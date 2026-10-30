@@ -506,6 +506,7 @@ describeIfDatabase('FIN-01 — goods receipt', () => {
     // Never revenue: free goods are not a sale, and the money owed does not
     // grow because more units arrived.
     for (const { entry } of [withoutBonus, withBonus]) {
+      expectBalanced(entry);
       expect(entry.lines.some((leg) => leg.accountCode === 'SALES_REVENUE')).toBe(false);
       expect(entry.lines.some((leg) => leg.accountCode === 'SALES_DISCOUNT')).toBe(false);
     }
@@ -1046,38 +1047,48 @@ describeIfDatabase('FIN-01 — POS settlement and MIG-03 opening events', () => 
 
   it('posts a balanced opening-stock valuation from the MIG-03 total', async () => {
     const branchId = branch('opening-stock');
+    const f = await fixture(ORG_A, branchId, 'opening-stock');
+    const opening = await import('./migration/opening-stock');
     const total = await inOrg(ORG_A, async (db) => {
-      await ensureBranch(db, ORG_A, branchId);
-      const session = await db.pharmacyOpeningSession.create({
+      const session = await opening.createOpeningSession(db, scopeOf(f), {
+        openingAt: RECEIVED_AT,
+      });
+      const batch = await db.pharmacyManufacturingBatch.create({
         data: {
           organizationId: ORG_A,
-          branchId,
-          openingAt: RECEIVED_AT,
-          status: 'POSTED',
-          createdByActorId: ACTOR,
-          postedByActorId: ACTOR,
-          postedAt: RECEIVED_AT,
+          medicineId: f.medicineId,
+          batchNumber: tag('opening-stock'),
+          expiresAt: EXPIRY_LATER,
+          expiryPrecision: 'DAY',
         },
       });
-      return db.pharmacyOpeningTotal.create({
-        data: {
-          organizationId: ORG_A,
-          branchId,
+      await opening.draftLine(db, scopeOf(f), {
+        sessionId: session.id,
+        sourceRef: tag('opening-stock'),
+        manufacturingBatchId: batch.id,
+        batchNumber: batch.batchNumber,
+        expiryDate: EXPIRY_LATER,
+        expiryPrecision: 'DAY',
+        printedMrpMinor: 30_000,
+        unitCostMinor: 1_500,
+        stockLocationId: f.storeId,
+        packLevelId: f.packLevelId,
+        unitsPerPack: 10,
+        expectedUnits: 20,
+        countedUnits: 20,
+      });
+      return (
+        await opening.postOpeningSession(db, scopeOf(f), {
           sessionId: session.id,
-          totalUnits: 20,
-          totalValueMinor: BigInt(30_000),
-          lineCount: 1,
-          actorId: ACTOR,
-          postedAt: RECEIVED_AT,
-        },
-      });
+          idempotencyKeyPrefix: tag('opening-stock'),
+        })
+      ).total;
     });
     const entry = await inOrg(ORG_A, (db) =>
-      deps.postings.postOpeningStockEntry(
-        db,
-        { organizationId: ORG_A, branchId, actorId: ACTOR },
-        { sessionId: total.sessionId, at: RECEIVED_AT }
-      )
+      deps.postings.postOpeningStockEntry(db, scopeOf(f), {
+        sessionId: total.sessionId,
+        at: RECEIVED_AT,
+      })
     );
     expectBalanced(entry);
     expect(entry).toMatchObject({ sourceKind: 'PHARMACY_OPENING_STOCK', sourceId: total.id });
@@ -1148,6 +1159,7 @@ describeIfDatabase('FIN-01 — reversal is additive and org-scoped', () => {
     });
 
     expectBalanced(result.reversal);
+    expectBalanced(result.entry);
     expect(result.reversal.reversesEntryId).toBe(result.entry.id);
     // Both postings survive; the correction is the SECOND one.
     expect(result.trail).toHaveLength(2);
@@ -1170,6 +1182,7 @@ describeIfDatabase('FIN-01 — reversal is additive and org-scoped', () => {
         goodsReceiptId: received.draft.id,
         at: RECEIVED_AT,
       });
+      expectBalanced(entry);
       return entry.id;
     });
 
@@ -1374,7 +1387,12 @@ describeIfDatabase('FIN-03 — perpetual valuation, margin and leakage', () => {
           },
         ],
       });
-      await deps.operations.approveCount(db, scopeOf(f), count.id, `count-${tag('leakage')}`);
+      const approved = await deps.operations.approveCount(
+        db,
+        scopeOf(f),
+        count.id,
+        `count-${tag('leakage')}`
+      );
       await deps.postings.postCountAdjustmentEntry(db, scopeOf(f), {
         countLineId: count.lines[0]!.id,
         at: LATER,
@@ -1383,7 +1401,7 @@ describeIfDatabase('FIN-03 — perpetual valuation, margin and leakage', () => {
       return deps.reports.leakageReport(
         db,
         { organizationId: ORG_A, branchId: f.branchId },
-        WINDOW
+        { from: WINDOW.from, to: new Date(approved.approvedAt!.getTime() + 1) }
       );
     });
 

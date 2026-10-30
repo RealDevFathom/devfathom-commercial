@@ -143,7 +143,7 @@ export async function postGoodsReceiptEntry(
     accrued += shelved + (line.quarantineLocationId ? held : 0);
   }
 
-  if (accrued === 0) throw new PharmacyFinanceError('NOTHING_TO_POST');
+  if (accrued === 0) return null;
 
   // One accrual leg for the whole delivery: what is owed is owed per invoice,
   // not per line, and FIN-02 settles it against exactly that.
@@ -584,6 +584,7 @@ export async function postInterbranchTransferEntry(
   if (!lot) throw new PharmacyFinanceError('NOT_FOUND');
 
   const amountMinor = lot.unitCostMinor * line.quantityUnits;
+  if (amountMinor === 0) return null;
 
   return postJournalEntry(
     db,
@@ -621,6 +622,73 @@ export async function postInterbranchTransferEntry(
   );
 }
 
+/** Move each received slice out of transit and onto its actual destination lot. */
+export async function postInterbranchTransferReceiptEntry(
+  db: ScopedDb,
+  scope: PostingScope,
+  input: { transferLineId: string; stockMovementId: string; at: Date }
+) {
+  const line = await db.pharmacyInterbranchTransferLine.findFirst({
+    where: { id: input.transferLineId, organizationId: scope.organizationId },
+    include: { transfer: true },
+  });
+  if (!line) throw new PharmacyFinanceError('NOT_FOUND');
+  if (line.transfer.toBranchId !== scope.branchId)
+    throw new PharmacyFinanceError('CROSS_BRANCH_REFERENCE');
+
+  const movement = await db.pharmacyStockMovement.findFirst({
+    where: { id: input.stockMovementId, organizationId: scope.organizationId },
+  });
+  if (!movement) throw new PharmacyFinanceError('NOT_FOUND');
+  if (
+    movement.branchId !== scope.branchId ||
+    movement.kind !== 'TRANSFER_IN' ||
+    movement.stockLocationId !== line.destinationStockLocationId
+  )
+    throw new PharmacyFinanceError('INVALID_STATE');
+
+  const lots = await loadLots(db, scope, [movement.inventoryLotId]);
+  const lot = lots.get(movement.inventoryLotId);
+  if (!lot) throw new PharmacyFinanceError('NOT_FOUND');
+  const amountMinor = lot.unitCostMinor * movement.quantityUnits;
+  if (amountMinor === 0) return null;
+
+  // Transfers dispatched before automatic journals have no transit value to
+  // clear. Keep those receipts usable during an upgrade, like legacy GRNs.
+  const dispatch = await db.financeJournalEntry.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      idempotencyKey: postingKey('PHARMACY_INTERBRANCH_TRANSFER_LINE', line.id),
+    },
+  });
+  if (!dispatch) return null;
+
+  const dimensions = {
+    branchId: scope.branchId,
+    productId: lot.medicineId,
+    locationId: movement.stockLocationId,
+    sourceLineId: line.id,
+    amountMinor,
+  };
+  return postJournalEntry(db, scope, {
+    sourceKind: 'PHARMACY_INTERBRANCH_TRANSFER_LINE',
+    sourceId: line.id,
+    description: `Receipt of inter-branch transfer ${line.transferId}`,
+    occurredAt: input.at,
+    idempotencyKey: `${postingKey('PHARMACY_INTERBRANCH_TRANSFER_LINE', line.id)}:received:${movement.id}`,
+    branchId: scope.branchId,
+    lines: [
+      { ...dimensions, accountCode: 'INVENTORY', side: 'DEBIT', lotId: movement.inventoryLotId },
+      {
+        ...dimensions,
+        accountCode: 'INVENTORY_IN_TRANSIT',
+        side: 'CREDIT',
+        lotId: line.sourceLotId,
+      },
+    ],
+  });
+}
+
 /**
  * FIN-01 (count adjustment): a counted variance is a real gain or loss of
  * value, so it is posted rather than absorbed.
@@ -649,6 +717,7 @@ export async function postCountAdjustmentEntry(
   if (!lot) throw new PharmacyFinanceError('NOT_FOUND');
 
   const amountMinor = lot.unitCostMinor * Math.abs(variance);
+  if (amountMinor === 0) return null;
   const dimensions = {
     branchId: line.branchId,
     productId: lot.medicineId,
@@ -815,6 +884,19 @@ export async function postDailyCloseEntry(
   });
 }
 
+/** Keep BigInt opening totals exact while each journal leg fits PostgreSQL INTEGER. */
+function openingLegs(
+  amount: bigint,
+  dimensions: Omit<JournalLineInput, 'amountMinor'>
+): JournalLineInput[] {
+  const lines: JournalLineInput[] = [];
+  const max = BigInt(2_147_483_647);
+  for (let remaining = amount; remaining > BigInt(0); remaining -= max) {
+    lines.push({ ...dimensions, amountMinor: Number(remaining > max ? max : remaining) });
+  }
+  return lines;
+}
+
 /** MIG-03: recognize the posted opening stock at its recorded lot cost. */
 export async function postOpeningStockEntry(
   db: ScopedDb,
@@ -826,9 +908,50 @@ export async function postOpeningStockEntry(
   });
   if (!total) throw new PharmacyFinanceError('NOT_FOUND');
   if (total.branchId !== scope.branchId) throw new PharmacyFinanceError('CROSS_BRANCH_REFERENCE');
-  const amountMinor = Number(total.totalValueMinor);
-  if (!Number.isSafeInteger(amountMinor) || amountMinor <= 0)
-    throw new PharmacyFinanceError('NOTHING_TO_POST');
+  if (total.totalValueMinor === BigInt(0)) return null;
+  const openingLines = await db.pharmacyOpeningStockLine.findMany({
+    where: { organizationId: scope.organizationId, sessionId: total.sessionId, status: 'POSTED' },
+    orderBy: { id: 'asc' },
+  });
+  const lots = await loadLots(
+    db,
+    scope,
+    openingLines.flatMap((line) => (line.postedLotId ? [line.postedLotId] : []))
+  );
+  const lines: JournalLineInput[] = [];
+  let valued = BigInt(0);
+  for (const line of openingLines) {
+    if (
+      !line.postedLotId ||
+      !line.stockLocationId ||
+      line.countedUnits === null ||
+      line.unitCostMinor === null
+    )
+      throw new PharmacyFinanceError('INVALID_STATE');
+    const amount = BigInt(line.countedUnits) * BigInt(line.unitCostMinor);
+    const lot = lots.get(line.postedLotId);
+    if (!lot) throw new PharmacyFinanceError('NOT_FOUND');
+    valued += amount;
+    lines.push(
+      ...openingLegs(amount, {
+        accountCode: 'INVENTORY',
+        side: 'DEBIT',
+        branchId: total.branchId,
+        productId: lot.medicineId,
+        lotId: line.postedLotId,
+        locationId: line.stockLocationId,
+        sourceLineId: line.id,
+      })
+    );
+  }
+  if (valued !== total.totalValueMinor) throw new PharmacyFinanceError('INVALID_STATE');
+  lines.push(
+    ...openingLegs(total.totalValueMinor, {
+      accountCode: 'OPENING_BALANCE_EQUITY',
+      side: 'CREDIT',
+      branchId: total.branchId,
+    })
+  );
   return postJournalEntry(db, scope, {
     sourceKind: 'PHARMACY_OPENING_STOCK',
     sourceId: total.id,
@@ -836,15 +959,7 @@ export async function postOpeningStockEntry(
     occurredAt: input.at,
     idempotencyKey: postingKey('PHARMACY_OPENING_STOCK', total.id),
     branchId: total.branchId,
-    lines: [
-      { accountCode: 'INVENTORY', side: 'DEBIT', amountMinor, branchId: total.branchId },
-      {
-        accountCode: 'OPENING_BALANCE_EQUITY',
-        side: 'CREDIT',
-        amountMinor,
-        branchId: total.branchId,
-      },
-    ],
+    lines,
   });
 }
 
@@ -859,11 +974,11 @@ export async function postOpeningLedgerEntry(
   });
   if (!opening) throw new PharmacyFinanceError('NOT_FOUND');
   if (opening.branchId !== scope.branchId) throw new PharmacyFinanceError('CROSS_BRANCH_REFERENCE');
-  const signed = Number(opening.balanceMinor);
-  if (!Number.isSafeInteger(signed) || signed === 0)
-    throw new PharmacyFinanceError('NOTHING_TO_POST');
+  const signed = opening.balanceMinor;
+  if (signed === BigInt(0)) return null;
+  const amount = signed > BigInt(0) ? signed : -signed;
   const accountCode = opening.account;
-  const side = signed > 0 ? 'DEBIT' : 'CREDIT';
+  const side = signed > BigInt(0) ? 'DEBIT' : 'CREDIT';
   const equitySide = side === 'DEBIT' ? 'CREDIT' : 'DEBIT';
   return postJournalEntry(db, scope, {
     sourceKind: 'PHARMACY_OPENING_LEDGER',
@@ -873,13 +988,12 @@ export async function postOpeningLedgerEntry(
     idempotencyKey: postingKey('PHARMACY_OPENING_LEDGER', opening.id),
     branchId: opening.branchId,
     lines: [
-      { accountCode, side, amountMinor: Math.abs(signed), branchId: opening.branchId },
-      {
+      ...openingLegs(amount, { accountCode, side, branchId: opening.branchId }),
+      ...openingLegs(amount, {
         accountCode: 'OPENING_BALANCE_EQUITY',
         side: equitySide,
-        amountMinor: Math.abs(signed),
         branchId: opening.branchId,
-      },
+      }),
     ],
   });
 }

@@ -322,6 +322,19 @@ beforeAll(async () => {
   ]);
   deps = { withTenantDb: scopedDb.withTenantDb, receipts, ledger };
   await roleGuard.assertRlsEnforcingRole(scopedDb.withPlatformDb);
+  await scopedDb.withPlatformDb((db) =>
+    db.organization.createMany({
+      data: [ORG_A, ORG_B].map((id) => ({
+        id,
+        slug: id,
+        legalName: id,
+        displayName: id,
+        status: 'ACTIVE' as const,
+        deploymentMode: 'SHARED' as const,
+      })),
+      skipDuplicates: true,
+    })
+  );
 }, 120_000);
 
 // ── Row level security ──────────────────────────────────────────────────────
@@ -422,6 +435,37 @@ describeIfDatabase('PH-PUR receiving — row level security', () => {
 // ── PUR-02 — receiving into the batch ledger ────────────────────────────────
 
 describeIfDatabase('PUR-02 — posting a receipt into the batch ledger', () => {
+  it('posts and reverses an all-bonus receipt without monetary journal entries', async () => {
+    const f = await fixture(ORG_A, BRANCH_A, 'free');
+    await inOrg(ORG_A, async (db) => {
+      const draft = await draftReceipt(db, f, 'free', {
+        direct: true,
+        line: { receivedPacks: 0, bonusPacks: 2 },
+      });
+      await db.pharmacyGoodsReceiptLine.update({
+        where: { id: draft.lines[0]!.id },
+        data: { unitCostMinor: 0 },
+      });
+      const posted = await deps.receipts.postGoodsReceipt(db, scopeOf(f), {
+        goodsReceiptId: draft.id,
+        at: RECEIVED_AT,
+      });
+      expect(posted.lines[0]!.inventoryLotId).toBeTruthy();
+      expect(await balancesFor(db, ORG_A, posted.lines[0]!.inventoryLotId!)).toEqual({
+        AVAILABLE: 20,
+      });
+      expect(await db.financeJournalEntry.count({ where: { sourceId: draft.id } })).toBe(0);
+      await deps.receipts.reverseGoodsReceipt(db, scopeOf(f), {
+        goodsReceiptId: draft.id,
+        reason: 'Return free samples',
+        at: RECEIVED_AT,
+      });
+      expect(await balancesFor(db, ORG_A, posted.lines[0]!.inventoryLotId!)).toEqual({
+        AVAILABLE: 0,
+      });
+    });
+  });
+
   it('creates the lot and the RECEIPT movement, and on-hand projects from them', async () => {
     const f = await fixture(ORG_A, BRANCH_A, 'post');
     const result = await inOrg(ORG_A, async (db) => {

@@ -111,16 +111,16 @@ export type PostJournalEntryInput = {
 export function assertBalanced(lines: readonly JournalLineInput[]): void {
   if (lines.length === 0) throw new FinancePostingError('EMPTY_ENTRY');
 
-  let debits = 0;
-  let credits = 0;
+  let debits = BigInt(0);
+  let credits = BigInt(0);
   for (const line of lines) {
     if (!Number.isSafeInteger(line.amountMinor) || line.amountMinor <= 0) {
       throw new FinancePostingError('INVALID_AMOUNT');
     }
-    if (line.side === 'DEBIT') debits += line.amountMinor;
-    else credits += line.amountMinor;
+    if (line.side === 'DEBIT') debits += BigInt(line.amountMinor);
+    else credits += BigInt(line.amountMinor);
   }
-  if (debits === 0 || credits === 0) throw new FinancePostingError('EMPTY_ENTRY');
+  if (debits === BigInt(0) || credits === BigInt(0)) throw new FinancePostingError('EMPTY_ENTRY');
   if (debits !== credits) throw new FinancePostingError('UNBALANCED');
 }
 

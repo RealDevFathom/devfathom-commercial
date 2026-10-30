@@ -3,7 +3,11 @@ import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { arrangementFor, PharmacyInventoryError } from './inventory';
-import { postCountAdjustmentEntry, postInterbranchTransferEntry } from './finance-postings';
+import {
+  postCountAdjustmentEntry,
+  postInterbranchTransferEntry,
+  postInterbranchTransferReceiptEntry,
+} from './finance-postings';
 import type { LedgerScope } from './stock-ledger';
 
 function assertPositive(units: number) {
@@ -472,7 +476,7 @@ export async function receiveTransferLine(
       receivedAt: new Date(),
     },
   });
-  await db.pharmacyStockMovement.create({
+  const receivedMovement = await db.pharmacyStockMovement.create({
     data: {
       organizationId: scope.organizationId,
       branchId: scope.branchId,
@@ -486,6 +490,11 @@ export async function receiveTransferLine(
       actorId: scope.actorId,
       idempotencyKey: `${input.idempotencyKeyPrefix}:received`,
     },
+  });
+  await postInterbranchTransferReceiptEntry(db, scope, {
+    transferLineId: line.id,
+    stockMovementId: receivedMovement.id,
+    at: receivedMovement.occurredAt,
   });
   await db.pharmacyInterbranchTransferLine.update({
     where: { id: line.id },

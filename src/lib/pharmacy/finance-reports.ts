@@ -63,14 +63,16 @@ export async function perpetualValuation(
   scope: ReportScope,
   at: Date
 ): Promise<ValuationRow[]> {
-  return db.$queryRaw<ValuationRow[]>(Prisma.sql`
+  const rows = await db.$queryRaw<
+    Array<Omit<ValuationRow, 'valueMinor'> & { valueMinor: bigint }>
+  >(Prisma.sql`
     SELECT line."branchId",
            line."lotId",
            line."locationId",
            batch."medicineId",
            lot."manufacturingBatchId",
            lot."unitCostMinor",
-           SUM(CASE WHEN line."side" = 'DEBIT' THEN line."amountMinor" ELSE -line."amountMinor" END)::int AS "valueMinor"
+           SUM(CASE WHEN line."side" = 'DEBIT' THEN line."amountMinor" ELSE -line."amountMinor" END)::bigint AS "valueMinor"
       FROM "finance_journal_lines" line
       JOIN "finance_journal_entries" entry
         ON entry."organizationId" = line."organizationId" AND entry."id" = line."entryId"
@@ -87,6 +89,7 @@ export async function perpetualValuation(
               batch."medicineId", lot."manufacturingBatchId", lot."unitCostMinor"
     HAVING SUM(CASE WHEN line."side" = 'DEBIT' THEN line."amountMinor" ELSE -line."amountMinor" END) <> 0
      ORDER BY line."branchId", line."lotId", line."locationId"`);
+  return rows.map((row) => ({ ...row, valueMinor: exactMoney(row.valueMinor) }));
 }
 
 export type MarginDimension = 'line' | 'batch' | 'product' | 'branch';
@@ -324,15 +327,22 @@ export type TrialBalanceRow = { accountCode: string; debitMinor: number; creditM
  * and this is the read that lets an operator (or a test) see that they are,
  * without trusting that every adapter got it right individually.
  */
-export function trialBalance(
+export async function trialBalance(
   db: ScopedDb,
   scope: ReportScope,
   input: { from: Date; to: Date }
 ): Promise<TrialBalanceRow[]> {
-  return db.$queryRaw<TrialBalanceRow[]>(Prisma.sql`
+  const rows = await db.$queryRaw<
+    Array<
+      Omit<TrialBalanceRow, 'debitMinor' | 'creditMinor'> & {
+        debitMinor: bigint;
+        creditMinor: bigint;
+      }
+    >
+  >(Prisma.sql`
     SELECT line."accountCode"::text AS "accountCode",
-           COALESCE(SUM(CASE WHEN line."side" = 'DEBIT' THEN line."amountMinor" ELSE 0 END), 0)::int AS "debitMinor",
-           COALESCE(SUM(CASE WHEN line."side" = 'CREDIT' THEN line."amountMinor" ELSE 0 END), 0)::int AS "creditMinor"
+           COALESCE(SUM(CASE WHEN line."side" = 'DEBIT' THEN line."amountMinor" ELSE 0 END), 0)::bigint AS "debitMinor",
+           COALESCE(SUM(CASE WHEN line."side" = 'CREDIT' THEN line."amountMinor" ELSE 0 END), 0)::bigint AS "creditMinor"
       FROM "finance_journal_lines" line
       JOIN "finance_journal_entries" entry
         ON entry."organizationId" = line."organizationId" AND entry."id" = line."entryId"
@@ -342,4 +352,9 @@ export function trialBalance(
        ${branchFilter(scope)}
      GROUP BY line."accountCode"
      ORDER BY line."accountCode"`);
+  return rows.map((row) => ({
+    ...row,
+    debitMinor: exactMoney(row.debitMinor),
+    creditMinor: exactMoney(row.creditMinor),
+  }));
 }

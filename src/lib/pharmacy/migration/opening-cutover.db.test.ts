@@ -354,6 +354,102 @@ describeIfDatabase('MIG-03 — opening stock is never defaulted', () => {
 });
 
 describeIfDatabase('MIG-03 — posting opening stock', () => {
+  it.each([45, 120_000])(
+    'values all opening lots and locations for %i units, including totals above int32',
+    async (units) => {
+      const f = await scenario(`valuation-${units}`);
+      await inOrg(ORG_A, async (db) => {
+        const session = await deps.opening.createOpeningSession(db, scopeOf(f), {
+          openingAt: OPENING_AT,
+        });
+        const batch = await manufacturingBatch(db, f, `valuation-${units}`);
+        for (const quantity of [units, 10]) {
+          await deps.opening.draftLine(db, scopeOf(f), {
+            sessionId: session.id,
+            ...completeLine(f, batch.id, `valuation-${quantity}`, quantity),
+          });
+        }
+        const posted = await deps.opening.postOpeningSession(db, scopeOf(f), {
+          sessionId: session.id,
+          idempotencyKeyPrefix: tag('valuation'),
+        });
+        const openingLines = await db.pharmacyOpeningStockLine.findMany({
+          where: { sessionId: session.id },
+        });
+        const reports = await import('../finance-reports');
+        const rows = await reports.perpetualValuation(db, scopeOf(f), new Date('2099-01-01'));
+        expect(rows).toHaveLength(2);
+        for (const line of openingLines) {
+          expect(rows.find((row) => row.lotId === line.postedLotId)).toMatchObject({
+            branchId: f.branchId,
+            locationId: f.locationId,
+            medicineId: f.medicineId,
+            valueMinor: line.countedUnits! * line.unitCostMinor!,
+          });
+        }
+        expect(rows.reduce((sum, row) => sum + row.valueMinor, 0)).toBe(
+          Number(posted.total.totalValueMinor)
+        );
+        const trial = await reports.trialBalance(db, scopeOf(f), {
+          from: OPENING_AT,
+          to: new Date('2099-01-01'),
+        });
+        expect(trial.find((row) => row.accountCode === 'INVENTORY')?.debitMinor).toBe(
+          Number(posted.total.totalValueMinor)
+        );
+        const adapter = await import('../finance-postings');
+        const first = await adapter.postOpeningStockEntry(db, scopeOf(f), {
+          sessionId: session.id,
+          at: OPENING_AT,
+        });
+        const replay = await adapter.postOpeningStockEntry(db, scopeOf(f), {
+          sessionId: session.id,
+          at: OPENING_AT,
+        });
+        expect(first!.id).toBe(replay!.id);
+      });
+    }
+  );
+
+  it.each([BigInt(3_000_000_000), BigInt(-3_000_000_000)])(
+    'posts large signed opening ledger balance %s without overflow',
+    async (amount) => {
+      const f = await scenario(`large-ledger-${amount}`);
+      await inOrg(ORG_A, async (db) => {
+        const session = await deps.opening.createOpeningSession(db, scopeOf(f), {
+          openingAt: OPENING_AT,
+        });
+        const ledger = await deps.opening.postOpeningLedger(db, scopeOf(f), {
+          sessionId: session.id,
+          balances: [{ account: 'BANK', balanceMinor: amount, sourceRef: tag('bank') }],
+        });
+        expect(ledger[0]!.balanceMinor).toBe(amount);
+        const entries = await db.financeJournalEntry.findMany({
+          where: { branchId: f.branchId, sourceKind: 'PHARMACY_OPENING_LEDGER' },
+          include: { lines: true },
+        });
+        expect(entries).toHaveLength(1);
+        const bank = entries[0]!.lines.filter((line) => line.accountCode === 'BANK');
+        expect(
+          bank.reduce(
+            (sum, line) =>
+              sum + BigInt(line.side === 'DEBIT' ? line.amountMinor : -line.amountMinor),
+            BigInt(0)
+          )
+        ).toBe(amount);
+        const reports = await import('../finance-reports');
+        const trial = await reports.trialBalance(db, scopeOf(f), {
+          from: OPENING_AT,
+          to: new Date('2099-01-01'),
+        });
+        expect(trial.find((row) => row.accountCode === 'BANK')).toMatchObject({
+          debitMinor: amount > BigInt(0) ? Number(amount) : 0,
+          creditMinor: amount < BigInt(0) ? Number(-amount) : 0,
+        });
+      });
+    }
+  );
+
   it('creates OPENING lots and movements and signed opening totals per branch', async () => {
     const fixture = await scenario('post');
     await inOrg(fixture.organizationId, async (db) => {
@@ -505,6 +601,7 @@ describeIfDatabase('MIG-03 — posting opening stock', () => {
         where: {
           organizationId: fixture.organizationId,
           sourceKind: 'PHARMACY_OPENING_LEDGER',
+          branchId: fixture.branchId,
         },
         include: { lines: true },
       });
