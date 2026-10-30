@@ -52,10 +52,18 @@ function fixture() {
         .fn()
         .mockResolvedValue({ saleable: true, rx: false, restricted: false, controlled: false }),
     },
+    packLevel: {
+      findMany: vi
+        .fn()
+        .mockResolvedValue([
+          { id: 'pack', level: 'UNIT', parentPackLevelId: null, unitsPerParent: 1 },
+        ]),
+    },
     pharmacyInventoryLot: {
       findMany: vi.fn().mockResolvedValue(
         ['reserved', 'split'].map((id) => ({
           id,
+          packLevelId: 'pack',
           printedMrpMinor: 100,
           unitsPerPack: 1,
           unitCostMinor: 50,
@@ -161,6 +169,7 @@ describe('internal reserved checkout allocation', () => {
     db.pharmacyInventoryLot.findMany.mockResolvedValue(
       ['reserved', 'split'].map((id) => ({
         id,
+        packLevelId: 'pack',
         printedMrpMinor: 100,
         unitsPerPack: 1,
         unitCostMinor: 101,

@@ -273,6 +273,8 @@ describe('POS-03 lot-derived pack/strip/unit pricing', () => {
   it('assigns gross and discount remainders without losing a minor unit', () => {
     expect(apportionMinor(400, [200, 200])).toEqual([200, 200]);
     expect(apportionMinor(41, [200, 200])).toEqual([20, 21]);
+    expect(apportionMinor(2, [1, 1, 1])).toEqual([0, 1, 1]);
+    expect(apportionMinor(2, [1, 1, 0])).toEqual([1, 1, 0]);
   });
 
   it.each<{
@@ -336,6 +338,21 @@ describe('POS-03 lot-derived pack/strip/unit pricing', () => {
       })
     ).toThrow('INVALID_SALE_UNIT_CONVERSION');
   });
+
+  it.each(['PACK', 'UNIT'] as const)(
+    'accepts %s for a lot received in single units',
+    (saleUnit) => {
+      expect(() =>
+        assertSaleUnitConversion({
+          packLevels: [{ id: 'unit', level: 'UNIT', parentPackLevelId: null, unitsPerParent: 1 }],
+          packLevelId: 'unit',
+          saleUnit,
+          canonicalUnitsPerSaleUnit: 1,
+          lots: [{ packLevelId: 'unit', unitsPerPack: 1 }],
+        })
+      ).not.toThrow();
+    }
+  );
 
   it("rejects a conversion that disagrees with the allocated lot's frozen pack size", () => {
     expect(() =>

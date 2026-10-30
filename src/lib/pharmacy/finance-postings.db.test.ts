@@ -86,6 +86,7 @@ type Fixture = {
   branchId: string;
   medicineId: string;
   packLevelId: string;
+  unitPackLevelId: string;
   presentationId: string;
   storeId: string;
   quarantineId: string;
@@ -138,6 +139,18 @@ async function fixture(organizationId: string, branchId: string, label: string):
         effectiveFrom: new Date('2026-01-01T00:00:00.000Z'),
       },
     });
+    const unitPackLevel = await db.packLevel.create({
+      data: {
+        organizationId,
+        presentationId,
+        versionGroupId: `unit-${tag(label)}`,
+        version: 1,
+        level: 'UNIT',
+        parentPackLevelId: packLevel.id,
+        unitsPerParent: 10,
+        effectiveFrom: new Date('2026-01-01T00:00:00.000Z'),
+      },
+    });
     const [store, quarantine] = await Promise.all([
       db.pharmacyStockLocation.create({
         data: {
@@ -181,6 +194,7 @@ async function fixture(organizationId: string, branchId: string, label: string):
       branchId,
       medicineId: medicine.id,
       packLevelId: packLevel.id,
+      unitPackLevelId: unitPackLevel.id,
       presentationId,
       storeId: store.id,
       quarantineId: quarantine.id,
@@ -239,7 +253,7 @@ async function postedReceipt(
           lineNumber: 1,
           purchaseOrderLineId: null,
           medicineId: f.medicineId,
-          packLevelId: f.packLevelId,
+          packLevelId: unitsPerPack === 1 ? f.unitPackLevelId : f.packLevelId,
           batchNumber: `B-${tag(label)}`,
           printedExpiry: options.expiresAt ?? EXPIRY_LATER,
           expiryPrecision: 'DAY',
@@ -302,7 +316,7 @@ async function stockLot(
   });
   const { lot } = await deps.ledger.receiveLot(db, scopeOf(f, options.branchId), {
     manufacturingBatchId: batch.id,
-    packLevelId: f.packLevelId,
+    packLevelId: options.unitsPerPack === 1 ? f.unitPackLevelId : f.packLevelId,
     stockLocationId: options.locationId ?? f.storeId,
     unitsPerPack: options.unitsPerPack ?? 10,
     supplierName: 'Distributor Ltd',
@@ -334,7 +348,7 @@ async function completedSaleLine(
     saleId: sale.id,
     medicineId: f.medicineId,
     presentationId: f.presentationId,
-    packLevelId: f.packLevelId,
+    packLevelId: f.unitPackLevelId,
     saleUnit: 'UNIT',
     quantity: options.quantity,
     canonicalUnitsPerSaleUnit: 1,
@@ -553,7 +567,11 @@ describeIfDatabase('FIN-01 / FIN-03 — sale line', () => {
   it.each(['cheap-first', 'dear-first'] as const)(
     'refunds each priced allocation exactly in %s order, including discount',
     async (order) => {
-      const f = await fixture(ORG_A, branch(`weighted-return-${order}`), `weighted-return-${order}`);
+      const f = await fixture(
+        ORG_A,
+        branch(`weighted-return-${order}`),
+        `weighted-return-${order}`
+      );
       const entries = await inOrg(ORG_A, async (db) => {
         const cheap = await stockLot(db, f, {
           label: `return-cheap-${order}`,
@@ -614,12 +632,12 @@ describeIfDatabase('FIN-01 / FIN-03 — sale line', () => {
       expect(entries.map((entry) => totalFor(entry, 'SALES_REVENUE', 'DEBIT'))).toEqual(
         order === 'cheap-first' ? [100, 100, 200] : [200, 100, 100]
       );
-      expect(entries.reduce((sum, entry) => sum + totalFor(entry, 'SALES_DISCOUNT', 'CREDIT'), 0)).toBe(
-        40
-      );
-      expect(entries.reduce((sum, entry) => sum + totalFor(entry, 'SALES_CLEARING', 'CREDIT'), 0)).toBe(
-        400
-      );
+      expect(
+        entries.reduce((sum, entry) => sum + totalFor(entry, 'SALES_DISCOUNT', 'CREDIT'), 0)
+      ).toBe(40);
+      expect(
+        entries.reduce((sum, entry) => sum + totalFor(entry, 'SALES_CLEARING', 'CREDIT'), 0)
+      ).toBe(400);
     }
   );
 
@@ -671,10 +689,15 @@ describeIfDatabase('FIN-01 / FIN-03 — sale line', () => {
         );
       }
 
-      await db.pharmacySaleReturnLine.updateMany({
-        where: { id: { in: returnLineIds }, organizationId: ORG_A },
-        data: { grossMinor: 0, discountMinor: 0 },
-      });
+      // Replay on a temporary copy: operational return evidence stays append-only.
+      await db.$executeRawUnsafe(
+        `CREATE TEMP TABLE pharmacy_sale_return_lines ON COMMIT DROP AS
+        SELECT * FROM public.pharmacy_sale_return_lines WHERE "saleLineId" = $1`,
+        sold.line.id
+      );
+      await db.$executeRawUnsafe(
+        'UPDATE pg_temp.pharmacy_sale_return_lines SET "grossMinor" = 0, "discountMinor" = 0'
+      );
       const migration = readFileSync(
         'prisma/migrations/20261026120000_pharmacy_allocation_money/migration.sql',
         'utf8'
@@ -685,18 +708,19 @@ describeIfDatabase('FIN-01 / FIN-03 — sale line', () => {
       if (!backfill) throw new Error('Historical return money backfill not found');
       await db.$executeRawUnsafe(backfill);
 
-      const lines = await db.pharmacySaleReturnLine.findMany({
-        where: { id: { in: returnLineIds }, organizationId: ORG_A },
-        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-      });
+      const lines = await db.$queryRawUnsafe<
+        Array<{ id: string; grossMinor: number; discountMinor: number }>
+      >('SELECT * FROM pg_temp.pharmacy_sale_return_lines ORDER BY "createdAt", id');
       return { lines, journals, partialReturnLineId: returnLineIds[0]! };
     });
 
     result.journals.forEach(expectBalanced);
-    expect(result.lines.map((line) => line.grossMinor).sort((a, b) => a - b)).toEqual([100, 100, 200]);
+    expect(result.lines.map((line) => line.grossMinor).sort((a, b) => a - b)).toEqual([
+      100, 100, 200,
+    ]);
     expect(result.lines.find((line) => line.id === result.partialReturnLineId)).toMatchObject({
       grossMinor: 100,
-      discountMinor: 13,
+      discountMinor: 10,
     });
     expect(result.lines.reduce((sum, line) => sum + line.grossMinor, 0)).toBe(400);
     expect(result.lines.reduce((sum, line) => sum + line.discountMinor, 0)).toBe(40);

@@ -254,7 +254,10 @@ export function assertSaleUnitConversion(input: {
         unitsPerPack: lot.unitsPerPack,
       }).find(
         (candidate) =>
-          candidate.packLevelId === input.packLevelId && candidate.kind === input.saleUnit
+          candidate.packLevelId === input.packLevelId &&
+          (candidate.kind === input.saleUnit ||
+            // A single canonical unit received as a pack can also be sold as UNIT.
+            (input.saleUnit === 'UNIT' && candidate.canonicalUnitsPerSaleUnit === 1))
       );
       if (!option || option.canonicalUnitsPerSaleUnit !== canonicalUnits)
         throw new PharmacySaleError('INVALID_SALE_UNIT_CONVERSION');
@@ -312,7 +315,7 @@ export function allocationWeightedPrice(input: {
   };
 }
 
-/** Assign every minor unit deterministically, with any rounding remainder on the last row. */
+/** Assign cumulative proportional shares, preserving totals and zero-weight rows. */
 export function apportionMinor(totalMinor: number, weights: readonly number[]): number[] {
   if (
     !Number.isSafeInteger(totalMinor) ||
@@ -323,11 +326,15 @@ export function apportionMinor(totalMinor: number, weights: readonly number[]): 
   const totalWeight = weights.reduce((sum, weight) => sum + weight, 0);
   if (!Number.isSafeInteger(totalWeight)) throw new PharmacySaleError('INVALID_QUANTITY');
   if (totalWeight === 0 || weights.length === 0) return weights.map(() => 0);
-  const shares = weights.map((weight) =>
-    Number((BigInt(totalMinor) * BigInt(weight)) / BigInt(totalWeight))
-  );
-  shares[shares.length - 1]! += totalMinor - shares.reduce((sum, share) => sum + share, 0);
-  return shares;
+  let through = BigInt(0);
+  let assigned = BigInt(0);
+  return weights.map((weight) => {
+    through += BigInt(weight);
+    const cumulative = (BigInt(totalMinor) * through) / BigInt(totalWeight);
+    const share = Number(cumulative - assigned);
+    assigned = cumulative;
+    return share;
+  });
 }
 
 export async function addSaleLine(db: ScopedDb, scope: LedgerScope, input: AddSaleLineInput) {
@@ -461,9 +468,7 @@ async function addSaleLineWithAllocation(
       idempotencyKey: input.idempotencyKey,
     },
   });
-  const priceWeights = allocationPrices.map(
-    (price) => price.unitPriceMinor * price.canonicalUnits
-  );
+  const priceWeights = allocationPrices.map((price) => price.unitPriceMinor * price.canonicalUnits);
   const allocationGross = apportionMinor(grossMinor, priceWeights);
   const allocationDiscount = apportionMinor(discountMinor, allocationGross);
   await Promise.all(
@@ -604,9 +609,7 @@ export function returnedSaleLineValue(line: {
   );
   const remainingUnits = line.canonicalUnits - identifiedUnits;
   const remainingValue =
-    (line.grossMinor ?? line.quantity * line.unitPriceMinor) -
-    line.discountMinor -
-    identifiedValue;
+    (line.grossMinor ?? line.quantity * line.unitPriceMinor) - line.discountMinor - identifiedValue;
   return (
     identifiedValue +
     (remainingUnits ? Math.floor((remainingValue * unidentifiedUnits) / remainingUnits) : 0)
@@ -980,6 +983,12 @@ export async function returnSaleLine(
         idempotencyKey: `${input.idempotencyKey}:${allocation.id}`,
       },
     });
+    // Round net cumulatively so a partial refund cannot become negative when
+    // gross and discount cross different minor-unit boundaries.
+    const delta = (amount: number) =>
+      Math.floor((amount * (used + units)) / allocation.canonicalUnits) -
+      Math.floor((amount * used) / allocation.canonicalUnits);
+    const discountMinor = delta(allocation.discountMinor);
     const returnedLine = await db.pharmacySaleReturnLine.create({
       data: {
         organizationId: scope.organizationId,
@@ -989,12 +998,8 @@ export async function returnSaleLine(
         inventoryLotId: allocation.inventoryLotId,
         stockLocationId,
         canonicalUnits: units,
-        grossMinor:
-          Math.floor((allocation.grossMinor * (used + units)) / allocation.canonicalUnits) -
-          Math.floor((allocation.grossMinor * used) / allocation.canonicalUnits),
-        discountMinor:
-          Math.floor((allocation.discountMinor * (used + units)) / allocation.canonicalUnits) -
-          Math.floor((allocation.discountMinor * used) / allocation.canonicalUnits),
+        grossMinor: delta(allocation.grossMinor - allocation.discountMinor) + discountMinor,
+        discountMinor,
         integrityDecision: `${disposition}: ${input.integrityDecision}`,
         stockMovementId: movement.id,
       },

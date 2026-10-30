@@ -32,6 +32,7 @@ function receipt(id: string, days: number, overrides: Partial<RepeatReceipt> = {
         id: `${id}-line`,
         quantity: 2,
         unitPriceMinor: 100,
+        grossMinor: 200,
         discountMinor: 0,
         canonicalUnits: 2,
         createdAt: at(days),
@@ -158,6 +159,14 @@ describe('first-observed repeat-purchase cohorts', () => {
     ];
     a.refunds = [{ id: 'f', amountMinor: 100, createdAt: at(10) }];
     expect(summarize([a, receipt('b', 20)]).horizons[0].repeated).toBe(1);
+  });
+  it('uses exact split-lot gross when deciding whether a receipt is fully refunded', () => {
+    const a = receipt('a', 0);
+    Object.assign(a.lines[0], { quantity: 3, unitPriceMinor: 133, grossMinor: 400 });
+    a.refunds = [{ id: 'refund', amountMinor: 399, createdAt: at(10) }];
+    expect(summarize([a]).enrolledCustomers).toBe(1);
+    a.refunds[0].amountMinor = 400;
+    expect(summarize([a]).enrolledCustomers).toBe(0);
   });
   it('keeps complete history and deduplicates details in the reference summary', () => {
     const old = receipt('old', -1);

@@ -360,28 +360,23 @@ export async function postUnidentifiedSaleReturnEntry(
   if (existing) return existing;
 
   const saleLine = holding.saleLine;
-  const identifiedUnits = saleLine.returnLines.reduce(
-    (sum, row) => sum + row.canonicalUnits,
-    0
-  );
+  const identifiedUnits = saleLine.returnLines.reduce((sum, row) => sum + row.canonicalUnits, 0);
   const identifiedGross = saleLine.returnLines.reduce((sum, row) => sum + row.grossMinor, 0);
-  const identifiedDiscount = saleLine.returnLines.reduce(
-    (sum, row) => sum + row.discountMinor,
-    0
-  );
+  const identifiedDiscount = saleLine.returnLines.reduce((sum, row) => sum + row.discountMinor, 0);
   const through = saleLine.unidentifiedReturnHolds.reduce(
     (sum, row) => sum + row.canonicalUnits,
     0
   );
   const before = through - holding.canonicalUnits;
   const remainingUnits = saleLine.canonicalUnits - identifiedUnits;
-  if (before < 0 || through > remainingUnits)
-    throw new PharmacyFinanceError('INVALID_STATE');
+  if (before < 0 || through > remainingUnits) throw new PharmacyFinanceError('INVALID_STATE');
   const delta = (amount: number) =>
     Math.floor((amount * through) / remainingUnits) -
     Math.floor((amount * before) / remainingUnits);
   const discount = delta(saleLine.discountMinor - identifiedDiscount);
-  const gross = delta(saleLine.grossMinor - identifiedGross);
+  const gross =
+    delta(saleLine.grossMinor - identifiedGross - saleLine.discountMinor + identifiedDiscount) +
+    discount;
   const dimensions = {
     branchId: holding.branchId,
     productId: saleLine.medicineId,

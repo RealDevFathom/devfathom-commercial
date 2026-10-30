@@ -79,10 +79,19 @@ function fixture(returnedUnits: number, priorRefunds: number[] = []) {
           {
             quantity: 10,
             unitPriceMinor: 100,
+            grossMinor: 1000,
             discountMinor: 0,
             canonicalUnits: 10,
             unidentifiedReturnHolds: [] as Array<{ canonicalUnits: number }>,
-            returnLines: returnedUnits ? [{ canonicalUnits: returnedUnits }] : [],
+            returnLines: returnedUnits
+              ? [
+                  {
+                    canonicalUnits: returnedUnits,
+                    grossMinor: returnedUnits * 100,
+                    discountMinor: 0,
+                  },
+                ]
+              : [],
           },
         ],
         // Prior refunds belong to other tenders; the current cash tender is still unused.

@@ -35,8 +35,22 @@ function fixture() {
     sale: { status: 'COMPLETED' },
     medicine: { controlled: false },
     allocations: [
-      { id: 'a1', inventoryLotId: 'lot1', stockLocationId: 'shelf1', canonicalUnits: 4 },
-      { id: 'a2', inventoryLotId: 'lot2', stockLocationId: 'shelf2', canonicalUnits: 6 },
+      {
+        id: 'a1',
+        inventoryLotId: 'lot1',
+        stockLocationId: 'shelf1',
+        canonicalUnits: 4,
+        grossMinor: 400,
+        discountMinor: 0,
+      },
+      {
+        id: 'a2',
+        inventoryLotId: 'lot2',
+        stockLocationId: 'shelf2',
+        canonicalUnits: 6,
+        grossMinor: 600,
+        discountMinor: 0,
+      },
     ],
     unidentifiedReturnHolds: [] as Array<{ canonicalUnits: number }>,
     returnLines: [{ inventoryLotId: 'lot1', canonicalUnits: 2 }],
@@ -73,6 +87,30 @@ function fixture() {
   return { db, line };
 }
 describe('counter return boundaries', () => {
+  it.each(Array.from({ length: 7 }, (_, used) => used))(
+    'keeps a one-unit partial refund nonnegative after %i returned units',
+    async (used) => {
+      const { db, line } = fixture();
+      line.canonicalUnits = 7;
+      line.allocations = [
+        {
+          id: 'a2',
+          inventoryLotId: 'lot2',
+          stockLocationId: 'shelf2',
+          canonicalUnits: 7,
+          grossMinor: 3,
+          discountMinor: 2,
+        },
+      ];
+      line.returnLines = used ? [{ inventoryLotId: 'lot2', canonicalUnits: used }] : [];
+      await returnSaleLine(db as never, scope, { ...input, canonicalUnits: 1 });
+      const data = db.pharmacySaleReturnLine.create.mock.calls[0]![0].data;
+      expect(data.grossMinor - data.discountMinor).toBe(used === 6 ? 1 : 0);
+      expect(data.discountMinor).toBe(
+        Math.floor((2 * (used + 1)) / 7) - Math.floor((2 * used) / 7)
+      );
+    }
+  );
   it('restocks only the explicitly named second lot, never the first allocation', async () => {
     const { db } = fixture();
     await returnSaleLine(db as never, scope, input);

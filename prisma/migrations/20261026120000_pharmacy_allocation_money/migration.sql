@@ -1,3 +1,12 @@
+BEGIN;
+
+-- Hold the DDL locks until the evidence guards have been restored. Only this
+-- transaction can write while the two append-only triggers are suspended.
+ALTER TABLE "pharmacy_sale_line_allocations"
+DISABLE TRIGGER pharmacy_sale_allocations_append_only;
+ALTER TABLE "pharmacy_sale_return_lines"
+DISABLE TRIGGER pharmacy_sale_return_lines_append_only;
+
 ALTER TABLE "pharmacy_sale_line_allocations"
 ADD COLUMN "grossMinor" INTEGER NOT NULL DEFAULT 0,
 ADD COLUMN "discountMinor" INTEGER NOT NULL DEFAULT 0;
@@ -48,8 +57,10 @@ WITH allocation_ranges AS (
 ), return_money AS (
   SELECT r.id,
     SUM(
-      FLOOR(a."grossMinor"::numeric * (LEAST(r.unit_start + r."canonicalUnits", a.unit_start + a."canonicalUnits") - a.unit_start) / a."canonicalUnits")
-      - FLOOR(a."grossMinor"::numeric * (GREATEST(r.unit_start, a.unit_start) - a.unit_start) / a."canonicalUnits")
+      FLOOR((a."grossMinor" - a."discountMinor")::numeric * (LEAST(r.unit_start + r."canonicalUnits", a.unit_start + a."canonicalUnits") - a.unit_start) / a."canonicalUnits")
+      - FLOOR((a."grossMinor" - a."discountMinor")::numeric * (GREATEST(r.unit_start, a.unit_start) - a.unit_start) / a."canonicalUnits")
+      + FLOOR(a."discountMinor"::numeric * (LEAST(r.unit_start + r."canonicalUnits", a.unit_start + a."canonicalUnits") - a.unit_start) / a."canonicalUnits")
+      - FLOOR(a."discountMinor"::numeric * (GREATEST(r.unit_start, a.unit_start) - a.unit_start) / a."canonicalUnits")
     )::integer AS gross,
     SUM(
       FLOOR(a."discountMinor"::numeric * (LEAST(r.unit_start + r."canonicalUnits", a.unit_start + a."canonicalUnits") - a.unit_start) / a."canonicalUnits")
@@ -70,3 +81,10 @@ SET "grossMinor" = return_money.gross,
 FROM return_money
 WHERE return_money.id = r.id;
 -- END historical return money backfill
+
+ALTER TABLE "pharmacy_sale_line_allocations"
+ENABLE TRIGGER pharmacy_sale_allocations_append_only;
+ALTER TABLE "pharmacy_sale_return_lines"
+ENABLE TRIGGER pharmacy_sale_return_lines_append_only;
+
+COMMIT;

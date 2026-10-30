@@ -24,6 +24,8 @@ describe('return postings match authorized cumulative net', () => {
             inventoryLotId: 'lot',
             stockLocationId: 'store',
             canonicalUnits: units,
+            grossMinor: gross,
+            discountMinor: discount,
             saleLine: {
               id: 'line',
               medicineId: 'medicine',
@@ -176,4 +178,46 @@ it('records a zero-minor-unit slice and assigns the rounding remainder to a late
     expect.objectContaining({ accountCode: 'SALES_REVENUE', side: 'DEBIT', amountMinor: 1 }),
     expect.objectContaining({ accountCode: 'SALES_CLEARING', side: 'CREDIT', amountMinor: 1 }),
   ]);
+});
+
+it('keeps unidentified net postings aligned with the refundable net at rounding boundaries', async () => {
+  const db = {
+    pharmacyUnidentifiedReturnHold: {
+      findFirst: vi.fn().mockResolvedValue({
+        id: 'hold',
+        branchId: 'branch',
+        quarantineLocationId: 'quarantine',
+        canonicalUnits: 1,
+        saleLine: {
+          id: 'line',
+          medicineId: 'medicine',
+          grossMinor: 3,
+          discountMinor: 2,
+          canonicalUnits: 7,
+          returnLines: [],
+          unidentifiedReturnHolds: [{ canonicalUnits: 3 }, { canonicalUnits: 1 }],
+        },
+      }),
+    },
+    financeJournalEntry: { findFirst: vi.fn().mockResolvedValue(null) },
+  };
+  await postUnidentifiedSaleReturnEntry(
+    db as unknown as ScopedDb,
+    { organizationId: 'org', branchId: 'branch', actorId: 'actor' },
+    { holdingId: 'hold', at: new Date('2026-10-21') }
+  );
+  const posted = vi.mocked(postJournalEntry).mock.calls.at(-1)![2];
+  const clearingNet = posted.lines
+    .filter((line) => line.accountCode === 'SALES_CLEARING')
+    .reduce(
+      (sum, line) => sum + (line.side === 'CREDIT' ? line.amountMinor : -line.amountMinor),
+      0
+    );
+  expect(clearingNet).toBe(0);
+  expect(posted.lines).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ accountCode: 'SALES_REVENUE', amountMinor: 1 }),
+      expect.objectContaining({ accountCode: 'SALES_DISCOUNT', amountMinor: 1 }),
+    ])
+  );
 });

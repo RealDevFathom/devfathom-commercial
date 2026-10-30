@@ -1150,6 +1150,7 @@ describeIfDatabase('leased receipt settlement', () => {
             canonicalUnitsPerSaleUnit: 1,
             canonicalUnits: 1,
             unitPriceMinor: 100,
+            grossMinor: 100,
             proRataCeilingMinor: 100,
             unitCostMinor: 50,
             idempotencyKey: tag('line'),
@@ -1164,6 +1165,7 @@ describeIfDatabase('leased receipt settlement', () => {
             stockLocationId: fixture.locationId,
             canonicalUnits: 1,
             stockMovementId: tag('movement'),
+            grossMinor: 100,
           },
         });
         return sale;

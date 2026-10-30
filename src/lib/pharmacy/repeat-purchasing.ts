@@ -46,6 +46,7 @@ type Line = {
   id: string;
   quantity: number;
   unitPriceMinor: number;
+  grossMinor: number;
   discountMinor: number;
   canonicalUnits: number;
   createdAt: Date;
