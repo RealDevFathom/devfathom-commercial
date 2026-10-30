@@ -83,11 +83,19 @@ function Field({
   );
 }
 
+function selectedProvince(data: Regulatory): string {
+  const code =
+    data.versions.find((version) => version.effective)?.provinceCode ??
+    data.branches.find((branch) => branch.id === data.selectedBranchId)?.provinceCode;
+  return (
+    data.jurisdictions.find(
+      (jurisdiction) =>
+        jurisdiction.provinceCode === code || jurisdiction.provinceCode === `PK-${code}`
+    )?.provinceCode ?? ''
+  );
+}
+
 export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory }) {
-  const initialProvinceCode =
-    initial.branches.find((branch) => branch.id === initial.selectedBranchId)?.provinceCode ??
-    initial.jurisdictions[0]?.provinceCode ??
-    '';
   const [data, setData] = useState<Regulatory>(initial);
   const [branchId, setBranchId] = useState<string>(initial.selectedBranchId ?? '');
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -95,21 +103,25 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [evidenceRef, setEvidenceRef] = useState('');
-  const [provinceCode, setProvinceCode] = useState<string>(initialProvinceCode);
+  const [provinceCode, setProvinceCode] = useState<string>(() => selectedProvince(initial));
   const formRef = useRef<HTMLFormElement>(null);
+  const refreshId = useRef(0);
 
   const utils = trpc.useUtils();
   const refresh = (nextBranchId = branchId) => {
+    const requestId = ++refreshId.current;
     void utils.pharmacyOnboarding.regulatory
       .fetch({ branchId: nextBranchId || undefined })
       .then((next) => {
+        if (requestId !== refreshId.current) return;
         setData(next);
-        const branchProvince = next.branches.find(
-          (branch) => branch.id === next.selectedBranchId
-        )?.provinceCode;
-        setProvinceCode(branchProvince ?? next.jurisdictions[0]?.provinceCode ?? '');
+        setProvinceCode(selectedProvince(next));
       })
-      .catch(() => setErrors({ form: 'That branch could not be loaded. Try again.' }));
+      .catch(() => {
+        if (requestId === refreshId.current) {
+          setErrors({ form: 'That branch could not be loaded. Try again.' });
+        }
+      });
   };
 
   const save = trpc.pharmacyOnboarding.saveRegulatoryProfile.useMutation({
@@ -365,8 +377,12 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
                 id="provinceCode"
                 name="provinceCode"
                 onChange={(event) => setProvinceCode(event.target.value)}
+                required
                 value={provinceCode}
               >
+                {data.jurisdictions.length > 0 && !provinceCode ? (
+                  <option value="">Choose a province with published rules</option>
+                ) : null}
                 {data.jurisdictions.length === 0 ? (
                   <option value="">No published jurisdictions</option>
                 ) : null}

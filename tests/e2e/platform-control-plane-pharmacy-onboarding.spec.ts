@@ -355,7 +355,7 @@ test('a fresh pharmacy fills its regulatory profile, watches the steps flip, and
   await page.getByLabel('Province').selectOption('PK-PB');
   await expect(page.getByText('Pending legal review')).toBeVisible();
   await expect(page.getByRole('status')).toContainText(
-    'Records can still be created, but these provincial rules are not enforced until legal sign-off.'
+    'Regulatory profiles can still be recorded, but dispensing and activation remain blocked until confirmed rules and a valid profile are in force.'
   );
   await page.getByLabel('Province').selectOption('PK-SD');
   await expect(page.getByText('Pending legal review')).toHaveCount(0);

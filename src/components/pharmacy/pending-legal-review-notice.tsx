@@ -8,8 +8,9 @@ export function PendingLegalReviewNotice({ provinceName }: { provinceName: strin
     >
       <StatusPill status="Pending legal review" tone="warning" />
       <p className="text-sm text-text-body">
-        {provinceName} rules are pending legal review. Records can still be created, but these
-        provincial rules are not enforced until legal sign-off.
+        {provinceName} rules are pending legal review. Regulatory profiles can still be recorded,
+        but dispensing and activation remain blocked until confirmed rules and a valid profile are
+        in force.
       </p>
     </div>
   );

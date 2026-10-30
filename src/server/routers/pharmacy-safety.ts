@@ -80,9 +80,17 @@ export const pharmacySafetyRouter = router({
   controlledRegister: safety
     .input(z.object({ branchId: z.string().min(1) }).strict())
     .query(async ({ ctx, input }) => {
-      const { organizationId, provinceCode } = await organizationBranch(ctx, input.branchId);
+      const { organizationId, provinceCode: branchProvinceCode } = await organizationBranch(
+        ctx,
+        input.branchId
+      );
       const now = new Date();
-      const [entries, ruleSet] = await Promise.all([
+      const ruleFields = {
+        licenceCategories: true,
+        permittedSchedules: true,
+        pharmacistCoverageRule: true,
+      } as const;
+      const [entries, profile] = await Promise.all([
         ctx.db.pharmacyControlledRegisterEntry.findMany({
           where: { organizationId, branchId: input.branchId },
           orderBy: { serial: 'asc' },
@@ -97,7 +105,29 @@ export const pharmacySafetyRouter = router({
             incidents: { include: { approvals: true } },
           },
         }),
-        ctx.db.jurisdictionRuleSet.findFirst({
+        ctx.db.branchRegulatoryProfile.findFirst({
+          where: {
+            organizationId,
+            branchId: input.branchId,
+            effectiveFrom: { lte: now },
+            OR: [{ effectiveTo: null }, { effectiveTo: { gt: now } }],
+          },
+          orderBy: { effectiveFrom: 'desc' },
+          select: {
+            provinceCode: true,
+            jurisdictionRuleSet: { select: ruleFields },
+          },
+        }),
+      ]);
+      // The guard uses the effective profile's pinned rules, even after a newer
+      // provincial rule set is published. Branch metadata may also still use
+      // the legacy two-letter province code.
+      const provinceCode =
+        profile?.provinceCode ??
+        (branchProvinceCode.startsWith('PK-') ? branchProvinceCode : `PK-${branchProvinceCode}`);
+      const ruleSet =
+        profile?.jurisdictionRuleSet ??
+        (await ctx.db.jurisdictionRuleSet.findFirst({
           where: {
             code: provinceCode,
             isPlaceholder: false,
@@ -105,13 +135,8 @@ export const pharmacySafetyRouter = router({
             OR: [{ effectiveTo: null }, { effectiveTo: { gt: now } }],
           },
           orderBy: { effectiveFrom: 'desc' },
-          select: {
-            licenceCategories: true,
-            permittedSchedules: true,
-            pharmacistCoverageRule: true,
-          },
-        }),
-      ]);
+          select: ruleFields,
+        }));
       const pendingLegalReview = ruleSet
         ? [
             ruleSet.licenceCategories,
