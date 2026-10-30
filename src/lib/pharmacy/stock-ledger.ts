@@ -75,6 +75,18 @@ export function expiryInstant(printed: Date, precision: 'DAY' | 'MONTH'): Date {
       );
 }
 
+/**
+ * Normalise an already-exclusive expiry boundary, not a printed date. Before
+ * PR #84 these were stored at UTC midnight; shift only that legacy boundary.
+ * PKT boundaries (19:00 UTC) and other instants must not move on repeated reads.
+ * Keep this predicate in sync with the PKT backfill migration.
+ */
+export function normalizeExpiryBoundary(expiresAt: Date): Date {
+  return expiresAt.getTime() % (24 * 60 * 60 * 1000) === 0
+    ? new Date(expiresAt.getTime() - 5 * 60 * 60 * 1000)
+    : expiresAt;
+}
+
 const CANDIDATE_COLUMNS = Prisma.sql`
   balance."inventoryLotId"    AS "inventoryLotId",
   balance."stockLocationId"   AS "stockLocationId",

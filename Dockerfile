@@ -43,6 +43,9 @@ ENV NEXT_BUILD_SKIP_TYPECHECK=1 \
 ARG NEXT_PUBLIC_APP_URL=
 ENV NEXT_PUBLIC_APP_URL=$NEXT_PUBLIC_APP_URL
 RUN AUTH_SECRET=container-build-only node node_modules/next/dist/bin/next build
+# Keep the source needed by operational TypeScript scripts, but do not publish
+# the colocated test suite or its explicitly test-only helpers.
+RUN ./scripts/prepare-runtime-src.sh ./src /runtime-src
 
 FROM oven/bun:1.4.3-slim AS runner
 WORKDIR /app
@@ -61,7 +64,7 @@ COPY --chown=bun:bun --from=builder /app/.next/standalone ./
 COPY --chown=bun:bun --from=builder /app/.next/static ./.next/static
 COPY --chown=bun:bun --from=builder /app/public ./public
 COPY --chown=bun:bun --from=builder /app/scripts ./scripts
-COPY --chown=bun:bun --from=builder /app/src ./src
+COPY --chown=bun:bun --from=builder /runtime-src ./src
 # The staging demo seed reuses the pharmacy counter fixture ids (scripts/seed-staging-demo.ts).
 COPY --chown=bun:bun --from=builder /app/tests/e2e/pharmacy-counter-fixture.ts ./tests/e2e/pharmacy-counter-fixture.ts
 COPY --chown=bun:bun --from=builder /app/tsconfig.json ./tsconfig.json

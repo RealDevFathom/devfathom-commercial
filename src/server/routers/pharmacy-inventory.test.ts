@@ -13,7 +13,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => {
   const hasModule = vi.fn<(view: { enabledModules: string[] }, key: string) => boolean>();
   hasModule.mockReturnValue(true);
-  return { hasModule };
+  const postWriteOffEntry = vi.fn();
+  return { hasModule, postWriteOffEntry };
 });
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
@@ -26,6 +27,9 @@ vi.mock('@/server/audit', () => ({
   ipFromHeaders: vi.fn(() => null),
   isAuditExcludedPath: vi.fn(() => true),
   recordTrpcAudit: vi.fn(),
+}));
+vi.mock('@/lib/pharmacy/finance-postings', () => ({
+  postWriteOffEntry: mocks.postWriteOffEntry,
 }));
 
 import { moduleForProcedure } from '@/lib/module-catalog';
@@ -144,6 +148,45 @@ const CAPABILITY_REFUSAL = {
 beforeEach(() => {
   db = makeDb();
   mocks.hasModule.mockImplementation((view, key) => view.enabledModules.includes(key));
+  mocks.postWriteOffEntry.mockReset();
+});
+
+describe('pharmacy write-off accounting', () => {
+  it('posts the write-off journal in the same transaction as the stock movement', async () => {
+    grant([allow('pharmacy:inventory')]);
+    const occurredAt = new Date('2026-10-29T00:02:07.000Z');
+    db.pharmacyInventoryLot.findFirst.mockResolvedValue({
+      id: 'lot_1',
+      unitsPerPack: 10,
+    });
+    db.pharmacyStockBalance.findFirst.mockResolvedValue({
+      onHandUnits: 20,
+      sealedPacks: 2,
+      looseUnits: 0,
+    });
+    db.pharmacyStockMovement.create.mockResolvedValue({
+      id: 'movement_1',
+      occurredAt,
+    });
+
+    await caller().writeOff({
+      branchId: 'branch_a',
+      inventoryLotId: 'lot_1',
+      stockLocationId: 'location_1',
+      units: 10,
+      witnessId: 'user_b',
+      reason: 'Expired stock destroyed',
+      evidenceRef: 'DEST-1',
+      idempotencyKey: 'writeoff-1',
+    });
+
+    expect(db.$transaction).toHaveBeenCalledOnce();
+    expect(mocks.postWriteOffEntry).toHaveBeenCalledWith(
+      db,
+      { organizationId: 'org_a', branchId: 'branch_a', actorId: 'user_a' },
+      { stockMovementId: 'movement_1', at: occurredAt }
+    );
+  });
 });
 
 describe('pharmacy inventory entitlement and tenant boundaries', () => {
@@ -213,7 +256,7 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
     });
     expect(db.pharmacyManufacturingBatch.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ expiresAt: new Date('2027-07-01T00:00:00.000Z') }),
+        data: expect.objectContaining({ expiresAt: new Date('2027-06-30T19:00:00.000Z') }),
       })
     );
   });
@@ -300,6 +343,67 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
     ['closeRecall', { recallNoticeId: 'recall_1' }],
   ] as const)('requires pharmacy:safety for %s', async (procedure, input) => {
     await expect(caller()[procedure](input as never)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+
+  it.each(['RECALLED', 'QUARANTINED'] as const)(
+    'does not let an ordinary member reactivate a %s batch',
+    async (state) => {
+      db.pharmacyManufacturingBatch.findFirst.mockResolvedValue({
+        id: 'batch_1',
+        medicineId: 'medicine_1',
+        state,
+      });
+
+      await expect(
+        caller().setBatchState({ manufacturingBatchId: 'batch_1', state: 'ACTIVE' })
+      ).rejects.toMatchObject(CAPABILITY_REFUSAL);
+
+      expect(db.pharmacyManufacturingBatch.findFirst).not.toHaveBeenCalled();
+      expect(db.pharmacyManufacturingBatch.update).not.toHaveBeenCalled();
+    }
+  );
+
+  it('does not let a safety user reactivate a batch covered by an open recall', async () => {
+    grant([allow('pharmacy:safety')]);
+    db.pharmacyManufacturingBatch.findFirst.mockResolvedValue({
+      id: 'batch_1',
+      medicineId: 'medicine_1',
+      state: 'RECALLED',
+    });
+    db.pharmacyRecallNotice.count.mockResolvedValue(1);
+
+    await expect(
+      caller().setBatchState({ manufacturingBatchId: 'batch_1', state: 'ACTIVE' })
+    ).rejects.toMatchObject({
+      code: 'CONFLICT',
+      message: 'Close the open recall before reactivating this batch.',
+    });
+
+    expect(db.pharmacyRecallNotice.count).toHaveBeenCalledWith({
+      where: {
+        organizationId: 'org_a',
+        status: 'OPEN',
+        OR: [{ batchId: 'batch_1' }, { medicineId: 'medicine_1' }],
+      },
+    });
+    expect(db.pharmacyManufacturingBatch.update).not.toHaveBeenCalled();
+  });
+
+  it('allows a safety user to reactivate a batch when no recall remains open', async () => {
+    grant([allow('pharmacy:safety')]);
+    db.pharmacyManufacturingBatch.findFirst.mockResolvedValue({
+      id: 'batch_1',
+      medicineId: 'medicine_1',
+      state: 'QUARANTINED',
+    });
+    db.pharmacyRecallNotice.count.mockResolvedValue(0);
+
+    await caller().setBatchState({ manufacturingBatchId: 'batch_1', state: 'ACTIVE' });
+
+    expect(db.pharmacyManufacturingBatch.update).toHaveBeenCalledWith({
+      where: { id: 'batch_1' },
+      data: { state: 'ACTIVE', stateReason: null, stateChangedAt: null },
+    });
   });
 
   it('allows an exact pharmacy:safety grant to acknowledge a recall', async () => {

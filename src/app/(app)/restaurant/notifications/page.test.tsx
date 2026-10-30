@@ -69,6 +69,17 @@ describe('RestaurantNotificationsPage tenancy resolution', () => {
     expect(screen.getByRole('heading', { name: 'Notifications center' })).toBeDefined();
   });
 
+  it('keeps the page eyebrow on the contrast-checked muted token', async () => {
+    mocks.resolveTenantActor.mockResolvedValue(actor);
+    mocks.createTRPCContext.mockResolvedValue(contextStub());
+
+    render(await RestaurantNotificationsPage({ searchParams }));
+
+    const eyebrow = screen.getByText('Restaurant operations');
+    expect(eyebrow.className).toContain('eyebrow');
+    expect(eyebrow.className).not.toContain('eyebrow-accent');
+  });
+
   it('never asks the context factory to re-resolve tenancy', async () => {
     mocks.resolveTenantActor.mockResolvedValue(actor);
     mocks.createTRPCContext.mockResolvedValue(contextStub());

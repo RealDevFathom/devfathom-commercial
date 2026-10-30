@@ -771,6 +771,29 @@ const purchasingRouter = router({
             );
           }
 
+          let updatedOrder;
+          try {
+            updatedOrder = await tx.pharmacyPurchaseOrder.update({
+              where: { id: order.id, status: 'SUBMITTED' },
+              data:
+                input.decision === 'APPROVED'
+                  ? {
+                      status: 'APPROVED',
+                      approvedAt: new Date(),
+                      approvedByUserId: ctx.session.user.id,
+                    }
+                  : { status: 'DRAFT' },
+            });
+          } catch (error) {
+            if ((error as { code?: unknown } | null)?.code === 'P2025') {
+              throw new TRPCError({
+                code: 'CONFLICT',
+                message: 'Purchase order has already been reviewed.',
+              });
+            }
+            throw error;
+          }
+
           await tx.pharmacyPurchaseOrderApproval.create({
             data: {
               purchaseOrderId: order.id,
@@ -782,17 +805,7 @@ const purchasingRouter = router({
               reason: input.reason,
             },
           });
-          return tx.pharmacyPurchaseOrder.update({
-            where: { id: order.id },
-            data:
-              input.decision === 'APPROVED'
-                ? {
-                    status: 'APPROVED',
-                    approvedAt: new Date(),
-                    approvedByUserId: ctx.session.user.id,
-                  }
-                : { status: 'DRAFT' },
-          });
+          return updatedOrder;
         });
       } catch (error) {
         domainError(error);
@@ -992,16 +1005,16 @@ const purchasingRouter = router({
           throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
         }
 
-        const ownOrderLines = input.purchaseOrderId
-          ? new Set(
-              (
+        const ownOrderLines = new Map(
+          input.purchaseOrderId
+            ? (
                 await ctx.db.pharmacyPurchaseOrderLine.findMany({
                   where: { purchaseOrderId: input.purchaseOrderId },
-                  select: { id: true },
+                  select: { id: true, medicineId: true, packLevelId: true },
                 })
-              ).map((line) => line.id)
-            )
-          : new Set<string>();
+              ).map((line) => [line.id, line] as const)
+            : []
+        );
 
         const lines = [];
         const seenSerials = new Set<string>();
@@ -1015,8 +1028,19 @@ const purchasingRouter = router({
           // An ordered line borrowed from another order — or from another
           // tenant — would make the three-way match compare the goods against
           // something they were never ordered on.
-          if (line.purchaseOrderLineId && !ownOrderLines.has(line.purchaseOrderLineId))
-            throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
+          if (line.purchaseOrderLineId) {
+            const orderLine = ownOrderLines.get(line.purchaseOrderLineId);
+            if (!orderLine) throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
+            // The referenced order line is the authority for item identity. Without
+            // this check, unrelated goods could inherit its price and quantity terms,
+            // pass three-way matching, and close the wrong ordered line.
+            if (
+              orderLine.medicineId !== line.medicineId ||
+              orderLine.packLevelId !== line.packLevelId
+            ) {
+              throw new PharmacyReceivingError('PURCHASE_ORDER_LINE_ITEM_MISMATCH');
+            }
+          }
 
           const quantities = receiptLineQuantities({
             receivedPacks: line.receivedPacks,
