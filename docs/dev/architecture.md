@@ -117,7 +117,7 @@ Each tenant is an **Organization**. Isolation is enforced **in the database**, n
 
 - RLS policies and composite constraints exist **only in migrations**. This is why `db:push` is disabled (see [onboarding.md](./onboarding.md#3-database-migrations-not-dbpush)).
 - Every new tenant-scoped table needs an RLS policy in its migration, plus RLS test coverage.
-- `bun run test:rls` (`scripts/verify-tenant-isolation.ts`, disposable DB only) is the quick check.
+- `bun run test:rls` (`scripts/verify-tenant-isolation.ts`) checks a disposable, migrated and seeded database. Its `TEST_DATABASE_URL` needs setup privileges to create and grant roles and `SET ROLE`; the script creates its own restricted role for the probes. See [testing.md](./testing.md).
 
 ## Cross-cutting concerns
 

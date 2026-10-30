@@ -1,16 +1,16 @@
 # Contributing and branching
 
 > **Audience:** engineers and coding agents.
-> **Based on:** `origin/main` @ `16a2a370` and CTO answers from 2026-10-22.
+> **Based on:** `origin/main` @ `16a2a370` and CTO answers from 2026-10-22; branch guidance updated for the `develop` PR base on 2026-10-30.
 > Related: [onboarding.md](./onboarding.md) · [testing.md](./testing.md)
 
 ---
 
 ## The rules
 
-1. **Every change reaches `main` through a pull request with review.**
-2. **Never push directly to `main`.** No exceptions, including for agents and for "tiny" fixes.
-3. Branch from `main` and keep branches short-lived. Delete them after merge (auto-delete is the target).
+1. **Every change reaches `develop`, `staging` or `main` through a pull request with review.**
+2. **Never push directly to `develop`, `staging` or `main`.** No exceptions, including for agents and for "tiny" fixes.
+3. Branch from `develop` for normal development and keep branches short-lived. Delete them after merge (auto-delete is the target).
 4. **Never commit secrets** (`.env`, `.env.local`, tokens, passwords, demo logins). Run `gitleaks` before opening a PR; there is no gitleaks CI workflow on `main` yet.
 5. **Azure is DEPRECATED – never deploy to Azure.** See [below](#deployment-azure-is-deprecated).
 
@@ -18,24 +18,25 @@
 
 | Branch | Purpose |
 |---|---|
-| `main` | Integration branch. PR-only. |
+| `develop` | Integration branch for normal code and docs PRs. PR-only. |
+| `staging` | Staging branch. Changes require a reviewed PR. |
+| `main` | Release branch. Changes require a reviewed PR. |
 | `fix/<short-name>` | Most code changes (the most common prefix), e.g. `fix/abac-deny-precedence` |
 | `improve/<short-name>` | Improvements to existing features |
 | `release/<name>` | Release branches |
 | `docs/<short-name>` | Documentation-only changes, e.g. `docs/dev-onboarding-architecture` |
 | `qa/<short-name>` | QA work |
 | `codex/<short-name>` | Branches opened by the Codex agent |
-| `staging`, `develop` | **Planned, not created yet.** The target model is `main` + `staging` + `develop`. TODO(confirm): creation date. Until then, PRs target `main`. |
 | `bots/post-hire-work` | Kept. Do not delete. |
 
 ## Pull request flow
 
 ```bash
-git checkout main && git pull
+git checkout develop && git pull --ff-only
 git checkout -b fix/<short-name>          # or improve/, docs/, qa/ …
 # …work, commit…
 git push -u origin fix/<short-name>
-# open a PR against main
+# open a PR against develop
 ```
 
 Before opening the PR:
@@ -51,7 +52,7 @@ Branch protection is not available on our GitHub plan, so review is required **b
 
 ### Docs PRs
 
-- Branch `docs/<topic>` → PR into `main`.
+- Branch `docs/<topic>` → PR into `develop`.
 - **The CTO approves docs PRs.**
 - Docs-only PRs **skip the QA gate** but still need a secrets check (run `gitleaks` locally). A docs PR that touches code or config goes through the normal gate.
 - Content about DRAP and the controlled register must be labelled **"DRAFT – pending legal review"**.
@@ -61,12 +62,12 @@ Branch protection is not available on our GitHub plan, so review is required **b
 
 | Workflow | What it does | Status |
 |---|---|---|
-| `qa.yml` | QA gate, including RLS regressions | Triggers on push to `restaurantv2`, PRs into `integration/**`, and manual dispatch with a SHA. Not automatic on PRs into `main`. |
+| `qa.yml` | QA gate, including RLS regressions | Triggers on push to `restaurantv2`, PRs into `integration/**`, and manual dispatch with a SHA. Not automatic on PRs into `develop`, `staging` or `main`. |
 | `image-build.yml` | Builds the container image on every pull request (no push, no deploy) | Active |
 | `promote-production.yml` | Azure production promotion | **DEPRECATED – never deploy to Azure** |
 | `deploy-staging.yml` | Azure-only staging deploy, manual dispatch only | **DEPRECATED – never start it.** |
 
-There is **no AWS CI workflow**. The AWS staging path matches `infra/aws` as of 2026-10-22: CloudFormation stacks (`infra/aws/shared.yaml`, `environment.yaml`, `certificate.yaml`, `dns.yaml`) plus CodeBuild (`infra/aws/buildspec.yml`) building from a source zip in S3 with `IMAGE_TAG` set to the commit SHA, then migrate, `prepare-runtime-role`, and an ECS service roll. No CDK and no GitHub Actions. Full procedure in PR 5.
+There is **no AWS CI workflow**. The AWS staging path matches `infra/aws` as of 2026-10-22: CloudFormation stacks (`infra/aws/shared.yaml`, `environment.yaml`, `certificate.yaml`, `dns.yaml`) plus CodeBuild (`infra/aws/buildspec.yml`) building from a source zip in S3 with `IMAGE_TAG` set to the commit SHA, then migrate, `prepare-runtime-role`, and an ECS service roll. No CDK and no GitHub Actions. Full procedure in [the AWS deployment guide](../deploy/aws.md).
 
 ## Deployment: Azure is DEPRECATED
 

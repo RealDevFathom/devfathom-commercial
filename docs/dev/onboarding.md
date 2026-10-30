@@ -25,7 +25,7 @@ Follow [LOCAL_SETUP.md](../LOCAL_SETUP.md) for the exact commands. In summary:
 
 1. `bun install --frozen-lockfile`. The `postinstall` step runs `prisma generate`, which writes the client to `src/generated/prisma`. Never edit that directory; regenerate with `bun run db:generate`.
 2. Copy `.env.example` to **`.env.local`** (ignored by Git) and fill in local values. LOCAL_SETUP lists the minimum variables. **Never commit env files or paste real values into docs, PRs, issues or chat.**
-3. Create the database and shadow database, plus a separate **application role** that is `NOSUPERUSER NOBYPASSRLS`. The app connects with `DATABASE_URL` as that role; migrations and seeds use `MIGRATION_DATABASE_URL`. A production server refuses to start if the app role can bypass RLS. `prisma/prepare-runtime-role.ts` automates this after `migrate deploy`: it creates the app login with no right to create databases or roles, sets its password, and grants connect, schema use and read/write on tables and sequences (including future ones). It fails if the login has extra powers, if `APP_DATABASE_URL` is not that role, or if it points at a different server or database from `DATABASE_URL`.
+3. Create the database and shadow database, plus a separate **application role** that is `NOSUPERUSER NOBYPASSRLS`. The app connects with `DATABASE_URL` as that role; migrations and seeds use `MIGRATION_DATABASE_URL`. A production server refuses to start if the app role can bypass RLS. Follow LOCAL_SETUP's role creation and grants for local development. The deployment helper `prisma/prepare-runtime-role.ts` instead expects **`DATABASE_URL` to be the migration/admin connection** and **`APP_DATABASE_URL` to be the `devfathom_app` connection** to the same server and database; its connect grant is hard-coded to the `devfathom` database. Run it only with that command's environment configured as in [the AWS deployment guide](../deploy/aws.md), after `migrate deploy`. Keep the running app's `DATABASE_URL` on the restricted role.
 4. Run `bun prisma/prepare-extensions.ts` **before** migrating. A later migration fails closed if this was skipped.
 5. Apply migrations with `bunx prisma migrate deploy` (164 migrations as of `16a2a370`), then grant the app role access as LOCAL_SETUP shows.
 6. Seed with `bun run db:seed`.
@@ -50,8 +50,8 @@ Follow [LOCAL_SETUP.md](../LOCAL_SETUP.md) for the exact commands. In summary:
 ### Changing the schema
 
 1. Edit `prisma/schema.prisma`.
-2. Run `bun run db:migrate` to create a migration. **If you add a tenant-scoped model, the migration must also add its RLS policy.** Prisma will not generate it. Copy the pattern from `prisma/migrations/20260728092000_row_level_security/migration.sql` (the base RLS setup) or a per-module example such as `prisma/migrations/20260818160000_restaurant_brands_catalog_menus/`.
-3. Add or extend RLS and migration tests (see [testing.md](./testing.md)).
+2. Create the migration without applying it: `bunx prisma migrate dev --create-only --name <short-name>`. **If you add a tenant-scoped model, edit the generated SQL to add its RLS policy before applying it.** Prisma will not generate it. Copy the pattern from `prisma/migrations/20260728092000_row_level_security/migration.sql` (the base RLS setup) or a per-module example such as `prisma/migrations/20260818160000_restaurant_brands_catalog_menus/`.
+3. Apply the completed migration with `bun run db:migrate`. Add or extend RLS and migration tests (see [testing.md](./testing.md)).
 
 For a brand-new shared database, see the fresh-database pipeline in `prisma/FRESH_DATABASE_ADAPTER.md` and the root `FRESH_DB_HANDOFF.md`. TODO(confirm): which is current, and whether they move into `docs/`.
 
@@ -94,12 +94,12 @@ bun run test       # Vitest. Use the package script, not `bun test` (Bun's own r
 bun run build
 ```
 
-- `bun run test` **skips** the database-backed suites unless `TEST_DATABASE_URL` is set, and that role must be neither `SUPERUSER` nor `BYPASSRLS`. See LOCAL_SETUP.
-- `bun run test:rls` runs the tenant-isolation verifier. Point it only at a **disposable** database via `TEST_DATABASE_URL`.
+- Most database-backed Vitest suites require `TEST_DATABASE_URL` with a role that is neither `SUPERUSER` nor `BYPASSRLS`; some require additional suite-specific URLs. A run with skipped suites has not verified them. See [testing.md](./testing.md) and LOCAL_SETUP.
+- `bun run test:rls` runs the tenant-isolation verifier. Point it only at a **disposable, migrated and seeded** database via `TEST_DATABASE_URL`, using a setup connection that can create and grant roles and `SET ROLE`. The verifier creates its own restricted role for the isolation probes; the app's restricted runtime connection is not sufficient.
 
 ## 7. Before your first PR
 
-- Read [contributing.md](./contributing.md). PRs go to `main` through review, and nobody pushes directly.
+- Read [contributing.md](./contributing.md). Normal code and docs PRs go to `develop` through review, and nobody pushes directly to `develop`, `staging` or `main`.
 - Read [auth-and-roles.md](./auth-and-roles.md) before touching anything in pharmacy dispensing, safety or catalogue review.
 - Coding agents: also read `AGENTS.md` / `CLAUDE.md` at the repo root.
 
