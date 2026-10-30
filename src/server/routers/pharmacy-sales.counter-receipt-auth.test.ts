@@ -519,8 +519,8 @@ describe('counter receipt authorization', () => {
     expect(path.write).not.toHaveBeenCalled();
   });
 
-  it.each(['pharmacy:counter', 'reports:financial'])(
-    'keeps Khata tender off the branch-assignment guard with %s',
+  it.each(['*', 'pharmacy:*', 'pharmacy:counter'])(
+    'keeps Khata tender with %s off the branch-assignment guard',
     async (capability) => {
       const f = fixture([{ capability, effect: 'ALLOW' }]);
       f.db.$transaction.mockRejectedValue(new Error('khata-reached'));
@@ -540,6 +540,41 @@ describe('counter receipt authorization', () => {
       expect(applyPharmacyTender).not.toHaveBeenCalled();
     }
   );
+
+  it.each(['pharmacy:dispense', 'reports:financial'])(
+    'denies Khata tender with %s access alone',
+    async (capability) => {
+      const f = fixture([{ capability, effect: 'ALLOW' }]);
+      await expect(
+        f.caller().tender({
+          branchId: 'branch-a',
+          saleId: 'sale-a',
+          deviceId: 'device-a',
+          businessDate: new Date('2026-10-01T00:00:00.000Z'),
+          type: 'KHATA',
+          amountMinor: 100,
+          familyAccountId: 'family-1',
+          idempotencyKey: 'khata-denied',
+        })
+      ).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'Pharmacy counter permission required.',
+      });
+      expect(f.db.$transaction).not.toHaveBeenCalled();
+      expect(f.db.pharmacyBranchAssignment.findMany).not.toHaveBeenCalled();
+      expect(applyPharmacyTender).not.toHaveBeenCalled();
+    }
+  );
+
+  it('keeps finance-only Khata account reads off the branch-assignment guard', async () => {
+    const f = fixture([{ capability: 'reports:financial', effect: 'ALLOW' }]);
+    f.db.$transaction.mockRejectedValue(new Error('khata-read-reached'));
+    await expect(
+      f.caller().khataAccounts({ branchId: 'branch-a', saleId: 'sale-a' })
+    ).rejects.toThrow('khata-read-reached');
+    expect(f.db.pharmacyBranchAssignment.findMany).not.toHaveBeenCalled();
+    expect(applyPharmacyTender).not.toHaveBeenCalled();
+  });
 
   it('denies pharmacy orders alone', async () => {
     const f = fixture([{ capability: 'pharmacy:orders', effect: 'ALLOW' }]);
