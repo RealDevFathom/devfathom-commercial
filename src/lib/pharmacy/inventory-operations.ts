@@ -421,6 +421,7 @@ export async function dispatchTransfer(
         quantityUnits: line.quantityUnits,
         sealedPackDelta: arrangement.sealedPacks,
         looseUnitDelta: arrangement.looseUnits,
+        reason: `Interbranch transfer line ${line.id}`,
         idempotencyKey: `${key}:${i}:transit`,
       },
     });
@@ -437,6 +438,11 @@ export async function receiveTransferLine(
   input: { transferId: string; lineId: string; receivedUnits: number; idempotencyKeyPrefix: string }
 ) {
   assertPositive(input.receivedUnits);
+  // Keep the remaining line quantity and its packaging stable across receipts.
+  const [lockedTransfer] = await db.$queryRaw<Array<{ id: string }>>(
+    Prisma.sql`SELECT id FROM "pharmacy_interbranch_transfers" WHERE id=${input.transferId} AND "organizationId"=${scope.organizationId} AND "toBranchId"=${scope.branchId} FOR UPDATE`
+  );
+  if (!lockedTransfer) throw new PharmacyInventoryError('CROSS_BRANCH_REFERENCE');
   const transfer = await db.pharmacyInterbranchTransfer.findFirst({
     where: {
       id: input.transferId,
@@ -455,22 +461,78 @@ export async function receiveTransferLine(
   if (line.receivedUnits + input.receivedUnits > line.quantityUnits)
     throw new PharmacyInventoryError('INVALID_UNITS');
   const source = await db.pharmacyInventoryLot.findFirstOrThrow({
-    where: { id: line.sourceLotId },
+    where: {
+      id: line.sourceLotId,
+      organizationId: scope.organizationId,
+      branchId: transfer.fromBranchId,
+    },
     include: { batch: true },
   });
-  const a = arrangementFor(input.receivedUnits, source.unitsPerPack);
-  await db.pharmacyStockMovement.create({
-    data: {
+  const [transit] = await db.$queryRaw<
+    Array<{ onHandUnits: number; sealedPacks: number; looseUnits: number }>
+  >(
+    Prisma.sql`SELECT "onHandUnits", "sealedPacks", "looseUnits" FROM "pharmacy_stock_balances" WHERE "organizationId"=${scope.organizationId} AND "branchId"=${transfer.fromBranchId} AND "inventoryLotId"=${source.id} AND "stockLocationId"=${line.sourceStockLocationId} AND disposition='IN_TRANSIT' FOR UPDATE`
+  );
+  if (!transit || transit.onHandUnits < input.receivedUnits)
+    throw new PharmacyInventoryError('INSUFFICIENT_STOCK');
+
+  const reason = `Interbranch transfer line ${line.id}`;
+  const movements = await db.pharmacyStockMovement.findMany({
+    where: {
       organizationId: scope.organizationId,
       branchId: transfer.fromBranchId,
       inventoryLotId: source.id,
       stockLocationId: line.sourceStockLocationId,
-      kind: 'TRANSFER_OUT',
       disposition: 'IN_TRANSIT',
+      reason,
+    },
+    select: { kind: true, sealedPackDelta: true, looseUnitDelta: true },
+  });
+  // New dispatches carry line attribution: a shared transit bucket must never
+  // let a loose shipment consume another shipment's sealed packs. Older,
+  // unattributed dispatches can only use the physical transit balance.
+  const remaining = movements.some((movement) => movement.kind === 'TRANSFER_IN')
+    ? movements.reduce(
+        (total, movement) => ({
+          sealedPacks: total.sealedPacks + movement.sealedPackDelta,
+          looseUnits: total.looseUnits + movement.looseUnitDelta,
+        }),
+        { sealedPacks: 0, looseUnits: 0 }
+      )
+    : transit;
+  const a = planRemovalArrangement({
+    ...remaining,
+    unitsPerPack: source.unitsPerPack,
+    quantityUnits: input.receivedUnits,
+  });
+  const transitScope = {
+    organizationId: scope.organizationId,
+    branchId: transfer.fromBranchId,
+    inventoryLotId: source.id,
+    stockLocationId: line.sourceStockLocationId,
+    disposition: 'IN_TRANSIT' as const,
+    actorId: scope.actorId,
+    reason,
+  };
+  if (a.breakPack.packsToBreak > 0) {
+    await db.pharmacyStockMovement.create({
+      data: {
+        ...transitScope,
+        kind: 'BREAK_PACK',
+        quantityUnits: 0,
+        sealedPackDelta: a.breakPack.sealedPackDelta,
+        looseUnitDelta: a.breakPack.looseUnitDelta,
+        idempotencyKey: `${input.idempotencyKeyPrefix}:transit-break-pack`,
+      },
+    });
+  }
+  await db.pharmacyStockMovement.create({
+    data: {
+      ...transitScope,
+      kind: 'TRANSFER_OUT',
       quantityUnits: -input.receivedUnits,
       sealedPackDelta: -a.sealedPacks,
       looseUnitDelta: -a.looseUnits,
-      actorId: scope.actorId,
       idempotencyKey: `${input.idempotencyKeyPrefix}:transit-out`,
     },
   });
