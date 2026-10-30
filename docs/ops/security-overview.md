@@ -40,7 +40,9 @@ Tenant data is separated at three layers.
 - Two-step sign-in (TOTP plus recovery codes) is available to tenant users and is off until each user enables it.
 
 ### Platform staff
-- Separate `PlatformUser`, `PlatformSession` and `PlatformRole`. The first platform sign-in always enrols an authenticator.
+- Separate `PlatformUser`, `PlatformSession` and `PlatformRole`.
+- **MFA enforcement** (`src/lib/platform/auth.ts`, verified by `tests/platform-enrollment.test.ts`): `SUPER_ADMIN`, `OPERATIONS` and `SUPPORT` require authenticator enrollment by default. Any role also requires enrollment when its user's `mfaRequired` is true. Accounts requiring enrollment receive only a 10-minute enrollment session after successful password sign-in, with no platform capabilities until enrollment is complete.
+- `SALES`, `FINANCE` and `AUDITOR` can sign in without MFA when `mfaRequired` is false and they have not enabled MFA. Setting `PLATFORM_MFA_ENFORCE` to the literal `false` disables only the default role-based requirement; per-user `mfaRequired` still applies. Once MFA is enabled, sign-in requires a valid TOTP or unused recovery code regardless of role or this override.
 - Capabilities per role (`src/lib/platform/capabilities.ts`):
 
 | PlatformRole | Can |

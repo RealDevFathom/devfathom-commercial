@@ -27,6 +27,7 @@
 | `AUTH_URL`, `NEXTAUTH_URL`, `NEXT_PUBLIC_APP_URL` | The app's public base URL. `NEXT_PUBLIC_APP_URL` is inlined at build time (a build argument). |
 | `AUTH_TRUST_HOST` | Set on AWS so next-auth trusts the load balancer's host header |
 | `PLATFORM_BASE_DOMAIN` | Base domain for tenant subdomains and the platform console |
+| `PLATFORM_MFA_ENFORCE` | Controls the default MFA requirement for privileged platform roles. Disabling it does not bypass per-user requirements or verification for enrolled users; see [Platform staff](security-overview.md#platform-staff). |
 | `SHARED_APP_HOSTS` | Hosts that are not tenant subdomains |
 | `DEFAULT_ORGANIZATION_ID` | The default organization for local single-tenant use |
 | `PLATFORM_ENCRYPTION_KEY` | Encrypts stored secrets such as MFA and SSO data. **Losing it makes that data unrecoverable.** |
