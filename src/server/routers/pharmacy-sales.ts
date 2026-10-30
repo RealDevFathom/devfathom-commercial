@@ -158,24 +158,15 @@ async function scopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> 
 }
 
 async function khataScope(ctx: TRPCContext, branch: string) {
-  const scope = await scopeFor(ctx, branch);
+  // Khata moves money through the counter and shares its member/branch boundary.
+  const scope = await requireCounterReceiptAccess(ctx, branch, true);
   if (
     ctx.organization?.vertical !== 'PHARMACY' ||
     ctx.organization.id !== scope.organizationId ||
     ctx.session!.user.organizationId !== scope.organizationId ||
-    !hasModule(ctx.entitlements, 'pharmacy-counter') ||
-    !(await can(subjectFromSession(ctx.session!.user), 'pharmacy:counter', undefined, {
-      db: ctx.db,
-      source: 'TRPC',
-    }))
+    !hasModule(ctx.entitlements, 'pharmacy-counter')
   )
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Pharmacy counter permission required.' });
-  const available = await ctx.db.pharmacyBranch.findFirst({
-    where: { organizationId: scope.organizationId, id: branch, active: true },
-    select: { id: true },
-  });
-  if (!available)
-    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
   return scope;
 }
 

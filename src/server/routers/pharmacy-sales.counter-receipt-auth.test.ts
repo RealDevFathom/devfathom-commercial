@@ -435,9 +435,8 @@ describe('counter receipt authorization', () => {
     expect(f.db.$transaction).not.toHaveBeenCalled();
   });
 
-  it('keeps Khata tender off the branch-assignment guard', async () => {
+  it('denies Khata tender when the cashier has no branch assignment', async () => {
     const f = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }]);
-    f.db.$transaction.mockRejectedValue(new Error('khata-reached'));
     await expect(
       f.caller().tender({
         branchId: 'branch-a',
@@ -449,8 +448,9 @@ describe('counter receipt authorization', () => {
         familyAccountId: 'family-1',
         idempotencyKey: 'khata-1',
       })
-    ).rejects.toThrow('khata-reached');
-    expect(f.db.pharmacyBranchAssignment.findMany).not.toHaveBeenCalled();
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+    expect(f.db.pharmacyBranchAssignment.findMany).toHaveBeenCalled();
+    expect(f.db.$transaction).not.toHaveBeenCalled();
     expect(applyPharmacyTender).not.toHaveBeenCalled();
   });
 
