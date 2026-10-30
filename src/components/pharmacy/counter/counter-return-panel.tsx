@@ -193,7 +193,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
           : next;
       // Witness credentials remain in memory only; a recovered controlled return needs a fresh PIN.
       localStorage.setItem(storageKey, JSON.stringify(saved));
-      setAttempt(next);
+      setAttempt(saved);
       if (next.kind === 'return') {
         const result = await returnLine.mutateAsync(next.input);
         if (result && 'blocked' in result) {
@@ -208,7 +208,6 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
       localStorage.removeItem(storageKey);
       setAttempt(null);
       setConfirmed(false);
-      setWitnessPin('');
       setUnits('1');
       setAmount('');
       setMessage(
@@ -233,6 +232,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
         `${counterErrorMessage(cause)} Check history before handing out cash; an unknown outcome must use the saved retry.`
       );
     } finally {
+      setWitnessPin('');
       latch.current = false;
       setBusy(false);
     }
