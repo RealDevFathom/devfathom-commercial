@@ -453,7 +453,7 @@ export const financeRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       // FIN-06: enforce a status state-machine, never re-fire side-effects on a
-      // no-op, and clear paidAt/sentAt when the invoice leaves PAID/SENT.
+      // no-op, and reset payment/issue timestamps only when the transition requires it.
       const current = await ctx.db.invoice.findUnique({
         where: { id: input.id },
         select: { status: true },
@@ -663,7 +663,7 @@ export const financeRouter = router({
   markOverdueInvoices: adminProcedure.mutation(async ({ ctx }) => {
     const result = await ctx.db.invoice.updateMany({
       where: { status: 'SENT', dueDate: { lt: new Date() } },
-      data: { status: 'OVERDUE', sentAt: null },
+      data: invoiceStatusUpdate('SENT', 'OVERDUE', new Date()),
     });
     return { count: result.count };
   }),

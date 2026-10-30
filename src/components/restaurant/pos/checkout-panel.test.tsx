@@ -45,6 +45,14 @@ const billed = {
 };
 
 describe('CheckoutPanel', () => {
+  it("labels an unsplit bill as 'Whole order' instead of exposing the NONE sentinel", async () => {
+    const request: TerminalRequest = async <T,>() => billed as T;
+    render(<CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />);
+
+    expect(await screen.findByRole('heading', { name: 'Whole order' })).toBeVisible();
+    expect(screen.queryByRole('heading', { name: 'NONE' })).not.toBeInTheDocument();
+  });
+
   it.each(['3860.00', '2860.25', '0.00'])(
     'prefills the authoritative initial balance %s, including partial and zero balances',
     async (remainingDue) => {
