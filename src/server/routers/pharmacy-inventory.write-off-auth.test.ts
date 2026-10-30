@@ -2,6 +2,7 @@
  * is mocked. Capability, actual selected-branch authority and a valid witness
  * are independent requirements. Refusals must not read stock or write evidence. */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Prisma } from '@/generated/prisma/client';
 
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
@@ -53,8 +54,10 @@ function makeDb() {
       ),
     },
     pharmacyBranchAssignment: {
-      findFirst: vi.fn(async ({ where }: { where: { branchId: string; userId: string } }) =>
-        where.branchId === 'branch_a' && where.userId === 'actor_a' ? { id: 'assignment_a' } : null
+      findFirst: vi.fn(async ({ where }: Prisma.PharmacyBranchAssignmentFindFirstArgs) =>
+        where?.branchId === 'branch_a' && where?.userId === 'actor_a'
+          ? { id: 'assignment_a' }
+          : null
       ),
     },
     pharmacyInventoryLot: {
@@ -291,6 +294,28 @@ describe('SEC-374-01 write-off capability and actual-branch authority', () => {
     untouched();
   });
 
+  it('identifies the actor even when the witness sorts first in the locked rows', async () => {
+    grant([allow('pharmacy:inventory')]);
+    db.user.findFirst.mockResolvedValue({ id: 'a_witness' });
+    db.currentActorRows.mockResolvedValue([
+      { id: 'a_witness', role: 'EMPLOYEE', department: null, status: 'ACTIVE' },
+      { id: 'actor_a', role: 'EMPLOYEE', department: null, status: 'ACTIVE' },
+    ]);
+    await expect(caller().writeOff({ ...input, witnessId: 'a_witness' })).resolves.toMatchObject({
+      movement: { actorId: 'actor_a' },
+    });
+  });
+
+  it('does not use a locked witness as authority when the actor is inactive', async () => {
+    grant([allow('pharmacy:inventory')]);
+    db.currentActorRows.mockResolvedValue([
+      { id: 'witness_a', role: 'EMPLOYEE', department: null, status: 'ACTIVE' },
+    ]);
+    await expect(caller().writeOff(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.user.findUnique).toHaveBeenCalledTimes(1);
+    untouched();
+  });
+
   it('still requires an active same-tenant distinct witness after both authorizations succeed', async () => {
     grant([allow('pharmacy:inventory')]);
     db.user.findFirst.mockResolvedValue(null);
@@ -310,6 +335,9 @@ describe('SEC-374-01 write-off capability and actual-branch authority', () => {
     expect(sql).toHaveLength(6);
     expect(sql[0]).toContain('FOR UPDATE OF b, a');
     expect(sql[1]).toContain('FROM users u');
+    expect(sql[1]).toContain('u.id IN (?, ?)');
+    expect(sql[1]).toContain('ORDER BY u.id');
+    expect(db.$queryRaw.mock.calls[1][0].values.slice(0, 2)).toEqual(['actor_a', 'witness_a']);
     expect(sql[2]).toContain('FROM organization_roles');
     expect(sql[3]).toContain('FROM organization_role_permissions');
     expect(sql[4]).toContain('FROM user_permission_overrides');

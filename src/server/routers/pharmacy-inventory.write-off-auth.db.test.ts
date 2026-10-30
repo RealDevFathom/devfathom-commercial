@@ -5,6 +5,7 @@
 import { randomBytes } from 'node:crypto';
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import type { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { TRPCContext } from '../trpc';
 
@@ -50,14 +51,15 @@ async function admin<T>(organizationId: string, run: (tx: ScopedDb) => Promise<T
 
 async function call(
   actorId: string,
-  input: Parameters<ReturnType<typeof router.createCaller>['writeOff']>[0]
+  input: Parameters<ReturnType<typeof router.createCaller>['writeOff']>[0],
+  decorateDb: (db: ScopedDb) => ScopedDb = (db) => db
 ) {
   return inTenant(
     org,
     (db) =>
       router
         .createCaller({
-          db,
+          db: decorateDb(db),
           headers: new Headers(),
           entitlements: { organizationId: org, enabledModules: ['pharmacy-inventory'] },
           session: {
@@ -547,4 +549,63 @@ describeDatabase('SEC-374-01 Postgres no-effect authorization regressions', () =
       await db.user.update({ where: { id: actors.allowed }, data: { status: 'ACTIVE' } });
     });
   });
+
+  it('allows reciprocal witnesses to write off concurrently in different branches', async () => {
+    await admin(org, (db) =>
+      db.pharmacyBranchAssignment.create({
+        data: { organizationId: org, branchId: branchB, userId: actors.unassigned, active: true },
+      })
+    );
+    const inputA = { ...(await fixture(branchA)), witnessId: actors.unassigned };
+    const inputB = { ...(await fixture(branchB)), witnessId: actors.allowed };
+    let arrivals = 0;
+    let release!: () => void;
+    const bothReady = new Promise<void>((resolve) => (release = resolve));
+    function synchronize(db: ScopedDb): ScopedDb {
+      return new Proxy(db, {
+        get(target, key) {
+          if (key === '$transaction') {
+            return (run: (tx: ScopedDb) => Promise<unknown>) =>
+              target.$transaction((tx) => run(synchronize(tx as ScopedDb)));
+          }
+          if (key === '$queryRaw') {
+            return async (query: Prisma.Sql) => {
+              const locksParticipants = query.strings
+                .join('?')
+                .includes('u.id, u.role, u.department, u.status');
+              if (locksParticipants) {
+                if (++arrivals === 2) release();
+                await bothReady;
+              }
+              const result = await target.$queryRaw(query);
+              // Give the other request time to acquire its actor lock with the
+              // old ordering. Ordered participant locks safely serialize here.
+              if (locksParticipants) await new Promise((resolve) => setTimeout(resolve, 100));
+              return result;
+            };
+          }
+          return Reflect.get(target, key);
+        },
+      });
+    }
+
+    const results = await Promise.allSettled([
+      call(actors.allowed, inputA, synchronize),
+      call(actors.unassigned, inputB, synchronize),
+    ]);
+    expect(results.map((result) => result.status)).toEqual(['fulfilled', 'fulfilled']);
+    for (const [input, actorId] of [
+      [inputA, actors.allowed],
+      [inputB, actors.unassigned],
+    ] as const) {
+      const after = await snapshot(org, input.inventoryLotId);
+      expect(after.balances[0]!.onHandUnits).toBe(8);
+      const movements = after.movements.filter((movement) => movement.kind === 'WRITE_OFF');
+      expect(movements).toHaveLength(1);
+      expect(movements[0]).toMatchObject({ actorId, branchId: input.branchId, quantityUnits: -2 });
+      expect(after.custody.filter((record) => record.movementId === movements[0]!.id)).toEqual([
+        expect.objectContaining({ actorId, branchId: input.branchId, witnessId: input.witnessId }),
+      ]);
+    }
+  }, 30_000);
 });

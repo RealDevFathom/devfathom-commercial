@@ -166,7 +166,8 @@ async function scopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> 
 async function writeOffScopeFor(
   ctx: TRPCContext,
   db: ScopedDb,
-  requestedBranchId: string
+  requestedBranchId: string,
+  witnessId: string
 ): Promise<LedgerScope> {
   const actor = actorFor(ctx);
   await assertInOrganization(db.pharmacyBranch, actor.organizationId, [requestedBranchId], {
@@ -195,14 +196,19 @@ async function writeOffScopeFor(
   // again on this transaction handle. Locking both parents also serializes new
   // role grants/denies and user overrides through their foreign keys; updates
   // to existing rules serialize on the rule rows themselves.
+  // Lock both participants in one global order. Locking the actor here and
+  // the witness later deadlocks reciprocal write-offs in different branches.
+  // The service still validates the witness before any stock access.
   const currentActors = await db.$queryRaw<
     Array<{ id: string; role: string; department: string | null; status: string }>
   >(Prisma.sql`
     SELECT u.id, u.role, u.department, u.status FROM users u
-    WHERE u.id = ${actor.actorId} AND u."organizationId" = ${actor.organizationId}
+    WHERE u.id IN (${actor.actorId}, ${witnessId})
+      AND u."organizationId" = ${actor.organizationId}
       AND u.status IN (${Prisma.join([...ACTIVE_STATUSES])})
+    ORDER BY u.id
     FOR UPDATE`);
-  const currentActor = currentActors[0];
+  const currentActor = currentActors.find((user) => user.id === actor.actorId);
   if (!currentActor) {
     throw new TRPCError({
       code: 'FORBIDDEN',
@@ -1125,7 +1131,7 @@ export const pharmacyInventoryRouter = router({
       try {
         return await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
-          const writeScope = await writeOffScopeFor(ctx, db, input.branchId);
+          const writeScope = await writeOffScopeFor(ctx, db, input.branchId, input.witnessId);
           return writeOff(db, writeScope, input);
         });
       } catch (error) {
