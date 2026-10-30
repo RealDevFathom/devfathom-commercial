@@ -13,6 +13,7 @@ import {
 
 import { hasModule } from '@/lib/entitlements';
 import { can, subjectFromSession } from '@/lib/abac';
+import { assignedRegisterBranchIds } from '@/lib/pharmacy/controlled-register';
 import {
   readPharmacyDailyWorkPack,
   validateDailyWorkPackInput,
@@ -39,9 +40,10 @@ import {
   acknowledgePackAuthenticationFlag,
   readPackAuthenticationFlags,
 } from '@/lib/pharmacy/pack-authentication-operations';
-import { auditedProtectedProcedure, capabilityProcedure, router, type TRPCContext } from '../trpc';
+import { capabilityProcedure, router, type TRPCContext } from '../trpc';
 
 const reports = capabilityProcedure('reports:operational');
+const safety = capabilityProcedure('pharmacy:safety');
 const widget = z
   .object({
     key: z.enum(PHARMACY_WIDGET_KEYS),
@@ -92,9 +94,32 @@ const transitions: Record<z.infer<typeof pvState>, readonly z.infer<typeof pvSta
   SUBMITTED: ['CLOSED'],
   CLOSED: [],
 };
+const externalTransitions: Record<
+  z.infer<typeof externalState>,
+  readonly z.infer<typeof externalState>[]
+> = {
+  NOT_SUBMITTED: ['PENDING', 'SUBMITTED', 'FAILED'],
+  PENDING: ['SUBMITTED', 'FAILED'],
+  FAILED: ['PENDING', 'SUBMITTED', 'FAILED'],
+  SUBMITTED: [],
+};
+
+function isPrismaRecordChanged(error: unknown): error is { code: 'P2025' } {
+  return typeof error === 'object' && error !== null && 'code' in error && error.code === 'P2025';
+}
+
+function reportChangedConflict(): TRPCError {
+  return new TRPCError({
+    code: 'CONFLICT',
+    message: 'The report changed while this action was being recorded. Refresh and try again.',
+  });
+}
 
 async function requirePvBranch(ctx: TRPCContext, branchId: string) {
   const organizationId = ctx.entitlements.organizationId;
+  const assigned = await assignedRegisterBranchIds(ctx.db, organizationId, ctx.session!.user.id);
+  if (!assigned.includes(branchId))
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
   const branch = await ctx.db.pharmacyBranch.findFirst({
     where: { id: branchId, organizationId, active: true },
   });
@@ -176,7 +201,7 @@ export const pharmacyReportsRouter = router({
       }
       return readPharmacyMarketingReport(ctx.db, ctx.entitlements.organizationId, scoped);
     }),
-  createPharmacovigilanceReport: auditedProtectedProcedure
+  createPharmacovigilanceReport: safety
     .input(
       z
         .object({
@@ -222,7 +247,7 @@ export const pharmacyReportsRouter = router({
         data: { ...input, organizationId, createdByUserId: ctx.session.user.id },
       });
     }),
-  transitionPharmacovigilanceReport: auditedProtectedProcedure
+  transitionPharmacovigilanceReport: safety
     .input(
       z.object({ id: z.string().min(1), branchId: z.string().min(1), state: pvState }).strict()
     )
@@ -237,12 +262,24 @@ export const pharmacyReportsRouter = router({
           code: 'BAD_REQUEST',
           message: 'Invalid report lifecycle transition.',
         });
-      return ctx.db.pharmacyPharmacovigilanceReport.update({
-        where: { id: report.id },
-        data: { state: input.state, reviewedByUserId: ctx.session.user.id },
-      });
+      try {
+        return await ctx.db.pharmacyPharmacovigilanceReport.update({
+          // The lifecycle value and row revision make validation and writing one atomic operation.
+          where: {
+            id: report.id,
+            organizationId,
+            branchId: input.branchId,
+            state: report.state,
+            updatedAt: report.updatedAt,
+          },
+          data: { state: input.state, reviewedByUserId: ctx.session.user.id },
+        });
+      } catch (error) {
+        if (isPrismaRecordChanged(error)) throw reportChangedConflict();
+        throw error;
+      }
     }),
-  recordPharmacovigilanceSubmission: auditedProtectedProcedure
+  recordPharmacovigilanceSubmission: safety
     .input(
       z
         .object({
@@ -272,19 +309,56 @@ export const pharmacyReportsRouter = router({
       const organizationId = await requirePvBranch(ctx, input.branchId);
       const report = await ctx.db.pharmacyPharmacovigilanceReport.findFirst({
         where: { id: input.id, branchId: input.branchId, organizationId },
-        select: { id: true },
-      });
-      if (!report) throw new TRPCError({ code: 'NOT_FOUND', message: 'Report not found.' });
-      return ctx.db.pharmacyPharmacovigilanceReport.update({
-        where: { id: report.id },
-        data: {
-          externalSubmissionState: input.state,
-          externalReference: input.state === 'SUBMITTED' ? input.externalReference : null,
-          externalFailureReason: input.state === 'FAILED' ? input.failureReason : null,
+        select: {
+          id: true,
+          state: true,
+          externalSubmissionState: true,
+          externalReference: true,
+          externalFailureReason: true,
+          updatedAt: true,
         },
       });
+      if (!report) throw new TRPCError({ code: 'NOT_FOUND', message: 'Report not found.' });
+      // An outstanding submission can finish even if internal review resumes or closes.
+      const pendingOutcome =
+        report.externalSubmissionState === 'PENDING' &&
+        (input.state === 'SUBMITTED' || input.state === 'FAILED');
+      if (!['READY', 'SUBMITTED'].includes(report.state) && !pendingOutcome)
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'The report is not ready for external submission.',
+        });
+      if (!externalTransitions[report.externalSubmissionState].includes(input.state))
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Invalid external submission transition.',
+        });
+      try {
+        return await ctx.db.pharmacyPharmacovigilanceReport.update({
+          // Match the complete submission evidence snapshot. In particular, FAILED -> FAILED
+          // attempts cannot overwrite one another merely because their enum value is unchanged.
+          where: {
+            id: report.id,
+            organizationId,
+            branchId: input.branchId,
+            state: report.state,
+            externalSubmissionState: report.externalSubmissionState,
+            externalReference: report.externalReference,
+            externalFailureReason: report.externalFailureReason,
+            updatedAt: report.updatedAt,
+          },
+          data: {
+            externalSubmissionState: input.state,
+            externalReference: input.state === 'SUBMITTED' ? input.externalReference : null,
+            externalFailureReason: input.state === 'FAILED' ? input.failureReason : null,
+          },
+        });
+      } catch (error) {
+        if (isPrismaRecordChanged(error)) throw reportChangedConflict();
+        throw error;
+      }
     }),
-  exportPharmacovigilanceDrap: auditedProtectedProcedure
+  exportPharmacovigilanceDrap: safety
     .input(
       z
         .object({ branchId: z.string().min(1), from: z.date(), to: z.date() })
