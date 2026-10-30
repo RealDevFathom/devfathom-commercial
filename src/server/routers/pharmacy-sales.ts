@@ -462,11 +462,22 @@ async function requireCurrentOrPastCloseDate(
   organizationId: string,
   businessDate: Date
 ) {
+  // Close reports and day-lock keys use four-digit, positive ISO years.
+  const year = businessDate.getUTCFullYear();
+  if (year < 1 || year > 9999) {
+    throw new TRPCError({
+      code: 'BAD_REQUEST',
+      message: 'Choose a business date between years 0001 and 9999.',
+    });
+  }
   const organization = await db.organization.findUnique({
     where: { id: organizationId },
     select: { timezone: true },
   });
-  if (businessDate.toISOString().slice(0, 10) > workspaceToday(organization?.timezone)) {
+  const date = new Date(businessDate);
+  date.setUTCHours(0, 0, 0, 0);
+  const today = new Date(`${workspaceToday(organization?.timezone)}T00:00:00.000Z`);
+  if (date.getTime() > today.getTime()) {
     throw new TRPCError({
       code: 'BAD_REQUEST',
       message: 'Choose a business date that is not in the future.',

@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useSession } from 'next-auth/react';
 import { useEntitlements } from '@/components/entitlements-provider';
 import { evaluateSessionUser } from '@/lib/auth/session-state';
@@ -72,6 +72,26 @@ function DayCloseBranches() {
   // Until the operator picks a day: today in the workspace's zone, settled once
   // the zone is known, so a page left open past midnight keeps its day.
   const today = useMemo(() => (timeZone ? workspaceToday(timeZone) : ''), [timeZone]);
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout>;
+    // Align to minute boundaries so the maximum advances at workspace midnight.
+    // Focus/visibility also catch up immediately after a suspended browser tab.
+    const refresh = () => {
+      setNow(new Date());
+      clearTimeout(timer);
+      timer = setTimeout(refresh, 60_000 - (Date.now() % 60_000));
+    };
+    timer = setTimeout(refresh, 60_000 - (Date.now() % 60_000));
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refresh);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', refresh);
+    };
+  }, []);
+  const maximumDate = timeZone ? workspaceToday(timeZone, now) : '';
   const date = picked ?? today;
   const branchId = selected || branches.data?.branches[0]?.id || '';
   return (
@@ -103,7 +123,7 @@ function DayCloseBranches() {
             <Input
               className="min-h-11"
               type="date"
-              max={today}
+              max={maximumDate}
               value={date}
               onChange={(e) => setPicked(e.target.value)}
             />

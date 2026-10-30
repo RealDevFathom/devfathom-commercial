@@ -98,6 +98,75 @@ afterEach(() => {
 });
 
 describe('pharmacy close family refusals', () => {
+  const closeProcedures = ['closePreview', 'closeDay', 'dailyClose'] as const;
+  function requestClose(procedure: (typeof closeProcedures)[number], date: Date) {
+    const input = { branchId: BRANCH, businessDate: date };
+    return procedure === 'closeDay'
+      ? f.caller.closeDay({ ...input, sourceHash: 'a'.repeat(64), counts: [], varianceNote: '' })
+      : f.caller[procedure](input);
+  }
+
+  describe.each(closeProcedures)('%s date validation', (procedure) => {
+    it.each(['+010000-01-01', '+010001-01-01', '0000-01-01', '-000001-01-01'])(
+      'rejects unsupported year %s before reading or writing a close',
+      async (date) => {
+        await expect(
+          requestClose(procedure, new Date(`${date}T00:00:00.000Z`))
+        ).rejects.toMatchObject({
+          code: 'BAD_REQUEST',
+        });
+        expect(f.db.$queryRaw).not.toHaveBeenCalled();
+        expect(f.db.pharmacyDailyClose.findFirst).not.toHaveBeenCalled();
+        expect(f.db.pharmacyDailyClose.create).not.toHaveBeenCalled();
+      }
+    );
+
+    it.each([
+      ['Asia/Tokyo', '2026-10-21T15:00:00.000Z', '2026-10-23'],
+      ['America/Chicago', '2026-10-22T04:59:59.000Z', '2026-10-22'],
+      ['UTC', '2026-10-22T00:00:00.000Z', '9999-12-31'],
+    ])('refuses a future date in %s', async (timezone, now, date) => {
+      vi.useFakeTimers({ now: new Date(now) });
+      f.db.organization.findUnique.mockResolvedValue({ timezone });
+      await expect(
+        requestClose(procedure, new Date(`${date}T00:00:00.000Z`))
+      ).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+        message: 'Choose a business date that is not in the future.',
+      });
+      expect(f.db.$queryRaw).not.toHaveBeenCalled();
+      expect(f.db.pharmacyDailyClose.create).not.toHaveBeenCalled();
+    });
+  });
+
+  it.each([
+    ['Asia/Tokyo', '2026-10-21T15:00:00.000Z', '2026-10-22'],
+    ['America/Chicago', '2026-10-22T04:59:59.000Z', '2026-10-21'],
+    ['UTC', '2026-10-22T00:00:00.000Z', '2026-10-21'],
+    ['PKT', '2026-10-22T00:00:00.000Z', '2026-10-22'],
+    ['UTC', '2026-10-22T00:00:00.000Z', '0001-01-01'],
+    ['UTC', '2026-10-22T00:00:00.000Z', '0099-12-31'],
+  ])('allows today and past dates in %s', async (timezone, now, date) => {
+    vi.useFakeTimers({ now: new Date(now) });
+    f.db.organization.findUnique.mockResolvedValue({ timezone });
+    await expect(
+      f.caller.closePreview({ branchId: BRANCH, businessDate: new Date(`${date}T00:00:00.000Z`) })
+    ).resolves.toMatchObject({ businessDate: new Date(`${date}T00:00:00.000Z`) });
+  });
+
+  it('compares the legacy daily-close input as a date without changing its timestamp', async () => {
+    vi.useFakeTimers({ now: new Date('2026-10-22T00:00:00.000Z') });
+    f.db.pharmacyDrawerSession.count.mockResolvedValue(1);
+    const date = new Date('2026-10-22T23:59:59.000Z');
+    await expect(
+      f.caller.dailyClose({ branchId: BRANCH, businessDate: date })
+    ).rejects.toMatchObject({
+      code: 'CONFLICT',
+      message: 'OPEN_DRAWER',
+    });
+    expect(date.toISOString()).toBe('2026-10-22T23:59:59.000Z');
+  });
+
   it('refuses to close a future business date in the organization timezone', async () => {
     vi.useFakeTimers({ now: new Date('2026-10-22T12:00:00.000Z') });
     f.db.organization.findUnique.mockResolvedValue({ timezone: 'Asia/Karachi' });

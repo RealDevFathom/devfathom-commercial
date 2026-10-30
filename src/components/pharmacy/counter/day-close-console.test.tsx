@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, cleanup } from '@testing-library/react';
+import { act, fireEvent, render, screen, cleanup } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   role: 'ADMIN',
@@ -127,6 +127,36 @@ describe('day-close console', () => {
       branchId: 'b',
       businessDate: new Date('2026-10-22T00:00:00.000Z'),
     });
+  });
+  it.each([false, true])('refreshes the maximum at workspace midnight, picked=%s', (picked) => {
+    vi.useFakeTimers({ now: new Date('2026-10-21T14:59:30.000Z') });
+    render(<PharmacyDayCloseConsole />);
+    const date = screen.getByLabelText('Business date');
+    if (picked) fireEvent.change(date, { target: { value: '2026-10-20' } });
+    fireEvent.change(screen.getByLabelText('Counted cash for drawer 1 (PKR)'), {
+      target: { value: '124.00' },
+    });
+    expect(date).toHaveAttribute('max', '2026-10-21');
+
+    act(() => vi.advanceTimersByTime(30_000));
+
+    expect(date).toHaveAttribute('max', '2026-10-22');
+    expect(date).toHaveValue(picked ? '2026-10-20' : '2026-10-21');
+    expect(screen.getByLabelText('Counted cash for drawer 1 (PKR)')).toHaveValue('124.00');
+    fireEvent.change(date, { target: { value: '2026-10-22' } });
+    expect(date).toBeValid();
+    expect(mocks.previewInput).toHaveBeenLastCalledWith({
+      branchId: 'b',
+      businessDate: new Date('2026-10-22T00:00:00.000Z'),
+    });
+  });
+  it('refreshes the maximum when a suspended tab regains focus', () => {
+    vi.useFakeTimers({ now: new Date('2026-10-21T14:59:30.000Z') });
+    render(<PharmacyDayCloseConsole />);
+    vi.setSystemTime(new Date('2026-10-22T15:01:00.000Z'));
+    fireEvent.focus(window);
+    expect(screen.getByLabelText('Business date')).toHaveAttribute('max', '2026-10-23');
+    expect(screen.getByLabelText('Business date')).toHaveValue('2026-10-21');
   });
   it.each(['PKT', 'UTC+5'])(
     'still renders, in UTC, for a stored zone Intl refuses (%s)',

@@ -343,4 +343,26 @@ describeIfDatabase('pharmacy drawer and close procedures, against PostgreSQL', (
       );
     }
   });
+
+  it.each(['+010000-01-01', '+010001-01-01', '0000-01-01', '-000001-01-01', '9999-12-31'])(
+    'refuses unsupported or future date %s without committing a close',
+    async (date) => {
+      const before = await rowsFor(ACTIVE);
+      const input = { branchId: ACTIVE, businessDate: new Date(`${date}T00:00:00.000Z`) };
+      const { computePharmacyClose } = await import('@/lib/pharmacy/settlement');
+      // An otherwise valid empty-day hash: without date validation, closeDay
+      // and dailyClose could both commit these dates before any trading.
+      const { sourceHash } = computePharmacyClose({ sales: [], refunds: [], drawers: [] });
+      await expect(asAdmin((c) => c.closePreview(input))).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+      });
+      await expect(asAdmin((c) => c.dailyClose(input))).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+      });
+      await expect(
+        asAdmin((c) => c.closeDay({ ...input, sourceHash, counts: [], varianceNote: '' }))
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      expect(await rowsFor(ACTIVE)).toEqual(before);
+    }
+  );
 });
