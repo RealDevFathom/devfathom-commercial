@@ -53,6 +53,7 @@ beforeAll(async () => {
           saleUnit: 'PACK',
           quantity: 1,
           reason: 'STOCKOUT',
+          requestedText: 'Requested test medicine',
           inventoryRuleSnapshot: {},
           estimatedValueMinor: organizationId === org ? 1200 : 9900,
           capturedByUserId: 'fixture-user',

@@ -24,6 +24,7 @@ import {
 } from '@/lib/pharmacy/dashboard';
 import {
   PHARMACY_METRIC_CONTRACT,
+  MAX_PHARMACY_REPORT_DAYS,
   pharmacyReportCatalog,
   readPharmacyOwnerCommandCentre,
 } from '@/lib/pharmacy/reports';
@@ -412,22 +413,36 @@ export const pharmacyReportsRouter = router({
     },
   })),
   branchComparison: reports
-    .input(filters.pick({ from: true, to: true }).strict())
+    .input(
+      z
+        .object({ from: z.iso.date(), to: z.iso.date() })
+        .strict()
+        .refine((input) => input.from <= input.to, {
+          message: 'The report start date must not be after the end date.',
+        })
+        .refine(
+          (input) =>
+            (Date.parse(input.to) - Date.parse(input.from)) / 86_400_000 + 1 <=
+            MAX_PHARMACY_REPORT_DAYS,
+          {
+            message: `Interactive pharmacy reports are limited to ${MAX_PHARMACY_REPORT_DAYS} days.`,
+          }
+        )
+    )
     .query(async ({ ctx, input }) => {
-      const scoped = await ownerFilters(ctx, input);
+      await requireFinancialReports(ctx);
+      if (ctx.session!.user.role !== 'ADMIN')
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Owner access is required.' });
       const available = await scope(ctx);
-      try {
-        return await readPharmacyBranchComparison(ctx.db, {
-          branches: available.branches.filter((branch) => scoped.branchIds.includes(branch.id)),
+      // The RSC tenant facade otherwise gives each statement its own transaction, losing
+      // the transaction-local branch context before the khata ledger is read.
+      return ctx.db.$transaction((tx) =>
+        readPharmacyBranchComparison(tx as typeof ctx.db, {
+          branches: available.branches,
           from: input.from,
           to: input.to,
-        });
-      } catch (error) {
-        throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message: error instanceof Error ? error.message : 'Invalid comparison filters.',
-        });
-      }
+        })
+      );
     }),
   repeatPurchasing: reports
     .input(
