@@ -1462,6 +1462,7 @@ model PharmacySaleLine {
   canonicalUnitsPerSaleUnit Int
   canonicalUnits            Int
   unitPriceMinor            Int
+  priceAdjustmentMinor      Int                          @default(0)
   proRataCeilingMinor       Int
   unitCostMinor             Int
   discountKind              PharmacyDiscountKind?
@@ -1496,6 +1497,8 @@ model PharmacySaleLineAllocation {
   inventoryLotId  String
   stockLocationId String
   canonicalUnits  Int
+  /// Issued price per canonical unit; null for historical allocations.
+  unitPriceMinor  Int?
   stockMovementId String
   createdAt       DateTime             @default(now())
   saleLine        PharmacySaleLine     @relation(fields: [organizationId, saleLineId], references: [organizationId, id], onDelete: Restrict)

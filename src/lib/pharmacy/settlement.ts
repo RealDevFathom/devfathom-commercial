@@ -9,7 +9,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { reverseRefundedEarnedPoints } from './customer-loyalty-earned-reversal';
 import { accrueSalePoints, restoreRefundedLoyaltyPoints } from './customer-loyalty';
-import { returnedLineValue } from './sales';
+import { returnedSaleLineMoney, saleLineNetMinor } from './sale-pricing';
 import { postTenderEntry, postTenderRefundEntry } from './finance-postings';
 import { firstCloseIsFinal } from './migration/first-close';
 import { assertSaleBatchesSellable } from './sale-batch-safety';
@@ -71,12 +71,14 @@ export function requireReleaseSafeAdapter(
 }
 
 export function saleTotalMinor(
-  lines: readonly { quantity: number; unitPriceMinor: number; discountMinor: number }[]
+  lines: readonly {
+    quantity: number;
+    unitPriceMinor: number;
+    discountMinor: number;
+    priceAdjustmentMinor?: number;
+  }[]
 ) {
-  return lines.reduce(
-    (total, line) => total + line.quantity * line.unitPriceMinor - line.discountMinor,
-    0
-  );
+  return lines.reduce((total, line) => total + saleLineNetMinor(line), 0);
 }
 
 export function assertPositiveMinor(value: number) {
@@ -503,7 +505,7 @@ export async function refundPharmacyTender(
       status: 'COMPLETED',
     },
     include: {
-      lines: { include: { returnLines: true, unidentifiedReturnHolds: true } },
+      lines: { include: { returnLines: true, unidentifiedReturnHolds: true, allocations: true } },
       refunds: true,
     },
   });
@@ -520,16 +522,7 @@ export async function refundPharmacyTender(
     })) > 0;
   if (!unsettledExempt) {
     const returnValue =
-      sale?.lines.reduce(
-        (sum, line) =>
-          sum +
-          returnedLineValue(
-            line,
-            line.returnLines.reduce((n, row) => n + row.canonicalUnits, 0) +
-              line.unidentifiedReturnHolds.reduce((n, row) => n + row.canonicalUnits, 0)
-          ),
-        0
-      ) ?? 0;
+      sale?.lines.reduce((sum, line) => sum + returnedSaleLineMoney(line).netMinor, 0) ?? 0;
     if (
       !sale ||
       sale.refunds.reduce((sum, row) => sum + row.amountMinor, 0) + input.amountMinor > returnValue

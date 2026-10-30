@@ -22,8 +22,8 @@
  *      anywhere in a receipt posting.
  *
  *   3. EVERY LEG CARRIES ITS DIMENSIONS. Revenue and discount are split across
- *      the sale's allocations pro rata by units so that every leg — revenue,
- *      discount and cost alike — names a branch, a product, a lot and the sale
+ *      the sale's allocations at issued prices (legacy lines pro rata by units).
+ *      Every leg — revenue, discount and cost — names a branch, product, lot and sale
  *      line it came from. That is what makes FIN-03's "margin by
  *      line/batch/product/branch" four groupings of one query instead of four
  *      report implementations.
@@ -39,6 +39,7 @@ import {
   type JournalLineInput,
 } from '@/lib/finance/journal';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { returnedSaleLineMoney, saleLineGrossMinor } from './sale-pricing';
 
 export { FinancePostingError } from '@/lib/finance/journal';
 
@@ -200,10 +201,13 @@ export async function postSaleLineEntry(
     line.allocations.map((allocation) => allocation.inventoryLotId)
   );
 
-  const grossMinor = line.unitPriceMinor * line.quantity;
+  const grossMinor = saleLineGrossMinor(line);
   const units = line.allocations.map((allocation) => allocation.canonicalUnits);
-  const grossShares = apportion(grossMinor, units);
-  const discountShares = apportion(line.discountMinor, units);
+  const hasIssuedPrices = line.allocations.every((row) => row.unitPriceMinor != null);
+  const grossShares = hasIssuedPrices
+    ? line.allocations.map((row) => row.unitPriceMinor! * row.canonicalUnits)
+    : apportion(grossMinor, units);
+  const discountShares = apportion(line.discountMinor, hasIssuedPrices ? grossShares : units);
 
   const lines: JournalLineInput[] = [];
   for (const [index, allocation] of line.allocations.entries()) {
@@ -258,8 +262,8 @@ export async function postSaleLineEntry(
  * back.
  *
  * A return is not always the whole line, so this is not `reverseJournalEntry` —
- * it is a linked entry that negates the returned PROPORTION: revenue and
- * discount pro rata by units, and cost at the exact landed cost of the lot the
+ * it is a linked entry that negates the returned value: revenue at the issued
+ * lot price, its share of discount, and cost at the exact landed cost of the lot the
  * goods are being booked back into. Its legs carry the ORIGINAL sale line's id,
  * so margin by line nets the return against the sale it belongs to, while the
  * entry's own source reference points at the return line that caused it.
@@ -274,7 +278,11 @@ export async function postSaleReturnEntry(
 ) {
   const returnLine = await db.pharmacySaleReturnLine.findFirst({
     where: { id: input.saleReturnLineId, organizationId: scope.organizationId },
-    include: { saleLine: true },
+    include: {
+      saleLine: {
+        include: { allocations: true, returnLines: true, unidentifiedReturnHolds: true },
+      },
+    },
   });
   if (!returnLine) throw new PharmacyFinanceError('NOT_FOUND');
   if (returnLine.branchId !== scope.branchId) {
@@ -295,29 +303,21 @@ export async function postSaleReturnEntry(
   const lot = lots.get(returnLine.inventoryLotId);
   if (!lot) throw new PharmacyFinanceError('NOT_FOUND');
 
-  const grossMinor = saleLine.unitPriceMinor * saleLine.quantity;
   const returned = returnLine.canonicalUnits;
-  const sold = saleLine.canonicalUnits;
-  // returnSaleLine holds the sold-line lock and posts each newly inserted
-  // allocation before inserting the next. Reverse cumulative deltas, so split
-  // returns recover the final rounding minor unit instead of flooring it away.
-  const cumulative = await db.pharmacySaleReturnLine.aggregate({
-    where: { organizationId: scope.organizationId, saleLineId: saleLine.id },
-    _sum: { canonicalUnits: true },
+  const through =
+    saleLine.returnLines.reduce((n, row) => n + row.canonicalUnits, 0) +
+    saleLine.unidentifiedReturnHolds.reduce((n, row) => n + row.canonicalUnits, 0);
+  if (through - returned < 0 || through > saleLine.canonicalUnits)
+    throw new PharmacyFinanceError('INVALID_STATE');
+  // The sold-line lock serializes returns. Reverse the change in cumulative
+  // issued-lot value so posting, history and refund authorization round alike.
+  const after = returnedSaleLineMoney(saleLine);
+  const before = returnedSaleLineMoney({
+    ...saleLine,
+    returnLines: saleLine.returnLines.filter((row) => row.id !== returnLine.id),
   });
-  const unidentified = await db.pharmacyUnidentifiedReturnHold.aggregate({
-    where: { organizationId: scope.organizationId, saleLineId: saleLine.id },
-    _sum: { canonicalUnits: true },
-  });
-  const through = (cumulative._sum.canonicalUnits ?? 0) + (unidentified._sum.canonicalUnits ?? 0);
-  const before = through - returned;
-  if (before < 0 || through > sold) throw new PharmacyFinanceError('INVALID_STATE');
-  const delta = (amount: number) =>
-    Math.floor((amount * through) / sold) - Math.floor((amount * before) / sold);
-  const discount = delta(saleLine.discountMinor);
-  // Refund authorization rounds cumulative NET. Derive gross from that same
-  // net plus discount, so every partial reversal clears its authorized refund.
-  const gross = delta(grossMinor - saleLine.discountMinor) + discount;
+  const gross = after.grossMinor - before.grossMinor;
+  const discount = after.discountMinor - before.discountMinor;
   const cost = lot.unitCostMinor * returned;
 
   const dimensions = {
@@ -365,7 +365,9 @@ export async function postUnidentifiedSaleReturnEntry(
   const holding = await db.pharmacyUnidentifiedReturnHold.findFirst({
     where: { id: input.holdingId, organizationId: scope.organizationId },
     include: {
-      saleLine: { include: { returnLines: true, unidentifiedReturnHolds: true } },
+      saleLine: {
+        include: { allocations: true, returnLines: true, unidentifiedReturnHolds: true },
+      },
     },
   });
   if (!holding) throw new PharmacyFinanceError('NOT_FOUND');
@@ -388,12 +390,15 @@ export async function postUnidentifiedSaleReturnEntry(
   const before = through - holding.canonicalUnits;
   if (before < 0 || through > saleLine.canonicalUnits)
     throw new PharmacyFinanceError('INVALID_STATE');
-  const delta = (amount: number) =>
-    Math.floor((amount * through) / saleLine.canonicalUnits) -
-    Math.floor((amount * before) / saleLine.canonicalUnits);
-  const discount = delta(saleLine.discountMinor);
-  const gross =
-    delta(saleLine.unitPriceMinor * saleLine.quantity - saleLine.discountMinor) + discount;
+  const afterMoney = returnedSaleLineMoney(saleLine);
+  const beforeMoney = returnedSaleLineMoney({
+    ...saleLine,
+    unidentifiedReturnHolds: saleLine.unidentifiedReturnHolds.filter(
+      (row) => row.id !== holding.id
+    ),
+  });
+  const discount = afterMoney.discountMinor - beforeMoney.discountMinor;
+  const gross = afterMoney.grossMinor - beforeMoney.grossMinor;
   const dimensions = {
     branchId: holding.branchId,
     productId: saleLine.medicineId,

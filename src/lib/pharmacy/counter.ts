@@ -11,6 +11,7 @@
  *
  * READ-ONLY. Nothing here writes, allocates, or issues a receipt number.
  */
+import { saleLineGrossMinor, saleLineNetMinor } from './sale-pricing';
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
@@ -496,6 +497,7 @@ export type CounterCartLine = {
   quantity: number;
   canonicalUnits: number;
   unitPriceMinor: number;
+  priceAdjustmentMinor?: number;
   proRataCeilingMinor: number;
   discountMinor: number;
   lineTotalMinor: number;
@@ -601,9 +603,10 @@ export async function readCounterCart(
       quantity: line.quantity,
       canonicalUnits: line.canonicalUnits,
       unitPriceMinor: line.unitPriceMinor,
+      priceAdjustmentMinor: line.priceAdjustmentMinor,
       proRataCeilingMinor: line.proRataCeilingMinor,
       discountMinor: line.discountMinor,
-      lineTotalMinor: line.unitPriceMinor * line.quantity - line.discountMinor,
+      lineTotalMinor: saleLineNetMinor(line),
       rx: line.medicine.rx,
       controlled: line.medicine.controlled,
       restricted: line.medicine.restricted,
@@ -623,7 +626,7 @@ export async function readCounterCart(
     };
   });
 
-  const grossMinor = lines.reduce((total, line) => total + line.unitPriceMinor * line.quantity, 0);
+  const grossMinor = lines.reduce((total, line) => total + saleLineGrossMinor(line), 0);
   const discountMinor = lines.reduce((total, line) => total + line.discountMinor, 0);
   return {
     saleId: sale.id,
@@ -692,8 +695,9 @@ export async function readCounterReceipt(
       quantity: line.quantity,
       canonicalUnits: line.canonicalUnits,
       unitPriceMinor: line.unitPriceMinor,
+      priceAdjustmentMinor: line.priceAdjustmentMinor,
       discountMinor: line.discountMinor,
-      lineTotalMinor: line.unitPriceMinor * line.quantity - line.discountMinor,
+      lineTotalMinor: saleLineNetMinor(line),
     };
   });
   const tenders = sale.tenders.map((tender) => ({

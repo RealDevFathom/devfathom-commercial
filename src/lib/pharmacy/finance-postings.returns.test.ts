@@ -31,12 +31,13 @@ describe('return postings match authorized cumulative net', () => {
               quantity: 1,
               discountMinor: 2,
               canonicalUnits: 3,
+              returnLines: [
+                { id: 'prior', canonicalUnits: through - units },
+                { id: 'return', canonicalUnits: units },
+              ],
+              unidentifiedReturnHolds: [],
             },
           }),
-          aggregate: vi.fn().mockResolvedValue({ _sum: { canonicalUnits: through } }),
-        },
-        pharmacyUnidentifiedReturnHold: {
-          aggregate: vi.fn().mockResolvedValue({ _sum: { canonicalUnits: 0 } }),
         },
         financeJournalEntry: { findFirst: vi.fn().mockResolvedValue(null) },
         pharmacyInventoryLot: {
@@ -93,7 +94,7 @@ it('reverses revenue but not inventory for an unidentified return hold', async (
           discountMinor: 2,
           canonicalUnits: 3,
           returnLines: [],
-          unidentifiedReturnHolds: [{ canonicalUnits: 1 }],
+          unidentifiedReturnHolds: [{ id: 'hold', canonicalUnits: 1 }],
         },
       }),
     },
@@ -126,7 +127,7 @@ it('records a zero-minor-unit slice and assigns the rounding remainder to a late
     discountMinor: 0,
     canonicalUnits: 3,
     returnLines: [],
-    unidentifiedReturnHolds: [{ canonicalUnits: 1 }],
+    unidentifiedReturnHolds: [{ id: 'early-hold', canonicalUnits: 1 }],
   };
   const findFirst = vi
     .fn()
@@ -144,7 +145,10 @@ it('records a zero-minor-unit slice and assigns the rounding remainder to a late
       canonicalUnits: 2,
       saleLine: {
         ...saleLine,
-        unidentifiedReturnHolds: [{ canonicalUnits: 1 }, { canonicalUnits: 2 }],
+        unidentifiedReturnHolds: [
+          { id: 'early-hold', canonicalUnits: 1 },
+          { id: 'later-hold', canonicalUnits: 2 },
+        ],
       },
     });
   const db = {

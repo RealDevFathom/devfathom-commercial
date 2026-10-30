@@ -3,6 +3,7 @@ import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { priceFromLot } from './medicine';
+import { returnedSaleLineMoney, saleLineNetMinor } from './sale-pricing';
 import { hashDeviceSecret } from '@/lib/retail-terminal/device-secret';
 import { canonicalJson } from './offline-snapshot-envelope';
 import { checkEnvelope } from './offline-snapshot-envelope';
@@ -300,6 +301,7 @@ async function addSaleLineWithAllocation(
     },
   });
   const lotById = new Map(lots.map((lot) => [lot.id, lot]));
+  const allocationPrices = new Map<string, number>();
   let grossNumerator = 0,
     ceilingNumerator = 0,
     costMinor = 0;
@@ -311,14 +313,16 @@ async function addSaleLineWithAllocation(
       canonicalUnitsInPack: lot.unitsPerPack,
       canonicalUnitsPerSaleUnit: input.canonicalUnitsPerSaleUnit,
     });
+    allocationPrices.set(
+      part.inventoryLotId,
+      price.unitPriceMinor / input.canonicalUnitsPerSaleUnit
+    );
     grossNumerator += price.unitPriceMinor * part.units;
     ceilingNumerator += price.proRataCeilingMinor * part.units;
     costMinor += lot.unitCostMinor * part.units;
   }
   const grossMinor = Math.floor(grossNumerator / input.canonicalUnitsPerSaleUnit);
-  const ceiling = Math.ceil(
-    ceilingNumerator / input.canonicalUnitsPerSaleUnit / input.quantity
-  );
+  const ceiling = Math.ceil(ceilingNumerator / input.canonicalUnitsPerSaleUnit / input.quantity);
   const unitPriceMinor = Math.ceil(grossMinor / input.quantity);
   const priceAdjustmentMinor = unitPriceMinor * input.quantity - grossMinor;
   const customerDiscountMinor = input.discountMinor ?? 0;
@@ -346,9 +350,8 @@ async function addSaleLineWithAllocation(
       proRataCeilingMinor: ceiling,
       unitCostMinor: Math.ceil(costMinor / input.quantity),
       discountKind: input.discountKind,
-      // The schema stores an integer unit price. Preserve an exact weighted lot
-      // total by recording the rounding remainder as part of the line discount.
-      discountMinor: customerDiscountMinor + priceAdjustmentMinor,
+      priceAdjustmentMinor,
+      discountMinor: customerDiscountMinor,
       approvalPolicy: input.approvalPolicy,
       approvedByUserId: input.approvedByUserId,
       idempotencyKey: input.idempotencyKey,
@@ -364,6 +367,7 @@ async function addSaleLineWithAllocation(
           inventoryLotId: part.inventoryLotId,
           stockLocationId: part.stockLocationId,
           canonicalUnits: part.units,
+          unitPriceMinor: allocationPrices.get(part.inventoryLotId)!,
           stockMovementId: allocation.movementIds[index]!,
         },
       })
@@ -453,13 +457,12 @@ export function returnedLineValue(
     quantity: number;
     unitPriceMinor: number;
     discountMinor: number;
+    priceAdjustmentMinor?: number;
     canonicalUnits: number;
   },
   units: number
 ) {
-  return Math.floor(
-    ((line.quantity * line.unitPriceMinor - line.discountMinor) * units) / line.canonicalUnits
-  );
+  return Math.floor((saleLineNetMinor(line) * units) / line.canonicalUnits);
 }
 
 export async function readReturnHistory(db: ScopedDb, scope: LedgerScope, saleId: string) {
@@ -529,8 +532,8 @@ export async function readReturnHistory(db: ScopedDb, scope: LedgerScope, saleId
       returnedUnits,
       unidentifiedUnits,
       lots,
-      returnedMinor: returnedLineValue(line, returnedUnits),
-      netMinor: line.quantity * line.unitPriceMinor - line.discountMinor,
+      returnedMinor: returnedSaleLineMoney(line).netMinor,
+      netMinor: saleLineNetMinor(line),
     };
   });
   const tenders = sale.tenders.map((tender) => ({

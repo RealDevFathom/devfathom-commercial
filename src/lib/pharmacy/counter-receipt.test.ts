@@ -67,6 +67,25 @@ describe('formatMinor', () => {
 });
 
 describe('counterReceiptTotals', () => {
+  it.each([0, 3])(
+    'excludes mixed-lot rounding from the reported discount of %i',
+    (discountMinor) => {
+      expect(
+        counterReceiptTotals({
+          lines: [
+            receiptLine({
+              quantity: 2,
+              unitPriceMinor: 101,
+              priceAdjustmentMinor: 1,
+              discountMinor,
+            }),
+          ],
+          tenders: [],
+        })
+      ).toMatchObject({ grossMinor: 201, discountMinor, netMinor: 201 - discountMinor });
+    }
+  );
+
   it('reconciles the total to the lines and tenders themselves', () => {
     const lines = [
       receiptLine({ unitPriceMinor: 2_500, quantity: 2, discountMinor: 0 }),

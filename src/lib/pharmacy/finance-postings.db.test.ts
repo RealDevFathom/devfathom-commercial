@@ -287,6 +287,7 @@ async function stockLot(
     locationId?: string;
     /** See `postedReceipt`: 1 when the scenario's sale takes part of a pack. */
     unitsPerPack?: number;
+    printedMrpMinor?: number;
   }
 ) {
   const batch = await db.pharmacyManufacturingBatch.create({
@@ -306,7 +307,7 @@ async function stockLot(
     supplierName: 'Distributor Ltd',
     supplierInvoiceRef: `INV-${tag(options.label)}`,
     unitCostMinor: options.unitCostMinor,
-    printedMrpMinor: 3_000 * (options.unitsPerPack ?? 10),
+    printedMrpMinor: options.printedMrpMinor ?? 3_000 * (options.unitsPerPack ?? 10),
     receivedExpiresAt: options.expiresAt,
     receivedExpiryPrecision: 'DAY',
     quantityUnits: options.units,
@@ -1406,4 +1407,137 @@ describeIfDatabase('FIN-03 — perpetual valuation, margin and leakage', () => {
     expect(debits).toBe(credits);
     expect(debits).toBeGreaterThan(0);
   });
+});
+
+describeIfDatabase('PHARM-609 — mixed-lot prices under database constraints', () => {
+  it.each([0, 3])(
+    'keeps rounding separate from a customer discount of %i',
+    async (discountMinor) => {
+      const f = await fixture(ORG_A, branch(`mixed-round-${discountMinor}`), 'mixed-round');
+      const { readCounterCart } = await import('./counter');
+      const { counterReceiptTotals } = await import('./counter-receipt');
+      const { saleTotalMinor } = await import('./settlement');
+      const line = await inOrg(ORG_A, async (db) => {
+        for (const price of [100, 101]) {
+          await stockLot(db, f, {
+            label: `mixed-${price}`,
+            units: 1,
+            unitsPerPack: 1,
+            unitCostMinor: 10,
+            printedMrpMinor: price,
+            expiresAt: EXPIRY_LATER,
+          });
+        }
+        // Exercises the real INSERT and its approval check, with and without approval.
+        const sold = await completedSaleLine(db, f, {
+          label: 'mixed-round',
+          quantity: 2,
+          discountMinor,
+          discountKind: discountMinor ? 'DISCOUNT' : undefined,
+        });
+        expect(sold.line).toMatchObject({
+          unitPriceMinor: 101,
+          priceAdjustmentMinor: 1,
+          discountMinor,
+        });
+        const allocations = await db.pharmacySaleLineAllocation.findMany({
+          where: { saleLineId: sold.line.id },
+        });
+        expect(allocations.map((row) => row.unitPriceMinor).sort()).toEqual([100, 101]);
+        expect(saleTotalMinor([sold.line])).toBe(201 - discountMinor);
+        const cart = await readCounterCart(db, scopeOf(f), sold.sale.id);
+        expect(cart.totals).toMatchObject({
+          grossMinor: 201,
+          discountMinor,
+          netMinor: 201 - discountMinor,
+        });
+        expect(cart.lines[0].lineTotalMinor).toBe(201 - discountMinor);
+        expect(counterReceiptTotals({ lines: [sold.line], tenders: [] })).toMatchObject({
+          grossMinor: 201,
+          discountMinor,
+          netMinor: 201 - discountMinor,
+        });
+        const entry = await deps.postings.postSaleLineEntry(db, scopeOf(f), {
+          saleLineId: sold.line.id,
+          at: SOLD_AT,
+        });
+        expectBalanced(entry);
+        expect(totalFor(entry, 'SALES_REVENUE', 'CREDIT')).toBe(201);
+        expect(totalFor(entry, 'SALES_DISCOUNT', 'DEBIT')).toBe(discountMinor);
+        return sold.line;
+      });
+      if (!discountMinor) {
+        // Price rounding must not relax the approval requirement for a real discount.
+        await expect(
+          inOrg(ORG_A, (db) =>
+            db.pharmacySaleLine.update({
+              where: { id: line.id },
+              data: { discountMinor: 1 },
+            })
+          )
+        ).rejects.toThrow(/pharmacy_sale_lines_approval_check/);
+      }
+    }
+  );
+
+  it.each([100, 300])(
+    'reverses the issued %i lot price and fully reconciles sequential returns',
+    async (firstPrice) => {
+      const f = await fixture(ORG_A, branch(`mixed-return-${firstPrice}`), 'mixed-return');
+      const { returnedSaleLineMoney } = await import('./sale-pricing');
+      await inOrg(ORG_A, async (db) => {
+        const lotIds = new Map<number, string>();
+        for (const price of [100, 300]) {
+          const { lot } = await stockLot(db, f, {
+            label: `mixed-return-${price}`,
+            units: 1,
+            unitsPerPack: 1,
+            unitCostMinor: 10,
+            printedMrpMinor: price,
+            expiresAt: EXPIRY_LATER,
+          });
+          lotIds.set(price, lot.id);
+        }
+        const sold = await completedSaleLine(db, f, { label: 'mixed-return', quantity: 2 });
+        const original = await deps.postings.postSaleLineEntry(db, scopeOf(f), {
+          saleLineId: sold.line.id,
+          at: SOLD_AT,
+        });
+        expect(
+          original.lines
+            .filter((row) => row.accountCode === 'SALES_REVENUE')
+            .map((row) => row.amountMinor)
+            .sort((a, b) => a - b)
+        ).toEqual([100, 300]);
+        let cumulative = 0;
+        for (const price of [firstPrice, 400 - firstPrice]) {
+          const returned = await deps.sales.returnSaleLine(db, scopeOf(f), {
+            saleLineId: sold.line.id,
+            lotId: lotIds.get(price),
+            canonicalUnits: 1,
+            quarantineLocationId: f.quarantineId,
+            reason: 'Mixed-lot return',
+            integrityDecision: 'QUARANTINE',
+            idempotencyKey: tag('mixed-return'),
+          });
+          const entry = await deps.postings.postSaleReturnEntry(db, scopeOf(f), {
+            saleReturnLineId: returned.returnLine!.id,
+            at: LATER,
+          });
+          expectBalanced(entry);
+          expect(totalFor(entry, 'SALES_REVENUE', 'DEBIT')).toBe(price);
+          expect(totalFor(entry, 'SALES_DISCOUNT', 'CREDIT')).toBe(0);
+          cumulative += price;
+          const line = await db.pharmacySaleLine.findUniqueOrThrow({
+            where: { id: sold.line.id },
+            include: { allocations: true, returnLines: true, unidentifiedReturnHolds: true },
+          });
+          expect(returnedSaleLineMoney(line).netMinor).toBe(cumulative);
+          const history = await deps.sales.readReturnHistory(db, scopeOf(f), sold.sale.id);
+          expect(history.lines[0].returnedMinor).toBe(cumulative);
+        }
+        expect(cumulative).toBe(400);
+      });
+    }
+  );
 });

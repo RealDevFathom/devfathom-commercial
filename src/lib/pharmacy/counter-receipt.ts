@@ -13,6 +13,7 @@
  * module can only ever render a number that already exists. An unsettled sale
  * renders as unissued rather than borrowing the next number.
  */
+import { saleLineGrossMinor } from './sale-pricing';
 
 import { PrintDocumentSchema, type PrintDocument } from '@/lib/restaurant/printing/contract';
 
@@ -45,6 +46,7 @@ export type CounterReceiptLine = {
   quantity: number;
   canonicalUnits: number;
   unitPriceMinor: number;
+  priceAdjustmentMinor?: number;
   discountMinor: number;
   lineTotalMinor: number;
 };
@@ -287,13 +289,13 @@ export function buildCounterReceiptDocument(
  * the sale lines do not add up to (POS-08 acceptance).
  */
 export function counterReceiptTotals(input: {
-  lines: readonly Pick<CounterReceiptLine, 'unitPriceMinor' | 'quantity' | 'discountMinor'>[];
+  lines: readonly Pick<
+    CounterReceiptLine,
+    'unitPriceMinor' | 'quantity' | 'discountMinor' | 'priceAdjustmentMinor'
+  >[];
   tenders: readonly Pick<CounterReceiptTender, 'amountMinor' | 'changeGivenMinor'>[];
 }): CounterReceipt['totals'] {
-  const grossMinor = input.lines.reduce(
-    (total, line) => total + line.unitPriceMinor * line.quantity,
-    0
-  );
+  const grossMinor = input.lines.reduce((total, line) => total + saleLineGrossMinor(line), 0);
   const discountMinor = input.lines.reduce((total, line) => total + line.discountMinor, 0);
   const tenderedMinor = input.tenders.reduce((total, tender) => total + tender.amountMinor, 0);
   const changeMinor = input.tenders.reduce(

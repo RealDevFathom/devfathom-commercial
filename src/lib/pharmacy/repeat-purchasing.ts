@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { saleLineNetMinor } from './sale-pricing';
+
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
@@ -46,6 +48,7 @@ type Line = {
   id: string;
   quantity: number;
   unitPriceMinor: number;
+  priceAdjustmentMinor?: number;
   discountMinor: number;
   canonicalUnits: number;
   createdAt: Date;
@@ -110,10 +113,7 @@ export function summarizeRepeatPurchasing(
       continue;
     }
     const lines = distinct(sale.lines).filter((l) => l.createdAt <= asOf);
-    const gross = lines.reduce(
-      (sum, l) => sum + l.quantity * l.unitPriceMinor - l.discountMinor,
-      0
-    );
+    const gross = lines.reduce((sum, l) => sum + saleLineNetMinor(l), 0);
     const units = lines.reduce(
       (sum, l) =>
         sum +
@@ -230,7 +230,7 @@ export async function readRepeatPurchasing(
         SELECT * FROM originals WHERE "completedAt" IS NOT NULL AND "receiptNumber" IS NOT NULL
       ), lines AS MATERIALIZED (
         SELECT l.id, l."saleId", l."organizationId", l."branchId", l."canonicalUnits",
-          l.quantity::numeric * l."unitPriceMinor" - l."discountMinor" AS gross
+          l.quantity::numeric * l."unitPriceMinor" - l."priceAdjustmentMinor" - l."discountMinor" AS gross
         FROM pharmacy_sale_lines l JOIN eligible_originals s
           ON s.id = l."saleId" AND s."organizationId" = l."organizationId" AND s."branchId" = l."branchId"
         WHERE l."organizationId" = ${organizationId} AND l."branchId" IN (${branches}) AND l."createdAt" <= ${asOf}

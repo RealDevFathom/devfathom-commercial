@@ -148,7 +148,9 @@ for (const boundary of ['service', 'API'] as const) {
             status: 'COMPLETED',
           },
           include: {
-            lines: { include: { unidentifiedReturnHolds: true, returnLines: true } },
+            lines: {
+              include: { unidentifiedReturnHolds: true, returnLines: true, allocations: true },
+            },
             refunds: true,
           },
         });
@@ -193,3 +195,33 @@ it('includes unidentified quarantine holdings in the mandatory refund cap', asyn
     refundId: 'refund-1',
   });
 });
+
+for (const boundary of ['service', 'API'] as const) {
+  it.each([
+    ['cheap', 100],
+    ['dear', 300],
+  ] as const)(
+    `${boundary} caps an identified %s return at its issued price`,
+    async (lotId, price) => {
+      const f = fixture(0);
+      const sale = await f.db.pharmacySale.findFirst();
+      Object.assign(sale.lines[0], {
+        quantity: 2,
+        unitPriceMinor: 200,
+        canonicalUnits: 2,
+        allocations: [
+          { inventoryLotId: 'cheap', canonicalUnits: 1, unitPriceMinor: 100 },
+          { inventoryLotId: 'dear', canonicalUnits: 1, unitPriceMinor: 300 },
+        ],
+        returnLines: [{ inventoryLotId: lotId, canonicalUnits: 1 }],
+      });
+      const run = (amountMinor: number) =>
+        boundary === 'API'
+          ? f.caller.refundTender({ ...input, amountMinor })
+          : refundPharmacyTender(f.db as unknown as ScopedDb, scope, { ...input, amountMinor });
+      await expect(run(price + 1)).rejects.toThrow('REFUND_EXCEEDS_TENDER');
+      expect(f.db.pharmacyRefund.create).not.toHaveBeenCalled();
+      await expect(run(price)).resolves.toMatchObject({ amountMinor: price, replayed: false });
+    }
+  );
+}

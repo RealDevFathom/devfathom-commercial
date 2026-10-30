@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { saleLineNetMinor } from './sale-pricing';
+
 import { assertSaleBatchesSellable } from './sale-batch-safety';
 import { completePaidPharmacySale, completionSaleInclude } from './sale-completion';
 import { postTenderEntry } from './finance-postings';
@@ -193,10 +195,7 @@ export async function redeemSalePoints(
     },
     _sum: { points: true },
   });
-  const totalMinor = sale.lines.reduce(
-    (sum, line) => sum + line.quantity * line.unitPriceMinor - line.discountMinor,
-    0
-  );
+  const totalMinor = sale.lines.reduce((sum, line) => sum + saleLineNetMinor(line), 0);
   const outstandingMinor =
     totalMinor - sale.tenders.reduce((sum, tender) => sum + tender.amountMinor, 0);
   let redemption: { points: number; amountMinor: number };
@@ -339,7 +338,14 @@ export async function readCustomerSnapshot(
         id: true,
         receiptNumber: true,
         completedAt: true,
-        lines: { select: { quantity: true, unitPriceMinor: true, discountMinor: true } },
+        lines: {
+          select: {
+            quantity: true,
+            unitPriceMinor: true,
+            discountMinor: true,
+            priceAdjustmentMinor: true,
+          },
+        },
         tenders: {
           select: { type: true, amountMinor: true, refunds: { select: { amountMinor: true } } },
         },
@@ -388,10 +394,7 @@ export async function readCustomerSnapshot(
       saleId: sale.id,
       receiptNumber: sale.receiptNumber,
       completedAt: sale.completedAt,
-      totalMinor: sale.lines.reduce(
-        (sum, line) => sum + line.quantity * line.unitPriceMinor - line.discountMinor,
-        0
-      ),
+      totalMinor: sale.lines.reduce((sum, line) => sum + saleLineNetMinor(line), 0),
     })),
   };
 }

@@ -162,7 +162,11 @@ describe('POS sale voiding', () => {
 });
 
 describe('POS-03 lot-derived pack/strip/unit pricing', () => {
-  it('bills mixed-lot units at their own lot prices', async () => {
+  it.each([
+    { rx: false, discountMinor: 0 },
+    { rx: true, discountMinor: 0 },
+    { rx: false, discountMinor: 3 },
+  ])('bills mixed-lot units at their own lot prices (%j)', async ({ rx, discountMinor }) => {
     vi.mocked(allocateForSale).mockResolvedValueOnce({
       allocations: [
         { inventoryLotId: 'lot-a', stockLocationId: 'shelf-a', units: 1 },
@@ -186,7 +190,7 @@ describe('POS-03 lot-derived pack/strip/unit pricing', () => {
       medicine: {
         findFirst: async () => ({
           id: 'medicine-a',
-          rx: false,
+          rx,
           restricted: false,
           controlled: false,
         }),
@@ -210,15 +214,26 @@ describe('POS-03 lot-derived pack/strip/unit pricing', () => {
       saleUnit: 'UNIT',
       quantity: 2,
       canonicalUnitsPerSaleUnit: 1,
+      discountMinor,
+      ...(discountMinor
+        ? {
+            discountKind: 'DISCOUNT' as const,
+            approvedByUserId: 'manager',
+            approvalPolicy: 'manager',
+          }
+        : {}),
       idempotencyKey: 'mixed-lot-line',
     });
 
-    expect(line.unitPriceMinor * line.quantity - line.discountMinor).toBe(201);
+    expect(
+      line.unitPriceMinor * line.quantity - line.priceAdjustmentMinor - line.discountMinor
+    ).toBe(201 - discountMinor);
     expect(createLine).toHaveBeenCalledWith({
       data: expect.objectContaining({
         unitPriceMinor: 101,
         proRataCeilingMinor: 101,
-        discountMinor: 1,
+        priceAdjustmentMinor: 1,
+        discountMinor,
       }),
     });
   });
