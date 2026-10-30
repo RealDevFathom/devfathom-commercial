@@ -41,11 +41,18 @@ describe('Pharmacy E2E seed', () => {
   test('grants the cashier the canonical counter capability', () => {
     const grantedCapabilities: string[] = [];
     const visit = (node: ts.Node) => {
-      if (ts.isForOfStatement(node) && ts.isArrayLiteralExpression(node.expression)) {
-        for (const tuple of node.expression.elements) {
-          if (!ts.isArrayLiteralExpression(tuple)) continue;
-          const capability = tuple.elements[1];
-          if (capability && ts.isStringLiteral(capability)) grantedCapabilities.push(capability.text);
+      if (ts.isForOfStatement(node)) {
+        // The seed's `as const` wraps the tuple array in an assertion node.
+        const expression = ts.isAsExpression(node.expression)
+          ? node.expression.expression
+          : node.expression;
+        if (ts.isArrayLiteralExpression(expression)) {
+          for (const tuple of expression.elements) {
+            if (!ts.isArrayLiteralExpression(tuple)) continue;
+            const capability = tuple.elements[1];
+            if (capability && ts.isStringLiteral(capability))
+              grantedCapabilities.push(capability.text);
+          }
         }
       }
       ts.forEachChild(node, visit);
