@@ -7,7 +7,7 @@ import { withPlatformDb, withTenantDb } from '@/lib/tenancy/scoped-db';
 import { workspaceTimezone } from '@/lib/timezone';
 
 import { formatMinor } from '../counter-receipt';
-import { lockPatientConsent } from '../consent-writer';
+import { lockCustomerConsent } from '../consent-writer';
 import { claimMessageLogInTransaction, sendClaimedMessage } from './message-log';
 import { canMessageCustomer, normalizeWhatsAppNumber, phoneLast4 } from './messages';
 import {
@@ -144,13 +144,14 @@ export async function processDueWhatsAppKhataReminders(
       if (config.organizationId !== account.organizationId || !config.phoneNumberId) return null;
       const organization = await db.organization.findUnique({
         where: { id: account.organizationId },
-        select: { vertical: true, status: true, timezone: true },
+        select: { vertical: true, status: true, timezone: true, isDemo: true },
       });
       const branch = await db.pharmacyBranch.findFirst({
         where: { organizationId: account.organizationId, id: account.branchId, active: true },
       });
       if (
         !organization ||
+        organization.isDemo ||
         organization.vertical !== 'PHARMACY' ||
         !isTenantLifecycleAccessible(organization.status) ||
         !branch
@@ -173,6 +174,9 @@ export async function processDueWhatsAppKhataReminders(
         }).format(now)
       );
       if (hour >= 22 || hour < 8) return null;
+      // STOP and consent writers take the same locks. Read eligibility only
+      // after acquiring them so a committed opt-out cannot leave a stale snapshot.
+      await lockCustomerConsent(db, account.organizationId, account.payerCustomerId);
       const customer = await db.pharmacyCustomer.findFirst({
         where: { organizationId: account.organizationId, id: account.payerCustomerId },
         select: {
@@ -185,7 +189,6 @@ export async function processDueWhatsAppKhataReminders(
         },
       });
       if (!customer) return null;
-      await lockPatientConsent(db, account.organizationId, customer.patientId);
       const consent = await db.patientConsent.findFirst({
         where: {
           organizationId: account.organizationId,
@@ -217,6 +220,7 @@ export async function processDueWhatsAppKhataReminders(
         preferredLanguage === 'ur'
           ? config.templates.khataReminderUrdu
           : config.templates.khataReminder;
+      if (!templateName) return { missingTemplate: true as const };
       const logId = await claimMessageLogInTransaction(db, {
         organizationId: account.organizationId,
         direction: 'OUTBOUND',
@@ -242,6 +246,10 @@ export async function processDueWhatsAppKhataReminders(
     });
     if (!recipient) {
       result.skippedNoConsent += 1;
+      continue;
+    }
+    if ('missingTemplate' in recipient) {
+      result.failed += 1;
       continue;
     }
     if (!recipient.logId) {

@@ -9,6 +9,8 @@ const store = vi.hoisted(() => ({
   logs: [] as LogRow[],
   /** The workspace zone the organization row holds. */
   timezone: 'Asia/Karachi',
+  isDemo: false,
+  lockConsent: vi.fn(),
 }));
 
 vi.mock('@/lib/entitlements', () => ({
@@ -16,8 +18,7 @@ vi.mock('@/lib/entitlements', () => ({
   resolveOrganizationEntitlements: async () => ({}),
 }));
 vi.mock('../consent-writer', () => ({
-  // The real writer takes a FOR UPDATE row lock on the patient; the fake is a no-op.
-  lockPatientConsent: async () => undefined,
+  lockCustomerConsent: store.lockConsent,
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => {
   const db = {
@@ -29,12 +30,15 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
         vertical: 'PHARMACY',
         status: 'ACTIVE',
         timezone: store.timezone,
+        isDemo: store.isDemo,
       }),
     },
     pharmacyBranch: { findFirst: async () => ({ id: 'branch-1' }) },
     pharmacyCustomer: {
-      findFirst: async ({ where }: { where: { id: string } }) =>
-        store.customers.find((customer) => customer.id === where.id) ?? null,
+      findFirst: async ({ where }: { where: { id: string } }) => {
+        const customer = store.customers.find((customer) => customer.id === where.id);
+        return customer ? { ...customer } : null;
+      },
     },
     patientConsent: {
       findFirst: async ({ where }: { where: { patientId: string } }) =>
@@ -114,6 +118,8 @@ beforeEach(() => {
   store.consents = [];
   store.logs = [];
   store.timezone = 'Asia/Karachi';
+  store.isDemo = false;
+  store.lockConsent.mockReset();
 });
 
 describe('planKhataReminder', () => {
@@ -166,6 +172,66 @@ describe('planKhataReminder', () => {
 });
 
 describe('processDueWhatsAppKhataReminders', () => {
+  it('rereads opt-in after a STOP commits while waiting for the consent lock', async () => {
+    store.accounts = [account()];
+    store.customers = [customer(true)];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    store.lockConsent.mockImplementationOnce(async () => {
+      store.customers[0].whatsappOptIn = false;
+    });
+    const provider = new MockWhatsAppProvider(config);
+
+    const result = await processDueWhatsAppKhataReminders({ now: NOW, config, provider });
+
+    expect(result).toMatchObject({ scanned: 1, skippedNoConsent: 1 });
+    expect(store.customers[0].whatsappOptIn).toBe(false);
+    expect(provider.calls).toEqual([]);
+    expect(store.logs).toEqual([]);
+  });
+
+  it('never reserves or sends reminders for demo organizations', async () => {
+    store.isDemo = true;
+    store.accounts = [account()];
+    store.customers = [customer(true)];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    const provider = new MockWhatsAppProvider(config);
+
+    const result = await processDueWhatsAppKhataReminders({ now: NOW, config, provider });
+
+    expect(result).toMatchObject({ scanned: 1, skippedNoConsent: 1 });
+    expect(provider.calls).toEqual([]);
+    expect(store.logs).toEqual([]);
+  });
+
+  it('allows a same-week retry after configuring a missing Urdu template', async () => {
+    store.accounts = [account()];
+    store.customers = [customer(true, 'ur')];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    const missingConfig = {
+      ...config,
+      templates: { ...config.templates, khataReminderUrdu: null },
+    };
+    const unconfiguredProvider = new MockWhatsAppProvider(missingConfig);
+
+    const first = await processDueWhatsAppKhataReminders({
+      now: NOW,
+      config: missingConfig,
+      provider: unconfiguredProvider,
+    });
+
+    expect(first).toMatchObject({ scanned: 1, failed: 1, duplicate: 0 });
+    expect(unconfiguredProvider.calls).toEqual([]);
+    expect(store.logs).toEqual([]);
+
+    const provider = new MockWhatsAppProvider(config);
+    const retry = await processDueWhatsAppKhataReminders({ now: NOW, config, provider });
+
+    expect(retry).toMatchObject({ prepared: 1, failed: 0, duplicate: 0 });
+    expect(provider.calls).toHaveLength(1);
+    expect(provider.calls[0]).toMatchObject({ template: 'khataReminderUrdu', language: 'ur' });
+    expect(store.logs).toHaveLength(1);
+  });
+
   it('sends once per family account per week across repeated runs', async () => {
     store.accounts = [account()];
     store.customers = [customer(true)];

@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { TRPCError } from '@trpc/server';
+import { getHTTPStatusCodeFromError } from '@trpc/server/http';
 import { z } from 'zod';
 
 import { pharmacyLoyaltyRouter } from '@/app/(app)/pharmacy/loyalty/loyalty-router';
@@ -30,7 +31,7 @@ export async function PATCH(
     );
   } catch (error) {
     if (error instanceof TRPCError) {
-      const status = error.code === 'NOT_FOUND' ? 404 : error.code === 'UNAUTHORIZED' ? 401 : 403;
+      const status = getHTTPStatusCodeFromError(error);
       return NextResponse.json({ error: 'Customer language could not be updated.' }, { status });
     }
     throw error;
