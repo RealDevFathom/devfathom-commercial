@@ -44,6 +44,19 @@ function fixture() {
   const db = {
     $queryRaw: vi.fn().mockResolvedValue([]),
     $transaction: vi.fn(),
+    user: {
+      findUnique: vi.fn().mockResolvedValue({
+        status: 'ACTIVE',
+        organizationId: 'org-a',
+        organizationRole: {
+          permissions: [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }],
+        },
+        permissionOverrides: [],
+      }),
+    },
+    pharmacyBranchAssignment: {
+      findMany: vi.fn().mockResolvedValue([{ branchId: 'branch-a' }]),
+    },
     pharmacyBranch: {
       findFirst: vi.fn().mockResolvedValue({ id: 'branch-a' }),
       findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
@@ -233,4 +246,37 @@ describe('Khata router trust and recovery boundary', () => {
       }),
     });
   });
+
+  it.each(['capability', 'assignment'])(
+    'denies a Khata refund without %s before ledger writes',
+    async (missing) => {
+      const f = fixture();
+      f.user.role = 'EMPLOYEE';
+      if (missing === 'capability') {
+        f.db.user.findUnique.mockResolvedValue({
+          status: 'ACTIVE',
+          organizationId: 'org-a',
+          organizationRole: { permissions: [] },
+          permissionOverrides: [],
+        });
+      } else {
+        f.db.pharmacyBranchAssignment.findMany.mockResolvedValue([]);
+      }
+
+      await expect(
+        f.caller().refundTender({
+          branchId: 'branch-a',
+          originalTenderId: 'tender-a',
+          deviceId: 'device-a',
+          businessDate: input.businessDate,
+          amountMinor: 50,
+          reason: 'Return',
+          idempotencyKey: 'refund-denied',
+        })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(f.db.$transaction).not.toHaveBeenCalled();
+      expect(refundPharmacyTender).not.toHaveBeenCalled();
+      expect(f.db.pharmacyKhataEvent.create).not.toHaveBeenCalled();
+    }
+  );
 });
