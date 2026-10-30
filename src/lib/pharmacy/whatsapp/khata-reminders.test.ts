@@ -74,7 +74,7 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
   };
 });
 
-import { MockWhatsAppProvider, readWhatsAppConfig } from './provider';
+import { createWhatsAppProvider, MockWhatsAppProvider, readWhatsAppConfig } from './provider';
 import {
   planKhataReminder,
   processDueWhatsAppKhataReminders,
@@ -172,6 +172,55 @@ describe('planKhataReminder', () => {
 });
 
 describe('processDueWhatsAppKhataReminders', () => {
+  it('sends Urdu reminders when only the Urdu template is configured', async () => {
+    store.accounts = [account()];
+    store.customers = [customer(true, 'ur')];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    const urduConfig = {
+      ...config,
+      templates: { ...config.templates, khataReminder: null },
+    };
+    const provider = new MockWhatsAppProvider(urduConfig);
+
+    const result = await processDueWhatsAppKhataReminders({
+      now: NOW,
+      config: urduConfig,
+      provider,
+    });
+
+    expect(result).toMatchObject({ configured: true, scanned: 1, prepared: 1, failed: 0 });
+    expect(provider.calls).toHaveLength(1);
+    expect(provider.calls[0]).toMatchObject({ template: 'khataReminderUrdu', language: 'ur' });
+  });
+
+  it('keeps English recipients retryable in an Urdu-only deployment', async () => {
+    store.accounts = [account()];
+    store.customers = [customer(true)];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    const urduConfig = {
+      ...config,
+      templates: { ...config.templates, khataReminder: null },
+    };
+    const provider = new MockWhatsAppProvider(urduConfig);
+
+    const result = await processDueWhatsAppKhataReminders({
+      now: NOW,
+      config: urduConfig,
+      provider,
+    });
+
+    expect(result).toMatchObject({ configured: true, scanned: 1, failed: 1 });
+    expect(provider.calls).toEqual([]);
+    expect(store.logs).toEqual([]);
+
+    const retry = await processDueWhatsAppKhataReminders({
+      now: NOW,
+      config,
+      provider: new MockWhatsAppProvider(config),
+    });
+    expect(retry).toMatchObject({ prepared: 1, failed: 0, duplicate: 0 });
+  });
+
   it('rereads opt-in after a STOP commits while waiting for the consent lock', async () => {
     store.accounts = [account()];
     store.customers = [customer(true)];
@@ -330,21 +379,83 @@ describe('processDueWhatsAppKhataReminders', () => {
     });
   });
 
-  it('runs with a fully configured Meta deployment instead of reporting unconfigured', async () => {
-    const metaConfig = readWhatsAppConfig({
-      PHARMACY_WHATSAPP_PROVIDER: 'meta',
-      PHARMACY_WHATSAPP_ACCESS_TOKEN: 'token',
-      PHARMACY_WHATSAPP_PHONE_NUMBER_ID: 'sender',
-      PHARMACY_WHATSAPP_ORGANIZATION_ID: 'org_a',
-      PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER: 'khata_due_v1',
-    });
-    const result = await processDueWhatsAppKhataReminders({
-      now: NOW,
-      config: metaConfig,
-      provider: new MockWhatsAppProvider(metaConfig),
-    });
-    expect(result).toMatchObject({ configured: true, scanned: 0 });
-  });
+  it.each(['PHARMACY_WHATSAPP_APP_SECRET', 'PHARMACY_WHATSAPP_VERIFY_TOKEN'] as const)(
+    'does not scan, reserve or send live reminders without %s',
+    async (missingCredential) => {
+      store.accounts = [account()];
+      store.customers = [customer(true)];
+      store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+      const metaConfig = readWhatsAppConfig({
+        PHARMACY_WHATSAPP_PROVIDER: 'meta',
+        PHARMACY_WHATSAPP_ACCESS_TOKEN: 'token',
+        PHARMACY_WHATSAPP_PHONE_NUMBER_ID: 'sender',
+        PHARMACY_WHATSAPP_ORGANIZATION_ID: 'org_a',
+        PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER: 'khata_due_v1',
+        PHARMACY_WHATSAPP_APP_SECRET: 'app-secret',
+        PHARMACY_WHATSAPP_VERIFY_TOKEN: 'verify-token',
+        [missingCredential]: ' ',
+      });
+      const provider = createWhatsAppProvider(metaConfig);
+      const send = vi.spyOn(provider, 'sendTemplate').mockResolvedValue({
+        providerMessageId: 'wamid.sent',
+        acceptedByProvider: true,
+      });
+
+      const result = await processDueWhatsAppKhataReminders({
+        now: NOW,
+        config: metaConfig,
+        provider,
+      });
+
+      expect(result).toMatchObject({ configured: false, scanned: 0, sent: 0 });
+      expect(send).not.toHaveBeenCalled();
+      expect(store.lockConsent).not.toHaveBeenCalled();
+      expect(store.logs).toEqual([]);
+    }
+  );
+
+  it.each(['en', 'ur'] as const)(
+    'sends %s reminders with a fully configured Meta deployment',
+    async (language) => {
+      store.accounts = [account()];
+      store.customers = [customer(true, language)];
+      store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+      const metaConfig = readWhatsAppConfig({
+        PHARMACY_WHATSAPP_PROVIDER: 'meta',
+        PHARMACY_WHATSAPP_ACCESS_TOKEN: 'token',
+        PHARMACY_WHATSAPP_PHONE_NUMBER_ID: 'sender',
+        PHARMACY_WHATSAPP_ORGANIZATION_ID: 'org_a',
+        PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER: language === 'en' ? 'khata_due_v1' : undefined,
+        PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER_UR: 'khata_due_ur_v1',
+        PHARMACY_WHATSAPP_APP_SECRET: 'app-secret',
+        PHARMACY_WHATSAPP_VERIFY_TOKEN: 'verify-token',
+      });
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValue(
+          new Response(JSON.stringify({ messages: [{ id: 'wamid.sent' }] }), { status: 200 })
+        );
+      vi.stubGlobal('fetch', fetchImpl);
+      try {
+        // Construct after stubbing fetch so the real Meta provider captures the stub.
+        const result = await processDueWhatsAppKhataReminders({ now: NOW, config: metaConfig });
+
+        expect(result).toMatchObject({ configured: true, scanned: 1, sent: 1, failed: 0 });
+        expect(fetchImpl).toHaveBeenCalledTimes(1);
+        const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+        expect(url).toBe('https://graph.facebook.com/v21.0/sender/messages');
+        expect(JSON.parse(String(init.body))).toMatchObject({
+          template: {
+            name: language === 'ur' ? 'khata_due_ur_v1' : 'khata_due_v1',
+            language: { code: language },
+          },
+        });
+        expect(store.logs[0]).toMatchObject({ status: 'SENT', providerMessageId: 'wamid.sent' });
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    }
+  );
 });
 
 describe('reminder text and daily customer dedupe', () => {

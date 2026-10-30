@@ -101,10 +101,11 @@ export async function processDueWhatsAppKhataReminders(
   const minBalanceMinor = options.minBalanceMinor ?? DEFAULT_MIN_BALANCE_MINOR;
   const result: KhataReminderRunResult = {
     configured: Boolean(
-      config.templates.khataReminder &&
+      (config.templates.khataReminder || config.templates.khataReminderUrdu) &&
       config.organizationId &&
       config.phoneNumberId &&
-      (config.provider === 'mock' || config.accessToken)
+      // Live reminders require both webhook setup and signed STOP processing.
+      (config.provider === 'mock' || (config.accessToken && config.appSecret && config.verifyToken))
     ),
     scanned: 0,
     sent: 0,
