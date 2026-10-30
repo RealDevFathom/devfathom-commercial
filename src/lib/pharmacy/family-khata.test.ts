@@ -258,6 +258,58 @@ describe('counter Khata ledger gate', () => {
     };
   }
   const input = { saleId: 'sale-a', familyAccountId: 'family-a', amountMinor: 500 };
+  it('returns the sale member account balance and scoped financial statement', async () => {
+    const db = fixture();
+    const entries = [
+      { id: 'charge-a', kind: 'CHARGE', amountMinor: 1200, occurredAt: new Date('2026-10-01') },
+      { id: 'payment-a', kind: 'PAYMENT', amountMinor: 700, occurredAt: new Date('2026-10-02') },
+    ];
+    db.pharmacyKhataEvent.findMany.mockResolvedValue(entries);
+
+    const statement = await readSaleKhataStatement(
+      db as never,
+      scope,
+      input.saleId,
+      input.familyAccountId
+    );
+
+    expect(statement).toEqual({
+      account: {
+        id: 'family-a',
+        displayName: 'Family',
+        creditLimitMinor: 1000,
+        memberId: 'member-a',
+        balanceMinor: 500,
+      },
+      generatedAt: expect.any(Date),
+      truncated: false,
+      entries,
+    });
+    expect(db.pharmacySale.findFirst).toHaveBeenCalledWith({
+      where: { id: input.saleId, organizationId: scope.organizationId, branchId: scope.branchId },
+      select: { customerId: true },
+    });
+    expect(db.pharmacyFamilyAccount.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          active: true,
+          members: { some: { customerId: 'customer-a' } },
+        },
+      })
+    );
+    expect(db.pharmacyKhataEvent.findMany).toHaveBeenCalledWith({
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        familyAccountId: input.familyAccountId,
+      },
+      select: { id: true, kind: true, amountMinor: true, occurredAt: true },
+      orderBy: [{ occurredAt: 'desc' }, { id: 'desc' }],
+      take: 1001,
+    });
+  });
   it('uses all ledger events and accepts the exact limit without owner authorization', async () => {
     const db = fixture();
     expect(await readKhataBalance(db as never, scope, 'family-a')).toBe(500);
