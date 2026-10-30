@@ -46,7 +46,7 @@ const ORG_B = `org_wha1183_b_${suffix}`;
 const branch = (label: string) => `branch_${label}_${suffix}`;
 const BRANCH_B = branch('org_b');
 const ACTOR = 'user_pharmacist';
-const WITNESS = 'user_manager';
+const WITNESS = `user_manager_${suffix}`;
 
 /** Fixed instants, so no case depends on the wall clock. */
 const RECEIVED_AT = new Date('2026-09-02T09:00:00.000Z');
@@ -405,6 +405,30 @@ beforeAll(async () => {
       [ORG_A, ORG_B]
     )
   );
+  await inOrg(ORG_A, async (db) => {
+    // Fresh tenants need the composite department FK parent before a real
+    // active witness can authorize the write-off valuation/leakage scenarios.
+    await db.organizationDepartment.create({
+      data: {
+        organizationId: ORG_A,
+        key: 'LEADERSHIP',
+        name: 'Synthetic leadership',
+        active: true,
+      },
+    });
+    await db.user.create({
+      data: {
+        id: WITNESS,
+        organizationId: ORG_A,
+        name: 'Synthetic write-off witness',
+        email: `${WITNESS}@example.test`,
+        department: 'LEADERSHIP',
+        title: 'Inventory manager',
+        role: 'EMPLOYEE',
+        status: 'ACTIVE',
+      },
+    });
+  });
 }, 120_000);
 
 // ── FIN-01 — one balanced entry per event kind ──────────────────────────────
