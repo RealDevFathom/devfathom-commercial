@@ -380,7 +380,13 @@ beforeAll(async () => {
       medicine: otc,
       authorizedCanonicalUnits: 100,
     });
-    for (const name of ['voided', 'completed', 'fullCompletion', 'retried', 'concurrent'] as const) {
+    for (const name of [
+      'voided',
+      'completed',
+      'fullCompletion',
+      'retried',
+      'concurrent',
+    ] as const) {
       lines[name] = await prescriptionLine(tx, ids.org, {
         ...forAyesha,
         ...current,
@@ -522,9 +528,8 @@ describeIfDatabase('prescription references on counter sale lines (#518)', () =>
   }
 
   async function recordCompletion(saleLineId: string) {
-    const { recordCompletedPrescriptionReference } = await import(
-      '@/lib/pharmacy/rx-prescription-reference'
-    );
+    const { recordCompletedPrescriptionReference } =
+      await import('@/lib/pharmacy/rx-prescription-reference');
     return withTenantDb(
       ids.org,
       async (tx) => {
@@ -582,9 +587,8 @@ describeIfDatabase('prescription references on counter sale lines (#518)', () =>
     // Exercises the real completion path (no mocks in this case): QA found completion
     // dropped prescriptionPatientId/saleId when recording the reference.
     const added = await addReferencedSale(lines.fullCompletion);
-    const { completePaidPharmacySale, completionSaleInclude } = await import(
-      '@/lib/pharmacy/sale-completion'
-    );
+    const { completePaidPharmacySale, completionSaleInclude } =
+      await import('@/lib/pharmacy/sale-completion');
     await withTenantDb(
       ids.org,
       async (tx) => {

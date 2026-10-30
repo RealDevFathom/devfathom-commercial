@@ -65,7 +65,12 @@ function hotp(secret: Buffer, counter: number): string {
  * Verify a 6-digit TOTP against a base32 secret, allowing ±`window` steps of
  * clock skew (default ±1 step = ±30s). Constant-time digit comparison.
  */
-export function verifyTotp(secretB32: string, token: string, window = 1, nowMs = Date.now()): boolean {
+export function verifyTotp(
+  secretB32: string,
+  token: string,
+  window = 1,
+  nowMs = Date.now()
+): boolean {
   const t = (token ?? '').replace(/\s+/g, '');
   if (!/^\d{6}$/.test(t)) return false;
   const secret = base32Decode(secretB32);

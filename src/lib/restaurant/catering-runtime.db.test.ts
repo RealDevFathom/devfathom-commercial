@@ -5,7 +5,10 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import * as ops from './catering-operations';
 import { postStockMovements } from './inventory-ledger';
 import { withPlatformDb, withTenantDb } from '@/lib/tenancy/scoped-db';
-import { assertAcceptanceDatabase, readAcceptanceReceipt } from '../../../scripts/restaurant-acceptance-target';
+import {
+  assertAcceptanceDatabase,
+  readAcceptanceReceipt,
+} from '../../../scripts/restaurant-acceptance-target';
 
 const url = process.env.TEST_DATABASE_URL;
 if (url) process.env.DATABASE_URL = url;
@@ -104,7 +107,11 @@ describeIfDatabase('catering real service acceptance', () => {
   beforeAll(async () => {
     if (process.env.RESTAURANT_ACCEPTANCE_ADMITTED === '1') {
       assertAcceptanceDatabase(url, readAcceptanceReceipt());
-    } else if (!url || new URL(url).port !== '55675' || !new URL(url).pathname.includes('disposable')) {
+    } else if (
+      !url ||
+      new URL(url).port !== '55675' ||
+      !new URL(url).pathname.includes('disposable')
+    ) {
       throw new Error('Reserved disposable slot required');
     }
     await withPlatformDb(async (tx) => {

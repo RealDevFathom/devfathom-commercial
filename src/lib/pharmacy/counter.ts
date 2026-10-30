@@ -702,6 +702,7 @@ export async function readCounterReceipt(
     tenderId: tender.id,
     type: tender.type,
     amountMinor: tender.amountMinor,
+    cashReceivedMinor: tender.cashReceivedMinor,
     changeGivenMinor: tender.changeGivenMinor,
   }));
 
