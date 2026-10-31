@@ -29,7 +29,7 @@ import 'server-only';
  */
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-import { expiryInstant } from '../stock-ledger';
+import { expiryInstant, normalizeExpiryBoundary } from '../stock-ledger';
 import type { LedgerScope } from '../stock-ledger';
 
 export class PharmacyOpeningError extends Error {
@@ -44,6 +44,7 @@ export class PharmacyOpeningError extends Error {
       | 'OPEN_EXCEPTIONS'
       | 'UNEXPLAINED_VARIANCE'
       | 'COAUTH_REQUIRED'
+      | 'BATCH_EXPIRY_CONFLICT'
   ) {
     super(reason);
     this.name = 'PharmacyOpeningError';
@@ -337,6 +338,25 @@ export async function postOpeningSession(
     // this predicate, and the lot about to be created cannot be built from nulls.
     if (missingAttributes(line).length > 0) throw new PharmacyOpeningError('INCOMPLETE_LINE');
 
+    const expiresAt = expiryInstant(
+      line.expiryDate as Date,
+      line.expiryPrecision as 'DAY' | 'MONTH'
+    );
+    const batch = await db.pharmacyManufacturingBatch.findFirst({
+      where: {
+        id: line.manufacturingBatchId as string,
+        organizationId: scope.organizationId,
+      },
+      select: { expiresAt: true },
+    });
+    if (!batch) throw new PharmacyOpeningError('NOT_FOUND');
+    if (
+      normalizeExpiryBoundary(batch.expiresAt).getTime() !==
+      normalizeExpiryBoundary(expiresAt).getTime()
+    ) {
+      throw new PharmacyOpeningError('BATCH_EXPIRY_CONFLICT');
+    }
+
     const unitsPerPack = line.unitsPerPack as number;
     const countedUnits = line.countedUnits as number;
     const sealedPacks = Math.floor(countedUnits / unitsPerPack);
@@ -356,10 +376,7 @@ export async function postOpeningSession(
         supplierInvoiceRef: line.sourceRef as string,
         unitCostMinor: line.unitCostMinor as number,
         printedMrpMinor: line.printedMrpMinor as number,
-        receivedExpiresAt: expiryInstant(
-          line.expiryDate as Date,
-          line.expiryPrecision as 'DAY' | 'MONTH'
-        ),
+        receivedExpiresAt: expiresAt,
         receivedExpiryPrecision: line.expiryPrecision as 'DAY' | 'MONTH',
         receivedAt: session.openingAt,
       },

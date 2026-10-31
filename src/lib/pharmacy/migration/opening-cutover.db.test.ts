@@ -151,8 +151,8 @@ async function manufacturingBatch(db: ScopedDb, fixture: Scenario, label: string
       organizationId: fixture.organizationId,
       medicineId: fixture.medicineId,
       batchNumber: `B-${tag(label)}`,
-      expiresAt: EXPIRY,
-      expiryPrecision: 'DAY',
+      expiresAt: new Date('2027-06-30T19:00:00.000Z'),
+      expiryPrecision: 'MONTH',
     },
   });
 }

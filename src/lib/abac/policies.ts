@@ -71,6 +71,7 @@ export const ALL_ACTIONS = [
   'menu:import', // R-lane WHA-194: OCR menu import — upload, review queue, confirmed catalog import
   'pharmacy:counter',
   'pharmacy:receipt',
+  'pharmacy:close',
   'pharmacy:manage',
   'pharmacy:procurement',
   'pharmacy:inventory',
@@ -247,10 +248,12 @@ export const POLICIES: Record<Action, Policy[]> = {
   'menu:import': [],
   'pharmacy:counter': [],
   'pharmacy:receipt': [],
+  'pharmacy:close': [],
   'pharmacy:manage': [],
-  // Tenant administrators retain the operational purchasing access they had
-  // before pharmacy capabilities became explicit. A matching custom DENY is
-  // still resolved first by `can()` and therefore takes precedence.
+  // Tenant administrators without an assigned organization role retain the
+  // purchasing and Goods-in access they had before pharmacy capabilities became
+  // explicit (#375). `can()` prevents an assigned role with no matching grant
+  // from falling through to this policy, and resolves a custom DENY first.
   'pharmacy:procurement': [isAdmin],
   'pharmacy:inventory': [],
   // Dispensing is an exact-grant-only action: tenant administration alone is

@@ -63,12 +63,14 @@ function fixture(returnedUnits: number, priorRefunds: number[] = []) {
         permissionOverrides: [],
       })),
     },
-    pharmacyBranchAssignment: { findMany: vi.fn(async () => [{ branchId: 'branch-1' }]) },
     pharmacyBranch: {
       findFirst: vi.fn(async () => ({ id: 'branch-1' })),
       findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
         where.id.in.map((id) => ({ id }))
       ),
+    },
+    pharmacyBranchAssignment: {
+      findMany: vi.fn().mockResolvedValue([{ branchId: 'branch-1' }]),
     },
     $executeRaw: vi.fn(async (query: { values: unknown[] }) => {
       payloadHash = String(query.values[5]);

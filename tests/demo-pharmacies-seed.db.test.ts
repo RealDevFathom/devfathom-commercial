@@ -75,7 +75,7 @@ describe('persisted demo pharmacy seed', () => {
         const organizationId = organization.id;
         const users = await prisma.user.findMany({
           where: { organizationId },
-          include: { organizationRole: true },
+          include: { organizationRole: { include: { permissions: true } } },
         });
         expect(organization.pharmacyOperatingMode).toBe(plan.mode);
         expect(organization.isDemo).toBe(false);
@@ -87,6 +87,19 @@ describe('persisted demo pharmacy seed', () => {
           const key = `DEMO_${plan.mode}_${user.organizationRole!.key.toUpperCase()}_PASSWORD`;
           expect(await compare(env[key]!, user.password!)).toBe(true);
           expect(user.password).not.toBe(env[key]);
+        }
+        const grants = (role: string) => users.find((user) => user.organizationRole?.key === role)!
+          .organizationRole!.permissions.filter((grant) => grant.effect === 'ALLOW').map((grant) => grant.capability);
+        expect(grants('owner')).toEqual(expect.arrayContaining([
+          'pharmacy:safety', 'pharmacy:catalogue-review',
+        ]));
+        if (plan.mode === 'SOLO') expect(grants('owner')).toContain('pharmacy:dispense');
+        else {
+          expect(grants('owner')).not.toContain('pharmacy:dispense');
+          expect(grants('pharmacist')).toContain('pharmacy:dispense');
+          expect(grants('cashier')).not.toContain('pharmacy:dispense');
+          expect(grants('cashier')).not.toContain('pharmacy:safety');
+          expect(grants('cashier')).not.toContain('pharmacy:catalogue-review');
         }
         const medicines = await prisma.medicine.findMany({
           where: { organizationId },

@@ -25,6 +25,7 @@ import { enforceOperatingMode } from './operating-mode';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
+import { postSupplierClaimEntry } from './finance-postings';
 import type { LedgerScope } from './stock-ledger';
 import {
   assertAllocatable,
@@ -215,6 +216,10 @@ export async function submitPurchaseReturn(
         returnBy: line.returnWindowEndsAt,
         createdById: scope.actorId,
       },
+    });
+    await postSupplierClaimEntry(db, scope, {
+      supplierClaimId: claim.id,
+      at: input.at,
     });
     await db.pharmacyPurchaseReturnLine.update({
       where: { id: line.id },

@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { enforceOperatingMode, type PharmacyApprovalKind } from './operating-mode';
-const mocks = vi.hoisted(() => ({ solo: vi.fn(), can: vi.fn(), branch: vi.fn() }));
+const mocks = vi.hoisted(() => ({ solo: vi.fn(), can: vi.fn(), branch: vi.fn(), pin: vi.fn() }));
 vi.mock('./solo-approval', () => ({
   authorizeSoloApproval: mocks.solo,
-  verifyPharmacyUserPin: vi.fn(async (_scope, pin) => pin === '4729'),
+  verifyPharmacyUserPin: mocks.pin,
 }));
 vi.mock('./procurement-access', () => ({
   actorCanProcure: (...args: unknown[]) => mocks.can(...args),
@@ -22,6 +22,7 @@ function fixture(mode: string, role = 'owner') {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.can.mockResolvedValue(true);
+  mocks.pin.mockImplementation(async (_scope, pin) => pin === '4729');
   mocks.solo.mockImplementation(async (_db, _scope, _target, pin) => pin === '4729');
 });
 describe.each<PharmacyApprovalKind>([
@@ -139,4 +140,17 @@ it('fails closed when approval evidence cannot be persisted', async () => {
       targetId: 'sale',
     })
   ).rejects.toThrow('audit unavailable');
+});
+
+
+it('holds the organization lock before the independent delegated PIN verifier starts', async () => {
+  const db = fixture('STAFFED', 'pharmacist');
+  const steps: string[] = [];
+  db.$queryRaw.mockImplementation(async () => { steps.push('organization'); return []; });
+  mocks.pin.mockImplementation(async () => { steps.push('credential'); return true; });
+  await enforceOperatingMode(db as never, scope, {
+    kind: 'RX', makerIds: ['actor'], checkerId: 'checker', pin: '4729',
+    targetType: 'PrescriptionSale', targetId: 'sale',
+  });
+  expect(steps).toEqual(['organization', 'credential']);
 });

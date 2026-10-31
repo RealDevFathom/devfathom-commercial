@@ -25,6 +25,7 @@ import {
 } from '@/lib/pharmacy/dashboard';
 import {
   PHARMACY_METRIC_CONTRACT,
+  MAX_PHARMACY_REPORT_DAYS,
   pharmacyReportCatalog,
   readPharmacyOwnerCommandCentre,
 } from '@/lib/pharmacy/reports';
@@ -40,6 +41,7 @@ import {
   acknowledgePackAuthenticationFlag,
   readPackAuthenticationFlags,
 } from '@/lib/pharmacy/pack-authentication-operations';
+import { readPharmacyBranchComparison } from '@/lib/pharmacy/branch-comparison';
 import { capabilityProcedure, router, type TRPCContext } from '../trpc';
 import { assignedRegisterBranchIds } from '@/lib/pharmacy/controlled-register';
 import { annotateAudit } from '@/server/audit';
@@ -96,6 +98,15 @@ const transitions: Record<z.infer<typeof pvState>, readonly z.infer<typeof pvSta
   READY: ['UNDER_REVIEW', 'SUBMITTED', 'CLOSED'],
   SUBMITTED: ['CLOSED'],
   CLOSED: [],
+};
+const externalTransitions: Record<
+  z.infer<typeof externalState>,
+  readonly z.infer<typeof externalState>[]
+> = {
+  NOT_SUBMITTED: ['PENDING', 'SUBMITTED', 'FAILED'],
+  PENDING: ['SUBMITTED', 'FAILED'],
+  SUBMITTED: [],
+  FAILED: ['PENDING', 'SUBMITTED'],
 };
 
 async function requirePvBranch(ctx: TRPCContext, branchId: string) {
@@ -267,6 +278,11 @@ export const pharmacyReportsRouter = router({
           code: 'BAD_REQUEST',
           message: 'Invalid report lifecycle transition.',
         });
+      if (report.externalSubmissionState === 'SUBMITTED' && input.state === 'UNDER_REVIEW')
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'A submitted report cannot return to review.',
+        });
       annotateAudit(ctx, {
         targetType: 'PharmacyPharmacovigilanceReport',
         targetId: report.id,
@@ -326,8 +342,14 @@ export const pharmacyReportsRouter = router({
             },
           });
         }
-        return db.pharmacyPharmacovigilanceReport.update({
-          where: { id: report.id, organizationId, branchId: input.branchId, state: report.state },
+        const [updated] = await db.pharmacyPharmacovigilanceReport.updateManyAndReturn({
+          where: {
+            id: report.id,
+            organizationId,
+            branchId: input.branchId,
+            state: report.state,
+            externalSubmissionState: report.externalSubmissionState,
+          },
           data: {
             state: input.state,
             ...(input.state === 'READY'
@@ -337,6 +359,12 @@ export const pharmacyReportsRouter = router({
                 : {}),
           },
         });
+        if (!updated)
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: 'Report lifecycle changed; refresh and try again.',
+          });
+        return updated;
       });
     }),
   recordPharmacovigilanceSubmission: safety
@@ -369,24 +397,35 @@ export const pharmacyReportsRouter = router({
       const organizationId = await requirePvBranch(ctx, input.branchId);
       const report = await ctx.db.pharmacyPharmacovigilanceReport.findFirst({
         where: { id: input.id, branchId: input.branchId, organizationId },
-        select: { id: true, state: true, reviewedByUserId: true },
       });
       if (!report) throw new TRPCError({ code: 'NOT_FOUND', message: 'Report not found.' });
       if (
-        input.state === 'SUBMITTED' &&
-        (!['READY', 'SUBMITTED', 'CLOSED'].includes(report.state) || !report.reviewedByUserId)
+        !['READY', 'SUBMITTED', 'CLOSED'].includes(report.state) ||
+        (input.state === 'SUBMITTED' && !report.reviewedByUserId)
       )
         throw new TRPCError({
           code: 'BAD_REQUEST',
-          message: 'Internal approval is required before submission.',
+          message: 'Report must be ready before recording a submission.',
         });
-      return ctx.db.pharmacyPharmacovigilanceReport.update({
+      const isIdempotent =
+        report.externalSubmissionState === input.state &&
+        report.externalReference ===
+          (input.state === 'SUBMITTED' ? input.externalReference : null) &&
+        report.externalFailureReason === (input.state === 'FAILED' ? input.failureReason : null);
+      if (isIdempotent) return report;
+      if (!externalTransitions[report.externalSubmissionState].includes(input.state))
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Invalid external submission transition.',
+        });
+      const [updated] = await ctx.db.pharmacyPharmacovigilanceReport.updateManyAndReturn({
         where: {
           id: report.id,
-          organizationId,
           branchId: input.branchId,
+          organizationId,
           state: report.state,
           reviewedByUserId: report.reviewedByUserId,
+          externalSubmissionState: report.externalSubmissionState,
         },
         data: {
           externalSubmissionState: input.state,
@@ -394,6 +433,12 @@ export const pharmacyReportsRouter = router({
           externalFailureReason: input.state === 'FAILED' ? input.failureReason : null,
         },
       });
+      if (!updated)
+        throw new TRPCError({
+          code: 'CONFLICT',
+          message: 'Submission state changed; refresh and try again.',
+        });
+      return updated;
     }),
   exportPharmacovigilanceDrap: safety
     .input(
@@ -515,11 +560,44 @@ export const pharmacyReportsRouter = router({
     metrics: PHARMACY_METRIC_CONTRACT,
     permissions: {
       operational: true,
+      owner: ctx.session!.user.role === 'ADMIN',
       financial: await can(subjectFromSession(ctx.session!.user), 'reports:financial', undefined, {
         db: ctx.db,
       }),
     },
   })),
+  branchComparison: reports
+    .input(
+      z
+        .object({ from: z.iso.date(), to: z.iso.date() })
+        .strict()
+        .refine((input) => input.from <= input.to, {
+          message: 'The report start date must not be after the end date.',
+        })
+        .refine(
+          (input) =>
+            (Date.parse(input.to) - Date.parse(input.from)) / 86_400_000 + 1 <=
+            MAX_PHARMACY_REPORT_DAYS,
+          {
+            message: `Interactive pharmacy reports are limited to ${MAX_PHARMACY_REPORT_DAYS} days.`,
+          }
+        )
+    )
+    .query(async ({ ctx, input }) => {
+      await requireFinancialReports(ctx);
+      if (ctx.session!.user.role !== 'ADMIN')
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Owner access is required.' });
+      const available = await scope(ctx);
+      // The RSC tenant facade otherwise gives each statement its own transaction, losing
+      // the transaction-local branch context before the khata ledger is read.
+      return ctx.db.$transaction((tx) =>
+        readPharmacyBranchComparison(tx as typeof ctx.db, {
+          branches: available.branches,
+          from: input.from,
+          to: input.to,
+        })
+      );
+    }),
   repeatPurchasing: reports
     .input(
       filters

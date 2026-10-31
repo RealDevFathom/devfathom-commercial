@@ -513,7 +513,8 @@ export async function listControlledPinWitnesses(
   db: ScopedDb,
   organizationId: string,
   actorId: string,
-  branchId?: string
+  branchId?: string,
+  qualifiedPersonUserId?: string
 ) {
   const solo = await soloOwnerEligible(db, { organizationId, actorId, branchId });
   const staff = await db.restaurantStaffProfile.findMany({
@@ -521,7 +522,7 @@ export async function listControlledPinWitnesses(
       organizationId,
       user: { organizationId, status: 'ACTIVE' },
       status: 'ACTIVE',
-      ...(solo ? {} : { userId: { not: actorId } }),
+      userId: qualifiedPersonUserId ?? (solo ? undefined : { not: actorId }),
       credentials: { some: { type: 'PIN', revokedAt: null, deviceId: null } },
     },
     include: {

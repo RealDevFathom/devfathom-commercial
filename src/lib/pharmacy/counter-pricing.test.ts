@@ -146,6 +146,28 @@ describe('previewSaleLine (exact quantity and price preview)', () => {
     }
   });
 
+  it('quotes the printed MRP for a full pack when the MRP is not divisible by its units', () => {
+    const threeUnitOptions = saleUnitOptions({
+      packLevels: [
+        { id: 'pack-3', parentPackLevelId: null, level: 'BOX', unitsPerParent: 1 },
+        { id: 'unit-3', parentPackLevelId: 'pack-3', level: 'TABLET', unitsPerParent: 3 },
+      ],
+      rootPackLevelId: 'pack-3',
+      unitsPerPack: 3,
+    });
+    const preview = previewSaleLine({
+      option: threeUnitOptions[0]!,
+      quantity: 1,
+      printedMrpMinor: 1_000,
+      unitsPerPack: 3,
+      availableUnits: 3,
+    });
+
+    expect(preview.option.kind).toBe('PACK');
+    expect(preview.unitPriceMinor).toBe(1_000);
+    expect(preview.grossMinor).toBe(1_000);
+  });
+
   it('multiplies canonical units and gross by the quantity', () => {
     const preview = previewSaleLine({
       option: strip!,

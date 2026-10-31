@@ -23,6 +23,9 @@ function fixture(assigned = true) {
     cnic: null,
     phone: null,
     dateOfBirth: null,
+    address: 'Address',
+    consents: [],
+    prescriptions: [],
   };
   const reads = {
     findMany: vi.fn(async () => []),
@@ -86,7 +89,7 @@ beforeEach(() => {
   mocks.can.mockResolvedValue(true);
 });
 describe('prescription read boundary', () => {
-  it.each(paths)('%s denies missing dispense before patient or branch queries', async (path) => {
+  it.each(paths)('%s denies missing clinical and counter grants before patient or branch queries', async (path) => {
     mocks.can.mockResolvedValue(false);
     const f = fixture();
     await expect(read(f.api, path)).rejects.toMatchObject({ code: 'FORBIDDEN' });
@@ -161,6 +164,40 @@ describe('alternate clinical read paths', () => {
       await expect(f.queue[path]()).rejects.toMatchObject({ code: 'FORBIDDEN' });
       expect(f.db.pharmacyPharmacistReviewItem.findMany).not.toHaveBeenCalled();
       expect(f.db.pharmacySaleLine.findMany).not.toHaveBeenCalled();
+    }
+  );
+});
+
+
+describe('cashier counter patient access', () => {
+  beforeEach(() => {
+    mocks.can.mockImplementation(async (_subject, action) => action === 'pharmacy:counter');
+  });
+  it('allows masked patient search and the limited panel on an assigned branch', async () => {
+    const f = fixture();
+    f.reads.findMany.mockResolvedValue([{ id: 'patient', displayName: 'Patient',
+      phone: '03001234567', cnic: '3520212345678', dateOfBirth: null }] as never);
+    await expect(f.api.counterPatients({ branchId: 'branch-a', query: 'Pa' })).resolves.toEqual({
+      patients: [{ patientId: 'patient', displayName: 'Patient', phone: '*******4567' }],
+    });
+    const panel = await f.api.counterPatientPanel({ branchId: 'branch-a', patientId: 'patient' });
+    expect(panel).toMatchObject({ patientId: 'patient', prescriptions: [], dispensingConsent: false });
+    expect(panel).not.toHaveProperty('sourceFileRef');
+    expect(panel).not.toHaveProperty('dateOfBirth');
+    expect(f.ctx.audit.detail.skipInput).toBe(true);
+  });
+  it.each(['workspace', 'readPatient', 'exportPatient'] as const)(
+    'keeps %s behind the clinical-file guard', async (path) => {
+      const f = fixture();
+      await expect(read(f.api, path)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      for (const query of Object.values(f.reads)) expect(query).not.toHaveBeenCalled();
+    }
+  );
+  it.each(['counterPatients', 'counterPatientPanel'] as const)(
+    'denies %s on another branch despite the counter grant', async (path) => {
+      const f = fixture();
+      await expect(read(f.api, path, 'branch-b')).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      for (const query of Object.values(f.reads)) expect(query).not.toHaveBeenCalled();
     }
   );
 });

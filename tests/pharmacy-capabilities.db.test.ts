@@ -32,6 +32,10 @@ const managerApprovalMigration = readFileSync(
 )
   .replace(/^BEGIN;$/m, '')
   .replace(/^COMMIT;$/m, '');
+const administratorReportsMigration = readFileSync(
+  'prisma/migrations/20261029000258_pharmacy_administrator_reports/migration.sql',
+  'utf8'
+);
 const expiry = new Date('2035-01-02T00:00:00.000Z');
 const expired = new Date('2020-01-02T00:00:00.000Z');
 const legacy: Record<string, string[]> = {
@@ -142,6 +146,22 @@ const legacy: Record<string, string[]> = {
       `INSERT INTO organization_role_permissions (id,"organizationId","organizationRoleId",capability,effect) VALUES ($1,$2,$3,'reports:financial','DENY')`,
       [id('other_owner_deny'), other, id('other_owner')]
     );
+    // Legacy pharmacy bootstrap roles are not canonical Owner templates. Both historical keys
+    // need operational reports, while a tenant-authored lookalike and an explicit DENY stay put.
+    for (const [key, roleKey, isSystem, roleOrg] of [
+      ['administrator', 'administrator', true, org],
+      ['admin', 'admin', true, other],
+      ['custom_administrator', 'administrator', false, third],
+    ] as const) {
+      await client.query(
+        `INSERT INTO organization_roles (id,"organizationId",key,name,"isSystem","updatedAt") VALUES ($1,$2,$3,$3,$4,now())`,
+        [id(key), roleOrg, roleKey, isSystem]
+      );
+    }
+    await client.query(
+      `INSERT INTO organization_role_permissions (id,"organizationId","organizationRoleId",capability,effect) VALUES ($1,$2,$3,'reports:operational','DENY')`,
+      [id('admin_reports_deny'), other, id('admin')]
+    );
     await client.query(migration);
     await client.query(managerProcurementMigration);
     await client.query(managerApprovalMigration);
@@ -150,6 +170,7 @@ const legacy: Record<string, string[]> = {
         .split('-- A solo exception')[0]
         .replace(/^BEGIN;$/m, '')
     );
+    await client.query(administratorReportsMigration);
   }, 60_000);
   afterAll(async () => {
     await client.query('ROLLBACK');
@@ -221,6 +242,23 @@ const legacy: Record<string, string[]> = {
       { capability: 'reports:financial', effect: 'DENY' },
       { capability: 'reports:operational', effect: 'ALLOW' },
     ]);
+    const administrator = await client.query(
+      `SELECT capability,effect FROM organization_role_permissions WHERE "organizationRoleId"=$1`,
+      [id('administrator')]
+    );
+    expect(administrator.rows).toEqual([{ capability: 'reports:operational', effect: 'ALLOW' }]);
+    const deniedAdministrator = await client.query(
+      `SELECT capability,effect FROM organization_role_permissions WHERE "organizationRoleId"=$1`,
+      [id('admin')]
+    );
+    expect(deniedAdministrator.rows).toEqual([
+      { capability: 'reports:operational', effect: 'DENY' },
+    ]);
+    const customAdministrator = await client.query(
+      `SELECT capability FROM organization_role_permissions WHERE "organizationRoleId"=$1`,
+      [id('custom_administrator')]
+    );
+    expect(customAdministrator.rows).toEqual([]);
     const custom = await client.query(
       `SELECT capability FROM organization_role_permissions WHERE "organizationRoleId"=$1`,
       [id('other_custom')]
@@ -255,6 +293,7 @@ const legacy: Record<string, string[]> = {
     await client.query(migration);
     await client.query(managerProcurementMigration);
     await client.query(managerApprovalMigration);
+    await client.query(administratorReportsMigration);
     expect(
       (
         await client.query(

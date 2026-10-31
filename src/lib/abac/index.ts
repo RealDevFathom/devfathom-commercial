@@ -89,6 +89,9 @@ async function customDecision(
     (await isPharmacyOwner(db as never, user.organizationId, userId))
   )
     return { decision: true, subject };
+  // An assigned role bounds procurement even for tenant administrators (#375).
+  if (action === 'pharmacy:procurement' && user.organizationRole)
+    return { decision: false, subject };
   return { decision: null, subject };
 }
 
@@ -121,7 +124,7 @@ export async function can(
     }
     if (decision === true) return true;
   } catch (err) {
-    console.error(`[abac] permission evaluation for "${action}" threw:`, err);
+    console.error('[abac] permission evaluation threw:', { action, error: err });
     return false;
   }
   for (const policy of POLICIES[action] ?? []) {
@@ -129,7 +132,7 @@ export async function can(
       if (await policy({ subject, resource, env, db })) return true;
     } catch (err) {
       // A policy that throws denies (fail-closed) but never crashes the request.
-      console.error(`[abac] policy for "${action}" threw:`, err);
+      console.error('[abac] policy threw:', { action, error: err });
     }
   }
   return false;

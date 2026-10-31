@@ -477,10 +477,19 @@ describe('KDS unlock authorization', () => {
     });
     const { token } = await establish(secret);
     addOperator(ACTING, device.id);
+    addOperator(INCOMING, device.id, ['kitchen:operate']);
 
-    const invalidCredential = await unlock(secret, token, ACTING, '0000');
-    expect(invalidCredential.response.status).toBe(401);
-    expect(invalidCredential.body).toEqual({ error: 'Invalid operator credential.' });
+    const invalidCredentialWithoutAccess = await unlock(secret, token, ACTING, '0000');
+    const invalidCredentialWithAccess = await unlock(secret, token, INCOMING, '0000');
+
+    // A caller who does not know either PIN sees the same response regardless
+    // of whether the targeted operator has kitchen access.
+    expect(invalidCredentialWithoutAccess.response.status).toBe(401);
+    expect(invalidCredentialWithAccess.response.status).toBe(401);
+    expect(invalidCredentialWithoutAccess.body).toEqual({
+      error: 'Invalid operator credential.',
+    });
+    expect(invalidCredentialWithAccess.body).toEqual(invalidCredentialWithoutAccess.body);
 
     const validCredentialWithoutAccess = await unlock(secret, token, ACTING, PINS[ACTING]);
     expect(validCredentialWithoutAccess.response.status).toBe(403);

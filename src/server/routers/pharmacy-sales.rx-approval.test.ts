@@ -2,6 +2,10 @@ import { describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({ mode: vi.fn(), add: vi.fn(), branch: vi.fn() }));
 vi.mock('server-only', () => ({}));
+vi.mock('@/lib/abac', async (original) => ({
+  ...(await original<typeof import('@/lib/abac')>()),
+  can: vi.fn(async () => true),
+}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/entitlements', () => ({ hasModule: () => true }));
@@ -90,4 +94,38 @@ describe('Rx approval on a discounted line', () => {
     expect(written).not.toHaveProperty('prescriptionApproval');
     expect(written).not.toHaveProperty('approvalPin');
   });
+});
+
+
+it('locks the organization before a controlled witness credential, matching delegated Rx approval', async () => {
+  const locks: string[] = [];
+  mocks.branch.mockImplementation(async (_db, scope) => scope);
+  const db = {
+    pharmacyBranch: { findMany: vi.fn(async () => [{ id: 'branch' }]) },
+    medicine: { findFirst: vi.fn(async () => ({ controlled: true })) },
+    $queryRaw: vi.fn(async (sql: TemplateStringsArray) => {
+      const statement = sql.join('?');
+      if (statement.includes('FOR ')) locks.push(statement);
+      return statement.includes('restaurant_staff_profiles') ? [{ userId: 'checker' }] : [];
+    }),
+    restaurantOperatorCredential: { findFirst: vi.fn(async () => null) },
+    $transaction: (run: (tx: unknown) => unknown) => run(db),
+  };
+  const ctx = {
+    db,
+    session: { user: { id: 'actor', organizationId: 'org', status: 'ACTIVE', role: 'EMPLOYEE' } },
+    entitlements: { organizationId: 'org', enabledModules: ['pharmacy-counter'] },
+    audit: { detail: {} }, requestMeta: { ip: null, userAgent: null },
+  } as unknown as TRPCContext;
+  await expect(pharmacySalesRouter.createCaller(ctx).addLine({
+    branchId: 'branch', saleId: 'sale', medicineId: 'medicine', presentationId: 'presentation',
+    packLevelId: 'pack', saleUnit: 'UNIT', quantity: 1, canonicalUnitsPerSaleUnit: 1,
+    idempotencyKey: 'controlled-lock-order',
+    controlledAuthorization: { patientId: 'patient', patientAddress: 'Address',
+      staffProfileId: 'checker-profile', pin: '4729', rxSerialWritten: true,
+      emergency: true, prescriberName: 'Prescriber' },
+  })).resolves.toHaveProperty('blocked');
+  expect(locks).toHaveLength(2);
+  expect(locks[0]).toContain('FROM organizations');
+  expect(locks[1]).toContain('FROM restaurant_operator_credentials');
 });

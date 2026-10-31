@@ -96,9 +96,10 @@ describe('module catalog', () => {
     for (const path of ACCOUNT_PROCEDURES) expect(moduleForProcedure(path)).toBeNull();
     expect(ACCOUNT_PROCEDURES.has('team.getById')).toBe(true);
     expect(ACCOUNT_PROCEDURES.has('team.updateProfile')).toBe(true);
+    expect(ACCOUNT_PROCEDURES.has('team.getNotifications')).toBe(false);
     expect(moduleForProcedure('team.getAll')).toBe('hr');
     expect(moduleForProcedure('team.updateRole')).toBe('hr');
-    expect(moduleForProcedure('team.getNotifications')).toBe('hr');
+    expect(moduleForProcedure('team.getNotifications')).toBeNull();
   });
 });
 
@@ -328,6 +329,54 @@ describe('team.getAll and team:view', () => {
     mocks.permissions.mockResolvedValue(rules);
     mocks.findMany.mockResolvedValue([self]);
     await expect(caller(['hr'], 'HR').getAll()).resolves.toEqual([self]);
+    expect(mocks.findMany).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ where: { id: 'user_self' } })
+    );
+  });
+});
+
+/** The lightweight roster must not bypass the directory's `team:view` decision. */
+describe('team.getRoster and team:view', () => {
+  const self = { id: 'user_self', name: 'Me', avatar: null, title: 'Engineer' };
+  const colleague = {
+    id: 'user_other',
+    name: 'Front desk',
+    avatar: null,
+    title: 'Receptionist',
+  };
+
+  it('lists the roster when team:view is allowed', async () => {
+    mocks.findMany.mockResolvedValue([colleague, self]);
+
+    await expect(caller(['hr']).getRoster()).resolves.toEqual([colleague, self]);
+    expect(mocks.permissions).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'user_self' } })
+    );
+    expect(mocks.findMany).toHaveBeenCalledWith(
+      expect.not.objectContaining({ where: expect.anything() })
+    );
+  });
+
+  it.each([
+    [
+      'an override',
+      {
+        organizationRole: null,
+        permissionOverrides: [{ capability: 'team:view', effect: 'DENY' }],
+      },
+    ],
+    [
+      'the custom role',
+      {
+        organizationRole: { permissions: [{ capability: 'team:*', effect: 'DENY' }] },
+        permissionOverrides: [],
+      },
+    ],
+  ])('reads only the viewer’s own roster row when %s denies team:view', async (_label, rules) => {
+    mocks.permissions.mockResolvedValue(rules);
+    mocks.findMany.mockResolvedValue([self]);
+
+    await expect(caller(['hr']).getRoster()).resolves.toEqual([self]);
     expect(mocks.findMany).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ where: { id: 'user_self' } })
     );

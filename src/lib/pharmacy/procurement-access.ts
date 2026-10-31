@@ -22,10 +22,11 @@ function matching(rules: readonly CapabilityRule[]) {
 export function procurementCapabilityGranted(input: {
   overrides: readonly CapabilityRule[];
   role: readonly CapabilityRule[];
+  tenantAdminWithoutRole?: boolean;
 }): boolean {
   const rules = matching([...input.overrides, ...input.role]);
   if (rules.some((rule) => rule.effect === 'DENY')) return false;
-  return rules.some((rule) => rule.effect === 'ALLOW');
+  return rules.some((rule) => rule.effect === 'ALLOW') || input.tenantAdminWithoutRole === true;
 }
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -53,13 +54,13 @@ export async function actorCanProcure(db: ScopedDb, userId: string, now = new Da
   if (!user || user.status !== 'ACTIVE') return false;
   const rules = [...user.permissionOverrides, ...(user.organizationRole?.permissions ?? [])];
   if (matching(rules).some((rule) => rule.effect === 'DENY')) return false;
-  if (
-    user.role === 'ADMIN' ||
-    (user.organizationId && (await isPharmacyOwner(db, user.organizationId, userId)))
-  )
+  if (user.organizationId && (await isPharmacyOwner(db, user.organizationId, userId)))
     return true;
   return procurementCapabilityGranted({
     overrides: user.permissionOverrides,
     role: user.organizationRole?.permissions ?? [],
+    // Match ABAC's legacy admin fallback (#375), without bypassing an assigned
+    // role's capability boundary or an explicit DENY.
+    tenantAdminWithoutRole: user.role === 'ADMIN' && user.organizationRole === null,
   });
 }

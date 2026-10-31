@@ -93,8 +93,7 @@ export async function assertRxSaleLinesAllowed(
     undefined,
     { db }
   );
-  if (actorCanDispense) return checkers;
-  await assertRxDelegationAllowed(db, scope);
+  if (!actorCanDispense) await assertRxDelegationAllowed(db, scope);
   for (const line of lines) {
     const approval = await db.auditLog.findFirst({
       where: {
@@ -102,19 +101,29 @@ export async function assertRxSaleLinesAllowed(
         action: RX_LINE_APPROVAL,
         targetType: 'PharmacySaleLine',
         targetId: line.id,
-        AND: [
-          { metadata: { path: ['saleId'], equals: sale.id } },
-          { metadata: { path: ['branchId'], equals: scope.branchId } },
-          { metadata: { path: ['requestedById'], equals: scope.actorId } },
-          { metadata: { path: ['medicineId'], equals: line.medicineId } },
-          { metadata: { path: ['presentationId'], equals: line.presentationId } },
-          { metadata: { path: ['canonicalUnits'], equals: line.canonicalUnits } },
-        ],
       },
       orderBy: { createdAt: 'desc' },
-      select: { actorId: true },
+      select: { actorId: true, metadata: true },
     });
-    if (!approval) throw new PharmacyRxSaleDenied();
+    // Legacy/direct dispensing can have no delegated evidence. Once an approval
+    // exists, a payer's own grant must never hide a revoked or mismatched checker.
+    if (!approval) {
+      if (actorCanDispense) continue;
+      throw new PharmacyRxSaleDenied();
+    }
+    const metadata = approval.metadata;
+    if (
+      !metadata ||
+      typeof metadata !== 'object' ||
+      Array.isArray(metadata) ||
+      metadata.saleId !== sale.id ||
+      metadata.branchId !== scope.branchId ||
+      metadata.requestedById !== scope.actorId ||
+      metadata.medicineId !== line.medicineId ||
+      metadata.presentationId !== line.presentationId ||
+      metadata.canonicalUnits !== line.canonicalUnits
+    )
+      throw new PharmacyRxSaleDenied();
     const checkerId = approval.actorId;
     if (!checkerId) throw new PharmacyRxSaleDenied();
     if (checkerId !== scope.actorId) {

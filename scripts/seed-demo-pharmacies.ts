@@ -254,6 +254,8 @@ export async function seedDemoPharmacies(
                     'pharmacy:manage',
                     'pharmacy:inventory',
                     'pharmacy:procurement',
+                    'pharmacy:safety',
+                    'pharmacy:catalogue-review',
                     'reports:operational',
                     'reports:financial',
                     ...(plan.mode === 'SOLO' ? ['pharmacy:dispense'] : []),
