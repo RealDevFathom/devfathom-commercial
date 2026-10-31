@@ -7,7 +7,7 @@
  * Reading your own profile is account self-service; reading another member is still
  * the licensed team directory.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   findUnique: vi.fn(),
@@ -83,6 +83,10 @@ beforeEach(() => {
   mocks.permissions.mockResolvedValue({ organizationRole: null, permissionOverrides: [] });
 });
 
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 describe('module catalog', () => {
   it('leaves every account self-service procedure unlicensed and the directory on hr', () => {
     for (const path of ACCOUNT_PROCEDURES) expect(moduleForProcedure(path)).toBeNull();
@@ -90,6 +94,7 @@ describe('module catalog', () => {
     expect(ACCOUNT_PROCEDURES.has('team.updateProfile')).toBe(true);
     expect(ACCOUNT_PROCEDURES.has('team.getNotifications')).toBe(false);
     expect(moduleForProcedure('team.getAll')).toBe('hr');
+    expect(moduleForProcedure('team.getRoster')).toBe('hr');
     expect(moduleForProcedure('team.updateRole')).toBe('hr');
     expect(moduleForProcedure('team.getNotifications')).toBeNull();
   });
@@ -324,6 +329,87 @@ describe('team.getAll and team:view', () => {
     expect(mocks.findMany).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ where: { id: 'user_self' } })
     );
+  });
+});
+
+/** The lightweight roster is a directory view and must enforce the same denial. */
+describe('team.getRoster and team:view', () => {
+  const rosterQuery = {
+    select: { id: true, name: true, avatar: true, title: true },
+    orderBy: { name: 'asc' },
+  };
+  const self = { id: 'user_self', name: 'Me', avatar: null, title: 'Engineer' };
+  const colleague = {
+    id: 'user_other',
+    name: 'Front desk',
+    avatar: null,
+    title: 'Receptionist',
+  };
+
+  it('lists the roster when team:view is allowed', async () => {
+    mocks.findMany.mockResolvedValue([colleague, self]);
+
+    await expect(caller(['hr']).getRoster()).resolves.toEqual([colleague, self]);
+    expect(mocks.permissions).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'user_self' } })
+    );
+    expect(mocks.findMany).toHaveBeenCalledExactlyOnceWith(rosterQuery);
+  });
+
+  it.each([
+    [
+      'an override',
+      {
+        organizationRole: null,
+        permissionOverrides: [{ capability: 'team:view', effect: 'DENY' }],
+      },
+    ],
+    [
+      'the custom role',
+      {
+        organizationRole: { permissions: [{ capability: 'team:*', effect: 'DENY' }] },
+        permissionOverrides: [],
+      },
+    ],
+  ])('reads only the viewer’s own roster row when %s denies team:view', async (_label, rules) => {
+    mocks.permissions.mockResolvedValue(rules);
+    mocks.findMany.mockResolvedValue([self]);
+
+    await expect(caller(['hr'], 'HR').getRoster()).resolves.toEqual([self]);
+    expect(mocks.findMany).toHaveBeenCalledExactlyOnceWith({
+      ...rosterQuery,
+      where: { id: 'user_self' },
+    });
+  });
+
+  it('fails closed when the permission lookup fails', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    mocks.permissions.mockRejectedValue(new Error('permission lookup failed'));
+    mocks.findMany.mockResolvedValue([self]);
+
+    await expect(caller(['hr']).getRoster()).resolves.toEqual([self]);
+    expect(error).toHaveBeenCalledWith(
+      '[abac] custom permission lookup for "team:view" threw:',
+      expect.any(Error)
+    );
+    expect(mocks.findMany).toHaveBeenCalledExactlyOnceWith({
+      ...rosterQuery,
+      where: { id: 'user_self' },
+    });
+  });
+
+  it('fails closed when the permission lookup finds no viewer', async () => {
+    mocks.permissions.mockResolvedValue(null);
+    mocks.findMany.mockResolvedValue([self]);
+
+    await expect(caller(['hr']).getRoster()).resolves.toEqual([self]);
+    expect(mocks.permissions).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ where: { id: 'user_self' } })
+    );
+    expect(mocks.findMany).toHaveBeenCalledExactlyOnceWith({
+      ...rosterQuery,
+      where: { id: 'user_self' },
+    });
   });
 });
 

@@ -73,6 +73,14 @@ function tasksVisibleTo(viewerId: string): Prisma.TaskWhereInput {
   };
 }
 
+/** Restrict directory-shaped queries to the caller when `team:view` is denied. */
+function teamDirectoryScope(
+  directoryAllowed: boolean,
+  viewerId: string
+): { where?: Prisma.UserWhereInput } {
+  return directoryAllowed ? {} : { where: { id: viewerId } };
+}
+
 export const teamRouter = router({
   getAll: protectedProcedure.query(async ({ ctx }) => {
     const me = ctx.session.user.id;
@@ -84,7 +92,7 @@ export const teamRouter = router({
       db: ctx.db,
     });
     const rows = await ctx.db.user.findMany({
-      ...(directory ? {} : { where: { id: me } }),
+      ...teamDirectoryScope(directory, me),
       select: {
         id: true,
         name: true,
@@ -112,7 +120,16 @@ export const teamRouter = router({
 
   // Lightweight roster — just enough to render avatars and names.
   getRoster: protectedProcedure.query(async ({ ctx }) => {
+    const me = ctx.session.user.id;
+    // This is another view of the team directory, so it must honor the same
+    // custom-role and per-user denial as getAll. Keep the caller's own record
+    // available for self-referential controls without exposing coworkers.
+    const directory = await can(subjectFromSession(ctx.session.user), 'team:view', undefined, {
+      source: 'TRPC',
+      db: ctx.db,
+    });
     return ctx.db.user.findMany({
+      ...teamDirectoryScope(directory, me),
       select: {
         id: true,
         name: true,
