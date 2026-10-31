@@ -119,7 +119,7 @@ const url = process.env.DATABASE_URL;
   }
 );
 
-it.each(['INACTIVE', 'ON_LEAVE', 'INVITED'] as const)(
+it.skipIf(!url).each(['INACTIVE', 'ON_LEAVE', 'INVITED'] as const)(
   'migrates a bootstrap admin with %s former staff, preserves DENYs and manual assignments, and refuses staffed promotion',
   async (formerStatus) => {
     expect(url).toBeTruthy();

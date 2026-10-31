@@ -58,6 +58,14 @@ this is compatible with foreign-key KEY SHARE locks and avoids the deadlock
 reproduced with FOR UPDATE. Real connection tests verify simultaneous approvals,
 roster races, unrelated-tenant concurrency, and stale repeatable-read rejection.
 
+Superseded by `20261101000000_pharmacy_solo_roster_advisory_lock` (PR #683
+review): roster writers now take a shared per-tenant transaction advisory lock
+and no longer lock or rewrite the organizations row; solo approvals take the
+exclusive lock and are refused (40001) outside READ COMMITTED. Owner-assignment
+recomputation keeps its own exclusive per-tenant advisory lock. The same
+migration restores the rule that an active, unlinked (PIN-only) staff profile
+makes a pharmacy staffed, which 104000 had dropped.
+
 ## Verified results
 
 - Changed unit/component suites: **650 tests, 27 files, zero skips**.

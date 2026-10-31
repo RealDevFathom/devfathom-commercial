@@ -627,8 +627,8 @@ export async function signOffOpeningSession(
   const session = await requireSession(db, scope, sessionId, ['POSTED']);
   if (session.createdByActorId === scope.actorId) {
     // Opening sessions have no maker/checker posting trigger: hold the same
-    // tenant membership lock while checking PIN proof and writing sign-off.
-    await db.$queryRaw`SELECT id FROM organizations WHERE id=${scope.organizationId} FOR NO KEY UPDATE`;
+    // exclusive tenant roster lock while checking PIN proof and writing sign-off.
+    await db.$queryRaw`SELECT pharmacy_lock_solo_roster(${scope.organizationId})::text`;
     if (
       !(await can(
         { id: scope.actorId, role: 'EMPLOYEE', organizationId: scope.organizationId },

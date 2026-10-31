@@ -201,7 +201,11 @@ describe('pharmacy drawer, close and cash procedures: the branch in the input', 
   it.each(closeProcedures)(
     '%s lets a non-admin with pharmacy:close reach the normal branch scope check',
     async (_name, run, refusal) => {
+      // ABAC reads live membership: only an ACTIVE member of this tenant is authorized.
       db.user.findUnique.mockResolvedValue({
+        role: 'EMPLOYEE',
+        status: 'ACTIVE',
+        organizationId: 'org-1',
         organizationRole: {
           permissions: [{ capability: 'pharmacy:close', effect: 'ALLOW' }],
         },

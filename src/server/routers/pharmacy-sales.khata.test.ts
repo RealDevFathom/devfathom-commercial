@@ -289,7 +289,9 @@ describe.each(
     async (source) => {
       const f = fixture();
       f.user.role = 'EMPLOYEE';
-      f.member.organizationRole.permissions = [{ capability: 'reports:financial', effect: 'ALLOW' }];
+      f.member.organizationRole.permissions = [
+        { capability: 'reports:financial', effect: 'ALLOW' },
+      ];
       const denial = { capability: 'pharmacy:dispense', effect: 'DENY' };
       if (source === 'user') f.member.permissionOverrides = [denial];
       else f.member.organizationRole.permissions.push(denial);
