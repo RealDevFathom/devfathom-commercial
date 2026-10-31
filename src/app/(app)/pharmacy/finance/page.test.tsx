@@ -128,7 +128,8 @@ it('renders the usable landed-profit totals, grouping, and exact-cost explanatio
   );
   expect(html).toContain('Landed profit grouped by item in UTC');
   expect(html).toContain('Currency unknown 25.00');
-  expect(html).toContain('apportioned freight, non-recoverable tax, and bonus units');
+  expect(html).toContain('including non-recoverable tax and bonus units; excludes order-level freight');
+  expect(html).not.toContain('apportioned freight');
   expect(html).toContain('medicine_a');
 });
 

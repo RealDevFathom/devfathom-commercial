@@ -41,6 +41,55 @@ describe('landed profit growth report', () => {
   });
 });
 
+describe('landed profit integer-money bounds', () => {
+  const scope = { organizationId: 'org_1', branchId: 'branch_1' };
+  const period = {
+    from: new Date('2026-10-01Z'),
+    to: new Date('2026-10-02Z'),
+    by: 'item' as const,
+  };
+
+  it('sums as bigint and returns exact numbers above the int4 range', async () => {
+    const query = vi.fn().mockResolvedValue([
+      {
+        key: 'medicine_a',
+        revenueMinor: BigInt(3_000_000_000),
+        discountMinor: BigInt(0),
+        landedCostMinor: BigInt(1_000_000_000),
+        profitMinor: BigInt(2_000_000_000),
+      },
+    ]);
+    const rows = await landedProfit({ $queryRaw: query } as unknown as ScopedDb, scope, period);
+    expect(query.mock.calls[0][0].sql).toContain('::bigint AS "revenueMinor"');
+    expect(query.mock.calls[0][0].sql).not.toContain('::int AS');
+    expect(rows).toEqual([
+      {
+        key: 'medicine_a',
+        revenueMinor: 3_000_000_000,
+        discountMinor: 0,
+        landedCostMinor: 1_000_000_000,
+        profitMinor: 2_000_000_000,
+      },
+    ]);
+  });
+
+  it('refuses totals beyond safe integer money', async () => {
+    const huge = BigInt(Number.MAX_SAFE_INTEGER) + BigInt(1);
+    const query = vi.fn().mockResolvedValue([
+      {
+        key: null,
+        revenueMinor: huge,
+        discountMinor: BigInt(0),
+        landedCostMinor: BigInt(0),
+        profitMinor: huge,
+      },
+    ]);
+    await expect(
+      landedProfit({ $queryRaw: query } as unknown as ScopedDb, scope, period)
+    ).rejects.toThrow(RangeError);
+  });
+});
+
 describe('gross-margin accounting comparison', () => {
   it.each([
     [10000, 500, 6000, 12000, 1500, 8000],

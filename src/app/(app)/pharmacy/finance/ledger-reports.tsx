@@ -244,7 +244,7 @@ export function LandedProfitLedger({ report }: { report: LandedProfit }) {
             label="Exact landed cost"
             value={money(total(report.rows.map((row) => row.landedCostMinor)), report.currency)}
             valueClassName="break-words text-xl"
-            sub="Allocated-lot cost including apportioned freight, non-recoverable tax, and bonus units."
+            sub="Allocated-lot cost including non-recoverable tax and bonus units; excludes order-level freight."
           />
           <Stat
             label="Landed profit"

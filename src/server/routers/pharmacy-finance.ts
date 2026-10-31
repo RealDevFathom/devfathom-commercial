@@ -205,7 +205,7 @@ export const pharmacyFinanceRouter = router({
       return {
         ...ledgerMetadata(
           ctx.reportScope,
-          'Posted sale revenue minus discounts and exact allocated-lot landed COGS, grouped in UTC. Landed COGS already spreads paid value, freight and non-recoverable tax over paid and bonus received units. Profit excludes overhead and unposted costs and is not net profit or cash flow.'
+          'Posted sale revenue minus discounts and exact allocated-lot landed COGS, grouped in UTC. Landed COGS spreads paid value net of discount and non-recoverable tax over paid and bonus received units; order-level freight and other charges are not yet included. Staff is the posting actor, so returns count against whoever processed them. Profit excludes overhead and unposted costs and is not net profit or cash flow.'
         ),
         period: { ...period, bounds: '[from,to)' as const },
         by: input.by,
