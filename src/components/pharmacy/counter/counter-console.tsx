@@ -278,6 +278,7 @@ function ScopedPharmacyCounterConsole({
   const [submittedSearch, setSubmittedSearch] = useState({ text: '', query: '', branchId: '' });
   const submittedQuery = submittedSearch.query;
   const scannerRevision = useRef(0);
+  const scannerInFlight = useRef(false);
   const [activeRow, setActiveRow] = useState<CounterSearchRow | null>(null);
   const [saleUnit, setSaleUnit] = useState<SaleUnitKind | null>(null);
   const [quantity, setQuantity] = useState(1);
@@ -350,6 +351,14 @@ function ScopedPharmacyCounterConsole({
     branchesQuery.isSuccess &&
     !branchesQuery.isError &&
     branches.some((branch) => branch.id === branchId);
+
+  useEffect(
+    () => () => {
+      scannerRevision.current += 1;
+      barcodeAdd.current = null;
+    },
+    [branchAuthorized, branchId]
+  );
 
   const discardReceiptIntent = useCallback(() => {
     receiptIntent.current?.printReservation?.cancel();
@@ -839,7 +848,9 @@ function ScopedPharmacyCounterConsole({
         });
         return;
       }
-      const overrideLotId = lotOverride?.inventoryLotId ?? null;
+      // stageRow clears the previous medicine's override, but this callback may
+      // still hold that previous render while a scan is handed off directly.
+      const overrideLotId = selection ? null : (lotOverride?.inventoryLotId ?? null);
       if (overrideLotId && !lotOverride?.reason.trim()) {
         setNotice({ tone: 'warning', message: 'Enter a reason before selling a non-FEFO batch.' });
         return;
@@ -960,27 +971,20 @@ function ScopedPharmacyCounterConsole({
 
   const runSearch = useCallback(
     async (submittedQuery?: string) => {
-      if (!branchAuthorized) return;
+      if (!branchAuthorized || busy || scannerInFlight.current) return;
       const trimmed = (submittedQuery ?? query).trim();
       if (trimmed.length < 2) {
         setNotice({ tone: 'warning', message: 'Type at least two characters to search.' });
         return;
       }
+      const revision = ++scannerRevision.current;
       const stageBarcodeResult = async (search: string) => {
         setSubmittedSearch({ text: trimmed, query: search, branchId });
         if (barcodeAdd.current !== trimmed) return;
         const input = { branchId, query: search };
-        // `client` is unavailable in lightweight/offline adapters. In that case a
-        // hook result already resolved for this exact barcode is still authoritative.
-        const clientSearch = utils.client?.pharmacySales?.counterSearch;
-        const cached = searchQuery.data;
-        const result = clientSearch
-          ? await clientSearch.query(input)
-          : cached?.rows.length === 1 && cached.rows[0]?.matchedOn === 'BARCODE'
-            ? cached
-            : { rows: [], truncated: false };
+        const result = await utils.client.pharmacySales.counterSearch.query(input);
+        if (revision !== scannerRevision.current || barcodeAdd.current !== trimmed) return;
         utils.pharmacySales.counterSearch.setData(input, result);
-        if (barcodeAdd.current !== trimmed) return;
         barcodeAdd.current = null;
         if (result.rows.length !== 1) return;
         const row = result.rows[0]!;
@@ -1003,18 +1007,16 @@ function ScopedPharmacyCounterConsole({
         }
       };
       const looksLikeGs1 = trimmed.startsWith(']d2') || trimmed.startsWith('(01)');
-      if (!looksLikeGs1) {
-        try {
-          await stageBarcodeResult(trimmed);
-        } catch (error) {
-          barcodeAdd.current = null;
-          setNotice({ tone: 'danger', message: messageFrom(error) });
-        }
-        return;
+      const scanning = looksLikeGs1 || barcodeAdd.current === trimmed;
+      if (scanning) {
+        scannerInFlight.current = true;
+        setPending(looksLikeGs1 ? 'authenticatePack' : 'searchBarcode');
       }
-      const revision = ++scannerRevision.current;
-      setPending('authenticatePack');
       try {
+        if (!looksLikeGs1) {
+          await stageBarcodeResult(trimmed);
+          return;
+        }
         const verdict = await authenticatePack.mutateAsync({ branchId, payload: trimmed });
         if (revision !== scannerRevision.current) return;
         setNotice({
@@ -1026,25 +1028,20 @@ function ScopedPharmacyCounterConsole({
                 : 'warning',
           message: verdict.explanation,
         });
+        if (verdict.status === 'BLOCKED_RECALL') barcodeAdd.current = null;
         await stageBarcodeResult(verdict.parsed?.gtin ?? trimmed);
       } catch (error) {
         if (revision !== scannerRevision.current) return;
         barcodeAdd.current = null;
         setNotice({ tone: 'danger', message: messageFrom(error) });
       } finally {
-        setPending(null);
+        if (scanning) {
+          scannerInFlight.current = false;
+          setPending(null);
+        }
       }
     },
-    [
-      addToCart,
-      authenticatePack,
-      branchAuthorized,
-      branchId,
-      query,
-      searchQuery.data,
-      stageRow,
-      utils,
-    ]
+    [addToCart, authenticatePack, branchAuthorized, branchId, busy, query, stageRow, utils]
   );
 
   const runTransition = useCallback(
@@ -1873,6 +1870,7 @@ function ScopedPharmacyCounterConsole({
                     aria-describedby="counter-search-help"
                     onChange={(event) => {
                       scannerRevision.current += 1;
+                      barcodeAdd.current = null;
                       setQuery(event.target.value);
                       setActiveRow(null);
                       setSaleUnit(null);
@@ -1881,7 +1879,7 @@ function ScopedPharmacyCounterConsole({
                     onKeyDown={(event) => {
                       if (event.key !== 'Enter') return;
                       event.preventDefault();
-                      const trimmed = query.trim();
+                      const trimmed = event.currentTarget.value.trim();
                       const barcode =
                         /^\d{6,}$/.test(trimmed) ||
                         trimmed.startsWith(']d2') ||
