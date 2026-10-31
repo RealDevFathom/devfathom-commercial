@@ -59,7 +59,7 @@ test('the password visibility control is keyboard reachable and touch sized', as
   await page.goto(`${sharedBaseUrl}/login`);
   await signInFormReady(page);
 
-  const password = page.getByLabel('Password');
+  const password = page.getByLabel('Password', { exact: true });
   const toggle = page.getByRole('button', { name: 'Show password' });
   await password.fill('correct horse battery staple');
   await password.focus();

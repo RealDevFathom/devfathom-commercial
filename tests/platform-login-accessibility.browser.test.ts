@@ -56,7 +56,7 @@ describe.runIf(Boolean(baseURL))('platform login Studio accessibility', () => {
             await page.route('**/api/platform/mfa', (route) => route.fulfill({ json: {} }));
             await page.goto(`${baseURL}/platform/login`);
             await page.getByLabel('Work email').waitFor();
-            const password = page.getByLabel('Password');
+            const password = page.getByLabel('Password', { exact: true });
             const toggle = page.getByRole('button', { name: 'Show password' });
             await password.fill('correct horse battery staple');
             await password.focus();
@@ -80,7 +80,9 @@ describe.runIf(Boolean(baseURL))('platform login Studio accessibility', () => {
               };
             });
             expect(toggleStyle).toMatchObject({ height: 44, width: 44 });
-            const focusColors = toggleStyle.boxShadow.match(/rgba?\([^)]+\)/g);
+            // Tailwind prepends transparent inset shadows. The opaque entries
+            // are the offset and focus ring whose contrast we need to measure.
+            const focusColors = toggleStyle.boxShadow.match(/rgb\([^)]+\)/g);
             expect(focusColors?.length).toBeGreaterThanOrEqual(2);
             expect(contrastRatio(focusColors![1]!, toggleStyle.background)).toBeGreaterThanOrEqual(
               3

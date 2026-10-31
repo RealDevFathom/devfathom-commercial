@@ -95,6 +95,6 @@ describe('password visibility controls', () => {
   it('is keyboard reachable and toggles the invite password without changing it', () => {
     render(<AcceptInviteForm token="valid-token" />);
 
-    expectAccessiblePasswordToggle(screen.getByLabelText<HTMLInputElement>('New Password'));
+    expectAccessiblePasswordToggle(screen.getByLabelText<HTMLInputElement>('New Password *'));
   });
 });
