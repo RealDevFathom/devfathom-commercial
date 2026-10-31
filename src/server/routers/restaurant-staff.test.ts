@@ -465,29 +465,79 @@ describe('staff CRUD', () => {
     }
   );
 
-  it('rotates and resends the invitation for an already-invited restaurant staff user', async () => {
-    mocks.can.mockImplementation(async (...args) => args[1] === 'staff:manage');
-    mocks.staffFindMany.mockResolvedValue([
-      {
-        id: 'actor',
+  it.each([
+    ['MANAGER', 'manager', 'branch-manager'],
+    ['WAITER', 'server', 'server'],
+  ] as const)(
+    'rotates and resends a pending %s invitation within branch scope',
+    async (staffRole, jobRoleKey, webRoleKey) => {
+      mocks.can.mockImplementation(async (...args) => args[1] === 'staff:manage');
+      mocks.staffFindMany.mockResolvedValue([
+        {
+          id: 'actor',
+          primaryBranchId: 'branch_1',
+          jobRoles: [{ branchId: 'branch_1' }],
+          directCapabilityGrants: [],
+        },
+      ]);
+      mocks.staffFindUnique.mockResolvedValue({
         primaryBranchId: 'branch_1',
-        jobRoles: [{ branchId: 'branch_1' }],
+        jobRoles: [],
         directCapabilityGrants: [],
-      },
-    ]);
-    mocks.staffFindUnique.mockResolvedValue({
-      primaryBranchId: 'branch_1',
-      jobRoles: [],
-      directCapabilityGrants: [],
-    });
+      });
+      mocks.userFindFirst.mockResolvedValue({
+        id: 'user_invited',
+        name: 'Mina Shah',
+        status: 'INVITED',
+        role: 'EMPLOYEE',
+        organizationRole: { key: webRoleKey },
+        permissionOverrides: [],
+        restaurantStaffProfiles: [
+          {
+            id: 'staff_new',
+            displayName: 'Mina Shah',
+            primaryBranchId: 'branch_1',
+            status: 'ACTIVE',
+            jobRoles: [{ jobRole: { key: jobRoleKey } }],
+          },
+        ],
+      });
+
+      const result = await caller().invite({
+        name: 'Mina Shah',
+        email: 'mina@example.com',
+        staffRole,
+        primaryBranchId: 'branch_1',
+        idempotencyKey: 'manager-resend-1',
+      });
+
+      expect(mocks.invitationUpsert).toHaveBeenCalledWith({
+        where: { userId: 'user_invited' },
+        create: expect.objectContaining({ userId: 'user_invited', email: 'mina@example.com' }),
+        update: expect.objectContaining({ email: 'mina@example.com', acceptedAt: null }),
+      });
+      expect(mocks.userCreate).not.toHaveBeenCalled();
+      expect(mocks.userCount).not.toHaveBeenCalled();
+      expect(mocks.staffCount).not.toHaveBeenCalled();
+      expect(mocks.staffCreate).not.toHaveBeenCalled();
+      expect(mocks.staffJobRoleCreate).not.toHaveBeenCalled();
+      expect(mocks.sendEmail).toHaveBeenCalledOnce();
+      expect(result).toMatchObject({ emailDelivered: true, resent: true });
+    }
+  );
+
+  it('allows an organization-wide administrator to resend a privileged account invitation', async () => {
     mocks.userFindFirst.mockResolvedValue({
-      id: 'user_invited',
-      name: 'Mina Shah',
+      id: 'pending_admin',
+      name: 'Pending Administrator',
       status: 'INVITED',
+      role: 'ADMIN',
+      organizationRole: { key: 'owner' },
+      permissionOverrides: [{ id: 'extra-access' }],
       restaurantStaffProfiles: [
         {
-          id: 'staff_new',
-          displayName: 'Mina Shah',
+          id: 'pending_staff',
+          displayName: 'Pending Administrator',
           primaryBranchId: 'branch_1',
           status: 'ACTIVE',
           jobRoles: [{ jobRole: { key: 'manager' } }],
@@ -495,27 +545,75 @@ describe('staff CRUD', () => {
       ],
     });
 
-    const result = await caller().invite({
-      name: 'Mina Shah',
-      email: 'mina@example.com',
-      staffRole: 'MANAGER',
-      primaryBranchId: 'branch_1',
-      idempotencyKey: 'manager-resend-1',
-    });
-
-    expect(mocks.invitationUpsert).toHaveBeenCalledWith({
-      where: { userId: 'user_invited' },
-      create: expect.objectContaining({ userId: 'user_invited', email: 'mina@example.com' }),
-      update: expect.objectContaining({ email: 'mina@example.com', acceptedAt: null }),
-    });
-    expect(mocks.userCreate).not.toHaveBeenCalled();
-    expect(mocks.userCount).not.toHaveBeenCalled();
-    expect(mocks.staffCount).not.toHaveBeenCalled();
-    expect(mocks.staffCreate).not.toHaveBeenCalled();
-    expect(mocks.staffJobRoleCreate).not.toHaveBeenCalled();
+    await expect(
+      caller().invite({
+        name: 'Pending Administrator',
+        email: 'admin@example.com',
+        staffRole: 'MANAGER',
+        primaryBranchId: 'branch_1',
+        idempotencyKey: 'organization-admin-resend',
+      })
+    ).resolves.toMatchObject({ resent: true });
+    expect(mocks.invitationUpsert).toHaveBeenCalledOnce();
     expect(mocks.sendEmail).toHaveBeenCalledOnce();
-    expect(result).toMatchObject({ emailDelivered: true, resent: true });
   });
+
+  it.each([
+    ['administrator', { role: 'ADMIN' }],
+    ['HR user', { role: 'HR' }],
+    ['general manager', { organizationRole: { key: 'general-manager' } }],
+    ['custom role', { organizationRole: { key: 'custom-role' } }],
+    ['permission override', { permissionOverrides: [{ id: 'extra-access' }] }],
+  ] as const)(
+    'denies a branch manager an activation link for a pending %s',
+    async (_label, webAccess) => {
+      mocks.can.mockImplementation(async (...args) => args[1] === 'staff:manage');
+      mocks.staffFindMany.mockResolvedValue([
+        {
+          id: 'actor',
+          primaryBranchId: 'branch_1',
+          jobRoles: [{ branchId: 'branch_1' }],
+          directCapabilityGrants: [],
+        },
+      ]);
+      mocks.staffFindUnique.mockResolvedValue({
+        primaryBranchId: 'branch_1',
+        jobRoles: [],
+        directCapabilityGrants: [],
+      });
+      mocks.userFindFirst.mockResolvedValue({
+        id: 'privileged_pending_user',
+        name: 'Pending User',
+        status: 'INVITED',
+        role: 'EMPLOYEE',
+        organizationRole: { key: 'branch-manager' },
+        permissionOverrides: [],
+        ...webAccess,
+        restaurantStaffProfiles: [
+          {
+            id: 'pending_staff',
+            displayName: 'Pending User',
+            primaryBranchId: 'branch_1',
+            status: 'ACTIVE',
+            jobRoles: [{ jobRole: { key: 'manager' } }],
+          },
+        ],
+      });
+
+      await expect(
+        caller().invite({
+          name: 'Pending User',
+          email: 'pending@example.com',
+          staffRole: 'MANAGER',
+          primaryBranchId: 'branch_1',
+          idempotencyKey: 'privileged-account-resend',
+        })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(mocks.invitationUpsert).not.toHaveBeenCalled();
+      expect(mocks.userUpdate).not.toHaveBeenCalled();
+      expect(mocks.sendEmail).not.toHaveBeenCalled();
+    }
+  );
 
   it('rejects a resend status mismatch without changing the profile or invitation', async () => {
     mocks.userFindFirst.mockResolvedValue({

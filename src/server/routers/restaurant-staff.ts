@@ -329,6 +329,15 @@ export const restaurantStaffRouter = router({
               id: true,
               name: true,
               status: true,
+              role: true,
+              organizationRole: { select: { key: true } },
+              permissionOverrides: {
+                where: {
+                  effect: 'ALLOW',
+                  OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+                },
+                select: { id: true },
+              },
               restaurantStaffProfiles: {
                 select: {
                   id: true,
@@ -352,6 +361,18 @@ export const restaurantStaffRouter = router({
               // other linked profiles and branch-specific grants.
               for (const profile of existing.restaurantStaffProfiles) {
                 await assertAuthorizedStaffProfile(tx, authorization, profile.id);
+              }
+              // Branch scope alone cannot authorize handing out a bearer link
+              // to a privileged web account. Scoped managers may resend only
+              // the web roles this flow can create, without extra user grants.
+              if (
+                !authorization.organizationWide &&
+                (existing.role !== 'EMPLOYEE' ||
+                  existing.organizationRole?.key !==
+                    (input.staffRole === 'MANAGER' ? 'branch-manager' : 'server') ||
+                  existing.permissionOverrides.length > 0)
+              ) {
+                denyStaffBranchAccess();
               }
               const expectedRoleKey = input.staffRole === 'MANAGER' ? 'manager' : 'server';
               if (!staff.jobRoles.some(({ jobRole }) => jobRole.key === expectedRoleKey)) {
