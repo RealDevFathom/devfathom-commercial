@@ -17,6 +17,7 @@ import {
   chequeMaturityCsv,
   chequeMaturityEvidence,
   chequeMaturityMonths,
+  formatChequeAmount,
 } from '@/lib/pharmacy/accounts/cheque-maturity';
 import { tenantContext } from '../../purchasing/_lib/console';
 import { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
@@ -35,9 +36,14 @@ function Notice({ title, children }: { title: string; children: React.ReactNode 
   );
 }
 
-async function financialReportAllowed(ctx: NonNullable<Awaited<ReturnType<typeof tenantContext>>>) {
+type TenantContext = NonNullable<Awaited<ReturnType<typeof tenantContext>>>;
+
+async function financialReportAllowed(
+  ctx: TenantContext,
+  user: NonNullable<TenantContext['session']>['user']
+) {
   try {
-    return await can(subjectFromSession(ctx.session.user), 'reports:financial', undefined, {
+    return await can(subjectFromSession(user), 'reports:financial', undefined, {
       db: ctx.db,
       source: 'TRPC',
       ip: ctx.requestMeta.ip,
@@ -67,7 +73,7 @@ export default async function ChequeMaturityPage({
     ctx.organization?.id !== ctx.entitlements.organizationId ||
     !hasModule(ctx.entitlements, 'pharmacy-finance') ||
     !hasModule(ctx.entitlements, 'pharmacy-reports') ||
-    !(await financialReportAllowed(ctx))
+    !(await financialReportAllowed(ctx, user))
   ) {
     return (
       <main className="space-y-6">
@@ -238,7 +244,7 @@ function EvidenceTable({ rows }: { rows: ReturnType<typeof chequeMaturityEvidenc
               />
             </TableCell>
             <TableCell numeric>
-              {row.amountMinor ?? 'Unknown'} {row.recordedCurrency ?? '(currency not recorded)'}
+              {formatChequeAmount(row.amountMinor, row.recordedCurrency)}
             </TableCell>
           </TableRow>
         ))}

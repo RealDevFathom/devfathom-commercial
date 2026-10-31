@@ -73,6 +73,8 @@ describe('cheque maturity accounts page', () => {
     await show();
     expect(screen.getByText(/exactly 50 means the read cap was reached/i)).toBeVisible();
     expect(screen.getAllByText('PDC')).toHaveLength(50);
+    expect(screen.getAllByText('PKR 1.00')).toHaveLength(50);
+    expect(screen.queryByText(/^100 PKR$/)).toBeNull();
   });
 
   it('rejects foreign branch input and contains reader errors without writes or leaked details', async () => {

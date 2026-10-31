@@ -4,6 +4,7 @@ import {
   chequeMaturityCsv,
   chequeMaturityEvidence,
   chequeMaturityMonths,
+  formatChequeAmount,
 } from './cheque-maturity';
 
 const cheque = (overrides: Record<string, unknown> = {}) => ({
@@ -60,5 +61,22 @@ describe('recorded cheque maturity evidence', () => {
     expect(csv).toContain("'+evil");
     expect(csv).not.toContain('PKR');
     expect(csv).toContain(CHEQUE_MATURITY_COVERAGE);
+  });
+});
+
+describe('formatChequeAmount', () => {
+  it('scales recorded minor units by the recorded currency minor-unit exponent', () => {
+    expect(formatChequeAmount(12500, 'PKR')).toBe('PKR 125.00');
+    expect(formatChequeAmount(123456789, 'USD')).toBe('USD 1,234,567.89');
+    expect(formatChequeAmount(-5, 'PKR')).toBe('-PKR 0.05');
+    expect(formatChequeAmount(0, 'USD')).toBe('USD 0.00');
+  });
+
+  it('labels raw minor units when the currency scale is unknown', () => {
+    expect(formatChequeAmount(12500, null)).toBe('12500 minor units (currency not recorded)');
+    expect(formatChequeAmount(12500, 'rupees')).toBe('12500 minor units rupees');
+    expect(formatChequeAmount(12500, 'JPY')).toBe('12500 minor units JPY');
+    expect(formatChequeAmount(12500, 'constructor')).toBe('12500 minor units constructor');
+    expect(formatChequeAmount(null, 'PKR')).toBe('Unknown');
   });
 });

@@ -107,3 +107,29 @@ export function chequeMaturityCsv(rows: ChequeMaturityRow[], observedAt: string)
     .map((line) => line.map(csvCell).join(','))
     .join('\r\n');
 }
+
+/** Minor-unit scales for currencies the platform records (Prisma `Currency`: USD, PKR). */
+const MINOR_UNIT_DIGITS: ReadonlyMap<string, number> = new Map([
+  ['PKR', 2],
+  ['USD', 2],
+]);
+
+/**
+ * Display a recorded minor-unit amount in major units using the recorded currency's
+ * minor-unit scale. Unrecognised currencies are labelled as raw minor units rather than
+ * guessing a scale.
+ */
+export function formatChequeAmount(amountMinor: number | null, currency: string | null) {
+  if (amountMinor === null) return 'Unknown';
+  const digits = currency ? MINOR_UNIT_DIGITS.get(currency) : undefined;
+  if (currency && digits !== undefined) {
+    const scale = 10 ** digits;
+    const absolute = Math.abs(amountMinor);
+    const major = Math.floor(absolute / scale)
+      .toString()
+      .replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    const fraction = digits ? `.${String(absolute % scale).padStart(digits, '0')}` : '';
+    return `${amountMinor < 0 ? '-' : ''}${currency} ${major}${fraction}`;
+  }
+  return `${amountMinor} minor units ${currency ?? '(currency not recorded)'}`;
+}
