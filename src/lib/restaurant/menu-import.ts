@@ -1286,14 +1286,41 @@ export async function purgeStaleMenuImports(
   });
 
   let deletedSources = 0;
+  let purgedDrafts = 0;
   for (const record of stale) {
-    if (record.storageObjectName) {
-      await runtime.deleteSource(record.organizationId, record.storageObjectName);
-      deletedSources += 1;
-    }
-    // An abandoned draft has no evidentiary value — it records only that
-    // somebody uploaded a file and never came back. Pages and lines cascade.
-    await db.restaurantMenuImport.delete({ where: { id: record.id } });
+    const deletedSource = await runImportTransaction(db, async (tx) => {
+      // Serialize with commit, then recheck the lifecycle state after taking the
+      // lock: the initial retention query may have raced with a reviewer.
+      await tx.$queryRaw`SELECT "id" FROM "restaurant_menu_imports" WHERE "id" = ${record.id} AND "organizationId" = ${record.organizationId} FOR UPDATE`;
+      const current = await tx.restaurantMenuImport.findUnique({
+        where: { id: record.id, organizationId: record.organizationId },
+        select: {
+          organizationId: true,
+          status: true,
+          storageObjectName: true,
+          createdAt: true,
+        },
+      });
+      if (
+        !current ||
+        current.createdAt >= cutoff ||
+        !([...OPEN_STATUSES, 'EXTRACTION_FAILED'] as string[]).includes(current.status)
+      ) {
+        return false;
+      }
+
+      if (current.storageObjectName) {
+        await runtime.deleteSource(current.organizationId, current.storageObjectName);
+      }
+      // An abandoned draft has no evidentiary value — it records only that
+      // somebody uploaded a file and never came back. Pages and lines cascade.
+      await tx.restaurantMenuImport.delete({
+        where: { id: record.id, organizationId: record.organizationId },
+      });
+      purgedDrafts += 1;
+      return Boolean(current.storageObjectName);
+    });
+    if (deletedSource) deletedSources += 1;
   }
 
   // Decided imports keep their rows but must not keep the customer's file.
@@ -1316,5 +1343,5 @@ export async function purgeStaleMenuImports(
     deletedSources += 1;
   }
 
-  return { purgedDrafts: stale.length, deletedSources };
+  return { purgedDrafts, deletedSources };
 }
