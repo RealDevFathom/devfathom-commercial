@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   addSaleLine,
+  assertSaleUnitConversion,
   addRestockInterest,
   captureSafeRestockArrival,
   changeSaleStatus,
@@ -156,6 +157,46 @@ describe('POS sale voiding', () => {
 });
 
 describe('POS-03 lot-derived pack/strip/unit pricing', () => {
+  it('rejects a client claiming that a ten-unit pack contains one canonical unit', () => {
+    expect(() =>
+      assertSaleUnitConversion({
+        packLevels: [
+          {
+            id: 'pack',
+            level: 'BOX',
+            parentPackLevelId: null,
+            unitsPerParent: 1,
+          },
+          {
+            id: 'unit',
+            level: 'UNIT',
+            parentPackLevelId: 'pack',
+            unitsPerParent: 10,
+          },
+        ],
+        packLevelId: 'pack',
+        saleUnit: 'PACK',
+        canonicalUnitsPerSaleUnit: 1,
+        lots: [{ packLevelId: 'pack', unitsPerPack: 10 }],
+      })
+    ).toThrow('INVALID_SALE_UNIT_CONVERSION');
+  });
+
+  it("rejects a conversion that disagrees with the allocated lot's frozen pack size", () => {
+    expect(() =>
+      assertSaleUnitConversion({
+        packLevels: [
+          { id: 'pack', level: 'BOX', parentPackLevelId: null, unitsPerParent: 1 },
+          { id: 'unit', level: 'UNIT', parentPackLevelId: 'pack', unitsPerParent: 10 },
+        ],
+        packLevelId: 'pack',
+        saleUnit: 'PACK',
+        canonicalUnitsPerSaleUnit: 10,
+        lots: [{ packLevelId: 'pack', unitsPerPack: 20 }],
+      })
+    ).toThrow('INVALID_SALE_UNIT_CONVERSION');
+  });
+
   it('charges a full pack at its exact printed MRP without compounding loose-unit floors', () => {
     expect(
       priceFromLot({

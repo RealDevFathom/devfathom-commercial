@@ -80,6 +80,22 @@ function chainFrom(packLevels: readonly PackLevelNode[], rootPackLevelId: string
   return chain;
 }
 
+/** Resolve a sale level to canonical units from the server-owned hierarchy. */
+export function canonicalUnitsForPackLevel(
+  packLevels: readonly PackLevelNode[],
+  packLevelId: string
+): number {
+  const chain = chainFrom(packLevels, packLevelId);
+  let canonicalUnits = 1;
+  for (let index = chain.length - 1; index > 0; index -= 1) {
+    assertPositiveInteger(chain[index]!.unitsPerParent);
+    canonicalUnits *= chain[index]!.unitsPerParent;
+    if (!Number.isSafeInteger(canonicalUnits))
+      throw new PharmacyMedicineError('INVALID_CONVERSION');
+  }
+  return canonicalUnits;
+}
+
 /**
  * The sale units this lot can be sold in, largest first.
  *
