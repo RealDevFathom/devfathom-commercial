@@ -8,9 +8,9 @@ CloudFormation in `infra/aws/`, and the application image is the repository's ow
 
 |            |                                                                                                                       |
 | ---------- | --------------------------------------------------------------------------------------------------------------------- |
-| Account    | `892667864163`                                                                                                        |
+| Account    | `<account-id>`                                                                                                        |
 | Region     | `ap-southeast-1` (Singapore)                                                                                          |
-| Staging    | `staging.devfathom.com`, tenants at `<slug>.staging.devfathom.com`, platform console at `admin.staging.devfathom.com` |
+| Staging    | `<staging-host>`, tenants at `<slug>.<staging-host>`, platform console at `admin.<staging-host>` |
 | Production | not created yet: `environment.yaml` with `EnvironmentName=production`                                                 |
 
 **Why Singapore.** The first choice was `me-central-1` (UAE), next to the old Azure UAE North
@@ -25,9 +25,9 @@ this region"), and ECS throttled cluster creation. Singapore is where the app ra
 | Stack                    | Template           | Region         | What it holds                                                                                                        |
 | ------------------------ | ------------------ | -------------- | -------------------------------------------------------------------------------------------------------------------- |
 | `devfathom-shared`       | `shared.yaml`      | ap-southeast-1 | ECR repository `devfathom-commercial`, build-source bucket, CodeBuild project `devfathom-image`                      |
-| `devfathom-staging-dns`  | `dns.yaml`         | me-central-1*  | Route 53 zone for `staging.devfathom.com`                                                                            |
+| `devfathom-staging-dns`  | `dns.yaml`         | me-central-1*  | Route 53 zone for `<staging-host>`                                                                            |
 | `devfathom-staging`      | `environment.yaml` | ap-southeast-1 | VPC, RDS PostgreSQL 16, secrets, uploads bucket, ECS cluster and services, load balancer, DNS records, jobs schedule |
-| `devfathom-staging-cert` | `certificate.yaml` | ap-southeast-1 | ACM certificate for `staging.devfathom.com` and `*.staging.devfathom.com`                                            |
+| `devfathom-staging-cert` | `certificate.yaml` | ap-southeast-1 | ACM certificate for `<staging-host>` and `*.<staging-host>`                                            |
 
 \* Route 53 is global, so the zone serves every region. The stack happens to live in the
 region that was tried first.
@@ -39,7 +39,7 @@ Left over from the me-central-1 attempt, both empty: `devfathom-build` in us-eas
 the me-central-1 repository, which no longer exists) and `devfathom-staging` in me-central-1
 (a failed create, `ROLLBACK_FAILED`, with termination protection on). Either can be deleted.
 
-The parent zone, `devfathom.com`, is on Cloudflare. It delegates `staging` to the Route 53
+The parent zone is on Cloudflare. It delegates `staging` to the Route 53
 zone with four NS records (the `NameServers` output of `devfathom-staging-dns`).
 
 ## Network and security
@@ -91,12 +91,12 @@ zone with four NS records (the `NameServers` output of `devfathom-staging-dns`).
 Images are tagged with the full commit sha, and tags are immutable.
 
 1. Make a source archive of the commit: `git archive --format=zip -o <sha>.zip <sha>`.
-2. Upload it to `s3://devfathom-build-892667864163-ap-southeast-1/source/<sha>.zip`.
+2. Upload it to `s3://devfathom-build-<account-id>-ap-southeast-1/source/<sha>.zip`.
 3. Start CodeBuild project `devfathom-image` with source override
-   `devfathom-build-892667864163-ap-southeast-1/source/<sha>.zip` and environment variable
+   `devfathom-build-<account-id>-ap-southeast-1/source/<sha>.zip` and environment variable
    `IMAGE_TAG=<sha>`.
 4. The build log ends with the image digest. Deploy by digest:
-   `892667864163.dkr.ecr.ap-southeast-1.amazonaws.com/devfathom-commercial@sha256:…`.
+   `<account-id>.dkr.ecr.ap-southeast-1.amazonaws.com/devfathom-commercial@sha256:…`.
    - ECR keeps the 10 newest other images. Before deploying an image to production, also tag it
      `prod-<sha>` (or `release-<name>`); the lifecycle policy never expires those tags.
    - Logs are kept 7 days outside production; production keeps web and jobs 30 days, migrate 90.
@@ -129,14 +129,9 @@ fails for a migration that stopped part-way, but not for one that has not starte
 **First deploy of a new environment.** Create the stack with `ImageUri` set, `DesiredCount=0`
 and `MigrationMode=seed` (staging) or `bootstrap` (production, which creates the first
 administrators and no demo data). Run the migration task, then update `DesiredCount=1`; in
-production, also set `MigrationMode=migrate` again, because the bootstrap runs once. The
-first sign-ins, with passwords in Secrets Manager:
+production, also set `MigrationMode=migrate` again, because the bootstrap runs once.
 
-- staging: the platform console as `platform-admin@<base>` (`platform-admin-password`), and
-  the workspace as `alex@company.com` or `jordan@company.com`, the seeded administrators
-  (`seed-password`, shared by all eight seeded users);
-- production: `admin@<base>` (`admin-password`) and `platform-admin@<base>`
-  (`platform-admin-password`).
+The staging logins are kept outside git. Ask the CTO or Inky for them; never put them in docs, PRs or chat.
 
 **Rollback.** Update `ImageUri` back to the previous digest. Migrations only go forward, so
 roll back only to an image whose schema expectations are still met.
@@ -189,8 +184,10 @@ demo seat 1 (tax-inclusive, passwordless personas behind `DEMO_ACCESS_CODE`, sec
 pharmacy password is HMAC-derived from `seed-password`, so an operator writes the login sheet
 without a database connection:
 
-    SEED_PASSWORD=… PLATFORM_ADMIN_PASSWORD=… DEMO_ACCESS_CODE=… PLATFORM_BASE_DOMAIN=staging.devfathom.com \
-      STAGING_LOGINS_FILE=/workspace/plan/staging-logins.md bun scripts/seed-staging-demo.ts --logins-only
+    SEED_PASSWORD=… PLATFORM_ADMIN_PASSWORD=… DEMO_ACCESS_CODE=… PLATFORM_BASE_DOMAIN=<staging-host> \
+      STAGING_LOGINS_FILE=<path outside git> bun scripts/seed-staging-demo.ts --logins-only
+
+The resulting login sheet stays outside git; the CTO or Inky hand it over.
 
 ## Staging checklist: Insights and app URLs
 
@@ -199,8 +196,8 @@ without a database connection:
   `EnableJobsSchedule=true` (default `false`). Staging must deploy with `EnableJobsSchedule=true`
   now that DNS and the certificate are live; also confirm the `cron-secret` secret is set.
 - `AUTH_URL`, `NEXTAUTH_URL` and `NEXT_PUBLIC_APP_URL` are all `https://${TenantHost}`; keep
-  `TenantHost=staging.devfathom.com` for staging.
+  `TenantHost=<staging-host>` for staging.
 - `NEXT_PUBLIC_APP_URL` is inlined by `next build`. `Dockerfile` and `Dockerfile.aws` take it as
   a build argument: build staging images with
-  `--build-arg NEXT_PUBLIC_APP_URL=https://staging.devfathom.com` (production: its own host). CodeBuild: start the build with
-  `--environment-variables-override name=NEXT_PUBLIC_APP_URL,value=https://staging.devfathom.com`.
+  `--build-arg NEXT_PUBLIC_APP_URL=https://<staging-host>` (production: its own host). CodeBuild: start the build with
+  `--environment-variables-override name=NEXT_PUBLIC_APP_URL,value=https://<staging-host>`.
