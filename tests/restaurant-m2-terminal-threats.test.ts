@@ -37,6 +37,7 @@ function copy(row: Row | null): Row | null {
 }
 
 const db = {
+  $queryRaw: vi.fn(async () => []),
   organization: {
     findUnique: async ({ where }: { where: Record<string, unknown> }) =>
       copy(find(h.store.organizations, where)),

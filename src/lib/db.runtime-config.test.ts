@@ -35,12 +35,17 @@ vi.mock('pg', () => ({ default: { Pool: mocks.pool } }));
 vi.mock('@prisma/adapter-pg', () => ({ PrismaPg: mocks.adapter }));
 vi.mock('@/generated/prisma/client', () => ({ PrismaClient: mocks.client }));
 
-const cache = globalThis as typeof globalThis & { prisma?: unknown; prismaVersion?: string };
+const cache = globalThis as typeof globalThis & {
+  prisma?: unknown;
+  credentialPrisma?: unknown;
+  prismaVersion?: string;
+};
 
 beforeEach(() => {
   vi.resetModules();
   vi.resetAllMocks();
   delete cache.prisma;
+  delete cache.credentialPrisma;
   delete cache.prismaVersion;
   vi.stubEnv('NODE_ENV', 'production');
   // All alternatives are inert; none may rescue invalid DATABASE_URL.
@@ -58,16 +63,34 @@ afterEach(() => {
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
   delete cache.prisma;
+  delete cache.credentialPrisma;
   delete cache.prismaVersion;
 });
 
 describe('runtime pool configuration boundary', () => {
+  it('reserves a separate bounded credential pool with the same runtime configuration', async () => {
+    vi.stubEnv('DATABASE_URL', validUrl);
+    const { db, credentialAttemptDb } = await import('./db');
+    expect(mocks.pool).not.toHaveBeenCalled();
+    expect(await Promise.resolve(credentialAttemptDb)).toBe(credentialAttemptDb);
+    await db.$queryRaw`SELECT 1`;
+    await credentialAttemptDb.$queryRaw`SELECT 2`;
+    await credentialAttemptDb.$queryRaw`SELECT 3`;
+    expect(mocks.pool.mock.calls).toEqual([
+      [{ connectionString: validUrl, max: 10 }],
+      [{ connectionString: validUrl, max: 2 }],
+    ]);
+    expect(mocks.client).toHaveBeenCalledTimes(2);
+    expect(mocks.adapter.mock.calls[0][0]).not.toBe(mocks.adapter.mock.calls[1][0]);
+  });
+
   it.each([undefined, '', ' ', '\n\t'])(
     'rejects absent/blank configuration (%j)',
     async (value) => {
       vi.stubEnv('DATABASE_URL', value);
-      const { db } = await import('./db');
+      const { db, credentialAttemptDb } = await import('./db');
       expect(() => db.$queryRaw`SELECT 1`).toThrow('runtime_database_url_missing');
+      expect(() => credentialAttemptDb.$queryRaw`SELECT 1`).toThrow('runtime_database_url_missing');
       expect(mocks.adapter).not.toHaveBeenCalled();
       expect(mocks.pool).not.toHaveBeenCalled();
       expect(mocks.client).not.toHaveBeenCalled();

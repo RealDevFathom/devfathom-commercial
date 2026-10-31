@@ -37,10 +37,12 @@ export type AuditOperationT =
 export type AuditOutcomeT = 'SUCCESS' | 'FAILURE';
 
 /**
- * Per-request mutable detail a mutation can attach to enrich its audit entry.
+ * Per-procedure mutable detail a mutation can attach to enrich its audit entry.
  * Lives on the tRPC context (`ctx.audit.detail`) — see createTRPCContext.
  */
 export interface AuditDetail {
+  /** Override a successful transport result when the mutation represents a denial. */
+  outcome?: AuditOutcomeT;
   category?: string;
   operation?: AuditOperationT;
   action?: string;

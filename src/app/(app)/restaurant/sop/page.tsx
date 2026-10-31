@@ -822,15 +822,26 @@ function SopBoardView(props: SopBoardViewProps) {
                           intent="waive"
                           occurrenceId={selected.id}
                         />
-                        <StaffSelect label="Acting verifier" required staff={staff} />
                         <StaffSelect
                           label="Approving co-author"
                           name="approvingStaffProfileId"
                           required
                           staff={staff}
                         />
+                        <label className="text-sm text-text-body">
+                          Approver PIN
+                          <Input
+                            autoComplete="off"
+                            className="mt-1"
+                            inputMode="numeric"
+                            name="approvingSecret"
+                            required
+                            type="password"
+                          />
+                        </label>
                         <p className="text-xs text-text-muted sm:col-span-2">
-                          Co-authorization requires two different active staff profiles.
+                          The signed-in verifier is recorded automatically. The approving manager
+                          must confirm with their own credential.
                         </p>
                         <label className="text-sm text-text-body sm:col-span-2">
                           Waiver reason
@@ -1084,22 +1095,25 @@ export default async function SopPage({ searchParams }: { searchParams: SearchPa
         }
         case 'waive': {
           const approvingStaffProfileId = field(form, 'approvingStaffProfileId');
-          if (
-            !actorStaffProfileId ||
-            !approvingStaffProfileId ||
-            actorStaffProfileId === approvingStaffProfileId
-          ) {
+          const approvingSecret = field(form, 'approvingSecret');
+          if (!approvingStaffProfileId || !approvingSecret) {
             throw new TRPCError({
               code: 'BAD_REQUEST',
-              message: 'Select two different active staff profiles for co-authorization.',
+              message: 'The approving manager and their credential are required.',
             });
           }
-          await caller.waive({
+          const waiver = await caller.waive({
             occurrenceId,
-            actorStaffProfileId,
-            approvingStaffProfileId,
+            approving: {
+              staffProfileId: approvingStaffProfileId,
+              type: 'PIN',
+              secret: approvingSecret,
+            },
             reason: field(form, 'reason'),
           });
+          if ('blocked' in waiver) {
+            throw new TRPCError({ code: 'FORBIDDEN', message: waiver.blocked });
+          }
           success = 'SOP waived with co-authorization.';
           break;
         }

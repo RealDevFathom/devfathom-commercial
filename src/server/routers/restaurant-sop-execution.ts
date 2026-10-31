@@ -27,6 +27,14 @@ import {
 import { summarizeSopReport } from '@/lib/restaurant/sop-reporting';
 import { businessDateToUtcDate } from '@/lib/restaurant/business-date';
 import { can, subjectFromSession } from '@/lib/abac';
+import { authenticateOperator } from '@/lib/restaurant/terminal-auth';
+import {
+  BADGE_MAX_LENGTH,
+  isValidBadgeFormat,
+  isValidPinFormat,
+} from '@/lib/restaurant/operator-credentials';
+import { staffHasCapability } from '@/lib/restaurant/job-roles';
+import { withTenantCredentialDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 
 /**
  * M7-L4 — the SOP execution router (branch-board reads + operator/verifier commands).
@@ -583,22 +591,92 @@ export const restaurantSopExecutionRouter = router({
       z
         .object({
           occurrenceId: OCCURRENCE_ID,
-          actorStaffProfileId: z.string().min(1),
-          approvingStaffProfileId: z.string().min(1),
+          approving: z
+            .object({
+              staffProfileId: z.string().min(1),
+              type: z.enum(['PIN', 'BADGE']),
+              // The common upper bound prevents an unbounded bcrypt input. The
+              // type-specific policy is checked below without exposing which
+              // part of a credential was malformed.
+              secret: z.string().min(1).max(BADGE_MAX_LENGTH),
+            })
+            .strict(),
           reason: z.string().min(1).max(2_000),
         })
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      // The approving credential is plaintext transport input and must never be audited.
+      annotateAudit(ctx, { skipInput: true });
+      const refuseAuthorization = () => {
+        // A normal transport result still represents a denied security operation.
+        annotateAudit(ctx, { outcome: 'FAILURE' });
+        return { blocked: 'Waiver authorization failed.' } as const;
+      };
       assertSopDepth(ctx.entitlements, 'sop.waiver');
       try {
-        const result = await waiveOccurrence(ctx.db, input);
-        annotateAudit(ctx, {
-          targetType: 'RestaurantSopOccurrence',
-          targetId: input.occurrenceId,
-          description: 'Waived SOP occurrence',
+        return await ctx.db.$transaction(async (transaction) => {
+          // ScopedDb's nested transaction facade passes the same scoped client,
+          // including its transaction method for the domain writer below.
+          const tx = transaction as ScopedDb;
+          const [actors, occurrence] = await Promise.all([
+            tx.restaurantStaffProfile.findMany({
+              where: { userId: ctx.session!.user.id, status: 'ACTIVE' },
+              select: { id: true },
+              orderBy: { id: 'asc' },
+              take: 2,
+            }),
+            tx.restaurantSopOccurrence.findUnique({
+              where: { id: input.occurrenceId },
+              select: { branchId: true },
+            }),
+          ]);
+          if (actors.length !== 1 || !occurrence) {
+            throw new TRPCError({ code: 'FORBIDDEN', message: 'Waiver authorization failed.' });
+          }
+
+          const actorStaffProfileId = actors[0]!.id;
+          const validSecret =
+            input.approving.type === 'PIN'
+              ? isValidPinFormat(input.approving.secret)
+              : isValidBadgeFormat(input.approving.secret);
+          if (!validSecret) return refuseAuthorization();
+
+          // Attempts must commit independently of the waiver/request: a later
+          // state error or failing batch sibling must not erase lockout state.
+          // Its reserved pool remains available even when requests fill theirs.
+          const approval = await withTenantCredentialDb(
+            ctx.entitlements.organizationId,
+            (authDb) => authenticateOperator(authDb, { ...input.approving, now: new Date() }),
+            { userId: ctx.session!.user.id }
+          );
+          if (
+            !approval.ok ||
+            approval.staffProfileId === actorStaffProfileId ||
+            !(await staffHasCapability(
+              tx,
+              approval.staffProfileId,
+              occurrence.branchId,
+              'sop:verify'
+            ))
+          ) {
+            // All credential and capability denials share the same refusal.
+            return refuseAuthorization();
+          }
+
+          const result = await waiveOccurrence(tx, {
+            occurrenceId: input.occurrenceId,
+            actorStaffProfileId,
+            approvingStaffProfileId: approval.staffProfileId,
+            reason: input.reason,
+          });
+          annotateAudit(ctx, {
+            targetType: 'RestaurantSopOccurrence',
+            targetId: input.occurrenceId,
+            description: 'Waived SOP occurrence',
+          });
+          return result;
         });
-        return result;
       } catch (err) {
         mapExecutionError(err);
       }

@@ -92,7 +92,7 @@ describe('organizationAdmin AskFathom contract (mock database, real authorizatio
     }
   );
 
-  it('audits ADMIN writes through the existing request context and supports repeated values', async () => {
+  it('audits ADMIN writes through isolated procedure contexts and supports repeated values', async () => {
     const ctx = context();
     const caller = testRouter.createCaller(ctx).organizationAdmin;
     for (const askFathomEnabled of [false, false, true]) {
@@ -110,18 +110,24 @@ describe('organizationAdmin AskFathom contract (mock database, real authorizatio
       data: { askFathomEnabled: true },
       select: { id: true, askFathomEnabled: true },
     });
-    expect(ctx.audit.detail).toMatchObject({
-      targetType: 'Organization',
-      targetId: 'org_a',
-      operation: 'UPDATE',
-    });
+    expect(ctx.audit.detail).toEqual({});
     expect(mocks.audit).toHaveBeenCalledTimes(3);
+    const procedureAudits = mocks.audit.mock.calls.map(([entry]) => entry.ctx.audit);
+    for (const audit of procedureAudits) {
+      expect(audit).not.toBe(ctx.audit);
+      expect(audit.detail).toMatchObject({
+        targetType: 'Organization',
+        targetId: 'org_a',
+        operation: 'UPDATE',
+      });
+    }
+    expect(new Set(procedureAudits.map((audit) => audit.detail)).size).toBe(3);
     expect(mocks.audit).toHaveBeenLastCalledWith(
       expect.objectContaining({
         path: 'organizationAdmin.setAskFathomEnabled',
         type: 'mutation',
         outcome: 'SUCCESS',
-        ctx: expect.objectContaining({ audit: ctx.audit }),
+        ctx: expect.objectContaining({ db: ctx.db, session: ctx.session }),
       })
     );
   });

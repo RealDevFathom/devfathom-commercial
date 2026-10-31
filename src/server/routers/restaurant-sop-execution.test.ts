@@ -12,10 +12,17 @@ const mocks = vi.hoisted(() => ({
     return true;
   }),
   annotateAudit: vi.fn(),
+  recordTrpcAudit: vi.fn(),
+  authenticateOperator: vi.fn(),
+  staffHasCapability: vi.fn(async () => true),
+  withTenantCredentialDb: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
-vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
+vi.mock('@/lib/tenancy/scoped-db', () => ({
+  createTenantDb: vi.fn(() => ({})),
+  withTenantCredentialDb: mocks.withTenantCredentialDb,
+}));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/entitlements', () => ({
   hasModule: vi.fn(() => true),
@@ -23,8 +30,8 @@ vi.mock('@/lib/entitlements', () => ({
 }));
 vi.mock('@/server/audit', () => ({
   ipFromHeaders: vi.fn(() => null),
-  isAuditExcludedPath: vi.fn(() => true),
-  recordTrpcAudit: vi.fn(),
+  isAuditExcludedPath: vi.fn(() => false),
+  recordTrpcAudit: mocks.recordTrpcAudit,
   annotateAudit: mocks.annotateAudit,
   diffChanges: vi.fn(() => ({})),
 }));
@@ -32,9 +39,16 @@ vi.mock('@/lib/abac', async () => {
   const actual = await vi.importActual<typeof import('@/lib/abac')>('@/lib/abac');
   return { ...actual, can: mocks.can };
 });
+vi.mock('@/lib/restaurant/terminal-auth', () => ({
+  authenticateOperator: mocks.authenticateOperator,
+}));
+vi.mock('@/lib/restaurant/job-roles', () => ({
+  staffHasCapability: mocks.staffHasCapability,
+}));
 
 import { restaurantSopExecutionRouter } from './restaurant-sop-execution';
 import { packageByKey } from '@/lib/vertical-catalog';
+import { router } from '../trpc';
 
 type Delegate = Record<string, ReturnType<typeof vi.fn>>;
 
@@ -86,9 +100,21 @@ function makeDb() {
 let db: ReturnType<typeof makeDb>;
 
 beforeEach(() => {
+  vi.clearAllMocks();
   db = makeDb();
+  db.restaurantStaffProfile.findMany.mockResolvedValue([{ id: 'staff_a' }]);
   mocks.can.mockResolvedValue(true);
-  mocks.annotateAudit.mockReset();
+  mocks.annotateAudit.mockImplementation(
+    (ctx: { audit: { detail: Record<string, unknown> } }, detail: Record<string, unknown>) =>
+      Object.assign(ctx.audit.detail, detail)
+  );
+  mocks.authenticateOperator.mockResolvedValue({
+    ok: true,
+    credentialId: 'credential_1',
+    staffProfileId: 'staff_b',
+  });
+  mocks.staffHasCapability.mockResolvedValue(true);
+  mocks.withTenantCredentialDb.mockImplementation(async (_id, run) => run(db));
 });
 
 /**
@@ -148,13 +174,62 @@ describe('strict-zod boundary', () => {
     await expect(
       caller().waive({
         occurrenceId: OCC_ID,
-        actorStaffProfileId: 'a',
-        approvingStaffProfileId: 'b',
+        approving: { staffProfileId: 'b', type: 'PIN', secret: '1234' },
         reason: 'r',
         extra: true,
       } as never)
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
   });
+
+  it.each([
+    {
+      label: 'direct sub-router call',
+      path: 'waive',
+      createCaller: (context: never) => restaurantSopExecutionRouter.createCaller(context),
+    },
+    {
+      label: 'app-router call',
+      path: 'restaurantSopExecution.waive',
+      createCaller: (context: never) =>
+        router({ restaurantSopExecution: restaurantSopExecutionRouter }).createCaller(context)
+          .restaurantSopExecution,
+    },
+  ])(
+    'suppresses a waiver credential from a $label before validation',
+    async ({ path, createCaller }) => {
+      const context = {
+        db: db as never,
+        entitlements: { organizationId: 'org_1', ...FULL_ENTITLEMENTS },
+        session: {
+          expires: 'later',
+          user: { id: 'user_1', role: 'EMPLOYEE', department: 'OPERATIONS', status: 'ACTIVE' },
+        },
+        organization: null,
+        support: null,
+        requestMeta: { ip: null, userAgent: null },
+        audit: { detail: {} },
+      } as never;
+      const recognizableSecret = 'PIN-DO-NOT-AUDIT-819';
+
+      await expect(
+        createCaller(context).waive({
+          occurrenceId: OCC_ID,
+          approving: { staffProfileId: 'b', type: 'PIN', secret: recognizableSecret },
+          reason: 'r',
+          extra: true,
+        } as never)
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+
+      expect(mocks.recordTrpcAudit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          path,
+          input: undefined,
+          outcome: 'FAILURE',
+        })
+      );
+      expect(JSON.stringify(mocks.recordTrpcAudit.mock.calls)).not.toContain(recognizableSecret);
+    }
+  );
 
   it('rejects unknown key on listOccurrences', async () => {
     await expect(
@@ -370,31 +445,157 @@ describe('verify', () => {
 // ── waive command ──────────────────────────────────────────────────────────────
 
 describe('waive', () => {
-  it('maps CO_AUTH_REQUIRED → FORBIDDEN when actor equals approver', async () => {
-    db.restaurantSopOccurrence.findUnique.mockResolvedValue({ id: OCC_ID, status: 'SUBMITTED' });
+  it('commits authentication in a separate tenant scope before a later waiver state error', async () => {
+    const authDb = { credentialTransaction: true };
+    let authenticationCommitted = false;
+    mocks.withTenantCredentialDb.mockImplementation(async (_id, run) => {
+      const result = await run(authDb);
+      authenticationCommitted = true;
+      return result;
+    });
+    db.restaurantSopOccurrence.findUnique.mockResolvedValue({
+      id: OCC_ID,
+      status: 'SCHEDULED',
+      branchId: 'branch_1',
+    });
 
     await expect(
       caller().waive({
         occurrenceId: OCC_ID,
-        actorStaffProfileId: 'same_person',
-        approvingStaffProfileId: 'same_person',
+        approving: { staffProfileId: 'staff_b', type: 'PIN', secret: '1234' },
         reason: 'test',
       })
-    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+    expect(authenticationCommitted).toBe(true);
+    expect(mocks.withTenantCredentialDb).toHaveBeenCalledWith('org_1', expect.any(Function), {
+      userId: 'user_1',
+    });
+    expect(mocks.authenticateOperator).toHaveBeenCalledWith(
+      authDb,
+      expect.objectContaining({
+        staffProfileId: 'staff_b',
+        type: 'PIN',
+        secret: '1234',
+      })
+    );
+    expect(db.restaurantCoAuthorization.create).not.toHaveBeenCalled();
+  });
+
+  it('returns a refusal so an invalid credential attempt can commit its lockout update', async () => {
+    db.restaurantSopOccurrence.findUnique.mockResolvedValue({
+      id: OCC_ID,
+      status: 'SUBMITTED',
+      branchId: 'branch_1',
+    });
+    mocks.authenticateOperator.mockResolvedValue({ ok: false, reason: 'INVALID' });
+
+    await expect(
+      caller().waive({
+        occurrenceId: OCC_ID,
+        approving: { staffProfileId: 'invented_staff', type: 'PIN', secret: '1234' },
+        reason: 'test',
+      })
+    ).resolves.toEqual({ blocked: 'Waiver authorization failed.' });
+    expect(db.restaurantCoAuthorization.create).not.toHaveBeenCalled();
+    expect(db.$transaction).toHaveBeenCalledOnce();
+    expect(mocks.annotateAudit).toHaveBeenCalledWith(expect.anything(), { skipInput: true });
+    expect(mocks.authenticateOperator).toHaveBeenCalledWith(db, {
+      staffProfileId: 'invented_staff',
+      type: 'PIN',
+      secret: '1234',
+      now: expect.any(Date),
+    });
+    expect(mocks.recordTrpcAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ path: 'waive', outcome: 'FAILURE' })
+    );
+  });
+
+  it('refuses same-person approval', async () => {
+    db.restaurantSopOccurrence.findUnique.mockResolvedValue({ branchId: 'branch_1' });
+    mocks.authenticateOperator.mockResolvedValue({
+      ok: true,
+      credentialId: 'credential_1',
+      staffProfileId: 'staff_a',
+    });
+
+    await expect(
+      caller().waive({
+        occurrenceId: OCC_ID,
+        approving: { staffProfileId: 'staff_a', type: 'PIN', secret: '1234' },
+        reason: 'test',
+      })
+    ).resolves.toHaveProperty('blocked');
+    expect(db.restaurantCoAuthorization.create).not.toHaveBeenCalled();
+    expect(mocks.recordTrpcAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ path: 'waive', outcome: 'FAILURE' })
+    );
+  });
+
+  it('refuses an approver without branch verification capability', async () => {
+    db.restaurantSopOccurrence.findUnique.mockResolvedValue({ branchId: 'branch_1' });
+    mocks.staffHasCapability.mockResolvedValue(false);
+
+    await expect(
+      caller().waive({
+        occurrenceId: OCC_ID,
+        approving: { staffProfileId: 'staff_b', type: 'PIN', secret: '1234' },
+        reason: 'test',
+      })
+    ).resolves.toHaveProperty('blocked');
+    expect(mocks.staffHasCapability).toHaveBeenCalledWith(db, 'staff_b', 'branch_1', 'sop:verify');
+    expect(mocks.recordTrpcAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ path: 'waive', outcome: 'FAILURE' })
+    );
+  });
+
+  it.each([{ profiles: [] }, { profiles: [{ id: 'staff_a' }, { id: 'staff_duplicate' }] }])(
+    'refuses when the session user does not resolve to exactly one active staff profile',
+    async ({ profiles }) => {
+      db.restaurantStaffProfile.findMany.mockResolvedValue(profiles);
+      db.restaurantSopOccurrence.findUnique.mockResolvedValue({ branchId: 'branch_1' });
+
+      await expect(
+        caller().waive({
+          occurrenceId: OCC_ID,
+          approving: { staffProfileId: 'staff_b', type: 'PIN', secret: '1234' },
+          reason: 'test',
+        })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(mocks.authenticateOperator).not.toHaveBeenCalled();
+    }
+  );
+
+  it('refuses malformed credentials without invoking bcrypt authentication', async () => {
+    db.restaurantSopOccurrence.findUnique.mockResolvedValue({ branchId: 'branch_1' });
+
+    await expect(
+      caller().waive({
+        occurrenceId: OCC_ID,
+        approving: { staffProfileId: 'staff_b', type: 'PIN', secret: '12ab' },
+        reason: 'test',
+      })
+    ).resolves.toEqual({ blocked: 'Waiver authorization failed.' });
+    expect(mocks.authenticateOperator).not.toHaveBeenCalled();
   });
 
   it('waives with valid co-authorization', async () => {
-    db.restaurantSopOccurrence.findUnique.mockResolvedValue({ id: OCC_ID, status: 'MISSED' });
+    db.restaurantSopOccurrence.findUnique.mockResolvedValue({
+      id: OCC_ID,
+      status: 'MISSED',
+      branchId: 'branch_1',
+    });
     db.restaurantCoAuthorization.create.mockResolvedValue({ id: 'coauth_1' });
     db.restaurantSopVerification.create.mockResolvedValue({ id: 'ver_1', createdAt: new Date() });
 
     const result = await caller().waive({
       occurrenceId: OCC_ID,
-      actorStaffProfileId: 'staff_a',
-      approvingStaffProfileId: 'staff_b',
+      approving: { staffProfileId: 'staff_b', type: 'PIN', secret: '1234' },
       reason: 'Emergency',
     });
-    expect(result.action).toBe('WAIVE');
+    expect(result).toHaveProperty('action', 'WAIVE');
+    expect(db.restaurantSopVerification.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ actorStaffProfileId: 'staff_a' }) })
+    );
   });
 });
 
@@ -444,8 +645,7 @@ describe('SOP depth entitlement gating', () => {
   };
   const WAIVE_INPUT = {
     occurrenceId: OCC_ID,
-    actorStaffProfileId: 'staff_a',
-    approvingStaffProfileId: 'staff_b',
+    approving: { staffProfileId: 'staff_b', type: 'PIN' as const, secret: '1234' },
     reason: 'Emergency',
   };
 
