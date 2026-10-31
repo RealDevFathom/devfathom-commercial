@@ -11,7 +11,7 @@ import { Client } from 'pg';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { purgeStaleMenuImports } from './menu-import';
+import { purgeStaleMenuImports, type MenuImportRuntime } from './menu-import';
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 const describeIfDatabase = TEST_DATABASE_URL ? describe : describe.skip;
@@ -69,8 +69,10 @@ describeIfDatabase('menu import retention concurrency', () => {
           `SELECT id, "organizationId", "storageObjectName"
              FROM restaurant_menu_imports
             WHERE "createdAt" < now() - interval '14 days'
-              AND status = ANY($1::"RestaurantMenuImportStatus"[])`,
-          [args.where.status.in]
+              AND status = ANY($1::"RestaurantMenuImportStatus"[])
+              AND "organizationId" = $2
+              AND id = $3`,
+          [args.where.status.in, organizationId, importId]
         );
         return decided ? result.rows.filter((row) => row.storageObjectName) : result.rows;
       }),
@@ -123,7 +125,17 @@ describeIfDatabase('menu import retention concurrency', () => {
       [importId]
     );
 
-    const purge = purgeStaleMenuImports(db as unknown as ScopedDb);
+    // Never touch real storage: the default runtime would delete uploaded objects.
+    const runtime = {
+      resolveAdapter: vi.fn(() => {
+        throw new Error('extraction is not expected during retention');
+      }),
+      putSource: vi.fn(async () => undefined),
+      readSource: vi.fn(async () => Buffer.alloc(0)),
+      deleteSource: vi.fn(async () => undefined),
+    } satisfies MenuImportRuntime;
+
+    const purge = purgeStaleMenuImports(db as unknown as ScopedDb, { runtime });
     await expect
       .poll(async () => {
         const waiting = await commitConnection.query(
@@ -144,5 +156,6 @@ describeIfDatabase('menu import retention concurrency', () => {
     );
     expect(persisted.rows).toEqual([{ status: 'COMMITTED' }]);
     expect(table.delete).not.toHaveBeenCalled();
+    expect(runtime.deleteSource).not.toHaveBeenCalled();
   });
 });
