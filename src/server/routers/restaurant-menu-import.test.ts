@@ -65,7 +65,7 @@ const PNG_BASE64 =
 
 function caller(overrides: { organizationId?: string | null } = {}) {
   return restaurantMenuImportRouter.createCaller({
-    db: {},
+    db: { organization: { findUnique: vi.fn(async () => ({ currency: 'PKR' })) } },
     entitlements: {
       enabledModules: ['restaurant-menu'],
       activeSeats: 1,
@@ -194,6 +194,7 @@ describe('upload', () => {
     expect(db).toBeDefined();
     expect(organizationId).toBe('org_1');
     expect(input.createdById).toBe('user_1');
+    expect(input.defaultCurrency).toBe('PKR');
     expect(Buffer.isBuffer(input.content)).toBe(true);
     expect(input.content.subarray(0, 4)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
   });
@@ -208,6 +209,7 @@ describe('error mapping', () => {
     ['REVIEW_INCOMPLETE', 'BAD_REQUEST'],
     ['NOTHING_TO_IMPORT', 'BAD_REQUEST'],
     ['PRICE_REQUIRED', 'BAD_REQUEST'],
+    ['CURRENCY_MISMATCH', 'BAD_REQUEST'],
     ['INVALID', 'BAD_REQUEST'],
   ];
 
