@@ -156,6 +156,7 @@ describe('module catalog routing', () => {
     ['/pharmacy/purchasing/orders', 'pharmacy-procurement'],
     ['/pharmacy/purchasing/suppliers', 'pharmacy-procurement'],
     ['/pharmacy/medicines', 'pharmacy-core'],
+    ['/pharmacy/accounts/liquidity-kpi', 'pharmacy-finance'],
     ['/pharmacy/orders', 'pharmacy-counter'],
   ])('resolves Pharmacy route %s to its existing licensed module %s', (route, module) => {
     for (const vertical of ['PHARMACY', 'RESTAURANT', 'AGENCY', undefined] as const) {
@@ -185,6 +186,7 @@ describe('module catalog routing', () => {
   it.each([
     ['/pharmacy/reports', 'pharmacy-reports'],
     ['/pharmacy/finance', 'pharmacy-finance'],
+    ['/pharmacy/accounts/liquidity-kpi', 'pharmacy-finance'],
     ['/pharmacy/inventory', 'pharmacy-inventory'],
     ['/pharmacy/purchasing/returns', 'pharmacy-procurement'],
   ])('keeps direct-route licensing for %s independent of Chat', (route, module) => {

@@ -194,6 +194,9 @@ jobs:
           CREATE DATABASE devfathom_gate_test OWNER gate_owner;
           REVOKE ALL ON DATABASE devfathom_gate_test FROM PUBLIC;
           GRANT CONNECT, TEMPORARY ON DATABASE devfathom_gate_test TO gate_runtime;
+          -- Migration regression tests create transaction-local schemas; this does not
+          -- grant role creation, ownership of production tables, or RLS bypass.
+          GRANT CREATE ON DATABASE devfathom_gate_test TO gate_runtime;
           CREATE DATABASE devfathom_gate_shadow_test OWNER gate_owner;
           REVOKE ALL ON DATABASE devfathom_gate_shadow_test FROM PUBLIC;
           CREATE ROLE cohort_runtime LOGIN PASSWORD 'cohort-runtime-ci-only' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT;

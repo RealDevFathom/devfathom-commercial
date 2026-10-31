@@ -186,6 +186,7 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
     ['Inventory', '/pharmacy/inventory', 'pharmacy-inventory'],
     ['Purchasing', '/pharmacy/purchasing', 'pharmacy-procurement'],
     ['Finance', '/pharmacy/finance', 'pharmacy-finance'],
+    ['Posted cash coverage', '/pharmacy/accounts/liquidity-kpi', 'pharmacy-finance'],
     ['Reports & Insights', '/pharmacy/reports', 'pharmacy-reports'],
   ] as const;
 
@@ -246,8 +247,8 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
       expect(screen.queryByRole('link', { name: new RegExp(`${label}$`) })).not.toBeInTheDocument();
       const hrefs = screen.getAllByRole('link').map((link) => link.getAttribute('href'));
       expect(hrefs).not.toContain(href);
-      for (const [, otherHref] of destinations) {
-        if (otherHref !== href) expect(hrefs).toContain(otherHref);
+      for (const [, otherHref, otherModule] of destinations) {
+        if (otherHref !== href && otherModule !== module) expect(hrefs).toContain(otherHref);
       }
       expect(hrefs).toContain('/chat');
     }
@@ -260,6 +261,7 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
     }
     for (const label of [
       'Finance',
+      'Posted cash coverage',
       'Onboarding',
       'Medicine catalog',
       'Regulatory profile',
@@ -310,6 +312,7 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
     ['/pharmacy/reports/repeat-purchasing', 'Reports & Insights'],
     ['/pharmacy/purchasing/returns', 'Purchasing'],
     ['/pharmacy/finance', 'Finance'],
+    ['/pharmacy/accounts/liquidity-kpi', 'Posted cash coverage'],
     ['/pharmacy/inventory', 'Inventory'],
   ])('marks only the longest matching destination current at %s', (pathname, label) => {
     renderNavigation({ pathname });
