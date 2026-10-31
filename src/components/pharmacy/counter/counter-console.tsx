@@ -2332,7 +2332,7 @@ function ScopedPharmacyCounterConsole({
             eyebrow="POS-09"
             title="Prescription and patient"
             actions={
-              <kbd className="rounded-[3px] border border-border-subtle bg-surface-sunken px-1.5 py-0.5 font-mono text-xs text-text-strong">
+              <kbd className="rounded-sm border border-border-subtle bg-surface-sunken px-1.5 py-0.5 font-mono text-xs text-text-strong">
                 {formatBinding(keymap.bindings.focusPrescriptionPanel)}
               </kbd>
             }

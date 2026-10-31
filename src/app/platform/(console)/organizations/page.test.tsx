@@ -42,6 +42,9 @@ describe('OrganizationsPage verticals', () => {
 
     expect(mocks.requirePlatformRead).toHaveBeenCalledWith('/platform/organizations');
     expect(mocks.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: {}, take: 250 }));
+    // These controls must keep Studio geometry without the retired palette CSS bridge.
+    expect(screen.getByRole('link', { name: 'Onboard organization' })).toHaveClass('rounded-sm');
+    expect(screen.getByRole('button', { name: 'Apply filters' })).toHaveClass('rounded-sm');
     expect(screen.getByRole('columnheader', { name: 'Vertical' })).toBeInTheDocument();
     const select = screen.getByRole('combobox', { name: 'Vertical' });
     expect(select).toHaveValue('');

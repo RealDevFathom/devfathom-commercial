@@ -85,33 +85,6 @@
   --color-warning: var(--warning);
   --color-warning-foreground: var(--warning-foreground);
 
-  /* --- Canonical numbered scales (utilities: bg-abyss-700, text-brass-500…) --- */
-  --color-abyss-900: var(--abyss-900);
-  --color-abyss-800: var(--abyss-800);
-  --color-abyss-700: var(--abyss-700);
-  --color-abyss-600: var(--abyss-600);
-  --color-abyss-500: var(--abyss-500);
-  --color-abyss-400: var(--abyss-400);
-  --color-abyss-300: var(--abyss-300);
-  --color-abyss-200: var(--abyss-200);
-  --color-abyss-100: var(--abyss-100);
-  --color-brass-700: var(--brass-700);
-  --color-brass-600: var(--brass-600);
-  --color-brass-500: var(--brass-500);
-  --color-brass-400: var(--brass-400);
-  --color-brass-300: var(--brass-300);
-  --color-brass-100: var(--brass-100);
-  --color-paper-white: var(--paper-white);
-  --color-paper-50: var(--paper-50);
-  --color-paper-100: var(--paper-100);
-  --color-paper-200: var(--paper-200);
-  --color-paper-300: var(--paper-300);
-  --color-slate-700: var(--slate-700);
-  --color-slate-600: var(--slate-600);
-  --color-slate-500: var(--slate-500);
-  --color-slate-400: var(--slate-400);
-  --color-slate-300: var(--slate-300);
-
   /* --- Canonical semantic aliases (utilities: bg-surface-sunken…) --- */
   --color-surface-page: var(--surface-page);
   --color-surface-card: var(--surface-card);
@@ -128,18 +101,17 @@
   --color-border-default: var(--border-default);
   --color-border-strong: var(--border-strong);
 
-  /* Brand brass accent (responds to data-accent). Distinct from shadcn
+  /* Brand accent (responds to data-accent). Distinct from shadcn
      --accent (a neutral hover wash). */
   --color-accent-brand: var(--accent-brand);
   --color-accent-brand-hover: var(--accent-brand-hover);
-  --color-brass: var(--accent-brand); /* legacy alias → brand accent */
   --color-seafoam: var(--accent-brand); /* legacy alias */
-  --color-brand: var(--abyss-700);
-  --color-brand-dark: var(--abyss-800);
-  --color-brand-light: var(--abyss-500);
+  --color-brand: var(--primary);
+  --color-brand-dark: var(--primary-hover);
+  --color-brand-light: var(--text-muted);
   --color-primary-hover: var(--primary-hover);
 
-  /* Radii — small & architectural (2–16px). Not pill-shaped. */
+  /* Radii — canonical Studio geometry. */
   --radius-xs: var(--radius-xs);
   --radius-sm: var(--radius-sm);
   --radius-md: var(--radius-md);
@@ -184,243 +156,6 @@
 }
 
 /* ============================================================
-   LIGHT THEME (default) — linen canvas, evergreen navigation
-   ============================================================ */
-:root {
-  /* Numbered scales — single source of truth */
-  --abyss-900: #263128;
-  --abyss-800: #344238;
-  --abyss-700: #465a4b;
-  --abyss-600: #5b6d58;
-  --abyss-500: #74866e;
-  --abyss-400: #9eae95;
-  --abyss-300: #c5d0bd;
-  --abyss-200: #e0e7da;
-  --abyss-100: #eef2ea;
-
-  --brass-700: #82331f;
-  --brass-600: #9e4028;
-  --brass-500: #b14e32;
-  --brass-400: #d27b5d;
-  --brass-300: #e8ad94;
-  --brass-100: #f7dfd5;
-
-  --paper-white: #fffcf6;
-  --paper-50: #f7f1e5;
-  --paper-100: #efe3d2;
-  --paper-200: #e5d3bd;
-  --paper-300: #d8c0a7;
-
-  --ink-900: #263128;
-  --slate-700: #3f443c;
-  --slate-600: #5e6259;
-  --slate-500: #7a7d73;
-  --slate-400: #a6a598;
-  --slate-300: #d8d5cc;
-
-  --green-600: #42624a;
-  --green-100: #cfe0cd;
-  --amber-600: #785217;
-  --amber-100: #f1dfb6;
-  --red-600: #904039;
-  --red-100: #f2d8d4;
-
-  /* Canonical semantic aliases */
-  --surface-page: var(--paper-50);
-  --surface-card: var(--paper-white);
-  --surface-sunken: var(--paper-100);
-  --surface-raised: var(--paper-white);
-  --surface-inverse: var(--abyss-900);
-
-  --text-strong: var(--ink-900);
-  --text-body: var(--slate-700);
-  --text-muted: var(--slate-500);
-  --text-faint: var(--slate-400);
-  --text-inverse: var(--paper-50);
-  --text-on-accent: var(--paper-white);
-  --text-link: var(--abyss-600);
-
-  --border-subtle: var(--paper-200);
-  --border-default: var(--paper-300);
-  --border-strong: var(--slate-400);
-
-  /* Clay signal: reserved for active routes and decisions. */
-  --accent-brand: var(--brass-500);
-  --accent-brand-hover: var(--brass-600);
-  --accent-quiet: var(--brass-100);
-
-  /* shadcn semantic names → mapped to canonical aliases */
-  --background: var(--surface-page);
-  --foreground: var(--text-strong);
-  --card: var(--surface-card);
-  --card-foreground: var(--text-strong);
-  --popover: var(--surface-card);
-  --popover-foreground: var(--text-strong);
-  --primary: var(--abyss-700);
-  --primary-foreground: var(--paper-white);
-  --primary-hover: var(--abyss-800);
-  --primary-quiet: var(--abyss-100);
-  --secondary: var(--paper-100);
-  --secondary-foreground: var(--slate-700);
-  --muted: var(--paper-100);
-  --muted-foreground: var(--slate-500);
-  /* shadcn --accent = neutral hover wash (NOT the brand brass) */
-  --accent: var(--paper-100);
-  --accent-foreground: var(--ink-900);
-
-  --destructive: var(--red-600);
-  --success: var(--green-600);
-  --success-foreground: var(--paper-white);
-  --warning: var(--amber-600);
-  --warning-foreground: var(--paper-white);
-
-  --border: var(--border-subtle);
-  --input: var(--border-subtle);
-  --ring: var(--accent-brand);
-
-  /* Drafting board geometry: deliberate corners, never pill-shaped by default. */
-  --radius-xs: 2px;
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 4px;
-  --radius-xl: 8px;
-  --radius: var(--radius-lg);
-
-  /* Charts — evergreen · stone · clay · green · moss */
-  --chart-1: var(--abyss-700);
-  --chart-2: var(--slate-500);
-  --chart-3: var(--brass-500);
-  --chart-4: var(--green-600);
-  --chart-5: var(--abyss-500);
-
-  --grid-line: rgba(38, 49, 40, 0.04);
-
-  /* Sidebar — fixed evergreen runbook surface (both themes) */
-  --sidebar: var(--abyss-900);
-  --sidebar-foreground: var(--abyss-200);
-  --sidebar-primary: var(--brass-500); /* clay — active accent */
-  --sidebar-primary-foreground: var(--paper-white);
-  --sidebar-accent: var(--abyss-800); /* hover/active background */
-  --sidebar-accent-foreground: var(--paper-white);
-  --sidebar-border: rgba(255, 255, 255, 0.08);
-  --sidebar-ring: var(--brass-500);
-
-  /* Typography */
-  --font-display: var(--font-sans);
-  --font-logo: var(--font-sans);
-  --font-body: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
-
-  /* Editorial display scale for page titles and big operational numbers. */
-  --type-display-xs: 1.375rem; /* 22 */
-  --type-display-sm: 1.75rem; /* 28 */
-  --type-display-md: 2.25rem; /* 36 */
-  --type-display-lg: 2.875rem; /* 46 */
-  --type-display-xl: 3.75rem; /* 60 */
-
-  --leading-tight: 1.08;
-  --leading-snug: 1.22;
-  --leading-normal: 1.5;
-  --leading-relaxed: 1.65;
-  --tracking-tight: -0.02em;
-  --tracking-snug: -0.01em;
-  --tracking-normal: 0;
-  --tracking-wide: 0.04em;
-  --tracking-caps: 0.14em; /* eyebrows */
-
-  /* Crisp lift — enough depth to separate linen from the board. */
-  --shadow-xs: 0 1px 2px rgba(38, 49, 40, 0.05);
-  --shadow-sm: 0 4px 10px -9px rgba(38, 49, 40, 0.28);
-  --shadow-md: 0 12px 26px -22px rgba(38, 49, 40, 0.34);
-  --shadow-lg: 0 20px 50px -34px rgba(38, 49, 40, 0.42);
-
-  /* Motion */
-  --ease-standard: cubic-bezier(0.4, 0.1, 0.2, 1);
-  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
-  --duration-fast: 120ms;
-  --duration-base: 200ms;
-  --duration-slow: 360ms;
-
-  color-scheme: light;
-}
-
-/* ============================================================
-   DARK THEME — deep evergreen canvas; clay actions stay high-contrast
-   ============================================================ */
-[data-theme='dark'] {
-  --surface-page: #18211b;
-  --surface-card: #212c23;
-  --surface-sunken: #111812;
-  --surface-raised: #2a382d;
-  --surface-inverse: #f7f1e5;
-
-  --text-strong: #f8f3ea;
-  --text-body: #ded8ce;
-  --text-muted: #b4aea3;
-  --text-faint: #7b8277;
-  --text-inverse: #18211b;
-  --text-on-accent: #18211b;
-  --text-link: #e0a37d;
-
-  --border-subtle: #304031;
-  --border-default: #405343;
-  --border-strong: #64755f;
-
-  /* Signal lightens in the dark without turning into decoration. */
-  --accent-brand: #e3926f;
-  --accent-brand-hover: #f1b18f;
-  --accent-quiet: #3e2721;
-
-  --background: var(--surface-page);
-  --foreground: var(--text-strong);
-  --card: var(--surface-card);
-  --card-foreground: var(--text-strong);
-  --popover: var(--surface-card);
-  --popover-foreground: var(--text-strong);
-
-  /* Clay remains dark enough for existing white-label actions. */
-  --primary: #a9462c;
-  --primary-foreground: #fffcf6;
-  --primary-hover: #bd5435;
-  --primary-quiet: #3e2721;
-
-  --secondary: #2a382d;
-  --secondary-foreground: var(--text-strong);
-  --muted: #2a382d;
-  --muted-foreground: #c2bbb0;
-  --accent: #2a382d;
-  --accent-foreground: #f7f1e5;
-
-  --destructive: #f0a89f;
-  --success: #a3c8a6;
-  --success-foreground: #18211b;
-  --warning: #e1bc72;
-  --warning-foreground: #2f2107;
-
-  --border: var(--border-subtle);
-  --input: var(--border-subtle);
-  --ring: var(--accent-brand);
-
-  --chart-1: #dec2a3;
-  --chart-2: #c1cfba;
-  --chart-3: #e3926f;
-  --chart-4: #9bc39e;
-  --chart-5: #82977b;
-
-  --grid-line: rgba(247, 241, 229, 0.05);
-
-  --sidebar: #131b15;
-  --sidebar-foreground: #dbe6d5;
-  --sidebar-primary: #e3926f;
-  --sidebar-primary-foreground: #18211b;
-  --sidebar-accent: #26352a;
-  --sidebar-accent-foreground: #f8f3ea;
-  --sidebar-border: #304031;
-  --sidebar-ring: #e3926f;
-
-  color-scheme: dark;
-}
-
-/* ============================================================
    CONFIGURABLE SURFACE ATTRIBUTES (data-* toggles)
    data-theme handled above. data-layout / data-icons are
    structural (handled in components).
@@ -436,11 +171,11 @@
   font-size: 112.5%; /* 16 → 18 */
 }
 
-/* Accent intensity — "bold" lets clay run a touch warmer/stronger. */
+/* Accent intensity — "bold" strengthens the Studio coral signal. */
 [data-accent='bold'] {
-  --accent-brand: var(--brass-600);
-  --accent-brand-hover: var(--brass-700);
-  --ring: var(--brass-600);
+  --accent-brand: #a5361f;
+  --accent-brand-hover: #8f2e1a;
+  --ring: var(--accent-brand);
 }
 [data-theme='dark'][data-accent='bold'] {
   --accent-brand: #e5bf97;
@@ -474,8 +209,8 @@
   }
 
   ::selection {
-    background: var(--brass-300);
-    color: var(--abyss-900);
+    background: #ffb4a8;
+    color: #111110;
   }
 
   h1,
@@ -963,6 +698,12 @@
   --input: var(--border-default);
   --ring: var(--accent-brand);
 
+  --destructive: #904039;
+  --success: #42624a;
+  --success-foreground: #ffffff;
+  --warning: #785217;
+  --warning-foreground: #ffffff;
+
   --chart-1: var(--accent-brand);
   --chart-2: #111110;
   --chart-3: #a3a39e;
@@ -978,6 +719,8 @@
   --sidebar-border: #e9e9e5;
   --sidebar-ring: var(--accent-brand);
 
+  --grid-line: rgba(17, 17, 16, 0.04);
+
   --radius-xs: 8px;
   --radius-sm: 12px;
   --radius-md: 16px;
@@ -990,8 +733,19 @@
   --shadow-md: 0 18px 42px -30px rgba(17, 17, 16, 0.3);
   --shadow-lg: 0 32px 80px -44px rgba(17, 17, 16, 0.4);
 
+  --ease-standard: cubic-bezier(0.4, 0.1, 0.2, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --duration-fast: 120ms;
+  --duration-base: 200ms;
+  --duration-slow: 360ms;
+
+  --tracking-tight: -0.02em;
+  --tracking-caps: 0.14em;
+
   --font-display: var(--font-sans);
   --font-body: 'Instrument Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+
+  color-scheme: light;
 }
 
 [data-theme='dark'] {
@@ -1006,6 +760,7 @@
   --text-faint: #9a9993;
   --text-inverse: #111110;
   --text-on-accent: #ffffff;
+  --text-link: #ff8b78;
   --border-subtle: #343431;
   --border-default: #44443f;
   --border-strong: #5e5d57;
@@ -1021,6 +776,7 @@
   --primary: #f7f7f4;
   --primary-foreground: #111110;
   --primary-hover: #deded9;
+  --primary-quiet: #30302d;
   --secondary: #30302d;
   --secondary-foreground: #f7f7f4;
   --muted: #30302d;
@@ -1030,11 +786,27 @@
   --border: var(--border-subtle);
   --input: var(--border-default);
   --ring: var(--accent-brand);
+  --destructive: #f0a89f;
+  --success: #a3c8a6;
+  --success-foreground: #18211b;
+  --warning: #e1bc72;
+  --warning-foreground: #2f2107;
+  --chart-1: #ff745d;
+  --chart-2: #dfdfda;
+  --chart-3: #aaa9a3;
+  --chart-4: #a3c8a6;
+  --chart-5: #9a9993;
+  --grid-line: rgba(247, 247, 244, 0.05);
   --sidebar: #242422;
   --sidebar-foreground: #dfdfda;
+  --sidebar-primary: var(--accent-brand);
+  --sidebar-primary-foreground: #111110;
   --sidebar-accent: #30302d;
   --sidebar-accent-foreground: #f7f7f4;
   --sidebar-border: #343431;
+  --sidebar-ring: var(--accent-brand);
+
+  color-scheme: dark;
 }
 
 @layer base {
@@ -1497,33 +1269,6 @@
     background: color-mix(in srgb, var(--surface-sunken) 72%, transparent);
   }
 
-  .platform-workspace .bg-abyss-900 {
-    border-radius: 3px;
-    background: var(--primary);
-    color: var(--primary-foreground);
-    box-shadow: 0 8px 18px -13px rgba(17, 17, 16, 0.72);
-  }
-
-  .platform-workspace .hover\:bg-abyss-800:hover,
-  .platform-workspace .bg-abyss-800 {
-    background: var(--primary-hover);
-    color: var(--primary-foreground);
-  }
-
-  .platform-workspace .border-abyss-900 {
-    border-color: var(--primary);
-  }
-
-  .platform-workspace .text-brass-300,
-  .platform-workspace .text-brass-500,
-  .platform-workspace .text-brass-700 {
-    color: var(--accent-brand);
-  }
-
-  .platform-workspace .bg-brass-100 {
-    background: var(--accent-quiet);
-  }
-
   .platform-workspace button,
   .platform-workspace a {
     -webkit-tap-highlight-color: transparent;
@@ -1550,42 +1295,6 @@
   .platform-workspace .platform-page-heading h1 {
     font-size: clamp(2rem, 11vw, 2.65rem);
   }
-}
-
-/* Unlayered compatibility bridge for the first platform implementation's
-   palette utilities. Unlayered rules intentionally outrank Tailwind's utility
-   layer so every existing route adopts Studio ink/coral without a brittle
-   route-by-route color rewrite. */
-.platform-workspace .bg-abyss-900 {
-  background-color: var(--primary);
-  color: var(--primary-foreground);
-}
-
-.platform-workspace .bg-abyss-800,
-.platform-workspace .hover\:bg-abyss-800:hover {
-  background-color: var(--primary-hover);
-  color: var(--primary-foreground);
-}
-
-.platform-workspace .border-abyss-900 {
-  border-color: var(--primary);
-}
-
-.platform-workspace .text-abyss-200,
-.platform-workspace .text-abyss-300,
-.platform-workspace .text-paper-50,
-.platform-workspace .text-paper-white {
-  color: var(--primary-foreground);
-}
-
-.platform-workspace .text-brass-300,
-.platform-workspace .text-brass-500,
-.platform-workspace .text-brass-700 {
-  color: var(--accent-brand);
-}
-
-.platform-workspace .bg-brass-100 {
-  background-color: var(--accent-quiet);
 }
 
 /* Authentication uses the Studio split recipe and the existing semantic themes. */
