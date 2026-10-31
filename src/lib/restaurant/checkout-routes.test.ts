@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-import { evaluateOrderSettlement } from './bills';
+import { BillCommandError, evaluateOrderSettlement } from './bills';
 import {
   buildReceiptForBranch,
   getOrderSettlementForBranch,
@@ -223,6 +223,19 @@ describe('checkout money serialization', () => {
         },
       ],
     });
+  });
+});
+
+it('refuses a comp reversal with missing service-charge evidence as a conflict', async () => {
+  const response = moneyErrorResponse(
+    new BillCommandError(
+      'The original service-charge allocation is unavailable.',
+      'SERVICE_CHARGE_EVIDENCE_MISSING'
+    )
+  )!;
+  expect(response.status).toBe(409);
+  expect(await response.json()).toEqual({
+    error: 'The original service-charge allocation is unavailable.',
   });
 });
 

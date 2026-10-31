@@ -445,6 +445,7 @@ export function moneyErrorResponse(err: unknown): NextResponse | null {
       err.reason === 'BILL_NOT_OPEN' ||
       err.reason === 'RESPLIT_LOCKED' ||
       err.reason === 'ALREADY_COMPED' ||
+      err.reason === 'SERVICE_CHARGE_EVIDENCE_MISSING' ||
       err.reason === 'NOT_COMPED';
     return json({ error: err.message }, notFound ? 404 : conflict ? 409 : 400);
   }

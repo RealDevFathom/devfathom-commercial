@@ -76,6 +76,7 @@ export type BillCommandErrorReason =
   | 'ALREADY_COMPED'
   | 'NOT_COMPED'
   | 'COMP_EXCEEDS_BILL'
+  | 'SERVICE_CHARGE_EVIDENCE_MISSING'
   | 'INVALID_SPLIT'
   | 'PARTITION_INCOMPLETE'
   | 'RESPLIT_LOCKED'
@@ -856,9 +857,10 @@ export type CompLineInput = {
   actor: MoneyCommandActor;
 };
 
-/** The release-idempotency key a comp of this line owns. One key per line, so the
- * first call and every replay of it name the same release. */
-const compReleaseKey = (billLineId: string) => `comp:${billLineId}`;
+/** A reversal makes the line eligible again. Each approved comp owns its release;
+ * money-command replays return before a new authorization or release is written. */
+const compReleaseKey = (billLineId: string, coAuthorizationId: string) =>
+  `comp:${billLineId}:${coAuthorizationId}`;
 
 /**
  * The comp's OWN idempotency record carries both facts its replay has to answer with:
@@ -1015,6 +1017,17 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
         : [];
     const removedServiceCharge = sub(bill.serviceChargeTotal, serviceChargeTotal);
 
+    const coAuthorizationId = await persistCoAuth(tx, {
+      actingStaffProfileId: input.actor.staffProfileId,
+      approvingStaffProfileId: input.approvingStaffProfileId,
+      capability: 'orders:complimentary',
+      reason,
+      targetType: 'RestaurantBillLine',
+      targetId: line.id,
+      deviceId: input.actor.deviceId,
+      terminalSessionId: input.terminalSessionId,
+    });
+
     // What the comp cannot absorb out of the bill's own balance (B3).
     const compedPayable = add(line.lineSubtotal, removedServiceCharge);
     const shortfall = sub(compedPayable, bill.grandTotal);
@@ -1025,7 +1038,7 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
         shortfall,
         actorId: input.actor.staffProfileId,
         reason: `Loyalty redemption released to comp bill line ${line.id}: ${reason}`,
-        idempotencyKey: compReleaseKey(line.id),
+        idempotencyKey: compReleaseKey(line.id, coAuthorizationId),
         at: new Date(),
       });
       // A replay here would mean an earlier transaction already rolled this release off
@@ -1042,17 +1055,6 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
         'COMP_EXCEEDS_BILL'
       );
     }
-
-    const coAuthorizationId = await persistCoAuth(tx, {
-      actingStaffProfileId: input.actor.staffProfileId,
-      approvingStaffProfileId: input.approvingStaffProfileId,
-      capability: 'orders:complimentary',
-      reason,
-      targetType: 'RestaurantBillLine',
-      targetId: line.id,
-      deviceId: input.actor.deviceId,
-      terminalSessionId: input.terminalSessionId,
-    });
 
     await tx.restaurantBillLine.update({
       where: { id: line.id },
@@ -1074,6 +1076,7 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
         },
       });
     }
+    const clearedServiceCharge = participatesInServiceCharge && serviceChargeBasis.isZero();
     await tx.restaurantBill.update({
       where: { id: bill.id },
       data: {
@@ -1082,6 +1085,13 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
         grandTotal,
         serviceChargeTotal,
         serviceChargeBasis,
+        ...(clearedServiceCharge
+          ? {
+              serviceChargePolicyVersionId: null,
+              serviceChargeRate: null,
+              serviceChargeTaxTreatment: null,
+            }
+          : {}),
       },
     });
 
@@ -1092,6 +1102,51 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
 
 export type ReverseCompLineInput = CompLineInput;
 export type ReverseCompLineResult = Omit<CompLineResult, 'releasedDiscount'>;
+
+/** Reconstruct the cut-time allocation from immutable subtotals in the bill order
+ * saved by cutBills. Independent rounding loses cents allocated to sibling bills;
+ * current totals lose them after comps. Neither can supply the original cap. */
+async function originalServiceCharge(
+  tx: ScopedDb,
+  billId: string,
+  orderId: string,
+  rate: Prisma.Decimal
+): Promise<Prisma.Decimal> {
+  const cut = await tx.restaurantMoneyIdempotencyKey.findFirst({
+    where: { commandType: 'bill.cut', resultRef: { contains: JSON.stringify(billId) } },
+    select: { resultRef: true },
+  });
+  const missingEvidence = () =>
+    new BillCommandError(
+      'The original service-charge allocation is unavailable.',
+      'SERVICE_CHARGE_EVIDENCE_MISSING'
+    );
+  if (!cut?.resultRef?.startsWith(CUT_RESULT_PREFIX)) throw missingEvidence();
+  let result: Partial<CutBillsReplay>;
+  try {
+    result = JSON.parse(cut.resultRef.slice(CUT_RESULT_PREFIX.length));
+  } catch {
+    throw missingEvidence();
+  }
+  if (
+    result?.orderId !== orderId ||
+    !Array.isArray(result.billIds) ||
+    !result.billIds.every((id) => typeof id === 'string') ||
+    !result.billIds.includes(billId)
+  ) {
+    throw missingEvidence();
+  }
+  const bills = await tx.restaurantBill.findMany({
+    where: { id: { in: result.billIds }, orderId },
+    select: { id: true, subtotal: true },
+  });
+  if (bills.length !== result.billIds.length) throw missingEvidence();
+  const subtotals = result.billIds.map((id) => bills.find((bill) => bill.id === id)!.subtotal);
+  return allocate(
+    roundMoney(multiply(sum(subtotals), rate)),
+    subtotals.map((subtotal) => subtotal.mul(100).toNumber())
+  )[result.billIds.indexOf(billId)]!;
+}
 
 /**
  * Reverse a mistaken line comp while preserving both authorization events in the
@@ -1108,13 +1163,14 @@ export async function reverseCompLine(
       where: { id: input.billId, branchId: input.branchId },
       select: {
         id: true,
+        orderId: true,
         status: true,
+        subtotal: true,
         compTotal: true,
         grandTotal: true,
         serviceChargeTotal: true,
         serviceChargeBasis: true,
-        serviceChargePolicyVersionId: true,
-        serviceChargeRate: true,
+        order: { select: { serviceChargePolicyVersion: { select: { id: true, rate: true } } } },
       },
     });
     if (!bill) throw new BillCommandError('The bill does not exist.', 'BILL_NOT_FOUND');
@@ -1148,13 +1204,20 @@ export async function reverseCompLine(
       terminalSessionId: input.terminalSessionId,
     });
 
-    const participates =
-      bill.serviceChargePolicyVersionId !== null && bill.serviceChargeRate !== null;
+    // The order's immutable policy survives zero-basis comps, whose bill metadata
+    // must be cleared to satisfy the service-charge evidence constraint.
+    const policy = bill.order.serviceChargePolicyVersion;
+    const participates = policy !== null;
     const serviceChargeBasis = participates
       ? add(bill.serviceChargeBasis, line.lineSubtotal)
       : bill.serviceChargeBasis;
+    const originalCharge = policy
+      ? await originalServiceCharge(tx, bill.id, bill.orderId, policy.rate)
+      : bill.serviceChargeTotal;
     const serviceChargeTotal = participates
-      ? roundMoney(multiply(serviceChargeBasis, bill.serviceChargeRate!))
+      ? serviceChargeBasis.equals(bill.subtotal)
+        ? originalCharge
+        : Prisma.Decimal.min(originalCharge, roundMoney(multiply(serviceChargeBasis, policy.rate)))
       : bill.serviceChargeTotal;
     const serviceAdded = sub(serviceChargeTotal, bill.serviceChargeTotal);
     const activeLines = participates
@@ -1201,6 +1264,13 @@ export async function reverseCompLine(
         grandTotal: add(bill.grandTotal, add(line.lineSubtotal, serviceAdded)),
         serviceChargeTotal,
         serviceChargeBasis,
+        ...(policy && !serviceChargeBasis.isZero()
+          ? {
+              serviceChargePolicyVersionId: policy.id,
+              serviceChargeRate: policy.rate,
+              serviceChargeTaxTreatment: 'NON_TAXABLE',
+            }
+          : {}),
       },
     });
     await recordMoneyIdempotentResult(tx, input.actor, line.id);
