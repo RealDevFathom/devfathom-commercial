@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   createPayment: vi.fn(),
   queryRaw: vi.fn(),
   transaction: vi.fn(),
+  emitEvent: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -17,6 +18,7 @@ vi.mock('@/lib/abac', async () => ({
   can: mocks.can,
 }));
 vi.mock('@/lib/entitlements', () => ({ hasModule: vi.fn(() => true) }));
+vi.mock('@/lib/webhooks', () => ({ emitEvent: mocks.emitEvent }));
 vi.mock('../audit', () => ({
   ipFromHeaders: vi.fn(() => null),
   isAuditExcludedPath: vi.fn(() => true),
@@ -206,6 +208,84 @@ describe('finance.updateInvoice', () => {
     expect(mocks.aggregate).not.toHaveBeenCalled();
     expect(mocks.createPayment).not.toHaveBeenCalled();
     expect(mocks.update).not.toHaveBeenCalled();
+  });
+
+  it('settles a sent invoice when a discount reduces its balance to zero', async () => {
+    mocks.findUnique.mockResolvedValue({ status: 'SENT', discount: 0, tax: 0 });
+    mocks.aggregate.mockResolvedValue({ _sum: { amount: 20 } });
+
+    await caller().updateInvoice({
+      id: 'invoice-1',
+      items: [{ description: 'Consulting', quantity: 1, rate: 100 }],
+      discount: 80,
+    });
+
+    expect(mocks.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          total: 20,
+          status: 'PAID',
+          paidAt: expect.any(Date),
+        }),
+      })
+    );
+    expect(mocks.emitEvent).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      'invoice.paid',
+      expect.objectContaining({ invoiceId: 'invoice-1', total: 20 })
+    );
+  });
+
+  it('settles a 100% discounted invoice when it is sent', async () => {
+    mocks.findUnique.mockResolvedValue({ status: 'DRAFT', discount: 0, tax: 0 });
+
+    await caller().updateInvoice({
+      id: 'invoice-1',
+      items: [{ description: 'Consulting', quantity: 1, rate: 100 }],
+      discount: 100,
+      status: 'SENT',
+    });
+
+    expect(mocks.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          total: 0,
+          status: 'PAID',
+          sentAt: expect.any(Date),
+          paidAt: expect.any(Date),
+        }),
+      })
+    );
+  });
+
+  it('leaves a sent invoice with an outstanding balance unsettled', async () => {
+    mocks.findUnique.mockResolvedValue({ status: 'SENT', discount: 0, tax: 0 });
+    mocks.aggregate.mockResolvedValue({ _sum: { amount: 20 } });
+
+    await caller().updateInvoice({
+      id: 'invoice-1',
+      items: [{ description: 'Consulting', quantity: 1, rate: 100 }],
+      discount: 50,
+    });
+
+    const data = mocks.update.mock.calls[0][0].data;
+    expect(data.total).toBe(50);
+    expect(data).not.toHaveProperty('status');
+    expect(data).not.toHaveProperty('paidAt');
+    expect(mocks.emitEvent).not.toHaveBeenCalled();
+  });
+
+  it('accepts up to 1,000 line items so existing large invoices stay editable', async () => {
+    const items = Array.from({ length: 1_000 }, () => ({
+      description: 'Line',
+      quantity: 1,
+      rate: 1,
+    }));
+
+    await caller().updateInvoice({ id: 'invoice-1', items, discount: 0 });
+
+    expect(mocks.update).toHaveBeenCalledOnce();
   });
 
   it('rejects a reduction below payments collected inside the locked transaction', async () => {

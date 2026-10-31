@@ -9,6 +9,7 @@ import {
   invoiceStatusUpdate,
   type InvoiceStatusValue,
 } from '@/lib/finance/invoice-status';
+import { settleCoveredSentInvoice } from '@/lib/finance/invoice-settlement';
 
 export const GET = withApiAuth(
   'finance:read',
@@ -77,10 +78,17 @@ export const PATCH = withApiAuth(
         { status: 409 }
       );
     }
-    const invoice = await authCtx.db.invoice.findUniqueOrThrow({
+    let invoice = await authCtx.db.invoice.findUniqueOrThrow({
       where: { id },
       include: { client: { select: { name: true } } },
     });
+    // A fully discounted or already-covered invoice settles as soon as it is sent.
+    if (next === 'SENT' && (await settleCoveredSentInvoice(authCtx.db, invoice))) {
+      invoice = await authCtx.db.invoice.findUniqueOrThrow({
+        where: { id },
+        include: { client: { select: { name: true } } },
+      });
+    }
 
     if (next === 'SENT' && existing.status !== 'SENT') {
       logActivity(authCtx.db, authCtx.userId, {

@@ -8,7 +8,6 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
-import { moneyLabel } from '@/lib/finance/currency';
 import { invoiceTotalLabel, type InvoiceTotal } from '@/lib/finance/invoice-display';
 import { calculateInvoiceMoney } from '@/lib/finance/invoice-money';
 import { format } from 'date-fns';

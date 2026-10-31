@@ -23,6 +23,7 @@ import {
   invoiceStatusUpdate,
   PAID_STATUS_ERROR,
 } from '@/lib/finance/invoice-status';
+import { settleCoveredSentInvoice } from '@/lib/finance/invoice-settlement';
 
 // Money columns are Decimal(12,2) — Postgres caps a value at 9,999,999,999.99.
 // Bound amounts here so an oversized input is a clean validation error, not a
@@ -615,10 +616,17 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
       if (changed.count !== 1) {
         return { error: 'Invoice status changed concurrently. Refresh and try again.' };
       }
-      const invoice = await db.invoice.findUniqueOrThrow({
+      let invoice = await db.invoice.findUniqueOrThrow({
         where: { id: matches[0].id },
         include: { client: { select: { name: true } } },
       });
+      // A fully discounted or already-covered invoice settles as soon as it is sent.
+      if (status === 'SENT' && (await settleCoveredSentInvoice(db, invoice))) {
+        invoice = await db.invoice.findUniqueOrThrow({
+          where: { id: matches[0].id },
+          include: { client: { select: { name: true } } },
+        });
+      }
 
       const totalLabel = `$${Number(invoice.total).toLocaleString()}`;
       if (status === 'SENT') {

@@ -18,6 +18,11 @@ import {
 import { invoiceStatusTransitionError, invoiceStatusUpdate } from '@/lib/finance/invoice-status';
 import { calculateInvoiceMoney, fromCents, moneyCents } from '@/lib/finance/invoice-money';
 import { MAX_MONEY, roundMoney, sumMoney } from '@/lib/finance/money';
+import {
+  invoiceBalanceCovered,
+  PAYMENT_EPSILON,
+  settleCoveredSentInvoice,
+} from '@/lib/finance/invoice-settlement';
 
 // Monthly-equivalent multiplier for a recurring expense's billing interval, so an
 // ongoing subscription's run-rate can be folded into burn/profit (FIN-05).
@@ -32,10 +37,19 @@ const RECURRING_MONTHLY_FACTOR: Record<string, number> = {
 // oversized input fails as a clean validation error instead of a raw DB 500.
 const MAX_MONEY_CENTS = 999_999_999_999n;
 const MAX_INVOICE_QUANTITY = 1_000_000;
-const MAX_INVOICE_ITEMS = 100;
+// Existing invoices may hold up to 1,000 lines; a lower cap would make them uneditable.
+const MAX_INVOICE_ITEMS = 1_000;
 const MONEY_MAX_MESSAGE = 'Amount must be 9,999,999,999.99 or less';
 const positiveMoney = () => z.number().positive().max(MAX_MONEY, MONEY_MAX_MESSAGE);
 const nonNegativeMoney = () => z.number().nonnegative().max(MAX_MONEY, MONEY_MAX_MESSAGE);
+
+// IMP-REST-03 payload for invoice.paid, captured inside a tx and fired after commit.
+type InvoicePaidEvent = {
+  invoiceId: string;
+  total: number;
+  currency: string;
+  clientId: string;
+};
 
 type PaymentCommand = {
   invoiceId: string;
@@ -124,8 +138,8 @@ export function calculateInvoiceTotals(
 // IMP-FIN-04: money is Decimal(12,2), so a partial payment can legitimately pay an
 // invoice off to the exact cent. Compare paid-vs-total with a half-cent tolerance
 // so a sub-cent float artifact never tips an exact payoff into "overpayment" — and
-// never leaves a fully-paid invoice a hair short of PAID.
-const PAYMENT_EPSILON = 0.005;
+// never leaves a fully-paid invoice a hair short of PAID (PAYMENT_EPSILON, shared
+// with invoice settlement in @/lib/finance/invoice-settlement).
 
 // A recurring expense's stored nextDueDate doesn't advance on its own, so once a
 // due date passes it goes stale (e.g. seeded "May 1" still showing in June). Roll
@@ -392,7 +406,8 @@ export const financeRouter = router({
       // are reapplied only after acquiring the invoice lock below.
       calculateInvoiceTotals(input.items, input.tax ?? 0, input.discount ?? 0);
       const orgId = workspaceId(ctx);
-      return ctx.db.$transaction(async (tx) => {
+      let paidEvent: InvoicePaidEvent | null = null;
+      const result = await ctx.db.$transaction(async (tx) => {
         // Serialize edits with payment recording. Re-read only after acquiring the
         // row lock so status, adjustments, and collected funds cannot go stale.
         const locked = await tx.$queryRaw<Array<{ id: string }>>`
@@ -452,6 +467,15 @@ export const financeRouter = router({
           if (input.status === 'SENT') data.sentAt = new Date();
           if (input.status === 'DRAFT') data.sentAt = null;
         }
+        // A discount can reduce a SENT invoice's total to what was already collected
+        // (or to zero). No further payment is possible and PAID can't be set manually,
+        // so settle it now instead of stranding it in SENT with a zero balance.
+        const nextStatus = input.status ?? current.status;
+        const settles = nextStatus === 'SENT' && invoiceBalanceCovered(totals.total, amountPaid);
+        if (settles) {
+          data.status = 'PAID';
+          data.paidAt = new Date();
+        }
 
         const invoice = await tx.invoice.update({
           where: { id: input.id, organizationId: orgId },
@@ -462,8 +486,18 @@ export const financeRouter = router({
             payments: { orderBy: { paidAt: 'desc' } },
           },
         });
+        if (settles) {
+          paidEvent = {
+            invoiceId: invoice.id,
+            total: totals.total,
+            currency: invoice.currency,
+            clientId: invoice.clientId,
+          };
+        }
         return { ...invoice, amountPaid, balance: round2(Number(invoice.total) - amountPaid) };
       });
+      if (paidEvent) emitEvent(ctx.db, ctx.entitlements, 'invoice.paid', paidEvent);
+      return result;
     }),
 
   // IMP-FIN-01: email the invoice to the client's primary contact (falling back to
@@ -520,11 +554,22 @@ export const financeRouter = router({
 
       // Promote DRAFT → SENT only after a successful send.
       const wasDraft = invoice.status === 'DRAFT';
+      let settled = false;
       if (wasDraft) {
         await ctx.db.invoice.update({
           where: { id: invoice.id },
           data: { status: 'SENT', sentAt: new Date() },
         });
+        // A fully discounted or already-covered invoice settles as soon as it is sent.
+        settled = await settleCoveredSentInvoice(ctx.db, invoice);
+        if (settled) {
+          emitEvent(ctx.db, ctx.entitlements, 'invoice.paid', {
+            invoiceId: invoice.id,
+            total: round2(Number(invoice.total)),
+            currency: invoice.currency,
+            clientId: invoice.clientId,
+          });
+        }
       }
 
       logActivity(ctx.db, ctx.session.user.id, {
@@ -536,7 +581,7 @@ export const financeRouter = router({
 
       return {
         sentTo: recipient.email,
-        status: wasDraft ? ('SENT' as const) : invoice.status,
+        status: settled ? ('PAID' as const) : wasDraft ? ('SENT' as const) : invoice.status,
       };
     }),
 
@@ -585,7 +630,7 @@ export const financeRouter = router({
           message: 'Invoice status changed concurrently. Refresh and try again.',
         });
       }
-      const invoice = await ctx.db.invoice.findUniqueOrThrow({
+      let invoice = await ctx.db.invoice.findUniqueOrThrow({
         where: { id: input.id },
         include: { client: { select: { name: true } } },
       });
@@ -597,6 +642,19 @@ export const financeRouter = router({
           entityType: 'Invoice',
           entityId: invoice.id,
         });
+        // A fully discounted or already-covered invoice settles as soon as it is sent.
+        if (await settleCoveredSentInvoice(ctx.db, invoice)) {
+          emitEvent(ctx.db, ctx.entitlements, 'invoice.paid', {
+            invoiceId: invoice.id,
+            total: round2(Number(invoice.total)),
+            currency: invoice.currency,
+            clientId: invoice.clientId,
+          });
+          invoice = await ctx.db.invoice.findUniqueOrThrow({
+            where: { id: input.id },
+            include: { client: { select: { name: true } } },
+          });
+        }
       }
 
       return invoice;
@@ -627,12 +685,7 @@ export const financeRouter = router({
       const orgId = workspaceId(ctx);
       const requestFingerprint = paymentCommandFingerprint(input);
       // IMP-REST-03: captured inside the tx, fired only AFTER it commits.
-      let paidEvent: {
-        invoiceId: string;
-        total: number;
-        currency: string;
-        clientId: string;
-      } | null = null;
+      let paidEvent: InvoicePaidEvent | null = null;
 
       const result = await ctx.db.$transaction(async (tx) => {
         // Serialize the idempotency domain before locking an invoice. This also

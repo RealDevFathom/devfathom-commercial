@@ -5,10 +5,11 @@
 ALTER TABLE "payments" ADD COLUMN "idempotencyKey" TEXT;
 ALTER TABLE "payments" ADD COLUMN "requestFingerprint" TEXT;
 
--- PostgreSQL permits multiple historical NULLs. CONCURRENTLY keeps payment writes
--- available while the unique index scans a non-empty production table. This
+-- Matches `@@unique([organizationId, idempotencyKey])` in schema.prisma exactly so
+-- migrate diff stays clean. A plain unique index already treats NULLs as distinct,
+-- so historical rows with NULL keys never conflict. CONCURRENTLY keeps payment
+-- writes available while the index scans a non-empty production table. This
 -- migration must remain non-transactional (Prisma runs PostgreSQL migration files
 -- without an implicit transaction).
 CREATE UNIQUE INDEX CONCURRENTLY "payments_organizationId_idempotencyKey_key"
-  ON "payments"("organizationId", "idempotencyKey")
-  WHERE "idempotencyKey" IS NOT NULL;
+  ON "payments"("organizationId", "idempotencyKey");
