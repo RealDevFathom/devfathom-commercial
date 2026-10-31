@@ -860,7 +860,7 @@ async function createOrganizationRecord(
 type ClaimedConversionOpportunity = {
   id: string;
   accountId: string;
-  fromStage: 'DISCOVERY' | 'QUALIFIED' | 'PROPOSAL' | 'NEGOTIATION';
+  fromStage: 'DISCOVERY' | 'QUALIFIED' | 'PROPOSAL' | 'NEGOTIATION' | 'WON';
 };
 
 /**
@@ -880,7 +880,8 @@ async function claimOpportunityForConversion(
     where: { id: opportunityId },
     select: { id: true, accountId: true, stage: true, convertedOrganizationId: true },
   });
-  const eligibleStages = ['DISCOVERY', 'QUALIFIED', 'PROPOSAL', 'NEGOTIATION'] as const;
+  // A deal can be marked won before onboarding creates its organization.
+  const eligibleStages = ['DISCOVERY', 'QUALIFIED', 'PROPOSAL', 'NEGOTIATION', 'WON'] as const;
   if (
     !opportunity ||
     opportunity.convertedOrganizationId !== null ||

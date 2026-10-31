@@ -140,7 +140,7 @@ describe('crm.opportunity.convert eligibility', () => {
   });
 
   it.each([
-    ['WON', null],
+    ['WON', 'org_existing'],
     ['LOST', null],
     ['QUALIFIED', 'org_existing'],
   ])(
@@ -190,9 +190,9 @@ describe('crm.opportunity.convert eligibility', () => {
     expect(platformDb.organization.create).not.toHaveBeenCalled();
   });
 
-  it('loses a concurrent conversion claim before provisioning', async () => {
+  it.each(['PROPOSAL', 'WON'])('loses a concurrent %s conversion claim before provisioning', async (stage) => {
     mocks.opportunityFindUnique.mockResolvedValue({
-      id: 'opp_1', accountId: 'account_1', stage: 'PROPOSAL', convertedOrganizationId: null,
+      id: 'opp_1', accountId: 'account_1', stage, convertedOrganizationId: null,
     });
     mocks.opportunityUpdateMany.mockResolvedValue({ count: 0 });
 
@@ -201,12 +201,17 @@ describe('crm.opportunity.convert eligibility', () => {
     ).catch((caught: unknown) => caught);
 
     expect(error).toMatchObject({ status: 409 });
+    expect(mocks.opportunityUpdateMany).toHaveBeenCalledWith({
+      where: { id: 'opp_1', stage, convertedOrganizationId: null },
+      data: { stage: 'WON', wonAt: expect.any(Date) },
+    });
+    expect(mocks.accountForUpdate).not.toHaveBeenCalled();
     expect(platformDb.organization.create).not.toHaveBeenCalled();
   });
 
-  it('rejects a second opportunity when its account is already linked', async () => {
+  it.each(['DISCOVERY', 'WON'])('rejects a %s opportunity when its account is already linked', async (stage) => {
     mocks.opportunityFindUnique.mockResolvedValue({
-      id: 'opp_2', accountId: 'account_1', stage: 'DISCOVERY', convertedOrganizationId: null,
+      id: 'opp_2', accountId: 'account_1', stage, convertedOrganizationId: null,
     });
     mocks.opportunityUpdateMany.mockResolvedValue({ count: 1 });
     mocks.accountForUpdate.mockResolvedValue([{ organizationId: 'org_existing' }]);
@@ -242,21 +247,26 @@ describe('crm.opportunity.convert eligibility', () => {
     expect(platformDb.organization.create).not.toHaveBeenCalled();
   });
 
-  it('claims an eligible opportunity and preserves its original stage in the event', async () => {
+  it.each([
+    ['crm.opportunity.convert', 'NEGOTIATION'],
+    ['crm.opportunity.convert', 'WON'],
+    ['organization.create', 'NEGOTIATION'],
+    ['organization.create', 'WON'],
+  ])('%s claims an unlinked %s opportunity and preserves its original stage in the event', async (command, stage) => {
     mocks.opportunityFindUnique.mockResolvedValue({
-      id: 'opp_1', accountId: 'account_1', stage: 'NEGOTIATION', convertedOrganizationId: null,
+      id: 'opp_1', accountId: 'account_1', stage, convertedOrganizationId: null,
     });
     mocks.opportunityUpdateMany.mockResolvedValue({ count: 1 });
 
     await executePlatformCommand(
       actor,
-      'crm.opportunity.convert',
+      command,
       { ...payload('admin@acme.com'), opportunityId: 'opp_1' },
       request
     );
 
     expect(mocks.opportunityUpdateMany).toHaveBeenCalledWith({
-      where: { id: 'opp_1', stage: 'NEGOTIATION', convertedOrganizationId: null },
+      where: { id: 'opp_1', stage, convertedOrganizationId: null },
       data: { stage: 'WON', wonAt: expect.any(Date) },
     });
     expect(mocks.accountForUpdate).toHaveBeenCalledOnce();
@@ -265,7 +275,7 @@ describe('crm.opportunity.convert eligibility', () => {
     expect(created.opportunityStageEvent).toContainEqual(
       expect.objectContaining({
         opportunityId: 'opp_1',
-        fromStage: 'NEGOTIATION',
+        fromStage: stage,
         toStage: 'WON',
       })
     );
