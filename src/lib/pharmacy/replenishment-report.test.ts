@@ -26,6 +26,8 @@ const manualScenario = {
   currentQuantityUnits: 0,
   proposedQuantityUnits: 12,
   currency: 'PKR',
+  goals: { salesMinor: 18000, marginMinor: 6000 },
+  pricing: { currentUnitPriceMinor: 1200, proposedUnitPriceMinor: 1500 },
   orderTerms: {
     packSize: 6,
     minimumOrderUnits: 0,
@@ -234,6 +236,33 @@ describe('live replenishment report composition', () => {
     });
     expect(decision.scenarios[2].order.committedCashMinor).toBe(6000);
     expect(decision.scenarios[2].outcome).toMatchObject({ shortageUnits: 0, endingStockUnits: 6 });
+    expect(result.planning.goalComparison).toEqual({
+      label: 'ILLUSTRATIVE_ESTIMATE',
+      definition:
+        'Sales and margin estimates use fulfilled units and user-supplied unit prices and unit cost; they are not recorded or forecast results.',
+      scenarios: [
+        expect.objectContaining({
+          policy: 'NO_ORDER',
+          label: 'ESTIMATE',
+          fulfilledUnits: 6,
+          salesMinor: 7200,
+          marginMinor: 4200,
+          goals: expect.objectContaining({ salesMet: false, marginMet: false }),
+        }),
+        expect.objectContaining({
+          policy: 'CURRENT',
+          salesMinor: 7200,
+          marginMinor: 4200,
+        }),
+        expect.objectContaining({
+          policy: 'PROPOSED',
+          fulfilledUnits: 12,
+          salesMinor: 18000,
+          marginMinor: 12000,
+          goals: expect.objectContaining({ salesMet: true, marginMet: true }),
+        }),
+      ],
+    });
     expect(result.observations.demand.coverage.observedDemandDays).toBe(0);
     expect(result.limitations.join(' ')).toContain('not empirical performance');
     expect(manualScenario).toEqual(before);
@@ -254,6 +283,7 @@ describe('live replenishment report composition', () => {
       basis: 'USER_SUPPLIED_ASSUMPTIONS',
       dailyDemandUnits: null,
       decision: null,
+      goalComparison: null,
     });
     expect(JSON.stringify(result)).not.toMatch(
       /6000|500|PKR|committedCashMinor|unitCostMinor|orderTerms/
