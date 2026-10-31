@@ -119,7 +119,14 @@ beforeEach(() => {
   mocks.can.mockResolvedValue(true);
   mocks.orderFindMany.mockResolvedValue([]);
   mocks.orderFindUnique.mockResolvedValue({ branchId: 'b1' });
-  mocks.staffFindMany.mockResolvedValue([{ id: 'staff_1', primaryBranchId: 'b1' }]);
+  mocks.staffFindMany.mockResolvedValue([
+    {
+      id: 'staff_1',
+      primaryBranchId: 'b1',
+      jobRoles: [],
+      directCapabilityGrants: [],
+    },
+  ]);
   mocks.assignmentsFindMany.mockResolvedValue([]);
   mocks.deviceFindFirst.mockResolvedValue({ id: 'dev_1' });
   mocks.deviceFindMany.mockResolvedValue([]);
@@ -319,6 +326,107 @@ describe('cancellation authorization and device directory', () => {
     await expect(caller().cancel(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(mocks.cancelOrder).not.toHaveBeenCalled();
   });
+
+  it.each(['jobRoles', 'directCapabilityGrants'] as const)(
+    'allows cancellation and device lookup at a secondary branch bound through %s',
+    async (binding) => {
+      mocks.can.mockImplementation(async (_subject, action) => action === 'orders:void');
+      mocks.staffFindMany.mockResolvedValue([
+        {
+          id: 'staff_1',
+          primaryBranchId: 'b1',
+          jobRoles: binding === 'jobRoles' ? [{ branchId: 'b2' }] : [],
+          directCapabilityGrants: binding === 'directCapabilityGrants' ? [{ branchId: 'b2' }] : [],
+        },
+      ]);
+      mocks.orderFindUnique.mockResolvedValue({ branchId: 'b2' });
+
+      await caller().listCancellationDevices({ branchId: 'b2' });
+      await caller().cancel({
+        ...input,
+        actor: { ...ACTOR, staffProfileId: 'spoofed_actor' },
+      });
+
+      expect(mocks.staffFindMany).toHaveBeenCalledWith({
+        where: { userId: 'user_gm', status: 'ACTIVE' },
+        select: {
+          id: true,
+          primaryBranchId: true,
+          jobRoles: { select: { branchId: true } },
+          directCapabilityGrants: { select: { branchId: true } },
+        },
+        orderBy: { id: 'asc' },
+        take: 2,
+      });
+      expect(mocks.deviceFindMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { branchId: 'b2', status: 'ACTIVE' } })
+      );
+      expect(mocks.deviceFindFirst).toHaveBeenCalledWith({
+        where: { id: 'dev_1', branchId: 'b2', status: 'ACTIVE' },
+        select: { id: true },
+      });
+      expect(mocks.cancelOrder).toHaveBeenCalledWith(db, expect.objectContaining({ actor: ACTOR }));
+
+      mocks.orderFindUnique.mockResolvedValue({ branchId: 'b3' });
+      await expect(caller().cancel(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await expect(caller().listCancellationDevices({ branchId: 'b3' })).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+      });
+      expect(mocks.cancelOrder).toHaveBeenCalledOnce();
+      expect(mocks.deviceFindMany).toHaveBeenCalledOnce();
+    }
+  );
+
+  it('rejects a bound branch that is inactive or outside the session organization', async () => {
+    mocks.can.mockImplementation(async (_subject, action) => action === 'orders:void');
+    mocks.staffFindMany.mockResolvedValue([
+      {
+        id: 'staff_1',
+        primaryBranchId: 'b1',
+        jobRoles: [{ branchId: 'b2' }],
+        directCapabilityGrants: [],
+      },
+    ]);
+    mocks.orderFindUnique.mockResolvedValue({ branchId: 'b2' });
+    const branchFindMany = vi.fn(async () => []);
+    const scopedDb = {
+      ...db,
+      restaurantBranch: { findMany: branchFindMany },
+    } as unknown as ScopedDb;
+
+    await expect(caller(scopedDb).cancel(input)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(
+      caller(scopedDb).listCancellationDevices({ branchId: 'b2' })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(branchFindMany).toHaveBeenCalledWith({
+      where: { id: { in: ['b2'] }, organizationId: 'org_1', active: true },
+      select: { id: true },
+    });
+    expect(mocks.cancelOrder).not.toHaveBeenCalled();
+    expect(mocks.deviceFindMany).not.toHaveBeenCalled();
+  });
+
+  it.each([0, 2])(
+    'rejects cancellation and device lookup with %i active session actors',
+    async (count) => {
+      mocks.staffFindMany.mockResolvedValue(
+        Array.from({ length: count }, (_, index) => ({
+          id: `staff_${index}`,
+          primaryBranchId: 'b1',
+          jobRoles: [{ branchId: 'b2' }],
+          directCapabilityGrants: [],
+        }))
+      );
+      mocks.orderFindUnique.mockResolvedValue({ branchId: 'b2' });
+
+      await expect(caller().cancel(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await expect(caller().listCancellationDevices({ branchId: 'b2' })).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+      });
+      expect(mocks.cancelOrder).not.toHaveBeenCalled();
+      expect(mocks.deviceFindMany).not.toHaveBeenCalled();
+    }
+  );
 
   it('rejects a revoked or out-of-branch device', async () => {
     mocks.deviceFindFirst.mockResolvedValue(null);

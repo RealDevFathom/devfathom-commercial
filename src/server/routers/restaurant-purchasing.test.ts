@@ -139,7 +139,14 @@ const usedActions = () => mocks.can.mock.calls.map((c) => c[1]);
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.can.mockResolvedValue(true);
-  mocks.findStaffProfiles.mockResolvedValue([{ id: 'staff_server', primaryBranchId: 'b1' }]);
+  mocks.findStaffProfiles.mockResolvedValue([
+    {
+      id: 'staff_server',
+      primaryBranchId: 'b1',
+      jobRoles: [],
+      directCapabilityGrants: [],
+    },
+  ]);
   mocks.findBranchAssignments.mockResolvedValue([]);
   mocks.findPurchaseOrder.mockResolvedValue({ branchId: 'b1', locationId: 'loc1' });
   mocks.findStockLocation.mockResolvedValue({ branchId: 'b1' });
@@ -360,8 +367,8 @@ describe('actor + idempotency plumbing', () => {
 
   it('fails before purchasing mutation when the active staff mapping is ambiguous', async () => {
     mocks.findStaffProfiles.mockResolvedValue([
-      { id: 'staff_one', primaryBranchId: 'b1' },
-      { id: 'staff_two', primaryBranchId: 'b1' },
+      { id: 'staff_one', primaryBranchId: 'b1', jobRoles: [], directCapabilityGrants: [] },
+      { id: 'staff_two', primaryBranchId: 'b1', jobRoles: [], directCapabilityGrants: [] },
     ]);
     await expect(
       caller().createPurchaseOrder({ supplierId: 's1', branchId: 'b1' })

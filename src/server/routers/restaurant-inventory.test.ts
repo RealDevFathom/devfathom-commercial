@@ -154,7 +154,14 @@ function caller(
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.can.mockResolvedValue(true);
-  mocks.findStaffProfiles.mockResolvedValue([{ id: 'staff_test', primaryBranchId: 'branch_1' }]);
+  mocks.findStaffProfiles.mockResolvedValue([
+    {
+      id: 'staff_test',
+      primaryBranchId: 'branch_1',
+      jobRoles: [],
+      directCapabilityGrants: [],
+    },
+  ]);
   mocks.findBranchAssignments.mockResolvedValue([]);
   mocks.findStockLocation.mockImplementation(async ({ where }) => ({
     branchId: where.id === 'loc_2' ? 'branch_2' : 'branch_1',
