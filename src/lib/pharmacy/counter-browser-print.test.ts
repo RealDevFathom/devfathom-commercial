@@ -171,6 +171,42 @@ describe('isolated Pharmacy browser receipt', () => {
     expect(html).toContain('قابلِ ادائیگی');
   });
 
+  it.each([
+    ['en', 'THERMAL_58'],
+    ['en', 'THERMAL'],
+    ['en', 'A4'],
+    ['ur', 'THERMAL_58'],
+    ['ur', 'THERMAL'],
+    ['ur', 'A4'],
+  ] as const)('prints completion-time NTN/STRN in %s %s browser output', (locale, format) => {
+    const settled = {
+      ...receipt,
+      taxIdentity: { ntn: 'HISTORICAL-NTN', strn: 'HISTORICAL-STRN' },
+    };
+    const html = buildCounterBrowserReceipt(settled, locale, format);
+    expect(html).toContain('NTN: HISTORICAL-NTN');
+    expect(html).toContain('STRN: HISTORICAL-STRN');
+  });
+
+  it('keeps browser and English ESC/POS regulatory identity in parity for one settled sale', () => {
+    const taxIdentity = { ntn: 'HISTORICAL-NTN', strn: 'HISTORICAL-STRN' };
+    const settled: CounterReceipt = { ...receipt, taxIdentity };
+    const browser = buildCounterBrowserReceipt(settled, 'en', 'A4');
+    const thermal = buildPharmacyReceiptPrintDocument(settled, 'en', {
+      layout: DEFAULT_RECEIPT_LAYOUT,
+      taxIdentity,
+      reprint: false,
+    });
+    expect(thermal.receiptSnapshot?.facts.taxLines).toEqual([
+      'NTN: HISTORICAL-NTN',
+      'STRN: HISTORICAL-STRN',
+      'Tax breakdown unavailable in receipt source',
+    ]);
+    for (const identity of thermal.receiptSnapshot!.facts.taxLines.slice(0, 2)) {
+      expect(browser).toContain(identity);
+    }
+  });
+
   it.each(['THERMAL_58', 'THERMAL', 'A4'] as const)(
     'renders every issued allocation with one amount in %s',
     (format) => {

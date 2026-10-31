@@ -756,12 +756,40 @@ describeIfDatabase('orders command layer (real DB)', () => {
     expect(events.length).toBeGreaterThanOrEqual(5);
   });
 
-  it('blocks an item void after bill cut so the payable snapshot cannot retain a voided line', async () => {
+  it('blocks an item void after bill cut so its line and service stay consistent', async () => {
     const { orderId, itemId, db } = await openWithItem();
-    await deps.orders.addItem(db, {
+    const second = await deps.orders.addItem(db, {
       orderId,
       menuItemId: ids.menuItem,
       actor: actor(),
+    });
+    const policy = await read((tx) =>
+      tx.restaurantServiceChargePolicyVersion.create({
+        data: {
+          branchId: ids.branch,
+          rate: '0.100000',
+          effectiveFrom: new Date('2026-08-18T00:00:00.000Z'),
+          effectiveTo: AT,
+          acknowledgedAt: AT,
+          acknowledgementRef: 'issue-366',
+          idempotencyKey: `bill_void_service_${suffix}`,
+          payloadHash: `bill-void-service-${suffix}`,
+        },
+      })
+    );
+    await read(async (tx) => {
+      await tx.restaurantOrderItem.update({
+        where: { id: itemId },
+        data: { unitPrice: '40.00' },
+      });
+      await tx.restaurantOrderItem.update({
+        where: { id: second.itemId },
+        data: { unitPrice: '60.00' },
+      });
+      await tx.restaurantOrder.update({
+        where: { id: orderId },
+        data: { serviceChargePolicyVersionId: policy.id },
+      });
     });
     const cut = await deps.bills.cutBills(db, {
       orderId,
@@ -786,14 +814,25 @@ describeIfDatabase('orders command layer (real DB)', () => {
       }),
       bill: await tx.restaurantBill.findUniqueOrThrow({
         where: { id: cut.billIds[0]! },
-        select: { status: true, subtotal: true, grandTotal: true, lines: true },
+        select: {
+          status: true,
+          subtotal: true,
+          serviceChargeTotal: true,
+          grandTotal: true,
+          lines: { orderBy: { lineSubtotal: 'asc' } },
+        },
       }),
     }));
     expect(snapshot.item.status).not.toBe('VOIDED');
     expect(snapshot.bill).toMatchObject({ status: 'OPEN' });
     expect(snapshot.bill.lines).toHaveLength(2);
-    expect(snapshot.bill.subtotal.toString()).toBe('25');
-    expect(snapshot.bill.grandTotal.toString()).toBe('25');
+    expect(snapshot.bill.lines.map((line) => line.lineSubtotal.toFixed(2))).toEqual([
+      '40.00',
+      '60.00',
+    ]);
+    expect(snapshot.bill.subtotal.toFixed(2)).toBe('100.00');
+    expect(snapshot.bill.serviceChargeTotal.toFixed(2)).toBe('10.00');
+    expect(snapshot.bill.grandTotal.toFixed(2)).toBe('110.00');
   });
 
   it('cancels an order with a compensating void of every in-flight item (cancel-compensation)', async () => {
