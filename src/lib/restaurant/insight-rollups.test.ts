@@ -142,7 +142,12 @@ describe('pure rollup calculations', () => {
   });
 });
 
-function rollupDb(input?: { correction?: boolean; mismatch?: boolean; legacyNet?: boolean }) {
+function rollupDb(input?: {
+  correction?: boolean;
+  mismatch?: boolean;
+  legacyNet?: boolean;
+  historicalRefunds?: boolean;
+}) {
   const close = {
     id: 'close_1',
     createdAt: new Date('2026-08-21T02:00:00.000Z'),
@@ -150,13 +155,13 @@ function rollupDb(input?: { correction?: boolean; mismatch?: boolean; legacyNet?
     grossSales: D(input?.mismatch ? '11' : '10'),
     deliveryFeeSales: D('2'),
     deliveryFeeRefunds: D('1'),
-    netSales: D(input?.legacyNet ? '7' : '5.75'),
-    taxTotal: D('0'),
-    serviceChargeTotal: D('0'),
+    netSales: D(input?.legacyNet ? '7' : input?.historicalRefunds ? '4' : '5.75'),
+    taxTotal: D(input?.historicalRefunds ? '0.5' : '0'),
+    serviceChargeTotal: D(input?.historicalRefunds ? '0.25' : '0'),
     tipTotal: D('0'),
     compTotal: D('2'),
     discountTotal: D('1'),
-    refundTotal: D('2'),
+    refundTotal: D(input?.historicalRefunds ? '3' : '2'),
     voidTotal: D('4'),
     cashExpected: D('0'),
     cashCounted: D('0'),
@@ -310,7 +315,7 @@ describe('rollupDay handler idempotency and correction', () => {
   });
 
   it.each([1, 2])(
-    'excludes an original item\'s %i non-voided remake(s) from item-mix sales',
+    "excludes an original item's %i non-voided remake(s) from item-mix sales",
     async (remakeCount) => {
       const db = rollupDb();
       const purchasedItem = {
@@ -536,6 +541,55 @@ describe('rollupDay handler idempotency and correction', () => {
       expect((await db.restaurantDailyClose.findMany())[0].netSales.toString()).toBe(
         legacyNet ? '7' : '5.75'
       );
+    }
+  );
+
+  it.each([
+    { force: false, legacyNet: false },
+    { force: true, legacyNet: false },
+    { force: false, legacyNet: true },
+    { force: true, legacyNet: true },
+  ])('normalizes historical refund closes with %j', async ({ force, legacyNet }) => {
+    const db = rollupDb({ historicalRefunds: true, legacyNet });
+    const closeBefore = { ...(await db.restaurantDailyClose.findMany())[0] };
+    db.insightDailyRollup.findFirst.mockResolvedValue({
+      id: 'rollup_1',
+      sourceDailyCloseId: 'close_1',
+      projectionVersion: 3,
+    });
+
+    const result = await rollupDay(db as unknown as ScopedDb, {
+      branchId: 'branch_1',
+      businessDate: '2026-08-20',
+      force,
+    });
+
+    expect(result.replayed).toBe(false);
+    expect(db.insightDailyRollup.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({ netSales: D('5.75'), refundTotal: D('2') }),
+        update: expect.objectContaining({ netSales: D('5.75'), refundTotal: D('2') }),
+      })
+    );
+    expect((await db.restaurantDailyClose.findMany())[0]).toEqual(closeBefore);
+  });
+
+  it.each(['netSales', 'taxTotal', 'serviceChargeTotal', 'refundTotal'] as const)(
+    'rejects a historical refund close with only %s using the current formula',
+    async (field) => {
+      const db = rollupDb({ historicalRefunds: true });
+      const current = rollupDb();
+      const historicalClose = (await db.restaurantDailyClose.findMany())[0];
+      historicalClose[field] = (await current.restaurantDailyClose.findMany())[0][field];
+
+      await expect(
+        rollupDay(db as unknown as ScopedDb, {
+          branchId: 'branch_1',
+          businessDate: '2026-08-20',
+          force: true,
+        })
+      ).rejects.toMatchObject({ reason: 'RECONCILIATION_FAILED' });
+      expect(db.insightDailyRollup.upsert).not.toHaveBeenCalled();
     }
   );
 
