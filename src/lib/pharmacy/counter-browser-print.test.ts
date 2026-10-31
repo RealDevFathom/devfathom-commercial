@@ -1,11 +1,17 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { DEFAULT_RECEIPT_LAYOUT } from '@/lib/receipts/configuration';
+
 import {
   buildCounterBrowserReceipt,
   buildCounterBrowserZReport,
   printCounterBrowserReceipt,
 } from './counter-browser-print';
 import type { CounterReceipt, CounterReceiptLocale } from './counter-receipt';
+import {
+  buildPharmacyReceiptPrintDocument,
+  readPharmacyReceiptTaxIdentity,
+} from './receipt-print';
 
 const receipt: CounterReceipt = {
   saleId: 'sale-1',
@@ -43,6 +49,91 @@ const receipt: CounterReceipt = {
 afterEach(() => vi.restoreAllMocks());
 
 describe('isolated Pharmacy browser receipt', () => {
+  it('reads and normalizes the profile in force at completion', async () => {
+    const at = new Date('2026-09-05T10:00:00Z');
+    const findFirst = vi.fn(async () => ({ ntn: ' NTN-HISTORICAL ', strn: '   ' }));
+
+    await expect(
+      readPharmacyReceiptTaxIdentity(
+        { branchRegulatoryProfile: { findFirst } } as never,
+        { organizationId: 'org-1', branchId: 'branch-1' },
+        at
+      )
+    ).resolves.toEqual({ ntn: 'NTN-HISTORICAL', strn: null });
+    expect(findFirst).toHaveBeenCalledWith({
+      where: {
+        organizationId: 'org-1',
+        branchId: 'branch-1',
+        effectiveFrom: { lte: at },
+        OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
+      },
+      orderBy: [{ effectiveFrom: 'desc' }, { version: 'desc' }],
+      select: { ntn: true, strn: true },
+    });
+  });
+
+  it('returns null identifiers when no profile was in force at completion', async () => {
+    const findFirst = vi.fn(async () => null);
+
+    await expect(
+      readPharmacyReceiptTaxIdentity(
+        { branchRegulatoryProfile: { findFirst } } as never,
+        { organizationId: 'org-1', branchId: 'branch-1' },
+        new Date('2026-09-05T10:00:00Z')
+      )
+    ).resolves.toEqual({ ntn: null, strn: null });
+  });
+
+  it.each([
+    ['en', 'THERMAL_58'],
+    ['en', 'THERMAL'],
+    ['en', 'A4'],
+    ['ur', 'THERMAL_58'],
+    ['ur', 'THERMAL'],
+    ['ur', 'A4'],
+  ] as const)('matches the settled-sale tax identity in %s %s output', (locale, format) => {
+    const settled = {
+      ...receipt,
+      taxIdentity: { ntn: 'NTN-HISTORICAL', strn: 'STRN-HISTORICAL' },
+    };
+    const html = buildCounterBrowserReceipt(settled, locale, format);
+    expect(html).toContain('NTN: NTN-HISTORICAL');
+    expect(html).toContain('STRN: STRN-HISTORICAL');
+    expect(html.replace(/\s+/g, ' ')).toContain(
+      locale === 'ur'
+        ? 'رسید کے ماخذ میں ٹیکس کی تفصیل دستیاب نہیں'
+        : 'Tax breakdown unavailable in receipt source'
+    );
+  });
+
+  it('matches the settled-sale tax identity in raw thermal output', () => {
+    const taxIdentity = { ntn: 'NTN-HISTORICAL', strn: 'STRN-HISTORICAL' };
+    const thermal = buildPharmacyReceiptPrintDocument(
+      { ...receipt, taxIdentity },
+      'en',
+      { layout: DEFAULT_RECEIPT_LAYOUT, taxIdentity, reprint: false }
+    );
+    expect(thermal.receiptSnapshot?.facts.taxLines).toEqual(
+      expect.arrayContaining([
+        'NTN: NTN-HISTORICAL',
+        'STRN: STRN-HISTORICAL',
+        'Tax breakdown unavailable in receipt source',
+      ])
+    );
+  });
+
+  it('omits blank identifiers and escapes regulatory identity in browser output', () => {
+    const html = buildCounterBrowserReceipt(
+      { ...receipt, taxIdentity: { ntn: '   ', strn: '<STRN & historical>' } },
+      'en',
+      'A4'
+    );
+    const parsed = new DOMParser().parseFromString(html, 'text/html');
+    expect(parsed.body.textContent).not.toContain('NTN:');
+    expect(parsed.body.textContent).toContain('STRN: <STRN & historical>');
+    expect(parsed.querySelector('strn')).toBeNull();
+  });
+
   it.each([
     ['en', 'Expected cash: 100.00'],
     ['ur', 'متوقع نقد: 100.00'],

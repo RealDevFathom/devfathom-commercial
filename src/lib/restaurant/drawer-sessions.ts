@@ -9,6 +9,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { businessDateToUtcDate, resolveBusinessDate } from './business-date';
 import { buildCoAuthorizationRecord } from './co-authorization';
 import { add, isNegative, money, sub, ZERO } from './money';
+import { assertMoneyDayOpen } from './money-day';
 
 /**
  * M5-L3 / C8 — the drawer-session command layer + the append-only drawer ledger.
@@ -65,7 +66,13 @@ export class DrawerSessionError extends Error {
 }
 
 export type DrawerMovementKind =
-  'OPENING_FLOAT' | 'CASH_SALE' | 'CASH_REFUND' | 'PAID_IN' | 'PAID_OUT' | 'DROP' | 'CLOSING_COUNT';
+  | 'OPENING_FLOAT'
+  | 'CASH_SALE'
+  | 'CASH_REFUND'
+  | 'PAID_IN'
+  | 'PAID_OUT'
+  | 'DROP'
+  | 'CLOSING_COUNT';
 
 /** The manual adjustment kinds a `cash:adjust` command may post (C8). Opening
  * float, sales, refunds and the closing count are written by their own commands /
@@ -443,6 +450,12 @@ export async function openDrawerSession(
       );
     }
 
+    const openingFloat = requireNonNegative(money(input.openingFloat), 'The opening float');
+    const businessDate = businessDateToUtcDate(
+      resolveBusinessDate(at, branch.timezone, branch.businessDayCutoff)
+    );
+    await assertMoneyDayOpen(tx, branch.id, businessDate);
+
     await enforceConcurrentRegisterLimit(tx, input);
 
     const existingOpen = await tx.restaurantDrawerSession.findFirst({
@@ -455,11 +468,6 @@ export async function openDrawerSession(
         'DRAWER_ALREADY_OPEN'
       );
     }
-
-    const openingFloat = requireNonNegative(money(input.openingFloat), 'The opening float');
-    const businessDate = businessDateToUtcDate(
-      resolveBusinessDate(at, branch.timezone, branch.businessDayCutoff)
-    );
 
     let sessionId: string;
     try {
