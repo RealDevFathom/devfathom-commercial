@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  ACCOUNT_PROCEDURES,
   alternativeModulesForProcedure,
   MODULE_CATALOG,
   PROCEDURE_MODULES,
@@ -35,6 +36,9 @@ describe('module catalog routing', () => {
     ['projects.list', 'projects'],
     ['trelloImport.preview', 'projects'],
     ['team.updateRole', 'hr'],
+    ['team.getNotifications', null],
+    ['team.markNotificationRead', null],
+    ['team.markAllNotificationsRead', null],
     ['finance.summary', 'finance'],
     ['apiTokens.create', 'api'],
     ['restaurantStaff.issueCredential', 'restaurant-core'],
@@ -83,6 +87,15 @@ describe('module catalog routing', () => {
     expect(alternativeModulesForProcedure('unknown.list')).toEqual([]);
     expect(alternativeModulesForProcedure('toString')).toEqual([]);
     expect(moduleForProcedure('toString')).toBeNull();
+  });
+
+  it('keeps the notification exception exact while the rest of team remains HR-gated', () => {
+    expect(moduleForProcedure('team.getNotifications')).toBeNull();
+    expect(moduleForProcedure('team.markNotificationRead')).toBeNull();
+    expect(moduleForProcedure('team.markAllNotificationsRead')).toBeNull();
+    expect(ACCOUNT_PROCEDURES.has('team.getNotifications')).toBe(false);
+    expect(moduleForProcedure('team.getNotifications.future')).toBe('hr');
+    expect(moduleForProcedure('team.deleteNotification')).toBe('hr');
   });
 
   it('pins every restaurant procedure namespace to its licensed module', () => {

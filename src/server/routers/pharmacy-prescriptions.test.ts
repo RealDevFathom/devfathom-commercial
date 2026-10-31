@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   actor: vi.fn(),
   context: vi.fn(),
   medicines: vi.fn(),
+  prescriptionLine: vi.fn(),
   objects: new Map<string, Buffer>(),
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
@@ -60,6 +61,7 @@ function context(
       pharmacyPatient: { findFirst: mocks.patient, findMany: mocks.patients },
       pharmacyPrescriber: { findFirst: mocks.prescriber },
       prescription: { findFirst: mocks.find, create: mocks.create },
+      prescriptionLine: { findFirst: mocks.prescriptionLine },
       medicine: { findMany: mocks.medicines },
     },
     entitlements: { organizationId, modules: [], enabledModules },
@@ -113,6 +115,7 @@ describe('prescription capture and private delivery', () => {
     mocks.patient.mockResolvedValue({ id: 'patient-a' });
     mocks.prescriber.mockResolvedValue({ id: 'prescriber-a' });
     mocks.find.mockResolvedValue(null);
+    mocks.prescriptionLine.mockResolvedValue({ medicine: { controlled: false } });
     mocks.create.mockImplementation(async ({ data }) => ({
       ...data,
       lines: undefined,
@@ -353,6 +356,79 @@ describe('prescription capture and private delivery', () => {
             'pharmacy:dispense',
           ]
     );
+  });
+
+  it('refuses controlled fills so they cannot bypass witnessed counter dispensing', async () => {
+    const ctx = context();
+    const create = vi.fn();
+    (ctx.db as unknown as Record<string, unknown>).prescriptionFill = { create };
+    mocks.prescriptionLine.mockResolvedValue({ medicine: { controlled: true } });
+
+    await expect(
+      caller(ctx).fill({
+        id: 'fill-controlled',
+        prescriptionLineId: 'line-controlled',
+        fillSequence: 1,
+        quantityCanonicalUnits: 1,
+        idempotencyKey: 'fill-key-controlled',
+      })
+    ).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'Controlled medicines must be dispensed through the witnessed counter flow.',
+    });
+    expect(mocks.prescriptionLine).toHaveBeenCalledWith({
+      where: { id: 'line-controlled', organizationId: 'org-a' },
+      select: { medicine: { select: { controlled: true } } },
+    });
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('does not disclose or fill a missing or cross-tenant prescription line', async () => {
+    const ctx = context();
+    const create = vi.fn();
+    (ctx.db as unknown as Record<string, unknown>).prescriptionFill = { create };
+    mocks.prescriptionLine.mockResolvedValue(null);
+
+    await expect(
+      caller(ctx).fill({
+        id: 'fill-foreign',
+        prescriptionLineId: 'line-foreign',
+        fillSequence: 1,
+        quantityCanonicalUnits: 1,
+        idempotencyKey: 'fill-key-foreign',
+      })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND', message: 'Prescription line not found.' });
+    expect(mocks.prescriptionLine).toHaveBeenCalledWith({
+      where: { id: 'line-foreign', organizationId: 'org-a' },
+      select: { medicine: { select: { controlled: true } } },
+    });
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('continues to record non-controlled prescription fills', async () => {
+    const ctx = context();
+    const create = vi.fn(async ({ data }) => data);
+    (ctx.db as unknown as Record<string, unknown>).prescriptionFill = { create };
+
+    await expect(
+      caller(ctx).fill({
+        id: 'fill-ordinary',
+        prescriptionLineId: 'line-ordinary',
+        fillSequence: 1,
+        quantityCanonicalUnits: 2,
+        idempotencyKey: 'fill-key-ordinary',
+      })
+    ).resolves.toMatchObject({ id: 'fill-ordinary', dispensedByUserId: 'user-a' });
+    expect(create).toHaveBeenCalledWith({
+      data: {
+        id: 'fill-ordinary',
+        prescriptionLineId: 'line-ordinary',
+        fillSequence: 1,
+        quantityCanonicalUnits: 2,
+        idempotencyKey: 'fill-key-ordinary',
+        dispensedByUserId: 'user-a',
+      },
+    });
   });
 
   it('denies the cashier orders capability before showing the capture workspace or uploading', async () => {
