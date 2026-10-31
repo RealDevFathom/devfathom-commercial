@@ -136,6 +136,28 @@ describe.skipIf(!url)('allocation money migration on populated, append-only evid
     }
   });
 
+  it.each([
+    ['pharmacy_sale_line_allocations', 'pharmacy_sale_alloc_money_check'],
+    ['pharmacy_sale_return_lines', 'pharmacy_sale_return_money_check'],
+  ])('rejects invalid persisted money on %s', async (table, constraint) => {
+    await client.query(grossMigration);
+    await client.query(allocationMigration);
+    for (const [gross, discount] of [
+      [-1, 0],
+      [100, -1],
+      [100, 101],
+    ]) {
+      await expect(
+        client.query(
+          `INSERT INTO pg_temp.${table} (id, "grossMinor", "discountMinor") VALUES ($1, $2, $3)`,
+          ['invalid', gross, discount]
+        )
+      ).rejects.toThrow(constraint);
+    }
+    await client.query(`INSERT INTO pg_temp.${table} (id, "grossMinor", "discountMinor")
+      VALUES ('zero', 0, 0), ('complimentary', 100, 100)`);
+  });
+
   it('rolls back schema changes and trigger suspension if a backfill fails', async () => {
     await client.query(grossMigration);
     await client.query(

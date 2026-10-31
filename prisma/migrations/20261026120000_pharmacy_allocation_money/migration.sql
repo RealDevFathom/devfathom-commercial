@@ -93,6 +93,15 @@ FROM return_money
 WHERE return_money.id = r.id;
 -- END historical return money backfill
 
+-- Refund authorization and journal reversals trust these persisted amounts.
+-- Keep each allocation and return nonnegative, including its net value.
+ALTER TABLE "pharmacy_sale_line_allocations"
+ADD CONSTRAINT "pharmacy_sale_alloc_money_check"
+  CHECK ("grossMinor" >= 0 AND "discountMinor" >= 0 AND "discountMinor" <= "grossMinor");
+ALTER TABLE "pharmacy_sale_return_lines"
+ADD CONSTRAINT "pharmacy_sale_return_money_check"
+  CHECK ("grossMinor" >= 0 AND "discountMinor" >= 0 AND "discountMinor" <= "grossMinor");
+
 ALTER TABLE "pharmacy_sale_line_allocations"
 ENABLE TRIGGER pharmacy_sale_allocations_append_only;
 ALTER TABLE "pharmacy_sale_return_lines"
