@@ -12,7 +12,9 @@ describe('pg_trgm migration grant', () => {
 
     expect(runner).toContain("set_config('devfathom.migration_role', $1, true)");
     expect(preparation).toContain("target_extension = 'pg_trgm'");
-    expect(preparation).toContain("member.identity = 'similarity_op(text,text)'::regprocedure");
+    expect(preparation).toContain(
+      "member.identity = pg_catalog.to_regprocedure('public.similarity_op(text,text)')"
+    );
     expect(preparation).toContain('TO %I WITH GRANT OPTION');
     expect(preparation).not.toContain('TO devfathom_app');
   });

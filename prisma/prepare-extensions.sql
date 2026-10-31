@@ -167,7 +167,8 @@ BEGIN
       LOOP
         EXECUTE format('REVOKE EXECUTE ON FUNCTION %s FROM PUBLIC', member.identity);
         IF target_extension = 'pg_trgm'
-           AND member.identity = 'similarity_op(text,text)'::regprocedure
+           -- btree_gist is prepared before pg_trgm exists on a fresh database.
+           AND member.identity = pg_catalog.to_regprocedure('public.similarity_op(text,text)')
            AND migration_role IS NOT NULL THEN
           -- The migration connection provisions the restricted runtime role after
           -- deploy. Delegate only this application dependency, with grant option,

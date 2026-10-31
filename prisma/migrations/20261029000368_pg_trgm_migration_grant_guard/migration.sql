@@ -22,6 +22,22 @@ BEGIN
               AND acl.privilege_type = 'EXECUTE'
               AND acl.is_grantable
          )
+         -- Managed services may own extension functions under a role the
+         -- customer cannot assume. Preparation records that skip instead of
+         -- revoking PUBLIC EXECUTE. Accept it only while PUBLIC still provides
+         -- execution to the runtime role, including one created after deploy.
+         OR EXISTS (
+           SELECT 1
+             FROM pg_catalog.pg_proc AS procedure
+             CROSS JOIN LATERAL pg_catalog.aclexplode(
+               coalesce(procedure.proacl, pg_catalog.acldefault('f', procedure.proowner))
+             ) AS acl
+            WHERE procedure.oid = 'public.similarity_op(text,text)'::regprocedure
+              AND procedure.proowner <> role.oid
+              AND NOT pg_catalog.pg_has_role(role.oid, procedure.proowner, 'SET')
+              AND acl.grantee = 0
+              AND acl.privilege_type = 'EXECUTE'
+         )
        )
   ) THEN
     RAISE EXCEPTION USING
