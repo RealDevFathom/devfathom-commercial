@@ -55,6 +55,11 @@ describe.each([
     vi.mocked(beginMoneyIdempotent).mockResolvedValue({ replay: false });
 
     await expect(command(db, input)).rejects.toMatchObject({ reason: 'FUTURE_BUSINESS_DATE' });
+    expect(tx.restaurantBranch.findUnique).toHaveBeenCalledWith({
+      where: { id: input.branchId },
+      select: { organizationId: true, timezone: true, businessDayCutoff: true },
+    });
+    expect(tx.$executeRaw).toHaveBeenCalledTimes(1);
     expect(tx.restaurantDailyClose.create).not.toHaveBeenCalled();
     expect(tx.restaurantDailyClose.count).not.toHaveBeenCalled();
     expect(tx.restaurantDailyClose.findMany).not.toHaveBeenCalled();
