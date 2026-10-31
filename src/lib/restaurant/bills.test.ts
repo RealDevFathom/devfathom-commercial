@@ -1594,6 +1594,129 @@ describeIfDatabase('bills command layer (real DB)', () => {
     }
   );
 
+  it.each(['BY_ITEM', 'BY_SEAT'] as const)(
+    'restores the original %s service allocation after a sibling settles with inclusive tax',
+    async (kind) => {
+      const tenders = await import('./tenders');
+      const at = new Date(AT.getTime() + (kind === 'BY_ITEM' ? 40 : 42));
+      const effectiveTo = new Date(at.getTime() + 1);
+      const policy = await read(async (tx) => {
+        await tx.restaurantTaxRuleVersion.createMany({
+          data: (['CASH', 'OTHER'] as const).map((paymentCategory) => ({
+            profileVersionId: ids.taxProfile,
+            officialSourceId: ids.taxSource,
+            ruleCode: `REVERSE_INCLUSIVE_${kind}_${paymentCategory}`,
+            paymentCategory,
+            priceMode: 'INCLUSIVE' as const,
+            rate: '0.200000',
+            status: 'PUBLISHED' as const,
+            effectiveFrom: at,
+            effectiveTo,
+            approvalReference: 'comp-reversal-inclusive-tax',
+            approvedAt: AT,
+            publishedAt: AT,
+          })),
+        });
+        return tx.restaurantServiceChargePolicyVersion.create({
+          data: {
+            branchId: ids.branch,
+            rate: '0.100000',
+            effectiveFrom: at,
+            effectiveTo,
+            acknowledgedAt: AT,
+            acknowledgementRef: 'comp-reversal-inclusive-tax',
+            idempotencyKey: `reverse_inclusive_${kind}_${suffix}`,
+            payloadHash: `reverse-inclusive-${kind}-${suffix}`,
+          },
+        });
+      });
+      const { db, orderId, itemIds } = await openWithItems([{ seat: 1 }, { seat: 2 }], at);
+      await read(async (tx) => {
+        for (const [index, id] of itemIds.entries()) {
+          await tx.restaurantOrderItem.update({
+            where: { id },
+            data: { unitPrice: index === 0 ? '0.10' : '0.05' },
+          });
+        }
+        await tx.restaurantOrder.update({
+          where: { id: orderId },
+          data: { serviceChargePolicyVersionId: policy.id },
+        });
+      });
+      const { billIds } = await deps.bills.cutBills(db, {
+        orderId,
+        branchId: ids.branch,
+        split: kind === 'BY_ITEM' ? { kind, groups: itemIds.map((id) => [id]) } : { kind },
+        actor: actor(),
+      });
+      const loadBill = (billId: string) =>
+        read((tx) =>
+          tx.restaurantBill.findUniqueOrThrow({ where: { id: billId }, include: { lines: true } })
+        );
+      const siblingId = billIds[0]!;
+      const targetId = billIds[1]!;
+      const before = await loadBill(targetId);
+      expect((await loadBill(siblingId)).serviceChargeTotal.toFixed(2)).toBe('0.01');
+      expect(before.serviceChargeTotal.toFixed(2)).toBe('0.01');
+
+      expect(
+        await tenders.applyTender(db, {
+          billId: siblingId,
+          branchId: ids.branch,
+          tender: { type: 'OTHER', amount: '0.11' },
+          actor: actor(),
+          now: at,
+        })
+      ).toMatchObject({ settled: true });
+      const settledSibling = await loadBill(siblingId);
+      // Reusing this net subtotal would reduce the order's service charge from
+      // 0.02 to 0.01 and incorrectly remove the target bill's original cent.
+      expect(settledSibling.subtotal.toFixed(2)).toBe('0.08');
+      expect(settledSibling.taxTotal.toFixed(2)).toBe('0.02');
+      expect(settledSibling.lines[0]!.lineSubtotal.toFixed(2)).toBe('0.10');
+
+      const comp = {
+        billId: targetId,
+        branchId: ids.branch,
+        billLineId: before.lines[0]!.id,
+        reason: 'mistaken comp after sibling settlement',
+        approvingStaffProfileId: ids.manager,
+      };
+      await deps.bills.compLine(db, { ...comp, actor: actor() });
+      expect((await loadBill(targetId)).serviceChargeTotal.toFixed(2)).toBe('0.00');
+      const reversal = { ...comp, actor: actor() };
+      await deps.bills.reverseCompLine(db, reversal);
+      expect((await deps.bills.reverseCompLine(db, reversal)).replayed).toBe(true);
+      const restored = await loadBill(targetId);
+      expect(restored.serviceChargeTotal).toEqual(before.serviceChargeTotal);
+      expect(restored.serviceChargeBasis).toEqual(before.serviceChargeBasis);
+      expect(restored.grandTotal).toEqual(before.grandTotal);
+      expect(restored.lines[0]).toMatchObject({
+        lineSubtotal: before.lines[0]!.lineSubtotal,
+        serviceChargeAmount: D('0.01'),
+        compAmount: D(0),
+        lineTotal: before.grandTotal,
+        compReason: null,
+        compCoAuthorizationId: null,
+      });
+      expect(await loadBill(siblingId)).toEqual(settledSibling);
+
+      const quote = await read((tx) => tenders.quoteOpenBillSettlement(tx, targetId, at));
+      expect(quote?.serviceChargePayable.toFixed(2)).toBe('0.01');
+      expect(quote?.grandTotal.toFixed(2)).toBe('0.06');
+      const result = await tenders.applyTender(db, {
+        billId: targetId,
+        branchId: ids.branch,
+        tender: { type: 'OTHER', amount: '0.06' },
+        actor: actor(),
+        now: at,
+      });
+      expect(result.settled).toBe(true);
+      expect(result.remainingDue.toFixed(2)).toBe('0.00');
+      expect((await loadBill(targetId)).serviceChargeTotal.toFixed(2)).toBe('0.01');
+    }
+  );
+
   it('releases loyalty again when a reversed line is comped in a new cycle', async () => {
     const loyalty = await import('./loyalty');
     const { db, orderId } = await openWithItems([{}]);

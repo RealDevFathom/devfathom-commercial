@@ -1103,9 +1103,9 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
 export type ReverseCompLineInput = CompLineInput;
 export type ReverseCompLineResult = Omit<CompLineResult, 'releasedDiscount'>;
 
-/** Reconstruct the cut-time allocation from immutable subtotals in the bill order
- * saved by cutBills. Independent rounding loses cents allocated to sibling bills;
- * current totals lose them after comps. Neither can supply the original cap. */
+/** Reconstruct the cut-time allocation from immutable bill-line subtotals in the
+ * bill order saved by cutBills. Settlement removes included tax from bill subtotals,
+ * while comps change service totals. Neither can supply the original cap. */
 async function originalServiceCharge(
   tx: ScopedDb,
   billId: string,
@@ -1138,10 +1138,12 @@ async function originalServiceCharge(
   }
   const bills = await tx.restaurantBill.findMany({
     where: { id: { in: result.billIds }, orderId },
-    select: { id: true, subtotal: true },
+    select: { id: true, lines: { select: { lineSubtotal: true } } },
   });
   if (bills.length !== result.billIds.length) throw missingEvidence();
-  const subtotals = result.billIds.map((id) => bills.find((bill) => bill.id === id)!.subtotal);
+  const subtotals = result.billIds.map((id) =>
+    sum(bills.find((bill) => bill.id === id)!.lines.map((line) => line.lineSubtotal))
+  );
   return allocate(
     roundMoney(multiply(sum(subtotals), rate)),
     subtotals.map((subtotal) => subtotal.mul(100).toNumber())
