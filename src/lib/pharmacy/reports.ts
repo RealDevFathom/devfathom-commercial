@@ -210,7 +210,7 @@ export const PHARMACY_METRIC_CONTRACT: readonly PharmacyMetricContract[] = [
   [
     'khataAgingMinor',
     'Khata aging',
-    'Outstanding amount on Khata charges whose due date has passed, net of payments allocated to each charge.',
+    'Outstanding amount on overdue Khata charges, net of allocated payments and including dishonoured amounts up to the corresponding prior payments; unlinked dishonours are account-level overdue debt capped by that family’s payments net of linked dishonours, less excess payment credits.',
     'pharmacy_khata_events',
     'selected branches at read time',
     '/pharmacy/reports?section=finance',
@@ -291,10 +291,57 @@ async function readKhataAgingMinor(db: ScopedDb, branchIds: readonly string[]): 
   try {
     // Khata tables enforce organization + exactly one branch through FORCE RLS. Read each
     // authorized report branch under its own branch context rather than bypassing that boundary.
+    // An unlinked dishonour cannot inherit a charge due date, so treat that reinstated debt as
+    // overdue at the account level rather than silently dropping it from aging. Payments must
+    // reference a charge; cap unlinked reversals by the same family’s net linked payments.
+    // Credits beyond charge principal repay that family’s unlinked debt and must be consumed.
     for (const branchId of branchIds) {
       await db.$queryRaw(Prisma.sql`SELECT set_config('app.current_branch_id', ${branchId}, true)`);
       const rows = await db.$queryRaw<Array<{ value: bigint }>>(
-        Prisma.sql`WITH payments AS (SELECT "organizationId", "branchId", "settlesChargeId", SUM("amountMinor") AS paid FROM "pharmacy_khata_events" WHERE "organizationId"=current_setting('app.current_organization_id',true) AND "branchId"=${branchId} AND "kind"='PAYMENT' GROUP BY "organizationId", "branchId", "settlesChargeId") SELECT COALESCE(SUM(GREATEST(charge."amountMinor"::bigint-COALESCE(payments.paid,0),0)),0)::bigint AS value FROM "pharmacy_khata_events" charge LEFT JOIN payments ON payments."organizationId"=charge."organizationId" AND payments."branchId"=charge."branchId" AND payments."settlesChargeId"=charge."id" WHERE charge."organizationId"=current_setting('app.current_organization_id',true) AND charge."branchId"=${branchId} AND charge."kind"='CHARGE' AND charge."dueAt"<=CURRENT_TIMESTAMP`
+        Prisma.sql`WITH settlements AS (
+          SELECT "organizationId", "branchId", "familyAccountId", "settlesChargeId",
+            GREATEST(SUM(CASE WHEN "kind"='PAYMENT' THEN "amountMinor" ELSE -"amountMinor" END),0) AS paid
+          FROM "pharmacy_khata_events"
+          WHERE "organizationId"=current_setting('app.current_organization_id',true)
+            AND "branchId"=${branchId} AND "kind" IN ('PAYMENT','DISHONOURED_CHEQUE')
+            AND "settlesChargeId" IS NOT NULL
+          GROUP BY "organizationId", "branchId", "familyAccountId", "settlesChargeId"
+        ), family_credits AS (
+          SELECT charge."organizationId", charge."branchId", charge."familyAccountId",
+            SUM(GREATEST(settlements.paid-charge."amountMinor"::bigint,0)) AS credit
+          FROM "pharmacy_khata_events" charge
+          JOIN settlements ON settlements."organizationId"=charge."organizationId"
+            AND settlements."branchId"=charge."branchId"
+            AND settlements."familyAccountId"=charge."familyAccountId"
+            AND settlements."settlesChargeId"=charge."id"
+          WHERE charge."kind"='CHARGE'
+          GROUP BY charge."organizationId", charge."branchId", charge."familyAccountId"
+        ), unlinked_events AS (
+          SELECT unlinked."organizationId", unlinked."branchId", unlinked."familyAccountId",
+            GREATEST(LEAST(SUM(unlinked."amountMinor"),COALESCE((SELECT SUM(paid) FROM settlements
+              WHERE settlements."organizationId"=unlinked."organizationId"
+                AND settlements."branchId"=unlinked."branchId"
+                AND settlements."familyAccountId"=unlinked."familyAccountId"),0))
+              -COALESCE((SELECT credit FROM family_credits
+                WHERE family_credits."organizationId"=unlinked."organizationId"
+                  AND family_credits."branchId"=unlinked."branchId"
+                  AND family_credits."familyAccountId"=unlinked."familyAccountId"),0),0)::bigint AS dishonoured
+          FROM "pharmacy_khata_events" unlinked
+          WHERE unlinked."organizationId"=current_setting('app.current_organization_id',true)
+            AND unlinked."branchId"=${branchId}
+            AND unlinked."kind"='DISHONOURED_CHEQUE' AND unlinked."settlesChargeId" IS NULL
+          GROUP BY unlinked."organizationId", unlinked."branchId", unlinked."familyAccountId"
+        )
+        SELECT (COALESCE(SUM(GREATEST(charge."amountMinor"::bigint-COALESCE(settlements.paid,0),0)),0)
+          +(SELECT COALESCE(SUM(dishonoured),0) FROM unlinked_events))::bigint AS value
+        FROM "pharmacy_khata_events" charge
+        LEFT JOIN settlements ON settlements."organizationId"=charge."organizationId"
+          AND settlements."branchId"=charge."branchId"
+          AND settlements."familyAccountId"=charge."familyAccountId"
+          AND settlements."settlesChargeId"=charge."id"
+        WHERE charge."organizationId"=current_setting('app.current_organization_id',true)
+          AND charge."branchId"=${branchId}
+          AND charge."kind"='CHARGE' AND charge."dueAt"<=CURRENT_TIMESTAMP`
       );
       total += rows[0]?.value ?? BigInt(0);
     }

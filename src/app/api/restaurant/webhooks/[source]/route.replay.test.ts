@@ -1,6 +1,5 @@
 import { createHmac } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { z } from 'zod';
 
 vi.mock('server-only', () => ({}));
 
@@ -19,16 +18,21 @@ vi.mock('@/lib/tenancy/host', () => ({
   resolveExplicitOrganizationByHost: mocks.resolveOrganization,
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: mocks.createTenantDb }));
-vi.mock('@/lib/restaurant/webhook-inbox', () => ({
-  recordInboundWebhook: mocks.recordInboundWebhook,
-  webhookEnvelopeSchema: z
-    .object({
-      externalEventId: z.string().min(1).max(200),
-      eventType: z.string().min(1).max(200).optional(),
-      payload: z.record(z.string(), z.unknown()),
-    })
-    .strict(),
-}));
+vi.mock('@/lib/restaurant/webhook-inbox', () => {
+  // Vitest hoists this factory, so a synchronous local load keeps the schema available.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { z } = require('zod') as typeof import('zod');
+  return {
+    recordInboundWebhook: mocks.recordInboundWebhook,
+    webhookEnvelopeSchema: z
+      .object({
+        externalEventId: z.string().min(1).max(200),
+        eventType: z.string().min(1).max(200).optional(),
+        payload: z.record(z.string(), z.unknown()),
+      })
+      .strict(),
+  };
+});
 
 import { POST } from './route';
 

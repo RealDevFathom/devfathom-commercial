@@ -8,7 +8,7 @@ import {
 
 describe('PH-RPT metric contract', () => {
   it('defines a source, scope, permission, and drill-through for every asserted metric', () => {
-    expect(PHARMACY_METRIC_CONTRACT).toHaveLength(23);
+    expect(PHARMACY_METRIC_CONTRACT).toHaveLength(24);
     for (const metric of PHARMACY_METRIC_CONTRACT) {
       expect(metric.key).toBeTruthy();
       expect(metric.definition).toBeTruthy();
@@ -80,7 +80,7 @@ describe('PH-RPT metric contract', () => {
     }
   });
 
-  it('reports overdue Khata principal net of payments for the selected branches', async () => {
+  it('reports overdue Khata principal net of payments with dishonours reinstated', async () => {
     const queryRaw = vi
       .fn()
       .mockImplementation(async (query: { strings: readonly string[] }) =>
@@ -107,10 +107,23 @@ describe('PH-RPT metric contract', () => {
         .includes('FROM "pharmacy_khata_events" charge')
     )?.[0] as { strings: readonly string[]; values: unknown[] };
     const sql = khataQuery.strings.join('?');
-    expect(sql).toContain('charge."amountMinor"::bigint-COALESCE(payments.paid,0)');
+    expect(sql).toContain('charge."amountMinor"::bigint-COALESCE(settlements.paid,0)');
+    expect(sql).toContain(`CASE WHEN "kind"='PAYMENT' THEN "amountMinor" ELSE -"amountMinor" END`);
+    expect(sql).toContain('GREATEST(SUM(CASE');
+    expect(sql).toContain(`"kind" IN ('PAYMENT','DISHONOURED_CHEQUE')`);
+    expect(sql).toContain(
+      `unlinked."kind"='DISHONOURED_CHEQUE' AND unlinked."settlesChargeId" IS NULL`
+    );
+    expect(sql).toContain('settlements."familyAccountId"=unlinked."familyAccountId"');
+    expect(sql).toContain('settlements."familyAccountId"=charge."familyAccountId"');
+    expect(sql).toContain('LEAST(SUM(unlinked."amountMinor"),COALESCE((SELECT SUM(paid)');
+    expect(sql).toContain('SUM(GREATEST(settlements.paid-charge."amountMinor"::bigint,0))');
+    expect(sql).toContain('-COALESCE((SELECT credit FROM family_credits');
+    expect(sql).toContain('family_credits."familyAccountId"=unlinked."familyAccountId"');
+    expect(sql).toContain('+(SELECT COALESCE(SUM(dishonoured),0) FROM unlinked_events)');
     expect(sql).toContain(')::bigint AS value');
     expect(sql).toContain(`charge."kind"='CHARGE' AND charge."dueAt"<=CURRENT_TIMESTAMP`);
-    expect(khataQuery.values).toEqual(['branch_1', 'branch_1']);
+    expect(khataQuery.values).toEqual(['branch_1', 'branch_1', 'branch_1']);
   });
 
   it('adds branch-scoped bigint results above the PostgreSQL integer limit', async () => {
