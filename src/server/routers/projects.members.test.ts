@@ -81,11 +81,15 @@ function projectDb() {
   return { db, members, calls };
 }
 
-function caller(db: ReturnType<typeof projectDb>['db'], userId: string) {
+function caller(
+  db: ReturnType<typeof projectDb>['db'],
+  userId: string,
+  role: 'EMPLOYEE' | 'ADMIN' = 'EMPLOYEE'
+) {
   return projectsRouter.createCaller({
     db,
     session: {
-      user: { id: userId, organizationId: 'organization-1', role: 'EMPLOYEE', status: 'ACTIVE' },
+      user: { id: userId, organizationId: 'organization-1', role, status: 'ACTIVE' },
     },
     entitlements: { enabledModules: ['projects'] },
     requestMeta: { ip: null, userAgent: null },
@@ -133,7 +137,8 @@ describe('project lead invariant', () => {
     expect(results.find(({ status }) => status === 'rejected')).toMatchObject({
       reason: { code: 'BAD_REQUEST' },
     });
-    expect(calls[0]).toBe('lock');
+    expect(calls.slice(0, 2)).toEqual(['read', 'lock']);
+    expect(calls.indexOf('lock')).toBeLessThan(calls.indexOf('count'));
   });
 
   it('rejects demoting the last lead through the add-member upsert', async () => {
@@ -152,7 +157,8 @@ describe('project lead invariant', () => {
     });
 
     expect(members.get('lead-a')).toEqual({ role: 'LEAD' });
-    expect(calls[0]).toBe('lock');
+    expect(calls.slice(0, 2)).toEqual(['read', 'lock']);
+    expect(calls.indexOf('lock')).toBeLessThan(calls.indexOf('count'));
     expect(calls).not.toContain('upsert');
   });
 
@@ -168,5 +174,81 @@ describe('project lead invariant', () => {
     ).resolves.toMatchObject({ userId: 'lead-a', role: 'MEMBER' });
 
     expect(members.get('lead-b')).toEqual({ role: 'LEAD' });
+  });
+
+  const mutations = ['addMember', 'removeMember', 'setMemberRole'] as const;
+  describe.each(mutations)('%s authorization', (method) => {
+    it.each(['member', 'outsider'])('rejects a %s before taking the project lock', async (userId) => {
+      const { db, members, calls } = projectDb();
+      members.set('member', { role: 'MEMBER' });
+
+      await expect(
+        caller(db, userId)[method]({ projectId: 'project-1', userId: 'lead-b', role: 'MEMBER' })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+
+      expect(db.$queryRaw).not.toHaveBeenCalled();
+      expect(calls).not.toContain('count');
+      expect(db.projectMember.upsert).not.toHaveBeenCalled();
+      expect(db.projectMember.delete).not.toHaveBeenCalled();
+      expect(db.projectMember.update).not.toHaveBeenCalled();
+      expect(members.get('lead-b')).toEqual({ role: 'LEAD' });
+    });
+
+    it('rechecks lead permission after waiting for the project lock', async () => {
+      const { db, members, calls } = projectDb();
+      db.$queryRaw.mockImplementationOnce(async () => {
+        calls.push('lock');
+        // Another transaction demoted this caller while it was waiting for the lock.
+        members.set('lead-a', { role: 'MEMBER' });
+        return [{ id: 'project-1' }];
+      });
+
+      await expect(
+        caller(db, 'lead-a')[method]({ projectId: 'project-1', userId: 'lead-b', role: 'MEMBER' })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+
+      expect(calls[0]).toBe('read');
+      expect(db.$queryRaw).toHaveBeenCalledOnce();
+      expect(db.projectMember.upsert).not.toHaveBeenCalled();
+      expect(db.projectMember.delete).not.toHaveBeenCalled();
+      expect(db.projectMember.update).not.toHaveBeenCalled();
+      expect(members.get('lead-b')).toEqual({ role: 'LEAD' });
+    });
+
+    it('allows an admin without a project membership', async () => {
+      const { db, members } = projectDb();
+
+      await caller(db, 'admin', 'ADMIN')[method]({
+        projectId: 'project-1',
+        userId: 'lead-b',
+        role: 'MEMBER',
+      });
+
+      expect(db.$queryRaw).toHaveBeenCalledOnce();
+      expect(members.get('lead-a')).toEqual({ role: 'LEAD' });
+      expect(members.get('lead-b')?.role).not.toBe('LEAD');
+    });
+  });
+
+  it('allows a plain member to remove their own membership', async () => {
+    const { db, members } = projectDb();
+    members.set('member', { role: 'MEMBER' });
+
+    await caller(db, 'member').removeMember({ projectId: 'project-1', userId: 'member' });
+
+    expect(members.has('member')).toBe(false);
+    expect(members.get('lead-a')).toEqual({ role: 'LEAD' });
+    expect(members.get('lead-b')).toEqual({ role: 'LEAD' });
+  });
+
+  it('preserves the missing-member error before locking for a non-lead caller', async () => {
+    const { db, members } = projectDb();
+    members.set('member', { role: 'MEMBER' });
+
+    await expect(
+      caller(db, 'member').removeMember({ projectId: 'project-1', userId: 'missing' })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND', message: 'Member not on this project.' });
+
+    expect(db.$queryRaw).not.toHaveBeenCalled();
   });
 });

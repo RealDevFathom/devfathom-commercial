@@ -200,6 +200,22 @@ export const projectsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const isAdmin = ctx.session.user.role === 'ADMIN';
       const membership = await ctx.db.$transaction(async (tx) => {
+        // Reject unauthorized requests before they can contend for the project lock.
+        // Recheck below after waiting for the lock: another lead may demote the caller.
+        if (!isAdmin) {
+          const callerMembership = await tx.projectMember.findUnique({
+            where: {
+              projectId_userId: { projectId: input.projectId, userId: ctx.session.user.id },
+            },
+          });
+          if (callerMembership?.role !== 'LEAD') {
+            throw new TRPCError({
+              code: 'FORBIDDEN',
+              message: 'Only the project lead or an admin can add members.',
+            });
+          }
+        }
+
         // An upsert may also change an existing member's role. Use the same
         // project-row lock as removeMember/setMemberRole so that every path
         // which can reduce the lead count participates in one serialization.
@@ -271,6 +287,27 @@ export const projectsRouter = router({
       const isAdmin = ctx.session.user.role === 'ADMIN';
       const isSelf = input.userId === ctx.session.user.id;
       await ctx.db.$transaction(async (tx) => {
+        if (!isAdmin && !isSelf) {
+          const [target, callerMembership] = await Promise.all([
+            tx.projectMember.findUnique({
+              where: { projectId_userId: { projectId: input.projectId, userId: input.userId } },
+            }),
+            tx.projectMember.findUnique({
+              where: {
+                projectId_userId: { projectId: input.projectId, userId: ctx.session.user.id },
+              },
+            }),
+          ]);
+          if (!target)
+            throw new TRPCError({ code: 'NOT_FOUND', message: 'Member not on this project.' });
+          if (callerMembership?.role !== 'LEAD') {
+            throw new TRPCError({
+              code: 'FORBIDDEN',
+              message: 'Only the project lead or an admin can remove other members.',
+            });
+          }
+        }
+
         // Serialize every operation which can reduce this project's lead count.
         // Locking the stable parent row avoids the write-skew possible when two
         // different membership rows are removed/demoted concurrently.
@@ -344,6 +381,20 @@ export const projectsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const isAdmin = ctx.session.user.role === 'ADMIN';
       return ctx.db.$transaction(async (tx) => {
+        if (!isAdmin) {
+          const callerMembership = await tx.projectMember.findUnique({
+            where: {
+              projectId_userId: { projectId: input.projectId, userId: ctx.session.user.id },
+            },
+          });
+          if (callerMembership?.role !== 'LEAD') {
+            throw new TRPCError({
+              code: 'FORBIDDEN',
+              message: 'Only the project lead or an admin can change roles.',
+            });
+          }
+        }
+
         await tx.$queryRaw`SELECT "id" FROM "projects" WHERE "id" = ${input.projectId} FOR UPDATE`;
 
         const callerMembership = await tx.projectMember.findUnique({
