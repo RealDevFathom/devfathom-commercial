@@ -376,7 +376,8 @@ export async function createPortalRequest(
       (input.action === 'refill' && previous[0].sourceSaleId !== input.saleId)
     )
       throw new CustomerPortalError(409, 'This request key was already used.');
-    return { id: previous[0].id, status: previous[0].status };
+    // A replay is not a new submission; callers must not audit it again.
+    return { id: previous[0].id, status: previous[0].status, replayed: true as const };
   }
   let sourceFileRef: string | null = null;
   if (input.action === 'refill') {

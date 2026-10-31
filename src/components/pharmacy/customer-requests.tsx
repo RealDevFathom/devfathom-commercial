@@ -37,23 +37,42 @@ export function CustomerRequests() {
   const [loading, setLoading] = useState(true);
   const [capture, setCapture] = useState<QueueRequest | null>(null);
   const flight = useRef(false);
-  // Initial loading is state; subsequent loads start from user events.
-  const load = useCallback(async () => {
-    try {
-      const nextWorkspace = await portalFetch<Workspace>(
+  // setState runs only in promise callbacks: the branch fetch subscribes to the
+  // external queue API, and later reloads start from user events.
+  const fetchWorkspace = useCallback(
+    () =>
+      portalFetch<Workspace>(
         `${endpoint}${branchId ? `?branchId=${encodeURIComponent(branchId)}` : ''}`
-      );
-      setWorkspace(nextWorkspace);
-      setError('');
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setLoading(false);
-    }
-  }, [branchId]);
+      ),
+    [branchId]
+  );
+  const applyLoaded = useCallback((nextWorkspace: Workspace) => {
+    setWorkspace(nextWorkspace);
+    setError('');
+    setLoading(false);
+  }, []);
+  const applyFailed = useCallback((e: unknown) => {
+    setError((e as Error).message);
+    setLoading(false);
+  }, []);
+  const load = useCallback(
+    () => fetchWorkspace().then(applyLoaded, applyFailed),
+    [fetchWorkspace, applyLoaded, applyFailed]
+  );
   useEffect(() => {
-    void load();
-  }, [load]);
+    let active = true;
+    fetchWorkspace().then(
+      (nextWorkspace) => {
+        if (active) applyLoaded(nextWorkspace);
+      },
+      (e: unknown) => {
+        if (active) applyFailed(e);
+      }
+    );
+    return () => {
+      active = false;
+    };
+  }, [fetchWorkspace, applyLoaded, applyFailed]);
 
   async function submit(event: FormEvent<HTMLFormElement>, request?: QueueRequest) {
     event.preventDefault();

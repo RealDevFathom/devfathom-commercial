@@ -290,8 +290,10 @@ export async function customerPortalPOST(request: Request) {
           throw new CustomerPortalError(401, 'Verify your phone again.');
       } else await admitCustomerRequest(org.id, scope.customerId);
       const result = await createPortalRequest(db, scope, input, staged?.photo);
-      await portalEvent(db, scope, 'REQUEST_SUBMITTED', `customer:${scope.customerId}`, result.id);
-      return portalJson(result, 201);
+      // Idempotent replays return the original request without a second audit entry.
+      if (!('replayed' in result))
+        await portalEvent(db, scope, 'REQUEST_SUBMITTED', `customer:${scope.customerId}`, result.id);
+      return portalJson({ id: result.id, status: result.status }, 201);
     });
   } catch (error) {
     return portalFailure(error);

@@ -8,7 +8,7 @@ import { StatusPill } from '@/components/ui/status-pill';
 import { Field, WorkspaceState, fieldClass } from './dispensing/field';
 import { fileError, imageBase64, isImageType } from '@/lib/pharmacy/prescription-image-input';
 import type { CustomerPortalSummary } from '@/lib/pharmacy/customer-portal-contract';
-import type { CounterReceipt } from '@/lib/pharmacy/counter-receipt';
+import { formatMinor, type CounterReceipt } from '@/lib/pharmacy/counter-receipt';
 import { buildCounterReceiptPreview } from '@/lib/pharmacy/counter-receipt-presentation';
 import { printCounterBrowserReceipt } from '@/lib/pharmacy/counter-browser-print';
 
@@ -37,25 +37,39 @@ export function CustomerPortal() {
     refill: null,
     photo: null,
   });
-  // Initial loading is state; subsequent loads start from user events.
-  const load = useCallback(async () => {
-    try {
-      const nextState = await portalFetch<State>(endpoint);
-      setState(nextState);
-      setError('');
-    } catch (e) {
-      if (e instanceof CustomerPortalClientError && e.status === 401) {
-        setState(null);
-        setReceipt(null);
-      }
-      setError((e as Error).message);
-    } finally {
-      setLoading(false);
-    }
+  // setState runs only in promise callbacks: the mount fetch subscribes to the
+  // external portal API, and later reloads start from user events.
+  const applyLoaded = useCallback((nextState: State) => {
+    setState(nextState);
+    setError('');
+    setLoading(false);
   }, []);
+  const applyFailed = useCallback((e: unknown) => {
+    if (e instanceof CustomerPortalClientError && e.status === 401) {
+      setState(null);
+      setReceipt(null);
+    }
+    setError((e as Error).message);
+    setLoading(false);
+  }, []);
+  const load = useCallback(
+    () => portalFetch<State>(endpoint).then(applyLoaded, applyFailed),
+    [applyLoaded, applyFailed]
+  );
   useEffect(() => {
-    void load();
-  }, [load]);
+    let active = true;
+    portalFetch<State>(endpoint).then(
+      (nextState) => {
+        if (active) applyLoaded(nextState);
+      },
+      (e: unknown) => {
+        if (active) applyFailed(e);
+      }
+    );
+    return () => {
+      active = false;
+    };
+  }, [applyLoaded, applyFailed]);
 
   async function run(work: () => Promise<void>) {
     if (inFlight.current) return;
@@ -99,7 +113,7 @@ export function CustomerPortal() {
   }
 
   const summary = state?.signedIn ? state.summary : null;
-  const money = (minor: number) => `${summary?.currency ?? ''} ${(minor / 100).toFixed(2)}`;
+  const money = (minor: number) => `${summary?.currency ?? ''} ${formatMinor(minor)}`;
 
   return (
     <div className="space-y-6">

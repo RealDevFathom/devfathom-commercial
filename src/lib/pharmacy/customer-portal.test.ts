@@ -156,7 +156,7 @@ describe('customer portal identity and requests', () => {
         saleId: 'sale-a',
         idempotencyKey: 'key',
       })
-    ).resolves.toMatchObject({ id: request.id });
+    ).resolves.toMatchObject({ id: request.id, replayed: true });
     expect(f.$executeRaw).not.toHaveBeenCalled();
   });
   it('blocks fulfilment until pharmacist approval', async () => {

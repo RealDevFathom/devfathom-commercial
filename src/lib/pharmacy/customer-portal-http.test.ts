@@ -14,6 +14,7 @@ import {
   customerPortalSummary,
   issuePortalOtp,
   createPortalRequest,
+  portalEvent,
 } from './customer-portal';
 import { sendCustomerSms } from './customer-otp-delivery';
 import { persistPrescriptionFile } from './prescription-files';
@@ -235,6 +236,47 @@ describe('public customer transport', () => {
         cleanupEffectId: expect.any(String),
       }
     );
+  });
+  it('audits a submission once and does not re-audit an idempotent replay', async () => {
+    const scope = {
+      organizationId: 'org-a',
+      branchId: 'branch-a',
+      customerId: 'customer-a',
+      patientId: 'patient-a',
+    };
+    vi.mocked(customerPortalScope).mockResolvedValue(scope);
+    const refill = command(
+      {
+        action: 'refill',
+        saleId: 'sale-a',
+        idempotencyKey: 'cc56d757-2cd8-4bbf-b077-18def61fa649',
+      },
+      undefined,
+      'df_customer=opaque'
+    );
+    vi.mocked(createPortalRequest).mockResolvedValueOnce({
+      id: 'request-a',
+      status: 'AWAITING_PHARMACIST',
+    });
+    const first = await customerPortalPOST(refill.clone());
+    expect(first.status).toBe(201);
+    expect(portalEvent).toHaveBeenCalledTimes(1);
+    expect(portalEvent).toHaveBeenCalledWith(
+      mockDb,
+      scope,
+      'REQUEST_SUBMITTED',
+      'customer:customer-a',
+      'request-a'
+    );
+    vi.mocked(createPortalRequest).mockResolvedValueOnce({
+      id: 'request-a',
+      status: 'AWAITING_PHARMACIST',
+      replayed: true,
+    });
+    const replay = await customerPortalPOST(refill);
+    expect(replay.status).toBe(201);
+    expect(await replay.json()).toEqual({ id: 'request-a', status: 'AWAITING_PHARMACIST' });
+    expect(portalEvent).toHaveBeenCalledTimes(1);
   });
   it('retains a durable cleanup job when the photo request transaction rolls back', async () => {
     vi.mocked(customerPortalScope).mockResolvedValue({
