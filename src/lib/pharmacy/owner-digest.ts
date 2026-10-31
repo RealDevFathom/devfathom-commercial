@@ -157,7 +157,7 @@ export async function readOwnerBriefingFigures(
     SELECT
       COALESCE((SELECT SUM("estimatedValueMinor") FROM open_period_demand),0)::int AS lost,
       (SELECT COUNT(*) FROM open_period_demand)::int AS "walkOuts",
-      COALESCE((SELECT SUM("estimatedValueMinor") FROM all_period_demand WHERE status='RECOVERED' AND "recoveredAt">=${start} AND "recoveredAt"<${end}),0)::int AS recovered,
+      COALESCE((SELECT SUM("estimatedValueMinor") FROM "pharmacy_unfulfilled_demand_events" WHERE "branchId"=${branchId} AND status='RECOVERED' AND "recoveredAt">=${start} AND "recoveredAt"<${end}),0)::int AS recovered,
       gaps.name AS "topGapName", COALESCE(gaps.value,0)::int AS "topGapValue",
       COALESCE(EXISTS(SELECT 1 FROM "pharmacy_purchase_order_lines" pol JOIN "pharmacy_purchase_orders" po ON po."organizationId"=pol."organizationId" AND po.id=pol."purchaseOrderId" WHERE po."branchId"=${branchId} AND po.status='DRAFT' AND pol."medicineId"=gaps."requestedMedicineId"),false) AS "topGapDraftPo"
     FROM gaps RIGHT JOIN (SELECT 1) singleton ON true
@@ -535,7 +535,18 @@ export async function processDueOwnerDigests(now = new Date(), limit = 25) {
     });
     if (digest) {
       captured += 1;
-      await withTenantDb(item.organizationId, (db) => new WhatsAppChannel().deliver(db, digest));
+      await withTenantDb(item.organizationId, async (db) => {
+        // Capture committed before this separate effect. Recheck access and the
+        // recipient so a disable, revocation or phone edit wins before sending.
+        const authorized = await readAuthorizedDigestSetting(db, item.id, item.organizationId);
+        if (
+          !authorized ||
+          authorized.userId !== digest.userId ||
+          authorized.branchId !== digest.branchId
+        )
+          return;
+        await new WhatsAppChannel().deliver(db, { ...digest, ownerPhone: authorized.user.phone });
+      });
     }
   }
   return { due: due.length, captured };

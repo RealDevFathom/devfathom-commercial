@@ -11,6 +11,11 @@ const mocks = vi.hoisted(() => ({
   tenantDb: {
     $queryRaw: vi.fn(),
     pharmacyOwnerDigestSetting: { findFirst: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
+    pharmacyOwnerDigestCapture: {
+      findUnique: vi.fn(),
+      createMany: vi.fn(),
+      findUniqueOrThrow: vi.fn(),
+    },
   },
 }));
 vi.mock('@/lib/abac', async () => ({
@@ -64,7 +69,10 @@ import {
 } from './owner-digest';
 
 describe('RPT-03 owner digest', () => {
-  afterEach(() => vi.useRealTimers());
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllEnvs();
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.can.mockResolvedValue(true);
@@ -319,6 +327,65 @@ describe('RPT-03 owner digest', () => {
     expect(briefing.whatsappBody.split('\n')).toHaveLength(6);
     expect(briefing.whatsappBody).toContain('Lost demand estimate PKR 325.00 · walk-outs 7');
   });
+
+  it.each(['disabled', 'revoked', 'phone changed', 'unchanged'])(
+    'rechecks the WhatsApp recipient after capture commits: %s',
+    async (change) => {
+      vi.stubEnv('PHARMACY_WHATSAPP_PROVIDER', 'meta');
+      vi.stubEnv('PHARMACY_WHATSAPP_ACCESS_TOKEN', 'token');
+      vi.stubEnv('PHARMACY_WHATSAPP_PHONE_NUMBER_ID', 'sender');
+      vi.stubEnv('PHARMACY_WHATSAPP_ORGANIZATION_ID', 'org_1');
+      vi.stubEnv('PHARMACY_WHATSAPP_TEMPLATE_OWNER_DIGEST', 'owner_digest_v1');
+      const now = new Date('2026-09-04T08:00:00.000Z');
+      const setting = {
+        id: 'setting_1',
+        organizationId: 'org_1',
+        userId: 'user_1',
+        branchId: 'branch_1',
+        enabled: true,
+        nextDueAt: now,
+        updatedAt: now,
+        timeMinutes: 480,
+        organization: { status: 'ACTIVE', vertical: 'PHARMACY', timezone: 'UTC' },
+        branch: { name: 'Main', active: true, organizationId: 'org_1' },
+        user: {
+          id: 'user_1',
+          organizationId: 'org_1',
+          role: 'ADMIN',
+          status: 'ACTIVE',
+          department: 'Management',
+          phone: '0300 1234567',
+        },
+      };
+      mocks.platformDb.pharmacyOwnerDigestSetting.findMany.mockResolvedValue([setting]);
+      mocks.tenantDb.pharmacyOwnerDigestSetting.findFirst.mockResolvedValue(setting);
+      mocks.tenantDb.pharmacyOwnerDigestCapture.findUnique.mockResolvedValue(null);
+      mocks.tenantDb.pharmacyOwnerDigestCapture.findUniqueOrThrow.mockResolvedValue({
+        id: 'capture_1',
+      });
+      mocks.tenantDb.pharmacyOwnerDigestCapture.createMany.mockImplementation(async () => {
+        if (change === 'disabled') {
+          mocks.tenantDb.pharmacyOwnerDigestSetting.findFirst.mockResolvedValue(null);
+        } else if (change === 'revoked') {
+          mocks.can.mockResolvedValue(false);
+        } else if (change === 'phone changed') {
+          setting.user.phone = '0300 7654321';
+        }
+        return { count: 1 };
+      });
+
+      await expect(processDueOwnerDigests(now)).resolves.toEqual({ due: 1, captured: 1 });
+
+      if (change === 'disabled' || change === 'revoked') {
+        expect(mocks.sendAndLog).not.toHaveBeenCalled();
+      } else {
+        expect(mocks.sendAndLog).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ phoneLast4: change === 'phone changed' ? '4321' : '4567' }),
+          expect.any(Function)
+        );
+      }
+    }
+  );
 
   async function expectDeniedDigestDisabled() {
     const now = new Date('2026-09-04T08:00:00.000Z');
