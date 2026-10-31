@@ -77,6 +77,10 @@ import {
   PharmacySubstituteError,
 } from '@/lib/pharmacy/substitute-finder';
 import {
+  DuplicateSaltAcknowledgementError,
+  verifyDuplicateSaltAcknowledgement,
+} from '@/lib/pharmacy/duplicate-salt-acknowledgement';
+import {
   addSaleLine,
   addRestockInterest,
   captureSafeRestockArrival,
@@ -1511,6 +1515,50 @@ export const pharmacySalesRouter = router({
       } catch (error) {
         if (error instanceof PharmacySubstituteError) {
           throw new TRPCError({ code: 'NOT_FOUND', message: error.code });
+        }
+        throw error;
+      }
+    }),
+  /**
+   * #724: the operator read the duplicate-salt warning and chose to continue.
+   * Never blocks or mutates the sale; the audit entry IS the acknowledgement,
+   * so it carries the recomputed salt and medicines, not client-supplied text.
+   */
+  acknowledgeDuplicateSalt: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          saleId: z.string().min(1),
+          ingredientKey: z.string().trim().min(1).max(200),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+      try {
+        const acknowledgement = await verifyDuplicateSaltAcknowledgement(ctx.db, scope, input);
+        annotateAudit(ctx, {
+          category: 'PHARMACY_SAFETY',
+          action: 'duplicate_salt_acknowledged',
+          targetType: 'PharmacySale',
+          targetId: acknowledgement.saleId,
+          description: `Counter acknowledged a duplicate active ingredient (${acknowledgement.ingredientName}) on one bill.`,
+          metadata: {
+            branchId: acknowledgement.branchId,
+            ingredientKey: acknowledgement.ingredientKey,
+            ingredientName: acknowledgement.ingredientName,
+            medicineIds: acknowledgement.medicines.map((medicine) => medicine.medicineId),
+            saleLineIds: acknowledgement.medicines.map((medicine) => medicine.ref),
+          },
+        });
+        return acknowledgement;
+      } catch (error) {
+        if (error instanceof DuplicateSaltAcknowledgementError) {
+          throw new TRPCError({
+            code: error.reason === 'NOT_FOUND' ? 'NOT_FOUND' : 'BAD_REQUEST',
+            message: error.reason,
+          });
         }
         throw error;
       }

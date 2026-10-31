@@ -243,3 +243,85 @@ describe('counterAlertsFor (POS-09)', () => {
     expect(alerts).toEqual([]);
   });
 });
+
+describe('counterAlertsFor duplicate active salt (#724)', () => {
+  const paracetamol = { ingredientId: 'ing-pcm', name: 'Paracetamol' };
+
+  it('warns, without blocking, when two paracetamol brands share a bill', () => {
+    const alerts = counterAlertsFor(
+      [
+        line({
+          ref: 'line-1',
+          medicine: medicine({
+            medicineId: 'panadol',
+            displayName: 'Panadol',
+            activeIngredients: [paracetamol],
+          }),
+        }),
+        line({
+          ref: 'line-2',
+          medicine: medicine({
+            medicineId: 'calpol',
+            displayName: 'Calpol',
+            activeIngredients: [paracetamol],
+          }),
+        }),
+      ],
+      { at: AT }
+    );
+    expect(alerts).toEqual([
+      {
+        key: 'duplicate-salt:paracetamol',
+        severity: 'CLINICAL_ADVICE',
+        code: 'DUPLICATE_ACTIVE_INGREDIENT',
+        message: 'Panadol, Calpol both contain Paracetamol. Check the patient is not double-dosing.',
+        saleLineRef: 'line-1',
+        remedy: 'Confirm each is intended, then acknowledge. The sale is not blocked.',
+        acknowledgement: { kind: 'DUPLICATE_ACTIVE_INGREDIENT', ingredientKey: 'paracetamol' },
+      },
+    ]);
+    expect(hasBlockingAlert(alerts)).toBe(false);
+  });
+
+  it('keeps existing blocks ahead of the duplicate-salt advice', () => {
+    const alerts = counterAlertsFor(
+      [
+        line({
+          ref: 'line-1',
+          medicine: medicine({ medicineId: 'a', rx: true, activeIngredients: [paracetamol] }),
+        }),
+        line({
+          ref: 'line-2',
+          medicine: medicine({ medicineId: 'b', activeIngredients: [paracetamol] }),
+        }),
+      ],
+      { at: AT }
+    );
+    expect(alerts.map((alert) => alert.code)).toEqual([
+      'RX_WITHOUT_PRESCRIPTION',
+      'DUPLICATE_ACTIVE_INGREDIENT',
+    ]);
+    expect(hasBlockingAlert(alerts)).toBe(true);
+  });
+
+  it('raises nothing for one medicine on two lines, or when ingredient data is absent', () => {
+    expect(
+      counterAlertsFor(
+        [
+          line({ ref: 'line-1', medicine: medicine({ activeIngredients: [paracetamol] }) }),
+          line({ ref: 'line-2', medicine: medicine({ activeIngredients: [paracetamol] }) }),
+        ],
+        { at: AT }
+      )
+    ).toEqual([]);
+    expect(
+      counterAlertsFor(
+        [
+          line({ ref: 'line-1', medicine: medicine({ medicineId: 'a' }) }),
+          line({ ref: 'line-2', medicine: medicine({ medicineId: 'b' }) }),
+        ],
+        { at: AT }
+      )
+    ).toEqual([]);
+  });
+});

@@ -505,6 +505,8 @@ export type CounterCartLine = {
   highAlert: boolean;
   lasa: boolean;
   coldChain: boolean;
+  /** #724: active salts from the ingredient graph, for the duplicate-salt notice. */
+  activeIngredients?: Array<{ ingredientId: string; name: string }>;
   /** An emergency controlled supply was recorded for this line (open follow-up). */
   emergencySupply: boolean;
   /** What FEFO actually took, batch by batch (POS-03: cart shows allocation). */
@@ -610,6 +612,10 @@ export async function readCounterCart(
       highAlert: line.medicine.highAlert,
       lasa: line.medicine.lasa,
       coldChain: line.medicine.coldChain,
+      activeIngredients: line.medicine.strengths.map((component) => ({
+        ingredientId: component.ingredientId,
+        name: component.ingredient.name,
+      })),
       emergencySupply: emergencyLineIds.has(line.id),
       allocations: line.allocations.map((allocation) => ({
         inventoryLotId: allocation.inventoryLotId,
