@@ -254,9 +254,9 @@ export const WHATSAPP_REPLIES = {
     'آپ نے واٹس ایپ پیغامات کی اجازت دے دی ہے۔ بند کرنے کے لیے STOP لکھیں۔',
   confirmation(input: { reference: string; quantity: number; branch: string }) {
     return (
-      `Order ${input.reference} received for collection at ${input.branch}. ` +
+      `Order ${input.reference} received: ${input.quantity} item(s) for collection at ${input.branch}. ` +
       'We will confirm when it is ready.\n' +
-      `آپ کا آرڈر ${input.reference} موصول ہو گیا ہے: ${input.quantity} x ${input.medicine}، ${input.branch} سے وصول کرنے کے لیے۔ ` +
+      `آپ کا آرڈر ${input.reference} موصول ہو گیا ہے: ${input.quantity} آئٹم، ${input.branch} سے وصول کرنے کے لیے۔ ` +
       'تیار ہونے پر ہم آپ کو اطلاع دیں گے۔'
     );
   },

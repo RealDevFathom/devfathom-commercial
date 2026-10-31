@@ -299,7 +299,9 @@ describe('marketing age eligibility', () => {
     ['2010-02-28', '2028-02-29T12:00:00Z', null],
     ['2008-02-29', '2026-02-28T12:00:00Z', 'UNDER_18'],
     ['2008-02-29', '2026-03-01T00:00:00Z', null],
-    ['2008-10-07', '2026-10-06T23:59:59Z', 'UNDER_18'],
+    // Workspace is Asia/Karachi (UTC+5): the birthday starts at 19:00Z the day before.
+    ['2008-10-07', '2026-10-06T18:59:59Z', 'UNDER_18'],
+    ['2008-10-07', '2026-10-06T19:00:00Z', null],
     ['2008-10-06', '2026-10-06T00:00:00Z', null],
   ])('checks birthday %s on %s', async (birth, timestamp, expected) => {
     dateOfBirth = new Date(birth);

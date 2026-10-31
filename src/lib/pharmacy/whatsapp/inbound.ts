@@ -25,6 +25,10 @@ import {
 } from './messages';
 import type { WhatsAppInboundMessage, WhatsAppProvider } from './provider';
 
+/** Promotional purposes a WhatsApp STOP withdraws; service purposes are kept. */
+const STOP_REVOKED_PURPOSES = ['MARKETING', 'LOYALTY'] as const;
+const CONSENT_CHANNELS = ['WHATSAPP', 'SMS', 'EMAIL', 'PHONE', 'IN_PERSON'] as const;
+
 export type InboundOutcome =
   | 'DUPLICATE'
   | 'UNKNOWN_SENDER'
@@ -202,34 +206,38 @@ export async function handleInboundWhatsAppMessage(
       });
       staleConsent = changed.count === 0;
       // START enables utility replies only. Marketing grants require their own
-      // explicit counter/QR consent; STOP can revoke that consent.
+      // explicit counter/QR consent; STOP revokes promotional consent on every
+      // channel, while service purposes (dispensing, reminders) are untouched.
       if (!staleConsent && !optIn) {
-        const latestMarketing = await db.patientConsent.findFirst({
-          where: {
-            organizationId,
-            patientId: customer.patientId,
-            purpose: 'MARKETING',
-            channel: 'WHATSAPP',
-          },
-          orderBy: [{ version: 'desc' }, { id: 'asc' }],
-          select: { recordedAt: true },
-        });
-        // The patient lock also serializes counter/QR writes. A delayed reply
-        // must not supersede a newer purpose-specific event; STOP wins ties.
-        if (!latestMarketing || latestMarketing.recordedAt <= message.receivedAt)
-          await writePatientConsent(
-            db,
-            organizationId,
-            customer.userId ?? `whatsapp:${last4}`,
-            {
-              patientId: customer.patientId,
-              purpose: 'MARKETING',
-              channel: 'WHATSAPP',
-              granted: false,
-              source: 'REPLY',
-            },
-            message.receivedAt
-          );
+        for (const purpose of STOP_REVOKED_PURPOSES)
+          for (const channel of CONSENT_CHANNELS) {
+            const latest = await db.patientConsent.findFirst({
+              where: { organizationId, patientId: customer.patientId, purpose, channel },
+              orderBy: [{ version: 'desc' }, { id: 'asc' }],
+              select: { granted: true, revokedAt: true, recordedAt: true },
+            });
+            // The patient lock also serializes counter/QR writes. A delayed reply
+            // must not supersede a newer purpose-specific event; STOP wins ties.
+            if (latest && latest.recordedAt > message.receivedAt) continue;
+            // Already revoked: another version would only clutter the history.
+            if (latest && (!latest.granted || latest.revokedAt)) continue;
+            // WhatsApp marketing always gets an explicit refusal row; other
+            // channels/purposes only need one when there is a grant to revoke.
+            if (!latest && (purpose !== 'MARKETING' || channel !== 'WHATSAPP')) continue;
+            await writePatientConsent(
+              db,
+              organizationId,
+              customer.userId ?? `whatsapp:${last4}`,
+              {
+                patientId: customer.patientId,
+                purpose,
+                channel,
+                granted: false,
+                source: 'REPLY',
+              },
+              message.receivedAt
+            );
+          }
       }
       if (staleConsent)
         await db.pharmacyMessageLog.update({

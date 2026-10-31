@@ -272,6 +272,41 @@ describe('handleInboundWhatsAppMessage consent gate', () => {
     expect(store.consents[1]).toEqual(utility);
   });
 
+  it('STOP revokes promotional consent across channels but keeps service consent', async () => {
+    knownCustomer(true);
+    const at = new Date('2026-10-06T09:00:00Z');
+    const sms = { ...recordedConsent('MARKETING', true, at), id: 'sms', channel: 'SMS' };
+    const email = { ...recordedConsent('MARKETING', true, at), id: 'email', channel: 'EMAIL' };
+    const loyalty = { ...recordedConsent('MARKETING', true, at), id: 'loyalty', purpose: 'LOYALTY' };
+    const reminders = { ...recordedConsent('REMINDERS', true, at), id: 'reminders', channel: 'SMS' };
+    store.consents = [sms, email, loyalty, reminders];
+    await expect(handleInboundWhatsAppMessage('org_a', provider, message('STOP'))).resolves.toBe(
+      'OPTED_OUT'
+    );
+    const written = store.consents.slice(4);
+    expect(written.map((row) => [row.purpose, row.channel, row.supersedesId ?? null])).toEqual(
+      expect.arrayContaining([
+        ['MARKETING', 'WHATSAPP', null],
+        ['MARKETING', 'SMS', 'sms'],
+        ['MARKETING', 'EMAIL', 'email'],
+        ['LOYALTY', 'WHATSAPP', 'loyalty'],
+      ])
+    );
+    expect(written).toHaveLength(4);
+    for (const row of written) expect(row).toMatchObject({ granted: false, source: 'REPLY' });
+    expect(store.consents[3]).toEqual(reminders);
+  });
+
+  it('a repeated STOP does not add another revocation version', async () => {
+    knownCustomer(true);
+    await handleInboundWhatsAppMessage('org_a', provider, message('STOP'));
+    expect(store.consents).toHaveLength(1);
+    await expect(handleInboundWhatsAppMessage('org_a', provider, message('STOP'))).resolves.toBe(
+      'OPTED_OUT'
+    );
+    expect(store.consents).toHaveLength(1);
+  });
+
   it('does not order or reply outside the 24-hour service window', async () => {
     knownCustomer(true);
     const old = { ...message('Panadol 2 packs'), receivedAt: new Date('2026-10-05T13:00:00Z') };

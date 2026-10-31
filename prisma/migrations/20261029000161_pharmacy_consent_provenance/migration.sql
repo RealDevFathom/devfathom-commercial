@@ -10,5 +10,5 @@ ALTER TABLE "pharmacy_patient_consents"
 ALTER TABLE "pharmacy_patient_consents" ADD CONSTRAINT "pharmacy_patient_consent_staff_source_check"
   CHECK (("source" = 'COUNTER_TABLET' AND "staffId" IS NOT NULL AND length(btrim("staffId")) > 0)
       OR ("source" <> 'COUNTER_TABLET'));
-CREATE INDEX "pharmacy_patient_consents_current_marketing_idx"
-  ON "pharmacy_patient_consents" ("organizationId", "patientId", "purpose", "channel", "version" DESC);
+-- Latest-version lookups are served by the existing
+-- (organizationId, patientId, purpose, channel, version) unique index.
