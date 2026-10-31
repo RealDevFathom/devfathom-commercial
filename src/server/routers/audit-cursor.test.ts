@@ -221,7 +221,10 @@ describeIfDatabase('audit list cursor pagination, against PostgreSQL', () => {
     if (!deps) return;
     await deps.withPlatformDb(async (db) => {
       const organizationId = { in: [ORGANIZATION_A, ORGANIZATION_B] };
-      await db.auditLog.deleteMany({ where: { organizationId } });
+      for (const fixtureOrganizationId of organizationId.in) {
+        await db.$queryRaw`SELECT set_config('app.purging_organization_id', ${fixtureOrganizationId}, true)`;
+        await db.auditLog.deleteMany({ where: { organizationId: fixtureOrganizationId } });
+      }
       await db.user.deleteMany({ where: { organizationId } });
       await db.organization.deleteMany({ where: { id: organizationId } });
     });

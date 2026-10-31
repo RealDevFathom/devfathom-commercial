@@ -83,48 +83,89 @@ describe.skipIf(!url)('platform audit ledger on disposable PostgreSQL', () => {
     }
   }
 
-  for (const operation of ['UPDATE', 'DELETE']) {
-    it(`audit_logs rejects tenant-scoped ${operation}`, async () => {
-      const { withTenantDb } = await import('@/lib/tenancy/scoped-db');
-      const mutation = withTenantDb(org, (db) =>
-        db.$executeRawUnsafe(
-          operation === 'UPDATE'
-            ? `UPDATE audit_logs SET action = 'tampered' WHERE id = $1`
-            : `DELETE FROM audit_logs WHERE id = $1`,
-          tenantAuditId
-        )
-      );
+  for (const context of [
+    { name: 'tenant-scoped', platform: false, purgeOrg: '' },
+    { name: 'tenant-scoped with a matching purge flag', platform: false, purgeOrg: org },
+    { name: 'platform-scoped without a purge', platform: true, purgeOrg: '' },
+    { name: 'platform-scoped with another purge', platform: true, purgeOrg: `${org}_other` },
+    { name: 'platform-scoped with the exact purge', platform: true, purgeOrg: org },
+  ]) {
+    const operations =
+      context.platform && context.purgeOrg === org ? ['UPDATE'] : ['UPDATE', 'DELETE'];
+    for (const operation of operations) {
+      it(`audit_logs rejects ${context.name} ${operation}`, async () => {
+        const { withTenantDb } = await import('@/lib/tenancy/scoped-db');
+        const scope = context.platform
+          ? scoped
+          : (run: Parameters<typeof scoped>[0]) => withTenantDb(org, run);
+        const mutation = scope(async (db) => {
+          await db.$queryRaw`SELECT set_config('app.purging_organization_id', ${context.purgeOrg}, true)`;
+          return db.$executeRawUnsafe(
+            operation === 'UPDATE'
+              ? `UPDATE audit_logs SET action = 'tampered' WHERE id = $1`
+              : `DELETE FROM audit_logs WHERE id = $1`,
+            tenantAuditId
+          );
+        });
 
-      const error = await mutation.catch((cause: unknown) => cause);
+        const error = await mutation.catch((cause: unknown) => cause);
 
-      expect(error).toEqual(
-        expect.objectContaining({
-          message: expect.stringMatching(
-            new RegExp(`audit_logs is append-only: ${operation} is forbidden`, 'i')
-          ),
-        })
-      );
-      expect(error).toMatchObject({
-        meta: { driverAdapterError: { cause: { originalCode: '55000' } } },
-      });
+        expect(error).toEqual(
+          expect.objectContaining({
+            message: expect.stringMatching(
+              new RegExp(`audit_logs is append-only: ${operation} is forbidden`, 'i')
+            ),
+          })
+        );
+        expect(error).toMatchObject({
+          meta: { driverAdapterError: { cause: { originalCode: '55000' } } },
+        });
 
-      await expect(
-        withTenantDb(org, (db) =>
-          db.$queryRaw<{ action: string }[]>`
+        await expect(
+          withTenantDb(
+            org,
+            (db) =>
+              db.$queryRaw<{ action: string }[]>`
             SELECT action FROM audit_logs WHERE id = ${tenantAuditId}
           `
-        )
-      ).resolves.toEqual([{ action }]);
-    });
+          )
+        ).resolves.toEqual([{ action }]);
+      });
+    }
   }
+
+  it('allows deletion only for the exact platform purge and keeps that context transaction-local', async () => {
+    const purgeId = `${org}_purged_audit`;
+    await scoped(
+      (db) =>
+        db.$executeRaw`
+        INSERT INTO audit_logs (id, "organizationId", source, category, action)
+        VALUES (${purgeId}, ${org}, 'TRPC', 'SYSTEM', ${action})
+      `
+    );
+    await expect(
+      scoped(async (db) => {
+        await db.$queryRaw`SELECT set_config('app.purging_organization_id', ${org}, true)`;
+        return db.$executeRaw`DELETE FROM audit_logs WHERE id = ${purgeId}`;
+      })
+    ).resolves.toBe(1);
+    await expect(
+      scoped((db) => db.$queryRaw`SELECT id FROM audit_logs WHERE id = ${purgeId}`)
+    ).resolves.toEqual([]);
+    await expect(
+      scoped((db) => db.$executeRaw`DELETE FROM audit_logs WHERE id = ${tenantAuditId}`)
+    ).rejects.toThrow(/audit_logs is append-only: DELETE is forbidden/);
+  });
 
   it('continues to allow tenant-scoped inserts', async () => {
     const { withTenantDb } = await import('@/lib/tenancy/scoped-db');
     const insertedId = `${org}_tenant_audit_insert`;
 
     await expect(
-      withTenantDb(org, (db) =>
-        db.$executeRaw`
+      withTenantDb(
+        org,
+        (db) =>
+          db.$executeRaw`
           INSERT INTO audit_logs (id, "organizationId", source, category, action)
           VALUES (${insertedId}, ${org}, 'TRPC', 'SYSTEM', ${action})
         `
@@ -132,8 +173,10 @@ describe.skipIf(!url)('platform audit ledger on disposable PostgreSQL', () => {
     ).resolves.toBe(1);
 
     await expect(
-      withTenantDb(org, (db) =>
-        db.$queryRaw<{ action: string }[]>`
+      withTenantDb(
+        org,
+        (db) =>
+          db.$queryRaw<{ action: string }[]>`
           SELECT action FROM audit_logs WHERE id = ${insertedId}
         `
       )
