@@ -4,6 +4,7 @@ import { can, subjectFromSession } from '@/lib/abac';
 import { hasModule } from '@/lib/entitlements';
 import {
   listReceivingExceptions,
+  lockReceivablePurchaseOrder,
   postGoodsReceipt,
   resolveReceivingException,
   reverseGoodsReceipt,
@@ -976,172 +977,168 @@ const purchasingRouter = router({
       await assertProcurement(ctx);
       const scope = receivingScope(ctx, input.branchId);
       try {
-        // PUR-01: an unauthorized or licence-expired supplier cannot be
-        // received from, checked here and again when the receipt posts.
-        assertOrderableSupplier(
-          await ctx.db.pharmacySupplier.findFirst({
-            where: { id: input.supplierId },
-            include: WITH_LICENCES,
-          }),
-          input.receivedAt
-        );
-        if (input.directPurchase) {
-          assertDirectPurchaseAuthorized({
-            bypassReason: input.directPurchase.reason,
-            bypassApprovedByUserId: input.directPurchase.approvedByUserId,
-            receivedByUserId: scope.actorId,
-          });
-        }
-        if (
-          input.purchaseOrderId &&
-          !(await ctx.db.pharmacyPurchaseOrder.findFirst({
-            where: {
-              id: input.purchaseOrderId,
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          if (input.purchaseOrderId) {
+            // Lock the referenced order before validating any mutable data so
+            // cancellation cannot commit while the receipt is being checked.
+            await lockReceivablePurchaseOrder(db, scope, {
+              purchaseOrderId: input.purchaseOrderId,
               supplierId: input.supplierId,
-              branchId: input.branchId,
-            },
-          }))
-        ) {
-          throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
-        }
-
-        const ownOrderLines = new Map(
-          input.purchaseOrderId
-            ? (
-                await ctx.db.pharmacyPurchaseOrderLine.findMany({
-                  where: { purchaseOrderId: input.purchaseOrderId },
-                  select: { id: true, medicineId: true, packLevelId: true },
-                })
-              ).map((line) => [line.id, line] as const)
-            : []
-        );
-
-        const lines = [];
-        const seenSerials = new Set<string>();
-        for (const [index, line] of input.lines.entries()) {
-          if (
-            !(await ctx.db.medicine.findFirst({ where: { id: line.medicineId, saleable: true } }))
-          )
-            throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
-          if (!(await ctx.db.packLevel.findFirst({ where: { id: line.packLevelId } })))
-            throw new PharmacyReceivingError('MISSING_PACK_CONVERSION');
-          // An ordered line borrowed from another order — or from another
-          // tenant — would make the three-way match compare the goods against
-          // something they were never ordered on.
-          if (line.purchaseOrderLineId) {
-            const orderLine = ownOrderLines.get(line.purchaseOrderLineId);
-            if (!orderLine) throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
-            // The referenced order line is the authority for item identity. Without
-            // this check, unrelated goods could inherit its price and quantity terms,
-            // pass three-way matching, and close the wrong ordered line.
-            if (
-              orderLine.medicineId !== line.medicineId ||
-              orderLine.packLevelId !== line.packLevelId
-            ) {
-              throw new PharmacyReceivingError('PURCHASE_ORDER_LINE_ITEM_MISMATCH');
-            }
-          }
-
-          const quantities = receiptLineQuantities({
-            receivedPacks: line.receivedPacks,
-            bonusPacks: line.bonusPacks,
-            canonicalUnitsPerPack: line.canonicalUnitsPerPack,
-            rejectedCanonicalUnits: line.rejectedCanonicalUnits,
-          });
-          const identity = await resolveReceiptLineIdentity(ctx.db, scope.organizationId, {
-            medicineId: line.medicineId,
-            batchNumber: line.batchNumber,
-            printedExpiry: line.printedExpiry,
-            expiryPrecision: line.expiryPrecision,
-            gtin: line.gtin,
-            serialNumber: line.serialNumber,
-            gs1Warnings: line.gs1Warnings,
-            gs1Payload: line.gs1Payload,
-            invoiceCorrection: line.invoiceCorrection,
-            acceptedCanonicalUnits: quantities.acceptedCanonicalUnits,
-            receivedAt: input.receivedAt,
-          });
-          if (identity.gtin && identity.serialKey) {
-            const token = `${identity.gtin}:${identity.serialKey}`;
-            if (seenSerials.has(token)) throw new PharmacyReceivingError('DUPLICATE_SERIAL');
-            seenSerials.add(token);
-            const prior = await ctx.db.pharmacyGoodsReceiptLine.findFirst({
-              where: {
-                organizationId: scope.organizationId,
-                gtin: identity.gtin,
-                serialKey: identity.serialKey,
-              },
-              select: { id: true },
             });
-            if (prior) throw new PharmacyReceivingError('DUPLICATE_SERIAL');
           }
-          // The tenant and branch are not repeated here: they travel in the
-          // composite key of the receipt this line is nested under, so Prisma
-          // supplies them and a payload could never disagree with the header.
-          lines.push({
-            lineNumber: index + 1,
-            purchaseOrderLineId: line.purchaseOrderLineId ?? null,
-            medicineId: line.medicineId,
-            packLevelId: line.packLevelId,
-            batchNumber: identity.batchNumber,
-            printedExpiry: identity.printedExpiry,
-            expiryPrecision: identity.expiryPrecision,
-            printedMrpMinor: line.printedMrpMinor,
-            canonicalUnitsPerPack: line.canonicalUnitsPerPack,
-            receivedPacks: line.receivedPacks,
-            bonusPacks: line.bonusPacks,
-            receivedCanonicalUnits: quantities.receivedCanonicalUnits,
-            bonusCanonicalUnits: quantities.bonusCanonicalUnits,
-            acceptedCanonicalUnits: quantities.acceptedCanonicalUnits,
-            rejectedCanonicalUnits: quantities.rejectedCanonicalUnits,
-            rejectionReason: line.rejectionReason ?? null,
-            invoicedPricePerPackMinor: line.invoicedPricePerPackMinor,
-            discountBps: line.discountBps,
-            taxBps: line.taxBps,
-            taxCreditable: line.taxCreditable,
-            // PUR-03: bonus units divide the same money over more units, so a
-            // scheme lowers the landed cost and never adds revenue.
-            unitCostMinor: receiptLineUnitCostMinor({
+          // PUR-01: an unauthorized or licence-expired supplier cannot be
+          // received from, checked here and again when the receipt posts.
+          assertOrderableSupplier(
+            await db.pharmacySupplier.findFirst({
+              where: { id: input.supplierId },
+              include: WITH_LICENCES,
+            }),
+            input.receivedAt
+          );
+          if (input.directPurchase) {
+            assertDirectPurchaseAuthorized({
+              bypassReason: input.directPurchase.reason,
+              bypassApprovedByUserId: input.directPurchase.approvedByUserId,
+              receivedByUserId: scope.actorId,
+            });
+          }
+          const ownOrderLines = new Map(
+            input.purchaseOrderId
+              ? (
+                  await db.pharmacyPurchaseOrderLine.findMany({
+                    where: { purchaseOrderId: input.purchaseOrderId },
+                    select: { id: true, medicineId: true, packLevelId: true },
+                  })
+                ).map((line) => [line.id, line] as const)
+              : []
+          );
+
+          const lines = [];
+          const seenSerials = new Set<string>();
+          for (const [index, line] of input.lines.entries()) {
+            if (!(await db.medicine.findFirst({ where: { id: line.medicineId, saleable: true } })))
+              throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
+            if (!(await db.packLevel.findFirst({ where: { id: line.packLevelId } })))
+              throw new PharmacyReceivingError('MISSING_PACK_CONVERSION');
+            // An ordered line borrowed from another order — or from another
+            // tenant — would make the three-way match compare the goods against
+            // something they were never ordered on.
+            if (line.purchaseOrderLineId) {
+              const orderLine = ownOrderLines.get(line.purchaseOrderLineId);
+              if (!orderLine) throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
+              // The referenced order line is the authority for item identity. Without
+              // this check, unrelated goods could inherit its price and quantity terms,
+              // pass three-way matching, and close the wrong ordered line.
+              if (
+                orderLine.medicineId !== line.medicineId ||
+                orderLine.packLevelId !== line.packLevelId
+              ) {
+                throw new PharmacyReceivingError('PURCHASE_ORDER_LINE_ITEM_MISMATCH');
+              }
+            }
+
+            const quantities = receiptLineQuantities({
               receivedPacks: line.receivedPacks,
               bonusPacks: line.bonusPacks,
               canonicalUnitsPerPack: line.canonicalUnitsPerPack,
+              rejectedCanonicalUnits: line.rejectedCanonicalUnits,
+            });
+            const identity = await resolveReceiptLineIdentity(db, scope.organizationId, {
+              medicineId: line.medicineId,
+              batchNumber: line.batchNumber,
+              printedExpiry: line.printedExpiry,
+              expiryPrecision: line.expiryPrecision,
+              gtin: line.gtin,
+              serialNumber: line.serialNumber,
+              gs1Warnings: line.gs1Warnings,
+              gs1Payload: line.gs1Payload,
+              invoiceCorrection: line.invoiceCorrection,
+              acceptedCanonicalUnits: quantities.acceptedCanonicalUnits,
+              receivedAt: input.receivedAt,
+            });
+            if (identity.gtin && identity.serialKey) {
+              const token = `${identity.gtin}:${identity.serialKey}`;
+              if (seenSerials.has(token)) throw new PharmacyReceivingError('DUPLICATE_SERIAL');
+              seenSerials.add(token);
+              const prior = await db.pharmacyGoodsReceiptLine.findFirst({
+                where: {
+                  organizationId: scope.organizationId,
+                  gtin: identity.gtin,
+                  serialKey: identity.serialKey,
+                },
+                select: { id: true },
+              });
+              if (prior) throw new PharmacyReceivingError('DUPLICATE_SERIAL');
+            }
+            // The tenant and branch are not repeated here: they travel in the
+            // composite key of the receipt this line is nested under, so Prisma
+            // supplies them and a payload could never disagree with the header.
+            lines.push({
+              lineNumber: index + 1,
+              purchaseOrderLineId: line.purchaseOrderLineId ?? null,
+              medicineId: line.medicineId,
+              packLevelId: line.packLevelId,
+              batchNumber: identity.batchNumber,
+              printedExpiry: identity.printedExpiry,
+              expiryPrecision: identity.expiryPrecision,
+              printedMrpMinor: line.printedMrpMinor,
+              canonicalUnitsPerPack: line.canonicalUnitsPerPack,
+              receivedPacks: line.receivedPacks,
+              bonusPacks: line.bonusPacks,
+              receivedCanonicalUnits: quantities.receivedCanonicalUnits,
+              bonusCanonicalUnits: quantities.bonusCanonicalUnits,
+              acceptedCanonicalUnits: quantities.acceptedCanonicalUnits,
+              rejectedCanonicalUnits: quantities.rejectedCanonicalUnits,
+              rejectionReason: line.rejectionReason ?? null,
               invoicedPricePerPackMinor: line.invoicedPricePerPackMinor,
               discountBps: line.discountBps,
               taxBps: line.taxBps,
               taxCreditable: line.taxCreditable,
-            }),
-            stockLocationId: line.stockLocationId,
-            quarantineLocationId: line.quarantineLocationId ?? null,
-            gtin: identity.gtin,
-            serialNumber: identity.serialNumber,
-            serialKey: identity.serialKey,
-            gs1Warnings: identity.gs1Warnings,
-          });
-        }
+              // PUR-03: bonus units divide the same money over more units, so a
+              // scheme lowers the landed cost and never adds revenue.
+              unitCostMinor: receiptLineUnitCostMinor({
+                receivedPacks: line.receivedPacks,
+                bonusPacks: line.bonusPacks,
+                canonicalUnitsPerPack: line.canonicalUnitsPerPack,
+                invoicedPricePerPackMinor: line.invoicedPricePerPackMinor,
+                discountBps: line.discountBps,
+                taxBps: line.taxBps,
+                taxCreditable: line.taxCreditable,
+              }),
+              stockLocationId: line.stockLocationId,
+              quarantineLocationId: line.quarantineLocationId ?? null,
+              gtin: identity.gtin,
+              serialNumber: identity.serialNumber,
+              serialKey: identity.serialKey,
+              gs1Warnings: identity.gs1Warnings,
+            });
+          }
 
-        return await ctx.db.pharmacyGoodsReceipt.create({
-          data: {
-            organizationId: scope.organizationId,
-            branchId: scope.branchId,
-            reference: input.reference,
-            supplierId: input.supplierId,
-            purchaseOrderId: input.purchaseOrderId ?? null,
-            supplierInvoiceRef: input.supplierInvoiceRef,
-            supplierInvoiceDate: input.supplierInvoiceDate,
-            distributorNtn: input.distributorNtn ?? null,
-            distributorStrn: input.distributorStrn ?? null,
-            warrantyEvidenceRef: input.warrantyEvidenceRef,
-            receivedByUserId: scope.actorId,
-            receivedAt: input.receivedAt,
-            directPurchase: Boolean(input.directPurchase),
-            bypassReason: input.directPurchase?.reason ?? null,
-            bypassApprovedByUserId: input.directPurchase?.approvedByUserId ?? null,
-            bypassApprovedAt: input.directPurchase ? new Date() : null,
-            note: input.note,
-            qualifiedPersonUserId: input.qualifiedPersonUserId ?? null,
-            lines: { create: lines },
-          },
-          include: { lines: { orderBy: { lineNumber: 'asc' } } },
+          return await db.pharmacyGoodsReceipt.create({
+            data: {
+              organizationId: scope.organizationId,
+              branchId: scope.branchId,
+              reference: input.reference,
+              supplierId: input.supplierId,
+              purchaseOrderId: input.purchaseOrderId ?? null,
+              supplierInvoiceRef: input.supplierInvoiceRef,
+              supplierInvoiceDate: input.supplierInvoiceDate,
+              distributorNtn: input.distributorNtn ?? null,
+              distributorStrn: input.distributorStrn ?? null,
+              warrantyEvidenceRef: input.warrantyEvidenceRef,
+              receivedByUserId: scope.actorId,
+              receivedAt: input.receivedAt,
+              directPurchase: Boolean(input.directPurchase),
+              bypassReason: input.directPurchase?.reason ?? null,
+              bypassApprovedByUserId: input.directPurchase?.approvedByUserId ?? null,
+              bypassApprovedAt: input.directPurchase ? new Date() : null,
+              note: input.note,
+              qualifiedPersonUserId: input.qualifiedPersonUserId ?? null,
+              lines: { create: lines },
+            },
+            include: { lines: { orderBy: { lineNumber: 'asc' } } },
+          });
         });
       } catch (error) {
         domainError(error);
