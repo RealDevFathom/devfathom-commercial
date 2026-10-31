@@ -637,6 +637,7 @@ function ScopedPharmacyCounterConsole({
           highAlert: line.highAlert,
           lasa: line.lasa,
           coldChain: line.coldChain,
+          activeIngredients: line.activeIngredients ?? [],
         },
         blocked: [],
         emergencySupply: line.emergencySupply ?? false,
@@ -2404,6 +2405,7 @@ function ScopedPharmacyCounterConsole({
                     }
               }
               alerts={alerts}
+              acknowledgementScope={saleId && branchId ? { branchId, saleId } : null}
               patient={patient}
               candidates={patientsQuery.data?.patients ?? []}
               query={patientQuery}
