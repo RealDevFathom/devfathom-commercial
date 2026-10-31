@@ -2,6 +2,7 @@ import 'server-only';
 import { randomUUID } from 'node:crypto';
 import { TRPCError } from '@trpc/server';
 import {
+  CredentialLifecycleError,
   issueOperatorCredential,
   rotateOperatorCredential,
 } from '@/lib/restaurant/credential-lifecycle';
@@ -9,6 +10,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { LedgerScope } from './stock-ledger';
 import {
   clearLockout,
+  CredentialPolicyError,
   isLockedOut,
   registerFailedAttempt,
   verifyOperatorCredential,
@@ -22,6 +24,22 @@ export type SmartDiscountApproval = Readonly<{
   signatureRef: string;
 }>;
 const proofs = new WeakSet<SmartDiscountApproval>();
+
+/** Credential policy/lifecycle failures are caller errors, not internal 500s. */
+function mapCredentialError(err: unknown): never {
+  if (err instanceof CredentialPolicyError)
+    throw new TRPCError({ code: 'BAD_REQUEST', message: err.message, cause: err });
+  if (err instanceof CredentialLifecycleError) {
+    const code =
+      err.reason === 'ALREADY_EXISTS' || err.reason === 'REVOKED'
+        ? 'CONFLICT'
+        : err.reason === 'NOT_FOUND' || err.reason === 'STAFF_NOT_FOUND'
+          ? 'NOT_FOUND'
+          : 'BAD_REQUEST';
+    throw new TRPCError({ code, message: err.message, cause: err });
+  }
+  throw err;
+}
 
 /** Pharmacy owners can enroll their own PIN without enabling restaurant modules. */
 export async function setSmartDiscountOwnerPin(
@@ -51,7 +69,9 @@ export async function setSmartDiscountOwnerPin(
   });
   if (staff && staff.status !== 'ACTIVE')
     throw new TRPCError({ code: 'FORBIDDEN', message: 'The owner profile must be active.' });
-  // This repairs only the current administrator's own profile, not an extra operator seat.
+  // This repairs only the current administrator's own profile, not an extra operator seat:
+  // like restaurant `provisionMyProfile`, the administrator's own profile is provisioning
+  // owed at activation, so it deliberately bypasses the operator commercial limit.
   if (!staff)
     staff = await db.restaurantStaffProfile.create({
       data: {
@@ -77,9 +97,13 @@ export async function setSmartDiscountOwnerPin(
     });
     if ('blocked' in verified) return verified;
   }
-  const credential = existing
-    ? await rotateOperatorCredential(db, { credentialId: existing.id, secret: pin })
-    : await issueOperatorCredential(db, { staffProfileId: staff.id, type: 'PIN', secret: pin });
+  // The owner has one org-wide operator PIN (deviceId null); the restaurant POS and this
+  // pharmacy approval deliberately share it, so changing it here changes it there too.
+  const credential = await (
+    existing
+      ? rotateOperatorCredential(db, { credentialId: existing.id, secret: pin })
+      : issueOperatorCredential(db, { staffProfileId: staff.id, type: 'PIN', secret: pin })
+  ).catch(mapCredentialError);
   await db.auditLog.create({
     data: {
       organizationId: scope.organizationId,

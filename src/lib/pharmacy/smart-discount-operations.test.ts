@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { verifySmartDiscountOwner, isSmartDiscountApproval } from './smart-discount-approval';
+import {
+  isSmartDiscountApproval,
+  setSmartDiscountOwnerPin,
+  verifySmartDiscountOwner,
+} from './smart-discount-approval';
 import {
   assertSmartDiscountOwner,
   readSmartDiscountSuggestion,
@@ -185,4 +189,33 @@ describe('persisted smart discount workflow', () => {
       expect(db.restaurantOperatorCredential.update).not.toHaveBeenCalled();
     }
   );
+});
+
+describe('smart discount owner PIN enrollment errors', () => {
+  function enrollDb(staffLookup: unknown) {
+    const db = fixture();
+    return Object.assign(db, {
+      restaurantStaffProfile: {
+        findFirst: vi.fn(async () => ({ id: 'staff', status: 'ACTIVE' })),
+        findUnique: vi.fn(async () => staffLookup),
+      },
+      restaurantOperatorCredential: {
+        ...db.restaurantOperatorCredential,
+        findFirst: vi.fn(async () => null),
+      },
+    });
+  }
+  it('maps credential policy failures to BAD_REQUEST instead of a 500', async () => {
+    const db = enrollDb({ id: 'staff', status: 'ACTIVE' });
+    await expect(setSmartDiscountOwnerPin(db as never, scope, '12')).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(db.auditLog.create).not.toHaveBeenCalled();
+  });
+  it('maps credential lifecycle failures to tRPC errors', async () => {
+    const db = enrollDb(null);
+    await expect(setSmartDiscountOwnerPin(db as never, scope, '1234')).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
+  });
 });
