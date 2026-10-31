@@ -1,18 +1,14 @@
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
-import { can, subjectFromSession } from '@/lib/abac';
-import { hasModule } from '@/lib/entitlements';
 import {
   compareRecordedTaxProfiles,
-  recordedTaxProfileReviewCsv,
   type TaxProfileReviewDto,
 } from '@/lib/pharmacy/accounts/tax-profile-review';
-import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
-import { createTRPCContext } from '@/server/trpc';
 import { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
 import { Button } from '@/components/ui/button';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
+import { canReview, reviewContext } from './_lib/access';
 
 export const metadata: Metadata = { title: 'Tax profile review' };
 
@@ -25,28 +21,8 @@ export default async function TaxProfileReviewPage({
   searchParams: Promise<{ branch?: string; before?: string; after?: string }>;
 }) {
   const query = await searchParams;
-  const actor = await resolveTenantActor();
-  if (!actor?.session?.user || actor.session.user.role !== 'ADMIN') return <Denied />;
-  const ctx = await createTRPCContext({
-    session: actor.session,
-    organization: actor.organization,
-    support: actor.support,
-  });
-  if (
-    !hasModule(ctx.entitlements, 'pharmacy-finance') ||
-    !hasModule(ctx.entitlements, 'pharmacy-reports')
-  )
-    return <Denied />;
-  for (const permission of ['reports:operational', 'reports:financial'] as const) {
-    if (
-      !(await can(subjectFromSession(ctx.session!.user), permission, undefined, {
-        db: ctx.db,
-        source: 'TRPC',
-        ip: ctx.requestMeta.ip,
-      }))
-    )
-      return <Denied />;
-  }
+  const ctx = await reviewContext();
+  if (!ctx || !(await canReview(ctx))) return <Denied />;
   const organizationId = ctx.entitlements.organizationId;
   const branches = await ctx.db.pharmacyBranch.findMany({
     where: { organizationId, active: true },
@@ -69,12 +45,17 @@ export default async function TaxProfileReviewPage({
     const workspace = await pharmacyFinanceRouter
       .createCaller(ctx)
       .workspace({ branchId: branch.id });
-    profiles = workspace.taxProfiles as unknown as TaxProfileReviewDto[];
+    profiles = workspace.taxProfiles;
   } catch {
     loadFailed = true;
   }
   const approved = profiles.filter(
-    (profile) => profile.status === 'PUBLISHED' && profile.approvalReference && profile.approvedAt
+    (profile) =>
+      profile.organizationId === organizationId &&
+      profile.branchId === branch.id &&
+      profile.status === 'PUBLISHED' &&
+      profile.approvalReference?.trim() &&
+      profile.approvedAt
   );
   let review: ReturnType<typeof compareRecordedTaxProfiles> | null = null;
   let reviewError = '';
@@ -84,7 +65,7 @@ export default async function TaxProfileReviewPage({
         organizationId,
         branchId: branch.id,
         selectedVersionIds: [query.before ?? '', query.after ?? ''],
-        profiles: approved,
+        profiles,
       });
     } catch {
       reviewError =
@@ -131,7 +112,13 @@ export default async function TaxProfileReviewPage({
               profiles={approved}
               selected={query.after}
             />
-            <Button type="submit" className="sm:col-span-3">
+            {approved.length < 2 ? (
+              <p className="text-sm text-text-muted sm:col-span-3">
+                Two approved versions are required. Publish approved versions in Pharmacy Finance
+                before comparing recorded evidence.
+              </p>
+            ) : null}
+            <Button type="submit" className="min-h-11 sm:col-span-3" disabled={approved.length < 2}>
               Compare recorded evidence
             </Button>
           </form>
@@ -147,7 +134,15 @@ export default async function TaxProfileReviewPage({
           title={`Version ${review.before.versionNumber} to ${review.after.versionNumber}`}
           eyebrow="Recorded differences"
         >
-          <div className="overflow-x-auto">
+          {review.changes.length === 0 ? (
+            <p className="mb-4 text-sm text-text-muted">No recorded rule differences.</p>
+          ) : null}
+          <div
+            className="overflow-x-auto focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            role="region"
+            aria-label="Recorded tax rule differences"
+            tabIndex={0}
+          >
             <table className="w-full text-left text-sm">
               <thead className="font-mono text-xs uppercase text-text-muted">
                 <tr>
@@ -155,7 +150,10 @@ export default async function TaxProfileReviewPage({
                   <th className="p-2">Class / PCT-HS</th>
                   <th className="p-2">Before rate</th>
                   <th className="p-2">After rate</th>
-                  <th className="p-2">Exemption evidence</th>
+                  <th className="p-2">Before rounding scale</th>
+                  <th className="p-2">After rounding scale</th>
+                  <th className="p-2">Before exemption</th>
+                  <th className="p-2">After exemption</th>
                 </tr>
               </thead>
               <tbody>
@@ -168,23 +166,31 @@ export default async function TaxProfileReviewPage({
                     </td>
                     <td className="p-2 font-mono">{change.before?.rate ?? '—'}</td>
                     <td className="p-2 font-mono">{change.after?.rate ?? '—'}</td>
-                    <td className="p-2">
-                      {change.after?.exemptionCode ??
-                        change.before?.exemptionCode ??
-                        'None recorded'}
-                    </td>
+                    <td className="p-2 font-mono">{change.before?.roundingScale ?? '—'}</td>
+                    <td className="p-2 font-mono">{change.after?.roundingScale ?? '—'}</td>
+                    <td className="p-2">{change.before?.exemptionCode ?? 'None recorded'}</td>
+                    <td className="p-2">{change.after?.exemptionCode ?? 'None recorded'}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-          <a
-            className="mt-5 inline-flex min-h-11 items-center rounded-[var(--radius-sm)] bg-primary px-4 text-sm font-medium text-primary-foreground"
-            download={`tax-profile-review-v${review.before.versionNumber}-v${review.after.versionNumber}.csv`}
-            href={`data:text/csv;charset=utf-8,${encodeURIComponent(recordedTaxProfileReviewCsv(review))}`}
+          <Button
+            className="mt-5 min-h-11"
+            nativeButton={false}
+            role="link"
+            render={
+              <a
+                href={`/pharmacy/accounts/tax-profile-review/export?${new URLSearchParams({
+                  branch: branch.id,
+                  before: review.before.id,
+                  after: review.after.id,
+                })}`}
+              />
+            }
           >
             Download evidence CSV
-          </a>
+          </Button>
         </SectionCard>
       ) : null}
     </Shell>

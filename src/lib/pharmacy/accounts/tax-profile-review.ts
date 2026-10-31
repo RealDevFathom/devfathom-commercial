@@ -130,21 +130,12 @@ export function compareRecordedTaxProfiles(input: {
   const [beforeId, afterId] = input.selectedVersionIds;
   if (!beforeId || !afterId || beforeId === afterId)
     throw new Error('Select two different tax profile versions.');
-  const selected = input.profiles.filter(
-    (profile) => profile.id === beforeId || profile.id === afterId
-  );
-  if (selected.length !== 2)
+  const selectedBefore = input.profiles.filter((profile) => profile.id === beforeId);
+  const selectedAfter = input.profiles.filter((profile) => profile.id === afterId);
+  if (selectedBefore.length !== 1 || selectedAfter.length !== 1)
     throw new Error('Selected tax profile versions were not found exactly once.');
-  const before = approved(
-    selected.find((profile) => profile.id === beforeId)!,
-    input.organizationId,
-    input.branchId
-  );
-  const after = approved(
-    selected.find((profile) => profile.id === afterId)!,
-    input.organizationId,
-    input.branchId
-  );
+  const before = approved(selectedBefore[0], input.organizationId, input.branchId);
+  const after = approved(selectedAfter[0], input.organizationId, input.branchId);
   const keys = [...new Set([...before.rules.keys(), ...after.rules.keys()])].sort();
   const changes: TaxRuleChange[] = [];
   for (const key of keys) {
@@ -180,6 +171,8 @@ export function recordedTaxProfileReviewCsv(review: TaxProfileReview) {
     'afterRate',
     'beforePriceMode',
     'afterPriceMode',
+    'beforeRoundingScale',
+    'afterRoundingScale',
     'beforeSroReference',
     'afterSroReference',
     'beforeSroProvisional',
@@ -194,9 +187,21 @@ export function recordedTaxProfileReviewCsv(review: TaxProfileReview) {
     'beforeEffectiveTo',
     'afterEffectiveFrom',
     'afterEffectiveTo',
+    'organizationId',
+    'branchId',
+    'beforeProfileId',
+    'afterProfileId',
+    'beforeVersionNumber',
+    'afterVersionNumber',
+    'beforeProfileName',
+    'afterProfileName',
     'notice',
   ];
-  const rows = review.changes.map((change) => [
+  // A no-change comparison still carries the selected profiles' recorded evidence.
+  const changes = review.changes.length
+    ? review.changes
+    : [{ kind: 'UNCHANGED', before: null, after: null }];
+  const rows = changes.map((change) => [
     change.kind,
     change.before?.productClass ?? change.after?.productClass,
     change.before?.pctHsCode ?? change.after?.pctHsCode,
@@ -204,6 +209,8 @@ export function recordedTaxProfileReviewCsv(review: TaxProfileReview) {
     change.after?.rate,
     change.before?.priceMode,
     change.after?.priceMode,
+    change.before?.roundingScale,
+    change.after?.roundingScale,
     change.before?.sroReference,
     change.after?.sroReference,
     change.before?.sroProvisional,
@@ -218,6 +225,14 @@ export function recordedTaxProfileReviewCsv(review: TaxProfileReview) {
     review.before.effectiveTo,
     review.after.effectiveFrom,
     review.after.effectiveTo,
+    review.scope.organizationId,
+    review.scope.branchId,
+    review.before.id,
+    review.after.id,
+    review.before.versionNumber,
+    review.after.versionNumber,
+    review.before.name,
+    review.after.name,
     review.disclaimer,
   ]);
   return `${[header, ...rows].map((row) => row.map(safeCsv).join(',')).join('\r\n')}\r\n`;
