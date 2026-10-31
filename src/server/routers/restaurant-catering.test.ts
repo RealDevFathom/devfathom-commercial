@@ -367,6 +367,117 @@ describe('restaurant catering lifecycle', () => {
     expect(db.restaurantCateringOrderLine.create).not.toHaveBeenCalled();
     expect(db.restaurantCateringOrderLine.updateMany).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { portions: '1', unitPrice: '1.999' },
+    { portions: '1.2345', unitPrice: '1.99' },
+  ])('rejects line decimals beyond their durable database scale', async (decimals) => {
+    await expect(
+      caller().addLine({
+        orderId: 'order_1',
+        recipeId: 'recipe_1',
+        description: 'Precision test',
+        ...decimals,
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(db.restaurantCateringOrderLine.create).not.toHaveBeenCalled();
+  });
+
+  it.each([{ portions: '1.2345' }, { unitPrice: '1.999' }])(
+    'rejects line updates beyond their durable database scale',
+    async (decimals) => {
+      await expect(
+        caller().updateLine({ orderId: 'order_1', lineId: 'line_1', ...decimals })
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      expect(db.restaurantCateringOrderLine.updateMany).not.toHaveBeenCalled();
+    }
+  );
+
+  it('preserves values at the durable database scale', async () => {
+    await caller().addLine({
+      orderId: 'order_1',
+      recipeId: 'recipe_1',
+      description: 'Precision test',
+      portions: '1.234',
+      unitPrice: '1.99',
+    });
+
+    const data = db.restaurantCateringOrderLine.create.mock.calls[0]?.[0].data as {
+      portions: Prisma.Decimal;
+      unitPrice: Prisma.Decimal;
+    };
+    expect(data.portions.toString()).toBe('1.234');
+    expect(data.unitPrice.toString()).toBe('1.99');
+  });
+
+  it('preserves money values at the durable database scale', async () => {
+    await caller().create({
+      branchId: 'branch_1',
+      eventName: 'Precision test',
+      eventDate: new Date('2026-10-08'),
+      headcount: 1,
+      quotedTotal: '12.34',
+      depositAmount: '5.67',
+    });
+    await caller().addExtraCost({
+      orderId: 'order_1',
+      kind: 'OTHER',
+      label: 'Precision test',
+      amount: '1.23',
+    });
+
+    const order = db.restaurantCateringOrder.create.mock.calls[0]?.[0].data as {
+      quotedTotal: Prisma.Decimal;
+      depositAmount: Prisma.Decimal;
+    };
+    const extraCost = db.restaurantCateringExtraCost.create.mock.calls[0]?.[0].data as {
+      amount: Prisma.Decimal;
+    };
+    expect(order.quotedTotal.toString()).toBe('12.34');
+    expect(order.depositAmount.toString()).toBe('5.67');
+    expect(extraCost.amount.toString()).toBe('1.23');
+  });
+
+  it('rejects excess money precision on every order write before persistence', async () => {
+    await expect(
+      caller().create({
+        branchId: 'branch_1',
+        eventName: 'Precision test',
+        eventDate: new Date('2026-10-08'),
+        headcount: 1,
+        quotedTotal: '1.001',
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(
+      caller().create({
+        branchId: 'branch_1',
+        eventName: 'Precision test',
+        eventDate: new Date('2026-10-08'),
+        headcount: 1,
+        depositAmount: '1.001',
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(
+      caller().update({ orderId: 'order_1', quotedTotal: '1.001' })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(
+      caller().update({ orderId: 'order_1', depositAmount: '1.001' })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(db.restaurantCateringOrder.create).not.toHaveBeenCalled();
+    expect(db.restaurantCateringOrder.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects excess precision for extra costs before persistence', async () => {
+    await expect(
+      caller().addExtraCost({
+        orderId: 'order_1',
+        kind: 'OTHER',
+        label: 'Precision test',
+        amount: '1.001',
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(db.restaurantCateringExtraCost.create).not.toHaveBeenCalled();
+  });
 });
 
 describe('restaurant catering production and cost', () => {

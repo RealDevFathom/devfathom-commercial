@@ -11,7 +11,8 @@ import { annotateAudit } from '../audit';
 import { capabilityProcedure, router } from '../trpc';
 
 const id = z.string().trim().min(1).max(200);
-const money = z.string().regex(/^\d+(?:\.\d{1,4})?$/);
+const cateringMoneyInput = z.string().regex(/^\d+(?:\.\d{1,2})?$/);
+const cateringPortionsInput = z.string().regex(/^\d+(?:\.\d{1,3})?$/);
 const status = z.enum([
   'DRAFT',
   'QUOTED',
@@ -215,8 +216,8 @@ const editableOrder = z
     headcount: z.number().int().min(1),
     venueAddress: z.string().trim().max(500).nullable().optional(),
     deliveryAddressId: id.nullable().optional(),
-    quotedTotal: money.nullable().optional(),
-    depositAmount: money.nullable().optional(),
+    quotedTotal: cateringMoneyInput.nullable().optional(),
+    depositAmount: cateringMoneyInput.nullable().optional(),
     notes: z.string().max(10_000).nullable().optional(),
   })
   .strict();
@@ -226,8 +227,8 @@ const lineShape = z
     productId: id.nullable().optional(),
     recipeId: id,
     description: z.string().trim().min(1).max(500),
-    portions: money,
-    unitPrice: money,
+    portions: cateringPortionsInput,
+    unitPrice: cateringMoneyInput,
     sortOrder: z.number().int().min(0).optional(),
   })
   .strict();
@@ -458,7 +459,7 @@ export const restaurantCateringRouter = router({
           orderId: id,
           kind: extraCostKind,
           label: z.string().trim().min(1).max(240),
-          amount: money,
+          amount: cateringMoneyInput,
           ...actor,
         })
         .strict()
