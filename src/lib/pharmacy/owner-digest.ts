@@ -9,6 +9,8 @@ import {
   refreshPharmacyAnomalySignals,
   renderAnomalyDigest,
 } from './anomaly-signals-operations';
+import { readLicenceRenewalReminders } from './licence-renewal-operations';
+import { renderRenewalDigest, type RenewalReminder } from './licence-renewal';
 import { withPlatformDb, withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import { workspaceTimezone } from '@/lib/timezone';
 
@@ -46,6 +48,8 @@ export type OwnerDigest = {
     value: number | null;
   }>;
   anomalies: Awaited<ReturnType<typeof readPharmacyAnomalySignals>>;
+  /** #720 — this branch's licences and the workspace supplier licences due for renewal. */
+  renewals: RenewalReminder[];
   rendered: string;
 };
 
@@ -85,9 +89,13 @@ export async function composeOwnerDigest(
     from: input.businessDate,
     to: input.businessDate,
   };
-  const [report, anomalies] = await Promise.all([
+  const [report, anomalies, renewals] = await Promise.all([
     readPharmacyOwnerCommandCentre(db, filters),
     readPharmacyAnomalySignals(db, filters),
+    readLicenceRenewalReminders(db, {
+      organizationId: input.organizationId,
+      branchIds: [input.branchId],
+    }),
   ]);
   const contracts = new Map(PHARMACY_METRIC_CONTRACT.map((contract) => [contract.key, contract]));
   const metrics = DIGEST_METRIC_KEYS.map((key) => {
@@ -100,10 +108,12 @@ export async function composeOwnerDigest(
     freshness: report.freshness,
     metrics,
     anomalies,
+    renewals,
     rendered: [
       `Daily owner digest · ${input.branchName} · ${input.businessDate}`,
       ...metrics.map((metric) => `${metric.label}: ${renderValue(metric.key, metric.value)}`),
       ...renderAnomalyDigest(anomalies),
+      ...renderRenewalDigest(renewals),
       `As of ${report.freshness.asOf}`,
     ].join('\n'),
   };

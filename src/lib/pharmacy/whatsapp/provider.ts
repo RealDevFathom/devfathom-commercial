@@ -7,7 +7,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
  * environment; see docs/pharmacy/whatsapp.md.
  */
 
-export type WhatsAppTemplateKey = 'refillReminder' | 'khataReminder';
+export type WhatsAppTemplateKey = 'refillReminder' | 'khataReminder' | 'licenceRenewalReminder';
 
 export type WhatsAppConfig = {
   provider: 'meta' | 'mock';
@@ -19,7 +19,10 @@ export type WhatsAppConfig = {
   verifyToken: string | null;
   graphVersion: string;
   templateLanguage: string;
-  templates: Record<WhatsAppTemplateKey, string | null>;
+  /** #720's owner renewal template is optional so existing configs stay valid. */
+  templates: Record<Exclude<WhatsAppTemplateKey, 'licenceRenewalReminder'>, string | null> & {
+    licenceRenewalReminder?: string | null;
+  };
   reminderLeadDays: number;
 };
 
@@ -83,6 +86,7 @@ export function readWhatsAppConfig(env: Env = process.env): WhatsAppConfig {
     templates: {
       refillReminder: envValue(env, 'PHARMACY_WHATSAPP_TEMPLATE_REFILL_REMINDER'),
       khataReminder: envValue(env, 'PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER'),
+      licenceRenewalReminder: envValue(env, 'PHARMACY_WHATSAPP_TEMPLATE_LICENCE_RENEWAL'),
     },
     reminderLeadDays:
       Number.isSafeInteger(leadDays) && leadDays >= 0 && leadDays <= 30 ? leadDays : 3,
