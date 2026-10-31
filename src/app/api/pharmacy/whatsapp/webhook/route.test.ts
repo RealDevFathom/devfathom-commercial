@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   organization: vi.fn(),
   inbound: vi.fn(),
   callback: vi.fn(),
+  quality: vi.fn(),
 }));
 vi.mock('@/lib/pharmacy/whatsapp/provider', () => ({
   readWhatsAppConfig: mocks.config,
@@ -13,6 +14,10 @@ vi.mock('@/lib/pharmacy/whatsapp/provider', () => ({
 }));
 vi.mock('@/lib/pharmacy/whatsapp/inbound', () => ({ handleInboundWhatsAppMessage: mocks.inbound }));
 vi.mock('@/lib/pharmacy/marketing-delivery', () => ({ recordMarketingCallback: mocks.callback }));
+vi.mock('@/lib/pharmacy/whatsapp/account-quality', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/pharmacy/whatsapp/account-quality')>()),
+  applyAccountQualityUpdates: mocks.quality,
+}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({
   withTenantDb: async (_org: string, fn: (db: unknown) => unknown) => fn({}),
 }));
@@ -104,4 +109,39 @@ it('routes authenticated status evidence only for the owned sender', async () =>
   mocks.callback.mockClear();
   expect((await POST(payload('sender-a'))).status).toBe(401);
   expect(mocks.callback).not.toHaveBeenCalled();
+});
+
+it('applies account-quality updates only for the explicitly bound WABA after signature validation', async () => {
+  const accountRequest = () =>
+    new Request('http://pharmacy.localhost/api/pharmacy/whatsapp/webhook', {
+      method: 'POST',
+      body: JSON.stringify({
+        object: 'whatsapp_business_account',
+        entry: [
+          { id: 'foreign-waba', changes: [{ field: 'account_update', value: { event: 'BAN' } }] },
+          { id: 'waba-a', changes: [{ field: 'account_update', value: { event: 'REINSTATED' } }] },
+        ],
+      }),
+    });
+  expect((await POST(accountRequest())).status).toBe(200);
+  expect(mocks.quality).not.toHaveBeenCalled();
+
+  mocks.config.mockReturnValue({
+    phoneNumberId: 'sender-a',
+    organizationId: 'org-a',
+    businessAccountId: 'waba-a',
+    accountAppealUrl: 'https://business.facebook.com/accountquality',
+  });
+  expect((await POST(accountRequest())).status).toBe(200);
+  expect(mocks.quality).toHaveBeenCalledExactlyOnceWith(
+    {},
+    'org-a',
+    [{ key: 'waba-a:REINSTATED', action: 'recover', level: 'recovery', event: 'REINSTATED' }],
+    'https://business.facebook.com/accountquality'
+  );
+
+  mocks.quality.mockClear();
+  mocks.verify.mockReturnValue(false);
+  expect((await POST(accountRequest())).status).toBe(401);
+  expect(mocks.quality).not.toHaveBeenCalled();
 });

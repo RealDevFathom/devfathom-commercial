@@ -20,13 +20,17 @@ function object(value: unknown): Record<string, unknown> | null {
 }
 
 /** Parse only explicitly supported Meta `account_update` events. Unknown events fail open. */
-export function parseAccountQualityUpdates(payload: unknown): AccountQualityUpdate[] {
+export function parseAccountQualityUpdates(
+  payload: unknown,
+  ownedBusinessAccountId: string | null | undefined
+): AccountQualityUpdate[] {
+  if (!ownedBusinessAccountId) return [];
   const root = object(payload);
   if (root?.object !== 'whatsapp_business_account' || !Array.isArray(root.entry)) return [];
   const updates: AccountQualityUpdate[] = [];
   for (const rawEntry of root.entry) {
     const entry = object(rawEntry);
-    if (!entry || !Array.isArray(entry.changes)) continue;
+    if (entry?.id !== ownedBusinessAccountId || !Array.isArray(entry.changes)) continue;
     for (const rawChange of entry.changes) {
       const change = object(rawChange);
       if (change?.field !== 'account_update') continue;

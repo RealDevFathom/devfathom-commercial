@@ -99,7 +99,7 @@ export async function POST(request: Request) {
     return json({ error: 'Invalid JSON body.' }, 400);
   }
 
-  const accountUpdates = parseAccountQualityUpdates(payload);
+  const accountUpdates = parseAccountQualityUpdates(payload, config.businessAccountId);
   if (accountUpdates.length)
     await withTenantDb(organization.id, (db) =>
       applyAccountQualityUpdates(db, organization.id, accountUpdates, config.accountAppealUrl)

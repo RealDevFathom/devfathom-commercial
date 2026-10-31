@@ -15,8 +15,49 @@ const payload = (event: string) => ({
 });
 
 describe('WhatsApp account quality', () => {
+  it('ignores unbound, foreign, and missing business account IDs', () => {
+    for (const binding of [undefined, null, '', 'foreign-waba']) {
+      expect(parseAccountQualityUpdates(fixture, binding)).toEqual([]);
+    }
+    expect(
+      parseAccountQualityUpdates(
+        {
+          object: 'whatsapp_business_account',
+          entry: [
+            {
+              changes: [
+                {
+                  field: 'account_update',
+                  value: { event: 'BAN' },
+                },
+              ],
+            },
+          ],
+        },
+        'waba-fixture'
+      )
+    ).toEqual([]);
+  });
+
+  it('filters each entry in a mixed-account delivery', () => {
+    expect(
+      parseAccountQualityUpdates(
+        {
+          object: 'whatsapp_business_account',
+          entry: [
+            { id: 'foreign-waba', changes: [{ field: 'account_update', value: { event: 'BAN' } }] },
+            ...payload('REINSTATED').entry,
+          ],
+        },
+        'waba-fixture'
+      )
+    ).toEqual([
+      { key: 'waba-fixture:REINSTATED', action: 'recover', level: 'recovery', event: 'REINSTATED' },
+    ]);
+  });
+
   it('parses only allowlisted adverse and recovery events', () => {
-    expect(parseAccountQualityUpdates(fixture)).toEqual([
+    expect(parseAccountQualityUpdates(fixture, 'waba-fixture')).toEqual([
       {
         key: 'waba-fixture:ACCOUNT_VIOLATION',
         action: 'hold',
@@ -24,8 +65,8 @@ describe('WhatsApp account quality', () => {
         event: 'ACCOUNT_VIOLATION',
       },
     ]);
-    expect(parseAccountQualityUpdates(payload('a new benign event'))).toEqual([]);
-    expect(parseAccountQualityUpdates(payload('REINSTATED'))).toEqual([
+    expect(parseAccountQualityUpdates(payload('a new benign event'), 'waba-fixture')).toEqual([]);
+    expect(parseAccountQualityUpdates(payload('REINSTATED'), 'waba-fixture')).toEqual([
       {
         key: 'waba-fixture:REINSTATED',
         action: 'recover',
@@ -59,7 +100,7 @@ describe('WhatsApp account quality', () => {
       applyAccountQualityUpdates(
         db as never,
         'org',
-        parseAccountQualityUpdates(fixture),
+        parseAccountQualityUpdates(fixture, 'waba-fixture'),
         'https://business.facebook.com/accountquality'
       )
     ).resolves.toEqual({ alerts: 1, paused: 2, restored: 0 });
@@ -105,7 +146,7 @@ describe('WhatsApp account quality', () => {
       applyAccountQualityUpdates(
         db as never,
         'org',
-        parseAccountQualityUpdates(payload('REINSTATED')),
+        parseAccountQualityUpdates(payload('REINSTATED'), 'waba-fixture'),
         'https://business.facebook.com/accountquality'
       )
     ).resolves.toEqual({ alerts: 0, paused: 0, restored: 2 });
@@ -131,7 +172,7 @@ describe('WhatsApp account quality', () => {
       applyAccountQualityUpdates(
         db as never,
         'org',
-        parseAccountQualityUpdates(fixture),
+        parseAccountQualityUpdates(fixture, 'waba-fixture'),
         'https://business.facebook.com/accountquality'
       )
     ).resolves.toEqual({ alerts: 0, paused: 0, restored: 0 });
