@@ -37,10 +37,11 @@ export function CustomerPortal() {
     refill: null,
     photo: null,
   });
+  // Initial loading is state; subsequent loads start from user events.
   const load = useCallback(async () => {
-    setLoading(true);
     try {
-      setState(await portalFetch<State>(endpoint));
+      const nextState = await portalFetch<State>(endpoint);
+      setState(nextState);
       setError('');
     } catch (e) {
       if (e instanceof CustomerPortalClientError && e.status === 401) {
@@ -83,6 +84,7 @@ export function CustomerPortal() {
           code: String(form.get('code')),
         });
         setChallengeId('');
+        setLoading(true);
         await load();
       } else {
         const response = await portalFetch<{ challengeId: string; message: string }>(endpoint, {
@@ -122,6 +124,7 @@ export function CustomerPortal() {
                   await portalFetch(endpoint, { action: 'logout' });
                   setState(null);
                   setReceipt(null);
+                  setLoading(true);
                   await load();
                 })
               }
@@ -147,7 +150,10 @@ export function CustomerPortal() {
             className="mt-3 min-h-11"
             variant="secondary"
             disabled={busy || loading}
-            onClick={() => void load()}
+            onClick={() => {
+              setLoading(true);
+              void load();
+            }}
           >
             Retry connection
           </Button>
@@ -327,6 +333,7 @@ export function CustomerPortal() {
                       idempotencyKey: requestKey.current.refill,
                     });
                     requestKey.current.refill = null;
+                    setLoading(true);
                     await load();
                     setNotice(
                       'Refill request received. A pharmacist will review your previous purchase.'
@@ -384,6 +391,7 @@ export function CustomerPortal() {
                     });
                     requestKey.current.photo = null;
                     form.reset();
+                    setLoading(true);
                     await load();
                     setNotice(
                       'Photo request received. A pharmacist must verify it before fulfilment.'

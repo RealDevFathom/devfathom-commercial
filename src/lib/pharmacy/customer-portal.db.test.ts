@@ -116,12 +116,21 @@ async function transaction<T>(org: string, fn: (db: ScopedDb, client: PoolClient
           'utf8'
         )
       );
+      await client.query(
+        await readFile(
+          new URL(
+            '../../../prisma/migrations/20261101000000_customer_portal_review_guards/migration.sql',
+            import.meta.url
+          ),
+          'utf8'
+        )
+      );
       await client.query(`INSERT INTO organizations VALUES ('org-a'), ('org-b');
         INSERT INTO users VALUES ('owner-a','org-a'), ('owner-b','org-b');
         INSERT INTO pharmacy_branches VALUES ('branch-a','org-a','A',true), ('branch-b','org-b','B',true);
         INSERT INTO pharmacy_patients VALUES ('patient-a','org-a','03001234567'), ('patient-b','org-b','03001234567');
         INSERT INTO pharmacy_customers VALUES ('customer-a','org-a','patient-a',true), ('customer-b','org-b','patient-b',true);
-        INSERT INTO pharmacy_sales VALUES ('sale-a','org-a','branch-a','customer-a','COMPLETED'), ('sale-b','org-b','branch-b','customer-b','COMPLETED');`);
+        INSERT INTO pharmacy_sales VALUES ('sale-a','org-a','branch-a','customer-a','COMPLETED'), ('sale-b','org-b','branch-b','customer-b','COMPLETED'), ('sale-fulfil','org-a','branch-a','customer-a','COMPLETED');`);
       const user = await client.query('SELECT rolsuper FROM pg_roles WHERE rolname=current_user');
       if (user.rows[0].rolsuper) {
         await client.query(`CREATE ROLE "${role}" NOLOGIN NOSUPERUSER NOBYPASSRLS`);
@@ -129,6 +138,7 @@ async function transaction<T>(org: string, fn: (db: ScopedDb, client: PoolClient
         await client.query(
           `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA "${schema}" TO "${role}"`
         );
+        await client.query(`GRANT TRUNCATE ON pharmacy_customer_portal_events TO "${role}"`);
         useRole = true;
       }
     } finally {
@@ -281,9 +291,29 @@ async function transaction<T>(org: string, fn: (db: ScopedDb, client: PoolClient
       )
     ).rejects.toThrow('append-only');
     await expect(
+      transaction('org-a', (_db, c) => c.query('TRUNCATE pharmacy_customer_portal_events'))
+    ).rejects.toThrow('append-only');
+    await expect(
       transaction('org-a', (_db, c) =>
         c.query("UPDATE pharmacy_customer_requests SET status='FULFILLED'")
       )
     ).rejects.toMatchObject({ code: '23514' });
+  });
+  it('prevents concurrent requests from reusing one fulfilment sale', async () => {
+    const insert = () =>
+      transaction('org-a', (_db, c) =>
+        c.query(
+          `
+      INSERT INTO pharmacy_customer_requests
+        (id,"organizationId","branchId","customerId",kind,status,"sourceSaleId","fulfilledSaleId","idempotencyKey","payloadHash")
+      VALUES ($1,'org-a','branch-a','customer-a','REFILL','FULFILLED','sale-a','sale-fulfil',$2,'test')`,
+          [randomUUID(), randomUUID()]
+        )
+      );
+    const results = await Promise.allSettled([insert(), insert()]);
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.find((result) => result.status === 'rejected')).toMatchObject({
+      reason: { code: '23505' },
+    });
   });
 });

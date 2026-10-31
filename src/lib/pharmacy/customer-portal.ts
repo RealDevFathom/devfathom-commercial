@@ -17,7 +17,9 @@ import {
 import { normalizeWhatsAppNumber } from './whatsapp/messages';
 import { readKhataBalance } from './family-khata';
 import { readCounterReceipt } from './counter';
-import { persistPrescriptionFile } from './prescription-files';
+import { prescriptionFileRefSchema } from './prescription-files';
+
+export type PreparedPortalPhoto = { sourceFileRef: string; cleanupEffectId: string };
 
 export class CustomerPortalError extends Error {
   constructor(
@@ -337,7 +339,8 @@ export async function createPortalRequest(
         contentType: 'image/png' | 'image/jpeg' | 'image/webp';
         dataBase64: string;
         idempotencyKey: string;
-      }
+      },
+  photo?: PreparedPortalPhoto
 ) {
   const payloadHash = portalHash(
     JSON.stringify(
@@ -346,7 +349,19 @@ export async function createPortalRequest(
         : ['RX_PHOTO', input.contentType, portalHash(input.dataBase64)]
     )
   );
-  // Serialize retries before uploading; the same key can never produce two requests.
+  // Storage has already finished outside this transaction. Lock its cleanup job
+  // before linking so a worker cannot remove the file while it is being claimed.
+  if (input.action === 'photo') {
+    if (!photo || !prescriptionFileRefSchema.safeParse(photo.sourceFileRef).success)
+      throw new CustomerPortalError(400, 'Upload a prescription image first.');
+    const staging = await db.$queryRaw<{ id: string }[]>(Prisma.sql`
+      SELECT id FROM outbound_effects WHERE id=${photo.cleanupEffectId}
+        AND "organizationId"=${scope.organizationId} AND kind='pharmacy-customer-photo-cleanup'
+        AND payload->>'sourceFileRef'=${photo.sourceFileRef}
+        AND status='PENDING' AND "createdAt" + INTERVAL '1 hour'>clock_timestamp() FOR UPDATE`);
+    if (!staging[0]) throw new CustomerPortalError(409, 'The upload expired. Please retry.');
+  }
+  // Serialize retries; the same key can never produce two requests.
   await db.$queryRaw(
     Prisma.sql`SELECT id FROM pharmacy_customers WHERE "organizationId"=${scope.organizationId} AND id=${scope.customerId} FOR UPDATE`
   );
@@ -376,14 +391,7 @@ export async function createPortalRequest(
       select: { id: true },
     });
     if (!sale) throw new CustomerPortalError(404, 'Previous purchase unavailable.');
-  } else {
-    const file = await persistPrescriptionFile(
-      scope.organizationId,
-      `customer:${scope.customerId}`,
-      { patientId: scope.patientId, contentType: input.contentType, dataBase64: input.dataBase64 }
-    );
-    sourceFileRef = file.sourceFileRef;
-  }
+  } else sourceFileRef = photo!.sourceFileRef;
   const id = randomUUID();
   await db.$executeRaw(Prisma.sql`INSERT INTO pharmacy_customer_requests
     (id, "organizationId", "branchId", "customerId", kind, "sourceSaleId", "sourceFileRef", "idempotencyKey", "payloadHash")
@@ -416,6 +424,15 @@ export async function updatePortalRequest(
   }
   if (action === 'FULFIL') {
     if (!saleId) throw new CustomerPortalError(400, 'Link the completed dispensing sale.');
+    // Different requests can target the same sale. Serialize that link and check
+    // again after acquiring the sale lock; the unique index is the final guard.
+    await db.$queryRaw(Prisma.sql`SELECT id FROM pharmacy_sales
+      WHERE id=${saleId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`);
+    const used = await db.$queryRaw<{ id: string }[]>(Prisma.sql`
+      SELECT id FROM pharmacy_customer_requests WHERE "organizationId"=${scope.organizationId}
+        AND "branchId"=${scope.branchId} AND "fulfilledSaleId"=${saleId}`);
+    if (used[0] || saleId === request.sourceSaleId)
+      throw new CustomerPortalError(409, 'Link a new sale that has not fulfilled another request.');
     const sale = await db.pharmacySale.findFirst({
       where: {
         id: saleId,
@@ -438,6 +455,38 @@ export async function updatePortalRequest(
         409,
         'Complete the verified dispensing sale for this customer and source Rx first.'
       );
+    if (request.kind === 'REFILL') {
+      const source = await db.pharmacySale.findFirst({
+        where: {
+          id: request.sourceSaleId!,
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          customerId: request.customerId,
+          status: 'COMPLETED',
+        },
+        include: { lines: true },
+      });
+      const totals = (
+        lines: { medicineId: string; presentationId: string; canonicalUnits: number }[]
+      ) => {
+        const result = new Map<string, number>();
+        for (const line of lines) {
+          const key = JSON.stringify([line.medicineId, line.presentationId]);
+          result.set(key, (result.get(key) ?? 0) + line.canonicalUnits);
+        }
+        return result;
+      };
+      const required = totals(source?.lines ?? []);
+      const dispensed = totals(sale.lines);
+      if (
+        !required.size ||
+        [...required].some(([key, units]) => units <= 0 || dispensed.get(key) !== units)
+      )
+        throw new CustomerPortalError(
+          409,
+          'The sale must match the refilled items and quantities.'
+        );
+    }
     // Existing sale completion enforces RX-03 SIGN, consent, limits, stock and money.
   }
   await db.$executeRaw(Prisma.sql`UPDATE pharmacy_customer_requests SET status=${status}, "fulfilledSaleId"=${action === 'FULFIL' ? saleId! : null}

@@ -4,11 +4,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   sendEmail: vi.fn(),
   deliver: vi.fn(),
+  portal: vi.fn(),
 }));
 
 vi.mock('@/lib/email', () => ({ sendEmail: mocks.sendEmail }));
 vi.mock('@/lib/webhooks/safe-url', () => ({
   deliverWebhookRequest: mocks.deliver,
+}));
+vi.mock('@/lib/pharmacy/customer-portal-effects', () => ({
+  runCustomerPortalEffect: mocks.portal,
 }));
 
 import {
@@ -41,6 +45,24 @@ vi.mock('@/lib/tenancy/scoped-db', () => tenancy);
 describe('outbound effect delivery', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('passes the worker tenant to portal effects and sanitizes failures', async () => {
+    const row = {
+      id: 'portal-sms',
+      kind: 'pharmacy-customer-sms',
+      payload: { encrypted: 'ciphertext' },
+    };
+    mocks.portal.mockResolvedValueOnce(undefined);
+    expect(await runEffect(row, undefined, 'org-a')).toEqual({ ok: true, error: null });
+    expect(mocks.portal).toHaveBeenCalledWith(row.kind, row.payload, 'org-a');
+    mocks.portal.mockRejectedValueOnce(new Error('provider secret'));
+    expect(await runEffect(row, undefined, 'org-a')).toEqual({
+      ok: false,
+      error: 'Delivery failed',
+    });
+    expect(await runEffect(row)).toEqual({ ok: false, error: 'Delivery failed' });
+    expect(mocks.portal).toHaveBeenCalledTimes(2);
   });
 
   it('sends a committed email outside the transaction', async () => {
@@ -123,6 +145,26 @@ describe('outbound effect delivery', () => {
 });
 
 describe('outbound effect worker', () => {
+  it.each([true, false])(
+    'clears OTP ciphertext after success or terminal failure: %s',
+    async (ok) => {
+      const update = vi.fn();
+      await recordOutcome(
+        { outboundEffect: { update } } as never,
+        {
+          id: 'portal-sms',
+          kind: 'pharmacy-customer-sms',
+          attempts: MAX_ATTEMPTS,
+          payload: { encrypted: 'ciphertext' },
+        },
+        { ok, error: ok ? null : 'Delivery failed' }
+      );
+      expect(update).toHaveBeenCalledWith({
+        where: { id: 'portal-sms' },
+        data: expect.objectContaining({ status: ok ? 'DONE' : 'DEAD', payload: {} }),
+      });
+    }
+  );
   it('claims with FOR UPDATE SKIP LOCKED', async () => {
     const query = vi.fn(async () => [{ id: 'effect_1', kind: 'email', payload: {}, attempts: 1 }]);
     await expect(claimEffects({ $queryRawUnsafe: query } as never)).resolves.toEqual([

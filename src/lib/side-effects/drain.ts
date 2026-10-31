@@ -153,8 +153,18 @@ export function scrubDeadEmailPayload(payload: Prisma.JsonValue): Prisma.InputJs
  */
 export async function runEffect(
   row: Pick<EffectRow, 'id' | 'kind' | 'payload'>,
-  lookupWebhook: (webhookId: string) => Promise<WebhookEndpoint | null> = async () => null
+  lookupWebhook: (webhookId: string) => Promise<WebhookEndpoint | null> = async () => null,
+  organizationId?: string
 ): Promise<EffectOutcome> {
+  if (row.kind.startsWith('pharmacy-customer-') && organizationId) {
+    try {
+      const { runCustomerPortalEffect } = await import('@/lib/pharmacy/customer-portal-effects');
+      await runCustomerPortalEffect(row.kind, row.payload, organizationId);
+      return { ok: true, error: null };
+    } catch {
+      return { ok: false, error: 'Delivery failed' };
+    }
+  }
   if (row.kind === 'email') return runEmail(row.payload);
   if (row.kind === 'webhook') return runWebhook(row, lookupWebhook);
   return { ok: false, error: 'Delivery failed' };
@@ -278,7 +288,11 @@ export async function recordOutcome(
   if (outcome.ok) {
     await db.outboundEffect.update({
       where: { id: row.id },
-      data: { status: 'DONE', lastError: null },
+      data: {
+        status: 'DONE',
+        lastError: null,
+        ...(row.kind === 'pharmacy-customer-sms' ? { payload: {} } : {}),
+      },
     });
   } else {
     const next = failureDisposition(row.attempts, now);
@@ -291,6 +305,7 @@ export async function recordOutcome(
         ...(next.status === 'DEAD' && row.kind === 'email'
           ? { payload: scrubDeadEmailPayload(row.payload ?? null) }
           : {}),
+        ...(next.status === 'DEAD' && row.kind === 'pharmacy-customer-sms' ? { payload: {} } : {}),
       },
     });
   }
@@ -354,16 +369,19 @@ export async function drainOrganization(organizationId: string): Promise<void> {
   );
 
   for (const row of claimed) {
-    const outcome = await runEffect(row, (webhookId) =>
-      withTenantDb(
-        organizationId,
-        async (db) =>
-          db.webhook.findUnique({
-            where: { id: webhookId },
-            select: { url: true, secret: true, active: true },
-          }),
-        { skipDrain: true, timeout: 10_000 }
-      )
+    const outcome = await runEffect(
+      row,
+      (webhookId) =>
+        withTenantDb(
+          organizationId,
+          async (db) =>
+            db.webhook.findUnique({
+              where: { id: webhookId },
+              select: { url: true, secret: true, active: true },
+            }),
+          { skipDrain: true, timeout: 10_000 }
+        ),
+      organizationId
     );
     await withTenantDb(
       organizationId,

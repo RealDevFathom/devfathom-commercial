@@ -1,5 +1,13 @@
 # PR #798 targeted visual QA
 
+Review fixes (2026-11-01): the evidence below belongs to the original PR head.
+The follow-up preserves the Studio layout and loading states, resolves the
+develop merge conflict with both proxy tests, narrows the manifest scope, and
+adds fulfilment, queue, retention and audit guards. Regression tests were added
+but no checks, tests, migrations or visual QA were rerun locally, as requested.
+Machine C must verify the committed follow-up head; the original report does
+not establish that these changes pass.
+
 Chromium against `next dev`, 2026-10-31. Synthetic customer data only.
 
 | Coverage | Customer entry and portal | Pharmacist queue and settings |

@@ -37,14 +37,13 @@ export function CustomerRequests() {
   const [loading, setLoading] = useState(true);
   const [capture, setCapture] = useState<QueueRequest | null>(null);
   const flight = useRef(false);
+  // Initial loading is state; subsequent loads start from user events.
   const load = useCallback(async () => {
-    setLoading(true);
     try {
-      setWorkspace(
-        await portalFetch<Workspace>(
-          `${endpoint}${branchId ? `?branchId=${encodeURIComponent(branchId)}` : ''}`
-        )
+      const nextWorkspace = await portalFetch<Workspace>(
+        `${endpoint}${branchId ? `?branchId=${encodeURIComponent(branchId)}` : ''}`
       );
+      setWorkspace(nextWorkspace);
       setError('');
     } catch (e) {
       setError((e as Error).message);
@@ -97,6 +96,7 @@ export function CustomerRequests() {
           };
       await portalFetch(endpoint, command);
       form.reset();
+      setLoading(true);
       await load();
       setNotice(
         request
@@ -136,7 +136,14 @@ export function CustomerRequests() {
       {error ? (
         <WorkspaceState title="Customer service could not be updated" tone="danger">
           <p>{error}</p>
-          <Button className="mt-3 min-h-11" variant="secondary" onClick={() => void load()}>
+          <Button
+            className="mt-3 min-h-11"
+            variant="secondary"
+            onClick={() => {
+              setLoading(true);
+              void load();
+            }}
+          >
             Retry
           </Button>
         </WorkspaceState>
@@ -150,6 +157,7 @@ export function CustomerRequests() {
               value={workspace.branchId ?? ''}
               disabled={busy}
               onChange={(e) => {
+                setLoading(true);
                 setBranchId(e.target.value);
                 setCapture(null);
               }}

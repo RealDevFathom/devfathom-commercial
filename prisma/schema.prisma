@@ -15423,6 +15423,7 @@ model PharmacyCustomerRequest {
   createdAt        DateTime @default(now()) @db.Timestamptz(3)
 
   @@unique([organizationId, branchId, customerId, idempotencyKey])
+  @@unique([organizationId, branchId, fulfilledSaleId], map: "pharmacy_customer_requests_fulfilled_sale_key")
   @@unique([organizationId, branchId, id])
   @@index([organizationId, branchId, status, createdAt], map: "pharmacy_customer_requests_queue")
   @@map("pharmacy_customer_requests")

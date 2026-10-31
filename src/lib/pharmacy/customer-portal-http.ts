@@ -1,5 +1,6 @@
 import 'server-only';
 import { randomUUID } from 'node:crypto';
+import { after } from 'next/server';
 import { TRPCError } from '@trpc/server';
 import { Prisma } from '@/generated/prisma/client';
 import { clientIp, rateLimit } from '@/lib/rate-limit';
@@ -11,7 +12,14 @@ import {
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { hasModule, resolveOrganizationEntitlements } from '@/lib/entitlements';
 import { customerPortalCommand } from './customer-portal-contract';
-import { customerSmsConfigured, sendCustomerSms } from './customer-otp-delivery';
+import { customerSmsConfigured } from './customer-otp-delivery';
+import { drainOrganization } from '@/lib/side-effects/drain';
+import {
+  queuePortalCredentialCleanup,
+  queuePortalSms,
+  stagePortalPhoto,
+} from './customer-portal-effects';
+import { persistPrescriptionFile, prescriptionFileId } from './prescription-files';
 import { normalizeWhatsAppNumber } from './whatsapp/messages';
 import {
   consumePortalOtp,
@@ -23,6 +31,8 @@ import {
   portalHash,
   portalReceipt,
   portalEvent,
+  type PortalScope,
+  type PreparedPortalPhoto,
 } from './customer-portal';
 
 export const portalCookieName = () =>
@@ -125,6 +135,12 @@ async function admit(request: Request) {
   }
 }
 
+async function admitCustomerRequest(organizationId: string, customerId: string) {
+  const gate = await rateLimit(`customer-request:${organizationId}:${customerId}`, 10, 60 * 60_000);
+  if (!gate.ok)
+    throw new CustomerPortalError(429, 'Please wait before submitting another request.');
+}
+
 export async function customerPortalGET(request: Request) {
   try {
     await admit(request);
@@ -179,20 +195,24 @@ export async function customerPortalPOST(request: Request) {
       if (!gate.ok)
         throw new CustomerPortalError(429, 'Please wait before requesting another code.');
       const challengeId = randomUUID();
-      const delivery = await withTenantDb(org.id, (db) =>
-        issuePortalOtp(db, org.id, input.branchId, input.phone, challengeId)
+      await withTenantDb(
+        org.id,
+        async (db) => {
+          const delivery = await issuePortalOtp(
+            db,
+            org.id,
+            input.branchId,
+            input.phone,
+            challengeId
+          );
+          if (delivery) await queuePortalSms(db, org.id, challengeId, delivery);
+          await queuePortalCredentialCleanup(db, org.id, new Date(Date.now() + 31 * 60_000));
+        },
+        { skipDrain: true }
       );
-      if (delivery) {
-        try {
-          await sendCustomerSms(org.id, delivery.phone, delivery.code);
-        } catch {
-          await withTenantDb(org.id, async (db) => {
-            await db.$executeRaw(
-              Prisma.sql`UPDATE pharmacy_customer_otp_challenges SET "consumedAt"=CURRENT_TIMESTAMP WHERE id=${challengeId} AND "organizationId"=${org.id}`
-            );
-          });
-        }
-      }
+      // Run the same post-response work for known and unknown numbers. Never
+      // wait for a provider request on the anonymous response's timing path.
+      after(() => drainOrganization(org.id).catch(() => undefined));
       return portalJson(
         {
           challengeId,
@@ -208,9 +228,16 @@ export async function customerPortalPOST(request: Request) {
         30 * 60_000
       );
       if (!gate.ok) throw new CustomerPortalError(429, 'Request a new code and try again later.');
-      const session = await withTenantDb(org.id, (db) =>
-        consumePortalOtp(db, org.id, input.challengeId, input.code)
-      );
+      const session = await withTenantDb(org.id, async (db) => {
+        const session = await consumePortalOtp(db, org.id, input.challengeId, input.code);
+        if (session)
+          await queuePortalCredentialCleanup(
+            db,
+            org.id,
+            new Date(Date.now() + session.maxAge * 1000)
+          );
+        return session;
+      });
       if (!session)
         throw new CustomerPortalError(
           400,
@@ -219,6 +246,29 @@ export async function customerPortalPOST(request: Request) {
       return portalJson({ ok: true }, 200, {
         'Set-Cookie': portalCookie(session.token, session.maxAge),
       });
+    }
+    let staged: { scope: PortalScope; photo: PreparedPortalPhoto } | undefined;
+    if (input.action === 'photo') {
+      staged = await withTenantDb(
+        org.id,
+        async (db) => {
+          const scope = await customerPortalScope(db, org.id, customerToken(request));
+          await admitCustomerRequest(org.id, scope.customerId);
+          return { scope, photo: await stagePortalPhoto(db, org.id) };
+        },
+        { skipDrain: true }
+      );
+      // Image decoding and object storage hold no database transaction or customer lock.
+      await persistPrescriptionFile(
+        org.id,
+        `customer:${staged.scope.customerId}`,
+        {
+          patientId: staged.scope.patientId,
+          contentType: input.contentType,
+          dataBase64: input.dataBase64,
+        },
+        prescriptionFileId(staged.photo.sourceFileRef)
+      );
     }
     return await withTenantDb(org.id, async (db) => {
       const token = customerToken(request);
@@ -231,14 +281,15 @@ export async function customerPortalPOST(request: Request) {
         return portalJson({ ok: true }, 200, { 'Set-Cookie': portalCookie('', 0) });
       }
       const scope = await customerPortalScope(db, org.id, token);
-      const gate = await rateLimit(
-        `customer-request:${org.id}:${scope.customerId}`,
-        10,
-        60 * 60_000
-      );
-      if (!gate.ok)
-        throw new CustomerPortalError(429, 'Please wait before submitting another request.');
-      const result = await createPortalRequest(db, scope, input);
+      if (staged) {
+        if (
+          scope.customerId !== staged.scope.customerId ||
+          scope.branchId !== staged.scope.branchId ||
+          scope.patientId !== staged.scope.patientId
+        )
+          throw new CustomerPortalError(401, 'Verify your phone again.');
+      } else await admitCustomerRequest(org.id, scope.customerId);
+      const result = await createPortalRequest(db, scope, input, staged?.photo);
       await portalEvent(db, scope, 'REQUEST_SUBMITTED', `customer:${scope.customerId}`, result.id);
       return portalJson(result, 201);
     });

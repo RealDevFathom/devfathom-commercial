@@ -4,7 +4,7 @@
   "description": "Private receipts, refill requests, Rx photo requests, khata payment and loyalty.",
   "id": "/pharmacy/customer/",
   "start_url": "/pharmacy/customer/",
-  "scope": "/pharmacy/",
+  "scope": "/pharmacy/customer/",
   "display": "standalone",
   "background_color": "#f6f6f3",
   "theme_color": "#111110",

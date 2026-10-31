@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   customerPortalGET,
   customerPortalPOST,
@@ -13,15 +13,31 @@ import {
   customerPortalScope,
   customerPortalSummary,
   issuePortalOtp,
+  createPortalRequest,
 } from './customer-portal';
 import { sendCustomerSms } from './customer-otp-delivery';
+import { persistPrescriptionFile } from './prescription-files';
+import { decryptSecret } from '@/lib/secret-crypto';
+
+const postResponse = vi.hoisted(() => vi.fn());
+vi.mock('next/server', () => ({ after: postResponse }));
+vi.mock('@/lib/side-effects/drain', () => ({ drainOrganization: vi.fn() }));
 
 const mockDb = vi.hoisted(() => ({
   $executeRaw: vi.fn(),
+  outboundEffect: { createMany: vi.fn().mockResolvedValue({ count: 1 }) },
   $queryRaw: vi.fn().mockResolvedValue([{ id: 'branch-a', name: 'Branch A' }]),
 }));
+const transaction = vi.hoisted(() => ({ active: false }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({
-  withTenantDb: (_org: string, fn: (db: unknown) => unknown) => fn(mockDb),
+  withTenantDb: async (_org: string, fn: (db: unknown) => unknown) => {
+    transaction.active = true;
+    try {
+      return await fn(mockDb);
+    } finally {
+      transaction.active = false;
+    }
+  },
 }));
 vi.mock('@/lib/tenancy/host', () => ({
   requestHost: () => 'acme.localhost',
@@ -53,7 +69,10 @@ vi.mock('./customer-portal', async (original) => {
 });
 vi.mock('./counter', () => ({ readCounterReceipt: vi.fn() }));
 vi.mock('./family-khata', () => ({ readKhataBalance: vi.fn() }));
-vi.mock('./prescription-files', () => ({ persistPrescriptionFile: vi.fn() }));
+vi.mock('./prescription-files', async (original) => ({
+  ...(await original<typeof import('./prescription-files')>()),
+  persistPrescriptionFile: vi.fn(),
+}));
 
 const command = (body: unknown, origin = 'http://acme.localhost:3000', cookie?: string) =>
   new Request('http://acme.localhost:3000/api/pharmacy/customer', {
@@ -68,6 +87,8 @@ const command = (body: unknown, origin = 'http://acme.localhost:3000', cookie?: 
   });
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(persistPrescriptionFile).mockReset();
+  vi.stubEnv('PLATFORM_ENCRYPTION_KEY', 'test-only-queue-encryption-key');
   vi.mocked(rateLimit).mockResolvedValue({ ok: true, remaining: 10, retryAfter: 0 });
   vi.mocked(resolveExplicitOrganizationByHost).mockResolvedValue({
     id: 'org-a',
@@ -76,6 +97,8 @@ beforeEach(() => {
     status: 'ACTIVE',
   } as NonNullable<Awaited<ReturnType<typeof resolveExplicitOrganizationByHost>>>);
 });
+
+afterEach(() => vi.unstubAllEnvs());
 
 describe('public customer transport', () => {
   it('clears an expired customer cookie so the public sign-in can be retried', async () => {
@@ -136,7 +159,17 @@ describe('public customer transport', () => {
     const knownBody = await known.json();
     expect(knownBody).toEqual({ ...unknownBody, challengeId: expect.any(String) });
     expect(knownBody).not.toHaveProperty('code');
-    expect(sendCustomerSms).toHaveBeenCalledWith('org-a', '923001234567', '123456');
+    expect(sendCustomerSms).not.toHaveBeenCalled();
+    expect(postResponse).toHaveBeenCalledTimes(2);
+    const queued = mockDb.outboundEffect.createMany.mock.calls
+      .flatMap(([arg]) => arg.data)
+      .find((effect) => effect.kind === 'pharmacy-customer-sms');
+    expect(queued.payload).not.toHaveProperty('code');
+    expect(JSON.parse(decryptSecret(queued.payload.encrypted))).toEqual({
+      organizationId: 'org-a',
+      phone: '923001234567',
+      code: '123456',
+    });
   });
   it('sets an HttpOnly, narrow-path customer cookie only after a successful OTP', async () => {
     const input = {
@@ -153,6 +186,88 @@ describe('public customer transport', () => {
     expect(response.status).toBe(200);
     expect(response.headers.get('set-cookie')).toBe(portalCookie('opaque', 3600));
     expect(response.headers.get('set-cookie')).toContain('HttpOnly; SameSite=Strict');
+  });
+  it('commits photo cleanup before storage and uploads outside the customer transaction', async () => {
+    const scope = {
+      organizationId: 'org-a',
+      branchId: 'branch-a',
+      customerId: 'customer-a',
+      patientId: 'patient-a',
+    };
+    vi.mocked(customerPortalScope).mockResolvedValue(scope);
+    vi.mocked(createPortalRequest).mockResolvedValue({
+      id: 'request-a',
+      status: 'AWAITING_PHARMACIST',
+    });
+    vi.mocked(persistPrescriptionFile).mockImplementation(async (_org, _actor, _input, id) => {
+      expect(transaction.active).toBe(false);
+      expect(mockDb.outboundEffect.createMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: [expect.objectContaining({ kind: 'pharmacy-customer-photo-cleanup' })],
+        })
+      );
+      return {
+        sourceFileRef: `/api/pharmacy/prescription-files?id=${id}`,
+        url: '',
+        size: 1,
+        contentType: 'image/png',
+      };
+    });
+    const response = await customerPortalPOST(
+      command(
+        {
+          action: 'photo',
+          contentType: 'image/png',
+          dataBase64: 'aGVsbG8=',
+          idempotencyKey: 'cc56d757-2cd8-4bbf-b077-18def61fa649',
+        },
+        undefined,
+        'df_customer=opaque'
+      )
+    );
+    expect(response.status).toBe(201);
+    expect(createPortalRequest).toHaveBeenCalledWith(
+      mockDb,
+      scope,
+      expect.objectContaining({ action: 'photo' }),
+      {
+        sourceFileRef: expect.stringContaining('/api/pharmacy/prescription-files?id='),
+        cleanupEffectId: expect.any(String),
+      }
+    );
+  });
+  it('retains a durable cleanup job when the photo request transaction rolls back', async () => {
+    vi.mocked(customerPortalScope).mockResolvedValue({
+      organizationId: 'org-a',
+      branchId: 'branch-a',
+      customerId: 'customer-a',
+      patientId: 'patient-a',
+    });
+    vi.mocked(createPortalRequest).mockRejectedValueOnce(new Error('rollback'));
+    const response = await customerPortalPOST(
+      command(
+        {
+          action: 'photo',
+          contentType: 'image/png',
+          dataBase64: 'aGVsbG8=',
+          idempotencyKey: 'cc56d757-2cd8-4bbf-b077-18def61fa649',
+        },
+        undefined,
+        'df_customer=opaque'
+      )
+    );
+    expect(response.status).toBe(503);
+    expect(persistPrescriptionFile).toHaveBeenCalledOnce();
+    expect(mockDb.outboundEffect.createMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: [
+          expect.objectContaining({
+            kind: 'pharmacy-customer-photo-cleanup',
+            availableAt: expect.any(Date),
+          }),
+        ],
+      })
+    );
   });
   it('uses only the resolved customer identity for private reads', async () => {
     const scope = {

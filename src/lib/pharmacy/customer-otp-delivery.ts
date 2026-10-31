@@ -8,6 +8,7 @@ export function customerSmsConfigured(organizationId: string, env: CustomerSmsEn
   return (
     env.PHARMACY_CUSTOMER_SMS_ORGANIZATION_ID === organizationId &&
     /^AC[0-9a-f]{32}$/i.test(env.PHARMACY_CUSTOMER_SMS_ACCOUNT_SID ?? '') &&
+    Boolean(env.PLATFORM_ENCRYPTION_KEY?.trim()) &&
     Boolean(env.PHARMACY_CUSTOMER_SMS_AUTH_TOKEN && env.PHARMACY_CUSTOMER_SMS_FROM)
   );
 }
