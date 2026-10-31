@@ -33,6 +33,8 @@ function renewHref(reminder: RenewalReminder) {
 export function LicenceRenewalBanner({ branchId }: { branchId?: string }) {
   const query = trpc.pharmacyReports.licenceRenewals.useQuery(branchId ? { branchId } : {}, {
     retry: false,
+    // Recheck on return even while the shared 60-second cache is still fresh.
+    refetchOnMount: 'always',
   });
 
   if (query.error) {

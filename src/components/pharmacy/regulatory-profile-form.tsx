@@ -114,6 +114,8 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
             : 'Premises and licences is still outstanding — the reason is on your setup steps.'
         }`
       );
+      // Refresh both branch-scoped and all-branch dashboard reminders after renewal.
+      void utils.pharmacyReports.licenceRenewals.invalidate();
       refresh();
     },
     onError: (error) => {
