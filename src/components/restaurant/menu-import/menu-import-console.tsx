@@ -93,6 +93,7 @@ type LineEditor = {
   note: string;
   mergeProductId: string;
   mergeVariantId: string;
+  variants: Array<{ name: string; priceAmount: string }>;
 };
 
 const labelClass =
@@ -220,21 +221,54 @@ function FlagChips({ flags }: { flags: string[] }) {
   );
 }
 
+function variantsFor(value: unknown): Array<{ name: string; priceAmount: string }> {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
+    const variant = item as { name?: unknown; price?: { amount?: unknown } };
+    if (typeof variant.name !== 'string') return [];
+    return [
+      {
+        name: variant.name,
+        priceAmount: typeof variant.price?.amount === 'string' ? variant.price.amount : '',
+      },
+    ];
+  });
+}
+
+function VariantList({ variants }: { variants: Array<{ name: string; priceAmount: string }> }) {
+  if (variants.length === 0) return null;
+  return (
+    <ul className="mt-2 space-y-1 border-l border-border-default pl-2 text-xs text-text-muted">
+      {variants.map((variant, index) => (
+        <li key={`${variant.name}-${index}`}>
+          <span className="text-text-strong">{variant.name}</span>
+          {' — '}
+          <span className="tabular-nums">{variant.priceAmount || 'no price'}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 function editorFor(line: ImportLine): LineEditor {
+  const reviewed = line.reviewedVariants === null ? null : variantsFor(line.reviewedVariants);
+  const variants = reviewed ?? variantsFor(line.extractedVariants);
   return {
     lineId: line.id,
-    categoryName: line.reviewedCategoryName ?? '',
-    productName: line.reviewedProductName ?? '',
-    description: line.reviewedDescription ?? '',
-    priceAmount: line.reviewedPriceAmount ?? '',
-    currency: line.reviewedCurrency ?? '',
+    categoryName: line.reviewedCategoryName ?? line.extractedCategoryName ?? '',
+    productName: line.reviewedProductName ?? line.extractedProductName ?? '',
+    description: line.reviewedDescription ?? line.extractedDescription ?? '',
+    priceAmount: line.reviewedPriceAmount ?? line.extractedPriceAmount ?? '',
+    currency: line.reviewedCurrency ?? line.extractedCurrency ?? '',
     note: line.reviewNote ?? '',
     mergeProductId: line.mergeProductId ?? '',
     mergeVariantId: line.mergeVariantId ?? '',
+    variants,
   };
 }
 
-/** Blank means "no override" — send `null` so the server clears any earlier edit. */
+/** Send an explicit blank as `null`; acceptance validates required fields. */
 function override(value: string): string | null {
   const trimmed = value.trim();
   return trimmed === '' ? null : trimmed;
@@ -410,6 +444,10 @@ export function RestaurantMenuImportConsole({
       priceAmount: override(draft.priceAmount),
       currency: override(draft.currency),
       note: override(draft.note),
+      variants: draft.variants.map((variant) => ({
+        name: variant.name,
+        priceAmount: override(variant.priceAmount),
+      })),
       mergeProductId: decision === 'MERGED' ? draft.mergeProductId : null,
       mergeVariantId: decision === 'MERGED' ? override(draft.mergeVariantId) : null,
     });
@@ -760,11 +798,13 @@ export function RestaurantMenuImportConsole({
                           </TableHeader>
                           <TableBody>
                             {page.lines.map((line, index) => {
+                              const reviewedVariants = variantsFor(line.reviewedVariants);
                               const corrected =
                                 line.reviewedProductName ??
                                 line.reviewedCategoryName ??
                                 line.reviewedPriceAmount ??
-                                line.reviewNote;
+                                line.reviewNote ??
+                                (reviewedVariants.length > 0 ? true : null);
                               // Three identically-labelled buttons per row are
                               // ambiguous to a screen reader, so each decision
                               // names its line. The name is extracted text and
@@ -797,6 +837,7 @@ export function RestaurantMenuImportConsole({
                                         fallback="(no price)"
                                       />
                                     </span>
+                                    <VariantList variants={variantsFor(line.extractedVariants)} />
                                   </TableCell>
                                   <TableCell className="max-w-[18rem] align-top">
                                     {corrected ? (
@@ -817,6 +858,7 @@ export function RestaurantMenuImportConsole({
                                             {line.reviewNote}
                                           </span>
                                         ) : null}
+                                        <VariantList variants={reviewedVariants} />
                                       </>
                                     ) : (
                                       <span className="text-text-faint">No correction</span>
@@ -1015,8 +1057,8 @@ function LineEditorPanel({
             Correcting: <Extracted value={line.extractedProductName} fallback="(no product name)" />
           </h5>
           <p className="mt-1 text-xs text-text-muted">
-            Leave a field blank to keep the extracted value. Blanking a field you previously edited
-            clears that correction.
+            Product name and price are required to accept a line. To restore either, enter its
+            extracted value shown below. Blanking category or description clears its correction.
           </p>
         </div>
         <FlagChips flags={line.flags} />
@@ -1066,6 +1108,48 @@ function LineEditorPanel({
             />
           </Field>
         </div>
+        {editor.variants.length > 0 ? (
+          <fieldset className="space-y-3 md:col-span-2">
+            <legend className={labelClass}>Variants</legend>
+            <p className="text-xs text-text-muted">
+              Confirm every extracted variant name and price. A blank price creates the variant
+              without a price-list entry.
+            </p>
+            {editor.variants.map((variant, index) => (
+              <div
+                key={index}
+                className="grid gap-3 rounded-md border border-border-subtle bg-surface-raised p-3 sm:grid-cols-2"
+              >
+                <Field label={`Variant ${index + 1} name`}>
+                  <Input
+                    value={variant.name}
+                    onChange={(event) => {
+                      const variants = editor.variants.map((item, itemIndex) =>
+                        itemIndex === index ? { ...item, name: event.target.value } : item
+                      );
+                      set('variants', variants);
+                    }}
+                    disabled={busy}
+                    maxLength={200}
+                  />
+                </Field>
+                <Field label={`Variant ${index + 1} price`} hint="Leave blank if no price was stated.">
+                  <Input
+                    value={variant.priceAmount}
+                    onChange={(event) => {
+                      const variants = editor.variants.map((item, itemIndex) =>
+                        itemIndex === index ? { ...item, priceAmount: event.target.value } : item
+                      );
+                      set('variants', variants);
+                    }}
+                    inputMode="decimal"
+                    disabled={busy}
+                  />
+                </Field>
+              </div>
+            ))}
+          </fieldset>
+        ) : null}
         <div className="md:col-span-2">
           <Field label="Review note" hint="Recorded with the decision. Not imported.">
             <Input

@@ -61,6 +61,7 @@ function line(overrides: Partial<ImportLine> = {}): ImportLine {
     extractedCurrency: 'PKR',
     extractedPriceRaw: 'Rs. 1250',
     extractedVariants: [],
+    reviewedVariants: null,
     extractedModifiers: [],
     confidence: { productName: 0.94 },
     flags: [],
@@ -336,6 +337,22 @@ describe('Restaurant menu-import console', () => {
       );
     });
 
+    it('accepts an untouched extracted line with its required name and price', () => {
+      renderConsole();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Accept Grilled Chicken' }));
+
+      expect(mocks.reviewLine).toHaveBeenCalledWith(
+        expect.objectContaining({
+          lineId: 'line_1',
+          decision: 'ACCEPTED',
+          productName: 'Grilled Chicken',
+          priceAmount: '1250.00',
+          variants: [],
+        })
+      );
+    });
+
     it('sends reviewer edits with the accept decision', () => {
       renderConsole();
 
@@ -356,10 +373,57 @@ describe('Restaurant menu-import console', () => {
       );
     });
 
-    it('clears a correction when the reviewer blanks a previously edited field', () => {
+    it('shows every extracted variant price and submits the reviewer-confirmed values', () => {
+      mocks.get.mockReturnValue({
+        data: detail({
+          pages: [
+            {
+              ...detail().pages[0]!,
+              lines: [
+                line({
+                  extractedVariants: [
+                    { name: 'Small', price: { amount: '900.00', currency: 'PKR', raw: '900' } },
+                    { name: 'Large', price: { amount: '1400.00', currency: 'PKR', raw: '1400' } },
+                  ],
+                }),
+              ],
+            },
+          ],
+        }),
+        error: null,
+        isLoading: false,
+        refetch: vi.fn(),
+      });
+      renderConsole();
+
+      expect(screen.getByText('Small')).toBeInTheDocument();
+      expect(screen.getByText('900.00')).toBeInTheDocument();
+      expect(screen.getByText('Large')).toBeInTheDocument();
+      expect(screen.getByText('1400.00')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Edit Grilled Chicken' }));
+      fireEvent.change(screen.getByLabelText('Variant 2 price'), { target: { value: '1450.00' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Accept with edits' }));
+
+      expect(mocks.reviewLine).toHaveBeenCalledWith(
+        expect.objectContaining({
+          productName: 'Grilled Chicken',
+          priceAmount: '1250.00',
+          variants: [
+            { name: 'Small', priceAmount: '900.00' },
+            { name: 'Large', priceAmount: '1450.00' },
+          ],
+        })
+      );
+    });
+
+    it('explains required fields and submits an explicit blank for server validation', () => {
       renderConsole();
 
       fireEvent.click(screen.getByRole('button', { name: 'Edit Mutton Karahi' }));
+      expect(
+        screen.getByText(/Product name and price are required to accept a line/)
+      ).toHaveTextContent('To restore either, enter its extracted value shown below.');
       fireEvent.change(screen.getByLabelText('Product name'), { target: { value: '   ' } });
       fireEvent.click(screen.getByRole('button', { name: 'Accept with edits' }));
 

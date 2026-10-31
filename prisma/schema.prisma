@@ -9869,6 +9869,9 @@ model RestaurantMenuImportLine {
   reviewedDescription  String?
   reviewedPriceAmount  Decimal?                       @db.Decimal(12, 2)
   reviewedCurrency     String?
+  /// Reviewer-confirmed variant names and prices. Null means variants have not
+  /// crossed the human-review boundary and must never be committed.
+  reviewedVariants     Json?
   reviewNote           String?
   /// Merge target while the import is open. Tenant-checked by composite FK in
   /// the migration and cleared once the import commits.
