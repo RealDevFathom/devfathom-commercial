@@ -15,7 +15,8 @@ async function signIn(page: Page) {
   await page.getByRole('button', { name: /sign in/i }).click();
   await expect(page.getByText('Choose a workspace', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: /Northstar Agency E2E/i }).click();
-  await expect(page).toHaveURL(/\/dashboard(?:\?|$)/);
+  // The production build may still be warming the first authenticated route.
+  await expect(page).toHaveURL(/\/dashboard(?:\?|$)/, { timeout: 30_000 });
   await expect(page.getByText('Northstar Agency E2E', { exact: true })).toBeVisible();
 }
 
