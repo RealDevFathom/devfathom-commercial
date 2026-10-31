@@ -25,14 +25,20 @@ discoverable from the available environment; private issue metadata could not be
 - `src/lib/restaurant/notification-webhook.ts:251-260` — disabled or missing configuration now
   fails the claimed attempt instead of returning success, preserving the scheduler's retry and
   dead-letter recovery path.
-- `src/server/routers/restaurant-notifications.ts:177-220` — status now returns every retained dead
-  letter independently from the bounded 20-item recent-delivery list.
+- `src/server/routers/restaurant-notifications.ts` (`webhookStatus`) — status now returns retained
+  dead letters independently from the bounded 20-item recent-delivery list, as a keyset-paginated
+  page (`deadLetterCursor`, default 25 rows, `deadLetterNextCursor` for older rows). Each dead letter
+  carries its `retryWebhook` successor (`id`, `status`), resolved from the deterministic retry
+  idempotency key, so recovered or in-flight retries are not reported as open failures.
 - `src/server/routers/restaurant-notifications.ts:280-306` — added the `staff:manage`-gated,
   audited webhook deletion mutation; queued deliveries become recoverable dead letters in the same
   tenant-scoped transaction that deletes the secret-bearing configuration.
 - `src/app/(app)/restaurant/notifications/page.tsx:422-489` — added a confirmed destructive removal
   action and a dedicated dead-letter recovery section whose retry actions remain available after a
-  new endpoint is enabled.
+  new endpoint is enabled. Only dead letters without a retry successor show a Retry action;
+  recovered, in-progress, and failed retries are labelled as history. Dead letters page with
+  Newest/Older links (`?deadLetters=<cursor>`), and the empty recent-delivery copy no longer claims
+  nothing was queued when dead letters exist.
 - `src/app/(app)/restaurant/notifications/page.tsx:912-919` — connected the removal form to the
   server action and reports how many queued deliveries were preserved as dead letters.
 - `src/lib/restaurant/notification-webhook.test.ts:279-287` — updated the behavioral handler test

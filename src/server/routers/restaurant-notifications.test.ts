@@ -276,12 +276,25 @@ describe('signed webhook administration', () => {
     });
     mocks.jobFindMany
       .mockResolvedValueOnce([{ id: 'recent_1', status: 'SUCCEEDED' }])
-      .mockResolvedValueOnce([{ id: 'dead_older_than_recent_window', status: 'DEAD' }]);
+      .mockResolvedValueOnce([
+        {
+          id: 'dead_older_than_recent_window',
+          status: 'DEAD',
+          payload: { eventId: 'event_9', attemptOffset: 0, version: '1.0', synthetic: true },
+        },
+      ])
+      .mockResolvedValueOnce([]);
     const status = await caller().webhookStatus({});
     expect(status.config).toMatchObject({ signingSecretConfigured: true });
     expect(status.deadLetters).toEqual([
-      { id: 'dead_older_than_recent_window', status: 'DEAD' },
+      expect.objectContaining({
+        id: 'dead_older_than_recent_window',
+        status: 'DEAD',
+        successor: null,
+      }),
     ]);
+    expect(status.deadLetters[0]).not.toHaveProperty('payload');
+    expect(status.deadLetterNextCursor).toBeUndefined();
     expect(JSON.stringify(status)).not.toContain('ciphertext-only');
     expect(mocks.jobFindMany).toHaveBeenNthCalledWith(
       1,
@@ -297,8 +310,54 @@ describe('signed webhook administration', () => {
       2,
       expect.objectContaining({
         where: { type: 'notification.webhook.deliver.v1', status: 'DEAD' },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: 26,
       })
     );
+  });
+
+  it('pages dead letters with a cursor and reports retry successor outcomes', async () => {
+    mocks.webhookFindFirst.mockResolvedValueOnce(null);
+    const dead = (id: string) => ({
+      id,
+      status: 'DEAD',
+      attempts: 5,
+      nextAttemptAt: new Date(),
+      lastError: 'HTTP 503',
+      createdAt: new Date(),
+      payload: { eventId: `event_${id}`, attemptOffset: 0, version: '1.0', synthetic: true },
+    });
+    mocks.jobFindMany
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([dead('d1'), dead('d2'), dead('d3')])
+      .mockResolvedValueOnce([
+        {
+          id: 'retry_d1',
+          status: 'SUCCEEDED',
+          idempotencyKey: 'notification-webhook:event_d1:retry:d1',
+        },
+      ]);
+
+    const status = await caller().webhookStatus({ deadLetterCursor: 'd0', deadLetterLimit: 2 });
+
+    expect(mocks.jobFindMany).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ take: 3, cursor: { id: 'd0' }, skip: 1 })
+    );
+    expect(mocks.jobFindMany).toHaveBeenNthCalledWith(3, {
+      where: {
+        type: 'notification.webhook.deliver.v1',
+        idempotencyKey: {
+          in: ['notification-webhook:event_d1:retry:d1', 'notification-webhook:event_d2:retry:d2'],
+        },
+      },
+      select: { id: true, status: true, idempotencyKey: true },
+    });
+    expect(status.deadLetters.map((row) => [row.id, row.successor])).toEqual([
+      ['d1', { id: 'retry_d1', status: 'SUCCEEDED' }],
+      ['d2', null],
+    ]);
+    expect(status.deadLetterNextCursor).toBe('d2');
   });
 
   it('deletes the secret-bearing endpoint and dead-letters queued work atomically', async () => {

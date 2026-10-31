@@ -116,6 +116,7 @@ describe('RestaurantNotificationsPage tenancy resolution', () => {
         config: null,
         deliveries: [],
         deadLetters: [],
+        deadLetterNextCursor: undefined,
       } satisfies WebhookStatus),
     });
 
@@ -218,14 +219,17 @@ describe('RestaurantNotificationsPage tenancy resolution', () => {
               nextAttemptAt: new Date('2026-10-20T00:00:00Z'),
               lastError: 'Webhook endpoint returned HTTP 503.',
               createdAt: new Date('2026-10-20T00:00:00Z'),
+              successor: null,
             },
           ],
+          deadLetterNextCursor: undefined,
         } satisfies WebhookStatus),
       });
 
       render(await RestaurantNotificationsPage({ searchParams }));
 
-      expect(screen.getByRole('heading', { name: 'Dead letters requiring action' })).toBeDefined();
+      expect(screen.getByRole('heading', { name: 'Dead letters' })).toBeDefined();
+      expect(screen.getByText(/1 on this page requires action/)).toBeDefined();
       expect(screen.getByText('job_dead · 5 attempts')).toBeDefined();
       const retry = screen.getByRole('button', { name: 'Retry' });
       const testDelivery = screen.getByRole('button', { name: 'Queue test delivery' });
@@ -253,4 +257,75 @@ describe('RestaurantNotificationsPage tenancy resolution', () => {
       expect(screen.queryByText(/signing-secret|ciphertext-only/i)).toBeNull();
     }
   );
+  it('keeps retried dead letters as non-actionable history, pages older rows, and describes dead-letter-only state', async () => {
+    mocks.resolveTenantActor.mockResolvedValue(actor);
+    mocks.createTRPCContext.mockResolvedValue(contextStub());
+    mocks.can.mockResolvedValue(true);
+    const webhookStatus = vi.fn().mockResolvedValue({
+      config: {
+        id: 'config_1',
+        endpointUrl: 'https://hooks.example.com/sop',
+        enabled: true,
+        signingSecretConfigured: true,
+        lastSuccessAt: new Date(),
+        lastFailureAt: null,
+        lastFailure: null,
+        updatedAt: new Date(),
+      },
+      deliveries: [],
+      deadLetters: (
+        [
+          ['job_open', null],
+          ['job_recovered', { id: 'retry_ok', status: 'SUCCEEDED' }],
+          ['job_pending', { id: 'retry_wait', status: 'QUEUED' }],
+          ['job_failed_again', { id: 'retry_dead', status: 'DEAD' }],
+        ] as const
+      ).map(([id, successor]) => ({
+        id,
+        status: 'DEAD' as const,
+        attempts: 5,
+        nextAttemptAt: new Date('2026-10-20T00:00:00Z'),
+        lastError: null,
+        createdAt: new Date('2026-10-20T00:00:00Z'),
+        successor: successor ? { ...successor } : null,
+      })),
+      deadLetterNextCursor: 'job_failed_again',
+    } satisfies WebhookStatus);
+    mocks.createCaller.mockReturnValue({
+      list: vi.fn().mockResolvedValue({ items: [], nextCursor: null }),
+      unreadCount: vi.fn().mockResolvedValue({ count: 0 }),
+      getMatrix: vi.fn().mockResolvedValue({
+        category: 'sop.escalation',
+        branchId: null,
+        channels: ['IN_APP', 'WEBHOOK', 'EMAIL', 'SMS', 'PUSH', 'WHATSAPP'].map((channel) => ({
+          channel,
+          enabled: true,
+        })),
+      }),
+      webhookStatus,
+    });
+
+    render(
+      await RestaurantNotificationsPage({
+        searchParams: Promise.resolve({ deadLetters: 'job_prev' }),
+      })
+    );
+
+    expect(webhookStatus).toHaveBeenCalledWith({ deadLetterCursor: 'job_prev' });
+    expect(screen.getAllByRole('button', { name: 'Retry' })).toHaveLength(1);
+    expect(screen.getByText(/1 on this page requires action/)).toBeDefined();
+    expect(screen.getByText('Recovered')).toBeDefined();
+    expect(screen.getByText('Retry retry_ok delivered successfully.')).toBeDefined();
+    expect(screen.getByText('Retry in progress')).toBeDefined();
+    expect(screen.getByText('Retry failed')).toBeDefined();
+    expect(screen.getByRole('link', { name: 'Older dead letters' })).toHaveAttribute(
+      'href',
+      expect.stringContaining('deadLetters=job_failed_again')
+    );
+    expect(screen.getByRole('link', { name: 'Newest dead letters' })).toBeDefined();
+    expect(screen.queryByText('No webhook deliveries have been queued.')).toBeNull();
+    expect(
+      screen.getByText('No recent deliveries outside the dead letters above.')
+    ).toBeDefined();
+  });
 });

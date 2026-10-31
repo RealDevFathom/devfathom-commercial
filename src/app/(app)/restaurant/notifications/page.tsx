@@ -67,6 +67,7 @@ type LoadedViewProps = {
   filter: Filter;
   cursor?: string;
   nextCursor?: string;
+  deadLetterCursor?: string;
   notice?: Notice;
   notifications: Notification[];
   unreadCount: number;
@@ -84,6 +85,7 @@ type SearchParams = Promise<{
   filter?: string | string[];
   cursor?: string | string[];
   branch?: string | string[];
+  deadLetters?: string | string[];
   notice?: string | string[];
   kind?: string | string[];
 }>;
@@ -106,11 +108,12 @@ function actionError(error: unknown) {
   return error instanceof TRPCError ? error.message : 'Notification command failed.';
 }
 
-function pageHref(filter: Filter, branch?: string, cursor?: string) {
+function pageHref(filter: Filter, branch?: string, cursor?: string, deadLetterCursor?: string) {
   const params = new URLSearchParams();
   if (filter === 'unread') params.set('filter', filter);
   if (branch) params.set('branch', branch);
   if (cursor) params.set('cursor', cursor);
+  if (deadLetterCursor) params.set('deadLetters', deadLetterCursor);
   const query = params.toString();
   return query ? `${route}?${query}` : route;
 }
@@ -121,8 +124,10 @@ function destination(form: FormData, notice: string, kind: Notice['kind']) {
   if (filter === 'unread') params.set('filter', filter);
   const cursor = optionalField(form, 'cursor');
   const branch = optionalField(form, 'branch');
+  const deadLetterCursor = optionalField(form, 'deadLetters');
   if (cursor) params.set('cursor', cursor);
   if (branch) params.set('branch', branch);
+  if (deadLetterCursor) params.set('deadLetters', deadLetterCursor);
   return `${route}?${params}`;
 }
 
@@ -170,18 +175,70 @@ function HiddenRouteState({
   filter,
   cursor,
   branch,
+  deadLetterCursor,
 }: {
   filter: Filter;
   cursor?: string;
   branch?: string;
+  deadLetterCursor?: string;
 }) {
   return (
     <>
       <input type="hidden" name="filter" value={filter} />
       {cursor ? <input type="hidden" name="cursor" value={cursor} /> : null}
       {branch ? <input type="hidden" name="branch" value={branch} /> : null}
+      {deadLetterCursor ? (
+        <input type="hidden" name="deadLetters" value={deadLetterCursor} />
+      ) : null}
     </>
   );
+}
+
+type DeadLetter = NonNullable<WebhookStatus>['deadLetters'][number];
+
+/**
+ * A dead letter stays DEAD after `retryWebhook` enqueues its successor, so the
+ * successor's state decides whether the row still needs operator action.
+ */
+function deadLetterState(event: DeadLetter): {
+  label: string;
+  tone: StatusTone;
+  detail?: string;
+  actionable: boolean;
+} {
+  const successor = event.successor;
+  if (!successor) return { label: 'Dead letter', tone: 'danger', actionable: true };
+  switch (successor.status) {
+    case 'SUCCEEDED':
+      return {
+        label: 'Recovered',
+        tone: 'success',
+        detail: `Retry ${successor.id} delivered successfully.`,
+        actionable: false,
+      };
+    case 'QUEUED':
+    case 'RUNNING':
+      return {
+        label: 'Retry in progress',
+        tone: 'warning',
+        detail: `Retry ${successor.id} is ${successor.status === 'QUEUED' ? 'queued' : 'running'}.`,
+        actionable: false,
+      };
+    case 'DEAD':
+      return {
+        label: 'Retry failed',
+        tone: 'danger',
+        detail: `Retry ${successor.id} was dead-lettered; act on that dead letter instead.`,
+        actionable: false,
+      };
+    default:
+      return {
+        label: 'Retry failed',
+        tone: 'danger',
+        detail: `Retry ${successor.id} finished with a permanent failure.`,
+        actionable: false,
+      };
+  }
 }
 
 function MatrixRows({
@@ -285,6 +342,7 @@ function NotificationsView(props: NotificationsViewProps) {
     branches,
     canManage,
     cursor,
+    deadLetterCursor,
     filter,
     matrices,
     matrixBranch,
@@ -296,6 +354,7 @@ function NotificationsView(props: NotificationsViewProps) {
   } = props;
   const branchById = new Map(branches.map((branch) => [branch.id, branch]));
   const activeBranches = branches.filter((branch) => branch.active);
+  const openDeadLetters = webhook?.deadLetters.filter((event) => !event.successor).length ?? 0;
 
   return (
     <div className="min-w-0 space-y-6">
@@ -457,34 +516,85 @@ function NotificationsView(props: NotificationsViewProps) {
                 </dd>
               </div>
             </dl>
-            {webhook.deadLetters.length ? (
+            {webhook.deadLetters.length || deadLetterCursor ? (
               <div className="space-y-2 border-t border-border-subtle pt-4">
-                <h3 className="font-semibold text-text-strong">Dead letters requiring action</h3>
+                <h3 className="font-semibold text-text-strong">Dead letters</h3>
+                <p className="text-sm text-text-muted">
+                  {openDeadLetters} on this page require{openDeadLetters === 1 ? 's' : ''} action.
+                  Retried dead letters are kept as history with their retry outcome.
+                </p>
                 <ul className="divide-y divide-border-subtle">
-                  {webhook.deadLetters.map((event) => (
-                    <li className="flex flex-col gap-2 py-3 sm:flex-row sm:items-center" key={event.id}>
-                      <div className="min-w-0 flex-1">
-                        <StatusPill status="DEAD" label="Dead letter" tone="danger" />
-                        <p className="mt-1 font-mono text-xs break-all text-text-muted">
-                          {event.id} · {event.attempts} attempt{event.attempts === 1 ? '' : 's'}
-                        </p>
-                        {event.lastError ? (
-                          <p className="mt-1 text-sm break-words text-destructive-foreground">
-                            {event.lastError}
+                  {webhook.deadLetters.map((event) => {
+                    const state = deadLetterState(event);
+                    return (
+                      <li
+                        className="flex flex-col gap-2 py-3 sm:flex-row sm:items-center"
+                        key={event.id}
+                      >
+                        <div className="min-w-0 flex-1">
+                          <StatusPill status="DEAD" label={state.label} tone={state.tone} />
+                          <p className="mt-1 font-mono text-xs break-all text-text-muted">
+                            {event.id} · {event.attempts} attempt{event.attempts === 1 ? '' : 's'}
                           </p>
+                          {event.lastError ? (
+                            <p className="mt-1 text-sm break-words text-destructive-foreground">
+                              {event.lastError}
+                            </p>
+                          ) : null}
+                          {state.detail ? (
+                            <p className="mt-1 text-sm break-words text-text-muted">
+                              {state.detail}
+                            </p>
+                          ) : null}
+                        </div>
+                        {state.actionable ? (
+                          <form action={action}>
+                            <HiddenRouteState
+                              filter={filter}
+                              cursor={cursor}
+                              branch={matrixBranch?.id}
+                              deadLetterCursor={deadLetterCursor}
+                            />
+                            <input type="hidden" name="intent" value="retry-webhook" />
+                            <input type="hidden" name="eventId" value={event.id} />
+                            <Button
+                              disabled={!webhook.config?.enabled}
+                              type="submit"
+                              variant="secondary"
+                            >
+                              Retry
+                            </Button>
+                          </form>
                         ) : null}
-                      </div>
-                      <form action={action}>
-                        <HiddenRouteState filter={filter} cursor={cursor} branch={matrixBranch?.id} />
-                        <input type="hidden" name="intent" value="retry-webhook" />
-                        <input type="hidden" name="eventId" value={event.id} />
-                        <Button disabled={!webhook.config?.enabled} type="submit" variant="secondary">
-                          Retry
-                        </Button>
-                      </form>
-                    </li>
-                  ))}
+                      </li>
+                    );
+                  })}
                 </ul>
+                {webhook.deadLetterNextCursor || deadLetterCursor ? (
+                  <nav aria-label="Dead letter pages" className="flex flex-wrap gap-2">
+                    {deadLetterCursor ? (
+                      <Link
+                        className={`${buttonVariants({ variant: 'secondary' })} min-h-11`}
+                        href={pageHref(filter, matrixBranch?.id, cursor)}
+                      >
+                        Newest dead letters
+                      </Link>
+                    ) : null}
+                    {webhook.deadLetterNextCursor ? (
+                      <Link
+                        className={`${buttonVariants({ variant: 'secondary' })} min-h-11`}
+                        href={pageHref(
+                          filter,
+                          matrixBranch?.id,
+                          cursor,
+                          webhook.deadLetterNextCursor
+                        )}
+                      >
+                        Older dead letters
+                      </Link>
+                    ) : null}
+                  </nav>
+                ) : null}
               </div>
             ) : null}
             {webhook.deliveries.length ? (
@@ -519,7 +629,11 @@ function NotificationsView(props: NotificationsViewProps) {
                 ))}
               </ul>
             ) : (
-              <p className="text-sm text-text-muted">No webhook deliveries have been queued.</p>
+              <p className="text-sm text-text-muted">
+                {webhook.deadLetters.length || deadLetterCursor
+                  ? 'No recent deliveries outside the dead letters above.'
+                  : 'No webhook deliveries have been queued.'}
+              </p>
             )}
           </div>
         )}
@@ -847,8 +961,9 @@ export default async function RestaurantNotificationsPage({
   const query = await searchParams;
   const filter: Filter = queryValue(query.filter) === 'unread' ? 'unread' : 'all';
   const cursor = queryValue(query.cursor);
+  const deadLetterCursor = queryValue(query.deadLetters);
   const requestedBranchId = queryValue(query.branch);
-  const retryHref = pageHref(filter, requestedBranchId, cursor);
+  const retryHref = pageHref(filter, requestedBranchId, cursor, deadLetterCursor);
   const ctx = await tenantContext();
   // Tenancy did not resolve. Entitlements are unknowable here, so show the
   // permission surface rather than let a missing workspace reach the user as an
@@ -970,7 +1085,7 @@ export default async function RestaurantNotificationsPage({
             : null,
         }
       : null;
-    const webhook = canManage ? await caller.webhookStatus({}) : null;
+    const webhook = canManage ? await caller.webhookStatus({ deadLetterCursor }) : null;
     const noticeText = queryValue(query.notice);
     const notice = noticeText
       ? {
@@ -984,6 +1099,7 @@ export default async function RestaurantNotificationsPage({
       branches,
       canManage,
       cursor,
+      deadLetterCursor,
       filter,
       matrices,
       matrixBranch,
