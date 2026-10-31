@@ -32,10 +32,13 @@ describe('pharmacy OTC and cosmetics category growth report', () => {
     });
     expect(report).toEqual({
       branchId: 'b1',
+      salesBasis: 'GROSS_COMPLETED_RECEIPTS_UTC_COMPLETED_AT',
       totalSalesMinor: 20000,
       categories: [
         {
           category: 'OTC',
+          catalogScope: 'OTC_FLAG',
+          label: 'OTC medicines',
           salesMinor: 7500,
           units: 15,
           salesSharePercent: 37.5,
@@ -46,6 +49,8 @@ describe('pharmacy OTC and cosmetics category growth report', () => {
         },
         {
           category: 'COSMETICS',
+          catalogScope: 'FRONT_SHOP',
+          label: 'Front-shop (cosmetics and other non-drug items)',
           salesMinor: 2500,
           units: 4,
           salesSharePercent: 12.5,

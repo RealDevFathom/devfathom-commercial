@@ -7,6 +7,24 @@ import { MAX_PHARMACY_REPORT_BRANCHES, MAX_PHARMACY_REPORT_DAYS } from './report
 export const PHARMACY_GROWTH_CATEGORIES = ['OTC', 'COSMETICS'] as const;
 export type PharmacyGrowthCategory = (typeof PHARMACY_GROWTH_CATEGORIES)[number];
 
+/**
+ * Catalog scope behind each category key. COSMETICS is the FRONT_SHOP product family, which covers
+ * all non-drug front-shop items (toiletries, baby care, etc.), not only cosmetics.
+ */
+export const PHARMACY_GROWTH_CATEGORY_SCOPE = {
+  OTC: { catalogScope: 'OTC_FLAG', label: 'OTC medicines' },
+  COSMETICS: {
+    catalogScope: 'FRONT_SHOP',
+    label: 'Front-shop (cosmetics and other non-drug items)',
+  },
+} as const satisfies Record<PharmacyGrowthCategory, { catalogScope: string; label: string }>;
+
+/**
+ * Sales basis: gross completed-receipt revenue (returns/refunds are NOT netted), windowed by the
+ * UTC `completedAt` timestamp (not the branch business date), consistent with other growth reports.
+ */
+export const PHARMACY_CATEGORY_GROWTH_SALES_BASIS = 'GROSS_COMPLETED_RECEIPTS_UTC_COMPLETED_AT';
+
 export type CategoryGrowthConfig = {
   category: PharmacyGrowthCategory;
   /** Tenant-maintained display space. Null means space productivity is unknown. */
@@ -105,6 +123,7 @@ export async function readPharmacyCategoryGrowthReport(
     const totalSalesMinor = Number(branchRows[0]?.branchSalesMinor ?? 0);
     return {
       branchId,
+      salesBasis: PHARMACY_CATEGORY_GROWTH_SALES_BASIS,
       totalSalesMinor,
       categories: PHARMACY_GROWTH_CATEGORIES.map((category) => {
         const row = branchRows.find((item) => item.category === category);
@@ -115,6 +134,7 @@ export async function readPharmacyCategoryGrowthReport(
         const space = configured?.displaySpaceSquareMetres ?? null;
         return {
           category,
+          ...PHARMACY_GROWTH_CATEGORY_SCOPE[category],
           salesMinor,
           units: Number(row?.units ?? 0),
           salesSharePercent,
