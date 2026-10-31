@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   reviewGrowth: vi.fn(),
   approve: vi.fn(),
   sandbox: vi.fn(),
+  draftReviewReply: vi.fn(),
 }));
 vi.mock('next/cache', () => ({ revalidatePath: mocks.revalidate }));
 vi.mock('@/server/trpc', () => ({ createTRPCContext: mocks.context }));
@@ -64,6 +65,26 @@ it('requires explicit campaign approval confirmation', async () => {
     error: true,
   });
   expect(mocks.approve).not.toHaveBeenCalled();
+});
+it('returns a manual-only, unapproved review reply draft', async () => {
+  mocks.draftReviewReply.mockResolvedValue({
+    available: true,
+    draft: 'Thank you for the feedback.',
+    posted: false,
+    approved: false,
+  });
+  const result = await marketingAction(
+    form({ operation: 'review-reply', rating: '4', review: 'Helpful team.', tone: 'WARM' })
+  );
+  expect(mocks.draftReviewReply).toHaveBeenCalledWith({
+    branchId: 'branch-a',
+    rating: 4,
+    review: 'Helpful team.',
+    tone: 'WARM',
+  });
+  expect(result.message).toContain('Nothing was posted');
+  expect(result.message).toContain('post it manually');
+  expect(mocks.revalidate).not.toHaveBeenCalled();
 });
 it('passes only insight reference and editable draft settings for server-bound review', async () => {
   mocks.reviewGrowth.mockResolvedValue({ decision: 'APPROVE', campaignId: 'from-insight' });

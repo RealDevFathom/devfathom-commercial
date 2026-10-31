@@ -40,6 +40,7 @@ import {
   type MarketingScope,
 } from '@/lib/pharmacy/marketing-service';
 import { draftMarketingCopy, marketingAssistanceInput } from '@/lib/pharmacy/marketing-assistance';
+import { draftBusinessReviewReply } from '@/lib/pharmacy/business-profile';
 import { protectedProcedure, router, type TRPCContext } from '../trpc';
 
 type MarketingAccessContext = Pick<TRPCContext, 'session' | 'entitlements' | 'audit'> & {
@@ -180,6 +181,49 @@ async function growthExecute<T>(
 
 // Integration export for WHA-1618; root.ts is outside this issue's ownership.
 export const pharmacyMarketingRouter = router({
+  draftReviewReply: protectedProcedure
+    .input(
+      marketingScopeInput
+        .extend({
+          rating: z.number().int().min(1).max(5),
+          review: z.string().trim().min(1).max(2_000),
+          tone: z.enum(['WARM', 'FORMAL']),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const resolved = await scope(ctx, input.branchId);
+      ctx.audit.detail = {
+        category: 'PHARMACY_MARKETING',
+        operation: 'CREATE',
+        action: 'business_review_reply_draft',
+        targetType: 'pharmacy_branch',
+        targetId: resolved.branchId,
+        skipInput: true,
+        metadata: { providerAttempted: false, outcome: 'disabled', approved: false, posted: false },
+      };
+      const settings = await readAskFathomSettings(ctx.db, resolved.organizationId);
+      if (!settings?.askFathomEnabled)
+        return {
+          available: false as const,
+          draft: null,
+          posted: false as const,
+          approved: false as const,
+        };
+      ctx.audit.detail.metadata = {
+        providerAttempted: true,
+        outcome: 'unavailable',
+        approved: false,
+        posted: false,
+      };
+      const result = await draftBusinessReviewReply({
+        rating: input.rating,
+        review: input.review,
+        tone: input.tone,
+      });
+      ctx.audit.detail.metadata.outcome = result.available ? 'draft_generated' : 'unavailable';
+      return result;
+    }),
   growthHistory: protectedProcedure
     .input(marketingScopeInput)
     .query(({ ctx, input }) => growthExecute(ctx, input.branchId, listGrowthInsights)),
