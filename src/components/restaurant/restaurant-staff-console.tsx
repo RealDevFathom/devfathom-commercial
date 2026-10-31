@@ -211,13 +211,16 @@ export function RestaurantStaffConsole() {
     setInviteResult(null);
     setCreateMode('INVITE');
     createStaff.reset();
+    inviteStaff.reset();
     updateStaff.reset();
     setStaffFormOpen(true);
   };
 
   const openEdit = (staff: StaffProfile) => {
     setEditingStaff(staff);
+    setInviteResult(null);
     createStaff.reset();
+    inviteStaff.reset();
     updateStaff.reset();
     setStaffFormOpen(true);
   };
@@ -225,10 +228,14 @@ export function RestaurantStaffConsole() {
   const submitStaff = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
+    const userId = data.has('userId')
+      ? formText(data, 'userId') || null
+      : (editingStaff?.userId ?? null);
     const payload = {
       displayName: formText(data, 'displayName'),
       email: formText(data, 'email') || null,
-      userId: formText(data, 'userId') || null,
+      // An unchanged pending account need not pass the ACTIVE-only link check.
+      ...(editingStaff && userId === editingStaff.userId ? {} : { userId }),
       primaryBranchId: formText(data, 'primaryBranchId') || null,
       status: formText(data, 'status') as StaffStatus,
     };
@@ -243,6 +250,7 @@ export function RestaurantStaffConsole() {
         name: payload.displayName,
         email: formText(data, 'email'),
         staffRole: formText(data, 'staffRole') as 'WAITER' | 'MANAGER',
+        status: payload.status,
         primaryBranchId,
         idempotencyKey: crypto.randomUUID(),
       });
@@ -484,14 +492,19 @@ export function RestaurantStaffConsole() {
           if (!staffFormPending) setStaffFormOpen(open);
         }}
       >
-        <DialogContent className="sm:max-w-xl">
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-xl">
           <DialogHeader>
             <DialogTitle>{editingStaff ? 'Edit staff member' : 'Add staff member'}</DialogTitle>
             <DialogDescription>
               Profile details control restaurant access and branch assignment.
             </DialogDescription>
           </DialogHeader>
-          <form key={editingStaff?.id ?? 'new-staff'} className="space-y-4" onSubmit={submitStaff}>
+          <form
+            key={editingStaff?.id ?? 'new-staff'}
+            className="space-y-4"
+            onSubmit={submitStaff}
+            onChange={() => setInviteResult(null)}
+          >
             {inviteResult ? (
               <div role="status" className="rounded-md border border-border bg-surface p-3 text-sm">
                 <p className="font-medium text-text-strong">
@@ -519,7 +532,11 @@ export function RestaurantStaffConsole() {
                   type="button"
                   variant={createMode === 'INVITE' ? 'secondary' : 'outline'}
                   aria-pressed={createMode === 'INVITE'}
-                  onClick={() => setCreateMode('INVITE')}
+                  disabled={staffFormPending}
+                  onClick={() => {
+                    setInviteResult(null);
+                    setCreateMode('INVITE');
+                  }}
                 >
                   Invite new user
                 </Button>
@@ -527,7 +544,11 @@ export function RestaurantStaffConsole() {
                   type="button"
                   variant={createMode === 'LINK' ? 'secondary' : 'outline'}
                   aria-pressed={createMode === 'LINK'}
-                  onClick={() => setCreateMode('LINK')}
+                  disabled={staffFormPending}
+                  onClick={() => {
+                    setInviteResult(null);
+                    setCreateMode('LINK');
+                  }}
                 >
                   Link existing user
                 </Button>
@@ -537,6 +558,7 @@ export function RestaurantStaffConsole() {
               <span className={labelClass}>Display name</span>
               <Input
                 name="displayName"
+                disabled={staffFormPending}
                 defaultValue={editingStaff?.displayName}
                 required
                 maxLength={200}
@@ -548,6 +570,7 @@ export function RestaurantStaffConsole() {
                 <span className={labelClass}>Email</span>
                 <Input
                   name="email"
+                  disabled={staffFormPending}
                   type="email"
                   defaultValue={editingStaff?.email ?? ''}
                   required={!editingStaff && createMode === 'INVITE'}
@@ -557,7 +580,12 @@ export function RestaurantStaffConsole() {
               {!editingStaff && createMode === 'INVITE' ? (
                 <label className="space-y-1.5">
                   <span className={labelClass}>Staff role</span>
-                  <select name="staffRole" defaultValue="WAITER" className={selectClass}>
+                  <select
+                    name="staffRole"
+                    defaultValue="WAITER"
+                    className={selectClass}
+                    disabled={staffFormPending}
+                  >
                     <option value="WAITER">Waiter</option>
                     <option value="MANAGER">Manager</option>
                   </select>
@@ -572,7 +600,11 @@ export function RestaurantStaffConsole() {
                     name="userId"
                     defaultValue={editingStaff?.userId ?? ''}
                     className={selectClass}
-                    disabled={eligibleUsersQuery.isLoading || Boolean(eligibleUsersQuery.error)}
+                    disabled={
+                      staffFormPending ||
+                      eligibleUsersQuery.isLoading ||
+                      Boolean(eligibleUsersQuery.error)
+                    }
                     aria-describedby="staff-user-help"
                   >
                     <option value="">
@@ -584,14 +616,17 @@ export function RestaurantStaffConsole() {
                             : 'User directory unavailable'
                           : 'No linked organization user'}
                     </option>
+                    {editingStaff?.userId ? (
+                      <option value={editingStaff.userId}>
+                        {editingStaff.displayName} — currently linked
+                      </option>
+                    ) : null}
                     {(eligibleUsersQuery.data ?? []).map((user) => {
+                      if (user.id === editingStaff?.userId) return null;
                       const linkedProfile = user.restaurantStaffProfiles[0];
-                      const isCurrent = user.id === editingStaff?.userId;
-                      const unavailable =
-                        user.status !== 'ACTIVE' || (Boolean(linkedProfile) && !isCurrent);
-                      const state = isCurrent
-                        ? ' — currently linked'
-                        : user.status !== 'ACTIVE'
+                      const unavailable = user.status !== 'ACTIVE' || Boolean(linkedProfile);
+                      const state =
+                        user.status !== 'ACTIVE'
                           ? ' — inactive'
                           : linkedProfile
                             ? ` — linked to ${linkedProfile.displayName}`
@@ -622,6 +657,7 @@ export function RestaurantStaffConsole() {
                 </label>
                 <RestaurantBranchSelect
                   id="staff-primary-branch"
+                  disabled={staffFormPending}
                   name="primaryBranchId"
                   defaultValue={editingStaff?.primaryBranchId ?? ''}
                   branches={branches}
@@ -636,6 +672,7 @@ export function RestaurantStaffConsole() {
                 <span className={labelClass}>Status</span>
                 <select
                   name="status"
+                  disabled={staffFormPending}
                   defaultValue={editingStaff?.status ?? 'ACTIVE'}
                   className={selectClass}
                 >

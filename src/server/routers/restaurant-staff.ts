@@ -282,6 +282,7 @@ export const restaurantStaffRouter = router({
         name: z.string().trim().min(1).max(200),
         email: emailSchema,
         staffRole: z.enum(['WAITER', 'MANAGER']),
+        status: STAFF_STATUS.default('ACTIVE'),
         primaryBranchId: z.string().min(1),
         idempotencyKey: z.string().trim().min(8).max(200),
       })
@@ -329,29 +330,42 @@ export const restaurantStaffRouter = router({
               name: true,
               status: true,
               restaurantStaffProfiles: {
-                where: { primaryBranchId: input.primaryBranchId },
                 select: {
                   id: true,
                   displayName: true,
                   primaryBranchId: true,
+                  status: true,
                   jobRoles: {
                     where: { branchId: input.primaryBranchId },
                     select: { jobRole: { select: { key: true } } },
                   },
                 },
-                take: 1,
               },
             },
           });
           if (existing) {
-            const staff = existing.restaurantStaffProfiles[0];
+            const staff = existing.restaurantStaffProfiles.find(
+              (profile) => profile.primaryBranchId === input.primaryBranchId
+            );
             if (existing.status === 'INVITED' && staff) {
+              // The activation link controls the whole account, including any
+              // other linked profiles and branch-specific grants.
+              for (const profile of existing.restaurantStaffProfiles) {
+                await assertAuthorizedStaffProfile(tx, authorization, profile.id);
+              }
               const expectedRoleKey = input.staffRole === 'MANAGER' ? 'manager' : 'server';
               if (!staff.jobRoles.some(({ jobRole }) => jobRole.key === expectedRoleKey)) {
                 throw new TRPCError({
                   code: 'CONFLICT',
                   message:
                     'This pending invitation has a different restaurant role. Cancel it before inviting the user with a new role.',
+                });
+              }
+              if (staff.status !== input.status) {
+                throw new TRPCError({
+                  code: 'CONFLICT',
+                  message:
+                    'This pending staff profile has a different status. Edit it before resending the invitation.',
                 });
               }
               await tx.invitation.upsert({
@@ -401,13 +415,29 @@ export const restaurantStaffRouter = router({
           const activeOperators = await tx.restaurantStaffProfile.count({
             where: { organizationId, status: 'ACTIVE' },
           });
-          if (activeOperators >= operatorLimit.value) {
+          if (input.status === 'ACTIVE' && activeOperators >= operatorLimit.value) {
             throw new CommercialLimitError(
               `Your plan supports ${operatorLimit.value} active restaurant operator${
                 operatorLimit.value === 1 ? '' : 's'
               }.`,
               'LIMIT_REACHED'
             );
+          }
+
+          // Web authorization uses organization roles; floor job roles alone do
+          // not grant access to capability-gated restaurant pages.
+          const organizationRole = await tx.organizationRole.findFirst({
+            where: {
+              organizationId,
+              key: input.staffRole === 'MANAGER' ? 'branch-manager' : 'server',
+            },
+            select: { id: true },
+          });
+          if (!organizationRole) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'The restaurant web role is unavailable.',
+            });
           }
 
           // Link the staff profile while the user is temporarily ACTIVE, then
@@ -419,6 +449,7 @@ export const restaurantStaffRouter = router({
               password: null,
               status: 'ACTIVE',
               role: 'EMPLOYEE',
+              organizationRoleId: organizationRole.id,
               department: department.key,
               title,
             },
@@ -429,6 +460,7 @@ export const restaurantStaffRouter = router({
               email: input.email,
               userId: user.id,
               primaryBranchId: input.primaryBranchId,
+              status: input.status,
             },
           });
           const jobRoleKey = input.staffRole === 'MANAGER' ? 'manager' : 'server';

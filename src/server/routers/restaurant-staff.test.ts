@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => ({
   userUpdate: vi.fn(),
   userCount: vi.fn(),
   jobRoleFindFirst: vi.fn(),
+  organizationRoleFindFirst: vi.fn(),
   staffJobRoleCreate: vi.fn(),
   staffJobRoleAuditCreate: vi.fn(),
   departmentFindFirst: vi.fn(),
@@ -74,6 +75,7 @@ vi.mock('@/lib/restaurant/job-roles', async () => ({
 import { restaurantStaffRouter } from './restaurant-staff';
 import { verifyOperatorCredential } from '@/lib/restaurant/operator-credentials';
 import type { TRPCContext } from '../trpc';
+import { RESTAURANT_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
 
 const db = {
   $queryRaw: mocks.raw,
@@ -96,6 +98,7 @@ const db = {
     count: mocks.userCount,
   },
   restaurantJobRole: { findFirst: mocks.jobRoleFindFirst },
+  organizationRole: { findFirst: mocks.organizationRoleFindFirst },
   restaurantStaffJobRole: { create: mocks.staffJobRoleCreate },
   restaurantStaffJobRoleAudit: { create: mocks.staffJobRoleAuditCreate },
   organizationDepartment: { findFirst: mocks.departmentFindFirst },
@@ -156,6 +159,11 @@ beforeEach(() => {
     id: `role_${where.key}`,
     key: where.key,
   }));
+  mocks.organizationRoleFindFirst.mockImplementation(
+    async ({ where }: { where: { key: string } }) => ({
+      id: `org_role_${where.key}`,
+    })
+  );
   mocks.staffJobRoleCreate.mockResolvedValue({ id: 'holding_1' });
   mocks.staffJobRoleAuditCreate.mockResolvedValue({});
   mocks.departmentFindFirst.mockResolvedValue({ key: 'OPERATIONS' });
@@ -313,7 +321,165 @@ describe('staff CRUD', () => {
     });
   });
 
+  it.each([
+    ['MANAGER', 'branch-manager', true],
+    ['WAITER', 'server', false],
+  ] as const)(
+    'assigns %s web permissions without organization-wide administration',
+    async (staffRole, roleKey, managesStaff) => {
+      mocks.userFindFirst.mockResolvedValue(null);
+      await caller().invite({
+        name: 'New Staff',
+        email: 'new@example.com',
+        staffRole,
+        primaryBranchId: 'branch_1',
+        idempotencyKey: 'web-permissions-invite',
+      });
+      const created = mocks.userCreate.mock.calls[0]![0].data;
+      expect(mocks.organizationRoleFindFirst).toHaveBeenCalledWith({
+        where: { organizationId: 'org_workspace', key: roleKey },
+        select: { id: true },
+      });
+      expect(created.organizationRoleId).toBe(`org_role_${roleKey}`);
+      const permissions = RESTAURANT_ROLE_TEMPLATES.find(
+        (role) => role.key === roleKey
+      )!.capabilities.map((capability) => ({ capability, effect: 'ALLOW' as const }));
+      const permissionDb = {
+        user: {
+          findUnique: async () => ({
+            organizationRole: { permissions },
+            permissionOverrides: [],
+          }),
+        },
+      };
+      const { can } = await vi.importActual<typeof import('@/lib/abac')>('@/lib/abac');
+      const subject = {
+        id: 'user_invited',
+        role: created.role,
+        department: created.department,
+        status: 'ACTIVE',
+      };
+      const options = { db: permissionDb as never };
+      expect(await can(subject, 'staff:manage', undefined, options)).toBe(managesStaff);
+      expect(await can(subject, 'pos:operate', undefined, options)).toBe(true);
+      expect(await can(subject, 'restaurant:configure', undefined, options)).toBe(false);
+    }
+  );
+
+  it('fails before creating an account when the web role is unavailable', async () => {
+    mocks.userFindFirst.mockResolvedValue(null);
+    mocks.organizationRoleFindFirst.mockResolvedValue(null);
+    await expect(
+      caller().invite({
+        name: 'New Staff',
+        email: 'new@example.com',
+        staffRole: 'MANAGER',
+        primaryBranchId: 'branch_1',
+        idempotencyKey: 'missing-web-role',
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mocks.userCreate).not.toHaveBeenCalled();
+    expect(mocks.invitationCreate).not.toHaveBeenCalled();
+    expect(mocks.sendEmail).not.toHaveBeenCalled();
+  });
+
+  it.each(['ACTIVE', 'SUSPENDED', 'ARCHIVED'] as const)(
+    'honors the selected %s staff status on invitation',
+    async (status) => {
+      mocks.userFindFirst.mockResolvedValue(null);
+      await caller().invite({
+        name: 'New Staff',
+        email: 'new@example.com',
+        staffRole: 'WAITER',
+        status,
+        primaryBranchId: 'branch_1',
+        idempotencyKey: 'selected-staff-status',
+      });
+      expect(mocks.staffCreate).toHaveBeenCalledWith({ data: expect.objectContaining({ status }) });
+    }
+  );
+
+  it('still enforces the operator limit for active invitations', async () => {
+    mocks.userFindFirst.mockResolvedValue(null);
+    mocks.staffCount.mockResolvedValue(50);
+    await expect(
+      caller().invite({
+        name: 'New Staff',
+        email: 'new@example.com',
+        staffRole: 'WAITER',
+        status: 'ACTIVE',
+        primaryBranchId: 'branch_1',
+        idempotencyKey: 'active-limit-invite',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.userCreate).not.toHaveBeenCalled();
+  });
+
+  it.each(['jobRoles', 'directCapabilityGrants', 'otherProfile'] as const)(
+    'rejects resend when the account has an unauthorized branch through %s',
+    async (scope) => {
+      mocks.can.mockImplementation(async (...args) => args[1] === 'staff:manage');
+      mocks.staffFindMany.mockResolvedValue([
+        {
+          id: 'actor',
+          primaryBranchId: 'branch_1',
+          jobRoles: [{ branchId: 'branch_1' }],
+          directCapabilityGrants: [],
+        },
+      ]);
+      const staff = {
+        id: 'pending_staff',
+        displayName: 'Pending Manager',
+        status: 'ACTIVE',
+        primaryBranchId: 'branch_1',
+        jobRoles: [{ jobRole: { key: 'manager' } }],
+      };
+      mocks.userFindFirst.mockResolvedValue({
+        id: 'pending_user',
+        name: 'Pending Manager',
+        status: 'INVITED',
+        restaurantStaffProfiles: [
+          staff,
+          ...(scope === 'otherProfile'
+            ? [{ ...staff, id: 'other', primaryBranchId: 'branch_2' }]
+            : []),
+        ],
+      });
+      mocks.staffFindUnique.mockImplementation(async ({ where }) => ({
+        primaryBranchId: where.id === 'other' ? 'branch_2' : 'branch_1',
+        jobRoles: scope === 'jobRoles' ? [{ branchId: 'branch_2' }] : [],
+        directCapabilityGrants:
+          scope === 'directCapabilityGrants' ? [{ branchId: 'branch_2' }] : [],
+      }));
+      await expect(
+        caller().invite({
+          name: 'Pending Manager',
+          email: 'pending@example.com',
+          staffRole: 'MANAGER',
+          primaryBranchId: 'branch_1',
+          idempotencyKey: 'unauthorized-resend',
+        })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(mocks.invitationUpsert).not.toHaveBeenCalled();
+      expect(mocks.sendEmail).not.toHaveBeenCalled();
+    }
+  );
+
   it('rotates and resends the invitation for an already-invited restaurant staff user', async () => {
+    mocks.can.mockImplementation(async (...args) => args[1] === 'staff:manage');
+    mocks.staffFindMany.mockResolvedValue([
+      {
+        id: 'actor',
+        primaryBranchId: 'branch_1',
+        jobRoles: [{ branchId: 'branch_1' }],
+        directCapabilityGrants: [],
+      },
+    ]);
+    mocks.staffFindUnique.mockResolvedValue({
+      primaryBranchId: 'branch_1',
+      jobRoles: [],
+      directCapabilityGrants: [],
+    });
     mocks.userFindFirst.mockResolvedValue({
       id: 'user_invited',
       name: 'Mina Shah',
@@ -323,6 +489,7 @@ describe('staff CRUD', () => {
           id: 'staff_new',
           displayName: 'Mina Shah',
           primaryBranchId: 'branch_1',
+          status: 'ACTIVE',
           jobRoles: [{ jobRole: { key: 'manager' } }],
         },
       ],
@@ -348,6 +515,36 @@ describe('staff CRUD', () => {
     expect(mocks.staffJobRoleCreate).not.toHaveBeenCalled();
     expect(mocks.sendEmail).toHaveBeenCalledOnce();
     expect(result).toMatchObject({ emailDelivered: true, resent: true });
+  });
+
+  it('rejects a resend status mismatch without changing the profile or invitation', async () => {
+    mocks.userFindFirst.mockResolvedValue({
+      id: 'user_invited',
+      name: 'Mina Shah',
+      status: 'INVITED',
+      restaurantStaffProfiles: [
+        {
+          id: 'staff_new',
+          displayName: 'Mina Shah',
+          primaryBranchId: 'branch_1',
+          status: 'SUSPENDED',
+          jobRoles: [{ jobRole: { key: 'manager' } }],
+        },
+      ],
+    });
+    await expect(
+      caller().invite({
+        name: 'Mina Shah',
+        email: 'mina@example.com',
+        staffRole: 'MANAGER',
+        status: 'ACTIVE',
+        primaryBranchId: 'branch_1',
+        idempotencyKey: 'status-mismatch-resend',
+      })
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+    expect(mocks.invitationUpsert).not.toHaveBeenCalled();
+    expect(mocks.staffUpdate).not.toHaveBeenCalled();
+    expect(mocks.sendEmail).not.toHaveBeenCalled();
   });
 
   it('keeps concurrent retries on the same idempotency key usable', async () => {
@@ -378,6 +575,7 @@ describe('staff CRUD', () => {
             id: 'staff_new',
             displayName: 'Mina Shah',
             primaryBranchId: 'branch_1',
+            status: 'ACTIVE',
             jobRoles: [{ jobRole: { key: 'manager' } }],
           },
         ],
@@ -413,6 +611,7 @@ describe('staff CRUD', () => {
           id: 'staff_new',
           displayName: 'Mina Shah',
           primaryBranchId: 'branch_1',
+          status: 'ACTIVE',
           jobRoles: [{ jobRole: { key: 'server' } }],
         },
       ],
