@@ -56,25 +56,28 @@ describe('readWhatsAppConfig', () => {
     expect(readWhatsAppConfig({ PHARMACY_WHATSAPP_PROVIDER: 'twilio' }).provider).toBe('mock');
   });
 
-  it('fails closed when an explicit English Khata parameter contract is invalid', () => {
-    const config = readWhatsAppConfig({
-      ...ENV,
-      PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER_EN_PARAMETERS: 'name,amount',
-    });
+  it.each(['name,amount', 'amount,name'])(
+    'fails closed when the explicit English Khata parameter contract is %s',
+    (parameters) => {
+      const config = readWhatsAppConfig({
+        ...ENV,
+        PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER_EN_PARAMETERS: parameters,
+      });
 
-    expect(config.khataParameterOrder.en).toBeNull();
-  });
+      expect(config.khataParameterOrder.en).toBeNull();
+    }
+  );
 
   it('keeps English and Urdu Khata template contracts independent', () => {
     const config = readWhatsAppConfig({
       PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER_EN: 'khata_due_en',
-      PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER_EN_PARAMETERS: 'amount,name',
+      PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER_EN_PARAMETERS: 'balance,name',
       PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER_UR: 'khata_due_ur',
       PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER_UR_PARAMETERS: 'name,amount',
     });
 
     expect(config.khataTemplates).toEqual({ en: 'khata_due_en', ur: 'khata_due_ur' });
-    expect(config.khataParameterOrder).toEqual({ en: ['amount', 'name'], ur: null });
+    expect(config.khataParameterOrder).toEqual({ en: ['balance', 'name'], ur: null });
   });
 
   it('rejects an out-of-range reminder lead', () => {
