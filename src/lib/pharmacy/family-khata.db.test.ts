@@ -258,7 +258,7 @@ suite('cash Khata collection PostgreSQL atomicity and replay', () => {
     };
     const collect = () => inScope(scope, (db) => khata.settleFamilyKhata(db, scope, input));
     const results = await Promise.all([collect(), collect()]);
-    expect(JSON.parse(JSON.stringify(results[0]))).toEqual(JSON.parse(JSON.stringify(results[1])));
+    expect(results[0]).toEqual(results[1]);
     await inScope(scope, async (db) => {
       expect(await khata.readKhataBalance(db, scope, scope.familyAccountId)).toBe(350);
       const payments = await db.pharmacyKhataEvent.findMany({
@@ -278,7 +278,7 @@ suite('cash Khata collection PostgreSQL atomicity and replay', () => {
       ).toMatchObject({ expectedCashMinor: 1250, varianceMinor: 0 });
       await cutPharmacyDailyClose(db, scope, { businessDate });
     });
-    expect(await collect()).toEqual(JSON.parse(JSON.stringify(results[0])));
+    expect(await collect()).toEqual(results[0]);
     await expect(
       inScope(scope, (db) => khata.settleFamilyKhata(db, scope, { ...input, amountMinor: 200 }))
     ).rejects.toMatchObject({ reason: 'IDEMPOTENCY_CONFLICT' });

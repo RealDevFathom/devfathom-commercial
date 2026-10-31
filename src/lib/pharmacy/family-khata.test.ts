@@ -59,7 +59,13 @@ function cashFixture() {
     },
     pharmacyKhataEvent: {
       findMany: vi.fn().mockResolvedValue([{ id: 'charge_1', kind: 'CHARGE', amountMinor: 250 }]),
-      create: vi.fn(async ({ data }) => ({ id: 'payment_1', ...data })),
+      create: vi.fn(async ({ data }) => ({
+        id: 'payment_1',
+        memberId: null,
+        dueAt: null,
+        note: null,
+        ...data,
+      })),
     },
     pharmacyDrawerMovement: { create: vi.fn().mockResolvedValue({ id: 'movement_1' }) },
     pharmacyDailyClose: { findFirst: vi.fn().mockResolvedValue(null) },
@@ -138,7 +144,7 @@ describe('CRM-L02 family privacy and khata settlement', () => {
     const replay = await settleFamilyKhata(db as never, scope, cashCollection);
 
     expect(result).toMatchObject({ paidMinor: 250, remainingBalanceMinor: 0 });
-    expect(replay).toEqual(JSON.parse(JSON.stringify(result)));
+    expect(replay).toEqual(result);
     expect(db.pharmacyDrawerSession.findFirst).toHaveBeenCalledWith({
       where: expect.objectContaining({
         id: 'drawer_1',
@@ -169,13 +175,26 @@ describe('CRM-L02 family privacy and khata settlement', () => {
     db.pharmacyDailyClose.findFirst.mockResolvedValue({ id: 'close_1' });
     db.pharmacyDailyClose.findFirst.mockClear();
 
-    await expect(settleFamilyKhata(db as never, scope, cashCollection)).resolves.toEqual(
-      JSON.parse(JSON.stringify(result))
-    );
+    await expect(settleFamilyKhata(db as never, scope, cashCollection)).resolves.toEqual(result);
     expect(db.pharmacyDailyClose.findFirst).not.toHaveBeenCalled();
     expect(db.pharmacyKhataEvent.create).toHaveBeenCalledTimes(1);
     expect(db.pharmacyDrawerMovement.create).toHaveBeenCalledTimes(1);
     expect(db.pharmacyMoneyIdempotencyKey.update).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves payment timestamp types when replaying the saved JSON after close', async () => {
+    const { db, drawer } = cashFixture();
+    const result = await settleFamilyKhata(db as never, scope, cashCollection);
+    drawer.status = 'CLOSED';
+
+    const replay = await settleFamilyKhata(db as never, scope, cashCollection);
+
+    expect(replay).toEqual(result);
+    expect(replay).toMatchObject({
+      allocations: [{ occurredAt: cashCollection.occurredAt, dueAt: null }],
+    });
+    expect(db.pharmacyKhataEvent.create).toHaveBeenCalledTimes(1);
+    expect(db.pharmacyDrawerMovement.create).toHaveBeenCalledTimes(1);
   });
 
   it('refuses a new collection on a closed drawer before appending payments', async () => {

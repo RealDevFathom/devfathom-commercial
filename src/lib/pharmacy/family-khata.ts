@@ -1,13 +1,19 @@
 import 'server-only';
 
 import { createHash, randomUUID } from 'node:crypto';
-import { Prisma } from '@/generated/prisma/client';
+import { Prisma, type PharmacyKhataEvent } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { auditPatientRead } from './patient-prescriptions';
 import { PharmacySettlementError, recordPharmacyCashMovement } from './settlement';
 
 export type FamilyKhataScope = { organizationId: string; branchId: string; actorId: string };
+
+type FamilyKhataSettlementResult = {
+  paidMinor: number;
+  remainingBalanceMinor: number;
+  allocations: PharmacyKhataEvent[];
+};
 
 export class FamilyKhataError extends Error {
   constructor(
@@ -162,7 +168,7 @@ export async function settleFamilyKhata(
     deviceId?: string;
     idempotencyKey?: string;
   }
-) {
+): Promise<FamilyKhataSettlementResult> {
   if (!Number.isSafeInteger(input.amountMinor) || input.amountMinor <= 0)
     throw new FamilyKhataError('INVALID_AMOUNT');
   const accounts = await db.$queryRaw<{ id: string }[]>(
@@ -226,7 +232,18 @@ export async function settleFamilyKhata(
     });
     if (!prior || prior.commandType !== 'khata_collection' || prior.payloadHash !== payloadHash)
       throw new PharmacySettlementError('IDEMPOTENCY_CONFLICT');
-    if (prior.resultPayload) return prior.resultPayload;
+    if (prior.resultPayload) {
+      const result = prior.resultPayload as FamilyKhataSettlementResult;
+      // JSON storage loses Date instances; match the original response on retry.
+      return {
+        ...result,
+        allocations: result.allocations.map((allocation) => ({
+          ...allocation,
+          occurredAt: new Date(allocation.occurredAt),
+          dueAt: allocation.dueAt === null ? null : new Date(allocation.dueAt),
+        })),
+      };
+    }
     // A committed collection remains replayable after close. Only new writes
     // require an open drawer; the movement helper rechecks under the day lock.
     if (drawer.status !== 'OPEN') throw new PharmacySettlementError('DRAWER_NOT_OPEN');
