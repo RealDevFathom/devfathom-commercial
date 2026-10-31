@@ -13,6 +13,10 @@ import {
 import { hasModule, resolveOrganizationEntitlements } from '@/lib/entitlements';
 import { moduleForApiScope } from '@/lib/module-catalog';
 import type { EntitlementView } from '@/lib/module-catalog';
+import {
+  isTaskAssigneeMembershipViolation,
+  TASK_ASSIGNEE_MEMBERSHIP_CONFLICT_MESSAGE,
+} from '@/lib/task-assignee-membership';
 
 export type ApiContext = {
   organizationId: string;
@@ -252,6 +256,21 @@ export function withApiAuth<T extends unknown[]>(
       });
       return res;
     } catch (err) {
+      // The tenant transaction has rolled back. A lost assignee/membership race
+      // is a retryable conflict, not a server fault.
+      if (isTaskAssigneeMembershipViolation(err)) {
+        recordRestAudit({
+          request,
+          ctx: auth,
+          scope: requiredScope,
+          status: 409,
+          durationMs: Date.now() - start,
+        });
+        return NextResponse.json(
+          { error: TASK_ASSIGNEE_MEMBERSHIP_CONFLICT_MESSAGE },
+          { status: 409 }
+        );
+      }
       // Log the full error server-side, but never leak DB/Prisma internals or
       // stack details to the client — respond with a generic 500.
       console.error(`API error in ${requiredScope}:`, err);

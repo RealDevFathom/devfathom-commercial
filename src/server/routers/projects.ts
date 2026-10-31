@@ -12,6 +12,22 @@ import {
   assertTaskAccess,
 } from '../authz';
 import { assertInOrganization, workspaceId } from '../org-refs';
+import {
+  isTaskAssigneeMembershipViolation,
+  TASK_ASSIGNEE_MEMBERSHIP_CONFLICT_MESSAGE,
+} from '@/lib/task-assignee-membership';
+
+/** A concurrent member removal or task move beat this assignee write. */
+function rethrowAssigneeConflict(error: unknown): never {
+  if (isTaskAssigneeMembershipViolation(error)) {
+    throw new TRPCError({
+      code: 'CONFLICT',
+      message: TASK_ASSIGNEE_MEMBERSHIP_CONFLICT_MESSAGE,
+      cause: error,
+    });
+  }
+  throw error;
+}
 
 // Format a task due date for emails, e.g. "Fri, Jun 20 · 5:00 PM".
 function formatDue(date: Date): string {
@@ -544,15 +560,16 @@ export const projectsRouter = router({
       // setColumnDefaultAssignees already enforces this, but createTask/
       // updateTaskAssignees did not, so an arbitrary or non-member id could be
       // assigned (and emailed) or trigger a raw FK 500.
+      const col = await ctx.db.column.findUnique({
+        where: { id: input.columnId },
+        select: { board: { select: { projectId: true } } },
+      });
+      if (!col) throw new TRPCError({ code: 'NOT_FOUND', message: 'Column not found.' });
       if (input.assigneeIds.length > 0) {
-        const col = await ctx.db.column.findUnique({
-          where: { id: input.columnId },
-          select: { board: { select: { projectId: true } } },
-        });
         const uniqueAssignees = [...new Set(input.assigneeIds)];
         await assertInOrganization(ctx.db.user, workspaceId(ctx), uniqueAssignees);
         const memberCount = await ctx.db.projectMember.count({
-          where: { projectId: col!.board.projectId, userId: { in: uniqueAssignees } },
+          where: { projectId: col.board.projectId, userId: { in: uniqueAssignees } },
         });
         if (memberCount !== uniqueAssignees.length) {
           throw new TRPCError({
@@ -567,9 +584,12 @@ export const projectsRouter = router({
         where: { columnId: input.columnId },
       });
 
-      // Fetch column's default assignees so we can auto-add them to the new task.
+      // Column defaults can outlive membership; only auto-add current members.
       const columnDefaults = await ctx.db.columnDefaultAssignee.findMany({
-        where: { columnId: input.columnId },
+        where: {
+          columnId: input.columnId,
+          user: { projectMembers: { some: { projectId: col.board.projectId } } },
+        },
         select: { userId: true },
       });
       const mergedAssignees = [
@@ -602,7 +622,7 @@ export const projectsRouter = router({
           labels: { include: { label: true } },
           _count: { select: { comments: true, attachments: true, checklists: true } },
         },
-      });
+      }).catch(rethrowAssigneeConflict);
       const board = task.column.board;
       const projectName = board.project.name;
       logActivity(ctx.db, ctx.session.user.id, {
@@ -791,7 +811,7 @@ export const projectsRouter = router({
             });
           }
         }
-      });
+      }).catch(rethrowAssigneeConflict);
 
       // Log completion when a task enters a "done" column (and wasn't already in
       // one). PROJ-07: match the same heuristic the board preview uses, not just a
@@ -930,7 +950,7 @@ export const projectsRouter = router({
             skipDuplicates: true,
           });
         }
-      });
+      }).catch(rethrowAssigneeConflict);
 
       return { success: true };
     }),
@@ -1527,19 +1547,20 @@ export const projectsRouter = router({
       }
 
       // Capture who was already assigned so we only email the *newly* added.
-      const existing = await ctx.db.taskAssignee.findMany({
-        where: { taskId: input.taskId },
-        select: { userId: true },
-      });
-      const existingIds = new Set(existing.map((e) => e.userId));
-
-      await ctx.db.taskAssignee.deleteMany({ where: { taskId: input.taskId } });
-      if (uniqueAssignees.length > 0) {
-        await ctx.db.taskAssignee.createMany({
-          data: uniqueAssignees.map((userId) => ({ taskId: input.taskId, userId })),
-          skipDuplicates: true,
+      const existingIds = await ctx.db.$transaction(async (tx) => {
+        const existing = await tx.taskAssignee.findMany({
+          where: { taskId: input.taskId },
+          select: { userId: true },
         });
-      }
+        await tx.taskAssignee.deleteMany({ where: { taskId: input.taskId } });
+        if (uniqueAssignees.length > 0) {
+          await tx.taskAssignee.createMany({
+            data: uniqueAssignees.map((userId) => ({ taskId: input.taskId, userId })),
+            skipDuplicates: true,
+          });
+        }
+        return new Set(existing.map((e) => e.userId));
+      }).catch(rethrowAssigneeConflict);
 
       // Email teammates newly assigned — never the actor, never re-notify.
       const added = uniqueAssignees.filter(

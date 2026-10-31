@@ -6,7 +6,7 @@ const mocks = vi.hoisted(() => {
     deleteMany: vi.fn(async () => ({ count: 1 })),
     createMany: vi.fn(async () => ({ count: 1 })),
   };
-  const db = {
+  const base = {
     task: {
       findUnique: vi.fn(async () => ({
         id: 'task-1',
@@ -30,7 +30,12 @@ const mocks = vi.hoisted(() => {
     taskAssignee,
     projectMember: {
       findMany: vi.fn(async () => [{ userId: 'destination-member' }]),
+      count: vi.fn(async () => 1),
     },
+  };
+  const db = {
+    ...base,
+    $transaction: vi.fn(async (callback: (tx: typeof base) => unknown) => callback(base)),
   };
   return { db, taskAssignee };
 });
@@ -64,20 +69,28 @@ beforeEach(() => {
 });
 
 describe('PATCH /api/v1/tasks/:id cross-project moves', () => {
-  it('drops destination non-members and only applies authorized column defaults', async () => {
+  it('moves before assigning a destination-only member and filters column defaults', async () => {
     const response = await PATCH(
       new Request('https://example.test/api/v1/tasks/task-1', {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           columnId: 'target-column',
-          addAssigneeIds: ['source-project-only-user'],
+          addAssigneeIds: ['destination-member'],
         }),
       }),
       { params: Promise.resolve({ id: 'task-1' }) }
     );
 
     expect(response.status).toBe(200);
+    expect(mocks.db.task.update).toHaveBeenCalled();
+    expect(mocks.taskAssignee.createMany).toHaveBeenNthCalledWith(1, {
+      data: [{ taskId: 'task-1', userId: 'destination-member' }],
+      skipDuplicates: true,
+    });
+    expect(mocks.db.task.update.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.taskAssignee.createMany.mock.invocationCallOrder[0]
+    );
     expect(mocks.taskAssignee.deleteMany).toHaveBeenCalledWith({
       where: {
         taskId: 'task-1',
@@ -96,6 +109,51 @@ describe('PATCH /api/v1/tasks/:id cross-project moves', () => {
     expect(mocks.taskAssignee.createMany).toHaveBeenLastCalledWith({
       data: [{ taskId: 'task-1', userId: 'destination-member' }],
       skipDuplicates: true,
+    });
+  });
+
+  it.each([
+    ['assigneeIds', ['non-member']],
+    ['addAssigneeIds', ['non-member']],
+  ])('rejects non-project members supplied through %s before writing', async (field, ids) => {
+    mocks.db.projectMember.count.mockResolvedValueOnce(0);
+
+    const response = await PATCH(
+      new Request('https://example.test/api/v1/tasks/task-1', {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ [field]: ids }),
+      }),
+      { params: Promise.resolve({ id: 'task-1' }) }
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: 'All assignees must be members of the project.',
+    });
+    expect(mocks.db.projectMember.count).toHaveBeenCalledWith({
+      where: { projectId: 'source-project', userId: { in: ['non-member'] } },
+    });
+    expect(mocks.taskAssignee.deleteMany).not.toHaveBeenCalled();
+    expect(mocks.taskAssignee.createMany).not.toHaveBeenCalled();
+  });
+
+  it('deduplicates assignees before replacing the assignment list', async () => {
+    const response = await PATCH(
+      new Request('https://example.test/api/v1/tasks/task-1', {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ assigneeIds: ['destination-member', 'destination-member'] }),
+      }),
+      { params: Promise.resolve({ id: 'task-1' }) }
+    );
+
+    expect(response.status).toBe(200);
+    expect(mocks.db.projectMember.count).toHaveBeenCalledWith({
+      where: { projectId: 'source-project', userId: { in: ['destination-member'] } },
+    });
+    expect(mocks.taskAssignee.createMany).toHaveBeenCalledWith({
+      data: [{ taskId: 'task-1', userId: 'destination-member' }],
     });
   });
 });

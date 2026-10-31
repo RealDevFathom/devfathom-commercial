@@ -89,12 +89,27 @@ export const POST = withApiAuth('tasks:write', async (ctx, request) => {
     return NextResponse.json({ error: 'You do not have access to that project.' }, { status: 403 });
   }
 
-  // REST-07: validate referenced FKs exist BEFORE the create, so a bad assignee/
-  // label id is a clean 400 instead of a raw Prisma FK violation (500).
+  // Assignees must be members of the task's project. This also validates their
+  // user ids before task creation, avoiding both cross-project assignment and a
+  // raw Prisma FK violation.
   if (input.assigneeIds.length > 0) {
-    const found = await ctx.db.user.count({ where: { id: { in: input.assigneeIds } } });
-    if (found !== new Set(input.assigneeIds).size) {
-      return NextResponse.json({ error: 'One or more assigneeIds do not exist.' }, { status: 400 });
+    const uniqueAssigneeIds = [...new Set(input.assigneeIds)];
+    const memberCount = await ctx.db.projectMember.count({
+      where: { projectId: column.board.project.id, userId: { in: uniqueAssigneeIds } },
+    });
+    if (memberCount !== uniqueAssigneeIds.length) {
+      // Preserve the existing REST error for unknown ids; distinguish real
+      // workspace users who cannot be assigned to this project.
+      const userCount = await ctx.db.user.count({ where: { id: { in: uniqueAssigneeIds } } });
+      return NextResponse.json(
+        {
+          error:
+            userCount !== uniqueAssigneeIds.length
+              ? 'One or more assigneeIds do not exist.'
+              : 'All assignees must be members of the project.',
+        },
+        { status: 400 }
+      );
     }
   }
   if (input.labelIds.length > 0) {
@@ -109,9 +124,22 @@ export const POST = withApiAuth('tasks:write', async (ctx, request) => {
     where: { columnId: input.columnId },
   });
 
-  // Merge explicit assignees with the column's default owners (deduped)
+  // Column defaults can outlive project membership. Only carry current project
+  // members onto the new task; explicit assignees were validated above.
+  const validDefaultAssignees =
+    column.defaultAssignees.length > 0
+      ? await ctx.db.projectMember.findMany({
+          where: {
+            projectId: column.board.project.id,
+            userId: { in: column.defaultAssignees.map((assignee) => assignee.userId) },
+          },
+          select: { userId: true },
+        })
+      : [];
+
+  // Merge explicit assignees with the column's valid default owners (deduped)
   const mergedAssignees = [
-    ...new Set([...input.assigneeIds, ...column.defaultAssignees.map((d) => d.userId)]),
+    ...new Set([...input.assigneeIds, ...validDefaultAssignees.map((member) => member.userId)]),
   ];
 
   const task = await ctx.db.task.create({

@@ -125,30 +125,28 @@ export const PATCH = withApiAuth(
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
-    // Do the mutation in a transaction so reorder + update + defaults are atomic.
-    const updated = await (async (tx) => {
-      // Assignee operations — process in order: full replace, then partial add, then partial remove.
-      // Mutual exclusivity between full-replace and partials is enforced at schema level.
-      if (assigneeIds) {
-        await tx.taskAssignee.deleteMany({ where: { taskId: id } });
-        if (assigneeIds.length > 0) {
-          await tx.taskAssignee.createMany({
-            data: assigneeIds.map((userId) => ({ taskId: id, userId })),
-          });
-        }
+    // New assignees must belong to the project that will own the task. Validate
+    // before any writes so a rejected full replacement cannot clear assignees.
+    const projectForAssignees = targetColumn?.board.project.id ?? projectId;
+    const uniqueAssigneeIds = assigneeIds ? [...new Set(assigneeIds)] : undefined;
+    const uniqueAddAssigneeIds = addAssigneeIds ? [...new Set(addAssigneeIds)] : undefined;
+    const requestedAssigneeIds = [
+      ...new Set([...(uniqueAssigneeIds ?? []), ...(uniqueAddAssigneeIds ?? [])]),
+    ];
+    if (requestedAssigneeIds.length > 0) {
+      const memberCount = await authCtx.db.projectMember.count({
+        where: { projectId: projectForAssignees, userId: { in: requestedAssigneeIds } },
+      });
+      if (memberCount !== requestedAssigneeIds.length) {
+        return NextResponse.json(
+          { error: 'All assignees must be members of the project.' },
+          { status: 400 }
+        );
       }
-      if (addAssigneeIds && addAssigneeIds.length > 0) {
-        await tx.taskAssignee.createMany({
-          data: addAssigneeIds.map((userId) => ({ taskId: id, userId })),
-          skipDuplicates: true, // no-op if already assigned
-        });
-      }
-      if (removeAssigneeIds && removeAssigneeIds.length > 0) {
-        await tx.taskAssignee.deleteMany({
-          where: { taskId: id, userId: { in: removeAssigneeIds } },
-        });
-      }
+    }
 
+    // Do the mutation in a transaction so reorder + update + defaults are atomic.
+    const updated = await authCtx.db.$transaction(async (tx) => {
       // Column move: reorder source + target, then move the task to end of target
       let newOrder = existing.order;
       if (isColumnMove && targetColumn) {
@@ -174,6 +172,28 @@ export const PATCH = withApiAuth(
           ...(isColumnMove && columnId && { columnId, order: newOrder }),
         },
       });
+
+      // Apply assignee edits after the move so the database invariant validates
+      // destination-only members against the task's new project.
+      if (uniqueAssigneeIds) {
+        await tx.taskAssignee.deleteMany({ where: { taskId: id } });
+        if (uniqueAssigneeIds.length > 0) {
+          await tx.taskAssignee.createMany({
+            data: uniqueAssigneeIds.map((userId) => ({ taskId: id, userId })),
+          });
+        }
+      }
+      if (uniqueAddAssigneeIds && uniqueAddAssigneeIds.length > 0) {
+        await tx.taskAssignee.createMany({
+          data: uniqueAddAssigneeIds.map((userId) => ({ taskId: id, userId })),
+          skipDuplicates: true,
+        });
+      }
+      if (removeAssigneeIds && removeAssigneeIds.length > 0) {
+        await tx.taskAssignee.deleteMany({
+          where: { taskId: id, userId: { in: removeAssigneeIds } },
+        });
+      }
 
       // A task moved to another project must not remain assigned to users who
       // cannot access that project. Do this after all requested assignee edits
@@ -207,7 +227,7 @@ export const PATCH = withApiAuth(
       }
 
       return task;
-    })(authCtx.db);
+    });
 
     // Activity log: task_completed fires only when entering Done from a different column
     if (

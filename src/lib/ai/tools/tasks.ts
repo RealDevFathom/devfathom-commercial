@@ -23,6 +23,18 @@ import { Prisma } from '@/generated/prisma/client';
 import type { AssistantHelpers, ToolSet } from '@/lib/ai/context';
 import { matchScore, norm } from '@/lib/ai/context';
 import { appUrl, templates } from '@/lib/email';
+import {
+  isTaskAssigneeMembershipViolation,
+  TASK_ASSIGNEE_MEMBERSHIP_CONFLICT_MESSAGE,
+} from '@/lib/task-assignee-membership';
+
+// A concurrent member removal or task move beat an assignee write; the
+// transaction rolled back, so report it to the assistant as a retryable error.
+const ASSIGNEE_CONFLICT = Symbol('task-assignee-membership-conflict');
+function assigneeConflictOrThrow(error: unknown): typeof ASSIGNEE_CONFLICT {
+  if (isTaskAssigneeMembershipViolation(error)) return ASSIGNEE_CONFLICT;
+  throw error;
+}
 
 // Format a task due date for emails, e.g. "Fri, Jun 20 · 5:00 PM". Mirrors the
 // helper in the projects router so assistant-sent emails match human-sent ones.
@@ -425,7 +437,7 @@ export function buildTasksTools(h: AssistantHelpers): ToolSet {
 
   tools.createTask = tool({
     description:
-      'Create a task in a project and (optionally) assign people to it. Identify the project by name (or id). The task lands in the named column (default "To Do" / the first column) and is assigned to YOU unless you name other assignees. Newly-assigned teammates are notified by email. Use for "add a task to <project>", "create a bug for <name> in <project>".',
+      'Create a task in a project and (optionally) assign people to it. Identify the project by name (or id). The task lands in the named column (default "To Do" / the first column) and is assigned to YOU if you are a project member, unless you name other assignees. Newly-assigned teammates are notified by email. Use for "add a task to <project>", "create a bug for <name> in <project>".',
     inputSchema: z.object({
       projectName: z
         .string()
@@ -440,7 +452,7 @@ export function buildTasksTools(h: AssistantHelpers): ToolSet {
       assignees: z
         .array(z.string())
         .nullish()
-        .describe('Names to assign (or "me"); defaults to you when omitted'),
+        .describe('Names of project members to assign (or "me"); defaults to you if a member'),
     }),
     needsApproval: true,
     execute: async ({
@@ -484,7 +496,8 @@ export function buildTasksTools(h: AssistantHelpers): ToolSet {
         dueAt = d;
       }
 
-      // Resolve named assignees → ids; default to the current user.
+      // Explicit assignees must be project members. An admin can create tasks
+      // without membership, but must not be implicitly assigned in that case.
       const assigneeIds: string[] = [];
       if (assignees && assignees.length) {
         for (const nm of assignees) {
@@ -493,11 +506,25 @@ export function buildTasksTools(h: AssistantHelpers): ToolSet {
           assigneeIds.push(a.id);
         }
       }
-      if (assigneeIds.length === 0) assigneeIds.push(h.ctx.userId);
+      if (assigneeIds.length > 0) {
+        const uniqueIds = [...new Set(assigneeIds)];
+        const memberCount = await h.db.projectMember.count({
+          where: { projectId: proj.id, userId: { in: uniqueIds } },
+        });
+        if (memberCount !== uniqueIds.length)
+          return { error: 'All assignees must be members of the project.' };
+      } else if (
+        await h.db.projectMember.count({ where: { projectId: proj.id, userId: h.ctx.userId } })
+      ) {
+        assigneeIds.push(h.ctx.userId);
+      }
 
       // Merge the column's default assignees (additive), mirroring the router.
       const columnDefaults = await h.db.columnDefaultAssignee.findMany({
-        where: { columnId: column.id },
+        where: {
+          columnId: column.id,
+          user: { projectMembers: { some: { projectId: proj.id } } },
+        },
         select: { userId: true },
       });
       const merged = [...new Set([...assigneeIds, ...columnDefaults.map((d) => d.userId)])];
@@ -506,7 +533,7 @@ export function buildTasksTools(h: AssistantHelpers): ToolSet {
         _max: { order: true },
         where: { columnId: column.id },
       });
-      const task = await h.db.task.create({
+      const created = await h.db.task.create({
         data: {
           title,
           description: description ?? null,
@@ -518,7 +545,11 @@ export function buildTasksTools(h: AssistantHelpers): ToolSet {
           assignees: { create: merged.map((id) => ({ userId: id })) },
         },
         select: { id: true, title: true, priority: true, dueDate: true, description: true },
-      });
+      }).catch(assigneeConflictOrThrow);
+      if (created === ASSIGNEE_CONFLICT) {
+        return { error: TASK_ASSIGNEE_MEMBERSHIP_CONFLICT_MESSAGE };
+      }
+      const task = created;
 
       h.activity({
         type: 'task_created',
@@ -676,7 +707,7 @@ export function buildTasksTools(h: AssistantHelpers): ToolSet {
       });
       const newOrder = (maxOrder._max.order ?? -1) + 1;
 
-      await h.db.$transaction(async (tx) => {
+      const moved = await h.db.$transaction(async (tx) => {
         // Close the gap left in the source column.
         await tx.task.updateMany({
           where: { columnId: task.columnId, order: { gt: task.order } },
@@ -693,7 +724,10 @@ export function buildTasksTools(h: AssistantHelpers): ToolSet {
         });
         // Auto-assign the target column's default assignees (additive).
         const defaults = await tx.columnDefaultAssignee.findMany({
-          where: { columnId: target.id },
+          where: {
+            columnId: target.id,
+            user: { projectMembers: { some: { projectId: task.column.board.projectId } } },
+          },
           select: { userId: true },
         });
         if (defaults.length > 0) {
@@ -702,7 +736,10 @@ export function buildTasksTools(h: AssistantHelpers): ToolSet {
             skipDuplicates: true,
           });
         }
-      });
+      }).catch(assigneeConflictOrThrow);
+      if (moved === ASSIGNEE_CONFLICT) {
+        return { error: TASK_ASSIGNEE_MEMBERSHIP_CONFLICT_MESSAGE };
+      }
 
       // Completion: entering a Done column from a non-Done one.
       const enteringDone =
@@ -786,26 +823,40 @@ export function buildTasksTools(h: AssistantHelpers): ToolSet {
         resolvedIds.push(a.id);
       }
       const resolvedSet = [...new Set(resolvedIds)];
-
-      const existing = await h.db.taskAssignee.findMany({
-        where: { taskId: task.id },
-        select: { userId: true },
-      });
-      const existingIds = new Set(existing.map((e) => e.userId));
-
       const m = mode ?? 'replace';
-      let final: string[];
-      if (m === 'add') final = [...new Set([...existingIds, ...resolvedSet])];
-      else if (m === 'remove') final = [...existingIds].filter((id) => !resolvedSet.includes(id));
-      else final = resolvedSet;
-
-      // Mirror updateTaskAssignees: full replace of the assignee set.
-      await h.db.taskAssignee.deleteMany({ where: { taskId: task.id } });
-      if (final.length > 0) {
-        await h.db.taskAssignee.createMany({
-          data: final.map((userId) => ({ taskId: task.id, userId })),
+      if (m !== 'remove' && resolvedSet.length > 0) {
+        const memberCount = await h.db.projectMember.count({
+          where: { projectId: task.column.board.projectId, userId: { in: resolvedSet } },
         });
+        if (memberCount !== resolvedSet.length)
+          return { error: 'All assignees must be members of the project.' };
       }
+
+      // Keep the old assignments if a concurrent membership removal or task
+      // move makes the database reject the replacement.
+      const assigned = await h.db.$transaction(async (tx) => {
+        const existing = await tx.taskAssignee.findMany({
+          where: { taskId: task.id },
+          select: { userId: true },
+        });
+        const existingIds = new Set(existing.map((e) => e.userId));
+        let final: string[];
+        if (m === 'add') final = [...new Set([...existingIds, ...resolvedSet])];
+        else if (m === 'remove') final = [...existingIds].filter((id) => !resolvedSet.includes(id));
+        else final = resolvedSet;
+
+        await tx.taskAssignee.deleteMany({ where: { taskId: task.id } });
+        if (final.length > 0) {
+          await tx.taskAssignee.createMany({
+            data: final.map((userId) => ({ taskId: task.id, userId })),
+          });
+        }
+        return { final, existingIds };
+      }).catch(assigneeConflictOrThrow);
+      if (assigned === ASSIGNEE_CONFLICT) {
+        return { error: TASK_ASSIGNEE_MEMBERSHIP_CONFLICT_MESSAGE };
+      }
+      const { final, existingIds } = assigned;
 
       // Notify the newly-added (never the actor, never re-notify).
       const added = final.filter((id) => !existingIds.has(id) && id !== h.ctx.userId);
