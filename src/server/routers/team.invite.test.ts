@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   roleFindFirst: vi.fn(),
   sendEmail: vi.fn(),
   appUrl: vi.fn(() => 'https://www.devfathom.com'),
+  annotateAudit: vi.fn(),
   can: vi.fn(async () => true),
 }));
 
@@ -27,7 +28,7 @@ vi.mock('@/server/audit', () => ({
   ipFromHeaders: vi.fn(() => null),
   isAuditExcludedPath: vi.fn(() => true),
   recordTrpcAudit: vi.fn(),
-  annotateAudit: vi.fn(),
+  annotateAudit: mocks.annotateAudit,
   diffChanges: vi.fn(() => ({})),
 }));
 vi.mock('@/lib/email', () => ({
@@ -126,6 +127,11 @@ describe('team.inviteMember duplicate guard', () => {
     await expect(
       caller().inviteMember({ ...invite, email: 'new.person@company.com' })
     ).resolves.toMatchObject({ id: 'user_2', emailDelivery: 'SENT' });
+    expect(mocks.annotateAudit).toHaveBeenCalledExactlyOnceWith(expect.anything(), {
+      targetType: 'User',
+      targetId: 'user_2',
+      result: { id: 'user_2', emailDelivery: 'SENT' },
+    });
   });
 
   it.each([null, { id: 'user_2', status: 'INVITED' }])(
@@ -160,6 +166,15 @@ describe('team.inviteMember duplicate guard', () => {
     expect(result).toMatchObject({ id: 'user_2', emailDelivery: 'FAILED' });
     expect(result.inviteUrl).toMatch(/^https:\/\/www\.devfathom\.com\/invite\//);
     expect(mocks.invitationUpsert).toHaveBeenCalledOnce();
+    expect(mocks.annotateAudit).toHaveBeenCalledExactlyOnceWith(expect.anything(), {
+      targetType: 'User',
+      targetId: 'user_2',
+      result: { id: 'user_2', emailDelivery: 'FAILED' },
+    });
+    const auditDetail = JSON.stringify(mocks.annotateAudit.mock.calls[0]?.[1]);
+    expect(auditDetail).not.toContain(result.inviteUrl.split('/').at(-1));
+    expect(auditDetail).not.toContain('new.person@company.com');
+    expect(auditDetail).not.toContain('provider unavailable');
     expect(consoleError).toHaveBeenCalledWith('[inviteMember] invite email delivery failed', {
       errorType: 'Error',
     });

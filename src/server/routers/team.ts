@@ -252,6 +252,11 @@ export const teamRouter = router({
         });
       }
 
+      annotateAudit(ctx, {
+        targetType: 'User',
+        targetId: user.id,
+        result: { id: user.id, emailDelivery },
+      });
       return { id: user.id, inviteUrl, emailDelivery };
     }),
 

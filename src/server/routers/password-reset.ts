@@ -95,15 +95,15 @@ export const passwordResetRouter = router({
           },
         });
 
-        const resetUrl = `${appUrl()}/reset-password/${token}`;
-        const mail = templates.passwordReset({
-          name: user.name,
-          resetUrl,
-          expiresLabel: 'in 1 hour',
-        });
-        // Best-effort send — never fail the request on an email hiccup, and never
-        // surface delivery status to the caller (it would leak existence).
+        // URL validation, rendering, and delivery are all best-effort: failing
+        // any of them must preserve the same response as an unknown account.
         try {
+          const resetUrl = `${appUrl()}/reset-password/${token}`;
+          const mail = templates.passwordReset({
+            name: user.name,
+            resetUrl,
+            expiresLabel: 'in 1 hour',
+          });
           await sendEmail({
             to: { email: user.email, name: user.name },
             subject: mail.subject,
