@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { computeRfmSegments, planRfmWinBack, type RfmCustomerFacts } from './rfm-winback';
+import {
+  computeRfmSegments,
+  planRfmWinBack,
+  validateNonDrugOffer,
+  type RfmCustomerFacts,
+} from './rfm-winback';
 
 const config = {
   recencyDays: [7, 30, 60, 90] as const,
@@ -21,6 +26,13 @@ const fixture = (overrides: Partial<RfmCustomerFacts> = {}): RfmCustomerFacts =>
   reminderWhatsAppConsent: false,
   marketingWhatsAppConsent: false,
   ...overrides,
+});
+
+const OFFER_TEXT = 'Save on personal-care essentials. Reply STOP to opt out.';
+const reviewed = (body = OFFER_TEXT) => ({
+  body,
+  approvedByUserId: 'owner-1',
+  approvedAt: new Date('2026-10-01T00:00:00Z'),
 });
 
 describe('RFM segmentation', () => {
@@ -73,7 +85,7 @@ describe('RFM win-back policy', () => {
   it.each([NaN, Infinity, -Infinity, -0.01, 1.01])(
     'rejects invalid win-back threshold %s even without customers',
     (winBackChurnScore) => {
-      expect(() => planRfmWinBack([], { ...config, winBackChurnScore }, 'Non-drug offer')).toThrow(
+      expect(() => planRfmWinBack([], { ...config, winBackChurnScore }, reviewed())).toThrow(
         /winBackChurnScore/
       );
     }
@@ -95,7 +107,7 @@ describe('RFM win-back policy', () => {
               }),
             ],
             config,
-            'Non-drug offer'
+            reviewed()
           )
         ).toThrow(/churnScore/);
       }
@@ -108,12 +120,12 @@ describe('RFM win-back policy', () => {
       const customer = fixture({ churnScore, marketingWhatsAppConsent: true });
       expect(computeRfmSegments([customer], config)[0]?.churnScore).toBe(churnScore);
       expect(
-        planRfmWinBack([customer], { ...config, winBackChurnScore: churnScore }, 'Non-drug offer')
+        planRfmWinBack([customer], { ...config, winBackChurnScore: churnScore }, reviewed())
       ).toEqual([
         {
           customerId: customer.customerId,
           kind: 'NON_DRUG_MARKETING',
-          text: 'Non-drug offer',
+          text: OFFER_TEXT,
           includesOffer: true,
         },
       ]);
@@ -131,7 +143,7 @@ describe('RFM win-back policy', () => {
         }),
       ],
       config,
-      'Save 20% on skincare'
+      reviewed('Save 20% on skincare. Reply STOP to opt out.')
     );
     expect(action).toEqual({
       customerId: 'customer-1',
@@ -147,7 +159,7 @@ describe('RFM win-back policy', () => {
       planRfmWinBack(
         [fixture({ hasDrugPurchase: true, refillDue: true, marketingWhatsAppConsent: true })],
         config,
-        'Non-drug offer'
+        reviewed()
       )
     ).toEqual([]);
   });
@@ -158,9 +170,7 @@ describe('RFM win-back policy', () => {
       fixture({ customerId: 'no-consent' }),
       fixture({ customerId: 'below-score', churnScore: 0.69, marketingWhatsAppConsent: true }),
     ];
-    expect(
-      planRfmWinBack(customers, config, 'Save on personal-care essentials. Reply STOP to opt out.')
-    ).toEqual([
+    expect(planRfmWinBack(customers, config, reviewed())).toEqual([
       {
         customerId: 'consented',
         kind: 'NON_DRUG_MARKETING',
@@ -168,5 +178,38 @@ describe('RFM win-back policy', () => {
         includesOffer: true,
       },
     ]);
+  });
+
+  it.each([
+    'Save on antibiotics. Reply STOP to opt out.',
+    'Painkillers 10% off this week. Reply STOP to opt out.',
+    'Paracetamol deals inside. Reply STOP to opt out.',
+    'Vitamin bundle savings. Reply STOP to opt out.',
+    'Buy 2 get 1 on 500 mg packs. Reply STOP to opt out.',
+    'Cough syrup offer today. Reply STOP to opt out.',
+    'Discount on your medicines. Reply STOP to opt out.',
+  ])('rejects offer copy naming a drug, salt or medicine category: %s', (body) => {
+    expect(() =>
+      planRfmWinBack([fixture({ marketingWhatsAppConsent: true })], config, reviewed(body))
+    ).toThrow(/drug, salt or medicine/);
+  });
+
+  it('rejects offer copy that is not an owner-approved template', () => {
+    for (const offer of [
+      { body: OFFER_TEXT, approvedByUserId: null, approvedAt: new Date() },
+      { body: OFFER_TEXT, approvedByUserId: 'owner-1', approvedAt: null },
+    ])
+      expect(() => planRfmWinBack([], config, offer)).toThrow(/owner-approved/);
+  });
+
+  it('rejects empty offers and offers without STOP opt-out instructions', () => {
+    expect(() => validateNonDrugOffer(reviewed('   '))).toThrow(/required/);
+    expect(() => validateNonDrugOffer(reviewed('Save on personal-care essentials.'))).toThrow(
+      /STOP/
+    );
+  });
+
+  it('accepts reviewed generic retail copy', () => {
+    expect(validateNonDrugOffer(reviewed())).toBe(OFFER_TEXT);
   });
 });

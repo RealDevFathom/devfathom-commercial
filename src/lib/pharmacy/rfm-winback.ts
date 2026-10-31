@@ -119,6 +119,43 @@ export type WinBackAction =
   | { customerId: string; kind: 'REFILL_DUE_UTILITY'; text: string; includesOffer: false }
   | { customerId: string; kind: 'NON_DRUG_MARKETING'; text: string; includesOffer: true };
 
+/**
+ * Reviewed non-drug offer copy. The shape matches an approved
+ * `pharmacyMarketingTemplate` row so the owner-approval evidence travels with
+ * the text; unreviewed or caller-built strings are rejected.
+ */
+export type ReviewedNonDrugOffer = {
+  body: string;
+  approvedByUserId: string | null;
+  approvedAt: Date | null;
+};
+
+// Drug, salt, dosage-form, strength and medicine-category vocabulary. Copy
+// matching any of these never reaches a WhatsApp message.
+const PROHIBITED_OFFER_CONTENT = new RegExp(
+  [
+    String.raw`\b(?:prescriptions?|conditions?|allerg\w*|medicines?|medications?|medicated|meds|diagnos\w*|patients?|drugs?|rx|otc|pharmaceuticals?|salts?|generics?|dos(?:e|es|age|ing)|refills?)\b`,
+    String.raw`\b(?:tablets?|capsules?|syrups?|suspensions?|injections?|injectables?|inhalers?|ointments?|eye[- ]?drops|sachets?|suppositor\w*|lozenges?)\b`,
+    String.raw`\b(?:antibiotics?|antidepressants?|antidiabetics?|antihypertensives?|anti[- ]?inflammator\w*|painkillers?|pain[- ]?relief|analgesics?|antacids?|antihistamines?|antiseptics?|antivirals?|antifungals?|steroids?|corticosteroids?|hormon\w*|contracepti\w*|vaccines?|insulin|statins?|opioids?|narcotics?|sedatives?|laxatives?|diuretics?|vitamins?|supplements?|multivitamins?)\b`,
+    String.raw`\b(?:paracetamol|acetaminophen|panadol|ibuprofen|aspirin|diclofenac|naproxen|amoxicillin|azithromycin|ciprofloxacin|metronidazole|omeprazole|esomeprazole|metformin|amlodipine|losartan|atorvastatin|cetirizine|loratadine|salbutamol|prednisolone|codeine|tramadol)\b`,
+    String.raw`\b\d+(?:\.\d+)?\s?(?:mg|mcg|µg|g|ml|iu)\b`,
+  ].join('|'),
+  'i'
+);
+
+/** Rejects unreviewed copy and any drug, salt or medicine-category content. */
+export function validateNonDrugOffer(offer: ReviewedNonDrugOffer): string {
+  const body = typeof offer?.body === 'string' ? offer.body.trim() : '';
+  if (!body) throw new Error('A non-drug offer is required.');
+  if (!offer.approvedByUserId || !(offer.approvedAt instanceof Date))
+    throw new Error('The non-drug offer must be a reviewed, owner-approved template.');
+  if (PROHIBITED_OFFER_CONTENT.test(body))
+    throw new Error('Use generic retail copy without drug, salt or medicine content.');
+  if (!/\bSTOP\b/.test(body.toUpperCase()))
+    throw new Error('Include STOP opt-out instructions in the non-drug offer.');
+  return body;
+}
+
 const REFILL_DUE_UTILITY_TEXT =
   'Your refill may be due soon. Reply YES if you would like the pharmacy team to contact you.';
 
@@ -126,15 +163,16 @@ const REFILL_DUE_UTILITY_TEXT =
  * Produces mutually exclusive actions. Any customer with drug history is kept
  * on the fixed utility path, even if they also bought non-drug goods or have
  * marketing consent. Consequently no caller-controlled copy can leak a drug,
- * salt, medicine category, or offer into their WhatsApp message.
+ * salt, medicine category, or offer into their WhatsApp message. Non-drug
+ * offer copy must be an owner-approved template and pass the content policy.
  */
 export function planRfmWinBack(
   customers: readonly RfmCustomerFacts[],
   config: RfmWinBackConfig,
-  nonDrugOfferText: string
+  nonDrugOffer: ReviewedNonDrugOffer
 ): WinBackAction[] {
   validateChurnScore(config.winBackChurnScore, 'winBackChurnScore');
-  if (!nonDrugOfferText.trim()) throw new Error('A non-drug offer is required.');
+  const nonDrugOfferText = validateNonDrugOffer(nonDrugOffer);
   return customers.flatMap((customer): WinBackAction[] => {
     validateChurnScore(customer.churnScore, 'churnScore');
     if (customer.churnScore < config.winBackChurnScore) return [];
