@@ -33,7 +33,7 @@ database('lost-sales migration and purchase recovery', () => {
     await client.query('BEGIN');
     // Temporary fixtures work with the runtime role, require no schema-owner
     // credentials, and cannot touch the application's migrated public tables.
-    await client.query(`CREATE TEMP TABLE pharmacy_branches (id text PRIMARY KEY);
+    await client.query(`CREATE TEMP TABLE pharmacy_branches (id text PRIMARY KEY, "organizationId" text DEFAULT 'org-a');
       SET LOCAL search_path = pg_temp;
       CREATE TEMP TABLE pharmacy_medicines ("organizationId" text, id text, PRIMARY KEY ("organizationId", id));
       CREATE TEMP TABLE pharmacy_sales ("organizationId" text, "branchId" text, id text, status text,
@@ -181,6 +181,27 @@ database('lost-sales migration and purchase recovery', () => {
     ).toMatchObject({ visitType: 'PARTIAL', abandonedBasketPkr: '0.00', estLossPkr: '3.00' });
   });
 
+  it('recalculates an explicitly abandoned Unknown item once its basket completes', async () => {
+    await seedRecovery();
+    await client.query(`UPDATE pharmacy_unfulfilled_demand_events
+        SET outcome = 'UNKNOWN', "requestedQty" = 1, "unitPricePkr" = 100, "lossProbability" = 1,
+          "abandonedBasketPkr" = 10, "estLossPkr" = 110 WHERE id = 'return';
+      UPDATE pharmacy_sales SET status = 'COMPLETED', "completedAt" = now() WHERE id = 'origin'`);
+    await recoverCompletedDemand(sqlDb() as never, scope, 'origin');
+    expect(
+      (
+        await client.query(
+          `SELECT "visitType", "lossProbability", "abandonedBasketPkr", "estLossPkr" FROM pharmacy_unfulfilled_demand_events WHERE id = 'return'`
+        )
+      ).rows[0]
+    ).toMatchObject({
+      visitType: 'PARTIAL',
+      lossProbability: '0.4300',
+      abandonedBasketPkr: '0.00',
+      estLossPkr: '43.00',
+    });
+  });
+
   const expireReturns = () => demandAggregate(sqlDb() as never, scope,
     new Date('2000-01-01'), new Date('2100-01-01'), true);
 
@@ -249,6 +270,15 @@ database('lost-sales migration and purchase recovery', () => {
     await expireReturns();
     expect((await client.query(`SELECT "estLossPkr" FROM pharmacy_unfulfilled_demand_events WHERE id = 'return'`))
       .rows[0].estLossPkr).toBe('10.00');
+  });
+
+  it('never expires a return promise that an explicit recovery already fulfilled', async () => {
+    await seedRecovery();
+    await client.query(`UPDATE pharmacy_unfulfilled_demand_events
+      SET status = 'RECOVERED', "createdAt" = now() - interval '8 days' WHERE id = 'return'`);
+    await expireReturns();
+    expect((await client.query(`SELECT "lossProbability", "estLossPkr" FROM pharmacy_unfulfilled_demand_events WHERE id = 'return'`))
+      .rows[0]).toMatchObject({ lossProbability: '0.0000', estLossPkr: '0.00' });
   });
 
   it('requires the allocated demand and receipt to share a branch', async () => {

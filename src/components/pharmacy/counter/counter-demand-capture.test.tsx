@@ -8,13 +8,21 @@ describe('counter demand outcome capture', () => {
   it('keeps an explicitly selected basket outcome when Unknown is saved automatically', async () => {
     vi.useFakeTimers();
     const capture = vi.fn().mockResolvedValue(true);
-    render(<CounterDemandCapture disabled={false} units={3} hasBasket onCapture={capture} />);
+    render(
+      <CounterDemandCapture
+        disabled={false}
+        units={3}
+        hasBasket
+        onArm={() => 'visit-a'}
+        onCapture={capture}
+      />
+    );
     fireEvent.click(screen.getByRole('button', { name: /Capture shortfall/ }));
     fireEvent.change(screen.getByLabelText('Basket outcome'), { target: { value: 'PARTIAL' } });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(5_000);
     });
-    expect(capture).toHaveBeenCalledExactlyOnceWith('UNKNOWN', {
+    expect(capture).toHaveBeenCalledExactlyOnceWith('visit-a', 'UNKNOWN', {
       notifyOptIn: false,
       visitType: 'PARTIAL',
     });
@@ -28,7 +36,15 @@ describe('counter demand outcome capture', () => {
           finish = resolve;
         })
     );
-    render(<CounterDemandCapture disabled={false} units={3} hasBasket onCapture={capture} />);
+    render(
+      <CounterDemandCapture
+        disabled={false}
+        units={3}
+        hasBasket
+        onArm={() => 'visit-a'}
+        onCapture={capture}
+      />
+    );
     fireEvent.click(screen.getByRole('button', { name: /Capture shortfall/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Will return' }));
     expect(screen.getByRole('button', { name: 'Capturing…' })).toBeDisabled();
@@ -41,7 +57,15 @@ describe('counter demand outcome capture', () => {
   it('preserves invalid notification input and cancels the default once an outcome is chosen', async () => {
     vi.useFakeTimers();
     const capture = vi.fn().mockResolvedValue(true);
-    render(<CounterDemandCapture disabled={false} units={3} hasBasket onCapture={capture} />);
+    render(
+      <CounterDemandCapture
+        disabled={false}
+        units={3}
+        hasBasket
+        onArm={() => 'visit-a'}
+        onCapture={capture}
+      />
+    );
     fireEvent.click(screen.getByRole('button', { name: /Capture shortfall/ }));
     fireEvent.click(screen.getByRole('checkbox', { name: /Notify when back/ }));
     fireEvent.change(screen.getByLabelText('Notification phone'), { target: { value: '123' } });
@@ -57,7 +81,15 @@ describe('counter demand outcome capture', () => {
   it('defaults to Unknown after five seconds even after dismissal, and never auto-submits PII', async () => {
     vi.useFakeTimers();
     const capture = vi.fn().mockResolvedValue(true);
-    render(<CounterDemandCapture disabled={false} units={3} hasBasket onCapture={capture} />);
+    render(
+      <CounterDemandCapture
+        disabled={false}
+        units={3}
+        hasBasket
+        onArm={() => 'visit-a'}
+        onCapture={capture}
+      />
+    );
     fireEvent.click(screen.getByRole('button', { name: /Capture shortfall/ }));
     fireEvent.click(screen.getByRole('checkbox', { name: /Notify when back/ }));
     fireEvent.change(screen.getByLabelText('Notification phone'), {
@@ -71,13 +103,21 @@ describe('counter demand outcome capture', () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1);
     });
-    expect(capture).toHaveBeenCalledExactlyOnceWith('UNKNOWN', { notifyOptIn: false });
+    expect(capture).toHaveBeenCalledExactlyOnceWith('visit-a', 'UNKNOWN', { notifyOptIn: false });
   });
 
   it('submits explicit opt-in once and clears contact details for the next capture', async () => {
     vi.useFakeTimers();
     const capture = vi.fn().mockResolvedValue(true);
-    render(<CounterDemandCapture disabled={false} units={3} hasBasket onCapture={capture} />);
+    render(
+      <CounterDemandCapture
+        disabled={false}
+        units={3}
+        hasBasket
+        onArm={() => 'visit-a'}
+        onCapture={capture}
+      />
+    );
     fireEvent.click(screen.getByRole('button', { name: /Capture shortfall/ }));
     fireEvent.click(screen.getByRole('checkbox', { name: /Notify when back/ }));
     fireEvent.change(screen.getByLabelText('Notification phone'), {
@@ -89,7 +129,7 @@ describe('counter demand outcome capture', () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(5_100);
     });
-    expect(capture).toHaveBeenCalledExactlyOnceWith('WILL_RETURN', {
+    expect(capture).toHaveBeenCalledExactlyOnceWith('visit-a', 'WILL_RETURN', {
       notifyOptIn: true,
       notifyPhone: '03001234567',
       notifyConsentRecorded: true,
@@ -99,7 +139,7 @@ describe('counter demand outcome capture', () => {
     expect(screen.queryByLabelText('Notification phone')).not.toBeInTheDocument();
   });
 
-  it('drops consent and cancels the old default when the visit context changes', async () => {
+  it('drops consent but still saves the old default with its original context on a context change', async () => {
     vi.useFakeTimers();
     const capture = vi.fn().mockResolvedValue(true);
     const { rerender } = render(
@@ -108,6 +148,7 @@ describe('counter demand outcome capture', () => {
         disabled={false}
         units={3}
         hasBasket
+        onArm={() => 'visit-a'}
         onCapture={capture}
       />
     );
@@ -116,25 +157,53 @@ describe('counter demand outcome capture', () => {
     fireEvent.change(screen.getByLabelText('Notification phone'), {
       target: { value: '03001234567' },
     });
+    fireEvent.change(screen.getByLabelText('Basket outcome'), { target: { value: 'WALK_OUT' } });
     rerender(
       <CounterDemandCapture
         key="branch-b:sale-b:customer-b"
         disabled={false}
         units={3}
         hasBasket
+        onArm={() => 'visit-b'}
         onCapture={capture}
       />
     );
+    // The scan replaced the sheet; the pending Unknown keeps visit A, without PII.
+    expect(capture).toHaveBeenCalledExactlyOnceWith('visit-a', 'UNKNOWN', {
+      notifyOptIn: false,
+      visitType: 'WALK_OUT',
+    });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(5_100);
     });
-    expect(capture).not.toHaveBeenCalled();
+    expect(capture).toHaveBeenCalledOnce();
     fireEvent.click(screen.getByRole('button', { name: /Capture shortfall/ }));
     expect(screen.getByRole('checkbox', { name: /Notify when back/ })).not.toBeChecked();
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Went elsewhere' }));
     });
-    expect(capture).toHaveBeenCalledExactlyOnceWith('WENT_ELSEWHERE', { notifyOptIn: false });
+    expect(capture).toHaveBeenCalledTimes(2);
+    expect(capture).toHaveBeenLastCalledWith('visit-b', 'WENT_ELSEWHERE', { notifyOptIn: false });
+  });
+
+  it('does not re-save on unmount once the default or an outcome was saved', async () => {
+    vi.useFakeTimers();
+    const capture = vi.fn().mockResolvedValue(true);
+    const { unmount } = render(
+      <CounterDemandCapture
+        disabled={false}
+        units={3}
+        hasBasket
+        onArm={() => 'visit-a'}
+        onCapture={capture}
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Capture shortfall/ }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    unmount();
+    expect(capture).toHaveBeenCalledExactlyOnceWith('visit-a', 'UNKNOWN', { notifyOptIn: false });
   });
 
   it('has no backdrop and leaves payment clickable while the outcome sheet is open', () => {
@@ -143,7 +212,13 @@ describe('counter demand outcome capture', () => {
     render(
       <>
         <button onClick={tender}>Take payment</button>
-        <CounterDemandCapture disabled={false} units={3} hasBasket={false} onCapture={vi.fn()} />
+        <CounterDemandCapture
+          disabled={false}
+          units={3}
+          hasBasket={false}
+          onArm={() => 'visit-a'}
+          onCapture={vi.fn()}
+        />
       </>
     );
     fireEvent.click(screen.getByRole('button', { name: /Capture shortfall/ }));

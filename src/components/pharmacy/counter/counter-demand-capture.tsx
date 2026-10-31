@@ -20,17 +20,28 @@ export type DemandCaptureOptions = {
   visitType?: 'PARTIAL' | 'WALK_OUT';
 };
 
-/** Mount with a branch/sale/customer/item key so consent never crosses visits. */
-export function CounterDemandCapture({
+/**
+ * Mount with a branch/sale/customer/item key so consent never crosses visits.
+ * The visit context is snapshotted when capture starts; if the sheet unmounts
+ * (for example, the next item is scanned) the pending Unknown default is saved
+ * immediately with that original context, without any notification details.
+ */
+export function CounterDemandCapture<Context>({
   disabled,
   units,
   hasBasket,
+  onArm,
   onCapture,
 }: {
   disabled: boolean;
   units: number;
   hasBasket: boolean;
-  onCapture: (outcome: LostSaleOutcome, options: DemandCaptureOptions) => Promise<boolean>;
+  onArm: () => Context | null;
+  onCapture: (
+    context: Context,
+    outcome: LostSaleOutcome,
+    options: DemandCaptureOptions
+  ) => Promise<boolean>;
 }) {
   const [open, setOpen] = useState(false);
   const [armed, setArmed] = useState(false);
@@ -40,14 +51,36 @@ export function CounterDemandCapture({
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
+  const contextRef = useRef<Context | null>(null);
+  const pendingDefault = useRef<DemandCaptureOptions | null>(null);
   const capture = useRef(onCapture);
   useEffect(() => {
     capture.current = onCapture;
   }, [onCapture]);
+  useEffect(() => {
+    pendingDefault.current = armed
+      ? { notifyOptIn: false, ...(visitType ? { visitType } : {}) }
+      : null;
+  }, [armed, visitType]);
+  useEffect(
+    () => () => {
+      // Unmounting must not discard an armed default capture.
+      const context = contextRef.current;
+      const options = pendingDefault.current;
+      if (context === null || options === null || savingRef.current) return;
+      contextRef.current = null;
+      pendingDefault.current = null;
+      void capture.current(context, 'UNKNOWN', options).catch(() => undefined);
+    },
+    []
+  );
 
   async function save(outcome: LostSaleOutcome, explicit: boolean) {
     if (savingRef.current) return;
+    const context = contextRef.current;
+    if (context === null) return;
     setArmed(false);
+    pendingDefault.current = null;
     if (explicit && notify && (phone.trim().length < 7 || phone.trim().length > 32)) {
       setError('Enter a phone number between 7 and 32 characters.');
       return;
@@ -58,7 +91,7 @@ export function CounterDemandCapture({
     // The automatic default saves only the demand. Sending contact details
     // requires the operator to explicitly save this customer's opt-in.
     try {
-      const saved = await capture.current(outcome, {
+      const saved = await capture.current(context, outcome, {
         notifyOptIn: explicit && notify,
         ...(explicit && notify ? { notifyPhone: phone.trim(), notifyConsentRecorded: true } : {}),
         ...(visitType ? { visitType } : {}),
@@ -68,6 +101,7 @@ export function CounterDemandCapture({
         setOpen(true);
         return;
       }
+      contextRef.current = null;
       setOpen(false);
       setNotify(false);
       setPhone('');
@@ -98,6 +132,12 @@ export function CounterDemandCapture({
         className="h-auto min-h-11 whitespace-normal"
         disabled={disabled || saving}
         onClick={() => {
+          // Keep an unsaved snapshot (e.g. after a failed save) for the retry.
+          if (contextRef.current === null) {
+            const context = onArm();
+            if (context === null) return;
+            contextRef.current = context;
+          }
           setOpen(true);
           setArmed(true);
         }}

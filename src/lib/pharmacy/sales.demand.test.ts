@@ -158,6 +158,26 @@ describe('lost-sales capture regressions', () => {
     }
   );
 
+  it.each(['PACK', 'STRIP'] as const)(
+    'still captures never-stocked %s demand without an inventory conversion',
+    async (saleUnit) => {
+      const db = fixture();
+      db.pharmacyInventoryLot.findFirst.mockResolvedValue(null as never);
+      expect(await captureDemand(db as never, scope, {
+        ...input, saleUnit, quantity: 2, reason: 'NOT_CARRIED', outcome: 'UNKNOWN',
+      })).toMatchObject({ quantity: 2, saleUnit, requestedQty: 2, unitPricePkr: 0, estLossPkr: 0 });
+      expect(db.packLevel.findMany).not.toHaveBeenCalled();
+    }
+  );
+
+  it('captures an unavailable pack shape without estimating value from canonical prices', async () => {
+    const db = fixture();
+    db.packLevel.findMany.mockResolvedValue([]);
+    expect(await captureDemand(db as never, scope, {
+      ...input, saleUnit: 'STRIP', quantity: 1, reason: 'PACK_UNAVAILABLE', outcome: 'UNKNOWN',
+    })).toMatchObject({ requestedQty: 1, unitPricePkr: 0, estLossPkr: 0 });
+  });
+
   it('keeps fractional canonical-unit prices until the final loss is rounded', async () => {
     const db = fixture();
     db.pharmacyInventoryLot.findFirst.mockResolvedValue({ printedMrpMinor: 1000, unitsPerPack: 3,

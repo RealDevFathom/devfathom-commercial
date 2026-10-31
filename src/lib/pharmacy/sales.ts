@@ -19,12 +19,12 @@ import { allocateForSale, allocateReservedForSale, reverseMovements } from './st
 import type { LedgerScope, ReservedSaleAllocation } from './stock-ledger';
 import { postSaleReturnEntry, postUnidentifiedSaleReturnEntry } from './finance-postings';
 import {
-  effectiveUnknownProbability,
   outcomeLossProbability,
   VISIT_WINDOW_MS,
   WILL_RETURN_WINDOW_MS,
   type LostSaleOutcome,
 } from './lost-sales';
+import { branchUnknownProbability } from './lost-sales-recovery';
 
 /**
  * Re-exported from `./medicine`, where MED-08 pricing now lives so the counter
@@ -1004,41 +1004,8 @@ export async function captureDemand(
     orderBy: { createdAt: 'desc' },
     select: { visitId: true },
   });
-  const branch = await db.pharmacyBranch.findFirstOrThrow({
-    where: { organizationId: scope.organizationId, id: scope.branchId },
-    select: { lostSalesUnknownProbability: true, lostSalesMeasuredRateMinimum: true },
-  });
-  const [knownOutcomes, knownLostOutcomes, lot] = await Promise.all([
-    db.unfulfilledDemandEvent.count({
-      where: {
-        organizationId: scope.organizationId,
-        branchId: scope.branchId,
-        OR: [
-          { outcome: { in: ['SUBSTITUTE_TAKEN', 'ORDERED_FOR_CUSTOMER', 'WENT_ELSEWHERE'] } },
-          {
-            outcome: 'WILL_RETURN',
-            OR: [
-              { resolvedBySaleId: { not: null } },
-              { createdAt: { lte: new Date(now.getTime() - WILL_RETURN_WINDOW_MS) } },
-            ],
-          },
-        ],
-      },
-    }),
-    db.unfulfilledDemandEvent.count({
-      where: {
-        organizationId: scope.organizationId,
-        branchId: scope.branchId,
-        OR: [
-          { outcome: 'WENT_ELSEWHERE' },
-          {
-            outcome: 'WILL_RETURN',
-            resolvedBySaleId: null,
-            createdAt: { lte: new Date(now.getTime() - WILL_RETURN_WINDOW_MS) },
-          },
-        ],
-      },
-    }),
+  const [unknownProbability, lot] = await Promise.all([
+    branchUnknownProbability(db, scope, now),
     input.requestedMedicineId
       ? db.pharmacyInventoryLot.findFirst({
           where: {
@@ -1056,12 +1023,6 @@ export async function captureDemand(
         })
       : null,
   ]);
-  const unknownProbability = effectiveUnknownProbability({
-    configuredEstimate: Number(branch.lostSalesUnknownProbability),
-    knownOutcomes,
-    knownLostOutcomes,
-    minimumKnownOutcomes: branch.lostSalesMeasuredRateMinimum,
-  });
   const outcome = input.outcome ?? 'UNKNOWN';
   // Only an explicit abandoned basket overrides the item outcome. An inferred
   // walk-out still uses the configured/measured Unknown estimate.
@@ -1070,18 +1031,9 @@ export async function captureDemand(
     input.visitType === 'WALK_OUT' && visitType === 'WALK_OUT'
       ? 1
       : outcomeLossProbability(outcome, { unknownProbability });
-  // Price is deliberately resolved from branch inventory on the server; clients
-  // cannot submit or alter lost-sales value.
-  const unitPricePkr = lot
-    ? new Prisma.Decimal(lot.printedMrpMinor)
-        .div(lot.unitsPerPack)
-        .div(100)
-        .toDecimalPlaces(12)
-        .toNumber()
-    : 0;
   let unitsPerSaleUnit = 1;
-  if (input.saleUnit !== 'UNIT') {
-    if (!lot) throw new PharmacySaleError('INVALID_QUANTITY');
+  let conversionAvailable = input.saleUnit === 'UNIT';
+  if (input.saleUnit !== 'UNIT' && lot) {
     const packLevels = await db.packLevel.findMany({
       where: { organizationId: scope.organizationId, presentationId: lot.packLevel.presentationId },
     });
@@ -1090,9 +1042,24 @@ export async function captureDemand(
       rootPackLevelId: lot.packLevelId,
       unitsPerPack: lot.unitsPerPack,
     }).filter((option) => option.kind === input.saleUnit);
-    if (options.length !== 1) throw new PharmacySaleError('INVALID_QUANTITY');
-    unitsPerSaleUnit = options[0]!.canonicalUnitsPerSaleUnit;
+    if (options.length === 1) {
+      unitsPerSaleUnit = options[0]!.canonicalUnitsPerSaleUnit;
+      conversionAvailable = true;
+    }
   }
+  // Demand for never-stocked or not-carried items (or an unavailable pack
+  // shape) is still captured. Without an inventory conversion the requested
+  // sale-unit count is kept as entered and no value is estimated from it.
+  // Price is deliberately resolved from branch inventory on the server; clients
+  // cannot submit or alter lost-sales value.
+  const unitPricePkr =
+    lot && conversionAvailable
+      ? new Prisma.Decimal(lot.printedMrpMinor)
+          .div(lot.unitsPerPack)
+          .div(100)
+          .toDecimalPlaces(12)
+          .toNumber()
+      : 0;
   const requestedQty = input.quantity * unitsPerSaleUnit;
   if (!Number.isSafeInteger(requestedQty) || requestedQty <= 0 || requestedQty > 2_147_483_647)
     throw new PharmacySaleError('INVALID_QUANTITY');
@@ -1168,10 +1135,35 @@ export async function recoverDemandWithAlternate(
   });
   if (!demand || !line || !demand.saleId || demand.saleId !== line.saleId)
     throw new PharmacySaleError('CROSS_BRANCH_REFERENCE');
+  const recoveredAt = new Date();
   return db.unfulfilledDemandEvent.update({
     where: { organizationId_id: { organizationId: scope.organizationId, id: demandId } },
-    data: { status: 'RECOVERED', recoveredSaleLineId: saleLineId, recoveredAt: new Date() },
+    data: {
+      status: 'RECOVERED',
+      recoveredSaleLineId: saleLineId,
+      recoveredAt,
+      ...explicitRecoveryLossState(demand, line.saleId, recoveredAt),
+    },
   });
+}
+
+/**
+ * An explicit recovery fulfilled the item, so it is no longer a lost sale and
+ * a later return-window expiry must not count it. Only abandoned-basket value
+ * (cleared separately when that basket completes) remains on the event.
+ */
+function explicitRecoveryLossState(
+  demand: { resolvedBySaleId: string | null; abandonedBasketPkr: Prisma.Decimal },
+  saleId: string,
+  at: Date
+) {
+  if (demand.resolvedBySaleId) return {};
+  return {
+    resolvedBySaleId: saleId,
+    resolvedAt: at,
+    lossProbability: 0,
+    estLossPkr: demand.abandonedBasketPkr,
+  };
 }
 
 export async function demandAggregate(
@@ -1190,7 +1182,7 @@ export async function demandAggregate(
     SELECT id FROM pharmacy_unfulfilled_demand_events
     WHERE "organizationId" = ${scope.organizationId} AND "branchId" = ${scope.branchId}
       AND outcome = 'WILL_RETURN'::"PharmacyDemandOutcome" AND "resolvedBySaleId" IS NULL
-      AND "createdAt" <= ${expiredBefore} AND "lossProbability" = 0
+      AND status <> 'RECOVERED' AND "createdAt" <= ${expiredBefore} AND "lossProbability" = 0
     ORDER BY id FOR UPDATE
   `);
   await db.$executeRaw(Prisma.sql`
@@ -1205,6 +1197,7 @@ export async function demandAggregate(
       AND "branchId" = ${scope.branchId}
       AND outcome = 'WILL_RETURN'::"PharmacyDemandOutcome"
       AND "resolvedBySaleId" IS NULL
+      AND status <> 'RECOVERED'
       AND "createdAt" <= ${expiredBefore}
       AND "lossProbability" = 0
   `);
@@ -1453,7 +1446,12 @@ export async function recoverRestockInterest(
     where: {
       organizationId_id: { organizationId: scope.organizationId, id: interest.demandEventId },
     },
-    data: { status: 'RECOVERED', recoveredSaleLineId: line.id, recoveredAt },
+    data: {
+      status: 'RECOVERED',
+      recoveredSaleLineId: line.id,
+      recoveredAt,
+      ...explicitRecoveryLossState(interest.demandEvent, line.saleId, recoveredAt),
+    },
   });
   await db.pharmacyRestockReservation.updateMany({
     where: {

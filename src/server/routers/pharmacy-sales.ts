@@ -1543,7 +1543,11 @@ export const pharmacySalesRouter = router({
           source: 'TRPC',
         }
       );
-      return demandAggregate(ctx.db, scope, input.from, input.to, financial);
+      // Expiry locks, updates and aggregates in several statements. Keep them in
+      // one transaction so the row locks are held until the expiry commits.
+      return ctx.db.$transaction(async (tx) =>
+        demandAggregate(txDb(tx), scope, input.from, input.to, financial)
+      );
     }),
   addRestockInterest: protectedProcedure
     .input(

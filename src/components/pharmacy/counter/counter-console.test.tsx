@@ -1443,6 +1443,30 @@ describe('PharmacyCounterConsole demand visit context', () => {
       vi.useRealTimers();
     }
   });
+  it('saves a pending default with its original context when the sheet is replaced', async () => {
+    mocks.selectStockout = true;
+    mocks.queries.counterBranches = query({
+      branches: [
+        { id: 'branch-a', name: 'Branch A' },
+        { id: 'branch-b', name: 'Branch B' },
+      ],
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    await openCapture();
+    fireEvent.click(screen.getByLabelText('Notify when back (opt-in)'));
+    fireEvent.change(screen.getByLabelText('Notification phone'), {
+      target: { value: '03001234567' },
+    });
+    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch-b' } });
+    await waitFor(() => expect(mocks.mutations.captureDemand).toHaveBeenCalledTimes(1));
+    expect(mocks.mutations.captureDemand!.mock.calls[0]![0]).toMatchObject({
+      branchId: 'branch-a',
+      requestedMedicineId: 'med-barcode',
+      outcome: 'UNKNOWN',
+      notifyOptIn: false,
+    });
+    expect(mocks.mutations.captureDemand!.mock.calls[0]![0]).not.toHaveProperty('notifyPhone');
+  });
   it('passes the browser terminal and clears notification consent on a branch/sale change', async () => {
     mocks.selectStockout = true;
     mocks.queries.counterBranches = query({

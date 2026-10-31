@@ -48,6 +48,8 @@ const db = {
     create: vi.fn(async ({ data }) => ({ id: 'demand-a', ...data })),
   },
 };
+const transaction = vi.fn(async (run: (tx: unknown) => Promise<unknown>) => run(db));
+Object.assign(db, { $transaction: transaction });
 function caller(overrides: Partial<TRPCContext> = {}) {
   return app.createCaller({
     db,
@@ -153,4 +155,31 @@ describe('demand financial permission', () => {
       });
     }
   );
+
+  it('expires and aggregates inside one transaction so expiry row locks are retained', async () => {
+    transaction.mockClear();
+    db.$executeRaw.mockClear();
+    let inTransaction = false;
+    transaction.mockImplementationOnce(async (run: (tx: unknown) => Promise<unknown>) => {
+      inTransaction = true;
+      try {
+        return await run(db);
+      } finally {
+        inTransaction = false;
+      }
+    });
+    const lockedInTransaction: boolean[] = [];
+    db.$executeRaw.mockImplementation(async () => {
+      lockedInTransaction.push(inTransaction);
+      return 0;
+    });
+    await caller().demandAggregate({
+      branchId: 'branch-a',
+      from: new Date('2026-01-01'),
+      to: new Date('2026-02-01'),
+    });
+    expect(transaction).toHaveBeenCalledOnce();
+    expect(lockedInTransaction).toEqual([true, true]);
+    db.$executeRaw.mockReset().mockResolvedValue(0);
+  });
 });
