@@ -30,6 +30,7 @@ import {
   sum,
   ZERO,
 } from './money';
+import { closeOrderAfterSettlement } from './orders';
 import { appendPaymentEvent, getPaymentProvider } from './payment-adapter';
 import {
   quoteTaxSettlement,
@@ -443,6 +444,7 @@ export async function applyTenderInTransaction(
     );
     settled = true;
     receiptNumber = result.receiptNumber;
+    await closeOrderAfterSettlement(tx, bill.orderId, input.actor, at);
   }
 
   if (input.tender.type === 'CARD' && input.tender.terminalConfirmation) {
@@ -598,7 +600,11 @@ async function loadSettlementContext(
   const fractionalItems =
     bill.splitKind === 'FRACTIONAL'
       ? await tx.restaurantOrderItem.findMany({
-          where: { orderId: bill.orderId, status: { not: 'VOIDED' } },
+          where: {
+            orderId: bill.orderId,
+            status: { not: 'VOIDED' },
+            remakeOfItemId: null,
+          },
           orderBy: { id: 'asc' },
           select: {
             id: true,

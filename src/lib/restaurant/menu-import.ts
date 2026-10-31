@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { createFixtureMenuExtractionAdapter } from './menu-extraction-fixtures';
+
 import { z } from 'zod';
 
 import { Prisma } from '@/generated/prisma/client';
@@ -124,6 +126,9 @@ export type MenuImportRuntime = {
 export const defaultMenuImportRuntime: MenuImportRuntime = {
   resolveAdapter: (name) => {
     if (name === 'VISION') return createVisionMenuExtractionAdapter();
+    if (name === 'FIXTURE' && configuredAdapterName() === 'FIXTURE') {
+      return createFixtureMenuExtractionAdapter();
+    }
     throw new MenuExtractionError('Menu extraction is unavailable.', 'ADAPTER_UNAVAILABLE');
   },
   putSource: putUpload,
