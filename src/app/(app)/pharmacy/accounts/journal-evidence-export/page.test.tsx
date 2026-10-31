@@ -5,6 +5,16 @@ const mocks = vi.hoisted(() => ({
   resolveTenantActor: vi.fn(),
   createTRPCContext: vi.fn(),
   financialStatements: vi.fn(),
+  can: vi.fn(),
+  branches: vi.fn(),
+}));
+
+vi.mock('@/lib/abac', async () => ({
+  ...(await vi.importActual<typeof import('@/lib/abac')>('@/lib/abac')),
+  can: mocks.can,
+}));
+vi.mock('@/server/routers/pharmacy-reports', () => ({
+  pharmacyReportsRouter: { createCaller: () => ({ branches: mocks.branches }) },
 }));
 
 vi.mock('@/lib/tenancy/tenant-actor', () => ({
@@ -28,7 +38,14 @@ beforeEach(() => {
     organization: { id: 'org-1' },
     support: null,
   });
-  mocks.createTRPCContext.mockResolvedValue({ authorized: true });
+  mocks.can.mockResolvedValue(true);
+  mocks.branches.mockResolvedValue({ branches: [{ id: 'branch-1', name: 'Main pharmacy' }] });
+  mocks.createTRPCContext.mockResolvedValue({
+    session: { user: { id: 'owner-1', role: 'ADMIN' } },
+    entitlements: { enabledModules: ['pharmacy-reports'] },
+    db: {},
+    requestMeta: { ip: null },
+  });
   mocks.financialStatements.mockResolvedValue({
     from: new Date('2026-10-01T00:00:00Z'),
     to: new Date('2026-10-26T00:00:00Z'),
@@ -42,7 +59,15 @@ beforeEach(() => {
       currency: 'PKR',
       occurredAt: new Date('2026-10-25T12:00:00Z'),
       reversesEntryId: null,
-      lines: [],
+      lines: [
+        {
+          id: `line-${index}`,
+          accountCode: 'CASH',
+          side: 'DEBIT',
+          amountMinor: 2147483647,
+          lotId: null,
+        },
+      ],
     })),
   });
 });
@@ -77,6 +102,57 @@ describe('journal evidence export page', () => {
     expect(html).toContain('25 entries returned · page cap 25 · 26 entries counted');
     expect(html).toContain('Coverage unknown');
     expect(html).toContain('Export this page (CSV)');
+  });
+
+  it.each(['admin:access', 'reports:operational', 'reports:financial'])(
+    'denies an ADMIN with a missing %s capability',
+    async (denied) => {
+      mocks.can.mockImplementation(async (_subject, action) => action !== denied);
+      const html = renderToStaticMarkup(await Page({ searchParams: Promise.resolve(valid) }));
+      expect(html).toContain('Permission required');
+      expect(html).not.toContain('Export this page (CSV)');
+      expect(mocks.branches).not.toHaveBeenCalled();
+      expect(mocks.financialStatements).not.toHaveBeenCalled();
+    }
+  );
+
+  it('offers only authorized branch names and a GET submit button', async () => {
+    const html = renderToStaticMarkup(await Page({ searchParams: Promise.resolve(valid) }));
+    const root = document.createElement('div');
+    root.innerHTML = html;
+    const form = root.querySelector('form')!;
+    expect(form.method).toBe('get');
+    expect(form.getAttribute('action')).toBe('/pharmacy/accounts/journal-evidence-export');
+    expect(form.querySelector('button')?.type).toBe('submit');
+    expect(form.querySelector('select[name="branch"]')?.textContent).toContain('Main pharmacy');
+    expect(form.querySelector('input[name="branch"]')).toBeNull();
+  });
+
+  it.each(['outside-organization', 'inactive-branch'])(
+    'does not read or export an unlisted branch: %s',
+    async (branch) => {
+      const html = renderToStaticMarkup(
+        await Page({ searchParams: Promise.resolve({ ...valid, branch }) })
+      );
+      expect(html).not.toContain('Export this page (CSV)');
+      expect(mocks.financialStatements).not.toHaveBeenCalled();
+    }
+  );
+
+  it('does not export if request context or entitlement resolution fails', async () => {
+    mocks.createTRPCContext.mockRejectedValue(new Error('database unavailable'));
+    const html = renderToStaticMarkup(await Page({ searchParams: Promise.resolve(valid) }));
+    expect(html).toContain('Evidence could not be read');
+    expect(html).not.toContain('Export this page (CSV)');
+    expect(mocks.financialStatements).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the authorized branch list cannot be read', async () => {
+    mocks.branches.mockRejectedValue(new Error('denied'));
+    const html = renderToStaticMarkup(await Page({ searchParams: Promise.resolve(valid) }));
+    expect(html).toContain('Evidence could not be read');
+    expect(html).not.toContain('Export this page (CSV)');
+    expect(mocks.financialStatements).not.toHaveBeenCalled();
   });
 
   it('suppresses export when the existing DTO read fails', async () => {

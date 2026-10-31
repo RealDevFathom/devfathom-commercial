@@ -177,6 +177,17 @@ export async function FinancialStatements({
         </p>
       )}
       <h3 className="mt-6 font-semibold">Journal · {result.journalCount} entries in window</h3>
+      <Link
+        className="mt-3 inline-flex min-h-11 items-center underline focus-visible:outline-2 focus-visible:outline-ring"
+        href={`/pharmacy/accounts/journal-evidence-export?${new URLSearchParams({
+          branch: branchId,
+          from: start,
+          to: end,
+          page: String(result.page),
+        })}`}
+      >
+        Export this journal page as evidence
+      </Link>
       {result.journal.map((e) => (
         <details key={e.id} className="mt-3 rounded-sm border border-border p-3">
           <summary className="min-h-11 cursor-pointer break-words focus-visible:outline-2 focus-visible:outline-ring">

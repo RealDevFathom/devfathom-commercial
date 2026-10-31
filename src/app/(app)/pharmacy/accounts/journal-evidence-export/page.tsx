@@ -1,4 +1,6 @@
 import type { Metadata } from 'next';
+import { can, subjectFromSession } from '@/lib/abac';
+import { hasModule } from '@/lib/entitlements';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { Input } from '@/components/ui/input';
@@ -8,8 +10,9 @@ import {
   type JournalEvidencePage,
 } from '@/lib/pharmacy/accounts/journal-evidence-export';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
+import { pharmacyReportsRouter } from '@/server/routers/pharmacy-reports';
 import { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
-import { createTRPCContext } from '@/server/trpc';
+import { createTRPCContext, type TRPCContext } from '@/server/trpc';
 import { JournalEvidenceExportButton } from './export-button';
 
 export const metadata: Metadata = { title: 'Journal evidence export · Pharmacy accounts' };
@@ -40,7 +43,44 @@ export default async function JournalEvidenceExportPage({
   searchParams: Promise<Query>;
 }) {
   const actor = await resolveTenantActor();
-  if (!actor?.session.user || actor.session.user.role !== 'ADMIN') {
+  let ctx: TRPCContext | null = null;
+  try {
+    if (actor?.session.user) {
+      ctx = await createTRPCContext({
+        session: actor.session,
+        organization: actor.organization,
+        support: actor.support,
+      });
+    }
+  } catch {
+    return (
+      <main className="min-w-0 space-y-6">
+        <PageHeader
+          eyebrow="Pharmacy / accounts"
+          heading="Journal evidence export"
+          description="Export only one authorized journal page with explicit coverage limits."
+        />
+        <State title="Evidence could not be read">
+          Access could not be verified. No CSV is available; retry or ask your workspace
+          administrator.
+        </State>
+      </main>
+    );
+  }
+  const authzOptions = ctx ? { db: ctx.db, source: 'TRPC' as const, ip: ctx.requestMeta.ip } : {};
+  const subject = ctx?.session?.user ? subjectFromSession(ctx.session.user) : null;
+  const allowed =
+    ctx &&
+    subject &&
+    hasModule(ctx.entitlements, 'pharmacy-reports') &&
+    (
+      await Promise.all(
+        (['admin:access', 'reports:operational', 'reports:financial'] as const).map((action) =>
+          can(subject, action, undefined, authzOptions)
+        )
+      )
+    ).every(Boolean);
+  if (!allowed || !ctx) {
     return (
       <main className="min-w-0 space-y-6">
         <PageHeader
@@ -56,6 +96,14 @@ export default async function JournalEvidenceExportPage({
     );
   }
 
+  let branches: Array<{ id: string; name: string }> = [];
+  let readFailed = false;
+  try {
+    ({ branches } = await pharmacyReportsRouter.createCaller(ctx).branches());
+  } catch {
+    readFailed = true;
+  }
+
   const query = await searchParams;
   const branchId = value(query.branch)?.trim();
   const fromText = value(query.from);
@@ -67,6 +115,7 @@ export default async function JournalEvidenceExportPage({
   const valid =
     !!branchId &&
     branchId.length <= 128 &&
+    branches.some((branch) => branch.id === branchId) &&
     !!from &&
     !!to &&
     to > from &&
@@ -76,20 +125,26 @@ export default async function JournalEvidenceExportPage({
     page <= 10_000;
 
   let evidence: JournalEvidencePage | null = null;
-  let readFailed = false;
-  if (valid) {
+  if (valid && !readFailed) {
     try {
-      const ctx = await createTRPCContext({
-        session: actor.session,
-        organization: actor.organization,
-        support: actor.support,
-      });
-      evidence = await pharmacyFinanceRouter.createCaller(ctx).financialStatements({
+      const result = await pharmacyFinanceRouter.createCaller(ctx).financialStatements({
         branchId,
         from: from.toISOString(),
         to: to.toISOString(),
         page,
       });
+      // Prisma Int journal amounts are exact; serialize them without currency conversion.
+      // Pass only the authorized page DTO to the client, excluding statement aggregates.
+      evidence = {
+        from: result.from,
+        to: result.to,
+        page: result.page,
+        journalCount: result.journalCount,
+        journal: result.journal.map((entry) => ({
+          ...entry,
+          lines: entry.lines.map((line) => ({ ...line, amountMinor: String(line.amountMinor) })),
+        })),
+      };
     } catch {
       readFailed = true;
     }
@@ -106,8 +161,21 @@ export default async function JournalEvidenceExportPage({
       <SectionCard title="Evidence window">
         <form action={ROUTE} className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <label className="grid gap-2 text-sm">
-            Branch ID
-            <Input name="branch" defaultValue={branchId} required />
+            Branch
+            <select
+              name="branch"
+              defaultValue={branches.some((branch) => branch.id === branchId) ? branchId : ''}
+              className="min-h-11 w-full rounded-[var(--radius-sm)] border border-border-default bg-surface-raised px-3 text-sm text-text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              required
+              disabled={!branches.length}
+            >
+              <option value="">Choose a branch</option>
+              {branches.map((branch) => (
+                <option key={branch.id} value={branch.id}>
+                  {branch.name}
+                </option>
+              ))}
+            </select>
           </label>
           <label className="grid gap-2 text-sm">
             From (UTC)
@@ -121,14 +189,18 @@ export default async function JournalEvidenceExportPage({
             Page
             <Input type="number" min="1" max="10000" name="page" defaultValue={pageText} required />
           </label>
-          <Button className="min-h-11 sm:col-span-2 lg:col-span-4 lg:justify-self-start">
+          <Button
+            type="submit"
+            disabled={!branches.length}
+            className="min-h-11 sm:col-span-2 lg:col-span-4 lg:justify-self-start"
+          >
             Read authorized page
           </Button>
         </form>
       </SectionCard>
-      {!valid ? (
+      {!valid && !readFailed ? (
         <State title="Choose a valid evidence window">
-          Provide an authorized branch, a UTC date window of at most 92 days, and a page from 1 to
+          Choose an authorized branch, a UTC date window of at most 92 days, and a page from 1 to
           10,000. Invalid input is not read or exported.
         </State>
       ) : null}

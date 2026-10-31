@@ -28,7 +28,13 @@ function page(): JournalEvidencePage {
             amountMinor: '900719925474099301',
             lotId: null,
           },
-          { id: 'line-a', accountCode: 'SALES', side: 'CREDIT', amountMinor: 10n, lotId: '@lot' },
+          {
+            id: 'line-a',
+            accountCode: 'SALES',
+            side: 'CREDIT',
+            amountMinor: BigInt(10),
+            lotId: '@lot',
+          },
         ],
       },
     ],
@@ -51,6 +57,28 @@ describe('journal evidence page CSV', () => {
       ledgerCoverage: 'coverage-unknown',
     });
   });
+
+  it.each([
+    { pageNumber: 1, count: 0, coverage: 'page-complete' },
+    { pageNumber: 2, count: 26, coverage: 'partial' },
+  ])(
+    'retains metadata for empty page $pageNumber with count $count',
+    ({ pageNumber, count, coverage }) => {
+      const csv = journalEvidenceCsv({
+        ...page(),
+        page: pageNumber,
+        journalCount: count,
+        journal: [],
+      });
+      const [header, metadata, trailing] = csv.split('\r\n');
+      expect(header!.split(',')).toHaveLength(21);
+      expect(metadata!.split(',')).toHaveLength(21);
+      expect(metadata).toBe(
+        `"${pageNumber}","25","0","${count}","${coverage}","coverage-unknown","2026-10-01T00:00:00.000Z","2026-10-26T00:00:00.000Z",${Array(13).fill('""').join(',')}`
+      );
+      expect(trailing).toBe('');
+    }
+  );
 
   it('preserves identifiers, currency and exact minor-unit strings in deterministic line order', () => {
     const csv = journalEvidenceCsv(page());

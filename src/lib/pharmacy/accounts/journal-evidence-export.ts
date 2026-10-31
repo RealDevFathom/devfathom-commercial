@@ -120,5 +120,7 @@ export function journalEvidenceCsv(input: JournalEvidencePage) {
       line.lotId ?? '',
     ]);
   });
+  // Keep the artifact self-describing even when this page has no journal entries.
+  if (!rows.length) rows.push([...metadata, ...Array(header.length - metadata.length).fill('')]);
   return `\uFEFF${[header, ...rows].map((row) => row.map(csvCell).join(',')).join('\r\n')}\r\n`;
 }
