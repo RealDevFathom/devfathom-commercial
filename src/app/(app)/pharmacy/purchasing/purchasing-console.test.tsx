@@ -159,6 +159,8 @@ function callerStub(overrides: Record<string, unknown> = {}) {
     purchaseOrders: vi.fn().mockResolvedValue([]),
     goodsReceipts: vi.fn().mockResolvedValue([]),
     receivingExceptionQueue: vi.fn().mockResolvedValue([]),
+    receivingQualifiedPersons: vi.fn().mockResolvedValue([]),
+    controlledWitnesses: vi.fn().mockResolvedValue([]),
     purchaseReturns: vi.fn().mockResolvedValue([]),
     returnableLots: vi.fn().mockResolvedValue([]),
     supplierCredits: vi.fn().mockResolvedValue([]),
@@ -881,4 +883,37 @@ describe('goods-in scan and duplicate serial', () => {
     );
     expect(result.searchParams.get('field')).toBe('serialNumber');
   });
+});
+
+it('uses branch-qualified people in both draft pickers instead of tenant-wide approvers', async () => {
+  const receivingQualifiedPersons = vi
+    .fn()
+    .mockResolvedValue([{ id: 'pharmacist-a', name: 'Branch A pharmacist' }]);
+  mocks.createCaller.mockReturnValue(
+    callerStub({
+      receivingQualifiedPersons,
+      purchaseOrders: vi.fn().mockResolvedValue([
+        {
+          id: 'po-sent',
+          reference: 'PO-SENT',
+          status: 'SENT',
+          branchId: 'branch-1',
+          supplier: { id: 'sup-ok', name: 'Karachi Distributors' },
+          lines: [],
+          goodsReceipts: [],
+          approvals: [],
+        },
+      ]),
+    })
+  );
+  render(await ReceivingPage({ searchParams: params({ order: 'po-sent' }) }));
+  expect(receivingQualifiedPersons).toHaveBeenCalledWith({ branchId: 'branch-1' });
+  const pickers = screen.getAllByRole('combobox', { name: 'Qualified person' });
+  expect(pickers).toHaveLength(2);
+  for (const picker of pickers) {
+    expect(within(picker).getByRole('option', { name: 'Branch A pharmacist' })).toHaveValue(
+      'pharmacist-a'
+    );
+    expect(within(picker).queryByRole('option', { name: /Bilal/ })).toBeNull();
+  }
 });

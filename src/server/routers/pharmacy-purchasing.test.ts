@@ -32,6 +32,7 @@ function model() {
     findFirst: vi.fn().mockResolvedValue(null),
     findUnique: vi.fn().mockResolvedValue(null),
     findMany: vi.fn().mockResolvedValue([]),
+    updateMany: vi.fn().mockResolvedValue({ count: 0 }),
     create: vi
       .fn()
       .mockImplementation(async ({ data }: { data: object }) => ({ id: 'new', ...data })),
@@ -55,6 +56,7 @@ function makeDb() {
     pharmacyPurchaseOrderLine: model(),
     pharmacyPurchaseOrderApproval: model(),
     pharmacyGoodsReceipt: model(),
+    restaurantStaffProfile: model(),
     pharmacyGoodsReceiptLine: model(),
     pharmacyReceivingException: model(),
     pharmacyPurchaseReturn: model(),
@@ -66,6 +68,7 @@ function makeDb() {
   };
   return Object.assign(db, {
     $transaction: vi.fn(async (fn: (tx: typeof db) => unknown) => fn(db)),
+    $queryRaw: vi.fn(),
   });
 }
 
@@ -622,8 +625,22 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
   }
 
   /** A resolvable purchase order whose one line the receipt may name. */
-  function resolvableOrder() {
-    db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({ id: 'po_a', supplierId: 'supplier_a' });
+  function resolvableOrder(branchId: string | null = 'branch_a') {
+    const order = { id: 'po_a', organizationId: 'org_a', supplierId: 'supplier_a', branchId };
+    db.pharmacyPurchaseOrder.findFirst.mockImplementation(async ({ where }) => {
+      const matchesBranch =
+        (where.branchId === undefined || where.branchId === order.branchId) &&
+        (!where.OR ||
+          where.OR.some(
+            (clause: { branchId: string | null }) => clause.branchId === order.branchId
+          ));
+      return where.id === order.id &&
+        where.organizationId === order.organizationId &&
+        where.supplierId === order.supplierId &&
+        matchesBranch
+        ? order
+        : null;
+    });
     db.pharmacyPurchaseOrderLine.findMany.mockResolvedValue([
       { id: 'poline_a', medicineId: 'medicine_a', packLevelId: 'pack_a' },
     ]);
@@ -679,6 +696,68 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     }
   );
 
+  it.each(['order', 'direct'] as const)(
+    'refuses an ineligible qualified person on a %s receipt before saving',
+    async (kind) => {
+      db.medicine.findFirst.mockResolvedValue({ id: 'medicine_a', controlled: true });
+      const input =
+        kind === 'order'
+          ? RECEIPT
+          : {
+              ...withoutOrder(),
+              directPurchase: { reason: 'Urgent delivery', approvedByUserId: 'manager' },
+            };
+      await expect(
+        caller().createGoodsReceipt({
+          ...input,
+          qualifiedPersonUserId: 'pharmacist_branch_b',
+        })
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'QUALIFIED_PERSON_INELIGIBLE' });
+      expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+    }
+  );
+
+  it('requires a named person before accepting controlled stock into a draft', async () => {
+    db.medicine.findFirst.mockResolvedValue({ id: 'medicine_a', controlled: true });
+    await expect(caller().createGoodsReceipt(RECEIPT)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'QUALIFIED_PERSON_INELIGIBLE',
+    });
+    expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+  });
+
+  it('accepts a qualified branch person on a controlled receipt', async () => {
+    db.medicine.findFirst.mockResolvedValue({ id: 'medicine_a', controlled: true });
+    db.restaurantStaffProfile.findMany.mockResolvedValue([
+      {
+        id: 'staff',
+        displayName: 'Branch pharmacist',
+        user: { id: 'pharmacist_a', organizationId: 'org_a', status: 'ACTIVE' },
+        credentials: [{ failedAttempts: 0, lockedUntil: null }],
+      },
+    ]);
+    await expect(
+      caller().createGoodsReceipt({ ...RECEIPT, qualifiedPersonUserId: 'pharmacist_a' })
+    ).resolves.toMatchObject({ qualifiedPersonUserId: 'pharmacist_a' });
+  });
+
+  it('does not require a witness for fully quarantined controlled stock', async () => {
+    db.medicine.findFirst.mockResolvedValue({ id: 'medicine_a', controlled: true });
+    await expect(
+      caller().createGoodsReceipt({
+        ...RECEIPT,
+        lines: [
+          {
+            ...RECEIPT_LINE,
+            rejectedCanonicalUnits: 120,
+            quarantineLocationId: 'quarantine',
+            rejectionReason: 'Damaged',
+          },
+        ],
+      })
+    ).resolves.toMatchObject({ qualifiedPersonUserId: null });
+  });
+
   it('derives canonical units and the landed unit cost instead of trusting the payload', async () => {
     await caller().createGoodsReceipt(RECEIPT);
     const line = db.pharmacyGoodsReceipt.create.mock.calls[0]![0].data.lines.create[0];
@@ -693,6 +772,29 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     // The tenant and branch are not repeated on the nested line: they travel in
     // the composite key of the header.
     expect(line).not.toHaveProperty('organizationId');
+    expect(db.pharmacyPurchaseOrder.findFirst).toHaveBeenCalledWith({
+      where: {
+        id: 'po_a',
+        organizationId: 'org_a',
+        supplierId: 'supplier_a',
+        OR: [{ branchId: 'branch_a' }, { branchId: null }],
+      },
+    });
+    expect(db.pharmacyPurchaseOrderLine.findMany).toHaveBeenCalledWith({
+      where: { organizationId: 'org_a', purchaseOrderId: 'po_a' },
+      select: { id: true, medicineId: true, packLevelId: true },
+    });
+  });
+
+  it.each(['branch_a', null])('receives a purchase order with branchId %s', async (branchId) => {
+    resolvableOrder(branchId);
+
+    await expect(caller().createGoodsReceipt(RECEIPT)).resolves.toMatchObject({
+      branchId: 'branch_a',
+      purchaseOrderId: 'po_a',
+      organizationId: 'org_a',
+    });
+    expect(db.pharmacyGoodsReceipt.create).toHaveBeenCalledOnce();
   });
 
   it('takes the receiver from the session, never from the payload', async () => {
@@ -760,15 +862,17 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
 
   it('refuses a receipt for a different branch than its purchase order', async () => {
     db.pharmacyBranch.findFirst.mockResolvedValue({ id: 'branch_b' });
-    db.pharmacyPurchaseOrder.findFirst.mockImplementation(async ({ where }) =>
-      where.branchId === 'branch_a' ? { id: 'po_a', supplierId: 'supplier_a' } : null
-    );
 
     await expect(
       caller().createGoodsReceipt({ ...RECEIPT, branchId: 'branch_b' })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(db.pharmacyPurchaseOrder.findFirst).toHaveBeenCalledWith({
-      where: { id: 'po_a', supplierId: 'supplier_a', branchId: 'branch_b' },
+      where: {
+        id: 'po_a',
+        organizationId: 'org_a',
+        supplierId: 'supplier_a',
+        OR: [{ branchId: 'branch_b' }, { branchId: null }],
+      },
     });
     expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
   });
@@ -1179,5 +1283,138 @@ describe('PUR-06 — the returns and settlement transport', () => {
         where: expect.objectContaining({ organizationId: 'org_a', branchId: 'branch_a' }),
       })
     );
+  });
+});
+
+describe('goods receipt qualified-person recovery', () => {
+  const input = {
+    branchId: 'branch_a',
+    goodsReceiptId: 'receipt',
+    qualifiedPersonUserId: 'pharmacist_a',
+  };
+  beforeEach(() => {
+    db.user.findUnique.mockResolvedValue({
+      organizationRole: { permissions: [{ capability: 'pharmacy.procurement', effect: 'ALLOW' }] },
+      permissionOverrides: [],
+    });
+    db.restaurantStaffProfile.findMany.mockResolvedValue([
+      {
+        id: 'staff',
+        displayName: 'Branch pharmacist',
+        user: { id: 'pharmacist_a', organizationId: 'org_a', status: 'ACTIVE' },
+        credentials: [{ failedAttempts: 0, lockedUntil: null }],
+      },
+    ]);
+  });
+
+  it('offers eligible branch people by user id for drafting', async () => {
+    await expect(caller().receivingQualifiedPersons({ branchId: 'branch_a' })).resolves.toEqual([
+      { id: 'pharmacist_a', name: 'Branch pharmacist' },
+    ]);
+    expect(db.restaurantStaffProfile.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          organizationId: 'org_a',
+          userId: { not: 'user_a' },
+          status: 'ACTIVE',
+          user: expect.objectContaining({
+            organizationId: 'org_a',
+            status: 'ACTIVE',
+            pharmacyBranchAssignments: {
+              some: { organizationId: 'org_a', branchId: 'branch_a', active: true },
+            },
+          }),
+        }),
+      })
+    );
+  });
+
+  it.each(['missing', 'other-branch'])(
+    'corrects an affected draft with a %s qualified person without writing stock',
+    async (oldPerson) => {
+      const receipt = {
+        id: 'receipt',
+        organizationId: 'org_a',
+        branchId: 'branch_a',
+        status: 'DRAFT',
+        qualifiedPersonUserId: oldPerson,
+      };
+      db.pharmacyGoodsReceipt.updateMany.mockImplementation(async ({ where, data }) => {
+        if (
+          !Object.entries(where).every(
+            ([key, value]) => receipt[key as keyof typeof receipt] === value
+          )
+        )
+          return { count: 0 };
+        Object.assign(receipt, data);
+        return { count: 1 };
+      });
+      await expect(caller().assignGoodsReceiptQualifiedPerson(input)).resolves.toEqual({
+        goodsReceiptId: 'receipt',
+      });
+      expect(receipt.qualifiedPersonUserId).toBe('pharmacist_a');
+      expect(db.pharmacyGoodsReceipt.updateMany).toHaveBeenCalledWith({
+        where: { id: 'receipt', organizationId: 'org_a', branchId: 'branch_a', status: 'DRAFT' },
+        data: { qualifiedPersonUserId: 'pharmacist_a' },
+      });
+      expect(db.pharmacyGoodsReceiptLine.update).not.toHaveBeenCalled();
+      expect(db.$transaction).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['POSTED', 'REVERSED', 'other-branch', 'other-tenant', 'missing'])(
+    'cannot reassign a %s receipt',
+    async (kind) => {
+      const receipt =
+        kind === 'missing'
+          ? null
+          : {
+              id: 'receipt',
+              organizationId: kind === 'other-tenant' ? 'org_b' : 'org_a',
+              branchId: kind === 'other-branch' ? 'branch_b' : 'branch_a',
+              status: ['POSTED', 'REVERSED'].includes(kind) ? kind : 'DRAFT',
+            };
+      db.pharmacyGoodsReceipt.updateMany.mockImplementation(async ({ where }) => ({
+        count:
+          receipt &&
+          Object.entries(where).every(
+            ([key, value]) => receipt[key as keyof typeof receipt] === value
+          )
+            ? 1
+            : 0,
+      }));
+      await expect(caller().assignGoodsReceiptQualifiedPerson(input)).rejects.toMatchObject({
+        code: 'CONFLICT',
+      });
+    }
+  );
+
+  it.each(['ineligible', 'self'])(
+    'refuses an %s replacement before updating the draft',
+    async (kind) => {
+      db.restaurantStaffProfile.findMany.mockResolvedValue([]);
+      await expect(
+        caller().assignGoodsReceiptQualifiedPerson({
+          ...input,
+          qualifiedPersonUserId: kind === 'self' ? 'user_a' : 'pharmacist_b',
+        })
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'QUALIFIED_PERSON_INELIGIBLE' });
+      expect(db.pharmacyGoodsReceipt.updateMany).not.toHaveBeenCalled();
+    }
+  );
+
+  it('requires procurement permission for listing and reassignment', async () => {
+    db.user.findUnique.mockResolvedValue({
+      organizationRole: { permissions: [] },
+      permissionOverrides: [],
+    });
+    await expect(
+      caller().receivingQualifiedPersons({ branchId: 'branch_a' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(caller().assignGoodsReceiptQualifiedPerson(input)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(db.restaurantStaffProfile.findMany).not.toHaveBeenCalled();
+    expect(db.pharmacyGoodsReceipt.updateMany).not.toHaveBeenCalled();
   });
 });

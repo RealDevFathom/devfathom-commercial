@@ -22,6 +22,13 @@ async function fail(error: unknown, startWrite: boolean) {
 }
 
 describe('purchasingOutcome', () => {
+  it('allows correcting an ineligible qualified person after server validation refuses the write', async () => {
+    await expect(fail(new Error('QUALIFIED_PERSON_INELIGIBLE'), true)).resolves.toMatchObject({
+      field: 'qualifiedPersonUserId',
+      outcome: 'rejected',
+    });
+  });
+
   it('shows the duplicate-serial sentence after the write has started', async () => {
     await expect(fail(new Error('DUPLICATE_SERIAL'), true)).resolves.toEqual({
       message: DUPLICATE,

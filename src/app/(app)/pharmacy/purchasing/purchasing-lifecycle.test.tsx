@@ -144,6 +144,8 @@ function callerStub(overrides: Record<string, unknown> = {}) {
     purchaseOrders: vi.fn().mockResolvedValue([]),
     goodsReceipts: vi.fn().mockResolvedValue([]),
     receivingExceptionQueue: vi.fn().mockResolvedValue([]),
+    receivingQualifiedPersons: vi.fn().mockResolvedValue([]),
+    controlledWitnesses: vi.fn().mockResolvedValue([]),
     purchaseReturns: vi.fn().mockResolvedValue([]),
     returnableLots: vi.fn().mockResolvedValue([]),
     supplierCredits: vi.fn().mockResolvedValue([]),
@@ -766,3 +768,140 @@ it.each(['pending', 'uncertain'] as const)(
       });
   }
 );
+
+it('lets a stranded controlled draft select a branch person and then obtain their posting PIN', async () => {
+  const receipt = {
+    id: 'gr-stranded',
+    reference: 'GR-STRANDED',
+    status: 'DRAFT',
+    qualifiedPersonUserId: 'pharmacist-other-branch',
+    supplier: licensedSupplier,
+    supplierInvoiceRef: 'INV',
+    supplierInvoiceDate: new Date('2026-09-01'),
+    receivedAt: new Date('2026-09-01'),
+    lines: [],
+    exceptions: [],
+  };
+  const list = vi.fn().mockResolvedValue([receipt]);
+  const assign = vi.fn().mockResolvedValue({ goodsReceiptId: receipt.id });
+  const witnesses = vi.fn().mockResolvedValue([]);
+  const post = vi.fn().mockResolvedValue({});
+  mocks.createCaller.mockReturnValue(
+    callerStub({
+      goodsReceipts: list,
+      assignGoodsReceiptQualifiedPerson: assign,
+      controlledWitnesses: witnesses,
+      receivingQualifiedPersons: vi
+        .fn()
+        .mockResolvedValue([{ id: 'pharmacist-branch', name: 'Branch pharmacist' }]),
+      postGoodsReceipt: post,
+    })
+  );
+  const view = render(await ReceivingPage({ searchParams: params({ receipt: receipt.id }) }));
+  expect(
+    screen.getByText('The named qualified person is not available to witness at this branch.')
+  ).toBeVisible();
+  fireEvent.change(screen.getByRole('combobox', { name: 'Change qualified person' }), {
+    target: { value: 'pharmacist-branch' },
+  });
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: 'Save qualified person' }));
+  });
+  expect(assign).toHaveBeenCalledExactlyOnceWith({
+    branchId: 'branch-1',
+    goodsReceiptId: receipt.id,
+    qualifiedPersonUserId: 'pharmacist-branch',
+  });
+  expect(post).not.toHaveBeenCalled();
+  expect(screen.getByRole('status')).toHaveTextContent('Qualified person updated');
+  list.mockResolvedValue([{ ...receipt, qualifiedPersonUserId: 'pharmacist-branch' }]);
+  witnesses.mockResolvedValue([{ id: 'staff-branch', name: 'Branch pharmacist' }]);
+  view.rerender(await ReceivingPage({ searchParams: params({ receipt: receipt.id }) }));
+  fireEvent.change(screen.getByRole('combobox', { name: 'Qualified person PIN' }), {
+    target: { value: 'staff-branch' },
+  });
+  fireEvent.change(screen.getByLabelText('PIN'), { target: { value: '1234' } });
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: 'Post into stock' }));
+  });
+  expect(post).toHaveBeenCalledExactlyOnceWith({
+    branchId: 'branch-1',
+    goodsReceiptId: receipt.id,
+    staffProfileId: 'staff-branch',
+    pin: '1234',
+  });
+  list.mockResolvedValue([{ ...receipt, status: 'POSTED' }]);
+  view.rerender(await ReceivingPage({ searchParams: params({ receipt: receipt.id }) }));
+  expect(screen.queryByRole('button', { name: 'Save qualified person' })).toBeNull();
+});
+
+it('explains how to recover a draft when the branch has no eligible qualified person', async () => {
+  mocks.createCaller.mockReturnValue(
+    callerStub({
+      goodsReceipts: vi.fn().mockResolvedValue([
+        {
+          id: 'gr-stranded',
+          reference: 'GR-STRANDED',
+          status: 'DRAFT',
+          qualifiedPersonUserId: 'unavailable',
+          supplier: licensedSupplier,
+          supplierInvoiceRef: 'INV',
+          supplierInvoiceDate: new Date('2026-09-01'),
+          receivedAt: new Date('2026-09-01'),
+          lines: [],
+          exceptions: [],
+        },
+      ]),
+    })
+  );
+  render(await ReceivingPage({ searchParams: params({ receipt: 'gr-stranded' }) }));
+  expect(screen.getByText(/reload to correct this draft/)).toBeVisible();
+  expect(screen.getByRole('button', { name: 'Save qualified person' })).toBeDisabled();
+});
+
+it('keeps a refused replacement editable and focuses its qualified-person field', async () => {
+  const assign = vi
+    .fn()
+    .mockRejectedValueOnce(new Error('QUALIFIED_PERSON_INELIGIBLE'))
+    .mockResolvedValue({ goodsReceiptId: 'gr-stranded' });
+  mocks.createCaller.mockReturnValue(
+    callerStub({
+      goodsReceipts: vi.fn().mockResolvedValue([
+        {
+          id: 'gr-stranded',
+          reference: 'GR-STRANDED',
+          status: 'DRAFT',
+          qualifiedPersonUserId: 'unavailable',
+          supplier: licensedSupplier,
+          supplierInvoiceRef: 'INV',
+          supplierInvoiceDate: new Date('2026-09-01'),
+          receivedAt: new Date('2026-09-01'),
+          lines: [],
+          exceptions: [],
+        },
+      ]),
+      receivingQualifiedPersons: vi
+        .fn()
+        .mockResolvedValue([{ id: 'pharmacist-branch', name: 'Branch pharmacist' }]),
+      assignGoodsReceiptQualifiedPerson: assign,
+    })
+  );
+  render(await ReceivingPage({ searchParams: params({ receipt: 'gr-stranded' }) }));
+  const select = screen.getByRole('combobox', { name: 'Change qualified person' });
+  fireEvent.change(select, { target: { value: 'pharmacist-branch' } });
+  const button = screen.getByRole('button', { name: 'Save qualified person' });
+  await act(async () => {
+    fireEvent.click(button);
+  });
+  expect(screen.getByRole('alert')).toHaveTextContent(
+    'Choose a different active person assigned to this branch'
+  );
+  expect(select).toHaveFocus();
+  expect(select).toHaveAttribute('aria-invalid', 'true');
+  expect(button).toBeEnabled();
+  await act(async () => {
+    fireEvent.click(button);
+  });
+  expect(assign).toHaveBeenCalledTimes(2);
+  expect(screen.getByRole('status')).toHaveTextContent('Qualified person updated');
+});

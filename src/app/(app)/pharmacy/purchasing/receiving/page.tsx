@@ -148,10 +148,12 @@ export default async function PharmacyReceivingPage({
   const exceptionStatus = param(query, 'exceptions') === 'resolved' ? 'RESOLVED' : 'OPEN';
 
   let receipts: GoodsReceiptDetail[];
+  let qualifiedPersons: Array<{ id: string; name: string }>;
   let exceptions: ReceivingExceptionRow[];
   try {
-    [receipts, exceptions] = await Promise.all([
+    [receipts, qualifiedPersons, exceptions] = await Promise.all([
       caller.goodsReceipts({ branchId }),
+      caller.receivingQualifiedPersons({ branchId }),
       caller.receivingExceptionQueue({ branchId, status: exceptionStatus }),
     ]);
   } catch {
@@ -330,13 +332,61 @@ export default async function PharmacyReceivingPage({
         { branch, receipt: receipt.id }
       );
     } catch (error) {
+      const failure = outcome.failure(error, 'Could not draft the direct purchase.');
       next = destination(
         ROUTE,
-        { ...outcome.failure(error, 'Could not draft the direct purchase.'), kind: 'error' },
+        {
+          ...failure,
+          field:
+            failure.field === 'qualifiedPersonUserId'
+              ? 'directQualifiedPersonUserId'
+              : failure.field,
+          kind: 'error',
+        },
         { branch }
       );
     }
     return next;
+  }
+
+  async function assignQualifiedPerson(form: FormData) {
+    'use server';
+    const branch = field(form, 'branchId');
+    const goodsReceiptId = field(form, 'goodsReceiptId');
+    const outcome = purchasingOutcome();
+    try {
+      const actionCaller = await purchasingCaller();
+      if (!actionCaller) throw new PurchasingValidationError(NO_ACTOR);
+      await outcome.write(actionCaller.assignGoodsReceiptQualifiedPerson)({
+        branchId: branch,
+        goodsReceiptId,
+        qualifiedPersonUserId: field(form, 'replacementQualifiedPersonUserId'),
+      });
+      revalidatePath(ROUTE);
+      return destination(
+        ROUTE,
+        {
+          message:
+            'Qualified person updated. They must enter their PIN before this receipt can be posted.',
+          kind: 'success',
+        },
+        { branch, receipt: goodsReceiptId }
+      );
+    } catch (error) {
+      const failure = outcome.failure(error, 'Could not change the qualified person.');
+      return destination(
+        ROUTE,
+        {
+          ...failure,
+          field:
+            failure.field === 'qualifiedPersonUserId'
+              ? 'replacementQualifiedPersonUserId'
+              : failure.field,
+          kind: 'error',
+        },
+        { branch, receipt: goodsReceiptId }
+      );
+    }
   }
 
   async function postReceipt(form: FormData) {
@@ -743,14 +793,14 @@ export default async function PharmacyReceivingPage({
                 </div>
 
                 <SelectField
-                  emptyHint="No other active user can sign a controlled-medicine purchase."
-                  hint="Required only when a line is a controlled medicine. They must be allowed to dispense, and they cannot be you. Their PIN is entered when the receipt is posted."
+                  emptyHint="No eligible PIN holder is available at this branch. Assign an active dispensing colleague to this branch and set up their PIN."
+                  hint="Required only when a line is a controlled medicine. They must be assigned to this branch, allowed to dispense, and cannot be you. Their PIN is entered when the receipt is posted."
                   label="Qualified person"
                   name="qualifiedPersonUserId"
                   notice={notice}
-                  options={workspace.approvers.map((approver) => ({
-                    value: approver.id,
-                    label: approver.name ? `${approver.name} (${approver.email})` : approver.email,
+                  options={qualifiedPersons.map((person) => ({
+                    value: person.id,
+                    label: person.name,
                   }))}
                   placeholder="Not a controlled medicine"
                 />
@@ -903,15 +953,12 @@ export default async function PharmacyReceivingPage({
               ))}
             </div>
             <SelectField
-              emptyHint="No other active user can sign a controlled-medicine purchase."
-              hint="Required only when a line is a controlled medicine. They must be allowed to dispense, and they cannot be you. Their PIN is entered when the receipt is posted."
+              emptyHint="No eligible PIN holder is available at this branch. Assign an active dispensing colleague to this branch and set up their PIN."
+              hint="Required only when a line is a controlled medicine. They must be assigned to this branch, allowed to dispense, and cannot be you. Their PIN is entered when the receipt is posted."
               label="Qualified person"
               name="directQualifiedPersonUserId"
               notice={notice}
-              options={workspace.approvers.map((approver) => ({
-                value: approver.id,
-                label: approver.name ? `${approver.name} (${approver.email})` : approver.email,
-              }))}
+              options={qualifiedPersons.map((person) => ({ value: person.id, label: person.name }))}
               placeholder="Not a controlled medicine"
             />
             <TextAreaField label="Direct purchase note" name="directNote" notice={notice} />
@@ -969,6 +1016,8 @@ export default async function PharmacyReceivingPage({
             lots={lots}
             notice={notice}
             onPost={postReceipt}
+            onAssignQualifiedPerson={assignQualifiedPerson}
+            qualifiedPersons={qualifiedPersons}
             onReverse={reverseReceipt}
             receipt={selectedReceipt}
             witnesses={witnesses}
@@ -1231,6 +1280,8 @@ function ReceiptDetail({
   branchId,
   notice,
   onPost,
+  onAssignQualifiedPerson,
+  qualifiedPersons,
   onReverse,
   witnesses,
 }: {
@@ -1244,6 +1295,8 @@ function ReceiptDetail({
   branchId: string;
   notice: Notice | null;
   onPost: (form: FormData) => Promise<string>;
+  onAssignQualifiedPerson: (form: FormData) => Promise<string>;
+  qualifiedPersons: ReadonlyArray<{ id: string; name: string }>;
   onReverse: (form: FormData) => Promise<string>;
   witnesses: ReadonlyArray<{ id: string; name: string }>;
 }) {
@@ -1343,6 +1396,39 @@ function ReceiptDetail({
       ) : null}
 
       <div className="mt-5 border-t border-border-subtle pt-5">
+        {receipt.status === 'DRAFT' &&
+        (receipt.qualifiedPersonUserId ||
+          receipt.lines.some((line) => line.medicine.controlled)) ? (
+          <PurchasingActionForm
+            operation={{
+              resource: `receipt:${receipt.id}`,
+              action: `assign:${receipt.qualifiedPersonUserId ?? 'missing'}`,
+            }}
+            action={onAssignQualifiedPerson}
+            className="mb-5 space-y-3"
+          >
+            <input name="branchId" type="hidden" value={branchId} />
+            <input name="goodsReceiptId" type="hidden" value={receipt.id} />
+            <SelectField
+              label="Change qualified person"
+              name="replacementQualifiedPersonUserId"
+              notice={notice}
+              options={qualifiedPersons.map((person) => ({ value: person.id, label: person.name }))}
+              defaultValue={
+                qualifiedPersons.some((person) => person.id === receipt.qualifiedPersonUserId)
+                  ? (receipt.qualifiedPersonUserId ?? undefined)
+                  : undefined
+              }
+              emptyHint="Assign an active dispensing colleague to this branch and set up their PIN, then reload to correct this draft."
+              hint="Correct an unavailable or missing qualified person while this receipt is still a draft. The selected person must enter their own PIN when posting."
+              placeholder="Select an eligible person at this branch"
+              required
+            />
+            <SubmitButton disabled={qualifiedPersons.length === 0} variant="secondary">
+              Save qualified person
+            </SubmitButton>
+          </PurchasingActionForm>
+        ) : null}
         {receipt.status === 'DRAFT' ? (
           <PurchasingActionForm
             operation={{ resource: `receipt:${receipt.id}`, action: 'post' }}
@@ -1354,8 +1440,8 @@ function ReceiptDetail({
             receipt.lines.some((line) => line.medicine.controlled) ? (
               <div className="mb-3 grid gap-3 sm:grid-cols-2">
                 <SelectField
-                  emptyHint="No other active user with a dispensing PIN can witness this receipt."
-                  hint="Must be the qualified person named when the receipt was drafted, and cannot be you."
+                  emptyHint="The named qualified person is not available to witness at this branch."
+                  hint="Only the qualified person currently named on this receipt can be selected, and it cannot be you. Correct the draft above if they are unavailable."
                   label="Qualified person PIN"
                   name="witnessStaffProfileId"
                   notice={notice}

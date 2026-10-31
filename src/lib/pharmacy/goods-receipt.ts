@@ -83,6 +83,75 @@ export type PostGoodsReceiptResult = {
 const WITNESS_BLOCKED = 'A different qualified person must enter their PIN.';
 
 /**
+ * The single PIN holder a controlled receipt may use when it is posted.
+ * Keep this read in lockstep with `verifyControlledPurchaseWitness`: the picker
+ * must never offer a pharmacist whom posting will reject.
+ */
+export async function listGoodsReceiptPinWitnesses(
+  db: ScopedDb,
+  scope: ReceivingScope,
+  goodsReceiptId: string
+): Promise<Array<{ id: string; name: string }>> {
+  const receipt = await db.pharmacyGoodsReceipt.findFirst({
+    where: { id: goodsReceiptId, organizationId: scope.organizationId, branchId: scope.branchId },
+    select: { qualifiedPersonUserId: true },
+  });
+  if (!receipt?.qualifiedPersonUserId || receipt.qualifiedPersonUserId === scope.actorId) return [];
+
+  const people = await listGoodsReceiptQualifiedPersons(db, scope, receipt.qualifiedPersonUserId);
+  return people.map(({ id, name }) => ({ id, name }));
+}
+
+/** Eligible named people for new receipts and correction of unposted drafts. */
+export async function listGoodsReceiptQualifiedPersons(
+  db: ScopedDb,
+  scope: ReceivingScope,
+  qualifiedPersonUserId?: string
+): Promise<Array<{ id: string; userId: string; name: string }>> {
+  if (qualifiedPersonUserId === scope.actorId) return [];
+  const profiles = await db.restaurantStaffProfile.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      userId: qualifiedPersonUserId ?? { not: scope.actorId },
+      status: 'ACTIVE',
+      user: {
+        organizationId: scope.organizationId,
+        status: 'ACTIVE',
+        pharmacyBranchAssignments: {
+          some: { organizationId: scope.organizationId, branchId: scope.branchId, active: true },
+        },
+      },
+      credentials: { some: { type: 'PIN', revokedAt: null, deviceId: null } },
+    },
+    include: {
+      user: {
+        include: {
+          organizationRole: { include: { permissions: true } },
+          permissionOverrides: true,
+        },
+      },
+      credentials: {
+        where: { type: 'PIN', revokedAt: null, deviceId: null },
+      },
+    },
+  });
+  const eligible: Array<{ id: string; userId: string; name: string }> = [];
+  const now = new Date();
+  for (const profile of profiles) {
+    const credential = profile.credentials[0];
+    if (
+      profile.user &&
+      credential &&
+      !isLockedOut(credential, now) &&
+      (await can(profile.user, 'pharmacy:dispense', undefined, { db, now }))
+    ) {
+      eligible.push({ id: profile.id, userId: profile.user.id, name: profile.displayName });
+    }
+  }
+  return eligible;
+}
+
+/**
  * PIN witness for a controlled purchase. A receipt with no controlled line
  * returns `{ pharmacistId: null }`. A failed PIN updates the lockout counter
  * and returns `{ blocked }` so the caller can commit that counter without
@@ -131,6 +200,17 @@ export async function verifyControlledPurchaseWitness(
   });
   const pharmacist = credential?.staffProfile.user;
   const now = new Date();
+  const branchAssignment = pharmacist
+    ? await db.pharmacyBranchAssignment.findFirst({
+        where: {
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          userId: pharmacist.id,
+          active: true,
+        },
+        select: { id: true },
+      })
+    : null;
   const eligible =
     credential &&
     credential.staffProfile.status === 'ACTIVE' &&
@@ -139,6 +219,7 @@ export async function verifyControlledPurchaseWitness(
     pharmacist.organizationId === scope.organizationId &&
     pharmacist.status === 'ACTIVE' &&
     pharmacist.id !== scope.actorId &&
+    Boolean(branchAssignment) &&
     !isLockedOut(credential, now) &&
     (await can(pharmacist, 'pharmacy:dispense', undefined, { db, now }));
   if (!eligible || !credential || !pharmacist) return { blocked: WITNESS_BLOCKED };

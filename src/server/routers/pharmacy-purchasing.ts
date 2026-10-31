@@ -3,13 +3,14 @@ import { z } from 'zod';
 import { can, subjectFromSession } from '@/lib/abac';
 import { hasModule } from '@/lib/entitlements';
 import {
+  listGoodsReceiptPinWitnesses,
+  listGoodsReceiptQualifiedPersons,
   listReceivingExceptions,
   postGoodsReceipt,
   resolveReceivingException,
   reverseGoodsReceipt,
   verifyControlledPurchaseWitness,
 } from '@/lib/pharmacy/goods-receipt';
-import { listControlledPinWitnesses } from '@/lib/pharmacy/controlled-register';
 import { PharmacyInventoryError } from '@/lib/pharmacy/inventory';
 import {
   allocateCentralReceipt,
@@ -997,8 +998,9 @@ const purchasingRouter = router({
           !(await ctx.db.pharmacyPurchaseOrder.findFirst({
             where: {
               id: input.purchaseOrderId,
+              organizationId: scope.organizationId,
               supplierId: input.supplierId,
-              branchId: input.branchId,
+              OR: [{ branchId: input.branchId }, { branchId: null }],
             },
           }))
         ) {
@@ -1009,7 +1011,10 @@ const purchasingRouter = router({
           input.purchaseOrderId
             ? (
                 await ctx.db.pharmacyPurchaseOrderLine.findMany({
-                  where: { purchaseOrderId: input.purchaseOrderId },
+                  where: {
+                    organizationId: scope.organizationId,
+                    purchaseOrderId: input.purchaseOrderId,
+                  },
                   select: { id: true, medicineId: true, packLevelId: true },
                 })
               ).map((line) => [line.id, line] as const)
@@ -1017,12 +1022,13 @@ const purchasingRouter = router({
         );
 
         const lines = [];
+        let needsQualifiedPerson = false;
         const seenSerials = new Set<string>();
         for (const [index, line] of input.lines.entries()) {
-          if (
-            !(await ctx.db.medicine.findFirst({ where: { id: line.medicineId, saleable: true } }))
-          )
-            throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
+          const medicine = await ctx.db.medicine.findFirst({
+            where: { id: line.medicineId, saleable: true },
+          });
+          if (!medicine) throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
           if (!(await ctx.db.packLevel.findFirst({ where: { id: line.packLevelId } })))
             throw new PharmacyReceivingError('MISSING_PACK_CONVERSION');
           // An ordered line borrowed from another order — or from another
@@ -1048,6 +1054,9 @@ const purchasingRouter = router({
             canonicalUnitsPerPack: line.canonicalUnitsPerPack,
             rejectedCanonicalUnits: line.rejectedCanonicalUnits,
           });
+          if (medicine.controlled && quantities.acceptedCanonicalUnits > 0) {
+            needsQualifiedPerson = true;
+          }
           const identity = await resolveReceiptLineIdentity(ctx.db, scope.organizationId, {
             medicineId: line.medicineId,
             batchNumber: line.batchNumber,
@@ -1119,6 +1128,16 @@ const purchasingRouter = router({
           });
         }
 
+        if (needsQualifiedPerson || input.qualifiedPersonUserId) {
+          if (
+            !input.qualifiedPersonUserId ||
+            !(await listGoodsReceiptQualifiedPersons(ctx.db, scope, input.qualifiedPersonUserId))
+              .length
+          ) {
+            throw new PharmacyReceivingError('QUALIFIED_PERSON_INELIGIBLE');
+          }
+        }
+
         return await ctx.db.pharmacyGoodsReceipt.create({
           data: {
             organizationId: scope.organizationId,
@@ -1146,6 +1165,56 @@ const purchasingRouter = router({
       } catch (error) {
         domainError(error);
       }
+    }),
+
+  /** The same eligibility used by the draft pickers, assignment and PIN picker. */
+  receivingQualifiedPersons: protectedProcedure
+    .input(z.object({ branchId }).strict())
+    .query(async ({ ctx, input }) => {
+      await assertProcurement(ctx);
+      const people = await listGoodsReceiptQualifiedPersons(
+        ctx.db,
+        receivingScope(ctx, input.branchId)
+      );
+      return people.map(({ userId, name }) => ({ id: userId, name }));
+    }),
+
+  /** Recover a draft with a missing or unavailable named qualified person. */
+  assignGoodsReceiptQualifiedPerson: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          goodsReceiptId: z.string().min(1),
+          qualifiedPersonUserId: z.string().trim().min(1),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      await assertProcurement(ctx);
+      const scope = receivingScope(ctx, input.branchId);
+      if (
+        !(await listGoodsReceiptQualifiedPersons(ctx.db, scope, input.qualifiedPersonUserId)).length
+      ) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'QUALIFIED_PERSON_INELIGIBLE' });
+      }
+      // The status predicate is rechecked after waiting for a concurrent posting's row lock.
+      const result = await ctx.db.pharmacyGoodsReceipt.updateMany({
+        where: {
+          id: input.goodsReceiptId,
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          status: 'DRAFT',
+        },
+        data: { qualifiedPersonUserId: input.qualifiedPersonUserId },
+      });
+      if (result.count !== 1) {
+        throw new TRPCError({
+          code: 'CONFLICT',
+          message: 'Only an existing draft at this branch can be reassigned.',
+        });
+      }
+      return { goodsReceiptId: input.goodsReceiptId };
     }),
 
   /**
@@ -1183,29 +1252,25 @@ const purchasingRouter = router({
       );
       if ('blocked' in attempt) return attempt;
       try {
-        return await ctx.db.$transaction((tx) =>
-          postGoodsReceipt(txDb(tx), scope, {
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          // Serialize draft reassignment with the witness read and stock posting.
+          await db.$queryRaw`SELECT id FROM pharmacy_goods_receipts WHERE id=${input.goodsReceiptId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`;
+          return postGoodsReceipt(db, scope, {
             goodsReceiptId: input.goodsReceiptId,
             at: new Date(),
             staffProfileId: input.staffProfileId,
             pin: input.pin,
-          })
-        );
+          });
+        });
       } catch (error) {
         domainError(error);
       }
     }),
 
-  /** The receipt's qualified person, when they can enter a PIN to witness posting. */
+  /** The named qualified person who can enter a PIN for this receipt. */
   controlledWitnesses: protectedProcedure
-    .input(
-      z
-        .object({
-          branchId,
-          goodsReceiptId: z.string().min(1),
-        })
-        .strict()
-    )
+    .input(z.object({ branchId, goodsReceiptId: z.string().min(1) }).strict())
     .query(async ({ ctx, input }) => {
       const actorId = ctx.session?.user?.id;
       if (!actorId) throw new TRPCError({ code: 'UNAUTHORIZED' });
@@ -1218,20 +1283,10 @@ const purchasingRouter = router({
       }
       const organizationId = ctx.entitlements?.organizationId;
       if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
-      const receipt = await ctx.db.pharmacyGoodsReceipt.findFirst({
-        where: {
-          id: input.goodsReceiptId,
-          organizationId,
-          branchId: input.branchId,
-        },
-        select: { qualifiedPersonUserId: true },
-      });
-      if (!receipt?.qualifiedPersonUserId || receipt.qualifiedPersonUserId === actorId) return [];
-      return listControlledPinWitnesses(
+      return listGoodsReceiptPinWitnesses(
         ctx.db,
-        organizationId,
-        actorId,
-        receipt.qualifiedPersonUserId
+        { organizationId, branchId: input.branchId, actorId },
+        input.goodsReceiptId
       );
     }),
 
