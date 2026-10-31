@@ -176,6 +176,52 @@ describe('organization.create CRM conversion isolation', () => {
     expect(mocks.assertPlatformCapability).toHaveBeenNthCalledWith(2, actor, 'crm:write');
   });
 
+  it.each(['organization.create', 'crm.opportunity.convert'])(
+    '%s converts an unclaimed won opportunity',
+    async (action) => {
+      platformDb.platformOpportunity.findUnique.mockResolvedValueOnce({
+        id: 'opp_1',
+        accountId: 'account_1',
+        stage: 'WON',
+        convertedOrganizationId: null,
+        account: { organizationId: null },
+      });
+      platformDb.platformOpportunity.updateMany.mockResolvedValueOnce({ count: 1 });
+      platformDb.platformAccount.updateMany.mockResolvedValueOnce({ count: 1 });
+
+      await expect(
+        executePlatformCommand(
+          actor,
+          action,
+          { ...payload('admin@acme.com'), opportunityId: 'opp_1' },
+          request
+        )
+      ).resolves.toMatchObject({ id: 'org_new' });
+
+      expect(platformDb.platformOpportunity.updateMany).toHaveBeenCalledWith({
+        where: { id: 'opp_1', convertedOrganizationId: null, stage: { not: 'LOST' } },
+        data: {
+          stage: 'WON',
+          wonAt: expect.any(Date),
+          convertedOrganizationId: 'org_new',
+        },
+      });
+      expect(platformDb.platformAccount.updateMany).toHaveBeenCalledWith({
+        where: { id: 'account_1', organizationId: null },
+        data: { organizationId: 'org_new', status: 'CUSTOMER' },
+      });
+      expect(platformDb.platformOpportunityStageEvent.create).toHaveBeenCalledWith({
+        data: {
+          opportunityId: 'opp_1',
+          fromStage: 'WON',
+          toStage: 'WON',
+          changedById: actor.id,
+          reason: 'Converted into an organization',
+        },
+      });
+    }
+  );
+
   it('rejects an unknown opportunity before provisioning', async () => {
     platformDb.platformOpportunity.findUnique.mockResolvedValueOnce(null);
 
@@ -204,8 +250,12 @@ describe('organization.create CRM conversion isolation', () => {
       { convertedOrganizationId: null, accountOrganizationId: null, stage: 'LOST' },
     ],
     [
-      'won opportunity',
-      { convertedOrganizationId: null, accountOrganizationId: null, stage: 'WON' },
+      'converted open opportunity',
+      { convertedOrganizationId: 'org_old', accountOrganizationId: null, stage: 'PROPOSAL' },
+    ],
+    [
+      'won opportunity with a bound account',
+      { convertedOrganizationId: null, accountOrganizationId: 'org_old', stage: 'WON' },
     ],
   ])('rejects a %s before provisioning', async (_label, state) => {
     platformDb.platformOpportunity.findUnique.mockResolvedValueOnce({
@@ -255,7 +305,7 @@ describe('organization.create CRM conversion isolation', () => {
       where: {
         id: 'opp_1',
         convertedOrganizationId: null,
-        stage: { notIn: ['WON', 'LOST'] },
+        stage: { not: 'LOST' },
       },
       data: {
         stage: 'WON',

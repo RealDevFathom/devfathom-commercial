@@ -873,7 +873,7 @@ async function bootstrapOrganization(
     | {
         id: string;
         accountId: string;
-        stage: 'DISCOVERY' | 'QUALIFIED' | 'PROPOSAL' | 'NEGOTIATION';
+        stage: 'DISCOVERY' | 'QUALIFIED' | 'PROPOSAL' | 'NEGOTIATION' | 'WON';
       }
     | undefined;
   if (input.opportunityId && actor) {
@@ -891,12 +891,15 @@ async function bootstrapOrganization(
     if (
       opportunity.convertedOrganizationId ||
       opportunity.account.organizationId ||
-      opportunity.stage === 'WON' ||
       opportunity.stage === 'LOST'
     ) {
       throw new PlatformSecurityError('This opportunity or account has already been claimed.', 409);
     }
-    conversion = opportunity;
+    conversion = {
+      id: opportunity.id,
+      accountId: opportunity.accountId,
+      stage: opportunity.stage,
+    };
   }
   const packageRecord = await db.platformPackage.findUnique({
     where: { id: input.packageId },
@@ -1235,7 +1238,7 @@ async function bootstrapOrganization(
       where: {
         id: conversion.id,
         convertedOrganizationId: null,
-        stage: { notIn: ['WON', 'LOST'] },
+        stage: { not: 'LOST' },
       },
       data: {
         stage: 'WON',
