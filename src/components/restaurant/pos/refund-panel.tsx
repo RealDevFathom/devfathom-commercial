@@ -96,7 +96,7 @@ export function RefundPanel({
           },
         ]
       : []
-    : operators.filter((operator) => operator.id !== actingOperatorId);
+    : operators.filter((operator) => operator.id !== actingOperatorId || operator.canSelfApprove);
 
   useEffect(() => {
     if (!demo || !demoApproval) return;
@@ -194,7 +194,12 @@ export function RefundPanel({
       return 'Enter a tip amount within the remaining tip balance.';
     if (!reason.trim() || reason.trim().length > 240)
       return 'Enter a reason between 1 and 240 characters.';
-    if (!managerId || managerId === actingOperatorId) return 'Select a distinct approving manager.';
+    if (
+      !managerId ||
+      (managerId === actingOperatorId &&
+        !operators.some((operator) => operator.id === managerId && operator.canSelfApprove))
+    )
+      return 'Select a distinct approving manager.';
     if (!demo && !/^\d{4,8}$/.test(managerSecret))
       return 'Enter the approving manager’s 4–8 digit PIN.';
     return null;
@@ -268,7 +273,7 @@ export function RefundPanel({
         <DialogHeader>
           <DialogTitle>Refund settled payment</DialogTitle>
           <DialogDescription>
-            Review the remaining balance, obtain distinct manager approval, then explicitly confirm.
+            Review the remaining balance, verify the approving manager PIN, then explicitly confirm.
           </DialogDescription>
         </DialogHeader>
         {state === 'loading' ? (
