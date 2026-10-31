@@ -9,10 +9,35 @@ const headers = { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosnif
 
 const STATUS = {
   unauthorized: 401,
+  organization_suspended: 403,
+  sensor_owner_inactive: 403,
   invalid_body: 400,
   module_disabled: 403,
   zone_unavailable: 409,
 } as const;
+
+/**
+ * Read at most `limit` bytes of the body. A chunked request has no
+ * Content-Length, so the cap is enforced while streaming instead of after the
+ * whole body is buffered. Returns null once the limit is exceeded.
+ */
+async function readBoundedText(request: Request, limit: number): Promise<string | null> {
+  if (!request.body) return '';
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > limit) {
+      await reader.cancel().catch(() => undefined);
+      return null;
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
 
 function reply(body: Record<string, unknown>, status: number) {
   return Response.json(body, { status, headers });
@@ -48,8 +73,8 @@ export async function POST(request: Request): Promise<Response> {
   if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) {
     return reply({ error: 'body_too_large' }, 413);
   }
-  const raw = await request.text();
-  if (Buffer.byteLength(raw) > MAX_BODY_BYTES) return reply({ error: 'body_too_large' }, 413);
+  const raw = await readBoundedText(request, MAX_BODY_BYTES);
+  if (raw === null) return reply({ error: 'body_too_large' }, 413);
   let body: unknown;
   try {
     body = JSON.parse(raw);

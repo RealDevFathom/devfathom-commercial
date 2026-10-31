@@ -9,6 +9,8 @@ const mocks = vi.hoisted(() => ({
   platformFindUnique: vi.fn(),
   tenantDb: {
     $queryRaw: vi.fn(),
+    organization: { findUnique: vi.fn() },
+    user: { findFirst: vi.fn() },
     pharmacyBranch: { findFirst: vi.fn() },
     pharmacyTemperatureLog: { findMany: vi.fn() },
     pharmacyColdChainSensor: { update: vi.fn() },
@@ -80,6 +82,8 @@ beforeEach(() => {
     run(mocks.tenantDb)
   );
   mocks.tenantDb.$queryRaw.mockResolvedValue([SENSOR]);
+  mocks.tenantDb.organization.findUnique.mockResolvedValue({ status: 'ACTIVE' });
+  mocks.tenantDb.user.findFirst.mockResolvedValue({ id: 'user_admin' });
   mocks.tenantDb.pharmacyBranch.findFirst.mockResolvedValue({ id: 'branch_a' });
   mocks.tenantDb.pharmacyTemperatureLog.findMany.mockResolvedValue([]);
   mocks.tenantDb.pharmacyColdChainSensor.update.mockResolvedValue({});
@@ -192,6 +196,47 @@ describe('receiveSensorPush', () => {
     await expect(receiveSensorPush(SECRET, push(1), NOW)).resolves.toEqual({
       ok: false,
       error: 'unauthorized',
+    });
+    expect(mocks.ingest).not.toHaveBeenCalled();
+    expect(mocks.tenantDb.pharmacyColdChainSensor.update).not.toHaveBeenCalled();
+  });
+
+  it.each(['SUSPENDED', 'TERMINATED'])(
+    'refuses a push from a %s tenant and writes nothing',
+    async (status) => {
+      mocks.tenantDb.organization.findUnique.mockResolvedValue({ status });
+      await expect(receiveSensorPush(SECRET, push(1), NOW)).resolves.toEqual({
+        ok: false,
+        error: 'organization_suspended',
+      });
+      expect(mocks.tenantDb.organization.findUnique).toHaveBeenCalledWith({
+        where: { id: 'org_a' },
+        select: { status: true },
+      });
+      expect(mocks.ingest).not.toHaveBeenCalled();
+      expect(mocks.tenantDb.pharmacyColdChainSensor.update).not.toHaveBeenCalled();
+      expect(mocks.refresh).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['ONBOARDING', 'GRACE'])('accepts a push from a %s tenant', async (status) => {
+    mocks.tenantDb.organization.findUnique.mockResolvedValue({ status });
+    await expect(receiveSensorPush(SECRET, push(1), NOW)).resolves.toMatchObject({ ok: true });
+  });
+
+  it('refuses a push attributed to an inactive or removed enroller', async () => {
+    mocks.tenantDb.user.findFirst.mockResolvedValue(null);
+    await expect(receiveSensorPush(SECRET, push(1), NOW)).resolves.toEqual({
+      ok: false,
+      error: 'sensor_owner_inactive',
+    });
+    expect(mocks.tenantDb.user.findFirst).toHaveBeenCalledWith({
+      where: {
+        id: 'user_admin',
+        organizationId: 'org_a',
+        status: { in: ['ACTIVE', 'ON_LEAVE'] },
+      },
+      select: { id: true },
     });
     expect(mocks.ingest).not.toHaveBeenCalled();
     expect(mocks.tenantDb.pharmacyColdChainSensor.update).not.toHaveBeenCalled();

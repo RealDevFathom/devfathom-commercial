@@ -74,6 +74,8 @@ describe('POST /api/pharmacy/cold-chain/readings', () => {
 
   it.each([
     ['unauthorized', 401],
+    ['organization_suspended', 403],
+    ['sensor_owner_inactive', 403],
     ['module_disabled', 403],
     ['zone_unavailable', 409],
   ] as const)('maps %s to %i', async (error, status) => {
@@ -100,6 +102,29 @@ describe('POST /api/pharmacy/cold-chain/readings', () => {
       request({ authorization: `Bearer ${SECRET}`, body: 'x'.repeat(64_001) })
     );
     expect(response.status).toBe(413);
+    expect(mocks.receive).not.toHaveBeenCalled();
+  });
+
+  it('caps a chunked body without Content-Length while streaming it', async () => {
+    let pulled = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulled += 1;
+        // Would be 10 MB if read in full; the reader must stop at the cap.
+        if (pulled > 640) controller.close();
+        else controller.enqueue(new Uint8Array(16_000).fill(120));
+      },
+    });
+    const response = await POST(
+      new Request('https://tenant.example/api/pharmacy/cold-chain/readings', {
+        method: 'POST',
+        headers: { authorization: `Bearer ${SECRET}`, 'content-type': 'application/json' },
+        body: stream,
+        duplex: 'half',
+      } as RequestInit)
+    );
+    expect(response.status).toBe(413);
+    expect(pulled).toBeLessThan(10);
     expect(mocks.receive).not.toHaveBeenCalled();
   });
 

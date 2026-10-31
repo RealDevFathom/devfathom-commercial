@@ -1876,7 +1876,7 @@ model PharmacyColdChainSensor {
   createdAt         DateTime             @default(now())
   updatedAt         DateTime             @updatedAt
 
-  location PharmacyStockLocation @relation(fields: [organizationId, branchId, stockLocationId], references: [organizationId, branchId, id], onDelete: Restrict)
+  location PharmacyStockLocation @relation(fields: [organizationId, branchId, stockLocationId], references: [organizationId, branchId, id], onDelete: Restrict, map: "pharmacy_cold_chain_sensors_location_fkey")
 
   @@unique([organizationId, id], map: "pharmacy_cold_chain_sensors_org_id_key")
   @@unique([organizationId, deviceIdentifier], map: "pharmacy_cold_chain_sensors_org_device_key")

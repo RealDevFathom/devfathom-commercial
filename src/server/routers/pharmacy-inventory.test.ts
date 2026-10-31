@@ -32,6 +32,7 @@ vi.mock('@/lib/pharmacy/finance-postings', () => ({
   postWriteOffEntry: mocks.postWriteOffEntry,
 }));
 
+import { Prisma } from '@/generated/prisma/client';
 import { moduleForProcedure } from '@/lib/module-catalog';
 
 import { pharmacyInventoryRouter } from './pharmacy-inventory';
@@ -61,7 +62,11 @@ function makeDb() {
     packLevel: model(),
     camera: model(),
     pharmacyStockLocation: model(),
-    pharmacyColdChainSensor: Object.assign(model(), { findMany: vi.fn().mockResolvedValue([]) }),
+    pharmacyColdChainSensor: Object.assign(model(), {
+      findMany: vi.fn().mockResolvedValue([]),
+      updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      findUniqueOrThrow: vi.fn().mockResolvedValue({ id: 'sensor_existing' }),
+    }),
     pharmacyTemperatureLog: Object.assign(model(), {
       createMany: vi.fn().mockResolvedValue({ count: 1 }),
     }),
@@ -98,7 +103,7 @@ function makeDb() {
   };
   return Object.assign(db, {
     $transaction: vi.fn(async (fn: (tx: typeof db) => unknown) => fn(db)),
-    $queryRaw: vi.fn(async () => []),
+    $queryRaw: vi.fn(async (..._args: unknown[]): Promise<unknown[]> => []),
   });
 }
 
@@ -860,6 +865,71 @@ describe('#732 — live cold-chain sensor management', () => {
       code: 'CONFLICT',
     });
     expect(db.pharmacyColdChainSensor.create).not.toHaveBeenCalled();
+  });
+
+  it('re-enrolls a revoked serial on its own row with a fresh secret', async () => {
+    grant([]);
+    db.pharmacyStockLocation.findFirst.mockResolvedValue(COLD_ZONE);
+    db.pharmacyColdChainSensor.findFirst.mockResolvedValue({
+      id: 'sensor_existing',
+      status: 'REVOKED',
+    });
+    const result = await caller().enrollColdChainSensor(ENROLL);
+    expect(result?.secret).toMatch(/^pcs_[A-Za-z0-9_-]{43}$/);
+    expect(db.pharmacyColdChainSensor.create).not.toHaveBeenCalled();
+    const [{ where, data }] = db.pharmacyColdChainSensor.updateMany.mock.calls[0] as unknown as [
+      { where: Record<string, unknown>; data: Record<string, unknown> },
+    ];
+    expect(where).toEqual({ organizationId: 'org_a', id: 'sensor_existing', status: 'REVOKED' });
+    expect(data).toMatchObject({
+      branchId: 'branch_a',
+      stockLocationId: 'fridge_1',
+      status: 'ACTIVE',
+      revokedAt: null,
+      enrolledByActorId: 'user_a',
+    });
+    expect(data.secretHash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('reports a lost re-enrollment race as CONFLICT', async () => {
+    grant([]);
+    db.pharmacyStockLocation.findFirst.mockResolvedValue(COLD_ZONE);
+    db.pharmacyColdChainSensor.findFirst.mockResolvedValue({
+      id: 'sensor_existing',
+      status: 'REVOKED',
+    });
+    db.pharmacyColdChainSensor.updateMany.mockResolvedValue({ count: 0 });
+    await expect(caller().enrollColdChainSensor(ENROLL)).rejects.toMatchObject({
+      code: 'CONFLICT',
+      message: 'DUPLICATE_DEVICE_IDENTIFIER',
+    });
+  });
+
+  it('reports a concurrent enrollment of the same serial as CONFLICT, not a 500', async () => {
+    grant([]);
+    db.pharmacyStockLocation.findFirst.mockResolvedValue(COLD_ZONE);
+    db.pharmacyColdChainSensor.create.mockRejectedValue(
+      new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+        code: 'P2002',
+        clientVersion: 'test',
+        meta: { target: ['organizationId', 'deviceIdentifier'] },
+      })
+    );
+    await expect(caller().enrollColdChainSensor(ENROLL)).rejects.toMatchObject({
+      code: 'CONFLICT',
+      message: 'DUPLICATE_DEVICE_IDENTIFIER',
+    });
+  });
+
+  it('re-attributes a sensor to the rotating admin', async () => {
+    grant([]);
+    db.$queryRaw.mockResolvedValue([{ id: 'sensor_1', status: 'ACTIVE', revokedAt: null }]);
+    await caller().rotateColdChainSensorSecret({ branchId: 'branch_a', sensorId: 'sensor_1' });
+    const [{ data }] = db.pharmacyColdChainSensor.update.mock.calls[0] as unknown as [
+      { data: Record<string, unknown> },
+    ];
+    expect(data).toMatchObject({ enrolledByActorId: 'user_a' });
+    expect(data.secretHash).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it('gates listing and revocation behind pharmacy:inventory', async () => {

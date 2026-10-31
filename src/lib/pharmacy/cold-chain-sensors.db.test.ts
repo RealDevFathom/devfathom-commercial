@@ -31,10 +31,16 @@ const ORG_A = `org_i732_a_${suffix}`;
 const ORG_B = `org_i732_b_${suffix}`;
 const BRANCH_A = `branch_i732_a_${suffix}`;
 const BRANCH_B = `branch_i732_b_${suffix}`;
-const ADMIN = 'cold_chain_admin';
+const ORG_C = `org_i732_c_${suffix}`;
+const BRANCH_C = `branch_i732_c_${suffix}`;
+// User ids are global, so each organization gets its own enrolling admin.
+const adminOf = (organizationId: string) => `cold_chain_admin_${organizationId}`;
+const ADMIN = adminOf(ORG_A);
+const LEAVER = `cold_chain_leaver_${suffix}`;
 
 type Deps = {
   withTenantDb: (typeof import('@/lib/tenancy/scoped-db'))['withTenantDb'];
+  withPlatformDb: (typeof import('@/lib/tenancy/scoped-db'))['withPlatformDb'];
   sensors: typeof import('./cold-chain-sensors');
   ledger: typeof import('./stock-ledger');
 };
@@ -44,8 +50,8 @@ function inOrg<T>(organizationId: string, work: (db: ScopedDb) => Promise<T>): P
   return deps.withTenantDb(organizationId, work);
 }
 
-function scope(organizationId: string, branchId: string) {
-  return { organizationId, branchId, actorId: ADMIN };
+function scope(organizationId: string, branchId: string, actorId = adminOf(organizationId)) {
+  return { organizationId, branchId, actorId };
 }
 
 async function zone(
@@ -86,12 +92,17 @@ async function zone(
   });
 }
 
-async function enroll(organizationId: string, branchId: string, stockLocationId: string) {
+async function enroll(
+  organizationId: string,
+  branchId: string,
+  stockLocationId: string,
+  options: { actorId?: string; deviceIdentifier?: string } = {}
+) {
   return inOrg(organizationId, (db) =>
-    deps.sensors.enrollColdChainSensor(db, scope(organizationId, branchId), {
+    deps.sensors.enrollColdChainSensor(db, scope(organizationId, branchId, options.actorId), {
       stockLocationId,
       name: 'Fridge probe',
-      deviceIdentifier: `SN-${randomBytes(4).toString('hex')}`,
+      deviceIdentifier: options.deviceIdentifier ?? `SN-${randomBytes(4).toString('hex')}`,
     })
   );
 }
@@ -104,14 +115,53 @@ function readings(...points: Array<[string, number]>) {
 
 beforeAll(async () => {
   if (!TEST_DATABASE_URL) return;
-  const [scopedDb, sensors, ledger, roleGuard] = await Promise.all([
+  const [scopedDb, sensors, ledger, roleGuard, departments] = await Promise.all([
     import('@/lib/tenancy/scoped-db'),
     import('./cold-chain-sensors'),
     import('./stock-ledger'),
     import('@/lib/testing/rls-role-guard'),
+    import('@/lib/test-support/departments'),
   ]);
-  deps = { withTenantDb: scopedDb.withTenantDb, sensors, ledger };
+  deps = {
+    withTenantDb: scopedDb.withTenantDb,
+    withPlatformDb: scopedDb.withPlatformDb,
+    sensors,
+    ledger,
+  };
   await roleGuard.assertRlsEnforcingRole(scopedDb.withPlatformDb);
+  // The push refuses a suspended tenant and an inactive enroller, so both
+  // must exist as real rows.
+  await scopedDb.withPlatformDb(async (db) => {
+    for (const organizationId of [ORG_A, ORG_B, ORG_C]) {
+      await db.organization.create({
+        data: {
+          id: organizationId,
+          slug: organizationId.replaceAll('_', '-'),
+          legalName: `Cold chain ${organizationId}`,
+          displayName: `Cold chain ${organizationId}`,
+          vertical: 'PHARMACY',
+          status: 'ACTIVE',
+        },
+      });
+    }
+    await departments.seedDepartments(db, [ORG_A, ORG_B, ORG_C], ['LEADERSHIP']);
+  });
+  const member = (id: string, organizationId: string) => ({
+    id,
+    organizationId,
+    name: id,
+    email: `${id}@cold-chain.test`,
+    role: 'ADMIN' as const,
+    department: 'LEADERSHIP',
+    title: 'Pharmacy administrator',
+    status: 'ACTIVE' as const,
+  });
+  for (const organizationId of [ORG_A, ORG_B, ORG_C]) {
+    await inOrg(organizationId, (db) =>
+      db.user.create({ data: member(adminOf(organizationId), organizationId) })
+    );
+  }
+  await inOrg(ORG_A, (db) => db.user.create({ data: member(LEAVER, ORG_A) }));
 }, 120_000);
 
 describeIfDatabase('#732 live cold-chain sensor push', () => {
@@ -187,6 +237,84 @@ describeIfDatabase('#732 live cold-chain sensor push', () => {
     await expect(
       inOrg(ORG_A, (db) => db.pharmacyTemperatureLog.count({ where: { stockLocationId: fridge } }))
     ).resolves.toBe(0);
+  });
+
+  it('refuses a push once the tenant is suspended, and writes nothing', async () => {
+    const fridge = await zone(ORG_C, BRANCH_C, 'COLD');
+    const { sensor, secret } = await enroll(ORG_C, BRANCH_C, fridge);
+    const body = readings(['2026-10-31T10:00:00.000Z', 5]);
+    const now = new Date('2026-10-31T10:30:00.000Z');
+    // The lifecycle is control-plane state, changed by the platform.
+    await deps.withPlatformDb((db) =>
+      db.organization.update({ where: { id: ORG_C }, data: { status: 'SUSPENDED' } })
+    );
+    await expect(deps.sensors.receiveSensorPush(secret, body, now)).resolves.toEqual({
+      ok: false,
+      error: 'organization_suspended',
+    });
+    const stored = await inOrg(ORG_C, async (db) => ({
+      logs: await db.pharmacyTemperatureLog.count({ where: { stockLocationId: fridge } }),
+      sensor: await db.pharmacyColdChainSensor.findUniqueOrThrow({ where: { id: sensor.id } }),
+    }));
+    expect(stored.logs).toBe(0);
+    expect(stored.sensor.lastSeenAt).toBeNull();
+  });
+
+  it('stops a sensor whose enroller is inactive until an admin rotates it', async () => {
+    const fridge = await zone(ORG_A, BRANCH_A, 'COLD');
+    const { sensor, secret } = await enroll(ORG_A, BRANCH_A, fridge, { actorId: LEAVER });
+    await inOrg(ORG_A, (db) =>
+      db.user.update({ where: { id: LEAVER }, data: { status: 'INACTIVE' } })
+    );
+    const now = new Date('2026-10-31T11:30:00.000Z');
+    const body = readings(['2026-10-31T11:00:00.000Z', 5]);
+    await expect(deps.sensors.receiveSensorPush(secret, body, now)).resolves.toEqual({
+      ok: false,
+      error: 'sensor_owner_inactive',
+    });
+
+    const rotated = await inOrg(ORG_A, (db) =>
+      deps.sensors.rotateColdChainSensorSecret(db, scope(ORG_A, BRANCH_A), sensor.id)
+    );
+    expect(rotated.sensor.enrolledByActorId).toBe(ADMIN);
+    await expect(deps.sensors.receiveSensorPush(rotated.secret, body, now)).resolves.toMatchObject(
+      { ok: true, accepted: 1 }
+    );
+    await expect(
+      inOrg(ORG_A, (db) =>
+        db.pharmacyTemperatureLog.findMany({
+          where: { stockLocationId: fridge },
+          select: { actorId: true },
+        })
+      )
+    ).resolves.toEqual([{ actorId: ADMIN }]);
+  });
+
+  it('re-enrolls a revoked serial on its own row and refuses an active duplicate', async () => {
+    const fridge = await zone(ORG_A, BRANCH_A, 'COLD');
+    const deviceIdentifier = `SN-REUSE-${randomBytes(4).toString('hex')}`;
+    const first = await enroll(ORG_A, BRANCH_A, fridge, { deviceIdentifier });
+    await expect(enroll(ORG_A, BRANCH_A, fridge, { deviceIdentifier })).rejects.toMatchObject({
+      reason: 'DUPLICATE_DEVICE_IDENTIFIER',
+    });
+    const now = new Date('2026-10-31T12:00:00.000Z');
+    await inOrg(ORG_A, (db) =>
+      deps.sensors.revokeColdChainSensor(db, scope(ORG_A, BRANCH_A), first.sensor.id, now)
+    );
+
+    const again = await enroll(ORG_A, BRANCH_A, fridge, { deviceIdentifier });
+    expect(again.sensor).toMatchObject({
+      id: first.sensor.id,
+      deviceIdentifier,
+      status: 'ACTIVE',
+      revokedAt: null,
+    });
+    await expect(
+      deps.sensors.receiveSensorPush(first.secret, readings(['2026-10-31T11:55:00.000Z', 5]), now)
+    ).resolves.toEqual({ ok: false, error: 'unauthorized' });
+    await expect(
+      deps.sensors.receiveSensorPush(again.secret, readings(['2026-10-31T11:55:00.000Z', 5]), now)
+    ).resolves.toMatchObject({ ok: true, accepted: 1 });
   });
 
   it('refuses a push while the tenant lacks pharmacy-inventory', async () => {

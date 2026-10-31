@@ -9,6 +9,7 @@ import {
   hashDeviceSecret,
   isDeviceUsable,
 } from '@/lib/retail-terminal/device-secret';
+import { isTenantLifecycleAccessible } from '@/lib/tenancy/host';
 import { withPlatformDb, withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { PharmacyInventoryError } from './inventory';
@@ -134,24 +135,67 @@ export async function enrollColdChainSensor(
   }
   const duplicate = await db.pharmacyColdChainSensor.findFirst({
     where: { organizationId: scope.organizationId, deviceIdentifier },
-    select: { id: true },
+    select: { id: true, status: true },
   });
-  if (duplicate) throw new PharmacyColdChainSensorError('DUPLICATE_DEVICE_IDENTIFIER');
-
   const { secret, secretHash } = generateDeviceSecret(COLD_CHAIN_SENSOR_SECRET_PREFIX);
-  const sensor = await db.pharmacyColdChainSensor.create({
-    data: {
-      organizationId: scope.organizationId,
-      branchId: scope.branchId,
-      stockLocationId: input.stockLocationId,
-      name,
-      deviceIdentifier,
-      secretHash,
-      enrolledByActorId: scope.actorId,
-    },
-    select: SENSOR_VIEW,
-  });
-  return { sensor, secret };
+
+  if (duplicate) {
+    if (duplicate.status !== 'REVOKED') {
+      throw new PharmacyColdChainSensorError('DUPLICATE_DEVICE_IDENTIFIER');
+    }
+    // A serial is unique per organization, so a revoked device is re-enrolled
+    // on its own row: a fresh secret, the new zone and the enrolling admin.
+    // Every reading it pushed keeps its serial as evidence, and the earlier
+    // revocation stays in the audit trail. The conditional update only wins
+    // while the row is still REVOKED, so two concurrent re-enrollments cannot
+    // both succeed.
+    const reactivated = await db.pharmacyColdChainSensor.updateMany({
+      where: { organizationId: scope.organizationId, id: duplicate.id, status: 'REVOKED' },
+      data: {
+        branchId: scope.branchId,
+        stockLocationId: input.stockLocationId,
+        name,
+        secretHash,
+        status: 'ACTIVE',
+        revokedAt: null,
+        lastSeenAt: null,
+        lastReadingAt: null,
+        enrolledByActorId: scope.actorId,
+      },
+    });
+    if (reactivated.count !== 1) {
+      throw new PharmacyColdChainSensorError('DUPLICATE_DEVICE_IDENTIFIER');
+    }
+    const sensor = await db.pharmacyColdChainSensor.findUniqueOrThrow({
+      where: { organizationId_id: { organizationId: scope.organizationId, id: duplicate.id } },
+      select: SENSOR_VIEW,
+    });
+    return { sensor, secret };
+  }
+
+  try {
+    const sensor = await db.pharmacyColdChainSensor.create({
+      data: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        stockLocationId: input.stockLocationId,
+        name,
+        deviceIdentifier,
+        secretHash,
+        enrolledByActorId: scope.actorId,
+      },
+      select: SENSOR_VIEW,
+    });
+    return { sensor, secret };
+  } catch (error) {
+    // A concurrent enrollment of the same serial lost the race to the
+    // (organizationId, deviceIdentifier) unique key: report it as the same
+    // conflict instead of an internal error.
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+      throw new PharmacyColdChainSensorError('DUPLICATE_DEVICE_IDENTIFIER');
+    }
+    throw error;
+  }
 }
 
 type SensorTrustRow = { id: string; status: 'ACTIVE' | 'REVOKED'; revokedAt: Date | null };
@@ -169,7 +213,11 @@ async function lockSensorInScope(db: ScopedDb, scope: LedgerScope, sensorId: str
   return row;
 }
 
-/** Replace a sensor's push secret; the previous one stops working at once. */
+/**
+ * Replace a sensor's push secret; the previous one stops working at once. The
+ * rotating admin becomes the person readings are attributed to, which is how a
+ * sensor whose enroller has left is brought back into service.
+ */
 export async function rotateColdChainSensorSecret(
   db: ScopedDb,
   scope: LedgerScope,
@@ -182,7 +230,7 @@ export async function rotateColdChainSensorSecret(
     const { secret, secretHash } = generateDeviceSecret(COLD_CHAIN_SENSOR_SECRET_PREFIX);
     const sensor = await tx.pharmacyColdChainSensor.update({
       where: { organizationId_id: { organizationId: scope.organizationId, id: sensorId } },
-      data: { secretHash },
+      data: { secretHash, enrolledByActorId: scope.actorId },
       select: SENSOR_VIEW,
     });
     return { sensor, secret };
@@ -297,7 +345,13 @@ export type SensorPushOutcome =
     }
   | {
       ok: false;
-      error: 'unauthorized' | 'invalid_body' | 'module_disabled' | 'zone_unavailable';
+      error:
+        | 'unauthorized'
+        | 'organization_suspended'
+        | 'sensor_owner_inactive'
+        | 'invalid_body'
+        | 'module_disabled'
+        | 'zone_unavailable';
     };
 
 type LockedSensor = {
@@ -349,6 +403,28 @@ export async function receiveSensorPush(
       FOR UPDATE`);
     const sensor = rows[0];
     if (!sensor || !isDeviceUsable(sensor)) return { ok: false, error: 'unauthorized' };
+    // Like every other machine credential, a sensor stops writing the moment
+    // its tenant is suspended or terminated.
+    const organization = await db.organization.findUnique({
+      where: { id: sensor.organizationId },
+      select: { status: true },
+    });
+    if (!organization || !isTenantLifecycleAccessible(organization.status)) {
+      return { ok: false, error: 'organization_suspended' };
+    }
+    // Readings and alert events are attributed to the enrolling admin, so a
+    // deactivated or removed enroller stops the sensor until an admin rotates
+    // its secret (which re-attributes it).
+    const owner = await db.user.findFirst({
+      where: {
+        id: sensor.enrolledByActorId,
+        organizationId: sensor.organizationId,
+        // Same member statuses as ACTIVE_STATUSES (`@/lib/auth/session-state`).
+        status: { in: ['ACTIVE', 'ON_LEAVE'] },
+      },
+      select: { id: true },
+    });
+    if (!owner) return { ok: false, error: 'sensor_owner_inactive' };
     if (!readings) return { ok: false, error: 'invalid_body' };
     if (
       !hasModule(
@@ -367,8 +443,8 @@ export async function receiveSensorPush(
     const scope: LedgerScope = {
       organizationId: sensor.organizationId,
       branchId: sensor.branchId,
-      // Readings and alert events are attributed to the person who enrolled
-      // the sensor; the sensor serial on every reading names the device.
+      // Readings and alert events are attributed to the (active) admin who
+      // enrolled or last rotated the sensor; the serial names the device.
       actorId: sensor.enrolledByActorId,
     };
 
