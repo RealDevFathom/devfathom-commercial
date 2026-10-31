@@ -431,6 +431,78 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
     expect(result.balance?.onHandUnits).toBe(35);
   });
 
+  it('serializes count approvals with different idempotency prefixes', async () => {
+    const fixture = await scenario(ORG_A, BRANCH_A, 'count-approval-race');
+    const count = await inOrg(ORG_A, async (db) => {
+      const { lot } = await stockLot(db, fixture, {
+        expiresAt: LATER,
+        units: 40,
+        label: 'count-approval-race',
+      });
+      return deps.operations.createCount(db, scopeOf(fixture), {
+        varianceThreshold: 10,
+        readings: [
+          {
+            inventoryLotId: lot.id,
+            stockLocationId: fixture.locationId,
+            countedSealedPacks: 3,
+            countedLooseUnits: 5,
+          },
+        ],
+      });
+    });
+
+    let releaseFirst: () => void = () => {};
+    const held = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let signalFirstApproved: () => void = () => {};
+    const firstApproved = new Promise<void>((resolve) => {
+      signalFirstApproved = resolve;
+    });
+    const first = inOrg(ORG_A, async (db) => {
+      const approved = await deps.operations.approveCount(
+        db,
+        scopeOf(fixture),
+        count.id,
+        tag('count-race-first')
+      );
+      signalFirstApproved();
+      await held;
+      return approved;
+    });
+    await firstApproved;
+
+    const second = inOrg(ORG_A, (db) =>
+      deps.operations.approveCount(db, scopeOf(fixture), count.id, tag('count-race-second'))
+    );
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    releaseFirst();
+
+    const [firstOutcome, secondOutcome] = await Promise.allSettled([first, second]);
+    expect(firstOutcome.status).toBe('fulfilled');
+    expect(secondOutcome.status).toBe('rejected');
+    const rejection = (secondOutcome as PromiseRejectedResult).reason;
+    expect(rejection).toBeInstanceOf(PharmacyInventoryError);
+    expect(rejection.reason).toBe('INVALID_STATE');
+
+    const line = count.lines[0]!;
+    const after = await inOrg(ORG_A, async (db) => ({
+      balance: await db.pharmacyStockBalance.findFirst({
+        where: { inventoryLotId: line.inventoryLotId, disposition: 'AVAILABLE' },
+      }),
+      adjustments: await db.pharmacyStockMovement.count({
+        where: {
+          inventoryLotId: line.inventoryLotId,
+          kind: 'ADJUSTMENT',
+          reason: `Inventory count ${count.id}`,
+        },
+      }),
+    }));
+    expect(after.balance?.onHandUnits).toBe(35);
+    expect(after.adjustments).toBe(1);
+  });
+
   it('quarantines only part of a lot and keeps the remainder available', async () => {
     const fixture = await scenario(ORG_A, BRANCH_A, 'partial-quarantine');
     const balances = await inOrg(ORG_A, async (db) => {
