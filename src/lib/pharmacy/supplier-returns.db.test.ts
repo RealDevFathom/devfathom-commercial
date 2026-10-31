@@ -241,9 +241,9 @@ describeIfDatabase('PUR-06 — a claimed quantity leaves saleable stock', () => 
     expect(result.allocated.reduce((n, a) => n + a.units, 0)).toBe(30);
   });
 
-  it('submitting the return reserves the quantity and a sale can no longer reach it', async () => {
+  it('submitting the return reserves the quantity, posts its value, and makes it unsaleable', async () => {
     const fixture = await scenario(ORG_A, 'submit-reserves');
-    const submitted = await inOrg(ORG_A, async (db) => {
+    const { submitted, journal } = await inOrg(ORG_A, async (db) => {
       const lot = await stockLot(db, fixture, 40, 'submit-reserves');
       const created = await deps.returns.createPurchaseReturn(db, scopeOf(fixture), {
         supplierId: fixture.supplierId,
@@ -251,13 +251,39 @@ describeIfDatabase('PUR-06 — a claimed quantity leaves saleable stock', () => 
         reference: `RET-${tag('submit-reserves')}`,
         lines: [line(fixture, lot.id, 30, 36_000)],
       });
-      return deps.returns.submitPurchaseReturn(db, scopeOf(fixture), {
+      const result = await deps.returns.submitPurchaseReturn(db, scopeOf(fixture), {
         purchaseReturnId: created.id,
         at: NOW,
       });
+      const claimId = result.lines[0]!.supplierClaimId!;
+      return {
+        submitted: result,
+        journal: await db.financeJournalEntry.findFirst({
+          where: {
+            organizationId: ORG_A,
+            sourceKind: 'PHARMACY_SUPPLIER_CLAIM',
+            sourceId: claimId,
+          },
+          include: { lines: true },
+        }),
+      };
     });
     expect(submitted.status).toBe('SUBMITTED');
     expect(submitted.lines[0]!.supplierClaimId).not.toBeNull();
+    expect(journal?.lines).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          accountCode: 'SUPPLIER_CLAIM_RECEIVABLE',
+          side: 'DEBIT',
+          amountMinor: 36_000,
+        }),
+        expect.objectContaining({
+          accountCode: 'INVENTORY',
+          side: 'CREDIT',
+          amountMinor: 36_000,
+        }),
+      ])
+    );
 
     // 40 on hand, 30 claimed: 11 is one more than what is left.
     await expect(

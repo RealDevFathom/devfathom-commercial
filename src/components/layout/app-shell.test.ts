@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react';
-import { createElement, type ComponentProps, type ComponentType } from 'react';
+import { createElement, type ComponentType } from 'react';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -89,9 +89,14 @@ describe('AppShell module guard', () => {
   });
 
   it('clearly warns when the pharmacy licence is a placeholder', () => {
+    const TestAppShell = AppShell as ComponentType<{
+      brand: Parameters<typeof AppShell>[0]['brand'];
+      pharmacyPlaceholder?: boolean;
+      children?: React.ReactNode;
+    }>;
     render(
       createElement(
-        AppShell,
+        TestAppShell,
         {
           brand: {
             organizationId: 'org_test',
@@ -103,7 +108,7 @@ describe('AppShell module guard', () => {
             accentColor: null,
           },
           pharmacyPlaceholder: true,
-        } as ComponentProps<typeof AppShell>,
+        },
         createElement('p', null, 'Dashboard')
       )
     );
