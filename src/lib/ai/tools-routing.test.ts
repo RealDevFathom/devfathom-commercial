@@ -15,13 +15,13 @@ vi.mock('@/lib/abac', async (importOriginal) => ({
   can: vi.fn().mockResolvedValue(false),
 }));
 
-const ctx: AssistantContext = {
+const ctx = {
   organizationId: 'org_test',
   userId: 'user_test',
   role: 'EMPLOYEE',
   vertical: 'AGENCY',
   enabledModules: MODULE_CATALOG.map(({ key }) => key),
-};
+} satisfies AssistantContext;
 const adminCtx: AssistantContext = { ...ctx, role: 'ADMIN' };
 
 describe('assistant tool routing', () => {
@@ -96,20 +96,21 @@ describe('assistant tool routing', () => {
     );
   });
 
-  it.each([
-    ['full-set routing', ''],
-    ['client-aware Notes routing', 'find the Acme note'],
-    ['core-tool routing', 'show my tasks'],
-  ])('requires every Notes dependency through %s', (_route, hint) => {
+  const noteToolNames = [
+    'searchNotes',
+    'getNote',
+    'createNote',
+    'updateNote',
+    'deleteNote',
+    'setNoteShares',
+  ];
+
+  it.each<[string, string, string[]]>([
+    ['full-set routing', '', noteToolNames],
+    ['client-aware Notes routing', 'find the Acme note', noteToolNames],
+    ['core-tool routing', 'show my tasks', ['searchNotes']],
+  ])('requires every Notes dependency through %s', (_route, hint, expectedNoteTools) => {
     const noteDependencies = ['notes', 'projects', 'clients'];
-    const noteToolNames = [
-      'searchNotes',
-      'getNote',
-      'createNote',
-      'updateNote',
-      'deleteNote',
-      'setNoteShares',
-    ];
 
     for (const missingModule of noteDependencies) {
       const tools = buildAssistantTools(
@@ -120,7 +121,9 @@ describe('assistant tool routing', () => {
     }
 
     const entitledTools = buildAssistantTools(ctx, { hint });
-    for (const name of noteToolNames) expect(entitledTools).toHaveProperty(name);
+    expect(Object.keys(entitledTools).filter((name) => noteToolNames.includes(name))).toEqual(
+      expectedNoteTools
+    );
   });
 
   it('retains execute authorization on pharmacy reports', async () => {
