@@ -47,10 +47,10 @@ describe('invoice discount editing', () => {
   it('accepts a full discount on decimal lines and previews the same tax cents as persistence', () => {
     render(<InvoiceManagePanel />);
     fireEvent.click(screen.getByRole('button', { name: /INV-1/ }));
-    fireEvent.change(screen.getByRole('spinbutton', { name: 'Tax (USD)', exact: true }), {
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Tax (USD)' }), {
       target: { value: '0.005' },
     });
-    fireEvent.change(screen.getByRole('spinbutton', { name: 'Discount (USD)', exact: true }), {
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Discount (USD)' }), {
       target: { value: '0.8' },
     });
     expect(screen.getByText('Total').parentElement).toHaveTextContent('$0.01');
@@ -64,7 +64,7 @@ describe('invoice discount editing', () => {
   it('describes an excessive discount and blocks saving', () => {
     render(<InvoiceManagePanel />);
     fireEvent.click(screen.getByRole('button', { name: /INV-1/ }));
-    const discount = screen.getByRole('spinbutton', { name: 'Discount (USD)', exact: true });
+    const discount = screen.getByRole('spinbutton', { name: 'Discount (USD)' });
     fireEvent.change(discount, { target: { value: '0.81' } });
     expect(discount).toHaveAttribute('aria-invalid', 'true');
     expect(discount).toHaveAccessibleDescription('Discount cannot exceed the invoice subtotal');

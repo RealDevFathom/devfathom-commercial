@@ -334,7 +334,7 @@ export function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
 
   const taxAmount = Number(tax);
   const discountAmount = Number(discount);
-  let money;
+  let money: ReturnType<typeof calculateInvoiceMoney> | undefined;
   let adjustmentError = '';
   try {
     money = calculateInvoiceMoney(items, taxAmount, discountAmount);

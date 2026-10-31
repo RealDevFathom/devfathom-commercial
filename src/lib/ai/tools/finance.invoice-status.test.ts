@@ -2,7 +2,18 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AssistantHelpers } from '@/lib/ai/context';
 import { PAID_STATUS_ERROR } from '@/lib/finance/invoice-status';
 
+const mocks = vi.hoisted(() => ({
+  entitlements: { organizationId: 'org-1', enabledModules: ['webhooks'] },
+  emitInvoicePaid: vi.fn(),
+  resolveOrganizationEntitlements: vi.fn(),
+}));
+
 vi.mock('server-only', () => ({}));
+vi.mock('@/lib/finance/invoice-paid-event', () => ({ emitInvoicePaid: mocks.emitInvoicePaid }));
+vi.mock('@/lib/entitlements', async () => ({
+  ...(await vi.importActual<typeof import('@/lib/entitlements')>('@/lib/entitlements')),
+  resolveOrganizationEntitlements: mocks.resolveOrganizationEntitlements,
+}));
 
 import { buildFinanceTools } from './finance';
 
@@ -32,7 +43,7 @@ function setup(prior: string, changed = 1) {
   const helpers = {
     db,
     isAdmin: true,
-    ctx: { userId: 'admin-1' },
+    ctx: { userId: 'admin-1', organizationId: 'org-1' },
     now: () => new Date('2026-10-21T00:00:00Z'),
     activity: vi.fn(),
     audit: vi.fn(),
@@ -45,7 +56,10 @@ function setup(prior: string, changed = 1) {
 }
 
 describe('assistant updateInvoiceStatus', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.resolveOrganizationEntitlements.mockResolvedValue(mocks.entitlements);
+  });
 
   it.each(['SENT', 'OVERDUE', 'PAID'])(
     'rejects direct PAID from %s without side effects',
@@ -98,5 +112,24 @@ describe('assistant updateInvoiceStatus', () => {
     expect(helpers.audit).toHaveBeenCalledWith(
       expect.objectContaining({ changes: { status: { before: 'DRAFT', after: 'PAID' } } })
     );
+  });
+
+  it('emits invoice.paid once when issuing settles a zero-total draft', async () => {
+    const { db, tool } = setup('DRAFT');
+    const settled = { ...invoice, total: 0, status: 'PAID', clientId: 'client-1' };
+    db.invoice.findMany.mockResolvedValue([
+      { id: invoice.id, invoiceNumber: invoice.invoiceNumber, status: 'DRAFT', total: 0 },
+    ]);
+    db.invoice.findUniqueOrThrow.mockResolvedValue(settled);
+    await tool.execute({ invoiceNumber: invoice.invoiceNumber, status: 'SENT' });
+    expect(mocks.resolveOrganizationEntitlements).toHaveBeenCalledWith('org-1', db);
+    expect(mocks.emitInvoicePaid).toHaveBeenCalledOnce();
+    expect(mocks.emitInvoicePaid).toHaveBeenCalledWith(db, mocks.entitlements, settled);
+  });
+
+  it('does not emit invoice.paid for an ordinary issue', async () => {
+    const { tool } = setup('DRAFT');
+    await tool.execute({ invoiceNumber: invoice.invoiceNumber, status: 'SENT' });
+    expect(mocks.emitInvoicePaid).not.toHaveBeenCalled();
   });
 });

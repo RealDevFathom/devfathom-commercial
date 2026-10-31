@@ -193,6 +193,56 @@ describe.skipIf(!databaseUrl)('invoice discounts against PostgreSQL', () => {
     expect(Number(saved?.discount)).toBe(0);
   });
 
+  it('rejects a batch-sibling edit that read the invoice before another edit wrote', async () => {
+    const invoice = await inOrg((tx) => seedInvoice(tx));
+    // tRPC batch siblings share one transaction, so FOR UPDATE cannot order them.
+    // Hold both edits after their locked read so each derives from the same SENT
+    // snapshot; only the first write may win and the shared transaction aborts.
+    let arrived = 0;
+    let bothRead!: () => void;
+    const barrier = new Promise<void>((resolve) => {
+      bothRead = resolve;
+    });
+    const result = inOrg(async (tx) => {
+      const sibling = new Proxy(tx, {
+        get(target, key, receiver) {
+          const value = Reflect.get(target, key, receiver);
+          if (key === '$transaction') {
+            return async (work: (inner: ScopedDb) => Promise<unknown>) => work(receiver);
+          }
+          if (key !== 'invoice') return value;
+          const model = value as ScopedDb['invoice'];
+          return new Proxy(model, {
+            get(modelTarget, modelKey) {
+              const member = Reflect.get(modelTarget, modelKey) as unknown;
+              if (modelKey !== 'findUnique') {
+                return typeof member === 'function' ? member.bind(modelTarget) : member;
+              }
+              const findUnique = member as (args: unknown) => Promise<unknown>;
+              return async (args: unknown) => {
+                const row = await findUnique.call(modelTarget, args);
+                if (++arrived === 2) bothRead();
+                await barrier;
+                return row;
+              };
+            },
+          });
+        },
+      }) as ScopedDb;
+      const settled = await Promise.allSettled([
+        caller(sibling).updateInvoice({ id: invoice.id, items: lines, discount: 100 }),
+        caller(sibling).updateInvoice({ id: invoice.id, items: lines, discount: 0 }),
+      ]);
+      const rejected = settled.find((outcome) => outcome.status === 'rejected');
+      if (rejected) throw rejected.reason;
+      return settled;
+    });
+    await expect(result).rejects.toMatchObject({ code: 'CONFLICT' });
+    const saved = await inOrg((tx) => caller(tx).getInvoiceById({ id: invoice.id }));
+    expect(saved).toMatchObject({ status: 'SENT', paidAt: null, amountPaid: 0, balance: 100 });
+    expect(Number(saved?.total)).toBe(100);
+  });
+
   it('serializes a racing payment after the discount and rejects its overpayment', async () => {
     const invoice = await inOrg((tx) => seedInvoice(tx));
     let signalLocked!: () => void;

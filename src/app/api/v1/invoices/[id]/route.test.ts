@@ -3,12 +3,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   logActivity: vi.fn(),
+  emitInvoicePaid: vi.fn(),
 }));
 
 vi.mock('@/lib/api-auth', () => ({
   withApiAuth: (_scope: string, handler: unknown) => handler,
 }));
 vi.mock('@/server/activity', () => ({ logActivity: mocks.logActivity }));
+vi.mock('@/lib/finance/invoice-paid-event', () => ({ emitInvoicePaid: mocks.emitInvoicePaid }));
 
 import { PATCH } from './route';
 
@@ -114,11 +116,14 @@ describe('PATCH /api/v1/invoices/:id invoice status', () => {
     expect(response.status).toBe(409);
     expect(authCtx.db.invoice.findUniqueOrThrow).not.toHaveBeenCalled();
     expect(mocks.logActivity).not.toHaveBeenCalled();
+    expect(mocks.emitInvoicePaid).not.toHaveBeenCalled();
   });
 
   it('issues and settles a fully discounted draft atomically', async () => {
     const authCtx = context('DRAFT');
     authCtx.db.invoice.findUnique.mockResolvedValue({ id: invoice.id, status: 'DRAFT', total: 0 });
+    const settled = { ...invoice, total: 0, status: 'PAID' };
+    authCtx.db.invoice.findUniqueOrThrow.mockResolvedValue(settled);
     const handler = PATCH as unknown as (
       ctx: unknown,
       request: Request,
@@ -137,5 +142,12 @@ describe('PATCH /api/v1/invoices/:id invoice status', () => {
       where: { id: invoice.id, status: 'DRAFT', total: 0 },
       data: { status: 'PAID', sentAt: expect.any(Date), paidAt: expect.any(Date) },
     });
+    expect(mocks.emitInvoicePaid).toHaveBeenCalledOnce();
+    expect(mocks.emitInvoicePaid).toHaveBeenCalledWith(authCtx.db, undefined, settled);
+  });
+
+  it('does not emit invoice.paid for an ordinary issue', async () => {
+    await patch('SENT', 'DRAFT');
+    expect(mocks.emitInvoicePaid).not.toHaveBeenCalled();
   });
 });

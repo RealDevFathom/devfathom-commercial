@@ -62,16 +62,16 @@ describe('CreateInvoiceForm', () => {
       target: { value: 'Second' },
     });
     fireEvent.change(screen.getAllByPlaceholderText('Rate')[1], { target: { value: '0.7' } });
-    fireEvent.change(screen.getByRole('spinbutton', { name: 'Tax', exact: true }), {
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Tax' }), {
       target: { value: '0.005' },
     });
-    fireEvent.change(screen.getByRole('spinbutton', { name: 'Discount', exact: true }), {
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Discount' }), {
       target: { value: '0.8' },
     });
 
     expect(screen.getByText('$0.01')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Create Invoice', exact: true })).toBeEnabled();
-    fireEvent.click(screen.getByRole('button', { name: 'Create Invoice', exact: true }));
+    expect(screen.getByRole('button', { name: 'Create Invoice' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Create Invoice' }));
     expect(mocks.mutate).toHaveBeenCalledWith(
       expect.objectContaining({ subtotal: 0.8, tax: 0.01, discount: 0.8, total: 0.01 })
     );
@@ -79,11 +79,11 @@ describe('CreateInvoiceForm', () => {
 
   it('associates invalid adjustment fields with their error and prevents submission', () => {
     render(<CreateInvoiceForm onClose={vi.fn()} />);
-    const discount = screen.getByRole('spinbutton', { name: 'Discount', exact: true });
+    const discount = screen.getByRole('spinbutton', { name: 'Discount' });
     fireEvent.change(discount, { target: { value: '1' } });
     expect(discount).toHaveAttribute('aria-invalid', 'true');
     expect(discount).toHaveAccessibleDescription('Discount cannot exceed the invoice subtotal');
-    expect(screen.getByRole('button', { name: 'Create Invoice', exact: true })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Create Invoice' })).toBeDisabled();
     expect(mocks.mutate).not.toHaveBeenCalled();
   });
 });

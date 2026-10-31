@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   updateMany: vi.fn(),
   sendEmail: vi.fn(),
   logActivity: vi.fn(),
+  emitInvoicePaid: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -16,6 +17,7 @@ vi.mock('@/lib/abac', async () => ({
 }));
 vi.mock('@/lib/entitlements', () => ({ hasModule: vi.fn(() => true) }));
 vi.mock('../activity', () => ({ logActivity: mocks.logActivity }));
+vi.mock('@/lib/finance/invoice-paid-event', () => ({ emitInvoicePaid: mocks.emitInvoicePaid }));
 vi.mock('@/lib/email', async () => ({
   ...(await vi.importActual<typeof import('@/lib/email')>('@/lib/email')),
   sendEmail: mocks.sendEmail,
@@ -110,11 +112,21 @@ describe('finance.updateInvoiceStatus', () => {
 
   it('issues and settles a fully discounted draft with a total compare-and-set', async () => {
     mocks.findUnique.mockResolvedValue({ status: 'DRAFT', total: 0 });
+    const settled = { id: 'invoice-1', status: 'PAID', total: 0, client: { name: 'Acme' } };
+    mocks.findUniqueOrThrow.mockResolvedValue(settled);
     await caller().updateInvoiceStatus({ id: 'invoice-1', status: 'SENT' });
     expect(mocks.updateMany).toHaveBeenCalledWith({
       where: { id: 'invoice-1', status: 'DRAFT', total: 0 },
       data: { status: 'PAID', sentAt: expect.any(Date), paidAt: expect.any(Date) },
     });
+    expect(mocks.emitInvoicePaid).toHaveBeenCalledOnce();
+    expect(mocks.emitInvoicePaid).toHaveBeenCalledWith(expect.anything(), expect.anything(), settled);
+  });
+
+  it('does not emit invoice.paid for an ordinary status change', async () => {
+    mocks.findUnique.mockResolvedValue({ status: 'DRAFT', total: 100 });
+    await caller().updateInvoiceStatus({ id: 'invoice-1', status: 'SENT' });
+    expect(mocks.emitInvoicePaid).not.toHaveBeenCalled();
   });
 
   it.each([0, 100])(
@@ -139,6 +151,7 @@ describe('finance.updateInvoiceStatus', () => {
             : { status: 'SENT', sentAt: expect.any(Date) },
       });
       expect(result.status).toBe(total === 0 ? 'PAID' : 'SENT');
+      expect(mocks.emitInvoicePaid).toHaveBeenCalledTimes(total === 0 ? 1 : 0);
     }
   );
 
@@ -157,5 +170,6 @@ describe('finance.updateInvoiceStatus', () => {
       code: 'CONFLICT',
     });
     expect(mocks.logActivity).not.toHaveBeenCalled();
+    expect(mocks.emitInvoicePaid).not.toHaveBeenCalled();
   });
 });

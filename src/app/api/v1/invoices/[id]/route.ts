@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { withApiAuth } from '@/lib/api-auth';
 import { readJson } from '@/lib/api-json';
 import { logActivity } from '@/server/activity';
+import { emitInvoicePaid } from '@/lib/finance/invoice-paid-event';
 import {
   INVOICE_STATUS_VALUES,
   invoiceStatusTransitionError,
@@ -86,6 +87,9 @@ export const PATCH = withApiAuth(
       where: { id },
       include: { client: { select: { name: true } } },
     });
+
+    // Issuing a zero-total invoice settles it; emit the same event as a payment.
+    if (invoice.status === 'PAID') emitInvoicePaid(authCtx.db, authCtx.entitlements, invoice);
 
     if (next === 'SENT' && existing.status !== 'SENT') {
       logActivity(authCtx.db, authCtx.userId, {

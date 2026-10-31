@@ -17,6 +17,7 @@ import {
 import { invoiceStatusTransitionError, invoiceStatusUpdate } from '@/lib/finance/invoice-status';
 import { calculateInvoiceMoney } from '@/lib/finance/invoice-money';
 import { MAX_MONEY, roundMoney, sumMoney } from '@/lib/finance/money';
+import { emitInvoicePaid } from '@/lib/finance/invoice-paid-event';
 
 // Monthly-equivalent multiplier for a recurring expense's billing interval, so an
 // ongoing subscription's run-rate can be folded into burn/profit (FIN-05).
@@ -65,6 +66,26 @@ const round2 = roundMoney;
 // so a sub-cent float artifact never tips an exact payoff into "overpayment" — and
 // never leaves a fully-paid invoice a hair short of PAID.
 const PAYMENT_EPSILON = 0.005;
+
+const INVOICE_CONFLICT_MESSAGE = 'Invoice changed concurrently. Refresh and try again.';
+
+/**
+ * Run an invoice write whose `where` pins the `updatedAt` version read under the
+ * row lock. tRPC batch siblings share one transaction, so `FOR UPDATE` cannot
+ * serialize them; every edit, payment and payment deletion therefore bumps the
+ * version, and a write based on a stale snapshot matches no row (P2025). The
+ * resulting error aborts the whole transaction, so nothing stale commits.
+ */
+async function writeInvoiceVersion<T>(write: () => Promise<T>): Promise<T> {
+  try {
+    return await write();
+  } catch (error) {
+    if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'P2025') {
+      throw new TRPCError({ code: 'CONFLICT', message: INVOICE_CONFLICT_MESSAGE });
+    }
+    throw error;
+  }
+}
 
 // A recurring expense's stored nextDueDate doesn't advance on its own, so once a
 // due date passes it goes stale (e.g. seeded "May 1" still showing in June). Roll
@@ -346,7 +367,7 @@ export const financeRouter = router({
         await tx.$queryRaw`SELECT id FROM invoices WHERE id = ${input.id} FOR UPDATE`;
         const current = await tx.invoice.findUnique({
           where: { id: input.id },
-          select: { status: true, tax: true, discount: true },
+          select: { status: true, tax: true, discount: true, updatedAt: true },
         });
         if (!current) throw new TRPCError({ code: 'NOT_FOUND', message: 'Invoice not found' });
         if (current.status !== 'DRAFT' && current.status !== 'SENT') {
@@ -401,25 +422,23 @@ export const financeRouter = router({
           data.paidAt = new Date();
         }
 
-        return tx.invoice.update({
-          where: { id: input.id },
-          data,
-          include: {
-            client: { include: { contacts: { where: { isPrimary: true }, take: 1 } } },
-            project: { select: { id: true, name: true } },
-            payments: { orderBy: { paidAt: 'desc' } },
-          },
-        });
+        // Every field above derives from this snapshot, so the write must fail if
+        // a batch sibling changed the invoice or its payments after the read.
+        return writeInvoiceVersion(() =>
+          tx.invoice.update({
+            where: { id: input.id, updatedAt: current.updatedAt },
+            data,
+            include: {
+              client: { include: { contacts: { where: { isPrimary: true }, take: 1 } } },
+              project: { select: { id: true, name: true } },
+              payments: { orderBy: { paidAt: 'desc' } },
+            },
+          })
+        );
       });
 
-      if (invoice.status === 'PAID') {
-        emitEvent(ctx.db, ctx.entitlements, 'invoice.paid', {
-          invoiceId: invoice.id,
-          total: Number(invoice.total),
-          currency: invoice.currency,
-          clientId: invoice.clientId,
-        });
-      }
+      // Only DRAFT/SENT invoices are editable, so PAID here is a fresh transition.
+      if (invoice.status === 'PAID') emitInvoicePaid(ctx.db, ctx.entitlements, invoice);
       const amountPaid = round2(invoice.payments.reduce((s, p) => s + Number(p.amount), 0));
       return { ...invoice, amountPaid, balance: round2(Number(invoice.total) - amountPaid) };
     }),
@@ -490,6 +509,8 @@ export const financeRouter = router({
             message: 'Invoice changed concurrently. Refresh and try again.',
           });
         }
+        // Issuing a zero-total draft settles it; integrations must see that.
+        if (issuedStatus.status === 'PAID') emitInvoicePaid(ctx.db, ctx.entitlements, invoice);
       }
 
       logActivity(ctx.db, ctx.session.user.id, {
@@ -555,6 +576,8 @@ export const financeRouter = router({
         include: { client: { select: { name: true } } },
       });
 
+      if (invoice.status === 'PAID') emitInvoicePaid(ctx.db, ctx.entitlements, invoice);
+
       if (next === 'SENT') {
         logActivity(ctx.db, ctx.session.user.id, {
           type: 'invoice_sent',
@@ -603,7 +626,14 @@ export const financeRouter = router({
         await tx.$queryRaw`SELECT id FROM invoices WHERE id = ${input.invoiceId} FOR UPDATE`;
         const invoice = await tx.invoice.findUnique({
           where: { id: input.invoiceId },
-          select: { id: true, status: true, total: true, currency: true, clientId: true },
+          select: {
+            id: true,
+            status: true,
+            total: true,
+            currency: true,
+            clientId: true,
+            updatedAt: true,
+          },
         });
         if (!invoice) throw new TRPCError({ code: 'NOT_FOUND', message: 'Invoice not found' });
 
@@ -645,6 +675,17 @@ export const financeRouter = router({
           });
         }
 
+        // Balance covered → mark PAID (the DRAFT/PAID guards above mean we only ever
+        // flip from SENT/OVERDUE here). Otherwise leave the status as-is but still
+        // bump the version, so a batched edit cannot reuse a stale payment total.
+        const fullyPaid = newPaid >= total - PAYMENT_EPSILON;
+        await writeInvoiceVersion(() =>
+          tx.invoice.update({
+            where: { id: invoice.id, updatedAt: invoice.updatedAt },
+            data: fullyPaid ? { status: 'PAID', paidAt: new Date() } : { updatedAt: new Date() },
+          })
+        );
+
         const payment = await tx.payment.create({
           data: {
             invoiceId: invoice.id,
@@ -656,14 +697,7 @@ export const financeRouter = router({
           },
         });
 
-        // Balance covered → mark PAID (the DRAFT/PAID guards above mean we only ever
-        // flip from SENT/OVERDUE here). Otherwise leave the status as-is.
-        const fullyPaid = newPaid >= total - PAYMENT_EPSILON;
         if (fullyPaid) {
-          await tx.invoice.update({
-            where: { id: invoice.id },
-            data: { status: 'PAID', paidAt: new Date() },
-          });
           paidEvent = {
             invoiceId: invoice.id,
             total,
@@ -709,7 +743,7 @@ export const financeRouter = router({
 
         const invoice = await tx.invoice.findUnique({
           where: { id: payment.invoiceId },
-          select: { id: true, status: true, total: true },
+          select: { id: true, status: true, total: true, updatedAt: true },
         });
         if (!invoice) return { invoiceId: payment.invoiceId, amountPaid: 0, balance: 0 };
 
@@ -720,12 +754,15 @@ export const financeRouter = router({
         });
         const amountPaid = round2(Number(agg._sum.amount ?? 0));
 
-        if (invoice.status === 'PAID' && amountPaid < total - PAYMENT_EPSILON) {
-          await tx.invoice.update({
-            where: { id: invoice.id },
-            data: { status: 'SENT', paidAt: null },
-          });
-        }
+        // Always bump the version: a batched edit must not settle against the
+        // payment total it read before this deletion.
+        const reopen = invoice.status === 'PAID' && amountPaid < total - PAYMENT_EPSILON;
+        await writeInvoiceVersion(() =>
+          tx.invoice.update({
+            where: { id: invoice.id, updatedAt: invoice.updatedAt },
+            data: reopen ? { status: 'SENT', paidAt: null } : { updatedAt: new Date() },
+          })
+        );
 
         return { invoiceId: invoice.id, amountPaid, balance: round2(total - amountPaid) };
       });

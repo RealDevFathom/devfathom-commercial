@@ -19,6 +19,8 @@ import { Prisma } from '@/generated/prisma/client';
 import type { AssistantHelpers, ToolSet } from '@/lib/ai/context';
 import { fromCurrencyGroups, diffByCurrency } from '@/lib/finance/currency';
 import { calculateInvoiceMoney } from '@/lib/finance/invoice-money';
+import { emitInvoicePaid } from '@/lib/finance/invoice-paid-event';
+import { resolveOrganizationEntitlements } from '@/lib/entitlements';
 import {
   invoiceStatusTransitionError,
   invoiceStatusUpdate,
@@ -638,6 +640,17 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
         where: { id: matches[0].id },
         include: { client: { select: { name: true } } },
       });
+
+      // Issuing a zero-total invoice settles it; emit the same event as a payment.
+      // Webhook fan-out is best-effort and must not fail a committed transition.
+      if (invoice.status === 'PAID') {
+        try {
+          const entitlements = await resolveOrganizationEntitlements(h.ctx.organizationId, db);
+          emitInvoicePaid(db, entitlements, invoice);
+        } catch (err) {
+          console.error('[webhooks] invoice.paid emit failed', err);
+        }
+      }
 
       const totalLabel = `$${Number(invoice.total).toLocaleString()}`;
       if (status === 'SENT') {

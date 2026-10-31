@@ -12,7 +12,11 @@ const mocks = vi.hoisted(() => ({
   paymentCreate: vi.fn(),
   logActivity: vi.fn(),
   emitEvent: vi.fn(),
+  emitInvoicePaid: vi.fn(),
 }));
+
+const VERSION = new Date('2026-10-01T00:00:00.000Z');
+const staleVersion = () => Object.assign(new Error('No record found'), { code: 'P2025' });
 
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/abac', async () => ({
@@ -22,6 +26,7 @@ vi.mock('@/lib/abac', async () => ({
 vi.mock('@/lib/entitlements', () => ({ hasModule: vi.fn(() => true) }));
 vi.mock('../activity', () => ({ logActivity: mocks.logActivity }));
 vi.mock('@/lib/webhooks', () => ({ emitEvent: mocks.emitEvent }));
+vi.mock('@/lib/finance/invoice-paid-event', () => ({ emitInvoicePaid: mocks.emitInvoicePaid }));
 vi.mock('../audit', () => ({
   ipFromHeaders: vi.fn(() => null),
   isAuditExcludedPath: vi.fn(() => true),
@@ -144,7 +149,12 @@ describe('finance.updateInvoice money calculation and settlement serialization',
   });
 
   it('rounds updated line items and tax half up before persisting totals', async () => {
-    mocks.findUnique.mockResolvedValue({ status: 'DRAFT', tax: 0, discount: 0 });
+    mocks.findUnique.mockResolvedValue({
+      status: 'DRAFT',
+      tax: 0,
+      discount: 0,
+      updatedAt: VERSION,
+    });
     mocks.update.mockResolvedValue({
       id: 'invoice-1',
       total: 2.03,
@@ -162,6 +172,7 @@ describe('finance.updateInvoice money calculation and settlement serialization',
 
     expect(mocks.update).toHaveBeenCalledWith(
       expect.objectContaining({
+        where: { id: 'invoice-1', updatedAt: VERSION },
         data: {
           items: [
             { description: 'First', quantity: 1, rate: 1.005, amount: 1.01 },
@@ -223,8 +234,31 @@ describe('finance.updateInvoice money calculation and settlement serialization',
       );
       expect(result).toMatchObject({ status: 'PAID', balance: 0, amountPaid: amount });
       expect(mocks.paymentCreate).not.toHaveBeenCalled();
+      expect(mocks.emitInvoicePaid).toHaveBeenCalledOnce();
     }
   );
+
+  it('rejects an edit whose locked snapshot was changed by a batch sibling', async () => {
+    mocks.findUnique.mockResolvedValue({
+      status: 'SENT',
+      tax: 0,
+      discount: 0,
+      updatedAt: VERSION,
+    });
+    mocks.update.mockRejectedValueOnce(staleVersion());
+
+    await expect(
+      caller().updateInvoice({
+        id: 'invoice-1',
+        items: [{ description: 'Work', quantity: 1, rate: 100 }],
+        discount: 100,
+      })
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+    expect(mocks.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'invoice-1', updatedAt: VERSION } })
+    );
+    expect(mocks.emitInvoicePaid).not.toHaveBeenCalled();
+  });
 
   it('reads omitted adjustments under the invoice lock and preserves them', async () => {
     mocks.findUnique.mockResolvedValue({ status: 'SENT', tax: 10, discount: 20 });
@@ -253,6 +287,7 @@ describe('finance.updateInvoice money calculation and settlement serialization',
     });
     expect(mocks.update.mock.calls[0][0].data).not.toHaveProperty('paidAt');
     expect(mocks.update.mock.calls[0][0].data).not.toHaveProperty('status');
+    expect(mocks.emitInvoicePaid).not.toHaveBeenCalled();
   });
 
   it('rejects an updated line amount overflow before opening a transaction', async () => {
@@ -300,11 +335,18 @@ describe('invoice payment settlement serialization', () => {
       total: 10,
       currency: 'USD',
       clientId: 'client-1',
+      updatedAt: VERSION,
     });
     mocks.paymentAggregate.mockResolvedValue({ _sum: { amount: 0 } });
     mocks.paymentCreate.mockResolvedValue({ id: 'payment-1', amount: 5 });
 
     await caller().addPayment({ invoiceId: 'invoice-1', amount: 5 });
+
+    // A partial payment still bumps the version a batched edit must match.
+    expect(mocks.update).toHaveBeenCalledWith({
+      where: { id: 'invoice-1', updatedAt: VERSION },
+      data: { updatedAt: expect.any(Date) },
+    });
 
     expect(mocks.queryRaw).toHaveBeenCalledWith(
       ['SELECT id FROM invoices WHERE id = ', ' FOR UPDATE'],
@@ -321,7 +363,12 @@ describe('invoice payment settlement serialization', () => {
   it('resolves the invoice then locks it before deleting and recomputing', async () => {
     mocks.paymentFindUnique.mockResolvedValue({ id: 'payment-1', invoiceId: 'invoice-1' });
     mocks.paymentDelete.mockResolvedValue({ id: 'payment-1' });
-    mocks.findUnique.mockResolvedValue({ id: 'invoice-1', status: 'PAID', total: 10 });
+    mocks.findUnique.mockResolvedValue({
+      id: 'invoice-1',
+      status: 'PAID',
+      total: 10,
+      updatedAt: VERSION,
+    });
     mocks.paymentAggregate.mockResolvedValue({ _sum: { amount: 5 } });
     mocks.update.mockResolvedValue({ id: 'invoice-1', status: 'SENT' });
 
@@ -344,9 +391,27 @@ describe('invoice payment settlement serialization', () => {
       mocks.paymentAggregate.mock.invocationCallOrder[0]
     );
     expect(mocks.update).toHaveBeenCalledWith({
-      where: { id: 'invoice-1' },
+      where: { id: 'invoice-1', updatedAt: VERSION },
       data: { status: 'SENT', paidAt: null },
     });
+  });
+
+  it('rejects a payment whose locked snapshot was changed by a batch sibling', async () => {
+    mocks.findUnique.mockResolvedValue({
+      id: 'invoice-1',
+      status: 'SENT',
+      total: 10,
+      currency: 'USD',
+      clientId: 'client-1',
+      updatedAt: VERSION,
+    });
+    mocks.update.mockRejectedValueOnce(staleVersion());
+
+    await expect(caller().addPayment({ invoiceId: 'invoice-1', amount: 10 })).rejects.toMatchObject(
+      { code: 'CONFLICT' }
+    );
+    expect(mocks.paymentCreate).not.toHaveBeenCalled();
+    expect(mocks.emitEvent).not.toHaveBeenCalled();
   });
 
   it('settles using the same rounded cents that are persisted for the payment', async () => {
@@ -356,6 +421,7 @@ describe('invoice payment settlement serialization', () => {
       total: 1.21,
       currency: 'USD',
       clientId: 'client-1',
+      updatedAt: VERSION,
     });
     mocks.paymentAggregate.mockResolvedValue({ _sum: { amount: 0.2 } });
     mocks.paymentCreate.mockResolvedValue({ id: 'payment-1', amount: 1.01 });
@@ -367,7 +433,7 @@ describe('invoice payment settlement serialization', () => {
     );
     expect(result).toMatchObject({ amountPaid: 1.21, balance: 0, status: 'PAID' });
     expect(mocks.update).toHaveBeenCalledWith({
-      where: { id: 'invoice-1' },
+      where: { id: 'invoice-1', updatedAt: VERSION },
       data: { status: 'PAID', paidAt: expect.any(Date) },
     });
     expect(mocks.emitEvent).toHaveBeenCalledWith(
