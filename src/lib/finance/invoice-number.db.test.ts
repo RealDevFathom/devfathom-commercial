@@ -1,8 +1,12 @@
+// @vitest-environment node
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { PrismaPg } from '@prisma/adapter-pg';
+import { PrismaClient, type Prisma } from '@/generated/prisma/client';
+import { advanceInvoiceNumberSequence, reserveInvoiceNumber } from './invoice-number';
 
 const ownerUrl = process.env.OWNER_URL ?? process.env.MIGRATION_DATABASE_URL ?? '';
 const runtimeUrl = process.env.TEST_DATABASE_URL ?? '';
@@ -34,12 +38,30 @@ async function reserve(client: pg.Client, organizationId: string, year: number) 
 }
 
 describeDatabase('atomic tenant invoice numbers on migrated PostgreSQL', () => {
-  const owner = new pg.Client({ connectionString: ownerUrl });
+  const schemaOwner = new pg.Client({ connectionString: ownerUrl });
+  // Own the fixture tables with the restricted role so FORCE RLS applies to the
+  // migration even when the supplied schema-setup URL belongs to a superuser.
+  const owner = new pg.Client({ connectionString: runtimeUrl });
+  const db = new PrismaClient({
+    adapter: new PrismaPg({ connectionString: runtimeUrl }, { schema }),
+  });
+
+  const tenant = <T>(organizationId: string, run: (tx: Prisma.TransactionClient) => Promise<T>) =>
+    db.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe(`SET LOCAL search_path TO ${quote(schema)}, public`);
+      await tx.$queryRaw`SELECT set_config('app.current_organization_id', ${organizationId}, true),
+        set_config('app.is_platform_admin', 'false', true)`;
+      return run(tx);
+    });
 
   beforeAll(async () => {
     if (ownerUrl === runtimeUrl) throw new Error('Owner and restricted runtime URLs must differ');
+    await schemaOwner.connect();
+    await schemaOwner.query(`CREATE SCHEMA ${quote(schema)}`);
+    await schemaOwner.query(
+      `GRANT USAGE, CREATE ON SCHEMA ${quote(schema)} TO ${quote(runtimeRole)}`
+    );
     await owner.connect();
-    await owner.query(`CREATE SCHEMA ${quote(schema)}`);
     await owner.query(`SET search_path TO ${quote(schema)}, public`);
     await owner.query(`SET app.is_platform_admin = 'true'`);
     await owner.query(`
@@ -54,7 +76,20 @@ describeDatabase('atomic tenant invoice numbers on migrated PostgreSQL', () => {
         ('legacy-a-2', 'tenant-a', 'INV-2026-019'),
         ('legacy-b-1', 'tenant-b', 'INV-2026-007'),
         ('legacy-custom', 'tenant-a', 'CUSTOM-42');
+      ALTER TABLE invoices ENABLE ROW LEVEL SECURITY;
+      ALTER TABLE invoices FORCE ROW LEVEL SECURITY;
+      CREATE POLICY tenant_isolation ON invoices
+        USING (current_setting('app.is_platform_admin', true) = 'true'
+          OR "organizationId" = NULLIF(current_setting('app.current_organization_id', true), ''))
+        WITH CHECK (current_setting('app.is_platform_admin', true) = 'true'
+          OR "organizationId" = NULLIF(current_setting('app.current_organization_id', true), ''));
     `);
+    await owner.query(`SET app.is_platform_admin = 'false'`);
+    const role = await owner.query(
+      `SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user`
+    );
+    expect(role.rows[0]).toEqual({ rolsuper: false, rolbypassrls: false });
+    expect((await owner.query('SELECT id FROM invoices')).rowCount).toBe(0);
     const migration = await readFile(
       path.join(
         process.cwd(),
@@ -63,16 +98,19 @@ describeDatabase('atomic tenant invoice numbers on migrated PostgreSQL', () => {
       'utf8'
     );
     await owner.query(migration);
-    await owner.query(`
-      GRANT USAGE ON SCHEMA ${quote(schema)} TO ${quote(runtimeRole)};
-      GRANT SELECT, INSERT, UPDATE, DELETE ON invoices, invoice_number_sequences TO ${quote(runtimeRole)};
-    `);
+    // Migration privilege must be local to its transaction.
+    expect(
+      (await owner.query(`SELECT current_setting('app.is_platform_admin') AS admin`)).rows
+    ).toEqual([{ admin: 'false' }]);
+    await owner.query(`SET app.is_platform_admin = 'true'`);
   });
 
   afterAll(async () => {
     if (!ownerUrl || !runtimeUrl) return;
-    await owner.query(`DROP SCHEMA IF EXISTS ${quote(schema)} CASCADE`);
+    await db.$disconnect();
     await owner.end();
+    await schemaOwner.query(`DROP SCHEMA IF EXISTS ${quote(schema)} CASCADE`);
+    await schemaOwner.end();
   });
 
   it('backfills each tenant/year maximum without changing legacy invoice rows', async () => {
@@ -134,5 +172,52 @@ describeDatabase('atomic tenant invoice numbers on migrated PostgreSQL', () => {
     } finally {
       await client.end();
     }
+  });
+
+  it('reserves first numbers concurrently through the application Prisma allocator', async () => {
+    const numbers = await Promise.all(
+      Array.from({ length: 12 }, () =>
+        tenant('tenant-a', (tx) => reserveInvoiceNumber(tx, 'tenant-a', 2030))
+      )
+    );
+    expect(numbers.toSorted()).toEqual(
+      Array.from({ length: 12 }, (_, index) => `INV-2030-${String(index + 1).padStart(3, '0')}`)
+    );
+    expect(await tenant('tenant-b', (tx) => reserveInvoiceNumber(tx, 'tenant-b', 2030))).toBe(
+      'INV-2030-001'
+    );
+  });
+
+  it('advances seeded numbers without rewinding a live allocator', async () => {
+    await tenant('tenant-a', async (tx) => {
+      await advanceInvoiceNumberSequence(tx, 'tenant-a', 2031, 17);
+      await tx.$executeRaw`INSERT INTO invoices (id, "organizationId", "invoiceNumber")
+        VALUES ('demo-seeded', 'tenant-a', 'INV-2031-017')`;
+    });
+    expect(await tenant('tenant-a', (tx) => reserveInvoiceNumber(tx, 'tenant-a', 2031))).toBe(
+      'INV-2031-018'
+    );
+    await tenant('tenant-a', (tx) => advanceInvoiceNumberSequence(tx, 'tenant-a', 2031, 5));
+    expect(await tenant('tenant-a', (tx) => reserveInvoiceNumber(tx, 'tenant-a', 2031))).toBe(
+      'INV-2031-019'
+    );
+  });
+
+  it('rolls back application reservations and seed advances when invoice creation fails', async () => {
+    for (const allocate of [
+      (tx: Prisma.TransactionClient) => reserveInvoiceNumber(tx, 'tenant-a', 2032),
+      (tx: Prisma.TransactionClient) => advanceInvoiceNumberSequence(tx, 'tenant-a', 2032, 99),
+    ]) {
+      await expect(
+        tenant('tenant-a', async (tx) => {
+          await allocate(tx);
+          await tx.$executeRaw`INSERT INTO invoices (id, "organizationId", "invoiceNumber")
+            VALUES ('legacy-a-1', 'tenant-a', 'INV-2032-001')`;
+        })
+      ).rejects.toThrow();
+    }
+    expect(await tenant('tenant-a', (tx) => reserveInvoiceNumber(tx, 'tenant-a', 2032))).toBe(
+      'INV-2032-001'
+    );
   });
 });

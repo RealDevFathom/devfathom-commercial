@@ -1,3 +1,9 @@
+BEGIN;
+
+-- Existing invoices have forced RLS, including for the migration owner. Read
+-- every tenant during the backfill, then restore scope when this migration ends.
+SELECT set_config('app.is_platform_admin', 'true', true);
+
 -- Invoice numbers are meaningful within a tenant, not globally. Replace the
 -- global constraint before backfilling tenant/year allocators.
 DROP INDEX "invoices_invoiceNumber_key";
@@ -34,3 +40,5 @@ CREATE POLICY "tenant_isolation" ON "invoice_number_sequences"
     current_setting('app.is_platform_admin', true) = 'true'
     OR "organizationId" = NULLIF(current_setting('app.current_organization_id', true), '')
   );
+
+COMMIT;

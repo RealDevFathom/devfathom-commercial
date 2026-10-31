@@ -11,6 +11,7 @@ import { defaultDepartmentRowsForVertical } from '../src/lib/vertical-catalog.js
 import { AGENCY_SUITE_MODULES, syncPlatformCatalog } from './catalog-sync.js';
 import { upsertPlatformAdmin } from './platform-admin.js';
 import { upsertStagingAdmin } from './staging-admin.js';
+import { advanceInvoiceNumberSequence } from '../src/lib/finance/invoice-number.js';
 
 // Seed writes through row-level security as a platform admin. Use the migration
 // role when it is set so the application role can stay NOSUPERUSER NOBYPASSRLS.
@@ -957,11 +958,7 @@ async function seedTenantData(tx: Prisma.TransactionClient) {
     [2025, 8],
     [2026, 5],
   ] as const) {
-    await tx.invoiceNumberSequence.upsert({
-      where: { organizationId_year: { organizationId: 'org_devfathom', year } },
-      create: { organizationId: 'org_devfathom', year, lastNumber },
-      update: { lastNumber: { set: lastNumber } },
-    });
+    await advanceInvoiceNumberSequence(tx, 'org_devfathom', year, lastNumber);
   }
 
   // Transactions — Income from paid invoices

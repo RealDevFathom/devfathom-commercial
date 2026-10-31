@@ -32,6 +32,7 @@ import pg from 'pg';
 import { randomBytes } from 'crypto';
 import { hash } from 'bcryptjs';
 import 'dotenv/config';
+import { advanceInvoiceNumberSequence } from '../src/lib/finance/invoice-number.js';
 
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
 const adapter = new PrismaPg(pool);
@@ -899,26 +900,35 @@ async function main() {
       const project = byProj[inv.project];
       if (!client) continue;
       const issued = ymd(Y, inv.month, inv.day);
-      await prisma.invoice.create({
-        data: {
-          invoiceNumber: inv.number,
-          clientId: client.id,
-          projectId: project?.id ?? null,
-          items: [
-            { description: 'Development Services', quantity: 1, rate: inv.total * 0.7, amount: inv.total * 0.7 },
-            { description: 'Design & UX', quantity: 1, rate: inv.total * 0.2, amount: inv.total * 0.2 },
-            { description: 'Project Management', quantity: 1, rate: inv.total * 0.1, amount: inv.total * 0.1 },
-          ],
-          subtotal: inv.total,
-          tax: 0,
-          total: inv.total,
-          currency: 'USD',
-          status: inv.status,
-          dueDate: new Date(issued.getTime() + 30 * DAY),
-          sentAt: inv.status !== 'DRAFT' ? issued : null,
-          paidAt: inv.paidMonth != null ? ymd(Y, inv.paidMonth, inv.paidDay!) : null,
-          createdAt: issued,
-        },
+      await prisma.$transaction(async (tx) => {
+        await advanceInvoiceNumberSequence(
+          tx,
+          client.organizationId,
+          Y,
+          Number(inv.number.split('-')[2])
+        );
+        await tx.invoice.create({
+          data: {
+            organizationId: client.organizationId,
+            invoiceNumber: inv.number,
+            clientId: client.id,
+            projectId: project?.id ?? null,
+            items: [
+              { description: 'Development Services', quantity: 1, rate: inv.total * 0.7, amount: inv.total * 0.7 },
+              { description: 'Design & UX', quantity: 1, rate: inv.total * 0.2, amount: inv.total * 0.2 },
+              { description: 'Project Management', quantity: 1, rate: inv.total * 0.1, amount: inv.total * 0.1 },
+            ],
+            subtotal: inv.total,
+            tax: 0,
+            total: inv.total,
+            currency: 'USD',
+            status: inv.status,
+            dueDate: new Date(issued.getTime() + 30 * DAY),
+            sentAt: inv.status !== 'DRAFT' ? issued : null,
+            paidAt: inv.paidMonth != null ? ymd(Y, inv.paidMonth, inv.paidDay!) : null,
+            createdAt: issued,
+          },
+        });
       });
       invCount++;
       // income transaction on payment
