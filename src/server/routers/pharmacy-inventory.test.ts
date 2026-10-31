@@ -67,7 +67,7 @@ function makeDb() {
     pharmacyStockMovement: model(),
     pharmacyStockBalance: model(),
     pharmacyRecallQuarantineAction: {
-      aggregate: vi.fn().mockResolvedValue({ _sum: { quantityUnits: null } }),
+      findMany: vi.fn().mockResolvedValue([]),
     },
     pharmacyCustodyRecord: model(),
     pharmacyAllocationOverride: model(),
@@ -433,7 +433,7 @@ describe('manual quarantine resolution authorization', () => {
         reason: 'Inspection passed',
       }),
     });
-    expect(db.pharmacyRecallQuarantineAction.aggregate).toHaveBeenCalledWith({
+    expect(db.pharmacyRecallQuarantineAction.findMany).toHaveBeenCalledWith({
       where: {
         organizationId: 'org_a',
         branchId: 'branch_a',
@@ -441,16 +441,16 @@ describe('manual quarantine resolution authorization', () => {
         stockLocationId: 'location_1',
         reversedAt: null,
       },
-      _sum: { quantityUnits: true },
+      select: { quantityUnits: true, heldMovementId: true },
     });
   });
 
   it.each(['release', 'write-off'])(
     'refuses regulatory stock through inventory-only %s before posting movements',
     async (operation) => {
-      db.pharmacyRecallQuarantineAction.aggregate.mockResolvedValue({
-        _sum: { quantityUnits: 20 },
-      });
+      db.pharmacyRecallQuarantineAction.findMany.mockResolvedValue([
+        { quantityUnits: 20, heldMovementId: 'recall-held-1' },
+      ]);
       const result =
         operation === 'release'
           ? caller().releaseQuarantinedPart(input)

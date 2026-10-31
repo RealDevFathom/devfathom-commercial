@@ -644,6 +644,122 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
     }
   );
 
+  it.each([
+    ['release', 'sealed'],
+    ['write-off', 'sealed'],
+    ['release', 'loose'],
+    ['write-off', 'loose'],
+  ] as const)(
+    'keeps a DRAP recall reversible after manual %s of %s stock',
+    async (operation, manualArrangement) => {
+      const { ingestDrapNotice, reverseRecallQuarantine } = await import('./drap-monitoring');
+      const fixture = await scenario(ORG_A, BRANCH_A, 'mixed-recall-arrangement');
+      const scope = scopeOf(fixture);
+      const { lot, recallId } = await inOrg(ORG_A, async (db) => {
+        const { lot } = await stockLot(db, fixture, {
+          expiresAt: LATER,
+          units: 30,
+          label: 'mixed-recall-arrangement',
+        });
+        const position = { inventoryLotId: lot.id, stockLocationId: fixture.locationId };
+        if (manualArrangement === 'loose') {
+          await deps.ledger.breakPack(db, scope, {
+            ...position,
+            requiredLooseUnits: 10,
+            idempotencyKey: tag('manual-loose-pack'),
+            at: NOW,
+          });
+        }
+        await deps.operations.quarantinePart(db, scope, {
+          ...position,
+          units: 10,
+          reason: 'Manual inspection hold',
+          idempotencyKeyPrefix: tag('manual-arrangement-hold'),
+        });
+        if (manualArrangement === 'sealed') {
+          await deps.ledger.breakPack(db, scope, {
+            ...position,
+            requiredLooseUnits: 20,
+            idempotencyKey: tag('recall-loose-packs'),
+            at: NOW,
+          });
+        }
+        const registration = tag('mixed-recall-registration');
+        await db.medicine.update({
+          where: { id: fixture.medicineId },
+          data: { drapRegistrationNumber: registration },
+        });
+        const ingest = await ingestDrapNotice(db, scope, 'MANUAL', {
+          kind: 'RECALL',
+          sourceReference: tag('mixed-arrangement-recall'),
+          drapRegistrationNumber: registration,
+          reason: 'Regulatory recall',
+        });
+        const action = await db.pharmacyRecallQuarantineAction.findFirstOrThrow({
+          where: { ingestId: ingest.id },
+        });
+        expect(action.quantityUnits).toBe(20);
+        return { lot, recallId: action.recallNoticeId };
+      });
+
+      await inOrg(ORG_A, async (db) => {
+        const input = {
+          inventoryLotId: lot.id,
+          stockLocationId: fixture.locationId,
+          units: 10,
+          reason: 'Resolve manual inspection hold',
+        };
+        const result =
+          operation === 'release'
+            ? await deps.operations.releaseQuarantinedPart(db, scope, {
+                ...input,
+                idempotencyKeyPrefix: tag('manual-arrangement-release'),
+              })
+            : await deps.operations.writeOff(db, scope, {
+                ...input,
+                disposition: 'QUARANTINE',
+                witnessId: 'user_witness',
+                evidenceRef: 'destruction-certificate',
+                idempotencyKey: tag('manual-arrangement-write-off'),
+              });
+        expect('removed' in result ? result.removed : result.movement).toMatchObject({
+          quantityUnits: -10,
+          sealedPackDelta: manualArrangement === 'sealed' ? -1 : 0,
+          looseUnitDelta: manualArrangement === 'loose' ? -10 : 0,
+        });
+        expect(
+          await db.pharmacyStockBalance.findFirst({
+            where: { inventoryLotId: lot.id, disposition: 'QUARANTINE' },
+          })
+        ).toMatchObject({
+          onHandUnits: 20,
+          sealedPacks: manualArrangement === 'sealed' ? 0 : 2,
+          looseUnits: manualArrangement === 'sealed' ? 20 : 0,
+        });
+      });
+
+      // Reverse in a new transaction to exercise the persisted stock arrangement.
+      await inOrg(ORG_A, async (db) => {
+        expect(
+          await reverseRecallQuarantine(db, scope, recallId, 'Regulatory clearance')
+        ).toMatchObject({ status: 'CLOSED' });
+        expect(
+          await db.pharmacyStockBalance.findFirst({
+            where: { inventoryLotId: lot.id, disposition: 'AVAILABLE' },
+          })
+        ).toMatchObject({ onHandUnits: operation === 'release' ? 30 : 20 });
+        expect(
+          await db.pharmacyStockBalance.findFirst({
+            where: { inventoryLotId: lot.id, disposition: 'QUARANTINE' },
+          })
+        ).toMatchObject({ onHandUnits: 0, sealedPacks: 0, looseUnits: 0 });
+        expect(
+          await db.pharmacyRecallQuarantineAction.findFirst({ where: { recallNoticeId: recallId } })
+        ).toMatchObject({ reversedById: ACTOR, reversedAt: expect.any(Date) });
+      });
+    }
+  );
+
   it.each(['release', 'write-off'] as const)(
     'preserves the recall reserve during a concurrent manual release and %s',
     async (operation) => {

@@ -10,7 +10,7 @@ function assertPositive(units: number) {
 }
 
 /** Keep recall-managed units available for the safety-authorized reversal. */
-async function assertManualQuarantineAvailable(
+async function manualQuarantineBalance(
   db: ScopedDb,
   scope: LedgerScope,
   input: { inventoryLotId: string; stockLocationId: string; units: number }
@@ -29,7 +29,7 @@ async function assertManualQuarantineAvailable(
     ORDER BY "disposition"
     FOR UPDATE
   `);
-  const [balance, recallReserve] = await Promise.all([
+  const [balance, recallActions] = await Promise.all([
     db.pharmacyStockBalance.findFirst({
       where: {
         organizationId: scope.organizationId,
@@ -38,9 +38,9 @@ async function assertManualQuarantineAvailable(
         stockLocationId: input.stockLocationId,
         disposition: 'QUARANTINE',
       },
-      select: { onHandUnits: true },
+      select: { onHandUnits: true, sealedPacks: true, looseUnits: true },
     }),
-    db.pharmacyRecallQuarantineAction.aggregate({
+    db.pharmacyRecallQuarantineAction.findMany({
       where: {
         organizationId: scope.organizationId,
         branchId: scope.branchId,
@@ -48,12 +48,35 @@ async function assertManualQuarantineAvailable(
         stockLocationId: input.stockLocationId,
         reversedAt: null,
       },
-      _sum: { quantityUnits: true },
+      select: { quantityUnits: true, heldMovementId: true },
     }),
   ]);
-  if (!balance || balance.onHandUnits - (recallReserve._sum.quantityUnits ?? 0) < input.units) {
+  const reservedUnits = recallActions.reduce((sum, action) => sum + action.quantityUnits, 0);
+  if (!balance || balance.onHandUnits - reservedUnits < input.units) {
     throw new PharmacyInventoryError('INSUFFICIENT_STOCK');
   }
+  if (!recallActions.length) return balance;
+  // Reversal negates each original movement's exact arrangement. Manual removals
+  // must leave those sealed packs and loose units intact, not just the total.
+  const recallReserve = await db.pharmacyStockMovement.aggregate({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      inventoryLotId: input.inventoryLotId,
+      stockLocationId: input.stockLocationId,
+      id: { in: recallActions.map((action) => action.heldMovementId) },
+    },
+    _sum: { sealedPackDelta: true, looseUnitDelta: true },
+  });
+  const manual = {
+    onHandUnits: balance.onHandUnits - reservedUnits,
+    sealedPacks: balance.sealedPacks - (recallReserve._sum.sealedPackDelta ?? 0),
+    looseUnits: balance.looseUnits - (recallReserve._sum.looseUnitDelta ?? 0),
+  };
+  if (manual.sealedPacks < 0 || manual.looseUnits < 0) {
+    throw new PharmacyInventoryError('INSUFFICIENT_STOCK');
+  }
+  return manual;
 }
 
 async function removalArrangement(
@@ -65,15 +88,18 @@ async function removalArrangement(
   unitsPerPack: number,
   disposition: 'AVAILABLE' | 'QUARANTINE' = 'AVAILABLE'
 ) {
-  const balance = await db.pharmacyStockBalance.findFirst({
-    where: {
-      organizationId: scope.organizationId,
-      branchId: scope.branchId,
-      inventoryLotId,
-      stockLocationId,
-      disposition,
-    },
-  });
+  const balance =
+    disposition === 'QUARANTINE'
+      ? await manualQuarantineBalance(db, scope, { inventoryLotId, stockLocationId, units })
+      : await db.pharmacyStockBalance.findFirst({
+          where: {
+            organizationId: scope.organizationId,
+            branchId: scope.branchId,
+            inventoryLotId,
+            stockLocationId,
+            disposition,
+          },
+        });
   if (!balance || balance.onHandUnits < units)
     throw new PharmacyInventoryError('INSUFFICIENT_STOCK');
   const looseUnits = Math.min(balance.looseUnits, units);
@@ -222,9 +248,6 @@ export async function writeOff(
     },
   });
   if (!lot) throw new PharmacyInventoryError('CROSS_BRANCH_REFERENCE');
-  if (input.disposition === 'QUARANTINE') {
-    await assertManualQuarantineAvailable(db, scope, input);
-  }
   const a = await removalArrangement(
     db,
     scope,
@@ -346,7 +369,6 @@ export async function releaseQuarantinedPart(
     },
   });
   if (!lot) throw new PharmacyInventoryError('CROSS_BRANCH_REFERENCE');
-  await assertManualQuarantineAvailable(db, scope, input);
   const a = await removalArrangement(
     db,
     scope,
