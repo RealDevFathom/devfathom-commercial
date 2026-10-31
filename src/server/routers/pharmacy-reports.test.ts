@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -103,6 +104,60 @@ function pvCaller() {
   mocks.branchFindFirst.mockResolvedValue({ id: 'branch_1' });
   return caller();
 }
+
+describe('delivery-radius profitability capability boundary', () => {
+  const input = {
+    estimatedOrderRevenueMinor: 2_000,
+    estimatedOrderCogsMinor: 1_000,
+    baseDeliveryCostMinor: 100,
+    deliveryCostPerKmMinor: 50,
+    radiiKm: [1, 5],
+  };
+
+  beforeEach(() => {
+    vi.mocked(hasModule).mockReturnValue(true);
+  });
+
+  it('denies callers without reports:financial', async () => {
+    mocks.can.mockResolvedValue(false);
+    await expect(caller('EMPLOYEE').deliveryRadiusProfitability(input)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mocks.can).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user_admin' }),
+      'reports:financial',
+      undefined,
+      expect.objectContaining({ source: 'TRPC' })
+    );
+  });
+
+  it('preserves solo-owner access with the all-capability role', async () => {
+    mocks.can.mockResolvedValue(true);
+    await expect(caller('ADMIN').deliveryRadiusProfitability(input)).resolves.toMatchObject({
+      basis: 'CONFIGURED_ESTIMATE',
+      rows: [expect.objectContaining({ radiusKm: 1 }), expect.objectContaining({ radiusKm: 5 })],
+    });
+  });
+
+  it('denies the disabled Reports module even with financial capability', async () => {
+    mocks.can.mockResolvedValue(true);
+    vi.mocked(hasModule).mockReturnValue(false);
+    await expect(caller().deliveryRadiusProfitability(input)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+  });
+
+  it('rejects overflowing configured estimates as invalid input', async () => {
+    mocks.can.mockResolvedValue(true);
+    await expect(
+      caller().deliveryRadiusProfitability({
+        ...input,
+        baseDeliveryCostMinor: Number.MAX_SAFE_INTEGER,
+        deliveryCostPerKmMinor: Number.MAX_SAFE_INTEGER,
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+  });
+});
 
 describe('normal Reports daily work pack', () => {
   const input = { from: '2026-09-01', to: '2026-09-10', asOf: '2026-09-11T00:00:00Z' };

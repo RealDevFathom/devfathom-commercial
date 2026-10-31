@@ -250,10 +250,27 @@ export const pharmacyPrescriptionsRouter = router({
       }
       const medicines = await ctx.db.medicine.findMany({
         where: { organizationId: ctx.entitlements.organizationId, saleable: true },
-        select: { id: true, productName: true, brandName: true },
+        select: {
+          id: true,
+          productName: true,
+          brandName: true,
+          strengths: {
+            select: { value: true, unit: true, ingredient: { select: { name: true } } },
+          },
+        },
         orderBy: { productName: 'asc' },
       });
-      return proposeRxPrefill(extraction, medicines);
+      return proposeRxPrefill(
+        extraction,
+        medicines.map((medicine) => ({
+          ...medicine,
+          strengths: medicine.strengths.map((strength) => ({
+            ingredient: strength.ingredient.name,
+            value: strength.value.toString(),
+            unit: strength.unit,
+          })),
+        }))
+      );
     }),
 
   capture: fileProcedure

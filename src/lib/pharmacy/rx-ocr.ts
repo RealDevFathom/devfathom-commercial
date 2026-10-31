@@ -251,6 +251,7 @@ export type RxPrefillMedicine = Readonly<{
   id: string;
   productName: string;
   brandName: string | null;
+  strengths?: readonly Readonly<{ ingredient: string; value: string | number; unit: string }>[];
 }>;
 
 export type RxPrefillLine = Readonly<{
@@ -268,6 +269,25 @@ export type RxOcrPrefill = Readonly<{
   adapter: RxOcrAdapterName;
   adapterVersion: string;
   lines: readonly RxPrefillLine[];
+  /** A review-only cart: it cannot be tendered until a pharmacist confirms it. */
+  draftCart: RxDraftCart;
+}>;
+
+export type RxDraftCart = Readonly<{
+  status: 'AWAITING_PHARMACIST_CONFIRMATION';
+  canTender: false;
+  lines: readonly Readonly<{
+    lineNumber: number;
+    readSalt: string | null;
+    readStrength: string | null;
+    candidates: readonly Readonly<{
+      medicineId: string;
+      label: string;
+      matchedSalt: string;
+      matchedStrength: string;
+      match: 'SALT_AND_STRENGTH';
+    }>[];
+  }>[];
 }>;
 
 const token = (value: string) =>
@@ -277,30 +297,95 @@ const token = (value: string) =>
     .replace(/[^a-z0-9]+/g, ' ')
     .trim();
 
+const sameNameOrQualifiedName = (left: string, right: string) => {
+  const normalizedLeft = token(left);
+  const normalizedRight = token(right);
+  if (!normalizedLeft || !normalizedRight) return false;
+  return (
+    normalizedLeft === normalizedRight ||
+    ` ${normalizedLeft} `.includes(` ${normalizedRight} `) ||
+    ` ${normalizedRight} `.includes(` ${normalizedLeft} `)
+  );
+};
+
+// Decimal points, signs and unit separators carry meaning; only ignore spacing and case.
+const strengthToken = (value: string) => value.normalize('NFKC').toLowerCase().replace(/\s+/g, '');
+const sameStrength = (left: string, right: string) => strengthToken(left) === strengthToken(right);
+
 /** Map read drug names onto catalogue medicines as candidates, never a choice. */
 export function proposeRxPrefill(
   extraction: RxOcrExtraction,
   medicines: readonly RxPrefillMedicine[]
 ): RxOcrPrefill {
+  const lines = extraction.lines.map((line) => {
+    const read = line.drugName.value ? token(line.drugName.value).split(' ')[0] : '';
+    const medicineCandidates =
+      read.length < 3
+        ? []
+        : medicines
+            .filter((medicine) =>
+              [
+                medicine.productName,
+                medicine.brandName ?? '',
+                ...(medicine.strengths ?? []).map((s) => s.ingredient),
+              ]
+                .map(token)
+                .some((name) => name.split(' ').includes(read) || name.startsWith(read))
+            )
+            .slice(0, 5)
+            .map((medicine) => ({ medicineId: medicine.id, label: medicine.productName }));
+    return { ...line, medicineCandidates };
+  });
+
+  const draftLines = extraction.lines.map((line, index) => {
+    const readSalt = line.drugName.value;
+    const readStrength = line.strength.value;
+    const normalizedSalt = token(readSalt ?? '');
+    const normalizedStrength = strengthToken(readStrength ?? '');
+    const candidates =
+      !normalizedSalt || !normalizedStrength
+        ? []
+        : medicines
+            .flatMap((medicine) => {
+              const strengths = medicine.strengths ?? [];
+              const matchingIngredients = strengths.filter((strength) =>
+                sameNameOrQualifiedName(strength.ingredient, readSalt ?? '')
+              );
+              // A named ingredient must use its own strength, even when the product
+              // name also includes it. Brand names may refer to any component.
+              const namedStrengths = matchingIngredients.length
+                ? matchingIngredients
+                : [medicine.productName, medicine.brandName ?? ''].some((name) =>
+                      sameNameOrQualifiedName(name, readSalt ?? '')
+                    )
+                  ? strengths
+                  : [];
+              return namedStrengths
+                .filter((strength) =>
+                  sameStrength(`${strength.value} ${strength.unit}`, normalizedStrength)
+                )
+                .map((strength) => ({
+                  medicineId: medicine.id,
+                  label: medicine.productName,
+                  matchedSalt: strength.ingredient,
+                  matchedStrength: `${strength.value} ${strength.unit}`,
+                  match: 'SALT_AND_STRENGTH' as const,
+                }));
+            })
+            .slice(0, 5);
+    return { lineNumber: index + 1, readSalt, readStrength, candidates };
+  });
+
   return {
     status: 'PROPOSED',
     requiresPharmacistConfirmation: true,
     adapter: extraction.adapter,
     adapterVersion: extraction.adapterVersion,
-    lines: extraction.lines.map((line) => {
-      const read = line.drugName.value ? token(line.drugName.value).split(' ')[0] : '';
-      const medicineCandidates =
-        read.length < 3
-          ? []
-          : medicines
-              .filter((medicine) =>
-                [medicine.productName, medicine.brandName ?? '']
-                  .map(token)
-                  .some((name) => name.split(' ').includes(read) || name.startsWith(read))
-              )
-              .slice(0, 5)
-              .map((medicine) => ({ medicineId: medicine.id, label: medicine.productName }));
-      return { ...line, medicineCandidates };
-    }),
+    lines,
+    draftCart: {
+      status: 'AWAITING_PHARMACIST_CONFIRMATION',
+      canTender: false,
+      lines: draftLines,
+    },
   };
 }

@@ -43,6 +43,7 @@ import type { TRPCContext } from '../trpc';
 import { pharmacyPrescriptionsRouter } from './pharmacy-prescriptions';
 import { GET } from '@/app/api/pharmacy/prescription-files/route';
 import { GET as sharedFileGET } from '@/app/api/files/[name]/route';
+import { proposeRxPrefill } from '@/lib/pharmacy/rx-ocr';
 
 function context(userId = 'user-a', organizationId = 'org-a', status = 'ACTIVE') {
   return {
@@ -527,7 +528,14 @@ describe('PH-A3 prescription OCR prefill', () => {
     mocks.patient.mockResolvedValue({ id: 'patient-a' });
     mocks.find.mockResolvedValue(null);
     mocks.medicines.mockResolvedValue([
-      { id: 'medicine-rx', productName: 'Fathomcillin E2E', brandName: null },
+      {
+        id: 'medicine-rx',
+        productName: 'Fathomcillin E2E',
+        brandName: null,
+        strengths: [
+          { value: { toString: () => '250' }, unit: 'mg', ingredient: { name: 'Fathomcillin' } },
+        ],
+      },
     ]);
     mocks.putUpload.mockImplementation(async (org, name, bytes) => {
       mocks.objects.set(`${org}/${name}`, bytes);
@@ -537,6 +545,110 @@ describe('PH-A3 prescription OCR prefill', () => {
       if (!bytes) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
       return bytes;
     });
+  });
+
+  it.each([
+    ['Augmentin', '625mg'],
+    ['Augmentin 625', '625 mg'],
+    ['Amoxicillin + Clavulanic Acid', '625 mg'],
+  ])('matches branded, qualified, and multi-salt medicine names: %s', (drugName, strength) => {
+    const proposal = proposeRxPrefill(
+      {
+        adapter: 'FIXTURE',
+        adapterVersion: 'test',
+        lines: [
+          {
+            drugName: { value: drugName, confidence: 1 },
+            strength: { value: strength, confidence: 1 },
+            dose: { value: null, confidence: 0 },
+          },
+        ],
+      },
+      [
+        {
+          id: 'augmentin-625',
+          productName: 'Augmentin 625 mg Tablets',
+          brandName: 'Augmentin',
+          strengths: [{ ingredient: 'Amoxicillin + Clavulanic Acid', value: 625, unit: 'mg' }],
+        },
+      ]
+    );
+
+    expect(proposal.draftCart.lines[0]?.candidates).toEqual([
+      expect.objectContaining({ medicineId: 'augmentin-625', match: 'SALT_AND_STRENGTH' }),
+    ]);
+  });
+
+  it.each([
+    ['2.5 mg', '25', 'mg', false],
+    ['25 mg', '2.5', 'mg', false],
+    ['5 mg/mL', '5', 'mgmL', false],
+    ['5 mg/5 mL', '5', 'mg/0.5 mL', false],
+    ['-5 mg', '5', 'mg', false],
+    ['2.5mg', '2.5', 'mg', true],
+    ['5 MG / mL', '5', 'mg/mL', true],
+  ])(
+    'preserves numeric and unit meaning when matching %s to %s %s',
+    (read, value, unit, matches) => {
+      const proposal = proposeRxPrefill(
+        {
+          adapter: 'FIXTURE',
+          adapterVersion: 'test',
+          lines: [
+            {
+              drugName: { value: 'Test salt', confidence: 1 },
+              strength: { value: read, confidence: 1 },
+              dose: { value: null, confidence: 0 },
+            },
+          ],
+        },
+        [
+          {
+            id: 'medicine-test',
+            productName: 'Test medicine',
+            brandName: null,
+            strengths: [{ ingredient: 'Test salt', value, unit }],
+          },
+        ]
+      );
+      expect(proposal.draftCart.lines[0]?.candidates).toHaveLength(matches ? 1 : 0);
+    }
+  );
+
+  it.each([
+    ['Amoxicillin', '125 mg', null],
+    ['Amoxicillin', '500 mg', 'Amoxicillin'],
+    ['Clavulanic Acid', '500 mg', null],
+    ['Clavulanic Acid', '125 mg', 'Clavulanic Acid'],
+    ['Augmentin', '500 mg', 'Amoxicillin'],
+  ])('pairs %s %s with the same catalogue ingredient', (drugName, strength, matchedSalt) => {
+    const proposal = proposeRxPrefill(
+      {
+        adapter: 'FIXTURE',
+        adapterVersion: 'test',
+        lines: [
+          {
+            drugName: { value: drugName, confidence: 1 },
+            strength: { value: strength, confidence: 1 },
+            dose: { value: null, confidence: 0 },
+          },
+        ],
+      },
+      [
+        {
+          id: 'augmentin',
+          productName: 'Amoxicillin + Clavulanic Acid Tablets',
+          brandName: 'Augmentin',
+          strengths: [
+            { ingredient: 'Amoxicillin', value: 500, unit: 'mg' },
+            { ingredient: 'Clavulanic Acid', value: 125, unit: 'mg' },
+          ],
+        },
+      ]
+    );
+    expect(proposal.draftCart.lines[0]?.candidates).toEqual(
+      matchedSalt ? [expect.objectContaining({ medicineId: 'augmentin', matchedSalt })] : []
+    );
   });
 
   it('is refused unless PHARMACY_RX_OCR_ADAPTER opts in, before reading storage', async () => {
@@ -564,6 +676,22 @@ describe('PH-A3 prescription OCR prefill', () => {
           medicineCandidates: [{ medicineId: 'medicine-rx', label: 'Fathomcillin E2E' }],
         },
       ],
+      draftCart: {
+        status: 'AWAITING_PHARMACIST_CONFIRMATION',
+        canTender: false,
+        lines: [
+          {
+            candidates: [
+              {
+                medicineId: 'medicine-rx',
+                match: 'SALT_AND_STRENGTH',
+                matchedSalt: 'Fathomcillin',
+                matchedStrength: '250 mg',
+              },
+            ],
+          },
+        ],
+      },
     });
     expect(mocks.medicines).toHaveBeenCalledWith(
       expect.objectContaining({ where: { organizationId: 'org-a', saleable: true } })
