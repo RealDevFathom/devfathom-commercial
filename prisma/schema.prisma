@@ -195,6 +195,7 @@ model BranchRegulatoryProfile {
 model PharmacyBranch {
   whatsappMessageLogs    PharmacyMessageLog[]
   hostedReceipts         PharmacyHostedReceipt[]
+  aiUsages               AIUsage[]
   receiptLayout          Json?
   receiptLayoutRevision  Int                  @default(0)
   id                     String               @id @default(cuid())
@@ -1124,7 +1125,7 @@ model PharmacySale {
 /// The bearer token is never stored; only its SHA-256 digest is retained.
 model PharmacyHostedReceipt {
   id                String    @id @default(cuid())
-  organizationId    String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  organizationId    String    @default(dbgenerated("current_setting('app.current_organization_id'::text, true)"))
   branchId          String
   saleId            String
   actorId           String
@@ -4931,6 +4932,7 @@ model Organization {
   modules                                   OrganizationModule[]
   limits                                    OrganizationLimit[]
   usageCounters                             OrganizationUsageCounter[]
+  aiUsages                                  AIUsage[]
   brand                                     OrganizationBrand?
   emailSettings                             OrganizationEmailSettings?
   domains                                   OrganizationDomain[]
@@ -6926,7 +6928,8 @@ model RestaurantOrderItemModifier {
 /// `linkReason` records why it was made (seated, moved, merged). Merge = several
 /// active table links under one order; combining two OPEN orders into one is
 /// deferred (BUILD-ASSUMPTIONS). At most one active link per (order, table) is
-/// enforced by a partial unique index in the migration.
+/// enforced by a partial unique index in the migration, and a second partial
+/// unique index permits only one active MOVE link per order.
 model RestaurantOrderTable {
   id             String                         @id @default(cuid())
   organizationId String                         @default(dbgenerated("current_setting('app.current_organization_id', true)"))
@@ -10905,6 +10908,25 @@ model OrganizationUsageCounter {
   @@unique([organizationId, key, periodStart, periodEnd])
   @@index([organizationId, key])
   @@map("organization_usage_counters")
+}
+
+model AIUsage {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  feature        String
+  provider       String
+  model          String
+  inputTokens    Int
+  outputTokens   Int
+  createdAt      DateTime @default(now())
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branch       PharmacyBranch @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Cascade)
+
+  @@index([organizationId, createdAt])
+  @@index([organizationId, branchId, createdAt])
+  @@map("ai_usage")
 }
 
 model OrganizationRole {

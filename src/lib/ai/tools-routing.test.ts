@@ -138,6 +138,7 @@ describe('assistant tool routing', () => {
     expect(Object.keys(tools).sort()).toEqual([
       'askPharmacyBusinessInsights',
       'askPharmacyFinanceInsights',
+      'askPharmacyOwnerQuestion',
       'askPharmacyReports',
     ]);
     expect(buildAssistantTools(adminCtx, { hint })).not.toHaveProperty(
@@ -247,6 +248,7 @@ describe('composed Pharmacy selection guards', () => {
         const tools = buildAssistantTools(subject, { hint });
         expect(tools).not.toHaveProperty('askPharmacyWorkPacks');
         expect('askPharmacyFinanceInsights' in tools).toBe(role === 'ADMIN');
+        expect('askPharmacyOwnerQuestion' in tools).toBe(role === 'ADMIN');
       }
       for (const hint of ['work packs', 'supplier credit follow-up']) {
         expect(buildAssistantTools(subject, { hint })).toHaveProperty('askPharmacyWorkPacks');

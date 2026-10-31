@@ -83,12 +83,15 @@ vi.mock('@/lib/trpc', () => {
       counterSearch: {
         setData: vi.fn(),
         fetch: (...args: unknown[]) => mocks.searchFetch(...args),
+        invalidate: vi.fn(),
       },
       counterCart: { cancel: mocks.cancel, invalidate: vi.fn() },
       counterReceipt: { invalidate: mocks.receiptInvalidate },
       counterEvidence: { reset: vi.fn() },
       drawerStatus: { invalidate: mocks.drawerStatusInvalidate },
     },
+    pharmacyPrescriptions: { counterPatientPanel: { invalidate: vi.fn() } },
+    pharmacySafety: { controlledRegister: { invalidate: vi.fn() } },
   };
   return {
     trpc: {
@@ -1260,6 +1263,11 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
         expect.objectContaining({ medicineId: 'med-barcode', quantity: 1 })
       )
     );
+
+    const successMessage = await screen.findByText('1 × Paracetamol added.');
+    expect(successMessage).toHaveClass('text-text-body');
+    expect(successMessage).not.toHaveClass('text-text-muted');
+    expect(successMessage.closest('[role="status"]')).toHaveClass('bg-success/10');
 
     expect(mocks.mutations.addLine).toHaveBeenCalledTimes(1);
     mocks.mutations.addLine!.mockClear();
