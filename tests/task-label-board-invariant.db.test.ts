@@ -19,6 +19,12 @@ const migration = readFileSync(
 const setup = DATABASE_URL ? new pg.Client({ connectionString: DATABASE_URL }) : null;
 const mover = DATABASE_URL ? new pg.Client({ connectionString: DATABASE_URL }) : null;
 const attacher = DATABASE_URL ? new pg.Client({ connectionString: DATABASE_URL }) : null;
+let attacherPid: number | null = null;
+
+async function backendPid(client: pg.Client): Promise<number> {
+  const result = await client.query<{ pid: number }>('SELECT pg_backend_pid() AS pid');
+  return result.rows[0]!.pid;
+}
 
 async function expectAttachBlocked(promise: Promise<unknown>) {
   let settled = false;
@@ -37,7 +43,7 @@ async function expectAttachBlocked(promise: Promise<unknown>) {
       `SELECT wait_event_type
          FROM pg_stat_activity
         WHERE pid = $1`,
-      [attacher!.processID]
+      [attacherPid]
     );
     if (activity.rows[0]?.wait_event_type === 'Lock') return;
     if (settled) throw new Error('Attachment completed instead of waiting for the concurrent move');
@@ -83,6 +89,7 @@ describeIfDatabase('task-label board invariant concurrency', () => {
     for (const client of [setup!, mover!, attacher!]) {
       await client.query(`SET search_path TO "${schema}"`);
     }
+    attacherPid = await backendPid(attacher!);
     await setup!.query(`
       CREATE TABLE "boards" (id text PRIMARY KEY, "organizationId" text NOT NULL);
       CREATE TABLE "columns" (
@@ -354,6 +361,8 @@ describeIfDatabase('task-label board invariant migration', () => {
       for (const client of [migrationClient, writer, blocker]) {
         await client.query(`SET search_path TO "${migrationSchema}"`);
       }
+      const migrationPid = await backendPid(migrationClient);
+      const writerPid = await backendPid(writer);
 
       await blocker.query(`SELECT pg_advisory_lock(${advisoryKey})`);
       const instrumentedMigration = migration.replace(
@@ -362,11 +371,11 @@ describeIfDatabase('task-label board invariant migration', () => {
       );
       const applying = migrationClient.query(instrumentedMigration);
 
-      await waitForLock(observer, migrationClient.processID!);
+      await waitForLock(observer, migrationPid);
       const inserting = writer.query(
         `INSERT INTO "task_labels" VALUES ('racing_link', 'task', 'wrong_label', 'org')`
       );
-      await waitForLock(observer, writer.processID!);
+      await waitForLock(observer, writerPid);
 
       await blocker.query(`SELECT pg_advisory_unlock(${advisoryKey})`);
       await applying;
