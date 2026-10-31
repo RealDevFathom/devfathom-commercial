@@ -32,7 +32,9 @@ describe.skipIf(process.platform === 'win32')('print bridge token files', () => 
   it('refuses replacement of an existing token', async () => {
     const path = join(scratch, 'token');
     await persistPrintBridgeToken(path, syntheticToken);
-    await expect(persistPrintBridgeToken(path, 'rdk_another_synthetic')).rejects.toMatchObject({ code: 'EEXIST' });
+    await expect(persistPrintBridgeToken(path, 'rdk_another_synthetic')).rejects.toMatchObject({
+      code: 'EEXIST',
+    });
     expect(await readFile(path, 'utf8')).toBe(`${syntheticToken}\n`);
   });
   it('refuses tokens readable by other users', async () => {
@@ -55,14 +57,19 @@ describe.skipIf(process.platform === 'win32')('print bridge token files', () => 
     await mkdir(path, { mode: 0o700 });
     await expect(readPrintBridgeToken(path)).rejects.toThrow();
   });
-  it.each(['rdk_' + 'x'.repeat(1024), 'not_a_device_token', 'rdk_first\nrdk_second'])('refuses malformed or oversized file contents #%#', async (contents) => {
-    const path = join(scratch, 'token');
-    await writeFile(path, contents, { mode: 0o600 });
-    await expect(readPrintBridgeToken(path)).rejects.toThrow();
-  });
+  it.each(['rdk_' + 'x'.repeat(1024), 'not_a_device_token', 'rdk_first\nrdk_second'])(
+    'refuses malformed or oversized file contents #%#',
+    async (contents) => {
+      const path = join(scratch, 'token');
+      await writeFile(path, contents, { mode: 0o600 });
+      await expect(readPrintBridgeToken(path)).rejects.toThrow();
+    }
+  );
   it('fails closed for a missing selected file without including the path', async () => {
     const path = join(scratch, 'synthetic-private-name');
-    await expect(resolvePrintBridgeToken({ tokenFile: path })).rejects.toThrow('Could not securely read PRINT_BRIDGE_TOKEN_FILE.');
+    await expect(resolvePrintBridgeToken({ tokenFile: path })).rejects.toThrow(
+      'Could not securely read PRINT_BRIDGE_TOKEN_FILE.'
+    );
     await expect(readPrintBridgeToken(path)).rejects.not.toThrow(path);
   });
   it('loads a selected file when no injected token is present', async () => {
@@ -70,16 +77,24 @@ describe.skipIf(process.platform === 'win32')('print bridge token files', () => 
     await persistPrintBridgeToken(path, syntheticToken);
     await expect(resolvePrintBridgeToken({ tokenFile: path })).resolves.toBe(syntheticToken);
   });
-  it.each(['invalid', 'rdk_synthetic\n'])('rejects invalid persistence input before creating a file #%#', async (token) => {
-    const path = join(scratch, 'token');
-    await expect(persistPrintBridgeToken(path, token)).rejects.toThrow('Invalid device token');
-    await expect(stat(path)).rejects.toMatchObject({ code: 'ENOENT' });
-  });
+  it.each(['invalid', 'rdk_synthetic\n'])(
+    'rejects invalid persistence input before creating a file #%#',
+    async (token) => {
+      const path = join(scratch, 'token');
+      await expect(persistPrintBridgeToken(path, token)).rejects.toThrow('Invalid device token');
+      await expect(stat(path)).rejects.toMatchObject({ code: 'ENOENT' });
+    }
+  );
 });
 
 describe('print bridge token selection', () => {
   it('preserves injected token precedence without inspecting a selected file', async () => {
-    await expect(resolvePrintBridgeToken({ token: 'existing-injected-value', tokenFile: join(scratch, 'missing') })).resolves.toBe('existing-injected-value');
+    await expect(
+      resolvePrintBridgeToken({
+        token: 'existing-injected-value',
+        tokenFile: join(scratch, 'missing'),
+      })
+    ).resolves.toBe('existing-injected-value');
   });
   it('leaves missing configuration for the existing bridge validation', async () => {
     await expect(resolvePrintBridgeToken({})).resolves.toBe('');

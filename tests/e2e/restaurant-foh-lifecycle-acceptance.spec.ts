@@ -235,7 +235,7 @@ async function openOrder(page: Page) {
 /** Add one modified unit to the OPEN order and send the whole order to the kitchen. */
 async function addModifiedUnitAndSend(page: Page, seat?: string) {
   await page.getByRole('button', { name: new RegExp(escapeRegExp(fixture.menuItem.name)) }).click();
-  await page.getByLabel('Quantity').fill('1');
+  await page.getByRole('spinbutton', { name: 'Quantity', exact: true }).fill('1');
   await page.getByLabel('Course', { exact: true }).fill('1');
   if (seat) await page.getByLabel('Seat', { exact: true }).fill(seat);
   await page.getByLabel(new RegExp(escapeRegExp(fixture.modifier.name))).check();

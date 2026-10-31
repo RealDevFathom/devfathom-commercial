@@ -2,13 +2,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   repeatRead: vi.fn().mockResolvedValue({ horizons: [] }),
-  can: vi.fn(async () => false),
+  can: vi.fn<typeof import('@/lib/abac').can>(async () => false),
   branchFindMany: vi.fn(),
   settingUpsert: vi.fn(),
+  userFindUnique: vi.fn(),
   branchFindFirst: vi.fn(),
   reportFindFirst: vi.fn(),
   reportFindMany: vi.fn(),
   reportUpdate: vi.fn(),
+  reportUpdateManyAndReturn: vi.fn(),
   stockDashboard: vi.fn(),
   stockDigest: vi.fn(),
   anomalyRead: vi.fn(),
@@ -76,8 +78,10 @@ function caller(role = 'ADMIN') {
         findFirst: mocks.reportFindFirst,
         findMany: mocks.reportFindMany,
         update: mocks.reportUpdate,
+        updateManyAndReturn: mocks.reportUpdateManyAndReturn,
       },
       pharmacyOwnerDigestSetting: { upsert: mocks.settingUpsert },
+      user: { findUnique: mocks.userFindUnique },
     },
     entitlements: {
       organizationId: 'org_1',
@@ -211,6 +215,32 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+describe('pharmacy administrator report bootstrap (#434)', () => {
+  beforeEach(() => {
+    mocks.can.mockResolvedValue(true);
+    mocks.branchFindMany.mockResolvedValue([{ id: 'branch_1', name: 'Main' }]);
+    mocks.userFindUnique.mockResolvedValue({ preferences: null });
+  });
+
+  it('loads branches, catalog and preferences through the shared operational grant', async () => {
+    const api = caller();
+
+    await expect(api.branches()).resolves.toMatchObject({
+      organizationId: 'org_1',
+      branches: [{ id: 'branch_1', name: 'Main' }],
+    });
+    await expect(api.catalog()).resolves.toMatchObject({
+      permissions: { operational: true, financial: true },
+    });
+    await expect(api.getPreferences()).resolves.toMatchObject({ version: 1 });
+
+    expect(mocks.can).toHaveBeenCalledTimes(4);
+    expect(mocks.can.mock.calls.filter((call) => call[1] === 'reports:operational')).toHaveLength(
+      3
+    );
+  });
+});
+
 describe('pharmacy owner digest capability boundary', () => {
   it('denies digest reads without reports:financial before tenant data access', async () => {
     mocks.can.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
@@ -272,19 +302,29 @@ describe('pharmacy owner digest capability boundary', () => {
 
 describe('RX-08 pharmacovigilance state boundaries', () => {
   it('completing internal review does not mark the report externally submitted', async () => {
-    mocks.reportFindFirst.mockResolvedValue({ id: 'pv_1', state: 'UNDER_REVIEW' });
-    mocks.reportUpdate.mockResolvedValue({
+    mocks.reportFindFirst.mockResolvedValue({
       id: 'pv_1',
-      state: 'READY',
+      state: 'UNDER_REVIEW',
       externalSubmissionState: 'NOT_SUBMITTED',
     });
+    mocks.reportUpdateManyAndReturn.mockResolvedValue([
+      {
+        id: 'pv_1',
+        state: 'READY',
+        externalSubmissionState: 'NOT_SUBMITTED',
+      },
+    ]);
     const result = await pvCaller().transitionPharmacovigilanceReport({
       id: 'pv_1',
       branchId: 'branch_1',
       state: 'READY',
     });
-    expect(mocks.reportUpdate).toHaveBeenCalledWith(
+    expect(mocks.reportUpdateManyAndReturn).toHaveBeenCalledWith(
       expect.objectContaining({
+        where: expect.objectContaining({
+          state: 'UNDER_REVIEW',
+          externalSubmissionState: 'NOT_SUBMITTED',
+        }),
         data: expect.not.objectContaining({ externalSubmissionState: expect.anything() }),
       })
     );
@@ -292,22 +332,257 @@ describe('RX-08 pharmacovigilance state boundaries', () => {
   });
 
   it('records a failed submission without changing or deleting the report', async () => {
-    mocks.reportFindFirst.mockResolvedValue({ id: 'pv_1', state: 'READY' });
-    mocks.reportUpdate.mockResolvedValue({
+    mocks.reportFindFirst.mockResolvedValue({
       id: 'pv_1',
       state: 'READY',
-      externalSubmissionState: 'FAILED',
+      externalSubmissionState: 'NOT_SUBMITTED',
+      externalReference: null,
+      externalFailureReason: null,
     });
+    mocks.reportUpdateManyAndReturn.mockResolvedValue([
+      {
+        id: 'pv_1',
+        state: 'READY',
+        externalSubmissionState: 'FAILED',
+      },
+    ]);
     await pvCaller().recordPharmacovigilanceSubmission({
       id: 'pv_1',
       branchId: 'branch_1',
       state: 'FAILED',
       failureReason: 'DRAP endpoint unavailable',
     });
-    expect(mocks.reportUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.not.objectContaining({ state: expect.anything() }) })
+    expect(mocks.reportUpdateManyAndReturn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ externalSubmissionState: 'NOT_SUBMITTED' }),
+        data: expect.not.objectContaining({ state: expect.anything() }),
+      })
     );
-    expect(mocks.reportUpdate.mock.calls[0]?.[0].data.externalSubmissionState).toBe('FAILED');
+    expect(mocks.reportUpdateManyAndReturn.mock.calls[0]?.[0].data.externalSubmissionState).toBe(
+      'FAILED'
+    );
+  });
+
+  it('rejects a lifecycle transition when a concurrent writer changed the source state', async () => {
+    mocks.reportFindFirst.mockResolvedValue({
+      id: 'pv_1',
+      state: 'READY',
+      externalSubmissionState: 'NOT_SUBMITTED',
+    });
+    mocks.reportUpdateManyAndReturn.mockResolvedValue([]);
+
+    await expect(
+      pvCaller().transitionPharmacovigilanceReport({
+        id: 'pv_1',
+        branchId: 'branch_1',
+        state: 'CLOSED',
+      })
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+    expect(mocks.reportUpdateManyAndReturn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          id: 'pv_1',
+          branchId: 'branch_1',
+          organizationId: 'org_1',
+          state: 'READY',
+          externalSubmissionState: 'NOT_SUBMITTED',
+        },
+      })
+    );
+  });
+
+  it('rejects a stale lifecycle regression when submission wins the cross-state race', async () => {
+    const row = {
+      id: 'pv_1',
+      state: 'READY',
+      externalSubmissionState: 'PENDING',
+      externalReference: null as string | null,
+      externalFailureReason: null as string | null,
+    };
+    let lifecycleUpdateStarted!: () => void;
+    const lifecycleStarted = new Promise<void>((resolve) => {
+      lifecycleUpdateStarted = resolve;
+    });
+    let finishLifecycle!: () => void;
+    const submissionFinished = new Promise<void>((resolve) => {
+      finishLifecycle = resolve;
+    });
+
+    mocks.reportFindFirst.mockImplementation(async () => ({ ...row }));
+    mocks.reportUpdateManyAndReturn.mockImplementation(async ({ where, data }) => {
+      if (data.state === 'UNDER_REVIEW') {
+        lifecycleUpdateStarted();
+        await submissionFinished;
+      }
+      if (
+        where.state !== row.state ||
+        where.externalSubmissionState !== row.externalSubmissionState
+      )
+        return [];
+      Object.assign(row, data);
+      if (data.externalSubmissionState === 'SUBMITTED') finishLifecycle();
+      return [{ ...row }];
+    });
+
+    const lifecycle = pvCaller().transitionPharmacovigilanceReport({
+      id: 'pv_1',
+      branchId: 'branch_1',
+      state: 'UNDER_REVIEW',
+    });
+    const lifecycleResult = expect(lifecycle).rejects.toMatchObject({ code: 'CONFLICT' });
+    await lifecycleStarted;
+    await pvCaller().recordPharmacovigilanceSubmission({
+      id: 'pv_1',
+      branchId: 'branch_1',
+      state: 'SUBMITTED',
+      externalReference: 'DRAP-1',
+    });
+
+    await lifecycleResult;
+    expect(row).toMatchObject({ state: 'READY', externalSubmissionState: 'SUBMITTED' });
+  });
+
+  it('rejects a lifecycle regression after an external submission completes', async () => {
+    const report = {
+      id: 'pv_1',
+      state: 'READY',
+      externalSubmissionState: 'NOT_SUBMITTED',
+      externalReference: null as string | null,
+      externalFailureReason: null as string | null,
+    };
+    mocks.reportFindFirst.mockImplementation(async () => ({ ...report }));
+    mocks.reportUpdateManyAndReturn.mockImplementation(async ({ data }) => {
+      Object.assign(report, data);
+      return [{ ...report }];
+    });
+
+    await pvCaller().recordPharmacovigilanceSubmission({
+      id: 'pv_1',
+      branchId: 'branch_1',
+      state: 'SUBMITTED',
+      externalReference: 'DRAP-1',
+    });
+
+    await expect(
+      pvCaller().transitionPharmacovigilanceReport({
+        id: 'pv_1',
+        branchId: 'branch_1',
+        state: 'UNDER_REVIEW',
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mocks.reportUpdateManyAndReturn).toHaveBeenCalledOnce();
+    expect(report).toMatchObject({ state: 'READY', externalSubmissionState: 'SUBMITTED' });
+  });
+
+  it('does not allow external submission state to regress after submission', async () => {
+    mocks.reportFindFirst.mockResolvedValue({
+      id: 'pv_1',
+      state: 'SUBMITTED',
+      externalSubmissionState: 'SUBMITTED',
+      externalReference: 'DRAP-1',
+      externalFailureReason: null,
+    });
+
+    await expect(
+      pvCaller().recordPharmacovigilanceSubmission({
+        id: 'pv_1',
+        branchId: 'branch_1',
+        state: 'PENDING',
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mocks.reportUpdateManyAndReturn).not.toHaveBeenCalled();
+  });
+
+  it('does not overwrite a completed submission reference', async () => {
+    mocks.reportFindFirst.mockResolvedValue({
+      id: 'pv_1',
+      state: 'SUBMITTED',
+      externalSubmissionState: 'SUBMITTED',
+      externalReference: 'DRAP-1',
+      externalFailureReason: null,
+    });
+
+    await expect(
+      pvCaller().recordPharmacovigilanceSubmission({
+        id: 'pv_1',
+        branchId: 'branch_1',
+        state: 'SUBMITTED',
+        externalReference: 'DRAP-2',
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mocks.reportUpdateManyAndReturn).not.toHaveBeenCalled();
+  });
+
+  it('returns an exact completed-submission retry without writing again', async () => {
+    const submitted = {
+      id: 'pv_1',
+      state: 'READY',
+      externalSubmissionState: 'SUBMITTED',
+      externalReference: 'DRAP-1',
+      externalFailureReason: null,
+    };
+    mocks.reportFindFirst.mockResolvedValue(submitted);
+
+    const result = await pvCaller().recordPharmacovigilanceSubmission({
+      id: 'pv_1',
+      branchId: 'branch_1',
+      state: 'SUBMITTED',
+      externalReference: 'DRAP-1',
+    });
+
+    expect(result).toEqual(submitted);
+    expect(mocks.reportUpdateManyAndReturn).not.toHaveBeenCalled();
+  });
+
+  it('does not record a submission for a draft report', async () => {
+    mocks.reportFindFirst.mockResolvedValue({
+      id: 'pv_1',
+      state: 'DRAFT',
+      externalSubmissionState: 'NOT_SUBMITTED',
+      externalReference: null,
+      externalFailureReason: null,
+    });
+
+    await expect(
+      pvCaller().recordPharmacovigilanceSubmission({
+        id: 'pv_1',
+        branchId: 'branch_1',
+        state: 'SUBMITTED',
+        externalReference: 'DRAP-1',
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mocks.reportUpdateManyAndReturn).not.toHaveBeenCalled();
+  });
+
+  it('rejects a submission update when its source state changed concurrently', async () => {
+    mocks.reportFindFirst.mockResolvedValue({
+      id: 'pv_1',
+      state: 'READY',
+      externalSubmissionState: 'PENDING',
+      externalReference: null,
+      externalFailureReason: null,
+    });
+    mocks.reportUpdateManyAndReturn.mockResolvedValue([]);
+
+    await expect(
+      pvCaller().recordPharmacovigilanceSubmission({
+        id: 'pv_1',
+        branchId: 'branch_1',
+        state: 'SUBMITTED',
+        externalReference: 'DRAP-1',
+      })
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+    expect(mocks.reportUpdateManyAndReturn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          id: 'pv_1',
+          branchId: 'branch_1',
+          organizationId: 'org_1',
+          state: 'READY',
+          externalSubmissionState: 'PENDING',
+        },
+      })
+    );
   });
 
   it('exports every report in range with internal and external states distinguished', async () => {

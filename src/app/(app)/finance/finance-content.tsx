@@ -219,7 +219,16 @@ function TransactionsTab({
   // IMP-FIN-06: export the currently-filtered transactions to CSV.
   const exportCsv = useCallback(() => {
     const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-    const header = ['Date', 'Type', 'Amount', 'Currency', 'Category', 'Description', 'Project', 'Client'];
+    const header = [
+      'Date',
+      'Type',
+      'Amount',
+      'Currency',
+      'Category',
+      'Description',
+      'Project',
+      'Client',
+    ];
     const rows = filtered.map((t) => [
       format(new Date(t.date), 'yyyy-MM-dd'),
       t.type,
@@ -769,7 +778,10 @@ function RecurringTab() {
                   </div>
                   <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-secondary">
                     <div
-                      className={cn('h-full rounded-full', b.overBudget ? 'bg-red-500' : 'bg-primary')}
+                      className={cn(
+                        'h-full rounded-full',
+                        b.overBudget ? 'bg-red-500' : 'bg-primary'
+                      )}
                       style={{ width: `${Math.min(100, b.pct)}%` }}
                     />
                   </div>
