@@ -2,7 +2,9 @@
 
 import { Loader2, Printer, ArrowLeft, FileText } from 'lucide-react';
 import Link from 'next/link';
+import Image from 'next/image';
 import { format } from 'date-fns';
+import { useState } from 'react';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { moneyLabel } from '@/lib/finance/currency';
@@ -25,6 +27,8 @@ const statusLabel: Record<string, string> = {
  */
 export function InvoicePrintView({ invoiceId }: { invoiceId: string }) {
   const { data: invoice, isLoading } = trpc.finance.getInvoiceById.useQuery({ id: invoiceId });
+  const [settledLogoUrl, setSettledLogoUrl] = useState<string | null>(null);
+  const [failedLogoUrl, setFailedLogoUrl] = useState<string | null>(null);
 
   if (isLoading) {
     return (
@@ -55,6 +59,9 @@ export function InvoicePrintView({ invoiceId }: { invoiceId: string }) {
   const tax = Number(invoice.tax);
   const total = Number(invoice.total);
   const primaryContact = invoice.client.contacts?.[0];
+  const logoUrl = invoice.issuer.brand?.logoUrl ?? null;
+  const isLogoLoading = logoUrl !== null && settledLogoUrl !== logoUrl;
+  const showLogo = logoUrl !== null && failedLogoUrl !== logoUrl;
 
   return (
     <>
@@ -88,9 +95,15 @@ export function InvoicePrintView({ invoiceId }: { invoiceId: string }) {
           </Link>
           <button
             onClick={() => window.print()}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-3.5 py-2 text-xs font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98]"
+            disabled={isLogoLoading}
+            className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-3.5 py-2 text-xs font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98] disabled:cursor-wait disabled:opacity-60 disabled:hover:bg-primary disabled:active:scale-100"
           >
-            <Printer className="h-3.5 w-3.5" /> Print / Save as PDF
+            {isLogoLoading ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Printer className="h-3.5 w-3.5" />
+            )}{' '}
+            {isLogoLoading ? 'Loading branding…' : 'Print / Save as PDF'}
           </button>
         </div>
 
@@ -101,11 +114,36 @@ export function InvoicePrintView({ invoiceId }: { invoiceId: string }) {
         >
           {/* Header */}
           <div className="flex items-start justify-between gap-6 border-b border-slate-200 pb-6">
-            <div>
-              <p className="font-display text-2xl font-bold tracking-tight text-[#0C2E2C]">
-                DevFathom
-              </p>
-              <p className="mt-1 text-xs text-slate-500">hub.devfathom.com</p>
+            <div className="flex items-start gap-3">
+              {/* The authenticated proxy keeps external branding compatible with
+                  the app's self-only image CSP and browser print-to-PDF. */}
+              {showLogo && (
+                <Image
+                  key={logoUrl}
+                  src={`/api/finance/issuer-logo?v=${encodeURIComponent(logoUrl)}`}
+                  alt={`${invoice.issuer.displayName} logo`}
+                  width={48}
+                  height={48}
+                  unoptimized
+                  className="h-12 w-12 shrink-0 object-contain"
+                  onLoad={() => setSettledLogoUrl(logoUrl)}
+                  onError={() => {
+                    setFailedLogoUrl(logoUrl);
+                    setSettledLogoUrl(logoUrl);
+                  }}
+                />
+              )}
+              <div>
+                <p className="font-display text-2xl font-bold tracking-tight text-[#0C2E2C]">
+                  {invoice.issuer.displayName}
+                </p>
+                {invoice.issuer.legalName !== invoice.issuer.displayName && (
+                  <p className="mt-1 text-xs text-slate-500">{invoice.issuer.legalName}</p>
+                )}
+                {invoice.issuer.brand?.supportEmail && (
+                  <p className="mt-1 text-xs text-slate-500">{invoice.issuer.brand.supportEmail}</p>
+                )}
+              </div>
             </div>
             <div className="text-right">
               <p className="font-display text-xl font-bold tracking-tight text-slate-900">

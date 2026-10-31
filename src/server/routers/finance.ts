@@ -254,8 +254,9 @@ export const financeRouter = router({
   getInvoiceById: adminProcedure
     .input(z.object({ id: z.string() }))
     .query(async ({ ctx, input }) => {
+      const orgId = workspaceId(ctx);
       const invoice = await ctx.db.invoice.findUnique({
-        where: { id: input.id },
+        where: { id: input.id, organizationId: orgId },
         include: {
           client: { include: { contacts: { where: { isPrimary: true }, take: 1 } } },
           project: { select: { id: true, name: true } },
@@ -264,8 +265,26 @@ export const financeRouter = router({
         },
       });
       if (!invoice) return null;
+      // The issuer must come from the authenticated workspace, never from a
+      // platform default (or from data supplied by the invoice's customer).
+      // Keep the organization id in the predicate as defence in depth on top
+      // of the tenant-scoped Prisma client/RLS connection.
+      const issuer = await ctx.db.organization.findUnique({
+        where: { id: orgId },
+        select: {
+          displayName: true,
+          legalName: true,
+          brand: { select: { logoUrl: true, supportEmail: true } },
+        },
+      });
+      if (!issuer) throw new TRPCError({ code: 'NOT_FOUND', message: 'Workspace not found.' });
       const amountPaid = round2(invoice.payments.reduce((s, p) => s + Number(p.amount), 0));
-      return { ...invoice, amountPaid, balance: round2(Number(invoice.total) - amountPaid) };
+      return {
+        ...invoice,
+        issuer,
+        amountPaid,
+        balance: round2(Number(invoice.total) - amountPaid),
+      };
     }),
 
   createInvoice: adminProcedure.input(createInvoiceInputSchema).mutation(async ({ ctx, input }) => {
