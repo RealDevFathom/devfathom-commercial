@@ -502,6 +502,48 @@ describeIfDatabase('daily close (real DB)', () => {
     expect(closeCountAtCutoff).toBe(1);
   });
 
+  it('replays a completed close after a cutoff change makes its date future', async () => {
+    const businessDate = '2026-01-20';
+    const db = deps.createTenantDb(orgId);
+    const actor = mActor(ids.seedDevice);
+    const noonUtc = new Date('2026-01-20T12:00:00.000Z');
+
+    const first = await deps.close.cutClose(
+      db,
+      { branchId: ids.branch, businessDate, actor },
+      noonUtc
+    );
+    expect(first.replayed).toBe(false);
+
+    // With an 18:00 cutoff, 12:00 UTC now resolves to the previous business day.
+    await read((tx) =>
+      tx.restaurantBranch.update({
+        where: { id: ids.branch },
+        data: { businessDayCutoff: '18:00' },
+      })
+    );
+
+    await expect(
+      deps.close.cutClose(db, { branchId: ids.branch, businessDate, actor }, noonUtc)
+    ).resolves.toMatchObject({ dailyCloseId: first.dailyCloseId, replayed: true });
+
+    // A NEW request for the same date is still rejected as future.
+    await expect(
+      deps.close.cutClose(
+        db,
+        { branchId: ids.branch, businessDate, actor: mActor(ids.seedDevice) },
+        noonUtc
+      )
+    ).rejects.toMatchObject({ reason: 'INVALID' });
+
+    const closeCount = await read((tx) =>
+      tx.restaurantDailyClose.count({
+        where: { branchId: ids.branch, businessDate: utcDate(businessDate) },
+      })
+    );
+    expect(closeCount).toBe(1);
+  });
+
   it('cross-business-date: a D2 refund of a D1 tender lands on D2, leaving D1 unchanged', async () => {
     const D1 = '2026-09-01';
     const D2 = '2026-09-02';

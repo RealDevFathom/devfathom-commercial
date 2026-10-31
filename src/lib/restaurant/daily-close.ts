@@ -427,6 +427,23 @@ export async function cutClose(
   const businessDate = businessDateToUtcDate(input.businessDate);
   return runMoneyTransaction(db, async (tx) => {
     await lockMoneyDay(tx, input.branchId, input.businessDate);
+    const canonical = canonicalClosePayload({
+      version: 1,
+      branchId: input.branchId,
+      businessDate: input.businessDate,
+    });
+    // A completed close must stay replayable even if the cutoff/timezone (or DST)
+    // later makes its date resolve as "future". An existing key is validated by
+    // beginMoneyIdempotent (same command + payload hash + completed) or rejected;
+    // only brand-new closes are subject to the future-date guard below.
+    const priorKey = await tx.restaurantMoneyIdempotencyKey.findUnique({
+      where: { deviceId_key: { deviceId: input.actor.deviceId, key: input.actor.idempotencyKey } },
+      select: { commandType: true },
+    });
+    if (priorKey) {
+      const prior = await beginMoneyIdempotent(tx, input.actor, 'cash.day_close', canonical);
+      if (prior.replay) return decodeFrozenCloseResult(prior.resultPayload);
+    }
     const branch = await tx.restaurantBranch.findUnique({
       where: { id: input.branchId },
       select: { timezone: true, businessDayCutoff: true },
@@ -439,11 +456,6 @@ export async function cutClose(
     ) {
       throw new DailyCloseError('A future business day cannot be closed.', 'INVALID');
     }
-    const canonical = canonicalClosePayload({
-      version: 1,
-      branchId: input.branchId,
-      businessDate: input.businessDate,
-    });
     const idem = await beginMoneyIdempotent(tx, input.actor, 'cash.day_close', canonical);
     if (idem.replay) return decodeFrozenCloseResult(idem.resultPayload);
 
