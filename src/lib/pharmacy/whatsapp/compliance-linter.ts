@@ -1,8 +1,10 @@
 import 'server-only';
 
-import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { randomUUID } from 'node:crypto';
+import { type ScopedDb, withTenantDb } from '@/lib/tenancy/scoped-db';
+import { afterTenantTransaction } from '@/lib/side-effects/scope';
 
-export const WHATSAPP_COMPLIANCE_LINTER_VERSION = '2026-10-29.1';
+export const WHATSAPP_COMPLIANCE_LINTER_VERSION = '2026-10-29.2';
 
 export type ComplianceOutcome = 'BLOCK' | 'WARN' | 'PASS';
 export type ComplianceReason = {
@@ -30,6 +32,22 @@ const STATIC_REGULATED_TERMS = [
   'dawai',
   'dawa',
   'goli',
+  'drugs',
+  'medicines',
+  'medications',
+  'pharmaceuticals',
+  'tablets',
+  'capsules',
+  'syrups',
+  'antibiotics',
+  'painkillers',
+  'دوائیں',
+  'دوائیاں',
+  'گولیاں',
+  'dawaiyan',
+  'dawaian',
+  'goliyan',
+  'golian',
 ] as const;
 
 const PROMOTIONAL_TERMS = [
@@ -57,6 +75,15 @@ function containsTerm(text: string, term: string) {
   return needle.length >= 2 && haystack.includes(` ${needle} `);
 }
 
+function catalogNameTerms(value: string) {
+  // Keep the full catalog value, and also recognize the name without a strength
+  // suffix when optional brand/alias metadata has not been populated.
+  const name = value.normalize('NFKC');
+  const strength =
+    /\s+\d+(?:[.,]\d+)?\s*(?:mcg|mg|kg|g|ml|l|iu|units?|%|[µμ]g)(?=$|[^\p{L}])/iu.exec(name);
+  return strength ? [name, name.slice(0, strength.index)] : [name];
+}
+
 export function lintWhatsAppContent(input: {
   templateText: string;
   variables?: readonly string[];
@@ -65,7 +92,7 @@ export function lintWhatsAppContent(input: {
 }) {
   const content = [input.templateText, ...(input.variables ?? [])].join(' ');
   const catalogTerms = Array.from(
-    new Set((input.catalog?.terms ?? []).map(normalized).filter(Boolean))
+    new Set((input.catalog?.terms ?? []).flatMap(catalogNameTerms).map(normalized).filter(Boolean))
   );
   const regulated = [
     ...STATIC_REGULATED_TERMS.map((term) => ({ term, source: 'STATIC' as const })),
@@ -89,7 +116,7 @@ export function lintWhatsAppContent(input: {
 /** Organization catalog is deliberately broader than current stock: stale/off-branch drug names must not leak. */
 export async function readComplianceCatalog(db: ScopedDb, organizationId: string) {
   const medicines = await db.medicine.findMany({
-    where: { organizationId },
+    where: { organizationId, productFamily: { not: 'FRONT_SHOP' } },
     select: {
       productName: true,
       brandName: true,
@@ -115,23 +142,46 @@ export async function lintAndLogWhatsAppContent(
     variables?: readonly string[];
     intent: 'UTILITY' | 'MARKETING';
     subject: string;
-  }
+  },
+  options: { retainBlockedDecision?: boolean } = {}
 ) {
   const result = lintWhatsAppContent({
     ...input,
     catalog: await readComplianceCatalog(db, scope.organizationId),
   });
-  await db.pharmacyWhatsAppComplianceLog.create({
-    data: {
-      organizationId: scope.organizationId,
-      branchId: scope.branchId,
-      actorId: scope.actorId ?? null,
-      subject: input.subject,
-      intent: input.intent,
-      outcome: result.outcome,
-      reasons: result.reasons,
-      linterVersion: result.version,
-    },
-  });
+  const log = {
+    id: randomUUID(),
+    organizationId: scope.organizationId,
+    branchId: scope.branchId,
+    actorId: scope.actorId ?? null,
+    subject: input.subject,
+    intent: input.intent,
+    outcome: result.outcome,
+    reasons: result.reasons,
+    linterVersion: result.version,
+    createdAt: new Date(),
+  };
+  await db.pharmacyWhatsAppComplianceLog.create({ data: log });
+  if (result.outcome === 'BLOCK' && options.retainBlockedDecision) {
+    // The first insert enforces the caller's current tenant/branch RLS. After
+    // its transaction ends, retain that same decision even if rejection rolled
+    // it back. A stable id avoids duplicates if the caller committed instead.
+    await afterTenantTransaction(() =>
+      withTenantDb(
+        scope.organizationId,
+        async (evidenceDb) => {
+          await evidenceDb.$queryRawUnsafe(
+            "SELECT set_config('app.current_branch_id', $1, true)",
+            scope.branchId
+          );
+          await evidenceDb.pharmacyWhatsAppComplianceLog.createMany({
+            data: [log],
+            skipDuplicates: true,
+          });
+        },
+        { userId: scope.actorId, skipDrain: true }
+      )
+    );
+  }
   return result;
 }

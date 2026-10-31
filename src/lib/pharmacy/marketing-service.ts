@@ -74,11 +74,16 @@ export async function approveMarketingTemplate(
 ) {
   marketingTemplateInput.parse(input);
   validateMarketingBody(input.body);
-  const compliance = await lintAndLogWhatsAppContent(db, scope, {
-    templateText: input.body,
-    intent: 'MARKETING',
-    subject: `template:${input.name}`,
-  });
+  const compliance = await lintAndLogWhatsAppContent(
+    db,
+    scope,
+    {
+      templateText: input.body,
+      intent: 'MARKETING',
+      subject: `template:${input.name}`,
+    },
+    { retainBlockedDecision: true }
+  );
   if (compliance.outcome === 'BLOCK')
     throw new MarketingWorkflowError(
       `WhatsApp compliance blocked this template (${compliance.reasons.map((reason) => reason.code).join(', ')}).`
