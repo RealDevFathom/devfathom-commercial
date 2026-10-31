@@ -127,6 +127,20 @@ describe('restaurant tax configuration UI', () => {
       approvalReference: 'Memo 42',
       accountantConfirmation: true,
       eligibilityConfirmations: ['ictNoInputTaxCreditOrAdjustment', 'ictNoRefund'],
+      replaceOpenProfile: false,
+      idempotencyKey: expect.any(String),
+    });
+
+    fireEvent.click(screen.getByLabelText(/End the currently open tax profile/i));
+    fireEvent.click(screen.getByRole('button', { name: 'Activate tax profile' }));
+    expect(mocks.activate).toHaveBeenLastCalledWith({
+      branchId: 'branch_1',
+      profileId: 'PK-ICT-RESTAURANT',
+      effectiveFrom: '2026-07-01T00:00:00.000Z',
+      approvalReference: 'Memo 42',
+      accountantConfirmation: true,
+      eligibilityConfirmations: ['ictNoInputTaxCreditOrAdjustment', 'ictNoRefund'],
+      replaceOpenProfile: true,
       idempotencyKey: expect.any(String),
     });
   });

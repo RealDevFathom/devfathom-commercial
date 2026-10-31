@@ -7,10 +7,7 @@ import { blockReasonFor, type BatchState, type BlockReason } from './inventory';
 import type { LedgerScope } from './stock-ledger';
 
 export type SaleBatchErrorReason =
-  | 'SALE_BATCH_RECALLED'
-  | 'SALE_BATCH_QUARANTINED'
-  | 'SALE_BATCH_EXPIRED'
-  | 'SALE_BATCH_BLOCKED';
+  'SALE_BATCH_RECALLED' | 'SALE_BATCH_QUARANTINED' | 'SALE_BATCH_EXPIRED' | 'SALE_BATCH_BLOCKED';
 
 /** #633: a batch on the sale stopped being sellable after its line was added. */
 export class PharmacySaleBatchError extends Error {

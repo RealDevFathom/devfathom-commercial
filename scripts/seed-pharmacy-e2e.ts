@@ -64,6 +64,8 @@ const RECEIVED_AT = new Date('2026-08-01T00:00:00.000Z');
 const EXPIRES_AT = new Date('2028-06-30T00:00:00.000Z');
 
 const MODULES = [
+  'hr',
+  'pharmacy-procurement',
   'pharmacy-core',
   'pharmacy-counter',
   'pharmacy-inventory',
@@ -448,8 +450,12 @@ async function seedCashier(passwordHash: string) {
         updatedAt: FIXED_AT,
       },
     });
+    // Repair workspaces created by the seed before the counter capability was canonicalized.
+    await tx.organizationRolePermission.deleteMany({
+      where: { organizationRoleId: role.id, capability: 'pharmacy.counter' },
+    });
     // Canonical grants, as #163's migration leaves real cashiers and the Cashier template gives
-    // new ones. A legacy pharmacy.counter grant is inert to can().
+    // new ones.
     for (const [id, capability] of [
       [PHARMACY_E2E.cashierCounterPermissionId, 'pharmacy:counter'],
       [PHARMACY_E2E.cashierOrdersPermissionId, 'pharmacy:orders'],

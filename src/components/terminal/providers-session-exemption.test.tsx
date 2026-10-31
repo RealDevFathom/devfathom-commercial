@@ -9,7 +9,25 @@ vi.mock('next/navigation', () => ({
   usePathname: () => navigation.pathname,
   useRouter: () => ({ push: navigation.push }),
 }));
+vi.mock('next/headers', () => ({ headers: async () => new Headers() }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: actor.resolve }));
+vi.mock('@/lib/tenancy/host', () => ({
+  TENANT_HOST_HEADER: 'x-devfathom-host',
+  isTenantLifecycleAccessible: () => true,
+  resolveOrganizationByHost: async () => ({
+    id: 'org_device',
+    status: 'ACTIVE',
+    isDemo: false,
+    displayName: 'Device tenant',
+  }),
+}));
+vi.mock('@/lib/tenancy/scoped-db', () => ({
+  withTenantDb: async (_organizationId: string, run: (db: unknown) => unknown) => run({}),
+}));
+vi.mock('@/lib/entitlements', () => ({
+  resolveOrganizationEntitlements: vi.fn(async () => ({ enabledModules: ['restaurant-pos'] })),
+  hasModule: vi.fn(() => true),
+}));
 vi.mock('@/components/restaurant/pos/order-pad', () => ({
   OrderPad: () => <h1>Order pad</h1>,
 }));
@@ -74,7 +92,12 @@ describe('terminal root providers', () => {
       const fetchMock = vi.fn();
       vi.stubGlobal('fetch', fetchMock);
       actor.resolve.mockResolvedValue({
-        organization: { isDemo: true, displayName: 'Sales seat one' },
+        organization: {
+          id: 'org_demo_restaurant_seat_1',
+          status: 'ACTIVE',
+          isDemo: true,
+          displayName: 'Sales seat one',
+        },
         session: {
           expires: '2099-01-01T00:00:00Z',
           user: {
