@@ -76,8 +76,8 @@ describe('invoice status menu placement', () => {
     });
     render(<InvoicesTab />);
     const label = status[0] + status.slice(1).toLowerCase();
-    fireEvent.click(screen.getByRole('button', { name: label, exact: true }));
-    return screen.getAllByRole('button', { name: 'Cancelled', exact: true }).at(-1)!.parentElement!;
+    fireEvent.click(screen.getByRole('button', { name: label }));
+    return screen.getAllByRole('button', { name: 'Cancelled' }).at(-1)!.parentElement!;
   }
 
   it.each([
