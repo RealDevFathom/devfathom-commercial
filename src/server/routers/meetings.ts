@@ -9,6 +9,11 @@ import { computePunctuality } from '@/lib/meeting-occurrence';
 import { legacyRecurrenceToRule } from '@/lib/meetings/recurrence';
 import { materializeMeetingOccurrences } from '@/lib/meetings/materialize';
 import {
+  INVALID_MEETING_TIME_MESSAGE,
+  isMeetingTimeConstraintError,
+  isValidMeetingTimeRange,
+} from '@/lib/meetings/time-range';
+import {
   cancelOccurrence,
   occurrenceJoinPath,
   rescheduleOccurrence,
@@ -31,10 +36,8 @@ const UPCOMING_SERIES_LIMIT = 200;
 /** Occurrences one `getOccurrences` page may return. */
 const OCCURRENCE_PAGE_SIZE_MAX = 200;
 
-const INVALID_MEETING_TIME_MESSAGE = 'End time must be after start time.';
-
 export function assertValidMeetingTimeRange(startTime: Date, endTime: Date): void {
-  if (endTime.getTime() <= startTime.getTime()) {
+  if (!isValidMeetingTimeRange(startTime, endTime)) {
     throw new TRPCError({ code: 'BAD_REQUEST', message: INVALID_MEETING_TIME_MESSAGE });
   }
 }
@@ -416,28 +419,47 @@ export const meetingsRouter = router({
         );
       }
 
-      if (attendeeIds) {
-        const allAttendees = [...new Set([ctx.session.user.id, ...attendeeIds])];
+      const allAttendees = attendeeIds
+        ? [...new Set([ctx.session.user.id, ...attendeeIds])]
+        : undefined;
+      if (allAttendees) {
         await assertInOrganization(ctx.db.user, workspaceId(ctx), allAttendees);
-        await ctx.db.meetingAttendee.deleteMany({ where: { meetingId: id } });
-        await ctx.db.meetingAttendee.createMany({
-          data: allAttendees.map((userId) => ({ meetingId: id, userId })),
-        });
       }
 
-      const updated = await ctx.db.meeting.update({
-        where: { id },
-        data: {
-          ...data,
-          // Keep the pair in step on every edit, exactly as `create` does. The
-          // guard matters: `recurrence` is OPTIONAL on this input, and an
-          // absent key means "leave the cadence alone", which must not be
-          // confused with an explicit `null` meaning "make it one-time".
-          ...(data.recurrence !== undefined
-            ? { recurrenceRule: legacyRecurrenceToRule(data.recurrence) }
-            : {}),
-        },
-      });
+      const updated = await ctx.db.meeting
+        .update({
+          where: { id },
+          data: {
+            ...data,
+            // Keep the pair in step on every edit, exactly as `create` does. The
+            // guard matters: `recurrence` is OPTIONAL on this input, and an
+            // absent key means "leave the cadence alone", which must not be
+            // confused with an explicit `null` meaning "make it one-time".
+            ...(data.recurrence !== undefined
+              ? { recurrenceRule: legacyRecurrenceToRule(data.recurrence) }
+              : {}),
+            // A nested write keeps attendees unchanged if a concurrent time
+            // edit makes this update violate the database constraint.
+            ...(allAttendees
+              ? {
+                  attendees: {
+                    deleteMany: {},
+                    create: allAttendees.map((userId) => ({ userId })),
+                  },
+                }
+              : {}),
+          },
+        })
+        .catch((error: unknown) => {
+          if (isMeetingTimeConstraintError(error)) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: INVALID_MEETING_TIME_MESSAGE,
+              cause: error,
+            });
+          }
+          throw error;
+        });
 
       // Reconcile after the edit. Moving the series or changing its cadence
       // adds the slots the new rule produces and CANCELS the future slots that

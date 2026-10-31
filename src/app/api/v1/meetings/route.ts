@@ -4,6 +4,7 @@ import { withApiAuth } from '@/lib/api-auth';
 import { readJson } from '@/lib/api-json';
 import { materializeMeetingOccurrences } from '@/lib/meetings/materialize';
 import { legacyRecurrenceToRule } from '@/lib/meetings/recurrence';
+import { INVALID_MEETING_TIME_MESSAGE, isValidMeetingTimeRange } from '@/lib/meetings/time-range';
 
 export const GET = withApiAuth('meetings:read', async (ctx, request) => {
   const url = new URL(request.url);
@@ -31,15 +32,20 @@ export const GET = withApiAuth('meetings:read', async (ctx, request) => {
   return NextResponse.json({ data: meetings });
 });
 
-const createSchema = z.object({
-  title: z.string().min(1),
-  description: z.string().optional(),
-  startTime: z.string().datetime(),
-  endTime: z.string().datetime(),
-  location: z.string().optional(),
-  recurrence: z.enum(['daily', 'weekly', 'biweekly', 'monthly']).nullable().optional(),
-  attendeeIds: z.array(z.string()).default([]),
-});
+const createSchema = z
+  .object({
+    title: z.string().min(1),
+    description: z.string().optional(),
+    startTime: z.string().datetime(),
+    endTime: z.string().datetime(),
+    location: z.string().optional(),
+    recurrence: z.enum(['daily', 'weekly', 'biweekly', 'monthly']).nullable().optional(),
+    attendeeIds: z.array(z.string()).default([]),
+  })
+  .refine((data) => isValidMeetingTimeRange(new Date(data.startTime), new Date(data.endTime)), {
+    message: INVALID_MEETING_TIME_MESSAGE,
+    path: ['endTime'],
+  });
 
 export const POST = withApiAuth('meetings:write', async (ctx, request) => {
   const __j = await readJson(request); // REST-05

@@ -30,6 +30,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { assertRlsEnforcingRole } from '@/lib/testing/rls-role-guard';
 import { seedDepartments } from '@/lib/test-support/departments';
+import { isMeetingTimeConstraintError } from '@/lib/meetings/time-range';
 
 // The router reaches `@/server/trpc`, which reaches Auth.js, which cannot load
 // outside a Next server runtime. Nothing under test uses it: the context here
@@ -256,6 +257,47 @@ describeIfDatabase('meetings list policy, against PostgreSQL', () => {
     expect(await getUpcomingIds(ORGANIZATION_A, { id: ADMIN_A, role: 'ADMIN' })).not.toContain(
       PAST_MEMBER
     );
+  });
+
+  it('replaces attendees atomically with a time edit, preserving them when the edit fails', async () => {
+    const attendeeIds = () => deps.withTenantDb(ORGANIZATION_A, async (db) => {
+      const meeting = await db.meeting.findUniqueOrThrow({
+        where: { id: FUTURE_MEMBER },
+        select: { attendees: { select: { userId: true } } },
+      });
+      return sorted(meeting.attendees.map((attendee) => attendee.userId));
+    });
+    const original = await deps.withTenantDb(ORGANIZATION_A, (db) =>
+      db.meeting.findUniqueOrThrow({
+        where: { id: FUTURE_MEMBER },
+        select: { startTime: true, endTime: true },
+      })
+    );
+
+    try {
+      await deps.withTenantDb(ORGANIZATION_A, (db) => db.meeting.update({
+        where: { id: FUTURE_MEMBER },
+        data: {
+          ...original,
+          attendees: { deleteMany: {}, create: [{ userId: MEMBER_A }, { userId: OUTSIDER_A }] },
+        },
+      }));
+      expect(await attendeeIds()).toEqual(sorted([MEMBER_A, OUTSIDER_A]));
+
+      await expect(deps.withTenantDb(ORGANIZATION_A, (db) => db.meeting.update({
+        where: { id: FUTURE_MEMBER },
+        data: {
+          endTime: original.startTime,
+          attendees: { deleteMany: {}, create: [{ userId: STRANGER_A }] },
+        },
+      }))).rejects.toSatisfy(isMeetingTimeConstraintError);
+      expect(await attendeeIds()).toEqual(sorted([MEMBER_A, OUTSIDER_A]));
+    } finally {
+      await deps.withTenantDb(ORGANIZATION_A, (db) => db.meeting.update({
+        where: { id: FUTURE_MEMBER },
+        data: { attendees: { deleteMany: {}, create: [{ userId: MEMBER_A }] } },
+      }));
+    }
   });
 
   it('atomically rejects complementary partial updates that would create an invalid range', async () => {
