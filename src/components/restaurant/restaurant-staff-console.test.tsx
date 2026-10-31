@@ -322,7 +322,7 @@ describe('Restaurant staff credential UI', () => {
       within(createDialog).getByRole('link', { name: 'Invite a new team member' })
     ).toHaveAttribute(
       'href',
-      '/team?invite=1&source=restaurant-staff&returnTo=%2Frestaurant%2Fstaff'
+      '/team?invite=1&returnTo=%2Frestaurant%2Fstaff'
     );
 
     fireEvent.click(within(createDialog).getByRole('button', { name: 'Close' }));

@@ -52,7 +52,7 @@ export function TeamContent({
   initialShowAddMember?: boolean;
   invitationReturnTo?: '/restaurant/staff';
 }) {
-  const { data: session } = useSession();
+  const { data: session, status: sessionStatus } = useSession();
   const entitlements = useEntitlements();
   const canReadDirectory = isModuleGranted('hr', entitlements.enabledModules);
   const isAdmin =
@@ -60,9 +60,11 @@ export function TeamContent({
     isModuleGranted(moduleForProcedure('team.inviteMember')!, entitlements.enabledModules);
   const [search, setSearch] = useState('');
   const [deptFilter, setDeptFilter] = useState('ALL');
-  // Keep the request while the session loads. The modal below always uses the
-  // same capability check as the visible Add Member action.
+  // Keep the request while the session loads, then discard it if access is denied.
   const [showAddMember, setShowAddMember] = useState(initialShowAddMember);
+  if (showAddMember && sessionStatus !== 'loading' && !isAdmin) {
+    setShowAddMember(false);
+  }
   const { data: team, isLoading } = trpc.team.getAll.useQuery(undefined, {
     enabled: canReadDirectory,
   });

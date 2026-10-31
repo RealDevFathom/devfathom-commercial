@@ -607,7 +607,6 @@ export function RestaurantStaffConsole({ invitedEmail }: { invitedEmail?: string
                           pathname: '/team',
                           query: {
                             invite: '1',
-                            source: 'restaurant-staff',
                             returnTo: '/restaurant/staff',
                           },
                         }}

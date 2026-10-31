@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({
   role: 'ADMIN' as string | undefined,
+  sessionStatus: 'authenticated' as 'loading' | 'authenticated' | 'unauthenticated',
   modules: ['admin'] as string[],
   directory: vi.fn(() => ({ data: [], isLoading: false })),
   departments: {
@@ -19,7 +20,10 @@ const state = vi.hoisted(() => ({
   invite: { mutate: vi.fn(), isPending: false },
 }));
 vi.mock('next-auth/react', () => ({
-  useSession: () => ({ data: { user: { role: state.role } } }),
+  useSession: () => ({
+    data: state.sessionStatus === 'authenticated' ? { user: { role: state.role } } : null,
+    status: state.sessionStatus,
+  }),
 }));
 vi.mock('@/components/entitlements-provider', () => ({
   useEntitlements: () => ({ enabledModules: state.modules }),
@@ -42,6 +46,8 @@ import { AddMemberModal, TeamContent } from './team-content';
 beforeEach(() => {
   vi.clearAllMocks();
   state.role = 'ADMIN';
+  state.sessionStatus = 'authenticated';
+  state.modules = ['admin'];
   state.departments.data = [
     { key: 'COUNTER', name: 'Counter', active: true },
     { key: 'OLD', name: 'Old department', active: false },
@@ -145,15 +151,44 @@ describe('tenant department invitation', () => {
 describe('baseline workspace invitations', () => {
   it('defers the deep-linked form until the session grants invitation permission', () => {
     state.role = undefined;
+    state.sessionStatus = 'loading';
     const view = render(<TeamContent initialShowAddMember />);
     expect(screen.queryByText('Add Team Member')).toBeNull();
     state.role = 'ADMIN';
+    state.sessionStatus = 'authenticated';
     view.rerender(<TeamContent initialShowAddMember />);
     expect(screen.getByText('Add Team Member')).toBeVisible();
     state.role = 'EMPLOYEE';
     view.rerender(<TeamContent initialShowAddMember />);
     expect(screen.queryByText('Add Team Member')).toBeNull();
+    state.role = 'ADMIN';
+    view.rerender(<TeamContent initialShowAddMember />);
+    expect(screen.queryByText('Add Team Member')).toBeNull();
   });
+
+  it.each(['role', 'module', 'unauthenticated'])(
+    'discards a deep-linked request when session loading resolves without permission (%s)',
+    (denial) => {
+      state.sessionStatus = 'loading';
+      const view = render(<TeamContent initialShowAddMember />);
+      expect(screen.queryByText('Add Team Member')).toBeNull();
+
+      state.sessionStatus = denial === 'unauthenticated' ? 'unauthenticated' : 'authenticated';
+      if (denial === 'role') state.role = 'EMPLOYEE';
+      if (denial === 'module') state.modules = [];
+      view.rerender(<TeamContent initialShowAddMember />);
+      expect(screen.queryByText('Add Team Member')).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Add Member' })).toBeNull();
+
+      state.role = 'ADMIN';
+      state.modules = ['admin'];
+      state.sessionStatus = 'authenticated';
+      view.rerender(<TeamContent initialShowAddMember />);
+      expect(screen.queryByText('Add Team Member')).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: 'Add Member' }));
+      expect(screen.getByText('Add Team Member')).toBeVisible();
+    }
+  );
 
   it('returns to Restaurant staff with the submitted email after a successful invitation', () => {
     render(<TeamContent initialShowAddMember invitationReturnTo="/restaurant/staff" />);
