@@ -7,6 +7,7 @@ import {
   MetaWhatsAppProvider,
   MockWhatsAppProvider,
   readWhatsAppConfig,
+  templateLanguageCode,
   WhatsAppProviderError,
 } from './provider';
 
@@ -51,7 +52,11 @@ describe('readWhatsAppConfig', () => {
   });
 
   it('selects meta only when explicitly configured', () => {
-    const config = readWhatsAppConfig({ ...ENV, PHARMACY_WHATSAPP_PROVIDER: 'meta' });
+    const config = readWhatsAppConfig({
+      ...ENV,
+      PHARMACY_WHATSAPP_PROVIDER: 'meta',
+      PHARMACY_WHATSAPP_LIVE_SEND: 'approved',
+    });
     expect(createWhatsAppProvider(config)).toBeInstanceOf(MetaWhatsAppProvider);
     expect(readWhatsAppConfig({ PHARMACY_WHATSAPP_PROVIDER: 'twilio' }).provider).toBe('mock');
   });
@@ -206,7 +211,7 @@ describe('MetaWhatsAppProvider', () => {
   });
 
   it('posts the selected Khata language with its own approved template identifier', async () => {
-    const fetchImpl = vi.fn(
+    const fetchImpl = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(
       async () =>
         new Response(JSON.stringify({ messages: [{ id: 'wamid.khata' }] }), { status: 200 })
     );
@@ -226,7 +231,7 @@ describe('MetaWhatsAppProvider', () => {
       language: 'ur',
       parameters: ['500.00', 'Khan household'],
     });
-    expect(JSON.parse(String((fetchImpl.mock.calls[0]![1] as RequestInit).body))).toMatchObject({
+    expect(JSON.parse(String(fetchImpl.mock.calls[0]![1]?.body))).toMatchObject({
       template: {
         name: 'khata_due_ur',
         language: { code: 'ur' },
@@ -250,10 +255,77 @@ describe('MetaWhatsAppProvider', () => {
   });
 });
 
-it('uses the configured Meta adapter in the production factory', async () => {
+it('keeps configured Meta sending disabled in the production factory without owner approval', async () => {
   const { createWhatsAppProvider } = await import('./provider');
   const provider = createWhatsAppProvider(
     readWhatsAppConfig({ ...ENV, PHARMACY_WHATSAPP_PROVIDER: 'meta' })
   );
+  expect(provider.name).toBe('meta');
+  expect(provider).not.toBeInstanceOf(MetaWhatsAppProvider);
+  await expect(provider.sendText({ to: 'synthetic', body: 'synthetic' })).rejects.toMatchObject({
+    reason: 'NOT_CONFIGURED',
+  });
+  await expect(
+    provider.sendTemplate({
+      to: 'synthetic',
+      template: 'khataReminder',
+      language: 'en',
+      parameters: ['synthetic', '1.00'],
+    })
+  ).rejects.toMatchObject({ reason: 'NOT_CONFIGURED' });
+  for (const value of ['true', '1', 'yes', 'APPROVED']) {
+    const unapproved = createWhatsAppProvider(
+      readWhatsAppConfig({
+        ...ENV,
+        PHARMACY_WHATSAPP_PROVIDER: 'meta',
+        PHARMACY_WHATSAPP_LIVE_SEND: value,
+      })
+    );
+    expect(unapproved).not.toBeInstanceOf(MetaWhatsAppProvider);
+  }
+});
+
+it('uses the Meta adapter in the production factory only with explicit owner approval', async () => {
+  const { createWhatsAppProvider } = await import('./provider');
+  const provider = createWhatsAppProvider(
+    readWhatsAppConfig({
+      ...ENV,
+      PHARMACY_WHATSAPP_PROVIDER: 'meta',
+      PHARMACY_WHATSAPP_LIVE_SEND: 'approved',
+    })
+  );
   expect(provider).toBeInstanceOf(MetaWhatsAppProvider);
+});
+
+describe('templateLanguageCode', () => {
+  it('keeps the configured English locale for English Khata sends', () => {
+    expect(templateLanguageCode({ templateLanguage: 'en_US' }, 'en')).toBe('en_US');
+    expect(templateLanguageCode({ templateLanguage: 'en' }, 'en')).toBe('en');
+    expect(templateLanguageCode({ templateLanguage: 'ur' }, 'en')).toBe('en');
+    expect(templateLanguageCode({ templateLanguage: 'en_US' }, 'ur')).toBe('ur');
+    expect(templateLanguageCode({ templateLanguage: 'ur' })).toBe('ur');
+  });
+
+  it('posts an English Khata send with the configured en_US locale', async () => {
+    const fetchImpl = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(
+      async () => new Response(JSON.stringify({ messages: [{ id: 'wamid.en' }] }), { status: 200 })
+    );
+    const provider = new MetaWhatsAppProvider(
+      readWhatsAppConfig({
+        ...ENV,
+        PHARMACY_WHATSAPP_TEMPLATE_LANGUAGE: 'en_US',
+        PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER_EN: 'khata_due_en',
+      }),
+      fetchImpl as unknown as typeof fetch
+    );
+    await provider.sendTemplate({
+      to: '923001234567',
+      template: 'khataReminder',
+      language: 'en',
+      parameters: ['Khan household', '500.00'],
+    });
+    expect(JSON.parse(String(fetchImpl.mock.calls[0]![1]?.body))).toMatchObject({
+      template: { name: 'khata_due_en', language: { code: 'en_US' } },
+    });
+  });
 });

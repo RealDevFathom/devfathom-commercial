@@ -82,11 +82,25 @@ export type KhataReminderRunResult = {
   configurationErrors: string[];
 };
 
+type KhataRecipientResult =
+  | { kind: 'configuration'; configurationError: string }
+  | {
+      kind: 'recipient';
+      customerId: string;
+      patientId: string;
+      to: string;
+      logId: string | null;
+      language: WhatsAppTemplateLanguage;
+      parameters: string[];
+    };
+
 function baseConfigurationErrors(config: WhatsAppConfig): string[] {
   const errors: string[] = [];
   if (!config.organizationId) errors.push('ORGANIZATION_NOT_CONFIGURED');
   if (!config.phoneNumberId) errors.push('PHONE_NUMBER_NOT_CONFIGURED');
   if (config.provider === 'meta' && !config.accessToken) errors.push('ACCESS_TOKEN_NOT_CONFIGURED');
+  // Live Meta sending requires the explicit owner-approval flag, not just credentials.
+  if (config.provider === 'meta' && !config.liveSendApproved) errors.push('LIVE_SEND_NOT_APPROVED');
   const hasUsableKhataTemplate = (['en', 'ur'] as const).some(
     (language) => config.khataTemplates[language] && config.khataParameterOrder[language]
   );
@@ -167,115 +181,123 @@ export async function processDueWhatsAppKhataReminders(
       continue;
     }
 
-    const recipient = await withTenantDb(account.organizationId, async (db) => {
-      if (config.organizationId !== account.organizationId || !config.phoneNumberId) return null;
-      const organization = await db.organization.findUnique({
-        where: { id: account.organizationId },
-        select: { vertical: true, status: true, timezone: true },
-      });
-      const branch = await db.pharmacyBranch.findFirst({
-        where: { organizationId: account.organizationId, id: account.branchId, active: true },
-      });
-      if (
-        !organization ||
-        organization.vertical !== 'PHARMACY' ||
-        !isTenantLifecycleAccessible(organization.status) ||
-        !branch
-      )
-        return null;
-      if (
-        !hasModule(
-          await resolveOrganizationEntitlements(account.organizationId, db, now),
-          'pharmacy-crm'
+    const recipient = await withTenantDb<KhataRecipientResult | null>(
+      account.organizationId,
+      async (db) => {
+        if (config.organizationId !== account.organizationId || !config.phoneNumberId) return null;
+        const organization = await db.organization.findUnique({
+          where: { id: account.organizationId },
+          select: { vertical: true, status: true, timezone: true },
+        });
+        const branch = await db.pharmacyBranch.findFirst({
+          where: { organizationId: account.organizationId, id: account.branchId, active: true },
+        });
+        if (
+          !organization ||
+          organization.vertical !== 'PHARMACY' ||
+          !isTenantLifecycleAccessible(organization.status) ||
+          !branch
         )
-      )
-        return null;
-      // UTC for a stored zone Intl refuses ("PKT", "UTC+5"), as the other readers do.
-      const timeZone = workspaceTimezone(organization.timezone);
-      const hour = Number(
-        new Intl.DateTimeFormat('en-GB', {
+          return null;
+        if (
+          !hasModule(
+            await resolveOrganizationEntitlements(account.organizationId, db, now),
+            'pharmacy-crm'
+          )
+        )
+          return null;
+        // UTC for a stored zone Intl refuses ("PKT", "UTC+5"), as the other readers do.
+        const timeZone = workspaceTimezone(organization.timezone);
+        const hour = Number(
+          new Intl.DateTimeFormat('en-GB', {
+            timeZone,
+            hour: '2-digit',
+            hourCycle: 'h23',
+          }).format(now)
+        );
+        if (hour >= 22 || hour < 8) return null;
+        const customer = await db.pharmacyCustomer.findFirst({
+          where: { organizationId: account.organizationId, id: account.payerCustomerId },
+          select: {
+            id: true,
+            patientId: true,
+            active: true,
+            whatsappOptIn: true,
+            preferredLanguage: true,
+            patient: { select: { phone: true } },
+          },
+        });
+        if (!customer) return null;
+        await lockPatientConsent(db, account.organizationId, customer.patientId);
+        const consent = await db.patientConsent.findFirst({
+          where: {
+            organizationId: account.organizationId,
+            patientId: customer.patientId,
+            purpose: 'REMINDERS',
+            channel: 'WHATSAPP',
+          },
+          orderBy: { version: 'desc' },
+          select: { granted: true, revokedAt: true, recordedAt: true },
+        });
+        const to = normalizeWhatsAppNumber(customer.patient.phone);
+        if (
+          !to ||
+          !canMessageCustomer(customer) ||
+          !consent?.granted ||
+          consent.revokedAt ||
+          consent.recordedAt > now
+        )
+          return null;
+        const language = customer.preferredLanguage;
+        if (language !== 'en' && language !== 'ur')
+          return { kind: 'configuration', configurationError: 'KHATA_LANGUAGE_UNSUPPORTED' };
+        const parameters = khataReminderParameters(
+          config,
+          language,
+          sanitizeReminderDisplayName(account.displayName),
+          formatMinor(balanceMinor)
+        );
+        if (!parameters)
+          return {
+            kind: 'configuration',
+            configurationError: `KHATA_TEMPLATE_${language.toUpperCase()}_NOT_CONFIGURED`,
+          };
+        const day = new Intl.DateTimeFormat('en-CA', {
           timeZone,
-          hour: '2-digit',
-          hourCycle: 'h23',
-        }).format(now)
-      );
-      if (hour >= 22 || hour < 8) return null;
-      const customer = await db.pharmacyCustomer.findFirst({
-        where: { organizationId: account.organizationId, id: account.payerCustomerId },
-        select: {
-          id: true,
-          patientId: true,
-          active: true,
-          whatsappOptIn: true,
-          preferredLanguage: true,
-          patient: { select: { phone: true } },
-        },
-      });
-      if (!customer) return null;
-      await lockPatientConsent(db, account.organizationId, customer.patientId);
-      const consent = await db.patientConsent.findFirst({
-        where: {
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+        }).format(now);
+        const logId = await claimMessageLogInTransaction(db, {
           organizationId: account.organizationId,
+          direction: 'OUTBOUND',
+          status: 'PENDING',
+          kind: 'KHATA_REMINDER',
+          dedupeKey: plan.dedupeKey,
+          customerDayKey: `khata:${customer.id}:${day}`,
+          branchId: account.branchId,
+          customerId: customer.id,
           patientId: customer.patientId,
-          purpose: 'REMINDERS',
-          channel: 'WHATSAPP',
-        },
-        orderBy: { version: 'desc' },
-        select: { granted: true, revokedAt: true, recordedAt: true },
-      });
-      const to = normalizeWhatsAppNumber(customer.patient.phone);
-      if (
-        !to ||
-        !canMessageCustomer(customer) ||
-        !consent?.granted ||
-        consent.revokedAt ||
-        consent.recordedAt > now
-      )
-        return null;
-      const language = customer.preferredLanguage;
-      if (language !== 'en' && language !== 'ur') return null;
-      const parameters = khataReminderParameters(
-        config,
-        language,
-        sanitizeReminderDisplayName(account.displayName),
-        formatMinor(balanceMinor)
-      );
-      if (!parameters)
-        return { configurationError: `KHATA_TEMPLATE_${language.toUpperCase()}_NOT_CONFIGURED` };
-      const day = new Intl.DateTimeFormat('en-CA', {
-        timeZone,
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-      }).format(now);
-      const logId = await claimMessageLogInTransaction(db, {
-        organizationId: account.organizationId,
-        direction: 'OUTBOUND',
-        status: 'PENDING',
-        kind: 'KHATA_REMINDER',
-        dedupeKey: plan.dedupeKey,
-        customerDayKey: `khata:${customer.id}:${day}`,
-        branchId: account.branchId,
-        customerId: customer.id,
-        patientId: customer.patientId,
-        phoneLast4: phoneLast4(to),
-        templateName: config.khataTemplates[language],
-        dueDate: plan.dueDate,
-      });
-      return {
-        customerId: customer.id,
-        patientId: customer.patientId,
-        to,
-        logId,
-        language,
-        parameters,
-      };
-    });
+          phoneLast4: phoneLast4(to),
+          templateName: config.khataTemplates[language],
+          dueDate: plan.dueDate,
+        });
+        return {
+          kind: 'recipient',
+          customerId: customer.id,
+          patientId: customer.patientId,
+          to,
+          logId,
+          language,
+          parameters,
+        };
+      }
+    );
     if (!recipient) {
       result.skippedNoConsent += 1;
       continue;
     }
-    if ('configurationError' in recipient) {
+    if (recipient.kind === 'configuration') {
       result.skippedConfiguration += 1;
       if (!result.configurationErrors.includes(recipient.configurationError))
         result.configurationErrors.push(recipient.configurationError);

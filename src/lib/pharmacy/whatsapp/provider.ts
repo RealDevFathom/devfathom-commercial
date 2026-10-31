@@ -20,6 +20,8 @@ export type WhatsAppConfig = {
   verifyToken: string | null;
   graphVersion: string;
   templateLanguage: string;
+  /** Owner approval for live Meta sends; credentials alone never enable sending. */
+  liveSendApproved: boolean;
   templates: Record<WhatsAppTemplateKey, string | null>;
   khataTemplates: Record<WhatsAppTemplateLanguage, string | null>;
   khataParameterOrder: Record<
@@ -92,6 +94,20 @@ function englishKhataParameterOrder(
   return value === null ? ['name', 'balance'] : parameterOrder(value);
 }
 
+/**
+ * Meta language code for a template send. English keeps the deployment's configured
+ * English locale (e.g. `en_US`) so existing approved templates still resolve.
+ */
+export function templateLanguageCode(
+  config: Pick<WhatsAppConfig, 'templateLanguage'>,
+  language?: WhatsAppTemplateLanguage
+): string {
+  if (language === 'ur') return 'ur';
+  if (language === 'en')
+    return /^en(_|$)/.test(config.templateLanguage) ? config.templateLanguage : 'en';
+  return config.templateLanguage;
+}
+
 export function readWhatsAppConfig(env: Env = process.env): WhatsAppConfig {
   const leadDays = Number(envValue(env, 'PHARMACY_WHATSAPP_REMINDER_LEAD_DAYS') ?? 3);
   return {
@@ -103,6 +119,7 @@ export function readWhatsAppConfig(env: Env = process.env): WhatsAppConfig {
     verifyToken: envValue(env, 'PHARMACY_WHATSAPP_VERIFY_TOKEN'),
     graphVersion: envValue(env, 'PHARMACY_WHATSAPP_GRAPH_VERSION') ?? 'v21.0',
     templateLanguage: envValue(env, 'PHARMACY_WHATSAPP_TEMPLATE_LANGUAGE') ?? 'en',
+    liveSendApproved: envValue(env, 'PHARMACY_WHATSAPP_LIVE_SEND') === 'approved',
     templates: {
       refillReminder: envValue(env, 'PHARMACY_WHATSAPP_TEMPLATE_REFILL_REMINDER'),
       khataReminder:
@@ -121,9 +138,7 @@ export function readWhatsAppConfig(env: Env = process.env): WhatsAppConfig {
         envValue(env, 'PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER_EN_PARAMETERS')
       ),
       // Urdu has no safe implicit contract: both approval name and placeholder order are explicit.
-      ur: parameterOrder(
-        envValue(env, 'PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER_UR_PARAMETERS')
-      ),
+      ur: parameterOrder(envValue(env, 'PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER_UR_PARAMETERS')),
     },
     reminderLeadDays:
       Number.isSafeInteger(leadDays) && leadDays >= 0 && leadDays <= 30 ? leadDays : 3,
@@ -237,7 +252,7 @@ export class MetaWhatsAppProvider implements WhatsAppProvider {
     language?: WhatsAppTemplateLanguage;
     parameters: string[];
   }) {
-    const language = input.language ?? this.config.templateLanguage;
+    const language = templateLanguageCode(this.config, input.language);
     const name =
       input.template === 'khataReminder' && input.language
         ? this.config.khataTemplates[input.language]
@@ -306,7 +321,7 @@ export class MockWhatsAppProvider implements WhatsAppProvider {
     language?: WhatsAppTemplateLanguage;
     parameters: string[];
   }) {
-    const language = input.language ?? this.config.templateLanguage;
+    const language = templateLanguageCode(this.config, input.language);
     const templateName =
       input.template === 'khataReminder' && input.language
         ? this.config.khataTemplates[input.language]
@@ -341,5 +356,21 @@ export function createWhatsAppProvider(
   config: WhatsAppConfig = readWhatsAppConfig()
 ): WhatsAppProvider {
   if (config.provider !== 'meta') return new MockWhatsAppProvider(config);
-  return new MetaWhatsAppProvider(config);
+  const provider = new MetaWhatsAppProvider(config);
+  if (config.liveSendApproved) return provider;
+  // Without explicit owner approval (PHARMACY_WHATSAPP_LIVE_SEND=approved), Meta credentials
+  // alone cannot enable sending for any caller.
+  const disabled = async (): Promise<WhatsAppSendResult> => {
+    throw new WhatsAppProviderError(
+      'NOT_CONFIGURED',
+      'Live sending is disabled pending owner approval.'
+    );
+  };
+  return {
+    name: 'meta',
+    sendText: disabled,
+    sendTemplate: disabled,
+    verifyWebhook: provider.verifyWebhook.bind(provider),
+    parseInbound: provider.parseInbound.bind(provider),
+  };
 }

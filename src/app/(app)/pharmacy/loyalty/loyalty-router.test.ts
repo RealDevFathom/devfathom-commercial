@@ -7,6 +7,8 @@ const mocks = vi.hoisted(() => ({
   history: vi.fn(),
   branch: vi.fn(),
   updateCustomers: vi.fn(),
+  findCustomer: vi.fn(),
+  annotateAudit: vi.fn(),
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
@@ -22,6 +24,7 @@ vi.mock('@/server/audit', () => ({
   ipFromHeaders: vi.fn(),
   isAuditExcludedPath: () => true,
   recordTrpcAudit: vi.fn(),
+  annotateAudit: mocks.annotateAudit,
 }));
 vi.mock('@/lib/pharmacy/customer-loyalty', async () => ({
   ...(await vi.importActual<typeof import('@/lib/pharmacy/customer-loyalty')>(
@@ -41,7 +44,7 @@ function caller({
   return pharmacyLoyaltyRouter.createCaller({
     db: {
       pharmacyBranch: { findMany: mocks.branches, findFirst: mocks.branch },
-      pharmacyCustomer: { updateMany: mocks.updateCustomers },
+      pharmacyCustomer: { updateMany: mocks.updateCustomers, findFirst: mocks.findCustomer },
     },
     session: session
       ? { expires: 'later', user: { id: 'owner-a', organizationId, role: 'ADMIN', status } }
@@ -62,6 +65,7 @@ beforeEach(() => {
   mocks.history.mockResolvedValue({ entries: [] });
   mocks.branch.mockResolvedValue({ id: 'branch-a' });
   mocks.updateCustomers.mockResolvedValue({ count: 1 });
+  mocks.findCustomer.mockResolvedValue({ id: 'customer-a', preferredLanguage: 'en' });
 });
 describe('ordinary loyalty router visibility', () => {
   it('hands trusted scope and requested page to history', async () => {
@@ -129,6 +133,19 @@ describe('ordinary loyalty router visibility', () => {
       where: { id: 'customer-a', organizationId: 'org-a', active: true },
       data: { preferredLanguage: 'ur' },
     });
+    expect(mocks.findCustomer).toHaveBeenCalledWith({
+      where: { id: 'customer-a', organizationId: 'org-a', active: true },
+      select: { id: true, preferredLanguage: true },
+    });
+    expect(mocks.annotateAudit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'pharmacyCustomer.setReminderLanguage',
+        targetType: 'PharmacyCustomer',
+        targetId: 'customer-a',
+        changes: { preferredLanguage: { before: 'en', after: 'ur' } },
+      })
+    );
     await expect(
       caller().setReminderLanguage({
         branchId: 'branch-a',
@@ -161,5 +178,20 @@ describe('ordinary loyalty router visibility', () => {
         preferredLanguage: 'ur',
       })
     ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(mocks.annotateAudit).not.toHaveBeenCalled();
+  });
+
+  it('does not update or audit a customer outside the authorized tenant', async () => {
+    mocks.findCustomer.mockResolvedValue(null);
+
+    await expect(
+      caller().setReminderLanguage({
+        branchId: 'branch-a',
+        customerId: 'customer-b',
+        preferredLanguage: 'ur',
+      })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(mocks.updateCustomers).not.toHaveBeenCalled();
+    expect(mocks.annotateAudit).not.toHaveBeenCalled();
   });
 });

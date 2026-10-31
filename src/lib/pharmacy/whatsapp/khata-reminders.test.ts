@@ -274,7 +274,11 @@ describe('processDueWhatsAppKhataReminders', () => {
     store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
     const provider = new MockWhatsAppProvider(urduConfig);
 
-    const result = await processDueWhatsAppKhataReminders({ now: NOW, config: urduConfig, provider });
+    const result = await processDueWhatsAppKhataReminders({
+      now: NOW,
+      config: urduConfig,
+      provider,
+    });
 
     expect(result).toMatchObject({ configured: true, prepared: 1, skippedConfiguration: 0 });
     expect(provider.calls[0]).toMatchObject({
@@ -296,7 +300,11 @@ describe('processDueWhatsAppKhataReminders', () => {
     store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
     const provider = new MockWhatsAppProvider(urduConfig);
 
-    const result = await processDueWhatsAppKhataReminders({ now: NOW, config: urduConfig, provider });
+    const result = await processDueWhatsAppKhataReminders({
+      now: NOW,
+      config: urduConfig,
+      provider,
+    });
 
     expect(result).toMatchObject({ configured: true, scanned: 1, prepared: 1 });
     expect(provider.calls[0]).toMatchObject({
@@ -347,6 +355,7 @@ describe('processDueWhatsAppKhataReminders', () => {
   it('allows a fully configured Meta job to use its injected adapter and records acceptance', async () => {
     const metaConfig = readWhatsAppConfig({
       PHARMACY_WHATSAPP_PROVIDER: 'meta',
+      PHARMACY_WHATSAPP_LIVE_SEND: 'approved',
       PHARMACY_WHATSAPP_ACCESS_TOKEN: 'test-token',
       PHARMACY_WHATSAPP_ORGANIZATION_ID: 'org_a',
       PHARMACY_WHATSAPP_PHONE_NUMBER_ID: 'owner-number',
@@ -367,12 +376,65 @@ describe('processDueWhatsAppKhataReminders', () => {
       parseInbound: vi.fn(),
     };
 
-    const first = await processDueWhatsAppKhataReminders({ now: NOW, config: metaConfig, provider });
-    const retry = await processDueWhatsAppKhataReminders({ now: NOW, config: metaConfig, provider });
+    const first = await processDueWhatsAppKhataReminders({
+      now: NOW,
+      config: metaConfig,
+      provider,
+    });
+    const retry = await processDueWhatsAppKhataReminders({
+      now: NOW,
+      config: metaConfig,
+      provider,
+    });
 
     expect(first).toMatchObject({ configured: true, sent: 1 });
     expect(retry).toMatchObject({ duplicate: 1, sent: 0 });
     expect(sendTemplate).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports configured false for Meta without explicit owner live-send approval', async () => {
+    const metaConfig = readWhatsAppConfig({
+      PHARMACY_WHATSAPP_PROVIDER: 'meta',
+      PHARMACY_WHATSAPP_ACCESS_TOKEN: 'test-token',
+      PHARMACY_WHATSAPP_ORGANIZATION_ID: 'org_a',
+      PHARMACY_WHATSAPP_PHONE_NUMBER_ID: 'owner-number',
+      PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER_EN: 'khata_due_en',
+    });
+    store.accounts = [account()];
+    store.customers = [customer(true)];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    const sendTemplate = vi.fn();
+
+    const result = await processDueWhatsAppKhataReminders({
+      now: NOW,
+      config: metaConfig,
+      provider: {
+        name: 'meta',
+        sendTemplate,
+        sendText: vi.fn(),
+        verifyWebhook: vi.fn(),
+        parseInbound: vi.fn(),
+      },
+    });
+
+    expect(result).toMatchObject({ configured: false, scanned: 0 });
+    expect(result.configurationErrors).toContain('LIVE_SEND_NOT_APPROVED');
+    expect(sendTemplate).not.toHaveBeenCalled();
+    expect(store.logs).toEqual([]);
+  });
+
+  it('counts an unsupported stored language as a configuration skip, not missing consent', async () => {
+    store.accounts = [account()];
+    store.customers = [{ ...customer(true), preferredLanguage: 'fr' }];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    const provider = new MockWhatsAppProvider(config);
+
+    const result = await processDueWhatsAppKhataReminders({ now: NOW, config, provider });
+
+    expect(result).toMatchObject({ skippedConfiguration: 1, skippedNoConsent: 0, prepared: 0 });
+    expect(result.configurationErrors).toContain('KHATA_LANGUAGE_UNSUPPORTED');
+    expect(provider.calls).toEqual([]);
+    expect(store.logs).toEqual([]);
   });
 
   it('preserves quiet hours without claiming or sending', async () => {
