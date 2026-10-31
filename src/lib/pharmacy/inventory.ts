@@ -259,7 +259,7 @@ export function blockReasonFor(
  * expiry always allocate in the same order — an unordered tiebreak makes the
  * "recommended batch" recorded on an override non-reproducible.
  */
-function byFefo(a: AllocationCandidate, b: AllocationCandidate): number {
+export function compareFefoCandidates(a: AllocationCandidate, b: AllocationCandidate): number {
   return (
     a.expiresAt.getTime() - b.expiresAt.getTime() ||
     (a.receivedAt?.getTime() ?? 0) - (b.receivedAt?.getTime() ?? 0) ||
@@ -312,7 +312,7 @@ export function planAllocation(input: {
         reason,
       });
   }
-  safe.sort(byFefo);
+  safe.sort(compareFefoCandidates);
 
   const recommendedLotId = safe[0]?.inventoryLotId ?? null;
 

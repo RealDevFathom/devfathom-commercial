@@ -16,6 +16,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import {
   blockReasonFor,
+  compareFefoCandidates,
   type AllocationCandidate,
   type BlockReason,
   type StockDisposition,
@@ -369,7 +370,7 @@ export async function searchCounterCatalog(
 
     let onHandUnits = 0;
     const blocked = new Set<BlockReason>();
-    let best: { lot: LotRow; locationId: string } | null = null;
+    let best: { lot: LotRow; locationId: string; candidate: AllocationCandidate } | null = null;
 
     for (const lot of medicineLots) {
       for (const balance of balancesByLot.get(lot.id) ?? []) {
@@ -381,12 +382,9 @@ export async function searchCounterCatalog(
           continue;
         }
         onHandUnits += balance.onHandUnits;
-        const better =
-          best === null ||
-          lot.batch.expiresAt.getTime() < best.lot.batch.expiresAt.getTime() ||
-          (lot.batch.expiresAt.getTime() === best.lot.batch.expiresAt.getTime() &&
-            lot.id.localeCompare(best.lot.id) < 0);
-        if (better) best = { lot, locationId: balance.stockLocationId };
+        if (best === null || compareFefoCandidates(candidate, best.candidate) < 0) {
+          best = { lot, locationId: balance.stockLocationId, candidate };
+        }
       }
     }
 
