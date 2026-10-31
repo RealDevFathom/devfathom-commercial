@@ -98,7 +98,7 @@ export function accountActivityBridge(
 }
 
 function csvCell(value: string): string {
-  const safe = /^[\t\r ]*[=+\-@]/.test(value) ? `'${value}` : value;
+  const safe = /^[\s\p{Cc}]*[=+\-@]/u.test(value) || /^[\t\r\n]/.test(value) ? `'${value}` : value;
   return `"${safe.replaceAll('"', '""')}"`;
 }
 

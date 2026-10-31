@@ -16,7 +16,7 @@ import { AccountActivityExportButton } from './export-button';
 
 export const metadata: Metadata = { title: 'Account activity bridge' };
 
-type Search = { branch?: string; from?: string; to?: string; selection?: string };
+type Search = Partial<Record<'branch' | 'from' | 'to' | 'selection', string | string[]>>;
 const date = /^\d{4}-\d{2}-\d{2}$/;
 const money = (value: string) => {
   const number = BigInt(value);
@@ -43,13 +43,26 @@ export default async function AccountActivityBridgePage({
       <State title="Permission required">Organization administrator access is required.</State>
     );
 
+  if (
+    Array.isArray(query.branch) ||
+    Array.isArray(query.from) ||
+    Array.isArray(query.to) ||
+    Array.isArray(query.selection)
+  )
+    return <State title="Invalid filters">Choose one value for each filter.</State>;
+
   const organizationId = ctx.entitlements.organizationId;
   const branches = await ctx.db.pharmacyBranch.findMany({
     where: { organizationId, active: true },
     orderBy: { name: 'asc' },
     select: { id: true, name: true },
   });
-  const branch = branches.find((candidate) => candidate.id === query.branch) ?? branches[0];
+  const branch =
+    query.branch === undefined
+      ? branches[0]
+      : branches.find((candidate) => candidate.id === query.branch);
+  if (query.branch !== undefined && !branch)
+    return <State title="Branch unavailable">Choose an active branch in this organization.</State>;
   if (!branch)
     return <State title="No active branch">Create an active pharmacy branch first.</State>;
 
@@ -85,23 +98,22 @@ export default async function AccountActivityBridgePage({
     );
   }
 
-  const requested = query.selection?.split('\u0000');
-  const selected = {
-    accountCode:
-      requested?.length === 2 ? requested[0]! : (statement.accounts[0]?.accountCode ?? ''),
-    currency: requested?.length === 2 ? requested[1]! : (statement.accounts[0]?.currency ?? ''),
-  };
-  let bridge;
-  try {
-    bridge = accountActivityBridge(statement.accounts, selected);
-  } catch {
-    bridge = null;
-  }
+  // Printable tuple values survive HTML parsing and GET form encoding unchanged.
   const choices = statement.accounts.map((row) => ({
-    value: `${row.accountCode}\u0000${row.currency}`,
+    value: JSON.stringify([row.accountCode, row.currency]),
     accountCode: row.accountCode,
     currency: row.currency,
   }));
+  const selected =
+    query.selection === undefined
+      ? choices[0]
+      : choices.find((choice) => choice.value === query.selection);
+  let bridge;
+  try {
+    bridge = selected ? accountActivityBridge(statement.accounts, selected) : null;
+  } catch {
+    bridge = null;
+  }
 
   return (
     <main className="space-y-6">
@@ -138,9 +150,14 @@ export default async function AccountActivityBridgePage({
             Account / currency
             <select
               name="selection"
-              defaultValue={`${selected.accountCode}\u0000${selected.currency}`}
+              defaultValue={selected?.value ?? ''}
               className="min-h-11 rounded-sm border border-border-default bg-surface-raised px-3"
             >
+              {!selected && (
+                <option value="" disabled>
+                  Choose an account / currency
+                </option>
+              )}
               {choices.map((choice) => (
                 <option key={choice.value} value={choice.value}>
                   {choice.accountCode} / {choice.currency}
@@ -148,7 +165,9 @@ export default async function AccountActivityBridgePage({
               ))}
             </select>
           </label>
-          <Button size="lg">Read bridge</Button>
+          <Button type="submit" size="lg">
+            Read bridge
+          </Button>
         </form>
       </SectionCard>
       <SectionCard title="Bridge evidence" titleLevel={2}>

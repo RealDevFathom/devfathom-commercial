@@ -78,6 +78,17 @@ describe('single-account activity bridge', () => {
     expect(csv).toContain('"unknown"');
   });
 
+  it.each(['\n=1+1', '\r\n+SUM(A1)', '\u00a0@SUM(A1)', '\u0000=1+1', '\ttext'])(
+    'neutralizes spreadsheet control and whitespace prefixes: %j',
+    (accountCode) => {
+      const bridge = accountActivityBridge([row({ accountCode })], {
+        accountCode,
+        currency: 'PKR',
+      });
+      expect(accountActivityBridgeCsv(bridge)).toContain(`"'${accountCode}"`);
+    }
+  );
+
   it('uses a specific domain error', () => {
     expect(() => accountActivityBridge([], { accountCode: 'CASH', currency: 'PKR' })).toThrow(
       AccountActivityBridgeError
