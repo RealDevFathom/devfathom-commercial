@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { receiptTextSchema } from '@/lib/receipts/configuration';
 import type { PharmacyPromotion } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { LedgerScope } from './stock-ledger';
@@ -8,7 +9,9 @@ import { Decimal } from '@/lib/restaurant/money-arithmetic';
 
 export const pharmacyPromotionInput = z.object({
   branchId: z.string().min(1),
-  name: z.string().trim().min(1).max(80).regex(/^[^\u0000-\u001f\u007f]+$/),
+  // Names are snapshotted onto issued receipts, so they must satisfy the shared
+  // receipt text contract (no controls, bidi overrides or lone surrogates).
+  name: receiptTextSchema(80).trim().min(1).regex(/^[^\u0000-\u001f\u007f]+$/),
   medicineId: z.string().min(1).optional(),
   effectiveFrom: z.date(),
   effectiveTo: z.date(),

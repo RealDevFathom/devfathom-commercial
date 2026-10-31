@@ -705,6 +705,9 @@ describe('§16 / §2.3 contract item 7 — Phase-1 scattered-conditional audit',
     // Accepted L1 F5 8537f1d6 (from e623f49d): RESTAURANT is a negative khata
     // fixture; centralized khataScope rejects it FORBIDDEN before tender writes.
     'src/server/routers/pharmacy-sales.khata.test.ts',
+    // #727: RESTAURANT is a negative fixture; pharmacy promotion administration
+    // rejects non-pharmacy tenants FORBIDDEN before any promotion write.
+    'src/server/routers/pharmacy-sales.promotions.test.ts',
     // Accepted catering/growth boundaries and their vertical-isolation fixtures.
     // Exact consumers only; no directory-wide exemption.
     'src/lib/ai/growth-recommendations.test.ts',

@@ -87,7 +87,7 @@ describe('#727 promotion command validation', () => {
   it.each([
     { effectiveTo: start }, { effectiveTo: new Date(start.getTime() - 1) },
     { benefitMinor: 1 }, { benefitBasisPoints: undefined }, { benefitBasisPoints: 10001 },
-    { benefitBasisPoints: 0 }, { benefitBasisPoints: 1.5 }, { name: 'bad\nname' },
+    { benefitBasisPoints: 0 }, { benefitBasisPoints: 1.5 }, { name: 'bad\nname' }, { name: 'Offer\u202e' }, { name: 'Offer\u2066x' },
     { name: ' ' }, { name: 'x'.repeat(81) }, { createdByUserId: 'spoof' },
   ])('rejects invalid or forged rule content: %j', (change) => {
     expect(pharmacyPromotionInput.safeParse({ ...input, ...change }).success).toBe(false);

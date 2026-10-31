@@ -335,6 +335,7 @@ it.each(['en', 'ur'] as const)('#727 shows issued promotion savings in %s alongs
     grossMinor: 100, discountMinor: 10, netMinor: 90, tenderedMinor: 90, changeMinor: 0,
   };
   render(<CounterReceiptView {...input} />);
-  expect(screen.getByText(/Nov offer \(-0\.10\)/)).toBeVisible();
-  expect(screen.getByRole('listitem')).toHaveTextContent('0.90');
+  const line = screen.getByRole('listitem');
+  expect(within(line).getByText(/Nov offer \(-0\.10\)/)).toBeVisible();
+  expect(line).toHaveTextContent('0.90');
 });
