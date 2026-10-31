@@ -8,6 +8,7 @@ ALTER TABLE "pharmacy_campaigns" ADD COLUMN "holdPreviousStatus" "PharmacyCampai
 DELETE FROM "notifications" newer
 USING "notifications" older
 WHERE newer."organizationId" = older."organizationId"
+  AND newer."type" = 'pharmacy_whatsapp_account_quality'
   AND newer."userId" = older."userId"
   AND newer."type" = older."type"
   AND newer."entityId" = older."entityId"
@@ -15,5 +16,7 @@ WHERE newer."organizationId" = older."organizationId"
   AND newer."createdAt" >= older."createdAt"
   AND (newer."createdAt" > older."createdAt" OR newer."id" > older."id");
 
-CREATE UNIQUE INDEX "notifications_tenant_user_type_entity_key"
-ON "notifications"("organizationId", "userId", "type", "entityId");
+-- Other notification types may legitimately repeat for the same entity.
+CREATE UNIQUE INDEX "notifications_whatsapp_account_quality_owner_event_key"
+ON "notifications"("organizationId", "userId", "type", "entityId")
+WHERE "type" = 'pharmacy_whatsapp_account_quality';

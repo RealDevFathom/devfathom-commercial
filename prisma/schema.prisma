@@ -4083,7 +4083,7 @@ model Notification {
   @@index([userId, isRead])
   @@index([createdAt])
   @@index([organizationId])
-  @@unique([organizationId, userId, type, entityId], map: "notifications_tenant_user_type_entity_key")
+  // WhatsApp account-quality retries use a partial unique index managed in SQL.
   @@map("notifications")
 }
 
