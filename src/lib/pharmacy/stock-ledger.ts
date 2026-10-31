@@ -533,7 +533,8 @@ export async function allocateForSale(
 /** Internal, already locked customer-order reservation plan; never public counter input. */
 export type ReservedSaleAllocation = {
   allocations: readonly Allocation[];
-  expiresAt: Date;
+  /** Null once an order has reached physical handoff and no longer has a proposal deadline. */
+  expiresAt: Date | null;
 };
 
 export async function allocateReservedForSale(
@@ -590,7 +591,7 @@ export async function allocateReservedForSale(
     rows.map((row) => [`${row.inventoryLotId}:${row.stockLocationId}`, row])
   );
   const at = new Date();
-  if (reservation.expiresAt.getTime() <= at.getTime()) {
+  if (reservation.expiresAt && reservation.expiresAt.getTime() <= at.getTime()) {
     throw new PharmacyInventoryError('BLOCKED_STOCK');
   }
   for (const part of allocations) {

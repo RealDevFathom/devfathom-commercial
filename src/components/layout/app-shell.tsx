@@ -170,7 +170,7 @@ export function AppShell({
   brand,
   pharmacyPlaceholder = false,
 }: {
-  children: React.ReactNode;
+  children?: React.ReactNode;
   brand: TenantBrand;
   pharmacyPlaceholder?: boolean;
 }) {

@@ -131,9 +131,12 @@ function OrderCard({
       {order.runner ? (
         <p className="mt-3 text-xs text-text-muted">Runner: {order.runner.name}</p>
       ) : null}
-      {['PROPOSED', 'ACCEPTED', 'PACKING'].includes(order.status) ? (
+      {['PROPOSED', 'ACCEPTED', 'PACKING', 'READY_FOR_COLLECTION'].includes(order.status) ? (
         <p className="mt-3 text-xs text-text-muted">
-          Reservation expires {dateTime(order.reservationExpiresAt)}
+          {order.status === 'READY_FOR_COLLECTION'
+            ? 'Original reservation deadline'
+            : 'Reservation expires'}{' '}
+          {dateTime(order.reservationExpiresAt)}
         </p>
       ) : null}
       {staff && next ? (
@@ -173,7 +176,8 @@ function OrderCard({
                       ? 'Start counter sale'
                       : 'Complete order'}
           </Button>
-          {['PROPOSED', 'ACCEPTED', 'PACKING'].includes(order.status) ? (
+          {['PROPOSED', 'ACCEPTED', 'PACKING', 'READY_FOR_COLLECTION'].includes(order.status) &&
+          !order.counterSaleId ? (
             <>
               <Button
                 variant="destructive"
