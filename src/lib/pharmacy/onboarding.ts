@@ -18,6 +18,7 @@
  * `assertActivationReady` fail-closed for pharmacy organizations.
  */
 import type { PrismaClient } from '@/generated/prisma/client';
+import { workspaceDateUtc } from '@/lib/timezone';
 import { isPackageCompatibleWithVertical, roleTemplatesForVertical } from '@/lib/vertical-catalog';
 
 import { assertStoredBranchMayOperate, BranchOperationDeniedError } from './regulatory';
@@ -245,57 +246,51 @@ export async function evaluatePharmacyReadiness(
     .filter((template) => template.key !== 'owner-operator')
     .map((template) => template.key);
 
-  const [
-    organization,
-    claims,
-    branch,
-    seededRoleKeys,
-    publishedEntryCount,
-    receivedLotCount,
-    supplierCount,
-  ] = await Promise.all([
-    db.organization.findUnique({
-      where: { id: organizationId },
-      select: { packageId: true, package: { select: { vertical: true } } },
-    }),
-    db.pharmacyOnboardingGateState.findMany({
-      where: { organizationId },
-      select: { gate: true, status: true, evidenceRef: true, actorId: true, recordedAt: true },
-    }),
-    // The licences gate is answered per branch; the organization is ready when
-    // at least one branch has an effective profile that PLAT-02 allows to
-    // operate. Pick the branch that owns the most recent effective profile.
-    db.branchRegulatoryProfile.findFirst({
-      where: {
-        organizationId,
-        effectiveFrom: { lte: at },
-        OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
-      },
-      select: { branchId: true },
-      orderBy: { effectiveFrom: 'desc' },
-    }),
-    // "Roles seeded" means the vertical's own role templates are present, not
-    // merely that the organization has some roles from another vertical.
-    db.organizationRole.count({
-      where: { organizationId, key: { in: requiredRoleKeys } },
-    }),
-    // MED-05 publishes a medicine through a PUBLISHED publication batch; a
-    // catalog row that has never been published is not catalog readiness.
-    db.medicinePublicationEntry.count({
-      where: {
-        organizationId,
-        batch: { status: 'PUBLISHED' },
-        assertion: {
-          status: { in: ['ACCEPTED', 'CORRECTED'] },
-          reviewer: { not: null },
-          medicine: { saleable: true },
+  const organization = await db.organization.findUnique({
+    where: { id: organizationId },
+    select: { packageId: true, package: { select: { vertical: true } }, timezone: true },
+  });
+  const calendarDate = workspaceDateUtc(organization?.timezone, at);
+  const [claims, branch, seededRoleKeys, publishedEntryCount, receivedLotCount, supplierCount] =
+    await Promise.all([
+      db.pharmacyOnboardingGateState.findMany({
+        where: { organizationId },
+        select: { gate: true, status: true, evidenceRef: true, actorId: true, recordedAt: true },
+      }),
+      // The licences gate is answered per branch; the organization is ready when
+      // at least one branch has an effective profile that PLAT-02 allows to
+      // operate. Pick the branch that owns the most recent effective profile.
+      db.branchRegulatoryProfile.findFirst({
+        where: {
+          organizationId,
+          effectiveFrom: { lte: calendarDate },
+          OR: [{ effectiveTo: null }, { effectiveTo: { gt: calendarDate } }],
         },
-      },
-    }),
-    // INV-01 receipt: a lot exists but is only opening stock once received.
-    db.pharmacyInventoryLot.count({ where: { organizationId, receivedAt: { not: null } } }),
-    db.pharmacySupplier.count({ where: { organizationId, authorized: true, active: true } }),
-  ]);
+        select: { branchId: true },
+        orderBy: { effectiveFrom: 'desc' },
+      }),
+      // "Roles seeded" means the vertical's own role templates are present, not
+      // merely that the organization has some roles from another vertical.
+      db.organizationRole.count({
+        where: { organizationId, key: { in: requiredRoleKeys } },
+      }),
+      // MED-05 publishes a medicine through a PUBLISHED publication batch; a
+      // catalog row that has never been published is not catalog readiness.
+      db.medicinePublicationEntry.count({
+        where: {
+          organizationId,
+          batch: { status: 'PUBLISHED' },
+          assertion: {
+            status: { in: ['ACCEPTED', 'CORRECTED'] },
+            reviewer: { not: null },
+            medicine: { saleable: true },
+          },
+        },
+      }),
+      // INV-01 receipt: a lot exists but is only opening stock once received.
+      db.pharmacyInventoryLot.count({ where: { organizationId, receivedAt: { not: null } } }),
+      db.pharmacySupplier.count({ where: { organizationId, authorized: true, active: true } }),
+    ]);
 
   const evidence: PharmacyReadinessEvidence = {
     PREMISES_AND_LICENCES: branch
