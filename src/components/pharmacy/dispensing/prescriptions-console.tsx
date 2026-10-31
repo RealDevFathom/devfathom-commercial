@@ -516,7 +516,12 @@ export function PrescriptionsConsole({
                   every line.
                 </WorkspaceState>
               ) : (
-                <div className="overflow-x-auto">
+                <div
+                  role="region"
+                  aria-label="Captured prescriptions"
+                  tabIndex={0}
+                  className="overflow-x-auto focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                >
                   <table className="w-full min-w-[46rem] text-left text-sm">
                     <thead className="font-mono text-[0.65rem] tracking-wide text-text-muted uppercase">
                       <tr>

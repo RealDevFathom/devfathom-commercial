@@ -83,6 +83,15 @@ beforeEach(() => {
           permissions: [],
           _count: { users: 0 },
         },
+        {
+          id: 'role_goods_in',
+          key: 'goods-in',
+          name: 'Goods-in',
+          description: 'Receive pharmacy deliveries',
+          isSystem: false,
+          permissions: [{ capability: 'pharmacy.procurement', effect: 'ALLOW' }],
+          _count: { users: 0 },
+        },
       ],
       users: [
         {
@@ -110,6 +119,21 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('organization people and access — staff onboarding', () => {
+  it('uses singular seat copy when the license limit is one', () => {
+    const data = overviewData.current as { entitlements: { seatLimit: number } };
+    data.entitlements.seatLimit = 1;
+
+    render(<OrganizationAdminContent />);
+
+    expect(screen.getByText('1 of 1 licensed seat is currently occupied.')).toBeInTheDocument();
+  });
+
+  it('keeps plural seat copy when the license limit is greater than one', () => {
+    render(<OrganizationAdminContent />);
+
+    expect(screen.getByText('1 of 10 licensed seats is currently occupied.')).toBeInTheDocument();
+  });
+
   it('offers an add-staff form with the organization pharmacy departments', () => {
     render(<OrganizationAdminContent />);
 
@@ -166,6 +190,36 @@ describe('organization people and access — staff onboarding', () => {
     const memberDepartment = screen.getAllByLabelText('Department')[1]!;
     const options = [...memberDepartment.querySelectorAll('option')].map((o) => o.textContent);
     expect(options).toEqual(['Counter', 'Dispensary', 'Store']);
+  });
+
+  it('restores server-confirmed access when a Goods-in grant is refused', () => {
+    render(<OrganizationAdminContent />);
+
+    const access = screen.getByLabelText('Custom role');
+    fireEvent.change(access, { target: { value: 'role_goods_in' } });
+    fireEvent.submit(access.closest('form')!);
+
+    expect(mutationFor('updateMember').mutate).toHaveBeenCalledWith(
+      expect.objectContaining({ organizationRoleId: 'role_goods_in' }),
+      expect.objectContaining({ onError: expect.any(Function) })
+    );
+    mutationFor('updateMember').mutate.mock.calls[0]![1].onError();
+
+    expect(access).toHaveValue('');
+  });
+
+  it('removes a displayed Goods-in grant when refreshed access no longer allows it', () => {
+    const data = overviewData.current as {
+      organization: { users: Array<{ organizationRoleId: string | null }> };
+    };
+    data.organization.users[0]!.organizationRoleId = 'role_goods_in';
+    const view = render(<OrganizationAdminContent />);
+    expect(screen.getByLabelText('Custom role')).toHaveValue('role_goods_in');
+
+    data.organization.users[0]!.organizationRoleId = null;
+    view.rerender(<OrganizationAdminContent />);
+
+    expect(screen.getByLabelText('Custom role')).toHaveValue('');
   });
 
   it('shows the complete password policy when adding or resetting a staff password', () => {

@@ -5,8 +5,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { PreferenceBootstrap } from './preference-bootstrap';
 
-function getBootstrapScript() {
-  const markup = renderToStaticMarkup(<PreferenceBootstrap />);
+function getBootstrapScript(nonce?: string) {
+  const markup = renderToStaticMarkup(<PreferenceBootstrap nonce={nonce} />);
   const document = new DOMParser().parseFromString(markup, 'text/html');
 
   return { markup, script: document.querySelector('script') };
@@ -26,11 +26,12 @@ describe('PreferenceBootstrap', () => {
   });
 
   it('has one server-rendered script and one execution boundary per document', () => {
-    const { markup, script } = getBootstrapScript();
+    const { markup, script } = getBootstrapScript('request-nonce');
 
     expect(markup.match(/id="apply-user-preferences"/g)).toHaveLength(1);
     expect(script).not.toBeNull();
     expect(script?.hasAttribute('data-nscript')).toBe(false);
+    expect(script?.getAttribute('nonce')).toBe('request-nonce');
   });
 
   it('preserves the saved preference allowlist and defaults', () => {

@@ -106,7 +106,7 @@ vi.mock('@/server/routers/pharmacy-reports', () => ({
       packAuthenticationFlags: async () => [],
       acknowledgePackAuthenticationFlag: async () => ({}),
       catalog: async () => ({
-        permissions: { operational: true, financial: true },
+        permissions: { operational: true, financial: true, owner: true },
         reports: [
           {
             key: 'sales-margin',
@@ -184,6 +184,7 @@ describe('pharmacy report catalog filters', () => {
       'Replenishment',
       'Repeat purchasing',
       'Supplier-credit follow-up',
+      'Compare branches',
     ]);
     expect(links[0]).toHaveAttribute('href', '/pharmacy/reports/replenishment?branch=b1');
     expect(links[1]).toHaveAttribute('href', '/pharmacy/reports/repeat-purchasing?branch=b1');
