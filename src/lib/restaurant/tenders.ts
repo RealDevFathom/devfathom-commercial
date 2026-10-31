@@ -35,6 +35,7 @@ import {
   quoteTaxSettlement,
   splitFractionalMoney,
   splitMoney,
+  TaxConfigurationError,
   type PaymentCategory,
   type TaxQuoteResult,
 } from './tax-calculator';
@@ -534,7 +535,7 @@ export async function quoteOpenBillSettlement(
     const settlement = await loadSettlementContext(tx, bill, existing, proposedTenderType, at);
     return settlement.quote;
   } catch (err) {
-    if (err instanceof TenderError) return null;
+    if (err instanceof TenderError || err instanceof TaxConfigurationError) return null;
     throw err;
   }
 }

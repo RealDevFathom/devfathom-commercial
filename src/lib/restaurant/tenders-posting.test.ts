@@ -8,6 +8,7 @@ import { getOrderSettlementForBranch } from './checkout-routes';
 import { closePreview } from './daily-close';
 import { appendMovement, closeDrawerSession, foldExpectedCash } from './drawer-sessions';
 import { refundTender } from './refunds';
+import { TaxConfigurationError } from './tax-calculator';
 import {
   applyTenderInTransaction,
   quoteOpenBillSettlement,
@@ -270,6 +271,12 @@ function fixture() {
     },
     restaurantTaxTenderAllocationSnapshot: { findMany: vi.fn(async () => []) },
     restaurantTaxTransactionSnapshot: { findMany: vi.fn(async () => []) },
+    restaurantTerminalReconciliation: {
+      create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({
+        id: 'reconciliation',
+        ...data,
+      })),
+    },
     restaurantCoAuthorization: { create: vi.fn(async () => ({ id: 'approval' })) },
     restaurantPayment: {
       create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
@@ -334,7 +341,7 @@ describe('collection posting and authoritative recorded balances (no DB)', () =>
     f.setTaxRate('0.08');
 
     const quote = await quoteOpenBillSettlement(f.db, f.bill.id, NOW, 'CARD');
-    expect(quote?.taxTotal.toFixed(2)).toBe('0.80');
+    expect(quote?.tax.toFixed(2)).toBe('0.80');
     expect(quote?.remainingDue.toFixed(2)).toBe('10.80');
 
     const result = await f.collect({
@@ -358,6 +365,15 @@ describe('collection posting and authoritative recorded balances (no DB)', () =>
     expect(f.tenders[0]!.amount.toFixed(2)).toBe('10.80');
     expect((f.payments[0]!.amount as Prisma.Decimal).toFixed(2)).toBe('10.80');
     expect((f.paymentEvents[0]!.amount as Prisma.Decimal).toFixed(2)).toBe('10.80');
+    expect(f.raw.restaurantTerminalReconciliation.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        outcome: 'APPLIED',
+        billId: f.bill.id,
+        paymentId: 'payment',
+        tenderId: f.tenders[0]!.id,
+        amount: quote!.remainingDue,
+      }),
+    });
     const tenderTotal = f.tenders.reduce((total, row) => total.plus(row.amount), D('0'));
     const paymentEventTotal = f.paymentEvents.reduce(
       (total, row) => total.plus(row.amount as Prisma.Decimal),
@@ -365,6 +381,37 @@ describe('collection posting and authoritative recorded balances (no DB)', () =>
     );
     expect(tenderTotal.minus(paymentEventTotal).toFixed(2)).toBe('0.00');
     expect(quote!.remainingDue.minus(tenderTotal).toFixed(2)).toBe('0.00');
+  });
+
+  it.each(['missing profile', 'missing CARD rule', 'expired source', 'conflicting profiles'])(
+    'returns no quote for %s while tender application still refuses the configuration',
+    async (scenario) => {
+      const f = fixture();
+      const profiles = await f.raw.restaurantTaxProfileVersion.findMany();
+      if (scenario === 'missing profile') profiles.length = 0;
+      if (scenario === 'missing CARD rule') {
+        profiles[0]!.rules = profiles[0]!.rules.filter((rule) => rule.paymentCategory !== 'CARD');
+      }
+      if (scenario === 'expired source') {
+        for (const rule of profiles[0]!.rules) rule.officialSource.expiresAt = D1;
+      }
+      if (scenario === 'conflicting profiles') profiles.push({ ...profiles[0]!, id: 'conflict' });
+      f.raw.restaurantTaxProfileVersion.findMany.mockResolvedValue(profiles);
+
+      await expect(quoteOpenBillSettlement(f.db, f.bill.id, NOW, 'CARD')).resolves.toBeNull();
+      await expect(f.collect({ tender: { type: 'CARD', amount: '3860' } })).rejects.toBeInstanceOf(
+        TaxConfigurationError
+      );
+      expect(f.tenders).toHaveLength(0);
+      expect(f.payments).toHaveLength(0);
+    }
+  );
+
+  it('propagates unexpected database failures instead of treating them as an unavailable quote', async () => {
+    const f = fixture();
+    const failure = new Error('database unavailable');
+    f.raw.organization.findUnique.mockRejectedValueOnce(failure);
+    await expect(quoteOpenBillSettlement(f.db, f.bill.id, NOW, 'CARD')).rejects.toBe(failure);
   });
 
   it('rejects a terminal approval when the locked CARD quote was repriced', async () => {
