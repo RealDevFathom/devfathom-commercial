@@ -65,6 +65,7 @@ type Procedures = {
     moveTask: (i: { taskId: string; targetColumnId: string; newOrder: number }) => Promise<unknown>;
     bulkMoveTasks: (i: { taskIds: string[]; targetColumnId: string }) => Promise<unknown>;
     updateTask: (i: { id: string; title?: string }) => Promise<unknown>;
+    updateColumn: (i: { id: string; name: string }) => Promise<unknown>;
   };
   teamStats: {
     getAll: () => Promise<{
@@ -372,6 +373,39 @@ describeIfDatabase('task completion time, against PostgreSQL (#410)', () => {
     await api().projects.moveTask({ taskId: task, targetColumnId: DONE, newOrder: 5 });
 
     expect((await completedAt(task))?.getTime()).toBe(finished.getTime());
+  });
+
+  it('includes tasks completed by a column rename and removes them when renamed away', async () => {
+    await client.query(`DELETE FROM tasks WHERE "organizationId" = $1`, [ORG]);
+    const task = await insertTask({
+      columnId: TODO,
+      createdAt: new Date(Date.now() - 2 * DAY),
+      updatedAt: new Date(Date.now() - DAY),
+    });
+    await expect(api().dashboard.getStats()).resolves.toMatchObject({
+      completedTasksThisWeek: 0,
+    });
+
+    await api().projects.updateColumn({ id: TODO, name: 'Done' });
+    expectRecent(await completedAt(task));
+    await expect(api().dashboard.getStats()).resolves.toMatchObject({
+      completedTasksThisWeek: 1,
+    });
+    const all = await api().teamStats.getAll();
+    expect(all.members.find((member) => member.userId === ADMIN)).toMatchObject({
+      completedThisWeek: 1,
+      avgCycleTimeDays: 2,
+    });
+    expect(all.velocity.reduce((sum, day) => sum + day.count, 0)).toBe(1);
+
+    await api().projects.updateColumn({ id: TODO, name: 'To Do' });
+    expect(await completedAt(task)).toBeNull();
+    await expect(api().dashboard.getStats()).resolves.toMatchObject({
+      completedTasksThisWeek: 0,
+    });
+    await expect(api().teamStats.getForUser({ userId: ADMIN })).resolves.toMatchObject({
+      completedThisWeek: 0,
+    });
   });
 
   it('counts completions by when tasks entered Done, never by their last edit', async () => {

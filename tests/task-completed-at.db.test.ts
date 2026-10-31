@@ -250,4 +250,56 @@ async function withTenantFixture(
       expect(await completedAt(created)).toEqual(historical);
     });
   });
+
+  it('tracks column renames under tenant RLS and rolls them back with the rename', async () => {
+    await withTenantFixture(async ({ client, org, done, todo, task, completedAt }) => {
+      const now = Date.now();
+      const open = await task({
+        columnId: todo,
+        createdAt: new Date(now - DAY),
+        updatedAt: new Date(now - DAY),
+      });
+      const finished = await task({
+        columnId: done,
+        createdAt: new Date(now - 30 * DAY),
+        updatedAt: new Date(now - 20 * DAY),
+      });
+      const historical = new Date(now - 20 * DAY);
+      await client.query(`UPDATE tasks SET "completedAt" = $2::timestamp WHERE id = $1`, [
+        finished,
+        utc(historical),
+      ]);
+      await client.query(
+        `SELECT set_config('app.is_platform_admin', 'false', true),
+                set_config('app.current_organization_id', $1, true)`,
+        [org]
+      );
+      const { rows } = await client.query<{ now: string }>(
+        `SELECT timezone('UTC', now())::timestamp(3)::text AS now`
+      );
+      const writeTime = parse(rows[0].now);
+
+      await client.query('SAVEPOINT before_rename');
+      await client.query(`UPDATE columns SET name = 'Done' WHERE id = $1`, [todo]);
+      expect(await completedAt(open)).toEqual(writeTime);
+      expect(await completedAt(finished)).toEqual(historical);
+
+      // Re-saving the same name and changing unrelated column metadata keep the time.
+      await client.query(`UPDATE columns SET name = 'Done', "order" = 3 WHERE id = $1`, [done]);
+      expect(await completedAt(finished)).toEqual(historical);
+      await client.query(`UPDATE columns SET name = 'Archived' WHERE id = $1`, [done]);
+      expect(await completedAt(finished)).toBeNull();
+      expect(await completedAt(open)).toEqual(writeTime);
+      await client.query(`UPDATE columns SET name = 'Done' WHERE id = $1`, [done]);
+      expect(await completedAt(finished)).toEqual(writeTime);
+
+      await client.query('ROLLBACK TO SAVEPOINT before_rename');
+      expect(await completedAt(open)).toBeNull();
+      expect(await completedAt(finished)).toEqual(historical);
+      const names = await client.query<{ name: string }>(`SELECT name FROM columns WHERE id = $1`, [
+        todo,
+      ]);
+      expect(names.rows).toEqual([{ name: 'To Do' }]);
+    });
+  });
 });
