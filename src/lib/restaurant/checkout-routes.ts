@@ -755,7 +755,26 @@ export async function buildReceiptForBranch(db: ScopedDb, billId: string, branch
       receiptNumber: true,
       settledAt: true,
       branch: { select: { name: true, timezone: true } },
-      order: { select: { orderNumber: true, channel: true } },
+      order: {
+        select: {
+          orderNumber: true,
+          channel: true,
+          customer: {
+            select: {
+              loyaltyAccount: {
+                select: {
+                  id: true,
+                  active: true,
+                  walletPasses: {
+                    where: { status: 'ACTIVE' },
+                    select: { platform: true },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
       lines: {
         orderBy: { createdAt: 'asc' },
         select: {
@@ -783,6 +802,23 @@ export async function buildReceiptForBranch(db: ScopedDb, billId: string, branch
   });
   if (!bill) return null;
 
+  const account = bill.order.customer?.loyaltyAccount;
+  const loyaltyWallet =
+    account?.active && account.walletPasses.length > 0
+      ? {
+          // A receipt is a settlement record, so later earns, redemptions, refunds,
+          // and adjustments must not rewrite the balance shown on a historical copy.
+          balance:
+            (
+              await db.loyaltyPointsEntry.aggregate({
+                where: { accountId: account.id, occurredAt: { lte: bill.settledAt! } },
+                _sum: { points: true },
+              })
+            )._sum.points ?? 0,
+          platforms: [...new Set(account.walletPasses.map(({ platform }) => platform))],
+        }
+      : null;
+
   return {
     billId: bill.id,
     orderId: bill.orderId,
@@ -794,6 +830,7 @@ export async function buildReceiptForBranch(db: ScopedDb, billId: string, branch
     receiptNumber: bill.receiptNumber,
     settledAt: bill.settledAt,
     splitKind: bill.splitKind,
+    loyaltyWallet,
     fractionNumerator: bill.fractionNumerator,
     fractionDenominator: bill.fractionDenominator,
     lines: bill.lines.map((line) => ({

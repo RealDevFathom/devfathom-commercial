@@ -30,7 +30,17 @@ function bill() {
     fractionNumerator: null,
     fractionDenominator: null,
     branch: { name: 'Main', timezone: 'UTC' },
-    order: { orderNumber: 42, channel: 'DINE_IN' },
+    order: {
+      orderNumber: 42,
+      channel: 'DINE_IN',
+      customer: {
+        loyaltyAccount: {
+          id: 'loyalty-1',
+          active: true,
+          walletPasses: [{ platform: 'APPLE' }],
+        },
+      },
+    },
     subtotal: decimal('24'),
     taxTotal: decimal('2'),
     serviceChargeTotal: decimal('1'),
@@ -119,6 +129,9 @@ beforeEach(() => {
     db: {
       $executeRawUnsafe: lock,
       restaurantBill: { findFirst: findBill, findFirstOrThrow: findBill },
+      loyaltyPointsEntry: {
+        aggregate: async () => ({ _sum: { points: 640 } }),
+      },
       restaurantBranch: { findFirst: findLayout },
       restaurantStaffProfile: {
         findUnique: async () => ({
@@ -209,6 +222,7 @@ describe('Restaurant receipt dispatch', () => {
       'Discount 0.50',
       'Line tax 2.00',
       'Cash received 30.00',
+      'Loyalty wallet 640 points / Apple Wallet',
     ])
       expect(footer.replaceAll('\n', ' ')).toContain(fact);
     expect(createJob.mock.calls[0][0].data).toMatchObject({
