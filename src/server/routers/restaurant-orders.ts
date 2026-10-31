@@ -623,7 +623,9 @@ async function listOrders(db: ScopedDb, input: ListOrdersInput) {
       serverStaffProfileId: true,
       createdAt: true,
       items: {
-        where: { status: { not: 'VOIDED' } },
+        // This list exposes the amount due and purchased-unit count. Kitchen
+        // workload, including remakes, is represented by tickets instead.
+        where: { status: { not: 'VOIDED' }, remakeOfItemId: null },
         select: {
           unitPrice: true,
           quantity: true,
@@ -656,7 +658,7 @@ async function listOrders(db: ScopedDb, input: ListOrdersInput) {
         id: t.tableId,
         code: t.table?.code ?? t.tableId,
       })),
-      itemCount: order.items.length,
+      itemCount: order.items.reduce((total, item) => total + item.quantity, 0),
       subtotal: money(deriveSubtotal(order.items)),
     })),
     nextCursor: hasMore ? page[page.length - 1]!.id : null,
@@ -764,7 +766,11 @@ async function getOrder(db: ScopedDb, orderId: string) {
     throw new TRPCError({ code: 'NOT_FOUND', message: 'The order does not exist.' });
   }
 
-  const activeItems = order.items.filter((i) => i.status !== 'VOIDED');
+  // Preserve remake rows in the operational history while excluding them from
+  // the guest's payable subtotal.
+  const purchasedItems = order.items.filter(
+    (item) => item.status !== 'VOIDED' && item.remakeOfItemId === null
+  );
   return {
     id: order.id,
     branchId: order.branchId,
@@ -816,7 +822,7 @@ async function getOrder(db: ScopedDb, orderId: string) {
       items: ticket.items,
     })),
     totals: {
-      subtotal: money(deriveSubtotal(activeItems)),
+      subtotal: money(deriveSubtotal(purchasedItems)),
       tax: money(new Prisma.Decimal(0)),
       serviceCharge: money(new Prisma.Decimal(0)),
     },
