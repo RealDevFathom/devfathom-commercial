@@ -52,6 +52,8 @@ function database() {
     pharmacyBranch: {
       findFirst: vi.fn().mockResolvedValue({ id: 'branch', organizationId: 'org', active: true }),
     },
+    pharmacySeasonalCalendarWindow: { findMany: vi.fn().mockResolvedValue([]) },
+    medicineStrengthComponent: { findMany: vi.fn().mockResolvedValue([]) },
     medicine: { findFirst: vi.fn().mockResolvedValue({ id: 'medicine', organizationId: 'org' }) },
     pharmacySaleLine: {
       findMany: vi.fn().mockResolvedValue([
@@ -360,5 +362,101 @@ describe('live replenishment report composition', () => {
     ).rejects.toThrow();
     expect(reads.pharmacyBranch.findFirst).not.toHaveBeenCalled();
     expect(mocks.stock).not.toHaveBeenCalled();
+  });
+});
+
+describe('persisted seasonal calendar in the live report', () => {
+  it('feeds branch salt sales into a separate recorded-sales projection without inventing demand evidence', async () => {
+    const { db, reads } = database();
+    reads.pharmacySeasonalCalendarWindow.findMany.mockResolvedValue([
+      {
+        id: 'season',
+        organizationId: 'org',
+        branchId: 'branch',
+        name: 'Local season',
+        startDate: new Date('2026-09-08T00:00:00Z'),
+        endDate: new Date('2026-09-30T00:00:00Z'),
+        enabled: true,
+      },
+    ]);
+    reads.medicineStrengthComponent.findMany.mockResolvedValue([{ ingredientId: 'salt' }]);
+    reads.unfulfilledDemandEvent.findMany.mockResolvedValue([]);
+    const lines = Array.from({ length: 9 }, (_, index) => {
+      const date = `2026-09-${String(index + 1).padStart(2, '0')}`;
+      return {
+        ...scope,
+        id: `line-${index}`,
+        canonicalUnits: index < 7 ? 10 : 15,
+        createdAt: new Date(`${date}T10:00:00Z`),
+        medicine: { strengths: [{ ingredientId: 'salt' }] },
+        sale: {
+          organizationId: 'org',
+          branchId: 'branch',
+          status: 'COMPLETED',
+          businessDate: new Date(`${date}T00:00:00Z`),
+          completedAt: new Date(`${date}T10:00:00Z`),
+          createdAt: new Date(`${date}T10:00:00Z`),
+          updatedAt: new Date(`${date}T10:00:00Z`),
+        },
+      };
+    });
+    reads.pharmacySaleLine.findMany.mockResolvedValue(lines);
+    const request = {
+      ...input,
+      historyStartDate: '2026-09-01',
+      originDate: '2026-09-10',
+      horizonDays: 2,
+    };
+    const result = await readPharmacyReplenishmentReport(db, request, readAt);
+    expect(result.forecast).toEqual({ status: 'INSUFFICIENT_EVIDENCE', result: null });
+    expect(result.seasonalForecast).toMatchObject({
+      label: 'MODELLED_RECORDED_SALES',
+      baselineDays: 7,
+      projection: [
+        { date: '2026-09-10', units: 15, seasonalityBps: 15_000 },
+        { date: '2026-09-11', units: 15, seasonalityBps: 15_000 },
+      ],
+    });
+    expect(result.seasonalForecast.adjustments[0].salts[0].learnedUplift).toMatchObject({
+      windowId: 'season',
+      upliftBps: 15_000,
+    });
+    expect(reads.pharmacySeasonalCalendarWindow.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { organizationId: 'org', branchId: 'branch', enabled: true },
+      })
+    );
+    expect(reads.medicineStrengthComponent.findMany).toHaveBeenCalledWith({
+      where: { organizationId: 'org', medicineId: 'medicine' },
+      select: { ingredientId: true },
+    });
+    expect(reads.pharmacySaleLine.findMany).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          organizationId: 'org',
+          branchId: 'branch',
+          medicine: {
+            organizationId: 'org',
+            strengths: { some: { organizationId: 'org', ingredientId: { in: ['salt'] } } },
+          },
+          sale: expect.objectContaining({
+            status: 'COMPLETED',
+            organizationId: 'org',
+            branchId: 'branch',
+            completedAt: {
+              gte: new Date('2026-09-01T00:00:00Z'),
+              lt: new Date('2026-09-10T00:00:00Z'),
+              lte: readAt,
+            },
+          }),
+        }),
+      })
+    );
+    reads.pharmacySeasonalCalendarWindow.findMany.mockResolvedValue([]);
+    const disabled = await readPharmacyReplenishmentReport(db, request, readAt);
+    expect(
+      disabled.seasonalForecast.adjustments.every((day) => day.seasonalityBps === 10_000)
+    ).toBe(true);
+    expect(disabled.seasonalForecast.projection?.map((day) => day.units)).toEqual([12, 12]);
   });
 });

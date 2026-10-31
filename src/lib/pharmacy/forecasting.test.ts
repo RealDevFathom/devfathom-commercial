@@ -160,3 +160,92 @@ describe('PUR-09 / invariant 29 approval property', () => {
     }
   });
 });
+
+describe('seasonal forecast regressions', () => {
+  const line: ForecastFixtureLine = {
+    ...fixture,
+    demandUnits: 100,
+    demandWindowDays: 10,
+    leadTimeDays: 10,
+    fillRateBps: 10_000,
+    seasonalityBps: 5_000,
+    openPurchaseOrderUnits: 0,
+    openTransferUnits: 0,
+    onHandUnits: 0,
+    expiringBeforeLeadTimeUnits: 0,
+    unfulfilledDemandUnits: 0,
+    packSize: 1,
+    cashLimitUnits: 100_000,
+    storageLimitUnits: 100_000,
+  };
+  const compare = (value: ForecastFixtureLine) =>
+    compareReplenishment([value], { organizationId: 'org', enabled: true }).forecast[0]!;
+  const history = Array.from({ length: 30 }, (_, i) => ({
+    branchId: 'b',
+    saltId: 's',
+    date: `2026-06-${String(i + 1).padStart(2, '0')}`,
+    units: i === 7 ? 30 : 10,
+  }));
+
+  it('preserves manual reductions without a spike', () => {
+    expect(compare(line).forecastQuantityUnits).toBe(50);
+  });
+  it('preserves reductions learned from an active calendar', () => {
+    const result = compare({
+      ...line,
+      seasonalityBps: undefined,
+      seasonalContext: {
+        branchId: 'b',
+        saltId: 's',
+        forecastDate: '2026-07-03',
+        history: [
+          ...history.map((day) => ({ ...day, units: 10 })),
+          { branchId: 'b', saltId: 's', date: '2026-07-01', units: 5 },
+          { branchId: 'b', saltId: 's', date: '2026-07-02', units: 5 },
+        ],
+        calendar: [
+          {
+            id: 'w',
+            branchId: 'b',
+            name: 'Quiet season',
+            startDate: '2026-07-01',
+            endDate: '2026-07-31',
+            enabled: true,
+          },
+        ],
+      },
+    });
+    expect(result.forecastQuantityUnits).toBe(50);
+    expect(result.reasons[1].value).toContain('5000 bps learned');
+  });
+  it('expires recovered historical spikes', () => {
+    expect(
+      compare({
+        ...line,
+        seasonalContext: {
+          branchId: 'b',
+          saltId: 's',
+          forecastDate: '2026-10-31',
+          calendar: [],
+          history,
+        },
+      }).forecastQuantityUnits
+    ).toBe(50);
+  });
+  it('applies a recent spike with a truthful explanation and configurable recency', () => {
+    const context = {
+      branchId: 'b',
+      saltId: 's',
+      forecastDate: '2026-06-10',
+      calendar: [],
+      history,
+    };
+    const recent = compare({ ...line, seasonalContext: context });
+    expect(recent.forecastQuantityUnits).toBe(300);
+    expect(recent.reasons[1].value).toContain('sales spike on 2026-06-08');
+    expect(
+      compare({ ...line, seasonalContext: { ...context, spikeMaxAgeDays: 1 } })
+        .forecastQuantityUnits
+    ).toBe(50);
+  });
+});

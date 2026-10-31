@@ -141,3 +141,24 @@ describe('transaction-bound seed audits', () => {
     ).rejects.toThrow('Audit transaction must match');
   });
 });
+
+describe('PIN redaction before resolver validation', () => {
+  it('redacts confirmation PINs even when the resolver never annotates the audit', async () => {
+    const ctx = await context({} as ScopedDb, false);
+    recordTrpcAudit({
+      ctx,
+      path: 'pharmacyReports.saveSeasonalWindow',
+      type: 'mutation',
+      input: { confirmationPin: '489153', startDate: 'invalid', branchId: 'branch' },
+      outcome: 'FAILURE',
+    });
+    await flushAuditWritesForTest();
+    const row = mocks.outsideCreate.mock.calls[0][0].data;
+    expect(row.input).toEqual({
+      confirmationPin: '[REDACTED]',
+      startDate: 'invalid',
+      branchId: 'branch',
+    });
+    expect(JSON.stringify(row)).not.toContain('489153');
+  });
+});

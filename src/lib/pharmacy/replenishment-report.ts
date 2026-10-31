@@ -8,6 +8,7 @@ import {
   type PharmacyDemandEvidenceReaderInput,
 } from './demand-evidence-reader';
 import { loadForecastingInputs } from './forecasting-inputs';
+import { readSeasonalSalesForecast } from './seasonal-forecast-reader';
 import {
   simulateReplenishmentDecision,
   type ReplenishmentDecision,
@@ -126,7 +127,27 @@ export async function readPharmacyReplenishmentReport(
     throw new RangeError('Supply row limit exceeded.');
 
   const { forecastInput, ...demand } = evidence;
-  const forecast = forecastInput ? forecastDemandEvidence(forecastInput) : null;
+  const seasonalForecast = await readSeasonalSalesForecast(
+    db,
+    { ...scope, ...request },
+    evidence.days,
+    readAt
+  );
+  const baseForecast = forecastInput ? forecastDemandEvidence(forecastInput) : null;
+  const forecast = baseForecast
+    ? {
+        ...baseForecast,
+        days: baseForecast.days.map((day, index) => {
+          if (day.units === null) return day;
+          const factor = seasonalForecast.adjustments[index]!.seasonalityBps;
+          const units = Number((BigInt(day.units) * BigInt(factor) + 9_999n) / 10_000n);
+          if (!Number.isSafeInteger(units))
+            throw new RangeError('Seasonal forecast exceeds safe units.');
+          return { ...day, units };
+        }),
+        assumptions: [...baseForecast.assumptions, ...seasonalForecast.assumptions],
+      }
+    : null;
   let decision: ReplenishmentDecision | null = null;
   const scenario = request.manualScenario;
   // The delivered supply reader has no stock-completeness contract. In particular,
@@ -189,6 +210,7 @@ export async function readPharmacyReplenishmentReport(
       status: forecast ? ('AVAILABLE' as const) : ('INSUFFICIENT_EVIDENCE' as const),
       result: forecast,
     },
+    seasonalForecast,
     backtest: {
       status: 'INELIGIBLE' as const,
       result: null,

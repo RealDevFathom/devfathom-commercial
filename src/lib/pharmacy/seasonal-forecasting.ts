@@ -262,3 +262,46 @@ export function detectSalesSpikes(
     (a, b) => a.date.localeCompare(b.date) || a.branchId.localeCompare(b.branchId)
   );
 }
+
+/** A spike affects forecasts only for this many UTC calendar days after it occurs. */
+export const DEFAULT_SPIKE_MAX_AGE_DAYS = 7;
+
+export type SeasonalForecastContext = {
+  branchId: string;
+  saltId: string;
+  forecastDate: string;
+  calendar: readonly SeasonalCalendarWindow[];
+  history: readonly SaltSalesDay[];
+  config?: SeasonalLearningConfig;
+  spikeConfig?: SpikeDetectionConfig;
+  spikeMaxAgeDays?: number;
+};
+
+/** Shared by fixture comparisons and live reports; no future observations or stale spikes. */
+export function seasonalForecastAdjustment(context: SeasonalForecastContext, fallbackBps = BPS) {
+  const forecastMs = dateMs(context.forecastDate);
+  const maxAgeDays = context.spikeMaxAgeDays ?? DEFAULT_SPIKE_MAX_AGE_DAYS;
+  if (!Number.isSafeInteger(maxAgeDays) || maxAgeDays < 1) {
+    throw new RangeError('Spike maximum age must be a positive integer');
+  }
+  if (!Number.isSafeInteger(fallbackBps) || fallbackBps <= 0) {
+    throw new RangeError('Seasonality must be positive integer basis points');
+  }
+  const learnedUplift = learnCalendarUplift(context);
+  const detectedSpike = detectSalesSpikes(context.history, context.spikeConfig)
+    .filter((spike) => {
+      const ageDays = (forecastMs - dateMs(spike.date)) / 86_400_000;
+      return (
+        spike.branchId === context.branchId &&
+        spike.saltId === context.saltId &&
+        ageDays > 0 &&
+        ageDays <= maxAgeDays
+      );
+    })
+    .at(-1);
+  const calendarBps = learnedUplift?.upliftBps ?? fallbackBps;
+  const seasonalityBps = detectedSpike
+    ? Math.max(calendarBps, detectedSpike.ratioBps)
+    : calendarBps;
+  return { seasonalityBps, learnedUplift, detectedSpike: detectedSpike ?? null };
+}

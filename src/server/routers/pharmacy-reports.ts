@@ -12,7 +12,14 @@ import {
 } from '@/lib/pharmacy/replenishment-report';
 
 import { hasModule } from '@/lib/entitlements';
-import { isLockedOut, verifyOperatorCredential } from '@/lib/restaurant/operator-credentials';
+import {
+  clearLockout,
+  isLockedOut,
+  registerFailedAttempt,
+  verifyOperatorCredential,
+} from '@/lib/restaurant/operator-credentials';
+import { withTenantDb } from '@/lib/tenancy/scoped-db';
+import { diffChanges } from '@/server/audit';
 import { can, subjectFromSession } from '@/lib/abac';
 import {
   readPharmacyDailyWorkPack,
@@ -127,35 +134,37 @@ const seasonalWindowInput = z
 async function confirmOwnerPin(ctx: TRPCContext, pin: string) {
   if (ctx.session!.user.role !== 'ADMIN')
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Owner access is required.' });
-  const credential = await ctx.db.restaurantOperatorCredential.findFirst({
-    where: {
-      organizationId: ctx.entitlements.organizationId,
-      type: 'PIN',
-      revokedAt: null,
-      deviceId: null,
-      staffProfile: { userId: ctx.session!.user.id, status: 'ACTIVE' },
+  // Authentication counters must commit even when the enclosing mutation rolls back.
+  const valid = await withTenantDb(
+    ctx.entitlements.organizationId,
+    async (db) => {
+      await db.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${JSON.stringify([
+        'pharmacy-seasonal-owner-pin',
+        ctx.entitlements.organizationId,
+        ctx.session!.user.id,
+      ])}, 0))`;
+      const credential = await db.restaurantOperatorCredential.findFirst({
+        where: {
+          organizationId: ctx.entitlements.organizationId,
+          type: 'PIN',
+          revokedAt: null,
+          deviceId: null,
+          staffProfile: { userId: ctx.session!.user.id, status: 'ACTIVE' },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+      const now = new Date();
+      if (!credential || isLockedOut(credential, now)) return false;
+      const matches = await verifyOperatorCredential('PIN', pin, credential.credentialHash);
+      await db.restaurantOperatorCredential.update({
+        where: { id: credential.id, organizationId: ctx.entitlements.organizationId },
+        data: matches ? clearLockout() : registerFailedAttempt(credential, now),
+      });
+      return matches;
     },
-    orderBy: { createdAt: 'desc' },
-  });
-  const now = new Date();
-  if (!credential || isLockedOut(credential, now))
-    throw new TRPCError({ code: 'FORBIDDEN', message: 'A valid owner PIN is required.' });
-  if (!(await verifyOperatorCredential('PIN', pin, credential.credentialHash))) {
-    await ctx.db.restaurantOperatorCredential.update({
-      where: { id: credential.id },
-      data: {
-        failedAttempts: { increment: 1 },
-        ...(credential.failedAttempts >= 4
-          ? { lockedUntil: new Date(now.getTime() + 15 * 60_000) }
-          : {}),
-      },
-    });
-    throw new TRPCError({ code: 'FORBIDDEN', message: 'A valid owner PIN is required.' });
-  }
-  await ctx.db.restaurantOperatorCredential.update({
-    where: { id: credential.id },
-    data: { failedAttempts: 0, lockedUntil: null },
-  });
+    { userId: ctx.session!.user.id, skipDrain: true }
+  );
+  if (!valid) throw new TRPCError({ code: 'FORBIDDEN', message: 'A valid owner PIN is required.' });
 }
 
 async function scope(ctx: TRPCContext) {
@@ -217,15 +226,19 @@ export const pharmacyReportsRouter = router({
         orderBy: [{ startDate: 'asc' }, { id: 'asc' }],
       });
     }),
-  saveSeasonalWindow: auditedProtectedProcedure
+  saveSeasonalWindow: reports
     .input(seasonalWindowInput)
     .mutation(async ({ ctx, input }) => {
       ctx.audit.detail = {
         category: 'PHARMACY_FORECAST',
         action: 'seasonal_window_save',
+        targetType: 'PharmacySeasonalCalendarWindow',
+        targetId: input.id,
+        metadata: { branchId: input.branchId },
         skipInput: true,
       };
       await requireOwnerBranch(ctx, input.branchId);
+      await requireFinancialReports(ctx);
       await confirmOwnerPin(ctx, input.confirmationPin);
       const startDate = new Date(`${input.startDate}T00:00:00.000Z`);
       const endDate = new Date(`${input.endDate}T00:00:00.000Z`);
@@ -236,8 +249,12 @@ export const pharmacyReportsRouter = router({
         });
       // Scoped transaction middleware keeps this lock through the overlap check and write,
       // so two owner requests for the same branch cannot both create overlapping windows.
-      await ctx.db
-        .$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`${ctx.entitlements.organizationId}\u0000${input.branchId}`}, 0))`;
+      await ctx.db.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${JSON.stringify([
+        'pharmacy-seasonal-calendar',
+        ctx.entitlements.organizationId,
+        input.branchId,
+      ])}, 0))`;
+      let previous: Record<string, unknown> = {};
       if (input.id) {
         const existing = await ctx.db.pharmacySeasonalCalendarWindow.findFirst({
           where: {
@@ -245,9 +262,9 @@ export const pharmacyReportsRouter = router({
             organizationId: ctx.entitlements.organizationId,
             branchId: input.branchId,
           },
-          select: { id: true },
         });
         if (!existing) throw new TRPCError({ code: 'NOT_FOUND', message: 'Window not found.' });
+        previous = existing;
       }
       const overlap = input.enabled
         ? await ctx.db.pharmacySeasonalCalendarWindow.findFirst({
@@ -275,7 +292,7 @@ export const pharmacyReportsRouter = router({
         enabled: input.enabled,
         updatedById: ctx.session!.user.id,
       };
-      return input.id
+      const saved = await (input.id
         ? ctx.db.pharmacySeasonalCalendarWindow.update({
             where: {
               organizationId_id: { organizationId: ctx.entitlements.organizationId, id: input.id },
@@ -284,9 +301,19 @@ export const pharmacyReportsRouter = router({
           })
         : ctx.db.pharmacySeasonalCalendarWindow.create({
             data: { ...data, createdById: ctx.session!.user.id },
-          });
+          }));
+      ctx.audit.detail.operation = input.id ? 'UPDATE' : 'CREATE';
+      ctx.audit.detail.targetId = saved.id;
+      ctx.audit.detail.targetLabel = saved.name;
+      ctx.audit.detail.changes = diffChanges<Record<string, unknown>>(previous, saved, [
+        'name',
+        'startDate',
+        'endDate',
+        'enabled',
+      ]);
+      return saved;
     }),
-  deleteSeasonalWindow: auditedProtectedProcedure
+  deleteSeasonalWindow: reports
     .input(
       z
         .object({
@@ -300,16 +327,29 @@ export const pharmacyReportsRouter = router({
       ctx.audit.detail = {
         category: 'PHARMACY_FORECAST',
         action: 'seasonal_window_delete',
+        operation: 'DELETE',
+        targetType: 'PharmacySeasonalCalendarWindow',
+        targetId: input.id,
+        metadata: { branchId: input.branchId },
         skipInput: true,
       };
       await requireOwnerBranch(ctx, input.branchId);
+      await requireFinancialReports(ctx);
       await confirmOwnerPin(ctx, input.confirmationPin);
-      return ctx.db.pharmacySeasonalCalendarWindow.delete({
+      const removed = await ctx.db.pharmacySeasonalCalendarWindow.delete({
         where: {
           organizationId_id: { organizationId: ctx.entitlements.organizationId, id: input.id },
           branchId: input.branchId,
         },
       });
+      ctx.audit.detail.targetLabel = removed.name;
+      ctx.audit.detail.changes = diffChanges<Record<string, unknown>>(removed, {}, [
+        'name',
+        'startDate',
+        'endDate',
+        'enabled',
+      ]);
+      return removed;
     }),
   marketing: reports
     .input(filters.pick({ branchId: true, from: true, to: true }))
