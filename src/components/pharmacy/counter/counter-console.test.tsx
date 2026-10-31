@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { CounterCart } from '@/lib/pharmacy/counter';
+import type { CounterCart, CounterSearchRow } from '@/lib/pharmacy/counter';
 import type { CounterReceipt } from '@/lib/pharmacy/counter-receipt';
 
 type Query = {
@@ -1277,6 +1277,110 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
     });
     expect(mocks.mutations.addLine).not.toHaveBeenCalled();
   });
+
+  it.each(['fefo', 'other', 'switch-fefo', 'repeat-other', 'keep-fefo'] as const)(
+    '#719 a scanned shelf label selects its exact lot (%s batch)',
+    async (mode) => {
+      const row: CounterSearchRow = {
+        medicineId: 'med-label',
+        displayName: 'Loose Strip',
+        brandName: null,
+        manufacturer: null,
+        strength: '500 mg',
+        presentationId: 'presentation-a',
+        presentation: 'Tablet',
+        dosageForm: 'Tablet',
+        route: 'Oral',
+        matchedOn: 'BARCODE',
+        recommendedLotId: 'lot-fefo',
+        labelLotId: mode === 'fefo' ? 'lot-fefo' : 'lot-labelled',
+        packLevelId: 'pack-a',
+        unitsPerPack: 30,
+        printedMrpMinor: 10000,
+        roundingIncrementMinor: 1,
+        batchNumber: 'B-1',
+        nearestSafeExpiry: '2028-06-30T00:00:00.000Z',
+        onHandUnits: 60,
+        saleableUnits: [],
+        saleUnits: [
+          { kind: 'PACK', packLevelId: 'pack-a', levelLabel: 'BOX', canonicalUnitsPerSaleUnit: 30 },
+        ],
+        restriction: {
+          rx: false,
+          otc: true,
+          restricted: false,
+          controlled: false,
+          highAlert: false,
+          lasa: false,
+        },
+        storage: { coldChain: false, locationKind: 'STORE', locationCode: 'A', locationName: 'Store' },
+        blocked: [],
+      };
+      const fefo: CounterSearchRow = {
+        ...row, labelLotId: undefined, unitsPerPack: 10, printedMrpMinor: 1000,
+        packLevelId: 'pack-fefo',
+        saleUnits: [{ kind: 'PACK', packLevelId: 'pack-fefo', levelLabel: 'BOX', canonicalUnitsPerSaleUnit: 10 }],
+      };
+      row.fefoSelection = fefo;
+      mocks.queries.counterSearch = query({ rows: [row] });
+      mocks.mutations.addLine!.mockResolvedValue({});
+      render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      const search = screen.getByLabelText('Scan or search');
+      fireEvent.change(search, { target: { value: '7100000000000041' } });
+      fireEvent.keyDown(search, { key: 'Enter' });
+      await waitFor(() =>
+        expect(mocks.searchFetch).toHaveBeenCalledWith(
+          { branchId: 'branch-a', query: '7100000000000041' },
+          { staleTime: 10_000 }
+        )
+      );
+      if (mode === 'fefo') {
+        await waitFor(() =>
+          expect(mocks.mutations.addLine).toHaveBeenCalledWith(
+            expect.objectContaining({ medicineId: 'med-label', quantity: 1, labelLotId: 'lot-fefo', canonicalUnitsPerSaleUnit: 30 })
+          )
+        );
+        expect(mocks.mutations.addLine!.mock.calls[0]![0]).not.toHaveProperty('override');
+        return;
+      }
+      // A non-FEFO labelled batch is staged as an override; nothing is sold
+      // until the pharmacist records why.
+      expect(
+        await screen.findByText(/This shelf label is for a batch FEFO would not sell first/)
+      ).toBeInTheDocument();
+      expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+      fireEvent.change(screen.getByLabelText('Override reason'), { target: { value: 'Customer has this pack' } });
+      if (mode === 'switch-fefo') {
+        mocks.queries.counterSearch = query({ rows: [{ ...fefo, labelLotId: 'lot-fefo' }] });
+        fireEvent.change(search, { target: { value: '7100000000000042' } });
+        fireEvent.keyDown(search, { key: 'Enter' });
+        await waitFor(() => expect(mocks.mutations.addLine).toHaveBeenCalledWith(
+          expect.objectContaining({ labelLotId: 'lot-fefo', packLevelId: 'pack-fefo', canonicalUnitsPerSaleUnit: 10 })
+        ));
+        expect(mocks.mutations.addLine!.mock.calls[0]![0]).not.toHaveProperty('override');
+      } else if (mode === 'repeat-other') {
+        fireEvent.keyDown(search, { key: 'Enter' });
+        await waitFor(() => expect(screen.getByLabelText('Override reason')).toHaveValue(''));
+        expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+      } else if (mode === 'keep-fefo') {
+        fireEvent.click(screen.getByRole('button', { name: 'Keep FEFO batch' }));
+        fireEvent.click(screen.getByRole('button', { name: /Add to cart/ }));
+        await waitFor(() => expect(mocks.mutations.addLine).toHaveBeenCalledWith(
+          expect.objectContaining({ packLevelId: 'pack-fefo', canonicalUnitsPerSaleUnit: 10 })
+        ));
+        expect(mocks.mutations.addLine!.mock.calls[0]![0]).not.toHaveProperty('labelLotId');
+        expect(mocks.mutations.addLine!.mock.calls[0]![0]).not.toHaveProperty('override');
+      } else {
+        fireEvent.click(screen.getByRole('button', { name: /Add to cart/ }));
+        await waitFor(() => expect(mocks.mutations.addLine).toHaveBeenCalledWith(
+          expect.objectContaining({
+            labelLotId: 'lot-labelled', canonicalUnitsPerSaleUnit: 30,
+            override: expect.objectContaining({ inventoryLotId: 'lot-labelled', reason: 'Customer has this pack' }),
+          })
+        ));
+      }
+    }
+  );
 
   it('does not run F9 while a field is focused or a dialog is open', () => {
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);

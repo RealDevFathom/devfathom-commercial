@@ -398,12 +398,20 @@ export default async function PharmacyInventoryPage({
         heading="Inventory"
         description="FEFO lots, controlled stock movements, chain operations, and the ranked work queue."
         actions={
-          <Link
-            href="/pharmacy/inventory/imports"
-            className={buttonVariants({ variant: 'secondary' })}
-          >
-            Imported stock / Awaiting verification
-          </Link>
+          <div className="flex flex-wrap gap-2">
+            <Link
+              href="/pharmacy/inventory/imports"
+              className={buttonVariants({ variant: 'secondary' })}
+            >
+              Imported stock / Awaiting verification
+            </Link>
+            <Link
+              href={`/pharmacy/inventory/labels?${new URLSearchParams({ branch: branch.id })}`}
+              className={buttonVariants({ variant: 'secondary' })}
+            >
+              Shelf and price labels
+            </Link>
+          </div>
         }
       />
       {query.notice ? (

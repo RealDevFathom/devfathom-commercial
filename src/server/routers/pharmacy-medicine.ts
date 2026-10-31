@@ -6,6 +6,7 @@ import {
 } from '@/lib/pharmacy/pricing';
 import { FileDrapNoticeSource, ingestDrapSource } from '@/lib/pharmacy/drap-monitoring';
 import { TRPCError } from '@trpc/server';
+import { parseShelfLabelCode } from '@/lib/pharmacy/shelf-label-code';
 import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
 import {
@@ -29,6 +30,11 @@ import {
   protectedProcedure,
   router,
 } from '../trpc';
+
+const registeredBarcodeCode = z.string().trim().min(1).max(200).refine(
+  (code) => parseShelfLabelCode(normalizeMedicineText(code)) === null,
+  { message: 'This code is reserved for lot shelf labels.' }
+);
 
 const family = z.enum(['PHARMACEUTICAL', 'BIOLOGICAL', 'DEVICE', 'ALTERNATIVE', 'FRONT_SHOP']);
 const provenance = z
@@ -711,7 +717,7 @@ export const pharmacyMedicineRouter = router({
           presentationId: z.string().min(1),
           packLevelId: z.string().min(1).optional(),
           type: z.enum(['GTIN', 'MANUFACTURER', 'INTERNAL']),
-          code: z.string().trim().min(1).max(200),
+          code: registeredBarcodeCode,
         })
         .strict()
     )
@@ -1054,6 +1060,12 @@ export const pharmacyMedicineRouter = router({
             data: { medicineId, ingredientId: ingredient.id, ...parsedStrength },
           });
           const barcode = values.get('barcode');
+          if (barcode && parseShelfLabelCode(normalizeMedicineText(barcode)) !== null) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'This code is reserved for lot shelf labels.',
+            });
+          }
           if (barcode)
             await tx.medicineBarcode.create({
               data: {

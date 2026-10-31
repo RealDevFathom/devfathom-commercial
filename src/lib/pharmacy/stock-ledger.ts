@@ -433,6 +433,8 @@ export type AllocateForSaleInput = {
   requiredUnits: number;
   at: Date;
   idempotencyKeyPrefix: string;
+  /** A scanned shelf label must allocate exclusively from this lot. */
+  labelLotId?: string;
   override?: { inventoryLotId: string; reason: string; approvalPolicy: string };
   /**
    * §8A invariant 6. When the branch cannot cover the quantity, allocate what
@@ -500,8 +502,20 @@ export async function allocateForSale(
     ) {
       throw new PharmacyInventoryError('BLOCKED_STOCK');
     }
-    if (!shortOfStock || !input.emergency) throw error;
+    if (!shortOfStock || !input.emergency || input.labelLotId) throw error;
     return emergencyShortfall(db, scope, input, candidates, byBucket, input.emergency.reason);
+  }
+
+  if (input.labelLotId) {
+    if (
+      (input.override && input.override.inventoryLotId !== input.labelLotId) ||
+      (!input.override && plan.recommendedLotId !== input.labelLotId)
+    ) {
+      throw new PharmacyInventoryError('OVERRIDE_EVIDENCE_MISSING');
+    }
+    if (plan.allocations.some((part) => part.inventoryLotId !== input.labelLotId)) {
+      throw new PharmacyInventoryError('INSUFFICIENT_STOCK');
+    }
   }
 
   let overrideId: string | null = null;
