@@ -21,8 +21,23 @@ it('keeps enrollment on the login screen, preserves errors, and shows recovery c
     .mockResolvedValueOnce({ ok: true, json: async () => ({ recoveryCodes: ['recovery-one'] }) });
   vi.stubGlobal('fetch', fetchMock);
   const { container } = render(<PlatformLoginForm />);
+  fireEvent.change(screen.getByLabelText('Work email'), {
+    target: { value: 'operator@example.test' },
+  });
+  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'correct password' } });
   fireEvent.submit(container.querySelector('form')!);
   fireEvent.click(await screen.findByRole('button', { name: 'Set up authenticator' }));
+  expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/platform/session', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      email: 'operator@example.test',
+      password: 'correct password',
+      authenticationCode: '',
+    }),
+  });
+  expect(screen.queryByLabelText('Work email')).not.toBeInTheDocument();
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   expect(router.replace).not.toHaveBeenCalled();
   expect(await screen.findByText('SYNTHETICKEY')).toBeVisible();
   fireEvent.change(screen.getByLabelText('Authentication code'), { target: { value: '123456' } });
@@ -64,6 +79,8 @@ it('associates a failed sign-in error with both credentials until either is edit
   fireEvent.submit(container.querySelector('form')!);
 
   const alert = await screen.findByRole('alert');
+  expect(email).toHaveValue('operator@example.test');
+  expect(password).toHaveValue('wrong password');
   expect(email).toHaveAttribute('aria-invalid', 'true');
   expect(password).toHaveAttribute('aria-invalid', 'true');
   expect(email).toHaveAttribute('aria-describedby', alert.id);
@@ -75,4 +92,46 @@ it('associates a failed sign-in error with both credentials until either is edit
   expect(password).toHaveAttribute('aria-invalid', 'false');
   expect(email).not.toHaveAttribute('aria-describedby');
   expect(password).not.toHaveAttribute('aria-describedby');
+});
+
+it('preserves submitted values and associates a network failure with the credentials until edited', async () => {
+  const fetchMock = vi.fn().mockRejectedValueOnce(new Error('offline'));
+  vi.stubGlobal('fetch', fetchMock);
+  const { container } = render(<PlatformLoginForm />);
+  const email = screen.getByLabelText('Work email');
+  const password = screen.getByLabelText('Password');
+  const code = screen.getByLabelText('Authentication code');
+  fireEvent.change(email, { target: { value: 'operator@example.test' } });
+  fireEvent.change(password, { target: { value: 'correct password' } });
+  fireEvent.change(code, { target: { value: 'recovery-code' } });
+  fireEvent.submit(container.querySelector('form')!);
+
+  const alert = await screen.findByRole('alert');
+  expect(alert).toHaveTextContent(
+    'The control desk could not be reached. Check the connection and try again.'
+  );
+  expect(email).toHaveFocus();
+  expect(email).toHaveValue('operator@example.test');
+  expect(password).toHaveValue('correct password');
+  expect(code).toHaveValue('recovery-code');
+  expect(fetchMock).toHaveBeenCalledWith('/api/platform/session', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      email: 'operator@example.test',
+      password: 'correct password',
+      authenticationCode: 'recovery-code',
+    }),
+  });
+  for (const field of [email, password]) {
+    expect(field).toHaveAttribute('aria-invalid', 'true');
+    expect(field).toHaveAttribute('aria-describedby', alert.id);
+  }
+  expect(screen.getByRole('button', { name: 'Continue to control desk' })).toBeEnabled();
+  fireEvent.change(password, { target: { value: 'another password' } });
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  for (const field of [email, password]) {
+    expect(field).toHaveAttribute('aria-invalid', 'false');
+    expect(field).not.toHaveAttribute('aria-describedby');
+  }
 });

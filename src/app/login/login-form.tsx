@@ -1,6 +1,6 @@
 'use client';
 
-import { useId, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { signIn } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { Building2, Loader2 } from 'lucide-react';
@@ -31,6 +31,7 @@ export function LoginForm({
 }) {
   const errorId = useId();
   const emailRef = useRef<HTMLInputElement>(null);
+  const codeRef = useRef<HTMLInputElement>(null);
   const router = useRouter();
   const hydrated = useHydrated();
   const [showPassword, setShowPassword] = useState(false);
@@ -42,12 +43,25 @@ export function LoginForm({
   const [twoFactor, setTwoFactor] = useState(
     initialError === '2fa-required' || initialError === '2fa-invalid'
   );
+  const [errorField, setErrorField] = useState<'credentials' | 'totp'>(
+    initialError === '2fa-required' || initialError === '2fa-invalid' ? 'totp' : 'credentials'
+  );
+  const credentialsInvalid = Boolean(error) && errorField === 'credentials';
+  const codeInvalid = Boolean(error) && errorField === 'totp';
 
-  const clearError = () => setError('');
+  // Wait for React to mount the code input and commit its error description
+  // before focusing it, including when an already visible code is rejected.
+  useEffect(() => {
+    if (error) (errorField === 'totp' ? codeRef : emailRef).current?.focus();
+  }, [error, errorField]);
 
-  const showError = (message: string) => {
+  const clearError = (field: 'credentials' | 'totp') => {
+    if (errorField === field) setError('');
+  };
+
+  const showError = (message: string, field: 'credentials' | 'totp' = 'credentials') => {
+    setErrorField(field);
     setError(message);
-    emailRef.current?.focus();
   };
 
   const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
@@ -82,10 +96,13 @@ export function LoginForm({
         if (result.code === '2fa_required') {
           // Password was correct; the account needs a second factor. Reveal the field.
           setTwoFactor(true);
-          showError('Enter the 6-digit code from your authenticator app.');
+          showError('Enter the 6-digit code from your authenticator app.', 'totp');
         } else if (result.code === '2fa_invalid') {
           setTwoFactor(true);
-          showError('That code is incorrect or expired. Try again, or use a recovery code.');
+          showError(
+            'That code is incorrect or expired. Try again, or use a recovery code.',
+            'totp'
+          );
         } else if (result.code === 'sso_required') {
           setTwoFactor(false);
           showError('Password sign-in is disabled. Use your organization identity provider.');
@@ -169,9 +186,9 @@ export function LoginForm({
               autoFocus
               name="email"
               required
-              onChange={clearError}
-              aria-invalid={Boolean(error)}
-              aria-describedby={error ? errorId : undefined}
+              onChange={() => clearError('credentials')}
+              aria-invalid={credentialsInvalid}
+              aria-describedby={credentialsInvalid ? errorId : undefined}
               className={inputClass}
             />
           </div>
@@ -190,9 +207,9 @@ export function LoginForm({
               autoComplete="current-password"
               name="password"
               required
-              onChange={clearError}
-              aria-invalid={Boolean(error)}
-              aria-describedby={error ? errorId : undefined}
+              onChange={() => clearError('credentials')}
+              aria-invalid={credentialsInvalid}
+              aria-describedby={credentialsInvalid ? errorId : undefined}
               className={inputClass}
             />
             <div className="text-end">
@@ -211,6 +228,7 @@ export function LoginForm({
                 Authentication code
               </label>
               <input
+                ref={codeRef}
                 id="totp"
                 type="text"
                 inputMode="numeric"
@@ -219,8 +237,9 @@ export function LoginForm({
                 autoFocus
                 name="totp"
                 required
-                aria-invalid={Boolean(error)}
-                aria-describedby={error ? errorId : undefined}
+                onChange={() => clearError('totp')}
+                aria-invalid={codeInvalid}
+                aria-describedby={codeInvalid ? errorId : undefined}
                 className={inputClass}
               />
               <p className="text-xs text-text-muted">
