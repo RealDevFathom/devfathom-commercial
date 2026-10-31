@@ -460,6 +460,7 @@ export function moneyErrorResponse(err: unknown): NextResponse | null {
       err.reason === 'REFUND_EXCEEDS_TENDER' ||
       err.reason === 'TIP_REFUND_EXCEEDS_TENDER' ||
       err.reason === 'INVALID_REVERSAL' ||
+      err.reason === 'BILL_NOT_SETTLED' ||
       err.reason === 'DRAWER_NOT_OPEN';
     return json({ error: err.message }, notFound ? 404 : conflict ? 409 : 400);
   }

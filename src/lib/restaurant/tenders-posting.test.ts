@@ -121,7 +121,7 @@ function fixture() {
     $transaction: vi.fn(async (work: (tx: ScopedDb) => Promise<unknown>) => work(db)),
     $queryRaw: vi.fn(async (sql: TemplateStringsArray) => {
       locks.push(sql.join('?'));
-      return [{ id: 'locked' }];
+      return [{ id: 'locked', status: bill.status }];
     }),
     $executeRaw: vi.fn(async (_sql: TemplateStringsArray, key: string) => {
       locks.push(key);
@@ -465,6 +465,34 @@ describe('collection posting and authoritative recorded balances (no DB)', () =>
     await expect(
       f.collect({ tender: { type: 'CASH', amount: '1', cashReceived: '1' } })
     ).rejects.toMatchObject({ name: 'MoneyIdempotencyError' });
+  });
+
+  it('refuses a partial-tender refund while the bill is open before any refund writes', async () => {
+    const f = fixture();
+    const collected = await f.collect({
+      tender: { type: 'CASH', amount: '1000', cashReceived: '1000' },
+    });
+    expect(f.bill.status).toBe('OPEN');
+    const keyWrites = f.raw.restaurantMoneyIdempotencyKey.create.mock.calls.length;
+
+    await expect(
+      refundTender(f.db, {
+        originalTenderId: collected.tenderId,
+        amount: '1000',
+        reason: 'Synthetic partial-tender refund',
+        approvingStaffProfileId: 'manager',
+        actor: { ...actor, idempotencyKey: 'refund' },
+        now: NOW,
+      })
+    ).rejects.toMatchObject({ reason: 'BILL_NOT_SETTLED' });
+
+    expect(f.raw.restaurantMoneyIdempotencyKey.create).toHaveBeenCalledTimes(keyWrites);
+    expect(f.raw.restaurantCoAuthorization.create).not.toHaveBeenCalled();
+    expect(f.raw.restaurantRefund.create).not.toHaveBeenCalled();
+    expect(f.movements).toHaveLength(2);
+    expect(
+      (await getOrderSettlementForBranch(f.db, 'order', 'branch'))?.bills[0].remainingDue
+    ).toBe('2860.00');
   });
 
   it('reverses on collection day even for a prior-day bill; refund replay leaves the drawer unchanged', async () => {
