@@ -269,6 +269,92 @@ describeIfDatabase('margin optimizer cost isolation under restricted PostgreSQL'
     expect(rows.map((row) => row.medicineId)).not.toContain(two.medicineId);
     expect(rows.map((row) => row.medicineId)).not.toContain(foreign.medicineId);
   });
+
+  it.each([
+    { label: 'supplier', supplierUnits: 35, restockUnits: 0 },
+    { label: 'restock', supplierUnits: 0, restockUnits: 35 },
+    { label: 'combined', supplierUnits: 15, restockUnits: 20 },
+  ])(
+    'excludes $label reservations from available units',
+    async ({ label, supplierUnits, restockUnits }) => {
+      const fixture = await branchFixture(
+        ORG_A,
+        `branch_margin_${label}_${suffix}`,
+        `margin-${label}-${suffix}`
+      );
+      await inOrg(ORG_A, async (db) => {
+        await db.$queryRaw`SELECT set_config('app.current_branch_id', ${fixture.branchId}, true)`;
+        const lot = await db.pharmacyInventoryLot.findFirstOrThrow({
+          where: { organizationId: ORG_A, branchId: fixture.branchId },
+        });
+        if (supplierUnits > 0) {
+          await db.pharmacySupplierClaim.create({
+            data: {
+              organizationId: ORG_A,
+              branchId: fixture.branchId,
+              inventoryLotId: lot.id,
+              reservedUnits: supplierUnits,
+              returnBy: EXPIRES_AT,
+              createdById: ACTOR,
+            },
+          });
+        }
+        if (restockUnits > 0) {
+          const demand = await db.unfulfilledDemandEvent.create({
+            data: {
+              organizationId: ORG_A,
+              branchId: fixture.branchId,
+              requestedMedicineId: fixture.medicineId,
+              saleUnit: 'UNIT',
+              quantity: restockUnits,
+              reason: 'STOCKOUT',
+              inventoryRuleSnapshot: {},
+              capturedByUserId: ACTOR,
+            },
+          });
+          const interest = await db.pharmacyRestockInterest.create({
+            data: {
+              organizationId: ORG_A,
+              branchId: fixture.branchId,
+              demandEventId: demand.id,
+              reserveOnArrival: true,
+              quantityUnits: restockUnits,
+              createdByUserId: ACTOR,
+            },
+          });
+          await db.pharmacyRestockReservation.create({
+            data: {
+              organizationId: ORG_A,
+              branchId: fixture.branchId,
+              interestId: interest.id,
+              inventoryLotId: lot.id,
+              stockLocationId: fixture.locationId,
+              reservedUnits: restockUnits,
+            },
+          });
+        }
+      });
+      // A fresh tenant-only connection has no branch GUC. The optimizer must
+      // bind it itself or branch-RLS would silently hide the restock hold.
+      const read = (quantityCanonicalUnits: number) =>
+        inOrg(ORG_A, (db) =>
+          deps.substituteFinder.findMarginOptimizedBrandProposals(
+            db,
+            { organizationId: ORG_A, branchId: fixture.branchId },
+            {
+              medicineId: fixture.medicineId,
+              presentationId: fixture.presentationId,
+              quantityCanonicalUnits,
+              at: NOW,
+            }
+          )
+        );
+      await expect(read(10)).resolves.toEqual([]);
+      const rows = await read(5);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.availableCanonicalUnits).toBe(5);
+    }
+  );
 });
 
 describeIfDatabase('PLAT-04 purchasing read — cross-branch id substitution', () => {

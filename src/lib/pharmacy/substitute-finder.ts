@@ -1,5 +1,7 @@
 import type { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { blockReasonFor } from './inventory';
+import { loadStockCandidatesForRead } from './stock-ledger';
 
 export class PharmacySubstituteError extends Error {
   constructor(readonly code: 'NOT_FOUND' | 'NOT_EQUIVALENT' | 'NOT_SALEABLE') {
@@ -241,23 +243,45 @@ export async function findMarginOptimizedBrandProposals(
   });
 
   const requestedStrength = strengthKey(requested.strengths);
-  const proposals = lots.flatMap((lot): MarginOptimizedBrandProposal[] => {
+  const matchingLots = lots.filter((lot) => {
+    const presentation = lot.packLevel.presentation;
+    return (
+      strengthKey(lot.batch.medicine.strengths) === requestedStrength &&
+      normalized(presentation.dosageForm) === normalized(requestedPresentation.dosageForm) &&
+      normalized(presentation.route) === normalized(requestedPresentation.route)
+    );
+  });
+  const availableByLot = new Map<string, number>();
+  // Use the same reservation-aware evidence and saleability rules as allocation.
+  // Read each matching medicine once, even when it has multiple receipt lots.
+  if (matchingLots.length > 0) {
+    await db.$transaction(async (tx) => {
+      // Restock reservations have branch RLS: bind the same connection used by
+      // the ledger read, including when the caller is the RSC database facade.
+      const [previous] = await tx.$queryRaw<{ branch: string | null }[]>`
+        SELECT current_setting('app.current_branch_id', true) AS branch`;
+      await tx.$queryRaw`SELECT set_config('app.current_branch_id', ${scope.branchId}, true)`;
+      try {
+        for (const medicineId of new Set(matchingLots.map((lot) => lot.batch.medicine.id))) {
+          const candidates = await loadStockCandidatesForRead(tx as ScopedDb, scope, medicineId);
+          for (const candidate of candidates) {
+            if (blockReasonFor(candidate, { ...scope, at }) !== null) continue;
+            availableByLot.set(
+              candidate.inventoryLotId,
+              (availableByLot.get(candidate.inventoryLotId) ?? 0) + candidate.availableUnits
+            );
+          }
+        }
+      } finally {
+        await tx.$queryRaw`SELECT set_config('app.current_branch_id', ${previous?.branch ?? ''}, true)`;
+      }
+    });
+  }
+  const proposals = matchingLots.flatMap((lot): MarginOptimizedBrandProposal[] => {
     const medicine = lot.batch.medicine;
     const presentation = lot.packLevel.presentation;
-    // Do not rely on relation integrity or RLS alone: legacy/mocked rows must
-    // still be incapable of inflating this branch's saleable quantity.
-    const availableCanonicalUnits = lot.balances
-      .filter(
-        (balance) =>
-          balance.organizationId === scope.organizationId && balance.branchId === scope.branchId
-      )
-      .reduce((total, balance) => total + balance.onHandUnits, 0);
-    if (
-      strengthKey(medicine.strengths) !== requestedStrength ||
-      normalized(presentation.dosageForm) !== normalized(requestedPresentation.dosageForm) ||
-      normalized(presentation.route) !== normalized(requestedPresentation.route) ||
-      availableCanonicalUnits < input.quantityCanonicalUnits
-    ) {
+    const availableCanonicalUnits = availableByLot.get(lot.id) ?? 0;
+    if (availableCanonicalUnits < input.quantityCanonicalUnits) {
       return [];
     }
     const priceMinor = Math.floor(

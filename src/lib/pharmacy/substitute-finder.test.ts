@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { AllocationCandidate } from './inventory';
 
 import {
   declineSubstitute,
@@ -39,11 +40,28 @@ function lot(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function dbWith(lots: unknown[]) {
-  return {
+function dbWith(lots: ReturnType<typeof lot>[]) {
+  const db = {
     medicine: { findFirst: async () => requested },
     pharmacyInventoryLot: { findMany: async () => lots },
+    $transaction: async (work: (tx: unknown) => Promise<unknown>): Promise<unknown> => work(db),
+    $queryRaw: async (query: unknown): Promise<unknown[]> => {
+      if (Array.isArray(query)) return [{ branch: '' }]; // branch-context statements
+      return lots.flatMap((item) =>
+        item.balances.map((balance) => ({
+          ...balance,
+          inventoryLotId: item.id,
+          stockLocationId: 'shelf',
+          batchState: 'ACTIVE',
+          disposition: 'AVAILABLE',
+          expiresAt: new Date('2099-01-01T00:00:00Z'),
+          receivedAt: new Date('2026-01-01T00:00:00Z'),
+          availableUnits: balance.onHandUnits,
+        }))
+      );
+    },
   };
+  return db;
 }
 
 describe('AI-05 deterministic substitute finder', () => {
@@ -165,9 +183,70 @@ describe('AI-05 deterministic substitute finder', () => {
     ]);
   });
 
+  it('uses ledger availability instead of raw on-hand units and binds branch RLS', async () => {
+    const db = dbWith([lot()]);
+    const statements: unknown[] = [];
+    const contextValues: unknown[][] = [];
+    db.$queryRaw = async (query: unknown, ...values: unknown[]) => {
+      statements.push(query);
+      if (Array.isArray(query)) {
+        contextValues.push(values);
+        return [{ branch: 'previous-branch' }];
+      }
+      return [
+        {
+          ...scope,
+          inventoryLotId: 'lot-a',
+          stockLocationId: 'shelf',
+          batchState: 'ACTIVE',
+          disposition: 'AVAILABLE',
+          receivedAt: new Date('2026-01-01T00:00:00Z'),
+          expiresAt: new Date('2099-01-01T00:00:00Z'),
+          availableUnits: 5,
+        },
+      ] satisfies AllocationCandidate[];
+    };
+    const input = {
+      medicineId: 'requested',
+      presentationId: 'presentation-requested',
+      quantityCanonicalUnits: 10,
+    };
+    await expect(findMarginOptimizedBrandProposals(db as never, scope, input)).resolves.toEqual([]);
+    const rows = await findMarginOptimizedBrandProposals(db as never, scope, {
+      ...input,
+      quantityCanonicalUnits: 5,
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.availableCanonicalUnits).toBe(5);
+    const ledgerQuery = statements.find((statement) => !Array.isArray(statement)) as {
+      sql: string;
+      values: unknown[];
+    };
+    expect(ledgerQuery.sql).toContain('pharmacy_supplier_claims');
+    expect(ledgerQuery.sql).toContain('pharmacy_restock_reservations');
+    expect(ledgerQuery.values).toEqual([scope.organizationId, scope.branchId, 'alternate']);
+    expect(contextValues).toEqual([
+      [],
+      [scope.branchId],
+      ['previous-branch'],
+      [],
+      [scope.branchId],
+      ['previous-branch'],
+    ]);
+  });
+
   it('does not count foreign tenant or branch balances as available stock', async () => {
     let query: { where: unknown; include: unknown } | undefined;
     const db = {
+      ...dbWith([
+        lot({
+          balances: [
+            { organizationId: 'org-b', branchId: 'branch-a', onHandUnits: 100 },
+            { organizationId: 'org-a', branchId: 'branch-b', onHandUnits: 100 },
+            { organizationId: 'org-a', branchId: 'branch-a', onHandUnits: 2 },
+          ],
+        }),
+      ]),
       medicine: { findFirst: async () => requested },
       pharmacyInventoryLot: {
         findMany: async (args: { where: unknown; include: unknown }) => {
