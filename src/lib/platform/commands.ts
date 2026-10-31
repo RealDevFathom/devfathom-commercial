@@ -22,6 +22,7 @@ import type { DemoSeatIdentity } from '@/lib/platform/command-types';
 import { demoApproverEmail } from '@/lib/demo/approval';
 import { demoSharedDeploymentOrigin } from '@/lib/platform/activation-gates';
 import { emailSchema } from '@/lib/email-address';
+import { organizationRolePermissionsSchema } from '@/lib/organization-role';
 import { ianaTimezone } from '@/lib/timezone';
 import { isReservedHostLabel, RESERVED_HOST_LABELS } from '@/lib/tenancy/host-routing';
 import { OrganizationVertical } from '@/generated/prisma/enums';
@@ -2698,21 +2699,21 @@ async function runCommand(
             .regex(/^[a-z0-9._-]+$/),
           name: requiredText,
           description: optionalText.optional(),
-          permissions: z
-            .array(
-              z.object({
-                capability: z.string().trim().min(1).max(150),
-                effect: z.enum(['ALLOW', 'DENY']),
-              })
-            )
-            .max(250)
-            .default([]),
+          permissions: organizationRolePermissionsSchema.default([]),
         })
         .parse(payload);
       const { id: roleId, permissions, ...role } = input;
+      // The platform command already runs inside withPlatformDb's transaction.
+      // Locking the tenant row also serializes concurrent permission replacements.
+      await db.$queryRaw`SELECT "id" FROM "organizations" WHERE "id" = ${input.organizationId} FOR UPDATE`;
       const existing = roleId
-        ? await db.organizationRole.findUnique({ where: { id: roleId } })
+        ? await db.organizationRole.findFirst({
+            where: { id: roleId, organizationId: input.organizationId },
+          })
         : null;
+      if (roleId && !existing) {
+        throw new PlatformSecurityError('Organization role not found.', 400);
+      }
       if (existing?.isSystem) {
         throw new PlatformSecurityError('System roles cannot be modified.', 400);
       }
