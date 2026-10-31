@@ -64,9 +64,9 @@ const round2 = (n: number) => Math.round(n * 100) / 100;
 // cents without crossing Number.MAX_SAFE_INTEGER before the API is serialized.
 const decimalToCents = (amount: unknown): bigint => {
   const match = String(amount).match(/^(-?)(\d+)(?:\.(\d{1,2}))?$/);
-  if (!match) throw new Error(`Invalid stored money value: ${String(amount)}`);
+  if (!match) throw new Error('Invalid stored money value');
   const [, sign, whole, fraction = ''] = match;
-  const cents = BigInt(whole) * 100n + BigInt(fraction.padEnd(2, '0'));
+  const cents = BigInt(whole) * BigInt(100) + BigInt(fraction.padEnd(2, '0'));
   return sign === '-' ? -cents : cents;
 };
 
