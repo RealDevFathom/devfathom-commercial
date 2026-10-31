@@ -161,12 +161,21 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 describe('Hotel navigation composition', () => {
-  it('retains every accepted link and adds exactly the six hospitality routes', () => {
+  it('retains Menu import and every accepted link alongside the six hospitality routes', () => {
     expect(priorHrefs).toHaveLength(58);
     expect(navigation).toHaveLength(64);
+    expect(navigation).toHaveLength(priorHrefs.length + hospitalityHrefs.length);
     const hrefs = navigation.map((n) => n.href);
     expect(new Set(hrefs).size).toBe(64);
     expect(new Set(hrefs)).toEqual(new Set([...priorHrefs, ...hospitalityHrefs]));
+    expect(hrefs).toEqual(expect.arrayContaining(priorHrefs));
+    expect(navigation.find((n) => n.href === MENU_IMPORT)).toMatchObject({
+      group: 'Restaurant',
+      module: 'restaurant-menu',
+    });
+    expect(
+      visibleNavigation(everyHotelModule, 'ADMIN', EVERY_RAIL_CAPABILITY).map((n) => n.href)
+    ).not.toContain(MENU_IMPORT);
     expect(navigation.filter((n) => n.group === 'Hospitality').map((n) => n.href)).toEqual(
       hospitalityHrefs
     );

@@ -86,6 +86,39 @@ export function buildPharmacyReportTools(h: AssistantHelpers): ToolSet {
   if (!h.ctx.enabledModules?.includes('pharmacy-reports')) return {};
 
   return {
+    askPharmacyOwnerQuestion: tool({
+      description:
+        'Read-only plain-language Pharmacy owner Q&A for English, Urdu, or Roman Urdu questions about sales, stock, khata, or recorded lost demand. Requires one exact active branch and a date period. Returns aggregate evidence only; it never writes, contacts customers, or names products for outreach.',
+      inputSchema: z
+        .object({
+          topic: z.enum(['sales', 'stock', 'khata', 'lost_demand']),
+          branch: z.string().trim().min(1).max(128),
+          from: z.iso.date(),
+          to: z.iso.date(),
+        })
+        .strict(),
+      execute: async ({ topic, branch, from, to }) => {
+        if (h.ctx.role !== 'ADMIN') return { kind: 'refusal', message: REFUSAL };
+        const metricKeys = {
+          sales: ['salesMinor'],
+          stock: ['openStockSignals'],
+          khata: ['khataAgingMinor'],
+          lost_demand: ['lostDemandEvents'],
+        }[topic];
+        // Delegate to the same permission, tenant, branch, date, citation, and
+        // freshness boundary as the canonical report tool. This adapter adds no
+        // mutation surface and deliberately accepts no free-form SQL or entity id.
+        const report = buildPharmacyReportTools(h).askPharmacyReports as unknown as {
+          execute: (input: {
+            metricKeys: string[];
+            branch: string;
+            from: string;
+            to: string;
+          }) => Promise<unknown>;
+        };
+        return report.execute({ metricKeys, branch, from, to });
+      },
+    }),
     askPharmacyWorkPacks: pharmacyWorkPackTool(h),
     askPharmacyFinanceInsights: tool({
       description:

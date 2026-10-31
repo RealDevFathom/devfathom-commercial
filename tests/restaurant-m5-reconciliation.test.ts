@@ -21,7 +21,7 @@ const D = (value: string | Prisma.Decimal) => new Prisma.Decimal(value);
 const sum = (values: readonly Prisma.Decimal[]) =>
   values.reduce((total, value) => total.plus(value), D('0'));
 const eqMoney = (actual: unknown, expected: string | Prisma.Decimal) =>
-  expect(D(String(actual)).equals(expected)).toBe(true);
+  expect(D(String(actual)).toString()).toBe(D(expected).toString());
 
 type RouteModule = {
   GET?: (request: Request) => Promise<Response>;
@@ -439,8 +439,10 @@ describeIfDatabase('WHA-62 M5 reconciliation headline battery (real REST + DB)',
           subtotal: true,
           taxTotal: true,
           serviceChargeTotal: true,
+          deliveryFeeTotal: true,
           compTotal: true,
           discountTotal: true,
+          roundingAdjustment: true,
           grandTotal: true,
         },
       }),
@@ -450,7 +452,12 @@ describeIfDatabase('WHA-62 M5 reconciliation headline battery (real REST + DB)',
       }),
       refunds: await tx.restaurantRefund.findMany({
         where: { businessDate: utcDate(businessDate), bill: { branchId: ids.branch } },
-        select: { amount: true },
+        select: {
+          amount: true,
+          taxRefundAmount: true,
+          serviceChargeRefundAmount: true,
+          deliveryFeeRefundAmount: true,
+        },
       }),
       drawers: await tx.restaurantDrawerSession.findMany({
         where: { branchId: ids.branch, businessDate: utcDate(businessDate) },
@@ -520,22 +527,48 @@ describeIfDatabase('WHA-62 M5 reconciliation headline battery (real REST + DB)',
 
     const settledBills = raw.bills.filter((bill) => bill.status === 'SETTLED');
     const voidBills = raw.bills.filter((bill) => bill.status === 'VOID');
+    for (const bill of settledBills) {
+      eqMoney(
+        bill.subtotal
+          .plus(bill.taxTotal)
+          .plus(bill.serviceChargeTotal)
+          .plus(bill.deliveryFeeTotal)
+          .minus(bill.compTotal)
+          .minus(bill.discountTotal)
+          .plus(bill.roundingAdjustment),
+        bill.grandTotal
+      );
+    }
     const expected = {
       grossSales: sum(settledBills.map((bill) => bill.subtotal)),
       compTotal: sum(settledBills.map((bill) => bill.compTotal)),
       discountTotal: sum(settledBills.map((bill) => bill.discountTotal)),
-      taxTotal: sum(settledBills.map((bill) => bill.taxTotal)),
-      serviceChargeTotal: sum(settledBills.map((bill) => bill.serviceChargeTotal)),
+      taxTotal: sum(settledBills.map((bill) => bill.taxTotal)).minus(
+        sum(raw.refunds.map((refund) => refund.taxRefundAmount))
+      ),
+      serviceChargeTotal: sum(settledBills.map((bill) => bill.serviceChargeTotal)).minus(
+        sum(raw.refunds.map((refund) => refund.serviceChargeRefundAmount))
+      ),
       tipTotal: sum(raw.tenders.map((tenderRow) => tenderRow.tipAmount)),
-      refundTotal: sum(raw.refunds.map((refundRow) => refundRow.amount)),
+      refundTotal: sum(
+        raw.refunds.map((refundRow) => refundRow.amount.minus(refundRow.deliveryFeeRefundAmount))
+      ),
       voidTotal: sum(voidBills.map((bill) => bill.grandTotal)),
       cashExpected: movementFold,
       cashCounted: sum(raw.drawers.map((drawer) => D(drawer.countedCash ?? '0'))),
     };
+    const refundedSales = sum(
+      raw.refunds.map((refundRow) =>
+        refundRow.amount
+          .minus(refundRow.taxRefundAmount)
+          .minus(refundRow.serviceChargeRefundAmount)
+          .minus(refundRow.deliveryFeeRefundAmount)
+      )
+    );
     const netSales = expected.grossSales
       .minus(expected.compTotal)
       .minus(expected.discountTotal)
-      .minus(expected.refundTotal);
+      .minus(refundedSales);
     const cashVariance = expected.cashCounted.minus(expected.cashExpected);
     expect(raw.close).not.toBeNull();
     eqMoney(raw.close!.grossSales, expected.grossSales);

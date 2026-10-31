@@ -59,7 +59,9 @@ function Field({
           {error}
         </p>
       ) : hint ? (
-        <p className="mt-1 text-xs text-text-muted" id={`${htmlFor}-hint`}>{hint}</p>
+        <p className="mt-1 text-xs text-text-muted" id={`${htmlFor}-hint`}>
+          {hint}
+        </p>
       ) : null}
     </div>
   );
@@ -192,7 +194,10 @@ function SelectedPropertySettings({
     if (accessDenied(error)) setUnavailable(true);
     if ((error as { data?: { code?: string } } | null)?.data?.code === 'CONFLICT') {
       setSaved(null);
-      setErrors({ [field]: 'These settings changed elsewhere. Your edits are kept. Reload and review the latest values before saving again.' });
+      setErrors({
+        [field]:
+          'These settings changed elsewhere. Your edits are kept. Reload and review the latest values before saving again.',
+      });
       return;
     }
     const fields = validationErrors(error);
@@ -273,7 +278,12 @@ function SelectedPropertySettings({
         >
           Change property
         </a>
-        <Button variant="outline" className="ml-2 min-h-11" onClick={() => void refresh(true)} disabled={busy}>
+        <Button
+          variant="outline"
+          className="ml-2 min-h-11"
+          onClick={() => void refresh(true)}
+          disabled={busy}
+        >
           Reload and discard edits
         </Button>
         {refreshing ? (
@@ -318,7 +328,12 @@ function SelectedPropertySettings({
                 value={option.value}
                 checked={property.mode === option.value}
                 onChange={() => {
-                  if (!busy) setMode.mutate({ branchId, mode: option.value, expectedUpdatedAt: property.updatedAt });
+                  if (!busy)
+                    setMode.mutate({
+                      branchId,
+                      mode: option.value,
+                      expectedUpdatedAt: property.updatedAt,
+                    });
                 }}
                 className="mt-1"
               />
@@ -346,18 +361,31 @@ function SelectedPropertySettings({
           <fieldset className="grid gap-4 sm:grid-cols-2" disabled={busy}>
             <legend className="sr-only">Property facts</legend>
             <Field htmlFor="name" label="Property name" error={errors.name}>
-              <Input id="name" name="name" {...fieldProps('name')} defaultValue={factsSnapshot.name} required />
+              <Input
+                id="name"
+                name="name"
+                {...fieldProps('name')}
+                defaultValue={factsSnapshot.name}
+                required
+              />
             </Field>
             <Field htmlFor="addressLine" label="Address" error={errors.addressLine}>
               <Input
                 id="addressLine"
-                name="addressLine" {...fieldProps('addressLine')}
+                name="addressLine"
+                {...fieldProps('addressLine')}
                 defaultValue={factsSnapshot.addressLine}
                 required
               />
             </Field>
             <Field htmlFor="city" label="City" error={errors.city}>
-              <Input id="city" name="city" {...fieldProps('city')} defaultValue={factsSnapshot.city} required />
+              <Input
+                id="city"
+                name="city"
+                {...fieldProps('city')}
+                defaultValue={factsSnapshot.city}
+                required
+              />
             </Field>
             <Field
               htmlFor="timezone"
@@ -365,7 +393,13 @@ function SelectedPropertySettings({
               error={errors.timezone}
               hint="The zone this property dates its business days and audits in."
             >
-              <Input id="timezone" name="timezone" {...fieldProps('timezone', true)} defaultValue={factsSnapshot.timezone} required />
+              <Input
+                id="timezone"
+                name="timezone"
+                {...fieldProps('timezone', true)}
+                defaultValue={factsSnapshot.timezone}
+                required
+              />
             </Field>
             <Field
               htmlFor="starCategory"
@@ -375,7 +409,8 @@ function SelectedPropertySettings({
             >
               <Input
                 id="starCategory"
-                name="starCategory" {...fieldProps('starCategory', true)}
+                name="starCategory"
+                {...fieldProps('starCategory', true)}
                 type="number"
                 min={1}
                 max={7}
@@ -388,7 +423,13 @@ function SelectedPropertySettings({
               error={errors.currency}
               hint="Three-letter code. Settlement is PKR."
             >
-              <Input id="currency" name="currency" {...fieldProps('currency', true)} defaultValue={factsSnapshot.currency} required />
+              <Input
+                id="currency"
+                name="currency"
+                {...fieldProps('currency', true)}
+                defaultValue={factsSnapshot.currency}
+                required
+              />
             </Field>
             <Field
               htmlFor="checkInTime"
@@ -398,7 +439,8 @@ function SelectedPropertySettings({
             >
               <Input
                 id="checkInTime"
-                name="checkInTime" {...fieldProps('checkInTime', true)}
+                name="checkInTime"
+                {...fieldProps('checkInTime', true)}
                 defaultValue={factsSnapshot.checkInTime}
                 required
               />
@@ -411,7 +453,8 @@ function SelectedPropertySettings({
             >
               <Input
                 id="checkOutTime"
-                name="checkOutTime" {...fieldProps('checkOutTime', true)}
+                name="checkOutTime"
+                {...fieldProps('checkOutTime', true)}
                 defaultValue={factsSnapshot.checkOutTime}
                 required
               />
@@ -422,7 +465,13 @@ function SelectedPropertySettings({
               error={errors.auditTime}
               hint="When the audit rolls the business date."
             >
-              <Input id="auditTime" name="auditTime" {...fieldProps('auditTime', true)} defaultValue={factsSnapshot.auditTime} required />
+              <Input
+                id="auditTime"
+                name="auditTime"
+                {...fieldProps('auditTime', true)}
+                defaultValue={factsSnapshot.auditTime}
+                required
+              />
             </Field>
             <Field
               htmlFor="taxProfileId"
@@ -432,7 +481,8 @@ function SelectedPropertySettings({
             >
               <Input
                 id="taxProfileId"
-                name="taxProfileId" {...fieldProps('taxProfileId', true)}
+                name="taxProfileId"
+                {...fieldProps('taxProfileId', true)}
                 defaultValue={factsSnapshot.taxProfileId ?? ''}
               />
             </Field>
@@ -444,7 +494,8 @@ function SelectedPropertySettings({
             >
               <Input
                 id="languages"
-                name="languages" {...fieldProps('languages', true)}
+                name="languages"
+                {...fieldProps('languages', true)}
                 defaultValue={factsSnapshot.languages.join(', ')}
                 required
               />
@@ -457,7 +508,8 @@ function SelectedPropertySettings({
             >
               <Input
                 id="bookingEngineSlug"
-                name="bookingEngineSlug" {...fieldProps('bookingEngineSlug', true)}
+                name="bookingEngineSlug"
+                {...fieldProps('bookingEngineSlug', true)}
                 defaultValue={factsSnapshot.bookingEngineSlug}
                 required
               />
