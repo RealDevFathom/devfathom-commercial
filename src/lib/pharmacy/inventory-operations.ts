@@ -434,13 +434,11 @@ export async function prepareTransferTransitRemoval(
   if (!balance || balance.onHandUnits < input.units)
     throw new PharmacyInventoryError('INSUFFICIENT_STOCK');
   assertArrangementReconciles({ ...balance, unitsPerPack: input.unitsPerPack });
-  const existingLoose = Math.min(balance.looseUnits, input.units);
-  const sealedUnits = input.units - existingLoose;
-  const removedSealed = Math.floor(sealedUnits / input.unitsPerPack);
-  const remainder = sealedUnits % input.unitsPerPack;
+  const removedSealed = Math.min(balance.sealedPacks, Math.floor(input.units / input.unitsPerPack));
+  const removedLoose = input.units - removedSealed * input.unitsPerPack;
   // Open only the pack needed for a fractional receipt, in the SAME transit
   // bucket. Quantity stays unchanged; the append-only projection stays valid.
-  if (remainder) {
+  if (removedLoose > balance.looseUnits) {
     await db.pharmacyStockMovement.create({
       data: {
         organizationId: scope.organizationId,
@@ -458,7 +456,7 @@ export async function prepareTransferTransitRemoval(
       },
     });
   }
-  return { sealedPacks: removedSealed, looseUnits: existingLoose + remainder };
+  return { sealedPacks: removedSealed, looseUnits: removedLoose };
 }
 
 /** A retry uses the same receipt key; a later delivery must use a new key. */
@@ -560,7 +558,6 @@ export async function receiveTransferLine(
       receivedAt: new Date(),
     },
   });
-  const a = arrangementFor(input.receivedUnits, source.unitsPerPack);
   await db.pharmacyStockMovement.create({
     data: {
       organizationId: scope.organizationId,
@@ -570,8 +567,8 @@ export async function receiveTransferLine(
       kind: 'TRANSFER_IN',
       disposition: 'AVAILABLE',
       quantityUnits: input.receivedUnits,
-      sealedPackDelta: a.sealedPacks,
-      looseUnitDelta: a.looseUnits,
+      sealedPackDelta: removed.sealedPacks,
+      looseUnitDelta: removed.looseUnits,
       actorId: scope.actorId,
       reason: transferReceiptReference(transfer.id, line.id),
       idempotencyKey: `${input.idempotencyKeyPrefix}:in`,

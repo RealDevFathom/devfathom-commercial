@@ -280,7 +280,10 @@ beforeEach(() => {
   window.localStorage.clear();
 });
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
 
 describe('PharmacyCounterConsole authoritative bill state', () => {
   it.each([
@@ -1115,72 +1118,93 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
     await waitFor(() => expect(mocks.drawerStatusInvalidate).toHaveBeenCalled());
   });
 
-  it('adds a barcode on Enter only when the search returns that single medicine', async () => {
-    const row = {
-      medicineId: 'med-barcode',
-      displayName: 'Paracetamol',
-      brandName: null,
-      manufacturer: null,
-      strength: '500 mg',
-      presentationId: 'presentation-a',
-      presentation: 'Tablet',
-      dosageForm: 'Tablet',
-      route: 'Oral',
-      matchedOn: 'BARCODE',
-      recommendedLotId: 'lot-a',
-      packLevelId: 'pack-a',
-      unitsPerPack: 1,
-      printedMrpMinor: 10000,
-      roundingIncrementMinor: 1,
-      batchNumber: 'B-1',
-      nearestSafeExpiry: '2028-06-30T00:00:00.000Z',
-      onHandUnits: 10,
-      saleableUnits: [],
-      saleUnits: [
-        {
-          kind: 'UNIT',
-          packLevelId: 'pack-a',
-          levelLabel: 'UNIT',
-          canonicalUnitsPerSaleUnit: 1,
+  it.each([false, true])(
+    'adds a single barcode exactly once (intervening render: %s)',
+    async (interveningRender) => {
+      const row = {
+        medicineId: 'med-barcode',
+        displayName: 'Paracetamol',
+        brandName: null,
+        manufacturer: null,
+        strength: '500 mg',
+        presentationId: 'presentation-a',
+        presentation: 'Tablet',
+        dosageForm: 'Tablet',
+        route: 'Oral',
+        matchedOn: 'BARCODE',
+        recommendedLotId: 'lot-a',
+        packLevelId: 'pack-a',
+        unitsPerPack: 1,
+        printedMrpMinor: 10000,
+        roundingIncrementMinor: 1,
+        batchNumber: 'B-1',
+        nearestSafeExpiry: '2028-06-30T00:00:00.000Z',
+        onHandUnits: 10,
+        saleableUnits: [],
+        saleUnits: [
+          {
+            kind: 'UNIT',
+            packLevelId: 'pack-a',
+            levelLabel: 'UNIT',
+            canonicalUnitsPerSaleUnit: 1,
+          },
+        ],
+        restriction: {
+          rx: false,
+          otc: true,
+          restricted: false,
+          controlled: false,
+          highAlert: false,
+          lasa: false,
         },
-      ],
-      restriction: {
-        rx: false,
-        otc: true,
-        restricted: false,
-        controlled: false,
-        highAlert: false,
-        lasa: false,
-      },
-      storage: {
-        coldChain: false,
-        locationKind: 'STORE',
-        locationCode: 'A',
-        locationName: 'Store',
-      },
-      blocked: [],
-    };
-    mocks.queries.counterSearch = query({ rows: [row] });
-    mocks.mutations.addLine!.mockResolvedValue({});
-    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
-    const search = screen.getByLabelText('Scan or search');
-    fireEvent.change(search, { target: { value: '123456' } });
-    fireEvent.keyDown(search, { key: 'Enter' });
-    await waitFor(() =>
-      expect(mocks.mutations.addLine).toHaveBeenCalledWith(
-        expect.objectContaining({ medicineId: 'med-barcode', quantity: 1 })
-      )
-    );
+        storage: {
+          coldChain: false,
+          locationKind: 'STORE',
+          locationCode: 'A',
+          locationName: 'Store',
+        },
+        blocked: [],
+      };
+      mocks.queries.counterSearch = query({ rows: [row] });
+      mocks.mutations.addLine!.mockResolvedValue({});
+      if (interveningRender) vi.useFakeTimers();
+      const view = render(
+        <PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />
+      );
+      const search = screen.getByLabelText('Scan or search');
+      fireEvent.change(search, { target: { value: '123456' } });
+      fireEvent.keyDown(search, { key: 'Enter' });
+      if (interveningRender) {
+        // Stage the search result, then complete an unrelated query before the
+        // deferred add fires. Mutation hook result objects change every render.
+        await act(async () => {
+          vi.advanceTimersByTime(0);
+        });
+        expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+        mocks.queries.drawerStatus = query({ openDrawer: null });
+        view.rerender(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+        await act(async () => {
+          vi.advanceTimersByTime(1);
+        });
+        vi.useRealTimers();
+      }
+      await waitFor(() =>
+        expect(mocks.mutations.addLine).toHaveBeenCalledWith(
+          expect.objectContaining({ medicineId: 'med-barcode', quantity: 1 })
+        )
+      );
+      expect(mocks.mutations.addLine).toHaveBeenCalledTimes(1);
 
-    mocks.mutations.addLine!.mockClear();
-    mocks.queries.counterSearch = query({ rows: [row, { ...row, medicineId: 'med-other' }] });
-    fireEvent.change(search, { target: { value: '654321' } });
-    fireEvent.keyDown(search, { key: 'Enter' });
-    await act(async () => {
-      await Promise.resolve();
-    });
-    expect(mocks.mutations.addLine).not.toHaveBeenCalled();
-  });
+      mocks.mutations.addLine!.mockClear();
+      mocks.queries.counterSearch = query({ rows: [row, { ...row, medicineId: 'med-other' }] });
+      fireEvent.change(search, { target: { value: '654321' } });
+      fireEvent.keyDown(search, { key: 'Enter' });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+    }
+  );
 
   it('does not run F9 while a field is focused or a dialog is open', () => {
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);

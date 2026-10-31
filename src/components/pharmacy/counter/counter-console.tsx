@@ -993,9 +993,15 @@ function ScopedPharmacyCounterConsole({
       const timer = window.setTimeout(() => stageRow(row), 0);
       return () => window.clearTimeout(timer);
     }
-    barcodeAdd.current = null;
-    if (!preview?.sufficient || busy) return;
-    const timer = window.setTimeout(() => void addToCart(), 0);
+    if (!preview?.sufficient || busy) {
+      barcodeAdd.current = null;
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      if (barcodeAdd.current !== token) return;
+      barcodeAdd.current = null;
+      void addToCart();
+    }, 0);
     return () => window.clearTimeout(timer);
   }, [
     activeRow,

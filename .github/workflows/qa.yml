@@ -98,6 +98,8 @@ jobs:
       OWNER_DATABASE_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/devfathom_gate_test
       PHARMACY_ORDERING_TEST_OWNER_DATABASE_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/devfathom_gate_test
       PHARMACY_TEST_OWNER_DATABASE_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/devfathom_gate_test
+      # Trusted pg_trgm functions are superuser-owned; only fixture ACL setup uses this URL.
+      PG_TRGM_TEST_OWNER_DATABASE_URL: postgresql://postgres:gate-postgres-ci-only@127.0.0.1:55432/devfathom_gate_test
       RESTAURANT_ACTOR_OWNER_DATABASE_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/devfathom_gate_test
       WHA1168_TEST_OWNER_DATABASE_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/devfathom_gate_test
       WHA1198_TEST_OWNER_DATABASE_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/devfathom_gate_test

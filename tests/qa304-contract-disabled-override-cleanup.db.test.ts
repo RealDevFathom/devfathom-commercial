@@ -4,7 +4,8 @@ import { readFileSync } from 'node:fs';
 import { Client } from 'pg';
 import { describe, expect, it } from 'vitest';
 
-const databaseUrl = process.env.TEST_DATABASE_URL;
+// Schema fixtures need owner authority; the runtime role keeps database CREATE revoked.
+const databaseUrl = process.env.OWNER_DATABASE_URL ?? process.env.TEST_DATABASE_URL;
 const sql = readFileSync(
   'prisma/migrations/20261021190000_qa304_contract_disabled_override_cleanup/migration.sql',
   'utf8'

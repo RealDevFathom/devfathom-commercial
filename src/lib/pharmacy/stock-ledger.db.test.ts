@@ -458,11 +458,12 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
   });
 
   it.each([
-    { sent: 10, first: 4 },
-    { sent: 30, first: 20 },
+    { sent: 10, first: 4, middle: 0 },
+    { sent: 30, first: 20, middle: 0 },
+    { sent: 20, first: 4, middle: 10 },
   ])(
     'keeps $sent dispatched units conserved across receipt$first, retries and completion (#357)',
-    async ({ sent, first }) => {
+    async ({ sent, first, middle }) => {
       const fixture = await scenario(ORG_A, BRANCH_A, 'transfer-workflow');
       const destinationBranch = `destination_${tag('357')}`;
       const setup = await inOrg(ORG_A, async (db) => {
@@ -542,9 +543,10 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
       await expect(
         receive(sent - first, tag('foreign'), 'wrong_destination')
       ).rejects.toMatchObject({ reason: 'CROSS_BRANCH_REFERENCE' });
+      if (middle) await receive(middle, tag('middle'));
       const finished = await Promise.all([
-        receive(sent - first, finalKey),
-        receive(sent - first, finalKey),
+        receive(sent - first - middle, finalKey),
+        receive(sent - first - middle, finalKey),
       ]);
       expect(finished[0]).toMatchObject({ status: 'RECEIVED', receivedAt: expect.any(Date) });
       await receive(first, firstKey); // An old retry after final completion is also a no-op.
@@ -570,8 +572,17 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
       const outgoing = final.movements.filter(
         (m) => m.kind === 'TRANSFER_OUT' && m.branchId === BRANCH_A
       );
-      expect(incoming).toHaveLength(2);
-      expect(new Set(incoming.map((m) => m.inventoryLotId)).size).toBe(2);
+      const deliveries = middle ? 3 : 2;
+      expect(incoming).toHaveLength(deliveries);
+      expect(new Set(incoming.map((m) => m.inventoryLotId)).size).toBe(deliveries);
+      for (const receipt of incoming) {
+        const debit = outgoing.find(
+          (m) => m.idempotencyKey === receipt.idempotencyKey.replace(/:in$/, ':transit-out')
+        )!;
+        expect(debit).toBeDefined();
+        expect(receipt.sealedPackDelta + debit.sealedPackDelta).toBe(0);
+        expect(receipt.looseUnitDelta + debit.looseUnitDelta).toBe(0);
+      }
       expect(incoming.reduce((n, m) => n + m.quantityUnits, 0)).toBe(sent);
       expect(outgoing.reduce((n, m) => n + m.quantityUnits, 0)).toBe(-sent);
       expect(final.destination.reduce((n, lot) => n + lot.onHandUnits, 0)).toBe(sent);

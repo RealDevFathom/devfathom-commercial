@@ -832,12 +832,61 @@ describe('#357 partial transfer receipts', () => {
     expect(s.destination).toEqual({ onHandUnits: 10, sealedPacks: 1, looseUnits: 0 });
   });
 
+  it('never reseals a pack-sized quantity taken from loose transit stock', async () => {
+    const s = scenario(20);
+    Object.assign(s.transit, { sealedPacks: 0, looseUnits: 20 });
+    await s.receive(10);
+    expect(s.transit).toEqual({ onHandUnits: 10, sealedPacks: 0, looseUnits: 10 });
+    expect(s.destination).toEqual({ onHandUnits: 10, sealedPacks: 0, looseUnits: 10 });
+    expect(s.movements.map((m) => m.kind)).toEqual(['TRANSFER_OUT', 'TRANSFER_IN']);
+  });
+
   it('conserves a mixed whole/fractional receipt14 out of sealed20', async () => {
     const s = scenario(20);
     await s.receive(14);
     expect(s.transit).toEqual({ onHandUnits: 6, sealedPacks: 0, looseUnits: 6 });
     expect(s.destination).toEqual({ onHandUnits: 14, sealedPacks: 1, looseUnits: 4 });
   });
+
+  it.each(['receiveTransferLine', 'receiveTransferWithVariance'] as const)(
+    '%s preserves the physical arrangement across deliveries of 4, 10 and 6',
+    async (procedure) => {
+      const s = scenario(20);
+      for (const [index, units] of [4, 10, 6].entries()) {
+        const common = {
+          branchId: 'branch_a',
+          transferId: s.transfer.id,
+          idempotencyKeyPrefix: `arrangement-${index}`,
+        };
+        if (procedure === 'receiveTransferLine') {
+          await caller().receiveTransferLine({ ...common, lineId: 'line_1', receivedUnits: units });
+        } else {
+          await caller().receiveTransferWithVariance({
+            ...common,
+            lines: [{ lineId: 'line_1', receivedUnits: units }],
+          });
+        }
+        const outgoing = s.movements.find(
+          (m) =>
+            m.idempotencyKey.startsWith(common.idempotencyKeyPrefix) && m.kind === 'TRANSFER_OUT'
+        )!;
+        const incoming = s.movements.find(
+          (m) =>
+            m.idempotencyKey.startsWith(common.idempotencyKeyPrefix) && m.kind === 'TRANSFER_IN'
+        )!;
+        expect(incoming.sealedPackDelta + outgoing.sealedPackDelta).toBe(0);
+        expect(incoming.looseUnitDelta + outgoing.looseUnitDelta).toBe(0);
+        if (index === 1) {
+          expect(incoming).toMatchObject({ sealedPackDelta: 1, looseUnitDelta: 0 });
+          expect(s.transit).toEqual({ onHandUnits: 6, sealedPacks: 0, looseUnits: 6 });
+        }
+      }
+      expect(s.movements.filter((m) => m.kind === 'BREAK_PACK')).toHaveLength(1);
+      expect(s.destination).toEqual({ onHandUnits: 20, sealedPacks: 1, looseUnits: 10 });
+      expect(s.transit).toEqual({ onHandUnits: 0, sealedPacks: 0, looseUnits: 0 });
+      expect(s.transfer.status).toBe('RECEIVED');
+    }
+  );
 
   it('keeps the legacy single-line endpoint partial rather than EXCEPTION', async () => {
     const s = scenario();
@@ -861,7 +910,11 @@ describe('#357 partial transfer receipts', () => {
 
   it('preserves witnessed permanent-shortfall write-off with a valid arrangement', async () => {
     const s = scenario();
-    db.user.findFirst.mockResolvedValue({ id: 'witness' });
+    db.user.findFirst.mockImplementation(async ({ where }) =>
+      where.id === 'witness'
+        ? { id: 'witness' }
+        : { id: where.id, organizationId: 'org_a', status: 'ACTIVE' }
+    );
     const result = await caller().receiveTransferWithVariance({
       branchId: 'branch_a',
       transferId: s.transfer.id,
@@ -892,7 +945,11 @@ describe('#357 partial transfer receipts', () => {
 
   it('replays an identical variance receipt, including a variance-only receipt', async () => {
     const s = scenario();
-    db.user.findFirst.mockResolvedValue({ id: 'witness' });
+    db.user.findFirst.mockImplementation(async ({ where }) =>
+      where.id === 'witness'
+        ? { id: 'witness' }
+        : { id: where.id, organizationId: 'org_a', status: 'ACTIVE' }
+    );
     const input = {
       branchId: 'branch_a',
       transferId: s.transfer.id,
@@ -913,7 +970,11 @@ describe('#357 partial transfer receipts', () => {
 
   it('rejects changed variance evidence on a consumed receipt key', async () => {
     const s = scenario();
-    db.user.findFirst.mockResolvedValue({ id: 'witness' });
+    db.user.findFirst.mockImplementation(async ({ where }) =>
+      where.id === 'witness'
+        ? { id: 'witness' }
+        : { id: where.id, organizationId: 'org_a', status: 'ACTIVE' }
+    );
     const input = {
       branchId: 'branch_a',
       transferId: s.transfer.id,
@@ -936,11 +997,15 @@ describe('#357 partial transfer receipts', () => {
   });
 
   it('gives receipt and variance pack openings distinct keys in a pooled transit balance', async () => {
-    const s = scenario(20);
-    // Transfer T owns20, another same-lot dispatched transfer owns3 loose units.
-    // Receipt8 and writeoff12 each need their own physical pack opening.
+    const s = scenario(16);
+    // Transfer T owns16, another same-lot dispatched transfer owns7 units.
+    // Receipt8 and writeoff8 each need their own physical pack opening.
     Object.assign(s.transit, { onHandUnits: 23, sealedPacks: 2, looseUnits: 3 });
-    db.user.findFirst.mockResolvedValue({ id: 'witness' });
+    db.user.findFirst.mockImplementation(async ({ where }) =>
+      where.id === 'witness'
+        ? { id: 'witness' }
+        : { id: where.id, organizationId: 'org_a', status: 'ACTIVE' }
+    );
     const result = await caller().receiveTransferWithVariance({
       branchId: 'branch_a',
       transferId: s.transfer.id,
@@ -956,9 +1021,9 @@ describe('#357 partial transfer receipts', () => {
     const openings = s.movements.filter((m) => m.kind === 'BREAK_PACK');
     expect(openings).toHaveLength(2);
     expect(new Set(openings.map((m) => m.idempotencyKey)).size).toBe(2);
-    expect(s.transit).toEqual({ onHandUnits: 3, sealedPacks: 0, looseUnits: 3 });
+    expect(s.transit).toEqual({ onHandUnits: 7, sealedPacks: 0, looseUnits: 7 });
     expect(s.destination.onHandUnits).toBe(8);
-    expect(s.movements.find((m) => m.kind === 'WRITE_OFF')?.quantityUnits).toBe(-12);
+    expect(s.movements.find((m) => m.kind === 'WRITE_OFF')?.quantityUnits).toBe(-8);
   });
 
   it('requires a distinct active witness before closing a permanent shortfall', async () => {
