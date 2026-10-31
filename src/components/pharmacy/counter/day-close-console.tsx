@@ -11,6 +11,7 @@ import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
+import { CashCloseCheckPanel } from './cash-close-check-panel';
 import { formatMinor, type CounterReceiptLocale } from '@/lib/pharmacy/counter-receipt';
 import { printCounterBrowserZReport } from '@/lib/pharmacy/counter-browser-print';
 import { counterErrorMessage } from '@/lib/pharmacy/counter-messages';
@@ -343,6 +344,8 @@ function DayCloseForm({ branchId, date }: { branchId: string; date: string }) {
           </form>
         )}
       </SectionCard>
+      {/* #728: once the day is closed, the owner sees the read-only anomaly check. */}
+      {report && <CashCloseCheckPanel branchId={branchId} date={date} />}
     </div>
   );
 }

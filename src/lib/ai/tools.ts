@@ -67,6 +67,9 @@ const CORE_TOOLS = new Set([
   'askPharmacyBusinessInsights',
   'askPharmacyFinanceInsights',
   'askPharmacyOwnerQuestion',
+  // Hint-gated below; listed here so a close/void/refund question finds it
+  // without adding a route that would displace the default write domains.
+  'askPharmacyCashCloseCheck',
   'getOverview',
   'globalSearch',
   'getRecentActivity',
@@ -95,6 +98,11 @@ const PHARMACY_REPORT_INTENT =
   /pharmacy|medicine|stock signal|expiry|quarantine|recall|pharmacist|dispensing|supplier claim|khata|lost demand|فروخت|سٹاک|کھاتہ|نہ مل/i;
 const PHARMACY_WORK_PACK_INTENT =
   /\bwork[ -]?packs?\b|\bsupplier[ -]+(?:credit[ -]+)?follow[ -]?up\b|\bfollow[ -]?up\b.{0,40}\bsupplier(?:s|[ -]+credits?)?\b|\b(?:outstanding|unmatched)[ -]+supplier[ -]+credits?\b/i;
+
+// #728: the owner cash-close check is offered only on an explicit close/variance/
+// refund/void question, so ordinary Pharmacy hints keep their existing tool set.
+const PHARMACY_CASH_CLOSE_INTENT =
+  /\b(?:cash[ -]?close|day[ -]?close|daily[ -]?close|close[ -]?variance|cash[ -]?variance|drawers?|z[ -]?reports?|voids?|voided|refunds?)\b/i;
 
 export function assistantToolChoice(hint: string, tools?: ToolSet) {
   return SELF_LEAVE_REQUEST.test(hint) && (!tools || Object.hasOwn(tools, 'requestLeave'))
@@ -208,6 +216,9 @@ export function buildAssistantTools(ctx: AssistantContext, opts: { hint?: string
   // Read-only preparation needs an explicit relevant hint, even in the full
   // approval-continuation set. Broad Pharmacy/finance hints keep their existing tools.
   if (!PHARMACY_WORK_PACK_INTENT.test(hint)) delete perDomain.pharmacyReports.askPharmacyWorkPacks;
+  // Owner-only, explicit-intent read of the cash-close anomaly check (#728).
+  if (ctx.role !== 'ADMIN' || !PHARMACY_CASH_CLOSE_INTENT.test(hint))
+    delete perDomain.pharmacyReports.askPharmacyCashCloseCheck;
   // WHA-1544 future hook: bind the accepted replenishment-report service here
   // under pharmacyReports only after its contract is accepted; no handler yet.
 

@@ -295,3 +295,43 @@ describe('composed Pharmacy selection guards', () => {
     }
   );
 });
+
+describe('Pharmacy cash-close check selection (#728)', () => {
+  it.each([
+    'any anomaly in yesterday’s cash close?',
+    'why was the drawer short',
+    'too many refunds and voids today',
+  ])('offers the owner the read-only check for %j', (hint) => {
+    const tools = buildAssistantTools({ ...adminCtx, vertical: 'PHARMACY' }, { hint });
+    expect(tools).toHaveProperty('askPharmacyCashCloseCheck');
+  });
+
+  it('keeps it from staff, other verticals, unrelated hints and the full set', () => {
+    const hint = 'check the cash close';
+    expect(
+      buildAssistantTools({ ...ctx, vertical: 'PHARMACY' }, { hint })
+    ).not.toHaveProperty('askPharmacyCashCloseCheck');
+    for (const vertical of ['AGENCY', 'RESTAURANT'] as const)
+      expect(buildAssistantTools({ ...adminCtx, vertical }, { hint })).not.toHaveProperty(
+        'askPharmacyCashCloseCheck'
+      );
+    for (const other of ['show pharmacy sales and margin', ''])
+      expect(
+        buildAssistantTools({ ...adminCtx, vertical: 'PHARMACY' }, { hint: other })
+      ).not.toHaveProperty('askPharmacyCashCloseCheck');
+    expect(
+      buildAssistantTools(
+        { ...adminCtx, vertical: 'PHARMACY', enabledModules: ['pharmacy-counter'] },
+        { hint }
+      )
+    ).not.toHaveProperty('askPharmacyCashCloseCheck');
+  });
+
+  it('guides the model only when the check is exposed', () => {
+    const prompt = assistantSystemPrompt({ vertical: 'PHARMACY' }, ['askPharmacyCashCloseCheck']);
+    expect(prompt).toContain('never proof of theft or misconduct');
+    expect(assistantSystemPrompt({ vertical: 'PHARMACY' }, [])).not.toContain(
+      'askPharmacyCashCloseCheck'
+    );
+  });
+});

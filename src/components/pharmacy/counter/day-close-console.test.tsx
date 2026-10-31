@@ -9,6 +9,8 @@ const mocks = vi.hoisted(() => ({
   previewInput: vi.fn(),
   /** The zone the workspace has stored. */
   zone: '',
+  /** Findings the read-only cash-close check returns for a closed day. */
+  checkFindings: [] as Array<{ kind: string; severity: string; explanation: string }>,
 }));
 /**
  * The workspace's zone in these fixtures: neither Asia/Karachi (which the screen
@@ -70,6 +72,18 @@ vi.mock('@/lib/trpc', () => ({
         },
       },
       closeDay: { useMutation: () => ({ mutate: mocks.mutate, reset: vi.fn() }) },
+      closeAnomalyCheck: {
+        useQuery: () => ({
+          isLoading: false,
+          error: null,
+          refetch: vi.fn(),
+          data: {
+            policyVersion: 'CC01-2026-11-01',
+            narrative: 'Cash-close check for 2026-09-29 (closed). No rule flagged this close.',
+            findings: mocks.checkFindings,
+          },
+        }),
+      },
     },
   },
 }));
@@ -85,6 +99,7 @@ beforeEach(() => {
   mocks.loading = false;
   mocks.error = null;
   mocks.close = null;
+  mocks.checkFindings = [];
   mocks.mutate.mockReset();
   mocks.previewInput.mockReset();
 });
@@ -211,5 +226,35 @@ describe('day-close console', () => {
         varianceNote: 'Short by one rupee',
       })
     );
+  });
+  it('shows the read-only cash-close check only once the day is closed', () => {
+    const view = render(<PharmacyDayCloseConsole />);
+    expect(screen.queryByText('Cash-close check')).not.toBeInTheDocument();
+    mocks.close = {
+      cashExpectedMinor: 12500,
+      cashCountedMinor: 12400,
+      isFinal: true,
+      id: 'c1',
+      sequence: 1,
+      supersedesCloseId: null,
+      reason: 'Short',
+    };
+    mocks.checkFindings = [
+      {
+        kind: 'UNMATCHED_REFUNDS',
+        severity: 'URGENT',
+        explanation: '4 refunds totalling PKR 900.00 have no matching stock-return record.',
+      },
+    ];
+    view.rerender(<PharmacyDayCloseConsole />);
+    expect(screen.getByText('Cash-close check')).toBeInTheDocument();
+    expect(screen.getByText('1 to review')).toBeInTheDocument();
+    expect(screen.getByText('Urgent')).toBeInTheDocument();
+    expect(
+      screen.getByText('4 refunds totalling PKR 900.00 have no matching stock-return record.')
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Nothing is posted, reopened or sent/)).toBeInTheDocument();
+    // Read-only: the panel offers no action beyond the existing close controls.
+    expect(screen.queryByRole('button', { name: /acknowledge|resolve|reopen/i })).toBeNull();
   });
 });

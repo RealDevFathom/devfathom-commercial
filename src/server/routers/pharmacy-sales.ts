@@ -30,6 +30,7 @@ import {
   verifyOperatorCredential,
 } from '@/lib/restaurant/operator-credentials';
 import { closePharmacyDay, readPharmacyClose } from '@/lib/pharmacy/day-close';
+import { readPharmacyCashCloseCheck } from '@/lib/pharmacy/cash-close-check-operations';
 import { workspaceTimezone } from '@/lib/timezone';
 import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-source';
 import { TRPCError } from '@trpc/server';
@@ -610,6 +611,22 @@ export const pharmacySalesRouter = router({
       try {
         return await ctx.db.$transaction(async (tx) =>
           closePharmacyDay(txDb(tx), await scopeFor(ctx, input.branchId), input)
+        );
+      } catch (error) {
+        fail(error);
+      }
+    }),
+  // #728: the owner's read-only cash-close anomaly check (close variance, refunds,
+  // voids) with its narrative. Owner-only like the anomaly signals it sits beside;
+  // a query that takes no day lock and writes nothing, so a flag never blocks or
+  // alters the close itself.
+  closeAnomalyCheck: adminProcedure
+    .input(z.object({ branchId, businessDate: closeDate }).strict())
+    .query(async ({ ctx, input }) => {
+      try {
+        const scope = await scopeFor(ctx, input.branchId);
+        return await ctx.db.$transaction(async (tx) =>
+          readPharmacyCashCloseCheck(txDb(tx), scope, input.businessDate)
         );
       } catch (error) {
         fail(error);
