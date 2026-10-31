@@ -226,7 +226,11 @@ describe('frozen quote and costing', () => {
     await expect(publishQuote(f.tx, 'org', 'order', 'PKR', 'staff')).rejects.toThrow(
       'A recipe is required for every quoted line.'
     );
-    expect(f.db.$queryRaw).not.toHaveBeenCalled();
+    // Publishing must lock the order before reading its lines, but reject
+    // product-only lines before reading booking state or an existing quote.
+    expect(f.db.$queryRaw).toHaveBeenCalledExactlyOnceWith(
+      Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${'order'},0))`
+    );
     expect(mocks.cost).not.toHaveBeenCalled();
     expect(f.db.$executeRaw).not.toHaveBeenCalled();
   });
