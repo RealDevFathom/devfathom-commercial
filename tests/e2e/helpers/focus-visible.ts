@@ -34,24 +34,49 @@ export async function assertKeyboardFocusWalk(page: Page, route: string, testInf
   expect(candidateCount, `${route}: page must expose a keyboard-reachable control`).toBeGreaterThan(
     0
   );
-  await expect(page.locator('[tabindex]:not([tabindex="0"]):not([tabindex="-1"])')).toHaveCount(
-    0
-  );
-  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await expect(page.locator('[tabindex]:not([tabindex="0"]):not([tabindex="-1"])')).toHaveCount(0);
+  // Blurring an autofocused control alone leaves the sequential navigation
+  // starting point there. Reset it to the start without focusing a control.
+  await page.evaluate(() => {
+    const body = document.body;
+    const tabIndex = body.getAttribute('tabindex');
+    body.setAttribute('tabindex', '-1');
+    body.focus({ preventScroll: true });
+    body.blur();
+    if (tabIndex === null) body.removeAttribute('tabindex');
+    else body.setAttribute('tabindex', tabIndex);
+  });
+
+  const readFocus = () =>
+    page.evaluate(
+      (selector) => ({
+        index: [...document.querySelectorAll(selector)].indexOf(document.activeElement as Element),
+        inBrowserChrome: document.activeElement === document.body && !document.hasFocus(),
+      }),
+      tabbableSelector
+    );
 
   const visited = new Set<number>();
   let previousIndex = -1;
   for (let step = 0; step <= candidateCount; step += 1) {
     await page.keyboard.press('Tab');
-    const index = await page.evaluate(
-      (selector) =>
-        [...document.querySelectorAll(selector)].indexOf(document.activeElement as Element),
-      tabbableSelector
-    );
-    if (visited.has(index)) break;
-    expect(index, `${route}: Tab must move to a declared interactive control`).toBeGreaterThanOrEqual(
-      0
-    );
+    let focus = await readFocus();
+    // Chromium visits browser chrome between the last and first document stop.
+    // Re-enter the document and verify the cycle instead of treating body as a
+    // control or accepting an arbitrary unknown focus target.
+    if (focus.inBrowserChrome && visited.size > 0) {
+      await page.keyboard.press('Tab');
+      focus = await readFocus();
+    }
+    const { index } = focus;
+    if (visited.has(index)) {
+      expect(index, `${route}: focus cycles back to the first tab stop`).toBe([...visited][0]);
+      break;
+    }
+    expect(
+      index,
+      `${route}: Tab must move to a declared interactive control`
+    ).toBeGreaterThanOrEqual(0);
     expect(index, `${route}: Tab stops follow document order`).toBeGreaterThan(previousIndex);
     visited.add(index);
     previousIndex = index;
@@ -80,7 +105,9 @@ export async function assertKeyboardFocusWalk(page: Page, route: string, testInf
         background,
       };
     });
-    expect(indicator.focusVisible, `${route}: tab stop ${step + 1} matches :focus-visible`).toBe(true);
+    expect(indicator.focusVisible, `${route}: tab stop ${step + 1} matches :focus-visible`).toBe(
+      true
+    );
     expect(indicator.style, `${route}: tab stop ${step + 1} has a solid outline`).toBe('solid');
     expect(
       indicator.width,
