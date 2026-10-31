@@ -17,6 +17,7 @@ import { assistantVertical } from '@/lib/ai/context';
 import { rateLimit } from '@/lib/rate-limit';
 import { readAskFathomSettings } from '@/lib/ai/ask-fathom-settings';
 import { createAIModel, readAIAvailability } from '@/lib/ai/provider';
+import { prepareAIModel } from '@/lib/ai/metered-model';
 import { assistantToolChoice, buildAssistantTools } from '@/lib/ai/tools';
 import { assistantSystemPrompt } from '@/lib/ai/prompt';
 import { responseForPasswordChange } from '@/lib/auth/session-state';
@@ -178,7 +179,7 @@ async function respond(req: Request) {
   }
   let ai: ReturnType<typeof createAIModel>;
   try {
-    ai = createAIModel();
+    ai = await prepareAIModel(createAIModel());
   } catch {
     console.error('ASSISTANT_PROVIDER_UNAVAILABLE');
     return Response.json(

@@ -1,4 +1,6 @@
 import { beforeEach, expect, it, vi } from 'vitest';
+import { MockLanguageModelV3 } from 'ai/test';
+import type { AIModelSelection } from '@/lib/ai/provider';
 const mocks = vi.hoisted(() => ({
   config: vi.fn(),
   model: vi.fn(),
@@ -51,8 +53,12 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.availability.mockReturnValue({ available: true, provider: 'groq' });
   provenance = growthSourceFixture();
-  mocks.config.mockReturnValue({ provider: 'TEST_DOUBLE', model: 'DETERMINISTIC_CATERING_TOKENS' });
-  mocks.model.mockReturnValue({ model: {} });
+  mocks.config.mockReturnValue({ provider: 'groq', model: 'DETERMINISTIC_CATERING_TOKENS' });
+  mocks.model.mockReturnValue({
+    model: new MockLanguageModelV3(),
+    provider: 'groq',
+    modelId: 'DETERMINISTIC_CATERING_TOKENS',
+  } satisfies AIModelSelection);
   mocks.generateText.mockResolvedValue({ output, finishReason: 'stop' });
   query.mockImplementation(async (sql: string) =>
     sql.includes('WITH periods') ? [{ source: structuredClone(provenance.source) }] : []
@@ -84,7 +90,7 @@ it('production orchestration uses shared generator and stores envelope/attributi
   expect(call.slice(6, 10)).toEqual([
     'READY',
     null,
-    'TEST_DOUBLE',
+    'groq',
     'DETERMINISTIC_CATERING_TOKENS',
   ]);
   expect(saved.actions).toEqual([{ ref: 'a1', kind: 'CATERING_REVIEW' }]);
