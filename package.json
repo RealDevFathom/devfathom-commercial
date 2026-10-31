@@ -129,7 +129,7 @@
     "eslint": "^9",
     "shadcn": "^4.2.0",
     "eslint-config-next": "16.4.2",
-    "jsdom": "30.1.2",
+    "jsdom": "30.0.0",
     "prettier": "^3.8.2",
     "tailwindcss": "^4",
     "tsx": "^4.21.0",
