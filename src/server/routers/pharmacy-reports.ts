@@ -42,6 +42,10 @@ import {
 } from '@/lib/pharmacy/pack-authentication-operations';
 import { readPharmacyBranchComparison } from '@/lib/pharmacy/branch-comparison';
 import { auditedProtectedProcedure, capabilityProcedure, router, type TRPCContext } from '../trpc';
+import {
+  readStaffingFootfall,
+  validateStaffingFootfallInput,
+} from '@/lib/pharmacy/staffing-footfall';
 
 const reports = capabilityProcedure('reports:operational');
 const widget = z
@@ -173,6 +177,28 @@ async function requireOwnerBranch(ctx: TRPCContext, branchId: string) {
 }
 
 export const pharmacyReportsRouter = router({
+  staffingFootfall: reports
+    .input(
+      filters
+        .pick({ branchId: true, from: true, to: true })
+        .required({ branchId: true })
+        .extend({
+          receiptsPerStaffHour: z.number().int().min(1).max(1_000),
+          minimumSuggestedStaff: z.number().int().min(0).max(1_000),
+        })
+    )
+    .query(async ({ ctx, input }) => {
+      await ownerFilters(ctx, input);
+      try {
+        validateStaffingFootfallInput(input);
+      } catch (error) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: error instanceof Error ? error.message : 'Invalid staffing planning inputs.',
+        });
+      }
+      return readStaffingFootfall(ctx.db, ctx.entitlements.organizationId, input);
+    }),
   marketing: reports
     .input(filters.pick({ branchId: true, from: true, to: true }))
     .query(async ({ ctx, input }) => {
