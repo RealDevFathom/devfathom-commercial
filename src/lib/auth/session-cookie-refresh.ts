@@ -1,4 +1,6 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
+import { decode, getToken, type JWT } from 'next-auth/jwt';
 
 export const JWT_SESSION_UPDATE_AGE_SECONDS = 60 * 60;
 
@@ -48,6 +50,40 @@ function updateCookie(cookieName: string, secret: string, now: number, secure: b
     .join('; ');
 }
 
+async function hasUnchangedClaims(
+  request: Request,
+  issuedCookies: string[],
+  secret: string
+): Promise<boolean> {
+  const cookieName = issuedCookies[0]!.split('=', 1)[0]!.replace(/\.\d+$/, '');
+  const token = issuedCookies
+    .map((cookie) => cookie.split(';', 1)[0]!)
+    .sort((a, b) => {
+      const chunkIndex = (cookie: string) =>
+        Number(cookie.split('=', 1)[0]!.split('.').at(-1)) || 0;
+      return chunkIndex(a) - chunkIndex(b);
+    })
+    .map((cookie) => cookie.slice(cookie.indexOf('=') + 1))
+    .join('');
+  try {
+    const [previous, next] = await Promise.all([
+      getToken({ req: request, secret, cookieName }),
+      decode({ token, secret, salt: cookieName }),
+    ]);
+    if (!previous || !next) return false;
+    // Only Auth.js's rotation metadata is redundant. In particular, persist
+    // lastValidatedAt so the JWT callback's one-minute DB cache still works.
+    const claims = (jwt: JWT) =>
+      Object.fromEntries(
+        Object.entries(jwt).filter(([key]) => !['iat', 'exp', 'jti'].includes(key))
+      );
+    return isDeepStrictEqual(claims(previous), claims(next));
+  } catch {
+    // An unfamiliar token format must never cause callback updates to be lost.
+    return false;
+  }
+}
+
 /**
  * Auth.js intentionally rotates JWT cookies on every session read and does not
  * apply session.updateAge to the JWT strategy. Keep its validation/session
@@ -79,7 +115,12 @@ export async function handleAuthRequest<T extends Request>(
   const changesCookieLayout = setCookies.some(
     (cookie) => SESSION_COOKIE_PATTERN.test(cookie) && !issuedNames.has(cookie.split('=', 1)[0])
   );
-  if (isSessionRead && !changesCookieLayout && validUpdateCookie(request, secret, now)) {
+  if (
+    isSessionRead &&
+    !changesCookieLayout &&
+    validUpdateCookie(request, secret, now) &&
+    (await hasUnchangedClaims(request, issuedSessionCookies, secret))
+  ) {
     response.headers.delete('set-cookie');
     for (const cookie of setCookies) {
       if (!issuedSessionCookies.includes(cookie)) response.headers.append('set-cookie', cookie);
