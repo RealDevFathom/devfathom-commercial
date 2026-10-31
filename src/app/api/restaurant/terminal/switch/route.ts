@@ -8,6 +8,7 @@ import { recordTerminalOperatorAudit } from '@/lib/restaurant/terminal-audit';
 import { describeShiftDenial } from '@/lib/restaurant/shifts';
 import { authenticateOperator, withTerminalAuth } from '@/lib/restaurant/terminal-auth';
 import { bindOperator } from '@/lib/restaurant/terminal-session';
+import { mintPosComposerProof } from '@/lib/restaurant/pos-composer-proof';
 
 const bodySchema = z.object({
   staffProfileId: z.string().min(1),
@@ -112,6 +113,16 @@ export const POST = withTerminalAuth(async (ctx, request) => {
     metadata: { previousStaffProfileId },
   });
   return NextResponse.json({
+    composerProof: mintPosComposerProof(
+      {
+        organizationId: ctx.organizationId,
+        branchId: ctx.device.branchId,
+        deviceId: ctx.device.id,
+        sessionId: session.id,
+        staffProfileId,
+      },
+      now
+    ),
     session: {
       id: session.id,
       state: 'UNLOCKED',

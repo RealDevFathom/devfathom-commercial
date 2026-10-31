@@ -40,7 +40,11 @@ import {
   isPosStoreSupported,
   type PosCatalogSnapshot,
 } from '@/lib/restaurant/pos-client-store';
-import { countQueuedCommands, type PosQueueSnapshot } from '@/lib/restaurant/pos-command-queue';
+import {
+  composerProofNeedsRenewal,
+  countQueuedCommands,
+  type PosQueueSnapshot,
+} from '@/lib/restaurant/pos-command-queue';
 import { PosOfflineRuntime } from '@/lib/restaurant/pos-offline-runtime';
 import {
   type BranchCommercialTerms,
@@ -265,11 +269,37 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
     setQueue(offlineRuntime.current?.snapshot().queue ?? null);
   }, []);
 
+  // Read by replay notices only; a directory refresh must not re-trigger replay.
+  const operatorsRef = useRef(operators);
+  useEffect(() => {
+    operatorsRef.current = operators;
+  }, [operators]);
+
   const replayQueue = useCallback(
     async (activeRuntime: Runtime) => {
       const local = offlineRuntime.current;
       if (!local || !navigator.onLine || activeRuntime.state !== 'UNLOCKED') return;
-      const result = await local.replay(async (queued) => {
+      const staffProfileId = activeRuntime.operator?.staffProfileId;
+      if (!staffProfileId || !activeRuntime.composerProof) return;
+      await local.renewComposerProof(
+        staffProfileId,
+        async (originalProof) => {
+          const response = await fetch('/api/restaurant/terminal/renew-composer-proof', {
+            method: 'POST',
+            cache: 'no-store',
+            credentials: 'include',
+            headers: { ...authHeaders(activeRuntime, true), 'Content-Type': 'application/json' },
+            body: JSON.stringify({ originalProof }),
+          });
+          if (!response.ok) return null;
+          const body = (await response.json().catch(() => null)) as {
+            composerProof?: unknown;
+          } | null;
+          return typeof body?.composerProof === 'string' ? body.composerProof : null;
+        },
+        (proof) => composerProofNeedsRenewal(proof, activeRuntime.sessionId, Date.now())
+      );
+      const result = await local.replay(staffProfileId, async (queued) => {
         try {
           const response = await fetch(queued.path, {
             method: queued.method,
@@ -304,6 +334,18 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
         setNotice({
           tone: 'warning',
           message: 'Queued orders are paused. Reauthenticate to resume replay.',
+        });
+      }
+      if (result.state === 'REFUSED' && result.waitingComposers?.length) {
+        const names = result.waitingComposers.map(
+          (composer) =>
+            operatorsRef.current.find((operator) => operator.staffProfileId === composer)
+              ?.displayName ??
+            (composer ? 'another operator' : 'an unverified composer')
+        );
+        setNotice({
+          tone: 'warning',
+          message: `Queued orders from ${[...new Set(names)].join(', ')} wait for that operator to sign in on this terminal before they send.`,
         });
       }
       if (result.discarded) {
@@ -648,8 +690,12 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
       }
       const local = offlineRuntime.current;
       if (!local) throw new Error('Local POS storage is unavailable.');
+      if (!runtime.operator || !runtime.composerProof)
+        throw new Error('Reauthenticate before saving offline work.');
       const enqueued = await local.enqueue({
         deviceId: runtime.deviceId,
+        composerStaffProfileId: runtime.operator.staffProfileId,
+        composerProof: runtime.composerProof,
         catalogVersion: draftMenu.version ?? '',
         clientOriginAt: new Date().toISOString(),
         open: body,

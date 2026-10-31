@@ -219,7 +219,9 @@ export function OrderPad({ demo = false }: { demo?: boolean }) {
                     <Button
                       type="button"
                       variant="outline"
-                      disabled={!pos.online || pos.busy}
+                      disabled={
+                        !pos.online || pos.busy || draft.review?.reason === 'COMPOSER_UNVERIFIED'
+                      }
                       onClick={workspace.sendReviewedOrder(draft)}
                     >
                       Send deliberately
