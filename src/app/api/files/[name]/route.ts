@@ -56,6 +56,26 @@ export async function GET(request: Request, ctx: { params: Promise<{ name: strin
   const organization = actor.organization;
   const fileRef = `/api/files/${name}`;
 
+  // The regulatory profile itself is admin-only. Apply the same role gate to
+  // its licence evidence so knowing (or leaking) the otherwise opaque URL does
+  // not let an ordinary tenant member bypass that profile's authorization.
+  // The tenant-scoped transaction and explicit predicate keep the lookup from
+  // classifying a file referenced by another organization as this tenant's.
+  if (session.user.role !== 'ADMIN') {
+    const licenceEvidence = await withTenantDb(organization.id, (db) =>
+      db.branchRegulatoryProfile.findFirst({
+        where: {
+          organizationId: organization.id,
+          licenceEvidenceFileRef: fileRef,
+        },
+        select: { id: true },
+      })
+    );
+    if (licenceEvidence) {
+      return new Response('Not found', { status: 404 });
+    }
+  }
+
   const sopEvidence = await withTenantDb(organization.id, (db) =>
     db.restaurantSopEvidence.findFirst({
       where: { storageRef: fileRef },
@@ -75,26 +95,6 @@ export async function GET(request: Request, ctx: { params: Promise<{ name: strin
       })
     );
     if (!branchAccess) return new Response('Not found', { status: 404 });
-  }
-
-  // The regulatory profile itself is admin-only. Apply the same role gate to
-  // its licence evidence so knowing (or leaking) the otherwise opaque URL does
-  // not let an ordinary tenant member bypass that profile's authorization.
-  // The tenant-scoped transaction and explicit predicate keep the lookup from
-  // classifying a file referenced by another organization as this tenant's.
-  if (session.user.role !== 'ADMIN') {
-    const licenceEvidence = await withTenantDb(organization.id, (db) =>
-      db.branchRegulatoryProfile.findFirst({
-        where: {
-          organizationId: organization.id,
-          licenceEvidenceFileRef: fileRef,
-        },
-        select: { id: true },
-      })
-    );
-    if (licenceEvidence) {
-      return new Response('Not found', { status: 404 });
-    }
   }
 
   // IMP-RT-05: per-channel membership enforcement. If this file is a chat

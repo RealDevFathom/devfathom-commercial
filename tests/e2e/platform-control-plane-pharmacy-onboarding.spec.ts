@@ -30,6 +30,7 @@ import {
   controlPlaneEnvironmentAvailable,
   ensureControlPlaneCatalog,
   loginPlatformRequest,
+  signInProvisionedTenant,
   platformMutationHeaders,
   resetOrganization,
   withAdminDatabase,
@@ -114,6 +115,21 @@ test.beforeAll(async () => {
     // A jurisdiction whose rules counsel has confirmed. The migration ships only
     // a provisional Punjab, on which no branch may operate — the form must offer
     // both and the gate must flip only on the confirmed one.
+    // Own the provisional version too: the lifecycle sibling confirms Punjab.
+    await db.query(`UPDATE pharmacy_jurisdiction_rule_sets
+      SET "effectiveTo"=now()-interval '1 minute'
+      WHERE code='PK-PB' AND "effectiveTo" IS NULL`);
+    await db.query(`INSERT INTO pharmacy_jurisdiction_rule_sets
+      (id,code,version,"effectiveFrom","licenceCategories","permittedSchedules",
+       "prescriptionOnlyClasses","prescriptionRetentionDays","controlledRegisterFlags",
+       "pharmacistCoverageRule","recordRetentionByClass")
+      SELECT 'e2e_onboarding_pb_provisional','PK-PB',
+        (SELECT max(version)+1 FROM pharmacy_jurisdiction_rule_sets WHERE code='PK-PB'),
+        now()-interval '1 minute',"licenceCategories","permittedSchedules",
+        "prescriptionOnlyClasses","prescriptionRetentionDays","controlledRegisterFlags",
+        "pharmacistCoverageRule","recordRetentionByClass"
+      FROM pharmacy_jurisdiction_rule_sets WHERE id='pk_pb_provisional_v1'
+      ON CONFLICT (id) DO UPDATE SET "effectiveFrom"=EXCLUDED."effectiveFrom", "effectiveTo"=NULL`);
     await db.query(
       `INSERT INTO pharmacy_jurisdiction_rule_sets
          (id, code, version, "effectiveFrom", "licenceCategories", "permittedSchedules",
@@ -227,6 +243,7 @@ test('a fresh pharmacy fills its regulatory profile, watches the steps flip, and
       'inventory',
       'manager',
       'owner',
+      'owner-operator',
       'pharmacist',
       'procurement',
     ]);
@@ -315,11 +332,7 @@ test('a fresh pharmacy fills its regulatory profile, watches the steps flip, and
   });
 
   // ── The administrator signs in and reads the checklist ─────────────────────
-  await page.goto(`${sharedBaseUrl}/login`);
-  await page.getByLabel('Email').fill(tenant.email);
-  await page.locator('input[name="password"]').fill(tenant.password);
-  await page.getByRole('button', { name: 'Sign in' }).click();
-  await expect(page).toHaveURL(/\/dashboard(?:\?|$)/, { timeout: 60_000 });
+  await signInProvisionedTenant(page, sharedBaseUrl!, tenant);
 
   // Reached by clicking, not by typing a URL: the nav must actually offer it.
   await page.getByRole('link', { name: 'Onboarding' }).click();
@@ -345,9 +358,7 @@ test('a fresh pharmacy fills its regulatory profile, watches the steps flip, and
   await expect(page).toHaveURL(/\/pharmacy\/regulatory$/);
 
   // The branch is a picker over this organization's own records — never an id.
-  await expect(page.getByLabel('Which branch is this profile for?')).toHaveValue(
-    `branch_${suffix}`
-  );
+  await expect(page.getByLabel('Which branch is this profile for?')).toHaveValue(branchId);
   await expect(page.getByRole('option', { name: /Clifton Chemist/ })).toBeAttached();
 
   // Punjab's rules are provisional and say so; Sindh's are confirmed.
@@ -371,12 +382,22 @@ test('a fresh pharmacy fills its regulatory profile, watches the steps flip, and
     page.getByText('Upload a scan or photograph of the licence as evidence.')
   ).toBeVisible();
 
+  const upload = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === '/api/upload' && response.request().method() === 'POST'
+  );
+  const evidence = Buffer.from('%PDF-1.4 e2e licence evidence');
   await page.setInputFiles('#licenceEvidence', {
     name: 'licence.pdf',
     mimeType: 'application/pdf',
-    buffer: Buffer.from('%PDF-1.4 e2e licence evidence'),
+    buffer: evidence,
   });
+  expect((await upload).status(), 'Licence evidence upload must succeed').toBe(200);
   await expect(page.getByText('Licence evidence attached.')).toBeVisible();
+  const evidenceUrl = await page.locator('input[name="licenceEvidenceFileRef"]').inputValue();
+  const storedEvidence = await page.request.get(new URL(evidenceUrl, page.url()).href);
+  expect(storedEvidence.status()).toBe(200);
+  expect(await storedEvidence.body()).toEqual(evidence);
   // Each schedule is a real checkbox with its own accessible name, so it is
   // reachable by keyboard and by name — not a div wearing a click handler.
   await page.getByRole('checkbox', { name: 'G', exact: true }).check();

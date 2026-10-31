@@ -2,10 +2,10 @@
 import { beforeEach, expect, test, vi } from 'vitest';
 const m = vi.hoisted(() => ({
   actor: vi.fn(),
+  licence: vi.fn(),
   sop: vi.fn(),
   branch: vi.fn(),
   attachment: vi.fn(),
-  licence: vi.fn(),
   member: vi.fn(),
   get: vi.fn(),
   tenant: vi.fn(),
@@ -28,9 +28,9 @@ beforeEach(() => {
   });
   m.tenant.mockImplementation(async (_org, callback) =>
     callback({
+      branchRegulatoryProfile: { findFirst: m.licence },
       restaurantSopEvidence: { findFirst: m.sop },
       restaurantBranchAssignment: { findUnique: m.branch },
-      branchRegulatoryProfile: { findFirst: m.licence },
       messageAttachment: { findFirst: m.attachment },
       channelMember: { findUnique: m.member },
     })
@@ -64,9 +64,8 @@ test.each(['EMPLOYEE', 'HR'])(
     });
     m.licence.mockResolvedValue({ id: 'regulatory-profile' });
     expect((await read()).status).toBe(404);
-    expect(m.tenant).toHaveBeenCalledTimes(2);
+    expect(m.tenant).toHaveBeenCalledTimes(1);
     expect(m.tenant).toHaveBeenNthCalledWith(1, 'org-a', expect.any(Function));
-    expect(m.tenant).toHaveBeenNthCalledWith(2, 'org-a', expect.any(Function));
     expect(m.licence).toHaveBeenCalledExactlyOnceWith({
       where: {
         organizationId: 'org-a',
@@ -78,6 +77,11 @@ test.each(['EMPLOYEE', 'HR'])(
     expect(m.get).not.toHaveBeenCalled();
   }
 );
+test('licence evidence denial hides resource even when storage is disabled', async () => {
+  m.licence.mockResolvedValue({ id: 'regulatory-profile' });
+  expect((await read('licence.pdf')).status).toBe(404);
+  expect(m.get).not.toHaveBeenCalled();
+});
 test('chat membership denial hides resource even when storage is disabled', async () => {
   m.attachment.mockResolvedValue({ message: { channelId: 'private-channel' } });
   expect((await read()).status).toBe(404);

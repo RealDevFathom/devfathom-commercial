@@ -362,7 +362,7 @@ async function sellThroughCheckout(pos: Page, kds: Page, tender: 'CASH' | 'CARD'
   await expect(pos.getByLabel('Channel')).toHaveValue('DINE_IN');
   await pos.getByLabel('Covers').fill('1');
   await pos.getByRole('button', { name: new RegExp(`^${fixture.menuItem.name}`) }).click();
-  await pos.getByLabel('Quantity').fill('1');
+  await pos.getByRole('spinbutton', { name: 'Quantity', exact: true }).fill('1');
   await pos.getByLabel(new RegExp(fixture.modifier.name)).check();
   await pos.getByRole('button', { name: 'Add to order' }).click();
   const openedResponse = pos.waitForResponse(

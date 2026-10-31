@@ -239,7 +239,12 @@ beforeAll(async () => {
         id: ids.orderRole,
         key: `wha49_kds_orders_${suffix}`,
         name: 'WHA-49 Kitchen Order Taking',
-        permissions: { create: [{ capability: 'orders:take', effect: 'ALLOW' }] },
+        permissions: {
+          create: [
+            { capability: 'orders:take', effect: 'ALLOW' },
+            { capability: 'kitchen:operate', effect: 'ALLOW' },
+          ],
+        },
       },
     });
     await tx.user.create({
