@@ -24,7 +24,7 @@ function context(status: string) {
     userId: 'user-1',
     db: {
       invoice: {
-        findUnique: vi.fn().mockResolvedValue({ id: invoice.id, status }),
+        findUnique: vi.fn().mockResolvedValue({ id: invoice.id, status, total: 100 }),
         findUniqueOrThrow: vi.fn().mockResolvedValue(invoice),
         updateMany: vi.fn().mockResolvedValue({ count: 1 }),
       },
@@ -78,19 +78,19 @@ describe('PATCH /api/v1/invoices/:id invoice status', () => {
 
     expect(response.status).toBe(200);
     expect(authCtx.db.invoice.updateMany).toHaveBeenCalledWith({
-      where: { id: invoice.id, status: 'DRAFT' },
+      where: { id: invoice.id, status: 'DRAFT', total: 100 },
       data: { status: 'SENT', sentAt: expect.any(Date) },
     });
     expect(mocks.logActivity).toHaveBeenCalledOnce();
   });
 
-  it.each(['OVERDUE', 'CANCELLED'])('clears sentAt for SENT to %s', async (status) => {
+  it.each(['OVERDUE', 'CANCELLED'])('preserves sentAt for SENT to %s', async (status) => {
     const { authCtx, response } = await patch(status, 'SENT');
 
     expect(response.status).toBe(200);
     expect(authCtx.db.invoice.updateMany).toHaveBeenCalledWith({
-      where: { id: invoice.id, status: 'SENT' },
-      data: { status, sentAt: null },
+      where: { id: invoice.id, status: 'SENT', total: 100 },
+      data: { status },
     });
   });
 
@@ -114,5 +114,28 @@ describe('PATCH /api/v1/invoices/:id invoice status', () => {
     expect(response.status).toBe(409);
     expect(authCtx.db.invoice.findUniqueOrThrow).not.toHaveBeenCalled();
     expect(mocks.logActivity).not.toHaveBeenCalled();
+  });
+
+  it('issues and settles a fully discounted draft atomically', async () => {
+    const authCtx = context('DRAFT');
+    authCtx.db.invoice.findUnique.mockResolvedValue({ id: invoice.id, status: 'DRAFT', total: 0 });
+    const handler = PATCH as unknown as (
+      ctx: unknown,
+      request: Request,
+      route: { params: Promise<{ id: string }> }
+    ) => Promise<Response>;
+    const response = await handler(
+      authCtx,
+      new Request('https://example.test/api/v1/invoices/invoice-1', {
+        method: 'PATCH',
+        body: JSON.stringify({ status: 'SENT' }),
+      }),
+      { params: Promise.resolve({ id: invoice.id }) }
+    );
+    expect(response.status).toBe(200);
+    expect(authCtx.db.invoice.updateMany).toHaveBeenCalledWith({
+      where: { id: invoice.id, status: 'DRAFT', total: 0 },
+      data: { status: 'PAID', sentAt: expect.any(Date), paidAt: expect.any(Date) },
+    });
   });
 });

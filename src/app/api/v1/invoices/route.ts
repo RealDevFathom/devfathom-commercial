@@ -4,6 +4,7 @@ import { withApiAuth } from '@/lib/api-auth';
 import { logActivity } from '@/server/activity';
 import { readJson } from '@/lib/api-json';
 import { calculateInvoiceMoney } from '@/lib/finance/invoice-money';
+import { MAX_MONEY } from '@/lib/finance/money';
 
 export const GET = withApiAuth('finance:read', async (ctx, request) => {
   const url = new URL(request.url);
@@ -33,7 +34,6 @@ export const GET = withApiAuth('finance:read', async (ctx, request) => {
 // Money columns are Decimal(12,2): Postgres caps a value at 9,999,999,999.99.
 // Bound + non-negative so an oversized/negative input is a clean 400, not a raw
 // DB 500 (FIN-07) and not a paid/outstanding-corrupting negative (FIN-01).
-const MAX_MONEY = 9_999_999_999.99;
 const lineItemSchema = z.object({
   description: z.string().min(1),
   quantity: z.number().positive().max(1_000_000),
@@ -46,7 +46,7 @@ const lineItemSchema = z.object({
 const createInvoiceSchema = z.object({
   clientId: z.string(),
   projectId: z.string().optional(),
-  items: z.array(lineItemSchema).min(1),
+  items: z.array(lineItemSchema).min(1).max(1_000),
   // subtotal/total are intentionally NOT accepted — they are derived server-side.
   tax: z.number().nonnegative().max(MAX_MONEY).default(0),
   discount: z.number().nonnegative().max(MAX_MONEY).default(0),

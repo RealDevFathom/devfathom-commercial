@@ -23,7 +23,7 @@ function setup(prior: string, changed = 1) {
       findMany: vi
         .fn()
         .mockResolvedValue([
-          { id: invoice.id, invoiceNumber: invoice.invoiceNumber, status: prior },
+          { id: invoice.id, invoiceNumber: invoice.invoiceNumber, status: prior, total: 100 },
         ]),
       updateMany: vi.fn().mockResolvedValue({ count: changed }),
       findUniqueOrThrow: vi.fn().mockResolvedValue({ ...invoice, status: prior }),
@@ -62,14 +62,14 @@ describe('assistant updateInvoiceStatus', () => {
     }
   );
 
-  it('clears sentAt with a compare-and-set when SENT becomes OVERDUE', async () => {
+  it('preserves sentAt with a compare-and-set when SENT becomes OVERDUE', async () => {
     const { db, tool } = setup('SENT');
 
     await tool.execute({ invoiceNumber: invoice.invoiceNumber, status: 'OVERDUE' });
 
     expect(db.invoice.updateMany).toHaveBeenCalledWith({
-      where: { id: invoice.id, status: 'SENT' },
-      data: { status: 'OVERDUE', sentAt: null },
+      where: { id: invoice.id, status: 'SENT', total: 100 },
+      data: { status: 'OVERDUE' },
     });
   });
 
@@ -83,5 +83,20 @@ describe('assistant updateInvoiceStatus', () => {
     expect(helpers.activity).not.toHaveBeenCalled();
     expect(helpers.audit).not.toHaveBeenCalled();
     expect(helpers.notifyUsers).not.toHaveBeenCalled();
+  });
+
+  it('issues and settles a fully discounted draft and audits its actual status', async () => {
+    const { db, helpers, tool } = setup('DRAFT');
+    db.invoice.findMany.mockResolvedValue([
+      { id: invoice.id, invoiceNumber: invoice.invoiceNumber, status: 'DRAFT', total: 0 },
+    ]);
+    await tool.execute({ invoiceNumber: invoice.invoiceNumber, status: 'SENT' });
+    expect(db.invoice.updateMany).toHaveBeenCalledWith({
+      where: { id: invoice.id, status: 'DRAFT', total: 0 },
+      data: { status: 'PAID', sentAt: expect.any(Date), paidAt: expect.any(Date) },
+    });
+    expect(helpers.audit).toHaveBeenCalledWith(
+      expect.objectContaining({ changes: { status: { before: 'DRAFT', after: 'PAID' } } })
+    );
   });
 });

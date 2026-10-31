@@ -1,10 +1,12 @@
+import { isPersistableMoney, multiplyMoney, roundMoney, sumMoney } from './money';
+
 export type InvoiceMoneyLine = {
   description: string;
   quantity: number;
   rate: number;
 };
 
-export const roundInvoiceMoney = (value: number) => Math.round(value * 100) / 100;
+export const roundInvoiceMoney = roundMoney;
 
 /**
  * Applies one money contract to every invoice entry point. Line amounts are
@@ -17,10 +19,12 @@ export function calculateInvoiceMoney(
   discountValue = 0
 ) {
   const items = sourceLines.map((line) => ({
-    ...line,
-    amount: roundInvoiceMoney(line.quantity * line.rate),
+    description: line.description,
+    quantity: line.quantity,
+    rate: line.rate,
+    amount: multiplyMoney(line.quantity, line.rate),
   }));
-  const subtotal = roundInvoiceMoney(items.reduce((sum, line) => sum + line.amount, 0));
+  const subtotal = sumMoney(items.map((line) => line.amount));
   const tax = roundInvoiceMoney(taxValue);
   const discount = roundInvoiceMoney(discountValue);
 
@@ -28,11 +32,22 @@ export function calculateInvoiceMoney(
     throw new RangeError('Discount cannot exceed the invoice subtotal');
   }
 
+  const total = sumMoney([subtotal, -discount, tax]);
+  if (
+    items.some((item) => !isPersistableMoney(item.amount)) ||
+    !isPersistableMoney(subtotal) ||
+    !isPersistableMoney(tax) ||
+    !isPersistableMoney(discount) ||
+    !isPersistableMoney(total)
+  ) {
+    throw new RangeError('Derived invoice amount exceeds the allowed range');
+  }
+
   return {
     items,
     subtotal,
     discount,
     tax,
-    total: roundInvoiceMoney(subtotal - discount + tax),
+    total,
   };
 }

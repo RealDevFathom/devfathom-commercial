@@ -16,6 +16,7 @@ import {
 } from '@/lib/finance/currency';
 import { invoiceStatusTransitionError, invoiceStatusUpdate } from '@/lib/finance/invoice-status';
 import { calculateInvoiceMoney } from '@/lib/finance/invoice-money';
+import { MAX_MONEY, roundMoney, sumMoney } from '@/lib/finance/money';
 
 // Monthly-equivalent multiplier for a recurring expense's billing interval, so an
 // ongoing subscription's run-rate can be folded into burn/profit (FIN-05).
@@ -28,7 +29,6 @@ const RECURRING_MONTHLY_FACTOR: Record<string, number> = {
 // Money columns (transaction.amount, invoice totals, etc.) are Decimal(12,2), so the
 // largest value Postgres will accept is 9,999,999,999.99. Bound amounts here so an
 // oversized input fails as a clean validation error instead of a raw DB 500.
-const MAX_MONEY = 9_999_999_999.99;
 const MONEY_MAX_MESSAGE = 'Amount must be 9,999,999,999.99 or less';
 const positiveMoney = () => z.number().positive().max(MAX_MONEY, MONEY_MAX_MESSAGE);
 const nonNegativeMoney = () => z.number().nonnegative().max(MAX_MONEY, MONEY_MAX_MESSAGE);
@@ -40,12 +40,13 @@ export const createInvoiceInputSchema = z.object({
     .array(
       z.object({
         description: z.string(),
-        quantity: z.number().positive(),
+        quantity: z.number().positive().max(1_000_000),
         rate: positiveMoney(),
         amount: nonNegativeMoney(),
       })
     )
-    .min(1, 'Invoice must have at least one line item'),
+    .min(1, 'Invoice must have at least one line item')
+    .max(1_000, 'Invoice must have 1,000 line items or fewer'),
   subtotal: nonNegativeMoney(),
   tax: nonNegativeMoney().default(0),
   discount: nonNegativeMoney().default(0),
@@ -57,7 +58,7 @@ export const createInvoiceInputSchema = z.object({
 
 // Round to 2 decimal places (cents). Used to derive invoice money server-side so
 // caller-supplied subtotal/total are never trusted (FIN-01).
-const round2 = (n: number) => Math.round(n * 100) / 100;
+const round2 = roundMoney;
 
 // IMP-FIN-04: money is Decimal(12,2), so a partial payment can legitimately pay an
 // invoice off to the exact cent. Compare paid-vs-total with a half-cent tolerance
@@ -314,11 +315,12 @@ export const financeRouter = router({
           .array(
             z.object({
               description: z.string().min(1),
-              quantity: z.number().positive(),
+              quantity: z.number().positive().max(1_000_000),
               rate: positiveMoney(),
             })
           )
-          .min(1),
+          .min(1)
+          .max(1_000),
         tax: nonNegativeMoney().optional(),
         discount: nonNegativeMoney().optional(),
         dueDate: z.date().optional(),
@@ -327,26 +329,10 @@ export const financeRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      const current = await ctx.db.invoice.findUnique({
-        where: { id: input.id },
-        select: { status: true, tax: true, discount: true },
-      });
-      if (!current) throw new TRPCError({ code: 'NOT_FOUND', message: 'Invoice not found' });
-      if (current.status !== 'DRAFT' && current.status !== 'SENT') {
-        throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message: `A ${current.status.toLowerCase()} invoice can't be edited — only draft or sent invoices.`,
-        });
-      }
-
-      // Recompute money server-side, identical to createInvoice.
-      let money;
+      // Validate derived line amounts before opening a transaction. Omitted
+      // adjustments are read again under the invoice lock below.
       try {
-        money = calculateInvoiceMoney(
-          input.items,
-          input.tax ?? Number(current.tax),
-          input.discount ?? Number(current.discount)
-        );
+        calculateInvoiceMoney(input.items);
       } catch (error) {
         throw new TRPCError({
           code: 'BAD_REQUEST',
@@ -354,26 +340,86 @@ export const financeRouter = router({
         });
       }
 
-      const data: Record<string, unknown> = money;
-      if (input.dueDate) data.dueDate = input.dueDate;
-      if (input.notes !== undefined) data.notes = input.notes.trim() || null;
-      if (input.status && input.status !== current.status) {
-        data.status = input.status;
-        // Keep sentAt consistent with the status the same way updateInvoiceStatus does.
-        if (input.status === 'SENT') data.sentAt = new Date();
-        if (input.status === 'DRAFT') data.sentAt = null;
-      }
+      const invoice = await ctx.db.$transaction(async (tx) => {
+        // The payment and deletion paths take this same lock. Read adjustments,
+        // status and payments only after it, so a discount cannot race settlement.
+        await tx.$queryRaw`SELECT id FROM invoices WHERE id = ${input.id} FOR UPDATE`;
+        const current = await tx.invoice.findUnique({
+          where: { id: input.id },
+          select: { status: true, tax: true, discount: true },
+        });
+        if (!current) throw new TRPCError({ code: 'NOT_FOUND', message: 'Invoice not found' });
+        if (current.status !== 'DRAFT' && current.status !== 'SENT') {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: `A ${current.status.toLowerCase()} invoice can't be edited — only draft or sent invoices.`,
+          });
+        }
 
-      const invoice = await ctx.db.invoice.update({
-        where: { id: input.id },
-        data,
-        include: {
-          client: { include: { contacts: { where: { isPrimary: true }, take: 1 } } },
-          project: { select: { id: true, name: true } },
-          payments: { orderBy: { paidAt: 'desc' } },
-        },
+        let money;
+        try {
+          money = calculateInvoiceMoney(
+            input.items,
+            input.tax ?? Number(current.tax),
+            input.discount ?? Number(current.discount)
+          );
+        } catch (error) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: error instanceof Error ? error.message : 'Invalid invoice totals',
+          });
+        }
+        const payments = await tx.payment.aggregate({
+          where: { invoiceId: input.id },
+          _sum: { amount: true },
+        });
+        const amountPaid = round2(Number(payments._sum.amount ?? 0));
+        if (money.total < amountPaid) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Invoice total cannot be less than the amount already paid.',
+          });
+        }
+
+        const data: Record<string, unknown> = money;
+        if (input.dueDate) data.dueDate = input.dueDate;
+        if (input.notes !== undefined) data.notes = input.notes.trim() || null;
+        if (input.status && input.status !== current.status) {
+          data.status = input.status;
+          // Keep sentAt consistent with the status the same way updateInvoiceStatus does.
+          if (input.status === 'SENT') data.sentAt = new Date();
+          if (input.status === 'DRAFT') data.sentAt = null;
+        }
+
+        // Drafts remain editable until issued. An issued invoice whose balance
+        // is cleared by a discount is settled without fabricating a payment.
+        if (
+          money.total === amountPaid &&
+          (amountPaid > 0 || (input.status ?? current.status) !== 'DRAFT')
+        ) {
+          data.status = 'PAID';
+          data.paidAt = new Date();
+        }
+
+        return tx.invoice.update({
+          where: { id: input.id },
+          data,
+          include: {
+            client: { include: { contacts: { where: { isPrimary: true }, take: 1 } } },
+            project: { select: { id: true, name: true } },
+            payments: { orderBy: { paidAt: 'desc' } },
+          },
+        });
       });
 
+      if (invoice.status === 'PAID') {
+        emitEvent(ctx.db, ctx.entitlements, 'invoice.paid', {
+          invoiceId: invoice.id,
+          total: Number(invoice.total),
+          currency: invoice.currency,
+          clientId: invoice.clientId,
+        });
+      }
       const amountPaid = round2(invoice.payments.reduce((s, p) => s + Number(p.amount), 0));
       return { ...invoice, amountPaid, balance: round2(Number(invoice.total) - amountPaid) };
     }),
@@ -432,11 +478,18 @@ export const financeRouter = router({
 
       // Promote DRAFT → SENT only after a successful send.
       const wasDraft = invoice.status === 'DRAFT';
+      const issuedStatus = invoiceStatusUpdate('DRAFT', 'SENT', new Date(), Number(invoice.total));
       if (wasDraft) {
-        await ctx.db.invoice.update({
-          where: { id: invoice.id },
-          data: { status: 'SENT', sentAt: new Date() },
+        const changed = await ctx.db.invoice.updateMany({
+          where: { id: invoice.id, status: 'DRAFT', total: invoice.total },
+          data: issuedStatus,
         });
+        if (changed.count !== 1) {
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: 'Invoice changed concurrently. Refresh and try again.',
+          });
+        }
       }
 
       logActivity(ctx.db, ctx.session.user.id, {
@@ -448,7 +501,7 @@ export const financeRouter = router({
 
       return {
         sentTo: recipient.email,
-        status: wasDraft ? ('SENT' as const) : invoice.status,
+        status: wasDraft ? issuedStatus.status : invoice.status,
       };
     }),
 
@@ -461,10 +514,10 @@ export const financeRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       // FIN-06: enforce a status state-machine, never re-fire side-effects on a
-      // no-op, and clear paidAt/sentAt when the invoice leaves PAID/SENT.
+      // no-op, and reset payment/issue timestamps only when the transition requires it.
       const current = await ctx.db.invoice.findUnique({
         where: { id: input.id },
-        select: { status: true },
+        select: { status: true, total: true },
       });
       if (!current) throw new TRPCError({ code: 'NOT_FOUND', message: 'Invoice not found' });
 
@@ -488,8 +541,8 @@ export const financeRouter = router({
       }
 
       const changed = await ctx.db.invoice.updateMany({
-        where: { id: input.id, status: prior },
-        data: invoiceStatusUpdate(prior, next, new Date()),
+        where: { id: input.id, status: prior, total: current.total },
+        data: invoiceStatusUpdate(prior, next, new Date(), Number(current.total)),
       });
       if (changed.count !== 1) {
         throw new TRPCError({
@@ -530,6 +583,12 @@ export const financeRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      // Settlement must use the same cent value as the Decimal(12,2) payment row.
+      const amount = round2(input.amount);
+      if (amount <= 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Payment must be at least 0.01.' });
+      }
+
       // IMP-REST-03: captured inside the tx, fired only AFTER it commits.
       let paidEvent: {
         invoiceId: string;
@@ -539,6 +598,9 @@ export const financeRouter = router({
       } | null = null;
 
       const result = await ctx.db.$transaction(async (tx) => {
+        // Use the same invoice-row lock as updateInvoice so settlement and edits
+        // cannot both proceed from stale status/total snapshots.
+        await tx.$queryRaw`SELECT id FROM invoices WHERE id = ${input.invoiceId} FOR UPDATE`;
         const invoice = await tx.invoice.findUnique({
           where: { id: input.invoiceId },
           select: { id: true, status: true, total: true, currency: true, clientId: true },
@@ -572,7 +634,7 @@ export const financeRouter = router({
           _sum: { amount: true },
         });
         const alreadyPaid = round2(Number(prior._sum.amount ?? 0));
-        const newPaid = round2(alreadyPaid + input.amount);
+        const newPaid = sumMoney([alreadyPaid, amount]);
 
         // Reject overpayment beyond a half-cent rounding tolerance.
         if (newPaid > total + PAYMENT_EPSILON) {
@@ -586,7 +648,7 @@ export const financeRouter = router({
         const payment = await tx.payment.create({
           data: {
             invoiceId: invoice.id,
-            amount: input.amount,
+            amount,
             currency: invoice.currency,
             method: input.method?.trim() || null,
             note: input.note?.trim() || null,
@@ -639,6 +701,10 @@ export const financeRouter = router({
         });
         if (!payment) throw new TRPCError({ code: 'NOT_FOUND', message: 'Payment not found' });
 
+        // Join updateInvoice and addPayment's invoice-row serialization protocol
+        // before changing either the payment set or the derived invoice status.
+        await tx.$queryRaw`SELECT id FROM invoices WHERE id = ${payment.invoiceId} FOR UPDATE`;
+
         await tx.payment.delete({ where: { id: payment.id } });
 
         const invoice = await tx.invoice.findUnique({
@@ -671,7 +737,7 @@ export const financeRouter = router({
   markOverdueInvoices: adminProcedure.mutation(async ({ ctx }) => {
     const result = await ctx.db.invoice.updateMany({
       where: { status: 'SENT', dueDate: { lt: new Date() } },
-      data: { status: 'OVERDUE', sentAt: null },
+      data: invoiceStatusUpdate('SENT', 'OVERDUE', new Date()),
     });
     return { count: result.count };
   }),

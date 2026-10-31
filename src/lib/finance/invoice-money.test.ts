@@ -12,8 +12,8 @@ describe('calculateInvoiceMoney', () => {
       0.5
     );
 
-    expect(result.items.map((line) => line.amount)).toEqual([1, 1]);
-    expect(result).toMatchObject({ subtotal: 2, discount: 0.5, tax: 0.25, total: 1.75 });
+    expect(result.items.map((line) => line.amount)).toEqual([1.01, 1.01]);
+    expect(result).toMatchObject({ subtotal: 2.02, discount: 0.5, tax: 0.25, total: 1.77 });
   });
 
   it('rejects a discount greater than the subtotal', () => {

@@ -4,6 +4,7 @@ import { withApiAuth } from '@/lib/api-auth';
 import { readJson } from '@/lib/api-json';
 import { logActivity } from '@/server/activity';
 import {
+  INVOICE_STATUS_VALUES,
   invoiceStatusTransitionError,
   invoiceStatusUpdate,
   type InvoiceStatusValue,
@@ -26,7 +27,10 @@ export const GET = withApiAuth(
 );
 
 const updateSchema = z.object({
-  status: z.enum(['DRAFT', 'SENT', 'PAID', 'OVERDUE', 'CANCELLED']).optional(),
+  // Parse the same status domain enforced by the shared transition machine below.
+  // Keeping one canonical list prevents this REST surface from accepting a new
+  // status before its transition rules (and the other API surfaces) are ready.
+  status: z.enum(INVOICE_STATUS_VALUES).optional(),
 });
 
 export const PATCH = withApiAuth(
@@ -64,8 +68,13 @@ export const PATCH = withApiAuth(
     // Compare-and-set makes the state check and write one atomic operation. Only
     // the request that wins this update may emit transition side effects.
     const changed = await authCtx.db.invoice.updateMany({
-      where: { id, status: existing.status },
-      data: invoiceStatusUpdate(existing.status as InvoiceStatusValue, next, new Date()),
+      where: { id, status: existing.status, total: existing.total },
+      data: invoiceStatusUpdate(
+        existing.status as InvoiceStatusValue,
+        next,
+        new Date(),
+        Number(existing.total)
+      ),
     });
     if (changed.count !== 1) {
       return NextResponse.json(

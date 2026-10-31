@@ -598,7 +598,7 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
 
       const matches = await db.invoice.findMany({
         where: { invoiceNumber: { contains: invoiceNumber, mode: 'insensitive' } },
-        select: { id: true, invoiceNumber: true, status: true },
+        select: { id: true, invoiceNumber: true, status: true, total: true },
         take: 6,
       });
       if (matches.length === 0) return { error: `No invoice matches "${invoiceNumber}".` };
@@ -626,9 +626,10 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
         };
       }
 
+      const statusData = invoiceStatusUpdate(priorStatus, status, now(), Number(matches[0].total));
       const changed = await db.invoice.updateMany({
-        where: { id: matches[0].id, status: priorStatus },
-        data: invoiceStatusUpdate(priorStatus, status, now()),
+        where: { id: matches[0].id, status: priorStatus, total: matches[0].total },
+        data: statusData,
       });
       if (changed.count !== 1) {
         return { error: 'Invoice status changed concurrently. Refresh and try again.' };
@@ -652,11 +653,11 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
         category: 'FINANCE',
         action: 'update_invoice_status',
         operation: 'UPDATE',
-        description: `Set invoice ${invoice.invoiceNumber} to ${status}`,
+        description: `Set invoice ${invoice.invoiceNumber} to ${statusData.status}`,
         targetType: 'Invoice',
         targetId: invoice.id,
         targetLabel: invoice.invoiceNumber,
-        changes: { status: { before: priorStatus, after: status } },
+        changes: { status: { before: priorStatus, after: statusData.status } },
       });
 
       return {

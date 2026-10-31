@@ -1,6 +1,6 @@
 'use client';
 
-import { memo, useCallback, useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { FileText, Plus, ChevronDown, X, Loader2 } from 'lucide-react';
 import { useVirtualizer } from '@tanstack/react-virtual';
@@ -8,8 +8,10 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
-import { moneyLabel } from '@/lib/finance/currency';
+import { invoiceTotalLabel, type InvoiceTotal } from '@/lib/finance/invoice-display';
 import { format } from 'date-fns';
+import { calculateInvoiceMoney } from '@/lib/finance/invoice-money';
+import { MAX_MONEY } from '@/lib/finance/money';
 
 type InvoiceStatus = 'DRAFT' | 'SENT' | 'PAID' | 'OVERDUE' | 'CANCELLED';
 
@@ -23,12 +25,10 @@ const statusConfig: Record<string, { bg: string; label: string }> = {
   CANCELLED: { bg: 'bg-muted text-muted-foreground line-through', label: 'Cancelled' },
 };
 
-type InvoiceRowData = {
+type InvoiceRowData = InvoiceTotal & {
   id: string;
   invoiceNumber: string;
   status: string;
-  currency: string;
-  total: unknown;
   dueDate: Date | string;
   client: { name: string };
   project: { name: string } | null;
@@ -53,6 +53,13 @@ export function InvoicesTab() {
       if (ctx?.previous) {
         utils.finance.getInvoices.setData(undefined, ctx.previous);
       }
+    },
+    onSuccess: (invoice) => {
+      // Issuing a fully discounted invoice settles it immediately. Replace the
+      // optimistic SENT status with the status actually persisted by the server.
+      utils.finance.getInvoices.setData(undefined, (old) =>
+        old?.map((inv) => (inv.id === invoice.id ? { ...inv, status: invoice.status } : inv))
+      );
     },
     onSettled: () => {
       utils.finance.getFinancialSummary.invalidate();
@@ -223,7 +230,7 @@ const InvoiceRow = memo(function InvoiceRow({
       </div>
       <div className="col-span-1 text-right">
         <p className="text-sm font-semibold text-foreground tabular-nums">
-          {moneyLabel(Number(inv.total), inv.currency)}
+          {invoiceTotalLabel(inv)}
         </p>
       </div>
       <div className="col-span-2 flex justify-center">
@@ -296,7 +303,7 @@ const InvoiceRow = memo(function InvoiceRow({
 /* ============================================
    Create Invoice Form
    ============================================ */
-function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
+export function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
   const utils = trpc.useUtils();
   const { data: clients } = trpc.clients.getAll.useQuery();
   const { data: projects } = trpc.projects.getAll.useQuery();
@@ -312,6 +319,7 @@ function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
   const [projectId, setProjectId] = useState('');
   const [dueDate, setDueDate] = useState('');
   const [notes, setNotes] = useState('');
+  const adjustmentId = useId();
   const [tax, setTax] = useState('0');
   const [discount, setDiscount] = useState('0');
   const [items, setItems] = useState([{ description: '', quantity: 1, rate: 0 }]);
@@ -324,22 +332,34 @@ function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
     setItems(updated);
   };
 
-  const subtotal = items.reduce((sum, item) => sum + item.quantity * item.rate, 0);
-  const taxAmount = parseFloat(tax) || 0;
-  const discountAmount = parseFloat(discount) || 0;
-  const total = subtotal - discountAmount + taxAmount;
-  const invalidAdjustment = taxAmount < 0 || discountAmount < 0 || discountAmount > subtotal;
+  const taxAmount = Number(tax);
+  const discountAmount = Number(discount);
+  let money;
+  let adjustmentError = '';
+  try {
+    money = calculateInvoiceMoney(items, taxAmount, discountAmount);
+  } catch (error) {
+    adjustmentError = error instanceof Error ? error.message : 'Invalid invoice totals';
+  }
+  const invalidTax = !Number.isFinite(taxAmount) || taxAmount < 0 || taxAmount > MAX_MONEY;
+  const invalidDiscount =
+    !Number.isFinite(discountAmount) || discountAmount < 0 || discountAmount > MAX_MONEY;
+  const invalidAdjustment = invalidTax || invalidDiscount || !money;
 
   const handleSubmit = () => {
-    if (!clientId || !dueDate || items.some((i) => !i.description)) return;
+    if (
+      !clientId ||
+      !dueDate ||
+      items.length === 0 ||
+      items.some((i) => !i.description) ||
+      invalidAdjustment ||
+      !money
+    )
+      return;
     createInvoice.mutate({
       clientId,
       projectId: projectId || undefined,
-      items: items.map((i) => ({ ...i, amount: i.quantity * i.rate })),
-      subtotal,
-      tax: taxAmount,
-      discount: discountAmount,
-      total,
+      ...money,
       dueDate: new Date(dueDate),
       notes: notes || undefined,
     });
@@ -429,7 +449,14 @@ function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
                 </span>
                 <button
                   onClick={() => removeItem(i)}
-                  className="col-span-1 flex justify-center text-muted-foreground hover:text-red-500"
+                  disabled={items.length === 1}
+                  aria-label="Remove line item"
+                  title={
+                    items.length === 1
+                      ? 'An invoice needs at least one line item'
+                      : 'Remove line item'
+                  }
+                  className="col-span-1 flex justify-center text-muted-foreground hover:text-red-500 disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:text-muted-foreground"
                 >
                   <X className="h-3.5 w-3.5" />
                 </button>
@@ -446,30 +473,48 @@ function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
 
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div>
-            <label className="mb-1 block text-xs font-medium text-foreground">Tax</label>
+            <label
+              htmlFor={`${adjustmentId}-tax`}
+              className="mb-1 block text-xs font-medium text-foreground"
+            >
+              Tax
+            </label>
             <input
               type="number"
               min="0"
               step="0.01"
+              id={`${adjustmentId}-tax`}
+              max={MAX_MONEY}
+              aria-invalid={invalidTax}
+              aria-describedby={invalidAdjustment ? `${adjustmentId}-error` : undefined}
               value={tax}
               onChange={(event) => setTax(event.target.value)}
               className="w-full rounded-xl border border-border bg-background px-3 py-2 text-right text-sm text-foreground focus:border-primary focus:outline-none"
             />
           </div>
           <div>
-            <label className="mb-1 block text-xs font-medium text-foreground">Discount</label>
+            <label
+              htmlFor={`${adjustmentId}-discount`}
+              className="mb-1 block text-xs font-medium text-foreground"
+            >
+              Discount
+            </label>
             <input
               type="number"
               min="0"
               step="0.01"
+              id={`${adjustmentId}-discount`}
+              max={MAX_MONEY}
+              aria-describedby={invalidAdjustment ? `${adjustmentId}-error` : undefined}
               value={discount}
               onChange={(event) => setDiscount(event.target.value)}
-              aria-invalid={invalidAdjustment}
+              aria-invalid={invalidDiscount || !!adjustmentError}
               className="w-full rounded-xl border border-border bg-background px-3 py-2 text-right text-sm text-foreground focus:border-primary focus:outline-none"
             />
             {invalidAdjustment && (
-              <p className="mt-1 text-xs text-destructive">
-                Tax and discount must be non-negative; discount cannot exceed subtotal.
+              <p id={`${adjustmentId}-error`} className="mt-1 text-xs text-destructive">
+                {adjustmentError ||
+                  'Tax and discount must be non-negative and at most 9,999,999,999.99.'}
               </p>
             )}
           </div>
@@ -480,7 +525,7 @@ function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
           <div className="text-right">
             <p className="text-xs text-muted-foreground">Total</p>
             <p className="font-display text-xl font-bold text-foreground">
-              ${total.toLocaleString()}
+              {money ? `$${money.total.toLocaleString()}` : '—'}
             </p>
           </div>
         </div>
@@ -496,6 +541,12 @@ function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
           />
         </div>
 
+        {createInvoice.error && (
+          <p role="alert" className="text-xs text-destructive">
+            {createInvoice.error.message}
+          </p>
+        )}
+
         <div className="flex justify-end gap-2">
           <button
             onClick={onClose}
@@ -505,7 +556,13 @@ function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
           </button>
           <button
             onClick={handleSubmit}
-            disabled={!clientId || !dueDate || invalidAdjustment || createInvoice.isPending}
+            disabled={
+              !clientId ||
+              !dueDate ||
+              items.length === 0 ||
+              invalidAdjustment ||
+              createInvoice.isPending
+            }
             className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
           >
             {createInvoice.isPending ? (
