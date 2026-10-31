@@ -10,6 +10,7 @@ const store = vi.hoisted(() => ({
   placed: [] as unknown[],
   failConsent: false,
   failCommit: false,
+  failOrder: false,
 }));
 
 vi.mock('@/lib/tenancy/scoped-db', () => {
@@ -82,6 +83,7 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
       const customers = store.customers.map((row) => ({ ...row }));
       const logs = store.logs.map((row) => ({ ...row }));
       const consents = store.consents.map((row) => ({ ...row }));
+      const placed = [...store.placed];
       try {
         const result = await run(db);
         if (store.failCommit) throw new Error('transaction commit failed');
@@ -90,6 +92,7 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
         store.customers = customers;
         store.logs = logs;
         store.consents = consents;
+        store.placed = placed;
         throw error;
       }
     },
@@ -100,6 +103,7 @@ vi.mock('@/lib/pharmacy/customer-ordering', () => ({
   PharmacyCustomerOrderError: class extends Error {},
   listStorefrontCatalog: async () => store.catalog,
   placeCustomerOrder: async (_db: unknown, scope: unknown, input: unknown) => {
+    if (store.failOrder) throw new Error('transient order failure');
     store.placed.push({ scope, input });
     return { id: 'order_abc123' };
   },
@@ -157,6 +161,7 @@ beforeEach(() => {
   ];
   store.failConsent = false;
   store.failCommit = false;
+  store.failOrder = false;
   provider = new MockWhatsAppProvider(readWhatsAppConfig({}));
 });
 afterEach(() => vi.useRealTimers());
@@ -276,6 +281,29 @@ describe('handleInboundWhatsAppMessage consent gate', () => {
     );
     expect(store.placed).toHaveLength(1);
     expect(provider.calls).toHaveLength(1);
+  });
+
+  it('rolls back the inbound claim when order placement fails so Meta can retry', async () => {
+    knownCustomer(true);
+    const retried = message('Panadol 2 packs');
+    store.failOrder = true;
+
+    await expect(handleInboundWhatsAppMessage('org_a', provider, retried)).rejects.toThrow(
+      'transient order failure'
+    );
+    expect(store.logs).toEqual([]);
+    expect(store.placed).toEqual([]);
+
+    store.failOrder = false;
+    await expect(handleInboundWhatsAppMessage('org_a', provider, retried)).resolves.toBe(
+      'ORDER_PLACED'
+    );
+    expect(store.placed).toHaveLength(1);
+    expect(store.logs[0]).toMatchObject({
+      kind: 'ORDER_REQUEST',
+      orderId: 'order_abc123',
+      branchId: 'branch-1',
+    });
   });
 
   it.each(['failConsent', 'failCommit'] as const)(

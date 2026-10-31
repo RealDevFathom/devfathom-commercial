@@ -256,7 +256,8 @@ export const WHATSAPP_REPLIES = {
     return (
       `Order ${input.reference} received for collection at ${input.branch}. ` +
       'We will confirm when it is ready.\n' +
-      `آپ کا آرڈر ${input.reference} موصول ہو گیا ہے۔ تیار ہونے پر ہم آپ کو اطلاع دیں گے۔`
+      `آپ کا آرڈر ${input.reference} موصول ہو گیا ہے: ${input.quantity} x ${input.medicine}، ${input.branch} سے وصول کرنے کے لیے۔ ` +
+      'تیار ہونے پر ہم آپ کو اطلاع دیں گے۔'
     );
   },
 } as const;

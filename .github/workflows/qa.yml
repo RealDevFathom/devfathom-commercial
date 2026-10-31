@@ -2,7 +2,7 @@ name: QA gate
 
 on:
   push:
-    branches: [restaurantv2]
+    branches: [restaurantv2, develop]
   pull_request:
     types: [opened, synchronize, reopened, labeled]
     branches:
@@ -274,11 +274,17 @@ jobs:
           DATABASE_URL="$RECEIPT_RUNTIME_URL" TEST_DATABASE_URL="$RECEIPT_RUNTIME_URL" WHA1364_RECEIPT_TEST_DATABASE_URL="$RECEIPT_RUNTIME_URL" run vitest-receipt bunx vitest run src/lib/pharmacy/receipt-identity.db.test.ts --maxWorkers=1 --no-file-parallelism --reporter=json --outputFile=gate/vitest-receipt.json
           CATERING_MONEY_DB_SLOT=reserved DATABASE_URL="$CATERING_RUNTIME_URL" TEST_DATABASE_URL="$CATERING_RUNTIME_URL" run vitest-catering bunx vitest run src/lib/restaurant/catering-money.db.test.ts src/lib/restaurant/catering-runtime.db.test.ts src/lib/restaurant/catering-endpoints.db.test.ts --maxWorkers=1 --no-file-parallelism --reporter=json --outputFile=gate/vitest-catering.json
           run reserved-db-start docker run -d --name reserved-tests-postgres --network host -e POSTGRES_PASSWORD=gate-reserved-ci-only postgres:16 -p 55677 -c listen_addresses=127.0.0.1
-          CI_RESERVED_ADMIN_DATABASE_URL=postgresql://postgres:gate-reserved-ci-only@127.0.0.1:55677/postgres run vitest-reserved bunx tsx scripts/ci-reserved-tests.ts
+          # ci-reserved-tests runs the isolated suites and writes each Vitest JSON report into
+          # CI_RESERVED_EVIDENCE_DIR. Keep the report contract explicit here so the final gate can
+          # never silently depend on a lane that this step did not produce.
+          CI_RESERVED_EVIDENCE_DIR=gate CI_RESERVED_ADMIN_DATABASE_URL=postgresql://postgres:gate-reserved-ci-only@127.0.0.1:55677/postgres run vitest-reserved bunx tsx scripts/ci-reserved-tests.ts
+          run vitest-reserved-reports test -s gate/vitest-counter-evidence.json -a -s gate/vitest-growth.json -a -s gate/vitest-platform-concurrency.json -a -s gate/vitest-price-intelligence.json -a -s gate/vitest-returns.json
           run boundary-db-start docker run -d --name boundary-tests-postgres --network host -e POSTGRES_PASSWORD=gate-reserved-ci-only postgres:16 -p 55678 -c listen_addresses=127.0.0.1
-          CI_RESERVED_ADMIN_DATABASE_URL=postgresql://postgres:gate-reserved-ci-only@127.0.0.1:55678/postgres run vitest-boundary-setup bunx tsx scripts/ci-reserved-tests.ts
+          CI_RESERVED_EVIDENCE_DIR=gate CI_RESERVED_ADMIN_DATABASE_URL=postgresql://postgres:gate-reserved-ci-only@127.0.0.1:55678/postgres run vitest-boundary bunx tsx scripts/ci-reserved-tests.ts
+          run vitest-boundary-report test -s gate/vitest-boundary-http.json
           run growth-acceptance-db-start docker run -d --name growth-acceptance-postgres --network host -e POSTGRES_PASSWORD=gate-reserved-ci-only postgres:16 -p 55683 -c listen_addresses=127.0.0.1
-          CI_RESERVED_ADMIN_DATABASE_URL=postgresql://postgres:gate-reserved-ci-only@127.0.0.1:55683/postgres run vitest-growth-setup bunx tsx scripts/ci-reserved-tests.ts
+          CI_RESERVED_EVIDENCE_DIR=gate CI_RESERVED_ADMIN_DATABASE_URL=postgresql://postgres:gate-reserved-ci-only@127.0.0.1:55683/postgres run vitest-growth-acceptance bunx tsx scripts/ci-reserved-tests.ts
+          run vitest-growth-acceptance-reports test -s gate/vitest-growth-ready.json -a -s gate/vitest-growth-sandbox.json
           RESTAURANT_DEMO_RESET_DB=1 run vitest bunx vitest run --exclude=tests/platform-login-accessibility.browser.test.ts --exclude=src/lib/pharmacy/counter-evidence.db.test.ts --exclude=tests/restaurant-growth-ready.db.test.ts --exclude=tests/restaurant-growth-sandbox.db.test.ts --exclude=src/app/api/trpc/transaction-boundary.real-http.test.ts --exclude=src/lib/restaurant/growth-concurrency.db.test.ts --exclude=tests/platform-sensitive-concurrency.db.test.ts --exclude=tests/pharmacy-price-intelligence.integration.test.ts --exclude=src/lib/pharmacy/settlement.returns.db.test.ts --exclude=src/lib/pharmacy/repeat-purchasing.db.test.ts --exclude=src/lib/pharmacy/receipt-identity.db.test.ts --exclude=src/lib/restaurant/catering-money.db.test.ts --exclude=src/lib/restaurant/catering-runtime.db.test.ts --exclude=src/lib/restaurant/catering-endpoints.db.test.ts --maxWorkers=1 --no-file-parallelism --reporter=json --outputFile=gate/vitest.json
           # test:rls creates its own NOLOGIN role and does not start the app.
           DATABASE_URL="$SUPERUSER_URL" TEST_DATABASE_URL="$SUPERUSER_URL" run test-rls bun run test:rls
