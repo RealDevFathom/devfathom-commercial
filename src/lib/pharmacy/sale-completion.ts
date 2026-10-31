@@ -10,6 +10,7 @@ import { assertRxSaleAllowed } from './rx-sale-gate';
 import { recordCompletedPrescriptionReference } from './rx-prescription-reference';
 import {
   assertCashMemoBuyerName,
+  normalizeCashMemoText,
   readPharmacyCashMemo,
   resolveCompletionBuyerName,
 } from './cash-memo';
@@ -50,6 +51,13 @@ export async function completePaidPharmacySale(
   if (leasedReceiptNumber === null)
     await assertCashMemoBuyerName(db, scope, { buyerName, customerId: null }, new Date());
   const buyerNameUpdate = buyerName && buyerName !== sale.buyerName ? { buyerName } : {};
+  const issuedAt = new Date();
+  const cashMemo = await readPharmacyCashMemo(db, scope, issuedAt);
+  // Validate the new printable fields before drawing a receipt number. Catalog
+  // text permits whitespace and controls that the receipt renderers refuse.
+  const manufacturers = sale.lines.map((line) =>
+    normalizeCashMemoText(line.medicine.manufacturer)
+  );
   let receiptNumber = leasedReceiptNumber;
   if (receiptNumber === null) {
     // Reserved (leased) numbers never return to this online sequence.
@@ -61,8 +69,6 @@ export async function completePaidPharmacySale(
       RETURNING "nextNumber" - 1 AS receipt_number`);
     receiptNumber = rows[0]!.receipt_number;
   }
-  const issuedAt = new Date();
-  const cashMemo = await readPharmacyCashMemo(db, scope, issuedAt);
   await db.pharmacySale.update({
     where: { organizationId_id: { organizationId: scope.organizationId, id: sale.id } },
     data: {
@@ -122,7 +128,7 @@ export async function completePaidPharmacySale(
       businessDate: input.businessDate.toISOString().slice(0, 10),
       issuedAt: issuedAt.toISOString(),
       cashMemo,
-      lines: sale.lines.map((line) => ({
+      lines: sale.lines.map((line, index) => ({
         saleLineId: line.id,
         medicineId: line.medicineId,
         presentationId: line.presentationId,
@@ -139,9 +145,7 @@ export async function completePaidPharmacySale(
               .join(' + ')
           : null,
         // Omitted, not null, when the catalog has none: older readers see the same snapshot.
-        ...(line.medicine.manufacturer?.trim()
-          ? { manufacturer: line.medicine.manufacturer.trim().slice(0, 200) }
-          : {}),
+        ...(manufacturers[index] ? { manufacturer: manufacturers[index] } : {}),
         presentation: line.presentation.presentation,
         allocations: line.allocations.map((allocation) => {
           const batch = checkedBatches.get(allocation.inventoryLotId) ?? allocation.lot.batch;

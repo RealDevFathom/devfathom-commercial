@@ -349,6 +349,12 @@ function ScopedPharmacyCounterConsole({
     buyerNameSaving.current = saving;
     setSavingBuyerName(saving);
   }, []);
+  const buyerNameUnsaved = useRef(false);
+  const [unsavedBuyerName, setUnsavedBuyerName] = useState(false);
+  const handleBuyerNameUnsaved = useCallback((unsaved: boolean) => {
+    buyerNameUnsaved.current = unsaved;
+    setUnsavedBuyerName(unsaved);
+  }, []);
   const [recoveryBranch, setRecoveryBranch] = useState('');
   const [storageError, setStorageError] = useState(false);
   const [attempt, setAttempt] = useState<TenderAttempt | null>(null);
@@ -1177,11 +1183,14 @@ function ScopedPharmacyCounterConsole({
         billState !== 'ready' ||
         tenderInFlight.current ||
         buyerNameSaving.current ||
+        buyerNameUnsaved.current ||
         attemptRef.current
       ) {
         return {
           status: 'rejected',
-          message: 'Payment was not sent. Load a valid bill and resolve any safety block first.',
+          message: buyerNameUnsaved.current
+            ? 'Save the displayed buyer name before taking payment.'
+            : 'Payment was not sent. Load a valid bill and resolve any safety block first.',
         };
       }
       tenderInFlight.current = true;
@@ -1354,7 +1363,7 @@ function ScopedPharmacyCounterConsole({
   }, [branchId, busy, ensureSale, linkCustomer, patient]);
 
   const redeemCustomerPoints = useCallback(async () => {
-    if (!saleId || redeemPoints <= 0 || busy) return;
+    if (!saleId || redeemPoints <= 0 || busy || buyerNameUnsaved.current) return;
     setPending('redeem');
     try {
       const result = await redeemLoyalty.mutateAsync({
@@ -2154,7 +2163,7 @@ function ScopedPharmacyCounterConsole({
                 saleId={saleId}
                 deviceId={counterDeviceId()}
                 businessDate={todayBusinessDate()}
-                disabled={busy || blocked}
+                disabled={busy || blocked || unsavedBuyerName}
                 onRecorded={refreshCart}
               />
             ) : null}
@@ -2165,6 +2174,7 @@ function ScopedPharmacyCounterConsole({
                 saleId={saleId}
                 buyerName={cart?.saleId === saleId ? cart.buyerName : null}
                 onSavingChange={handleBuyerNameSaving}
+                onUnsavedChange={handleBuyerNameUnsaved}
                 onSaved={handleBuyerNameSaved}
                 suggestedName={
                   customerQuery.data?.customer.displayName ?? patient?.displayName ?? null
@@ -2188,7 +2198,7 @@ function ScopedPharmacyCounterConsole({
               state={billState}
               blocked={blocked}
               pending={pending === 'tender'}
-              disabled={busy || !saleId}
+              disabled={busy || unsavedBuyerName || !saleId}
               initialDraft={
                 restoredAttempt
                   ? { ...restoredAttempt.draft, type: restoredAttempt.input.type }
@@ -2311,7 +2321,11 @@ function ScopedPharmacyCounterConsole({
                     type="button"
                     className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
                     disabled={
-                      busy || redeemPoints <= 0 || balanceMinor === null || balanceMinor <= 0
+                      busy ||
+                      unsavedBuyerName ||
+                      redeemPoints <= 0 ||
+                      balanceMinor === null ||
+                      balanceMinor <= 0
                     }
                     onClick={() => void redeemCustomerPoints()}
                   >

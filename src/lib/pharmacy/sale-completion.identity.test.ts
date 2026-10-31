@@ -77,6 +77,7 @@ function line(id: string, medicineId: string, allocations: ReturnType<typeof all
     medicine: {
       organizationId: 'org_a',
       productName: `Product ${medicineId}`,
+      manufacturer: null as string | null,
       strengths: [{ value: '500.00', unit: 'mg' }],
     },
     presentation: { organizationId: 'org_a', medicineId, presentation: 'Tablet' },
@@ -144,6 +145,22 @@ beforeEach(() => {
 });
 
 describe('R1 receipt identity carries every batch fact', () => {
+  it.each([
+    ['Acme\tPharma', 'Acme Pharma'],
+    [' Acme\nPharma\u001b\u202e ', 'Acme Pharma'],
+    ['a'.repeat(199) + '😀', 'a'.repeat(199)],
+  ])('freezes printable manufacturer text from %j', async (raw, expected) => {
+    const s = sale();
+    s.lines[0]!.medicine.manufacturer = raw;
+    await complete(s);
+    expect(mocks.validate.mock.calls[0]![0]).toMatchObject({
+      lines: [
+        expect.objectContaining({ manufacturer: expected }),
+        expect.not.objectContaining({ manufacturer: expect.anything() }),
+      ],
+    });
+  });
+
   it('freezes the selected regulatory facts alongside the issued line identities', async () => {
     db.branchRegulatoryProfile.findFirst.mockResolvedValueOnce({
       provinceCode: 'PK-SD',

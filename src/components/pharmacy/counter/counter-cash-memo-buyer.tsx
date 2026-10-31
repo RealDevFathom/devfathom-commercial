@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -18,6 +18,7 @@ export type CounterCashMemoBuyerProps = {
   suggestedName?: string | null;
   disabled?: boolean;
   onSavingChange?: (saving: boolean) => void;
+  onUnsavedChange?: (unsaved: boolean) => void;
   onSaved?: (buyerName: string | null) => void;
 };
 
@@ -36,6 +37,7 @@ export function CounterCashMemoBuyer({
   suggestedName = null,
   disabled = false,
   onSavingChange,
+  onUnsavedChange,
   onSaved,
 }: CounterCashMemoBuyerProps) {
   const policy = trpc.pharmacySales.counterCashMemoPolicy.useQuery(
@@ -49,14 +51,23 @@ export function CounterCashMemoBuyer({
   const saving = useRef(false);
   const [isSaving, setIsSaving] = useState(false);
 
-  if (!policy.data?.cashMemo) return null;
-
   const value = draft ?? buyerName ?? suggestedName ?? '';
   const trimmed = value.replace(/\s+/g, ' ').trim();
   const tooLong = trimmed.length > CASH_MEMO_BUYER_NAME_MAX;
-  const required = policy.data.buyerNameRequired;
+  const required = policy.data?.buyerNameRequired;
   const savedHere = saved !== null && saved.saleId === saleId;
-  const unchanged = savedHere && saved.name === (trimmed || null);
+  const persistedName = savedHere ? saved.name : buyerName;
+  const unchanged = persistedName === (trimmed || null);
+  const unsaved = Boolean(saleId && policy.data?.cashMemo && !unchanged);
+
+  // Suggestions can change without an input event. Report them before the
+  // browser accepts a payment click/shortcut, and release the guard on unmount.
+  useLayoutEffect(() => {
+    onUnsavedChange?.(unsaved);
+  }, [onUnsavedChange, unsaved]);
+  useLayoutEffect(() => () => onUnsavedChange?.(false), [onUnsavedChange]);
+
+  if (!policy.data?.cashMemo) return null;
 
   const submit = async () => {
     if (disabled || !saleId || tooLong || saving.current) return;
@@ -104,6 +115,9 @@ export function CounterCashMemoBuyer({
           onChange={(event) => {
             setDraft(event.target.value);
             setError(null);
+            onUnsavedChange?.(
+              (event.target.value.replace(/\s+/g, ' ').trim() || null) !== persistedName
+            );
           }}
           className="h-11 min-w-0 flex-1 sm:max-w-sm"
         />
@@ -132,7 +146,11 @@ export function CounterCashMemoBuyer({
         <p id="cash-memo-buyer-error" role="alert" className="text-sm text-destructive">
           {error}
         </p>
-      ) : unchanged ? (
+      ) : unsaved ? (
+        <p className="text-sm text-text-muted">
+          Save the displayed buyer name before taking payment.
+        </p>
+      ) : savedHere && unchanged ? (
         <p role="status" className="text-sm text-text-muted">
           {saved?.name ? 'Buyer name saved for this bill.' : 'Buyer name cleared for this bill.'}
         </p>

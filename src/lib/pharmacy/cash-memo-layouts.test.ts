@@ -10,7 +10,7 @@ import { describe, expect, it } from 'vitest';
 
 import { DEFAULT_RECEIPT_LAYOUT } from '@/lib/receipts/configuration';
 
-import type { PharmacyCashMemo } from './cash-memo';
+import { normalizeCashMemoText, type PharmacyCashMemo } from './cash-memo';
 import { buildCounterBrowserReceipt } from './counter-browser-print';
 import { counterReceiptTotals, type CounterReceipt } from './counter-receipt';
 import { buildCounterReceiptPreview } from './counter-receipt-presentation';
@@ -77,6 +77,22 @@ function standardReceipt(): CounterReceipt {
 }
 
 const sindh = (): CounterReceipt => ({ ...standardReceipt(), cashMemo: memo });
+
+it('prints a manufacturer containing catalog whitespace after issuance normalization', () => {
+  const receipt = sindh();
+  receipt.lines[0]!.manufacturer = normalizeCashMemoText('Acme\tPharma\r\nPakistan');
+  for (const locale of ['en', 'ur'] as const) {
+    for (const format of ['THERMAL', 'THERMAL_58', 'A4'] as const) {
+      expect(buildCounterBrowserReceipt(receipt, locale, format)).toContain('Acme Pharma Pakistan');
+    }
+  }
+  const document = buildPharmacyReceiptPrintDocument(receipt, 'en', {
+    layout: DEFAULT_RECEIPT_LAYOUT,
+    taxIdentity: { ntn: null, strn: null },
+    reprint: false,
+  });
+  expect(document.receiptSnapshot?.facts.lines[0]).toContain('Manufacturer: Acme Pharma Pakistan');
+});
 
 const EN_MEMO_HEADER = [
   'Cash memo - Sindh Drugs Rules r.18',

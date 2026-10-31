@@ -18,6 +18,7 @@
  */
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { receiptTextSchema } from '@/lib/receipts/configuration';
 
 import {
   COUNTER_RECEIPT_STRINGS,
@@ -97,6 +98,19 @@ export const CASH_MEMO_STRINGS: Readonly<Record<CounterReceiptLocale, CashMemoSt
 const UNPRINTABLE = /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069\p{Cs}]/u;
 // eslint-disable-next-line no-control-regex
 const UNPRINTABLE_ALL = /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069\p{Cs}]/gu;
+
+/** Normalize catalog/profile text before freezing it, using the printers' validator. */
+export function normalizeCashMemoText(raw: string | null | undefined, max = 200): string | null {
+  const value = (raw ?? '')
+    .replace(/\s+/g, ' ')
+    .replace(UNPRINTABLE_ALL, '')
+    .trim()
+    .slice(0, max)
+    // Truncation must not leave half of a supplementary Unicode character.
+    .replace(UNPRINTABLE_ALL, '')
+    .trim();
+  return receiptTextSchema(max).parse(value) || null;
+}
 
 /** Blank to fill by hand: a nameless walk-in memo still has a buyer field. */
 const BLANK = '________________';
@@ -225,10 +239,10 @@ export async function readPharmacyCashMemo(
   }
   return {
     template: 'SINDH_CASH_MEMO',
-    licenceNumber: profile.licenceNumber.trim() || null,
+    licenceNumber: normalizeCashMemoText(profile.licenceNumber),
     licenceValidFrom: profile.licenceValidFrom.toISOString(),
     licenceValidTo: profile.licenceValidTo.toISOString(),
-    pharmacistRegistration: profile.qualifiedPersonRegistration.trim() || null,
+    pharmacistRegistration: normalizeCashMemoText(profile.qualifiedPersonRegistration),
   };
 }
 
@@ -265,13 +279,7 @@ export async function resolveCompletionBuyerName(
     where: { organizationId: scope.organizationId, id: sale.customerId },
     select: { displayName: true },
   });
-  const name =
-    typeof customer?.displayName === 'string'
-      ? customer.displayName.replace(/\s+/g, ' ').trim()
-      : '';
-  if (!name) return null;
-  const printable = name.replace(UNPRINTABLE_ALL, '').trim();
-  return printable ? printable.slice(0, CASH_MEMO_BUYER_NAME_MAX).trim() : null;
+  return normalizeCashMemoText(customer?.displayName, CASH_MEMO_BUYER_NAME_MAX);
 }
 
 /**

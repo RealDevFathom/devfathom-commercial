@@ -324,6 +324,38 @@ describe('PharmacyCounterConsole authoritative bill state', () => {
     expect(screen.getByRole('button', { name: 'Take payment' })).toBeEnabled();
   });
 
+  it('blocks tender for unsaved buyer text and leaves the buyer field available to save', () => {
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const props = mocks.buyerProps.mock.lastCall![0];
+    act(() => props.onUnsavedChange(true));
+    enterPayment();
+    expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
+    expect(mocks.buyerProps.mock.lastCall![0].disabled).toBe(false);
+    expect(mocks.mutations.tender).not.toHaveBeenCalled();
+    act(() => props.onUnsavedChange(false));
+    expect(screen.getByRole('button', { name: 'Take payment' })).toBeEnabled();
+  });
+
+  it('blocks loyalty redemption while the displayed buyer name is unsaved', () => {
+    mocks.queries.customerSnapshot = query({
+      customer: { displayName: 'Linked buyer', creditLimitMinor: 0 },
+      pointsBalance: 100,
+      creditBalanceMinor: 0,
+      availableCreditMinor: 0,
+      history: [],
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    fireEvent.change(screen.getByLabelText('Points to redeem'), { target: { value: '10' } });
+    expect(screen.getByRole('button', { name: 'Redeem' })).toBeEnabled();
+    const props = mocks.buyerProps.mock.lastCall![0];
+    act(() => props.onUnsavedChange(true));
+    expect(screen.getByRole('button', { name: 'Redeem' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Redeem' }));
+    expect(mocks.mutations.redeemPoints).not.toHaveBeenCalled();
+    act(() => props.onUnsavedChange(false));
+    expect(screen.getByRole('button', { name: 'Redeem' })).toBeEnabled();
+  });
+
   it.each([
     'missing',
     'loading',

@@ -7,6 +7,7 @@ import {
   cashMemoLineRows,
   cashMemoSignatureLine,
   normalizeBuyerName,
+  normalizeCashMemoText,
   PharmacyCashMemoError,
   readPharmacyCashMemo,
   readPharmacyCashMemoPolicy,
@@ -16,9 +17,55 @@ import {
   type PharmacyCashMemo,
 } from './cash-memo';
 import type { CounterReceiptLine } from './counter-receipt';
+import { receiptTextSchema } from '@/lib/receipts/configuration';
 
 const scope = { organizationId: 'org-1', branchId: 'branch-1' };
 const at = new Date('2026-10-31T09:30:00.000Z');
+
+describe('receipt text frozen at issuance', () => {
+  it.each([
+    [' Acme\tPharma\r\nPakistan ', 'Acme Pharma Pakistan'],
+    ['Acme\u001b\u0000\u007f\u009f\u202e\u2066Pharma', 'AcmePharma'],
+    ['سندھ فارما', 'سندھ فارما'],
+    ['a'.repeat(199) + '😀', 'a'.repeat(199)],
+    ['\t\u001b\ud800', null],
+  ])('normalizes and validates %j for every receipt renderer', (raw, expected) => {
+    const text = normalizeCashMemoText(raw);
+    expect(text).toBe(expected);
+    if (text) expect(receiptTextSchema(200).safeParse(text).success).toBe(true);
+  });
+
+  it('normalizes regulatory headers before they enter the frozen snapshot', async () => {
+    const db = {
+      branchRegulatoryProfile: {
+        findFirst: vi.fn().mockResolvedValue(
+          profile({
+            licenceNumber: ' DL\t42\u001b ',
+            qualifiedPersonRegistration: ' QP\n123\u202e ',
+          })
+        ),
+      },
+    };
+    expect(await readPharmacyCashMemo(db as never, scope, at)).toMatchObject({
+      licenceNumber: 'DL 42',
+      pharmacistRegistration: 'QP 123',
+    });
+  });
+
+  it('keeps a linked customer name printable when truncation reaches a surrogate pair', async () => {
+    const db = {
+      pharmacyCustomer: {
+        findFirst: vi.fn().mockResolvedValue({ displayName: 'a'.repeat(119) + '😀' }),
+      },
+    };
+    const name = await resolveCompletionBuyerName(db as never, scope, {
+      buyerName: null,
+      customerId: 'customer-a',
+    });
+    expect(name).toBe('a'.repeat(119));
+    expect(receiptTextSchema(120).safeParse(name).success).toBe(true);
+  });
+});
 
 const memo: PharmacyCashMemo = {
   template: 'SINDH_CASH_MEMO',
