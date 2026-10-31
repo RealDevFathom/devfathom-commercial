@@ -60,9 +60,9 @@ export function TeamContent({
     isModuleGranted(moduleForProcedure('team.inviteMember')!, entitlements.enabledModules);
   const [search, setSearch] = useState('');
   const [deptFilter, setDeptFilter] = useState('ALL');
-  // Query-string entry points are only a convenience. They must never bypass
-  // the same capability check that protects the visible Add Member action.
-  const [showAddMember, setShowAddMember] = useState(initialShowAddMember && isAdmin);
+  // Keep the request while the session loads. The modal below always uses the
+  // same capability check as the visible Add Member action.
+  const [showAddMember, setShowAddMember] = useState(initialShowAddMember);
   const { data: team, isLoading } = trpc.team.getAll.useQuery(undefined, {
     enabled: canReadDirectory,
   });

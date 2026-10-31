@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({
-  role: 'ADMIN',
+  role: 'ADMIN' as string | undefined,
   modules: ['admin'] as string[],
   directory: vi.fn(() => ({ data: [], isLoading: false })),
   departments: {
@@ -41,6 +41,7 @@ import { AddMemberModal, TeamContent } from './team-content';
 
 beforeEach(() => {
   vi.clearAllMocks();
+  state.role = 'ADMIN';
   state.departments.data = [
     { key: 'COUNTER', name: 'Counter', active: true },
     { key: 'OLD', name: 'Old department', active: false },
@@ -142,6 +143,30 @@ describe('tenant department invitation', () => {
 });
 
 describe('baseline workspace invitations', () => {
+  it('defers the deep-linked form until the session grants invitation permission', () => {
+    state.role = undefined;
+    const view = render(<TeamContent initialShowAddMember />);
+    expect(screen.queryByText('Add Team Member')).toBeNull();
+    state.role = 'ADMIN';
+    view.rerender(<TeamContent initialShowAddMember />);
+    expect(screen.getByText('Add Team Member')).toBeVisible();
+    state.role = 'EMPLOYEE';
+    view.rerender(<TeamContent initialShowAddMember />);
+    expect(screen.queryByText('Add Team Member')).toBeNull();
+  });
+
+  it('returns to Restaurant staff with the submitted email after a successful invitation', () => {
+    render(<TeamContent initialShowAddMember invitationReturnTo="/restaurant/staff" />);
+    fill();
+    fireEvent.change(screen.getByLabelText('Department'), { target: { value: 'COUNTER' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send Invite' }));
+    act(() => state.invite.mutate.mock.calls[0][1].onSuccess({ inviteUrl: '/invite/token' }));
+    expect(screen.getByRole('link', { name: 'Return to Restaurant staff' })).toHaveAttribute(
+      'href',
+      '/restaurant/staff?invitedEmail=second%40e2e.invalid'
+    );
+  });
+
   it('opens the invitation form from a Restaurant Staff handoff', () => {
     render(<TeamContent initialShowAddMember />);
     expect(screen.getByText('Add Team Member')).toBeVisible();

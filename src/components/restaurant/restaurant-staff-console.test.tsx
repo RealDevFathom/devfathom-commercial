@@ -15,6 +15,8 @@ type MutationOptions = {
 };
 
 const mocks = vi.hoisted(() => ({
+  workspaceRole: 'ADMIN' as string | undefined,
+  refreshUsers: vi.fn(),
   staff: {
     data: [
       {
@@ -79,6 +81,9 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('next-auth/react', () => ({
+  useSession: () => ({ data: { user: { role: mocks.workspaceRole } } }),
+}));
 vi.mock('@/lib/trpc', () => ({
   trpc: {
     useUtils: () => ({
@@ -95,7 +100,13 @@ vi.mock('@/lib/trpc', () => ({
     restaurantStaff: {
       list: { useQuery: () => mocks.staff },
       listEligibleUsers: {
-        useQuery: () => ({ data: mocks.eligibleUsers, error: null, isLoading: false }),
+        useQuery: () => ({
+          data: mocks.eligibleUsers,
+          error: null,
+          isLoading: false,
+          isFetching: false,
+          refetch: mocks.refreshUsers,
+        }),
       },
       listBranches: {
         useQuery: () => ({
@@ -223,6 +234,81 @@ const entitlements = {
 } as EntitlementView;
 
 describe('Restaurant staff credential UI', () => {
+  it.each(['EMPLOYEE', 'HR', undefined])(
+    'explains the admin invitation requirement for workspace role %s',
+    (role) => {
+      mocks.workspaceRole = role;
+      render(
+        <EntitlementsProvider value={entitlements}>
+          <RestaurantStaffConsole />
+        </EntitlementsProvider>
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'Add staff member' }));
+      const dialog = screen.getByRole('dialog', { name: 'Add staff member' });
+      expect(within(dialog).queryByRole('link', { name: 'Invite a new team member' })).toBeNull();
+      expect(within(dialog).getByText(/Ask a workspace admin to invite/)).toBeVisible();
+      // Restaurant management remains available to non-admin managers.
+      expect(within(dialog).getByRole('button', { name: 'Save staff member' })).toBeEnabled();
+    }
+  );
+
+  it('resumes an invitation, waits for acceptance, and submits the accepted account link', () => {
+    const originalStatus = mocks.eligibleUsers[0].status;
+    mocks.eligibleUsers[0].status = 'INVITED';
+    const view = render(
+      <EntitlementsProvider value={entitlements}>
+        <RestaurantStaffConsole invitedEmail="AYESHA@example.com" />
+      </EntitlementsProvider>
+    );
+    const dialog = screen.getByRole('dialog', { name: 'Add staff member' });
+    expect(within(dialog).getByLabelText('Display name')).toHaveValue('Ayesha Khan');
+    expect(within(dialog).getByRole('button', { name: 'Save staff member' })).toBeDisabled();
+    expect(within(dialog).getByText(/Waiting for the invited user/)).toBeVisible();
+    expect(within(dialog).getByLabelText('Organization user')).toHaveValue('');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Refresh users' }));
+    expect(mocks.refreshUsers).toHaveBeenCalledOnce();
+
+    mocks.eligibleUsers[0].status = originalStatus;
+    view.rerender(
+      <EntitlementsProvider value={entitlements}>
+        <RestaurantStaffConsole invitedEmail="AYESHA@example.com" />
+      </EntitlementsProvider>
+    );
+    expect(within(dialog).getByLabelText('Organization user')).toHaveValue('user_available');
+    expect(
+      within(dialog).getByText(/then manage Job roles to assign waiter or manager access/)
+    ).toBeVisible();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save staff member' }));
+    expect(mocks.noopMutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        displayName: 'Ayesha Khan',
+        email: 'AYESHA@example.com',
+        userId: 'user_available',
+      })
+    );
+  });
+
+  it.each(['missing@example.com', 'bilal@example.com'])(
+    'does not link an absent or already linked return target (%s)',
+    (email) => {
+      render(
+        <EntitlementsProvider value={entitlements}>
+          <RestaurantStaffConsole invitedEmail={email} />
+        </EntitlementsProvider>
+      );
+      const dialog = screen.getByRole('dialog', { name: 'Add staff member' });
+      expect(within(dialog).getByLabelText('Organization user')).toHaveValue('');
+      expect(within(dialog).getByRole('button', { name: 'Save staff member' })).toBeDisabled();
+      expect(mocks.noopMutate).not.toHaveBeenCalled();
+
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Add staff member' }));
+      const newDialog = screen.getByRole('dialog', { name: 'Add staff member' });
+      expect(within(newDialog).getByLabelText('Email')).toHaveValue('');
+      expect(within(newDialog).getByRole('button', { name: 'Save staff member' })).toBeEnabled();
+    }
+  );
+
   it('offers the contextual Team invitation handoff only while creating staff', () => {
     render(
       <EntitlementsProvider value={entitlements}>
@@ -290,6 +376,7 @@ describe('Restaurant staff credential UI', () => {
   });
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.workspaceRole = 'ADMIN';
     mocks.issueOptions = undefined;
     mocks.issueMutate.mockImplementation((_input, options?: IssueCallOptions) => {
       mocks.issueOptions?.onError?.({ message: 'Credential rejected.' });
