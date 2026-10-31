@@ -22,6 +22,8 @@ import {
   MAX_ESCALATION_PAIR_EVALUATIONS_PER_TICK,
   MAX_ESCALATION_POLICIES_PER_TICK,
   missedAt,
+  MAX_ESCALATION_STEP_DELAY_MINUTES,
+  SOP_ESCALATION_CURSOR_KEY,
   sopEscalationJobKey,
   sopLateMissedHandler,
 } from './sop-late-missed';
@@ -74,6 +76,19 @@ function makeContext(payloadOverride: Record<string, unknown> = {}): {
 function sweepSql(executeRaw: ReturnType<typeof vi.fn>): string {
   const [template] = executeRaw.mock.calls[0] as [TemplateStringsArray];
   return template.join(' ').replace(/\s+/g, ' ');
+}
+
+/**
+ * Fake for the persistent per-tenant cursor upsert: the first call returns 0 and
+ * every later call returns the previous position + 1, like the SQL upsert.
+ */
+function persistentCursor() {
+  let next = 0;
+  return vi.fn(async (strings: TemplateStringsArray, ...values: unknown[]) => {
+    expect(strings.join('?')).toContain('ON CONFLICT ("organizationId", "idempotencyKey")');
+    expect(values).toContain(SOP_ESCALATION_CURSOR_KEY);
+    return [{ position: BigInt(next++) }];
+  });
 }
 
 describe('missedAt / isMissedAt', () => {
@@ -256,6 +271,7 @@ describe('enqueueDueSopEscalations', () => {
     );
     const db = {
       $executeRaw: vi.fn().mockResolvedValue(0),
+      $queryRaw: persistentCursor(),
       restaurantSopEscalationPolicy: {
         count: vi.fn().mockResolvedValue(policies.length),
         findMany: findPolicies,
@@ -273,8 +289,10 @@ describe('enqueueDueSopEscalations', () => {
     const pageCombinations =
       Math.ceil(policies.length / MAX_ESCALATION_POLICIES_PER_TICK) *
       Math.ceil(occurrences.length / MAX_ESCALATION_OCCURRENCES_PER_TICK);
-    for (let minute = 0; minute < pageCombinations; minute += 1) {
-      await enqueueDueSopEscalations(db, new Date(WINDOW_ENDS.getTime() + minute * 60_000));
+    // Progress is per invocation, not per wall-clock minute: even repeated
+    // invocations at the same instant traverse every page combination.
+    for (let i = 0; i < pageCombinations; i += 1) {
+      await enqueueDueSopEscalations(db, WINDOW_ENDS);
     }
 
     expect(enqueue).toHaveBeenCalledWith(
@@ -618,13 +636,104 @@ describe('enqueueDueSopEscalations', () => {
 
   it('bounds the producer to a lookback window so exhausted old chains age out', async () => {
     const now = new Date('2026-08-20T12:00:00.000Z');
+    const lookbackStart = new Date(now.getTime() - ESCALATION_LOOKBACK_MS);
     const { db, findOccurrences, countOccurrences } = producerDb([basePolicy], []);
     await enqueueDueSopEscalations(db, now);
     expect(findOccurrences).not.toHaveBeenCalled(); // count 0 short-circuits
-    expect(countOccurrences.mock.calls[0][0].where.windowEndsAt).toEqual({
-      lte: now,
-      gte: new Date(now.getTime() - ESCALATION_LOOKBACK_MS),
+    const where = countOccurrences.mock.calls[0][0].where;
+    expect(where.windowEndsAt).toEqual({ lte: now });
+    expect(where.OR).toEqual([
+      { windowEndsAt: { gte: lookbackStart } },
+      { escalationEvents: { some: { kind: 'FIRED', createdAt: { gte: lookbackStart } } } },
+    ]);
+  });
+
+  it('keeps unfinished maximum-delay chains discoverable until their next step is due', async () => {
+    // The lookback must outlast any single step delay, and it re-anchors on the
+    // latest FIRED step, so a 6-day step followed by a 2-day (or max 7-day)
+    // step is never dropped between steps.
+    expect(ESCALATION_LOOKBACK_MS).toBeGreaterThan(MAX_ESCALATION_STEP_DELAY_MINUTES * 60_000);
+
+    vi.mocked(enqueue).mockClear();
+    vi.mocked(enqueue).mockResolvedValue({
+      job: {} as Awaited<ReturnType<typeof enqueue>>['job'],
+      deduplicated: false,
     });
+    const windowEndsAt = new Date('2026-08-01T12:00:00.000Z');
+    const firstFiredAt = new Date(windowEndsAt.getTime() + 6 * 24 * 60 * 60_000);
+    const now = new Date(firstFiredAt.getTime() + 2 * 24 * 60 * 60_000);
+    const policy = {
+      ...basePolicy,
+      steps: [
+        { id: 'step_1', delayMinutes: 6 * 24 * 60 },
+        { id: 'step_2', delayMinutes: 2 * 24 * 60 },
+      ],
+    };
+    const occurrence = {
+      ...occurrenceAt('occ_long', windowEndsAt),
+      escalationEvents: [{ kind: 'FIRED', escalationStepId: 'step_1', createdAt: firstFiredAt }],
+    };
+    const { db, countOccurrences } = producerDb([policy], [occurrence]);
+
+    // Eight days after window close the step-1 FIRED anchor is inside the window.
+    const lookbackStart = new Date(now.getTime() - ESCALATION_LOOKBACK_MS);
+    expect(firstFiredAt.getTime()).toBeGreaterThanOrEqual(lookbackStart.getTime());
+    await expect(enqueueDueSopEscalations(db, now)).resolves.toBe(1);
+    expect(countOccurrences.mock.calls[0][0].where.OR).toContainEqual({
+      escalationEvents: { some: { kind: 'FIRED', createdAt: { gte: lookbackStart } } },
+    });
+    expect(enqueue).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({
+        idempotencyKey: sopEscalationJobKey('occ_long', 'policy_1', 'step_2'),
+      })
+    );
+  });
+
+  it('visits every occurrence page under a fixed five-minute cron cadence', async () => {
+    // 125 eligible occurrences = 5 pages. A wall-clock-minute odometer with a
+    // 5-minute cadence always landed on the same page; the persistent cursor
+    // advances per invocation, so five runs cover all 125.
+    vi.mocked(enqueue).mockClear();
+    vi.mocked(enqueue).mockResolvedValue({
+      job: {} as Awaited<ReturnType<typeof enqueue>>['job'],
+      deduplicated: false,
+    });
+    const occurrences = Array.from({ length: 125 }, (_, i) =>
+      occurrenceAt(`occ_${i.toString().padStart(3, '0')}`, WINDOW_ENDS)
+    );
+    const findOccurrences = vi.fn(({ skip, take }: { skip: number; take: number }) =>
+      Promise.resolve(occurrences.slice(skip, skip + take))
+    );
+    const db = {
+      $executeRaw: vi.fn().mockResolvedValue(0),
+      $queryRaw: persistentCursor(),
+      restaurantSopEscalationPolicy: {
+        count: vi.fn().mockResolvedValue(1),
+        findMany: vi.fn().mockResolvedValue([basePolicy]),
+      },
+      restaurantSopOccurrence: { count: vi.fn().mockResolvedValue(125), findMany: findOccurrences },
+    } as unknown as ScopedDb;
+
+    for (let run = 0; run < 5; run += 1) {
+      await enqueueDueSopEscalations(db, new Date(WINDOW_ENDS.getTime() + run * 5 * 60_000));
+    }
+
+    expect(findOccurrences.mock.calls.map(([query]) => query.skip)).toEqual([0, 25, 50, 75, 100]);
+    const keys = new Set(vi.mocked(enqueue).mock.calls.map(([, input]) => input.idempotencyKey));
+    expect(keys.size).toBe(125);
+  });
+
+  it('does not touch the traversal cursor when a single page covers all work', async () => {
+    const queryRaw = vi.fn();
+    const { db } = producerDb([basePolicy], [occurrenceAt('occ_1', WINDOW_ENDS)]);
+    Object.assign(db, { $queryRaw: queryRaw });
+    vi.mocked(enqueue).mockResolvedValue({
+      job: {} as Awaited<ReturnType<typeof enqueue>>['job'],
+      deduplicated: false,
+    });
+    await enqueueDueSopEscalations(db, WINDOW_ENDS);
+    expect(queryRaw).not.toHaveBeenCalled();
   });
 
   it('does not escalate occurrences that closed before the policy was created', async () => {

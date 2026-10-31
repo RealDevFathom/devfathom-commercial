@@ -286,6 +286,50 @@ describe('sopEscalationHandler', () => {
     await sopEscalationHandler(makeCtx(db));
 
     expect(mocks.outboxCreateMany).not.toHaveBeenCalled();
+    // The SUCCEEDED-but-unfired job must not hold the step key forever.
+    expect(mocks.jobUpdate).toHaveBeenCalledWith({
+      where: { id: 'job_1' },
+      data: { idempotencyKey: null },
+    });
+  });
+
+  it('releases the queue identity when a queued step delay was raised before execution', async () => {
+    // Enqueued when a 0-minute delay was due; the operator then raised it to 90
+    // minutes. The job must defer AND free its key so the next sweep can
+    // re-enqueue the step once the new delay elapses.
+    const { db, mocks } = makeDb({
+      policy: {
+        ...BASE_POLICY,
+        steps: [{ ...BASE_POLICY.steps[0], delayMinutes: 90 }, BASE_POLICY.steps[1]],
+      },
+    });
+    await sopEscalationHandler(makeCtx(db));
+
+    expect(mocks.eventCreate).not.toHaveBeenCalled();
+    expect(mocks.jobUpdate).toHaveBeenCalledWith({
+      where: { id: 'job_1' },
+      data: { idempotencyKey: null },
+    });
+  });
+
+  it('releases the queue identity when the policy is inactive so reactivation can resume', async () => {
+    const { db, mocks } = makeDb({ policy: { ...BASE_POLICY, active: false } });
+    await sopEscalationHandler(makeCtx(db));
+
+    expect(mocks.eventFindMany).not.toHaveBeenCalled();
+    expect(mocks.eventCreate).not.toHaveBeenCalled();
+    expect(mocks.jobUpdate).toHaveBeenCalledWith({
+      where: { id: 'job_1' },
+      data: { idempotencyKey: null },
+    });
+  });
+
+  it('keeps the queue identity once the step has fired', async () => {
+    const { db, mocks } = makeDb({});
+    await sopEscalationHandler(makeCtx(db));
+
+    expect(mocks.eventCreate.mock.calls[0][0].data.kind).toBe('FIRED');
+    expect(mocks.jobUpdate).not.toHaveBeenCalled();
   });
 
   it('fires step 2 once the delay has exactly elapsed', async () => {

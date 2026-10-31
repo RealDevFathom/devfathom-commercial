@@ -64,6 +64,7 @@ function createJobDb(seed: Row[] = []) {
   const jobs = new Map<string, Row>();
   const executions: Row[] = [];
   let seq = 0;
+  let cursor = 0;
   for (const row of seed) jobs.set(row.id as string, { ...row });
 
   const restaurantJob = {
@@ -112,6 +113,11 @@ function createJobDb(seed: Row[] = []) {
     // Producer savepoints (SAVEPOINT / RELEASE / ROLLBACK TO) are no-ops here.
     $executeRaw: async () => 0,
     $queryRaw: async (sql: { values: unknown[]; strings?: readonly string[] }) => {
+      // Persistent SOP-escalation traversal cursor upsert (tagged-template call,
+      // so the first argument is the TemplateStringsArray itself).
+      if (Array.isArray(sql) && (sql as readonly string[]).join('').includes('ON CONFLICT')) {
+        return [{ position: BigInt(cursor++) }];
+      }
       const now = sql.values[0] as Date;
       const typeFilter = sql.values[1] as string | undefined;
       const excludesType = sql.strings?.join('').includes('<>') ?? false;

@@ -30,7 +30,8 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
  *   branch timezone. When the current wall-clock minute falls inside the quiet
  *   window, delivery is DEFERRED (a FIRED event is NOT written). The completed
  *   job releases its idempotency key so the next overdue sweep can enqueue the
- *   step again after quiet hours.
+ *   step again after quiet hours. The same release applies to every other
+ *   recoverable deferral (delay not yet elapsed, policy inactive/inapplicable).
  *
  * Idempotency: each step fires AT MOST ONCE per policy × occurrence combination.
  * The FIRED event for a step is the logical guard, but a guard that is only read
@@ -185,10 +186,30 @@ export async function sopEscalationHandler({ db, job }: RestaurantJobContext): P
           },
         },
       });
-      if (!policy || !policy.active) return; // policy removed or deactivated
+      // Every non-terminal early return below completes this job without firing
+      // or stopping the chain. The worker then marks it SUCCEEDED, so the stable
+      // occurrence/policy/step key must be released or enqueue() would
+      // deduplicate every later sweep against this event-free row forever (e.g.
+      // after a delay increase, a quiet-hour deferral, or deactivate→reactivate).
+      // The producer re-derives due-ness from live policy state, so releasing the
+      // key cannot cause an early or duplicate fire.
+      const releaseQueueIdentity = () =>
+        tx.restaurantJob.update({
+          where: { id: job.id },
+          data: { idempotencyKey: null },
+        });
+
+      if (!policy || !policy.active) {
+        // policy removed or deactivated — a reactivated policy must be able to resume
+        await releaseQueueIdentity();
+        return;
+      }
       // Jobs are durable input. Revalidate branch applicability here rather than
       // trusting that every producer (or replay) paired the records correctly.
-      if (policy.scope === 'BRANCH' && policy.branchId !== occ.branchId) return;
+      if (policy.scope === 'BRANCH' && policy.branchId !== occ.branchId) {
+        await releaseQueueIdentity();
+        return;
+      }
 
       // ── Fold event ledger ─────────────────────────────────────────────────
       const events: EscalationEvent[] = await tx.restaurantSopEscalationEvent.findMany({
@@ -258,7 +279,9 @@ export async function sopEscalationHandler({ db, job }: RestaurantJobContext): P
         );
       const anchor = lastFiredEvent ? lastFiredEvent.createdAt : occ.windowEndsAt;
       if (now.getTime() - anchor.getTime() < nextStep.delayMinutes * 60_000) {
-        // Delay not yet elapsed — defer silently
+        // Delay not yet elapsed (e.g. the delay was raised while this job was
+        // queued) — defer and let a later sweep enqueue the step once it is due.
+        await releaseQueueIdentity();
         return;
       }
 
@@ -267,13 +290,8 @@ export async function sopEscalationHandler({ db, job }: RestaurantJobContext): P
         const branchTz = occ.branch?.timezone ?? 'UTC';
         const localMin = localMinutesOfDay(branchTz, now);
         if (isQuietHour(localMin, policy.quietHoursStartMinutes, policy.quietHoursEndMinutes)) {
-          // The worker will complete this job normally, so release the stable
-          // occurrence/policy/step key. Otherwise enqueue() would forever
-          // deduplicate later sweeps against this event-free SUCCEEDED job.
-          await tx.restaurantJob.update({
-            where: { id: job.id },
-            data: { idempotencyKey: null },
-          });
+          // Quiet hours — defer; the next overdue sweep re-enqueues the step.
+          await releaseQueueIdentity();
           return;
         }
       }

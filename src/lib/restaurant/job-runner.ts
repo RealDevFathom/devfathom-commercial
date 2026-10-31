@@ -122,25 +122,36 @@ function addOutbox(into: OutboxDispatchSummary, from: OutboxDispatchSummary): vo
 }
 
 /**
- * How often the (heavier) SOP-escalation discovery scan may run per process. The
- * producer pages by wall-clock minute, so re-running the scan every 1s poll adds
- * DB load without surfacing new work any sooner.
+ * How often the (heavier) SOP-escalation discovery scan may run per process.
+ * Escalation delays are minute-granular, so re-running the scan every 1s poll
+ * adds DB load without surfacing new work any sooner.
  */
 export const SOP_ESCALATION_DISCOVERY_INTERVAL_MS = 60_000;
 
 let sopDiscoveryCache: { bucket: number; organizationIds: string[] } | null = null;
 
-/** Orgs with in-window overdue occurrences that an active policy can still act on. */
+/** Orgs with in-lookback overdue occurrences that an active policy can still act on. */
 async function discoverSopEscalationOrganizations(now: Date): Promise<string[]> {
   const bucket = Math.floor(now.getTime() / SOP_ESCALATION_DISCOVERY_INTERVAL_MS);
   if (sopDiscoveryCache?.bucket === bucket) return sopDiscoveryCache.organizationIds;
+  // Unfinished chains re-anchor on their latest FIRED step (mirrors the
+  // producer), so long multi-step chains stay discoverable past window close.
   const lookbackStart = escalationLookbackStart(now);
   const organizationIds = await withPlatformDb(async (db) => {
     const rows = await db.$queryRaw<Array<{ organizationId: string }>>(Prisma.sql`
       SELECT DISTINCT occ."organizationId"
       FROM "restaurant_sop_occurrences" occ
       WHERE occ."windowEndsAt" <= ${now}
-        AND occ."windowEndsAt" >= ${lookbackStart}
+        AND (
+          occ."windowEndsAt" >= ${lookbackStart}
+          OR EXISTS (
+            SELECT 1
+            FROM "restaurant_sop_escalation_events" fired
+            WHERE fired."occurrenceId" = occ.id
+              AND fired.kind = 'FIRED'
+              AND fired."createdAt" >= ${lookbackStart}
+          )
+        )
         AND occ."status" IN ('SCHEDULED', 'IN_PROGRESS', 'SUBMITTED', 'LATE', 'MISSED')
         AND occ."organizationId" <> ''
         AND EXISTS (
@@ -246,8 +257,11 @@ export async function runRestaurantWorkerTick(
         (options.produceDueJobs ?? enqueueDueSopEscalations)(db, now)
       );
     } catch (error) {
+      // Constant format string: the org id is passed as an argument, never
+      // interpolated into the format, so it cannot inject format specifiers.
       console.error(
-        `[restaurant-worker] SOP escalation producer failed for org ${organizationId}`,
+        '[restaurant-worker] SOP escalation producer failed for org %s',
+        organizationId,
         error
       );
     }

@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { randomUUID } from 'node:crypto';
+
 import { z } from 'zod';
 
 import type { Prisma } from '@/generated/prisma/client';
@@ -88,19 +90,66 @@ export const MAX_ESCALATION_POLICIES_PER_TICK = 20;
 export const MAX_ESCALATION_OCCURRENCES_PER_TICK = 25;
 export const MAX_ESCALATION_PAIR_EVALUATIONS_PER_TICK = 500;
 /**
- * How far back (by `windowEndsAt`) the producer and worker discovery look for
- * escalation work. Escalation is an operational alert, not a backfill: rows older
- * than this are never paged, so exhausted-but-unverified chains age out of the
- * bounded page rotation instead of slowing it down forever.
+ * Upper bound on a single step's `delayMinutes`; mirrors the configuration
+ * validator in `restaurant-sop.ts` (`delayMinutes: z.number().int().max(10_080)`).
  */
-export const ESCALATION_LOOKBACK_MS = 7 * 24 * 60 * 60_000;
+export const MAX_ESCALATION_STEP_DELAY_MINUTES = 10_080;
+/** Catch-up margin so a step due at the edge of the lookback is not lost between ticks. */
+const ESCALATION_CATCH_UP_MS = 24 * 60 * 60_000;
+/**
+ * How far back the producer and worker discovery look for escalation work,
+ * measured from an occurrence's latest chain anchor: its `windowEndsAt`, or the
+ * most recent FIRED event. Escalation is an operational alert, not a backfill:
+ * chains whose anchor is older than this are never paged, so exhausted-but-
+ * unverified chains age out of the bounded page rotation. Because the window
+ * re-anchors on every FIRED step and exceeds the maximum per-step delay, an
+ * unfinished chain always stays discoverable until its next step is due.
+ */
+export const ESCALATION_LOOKBACK_MS =
+  MAX_ESCALATION_STEP_DELAY_MINUTES * 60_000 + ESCALATION_CATCH_UP_MS;
 
-/** Lower `windowEndsAt` bound for escalation work at `now`. */
+/** Lower chain-anchor bound for escalation work at `now`. */
 export function escalationLookbackStart(now: Date): Date {
   return new Date(now.getTime() - ESCALATION_LOOKBACK_MS);
 }
 
-const ESCALATION_PAGE_INTERVAL_MS = 60_000;
+/**
+ * Persistent per-tenant traversal cursor. Stored as a single never-claimable
+ * (SUCCEEDED) row in the tenant's job table, keyed by a reserved idempotency
+ * key, so page progress survives restarts, is shared by every worker, and
+ * advances once per producer invocation — independent of invocation cadence.
+ */
+export const SOP_ESCALATION_CURSOR_JOB = 'sop.escalationCursor';
+export const SOP_ESCALATION_CURSOR_KEY = 'sop-escalation:cursor';
+
+/**
+ * Atomically claim the next traversal position for this tenant. Returns 0 on
+ * first use; every later call returns the previous value + 1. The upsert is a
+ * single statement under the tenant's forced RLS (organizationId defaults from
+ * the session setting), so concurrent sweepers each receive a distinct position.
+ */
+async function nextEscalationCursorPosition(db: ScopedDb, now: Date): Promise<number> {
+  const rows = await db.$queryRaw<Array<{ position: bigint | number | string }>>`
+    INSERT INTO restaurant_jobs (id, type, payload, status, "idempotencyKey", "updatedAt")
+    VALUES (
+      ${randomUUID()},
+      ${SOP_ESCALATION_CURSOR_JOB},
+      '{"position":0}'::jsonb,
+      'SUCCEEDED',
+      ${SOP_ESCALATION_CURSOR_KEY},
+      ${now}
+    )
+    ON CONFLICT ("organizationId", "idempotencyKey") DO UPDATE
+      SET payload = jsonb_build_object(
+            'position',
+            COALESCE((restaurant_jobs.payload->>'position')::bigint, -1) + 1
+          ),
+          "updatedAt" = EXCLUDED."updatedAt"
+    RETURNING (payload->>'position')::bigint AS position
+  `;
+  const position = Number(rows[0]?.position ?? 0);
+  return Number.isSafeInteger(position) && position >= 0 ? position : 0;
+}
 
 const PayloadSchema = z
   .object({
@@ -143,12 +192,19 @@ export function sopEscalationJobKey(
  * step in the chain to be scheduled.
  */
 export async function enqueueDueSopEscalations(db: ScopedDb, now: Date): Promise<number> {
+  const lookbackStart = escalationLookbackStart(now);
   const policyWhere = {
     active: true,
     steps: { some: {} },
   } satisfies Prisma.RestaurantSopEscalationPolicyWhereInput;
   const occurrenceWhere = {
-    windowEndsAt: { lte: now, gte: escalationLookbackStart(now) },
+    windowEndsAt: { lte: now },
+    // An unfinished chain re-anchors on its latest FIRED step, so a long
+    // multi-step chain is not truncated by the historical window-close cutoff.
+    OR: [
+      { windowEndsAt: { gte: lookbackStart } },
+      { escalationEvents: { some: { kind: 'FIRED', createdAt: { gte: lookbackStart } } } },
+    ],
     status: { in: ['SCHEDULED', 'IN_PROGRESS', 'SUBMITTED', 'LATE', 'MISSED'] },
     // STOPPED terminates every policy chain, so do not let old terminal rows
     // consume a bounded occurrence page forever.
@@ -160,15 +216,18 @@ export async function enqueueDueSopEscalations(db: ScopedDb, now: Date): Promise
   ]);
   if (policyCount === 0 || occurrenceCount === 0) return 0;
 
-  // Derive a persistent, deterministic odometer from wall-clock minutes rather
-  // than process memory. Occurrence pages advance first; after a complete pass,
-  // the policy page advances. Thus every policy/occurrence page combination is
-  // visited even across restarts and regardless of which worker runs the tick.
-  const tick = Math.floor(now.getTime() / ESCALATION_PAGE_INTERVAL_MS);
+  // Persistent odometer: occurrence pages advance first; after a complete pass,
+  // the policy page advances. The position advances once per invocation (not per
+  // wall-clock minute), so every policy/occurrence page combination is visited
+  // within `occurrencePageCount * policyPageCount` invocations whatever the
+  // cadence (1s polling or a 5-minute `--once` cron), across restarts and workers.
   const occurrencePageCount = Math.ceil(occurrenceCount / MAX_ESCALATION_OCCURRENCES_PER_TICK);
   const policyPageCount = Math.ceil(policyCount / MAX_ESCALATION_POLICIES_PER_TICK);
-  const occurrencePage = tick % occurrencePageCount;
-  const policyPage = Math.floor(tick / occurrencePageCount) % policyPageCount;
+  const combinations = occurrencePageCount * policyPageCount;
+  const tick = combinations > 1 ? await nextEscalationCursorPosition(db, now) : 0;
+  const combination = tick % combinations;
+  const occurrencePage = combination % occurrencePageCount;
+  const policyPage = Math.floor(combination / occurrencePageCount) % policyPageCount;
   const policies: Array<{
     id: string;
     scope: 'ORG' | 'BRANCH';
