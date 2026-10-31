@@ -23,8 +23,11 @@ import {
 import { pharmacySupplierLinksRouter } from './pharmacy-supplier-links';
 
 const target = { id: 'link_a', organizationId: 'org_a', branchId: 'branch_a' };
+type TestDb = {
+  $transaction: (run: (tx: TestDb) => Promise<unknown>) => Promise<unknown>;
+};
 const db = {
-  $transaction: vi.fn(async (run: (tx: typeof db) => Promise<unknown>) => run(db)),
+  $transaction: vi.fn(async (run: (tx: TestDb) => Promise<unknown>) => run(db)),
 };
 const context = {
   db,
