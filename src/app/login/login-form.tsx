@@ -30,43 +30,42 @@ export function LoginForm({
   initialError?: LoginErrorKey;
 }) {
   const errorId = useId();
-  const emailRef = useRef<HTMLInputElement>(null);
-  const codeRef = useRef<HTMLInputElement>(null);
   const router = useRouter();
   const hydrated = useHydrated();
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string>(
     initialError ? LOGIN_ERROR_MESSAGES[initialError] : ''
   );
+  const [invalidFields, setInvalidFields] = useState<'credentials' | 'totp' | null>(() =>
+    initialError === '2fa-required' || initialError === '2fa-invalid'
+      ? 'totp'
+      : initialError
+        ? 'credentials'
+        : null
+  );
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const emailRef = useRef<HTMLInputElement>(null);
+  const totpRef = useRef<HTMLInputElement>(null);
   // IMP-AUTH-02: revealed after a correct password when the account has 2FA on.
   const [twoFactor, setTwoFactor] = useState(
     initialError === '2fa-required' || initialError === '2fa-invalid'
   );
-  const [errorField, setErrorField] = useState<'credentials' | 'totp'>(
-    initialError === '2fa-required' || initialError === '2fa-invalid' ? 'totp' : 'credentials'
-  );
-  const credentialsInvalid = Boolean(error) && errorField === 'credentials';
-  const codeInvalid = Boolean(error) && errorField === 'totp';
 
-  // Wait for React to mount the code input and commit its error description
-  // before focusing it, including when an already visible code is rejected.
   useEffect(() => {
-    if (error) (errorField === 'totp' ? codeRef : emailRef).current?.focus();
-  }, [error, errorField]);
+    if (invalidFields === 'totp') totpRef.current?.focus();
+  }, [invalidFields, twoFactor]);
 
+  // Editing the field an error belongs to dismisses it; editing another field does not.
   const clearError = (field: 'credentials' | 'totp') => {
-    if (errorField === field) setError('');
-  };
-
-  const showError = (message: string, field: 'credentials' | 'totp' = 'credentials') => {
-    setErrorField(field);
-    setError(message);
+    if (invalidFields !== field) return;
+    setInvalidFields(null);
+    setError('');
   };
 
   const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setError('');
+    setInvalidFields(null);
     setIsSubmitting(true);
 
     const formData = new FormData(event.currentTarget);
@@ -96,33 +95,39 @@ export function LoginForm({
         if (result.code === '2fa_required') {
           // Password was correct; the account needs a second factor. Reveal the field.
           setTwoFactor(true);
-          showError('Enter the 6-digit code from your authenticator app.', 'totp');
+          setInvalidFields('totp');
+          setError('Enter the 6-digit code from your authenticator app.');
         } else if (result.code === '2fa_invalid') {
           setTwoFactor(true);
-          showError(
-            'That code is incorrect or expired. Try again, or use a recovery code.',
-            'totp'
-          );
+          setInvalidFields('totp');
+          setError('That code is incorrect or expired. Try again, or use a recovery code.');
         } else if (result.code === 'sso_required') {
           setTwoFactor(false);
-          showError('Password sign-in is disabled. Use your organization identity provider.');
+          setInvalidFields('credentials');
+          setError('Password sign-in is disabled. Use your organization identity provider.');
         } else {
           setTwoFactor(false);
-          showError(
+          setInvalidFields('credentials');
+          setError(
             result.code === 'suspended'
               ? 'Your account has been suspended. Please contact your workspace administrator.'
               : 'Invalid email or password. Please try again.'
           );
         }
         setIsSubmitting(false);
+        if (result.code !== '2fa_required' && result.code !== '2fa_invalid') {
+          emailRef.current?.focus();
+        }
         return;
       }
 
       await appProvidersReady;
       router.replace(callbackUrl);
     } catch {
-      showError('Unable to sign in right now. Please check your connection and try again.');
+      setError('Unable to sign in right now. Please check your connection and try again.');
+      setInvalidFields('credentials');
       setIsSubmitting(false);
+      emailRef.current?.focus();
     }
   };
 
@@ -186,9 +191,9 @@ export function LoginForm({
               autoFocus
               name="email"
               required
+              aria-invalid={invalidFields === 'credentials' || undefined}
+              aria-describedby={invalidFields === 'credentials' ? errorId : undefined}
               onChange={() => clearError('credentials')}
-              aria-invalid={credentialsInvalid}
-              aria-describedby={credentialsInvalid ? errorId : undefined}
               className={inputClass}
             />
           </div>
@@ -207,9 +212,9 @@ export function LoginForm({
               autoComplete="current-password"
               name="password"
               required
+              aria-invalid={invalidFields === 'credentials' || undefined}
+              aria-describedby={invalidFields === 'credentials' ? errorId : undefined}
               onChange={() => clearError('credentials')}
-              aria-invalid={credentialsInvalid}
-              aria-describedby={credentialsInvalid ? errorId : undefined}
               className={inputClass}
             />
             <div className="text-end">
@@ -228,7 +233,7 @@ export function LoginForm({
                 Authentication code
               </label>
               <input
-                ref={codeRef}
+                ref={totpRef}
                 id="totp"
                 type="text"
                 inputMode="numeric"
@@ -237,9 +242,9 @@ export function LoginForm({
                 autoFocus
                 name="totp"
                 required
+                aria-invalid={invalidFields === 'totp' || undefined}
+                aria-describedby={invalidFields === 'totp' ? errorId : undefined}
                 onChange={() => clearError('totp')}
-                aria-invalid={codeInvalid}
-                aria-describedby={codeInvalid ? errorId : undefined}
                 className={inputClass}
               />
               <p className="text-xs text-text-muted">

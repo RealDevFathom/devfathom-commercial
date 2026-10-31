@@ -88,8 +88,8 @@ it('associates a failed sign-in error with both credentials until either is edit
   expect(email).toHaveFocus();
 
   fireEvent.change(email, { target: { value: 'another@example.test' } });
-  expect(email).toHaveAttribute('aria-invalid', 'false');
-  expect(password).toHaveAttribute('aria-invalid', 'false');
+  expect(email).not.toHaveAttribute('aria-invalid');
+  expect(password).not.toHaveAttribute('aria-invalid');
   expect(email).not.toHaveAttribute('aria-describedby');
   expect(password).not.toHaveAttribute('aria-describedby');
 });
@@ -131,7 +131,42 @@ it('preserves submitted values and associates a network failure with the credent
   fireEvent.change(password, { target: { value: 'another password' } });
   expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   for (const field of [email, password]) {
-    expect(field).toHaveAttribute('aria-invalid', 'false');
+    expect(field).not.toHaveAttribute('aria-invalid');
+    expect(field).not.toHaveAttribute('aria-describedby');
+  }
+});
+
+it('focuses and describes the authentication code when a second factor is rejected', async () => {
+  const fetchMock = vi.fn().mockResolvedValueOnce({
+    ok: false,
+    json: async () => ({ error: 'Email, password, or authentication code is incorrect.' }),
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  const { container } = render(<PlatformLoginForm />);
+  const email = screen.getByLabelText('Work email');
+  const password = screen.getByLabelText('Password');
+  const code = screen.getByLabelText('Authentication code');
+  fireEvent.change(email, { target: { value: 'operator@example.test' } });
+  fireEvent.change(password, { target: { value: 'correct password' } });
+  fireEvent.change(code, { target: { value: '000000' } });
+  fireEvent.submit(container.querySelector('form')!);
+
+  const alert = await screen.findByRole('alert');
+  expect(alert).toHaveTextContent('Email, password, or authentication code is incorrect.');
+  // The server does not disclose which factor failed, so the code is implicated too.
+  expect(code).toHaveFocus();
+  expect(code).toHaveValue('000000');
+  expect(email).toHaveValue('operator@example.test');
+  expect(password).toHaveValue('correct password');
+  for (const field of [email, password, code]) {
+    expect(field).toHaveAttribute('aria-invalid', 'true');
+    expect(field).toHaveAttribute('aria-describedby', alert.id);
+  }
+
+  fireEvent.change(code, { target: { value: '123456' } });
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  for (const field of [email, password, code]) {
+    expect(field).not.toHaveAttribute('aria-invalid');
     expect(field).not.toHaveAttribute('aria-describedby');
   }
 });

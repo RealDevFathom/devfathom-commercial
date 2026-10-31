@@ -111,6 +111,7 @@ function order(
     quantity?: number;
     seatNumber?: number | null;
     status?: string;
+    remakeOfItemId?: string | null;
     modifiers?: string[];
   }>
 ) {
@@ -122,6 +123,7 @@ function order(
     items: items.map((i) => ({
       id: i.id,
       status: i.status ?? 'SERVED',
+      remakeOfItemId: i.remakeOfItemId ?? null,
       seatNumber: i.seatNumber ?? null,
       name: i.id,
       unitPrice: D(i.unitPrice),
@@ -242,6 +244,7 @@ describe('exclusiveTaxFromSettlementSnapshots', () => {
             {
               id: 'item-1',
               status: 'SERVED',
+              remakeOfItemId: null,
               seatNumber: null,
               name: 'Chicken Karahi',
               unitPrice: D('970.00'),
@@ -412,6 +415,56 @@ describe('evaluateOrderSettlement reconciliation', () => {
     expect(settlement.accountedTotal.toString()).toBe('106');
     expect(settlement.derivedOrderTotal.toString()).toBe('106');
   });
+
+  it('reconciles against the purchased line and does not require remake lines on a bill', async () => {
+    const purchased = order([
+      { id: 'original', unitPrice: '12.50', quantity: 2, modifiers: ['1.00'] },
+      {
+        id: 'replacement',
+        unitPrice: '12.50',
+        quantity: 2,
+        modifiers: ['1.00'],
+        remakeOfItemId: 'original',
+      },
+      {
+        id: 'second-replacement',
+        unitPrice: '12.50',
+        quantity: 2,
+        modifiers: ['1.00'],
+        remakeOfItemId: 'replacement',
+      },
+    ]);
+    const db = {
+      restaurantOrder: { findFirst: async () => purchased },
+      restaurantBill: {
+        findMany: async () => [
+          {
+            id: 'bill-1',
+            status: 'SETTLED',
+            splitKind: 'NONE',
+            grandTotal: D('27.00'),
+            serviceChargeTotal: D('0'),
+            deliveryFeeTotal: D('0'),
+            compTotal: D('0'),
+            discountTotal: D('0'),
+            taxTotal: D('0'),
+            receiptNumber: 1,
+            lines: [{ orderItemId: 'original' }],
+            tenders: [{ amount: D('27.00') }],
+          },
+        ],
+      },
+      restaurantTaxTransactionSnapshot: { findMany: async () => [] },
+    } as unknown as ScopedDb;
+
+    const settlement = await evaluateOrderSettlement(db, 'order-1');
+
+    expect(settlement.settled).toBe(true);
+    expect(settlement.blocker).toBeNull();
+    expect(settlement.unbilledItemIds).toEqual([]);
+    expect(settlement.derivedOrderTotal.toFixed(2)).toBe('27.00');
+    expect(settlement.accountedTotal.toFixed(2)).toBe('27.00');
+  });
 });
 
 describe('planBills — NONE / BY_ITEM / BY_SEAT (pure partition, C4)', () => {
@@ -465,7 +518,7 @@ describe('planBills — NONE / BY_ITEM / BY_SEAT (pure partition, C4)', () => {
     ).toThrow(/not supported when a service charge is pinned/);
   });
 
-  it('NONE places every non-voided item on one bill; subtotal ≡ order total', () => {
+  it('NONE places every billable purchased item on one bill; subtotal ≡ order total', () => {
     const o = order([
       { id: 'a', unitPrice: '10.00' },
       { id: 'b', unitPrice: '5.00', quantity: 3 },
@@ -478,6 +531,66 @@ describe('planBills — NONE / BY_ITEM / BY_SEAT (pure partition, C4)', () => {
     expect(bill!.roundingAdjustment.toString()).toBe('0');
   });
 
+  it.each([
+    ['NONE', { kind: 'NONE' } as const],
+    ['BY_ITEM', { kind: 'BY_ITEM', groups: [['original']] } as const],
+    ['BY_SEAT', { kind: 'BY_SEAT' } as const],
+    ['FRACTIONAL', { kind: 'FRACTIONAL', weights: [1, 1] } as const],
+  ])(
+    'charges the original purchase once for a %s split and excludes chained remakes',
+    (_name, split) => {
+      const o = order([
+        { id: 'original', unitPrice: '10.00', quantity: 2, seatNumber: 1, modifiers: ['1.25'] },
+        {
+          id: 'replacement',
+          unitPrice: '10.00',
+          quantity: 2,
+          seatNumber: 2,
+          modifiers: ['1.25'],
+          remakeOfItemId: 'original',
+        },
+        {
+          id: 'second-replacement',
+          unitPrice: '10.00',
+          quantity: 2,
+          seatNumber: 3,
+          modifiers: ['1.25'],
+          remakeOfItemId: 'replacement',
+        },
+      ]);
+
+      const bills = planBills(o, split);
+      const lines = bills.flatMap((bill) => bill.lines.map((line) => line.orderItemId));
+      const total = bills.reduce((value, bill) => value.plus(bill.grandTotal), D(0));
+
+      expect(lines).toEqual(split.kind === 'FRACTIONAL' ? [] : ['original']);
+      expect(total.toFixed(2)).toBe('22.50');
+    }
+  );
+
+  it('allocates service charge only from the purchased line when a remake exists', () => {
+    const [bill] = planBills(
+      withServiceCharge(
+        order([
+          { id: 'original', unitPrice: '10.00', quantity: 2, modifiers: ['1.25'] },
+          {
+            id: 'replacement',
+            unitPrice: '10.00',
+            quantity: 2,
+            modifiers: ['1.25'],
+            remakeOfItemId: 'original',
+          },
+        ])
+      ),
+      { kind: 'NONE' }
+    );
+
+    expect(bill!.subtotal.toFixed(2)).toBe('22.50');
+    expect(bill!.serviceChargeTotal.toFixed(2)).toBe('2.25');
+    expect(bill!.grandTotal.toFixed(2)).toBe('24.75');
+    expect(bill!.lines[0]!.serviceChargeAmount.toFixed(2)).toBe('2.25');
+  });
+
   it('BY_ITEM asserts a complete partition and rejects gaps/dupes/unknowns', () => {
     const o = order([
       { id: 'a', unitPrice: '10.00' },
@@ -488,12 +601,12 @@ describe('planBills — NONE / BY_ITEM / BY_SEAT (pure partition, C4)', () => {
     expect(bills).toHaveLength(2);
     expect(bills[0]!.subtotal.toString()).toBe('16');
     expect(bills[1]!.subtotal.toString()).toBe('4');
-    // Every non-voided item is placed on exactly one bill.
+    // Every billable purchased item is placed on exactly one bill.
     const placed = bills.flatMap((b) => b.lines.map((l) => l.orderItemId)).sort();
     expect(placed).toEqual(['a', 'b', 'c']);
 
     expect(() => planBills(o, { kind: 'BY_ITEM', groups: [['a', 'b']] })).toThrowError(
-      /Every non-voided item/
+      /Every billable purchased item/
     );
     expect(() => planBills(o, { kind: 'BY_ITEM', groups: [['a', 'a', 'b', 'c']] })).toThrowError(
       /more than one bill/
@@ -980,6 +1093,49 @@ describeIfDatabase('bills command layer (real DB)', () => {
       tx.restaurantBill.count({ where: { orderId: fresh.orderId } })
     );
     expect(billCount).toBe(2); // the replay created no additional bills
+  });
+
+  it('persists only the purchased line when cutting an order with a remake', async () => {
+    const { orderId, itemIds, db } = await openWithItems([{ modifier: true }]);
+    await deps.withTenantDb(orgId, (tx) =>
+      tx.restaurantOrderItem.update({
+        where: { id: itemIds[0]! },
+        data: { status: 'SERVED', quantity: 2 },
+      })
+    );
+    const remake = await deps.orders.requestRemake(db, {
+      orderId,
+      itemId: itemIds[0]!,
+      reason: 'replace preparation',
+      actor: actor(),
+    });
+
+    const cut = await deps.bills.cutBills(db, {
+      orderId,
+      branchId: ids.branch,
+      split: { kind: 'NONE' },
+      actor: actor(),
+    });
+    const bill = await read((tx) =>
+      tx.restaurantBill.findUniqueOrThrow({
+        where: { id: cut.billIds[0]! },
+        select: {
+          subtotal: true,
+          grandTotal: true,
+          lines: { select: { orderItemId: true, quantity: true, lineSubtotal: true } },
+        },
+      })
+    );
+    const settlement = await read((tx) => deps.bills.evaluateOrderSettlement(tx, orderId));
+
+    expect(bill.lines).toHaveLength(1);
+    expect(bill.lines[0]).toMatchObject({ orderItemId: itemIds[0], quantity: 2 });
+    expect(bill.lines[0]!.orderItemId).not.toBe(remake.remakeItemId);
+    expect(bill.lines[0]!.lineSubtotal.toFixed(2)).toBe('27.00');
+    expect(bill.subtotal.toFixed(2)).toBe('27.00');
+    expect(bill.grandTotal.toFixed(2)).toBe('27.00');
+    expect(settlement.unbilledItemIds).toEqual([]);
+    expect(settlement.accountedTotal.toFixed(2)).toBe(settlement.derivedOrderTotal.toFixed(2));
   });
 
   it('BY_SEAT groups items into per-seat bills that reconcile to the order total', async () => {

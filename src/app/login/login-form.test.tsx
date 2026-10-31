@@ -88,8 +88,8 @@ it.each([
   expect(email).toHaveFocus();
 
   fireEvent.change(password, { target: { value: 'another password' } });
-  expect(email).toHaveAttribute('aria-invalid', 'false');
-  expect(password).toHaveAttribute('aria-invalid', 'false');
+  expect(email).not.toHaveAttribute('aria-invalid');
+  expect(password).not.toHaveAttribute('aria-invalid');
   expect(email).not.toHaveAttribute('aria-describedby');
   expect(password).not.toHaveAttribute('aria-describedby');
 });
@@ -113,7 +113,7 @@ it('focuses and clears only the authentication-code error through MFA retries', 
   expect(code).toHaveAttribute('aria-describedby', screen.getByRole('alert').id);
   expect(screen.getByRole('alert')).toHaveTextContent('Enter the 6-digit code');
   for (const field of [email, password]) {
-    expect(field).toHaveAttribute('aria-invalid', 'false');
+    expect(field).not.toHaveAttribute('aria-invalid');
     expect(field).not.toHaveAttribute('aria-describedby');
   }
 
@@ -123,7 +123,7 @@ it('focuses and clears only the authentication-code error through MFA retries', 
   expect(screen.getByRole('alert')).toBeVisible();
   fireEvent.change(code, { target: { value: '000000' } });
   expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-  expect(code).toHaveAttribute('aria-invalid', 'false');
+  expect(code).not.toHaveAttribute('aria-invalid');
   expect(code).not.toHaveAttribute('aria-describedby');
 
   // The input is already mounted: autoFocus cannot handle this retry.
@@ -136,12 +136,12 @@ it('focuses and clears only the authentication-code error through MFA retries', 
   expect(code).toHaveAttribute('aria-describedby', screen.getByRole('alert').id);
   expect(email).toHaveValue('owner+edited@example.test');
   expect(password).toHaveValue('edited password');
-  expect(email).toHaveAttribute('aria-invalid', 'false');
-  expect(password).toHaveAttribute('aria-invalid', 'false');
+  expect(email).not.toHaveAttribute('aria-invalid');
+  expect(password).not.toHaveAttribute('aria-invalid');
 
   fireEvent.change(code, { target: { value: 'recovery-code' } });
   expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-  expect(code).toHaveAttribute('aria-invalid', 'false');
+  expect(code).not.toHaveAttribute('aria-invalid');
   expect(code).not.toHaveAttribute('aria-describedby');
   fireEvent.submit(submit);
   await waitFor(() => expect(m.replace).toHaveBeenCalledWith('/dashboard'));
@@ -162,11 +162,11 @@ it.each(['2fa-required', '2fa-invalid'] as const)(
     expect(code).toHaveFocus();
     expect(code).toHaveAttribute('aria-invalid', 'true');
     expect(code).toHaveAttribute('aria-describedby', screen.getByRole('alert').id);
-    expect(screen.getByLabelText('Email')).toHaveAttribute('aria-invalid', 'false');
-    expect(screen.getByLabelText('Password')).toHaveAttribute('aria-invalid', 'false');
+    expect(screen.getByLabelText('Email')).not.toHaveAttribute('aria-invalid');
+    expect(screen.getByLabelText('Password')).not.toHaveAttribute('aria-invalid');
     fireEvent.change(code, { target: { value: '123456' } });
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-    expect(code).toHaveAttribute('aria-invalid', 'false');
+    expect(code).not.toHaveAttribute('aria-invalid');
     expect(code).not.toHaveAttribute('aria-describedby');
   }
 );
@@ -194,7 +194,7 @@ it('preserves credentials and describes a network failure until edited', async (
   fireEvent.change(email, { target: { value: 'another@example.test' } });
   expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   for (const field of [email, password]) {
-    expect(field).toHaveAttribute('aria-invalid', 'false');
+    expect(field).not.toHaveAttribute('aria-invalid');
     expect(field).not.toHaveAttribute('aria-describedby');
   }
 });
