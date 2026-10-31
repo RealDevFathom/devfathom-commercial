@@ -48,6 +48,27 @@ const titleCase = (s: string) => (s === 'HR' ? 'HR' : s.charAt(0) + s.slice(1).t
 const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const OCCUPIED_SEAT_STATUSES = ['ACTIVE', 'ON_LEAVE', 'INVITED'] as const;
 
+// HTTP batch mutations share a transaction. PostgreSQL row locks do not
+// serialize callers inside that same transaction, so queue the entire invite
+// operation as well as locking the organization against other transactions.
+const inviteQueues = new WeakMap<Prisma.TransactionClient, Promise<void>>();
+
+async function serializeInvite<T>(tx: Prisma.TransactionClient, run: () => Promise<T>): Promise<T> {
+  const previous = inviteQueues.get(tx) ?? Promise.resolve();
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  inviteQueues.set(tx, pending);
+  await previous;
+  try {
+    return await run();
+  } finally {
+    release();
+    if (inviteQueues.get(tx) === pending) inviteQueues.delete(tx);
+  }
+}
+
 // IMP-HR-01: the leave types we track balances for (mirrors the LeaveType enum).
 const LEAVE_TYPES = ['VACATION', 'SICK', 'REMOTE'] as const;
 
@@ -180,60 +201,62 @@ export const teamRouter = router({
         skills: input.skills,
       };
 
-      const user = await ctx.db.$transaction(async (tx) => {
-        const organizationId = workspaceId(ctx);
-        // Serialize all seat-consuming writes for this organization. The count
-        // must happen after taking the lock so a concurrent invite that just
-        // committed is included before this transaction decides to create.
-        await tx.$queryRaw`SELECT "id" FROM "organizations" WHERE "id" = ${organizationId} FOR UPDATE`;
-        const existing = await tx.user.findFirst({
-          where: { email },
-          select: { id: true, status: true },
-        });
-        // Only a still-pending invite may be re-sent; an active/real account blocks.
-        if (existing && existing.status !== 'INVITED') {
-          throw new TRPCError({
-            code: 'CONFLICT',
-            message: 'A user with this email already exists',
+      const user = await ctx.db.$transaction((tx) =>
+        serializeInvite(tx, async () => {
+          const organizationId = workspaceId(ctx);
+          // Serialize all seat-consuming writes for this organization. The count
+          // must happen after taking the lock so a concurrent invite that just
+          // committed is included before this transaction decides to create.
+          await tx.$queryRaw`SELECT "id" FROM "organizations" WHERE "id" = ${organizationId} FOR UPDATE`;
+          const existing = await tx.user.findFirst({
+            where: { email },
+            select: { id: true, status: true },
           });
-        }
-        if (!existing) {
-          const occupiedSeats = await tx.user.count({
-            where: { status: { in: [...OCCUPIED_SEAT_STATUSES] } },
-          });
-          if (occupiedSeats >= ctx.entitlements.seatLimit) {
+          // Only a still-pending invite may be re-sent; an active/real account blocks.
+          if (existing && existing.status !== 'INVITED') {
             throw new TRPCError({
-              code: 'FORBIDDEN',
-              message: `Seat limit reached (${occupiedSeats}/${ctx.entitlements.seatLimit}). Increase the organization license before inviting another member.`,
+              code: 'CONFLICT',
+              message: 'A user with this email already exists',
             });
           }
-        }
-
-        // Upsert the user (re-invite refreshes the seeded details), then replace
-        // any prior invitation with a fresh single-use token.
-        const u = existing
-          ? await tx.user.update({
-              where: { id: existing.id },
-              data: { ...profile, password: null, status: 'INVITED' },
-            })
-          : await tx.user.create({
-              data: { ...profile, email, password: null, status: 'INVITED' },
+          if (!existing) {
+            const occupiedSeats = await tx.user.count({
+              where: { status: { in: [...OCCUPIED_SEAT_STATUSES] } },
             });
+            if (occupiedSeats >= ctx.entitlements.seatLimit) {
+              throw new TRPCError({
+                code: 'FORBIDDEN',
+                message: `Seat limit reached (${occupiedSeats}/${ctx.entitlements.seatLimit}). Increase the organization license before inviting another member.`,
+              });
+            }
+          }
 
-        await tx.invitation.upsert({
-          where: { userId: u.id },
-          create: {
-            userId: u.id,
-            email,
-            tokenHash,
-            invitedById: ctx.session.user.id,
-            expiresAt,
-          },
-          update: { tokenHash, expiresAt, acceptedAt: null, invitedById: ctx.session.user.id },
-        });
+          // Upsert the user (re-invite refreshes the seeded details), then replace
+          // any prior invitation with a fresh single-use token.
+          const u = existing
+            ? await tx.user.update({
+                where: { id: existing.id },
+                data: { ...profile, password: null, status: 'INVITED' },
+              })
+            : await tx.user.create({
+                data: { ...profile, email, password: null, status: 'INVITED' },
+              });
 
-        return u;
-      });
+          await tx.invitation.upsert({
+            where: { userId: u.id },
+            create: {
+              userId: u.id,
+              email,
+              tokenHash,
+              invitedById: ctx.session.user.id,
+              expiresAt,
+            },
+            update: { tokenHash, expiresAt, acceptedAt: null, invitedById: ctx.session.user.id },
+          });
+
+          return u;
+        })
+      );
 
       const inviteUrl = `${appUrl()}/invite/${token}`;
 
