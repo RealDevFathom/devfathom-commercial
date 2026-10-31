@@ -4,7 +4,6 @@ import { Prisma } from '@/generated/prisma/client';
 import { hasModule, resolveOrganizationEntitlements } from '@/lib/entitlements';
 import { isTenantLifecycleAccessible } from '@/lib/tenancy/host';
 import { withPlatformDb, withTenantDb } from '@/lib/tenancy/scoped-db';
-import { workspaceTimezone } from '@/lib/timezone';
 
 import { formatMinor } from '../counter-receipt';
 import { lockPatientConsent } from '../consent-writer';
@@ -18,7 +17,6 @@ import {
 } from './provider';
 
 const DAY_MS = 86_400_000;
-const WEEK_MS = 7 * DAY_MS;
 
 /** Do not nag over a few paisa: a reminder needs a real outstanding balance. */
 const DEFAULT_MIN_BALANCE_MINOR = 10_000;
@@ -32,14 +30,16 @@ export type KhataReminderCandidate = {
 /**
  * CRM-L06 pure reminder plan for one family khata account. A reminder is due
  * only when the account carries an overdue, unsettled balance at or above the
- * floor. The dedupe key buckets by account x week, so the scheduled job nudges
- * an overdue payer at most once per week until the balance clears — never a
- * promotion, only the utility fact that money is owed.
+ * floor. The dedupe key buckets by account and the owner-configured interval,
+ * so the scheduled job nudges an overdue payer at most once per period until
+ * the balance clears — never a promotion, only the utility fact that money is
+ * owed.
  */
 export function planKhataReminder(
   candidate: KhataReminderCandidate,
   now: Date,
-  minBalanceMinor: number = DEFAULT_MIN_BALANCE_MINOR
+  minBalanceMinor: number = DEFAULT_MIN_BALANCE_MINOR,
+  intervalDays = 7
 ) {
   const floor = Math.max(1, Number.isSafeInteger(minBalanceMinor) ? minBalanceMinor : 1);
   const due =
@@ -47,13 +47,17 @@ export function planKhataReminder(
     candidate.oldestOverdueAt.getTime() <= now.getTime() &&
     Number.isSafeInteger(candidate.balanceMinor) &&
     candidate.balanceMinor >= floor;
-  const week = Math.floor(now.getTime() / WEEK_MS);
+  const safeIntervalDays =
+    Number.isSafeInteger(intervalDays) && intervalDays >= 1 && intervalDays <= 90
+      ? intervalDays
+      : 7;
+  const period = Math.floor(now.getTime() / (safeIntervalDays * DAY_MS));
   return {
     due,
     dueDate: candidate.oldestOverdueAt
       ? candidate.oldestOverdueAt.toISOString().slice(0, 10)
       : null,
-    dedupeKey: `khata:${candidate.familyAccountId}:w${week}`,
+    dedupeKey: `khata:${candidate.familyAccountId}:d${safeIntervalDays}:p${period}`,
   };
 }
 
@@ -98,9 +102,9 @@ export async function processDueWhatsAppKhataReminders(
   const now = options.now ?? new Date();
   const config = options.config ?? readWhatsAppConfig();
   const provider = options.provider ?? createWhatsAppProvider(config);
-  const minBalanceMinor = options.minBalanceMinor ?? DEFAULT_MIN_BALANCE_MINOR;
+  const minBalanceMinor = options.minBalanceMinor ?? config.khataReminderMinBalanceMinor;
   const result: KhataReminderRunResult = {
-    configured: Boolean(config.templates.khataReminder),
+    configured: Boolean(config.templates.khataReminder && config.khataPaymentLink),
     scanned: 0,
     sent: 0,
     prepared: 0,
@@ -111,6 +115,7 @@ export async function processDueWhatsAppKhataReminders(
     notDue: 0,
   };
   const organizationId = config.organizationId;
+  // The factory disables Meta sends pending owner approval; do not consume dedupe keys.
   if (!result.configured || config.provider === 'meta' || !organizationId || !config.phoneNumberId)
     return { ...result, configured: false };
 
@@ -129,7 +134,8 @@ export async function processDueWhatsAppKhataReminders(
         oldestOverdueAt: account.oldestOverdueAt,
       },
       now,
-      minBalanceMinor
+      minBalanceMinor,
+      config.khataReminderIntervalDays
     );
     if (!plan.due) {
       result.notDue += 1;
@@ -159,8 +165,9 @@ export async function processDueWhatsAppKhataReminders(
         )
       )
         return null;
-      // UTC for a stored zone Intl refuses ("PKT", "UTC+5"), as the other readers do.
-      const timeZone = workspaceTimezone(organization.timezone);
+      // Collection messages are governed by the fixed Pakistan quiet-hours rule,
+      // even if a workspace has an incorrect or legacy timezone value.
+      const timeZone = 'Asia/Karachi';
       const hour = Number(
         new Intl.DateTimeFormat('en-GB', {
           timeZone,
@@ -168,7 +175,8 @@ export async function processDueWhatsAppKhataReminders(
           hourCycle: 'h23',
         }).format(now)
       );
-      if (hour >= 22 || hour < 8) return null;
+      // Issue #740 requires quiet hours from 22:00 through 08:59 PKT/local time.
+      if (hour >= 22 || hour < 9) return null;
       const customer = await db.pharmacyCustomer.findFirst({
         where: { organizationId: account.organizationId, id: account.payerCustomerId },
         select: {
@@ -248,8 +256,13 @@ export async function processDueWhatsAppKhataReminders(
         provider.sendTemplate({
           to: recipient.to,
           template: 'khataReminder',
-          // Utility parameters only: who owes, and how much is outstanding.
-          parameters: [sanitizeReminderDisplayName(account.displayName), formatMinor(balanceMinor)],
+          // Fixed utility facts only. No sale line, drug, salt, category, or free-form
+          // account label can enter the Meta template.
+          parameters: [
+            formatMinor(balanceMinor),
+            plan.dueDate ?? '',
+            config.khataPaymentLink!,
+          ],
         })
     );
     if (outcome === 'SENT') result.sent += 1;

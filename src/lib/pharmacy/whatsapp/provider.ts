@@ -21,6 +21,10 @@ export type WhatsAppConfig = {
   templateLanguage: string;
   templates: Record<WhatsAppTemplateKey, string | null>;
   reminderLeadDays: number;
+  /** Owner-configured khata utility cadence and collection destination. */
+  khataReminderIntervalDays: number;
+  khataReminderMinBalanceMinor: number;
+  khataPaymentLink: string | null;
 };
 
 export type WhatsAppSendResult = {
@@ -71,6 +75,23 @@ function envValue(env: Env, key: string): string | null {
 
 export function readWhatsAppConfig(env: Env = process.env): WhatsAppConfig {
   const leadDays = Number(envValue(env, 'PHARMACY_WHATSAPP_REMINDER_LEAD_DAYS') ?? 3);
+  const khataIntervalDays = Number(
+    envValue(env, 'PHARMACY_WHATSAPP_KHATA_REMINDER_INTERVAL_DAYS') ?? 7
+  );
+  const khataMinBalanceMinor = Number(
+    envValue(env, 'PHARMACY_WHATSAPP_KHATA_MIN_BALANCE_MINOR') ?? 10_000
+  );
+  const paymentLinkValue = envValue(env, 'PHARMACY_WHATSAPP_KHATA_PAYMENT_LINK');
+  let khataPaymentLink: string | null = null;
+  if (paymentLinkValue) {
+    try {
+      const parsed = new URL(paymentLinkValue);
+      if (parsed.protocol === 'https:' && !parsed.username && !parsed.password)
+        khataPaymentLink = parsed.toString();
+    } catch {
+      // Invalid owner configuration fails closed; the job reports unconfigured.
+    }
+  }
   return {
     provider: envValue(env, 'PHARMACY_WHATSAPP_PROVIDER') === 'meta' ? 'meta' : 'mock',
     accessToken: envValue(env, 'PHARMACY_WHATSAPP_ACCESS_TOKEN'),
@@ -86,6 +107,15 @@ export function readWhatsAppConfig(env: Env = process.env): WhatsAppConfig {
     },
     reminderLeadDays:
       Number.isSafeInteger(leadDays) && leadDays >= 0 && leadDays <= 30 ? leadDays : 3,
+    khataReminderIntervalDays:
+      Number.isSafeInteger(khataIntervalDays) && khataIntervalDays >= 1 && khataIntervalDays <= 90
+        ? khataIntervalDays
+        : 7,
+    khataReminderMinBalanceMinor:
+      Number.isSafeInteger(khataMinBalanceMinor) && khataMinBalanceMinor >= 1
+        ? khataMinBalanceMinor
+        : 10_000,
+    khataPaymentLink,
   };
 }
 
