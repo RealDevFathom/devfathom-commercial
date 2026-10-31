@@ -142,11 +142,7 @@ export function ProjectsContent() {
               <Upload className="h-4 w-4" />
               Import from Trello
             </Button>
-            <Button
-              size="lg"
-              className="h-10 px-4"
-              onClick={() => setShowCreateModal(true)}
-            >
+            <Button size="lg" className="h-10 px-4" onClick={() => setShowCreateModal(true)}>
               <Plus className="h-4 w-4" />
               New Project
             </Button>
@@ -274,9 +270,7 @@ export function ProjectsContent() {
       {isLoading ? (
         <SkeletonGrid view={view} />
       ) : filtered.length === 0 ? (
-        <EmptyState
-          hasQuery={Boolean(search || statusFilter !== 'ALL' || typeFilter !== 'ALL')}
-        />
+        <EmptyState hasQuery={Boolean(search || statusFilter !== 'ALL' || typeFilter !== 'ALL')} />
       ) : grouped ? (
         <div className="space-y-8">
           {groups.map((g) => (

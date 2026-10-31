@@ -11,15 +11,19 @@ export default function SsoCompletePage() {
 
   useEffect(() => {
     let active = true;
-    void signIn('enterprise', { redirect: false }).then((result) => {
-      if (!active) return;
-      if (result?.error) {
-        setError('The enterprise sign-in ticket is invalid or expired. Start again.');
-        return;
-      }
-      router.replace('/dashboard');
-      router.refresh();
-    });
+    void signIn('enterprise', { redirect: false })
+      .then((result) => {
+        if (!active) return;
+        if (!result || result.error) {
+          setError('The enterprise sign-in ticket is invalid or expired. Start again.');
+          return;
+        }
+        router.replace('/dashboard?landing=1');
+        router.refresh();
+      })
+      .catch(() => {
+        if (active) setError('The enterprise sign-in ticket is invalid or expired. Start again.');
+      });
     return () => {
       active = false;
     };

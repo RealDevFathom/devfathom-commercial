@@ -69,7 +69,7 @@ function PlatformDrawer({
         </button>
       </div>
 
-      <nav className="flex-1 space-y-6 overflow-y-auto px-3 py-5">
+      <nav aria-label="Platform navigation" className="flex-1 space-y-6 overflow-y-auto px-3 py-5">
         {groupOrder.map((group) => (
           <div key={group} className="space-y-1">
             <p className="px-2 pb-2 font-mono text-[9px] font-semibold uppercase tracking-[0.2em] text-sidebar-foreground/45">
@@ -94,6 +94,7 @@ function PlatformDrawer({
                     )}
                   >
                     <span
+                      aria-hidden="true"
                       className={cn(
                         'w-5 shrink-0 text-center font-mono text-[10px] tabular-nums',
                         active
@@ -321,6 +322,7 @@ export function PlatformShell({
                   )}
                 >
                   <span
+                    aria-hidden="true"
                     className={cn(
                       'font-mono text-[10px] tabular-nums text-text-body',
                       active && 'text-accent-brand'

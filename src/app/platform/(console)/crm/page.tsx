@@ -210,7 +210,27 @@ export default async function CrmPage() {
                       <td className="px-4 py-3 text-xs">
                         {lead.account?.name ?? lead.companyName ?? 'Unassigned'}
                       </td>
-                      <td className="px-4 py-3 text-xs">{lead.source ?? 'Direct'}</td>
+                      <td className="px-4 py-3 text-xs">
+                        {lead.source ?? 'Direct'}
+                        {lead.source?.startsWith('workspace-request:') && (
+                          <div className="mt-2 flex flex-col gap-3">
+                            <a
+                              className="underline underline-offset-4"
+                              href={`/api/platform/workspace-requests/${lead.id}`}
+                            >
+                              Download request details
+                            </a>
+                            {lead.source === 'workspace-request:pharmacy' && (
+                              <a
+                                className="underline underline-offset-4"
+                                href={`/api/platform/workspace-requests/${lead.id}?document=1`}
+                              >
+                                Download licence copy
+                              </a>
+                            )}
+                          </div>
+                        )}
+                      </td>
                       <td className="px-4 py-3">
                         <PlatformStatus value={lead.status} />
                       </td>

@@ -161,6 +161,10 @@ export function KdsBoard({ demo = false }: { demo?: boolean }) {
     setNotice(message ? { tone: 'danger', message } : null);
   }, []);
 
+  const deliveryAuthorizationFailure = useCallback(() => {
+    disconnect('Device authorization failed. Reconnect with valid KDS credentials.');
+  }, [disconnect]);
+
   const loadQueue = useCallback(
     async (activeRuntime: Runtime, sinceCursor?: number) => {
       if (queueFlight.current) return queueFlight.current;
@@ -605,9 +609,7 @@ export function KdsBoard({ demo = false }: { demo?: boolean }) {
         <DeliveryBoard
           sessionToken={runtime.sessionToken}
           operatorStaffProfileId={runtime.operatorStaffProfileId}
-          onAuthorizationFailure={() =>
-            disconnect('Device authorization failed. Reconnect with valid KDS credentials.')
-          }
+          onAuthorizationFailure={deliveryAuthorizationFailure}
         />
 
         {loading ? (

@@ -1,8 +1,7 @@
 import 'server-only';
 
-import { generateText } from 'ai';
 import { z } from 'zod';
-import { createAIModel } from '@/lib/ai/provider';
+import { routeAI } from '@/lib/ai/router';
 import { validateMarketingBody } from './marketing-service';
 
 // Only fixed generic choices cross the provider boundary. No free-text prompt,
@@ -14,13 +13,21 @@ export const marketingAssistanceInput = z
   })
   .strict();
 
-export async function draftMarketingCopy(input: z.infer<typeof marketingAssistanceInput>) {
+type MarketingAssistanceContext = {
+  organizationId: string;
+  branchId: string;
+};
+
+export async function draftMarketingCopy(
+  input: z.infer<typeof marketingAssistanceInput>,
+  context: MarketingAssistanceContext
+) {
   const choice = marketingAssistanceInput.parse(input);
   try {
-    const selection = createAIModel();
-    const result = await generateText({
-      model: selection.model,
-      providerOptions: selection.providerOptions,
+    const result = await routeAI({
+      organizationId: context.organizationId,
+      branchId: context.branchId,
+      feature: 'pharmacy.marketing-assistance',
       system:
         'Write one short generic retail WhatsApp draft. No medicines, clinical claims, health information, personal data, invented offers or discounts. Include Reply STOP to opt out. Human approval is required. Return text only.',
       prompt: `Occasion: ${choice.occasion}. Tone: ${choice.tone}.`,
