@@ -2,6 +2,8 @@ export const INVOICE_STATUS_VALUES = ['DRAFT', 'SENT', 'PAID', 'OVERDUE', 'CANCE
 
 export type InvoiceStatusValue = (typeof INVOICE_STATUS_VALUES)[number];
 
+export const PAID_STATUS_ERROR = 'Record a payment to mark an invoice as paid.';
+
 const TRANSITIONS: Record<InvoiceStatusValue, readonly InvoiceStatusValue[]> = {
   DRAFT: ['SENT', 'CANCELLED'],
   SENT: ['OVERDUE', 'CANCELLED', 'DRAFT', 'PAID'],
@@ -12,8 +14,11 @@ const TRANSITIONS: Record<InvoiceStatusValue, readonly InvoiceStatusValue[]> = {
 
 export function invoiceStatusTransitionError(
   prior: InvoiceStatusValue,
-  next: InvoiceStatusValue
+  next: InvoiceStatusValue,
+  options: { recordsPayment?: boolean } = {}
 ): string | null {
+  // Status-only callers (including REST) must not bypass the payment ledger.
+  if (next === 'PAID' && !options.recordsPayment) return PAID_STATUS_ERROR;
   if (prior === next || TRANSITIONS[prior].includes(next)) return null;
   return `Cannot change an invoice from ${prior} to ${next}.`;
 }

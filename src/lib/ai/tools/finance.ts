@@ -595,7 +595,9 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
         };
       }
       // FIN-06: enforce the status state-machine.
-      const transitionError = invoiceStatusTransitionError(priorStatus, status);
+      const transitionError = invoiceStatusTransitionError(priorStatus, status, {
+        recordsPayment: true,
+      });
       if (transitionError) {
         return {
           error: transitionError,
@@ -604,6 +606,8 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
 
       if (status === 'PAID') {
         const invoice = await db.$transaction(async (tx) => {
+          // Share the invoice lock with payment entry/removal before summing.
+          await tx.$queryRaw`SELECT id FROM invoices WHERE id = ${matches[0].id} FOR UPDATE`;
           const current = await tx.invoice.findUnique({
             where: { id: matches[0].id },
             select: { id: true, total: true, currency: true },

@@ -463,7 +463,7 @@ export const financeRouter = router({
       const prior = current.status;
       const next = input.status;
 
-      const transitionError = invoiceStatusTransitionError(prior, next);
+      const transitionError = invoiceStatusTransitionError(prior, next, { recordsPayment: true });
       if (transitionError) {
         throw new TRPCError({
           code: 'BAD_REQUEST',
@@ -484,6 +484,9 @@ export const financeRouter = router({
       // readers can never observe PAID with an outstanding balance.
       if (next === 'PAID') {
         return ctx.db.$transaction(async (tx) => {
+          // Payment additions/deletions take this same lock before reading the
+          // ledger, so a concurrent partial payment cannot stale the balance.
+          await tx.$queryRaw`SELECT id FROM invoices WHERE id = ${input.id} FOR UPDATE`;
           const invoice = await tx.invoice.findUnique({
             where: { id: input.id },
             select: { id: true, total: true, currency: true },
@@ -575,6 +578,7 @@ export const financeRouter = router({
       } | null = null;
 
       const result = await ctx.db.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT id FROM invoices WHERE id = ${input.invoiceId} FOR UPDATE`;
         const invoice = await tx.invoice.findUnique({
           where: { id: input.invoiceId },
           select: { id: true, status: true, total: true, currency: true, clientId: true },
@@ -675,6 +679,7 @@ export const financeRouter = router({
         });
         if (!payment) throw new TRPCError({ code: 'NOT_FOUND', message: 'Payment not found' });
 
+        await tx.$queryRaw`SELECT id FROM invoices WHERE id = ${payment.invoiceId} FOR UPDATE`;
         await tx.payment.delete({ where: { id: payment.id } });
 
         const invoice = await tx.invoice.findUnique({
