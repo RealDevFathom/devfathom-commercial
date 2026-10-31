@@ -181,6 +181,19 @@ describe.each(khataPaths)('Khata $name authorization', ({ run }) => {
     await expect(run(f.caller(), 'branch-a')).resolves.toBeDefined();
   });
 
+  it.each(['user', 'role'])(
+    'keeps a %s clinical DENY separate from counter access',
+    async (source) => {
+      const f = fixture();
+      f.user.role = 'EMPLOYEE';
+      const denial = { capability: 'pharmacy:dispense', effect: 'DENY' };
+      if (source === 'user') f.member.permissionOverrides = [denial];
+      else f.member.organizationRole.permissions.push(denial);
+
+      await expect(run(f.caller(), 'branch-a')).resolves.toBeDefined();
+    }
+  );
+
   it.each(['branch-b', 'unassigned'])(
     'denies a cashier assigned to %s before Khata data or money operations',
     async (assignment) => {
@@ -269,6 +282,20 @@ describe.each(
     await expect(run(f.caller(), 'branch-a')).resolves.toBeDefined();
   });
 
+  it.each(['user', 'role'])(
+    'keeps a %s clinical DENY separate from financial reads',
+    async (source) => {
+      const f = fixture();
+      f.user.role = 'EMPLOYEE';
+      f.member.organizationRole.permissions = [{ capability: 'reports:financial', effect: 'ALLOW' }];
+      const denial = { capability: 'pharmacy:dispense', effect: 'DENY' };
+      if (source === 'user') f.member.permissionOverrides = [denial];
+      else f.member.organizationRole.permissions.push(denial);
+
+      await expect(run(f.caller(), 'branch-a')).resolves.toBeDefined();
+    }
+  );
+
   it.each([{ assignments: [] }, { assignments: [{ branchId: 'branch-b' }] }])(
     'denies finance reads outside assignments $assignments',
     async ({ assignments }) => {
@@ -307,6 +334,30 @@ describe.each(
 });
 
 describe('Khata router trust and recovery boundary', () => {
+  it.each(['CASH', 'CARD', 'BANK_TRANSFER', 'WALLET'])(
+    'preserves the receipt permission boundary for a %s refund',
+    async (type) => {
+      const f = fixture();
+      f.user.role = 'EMPLOYEE';
+      f.member.permissionOverrides = [{ capability: 'pharmacy:dispense', effect: 'DENY' }];
+      f.db.pharmacyTender.findFirst.mockResolvedValue({ type });
+
+      await expect(
+        f.caller().refundTender({
+          branchId: input.branchId,
+          originalTenderId: 'tender-a',
+          deviceId: input.deviceId,
+          businessDate: input.businessDate,
+          amountMinor: 50,
+          reason: 'Return',
+          idempotencyKey: 'refund-a',
+        })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(refundPharmacyTender).not.toHaveBeenCalled();
+      expect(f.db.pharmacyKhataEvent.create).not.toHaveBeenCalled();
+    }
+  );
+
   it.each([
     ['bootstrap admin wildcard', '*', ['pharmacy:counter']],
     ['counter operator', 'pharmacy:counter', ['pharmacy:counter']],
