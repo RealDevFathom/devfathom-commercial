@@ -169,7 +169,7 @@ describe('counter returns', () => {
     expect(mocks.refetch).not.toHaveBeenCalled();
     expect(localStorage.getItem('pharmacy-return:o:a:b')).toBeNull();
   });
-  it('re-collects a witness without persisting its PIN when an ambiguous controlled return did not commit', async () => {
+  it.each([false, true])('recovers controlled returns (remount=%s)', async (remount) => {
     const controlledHistory = mocks.history as {
       data: { lines: Array<{ controlled: boolean }> };
     };
@@ -200,8 +200,12 @@ describe('counter returns', () => {
       expect(screen.getByRole('button', { name: 'Retry saved return' })).toBeDisabled();
     });
 
-    view.unmount();
-    render(<ReturnForm {...props} />);
+    if (remount) {
+      view.unmount();
+      render(<ReturnForm {...props} />);
+    }
+    expect(screen.getAllByLabelText('Witness pharmacist')).toHaveLength(1);
+    expect(screen.getAllByLabelText('Witness PIN')).toHaveLength(1);
     const retry = await screen.findByRole('button', { name: 'Retry saved return' });
     expect(retry).toBeDisabled();
     fireEvent.change(screen.getByLabelText('Witness pharmacist'), {

@@ -600,7 +600,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
               Restock only inspected medicine with acceptable storage and intact packaging. Expired
               or recalled lots are refused by the server.
             </p>
-            {line?.controlled && (
+            {!attempt && line?.controlled && (
               <div className="space-y-3 rounded-md border border-border-subtle p-3">
                 <p className="text-sm font-medium text-text-strong">
                   Controlled medicine witness required
