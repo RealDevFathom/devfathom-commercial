@@ -83,6 +83,8 @@ const BRANCH_ID = `wha1209_branch_${suffix}`;
 const LIVE_BRANCH_ID = `wha1209_live_branch_${suffix}`;
 const LOCATION_ID = `wha1209_loc_${suffix}`;
 const JOB_ID = `wha1209_job_${suffix}`;
+const AUDITED_USER_ID = `audit_purge_user_${suffix}`;
+const USER_AUDIT_ID = `audit_purge_record_${suffix}`;
 const PURGED_PROFILE_ID = `wha1220_profile_${suffix}`;
 const LIVE_PROFILE_ID = `wha1220_live_profile_${suffix}`;
 const HOTEL_PURGED_ORG = `hotel_purge_${suffix}`;
@@ -198,6 +200,27 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
     await withPlatformDb(async (db) => {
       await seedTenant(db, PURGED_ORG, 'PURGING');
       await seedTenant(db, LIVE_ORG, 'ACTIVE');
+
+      await db.organizationDepartment.create({
+        data: { organizationId: PURGED_ORG, key: 'QA', name: 'QA' },
+      });
+      await db.user.create({
+        data: {
+          id: AUDITED_USER_ID,
+          organizationId: PURGED_ORG,
+          name: 'Audited tenant user',
+          email: `${AUDITED_USER_ID}@example.test`,
+          department: 'QA',
+          title: 'Operator',
+        },
+      });
+      await db.platformAuditLog.create({
+        data: {
+          id: USER_AUDIT_ID,
+          actorTenantUserId: AUDITED_USER_ID,
+          action: 'test.audited-tenant-user',
+        },
+      });
 
       // The mutually-referencing pair: a branch that names a default stock
       // location which in turn belongs to that branch.
@@ -316,6 +339,11 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
       })
     );
     expect(organization.status).toBe('PURGED');
+    await withPlatformDb(async (db) => {
+      expect(await db.user.findUnique({ where: { id: AUDITED_USER_ID } })).toBeNull();
+      const audit = await db.platformAuditLog.findUniqueOrThrow({ where: { id: USER_AUDIT_ID } });
+      expect(audit.actorTenantUserId).toBe(AUDITED_USER_ID);
+    });
   });
 
   it('keeps regulatory profiles append-only outside the exact purge context', async () => {

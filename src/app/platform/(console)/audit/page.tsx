@@ -52,7 +52,21 @@ export default async function PlatformAuditPage({
   const pageSize = 100;
   const success =
     query.outcome === 'success' ? true : query.outcome === 'failure' ? false : undefined;
-  const { rows } = await withPlatformDb(async (db) => {
+  const { rows, platformActorsById, tenantActorsById } = await withPlatformDb(async (db) => {
+    // Actor IDs are immutable historical references, not foreign keys: accounts
+    // may be deleted while their audit records must remain unchanged.
+    const actorSearch = {
+      OR: [
+        { name: { contains: q, mode: 'insensitive' as const } },
+        { email: { contains: q, mode: 'insensitive' as const } },
+      ],
+    };
+    const matchingPlatformActors =
+      q && !invalid
+        ? await db.platformUser.findMany({ where: actorSearch, select: { id: true } })
+        : [];
+    const matchingTenantActors =
+      q && !invalid ? await db.user.findMany({ where: actorSearch, select: { id: true } }) : [];
     const where: Prisma.PlatformAuditLogWhereInput = {
       ...(invalid ? { id: { in: [] } } : {}),
       ...(organizationId ? { organizationId } : {}),
@@ -88,10 +102,8 @@ export default async function PlatformAuditPage({
               { targetType: { contains: q, mode: 'insensitive' } },
               { targetId: { contains: q, mode: 'insensitive' } },
               { reason: { contains: q, mode: 'insensitive' } },
-              { actorPlatformUser: { is: { name: { contains: q, mode: 'insensitive' } } } },
-              { actorPlatformUser: { is: { email: { contains: q, mode: 'insensitive' } } } },
-              { actorTenantUser: { is: { name: { contains: q, mode: 'insensitive' } } } },
-              { actorTenantUser: { is: { email: { contains: q, mode: 'insensitive' } } } },
+              { actorPlatformUserId: { in: matchingPlatformActors.map((actor) => actor.id) } },
+              { actorTenantUserId: { in: matchingTenantActors.map((actor) => actor.id) } },
             ],
           }
         : {}),
@@ -99,14 +111,33 @@ export default async function PlatformAuditPage({
     const logs = await db.platformAuditLog.findMany({
       where,
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-      include: {
-        organization: { select: { displayName: true } },
-        actorPlatformUser: { select: { name: true, email: true } },
-        actorTenantUser: { select: { name: true, email: true } },
-      },
+      include: { organization: { select: { displayName: true } } },
       take: pageSize + 1,
     });
-    return { rows: logs };
+    const visibleLogs = logs.slice(0, pageSize);
+    const platformActorIds = visibleLogs.flatMap((log) =>
+      log.actorPlatformUserId ? [log.actorPlatformUserId] : []
+    );
+    const tenantActorIds = visibleLogs.flatMap((log) =>
+      log.actorTenantUserId ? [log.actorTenantUserId] : []
+    );
+    const platformActors = platformActorIds.length
+      ? await db.platformUser.findMany({
+          where: { id: { in: platformActorIds } },
+          select: { id: true, name: true, email: true },
+        })
+      : [];
+    const tenantActors = tenantActorIds.length
+      ? await db.user.findMany({
+          where: { id: { in: tenantActorIds } },
+          select: { id: true, name: true, email: true },
+        })
+      : [];
+    return {
+      rows: logs,
+      platformActorsById: new Map(platformActors.map((actor) => [actor.id, actor])),
+      tenantActorsById: new Map(tenantActors.map((actor) => [actor.id, actor])),
+    };
   });
 
   const logs = rows.slice(0, pageSize);
@@ -280,7 +311,11 @@ export default async function PlatformAuditPage({
             ) : null}
             {logs.map((log) => {
               const actorId = log.actorPlatformUserId ?? log.actorTenantUserId;
-              const actor = log.actorPlatformUser ?? log.actorTenantUser;
+              const actor = log.actorPlatformUserId
+                ? platformActorsById.get(log.actorPlatformUserId)
+                : log.actorTenantUserId
+                  ? tenantActorsById.get(log.actorTenantUserId)
+                  : undefined;
 
               return (
                 <tr key={log.id}>
@@ -299,7 +334,7 @@ export default async function PlatformAuditPage({
                       </>
                     ) : (
                       <p className="text-xs text-text-body">
-                        {actorId ?? 'Anonymous'}
+                        {actorId ? 'Deleted or unavailable actor' : 'Anonymous'}
                       </p>
                     )}
                     {actorId ? (
