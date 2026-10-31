@@ -731,6 +731,12 @@ export default async function PharmacyFinancePage({
           )}
         </SectionCard>
         <SectionCard title="Publish tax profile" eyebrow="FIN-04 · Accountant approval">
+          <a
+            href={`/pharmacy/accounts/tax-profile-review?${new URLSearchParams({ branch: branch.id })}`}
+            className="mb-5 inline-flex min-h-11 items-center text-sm text-primary underline underline-offset-4 hover:text-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            Review recorded tax profile versions
+          </a>
           <form action={perform} className="grid gap-3 sm:grid-cols-2">
             <input type="hidden" name="action" value="tax" />
             <input type="hidden" name="branchId" value={branch.id} />
