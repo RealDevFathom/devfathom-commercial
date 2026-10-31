@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { CounterReceipt } from './counter-receipt';
 import { readDispensingLabelSources } from './dispensing-label-source';
+import { effectiveRegulatoryProfileWhere } from './regulatory';
 
 const scope = { organizationId: 'org', branchId: 'branch' };
 const actorScope = { ...scope, actorId: 'operator' };
@@ -117,6 +118,21 @@ describe('label source provenance', () => {
       expect(db.pharmacyRefillReminderCapture.findMany).not.toHaveBeenCalled();
     }
   );
+  it('reads the profile on the workspace calendar day the dispensing gate used', async () => {
+    const { db } = fixture();
+    // 01:00 PKT on 2026-09-30 is still 2026-09-29 in UTC.
+    const at = new Date('2026-09-29T20:00:00Z');
+    await readDispensingLabelSources(
+      db as unknown as ScopedDb,
+      actorScope,
+      { ...receipt, completedAt: at.toISOString() },
+      'Asia/Karachi'
+    );
+    expect(db.branchRegulatoryProfile.findFirst.mock.calls[0]![0].where).toEqual({
+      ...scope,
+      ...effectiveRegulatoryProfileWhere(at, new Date('2026-09-30T00:00:00.000Z')),
+    });
+  });
   it('does not query clinical sources for unsettled receipt', async () => {
     const { db } = fixture();
     expect(

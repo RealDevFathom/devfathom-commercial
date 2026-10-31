@@ -40,7 +40,12 @@ import {
   ruleSetOptions,
   type RegulatoryProfileInput,
 } from '@/lib/pharmacy/regulatory-profile-form';
-import { evaluateBranchRegulatoryStatus } from '@/lib/pharmacy/regulatory';
+import {
+  effectiveRegulatoryProfileWhere,
+  evaluateBranchRegulatoryStatus,
+  isRegulatoryProfileEffective,
+} from '@/lib/pharmacy/regulatory';
+import { workspaceDateUtc, workspaceTimezone } from '@/lib/timezone';
 import { adminProcedure, router, type TRPCContext } from '../trpc';
 
 /** The gates an operator may attest to; the rest are answered from data. */
@@ -106,17 +111,17 @@ function reconcilePackageGate(
 async function readOverview(ctx: TRPCContext) {
   const organizationId = ctx.entitlements.organizationId;
   const now = new Date();
-  const [organization, evaluated, currentProfile] = await Promise.all([
-    ctx.db.organization.findFirst({
-      where: { id: organizationId },
-      select: { displayName: true, status: true, vertical: true, packageId: true },
-    }),
+  const organization = await ctx.db.organization.findFirst({
+    where: { id: organizationId },
+    select: { displayName: true, status: true, vertical: true, packageId: true, timezone: true },
+  });
+  const calendarDate = workspaceDateUtc(organization?.timezone, now);
+  const [evaluated, currentProfile] = await Promise.all([
     evaluatePharmacyReadiness(ctx.db, organizationId, now),
     ctx.db.branchRegulatoryProfile.findFirst({
       where: {
         organizationId,
-        effectiveFrom: { lte: now },
-        OR: [{ effectiveTo: null }, { effectiveTo: { gt: now } }],
+        ...effectiveRegulatoryProfileWhere(now, calendarDate),
       },
       select: { licenceValidTo: true },
       orderBy: { effectiveFrom: 'desc' },
@@ -282,6 +287,12 @@ export const pharmacyOnboardingRouter = router({
     .query(async ({ ctx, input }) => {
       const organizationId = ctx.entitlements.organizationId;
       const now = new Date();
+      const organization = await ctx.db.organization.findFirst({
+        where: { id: organizationId },
+        select: { timezone: true },
+      });
+      const timeZone = workspaceTimezone(organization?.timezone);
+      const calendarDate = workspaceDateUtc(timeZone, now);
       const branches = await ctx.db.pharmacyBranch.findMany({
         where: { organizationId, active: true },
         orderBy: { name: 'asc' },
@@ -339,9 +350,7 @@ export const pharmacyOnboardingRouter = router({
         jurisdictions,
         selectedBranchId: selected?.id ?? null,
         versions: versions.map(({ jurisdictionRuleSet, ...version }) => {
-          const effective =
-            version.effectiveFrom <= now &&
-            (version.effectiveTo === null || version.effectiveTo > now);
+          const effective = isRegulatoryProfileEffective(version, now, calendarDate);
           const status = evaluateBranchRegulatoryStatus(
             {
               ...version,
@@ -353,7 +362,8 @@ export const pharmacyOnboardingRouter = router({
               ruleSet: jurisdictionRuleSet,
             },
             effective,
-            now
+            now,
+            timeZone
           );
           return {
             ...version,

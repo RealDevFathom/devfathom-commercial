@@ -4,10 +4,8 @@ import { DEFAULT_RECEIPT_LAYOUT } from '@/lib/receipts/configuration';
 
 import { buildCounterBrowserReceipt, printCounterBrowserReceipt } from './counter-browser-print';
 import type { CounterReceipt, CounterReceiptLocale } from './counter-receipt';
-import {
-  buildPharmacyReceiptPrintDocument,
-  readPharmacyReceiptTaxIdentity,
-} from './receipt-print';
+import { buildPharmacyReceiptPrintDocument, readPharmacyReceiptTaxIdentity } from './receipt-print';
+import { effectiveRegulatoryProfileWhere } from './regulatory';
 
 const receipt: CounterReceipt = {
   saleId: 'sale-1',
@@ -60,12 +58,33 @@ describe('isolated Pharmacy browser receipt', () => {
       where: {
         organizationId: 'org-1',
         branchId: 'branch-1',
-        effectiveFrom: { lte: at },
-        OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
+        ...effectiveRegulatoryProfileWhere(at, new Date('2026-09-05T00:00:00.000Z')),
       },
       orderBy: [{ effectiveFrom: 'desc' }, { version: 'desc' }],
       select: { ntn: true, strn: true },
     });
+  });
+
+  it('resolves the profile on the workspace calendar day the sale gate used', async () => {
+    // 01:00 PKT on 2026-09-05 is still 2026-09-04 in UTC.
+    const at = new Date('2026-09-04T20:00:00Z');
+    const findFirst = vi.fn(async () => ({ ntn: 'NTN-NEW', strn: 'STRN-NEW' }));
+
+    await readPharmacyReceiptTaxIdentity(
+      { branchRegulatoryProfile: { findFirst } } as never,
+      { organizationId: 'org-1', branchId: 'branch-1' },
+      at,
+      'Asia/Karachi'
+    );
+    expect(findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          organizationId: 'org-1',
+          branchId: 'branch-1',
+          ...effectiveRegulatoryProfileWhere(at, new Date('2026-09-05T00:00:00.000Z')),
+        },
+      })
+    );
   });
 
   it('returns null identifiers when no profile was in force at completion', async () => {
@@ -104,11 +123,11 @@ describe('isolated Pharmacy browser receipt', () => {
 
   it('matches the settled-sale tax identity in raw thermal output', () => {
     const taxIdentity = { ntn: 'NTN-HISTORICAL', strn: 'STRN-HISTORICAL' };
-    const thermal = buildPharmacyReceiptPrintDocument(
-      { ...receipt, taxIdentity },
-      'en',
-      { layout: DEFAULT_RECEIPT_LAYOUT, taxIdentity, reprint: false }
-    );
+    const thermal = buildPharmacyReceiptPrintDocument({ ...receipt, taxIdentity }, 'en', {
+      layout: DEFAULT_RECEIPT_LAYOUT,
+      taxIdentity,
+      reprint: false,
+    });
     expect(thermal.receiptSnapshot?.facts.taxLines).toEqual(
       expect.arrayContaining([
         'NTN: NTN-HISTORICAL',

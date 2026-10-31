@@ -22,7 +22,7 @@ import type { DemoSeatIdentity } from '@/lib/platform/command-types';
 import { demoApproverEmail } from '@/lib/demo/approval';
 import { demoSharedDeploymentOrigin } from '@/lib/platform/activation-gates';
 import { emailSchema } from '@/lib/email-address';
-import { ianaTimezone } from '@/lib/timezone';
+import { ianaTimezone, workspaceDateUtc } from '@/lib/timezone';
 import { isReservedHostLabel, RESERVED_HOST_LABELS } from '@/lib/tenancy/host-routing';
 import { OrganizationVertical } from '@/generated/prisma/enums';
 import {
@@ -40,6 +40,7 @@ import { moduleDefinitionForKey, verticalForModuleKey } from '@/lib/module-catal
 import {
   assertStoredBranchMayOperate,
   BranchOperationDeniedError,
+  effectiveRegulatoryProfileWhere,
 } from '@/lib/pharmacy/regulatory';
 import { PAKISTAN_PROVINCES } from '@/lib/pharmacy/regulatory-profile-form';
 import { isDedicatedProvisioningConfigured } from '@/lib/platform/provisioning-config';
@@ -468,11 +469,11 @@ async function assertActivationReady(db: PrismaClient, organizationId: string) {
 
   if (organization.vertical === 'PHARMACY') {
     const now = new Date();
+    const calendarDate = workspaceDateUtc(organization.timezone, now);
     const profile = await db.branchRegulatoryProfile.findFirst({
       where: {
         organizationId,
-        effectiveFrom: { lte: now },
-        OR: [{ effectiveTo: null }, { effectiveTo: { gt: now } }],
+        ...effectiveRegulatoryProfileWhere(now, calendarDate),
       },
       select: { branchId: true },
       orderBy: { effectiveFrom: 'desc' },

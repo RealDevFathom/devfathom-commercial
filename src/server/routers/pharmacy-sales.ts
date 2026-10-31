@@ -300,14 +300,17 @@ async function loadCounterReceipt(ctx: TRPCContext, scope: LedgerScope, saleId: 
     }),
     ctx.db.organization.findUnique({
       where: { id: scope.organizationId },
-      select: { currency: true },
+      select: { currency: true, timezone: true },
     }),
   ]);
   if (!branch) throw new PharmacyCounterError('CROSS_BRANCH_REFERENCE');
-  return readCounterReceipt(ctx.db, scope, saleId, {
+  const receipt = await readCounterReceipt(ctx.db, scope, saleId, {
     name: branch.name,
     currency: organization?.currency ?? 'PKR',
   });
+  // Regulatory identity on the paper is resolved in the workspace zone, the
+  // same calendar day the sale/dispense gate admitted the profile on.
+  return { receipt, timeZone: workspaceTimezone(organization?.timezone) };
 }
 
 // Canonical names (#163) beside the legacy dotted ones, which still cover un-migrated grants.
@@ -1734,11 +1737,11 @@ export const pharmacySalesRouter = router({
     .query(async ({ ctx, input }) => {
       const scope = await requireCounterReceiptAccess(ctx, input.branchId);
       try {
-        const receipt = await loadCounterReceipt(ctx, scope, input.saleId);
+        const { receipt, timeZone } = await loadCounterReceipt(ctx, scope, input.saleId);
         const [dispensingLabelSources, taxIdentity] = await Promise.all([
-          readDispensingLabelSources(ctx.db, scope, receipt),
+          readDispensingLabelSources(ctx.db, scope, receipt, timeZone),
           receipt.completedAt
-            ? readPharmacyReceiptTaxIdentity(ctx.db, scope, new Date(receipt.completedAt))
+            ? readPharmacyReceiptTaxIdentity(ctx.db, scope, new Date(receipt.completedAt), timeZone)
             : Promise.resolve({ ntn: null, strn: null }),
         ]);
         // F8: sourced Rx label payloads come only from this authorized receipt read.
@@ -1773,13 +1776,13 @@ export const pharmacySalesRouter = router({
     .query(async ({ ctx, input }) => {
       const scope = await requireCounterReceiptAccess(ctx, input.branchId);
       try {
-        const receipt = await loadCounterReceipt(ctx, scope, input.saleId);
+        const { receipt, timeZone } = await loadCounterReceipt(ctx, scope, input.saleId);
         if (receipt.receiptNumber === null || !receipt.completedAt) {
           throw new PharmacyReceiptPrintError('RECEIPT_NOT_ISSUED');
         }
         const [format, taxIdentity] = await Promise.all([
           readPharmacyReceiptFormat(ctx.db, scope),
-          readPharmacyReceiptTaxIdentity(ctx.db, scope, new Date(receipt.completedAt)),
+          readPharmacyReceiptTaxIdentity(ctx.db, scope, new Date(receipt.completedAt), timeZone),
         ]);
         return {
           status: 'READY' as const,

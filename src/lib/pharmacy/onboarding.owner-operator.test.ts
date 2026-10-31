@@ -2,9 +2,9 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { PrismaClient } from '@/generated/prisma/client';
 
-vi.mock('./regulatory', () => ({
+vi.mock('./regulatory', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./regulatory')>()),
   assertStoredBranchMayOperate: vi.fn(async () => undefined),
-  BranchOperationDeniedError: class extends Error {},
 }));
 
 import { evaluatePharmacyReadiness, PHARMACY_ONBOARDING_STEPS } from './onboarding';
@@ -27,7 +27,11 @@ function readinessDb(roles: Record<string, string[]>) {
   );
   const db = {
     organization: {
-      findUnique: vi.fn(async () => ({ packageId: 'pharmacy', package: { vertical: 'PHARMACY' } })),
+      findUnique: vi.fn(async () => ({
+        packageId: 'pharmacy',
+        package: { vertical: 'PHARMACY' },
+        timezone: 'Asia/Karachi',
+      })),
     },
     pharmacyOnboardingGateState: {
       findMany: vi.fn(async () =>

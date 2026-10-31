@@ -108,6 +108,46 @@ describe('assertBranchMayOperate', () => {
     expectDenied(state, 'LICENCE_INVALID');
   });
 
+  it('starts date-only validity at midnight in the workspace while preserving expiry instants', () => {
+    const state = validState();
+    state.licenceValidFrom = new Date('2026-10-21T00:00:00.000Z');
+    state.qualifiedPersonValidFrom = new Date('2026-10-21T00:00:00.000Z');
+    state.licenceValidTo = new Date('2026-10-22T00:00:00.000Z');
+
+    expect(() =>
+      assertBranchMayOperate(
+        state,
+        {
+          name: 'DISPENSE',
+          at: new Date('2026-10-20T19:00:00.000Z'),
+          schedule: 'RX',
+          requiresQualifiedPerson: true,
+        },
+        'Asia/Karachi'
+      )
+    ).not.toThrow();
+    expect(() =>
+      assertBranchMayOperate(
+        state,
+        {
+          name: 'DISPENSE',
+          at: new Date('2026-10-20T23:59:59.999Z'),
+          schedule: 'RX',
+          requiresQualifiedPerson: true,
+        },
+        'Asia/Karachi'
+      )
+    ).not.toThrow();
+
+    expect(() =>
+      assertBranchMayOperate(
+        state,
+        { name: 'DISPENSE', at: state.licenceValidTo, requiresQualifiedPerson: false },
+        'Asia/Karachi'
+      )
+    ).toThrowError(new BranchOperationDeniedError('LICENCE_INVALID'));
+  });
+
   it('fails closed and audits missing qualified-person coverage', () => {
     const state = validState();
     state.qualifiedPersonCoverageRosterRef = '';

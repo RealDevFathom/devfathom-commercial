@@ -241,7 +241,8 @@ describe('counter receipt authorization', () => {
     expect(readPharmacyReceiptTaxIdentity).toHaveBeenCalledWith(
       f.db,
       expect.objectContaining({ organizationId: 'org-a', branchId: 'branch-a' }),
-      new Date('2026-10-01T00:00:00.000Z')
+      new Date('2026-10-01T00:00:00.000Z'),
+      'UTC'
     );
   });
 
@@ -261,7 +262,8 @@ describe('counter receipt authorization', () => {
     expect(readPharmacyReceiptTaxIdentity).toHaveBeenCalledWith(
       f.db,
       { organizationId: 'org-a', branchId: 'branch-a', actorId: 'user-a' },
-      new Date('2026-10-01T00:00:00.000Z')
+      new Date('2026-10-01T00:00:00.000Z'),
+      'UTC'
     );
   });
 

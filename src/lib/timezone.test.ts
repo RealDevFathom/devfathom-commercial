@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { ianaTimezone, isIanaTimezone, workspaceTimezone, workspaceToday } from './timezone';
+import {
+  ianaTimezone,
+  isIanaTimezone,
+  workspaceDateUtc,
+  workspaceTimezone,
+  workspaceToday,
+} from './timezone';
 
 // 22:30 UTC on 21 October: already the 22nd in Asia/Tokyo, still the 21st in UTC.
 const instant = new Date('2026-10-21T22:30:00.000Z');
@@ -35,5 +41,11 @@ describe('workspace time zones', () => {
     expect(workspaceToday('America/Chicago', instant)).toBe('2026-10-21');
     expect(workspaceToday('PKT', instant)).toBe('2026-10-21');
     expect(workspaceToday(undefined, instant)).toBe('2026-10-21');
+  });
+
+  it('encodes the workspace day as the UTC-midnight date-only representation', () => {
+    expect(workspaceDateUtc('Asia/Karachi', new Date('2026-10-20T19:00:00.000Z'))).toEqual(
+      new Date('2026-10-21T00:00:00.000Z')
+    );
   });
 });
