@@ -629,13 +629,13 @@ describe('counter receipt authorization', () => {
     expect(applyPharmacyTender).not.toHaveBeenCalled();
   });
 
-  it('keeps finance-only Khata account reads off the branch-assignment guard', async () => {
+  it('denies finance-only Khata account reads without a branch assignment', async () => {
     const f = fixture([{ capability: 'reports:financial', effect: 'ALLOW' }]);
-    f.db.$transaction.mockRejectedValue(new Error('khata-read-reached'));
     await expect(
       f.caller().khataAccounts({ branchId: 'branch-a', saleId: 'sale-a' })
-    ).rejects.toThrow('khata-read-reached');
-    expect(f.db.pharmacyBranchAssignment.findMany).not.toHaveBeenCalled();
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+    expect(f.db.pharmacyBranchAssignment.findMany).toHaveBeenCalled();
+    expect(f.db.$transaction).not.toHaveBeenCalled();
     expect(applyPharmacyTender).not.toHaveBeenCalled();
   });
 
