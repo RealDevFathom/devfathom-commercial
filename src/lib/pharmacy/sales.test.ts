@@ -9,6 +9,8 @@ import {
   priceFromLot,
   recoverDemandWithAlternate,
   recoverRestockInterest,
+  restockRecoveryReport,
+  restockRecoveryDashboard,
   returnSaleLine,
   validateDiscount,
 } from './sales';
@@ -201,6 +203,76 @@ describe('POS-03 lot-derived pack/strip/unit pricing', () => {
 });
 
 describe('DEM-03 restock interest', () => {
+  it.each([true, false])(
+    'reads consent after acquiring the consent-writer lock (granted: %s)',
+    async (granted) => {
+      const events: string[] = [];
+      const interest = {
+        id: 'interest-a',
+        patientId: 'patient-a',
+        channel: 'WHATSAPP',
+        patient: { phone: '923001234567' },
+        reserveOnArrival: false,
+      };
+      const db = {
+        $queryRaw: vi.fn().mockImplementation(async (query: { sql: string; values: unknown[] }) => {
+          if (query.sql.includes('pharmacy_patients')) {
+            expect(query.values).toEqual([scope.organizationId, interest.patientId]);
+            events.push('patient-lock');
+            return [{ id: interest.patientId }];
+          }
+          events.push('interest-lock');
+          return [{ id: interest.id }];
+        }),
+        pharmacyInventoryLot: {
+          findFirst: vi.fn().mockResolvedValue({
+            id: 'lot-a',
+            receivedAt: new Date('2026-10-21'),
+            batch: { medicineId: 'med-a', state: 'ACTIVE', expiresAt: new Date('2035-01-01') },
+            balances: [{ stockLocationId: 'shelf-a' }],
+          }),
+        },
+        pharmacyRestockInterest: {
+          findMany: vi.fn().mockResolvedValue([interest]),
+          findFirst: vi.fn().mockResolvedValue(interest),
+        },
+        patientConsent: {
+          findFirst: vi.fn().mockImplementation(async () => {
+            // A revocation committed while we waited must be visible here.
+            expect(events).toEqual(['interest-lock', 'patient-lock']);
+            events.push('consent-read');
+            return { id: 'latest-consent', granted, revokedAt: granted ? null : new Date() };
+          }),
+        },
+        pharmacyRestockNotification: {
+          create: vi.fn().mockImplementation(async () => {
+            events.push('notification-insert');
+            return { id: 'notification-a' };
+          }),
+        },
+        outboundEffect: { create: vi.fn().mockResolvedValue({ id: 'effect-a' }) },
+      };
+
+      const result = await captureSafeRestockArrival(db as never, scope, {
+        inventoryLotId: 'lot-a',
+        at: new Date('2026-10-21'),
+        skipUnavailable: true,
+      });
+      expect(events).toEqual([
+        'interest-lock', 'patient-lock', 'consent-read',
+        ...(granted ? ['notification-insert'] : []),
+      ]);
+      expect(result).toHaveLength(granted ? 1 : 0);
+      expect(db.pharmacyRestockNotification.create).toHaveBeenCalledTimes(granted ? 1 : 0);
+      expect(db.outboundEffect.create).toHaveBeenCalledTimes(granted ? 1 : 0);
+      if (granted) {
+        expect(db.pharmacyRestockNotification.create).toHaveBeenCalledWith(
+          expect.objectContaining({ data: expect.objectContaining({ consentId: 'latest-consent' }) })
+        );
+      }
+    }
+  );
+
   it('refuses a contact when current reminders consent is not granted', async () => {
     const db = {
       unfulfilledDemandEvent: { findFirst: async () => ({ id: 'demand-a' }) },
@@ -261,11 +333,13 @@ describe('DEM-03 restock interest', () => {
   it('attributes the completed receipt to the originating event and interest', async () => {
     const writes: Array<Record<string, unknown>> = [];
     const db = {
+      $queryRaw: vi.fn().mockResolvedValue([]),
       pharmacyRestockInterest: {
         findFirst: async () => ({
           id: 'interest-a',
           demandEventId: 'demand-a',
           demandEvent: { requestedMedicineId: 'med-a' },
+          notifications: [{ sentAt: new Date() }],
         }),
         update: async (args: { data: Record<string, unknown> }) => {
           writes.push(args.data);
@@ -277,10 +351,11 @@ describe('DEM-03 restock interest', () => {
           id: 'line-a',
           saleId: 'sale-a',
           medicineId: 'med-a',
-          sale: { status: 'COMPLETED', receiptNumber: 42 },
+          sale: { status: 'COMPLETED', receiptNumber: 42, completedAt: new Date() },
         }),
       },
       unfulfilledDemandEvent: {
+        count: vi.fn().mockResolvedValue(0),
         update: async (args: { data: Record<string, unknown> }) => {
           writes.push(args.data);
           return args;
@@ -303,6 +378,36 @@ describe('DEM-03 restock interest', () => {
       ])
     );
     expect(result).toMatchObject({ recoveredSale: { receiptNumber: 42 } });
+  });
+
+  it('refuses recovery when the successful delivery timestamp is in the future', async () => {
+    const write = vi.fn();
+    const db = {
+      $queryRaw: vi.fn().mockResolvedValue([]),
+      pharmacyRestockInterest: {
+        findFirst: async () => ({
+          id: 'interest-a',
+          demandEventId: 'demand-a',
+          demandEvent: { requestedMedicineId: 'med-a' },
+          notifications: [{ sentAt: new Date('2099-01-01') }],
+        }),
+      },
+      pharmacySaleLine: {
+        findFirst: async () => ({
+          id: 'line-a',
+          medicineId: 'med-a',
+          sale: { status: 'COMPLETED', receiptNumber: 42, completedAt: new Date() },
+        }),
+      },
+      unfulfilledDemandEvent: { count: vi.fn().mockResolvedValue(0), update: write },
+    };
+    await expect(
+      recoverRestockInterest(db as never, scope, {
+        interestId: 'interest-a',
+        saleLineId: 'line-a',
+      })
+    ).rejects.toThrow('INVALID_STATE');
+    expect(write).not.toHaveBeenCalled();
   });
 });
 
@@ -429,7 +534,9 @@ describe('POS-10 recovered alternate', () => {
   it('closes an explicit event only when the alternate belongs to the same sale', async () => {
     let update: unknown;
     const db = {
+      $queryRaw: vi.fn().mockResolvedValue([]),
       unfulfilledDemandEvent: {
+        count: vi.fn().mockResolvedValue(0),
         findFirst: async () => ({ id: 'demand-a', saleId: 'sale-a' }),
         update: async (args: unknown) => {
           update = args;
@@ -440,5 +547,202 @@ describe('POS-10 recovered alternate', () => {
     };
     await recoverDemandWithAlternate(db as never, scope, 'demand-a', 'line-a');
     expect(update).toMatchObject({ data: { status: 'RECOVERED', recoveredSaleLineId: 'line-a' } });
+  });
+});
+
+describe('back-in-stock receipt attribution', () => {
+  const notifiedAt = new Date('2026-09-01T12:00:00Z');
+  function recoveryDb(completedAt: Date, medicineId = 'med-a', patientId?: string) {
+    return {
+      $queryRaw: vi.fn().mockResolvedValue([]),
+      pharmacyRestockInterest: {
+        findFirst: vi
+          .fn()
+          .mockResolvedValue({
+            id: 'interest-a',
+            patientId: 'patient-a',
+            demandEventId: 'demand-a',
+            demandEvent: { requestedMedicineId: 'med-a' },
+            notifications: [{ sentAt: notifiedAt }],
+          }),
+        update: vi.fn().mockResolvedValue({ status: 'RECOVERED' }),
+      },
+      pharmacySaleLine: {
+        findFirst: vi
+          .fn()
+          .mockResolvedValue({
+            id: 'line-a',
+            saleId: 'sale-a',
+            medicineId,
+            sale: {
+              status: 'COMPLETED',
+              receiptNumber: 1,
+              completedAt,
+              customer: patientId ? { patientId } : null,
+            },
+          }),
+      },
+      unfulfilledDemandEvent: { count: vi.fn().mockResolvedValue(0), update: vi.fn().mockResolvedValue({}) },
+      pharmacyRestockReservation: { updateMany: vi.fn().mockResolvedValue({ count: 0 }) },
+    };
+  }
+
+  it.each(['2026-09-01T11:59:59Z', '2026-09-08T12:00:01Z'])(
+    'rejects a receipt outside the delivery window (%s)',
+    async (soldAt) => {
+      const db = recoveryDb(new Date(soldAt));
+      await expect(
+        recoverRestockInterest(db as never, scope, {
+          interestId: 'interest-a',
+          saleLineId: 'line-a',
+        })
+      ).rejects.toThrow('INVALID_STATE');
+      expect(db.unfulfilledDemandEvent.update).not.toHaveBeenCalled();
+    }
+  );
+
+  it('accepts an in-window receipt even when attributed weeks later', async () => {
+    const db = recoveryDb(new Date('2026-09-03T12:00:00Z'));
+    await expect(
+      recoverRestockInterest(db as never, scope, { interestId: 'interest-a', saleLineId: 'line-a' })
+    ).resolves.toMatchObject({ status: 'RECOVERED' });
+  });
+
+  it('accepts a different SKU bought by the same identified customer', async () => {
+    const db = recoveryDb(new Date('2026-09-03T12:00:00Z'), 'alternate-med', 'patient-a');
+    await expect(
+      recoverRestockInterest(db as never, scope, { interestId: 'interest-a', saleLineId: 'line-a' })
+    ).resolves.toMatchObject({ status: 'RECOVERED' });
+  });
+
+  it('retains same-SKU manual recovery without a sent notice', async () => {
+    const db = recoveryDb(new Date('2026-09-03T12:00:00Z'));
+    const interest = await db.pharmacyRestockInterest.findFirst();
+    db.pharmacyRestockInterest.findFirst.mockResolvedValue({ ...interest, notifications: [] });
+    await expect(
+      recoverRestockInterest(db as never, scope, {
+        interestId: 'interest-a', saleLineId: 'line-a',
+      })
+    ).resolves.toMatchObject({ status: 'RECOVERED' });
+    expect(db.pharmacyRestockReservation.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: 'CONSUMED' }) })
+    );
+  });
+
+  it('refuses unrelated SKU recovery without a sent notice', async () => {
+    const db = recoveryDb(new Date('2026-09-03T12:00:00Z'), 'alternate-med', 'patient-a');
+    const interest = await db.pharmacyRestockInterest.findFirst();
+    db.pharmacyRestockInterest.findFirst.mockResolvedValue({ ...interest, notifications: [] });
+    await expect(recoverRestockInterest(db as never, scope, {
+      interestId: 'interest-a', saleLineId: 'line-a',
+    })).rejects.toThrow('INVALID_STATE');
+  });
+
+  it('locks the sale line and rejects revenue already credited to another request', async () => {
+    const db = recoveryDb(new Date('2026-09-03T12:00:00Z'));
+    db.unfulfilledDemandEvent.count.mockResolvedValue(1);
+    await expect(recoverRestockInterest(db as never, scope, {
+      interestId: 'interest-a', saleLineId: 'line-a',
+    })).rejects.toThrow('INVALID_STATE');
+    expect(db.$queryRaw).toHaveBeenCalled();
+    expect(db.unfulfilledDemandEvent.update).not.toHaveBeenCalled();
+    expect(db.pharmacyRestockInterest.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses a different SKU bought by an unrelated customer', async () => {
+    const db = recoveryDb(new Date('2026-09-03T12:00:00Z'), 'alternate-med', 'unrelated-patient');
+    await expect(
+      recoverRestockInterest(db as never, scope, { interestId: 'interest-a', saleLineId: 'line-a' })
+    ).rejects.toThrow('INVALID_STATE');
+  });
+});
+
+it('reports actual linked line revenue after discount, with catalog salts and the arrival distributor', async () => {
+  const db = {
+    pharmacyRestockInterest: {
+      findMany: vi.fn().mockResolvedValue([
+        {
+          id: 'interest-a',
+          status: 'RECOVERED',
+          recoveredSaleLineId: 'line-a',
+          demandEvent: {
+            estimatedValueMinor: 10000,
+            requestedText: 'Brand label',
+            medicine: {
+              strengths: [{ ingredient: { name: 'Salt A' } }, { ingredient: { name: 'Salt B' } }],
+            },
+          },
+          notifications: [{ inventoryLotId: 'lot-a' }],
+        },
+        {
+          id: 'interest-b',
+          status: 'OPEN',
+          recoveredSaleLineId: null,
+          demandEvent: {
+            estimatedValueMinor: 1000,
+            medicine: { strengths: [{ ingredient: { name: 'Salt B' } }] },
+          },
+          notifications: [{ inventoryLotId: 'lot-b' }],
+        },
+      ]),
+    },
+    pharmacySaleLine: {
+      findMany: vi
+        .fn()
+        .mockResolvedValue([
+          { id: 'line-a', quantity: 2, unitPriceMinor: 1500, discountMinor: 500, canonicalUnits: 20, returnLines: [], unidentifiedReturnHolds: [] },
+        ]),
+    },
+    pharmacyInventoryLot: {
+      findMany: vi.fn().mockResolvedValue([
+        { id: 'lot-a', supplierName: 'Distributor A' },
+        { id: 'lot-b', supplierName: 'Distributor B' },
+      ]),
+    },
+  };
+  const report = await restockRecoveryDashboard(db as never, scope);
+  expect(report).toMatchObject({
+    estimatedLostMinor: 11000,
+    recoveredMinor: 2500,
+    netMinor: 8500,
+    rows: [
+      { salt: 'Salt A + Salt B', distributor: 'Distributor A', recoveredMinor: 2500 },
+      { salt: 'Salt B', distributor: 'Distributor B', recoveredMinor: 0 },
+    ],
+  });
+  expect(db.pharmacySaleLine.findMany).toHaveBeenCalledWith(
+    expect.objectContaining({
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        id: { in: ['line-a'] },
+      },
+    })
+  );
+});
+
+it('preserves the legacy array report contract', async () => {
+  const interests = [{ id: 'interest-a', status: 'OPEN' }];
+  const db = { pharmacyRestockInterest: { findMany: vi.fn().mockResolvedValue(interests) } };
+  await expect(restockRecoveryReport(db as never, scope)).resolves.toEqual(interests);
+});
+
+it('deducts identified and unidentified returns once and caps historical duplicate credits', async () => {
+  const interest = {
+    status: 'RECOVERED', recoveredSaleLineId: 'line-a',
+    demandEvent: { estimatedValueMinor: 3000, medicine: null }, notifications: [],
+  };
+  const db = {
+    pharmacyRestockInterest: { findMany: vi.fn().mockResolvedValue([
+      { ...interest, id: 'a' }, { ...interest, id: 'b' },
+    ]) },
+    pharmacySaleLine: { findMany: vi.fn().mockResolvedValue([{
+      id: 'line-a', quantity: 2, unitPriceMinor: 1500, discountMinor: 500, canonicalUnits: 20,
+      returnLines: [{ canonicalUnits: 4 }], unidentifiedReturnHolds: [{ canonicalUnits: 6 }],
+    }]) },
+    pharmacyInventoryLot: { findMany: vi.fn().mockResolvedValue([]) },
+  };
+  await expect(restockRecoveryDashboard(db as never, scope)).resolves.toMatchObject({
+    recoveredMinor: 1250, estimatedLostMinor: 6000, netMinor: 4750,
   });
 });

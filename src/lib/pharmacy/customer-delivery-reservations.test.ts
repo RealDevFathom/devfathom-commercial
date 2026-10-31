@@ -21,6 +21,7 @@ it('ordinary restock opt-out cannot release order-bound physical custody', async
 it('ordinary restock recovery cannot consume order reservations against another receipt', async () => {
   const consume = vi.fn();
   const db = {
+    $queryRaw: vi.fn().mockResolvedValue([]),
     pharmacyRestockInterest: {
       findFirst: vi.fn().mockResolvedValue({
         id: 'interest-a',
@@ -37,7 +38,7 @@ it('ordinary restock recovery cannot consume order reservations against another 
         sale: { status: 'COMPLETED', receiptNumber: 1 },
       }),
     },
-    unfulfilledDemandEvent: { update: vi.fn() },
+    unfulfilledDemandEvent: { count: vi.fn().mockResolvedValue(0), update: vi.fn() },
     pharmacyRestockReservation: { updateMany: consume },
   };
   await expect(

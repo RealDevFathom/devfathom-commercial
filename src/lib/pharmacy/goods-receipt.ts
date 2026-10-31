@@ -50,6 +50,7 @@ import {
   reverseMovements,
 } from './stock-ledger';
 import type { LedgerScope } from './stock-ledger';
+import { captureSafeRestockArrival } from './sales';
 
 export type ReceivingScope = LedgerScope;
 
@@ -172,6 +173,11 @@ export async function postGoodsReceipt(
   if (receipt.branchId !== scope.branchId) {
     throw new PharmacyReceivingError('CROSS_BRANCH_REFERENCE');
   }
+  // Restock RLS requires a branch even when the caller only bound the tenant.
+  await db.$queryRawUnsafe(
+    "SELECT set_config('app.current_branch_id', $1, true)",
+    scope.branchId
+  );
   assertGoodsReceiptTransition(receipt.status, 'POSTED');
   if (receipt.lines.length === 0) throw new PharmacyReceivingError('INVALID_QUANTITY');
 
@@ -357,6 +363,15 @@ export async function postGoodsReceipt(
     }
   }
 
+  for (const line of lines) {
+    if (line.acceptedMovementId) {
+      await captureSafeRestockArrival(db, scope, {
+        inventoryLotId: line.inventoryLotId,
+        at: input.at,
+        skipUnavailable: true,
+      });
+    }
+  }
   return { goodsReceiptId: receipt.id, postedAt: input.at, lines, exceptions };
 }
 

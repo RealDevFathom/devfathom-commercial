@@ -1053,6 +1053,9 @@ enum PharmacyRestockReservationStatus {
 
 enum PharmacyRestockNotificationStatus {
   CAPTURED
+  PROCESSING
+  SENT
+  FAILED
   CANCELLED
 }
 
@@ -1707,6 +1710,9 @@ model PharmacyRestockNotification {
   inventoryLotId String
   idempotencyKey String
   queuedAt       DateTime                          @default(now())
+  sentAt         DateTime?
+  providerMessageId String?
+  lastError      String?
   cancelledAt    DateTime?
   interest       PharmacyRestockInterest           @relation(fields: [organizationId, branchId, interestId], references: [organizationId, branchId, id], onDelete: Restrict)
 

@@ -1,3 +1,7 @@
+import {
+  reviewRestockNotifications,
+  reconcileRestockNotification,
+} from '@/lib/pharmacy/back-in-stock-worker';
 import { ControlledRestorationDenied } from '@/lib/pharmacy/controlled-restoration-authorization';
 import { assertRxSaleAllowed, PharmacyRxSaleDenied } from '@/lib/pharmacy/rx-sale-gate';
 import {
@@ -89,6 +93,7 @@ import {
   recoverDemandWithAlternate,
   recoverRestockInterest,
   restockRecoveryReport,
+  restockRecoveryDashboard,
   returnSaleLine,
   readReturnHistory,
 } from '@/lib/pharmacy/sales';
@@ -1601,6 +1606,45 @@ export const pharmacySalesRouter = router({
     .query(async ({ ctx, input }) =>
       restockRecoveryReport(ctx.db, await scopeFor(ctx, input.branchId), input.campaignKey)
     ),
+
+  restockRecoveryDashboard: protectedProcedure
+    .input(z.object({ branchId, campaignKey: z.string().trim().min(1).max(160).optional() }).strict())
+    .query(async ({ ctx, input }) => {
+      const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+      return ctx.db.$transaction(async (tx) => {
+        const db = txDb(tx);
+        await bindKhataBranch(db, scope);
+        return restockRecoveryDashboard(db, scope, input.campaignKey);
+      });
+    }),
+  restockNotificationReview: protectedProcedure
+    .input(z.object({ branchId, reference: z.string().regex(/^R-[0-9A-Z]{7}$/).optional() }).strict())
+    .query(async ({ ctx, input }) => {
+      const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+      return ctx.db.$transaction(async (tx) => {
+        const db = txDb(tx);
+        await bindKhataBranch(db, scope);
+        return reviewRestockNotifications(db, scope, input.reference);
+      });
+    }),
+  reconcileRestockNotification: protectedProcedure
+    .input(
+      z.object({
+        branchId,
+        notificationId: z.string().min(1),
+        outcome: z.enum(['SENT', 'FAILED']),
+        sentAt: z.coerce.date().optional(),
+        providerMessageId: z.string().trim().min(1).max(200).optional(),
+      }).strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+      return ctx.db.$transaction(async (tx) => {
+        const db = txDb(tx);
+        await bindKhataBranch(db, scope);
+        return reconcileRestockNotification(db, scope, input);
+      });
+    }),
 
   // ── PH-POS counter reads (POS-01, POS-02, POS-08) ─────────────────────────
 
