@@ -88,6 +88,8 @@ function makeDb(status = 'DRAFT') {
     },
     restaurantBranchAssignment: { findMany: vi.fn().mockResolvedValue([]) },
     restaurantStockItem: { findFirst: vi.fn().mockResolvedValue({ id: 'stock_rice' }) },
+    restaurantRecipe: { findFirst: vi.fn().mockResolvedValue({ id: 'recipe_1' }) },
+    restaurantProduct: { findFirst: vi.fn().mockResolvedValue({ id: 'product_1' }) },
     restaurantCateringOrder: {
       findFirst: vi.fn().mockResolvedValue(order),
       findMany: vi.fn().mockResolvedValue([]),
@@ -313,16 +315,55 @@ describe('restaurant catering lifecycle', () => {
 
     for (const recipeId of [undefined, null]) {
       await expect(
-        caller().addLine({ ...addInput, recipeId } as Parameters<
+        caller().addLine({ ...addInput, recipeId } as unknown as Parameters<
           ReturnType<typeof caller>['addLine']
         >[0])
       ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
       await expect(
-        caller().updateLine({ ...updateInput, recipeId } as Parameters<
+        caller().updateLine({ ...updateInput, recipeId } as unknown as Parameters<
           ReturnType<typeof caller>['updateLine']
         >[0])
       ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     }
+    expect(db.restaurantCateringOrderLine.create).not.toHaveBeenCalled();
+    expect(db.restaurantCateringOrderLine.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('rejects recipes and products outside the active organization', async () => {
+    db.restaurantRecipe.findFirst.mockResolvedValue(null);
+    await expect(
+      caller().addLine({
+        orderId: 'order_1',
+        recipeId: 'foreign_recipe',
+        description: 'Foreign recipe',
+        portions: '1',
+        unitPrice: '1.00',
+      })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    await expect(
+      caller().updateLine({ orderId: 'order_1', lineId: 'line_1', recipeId: 'foreign_recipe' })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(db.restaurantRecipe.findFirst).toHaveBeenCalledWith({
+      where: { id: 'foreign_recipe', organizationId: 'org_1' },
+      select: { id: true },
+    });
+
+    db.restaurantRecipe.findFirst.mockResolvedValue({ id: 'recipe_1' });
+    db.restaurantProduct.findFirst.mockResolvedValue(null);
+    await expect(
+      caller().addLine({
+        orderId: 'order_1',
+        recipeId: 'recipe_1',
+        productId: 'foreign_product',
+        description: 'Foreign product',
+        portions: '1',
+        unitPrice: '1.00',
+      })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(db.restaurantProduct.findFirst).toHaveBeenCalledWith({
+      where: { id: 'foreign_product', organizationId: 'org_1' },
+      select: { id: true },
+    });
     expect(db.restaurantCateringOrderLine.create).not.toHaveBeenCalled();
     expect(db.restaurantCateringOrderLine.updateMany).not.toHaveBeenCalled();
   });
