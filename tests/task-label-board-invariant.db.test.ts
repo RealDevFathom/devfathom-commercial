@@ -53,7 +53,7 @@ async function expectAttachBlocked(promise: Promise<unknown>) {
   throw new Error('Attachment did not reach the expected row-lock wait');
 }
 
-async function expectRejectedAttachAfterMove(move: string) {
+async function expectRejectedAttachAfterMove(move: string, afterAttachBlocked?: string) {
   await mover!.query('BEGIN');
   await attacher!.query('BEGIN');
   await mover!.query(move);
@@ -64,6 +64,7 @@ async function expectRejectedAttachAfterMove(move: string) {
   );
   await expectAttachBlocked(attach);
 
+  if (afterAttachBlocked) await mover!.query(afterAttachBlocked);
   await mover!.query('COMMIT');
   await expect(attach).rejects.toMatchObject({ code: '23514' });
   await attacher!.query('ROLLBACK');
@@ -95,7 +96,10 @@ describeIfDatabase('task-label board invariant concurrency', () => {
       CREATE TABLE "columns" (
         id text PRIMARY KEY, "boardId" text NOT NULL, "organizationId" text NOT NULL
       );
-      CREATE TABLE "tasks" (id text PRIMARY KEY, "columnId" text NOT NULL, "organizationId" text NOT NULL);
+      CREATE TABLE "tasks" (
+        id text PRIMARY KEY, "columnId" text NOT NULL, "organizationId" text NOT NULL,
+        "order" integer NOT NULL DEFAULT 0
+      );
       CREATE TABLE "labels" (id text PRIMARY KEY, "boardId" text NOT NULL, "organizationId" text NOT NULL);
       CREATE TABLE "task_labels" (
         id text PRIMARY KEY, "taskId" text NOT NULL, "labelId" text NOT NULL,
@@ -108,7 +112,7 @@ describeIfDatabase('task-label board invariant concurrency', () => {
         ('column_a', 'board_a', 'org'),
         ('column_b', 'board_b', 'org'),
         ('column_wrong_org', 'board_a', 'other_org');
-      INSERT INTO "tasks" VALUES ('task', 'column_a', 'org');
+      INSERT INTO "tasks" (id, "columnId", "organizationId") VALUES ('task', 'column_a', 'org');
       INSERT INTO "labels" VALUES ('label', 'board_a', 'org');
     `);
   });
@@ -182,6 +186,41 @@ describeIfDatabase('task-label board invariant concurrency', () => {
   it('serializes attachment with a task move and rejects the stale attachment', async () => {
     await expectRejectedAttachAfterMove(
       `UPDATE "tasks" SET "columnId" = 'column_b' WHERE id = 'task'`
+    );
+    await setup!.query(`UPDATE "tasks" SET "columnId" = 'column_a' WHERE id = 'task'`);
+  });
+
+  // moveTask/moveTasks lock columns FOR UPDATE and then update tasks. The guard
+  // must take the column before the task, otherwise an attachment holding the
+  // task lock and waiting for the column deadlocks with the reorder.
+  it('does not deadlock with a same-column reorder that already holds the column lock', async () => {
+    await mover!.query('BEGIN');
+    await attacher!.query('BEGIN');
+    await mover!.query(`SELECT id FROM "columns" WHERE id = 'column_a' FOR UPDATE`);
+
+    const attach = attacher!.query(
+      `INSERT INTO "task_labels" ("id", "organizationId", "taskId", "labelId")
+       VALUES ('reorder_tl', 'org', 'task', 'label')`
+    );
+    await expectAttachBlocked(attach);
+
+    // With task-before-column locking this update waits on the attachment and
+    // PostgreSQL aborts one side with a deadlock (40P01).
+    await mover!.query(`UPDATE "tasks" SET "order" = "order" + 1 WHERE id = 'task'`);
+    await mover!.query('COMMIT');
+    await attach;
+    await attacher!.query('COMMIT');
+
+    const linked = await setup!.query(`SELECT 1 FROM "task_labels" WHERE id = 'reorder_tl'`);
+    expect(linked.rowCount).toBe(1);
+    await setup!.query(`DELETE FROM "task_labels" WHERE id = 'reorder_tl'`);
+    await setup!.query(`UPDATE "tasks" SET "order" = 0 WHERE id = 'task'`);
+  });
+
+  it('rejects an attachment racing a column-locked cross-board move without deadlock', async () => {
+    await expectRejectedAttachAfterMove(
+      `SELECT id FROM "columns" WHERE id IN ('column_a', 'column_b') ORDER BY id FOR UPDATE`,
+      `UPDATE "tasks" SET "columnId" = 'column_b', "order" = 0 WHERE id = 'task'`
     );
     await setup!.query(`UPDATE "tasks" SET "columnId" = 'column_a' WHERE id = 'task'`);
   });

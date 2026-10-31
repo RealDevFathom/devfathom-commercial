@@ -31,11 +31,53 @@ CREATE OR REPLACE FUNCTION enforce_task_label_board()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
+DECLARE
+  v_column_id text;
+  v_attempt integer := 0;
 BEGIN
   -- Lock the rows which determine validity. FOR SHARE conflicts with the
-  -- FOR NO KEY UPDATE lock taken by board/column moves, so an attachment
-  -- cannot validate against a row version that a concurrent move is changing.
-  -- PostgreSQL then follows the updated row and rechecks this predicate.
+  -- FOR UPDATE / FOR NO KEY UPDATE locks taken by board, column, label and task
+  -- moves, so an attachment cannot validate against a row version that a
+  -- concurrent move is changing.
+  --
+  -- Lock order matches the application move/reorder protocol (moveTask and
+  -- bulk moves lock columns FOR UPDATE, then update tasks): column first, then
+  -- its board and the label, and the task last. Taking the task lock first
+  -- would deadlock with a concurrent reorder that already holds the column.
+  -- If the task changed column before its lock was acquired, roll back this
+  -- attempt's subtransaction (releasing its row locks) and retry against the
+  -- task's current column, so no stale lock is held out of order.
+  LOOP
+    v_attempt := v_attempt + 1;
+    BEGIN
+      SELECT t."columnId" INTO v_column_id FROM "tasks" t WHERE t.id = NEW."taskId";
+      IF FOUND THEN
+        PERFORM 1 FROM "columns" c WHERE c.id = v_column_id FOR SHARE;
+        PERFORM 1
+          FROM "columns" c
+          JOIN "boards" b ON b.id = c."boardId"
+         WHERE c.id = v_column_id
+           FOR SHARE OF b;
+        PERFORM 1 FROM "labels" l WHERE l.id = NEW."labelId" FOR SHARE;
+        PERFORM 1
+          FROM "tasks" t
+         WHERE t.id = NEW."taskId" AND t."columnId" = v_column_id
+           FOR SHARE;
+        IF NOT FOUND THEN
+          RAISE EXCEPTION 'task moved while attaching label' USING ERRCODE = 'DFT01';
+        END IF;
+      END IF;
+    EXCEPTION WHEN SQLSTATE 'DFT01' THEN
+      IF v_attempt >= 5 THEN
+        RAISE EXCEPTION 'task moved concurrently while attaching label; retry'
+          USING ERRCODE = '40001';
+      END IF;
+      CONTINUE;
+    END;
+    EXIT;
+  END LOOP;
+
+  -- Every row that determines validity is now locked at its latest version.
   IF NOT EXISTS (
     SELECT 1
     FROM "tasks" t
@@ -48,7 +90,6 @@ BEGIN
       AND t."organizationId" = c."organizationId"
       AND t."organizationId" = b."organizationId"
       AND t."organizationId" = NEW."organizationId"
-    FOR SHARE OF t, c, b, l
   ) THEN
     RAISE EXCEPTION 'task label must belong to the task board and organization'
       USING ERRCODE = '23514';
