@@ -345,6 +345,27 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
     await expect(caller()[procedure](input as never)).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
 
+  it('refuses quarantine for an inventory-only caller before any stock access', async () => {
+    grant([allow('pharmacy:inventory')]);
+
+    await expect(
+      caller().quarantinePart({
+        branchId: 'branch_a',
+        inventoryLotId: 'lot_1',
+        stockLocationId: 'location_1',
+        units: 10,
+        reason: 'Suspected contamination',
+        idempotencyKeyPrefix: 'quarantine-1',
+      })
+    ).rejects.toMatchObject(CAPABILITY_REFUSAL);
+
+    expect(db.$transaction).not.toHaveBeenCalled();
+    expect(db.pharmacyBranch.findMany).not.toHaveBeenCalled();
+    expect(db.pharmacyInventoryLot.findFirst).not.toHaveBeenCalled();
+    expect(db.pharmacyStockBalance.findFirst).not.toHaveBeenCalled();
+    expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
+  });
+
   it('runs quarantine through the real router with exact pharmacy:safety authority', async () => {
     // The explicit inventory DENY makes this a regression test for the procedure
     // declaration itself: changing quarantinePart back to inventoryControl must
