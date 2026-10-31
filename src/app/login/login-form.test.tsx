@@ -38,9 +38,16 @@ it('preserves native credential submit, forgot-password route, and keyboard reac
     '/forgot-password'
   );
   const reveal = screen.getByRole('button', { name: 'Show password' });
+  const password = screen.getByLabelText('Password');
   expect(reveal.tabIndex).toBe(0);
+  expect(reveal).toHaveClass('h-11', 'w-11', 'focus-visible:ring-2');
+  fireEvent.change(password, { target: { value: 'kept secret' } });
   fireEvent.click(reveal);
-  expect(screen.getByLabelText('Password')).toHaveAttribute('type', 'text');
+  expect(password).toHaveAttribute('type', 'text');
+  expect(password).toHaveValue('kept secret');
+  fireEvent.click(screen.getByRole('button', { name: 'Hide password' }));
+  expect(password).toHaveAttribute('type', 'password');
+  expect(password).toHaveValue('kept secret');
 });
 it('retains entered credentials and submits MFA/recovery codes through the existing provider', async () => {
   m.signIn

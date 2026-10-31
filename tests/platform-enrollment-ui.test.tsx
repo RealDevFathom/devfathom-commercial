@@ -9,6 +9,21 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
 });
+it('keeps the password reveal keyboard reachable and preserves its value when toggled', () => {
+  render(<PlatformLoginForm />);
+  const password = screen.getByLabelText('Password');
+  const reveal = screen.getByRole('button', { name: 'Show password' });
+
+  expect(reveal.tabIndex).toBe(0);
+  expect(reveal).toHaveClass('h-11', 'w-11', 'focus-visible:ring-2');
+  fireEvent.change(password, { target: { value: 'kept secret' } });
+  fireEvent.click(reveal);
+  expect(password).toHaveAttribute('type', 'text');
+  expect(password).toHaveValue('kept secret');
+  fireEvent.click(screen.getByRole('button', { name: 'Hide password' }));
+  expect(password).toHaveAttribute('type', 'password');
+  expect(password).toHaveValue('kept secret');
+});
 it('keeps enrollment on the login screen, preserves errors, and shows recovery codes before continuing', async () => {
   const fetchMock = vi
     .fn()
