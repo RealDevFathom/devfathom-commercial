@@ -159,6 +159,11 @@ describe('PlatformCommandForm', () => {
     await waitFor(() => expect(select).toHaveFocus());
     expect(screen.getByText('Choose a valid IANA timezone.')).toBeInTheDocument();
     expect(screen.getByRole('alert')).toHaveTextContent('1 field needs attention');
-    expect(select).toHaveAttribute('aria-invalid', 'true');
+    expect(select).toHaveAttribute('data-invalid', '');
+    expect(select).toHaveAccessibleDescription('Choose a valid IANA timezone.');
+    fireEvent.click(select);
+    const search = await screen.findByRole('combobox');
+    expect(search).toHaveAttribute('aria-invalid', 'true');
+    expect(search).toHaveAccessibleDescription('Choose a valid IANA timezone.');
   });
 });

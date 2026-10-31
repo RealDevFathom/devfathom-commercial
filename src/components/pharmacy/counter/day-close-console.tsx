@@ -51,16 +51,32 @@ export function PharmacyDayCloseConsole() {
     !isModuleGranted('pharmacy-counter', entitlements.enabledModules);
   const access = trpc.pharmacySales.closeAccess.useQuery(undefined, {
     enabled: !sessionIneligible,
-    retry: false,
   });
+  const checking = status === 'loading' || (!sessionIneligible && access.isFetching);
+  const accessDenied =
+    access.error?.data?.code === 'FORBIDDEN' || access.error?.data?.code === 'UNAUTHORIZED';
   if (sessionIneligible || access.isLoading || access.error || !access.data?.allowed) {
     return (
       <SectionCard title="Day close unavailable">
-        <p role="status">
-          {status === 'loading' || (!sessionIneligible && access.isLoading)
-            ? 'Checking day-close access…'
-            : 'You do not have permission to reconcile and close a day.'}
-        </p>
+        {!sessionIneligible && access.error && !accessDenied ? (
+          <div className="space-y-3">
+            <p role="alert">Could not check day-close access. Please try again.</p>
+            <Button
+              className="min-h-11"
+              variant="outline"
+              disabled={access.isFetching}
+              onClick={() => void access.refetch()}
+            >
+              {checking ? 'Checking day-close access…' : 'Retry access check'}
+            </Button>
+          </div>
+        ) : (
+          <p role="status">
+            {checking || (!sessionIneligible && access.isLoading)
+              ? 'Checking day-close access…'
+              : 'You do not have permission to reconcile and close a day.'}
+          </p>
+        )}
       </SectionCard>
     );
   }

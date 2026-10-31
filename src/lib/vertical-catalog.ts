@@ -735,6 +735,7 @@ export const PHARMACY_CAPABILITIES: readonly string[] = [
   'pharmacy:catalogue-review',
   'pharmacy:manage',
   'pharmacy:counter',
+  'pharmacy:close',
   'pharmacy:procurement',
   'pharmacy:inventory',
   'pharmacy:orders',
@@ -746,6 +747,7 @@ export const PHARMACY_CAPABILITIES: readonly string[] = [
 /** Canonical actions checked by pharmacy workflows, including shared report gates. */
 export const PHARMACY_CHECKED_CAPABILITIES = [
   'pharmacy:counter',
+  'pharmacy:close',
   'pharmacy:manage',
   'pharmacy:procurement',
   'pharmacy:inventory',
@@ -785,12 +787,14 @@ export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
     key: 'pharmacist',
     name: 'Pharmacist',
     isSystem: true,
-    capabilities: ['pharmacy:dispense', 'pharmacy:catalogue-review'],
+    capabilities: ['pharmacy:dispense', 'pharmacy:catalogue-review', 'pharmacy:close'],
   },
   {
     key: 'manager',
     name: 'Manager',
     isSystem: true,
+    // Managers retain the purchasing and Goods-in access that predates the
+    // explicit pharmacy capability model (#375).
     capabilities: ['pharmacy:manage', 'pharmacy:orders', 'pharmacy:procurement'],
   },
   {

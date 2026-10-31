@@ -81,7 +81,10 @@ describeIfDatabase('organization.create duplicate slug on PostgreSQL', () => {
   });
 
   it('returns 409 for a duplicate slug, including case and whitespace', async () => {
-    const created = await createOrganization(`  ${slug.toUpperCase()}  `, `admin-${suffix}@test.local`);
+    const created = await createOrganization(
+      `  ${slug.toUpperCase()}  `,
+      `admin-${suffix}@test.local`
+    );
     expect(created).toMatchObject({ slug });
 
     for (const [variant, email] of [

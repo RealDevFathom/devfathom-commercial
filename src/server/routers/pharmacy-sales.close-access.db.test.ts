@@ -83,7 +83,7 @@ function request<T>(
           data: {
             organizationId: org,
             organizationRoleId: role.id,
-            capability: 'pharmacy:manage',
+            capability: 'pharmacy:close',
             effect: 'ALLOW',
           },
         });

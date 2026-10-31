@@ -130,7 +130,13 @@ export function ControlledRegisterConsole() {
           ) : (
             <>
               <RegisterCards entries={register.data.entries} />
-              <div ref={page} className="hidden max-w-full overflow-x-auto md:block">
+              <div
+                ref={page}
+                role="region"
+                aria-label="Controlled medicine register"
+                tabIndex={0}
+                className="hidden max-w-full overflow-x-auto focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring md:block"
+              >
                 <table className="w-full border-collapse text-left">
                   <thead>
                     <tr className="border-b border-border-subtle">

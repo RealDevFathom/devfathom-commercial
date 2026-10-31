@@ -76,7 +76,7 @@ function fixture() {
     user: {
       findUnique: vi.fn().mockResolvedValue({
         organizationRole: {
-          permissions: [{ capability: 'pharmacy:manage', effect: 'ALLOW' }],
+          permissions: [{ capability: 'pharmacy:close', effect: 'ALLOW' }],
         },
         permissionOverrides: [],
       }),
@@ -156,9 +156,27 @@ describe('pharmacy close family refusals', () => {
 
     f.db.user.findUnique.mockResolvedValue({
       organizationRole: { permissions: [{ capability: 'pharmacy:*', effect: 'ALLOW' }] },
-      permissionOverrides: [{ capability: 'pharmacy:manage', effect: 'DENY' }],
+      permissionOverrides: [{ capability: 'pharmacy:close', effect: 'DENY' }],
     });
     await expect(pharmacist().closeAccess()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+
+  it('requires the dedicated close grant even for an assigned pharmacy manager', async () => {
+    f.db.user.findUnique.mockResolvedValue({
+      organizationRole: { permissions: [{ capability: 'pharmacy:manage', effect: 'ALLOW' }] },
+      permissionOverrides: [],
+    });
+    const denied = {
+      code: 'FORBIDDEN',
+      message: 'Day-close permission is required to reconcile and close a day.',
+    };
+    await expect(pharmacist().closeAccess()).rejects.toMatchObject(denied);
+    await expect(pharmacist().counterBranches({ forDayClose: true })).rejects.toMatchObject(denied);
+    for (const [, run] of closeOperations) {
+      await expect(run(pharmacist())).rejects.toMatchObject(denied);
+    }
+    expect(f.db.pharmacyBranchAssignment.findFirst).not.toHaveBeenCalled();
+    expect(f.db.$transaction).not.toHaveBeenCalled();
   });
 
   const closeOperations = [
