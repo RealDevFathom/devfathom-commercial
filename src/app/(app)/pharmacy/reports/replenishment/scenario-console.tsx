@@ -22,6 +22,7 @@ import type {
   PharmacyReplenishmentReportInput,
 } from '@/lib/pharmacy/replenishment-report';
 import { trpc } from '@/lib/trpc';
+import { SeasonalCalendar } from './seasonal-calendar';
 
 type Props = {
   organizationId: string;
@@ -342,7 +343,9 @@ function ScenarioWorkspace({
       </SectionCard>
     );
   return (
-    <div className="space-y-6">
+    <>
+      {financial && branchId ? <SeasonalCalendar branchId={branchId} /> : null}
+      <div className="space-y-6">
       <SectionCard title="Report scope" titleLevel={2}>
         {invalidInitialBranch && !branchId && (
           <p role="alert" className="mb-4 text-sm text-text-muted">
@@ -566,7 +569,8 @@ function ScenarioWorkspace({
           }
         />
       )}
-    </div>
+      </div>
+    </>
   );
 }
 
@@ -720,6 +724,38 @@ function ReportEvidence({
               )
             )}
           </>
+        )}
+        {report.seasonalForecast.projection && (
+          <div className="mt-4">
+            <h3 className="font-medium">Seasonal recorded-sales projection</h3>
+            <p className="mt-2 text-sm text-text-muted">
+              Modelled from {report.seasonalForecast.baselineDays} recorded non-event sales days.
+              Demand coverage remains unverified.
+            </p>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>UTC day</TableHead>
+                  <TableHead className="text-right">Projected sales units</TableHead>
+                  <TableHead className="text-right">Seasonal factor (bps)</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {report.seasonalForecast.projection.map((day) => (
+                  <TableRow key={day.date}>
+                    <TableCell>{day.date}</TableCell>
+                    <TableCell className="text-right">{units(day.units)}</TableCell>
+                    <TableCell className="text-right">{day.seasonalityBps}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+            {report.seasonalForecast.assumptions.map((reason) => (
+              <p key={reason} className="mt-2 text-sm text-text-muted">
+                {reason}
+              </p>
+            ))}
+          </div>
         )}
         <p className="mt-3 text-sm text-text-muted">
           Backtest unavailable: no eligible historical replay. Scenario coverage is not empirical

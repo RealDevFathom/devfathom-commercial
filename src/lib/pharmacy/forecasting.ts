@@ -17,6 +17,9 @@ import {
   type DemandSource,
 } from './demand-evidence';
 import { blockReasonFor, planAllocation, type AllocationCandidate } from './inventory';
+import { seasonalForecastAdjustment, type SeasonalForecastContext } from './seasonal-forecasting';
+
+export * from './seasonal-forecasting';
 
 export { forecastDemandEvidence, backtestDemandEvidence } from './demand-evidence';
 export type {
@@ -61,7 +64,9 @@ export type ForecastFixtureLine = {
   medicineId: string;
   demandUnits: number;
   demandWindowDays: number;
-  seasonalityBps: number;
+  /** @deprecated Supply seasonalContext so uplift is learned from branch-local history. */
+  seasonalityBps?: number;
+  seasonalContext?: SeasonalForecastContext;
   leadTimeDays: number;
   fillRateBps: number;
   openPurchaseOrderUnits: number;
@@ -182,12 +187,15 @@ function forecastLine(line: ForecastFixtureLine): ForecastLine {
   [line.demandWindowDays, line.leadTimeDays, line.packSize].forEach((value) =>
     integer(value, false)
   );
-  if (line.seasonalityBps <= 0 || line.fillRateBps <= 0 || line.fillRateBps > BPS) {
+  const { learnedUplift, detectedSpike, seasonalityBps } = line.seasonalContext
+    ? seasonalForecastAdjustment(line.seasonalContext, line.seasonalityBps)
+    : { learnedUplift: null, detectedSpike: null, seasonalityBps: line.seasonalityBps ?? BPS };
+  if (seasonalityBps <= 0 || line.fillRateBps <= 0 || line.fillRateBps > BPS) {
     throw new RangeError('Rates must be positive basis points and fill rate cannot exceed 100%');
   }
 
   const velocityLeadDemand = Math.ceil(
-    (line.demandUnits * line.leadTimeDays * line.seasonalityBps * BPS) /
+    (line.demandUnits * line.leadTimeDays * seasonalityBps * BPS) /
       (line.demandWindowDays * BPS * line.fillRateBps)
   );
   const inbound = line.openPurchaseOrderUnits + line.openTransferUnits;
@@ -216,7 +224,15 @@ function forecastLine(line: ForecastFixtureLine): ForecastLine {
         input: 'DEMAND_VELOCITY',
         value: `${line.demandUnits} units / ${line.demandWindowDays} days`,
       },
-      { input: 'SEASONALITY', value: `${line.seasonalityBps} bps` },
+      {
+        input: 'SEASONALITY',
+        value:
+          learnedUplift && (!detectedSpike || learnedUplift.upliftBps >= detectedSpike.ratioBps)
+            ? `${seasonalityBps} bps learned from ${learnedUplift.eventDays} branch event days (${learnedUplift.windowName})`
+            : detectedSpike
+              ? `${seasonalityBps} bps from branch-local sales spike on ${detectedSpike.date}`
+              : `${seasonalityBps} bps${line.seasonalityBps ? ' legacy input' : ' neutral (insufficient calendar history)'}`,
+      },
       {
         input: 'LEAD_TIME_AND_FILL_HISTORY',
         value: `${line.leadTimeDays} days; ${line.fillRateBps} bps fill`,
