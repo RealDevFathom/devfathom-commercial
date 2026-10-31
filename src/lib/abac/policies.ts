@@ -73,6 +73,7 @@ export const ALL_ACTIONS = [
   'menu:import', // R-lane WHA-194: OCR menu import — upload, review queue, confirmed catalog import
   'pharmacy:counter',
   'pharmacy:receipt',
+  'pharmacy:close',
   'pharmacy:manage',
   'pharmacy:pin-reset',
   'pharmacy:procurement',
@@ -250,6 +251,7 @@ export const POLICIES: Record<Action, Policy[]> = {
   'menu:import': [],
   'pharmacy:counter': [],
   'pharmacy:receipt': [],
+  'pharmacy:close': [],
   'pharmacy:manage': [],
   // Preserve administrator/owner recovery through the evaluator so matching
   // DENYs are resolved before these legacy identity grants.
@@ -259,9 +261,8 @@ export const POLICIES: Record<Action, Policy[]> = {
       !!subject.organizationId &&
       isPharmacyOwner(db as ScopedDb, subject.organizationId, subject.id),
   ],
-  // Tenant administrators retain the operational purchasing access they had
-  // before pharmacy capabilities became explicit. A matching custom DENY is
-  // still resolved first by `can()` and therefore takes precedence.
+  // Legacy administrators without an assigned organization role retain purchasing
+  // access. `can()` enforces assigned-role grants and resolves custom DENYs first.
   'pharmacy:procurement': [isAdmin],
   'pharmacy:inventory': [],
   // Dispensing is an exact-grant-only action: tenant administration alone is

@@ -418,9 +418,29 @@ export const pharmacyPrescriptionsRouter = router({
         })
         .strict()
     )
-    .mutation(({ ctx, input }) =>
-      ctx.db.prescriptionFill.create({ data: { ...input, dispensedByUserId: ctx.session.user.id } })
-    ),
+    .mutation(async ({ ctx, input }) => {
+      const line = await ctx.db.prescriptionLine.findFirst({
+        where: {
+          id: input.prescriptionLineId,
+          organizationId: ctx.entitlements.organizationId,
+        },
+        select: { medicine: { select: { controlled: true } } },
+      });
+      if (!line) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Prescription line not found.' });
+      }
+      // Controlled dispensing must use the counter flow, which atomically allocates stock and
+      // records both the witnessed fill and controlled-drug register entry.
+      if (line.medicine.controlled) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Controlled medicines must be dispensed through the witnessed counter flow.',
+        });
+      }
+      return ctx.db.prescriptionFill.create({
+        data: { ...input, dispensedByUserId: ctx.session.user.id },
+      });
+    }),
 
   captureRefillReminder: capabilityProcedure('pharmacy:dispense')
     .input(

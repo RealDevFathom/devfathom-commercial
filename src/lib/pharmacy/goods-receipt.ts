@@ -48,7 +48,12 @@ import {
   type OrderedTerms,
 } from './receiving';
 import { nearExpiryWarning, packIsExpired } from './gs1-datamatrix';
-import { expiryInstant, receiveLot, reverseMovements } from './stock-ledger';
+import {
+  expiryInstant,
+  normalizeExpiryBoundary,
+  receiveLot,
+  reverseMovements,
+} from './stock-ledger';
 import type { LedgerScope } from './stock-ledger';
 
 export type ReceivingScope = LedgerScope;
@@ -444,10 +449,13 @@ async function resolveManufacturingBatch(
     },
   });
   if (existing) {
-    if (existing.expiresAt.getTime() !== expiresAt.getTime()) {
+    if (
+      normalizeExpiryBoundary(existing.expiresAt).getTime() !==
+      normalizeExpiryBoundary(expiresAt).getTime()
+    ) {
       throw new PharmacyReceivingError('BATCH_EXPIRY_CONFLICT');
     }
-    return existing;
+    return { ...existing, expiresAt };
   }
   return db.pharmacyManufacturingBatch.create({
     data: {

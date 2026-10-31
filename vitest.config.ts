@@ -1,10 +1,10 @@
 import { fileURLToPath } from 'node:url';
 
-import { defineConfig } from 'vitest/config';
+import { configDefaults, defineConfig } from 'vitest/config';
 
 const databaseSuites = [
-  '**/*.db.test.{ts,tsx}',
-  '**/*-rls.test.{ts,tsx}',
+  '{src,tests}/**/*.db.test.{ts,tsx}',
+  '{src,tests}/**/*-rls.test.{ts,tsx}',
   'tests/pharmacy-price-intelligence.integration.test.ts',
   'src/lib/platform/audit-secret-redaction.test.ts',
 ];
@@ -31,7 +31,7 @@ export default defineConfig({
         test: {
           name: 'unit',
           include: ['src/**/*.test.{ts,tsx}', 'tests/**/*.test.{ts,tsx}'],
-          exclude: databaseSuites,
+          exclude: [...configDefaults.exclude, ...databaseSuites],
           sequence: { groupOrder: 0 },
         },
       },
@@ -39,6 +39,9 @@ export default defineConfig({
         extends: true,
         test: {
           name: 'database',
+          ...(process.env.TEST_DATABASE_URL
+            ? { env: { DATABASE_URL: process.env.TEST_DATABASE_URL } }
+            : {}),
           include: databaseSuites,
           fileParallelism: false,
           sequence: { groupOrder: 1 },

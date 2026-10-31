@@ -97,6 +97,15 @@ const transitions: Record<z.infer<typeof pvState>, readonly z.infer<typeof pvSta
   SUBMITTED: ['CLOSED'],
   CLOSED: [],
 };
+const externalTransitions: Record<
+  z.infer<typeof externalState>,
+  readonly z.infer<typeof externalState>[]
+> = {
+  NOT_SUBMITTED: ['PENDING', 'SUBMITTED', 'FAILED'],
+  PENDING: ['SUBMITTED', 'FAILED'],
+  SUBMITTED: [],
+  FAILED: ['PENDING', 'SUBMITTED'],
+};
 
 async function requirePvBranch(ctx: TRPCContext, branchId: string) {
   const organizationId = ctx.entitlements.organizationId;
@@ -267,6 +276,11 @@ export const pharmacyReportsRouter = router({
           code: 'BAD_REQUEST',
           message: 'Invalid report lifecycle transition.',
         });
+      if (report.externalSubmissionState === 'SUBMITTED' && input.state === 'UNDER_REVIEW')
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'A submitted report cannot return to review.',
+        });
       annotateAudit(ctx, {
         targetType: 'PharmacyPharmacovigilanceReport',
         targetId: report.id,
@@ -326,8 +340,14 @@ export const pharmacyReportsRouter = router({
             },
           });
         }
-        return db.pharmacyPharmacovigilanceReport.update({
-          where: { id: report.id, organizationId, branchId: input.branchId, state: report.state },
+        const [updated] = await db.pharmacyPharmacovigilanceReport.updateManyAndReturn({
+          where: {
+            id: report.id,
+            organizationId,
+            branchId: input.branchId,
+            state: report.state,
+            externalSubmissionState: report.externalSubmissionState,
+          },
           data: {
             state: input.state,
             ...(input.state === 'READY'
@@ -337,6 +357,12 @@ export const pharmacyReportsRouter = router({
                 : {}),
           },
         });
+        if (!updated)
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: 'Report lifecycle changed; refresh and try again.',
+          });
+        return updated;
       });
     }),
   recordPharmacovigilanceSubmission: safety
@@ -369,23 +395,31 @@ export const pharmacyReportsRouter = router({
       const organizationId = await requirePvBranch(ctx, input.branchId);
       const report = await ctx.db.pharmacyPharmacovigilanceReport.findFirst({
         where: { id: input.id, branchId: input.branchId, organizationId },
-        select: { id: true, state: true, reviewedByUserId: true },
       });
       if (!report) throw new TRPCError({ code: 'NOT_FOUND', message: 'Report not found.' });
-      if (
-        input.state === 'SUBMITTED' &&
-        (!['READY', 'SUBMITTED', 'CLOSED'].includes(report.state) || !report.reviewedByUserId)
-      )
+      if (!['READY', 'SUBMITTED', 'CLOSED'].includes(report.state) || !report.reviewedByUserId)
         throw new TRPCError({
           code: 'BAD_REQUEST',
-          message: 'Internal approval is required before submission.',
+          message: 'Report must be ready before recording a submission.',
         });
-      return ctx.db.pharmacyPharmacovigilanceReport.update({
+      const isIdempotent =
+        report.externalSubmissionState === input.state &&
+        report.externalReference ===
+          (input.state === 'SUBMITTED' ? input.externalReference : null) &&
+        report.externalFailureReason === (input.state === 'FAILED' ? input.failureReason : null);
+      if (isIdempotent) return report;
+      if (!externalTransitions[report.externalSubmissionState].includes(input.state))
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Invalid external submission transition.',
+        });
+      const [updated] = await ctx.db.pharmacyPharmacovigilanceReport.updateManyAndReturn({
         where: {
           id: report.id,
-          organizationId,
           branchId: input.branchId,
+          organizationId,
           state: report.state,
+          externalSubmissionState: report.externalSubmissionState,
           reviewedByUserId: report.reviewedByUserId,
         },
         data: {
@@ -394,6 +428,12 @@ export const pharmacyReportsRouter = router({
           externalFailureReason: input.state === 'FAILED' ? input.failureReason : null,
         },
       });
+      if (!updated)
+        throw new TRPCError({
+          code: 'CONFLICT',
+          message: 'Submission state changed; refresh and try again.',
+        });
+      return updated;
     }),
   exportPharmacovigilanceDrap: safety
     .input(

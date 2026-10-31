@@ -5,9 +5,11 @@ vi.mock('server-only', () => ({}));
 const approval = vi.hoisted(() => ({ authorize: vi.fn(), can: vi.fn() }));
 vi.mock('../solo-approval', () => ({ authorizeSoloApproval: approval.authorize }));
 vi.mock('@/lib/abac', () => ({ can: approval.can }));
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
   DEFAULT_MATERIALITY_THRESHOLD,
   missingAttributes,
+  postOpeningSession,
   signOffOpeningSession,
 } from './opening-stock';
 
@@ -138,5 +140,97 @@ describe('opening stock solo sign-off', () => {
       signOffOpeningSession(db as never, scope, 'session', '1234')
     ).rejects.toMatchObject({ reason: 'OPEN_EXCEPTIONS' });
     expect(db.pharmacyOpeningSession.update).not.toHaveBeenCalled();
+  });
+});
+
+const SCOPE = { organizationId: 'org_a', branchId: 'branch_a', actorId: 'user_a' };
+
+function openingDb(precision: 'DAY' | 'MONTH', stored: string) {
+  const db = {
+    pharmacyOpeningSession: {
+      findFirst: vi.fn().mockResolvedValue({
+        id: 'session',
+        branchId: SCOPE.branchId,
+        status: 'COUNTED',
+        openingAt: new Date('2026-10-21T00:00:00.000Z'),
+      }),
+      update: vi.fn().mockResolvedValue({}),
+    },
+    pharmacyOpeningStockLine: {
+      findMany: vi.fn().mockResolvedValue([
+        {
+          ...completeLine(),
+          id: 'line',
+          expiryDate: new Date('2027-06-15T00:00:00.000Z'),
+          expiryPrecision: precision,
+        },
+      ]),
+      update: vi.fn().mockResolvedValue({}),
+    },
+    pharmacyManufacturingBatch: {
+      findFirst: vi.fn().mockResolvedValue({ expiresAt: new Date(stored) }),
+    },
+    pharmacyInventoryLot: { create: vi.fn().mockResolvedValue({ id: 'lot' }) },
+    pharmacyStockMovement: { create: vi.fn().mockResolvedValue({ id: 'movement' }) },
+    pharmacyOpeningTotal: {
+      create: vi.fn().mockImplementation(async ({ data }: { data: object }) => data),
+    },
+  };
+  return { db: db as unknown as ScopedDb, models: db };
+}
+
+describe('opening stock expiry boundaries', () => {
+  it.each([
+    ['DAY', '2027-06-16T00:00:00.000Z', '2027-06-15T19:00:00.000Z'],
+    ['DAY', '2027-06-15T19:00:00.000Z', '2027-06-15T19:00:00.000Z'],
+    ['MONTH', '2027-07-01T00:00:00.000Z', '2027-06-30T19:00:00.000Z'],
+    ['MONTH', '2027-06-30T19:00:00.000Z', '2027-06-30T19:00:00.000Z'],
+  ] as const)('posts %s stock against an existing batch at %s', async (precision, stored, pkt) => {
+    const { db, models } = openingDb(precision, stored);
+
+    const posted = await postOpeningSession(db, SCOPE, {
+      sessionId: 'session',
+      idempotencyKeyPrefix: 'opening',
+    });
+
+    expect(posted.postedLineCount).toBe(1);
+    expect(posted.total).toMatchObject({ totalUnits: 40, totalValueMinor: BigInt(720_000) });
+    expect(models.pharmacyInventoryLot.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        manufacturingBatchId: 'batch_1',
+        receivedExpiresAt: new Date(pkt),
+        receivedExpiryPrecision: precision,
+      }),
+    });
+    expect(models.pharmacyManufacturingBatch.findFirst).toHaveBeenCalledWith({
+      where: { id: 'batch_1', organizationId: SCOPE.organizationId },
+      select: { expiresAt: true },
+    });
+  });
+
+  it.each([
+    ['DAY', '2027-06-17T00:00:00.000Z'],
+    ['MONTH', '2027-07-02T00:00:00.000Z'],
+    ['DAY', '2027-06-15T19:00:00.001Z'],
+  ] as const)('refuses a conflicting %s batch expiry at %s', async (precision, stored) => {
+    const { db, models } = openingDb(precision, stored);
+
+    await expect(
+      postOpeningSession(db, SCOPE, { sessionId: 'session', idempotencyKeyPrefix: 'opening' })
+    ).rejects.toMatchObject({ reason: 'BATCH_EXPIRY_CONFLICT' });
+    expect(models.pharmacyInventoryLot.create).not.toHaveBeenCalled();
+    expect(models.pharmacyStockMovement.create).not.toHaveBeenCalled();
+    expect(models.pharmacyOpeningSession.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses a batch outside the workspace before posting stock', async () => {
+    const { db, models } = openingDb('DAY', '2027-06-16T00:00:00.000Z');
+    models.pharmacyManufacturingBatch.findFirst.mockResolvedValue(null);
+
+    await expect(
+      postOpeningSession(db, SCOPE, { sessionId: 'session', idempotencyKeyPrefix: 'opening' })
+    ).rejects.toMatchObject({ reason: 'NOT_FOUND' });
+    expect(models.pharmacyInventoryLot.create).not.toHaveBeenCalled();
+    expect(models.pharmacyStockMovement.create).not.toHaveBeenCalled();
   });
 });

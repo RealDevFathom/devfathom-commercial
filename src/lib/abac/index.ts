@@ -33,7 +33,7 @@ async function customDecision(
   action: string,
   now: Date,
   organizationId?: string
-): Promise<{ decision: boolean | null; subject: Subject }> {
+): Promise<{ decision: boolean | null; subject: Subject; hasOrganizationRole: boolean }> {
   const user = await db.user.findUnique({
     where: { id: userId, ...(organizationId ? { organizationId } : {}) },
     select: {
@@ -53,6 +53,7 @@ async function customDecision(
       },
     },
   });
+  const hasOrganizationRole = user?.organizationRole != null;
   const subject: Subject = { id: userId, role: user?.role ?? 'EMPLOYEE', status: user?.status };
   if (
     !user ||
@@ -62,7 +63,7 @@ async function customDecision(
       user.organizationRole.organizationId !== user.organizationId) ||
     !ACTIVE_STATUSES.has(user.status)
   )
-    return { decision: false, subject };
+    return { decision: false, subject, hasOrganizationRole };
   const matchingRules = [
     ...user.permissionOverrides,
     ...(user.organizationRole?.permissions ?? []),
@@ -76,8 +77,10 @@ async function customDecision(
       rule.effect === 'DENY' ? 'DENY' : 'ALLOW'
     )
   );
-  if (matchingRules.some((rule) => rule.effect === 'DENY')) return { decision: false, subject };
-  if (matchingRules.some((rule) => rule.effect === 'ALLOW')) return { decision: true, subject };
+  if (matchingRules.some((rule) => rule.effect === 'DENY'))
+    return { decision: false, subject, hasOrganizationRole };
+  if (matchingRules.some((rule) => rule.effect === 'ALLOW'))
+    return { decision: true, subject, hasOrganizationRole };
   // Only a proven sole active proprietor inherits all capabilities. This is an
   // entitlement, never an exemption from resource checks or PIN/audit approval.
   if (
@@ -88,8 +91,8 @@ async function customDecision(
       1 &&
     (await isPharmacyOwner(db as never, user.organizationId, userId))
   )
-    return { decision: true, subject };
-  return { decision: null, subject };
+    return { decision: true, subject, hasOrganizationRole };
+  return { decision: null, subject, hasOrganizationRole };
 }
 
 /** True iff some policy registered for `action` allows the subject + resource. */
@@ -120,8 +123,10 @@ export async function can(
       if (!(await policy({ subject, resource, env, db }))) return false;
     }
     if (decision === true) return true;
+    // Assigned roles must explicitly grant procurement; legacy admins retain access.
+    if (action === 'pharmacy:procurement' && current.hasOrganizationRole) return false;
   } catch (err) {
-    console.error(`[abac] permission evaluation for "${action}" threw:`, err);
+    console.error('[abac] permission evaluation threw:', action, err);
     return false;
   }
   for (const policy of POLICIES[action] ?? []) {
@@ -129,7 +134,7 @@ export async function can(
       if (await policy({ subject, resource, env, db })) return true;
     } catch (err) {
       // A policy that throws denies (fail-closed) but never crashes the request.
-      console.error(`[abac] policy for "${action}" threw:`, err);
+      console.error('[abac] policy threw:', action, err);
     }
   }
   return false;

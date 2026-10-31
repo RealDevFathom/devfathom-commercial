@@ -55,7 +55,7 @@ let originalBaselineRows: Array<{
   id: string;
   key: string;
   band: import('@/generated/prisma/enums').PlatformModuleBand;
-  vertical: import('@/generated/prisma/enums').OrganizationVertical | null;
+  vertical: import('@/generated/prisma/client').PlatformModule['vertical'];
   active: boolean;
 }> = [];
 
