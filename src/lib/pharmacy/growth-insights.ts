@@ -212,7 +212,7 @@ export async function saveGrowthInsight(db: ScopedDb, scope: MarketingScope, res
 }
 export async function listGrowthInsights(db: ScopedDb, scope: MarketingScope) {
   const insights = await db.$queryRaw<GrowthInsightRow[]>(
-    Prisma.sql`SELECT id,status,"failureCode",provider,model,"inputHash","schemaVersion",snapshot,output,"createdAt" FROM growth_insights WHERE "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} AND vertical='PHARMACY' ORDER BY "createdAt" DESC,id DESC LIMIT 20`
+    Prisma.sql`SELECT id,status,"failureCode",provider,model,"inputHash","schemaVersion",snapshot,output,"createdAt" FROM growth_insights WHERE "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} AND vertical='PHARMACY' AND provider IS DISTINCT FROM 'DETERMINISTIC_BASKET' ORDER BY "createdAt" DESC,id DESC LIMIT 20`
   );
   const reviews = insights.length
     ? await db.$queryRaw<GrowthReviewRow[]>(

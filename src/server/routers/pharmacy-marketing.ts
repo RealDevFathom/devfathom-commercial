@@ -1,4 +1,11 @@
 import { Prisma } from '@/generated/prisma/client';
+import {
+  basketGenerateInput,
+  basketReviewInput,
+  generateBasketInsights,
+  listBasketInsights,
+  reviewBasketInsight,
+} from '@/lib/pharmacy/basket-workflow';
 import { generateGrowthRecommendations } from '@/lib/ai/growth-recommendations';
 import {
   buildPharmacyGrowthInput,
@@ -180,6 +187,25 @@ async function growthExecute<T>(
 
 // Integration export for WHA-1618; root.ts is outside this issue's ownership.
 export const pharmacyMarketingRouter = router({
+  basketHistory: protectedProcedure
+    .input(marketingScopeInput)
+    .query(({ ctx, input }) => growthExecute(ctx, input.branchId, listBasketInsights)),
+  generateBaskets: protectedProcedure
+    .input(basketGenerateInput)
+    .mutation(({ ctx, input }) =>
+      growthExecute(ctx, input.branchId, (db, resolved) =>
+        generateBasketInsights(db, resolved, input)
+      )
+    ),
+  reviewBasket: protectedProcedure
+    .use(({ ctx, next }) => {
+      ctx.audit.detail = { action: 'pharmacy_bundle_review', skipInput: true };
+      return next();
+    })
+    .input(basketReviewInput)
+    .mutation(({ ctx, input }) =>
+      growthExecute(ctx, input.branchId, (db, resolved) => reviewBasketInsight(db, resolved, input))
+    ),
   growthHistory: protectedProcedure
     .input(marketingScopeInput)
     .query(({ ctx, input }) => growthExecute(ctx, input.branchId, listGrowthInsights)),
