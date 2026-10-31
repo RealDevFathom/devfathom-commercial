@@ -170,10 +170,12 @@ export const resignationsRouter = router({
         // The target's role is part of the authorization decision. Lock both it
         // and the resignation before re-reading either so a concurrent promotion
         // cannot make that decision stale before the transition commits.
+        // NO KEY UPDATE still blocks role changes, while allowing reviewer FK
+        // key-share locks when two admins review each other's resignations.
         await tx.$queryRaw`SELECT r.id FROM "resignations" r
           JOIN "users" u ON u.id = r."userId" AND u."organizationId" = r."organizationId"
           WHERE r.id = ${input.id} AND r."organizationId" = ${organizationId}
-          FOR UPDATE OF r, u`;
+          FOR NO KEY UPDATE OF r, u`;
         const resignation = await tx.resignation.findFirst({
           where: { id: input.id, organizationId },
           include: { user: { select: { id: true, role: true, name: true, email: true } } },

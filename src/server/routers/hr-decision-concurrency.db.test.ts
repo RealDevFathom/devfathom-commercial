@@ -12,12 +12,16 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
 
-const effects = vi.hoisted(() => ({ notify: vi.fn(), annotateAudit: vi.fn() }));
+const effects = vi.hoisted(() => ({
+  can: vi.fn<(...args: unknown[]) => Promise<boolean>>().mockResolvedValue(true),
+  notify: vi.fn(),
+  annotateAudit: vi.fn(),
+}));
 
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/abac', async () => ({
   ...(await vi.importActual<typeof import('@/lib/abac')>('@/lib/abac')),
-  can: vi.fn(async () => true),
+  can: effects.can,
 }));
 vi.mock('@/lib/notifications', () => ({ notify: effects.notify }));
 vi.mock('@/lib/email', () => ({
@@ -115,6 +119,7 @@ describeIfDatabase('atomic HR decisions, against PostgreSQL', () => {
   }, 120_000);
 
   beforeEach(async () => {
+    effects.can.mockReset().mockResolvedValue(true);
     effects.notify.mockClear();
     effects.annotateAudit.mockClear();
     await client.query(`DELETE FROM resignations WHERE "organizationId" = $1`, [ORG]);
@@ -185,5 +190,52 @@ describeIfDatabase('atomic HR decisions, against PostgreSQL', () => {
     );
     expect(effects.annotateAudit).toHaveBeenCalledOnce();
     expect(effects.notify).toHaveBeenCalledOnce();
+  });
+
+  it('allows admins to review each other without deadlocking reviewer foreign keys', async () => {
+    const firstResignation = id('first_admin_resignation');
+    const secondResignation = id('second_admin_resignation');
+    await client.query(
+      `INSERT INTO resignations
+         (id, "organizationId", "userId", reason, "proposedLastDay", status, "updatedAt")
+       VALUES ($1, $3, $4, 'Moving to a new role', now(), 'PENDING', now()),
+              ($2, $3, $5, 'Moving to a new role', now(), 'PENDING', now())`,
+      [firstResignation, secondResignation, ORG, APPROVER, DECLINER]
+    );
+
+    // Both reviews must hold their target locks before either writes reviewedById.
+    // FOR UPDATE would then deadlock against the other review's FK key-share lock.
+    let arrived = 0;
+    let release!: () => void;
+    const bothLocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    effects.can.mockImplementation(async (...args: unknown[]) => {
+      if (args[1] === 'resignation:review') {
+        if (++arrived === 2) release();
+        await bothLocked;
+      }
+      return true;
+    });
+
+    const results = await Promise.allSettled([
+      caller(APPROVER).resignations.review({ id: secondResignation, decision: 'DECLINED' }),
+      caller(DECLINER).resignations.review({ id: firstResignation, decision: 'DECLINED' }),
+    ]);
+
+    expect(results.map((result) => result.status)).toEqual(['fulfilled', 'fulfilled']);
+    const stored = await client.query<{ id: string; status: string; reviewedById: string }>(
+      `SELECT id, status, "reviewedById" FROM resignations WHERE "organizationId" = $1`,
+      [ORG]
+    );
+    expect(stored.rows).toHaveLength(2);
+    expect(stored.rows).toEqual(
+      expect.arrayContaining([
+        { id: firstResignation, status: 'DECLINED', reviewedById: DECLINER },
+        { id: secondResignation, status: 'DECLINED', reviewedById: APPROVER },
+      ])
+    );
+    expect(effects.annotateAudit).toHaveBeenCalledTimes(2);
+    expect(effects.notify).toHaveBeenCalledTimes(2);
   });
 });

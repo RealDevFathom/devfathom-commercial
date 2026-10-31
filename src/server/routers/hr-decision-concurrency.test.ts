@@ -213,7 +213,7 @@ describe('atomic HR decisions', () => {
       caller.review({ id: resignation.id, decision: 'APPROVED' })
     ).rejects.toMatchObject({ code: 'CONFLICT' });
 
-    expect(mocks.can).not.toHaveBeenCalled();
+    expect(mocks.can.mock.calls.map((args) => args[1])).toEqual(['hr:access']);
     expect(tx.resignation.updateMany).not.toHaveBeenCalled();
     expect(tx.user.update).not.toHaveBeenCalled();
     expect(mocks.annotateAudit).not.toHaveBeenCalled();
@@ -268,6 +268,7 @@ describe('atomic HR decisions', () => {
       user: { id: 'employee-1', name: 'Employee', email: 'e@example.test' },
     };
     mocks.can.mockImplementation(async (...args: unknown[]) => {
+      if (args[1] !== 'resignation:review') return true;
       const resource = args[2] as { targetRole?: string };
       return resource.targetRole !== 'ADMIN';
     });
