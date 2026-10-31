@@ -8428,6 +8428,7 @@ model RestaurantJob {
   nextAttemptAt  DateTime            @default(now())
   claimedAt      DateTime?
   claimedBy      String?
+  claimToken     String?
   lastError      String?
   idempotencyKey String?
   createdAt      DateTime            @default(now())
