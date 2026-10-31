@@ -311,6 +311,57 @@ describe('PUR-01 a purchase order needs a licensed, authorized supplier', () => 
   });
 });
 
+describe('PUR-02 order-line comparison assumptions', () => {
+  it('copies forecast, shelf life and lead time from the stored quote line, not the client', async () => {
+    resolvableCatalog();
+    orderableSupplier();
+    db.pharmacyRequisition.findFirst.mockResolvedValue({ id: 'req_a' });
+    db.pharmacyQuote.findFirst.mockResolvedValue({ id: 'quote_a', supplierId: 'supplier_a' });
+    db.pharmacyQuoteLine.findMany.mockResolvedValue([
+      {
+        forecastSellThroughPacks: 8,
+        minimumExpiryDays: 180,
+        leadTimeDays: 4,
+        requisitionLine: { medicineId: 'medicine_a' },
+      },
+    ]);
+    await caller().createPurchaseOrder({
+      reference: 'PO-1',
+      supplierId: 'supplier_a',
+      requisitionId: 'req_a',
+      quoteId: 'quote_a',
+      lines: [
+        { ...ORDER_LINE, forecastSellThroughPacks: 999, minimumExpiryDays: 9999, leadTimeDays: 0 },
+      ],
+    });
+    expect(db.pharmacyQuoteLine.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { quoteId: 'quote_a', requisitionLine: { requisitionId: 'req_a' } },
+      })
+    );
+    const { data } = db.pharmacyPurchaseOrder.create.mock.calls[0]![0];
+    expect(data.lines.create[0]).toMatchObject({
+      forecastSellThroughPacks: 8,
+      minimumExpiryDays: 180,
+      leadTimeDays: 4,
+    });
+  });
+
+  it('drops client-sent assumptions when the order is not raised from a quote', async () => {
+    resolvableCatalog();
+    orderableSupplier();
+    await caller().createPurchaseOrder({
+      reference: 'PO-1',
+      supplierId: 'supplier_a',
+      lines: [{ ...ORDER_LINE, forecastSellThroughPacks: 999, minimumExpiryDays: 30 }],
+    });
+    expect(db.pharmacyQuoteLine.findMany).not.toHaveBeenCalled();
+    const { data } = db.pharmacyPurchaseOrder.create.mock.calls[0]![0];
+    expect(data.lines.create[0].forecastSellThroughPacks).toBeUndefined();
+    expect(data.lines.create[0].minimumExpiryDays).toBeUndefined();
+  });
+});
+
 describe('PUR-02 approval', () => {
   beforeEach(() => {
     orderableSupplier();

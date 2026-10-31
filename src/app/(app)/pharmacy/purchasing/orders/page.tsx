@@ -123,9 +123,10 @@ export default async function PharmacyOrdersPage({
    * PUR-02: the ranked, explained comparison for every line of the selected
    * requisition. Loaded only for the selection, because the comparison is a
    * priced calculation per line and running it for the whole register would be
-   * work nobody asked for.
+   * work nobody asked for. An arrow bound to a const (not a hoisted function
+   * declaration) so `caller` keeps its non-null narrowing from the guard above.
    */
-  async function comparisonsFor(source: RequisitionDetail | null): Promise<LineComparison[]> {
+  const comparisonsFor = async (source: RequisitionDetail | null): Promise<LineComparison[]> => {
     if (!source) return [];
     return Promise.all(
       source.lines.map(async (line) => ({
@@ -134,7 +135,7 @@ export default async function PharmacyOrdersPage({
         ranking: (await caller.compareQuotes({ requisitionLineId: line.id })).ranking,
       }))
     );
-  }
+  };
   const comparisons = await comparisonsFor(requisition);
   // The two registers can select different requisitions. A draft's ranking
   // must always come from its own source, including when opened by PO alone.
@@ -318,9 +319,6 @@ export default async function PharmacyOrdersPage({
             canonicalUnitsPerPack: quoted.canonicalUnitsPerPack,
             listPricePerPackMinor: quoted.pricePerPackMinor,
             discountBps: quoted.discountBps,
-            forecastSellThroughPacks: quoted.forecastSellThroughPacks ?? line.quantityPacks,
-            minimumExpiryDays: quoted.minimumExpiryDays,
-            leadTimeDays: quoted.leadTimeDays,
           },
         ];
       });
@@ -851,11 +849,18 @@ function RequisitionDetailPanel({
                           {row.minimumExpiryDays}d
                         </p>
                         <p className="mt-1 text-xs text-text-muted">
-                          Last quoted price {money(row.pricePerPackMinor)}/pack · Forecast:{' '}
-                          {row.forecastSellThroughPacks} packs before expiry (estimate)
-                          {row.atRiskBonusPacks > 0
-                            ? ` · ${row.atRiskBonusPacks} bonus packs at risk`
-                            : ' · all bonus packs forecast to sell'}
+                          Last quoted price {money(row.pricePerPackMinor)}/pack ·{' '}
+                          {row.forecastSellThroughPacks === null
+                            ? 'Forecast: not recorded (all packs assumed to sell)'
+                            : `Forecast: ${row.forecastSellThroughPacks} packs before expiry (estimate)`}
+                          {row.atRiskPaidPacks > 0
+                            ? ` · ${row.atRiskPaidPacks} paid packs at risk`
+                            : ''}
+                          {row.forecastSellThroughPacks === null
+                            ? ''
+                            : row.atRiskBonusPacks > 0
+                              ? ` · ${row.atRiskBonusPacks} bonus packs at risk`
+                              : ' · all bonus packs forecast to sell'}
                         </p>
                         <ul className="mt-2 space-y-1">
                           {row.reasons.map((reason) => (
@@ -1056,6 +1061,7 @@ function OrderDetailPanel({
       netCostMinor: number;
       effectiveUnitCostMicroMinor?: number;
       atRiskBonusPacks?: number;
+      atRiskPaidPacks?: number;
     }[];
   } | null;
   actorId: string;
@@ -1068,6 +1074,9 @@ function OrderDetailPanel({
   const selfApproval =
     order.createdByUserId === actorId || order.requisition?.requestedByUserId === actorId;
   const costByLine = new Map(landed?.lines.map((line) => [line.purchaseOrderLineId, line]) ?? []);
+  // The forecast-based cost and assumption apply to the draft being reviewed;
+  // once submitted, the order is costed and described per stocked unit.
+  const isDraft = order.status === 'DRAFT';
   const selectedQuoteRanks = order.quoteId
     ? comparisons.flatMap((comparison) => {
         const row = comparison.ranking.find((candidate) => candidate.quoteId === order.quoteId);
@@ -1142,11 +1151,12 @@ function OrderDetailPanel({
                 <span className="font-mono text-sm tabular-nums text-text-strong">
                   {cost
                     ? microMoney(
-                        cost.effectiveUnitCostMicroMinor ??
+                        (isDraft ? cost.effectiveUnitCostMicroMinor : undefined) ??
                           cost.landedCostPerCanonicalUnitMicroMinor
                       )
                     : '—'}{' '}
-                  / {cost?.effectiveUnitCostMicroMinor ? 'forecast sellable unit' : 'unit'}
+                  /{' '}
+                  {isDraft && cost?.effectiveUnitCostMicroMinor ? 'forecast sellable unit' : 'unit'}
                 </span>
               </div>
               <p className="mt-1 text-xs text-text-muted">
@@ -1167,11 +1177,14 @@ function OrderDetailPanel({
                     : ''}
                 </p>
               ) : null}
-              {line.forecastSellThroughPacks ? (
+              {isDraft && line.forecastSellThroughPacks ? (
                 <p className="mt-1 text-xs text-text-muted">
                   Draft comparison assumption: {line.forecastSellThroughPacks} packs forecast to
                   sell before the {line.minimumExpiryDays ?? 'unrecorded'}-day shelf-life window
                   (estimate) · lead {line.leadTimeDays ?? 'unrecorded'} days
+                  {cost?.atRiskPaidPacks
+                    ? ` · ${cost.atRiskPaidPacks} paid packs at expiry risk`
+                    : ''}
                   {cost?.atRiskBonusPacks
                     ? ` · ${cost.atRiskBonusPacks} bonus packs at expiry risk`
                     : ' · all bonus packs forecast to sell'}

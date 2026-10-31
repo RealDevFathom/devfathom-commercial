@@ -408,6 +408,92 @@ describe('PUR-02 quote comparison', () => {
     );
   });
 
+  it('keeps a legacy scheme quote with no recorded forecast ranked as if all packs sell', () => {
+    const ranking = compareQuotes({
+      requiredPacks: 10,
+      at: NOW,
+      candidates: [
+        {
+          ...base,
+          ...supplier('s_scheme', 'Scheme'),
+          quoteId: 'q_scheme',
+          pricePerPackMinor: 10_000,
+          schemeBuyPacks: 5,
+          schemeFreePacks: 1,
+          forecastSellThroughPacks: null,
+        },
+        {
+          ...base,
+          ...supplier('s_discount', 'Discount'),
+          quoteId: 'q_discount',
+          pricePerPackMinor: 10_000,
+          discountBps: 1_500,
+          forecastSellThroughPacks: null,
+        },
+      ],
+    });
+    expect(ranking.map((row) => row.quoteId)).toEqual(['q_scheme', 'q_discount']);
+    const scheme = ranking[0]!;
+    expect(scheme.forecastSellThroughPacks).toBeNull();
+    expect(scheme.atRiskBonusPacks).toBe(0);
+    expect(scheme.effectiveSellableUnitCostMicroMinor).toBe(833_333_333);
+    expect(scheme.reasons).toContainEqual(
+      'Scheme adds 2 free packs; no sell-through forecast is recorded, so all are assumed to sell.'
+    );
+  });
+
+  it('flags nothing at risk on a quote that cannot be compared', () => {
+    const [row] = compareQuotes({
+      requiredPacks: 10,
+      at: NOW,
+      candidates: [
+        {
+          ...base,
+          ...supplier('s_lapsed', 'Lapsed'),
+          supplierAuthorized: false,
+          quoteId: 'q_lapsed',
+          schemeBuyPacks: 5,
+          schemeFreePacks: 1,
+          forecastSellThroughPacks: 5,
+        },
+      ],
+    });
+    expect(row!.comparable).toBe(false);
+    expect(row!.atRiskBonusPacks).toBe(0);
+    expect(row!.atRiskPaidPacks).toBe(0);
+    expect(row!.reasons).toContainEqual('Scheme adds 2 free packs.');
+    expect(row!.reasons.some((reason) => reason.includes('expiry risk'))).toBe(false);
+  });
+
+  it('reports paid packs at risk when the forecast is below the paid quantity', () => {
+    expect(
+      effectiveCostPerSellableUnit({
+        costMinor: 100_000,
+        paidPacks: 10,
+        bonusPacks: 2,
+        canonicalUnitsPerPack: 1,
+        forecastSellThroughPacks: 7,
+      })
+    ).toMatchObject({ sellablePacks: 7, atRiskPaidPacks: 3, atRiskBonusPacks: 2 });
+    const [row] = compareQuotes({
+      requiredPacks: 10,
+      at: NOW,
+      candidates: [
+        {
+          ...base,
+          ...supplier('s_1', 'A'),
+          quoteId: 'q_a',
+          pricePerPackMinor: 10_000,
+          forecastSellThroughPacks: 7,
+        },
+      ],
+    });
+    expect(row!.atRiskPaidPacks).toBe(3);
+    expect(row!.reasons).toContainEqual(
+      '3 paid packs are at expiry risk under the configured sell-through forecast.'
+    );
+  });
+
   it('returns a ranked list and never awards a winner', () => {
     const ranking = compareQuotes({
       requiredPacks: 10,

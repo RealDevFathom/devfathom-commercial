@@ -603,7 +603,9 @@ const purchasingRouter = router({
           moqPacks: line.moqPacks,
           leadTimeDays: line.leadTimeDays,
           minimumExpiryDays: line.minimumExpiryDays,
-          forecastSellThroughPacks: line.forecastSellThroughPacks ?? requisitionLine.quantityPacks,
+          // A legacy quote has no recorded forecast; the comparison assumes it
+          // all sells and says so, rather than inventing one from the requisition.
+          forecastSellThroughPacks: line.forecastSellThroughPacks,
         }));
         return {
           requisitionLineId: requisitionLine.id,
@@ -696,6 +698,36 @@ const purchasingRouter = router({
           otherChargesMinor: input.otherChargesMinor,
         });
 
+        // The comparison assumptions retained on each line are quote facts, so
+        // they are copied from the stored quote lines and never trusted from the
+        // client. A line with no matching stored quote line carries none.
+        const quoteAssumptions = new Map<
+          string,
+          {
+            forecastSellThroughPacks: number | null;
+            minimumExpiryDays: number;
+            leadTimeDays: number;
+          }
+        >();
+        if (input.quoteId) {
+          const storedQuoteLines = await ctx.db.pharmacyQuoteLine.findMany({
+            where: {
+              quoteId: input.quoteId,
+              ...(input.requisitionId
+                ? { requisitionLine: { requisitionId: input.requisitionId } }
+                : {}),
+            },
+            include: { requisitionLine: { select: { medicineId: true } } },
+          });
+          for (const stored of storedQuoteLines) {
+            quoteAssumptions.set(stored.requisitionLine.medicineId, {
+              forecastSellThroughPacks: stored.forecastSellThroughPacks,
+              minimumExpiryDays: stored.minimumExpiryDays,
+              leadTimeDays: stored.leadTimeDays,
+            });
+          }
+        }
+
         const { lines, ...purchaseOrder } = input;
         return await ctx.db.pharmacyPurchaseOrder.create({
           data: {
@@ -704,6 +736,10 @@ const purchasingRouter = router({
             lines: {
               create: lines.map((line, index) => ({
                 ...line,
+                forecastSellThroughPacks: undefined,
+                minimumExpiryDays: undefined,
+                leadTimeDays: undefined,
+                ...quoteAssumptions.get(line.medicineId),
                 lineNumber: index + 1,
                 orderedCanonicalUnits: line.orderedPacks * line.canonicalUnitsPerPack,
                 bonusCanonicalUnits: line.bonusPacks * line.canonicalUnitsPerPack,
