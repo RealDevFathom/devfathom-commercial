@@ -120,6 +120,8 @@ function makeDb() {
         return {};
       }),
     },
+    // #708: the cash-memo buyer-name policy read; no owner policy on this branch.
+    pharmacyBranch: { findFirst: vi.fn().mockResolvedValue(null) },
   };
 }
 let db = makeDb();

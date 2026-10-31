@@ -18,6 +18,12 @@ const lineSchema = z
     presentationId: id,
     medicineName: id,
     strength: id.nullable(),
+    /**
+     * #708: the catalog manufacturer as issued, so a reprint of a Sindh cash memo
+     * shows the manufacturer printed originally. Optional: snapshots issued before
+     * #708 carry no manufacturer and render it as unavailable, never as today's.
+     */
+    manufacturer: z.string().min(1).max(200).nullable().optional(),
     presentation: id,
     allocations: z.array(allocationSchema).min(1),
   })

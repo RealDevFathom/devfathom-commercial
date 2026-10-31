@@ -140,6 +140,8 @@ vi.mock('./counter-keymap-legend', () => ({ CounterKeymapLegend: () => null }));
 vi.mock('./counter-search-results', () => ({ CounterSearchResults: () => null }));
 vi.mock('./counter-substitute-proposals', () => ({ CounterSubstituteProposals: () => null }));
 vi.mock('./counter-unit-toggle', () => ({ CounterUnitToggle: () => null }));
+// #708: the cash-memo buyer field owns its own queries; covered in its own test.
+vi.mock('./counter-cash-memo-buyer', () => ({ CounterCashMemoBuyer: () => null }));
 
 import { PharmacyCounterConsole } from './counter-console';
 import {

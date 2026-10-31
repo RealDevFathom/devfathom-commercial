@@ -13,6 +13,7 @@ import { returnedLineValue } from './sales';
 import { postTenderEntry, postTenderRefundEntry } from './finance-postings';
 import { firstCloseIsFinal } from './migration/first-close';
 import { assertSaleBatchesSellable } from './sale-batch-safety';
+import { assertCashMemoBuyerName } from './cash-memo';
 import { completePaidPharmacySale, completionSaleInclude } from './sale-completion';
 import { assertRxSaleAllowed } from './rx-sale-gate';
 import type { LedgerScope } from './stock-ledger';
@@ -315,6 +316,10 @@ export async function applyPharmacyTender(
   const settled = tenderedMinor + input.amountMinor === totalMinor;
   if (input.leasedReceipt && !settled)
     throw new PharmacySettlementError('LEASE_REQUIRES_SETTLEMENT');
+  // #708: before any lease, provider charge or tender, so a refused nameless
+  // Sindh cash memo moves no money. Offline replays are recorded as they happened.
+  if (settled && !input.leasedReceipt)
+    await assertCashMemoBuyerName(db, scope, sale, new Date());
 
   // Same owning transaction as the sale/tender/event. UPDATE locks and rechecks
   // the cursor, so a second command cannot consume the same number. Reserved

@@ -16,6 +16,7 @@
 
 import { PrintDocumentSchema, type PrintDocument } from '@/lib/restaurant/printing/contract';
 
+import type { PharmacyCashMemo } from './cash-memo';
 import type { DispensingLabelSource } from './dispensing-label';
 
 import type { SaleUnitKind } from './counter-pricing';
@@ -40,6 +41,8 @@ export type CounterReceiptLine = {
   medicineName: string;
   /** Rendered strength, for example `500 mg`. Null for an unstrengthed item. */
   strength: string | null;
+  /** #708: manufacturer as issued; absent/null on receipts issued before it was snapshotted. */
+  manufacturer?: string | null;
   presentation: string;
   batchNumber: string;
   /** ISO date of the dispensed batch's expiry. */
@@ -65,6 +68,14 @@ export type CounterReceipt = {
   dispensingLabelSources?: DispensingLabelSource[];
   /** Supplied by settled receipt reads; optional only for legacy in-memory callers. */
   taxIdentity?: PharmacyReceiptTaxIdentity;
+  /**
+   * #708: set only when the profile in force at completion is for Sindh; the
+   * receipt then renders as a Sindh cash memo. Absent or null keeps the
+   * standard receipt.
+   */
+  cashMemo?: PharmacyCashMemo | null;
+  /** #708: buyer name frozen on the sale at completion; null for a nameless walk-in. */
+  buyerName?: string | null;
   saleId: string;
   /** Null until a tender settles the bill; never minted by a render. */
   receiptNumber: number | null;

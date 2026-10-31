@@ -324,3 +324,59 @@ it.each([undefined, null, []])('renders no evidence section for %j', (evidence) 
   render(<CounterReceiptView {...props({ evidence })} />);
   expect(screen.queryByRole('region', { name: 'Camera evidence' })).toBeNull();
 });
+
+const sindhMemo = {
+  template: 'SINDH_CASH_MEMO' as const,
+  licenceNumber: 'DL-KHI-0042',
+  licenceValidFrom: '2026-01-01T00:00:00.000Z',
+  licenceValidTo: '2027-12-31T00:00:00.000Z',
+  pharmacistRegistration: 'PPC-12345',
+};
+
+function memoProps(overrides: Partial<CounterReceiptViewProps> = {}) {
+  const input = props(overrides);
+  input.receipt = {
+    ...input.receipt!,
+    cashMemo: sindhMemo,
+    buyerName: 'Ayesha Khan',
+    lines: input.receipt!.lines.map((line) => ({
+      ...line,
+      identityStatus: 'ISSUED' as const,
+      strength: '500 mg',
+      manufacturer: 'GSK Pakistan',
+    })),
+  };
+  return input;
+}
+
+it('#708 shows every Sindh cash memo field on screen', () => {
+  render(<CounterReceiptView {...memoProps()} />);
+  const region = screen.getByRole('region', { name: 'Receipt 12' });
+  for (const text of [
+    'Cash memo - Sindh Drugs Rules r.18',
+    'Drug sale licence: DL-KHI-0042',
+    'Valid: 2026-01-01 to 2027-12-31',
+    'Pharmacist reg.: PPC-12345',
+    'Buyer: Ayesha Khan',
+    'Strength: 500 mg · Manufacturer: GSK Pakistan',
+    'Qty: 1 unit · Unit price: 1.00',
+    'Signature of qualified person: ________________',
+  ]) {
+    expect(within(region).getByText(text)).toBeTruthy();
+  }
+});
+
+it('#708 shows the Urdu cash memo', () => {
+  render(<CounterReceiptView {...memoProps({ locale: 'ur' })} />);
+  expect(screen.getByText('خریدار: Ayesha Khan')).toBeTruthy();
+  expect(screen.getByText('مستند شخص کے دستخط: ________________')).toBeTruthy();
+});
+
+it('#708 keeps a receipt without a cash memo unchanged', () => {
+  const input = props();
+  input.receipt = { ...input.receipt!, cashMemo: null, buyerName: 'Ayesha Khan' };
+  render(<CounterReceiptView {...input} />);
+  expect(screen.queryByText(/Cash memo/)).toBeNull();
+  expect(screen.queryByText(/Signature of qualified person/)).toBeNull();
+  expect(screen.queryByText(/Ayesha Khan/)).toBeNull();
+});

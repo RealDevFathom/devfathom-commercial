@@ -8,6 +8,7 @@ import { assertSaleBatchesSellable } from './sale-batch-safety';
 import { PharmacyReceiptIdentityError, validateReceiptIdentity } from './receipt-identity';
 import { assertRxSaleAllowed } from './rx-sale-gate';
 import { recordCompletedPrescriptionReference } from './rx-prescription-reference';
+import { assertCashMemoBuyerName, resolveCompletionBuyerName } from './cash-memo';
 
 export const completionSaleInclude = {
   lines: {
@@ -38,6 +39,12 @@ export async function completePaidPharmacySale(
   // #633: re-check every batch under lock before a receipt number is drawn. The receipt
   // snapshot below records these checked facts, not the ones loaded with the sale.
   const checkedBatches = await assertSaleBatchesSellable(db, scope, sale.id);
+  // #708: owner policy may require a buyer name on a Sindh cash memo. An offline
+  // replay (leased number) already happened at the counter and is recorded as it was.
+  if (leasedReceiptNumber === null) await assertCashMemoBuyerName(db, scope, sale, new Date());
+  // Frozen with the receipt number below; the database refuses a later change.
+  const buyerName = await resolveCompletionBuyerName(db, scope, sale);
+  const buyerNameUpdate = buyerName && buyerName !== sale.buyerName ? { buyerName } : {};
   let receiptNumber = leasedReceiptNumber;
   if (receiptNumber === null) {
     // Reserved (leased) numbers never return to this online sequence.
@@ -58,6 +65,7 @@ export async function completePaidPharmacySale(
       receiptNumber,
       receiptDeviceId: input.deviceId,
       businessDate: input.businessDate,
+      ...buyerNameUpdate,
     },
   });
   for (const line of sale.lines) {
@@ -123,6 +131,10 @@ export async function completePaidPharmacySale(
               })
               .join(' + ')
           : null,
+        // Omitted, not null, when the catalog has none: older readers see the same snapshot.
+        ...(line.medicine.manufacturer?.trim()
+          ? { manufacturer: line.medicine.manufacturer.trim().slice(0, 200) }
+          : {}),
         presentation: line.presentation.presentation,
         allocations: line.allocations.map((allocation) => {
           const batch = checkedBatches.get(allocation.inventoryLotId) ?? allocation.lot.batch;

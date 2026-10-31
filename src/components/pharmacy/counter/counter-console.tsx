@@ -35,6 +35,7 @@ import { CounterReturnPanel } from './counter-return-panel';
 import { CounterRxPanel } from './counter-rx-panel';
 import { CounterSearchResults } from './counter-search-results';
 import { CounterSubstituteProposals } from './counter-substitute-proposals';
+import { CounterCashMemoBuyer } from './counter-cash-memo-buyer';
 import {
   CounterTenderPanel,
   type CounterTenderType,
@@ -2138,6 +2139,17 @@ function ScopedPharmacyCounterConsole({
                 businessDate={todayBusinessDate()}
                 disabled={busy || blocked}
                 onRecorded={refreshCart}
+              />
+            ) : null}
+            {branchId ? (
+              <CounterCashMemoBuyer
+                key={`cash-memo:${branchId}:${saleId ?? 'none'}`}
+                branchId={branchId}
+                saleId={saleId}
+                suggestedName={
+                  customerQuery.data?.customer.displayName ?? patient?.displayName ?? null
+                }
+                disabled={busy || pending === 'tender'}
               />
             ) : null}
             <CounterTenderPanel

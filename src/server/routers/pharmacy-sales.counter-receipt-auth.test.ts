@@ -40,6 +40,12 @@ vi.mock('@/lib/pharmacy/settlement', async (original) => ({
   applyPharmacyTender: vi.fn(async () => ({ tenderId: 'tender-1' })),
   refundPharmacyTender: vi.fn(async () => ({ refundId: 'refund-1' })),
 }));
+// #708: the cash-memo profile read; null keeps the standard receipt in these cases.
+vi.mock('@/lib/pharmacy/cash-memo', async (original) => ({
+  ...(await original<typeof import('@/lib/pharmacy/cash-memo')>()),
+  readPharmacyCashMemo: vi.fn(async () => null),
+  readPharmacyCashMemoPolicy: vi.fn(async () => ({ cashMemo: false, buyerNameRequired: false })),
+}));
 vi.mock('@/lib/pharmacy/dispensing-label-source', () => ({
   readDispensingLabelSources: vi.fn(async () => []),
 }));
@@ -64,6 +70,7 @@ vi.mock('@/lib/pharmacy/receipt-print', () => ({
 }));
 
 import { hasModule } from '@/lib/entitlements';
+import { readPharmacyCashMemo, readPharmacyCashMemoPolicy } from '@/lib/pharmacy/cash-memo';
 import { readCounterCart, readCounterReceipt } from '@/lib/pharmacy/counter';
 import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-source';
 import { readReturnHistory, returnSaleLine } from '@/lib/pharmacy/sales';
@@ -777,5 +784,166 @@ describe('counter receipt authorization', () => {
         }),
       })
     );
+  });
+});
+
+describe('#708 Sindh cash memo procedures', () => {
+  const sindhMemo = {
+    template: 'SINDH_CASH_MEMO' as const,
+    licenceNumber: 'DL-KHI-0042',
+    licenceValidFrom: '2026-01-01T00:00:00.000Z',
+    licenceValidTo: '2027-12-31T00:00:00.000Z',
+    pharmacistRegistration: 'PPC-12345',
+  };
+  const cashier: Permission[] = [
+    { capability: 'pharmacy.counter', effect: 'ALLOW' },
+    { capability: 'pharmacy:counter', effect: 'ALLOW' },
+  ];
+
+  it('supplies the cash memo in force at completion to receipt reads and reprints', async () => {
+    const f = fixture(dispense);
+    assign(f, ['branch-a']);
+    vi.mocked(readPharmacyCashMemo).mockResolvedValueOnce(sindhMemo);
+
+    await expect(
+      f.caller().counterReceipt({ branchId: 'branch-a', saleId: 'sale-a' })
+    ).resolves.toMatchObject({ cashMemo: sindhMemo });
+    expect(readPharmacyCashMemo).toHaveBeenCalledWith(
+      f.db,
+      { organizationId: 'org-a', branchId: 'branch-a', actorId: 'user-a' },
+      new Date('2026-10-01T00:00:00.000Z')
+    );
+  });
+
+  it('does not read a cash memo for an unsettled receipt', async () => {
+    const f = fixture(dispense);
+    assign(f, ['branch-a']);
+    vi.mocked(readCounterReceipt).mockResolvedValue({
+      receiptNumber: null,
+      completedAt: null,
+    } as never);
+
+    await expect(
+      f.caller().counterReceipt({ branchId: 'branch-a', saleId: 'sale-a' })
+    ).resolves.toMatchObject({ cashMemo: null });
+    expect(readPharmacyCashMemo).not.toHaveBeenCalled();
+  });
+
+  it('hands the completion-time cash memo to the ESC/POS job', async () => {
+    const f = fixture(dispense);
+    assign(f, ['branch-a']);
+    vi.mocked(readPharmacyCashMemo).mockResolvedValueOnce(sindhMemo);
+
+    await expect(
+      f.caller().counterReceiptPrintJob({
+        branchId: 'branch-a',
+        saleId: 'sale-a',
+        locale: 'en',
+        reprint: true,
+      })
+    ).resolves.toMatchObject({ status: 'READY', reprint: true });
+    expect(buildPharmacyReceiptEscPosJob).toHaveBeenCalledWith(
+      expect.objectContaining({ receiptNumber: 7, cashMemo: sindhMemo }),
+      'en',
+      expect.objectContaining({ reprint: true })
+    );
+  });
+
+  it('reports the counter cash memo policy for an authorized branch only', async () => {
+    const f = fixture(dispense);
+    assign(f, ['branch-a']);
+    vi.mocked(readPharmacyCashMemoPolicy).mockResolvedValueOnce({
+      cashMemo: true,
+      buyerNameRequired: true,
+    });
+    await expect(f.caller().counterCashMemoPolicy({ branchId: 'branch-a' })).resolves.toEqual({
+      cashMemo: true,
+      buyerNameRequired: true,
+    });
+
+    const outsider = fixture(dispense, 'ADMIN');
+    await expect(
+      outsider.caller().counterCashMemoPolicy({ branchId: 'foreign-branch' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+
+  it('saves the buyer name on the locked open sale, keeping it out of audit input', async () => {
+    const f = fixture(cashier);
+    assign(f, ['branch-a']);
+    const updateMany = vi.fn(async () => ({ count: 1 }));
+    (f.db.pharmacySale as Record<string, unknown>).updateMany = updateMany;
+
+    await expect(
+      f.caller().counterSetBuyerName({
+        branchId: 'branch-a',
+        saleId: 'sale-a',
+        buyerName: '  Ayesha  Khan ',
+      })
+    ).resolves.toEqual({ saleId: 'sale-a', buyerName: 'Ayesha Khan' });
+    expect(f.db.$transaction).toHaveBeenCalledOnce();
+    expect(updateMany).toHaveBeenCalledWith({
+      where: {
+        id: 'sale-a',
+        organizationId: 'org-a',
+        branchId: 'branch-a',
+        status: 'OPEN',
+        receiptNumber: null,
+      },
+      data: { buyerName: 'Ayesha Khan' },
+    });
+    expect(f.context.audit.detail).toMatchObject({
+      action: 'cash_memo_buyer_name_set',
+      targetType: 'PharmacySale',
+      targetId: 'sale-a',
+      skipInput: true,
+    });
+  });
+
+  it('refuses a buyer name change once the receipt is issued', async () => {
+    const f = fixture(cashier);
+    assign(f, ['branch-a']);
+    (f.db.pharmacySale as Record<string, unknown>).updateMany = vi.fn(async () => ({ count: 0 }));
+
+    await expect(
+      f.caller().counterSetBuyerName({ branchId: 'branch-a', saleId: 'sale-a', buyerName: 'X' })
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+  });
+
+  it('denies the buyer name write outside the counter capability', async () => {
+    const denied = fixture([]);
+    assign(denied, ['branch-a']);
+    const updateMany = vi.fn(async () => ({ count: 1 }));
+    (denied.db.pharmacySale as Record<string, unknown>).updateMany = updateMany;
+
+    await expect(
+      denied
+        .caller()
+        .counterSetBuyerName({ branchId: 'branch-a', saleId: 'sale-a', buyerName: 'X' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(updateMany).not.toHaveBeenCalled();
+  });
+
+  it('lets only an administrator set the buyer-name owner policy', async () => {
+    const admin = fixture(dispense, 'ADMIN');
+    const updateMany = vi.fn(async () => ({ count: 1 }));
+    (admin.db.pharmacyBranch as Record<string, unknown>).updateMany = updateMany;
+    await expect(
+      admin.caller().counterSaveCashMemoPolicy({ branchId: 'branch-a', buyerNameRequired: true })
+    ).resolves.toEqual({ buyerNameRequired: true });
+    expect(updateMany).toHaveBeenCalledWith({
+      where: { id: 'branch-a', organizationId: 'org-a', active: true },
+      data: { cashMemoBuyerNameRequired: true },
+    });
+
+    await expect(
+      admin
+        .caller()
+        .counterSaveCashMemoPolicy({ branchId: 'closed-branch', buyerNameRequired: true })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+
+    const cashier = fixture([{ capability: 'pharmacy.counter', effect: 'ALLOW' }]);
+    await expect(
+      cashier.caller().counterSaveCashMemoPolicy({ branchId: 'branch-a', buyerNameRequired: true })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
 });

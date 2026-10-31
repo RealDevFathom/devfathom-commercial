@@ -93,6 +93,12 @@ import {
   readReturnHistory,
 } from '@/lib/pharmacy/sales';
 import type { LedgerScope } from '@/lib/pharmacy/stock-ledger';
+import {
+  PharmacyCashMemoError,
+  readPharmacyCashMemo,
+  readPharmacyCashMemoPolicy,
+  setPharmacySaleBuyerName,
+} from '@/lib/pharmacy/cash-memo';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { authenticatePharmacyPack } from '@/lib/pharmacy/pack-authentication-operations';
 import {
@@ -204,6 +210,17 @@ function ledgerTender(input: z.infer<typeof tenderInput>) {
 }
 
 function fail(error: unknown): never {
+  // #708: refused before any money moved (policy) or on an issued receipt.
+  if (error instanceof PharmacyCashMemoError)
+    throw new TRPCError({
+      code: error.reason === 'SALE_NOT_OPEN' ? 'CONFLICT' : 'BAD_REQUEST',
+      message:
+        error.reason === 'BUYER_NAME_REQUIRED'
+          ? 'This branch requires the buyer name on the cash memo. Enter it, then take payment.'
+          : error.reason === 'INVALID_BUYER_NAME'
+            ? 'Enter the buyer name as plain text, up to 120 characters.'
+            : 'The buyer name can only change before the receipt is issued.',
+    });
   if (error instanceof PharmacyRxSaleDenied)
     throw new TRPCError({ code: 'FORBIDDEN', message: error.message });
   if (error instanceof PharmacyRxReferenceError)
@@ -1735,11 +1752,15 @@ export const pharmacySalesRouter = router({
       const scope = await requireCounterReceiptAccess(ctx, input.branchId);
       try {
         const receipt = await loadCounterReceipt(ctx, scope, input.saleId);
-        const [dispensingLabelSources, taxIdentity] = await Promise.all([
+        const [dispensingLabelSources, taxIdentity, cashMemo] = await Promise.all([
           readDispensingLabelSources(ctx.db, scope, receipt),
           receipt.completedAt
             ? readPharmacyReceiptTaxIdentity(ctx.db, scope, new Date(receipt.completedAt))
             : Promise.resolve({ ntn: null, strn: null }),
+          // #708: the profile in force at completion, so a reprint shows the same memo.
+          receipt.completedAt
+            ? readPharmacyCashMemo(ctx.db, scope, new Date(receipt.completedAt))
+            : Promise.resolve(null),
         ]);
         // F8: sourced Rx label payloads come only from this authorized receipt read.
         return {
@@ -1747,6 +1768,7 @@ export const pharmacySalesRouter = router({
           dispensingLabelSources,
           // Completion-time identity keeps browser, A4, and Urdu copies aligned with ESC/POS.
           taxIdentity,
+          cashMemo,
         };
       } catch (error) {
         fail(error);
@@ -1777,13 +1799,14 @@ export const pharmacySalesRouter = router({
         if (receipt.receiptNumber === null || !receipt.completedAt) {
           throw new PharmacyReceiptPrintError('RECEIPT_NOT_ISSUED');
         }
-        const [format, taxIdentity] = await Promise.all([
+        const [format, taxIdentity, cashMemo] = await Promise.all([
           readPharmacyReceiptFormat(ctx.db, scope),
           readPharmacyReceiptTaxIdentity(ctx.db, scope, new Date(receipt.completedAt)),
+          readPharmacyCashMemo(ctx.db, scope, new Date(receipt.completedAt)),
         ]);
         return {
           status: 'READY' as const,
-          ...buildPharmacyReceiptEscPosJob(receipt, input.locale, {
+          ...buildPharmacyReceiptEscPosJob({ ...receipt, cashMemo }, input.locale, {
             layout: format.layout,
             taxIdentity,
             reprint: input.reprint,
@@ -1822,6 +1845,74 @@ export const pharmacySalesRouter = router({
       // Active, in-organization branch or FORBIDDEN (scopeFor checks it).
       const scope = await branchScopeOrForbidden(ctx, input.branchId);
       return savePharmacyReceiptFormat(ctx.db, scope.organizationId, input);
+    }),
+
+  /**
+   * #708: whether a sale tendered now prints a Sindh cash memo (the profile in
+   * force is for Sindh) and whether the owner requires a buyer name on it.
+   */
+  counterCashMemoPolicy: protectedProcedure
+    .input(z.object({ branchId }).strict())
+    .query(async ({ ctx, input }) =>
+      readPharmacyCashMemoPolicy(
+        ctx.db,
+        await requireCounterReceiptAccess(ctx, input.branchId),
+        new Date()
+      )
+    ),
+
+  /** #708: owner policy, buyer name required on a Sindh cash memo. Admins only. */
+  counterSaveCashMemoPolicy: adminProcedure
+    .input(z.object({ branchId, buyerNameRequired: z.boolean() }).strict())
+    .mutation(async ({ ctx, input }) => {
+      const scope = await branchScopeOrForbidden(ctx, input.branchId);
+      const updated = await ctx.db.pharmacyBranch.updateMany({
+        where: { id: scope.branchId, organizationId: scope.organizationId, active: true },
+        data: { cashMemoBuyerNameRequired: input.buyerNameRequired },
+      });
+      if (updated.count !== 1)
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Branch not found.' });
+      return { buyerNameRequired: input.buyerNameRequired };
+    }),
+
+  /**
+   * #708: the buyer name for the cash memo, typed at tender. Only an OPEN sale
+   * with no receipt number can change; completion freezes it. The name itself
+   * is never written to the audit detail.
+   */
+  counterSetBuyerName: auditedProtectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          saleId: z.string().min(1),
+          buyerName: z.string().max(200).nullable(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
+      // The buyer's name is personal data: keep it out of the captured audit input.
+      ctx.audit.detail = {
+        category: 'PHARMACY_COUNTER',
+        action: input.buyerName?.trim()
+          ? 'cash_memo_buyer_name_set'
+          : 'cash_memo_buyer_name_cleared',
+        targetType: 'PharmacySale',
+        targetId: input.saleId,
+        skipInput: true,
+      };
+      try {
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          await db.$queryRaw(
+            Prisma.sql`SELECT id FROM pharmacy_sales WHERE id = ${input.saleId} AND "organizationId" = ${scope.organizationId} AND "branchId" = ${scope.branchId} FOR UPDATE`
+          );
+          return setPharmacySaleBuyerName(db, scope, input);
+        });
+      } catch (error) {
+        fail(error);
+      }
     }),
 
   // ── POS-01 configurable shortcuts ─────────────────────────────────────────
