@@ -1,5 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { previewWhatsAppCost, readWhatsAppRateCard } from './rate-card';
+
+afterEach(() => vi.unstubAllEnvs());
 
 describe('WhatsApp rate card', () => {
   it('calculates recipients times the configured category rate exactly', () => {
@@ -17,11 +19,27 @@ describe('WhatsApp rate card', () => {
   });
 
   it('does not invent a rate when configuration is absent, invalid, or missing a category', () => {
+    vi.stubEnv('PHARMACY_WHATSAPP_RATE_CARD', undefined);
     expect(previewWhatsAppCost(3, 'MARKETING', readWhatsAppRateCard(undefined))).toBeNull();
     expect(previewWhatsAppCost(3, 'MARKETING', readWhatsAppRateCard('{bad json'))).toBeNull();
     const card = readWhatsAppRateCard(
       JSON.stringify({ currency: 'PKR', rates: { UTILITY: '0.5' } })
     );
     expect(previewWhatsAppCost(3, 'MARKETING', card)).toBeNull();
+  });
+
+  it('reads the current environment rate card on each preview', () => {
+    for (const [rate, total] of [
+      ['1.25', '5'],
+      ['2.75', '11'],
+    ]) {
+      vi.stubEnv(
+        'PHARMACY_WHATSAPP_RATE_CARD',
+        JSON.stringify({ currency: 'PKR', rates: { MARKETING: rate } })
+      );
+      expect(previewWhatsAppCost(4, 'MARKETING')).toMatchObject({ rate, total });
+    }
+    vi.stubEnv('PHARMACY_WHATSAPP_RATE_CARD', undefined);
+    expect(previewWhatsAppCost(4, 'MARKETING')).toBeNull();
   });
 });

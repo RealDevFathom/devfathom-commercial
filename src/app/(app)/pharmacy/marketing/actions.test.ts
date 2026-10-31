@@ -1,4 +1,4 @@
-import { beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   context: vi.fn(),
   revalidate: vi.fn(),
@@ -25,6 +25,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   mocks.context.mockResolvedValue({});
 });
+afterEach(() => vi.unstubAllEnvs());
 it('returns the saved manual draft for navigation with bounded retail settings', async () => {
   mocks.createDraft.mockResolvedValue({ id: 'saved-draft' });
   const result = await marketingAction(
@@ -75,7 +76,6 @@ it('shows recipients times the configured marketing rate before capture', async 
   const result = await marketingAction(form({ operation: 'preview', campaignId: 'c1' }));
   expect(result.message).toContain('8 recipients × PKR 2.75 (marketing) = PKR 22');
   expect(result.message).toContain('Nothing saved or sent');
-  vi.unstubAllEnvs();
 });
 it('passes only insight reference and editable draft settings for server-bound review', async () => {
   mocks.reviewGrowth.mockResolvedValue({ decision: 'APPROVE', campaignId: 'from-insight' });
