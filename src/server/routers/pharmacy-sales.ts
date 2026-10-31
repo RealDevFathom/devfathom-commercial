@@ -111,6 +111,7 @@ import {
 import { assertInOrganization } from '../org-refs';
 import {
   adminProcedure,
+  assertModuleLicensed,
   auditedProtectedProcedure,
   capabilityProcedure,
   protectedProcedure,
@@ -1450,6 +1451,7 @@ export const pharmacySalesRouter = router({
         .strict()
     )
     .query(async ({ ctx, input }) => {
+      assertModuleLicensed(ctx, 'pharmacy-procurement');
       try {
         return await findMarginOptimizedBrandProposals(
           ctx.db,

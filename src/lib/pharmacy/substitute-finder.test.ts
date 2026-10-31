@@ -44,7 +44,9 @@ function dbWith(lots: ReturnType<typeof lot>[]) {
   const db = {
     medicine: { findFirst: async () => requested },
     pharmacyInventoryLot: { findMany: async () => lots },
-    $transaction: async (work: (tx: unknown) => Promise<unknown>): Promise<unknown> => work(db),
+    async $transaction(work: (tx: unknown) => Promise<unknown>): Promise<unknown> {
+      return work(this);
+    },
     $queryRaw: async (query: unknown): Promise<unknown[]> => {
       if (Array.isArray(query)) return [{ branch: '' }]; // branch-context statements
       return lots.flatMap((item) =>
@@ -292,6 +294,147 @@ describe('AI-05 deterministic substitute finder', () => {
         },
       },
     });
+  });
+
+  it.each([
+    { label: 'same branch', branches: ['branch-a', 'branch-a'], initialBranch: '' },
+    { label: 'different branches', branches: ['branch-a', 'branch-b'], initialBranch: '' },
+    {
+      label: 'different branches with an existing scope',
+      branches: ['branch-a', 'branch-b'],
+      initialBranch: 'previous-branch',
+    },
+  ])('keeps concurrent comparisons for $label bound through every ledger read', async ({
+    branches,
+    initialBranch,
+  }) => {
+    const lots = [...new Set(branches)].flatMap((branchId) =>
+      ['single', 'first', 'second'].map((medicineId) =>
+        lot({
+          id: `${branchId}-${medicineId}`,
+          balances: [{ organizationId: scope.organizationId, branchId, onHandUnits: 20 }],
+          batch: {
+            medicine: {
+              id: medicineId,
+              productName: medicineId,
+              strengths: strength('ingredient-a', medicineId === 'single' ? '250' : '500'),
+            },
+          },
+        })
+      )
+    );
+    const db = dbWith(lots);
+    db.medicine.findFirst = async (args?: { where: { id: string } }) => ({
+      ...requested,
+      strengths: strength('ingredient-a', args?.where.id === 'requested-single' ? '250' : '500'),
+    });
+    let currentBranch = initialBranch;
+    db.pharmacyInventoryLot.findMany = async (args?: { where: { branchId: string } }) => {
+      expect(currentBranch).toBe(args?.where.branchId);
+      return lots.filter((item) => item.balances[0]!.branchId === args?.where.branchId);
+    };
+    const readScopes: { requested: unknown; actual: string }[] = [];
+    // Model the HTTP batch's one connection: only individual statements queue.
+    let statementQueue = Promise.resolve();
+    db.$queryRaw = (query: unknown, ...values: unknown[]) => {
+      const result = statementQueue.then(() => {
+        if (Array.isArray(query)) {
+          if (query[0].includes('current_setting')) return [{ branch: currentBranch }];
+          currentBranch = String(values[0]);
+          return [];
+        }
+        const [, branchId, medicineId] = (query as { values: unknown[] }).values;
+        readScopes.push({ requested: branchId, actual: currentBranch });
+        // Branch RLS hides sibling stock; an empty scope hides restock holds.
+        if (currentBranch && currentBranch !== branchId) return [];
+        return lots
+          .filter(
+            (item) => item.balances[0]!.branchId === branchId && item.batch.medicine.id === medicineId
+          )
+          .map(
+            (item) =>
+              ({
+                organizationId: scope.organizationId,
+                branchId: String(branchId),
+                inventoryLotId: item.id,
+                stockLocationId: 'shelf',
+                batchState: 'ACTIVE',
+                disposition: 'AVAILABLE',
+                receivedAt: new Date('2026-01-01T00:00:00Z'),
+                expiresAt: new Date('2099-01-01T00:00:00Z'),
+                availableUnits: currentBranch === branchId ? 5 : 20,
+              }) satisfies AllocationCandidate
+          );
+      });
+      statementQueue = result.then(() => undefined);
+      return result;
+    };
+    const results = await Promise.all(
+      branches.map((branchId, index) =>
+        findMarginOptimizedBrandProposals(
+          db as never,
+          { ...scope, branchId },
+          {
+            // The shorter comparison must not restore scope during the other's second read.
+            medicineId: index === 0 ? 'requested-single' : 'requested',
+            presentationId: 'presentation-requested',
+            quantityCanonicalUnits: 5,
+          }
+        )
+      )
+    );
+    results.forEach((rows, index) => {
+      expect(rows.map((row) => [row.inventoryLotId, row.availableCanonicalUnits])).toEqual(
+        (index === 0 ? ['single'] : ['first', 'second']).map((medicineId) => [
+          `${branches[index]}-${medicineId}`,
+          5,
+        ])
+      );
+    });
+    expect(readScopes).toEqual(
+      branches.flatMap((branchId, index) =>
+        Array.from({ length: index === 0 ? 1 : 2 }, () => ({
+          requested: branchId,
+          actual: branchId,
+        }))
+      )
+    );
+    expect(currentBranch).toBe(initialBranch);
+  });
+
+  it('restores branch scope and releases a queued comparison when a ledger read fails', async () => {
+    const db = dbWith([lot()]);
+    const readLedger = db.$queryRaw;
+    let currentBranch = 'previous-branch';
+    let failRead = true;
+    db.$queryRaw = async (query: unknown, ...values: unknown[]) => {
+      if (Array.isArray(query)) {
+        if (query[0].includes('current_setting')) return [{ branch: currentBranch }];
+        currentBranch = String(values[0]);
+        return [];
+      }
+      expect(currentBranch).toBe(scope.branchId);
+      if (failRead) {
+        failRead = false;
+        throw new Error('ledger read failed');
+      }
+      return readLedger(query);
+    };
+    const input = {
+      medicineId: 'requested',
+      presentationId: 'presentation-requested',
+      quantityCanonicalUnits: 10,
+    };
+    const [failed, succeeded] = await Promise.allSettled([
+      findMarginOptimizedBrandProposals(db as never, scope, input),
+      findMarginOptimizedBrandProposals(db as never, scope, input),
+    ]);
+    expect(failed).toMatchObject({ status: 'rejected', reason: new Error('ledger read failed') });
+    expect(succeeded).toMatchObject({
+      status: 'fulfilled',
+      value: [{ inventoryLotId: 'lot-a', availableCanonicalUnits: 20 }],
+    });
+    expect(currentBranch).toBe('previous-branch');
   });
 
   it('never margin-ranks a different ingredient, strength, form, or route', async () => {

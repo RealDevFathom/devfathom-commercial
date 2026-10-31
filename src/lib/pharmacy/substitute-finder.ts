@@ -183,21 +183,60 @@ export async function findSubstituteProposals(
   );
 }
 
+const branchReadQueues = new WeakMap<Prisma.TransactionClient, Promise<void>>();
+
+function serializeBranchRead<T>(tx: Prisma.TransactionClient, read: () => Promise<T>) {
+  // Batched procedures share this transaction client. Serializing statements
+  // alone lets another comparison change the branch between ledger reads.
+  const result = (branchReadQueues.get(tx) ?? Promise.resolve()).then(read);
+  branchReadQueues.set(
+    tx,
+    result.then(
+      () => undefined,
+      () => undefined
+    )
+  );
+  return result;
+}
+
+type BrandComparisonInput = {
+  medicineId: string;
+  presentationId: string;
+  quantityCanonicalUnits: number;
+  at?: Date;
+};
+
 /**
  * #745: pharmacist/purchasing decision support for brand mix. Unlike the
  * patient-savings finder above, this ranks only exact, saleable equivalents by
  * the observed lot margin. It remains read-only and deliberately does not
  * infer an equivalent salt, strength, form, or route.
  */
-export async function findMarginOptimizedBrandProposals(
+export function findMarginOptimizedBrandProposals(
   db: ScopedDb,
   scope: { organizationId: string; branchId: string },
-  input: {
-    medicineId: string;
-    presentationId: string;
-    quantityCanonicalUnits: number;
-    at?: Date;
-  }
+  input: BrandComparisonInput
+): Promise<MarginOptimizedBrandProposal[]> {
+  return db.$transaction((tx) =>
+    serializeBranchRead(tx, async () => {
+      // Bind every branch-protected read to this connection, including the
+      // initial lot query and restock reservations in subsequent ledger reads.
+      const [previous] = await tx.$queryRaw<{ branch: string | null }[]>`
+        SELECT current_setting('app.current_branch_id', true) AS branch`;
+      await tx.$queryRaw`SELECT set_config('app.current_branch_id', ${scope.branchId}, true)`;
+      try {
+        return await readMarginOptimizedBrandProposals(tx as ScopedDb, scope, input);
+      } finally {
+        await tx.$queryRaw`SELECT set_config('app.current_branch_id', ${previous?.branch ?? ''}, true)`;
+      }
+    })
+  );
+}
+
+async function readMarginOptimizedBrandProposals(
+  db: ScopedDb,
+  scope: { organizationId: string; branchId: string },
+  input: BrandComparisonInput
 ): Promise<MarginOptimizedBrandProposal[]> {
   const at = input.at ?? new Date();
   const requested = await db.medicine.findFirst({
@@ -254,28 +293,15 @@ export async function findMarginOptimizedBrandProposals(
   const availableByLot = new Map<string, number>();
   // Use the same reservation-aware evidence and saleability rules as allocation.
   // Read each matching medicine once, even when it has multiple receipt lots.
-  if (matchingLots.length > 0) {
-    await db.$transaction(async (tx) => {
-      // Restock reservations have branch RLS: bind the same connection used by
-      // the ledger read, including when the caller is the RSC database facade.
-      const [previous] = await tx.$queryRaw<{ branch: string | null }[]>`
-        SELECT current_setting('app.current_branch_id', true) AS branch`;
-      await tx.$queryRaw`SELECT set_config('app.current_branch_id', ${scope.branchId}, true)`;
-      try {
-        for (const medicineId of new Set(matchingLots.map((lot) => lot.batch.medicine.id))) {
-          const candidates = await loadStockCandidatesForRead(tx as ScopedDb, scope, medicineId);
-          for (const candidate of candidates) {
-            if (blockReasonFor(candidate, { ...scope, at }) !== null) continue;
-            availableByLot.set(
-              candidate.inventoryLotId,
-              (availableByLot.get(candidate.inventoryLotId) ?? 0) + candidate.availableUnits
-            );
-          }
-        }
-      } finally {
-        await tx.$queryRaw`SELECT set_config('app.current_branch_id', ${previous?.branch ?? ''}, true)`;
-      }
-    });
+  for (const medicineId of new Set(matchingLots.map((lot) => lot.batch.medicine.id))) {
+    const candidates = await loadStockCandidatesForRead(db, scope, medicineId);
+    for (const candidate of candidates) {
+      if (blockReasonFor(candidate, { ...scope, at }) !== null) continue;
+      availableByLot.set(
+        candidate.inventoryLotId,
+        (availableByLot.get(candidate.inventoryLotId) ?? 0) + candidate.availableUnits
+      );
+    }
   }
   const proposals = matchingLots.flatMap((lot): MarginOptimizedBrandProposal[] => {
     const medicine = lot.batch.medicine;

@@ -336,23 +336,47 @@ describeIfDatabase('margin optimizer cost isolation under restricted PostgreSQL'
       });
       // A fresh tenant-only connection has no branch GUC. The optimizer must
       // bind it itself or branch-RLS would silently hide the restock hold.
-      const read = (quantityCanonicalUnits: number) =>
-        inOrg(ORG_A, (db) =>
-          deps.substituteFinder.findMarginOptimizedBrandProposals(
-            db,
-            { organizationId: ORG_A, branchId: fixture.branchId },
-            {
-              medicineId: fixture.medicineId,
-              presentationId: fixture.presentationId,
-              quantityCanonicalUnits,
-              at: NOW,
-            }
-          )
+      const compare = (db: ScopedDb, quantityCanonicalUnits: number) =>
+        deps.substituteFinder.findMarginOptimizedBrandProposals(
+          db,
+          { organizationId: ORG_A, branchId: fixture.branchId },
+          {
+            medicineId: fixture.medicineId,
+            presentationId: fixture.presentationId,
+            quantityCanonicalUnits,
+            at: NOW,
+          }
         );
+      const read = (quantityCanonicalUnits: number) =>
+        inOrg(ORG_A, (db) => compare(db, quantityCanonicalUnits));
       await expect(read(10)).resolves.toEqual([]);
       const rows = await read(5);
       expect(rows).toHaveLength(1);
       expect(rows[0]!.availableCanonicalUnits).toBe(5);
+
+      // HTTP batches share one outer transaction; nested callbacks reuse it.
+      await inOrg(ORG_A, async (db) => {
+        const [reserved, sibling] = await Promise.all([
+          compare(db, 5),
+          deps.substituteFinder.findMarginOptimizedBrandProposals(
+            db,
+            { organizationId: ORG_A, branchId: BRANCH_ONE },
+            {
+              medicineId: one.medicineId,
+              presentationId: one.presentationId,
+              quantityCanonicalUnits: 10,
+              at: NOW,
+            }
+          ),
+        ]);
+        expect(reserved).toHaveLength(1);
+        expect(reserved[0]!.availableCanonicalUnits).toBe(5);
+        expect(sibling).toHaveLength(1);
+        expect(sibling[0]!.availableCanonicalUnits).toBe(40);
+        const [restored] = await db.$queryRaw<{ branch: string | null }[]>`
+          SELECT current_setting('app.current_branch_id', true) AS branch`;
+        expect(restored?.branch ?? '').toBe('');
+      });
     }
   );
 });

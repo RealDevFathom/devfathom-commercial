@@ -4,7 +4,9 @@ vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/entitlements', () => ({
-  hasModule: vi.fn(() => true),
+  hasModule: vi.fn((view: { enabledModules: string[] }, key: string) =>
+    view.enabledModules.includes(key)
+  ),
   resolveOrganizationEntitlements: vi.fn(),
 }));
 vi.mock('@/server/audit', () => ({
@@ -24,7 +26,11 @@ const input = {
   quantityCanonicalUnits: 10,
 };
 
-function fixture(capabilities: string[], branches = ['branch-a']) {
+function fixture(
+  capabilities: string[],
+  branches = ['branch-a'],
+  enabledModules = ['pharmacy-counter', 'pharmacy-procurement']
+) {
   const db = {
     user: {
       findUnique: vi.fn(async () => ({
@@ -47,10 +53,12 @@ function fixture(capabilities: string[], branches = ['branch-a']) {
       })),
     },
     pharmacyInventoryLot: { findMany: vi.fn(async () => []) },
+    $queryRaw: vi.fn(async () => [{ branch: '' }]),
+    $transaction: vi.fn(async (work: (tx: unknown) => Promise<unknown>): Promise<unknown> => work(db)),
   };
   const caller = app.createCaller({
     db,
-    entitlements: { organizationId: 'org-a', enabledModules: ['pharmacy-counter'], modules: [] },
+    entitlements: { organizationId: 'org-a', enabledModules, modules: [] },
     session: {
       expires: 'later',
       user: { id: 'user-a', role: 'MEMBER', status: 'ACTIVE', organizationId: 'org-a' },
@@ -76,6 +84,20 @@ describe('#745 margin optimizer commercial-data boundary', () => {
     expect(db.pharmacyInventoryLot.findMany).not.toHaveBeenCalled();
   });
 
+  it.each(['pharmacy:procurement', 'pharmacy:*'])(
+    'rejects a Counter-only licence even with %s permission',
+    async (capability) => {
+      const { caller, db } = fixture([capability], ['branch-a'], ['pharmacy-counter']);
+      await expect(caller.marginOptimizedBrandProposals(input)).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'The pharmacy-procurement module is not enabled for this organization.',
+      });
+      expect(db.pharmacyBranch.findMany).not.toHaveBeenCalled();
+      expect(db.medicine.findFirst).not.toHaveBeenCalled();
+      expect(db.pharmacyInventoryLot.findMany).not.toHaveBeenCalled();
+    }
+  );
+
   it('rejects a foreign branch before reading any lot cost', async () => {
     const { caller, db } = fixture(['pharmacy:procurement'], []);
     await expect(caller.marginOptimizedBrandProposals(input)).rejects.toMatchObject({
@@ -86,13 +108,16 @@ describe('#745 margin optimizer commercial-data boundary', () => {
     expect(db.pharmacyInventoryLot.findMany).not.toHaveBeenCalled();
   });
 
-  it('keeps the solo-owner pharmacy wildcard able to use the read-only optimizer', async () => {
-    const { caller, db } = fixture(['pharmacy:*']);
-    await expect(caller.marginOptimizedBrandProposals(input)).resolves.toEqual([]);
-    expect(db.pharmacyInventoryLot.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: expect.objectContaining({ organizationId: 'org-a', branchId: 'branch-a' }),
-      })
-    );
-  });
+  it.each(['pharmacy:procurement', 'pharmacy:*'])(
+    'allows the licensed read-only optimizer with %s permission, including the solo owner',
+    async (capability) => {
+      const { caller, db } = fixture([capability]);
+      await expect(caller.marginOptimizedBrandProposals(input)).resolves.toEqual([]);
+      expect(db.pharmacyInventoryLot.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ organizationId: 'org-a', branchId: 'branch-a' }),
+        })
+      );
+    }
+  );
 });
