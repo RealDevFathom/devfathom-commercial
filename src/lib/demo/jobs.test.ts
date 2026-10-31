@@ -28,6 +28,7 @@ import {
 import { resolveRestaurantJobHandler } from '@/lib/restaurant/job-handlers';
 
 type Row = Record<string, unknown>;
+const FIELD_MAX_ATTEMPTS = Symbol('RestaurantJob.maxAttempts');
 type DemoOrganization = {
   id: string;
   isDemo: boolean;
@@ -59,7 +60,16 @@ function applyData(row: Row, data: Row): void {
 function matches(row: Row, where: Row): boolean {
   for (const [key, condition] of Object.entries(where)) {
     if (condition && typeof condition === 'object' && !(condition instanceof Date)) {
+      if ('gte' in condition) {
+        const compared = condition.gte === FIELD_MAX_ATTEMPTS ? row.maxAttempts : condition.gte;
+        if (!((row[key] as number) >= (compared as number))) return false;
+        continue;
+      }
       if ('lt' in condition) {
+        if (condition.lt === FIELD_MAX_ATTEMPTS) {
+          if (!((row[key] as number) < (row.maxAttempts as number))) return false;
+          continue;
+        }
         if (!((row[key] as Date) < (condition as { lt: Date }).lt)) return false;
         continue;
       }
@@ -92,6 +102,7 @@ function createDemoDb(
       ),
     },
     restaurantJob: {
+      fields: { maxAttempts: FIELD_MAX_ATTEMPTS },
       findFirst: vi.fn(
         async ({ where }: { where: { idempotencyKey?: string } }) =>
           [...jobs.values()].find((job) => job.idempotencyKey === where.idempotencyKey) ?? null
@@ -427,6 +438,44 @@ describe('processDueDemoResetJobs', () => {
     expect(first.state.resets + second.state.resets).toBe(2);
     expect(second.jobs.get('reset_2')!.status).toBe('SUCCEEDED');
   });
+
+  it.each([3, 4])(
+    'does not reset a stale job with %i attempts against a budget of 3',
+    async (attempts) => {
+      const abandoned = {
+        status: 'RUNNING',
+        claimedAt: new Date(NOW.getTime() - DEMO_RESET_LEASE_MS - 1),
+        claimedBy: 'dead-worker',
+      };
+      const demo = createDemoDb(undefined, [
+        { ...queuedJob('exhausted'), ...abandoned, attempts, maxAttempts: 3 },
+        { ...queuedJob('retryable'), ...abandoned, attempts: 1, maxAttempts: 2 },
+      ]);
+      mocks.withPlatformDb.mockImplementation(async (work: (db: ScopedDb) => Promise<unknown>) =>
+        work({
+          organization: { findMany: async () => [{ id: ORGANIZATION_ID }] },
+        } as unknown as ScopedDb)
+      );
+      mocks.withTenantDb.mockImplementation(
+        async (_organizationId: string, work: (db: ScopedDb) => Promise<unknown>) => work(demo.db)
+      );
+
+      const result = await processDueDemoResetJobs({ now: NOW, maxJobs: 1 });
+
+      expect(result.recovered).toBe(2);
+      expect(result.jobs).toMatchObject({ claimed: 1, succeeded: 1 });
+      expect(demo.state.resets).toBe(1);
+      expect(demo.jobs.get('exhausted')).toMatchObject({
+        status: 'DEAD',
+        attempts,
+        claimedAt: null,
+        claimedBy: null,
+      });
+      expect(demo.jobs.get('retryable')).toMatchObject({ status: 'SUCCEEDED', attempts: 2 });
+      expect(demo.executions).toHaveLength(1);
+      expect(demo.executions[0]!.jobId).toBe('retryable');
+    }
+  );
 
   it('rolls back a failed reset and requeues it through scheduler retry', async () => {
     const demo = createDemoDb(undefined, [queuedJob('reset')]);
