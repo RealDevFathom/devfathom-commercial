@@ -128,7 +128,7 @@ export async function verifyOccurrence(
             organizationId: occ.organizationId,
             actorType: 'RESTAURANT_OPERATOR',
             actorStaffProfileId: actor,
-            source: 'SYSTEM',
+            source: 'TRPC', // interactive PIN re-entry via the SOP tRPC procedure
             category: categoryForPath('restaurant'),
             operation: 'EXECUTE',
             action: 'sop.verify.soloOwnerApproval',
@@ -317,7 +317,7 @@ export async function waiveOccurrence(
           organizationId: current.organizationId,
           actorType: 'RESTAURANT_OPERATOR',
           actorStaffProfileId: input.actorStaffProfileId,
-          source: 'SYSTEM',
+          source: 'TRPC', // interactive PIN re-entry via the SOP tRPC procedure
           category: categoryForPath('restaurant'),
           operation: 'EXECUTE',
           action: 'sop.waive.soloOwnerApproval',

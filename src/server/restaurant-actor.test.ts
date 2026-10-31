@@ -112,6 +112,12 @@ describe('owner/admin capability and automatic branch access', () => {
       staffProfileId: 'session-staff',
     });
   });
+  it('does not treat a DENY capability override as branch eligibility', async () => {
+    const { db, ctx } = fixture();
+    await resolveRestaurantActor(ctx as never, ['home']);
+    const select = db.restaurantStaffProfile.findMany.mock.calls[0]![0].select;
+    expect(select.directCapabilityGrants.where).toEqual({ effect: 'ALLOW' });
+  });
   it('denies a regular user at another branch', async () => {
     await expect(resolveRestaurantActor(fixture().ctx as never, ['remote'])).rejects.toMatchObject({
       code: 'FORBIDDEN',
@@ -119,6 +125,17 @@ describe('owner/admin capability and automatic branch access', () => {
   });
   it('does not grant an owner access to a foreign or inactive branch', async () => {
     const { db, ctx } = fixture('ADMIN');
+    // Even an explicit tenant-wide restaurant:configure grant only lifts the
+    // branch-link requirement; the branch must still be active in this tenant.
+    db.user.findUnique.mockResolvedValue({
+      role: 'ADMIN',
+      status: 'ACTIVE',
+      organizationRole: {
+        key: 'owner',
+        permissions: [{ capability: 'restaurant:configure', effect: 'ALLOW' }],
+      },
+      permissionOverrides: [],
+    });
     db.restaurantBranch.findMany.mockResolvedValue([]);
     await expect(resolveRestaurantActor(ctx as never, ['foreign'])).rejects.toMatchObject({
       code: 'BAD_REQUEST',

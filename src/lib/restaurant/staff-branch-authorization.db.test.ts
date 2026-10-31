@@ -213,6 +213,14 @@ describeIfDatabase('staff branch authorization (real PostgreSQL)', () => {
     await expect(
       resolveRestaurantActor(context(ids.manager), [ids.foreignBranch])
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    // A DENY capability override at another branch is not a branch link.
+    await client.query(
+      `INSERT INTO restaurant_staff_capability_grants (id,"organizationId","staffProfileId","branchId",capability,effect) VALUES ($1,$2,$3,$4,$5,'DENY')`,
+      [`deny_${suffix}`, ids.orgA, ids.managerProfile, ids.branchB, 'sop:verify']
+    );
+    await expect(resolveRestaurantActor(context(ids.manager), [ids.branchB])).rejects.toMatchObject(
+      { code: 'FORBIDDEN' }
+    );
     // A role holding can bind a branch other than the primary branch.
     await client.query(
       `INSERT INTO restaurant_staff_job_roles (id,"organizationId","staffProfileId","jobRoleId","branchId") VALUES ($1,$2,$3,$4,$5)`,

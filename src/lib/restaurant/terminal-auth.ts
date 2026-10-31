@@ -583,7 +583,9 @@ export async function authenticateOperator(
      * where only an organization-wide credential is accepted. */
     deviceId?: string;
     /** Trusted branch derived from the authenticated terminal device. When set,
-     * only an operator whose primary branch matches may authenticate. */
+     * only an operator linked to this branch may authenticate: primary branch,
+     * an active job-role holding, an ALLOW capability override, or a branch
+     * assignment. A DENY override is never a branch link. */
     branchId?: string;
     type: OperatorCredentialType;
     secret: string;
@@ -600,7 +602,7 @@ export async function authenticateOperator(
         primaryBranchId: true,
         status: true,
         jobRoles: { where: { jobRole: { active: true } }, select: { branchId: true } },
-        directCapabilityGrants: { select: { branchId: true } },
+        directCapabilityGrants: { where: { effect: 'ALLOW' }, select: { branchId: true } },
         user: { select: { restaurantBranchAssignments: { select: { branchId: true } } } },
       },
     }),

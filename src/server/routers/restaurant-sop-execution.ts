@@ -99,6 +99,11 @@ function mapExecutionError(err: unknown): never {
 // ── Shared schemas ────────────────────────────────────────────────────────────
 
 const OCCURRENCE_ID = z.string().min(1);
+/** Operator PINs are 4-8 digits everywhere (terminal, pharmacy, SOP approvals). */
+const APPROVAL_PIN = z
+  .string()
+  .regex(/^\d{4,8}$/)
+  .optional();
 const OPTIONAL_ACTOR = z.string().min(1).nullable().optional();
 const OPTIONAL_REASON = z.string().max(2_000).nullable().optional();
 const REPORT_DATE = z
@@ -555,7 +560,7 @@ export const restaurantSopExecutionRouter = router({
           occurrenceId: OCCURRENCE_ID,
           actorStaffProfileId: OPTIONAL_ACTOR,
           reason: OPTIONAL_REASON,
-          approvalPin: z.string().min(1).max(128).optional(),
+          approvalPin: APPROVAL_PIN,
         })
         .strict()
     )
@@ -614,11 +619,8 @@ export const restaurantSopExecutionRouter = router({
           // Ignored: the acting verifier is always the session actor.
           actorStaffProfileId: OPTIONAL_ACTOR,
           approvingStaffProfileId: z.string().trim().min(1),
-          approvalPin: z.string().min(1).max(128).optional(),
-          approvingPin: z
-            .string()
-            .regex(/^\d{4,8}$/)
-            .optional(),
+          approvalPin: APPROVAL_PIN,
+          approvingPin: APPROVAL_PIN,
           reason: z.string().min(1).max(2_000),
         })
         .strict()

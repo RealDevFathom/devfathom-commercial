@@ -902,7 +902,7 @@ describe('SOP waiver second-approver authentication', () => {
         occurrenceId: OCC_ID,
         actorStaffProfileId: 'spoofed',
         approvingStaffProfileId: 'staff_b',
-        approvalPin: 'wrong',
+        approvalPin: '0000',
         reason: 'Emergency',
       })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });

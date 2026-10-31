@@ -265,6 +265,7 @@ describe('waiver credential and solo-owner boundary', () => {
     expect(db.auditLog.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         action: 'sop.waive.soloOwnerApproval',
+        source: 'TRPC',
         actorStaffProfileId: ACTOR_ID,
         targetId: OCC_ID,
         metadata: expect.objectContaining({ coAuthorizationId: 'new_id' }),

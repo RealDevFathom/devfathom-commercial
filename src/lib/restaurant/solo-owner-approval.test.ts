@@ -135,7 +135,7 @@ describe('solo owner approval requires live PIN reauthentication and audit', () 
     );
     expect(db.auditLog.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ action: 'sop.verify.soloOwnerApproval' }),
+        data: expect.objectContaining({ action: 'sop.verify.soloOwnerApproval', source: 'TRPC' }),
       })
     );
     expect(db.restaurantSopVerification.create).toHaveBeenCalledWith(
