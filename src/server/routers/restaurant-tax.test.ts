@@ -59,7 +59,7 @@ function caller() {
 
 const base = {
   branchId: 'branch_1',
-  effectiveFrom: '2026-07-01T00:00:00.000Z',
+  effectiveFrom: '2026-07-01',
   accountantConfirmation: true,
   approvalReference: 'Accountant memo 42',
   idempotencyKey: 'activation-key-42',
@@ -68,7 +68,10 @@ const base = {
 describe('restaurant tax activation router', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    db.restaurantBranch.findUnique.mockResolvedValue({ id: 'branch_1' });
+    db.restaurantBranch.findUnique.mockResolvedValue({
+      id: 'branch_1',
+      timezone: 'Asia/Karachi',
+    });
     db.$transaction.mockImplementation(async (run) => run(db));
     db.restaurantTaxProfileVersion.findUnique.mockResolvedValue(null);
     db.restaurantTaxProfileVersion.findFirst.mockResolvedValue(null);
@@ -119,7 +122,7 @@ describe('restaurant tax activation router', () => {
     expect(db.restaurantTaxProfileVersion.create).not.toHaveBeenCalled();
   });
 
-  it('publishes the exact selected effective-dated profile after explicit confirmation', async () => {
+  it('publishes the selected date from branch-local midnight after explicit confirmation', async () => {
     await caller().activate({
       ...base,
       profileId: 'PK-ICT-RESTAURANT',
@@ -130,7 +133,7 @@ describe('restaurant tax activation router', () => {
         data: expect.objectContaining({
           branchId: 'branch_1',
           status: 'PUBLISHED',
-          effectiveFrom: new Date('2026-07-01T00:00:00.000Z'),
+          effectiveFrom: new Date('2026-06-30T19:00:00.000Z'),
           rules: {
             create: expect.arrayContaining([
               expect.objectContaining({ paymentCategory: 'CARD', rate: '0.05' }),

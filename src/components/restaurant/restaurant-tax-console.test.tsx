@@ -4,7 +4,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { PAKISTAN_TAX_PROFILE_CATALOG } from '@/lib/restaurant/pakistan-tax-profiles';
 
+type PublishedProfile = {
+  id: string;
+  branch: { name: string; timezone: string };
+  effectiveFrom: Date;
+  approvalReference: string;
+  rules: { paymentCategory: string; rate: string }[];
+};
+
 const mocks = vi.hoisted(() => ({
+  activeProfiles: [] as PublishedProfile[],
   activate: vi.fn(),
   publishCustom: vi.fn(),
   invalidate: vi.fn(),
@@ -29,7 +38,7 @@ vi.mock('@/lib/trpc', () => ({
           data: {
             branches: [{ id: 'branch_1', name: 'Karachi' }],
             profiles: PAKISTAN_TAX_PROFILE_CATALOG,
-            activeProfiles: [],
+            activeProfiles: mocks.activeProfiles,
           },
           isLoading: false,
           error: null,
@@ -53,7 +62,10 @@ vi.mock('@/lib/trpc', () => ({
 import { RestaurantTaxConsole } from './restaurant-tax-console';
 
 describe('restaurant tax configuration UI', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.activeProfiles = [];
+  });
   afterEach(() => vi.unstubAllGlobals());
 
   it('renders on HTTP LAN and retains a failed command key through rerender and retry', () => {
@@ -84,6 +96,30 @@ describe('restaurant tax configuration UI', () => {
       })
     ).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Activate tax profile' })).toBeDisabled();
+  });
+
+  it('displays each published effective date in its branch timezone', () => {
+    mocks.activeProfiles = [
+      {
+        id: 'karachi_profile',
+        branch: { name: 'Karachi', timezone: 'Asia/Karachi' },
+        effectiveFrom: new Date('2026-06-30T19:00:00.000Z'),
+        approvalReference: 'Karachi memo',
+        rules: [],
+      },
+      {
+        id: 'los_angeles_profile',
+        branch: { name: 'Los Angeles', timezone: 'America/Los_Angeles' },
+        effectiveFrom: new Date('2026-06-30T19:00:00.000Z'),
+        approvalReference: 'Los Angeles memo',
+        rules: [],
+      },
+    ];
+
+    render(<RestaurantTaxConsole />);
+
+    expect(screen.getByText('Effective 01-Jul-2026 · Karachi memo')).toBeInTheDocument();
+    expect(screen.getByText('Effective 30-Jun-2026 · Los Angeles memo')).toBeInTheDocument();
   });
 
   it('explains why a disabled profile is unavailable and prevents submission', () => {
@@ -123,7 +159,7 @@ describe('restaurant tax configuration UI', () => {
     expect(mocks.activate).toHaveBeenCalledWith({
       branchId: 'branch_1',
       profileId: 'PK-ICT-RESTAURANT',
-      effectiveFrom: '2026-07-01T00:00:00.000Z',
+      effectiveFrom: '2026-07-01',
       approvalReference: 'Memo 42',
       accountantConfirmation: true,
       eligibilityConfirmations: ['ictNoInputTaxCreditOrAdjustment', 'ictNoRefund'],
