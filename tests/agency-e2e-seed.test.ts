@@ -45,7 +45,8 @@ describe('Agency E2E owned fixture restoration', () => {
     'invoice',
     'transaction',
   ])('restores mutable %s values by upsert', (model) => {
-    expect(seed).toMatch(new RegExp(`tx\\.${model}\\.upsert\\(\\{[\\s\\S]*?update: \\{`));
+    const upsertBody = seed.split(`tx.${model}.upsert({`)[1]?.split('});')[0];
+    expect(upsertBody).toMatch(/update: \{/);
   });
 });
 
