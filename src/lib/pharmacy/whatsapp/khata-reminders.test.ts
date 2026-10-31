@@ -70,7 +70,7 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
   };
 });
 
-import { MockWhatsAppProvider, readWhatsAppConfig } from './provider';
+import { createWhatsAppProvider, MockWhatsAppProvider, readWhatsAppConfig } from './provider';
 import {
   planKhataReminder,
   processDueWhatsAppKhataReminders,
@@ -217,18 +217,44 @@ describe('processDueWhatsAppKhataReminders', () => {
     });
   });
 
-  it('allows the configured Meta provider path rather than limiting collection to sandbox', async () => {
-    store.accounts = [account()];
-    store.customers = [customer(true)];
-    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
-    const metaConfig = { ...config, provider: 'meta' as const };
-    const provider = new MockWhatsAppProvider(metaConfig);
+  it.each([true, false])(
+    'leaves disabled Meta reminders unclaimed (injected factory provider: %s)',
+    async (injectProvider) => {
+      store.accounts = [account()];
+      store.customers = [customer(true)];
+      store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+      const metaConfig = { ...config, provider: 'meta' as const, accessToken: 'test-token' };
+      const provider = createWhatsAppProvider(metaConfig);
+      const sendTemplate = vi.spyOn(provider, 'sendTemplate');
 
-    await expect(
-      processDueWhatsAppKhataReminders({ now: NOW, config: metaConfig, provider })
-    ).resolves.toMatchObject({ configured: true, prepared: 1 });
-    expect(provider.calls).toHaveLength(1);
-  });
+      await expect(
+        processDueWhatsAppKhataReminders({
+          now: NOW,
+          config: metaConfig,
+          ...(injectProvider ? { provider } : {}),
+        })
+      ).resolves.toEqual({
+        configured: false,
+        scanned: 0,
+        sent: 0,
+        prepared: 0,
+        unknown: 0,
+        failed: 0,
+        duplicate: 0,
+        skippedNoConsent: 0,
+        notDue: 0,
+      });
+      expect(sendTemplate).not.toHaveBeenCalled();
+      expect(store.logs).toEqual([]);
+
+      // The disabled run must leave both dedupe keys available for a ready provider.
+      const mockProvider = new MockWhatsAppProvider(config);
+      await expect(
+        processDueWhatsAppKhataReminders({ now: NOW, config, provider: mockProvider })
+      ).resolves.toMatchObject({ prepared: 1, duplicate: 0, failed: 0 });
+      expect(mockProvider.calls).toHaveLength(1);
+    }
+  );
 
   it.each([
     ['never asked (null opt-in)', null, { granted: true, revokedAt: null }],

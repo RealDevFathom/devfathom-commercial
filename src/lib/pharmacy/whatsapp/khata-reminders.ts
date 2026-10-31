@@ -115,7 +115,8 @@ export async function processDueWhatsAppKhataReminders(
     notDue: 0,
   };
   const organizationId = config.organizationId;
-  if (!result.configured || !organizationId || !config.phoneNumberId)
+  // The factory disables Meta sends pending owner approval; do not consume dedupe keys.
+  if (!result.configured || config.provider === 'meta' || !organizationId || !config.phoneNumberId)
     return { ...result, configured: false };
 
   const limit = Math.max(1, Math.min(500, Math.floor(options.limit ?? 100)));
