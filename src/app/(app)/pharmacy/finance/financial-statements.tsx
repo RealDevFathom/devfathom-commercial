@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { ProfitAndLossReport } from '../accounts/profit-loss/report';
 import { TRPCError } from '@trpc/server';
 import { SectionCard } from '@/components/ui/section-card';
 import { Button } from '@/components/ui/button';
@@ -78,6 +79,7 @@ export async function FinancialStatements({
         {result.definition} Amounts shown in the recorded currency. Retrieved{' '}
         {result.freshness.retrievedAt.toISOString()}.
       </p>
+      <ProfitAndLossReport statements={result.profitAndLoss} />
       <h3 className="mt-6 font-semibold">Receivables, payables and cash at cutoff</h3>
       <p className="mt-2 text-sm text-text-muted">
         Recorded ledger balances only. Goods received accrual is shown separately from invoiced
