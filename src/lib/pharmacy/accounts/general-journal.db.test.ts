@@ -103,6 +103,27 @@ describeDatabase('pharmacy general-journal database contract', () => {
     expect(trigger.rows[0]?.definition).toMatch(/BEFORE INSERT OR DELETE/);
   });
 
+  it('rejects ledger lines appended to a voucher posting or reversal', async () => {
+    await client.query('DROP TABLE IF EXISTS pg_temp.finance_journal_lines, pg_temp.finance_journal_entries, pg_temp.pharmacy_general_journal_documents');
+    await client.query(`CREATE TEMP TABLE finance_journal_entries (id text, "organizationId" text, "sourceKind" "FinanceSourceKind")`);
+    await client.query(`CREATE TEMP TABLE finance_journal_lines ("organizationId" text, "entryId" text, side "FinanceJournalSide", "amountMinor" integer)`);
+    await client.query(`CREATE TEMP TABLE pharmacy_general_journal_documents ("organizationId" text, "journalEntryId" text, "reversalEntryId" text)`);
+    await client.query(`CREATE TRIGGER voucher_shape_test_trigger BEFORE INSERT ON finance_journal_lines
+      FOR EACH ROW EXECUTE FUNCTION prevent_pharmacy_journal_voucher_line_append()`);
+    await client.query(`INSERT INTO finance_journal_entries VALUES
+      ('voucher', 'org', 'PHARMACY_JOURNAL_VOUCHER'), ('linked', 'org', 'PHARMACY_JOURNAL_VOUCHER'),
+      ('other', 'org', (SELECT e FROM unnest(enum_range(NULL::"FinanceSourceKind")) e WHERE e <> 'PHARMACY_JOURNAL_VOUCHER' LIMIT 1))`);
+    await client.query(`INSERT INTO finance_journal_lines VALUES ('org', 'voucher', 'DEBIT', 100), ('org', 'voucher', 'CREDIT', 100)`);
+    await expect(client.query(`INSERT INTO finance_journal_lines VALUES ('org', 'voucher', 'DEBIT', 50)`)).rejects.toThrow(/fixed two-line shape/);
+    await client.query(`INSERT INTO pharmacy_general_journal_documents VALUES ('org', NULL, 'linked')`);
+    await expect(client.query(`INSERT INTO finance_journal_lines VALUES ('org', 'linked', 'DEBIT', 50)`)).rejects.toThrow(/fixed two-line shape/);
+    await expect(client.query(`INSERT INTO finance_journal_lines VALUES ('org', 'other', 'DEBIT', 50), ('org', 'other', 'CREDIT', 50), ('org', 'other', 'DEBIT', 5)`))
+      .resolves.toMatchObject({ rowCount: 3 });
+    const trigger = await client.query(`SELECT pg_get_triggerdef(oid) AS definition FROM pg_trigger
+      WHERE tgrelid = 'public.finance_journal_lines'::regclass AND tgname = 'finance_journal_lines_pharmacy_voucher_shape'`);
+    expect(trigger.rows[0]?.definition).toMatch(/BEFORE INSERT/);
+  });
+
   it('prevents cancelled vouchers from returning to any other state through SQL', async () => {
     await client.query(`CREATE TEMP TABLE journal_cancelled_test (id text, status "PharmacyGeneralJournalStatus")`);
     await client.query(`CREATE TRIGGER journal_cancelled_test_trigger BEFORE UPDATE ON journal_cancelled_test

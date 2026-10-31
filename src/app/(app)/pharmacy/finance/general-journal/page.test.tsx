@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { cleanup, render, screen } from '@testing-library/react';
 import { Children, isValidElement, type ReactNode } from 'react';
 import { TRPCError } from '@trpc/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -8,12 +8,20 @@ const mocks = vi.hoisted(() => ({
   createTRPCContext: vi.fn(),
   createCaller: vi.fn(),
   redirect: vi.fn(),
+  jar: new Map<string, string>(),
 }));
 
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: mocks.resolveTenantActor }));
 vi.mock('@/server/trpc', () => ({ createTRPCContext: mocks.createTRPCContext }));
 vi.mock('@/server/routers/pharmacy-general-journal', () => ({ pharmacyGeneralJournalRouter: { createCaller: mocks.createCaller } }));
 vi.mock('next/navigation', () => ({ redirect: mocks.redirect }));
+vi.mock('next/headers', () => ({
+  cookies: async () => ({
+    get: (name: string) => (mocks.jar.has(name) ? { name, value: mocks.jar.get(name)! } : undefined),
+    set: (name: string, value: string) => { mocks.jar.set(name, value); },
+    delete: (name: string) => { mocks.jar.delete(name); },
+  }),
+}));
 
 import GeneralJournalPage from './page';
 
@@ -25,6 +33,7 @@ const actor = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.jar.clear();
   mocks.redirect.mockImplementation(() => { throw new Error('NEXT_REDIRECT'); });
   mocks.createTRPCContext.mockResolvedValue({ session: actor.session, organization: actor.organization });
   mocks.createCaller.mockReturnValue({
@@ -130,7 +139,7 @@ describe('general journal commands', () => {
       expect(api[method].mock.calls[0]).toEqual(api[method].mock.calls[1]);
       expect(api[method]).toHaveBeenLastCalledWith(expect.objectContaining({ idempotencyKey: key }));
       if (method === 'reverse') {
-        expect(api.reverse).toHaveBeenLastCalledWith(expect.objectContaining({ at: new Date(String(form.get('reversalAt'))) }));
+        expect(api.reverse).toHaveBeenLastCalledWith(expect.objectContaining({ at: new Date(`${String(form.get('reversalDate'))}T12:00:00Z`) }));
       }
       expect(mocks.redirect.mock.calls[1][0]).toContain('kind=success');
     } finally {
@@ -161,5 +170,102 @@ describe('general journal commands', () => {
     api.list.mockRejectedValueOnce(new Error('database unavailable'));
     render(await GeneralJournalPage({ searchParams: Promise.resolve({}) }));
     expect(screen.getByText('General journal unavailable')).toBeDefined();
+  });
+
+  it('defaults the reversal to an editable accounting date that satisfies the voucher chronology', async () => {
+    const api = caller();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      // 03:00 UTC on the voucher day: a render-time instant would precede the noon-UTC voucher date.
+      vi.setSystemTime(new Date('2026-10-25T03:00:00Z'));
+      const page = await GeneralJournalPage({ searchParams: Promise.resolve({}) });
+      render(page);
+      const input = screen.getByLabelText('Reversal date') as HTMLInputElement;
+      expect(input.type).toBe('date');
+      expect(input.value).toBe('2026-10-25');
+      expect(input.min).toBe('2026-10-25');
+      const button = screen.getByRole('button', { name: 'Reverse' }) as HTMLButtonElement;
+      const form = new FormData(button.form!);
+      form.set('action', button.value);
+      form.set('reversalReason', 'Correct the accrual');
+      form.set('reversalDate', '2026-10-27');
+      await expect(serverAction(page)!(form)).rejects.toThrow('NEXT_REDIRECT');
+      expect(api.reverse).toHaveBeenCalledWith(expect.objectContaining({ documentId: 'doc-2', at: new Date('2026-10-27T12:00:00Z') }));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('defaults a future-dated voucher reversal to the voucher date', async () => {
+    const api = caller();
+    api.list.mockResolvedValue([{ ...document, id: 'doc-2', status: 'POSTED', occurredAt: new Date('2099-01-05T12:00:00Z') }]);
+    render(await GeneralJournalPage({ searchParams: Promise.resolve({}) }));
+    expect((screen.getByLabelText('Reversal date') as HTMLInputElement).value).toBe('2099-01-05');
+  });
+
+  it('preserves a failed new draft and its request key with an actionable error', async () => {
+    const api = caller();
+    api.createDraft.mockRejectedValue(new TRPCError({ code: 'CONFLICT', message: 'A voucher with this reference or request key already exists.' }));
+    const page = await GeneralJournalPage({ searchParams: Promise.resolve({}) });
+    render(page);
+    const button = screen.getByRole('button', { name: 'Save draft' }) as HTMLButtonElement;
+    const form = new FormData(button.form!);
+    form.set('action', button.value);
+    form.set('reference', 'JV-DUP');
+    form.set('amount', '45.60');
+    form.set('occurredAt', '2026-10-20');
+    form.set('evidence', 'invoice 7');
+    form.set('reason', 'utility accrual');
+    await expect(serverAction(page)!(form)).rejects.toThrow('NEXT_REDIRECT');
+    const url = new URL(mocks.redirect.mock.calls[0][0] as string, 'https://tenant.test');
+    expect(url.searchParams.get('kind')).toBe('error');
+    expect(url.search).not.toMatch(/JV-DUP|invoice|utility/);
+    cleanup();
+    render(await GeneralJournalPage({ searchParams: Promise.resolve(Object.fromEntries(url.searchParams)) }));
+    expect(screen.getAllByText('A voucher with this reference already exists. Use a different reference.').length).toBeGreaterThan(0);
+    const retry = screen.getByRole('button', { name: 'Save draft' }) as HTMLButtonElement;
+    const retained = new FormData(retry.form!);
+    expect(Object.fromEntries(['reference', 'amount', 'occurredAt', 'evidence', 'reason', 'idempotencyKey'].map((name) => [name, retained.get(name)])))
+      .toEqual({ reference: 'JV-DUP', amount: '45.60', occurredAt: '2026-10-20', evidence: 'invoice 7', reason: 'utility accrual', idempotencyKey: form.get('idempotencyKey') });
+    expect((screen.getAllByLabelText('Reference')[0] as HTMLInputElement).getAttribute('aria-invalid')).toBe('true');
+  });
+
+  it('preserves edited draft values after a stale-version failure', async () => {
+    const api = caller();
+    api.updateDraft.mockRejectedValue(new TRPCError({ code: 'CONFLICT', message: 'STALE_VERSION' }));
+    const page = await GeneralJournalPage({ searchParams: Promise.resolve({}) });
+    render(page);
+    const button = screen.getByRole('button', { name: 'Save changes' }) as HTMLButtonElement;
+    const form = new FormData(button.form!);
+    form.set('action', button.value);
+    form.set('reference', 'USD-1-EDITED');
+    await expect(serverAction(page)!(form)).rejects.toThrow('NEXT_REDIRECT');
+    const url = new URL(mocks.redirect.mock.calls[0][0] as string, 'https://tenant.test');
+    cleanup();
+    render(await GeneralJournalPage({ searchParams: Promise.resolve(Object.fromEntries(url.searchParams)) }));
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeDefined();
+    const edited = new FormData((screen.getByRole('button', { name: 'Save changes' }) as HTMLButtonElement).form!);
+    expect(edited.get('reference')).toBe('USD-1-EDITED');
+    expect(screen.getAllByText(/changed by someone else/).length).toBeGreaterThan(0);
+  });
+
+  it('ignores retained values without the matching one-time retry nonce', async () => {
+    caller();
+    mocks.jar.set('pharmacy-general-journal-retry', JSON.stringify({ nonce: 'n-1', branchId: 'branch-1', message: 'old', action: 'create', reference: 'STALE' }));
+    render(await GeneralJournalPage({ searchParams: Promise.resolve({ retry: 'other' }) }));
+    const form = new FormData((screen.getByRole('button', { name: 'Save draft' }) as HTMLButtonElement).form!);
+    expect(form.get('reference')).toBe('');
+  });
+
+  it('pages older vouchers and searches history by reference', async () => {
+    const api = caller();
+    const page = Array.from({ length: 26 }, (_, index) => ({ ...document, id: `doc-${index}`, reference: `JV-${index}` }));
+    api.list.mockResolvedValue(page);
+    render(await GeneralJournalPage({ searchParams: Promise.resolve({ ref: 'JV', before: 'doc-x' }) }));
+    expect(api.list).toHaveBeenCalledWith({ branchId: 'branch-1', limit: 26, cursor: 'doc-x', reference: 'JV' });
+    expect(screen.queryByText('JV-25')).toBeNull();
+    const older = screen.getByRole('link', { name: 'Older vouchers' }).getAttribute('href')!;
+    expect(Object.fromEntries(new URL(older, 'https://tenant.test').searchParams)).toEqual({ branch: 'branch-1', ref: 'JV', before: 'doc-24' });
+    expect((screen.getByLabelText('Search by reference') as HTMLInputElement).value).toBe('JV');
   });
 });

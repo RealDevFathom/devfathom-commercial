@@ -18,6 +18,8 @@ function fail(error: unknown): never {
   throw error;
 }
 
+export const GENERAL_JOURNAL_HISTORY_MAX = 100;
+
 export function documentDto(document: {
   id: string; branchId: string; reference: string; purpose: string; status: string; amountMinor: number; currency: string;
   occurredAt: Date; evidence: string; reason: string; version: number; postedAt: Date | null; cancelledAt: Date | null;
@@ -36,9 +38,23 @@ export const pharmacyGeneralJournalRouter = router({
     await authorizePharmacyGeneralJournal(ctx, input.branchId);
     return PHARMACY_GENERAL_JOURNAL_ACCOUNTS.map(({ code, normalSide, name }) => ({ code, side: normalSide, name }));
   }),
-  list: adminProcedure.input(z.object({ branchId: z.string().trim().min(1).max(128) }).strict()).query(async ({ ctx, input }) => {
+  // Keyset-paginated, newest first. `cursor` is the last document id already
+  // shown; `reference` narrows history so any older voucher stays reachable.
+  list: adminProcedure.input(z.object({
+    branchId: z.string().trim().min(1).max(128),
+    cursor: z.string().trim().min(1).max(128).optional(),
+    reference: z.string().trim().max(80).optional(),
+    limit: z.number().int().min(1).max(GENERAL_JOURNAL_HISTORY_MAX).optional(),
+  }).strict()).query(async ({ ctx, input }) => {
     const scope = await authorizePharmacyGeneralJournal(ctx, input.branchId);
-    const documents = await ctx.db.pharmacyGeneralJournalDocument.findMany({ where: { organizationId: scope.organizationId, branchId: scope.branchId }, orderBy: { createdAt: 'desc' }, take: 100 });
+    const where: Prisma.PharmacyGeneralJournalDocumentWhereInput = { organizationId: scope.organizationId, branchId: scope.branchId };
+    if (input.reference) where.reference = { contains: input.reference, mode: 'insensitive' };
+    if (input.cursor) {
+      const anchor = await ctx.db.pharmacyGeneralJournalDocument.findFirst({ where: { organizationId: scope.organizationId, branchId: scope.branchId, id: input.cursor }, select: { id: true, createdAt: true } });
+      if (!anchor) throw new TRPCError({ code: 'NOT_FOUND', message: 'NOT_FOUND' });
+      where.OR = [{ createdAt: { lt: anchor.createdAt } }, { createdAt: anchor.createdAt, id: { lt: anchor.id } }];
+    }
+    const documents = await ctx.db.pharmacyGeneralJournalDocument.findMany({ where, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: input.limit ?? GENERAL_JOURNAL_HISTORY_MAX });
     return documents.map(documentDto);
   }),
   createDraft: adminProcedure.input(createJournalDraftSchema).mutation(async ({ ctx, input }) => {

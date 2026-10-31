@@ -49,7 +49,7 @@ describe('pharmacy general journal router denial chain', () => {
         findFirst: vi.fn(async (): Promise<{ id: string } | null> => null),
         findMany: vi.fn(async () => []),
       },
-      pharmacyGeneralJournalDocument: { findMany: vi.fn() },
+      pharmacyGeneralJournalDocument: { findMany: vi.fn(async () => []), findFirst: vi.fn(async (): Promise<{ id: string; createdAt: Date } | null> => null) },
       auditLog: { create: vi.fn(async () => ({})) },
     };
     return {
@@ -116,6 +116,35 @@ describe('pharmacy general journal router denial chain', () => {
     const caller = pharmacyGeneralJournalRouter.createCaller(ctx as never);
     await expect(caller.post({ branchId: 'branch-1', documentId: 'doc-1', version: 1, idempotencyKey: 'post-1' }))
       .rejects.toMatchObject({ code });
+  });
+
+  it('pages history by a scoped keyset cursor and searches by reference', async () => {
+    mocks.can.mockResolvedValue(true);
+    const ctx = context();
+    ctx.db.pharmacyBranch.findFirst.mockResolvedValue({ id: 'branch-1' });
+    const createdAt = new Date('2026-10-01T00:00:00Z');
+    ctx.db.pharmacyGeneralJournalDocument.findFirst.mockResolvedValue({ id: 'doc-50', createdAt });
+    const caller = pharmacyGeneralJournalRouter.createCaller(ctx as never);
+    await caller.list({ branchId: 'branch-1', cursor: 'doc-50', reference: 'JV-7', limit: 26 });
+    expect(ctx.db.pharmacyGeneralJournalDocument.findFirst).toHaveBeenCalledWith({
+      where: { organizationId: 'org-1', branchId: 'branch-1', id: 'doc-50' }, select: { id: true, createdAt: true },
+    });
+    expect(ctx.db.pharmacyGeneralJournalDocument.findMany).toHaveBeenCalledWith({
+      where: {
+        organizationId: 'org-1', branchId: 'branch-1', reference: { contains: 'JV-7', mode: 'insensitive' },
+        OR: [{ createdAt: { lt: createdAt } }, { createdAt, id: { lt: 'doc-50' } }],
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 26,
+    });
+  });
+
+  it('rejects a history cursor outside the authorized branch', async () => {
+    mocks.can.mockResolvedValue(true);
+    const ctx = context();
+    ctx.db.pharmacyBranch.findFirst.mockResolvedValue({ id: 'branch-1' });
+    const caller = pharmacyGeneralJournalRouter.createCaller(ctx as never);
+    await expect(caller.list({ branchId: 'branch-1', cursor: 'foreign-doc' })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(ctx.db.pharmacyGeneralJournalDocument.findMany).not.toHaveBeenCalled();
   });
 
   it('serves the shared general journal account catalogue', async () => {
