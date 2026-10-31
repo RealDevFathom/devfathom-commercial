@@ -15,10 +15,9 @@ vi.mock('@/lib/pharmacy/whatsapp/provider', () => ({
 vi.mock('@/lib/pharmacy/whatsapp/inbound', () => ({ handleInboundWhatsAppMessage: mocks.inbound }));
 vi.mock('@/lib/pharmacy/marketing-delivery', () => ({ recordMarketingCallback: mocks.callback }));
 vi.mock('@/lib/pharmacy/marketing-safety', async () => ({
-  parseMarketingQualityUpdates: (payload: unknown) =>
-    JSON.stringify(payload).includes('account_update')
-      ? [{ quality: 'RED', paused: true, reason: 'ACCOUNT_QUALITY_RED' }]
-      : [],
+  ...(await vi.importActual<typeof import('@/lib/pharmacy/marketing-safety')>(
+    '@/lib/pharmacy/marketing-safety'
+  )),
   recordMarketingQualityUpdate: mocks.quality,
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({
@@ -38,7 +37,11 @@ const request = () =>
   });
 beforeEach(() => {
   vi.resetAllMocks();
-  mocks.config.mockReturnValue({ phoneNumberId: 'sender-a', organizationId: 'org-a' });
+  mocks.config.mockReturnValue({
+    phoneNumberId: 'sender-a',
+    organizationId: 'org-a',
+    businessAccountId: 'account-a',
+  });
   mocks.verify.mockReturnValue(true);
   mocks.organization.mockResolvedValue({
     id: 'org-a',
@@ -119,7 +122,14 @@ it('auto-pauses marketing when an authenticated account_update reports a quality
     new Request('http://pharmacy.localhost/api/pharmacy/whatsapp/webhook', {
       method: 'POST',
       body: JSON.stringify({
-        entry: [{ changes: [{ field: 'account_update', value: { new_quality_score: 'RED' } }] }],
+        object: 'whatsapp_business_account',
+        entry: [
+          {
+            id: 'account-a',
+            time: 1790000000,
+            changes: [{ field: 'account_update', value: { new_quality_score: 'RED' } }],
+          },
+        ],
       }),
     })
   );
@@ -128,5 +138,7 @@ it('auto-pauses marketing when an authenticated account_update reports a quality
     quality: 'RED',
     paused: true,
     reason: 'ACCOUNT_QUALITY_RED',
+    occurredAt: new Date(1790000000000),
+    eventKey: expect.any(String),
   });
 });

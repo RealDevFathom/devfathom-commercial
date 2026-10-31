@@ -87,6 +87,16 @@ async function scope(ctx: MarketingAccessContext, branchId: string): Promise<Mar
   };
 }
 
+function workflowFailure(error: unknown): never {
+  if (error instanceof MarketingWorkflowError || error instanceof z.ZodError)
+    throw new TRPCError({
+      code: 'BAD_REQUEST',
+      message:
+        error instanceof MarketingWorkflowError ? error.message : 'Invalid campaign settings.',
+    });
+  throw error;
+}
+
 async function execute<T>(
   ctx: TRPCContext,
   branchId: string,
@@ -96,13 +106,7 @@ async function execute<T>(
   try {
     return await ctx.db.$transaction((db) => fn(db as ScopedDb, resolved));
   } catch (error) {
-    if (error instanceof MarketingWorkflowError || error instanceof z.ZodError)
-      throw new TRPCError({
-        code: 'BAD_REQUEST',
-        message:
-          error instanceof MarketingWorkflowError ? error.message : 'Invalid campaign settings.',
-      });
-    throw error;
+    workflowFailure(error);
   }
 }
 
@@ -135,7 +139,7 @@ function sandboxTransaction(ctx: TRPCContext, branchId: string): MarketingTransa
         return run(db, resolved);
       },
       { userId: userId }
-    );
+    ).catch(workflowFailure);
 }
 
 // Growth mutations re-resolve current entitlements and actor, including after provider latency.

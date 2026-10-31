@@ -154,7 +154,11 @@ export async function POST(request: Request) {
           );
         }
       }
-  for (const update of parseMarketingQualityUpdates(payload, config.phoneNumberId))
+  for (const update of parseMarketingQualityUpdates(
+    payload,
+    config.phoneNumberId,
+    config.businessAccountId
+  ))
     await withTenantDb(organization.id, (db) =>
       recordMarketingQualityUpdate(db, organization.id, config.phoneNumberId!, update)
     );

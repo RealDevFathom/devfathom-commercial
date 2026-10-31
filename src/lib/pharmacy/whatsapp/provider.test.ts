@@ -56,6 +56,13 @@ describe('readWhatsAppConfig', () => {
     expect(readWhatsAppConfig({ PHARMACY_WHATSAPP_PROVIDER: 'twilio' }).provider).toBe('mock');
   });
 
+  it('reads the explicit account binding for quality webhooks', () => {
+    expect(readWhatsAppConfig({}).businessAccountId).toBeNull();
+    expect(
+      readWhatsAppConfig({ PHARMACY_WHATSAPP_BUSINESS_ACCOUNT_ID: ' account-a ' }).businessAccountId
+    ).toBe('account-a');
+  });
+
   it('rejects an out-of-range reminder lead', () => {
     expect(readWhatsAppConfig({ PHARMACY_WHATSAPP_REMINDER_LEAD_DAYS: '5' }).reminderLeadDays).toBe(
       5

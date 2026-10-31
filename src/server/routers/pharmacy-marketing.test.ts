@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TRPCContext } from '../trpc';
+import { MarketingWorkflowError } from '@/lib/pharmacy/marketing-errors';
 const mocks = vi.hoisted(() => ({
   licensed: vi.fn(),
   entitlements: vi.fn(),
@@ -17,8 +18,9 @@ const mocks = vi.hoisted(() => ({
   settings: vi.fn(),
   assist: vi.fn(),
   capture: vi.fn(),
+  tenant: vi.fn(),
 }));
-vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
+vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(), withTenantDb: mocks.tenant }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/entitlements', () => ({
   hasModule: mocks.licensed,
@@ -103,6 +105,29 @@ beforeEach(() => {
 });
 const input = { branchId: 'branch-a' };
 describe('marketing workflow authorization', () => {
+  it('exposes a quality pause as a user-facing capture failure', async () => {
+    const message = 'Marketing is auto-paused by provider quality (ACCOUNT_QUALITY_RED).';
+    mocks.capture.mockRejectedValue(new MarketingWorkflowError(message));
+    await expect(caller().capture({ ...input, campaignId: 'campaign-a' })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message,
+    });
+  });
+
+  it.each(['sandbox', 'sandboxDue'] as const)(
+    'exposes a quality pause from %s transactions',
+    async (operation) => {
+      const message = 'Marketing is auto-paused by provider quality (ACCOUNT_QUALITY_RED).';
+      mocks.tenant.mockRejectedValue(new MarketingWorkflowError(message));
+      const owner = caller();
+      const result =
+        operation === 'sandbox'
+          ? owner.sandbox({ ...input, campaignId: 'campaign-a', requestKey: 'request-a' })
+          : owner.sandboxDue({ ...input, campaignIds: ['campaign-a'], requestKey: 'request-a' });
+      await expect(result).rejects.toMatchObject({ code: 'BAD_REQUEST', message });
+    }
+  );
+
   it('binds tenant, branch, actor, and timezone before a transaction', async () => {
     await caller().history(input);
     expect(mocks.branch).toHaveBeenCalledWith({

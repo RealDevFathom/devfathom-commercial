@@ -6,6 +6,9 @@ import { workspaceTimezone } from '@/lib/timezone';
 import { z } from 'zod';
 import { lockCustomerConsent } from './consent-writer';
 import { requireMarketingQuality } from './marketing-safety';
+import { MarketingWorkflowError } from './marketing-errors';
+
+export { MarketingWorkflowError } from './marketing-errors';
 
 const id = z.string().trim().min(1).max(128);
 export const marketingScopeInput = z.object({ branchId: id }).strict();
@@ -53,7 +56,6 @@ export type MarketingScope = {
   timezone: string;
 };
 
-export class MarketingWorkflowError extends Error {}
 const DAY = 86_400_000;
 
 export function validateMarketingBody(body: string) {
