@@ -753,6 +753,7 @@ export const restaurantStaffRouter = router({
           ctx.session!.user,
           ctx.entitlements.organizationId
         );
+        assertOrganizationWide(authorization);
         assertAuthorizedBranch(authorization, input.branchId);
         await assertStaffProfileExists(ctx.db, input.staffProfileId);
         const result = await setStaffJobRoles(ctx.db, {
@@ -812,6 +813,7 @@ export const restaurantStaffRouter = router({
           ctx.session!.user,
           ctx.entitlements.organizationId
         );
+        assertOrganizationWide(authorization);
         assertAuthorizedBranch(authorization, input.branchId);
         await assertStaffProfileExists(ctx.db, input.staffProfileId);
         const result = await setStaffAccess(ctx.db, {
@@ -888,6 +890,7 @@ export const restaurantStaffRouter = router({
           ctx.session!.user,
           ctx.entitlements.organizationId
         );
+        assertOrganizationWide(authorization);
         assertAuthorizedBranch(authorization, input.branchId);
         await assertStaffProfileExists(ctx.db, input.staffProfileId);
         const result = await setStaffCapabilityOverride(ctx.db, {
@@ -930,6 +933,7 @@ export const restaurantStaffRouter = router({
           ctx.session!.user,
           ctx.entitlements.organizationId
         );
+        assertOrganizationWide(authorization);
         assertAuthorizedBranch(authorization, input.branchId);
         await assertStaffProfileExists(ctx.db, input.staffProfileId);
         const result = await clearStaffCapabilityOverride(ctx.db, {
