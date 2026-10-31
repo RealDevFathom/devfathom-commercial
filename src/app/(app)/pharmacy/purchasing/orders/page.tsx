@@ -125,16 +125,27 @@ export default async function PharmacyOrdersPage({
    * priced calculation per line and running it for the whole register would be
    * work nobody asked for.
    */
-  let comparisons: LineComparison[] = [];
-  if (requisition) {
-    comparisons = await Promise.all(
-      requisition.lines.map(async (line) => ({
+  async function comparisonsFor(source: RequisitionDetail | null): Promise<LineComparison[]> {
+    if (!source) return [];
+    return Promise.all(
+      source.lines.map(async (line) => ({
         lineId: line.id,
         medicine: line.medicine.productName,
         ranking: (await caller.compareQuotes({ requisitionLineId: line.id })).ranking,
       }))
     );
   }
+  const comparisons = await comparisonsFor(requisition);
+  // The two registers can select different requisitions. A draft's ranking
+  // must always come from its own source, including when opened by PO alone.
+  const orderRequisition =
+    order?.status === 'DRAFT' && order.quoteId
+      ? (requisitions.find((row) => row.id === order.requisition?.id) ?? null)
+      : null;
+  const orderComparisons =
+    orderRequisition && orderRequisition.id === requisition?.id
+      ? comparisons
+      : await comparisonsFor(orderRequisition);
 
   /** PUR-03: the stored order, costed, with freight allocated across its lines. */
   let landed: Awaited<ReturnType<typeof caller.landedCost>> | null = null;
@@ -617,7 +628,7 @@ export default async function PharmacyOrdersPage({
           {order ? (
             <OrderDetailPanel
               actorId={ctx.session.user.id}
-              comparisons={comparisons}
+              comparisons={orderComparisons}
               landed={landed}
               notice={notice}
               onAdvance={advanceOrder}
@@ -793,8 +804,8 @@ function RequisitionDetailPanel({
 
       <SectionCard eyebrow="PUR-02" title="Quote comparison — ranked and explained" titleLevel={2}>
         <p className="text-sm text-text-muted">
-          Ranked by effective landed cost per unit, then lead time, then shelf life. It never
-          awards: every position states its reasons and you decide.
+          Ranked by effective cost per forecast sellable unit, then lead time, then shelf life. It
+          never awards: every position states its reasons and you decide.
         </p>
         {comparisons.every((comparison) => comparison.ranking.length === 0) ? (
           <EmptyState
@@ -1082,7 +1093,7 @@ function OrderDetailPanel({
       {order.status === 'DRAFT' && selectedQuoteRanks.length > 0 ? (
         <div className="mt-4 rounded-[var(--radius-sm)] border border-border-subtle bg-surface-sunken p-3">
           <p className="font-mono text-xs uppercase tracking-[0.12em] text-text-muted">
-            Distributor ranking retained on draft
+            Current distributor ranking for this draft
           </p>
           <ul className="mt-2 space-y-1">
             {selectedQuoteRanks.map((row) => (

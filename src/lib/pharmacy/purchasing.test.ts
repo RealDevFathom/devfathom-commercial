@@ -374,6 +374,40 @@ describe('PUR-02 quote comparison', () => {
     expect(ranking.every((row) => row.reasons.length > 0)).toBe(true);
   });
 
+  it.each([10, 12])('ranks schemes using the %i-pack sell-through forecast', (forecast) => {
+    const ranking = compareQuotes({
+      requiredPacks: 10,
+      at: NOW,
+      candidates: [
+        {
+          ...base,
+          ...supplier('s_scheme', 'Scheme'),
+          quoteId: 'q_scheme',
+          pricePerPackMinor: 10_000,
+          schemeBuyPacks: 5,
+          schemeFreePacks: 1,
+          forecastSellThroughPacks: forecast,
+        },
+        {
+          ...base,
+          ...supplier('s_discount', 'Discount'),
+          quoteId: 'q_discount',
+          pricePerPackMinor: 10_000,
+          discountBps: 1_500,
+          forecastSellThroughPacks: forecast,
+        },
+      ],
+    });
+    expect(ranking.map((row) => row.quoteId)).toEqual(
+      forecast === 10 ? ['q_discount', 'q_scheme'] : ['q_scheme', 'q_discount']
+    );
+    const scheme = ranking.find((row) => row.quoteId === 'q_scheme')!;
+    expect(scheme.atRiskBonusPacks).toBe(forecast === 10 ? 2 : 0);
+    expect(scheme.effectiveSellableUnitCostMicroMinor).toBe(
+      forecast === 10 ? 1_000 * MICRO : 833_333_333
+    );
+  });
+
   it('returns a ranked list and never awards a winner', () => {
     const ranking = compareQuotes({
       requiredPacks: 10,

@@ -441,6 +441,7 @@ describe('PUR-02 tenant boundaries', () => {
           {
             requisitionLineId: 'reqline_from_another_requisition',
             pricePerPackMinor: 100,
+            forecastSellThroughPacks: 10,
             canonicalUnitsPerPack: 10,
           },
         ],
