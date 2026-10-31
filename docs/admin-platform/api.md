@@ -75,10 +75,10 @@ Authentication: `Authorization: Bearer df_<token>`.
 Token authentication resolves the bound organization in platform scope, then returns to a tenant-scoped database. It checks user/organization status, token expiry, rate limits, API module entitlement, scope, and admin role for finance.
 
 | Resource | Paths |
-| --------------------- | ------------------------------------------------------------------ | ---------------------------- | ----- | ----------------------------- |
+| --------------------- | --------------------------------------------------------------------------- |
 | API reference | `GET /api/v1/spec` |
-| projects | `GET                                                               | POST /api/v1/projects`, `GET | PATCH | DELETE /api/v1/projects/{id}` |
-| clients | `GET                                                               | POST /api/v1/clients`, `GET  | PATCH | DELETE /api/v1/clients/{id}` |
+| projects | `GET \| POST /api/v1/projects`, `GET \| DELETE /api/v1/projects/{id}` |
+| clients | `GET \| POST /api/v1/clients`, `GET \| DELETE /api/v1/clients/{id}` |
 | tasks/boards/comments | `/api/v1/tasks`, `/api/v1/tasks/{id}`, `/comments`, `/boards/{id}` |
 | invoices | `/api/v1/invoices`, `/api/v1/invoices/{id}` |
 | transactions | `/api/v1/transactions`, `/api/v1/transactions/{id}` |
