@@ -160,7 +160,12 @@ describe('team last-admin serialization', () => {
       expect(mocks.userUpdate).toHaveBeenCalledWith({
         where: { id: 'admin_target' },
         data: change,
+        select: expect.objectContaining({ id: true, role: true, status: true }),
       });
+      // Credential and session columns must never be selected for the response.
+      const [{ select }] = mocks.userUpdate.mock.calls[0] as [{ select: Record<string, unknown> }];
+      expect(select).not.toHaveProperty('password');
+      expect(select).not.toHaveProperty('tokenVersion');
     }
   );
 

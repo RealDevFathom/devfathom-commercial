@@ -20,6 +20,7 @@ import { emailSchema } from '@/lib/email-address';
 import { assertInOrganization, workspaceId } from '../org-refs';
 import { passwordSchema } from '@/lib/password-policy';
 import { generateInviteToken } from '@/lib/invite-token';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 // IMP-AUTH-04: per-category × per-channel notification opt-outs. Sparse —
 // anything unset means "opted in" (notify() defaults to ON). Keys mirror
@@ -43,6 +44,40 @@ const notificationPrefsSchema = z
 
 // "LEADERSHIP" → "Leadership", "ADMIN" → "Admin". Acronym roles stay upper-case.
 const titleCase = (s: string) => (s === 'HR' ? 'HR' : s.charAt(0) + s.slice(1).toLowerCase());
+
+// #424: the organization row lock serializes admin-roster changes across
+// requests, but a batched tRPC request runs every mutation concurrently inside
+// ONE shared transaction (nested `$transaction` reuses it). Postgres row locks
+// are re-entrant for their owning transaction, so sibling mutations in a batch
+// would all pass the lock and could each count the same admins before either
+// write lands. Chain the full lock -> check -> write section per transaction
+// handle so siblings in one batch run it one at a time.
+const adminRosterQueues = new WeakMap<object, Promise<unknown>>();
+
+function withAdminRosterLock<T>(
+  db: ScopedDb,
+  organizationId: string,
+  lock: boolean,
+  run: (tx: Prisma.TransactionClient) => Promise<T>
+): Promise<T> {
+  const operation = () =>
+    db.$transaction(async (tx) => {
+      if (lock) {
+        await tx.$queryRaw`SELECT "id" FROM "organizations" WHERE "id" = ${organizationId} FOR UPDATE`;
+      }
+      return run(tx);
+    });
+  const prior = adminRosterQueues.get(db) ?? Promise.resolve();
+  const result = prior.then(operation, operation);
+  adminRosterQueues.set(
+    db,
+    result.then(
+      () => undefined,
+      () => undefined
+    )
+  );
+  return result;
+}
 
 // How long an invitation link stays valid.
 const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -843,54 +878,61 @@ export const teamRouter = router({
       const demoting = input.role !== undefined && input.role !== 'ADMIN';
       const deactivating = input.status !== undefined && input.status !== 'ACTIVE';
       const organizationId = workspaceId(ctx);
-      const { before, updated } = await ctx.db.$transaction(async (tx) => {
-        // Coordinate promotions/reactivations as well as removals. Read the
-        // target only after locking so a stale role/status cannot skip the guard.
-        if (input.role !== undefined || input.status !== undefined) {
-          await tx.$queryRaw`SELECT "id" FROM "organizations" WHERE "id" = ${organizationId} FOR UPDATE`;
-        }
-        const before = await tx.user.findUnique({
-          where: { id },
-          select: Object.fromEntries(auditFields.map((f) => [f, true])) as Record<
-            (typeof auditFields)[number],
-            true
-          >,
-        });
-        if (before?.role === 'ADMIN' && before.status === 'ACTIVE' && (demoting || deactivating)) {
-          const activeAdmins = await tx.user.count({
-            where: { organizationId, role: 'ADMIN', status: 'ACTIVE' },
+      // Coordinate promotions/reactivations as well as removals. Read the
+      // target only after locking so a stale role/status cannot skip the guard.
+      const rosterChange = input.role !== undefined || input.status !== undefined;
+      const { before, updated } = await withAdminRosterLock(
+        ctx.db,
+        organizationId,
+        rosterChange,
+        async (tx) => {
+          const before = await tx.user.findUnique({
+            where: { id },
+            select: Object.fromEntries(auditFields.map((f) => [f, true])) as Record<
+              (typeof auditFields)[number],
+              true
+            >,
           });
-          if (activeAdmins <= 1) {
-            throw new TRPCError({
-              code: 'BAD_REQUEST',
-              message: 'Cannot demote or deactivate the last active admin.',
+          if (
+            before?.role === 'ADMIN' &&
+            before.status === 'ACTIVE' &&
+            (demoting || deactivating)
+          ) {
+            const activeAdmins = await tx.user.count({
+              where: { organizationId, role: 'ADMIN', status: 'ACTIVE' },
             });
+            if (activeAdmins <= 1) {
+              throw new TRPCError({
+                code: 'BAD_REQUEST',
+                message: 'Cannot demote or deactivate the last active admin.',
+              });
+            }
           }
+          // Return only the member profile needed by callers. Prisma returns every
+          // scalar column when `select` is omitted, which would expose credential
+          // and session fields (including the bcrypt password hash) over tRPC.
+          const updated = await tx.user.update({
+            where: { id },
+            data,
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              role: true,
+              department: true,
+              title: true,
+              avatar: true,
+              phone: true,
+              bio: true,
+              skills: true,
+              startDate: true,
+              status: true,
+              lastActiveAt: true,
+            },
+          });
+          return { before, updated };
         }
-        // Return only the member profile needed by callers. Prisma returns every
-        // scalar column when `select` is omitted, which would expose credential
-        // and session fields (including the bcrypt password hash) over tRPC.
-        const updated = await tx.user.update({
-          where: { id },
-          data,
-          select: {
-            id: true,
-            name: true,
-            email: true,
-            role: true,
-            department: true,
-            title: true,
-            avatar: true,
-            phone: true,
-            bio: true,
-            skills: true,
-            startDate: true,
-            status: true,
-            lastActiveAt: true,
-          },
-        });
-        return { before, updated };
-      });
+      );
       annotateAudit(ctx, {
         targetType: 'User',
         targetId: id,
@@ -952,48 +994,52 @@ export const teamRouter = router({
       // status flip already blocks new auth; bumping tokenVersion cuts off any
       // already-issued JWT on its next revalidation rather than at token expiry).
       const organizationId = workspaceId(ctx);
-      const { before, updated } = await ctx.db.$transaction(async (tx) => {
-        await tx.$queryRaw`SELECT "id" FROM "organizations" WHERE "id" = ${organizationId} FOR UPDATE`;
-        const before = await tx.user.findUnique({
-          where: { id: input.id },
-          select: { status: true, name: true, email: true, role: true },
-        });
-        if (!before) {
-          throw new TRPCError({ code: 'NOT_FOUND', message: 'Member not found' });
-        }
-        // Check the current role under the same lock as role changes: HR may
-        // lay off non-admins only, including after a concurrent promotion.
-        const subject = subjectFromSession(ctx.session.user);
-        if (
-          !(await can(
-            subject,
-            'team:layoff',
-            { type: 'User', targetRole: before.role },
-            { source: 'TRPC', db: tx }
-          ))
-        ) {
-          throw new TRPCError({
-            code: 'FORBIDDEN',
-            message: 'You do not have permission to lay off this member.',
+      const { before, updated } = await withAdminRosterLock(
+        ctx.db,
+        organizationId,
+        true,
+        async (tx) => {
+          const before = await tx.user.findUnique({
+            where: { id: input.id },
+            select: { status: true, name: true, email: true, role: true },
           });
-        }
-        if (before.role === 'ADMIN' && before.status === 'ACTIVE') {
-          const activeAdmins = await tx.user.count({
-            where: { organizationId, role: 'ADMIN', status: 'ACTIVE' },
-          });
-          if (activeAdmins <= 1) {
+          if (!before) {
+            throw new TRPCError({ code: 'NOT_FOUND', message: 'Member not found' });
+          }
+          // Check the current role under the same lock as role changes: HR may
+          // lay off non-admins only, including after a concurrent promotion.
+          const subject = subjectFromSession(ctx.session.user);
+          if (
+            !(await can(
+              subject,
+              'team:layoff',
+              { type: 'User', targetRole: before.role },
+              { source: 'TRPC', db: tx }
+            ))
+          ) {
             throw new TRPCError({
-              code: 'BAD_REQUEST',
-              message: 'You cannot lay off the last active admin',
+              code: 'FORBIDDEN',
+              message: 'You do not have permission to lay off this member.',
             });
           }
+          if (before.role === 'ADMIN' && before.status === 'ACTIVE') {
+            const activeAdmins = await tx.user.count({
+              where: { organizationId, role: 'ADMIN', status: 'ACTIVE' },
+            });
+            if (activeAdmins <= 1) {
+              throw new TRPCError({
+                code: 'BAD_REQUEST',
+                message: 'You cannot lay off the last active admin',
+              });
+            }
+          }
+          const updated = await tx.user.update({
+            where: { id: input.id },
+            data: { status: 'INACTIVE', tokenVersion: { increment: 1 } },
+          });
+          return { before, updated };
         }
-        const updated = await tx.user.update({
-          where: { id: input.id },
-          data: { status: 'INACTIVE', tokenVersion: { increment: 1 } },
-        });
-        return { before, updated };
-      });
+      );
       annotateAudit(ctx, {
         targetType: 'User',
         targetId: input.id,
