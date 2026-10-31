@@ -44,15 +44,18 @@ describe('journal lookup page', () => {
 
   it('associates field-level validation errors with the invalid inputs only', async () => {
     const output = await html({ ...valid, entryId: 'x'.repeat(129), to: valid.from });
-    expect(output).toMatch(
-      /id="journal-lookup-entryId"[^>]*aria-invalid="true"[^>]*aria-describedby="journal-lookup-entryId-error"/
-    );
+    const input = (name: string) =>
+      output.match(new RegExp(`<input[^>]*id="journal-lookup-${name}"[^>]*>`))?.[0] ?? '';
+    expect(input('entryId')).toContain('aria-invalid="true"');
+    expect(input('entryId')).toContain('aria-describedby="journal-lookup-entryId-error"');
     expect(output).toContain('id="journal-lookup-entryId-error"');
     expect(output).toContain('Use at most 128 characters.');
-    expect(output).toMatch(/id="journal-lookup-to"[^>]*aria-invalid="true"/);
+    expect(input('to')).toContain('aria-invalid="true"');
+    expect(input('to')).toContain('aria-describedby="journal-lookup-to-error"');
     expect(output).toContain('Must be after From and no more than 92 days later.');
-    expect(output).not.toMatch(/id="journal-lookup-branchId"[^>]*aria-invalid/);
-    expect(output).not.toContain('journal-lookup-from-error');
+    expect(input('branchId')).not.toBe('');
+    expect(input('branchId')).not.toContain('aria-invalid');
+    expect(input('from')).not.toContain('aria-invalid');
     expect(mocks.lookup).not.toHaveBeenCalled();
   });
 
