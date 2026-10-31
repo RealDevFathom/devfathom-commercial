@@ -1,7 +1,7 @@
 // No DB client: exercise the real command, money arithmetic, replay and ledger
 // paths against in-memory delegates. DB rollback/RLS/concurrency require QA.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { Prisma } from '@/generated/prisma/client';
+import { Prisma, type RestaurantPayment } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { finalizeBillSettlement } from './bills';
 import { getOrderSettlementForBranch } from './checkout-routes';
@@ -269,11 +269,13 @@ function fixture() {
     restaurantCoAuthorization: { create: vi.fn(async () => ({ id: 'approval' })) },
     restaurantPayment: {
       create: vi.fn(async () => ({ id: 'payment' })),
-      findUnique: vi.fn(async () => ({
-        id: 'payment',
-        provider: 'TERMINAL',
-        providerRef: 'terminal-payment',
-      })),
+      findUnique: vi.fn(
+        async (): Promise<Pick<RestaurantPayment, 'id' | 'provider' | 'providerRef'> | null> => ({
+          id: 'payment',
+          provider: 'TERMINAL',
+          providerRef: 'terminal-payment',
+        })
+      ),
       update: vi.fn(),
     },
     restaurantPaymentEvent: { create: vi.fn(async () => ({ id: 'event' })) },
@@ -595,6 +597,7 @@ describe('collection posting and authoritative recorded balances (no DB)', () =>
       }
       const idempotencyClaimsBeforeRefund =
         f.raw.restaurantMoneyIdempotencyKey.create.mock.calls.length;
+      const paymentEventsBeforeRefund = f.raw.restaurantPaymentEvent.create.mock.calls.length;
 
       await expect(
         refundTender(f.db, {
@@ -622,7 +625,7 @@ describe('collection posting and authoritative recorded balances (no DB)', () =>
       expect(f.raw.restaurantCoAuthorization.create).not.toHaveBeenCalled();
       expect(f.raw.restaurantTaxRefundAllocation.create).not.toHaveBeenCalled();
       expect(reverseLoyaltyForRefund).not.toHaveBeenCalled();
-      expect(f.raw.restaurantPaymentEvent.create).not.toHaveBeenCalled();
+      expect(f.raw.restaurantPaymentEvent.create).toHaveBeenCalledTimes(paymentEventsBeforeRefund);
       expect(f.raw.restaurantPayment.update).not.toHaveBeenCalled();
       expect(f.raw.restaurantTerminalReconciliation.create).not.toHaveBeenCalled();
       expect(f.raw.restaurantDrawerMovement.create).not.toHaveBeenCalled();

@@ -524,7 +524,7 @@ async function requireRefundableCardPayment(
       'UNSUPPORTED_PAYMENT_PROVIDER'
     );
   }
-  return payment;
+  return { id: payment.id, provider: payment.provider, providerRef: payment.providerRef };
 }
 
 /** Run the payment's adapter REFUND/VOID against the card payment, append the event, and
