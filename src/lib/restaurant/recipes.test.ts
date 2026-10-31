@@ -444,7 +444,15 @@ describe('createRecipeLine — recipe cycle detection', () => {
       unitId: 'u1',
     });
 
-    expect(db.transactionQueryRaw).not.toHaveBeenCalled();
+    expect(db.$transaction).toHaveBeenCalledTimes(1);
+    expect(db.$queryRaw).not.toHaveBeenCalled();
+    const statements = db.transactionQueryRaw.mock.calls.map(([query]) =>
+      (query.strings ?? query).join('?')
+    );
+    expect(statements).toContainEqual(
+      expect.stringContaining("current_setting('app.current_organization_id', true)")
+    );
+    expect(statements.join('\n')).not.toContain('pg_advisory_xact_lock');
     expect(db.restaurantRecipeLine.create).toHaveBeenCalledWith({
       data: expect.objectContaining({ ingredientId: 'i1', subRecipeId: null }),
     });
