@@ -30,8 +30,10 @@ const db = {
     update: projectUpdate,
     findUniqueOrThrow: projectFindUniqueOrThrow,
   },
-  user: { count: vi.fn() },
-  client: { count: vi.fn() },
+  user: { findMany: vi.fn() },
+  client: { findMany: vi.fn() },
+  $queryRaw: vi.fn(),
+  $transaction: vi.fn(),
 };
 
 function caller() {
@@ -45,7 +47,13 @@ function caller() {
   } as never);
 }
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.resetAllMocks();
+  db.user.findMany.mockResolvedValue([{ id: 'user-1' }]);
+  projectCreate.mockResolvedValue({ id: 'project-1', name: 'Project' });
+  projectUpdate.mockResolvedValue({ id: 'project-1', name: 'Project' });
+  db.$transaction.mockImplementation(async (run) => run(db));
+});
 
 describe('project date validation', () => {
   it('rejects create when the end date precedes the start date', async () => {
@@ -74,6 +82,13 @@ describe('project date validation', () => {
       message: 'End date must be on or after the start date.',
     });
 
+    expect(db.$queryRaw).toHaveBeenCalledWith(
+      ['SELECT id FROM projects WHERE id = ', ' FOR UPDATE'],
+      'project-1'
+    );
+    expect(db.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      projectFindUniqueOrThrow.mock.invocationCallOrder[0]
+    );
     expect(projectUpdate).not.toHaveBeenCalled();
   });
 
@@ -88,5 +103,110 @@ describe('project date validation', () => {
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
 
     expect(projectUpdate).not.toHaveBeenCalled();
+  });
+
+  it('allows unrelated edits on a legacy project with reversed dates', async () => {
+    projectFindUniqueOrThrow.mockResolvedValue({
+      startDate: new Date('2026-10-22T00:00:00.000Z'),
+      endDate: new Date('2026-10-21T00:00:00.000Z'),
+    });
+
+    await expect(
+      caller().update({ id: 'project-1', name: 'Renamed', status: 'COMPLETED' })
+    ).resolves.toMatchObject({ id: 'project-1' });
+    expect(projectUpdate).toHaveBeenCalledWith({
+      where: { id: 'project-1' },
+      data: { name: 'Renamed', status: 'COMPLETED' },
+    });
+  });
+
+  it.each(['startDate', 'endDate'] as const)('allows clearing %s', async (field) => {
+    projectFindUniqueOrThrow.mockResolvedValue({
+      startDate: new Date('2026-10-22T00:00:00.000Z'),
+      endDate: new Date('2026-10-21T00:00:00.000Z'),
+    });
+
+    await expect(caller().update({ id: 'project-1', [field]: null })).resolves.toMatchObject({
+      id: 'project-1',
+    });
+  });
+
+  it('allows repairing reversed dates with equal start and end dates', async () => {
+    projectFindUniqueOrThrow.mockResolvedValue({
+      startDate: new Date('2026-10-22T00:00:00.000Z'),
+      endDate: new Date('2026-10-21T00:00:00.000Z'),
+    });
+    const date = new Date('2026-10-23T00:00:00.000Z');
+
+    await expect(
+      caller().update({ id: 'project-1', startDate: date, endDate: date })
+    ).resolves.toMatchObject({ id: 'project-1' });
+    expect(projectUpdate).toHaveBeenCalledWith({
+      where: { id: 'project-1' },
+      data: { startDate: date, endDate: date },
+    });
+  });
+
+  it.each([
+    {},
+    { startDate: new Date('2026-10-21T00:00:00.000Z') },
+    { endDate: new Date('2026-10-22T00:00:00.000Z') },
+    {
+      startDate: new Date('2026-10-21T00:00:00.000Z'),
+      endDate: new Date('2026-10-22T00:00:00.000Z'),
+    },
+    {
+      startDate: new Date('2026-10-22T00:00:00.000Z'),
+      endDate: new Date('2026-10-22T00:00:00.000Z'),
+    },
+  ])('allows creating a project with valid optional dates: %o', async (dates) => {
+    await expect(
+      caller().create({ name: 'Project', type: 'INTERNAL', createDefaultBoard: false, ...dates })
+    ).resolves.toMatchObject({ id: 'project-1' });
+    expect(projectCreate).toHaveBeenCalledOnce();
+  });
+
+  it('serializes concurrent partial date edits before validating the stored dates', async () => {
+    let dates = {
+      startDate: new Date('2026-10-01T00:00:00.000Z'),
+      endDate: new Date('2026-10-31T00:00:00.000Z'),
+    };
+    projectFindUniqueOrThrow.mockImplementation(async () => ({ ...dates }));
+    projectUpdate.mockImplementation(async ({ data }) => {
+      dates = { ...dates, ...data };
+      return { id: 'project-1', name: 'Project', ...dates };
+    });
+    let lock = Promise.resolve();
+    db.$transaction.mockImplementation(async (run) => {
+      let release: (() => void) | undefined;
+      const tx = {
+        project: db.project,
+        $queryRaw: vi.fn(async () => {
+          const previous = lock;
+          lock = new Promise<void>((resolve) => {
+            release = resolve;
+          });
+          await previous;
+          return [{ id: 'project-1' }];
+        }),
+      };
+      try {
+        return await run(tx);
+      } finally {
+        release?.();
+      }
+    });
+
+    const results = await Promise.allSettled([
+      caller().update({ id: 'project-1', startDate: new Date('2026-10-25T00:00:00.000Z') }),
+      caller().update({ id: 'project-1', endDate: new Date('2026-10-05T00:00:00.000Z') }),
+    ]);
+
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.find((result) => result.status === 'rejected')).toMatchObject({
+      reason: { code: 'BAD_REQUEST', message: 'End date must be on or after the start date.' },
+    });
+    expect(dates.endDate.getTime()).toBeGreaterThanOrEqual(dates.startDate.getTime());
+    expect(projectUpdate).toHaveBeenCalledOnce();
   });
 });

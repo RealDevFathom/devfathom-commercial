@@ -160,16 +160,23 @@ export const projectsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const { id, ...data } = input;
       await assertProjectAccess(ctx, id);
-      const storedDates = await ctx.db.project.findUniqueOrThrow({
-        where: { id },
-        select: { startDate: true, endDate: true },
+      const project = await ctx.db.$transaction(async (tx) => {
+        if (data.startDate !== undefined || data.endDate !== undefined) {
+          // Lock before reading so concurrent partial edits validate against
+          // the dates actually retained by this update.
+          await tx.$queryRaw`SELECT id FROM projects WHERE id = ${id} FOR UPDATE`;
+          const storedDates = await tx.project.findUniqueOrThrow({
+            where: { id },
+            select: { startDate: true, endDate: true },
+          });
+          const startDate = data.startDate === undefined ? storedDates.startDate : data.startDate;
+          const endDate = data.endDate === undefined ? storedDates.endDate : data.endDate;
+          if (!projectDatesAreOrdered(startDate, endDate)) {
+            throw new TRPCError({ code: 'BAD_REQUEST', message: PROJECT_DATE_ORDER_MESSAGE });
+          }
+        }
+        return tx.project.update({ where: { id }, data });
       });
-      const startDate = data.startDate === undefined ? storedDates.startDate : data.startDate;
-      const endDate = data.endDate === undefined ? storedDates.endDate : data.endDate;
-      if (!projectDatesAreOrdered(startDate, endDate)) {
-        throw new TRPCError({ code: 'BAD_REQUEST', message: PROJECT_DATE_ORDER_MESSAGE });
-      }
-      const project = await ctx.db.project.update({ where: { id }, data });
       logActivity(ctx.db, ctx.session.user.id, {
         type: 'project_updated',
         message:
