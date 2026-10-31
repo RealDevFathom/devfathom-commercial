@@ -60,6 +60,19 @@ export async function publishTaxProfile(tx: Prisma.TransactionClient, input: Pub
     include: { rules: true },
   });
   if (current && !input.replaceOpenProfile) return { kind: 'occupied' as const };
+
+  const overlap = await tx.restaurantTaxProfileVersion.findFirst({
+    where: {
+      ...(current ? { id: { not: current.id } } : {}),
+      branchId: input.branchId,
+      status: 'PUBLISHED',
+      effectiveFrom: { lt: input.effectiveTo ?? new Date('9999-12-31T23:59:59.999Z') },
+      OR: [{ effectiveTo: null }, { effectiveTo: { gt: input.effectiveFrom } }],
+    },
+    select: { id: true },
+  });
+  if (overlap) return { kind: 'occupied' as const };
+
   if (current) {
     await tx.restaurantTaxRuleVersion.updateMany({
       where: { profileVersionId: current.id, effectiveTo: null },
@@ -70,17 +83,6 @@ export async function publishTaxProfile(tx: Prisma.TransactionClient, input: Pub
       data: { effectiveTo: input.effectiveFrom },
     });
   }
-
-  const overlap = await tx.restaurantTaxProfileVersion.findFirst({
-    where: {
-      branchId: input.branchId,
-      status: 'PUBLISHED',
-      effectiveFrom: { lt: input.effectiveTo ?? new Date('9999-12-31T23:59:59.999Z') },
-      OR: [{ effectiveTo: null }, { effectiveTo: { gt: input.effectiveFrom } }],
-    },
-    select: { id: true },
-  });
-  if (overlap) return { kind: 'occupied' as const };
 
   const source = await tx.restaurantTaxOfficialSource.upsert({
     where: {

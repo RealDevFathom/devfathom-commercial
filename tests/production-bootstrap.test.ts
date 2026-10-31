@@ -12,6 +12,7 @@ import {
   AGENCY_DEPARTMENTS,
   HOSPITALITY_PACKAGES,
   PHARMACY_PACKAGES,
+  packageDefaultSeats,
   RESTAURANT_MODULES,
   RESTAURANT_DEPARTMENTS,
   RESTAURANT_ROLE_TEMPLATES,
@@ -71,7 +72,7 @@ function fakeTransaction() {
   // to remember what a previous pass created: a package that already exists is
   // deliberately left alone rather than re-composed.
   const moduleKeys = new Set<string>();
-  const packageKeys = new Set<string>();
+  const packages = new Map<string, { key: string; defaultSeats?: number }>();
   const findManyByKey = (known: Set<string>) =>
     vi.fn(async (args: { where: { key: { in: string[] } } }) =>
       args.where.key.in.filter((key) => known.has(key)).map((key) => ({ key }))
@@ -84,9 +85,26 @@ function fakeTransaction() {
     }),
   };
   const platformPackage = {
-    findMany: findManyByKey(packageKeys),
-    upsert: vi.fn(async (args: { where: { key: string } }) => {
-      packageKeys.add(args.where.key);
+    findMany: vi.fn(async (args: { where: { key: { in: string[] } } }) =>
+      args.where.key.in.filter((key) => packages.has(key)).map((key) => ({ key }))
+    ),
+    updateMany: vi.fn(
+      async (args: {
+        where: { key: string; defaultSeats?: number };
+        data: { defaultSeats?: number };
+      }) => {
+        const row = packages.get(args.where.key);
+        if (!row || row.defaultSeats !== args.where.defaultSeats) return { count: 0 };
+        Object.assign(row, args.data);
+        return { count: 1 };
+      }
+    ),
+    upsert: vi.fn(async (args: { where: { key: string }; create?: { defaultSeats?: number } }) => {
+      if (!packages.has(args.where.key))
+        packages.set(args.where.key, {
+          key: args.where.key,
+          defaultSeats: args.create?.defaultSeats,
+        });
       return { id: `package_${args.where.key}` };
     }),
   };
@@ -283,6 +301,7 @@ describe('production bootstrap', () => {
           key: restaurantPackage.key,
           name: restaurantPackage.name,
           vertical: 'RESTAURANT',
+          defaultSeats: packageDefaultSeats(restaurantPackage),
         },
       });
       for (const moduleKey of restaurantPackage.moduleKeys) {
@@ -535,6 +554,20 @@ function restaurantTransaction() {
         if (!row) throw new Error('Missing package in fake');
         return row;
       }),
+      updateMany: vi.fn(
+        async ({
+          where,
+          data,
+        }: {
+          where: { key: string; defaultSeats: number };
+          data: { defaultSeats: number };
+        }) => {
+          const row = packages.get(where.key);
+          if (!row || row.defaultSeats !== where.defaultSeats) return { count: 0 };
+          Object.assign(row, data);
+          return { count: 1 };
+        }
+      ),
       upsert: vi.fn(async ({ create: data }: { create: { key: string } }) => {
         if (!packages.has(data.key))
           packages.set(data.key, {
@@ -575,6 +608,7 @@ function restaurantTransaction() {
     delegates.platformUser.create,
     delegates.platformModule.upsert,
     delegates.platformPackage.upsert,
+    delegates.platformPackage.updateMany,
     delegates.platformPackageModule.upsert,
     delegates.organizationRole.create,
     delegates.organizationDepartment.createMany,
@@ -605,6 +639,7 @@ describe('explicit Restaurant fresh bootstrap', () => {
   it('creates only the selected code-owned catalog and Restaurant foundations, with no deployment or trading models', async () => {
     const fake = restaurantTransaction();
     await bootstrapProduction(fake.tx, RESTAURANT_INPUT, fakeHash());
+    const selected = RESTAURANT_PACKAGES.find((pkg) => pkg.key === RESTAURANT_INPUT.packageKey)!;
     expect(fake.organizations).toEqual([
       expect.objectContaining({
         id: RESTAURANT_INPUT.organizationId,
@@ -613,11 +648,10 @@ describe('explicit Restaurant fresh bootstrap', () => {
         status: 'ONBOARDING',
         isDemo: false,
         packageId: 'package_restaurant-essentials',
-        seatLimit: 1,
+        seatLimit: packageDefaultSeats(selected),
       }),
     ]);
     expect([...fake.packages.keys()]).toEqual(['restaurant-essentials']);
-    const selected = RESTAURANT_PACKAGES.find((pkg) => pkg.key === RESTAURANT_INPUT.packageKey)!;
     expect([...fake.modules.keys()].sort()).toEqual(
       ['dashboard', 'admin', 'notifications', ...selected.moduleKeys].sort()
     );

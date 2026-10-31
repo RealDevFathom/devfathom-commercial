@@ -22,11 +22,12 @@
  */
 import { randomBytes } from 'node:crypto';
 
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { Prisma } from '@/generated/prisma/client';
 import { ensureRestaurantTaxProfile } from '@/lib/test-support/restaurant-tax-profile';
 import { ensurePlatformModule, seedDepartments } from '@/lib/test-support/departments';
+import { clearRateLimit } from '@/lib/rate-limit';
 
 /** Assert a serialised money value by Decimal VALUE, tolerant of trailing-zero format
  * (`.toString()` trims computed Decimals: '10' ≡ '10.00'). Never a float comparison. */
@@ -97,6 +98,15 @@ const ctx = {
 };
 
 let orderSeq = 0;
+
+beforeEach(async () => {
+  await Promise.all([
+    clearRateLimit('terminal:ip:unknown'),
+    ...[ctx.posA, ctx.posB, ctx.posDay, ctx.posReplay, ctx.posTax]
+      .filter(({ deviceId }) => deviceId)
+      .map(({ deviceId }) => clearRateLimit(`terminal:device:${deviceId}`)),
+  ]);
+});
 
 async function call(
   route: RouteModule,
@@ -336,7 +346,13 @@ beforeAll(async () => {
       category: 'Operations',
     });
     await tx.organizationModule.create({
-      data: { organizationId: orgA, moduleId: posModule.id },
+      data: {
+        organizationId: orgA,
+        moduleId: posModule.id,
+        // Daily-close tests rewind to noon. Keep the entitlement effective
+        // throughout that business day, regardless of the real CI start time.
+        startsAt: new Date(`${TODAY}T00:00:00.000Z`),
+      },
     });
     await tx.organizationLimit.create({
       data: {
@@ -361,7 +377,9 @@ beforeAll(async () => {
       ensureRestaurantTaxProfile(tx, orgA, ctx.branchReplay),
     ]);
     // Match the issue's customer-supplied profile without mutating published evidence.
-    const source = await tx.restaurantTaxOfficialSource.findFirstOrThrow();
+    const source = await tx.restaurantTaxOfficialSource.findFirstOrThrow({
+      where: { organizationId: orgA },
+    });
     const effectiveFrom = new Date('2026-08-01T00:00:00.000Z');
     await tx.restaurantTaxProfileVersion.create({
       data: {
@@ -1154,18 +1172,29 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
       });
       expect(deniedRecut.status).toBe(404);
 
-      const deniedComp = await call(deps.routes.comp, {
-        secret: ctx.posA.secret,
-        session: tokenA,
-        key: uniqueKey('wha977-cross-branch-comp'),
-        body: {
-          billId: branchBBillId,
-          billLineId: branchBLineId,
-          reason: 'must not cross branch',
-          approving: { staffProfileId: ctx.managerA, type: 'PIN', secret: PIN },
-        },
-      });
-      expect(deniedComp.status).toBe(404);
+      const pinState = () =>
+        deps.withTenantDb(orgA, (tx) =>
+          tx.restaurantOperatorCredential.findFirstOrThrow({
+            where: { staffProfileId: ctx.managerA, type: 'PIN' },
+            select: { failedAttempts: true, lockedUntil: true },
+          })
+        );
+      const beforePin = await pinState();
+      for (const billId of [branchBBillId, `missing_bill_${suffix}`]) {
+        const deniedComp = await call(deps.routes.comp, {
+          secret: ctx.posA.secret,
+          session: tokenA,
+          key: uniqueKey('wha977-cross-branch-comp'),
+          body: {
+            billId,
+            billLineId: branchBLineId,
+            reason: 'must not cross branch',
+            approving: { staffProfileId: ctx.managerA, type: 'PIN', secret: '000000' },
+          },
+        });
+        expect(deniedComp.status).toBe(404);
+        expect(await pinState()).toEqual(beforePin);
+      }
 
       await deps.withTenantDb(orgA, (tx) =>
         tx.restaurantRegisteredDevice.update({
@@ -1201,7 +1230,6 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
 
   describe('terminal tender branch and business-date boundary', () => {
     it('rejects foreign-branch cash bills, but collects open prior-day bills in the current drawer', async () => {
-      const tokenA = await establishUnlock(ctx.posA.secret, ctx.staffA, ctx.branchA);
       const tokenDay = await establishUnlock(ctx.posDay.secret, ctx.staffA, ctx.branchDay);
 
       const foreignOrder = await seedOrder(ctx.branchDay, ctx.posDay.deviceId, TODAY, ['5.00']);
@@ -1212,6 +1240,7 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
         body: { orderId: foreignOrder.orderId, split: { kind: 'NONE' } },
       });
       const foreignBillId = (foreignCut.json.billIds as string[])[0]!;
+      const tokenA = await establishUnlock(ctx.posA.secret, ctx.staffA, ctx.branchA);
       const beforeForeign = await moneyCounts();
       const foreign = await call(deps.routes.tender, {
         secret: ctx.posA.secret,
