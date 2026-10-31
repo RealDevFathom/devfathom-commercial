@@ -1274,6 +1274,16 @@ function stockLocationClause(range: RestaurantStockReportRange) {
     : Prisma.empty;
 }
 
+// Intl accepts ISO offsets (+HH, +HHMM, +HH:MM); PostgreSQL uses POSIX's
+// opposite sign and requires minutes to be colon-separated. Normalize at read
+// time so existing branch values and new values share the same report behavior.
+const BRANCH_REPORT_TIMEZONE = Prisma.sql`(CASE
+  WHEN branch."timezone" ~ '^[+-][0-9]{2}(:?[0-9]{2})?$'
+  THEN 'UTC' || TRANSLATE(LEFT(branch."timezone", 3), '+-', '-+') || ':' ||
+    CASE WHEN LENGTH(branch."timezone") = 3 THEN '00' ELSE RIGHT(branch."timezone", 2) END
+  ELSE branch."timezone"
+END)`;
+
 function valuedWastageCte(range: RestaurantStockReportRange) {
   return Prisma.sql`
     WITH current_costs AS (
@@ -1292,7 +1302,7 @@ function valuedWastageCte(range: RestaurantStockReportRange) {
         movement."locationId",
         location."branchId",
         branch."name" AS "branchName",
-        branch."timezone" AS "branchTimezone",
+        ${BRANCH_REPORT_TIMEZONE} AS "branchTimezone",
         location."name" AS "locationName",
         ingredient."name" AS "ingredientName",
         COALESCE(unit."abbreviation", unit."name") AS "canonicalUnit",
@@ -1321,8 +1331,8 @@ function valuedWastageCte(range: RestaurantStockReportRange) {
        AND current_costs."locationId" = movement."locationId"
       WHERE location."branchId" IN (${Prisma.join(range.branchIds)})
         ${stockLocationClause(range)}
-        AND (movement."occurredAt" AT TIME ZONE 'UTC') >= (${range.from}::date::timestamp AT TIME ZONE branch."timezone")
-        AND (movement."occurredAt" AT TIME ZONE 'UTC') < ((${range.to}::date + 1)::timestamp AT TIME ZONE branch."timezone")
+        AND (movement."occurredAt" AT TIME ZONE 'UTC') >= (${range.from}::date::timestamp AT TIME ZONE ${BRANCH_REPORT_TIMEZONE})
+        AND (movement."occurredAt" AT TIME ZONE 'UTC') < ((${range.to}::date + 1)::timestamp AT TIME ZONE ${BRANCH_REPORT_TIMEZONE})
         AND (
           movement."reason" IN ('WASTAGE', 'SPOILAGE', 'STAFF_MEAL')
           OR (movement."reason" = 'MANUAL_CORRECTION' AND movement."quantity" < 0)
@@ -1694,8 +1704,8 @@ export async function readPurchasingReport(db: ScopedDb, range: RestaurantReport
           FROM "restaurant_purchase_orders" purchase_order
           JOIN "restaurant_branches" branch ON branch."id" = purchase_order."branchId"
           WHERE purchase_order."branchId" IN (${Prisma.join(range.branchIds)})
-            AND (purchase_order."createdAt" AT TIME ZONE 'UTC') >= (${range.from}::date::timestamp AT TIME ZONE branch."timezone")
-            AND (purchase_order."createdAt" AT TIME ZONE 'UTC') < ((${range.to}::date + 1)::timestamp AT TIME ZONE branch."timezone")
+            AND (purchase_order."createdAt" AT TIME ZONE 'UTC') >= (${range.from}::date::timestamp AT TIME ZONE ${BRANCH_REPORT_TIMEZONE})
+            AND (purchase_order."createdAt" AT TIME ZONE 'UTC') < ((${range.to}::date + 1)::timestamp AT TIME ZONE ${BRANCH_REPORT_TIMEZONE})
         ) AS "purchaseOrderCount",
         (
           SELECT COALESCE(SUM(line."orderedQuantity" * line."unitCost"), 0)
@@ -1704,16 +1714,16 @@ export async function readPurchasingReport(db: ScopedDb, range: RestaurantReport
             ON purchase_order."id" = line."purchaseOrderId"
           JOIN "restaurant_branches" branch ON branch."id" = purchase_order."branchId"
           WHERE purchase_order."branchId" IN (${Prisma.join(range.branchIds)})
-            AND (purchase_order."createdAt" AT TIME ZONE 'UTC') >= (${range.from}::date::timestamp AT TIME ZONE branch."timezone")
-            AND (purchase_order."createdAt" AT TIME ZONE 'UTC') < ((${range.to}::date + 1)::timestamp AT TIME ZONE branch."timezone")
+            AND (purchase_order."createdAt" AT TIME ZONE 'UTC') >= (${range.from}::date::timestamp AT TIME ZONE ${BRANCH_REPORT_TIMEZONE})
+            AND (purchase_order."createdAt" AT TIME ZONE 'UTC') < ((${range.to}::date + 1)::timestamp AT TIME ZONE ${BRANCH_REPORT_TIMEZONE})
         ) AS "purchaseOrderValue",
         (
           SELECT COUNT(*)::int
           FROM "restaurant_purchase_receipts" receipt
           JOIN "restaurant_branches" branch ON branch."id" = receipt."branchId"
           WHERE receipt."branchId" IN (${Prisma.join(range.branchIds)})
-            AND (receipt."receivedAt" AT TIME ZONE 'UTC') >= (${range.from}::date::timestamp AT TIME ZONE branch."timezone")
-            AND (receipt."receivedAt" AT TIME ZONE 'UTC') < ((${range.to}::date + 1)::timestamp AT TIME ZONE branch."timezone")
+            AND (receipt."receivedAt" AT TIME ZONE 'UTC') >= (${range.from}::date::timestamp AT TIME ZONE ${BRANCH_REPORT_TIMEZONE})
+            AND (receipt."receivedAt" AT TIME ZONE 'UTC') < ((${range.to}::date + 1)::timestamp AT TIME ZONE ${BRANCH_REPORT_TIMEZONE})
         ) AS "receiptCount",
         (
           SELECT COALESCE(SUM(line."receivedQuantity" * line."unitCost"), 0)
@@ -1722,8 +1732,8 @@ export async function readPurchasingReport(db: ScopedDb, range: RestaurantReport
             ON receipt."id" = line."purchaseReceiptId"
           JOIN "restaurant_branches" branch ON branch."id" = receipt."branchId"
           WHERE receipt."branchId" IN (${Prisma.join(range.branchIds)})
-            AND (receipt."receivedAt" AT TIME ZONE 'UTC') >= (${range.from}::date::timestamp AT TIME ZONE branch."timezone")
-            AND (receipt."receivedAt" AT TIME ZONE 'UTC') < ((${range.to}::date + 1)::timestamp AT TIME ZONE branch."timezone")
+            AND (receipt."receivedAt" AT TIME ZONE 'UTC') >= (${range.from}::date::timestamp AT TIME ZONE ${BRANCH_REPORT_TIMEZONE})
+            AND (receipt."receivedAt" AT TIME ZONE 'UTC') < ((${range.to}::date + 1)::timestamp AT TIME ZONE ${BRANCH_REPORT_TIMEZONE})
         ) AS "receivedSupplierSpend",
         (
           SELECT COUNT(*)::int
@@ -1732,8 +1742,8 @@ export async function readPurchasingReport(db: ScopedDb, range: RestaurantReport
             ON receipt."id" = discrepancy."purchaseReceiptId"
           JOIN "restaurant_branches" branch ON branch."id" = receipt."branchId"
           WHERE receipt."branchId" IN (${Prisma.join(range.branchIds)})
-            AND (receipt."receivedAt" AT TIME ZONE 'UTC') >= (${range.from}::date::timestamp AT TIME ZONE branch."timezone")
-            AND (receipt."receivedAt" AT TIME ZONE 'UTC') < ((${range.to}::date + 1)::timestamp AT TIME ZONE branch."timezone")
+            AND (receipt."receivedAt" AT TIME ZONE 'UTC') >= (${range.from}::date::timestamp AT TIME ZONE ${BRANCH_REPORT_TIMEZONE})
+            AND (receipt."receivedAt" AT TIME ZONE 'UTC') < ((${range.to}::date + 1)::timestamp AT TIME ZONE ${BRANCH_REPORT_TIMEZONE})
         ) AS "discrepancyCount"
     `),
     db.$queryRaw<Array<{ status: string; count: number }>>(Prisma.sql`
@@ -1741,8 +1751,8 @@ export async function readPurchasingReport(db: ScopedDb, range: RestaurantReport
       FROM "restaurant_purchase_orders" purchase_order
       JOIN "restaurant_branches" branch ON branch."id" = purchase_order."branchId"
       WHERE purchase_order."branchId" IN (${Prisma.join(range.branchIds)})
-        AND (purchase_order."createdAt" AT TIME ZONE 'UTC') >= (${range.from}::date::timestamp AT TIME ZONE branch."timezone")
-        AND (purchase_order."createdAt" AT TIME ZONE 'UTC') < ((${range.to}::date + 1)::timestamp AT TIME ZONE branch."timezone")
+        AND (purchase_order."createdAt" AT TIME ZONE 'UTC') >= (${range.from}::date::timestamp AT TIME ZONE ${BRANCH_REPORT_TIMEZONE})
+        AND (purchase_order."createdAt" AT TIME ZONE 'UTC') < ((${range.to}::date + 1)::timestamp AT TIME ZONE ${BRANCH_REPORT_TIMEZONE})
       GROUP BY purchase_order."status"
       ORDER BY purchase_order."status" ASC
     `),
@@ -1755,8 +1765,8 @@ export async function readPurchasingReport(db: ScopedDb, range: RestaurantReport
       JOIN "restaurant_branches" branch ON branch."id" = receipt."branchId"
       JOIN "restaurant_suppliers" supplier ON supplier."id" = receipt."supplierId"
       WHERE receipt."branchId" IN (${Prisma.join(range.branchIds)})
-        AND (receipt."receivedAt" AT TIME ZONE 'UTC') >= (${range.from}::date::timestamp AT TIME ZONE branch."timezone")
-        AND (receipt."receivedAt" AT TIME ZONE 'UTC') < ((${range.to}::date + 1)::timestamp AT TIME ZONE branch."timezone")
+        AND (receipt."receivedAt" AT TIME ZONE 'UTC') >= (${range.from}::date::timestamp AT TIME ZONE ${BRANCH_REPORT_TIMEZONE})
+        AND (receipt."receivedAt" AT TIME ZONE 'UTC') < ((${range.to}::date + 1)::timestamp AT TIME ZONE ${BRANCH_REPORT_TIMEZONE})
       GROUP BY supplier."name"
       ORDER BY supplier."name" ASC
     `),
@@ -1771,8 +1781,8 @@ export async function readPurchasingReport(db: ScopedDb, range: RestaurantReport
       JOIN "restaurant_suppliers" supplier ON supplier."id" = receipt."supplierId"
       JOIN "restaurant_branches" branch ON branch."id" = receipt."branchId"
       WHERE receipt."branchId" IN (${Prisma.join(range.branchIds)})
-        AND (receipt."receivedAt" AT TIME ZONE 'UTC') >= (${range.from}::date::timestamp AT TIME ZONE branch."timezone")
-        AND (receipt."receivedAt" AT TIME ZONE 'UTC') < ((${range.to}::date + 1)::timestamp AT TIME ZONE branch."timezone")
+        AND (receipt."receivedAt" AT TIME ZONE 'UTC') >= (${range.from}::date::timestamp AT TIME ZONE ${BRANCH_REPORT_TIMEZONE})
+        AND (receipt."receivedAt" AT TIME ZONE 'UTC') < ((${range.to}::date + 1)::timestamp AT TIME ZONE ${BRANCH_REPORT_TIMEZONE})
       ORDER BY receipt."receivedAt" ASC, discrepancy."id" ASC
       LIMIT ${MAX_INTERACTIVE_ROWS + 1}
     `),

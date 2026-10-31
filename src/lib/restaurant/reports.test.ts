@@ -659,7 +659,9 @@ describe('restaurant wastage and stock movement reports', () => {
       expect(sql).toContain(`FILTER (WHERE "valuationSource" <> 'RECORDED')`);
       expect(sql).toContain(`(movement."occurredAt" AT TIME ZONE 'UTC') >=`);
       expect(sql).toContain(`(movement."occurredAt" AT TIME ZONE 'UTC') <`);
-      expect(sql).toContain('AT TIME ZONE branch."timezone"');
+      expect(sql).toContain('AT TIME ZONE (CASE');
+      expect(sql).toContain(`TRANSLATE(LEFT(branch."timezone", 3), '+-', '-+')`);
+      expect(sql).toContain(`ELSE branch."timezone"`);
     }
     expect(
       queries.some((sql) =>
@@ -1054,7 +1056,9 @@ describe('restaurant complete summaries with bounded details', () => {
     expect(report.discrepancies).toHaveLength(200);
     for (const [query] of (db.$queryRaw as ReturnType<typeof vi.fn>).mock.calls) {
       const sql = queryText(query);
-      expect(sql).toContain('AT TIME ZONE branch."timezone"');
+      expect(sql).toContain('AT TIME ZONE (CASE');
+      expect(sql).toContain(`TRANSLATE(LEFT(branch."timezone", 3), '+-', '-+')`);
+      expect(sql).toContain(`ELSE branch."timezone"`);
       expect(sql).toMatch(
         /(?:purchase_order\."createdAt"|receipt\."receivedAt") AT TIME ZONE 'UTC'/
       );
