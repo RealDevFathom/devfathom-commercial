@@ -751,6 +751,63 @@ describeIfDatabase('PH-OFF OFF-01 — the append-only command log', () => {
     expect(backfill?.nextSequence).toBe(1);
   });
 
+  it('advances across historical commands only after filling their preceding gap', async () => {
+    const fixture = await scenario(ORG_A, BRANCH_A, 'log-historical-gap');
+    const scope = scopeOf(fixture);
+    const historical = command(fixture, {
+      sequence: 3,
+      idempotencyKey: `historical-${fixture.deviceId}-3`,
+    });
+    await inOrg(ORG_A, async (db) => {
+      await deps.log.recordOfflineCommand(db, scope, command(fixture));
+      // A pre-cursor deployment could record sequences 1 and 3. Its backfill
+      // resumes at 2, which is also the cursor after recording sequence 1 here.
+      await db.pharmacyOfflineCommand.create({
+        data: {
+          ...historical,
+          organizationId: ORG_A,
+          branchId: BRANCH_A,
+          payloadHash: deps.log.commandPayloadHash(historical.payload),
+          status: 'ACCEPTED',
+          settledAt: NOW,
+          attempts: 1,
+          serverRef: 'historical-sale',
+        },
+      });
+      await deps.log.recordOfflineCommand(db, scope, historical);
+      const cursor = await db.pharmacyRegisteredDevice.findFirstOrThrow({
+        where: { id: fixture.deviceId },
+      });
+      expect(cursor.nextOfflineCommandSequence).toBe(2);
+    });
+    await inOrg(ORG_A, (db) =>
+      deps.log.recordOfflineCommand(
+        db,
+        scope,
+        command(fixture, { sequence: 2, idempotencyKey: `key-${fixture.deviceId}-2` })
+      )
+    );
+    await expect(
+      inOrg(ORG_A, (db) =>
+        deps.log.recordOfflineCommand(db, scope, { ...historical, payload: { changed: true } })
+      )
+    ).rejects.toThrow('IDEMPOTENCY_CONFLICT');
+    const replay = await inOrg(ORG_A, (db) => deps.log.recordOfflineCommand(db, scope, historical));
+    expect(replay.replayed).toBe(true);
+    expect(replay.command.status).toBe('ACCEPTED');
+    // Older retries must never rewind a cursor that has caught up with history.
+    await inOrg(ORG_A, (db) => deps.log.recordOfflineCommand(db, scope, command(fixture)));
+    const next = await inOrg(ORG_A, (db) =>
+      deps.log.recordOfflineCommand(
+        db,
+        scope,
+        command(fixture, { sequence: 4, idempotencyKey: `key-${fixture.deviceId}-4` })
+      )
+    );
+    expect(next.replayed).toBe(false);
+    expect(next.command.sequence).toBe(4);
+  });
+
   it('refuses one key carrying two different payloads', async () => {
     const fixture = await scenario(ORG_A, BRANCH_A, 'log-conflict');
     await inOrg(ORG_A, (db) =>

@@ -418,6 +418,49 @@ describeIfDatabase('offline counter REST on forced-RLS PostgreSQL', () => {
     expect((await f.counts()).commands).toBe(2);
   });
 
+  it('refuses a later sale until an already-recorded pending command settles', async () => {
+    const f = await setup();
+    await inOrg(ORG_A, (db) =>
+      deps.log.recordOfflineCommand(db, scopeOf(f.fixture), {
+        deviceId: f.fixture.deviceId,
+        sequence: f.command.sequence,
+        idempotencyKey: f.command.idempotencyKey,
+        action: f.command.action,
+        payload: f.command,
+        clientOriginAt: new Date(f.command.leasedReceipt.originalSaleAt),
+        receiptNumber: f.command.leasedReceipt.receiptNumber,
+      })
+    );
+    // Use another lease so its receipt cursor cannot mask a settlement-order defect.
+    const leased = await f.call('lease', { size: 2 });
+    expect(leased.status).toBe(200);
+    const lease = await leased.json();
+    const second = {
+      ...f.command,
+      sequence: 2,
+      idempotencyKey: tag('later-command'),
+      leasedReceipt: {
+        ...f.command.leasedReceipt,
+        leaseId: lease.id,
+        receiptNumber: lease.blockStart,
+        originalSaleAt: new Date().toISOString(),
+      },
+    };
+    const before = await f.counts();
+    const blocked = await f.replay(second);
+    expect(blocked.status).toBe(409);
+    expect(await blocked.json()).toEqual({ error: 'earlier_command_pending' });
+    expect(await f.counts()).toEqual(before);
+    const cursor = await inOrg(ORG_A, (db) =>
+      db.pharmacyRegisteredDevice.findFirstOrThrow({ where: { id: f.fixture.deviceId } })
+    );
+    expect(cursor.nextOfflineCommandSequence).toBe(2);
+
+    expect((await f.replay()).status).toBe(200);
+    expect((await f.replay(second)).status).toBe(200);
+    expect(await f.counts()).toMatchObject({ commands: 2, sales: 2, consumed: 2 });
+  });
+
   it('replays identical concurrent Idempotency-Key requests into exactly one sale', async () => {
     const f = await setup();
     const responses = await Promise.all([f.replay(), f.replay()]);

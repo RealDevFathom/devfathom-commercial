@@ -128,6 +128,22 @@ export async function recordOfflineCommand(
       existing.payloadHash !== payloadHash
     )
       throw new PharmacyOfflineCommandError('IDEMPOTENCY_CONFLICT');
+    // A backfilled cursor can catch up with history after a gap is filled.
+    // Advance only across this validated command at the current position;
+    // future history must not skip a gap and older retries must not rewind it.
+    if (existing.sequence < MAX_OFFLINE_COMMAND_CURSOR) {
+      await db.pharmacyRegisteredDevice.updateMany({
+        where: {
+          id: input.deviceId,
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          status: 'ACTIVE',
+          revokedAt: null,
+          nextOfflineCommandSequence: existing.sequence,
+        },
+        data: { nextOfflineCommandSequence: { increment: 1 } },
+      });
+    }
     // Finding the key means this invocation did not create the command. That is
     // a replay even when the first worker crashed before its initial attempt.
     return { command: existing, replayed: true };

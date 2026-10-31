@@ -314,6 +314,20 @@ export async function replayCounterCommand(
     };
   if (recorded.command.status !== 'PENDING')
     throw new CounterTransportError('command_rejected', 409);
+  // Recording order alone does not settle older PENDING rows left by a crash
+  // or a pre-cursor deployment. The transport holds the device lock throughout
+  // this check and settlement, so no later command can consume stock first.
+  const earlier = await db.pharmacyOfflineCommand.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      deviceId,
+      status: 'PENDING',
+      sequence: { lt: command.sequence },
+    },
+    select: { id: true },
+  });
+  if (earlier) throw new CounterTransportError('earlier_command_pending', 409);
   const sale = await createSale(db, scope);
   for (const [index, line] of command.lines.entries()) {
     const medicine = await db.medicine.findFirst({
