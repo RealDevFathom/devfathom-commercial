@@ -58,6 +58,8 @@ function isDevelopmentHost(hostname: string): boolean {
   return (
     hostname === 'localhost' ||
     hostname.endsWith('.localhost') ||
+    hostname === '127.0.0.1' ||
+    hostname === '[::1]' ||
     hostname === 'lvh.me' ||
     hostname.endsWith('.lvh.me')
   );
@@ -70,7 +72,8 @@ function normalizeAppUrl(value: string): string {
     if (url.protocol !== 'http:' && url.protocol !== 'https:') return DEFAULT_APP_URL;
 
     // Local development commonly uses plain HTTP. lvh.me and its subdomains
-    // resolve to loopback, so they must receive the same treatment as localhost.
+    // resolve to loopback, so they receive the same treatment as localhost and
+    // the IPv4/IPv6 loopback addresses.
     if (url.protocol === 'http:' && !isDevelopmentHost(url.hostname)) {
       url.protocol = 'https:';
     }

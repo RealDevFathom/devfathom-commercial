@@ -26,16 +26,22 @@ describe('appUrl', () => {
     ['http://cafe.lvh.me:3100', 'http://cafe.lvh.me:3100'],
     ['http://localhost:3000', 'http://localhost:3000'],
     ['http://cafe.localhost:3000', 'http://cafe.localhost:3000'],
+    ['http://127.0.0.1:3000', 'http://127.0.0.1:3000'],
+    ['http://[::1]:3000', 'http://[::1]:3000'],
   ])('keeps HTTP for the development host %s', (configuredUrl, expected) => {
     process.env.NEXT_PUBLIC_APP_URL = configuredUrl;
 
     expect(`${appUrl()}/invite/T`).toBe(`${expected}/invite/T`);
   });
 
-  it('upgrades an HTTP production URL to HTTPS', () => {
-    process.env.NEXT_PUBLIC_APP_URL = 'http://app.example.com/';
+  it.each([
+    ['http://app.example.com/', 'https://app.example.com'],
+    ['http://127.0.0.1.example.com:3000', 'https://127.0.0.1.example.com:3000'],
+    ['http://[::2]:3000', 'https://[::2]:3000'],
+  ])('upgrades a non-development HTTP URL to HTTPS: %s', (configuredUrl, expected) => {
+    process.env.NEXT_PUBLIC_APP_URL = configuredUrl;
 
-    expect(appUrl()).toBe('https://app.example.com');
+    expect(appUrl()).toBe(expected);
   });
 
   it.each(['javascript:alert(1)', '//evil.example', 'not a URL'])(
