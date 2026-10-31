@@ -111,7 +111,7 @@ const db = {
     findUnique: mocks.findBranch,
     findFirst: mocks.findBranch,
     findMany: vi.fn(async ({ where }: { where?: { id?: { in?: string[] } } }) =>
-      (where?.id?.in ?? []).map((id) => ({ id }))
+      (where?.id?.in ?? ['branch_1']).map((id) => ({ id }))
     ),
   },
   restaurantStockLocation: {
@@ -284,6 +284,82 @@ describe('restaurantInventoryRouter', () => {
     mocks.can.mockResolvedValue(false);
     await expect(caller().listStockOnHand({})).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
+
+  it('restricts every inventory reader to the staff member assigned branches', async () => {
+    mocks.can.mockResolvedValue(false);
+    mocks.findBranchAssignments.mockResolvedValue([{ branchId: 'branch_2' }]);
+    mocks.listStockOnHand.mockResolvedValue([]);
+    mocks.listStockMovements.mockResolvedValue({ items: [], nextCursor: null });
+    mocks.listStockCounts.mockResolvedValue({ items: [], nextCursor: null });
+    mocks.listStockTransfers.mockResolvedValue({ items: [], nextCursor: null });
+    mocks.evaluateLowStockRules.mockResolvedValue([]);
+    mocks.listStockBatches.mockResolvedValue({ items: [], nextCursor: null });
+
+    const api = caller();
+    mocks.can.mockResolvedValueOnce(true);
+    await api.listStockOnHand({});
+    mocks.can.mockResolvedValueOnce(true);
+    await api.listStockMovements({});
+    mocks.can.mockResolvedValueOnce(true);
+    await api.listStockCounts({});
+    mocks.can.mockResolvedValueOnce(true);
+    await api.listStockTransfers({});
+    mocks.can.mockResolvedValueOnce(true);
+    await api.evaluateLowStockRules({});
+    mocks.can.mockResolvedValueOnce(true);
+    await api.listStockBatches({});
+
+    for (const reader of [
+      mocks.listStockOnHand,
+      mocks.listStockMovements,
+      mocks.listStockCounts,
+      mocks.listStockTransfers,
+      mocks.evaluateLowStockRules,
+      mocks.listStockBatches,
+    ]) {
+      expect(reader).toHaveBeenCalledWith(
+        db,
+        expect.objectContaining({ branchIds: ['branch_1', 'branch_2'] })
+      );
+    }
+  });
+
+  it.each([
+    { name: 'missing', actors: [] },
+    {
+      name: 'ambiguous',
+      actors: [
+        { id: 'staff_1', primaryBranchId: 'branch_1' },
+        { id: 'staff_2', primaryBranchId: 'branch_2' },
+      ],
+    },
+  ])(
+    'rejects every reader for a $name staff mapping, even with configure access',
+    async ({ actors }) => {
+      mocks.findStaffProfiles.mockResolvedValue(actors);
+      const api = caller();
+      for (const read of [
+        () => api.listStockOnHand({}),
+        () => api.listStockMovements({}),
+        () => api.listStockCounts({}),
+        () => api.listStockTransfers({}),
+        () => api.evaluateLowStockRules({}),
+        () => api.listStockBatches({}),
+      ]) {
+        await expect(read()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      }
+      for (const reader of [
+        mocks.listStockOnHand,
+        mocks.listStockMovements,
+        mocks.listStockCounts,
+        mocks.listStockTransfers,
+        mocks.evaluateLowStockRules,
+        mocks.listStockBatches,
+      ]) {
+        expect(reader).not.toHaveBeenCalled();
+      }
+    }
+  );
 
   it('rejects wastage mutations when ABAC denies inventory:waste', async () => {
     mocks.can.mockResolvedValue(false);
