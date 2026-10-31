@@ -70,7 +70,14 @@ export function appUrl(): string {
   if (!['http:', 'https:'].includes(parsed.protocol)) {
     throw new Error('Public application URL must use HTTP or HTTPS.');
   }
-  if (process.env.NODE_ENV === 'production' && parsed.protocol !== 'https:') {
+  // Browser lanes run production builds on loopback without a TLS proxy.
+  // Match the parsed hostname so lookalike public domains cannot bypass HTTPS.
+  const loopback =
+    parsed.hostname === 'localhost' ||
+    parsed.hostname.endsWith('.localhost') ||
+    parsed.hostname === '127.0.0.1' ||
+    parsed.hostname === '[::1]';
+  if (process.env.NODE_ENV === 'production' && parsed.protocol !== 'https:' && !loopback) {
     throw new Error('Public application URL must use HTTPS in production.');
   }
   return configured;
