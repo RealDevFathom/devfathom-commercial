@@ -101,7 +101,16 @@ describe('organization.update deployment mode', () => {
     expect(platformDb.organization.update).not.toHaveBeenCalled();
     expect(platformDb.organizationDeployment.upsert).not.toHaveBeenCalled();
     expect(platformDb.platformJob.create).not.toHaveBeenCalled();
-    expect(platformDb.platformAuditLog.create).not.toHaveBeenCalled();
+    expect(platformDb.platformAuditLog.create).toHaveBeenCalledExactlyOnceWith({
+      data: expect.objectContaining({
+        action: 'organization.update',
+        actorPlatformUserId: 'op_1',
+        success: false,
+        reason: 'Platform command validation failed.',
+        error: 'Platform command validation failed.',
+        metadata: { outcomeCategory: 'validation_failed' },
+      }),
+    });
   });
 
   it('preserves the dedicated provisioning flow when it is configured', async () => {

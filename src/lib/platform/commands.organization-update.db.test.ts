@@ -45,10 +45,8 @@ describeIfDatabase('organization.update deployment-mode concurrency', () => {
 
   afterAll(async () => {
     if (TEST_DATABASE_URL) {
-      await withPlatformDb(async (tx) => {
-        await tx.platformAuditLog.deleteMany({ where: { targetId: organizationId } });
-        await tx.organization.deleteMany({ where: { id: organizationId } });
-      });
+      // Keep the uniquely named fixtures in this disposable database: command
+      // audit history is append-only and must survive teardown.
       await db.$disconnect();
     }
   });
