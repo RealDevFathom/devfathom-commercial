@@ -12,6 +12,7 @@ export default function RestaurantNotificationsLoading() {
     >
       <PageHeader
         eyebrow="Restaurant operations"
+        eyebrowMuted
         heading="Notifications center"
         description="Loading in-app alerts, delivery records, and routing controls."
       />
