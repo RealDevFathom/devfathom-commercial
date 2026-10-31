@@ -61,6 +61,7 @@ export default defineConfig({
     'restaurant-financial-comparison-export.spec.ts',
     'restaurant-actor-accessibility.spec.ts',
     'restaurant-pos-kds-accessibility.spec.ts',
+    'restaurant-focus-visible.spec.ts',
   ],
   ...(process.env.RESTAURANT_E2E_SPEC_FILE
     ? { testMatch: [process.env.RESTAURANT_E2E_SPEC_FILE] }
