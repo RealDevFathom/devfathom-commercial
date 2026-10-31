@@ -4,6 +4,7 @@ import { createAmazonBedrock } from '@ai-sdk/amazon-bedrock';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createVertex } from '@ai-sdk/google-vertex';
 import { createGroq } from '@ai-sdk/groq';
+import { defaultProvider } from '@aws-sdk/credential-provider-node';
 import { DefaultAzureCredential, getBearerTokenProvider } from '@azure/identity';
 import type { LanguageModel } from 'ai';
 import { defaultAIModel, type AIModelClass } from './model-defaults';
@@ -126,7 +127,10 @@ export function createAIModel(env: Env = process.env): AIModelSelection {
       };
     case 'bedrock':
       return {
-        model: createAmazonBedrock({ region: config.region })(config.model),
+        model: createAmazonBedrock({
+          region: config.region,
+          credentialProvider: defaultProvider(),
+        })(config.model),
         provider: config.provider,
         modelId: config.model,
       };

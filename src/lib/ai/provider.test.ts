@@ -8,7 +8,13 @@ const sdk = vi.hoisted(() => {
     vertex: vi.fn(() => select),
     groq: vi.fn(() => select),
     anthropic: vi.fn(() => select),
-    bedrock: vi.fn(() => select),
+    bedrock: vi.fn<(options: unknown) => typeof select>(() => select),
+    defaultCredentials: vi.fn(),
+    awsCredentials: vi.fn(async () => ({
+      accessKeyId: 'inert-role-key',
+      secretAccessKey: 'inert-role-secret',
+      sessionToken: 'inert-role-session',
+    })),
     credential: vi.fn(function () {}),
     token: vi.fn(),
     generate: vi.fn(),
@@ -22,6 +28,9 @@ vi.mock('@ai-sdk/amazon-bedrock', () => ({ createAmazonBedrock: sdk.bedrock }));
 vi.mock('@ai-sdk/google', () => ({ createGoogleGenerativeAI: sdk.google }));
 vi.mock('@ai-sdk/google-vertex', () => ({ createVertex: sdk.vertex }));
 vi.mock('@ai-sdk/groq', () => ({ createGroq: sdk.groq }));
+vi.mock('@aws-sdk/credential-provider-node', () => ({
+  defaultProvider: sdk.defaultCredentials,
+}));
 vi.mock('@azure/identity', () => ({
   DefaultAzureCredential: sdk.credential,
   getBearerTokenProvider: sdk.token,
@@ -60,6 +69,7 @@ const input: GrowthInput = {
 };
 beforeEach(() => {
   vi.clearAllMocks();
+  sdk.defaultCredentials.mockReturnValue(sdk.awsCredentials);
   vi.stubGlobal('fetch', sdk.fetch);
 });
 afterEach(() => {
@@ -143,8 +153,24 @@ describe('shared provider gate with real factory boundary', () => {
           : 'us.anthropic.claude-opus-4-1-20250805-v1:0',
     });
     expect(sdk[provider]).toHaveBeenCalledWith(
-      provider === 'anthropic' ? { apiKey: 'inert-key' } : { region: 'us-east-1' }
+      provider === 'anthropic'
+        ? { apiKey: 'inert-key' }
+        : { region: 'us-east-1', credentialProvider: sdk.awsCredentials }
     );
+    expect(sdk.fetch).not.toHaveBeenCalled();
+  });
+  it('passes the lazy AWS credential chain, including role session tokens, to Bedrock', async () => {
+    createAIModel({ AI_PROVIDER: 'bedrock', AWS_REGION: 'us-east-1' });
+    expect(sdk.defaultCredentials).toHaveBeenCalledExactlyOnceWith();
+    expect(sdk.awsCredentials).not.toHaveBeenCalled();
+    const options = sdk.bedrock.mock.calls[0][0] as unknown as {
+      credentialProvider: typeof sdk.awsCredentials;
+    };
+    await expect(options.credentialProvider()).resolves.toEqual({
+      accessKeyId: 'inert-role-key',
+      secretAccessKey: 'inert-role-secret',
+      sessionToken: 'inert-role-session',
+    });
     expect(sdk.fetch).not.toHaveBeenCalled();
   });
   it('validates Claude configuration and preserves exact model overrides', () => {

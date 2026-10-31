@@ -1,6 +1,6 @@
 /** @vitest-environment node */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { generateText, streamText, Output } from 'ai';
+import { convertToModelMessages, generateText, streamText, Output } from 'ai';
 import { MockLanguageModelV3, convertArrayToReadableStream } from 'ai/test';
 import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
@@ -85,6 +85,7 @@ beforeEach(() => {
   mocks.config.mockReturnValue({ provider: 'anthropic', model: DEFAULT_AI_MODELS.anthropic.cheap });
 });
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
@@ -161,6 +162,164 @@ describe('production Claude routing and metering', () => {
     expect(mocks.create).toHaveBeenCalledTimes(2);
   });
 
+  it.each(['generate', 'stream'] as const)(
+    'rechecks persisted spend before a reused model can %s again',
+    async (mode) => {
+      const anthropic = selection();
+      const bedrock = selection('bedrock');
+      mocks.factory.mockReturnValue(bedrock);
+      mocks.create.mockImplementation(async ({ data }) => {
+        if (data.provider === 'anthropic')
+          mocks.aggregate.mockResolvedValue({ _sum: { costUsd: new Prisma.Decimal('10') } });
+      });
+      const prepared = await prepareAIModel(anthropic);
+      const run = () =>
+        mode === 'generate'
+          ? generateText({ model: prepared.model, prompt: 'safe', maxRetries: 0 }).then(
+              (result) => result.text
+            )
+          : streamText({ model: prepared.model, prompt: 'safe', maxRetries: 0 }).text;
+      expect(await run()).toBe('paid output');
+      expect(await run()).toBe('paid output');
+      expect(mocks.create.mock.calls.map(([arg]) => arg.data.provider)).toEqual([
+        'anthropic',
+        'bedrock',
+      ]);
+      expect(prepared).toMatchObject({
+        provider: 'bedrock',
+        modelId: DEFAULT_AI_MODELS.bedrock.cheap,
+      });
+      for (const selected of [anthropic, bedrock]) {
+        const model = selected.model as MockLanguageModelV3;
+        expect(mode === 'generate' ? model.doGenerateCalls : model.doStreamCalls).toHaveLength(1);
+      }
+    }
+  );
+
+  it('uses each invocation month and effective price when a model crosses UTC rollover', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const before = new Date('2026-09-30T23:59:59Z');
+    const after = new Date('2026-10-01T00:00:01Z');
+    vi.setSystemTime(before);
+    mocks.aggregate.mockImplementation(async ({ where }) => ({
+      _sum: {
+        costUsd: new Prisma.Decimal(where.occurredAt.gte.getUTCMonth() === 8 ? '10' : '0'),
+      },
+    }));
+    mocks.prices.mockImplementation(async ({ where }) => ({
+      provider: where.provider,
+      model: where.model,
+      inputUsdPerMillionTokens: new Prisma.Decimal(where.effectiveFrom.lte < after ? '1' : '2'),
+      outputUsdPerMillionTokens: new Prisma.Decimal('5'),
+      effectiveFrom: where.effectiveFrom.lte,
+    }));
+    const prepared = await prepareAIModel(selection());
+    await generateText({ model: prepared.model, prompt: 'safe' });
+    vi.setSystemTime(after);
+    await generateText({ model: prepared.model, prompt: 'safe' });
+    expect(mocks.create.mock.calls.map(([arg]) => arg.data)).toEqual([
+      expect.objectContaining({
+        provider: 'bedrock',
+        occurredAt: before,
+        costUsd: new Prisma.Decimal(6),
+      }),
+      expect.objectContaining({
+        provider: 'anthropic',
+        occurredAt: after,
+        costUsd: new Prisma.Decimal(7),
+      }),
+    ]);
+    expect(mocks.aggregate).toHaveBeenLastCalledWith({
+      where: {
+        provider: 'anthropic',
+        occurredAt: {
+          gte: new Date('2026-10-01T00:00:00Z'),
+          lt: new Date('2026-11-01T00:00:00Z'),
+        },
+      },
+      _sum: { costUsd: true },
+    });
+  });
+
+  it.each(['generate', 'stream'] as const)(
+    'rejects cache controls on every SDK option surface before %s purchases output',
+    async (mode) => {
+      type Params = Parameters<MockLanguageModelV3['doGenerate']>[0];
+      const options: NonNullable<Params['providerOptions']>[] = [
+        { anthropic: { cacheControl: { type: 'ephemeral', ttl: '5m' } } },
+        { anthropic: { cache_control: { type: 'ephemeral', ttl: '1h' } } },
+        { bedrock: { cachePoint: { type: 'default' } } },
+      ];
+      for (const provider of ['anthropic', 'bedrock'] as const) {
+        const selected = selection(provider);
+        const prepared = await prepareAIModel(selected);
+        const model = prepared.model as MockLanguageModelV3;
+        for (const providerOptions of options) {
+          const calls: Params[] = [
+            { prompt: [], providerOptions },
+            { prompt: [{ role: 'system', content: 'safe', providerOptions }] },
+            {
+              prompt: [{ role: 'user', content: [{ type: 'text', text: 'safe' }], providerOptions }],
+            },
+            {
+              prompt: [{ role: 'user', content: [{ type: 'text', text: 'safe', providerOptions }] }],
+            },
+            {
+              prompt: [],
+              tools: [{ type: 'function', name: 'safe', inputSchema: {}, providerOptions }],
+            },
+            {
+              prompt: [
+                {
+                  role: 'tool',
+                  content: [
+                    {
+                      type: 'tool-result',
+                      toolCallId: 'call-1',
+                      toolName: 'safe',
+                      output: { type: 'text', value: 'safe', providerOptions },
+                    },
+                  ],
+                },
+              ],
+            },
+          ];
+          for (const params of calls)
+            await expect(
+              mode === 'generate' ? model.doGenerate(params) : model.doStream(params)
+            ).rejects.toThrow('AI prompt caching requires cache-specific ledger prices');
+        }
+        const original = selected.model as MockLanguageModelV3;
+        expect(original.doGenerateCalls).toHaveLength(0);
+        expect(original.doStreamCalls).toHaveLength(0);
+      }
+      expect(mocks.create).not.toHaveBeenCalled();
+    }
+  );
+
+  it('rejects assistant text-part cache metadata after UI message conversion', async () => {
+    const selected = selection();
+    const prepared = await prepareAIModel(selected);
+    const messages = await convertToModelMessages([
+      {
+        id: 'user-1',
+        role: 'user',
+        parts: [
+          {
+            type: 'text',
+            text: 'safe',
+            providerMetadata: { anthropic: { cacheControl: { type: 'ephemeral', ttl: '1h' } } },
+          },
+        ],
+      },
+    ]);
+    await expect(
+      generateText({ model: prepared.model, messages, maxRetries: 0 })
+    ).rejects.toThrow('AI prompt caching requires cache-specific ledger prices');
+    expect((selected.model as MockLanguageModelV3).doGenerateCalls).toHaveLength(0);
+    expect(mocks.create).not.toHaveBeenCalled();
+  });
+
   it('routes growth generation and meters both paid repair attempts', async () => {
     mocks.aggregate.mockResolvedValue({ _sum: { costUsd: new Prisma.Decimal('10') } });
     const result = await generateGrowthRecommendations({
@@ -192,10 +351,56 @@ describe('production Claude routing and metering', () => {
       expect(arg.data).toMatchObject({ provider: 'bedrock', costUsd: new Prisma.Decimal(6) });
   });
 
+  it('attributes a growth repair to Bedrock when the first attempt reaches budget', async () => {
+    mocks.create.mockImplementation(async ({ data }) => {
+      if (data.provider === 'anthropic')
+        mocks.aggregate.mockResolvedValue({ _sum: { costUsd: new Prisma.Decimal('10') } });
+    });
+    const result = await generateGrowthRecommendations({
+      vertical: 'RESTAURANT',
+      currency: 'PKR',
+      current: { from: '2026-09-01T00:00:00Z', cutoff: '2026-10-01T00:00:00Z' },
+      comparison: { from: '2026-08-01T00:00:00Z', cutoff: '2026-09-01T00:00:00Z' },
+      facts: [
+        {
+          ref: 'e1',
+          metric: 'receipt_count',
+          value: '20',
+          period: 'CURRENT',
+          cohortSize: 10,
+          coverage: 'COMPLETE',
+          freshAt: '2026-10-01T00:00:00Z',
+        },
+      ],
+      actions: [{ ref: 'a1', kind: 'RETAIL_REVIEW' }],
+    });
+    expect(result).toMatchObject({
+      status: 'INVALID',
+      failureCode: 'OUTPUT',
+      provider: 'bedrock',
+      model: DEFAULT_AI_MODELS.bedrock.cheap,
+    });
+    expect(mocks.create.mock.calls.map(([arg]) => arg.data.provider)).toEqual([
+      'anthropic',
+      'bedrock',
+    ]);
+  });
+
   it('rejects an unpriced model before any provider call', async () => {
     mocks.prices.mockResolvedValue(null);
     const selected = selection();
     await expect(prepareAIModel(selected)).rejects.toThrow('No effective AI model price');
+    expect((selected.model as MockLanguageModelV3).doGenerateCalls).toHaveLength(0);
+    expect(mocks.create).not.toHaveBeenCalled();
+  });
+
+  it('rechecks the effective price immediately before purchasing output', async () => {
+    const selected = selection();
+    const prepared = await prepareAIModel(selected);
+    mocks.prices.mockResolvedValue(null);
+    await expect(
+      generateText({ model: prepared.model, prompt: 'safe', maxRetries: 0 })
+    ).rejects.toThrow('No effective AI model price');
     expect((selected.model as MockLanguageModelV3).doGenerateCalls).toHaveLength(0);
     expect(mocks.create).not.toHaveBeenCalled();
   });

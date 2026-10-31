@@ -273,6 +273,9 @@ export async function generateGrowthRecommendations(raw: GrowthInput): Promise<G
             maxOutputTokens: 1000,
             maxRetries: 0,
             abortSignal: signal,
+          }).finally(() => {
+            result.provider = selected.provider;
+            result.model = selected.modelId;
           }),
           deadline,
         ]);
