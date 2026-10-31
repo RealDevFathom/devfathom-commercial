@@ -197,6 +197,8 @@ export const organizationAdminRouter = router({
         currency: true,
         primaryContactName: true,
         primaryContactEmail: true,
+        invoiceAddress: true,
+        taxId: true,
         activatedAt: true,
         packageId: true,
         brand: true,
@@ -310,6 +312,8 @@ export const organizationAdminRouter = router({
         locale: z.string().trim().min(2).max(20),
         primaryContactName: z.string().trim().max(150).nullable(),
         primaryContactEmail: optionalEmail,
+        invoiceAddress: z.string().trim().max(500).nullable().optional(),
+        taxId: z.string().trim().max(100).nullable().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {

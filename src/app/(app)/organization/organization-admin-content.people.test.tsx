@@ -65,6 +65,8 @@ beforeEach(() => {
       currency: 'PKR',
       primaryContactName: null,
       primaryContactEmail: null,
+      invoiceAddress: '42 Market Street\nSeattle, WA 98101',
+      taxId: 'US-12-3456789',
       activatedAt: null,
       package: { name: 'Pharmacy Professional' },
       brand: null,
@@ -108,6 +110,40 @@ beforeEach(() => {
 });
 
 afterEach(cleanup);
+
+describe('workspace profile invoice address', () => {
+  it('preserves stored address line breaks when saving another profile field', () => {
+    render(<OrganizationAdminContent />);
+
+    const address = screen.getByLabelText('Invoice address');
+    expect(address).toHaveValue('42 Market Street\nSeattle, WA 98101');
+    fireEvent.change(screen.getByLabelText('Display name'), {
+      target: { value: 'Updated workspace' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save profile' }));
+
+    expect(mutationFor('updateProfile').mutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        displayName: 'Updated workspace',
+        invoiceAddress: '42 Market Street\nSeattle, WA 98101',
+        taxId: 'US-12-3456789',
+      })
+    );
+  });
+
+  it.each(['Suite 900\n123 Main Street\nSeattle, WA 98101', ''])(
+    'submits an edited multiline or cleared address (%j)',
+    (value) => {
+      render(<OrganizationAdminContent />);
+      fireEvent.change(screen.getByLabelText('Invoice address'), { target: { value } });
+      fireEvent.click(screen.getByRole('button', { name: 'Save profile' }));
+
+      expect(mutationFor('updateProfile').mutate).toHaveBeenCalledWith(
+        expect.objectContaining({ invoiceAddress: value || null })
+      );
+    }
+  );
+});
 
 describe('organization people and access — staff onboarding', () => {
   it('offers an add-staff form with the organization pharmacy departments', () => {

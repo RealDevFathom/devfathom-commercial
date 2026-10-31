@@ -7,6 +7,7 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Switch as StudioSwitch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { PageHeader } from '@/components/ui/page-header';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
@@ -305,6 +306,8 @@ export function OrganizationAdminContent() {
       locale: formValue(values, 'locale'),
       primaryContactName: formValue(values, 'primaryContactName') || null,
       primaryContactEmail: formValue(values, 'primaryContactEmail'),
+      invoiceAddress: formValue(values, 'invoiceAddress') || null,
+      taxId: formValue(values, 'taxId') || null,
     });
   };
   const submitBrand = (event: FormEvent<HTMLFormElement>) => {
@@ -426,6 +429,19 @@ export function OrganizationAdminContent() {
                 type="email"
                 defaultValue={organization.primaryContactEmail ?? ''}
               />
+            </label>
+            <label className="sm:col-span-2">
+              <span className={labelClass}>Invoice address</span>
+              <Textarea
+                name="invoiceAddress"
+                defaultValue={organization.invoiceAddress ?? ''}
+                placeholder="Street, city, region, postal code, country"
+                maxLength={500}
+              />
+            </label>
+            <label className="sm:col-span-2">
+              <span className={labelClass}>Tax ID</span>
+              <Input name="taxId" defaultValue={organization.taxId ?? ''} />
             </label>
             <div className="sm:col-span-2">
               <SubmitButton pending={profile.isPending}>Save profile</SubmitButton>
