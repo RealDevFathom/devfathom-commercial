@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { format } from 'date-fns';
+import { Prisma } from '@/generated/prisma/client';
 import { router, adminProcedure } from '../trpc';
 import { logActivity } from '../activity';
 import { emitEvent } from '@/lib/webhooks';
@@ -57,7 +58,6 @@ export const createInvoiceInputSchema = z.object({
 // Round to 2 decimal places (cents). Used to derive invoice money server-side so
 // caller-supplied subtotal/total are never trusted (FIN-01).
 const round2 = (n: number) => Math.round(n * 100) / 100;
-const toCents = (amount: unknown) => Math.round(Number(amount) * 100);
 
 // Values read from Decimal(12,2) columns have at most two fractional digits.
 // Parse those digits directly so large invoice sets can be accumulated as bigint
@@ -841,8 +841,7 @@ export const financeRouter = router({
       yearlyIncomeG,
       yearlyExpenseG,
       paidInvoicesG,
-      outstandingInvoicesG,
-      outstandingPaymentsG,
+      outstandingG,
       recurring,
     ] = await Promise.all([
       // FIN-04: cap each "this period" window at `now` so future-dated rows can't
@@ -857,17 +856,25 @@ export const financeRouter = router({
         _count: true,
         where: { status: 'PAID' },
       }),
-      ctx.db.invoice.groupBy({
-        by: ['currency'],
-        _sum: { total: true },
-        _count: true,
-        where: { status: { in: ['SENT', 'OVERDUE'] } },
-      }),
-      ctx.db.payment.groupBy({
-        by: ['currency'],
-        _sum: { amount: true },
-        where: { invoice: { status: { in: ['SENT', 'OVERDUE'] } } },
-      }),
+      // Read both sides in one statement: separate aggregates can observe an
+      // invoice before payoff and its payments after it leaves SENT/OVERDUE.
+      // Sum each invoice's payments first so multiple payments never multiply
+      // its total or count. Payments reduce their parent invoice's currency.
+      ctx.db.$queryRaw<
+        { currency: string; total: Prisma.Decimal; paid: Prisma.Decimal; count: number }[]
+      >(Prisma.sql`
+        SELECT i.currency, SUM(i.total) AS total,
+               SUM(COALESCE(p.amount, 0)) AS paid, COUNT(*)::integer AS count
+        FROM invoices i
+        LEFT JOIN LATERAL (
+          SELECT SUM(amount) AS amount
+          FROM payments
+          WHERE "invoiceId" = i.id AND "organizationId" = ${workspaceId(ctx)}
+        ) p ON true
+        WHERE i."organizationId" = ${workspaceId(ctx)}
+          AND i.status IN ('SENT', 'OVERDUE')
+        GROUP BY i.currency
+      `),
       ctx.db.recurringExpense.findMany({
         where: { active: true },
         select: { amount: true, currency: true, interval: true },
@@ -876,24 +883,12 @@ export const financeRouter = router({
 
     const monthlyIncome = fromCurrencyGroups(monthlyIncomeG, 'amount');
     const yearlyIncome = fromCurrencyGroups(yearlyIncomeG, 'amount');
-    const outstandingCents = new Map(
-      outstandingInvoicesG.map((group) => [
-        group.currency,
-        decimalToCents(group._sum.total ?? 0),
-      ])
-    );
-    for (const group of outstandingPaymentsG) {
-      outstandingCents.set(
-        group.currency,
-        (outstandingCents.get(group.currency) ?? 0n) - decimalToCents(group._sum.amount ?? 0)
-      );
-    }
     const totalOutstanding = sortCurrencies(
-      Array.from(outstandingCents, ([currency, cents]) => ({
-        currency,
+      outstandingG.map((group) => ({
+        currency: group.currency,
         // CurrencyAmount is the public number-based DTO. Fail rather than
         // silently losing cents when the aggregate exceeds its safe range.
-        amount: centsToSafeNumber(cents),
+        amount: centsToSafeNumber(decimalToCents(group.total) - decimalToCents(group.paid)),
       }))
     );
 
@@ -939,7 +934,7 @@ export const financeRouter = router({
       totalPaid: fromCurrencyGroups(paidInvoicesG, 'total'),
       paidCount: paidInvoicesG.reduce((s, g) => s + g._count, 0),
       totalOutstanding,
-      outstandingCount: outstandingInvoicesG.reduce((sum, group) => sum + group._count, 0),
+      outstandingCount: outstandingG.reduce((sum, group) => sum + group.count, 0),
     };
   }),
 
