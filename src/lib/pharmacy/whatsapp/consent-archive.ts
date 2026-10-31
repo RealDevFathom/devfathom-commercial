@@ -19,6 +19,14 @@ function fingerprint(key: string, domain: string, value: string): string {
   return createHmac('sha256', key).update(`whatsapp-consent:${domain}:${value}`).digest('hex');
 }
 
+/** Run from the platform worker even when no tenants are waiting for purge. */
+export async function deleteExpiredWhatsAppConsentArchives(
+  db: Pick<ArchiveDb, 'pharmacyWhatsAppConsentArchive'>,
+  now = new Date()
+): Promise<void> {
+  await db.pharmacyWhatsAppConsentArchive.deleteMany({ where: { expiresAt: { lte: now } } });
+}
+
 /**
  * Preserve the minimum proof needed before tenant erasure. This deliberately
  * excludes names, phone fragments, message IDs and organization IDs.
@@ -32,12 +40,13 @@ export async function archiveWhatsAppConsentBeforeTenantPurge(
     where: { organizationId, whatsappOptIn: { not: null }, whatsappOptInChangedAt: { not: null } },
     select: { id: true, whatsappOptIn: true, whatsappOptInChangedAt: true },
   });
+  // Other verticals, and tenants without recorded consent, need no archive key.
+  if (!consent.length) return;
   const key = archiveKey();
   const expiresAt = new Date(now);
   expiresAt.setUTCDate(expiresAt.getUTCDate() + WHATSAPP_CONSENT_ARCHIVE_RETENTION_DAYS);
 
-  await db.pharmacyWhatsAppConsentArchive.deleteMany({ where: { expiresAt: { lte: now } } });
-  if (!consent.length) return;
+  await deleteExpiredWhatsAppConsentArchives(db, now);
   const organizationFingerprint = fingerprint(key, 'organization', organizationId);
   await db.pharmacyWhatsAppConsentArchive.createMany({
     data: consent.map((row) => ({

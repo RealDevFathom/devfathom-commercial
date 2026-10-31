@@ -20,3 +20,11 @@ CREATE INDEX "pharmacy_wa_consent_archive_expiry_idx"
 
 -- This is control-plane compliance evidence, not tenant-readable data.
 REVOKE ALL ON TABLE "pharmacy_whatsapp_consent_archives" FROM PUBLIC;
+-- The runtime role also receives direct table grants. Enforce the boundary
+-- for that role, including when it owns this table.
+ALTER TABLE "pharmacy_whatsapp_consent_archives" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "pharmacy_whatsapp_consent_archives" FORCE ROW LEVEL SECURITY;
+CREATE POLICY "pharmacy_wa_consent_archive_platform_only"
+  ON "pharmacy_whatsapp_consent_archives"
+  USING (current_setting('app.is_platform_admin', true) = 'true')
+  WITH CHECK (current_setting('app.is_platform_admin', true) = 'true');

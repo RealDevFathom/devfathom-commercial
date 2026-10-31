@@ -16,7 +16,10 @@ import {
   runCameraEvidenceRetentionJob,
   runCounterEvidenceSnapshotJob,
 } from '@/lib/pharmacy/counter-evidence';
-import { archiveWhatsAppConsentBeforeTenantPurge } from '@/lib/pharmacy/whatsapp/consent-archive';
+import {
+  archiveWhatsAppConsentBeforeTenantPurge,
+  deleteExpiredWhatsAppConsentArchives,
+} from '@/lib/pharmacy/whatsapp/consent-archive';
 
 type JobPayload = Record<string, unknown>;
 type JobResult = Record<string, unknown>;
@@ -884,6 +887,7 @@ export type ProcessJobsResult = {
 
 export async function processPlatformJobs(maxJobs = 10): Promise<ProcessJobsResult> {
   const limit = Math.max(1, Math.min(100, Math.floor(maxJobs)));
+  await withPlatformDb((db) => deleteExpiredWhatsAppConsentArchives(db));
   await enqueueCameraEvidenceJobs(new Date());
   const result: ProcessJobsResult = {
     recovered: await recoverStaleJobs(),

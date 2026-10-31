@@ -43,7 +43,13 @@ describe('archiveWhatsAppConsentBeforeTenantPurge', () => {
   it('does not silently create linkable hashes without the platform secret', async () => {
     vi.stubEnv('PLATFORM_ENCRYPTION_KEY', '');
     const db = {
-      pharmacyCustomer: { findMany: vi.fn().mockResolvedValue([]) },
+      pharmacyCustomer: {
+        findMany: vi
+          .fn()
+          .mockResolvedValue([
+            { id: 'customer-id', whatsappOptIn: true, whatsappOptInChangedAt: new Date() },
+          ]),
+      },
       pharmacyWhatsAppConsentArchive: { createMany: vi.fn(), deleteMany: vi.fn() },
     };
 
@@ -51,5 +57,19 @@ describe('archiveWhatsAppConsentBeforeTenantPurge', () => {
       archiveWhatsAppConsentBeforeTenantPurge(db as never, 'organization-id')
     ).rejects.toThrow(/PLATFORM_ENCRYPTION_KEY/);
     expect(db.pharmacyWhatsAppConsentArchive.deleteMany).not.toHaveBeenCalled();
+    expect(db.pharmacyWhatsAppConsentArchive.createMany).not.toHaveBeenCalled();
+  });
+
+  it('allows purges without a platform secret when there is no consent to retain', async () => {
+    vi.stubEnv('PLATFORM_ENCRYPTION_KEY', '');
+    const db = {
+      pharmacyCustomer: { findMany: vi.fn().mockResolvedValue([]) },
+      pharmacyWhatsAppConsentArchive: { createMany: vi.fn(), deleteMany: vi.fn() },
+    };
+
+    await expect(
+      archiveWhatsAppConsentBeforeTenantPurge(db as never, 'organization-id')
+    ).resolves.toBeUndefined();
+    expect(db.pharmacyWhatsAppConsentArchive.createMany).not.toHaveBeenCalled();
   });
 });
