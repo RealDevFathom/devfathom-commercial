@@ -481,10 +481,9 @@ export function recordTrpcAudit(args: {
   const detail = args.ctx.audit?.detail ?? {};
   // Authentication and input validation can reject review drafting before its
   // resolver sets skipInput. Cover both the app router and server-action caller.
-  const skipInput =
-    detail.skipInput ||
-    args.path === 'pharmacyMarketing.draftReviewReply' ||
-    args.path === 'draftReviewReply';
+  const isReviewDraft =
+    args.path === 'pharmacyMarketing.draftReviewReply' || args.path === 'draftReviewReply';
+  const skipInput = detail.skipInput || isReviewDraft;
   const { code, message } = extractError(args.error);
 
   return recordAudit(
@@ -521,7 +520,8 @@ export function recordTrpcAudit(args: {
       path: args.path,
       outcome: args.outcome,
       errorCode: code,
-      errorMessage: message,
+      // Strict validation errors can echo submitted keys into their message.
+      errorMessage: isReviewDraft && message !== null ? '[skipped]' : message,
       durationMs: args.durationMs ?? null,
     },
     args.ctx.audit?.db

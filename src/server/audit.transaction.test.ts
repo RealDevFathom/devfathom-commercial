@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { TRPCError } from '@trpc/server';
+import { z } from 'zod';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 const mocks = vi.hoisted(() => ({
@@ -138,6 +140,52 @@ describe('transaction-bound seed audits', () => {
       );
     }
   );
+
+  it.each(['draftReviewReply', 'pharmacyMarketing.draftReviewReply'])(
+    'does not retain input echoed by validation errors for %s',
+    async (path) => {
+      const privateDetail = 'customer@example.com';
+      const input = { review: 'Helpful team.', [privateDetail]: 'unexpected field' };
+      const validation = z.object({ review: z.string() }).strict().safeParse(input);
+      if (validation.success) throw new Error('Expected strict input validation to fail');
+      const error = new TRPCError({ code: 'BAD_REQUEST', cause: validation.error });
+      expect(error.message).toContain(privateDetail);
+
+      const ctx = await context({} as ScopedDb, false);
+      recordTrpcAudit({ ctx, path, type: 'mutation', input, outcome: 'FAILURE', error });
+      await flushAuditWritesForTest();
+
+      expect(mocks.outsideCreate).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          path,
+          outcome: 'FAILURE',
+          input: '[skipped]',
+          errorCode: 'BAD_REQUEST',
+          errorMessage: '[skipped]',
+        }),
+      });
+      expect(JSON.stringify(mocks.outsideCreate.mock.calls)).not.toContain(privateDetail);
+    }
+  );
+
+  it('retains error diagnostics for other procedures', async () => {
+    const ctx = await context({} as ScopedDb, false);
+    recordTrpcAudit({
+      ctx,
+      path: 'create',
+      type: 'mutation',
+      input: {},
+      outcome: 'FAILURE',
+      error: new TRPCError({ code: 'FORBIDDEN', message: 'Owner access is required.' }),
+    });
+    await flushAuditWritesForTest();
+    expect(mocks.outsideCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        errorCode: 'FORBIDDEN',
+        errorMessage: 'Owner access is required.',
+      }),
+    });
+  });
 
   it('defers normal audits until the owning transaction has settled', async () => {
     const ctx = await context({} as ScopedDb, false);
