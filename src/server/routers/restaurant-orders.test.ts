@@ -13,7 +13,8 @@ import { Prisma } from '@/generated/prisma/client';
 const D = (v: string) => new Prisma.Decimal(v);
 
 const mocks = vi.hoisted(() => ({
-  can: vi.fn<(subject: unknown, action: unknown) => Promise<boolean>>(() => Promise.resolve(true)),
+  can: vi.fn<typeof import('@/lib/abac').can>(() => Promise.resolve(true)),
+  userFindUnique: vi.fn(),
   annotateAudit: vi.fn(),
   orderFindMany: vi.fn(),
   orderFindUnique: vi.fn(),
@@ -60,8 +61,10 @@ import { restaurantOrdersRouter } from './restaurant-orders';
 import { OrderCommandError } from '@/lib/restaurant/orders';
 import type { TRPCContext } from '../trpc';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { roleTemplatesForVertical } from '@/lib/vertical-catalog';
 
 const db = {
+  user: { findUnique: mocks.userFindUnique },
   restaurantOrder: { findMany: mocks.orderFindMany, findUnique: mocks.orderFindUnique },
   restaurantKitchenTicket: { findMany: mocks.ticketFindMany },
   restaurantBranch: {
@@ -295,6 +298,76 @@ describe('capability gating + strict inputs', () => {
       // @ts-expect-error — surplus field must be rejected, never stripped
       caller().getOrder({ orderId: 'o1', surplus: true })
     ).rejects.toBeDefined();
+  });
+});
+
+describe('cancellation through real ABAC middleware', () => {
+  const permissionsFor = (key: string) =>
+    roleTemplatesForVertical('RESTAURANT')
+      .find((role) => role.key === key)!
+      .capabilities.map((capability) => ({ capability, effect: 'ALLOW' as const }));
+
+  beforeEach(async () => {
+    const actual = await vi.importActual<typeof import('@/lib/abac')>('@/lib/abac');
+    mocks.can.mockImplementation(actual.can);
+    mocks.cancelOrder.mockResolvedValue({ orderId: 'o1', replayed: false });
+  });
+
+  it.each(['owner', 'general-manager', 'branch-manager'])(
+    'allows the %s template through the tenant-scoped permission lookup',
+    async (role) => {
+      mocks.userFindUnique.mockResolvedValue({
+        organizationRole: { permissions: permissionsFor(role) },
+        permissionOverrides: [],
+      });
+
+      await expect(
+        caller().cancel({ orderId: 'o1', reason: 'Guest request', actor: ACTOR })
+      ).resolves.toMatchObject({ orderId: 'o1' });
+      expect(mocks.can).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'user_gm' }),
+        'orders:void',
+        undefined,
+        expect.objectContaining({ db })
+      );
+      expect(mocks.userFindUnique).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'user_gm' } })
+      );
+      expect(mocks.cancelOrder).toHaveBeenCalledWith(
+        db,
+        expect.objectContaining({ orderId: 'o1', reason: 'Guest request' })
+      );
+    }
+  );
+
+  it.each(['owner', 'general-manager', 'branch-manager'])(
+    'honors an explicit orders:void deny for the %s template',
+    async (role) => {
+      mocks.userFindUnique.mockResolvedValue({
+        organizationRole: { permissions: permissionsFor(role) },
+        permissionOverrides: [{ capability: 'orders:void', effect: 'DENY' }],
+      });
+
+      await expect(
+        caller().cancel({ orderId: 'o1', reason: 'Guest request', actor: ACTOR })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(mocks.cancelOrder).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([
+    { permissions: [] },
+    { permissions: [{ capability: 'orders:manage', effect: 'ALLOW' }] },
+  ])('denies cancellation without an orders:void grant ($permissions)', async ({ permissions }) => {
+    mocks.userFindUnique.mockResolvedValue({
+      organizationRole: { permissions },
+      permissionOverrides: [],
+    });
+
+    await expect(
+      caller().cancel({ orderId: 'o1', reason: 'Guest request', actor: ACTOR })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.cancelOrder).not.toHaveBeenCalled();
   });
 });
 

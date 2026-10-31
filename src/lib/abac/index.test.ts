@@ -54,6 +54,8 @@ describe('restaurant order void access', () => {
   );
 
   it('keeps the catalogue default-deny and lets an explicit deny override owner wildcard access', async () => {
+    expect(ALL_ACTIONS).toContain('orders:void');
+    expect(POLICIES['orders:void']).toEqual([]);
     await expect(
       can(employee, 'orders:void', undefined, { db: authorizationDb({}) })
     ).resolves.toBe(false);
