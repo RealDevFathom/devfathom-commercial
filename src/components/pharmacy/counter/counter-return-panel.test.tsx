@@ -193,6 +193,12 @@ describe('counter returns', () => {
     const saved = localStorage.getItem('pharmacy-return:o:a:b')!;
     expect(saved).not.toContain('1234');
     expect(JSON.parse(saved)).toMatchObject({ requiresControlledWitness: true });
+    await waitFor(() => {
+      for (const field of screen.getAllByLabelText('Witness PIN')) {
+        expect(field).toHaveValue('');
+      }
+      expect(screen.getByRole('button', { name: 'Retry saved return' })).toBeDisabled();
+    });
 
     view.unmount();
     render(<ReturnForm {...props} />);
@@ -238,6 +244,16 @@ describe('counter returns', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Retry saved return' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('fresh witness PIN');
     expect(localStorage.getItem('pharmacy-return:o:a:b')).toContain('same-key');
+    expect(screen.getByRole('button', { name: 'Retry saved return' })).toBeDisabled();
+
+    mocks.returnLine.mockRejectedValueOnce(
+      Object.assign(new Error('Dispense permission is required.'), { data: { code: 'FORBIDDEN' } })
+    );
+    fireEvent.change(screen.getByLabelText('Witness PIN'), { target: { value: '5678' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry saved return' }));
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Dispense permission'));
+    expect(localStorage.getItem('pharmacy-return:o:a:b')).toContain('same-key');
+    expect(screen.getByLabelText('Witness PIN')).toHaveValue('');
     expect(screen.getByRole('button', { name: 'Retry saved return' })).toBeDisabled();
   });
   it('explains a recovery witness lookup failure and offers retry', () => {
@@ -306,6 +322,52 @@ describe('counter returns', () => {
       expect(mocks.refund.mock.calls[1][0]).toEqual(first);
     }
   );
+  it.each(['BAD_REQUEST', 'FORBIDDEN', 'NOT_FOUND', 'UNAUTHORIZED'])(
+    'preserves an ambiguous refund after a recovery %s error',
+    async (code) => {
+      mocks.refund.mockRejectedValueOnce(new Error('Disconnected'));
+      render(<ReturnForm {...props} />);
+      chooseReceipt();
+      fireEvent.change(screen.getByLabelText('Original tender'), { target: { value: 'cash' } });
+      fireEvent.change(screen.getByLabelText('Refund amount (PKR)'), { target: { value: '2.00' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Confirm refund' }));
+      await screen.findByRole('alert');
+      const saved = localStorage.getItem('pharmacy-return:o:a:b');
+      expect(saved).not.toBeNull();
+
+      mocks.refund.mockRejectedValueOnce(
+        Object.assign(new Error('Recovery denied'), { data: { code } })
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'Retry saved refund' }));
+      await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Recovery denied'));
+      expect(localStorage.getItem('pharmacy-return:o:a:b')).toBe(saved);
+      expect(screen.getByRole('button', { name: 'Retry saved refund' })).toBeEnabled();
+      expect(screen.getByRole('button', { name: 'Confirm refund' })).toBeDisabled();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Retry saved refund' }));
+      await screen.findByText(/Refund recorded/);
+      expect(mocks.refund.mock.calls[2][0]).toEqual(mocks.refund.mock.calls[0][0]);
+      expect(localStorage.getItem('pharmacy-return:o:a:b')).toBeNull();
+    }
+  );
+  it('preserves a committed refund when refreshing history is forbidden', async () => {
+    mocks.refetch.mockRejectedValueOnce(
+      Object.assign(new Error('History denied'), { data: { code: 'FORBIDDEN' } })
+    );
+    render(<ReturnForm {...props} />);
+    chooseReceipt();
+    fireEvent.change(screen.getByLabelText('Original tender'), { target: { value: 'cash' } });
+    fireEvent.change(screen.getByLabelText('Refund amount (PKR)'), { target: { value: '2.00' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm refund' }));
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('History denied'));
+    expect(localStorage.getItem('pharmacy-return:o:a:b')).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'Confirm refund' })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry saved refund' }));
+    await screen.findByText(/Refund recorded/);
+    expect(mocks.refund.mock.calls[1][0]).toEqual(mocks.refund.mock.calls[0][0]);
+    expect(localStorage.getItem('pharmacy-return:o:a:b')).toBeNull();
+  });
   it('fails closed when saved recovery is corrupt', () => {
     localStorage.setItem('pharmacy-return:o:a:b', 'broken');
     render(<ReturnForm {...props} />);

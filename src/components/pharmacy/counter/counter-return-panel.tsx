@@ -194,6 +194,8 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
     setBusy(true);
     setError('');
     setMessage('');
+    setWitnessPin('');
+    let mutationSucceeded = false;
     try {
       // Write before sending; an ambiguous network outcome can only replay this exact request.
       localStorage.setItem(storageKey, JSON.stringify(next));
@@ -207,7 +209,6 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
             localStorage.removeItem(storageKey);
             setAttempt(null);
           }
-          setWitnessPin('');
           setError(result.blocked);
           return;
         }
@@ -216,12 +217,12 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
           ...next.input,
           businessDate: new Date(next.input.businessDate),
         });
+      mutationSucceeded = true;
       await history.refetch({ throwOnError: true });
       localStorage.removeItem(storageKey);
       setAttempt(null);
       setConfirmed(false);
       setUnits('1');
-      setWitnessPin('');
       setAmount('');
       setMessage(
         next.kind === 'return'
@@ -230,7 +231,13 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
       );
     } catch (cause) {
       const code = (cause as { data?: { code?: string } })?.data?.code;
-      if (['BAD_REQUEST', 'FORBIDDEN', 'NOT_FOUND', 'UNAUTHORIZED'].includes(code ?? '')) {
+      // A rejected retry or failed history refresh says nothing about the original commit.
+      // Only a definitively rejected first mutation may release its operation key.
+      if (
+        !recovering &&
+        !mutationSucceeded &&
+        ['BAD_REQUEST', 'FORBIDDEN', 'NOT_FOUND', 'UNAUTHORIZED'].includes(code ?? '')
+      ) {
         try {
           localStorage.removeItem(storageKey);
           setAttempt(null);
@@ -242,6 +249,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
         `${counterErrorMessage(cause)} Check history before handing out cash; an unknown outcome must use the saved retry.`
       );
     } finally {
+      setWitnessPin('');
       latch.current = false;
       setBusy(false);
     }
