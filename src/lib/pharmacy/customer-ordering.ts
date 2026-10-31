@@ -727,9 +727,7 @@ export async function transitionCustomerOrder(
     if (
       !isCustomerOrderReleaseEligible(order.status as CustomerOrderStatus) ||
       order.counterSaleId ||
-      (input.action === 'expire' &&
-        (!isCustomerOrderReservationDeadlineEnforced(order.status as CustomerOrderStatus) ||
-          order.reservationExpiresAt.getTime() > Date.now()))
+      (input.action === 'expire' && order.reservationExpiresAt.getTime() > Date.now())
     ) {
       throw new PharmacyCustomerOrderError('INVALID_STATE');
     }
