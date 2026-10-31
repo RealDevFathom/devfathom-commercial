@@ -9,6 +9,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { evaluateOrderSettlement } from './bills';
 import { businessDateToUtcDate, resolveBusinessDate } from './business-date';
 import { buildCoAuthorizationRecord } from './co-authorization';
+import { DailyCloseError } from './daily-close-errors';
 import { postOrderRecipeConsumption } from './inventory';
 import {
   enqueueKitchenTicketPrintJobs,
@@ -17,6 +18,7 @@ import {
   type GeneratedTicket,
 } from './kitchen-tickets';
 import { earnLoyaltyForClosedOrder } from './loyalty';
+import { assertMoneyDayOpen } from './money-day';
 import {
   DELIVERY_CHANNEL_UNAVAILABLE_MESSAGE,
   isOperationalOrderChannel,
@@ -71,6 +73,7 @@ export type OrderCommandErrorReason =
   | 'ORDER_NOT_FOUND'
   | 'ITEM_NOT_FOUND'
   | 'ORDER_TERMINAL'
+  | 'DAY_CLOSED'
   | 'NO_PUBLICATION'
   | 'INVALID'
   | 'ITEM_STATE'
@@ -505,6 +508,19 @@ export async function openOrder(db: ScopedDb, input: OpenOrderInput): Promise<Op
     const businessDate = businessDateToUtcDate(
       resolveBusinessDate(at, branch.timezone, branch.businessDayCutoff)
     );
+    // Hold the close's branch-day lock through creation so a new unbilled order
+    // cannot slip in after the close has checked its operational guard.
+    try {
+      await assertMoneyDayOpen(tx, branch.id, businessDate);
+    } catch (error) {
+      if (error instanceof DailyCloseError && error.reason === 'CLOSE_EXISTS') {
+        throw new OrderCommandError(
+          'This business day is closed; new orders cannot be opened.',
+          'DAY_CLOSED'
+        );
+      }
+      throw error;
+    }
     await enforceMonthlyOrderLimit(tx, input, businessDate);
     const orderNumber = await allocateOrderNumber(tx, { branchId: branch.id, businessDate });
 

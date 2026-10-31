@@ -364,6 +364,7 @@ export function orderErrorResponse(err: unknown): NextResponse | null {
   if (err instanceof OrderCommandError) {
     const conflict =
       err.reason === 'ORDER_TERMINAL' ||
+      err.reason === 'DAY_CLOSED' ||
       err.reason === 'ITEM_STATE' ||
       err.reason === 'NOT_CLOSABLE' ||
       err.reason === 'NOTHING_TO_SEND' ||

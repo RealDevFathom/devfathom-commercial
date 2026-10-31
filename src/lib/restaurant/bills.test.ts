@@ -723,6 +723,7 @@ type Deps = {
   enrollDevice: (typeof import('@/lib/restaurant/devices'))['enrollDevice'];
   orders: typeof import('@/lib/restaurant/orders');
   bills: typeof import('./bills');
+  close: typeof import('./daily-close');
 };
 
 let deps: Deps;
@@ -771,11 +772,12 @@ async function openWithItems(
 
 beforeAll(async () => {
   if (!TEST_DATABASE_URL) return;
-  const [scopedDb, devices, orders, bills] = await Promise.all([
+  const [scopedDb, devices, orders, bills, close] = await Promise.all([
     import('@/lib/tenancy/scoped-db'),
     import('@/lib/restaurant/devices'),
     import('@/lib/restaurant/orders'),
     import('./bills'),
+    import('./daily-close'),
   ]);
   deps = {
     withTenantDb: scopedDb.withTenantDb,
@@ -784,6 +786,7 @@ beforeAll(async () => {
     enrollDevice: devices.enrollDevice,
     orders,
     bills,
+    close,
   };
 
   await deps.withPlatformDb((tx) =>
@@ -1048,6 +1051,52 @@ function settlementInput(billId: string, billLineId: string, evaluationId: strin
 }
 
 describeIfDatabase('bills command layer (real DB)', () => {
+  it('refuses a new cut after daily close while replaying the original cut unchanged', async () => {
+    const now = new Date('2026-08-20T18:00:00.000Z');
+    const { orderId, db } = await openWithItems([{}], now);
+    const input = {
+      orderId,
+      branchId: ids.branch,
+      split: { kind: 'NONE' as const },
+      actor: actor(),
+    };
+    const first = await deps.bills.cutBills(db, input);
+    await read((tx) =>
+      deps.bills.settleBill(tx, {
+        billId: first.billIds[0]!,
+        staffProfileId: ids.operator,
+        deviceId,
+        at: now,
+      })
+    );
+    const closed = await deps.close.cutClose(db, {
+      branchId: ids.branch,
+      businessDate: '2026-08-20',
+      actor: actor(),
+    });
+    const before = await read((tx) =>
+      tx.restaurantDailyClose.findUniqueOrThrow({ where: { id: closed.dailyCloseId } })
+    );
+    const rejectedActor = actor();
+    await expect(
+      deps.bills.cutBills(db, { ...input, actor: rejectedActor })
+    ).rejects.toMatchObject({ reason: 'CLOSE_EXISTS' });
+    expect(
+      await read((tx) =>
+        tx.restaurantMoneyIdempotencyKey.findUnique({
+          where: { deviceId_key: { deviceId, key: rejectedActor.idempotencyKey } },
+        })
+      )
+    ).toBeNull();
+    await expect(deps.bills.cutBills(db, input)).resolves.toEqual({ ...first, replayed: true });
+    expect(await read((tx) => tx.restaurantBill.count({ where: { orderId } }))).toBe(1);
+    expect(
+      await read((tx) =>
+        tx.restaurantDailyClose.findUniqueOrThrow({ where: { id: closed.dailyCloseId } })
+      )
+    ).toEqual(before);
+  });
+
   it('cuts one NONE bill for the whole order; replay is idempotent', async () => {
     const { orderId, db } = await openWithItems([{}, { modifier: true }]);
     const result = await deps.bills.cutBills(db, {

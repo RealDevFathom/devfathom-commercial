@@ -154,6 +154,7 @@ function fixture() {
       ),
     },
     restaurantOrder: {
+      count: vi.fn(async () => 0),
       findUnique: vi.fn(async ({ where }: { where: Where }) =>
         where.id === 'order'
           ? {

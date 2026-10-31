@@ -389,6 +389,13 @@ describe('mutation wiring', () => {
     });
   });
 
+  it('maps an order opened on a closed business day to CONFLICT', async () => {
+    mocks.openOrder.mockRejectedValueOnce(new OrderCommandError('day closed', 'DAY_CLOSED'));
+    await expect(
+      caller().open({ branchId: 'b1', channel: 'TAKEAWAY', actor: ACTOR })
+    ).rejects.toMatchObject({ code: 'CONFLICT', message: 'day closed' });
+  });
+
   it('maps a post-cut item void to CONFLICT', async () => {
     mocks.voidItem.mockRejectedValue(
       new OrderCommandError('void and recut the bill first', 'BILL_ALREADY_CUT')

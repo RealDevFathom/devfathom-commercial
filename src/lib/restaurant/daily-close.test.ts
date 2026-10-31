@@ -218,6 +218,7 @@ type Deps = {
   enrollDevice: (typeof import('@/lib/restaurant/devices'))['enrollDevice'];
   drawer: typeof import('./drawer-sessions');
   close: typeof import('./daily-close');
+  orders: typeof import('./orders');
 };
 
 let deps: Deps;
@@ -386,11 +387,12 @@ async function seedClosedDrawer(input: {
 
 beforeAll(async () => {
   if (!TEST_DATABASE_URL) return;
-  const [scopedDb, devices, drawer, close] = await Promise.all([
+  const [scopedDb, devices, drawer, close, orders] = await Promise.all([
     import('@/lib/tenancy/scoped-db'),
     import('@/lib/restaurant/devices'),
     import('./drawer-sessions'),
     import('./daily-close'),
+    import('./orders'),
   ]);
   deps = {
     withTenantDb: scopedDb.withTenantDb,
@@ -399,6 +401,7 @@ beforeAll(async () => {
     enrollDevice: devices.enrollDevice,
     drawer,
     close,
+    orders,
   };
 
   await deps.withPlatformDb((tx) =>
@@ -429,6 +432,90 @@ beforeAll(async () => {
 });
 
 describeIfDatabase('daily close (real DB)', () => {
+  it('rejects new orders on a closed day without consuming their key, but permits replays', async () => {
+    const date = '2026-09-15';
+    const db = deps.createTenantDb(orgId);
+    const input = {
+      organizationId: orgId,
+      entitlementLimits: { 'pos.orders.monthly': 1000000 },
+      branchId: ids.branch,
+      channel: 'TAKEAWAY' as const,
+      actor: mActor(ids.seedDevice),
+      now: noonOf(date),
+    };
+    const opened = await deps.orders.openOrder(db, input);
+    await deps.orders.cancelOrder(db, {
+      orderId: opened.orderId,
+      reason: 'Guest left before ordering',
+      actor: mActor(ids.seedDevice),
+    });
+    await deps.close.cutClose(db, {
+      branchId: ids.branch,
+      businessDate: date,
+      actor: mActor(ids.seedDevice),
+    });
+    await expect(deps.orders.openOrder(db, input)).resolves.toEqual({
+      ...opened,
+      replayed: true,
+    });
+    const rejectedActor = mActor(ids.seedDevice);
+    await expect(
+      deps.orders.openOrder(db, { ...input, actor: rejectedActor })
+    ).rejects.toMatchObject({ reason: 'DAY_CLOSED' });
+    expect(
+      await read((tx) =>
+        tx.restaurantOrderIdempotencyKey.findUnique({
+          where: {
+            deviceId_key: { deviceId: ids.seedDevice, key: rejectedActor.idempotencyKey },
+          },
+        })
+      )
+    ).toBeNull();
+    expect(
+      await read((tx) =>
+        tx.restaurantOrder.count({ where: { branchId: ids.branch, businessDate: utcDate(date) } })
+      )
+    ).toBe(1);
+    const nextDay = await deps.orders.openOrder(db, {
+      ...input,
+      actor: rejectedActor,
+      now: noonOf('2026-09-16'),
+    });
+    expect(nextDay.replayed).toBe(false);
+    expect(nextDay.businessDate).toEqual(utcDate('2026-09-16'));
+  });
+
+  it('serializes an order open racing a close so they cannot both succeed', async () => {
+    const date = '2026-09-17';
+    const db = deps.createTenantDb(orgId);
+    const [opened, closed] = await Promise.allSettled([
+      deps.orders.openOrder(db, {
+        organizationId: orgId,
+        entitlementLimits: { 'pos.orders.monthly': 1000000 },
+        branchId: ids.branch,
+        channel: 'TAKEAWAY',
+        actor: mActor(ids.seedDevice),
+        now: noonOf(date),
+      }),
+      deps.close.cutClose(db, {
+        branchId: ids.branch,
+        businessDate: date,
+        actor: mActor(ids.seedDevice),
+      }),
+    ]);
+    if (opened.status === 'fulfilled') {
+      expect(closed).toMatchObject({ status: 'rejected', reason: { reason: 'UNSETTLED_BILL' } });
+    } else {
+      expect(opened.reason).toMatchObject({ reason: 'DAY_CLOSED' });
+      expect(closed.status).toBe('fulfilled');
+    }
+    const preview = await deps.close.closePreview(db, { branchId: ids.branch, businessDate: date });
+    expect(preview.readiness.unbilledOrderCount).toBe(opened.status === 'fulfilled' ? 1 : 0);
+    expect(preview.existingCloseId).toBe(
+      closed.status === 'fulfilled' ? closed.value.dailyCloseId : null
+    );
+  });
+
   it('cross-business-date: a D2 refund of a D1 tender lands on D2, leaving D1 unchanged', async () => {
     const D1 = '2026-09-01';
     const D2 = '2026-09-02';
@@ -498,6 +585,42 @@ describeIfDatabase('daily close (real DB)', () => {
       grandTotal: '10.00',
     });
     const db = deps.createTenantDb(orgId);
+    await expect(
+      deps.close.cutClose(db, {
+        branchId: ids.branch,
+        businessDate: date,
+        actor: mActor(ids.seedDevice),
+      })
+    ).rejects.toMatchObject({ reason: 'UNSETTLED_BILL' });
+  });
+
+  it('blocks a cut while an active order has no live bill', async () => {
+    const date = '2026-09-14';
+    await deps.withTenantDb(orgId, (tx) =>
+      tx.restaurantOrder.create({
+        data: {
+          branchId: ids.branch,
+          orderNumber: ++orderCounter,
+          businessDate: utcDate(date),
+          status: 'SERVED',
+          channel: 'DINE_IN',
+          staffProfileId: ids.operator,
+          deviceId: ids.seedDevice,
+        },
+        select: { id: true },
+      })
+    );
+
+    const db = deps.createTenantDb(orgId);
+    const preview = await deps.close.closePreview(db, {
+      branchId: ids.branch,
+      businessDate: date,
+    });
+    expect(preview.readiness).toMatchObject({
+      allBillsResolved: false,
+      openBillCount: 0,
+      unbilledOrderCount: 1,
+    });
     await expect(
       deps.close.cutClose(db, {
         branchId: ids.branch,

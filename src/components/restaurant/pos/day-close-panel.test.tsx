@@ -18,7 +18,7 @@ describe('DayClosePanel', () => {
       if (path.includes('/preview')) {
         return {
           businessDate: '2026-08-19',
-          readiness: { openBillCount: 0, openDrawerCount: 0 },
+          readiness: { openBillCount: 0, unbilledOrderCount: 0, openDrawerCount: 0 },
           existingCloseId: 'close-1',
           totals: {
             grossSales: '10.00',
@@ -71,7 +71,7 @@ describe('DayClosePanel', () => {
       if (path.endsWith('/current')) return { businessDate: '2026-09-28' } as T;
       return {
         businessDate: '2026-09-28',
-        readiness: { openBillCount: 0, openDrawerCount: 0 },
+        readiness: { openBillCount: 0, unbilledOrderCount: 0, openDrawerCount: 0 },
         existingCloseId: 'close-1',
         totals: {
           grossSales: '28.00',
@@ -119,4 +119,49 @@ describe('DayClosePanel', () => {
     fireEvent.keyDown(document, { key: 'Escape' });
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
   });
+
+  it.each([null, 'close-1'])(
+    'blocks close or correction for unbilled active orders (%s)',
+    async (existingCloseId) => {
+      const requestMock = vi.fn(async (path: string) => {
+        if (path.endsWith('/current')) return { businessDate: '2026-09-28' };
+        return {
+          businessDate: '2026-09-28',
+          readiness: { openBillCount: 0, unbilledOrderCount: 2, openDrawerCount: 0 },
+          existingCloseId,
+          totals: {
+            grossSales: '0.00',
+            netSales: '0.00',
+            deliveryFeeSales: '0.00',
+            deliveryFeeRefunds: '0.00',
+            refundTotal: '0.00',
+            cashExpected: '0.00',
+            cashCounted: '0.00',
+            cashVariance: '0.00',
+          },
+        };
+      });
+      render(
+        <DayClosePanel
+          request={requestMock as TerminalRequest}
+          operators={operators}
+          actingOperatorId="operator-1"
+        />
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'Close day' }));
+      const panel = within(screen.getByRole('dialog', { name: 'Close business day' }));
+      await waitFor(() => expect(panel.getByLabelText('Business date')).toHaveValue('2026-09-28'));
+      fireEvent.click(panel.getByRole('button', { name: 'Check readiness' }));
+      await panel.findByText('Unbilled active orders');
+      expect(panel.getByText('Unbilled active orders').nextElementSibling).toHaveTextContent('2');
+      expect(
+        panel.getByText(/Resolve 0 open bill\(s\), 2 unbilled active order\(s\)/)
+      ).toBeVisible();
+      expect(panel.queryByText('Ready to close')).not.toBeInTheDocument();
+      expect(
+        panel.queryByRole('button', { name: /^(Close business day|Record correction)$/ })
+      ).not.toBeInTheDocument();
+      expect(requestMock).toHaveBeenCalledTimes(2);
+    }
+  );
 });

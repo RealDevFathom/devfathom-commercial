@@ -26,7 +26,7 @@ import type { TerminalRequest } from './checkout-panel';
 
 type Preview = {
   businessDate: string;
-  readiness: { openBillCount: number; openDrawerCount: number };
+  readiness: { openBillCount: number; unbilledOrderCount: number; openDrawerCount: number };
   existingCloseId: string | null;
   totals: {
     grossSales: string;
@@ -104,7 +104,7 @@ export function DayClosePanel({
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!preview) return;
+    if (!preview || !ready || busy || disabled) return;
     const correction = preview.existingCloseId !== null;
     if (correction && (!reason.trim() || !managerId.trim() || !managerSecret)) {
       setError('A correction requires a reason and an eligible approving manager PIN.');
@@ -137,7 +137,10 @@ export function DayClosePanel({
     }
   }
 
-  const ready = preview?.readiness.openBillCount === 0 && preview.readiness.openDrawerCount === 0;
+  const ready =
+    preview?.readiness.openBillCount === 0 &&
+    preview.readiness.unbilledOrderCount === 0 &&
+    preview.readiness.openDrawerCount === 0;
   const busy = pending !== null;
   return (
     <Dialog open={open} onOpenChange={(next) => void setPanelOpen(next)}>
@@ -207,8 +210,12 @@ export function DayClosePanel({
           >
             <dl className="grid gap-2 text-sm sm:grid-cols-2">
               <div>
-                <dt className="text-text-muted">Open orders</dt>
+                <dt className="text-text-muted">Open bills</dt>
                 <dd className="font-mono tabular-nums">{preview.readiness.openBillCount}</dd>
+              </div>
+              <div>
+                <dt className="text-text-muted">Unbilled active orders</dt>
+                <dd className="font-mono tabular-nums">{preview.readiness.unbilledOrderCount}</dd>
               </div>
               <div>
                 <dt className="text-text-muted">Open drawers</dt>
@@ -249,7 +256,8 @@ export function DayClosePanel({
             </dl>
             {!ready ? (
               <p className="mt-3 text-sm text-warning">
-                Resolve {preview.readiness.openBillCount} open order(s) and{' '}
+                Resolve {preview.readiness.openBillCount} open bill(s),{' '}
+                {preview.readiness.unbilledOrderCount} unbilled active order(s) and{' '}
                 {preview.readiness.openDrawerCount} open drawer(s).
               </p>
             ) : null}
