@@ -366,7 +366,8 @@ async function readCashCountCoverage(
       });
       yield* page;
       if (page.length < 500) return;
-      cursor = page[page.length - 1].id;
+      const last = page[page.length - 1];
+      after = { eventDate: last.eventDate, id: last.id };
     }
   }
   let drawerSessionCount = 0;
@@ -803,17 +804,28 @@ export async function readCateringReport(
   limit = MAX_INTERACTIVE_ROWS
 ) {
   const parsed = validateRestaurantReportRange(range);
+  // Keyset pagination on the (eventDate, id) sort key. It does not depend on the
+  // previous page's last row still existing, so under the default READ COMMITTED
+  // isolation a concurrent edit/delete can never skip the remainder of the range
+  // and no order is counted twice.
   async function* orderPages() {
-    let cursor: string | undefined;
+    let after: { eventDate: Date; id: string } | undefined;
     while (true) {
       const page = await db.restaurantCateringOrder.findMany({
         where: {
           branchId: { in: range.branchIds },
           eventDate: { gte: parsed.from, lte: parsed.to },
+          ...(after
+            ? {
+                OR: [
+                  { eventDate: { gt: after.eventDate } },
+                  { eventDate: after.eventDate, id: { gt: after.id } },
+                ],
+              }
+            : {}),
         },
         orderBy: [{ eventDate: 'asc' }, { id: 'asc' }],
         take: 500,
-        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
         select: {
           id: true,
           organizationId: true,
@@ -837,7 +849,8 @@ export async function readCateringReport(
       });
       yield* page;
       if (page.length < 500) return;
-      cursor = page[page.length - 1].id;
+      const last = page[page.length - 1];
+      after = { eventDate: last.eventDate, id: last.id };
     }
   }
   const costCache = new Map<

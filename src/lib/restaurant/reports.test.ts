@@ -180,6 +180,35 @@ describe('restaurant food-cost and dish-profitability reports', () => {
   });
 });
 
+const cateringEventDate = new Date('2026-01-10T00:00:00Z');
+
+function afterKey(id: string) {
+  return [
+    { eventDate: { gt: cateringEventDate } },
+    { eventDate: cateringEventDate, id: { gt: id } },
+  ];
+}
+
+type KeysetQuery = {
+  take: number;
+  where: { OR?: [{ eventDate: { gt: Date } }, { eventDate: Date; id: { gt: string } }] };
+};
+
+function keysetPage<T extends { id: string; eventDate: Date }>(orders: T[]) {
+  return async (query: KeysetQuery) => {
+    const after = query.where.OR;
+    const rows = after
+      ? orders.filter(
+          (order) =>
+            order.eventDate > after[0].eventDate.gt ||
+            (order.eventDate.getTime() === after[1].eventDate.getTime() &&
+              order.id > after[1].id.gt)
+        )
+      : orders;
+    return rows.slice(0, query.take);
+  };
+}
+
 describe('restaurant catering report', () => {
   it('does not mark an exact detail-limit page as truncated', async () => {
     const orders = Array.from({ length: 500 }, (_, index) => ({
@@ -194,14 +223,7 @@ describe('restaurant catering report', () => {
       extraCosts: [],
       delivery: null,
     }));
-    const findMany = vi.fn(
-      async (query: { take: number; cursor?: { id: string }; skip?: number }) => {
-        const start = query.cursor
-          ? orders.findIndex((order) => order.id === query.cursor?.id) + (query.skip ?? 0)
-          : 0;
-        return orders.slice(start, start + query.take);
-      }
-    );
+    const findMany = vi.fn(keysetPage(orders));
     const db = { restaurantCateringOrder: { findMany } } as unknown as ScopedDb;
 
     const report = await readCateringReport(db, boundedRange, 500);
@@ -211,9 +233,9 @@ describe('restaurant catering report', () => {
     expect(report.truncated).toBe(false);
     expect(findMany).toHaveBeenCalledTimes(2);
     expect(findMany.mock.calls[1][0]).toMatchObject({
-      cursor: { id: 'o500' },
-      skip: 1,
+      where: { OR: afterKey('o500') },
     });
+    expect(findMany.mock.calls[1][0]).not.toHaveProperty('cursor');
   });
 
   it('aggregates across every cursor page while retaining only the bounded detail rows', async () => {
@@ -245,14 +267,7 @@ describe('restaurant catering report', () => {
             }
           : null,
     }));
-    const findMany = vi.fn(
-      async (query: { take: number; cursor?: { id: string }; skip?: number }) => {
-        const start = query.cursor
-          ? orders.findIndex((order) => order.id === query.cursor?.id) + (query.skip ?? 0)
-          : 0;
-        return orders.slice(start, start + query.take);
-      }
-    );
+    const findMany = vi.fn(keysetPage(orders));
     const db = {
       restaurantCateringOrder: { findMany },
     } as unknown as ScopedDb;
@@ -294,17 +309,19 @@ describe('restaurant catering report', () => {
       orderBy: [{ eventDate: 'asc' }, { id: 'asc' }],
       take: 500,
     });
-    expect(findMany.mock.calls[0][0]).not.toHaveProperty('cursor');
+    expect(findMany.mock.calls[0][0].where).not.toHaveProperty('OR');
     expect(findMany.mock.calls[1][0]).toMatchObject({
       take: 500,
-      cursor: { id: 'o0500' },
-      skip: 1,
+      where: { OR: afterKey('o0500') },
     });
     expect(findMany.mock.calls[2][0]).toMatchObject({
       take: 500,
-      cursor: { id: 'o1000' },
-      skip: 1,
+      where: { OR: afterKey('o1000') },
     });
+    for (const [query] of findMany.mock.calls) {
+      expect(query).not.toHaveProperty('cursor');
+      expect(query).not.toHaveProperty('skip');
+    }
     expect(recipeMocks.computeRecipeCostInDb).toHaveBeenCalledWith(db, {
       organizationId: 'org1',
       recipeId: 'later-page-recipe',
