@@ -384,7 +384,7 @@ function NotificationsView(props: NotificationsViewProps) {
         <div
           className={`rounded-[var(--radius-sm)] border p-3 text-sm ${
             notice.kind === 'error'
-              ? 'border-destructive bg-destructive-background text-destructive-foreground'
+              ? 'border-destructive bg-destructive/10 text-destructive'
               : 'border-success bg-success-background text-success-foreground'
           }`}
           role={notice.kind === 'error' ? 'alert' : 'status'}
@@ -481,13 +481,13 @@ function NotificationsView(props: NotificationsViewProps) {
             {webhook.config ? (
               <form
                 action={action}
-                className="space-y-3 rounded-[var(--radius-sm)] border border-destructive bg-destructive-background p-4"
+                className="space-y-3 rounded-[var(--radius-sm)] border border-destructive bg-destructive/10 p-4"
               >
                 <HiddenRouteState filter={filter} cursor={cursor} branch={matrixBranch?.id} />
                 <input type="hidden" name="intent" value="delete-webhook" />
                 <input type="hidden" name="confirmation" value="DELETE" />
                 <div>
-                  <p className="font-semibold text-destructive-foreground">Remove webhook</p>
+                  <p className="font-semibold text-destructive">Remove webhook</p>
                   <p className="mt-1 text-sm text-text-muted">
                     This permanently deletes the encrypted signing secret. Queued deliveries become
                     dead letters so they can be retried after a new endpoint is configured.
@@ -537,7 +537,7 @@ function NotificationsView(props: NotificationsViewProps) {
                             {event.id} · {event.attempts} attempt{event.attempts === 1 ? '' : 's'}
                           </p>
                           {event.lastError ? (
-                            <p className="mt-1 text-sm break-words text-destructive-foreground">
+                            <p className="mt-1 text-sm break-words text-destructive">
                               {event.lastError}
                             </p>
                           ) : null}
@@ -620,7 +620,7 @@ function NotificationsView(props: NotificationsViewProps) {
                         {event.id} · {event.attempts} attempt{event.attempts === 1 ? '' : 's'}
                       </p>
                       {event.lastError ? (
-                        <p className="mt-1 text-sm break-words text-destructive-foreground">
+                        <p className="mt-1 text-sm break-words text-destructive">
                           {event.lastError}
                         </p>
                       ) : null}
