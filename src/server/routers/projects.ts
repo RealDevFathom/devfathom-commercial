@@ -12,6 +12,22 @@ import {
   assertTaskAccess,
 } from '../authz';
 import { assertInOrganization, workspaceId } from '../org-refs';
+import {
+  isTaskAssigneeMembershipViolation,
+  TASK_ASSIGNEE_MEMBERSHIP_CONFLICT_MESSAGE,
+} from '@/lib/task-assignee-membership';
+
+/** A concurrent member removal or task move beat this assignee write. */
+function rethrowAssigneeConflict(error: unknown): never {
+  if (isTaskAssigneeMembershipViolation(error)) {
+    throw new TRPCError({
+      code: 'CONFLICT',
+      message: TASK_ASSIGNEE_MEMBERSHIP_CONFLICT_MESSAGE,
+      cause: error,
+    });
+  }
+  throw error;
+}
 
 // Format a task due date for emails, e.g. "Fri, Jun 20 · 5:00 PM".
 function formatDue(date: Date): string {
@@ -606,7 +622,7 @@ export const projectsRouter = router({
           labels: { include: { label: true } },
           _count: { select: { comments: true, attachments: true, checklists: true } },
         },
-      });
+      }).catch(rethrowAssigneeConflict);
       const board = task.column.board;
       const projectName = board.project.name;
       logActivity(ctx.db, ctx.session.user.id, {
@@ -793,7 +809,7 @@ export const projectsRouter = router({
             });
           }
         }
-      });
+      }).catch(rethrowAssigneeConflict);
 
       // Log completion when a task enters a "done" column (and wasn't already in
       // one). PROJ-07: match the same heuristic the board preview uses, not just a
@@ -932,7 +948,7 @@ export const projectsRouter = router({
             skipDuplicates: true,
           });
         }
-      });
+      }).catch(rethrowAssigneeConflict);
 
       return { success: true };
     }),
@@ -1542,7 +1558,7 @@ export const projectsRouter = router({
           });
         }
         return new Set(existing.map((e) => e.userId));
-      });
+      }).catch(rethrowAssigneeConflict);
 
       // Email teammates newly assigned — never the actor, never re-notify.
       const added = uniqueAssignees.filter(

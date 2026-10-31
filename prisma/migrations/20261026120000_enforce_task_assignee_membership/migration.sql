@@ -6,6 +6,12 @@
 -- future migration which needs to lock the same invariant participants.
 LOCK TABLE task_assignees, project_members, tasks IN SHARE ROW EXCLUSIVE MODE;
 
+-- The migration role is subject to FORCE ROW LEVEL SECURITY on task_assignees,
+-- project_members, tasks and audit_logs. Without the platform-admin flag the
+-- cleanup below would silently match zero rows. Keep set_config as its own
+-- statement: a flag set inside the same statement is not visible to RLS.
+SELECT set_config('app.is_platform_admin', 'true', true);
+
 -- Remove invalid rows created before this invariant existed, retaining a
 -- tenant-scoped audit record for every discarded assignment.
 WITH removed AS (

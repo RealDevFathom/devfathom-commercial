@@ -23,6 +23,18 @@ import { Prisma } from '@/generated/prisma/client';
 import type { AssistantHelpers, ToolSet } from '@/lib/ai/context';
 import { matchScore, norm } from '@/lib/ai/context';
 import { appUrl, templates } from '@/lib/email';
+import {
+  isTaskAssigneeMembershipViolation,
+  TASK_ASSIGNEE_MEMBERSHIP_CONFLICT_MESSAGE,
+} from '@/lib/task-assignee-membership';
+
+// A concurrent member removal or task move beat an assignee write; the
+// transaction rolled back, so report it to the assistant as a retryable error.
+const ASSIGNEE_CONFLICT = Symbol('task-assignee-membership-conflict');
+function assigneeConflictOrThrow(error: unknown): typeof ASSIGNEE_CONFLICT {
+  if (isTaskAssigneeMembershipViolation(error)) return ASSIGNEE_CONFLICT;
+  throw error;
+}
 
 // Format a task due date for emails, e.g. "Fri, Jun 20 · 5:00 PM". Mirrors the
 // helper in the projects router so assistant-sent emails match human-sent ones.
@@ -521,7 +533,7 @@ export function buildTasksTools(h: AssistantHelpers): ToolSet {
         _max: { order: true },
         where: { columnId: column.id },
       });
-      const task = await h.db.task.create({
+      const created = await h.db.task.create({
         data: {
           title,
           description: description ?? null,
@@ -533,7 +545,11 @@ export function buildTasksTools(h: AssistantHelpers): ToolSet {
           assignees: { create: merged.map((id) => ({ userId: id })) },
         },
         select: { id: true, title: true, priority: true, dueDate: true, description: true },
-      });
+      }).catch(assigneeConflictOrThrow);
+      if (created === ASSIGNEE_CONFLICT) {
+        return { error: TASK_ASSIGNEE_MEMBERSHIP_CONFLICT_MESSAGE };
+      }
+      const task = created;
 
       h.activity({
         type: 'task_created',
@@ -691,7 +707,7 @@ export function buildTasksTools(h: AssistantHelpers): ToolSet {
       });
       const newOrder = (maxOrder._max.order ?? -1) + 1;
 
-      await h.db.$transaction(async (tx) => {
+      const moved = await h.db.$transaction(async (tx) => {
         // Close the gap left in the source column.
         await tx.task.updateMany({
           where: { columnId: task.columnId, order: { gt: task.order } },
@@ -720,7 +736,10 @@ export function buildTasksTools(h: AssistantHelpers): ToolSet {
             skipDuplicates: true,
           });
         }
-      });
+      }).catch(assigneeConflictOrThrow);
+      if (moved === ASSIGNEE_CONFLICT) {
+        return { error: TASK_ASSIGNEE_MEMBERSHIP_CONFLICT_MESSAGE };
+      }
 
       // Completion: entering a Done column from a non-Done one.
       const enteringDone =
@@ -815,7 +834,7 @@ export function buildTasksTools(h: AssistantHelpers): ToolSet {
 
       // Keep the old assignments if a concurrent membership removal or task
       // move makes the database reject the replacement.
-      const { final, existingIds } = await h.db.$transaction(async (tx) => {
+      const assigned = await h.db.$transaction(async (tx) => {
         const existing = await tx.taskAssignee.findMany({
           where: { taskId: task.id },
           select: { userId: true },
@@ -833,7 +852,11 @@ export function buildTasksTools(h: AssistantHelpers): ToolSet {
           });
         }
         return { final, existingIds };
-      });
+      }).catch(assigneeConflictOrThrow);
+      if (assigned === ASSIGNEE_CONFLICT) {
+        return { error: TASK_ASSIGNEE_MEMBERSHIP_CONFLICT_MESSAGE };
+      }
+      const { final, existingIds } = assigned;
 
       // Notify the newly-added (never the actor, never re-notify).
       const added = final.filter((id) => !existingIds.has(id) && id !== h.ctx.userId);

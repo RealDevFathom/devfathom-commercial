@@ -367,4 +367,75 @@ describeIfDatabase('task-assignee project membership database invariant', () => 
       await Promise.all([setup.end(), assigner.end(), mover.end()]);
     }
   });
+  it('removes invalid assignments under FORCE ROW LEVEL SECURITY as a non-bypass role', async () => {
+    const suffix = randomUUID().replaceAll('-', '');
+    const schema = `task_membership_${suffix}`;
+    const role = `task_membership_role_${suffix}`;
+    const policy = `USING (current_setting('app.is_platform_admin', true) = 'true'
+        OR "organizationId" = NULLIF(current_setting('app.current_organization_id', true), ''))
+      WITH CHECK (current_setting('app.is_platform_admin', true) = 'true'
+        OR "organizationId" = NULLIF(current_setting('app.current_organization_id', true), ''))`;
+    const rlsTables = ['audit_logs', 'project_members', 'tasks', 'task_assignees'];
+    const admin = new pg.Client({ connectionString: databaseUrl });
+    const migrator = new pg.Client({ connectionString: databaseUrl });
+    await Promise.all([admin.connect(), migrator.connect()]);
+    try {
+      // Mirror production: the migration role owns the tables, is not a
+      // superuser and has no BYPASSRLS, so FORCE RLS applies to it.
+      await admin.query(`CREATE ROLE "${role}" NOSUPERUSER NOBYPASSRLS NOLOGIN`);
+      await admin.query(`CREATE SCHEMA "${schema}" AUTHORIZATION "${role}"`);
+      await admin.query(`SET ROLE "${role}"; SET search_path TO "${schema}"`);
+      await admin.query(`
+        ${auditTable}
+        CREATE TABLE projects (id text PRIMARY KEY);
+        CREATE TABLE boards (id text PRIMARY KEY, "projectId" text NOT NULL);
+        CREATE TABLE columns (id text PRIMARY KEY, "boardId" text NOT NULL);
+        CREATE TABLE tasks (id text PRIMARY KEY, "columnId" text NOT NULL, "organizationId" text NOT NULL DEFAULT 'organization');
+        CREATE TABLE project_members (id text PRIMARY KEY, "projectId" text NOT NULL, "userId" text NOT NULL, "organizationId" text NOT NULL DEFAULT 'organization');
+        CREATE TABLE task_assignees (id text PRIMARY KEY, "taskId" text NOT NULL, "userId" text NOT NULL, "organizationId" text NOT NULL DEFAULT 'organization');
+        INSERT INTO projects VALUES ('project');
+        INSERT INTO boards VALUES ('board', 'project');
+        INSERT INTO columns VALUES ('column', 'board');
+        INSERT INTO tasks VALUES ('task', 'column');
+        INSERT INTO project_members VALUES ('membership', 'project', 'member');
+        INSERT INTO task_assignees VALUES ('valid', 'task', 'member');
+        INSERT INTO task_assignees VALUES ('invalid', 'task', 'outsider');
+        ${rlsTables
+          .map(
+            (table) => `ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY;
+        ALTER TABLE ${table} FORCE ROW LEVEL SECURITY;
+        CREATE POLICY tenant_isolation ON ${table} ${policy};`
+          )
+          .join('\n')}
+      `);
+
+      // A fresh session with no tenant or platform-admin context, as the
+      // deployment job runs.
+      await migrator.query(`SET ROLE "${role}"; SET search_path TO "${schema}"`);
+      await migrator.query(migration);
+
+      await admin.query('BEGIN');
+      await admin.query(`SELECT set_config('app.is_platform_admin', 'true', true)`);
+      const remaining = await admin.query(`SELECT id FROM task_assignees ORDER BY id`);
+      const audit = await admin.query(`SELECT "organizationId", action, "targetId", metadata FROM audit_logs`);
+      await admin.query('COMMIT');
+      expect(remaining.rows).toEqual([{ id: 'valid' }]);
+      expect(audit.rows).toEqual([expect.objectContaining({
+        organizationId: 'organization',
+        action: 'task.assignee_membership_cleanup',
+        targetId: 'task',
+        metadata: expect.objectContaining({ userId: 'outsider', assignmentId: 'invalid', reason: 'migration_cleanup' }),
+      })]);
+      // The platform-admin flag is transaction-local and must not leak.
+      const leaked = await migrator.query(`SELECT current_setting('app.is_platform_admin', true) AS flag`);
+      expect(leaked.rows[0].flag ?? '').not.toBe('true');
+    } finally {
+      await admin.query('ROLLBACK').catch(() => undefined);
+      await admin.query('RESET ROLE').catch(() => undefined);
+      await migrator.query('RESET ROLE').catch(() => undefined);
+      await admin.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`).catch(() => undefined);
+      await admin.query(`DROP ROLE IF EXISTS "${role}"`).catch(() => undefined);
+      await Promise.all([admin.end(), migrator.end()]);
+    }
+  });
 });

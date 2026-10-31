@@ -144,6 +144,17 @@ async function main() {
     if (!p?.boards?.length) return null;
     return p.boards[0].columns.find((c: any) => c.name === colName) ?? null;
   };
+  // Task assignees must be project members (enforced by the
+  // task_assignee_project_membership trigger), so enrol each demo assignee in
+  // the project before assigning them work there.
+  const ensureProjectMember = async (projName: string, userId: string) => {
+    const p = byProj[projName];
+    await prisma.projectMember.upsert({
+      where: { projectId_userId: { projectId: p.id, userId } },
+      update: {},
+      create: { projectId: p.id, userId, organizationId: p.organizationId },
+    });
+  };
   const labelOf = (projName: string, labelName: string) => {
     const p = byProj[projName];
     if (!p?.boards?.length) return null;
@@ -220,6 +231,7 @@ async function main() {
     for (const t of tasks) {
       const column = colOf(projName, t.col);
       const label = labelOf(projName, t.label);
+      for (const u of t.assignees) await ensureProjectMember(projName, u.id);
       const created = await prisma.task.create({
         data: {
           title: t.title,
@@ -276,6 +288,7 @@ async function main() {
       const done = colOf(mw.project, 'Done');
       if (!done) continue;
       const n = Math.min(mw.titles.length, 7);
+      await ensureProjectMember(mw.project, mw.user.id);
       for (let i = 0; i < n; i++) {
         const doneDaysAgo = offsets[i % offsets.length] + (i < 2 ? 0 : 1);
         const doneAt = daysAgo(doneDaysAgo, 11 + (i % 6), (i * 13) % 60);
