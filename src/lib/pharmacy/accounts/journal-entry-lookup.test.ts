@@ -90,6 +90,75 @@ describe('exact posted-journal lookup', () => {
     });
   });
 
+  it('ignores the nullable header branch and returns only branch-scoped lines', async () => {
+    // Header branchId is null (interbranch entry); access is decided by the branch's lines only.
+    mocks.journal.mockResolvedValue({
+      id: '.',
+      sourceKind: 'SALE',
+      sourceId: 'sale-1',
+      currency: 'PKR',
+      occurredAt: new Date(input.from),
+      reversesEntryId: null,
+      branchId: null,
+      lines: [{ id: 'line-1', accountCode: 'CASH', side: 'DEBIT', amountMinor: 5 }],
+    });
+    const result = await caller().lookup(input);
+    expect(result).toEqual({
+      status: 'FOUND',
+      entry: {
+        id: '.',
+        sourceKind: 'SALE',
+        sourceId: 'sale-1',
+        currency: 'PKR',
+        occurredAt: new Date(input.from).toISOString(),
+        reversesEntryId: null,
+        lines: [{ id: 'line-1', accountCode: 'CASH', side: 'DEBIT', amountMinor: '5' }],
+        debitMinor: '5',
+        creditMinor: '0',
+        differenceMinor: '5',
+      },
+    });
+    const query = mocks.journal.mock.calls[0][0];
+    expect(query.where).not.toHaveProperty('branchId');
+    expect(query.select).not.toHaveProperty('branchId');
+    expect(query.where.lines).toEqual({ some: { organizationId: 'org_1', branchId: '!' } });
+    expect(query.select.lines.where).toEqual({ organizationId: 'org_1', branchId: '!' });
+  });
+
+  it('finds an original entry and its reversal independently by exact ID', async () => {
+    const entry = (id: string, reversesEntryId: string | null, side: 'DEBIT' | 'CREDIT') => ({
+      id,
+      sourceKind: 'SALE',
+      sourceId: 'sale-1',
+      currency: 'PKR',
+      occurredAt: new Date(input.from),
+      reversesEntryId,
+      lines: [{ id: `${id}-line`, accountCode: 'CASH', side, amountMinor: 7 }],
+    });
+    mocks.journal
+      .mockResolvedValueOnce(entry('original', null, 'DEBIT'))
+      .mockResolvedValueOnce(entry('reversal', 'original', 'CREDIT'));
+
+    const original = await caller().lookup({ ...input, entryId: 'original' });
+    const reversal = await caller().lookup({ ...input, entryId: 'reversal' });
+
+    expect(mocks.journal.mock.calls[0][0].where.id).toBe('original');
+    expect(mocks.journal.mock.calls[1][0].where.id).toBe('reversal');
+    expect(original).toMatchObject({
+      status: 'FOUND',
+      entry: { id: 'original', reversesEntryId: null, debitMinor: '7', differenceMinor: '7' },
+    });
+    expect(reversal).toMatchObject({
+      status: 'FOUND',
+      entry: {
+        id: 'reversal',
+        reversesEntryId: 'original',
+        creditMinor: '7',
+        differenceMinor: '-7',
+      },
+    });
+  });
+
   it('returns no details or totals for 201 rows and performs no second journal read', async () => {
     mocks.journal.mockResolvedValue({
       lines: Array.from({ length: 201 }, (_, i) => ({ id: String(i) })),

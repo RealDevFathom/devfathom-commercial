@@ -1,3 +1,4 @@
+import { TRPCError } from '@trpc/server';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -44,8 +45,14 @@ describe('journal lookup page', () => {
 
   it('associates field-level validation errors with the invalid inputs only', async () => {
     const output = await html({ ...valid, entryId: 'x'.repeat(129), to: valid.from });
-    const input = (name: string) =>
-      output.match(new RegExp(`<input[^>]*id="journal-lookup-${name}"[^>]*>`))?.[0] ?? '';
+    const input = (name: string) => {
+      const marker = `id="journal-lookup-${name}"`;
+      const at = output.indexOf(marker);
+      if (at < 0) return '';
+      const start = output.lastIndexOf('<input', at);
+      const end = output.indexOf('>', at);
+      return start < 0 || end < 0 ? '' : output.slice(start, end + 1);
+    };
     expect(input('entryId')).toContain('aria-invalid="true"');
     expect(input('entryId')).toContain('aria-describedby="journal-lookup-entryId-error"');
     expect(output).toContain('id="journal-lookup-entryId-error"');
@@ -54,8 +61,11 @@ describe('journal lookup page', () => {
     expect(input('to')).toContain('aria-describedby="journal-lookup-to-error"');
     expect(output).toContain('Must be after From and no more than 92 days later.');
     expect(input('branchId')).not.toBe('');
-    expect(input('branchId')).not.toContain('aria-invalid');
-    expect(input('from')).not.toContain('aria-invalid');
+    expect(input('branchId')).not.toContain('aria-invalid="true"');
+    expect(input('branchId')).not.toContain('aria-describedby');
+    expect(input('from')).not.toBe('');
+    expect(input('from')).not.toContain('aria-invalid="true"');
+    expect(input('from')).not.toContain('aria-describedby');
     expect(mocks.lookup).not.toHaveBeenCalled();
   });
 
@@ -106,6 +116,36 @@ describe('journal lookup page', () => {
     expect(output).toContain('value="branch-1"');
     expect(output).toContain('branch-1 · [');
     expect(output).not.toContain('  branch-1  ');
+  });
+
+  it('accepts 1-character and punctuation-only IDs and performs the exact lookup', async () => {
+    const query = { ...valid, branchId: '!', entryId: '.' };
+    const output = await html(query);
+    expect(mocks.lookup).toHaveBeenCalledWith(query);
+    expect(output).not.toContain('aria-invalid="true"');
+    expect(output).toContain('No journal entry was found');
+  });
+
+  it.each([
+    ['FORBIDDEN', 'You do not have access to this financial report scope.'],
+    ['UNAUTHORIZED', 'You do not have access to this financial report scope.'],
+    ['INTERNAL_SERVER_ERROR', 'The journal lookup is unavailable.'],
+  ] as const)('renders %s errors as a non-stale status', async (code, copy) => {
+    mocks.lookup.mockRejectedValue(new TRPCError({ code }));
+    const output = await html(valid);
+    expect(output).toContain(copy);
+    expect(output).toContain('role="alert"');
+    expect(output).not.toContain('Authorized branch slice');
+  });
+
+  it('renders DENIED when no tenant actor resolves and FAILURE for unexpected errors', async () => {
+    mocks.actor.mockResolvedValueOnce(null);
+    expect(await html(valid)).toContain('You do not have access to this financial report scope.');
+    mocks.context.mockRejectedValueOnce(new Error('db down'));
+    const failure = await html(valid);
+    expect(failure).toContain('The journal lookup is unavailable.');
+    expect(failure).not.toContain('db down');
+    expect(failure).not.toContain('Authorized branch slice');
   });
 
   it.each([
