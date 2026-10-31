@@ -182,37 +182,46 @@ describe('team last-admin serialization', () => {
           ['admin_target', { id: 'admin_target', ...initial }],
         ]);
         let firstTransaction = true;
+        const userDelegate: TeamDb['user'] = {
+          findUnique: vi.fn(async ({ where }: { where: { id: string } }) => ({
+            ...users.get(where.id)!,
+            name: 'Admin',
+            email: 'admin@example.test',
+          })),
+          count: vi.fn(
+            async () =>
+              [...users.values()].filter((u) => u.role === 'ADMIN' && u.status === 'ACTIVE')
+                .length
+          ),
+          update: vi.fn(async ({ where, data }) => {
+            const updated = { ...users.get(where.id)!, ...data };
+            users.set(where.id, updated);
+            return updated;
+          }),
+        };
+        // The competing request arrives on its own connection/transaction
+        // handle, as a separate HTTP request would. Reusing `raceDb` would
+        // queue it behind the delayed request that is waiting on it.
+        const otherDb: TeamDb = {
+          ...db,
+          user: userDelegate,
+          $transaction: (run) => run(otherDb),
+        };
         const raceDb: TeamDb = {
           ...db,
-          user: {
-            findUnique: vi.fn(async ({ where }: { where: { id: string } }) => ({
-              ...users.get(where.id)!,
-              name: 'Admin',
-              email: 'admin@example.test',
-            })),
-            count: vi.fn(
-              async () =>
-                [...users.values()].filter((u) => u.role === 'ADMIN' && u.status === 'ACTIVE')
-                  .length
-            ),
-            update: vi.fn(async ({ where, data }) => {
-              const updated = { ...users.get(where.id)!, ...data };
-              users.set(where.id, updated);
-              return updated;
-            }),
-          },
+          user: userDelegate,
           $transaction: async (run) => {
             if (firstTransaction) {
               firstTransaction = false;
               // Another request promotes/reactivates B and demotes A before the
               // delayed request starts its transaction. An earlier snapshot of B
               // must not let that request skip the last-admin guard.
-              await caller(raceDb).adminUpdateMember({
+              await caller(otherDb).adminUpdateMember({
                 id: 'admin_target',
                 role: 'ADMIN',
                 status: 'ACTIVE',
               });
-              await caller(raceDb).adminUpdateMember({ id: 'admin_actor', role: 'EMPLOYEE' });
+              await caller(otherDb).adminUpdateMember({ id: 'admin_actor', role: 'EMPLOYEE' });
             }
             return run(raceDb);
           },
