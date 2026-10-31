@@ -19,7 +19,7 @@ vi.mock('@/lib/email', () => ({
   sendEmail: vi.fn(async () => undefined),
 }));
 import { sendEmail } from '@/lib/email';
-import { withTenantDb, withPlatformDb } from '@/lib/tenancy/scoped-db';
+import { createTenantDb, withTenantDb, withPlatformDb } from '@/lib/tenancy/scoped-db';
 import { initiateAdminPasswordReset } from './password-reset';
 import { passwordResetRouter } from '@/server/routers/password-reset';
 import { invitationsRouter } from '@/server/routers/invitations';
@@ -303,5 +303,24 @@ describe.skipIf(!testDatabaseUrl)('H4/M14 recovery lifecycle against PostgreSQL'
     expect(
       await withTenantDb(org, (db) => initiateAdminPasswordReset(db, org, userId))
     ).toMatchObject({ emailSent: true });
+  });
+
+  it('sends the reset email only after the token and revocation have committed', async () => {
+    let committedAtSend: { tokens: number; tokenVersion: number } | null = null;
+    const before = await read();
+    vi.mocked(sendEmail).mockImplementationOnce(async (mail) => {
+      const raw = mail.text!.split('/').at(-1)!;
+      // A separate connection sees only committed state.
+      committedAtSend = await withTenantDb(org, async (db) => ({
+        tokens: await db.passwordResetToken.count({
+          where: { userId, tokenHash: hashToken(raw), usedAt: null },
+        }),
+        tokenVersion: (await db.user.findUniqueOrThrow({ where: { id: userId } })).tokenVersion,
+      }));
+      return undefined as never;
+    });
+    const result = await initiateAdminPasswordReset(createTenantDb(org) as never, org, userId);
+    expect(result?.emailSent).toBe(true);
+    expect(committedAtSend).toEqual({ tokens: 1, tokenVersion: before.tokenVersion + 1 });
   });
 });

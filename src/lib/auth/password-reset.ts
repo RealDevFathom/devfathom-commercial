@@ -26,11 +26,9 @@ export async function revokePasswordResetCredentials(
   });
 }
 
-// Only status crosses this boundary; neither token nor link reaches the model.
-export async function emailPasswordReset(
-  db: PrismaClient,
-  user: { id: string; organizationId: string; name: string; email: string }
-): Promise<boolean> {
+type ResetRecipient = { id: string; organizationId: string; name: string; email: string };
+
+async function issuePasswordResetToken(db: PrismaClient, user: ResetRecipient): Promise<string> {
   const { token, tokenHash } = generateInviteToken();
   await db.passwordResetToken.create({
     data: {
@@ -40,6 +38,16 @@ export async function emailPasswordReset(
       expiresAt: new Date(Date.now() + RESET_TTL_MS),
     },
   });
+  return token;
+}
+
+// Send only after the token is durable: the link must never point at a row that
+// can still roll back, and network I/O must not hold a transaction open.
+async function sendPasswordResetEmail(
+  user: ResetRecipient,
+  token: string,
+  source: string
+): Promise<boolean> {
   const mail = templates.passwordReset({
     name: user.name,
     resetUrl: `${appUrl()}/reset-password/${token}`,
@@ -48,10 +56,21 @@ export async function emailPasswordReset(
   try {
     await sendEmail({ to: { email: user.email, name: user.name }, ...mail });
     return true;
-  } catch {
-    // Provider errors may contain the payload, including the recovery link.
+  } catch (err) {
+    // Provider errors may contain the payload, including the recovery link, so
+    // log only the error class and the user id — never the error itself.
+    console.error(`[${source}] password reset email failed`, {
+      userId: user.id,
+      error: err instanceof Error ? err.name : typeof err,
+    });
     return false;
   }
+}
+
+// Only status crosses this boundary; neither token nor link reaches the model.
+export async function emailPasswordReset(db: PrismaClient, user: ResetRecipient): Promise<boolean> {
+  const token = await issuePasswordResetToken(db, user);
+  return sendPasswordResetEmail(user, token, 'passwordReset.request');
 }
 
 export async function initiateAdminPasswordReset(
@@ -59,7 +78,9 @@ export async function initiateAdminPasswordReset(
   organizationId: string,
   userId: string
 ) {
-  return db.$transaction(async (tx) => {
+  // Commit the version bump, credential revocation and new token first; only
+  // then send the email, outside the transaction.
+  const issued = await db.$transaction(async (tx) => {
     const user = await tx.user.findFirst({
       where: { id: userId, organizationId, organization: { isDemo: false } },
       select: { id: true, organizationId: true, name: true, email: true },
@@ -70,7 +91,10 @@ export async function initiateAdminPasswordReset(
       data: { tokenVersion: { increment: 1 } },
     });
     await revokePasswordResetCredentials(tx as PrismaClient, organizationId, user.id);
-    const emailSent = await emailPasswordReset(tx as PrismaClient, user);
-    return { user, emailSent };
+    const token = await issuePasswordResetToken(tx as PrismaClient, user);
+    return { user, token };
   });
+  if (!issued) return null;
+  const emailSent = await sendPasswordResetEmail(issued.user, issued.token, 'admin.passwordReset');
+  return { user: issued.user, emailSent };
 }
