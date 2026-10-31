@@ -14,7 +14,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: image-build-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}${{ (github.event.action == 'labeled' && github.event.label.name != 'ci-ready') && format('-ignored-label-{0}', github.run_id) || '' }}
+  group: image-build-${{ github.event.pull_request.number }}${{ (github.event.action == 'labeled' && github.event.label.name != 'ci-ready') && format('-ignored-label-{0}', github.run_id) || '' }}
   cancel-in-progress: true
 
 jobs:

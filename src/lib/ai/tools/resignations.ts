@@ -26,7 +26,7 @@ export function buildResignationsTools(h: AssistantHelpers): ToolSet {
   // Mirror of resignations.mine — the current user's own resignation(s).
   tools.getMyResignation = tool({
     description:
-      "Show the CURRENT user (your) own resignation and where it stands: PENDING review, APPROVED, DECLINED or WITHDRAWN, plus the stated reason, your proposed last day, any confirmed last working day, and the reviewer's note. Use for \"did my resignation go through\", \"what's the status of my notice\", \"my resignation\".",
+      'Show the CURRENT user (your) own resignation and where it stands: PENDING review, APPROVED, DECLINED or WITHDRAWN, plus the stated reason, your proposed last day, any confirmed last working day, and the reviewer\'s note. Use for "did my resignation go through", "what\'s the status of my notice", "my resignation".',
     inputSchema: z.object({}),
     execute: async () => {
       const rows = await h.db.resignation.findMany({
@@ -243,11 +243,11 @@ export function buildResignationsTools(h: AssistantHelpers): ToolSet {
   if (h.isAdminOrHr) {
     tools.reviewResignation = tool({
       description:
-        "Approve or decline a team member's pending resignation (HR / admin). Give the person's name, the decision, and — when approving — optionally their confirmed last working day (defaults to the proposed last day) and an optional note for them. The employee is emailed the outcome. This records the decision only; it does NOT deactivate the account (offboarding happens separately). Use for \"approve <name>'s resignation\", \"decline the resignation from <name>\".",
+        'Approve or decline a team member\'s pending resignation (HR / admin). Give the person\'s name, the decision, and — when approving — optionally their confirmed last working day (defaults to the proposed last day) and an optional note for them. The employee is emailed the outcome. This records the decision only; it does NOT deactivate the account (offboarding happens separately). Use for "approve <name>\'s resignation", "decline the resignation from <name>".',
       inputSchema: z.object({
         person: z
           .string()
-          .describe("The resigning team member's name, e.g. \"Aisha\" or \"Aisha Khan\""),
+          .describe('The resigning team member\'s name, e.g. "Aisha" or "Aisha Khan"'),
         decision: z.enum(['APPROVED', 'DECLINED']).describe('Approve or decline the resignation'),
         lastWorkingDay: z
           .string()

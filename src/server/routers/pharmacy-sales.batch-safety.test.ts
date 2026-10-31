@@ -31,8 +31,8 @@ const BRANCH = 'branch-1';
 
 function caller(granted = true) {
   const db = {
-    $transaction: vi.fn(
-      async (callback: (tx: unknown) => unknown): Promise<unknown> => callback(db)
+    $transaction: vi.fn(async (callback: (tx: unknown) => unknown): Promise<unknown> =>
+      callback(db)
     ),
     pharmacyBranch: {
       findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
@@ -42,7 +42,7 @@ function caller(granted = true) {
     user: {
       findUnique: vi.fn(async () => ({
         organizationRole: {
-          permissions: granted ? [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }] : [],
+          permissions: [{ capability: 'pharmacy:dispense', effect: granted ? 'ALLOW' : 'DENY' }],
         },
         permissionOverrides: [],
       })),
@@ -65,7 +65,7 @@ function caller(granted = true) {
 beforeEach(() => loyalty.redeemSalePoints.mockReset());
 
 describe('#633 batch refusal at tender', () => {
-  it('forbids loyalty redemption when the session has no dispense grant', async () => {
+  it('forbids loyalty redemption when an active branch user is denied dispense', async () => {
     await expect(
       caller(false).redeemPoints({
         branchId: BRANCH,
