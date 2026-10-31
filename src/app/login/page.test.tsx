@@ -48,4 +48,7 @@ it('starts with a skip link targeting the main sign-in landmark', async () => {
   expect(document.querySelectorAll('a, button, input, select, textarea')[0]).toBe(skipLink);
   expect(skipLink).toHaveAttribute('href', '#main-content');
   expect(main).toHaveAttribute('id', 'main-content');
+  expect(main).toHaveAttribute('tabindex', '-1');
+  main.focus();
+  expect(main).toHaveFocus();
 });

@@ -83,12 +83,13 @@ export default async function LoginPage(props: LoginPageProps) {
     <>
       <a
         href="#main-content"
-        className="sr-only fixed top-3 left-3 z-50 rounded-[3px] bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground focus:not-sr-only"
+        className="fixed top-3 left-3 z-50 rounded-[3px] bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground not-focus:sr-only"
       >
         Skip to content
       </a>
       <main
         id="main-content"
+        tabIndex={-1}
         className="min-h-dvh bg-background text-foreground lg:grid lg:grid-cols-[minmax(0,1.08fr)_minmax(26rem,0.92fr)]"
       >
         {/* Blueprint field panel — desktop only */}

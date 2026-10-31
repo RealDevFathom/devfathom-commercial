@@ -55,7 +55,11 @@ describe('AppShell module guard', () => {
     const skipLink = screen.getByRole('link', { name: 'Skip to content' });
     expect(document.querySelectorAll('a, button, input, select, textarea')[0]).toBe(skipLink);
     expect(skipLink).toHaveAttribute('href', '#main-content');
-    expect(screen.getByRole('main')).toHaveAttribute('id', 'main-content');
+    const main = screen.getByRole('main');
+    expect(main).toHaveAttribute('id', 'main-content');
+    expect(main).toHaveAttribute('tabindex', '-1');
+    main.focus();
+    expect(main).toHaveFocus();
   });
 
   it('keeps the responsive dashboard brand link explicitly named', () => {
