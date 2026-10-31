@@ -64,6 +64,7 @@ export type RefundKind = 'REFUND' | 'VOID_REVERSAL';
 export type RefundErrorReason =
   | 'TENDER_NOT_FOUND'
   | 'PAYMENT_NOT_FOUND'
+  | 'UNSUPPORTED_PAYMENT_PROVIDER'
   | 'INVALID_AMOUNT'
   | 'REFUND_EXCEEDS_TENDER'
   | 'TIP_REFUND_EXCEEDS_TENDER'
@@ -134,6 +135,12 @@ type LoadedTender = {
   };
 };
 
+type RefundableCardPayment = {
+  id: string;
+  provider: 'MOCK';
+  providerRef: string | null;
+};
+
 function requireReason(reason: string | null | undefined): string {
   const trimmed = (reason ?? '').trim();
   if (trimmed.length === 0) {
@@ -168,6 +175,12 @@ export async function refundTender(
     // unknown tender and cannot burn a key or write co-auth/payment/drawer rows.
     const branchId = await loadActorBranch(tx, input.actor.deviceId, input.branchId);
     const tender = await loadTender(tx, input.originalTenderId, branchId);
+    // Reject card channels without an authoritative reversal adapter before claiming
+    // an idempotency key or creating any refund-related records. The transaction is
+    // still the final atomicity boundary, but this ordering also keeps non-transactional
+    // callers and test doubles free of misleading residue.
+    const cardPayment =
+      tender.type === 'CARD' ? await requireRefundableCardPayment(tx, tender.paymentId) : null;
     const canonicalBytes = JSON.stringify({
       originalTenderId: tender.id,
       amount: amount.toString(),
@@ -339,10 +352,7 @@ export async function refundTender(
       tender.type === 'CASH'
         ? await requireOpenDrawer(tx, input.actor, branchId, businessDate)
         : null;
-    const paymentId = tender.type === 'CARD' ? tender.paymentId : null;
-    if (tender.type === 'CARD' && !paymentId) {
-      throw new RefundError('The card tender has no payment to refund.', 'PAYMENT_NOT_FOUND');
-    }
+    const paymentId = cardPayment?.id ?? null;
 
     const refund = await tx.restaurantRefund.create({
       data: {
@@ -396,9 +406,9 @@ export async function refundTender(
     }
 
     let paymentStatus: PaymentStatus | null = null;
-    if (paymentId) {
+    if (cardPayment) {
       paymentStatus = await applyCardRefund(tx, {
-        paymentId,
+        payment: cardPayment,
         kind,
         amount,
         tipRefundAmount,
@@ -494,12 +504,35 @@ async function requireOpenDrawer(
   return drawer.id;
 }
 
-/** Run the MOCK adapter REFUND/VOID against the card payment, append the event, and
+async function requireRefundableCardPayment(
+  tx: ScopedDb,
+  paymentId: string | null
+): Promise<RefundableCardPayment> {
+  if (!paymentId) {
+    throw new RefundError('The card tender has no payment to refund.', 'PAYMENT_NOT_FOUND');
+  }
+  const payment = await tx.restaurantPayment.findUnique({
+    where: { id: paymentId },
+    select: { id: true, provider: true, providerRef: true },
+  });
+  if (!payment) {
+    throw new RefundError('The card payment no longer exists.', 'PAYMENT_NOT_FOUND');
+  }
+  if (payment.provider !== 'MOCK') {
+    throw new RefundError(
+      `Refunds are not supported for the ${payment.provider} payment provider.`,
+      'UNSUPPORTED_PAYMENT_PROVIDER'
+    );
+  }
+  return { id: payment.id, provider: payment.provider, providerRef: payment.providerRef };
+}
+
+/** Run the payment's adapter REFUND/VOID against the card payment, append the event, and
  * transition the payment's normalized status. Returns the resulting status. */
 async function applyCardRefund(
   tx: ScopedDb,
   input: {
-    paymentId: string;
+    payment: RefundableCardPayment;
     kind: RefundKind;
     amount: Prisma.Decimal;
     tipRefundAmount: Prisma.Decimal;
@@ -509,23 +542,15 @@ async function applyCardRefund(
     originalTenderId: string;
   }
 ): Promise<PaymentStatus> {
-  const payment = await tx.restaurantPayment.findUnique({
-    where: { id: input.paymentId },
-    select: { id: true, providerRef: true },
-  });
-  if (!payment) {
-    throw new RefundError('The card payment no longer exists.', 'PAYMENT_NOT_FOUND');
-  }
-
   const capability: PaymentCapability = input.kind === 'VOID_REVERSAL' ? 'VOID' : 'REFUND';
-  const provider = getPaymentProvider('MOCK');
+  const provider = getPaymentProvider(input.payment.provider);
   const operationRef = `${input.originalTenderId}:${input.actor.deviceId}:${input.actor.idempotencyKey}`;
   const outcome = provider.execute({
     capability,
     amount: input.amount,
     tipAmount: input.tipRefundAmount,
     operationRef,
-    priorRef: payment.providerRef,
+    priorRef: input.payment.providerRef,
   });
 
   // The normalized payment status: a void → VOIDED; a refund → REFUNDED once the
@@ -539,14 +564,14 @@ async function applyCardRefund(
         : 'PARTIALLY_REFUNDED';
 
   await appendPaymentEvent(tx, {
-    paymentId: payment.id,
+    paymentId: input.payment.id,
     capability: outcome.event.capability,
     eventType: outcome.event.eventType,
     amount: outcome.event.amount,
     providerRef: outcome.event.providerRef,
     payload: outcome.event.payload,
   });
-  await tx.restaurantPayment.update({ where: { id: payment.id }, data: { status } });
+  await tx.restaurantPayment.update({ where: { id: input.payment.id }, data: { status } });
   return status;
 }
 

@@ -1,12 +1,13 @@
 // No DB client: exercise the real command, money arithmetic, replay and ledger
 // paths against in-memory delegates. DB rollback/RLS/concurrency require QA.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { Prisma } from '@/generated/prisma/client';
+import { Prisma, type RestaurantPayment } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { finalizeBillSettlement } from './bills';
 import { getOrderSettlementForBranch } from './checkout-routes';
 import { closePreview } from './daily-close';
 import { appendMovement, closeDrawerSession, foldExpectedCash } from './drawer-sessions';
+import { reverseLoyaltyForRefund } from './loyalty';
 import { refundTender } from './refunds';
 import { applyTenderInTransaction, type ApplyTenderInput } from './tenders';
 
@@ -43,6 +44,7 @@ type Tender = {
   tipAmount: Prisma.Decimal;
   businessDate: Date;
   createdAt: Date;
+  paymentId?: string | null;
 };
 
 function fixture() {
@@ -189,7 +191,7 @@ function fixture() {
       findFirst: vi.fn(async ({ where }: { where: { id: string; bill: { branchId: string } } }) => {
         const row = tenders.find((tender) => tender.id === where.id);
         return row && where.bill.branchId === bill.branchId
-          ? { ...row, paymentId: null, bill }
+          ? { ...row, paymentId: row.paymentId ?? null, bill }
           : null;
       }),
       findMany: vi.fn(async ({ where }: { where: Where & { bill?: { branchId: string } } }) => {
@@ -277,10 +279,22 @@ function fixture() {
       create: vi.fn(async () => ({ id: 'refund' })),
     },
     restaurantTaxTenderAllocationSnapshot: { findMany: vi.fn(async () => []) },
+    restaurantTaxRefundAllocation: { create: vi.fn(async () => ({ id: 'tax-refund' })) },
     restaurantTaxTransactionSnapshot: { findMany: vi.fn(async () => []) },
     restaurantCoAuthorization: { create: vi.fn(async () => ({ id: 'approval' })) },
-    restaurantPayment: { create: vi.fn(async () => ({ id: 'payment' })) },
+    restaurantPayment: {
+      create: vi.fn(async () => ({ id: 'payment' })),
+      findUnique: vi.fn(
+        async (): Promise<Pick<RestaurantPayment, 'id' | 'provider' | 'providerRef'> | null> => ({
+          id: 'payment',
+          provider: 'TERMINAL',
+          providerRef: 'terminal-payment',
+        })
+      ),
+      update: vi.fn(),
+    },
     restaurantPaymentEvent: { create: vi.fn(async () => ({ id: 'event' })) },
+    restaurantTerminalReconciliation: { create: vi.fn(async () => ({ id: 'reconciliation' })) },
   };
   const db = raw as unknown as ScopedDb;
   vi.mocked(finalizeBillSettlement).mockImplementation(async (_tx, input) => {
@@ -514,6 +528,150 @@ describe('collection posting and authoritative recorded balances (no DB)', () =>
     expect(f.raw.restaurantRefund.create).not.toHaveBeenCalled();
     expect(f.movements).toHaveLength(2);
   });
+
+  it.each([
+    ['REFUND', '1000'],
+    ['VOID_REVERSAL', '3860'],
+  ] as const)(
+    'rejects a terminal card %s instead of recording a MOCK reversal',
+    async (kind, amount) => {
+      const f = fixture();
+      const collected = await f.collect({
+        tender: {
+          type: 'CARD',
+          amount: '3860',
+          terminalConfirmation: {
+            configId: 'terminal-config',
+            branchId: 'branch',
+            externalEventId: 'terminal-event',
+            source: 'WEBHOOK',
+            externalReference: 'terminal-payment',
+            providerRef: 'terminal-provider-ref',
+          },
+        },
+      });
+      const writesBeforeRefund = {
+        idempotency: f.raw.restaurantMoneyIdempotencyKey.create.mock.calls.length,
+        paymentEvents: f.raw.restaurantPaymentEvent.create.mock.calls.length,
+        reconciliations: f.raw.restaurantTerminalReconciliation.create.mock.calls.length,
+        movements: f.raw.restaurantDrawerMovement.create.mock.calls.length,
+      };
+
+      await expect(
+        refundTender(f.db, {
+          originalTenderId: collected.tenderId,
+          amount,
+          kind,
+          reason: 'Terminal refund regression',
+          approvingStaffProfileId: 'manager',
+          actor: { ...actor, idempotencyKey: 'terminal-refund' },
+          now: NOW,
+        })
+      ).rejects.toMatchObject({ reason: 'UNSUPPORTED_PAYMENT_PROVIDER' });
+
+      expect(f.raw.restaurantPayment.findUnique).toHaveBeenCalledWith({
+        where: { id: 'payment' },
+        select: { id: true, provider: true, providerRef: true },
+      });
+      expect(f.raw.restaurantMoneyIdempotencyKey.create).toHaveBeenCalledTimes(
+        writesBeforeRefund.idempotency
+      );
+      expect(f.raw.restaurantRefund.create).not.toHaveBeenCalled();
+      expect(f.raw.restaurantCoAuthorization.create).not.toHaveBeenCalled();
+      expect(f.raw.restaurantTaxRefundAllocation.create).not.toHaveBeenCalled();
+      expect(reverseLoyaltyForRefund).not.toHaveBeenCalled();
+      expect(f.raw.restaurantPaymentEvent.create).toHaveBeenCalledTimes(
+        writesBeforeRefund.paymentEvents
+      );
+      expect(f.raw.restaurantPayment.update).not.toHaveBeenCalled();
+      expect(f.raw.restaurantTerminalReconciliation.create).toHaveBeenCalledTimes(
+        writesBeforeRefund.reconciliations
+      );
+      expect(f.raw.restaurantDrawerMovement.create).toHaveBeenCalledTimes(
+        writesBeforeRefund.movements
+      );
+    }
+  );
+
+  it('continues to refund card payments through their stored MOCK provider', async () => {
+    const f = fixture();
+    f.raw.restaurantPayment.findUnique.mockResolvedValueOnce({
+      id: 'payment',
+      provider: 'MOCK',
+      providerRef: 'mock-payment',
+    });
+    const collected = await f.collect({ tender: { type: 'CARD', amount: '3860' } });
+    const paymentEventsBeforeRefund = f.raw.restaurantPaymentEvent.create.mock.calls.length;
+
+    const result = await refundTender(f.db, {
+      originalTenderId: collected.tenderId,
+      amount: '1000',
+      reason: 'Supported provider regression',
+      approvingStaffProfileId: 'manager',
+      actor: { ...actor, idempotencyKey: 'mock-refund' },
+      now: NOW,
+    });
+
+    expect(result).toMatchObject({
+      paymentId: 'payment',
+      paymentStatus: 'PARTIALLY_REFUNDED',
+      replayed: false,
+    });
+    expect(f.raw.restaurantPaymentEvent.create).toHaveBeenCalledTimes(
+      paymentEventsBeforeRefund + 1
+    );
+    expect(f.raw.restaurantPayment.update).toHaveBeenCalledWith({
+      where: { id: 'payment' },
+      data: { status: 'PARTIALLY_REFUNDED' },
+    });
+  });
+
+  it.each(['missing payment link', 'deleted payment'] as const)(
+    'rejects a card refund with a %s before claiming idempotency or writing refund records',
+    async (failure) => {
+      const f = fixture();
+      const collected = await f.collect({ tender: { type: 'CARD', amount: '3860' } });
+      if (failure === 'missing payment link') {
+        f.tenders[0].paymentId = null;
+      } else {
+        f.raw.restaurantPayment.findUnique.mockResolvedValueOnce(null);
+      }
+      const idempotencyClaimsBeforeRefund =
+        f.raw.restaurantMoneyIdempotencyKey.create.mock.calls.length;
+      const paymentEventsBeforeRefund = f.raw.restaurantPaymentEvent.create.mock.calls.length;
+
+      await expect(
+        refundTender(f.db, {
+          originalTenderId: collected.tenderId,
+          amount: '1000',
+          reason: 'Missing payment regression',
+          approvingStaffProfileId: 'manager',
+          actor: { ...actor, idempotencyKey: 'missing-payment-refund' },
+          now: NOW,
+        })
+      ).rejects.toMatchObject({ reason: 'PAYMENT_NOT_FOUND' });
+
+      if (failure === 'missing payment link') {
+        expect(f.raw.restaurantPayment.findUnique).not.toHaveBeenCalled();
+      } else {
+        expect(f.raw.restaurantPayment.findUnique).toHaveBeenCalledWith({
+          where: { id: 'payment' },
+          select: { id: true, provider: true, providerRef: true },
+        });
+      }
+      expect(f.raw.restaurantMoneyIdempotencyKey.create).toHaveBeenCalledTimes(
+        idempotencyClaimsBeforeRefund
+      );
+      expect(f.raw.restaurantRefund.create).not.toHaveBeenCalled();
+      expect(f.raw.restaurantCoAuthorization.create).not.toHaveBeenCalled();
+      expect(f.raw.restaurantTaxRefundAllocation.create).not.toHaveBeenCalled();
+      expect(reverseLoyaltyForRefund).not.toHaveBeenCalled();
+      expect(f.raw.restaurantPaymentEvent.create).toHaveBeenCalledTimes(paymentEventsBeforeRefund);
+      expect(f.raw.restaurantPayment.update).not.toHaveBeenCalled();
+      expect(f.raw.restaurantTerminalReconciliation.create).not.toHaveBeenCalled();
+      expect(f.raw.restaurantDrawerMovement.create).not.toHaveBeenCalled();
+    }
+  );
 
   it.each([D1, D2])(
     'rejects a closed bill or collection day %s before tender writes',
