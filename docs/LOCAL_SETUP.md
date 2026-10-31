@@ -126,6 +126,13 @@ extension administrator (`EXTENSION_ADMIN_DATABASE_URL`). Migration
 PostgreSQL `P0001` if it was skipped, so `migrate deploy` will stop on a fresh database until this
 step has run. Bun loads `EXTENSION_ADMIN_DATABASE_URL` from `.env.local`; set it as shown above.
 
+Preparation also requires `MIGRATION_DATABASE_URL` (falling back to `DATABASE_URL` when it is unset
+or blank), which must target the same server and database as `EXTENSION_ADMIN_DATABASE_URL`. Its
+role is granted `EXECUTE … WITH GRANT OPTION` on `pg_trgm`'s `similarity_op(text,text)`, and
+migration `20261029000368_pg_trgm_migration_grant_guard` fails closed if that delegation is missing.
+Set `MIGRATION_DATABASE_URL` to the migration role, not the runtime `devfathom_app` role, so the
+grant option is not handed to the application.
+
 The seed creates the local DevFathom organization, platform operator, modules, users, and demo
 data. Platform login uses `PLATFORM_ADMIN_EMAIL` and `PLATFORM_ADMIN_PASSWORD`; tenant login uses
 an email printed by the seed and the `SEED_PASSWORD` value.

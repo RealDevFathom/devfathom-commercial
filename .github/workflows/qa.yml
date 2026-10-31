@@ -77,6 +77,8 @@ jobs:
       # #142 regression: owner must be superuser to reproduce the RLS bypass; the suite
       # creates its own NOSUPERUSER NOBYPASSRLS role for the restricted-role assertions.
       CATALOG_TEST_DATABASE_URL: postgresql://postgres:gate-postgres-ci-only@127.0.0.1:55432/devfathom_gate_test
+      # #383: pg_trgm preparation suite creates a disposable database and roles.
+      PG_TRGM_TEST_DATABASE_URL: postgresql://postgres:gate-postgres-ci-only@127.0.0.1:55432/devfathom_gate_test
       DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/devfathom_gate_test
       TEST_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/devfathom_gate_test
       SHADOW_DATABASE_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/devfathom_gate_shadow_test
