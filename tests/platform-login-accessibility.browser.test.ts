@@ -22,6 +22,11 @@ function luminance(color: string) {
   return channels[0]! * 0.2126 + channels[1]! * 0.7152 + channels[2]! * 0.0722;
 }
 
+function contrastRatio(first: string, second: string) {
+  const values = [luminance(first), luminance(second)].sort((a, b) => b - a);
+  return (values[0]! + 0.05) / (values[1]! + 0.05);
+}
+
 // Explicit opt-in keeps this browser lane out of ordinary unit test runs.
 describe.runIf(Boolean(baseURL))('platform login Studio accessibility', () => {
   beforeAll(async () => {
@@ -61,6 +66,40 @@ describe.runIf(Boolean(baseURL))('platform login Studio accessibility', () => {
             });
             await page.goto(platformLoginURL!.href);
             await page.getByLabel('Work email').waitFor();
+            const password = page.getByLabel('Password', { exact: true });
+            const toggle = page.getByRole('button', { name: 'Show password' });
+            await password.fill('correct horse battery staple');
+            await password.focus();
+            await page.keyboard.press('Tab');
+            await expect(
+              toggle.evaluate((element) => element === document.activeElement)
+            ).resolves.toBe(true);
+            const toggleStyle = await toggle.evaluate((element) => {
+              const rect = element.getBoundingClientRect();
+              let container: Element | null = element.parentElement;
+              let background = 'rgba(0, 0, 0, 0)';
+              while (container && background.endsWith(', 0)')) {
+                background = getComputedStyle(container).backgroundColor;
+                container = container.parentElement;
+              }
+              return {
+                height: rect.height,
+                width: rect.width,
+                boxShadow: getComputedStyle(element).boxShadow,
+                background,
+              };
+            });
+            expect(toggleStyle).toMatchObject({ height: 44, width: 44 });
+            // Tailwind prepends transparent inset shadows. The opaque entries
+            // are the offset and focus ring whose contrast we need to measure.
+            const focusColors = toggleStyle.boxShadow.match(/rgb\([^)]+\)/g);
+            expect(focusColors?.length).toBeGreaterThanOrEqual(2);
+            expect(contrastRatio(focusColors![1]!, toggleStyle.background)).toBeGreaterThanOrEqual(
+              3
+            );
+            await toggle.click();
+            await expect(password.getAttribute('type')).resolves.toBe('text');
+            await expect(password.inputValue()).resolves.toBe('correct horse battery staple');
             await page.waitForFunction(() =>
               document
                 .getAnimations()
@@ -80,10 +119,7 @@ describe.runIf(Boolean(baseURL))('platform login Studio accessibility', () => {
               }))
             );
             for (const color of colors) {
-              const values = [luminance(color.text), luminance(color.background)].sort(
-                (a, b) => b - a
-              );
-              expect((values[0]! + 0.05) / (values[1]! + 0.05)).toBeGreaterThanOrEqual(4.5);
+              expect(contrastRatio(color.text, color.background)).toBeGreaterThanOrEqual(4.5);
             }
             const results = await new AxeBuilder({ page })
               .withTags(['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa'])

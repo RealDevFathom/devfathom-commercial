@@ -55,6 +55,26 @@ test('the login URL carries no workspace slug or parameter', async ({ page }) =>
   await expect(page.getByRole('heading', { level: 1 })).toHaveCount(1);
 });
 
+test('the password visibility control is keyboard reachable and touch sized', async ({ page }) => {
+  await page.goto(`${sharedBaseUrl}/login`);
+  await signInFormReady(page);
+
+  const password = page.getByLabel('Password', { exact: true });
+  const toggle = page.getByRole('button', { name: 'Show password' });
+  await password.fill('correct horse battery staple');
+  await password.focus();
+  await page.keyboard.press('Tab');
+  await expect(toggle).toBeFocused();
+  await expect(toggle).not.toHaveCSS('box-shadow', 'none');
+  expect(
+    await toggle.evaluate((element) => element.getBoundingClientRect().toJSON())
+  ).toMatchObject({ height: 44, width: 44 });
+
+  await toggle.click();
+  await expect(password).toHaveAttribute('type', 'text');
+  await expect(password).toHaveValue('correct horse battery staple');
+});
+
 test('no organization information is emitted before credentials verify', async ({ request }) => {
   const response = await request.post(`${sharedBaseUrl}/api/login`, {
     headers: { origin: sharedBaseUrl!, 'content-type': 'application/json' },
