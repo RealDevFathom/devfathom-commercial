@@ -32,7 +32,9 @@ function testHarness(initialMembers?: Member[]) {
     { projectId: 'project-1', userId: 'lead-a', role: 'LEAD' },
     { projectId: 'project-1', userId: 'lead-b', role: 'LEAD' },
   ];
-  const queryRaw = vi.fn(async () => [{ pg_advisory_xact_lock: null }]);
+  const queryRaw = vi.fn<(...args: unknown[]) => Promise<unknown[]>>(async () => [
+    { pg_advisory_xact_lock: null },
+  ]);
   const projectMember = {
     findUnique: vi.fn(async ({ where }: { where: { projectId_userId: Member } }) => {
       const key = where.projectId_userId;
