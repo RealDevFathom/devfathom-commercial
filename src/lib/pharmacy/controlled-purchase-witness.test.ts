@@ -56,8 +56,8 @@ function witnessDb() {
 
 describe('verifyControlledPurchaseWitness', () => {
   beforeEach(() => {
-    vi.mocked(can).mockResolvedValue(true);
-    vi.mocked(verifyOperatorCredential).mockResolvedValue(false);
+    vi.mocked(can).mockReset().mockResolvedValue(true);
+    vi.mocked(verifyOperatorCredential).mockReset().mockResolvedValue(false);
   });
 
   it('does not ask for a PIN when the receipt has no controlled line', async () => {

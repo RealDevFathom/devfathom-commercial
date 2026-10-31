@@ -999,7 +999,7 @@ const purchasingRouter = router({
               id: input.purchaseOrderId,
               organizationId: scope.organizationId,
               supplierId: input.supplierId,
-              branchId: input.branchId,
+              OR: [{ branchId: input.branchId }, { branchId: null }],
             },
           }))
         ) {

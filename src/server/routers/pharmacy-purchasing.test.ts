@@ -622,8 +622,22 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
   }
 
   /** A resolvable purchase order whose one line the receipt may name. */
-  function resolvableOrder() {
-    db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({ id: 'po_a', supplierId: 'supplier_a' });
+  function resolvableOrder(branchId: string | null = 'branch_a') {
+    const order = { id: 'po_a', organizationId: 'org_a', supplierId: 'supplier_a', branchId };
+    db.pharmacyPurchaseOrder.findFirst.mockImplementation(async ({ where }) => {
+      const matchesBranch =
+        (where.branchId === undefined || where.branchId === order.branchId) &&
+        (!where.OR ||
+          where.OR.some(
+            (clause: { branchId: string | null }) => clause.branchId === order.branchId
+          ));
+      return where.id === order.id &&
+        where.organizationId === order.organizationId &&
+        where.supplierId === order.supplierId &&
+        matchesBranch
+        ? order
+        : null;
+    });
     db.pharmacyPurchaseOrderLine.findMany.mockResolvedValue([
       { id: 'poline_a', medicineId: 'medicine_a', packLevelId: 'pack_a' },
     ]);
@@ -698,13 +712,24 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
         id: 'po_a',
         organizationId: 'org_a',
         supplierId: 'supplier_a',
-        branchId: 'branch_a',
+        OR: [{ branchId: 'branch_a' }, { branchId: null }],
       },
     });
     expect(db.pharmacyPurchaseOrderLine.findMany).toHaveBeenCalledWith({
       where: { organizationId: 'org_a', purchaseOrderId: 'po_a' },
       select: { id: true, medicineId: true, packLevelId: true },
     });
+  });
+
+  it.each(['branch_a', null])('receives a purchase order with branchId %s', async (branchId) => {
+    resolvableOrder(branchId);
+
+    await expect(caller().createGoodsReceipt(RECEIPT)).resolves.toMatchObject({
+      branchId: 'branch_a',
+      purchaseOrderId: 'po_a',
+      organizationId: 'org_a',
+    });
+    expect(db.pharmacyGoodsReceipt.create).toHaveBeenCalledOnce();
   });
 
   it('takes the receiver from the session, never from the payload', async () => {
@@ -772,9 +797,6 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
 
   it('refuses a receipt for a different branch than its purchase order', async () => {
     db.pharmacyBranch.findFirst.mockResolvedValue({ id: 'branch_b' });
-    db.pharmacyPurchaseOrder.findFirst.mockImplementation(async ({ where }) =>
-      where.branchId === 'branch_a' ? { id: 'po_a', supplierId: 'supplier_a' } : null
-    );
 
     await expect(
       caller().createGoodsReceipt({ ...RECEIPT, branchId: 'branch_b' })
@@ -784,7 +806,7 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
         id: 'po_a',
         organizationId: 'org_a',
         supplierId: 'supplier_a',
-        branchId: 'branch_b',
+        OR: [{ branchId: 'branch_b' }, { branchId: null }],
       },
     });
     expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
