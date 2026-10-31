@@ -152,6 +152,24 @@ describe('exact posted-journal lookup', () => {
       },
     ],
     [
+      'zero debit amount',
+      {
+        lines: [
+          { id: 'line-1', accountCode: 'CASH', side: 'DEBIT', amountMinor: 1 },
+          { id: 'line-2', accountCode: 'CASH', side: 'DEBIT', amountMinor: 0 },
+        ],
+      },
+    ],
+    [
+      'zero credit amount',
+      {
+        lines: [
+          { id: 'line-1', accountCode: 'CASH', side: 'DEBIT', amountMinor: 1 },
+          { id: 'line-2', accountCode: 'SALES_REVENUE', side: 'CREDIT', amountMinor: 0 },
+        ],
+      },
+    ],
+    [
       'out-of-range amount',
       {
         lines: [

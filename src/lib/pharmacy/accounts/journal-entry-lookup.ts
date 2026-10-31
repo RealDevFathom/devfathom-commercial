@@ -138,7 +138,7 @@ export const journalEntryLookupRouter = router({
         seen.has(line.id) ||
         (line.side !== 'DEBIT' && line.side !== 'CREDIT') ||
         !Number.isInteger(line.amountMinor) ||
-        line.amountMinor < 0 ||
+        line.amountMinor <= 0 ||
         line.amountMinor > 2_147_483_647
       ) {
         return { status: 'INVALID_SOURCE' } satisfies JournalEntryLookupResult;
