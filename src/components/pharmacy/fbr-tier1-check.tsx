@@ -3,15 +3,14 @@
 /**
  * #709 — the FBR "Am I Tier-1?" self-check wizard.
  *
- * Five questions, one verdict. The verdict is decided on the server from the
- * answers (the client never sends a result), stored with the answers in an
+ * One verdict, decided on the server from the answers (the client never sends
+ * a result), stored with the answers in an
  * audit row, and shown here with every criterion's outcome and the dated
  * source it rests on. The check is asked again twelve months after it was last
  * answered. It is guidance, not tax advice, and says so wherever a result is
  * shown.
  */
 import { useState, type FormEvent } from 'react';
-import Link from 'next/link';
 import type { inferRouterOutputs } from '@trpc/server';
 
 import { Button } from '@/components/ui/button';
@@ -60,7 +59,12 @@ const OUTCOME_TONE: Record<FbrTier1CriterionOutcome, 'danger' | 'success' | 'war
   UNKNOWN: 'warning',
 };
 
-type ChoiceKey = 'chainOutlet' | 'airConditionedMallOrPlaza' | 'wholesaleAndRetail';
+type ChoiceKey =
+  | 'chainOutlet'
+  | 'airConditionedMallOrPlaza'
+  | 'wholesaleAndRetail'
+  | 'bankCardPos'
+  | 'otherNotifiedCategory';
 type AmountKey = 'electricityBillRupees12Months' | 'annualTurnoverRupees';
 
 const FIELD_FOR: Record<FbrTier1CriterionKey, ChoiceKey | AmountKey> = {
@@ -68,6 +72,8 @@ const FIELD_FOR: Record<FbrTier1CriterionKey, ChoiceKey | AmountKey> = {
   airConditionedMallOrPlaza: 'airConditionedMallOrPlaza',
   electricityBill12Months: 'electricityBillRupees12Months',
   wholesaleAndRetail: 'wholesaleAndRetail',
+  bankCardPos: 'bankCardPos',
+  otherNotifiedCategory: 'otherNotifiedCategory',
   annualTurnover: 'annualTurnoverRupees',
 };
 
@@ -130,6 +136,8 @@ export function FbrTier1Check({ initial }: { initial: Status }) {
       airConditionedMallOrPlaza: choice('airConditionedMallOrPlaza'),
       electricityBillRupees12Months: amount('electricityBillRupees12Months'),
       wholesaleAndRetail: choice('wholesaleAndRetail'),
+      bankCardPos: choice('bankCardPos'),
+      otherNotifiedCategory: choice('otherNotifiedCategory'),
       annualTurnoverRupees: amount('annualTurnoverRupees'),
     };
     if (Object.keys(next).length > 0) {
@@ -156,9 +164,12 @@ export function FbrTier1Check({ initial }: { initial: Status }) {
           title="Your latest answer"
           titleLevel={2}
           actions={
-            <StatusPill tone={RESULT_TONE[latest.evaluation.result]}>
-              {latest.evaluation.headline}
-            </StatusPill>
+            <StatusPill
+              status={latest.evaluation.result}
+              label={latest.evaluation.headline}
+              tone={RESULT_TONE[latest.evaluation.result]}
+              className="max-w-40 whitespace-normal sm:max-w-none"
+            />
           }
         >
           <div className="space-y-4" aria-live="polite">
@@ -184,12 +195,14 @@ export function FbrTier1Check({ initial }: { initial: Status }) {
             {latest.evaluation.result === 'TIER_1' ? (
               <p className="text-sm text-text-body">
                 Tier-1 retailers must integrate their point of sale with FBR.{' '}
-                <Link
-                  className="font-medium text-primary underline underline-offset-4 hover:text-accent-brand"
-                  href="/pharmacy/regulatory#fiscalStatus"
+                <a
+                  className="font-medium text-primary underline underline-offset-4 hover:text-accent-brand focus-visible:outline-2 focus-visible:outline-ring"
+                  href="https://www.fbr.gov.pk/pos-technical-assistance/163085/163087"
+                  rel="noopener noreferrer"
+                  target="_blank"
                 >
-                  Set up FBR fiscal integration
-                </Link>
+                  Read FBR’s official integration setup instructions (opens in a new tab)
+                </a>
               </p>
             ) : latest.evaluation.result === 'UNSURE' ? (
               <p className="text-sm text-text-body">
@@ -221,9 +234,11 @@ export function FbrTier1Check({ initial }: { initial: Status }) {
                         {criterion.confirmed ? '' : ' — not confirmed by FBR'}
                       </p>
                     </div>
-                    <StatusPill tone={OUTCOME_TONE[criterion.outcome]}>
-                      {OUTCOME_LABEL[criterion.outcome]}
-                    </StatusPill>
+                    <StatusPill
+                      status={criterion.outcome}
+                      label={OUTCOME_LABEL[criterion.outcome]}
+                      tone={OUTCOME_TONE[criterion.outcome]}
+                    />
                   </li>
                 );
               })}
@@ -234,16 +249,17 @@ export function FbrTier1Check({ initial }: { initial: Status }) {
         <SectionCard title="Not answered yet" titleLevel={2}>
           <p className="text-sm text-text-muted">
             Nobody in this workspace has answered the Tier-1 self-check. It takes a minute: answer
-            the five questions below.
+            the questions below.
           </p>
         </SectionCard>
       )}
 
-      <SectionCard title={latest ? 'Answer again' : 'The five questions'} titleLevel={2}>
+      <SectionCard title={latest ? 'Answer again' : 'The questions'} titleLevel={2}>
         <form className="space-y-6" noValidate onSubmit={submit}>
           <p className="text-sm text-text-muted">
-            Any one of the first four makes a retailer Tier-1. Choose “Not sure” or leave an amount
-            blank rather than guess.
+            Any confirmed criterion makes a retailer Tier-1. The turnover claim alone returns
+            “Unsure” until FBR confirms it. Choose “Not sure” or leave an amount blank rather
+            than guess.
           </p>
           {status.criteria.map((criterion) => {
             const field = FIELD_FOR[criterion.key];

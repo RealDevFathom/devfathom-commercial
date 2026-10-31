@@ -19,6 +19,8 @@ const neighbourhood: FbrTier1Answers = {
   airConditionedMallOrPlaza: 'NO',
   electricityBillRupees12Months: 300_000,
   wholesaleAndRetail: 'NO',
+  bankCardPos: 'NO',
+  otherNotifiedCategory: 'NO',
   annualTurnoverRupees: 20_000_000,
 };
 
@@ -38,6 +40,8 @@ describe('#709 FBR Tier-1 self-check', () => {
       { electricityBillRupees12Months: FBR_TIER1_ELECTRICITY_THRESHOLD_RUPEES + 1 },
     ],
     ['wholesale activity', { wholesaleAndRetail: 'YES' }],
+    ['a bank or authorized provider card-payment POS', { bankCardPos: 'YES' }],
+    ['another confirmed FBR-notified category', { otherNotifiedCategory: 'YES' }],
   ])('%s alone triggers Tier-1', (_label, change) => {
     const evaluation = evaluateFbrTier1({ ...neighbourhood, ...change });
     expect(evaluation.result).toBe('TIER_1');
@@ -50,6 +54,8 @@ describe('#709 FBR Tier-1 self-check', () => {
       airConditionedMallOrPlaza: 'UNSURE',
       electricityBillRupees12Months: null,
       wholesaleAndRetail: 'YES',
+      bankCardPos: 'UNSURE',
+      otherNotifiedCategory: 'UNSURE',
       annualTurnoverRupees: null,
     });
     expect(evaluation.result).toBe('TIER_1');
@@ -69,6 +75,8 @@ describe('#709 FBR Tier-1 self-check', () => {
     ['an unsure mall answer', { airConditionedMallOrPlaza: 'UNSURE' }],
     ['an unknown electricity bill', { electricityBillRupees12Months: null }],
     ['an unsure wholesale answer', { wholesaleAndRetail: 'UNSURE' }],
+    ['an unsure card-payment POS answer', { bankCardPos: 'UNSURE' }],
+    ['unassessed notification-dependent categories', { otherNotifiedCategory: 'UNSURE' }],
     ['an unknown turnover', { annualTurnoverRupees: null }],
   ])('%s, with nothing else applying, is Unsure — never Not Tier-1', (_label, change) => {
     const evaluation = evaluateFbrTier1({ ...neighbourhood, ...change });
@@ -106,6 +114,8 @@ describe('#709 FBR Tier-1 self-check', () => {
       'airConditionedMallOrPlaza',
       'electricityBill12Months',
       'wholesaleAndRetail',
+      'bankCardPos',
+      'otherNotifiedCategory',
       'annualTurnover',
     ]);
     for (const criterion of FBR_TIER1_CRITERIA) {
@@ -157,11 +167,29 @@ describe('#709 FBR Tier-1 self-check', () => {
     expect(parseStoredFbrTier1Answers(null)).toBeNull();
     expect(parseStoredFbrTier1Answers([])).toBeNull();
     expect(parseStoredFbrTier1Answers({ ...neighbourhood, chainOutlet: 'MAYBE' })).toBeNull();
+    expect(parseStoredFbrTier1Answers({ ...neighbourhood, bankCardPos: 'MAYBE' })).toBeNull();
+    expect(
+      parseStoredFbrTier1Answers({ ...neighbourhood, otherNotifiedCategory: null })
+    ).toBeNull();
     expect(
       parseStoredFbrTier1Answers({ ...neighbourhood, electricityBillRupees12Months: -1 })
     ).toBeNull();
     const missing: Record<string, unknown> = { ...neighbourhood };
     delete missing.annualTurnoverRupees;
     expect(parseStoredFbrTier1Answers(missing)).toBeNull();
+  });
+
+  it('treats omitted categories on legacy answers as unknown, never as No', () => {
+    const legacy: Record<string, unknown> = { ...neighbourhood };
+    delete legacy.bankCardPos;
+    delete legacy.otherNotifiedCategory;
+    const answers = parseStoredFbrTier1Answers(legacy);
+    expect(answers).toEqual({
+      ...neighbourhood,
+      bankCardPos: 'UNSURE',
+      otherNotifiedCategory: 'UNSURE',
+    });
+    expect(evaluateFbrTier1(answers!).result).toBe('UNSURE');
+    expect(evaluateFbrTier1({ ...answers!, chainOutlet: 'YES' }).result).toBe('TIER_1');
   });
 });

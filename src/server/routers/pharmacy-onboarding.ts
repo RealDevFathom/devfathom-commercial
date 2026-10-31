@@ -90,6 +90,8 @@ const fbrTier1Input = z
     airConditionedMallOrPlaza: fbrTier1Choice,
     electricityBillRupees12Months: fbrTier1Rupees,
     wholesaleAndRetail: fbrTier1Choice,
+    bankCardPos: fbrTier1Choice,
+    otherNotifiedCategory: fbrTier1Choice,
     annualTurnoverRupees: fbrTier1Rupees,
   })
   .strict();
@@ -359,6 +361,8 @@ export const pharmacyOnboardingRouter = router({
       airConditionedMallOrPlaza: input.airConditionedMallOrPlaza,
       electricityBillRupees12Months: input.electricityBillRupees12Months,
       wholesaleAndRetail: input.wholesaleAndRetail,
+      bankCardPos: input.bankCardPos,
+      otherNotifiedCategory: input.otherNotifiedCategory,
       annualTurnoverRupees: input.annualTurnoverRupees,
     };
     const evaluation = evaluateFbrTier1(answers);

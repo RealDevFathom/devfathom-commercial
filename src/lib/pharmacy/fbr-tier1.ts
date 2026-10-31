@@ -22,7 +22,7 @@ export const FBR_TIER1_CHECK_TARGET_TYPE = 'FbrTier1SelfCheck';
 /** The check is asked again this many months after the last answer. */
 export const FBR_TIER1_RECHECK_MONTHS = 12;
 /** Bumped whenever a criterion, threshold or source changes. */
-export const FBR_TIER1_RULES_VERSION = '2026-10-31';
+export const FBR_TIER1_RULES_VERSION = '2026-11-01';
 
 /** Rs 1.2 million over the preceding 12 consecutive months. */
 export const FBR_TIER1_ELECTRICITY_THRESHOLD_RUPEES = 1_200_000;
@@ -41,6 +41,8 @@ export type FbrTier1CriterionKey =
   | 'airConditionedMallOrPlaza'
   | 'electricityBill12Months'
   | 'wholesaleAndRetail'
+  | 'bankCardPos'
+  | 'otherNotifiedCategory'
   | 'annualTurnover';
 export type FbrTier1CriterionOutcome = 'MET' | 'NOT_MET' | 'UNKNOWN';
 
@@ -50,6 +52,8 @@ export type FbrTier1Answers = {
   /** Total electricity billed over the last 12 months, whole rupees; null = not known. */
   electricityBillRupees12Months: number | null;
   wholesaleAndRetail: FbrTier1Answer;
+  bankCardPos: FbrTier1Answer;
+  otherNotifiedCategory: FbrTier1Answer;
   /** Annual turnover, whole rupees; null = not known. */
   annualTurnoverRupees: number | null;
 };
@@ -117,6 +121,21 @@ export const FBR_TIER1_CRITERIA: readonly FbrTier1Criterion[] = [
     source: FBR_POS_BOOKLET,
   },
   {
+    key: 'bankCardPos',
+    question: 'Have you acquired a bank or SBP-authorized provider’s POS for debit or credit card payments?',
+    help: 'Includes a POS from a bank or another State Bank of Pakistan-authorized digital payment provider (§2(43A)(f)).',
+    confirmed: true,
+    source: FBR_POS_BOOKLET,
+  },
+  {
+    key: 'otherNotifiedCategory',
+    question:
+      'Does an FBR-notified withholding-tax threshold or other prescribed Tier-1 category apply to you?',
+    help: 'Ask your tax adviser or FBR about withholding tax under sections 236G/236H over the preceding 12 months and other Board-prescribed categories (§2(43A)(g)–(h)). Answer No only if they have ruled these out; otherwise choose Not sure.',
+    confirmed: true,
+    source: FBR_POS_BOOKLET,
+  },
+  {
     key: 'annualTurnover',
     question: 'What was the business’s turnover for the last 12 months, in rupees?',
     help: 'A Rs 200 million turnover test has been reported for Finance Act 2026 but FBR has not confirmed it, so a turnover above it is reported as “Unsure”.',
@@ -173,6 +192,10 @@ export function criterionOutcome(
       );
     case 'wholesaleAndRetail':
       return fromAnswer(answers.wholesaleAndRetail);
+    case 'bankCardPos':
+      return fromAnswer(answers.bankCardPos);
+    case 'otherNotifiedCategory':
+      return fromAnswer(answers.otherNotifiedCategory);
     case 'annualTurnover':
       return fromAmount(answers.annualTurnoverRupees, FBR_TIER1_TURNOVER_THRESHOLD_RUPEES);
   }
@@ -232,8 +255,10 @@ function readAmount(value: unknown): number | null | undefined {
 
 /**
  * Read answers back out of a stored audit row. Returns null for anything that
- * is not a complete, well-formed set, so a malformed row is treated as "never
- * asked" rather than trusted.
+ * is not a well-formed set, so a malformed row is treated as "never asked"
+ * rather than trusted. Questions absent from the original questionnaire are
+ * unknown on legacy rows; previously saved negative results must not imply
+ * those categories were ruled out.
  */
 export function parseStoredFbrTier1Answers(value: unknown): FbrTier1Answers | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
@@ -245,12 +270,17 @@ export function parseStoredFbrTier1Answers(value: unknown): FbrTier1Answers | nu
   const chainOutlet = choice('chainOutlet');
   const airConditionedMallOrPlaza = choice('airConditionedMallOrPlaza');
   const wholesaleAndRetail = choice('wholesaleAndRetail');
+  const bankCardPos = record.bankCardPos === undefined ? 'UNSURE' : choice('bankCardPos');
+  const otherNotifiedCategory =
+    record.otherNotifiedCategory === undefined ? 'UNSURE' : choice('otherNotifiedCategory');
   const electricityBillRupees12Months = readAmount(record.electricityBillRupees12Months);
   const annualTurnoverRupees = readAmount(record.annualTurnoverRupees);
   if (
     !chainOutlet ||
     !airConditionedMallOrPlaza ||
     !wholesaleAndRetail ||
+    !bankCardPos ||
+    !otherNotifiedCategory ||
     electricityBillRupees12Months === undefined ||
     annualTurnoverRupees === undefined
   )
@@ -260,6 +290,8 @@ export function parseStoredFbrTier1Answers(value: unknown): FbrTier1Answers | nu
     airConditionedMallOrPlaza,
     electricityBillRupees12Months,
     wholesaleAndRetail,
+    bankCardPos,
+    otherNotifiedCategory,
     annualTurnoverRupees,
   };
 }

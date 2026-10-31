@@ -85,6 +85,8 @@ const notTier1 = {
   airConditionedMallOrPlaza: 'NO' as const,
   electricityBillRupees12Months: 250_000,
   wholesaleAndRetail: 'NO' as const,
+  bankCardPos: 'NO' as const,
+  otherNotifiedCategory: 'NO' as const,
   annualTurnoverRupees: 15_000_000,
 };
 
@@ -145,7 +147,7 @@ describeIfDatabase('#709 FBR Tier-1 self-check against PostgreSQL', () => {
       expect(status.latest).toBeNull();
       expect(status.recheckDue).toBe(true);
       expect(status.disclaimer).toMatch(/not tax advice/i);
-      expect(status.criteria).toHaveLength(5);
+      expect(status.criteria).toHaveLength(7);
     });
   });
 
@@ -209,6 +211,14 @@ describeIfDatabase('#709 FBR Tier-1 self-check against PostgreSQL', () => {
       await expect(
         caller(db).recordFbrTier1Check({ ...notTier1, annualTurnoverRupees: 1.5 })
       ).rejects.toThrow();
+      const missingCategory: Record<string, unknown> = { ...notTier1 };
+      delete missingCategory.bankCardPos;
+      await expect(
+        caller(db).recordFbrTier1Check(missingCategory as never)
+      ).rejects.toThrow();
+      await expect(
+        caller(db).recordFbrTier1Check({ ...notTier1, otherNotifiedCategory: 'MAYBE' } as never)
+      ).rejects.toThrow();
     });
   });
 
@@ -231,5 +241,40 @@ describeIfDatabase('#709 FBR Tier-1 self-check against PostgreSQL', () => {
       expect(status.latest?.evaluation.result).toBe('NOT_TIER_1');
       expect(status.recheckDue).toBe(true);
     });
+  });
+
+  it('re-evaluates legacy negative answers as Unsure without losing their history', async () => {
+    await owner.query(
+      `UPDATE audit_logs SET input = input::jsonb - 'bankCardPos' - 'otherNotifiedCategory'
+        WHERE "organizationId" = $1 AND action = 'pharmacy.fbrTier1Check'`,
+      [organizationId]
+    );
+    await withTenantDb(organizationId, async (db) => {
+      const status = await caller(db).fbrTier1Status();
+      expect(status.latest?.evaluation.result).toBe('UNSURE');
+      expect(status.latest?.answers).toMatchObject({
+        bankCardPos: 'UNSURE',
+        otherNotifiedCategory: 'UNSURE',
+      });
+    });
+  });
+
+  it('stores a card-payment POS as a sufficient criterion for a standalone shop', async () => {
+    const answers = { ...notTier1, bankCardPos: 'YES' as const };
+    const status = await withTenantDb(organizationId, (db) =>
+      caller(db).recordFbrTier1Check(answers)
+    );
+    expect(status.latest?.evaluation.result).toBe('TIER_1');
+    expect(status.latest?.answers).toEqual(answers);
+    expect(status.latest?.evaluation.criteria.find((c) => c.key === 'bankCardPos')).toMatchObject({
+      outcome: 'MET',
+      confirmed: true,
+    });
+    const rows = await owner.query<{ input: unknown; result: { result: string } }>(
+      'SELECT input, result FROM audit_logs WHERE id = $1 AND "organizationId" = $2',
+      [status.latest!.id, organizationId]
+    );
+    expect(rows.rows[0].input).toEqual(answers);
+    expect(rows.rows[0].result.result).toBe('TIER_1');
   });
 });
