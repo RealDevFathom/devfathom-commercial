@@ -766,3 +766,71 @@ it.each(['pending', 'uncertain'] as const)(
       });
   }
 );
+
+it('collects a fresh independent witness when reversing a controlled receipt', async () => {
+  const receipt = {
+    id: 'gr-controlled',
+    reference: 'GR-CD',
+    status: 'POSTED',
+    supplier: licensedSupplier,
+    supplierInvoiceRef: 'INV-CD',
+    supplierInvoiceDate: new Date('2026-09-01'),
+    receivedAt: new Date('2026-09-01'),
+    qualifiedPersonUserId: 'old-witness',
+    lines: [],
+    exceptions: [],
+  };
+  const reverse = vi.fn().mockResolvedValue({});
+  mocks.createCaller.mockReturnValue(
+    callerStub({
+      goodsReceipts: vi.fn().mockResolvedValue([receipt]),
+      reverseGoodsReceipt: reverse,
+      controlledWitnesses: vi
+        .fn()
+        .mockResolvedValue([{ id: 'fresh-staff', name: 'Fresh pharmacist' }]),
+    })
+  );
+  vi.stubGlobal('window', { document, location: { origin: 'https://workspace.test' } });
+  render(await ReceivingPage({ searchParams: params({ receipt: receipt.id }) }));
+  fireEvent.change(screen.getByLabelText(/Why is this being reversed/), {
+    target: { value: 'Wrong consignment' },
+  });
+  fireEvent.change(screen.getByLabelText('Reversal witness'), { target: { value: 'fresh-staff' } });
+  fireEvent.change(screen.getByLabelText('PIN'), { target: { value: '1234' } });
+  expect(screen.getByLabelText('PIN')).toHaveAttribute('type', 'password');
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: 'Reverse posting' }));
+  });
+  expect(reverse).toHaveBeenCalledWith(
+    expect.objectContaining({
+      goodsReceiptId: receipt.id,
+      reason: 'Wrong consignment',
+      controlledWitness: { staffProfileId: 'fresh-staff', pin: '1234' },
+    })
+  );
+});
+
+it('keeps controlled reversal disabled when witness choices fail to load', async () => {
+  mocks.createCaller.mockReturnValue(
+    callerStub({
+      goodsReceipts: vi.fn().mockResolvedValue([
+        {
+          id: 'gr-controlled',
+          reference: 'GR-CD',
+          status: 'POSTED',
+          supplier: licensedSupplier,
+          supplierInvoiceRef: 'INV-CD',
+          supplierInvoiceDate: new Date('2026-09-01'),
+          receivedAt: new Date('2026-09-01'),
+          qualifiedPersonUserId: 'old-witness',
+          lines: [],
+          exceptions: [],
+        },
+      ]),
+      controlledWitnesses: vi.fn().mockRejectedValue(new Error('FORBIDDEN')),
+    })
+  );
+  render(await ReceivingPage({ searchParams: params({ receipt: 'gr-controlled' }) }));
+  expect(screen.getByRole('button', { name: 'Reverse posting' })).toBeDisabled();
+  expect(screen.getByText(/Witness choices could not load/)).toBeVisible();
+});

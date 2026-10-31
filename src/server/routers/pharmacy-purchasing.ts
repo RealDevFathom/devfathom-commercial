@@ -1,4 +1,5 @@
 import { TRPCError } from '@trpc/server';
+import { ControlledRestorationDenied } from '@/lib/pharmacy/controlled-restoration-authorization';
 import { z } from 'zod';
 import { can, subjectFromSession } from '@/lib/abac';
 import { hasModule } from '@/lib/entitlements';
@@ -94,6 +95,9 @@ const bps = z.number().int().min(0).max(10_000);
 const branchId = z.string().trim().min(1).max(128);
 
 function domainError(error: unknown): never {
+  if (error instanceof ControlledRestorationDenied) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: error.message });
+  }
   if (error instanceof CentralPurchasingError) {
     throw new TRPCError({
       code:
@@ -1192,19 +1196,36 @@ const purchasingRouter = router({
           branchId,
           goodsReceiptId: z.string().min(1),
           reason: z.string().trim().min(1).max(1000),
+          controlledWitness: z
+            .object({
+              staffProfileId: z.string().min(1),
+              pin: z.string().regex(/^\d{4,8}$/),
+            })
+            .strict()
+            .optional(),
         })
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      await assertProcurement(ctx);
       const scope = receivingScope(ctx, input.branchId);
       try {
-        return await ctx.db.$transaction((tx) =>
-          reverseGoodsReceipt(txDb(tx), scope, {
-            goodsReceiptId: input.goodsReceiptId,
-            reason: input.reason,
-            at: new Date(),
-          })
-        );
+        const result = await ctx.db.$transaction(async (tx) => {
+          try {
+            return await reverseGoodsReceipt(txDb(tx), scope, {
+              goodsReceiptId: input.goodsReceiptId,
+              reason: input.reason,
+              at: new Date(),
+              controlledWitness: input.controlledWitness,
+            });
+          } catch (error) {
+            // Commit failed PIN counters without posting any stock movements.
+            if (error instanceof ControlledRestorationDenied && !error.forbidden) return error;
+            throw error;
+          }
+        });
+        if (result instanceof ControlledRestorationDenied) throw result;
+        return result;
       } catch (error) {
         domainError(error);
       }

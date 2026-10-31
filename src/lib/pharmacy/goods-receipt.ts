@@ -28,6 +28,7 @@ import { can } from '@/lib/abac';
 import {
   appendControlledPurchaseEntries,
   appendControlledPurchaseReversals,
+  assignedRegisterBranchIds,
 } from './controlled-register';
 import {
   clearLockout,
@@ -37,6 +38,11 @@ import {
 } from '@/lib/restaurant/operator-credentials';
 
 import { PharmacyInventoryError } from './inventory';
+import {
+  authorizeControlledRestoration,
+  ControlledRestorationDenied,
+  type ControlledRestorationPin,
+} from './controlled-restoration-authorization';
 import {
   assertGoodsReceiptTransition,
   assertSaleableOnReceipt,
@@ -468,7 +474,12 @@ export type ReverseGoodsReceiptResult = {
 export async function reverseGoodsReceipt(
   db: ScopedDb,
   scope: ReceivingScope,
-  input: { goodsReceiptId: string; reason: string; at: Date }
+  input: {
+    goodsReceiptId: string;
+    reason: string;
+    at: Date;
+    controlledWitness?: ControlledRestorationPin;
+  }
 ): Promise<ReverseGoodsReceiptResult> {
   if (input.reason.trim().length === 0) {
     throw new PharmacyReceivingError('BYPASS_EVIDENCE_MISSING');
@@ -497,6 +508,31 @@ export async function reverseGoodsReceipt(
   });
   if (posted.length === 0) throw new PharmacyInventoryError('NOT_FOUND');
 
+  const controlled = await db.pharmacyControlledRegisterEntry.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      entryKind: 'PURCHASE',
+      stockMovementId: { in: posted.map((movement) => movement.id) },
+    },
+    select: { id: true },
+  });
+  let witness;
+  if (controlled) {
+    const assigned = await assignedRegisterBranchIds(db, scope.organizationId, scope.actorId);
+    const branch = await db.pharmacyBranch.findFirst({
+      where: { organizationId: scope.organizationId, id: scope.branchId, active: true },
+      select: { id: true },
+    });
+    if (!assigned.includes(scope.branchId) || !branch) throw new ControlledRestorationDenied(true);
+    witness = await authorizeControlledRestoration(
+      db,
+      scope,
+      input.controlledWitness,
+      'pharmacy:safety'
+    );
+  }
+
   const reversals = await reverseMovements(db, scope, {
     movementIds: posted.map((movement) => movement.id),
     reason: input.reason,
@@ -509,6 +545,7 @@ export async function reverseGoodsReceipt(
     recordedByUserId: scope.actorId,
     reason: input.reason,
     reversedMovementIds: posted.map((movement) => movement.id),
+    witness,
   });
 
   await db.pharmacyGoodsReceipt.update({

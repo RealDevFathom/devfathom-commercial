@@ -1077,3 +1077,18 @@ describe('PUR-06 — the returns and settlement transport', () => {
     );
   });
 });
+
+it('refuses receipt reversal without procurement permission before reading the receipt', async () => {
+  db.user.findUnique.mockResolvedValue({
+    organizationRole: { permissions: [] },
+    permissionOverrides: [],
+  });
+  await expect(
+    caller().reverseGoodsReceipt({
+      branchId: 'branch_a',
+      goodsReceiptId: 'receipt',
+      reason: 'Wrong delivery',
+    })
+  ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  expect(db.pharmacyGoodsReceipt.findFirst).not.toHaveBeenCalled();
+});

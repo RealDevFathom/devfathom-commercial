@@ -16,22 +16,23 @@ export class ControlledRestorationDenied extends Error {
   constructor(readonly forbidden = false) {
     super(
       forbidden
-        ? 'Dispense permission is required.'
+        ? 'Permission to change controlled stock is required.'
         : 'A different pharmacist must enter a fresh witness PIN.'
     );
   }
 }
 
-/** Called inside the sale transaction, before any stock or status mutation. */
+/** Called inside the stock transaction, before any stock or status mutation. */
 export async function authorizeControlledRestoration(
   db: ScopedDb,
   scope: LedgerScope,
-  input?: ControlledRestorationPin
+  input?: ControlledRestorationPin,
+  actorCapability: 'pharmacy:dispense' | 'pharmacy:safety' = 'pharmacy:dispense'
 ): Promise<ControlledRestorationWitness> {
   const actor = await db.user.findFirst({
     where: { id: scope.actorId, organizationId: scope.organizationId, status: 'ACTIVE' },
   });
-  if (!actor || !(await can(actor, 'pharmacy:dispense', undefined, { db }))) {
+  if (!actor || !(await can(actor, actorCapability, undefined, { db }))) {
     throw new ControlledRestorationDenied(true);
   }
   if (!input) throw new ControlledRestorationDenied();

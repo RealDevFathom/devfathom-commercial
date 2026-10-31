@@ -1,3 +1,14 @@
+-- Zero is reserved for a movement-backed purchase reversal. The trigger below
+-- checks the original kind and the exact compensating receipt movement.
+ALTER TABLE "pharmacy_controlled_register_entries"
+  DROP CONSTRAINT "pharmacy_controlled_register_entri_quantityCanonicalUnits_check";
+ALTER TABLE "pharmacy_controlled_register_entries"
+  ADD CONSTRAINT "pharmacy_controlled_register_entri_quantityCanonicalUnits_check"
+  CHECK ("quantityCanonicalUnits" > 0 OR (
+    "entryKind" = 'CORRECTION' AND "quantityCanonicalUnits" = 0
+    AND "restorationMovementId" IS NOT NULL
+  ));
+
 CREATE OR REPLACE FUNCTION pharmacy_rx_reconcile_controlled_register() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE actual integer; movement record; lot_batch text; original record; previous_balance bigint; derived_delta bigint; restored bigint;
 BEGIN
@@ -33,14 +44,25 @@ BEGIN
       derived_delta := CASE WHEN original."entryKind"='SALE'
         THEN original."quantityCanonicalUnits"::bigint - NEW."quantityCanonicalUnits"
         ELSE NEW."quantityCanonicalUnits"::bigint - original."quantityCanonicalUnits" END;
-      IF NEW."quantityCanonicalUnits" < 0
-         OR (original."entryKind" <> 'PURCHASE' AND NEW."quantityCanonicalUnits" = 0)
-         OR abs(derived_delta)>original."quantityCanonicalUnits" THEN
+      IF NEW."quantityCanonicalUnits" <= 0 OR abs(derived_delta)>original."quantityCanonicalUnits" THEN
         RAISE EXCEPTION 'correction quantity exceeds original cap' USING ERRCODE='23514';
       END IF;
       -- The database derives the delta too; callers cannot supply an arbitrary change.
       IF NEW."balanceDelta"::bigint IS DISTINCT FROM derived_delta THEN
         RAISE EXCEPTION 'correction delta must be derived from original quantity' USING ERRCODE='23514';
+      END IF;
+    ELSIF original."entryKind" = 'PURCHASE' THEN
+      SELECT * INTO movement FROM "pharmacy_stock_movements"
+        WHERE "organizationId"=NEW."organizationId" AND "id"=NEW."restorationMovementId";
+      IF NOT FOUND OR movement."kind" IS DISTINCT FROM 'ADJUSTMENT'
+         OR movement."branchId" IS DISTINCT FROM NEW."branchId"
+         OR movement."inventoryLotId" IS DISTINCT FROM NEW."inventoryLotId"
+         OR movement."reversesMovementId" IS DISTINCT FROM original."stockMovementId"
+         OR movement."disposition" = 'QUARANTINE'
+         OR movement."quantityUnits"::bigint IS DISTINCT FROM -original."quantityCanonicalUnits"::bigint
+         OR NEW."quantityCanonicalUnits" <> 0
+         OR NEW."balanceDelta" IS DISTINCT FROM movement."quantityUnits" THEN
+        RAISE EXCEPTION 'purchase reversal must match a compensating receipt movement' USING ERRCODE='23514';
       END IF;
     ELSE
       SELECT * INTO movement FROM "pharmacy_stock_movements"

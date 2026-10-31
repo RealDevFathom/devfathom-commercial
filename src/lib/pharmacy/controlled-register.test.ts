@@ -229,7 +229,7 @@ describe('appendControlledCorrection', () => {
 });
 
 describe('appendControlledPurchaseReversals', () => {
-  it('appends a zero-quantity correction for the reversed controlled purchase', async () => {
+  it('appends a movement-backed zero-quantity correction with a fresh witness', async () => {
     const create = vi.fn().mockResolvedValue({ id: 'correction' });
     const purchase = {
       ...original,
@@ -243,16 +243,15 @@ describe('appendControlledPurchaseReversals', () => {
       $queryRaw: vi.fn(),
       pharmacyControlledRegisterEntry: {
         findMany: vi.fn().mockResolvedValue([purchase]),
-        findFirst: vi
-          .fn()
-          .mockResolvedValueOnce(purchase)
-          .mockResolvedValueOnce(null)
-          .mockResolvedValueOnce({ runningBalance: 2 }),
+        findFirst: vi.fn().mockResolvedValue({ runningBalance: 2 }),
         aggregate: vi.fn().mockResolvedValue({ _max: { serial: 1 } }),
         create,
       },
       pharmacyStockBalance: {
         aggregate: vi.fn().mockResolvedValue({ _sum: { onHandUnits: 0 } }),
+      },
+      pharmacyStockMovement: {
+        findFirst: vi.fn().mockResolvedValue({ id: 'reversal-movement', quantityUnits: -2 }),
       },
     } as unknown as ScopedDb;
 
@@ -261,7 +260,8 @@ describe('appendControlledPurchaseReversals', () => {
       branchId: 'branch',
       recordedByUserId: 'receiver',
       reason: 'Supplier sent the wrong consignment.',
-      reversedMovementIds: ['receipt-movement'],
+      reversedMovementIds: Object.freeze(['receipt-movement']),
+      witness: { witnessedByUserId: 'fresh-witness', signatureRef: 'pin:fresh-verification' },
     });
 
     expect(create).toHaveBeenCalledWith({
@@ -271,8 +271,10 @@ describe('appendControlledPurchaseReversals', () => {
         quantityCanonicalUnits: 0,
         balanceDelta: -2,
         runningBalance: 0,
+        restorationMovementId: 'reversal-movement',
         recordedByUserId: 'receiver',
-        witnessedByUserId: 'pharmacist',
+        witnessedByUserId: 'fresh-witness',
+        signatureRef: 'pin:fresh-verification',
         correctionReason: 'Supplier sent the wrong consignment.',
       }),
     });
