@@ -79,6 +79,7 @@ function ControlForm({ controls }: { controls?: Partial<Controls> }) {
         <label className="grid gap-2 text-sm">
           Branch ID
           <Input
+            className="min-h-11"
             name="branch"
             defaultValue={controls?.branchId}
             maxLength={128}
@@ -88,11 +89,11 @@ function ControlForm({ controls }: { controls?: Partial<Controls> }) {
         </label>
         <label className="grid gap-2 text-sm">
           From (UTC)
-          <Input name="from" type="date" defaultValue={controls?.from} required />
+          <Input className="min-h-11" name="from" type="date" defaultValue={controls?.from} required />
         </label>
         <label className="grid gap-2 text-sm">
           To, exclusive (UTC)
-          <Input name="to" type="date" defaultValue={controls?.to} required />
+          <Input className="min-h-11" name="to" type="date" defaultValue={controls?.to} required />
         </label>
         <Button type="submit" className="min-h-11">
           Read control

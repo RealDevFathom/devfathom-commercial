@@ -188,10 +188,9 @@ describe('TrialBalanceControlPage', () => {
   });
 
   it('shows source failure without stale rows for malformed, mismatched or failed responses', async () => {
-    mocks.financialStatements.mockResolvedValueOnce({
-      ...report(),
-      scope: { organizationId: 'org-2', branchId: 'branch-1' },
-    });
+    mocks.financialStatements.mockResolvedValueOnce(
+      Object.assign(report(), { scope: { organizationId: 'org-2', branchId: 'branch-1' } })
+    );
     expect(await html({ branch: 'branch-1', from: '2026-01-01', to: '2026-02-01' })).toContain(
       'Trial-balance source unavailable'
     );
@@ -207,10 +206,7 @@ describe('TrialBalanceControlPage', () => {
     ['from', { from: new Date('2026-01-02T00:00:00.000Z') }],
     ['to', { to: new Date('2026-01-31T00:00:00.000Z') }],
   ])('fails closed when the source returns a mismatched %s', async (_description, mismatch) => {
-    mocks.financialStatements.mockResolvedValueOnce({
-      ...report(),
-      ...mismatch,
-    });
+    mocks.financialStatements.mockResolvedValueOnce(Object.assign(report(), mismatch));
 
     const output = await html({ branch: 'branch-1', from: '2026-01-01', to: '2026-02-01' });
     expect(output).toContain('Trial-balance source unavailable');
@@ -222,10 +218,7 @@ describe('TrialBalanceControlPage', () => {
     ['non-Date', { retrievedAt: '2026-02-02T03:04:05.000Z' }],
     ['invalid Date', { retrievedAt: new Date(Number.NaN) }],
   ])('fails closed when freshness.retrievedAt is %s', async (_description, freshness) => {
-    mocks.financialStatements.mockResolvedValueOnce({
-      ...report(),
-      freshness,
-    });
+    mocks.financialStatements.mockResolvedValueOnce(Object.assign(report(), { freshness }));
 
     const output = await html({ branch: 'branch-1', from: '2026-01-01', to: '2026-02-01' });
     expect(output).toContain('Trial-balance source unavailable');

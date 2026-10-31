@@ -81,8 +81,8 @@ describe('projectTrialBalanceControl', () => {
     [row({ accountCode: '' })],
     [row({ accountCode: '¢'.repeat(65) })],
     [row({ currency: 'x'.repeat(33) })],
-  ])('rejects negative movements and malformed or over-bound fields', (accounts: unknown[]) => {
-    expect(() => projectTrialBalanceControl(accounts)).toThrow(InvalidTrialBalanceError);
+  ])('rejects negative movements and malformed or over-bound fields', (account) => {
+    expect(() => projectTrialBalanceControl([account])).toThrow(InvalidTrialBalanceError);
   });
 
   it('rejects duplicate account/currency pairs', () => {
