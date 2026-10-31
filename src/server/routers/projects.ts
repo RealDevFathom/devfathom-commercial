@@ -99,33 +99,31 @@ export const projectsRouter = router({
               role: i === 0 ? 'LEAD' : 'MEMBER',
             })),
           },
+          ...(createDefaultBoard
+            ? {
+                boards: {
+                  create: {
+                    name: `${projectData.name} Board`,
+                    columns: {
+                      create: ['Backlog', 'To Do', 'In Progress', 'Review', 'Done'].map(
+                        (name, order) => ({ name, order })
+                      ),
+                    },
+                    labels: {
+                      create: [
+                        { name: 'Bug', color: '#EF4444' },
+                        { name: 'Feature', color: '#2563EB' },
+                        { name: 'Enhancement', color: '#0EA5E9' },
+                        { name: 'Design', color: '#F59E0B' },
+                        { name: 'Urgent', color: '#DC2626' },
+                      ],
+                    },
+                  },
+                },
+              }
+            : {}),
         },
       });
-
-      // Create a default board with standard columns
-      if (createDefaultBoard) {
-        await ctx.db.board.create({
-          data: {
-            name: `${project.name} Board`,
-            projectId: project.id,
-            columns: {
-              create: ['Backlog', 'To Do', 'In Progress', 'Review', 'Done'].map((name, order) => ({
-                name,
-                order,
-              })),
-            },
-            labels: {
-              create: [
-                { name: 'Bug', color: '#EF4444' },
-                { name: 'Feature', color: '#2563EB' },
-                { name: 'Enhancement', color: '#0EA5E9' },
-                { name: 'Design', color: '#F59E0B' },
-                { name: 'Urgent', color: '#DC2626' },
-              ],
-            },
-          },
-        });
-      }
 
       logActivity(ctx.db, ctx.session.user.id, {
         type: 'project_created',
@@ -672,6 +670,8 @@ export const projectsRouter = router({
   deleteTask: protectedProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
+      // Deleting is destructive: project membership grants task access, but only
+      // project leads and organization admins may manage (and therefore delete) it.
       await assertTaskAccess(ctx, input.id, { manage: true });
       return ctx.db.task.delete({ where: { id: input.id } });
     }),

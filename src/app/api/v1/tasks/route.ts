@@ -89,12 +89,22 @@ export const POST = withApiAuth('tasks:write', async (ctx, request) => {
     return NextResponse.json({ error: 'You do not have access to that project.' }, { status: 403 });
   }
 
-  // REST-07: validate referenced FKs exist BEFORE the create, so a bad assignee/
-  // label id is a clean 400 instead of a raw Prisma FK violation (500).
-  if (input.assigneeIds.length > 0) {
-    const found = await ctx.db.user.count({ where: { id: { in: input.assigneeIds } } });
-    if (found !== new Set(input.assigneeIds).size) {
-      return NextResponse.json({ error: 'One or more assigneeIds do not exist.' }, { status: 400 });
+  // REST-07: validate referenced FKs before create. Task assignees are more
+  // narrowly scoped than tenant users: every assignee must belong to the
+  // project that owns the selected column.
+  const uniqueAssigneeIds = [...new Set(input.assigneeIds)];
+  if (uniqueAssigneeIds.length > 0) {
+    const memberCount = await ctx.db.projectMember.count({
+      where: {
+        projectId: column.board.project.id,
+        userId: { in: uniqueAssigneeIds },
+      },
+    });
+    if (memberCount !== uniqueAssigneeIds.length) {
+      return NextResponse.json(
+        { error: 'All assignees must be members of the project.' },
+        { status: 400 }
+      );
     }
   }
   if (input.labelIds.length > 0) {
@@ -121,7 +131,7 @@ export const POST = withApiAuth('tasks:write', async (ctx, request) => {
 
   // Merge explicit assignees with the column's default owners (deduped)
   const mergedAssignees = [
-    ...new Set([...input.assigneeIds, ...column.defaultAssignees.map((d) => d.userId)]),
+    ...new Set([...uniqueAssigneeIds, ...column.defaultAssignees.map((d) => d.userId)]),
   ];
 
   const task = await ctx.db.task.create({

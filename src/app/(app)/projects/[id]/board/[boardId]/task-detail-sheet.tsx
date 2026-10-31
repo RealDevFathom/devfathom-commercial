@@ -259,7 +259,10 @@ function ChecklistBlock({
       </div>
       <div className="h-1.5 rounded-full bg-secondary mb-3">
         <div
-          className={cn('h-full rounded-full transition-all', pct === 100 ? 'bg-emerald-500' : 'bg-primary')}
+          className={cn(
+            'h-full rounded-full transition-all',
+            pct === 100 ? 'bg-emerald-500' : 'bg-primary'
+          )}
           style={{ width: `${pct}%` }}
         />
       </div>

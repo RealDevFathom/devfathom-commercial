@@ -168,6 +168,40 @@ describeIfDatabase('drawer session command layer (real DB)', () => {
     expect(session?.movements[0].amount.toString()).toBe('150');
   });
 
+  it('rejects opening a drawer on a closed business day without writing money records', async () => {
+    const deviceId = await newDevice('POS-closed-day');
+    await deps.withTenantDb(orgId, (tx) =>
+      tx.restaurantDailyClose.create({
+        data: {
+          branchId: ids.branch,
+          businessDate: new Date('2026-08-18T00:00:00.000Z'),
+          cutByStaffProfileId: ids.manager,
+          deviceId,
+        },
+      })
+    );
+
+    await expect(
+      deps.drawer.openDrawerSession(deps.createTenantDb(orgId), {
+        organizationId: orgId,
+        entitlementLimits: { 'pos.concurrentRegisters.max': 1000000 },
+        branchId: ids.branch,
+        openingFloat: '100.00',
+        actor: actor(deviceId),
+        now: new Date('2026-08-18T18:00:00.000Z'),
+      })
+    ).rejects.toMatchObject({ reason: 'CLOSE_EXISTS' });
+
+    const [sessions, movements] = await read(async (tx) =>
+      Promise.all([
+        tx.restaurantDrawerSession.count({ where: { deviceId } }),
+        tx.restaurantDrawerMovement.count({ where: { deviceId } }),
+      ])
+    );
+    expect(sessions).toBe(0);
+    expect(movements).toBe(0);
+  });
+
   it('rejects a second OPEN drawer on the same register', async () => {
     const deviceId = await newDevice('POS-dupe');
     const db = deps.createTenantDb(orgId);
