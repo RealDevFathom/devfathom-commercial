@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   can: vi.fn(),
   resolveOrganizationEntitlements: vi.fn(),
   sendAndLog: vi.fn(),
+  activeTenantTransactions: 0,
   platformDb: { pharmacyOwnerDigestSetting: { findMany: vi.fn() } },
   tenantDb: {
     $queryRaw: vi.fn(),
@@ -28,7 +29,14 @@ vi.mock('@/lib/entitlements', async () => ({
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({
   withPlatformDb: vi.fn(async (callback) => callback(mocks.platformDb)),
-  withTenantDb: vi.fn(async (_organizationId, callback) => callback(mocks.tenantDb)),
+  withTenantDb: vi.fn(async (_organizationId, callback) => {
+    mocks.activeTenantTransactions += 1;
+    try {
+      return await callback(mocks.tenantDb);
+    } finally {
+      mocks.activeTenantTransactions -= 1;
+    }
+  }),
 }));
 vi.mock('./reports', () => ({
   readPharmacyOwnerCommandCentre: mocks.readPharmacyOwnerCommandCentre,
@@ -62,11 +70,14 @@ import {
   CaptureChannel,
   composeOwnerDigest,
   nextDigestDueAt,
+  ownerDigestWhatsAppPhoneHash,
+  ownerDigestWhatsAppParameters,
   processDueOwnerDigests,
   readOwnerBriefingFigures,
   renderOwnerBriefing,
   WhatsAppChannel,
 } from './owner-digest';
+import { MetaWhatsAppProvider } from './whatsapp/provider';
 
 describe('RPT-03 owner digest', () => {
   afterEach(() => {
@@ -75,6 +86,7 @@ describe('RPT-03 owner digest', () => {
   });
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.activeTenantTransactions = 0;
     mocks.can.mockResolvedValue(true);
     mocks.resolveOrganizationEntitlements.mockResolvedValue({
       enabledModules: ['pharmacy-reports'],
@@ -231,7 +243,10 @@ describe('RPT-03 owner digest', () => {
   });
 
   it('delivers the safe briefing through the configured owner template and audit log', async () => {
-    const provider = { sendTemplate: vi.fn() };
+    const fetchImpl = vi.fn(
+      async (_url: string | URL | Request, _init?: RequestInit) =>
+        new Response(JSON.stringify({ messages: [{ id: 'wamid.owner' }] }), { status: 200 })
+    );
     const config = {
       provider: 'meta' as const,
       accessToken: 'token',
@@ -250,12 +265,15 @@ describe('RPT-03 owner digest', () => {
       branchId: 'branch_1',
       branchName: 'Main',
       ownerPhone: '0300 1234567',
+      whatsappPhoneHash: ownerDigestWhatsAppPhoneHash('0300 1234567'),
       businessDate: '2026-09-04',
     });
 
-    await expect(
-      new WhatsAppChannel(config, provider as never).deliver({} as never, digest)
-    ).resolves.toEqual({ delivered: true, reference: 'SENT' });
+    const provider = new MetaWhatsAppProvider(config, fetchImpl);
+    await expect(new WhatsAppChannel(config, provider).deliver(digest)).resolves.toEqual({
+      delivered: true,
+      reference: 'SENT',
+    });
     expect(mocks.sendAndLog).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: 'OWNER_DIGEST',
@@ -267,11 +285,36 @@ describe('RPT-03 owner digest', () => {
     );
     const send = mocks.sendAndLog.mock.calls[0][1];
     await send();
-    expect(provider.sendTemplate).toHaveBeenCalledWith({
-      to: '923001234567',
-      template: 'ownerDigest',
-      parameters: [expect.not.stringContaining('Main')],
-    });
+    const payload = JSON.parse(String(fetchImpl.mock.calls[0][1]?.body));
+    expect(payload.template.name).toBe('owner_digest_v1');
+    const parameters = payload.template.components[0].parameters.map(
+      (p: { text: string }) => p.text
+    );
+    expect(parameters).toEqual([
+      '2026-09-04',
+      'PKR 100.00',
+      'PKR 60.00',
+      'PKR 0.00',
+      '0',
+      'PKR 0.00',
+      'No',
+      'PKR 0.00',
+      'PKR 7.00',
+      'Not available',
+      '2026-08-29',
+      '2026-09-04',
+      'PKR 100.00',
+      'PKR 60.00',
+      'PKR 0.00',
+      '0',
+      'PKR 0.00',
+      'No',
+      'PKR 0.00',
+      'PKR 7.00',
+      'Not available',
+    ]);
+    expect(parameters.every((value: string) => !/[\r\n\t]| {5}/.test(value))).toBe(true);
+    expect(parameters.join(' ')).not.toContain('Main');
   });
 
   it('fails closed when the sender is not explicitly bound to this organization', async () => {
@@ -293,12 +336,72 @@ describe('RPT-03 owner digest', () => {
       branchId: 'branch_1',
       branchName: 'Main',
       ownerPhone: '0300 1234567',
+      whatsappPhoneHash: ownerDigestWhatsAppPhoneHash('0300 1234567'),
       businessDate: '2026-09-04',
     });
     await expect(
-      new WhatsAppChannel(config, { sendTemplate: vi.fn() } as never).deliver({} as never, digest)
+      new WhatsAppChannel(config, { sendTemplate: vi.fn() } as never).deliver(digest)
     ).resolves.toEqual({ delivered: false });
     expect(mocks.sendAndLog).not.toHaveBeenCalled();
+  });
+
+  it.each([null, 'changed', 'invalid'])(
+    'does not claim a message without consent for the current valid phone: %s',
+    async (consent) => {
+      const config = {
+        provider: 'meta' as const,
+        accessToken: 'token',
+        phoneNumberId: 'sender',
+        organizationId: 'org_1',
+        appSecret: null,
+        verifyToken: null,
+        graphVersion: 'v21.0',
+        templateLanguage: 'en',
+        reminderLeadDays: 3,
+        templates: { refillReminder: null, khataReminder: null, ownerDigest: 'owner_digest_v1' },
+      };
+      const digest = await composeOwnerDigest(mocks.tenantDb as never, {
+        organizationId: 'org_1',
+        userId: 'user_1',
+        branchId: 'branch_1',
+        branchName: 'Main',
+        businessDate: '2026-09-04',
+        ownerPhone: consent === 'invalid' ? 'bad' : '0300 1234567',
+        whatsappPhoneHash: consent ? ownerDigestWhatsAppPhoneHash('0300 7654321') : null,
+      });
+      await expect(new WhatsAppChannel(config).deliver(digest)).resolves.toEqual({
+        delivered: false,
+      });
+      expect(mocks.sendAndLog).not.toHaveBeenCalled();
+    }
+  );
+
+  it('converts bigint aggregates above PostgreSQL int32 into serializable figures', async () => {
+    mocks.tenantDb.$queryRaw.mockResolvedValueOnce([
+      {
+        lost: BigInt(3_000_000_000),
+        walkOuts: BigInt(2),
+        recovered: BigInt(4_000_000_000),
+        topGapValue: BigInt(3_000_000_000),
+        topGapName: 'Medicine',
+        topGapDraftPo: true,
+      },
+    ]);
+    const figures = await readOwnerBriefingFigures(
+      mocks.tenantDb as never,
+      'branch_1',
+      '2026-09-04',
+      '2026-09-04',
+      'UTC'
+    );
+    expect(figures).toMatchObject({
+      lostDemandEstimatedMinor: 3_000_000_000,
+      walkOuts: 2,
+      recoveredEstimatedMinor: 4_000_000_000,
+      topGapEstimatedMinor: 3_000_000_000,
+    });
+    expect(() => JSON.stringify(figures)).not.toThrow();
+    expect(mocks.tenantDb.$queryRaw.mock.calls[0][0].sql).not.toContain('::int');
   });
 
   it('keeps catalog, salt, category and even branch names out of WhatsApp copy', () => {
@@ -326,9 +429,83 @@ describe('RPT-03 owner digest', () => {
     );
     expect(briefing.whatsappBody.split('\n')).toHaveLength(6);
     expect(briefing.whatsappBody).toContain('Lost demand estimate PKR 325.00 · walk-outs 7');
+    const parameters = ownerDigestWhatsAppParameters({
+      briefings: { daily: briefing, weekly: briefing },
+    } as never);
+    expect(parameters.join(' ')).not.toMatch(
+      /Panadol|Paracetamol|Analgesic|Amoxicillin|Antibiotics/i
+    );
+    expect(parameters).toHaveLength(21);
+    expect(parameters[6]).toBe('Yes');
+    expect(parameters[10]).toBe('2026-09-04');
   });
 
-  it.each(['disabled', 'revoked', 'phone changed', 'unchanged'])(
+  function dueSetting(now: Date) {
+    return {
+      id: 'setting_1',
+      organizationId: 'org_1',
+      userId: 'user_1',
+      branchId: 'branch_1',
+      enabled: true,
+      whatsappPhoneHash: ownerDigestWhatsAppPhoneHash('0300 1234567'),
+      nextDueAt: now,
+      updatedAt: now,
+      timeMinutes: 480,
+      organization: { status: 'ACTIVE', vertical: 'PHARMACY', timezone: 'UTC' },
+      branch: { name: 'Main', active: true, organizationId: 'org_1' },
+      user: {
+        id: 'user_1',
+        organizationId: 'org_1',
+        role: 'ADMIN',
+        status: 'ACTIVE',
+        department: 'Management',
+        phone: '0300 1234567',
+      },
+    };
+  }
+
+  it.each(['compose', 'recheck', 'log', 'provider'])(
+    'continues processing the next owner after a %s failure',
+    async (failure) => {
+      vi.stubEnv('PHARMACY_WHATSAPP_PROVIDER', 'meta');
+      vi.stubEnv('PHARMACY_WHATSAPP_ACCESS_TOKEN', 'token');
+      vi.stubEnv('PHARMACY_WHATSAPP_PHONE_NUMBER_ID', 'sender');
+      vi.stubEnv('PHARMACY_WHATSAPP_ORGANIZATION_ID', 'org_1');
+      vi.stubEnv('PHARMACY_WHATSAPP_TEMPLATE_OWNER_DIGEST', 'owner_digest_v1');
+      const now = new Date('2026-09-04T08:00:00Z');
+      const first = dueSetting(now);
+      const second = { ...dueSetting(now), id: 'setting_2', userId: 'user_2' };
+      mocks.platformDb.pharmacyOwnerDigestSetting.findMany.mockResolvedValue([first, second]);
+      let firstReads = 0;
+      mocks.tenantDb.pharmacyOwnerDigestSetting.findFirst.mockImplementation(async ({ where }) => {
+        if (where.id === second.id) return second;
+        firstReads += 1;
+        if (failure === 'recheck' && firstReads === 4) throw new Error('private database error');
+        return first;
+      });
+      mocks.tenantDb.pharmacyOwnerDigestCapture.findUnique.mockResolvedValue(null);
+      mocks.tenantDb.pharmacyOwnerDigestCapture.findUniqueOrThrow.mockResolvedValue({
+        id: 'capture',
+      });
+      mocks.tenantDb.pharmacyOwnerDigestCapture.createMany.mockResolvedValue({ count: 1 });
+      if (failure === 'compose')
+        mocks.readPharmacyOwnerCommandCentre.mockRejectedValueOnce(new Error('private SQL error'));
+      if (failure === 'log')
+        mocks.sendAndLog.mockRejectedValueOnce(new Error('private persistence error'));
+      if (failure === 'provider') mocks.sendAndLog.mockResolvedValueOnce('FAILED');
+      await expect(processDueOwnerDigests(now)).resolves.toEqual({
+        due: 2,
+        captured: failure === 'compose' ? 1 : 2,
+        failed: 1,
+      });
+      expect(mocks.sendAndLog).toHaveBeenCalledWith(
+        expect.objectContaining({ dedupeKey: 'owner-digest:user_2:branch_1:2026-09-04' }),
+        expect.any(Function)
+      );
+    }
+  );
+
+  it.each(['disabled', 'revoked', 'opted out', 'phone changed', 'unchanged'])(
     'rechecks the WhatsApp recipient after capture commits: %s',
     async (change) => {
       vi.stubEnv('PHARMACY_WHATSAPP_PROVIDER', 'meta');
@@ -337,26 +514,7 @@ describe('RPT-03 owner digest', () => {
       vi.stubEnv('PHARMACY_WHATSAPP_ORGANIZATION_ID', 'org_1');
       vi.stubEnv('PHARMACY_WHATSAPP_TEMPLATE_OWNER_DIGEST', 'owner_digest_v1');
       const now = new Date('2026-09-04T08:00:00.000Z');
-      const setting = {
-        id: 'setting_1',
-        organizationId: 'org_1',
-        userId: 'user_1',
-        branchId: 'branch_1',
-        enabled: true,
-        nextDueAt: now,
-        updatedAt: now,
-        timeMinutes: 480,
-        organization: { status: 'ACTIVE', vertical: 'PHARMACY', timezone: 'UTC' },
-        branch: { name: 'Main', active: true, organizationId: 'org_1' },
-        user: {
-          id: 'user_1',
-          organizationId: 'org_1',
-          role: 'ADMIN',
-          status: 'ACTIVE',
-          department: 'Management',
-          phone: '0300 1234567',
-        },
-      };
+      const setting = dueSetting(now);
       mocks.platformDb.pharmacyOwnerDigestSetting.findMany.mockResolvedValue([setting]);
       mocks.tenantDb.pharmacyOwnerDigestSetting.findFirst.mockResolvedValue(setting);
       mocks.tenantDb.pharmacyOwnerDigestCapture.findUnique.mockResolvedValue(null);
@@ -368,19 +526,29 @@ describe('RPT-03 owner digest', () => {
           mocks.tenantDb.pharmacyOwnerDigestSetting.findFirst.mockResolvedValue(null);
         } else if (change === 'revoked') {
           mocks.can.mockResolvedValue(false);
+        } else if (change === 'opted out') {
+          setting.whatsappPhoneHash = null;
         } else if (change === 'phone changed') {
           setting.user.phone = '0300 7654321';
         }
         return { count: 1 };
       });
 
-      await expect(processDueOwnerDigests(now)).resolves.toEqual({ due: 1, captured: 1 });
+      mocks.sendAndLog.mockImplementation(async () => {
+        expect(mocks.activeTenantTransactions).toBe(0);
+        return 'SENT';
+      });
+      await expect(processDueOwnerDigests(now)).resolves.toEqual({
+        due: 1,
+        captured: 1,
+        failed: 0,
+      });
 
-      if (change === 'disabled' || change === 'revoked') {
+      if (change !== 'unchanged') {
         expect(mocks.sendAndLog).not.toHaveBeenCalled();
       } else {
         expect(mocks.sendAndLog).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({ phoneLast4: change === 'phone changed' ? '4321' : '4567' }),
+          expect.objectContaining({ phoneLast4: '4567' }),
           expect.any(Function)
         );
       }
@@ -420,7 +588,7 @@ describe('RPT-03 owner digest', () => {
         department: 'Management',
       },
     });
-    await expect(processDueOwnerDigests(now)).resolves.toEqual({ due: 1, captured: 0 });
+    await expect(processDueOwnerDigests(now)).resolves.toEqual({ due: 1, captured: 0, failed: 0 });
     expect(mocks.readPharmacyOwnerCommandCentre).not.toHaveBeenCalled();
     expect(mocks.tenantDb.pharmacyOwnerDigestSetting.update).toHaveBeenCalledWith({
       where: { id: 'setting_1' },

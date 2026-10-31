@@ -13683,6 +13683,8 @@ model PharmacyOwnerDigestSetting {
   nextDueAt      DateTime?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
+  /// Explicit WhatsApp consent bound to the normalized profile phone; null means off.
+  whatsappPhoneHash String?
 
   organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   user         User           @relation(fields: [userId], references: [id], onDelete: Cascade)

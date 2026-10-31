@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { createHash } from 'node:crypto';
+
 import { Prisma } from '@/generated/prisma/client';
 import { can, subjectFromSession } from '@/lib/abac';
 import { hasModule, resolveOrganizationEntitlements } from '@/lib/entitlements';
@@ -61,7 +63,7 @@ export type OwnerBriefing = {
   figures: OwnerBriefingFigures;
   /** Full detail for the authenticated owner in the app. */
   appBody: string;
-  /** Utility-safe copy: deliberately contains no catalog-derived text. */
+  /** Human-readable preview only; Meta receives individual figure variables instead. */
   whatsappBody: string;
 };
 
@@ -71,6 +73,7 @@ export type OwnerDigest = {
   branchId: string;
   branchName: string;
   ownerPhone: string | null;
+  whatsappPhoneHash: string | null;
   businessDate: string;
   freshness: CommandCentre['freshness'];
   metrics: Array<{
@@ -133,11 +136,11 @@ export async function readOwnerBriefingFigures(
   const end = zonedWallTimeToUtc(dayAfterTo, 0, zone).instant;
   const [demand] = await db.$queryRaw<
     Array<{
-      lost: number;
-      walkOuts: number;
-      recovered: number;
+      lost: bigint;
+      walkOuts: bigint;
+      recovered: bigint;
       topGapName: string | null;
-      topGapValue: number;
+      topGapValue: bigint;
       topGapDraftPo: boolean;
     }>
   >(Prisma.sql`
@@ -150,27 +153,27 @@ export async function readOwnerBriefingFigures(
       SELECT * FROM all_period_demand WHERE status='OPEN'
     ), gaps AS (
       SELECT "requestedMedicineId", MAX("productName") AS name,
-        COALESCE(SUM("estimatedValueMinor"),0)::int AS value
+        COALESCE(SUM("estimatedValueMinor"),0)::bigint AS value
       FROM open_period_demand GROUP BY "requestedMedicineId"
       ORDER BY value DESC, "requestedMedicineId" NULLS LAST LIMIT 1
     )
     SELECT
-      COALESCE((SELECT SUM("estimatedValueMinor") FROM open_period_demand),0)::int AS lost,
-      (SELECT COUNT(*) FROM open_period_demand)::int AS "walkOuts",
-      COALESCE((SELECT SUM("estimatedValueMinor") FROM "pharmacy_unfulfilled_demand_events" WHERE "branchId"=${branchId} AND status='RECOVERED' AND "recoveredAt">=${start} AND "recoveredAt"<${end}),0)::int AS recovered,
-      gaps.name AS "topGapName", COALESCE(gaps.value,0)::int AS "topGapValue",
+      COALESCE((SELECT SUM("estimatedValueMinor") FROM open_period_demand),0)::bigint AS lost,
+      (SELECT COUNT(*) FROM open_period_demand)::bigint AS "walkOuts",
+      COALESCE((SELECT SUM("estimatedValueMinor") FROM "pharmacy_unfulfilled_demand_events" WHERE "branchId"=${branchId} AND status='RECOVERED' AND "recoveredAt">=${start} AND "recoveredAt"<${end}),0)::bigint AS recovered,
+      gaps.name AS "topGapName", COALESCE(gaps.value,0)::bigint AS "topGapValue",
       COALESCE(EXISTS(SELECT 1 FROM "pharmacy_purchase_order_lines" pol JOIN "pharmacy_purchase_orders" po ON po."organizationId"=pol."organizationId" AND po.id=pol."purchaseOrderId" WHERE po."branchId"=${branchId} AND po.status='DRAFT' AND pol."medicineId"=gaps."requestedMedicineId"),false) AS "topGapDraftPo"
     FROM gaps RIGHT JOIN (SELECT 1) singleton ON true
   `);
   return {
     salesMinor: report.metrics.salesMinor,
     cashMinor: report.metrics.cashMinor,
-    lostDemandEstimatedMinor: demand?.lost ?? 0,
-    walkOuts: demand?.walkOuts ?? 0,
+    lostDemandEstimatedMinor: Number(demand?.lost ?? 0),
+    walkOuts: Number(demand?.walkOuts ?? 0),
     topGapName: demand?.topGapName ?? null,
-    topGapEstimatedMinor: demand?.topGapValue ?? 0,
+    topGapEstimatedMinor: Number(demand?.topGapValue ?? 0),
     topGapDraftPo: demand?.topGapDraftPo ?? false,
-    recoveredEstimatedMinor: demand?.recovered ?? 0,
+    recoveredEstimatedMinor: Number(demand?.recovered ?? 0),
     expiryAtRiskMinor: report.metrics.expiryValueMinor30,
     khataDueMinor: report.metrics.khataAgingMinor,
   };
@@ -222,6 +225,7 @@ export async function composeOwnerDigest(
     branchId: string;
     branchName: string;
     ownerPhone?: string | null;
+    whatsappPhoneHash?: string | null;
     businessDate: string;
     timezone?: string;
   }
@@ -275,6 +279,7 @@ export async function composeOwnerDigest(
   return {
     ...input,
     ownerPhone: input.ownerPhone ?? null,
+    whatsappPhoneHash: input.whatsappPhoneHash ?? null,
     freshness: report.freshness,
     metrics,
     anomalies,
@@ -322,7 +327,36 @@ export class CaptureChannel implements DigestChannel {
   }
 }
 
-export class WhatsAppChannel implements DigestChannel {
+/** A profile phone edit invalidates consent until the owner opts in again. */
+export function ownerDigestWhatsAppPhoneHash(phone: string | null | undefined): string | null {
+  const normalized = normalizeWhatsAppNumber(phone);
+  return normalized ? createHash('sha256').update(normalized).digest('hex') : null;
+}
+
+/** Ordered body variables for the fixed, approved template in docs/pharmacy/owner-digest-whatsapp.md. */
+export function ownerDigestWhatsAppParameters(digest: OwnerDigest): string[] {
+  const figures = (f: OwnerBriefingFigures) => [
+    money(f.salesMinor),
+    money(f.cashMinor),
+    money(f.lostDemandEstimatedMinor),
+    String(f.walkOuts),
+    money(f.topGapEstimatedMinor),
+    f.topGapDraftPo ? 'Yes' : 'No',
+    money(f.recoveredEstimatedMinor),
+    money(f.expiryAtRiskMinor),
+    money(f.khataDueMinor),
+  ];
+  return [
+    digest.briefings.daily.to,
+    ...figures(digest.briefings.daily.figures),
+    digest.briefings.weekly.from,
+    digest.briefings.weekly.to,
+    ...figures(digest.briefings.weekly.figures),
+  ];
+}
+
+// Sending deliberately takes no ScopedDb: no caller transaction may span network I/O.
+export class WhatsAppChannel {
   readonly name = 'whatsapp';
   readonly configured: boolean;
 
@@ -336,16 +370,25 @@ export class WhatsAppChannel implements DigestChannel {
       config.provider === 'meta' &&
       config.accessToken &&
       config.phoneNumberId &&
+      config.organizationId &&
       config.templates.ownerDigest
     );
   }
 
-  async deliver(_db: ScopedDb, digest: OwnerDigest) {
+  isConfiguredFor(organizationId: string) {
+    return this.configured && this.config.organizationId === organizationId;
+  }
+
+  async deliver(digest: OwnerDigest) {
     const to = normalizeWhatsAppNumber(digest.ownerPhone);
-    if (!this.configured || !to || this.config.organizationId !== digest.organizationId) {
+    if (
+      !this.isConfiguredFor(digest.organizationId) ||
+      !to ||
+      !digest.whatsappPhoneHash ||
+      digest.whatsappPhoneHash !== ownerDigestWhatsAppPhoneHash(to)
+    ) {
       return { delivered: false };
     }
-    const body = `${digest.briefings.daily.whatsappBody}\n\n${digest.briefings.weekly.whatsappBody}`;
     const outcome = await sendAndLog(
       {
         organizationId: digest.organizationId,
@@ -356,7 +399,12 @@ export class WhatsAppChannel implements DigestChannel {
         templateName: this.config.templates.ownerDigest,
         dueDate: digest.businessDate,
       },
-      () => this.provider.sendTemplate({ to, template: 'ownerDigest', parameters: [body] })
+      () =>
+        this.provider.sendTemplate({
+          to,
+          template: 'ownerDigest',
+          parameters: ownerDigestWhatsAppParameters(digest),
+        })
     );
     return { delivered: outcome === 'SENT', reference: outcome };
   }
@@ -460,94 +508,110 @@ export async function processDueOwnerDigests(now = new Date(), limit = 25) {
     })
   );
   let captured = 0;
+  let failed = 0;
   for (const item of due) {
-    const digest = await withTenantDb(item.organizationId, async (db) => {
-      const setting = await db.pharmacyOwnerDigestSetting.findFirst({
-        where: {
-          id: item.id,
-          organizationId: item.organizationId,
-          enabled: true,
-          nextDueAt: { lte: now },
-        },
-        include: {
-          organization: { select: { timezone: true } },
-        },
-      });
-      if (!setting?.nextDueAt) return null;
-      // Compare-and-set acquires the setting row lock until tenant commit.
-      // A concurrent disable/edit wins if committed first; competing workers
-      // cannot refresh anomalies or claim this occurrence twice.
-      const claim = await db.pharmacyOwnerDigestSetting.updateMany({
-        where: {
-          id: setting.id,
-          organizationId: item.organizationId,
-          enabled: true,
-          nextDueAt: setting.nextDueAt,
-          updatedAt: setting.updatedAt,
-        },
-        data: {
-          nextDueAt: nextDigestDueAt(now, setting.organization.timezone, setting.timeMinutes),
-        },
-      });
-      if (claim.count !== 1) return null;
-      const authorized = await readAuthorizedDigestSetting(db, item.id, item.organizationId);
-      if (!authorized) {
-        await db.pharmacyOwnerDigestSetting.update({
-          where: { id: item.id },
-          data: { enabled: false, nextDueAt: null },
+    try {
+      const digest = await withTenantDb(item.organizationId, async (db) => {
+        const setting = await db.pharmacyOwnerDigestSetting.findFirst({
+          where: {
+            id: item.id,
+            organizationId: item.organizationId,
+            enabled: true,
+            nextDueAt: { lte: now },
+          },
+          include: {
+            organization: { select: { timezone: true } },
+          },
         });
-        return null;
-      }
-      // A delayed retry belongs to the scheduled local day, not the retry day.
-      const businessDate = localClock(setting.nextDueAt, authorized.organization.timezone).date;
-      const key = {
-        organizationId: item.organizationId,
-        userId: authorized.userId,
-        branchId: authorized.branchId,
-        businessDate,
-      };
-      const existing = await db.pharmacyOwnerDigestCapture.findUnique({
-        where: { organizationId_userId_branchId_businessDate: key },
-        select: { id: true },
-      });
-      if (existing) return null;
-      await refreshPharmacyAnomalySignals(
-        db,
-        { branchIds: [authorized.branchId], from: businessDate, to: businessDate },
-        'system:owner-digest',
-        new Date()
-      );
-      const digest = await composeOwnerDigest(db, {
-        ...key,
-        branchName: authorized.branch.name,
-        ownerPhone: authorized.user.phone,
-        timezone: authorized.organization.timezone,
-      });
-      if (!(await readAuthorizedDigestSetting(db, item.id, item.organizationId))) {
-        // Throw through withTenantDb so the claim and anomaly writes roll back.
-        throw new DigestAuthorityChanged();
-      }
-      const captured = await new CaptureChannel().deliver(db, digest);
-      return captured.delivered ? digest : null;
-    }).catch((error: unknown) => {
-      if (error instanceof DigestAuthorityChanged) return null;
-      throw error;
-    });
-    if (digest) {
-      captured += 1;
-      await withTenantDb(item.organizationId, async (db) => {
-        // Capture committed before this separate effect. Recheck access and the
-        // recipient so a disable, revocation or phone edit wins before sending.
+        if (!setting?.nextDueAt) return null;
+        // Compare-and-set acquires the setting row lock until tenant commit.
+        // A concurrent disable/edit wins if committed first; competing workers
+        // cannot refresh anomalies or claim this occurrence twice.
+        const claim = await db.pharmacyOwnerDigestSetting.updateMany({
+          where: {
+            id: setting.id,
+            organizationId: item.organizationId,
+            enabled: true,
+            nextDueAt: setting.nextDueAt,
+            updatedAt: setting.updatedAt,
+          },
+          data: {
+            nextDueAt: nextDigestDueAt(now, setting.organization.timezone, setting.timeMinutes),
+          },
+        });
+        if (claim.count !== 1) return null;
         const authorized = await readAuthorizedDigestSetting(db, item.id, item.organizationId);
-        if (
-          !authorized ||
-          authorized.userId !== digest.userId ||
-          authorized.branchId !== digest.branchId
-        )
-          return;
-        await new WhatsAppChannel().deliver(db, { ...digest, ownerPhone: authorized.user.phone });
+        if (!authorized) {
+          await db.pharmacyOwnerDigestSetting.update({
+            where: { id: item.id },
+            data: { enabled: false, nextDueAt: null },
+          });
+          return null;
+        }
+        // A delayed retry belongs to the scheduled local day, not the retry day.
+        const businessDate = localClock(setting.nextDueAt, authorized.organization.timezone).date;
+        const key = {
+          organizationId: item.organizationId,
+          userId: authorized.userId,
+          branchId: authorized.branchId,
+          businessDate,
+        };
+        const existing = await db.pharmacyOwnerDigestCapture.findUnique({
+          where: { organizationId_userId_branchId_businessDate: key },
+          select: { id: true },
+        });
+        if (existing) return null;
+        await refreshPharmacyAnomalySignals(
+          db,
+          { branchIds: [authorized.branchId], from: businessDate, to: businessDate },
+          'system:owner-digest',
+          new Date()
+        );
+        const digest = await composeOwnerDigest(db, {
+          ...key,
+          branchName: authorized.branch.name,
+          ownerPhone: authorized.user.phone,
+          whatsappPhoneHash: authorized.whatsappPhoneHash,
+          timezone: authorized.organization.timezone,
+        });
+        if (!(await readAuthorizedDigestSetting(db, item.id, item.organizationId))) {
+          // Throw through withTenantDb so the claim and anomaly writes roll back.
+          throw new DigestAuthorityChanged();
+        }
+        const captured = await new CaptureChannel().deliver(db, digest);
+        return captured.delivered ? digest : null;
+      }).catch((error: unknown) => {
+        if (error instanceof DigestAuthorityChanged) return null;
+        throw error;
       });
+      if (digest) {
+        captured += 1;
+        const recipient = await withTenantDb(item.organizationId, async (db) => {
+          // Capture committed before this separate effect. Recheck access and the
+          // recipient so a disable, revocation or phone edit wins before sending.
+          const authorized = await readAuthorizedDigestSetting(db, item.id, item.organizationId);
+          if (
+            !authorized ||
+            authorized.userId !== digest.userId ||
+            authorized.branchId !== digest.branchId
+          )
+            return;
+          return {
+            ...digest,
+            ownerPhone: authorized.user.phone,
+            whatsappPhoneHash: authorized.whatsappPhoneHash,
+          };
+        });
+        if (recipient) {
+          const delivery = await new WhatsAppChannel().deliver(recipient);
+          if (delivery.reference === 'FAILED' || delivery.reference === 'UNKNOWN') failed += 1;
+        }
+      }
+    } catch {
+      // One tenant's query, recheck or log failure must not abort other jobs/owners.
+      // Leave committed message claims intact; an uncertain send must never be retried.
+      failed += 1;
     }
   }
-  return { due: due.length, captured };
+  return { due: due.length, captured, failed };
 }

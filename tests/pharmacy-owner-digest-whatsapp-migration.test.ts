@@ -31,3 +31,17 @@ describe('owner digest WhatsApp audit migration', () => {
     expect(migration).not.toMatch(/\b(?:CREATE TABLE|DROP TABLE|DISABLE ROW LEVEL SECURITY)\b/);
   });
 });
+
+describe('owner digest WhatsApp consent migration', () => {
+  const consentMigration = readFileSync(
+    'prisma/migrations/20261031235900_owner_digest_whatsapp_consent/migration.sql',
+    'utf8'
+  );
+
+  it('defaults every existing owner to no consent without backfilling from capture opt-in', () => {
+    expect(consentMigration).toContain(
+      'ALTER TABLE "pharmacy_owner_digest_settings" ADD COLUMN "whatsappPhoneHash" TEXT'
+    );
+    expect(consentMigration).not.toMatch(/\b(?:UPDATE|DEFAULT|NOT NULL|DROP|DISABLE)\b/);
+  });
+});
