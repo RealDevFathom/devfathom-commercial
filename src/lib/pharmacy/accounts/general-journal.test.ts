@@ -15,6 +15,7 @@ import {
   createGeneralJournalDraft,
   postGeneralJournal,
   reverseGeneralJournal,
+  updateGeneralJournalDraft,
 } from './general-journal';
 import { createJournalDraftSchema, GENERAL_JOURNAL_MAX_DATE, GENERAL_JOURNAL_MIN_DATE } from './general-journal-schema';
 
@@ -40,14 +41,25 @@ describe('draft creation replay', () => {
   const scope = { organizationId: 'org-1', branchId: 'branch-1', actorId: 'user-1' };
   const input = { branchId: 'branch-1', reference: 'JV-1', purpose: 'NONTRADE_OPERATING_ACCRUAL' as const, amountMinor: 100, currency: 'PKR' as const, occurredAt: new Date('2026-10-25T12:00:00Z'), evidence: ' invoice ', reason: ' accrual ', idempotencyKey: 'key-1' };
   type ReplayDocument = Pick<Awaited<ReturnType<typeof createGeneralJournalDraft>>, 'id'> & { createPayloadHash?: string };
-  const baseDb = () => ({ $executeRaw: async () => 1, pharmacyGeneralJournalDocument: { findFirst: async (): Promise<ReplayDocument | null> => null, create: async ({ data }: { data: object }) => data } });
+  const baseDb = () => ({ $executeRaw: async () => 1, auditLog: { create: vi.fn(async () => ({})) }, pharmacyGeneralJournalDocument: { findFirst: async (): Promise<ReplayDocument | null> => null, create: async ({ data }: { data: object }) => ({ id: 'draft-1', version: 1, ...data }) } });
 
   it('returns a same-branch replay only when the canonical payload matches', async () => {
-    const first = await createGeneralJournalDraft(baseDb() as never, scope, input);
     const db = baseDb();
+    const first = await createGeneralJournalDraft(db as never, scope, input);
     db.pharmacyGeneralJournalDocument.findFirst = async () => first;
     await expect(createGeneralJournalDraft(db as never, scope, input)).resolves.toEqual(first);
     await expect(createGeneralJournalDraft(db as never, scope, { ...input, amountMinor: 101 })).rejects.toMatchObject({ reason: 'REPLAY_MISMATCH' });
+    expect(db.auditLog.create).toHaveBeenCalledTimes(1);
+    expect(db.auditLog.create).toHaveBeenCalledWith({ data: expect.objectContaining({
+      organizationId: scope.organizationId, actorId: scope.actorId, action: 'pharmacyGeneralJournal.createDraft',
+      targetId: first.id, outcome: 'SUCCESS',
+    }) });
+  });
+
+  it('awaits the draft creation audit inside the business transaction', async () => {
+    const db = baseDb();
+    db.auditLog.create.mockRejectedValue(new Error('audit unavailable'));
+    await expect(createGeneralJournalDraft(db as never, scope, input)).rejects.toThrow('audit unavailable');
   });
 
   it('does not return a document associated with the same key in another branch', async () => {
@@ -129,10 +141,38 @@ describe('voucher lifecycle commands', () => {
     const success = database();
     await expect(cancelGeneralJournal(success.db as never, scope, { documentId: 'document-1', version: 1 }))
       .resolves.toMatchObject({ status: 'CANCELLED', version: 2 });
+    expect(success.db.auditLog.create).toHaveBeenCalledWith({ data: expect.objectContaining({
+      organizationId: scope.organizationId, actorId: scope.actorId, action: 'pharmacyGeneralJournal.cancel',
+      targetId: 'document-1', outcome: 'SUCCESS', result: { status: 'CANCELLED' },
+    }) });
     const conflict = database();
     conflict.db.pharmacyGeneralJournalDocument.updateMany.mockResolvedValue({ count: 0 });
     await expect(cancelGeneralJournal(conflict.db as never, scope, { documentId: 'document-1', version: 1 }))
       .rejects.toMatchObject({ reason: 'INVALID_STATE' });
+    expect(conflict.db.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  it('audits draft updates and rejects stale updates without a success audit', async () => {
+    const { db } = database();
+    const input = { documentId: 'document-1', version: 1, reference: 'JV-2', purpose: 'NONTRADE_OPERATING_ACCRUAL' as const,
+      amountMinor: 200, currency: 'PKR' as const, occurredAt, evidence: 'invoice', reason: 'correction' };
+    await expect(updateGeneralJournalDraft(db as never, scope, input)).resolves.toMatchObject({ reference: 'JV-2', version: 2 });
+    expect(db.auditLog.create).toHaveBeenCalledWith({ data: expect.objectContaining({
+      organizationId: scope.organizationId, actorId: scope.actorId, action: 'pharmacyGeneralJournal.updateDraft',
+      targetId: 'document-1', input: { version: 1 }, result: { version: 2 }, outcome: 'SUCCESS',
+    }) });
+    db.auditLog.create.mockClear();
+    db.pharmacyGeneralJournalDocument.updateMany.mockResolvedValueOnce({ count: 0 });
+    await expect(updateGeneralJournalDraft(db as never, scope, input)).rejects.toMatchObject({ reason: 'STALE_VERSION' });
+    expect(db.auditLog.create).not.toHaveBeenCalled();
+    db.auditLog.create.mockRejectedValueOnce(new Error('audit unavailable'));
+    await expect(updateGeneralJournalDraft(db as never, scope, { ...input, version: 2 })).rejects.toThrow('audit unavailable');
+  });
+
+  it('awaits cancellation audit failure so the transaction cannot commit silently', async () => {
+    const { db } = database();
+    db.auditLog.create.mockRejectedValueOnce(new Error('audit unavailable'));
+    await expect(cancelGeneralJournal(db as never, scope, { documentId: 'document-1', version: 1 })).rejects.toThrow('audit unavailable');
   });
 
   it('reverses additively once and enforces payload-stable replay', async () => {
@@ -144,6 +184,21 @@ describe('voucher lifecycle commands', () => {
     expect(journal.reverse).toHaveBeenCalledTimes(1);
     await expect(reverseGeneralJournal(db as never, scope, { ...command, reason: 'another correction' }))
       .rejects.toMatchObject({ reason: 'REPLAY_MISMATCH' });
+  });
+
+  it('rejects reversals before the original accounting date, even in an open period', async () => {
+    const { db } = database('POSTED');
+    await expect(reverseGeneralJournal(db as never, scope, { documentId: 'document-1', version: 2,
+      idempotencyKey: 'reverse-1', at: new Date(occurredAt.getTime() - 1), reason: 'correction' }))
+      .rejects.toMatchObject({ reason: 'INVALID_DATE' });
+    expect(journal.reverse).not.toHaveBeenCalled();
+    expect(db.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  it('allows a reversal at the original accounting date', async () => {
+    const { db } = database('POSTED');
+    await expect(reverseGeneralJournal(db as never, scope, { documentId: 'document-1', version: 2,
+      idempotencyKey: 'reverse-1', at: occurredAt, reason: 'correction' })).resolves.toMatchObject({ status: 'REVERSED' });
   });
 
   it('awaits the success audit so a transaction can roll back the document and ledger together', async () => {

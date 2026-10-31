@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
-import { createGeneralJournalDraft, postGeneralJournal, reverseGeneralJournal } from '@/lib/pharmacy/accounts/general-journal';
+import { cancelGeneralJournal, createGeneralJournalDraft, postGeneralJournal, reverseGeneralJournal } from '@/lib/pharmacy/accounts/general-journal';
 import { authorizePharmacyGeneralJournal, authorizePharmacyGeneralJournalCollection } from './pharmacy-general-journal-security';
 import type { TRPCContext } from './trpc';
 
@@ -80,5 +80,29 @@ describeDatabase('durable pharmacy journal admission', () => {
     await expect(withTenantDb(organizationId, (db) => db.pharmacyGeneralJournalDocument.delete({ where: { id: reversed.id } })))
       .rejects.toThrow(/cannot be deleted/);
     expect(await withTenantDb(organizationId, (db) => db.financeJournalEntry.count({ where: { sourceId: draft.id } }))).toBe(2);
+  });
+
+  it('enforces reversal chronology and terminal cancellation through the runtime role', async () => {
+    const scope = { organizationId, actorId, branchId };
+    const draft = await withTenantDb(organizationId, (db) => createGeneralJournalDraft(db, scope, {
+      reference: `cancelled-${tag}`, purpose: 'NONTRADE_OPERATING_ACCRUAL', amountMinor: 100, currency: 'PKR',
+      occurredAt: new Date('2026-10-25T12:00:00Z'), evidence: 'invoice', reason: 'accrual', idempotencyKey: randomUUID(),
+    }));
+    await expect(withTenantDb(organizationId, (db) => db.$executeRaw`
+      UPDATE pharmacy_general_journal_documents SET "reversedAt" = TIMESTAMP '2026-10-24 12:00:00'
+      WHERE id = ${draft.id}`)).rejects.toThrow(/reversal_date_check/);
+    await withTenantDb(organizationId, (db) => cancelGeneralJournal(db, scope, { documentId: draft.id, version: draft.version }));
+    await expect(withTenantDb(organizationId, (db) => db.$executeRaw`
+      UPDATE pharmacy_general_journal_documents SET status = 'DRAFT' WHERE id = ${draft.id}`))
+      .rejects.toThrow(/cancelled.*status cannot change/);
+    await expect(withTenantDb(organizationId, (db) => db.$executeRaw`
+      UPDATE pharmacy_general_journal_documents SET status = 'POSTED' WHERE id = ${draft.id}`))
+      .rejects.toThrow(/cancelled.*status cannot change/);
+    const audit = await owner.query(`SELECT action, outcome FROM audit_logs
+      WHERE "organizationId" = $1 AND "targetId" = $2 ORDER BY action`, [organizationId, draft.id]);
+    expect(audit.rows).toEqual([
+      { action: 'pharmacyGeneralJournal.cancel', outcome: 'SUCCESS' },
+      { action: 'pharmacyGeneralJournal.createDraft', outcome: 'SUCCESS' },
+    ]);
   });
 });

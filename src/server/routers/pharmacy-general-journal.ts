@@ -1,5 +1,8 @@
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
+import { Prisma } from '@/generated/prisma/client';
+import { FinancePostingError } from '@/lib/finance/journal';
+import { PHARMACY_GENERAL_JOURNAL_ACCOUNTS } from '@/lib/pharmacy/accounts/coa';
 import { cancelGeneralJournal, createGeneralJournalDraft, PharmacyGeneralJournalError, postGeneralJournal, reverseGeneralJournal, updateGeneralJournalDraft } from '@/lib/pharmacy/accounts/general-journal';
 import { createJournalDraftSchema, journalCommandSchema, reverseJournalSchema, updateJournalDraftSchema } from '@/lib/pharmacy/accounts/general-journal-schema';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -7,7 +10,11 @@ import { authorizePharmacyGeneralJournal, authorizePharmacyGeneralJournalCollect
 import { adminProcedure, router } from '../trpc';
 
 function fail(error: unknown): never {
-  if (error instanceof PharmacyGeneralJournalError) throw new TRPCError({ code: error.reason === 'NOT_FOUND' ? 'NOT_FOUND' : error.reason === 'STALE_VERSION' || error.reason === 'INVALID_STATE' ? 'CONFLICT' : 'BAD_REQUEST', message: error.reason });
+  if (error instanceof PharmacyGeneralJournalError) throw new TRPCError({ code: error.reason === 'NOT_FOUND' ? 'NOT_FOUND' : ['STALE_VERSION', 'INVALID_STATE', 'REPLAY_MISMATCH'].includes(error.reason) ? 'CONFLICT' : 'BAD_REQUEST', message: error.reason });
+  if (error instanceof FinancePostingError) throw new TRPCError({ code: error.reason === 'NOT_FOUND' ? 'NOT_FOUND' : 'BAD_REQUEST', message: error.reason });
+  if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+    throw new TRPCError({ code: 'CONFLICT', message: 'A voucher with this reference or request key already exists.' });
+  }
   throw error;
 }
 
@@ -27,10 +34,7 @@ export const pharmacyGeneralJournalRouter = router({
   }),
   accounts: adminProcedure.input(z.object({ branchId: z.string().trim().min(1).max(128) }).strict()).query(async ({ ctx, input }) => {
     await authorizePharmacyGeneralJournal(ctx, input.branchId);
-    return [
-      { code: 'OPERATING_EXPENSE', side: 'DEBIT', name: 'Operating expense' },
-      { code: 'MANUAL_NONTRADE_ACCRUAL', side: 'CREDIT', name: 'Manual non-trade accrual' },
-    ];
+    return PHARMACY_GENERAL_JOURNAL_ACCOUNTS.map(({ code, normalSide, name }) => ({ code, side: normalSide, name }));
   }),
   list: adminProcedure.input(z.object({ branchId: z.string().trim().min(1).max(128) }).strict()).query(async ({ ctx, input }) => {
     const scope = await authorizePharmacyGeneralJournal(ctx, input.branchId);

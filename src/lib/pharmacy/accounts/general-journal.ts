@@ -38,7 +38,9 @@ export async function createGeneralJournalDraft(db: ScopedDb, scope: GeneralJour
   }
   const keyUsedOutsideBranch = await db.pharmacyGeneralJournalDocument.findFirst({ where: { organizationId: scope.organizationId, createKey: input.idempotencyKey }, select: { id: true } });
   if (keyUsedOutsideBranch) throw new PharmacyGeneralJournalError('REPLAY_MISMATCH');
-  return db.pharmacyGeneralJournalDocument.create({ data: { organizationId: scope.organizationId, branchId: scope.branchId, reference: input.reference, purpose: input.purpose, amountMinor: input.amountMinor, currency: input.currency, occurredAt: input.occurredAt, evidence: input.evidence.trim(), reason: input.reason.trim(), createKey: input.idempotencyKey, createPayloadHash: payloadHash, createdByUserId: scope.actorId } });
+  const document = await db.pharmacyGeneralJournalDocument.create({ data: { organizationId: scope.organizationId, branchId: scope.branchId, reference: input.reference, purpose: input.purpose, amountMinor: input.amountMinor, currency: input.currency, occurredAt: input.occurredAt, evidence: input.evidence.trim(), reason: input.reason.trim(), createKey: input.idempotencyKey, createPayloadHash: payloadHash, createdByUserId: scope.actorId } });
+  await db.auditLog.create({ data: { organizationId: scope.organizationId, actorId: scope.actorId, source: 'TRPC', category: 'FINANCE', operation: 'CREATE', action: 'pharmacyGeneralJournal.createDraft', targetType: 'PharmacyGeneralJournalDocument', targetId: document.id, result: { version: document.version }, outcome: 'SUCCESS' } });
+  return document;
 }
 
 export async function updateGeneralJournalDraft(db: ScopedDb, scope: GeneralJournalScope, input: Omit<DraftInput, 'idempotencyKey'|'reference'> & { documentId: string; reference: string; version: number }) {
@@ -49,7 +51,9 @@ export async function updateGeneralJournalDraft(db: ScopedDb, scope: GeneralJour
     data: { reference: input.reference, purpose: input.purpose, amountMinor: input.amountMinor, currency: input.currency, occurredAt: input.occurredAt, evidence: input.evidence.trim(), reason: input.reason.trim(), version: { increment: 1 } },
   });
   if (result.count !== 1) throw new PharmacyGeneralJournalError('STALE_VERSION');
-  return db.pharmacyGeneralJournalDocument.findFirstOrThrow({ where: { organizationId: scope.organizationId, branchId: scope.branchId, id: input.documentId } });
+  const document = await db.pharmacyGeneralJournalDocument.findFirstOrThrow({ where: { organizationId: scope.organizationId, branchId: scope.branchId, id: input.documentId } });
+  await db.auditLog.create({ data: { organizationId: scope.organizationId, actorId: scope.actorId, source: 'TRPC', category: 'FINANCE', operation: 'UPDATE', action: 'pharmacyGeneralJournal.updateDraft', targetType: 'PharmacyGeneralJournalDocument', targetId: document.id, input: { version: input.version }, result: { version: document.version }, outcome: 'SUCCESS' } });
+  return document;
 }
 
 export async function postGeneralJournal(db: ScopedDb, scope: GeneralJournalScope, input: { documentId: string; version: number; idempotencyKey: string }) {
@@ -75,7 +79,9 @@ export async function cancelGeneralJournal(db: ScopedDb, scope: GeneralJournalSc
   await lockGeneralJournalScope(db, scope);
   const result = await db.pharmacyGeneralJournalDocument.updateMany({ where: { organizationId: scope.organizationId, branchId: scope.branchId, id: input.documentId, version: input.version, status: 'DRAFT' }, data: { status: 'CANCELLED', cancelledAt: new Date(), version: { increment: 1 } } });
   if (result.count !== 1) throw new PharmacyGeneralJournalError('INVALID_STATE');
-  return db.pharmacyGeneralJournalDocument.findFirstOrThrow({ where: { organizationId: scope.organizationId, branchId: scope.branchId, id: input.documentId } });
+  const document = await db.pharmacyGeneralJournalDocument.findFirstOrThrow({ where: { organizationId: scope.organizationId, branchId: scope.branchId, id: input.documentId } });
+  await db.auditLog.create({ data: { organizationId: scope.organizationId, actorId: scope.actorId, source: 'TRPC', category: 'FINANCE', operation: 'UPDATE', action: 'pharmacyGeneralJournal.cancel', targetType: 'PharmacyGeneralJournalDocument', targetId: document.id, input: { version: input.version }, result: { status: document.status }, outcome: 'SUCCESS' } });
+  return document;
 }
 
 export async function reverseGeneralJournal(db: ScopedDb, scope: GeneralJournalScope, input: { documentId: string; version: number; idempotencyKey: string; at: Date; reason: string }) {
@@ -86,6 +92,7 @@ export async function reverseGeneralJournal(db: ScopedDb, scope: GeneralJournalS
   if (document.reverseKey) { if (document.reverseKey !== input.idempotencyKey || document.reversePayloadHash !== payloadHash) throw new PharmacyGeneralJournalError('REPLAY_MISMATCH'); return document; }
   if (document.version !== input.version) throw new PharmacyGeneralJournalError('STALE_VERSION');
   if (document.status !== 'POSTED') throw new PharmacyGeneralJournalError('INVALID_STATE');
+  if (input.at < document.occurredAt) throw new PharmacyGeneralJournalError('INVALID_DATE');
   await assertOpen(db, scope, input.at);
   const reversal = await reverseJournalEntry(db, scope, { entryId: document.journalEntryId, reason: input.reason.trim(), at: input.at, idempotencyKey: `pharmacy-jv-reversal:${document.id}` });
   const reversed = await db.pharmacyGeneralJournalDocument.update({ where: { organizationId_id: { organizationId: scope.organizationId, id: document.id } }, data: { status: 'REVERSED', reversedAt: input.at, reversalEntryId: reversal.id, reverseKey: input.idempotencyKey, reversePayloadHash: payloadHash, version: { increment: 1 } } });

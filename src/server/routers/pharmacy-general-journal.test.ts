@@ -1,7 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { Prisma } from '@/generated/prisma/client';
+import { FinancePostingError } from '@/lib/finance/journal';
+import { PharmacyGeneralJournalError } from '@/lib/pharmacy/accounts/general-journal';
+import { PHARMACY_GENERAL_JOURNAL_ACCOUNTS } from '@/lib/pharmacy/accounts/coa';
 
 const mocks = vi.hoisted(() => ({ can: vi.fn(), record: vi.fn() }));
 vi.mock('server-only', () => ({}));
+vi.mock('@/lib/tenancy/scoped-db', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/tenancy/scoped-db')>()),
+  withTenantDb: vi.fn(async (organizationId: string, callback: (db: { auditLog: { create: () => Promise<object> } }) => Promise<unknown>) => callback({ auditLog: { create: vi.fn(async () => ({ organizationId })) } })),
+}));
 vi.mock('@/lib/abac', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/abac')>()),
   can: mocks.can,
@@ -35,6 +43,7 @@ describe('pharmacy general journal router denial chain', () => {
 
   function context() {
     const db = {
+      $transaction: vi.fn(),
       user: { findUnique: vi.fn(async () => ({ organizationRole: 'ADMIN', permissionOverrides: [] })) },
       pharmacyBranch: {
         findFirst: vi.fn(async (): Promise<{ id: string } | null> => null),
@@ -71,5 +80,51 @@ describe('pharmacy general journal router denial chain', () => {
       where: { organizationId: 'org-1', id: 'other-branch', active: true }, select: { id: true },
     });
     expect(ctx.db.pharmacyGeneralJournalDocument.findMany).not.toHaveBeenCalled();
+  });
+
+  const draft = { branchId: 'branch-1', reference: 'JV-1', purpose: 'NONTRADE_OPERATING_ACCRUAL' as const,
+    amountMinor: 100, currency: 'PKR' as const, occurredAt: new Date('2026-10-25T12:00:00Z'),
+    evidence: 'invoice', reason: 'accrual', idempotencyKey: 'create-1' };
+
+  it.each(['createDraft', 'updateDraft'] as const)('maps duplicate references from %s to a conflict', async (method) => {
+    mocks.can.mockResolvedValue(true);
+    const ctx = context();
+    ctx.db.pharmacyBranch.findFirst.mockResolvedValue({ id: 'branch-1' });
+    ctx.db.$transaction.mockRejectedValue(new Prisma.PrismaClientKnownRequestError('secret index details', {
+      code: 'P2002', clientVersion: 'test', meta: { target: ['organizationId', 'reference'] },
+    }));
+    const caller = pharmacyGeneralJournalRouter.createCaller(ctx as never);
+    const command = method === 'createDraft'
+      ? caller.createDraft(draft)
+      : caller.updateDraft({ branchId: draft.branchId, reference: draft.reference, purpose: draft.purpose,
+        amountMinor: draft.amountMinor, currency: draft.currency, occurredAt: draft.occurredAt,
+        evidence: draft.evidence, reason: draft.reason, documentId: 'doc-1', version: 1 });
+    await expect(command).rejects.toMatchObject({ code: 'CONFLICT', message: 'A voucher with this reference or request key already exists.' });
+  });
+
+  it.each([
+    [new FinancePostingError('NOT_FOUND'), 'NOT_FOUND'],
+    [new FinancePostingError('INVALID_AMOUNT'), 'BAD_REQUEST'],
+    [new FinancePostingError('UNBALANCED'), 'BAD_REQUEST'],
+    [new PharmacyGeneralJournalError('REPLAY_MISMATCH'), 'CONFLICT'],
+    [new Error('unexpected database failure'), 'INTERNAL_SERVER_ERROR'],
+  ] as const)('maps expected posting errors without concealing unexpected failures: %s', async (error, code) => {
+    mocks.can.mockResolvedValue(true);
+    const ctx = context();
+    ctx.db.pharmacyBranch.findFirst.mockResolvedValue({ id: 'branch-1' });
+    ctx.db.$transaction.mockRejectedValue(error);
+    const caller = pharmacyGeneralJournalRouter.createCaller(ctx as never);
+    await expect(caller.post({ branchId: 'branch-1', documentId: 'doc-1', version: 1, idempotencyKey: 'post-1' }))
+      .rejects.toMatchObject({ code });
+  });
+
+  it('serves the shared general journal account catalogue', async () => {
+    mocks.can.mockResolvedValue(true);
+    const ctx = context();
+    ctx.db.pharmacyBranch.findFirst.mockResolvedValue({ id: 'branch-1' });
+    const caller = pharmacyGeneralJournalRouter.createCaller(ctx as never);
+    await expect(caller.accounts({ branchId: 'branch-1' })).resolves.toEqual(
+      PHARMACY_GENERAL_JOURNAL_ACCOUNTS.map(({ code, name, normalSide }) => ({ code, name, side: normalSide })),
+    );
   });
 });

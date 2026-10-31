@@ -102,4 +102,20 @@ describeDatabase('pharmacy general-journal database contract', () => {
       WHERE tgrelid = 'pharmacy_general_journal_documents'::regclass AND tgname = 'pharmacy_general_journal_lifecycle_guard'`);
     expect(trigger.rows[0]?.definition).toMatch(/BEFORE INSERT OR DELETE/);
   });
+
+  it('prevents cancelled vouchers from returning to any other state through SQL', async () => {
+    await client.query(`CREATE TEMP TABLE journal_cancelled_test (id text, status "PharmacyGeneralJournalStatus")`);
+    await client.query(`CREATE TRIGGER journal_cancelled_test_trigger BEFORE UPDATE ON journal_cancelled_test
+      FOR EACH ROW EXECUTE FUNCTION prevent_pharmacy_general_journal_cancelled_reopen()`);
+    await client.query(`INSERT INTO journal_cancelled_test VALUES ('cancelled', 'CANCELLED')`);
+    for (const status of ['DRAFT', 'POSTED', 'REVERSED']) {
+      await expect(client.query(`UPDATE journal_cancelled_test SET status = $1 WHERE id = 'cancelled'`, [status]))
+        .rejects.toThrow(/cancelled.*status cannot change/);
+    }
+    await expect(client.query(`UPDATE journal_cancelled_test SET status = 'CANCELLED' WHERE id = 'cancelled'`))
+      .resolves.toMatchObject({ rowCount: 1 });
+    const trigger = await client.query(`SELECT pg_get_triggerdef(oid) AS definition FROM pg_trigger
+      WHERE tgrelid = 'pharmacy_general_journal_documents'::regclass AND tgname = 'pharmacy_general_journal_cancelled_guard'`);
+    expect(trigger.rows[0]?.definition).toMatch(/BEFORE UPDATE/);
+  });
 });

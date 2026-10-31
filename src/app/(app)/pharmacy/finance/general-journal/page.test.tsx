@@ -69,6 +69,9 @@ describe('general journal commands', () => {
       branches: vi.fn().mockResolvedValue([{ id: 'branch-1', name: 'Main branch' }]),
       list: vi.fn().mockResolvedValue([document, { ...document, id: 'doc-2', reference: 'Posted', status: 'POSTED' }]),
       updateDraft: vi.fn().mockResolvedValue(document),
+      createDraft: vi.fn().mockResolvedValue(document),
+      post: vi.fn().mockResolvedValue({ ...document, status: 'POSTED' }),
+      reverse: vi.fn().mockResolvedValue({ ...document, status: 'REVERSED' }),
     };
     mocks.resolveTenantActor.mockResolvedValue(actor);
     mocks.createCaller.mockReturnValue(value);
@@ -79,7 +82,7 @@ describe('general journal commands', () => {
     caller();
     render(await GeneralJournalPage({ searchParams: Promise.resolve({}) }));
     for (const name of ['Save draft', 'Save changes', 'Post', 'Cancel', 'Reverse']) {
-      expect(screen.getByRole('button', { name, exact: true }).getAttribute('type')).toBe('submit');
+      expect(screen.getByRole('button', { name }).getAttribute('type')).toBe('submit');
     }
   });
 
@@ -94,6 +97,45 @@ describe('general journal commands', () => {
     form.set('action', button.value);
     await expect(serverAction(page)!(form)).rejects.toThrow('NEXT_REDIRECT');
     expect(api.updateDraft).toHaveBeenCalledWith(expect.objectContaining({ documentId: 'doc-1', currency: 'USD', amountMinor: 12345 }));
+  });
+
+  it.each([
+    ['Save draft', 'createDraft'],
+    ['Post', 'post'],
+    ['Reverse', 'reverse'],
+  ] as const)('retries %s with the original command after a lost response', async (name, method) => {
+    const api = caller();
+    api[method].mockRejectedValueOnce(new Error('response lost'));
+    const page = await GeneralJournalPage({ searchParams: Promise.resolve({}) });
+    render(page);
+    const button = screen.getByRole('button', { name }) as HTMLButtonElement;
+    const form = new FormData(button.form!);
+    form.set('action', button.value);
+    form.set('reversalReason', 'Correct the accrual');
+    if (method === 'createDraft') {
+      form.set('reference', 'JV-RETRY');
+      form.set('amount', '12.34');
+      form.set('evidence', 'invoice');
+      form.set('reason', 'accrual');
+    }
+    const key = form.get('idempotencyKey');
+    expect(key).toEqual(expect.any(String));
+    expect(String(key).length).toBeGreaterThan(0);
+    vi.useFakeTimers();
+    try {
+      await expect(serverAction(page)!(form)).rejects.toThrow('NEXT_REDIRECT');
+      vi.setSystemTime(new Date('2026-11-01T12:00:00Z'));
+      await expect(serverAction(page)!(form)).rejects.toThrow('NEXT_REDIRECT');
+      expect(api[method]).toHaveBeenCalledTimes(2);
+      expect(api[method].mock.calls[0]).toEqual(api[method].mock.calls[1]);
+      expect(api[method]).toHaveBeenLastCalledWith(expect.objectContaining({ idempotencyKey: key }));
+      if (method === 'reverse') {
+        expect(api.reverse).toHaveBeenLastCalledWith(expect.objectContaining({ at: new Date(String(form.get('reversalAt'))) }));
+      }
+      expect(mocks.redirect.mock.calls[1][0]).toContain('kind=success');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it.each(['INTERNAL_SERVER_ERROR', 'BAD_REQUEST', 'CONFLICT'] as const)('keeps raw %s messages out of redirect notices', async (code) => {
