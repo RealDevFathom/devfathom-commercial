@@ -1,4 +1,7 @@
+// @vitest-environment node
+
 import { readFile } from 'node:fs/promises';
+import { describe, expect, it } from 'vitest';
 
 const dispositionUrl = new URL(
   '../docs/archive-recovery/issue-466-growth-g2-followups.md',
