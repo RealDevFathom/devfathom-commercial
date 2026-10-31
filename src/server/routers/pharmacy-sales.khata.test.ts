@@ -10,6 +10,7 @@ vi.mock('@/server/audit', () => ({
   ipFromHeaders: vi.fn(),
   isAuditExcludedPath: vi.fn(() => false),
   recordTrpcAudit: vi.fn(),
+  recordAudit: vi.fn(),
 }));
 vi.mock('@/lib/abac', () => ({
   can: vi.fn(async () => true),
@@ -27,6 +28,8 @@ import {
   refundPharmacyTender,
 } from '@/lib/pharmacy/settlement';
 import { can } from '@/lib/abac';
+import { pharmacyRegulatoryFixture } from '@/lib/test-support/pharmacy-regulatory';
+import { recordAudit } from '@/server/audit';
 import { router, type TRPCContext } from '../trpc';
 import { pharmacySalesRouter } from './pharmacy-sales';
 const app = router({ pharmacySales: pharmacySalesRouter });
@@ -41,7 +44,12 @@ const input = {
   familyAccountId: 'family-a',
 };
 function fixture() {
+  const { rules, profile } = pharmacyRegulatoryFixture('branch-a');
   const db = {
+    organization: { findUnique: vi.fn().mockResolvedValue({ status: 'ACTIVE' }) },
+    branchRegulatoryProfile: {
+      findFirst: vi.fn().mockResolvedValue({ ...profile, jurisdictionRuleSet: rules }),
+    },
     $queryRaw: vi.fn().mockResolvedValue([]),
     $transaction: vi.fn(),
     pharmacyBranch: {
@@ -111,6 +119,38 @@ beforeEach(() => {
   });
 });
 describe('Khata router trust and recovery boundary', () => {
+  it.each(['KHATA', 'CREDIT'] as const)(
+    'refuses %s for onboarding organizations and branches without a profile, even with owner override',
+    async (type) => {
+      const f = fixture();
+      f.db.organization.findUnique.mockResolvedValue({ status: 'ONBOARDING' });
+      await expect(
+        f.caller().tender({ ...input, type, ownerOverride: true })
+      ).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'ORGANIZATION_NOT_ACTIVE',
+      });
+      expect(f.db.branchRegulatoryProfile.findFirst).not.toHaveBeenCalled();
+
+      f.db.organization.findUnique.mockResolvedValue({ status: 'ACTIVE' });
+      f.db.branchRegulatoryProfile.findFirst.mockResolvedValue(null);
+      await expect(
+        f.caller().tender({ ...input, type, ownerOverride: true })
+      ).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'PROFILE_MISSING',
+      });
+      for (const errorCode of ['ORGANIZATION_NOT_ACTIVE', 'PROFILE_MISSING'])
+        expect(recordAudit).toHaveBeenCalledWith(
+          expect.objectContaining({ organizationId: 'org-a', targetId: 'branch-a', errorCode })
+        );
+      expect(applyPharmacyTender).not.toHaveBeenCalled();
+      expect(f.db.pharmacyKhataEvent.create).not.toHaveBeenCalled();
+      expect(f.db.pharmacyKhataLimitDecision.create).not.toHaveBeenCalled();
+      expect(f.db.$queryRaw).not.toHaveBeenCalled();
+    }
+  );
+
   it('uses server tenant, CREDIT settlement and an atomic member charge', async () => {
     const f = fixture();
     await f.caller().tender(input);

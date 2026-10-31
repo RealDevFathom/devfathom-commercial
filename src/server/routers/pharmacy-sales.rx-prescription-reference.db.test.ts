@@ -9,6 +9,7 @@
 import { randomBytes } from 'node:crypto';
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { pharmacyRegulatoryFixture } from '@/lib/test-support/pharmacy-regulatory';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (databaseUrl) process.env.DATABASE_URL = databaseUrl;
@@ -176,6 +177,8 @@ beforeAll(async () => {
     )
   );
   expect(role).toEqual({ rolsuper: false, rolbypassrls: false });
+  const { rules, profile } = pharmacyRegulatoryFixture(ids.branch);
+  await withPlatformDb((tx) => tx.jurisdictionRuleSet.create({ data: rules }));
   for (const org of [ids.org, ids.otherOrg])
     await withPlatformDb((tx) =>
       tx.$executeRawUnsafe(
@@ -304,6 +307,7 @@ beforeAll(async () => {
         provinceCode: 'PB',
       },
     });
+    await tx.branchRegulatoryProfile.create({ data: profile });
     for (const [userId, capabilities] of [
       [ids.cashier, ['pharmacy:counter', 'pharmacy:orders']],
       [ids.pharmacist, ['pharmacy:dispense', 'pharmacy:counter']],
@@ -379,7 +383,13 @@ beforeAll(async () => {
       medicine: otc,
       authorizedCanonicalUnits: 100,
     });
-    for (const name of ['voided', 'completed', 'fullCompletion', 'retried', 'concurrent'] as const) {
+    for (const name of [
+      'voided',
+      'completed',
+      'fullCompletion',
+      'retried',
+      'concurrent',
+    ] as const) {
       lines[name] = await prescriptionLine(tx, ids.org, {
         ...forAyesha,
         ...current,
@@ -521,9 +531,8 @@ describeIfDatabase('prescription references on counter sale lines (#518)', () =>
   }
 
   async function recordCompletion(saleLineId: string) {
-    const { recordCompletedPrescriptionReference } = await import(
-      '@/lib/pharmacy/rx-prescription-reference'
-    );
+    const { recordCompletedPrescriptionReference } =
+      await import('@/lib/pharmacy/rx-prescription-reference');
     return withTenantDb(
       ids.org,
       async (tx) => {
@@ -581,9 +590,8 @@ describeIfDatabase('prescription references on counter sale lines (#518)', () =>
     // Exercises the real completion path (no mocks in this case): QA found completion
     // dropped prescriptionPatientId/saleId when recording the reference.
     const added = await addReferencedSale(lines.fullCompletion);
-    const { completePaidPharmacySale, completionSaleInclude } = await import(
-      '@/lib/pharmacy/sale-completion'
-    );
+    const { completePaidPharmacySale, completionSaleInclude } =
+      await import('@/lib/pharmacy/sale-completion');
     await withTenantDb(
       ids.org,
       async (tx) => {

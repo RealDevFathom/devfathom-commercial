@@ -8,6 +8,7 @@
 import { randomBytes } from 'node:crypto';
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { pharmacyRegulatoryFixture } from '@/lib/test-support/pharmacy-regulatory';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (databaseUrl) process.env.DATABASE_URL = databaseUrl;
@@ -192,6 +193,8 @@ beforeAll(async () => {
     )
   );
   expect(role).toEqual({ rolsuper: false, rolbypassrls: false });
+  const { rules, profile } = pharmacyRegulatoryFixture(ids.branch);
+  await withPlatformDb((tx) => tx.jurisdictionRuleSet.create({ data: rules }));
   await withPlatformDb((tx) =>
     tx.$executeRawUnsafe(
       `INSERT INTO organizations (id, slug, "legalName", "displayName", vertical, status, "deploymentMode", "createdAt", "updatedAt")
@@ -211,6 +214,7 @@ beforeAll(async () => {
         provinceCode: 'PB',
       },
     });
+    await tx.branchRegulatoryProfile.create({ data: profile });
     // Persisted roles: the Cashier template's grants, a pharmacist with the exact grant, and the
     // two explicit-DENY combinations.
     const users: Array<{
