@@ -8,6 +8,17 @@ const preflight = readFileSync(resolve('scripts/preflight-agency-e2e.ts'), 'utf8
 const fixture = readFileSync(resolve('tests/agency-e2e/agency-fixture.ts'), 'utf8');
 
 describe('Agency E2E owned fixture restoration', () => {
+  test('licenses Notes for the agency demo package', () => {
+    expect(seed).toContain("['notes', 'Notes', 'Knowledge', '/notes', true]");
+    expect(seed).toContain("['api', 'API access', 'Developer', '/organization/api', false]");
+    expect(seed).toContain("['webhooks', 'Webhooks', 'Developer', '/organization/webhooks', false]");
+    expect(seed).toContain('update: { enabled }');
+    expect(seed).toMatch(/create: \{[\s\S]*?enabled,[\s\S]*?\}/);
+    expect(seed).toMatch(
+      /platformPackageModule\.findFirst\([\s\S]*?module: \{ key: 'notes' \}[\s\S]*?if \(!notesLicense\?\.enabled\)/
+    );
+  });
+
   test('uses exact owned IDs and restores the seed twice before execution', () => {
     expect(fixture).toContain("organizationId: 'org_agency_e2e_owned'");
     expect(fixture).toContain("clientId: 'client_agency_e2e_owned'");
