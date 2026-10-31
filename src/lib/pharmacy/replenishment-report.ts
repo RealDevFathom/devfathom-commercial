@@ -34,6 +34,18 @@ export const pharmacyReplenishmentReportInput = z
         currentQuantityUnits: units,
         proposedQuantityUnits: units,
         currency: z.string().regex(/^[A-Z]{3}$/),
+        goals: z
+          .object({
+            salesMinor: units.nullable(),
+            marginMinor: units.nullable(),
+          })
+          .strict(),
+        pricing: z
+          .object({
+            currentUnitPriceMinor: units,
+            proposedUnitPriceMinor: units,
+          })
+          .strict(),
         orderTerms: z
           .object({
             packSize: units.min(1),
@@ -81,9 +93,15 @@ export function validatePharmacyReplenishmentReportInput(
       planningOrigin > readAt.getTime() + 31 * 86_400_000 ||
       (scenario.orderTerms.arrivalAt !== null &&
         Date.parse(scenario.orderTerms.arrivalAt) < planningOrigin) ||
-      !Number.isSafeInteger(scenario.dailyDemandUnits * input.horizonDays)
+      !Number.isSafeInteger(scenario.dailyDemandUnits * input.horizonDays) ||
+      !Number.isSafeInteger(
+        scenario.dailyDemandUnits * input.horizonDays * scenario.pricing.currentUnitPriceMinor
+      ) ||
+      !Number.isSafeInteger(
+        scenario.dailyDemandUnits * input.horizonDays * scenario.pricing.proposedUnitPriceMinor
+      )
     )
-      throw new RangeError('Use a future planning origin within 31 days and safe demand totals.');
+      throw new RangeError('Use a future planning origin within 31 days and safe scenario totals.');
     demandDateAfter(scenario.originDate, input.horizonDays);
   }
 }
@@ -128,6 +146,7 @@ export async function readPharmacyReplenishmentReport(
   const { forecastInput, ...demand } = evidence;
   const forecast = forecastInput ? forecastDemandEvidence(forecastInput) : null;
   let decision: ReplenishmentDecision | null = null;
+  let goalComparison: ReturnType<typeof compareReplenishmentGoals> | null = null;
   const scenario = request.manualScenario;
   // The delivered supply reader has no stock-completeness contract. In particular,
   // an empty read cannot prove zero inventory; never simulate it as known zero.
@@ -171,6 +190,7 @@ export async function readPharmacyReplenishmentReport(
       orderTerms: { ...scenario.orderTerms, source },
     };
     decision = simulateReplenishmentDecision(decisionInput);
+    goalComparison = compareReplenishmentGoals(decision, scenario);
   }
   return {
     scope,
@@ -205,6 +225,7 @@ export async function readPharmacyReplenishmentReport(
       basis: 'USER_SUPPLIED_ASSUMPTIONS' as const,
       dailyDemandUnits: decision ? scenario!.dailyDemandUnits : null,
       decision,
+      goalComparison,
     },
     limitations: [
       ...evidence.missingInputs,
@@ -214,6 +235,57 @@ export async function readPharmacyReplenishmentReport(
       'Manual planning assumes a constant daily rate and only recorded eligible stock carried to a future UTC origin. Stock completeness remains unverified. Scenario coverage is model input coverage, not empirical performance.',
       'Planning is read-only and requires financial report access. No order, reservation or approval is created.',
     ],
+  };
+}
+
+/**
+ * Read-only estimates derived solely from configurable scenario assumptions. Keeping this
+ * calculation pure makes fixture results stable and prevents illustrative figures becoming facts.
+ */
+export function compareReplenishmentGoals(
+  decision: ReplenishmentDecision,
+  scenario: NonNullable<PharmacyReplenishmentReportInput['manualScenario']>
+) {
+  const estimate = (entry: ReplenishmentDecision['scenarios'][number]) => {
+    const unitPriceMinor =
+      entry.policy === 'PROPOSED'
+        ? scenario.pricing.proposedUnitPriceMinor
+        : scenario.pricing.currentUnitPriceMinor;
+    const fulfilledUnits = entry.outcome?.fulfilledUnits ?? null;
+    const salesMinor = fulfilledUnits === null ? null : fulfilledUnits * unitPriceMinor;
+    const marginMinor =
+      salesMinor === null || scenario.orderTerms.unitCostMinor === null
+        ? null
+        : salesMinor - fulfilledUnits! * scenario.orderTerms.unitCostMinor;
+    return {
+      policy: entry.policy,
+      label: 'ESTIMATE' as const,
+      assumptions: {
+        unitPriceMinor,
+        unitCostMinor: scenario.orderTerms.unitCostMinor,
+      },
+      fulfilledUnits,
+      salesMinor,
+      marginMinor,
+      goals: {
+        salesMinor: scenario.goals.salesMinor,
+        marginMinor: scenario.goals.marginMinor,
+        salesMet:
+          scenario.goals.salesMinor === null || salesMinor === null
+            ? null
+            : salesMinor >= scenario.goals.salesMinor,
+        marginMet:
+          scenario.goals.marginMinor === null || marginMinor === null
+            ? null
+            : marginMinor >= scenario.goals.marginMinor,
+      },
+    };
+  };
+  return {
+    label: 'ILLUSTRATIVE_ESTIMATE' as const,
+    definition:
+      'Sales and margin estimates use fulfilled units and user-supplied unit prices and unit cost; they are not recorded or forecast results.',
+    scenarios: decision.scenarios.map(estimate),
   };
 }
 
