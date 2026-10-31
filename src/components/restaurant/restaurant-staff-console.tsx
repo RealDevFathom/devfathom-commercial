@@ -85,6 +85,13 @@ export function RestaurantStaffConsole() {
   const [staffFormOpen, setStaffFormOpen] = useState(false);
   const [createMode, setCreateMode] = useState<'LINK' | 'INVITE'>('LINK');
   const [editingStaff, setEditingStaff] = useState<StaffProfile | null>(null);
+  const [sentInvite, setSentInvite] = useState<{
+    id: string;
+    email: string | null;
+    inviteUrl: string;
+    emailDelivered: boolean;
+  } | null>(null);
+  const [inviteCopied, setInviteCopied] = useState(false);
   const [selectedStaff, setSelectedStaff] = useState<StaffProfile | null>(null);
   // SOP-1: the job-role multi-select target (separate from the credentials dialog).
   const [jobRolesStaff, setJobRolesStaff] = useState<StaffProfile | null>(null);
@@ -125,9 +132,18 @@ export function RestaurantStaffConsole() {
     onError: mutationFailure,
   });
   const inviteStaff = trpc.restaurantStaff.invite.useMutation({
-    onSuccess: () => {
+    onSuccess: (result) => {
       refreshStaff();
       setStaffFormOpen(false);
+      setInviteCopied(false);
+      setSentInvite(result);
+    },
+    onError: mutationFailure,
+  });
+  const resendInvite = trpc.restaurantStaff.resendInvite.useMutation({
+    onSuccess: (result) => {
+      setInviteCopied(false);
+      setSentInvite(result);
     },
     onError: mutationFailure,
   });
@@ -204,6 +220,7 @@ export function RestaurantStaffConsole() {
     setEditingStaff(null);
     setCreateMode('LINK');
     createStaff.reset();
+    inviteStaff.reset();
     updateStaff.reset();
     setStaffFormOpen(true);
   };
@@ -211,6 +228,7 @@ export function RestaurantStaffConsole() {
   const openEdit = (staff: StaffProfile) => {
     setEditingStaff(staff);
     createStaff.reset();
+    inviteStaff.reset();
     updateStaff.reset();
     setStaffFormOpen(true);
   };
@@ -426,6 +444,16 @@ export function RestaurantStaffConsole() {
                     </TableCell>
                     <TableCell>
                       <div className="flex justify-end gap-2">
+                        {staff.user?.status === 'INVITED' ? (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={resendInvite.isPending}
+                            onClick={() => resendInvite.mutate({ staffProfileId: staff.id })}
+                          >
+                            Resend invitation
+                          </Button>
+                        ) : null}
                         <Button variant="outline" size="sm" onClick={() => openEdit(staff)}>
                           Edit
                         </Button>
@@ -472,7 +500,7 @@ export function RestaurantStaffConsole() {
           if (!staffFormPending) setStaffFormOpen(open);
         }}
       >
-        <DialogContent className="sm:max-w-xl">
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-xl">
           <DialogHeader>
             <DialogTitle>{editingStaff ? 'Edit staff member' : 'Add staff member'}</DialogTitle>
             <DialogDescription>
@@ -673,6 +701,70 @@ export function RestaurantStaffConsole() {
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={sentInvite != null}
+        onOpenChange={(open) => {
+          if (!open) setSentInvite(null);
+        }}
+      >
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-xl">
+          <DialogHeader>
+            <DialogTitle>Staff invitation</DialogTitle>
+            <DialogDescription>
+              Invitation for {sentInvite?.email}. The link expires in 7 days.
+            </DialogDescription>
+          </DialogHeader>
+          <p role="status" className="text-sm text-text-body">
+            {sentInvite?.emailDelivered
+              ? 'Invitation email sent. You can also share the link directly.'
+              : 'The staff profile was saved, but the invitation email could not be sent. Copy the link or retry sending.'}
+          </p>
+          <label className="space-y-1.5">
+            <span className={labelClass}>Invitation link</span>
+            <Input
+              readOnly
+              value={sentInvite?.inviteUrl ?? ''}
+              onFocus={(event) => event.currentTarget.select()}
+            />
+          </label>
+          {resendInvite.error ? (
+            <p role="alert" className="text-sm text-destructive">
+              {resendInvite.error.message}
+            </p>
+          ) : null}
+          <DialogFooter className="sm:flex-wrap">
+            <Button
+              variant="outline"
+              className="min-h-11"
+              onClick={async () => {
+                if (!sentInvite) return;
+                try {
+                  await navigator.clipboard.writeText(sentInvite.inviteUrl);
+                  setInviteCopied(true);
+                } catch {
+                  toast.error('Copy failed. Select and copy the invitation link above.');
+                }
+              }}
+            >
+              {inviteCopied ? 'Copied!' : 'Copy invitation link'}
+            </Button>
+            <Button
+              variant="outline"
+              className="min-h-11"
+              disabled={resendInvite.isPending}
+              onClick={() => {
+                if (sentInvite) resendInvite.mutate({ staffProfileId: sentInvite.id });
+              }}
+            >
+              {resendInvite.isPending ? 'Sending…' : 'Resend invitation'}
+            </Button>
+            <Button className="min-h-11" onClick={() => setSentInvite(null)}>
+              Done
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 

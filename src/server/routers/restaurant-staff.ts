@@ -18,6 +18,9 @@ import { createStaffProfile } from '@/lib/restaurant/staff';
 import { emailSchema } from '@/lib/email-address';
 import { generateInviteToken } from '@/lib/invite-token';
 import { appUrl, sendEmail, templates } from '@/lib/email';
+import { can, subjectFromSession, type Action } from '@/lib/abac';
+import { capabilityMatches } from '@/lib/abac/capabilities';
+import type { TRPCContext } from '../trpc';
 import {
   CredentialLifecycleError,
   issueOperatorCredential,
@@ -134,6 +137,55 @@ function workspaceOrganizationId(ctx: {
     throw new TRPCError({ code: 'NOT_FOUND', message: 'Workspace not found.' });
   }
   return organizationId;
+}
+
+type InvitePermission = { capability: string; effect: string };
+
+async function canAssignInviteRole(
+  ctx: TRPCContext,
+  permissions: InvitePermission[],
+  accountRole = 'EMPLOYEE'
+) {
+  const subject = subjectFromSession(ctx.session!.user);
+  const options = { db: ctx.db, source: 'TRPC' as const };
+  // Organization administrators already have role-assignment authority in team.inviteMember.
+  if (await can(subject, 'admin:access', undefined, options)) return true;
+  if (accountRole !== 'EMPLOYEE') return false;
+  for (const permission of permissions) {
+    if (permission.effect !== 'ALLOW') continue;
+    // A branch staff manager cannot delegate an open-ended wildcard or a grant
+    // they do not hold themselves. Check the actual permissions, never role names.
+    if (
+      !capabilityMatches(permission.capability, permission.capability) ||
+      !(await can(subject, permission.capability as Action, undefined, options))
+    )
+      return false;
+  }
+  return true;
+}
+
+async function deliverStaffInvite(
+  ctx: TRPCContext,
+  user: { name: string; email: string },
+  role: string,
+  token: string
+) {
+  const inviteUrl = `${appUrl()}/invite/${token}`;
+  const mail = templates.inviteMember({
+    name: user.name,
+    inviterName: ctx.session!.user.name ?? undefined,
+    role,
+    workspace: 'DevFathom',
+    acceptUrl: inviteUrl,
+    expiresLabel: 'in 7 days',
+  });
+  try {
+    await sendEmail({ to: { email: user.email, name: user.name }, ...mail });
+    return { inviteUrl, emailDelivered: true };
+  } catch (error) {
+    console.error('[restaurantStaff.invite] invite email failed for', user.email, error);
+    return { inviteUrl, emailDelivered: false };
+  }
 }
 
 export const restaurantStaffRouter = router({
@@ -286,10 +338,21 @@ export const restaurantStaffRouter = router({
       ctx.db.organizationRole.findMany({
         where: { organizationId },
         orderBy: { name: 'asc' },
-        select: { id: true, key: true, name: true },
+        select: {
+          id: true,
+          key: true,
+          name: true,
+          permissions: { select: { capability: true, effect: true } },
+        },
       }),
     ]);
-    return { departments, roles };
+    const allowedRoles = [];
+    for (const role of roles) {
+      if (await canAssignInviteRole(ctx, role.permissions)) {
+        allowedRoles.push({ id: role.id, key: role.key, name: role.name });
+      }
+    }
+    return { departments, roles: allowedRoles };
   }),
 
   invite: staffProcedure
@@ -335,11 +398,24 @@ export const restaurantStaffRouter = router({
             const organizationRole = input.organizationRoleId
               ? await tx.organizationRole.findFirst({
                   where: { id: input.organizationRoleId, organizationId },
-                  select: { id: true, name: true },
+                  select: {
+                    id: true,
+                    name: true,
+                    permissions: { select: { capability: true, effect: true } },
+                  },
                 })
               : null;
             if (input.organizationRoleId && !organizationRole) {
               throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invalid role template.' });
+            }
+            if (
+              organizationRole &&
+              !(await canAssignInviteRole(ctx, organizationRole.permissions))
+            ) {
+              throw new TRPCError({
+                code: 'FORBIDDEN',
+                message: 'You cannot assign this role template.',
+              });
             }
             if (await tx.user.findFirst({ where: { organizationId, email: input.email } })) {
               throw new TRPCError({
@@ -388,7 +464,8 @@ export const restaurantStaffRouter = router({
               status: input.status,
             });
             return { user, staff, roleName: organizationRole?.name };
-          }
+          },
+          input.status
         );
         annotateAudit(ctx, {
           targetType: 'RestaurantStaffProfile',
@@ -397,29 +474,96 @@ export const restaurantStaffRouter = router({
           description: `Invited and created restaurant staff profile "${result.staff.displayName}"`,
           metadata: { userId: result.user.id, primaryBranchId: result.staff.primaryBranchId },
         });
-        const inviteUrl = `${appUrl()}/invite/${token}`;
-        const mail = templates.inviteMember({
-          name: result.user.name,
-          inviterName: ctx.session!.user.name ?? undefined,
-          role: result.roleName ?? `Employee · ${input.department}`,
-          workspace: 'DevFathom',
-          acceptUrl: inviteUrl,
-          expiresLabel: 'in 7 days',
-        });
-        try {
-          await sendEmail({
-            to: { email: input.email, name: result.user.name },
-            subject: mail.subject,
-            html: mail.html,
-            text: mail.text,
-          });
-        } catch (error) {
-          console.error('[restaurantStaff.invite] invite email failed for', input.email, error);
-        }
-        return { ...result.staff, inviteUrl };
+        const delivery = await deliverStaffInvite(
+          ctx,
+          result.user,
+          result.roleName ?? `Employee · ${input.department}`,
+          token
+        );
+        return { ...result.staff, ...delivery };
       } catch (err) {
         mapStaffError(err);
       }
+    }),
+
+  resendInvite: staffProcedure
+    .input(z.object({ staffProfileId: z.string().min(1) }).strict())
+    .mutation(async ({ ctx, input }) => {
+      const authorization = await resolveStaffBranchAuthorization(
+        ctx.db,
+        ctx.session!.user,
+        ctx.entitlements.organizationId
+      );
+      await assertAuthorizedStaffProfile(ctx.db, authorization, input.staffProfileId);
+      const staff = await ctx.db.restaurantStaffProfile.findUnique({
+        where: { id: input.staffProfileId },
+        select: {
+          id: true,
+          user: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              status: true,
+              role: true,
+              department: true,
+              organizationRole: {
+                select: { name: true, permissions: { select: { capability: true, effect: true } } },
+              },
+              permissionOverrides: {
+                where: { OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] },
+                select: { capability: true, effect: true },
+              },
+            },
+          },
+        },
+      });
+      const user = staff?.user;
+      if (!user || user.status !== 'INVITED') {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'This staff member has no pending invitation.',
+        });
+      }
+      if (
+        !(await canAssignInviteRole(
+          ctx,
+          [...(user.organizationRole?.permissions ?? []), ...user.permissionOverrides],
+          user.role
+        ))
+      ) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'You cannot assign this role template.',
+        });
+      }
+      const { token, tokenHash } = generateInviteToken();
+      const changed = await ctx.db.invitation.updateMany({
+        where: { organizationId: workspaceOrganizationId(ctx), userId: user.id, acceptedAt: null },
+        data: {
+          tokenHash,
+          expiresAt: new Date(Date.now() + INVITE_TTL_MS),
+          invitedById: ctx.session!.user.id,
+        },
+      });
+      if (changed.count !== 1) {
+        throw new TRPCError({ code: 'CONFLICT', message: 'This invitation is no longer pending.' });
+      }
+      annotateAudit(ctx, {
+        targetType: 'RestaurantStaffProfile',
+        targetId: input.staffProfileId,
+        description: 'Resent restaurant staff invitation',
+      });
+      return {
+        id: input.staffProfileId,
+        email: user.email,
+        ...(await deliverStaffInvite(
+          ctx,
+          user,
+          user.organizationRole?.name ?? `Employee · ${user.department}`,
+          token
+        )),
+      };
     }),
 
   // ── Staff profiles ────────────────────────────────────────────────────────
@@ -450,6 +594,7 @@ export const restaurantStaffRouter = router({
           displayName: true,
           email: true,
           userId: true,
+          user: { select: { status: true } },
           primaryBranchId: true,
           status: true,
           createdAt: true,

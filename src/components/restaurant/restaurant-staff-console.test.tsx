@@ -3,6 +3,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { EntitlementView } from '@/lib/module-catalog';
 
+type InviteResult = { id: string; email: string; inviteUrl: string; emailDelivered: boolean };
+type InviteOptions = { onSuccess: (result: InviteResult) => void };
+
 type IssueOptions = { onError?: (error: { message: string }) => void };
 type IssueCallOptions = { onSettled?: () => void };
 type MutationOptions = {
@@ -22,6 +25,7 @@ const mocks = vi.hoisted(() => ({
         displayName: 'Shift Lead',
         email: 'lead@example.com',
         userId: null,
+        user: null as { status: string } | null,
         primaryBranchId: 'branch_1',
         status: 'ACTIVE',
         createdAt: new Date('2026-08-18T07:00:00Z'),
@@ -44,6 +48,9 @@ const mocks = vi.hoisted(() => ({
   issueReset: vi.fn(),
   noopMutate: vi.fn(),
   inviteMutate: vi.fn(),
+  inviteOptions: undefined as InviteOptions | undefined,
+  resendOptions: undefined as InviteOptions | undefined,
+  resendMutate: vi.fn(),
   inviteOptionsError: null as { message: string } | null,
   noopReset: vi.fn(),
   invalidate: vi.fn(),
@@ -111,7 +118,21 @@ vi.mock('@/lib/trpc', () => ({
         }),
       },
       invite: {
-        useMutation: () => ({ mutate: mocks.inviteMutate, isPending: false, error: null }),
+        useMutation: (options: InviteOptions) => {
+          mocks.inviteOptions = options;
+          return {
+            mutate: mocks.inviteMutate,
+            reset: mocks.noopReset,
+            isPending: false,
+            error: null,
+          };
+        },
+      },
+      resendInvite: {
+        useMutation: (options: InviteOptions) => {
+          mocks.resendOptions = options;
+          return { mutate: mocks.resendMutate, isPending: false, error: null };
+        },
       },
       listBranches: {
         useQuery: () => ({
@@ -326,6 +347,80 @@ describe('Restaurant staff credential UI', () => {
     });
   });
 
+  it('keeps a copyable invitation link after failed delivery and allows resending', async () => {
+    const copy = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: copy },
+    });
+    render(
+      <EntitlementsProvider value={entitlements}>
+        <RestaurantStaffConsole />
+      </EntitlementsProvider>
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Add staff member' }));
+    act(() =>
+      mocks.inviteOptions?.onSuccess({
+        id: 'staff_new',
+        email: 'mina@example.com',
+        inviteUrl: 'https://example.test/invite/first',
+        emailDelivered: false,
+      })
+    );
+    const dialog = screen.getByRole('dialog', { name: 'Staff invitation' });
+    expect(within(dialog).getByRole('status')).toHaveTextContent('email could not be sent');
+    expect(within(dialog).getByLabelText('Invitation link')).toHaveValue(
+      'https://example.test/invite/first'
+    );
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Copy invitation link' }));
+    await waitFor(() => expect(copy).toHaveBeenCalledWith('https://example.test/invite/first'));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Resend invitation' }));
+    expect(mocks.resendMutate).toHaveBeenCalledWith({ staffProfileId: 'staff_new' });
+    expect(mocks.inviteMutate).not.toHaveBeenCalled();
+    act(() =>
+      mocks.resendOptions?.onSuccess({
+        id: 'staff_new',
+        email: 'mina@example.com',
+        inviteUrl: 'https://example.test/invite/retry',
+        emailDelivered: true,
+      })
+    );
+    expect(within(dialog).getByLabelText('Invitation link')).toHaveValue(
+      'https://example.test/invite/retry'
+    );
+    expect(within(dialog).getByRole('status')).toHaveTextContent('Invitation email sent');
+  });
+
+  it('bounds the invite form to the viewport and preserves keyboard dismissal', async () => {
+    render(
+      <EntitlementsProvider value={entitlements}>
+        <RestaurantStaffConsole />
+      </EntitlementsProvider>
+    );
+    const trigger = screen.getByRole('button', { name: 'Add staff member' });
+    trigger.focus();
+    fireEvent.click(trigger);
+    fireEvent.click(screen.getByRole('button', { name: 'Invite new user' }));
+    const dialog = screen.getByRole('dialog', { name: 'Add staff member' });
+    expect(dialog).toHaveClass('max-h-[calc(100dvh-2rem)]', 'overflow-y-auto');
+    await waitFor(() => expect(dialog).toContainElement(document.activeElement as HTMLElement));
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(trigger).toHaveFocus();
+  });
+
+  it('offers resend for a pending invitation after the result dialog is closed', () => {
+    mocks.staff.data[0]!.user = { status: 'INVITED' };
+    render(
+      <EntitlementsProvider value={entitlements}>
+        <RestaurantStaffConsole />
+      </EntitlementsProvider>
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Resend invitation' }));
+    expect(mocks.resendMutate).toHaveBeenCalledWith({ staffProfileId: 'staff_1' });
+    mocks.staff.data[0]!.user = null;
+  });
+
   it('clears a rejected secret while preserving non-secret credential fields', () => {
     render(
       <EntitlementsProvider value={entitlements}>
@@ -414,6 +509,7 @@ describe('Restaurant staff role profiles', () => {
         displayName: 'Shift Lead',
         email: 'lead@example.com',
         userId: null,
+        user: null as { status: string } | null,
         primaryBranchId: 'branch_1',
         status: 'ACTIVE',
         createdAt: new Date('2026-08-18T07:00:00Z'),

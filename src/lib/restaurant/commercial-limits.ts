@@ -72,13 +72,15 @@ function transactionScopedDb(db: ScopedDb, tx: Prisma.TransactionClient): Scoped
 export async function withStaffCreationCapacity<T>(
   db: ScopedDb,
   limits: Readonly<Record<string, number>>,
-  work: (db: ScopedDb, tx: Prisma.TransactionClient) => Promise<T>
+  work: (db: ScopedDb, tx: Prisma.TransactionClient) => Promise<T>,
+  status: CreateStaffProfileInput['status'] = 'ACTIVE'
 ): Promise<T> {
-  const operatorsMax = configuredLimit(limits, RESTAURANT_OPERATORS_LIMIT);
+  const operatorsMax =
+    status === 'ACTIVE' ? configuredLimit(limits, RESTAURANT_OPERATORS_LIMIT) : undefined;
   return db.$transaction(async (tx) => {
     const scopedTx = transactionScopedDb(db, tx);
     await lockOrganization(tx);
-    await assertOperatorCapacity(scopedTx, operatorsMax);
+    if (operatorsMax !== undefined) await assertOperatorCapacity(scopedTx, operatorsMax);
     return work(scopedTx, tx);
   });
 }
