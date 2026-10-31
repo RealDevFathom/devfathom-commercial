@@ -32,6 +32,7 @@ const staffProfiles: Record<string, unknown>[] = [];
 const auditRecords: Record<string, unknown>[] = [];
 const jobRoles: Record<string, unknown>[] = [];
 const jobRoleHoldings: Record<string, unknown>[] = [];
+const branchAssignments: Record<string, unknown>[] = [];
 const stations: Record<string, unknown>[] = [];
 const organizationDefaults: string[] = [];
 
@@ -181,7 +182,20 @@ const platformDb = {
       };
     }),
   },
-  restaurantBranchAssignment: { create: passthrough('assignment') },
+  restaurantBranchAssignment: {
+    create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
+      branchAssignments.push(data);
+      return { id: `assignment_${branchAssignments.length}`, ...data };
+    }),
+    upsert: vi.fn(async ({ create }: { create: Record<string, unknown> }) => {
+      const existing = branchAssignments.find(
+        (row) => row.branchId === create.branchId && row.userId === create.userId
+      );
+      if (existing) return existing;
+      branchAssignments.push(create);
+      return { id: `assignment_${branchAssignments.length}`, ...create };
+    }),
+  },
   restaurantStaffProfile: {
     // `grantJobRole` asserts both the staff profile and the branch are in scope.
     findUnique: vi.fn(async ({ where }: { where: { id: string } }) => ({ id: where.id })),
@@ -265,6 +279,7 @@ beforeEach(() => {
   auditRecords.length = 0;
   jobRoles.length = 0;
   jobRoleHoldings.length = 0;
+  branchAssignments.length = 0;
   stations.length = 0;
   organizationDefaults.length = 0;
   state.existingByUserId = new Map();
@@ -361,6 +376,9 @@ describe('restaurant administrator staff profile at the platform entry points', 
     // second holding, and no extra station on the branch that already has one.
     expect(jobRoles).toHaveLength(RESTAURANT_JOB_ROLE_TEMPLATES.length);
     expect(jobRoleHoldings).toHaveLength(1);
+    expect(branchAssignments).toEqual([
+      { organizationId: 'org_new', branchId: 'branch_default', userId: 'user_admin' },
+    ]);
     expect(stations).toHaveLength(1);
     const audited = auditRecords.at(-1)?.after as Record<string, unknown>;
     expect(audited.restaurantAdministratorStaffProfiles).toEqual([
@@ -461,6 +479,10 @@ describe('restaurant administrator staff profile at the platform entry points', 
 
     await executePlatformCommand(actor, 'organization.transition', activatePayload, request);
 
+    expect(branchAssignments).toEqual([
+      { organizationId: 'org_new', branchId: 'branch_default', userId: 'user_admin' },
+      { organizationId: 'org_new', branchId: 'branch_second', userId: 'user_admin' },
+    ]);
     expect(stations).toEqual([
       { branchId: 'branch_default', name: 'Kitchen', isDefault: true },
       { branchId: 'branch_second', name: 'Kitchen', isDefault: true },

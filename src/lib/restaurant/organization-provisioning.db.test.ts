@@ -243,9 +243,11 @@ describeIfDatabase('provisionRestaurantOrganization against PostgreSQL', () => {
       roles: await tx.restaurantJobRole.count(),
       profiles: await tx.restaurantStaffProfile.count(),
       holdings: await tx.restaurantStaffJobRole.count(),
+      assignments: await tx.restaurantBranchAssignment.count(),
       stations: await tx.restaurantKitchenStation.count(),
     }));
 
+    expect(before.assignments).toBe(2);
     const second = await provisionAsPlatform();
 
     expect(second.jobRolesCreated).toEqual([]);
@@ -259,6 +261,7 @@ describeIfDatabase('provisionRestaurantOrganization against PostgreSQL', () => {
         roles: await tx.restaurantJobRole.count(),
         profiles: await tx.restaurantStaffProfile.count(),
         holdings: await tx.restaurantStaffJobRole.count(),
+        assignments: await tx.restaurantBranchAssignment.count(),
         stations: await tx.restaurantKitchenStation.count(),
       }))
     ).resolves.toEqual(before);

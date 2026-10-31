@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
   jobRoleFindFirst: vi.fn(),
   stationFindFirst: vi.fn(),
   stationCreate: vi.fn(),
+  assignmentUpsert: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -60,6 +61,7 @@ import { RESTAURANT_JOB_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
 import type { TRPCContext } from '../trpc';
 
 const db = {
+  restaurantBranchAssignment: { upsert: mocks.assignmentUpsert },
   restaurantStaffProfile: {
     findFirst: mocks.staffFindFirst,
     findMany: mocks.staffFindMany,
@@ -166,6 +168,11 @@ describe('restaurantStaff.provisionMyProfile', () => {
       primaryBranchId: 'branch_default',
       userId: 'user_admin',
       roleProfileGranted: false,
+    });
+    expect(mocks.assignmentUpsert).toHaveBeenCalledWith({
+      where: { branchId_userId: { branchId: 'branch_default', userId: 'user_admin' } },
+      create: { organizationId: 'org_1', branchId: 'branch_default', userId: 'user_admin' },
+      update: {},
     });
     expect(mocks.staffCreate).toHaveBeenCalledOnce();
     expect(mocks.staffCreate.mock.calls[0]![0].data).toMatchObject({

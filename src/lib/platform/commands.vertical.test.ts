@@ -71,6 +71,7 @@ const mocks = vi.hoisted(() => ({
     { id: 'user_admin', name: 'Restaurant Admin', email: 'admin@burger.co' },
   ]),
   assignmentCreate: vi.fn(),
+  assignmentUpsert: vi.fn(),
   moduleUpsert: vi.fn(),
   orgModuleFindMany: vi.fn(),
   orgModuleCount: vi.fn(),
@@ -154,7 +155,7 @@ const platformDb = {
     count: mocks.branchCount,
   },
   pharmacyBranch: { create: mocks.pharmacyBranchCreate },
-  restaurantBranchAssignment: { create: mocks.assignmentCreate },
+  restaurantBranchAssignment: { create: mocks.assignmentCreate, upsert: mocks.assignmentUpsert },
   restaurantStaffProfile: {
     findFirst: mocks.staffFindFirst,
     create: mocks.staffCreate,
