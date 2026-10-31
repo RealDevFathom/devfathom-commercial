@@ -9,6 +9,7 @@ import {
   buildSoloOwnerCoAuthorization,
 } from '@/lib/restaurant/co-authorization';
 import { operatorHasCapability } from '@/lib/restaurant/checkout-routes';
+import { recordOwnerPinReauthentication } from '@/lib/restaurant/owner-reauthentication';
 import { recordTerminalOperatorAudit } from '@/lib/restaurant/terminal-audit';
 import { authenticateOperator, withTerminalAuth } from '@/lib/restaurant/terminal-auth';
 
@@ -128,6 +129,9 @@ export const POST = withTerminalAuth(async (ctx, request) => {
       { status: 403 }
     );
   }
+  if (type === 'PIN') {
+    await recordOwnerPinReauthentication(ctx.db, approvingStaffProfileId, ctx.device.branchId);
+  }
   const created = await ctx.db.restaurantCoAuthorization.create({ data: record });
   // C7 attribution: the actor stays the ACTING operator (approval never changes
   // who acts); the approving manager and the evidence are pinned in metadata.
@@ -143,6 +147,10 @@ export const POST = withTerminalAuth(async (ctx, request) => {
       capability: record.capability,
       reason: record.reason,
       soloOwnerPinReauthenticated: actingStaffProfileId === approvingStaffProfileId,
+      approvalMode:
+        record.actingStaffProfileId === record.approvingStaffProfileId
+          ? 'OWNER_PIN_REAUTHENTICATION'
+          : 'SECOND_OPERATOR',
     },
   });
   return NextResponse.json(

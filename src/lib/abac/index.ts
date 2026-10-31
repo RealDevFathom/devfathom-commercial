@@ -32,7 +32,7 @@ async function customDecision(
   userId: string,
   action: string,
   now: Date
-): Promise<boolean | null> {
+): Promise<{ decision: boolean | null; hasOrganizationRole: boolean }> {
   const user = await db.user.findUnique({
     where: { id: userId },
     select: {
@@ -46,19 +46,22 @@ async function customDecision(
       },
     },
   });
-  if (!user) return false;
+  if (!user) return { decision: false, hasOrganizationRole: false };
   const matchingRules = [
     ...user.permissionOverrides,
     ...(user.organizationRole?.permissions ?? []),
   ].filter((rule) =>
     capabilityMatches(rule.capability, action, rule.effect === 'DENY' ? 'DENY' : 'ALLOW')
   );
-  if (matchingRules.some((rule) => rule.effect === 'DENY')) return false;
-  // Owners/admins hold every capability, including regulated actions. Explicit
-  // DENY still wins; exact-grant pharmacy rules remain unchanged for other roles.
-  if (isTenantAdministrator(user)) return true;
-  if (matchingRules.some((rule) => rule.effect === 'ALLOW')) return true;
-  return null;
+  const hasOrganizationRole = user.organizationRole !== null;
+  if (matchingRules.some((rule) => rule.effect === 'DENY')) {
+    return { decision: false, hasOrganizationRole };
+  }
+  // Server-loaded tenant ownership retains its grants; explicit DENY still wins.
+  if (isTenantAdministrator(user) || matchingRules.some((rule) => rule.effect === 'ALLOW')) {
+    return { decision: true, hasOrganizationRole };
+  }
+  return { decision: null, hasOrganizationRole };
 }
 
 /** True iff some policy registered for `action` allows the subject + resource. */
@@ -75,14 +78,19 @@ export async function can(
   };
   const db = opts.db;
   if (!db) {
-    console.error(`[abac] no tenant-scoped database supplied for "${action}"`);
+    console.error('[abac] no tenant-scoped database supplied for "%s"', action);
     return false;
   }
   try {
-    const decision = await customDecision(db, subject.id, action, env.now);
+    const { decision, hasOrganizationRole } = await customDecision(db, subject.id, action, env.now);
     if (decision !== null) return decision;
+    // Procurement's tenant-admin fallback exists only for legacy users who do
+    // not yet have an organization role. Once a role is assigned, its
+    // capabilities are the boundary: an omitted procurement grant must not
+    // fall through to the coarse ADMIN policy.
+    if (action === 'pharmacy:procurement' && hasOrganizationRole) return false;
   } catch (err) {
-    console.error(`[abac] custom permission lookup for "${action}" threw:`, err);
+    console.error('[abac] custom permission lookup for "%s" threw:', action, err);
     return false;
   }
   for (const policy of POLICIES[action] ?? []) {
@@ -90,7 +98,7 @@ export async function can(
       if (await policy({ subject, resource, env, db })) return true;
     } catch (err) {
       // A policy that throws denies (fail-closed) but never crashes the request.
-      console.error(`[abac] policy for "${action}" threw:`, err);
+      console.error('[abac] policy for "%s" threw:', action, err);
     }
   }
   return false;

@@ -554,7 +554,7 @@ describe('operator attribution and secret containment', () => {
       const { device, secret } = await enroll('co-authorization');
       const { token, sessionId } = await establish(secret);
       addOperator(ACTING, device.id);
-      addOperator(MANAGER, device.id);
+      addOperator(MANAGER, device.id, ['coauth:approve']);
       expect((await unlock(secret, token, ACTING, PINS[ACTING])).response.status).toBe(200);
 
       const marker = PINS[MANAGER];
@@ -605,7 +605,7 @@ describe('operator attribution and secret containment', () => {
     const { token } = await establish(secret);
     addOperator(ACTING, device.id);
     addOperator(INCOMING, device.id);
-    addOperator(MANAGER, device.id);
+    addOperator(MANAGER, device.id, ['coauth:approve']);
 
     expect((await unlock(secret, token, ACTING, PINS[ACTING])).response.status).toBe(200);
     expect(

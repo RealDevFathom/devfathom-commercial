@@ -1,7 +1,7 @@
 // @vitest-environment node
 /** PR 268: real router, Prisma, PostgreSQL RLS, PIN hashing and durable attribution.
- * Run with DATABASE_URL and, if it is privileged, TEST_RUNTIME_ROLE naming an
- * existing NOSUPERUSER/NOBYPASSRLS application role. Fixtures are committed and cleaned up.
+ * Run with TEST_DATABASE_URL naming a NOSUPERUSER/NOBYPASSRLS application role.
+ * Fixtures are committed for independent credential transactions and cleaned up.
  */
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
@@ -17,6 +17,11 @@ import { hashOperatorCredential } from '@/lib/restaurant/operator-credentials';
 import { resolveRestaurantActor } from '@/server/restaurant-actor';
 import { toAuditJson } from '@/server/audit';
 
+const databaseUrl = process.env.TEST_DATABASE_URL;
+if (databaseUrl) process.env.DATABASE_URL = databaseUrl;
+const describeIfDatabase = databaseUrl ? describe : describe.skip;
+const pkg = packageByKey('restaurant-enterprise')!;
+
 async function scenario(
   run: (
     db: ScopedDb,
@@ -24,8 +29,6 @@ async function scenario(
     caller: (user: string) => ReturnType<typeof restaurantSopExecutionRouter.createCaller>
   ) => Promise<void>
 ) {
-  if (!process.env.DATABASE_URL)
-    throw new Error('DATABASE_URL is required for SOP security regressions');
   const prefix = `sop268_${randomUUID().replaceAll('-', '')}`;
   const ids = Object.fromEntries(
     [
@@ -55,7 +58,7 @@ async function scenario(
           legalName: prefix,
           displayName: prefix,
           status: 'ACTIVE',
-          vertical: 'RESTAURANT',
+          vertical: pkg.vertical,
         },
       });
       await withOrganizationDefaults(platform, ids.org!, async (db) => {
@@ -165,7 +168,6 @@ async function scenario(
       'SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user'
     );
     expect(runtime).toEqual({ rolsuper: false, rolbypassrls: false });
-    const pkg = packageByKey('restaurant-enterprise')!;
     const caller = (user: string) =>
       restaurantSopExecutionRouter.createCaller({
         db,
@@ -202,7 +204,7 @@ async function scenario(
   }
 }
 
-describe('PR 268 SOP security against local Postgres', () => {
+describeIfDatabase('PR 268 SOP security against local Postgres', () => {
   it('enforces tenant RLS even for an owner', async () => {
     await scenario(async (db, ids) => {
       await db.$transaction(async (tx) => {

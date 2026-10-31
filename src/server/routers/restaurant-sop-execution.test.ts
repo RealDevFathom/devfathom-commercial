@@ -26,7 +26,8 @@ vi.mock('@/lib/entitlements', () => ({
   hasModule: vi.fn(() => true),
   resolveOrganizationEntitlements: vi.fn(async () => ({ enabledModules: [] })),
 }));
-vi.mock('@/server/audit', () => ({
+vi.mock('@/server/audit', async (original) => ({
+  ...(await original<typeof import('@/server/audit')>()),
   ipFromHeaders: vi.fn(() => null),
   isAuditExcludedPath: vi.fn(() => true),
   recordTrpcAudit: vi.fn(),

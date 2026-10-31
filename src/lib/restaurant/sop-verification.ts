@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { categoryForPath } from '@/server/audit';
+
 import { authenticateApprovalPin } from './approval-auth';
 import { operatorHasCapability } from './checkout-routes';
 import { type ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -127,7 +129,7 @@ export async function verifyOccurrence(
             actorType: 'RESTAURANT_OPERATOR',
             actorStaffProfileId: actor,
             source: 'SYSTEM',
-            category: 'RESTAURANT',
+            category: categoryForPath('restaurant'),
             operation: 'EXECUTE',
             action: 'sop.verify.soloOwnerApproval',
             description: 'Sole active owner verified their SOP execution with a verified PIN.',
@@ -316,7 +318,7 @@ export async function waiveOccurrence(
           actorType: 'RESTAURANT_OPERATOR',
           actorStaffProfileId: input.actorStaffProfileId,
           source: 'SYSTEM',
-          category: 'RESTAURANT',
+          category: categoryForPath('restaurant'),
           operation: 'EXECUTE',
           action: 'sop.waive.soloOwnerApproval',
           description: 'Sole active owner approved an SOP waiver with a verified PIN.',

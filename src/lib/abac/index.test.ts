@@ -145,21 +145,49 @@ describe('opt-in pharmacy Owner / Operator access', () => {
 });
 
 describe('custom ABAC decisions', () => {
-  it('preserves procurement access for managers and tenant admins without a role', async () => {
-    const managerPermissions = roleTemplatesForVertical('PHARMACY')
-      .find((role) => role.key === 'manager')!
+  const pharmacyPermissionsFor = (roleKey: string): Permission[] =>
+    roleTemplatesForVertical('PHARMACY')
+      .find((role) => role.key === roleKey)!
       .capabilities.map((capability) => ({ capability, effect: 'ALLOW' as const }));
 
+  it('preserves procurement access for the Manager template (#375)', async () => {
     await expect(
       can(employee, 'pharmacy:procurement', undefined, {
-        db: authorizationDb({ rolePermissions: managerPermissions }),
+        db: authorizationDb({ rolePermissions: pharmacyPermissionsFor('manager') }),
       })
     ).resolves.toBe(true);
+  });
+
+  it('preserves procurement access for a tenant admin without a role (#375)', async () => {
     await expect(
       can({ ...employee, role: 'ADMIN' }, 'pharmacy:procurement', undefined, {
         db: authorizationDb({}),
       })
     ).resolves.toBe(true);
+  });
+
+  it('does not give the Pharmacist template procurement access by default (#375)', async () => {
+    await expect(
+      can(employee, 'pharmacy:procurement', undefined, {
+        db: authorizationDb({ rolePermissions: pharmacyPermissionsFor('pharmacist') }),
+      })
+    ).resolves.toBe(false);
+  });
+
+  it('does not let tenant admin authority bypass an assigned Pharmacist role (#375)', async () => {
+    await expect(
+      can({ ...employee, role: 'ADMIN' }, 'pharmacy:procurement', undefined, {
+        db: authorizationDb({ rolePermissions: pharmacyPermissionsFor('pharmacist') }),
+      })
+    ).resolves.toBe(false);
+  });
+
+  it('does not let tenant admin authority bypass an assigned custom role (#375)', async () => {
+    await expect(
+      can({ ...employee, role: 'ADMIN' }, 'pharmacy:procurement', undefined, {
+        db: authorizationDb({ rolePermissions: [] }),
+      })
+    ).resolves.toBe(false);
   });
 
   it('lets an explicit deny revoke tenant admin procurement access', async () => {
@@ -228,6 +256,45 @@ describe('custom ABAC decisions', () => {
     ).resolves.toBe(false);
   });
 
+  it('keeps format specifiers in a failed action lookup out of the log format', async () => {
+    const error = new Error('database unavailable');
+    const db = {
+      user: { findUnique: vi.fn().mockRejectedValue(error) },
+    } as unknown as AuthzDb;
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const action = 'team:%s%s' as Action;
+    try {
+      await expect(can(employee, action, undefined, { db })).resolves.toBe(false);
+      expect(log).toHaveBeenCalledExactlyOnceWith(
+        '[abac] custom permission lookup for "%s" threw:',
+        action,
+        error
+      );
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it('logs a throwing policy with a constant format and still denies access', async () => {
+    const error = new Error('policy unavailable');
+    const originalPolicies = POLICIES['team:view'];
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    POLICIES['team:view'] = [vi.fn().mockRejectedValue(error)];
+    try {
+      await expect(
+        can(employee, 'team:view', undefined, { db: authorizationDb({}) })
+      ).resolves.toBe(false);
+      expect(log).toHaveBeenCalledExactlyOnceWith(
+        '[abac] policy for "%s" threw:',
+        'team:view',
+        error
+      );
+    } finally {
+      POLICIES['team:view'] = originalPolicies;
+      log.mockRestore();
+    }
+  });
+
   it('normalizes a session user into a policy subject', () => {
     expect(subjectFromSession({ id: 'u1' })).toEqual({
       id: 'u1',
@@ -260,9 +327,10 @@ describe('custom ABAC decisions', () => {
       'pharmacy:safety',
       'pharmacy:catalogue-review',
       'pharmacy:orders',
+      'pharmacy:close',
     ] as const satisfies readonly Action[];
 
-    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(45);
+    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(46);
     for (const action of actions) {
       expect(ALL_ACTIONS).toContain(action);
       expect(POLICIES[action]).toHaveLength(0);
