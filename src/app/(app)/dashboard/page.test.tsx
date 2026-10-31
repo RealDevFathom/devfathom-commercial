@@ -47,6 +47,7 @@ import { PharmacyDashboardContent } from './pharmacy-dashboard-content';
 import { HotelDashboardContent } from './hotel-dashboard-content';
 import { RestaurantDashboardContent } from './restaurant-dashboard-content';
 import { ALL_ACTIONS, POLICIES } from '@/lib/abac/policies';
+import type { AuthzDb } from '@/lib/authz';
 
 function helpers() {
   return {
@@ -131,6 +132,48 @@ describe('DashboardPage vertical dispatch', () => {
         'restaurant-core',
         'restaurant-inventory',
       ]);
+    }
+  );
+
+  it.each([
+    ['owner', 'ADMIN', ['orders:take'], [], '/restaurant'],
+    ['delegated administrator', 'EMPLOYEE', ['admin:access', 'orders:take'], [], '/restaurant'],
+    ['waiter', 'EMPLOYEE', ['orders:take'], [], '/pos'],
+    ['kitchen staff', 'EMPLOYEE', [], [], null],
+    ['revoked waiter', 'EMPLOYEE', ['orders:take'], ['orders:take'], null],
+    ['revoked administrator', 'ADMIN', ['orders:take'], ['admin:access'], '/pos'],
+  ] as const)(
+    'resolves the %s landing through production ABAC policies',
+    async (_persona, role, grants, denials, target) => {
+      const { can } = await vi.importActual<typeof import('@/lib/abac')>('@/lib/abac');
+      const findUnique = vi.fn().mockResolvedValue({
+        organizationRole: {
+          permissions: grants.map((capability) => ({ capability, effect: 'ALLOW' })),
+        },
+        permissionOverrides: denials.map((capability) => ({ capability, effect: 'DENY' })),
+      });
+      const db = { user: { findUnique } } as unknown as AuthzDb;
+      mocks.can.mockImplementation(can);
+      mocks.withTenantDb.mockImplementation((_id, callback) => callback(db));
+      mocks.createSSRHelpers.mockResolvedValue({
+        helpers: helpers(),
+        session: { user: { id: 'restaurant-user', role, status: 'ACTIVE' } },
+        organization: { id: 'restaurant-tenant' },
+        entitlements: { vertical: 'RESTAURANT', enabledModules: ['restaurant-core'] },
+      });
+
+      if (target) {
+        await expect(DashboardPage()).rejects.toThrow('redirect');
+        expect(mocks.redirect).toHaveBeenCalledWith(target);
+      } else {
+        const page = await DashboardPage();
+        expect(mocks.redirect).not.toHaveBeenCalled();
+        expect(page.props.children.type).toBe(RestaurantDashboardContent);
+      }
+      expect(mocks.withTenantDb).toHaveBeenCalledWith('restaurant-tenant', expect.any(Function));
+      expect(findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'restaurant-user' } })
+      );
     }
   );
 
