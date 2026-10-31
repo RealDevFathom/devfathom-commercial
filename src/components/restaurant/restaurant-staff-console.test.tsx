@@ -13,6 +13,10 @@ type MutationOptions = {
   }) => void | Promise<void>;
   onError?: (error: { message: string }) => void;
 };
+type InviteOptions = {
+  onSuccess?: (result: { inviteUrl: string; emailDelivered: boolean; resent: boolean }) => void;
+  onError?: (error: { message: string }) => void;
+};
 
 const mocks = vi.hoisted(() => ({
   staff: {
@@ -21,7 +25,7 @@ const mocks = vi.hoisted(() => ({
         id: 'staff_1',
         displayName: 'Shift Lead',
         email: 'lead@example.com',
-        userId: null,
+        userId: null as string | null,
         primaryBranchId: 'branch_1',
         status: 'ACTIVE',
         createdAt: new Date('2026-08-18T07:00:00Z'),
@@ -43,6 +47,8 @@ const mocks = vi.hoisted(() => ({
   issueMutate: vi.fn(),
   issueReset: vi.fn(),
   noopMutate: vi.fn(),
+  inviteMutate: vi.fn(),
+  inviteOptions: undefined as InviteOptions | undefined,
   noopReset: vi.fn(),
   invalidate: vi.fn(),
   roleSave: vi.fn(),
@@ -85,6 +91,7 @@ vi.mock('@/lib/trpc', () => ({
       restaurantStaff: {
         list: { invalidate: mocks.invalidate },
         listCredentials: { invalidate: mocks.invalidate },
+        listEligibleUsers: { invalidate: mocks.invalidate },
         // SOP-1: the job-roles dialog invalidates its own two queries on save.
         listStaffJobRoles: { invalidate: mocks.invalidate },
         listStaffJobRoleAudit: { invalidate: mocks.invalidate },
@@ -143,6 +150,17 @@ vi.mock('@/lib/trpc', () => ({
           isPending: false,
           error: null,
         }),
+      },
+      invite: {
+        useMutation: (options: InviteOptions) => {
+          mocks.inviteOptions = options;
+          return {
+            mutate: mocks.inviteMutate,
+            reset: mocks.noopReset,
+            isPending: false,
+            error: null,
+          };
+        },
       },
       update: {
         useMutation: () => ({
@@ -250,6 +268,7 @@ describe('Restaurant staff credential UI', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: 'Add staff member' }));
     const dialog = screen.getByRole('dialog', { name: 'Add staff member' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Link existing user' }));
     const selector = within(dialog).getByLabelText('Organization user');
     expect(
       within(selector).getByRole('option', { name: 'Ayesha Khan — ayesha@example.com' })
@@ -261,8 +280,166 @@ describe('Restaurant staff credential UI', () => {
     ).toBeDisabled();
     expect(within(dialog).queryByText(/linked user id/i)).not.toBeInTheDocument();
   });
+
+  it('invites a new restaurant manager and creates their staff profile in one flow', () => {
+    render(
+      <EntitlementsProvider value={entitlements}>
+        <RestaurantStaffConsole />
+      </EntitlementsProvider>
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Add staff member' }));
+    const dialog = screen.getByRole('dialog', { name: 'Add staff member' });
+    expect(within(dialog).getByRole('button', { name: 'Invite new user' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+    fireEvent.change(within(dialog).getByLabelText('Display name'), {
+      target: { value: 'Mina Shah' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('Email'), {
+      target: { value: 'mina@example.com' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('Staff role'), {
+      target: { value: 'MANAGER' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('Primary branch'), {
+      target: { value: 'branch_1' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('Status'), {
+      target: { value: 'SUSPENDED' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save staff member' }));
+
+    expect(mocks.inviteMutate).toHaveBeenCalledWith({
+      name: 'Mina Shah',
+      email: 'mina@example.com',
+      staffRole: 'MANAGER',
+      status: 'SUSPENDED',
+      primaryBranchId: 'branch_1',
+      idempotencyKey: expect.any(String),
+    });
+    expect(mocks.noopMutate).not.toHaveBeenCalled();
+  });
+
+  it('keeps the shareable link visible when invitation email delivery is unconfirmed', () => {
+    render(
+      <EntitlementsProvider value={entitlements}>
+        <RestaurantStaffConsole />
+      </EntitlementsProvider>
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Add staff member' }));
+
+    act(() => {
+      mocks.inviteOptions?.onSuccess?.({
+        inviteUrl: 'https://devfathom.test/invite/retry-token',
+        emailDelivered: false,
+        resent: false,
+      });
+    });
+
+    expect(screen.getByRole('dialog', { name: 'Add staff member' })).toBeVisible();
+    expect(screen.getByText('Email delivery could not be confirmed.')).toBeVisible();
+    expect(screen.getByRole('link', { name: /retry-token/ })).toHaveAttribute(
+      'href',
+      'https://devfathom.test/invite/retry-token'
+    );
+    expect(screen.getByRole('dialog')).toHaveClass('max-h-[calc(100dvh-2rem)]', 'overflow-y-auto');
+  });
+
+  it('preserves the current pending account when saving a profile edit', () => {
+    mocks.staff.data[0]!.userId = 'user_pending';
+    mocks.eligibleUsers.push({
+      id: 'user_pending',
+      name: 'Shift Lead',
+      email: 'lead@example.com',
+      status: 'INVITED',
+      restaurantStaffProfiles: [{ id: 'staff_1', displayName: 'Shift Lead' }],
+    });
+    render(
+      <EntitlementsProvider value={entitlements}>
+        <RestaurantStaffConsole />
+      </EntitlementsProvider>
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByLabelText('Organization user')).toHaveValue('user_pending');
+    expect(within(dialog).getByRole('option', { name: /currently linked/ })).toBeEnabled();
+    fireEvent.change(within(dialog).getByLabelText('Display name'), {
+      target: { value: 'Updated Lead' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save staff member' }));
+    expect(mocks.noopMutate).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'staff_1', displayName: 'Updated Lead' })
+    );
+    expect(mocks.noopMutate.mock.calls[0]![0]).not.toHaveProperty('userId');
+  });
+
+  it('preserves the current account while it is absent from the directory', () => {
+    mocks.staff.data[0]!.userId = 'user_pending';
+    const view = render(
+      <EntitlementsProvider value={entitlements}>
+        <RestaurantStaffConsole />
+      </EntitlementsProvider>
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByLabelText('Organization user')).toHaveValue('user_pending');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save staff member' }));
+    expect(mocks.noopMutate.mock.calls[0]![0]).not.toHaveProperty('userId');
+    mocks.eligibleUsers.push({
+      id: 'user_pending',
+      name: 'Shift Lead',
+      email: 'lead@example.com',
+      status: 'INVITED',
+      restaurantStaffProfiles: [{ id: 'staff_1', displayName: 'Shift Lead' }],
+    });
+    view.rerender(
+      <EntitlementsProvider value={entitlements}>
+        <RestaurantStaffConsole />
+      </EntitlementsProvider>
+    );
+    expect(within(dialog).getByLabelText('Organization user')).toHaveValue('user_pending');
+    // An explicit unlink still reaches the server as null.
+    fireEvent.change(within(dialog).getByLabelText('Organization user'), { target: { value: '' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save staff member' }));
+    expect(mocks.noopMutate).toHaveBeenLastCalledWith(expect.objectContaining({ userId: null }));
+  });
+
+  it.each(['edit', 'mode', 'identity'] as const)(
+    'clears a previous activation link when changing %s',
+    async (operation) => {
+      render(
+        <EntitlementsProvider value={entitlements}>
+          <RestaurantStaffConsole />
+        </EntitlementsProvider>
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'Add staff member' }));
+      act(() =>
+        mocks.inviteOptions?.onSuccess?.({
+          inviteUrl: 'https://devfathom.test/invite/previous-person',
+          emailDelivered: false,
+          resent: false,
+        })
+      );
+      expect(screen.getByRole('link', { name: /previous-person/ })).toBeVisible();
+      if (operation === 'edit') {
+        fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+        await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+        fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+      } else if (operation === 'mode') {
+        fireEvent.click(screen.getByRole('button', { name: 'Link existing user' }));
+      } else {
+        fireEvent.change(screen.getByLabelText('Email'), {
+          target: { value: 'another@example.com' },
+        });
+      }
+      expect(screen.queryByRole('link', { name: /previous-person/ })).not.toBeInTheDocument();
+    }
+  );
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.staff.data[0]!.userId = null;
+    mocks.eligibleUsers = mocks.eligibleUsers.filter((user) => user.id !== 'user_pending');
     mocks.issueOptions = undefined;
     mocks.issueMutate.mockImplementation((_input, options?: IssueCallOptions) => {
       mocks.issueOptions?.onError?.({ message: 'Credential rejected.' });

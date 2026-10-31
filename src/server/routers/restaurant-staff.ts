@@ -7,6 +7,11 @@ import { StaffProfileError } from '@/lib/restaurant/staff';
 import { demoDirectoryPolicy } from '@/lib/demo/directory-access';
 import { resolveDemoDirectoryScope } from '@/lib/restaurant/staff-branch-authorization';
 import { provisionRestaurantOrganization } from '@/lib/restaurant/organization-provisioning';
+import { appUrl, sendEmail, templates } from '@/lib/email';
+import { emailSchema } from '@/lib/email-address';
+import { generateIdempotentInviteToken } from '@/lib/invite-token';
+import { Prisma } from '@/generated/prisma/client';
+import { RESTAURANT_OPERATORS_LIMIT, resolveEntitlementLimit } from '@/lib/entitlement-limits';
 import {
   CommercialLimitError,
   createStaffProfileWithinCommercialLimit,
@@ -66,6 +71,8 @@ import {
 
 const STAFF_STATUS = z.enum(['ACTIVE', 'SUSPENDED', 'ARCHIVED']);
 const CREDENTIAL_TYPE = z.enum(['PIN', 'BADGE']);
+const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const OCCUPIED_SEAT_STATUSES = ['ACTIVE', 'ON_LEAVE', 'INVITED'] as const;
 
 /** Translate a staff-domain error into the right tRPC status; rethrow anything else. */
 function mapStaffError(err: unknown): never {
@@ -268,6 +275,295 @@ export const restaurantStaffRouter = router({
       orderBy: [{ name: 'asc' }, { email: 'asc' }],
     });
   }),
+
+  invite: staffProcedure
+    .input(
+      z.object({
+        name: z.string().trim().min(1).max(200),
+        email: emailSchema,
+        staffRole: z.enum(['WAITER', 'MANAGER']),
+        status: STAFF_STATUS.default('ACTIVE'),
+        primaryBranchId: z.string().min(1),
+        idempotencyKey: z.string().trim().min(8).max(200),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const authorization = await resolveStaffBranchAuthorization(
+        ctx.db,
+        ctx.session!.user,
+        ctx.entitlements.organizationId
+      );
+      if (!authorization.organizationWide) {
+        assertAuthorizedBranch(authorization, input.primaryBranchId);
+      } else if (input.primaryBranchId) {
+        assertAuthorizedBranch(authorization, input.primaryBranchId);
+      }
+
+      const organizationId = workspaceOrganizationId(ctx);
+      const department = await ctx.db.organizationDepartment.findFirst({
+        where: { organizationId: workspaceOrganizationId(ctx), active: true },
+        select: { key: true },
+        orderBy: { sortOrder: 'asc' },
+      });
+      if (!department) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'No active department is available.' });
+      }
+
+      const { token, tokenHash } = generateIdempotentInviteToken(
+        organizationId,
+        input.idempotencyKey
+      );
+      const expiresAt = new Date(Date.now() + INVITE_TTL_MS);
+      const title = input.staffRole === 'MANAGER' ? 'Restaurant Manager' : 'Waiter';
+      const result = await ctx.db
+        .$transaction(async (tx) => {
+          // Serialize all seat-occupying writes for this tenant, then re-count from
+          // the authoritative rows. The entitlement snapshot is deliberately not
+          // used for this decision because two requests can share the same snapshot.
+          await tx.$queryRaw(
+            Prisma.sql`SELECT id FROM organizations WHERE id = ${organizationId} FOR UPDATE`
+          );
+          const existing = await tx.user.findFirst({
+            where: { organizationId, email: input.email },
+            select: {
+              id: true,
+              name: true,
+              status: true,
+              role: true,
+              organizationRole: { select: { key: true } },
+              permissionOverrides: {
+                where: {
+                  effect: 'ALLOW',
+                  OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+                },
+                select: { id: true },
+              },
+              restaurantStaffProfiles: {
+                select: {
+                  id: true,
+                  displayName: true,
+                  primaryBranchId: true,
+                  status: true,
+                  jobRoles: {
+                    where: { branchId: input.primaryBranchId },
+                    select: { jobRole: { select: { key: true } } },
+                  },
+                },
+              },
+            },
+          });
+          if (existing) {
+            const staff = existing.restaurantStaffProfiles.find(
+              (profile) => profile.primaryBranchId === input.primaryBranchId
+            );
+            if (existing.status === 'INVITED' && staff) {
+              // The activation link controls the whole account, including any
+              // other linked profiles and branch-specific grants.
+              for (const profile of existing.restaurantStaffProfiles) {
+                await assertAuthorizedStaffProfile(tx, authorization, profile.id);
+              }
+              // Branch scope alone cannot authorize handing out a bearer link
+              // to a privileged web account. Scoped managers may resend only
+              // the web roles this flow can create, without extra user grants.
+              if (
+                !authorization.organizationWide &&
+                (existing.role !== 'EMPLOYEE' ||
+                  existing.organizationRole?.key !==
+                    (input.staffRole === 'MANAGER' ? 'branch-manager' : 'server') ||
+                  existing.permissionOverrides.length > 0)
+              ) {
+                denyStaffBranchAccess();
+              }
+              const expectedRoleKey = input.staffRole === 'MANAGER' ? 'manager' : 'server';
+              if (!staff.jobRoles.some(({ jobRole }) => jobRole.key === expectedRoleKey)) {
+                throw new TRPCError({
+                  code: 'CONFLICT',
+                  message:
+                    'This pending invitation has a different restaurant role. Cancel it before inviting the user with a new role.',
+                });
+              }
+              if (staff.status !== input.status) {
+                throw new TRPCError({
+                  code: 'CONFLICT',
+                  message:
+                    'This pending staff profile has a different status. Edit it before resending the invitation.',
+                });
+              }
+              await tx.invitation.upsert({
+                where: { userId: existing.id },
+                create: {
+                  userId: existing.id,
+                  email: input.email,
+                  tokenHash,
+                  invitedById: ctx.session!.user.id,
+                  expiresAt,
+                },
+                update: {
+                  email: input.email,
+                  tokenHash,
+                  invitedById: ctx.session!.user.id,
+                  expiresAt,
+                  acceptedAt: null,
+                },
+              });
+              return { user: existing, staff, resent: true };
+            }
+            throw new TRPCError({
+              code: 'CONFLICT',
+              message:
+                'A user with this email already exists. Link them from the existing user list.',
+            });
+          }
+          const activeSeats = await tx.user.count({
+            where: { organizationId, status: { in: [...OCCUPIED_SEAT_STATUSES] } },
+          });
+          if (activeSeats >= ctx.entitlements.seatLimit) {
+            throw new TRPCError({
+              code: 'FORBIDDEN',
+              message: `Seat limit reached (${activeSeats}/${ctx.entitlements.seatLimit}).`,
+            });
+          }
+          const operatorLimit = resolveEntitlementLimit(
+            ctx.entitlements.limits,
+            RESTAURANT_OPERATORS_LIMIT
+          );
+          if (operatorLimit.status === 'missing') {
+            throw new CommercialLimitError(
+              'Restaurant operator limit is not configured correctly.',
+              'UNCONFIGURED'
+            );
+          }
+          const activeOperators = await tx.restaurantStaffProfile.count({
+            where: { organizationId, status: 'ACTIVE' },
+          });
+          if (input.status === 'ACTIVE' && activeOperators >= operatorLimit.value) {
+            throw new CommercialLimitError(
+              `Your plan supports ${operatorLimit.value} active restaurant operator${
+                operatorLimit.value === 1 ? '' : 's'
+              }.`,
+              'LIMIT_REACHED'
+            );
+          }
+
+          // Web authorization uses organization roles; floor job roles alone do
+          // not grant access to capability-gated restaurant pages.
+          const organizationRole = await tx.organizationRole.findFirst({
+            where: {
+              organizationId,
+              key: input.staffRole === 'MANAGER' ? 'branch-manager' : 'server',
+            },
+            select: { id: true },
+          });
+          if (!organizationRole) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'The restaurant web role is unavailable.',
+            });
+          }
+
+          // Link the staff profile while the user is temporarily ACTIVE, then
+          // publish the account as INVITED before this transaction commits.
+          const user = await tx.user.create({
+            data: {
+              name: input.name,
+              email: input.email,
+              password: null,
+              status: 'ACTIVE',
+              role: 'EMPLOYEE',
+              organizationRoleId: organizationRole.id,
+              department: department.key,
+              title,
+            },
+          });
+          const staff = await tx.restaurantStaffProfile.create({
+            data: {
+              displayName: input.name,
+              email: input.email,
+              userId: user.id,
+              primaryBranchId: input.primaryBranchId,
+              status: input.status,
+            },
+          });
+          const jobRoleKey = input.staffRole === 'MANAGER' ? 'manager' : 'server';
+          const jobRole = await tx.restaurantJobRole.findFirst({
+            where: { organizationId, key: jobRoleKey, active: true },
+            select: { id: true, key: true },
+          });
+          if (!jobRole) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: `The ${input.staffRole.toLowerCase()} job role is unavailable.`,
+            });
+          }
+          await tx.restaurantStaffJobRole.create({
+            data: {
+              staffProfileId: staff.id,
+              jobRoleId: jobRole.id,
+              branchId: input.primaryBranchId,
+              grantedByStaffId: authorization.actorStaffProfileId,
+            },
+          });
+          await tx.restaurantStaffJobRoleAudit.create({
+            data: {
+              staffProfileId: staff.id,
+              jobRoleId: jobRole.id,
+              jobRoleKey: jobRole.key,
+              branchId: input.primaryBranchId,
+              change: 'GRANTED',
+              actorStaffProfileId: authorization.actorStaffProfileId,
+            },
+          });
+          await tx.user.update({ where: { id: user.id }, data: { status: 'INVITED' } });
+          await tx.invitation.create({
+            data: {
+              userId: user.id,
+              email: input.email,
+              tokenHash,
+              invitedById: ctx.session!.user.id,
+              expiresAt,
+            },
+          });
+          return { user, staff, resent: false };
+        })
+        .catch(mapStaffError);
+
+      annotateAudit(ctx, {
+        targetType: 'RestaurantStaffProfile',
+        targetId: result.staff.id,
+        targetLabel: result.staff.displayName,
+        description: `${result.resent ? 'Resent invitation to' : 'Invited'} restaurant ${input.staffRole.toLowerCase()} "${result.staff.displayName}"`,
+        metadata: {
+          primaryBranchId: result.staff.primaryBranchId,
+          userId: result.user.id,
+          resent: result.resent,
+        },
+      });
+      const inviteUrl = `${appUrl()}/invite/${token}`;
+      const mail = templates.inviteMember({
+        name: result.user.name,
+        inviterName: ctx.session!.user.name ?? undefined,
+        role: title,
+        workspace: 'DevFathom',
+        acceptUrl: inviteUrl,
+        expiresLabel: 'in 7 days',
+      });
+      let emailDelivered = true;
+      try {
+        await sendEmail({
+          to: { email: input.email, name: result.user.name },
+          subject: mail.subject,
+          html: mail.html,
+          text: mail.text,
+        });
+      } catch (error) {
+        emailDelivered = false;
+        console.error(
+          '[restaurantStaff.invite] invite email failed',
+          error instanceof Error ? error.name : 'unknown error'
+        );
+      }
+      return { id: result.staff.id, inviteUrl, emailDelivered, resent: result.resent };
+    }),
 
   // ── Staff profiles ────────────────────────────────────────────────────────
   list: staffProcedure
