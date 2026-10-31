@@ -1,4 +1,4 @@
-import { createHmac } from 'node:crypto';
+import { createHmac, randomBytes } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
@@ -18,11 +18,8 @@ vi.mock('@/lib/tenancy/host', () => ({
   resolveExplicitOrganizationByHost: mocks.resolveOrganization,
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: mocks.createTenantDb }));
-vi.mock('@/lib/restaurant/webhook-inbox', () => {
-  // The factory is hoisted above ESM imports, so load Zod here rather than
-  // closing over an import that has not been initialized yet.
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { z } = require('zod') as typeof import('zod');
+vi.mock('@/lib/restaurant/webhook-inbox', async () => {
+  const { z } = await import('zod');
   return {
     recordInboundWebhook: mocks.recordInboundWebhook,
     webhookEnvelopeSchema: z
@@ -37,7 +34,7 @@ vi.mock('@/lib/restaurant/webhook-inbox', () => {
 
 import { POST } from './route';
 
-const SECRET = 'test-terminal-secret';
+const SECRET = randomBytes(32).toString('hex');
 const SOURCE = 'card-provider';
 
 function rawEnvelope() {

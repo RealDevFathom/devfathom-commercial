@@ -6,6 +6,15 @@ The guide reflects accepted local behavior. It does not claim deployment, releas
 or hardware evidence. Browser evidence is limited to the workflow markers below; the overall browser
 gate is not green.
 
+## Release note: restaurant sign-in permissions (#478)
+
+Fresh sign-ins select the landing page by capability: `admin:access` opens restaurant management,
+then `orders:take` opens POS. Staff with neither capability stay on the restaurant dashboard.
+For older tenants, an `EMPLOYEE` without an organization role or an explicit `orders:take` grant
+no longer lands on POS automatically. Assign the appropriate cashier/waiter role or explicit
+permission to staff who take orders. Opening `/dashboard` directly retains the overview and
+any available first-run checklist.
+
 ## Read this first
 
 - Restaurant workspaces use organization type `RESTAURANT`. Platform onboarding and commercial

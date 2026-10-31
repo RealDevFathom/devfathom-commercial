@@ -42,49 +42,52 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   }
   const passwordChange = workspaceRedirectForPasswordChange(actor.session.user.mustChangePassword);
   if (passwordChange) redirect(passwordChange);
-  const { entitlements, brand, pharmacyPlaceholder } = await withTenantDb(actor.organization.id, async (db) => {
-    const [entitlementSnapshot, organization, placeholderProfile] = await Promise.all([
-      resolveOrganizationEntitlements(actor.organization.id, db),
-      db.organization.findUnique({
-        where: { id: actor.organization.id },
-        select: {
-          id: true,
-          displayName: true,
-          brand: {
-            select: {
-              logoUrl: true,
-              markUrl: true,
-              faviconUrl: true,
-              primaryColor: true,
-              accentColor: true,
+  const { entitlements, brand, pharmacyPlaceholder } = await withTenantDb(
+    actor.organization.id,
+    async (db) => {
+      const [entitlementSnapshot, organization, placeholderProfile] = await Promise.all([
+        resolveOrganizationEntitlements(actor.organization.id, db),
+        db.organization.findUnique({
+          where: { id: actor.organization.id },
+          select: {
+            id: true,
+            displayName: true,
+            brand: {
+              select: {
+                logoUrl: true,
+                markUrl: true,
+                faviconUrl: true,
+                primaryColor: true,
+                accentColor: true,
+              },
             },
           },
+        }),
+        db.branchRegulatoryProfile.findFirst({
+          where: { organizationId: actor.organization.id, isPlaceholder: true, effectiveTo: null },
+          select: { id: true },
+        }),
+      ]);
+      return {
+        entitlements: entitlementSnapshot,
+        brand: {
+          // WHA-276: the chrome is only allowed to display an identity it can
+          // attribute to a tenant, so the brand carries the organization it was
+          // resolved for. `resolveTenantActor` has already proven this equals the
+          // session's organizationId (host and session must agree, and the shared
+          // host resolves by the session's own id).
+          organizationId: actor.organization.id,
+          displayName: organization?.displayName ?? actor.organization.displayName,
+          logoUrl: organization?.brand?.logoUrl ?? null,
+          markUrl: organization?.brand?.markUrl ?? null,
+          faviconUrl: organization?.brand?.faviconUrl ?? null,
+          primaryColor: organization?.brand?.primaryColor ?? null,
+          accentColor: organization?.brand?.accentColor ?? null,
         },
-      }),
-      db.branchRegulatoryProfile.findFirst({
-        where: { organizationId: actor.organization.id, isPlaceholder: true, effectiveTo: null },
-        select: { id: true },
-      }),
-    ]);
-    return {
-      entitlements: entitlementSnapshot,
-      brand: {
-        // WHA-276: the chrome is only allowed to display an identity it can
-        // attribute to a tenant, so the brand carries the organization it was
-        // resolved for. `resolveTenantActor` has already proven this equals the
-        // session's organizationId (host and session must agree, and the shared
-        // host resolves by the session's own id).
-        organizationId: actor.organization.id,
-        displayName: organization?.displayName ?? actor.organization.displayName,
-        logoUrl: organization?.brand?.logoUrl ?? null,
-        markUrl: organization?.brand?.markUrl ?? null,
-        faviconUrl: organization?.brand?.faviconUrl ?? null,
-        primaryColor: organization?.brand?.primaryColor ?? null,
-        accentColor: organization?.brand?.accentColor ?? null,
-      },
-      pharmacyPlaceholder: Boolean(placeholderProfile),
-    };
-  });
+        pharmacyPlaceholder: Boolean(placeholderProfile),
+      };
+    }
+  );
   assertWorkspaceIdentity(actor.session.user.organizationId, brand.organizationId);
   return (
     <TenantSessionBoundary

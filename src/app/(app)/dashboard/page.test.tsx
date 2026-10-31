@@ -87,7 +87,9 @@ describe('DashboardPage vertical dispatch', () => {
       });
       mocks.can.mockImplementation(async (_subject, action) => capabilities.includes(action));
 
-      await expect(DashboardPage()).rejects.toThrow('redirect');
+      await expect(
+        DashboardPage({ searchParams: Promise.resolve({ landing: '1' }) })
+      ).rejects.toThrow('redirect');
 
       expect(mocks.redirect).toHaveBeenCalledWith(target);
       expect(mocks.withTenantDb).toHaveBeenCalledWith('restaurant-tenant', expect.any(Function));
@@ -118,7 +120,7 @@ describe('DashboardPage vertical dispatch', () => {
       });
       mocks.can.mockResolvedValue(false);
 
-      const page = await DashboardPage();
+      const page = await DashboardPage({ searchParams: Promise.resolve({ landing: '1' }) });
 
       expect(mocks.redirect).not.toHaveBeenCalled();
       expect(mocks.can.mock.calls.slice(0, 2).map(([, action]) => action)).toEqual([
@@ -163,10 +165,12 @@ describe('DashboardPage vertical dispatch', () => {
       });
 
       if (target) {
-        await expect(DashboardPage()).rejects.toThrow('redirect');
+        await expect(
+          DashboardPage({ searchParams: Promise.resolve({ landing: '1' }) })
+        ).rejects.toThrow('redirect');
         expect(mocks.redirect).toHaveBeenCalledWith(target);
       } else {
-        const page = await DashboardPage();
+        const page = await DashboardPage({ searchParams: Promise.resolve({ landing: '1' }) });
         expect(mocks.redirect).not.toHaveBeenCalled();
         expect(page.props.children.type).toBe(RestaurantDashboardContent);
       }
@@ -190,12 +194,55 @@ describe('DashboardPage vertical dispatch', () => {
         entitlements: { vertical: 'RESTAURANT', enabledModules: ['restaurant-core'] },
       });
 
-      const page = await DashboardPage();
+      const page = await DashboardPage({ searchParams: Promise.resolve({ landing: '1' }) });
 
       expect(mocks.withTenantDb).not.toHaveBeenCalled();
       expect(mocks.can).not.toHaveBeenCalled();
       expect(mocks.redirect).not.toHaveBeenCalled();
       expect(page.props.children.type).toBe(RestaurantDashboardContent);
+    }
+  );
+
+  it.each([
+    ['ADMIN', []],
+    ['EMPLOYEE', []],
+    ['ADMIN', ['admin:access', 'orders:take']],
+    ['EMPLOYEE', ['orders:take']],
+    ['EMPLOYEE', ['admin:access', 'orders:take']],
+  ])(
+    'retains the Restaurant dashboard on explicit navigation for %s with %s',
+    async (role, capabilities) => {
+      const agencyHelpers = helpers();
+      const user = { id: 'restaurant-user', role, status: 'ACTIVE' };
+      const checklist = { complete: false, items: [] };
+      mocks.can.mockImplementation(async (_subject, action) => capabilities.includes(action));
+      mocks.loadSetupChecklist.mockResolvedValue(checklist);
+      mocks.createSSRHelpers.mockResolvedValue({
+        helpers: agencyHelpers,
+        organization: { id: 'restaurant-org' },
+        session: { user },
+        entitlements: { vertical: 'RESTAURANT', enabledModules: ['restaurant-core'] },
+      });
+
+      const page = await DashboardPage({});
+
+      expect(mocks.redirect).not.toHaveBeenCalled();
+      expect(mocks.can.mock.calls.map(([, action]) => action)).toEqual(['admin:access']);
+      expect(mocks.can).toHaveBeenCalledWith(user, 'admin:access', undefined, { db: mocks.db });
+      expect(page.props.children.type).toBe(RestaurantDashboardContent);
+      expect(page.props.children.props.enabledModules).toEqual(['restaurant-core']);
+      if (capabilities.includes('admin:access')) {
+        expect(mocks.loadSetupChecklist).toHaveBeenCalledWith(
+          mocks.db,
+          'restaurant-org',
+          'RESTAURANT'
+        );
+        expect(page.props.children.props.checklist).toBe(checklist);
+      } else {
+        expect(mocks.loadSetupChecklist).not.toHaveBeenCalled();
+        expect(page.props.children.props.checklist).toBeUndefined();
+      }
+      expect(agencyHelpers.dashboard.getStats.prefetch).not.toHaveBeenCalled();
     }
   );
 
@@ -214,7 +261,7 @@ describe('DashboardPage vertical dispatch', () => {
       entitlements: { vertical: 'HOSPITALITY', enabledModules: ['hotel-core'] },
     });
 
-    const page = await DashboardPage();
+    const page = await DashboardPage({});
 
     expect(agencyHelpers.dashboard.getStats.prefetch).not.toHaveBeenCalled();
     expect(agencyHelpers.team.getAll.prefetch).not.toHaveBeenCalled();
@@ -236,7 +283,7 @@ describe('DashboardPage vertical dispatch', () => {
       entitlements: { vertical: 'AGENCY', enabledModules: ['dashboard'] },
     });
 
-    await DashboardPage();
+    await DashboardPage({});
 
     expect(agencyHelpers.dashboard.getStats.prefetch).toHaveBeenCalledOnce();
     expect(agencyHelpers.meetings.getUpcoming.prefetch).toHaveBeenCalledOnce();
@@ -260,7 +307,7 @@ describe('PHARMACY first-run capability gate', () => {
     });
     mocks.can.mockResolvedValue(allowed);
     mocks.loadSetupChecklist.mockResolvedValue({ complete: false, items: [] });
-    const page = await DashboardPage();
+    const page = await DashboardPage({});
     expect(mocks.withTenantDb).toHaveBeenCalledWith('tenant', expect.any(Function));
     expect(mocks.can).toHaveBeenCalledWith(user, 'admin:access', undefined, { db: mocks.db });
     expect(mocks.loadSetupChecklist).toHaveBeenCalledTimes(loads ? 1 : 0);
@@ -275,7 +322,7 @@ describe('PHARMACY first-run capability gate', () => {
       organization: { id: 'tenant' },
       entitlements: { vertical, enabledModules: [] },
     });
-    await DashboardPage();
+    await DashboardPage({});
     expect(mocks.withTenantDb).not.toHaveBeenCalled();
   });
 });

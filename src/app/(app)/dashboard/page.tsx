@@ -17,7 +17,12 @@ export const metadata: Metadata = {
   title: 'Dashboard',
 };
 
-export default async function DashboardPage() {
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ landing?: string | string[] }>;
+}) {
+  const signInLanding = (await searchParams)?.landing === '1';
   const ssr = await createSSRHelpers();
   const helpers = ssr?.helpers;
   const restaurant = ssr?.entitlements.vertical === 'RESTAURANT';
@@ -31,11 +36,11 @@ export default async function DashboardPage() {
   const organizationId = ssr?.organization?.id;
   const user = ssr?.session?.user;
 
-  // `/dashboard` is the role-agnostic login callback. Resolve the destination
-  // through the tenant-scoped permission model rather than the coarse session
-  // role: restaurant users without order-taking access must not be sent to POS.
+  // Route fresh sign-ins through tenant-scoped permissions. Explicit dashboard
+  // visits retain the management overview, saved preferences and first-run checklist;
+  // restaurant users without order-taking access must not be sent to POS.
   const restaurantLanding =
-    restaurant && organizationId && user
+    signInLanding && restaurant && organizationId && user
       ? await withTenantDb(organizationId, async (db) => {
           const subject = subjectFromSession(user);
           if (await can(subject, 'admin:access', undefined, { db })) return '/restaurant';
