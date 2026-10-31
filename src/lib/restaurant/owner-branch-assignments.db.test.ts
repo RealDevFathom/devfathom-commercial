@@ -37,8 +37,13 @@ describeIfDatabase('owner branch assignments against PostgreSQL', () => {
     await withPlatformDb((db) => db.organization.deleteMany({ where: { id: organizationId } }));
   });
 
-  it.each(['expires', 'is removed'] as const)(
-    'does not persist override-derived access when the wildcard grant %s',
+  it.each([
+    'override expires',
+    'override is removed',
+    'role is unassigned',
+    'wildcard permission is removed',
+  ] as const)(
+    'does not persist derived access when the %s',
     async (revocation) => {
       await expect(
         withTenantDb(organizationId, async (db) => {
@@ -62,15 +67,32 @@ describeIfDatabase('owner branch assignments against PostgreSQL', () => {
             },
           });
           await ensureDefaultJobRoles(db);
-          const override = await db.userPermissionOverride.create({
-            data: {
-              userId: user.id,
-              capability: '*',
-              effect: 'ALLOW',
-              reason: 'Temporary branch administration',
-              expiresAt: revocation === 'expires' ? new Date(Date.now() + 60_000) : null,
-            },
-          });
+          const fromRole =
+            revocation === 'role is unassigned' || revocation === 'wildcard permission is removed';
+          const role = fromRole
+            ? await db.organizationRole.create({
+                data: {
+                  key: 'temporary-administrator',
+                  name: 'Temporary administrator',
+                  permissions: { create: { capability: '*', effect: 'ALLOW' } },
+                },
+              })
+            : null;
+          if (role) {
+            await db.user.update({ where: { id: user.id }, data: { organizationRoleId: role.id } });
+          }
+          const override = !fromRole
+            ? await db.userPermissionOverride.create({
+                data: {
+                  userId: user.id,
+                  capability: '*',
+                  effect: 'ALLOW',
+                  reason: 'Temporary branch administration',
+                  expiresAt:
+                    revocation === 'override expires' ? new Date(Date.now() + 60_000) : null,
+                },
+              })
+            : null;
 
           // Exercise both initial assignment and the branch-reactivation path.
           await assignOwnersToBranch(db, organizationId, newBranch.id);
@@ -91,13 +113,19 @@ describeIfDatabase('owner branch assignments against PostgreSQL', () => {
           ).toBe(0);
           expect(await db.restaurantBranchAssignment.count({ where: { userId: user.id } })).toBe(0);
 
-          if (revocation === 'expires') {
+          if (revocation === 'role is unassigned') {
+            await db.user.update({ where: { id: user.id }, data: { organizationRoleId: null } });
+          } else if (revocation === 'wildcard permission is removed') {
+            await db.organizationRolePermission.deleteMany({
+              where: { organizationRoleId: role!.id, capability: '*' },
+            });
+          } else if (revocation === 'override expires') {
             await db.userPermissionOverride.update({
-              where: { id: override.id },
+              where: { id: override!.id },
               data: { expiresAt: new Date(0) },
             });
           } else {
-            await db.userPermissionOverride.delete({ where: { id: override.id } });
+            await db.userPermissionOverride.delete({ where: { id: override!.id } });
           }
           expect(await hasStaffBranchAccess(db, profile.id, newBranch.id)).toBe(false);
           for (const branchId of [originalBranch.id, newBranch.id]) {

@@ -1,9 +1,10 @@
 // @vitest-environment node
-// Deliberately required: no env gate or skipped substitute for PostgreSQL.
 import { randomBytes, createHash } from 'node:crypto';
 import { compare } from 'bcryptjs';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { AssistantHelpers } from '@/lib/ai/context';
+import { seedDepartments } from '@/lib/test-support/departments';
+import { assertDisposableRlsDatabase } from '../../../tests/disposable-rls-database';
 
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn(async () => null) }));
 vi.mock('@/lib/email', () => ({
@@ -25,11 +26,12 @@ import { invitationsRouter } from '@/server/routers/invitations';
 import { buildPeopleTools } from '@/lib/ai/tools/people';
 
 const suffix = randomBytes(6).toString('hex');
+const testDatabaseUrl = process.env.M8_TEST_RUNTIME_DATABASE_URL ?? process.env.TEST_DATABASE_URL;
 const userId = `h4_${suffix}`;
 const otherId = `h4_other_${suffix}`;
 const hashToken = (raw: string) => createHash('sha256').update(raw).digest('hex');
-let org: string;
-let otherOrg: string;
+const org = `h4_reset_${suffix}`;
+const otherOrg = `h4_reset_other_${suffix}`;
 const resetCaller = (db: unknown) =>
   passwordResetRouter.createCaller({ db, requestMeta: { ip: '203.0.113.91' } } as never);
 const read = () => withTenantDb(org, (db) => db.user.findUniqueOrThrow({ where: { id: userId } }));
@@ -67,39 +69,43 @@ async function expectRevoked() {
   });
 }
 
-describe('H4/M14 recovery lifecycle against local PostgreSQL', () => {
+// Like the other PostgreSQL suites, use an explicitly configured disposable
+// runtime database; ordinary unit runs must never use ambient DATABASE_URL.
+describe.skipIf(!testDatabaseUrl)('H4/M14 recovery lifecycle against PostgreSQL', () => {
   beforeAll(async () => {
-    const url = new URL(process.env.DATABASE_URL ?? '');
-    expect(['localhost', '127.0.0.1', '[::1]']).toContain(url.hostname);
-    const organizations = await withPlatformDb(async (db) => {
+    assertDisposableRlsDatabase(testDatabaseUrl!);
+    vi.stubEnv('DATABASE_URL', testDatabaseUrl!);
+    await withPlatformDb(async (db) => {
+      // Keep the isolation assertions meaningful: the configured runtime must
+      // exercise forced RLS rather than bypassing it as a superuser.
       const roles = await db.$queryRaw<
         Array<{ rolsuper: boolean; rolbypassrls: boolean }>
       >`SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user`;
       expect(roles[0]).toEqual({ rolsuper: false, rolbypassrls: false });
-      return db.organization.findMany({
-        where: { isDemo: false, departments: { some: { active: true } } },
-        take: 2,
-        orderBy: { id: 'asc' },
-        select: { id: true },
+      await db.organization.createMany({
+        data: [org, otherOrg].map((id) => ({
+          id,
+          slug: id,
+          displayName: 'Password reset regression',
+          legalName: 'Password reset regression',
+          status: 'ACTIVE' as const,
+          isDemo: false,
+        })),
       });
+      await seedDepartments(db, [org, otherOrg], ['ENGINEERING']);
     });
-    expect(organizations).toHaveLength(2);
-    [org, otherOrg] = organizations.map((o) => o.id);
     for (const [organizationId, id] of [
       [org, userId],
       [otherOrg, otherId],
     ]) {
       await withTenantDb(organizationId, async (db) => {
-        const department = await db.organizationDepartment.findFirstOrThrow({
-          where: { active: true },
-        });
         await db.user.create({
           data: {
             id,
             name: 'Reset Member',
             email: `${id}@example.test`,
             title: 'Engineer',
-            department: department.key,
+            department: 'ENGINEERING',
             password: 'original-hash',
             tokenVersion: 7,
             mustChangePassword: true,
@@ -109,12 +115,15 @@ describe('H4/M14 recovery lifecycle against local PostgreSQL', () => {
     }
   });
   afterAll(async () => {
-    for (const [organizationId, id] of [
-      [org, userId],
-      [otherOrg, otherId],
-    ]) {
-      if (!organizationId) continue;
-      await withTenantDb(organizationId, (db) => db.user.deleteMany({ where: { id } }));
+    try {
+      await withPlatformDb(async (db) => {
+        const organizationId = { in: [org, otherOrg] };
+        // Users reference the department catalog with ON DELETE RESTRICT.
+        await db.user.deleteMany({ where: { organizationId } });
+        await db.organization.deleteMany({ where: { id: organizationId } });
+      });
+    } finally {
+      vi.unstubAllEnvs();
     }
   });
 
@@ -157,6 +166,7 @@ describe('H4/M14 recovery lifecycle against local PostgreSQL', () => {
   });
 
   it('completion revokes credentials issued since initiation, consumes sibling links, and accepts only one concurrent link', async () => {
+    await withTenantDb(org, (db) => initiateAdminPasswordReset(db, org, userId));
     const first = capturedToken();
     const sibling = `sibling_${suffix}`;
     await credentials(sibling);

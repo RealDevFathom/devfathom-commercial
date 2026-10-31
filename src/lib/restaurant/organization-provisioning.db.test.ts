@@ -465,21 +465,37 @@ describeIfDatabase('provisionRestaurantOrganization against PostgreSQL', () => {
         await tx.restaurantBranchAssignment.count({
           where: { branchId: dormant.id, userId: user.id },
         })
-      ).toBe(1);
+      ).toBe(0);
       expect(
         await tx.restaurantStaffJobRole.count({
           where: { branchId: dormant.id, staffProfileId: profile.id },
         })
-      ).toBe(1);
+      ).toBe(0);
       for (const userId of [user.id, ids.admin]) {
+        // Web role access stays dynamic; explicitly provisioned floor owners
+        // continue to receive durable holdings and branch assignments.
+        const expectedHoldings = userId === ids.admin ? 1 : 0;
         expect(
           await tx.restaurantBranchAssignment.count({ where: { branchId: created.id, userId } })
-        ).toBe(1);
+        ).toBe(expectedHoldings);
         expect(
           await tx.restaurantStaffJobRole.count({
             where: { branchId: created.id, staffProfile: { userId }, jobRole: { key: 'owner' } },
           })
-        ).toBe(1);
+        ).toBe(expectedHoldings);
+      }
+      for (const branchId of [created.id, dormant.id]) {
+        expect(await hasStaffBranchAccess(tx, profile.id, branchId)).toBe(true);
+        expect(
+          await operatorHasCapability(tx, profile.id, 'payments:refund', new Date(), branchId)
+        ).toBe(true);
+      }
+      await tx.user.update({ where: { id: user.id }, data: { organizationRoleId: null } });
+      for (const branchId of [created.id, dormant.id]) {
+        expect(await hasStaffBranchAccess(tx, profile.id, branchId)).toBe(false);
+        expect(
+          await operatorHasCapability(tx, profile.id, 'payments:refund', new Date(), branchId)
+        ).toBe(false);
       }
     });
   });

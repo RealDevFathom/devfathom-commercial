@@ -5,22 +5,14 @@ import { grantJobRole } from './job-roles';
 
 /** Called within provisioning/branch creation transactions. Never grants a full
  * owner role to an ordinary branch manager or revives an inactive role/profile.
- * User overrides remain derived access: persisting ownership or assignments here
- * would outlive their expiry or revocation. */
+ * Organization roles and user overrides remain derived access: persisting
+ * ownership or assignments here would outlive their expiry or revocation. */
 export async function assignOwnersToBranch(db: ScopedDb, organizationId: string, branchId: string) {
   const profiles = await db.restaurantStaffProfile.findMany({
     where: {
       organizationId,
       status: 'ACTIVE',
-      OR: [
-        { jobRoles: { some: { jobRole: { key: 'owner', active: true } } } },
-        {
-          user: {
-            status: 'ACTIVE',
-            organizationRole: { permissions: { some: { capability: '*', effect: 'ALLOW' } } },
-          },
-        },
-      ],
+      jobRoles: { some: { jobRole: { key: 'owner', active: true } } },
     },
     select: { id: true, userId: true },
   });

@@ -214,7 +214,6 @@ describe('§9 contract item 2 — RESTAURANT organization.create: branch + assig
     mocks.assignmentCreate.mockResolvedValue({ id: 'assign_1' });
     mocks.pkgFindUnique.mockResolvedValue({
       id: 'pkg_r',
-      defaultSeats: 100,
       active: true,
       defaultSeats: 50,
       vertical: 'RESTAURANT',
@@ -303,7 +302,6 @@ describe('§2.3 contract item 3 — mismatched package rejected', () => {
   it('rejects AGENCY create with a RESTAURANT package', async () => {
     mocks.pkgFindUnique.mockResolvedValue({
       id: 'pkg_r',
-      defaultSeats: 100,
       active: true,
       defaultSeats: 25,
       vertical: 'RESTAURANT',
