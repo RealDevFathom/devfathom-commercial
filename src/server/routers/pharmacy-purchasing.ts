@@ -43,6 +43,7 @@ import {
   assertRequisitionTransition,
   assertSupplierEligible,
   compareQuotes,
+  effectiveCostPerSellableUnit,
   landedCost,
   PharmacyPurchasingError,
   SEGREGATION_OF_DUTIES_POLICY,
@@ -528,6 +529,7 @@ const purchasingRouter = router({
                   moqPacks: z.number().int().positive().default(1),
                   leadTimeDays: z.number().int().nonnegative().default(0),
                   minimumExpiryDays: z.number().int().nonnegative().default(0),
+                  forecastSellThroughPacks: z.number().int().positive(),
                   canonicalUnitsPerPack: z.number().int().positive(),
                 })
                 .strict()
@@ -603,6 +605,9 @@ const purchasingRouter = router({
           moqPacks: line.moqPacks,
           leadTimeDays: line.leadTimeDays,
           minimumExpiryDays: line.minimumExpiryDays,
+          // A legacy quote has no recorded forecast; the comparison assumes it
+          // all sells and says so, rather than inventing one from the requisition.
+          forecastSellThroughPacks: line.forecastSellThroughPacks,
         }));
         return {
           requisitionLineId: requisitionLine.id,
@@ -648,6 +653,9 @@ const purchasingRouter = router({
                   rebateBps: bps.default(0),
                   taxBps: bps.default(0),
                   taxCreditable: z.boolean().default(false),
+                  forecastSellThroughPacks: z.number().int().positive().optional(),
+                  minimumExpiryDays: z.number().int().nonnegative().optional(),
+                  leadTimeDays: z.number().int().nonnegative().optional(),
                 })
                 .strict()
             )
@@ -692,6 +700,36 @@ const purchasingRouter = router({
           otherChargesMinor: input.otherChargesMinor,
         });
 
+        // The comparison assumptions retained on each line are quote facts, so
+        // they are copied from the stored quote lines and never trusted from the
+        // client. A line with no matching stored quote line carries none.
+        const quoteAssumptions = new Map<
+          string,
+          {
+            forecastSellThroughPacks: number | null;
+            minimumExpiryDays: number;
+            leadTimeDays: number;
+          }
+        >();
+        if (input.quoteId) {
+          const storedQuoteLines = await ctx.db.pharmacyQuoteLine.findMany({
+            where: {
+              quoteId: input.quoteId,
+              ...(input.requisitionId
+                ? { requisitionLine: { requisitionId: input.requisitionId } }
+                : {}),
+            },
+            include: { requisitionLine: { select: { medicineId: true } } },
+          });
+          for (const stored of storedQuoteLines) {
+            quoteAssumptions.set(stored.requisitionLine.medicineId, {
+              forecastSellThroughPacks: stored.forecastSellThroughPacks,
+              minimumExpiryDays: stored.minimumExpiryDays,
+              leadTimeDays: stored.leadTimeDays,
+            });
+          }
+        }
+
         const { lines, ...purchaseOrder } = input;
         return await ctx.db.pharmacyPurchaseOrder.create({
           data: {
@@ -700,6 +738,10 @@ const purchasingRouter = router({
             lines: {
               create: lines.map((line, index) => ({
                 ...line,
+                forecastSellThroughPacks: undefined,
+                minimumExpiryDays: undefined,
+                leadTimeDays: undefined,
+                ...quoteAssumptions.get(line.medicineId),
                 lineNumber: index + 1,
                 orderedCanonicalUnits: line.orderedPacks * line.canonicalUnitsPerPack,
                 bonusCanonicalUnits: line.bonusPacks * line.canonicalUnitsPerPack,
@@ -871,6 +913,15 @@ const purchasingRouter = router({
             ...line,
             purchaseOrderLineId: order.lines[index]!.id,
             medicineId: order.lines[index]!.medicineId,
+            ...(order.lines[index]!.forecastSellThroughPacks
+              ? effectiveCostPerSellableUnit({
+                  costMinor: line.landedCostMinor,
+                  paidPacks: order.lines[index]!.orderedPacks,
+                  bonusPacks: order.lines[index]!.bonusPacks,
+                  canonicalUnitsPerPack: order.lines[index]!.canonicalUnitsPerPack,
+                  forecastSellThroughPacks: order.lines[index]!.forecastSellThroughPacks!,
+                })
+              : {}),
           })),
         };
       } catch (error) {
