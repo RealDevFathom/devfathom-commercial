@@ -59,6 +59,12 @@ it.each([
   'Email the patient at private@example.com.',
   'Call the customer on +1 (212) 555-0198.',
   'Use coupon SAVE20 for a $10 discount.',
+  'We recommend aspirin and insulin.',
+  'Thank you, Jane Smith, at 42 Oak Street.',
+  'We remember your diabetes and cancer history.',
+  'Your reply has been posted and approved.',
+  'Take аspirin.', // Cyrillic a bypasses a Latin drug-name denylist.
+  'Thank you for your feedback. We hope to see you again. Visit private.example/patient/Jane.',
 ])('deterministically rejects prohibited generated content: %s', async (text) => {
   mocks.generate.mockResolvedValue({ text });
   expect(
@@ -80,4 +86,32 @@ it('marks review text as untrusted data in the provider request', async () => {
   });
   expect(mocks.generate.mock.calls[0][0].system).toContain('untrusted quoted data');
   expect(mocks.generate.mock.calls[0][0].prompt).toContain('<untrusted-customer-review>');
+});
+
+it.each([
+  ['WARM', 5, 'We appreciate your kind words. We look forward to welcoming you again.'],
+  [
+    'FORMAL',
+    1,
+    'Thank you for bringing this to our attention. We are sorry to hear that your experience fell short of expectations. Please contact the store privately so we can listen to your concerns.',
+  ],
+] as const)('preserves %s drafting using safe complete sentences', async (tone, rating, draft) => {
+  mocks.generate.mockResolvedValue({ text: draft });
+  expect(await draftBusinessReviewReply({ rating, tone, review: 'Customer feedback.' })).toEqual({
+    available: true,
+    draft,
+    posted: false,
+    approved: false,
+  });
+  expect(mocks.generate.mock.calls[0][0].system).toContain('chosen verbatim');
+});
+
+it.each([
+  '',
+  'Thank you for your feedback. Jane Smith.',
+  'Jane Smith. Thank you for your feedback.',
+  'Thank you for your feedback.\u200b',
+  'Thank you for your feedback. '.repeat(5),
+])('rejects unrecognized text or an unbounded composition: %s', (draft) => {
+  expect(isSafeBusinessReviewReply(draft)).toBe(false);
 });
