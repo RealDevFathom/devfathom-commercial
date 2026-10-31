@@ -6,7 +6,7 @@
  */
 import { randomBytes } from 'node:crypto';
 import pg from 'pg';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
@@ -56,12 +56,6 @@ describeIfDatabase('project membership concurrency against PostgreSQL', () => {
        VALUES ($1, $2, 'Concurrent project', 'INTERNAL', now())`,
       [PROJECT, ORG]
     );
-    await setup.query(
-      `INSERT INTO project_members (id, "organizationId", "projectId", "userId", role)
-       VALUES ($1,$5,$6,$3,'LEAD'), ($2,$5,$6,$4,'LEAD')`,
-      [`pm_a_${suffix}`, `pm_b_${suffix}`, LEAD_A, LEAD_B, ORG, PROJECT]
-    );
-
     const { createTenantDb } = await import('@/lib/tenancy/scoped-db');
     const { projectsRouter } = await import('./projects');
     projectCaller = projectsRouter.createCaller({
@@ -78,20 +72,42 @@ describeIfDatabase('project membership concurrency against PostgreSQL', () => {
     } as never);
   });
 
-  afterAll(async () => {
-    if (!setup) return;
-    await setup.query(`DELETE FROM organizations WHERE id = $1`, [ORG]);
-    await setup.end();
+  beforeEach(async () => {
+    await setup.query(`DELETE FROM project_members WHERE "projectId" = $1`, [PROJECT]);
+    await setup.query(
+      `INSERT INTO project_members (id, "organizationId", "projectId", "userId", role)
+       VALUES ($1,$5,$6,$3,'LEAD'), ($2,$5,$6,$4,'LEAD')`,
+      [`pm_a_${suffix}`, `pm_b_${suffix}`, LEAD_A, LEAD_B, ORG, PROJECT]
+    );
   });
 
-  it('allows only one of two concurrent lead demotions', async () => {
+  afterAll(async () => {
+    if (!setup) return;
+    try {
+      await setup.query(`DELETE FROM projects WHERE id = $1`, [PROJECT]);
+      await setup.query(`DELETE FROM organizations WHERE id = $1`, [ORG]);
+    } finally {
+      await setup.end();
+    }
+  });
+
+  it.each([
+    ['setMemberRole', 'setMemberRole'],
+    ['addMember', 'addMember'],
+    ['addMember', 'setMemberRole'],
+    ['removeMember', 'setMemberRole'],
+    ['removeMember', 'addMember'],
+    ['removeMember', 'removeMember'],
+  ] as const)('preserves a lead during concurrent %s and %s', async (first, second) => {
     const results = await Promise.allSettled([
-      projectCaller.setMemberRole({ projectId: PROJECT, userId: LEAD_A, role: 'MEMBER' }),
-      projectCaller.setMemberRole({ projectId: PROJECT, userId: LEAD_B, role: 'MEMBER' }),
+      projectCaller[first]({ projectId: PROJECT, userId: LEAD_A, role: 'MEMBER' }),
+      projectCaller[second]({ projectId: PROJECT, userId: LEAD_B, role: 'MEMBER' }),
     ]);
 
     expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
     expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
+    const rejected = results.find((result) => result.status === 'rejected');
+    expect(rejected?.reason).toMatchObject({ code: 'BAD_REQUEST' });
     const remaining = await setup.query<{ count: string }>(
       `SELECT count(*) FROM project_members WHERE "projectId" = $1 AND role = 'LEAD'`,
       [PROJECT]

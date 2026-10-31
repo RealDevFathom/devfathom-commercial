@@ -13,6 +13,7 @@ import { projectsRouter } from './projects';
 const membershipFindUnique = vi.fn();
 const membershipCreate = vi.fn();
 const membershipUpdate = vi.fn();
+const membershipDelete = vi.fn();
 const membershipCount = vi.fn();
 const userFindMany = vi.fn();
 const userFindUnique = vi.fn();
@@ -27,6 +28,7 @@ const db = {
     findUnique: membershipFindUnique,
     create: membershipCreate,
     update: membershipUpdate,
+    delete: membershipDelete,
     count: membershipCount,
   },
   user: { findMany: userFindMany, findUnique: userFindUnique },
@@ -34,14 +36,14 @@ const db = {
   activity: { create: activityCreate },
 };
 
-function caller() {
+function caller(role = 'EMPLOYEE') {
   return projectsRouter.createCaller({
     db,
     session: {
       expires: 'later',
       user: {
         id: 'lead_1',
-        role: 'EMPLOYEE',
+        role,
         department: 'ENGINEERING',
         status: 'ACTIVE',
         organizationId: 'org_1',
@@ -122,5 +124,68 @@ describe('projects.addMember role invariants', () => {
       data: { projectId: 'project_1', userId: 'user_2', role: 'LEAD' },
     });
     expect(activityCreate).toHaveBeenCalledOnce();
+  });
+
+  it('rechecks the lead count after a removal waits for a concurrent demotion', async () => {
+    membershipCount.mockResolvedValue(2);
+    // The other transaction demotes a lead before releasing the project lock.
+    executeRaw.mockImplementationOnce(async () => {
+      membershipCount.mockResolvedValue(1);
+      return 0;
+    });
+
+    await expect(
+      caller().removeMember({ projectId: 'project_1', userId: 'lead_1' })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(membershipDelete).not.toHaveBeenCalled();
+    expect(activityCreate).not.toHaveBeenCalled();
+  });
+
+  it.each(['addMember', 'setMemberRole'] as const)(
+    '%s rechecks caller authority after waiting for a concurrent demotion',
+    async (method) => {
+      const lead = { projectId: 'project_1', userId: 'lead_1', role: 'LEAD' };
+      membershipFindUnique.mockImplementation(async ({ where }) => ({
+        ...lead,
+        userId: where.projectId_userId.userId,
+      }));
+      userFindMany.mockResolvedValue([{ id: 'user_2' }]);
+      executeRaw.mockImplementationOnce(async () => {
+        membershipFindUnique.mockImplementation(async ({ where }) => ({
+          ...lead,
+          userId: where.projectId_userId.userId,
+          role: 'MEMBER',
+        }));
+        return 0;
+      });
+
+      await expect(
+        caller()[method]({ projectId: 'project_1', userId: 'user_2', role: 'LEAD' })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(membershipUpdate).not.toHaveBeenCalled();
+      expect(membershipCreate).not.toHaveBeenCalled();
+    }
+  );
+
+  it('allows a member to leave while preserving lead and admin removal permissions', async () => {
+    membershipFindUnique.mockResolvedValue({ role: 'MEMBER' });
+    await expect(
+      caller().removeMember({ projectId: 'project_1', userId: 'lead_1' })
+    ).resolves.toEqual({ success: true });
+
+    await expect(
+      caller().removeMember({ projectId: 'project_1', userId: 'user_2' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+
+    await expect(
+      caller('ADMIN').removeMember({ projectId: 'project_1', userId: 'user_2' })
+    ).resolves.toEqual({ success: true });
+
+    membershipFindUnique.mockResolvedValue({ role: 'LEAD' });
+    membershipCount.mockResolvedValue(2);
+    await expect(
+      caller().removeMember({ projectId: 'project_1', userId: 'user_2' })
+    ).resolves.toEqual({ success: true });
+    expect(membershipDelete).toHaveBeenCalledTimes(3);
   });
 });
