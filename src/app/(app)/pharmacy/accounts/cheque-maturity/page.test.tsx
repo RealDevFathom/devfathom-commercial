@@ -87,4 +87,34 @@ describe('cheque maturity accounts page', () => {
     ).toBeVisible();
     expect(screen.queryByText(/secret database detail/)).toBeNull();
   });
+
+  it.each([
+    { branch: 'foreign' },
+    { branch: ['branch-1'] },
+    { branch: ['foreign', 'branch-1'] },
+    { branch: [] },
+  ])('rejects an invalid explicit branch selection: $branch', async ({ branch }) => {
+    await show(branch);
+    expect(screen.getByRole('heading', { name: 'Branch unavailable' })).toBeVisible();
+    expect(mocks.workspace).not.toHaveBeenCalled();
+  });
+
+  it.each([0, 1, 2])(
+    'defaults an absent branch parameter only with one active branch (%i available)',
+    async (count) => {
+      mocks.branches.mockResolvedValue(
+        Array.from({ length: count }, (_, index) => ({
+          id: `branch-${index + 1}`,
+          name: `Branch ${index + 1}`,
+        }))
+      );
+      render(await Page({ searchParams: Promise.resolve({}) }));
+      if (count === 1) {
+        expect(mocks.workspace).toHaveBeenCalledExactlyOnceWith({ branchId: 'branch-1' });
+      } else {
+        expect(screen.getByRole('heading', { name: 'Choose a branch' })).toBeVisible();
+        expect(mocks.workspace).not.toHaveBeenCalled();
+      }
+    }
+  );
 });

@@ -90,7 +90,11 @@ export default async function ChequeMaturityPage({
     select: { id: true, name: true },
   });
   const branchId =
-    typeof requested === 'string' ? requested : branches.length === 1 ? branches[0]?.id : undefined;
+    typeof requested === 'string'
+      ? requested
+      : requested === undefined && branches.length === 1
+        ? branches[0]?.id
+        : undefined;
   const branch = branches.find((item) => item.id === branchId);
   let rows = [] as ReturnType<typeof chequeMaturityEvidence>;
   let observedAt = '';
