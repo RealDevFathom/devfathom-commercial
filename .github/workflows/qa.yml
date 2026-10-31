@@ -156,6 +156,24 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - name: Check runner memory budget
+        run: node scripts/check-ci-memory.mjs
+      - name: Install PostgreSQL client
+        run: |
+          if ! command -v psql >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install --yes postgresql-client
+          fi
+          psql --version
+      - name: Install Azure CLI and Bicep
+        run: |
+          if ! command -v az >/dev/null; then
+            curl --fail --silent --show-error --location https://aka.ms/InstallAzureCLIDeb --output "$RUNNER_TEMP/install-azure-cli.sh"
+            sudo bash "$RUNNER_TEMP/install-azure-cli.sh"
+          fi
+          az version
+          az bicep install
+          az bicep version
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.2
@@ -391,6 +409,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - name: Check runner memory budget
+        run: node scripts/check-ci-memory.mjs
+      - name: Install PostgreSQL client
+        run: |
+          if ! command -v psql >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install --yes postgresql-client
+          fi
+          psql --version
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.2
