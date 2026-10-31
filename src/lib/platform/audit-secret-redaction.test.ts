@@ -124,6 +124,18 @@ describeIfDatabase('platform audit redaction, against PostgreSQL', () => {
     await deps.assertRlsEnforcingRole(deps.withPlatformDb);
 
     await deps.withPlatformDb((db) =>
+      db.platformUser.create({
+        data: {
+          id: OPERATOR,
+          name: actor().name,
+          email: actor().email,
+          role: 'SUPER_ADMIN',
+          passwordHash: 'fixture',
+        },
+      })
+    );
+
+    await deps.withPlatformDb((db) =>
       db.organization.create({
         data: {
           id: ORGANIZATION,

@@ -2857,6 +2857,7 @@ model User {
   recoveryCodes               TwoFactorRecoveryCode[]
   webhooksCreated             Webhook[]                      @relation("WebhookCreator")
   auditLogs                   AuditLog[]                     @relation("UserAuditLogs")
+  platformAuditLogs           PlatformAuditLog[]             @relation("PlatformAuditTenantActor")
   resignations                Resignation[]                  @relation("UserResignations")
   resignationsReviewed        Resignation[]                  @relation("ResignationsReviewed")
   // Email integration: connected Gmail/Outlook mailboxes feeding the unified inbox.
@@ -10670,6 +10671,7 @@ model PlatformUser {
   sessions                             PlatformSession[]
   recoveryCodes                        PlatformRecoveryCode[]
   restaurantActivationAcknowledgements RestaurantActivationAcknowledgement[]
+  auditLogs                            PlatformAuditLog[] @relation("PlatformAuditPlatformActor")
 
   @@index([role, active])
   @@map("platform_users")
@@ -11519,10 +11521,15 @@ model PlatformAuditLog {
   userAgent           String?
   createdAt           DateTime @default(now())
 
-  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  organization      Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  actorPlatformUser PlatformUser? @relation("PlatformAuditPlatformActor", fields: [actorPlatformUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  /// Logical read relation only: the SQL insert trigger validates attribution.
+  /// There is deliberately no tenant actor FK: immutable history survives purge.
+  actorTenantUser   User?         @relation("PlatformAuditTenantActor", fields: [organizationId, actorTenantUserId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
 
   @@index([organizationId, createdAt])
   @@index([actorPlatformUserId, createdAt])
+  @@index([actorTenantUserId, createdAt])
   @@index([action, createdAt])
   @@index([requestId])
   @@map("platform_audit_logs")

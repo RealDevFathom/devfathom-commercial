@@ -18,6 +18,8 @@ vi.mock('@/lib/platform/page-access', () => ({
 const suffix = randomUUID();
 const org = `audit_${suffix}`;
 const actor = `actor_${suffix}`;
+const otherOrg = `audit_other_${suffix}`;
+const tenantActor = `tenant_actor_${suffix}`;
 const action = `test.${suffix}`;
 let scoped: typeof import('@/lib/tenancy/scoped-db').withPlatformDb;
 let page: typeof import('@/app/platform/(console)/audit/page').default;
@@ -34,6 +36,31 @@ describe.skipIf(!url)('platform audit ledger on disposable PostgreSQL', () => {
       expect(role).toEqual({ rolsuper: false, rolbypassrls: false });
       await db.organization.create({
         data: { id: org, slug: org, legalName: org, displayName: org },
+      });
+      await db.organization.create({
+        data: { id: otherOrg, slug: otherOrg, legalName: otherOrg, displayName: otherOrg },
+      });
+      await db.organizationDepartment.create({
+        data: { organizationId: otherOrg, key: 'ADMINISTRATION', name: 'Administration' },
+      });
+      await db.user.create({
+        data: {
+          id: tenantActor,
+          organizationId: otherOrg,
+          name: 'Other tenant actor',
+          email: `${tenantActor}@example.test`,
+          department: 'ADMINISTRATION',
+          title: 'Administrator',
+        },
+      });
+      await db.platformUser.create({
+        data: {
+          id: actor,
+          name: 'Audit actor',
+          email: `${actor}@example.test`,
+          passwordHash: 'fixture',
+          role: 'AUDITOR',
+        },
       });
       await db.organizationLifecycleEvent.create({
         data: {
@@ -55,6 +82,50 @@ describe.skipIf(!url)('platform audit ledger on disposable PostgreSQL', () => {
         })),
       });
     });
+  });
+  it('rejects attribution to an actor from another organization', async () => {
+    await expect(
+      scoped((db) =>
+        db.platformAuditLog.create({
+          data: {
+            organizationId: org,
+            actorTenantUserId: tenantActor,
+            action: `${action}.cross_tenant`,
+          },
+        })
+      )
+    ).rejects.toThrow(/foreign key constraint/i);
+  });
+  it.each([
+    { organizationId: otherOrg, actorTenantUserId: `missing_${suffix}` },
+    { actorTenantUserId: tenantActor },
+  ])('rejects missing tenant actor or organization context: %j', async (attribution) => {
+    await expect(
+      scoped((db) =>
+        db.platformAuditLog.create({
+          data: { ...attribution, action: `${action}.invalid_actor` },
+        })
+      )
+    ).rejects.toThrow();
+  });
+  it('retains an unchanged audit row after deleting its tenant actor', async () => {
+    const saved = await scoped((db) =>
+      db.platformAuditLog.create({
+        data: {
+          organizationId: otherOrg,
+          actorTenantUserId: tenantActor,
+          action: `${action}.retained_actor`,
+        },
+      })
+    );
+    await scoped((db) => db.user.delete({ where: { id: tenantActor } }));
+    const retained = await scoped((db) =>
+      db.platformAuditLog.findUniqueOrThrow({
+        where: { id: saved.id },
+        include: { actorTenantUser: true },
+      })
+    );
+    expect(retained).toEqual({ ...saved, actorTenantUser: null });
   });
   afterAll(async () => {
     await (await import('@/lib/db')).db.$disconnect();
