@@ -16,6 +16,7 @@ import {
   parseSimpleMedicineStrength,
   PharmacyMedicineError,
 } from '@/lib/pharmacy/medicine';
+import { PharmacyProductClassError, validateRetailFields } from '@/lib/pharmacy/product-class';
 import {
   configureManualReferenceConnector,
   proposedBoolean,
@@ -159,6 +160,9 @@ const reviewDecisionInput = z.discriminatedUnion('action', [
 ]);
 
 function domainError(error: unknown): never {
+  if (error instanceof PharmacyProductClassError) {
+    throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
+  }
   if (error instanceof PharmacyMedicineError) {
     throw new TRPCError({
       code:
@@ -223,6 +227,44 @@ export const pharmacyMedicineRouter = router({
         input
       )
     ),
+  /**
+   * #718: shop-set retail price and category for a NON_DRUG_RETAIL (FRONT_SHOP) item. A medicine
+   * keeps its DRAP printed MRP and is refused; `null` clears a field.
+   */
+  setRetailDetails: adminProcedure
+    .input(
+      z
+        .object({
+          medicineId: z.string().min(1),
+          retailPriceMinor: z.number().int().positive().safe().nullable(),
+          retailCategory: z.string().max(200).nullable(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const item = await ctx.db.medicine.findFirst({
+          where: { id: input.medicineId },
+          select: { id: true, productFamily: true },
+        });
+        if (!item) throw new PharmacyMedicineError('NOT_FOUND');
+        const retail = validateRetailFields({
+          productFamily: item.productFamily,
+          retailPriceMinor: input.retailPriceMinor,
+          retailCategory: input.retailCategory,
+        });
+        return await ctx.db.medicine.update({
+          where: { id: item.id },
+          data: {
+            retailPriceMinor: retail.retailPriceMinor,
+            retailCategory: retail.retailCategory,
+          },
+          select: { id: true, productFamily: true, retailPriceMinor: true, retailCategory: true },
+        });
+      } catch (error) {
+        domainError(error);
+      }
+    }),
   priceOverrides: adminProcedure
     .input(z.object({ branchId: z.string().min(1).optional() }).strict())
     .query(({ ctx, input }) =>
@@ -546,11 +588,25 @@ export const pharmacyMedicineRouter = router({
             .default([]),
           provenance: z.array(provenance).default([]),
           saleable: z.boolean().default(false),
+          // #718: NON_DRUG_RETAIL (FRONT_SHOP) only — shop-set price, EAN-13 and category.
+          retailPriceMinor: z.number().int().positive().safe().optional(),
+          retailCategory: z.string().max(200).optional(),
+          ean13: z.string().trim().max(13).optional(),
         })
         .strict()
+        .refine((value) => !value.ean13 || Boolean(value.presentation), {
+          message: 'An EAN-13 is printed on a presentation; add the presentation first.',
+          path: ['ean13'],
+        })
     )
     .mutation(async ({ ctx, input }) => {
       try {
+        const retail = validateRetailFields({
+          productFamily: input.productFamily,
+          retailPriceMinor: input.retailPriceMinor,
+          retailCategory: input.retailCategory,
+          ean13: input.ean13,
+        });
         if (input.saleable)
           assertSaleable({
             productFamily: input.productFamily,
@@ -568,11 +624,33 @@ export const pharmacyMedicineRouter = router({
             throw new PharmacyMedicineError('CROSS_TENANT_REFERENCE');
           }
         }
-        const { presentation, strengths, provenance: assertions, ...medicine } = input;
+        const { presentation, strengths, provenance: assertions, ...rest } = input;
+        // The validated retail values below replace the raw ones; EAN-13 lives on the barcode.
+        const medicine = { ...rest };
+        delete medicine.retailPriceMinor;
+        delete medicine.retailCategory;
+        delete medicine.ean13;
         return await ctx.db.medicine.create({
           data: {
             ...medicine,
-            presentations: presentation ? { create: presentation } : undefined,
+            retailPriceMinor: retail.retailPriceMinor,
+            retailCategory: retail.retailCategory,
+            presentations: presentation
+              ? {
+                  create: {
+                    ...presentation,
+                    barcodes: retail.ean13
+                      ? {
+                          create: {
+                            type: 'GTIN',
+                            code: retail.ean13,
+                            normalizedCode: normalizeMedicineText(retail.ean13),
+                          },
+                        }
+                      : undefined,
+                  },
+                }
+              : undefined,
             strengths: { create: strengths },
             provenance: {
               create: assertions.map((item) => ({

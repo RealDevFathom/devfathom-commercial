@@ -773,6 +773,80 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
   });
 
+  describe('#718 non-drug retail lines', () => {
+    const bare = () => {
+      const { batchNumber, printedExpiry, printedMrpMinor, ...line } = RECEIPT_LINE;
+      void batchNumber;
+      void printedExpiry;
+      void printedMrpMinor;
+      return line;
+    };
+    const createdLine = () =>
+      db.pharmacyGoodsReceipt.create.mock.calls[0]![0].data.lines.create[0] as Record<
+        string,
+        unknown
+      >;
+
+    it('drafts a non-drug line with no batch, no expiry and the shop retail price', async () => {
+      db.medicine.findFirst.mockResolvedValue({
+        id: 'medicine_a',
+        productFamily: 'FRONT_SHOP',
+        retailPriceMinor: 45_000,
+      });
+      await caller().createGoodsReceipt({ ...RECEIPT, lines: [bare()] });
+      expect(createdLine()).toMatchObject({
+        batchNumber: 'RETAIL-NOEXP',
+        printedExpiry: new Date('9998-12-31T00:00:00.000Z'),
+        expiryPrecision: 'DAY',
+        printedMrpMinor: 45_000,
+      });
+    });
+
+    it('keeps an optional printed expiry on a non-drug line', async () => {
+      db.medicine.findFirst.mockResolvedValue({
+        id: 'medicine_a',
+        productFamily: 'FRONT_SHOP',
+        retailPriceMinor: 45_000,
+      });
+      await caller().createGoodsReceipt({
+        ...RECEIPT,
+        lines: [{ ...bare(), printedExpiry: EXPIRY }],
+      });
+      expect(createdLine()).toMatchObject({
+        batchNumber: 'RETAIL-2027-06-01-D',
+        printedExpiry: EXPIRY,
+      });
+    });
+
+    it('refuses a non-drug line with neither a printed nor a shop retail price', async () => {
+      db.medicine.findFirst.mockResolvedValue({
+        id: 'medicine_a',
+        productFamily: 'FRONT_SHOP',
+        retailPriceMinor: null,
+      });
+      await expect(
+        caller().createGoodsReceipt({ ...RECEIPT, lines: [bare()] })
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'MISSING_MRP' });
+      expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      [{ batchNumber: undefined }, 'MISSING_BATCH'],
+      [{ printedExpiry: undefined }, 'MISSING_EXPIRY'],
+      [{ printedMrpMinor: undefined }, 'MISSING_MRP'],
+    ])('still refuses a medicine line missing %j', async (omit, message) => {
+      db.medicine.findFirst.mockResolvedValue({
+        id: 'medicine_a',
+        productFamily: 'PHARMACEUTICAL',
+        retailPriceMinor: null,
+      });
+      await expect(
+        caller().createGoodsReceipt({ ...RECEIPT, lines: [{ ...RECEIPT_LINE, ...omit }] })
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST', message });
+      expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+    });
+  });
+
   it('refuses a cross-tenant medicine on a receipt line', async () => {
     db.medicine.findFirst.mockResolvedValue(null);
     await expect(caller().createGoodsReceipt(RECEIPT)).rejects.toMatchObject({

@@ -3,6 +3,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
   explainGrossMargin,
   grossMarginComparison,
+  grossMarginQuery,
   marginComparisonPeriods,
 } from './finance-reports';
 const row = (revenueMinor: number, discountMinor: number, cogsMinor: number) => ({
@@ -114,5 +115,27 @@ describe('gross-margin accounting comparison', () => {
         { from: new Date('2026-09-01Z'), to: new Date('2026-09-02Z') }
       )
     ).rejects.toThrow('branch group');
+  });
+});
+
+describe('#718 margin by product class', () => {
+  const scope = { organizationId: 'org_1', branchId: 'branch_1' };
+  const period = { from: new Date('2026-09-01Z'), to: new Date('2026-09-03Z') };
+
+  it('splits medicine and non-drug margin from the FRONT_SHOP family on the same journal', () => {
+    const sql = grossMarginQuery(scope, { ...period, by: 'productClass' });
+    expect(sql.sql).toContain('LEFT JOIN "pharmacy_medicines" product');
+    expect(sql.sql).toContain('product."organizationId" = line."organizationId"');
+    expect(sql.sql).toContain('product."id" = line."productId"');
+    expect(sql.sql).toContain(
+      `WHEN product."productFamily" = 'FRONT_SHOP' THEN 'NON_DRUG_RETAIL' ELSE 'MEDICINE'`
+    );
+    expect(sql.sql).toContain('line."organizationId" = ?');
+    expect(sql.sql).toContain('line."branchId" = ?');
+  });
+
+  it('leaves the existing dimensions without the catalogue join', () => {
+    for (const by of ['line', 'batch', 'product', 'branch'] as const)
+      expect(grossMarginQuery(scope, { ...period, by }).sql).not.toContain('pharmacy_medicines');
   });
 });

@@ -99,3 +99,83 @@ describe('pharmacy medicine tenant and entitlement boundaries', () => {
     expect(moduleForProcedure('pharmacyMedicine.createIngredient')).toBe('pharmacy-core');
   });
 });
+
+describe('#718 non-drug retail catalogue items', () => {
+  it('creates a front-shop item with a shop retail price, category and EAN-13 barcode', async () => {
+    await caller().createMedicine({
+      productName: 'Baby lotion 200ml',
+      productFamily: 'FRONT_SHOP',
+      presentation: { presentation: 'Bottle, 200 ml' },
+      retailPriceMinor: 55_000,
+      retailCategory: '  Baby   care ',
+      ean13: '4006381333931',
+      saleable: true,
+    });
+    const data = db.medicine.create.mock.calls[0]![0].data;
+    expect(data).toMatchObject({
+      productFamily: 'FRONT_SHOP',
+      retailPriceMinor: 55_000,
+      retailCategory: 'Baby care',
+      saleable: true,
+      presentations: {
+        create: {
+          presentation: 'Bottle, 200 ml',
+          barcodes: {
+            create: { type: 'GTIN', code: '4006381333931', normalizedCode: '4006381333931' },
+          },
+        },
+      },
+    });
+    expect(data).not.toHaveProperty('ean13');
+  });
+
+  it.each([[{ retailPriceMinor: 100 }], [{ retailCategory: 'Cosmetics' }]])(
+    'refuses retail fields %j on a medicine',
+    async (retail) => {
+      await expect(
+        caller().createMedicine({
+          productName: 'Paracetamol',
+          productFamily: 'PHARMACEUTICAL',
+          ...retail,
+        })
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'RETAIL_FIELDS_MEDICINE' });
+      expect(db.medicine.create).not.toHaveBeenCalled();
+    }
+  );
+
+  it('refuses an invalid EAN-13 check digit', async () => {
+    await expect(
+      caller().createMedicine({
+        productName: 'Shampoo',
+        productFamily: 'FRONT_SHOP',
+        presentation: { presentation: 'Bottle' },
+        ean13: '4006381333932',
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'INVALID_EAN13' });
+    expect(db.medicine.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses an EAN-13 without a presentation to carry it', async () => {
+    await expect(
+      caller().createMedicine({
+        productName: 'Shampoo',
+        productFamily: 'FRONT_SHOP',
+        ean13: '4006381333931',
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(db.medicine.create).not.toHaveBeenCalled();
+  });
+
+  it('keeps a front-shop item saleable without DRAP registration or strength', async () => {
+    await caller().createMedicine({
+      productName: 'Lip balm',
+      productFamily: 'FRONT_SHOP',
+      presentation: { presentation: 'Stick' },
+      saleable: true,
+    });
+    expect(db.medicine.create.mock.calls[0]![0].data).toMatchObject({
+      retailPriceMinor: null,
+      retailCategory: null,
+    });
+  });
+});
