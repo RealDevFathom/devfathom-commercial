@@ -773,6 +773,29 @@ const purchasingRouter = router({
             );
           }
 
+          let updatedOrder;
+          try {
+            updatedOrder = await tx.pharmacyPurchaseOrder.update({
+              where: { id: order.id, status: 'SUBMITTED' },
+              data:
+                input.decision === 'APPROVED'
+                  ? {
+                      status: 'APPROVED',
+                      approvedAt: new Date(),
+                      approvedByUserId: ctx.session.user.id,
+                    }
+                  : { status: 'DRAFT' },
+            });
+          } catch (error) {
+            if ((error as { code?: unknown } | null)?.code === 'P2025') {
+              throw new TRPCError({
+                code: 'CONFLICT',
+                message: 'Purchase order has already been reviewed.',
+              });
+            }
+            throw error;
+          }
+
           await tx.pharmacyPurchaseOrderApproval.create({
             data: {
               purchaseOrderId: order.id,
@@ -784,17 +807,7 @@ const purchasingRouter = router({
               reason: input.reason,
             },
           });
-          return tx.pharmacyPurchaseOrder.update({
-            where: { id: order.id },
-            data:
-              input.decision === 'APPROVED'
-                ? {
-                    status: 'APPROVED',
-                    approvedAt: new Date(),
-                    approvedByUserId: ctx.session.user.id,
-                  }
-                : { status: 'DRAFT' },
-          });
+          return updatedOrder;
         });
       } catch (error) {
         domainError(error);
@@ -886,6 +899,8 @@ const purchasingRouter = router({
           purchaseOrderId: z.string().min(1).optional(),
           supplierInvoiceRef: z.string().trim().min(1).max(200),
           supplierInvoiceDate: z.date(),
+          distributorNtn: z.string().trim().min(1).max(60).optional(),
+          distributorStrn: z.string().trim().min(1).max(60).optional(),
           warrantyEvidenceRef: z.string().trim().min(1).max(500),
           receivedAt: z.date(),
           directPurchase: z
@@ -981,7 +996,7 @@ const purchasingRouter = router({
         }
         const purchaseOrder = input.purchaseOrderId
           ? await ctx.db.pharmacyPurchaseOrder.findFirst({
-              where: { id: input.purchaseOrderId, supplierId: input.supplierId },
+              where: { id: input.purchaseOrderId, supplierId: input.supplierId, branchId: input.branchId },
               include: { lines: { orderBy: { lineNumber: 'asc' } } },
             })
           : null;
@@ -1023,8 +1038,19 @@ const purchasingRouter = router({
           // An ordered line borrowed from another order — or from another
           // tenant — would make the three-way match compare the goods against
           // something they were never ordered on.
-          if (line.purchaseOrderLineId && !ownOrderLines.has(line.purchaseOrderLineId))
-            throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
+          if (line.purchaseOrderLineId) {
+            const orderLine = ownOrderLines.get(line.purchaseOrderLineId);
+            if (!orderLine) throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
+            // The referenced order line is the authority for item identity. Without
+            // this check, unrelated goods could inherit its price and quantity terms,
+            // pass three-way matching, and close the wrong ordered line.
+            if (
+              orderLine.medicineId !== line.medicineId ||
+              orderLine.packLevelId !== line.packLevelId
+            ) {
+              throw new PharmacyReceivingError('PURCHASE_ORDER_LINE_ITEM_MISMATCH');
+            }
+          }
 
           const orderLine = line.purchaseOrderLineId
             ? ownOrderLines.get(line.purchaseOrderLineId)
@@ -1172,6 +1198,8 @@ const purchasingRouter = router({
                 purchaseOrderId: input.purchaseOrderId ?? null,
                 supplierInvoiceRef: input.supplierInvoiceRef,
                 supplierInvoiceDate: input.supplierInvoiceDate,
+                distributorNtn: input.distributorNtn ?? null,
+                distributorStrn: input.distributorStrn ?? null,
                 warrantyEvidenceRef: input.warrantyEvidenceRef,
                 receivedByUserId: scope.actorId,
                 receivedAt: input.receivedAt,
@@ -1241,21 +1269,44 @@ const purchasingRouter = router({
       }
     }),
 
-  /** Qualified people who can enter a PIN when a controlled receipt is posted. */
-  controlledWitnesses: protectedProcedure.query(async ({ ctx }) => {
-    const actorId = ctx.session?.user?.id;
-    if (!actorId) throw new TRPCError({ code: 'UNAUTHORIZED' });
-    const actor = subjectFromSession(ctx.session!.user);
-    if (
-      !(await can(actor, 'pharmacy:safety', undefined, { db: ctx.db })) &&
-      !(await can(actor, 'pharmacy:dispense', undefined, { db: ctx.db }))
-    ) {
-      throw new TRPCError({ code: 'FORBIDDEN' });
-    }
-    const organizationId = ctx.entitlements?.organizationId;
-    if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
-    return listControlledPinWitnesses(ctx.db, organizationId, actorId);
-  }),
+  /** The receipt's qualified person, when they can enter a PIN to witness posting. */
+  controlledWitnesses: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          goodsReceiptId: z.string().min(1),
+        })
+        .strict()
+    )
+    .query(async ({ ctx, input }) => {
+      const actorId = ctx.session?.user?.id;
+      if (!actorId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+      const actor = subjectFromSession(ctx.session!.user);
+      if (
+        !(await can(actor, 'pharmacy:safety', undefined, { db: ctx.db })) &&
+        !(await can(actor, 'pharmacy:dispense', undefined, { db: ctx.db }))
+      ) {
+        throw new TRPCError({ code: 'FORBIDDEN' });
+      }
+      const organizationId = ctx.entitlements?.organizationId;
+      if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+      const receipt = await ctx.db.pharmacyGoodsReceipt.findFirst({
+        where: {
+          id: input.goodsReceiptId,
+          organizationId,
+          branchId: input.branchId,
+        },
+        select: { qualifiedPersonUserId: true },
+      });
+      if (!receipt?.qualifiedPersonUserId || receipt.qualifiedPersonUserId === actorId) return [];
+      return listControlledPinWitnesses(
+        ctx.db,
+        organizationId,
+        actorId,
+        receipt.qualifiedPersonUserId
+      );
+    }),
 
   /**
    * PUR-04: undo a posting with linked compensating movements. Nothing that was
@@ -1273,6 +1324,7 @@ const purchasingRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      await assertProcurement(ctx);
       const scope = receivingScope(ctx, input.branchId);
       try {
         return await ctx.db.$transaction((tx) =>

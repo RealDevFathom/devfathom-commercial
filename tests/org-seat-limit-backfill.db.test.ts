@@ -4,10 +4,8 @@ import { readFileSync } from 'node:fs';
 import { Client } from 'pg';
 import { describe, expect, it } from 'vitest';
 
-// This migration-level fixture creates an isolated schema. Keep it on the
-// ephemeral owner connection rather than asking the restricted app role for
-// database CREATE privileges.
-const databaseUrl = process.env.ORG_SEAT_LIMIT_TEST_OWNER_DATABASE_URL;
+const databaseUrl = process.env.TEST_DATABASE_URL;
+const ownerDatabaseUrl = process.env.OWNER_DATABASE_URL;
 const sql = readFileSync(
   'prisma/migrations/20261021141526_org_seat_limit_backfill/migration.sql',
   'utf8'
@@ -44,7 +42,11 @@ describe('backfill SQL splitter', () => {
 (databaseUrl ? describe : describe.skip)('seat backfill on PostgreSQL with forced RLS', () => {
   it('repairs legacy seats, preserves contract, creation, demo, unknown, manual, custom and single-seat limits, and audits once', async () => {
     const client = new Client({ connectionString: databaseUrl });
+    const schemaOwner = ownerDatabaseUrl
+      ? new Client({ connectionString: ownerDatabaseUrl })
+      : client;
     await client.connect();
+    if (schemaOwner !== client) await schemaOwner.connect();
     const schema = `seat_${randomUUID().replaceAll('-', '')}`;
     try {
       const {
@@ -53,10 +55,16 @@ describe('backfill SQL splitter', () => {
         'SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user'
       );
       expect(role).toEqual({ rolsuper: false, rolbypassrls: false });
-      await client.query('BEGIN');
       // Isolate migration execution from any shared database data. These tables
       // expose the migration columns with their production defaults and RLS.
-      await client.query(`CREATE SCHEMA "${schema}"`);
+      await schemaOwner.query(`CREATE SCHEMA "${schema}"`);
+      if (schemaOwner !== client) {
+        const runtimeRole = new URL(databaseUrl!).username;
+        await schemaOwner.query(
+          `GRANT USAGE, CREATE ON SCHEMA "${schema}" TO "${runtimeRole.replaceAll('"', '""')}"`
+        );
+      }
+      await client.query('BEGIN');
       await client.query(`SET search_path TO "${schema}"`);
       await client.query(`
         CREATE TABLE platform_packages (id text PRIMARY KEY, key text, vertical text,
@@ -192,8 +200,9 @@ describe('backfill SQL splitter', () => {
       expect(await snapshot()).toEqual(first);
     } finally {
       await client.query('ROLLBACK');
-      await client.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+      await schemaOwner.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
       await client.end();
+      if (schemaOwner !== client) await schemaOwner.end();
     }
   });
 });
