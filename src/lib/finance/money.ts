@@ -1,54 +1,31 @@
-type DecimalParts = {
-  coefficient: bigint;
-  scale: number;
-};
+import { Prisma } from '@/generated/prisma/client';
 
-const BIGINT_ZERO = BigInt(0);
-const BIGINT_ONE = BigInt(1);
-const BIGINT_TWO = BigInt(2);
-const BIGINT_TEN = BigInt(10);
+type MoneyInput = number | string | Prisma.Decimal;
 
-function decimalParts(value: number): DecimalParts {
-  if (!Number.isFinite(value)) throw new RangeError('Money values must be finite');
+/** Largest value supported by the application's Decimal(12,2) money columns. */
+export const MAX_MONEY = 9_999_999_999.99;
 
-  const match = String(value).match(/^(-?)(\d+)(?:\.(\d+))?(?:e([+-]?\d+))?$/i);
-  if (!match) throw new RangeError(`Invalid money value: ${value}`);
+const decimal = (value: MoneyInput) => new Prisma.Decimal(value);
 
-  const fraction = match[3] ?? '';
-  const exponent = Number(match[4] ?? 0);
-  const sign = match[1] === '-' ? -BIGINT_ONE : BIGINT_ONE;
-
-  return {
-    coefficient: sign * BigInt(`${match[2]}${fraction}`),
-    scale: fraction.length - exponent,
-  };
+/** Round a monetary value to cents using decimal half-up semantics. */
+export function roundMoney(value: MoneyInput): number {
+  return decimal(value).toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP).toNumber();
 }
 
-function toCents({ coefficient, scale }: DecimalParts): bigint {
-  const shift = scale - 2;
-  if (shift <= 0) return coefficient * BIGINT_TEN ** BigInt(-shift);
-
-  const divisor = BIGINT_TEN ** BigInt(shift);
-  const absolute = coefficient < BIGINT_ZERO ? -coefficient : coefficient;
-  const quotient = absolute / divisor;
-  const remainder = absolute % divisor;
-  const rounded = quotient + (remainder * BIGINT_TWO >= divisor ? BIGINT_ONE : BIGINT_ZERO);
-  return coefficient < BIGINT_ZERO ? -rounded : rounded;
+/** Multiply decimal inputs before rounding so binary floating-point cannot change a half-cent. */
+export function multiplyMoney(left: MoneyInput, right: MoneyInput): number {
+  return roundMoney(decimal(left).times(decimal(right)));
 }
 
-/** Round a numeric money input to cents using decimal half-up semantics. */
-export function roundMoney(value: number): number {
-  return Number(toCents(decimalParts(value))) / 100;
+/** Add monetary values as decimals and round the result to cents. */
+export function sumMoney(values: MoneyInput[]): number {
+  return roundMoney(
+    values.reduce<Prisma.Decimal>((total, value) => total.plus(decimal(value)), decimal(0))
+  );
 }
 
-/**
- * Multiply decimal inputs before rounding to avoid binary floating-point changing
- * a half-cent boundary (for example, JavaScript represents 1.005 * 100 below 100.5).
- */
-export function multiplyMoney(left: number, right: number): number {
-  const a = decimalParts(left);
-  const b = decimalParts(right);
-  return Number(
-    toCents({ coefficient: a.coefficient * b.coefficient, scale: a.scale + b.scale })
-  ) / 100;
+/** Whether a derived value can safely be persisted in a Decimal(12,2) money column. */
+export function isPersistableMoney(value: MoneyInput): boolean {
+  const amount = decimal(value);
+  return amount.isFinite() && !amount.isNegative() && amount.lessThanOrEqualTo(MAX_MONEY);
 }
