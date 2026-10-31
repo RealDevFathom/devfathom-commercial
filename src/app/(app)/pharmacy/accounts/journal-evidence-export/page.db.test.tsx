@@ -62,7 +62,7 @@ beforeAll(async () => {
   const { seedDepartments, ensurePlatformModule } = await import('@/lib/test-support/departments');
   withTenantDb = scoped.withTenantDb;
   await assertRlsEnforcingRole(scoped.withPlatformDb);
-  const module = await scoped.withPlatformDb(async (db) => {
+  const reportsModule = await scoped.withPlatformDb(async (db) => {
     await db.organization.createMany({
       data: [org, otherOrg].map((id) => ({
         id,
@@ -82,7 +82,7 @@ beforeAll(async () => {
   for (const organizationId of [org, otherOrg]) {
     await withTenantDb(organizationId, async (db) => {
       await seedDepartments(db, [organizationId], ['LEADERSHIP']);
-      await db.organizationModule.create({ data: { moduleId: module.id, status: 'ENABLED' } });
+      await db.organizationModule.create({ data: { moduleId: reportsModule.id, status: 'ENABLED' } });
       await db.pharmacyBranch.create({
         data: {
           id: organizationId === org ? branch : otherBranch,
