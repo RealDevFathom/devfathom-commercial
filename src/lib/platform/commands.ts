@@ -1891,8 +1891,25 @@ async function runCommand(
         .parse(payload);
       const { id: organizationId, ...data } = input;
       let correctionReason: string | undefined;
+      // Deployment-mode decisions must use the current value at the point of
+      // the write. Without this lock, an unchanged DEDICATED request can read
+      // a stale value, race a transition to SHARED, and silently restore
+      // DEDICATED without creating its provisioning job.
+      if (data.deploymentMode !== undefined) {
+        await db.$queryRaw`SELECT id FROM organizations WHERE id = ${organizationId} FOR UPDATE`;
+      }
       const before = await db.organization.findUnique({ where: { id: organizationId } });
       if (!before) throw new PlatformSecurityError('Organization not found.', 400);
+      if (
+        data.deploymentMode === 'DEDICATED' &&
+        data.deploymentMode !== before.deploymentMode &&
+        !isDedicatedProvisioningConfigured()
+      ) {
+        throw new PlatformSecurityError(
+          'Dedicated provisioning is unavailable because Vercel provisioning is not configured for this environment. Choose Shared platform or ask a platform administrator to configure Vercel.',
+          400
+        );
+      }
       const changesVertical = data.vertical !== undefined && data.vertical !== before.vertical;
       // A vertical correction is deliberately narrower than ordinary onboarding
       // edits: it is an early correction only, before activation or any
