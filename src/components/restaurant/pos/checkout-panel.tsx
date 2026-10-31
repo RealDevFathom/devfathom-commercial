@@ -289,6 +289,10 @@ function billTone(status: string): StatusTone {
   return 'neutral';
 }
 
+function billTitle(splitKind: string) {
+  return splitKind === 'NONE' ? 'Whole order' : splitKind.replaceAll('_', ' ');
+}
+
 const blockerLabels: Record<Exclude<CheckoutSummary['blocker'], null>, string> = {
   NO_BILLS: 'No bills have been cut.',
   ITEMS_UNBILLED: 'Some order items are not billed.',
@@ -928,7 +932,7 @@ export function CheckoutPanel({
                 title={
                   bill.receiptNumber !== null
                     ? `Receipt ${bill.receiptNumber}`
-                    : bill.splitKind.replaceAll('_', ' ')
+                    : billTitle(bill.splitKind)
                 }
                 actions={<StatusPill status={bill.status} tone={billTone(bill.status)} />}
               >
