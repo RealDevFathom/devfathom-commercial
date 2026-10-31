@@ -4,6 +4,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 // Source/pure checks only. Transaction and RLS evidence belongs to the PostgreSQL suite.
 vi.mock('./daily-close', () => ({ assertMoneyDayOpen: vi.fn() }));
+// appendMovement re-checks the drawer's own financial day through the shared guard.
+vi.mock('./money-day', () => ({ assertMoneyDayOpen: vi.fn(), lockMoneyDay: vi.fn() }));
 vi.mock('./staff-branch-authorization', () => ({
   assertActorEligibleForBranch: vi.fn(),
   assertAuthorizedBranch: vi.fn(),
@@ -17,6 +19,7 @@ import {
 } from './catering-money';
 import { foldExpectedCash } from './drawer-sessions';
 import { assertMoneyDayOpen } from './daily-close';
+import { assertMoneyDayOpen as assertDrawerMoneyDayOpen } from './money-day';
 
 const input: CateringMoneyInput = {
   cateringOrderId: 'order',
@@ -161,6 +164,7 @@ const scope: CateringMoneyScope = {
     branchIds: ['branch'],
   },
 };
+const DRAWER_DAY = new Date('2026-08-19T00:00:00.000Z');
 function fixture() {
   const keys = new Map<string, Record<string, unknown>>();
   const evidence: CateringEvidence[] = [];
@@ -205,7 +209,12 @@ function fixture() {
     },
     restaurantDrawerSession: {
       findFirst: vi.fn(async () => ({ id: 'drawer' })),
-      findUnique: vi.fn(async () => ({ id: 'drawer', status: 'OPEN' })),
+      findUnique: vi.fn(async () => ({
+        id: 'drawer',
+        status: 'OPEN',
+        branchId: 'branch',
+        businessDate: DRAWER_DAY,
+      })),
     },
     restaurantDrawerMovement: {
       create: vi.fn(async () => {
@@ -245,6 +254,7 @@ describe('catering evidence service (unit delegates, not DB proof)', () => {
     const result = await recordCateringMoneyEvidence(f.db, scope, input);
     expect(f.calls).toEqual(['lock', 'quote', 'cap', 'movement', 'evidence', 'audit']);
     expect(result).toMatchObject({ ledgerReference: 'movement', replayed: false });
+    expect(assertDrawerMoneyDayOpen).toHaveBeenCalledWith(f.db, 'branch', DRAWER_DAY);
     const before = f.tx.restaurantDrawerMovement.create.mock.calls.length;
     expect(await recordCateringMoneyEvidence(f.db, scope, { ...input, amount: '28' })).toEqual({
       ...result,
@@ -311,13 +321,24 @@ describe('catering evidence service (unit delegates, not DB proof)', () => {
     await expect(recordCateringMoneyEvidence(day.db, scope, input)).rejects.toThrow('day closed');
     expect(day.tx.restaurantDrawerMovement.create).not.toHaveBeenCalled();
     const drawer = fixture();
-    drawer.tx.restaurantDrawerSession.findUnique.mockResolvedValueOnce({
+    drawer.tx.restaurantDrawerSession.findUnique.mockResolvedValue({
       id: 'drawer',
       status: 'CLOSED',
+      branchId: 'branch',
+      businessDate: DRAWER_DAY,
     });
     await expect(recordCateringMoneyEvidence(drawer.db, scope, input)).rejects.toThrow('closed');
     expect(drawer.tx.auditLog.create).not.toHaveBeenCalled();
     expect(drawer.tx.restaurantMoneyIdempotencyKey.updateMany).not.toHaveBeenCalled();
+    const drawerDay = fixture();
+    vi.mocked(assertDrawerMoneyDayOpen).mockRejectedValueOnce(new Error('drawer day closed'));
+    await expect(recordCateringMoneyEvidence(drawerDay.db, scope, input)).rejects.toThrow(
+      'drawer day closed'
+    );
+    expect(drawerDay.tx.restaurantDrawerMovement.create).not.toHaveBeenCalled();
+    expect(drawerDay.calls).not.toContain('evidence');
+    expect(drawerDay.tx.auditLog.create).not.toHaveBeenCalled();
+    expect(drawerDay.tx.restaurantMoneyIdempotencyKey.updateMany).not.toHaveBeenCalled();
   });
   it.each(['CANCELLED', 'CLOSED'])(
     'rejects new receipts on %s but replays successful receipt',
