@@ -6,14 +6,11 @@ vi.mock('@/lib/entitlements', () => ({
   hasModule: vi.fn(() => true),
   resolveOrganizationEntitlements: vi.fn(),
 }));
-vi.mock('@/server/audit', () => ({
+vi.mock('@/server/audit', async (original) => ({
+  ...(await original<typeof import('@/server/audit')>()),
   ipFromHeaders: vi.fn(),
   isAuditExcludedPath: vi.fn(() => false),
   recordTrpcAudit: vi.fn(),
-}));
-vi.mock('@/lib/abac', () => ({
-  can: vi.fn(async () => true),
-  subjectFromSession: (user: unknown) => user,
 }));
 vi.mock('@/lib/pharmacy/settlement', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/settlement')>()),
@@ -26,9 +23,11 @@ import {
   readPharmacyTenderOutcome,
   refundPharmacyTender,
 } from '@/lib/pharmacy/settlement';
-import { can } from '@/lib/abac';
+import { can, subjectFromSession } from '@/lib/abac';
+import * as abac from '@/lib/abac';
 import { router, type TRPCContext } from '../trpc';
 import { pharmacySalesRouter } from './pharmacy-sales';
+const canSpy = vi.spyOn(abac, 'can');
 const app = router({ pharmacySales: pharmacySalesRouter });
 const input = {
   branchId: 'branch-a',
@@ -41,22 +40,21 @@ const input = {
   familyAccountId: 'family-a',
 };
 function fixture() {
+  const member = {
+    role: 'ADMIN',
+    status: 'ACTIVE',
+    organizationId: 'org-a',
+    organizationRole: {
+      permissions: [{ capability: 'pharmacy:counter', effect: 'ALLOW' }],
+    },
+    permissionOverrides: [] as { capability: string; effect: string }[],
+  };
   const db = {
     $queryRaw: vi.fn().mockResolvedValue([]),
     $transaction: vi.fn(),
-    user: {
-      findUnique: vi.fn().mockResolvedValue({
-        role: 'ADMIN',
-        status: 'ACTIVE',
-        organizationId: 'org-a',
-        organizationRole: {
-          permissions: [{ capability: 'pharmacy:counter', effect: 'ALLOW' }],
-        },
-        permissionOverrides: [],
-      }),
-    },
+    user: { findUnique: vi.fn(async () => member) },
     pharmacyBranchAssignment: {
-      findMany: vi.fn().mockResolvedValue([{ branchId: 'branch-a' }]),
+      findMany: vi.fn(async () => [{ branchId: 'branch-a' }]),
     },
     pharmacyBranch: {
       findFirst: vi.fn().mockResolvedValue({ id: 'branch-a' }),
@@ -104,6 +102,7 @@ function fixture() {
   };
   return {
     db,
+    member,
     user,
     context,
     caller: () => app.createCaller(context as unknown as TRPCContext).pharmacySales,
@@ -111,7 +110,6 @@ function fixture() {
 }
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(can).mockResolvedValue(true);
   vi.mocked(readPharmacyTenderOutcome).mockResolvedValue({
     status: 'NOT_FOUND',
     replayUnsafe: true,
@@ -123,8 +121,344 @@ beforeEach(() => {
     remainingMinor: 100,
     replayed: false,
   });
+  vi.mocked(refundPharmacyTender).mockResolvedValue({
+    refundId: 'refund-a',
+    originalTenderId: 'tender-a',
+    amountMinor: 50,
+    replayed: false,
+  });
 });
+
+type Caller = ReturnType<ReturnType<typeof fixture>['caller']>;
+const khataPaths: { name: string; run: (caller: Caller, branchId: string) => Promise<unknown> }[] =
+  [
+    {
+      name: 'accounts',
+      run: (c, branchId) => c.khataAccounts({ branchId, saleId: input.saleId }),
+    },
+    {
+      name: 'statement',
+      run: (c, branchId) =>
+        c.khataStatement({
+          branchId,
+          saleId: input.saleId,
+          familyAccountId: input.familyAccountId,
+        }),
+    },
+    { name: 'Khata charge', run: (c, branchId) => c.tender({ ...input, branchId }) },
+    {
+      name: 'credit charge',
+      run: (c, branchId) => c.tender({ ...input, branchId, type: 'CREDIT' }),
+    },
+    { name: 'Khata outcome', run: (c, branchId) => c.tenderOutcome({ ...input, branchId }) },
+    {
+      name: 'credit outcome',
+      run: (c, branchId) => c.tenderOutcome({ ...input, branchId, type: 'CREDIT' }),
+    },
+    {
+      name: 'legacy credit outcome without a family account',
+      run: (c, branchId) =>
+        c.tenderOutcome({ ...input, branchId, type: 'CREDIT', familyAccountId: undefined }),
+    },
+    {
+      name: 'credit refund',
+      run: (c, branchId) =>
+        c.refundTender({
+          branchId,
+          originalTenderId: 'tender-a',
+          deviceId: input.deviceId,
+          businessDate: input.businessDate,
+          amountMinor: 50,
+          reason: 'Return',
+          idempotencyKey: 'refund-a',
+        }),
+    },
+  ];
+
+describe.each(khataPaths)('Khata $name authorization', ({ run }) => {
+  it('allows the assigned branch with real counter permissions and no dispense grant', async () => {
+    const f = fixture();
+    f.user.role = 'EMPLOYEE';
+    await expect(run(f.caller(), 'branch-a')).resolves.toBeDefined();
+  });
+
+  it.each(['user', 'role'])(
+    'keeps a %s clinical DENY separate from counter access',
+    async (source) => {
+      const f = fixture();
+      f.user.role = 'EMPLOYEE';
+      const denial = { capability: 'pharmacy:dispense', effect: 'DENY' };
+      if (source === 'user') f.member.permissionOverrides = [denial];
+      else f.member.organizationRole.permissions.push(denial);
+
+      await expect(run(f.caller(), 'branch-a')).resolves.toBeDefined();
+    }
+  );
+
+  it.each(['branch-b', 'unassigned'])(
+    'denies a cashier assigned to %s before Khata data or money operations',
+    async (assignment) => {
+      const f = fixture();
+      f.user.role = 'EMPLOYEE';
+      f.db.pharmacyBranchAssignment.findMany.mockResolvedValue(
+        assignment === 'unassigned' ? [] : [{ branchId: assignment }]
+      );
+      // Both branches are active in org-a; only branch assignment differs.
+      await expect(run(f.caller(), 'branch-a')).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'Branch is outside your scope.',
+      });
+      expect(f.db.pharmacySale.findFirst).not.toHaveBeenCalled();
+      expect(f.db.pharmacyFamilyAccount.findMany).not.toHaveBeenCalled();
+      expect(f.db.pharmacyKhataEvent.findFirst).not.toHaveBeenCalled();
+      expect(f.db.pharmacyKhataEvent.findMany).not.toHaveBeenCalled();
+      expect(f.db.pharmacyKhataEvent.create).not.toHaveBeenCalled();
+      expect(f.db.$queryRaw).not.toHaveBeenCalled();
+      expect(readPharmacyTenderOutcome).not.toHaveBeenCalled();
+      expect(applyPharmacyTender).not.toHaveBeenCalled();
+      expect(refundPharmacyTender).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['user', 'role'])('honors a %s DENY despite another counter ALLOW', async (source) => {
+    const f = fixture();
+    f.user.role = 'EMPLOYEE';
+    if (source === 'user') {
+      f.member.permissionOverrides = [{ capability: 'pharmacy:counter', effect: 'DENY' }];
+    } else {
+      f.member.organizationRole.permissions = [{ capability: 'pharmacy:counter', effect: 'DENY' }];
+      f.member.permissionOverrides = [{ capability: 'pharmacy:counter', effect: 'ALLOW' }];
+    }
+    await expect(run(f.caller(), 'branch-a')).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(applyPharmacyTender).not.toHaveBeenCalled();
+    expect(refundPharmacyTender).not.toHaveBeenCalled();
+  });
+
+  it.each(['pharmacy:dispense', 'pharmacy.counter'])(
+    'rejects %s without a canonical counter grant',
+    async (capability) => {
+      const f = fixture();
+      f.user.role = 'EMPLOYEE';
+      f.member.organizationRole.permissions = [{ capability, effect: 'ALLOW' }];
+      await expect(run(f.caller(), 'branch-a')).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(readPharmacyTenderOutcome).not.toHaveBeenCalled();
+      expect(applyPharmacyTender).not.toHaveBeenCalled();
+      expect(refundPharmacyTender).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['session', 'database'])('rejects an inactive %s user', async (source) => {
+    const f = fixture();
+    if (source === 'session') f.user.status = 'INACTIVE';
+    else f.member.status = 'INACTIVE';
+    await expect(run(f.caller(), 'branch-a')).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(applyPharmacyTender).not.toHaveBeenCalled();
+    expect(refundPharmacyTender).not.toHaveBeenCalled();
+  });
+
+  it.each([{ assignments: [] }, { assignments: [{ branchId: 'branch-b' }] }])(
+    'preserves and audits tenant-admin access with assignments $assignments',
+    async ({ assignments }) => {
+      const f = fixture();
+      f.db.pharmacyBranchAssignment.findMany.mockResolvedValue(assignments);
+      await expect(run(f.caller(), 'branch-a')).resolves.toBeDefined();
+      expect(f.context.audit.detail).toMatchObject({
+        targetType: 'PharmacyBranch',
+        targetId: 'branch-a',
+        metadata: { branchId: 'branch-a' },
+      });
+    }
+  );
+});
+
+describe.each(
+  khataPaths.filter(
+    ({ name }) => name === 'accounts' || name === 'statement' || name.includes('outcome')
+  )
+)('Khata finance $name authorization', ({ run }) => {
+  it('allows an assigned finance-only member to read', async () => {
+    const f = fixture();
+    f.user.role = 'EMPLOYEE';
+    f.member.organizationRole.permissions = [{ capability: 'reports:financial', effect: 'ALLOW' }];
+    await expect(run(f.caller(), 'branch-a')).resolves.toBeDefined();
+  });
+
+  it.each(['user', 'role'])(
+    'keeps a %s clinical DENY separate from financial reads',
+    async (source) => {
+      const f = fixture();
+      f.user.role = 'EMPLOYEE';
+      f.member.organizationRole.permissions = [{ capability: 'reports:financial', effect: 'ALLOW' }];
+      const denial = { capability: 'pharmacy:dispense', effect: 'DENY' };
+      if (source === 'user') f.member.permissionOverrides = [denial];
+      else f.member.organizationRole.permissions.push(denial);
+
+      await expect(run(f.caller(), 'branch-a')).resolves.toBeDefined();
+    }
+  );
+
+  it.each([{ assignments: [] }, { assignments: [{ branchId: 'branch-b' }] }])(
+    'denies finance reads outside assignments $assignments',
+    async ({ assignments }) => {
+      const f = fixture();
+      f.user.role = 'EMPLOYEE';
+      f.member.organizationRole.permissions = [
+        { capability: 'reports:financial', effect: 'ALLOW' },
+      ];
+      f.db.pharmacyBranchAssignment.findMany.mockResolvedValue(assignments);
+      await expect(run(f.caller(), 'branch-a')).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'Branch is outside your scope.',
+      });
+      expect(f.db.pharmacySale.findFirst).not.toHaveBeenCalled();
+      expect(readPharmacyTenderOutcome).not.toHaveBeenCalled();
+    }
+  );
+
+  it('denies inactive finance members before reading evidence', async () => {
+    const f = fixture();
+    f.member.organizationRole.permissions = [{ capability: 'reports:financial', effect: 'ALLOW' }];
+    f.member.status = 'INACTIVE';
+    await expect(run(f.caller(), 'branch-a')).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(f.db.pharmacySale.findFirst).not.toHaveBeenCalled();
+    expect(readPharmacyTenderOutcome).not.toHaveBeenCalled();
+  });
+
+  it('does not let financial access bypass an explicit counter DENY', async () => {
+    const f = fixture();
+    f.member.organizationRole.permissions = [{ capability: 'reports:financial', effect: 'ALLOW' }];
+    f.member.permissionOverrides = [{ capability: 'pharmacy:counter', effect: 'DENY' }];
+    await expect(run(f.caller(), 'branch-a')).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(f.db.pharmacySale.findFirst).not.toHaveBeenCalled();
+    expect(readPharmacyTenderOutcome).not.toHaveBeenCalled();
+  });
+});
+
 describe('Khata router trust and recovery boundary', () => {
+  it.each(['CASH', 'CARD', 'BANK_TRANSFER', 'WALLET'])(
+    'preserves the receipt permission boundary for a %s refund',
+    async (type) => {
+      const f = fixture();
+      f.user.role = 'EMPLOYEE';
+      f.member.permissionOverrides = [{ capability: 'pharmacy:dispense', effect: 'DENY' }];
+      f.db.pharmacyTender.findFirst.mockResolvedValue({ type });
+
+      await expect(
+        f.caller().refundTender({
+          branchId: input.branchId,
+          originalTenderId: 'tender-a',
+          deviceId: input.deviceId,
+          businessDate: input.businessDate,
+          amountMinor: 50,
+          reason: 'Return',
+          idempotencyKey: 'refund-a',
+        })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(refundPharmacyTender).not.toHaveBeenCalled();
+      expect(f.db.pharmacyKhataEvent.create).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([
+    ['bootstrap admin wildcard', '*', ['pharmacy:counter']],
+    ['counter operator', 'pharmacy:counter', ['pharmacy:counter']],
+    ['finance operator', 'reports:financial', ['pharmacy:counter', 'reports:financial']],
+  ])(
+    'admits a %s without requiring clinical dispense permission',
+    async (_name, grant, actions) => {
+      const f = fixture();
+      f.member.organizationRole.permissions = [{ capability: grant, effect: 'ALLOW' }];
+
+      await expect(
+        f.caller().khataAccounts({ branchId: 'branch-a', saleId: 'sale-a' })
+      ).resolves.toEqual([expect.objectContaining({ id: 'family-a' })]);
+      expect(canSpy.mock.calls.map(([, action]) => action)).toEqual(actions);
+      expect(can).not.toHaveBeenCalledWith(
+        expect.anything(),
+        'pharmacy:dispense',
+        expect.anything(),
+        expect.anything()
+      );
+    }
+  );
+
+  it('does not treat clinical dispense permission as Khata access', async () => {
+    const f = fixture();
+    f.member.organizationRole.permissions = [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }];
+
+    await expect(
+      f.caller().khataAccounts({ branchId: 'branch-a', saleId: 'sale-a' })
+    ).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Pharmacy counter or financial reports permission required.',
+    });
+    expect(canSpy.mock.calls.map(([, action]) => action)).toEqual([
+      'pharmacy:counter',
+      'reports:financial',
+    ]);
+    expect(can).not.toHaveBeenCalledWith(
+      expect.anything(),
+      'pharmacy:dispense',
+      expect.anything(),
+      expect.anything()
+    );
+  });
+
+  it('lets a finance-only operator read statements and tender outcomes', async () => {
+    const f = fixture();
+    f.member.organizationRole.permissions = [{ capability: 'reports:financial', effect: 'ALLOW' }];
+
+    await expect(
+      f.caller().khataStatement({
+        branchId: 'branch-a',
+        saleId: 'sale-a',
+        familyAccountId: 'family-a',
+      })
+    ).resolves.toBeDefined();
+    await expect(f.caller().tenderOutcome(input)).resolves.toMatchObject({
+      status: 'NOT_FOUND',
+    });
+    expect(readPharmacyTenderOutcome).toHaveBeenCalledWith(
+      f.db,
+      expect.objectContaining({ organizationId: 'org-a', branchId: 'branch-a' }),
+      { ...input, type: 'CREDIT' }
+    );
+    expect(canSpy.mock.calls.map(([, action]) => action)).toEqual([
+      'pharmacy:counter',
+      'reports:financial',
+      'pharmacy:counter',
+      'reports:financial',
+    ]);
+  });
+
+  it('allows a cashier with counter access to read and charge Khata without dispense access', async () => {
+    const f = fixture();
+    f.user.role = 'EMPLOYEE';
+    await expect(
+      can(subjectFromSession(f.user), 'pharmacy:dispense', undefined, { db: f.db as never })
+    ).resolves.toBe(false);
+
+    await expect(
+      f.caller().khataAccounts({ branchId: 'branch-a', saleId: 'sale-a' })
+    ).resolves.toEqual([
+      expect.objectContaining({ id: 'family-a', balanceMinor: 0, creditLimitMinor: 100 }),
+    ]);
+    await expect(f.caller().tender(input)).resolves.toMatchObject({ tenderId: 'tender-a' });
+    await expect(f.caller().tenderOutcome(input)).resolves.toEqual({
+      status: 'NOT_FOUND',
+      replayUnsafe: true,
+    });
+
+    expect(f.db.pharmacyBranchAssignment.findMany).toHaveBeenCalledWith({
+      where: {
+        organizationId: 'org-a',
+        userId: f.user.id,
+        active: true,
+        branch: { organizationId: 'org-a', active: true },
+      },
+      select: { branchId: true },
+    });
+  });
   it('uses server tenant, CREDIT settlement and an atomic member charge', async () => {
     const f = fixture();
     await f.caller().tender(input);
@@ -143,6 +477,31 @@ describe('Khata router trust and recovery boundary', () => {
         amountMinor: 100,
       }),
     });
+  });
+  it('does not let a finance-only operator create or refund Khata tenders', async () => {
+    const f = fixture();
+    f.member.organizationRole.permissions = [{ capability: 'reports:financial', effect: 'ALLOW' }];
+    const refund = {
+      branchId: 'branch-a',
+      originalTenderId: 'tender-a',
+      deviceId: 'device-a',
+      businessDate: input.businessDate,
+      amountMinor: 50,
+      reason: 'Return',
+      idempotencyKey: 'refund-a',
+    };
+
+    await expect(f.caller().tender(input)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Pharmacy counter permission required.',
+    });
+    await expect(f.caller().refundTender(refund)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission for this action.',
+    });
+    expect(applyPharmacyTender).not.toHaveBeenCalled();
+    expect(refundPharmacyTender).not.toHaveBeenCalled();
+    expect(f.db.pharmacyKhataEvent.create).not.toHaveBeenCalled();
   });
   it('hands only the fresh server-session claim to the audited owner gate', async () => {
     const f = fixture();
@@ -205,13 +564,37 @@ describe('Khata router trust and recovery boundary', () => {
     const f = fixture();
     f.db.pharmacyBranch.findFirst.mockResolvedValue(null as never);
     await expect(f.caller().tender(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    vi.mocked(can).mockResolvedValue(false);
+    f.db.pharmacyBranch.findFirst.mockResolvedValue({ id: 'branch-a' });
+    f.member.organizationRole.permissions = [];
     await expect(f.caller().tender(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    f.member.organizationRole.permissions = [{ capability: 'pharmacy:counter', effect: 'ALLOW' }];
     f.context.organization.vertical = 'RESTAURANT';
     await expect(
       f.caller().khataAccounts({ branchId: 'branch-a', saleId: 'sale-a' })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(applyPharmacyTender).not.toHaveBeenCalled();
+  });
+  it('gates Khata with counter or finance access, never clinical dispense access', async () => {
+    const f = fixture();
+    f.member.organizationRole.permissions = [{ capability: 'reports:financial', effect: 'ALLOW' }];
+
+    await expect(
+      f.caller().khataAccounts({ branchId: 'branch-a', saleId: 'sale-a' })
+    ).resolves.toEqual([expect.objectContaining({ id: 'family-a' })]);
+    expect(can).toHaveBeenCalledWith(subjectFromSession(f.user), 'pharmacy:counter', undefined, {
+      db: f.db,
+      source: 'TRPC',
+    });
+    expect(can).toHaveBeenCalledWith(subjectFromSession(f.user), 'reports:financial', undefined, {
+      db: f.db,
+      source: 'TRPC',
+    });
+    expect(canSpy.mock.calls.map(([, action]) => action)).not.toContain('pharmacy:dispense');
+
+    f.member.organizationRole.permissions = [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }];
+    await expect(
+      f.caller().khataAccounts({ branchId: 'branch-a', saleId: 'sale-a' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
   it('appends a refund payment once without editing the original charge', async () => {
     const f = fixture();

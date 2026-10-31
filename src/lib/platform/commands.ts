@@ -227,6 +227,20 @@ export function auditProjection(result: Pick<CommandResult, 'audit' | 'auditBefo
   };
 }
 
+/**
+ * A command may put an operator-supplied reason in the immutable ledger only
+ * after its schema has accepted it and its explicit audit projection includes
+ * it. This avoids copying an untrusted `payload.reason` from commands that do
+ * not actually define that field.
+ */
+function auditReason(result: Pick<CommandResult, 'audit'>): string | undefined {
+  if (!result.audit || typeof result.audit !== 'object' || Array.isArray(result.audit)) {
+    return undefined;
+  }
+  const reason = (result.audit as Record<string, unknown>).reason;
+  return typeof reason === 'string' ? reason : undefined;
+}
+
 function sensitiveCommand(action: string): boolean {
   return (
     [
@@ -2176,7 +2190,7 @@ async function runCommand(
         targetId: saved.id,
         organizationId: input.organizationId,
         data: saved,
-        audit: saved,
+        audit: { ...saved, reason: input.reason },
       };
     }
     case 'organization.module.reset': {
@@ -3060,7 +3074,7 @@ async function runCommand(
         targetId: saved.id,
         auditBefore: before,
         data: saved,
-        audit: saved,
+        audit: { ...saved, reason: input.reason },
       };
     }
     case 'crm.opportunity.convert': {
@@ -3267,7 +3281,7 @@ async function runCommand(
         organizationId: saved.organizationId,
         auditBefore: before,
         data: saved,
-        audit: saved,
+        audit: { ...saved, reason: input.reason },
       };
     }
     case 'commercial.invoice.create': {
@@ -3340,7 +3354,7 @@ async function runCommand(
         organizationId: saved.organizationId,
         auditBefore: before,
         data: saved,
-        audit: saved,
+        audit: { ...saved, reason: input.reason },
       };
     }
     case 'commercial.payment.record': {
@@ -4158,6 +4172,8 @@ export async function executePlatformCommand(
           targetId: result.targetId,
           before,
           after,
+          reason: auditReason(result),
+          success: true,
           metadata: placeholder || declaredPlaceholder ? { placeholder: true } : undefined,
           requestId: request.headers.get('x-devfathom-request-id'),
           ip:

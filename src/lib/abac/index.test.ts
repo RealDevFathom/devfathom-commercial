@@ -190,21 +190,49 @@ describe('tenant-scoped custom permissions', () => {
 });
 
 describe('custom ABAC decisions', () => {
-  it('preserves procurement access for managers and tenant admins without a role', async () => {
-    const managerPermissions = roleTemplatesForVertical('PHARMACY')
-      .find((role) => role.key === 'manager')!
+  const pharmacyPermissionsFor = (roleKey: string): Permission[] =>
+    roleTemplatesForVertical('PHARMACY')
+      .find((role) => role.key === roleKey)!
       .capabilities.map((capability) => ({ capability, effect: 'ALLOW' as const }));
 
+  it('preserves procurement access for the Manager template (#375)', async () => {
     await expect(
       can(employee, 'pharmacy:procurement', undefined, {
-        db: authorizationDb({ rolePermissions: managerPermissions }),
+        db: authorizationDb({ rolePermissions: pharmacyPermissionsFor('manager') }),
       })
     ).resolves.toBe(true);
+  });
+
+  it('preserves procurement access for a tenant admin without a role (#375)', async () => {
     await expect(
       can({ ...employee, role: 'ADMIN' }, 'pharmacy:procurement', undefined, {
         db: authorizationDb({}),
       })
     ).resolves.toBe(true);
+  });
+
+  it('does not give the Pharmacist template procurement access by default (#375)', async () => {
+    await expect(
+      can(employee, 'pharmacy:procurement', undefined, {
+        db: authorizationDb({ rolePermissions: pharmacyPermissionsFor('pharmacist') }),
+      })
+    ).resolves.toBe(false);
+  });
+
+  it('does not let tenant admin authority bypass an assigned Pharmacist role (#375)', async () => {
+    await expect(
+      can({ ...employee, role: 'ADMIN' }, 'pharmacy:procurement', undefined, {
+        db: authorizationDb({ rolePermissions: pharmacyPermissionsFor('pharmacist') }),
+      })
+    ).resolves.toBe(false);
+  });
+
+  it('does not let tenant admin authority bypass an assigned custom role (#375)', async () => {
+    await expect(
+      can({ ...employee, role: 'ADMIN' }, 'pharmacy:procurement', undefined, {
+        db: authorizationDb({ rolePermissions: [] }),
+      })
+    ).resolves.toBe(false);
   });
 
   it('lets an explicit deny revoke tenant admin procurement access', async () => {
