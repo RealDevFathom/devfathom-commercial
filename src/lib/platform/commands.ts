@@ -4214,6 +4214,13 @@ export async function executePlatformCommand(
       .regex(/^[a-z]+(?:\.[a-z]+)+$/)
       .parse(actionInput);
     assertPlatformCapability(actor, capabilityFor(action));
+    // Converting an opportunity is more than a CRM write: it provisions a
+    // tenant and creates its wildcard administrator. Keep the CRM permission
+    // for the sales-side transition, but require the organization security
+    // boundary before any provisioning work can begin.
+    if (action === 'crm.opportunity.convert') {
+      assertPlatformCapability(actor, 'organizations:security:write');
+    }
 
     return await withPlatformDb(async (db) => {
       const reason = sensitiveCommand(action)
