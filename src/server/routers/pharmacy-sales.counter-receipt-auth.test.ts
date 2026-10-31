@@ -604,6 +604,31 @@ describe('counter receipt authorization', () => {
     }
   );
 
+  it.each(['pharmacy:dispense', 'reports:financial'])(
+    'denies Khata tender with %s access alone',
+    async (capability) => {
+      const f = fixture([{ capability, effect: 'ALLOW' }]);
+      await expect(
+        f.caller().tender({
+          branchId: 'branch-a',
+          saleId: 'sale-a',
+          deviceId: 'device-a',
+          businessDate: new Date('2026-10-01T00:00:00.000Z'),
+          type: 'KHATA',
+          amountMinor: 100,
+          familyAccountId: 'family-1',
+          idempotencyKey: 'khata-denied',
+        })
+      ).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'Pharmacy counter permission required.',
+      });
+      expect(f.db.$transaction).not.toHaveBeenCalled();
+      expect(f.db.pharmacyBranchAssignment.findMany).not.toHaveBeenCalled();
+      expect(applyPharmacyTender).not.toHaveBeenCalled();
+    }
+  );
+
   it('denies Khata tender when the cashier has no branch assignment', async () => {
     const f = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }]);
     await expect(
@@ -637,6 +662,16 @@ describe('counter receipt authorization', () => {
         idempotencyKey: 'khata-clinical-only',
       })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(f.db.$transaction).not.toHaveBeenCalled();
+    expect(applyPharmacyTender).not.toHaveBeenCalled();
+  });
+
+  it('denies finance-only Khata account reads without a branch assignment', async () => {
+    const f = fixture([{ capability: 'reports:financial', effect: 'ALLOW' }]);
+    await expect(
+      f.caller().khataAccounts({ branchId: 'branch-a', saleId: 'sale-a' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+    expect(f.db.pharmacyBranchAssignment.findMany).toHaveBeenCalled();
     expect(f.db.$transaction).not.toHaveBeenCalled();
     expect(applyPharmacyTender).not.toHaveBeenCalled();
   });
