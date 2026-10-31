@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { quoteDraftCheckBreakdown, quoteDraftCheckTotal } from './draft-check-total';
-import type { TaxProfile, TaxRule } from './tax-calculator';
+import { quoteTaxSettlement, type TaxProfile, type TaxRule } from './tax-calculator';
 
 const at = new Date('2030-06-01T00:00:00Z');
 
@@ -95,11 +95,95 @@ describe('quoteDraftCheckTotal', () => {
     expect(quote).toEqual({ tax: '0.03', serviceCharge: '0.00', total: '0.18' });
   });
 
-  it('continues to reject invalid quantities before unit expansion', () => {
+  it.each([
+    { quantity: 150_000, tax: '1500.00', total: '9000.00' },
+    { quantity: 2_147_483_647, tax: '21474836.47', total: '128849018.82' },
+  ])('quotes $quantity units without expanding every physical unit', ({ quantity, tax, total }) => {
+    expect(
+      quoteDraftCheckBreakdown({
+        at,
+        profiles: [profile],
+        rules: [rule('CASH', '0.10'), rule('CARD', '0.10'), rule('OTHER', '0.10')],
+        lines: [{ id: 'bulk-item', unitPrice: '0.05', quantity }],
+      })
+    ).toEqual({ tax, serviceCharge: '0.00', total });
+  });
+
+  it('quotes large quantities with the default zero-tax configuration', () => {
+    expect(
+      quoteDraftCheckTotal({
+        at,
+        lines: [{ id: 'bulk-item', unitPrice: '1.00', quantity: 150_000 }],
+      })
+    ).toBe('150000.00');
+  });
+
+  it.each(['EXCLUSIVE', 'INCLUSIVE'] as const)(
+    'matches per-unit settlement with %s tax, modifiers, service, and delivery',
+    (priceMode) => {
+      for (const rate of ['0', '0.05', '0.10']) {
+        const rules = [rule('CASH', rate), rule('CARD', rate), rule('OTHER', rate)].map((rule) => ({
+          ...rule,
+          priceMode,
+        }));
+        const lines = [
+          { id: 'small', unitPrice: '0.05', quantity: 3, modifierDeltas: [] },
+          { id: 'rounded', unitPrice: '10.005', quantity: 2, modifierDeltas: ['0.10', '-0.005'] },
+          { id: 'free', unitPrice: '0', quantity: 4, modifierDeltas: [] },
+          { id: 'sub-cent', unitPrice: '0.004', quantity: 2, modifierDeltas: [] },
+        ];
+        for (const service of [
+          { serviceCharge: '2.50' },
+          { serviceCharge: '9.99', serviceChargeRate: '0.10' },
+        ]) {
+          // The unrounded pre-tax basis is 20.368, so the 10% service charge is 2.04.
+          const serviceAmount = 'serviceChargeRate' in service ? '2.04' : '2.50';
+          const settlement = quoteTaxSettlement({
+            at,
+            profiles: [profile],
+            rules,
+            proposedTenderType: 'CASH',
+            serviceCharge: { amount: serviceAmount, taxable: false },
+            lines: lines.flatMap((line) =>
+              Array.from({ length: line.quantity }, (_, ordinal) => ({
+                id: `${line.id}:${ordinal}`,
+                unitPrice: line.unitPrice,
+                quantity: 1,
+                modifierTotal: line.id === 'rounded' ? '0.10' : '0.00',
+              }))
+            ),
+          });
+
+          expect(
+            quoteDraftCheckBreakdown({
+              at,
+              profiles: [profile],
+              rules,
+              lines,
+              ...service,
+              deliveryFee: '4.00',
+            })
+          ).toEqual({
+            tax: settlement.tax.toFixed(2),
+            serviceCharge: serviceAmount,
+            total: settlement.grandTotal.plus('4.00').toFixed(2),
+          });
+        }
+      }
+    }
+  );
+
+  it('quotes an empty draft with flat service and delivery charges', () => {
+    expect(
+      quoteDraftCheckBreakdown({ at, lines: [], serviceCharge: '2.50', deliveryFee: '4.00' })
+    ).toEqual({ tax: '0.00', serviceCharge: '2.50', total: '6.50' });
+  });
+
+  it.each([0, -1, 1.5, NaN, Infinity])('continues to reject invalid quantity %s', (quantity) => {
     expect(() =>
       quoteDraftCheckTotal({
         at,
-        lines: [{ id: 'invalid', unitPrice: '1.00', quantity: 0 }],
+        lines: [{ id: 'invalid', unitPrice: '1.00', quantity }],
       })
     ).toThrow('Invalid quantity for invalid');
   });

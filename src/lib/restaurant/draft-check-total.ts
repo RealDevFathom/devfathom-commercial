@@ -39,21 +39,20 @@ export type DraftCheckBreakdown = {
 export function quoteDraftCheckBreakdown(input: DraftCheckTotalInput): DraftCheckBreakdown {
   const at = input.at ?? new Date();
   const fallback = input.profiles ? null : zeroTax(at);
-  // Settlement supplies one tax line per physical unit so that tax is rounded
-  // per unit. Expand previews the same way; otherwise an aggregated quantity
-  // can produce a different payable amount solely because it was quoted before
-  // the bill was materialized.
-  const lines = input.lines.flatMap((line) => {
+  // Settlement rounds per physical unit. Drafts use one CASH rule without
+  // per-unit reductions, so quote each unit once and multiply the rounded
+  // amounts below. Work and allocation must not grow with the quantity.
+  const lines = input.lines.map((line) => {
     if (!Number.isInteger(line.quantity) || line.quantity <= 0) {
       throw new RangeError(`Invalid quantity for ${line.id}`);
     }
     const modifierTotal = formatMoney(sum(line.modifierDeltas ?? []));
-    return Array.from({ length: line.quantity }, (_, unitOrdinal) => ({
-      id: `${line.id}:${unitOrdinal}`,
+    return {
+      id: line.id,
       unitPrice: line.unitPrice,
-      quantity: 1,
+      quantity: line.quantity,
       modifierTotal,
-    }));
+    };
   });
   const basis = sum(
     lines.map((line) => multiply(add(line.unitPrice, line.modifierTotal), line.quantity))
@@ -63,17 +62,23 @@ export function quoteDraftCheckBreakdown(input: DraftCheckTotalInput): DraftChec
       ? formatMoney(roundMoney(multiply(basis, input.serviceChargeRate)))
       : (input.serviceCharge ?? '0.00');
   const quote = quoteTaxSettlement({
-    lines,
+    lines: lines.map((line) => ({ ...line, quantity: 1 })),
     profiles: input.profiles ?? fallback!.profiles,
     rules: input.rules ?? fallback!.rules,
     at,
     proposedTenderType: 'CASH',
     serviceCharge: { amount: serviceAmount, taxable: false },
   });
+  const tax = sum(quote.lines.map((line, index) => multiply(line.tax, lines[index]!.quantity)));
+  const merchandisePayable = sum(
+    quote.lines.map((line, index) => multiply(line.gross, lines[index]!.quantity))
+  );
   return {
-    tax: formatMoney(quote.tax.toString()),
+    tax: formatMoney(tax),
     serviceCharge: formatMoney(quote.serviceChargePayable.toString()),
-    total: formatMoney(add(quote.grandTotal.toString(), input.deliveryFee ?? '0.00')),
+    total: formatMoney(
+      sum([merchandisePayable, quote.serviceChargePayable, input.deliveryFee ?? '0.00'])
+    ),
   };
 }
 
