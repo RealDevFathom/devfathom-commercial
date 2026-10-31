@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto';
 
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 
+import type { SnapshotVerifier } from '@/lib/pharmacy/counter-offline-runtime';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 const TEST_DATABASE_URL = process.env.M8_TEST_RUNTIME_DATABASE_URL ?? process.env.TEST_DATABASE_URL;
@@ -768,6 +769,176 @@ describeIfDatabase('offline transport authorization and conflicts', () => {
     expect(state.batch.state).toBe('RECALLED');
     expect(state.sales).toBe(1);
   }, 20_000);
+
+  it.each(['before', 'after'] as const)(
+    'preserves a recall delivered %s installing a refresh that read pre-recall state',
+    async (delivery) => {
+      const f = await setup();
+      const { PharmacyCounterRuntime, createMemoryDriver } =
+        await import('@/lib/pharmacy/counter-offline-runtime');
+      const { createRecall } = await import('@/lib/pharmacy/inventory-operations');
+      const scoped = await import('@/lib/tenancy/scoped-db');
+      const scope = scopeOf(f.fixture);
+      const batchId = await inOrg(ORG_A, async (db) => {
+        const lot = await db.pharmacyInventoryLot.findFirstOrThrow({
+          where: { id: f.fixture.lotId },
+        });
+        return lot.manufacturingBatchId;
+      });
+      const driver = createMemoryDriver();
+      const verifier: SnapshotVerifier = {
+        verify: ({ envelope, signature, publicKey }) =>
+          deps.snapshots.verifySnapshotSignature(envelope, signature, publicKey),
+      };
+      const terminalScope = {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        deviceId: f.fixture.deviceId,
+      };
+      const counter = new PharmacyCounterRuntime(
+        terminalScope,
+        driver,
+        verifier,
+        deps.snapshots.snapshotPublicKey()
+      );
+      async function install(snapshots: typeof f.command.snapshots) {
+        for (const snapshot of snapshots) {
+          expect(
+            await counter.installSnapshot({
+              ...snapshot,
+              payloadHash: deps.snapshots.snapshotPayloadHash(snapshot.payload),
+              nowMs: Date.now(),
+            })
+          ).toMatchObject({ ok: true });
+        }
+      }
+      await install(f.command.snapshots);
+      await counter.adoptLeases([
+        {
+          leaseId: f.lease.id,
+          blockStart: f.lease.blockStart,
+          blockEnd: f.lease.blockEnd,
+          nextNumber: f.lease.blockStart,
+        },
+      ]);
+      await counter.adoptQuotas([{ ...bucketOf(f.fixture), quotaUnits: 10, consumedUnits: 0 }]);
+
+      let resume!: () => void;
+      const release = new Promise<void>((resolve) => {
+        resume = resolve;
+      });
+      let reachedCatalog = false;
+      // Pause after the real lot/batch read, before the remaining snapshot
+      // reads. The production recall can commit while this refresh is in flight.
+      const originalWithTenantDb = scoped.withTenantDb;
+      const spy = vi.spyOn(scoped, 'withTenantDb').mockImplementation((org, work, options) =>
+        originalWithTenantDb(
+          org,
+          (db) =>
+            work(
+              new Proxy(db, {
+                get(target, key) {
+                  if (key !== 'medicine') return Reflect.get(target, key);
+                  return new Proxy(target.medicine, {
+                    get(delegate, method) {
+                      if (method !== 'findMany') return Reflect.get(delegate, method);
+                      return async (...args: Parameters<typeof delegate.findMany>) => {
+                        reachedCatalog = true;
+                        await release;
+                        return delegate.findMany(...args);
+                      };
+                    },
+                  });
+                },
+              })
+            ),
+          options
+        )
+      );
+      const refreshing = f.call('snapshot');
+      try {
+        await Promise.race([
+          vi.waitFor(() => expect(reachedCatalog).toBe(true), { timeout: 5_000 }),
+          refreshing.then(() => {
+            throw new Error('Refresh finished before the catalog checkpoint');
+          }),
+        ]);
+        await inOrg(ORG_A, (db) =>
+          createRecall(db, scope, {
+            batchId,
+            reference: tag('refresh-recall'),
+            reason: 'Recall during snapshot refresh',
+          })
+        );
+        const bulletin = {
+          issuedAt: new Date().toISOString(),
+          recallVersion: 0,
+          recalledBatchIds: [batchId],
+        };
+        if (delivery === 'before') expect(await counter.applyRecallBulletin(bulletin)).toBe(true);
+        // Ensure a completion-time timestamp would be strictly newer than the
+        // bulletin, so the original regression cannot pass by millisecond ties.
+        await vi.waitFor(() => expect(Date.now()).toBeGreaterThan(Date.parse(bulletin.issuedAt)));
+        resume();
+        const response = await refreshing;
+        expect(response.status).toBe(200);
+        const { snapshots } = await response.json();
+        const prices = snapshots.find(
+          (snapshot: { envelope: { kind: string } }) => snapshot.envelope.kind === 'PRICES'
+        );
+        expect(prices.payload).toContainEqual(
+          expect.objectContaining({
+            id: f.fixture.lotId,
+            manufacturingBatch: { state: 'ACTIVE' },
+          })
+        );
+        await install(snapshots);
+        if (delivery === 'after') expect(await counter.applyRecallBulletin(bulletin)).toBe(true);
+
+        const reloaded = new PharmacyCounterRuntime(
+          terminalScope,
+          driver,
+          verifier,
+          deps.snapshots.snapshotPublicKey()
+        );
+        expect(await reloaded.hydrate()).toBe('ready');
+        for (const current of [counter, reloaded]) {
+          expect(
+            await current.enqueue(
+              {
+                deviceId: f.fixture.deviceId,
+                action: 'CASH_OTC_SALE',
+                payload: { medicineId: f.fixture.medicineId },
+                clientOriginAt: new Date().toISOString(),
+                bucket: bucketOf(f.fixture),
+                requestedUnits: 1,
+              },
+              {
+                nowMs: Date.now(),
+                cachedCreditRemainingMinor: 0,
+                controlledMedicinesPermittedOffline: false,
+                originalSaleAvailable: false,
+                deviceUsable: true,
+              }
+            )
+          ).toMatchObject({ ok: false, reason: 'BATCH_RECALLED' });
+          expect(current.snapshot().queue).toMatchObject({
+            commands: [],
+            leases: [{ nextNumber: f.lease.blockStart }],
+            quotas: [{ consumedUnits: 0 }],
+          });
+        }
+        expect(Date.parse(prices.envelope.issuedAt)).toBeLessThanOrEqual(
+          Date.parse(bulletin.issuedAt)
+        );
+      } finally {
+        resume();
+        await refreshing;
+        spy.mockRestore();
+      }
+    },
+    20_000
+  );
 
   it('includes a recalled quota-bearing lot without serializing unrelated branch lots', async () => {
     const f = await setup();

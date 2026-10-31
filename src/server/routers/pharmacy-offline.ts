@@ -561,6 +561,10 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
           await db.$queryRaw(
             Prisma.sql`SELECT id FROM pharmacy_registered_devices WHERE id=${device.id} AND "organizationId"=${ctx.scope.organizationId} FOR UPDATE`
           );
+          // The signed timestamp is a lower bound on the state reads, not the
+          // response time. A recall can commit while catalog/tax reads run;
+          // its bulletin must survive installation of this in-flight snapshot.
+          const now = new Date();
           const quotas = await db.pharmacyDeviceLotQuota.findMany({
             where: {
               organizationId: ctx.scope.organizationId,
@@ -620,7 +624,6 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
             include: { rules: true },
             take: 20,
           });
-          const now = new Date();
           const expiry = new Date(now.getTime() + 8 * 60 * 60 * 1000);
           const payloads = {
             CATALOG: catalog,
