@@ -158,6 +158,7 @@ beforeEach(() => {
 describe('pharmacy write-off accounting', () => {
   it('posts the write-off journal in the same transaction as the stock movement', async () => {
     grant([allow('pharmacy:inventory')]);
+    db.user.findFirst.mockResolvedValue({ id: 'user_b' });
     const occurredAt = new Date('2026-10-29T00:02:07.000Z');
     db.pharmacyInventoryLot.findFirst.mockResolvedValue({
       id: 'lot_1',
