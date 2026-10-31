@@ -11,6 +11,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   can: vi.fn<typeof import('@/lib/abac').can>(async () => true),
   annotateAudit: vi.fn(),
+  resolveStaffCapabilities: vi.fn<
+    typeof import('@/lib/restaurant/job-roles').resolveStaffCapabilities
+  >(async () => new Set()),
   // floor lib
   createFloor: vi.fn(),
   updateFloor: vi.fn(),
@@ -55,6 +58,12 @@ vi.mock('@/server/audit', () => ({
 vi.mock('@/lib/abac', async () => {
   const actual = await vi.importActual<typeof import('@/lib/abac')>('@/lib/abac');
   return { ...actual, can: mocks.can };
+});
+vi.mock('@/lib/restaurant/job-roles', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/restaurant/job-roles')>(
+    '@/lib/restaurant/job-roles'
+  );
+  return { ...actual, resolveStaffCapabilities: mocks.resolveStaffCapabilities };
 });
 vi.mock('@/lib/restaurant/floor', async () => {
   const actual =
@@ -108,7 +117,7 @@ import { SectionError } from '@/lib/restaurant/sections';
 import { StationError } from '@/lib/restaurant/stations';
 import type { TRPCContext } from '../trpc';
 
-function caller(primaryBranchId = 'branch_1') {
+function caller(primaryBranchId = 'branch_1', roleBranchId: string | null = null) {
   const branch = (id: string) =>
     id === 'missing_resource'
       ? undefined
@@ -122,8 +131,20 @@ function caller(primaryBranchId = 'branch_1') {
         ),
       },
       restaurantStaffProfile: {
-        findFirst: vi.fn(async ({ where }: { where: { primaryBranchId: string } }) =>
-          where.primaryBranchId === primaryBranchId ? { id: 'staff_1' } : null
+        findFirst: vi.fn(
+          async ({
+            where,
+          }: {
+            where: {
+              primaryBranchId?: string;
+              OR?: [{ jobRoles: { some: { branchId: string } } }, unknown];
+            };
+          }) => {
+            if (where.OR) {
+              return where.OR[0].jobRoles.some.branchId === roleBranchId ? { id: 'staff_1' } : null;
+            }
+            return where.primaryBranchId === primaryBranchId ? { id: 'staff_1' } : null;
+          }
         ),
       },
       restaurantBranchAssignment: { findFirst: vi.fn(async () => null) },
@@ -170,6 +191,7 @@ function caller(primaryBranchId = 'branch_1') {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.can.mockResolvedValue(true);
+  mocks.resolveStaffCapabilities.mockResolvedValue(new Set());
   mocks.createFloor.mockResolvedValue({ id: 'floor_new', name: 'Patio', branchId: 'branch_1' });
   mocks.listFloors.mockResolvedValue([{ id: 'floor_1', tables: [] }]);
   mocks.createTable.mockResolvedValue({
@@ -232,6 +254,51 @@ describe('capability gating', () => {
     expect(mocks.updateSection).not.toHaveBeenCalled();
     expect(mocks.updateStation).not.toHaveBeenCalled();
     expect(mocks.updateRoutingRule).not.toHaveBeenCalled();
+  });
+
+  it('allows a manager whose job role at a secondary branch grants the capability', async () => {
+    mocks.can.mockImplementation(
+      async (_subject, capability) => capability !== 'restaurant:configure'
+    );
+    mocks.resolveStaffCapabilities.mockImplementation(
+      async (_db, _staffProfileId, branchId) =>
+        new Set(branchId === 'branch_b' ? ['orders:read', 'floor:manage'] : [])
+    );
+    mocks.updateFloor.mockResolvedValue({ id: 'branch_b_resource', name: 'Patio' });
+    mocks.updateStation.mockResolvedValue({ id: 'branch_b_resource', name: 'Grill' });
+    const manager = () => caller('branch_1', 'branch_b');
+
+    await manager().listFloors({ branchId: 'branch_b' });
+    await manager().listSections({ branchId: 'branch_b', businessDate: '2026-08-19' });
+    await manager().listStations({ branchId: 'branch_b' });
+    await manager().updateFloor({ id: 'branch_b_resource', name: 'Patio' });
+    await manager().updateStation({ id: 'branch_b_resource', name: 'Grill' });
+
+    expect(mocks.listFloors).toHaveBeenCalled();
+    expect(mocks.listSections).toHaveBeenCalled();
+    expect(mocks.listStations).toHaveBeenCalled();
+    expect(mocks.updateFloor).toHaveBeenCalled();
+    expect(mocks.updateStation).toHaveBeenCalled();
+    expect(mocks.resolveStaffCapabilities).toHaveBeenCalledWith(
+      expect.anything(),
+      'staff_1',
+      'branch_b'
+    );
+  });
+
+  it('denies a secondary-branch job role whose effective capabilities lack the duty', async () => {
+    mocks.can.mockImplementation(
+      async (_subject, capability) => capability !== 'restaurant:configure'
+    );
+    mocks.resolveStaffCapabilities.mockResolvedValue(new Set(['orders:read']));
+    const manager = () => caller('branch_1', 'branch_b');
+
+    await manager().listFloors({ branchId: 'branch_b' });
+    expect(mocks.listFloors).toHaveBeenCalled();
+    await expect(
+      manager().updateFloor({ id: 'branch_b_resource', name: 'Nope' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.updateFloor).not.toHaveBeenCalled();
   });
 
   it('allows an organization-wide restaurant administrator across branches', async () => {

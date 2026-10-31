@@ -3,7 +3,9 @@ import { TRPCError } from '@trpc/server';
 
 import { router, capabilityProcedure, type TRPCContext } from '../trpc';
 import { annotateAudit } from '../audit';
+import { assertInOrganization } from '../org-refs';
 import { requireRestaurantBranchScope } from '../restaurant-branch-scope';
+import { resolveStaffCapabilities } from '@/lib/restaurant/job-roles';
 import { businessDateToUtcDate } from '@/lib/restaurant/business-date';
 import {
   FloorError,
@@ -85,14 +87,53 @@ function mapDomainError(err: unknown): never {
 const readProcedure = capabilityProcedure('orders:read');
 const manageProcedure = capabilityProcedure('floor:manage');
 
-async function assertActiveBranch(ctx: TRPCContext, branchId: string) {
+type FloorCapability = 'orders:read' | 'floor:manage';
+
+/**
+ * Floor branch boundary. In addition to the shared Restaurant scope (primary
+ * branch, explicit branch assignment, or organization-wide `restaurant:configure`),
+ * an ACTIVE linked staff profile holding a job role or direct capability grant at
+ * the branch is in scope when its effective capabilities there (DENYs applied)
+ * include the procedure's capability. This matches the branch picker, which lists
+ * branches from the same job-role/direct-grant links.
+ */
+async function assertActiveBranch(
+  ctx: TRPCContext,
+  branchId: string,
+  capability: FloorCapability = 'floor:manage'
+) {
+  const user = ctx.session?.user;
+  if (!user) throw new TRPCError({ code: 'UNAUTHORIZED' });
+  const roleActor = await ctx.db.restaurantStaffProfile.findFirst({
+    where: {
+      userId: user.id,
+      status: 'ACTIVE',
+      OR: [
+        { jobRoles: { some: { branchId } } },
+        { directCapabilityGrants: { some: { branchId } } },
+      ],
+    },
+    select: { id: true },
+  });
+  if (
+    roleActor &&
+    (await resolveStaffCapabilities(ctx.db, roleActor.id, branchId)).has(capability)
+  ) {
+    const organizationId = ctx.entitlements?.organizationId ?? user.organizationId;
+    if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+    await assertInOrganization(ctx.db.restaurantBranch, organizationId, [branchId], {
+      active: true,
+    });
+    return;
+  }
   await requireRestaurantBranchScope(ctx, branchId);
 }
 
 async function requireResourceBranch(
   ctx: TRPCContext,
   resource: 'floor' | 'table' | 'section' | 'station' | 'routingRule',
-  id: string
+  id: string,
+  capability: FloorCapability = 'floor:manage'
 ) {
   let branchId: string | undefined;
   if (resource === 'floor') {
@@ -127,7 +168,7 @@ async function requireResourceBranch(
     branchId = row?.station.branchId;
   }
   if (!branchId) throw new TRPCError({ code: 'FORBIDDEN' });
-  await requireRestaurantBranchScope(ctx, branchId);
+  await assertActiveBranch(ctx, branchId, capability);
 }
 
 export const restaurantFloorRouter = router({
@@ -135,7 +176,7 @@ export const restaurantFloorRouter = router({
   listFloors: readProcedure
     .input(z.object({ branchId: z.string(), includeInactive: z.boolean().optional() }).strict())
     .query(async ({ ctx, input }) => {
-      await assertActiveBranch(ctx, input.branchId);
+      await assertActiveBranch(ctx, input.branchId, 'orders:read');
       return listFloors(ctx.db, input);
     }),
 
@@ -297,7 +338,7 @@ export const restaurantFloorRouter = router({
         .strict()
     )
     .query(async ({ ctx, input }) => {
-      await assertActiveBranch(ctx, input.branchId);
+      await assertActiveBranch(ctx, input.branchId, 'orders:read');
       return listSections(ctx.db, {
         branchId: input.branchId,
         businessDate: businessDateToUtcDate(input.businessDate),
@@ -459,7 +500,7 @@ export const restaurantFloorRouter = router({
   listStations: readProcedure
     .input(z.object({ branchId: z.string(), includeInactive: z.boolean().optional() }).strict())
     .query(async ({ ctx, input }) => {
-      await assertActiveBranch(ctx, input.branchId);
+      await assertActiveBranch(ctx, input.branchId, 'orders:read');
       return listStations(ctx.db, input);
     }),
 
