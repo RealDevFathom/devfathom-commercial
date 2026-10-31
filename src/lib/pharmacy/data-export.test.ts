@@ -55,7 +55,7 @@ const packLevels = [
 function seededDb() {
   const queries: string[] = [];
   const db = {
-    $queryRaw: vi.fn(async (sql: unknown) => {
+    $queryRaw: vi.fn(async (sql: unknown): Promise<unknown[]> => {
       const text = sqlText(sql);
       queries.push(text);
       return text.includes('NULLIF(current_setting') ? [{ branchId: 'prior-branch' }] : [];
@@ -505,7 +505,8 @@ describe('export status view', () => {
 
 describe('request', () => {
   function requestDb(pending: unknown, recent: number) {
-    return {
+    const db = {
+      $queryRaw: vi.fn(async () => []),
       pharmacyDataExport: {
         findFirst: vi.fn(async () => pending),
         count: vi.fn(async () => recent),
@@ -522,6 +523,9 @@ describe('request', () => {
         })),
       },
     };
+    return Object.assign(db, {
+      $transaction: vi.fn(async (run: (tx: unknown) => Promise<unknown>) => run(db)),
+    });
   }
   it('returns the pending request instead of queuing a second one', async () => {
     const pending = {
@@ -560,6 +564,31 @@ describe('request', () => {
 });
 
 describe('collection', () => {
+  it.each(['SUPPLIER_PAYMENT', 'CHEQUE', 'VOUCHER'])(
+    'includes posted %s settlements and excludes reversed ones',
+    async (kind) => {
+      const { db } = seededDb();
+      const allocations = [
+        { sourceId: 'grn-1', amountMinor: 1_800, kind, status: 'POSTED' },
+        { sourceId: 'grn-1', amountMinor: 900, kind, status: 'REVERSED' },
+      ];
+      db.pharmacyBookkeepingAllocation.findMany.mockImplementation(async (...args: unknown[]) => {
+        const query = args[0] as {
+          where: { transaction: { kind: string | { in: string[] }; status: string } };
+        };
+        const filter = query.where.transaction;
+        return allocations.filter((row) =>
+          (typeof filter.kind === 'string' ? filter.kind === row.kind : filter.kind.in.includes(row.kind)) &&
+          row.status === filter.status
+        );
+      });
+      const { dataset } = await collectPharmacyDataExport(db as unknown as ScopedDb, 'org-a', RANGE, NOW);
+      expect(dataset.suppliers[0]).toMatchObject({
+        purchased_total: '18.00', paid_total: '18.00', balance: '0.00',
+      });
+    }
+  );
+
   it('builds every file from the tenant, scoped to the organization', async () => {
     const { db, queries } = seededDb();
     const { dataset, organizationName } = await collectPharmacyDataExport(
@@ -634,6 +663,18 @@ describe('collection', () => {
         balance: '13.00',
       }),
     ]);
+    expect(db.pharmacyBookkeepingAllocation.findMany).toHaveBeenCalledWith({
+      where: {
+        organizationId: 'org-a',
+        sourceKind: 'PURCHASE_INVOICE',
+        transaction: {
+          organizationId: 'org-a',
+          kind: { in: ['SUPPLIER_PAYMENT', 'CHEQUE', 'VOUCHER'] },
+          status: 'POSTED',
+        },
+      },
+      select: { sourceId: true, amountMinor: true },
+    });
     expect(dataset.goodsReceipts.map((row) => [row.code, row.payable, row.po_reference])).toEqual([
       ['grn-1', '18.00', 'PO-1'],
       ['grn-2', '18.00', 'PO-1'],
@@ -747,6 +788,7 @@ describe('worker', () => {
           salesFrom: new Date('2026-10-01T00:00:00.000Z'),
           salesTo: new Date('2026-10-30T00:00:00.000Z'),
           requestedByUserId: 'owner-1',
+          requestedAt: NOW,
         })),
         update: vi.fn(async () => ({})),
         updateMany: vi.fn(async () => ({ count: 1 })),
@@ -803,6 +845,14 @@ describe('worker', () => {
     await expect(
       runPharmacyDataExportJob(db as unknown as ScopedDb, job, { exportId: 'exp-1' }, { now: NOW })
     ).resolves.toEqual({ exportId: 'exp-1', skipped: 'READY' });
+    expect(storage.putUpload).not.toHaveBeenCalled();
+  });
+
+  it('never uploads a stale request even before the retention sweep runs', async () => {
+    const db = jobDb();
+    await expect(runPharmacyDataExportJob(db as unknown as ScopedDb, job, { exportId: 'exp-1' }, {
+      now: new Date(NOW.getTime() + 7 * 3_600_000),
+    })).resolves.toMatchObject({ skipped: 'stale' });
     expect(storage.putUpload).not.toHaveBeenCalled();
   });
 
@@ -885,7 +935,7 @@ describe('worker', () => {
     expect(storage.deleteUpload).toHaveBeenCalledWith('org-a/pharmacy-data-exports', 'exp-1.zip');
     expect(db.pharmacyDataExport.updateMany).toHaveBeenCalledTimes(1);
     expect(db.pharmacyDataExport.updateMany).toHaveBeenCalledWith({
-      where: { id: 'exp-1', organizationId: 'org-a', status: 'READY' },
+      where: { id: 'exp-1', organizationId: 'org-a', status: { in: ['READY', 'FAILED', 'QUEUED'] } },
       data: { status: 'EXPIRED', storageKey: null },
     });
   });

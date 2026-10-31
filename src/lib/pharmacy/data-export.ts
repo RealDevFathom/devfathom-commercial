@@ -205,36 +205,43 @@ export async function requestPharmacyDataExport(
   now: Date = new Date()
 ): Promise<{ export: PharmacyDataExportView; created: boolean }> {
   const range = parseSalesRange(input.range, now);
-  const pending = await db.pharmacyDataExport.findFirst({
-    where: {
-      organizationId: input.organizationId,
-      status: 'QUEUED',
-      requestedAt: { gt: new Date(now.getTime() - PHARMACY_DATA_EXPORT_STALE_MS) },
-    },
-    orderBy: { requestedAt: 'desc' },
-    select: exportSelect,
+  return db.$transaction(async (tx) => {
+    // Keep lookup, count and insertion behind the same tenant-specific lock.
+    // Scoped clients reuse the caller's transaction; the RSC facade opens one.
+    await tx.$queryRaw(Prisma.sql`
+      SELECT 1 AS locked FROM pg_advisory_xact_lock(hashtextextended(${`pharmacy-data-export:${input.organizationId}`}, 0))
+    `);
+    const pending = await tx.pharmacyDataExport.findFirst({
+      where: {
+        organizationId: input.organizationId,
+        status: 'QUEUED',
+        requestedAt: { gt: new Date(now.getTime() - PHARMACY_DATA_EXPORT_STALE_MS) },
+      },
+      orderBy: { requestedAt: 'desc' },
+      select: exportSelect,
+    });
+    if (pending) return { export: viewPharmacyDataExport(pending, now), created: false };
+    const recent = await tx.pharmacyDataExport.count({
+      where: {
+        organizationId: input.organizationId,
+        requestedAt: { gt: new Date(now.getTime() - MS_PER_DAY) },
+      },
+    });
+    if (recent >= PHARMACY_DATA_EXPORT_DAILY_LIMIT) {
+      throw new PharmacyDataExportError('RATE_LIMITED');
+    }
+    const created = await tx.pharmacyDataExport.create({
+      data: {
+        organizationId: input.organizationId,
+        requestedByUserId: input.actorId,
+        salesFrom: range.from,
+        salesTo: range.to,
+        requestedAt: now,
+      },
+      select: exportSelect,
+    });
+    return { export: viewPharmacyDataExport(created, now), created: true };
   });
-  if (pending) return { export: viewPharmacyDataExport(pending, now), created: false };
-  const recent = await db.pharmacyDataExport.count({
-    where: {
-      organizationId: input.organizationId,
-      requestedAt: { gt: new Date(now.getTime() - MS_PER_DAY) },
-    },
-  });
-  if (recent >= PHARMACY_DATA_EXPORT_DAILY_LIMIT) {
-    throw new PharmacyDataExportError('RATE_LIMITED');
-  }
-  const created = await db.pharmacyDataExport.create({
-    data: {
-      organizationId: input.organizationId,
-      requestedByUserId: input.actorId,
-      salesFrom: range.from,
-      salesTo: range.to,
-      requestedAt: now,
-    },
-    select: exportSelect,
-  });
-  return { export: viewPharmacyDataExport(created, now), created: true };
 }
 
 /**
@@ -858,7 +865,11 @@ export async function collectPharmacyDataExport(
     where: {
       organizationId,
       sourceKind: 'PURCHASE_INVOICE',
-      transaction: { organizationId, kind: 'SUPPLIER_PAYMENT', status: 'POSTED' },
+      transaction: {
+        organizationId,
+        kind: { in: ['SUPPLIER_PAYMENT', 'CHEQUE', 'VOUCHER'] },
+        status: 'POSTED',
+      },
     },
     select: { sourceId: true, amountMinor: true },
   });
@@ -1121,13 +1132,23 @@ export async function runPharmacyDataExportJob(
     throw new Error('Job payload requires "exportId".');
   }
   return withOrganizationDefaults(db, organizationId, async (tx) => {
+    // Cleanup takes the same row lock, so it cannot delete an in-flight upload.
+    await tx.$queryRaw(Prisma.sql`
+      SELECT "id" FROM "pharmacy_data_exports"
+      WHERE "id" = ${exportId} AND "organizationId" = ${organizationId}
+      FOR UPDATE
+    `);
     const request = await tx.pharmacyDataExport.findFirst({
       where: { id: exportId, organizationId },
-      select: { id: true, status: true, salesFrom: true, salesTo: true, requestedByUserId: true },
+      select: { id: true, status: true, salesFrom: true, salesTo: true, requestedByUserId: true, requestedAt: true },
     });
     if (!request) return { exportId, skipped: 'missing' };
     if (request.status !== 'QUEUED') return { exportId, skipped: request.status };
     const now = options.now ?? new Date();
+    // Never recreate an orphan after its retention cleanup becomes due.
+    if (now.getTime() - request.requestedAt.getTime() > PHARMACY_DATA_EXPORT_STALE_MS) {
+      return { exportId, skipped: 'stale' };
+    }
     const range = {
       from: formatCalendarDate(request.salesFrom)!,
       to: formatCalendarDate(request.salesTo)!,
@@ -1238,18 +1259,22 @@ export async function relayPharmacyDataExportJobs(db: ScopedDb): Promise<number>
 }
 
 /**
- * Remove archives whose 24-hour link has lapsed. The row stays as history with
- * status EXPIRED; a storage failure leaves the row for the next pass.
+ * Remove lapsed READY archives and failed/stale attempts. Every upload uses
+ * the durable request id as its key, including when READY metadata rolls back.
+ * Lock against the builder, and retry storage or commit failures next pass.
  */
 export async function expirePharmacyDataExports(db: ScopedDb, now: Date): Promise<number> {
   const expired = await db.$queryRaw<
-    Array<{ id: string; organizationId: string; storageKey: string | null }>
+    Array<{ id: string; organizationId: string; storageKey: string }>
   >(Prisma.sql`
-    SELECT x."id", x."organizationId", x."storageKey"
+    SELECT x."id", x."organizationId", COALESCE(x."storageKey", x."id" || '.zip') AS "storageKey"
     FROM "pharmacy_data_exports" x
-    WHERE x."status" = 'READY' AND x."expiresAt" <= ${now}
-    ORDER BY x."expiresAt" ASC, x."id" ASC
+    WHERE (x."status" = 'READY' AND x."expiresAt" <= ${now})
+       OR x."status" = 'FAILED'
+       OR (x."status" = 'QUEUED' AND x."requestedAt" < ${new Date(now.getTime() - PHARMACY_DATA_EXPORT_STALE_MS)})
+    ORDER BY COALESCE(x."expiresAt", x."requestedAt") ASC, x."id" ASC
     LIMIT ${EXPIRY_LIMIT}
+    FOR UPDATE SKIP LOCKED
   `);
   let count = 0;
   for (const row of expired) {
@@ -1259,7 +1284,7 @@ export async function expirePharmacyDataExports(db: ScopedDb, now: Date): Promis
       continue;
     }
     await db.pharmacyDataExport.updateMany({
-      where: { id: row.id, organizationId: row.organizationId, status: 'READY' },
+      where: { id: row.id, organizationId: row.organizationId, status: { in: ['READY', 'FAILED', 'QUEUED'] } },
       data: { status: 'EXPIRED', storageKey: null },
     });
     count += 1;

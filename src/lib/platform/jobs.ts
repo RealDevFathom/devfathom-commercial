@@ -767,6 +767,10 @@ async function executeJob(job: PlatformJob): Promise<JobResult> {
       return handlers[job.type](db, job, payload);
     },
     {
+      // All collection reads must reconcile against one database snapshot.
+      ...(job.type === 'PHARMACY_DATA_EXPORT_V1'
+        ? { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead }
+        : {}),
       timeout:
         job.type === 'PHARMACY_DATA_EXPORT_V1'
           ? 300_000

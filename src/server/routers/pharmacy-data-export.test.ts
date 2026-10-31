@@ -32,6 +32,7 @@ vi.mock('@/lib/storage', () => storage);
 
 import type { TRPCContext } from '../trpc';
 import { pharmacyDataExportRouter } from './pharmacy-data-export';
+import { exportRowsToCsv, PHARMACY_EXPORT_FILES } from '@/lib/pharmacy/data-export-format';
 
 const NOW = new Date('2026-10-31T07:00:00.000Z');
 
@@ -46,7 +47,9 @@ function fixture(
   } = {}
 ) {
   const rows: Row[] = options.rows ?? [];
-  const db = {
+  const database = {
+    $queryRaw: vi.fn(async () => []),
+    medicine: { create: vi.fn(async () => ({ id: 'imported-medicine' })) },
     pharmacyDataExport: {
       findMany: vi.fn(async () => rows),
       findFirst: vi.fn(async (args: { where: { id?: string; status?: string } }) => {
@@ -69,6 +72,9 @@ function fixture(
       update: vi.fn(async () => ({})),
     },
   };
+  const db = Object.assign(database, {
+    $transaction: vi.fn(async (run: (tx: unknown) => Promise<unknown>) => run(database)),
+  });
   const context = {
     db,
     entitlements: { organizationId: 'org-a', enabledModules: ['pharmacy-core'], modules: [] },
@@ -123,9 +129,36 @@ beforeEach(() => {
 });
 
 describe('pharmacy owner data export router', () => {
+  it('imports catalogue-only rows as audited drafts in the owner session tenant', async () => {
+    const f = fixture();
+    const csv = exportRowsToCsv(PHARMACY_EXPORT_FILES.medicines, [{
+      code: 'foreign-id', medicine_code: 'foreign-id', product: 'Catalogue medicine',
+      product_family: 'PHARMACEUTICAL', rx: true, otc: false, restricted: false,
+      controlled: false, high_alert: false, lasa: false, cold_chain: false, saleable: true,
+    }]);
+    await expect(f.caller.importCatalogue({ csv })).resolves.toEqual({
+      rows: 1, medicines: 1, presentations: 0, packs: 0,
+    });
+    expect(f.db.medicine.create).toHaveBeenCalledWith({ data: expect.objectContaining({
+      organizationId: 'org-a', productName: 'Catalogue medicine', saleable: false,
+      provenance: { create: expect.objectContaining({ sourceType: 'IMPORT', status: 'UNREVIEWED' }) },
+    }) });
+    expect(audit.annotateAudit).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      action: 'pharmacy.dataExport.catalogueImported', metadata: expect.objectContaining({ medicines: 1 }),
+    }));
+  });
+
+  it('rejects a stock sheet on the catalogue path before writing anything', async () => {
+    const f = fixture();
+    await expect(f.caller.importCatalogue({ csv: 'product,batch\nPanadol,B1' }))
+      .rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(f.db.medicine.create).not.toHaveBeenCalled();
+  });
+
   it.each(['EMPLOYEE', 'MANAGER'] as const)('refuses a %s with FORBIDDEN (403)', async (role) => {
     const f = fixture({ role, rows: [readyRow()] });
     await expect(f.caller.list()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(f.caller.importCatalogue({ csv: '' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
     await expect(f.caller.request({ from: '2026-01-01', to: '2026-10-30' })).rejects.toMatchObject(
       { code: 'FORBIDDEN' }
     );
@@ -136,6 +169,7 @@ describe('pharmacy owner data export router', () => {
 
   it('refuses a platform support session acting as the owner', async () => {
     const f = fixture({ support: true, rows: [readyRow()] });
+    await expect(f.caller.importCatalogue({ csv: '' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
     await expect(f.caller.request({ from: '2026-01-01', to: '2026-10-30' })).rejects.toMatchObject(
       { code: 'FORBIDDEN' }
     );

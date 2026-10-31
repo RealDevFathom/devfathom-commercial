@@ -16,12 +16,17 @@ const m = vi.hoisted(() => ({
   scope: vi.fn(),
   snapshot: vi.fn(),
   retention: vi.fn(),
+  dataExport: vi.fn(),
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ withPlatformDb: m.scope }));
 vi.mock('@/lib/pharmacy/counter-evidence', () => ({
   PHARMACY_CAMERA_SNAPSHOT_JOB: 'pharmacy.camera.snapshot.v1',
   runCounterEvidenceSnapshotJob: m.snapshot,
   runCameraEvidenceRetentionJob: m.retention,
+}));
+vi.mock('@/lib/pharmacy/data-export', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/pharmacy/data-export')>()),
+  runPharmacyDataExportJob: m.dataExport,
 }));
 import { processPlatformJobs } from './jobs';
 
@@ -55,7 +60,7 @@ function queue(item: ReturnType<typeof job>, dependencies: unknown[] = []) {
   let claimed = false;
   m.query.mockImplementation(async (sql: { text?: string; strings?: string[] }) => {
     const text = sql.text ?? sql.strings?.join('') ?? '';
-    if (text.includes('FOR UPDATE SKIP LOCKED')) {
+    if (text.includes('FROM "platform_jobs"') && text.includes('FOR UPDATE SKIP LOCKED')) {
       if (claimed) return [];
       claimed = true;
       return [{ id: item.id }];
@@ -76,6 +81,7 @@ beforeEach(() => {
   m.createMany.mockResolvedValue({ count: 0 });
   m.snapshot.mockResolvedValue({ captured: true });
   m.retention.mockResolvedValue({ purged: 1 });
+  m.dataExport.mockResolvedValue({ exportId: 'exp-1' });
   m.organization.mockResolvedValue({ status: 'PURGING', purgeScheduledAt: new Date('2026-10-01') });
   m.execute.mockResolvedValue(1);
   m.deployment.mockResolvedValue({ count: 1 });
@@ -83,6 +89,16 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe('composed platform worker boundaries', () => {
+  it('starts export collection in a repeatable snapshot at the outer transaction boundary', async () => {
+    const item = job('PHARMACY_DATA_EXPORT_V1', { payload: { exportId: 'exp-1' } });
+    queue(item);
+    await expect(processPlatformJobs(1)).resolves.toMatchObject({ succeeded: 1, failed: 0 });
+    expect(m.dataExport).toHaveBeenCalledExactlyOnceWith(db, item, { exportId: 'exp-1' });
+    expect(m.scope).toHaveBeenCalledWith(expect.any(Function), {
+      timeout: 300_000, isolationLevel: 'RepeatableRead',
+    });
+  });
+
   it('propagates enqueue failure before stale recovery or any claim', async () => {
     const error = new Error('camera enqueue unavailable');
     m.createMany.mockRejectedValue(error);

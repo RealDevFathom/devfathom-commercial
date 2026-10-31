@@ -29,7 +29,7 @@ export type ExportColumn = { readonly header: string; readonly description: stri
 export type ExportFileSpec = {
   readonly name: string;
   readonly title: string;
-  /** True when the file is master data the migration wizard can import back. */
+  /** True for master data with a supported import path (documented in README). */
   readonly importable: boolean;
   readonly scope: string;
   readonly columns: readonly ExportColumn[];
@@ -460,10 +460,17 @@ export function buildPharmacyExportReadme(
     '',
     'Re-importing',
     '------------',
+    'medicines.csv is catalogue-only. Import it with the owner-only tRPC mutation',
+    'pharmacyDataExport.importCatalogue({ csv: <UTF-8 contents of medicines.csv> }).',
+    'This creates new, non-saleable drafts for identity and regulatory review; it does',
+    'not merge into existing medicines or import stock. Packs keep their canonical',
+    'conversions as independent levels. Batch, expiry and MRP belong to stock lots,',
+    'so do not send medicines.csv through the stock migration profiler.',
+    '',
     'Column names follow the DevFathom migration wizard (Excel/CSV source) import headers:',
     'code, product, pack, barcode, batch, expiry, mrp, cost, quantity, supplier, customer,',
-    'balance. Files marked "importable" are master data that the wizard reads back one row',
-    'per CSV row. Other files are history kept for your records and audits.',
+    'balance. Other files marked "importable" use that profiler, including its stock',
+    'validation and exception review. History files are kept for your records and audits.',
     '',
     'Values',
     '------',

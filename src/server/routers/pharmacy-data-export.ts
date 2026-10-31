@@ -8,6 +8,10 @@ import {
   requestPharmacyDataExport,
 } from '@/lib/pharmacy/data-export';
 import { annotateAudit } from '@/server/audit';
+import {
+  importPharmacyExportCatalogue,
+  PharmacyCatalogueImportError,
+} from '@/lib/pharmacy/data-export-catalogue';
 
 import { adminProcedure, router, type TRPCContext } from '../trpc';
 
@@ -71,6 +75,29 @@ function fail(error: unknown): never {
 }
 
 export const pharmacyDataExportRouter = router({
+  importCatalogue: adminProcedure
+    .input(z.object({ csv: z.string().max(5_000_000) }).strict())
+    .mutation(async ({ ctx, input }) => {
+      const { organizationId } = ownerOrganizationId(ctx);
+      try {
+        const result = await importPharmacyExportCatalogue(ctx.db, organizationId, input.csv);
+        annotateAudit(ctx, {
+          category: 'pharmacy',
+          operation: 'CREATE',
+          action: 'pharmacy.dataExport.catalogueImported',
+          description: 'Owner imported catalogue drafts from medicines.csv for review.',
+          targetType: 'Medicine',
+          metadata: result,
+        });
+        return result;
+      } catch (error) {
+        if (error instanceof PharmacyCatalogueImportError) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
+        }
+        throw error;
+      }
+    }),
+
   list: adminProcedure.query(async ({ ctx }) => {
     const { organizationId } = ownerOrganizationId(ctx);
     return listPharmacyDataExports(ctx.db, organizationId);

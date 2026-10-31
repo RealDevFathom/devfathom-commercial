@@ -16,6 +16,7 @@ import {
   type ExportFileSpec,
   type PharmacyExportDataset,
 } from './data-export-format';
+import { parsePharmacyExportCatalogue } from './data-export-catalogue';
 import { excelCsvProfiler } from './migration/excel-csv-profiler';
 import { profileTable } from './migration/profiler';
 import { parseDelimitedText } from './migration/source-values';
@@ -66,7 +67,7 @@ function seededDataset(): PharmacyExportDataset {
       mrp: formatMinor(3_000),
       supplier: 'Muller & Phipps',
     },
-    { code: 'lot-2', product: 'Brufen', pack: 20, batch: 'B-2', expiry: '2027-01-31', quantity: 0 }
+    { code: 'lot-2', product: 'Brufen', pack: 20, batch: 'B-2', expiry: '2027-01-31', quantity: 0, mrp: '25.00' }
   );
   data.customers.push(
     { code: 'c-1', customer: 'Ayesha Khan', balance: formatMinor(125_050) },
@@ -103,6 +104,15 @@ function seededDataset(): PharmacyExportDataset {
       lot_code: 'lot-t',
     }
   );
+  data.medicines = data.medicines.map((row, index) => ({
+    brand_name: null, manufacturer: null, drap_registration_no: null,
+    product_family: 'PHARMACEUTICAL', rx: false, otc: false, restricted: false,
+    controlled: false, high_alert: false, lasa: false, cold_chain: false, saleable: false,
+    medicine_code: index < 2 ? 'med-1' : 'med-2',
+    presentation_code: index < 2 ? 'pr-1' : '',
+    presentation: index < 2 ? 'Tablet' : '', dosage_form: null, route: null,
+    ...row,
+  }));
   return data as PharmacyExportDataset;
 }
 
@@ -151,6 +161,28 @@ describe('owner data export — CSV safety', () => {
 });
 
 describe('owner data export — import preset columns', () => {
+  it.each([
+    { product: '' },
+    { pack: '0' },
+    { pack: '1.5' },
+    { pack: '2147483648' },
+    { rx: 'maybe' },
+    { presentation_code: '' },
+  ])('rejects malformed catalogue data before importing: %j', (change) => {
+    const row = { ...seededDataset().medicines[0], ...change };
+    const csv = exportRowsToCsv(PHARMACY_EXPORT_FILES.medicines, [row]);
+    expect(() => parsePharmacyExportCatalogue(csv)).toThrow('valid, consistent catalogue rows');
+  });
+
+  it('refuses conflicting medicine identities and duplicate source row identifiers', () => {
+    const rows = [...seededDataset().medicines];
+    rows[1] = { ...rows[1], product: 'A different medicine' };
+    expect(() => parsePharmacyExportCatalogue(exportRowsToCsv(PHARMACY_EXPORT_FILES.medicines, rows)))
+      .toThrow('valid, consistent catalogue rows');
+    expect(() => parsePharmacyExportCatalogue(exportRowsToCsv(PHARMACY_EXPORT_FILES.medicines, [rows[0]!, rows[0]!])))
+      .toThrow('valid, consistent catalogue rows');
+  });
+
   it('declares unique headers, and only preset headers normalize to a profiler synonym', () => {
     for (const key of PHARMACY_EXPORT_FILE_KEYS) {
       const headers: string[] = PHARMACY_EXPORT_FILES[key].columns.map((column) => column.header);
@@ -177,6 +209,15 @@ describe('owner data export — import preset columns', () => {
       const table = parseDelimitedText(file.data.toString('utf8'));
       const profiled = profileTable(excelCsvProfiler, table);
       expect(profiled.rows).toHaveLength(dataset[key].length);
+      if (key === 'medicines') {
+        const catalogue = parsePharmacyExportCatalogue(file.data.toString('utf8'));
+        expect(catalogue).toHaveLength(dataset.medicines.length);
+        expect(catalogue.map((row) => row.pack)).toEqual([10, 200, null]);
+        // The stock profiler still refuses catalogue rows without lot evidence.
+        expect(profiled.exceptions.some((exception) => exception.bucket === 'MISSING_BATCH')).toBe(true);
+      } else {
+        expect(profiled.exceptions).toEqual([]);
+      }
       expect(profiled.rows.map((row) => row.sourceKey)).toEqual(
         dataset[key].map((row) => String(row.code))
       );
