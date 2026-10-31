@@ -62,7 +62,7 @@ const OUTCOME_TONE: Record<FbrTier1CriterionOutcome, 'danger' | 'success' | 'war
 type ChoiceKey =
   | 'chainOutlet'
   | 'airConditionedMallOrPlaza'
-  | 'wholesaleAndRetail'
+  | 'bulkImportWholesaleAndRetail'
   | 'bankCardPos'
   | 'otherNotifiedCategory';
 type AmountKey = 'electricityBillRupees12Months' | 'annualTurnoverRupees';
@@ -71,7 +71,7 @@ const FIELD_FOR: Record<FbrTier1CriterionKey, ChoiceKey | AmountKey> = {
   chainOutlet: 'chainOutlet',
   airConditionedMallOrPlaza: 'airConditionedMallOrPlaza',
   electricityBill12Months: 'electricityBillRupees12Months',
-  wholesaleAndRetail: 'wholesaleAndRetail',
+  wholesaleAndRetail: 'bulkImportWholesaleAndRetail',
   bankCardPos: 'bankCardPos',
   otherNotifiedCategory: 'otherNotifiedCategory',
   annualTurnover: 'annualTurnoverRupees',
@@ -135,7 +135,7 @@ export function FbrTier1Check({ initial }: { initial: Status }) {
       chainOutlet: choice('chainOutlet'),
       airConditionedMallOrPlaza: choice('airConditionedMallOrPlaza'),
       electricityBillRupees12Months: amount('electricityBillRupees12Months'),
-      wholesaleAndRetail: choice('wholesaleAndRetail'),
+      bulkImportWholesaleAndRetail: choice('bulkImportWholesaleAndRetail'),
       bankCardPos: choice('bankCardPos'),
       otherNotifiedCategory: choice('otherNotifiedCategory'),
       annualTurnoverRupees: amount('annualTurnoverRupees'),

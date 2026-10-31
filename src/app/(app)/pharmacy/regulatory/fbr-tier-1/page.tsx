@@ -42,7 +42,7 @@ export default async function PharmacyFbrTier1Page() {
       <PageHeader
         eyebrow="Pharmacy · FBR"
         heading="Am I Tier-1?"
-        description="Questions about chain membership, location, electricity, wholesale, card-payment POS, notified categories and turnover. The answers and the result are kept, and the check is asked again every twelve months."
+        description="Questions about chain membership, location, electricity, bulk import and wholesale, card-payment POS, notified categories and turnover. The answers and the result are kept, and the check is asked again every twelve months."
       />
       <FbrTier1Check initial={initial} />
     </main>

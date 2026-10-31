@@ -55,7 +55,14 @@ import {
 } from '@/lib/pharmacy/fbr-tier1';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { recordAudit } from '../audit';
-import { adminProcedure, router, type TRPCContext } from '../trpc';
+import { adminProcedure, assertModuleLicensed, router, type TRPCContext } from '../trpc';
+
+// Server-rendered pages also use this router's standalone caller. Its paths
+// lack the pharmacyOnboarding prefix used by the general module middleware.
+const fbrTier1Procedure = adminProcedure.use(({ ctx, next }) => {
+  assertModuleLicensed(ctx, 'pharmacy-core');
+  return next();
+});
 
 /** The gates an operator may attest to; the rest are answered from data. */
 const ATTESTABLE_GATES = PHARMACY_ONBOARDING_STEPS.filter((step) => !step.evidenceBacked).map(
@@ -89,7 +96,7 @@ const fbrTier1Input = z
     chainOutlet: fbrTier1Choice,
     airConditionedMallOrPlaza: fbrTier1Choice,
     electricityBillRupees12Months: fbrTier1Rupees,
-    wholesaleAndRetail: fbrTier1Choice,
+    bulkImportWholesaleAndRetail: fbrTier1Choice,
     bankCardPos: fbrTier1Choice,
     otherNotifiedCategory: fbrTier1Choice,
     annualTurnoverRupees: fbrTier1Rupees,
@@ -344,7 +351,7 @@ export const pharmacyOnboardingRouter = router({
     }),
 
   /** #709 — the latest FBR Tier-1 self-check, and whether it is due again. */
-  fbrTier1Status: adminProcedure.query(({ ctx }) => readFbrTier1Status(ctx)),
+  fbrTier1Status: fbrTier1Procedure.query(({ ctx }) => readFbrTier1Status(ctx)),
 
   /**
    * #709 — record an FBR Tier-1 self-check. The verdict is computed here from
@@ -353,14 +360,14 @@ export const pharmacyOnboardingRouter = router({
    * failed write fails the request rather than claiming a check that was not
    * kept.
    */
-  recordFbrTier1Check: adminProcedure.input(fbrTier1Input).mutation(async ({ ctx, input }) => {
+  recordFbrTier1Check: fbrTier1Procedure.input(fbrTier1Input).mutation(async ({ ctx, input }) => {
     const organizationId = ctx.entitlements.organizationId;
     const user = ctx.session.user;
     const answers: FbrTier1Answers = {
       chainOutlet: input.chainOutlet,
       airConditionedMallOrPlaza: input.airConditionedMallOrPlaza,
       electricityBillRupees12Months: input.electricityBillRupees12Months,
-      wholesaleAndRetail: input.wholesaleAndRetail,
+      bulkImportWholesaleAndRetail: input.bulkImportWholesaleAndRetail,
       bankCardPos: input.bankCardPos,
       otherNotifiedCategory: input.otherNotifiedCategory,
       annualTurnoverRupees: input.annualTurnoverRupees,

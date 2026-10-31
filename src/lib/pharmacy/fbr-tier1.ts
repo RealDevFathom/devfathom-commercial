@@ -22,7 +22,7 @@ export const FBR_TIER1_CHECK_TARGET_TYPE = 'FbrTier1SelfCheck';
 /** The check is asked again this many months after the last answer. */
 export const FBR_TIER1_RECHECK_MONTHS = 12;
 /** Bumped whenever a criterion, threshold or source changes. */
-export const FBR_TIER1_RULES_VERSION = '2026-11-01';
+export const FBR_TIER1_RULES_VERSION = '2026-11-01-r2';
 
 /** Rs 1.2 million over the preceding 12 consecutive months. */
 export const FBR_TIER1_ELECTRICITY_THRESHOLD_RUPEES = 1_200_000;
@@ -51,7 +51,8 @@ export type FbrTier1Answers = {
   airConditionedMallOrPlaza: FbrTier1Answer;
   /** Total electricity billed over the last 12 months, whole rupees; null = not known. */
   electricityBillRupees12Months: number | null;
-  wholesaleAndRetail: FbrTier1Answer;
+  /** Bulk import and supply of consumer goods to both retailers and consumers. */
+  bulkImportWholesaleAndRetail: FbrTier1Answer;
   bankCardPos: FbrTier1Answer;
   otherNotifiedCategory: FbrTier1Answer;
   /** Annual turnover, whole rupees; null = not known. */
@@ -115,8 +116,8 @@ export const FBR_TIER1_CRITERIA: readonly FbrTier1Criterion[] = [
   {
     key: 'wholesaleAndRetail',
     question:
-      'Do you also sell wholesale — supplying other retailers as well as selling to customers?',
-    help: 'A wholesaler-cum-retailer is Tier-1 whatever its size.',
+      'Do you import consumer goods in bulk and supply them both wholesale to retailers and retail to consumers?',
+    help: 'This criterion requires bulk import as well as wholesale and retail supply (§2(43A)(d)). Answer No if you only buy domestically; choose Not sure if any part is unknown.',
     confirmed: true,
     source: FBR_POS_BOOKLET,
   },
@@ -191,7 +192,7 @@ export function criterionOutcome(
         FBR_TIER1_ELECTRICITY_THRESHOLD_RUPEES
       );
     case 'wholesaleAndRetail':
-      return fromAnswer(answers.wholesaleAndRetail);
+      return fromAnswer(answers.bulkImportWholesaleAndRetail);
     case 'bankCardPos':
       return fromAnswer(answers.bankCardPos);
     case 'otherNotifiedCategory':
@@ -269,7 +270,14 @@ export function parseStoredFbrTier1Answers(value: unknown): FbrTier1Answers | nu
       : undefined;
   const chainOutlet = choice('chainOutlet');
   const airConditionedMallOrPlaza = choice('airConditionedMallOrPlaza');
-  const wholesaleAndRetail = choice('wholesaleAndRetail');
+  let bulkImportWholesaleAndRetail = choice('bulkImportWholesaleAndRetail');
+  if (record.bulkImportWholesaleAndRetail === undefined) {
+    // The old question established wholesale/retail supply only. A legacy
+    // Yes cannot confirm bulk import; a No still rules out the full condition.
+    const legacyWholesale = choice('wholesaleAndRetail');
+    bulkImportWholesaleAndRetail =
+      legacyWholesale === 'NO' ? 'NO' : legacyWholesale ? 'UNSURE' : undefined;
+  }
   const bankCardPos = record.bankCardPos === undefined ? 'UNSURE' : choice('bankCardPos');
   const otherNotifiedCategory =
     record.otherNotifiedCategory === undefined ? 'UNSURE' : choice('otherNotifiedCategory');
@@ -278,7 +286,7 @@ export function parseStoredFbrTier1Answers(value: unknown): FbrTier1Answers | nu
   if (
     !chainOutlet ||
     !airConditionedMallOrPlaza ||
-    !wholesaleAndRetail ||
+    !bulkImportWholesaleAndRetail ||
     !bankCardPos ||
     !otherNotifiedCategory ||
     electricityBillRupees12Months === undefined ||
@@ -289,7 +297,7 @@ export function parseStoredFbrTier1Answers(value: unknown): FbrTier1Answers | nu
     chainOutlet,
     airConditionedMallOrPlaza,
     electricityBillRupees12Months,
-    wholesaleAndRetail,
+    bulkImportWholesaleAndRetail,
     bankCardPos,
     otherNotifiedCategory,
     annualTurnoverRupees,

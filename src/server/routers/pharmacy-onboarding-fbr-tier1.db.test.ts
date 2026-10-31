@@ -84,7 +84,7 @@ const notTier1 = {
   chainOutlet: 'NO' as const,
   airConditionedMallOrPlaza: 'NO' as const,
   electricityBillRupees12Months: 250_000,
-  wholesaleAndRetail: 'NO' as const,
+  bulkImportWholesaleAndRetail: 'NO' as const,
   bankCardPos: 'NO' as const,
   otherNotifiedCategory: 'NO' as const,
   annualTurnoverRupees: 15_000_000,

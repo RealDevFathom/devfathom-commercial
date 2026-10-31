@@ -26,7 +26,7 @@ const answers: FbrTier1Answers = {
   chainOutlet: 'NO',
   airConditionedMallOrPlaza: 'NO',
   electricityBillRupees12Months: 300_000,
-  wholesaleAndRetail: 'NO',
+  bulkImportWholesaleAndRetail: 'NO',
   bankCardPos: 'YES',
   otherNotifiedCategory: 'UNSURE',
   annualTurnoverRupees: 20_000_000,
@@ -88,7 +88,7 @@ describe('FBR Tier-1 self-check UI regressions', () => {
     expect(setup.getAttribute('rel')).toBe('noopener noreferrer');
   });
 
-  it('submits both added answers to the server without a client-computed result', () => {
+  it('submits all answers to the server without a client-computed result', () => {
     const { container } = render(<FbrTier1Check initial={status(null)} />);
     for (const group of screen.getAllByRole('group')) {
       const choice = group.querySelector('input')?.getAttribute('name') === 'bankCardPos'
@@ -106,6 +106,20 @@ describe('FBR Tier-1 self-check UI regressions', () => {
     expect(mocks.mutate).toHaveBeenCalledExactlyOnceWith({
       ...answers,
       otherNotifiedCategory: 'NO',
+    });
+  });
+
+  it('asks about bulk import and both wholesale and retail supply before submitting Yes', () => {
+    const { container } = render(<FbrTier1Check initial={status(answers)} />);
+    const wholesale = screen.getByRole('group', {
+      name: 'Do you import consumer goods in bulk and supply them both wholesale to retailers and retail to consumers?',
+    });
+    expect(within(wholesale).getByText(/No if you only buy domestically/)).toBeVisible();
+    fireEvent.click(within(wholesale).getByRole('radio', { name: 'Yes' }));
+    fireEvent.submit(container.querySelector('form')!);
+    expect(mocks.mutate).toHaveBeenCalledExactlyOnceWith({
+      ...answers,
+      bulkImportWholesaleAndRetail: 'YES',
     });
   });
 });

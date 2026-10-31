@@ -18,7 +18,7 @@ const neighbourhood: FbrTier1Answers = {
   chainOutlet: 'NO',
   airConditionedMallOrPlaza: 'NO',
   electricityBillRupees12Months: 300_000,
-  wholesaleAndRetail: 'NO',
+  bulkImportWholesaleAndRetail: 'NO',
   bankCardPos: 'NO',
   otherNotifiedCategory: 'NO',
   annualTurnoverRupees: 20_000_000,
@@ -39,7 +39,7 @@ describe('#709 FBR Tier-1 self-check', () => {
       'electricity above Rs 1.2M in 12 months',
       { electricityBillRupees12Months: FBR_TIER1_ELECTRICITY_THRESHOLD_RUPEES + 1 },
     ],
-    ['wholesale activity', { wholesaleAndRetail: 'YES' }],
+    ['bulk import with wholesale and retail supply', { bulkImportWholesaleAndRetail: 'YES' }],
     ['a bank or authorized provider card-payment POS', { bankCardPos: 'YES' }],
     ['another confirmed FBR-notified category', { otherNotifiedCategory: 'YES' }],
   ])('%s alone triggers Tier-1', (_label, change) => {
@@ -53,12 +53,27 @@ describe('#709 FBR Tier-1 self-check', () => {
       chainOutlet: 'UNSURE',
       airConditionedMallOrPlaza: 'UNSURE',
       electricityBillRupees12Months: null,
-      wholesaleAndRetail: 'YES',
+      bulkImportWholesaleAndRetail: 'YES',
       bankCardPos: 'UNSURE',
       otherNotifiedCategory: 'UNSURE',
       annualTurnoverRupees: null,
     });
     expect(evaluation.result).toBe('TIER_1');
+  });
+
+  it('does not apply the wholesale criterion to a domestic-only wholesaler-retailer', () => {
+    const evaluation = evaluateFbrTier1({
+      ...neighbourhood,
+      bulkImportWholesaleAndRetail: 'NO',
+    });
+    expect(evaluation.result).toBe('NOT_TIER_1');
+    expect(evaluation.criteria.find((c) => c.key === 'wholesaleAndRetail')).toMatchObject({
+      outcome: 'NOT_MET',
+    });
+    const wholesale = FBR_TIER1_CRITERIA.find((c) => c.key === 'wholesaleAndRetail')!;
+    expect(wholesale.question).toMatch(/import consumer goods in bulk/);
+    expect(wholesale.question).toMatch(/wholesale to retailers and retail to consumers/);
+    expect(wholesale.help).toMatch(/No if you only buy domestically/);
   });
 
   it('an electricity bill of exactly Rs 1.2M does not exceed the threshold', () => {
@@ -74,7 +89,7 @@ describe('#709 FBR Tier-1 self-check', () => {
     ['an unsure chain answer', { chainOutlet: 'UNSURE' }],
     ['an unsure mall answer', { airConditionedMallOrPlaza: 'UNSURE' }],
     ['an unknown electricity bill', { electricityBillRupees12Months: null }],
-    ['an unsure wholesale answer', { wholesaleAndRetail: 'UNSURE' }],
+    ['an unsure bulk import and wholesale answer', { bulkImportWholesaleAndRetail: 'UNSURE' }],
     ['an unsure card-payment POS answer', { bankCardPos: 'UNSURE' }],
     ['unassessed notification-dependent categories', { otherNotifiedCategory: 'UNSURE' }],
     ['an unknown turnover', { annualTurnoverRupees: null }],
@@ -169,6 +184,9 @@ describe('#709 FBR Tier-1 self-check', () => {
     expect(parseStoredFbrTier1Answers({ ...neighbourhood, chainOutlet: 'MAYBE' })).toBeNull();
     expect(parseStoredFbrTier1Answers({ ...neighbourhood, bankCardPos: 'MAYBE' })).toBeNull();
     expect(
+      parseStoredFbrTier1Answers({ ...neighbourhood, bulkImportWholesaleAndRetail: 'MAYBE' })
+    ).toBeNull();
+    expect(
       parseStoredFbrTier1Answers({ ...neighbourhood, otherNotifiedCategory: null })
     ).toBeNull();
     expect(
@@ -192,4 +210,23 @@ describe('#709 FBR Tier-1 self-check', () => {
     expect(evaluateFbrTier1(answers!).result).toBe('UNSURE');
     expect(evaluateFbrTier1({ ...answers!, chainOutlet: 'YES' }).result).toBe('TIER_1');
   });
+
+  it.each(['YES', 'NO', 'UNSURE'] as const)(
+    'reads legacy wholesale %s without assuming bulk import',
+    (wholesaleAndRetail) => {
+      const legacy: Record<string, unknown> = { ...neighbourhood, wholesaleAndRetail };
+      delete legacy.bulkImportWholesaleAndRetail;
+      const answers = parseStoredFbrTier1Answers(legacy);
+      expect(answers).toEqual({
+        ...neighbourhood,
+        bulkImportWholesaleAndRetail: wholesaleAndRetail === 'NO' ? 'NO' : 'UNSURE',
+      });
+      expect(evaluateFbrTier1(answers!).result).toBe(
+        wholesaleAndRetail === 'NO' ? 'NOT_TIER_1' : 'UNSURE'
+      );
+      expect(evaluateFbrTier1({ ...answers!, chainOutlet: 'YES' }).result).toBe('TIER_1');
+      expect(legacy.wholesaleAndRetail).toBe(wholesaleAndRetail);
+      expect(legacy).not.toHaveProperty('bulkImportWholesaleAndRetail');
+    }
+  );
 });

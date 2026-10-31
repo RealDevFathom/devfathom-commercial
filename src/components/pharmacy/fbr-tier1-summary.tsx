@@ -53,7 +53,7 @@ export function FbrTier1Summary({
           ? recheckDue
             ? `Last answered ${dayFormat.format(new Date(latest.assessedAt))}. Twelve months have passed — answer it again.`
             : `Last answered ${dayFormat.format(new Date(latest.assessedAt))}. Ask again by ${dayFormat.format(new Date(latest.recheckDueAt))}.`
-          : 'Chain outlets, mall shops, large electricity users, wholesaler-retailers, card-payment POS holders and other FBR-prescribed categories must integrate with FBR. Check whether that includes you.'}{' '}
+          : 'Chain outlets, mall shops, large electricity users, bulk-importing wholesaler-retailers, card-payment POS holders and other FBR-prescribed categories must integrate with FBR. Check whether that includes you.'}{' '}
         <Link
           className="font-medium text-primary underline underline-offset-4 hover:text-accent-brand"
           href="/pharmacy/regulatory/fbr-tier-1"
