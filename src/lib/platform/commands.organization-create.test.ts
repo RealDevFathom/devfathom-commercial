@@ -7,12 +7,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { Prisma } from '@/generated/prisma/client';
 
-const mocks = vi.hoisted(() => ({ userFindFirst: vi.fn(), userCreate: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  userFindFirst: vi.fn(),
+  userCreate: vi.fn(),
+  assertPlatformCapability: vi.fn(),
+}));
 
 vi.mock('server-only', () => ({}));
 vi.mock('bcryptjs', () => ({ hash: vi.fn(async () => 'hashed'), compare: vi.fn() }));
 vi.mock('@/lib/secret-crypto', () => ({ encryptSecret: vi.fn() }));
-vi.mock('@/lib/platform/auth', () => ({ assertPlatformCapability: vi.fn() }));
+vi.mock('@/lib/platform/auth', () => ({
+  assertPlatformCapability: mocks.assertPlatformCapability,
+}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({
   withPlatformDb: vi.fn(async (run: (db: unknown) => Promise<unknown>) => run(platformDb)),
 }));
@@ -43,6 +49,9 @@ const platformDb = {
   organizationEmailSettings: { create: record('emailSettings') },
   organizationDeployment: { create: record('deployment') },
   platformJob: { create: record('job') },
+  platformOpportunity: { findUnique: vi.fn(), updateMany: vi.fn() },
+  platformAccount: { updateMany: vi.fn() },
+  platformOpportunityStageEvent: { create: record('opportunityStageEvent') },
   organizationLifecycleEvent: { create: record('lifecycle') },
   platformAuditLog: { create: record('audit') },
 };
@@ -113,6 +122,228 @@ describe('organization.create admin email', () => {
         data: expect.objectContaining({ email: 'admin@acme.com', mustChangePassword: true }),
       })
     );
+  });
+});
+
+describe('organization.create CRM conversion isolation', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.assertPlatformCapability.mockImplementation(() => undefined);
+    mocks.userFindFirst.mockResolvedValue(null);
+    mocks.userCreate.mockResolvedValue({ id: 'user_new' });
+  });
+
+  it('does not let an Organizations-only operator mutate CRM', async () => {
+    const operationsActor = { id: 'op_2', role: 'OPERATIONS' } as never;
+    mocks.assertPlatformCapability.mockImplementation(
+      (_actor: unknown, capability: string) => {
+        if (capability === 'crm:write') {
+          throw new PlatformSecurityError('You do not have permission for this action.', 403);
+        }
+      }
+    );
+
+    await expect(
+      executePlatformCommand(
+        operationsActor,
+        'organization.create',
+        { ...payload('admin@acme.com'), opportunityId: 'opp_1' },
+        request
+      )
+    ).rejects.toMatchObject({ status: 403 });
+    expect(platformDb.platformOpportunity.findUnique).not.toHaveBeenCalled();
+    expect(platformDb.organization.create).not.toHaveBeenCalled();
+  });
+
+  it('requires CRM write authority when an opportunity is supplied', async () => {
+    platformDb.platformOpportunity.findUnique.mockResolvedValueOnce({
+      id: 'opp_1',
+      accountId: 'account_1',
+      stage: 'PROPOSAL',
+      convertedOrganizationId: null,
+      account: { organizationId: null },
+    });
+    platformDb.platformOpportunity.updateMany.mockResolvedValueOnce({ count: 1 });
+    platformDb.platformAccount.updateMany.mockResolvedValueOnce({ count: 1 });
+    await executePlatformCommand(
+      actor,
+      'organization.create',
+      { ...payload('admin@acme.com'), opportunityId: 'opp_1' },
+      request
+    );
+
+    expect(mocks.assertPlatformCapability).toHaveBeenNthCalledWith(1, actor, 'organizations:write');
+    expect(mocks.assertPlatformCapability).toHaveBeenNthCalledWith(2, actor, 'crm:write');
+  });
+
+  it.each(['organization.create', 'crm.opportunity.convert'])(
+    '%s converts an unclaimed won opportunity',
+    async (action) => {
+      platformDb.platformOpportunity.findUnique.mockResolvedValueOnce({
+        id: 'opp_1',
+        accountId: 'account_1',
+        stage: 'WON',
+        convertedOrganizationId: null,
+        account: { organizationId: null },
+      });
+      platformDb.platformOpportunity.updateMany.mockResolvedValueOnce({ count: 1 });
+      platformDb.platformAccount.updateMany.mockResolvedValueOnce({ count: 1 });
+
+      await expect(
+        executePlatformCommand(
+          actor,
+          action,
+          { ...payload('admin@acme.com'), opportunityId: 'opp_1' },
+          request
+        )
+      ).resolves.toMatchObject({ id: 'org_new' });
+
+      expect(platformDb.platformOpportunity.updateMany).toHaveBeenCalledWith({
+        where: { id: 'opp_1', convertedOrganizationId: null, stage: { not: 'LOST' } },
+        data: {
+          stage: 'WON',
+          wonAt: expect.any(Date),
+          convertedOrganizationId: 'org_new',
+        },
+      });
+      expect(platformDb.platformAccount.updateMany).toHaveBeenCalledWith({
+        where: { id: 'account_1', organizationId: null },
+        data: { organizationId: 'org_new', status: 'CUSTOMER' },
+      });
+      expect(platformDb.platformOpportunityStageEvent.create).toHaveBeenCalledWith({
+        data: {
+          opportunityId: 'opp_1',
+          fromStage: 'WON',
+          toStage: 'WON',
+          changedById: 'op_1',
+          reason: 'Converted into an organization',
+        },
+      });
+    }
+  );
+
+  it('rejects an unknown opportunity before provisioning', async () => {
+    platformDb.platformOpportunity.findUnique.mockResolvedValueOnce(null);
+
+    await expect(
+      executePlatformCommand(
+        actor,
+        'organization.create',
+        { ...payload('admin@acme.com'), opportunityId: 'opp_missing' },
+        request
+      )
+    ).rejects.toMatchObject({ status: 400, message: 'Opportunity not found.' });
+    expect(platformDb.organization.create).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      'converted opportunity',
+      { convertedOrganizationId: 'org_old', accountOrganizationId: null, stage: 'WON' },
+    ],
+    [
+      'bound account',
+      { convertedOrganizationId: null, accountOrganizationId: 'org_old', stage: 'PROPOSAL' },
+    ],
+    [
+      'lost opportunity',
+      { convertedOrganizationId: null, accountOrganizationId: null, stage: 'LOST' },
+    ],
+    [
+      'converted open opportunity',
+      { convertedOrganizationId: 'org_old', accountOrganizationId: null, stage: 'PROPOSAL' },
+    ],
+    [
+      'won opportunity with a bound account',
+      { convertedOrganizationId: null, accountOrganizationId: 'org_old', stage: 'WON' },
+    ],
+  ])('rejects a %s before provisioning', async (_label, state) => {
+    platformDb.platformOpportunity.findUnique.mockResolvedValueOnce({
+      id: 'opp_1',
+      accountId: 'account_1',
+      stage: state.stage,
+      convertedOrganizationId: state.convertedOrganizationId,
+      account: { organizationId: state.accountOrganizationId },
+    });
+
+    await expect(
+      executePlatformCommand(
+        actor,
+        'organization.create',
+        { ...payload('admin@acme.com'), opportunityId: 'opp_1' },
+        request
+      )
+    ).rejects.toMatchObject({
+      status: 409,
+      message: 'This opportunity or account has already been claimed.',
+    });
+    expect(platformDb.organization.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects a competing opportunity claim before claiming its account', async () => {
+    platformDb.platformOpportunity.findUnique.mockResolvedValueOnce({
+      id: 'opp_1',
+      accountId: 'account_1',
+      stage: 'PROPOSAL',
+      convertedOrganizationId: null,
+      account: { organizationId: null },
+    });
+    platformDb.platformOpportunity.updateMany.mockResolvedValueOnce({ count: 0 });
+
+    await expect(
+      executePlatformCommand(
+        actor,
+        'organization.create',
+        { ...payload('admin@acme.com'), opportunityId: 'opp_1' },
+        request
+      )
+    ).rejects.toMatchObject({
+      status: 409,
+      message: 'This opportunity or account has already been claimed.',
+    });
+    expect(platformDb.platformOpportunity.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: 'opp_1',
+        convertedOrganizationId: null,
+        stage: { not: 'LOST' },
+      },
+      data: {
+        stage: 'WON',
+        wonAt: expect.any(Date),
+        convertedOrganizationId: 'org_new',
+      },
+    });
+    expect(platformDb.platformAccount.updateMany).not.toHaveBeenCalled();
+    expect(platformDb.platformOpportunityStageEvent.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects a competing account claim before recording the stage event', async () => {
+    platformDb.platformOpportunity.findUnique.mockResolvedValueOnce({
+      id: 'opp_1',
+      accountId: 'account_1',
+      stage: 'PROPOSAL',
+      convertedOrganizationId: null,
+      account: { organizationId: null },
+    });
+    platformDb.platformOpportunity.updateMany.mockResolvedValueOnce({ count: 1 });
+    platformDb.platformAccount.updateMany.mockResolvedValueOnce({ count: 0 });
+
+    await expect(
+      executePlatformCommand(
+        actor,
+        'organization.create',
+        { ...payload('admin@acme.com'), opportunityId: 'opp_1' },
+        request
+      )
+    ).rejects.toMatchObject({
+      status: 409,
+      message: 'This opportunity or account has already been claimed.',
+    });
+    expect(platformDb.platformAccount.updateMany).toHaveBeenCalledWith({
+      where: { id: 'account_1', organizationId: null },
+      data: { organizationId: 'org_new', status: 'CUSTOMER' },
+    });
+    expect(platformDb.platformOpportunityStageEvent.create).not.toHaveBeenCalled();
   });
 });
 

@@ -869,6 +869,38 @@ async function bootstrapOrganization(
       400
     );
   }
+  let conversion:
+    | {
+        id: string;
+        accountId: string;
+        stage: 'DISCOVERY' | 'QUALIFIED' | 'PROPOSAL' | 'NEGOTIATION' | 'WON';
+      }
+    | undefined;
+  if (input.opportunityId && actor) {
+    const opportunity = await db.platformOpportunity.findUnique({
+      where: { id: input.opportunityId },
+      select: {
+        id: true,
+        accountId: true,
+        stage: true,
+        convertedOrganizationId: true,
+        account: { select: { organizationId: true } },
+      },
+    });
+    if (!opportunity) throw new PlatformSecurityError('Opportunity not found.', 400);
+    if (
+      opportunity.convertedOrganizationId ||
+      opportunity.account.organizationId ||
+      opportunity.stage === 'LOST'
+    ) {
+      throw new PlatformSecurityError('This opportunity or account has already been claimed.', 409);
+    }
+    conversion = {
+      id: opportunity.id,
+      accountId: opportunity.accountId,
+      stage: opportunity.stage,
+    };
+  }
   const packageRecord = await db.platformPackage.findUnique({
     where: { id: input.packageId },
     include: { moduleLinks: { where: { enabled: true } } },
@@ -1199,34 +1231,40 @@ async function bootstrapOrganization(
       ...(demo ? { createdAt: demo.now } : {}),
     },
   });
-  if (input.opportunityId && actor) {
-    const opportunity = await db.platformOpportunity.findUnique({
-      where: { id: input.opportunityId },
-      select: { id: true, accountId: true, stage: true },
+  if (conversion && actor) {
+    // The conditional writes are the concurrency backstop: PostgreSQL rechecks
+    // their predicates after waiting on a competing conversion's row lock.
+    const claimedOpportunity = await db.platformOpportunity.updateMany({
+      where: {
+        id: conversion.id,
+        convertedOrganizationId: null,
+        stage: { not: 'LOST' },
+      },
+      data: {
+        stage: 'WON',
+        wonAt: new Date(),
+        convertedOrganizationId: organization.id,
+      },
     });
-    if (opportunity) {
-      await db.platformOpportunity.update({
-        where: { id: opportunity.id },
-        data: {
-          stage: 'WON',
-          wonAt: new Date(),
-          convertedOrganizationId: organization.id,
-        },
-      });
-      await db.platformOpportunityStageEvent.create({
-        data: {
-          opportunityId: opportunity.id,
-          fromStage: opportunity.stage,
-          toStage: 'WON',
-          changedById: actor.id,
-          reason: 'Converted into an organization',
-        },
-      });
-      await db.platformAccount.update({
-        where: { id: opportunity.accountId },
-        data: { organizationId: organization.id, status: 'CUSTOMER' },
-      });
+    if (claimedOpportunity.count !== 1) {
+      throw new PlatformSecurityError('This opportunity or account has already been claimed.', 409);
     }
+    const claimedAccount = await db.platformAccount.updateMany({
+      where: { id: conversion.accountId, organizationId: null },
+      data: { organizationId: organization.id, status: 'CUSTOMER' },
+    });
+    if (claimedAccount.count !== 1) {
+      throw new PlatformSecurityError('This opportunity or account has already been claimed.', 409);
+    }
+    await db.platformOpportunityStageEvent.create({
+      data: {
+        opportunityId: conversion.id,
+        fromStage: conversion.stage,
+        toStage: 'WON',
+        changedById: actor.id,
+        reason: 'Converted into an organization',
+      },
+    });
   }
   return organization;
 }
@@ -1751,6 +1789,7 @@ async function runCommand(
     }
     case 'organization.create': {
       const input = organizationInput.parse(payload);
+      if (input.opportunityId) assertPlatformCapability(actor, 'crm:write');
       const organization = await bootstrapOrganization(db, actor, input);
       return {
         targetType: 'Organization',
