@@ -954,7 +954,18 @@ describe('PharmacyCounterConsole split tender', () => {
       businessDate: '2026-11-01',
       completedAt: '2026-11-01T10:00:00Z',
       currency: 'PKR',
-      lines: bill.lines.map((line) => ({ ...line, batchNumber: 'BATCH-A', expiresAt: '2036-01-01' })),
+      lines: bill.lines.map((line) => ({
+        ...line,
+        batchNumber: 'BATCH-A',
+        expiresAt: '2036-01-01',
+        allocations: line.allocations.map((allocation, index) => ({
+          allocationId: `${line.saleLineId}-allocation-${index}`,
+          inventoryLotId: allocation.inventoryLotId,
+          batchNumber: allocation.batchNumber,
+          expiresAt: allocation.expiresAt,
+          canonicalUnits: allocation.canonicalUnits,
+        })),
+      })),
       tenders: [0, 1].map((index) => ({
         tenderId: `tender-${index}`,
         type,

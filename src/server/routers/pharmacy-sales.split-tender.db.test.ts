@@ -227,12 +227,13 @@ suite('split tender against PostgreSQL', () => {
 
     await inTenant(async (db) => {
       const { foldExpectedCash } = await import('@/lib/pharmacy/settlement');
+      type DrawerMovement = import('@/lib/pharmacy/settlement').DrawerMovement;
       const { readKhataBalance } = await import('@/lib/pharmacy/family-khata');
       const movements = await db.pharmacyDrawerMovement.findMany({
         where: { drawerSessionId: f.drawerId },
       });
       expect(movements).toEqual([expect.objectContaining({ kind: 'CASH_SALE', amountMinor: 60000 })]);
-      expect(foldExpectedCash(movements)).toBe(60000);
+      expect(foldExpectedCash(movements as DrawerMovement[])).toBe(60000);
       expect(await readKhataBalance(db, scope, f.familyAccountId)).toBe(40000);
       expect(
         await db.pharmacyKhataEvent.count({ where: { familyAccountId: f.familyAccountId } })
