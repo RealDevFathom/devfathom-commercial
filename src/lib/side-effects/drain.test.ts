@@ -1,4 +1,4 @@
-import { createHmac } from 'node:crypto';
+import { createHmac, randomBytes } from 'node:crypto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -27,6 +27,7 @@ import {
   STALE_CLAIM_MS,
   claimEffects,
   drainDueOrganizations,
+  drainOrganization,
   failureDisposition,
   listDueOrganizationIds,
   recordOutcome,
@@ -73,6 +74,7 @@ describe('outbound effect delivery', () => {
       error: 'Delivery failed',
     });
     const body = '{"event":"task.created"}';
+    const liveSecret = randomBytes(32).toString('hex');
     const outcome = await runEffect(
       {
         id: 'effect_1',
@@ -86,9 +88,9 @@ describe('outbound effect delivery', () => {
           payload: { taskId: 'task_1' },
         },
       },
-      async () => ({ url: 'https://example.com/hook', secret: 'live-secret', active: true })
+      async () => ({ url: 'https://example.com/hook', secret: liveSecret, active: true })
     );
-    const signature = createHmac('sha256', 'live-secret').update(body).digest('hex');
+    const signature = createHmac('sha256', liveSecret).update(body).digest('hex');
     expect(mocks.deliver).toHaveBeenCalledWith(
       'https://example.com/hook',
       expect.objectContaining({
@@ -98,6 +100,7 @@ describe('outbound effect delivery', () => {
         }),
       })
     );
+    expect(JSON.stringify(outcome)).not.toContain(liveSecret);
     expect(outcome.ok).toBe(false);
     expect(outcome.error).toBe('Delivery failed');
     expect(outcome.delivery).toMatchObject({
@@ -354,4 +357,38 @@ it('rejects restock delivery without a trusted tenant', async () => {
     })
   ).resolves.toEqual({ ok: false, error: 'Delivery failed' });
   expect(mocks.restock).not.toHaveBeenCalled();
+});
+
+it('continues a claimed batch when a restock delivery throws', async () => {
+  const rows = ['notice_1', 'notice_2'].map((notificationId, index) => ({
+    id: `effect_${index + 1}`,
+    kind: 'pharmacy-back-in-stock',
+    attempts: 1,
+    payload: { branchId: 'branch_1', notificationId },
+  }));
+  const update = vi.fn().mockResolvedValue({});
+  const db = {
+    outboundEffect: {
+      update,
+      updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+      deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
+    },
+    $queryRawUnsafe: vi.fn().mockResolvedValue(rows),
+    $executeRawUnsafe: vi.fn().mockResolvedValue(0),
+  };
+  tenancy.withTenantDb.mockImplementation(async (_org, run) => run(db));
+  mocks.restock
+    .mockReset()
+    .mockRejectedValueOnce(new Error('private database details'))
+    .mockResolvedValueOnce('SENT');
+  await expect(drainOrganization('org_1')).resolves.toBeUndefined();
+  expect(mocks.restock).toHaveBeenCalledTimes(2);
+  expect(update).toHaveBeenNthCalledWith(1, {
+    where: { id: 'effect_1' },
+    data: { status: 'PENDING', lastError: 'Delivery failed', availableAt: expect.any(Date) },
+  });
+  expect(update).toHaveBeenNthCalledWith(2, {
+    where: { id: 'effect_2' },
+    data: { status: 'DONE', lastError: null },
+  });
 });

@@ -1,8 +1,10 @@
 import 'server-only';
 
+import { Prisma } from '@/generated/prisma/client';
+
 import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 
-import { sendBackInStockNotice } from './back-in-stock';
+import { restockPublicToken, sendBackInStockNotice } from './back-in-stock';
 import { lockPatientConsent } from './consent-writer';
 import { canMessageCustomer, normalizeWhatsAppNumber } from './whatsapp/messages';
 import {
@@ -27,12 +29,6 @@ export async function deliverBackInStockNotification(
 ) {
   const scope = { organizationId, branchId };
   const config = readWhatsAppConfig();
-  if (
-    !options.provider &&
-    config.provider === 'meta' &&
-    config.organizationId !== scope.organizationId
-  )
-    return 'SKIPPED' as const;
   const transaction = <T>(run: (db: ScopedDb) => Promise<T>) =>
     withTenantDb(
       scope.organizationId,
@@ -48,12 +44,38 @@ export async function deliverBackInStockNotification(
 
   const notification = await transaction(async (db) => {
     const row = await db.pharmacyRestockNotification.findFirst({
-      where: { id: notificationId, ...scope, status: 'CAPTURED', channel: 'WHATSAPP' },
+      where: { id: notificationId, ...scope, status: 'CAPTURED' },
       include: {
         interest: { select: { id: true, patientId: true, createdAt: true, status: true } },
       },
     });
-    if (!row || row.interest.status !== 'OPEN' || !row.interest.patientId) return null;
+    if (!row) return null;
+    const unsupported =
+      row.channel !== 'WHATSAPP'
+        ? 'UNSUPPORTED_CHANNEL'
+        : !options.provider &&
+            config.provider === 'meta' &&
+            config.organizationId !== scope.organizationId
+          ? 'PROVIDER_ORGANIZATION_MISMATCH'
+          : null;
+    if (unsupported) {
+      await db.pharmacyRestockNotification.updateMany({
+        where: { id: row.id, ...scope, status: 'CAPTURED' },
+        data: { status: 'FAILED', lastError: unsupported },
+      });
+      return null;
+    }
+    if (row.interest.status !== 'OPEN' || !row.interest.patientId) {
+      await db.pharmacyRestockNotification.updateMany({
+        where: { id: row.id, ...scope, status: 'CAPTURED' },
+        data: {
+          status: 'CANCELLED',
+          cancelledAt: options.now ?? new Date(),
+          lastError: 'INTEREST_CLOSED',
+        },
+      });
+      return null;
+    }
     await lockPatientConsent(db, scope.organizationId, row.interest.patientId);
     const consent = await db.patientConsent.findFirst({
       where: {
@@ -84,11 +106,16 @@ export async function deliverBackInStockNotification(
       });
       return null;
     }
+    const branchLocation = await db.pharmacyBranch.findFirst({
+      where: { id: scope.branchId, organizationId: scope.organizationId },
+      select: { name: true, addressLine: true, city: true },
+    });
+    if (!branchLocation) throw new Error('Branch not found');
     const claim = await db.pharmacyRestockNotification.updateMany({
       where: { id: row.id, ...scope, status: 'CAPTURED', interest: { status: 'OPEN' } },
       data: { status: 'PROCESSING', lastError: null },
     });
-    return claim.count === 1 ? { ...row, destination: to } : null;
+    return claim.count === 1 ? { ...row, destination: to, branchLocation } : null;
   });
   if (!notification) return 'SKIPPED' as const;
 
@@ -97,6 +124,7 @@ export async function deliverBackInStockNotification(
   try {
     sent = await sendBackInStockNotice(provider, notification.destination, {
       branchId: notification.branchId,
+      branchLocation: notification.branchLocation,
       notificationId: notification.id,
       requestedOn: notification.interest.createdAt,
     });
@@ -118,6 +146,7 @@ export async function deliverBackInStockNotification(
       db.pharmacyRestockNotification.updateMany({
         where: { id: notification.id, ...scope, status: 'PROCESSING' },
         data: {
+          ...(sent.acceptedByProvider === false ? { status: 'FAILED' as const } : {}),
           lastError:
             sent.acceptedByProvider === false ? 'MOCK_PREPARED' : 'UNKNOWN_PROVIDER_OUTCOME',
         },
@@ -144,4 +173,88 @@ export async function deliverBackInStockNotification(
     });
     return 'SENT' as const;
   });
+}
+
+/** Operator queue and customer-reference lookup; no destinations or patient details. */
+export async function reviewRestockNotifications(
+  db: ScopedDb,
+  { organizationId, branchId }: RestockNotificationScope,
+  reference?: string
+) {
+  const scope = { organizationId, branchId };
+  const where: Prisma.PharmacyRestockNotificationWhereInput = {
+    ...scope,
+    ...(reference ? {} : { status: { in: ['CAPTURED', 'PROCESSING', 'FAILED'] } }),
+  };
+  const rows = await db.pharmacyRestockNotification.findMany({
+    where,
+    select: {
+      id: true,
+      interestId: true,
+      status: true,
+      queuedAt: true,
+      sentAt: true,
+      providerMessageId: true,
+      lastError: true,
+    },
+    orderBy: { queuedAt: 'asc' },
+  });
+  return rows
+    .map((row) => ({ ...row, reference: restockPublicToken('reference', row.id) }))
+    .filter((row) => !reference || row.reference === reference);
+}
+
+/**
+ * Manual acknowledgement only: never release the durable claim or resend.
+ * The operator verifies the provider record before declaring an unknown send SENT.
+ */
+export async function reconcileRestockNotification(
+  db: ScopedDb,
+  { organizationId, branchId }: RestockNotificationScope,
+  input: {
+    notificationId: string;
+    outcome: 'SENT' | 'FAILED';
+    sentAt?: Date;
+    providerMessageId?: string;
+  },
+  now = new Date()
+) {
+  const scope = { organizationId, branchId };
+  await db.$queryRaw(Prisma.sql`
+    SELECT id FROM pharmacy_restock_notifications
+    WHERE "organizationId" = ${scope.organizationId} AND "branchId" = ${scope.branchId}
+      AND id = ${input.notificationId} FOR UPDATE
+  `);
+  const row = await db.pharmacyRestockNotification.findFirst({
+    where: { id: input.notificationId, ...scope, status: 'PROCESSING' },
+  });
+  if (!row) throw new Error('Notification is not awaiting reconciliation');
+  if (
+    input.outcome === 'SENT' &&
+    (!input.sentAt ||
+      !Number.isFinite(input.sentAt.getTime()) ||
+      !input.providerMessageId?.trim() ||
+      input.sentAt < row.queuedAt ||
+      input.sentAt > now)
+  )
+    throw new Error('A valid provider acknowledgement is required');
+  const updated = await db.pharmacyRestockNotification.updateMany({
+    where: { id: row.id, ...scope, status: 'PROCESSING' },
+    data:
+      input.outcome === 'SENT'
+        ? {
+            status: 'SENT',
+            sentAt: input.sentAt,
+            providerMessageId: input.providerMessageId,
+            lastError: null,
+          }
+        : { status: 'FAILED', lastError: 'OPERATOR_CONFIRMED_NOT_SENT' },
+  });
+  if (updated.count === 1 && input.outcome === 'SENT') {
+    await db.pharmacyRestockInterest.updateMany({
+      where: { id: row.interestId, ...scope, status: 'OPEN' },
+      data: { status: 'NOTIFIED' },
+    });
+  }
+  return updated;
 }

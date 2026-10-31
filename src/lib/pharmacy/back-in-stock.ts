@@ -1,3 +1,4 @@
+import { workspaceToday } from '@/lib/timezone';
 import type { WhatsAppProvider } from './whatsapp/provider';
 
 /** Policy kernel for pharmacy back-in-stock notices and revenue attribution. */
@@ -6,17 +7,18 @@ export const RESTOCK_RECOVERY_WINDOW_DAYS = 7;
 
 export type BackInStockTemplateInput = {
   branchId: string;
+  /** Loaded by the worker from the tenant's branch record, never the demand. */
+  branchLocation?: { name: string; addressLine: string; city: string };
   requestedOn: Date;
   notificationId: string;
 };
 
 const OPAQUE_ID = /^[A-Za-z0-9_-]{8,64}$/;
 
-function publicToken(kind: 'branch' | 'reference', value: string): string {
+export function restockPublicToken(kind: 'branch' | 'reference', value: string): string {
   if (!OPAQUE_ID.test(value)) throw new TypeError(`Invalid ${kind} identifier`);
-  // Never send caller-supplied labels or identifier fragments. Hashing the
-  // syntactically opaque ID keeps the receipt useful without making free text,
-  // drug names, or PHI recoverable from a template parameter.
+  // Keep identifiers opaque: never expose identifier fragments, product data
+  // or patient details. The scoped review query resolves these public tokens.
   let hash = 0x811c9dc5;
   for (const byte of new TextEncoder().encode(`${kind}:${value}`)) {
     hash ^= byte;
@@ -26,14 +28,20 @@ function publicToken(kind: 'branch' | 'reference', value: string): string {
 }
 
 /**
- * The only allowed template variables. Product, salt and therapeutic category
- * are deliberately absent from the type and output (Meta utility policy / DRAP s.24).
+ * Only branch location, request date and an opaque reference are allowed.
+ * Product, salt and therapeutic category are deliberately absent from the type
+ * and output (Meta utility policy / DRAP s.24).
  */
 export function backInStockTemplateParameters(input: BackInStockTemplateInput): string[] {
+  const branch = restockPublicToken('branch', input.branchId);
+  const location = input.branchLocation;
+  const label = location ? [location.name, location.addressLine, location.city].join(', ') : '';
+  if (location && (!label.trim() || label.length > 320 || /[\r\n{}<>]/.test(label)))
+    throw new TypeError('Invalid branch location');
   return [
-    publicToken('branch', input.branchId),
-    input.requestedOn.toISOString().slice(0, 10),
-    publicToken('reference', input.notificationId),
+    label ? `${label} (${branch})` : branch,
+    workspaceToday('Asia/Karachi', input.requestedOn),
+    restockPublicToken('reference', input.notificationId),
   ];
 }
 
@@ -42,7 +50,7 @@ export function backInStockPreview(input: BackInStockTemplateInput): string {
   return `The item you asked about at ${branch} on ${date} is now available. Ref #${reference}. Reply STOP to opt out.`;
 }
 
-/** Provider boundary used by the GRN arrival worker; runtime validation rejects free text/PHI. */
+/** GRN provider boundary: request text and patient details never become parameters. */
 export function sendBackInStockNotice(
   provider: WhatsAppProvider,
   to: string,

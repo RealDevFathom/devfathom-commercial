@@ -170,3 +170,22 @@ describe('back-in-stock policy', () => {
     });
   });
 });
+
+it('dates requests in Pakistan time across the UTC midnight boundary', () => {
+  expect(backInStockTemplateParameters({
+    branchId: 'branch01', notificationId: 'notice01',
+    requestedOn: new Date('2026-10-20T21:30:00Z'),
+  })[1]).toBe('2026-10-21');
+});
+
+it('allows stored branch location while ignoring product or patient fields', () => {
+  const input = {
+    branchId: 'branch01', notificationId: 'notice01', requestedOn: now,
+    branchLocation: { name: 'Main Branch', addressLine: '10 Market Road', city: 'Lahore' },
+    productName: 'Panadol', patientName: 'Private Patient',
+  };
+  const output = backInStockPreview(input);
+  expect(output).toContain('Main Branch, 10 Market Road, Lahore');
+  expect(output).not.toContain(input.productName);
+  expect(output).not.toContain(input.patientName);
+});

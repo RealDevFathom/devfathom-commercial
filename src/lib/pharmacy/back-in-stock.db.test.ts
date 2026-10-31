@@ -450,12 +450,72 @@ describe.skipIf(!url)('back-in-stock committed delivery on PostgreSQL', () => {
     expect(sends.sendTemplate).not.toHaveBeenCalled();
   });
 
+  it('records unsupported SMS delivery without leaving a captured notice', async () => {
+    const f = await fixture();
+    await tenant(async (db) => {
+      await consent.writePatientConsent(db, scope.organizationId, scope.actorId, {
+        patientId: f.patient.id,
+        purpose: 'REMINDERS',
+        channel: 'SMS',
+        granted: true,
+      });
+      await db.pharmacyRestockInterest.update({
+        where: { id: f.interest.id },
+        data: { channel: 'SMS' },
+      });
+    });
+    const [captured] = await tenant((db) =>
+      sales.captureSafeRestockArrival(db, scope, { inventoryLotId: f.lots[0].id })
+    );
+    await expect(
+      worker.deliverBackInStockNotification(scope, captured.notification!.id)
+    ).resolves.toBe('SKIPPED');
+    const notice = await tenant((db) =>
+      db.pharmacyRestockNotification.findFirstOrThrow({ where: { id: captured.notification!.id } })
+    );
+    expect(notice).toMatchObject({ status: 'FAILED', lastError: 'UNSUPPORTED_CHANNEL' });
+    expect(sends.sendTemplate).not.toHaveBeenCalled();
+  });
+
+  it('exposes uncertain sends for reference lookup and durable reconciliation without a resend', async () => {
+    const f = await fixture();
+    sends.sendTemplate.mockRejectedValue(new Error('unknown outcome'));
+    const [captured] = await tenant((db) =>
+      sales.captureSafeRestockArrival(db, scope, { inventoryLotId: f.lots[0].id })
+    );
+    await expect(
+      worker.deliverBackInStockNotification(scope, captured.notification!.id)
+    ).resolves.toBe('UNKNOWN');
+    const queue = await tenant((db) => worker.reviewRestockNotifications(db, scope));
+    const pending = queue.find((notice) => notice.id === captured.notification!.id)!;
+    expect(pending).toMatchObject({ status: 'PROCESSING', lastError: 'UNKNOWN_PROVIDER_OUTCOME' });
+    expect(pending).not.toHaveProperty('destination');
+    await expect(
+      tenant((db) => worker.reviewRestockNotifications(db, scope, pending.reference))
+    ).resolves.toMatchObject([{ id: pending.id, interestId: f.interest.id }]);
+    const sentAt = new Date();
+    await tenant((db) => worker.reconcileRestockNotification(db, scope, {
+      notificationId: pending.id,
+      outcome: 'SENT',
+      sentAt,
+      providerMessageId: 'operator-verified-ack',
+    }));
+    await expect(
+      worker.deliverBackInStockNotification(scope, pending.id)
+    ).resolves.toBe('SKIPPED');
+    expect(sends.sendTemplate).toHaveBeenCalledTimes(1);
+    const [resolved] = await tenant((db) =>
+      worker.reviewRestockNotifications(db, scope, pending.reference)
+    );
+    expect(resolved).toMatchObject({ status: 'SENT', sentAt });
+  });
+
   it('reads actual catalog salt and arrival distributor in the report', async () => {
     const f = await fixture();
     await tenant((db) =>
       sales.captureSafeRestockArrival(db, scope, { inventoryLotId: f.lots[0].id })
     );
-    const report = await tenant((db) => sales.restockRecoveryReport(db, scope));
+    const report = await tenant((db) => sales.restockRecoveryDashboard(db, scope));
     expect(report.rows).toContainEqual(
       expect.objectContaining({
         salt: f.medicine.strengths[0].ingredient.name,

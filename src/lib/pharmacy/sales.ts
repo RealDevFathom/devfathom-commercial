@@ -915,12 +915,30 @@ export async function captureDemand(
   });
 }
 
+/** Call inside the caller's transaction before assigning revenue to a request. */
+async function lockRecoveryLine(db: ScopedDb, scope: LedgerScope, saleLineId: string) {
+  await db.$queryRaw(Prisma.sql`
+    SELECT id FROM pharmacy_sale_lines
+    WHERE "organizationId" = ${scope.organizationId} AND "branchId" = ${scope.branchId}
+      AND id = ${saleLineId} FOR UPDATE
+  `);
+  const credited = await db.unfulfilledDemandEvent.count({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      recoveredSaleLineId: saleLineId,
+    },
+  });
+  if (credited) throw new PharmacySaleError('INVALID_STATE');
+}
+
 export async function recoverDemandWithAlternate(
   db: ScopedDb,
   scope: LedgerScope,
   demandId: string,
   saleLineId: string
 ) {
+  await lockRecoveryLine(db, scope, saleLineId);
   const demand = await db.unfulfilledDemandEvent.findFirst({
     where: {
       id: demandId,
@@ -1200,6 +1218,12 @@ export async function recoverRestockInterest(
   scope: LedgerScope,
   input: { interestId: string; saleLineId: string }
 ) {
+  await lockRecoveryLine(db, scope, input.saleLineId);
+  await db.$queryRaw(Prisma.sql`
+    SELECT id FROM pharmacy_restock_interests
+    WHERE "organizationId" = ${scope.organizationId} AND "branchId" = ${scope.branchId}
+      AND id = ${input.interestId} FOR UPDATE
+  `);
   const interest = await db.pharmacyRestockInterest.findFirst({
     where: {
       id: input.interestId,
@@ -1225,18 +1249,23 @@ export async function recoverRestockInterest(
     throw new PharmacySaleError('CROSS_BRANCH_REFERENCE');
   const recoveredAt = new Date();
   const notifiedAt = interest.notifications[0]?.sentAt;
+  const sameSku = line.medicineId === interest.demandEvent.requestedMedicineId;
+  // Manual same-SKU recovery predates automated messaging. Keep it available
+  // for reservations, SMS, absent consent and mock/failed deliveries. A sent
+  // notice still uses the seven-day attribution window.
   if (
-    !notifiedAt ||
-    !line.sale.completedAt ||
-    !isRecoverableSale({
-      notifiedAt,
-      soldAt: line.sale.completedAt,
-      sameCustomer: Boolean(
-        line.sale.customer?.patientId &&
-        line.sale.customer.patientId === (interest.patientId ?? interest.demandEvent.customerId)
-      ),
-      sameSku: line.medicineId === interest.demandEvent.requestedMedicineId,
-    })
+    notifiedAt
+      ? !line.sale.completedAt ||
+        !isRecoverableSale({
+          notifiedAt,
+          soldAt: line.sale.completedAt,
+          sameCustomer: Boolean(
+            line.sale.customer?.patientId &&
+              line.sale.customer.patientId === (interest.patientId ?? interest.demandEvent.customerId)
+          ),
+          sameSku,
+        })
+      : !sameSku
   )
     throw new PharmacySaleError('INVALID_STATE');
   await db.unfulfilledDemandEvent.update({
@@ -1269,6 +1298,33 @@ export async function recoverRestockInterest(
 }
 
 export async function restockRecoveryReport(
+  db: ScopedDb,
+  scope: Pick<LedgerScope, 'organizationId' | 'branchId'>,
+  campaignKey?: string
+) {
+  return db.pharmacyRestockInterest.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      ...(campaignKey ? { campaignKey } : {}),
+    },
+    select: {
+      id: true,
+      demandEventId: true,
+      campaignKey: true,
+      status: true,
+      recoveredSaleLineId: true,
+      recoveredAt: true,
+      demandEvent: { select: { requestedMedicineId: true, requestedText: true, quantity: true } },
+      recoveredSale: {
+        select: { id: true, receiptNumber: true, receiptDeviceId: true, businessDate: true },
+      },
+    },
+    orderBy: { createdAt: 'desc' },
+  });
+}
+
+export async function restockRecoveryDashboard(
   db: ScopedDb,
   scope: Pick<LedgerScope, 'organizationId' | 'branchId'>,
   campaignKey?: string
@@ -1312,7 +1368,15 @@ export async function restockRecoveryReport(
         in: interests.flatMap((row) => (row.recoveredSaleLineId ? [row.recoveredSaleLineId] : [])),
       },
     },
-    select: { id: true, quantity: true, unitPriceMinor: true, discountMinor: true },
+    select: {
+      id: true,
+      quantity: true,
+      unitPriceMinor: true,
+      discountMinor: true,
+      canonicalUnits: true,
+      returnLines: { select: { canonicalUnits: true } },
+      unidentifiedReturnHolds: { select: { canonicalUnits: true } },
+    },
   });
   const lots = await db.pharmacyInventoryLot.findMany({
     where: {
@@ -1326,9 +1390,20 @@ export async function restockRecoveryReport(
   });
   const lineById = new Map(saleLines.map((line) => [line.id, line]));
   const lotById = new Map(lots.map((lot) => [lot.id, lot]));
+  // Historical duplicates must not multiply revenue either.
+  const creditedLines = new Set<string>();
   const dashboard = recoveryDashboard(
     interests.map((interest) => {
       const line = interest.recoveredSaleLineId ? lineById.get(interest.recoveredSaleLineId) : null;
+      const credit = interest.status === 'RECOVERED' && line && !creditedLines.has(line.id);
+      if (credit) creditedLines.add(line.id);
+      // Completed-sale refunds are capped at returned goods. Subtract their
+      // value once, including returns pending payment, rather than subtracting
+      // both the return and its subsequent cash refund.
+      const returnedUnits = line
+        ? line.returnLines.reduce((sum, row) => sum + row.canonicalUnits, 0) +
+          line.unidentifiedReturnHolds.reduce((sum, row) => sum + row.canonicalUnits, 0)
+        : 0;
       const lotId = interest.notifications[0]?.inventoryLotId;
       const salts =
         interest.demandEvent.medicine?.strengths.map((part) => part.ingredient.name) ?? [];
@@ -1338,8 +1413,12 @@ export async function restockRecoveryReport(
         distributor: (lotId ? lotById.get(lotId)?.supplierName : null) ?? 'Unassigned',
         estimatedLostMinor: interest.demandEvent.estimatedValueMinor ?? 0,
         recoveredMinor:
-          interest.status === 'RECOVERED' && line
-            ? line.quantity * line.unitPriceMinor - line.discountMinor
+          credit && line
+            ? Math.max(
+                0,
+                line.quantity * line.unitPriceMinor - line.discountMinor -
+                  returnedLineValue(line, returnedUnits)
+              )
             : 0,
       };
     })

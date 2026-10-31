@@ -385,7 +385,7 @@ export async function drainOrganization(organizationId: string): Promise<void> {
           { skipDrain: true, timeout: 10_000 }
         ),
       organizationId
-    );
+    ).catch((): EffectOutcome => ({ ok: false, error: 'Delivery failed' }));
     await withTenantDb(
       organizationId,
       async (db) => {
