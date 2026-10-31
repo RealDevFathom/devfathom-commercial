@@ -177,9 +177,8 @@ describeIfDatabase('shift-aware operator sign-in (real DB)', () => {
       })
     );
 
-    const requestDb = deps.createTenantDb(orgId);
     const attempt = (secret: string) =>
-      requestDb.$transaction((tx) =>
+      deps.withTenantDb(orgId, (tx) =>
         deps.authenticateOperator(tx, {
           staffProfileId: OPEN.id,
           type: 'PIN',

@@ -5,6 +5,7 @@ import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 import type { TRPCContext } from '@/server/trpc';
 import { seedDepartments } from '@/lib/test-support/departments';
+import { hashOperatorCredential } from '@/lib/restaurant/operator-credentials';
 
 const mocks = vi.hoisted(() => ({
   can: vi.fn<(subject: unknown, action: unknown) => Promise<boolean>>(() => Promise.resolve(true)),
@@ -45,6 +46,7 @@ const ids = {
   manager: `staff_manager_wha88_${suffix}`,
 };
 const T0 = new Date('2026-08-20T12:00:00.000Z');
+const APPROVAL_PIN = '728163';
 
 type JobsCaller = ReturnType<
   (typeof import('@/server/routers/restaurant-jobs'))['restaurantJobsRouter']['createCaller']
@@ -275,11 +277,21 @@ beforeAll(async () => {
         },
       ],
     });
+    const credentialHash = await hashOperatorCredential('PIN', APPROVAL_PIN);
+    for (const staffProfileId of [ids.operator, ids.manager]) {
+      await tx.restaurantOperatorCredential.create({
+        data: { staffProfileId, type: 'PIN', credentialHash },
+      });
+    }
+    await tx.restaurantStaffCapabilityGrant.create({
+      data: { staffProfileId: ids.manager, branchId: ids.branch, capability: 'sop:verify' },
+    });
   });
 
   const context = {
     db: scopedDb.createTenantDb(orgId),
     entitlements: {
+      organizationId: orgId,
       // WHA-264 gates SOP depth on the module set AND limit values. This battery
       // exercises co-authorized waivers and escalation chains, so the fixture
       // org is entitled to the depths those paths require.
@@ -778,8 +790,7 @@ describeIfDatabase('WHA-88 M7 independent acceptance (real PostgreSQL + API)', (
     await expect(
       api.execution.waive({
         occurrenceId: occurrence.id,
-        actorStaffProfileId: ids.operator,
-        approvingStaffProfileId: ids.manager,
+        approving: { staffProfileId: ids.manager, type: 'PIN', secret: APPROVAL_PIN },
         reason: 'Caller lacks manager verification permission',
       })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
@@ -787,21 +798,20 @@ describeIfDatabase('WHA-88 M7 independent acceptance (real PostgreSQL + API)', (
     await expect(
       api.execution.waive({
         occurrenceId: occurrence.id,
-        actorStaffProfileId: ids.operator,
-        approvingStaffProfileId: ids.operator,
+        approving: { staffProfileId: ids.operator, type: 'PIN', secret: APPROVAL_PIN },
         reason: 'Self approval is forbidden',
       })
-    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    ).resolves.toEqual({ blocked: 'Waiver authorization failed.' });
     await expect(api.execution.getOccurrence({ id: occurrence.id })).resolves.toMatchObject({
       status: 'MISSED',
     });
 
     const waived = await api.execution.waive({
       occurrenceId: occurrence.id,
-      actorStaffProfileId: ids.operator,
-      approvingStaffProfileId: ids.manager,
+      approving: { staffProfileId: ids.manager, type: 'PIN', secret: APPROVAL_PIN },
       reason: 'Manager-approved operational waiver',
     });
+    if (!('verificationId' in waived)) throw new Error('Expected a verified waiver.');
     const persisted = await deps.withTenantDb(orgId, async (tx) => {
       const verification = await tx.restaurantSopVerification.findUniqueOrThrow({
         where: { id: waived.verificationId },

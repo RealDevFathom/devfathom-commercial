@@ -73,9 +73,8 @@ export const createTRPCContext = async (opts?: {
       ip: ipFromHeaders(headers),
       userAgent: headers?.get('user-agent') ?? null,
     },
-    // Mutable per-request holder. A mutation can enrich its own audit entry via
-    // `annotateAudit(ctx, {...})`; the audit middleware reads this after the
-    // resolver runs. Stays a stable reference across middleware `ctx` spreads.
+    // The audit middleware gives each procedure its own mutable detail holder,
+    // preserving an explicitly supplied transaction for seed audit writes.
     audit: { detail: {} as AuditDetail, ...(opts?.auditDb ? { db: opts.auditDb } : {}) },
   };
 };
@@ -188,6 +187,9 @@ function auditMiddleware(opts: { auditReads: boolean }) {
 
     if (!wantAudit) return next();
 
+    // A batch shares its base context. Annotations belong to this procedure,
+    // including across downstream middleware context spreads, never siblings.
+    const procedureCtx = { ...ctx, audit: { ...ctx.audit, detail: { ...ctx.audit.detail } } };
     const start = Date.now();
     // Credential-bearing inputs must be suppressed before any later middleware,
     // including input validation and authorization, can reject the request.
@@ -207,14 +209,14 @@ function auditMiddleware(opts: { auditReads: boolean }) {
 
     // tRPC middleware does not throw on resolver errors — it returns a result
     // discriminated by `ok`. We record either way, then pass the result through.
-    const result = await next();
+    const result = await next({ ctx: procedureCtx });
 
     await recordTrpcAudit({
-      ctx,
+      ctx: procedureCtx,
       path,
       type,
       input: skipRawInput ? undefined : rawInput,
-      outcome: result.ok ? (ctx.audit.detail.outcome ?? 'SUCCESS') : 'FAILURE',
+      outcome: result.ok ? (procedureCtx.audit.detail.outcome ?? 'SUCCESS') : 'FAILURE',
       error: result.ok ? undefined : result.error,
       durationMs: Date.now() - start,
     });

@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { fetchRequestHandler } from '@trpc/server/adapters/fetch';
+import { z } from 'zod';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 const mocks = vi.hoisted(() => ({
@@ -18,7 +20,7 @@ vi.mock('@/lib/entitlements', () => ({
 }));
 
 import { bindSideEffects } from '@/lib/side-effects/scope';
-import { flushAuditWritesForTest, recordTrpcAudit } from './audit';
+import { annotateAudit, flushAuditWritesForTest, recordTrpcAudit } from './audit';
 import { createTRPCContext, protectedProcedure, router, type TRPCContext } from './trpc';
 
 const organizationId = 'org_demo_restaurant_seat_1';
@@ -46,6 +48,62 @@ beforeEach(() => {
 });
 
 describe('transaction-bound seed audits', () => {
+  it('isolates denial annotations from a successful sibling in an HTTP batch', async () => {
+    let release!: () => void;
+    const denied = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const batchRouter = router({
+      refuse: protectedProcedure.mutation(({ ctx }) => {
+        annotateAudit(ctx, {
+          outcome: 'FAILURE',
+          skipInput: true,
+          targetId: 'denied-target',
+          description: 'Denied operation',
+          metadata: { denied: true },
+        });
+        release();
+        return { blocked: true };
+      }),
+      save: protectedProcedure.input(z.object({ label: z.string() })).mutation(async () => {
+        await denied;
+        return { saved: true };
+      }),
+    });
+    const create = vi.fn().mockResolvedValue({ id: 'audit_batch' });
+    const ctx = await context({ auditLog: { create } } as unknown as ScopedDb);
+    const response = await fetchRequestHandler({
+      endpoint: '/api/trpc',
+      req: new Request('https://tenant.test/api/trpc/refuse,save?batch=1', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ 0: { json: null }, 1: { json: { label: 'saved-input' } } }),
+      }),
+      router: batchRouter,
+      createContext: () => ctx,
+    });
+    expect(response.status).toBe(200);
+    expect(create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        path: 'refuse',
+        outcome: 'FAILURE',
+        targetId: 'denied-target',
+      }),
+    });
+    expect(create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        path: 'save',
+        outcome: 'SUCCESS',
+        input: { label: 'saved-input' },
+      }),
+    });
+    const saved = create.mock.calls.find(([args]) => args.data.path === 'save')![0].data;
+    expect(saved.targetId).not.toBe('denied-target');
+    expect(saved.description).not.toBe('Denied operation');
+    expect(saved.metadata).not.toEqual(expect.objectContaining({ denied: true }));
+    expect(ctx.audit.detail).toEqual({});
+  });
+
   it('writes the uncommitted manager audit in the seed transaction and awaits durability', async () => {
     let release!: () => void;
     const pending = new Promise<void>((resolve) => {

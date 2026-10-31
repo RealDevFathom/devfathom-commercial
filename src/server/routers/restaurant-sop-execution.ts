@@ -34,6 +34,7 @@ import {
   isValidPinFormat,
 } from '@/lib/restaurant/operator-credentials';
 import { staffHasCapability } from '@/lib/restaurant/job-roles';
+import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 
 /**
  * M7-L4 — the SOP execution router (branch-board reads + operator/verifier commands).
@@ -608,14 +609,16 @@ export const restaurantSopExecutionRouter = router({
       // The approving credential is plaintext transport input and must never be audited.
       annotateAudit(ctx, { skipInput: true });
       const refuseAuthorization = () => {
-        // This remains a normal result so credential-attempt state can commit,
-        // but it is still a denied security operation in the central audit log.
+        // A normal transport result still represents a denied security operation.
         annotateAudit(ctx, { outcome: 'FAILURE' });
         return { blocked: 'Waiver authorization failed.' } as const;
       };
       assertSopDepth(ctx.entitlements, 'sop.waiver');
       try {
-        return await ctx.db.$transaction(async (tx) => {
+        return await ctx.db.$transaction(async (transaction) => {
+          // ScopedDb's nested transaction facade passes the same scoped client,
+          // including its transaction method for the domain writer below.
+          const tx = transaction as ScopedDb;
           const [actors, occurrence] = await Promise.all([
             tx.restaurantStaffProfile.findMany({
               where: { userId: ctx.session!.user.id, status: 'ACTIVE' },
@@ -639,10 +642,13 @@ export const restaurantSopExecutionRouter = router({
               : isValidBadgeFormat(input.approving.secret);
           if (!validSecret) return refuseAuthorization();
 
-          const approval = await authenticateOperator(tx, {
-            ...input.approving,
-            now: new Date(),
-          });
+          // Attempts must commit independently of the waiver/request: a later
+          // state error or failing batch sibling must not erase lockout state.
+          const approval = await withTenantDb(
+            ctx.entitlements.organizationId,
+            (authDb) => authenticateOperator(authDb, { ...input.approving, now: new Date() }),
+            { userId: ctx.session!.user.id, skipDrain: true }
+          );
           if (
             !approval.ok ||
             approval.staffProfileId === actorStaffProfileId ||
@@ -653,8 +659,7 @@ export const restaurantSopExecutionRouter = router({
               'sop:verify'
             ))
           ) {
-            // Return rather than throw so failed-attempt state commits while the
-            // caller still receives the same generic authorization refusal.
+            // All credential and capability denials share the same refusal.
             return refuseAuthorization();
           }
 
