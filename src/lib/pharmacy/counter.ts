@@ -523,6 +523,7 @@ export type CounterCart = {
   saleId: string;
   status: string;
   receiptNumber: number | null;
+  buyerName: string | null;
   lines: CounterCartLine[];
   totals: { grossMinor: number; discountMinor: number; netMinor: number; tenderedMinor: number };
 };
@@ -629,6 +630,7 @@ export async function readCounterCart(
     saleId: sale.id,
     status: sale.status,
     receiptNumber: sale.receiptNumber,
+    buyerName: sale.buyerName ?? null,
     lines,
     totals: {
       grossMinor,
@@ -715,6 +717,7 @@ export async function readCounterReceipt(
     currency: branch.currency,
     // #708: frozen at completion; a reprint prints the same buyer.
     buyerName: sale.receiptNumber === null ? null : (sale.buyerName ?? null),
+    cashMemo: snapshot?.cashMemo,
     lines,
     tenders,
     totals: counterReceiptTotals({ lines, tenders }),

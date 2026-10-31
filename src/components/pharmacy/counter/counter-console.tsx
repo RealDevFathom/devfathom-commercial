@@ -343,6 +343,12 @@ function ScopedPharmacyCounterConsole({
   const [tenderReadRequired, setTenderReadRequired] = useState(false);
   const [refreshingTenderBill, setRefreshingTenderBill] = useState(false);
   const tenderInFlight = useRef(false);
+  const buyerNameSaving = useRef(false);
+  const [savingBuyerName, setSavingBuyerName] = useState(false);
+  const handleBuyerNameSaving = useCallback((saving: boolean) => {
+    buyerNameSaving.current = saving;
+    setSavingBuyerName(saving);
+  }, []);
   const [recoveryBranch, setRecoveryBranch] = useState('');
   const [storageError, setStorageError] = useState(false);
   const [attempt, setAttempt] = useState<TenderAttempt | null>(null);
@@ -478,6 +484,15 @@ function ScopedPharmacyCounterConsole({
   const cartQuery = trpc.pharmacySales.counterCart.useQuery(
     { branchId, saleId: saleId ?? '' },
     { enabled: Boolean(branchId && saleId), staleTime: 30_000 }
+  );
+  const handleBuyerNameSaved = useCallback(
+    (buyerName: string | null) => {
+      if (!saleId) return;
+      utils.pharmacySales.counterCart.setData({ branchId, saleId }, (savedCart) =>
+        savedCart ? { ...savedCart, buyerName } : savedCart
+      );
+    },
+    [branchId, saleId, utils]
   );
 
   // POS-07: one OPEN drawer per counter device. The header offers "Open drawer"
@@ -683,6 +698,7 @@ function ScopedPharmacyCounterConsole({
                     : 'unavailable';
   const busy =
     pending !== null ||
+    savingBuyerName ||
     tenderReadRequired ||
     unknownTender ||
     refreshingTenderBill ||
@@ -1160,6 +1176,7 @@ function ScopedPharmacyCounterConsole({
         blocked ||
         billState !== 'ready' ||
         tenderInFlight.current ||
+        buyerNameSaving.current ||
         attemptRef.current
       ) {
         return {
@@ -2146,10 +2163,19 @@ function ScopedPharmacyCounterConsole({
                 key={`cash-memo:${branchId}:${saleId ?? 'none'}`}
                 branchId={branchId}
                 saleId={saleId}
+                buyerName={cart?.saleId === saleId ? cart.buyerName : null}
+                onSavingChange={handleBuyerNameSaving}
+                onSaved={handleBuyerNameSaved}
                 suggestedName={
                   customerQuery.data?.customer.displayName ?? patient?.displayName ?? null
                 }
-                disabled={busy || pending === 'tender'}
+                disabled={
+                  busy ||
+                  cartQuery.isFetching ||
+                  !cartQuery.isSuccess ||
+                  cart?.saleId !== saleId ||
+                  cart?.status !== 'OPEN'
+                }
               />
             ) : null}
             <CounterTenderPanel

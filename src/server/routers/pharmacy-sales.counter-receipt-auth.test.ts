@@ -829,6 +829,34 @@ describe('#708 Sindh cash memo procedures', () => {
     expect(readPharmacyCashMemo).not.toHaveBeenCalled();
   });
 
+  it.each([sindhMemo, null])(
+    'reprints frozen memo facts without querying profile history (%j)',
+    async (cashMemo) => {
+      const f = fixture(dispense);
+      assign(f, ['branch-a']);
+      vi.mocked(readCounterReceipt).mockResolvedValue({
+        receiptNumber: 7,
+        completedAt: '2026-10-01T00:00:00.000Z',
+        cashMemo,
+      } as never);
+      await expect(
+        f.caller().counterReceipt({ branchId: 'branch-a', saleId: 'sale-a' })
+      ).resolves.toMatchObject({ cashMemo });
+      await f.caller().counterReceiptPrintJob({
+        branchId: 'branch-a',
+        saleId: 'sale-a',
+        locale: 'en',
+        reprint: true,
+      });
+      expect(buildPharmacyReceiptEscPosJob).toHaveBeenCalledWith(
+        expect.objectContaining({ cashMemo }),
+        'en',
+        expect.objectContaining({ reprint: true })
+      );
+      expect(readPharmacyCashMemo).not.toHaveBeenCalled();
+    }
+  );
+
   it('hands the completion-time cash memo to the ESC/POS job', async () => {
     const f = fixture(dispense);
     assign(f, ['branch-a']);

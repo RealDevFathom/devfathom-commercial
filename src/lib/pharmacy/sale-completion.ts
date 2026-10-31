@@ -8,7 +8,11 @@ import { assertSaleBatchesSellable } from './sale-batch-safety';
 import { PharmacyReceiptIdentityError, validateReceiptIdentity } from './receipt-identity';
 import { assertRxSaleAllowed } from './rx-sale-gate';
 import { recordCompletedPrescriptionReference } from './rx-prescription-reference';
-import { assertCashMemoBuyerName, resolveCompletionBuyerName } from './cash-memo';
+import {
+  assertCashMemoBuyerName,
+  readPharmacyCashMemo,
+  resolveCompletionBuyerName,
+} from './cash-memo';
 
 export const completionSaleInclude = {
   lines: {
@@ -41,9 +45,10 @@ export async function completePaidPharmacySale(
   const checkedBatches = await assertSaleBatchesSellable(db, scope, sale.id);
   // #708: owner policy may require a buyer name on a Sindh cash memo. An offline
   // replay (leased number) already happened at the counter and is recorded as it was.
-  if (leasedReceiptNumber === null) await assertCashMemoBuyerName(db, scope, sale, new Date());
   // Frozen with the receipt number below; the database refuses a later change.
   const buyerName = await resolveCompletionBuyerName(db, scope, sale);
+  if (leasedReceiptNumber === null)
+    await assertCashMemoBuyerName(db, scope, { buyerName, customerId: null }, new Date());
   const buyerNameUpdate = buyerName && buyerName !== sale.buyerName ? { buyerName } : {};
   let receiptNumber = leasedReceiptNumber;
   if (receiptNumber === null) {
@@ -57,6 +62,7 @@ export async function completePaidPharmacySale(
     receiptNumber = rows[0]!.receipt_number;
   }
   const issuedAt = new Date();
+  const cashMemo = await readPharmacyCashMemo(db, scope, issuedAt);
   await db.pharmacySale.update({
     where: { organizationId_id: { organizationId: scope.organizationId, id: sale.id } },
     data: {
@@ -115,6 +121,7 @@ export async function completePaidPharmacySale(
       deviceId: input.deviceId,
       businessDate: input.businessDate.toISOString().slice(0, 10),
       issuedAt: issuedAt.toISOString(),
+      cashMemo,
       lines: sale.lines.map((line) => ({
         saleLineId: line.id,
         medicineId: line.medicineId,

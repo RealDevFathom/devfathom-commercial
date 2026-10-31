@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -95,4 +95,65 @@ it('is disabled until there is an open bill', () => {
   render(<CounterCashMemoBuyer branchId="branch-a" saleId={null} />);
   expect(screen.getByLabelText('Buyer name for cash memo')).toBeDisabled();
   expect(screen.getByRole('button', { name: 'Save buyer name' })).toBeDisabled();
+});
+
+it('restores the saved bill name after remounting, ahead of another suggestion', () => {
+  const view = render(
+    <CounterCashMemoBuyer branchId="branch-a" saleId="sale-a" buyerName="Saved buyer" />
+  );
+  view.unmount();
+  render(
+    <CounterCashMemoBuyer
+      branchId="branch-a"
+      saleId="sale-a"
+      buyerName="Saved buyer"
+      suggestedName="Different patient"
+    />
+  );
+  expect(screen.getByLabelText('Buyer name for cash memo')).toHaveValue('Saved buyer');
+});
+
+it('uses a saved name that arrives with the cart after the field mounts', () => {
+  const view = render(<CounterCashMemoBuyer branchId="branch-a" saleId="sale-a" />);
+  view.rerender(
+    <CounterCashMemoBuyer branchId="branch-a" saleId="sale-a" buyerName="Saved buyer" />
+  );
+  expect(screen.getByLabelText('Buyer name for cash memo')).toHaveValue('Saved buyer');
+});
+
+it.each([true, false])('guards payment until the save finishes (success: %s)', async (success) => {
+  let resolve!: (value: { buyerName: string }) => void;
+  let reject!: (reason: Error) => void;
+  mocks.save.mockReturnValue(
+    new Promise((yes, no) => {
+      resolve = yes;
+      reject = no;
+    })
+  );
+  const onSavingChange = vi.fn();
+  const onSaved = vi.fn();
+  render(
+    <CounterCashMemoBuyer
+      branchId="branch-a"
+      saleId="sale-a"
+      suggestedName="Buyer"
+      onSavingChange={onSavingChange}
+      onSaved={onSaved}
+    />
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Save buyer name' }));
+  expect(onSavingChange.mock.calls).toEqual([[true]]);
+  expect(screen.getByRole('button', { name: 'Saving…' })).toBeDisabled();
+  expect(screen.getByLabelText('Buyer name for cash memo')).toBeDisabled();
+  await act(async () => {
+    if (success) resolve({ buyerName: 'Buyer' });
+    else reject(new Error('Save failed'));
+  });
+  expect(onSavingChange.mock.calls).toEqual([[true], [false]]);
+  if (success) expect(onSaved).toHaveBeenCalledWith('Buyer');
+  else {
+    expect(onSaved).not.toHaveBeenCalled();
+    expect(screen.getByRole('alert')).toHaveTextContent('Save failed');
+    expect(screen.getByRole('button', { name: 'Save buyer name' })).toBeEnabled();
+  }
 });

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -12,9 +12,13 @@ export type CounterCashMemoBuyerProps = {
   branchId: string;
   /** The open bill; nothing can be saved without one. */
   saleId: string | null;
+  /** The name already saved on this bill, loaded with the cart. */
+  buyerName?: string | null;
   /** The selected patient or linked customer, offered as the starting value. */
   suggestedName?: string | null;
   disabled?: boolean;
+  onSavingChange?: (saving: boolean) => void;
+  onSaved?: (buyerName: string | null) => void;
 };
 
 /**
@@ -28,8 +32,11 @@ export type CounterCashMemoBuyerProps = {
 export function CounterCashMemoBuyer({
   branchId,
   saleId,
+  buyerName = null,
   suggestedName = null,
   disabled = false,
+  onSavingChange,
+  onSaved,
 }: CounterCashMemoBuyerProps) {
   const policy = trpc.pharmacySales.counterCashMemoPolicy.useQuery(
     { branchId },
@@ -39,10 +46,12 @@ export function CounterCashMemoBuyer({
   const [draft, setDraft] = useState<string | null>(null);
   const [saved, setSaved] = useState<{ saleId: string; name: string | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const saving = useRef(false);
+  const [isSaving, setIsSaving] = useState(false);
 
   if (!policy.data?.cashMemo) return null;
 
-  const value = draft ?? suggestedName ?? '';
+  const value = draft ?? buyerName ?? suggestedName ?? '';
   const trimmed = value.replace(/\s+/g, ' ').trim();
   const tooLong = trimmed.length > CASH_MEMO_BUYER_NAME_MAX;
   const required = policy.data.buyerNameRequired;
@@ -50,17 +59,27 @@ export function CounterCashMemoBuyer({
   const unchanged = savedHere && saved.name === (trimmed || null);
 
   const submit = async () => {
-    if (!saleId || tooLong || save.isPending) return;
+    if (disabled || !saleId || tooLong || saving.current) return;
+    // Notify synchronously so a payment shortcut in the same turn is guarded too.
+    saving.current = true;
+    setIsSaving(true);
+    onSavingChange?.(true);
     setError(null);
     try {
       const result = await save.mutateAsync({ branchId, saleId, buyerName: trimmed || null });
       setSaved({ saleId, name: result.buyerName });
+      setDraft(result.buyerName ?? '');
+      onSaved?.(result.buyerName);
     } catch (cause) {
       setError(
         cause instanceof Error && cause.message
           ? cause.message
           : 'The buyer name could not be saved. Retry before taking payment.'
       );
+    } finally {
+      saving.current = false;
+      setIsSaving(false);
+      onSavingChange?.(false);
     }
   };
 
@@ -79,7 +98,7 @@ export function CounterCashMemoBuyer({
           value={value}
           maxLength={CASH_MEMO_BUYER_NAME_MAX + 20}
           autoComplete="off"
-          disabled={disabled || !saleId || save.isPending}
+          disabled={disabled || !saleId || isSaving}
           aria-invalid={tooLong || error !== null ? true : undefined}
           aria-describedby={describedBy}
           onChange={(event) => {
@@ -92,10 +111,10 @@ export function CounterCashMemoBuyer({
           type="button"
           variant="outline"
           className="h-11"
-          disabled={disabled || !saleId || tooLong || save.isPending || unchanged}
+          disabled={disabled || !saleId || tooLong || isSaving || unchanged}
           onClick={() => void submit()}
         >
-          {save.isPending ? 'Saving…' : 'Save buyer name'}
+          {isSaving ? 'Saving…' : 'Save buyer name'}
         </Button>
       </div>
       <p id="cash-memo-buyer-help" className="text-xs text-text-muted">

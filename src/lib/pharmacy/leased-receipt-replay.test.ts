@@ -140,6 +140,7 @@ function fixture() {
     },
     pharmacyTender: { create: tenderCreate },
     pharmacySaleEvent: { create: vi.fn().mockResolvedValue({}) },
+    branchRegulatoryProfile: { findFirst: vi.fn().mockResolvedValue(null) },
   };
   const input = {
     saleId: 'sale-1',

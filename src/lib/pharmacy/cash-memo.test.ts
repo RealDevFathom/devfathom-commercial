@@ -187,7 +187,7 @@ describe('normalizeBuyerName', () => {
   it('refuses over-long names and printer control or bidi override characters', () => {
     expect(() => normalizeBuyerName('a'.repeat(121))).toThrow(PharmacyCashMemoError);
     expect(() => normalizeBuyerName('Ayesha\u001b@')).toThrow(PharmacyCashMemoError);
-    expect(() => normalizeBuyerName('Ayesha‮Khan')).toThrow(PharmacyCashMemoError);
+    expect(() => normalizeBuyerName('Ayesha\u202EKhan')).toThrow(PharmacyCashMemoError);
   });
 });
 
@@ -255,6 +255,7 @@ describe('owner buyer-name policy', () => {
       branchRegulatoryProfile: {
         findFirst: vi.fn(async () => profile({ provinceCode: options.province ?? 'PK-SD' })),
       },
+      pharmacyCustomer: { findFirst: vi.fn(async () => ({ displayName: 'Ayesha' })) },
     };
   }
 
@@ -297,13 +298,32 @@ describe('owner buyer-name policy', () => {
     ).resolves.toBeUndefined();
   });
 
-  it('accepts a typed name or a selected customer without reading the policy', async () => {
+  it('accepts a typed name or a printable linked customer without reading the policy', async () => {
     const fake = db({ required: true });
     const typed = { buyerName: 'Ayesha', customerId: null };
     const customer = { buyerName: null, customerId: 'c-1' };
     await assertCashMemoBuyerName(fake as never, scope, typed, at);
     await assertCashMemoBuyerName(fake as never, scope, customer, at);
     expect(fake.pharmacyBranch.findFirst).not.toHaveBeenCalled();
+  });
+
+  it.each([null, '', '   ', '\u202E'])(
+    'refuses an unprintable linked name %j',
+    async (displayName) => {
+      const fake = db({ required: true });
+      fake.pharmacyCustomer.findFirst.mockResolvedValueOnce({ displayName } as never);
+      await expect(
+        assertCashMemoBuyerName(fake as never, scope, { buyerName: null, customerId: 'c-1' }, at)
+      ).rejects.toMatchObject({ reason: 'BUYER_NAME_REQUIRED' });
+    }
+  );
+
+  it('refuses a missing linked customer when the owner requires a name', async () => {
+    const fake = db({ required: true });
+    fake.pharmacyCustomer.findFirst.mockResolvedValueOnce(null as never);
+    await expect(
+      assertCashMemoBuyerName(fake as never, scope, { buyerName: null, customerId: 'missing' }, at)
+    ).rejects.toMatchObject({ reason: 'BUYER_NAME_REQUIRED' });
   });
 });
 

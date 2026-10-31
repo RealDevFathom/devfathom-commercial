@@ -122,6 +122,7 @@ function makeDb() {
     },
     // #708: the cash-memo buyer-name policy read; no owner policy on this branch.
     pharmacyBranch: { findFirst: vi.fn().mockResolvedValue(null) },
+    branchRegulatoryProfile: { findFirst: vi.fn().mockResolvedValue(null) },
   };
 }
 let db = makeDb();
@@ -143,6 +144,27 @@ beforeEach(() => {
 });
 
 describe('R1 receipt identity carries every batch fact', () => {
+  it('freezes the selected regulatory facts alongside the issued line identities', async () => {
+    db.branchRegulatoryProfile.findFirst.mockResolvedValueOnce({
+      provinceCode: 'PK-SD',
+      isPlaceholder: false,
+      licenceNumber: 'DL-ISSUED',
+      licenceValidFrom: new Date('2026-01-01T00:00:00.000Z'),
+      licenceValidTo: new Date('2027-12-31T00:00:00.000Z'),
+      qualifiedPersonRegistration: 'QP-ISSUED',
+    } as never);
+    await complete(sale());
+    expect(mocks.validate.mock.calls[0]![0]).toMatchObject({
+      cashMemo: {
+        template: 'SINDH_CASH_MEMO',
+        licenceNumber: 'DL-ISSUED',
+        licenceValidFrom: '2026-01-01T00:00:00.000Z',
+        licenceValidTo: '2027-12-31T00:00:00.000Z',
+        pharmacistRegistration: 'QP-ISSUED',
+      },
+    });
+  });
+
   it('hands the validator all three allocations with batch, expiry and units, and stores its result', async () => {
     await expect(complete(sale())).resolves.toBe(41);
     expect(mocks.validate).toHaveBeenCalledTimes(1);
@@ -159,6 +181,7 @@ describe('R1 receipt identity carries every batch fact', () => {
       receiptNumber: 41,
       deviceId: 'counter-a',
       businessDate: '2026-10-11',
+      cashMemo: null,
     });
     expect(snapshot.lines.map((l) => l.saleLineId)).toEqual(['line_1', 'line_2']);
     expect(snapshot.lines[0]!.strength).toBe('500 mg');

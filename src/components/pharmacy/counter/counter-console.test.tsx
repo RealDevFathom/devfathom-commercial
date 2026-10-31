@@ -32,6 +32,8 @@ const mocks = vi.hoisted(() => ({
   signIn: vi.fn(),
   receiptRefetch: vi.fn(),
   drawerStatusInvalidate: vi.fn(),
+  buyerProps: vi.fn(),
+  cartSetData: vi.fn(),
   session: {
     status: 'authenticated',
     data: {
@@ -85,7 +87,7 @@ vi.mock('@/lib/trpc', () => {
         fetch: (...args: unknown[]) => mocks.searchFetch(...args),
         invalidate: vi.fn(),
       },
-      counterCart: { cancel: mocks.cancel, invalidate: vi.fn() },
+      counterCart: { cancel: mocks.cancel, invalidate: vi.fn(), setData: mocks.cartSetData },
       counterReceipt: { invalidate: mocks.receiptInvalidate },
       counterEvidence: { reset: vi.fn() },
       drawerStatus: { invalidate: mocks.drawerStatusInvalidate },
@@ -141,7 +143,12 @@ vi.mock('./counter-search-results', () => ({ CounterSearchResults: () => null })
 vi.mock('./counter-substitute-proposals', () => ({ CounterSubstituteProposals: () => null }));
 vi.mock('./counter-unit-toggle', () => ({ CounterUnitToggle: () => null }));
 // #708: the cash-memo buyer field owns its own queries; covered in its own test.
-vi.mock('./counter-cash-memo-buyer', () => ({ CounterCashMemoBuyer: () => null }));
+vi.mock('./counter-cash-memo-buyer', () => ({
+  CounterCashMemoBuyer: (props: unknown) => {
+    mocks.buyerProps(props);
+    return null;
+  },
+}));
 
 import { PharmacyCounterConsole } from './counter-console';
 import {
@@ -156,6 +163,7 @@ function cart(overrides: Partial<CounterCart> = {}): CounterCart {
     saleId: 'sale-a',
     status: 'OPEN',
     receiptNumber: null,
+    buyerName: null,
     lines: [
       {
         saleLineId: 'line-a',
@@ -294,6 +302,28 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe('PharmacyCounterConsole authoritative bill state', () => {
+  it('restores the saved buyer and keeps the cart cache current after saving', () => {
+    mocks.queries.counterCart!.data = cart({ buyerName: 'Saved buyer' });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const props = mocks.buyerProps.mock.lastCall![0];
+    expect(props.buyerName).toBe('Saved buyer');
+    act(() => props.onSaved('Updated buyer'));
+    const [input, update] = mocks.cartSetData.mock.lastCall!;
+    expect(input).toEqual({ branchId: 'branch-a', saleId: 'sale-a' });
+    expect(update(cart())).toEqual(cart({ buyerName: 'Updated buyer' }));
+  });
+
+  it('blocks payment while the buyer name is saving and re-enables it after saving', () => {
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const props = mocks.buyerProps.mock.lastCall![0];
+    act(() => props.onSavingChange(true));
+    enterPayment();
+    expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
+    expect(mocks.mutations.tender).not.toHaveBeenCalled();
+    act(() => props.onSavingChange(false));
+    expect(screen.getByRole('button', { name: 'Take payment' })).toBeEnabled();
+  });
+
   it.each([
     'missing',
     'loading',

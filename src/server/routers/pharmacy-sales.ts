@@ -1757,10 +1757,12 @@ export const pharmacySalesRouter = router({
           receipt.completedAt
             ? readPharmacyReceiptTaxIdentity(ctx.db, scope, new Date(receipt.completedAt))
             : Promise.resolve({ ntn: null, strn: null }),
-          // #708: the profile in force at completion, so a reprint shows the same memo.
-          receipt.completedAt
-            ? readPharmacyCashMemo(ctx.db, scope, new Date(receipt.completedAt))
-            : Promise.resolve(null),
+          // Prefer immutable issuance facts, including an explicit non-Sindh null.
+          receipt.cashMemo !== undefined
+            ? Promise.resolve(receipt.cashMemo)
+            : receipt.completedAt
+              ? readPharmacyCashMemo(ctx.db, scope, new Date(receipt.completedAt))
+              : Promise.resolve(null),
         ]);
         // F8: sourced Rx label payloads come only from this authorized receipt read.
         return {
@@ -1802,7 +1804,9 @@ export const pharmacySalesRouter = router({
         const [format, taxIdentity, cashMemo] = await Promise.all([
           readPharmacyReceiptFormat(ctx.db, scope),
           readPharmacyReceiptTaxIdentity(ctx.db, scope, new Date(receipt.completedAt)),
-          readPharmacyCashMemo(ctx.db, scope, new Date(receipt.completedAt)),
+          receipt.cashMemo !== undefined
+            ? Promise.resolve(receipt.cashMemo)
+            : readPharmacyCashMemo(ctx.db, scope, new Date(receipt.completedAt)),
         ]);
         return {
           status: 'READY' as const,

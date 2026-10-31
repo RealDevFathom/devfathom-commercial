@@ -201,10 +201,7 @@ const read = (scope: Scope, saleId: string) =>
       name: 'Cash memo',
       currency: 'PKR',
     });
-    const cashMemoHeader = receipt.completedAt
-      ? await cashMemo.readPharmacyCashMemo(db, scope, new Date(receipt.completedAt))
-      : null;
-    return { ...receipt, cashMemo: cashMemoHeader };
+    return receipt;
   });
 
 describeDatabase('#708 Sindh cash memo (PostgreSQL, FORCE RLS)', () => {
@@ -212,6 +209,9 @@ describeDatabase('#708 Sindh cash memo (PostgreSQL, FORCE RLS)', () => {
     const { saleId, totalMinor } = await cart(sindh, 'typed');
     await tenant((db) =>
       cashMemo.setPharmacySaleBuyerName(db, sindh, { saleId, buyerName: '  Ayesha  Khan ' })
+    );
+    expect((await tenant((db) => counter.readCounterCart(db, sindh, saleId))).buyerName).toBe(
+      'Ayesha Khan'
     );
     await expect(tender(sindh, saleId, totalMinor)).resolves.toMatchObject({ settled: true });
 
@@ -236,7 +236,37 @@ describeDatabase('#708 Sindh cash memo (PostgreSQL, FORCE RLS)', () => {
         data: { manufacturer: 'Someone else' },
       })
     );
+    // The profile editor permits a successor backdated to before issuance.
+    await tenant(async (db) => {
+      const original = await db.branchRegulatoryProfile.findFirstOrThrow({
+        where: { organizationId, branchId: sindh.branchId, version: 1 },
+      });
+      const effectiveFrom = new Date(new Date(first.completedAt!).getTime() - 86_400_000);
+      await db.branchRegulatoryProfile.update({
+        where: { id: original.id },
+        data: { effectiveTo: effectiveFrom },
+      });
+      await db.branchRegulatoryProfile.create({
+        data: {
+          ...original,
+          id: randomUUID(),
+          version: 2,
+          createdAt: new Date(),
+          effectiveFrom,
+          effectiveTo: null,
+          premises: {},
+          retentionPolicy: {},
+          licenceNumber: 'BACKDATED-LICENCE',
+          licenceValidTo: new Date('2029-12-31T00:00:00.000Z'),
+          qualifiedPersonRegistration: 'BACKDATED-PHARMACIST',
+        },
+      });
+    });
+    expect(
+      await tenant((db) => cashMemo.readPharmacyCashMemo(db, sindh, new Date(first.completedAt!)))
+    ).toMatchObject({ licenceNumber: 'BACKDATED-LICENCE' });
     const reprint = await read(sindh, saleId);
+    expect(reprint.cashMemo).toEqual(first.cashMemo);
     expect(reprint.lines[0]!.manufacturer).toBe('GSK Pakistan');
     const preview = presentation.buildCounterReceiptPreview(reprint, 'en', 80, true);
     for (const field of [
@@ -299,6 +329,24 @@ describeDatabase('#708 Sindh cash memo (PostgreSQL, FORCE RLS)', () => {
         tenders: await db.pharmacyTender.count({ where: { saleId } }),
       }));
       expect(state).toEqual({ sale: { status: 'OPEN', receiptNumber: null }, tenders: 0 });
+
+      // Linking a customer with no printable name cannot bypass the policy.
+      await tenant(async (db) => {
+        const patient = await db.pharmacyPatient.create({
+          data: { organizationId, displayName: 'Policy patient' },
+        });
+        const customer = await db.pharmacyCustomer.create({
+          data: { organizationId, patientId: patient.id, displayName: '\u202E' },
+        });
+        await db.pharmacySale.update({
+          where: { organizationId_id: { organizationId, id: saleId } },
+          data: { customerId: customer.id },
+        });
+      });
+      await expect(tender(sindh, saleId, totalMinor)).rejects.toMatchObject({
+        reason: 'BUYER_NAME_REQUIRED',
+      });
+      expect(await tenant((db) => db.pharmacyTender.count({ where: { saleId } }))).toBe(0);
 
       await tenant((db) =>
         cashMemo.setPharmacySaleBuyerName(db, sindh, { saleId, buyerName: 'Bilal Ahmed' })

@@ -36,6 +36,18 @@ const snapshotSchema = z
     deviceId: id,
     businessDate: z.iso.date(),
     issuedAt: z.iso.datetime(),
+    // Absent only on legacy snapshots. Explicit null freezes a non-Sindh receipt too.
+    cashMemo: z
+      .object({
+        template: z.literal('SINDH_CASH_MEMO'),
+        licenceNumber: id.nullable(),
+        licenceValidFrom: z.iso.datetime().nullable(),
+        licenceValidTo: z.iso.datetime().nullable(),
+        pharmacistRegistration: id.nullable(),
+      })
+      .strict()
+      .nullable()
+      .optional(),
     lines: z.array(lineSchema).min(1),
   })
   .strict();

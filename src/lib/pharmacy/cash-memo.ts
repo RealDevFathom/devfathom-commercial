@@ -9,9 +9,9 @@
  *
  * The template is not a setting someone can forget to turn on. It applies
  * whenever the regulatory profile in force when the sale completed is for
- * Sindh, and that profile is read again from history on a reprint, so the
- * reprint shows the same fields. Branches in other provinces keep the
- * standard receipt unchanged.
+ * Sindh. Its header facts are frozen in the issued receipt snapshot, so a
+ * backdated profile update cannot change a reprint. Branches in other provinces
+ * keep the standard receipt unchanged.
  *
  * This module has no runtime database or server imports, so the counter view
  * can import its strings and line rendering.
@@ -104,9 +104,9 @@ const BLANK = '________________';
 export type CashMemoSeparator = ' · ' | ' | ';
 
 /** True when this receipt renders as a Sindh cash memo. */
-export function isCashMemo(
-  receipt: Pick<CounterReceipt, 'cashMemo'>
-): receipt is Pick<CounterReceipt, 'cashMemo'> & { cashMemo: PharmacyCashMemo } {
+export function isCashMemo<T extends Pick<CounterReceipt, 'cashMemo'>>(
+  receipt: T
+): receipt is T & { cashMemo: PharmacyCashMemo } {
   return receipt.cashMemo?.template === 'SINDH_CASH_MEMO';
 }
 
@@ -258,7 +258,7 @@ export async function resolveCompletionBuyerName(
   scope: BranchScope,
   sale: { buyerName: string | null; customerId: string | null }
 ): Promise<string | null> {
-  const typed = sale.buyerName?.trim();
+  const typed = normalizeBuyerName(sale.buyerName);
   if (typed) return typed;
   if (!sale.customerId) return null;
   const customer = await db.pharmacyCustomer.findFirst({
@@ -279,13 +279,13 @@ export async function resolveCompletionBuyerName(
  * cannot be settled. Walk-ins without a name stay allowed by default.
  */
 export async function assertCashMemoBuyerName(
-  db: PolicyDb,
+  db: PolicyDb & Pick<ScopedDb, 'pharmacyCustomer'>,
   scope: BranchScope,
   sale: { buyerName: string | null; customerId: string | null },
   at: Date
 ): Promise<void> {
-  // A typed name or a selected customer satisfies the policy without any read.
-  if (sale.buyerName?.trim() || sale.customerId) return;
+  // Validate the actual printable name, including a linked customer's fallback.
+  if (await resolveCompletionBuyerName(db, scope, sale)) return;
   const branch = await db.pharmacyBranch.findFirst({
     where: { id: scope.branchId, organizationId: scope.organizationId },
     select: { cashMemoBuyerNameRequired: true },

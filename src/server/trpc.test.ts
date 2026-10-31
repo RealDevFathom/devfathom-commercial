@@ -326,7 +326,7 @@ describe('temporary password gate', () => {
   });
 });
 
-describe('camera renewal audit redaction before resolver suppression (F3-R1)', () => {
+describe('sensitive audit input redaction before resolver suppression', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     mocks.can.mockResolvedValue(true);
@@ -340,6 +340,50 @@ describe('camera renewal audit redaction before resolver suppression (F3-R1)', (
     await actual.flushAuditWritesForTest();
     mocks.recordTrpcAudit.mockReset();
   });
+
+  it.each(['authorization', 'capability', 'invalid-input'] as const)(
+    'redacts buyer names when %s rejects before the resolver',
+    async (denial) => {
+      const resolver = vi.fn(() => 'saved');
+      const sales = router({
+        pharmacySales: router({
+          counterSetBuyerName: capabilityProcedure('pharmacy:counter')
+            .input(
+              z.object({
+                branchId: z.string().min(1),
+                saleId: z.string().min(1),
+                buyerName: z.string().max(200),
+              })
+            )
+            .mutation(resolver),
+        }),
+      });
+      const ctx = contextFor({
+        ...ADMIN,
+        status: 'ACTIVE',
+        organizationId: 'org-buyer',
+        ...(denial === 'authorization' ? { sessionRevoked: true } : {}),
+      });
+      if (denial === 'capability') mocks.can.mockResolvedValue(false);
+      const input = {
+        branchId: denial === 'invalid-input' ? '' : 'branch-a',
+        saleId: 'sale-a',
+        buyerName: 'Sensitive buyer name',
+      };
+      await expect(
+        sales.createCaller(ctx).pharmacySales.counterSetBuyerName(input)
+      ).rejects.toBeDefined();
+      const actual = await vi.importActual<typeof import('./audit')>('./audit');
+      await actual.flushAuditWritesForTest();
+      expect(resolver).not.toHaveBeenCalled();
+      expect(mocks.auditCreate).toHaveBeenCalledOnce();
+      const row = mocks.auditCreate.mock.calls[0]![0];
+      expect(row).toMatchObject({
+        data: { outcome: 'FAILURE', input: { ...input, buyerName: '[REDACTED]' } },
+      });
+      expect(JSON.stringify(row)).not.toContain(input.buyerName);
+    }
+  );
 
   it.each(['entitlement', 'capability', 'license', 'invalid-input'] as const)(
     'keeps %s denial audited while removing the prior grant identifier',

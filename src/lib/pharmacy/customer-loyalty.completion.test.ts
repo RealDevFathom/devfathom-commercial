@@ -81,6 +81,8 @@ function fixture() {
       create: vi.fn().mockResolvedValue({ id: 'tender-a', createdAt: new Date() }),
     },
     pharmacySaleEvent: { create: vi.fn() },
+    pharmacyBranch: { findFirst: vi.fn().mockResolvedValue(null) },
+    branchRegulatoryProfile: { findFirst: vi.fn().mockResolvedValue(null) },
     pharmacyLoyaltyPointsEntry: {
       findUnique: vi.fn().mockResolvedValue(null),
       aggregate: vi.fn().mockResolvedValue({ _sum: { points: 10 } }),
