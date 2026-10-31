@@ -2,11 +2,18 @@ import { fireEvent, render, screen, cleanup } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   role: 'ADMIN',
+  closeAllowed: true,
+  accessLoading: false,
+  accessFetching: false,
+  accessError: null as (Error & { data?: { code: string } }) | null,
+  accessRefetch: vi.fn(),
+  accessOptions: vi.fn(),
   loading: false,
   error: null as Error | null,
   close: null as Record<string, unknown> | null,
   mutate: vi.fn(),
   previewInput: vi.fn(),
+  branchInput: vi.fn(),
   /** The zone the workspace has stored. */
   zone: '',
 }));
@@ -36,11 +43,26 @@ vi.mock('@/components/entitlements-provider', () => ({
 vi.mock('@/lib/trpc', () => ({
   trpc: {
     pharmacySales: {
+      closeAccess: {
+        useQuery: (_input: unknown, options: unknown) => {
+          mocks.accessOptions(options);
+          return {
+            data: mocks.closeAllowed ? { allowed: true } : undefined,
+            isLoading: mocks.accessLoading,
+            isFetching: mocks.accessFetching,
+            error: mocks.accessError,
+            refetch: mocks.accessRefetch,
+          };
+        },
+      },
       counterBranches: {
-        useQuery: () => ({
-          data: { branches: [{ id: 'b', name: 'Main' }], timezone: mocks.zone },
-          isSuccess: true,
-        }),
+        useQuery: (input: unknown) => {
+          mocks.branchInput(input);
+          return {
+            data: { branches: [{ id: 'b', name: 'Main' }], timezone: mocks.zone },
+            isSuccess: true,
+          };
+        },
       },
       closePreview: {
         useQuery: (input: unknown) => {
@@ -82,11 +104,18 @@ afterEach(() => {
 beforeEach(() => {
   mocks.zone = WORKSPACE_ZONE;
   mocks.role = 'ADMIN';
+  mocks.closeAllowed = true;
+  mocks.accessLoading = false;
+  mocks.accessFetching = false;
+  mocks.accessError = null;
+  mocks.accessRefetch.mockReset();
+  mocks.accessOptions.mockReset();
   mocks.loading = false;
   mocks.error = null;
   mocks.close = null;
   mocks.mutate.mockReset();
   mocks.previewInput.mockReset();
+  mocks.branchInput.mockReset();
 });
 describe('day-close console', () => {
   it('parses exact cash minor units without rounding an invalid amount', () => {
@@ -146,10 +175,64 @@ describe('day-close console', () => {
       );
     }
   );
-  it('shows permission denial for a non-administrator', () => {
+  it('renders the close controls for a capable non-administrator', () => {
     mocks.role = 'MEMBER';
     render(<PharmacyDayCloseConsole />);
-    expect(screen.getByText(/Sign in as a pharmacy administrator/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Close and lock day' })).toBeInTheDocument();
+    expect(mocks.branchInput).toHaveBeenCalledWith({ forDayClose: true });
+  });
+  it.each(['FORBIDDEN', 'UNAUTHORIZED'])('shows the server-derived %s denial', (code) => {
+    mocks.role = 'MEMBER';
+    mocks.closeAllowed = false;
+    mocks.accessError = Object.assign(new Error('Access refused'), { data: { code } });
+    render(<PharmacyDayCloseConsole />);
+    expect(screen.getByText(/do not have permission/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Close and lock day' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retry access check' })).not.toBeInTheDocument();
+    expect(mocks.branchInput).not.toHaveBeenCalled();
+  });
+  it('shows an access-check loading state without claiming permission was denied', () => {
+    mocks.closeAllowed = false;
+    mocks.accessLoading = true;
+    mocks.accessFetching = true;
+    render(<PharmacyDayCloseConsole />);
+    expect(screen.getByRole('status')).toHaveTextContent('Checking day-close access…');
+    expect(screen.queryByText(/do not have permission/)).not.toBeInTheDocument();
+    expect(mocks.branchInput).not.toHaveBeenCalled();
+  });
+  it.each([undefined, 'INTERNAL_SERVER_ERROR'])(
+    'lets the operator retry a transient access failure (%s) and recover without reloading',
+    (code) => {
+      mocks.closeAllowed = false;
+      mocks.accessError = Object.assign(new Error('Service unavailable'), {
+        data: code ? { code } : undefined,
+      });
+      mocks.accessRefetch.mockImplementation(() => {
+        mocks.accessFetching = true;
+      });
+      const view = render(<PharmacyDayCloseConsole />);
+      expect(screen.getByRole('alert')).toHaveTextContent('Could not check day-close access.');
+      expect(screen.queryByText(/do not have permission/)).not.toBeInTheDocument();
+      expect(mocks.branchInput).not.toHaveBeenCalled();
+      // Leave retryQuery in the application's provider in control of transient retries.
+      expect(mocks.accessOptions).toHaveBeenLastCalledWith({ enabled: true });
+      fireEvent.click(screen.getByRole('button', { name: 'Retry access check' }));
+      expect(mocks.accessRefetch).toHaveBeenCalledOnce();
+      view.rerender(<PharmacyDayCloseConsole />);
+      expect(screen.getByRole('button', { name: 'Checking day-close access…' })).toBeDisabled();
+      mocks.accessFetching = false;
+      mocks.accessError = null;
+      mocks.closeAllowed = true;
+      view.rerender(<PharmacyDayCloseConsole />);
+      expect(screen.getByRole('button', { name: 'Close and lock day' })).toBeInTheDocument();
+    }
+  );
+  it('hides close controls when a refetch denies previously granted access', () => {
+    const view = render(<PharmacyDayCloseConsole />);
+    expect(screen.getByRole('button', { name: 'Close and lock day' })).toBeInTheDocument();
+    mocks.accessError = Object.assign(new Error('Access refused'), { data: { code: 'FORBIDDEN' } });
+    view.rerender(<PharmacyDayCloseConsole />);
+    expect(screen.getByText(/do not have permission/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Close and lock day' })).not.toBeInTheDocument();
   });
   it('shows loading and retryable errors', () => {

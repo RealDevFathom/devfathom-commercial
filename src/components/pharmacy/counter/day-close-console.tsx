@@ -44,20 +44,39 @@ export function PharmacyDayCloseConsole() {
   const { data: session, status } = useSession();
   const entitlements = useEntitlements();
   const user = session?.user;
-  if (
+  const sessionIneligible =
     status !== 'authenticated' ||
     !evaluateSessionUser(user).ok ||
-    user?.role !== 'ADMIN' ||
-    user.organizationId !== entitlements.organizationId ||
-    !isModuleGranted('pharmacy-counter', entitlements.enabledModules)
-  ) {
+    user?.organizationId !== entitlements.organizationId ||
+    !isModuleGranted('pharmacy-counter', entitlements.enabledModules);
+  const access = trpc.pharmacySales.closeAccess.useQuery(undefined, {
+    enabled: !sessionIneligible,
+  });
+  const checking = status === 'loading' || (!sessionIneligible && access.isFetching);
+  const accessDenied =
+    access.error?.data?.code === 'FORBIDDEN' || access.error?.data?.code === 'UNAUTHORIZED';
+  if (sessionIneligible || access.isLoading || access.error || !access.data?.allowed) {
     return (
       <SectionCard title="Day close unavailable">
-        <p role="status">
-          {status === 'loading'
-            ? 'Checking day-close access…'
-            : 'Sign in as a pharmacy administrator to reconcile and close a day.'}
-        </p>
+        {!sessionIneligible && access.error && !accessDenied ? (
+          <div className="space-y-3">
+            <p role="alert">Could not check day-close access. Please try again.</p>
+            <Button
+              className="min-h-11"
+              variant="outline"
+              disabled={access.isFetching}
+              onClick={() => void access.refetch()}
+            >
+              {checking ? 'Checking day-close access…' : 'Retry access check'}
+            </Button>
+          </div>
+        ) : (
+          <p role="status">
+            {checking || (!sessionIneligible && access.isLoading)
+              ? 'Checking day-close access…'
+              : 'You do not have permission to reconcile and close a day.'}
+          </p>
+        )}
       </SectionCard>
     );
   }
@@ -65,7 +84,7 @@ export function PharmacyDayCloseConsole() {
 }
 
 function DayCloseBranches() {
-  const branches = trpc.pharmacySales.counterBranches.useQuery();
+  const branches = trpc.pharmacySales.counterBranches.useQuery({ forDayClose: true });
   const [selected, setSelected] = useState('');
   const [picked, setPicked] = useState<string | null>(null);
   const timeZone = branches.data?.timezone;

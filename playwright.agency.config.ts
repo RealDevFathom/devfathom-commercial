@@ -4,7 +4,9 @@ import { agencyE2eEnvironment } from './scripts/agency-e2e-environment';
 
 const env = agencyE2eEnvironment();
 const port = Number(process.env.PLAYWRIGHT_PORT ?? 4327);
-const baseURL = `http://127.0.0.1:${port}`;
+// Use the configured platform base domain so the workspace-selection session
+// cookie is sent on the navigation that follows login.
+const baseURL = `http://localhost:${port}`;
 
 export default defineConfig({
   testDir: './tests/agency-e2e',
@@ -33,7 +35,7 @@ export default defineConfig({
       TEST_DATABASE_URL: env.TEST_DATABASE_URL!,
       AGENCY_E2E: '1',
       AUTH_TRUST_HOST: 'true',
-      SHARED_APP_HOSTS: '127.0.0.1',
+      SHARED_APP_HOSTS: 'localhost',
     },
   },
 });

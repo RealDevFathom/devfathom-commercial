@@ -488,7 +488,32 @@ async function requireCloseAccess(ctx: TRPCContext) {
     });
 }
 
+async function closeScope(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
+  const scope = await scopeFor(ctx, branch);
+  const user = ctx.session!.user;
+  if (user.organizationId === scope.organizationId) {
+    // Preserve organization administrators' access to every active branch.
+    if (user.role === 'ADMIN') return scope;
+    const assignment = await ctx.db.pharmacyBranchAssignment.findFirst({
+      where: {
+        organizationId: scope.organizationId,
+        branchId: branch,
+        userId: user.id,
+        active: true,
+        branch: { organizationId: scope.organizationId, active: true },
+      },
+      select: { id: true },
+    });
+    if (assignment) return scope;
+  }
+  throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+}
+
 export const pharmacySalesRouter = router({
+  closeAccess: protectedProcedure.query(async ({ ctx }) => {
+    await requireCloseAccess(ctx);
+    return { allowed: true as const };
+  }),
   sandboxPayment: adminProcedure.input(sandboxPaymentInput).mutation(async ({ ctx, input }) => {
     annotateAudit(ctx, { skipInput: true });
     try {
@@ -569,8 +594,9 @@ export const pharmacySalesRouter = router({
     .query(async ({ ctx, input }) => {
       await requireCloseAccess(ctx);
       try {
+        const scope = await closeScope(ctx, input.branchId);
         return await ctx.db.$transaction(async (tx) =>
-          readPharmacyClose(txDb(tx), await scopeFor(ctx, input.branchId), input.businessDate)
+          readPharmacyClose(txDb(tx), scope, input.businessDate)
         );
       } catch (error) {
         fail(error);
@@ -600,9 +626,8 @@ export const pharmacySalesRouter = router({
     .mutation(async ({ ctx, input }) => {
       await requireCloseAccess(ctx);
       try {
-        return await ctx.db.$transaction(async (tx) =>
-          closePharmacyDay(txDb(tx), await scopeFor(ctx, input.branchId), input)
-        );
+        const scope = await closeScope(ctx, input.branchId);
+        return await ctx.db.$transaction(async (tx) => closePharmacyDay(txDb(tx), scope, input));
       } catch (error) {
         fail(error);
       }
@@ -765,8 +790,9 @@ export const pharmacySalesRouter = router({
     .mutation(async ({ ctx, input }) => {
       await requireCloseAccess(ctx);
       try {
+        const scope = await closeScope(ctx, input.branchId);
         return await ctx.db.$transaction(async (tx) =>
-          cutPharmacyDailyClose(txDb(tx), await scopeFor(ctx, input.branchId), input)
+          cutPharmacyDailyClose(txDb(tx), scope, input)
         );
       } catch (error) {
         fail(error);
@@ -1585,29 +1611,50 @@ export const pharmacySalesRouter = router({
   // ── PH-POS counter reads (POS-01, POS-02, POS-08) ─────────────────────────
 
   /** The branches this counter may open a bill against, with the money format. */
-  counterBranches: protectedProcedure.query(async ({ ctx }) => {
-    const organizationId = ctx.entitlements?.organizationId;
-    if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
-    const [branches, organization] = await Promise.all([
-      ctx.db.pharmacyBranch.findMany({
-        where: { organizationId, active: true },
-        select: { id: true, code: true, name: true, city: true },
-        orderBy: [{ name: 'asc' }, { id: 'asc' }],
-      }),
-      ctx.db.organization.findUnique({
-        where: { id: organizationId },
-        select: { currency: true, timezone: true },
-      }),
-    ]);
-    return {
-      branches,
-      currency: organization?.currency ?? 'PKR',
-      // The workspace's zone: the day close picks "today" in it before any
-      // close has been read. A stored value Intl refuses is handed over as UTC.
-      timezone: workspaceTimezone(organization?.timezone),
-      paymentSandboxAvailable: ctx.session.user.role === 'ADMIN' && paymentSandboxAdmitted(),
-    };
-  }),
+  counterBranches: protectedProcedure
+    .input(
+      z
+        .object({ forDayClose: z.literal(true) })
+        .strict()
+        .optional()
+    )
+    .query(async ({ ctx, input }) => {
+      if (input?.forDayClose) await requireCloseAccess(ctx);
+      const organizationId = ctx.entitlements?.organizationId;
+      if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+      if (input?.forDayClose && ctx.session.user.organizationId !== organizationId) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+      }
+      const [branches, organization] = await Promise.all([
+        ctx.db.pharmacyBranch.findMany({
+          where: {
+            organizationId,
+            active: true,
+            ...(input?.forDayClose && ctx.session.user.role !== 'ADMIN'
+              ? {
+                  branchAssignments: {
+                    some: { organizationId, userId: ctx.session.user.id, active: true },
+                  },
+                }
+              : {}),
+          },
+          select: { id: true, code: true, name: true, city: true },
+          orderBy: [{ name: 'asc' }, { id: 'asc' }],
+        }),
+        ctx.db.organization.findUnique({
+          where: { id: organizationId },
+          select: { currency: true, timezone: true },
+        }),
+      ]);
+      return {
+        branches,
+        currency: organization?.currency ?? 'PKR',
+        // The workspace's zone: the day close picks "today" in it before any
+        // close has been read. A stored value Intl refuses is handed over as UTC.
+        timezone: workspaceTimezone(organization?.timezone),
+        paymentSandboxAvailable: ctx.session.user.role === 'ADMIN' && paymentSandboxAdmitted(),
+      };
+    }),
 
   /** POS-02: one search across brand, generic, ingredient, form, barcode and alias. */
   counterSearch: protectedProcedure
