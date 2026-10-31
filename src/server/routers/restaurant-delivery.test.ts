@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   createDeliveryZone: vi.fn(),
   updateDeliveryZone: vi.fn(),
   deactivateDeliveryZone: vi.fn(),
+  reactivateDeliveryZone: vi.fn(),
   listDeliveryAddresses: vi.fn(),
   createDeliveryAddress: vi.fn(),
   updateDeliveryAddress: vi.fn(),
@@ -66,6 +67,7 @@ vi.mock('@/lib/restaurant/delivery', async () => {
     createDeliveryZone: mocks.createDeliveryZone,
     updateDeliveryZone: mocks.updateDeliveryZone,
     deactivateDeliveryZone: mocks.deactivateDeliveryZone,
+    reactivateDeliveryZone: mocks.reactivateDeliveryZone,
     listDeliveryAddresses: mocks.listDeliveryAddresses,
     createDeliveryAddress: mocks.createDeliveryAddress,
     updateDeliveryAddress: mocks.updateDeliveryAddress,
@@ -140,6 +142,7 @@ beforeEach(() => {
   mocks.createDeliveryZone.mockResolvedValue(zone);
   mocks.updateDeliveryZone.mockResolvedValue(zone);
   mocks.deactivateDeliveryZone.mockResolvedValue(undefined);
+  mocks.reactivateDeliveryZone.mockResolvedValue(undefined);
   mocks.listDeliveryAddresses.mockResolvedValue([address]);
   mocks.createDeliveryAddress.mockResolvedValue(address);
   mocks.updateDeliveryAddress.mockResolvedValue(address);
@@ -171,6 +174,7 @@ describe('authorization and server-owned scope', () => {
     await api.createZone(zoneInput);
     await api.updateZone({ ...zoneInput, zoneId: 'zone_1' });
     await api.deactivateZone({ branchId: 'branch_1', zoneId: 'zone_1' });
+    await api.reactivateZone({ branchId: 'branch_1', zoneId: 'zone_1' });
     await api.listAddresses({ customerId: 'customer_1' });
     await api.createAddress(addressInput);
     await api.updateAddress({ ...addressInput, addressId: 'address_1' });
@@ -185,13 +189,28 @@ describe('authorization and server-owned scope', () => {
 
     expect(mocks.can.mock.calls.map((call) => call[1])).toEqual([
       'customers:read',
-      ...Array(4).fill('restaurant:configure'),
+      ...Array(5).fill('restaurant:configure'),
       'customers:read',
       ...Array(4).fill('customers:manage'),
     ]);
-    expect(mocks.requireBranchScope).toHaveBeenCalledTimes(4);
+    expect(mocks.requireBranchScope).toHaveBeenCalledTimes(5);
     expect(mocks.requireBranchScope.mock.calls.map((call) => call[1])).toEqual(
-      Array(4).fill('branch_1')
+      Array(5).fill('branch_1')
+    );
+  });
+
+  it('reactivates only through server-owned tenant and branch scope', async () => {
+    await caller().reactivateZone({ branchId: 'branch_1', zoneId: 'zone_1' });
+
+    expect(mocks.requireBranchScope).toHaveBeenCalledWith(expect.anything(), 'branch_1');
+    expect(mocks.reactivateDeliveryZone).toHaveBeenCalledWith(db, {
+      organizationId: 'organization_server',
+      branchId: 'branch_1',
+      zoneId: 'zone_1',
+    });
+    expect(mocks.annotateAudit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ targetType: 'RestaurantDeliveryZone', targetId: 'zone_1' })
     );
   });
 
