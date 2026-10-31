@@ -64,6 +64,20 @@ describe('POST /api/v1/tasks/:id/comments', () => {
     expect(mocks.taskComment.create).not.toHaveBeenCalled();
   });
 
+  it('rejects an empty parent ID instead of writing it without validation', async () => {
+    mocks.taskComment.findFirst.mockResolvedValue(null);
+
+    const { response, body } = await post('');
+
+    expect(response.status).toBe(400);
+    expect(body).toEqual({ error: 'Parent comment not found on this task' });
+    expect(mocks.taskComment.findFirst).toHaveBeenCalledWith({
+      where: { id: '', taskId: 'task-1' },
+      select: { id: true },
+    });
+    expect(mocks.taskComment.create).not.toHaveBeenCalled();
+  });
+
   it('does not look up the parent before authorizing access to the URL task', async () => {
     mocks.canAccessProject.mockResolvedValue(false);
 
