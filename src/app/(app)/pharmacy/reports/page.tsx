@@ -200,13 +200,34 @@ export default async function PharmacyReportsPage({
   const anomalyMessage = value(query.anomaly);
   const advisorMessage = value(query.advisor);
   const authenticationMessage = value(query.authentication);
+  // Staffing assumptions are carried through report actions so a refresh or redirect never
+  // silently reverts a user's chosen capacity/minimum to the defaults.
+  const staffingAssumptions = {
+    receiptsPerStaffHour:
+      value(query.receiptsPerStaffHour) === undefined ? undefined : String(receiptsPerStaffHour),
+    minimumSuggestedStaff:
+      value(query.minimumSuggestedStaff) === undefined ? undefined : String(minimumSuggestedStaff),
+  };
   const returnQuery = new URLSearchParams(
-    Object.entries({ branch, supplier, ingredient, batch, from, to }).filter(
-      (entry): entry is [string, string] => typeof entry[1] === 'string'
-    )
+    Object.entries({
+      branch,
+      supplier,
+      ingredient,
+      batch,
+      from,
+      to,
+      ...staffingAssumptions,
+    }).filter((entry): entry is [string, string] => typeof entry[1] === 'string')
   );
   const followUpQuery = new URLSearchParams(returnQuery);
-  for (const filter of ['supplier', 'ingredient', 'batch']) followUpQuery.delete(filter);
+  for (const filter of [
+    'supplier',
+    'ingredient',
+    'batch',
+    'receiptsPerStaffHour',
+    'minimumSuggestedStaff',
+  ])
+    followUpQuery.delete(filter);
   const workPackScopeValid =
     !invalidRange &&
     ![query.branch, query.from, query.to].some(Array.isArray) &&
