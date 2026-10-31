@@ -100,7 +100,9 @@ beforeEach(() => {
       : null
   );
   findBill.mockImplementation(async ({ where }) =>
-    where.id === receipt?.id && where.branchId === receipt?.branchId && where.status === 'SETTLED'
+    where.id === receipt?.id &&
+    where.branchId === receipt?.branchId &&
+    (where.status === undefined || where.status === 'SETTLED')
       ? receipt
       : null
   );
@@ -120,6 +122,10 @@ beforeEach(() => {
       restaurantBranch: { findFirst: findLayout },
       restaurantStaffProfile: {
         findUnique: async () => ({
+          status: 'ACTIVE',
+          primaryBranchId: 'branch-1',
+          jobRoles: [],
+          directCapabilityGrants: [],
           user: {
             permissionOverrides: [],
             organizationRole: {
@@ -128,6 +134,8 @@ beforeEach(() => {
           },
         }),
       },
+      restaurantStaffJobRole: { findMany: async () => [] },
+      restaurantStaffCapabilityGrant: { findMany: async () => [] },
       restaurantPrintRoute: {
         findFirst: async () => (configured ? { printerId: 'queue:///Receipt' } : null),
       },
@@ -383,12 +391,29 @@ describe('Restaurant receipt dispatch', () => {
     expect(mocks.event).not.toHaveBeenCalled();
   });
   it('rejects cross-branch and missing/unsettled bills before queue access', async () => {
-    mocks.ctx.device.branchId = 'other-branch';
+    receipt!.branchId = 'other-branch';
     expect((await post()).status).toBe(404);
     receipt = null;
     expect((await post()).status).toBe(404);
     expect(lock).not.toHaveBeenCalled();
     expect(createJob).not.toHaveBeenCalled();
+  });
+  it('does not disclose bill existence before the payment capability gate', async () => {
+    allowed = false;
+    const existing = await post({ billId: 'bill-1', action: 'print' });
+    const missing = await post({ billId: 'missing-bill', action: 'print' }, 'missing-key');
+    expect(existing.status).toBe(403);
+    expect(missing.status).toBe(403);
+    expect(await existing.json()).toEqual(await missing.json());
+    expect(findBill).not.toHaveBeenCalled();
+  });
+  it('returns the same not-found response for foreign and nonexistent bills after authorization', async () => {
+    receipt!.branchId = 'other-branch';
+    const foreign = await post({ billId: 'bill-1', action: 'print' });
+    const missing = await post({ billId: 'missing-bill', action: 'print' }, 'missing-key');
+    expect(foreign.status).toBe(404);
+    expect(missing.status).toBe(404);
+    expect(await foreign.json()).toEqual(await missing.json());
   });
   it('requires an unlocked operator, payment capability, and POS register', async () => {
     mocks.ctx.state = 'LOCKED';

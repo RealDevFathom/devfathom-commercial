@@ -23,6 +23,7 @@ vi.mock('@/lib/pharmacy/customer-loyalty', async (importOriginal) => ({
 }));
 
 import { PharmacySaleBatchError } from '@/lib/pharmacy/sale-batch-safety';
+import { PharmacyLoyaltyError } from '@/lib/pharmacy/customer-loyalty';
 import { router, type TRPCContext } from '../trpc';
 import { pharmacySalesRouter } from './pharmacy-sales';
 
@@ -42,7 +43,7 @@ function caller(granted = true) {
     user: {
       findUnique: vi.fn(async () => ({
         organizationRole: {
-          permissions: granted ? [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }] : [],
+          permissions: [{ capability: 'pharmacy:dispense', effect: granted ? 'ALLOW' : 'DENY' }],
         },
         permissionOverrides: [],
       })),
@@ -65,7 +66,27 @@ function caller(granted = true) {
 beforeEach(() => loyalty.redeemSalePoints.mockReset());
 
 describe('#633 batch refusal at tender', () => {
-  it('forbids loyalty redemption when the session has no dispense grant', async () => {
+  it('keeps missing loyalty consent as a forbidden redemption', async () => {
+    loyalty.redeemSalePoints.mockRejectedValueOnce(
+      new PharmacyLoyaltyError('LOYALTY_CONSENT_REQUIRED')
+    );
+
+    await expect(
+      caller().redeemPoints({
+        branchId: BRANCH,
+        saleId: 'sale-1',
+        points: 200,
+        deviceId: 'device-1',
+        businessDate: new Date('2026-10-22T00:00:00.000Z'),
+        idempotencyKey: 'redeem-without-consent',
+      })
+    ).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'LOYALTY_CONSENT_REQUIRED',
+    });
+  });
+
+  it('forbids loyalty redemption when an active branch user is denied dispense', async () => {
     await expect(
       caller(false).redeemPoints({
         branchId: BRANCH,
