@@ -9,9 +9,11 @@
  */
 import { randomBytes } from 'node:crypto';
 
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { Prisma } from '@/generated/prisma/client';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { listPurchaseOrders } from './purchasing';
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
@@ -546,6 +548,83 @@ describeIfDatabase('M6 purchasing — supplier returns', () => {
       )
     ).rejects.toMatchObject({ name: 'PurchasingError', reason: 'INVALID' });
   }, 30_000);
+});
+
+describe('M6 purchasing — branch scope query', () => {
+  it.each([{ branchIds: ['primary', 'assigned'] }, { branchIds: [] }])(
+    'applies the authorized branch set before pagination ($branchIds)',
+    async ({ branchIds }) => {
+      const findMany = vi.fn().mockResolvedValue([]);
+      const db = { restaurantPurchaseOrder: { findMany } } as unknown as ScopedDb;
+
+      await listPurchaseOrders(db, { branchIds, branchId: 'other', limit: 2, cursor: 'previous' });
+
+      expect(findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            branchId: 'other',
+            AND: [{ branchId: { in: branchIds } }],
+          }),
+          take: 3,
+          cursor: { id: 'previous' },
+          skip: 1,
+        })
+      );
+    }
+  );
+});
+
+describeIfDatabase('M6 purchasing — branch-scoped pagination', () => {
+  it('fills pages from authorized branches while excluding other branches and empty scopes', async () => {
+    await deps.withTenantDb(orgId, async (tx) => {
+      const assignedBranch = `branch_list_assigned_${suffix}`;
+      const otherBranch = `branch_list_other_${suffix}`;
+      await tx.restaurantBranch.createMany({
+        data: [
+          { id: assignedBranch, name: 'Assigned purchasing branch' },
+          { id: otherBranch, name: 'Other purchasing branch' },
+        ],
+      });
+      const supplier = await tx.restaurantSupplier.create({
+        data: { name: 'Pagination supplier' },
+      });
+      const branches = [ids.branch, otherBranch, assignedBranch, otherBranch, ids.branch];
+      const orderIds = branches.map((_, index) => `po_list_${index}_${suffix}`);
+      await tx.restaurantPurchaseOrder.createMany({
+        data: branches.map((branchId, index) => ({
+          id: orderIds[index]!,
+          branchId,
+          supplierId: supplier.id,
+          createdAt: new Date(Date.UTC(2026, 0, 1, 0, 0, index)),
+        })),
+      });
+
+      const input = { branchIds: [ids.branch, assignedBranch], supplierId: supplier.id, limit: 2 };
+      const first = await deps.purchasing.listPurchaseOrders(tx, input);
+      expect(first.orders.map(({ id }) => id)).toEqual([orderIds[4], orderIds[2]]);
+      expect(first.nextCursor).toBe(orderIds[2]);
+      const second = await deps.purchasing.listPurchaseOrders(tx, {
+        ...input,
+        cursor: first.nextCursor!,
+      });
+      expect(second.orders.map(({ id }) => id)).toEqual([orderIds[0]]);
+      expect(second.nextCursor).toBeNull();
+
+      await expect(
+        deps.purchasing.listPurchaseOrders(tx, { ...input, branchIds: [] })
+      ).resolves.toEqual({ orders: [], nextCursor: null });
+      await expect(
+        deps.purchasing.listPurchaseOrders(tx, { ...input, branchId: otherBranch })
+      ).resolves.toEqual({ orders: [], nextCursor: null });
+
+      const allBranches = await deps.purchasing.listPurchaseOrders(tx, {
+        ...input,
+        branchIds: [...input.branchIds, otherBranch],
+        limit: 10,
+      });
+      expect(allBranches.orders.map(({ id }) => id)).toEqual([...orderIds].reverse());
+    });
+  });
 });
 
 describeIfDatabase('M6 purchasing — cross-org isolation (RLS)', () => {

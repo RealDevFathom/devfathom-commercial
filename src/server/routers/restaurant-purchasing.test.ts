@@ -48,6 +48,7 @@ const mocks = vi.hoisted(() => {
     getPurchaseReceipt: fn(),
     findStaffProfiles: fn(),
     findBranchAssignments: fn(),
+    findBranches: fn(),
     findPurchaseOrder: fn(),
     findPurchaseReceipt: fn(),
     findStockLocation: fn(),
@@ -103,11 +104,7 @@ function caller() {
     db: {
       restaurantStaffProfile: { findMany: mocks.findStaffProfiles },
       restaurantBranchAssignment: { findMany: mocks.findBranchAssignments },
-      restaurantBranch: {
-        findMany: vi.fn(async ({ where }: { where?: { id?: { in?: string[] } } }) =>
-          (where?.id?.in ?? []).map((id) => ({ id }))
-        ),
-      },
+      restaurantBranch: { findMany: mocks.findBranches },
       restaurantPurchaseOrder: { findUnique: mocks.findPurchaseOrder },
       restaurantPurchaseReceipt: { findUnique: mocks.findPurchaseReceipt },
       restaurantStockLocation: { findUnique: mocks.findStockLocation },
@@ -143,6 +140,11 @@ beforeEach(() => {
   mocks.can.mockResolvedValue(true);
   mocks.findStaffProfiles.mockResolvedValue([{ id: 'staff_server', primaryBranchId: 'b1' }]);
   mocks.findBranchAssignments.mockResolvedValue([]);
+  mocks.findBranches
+    .mockReset()
+    .mockImplementation(async ({ where }: { where?: { id?: { in?: string[] } } }) =>
+      (where?.id?.in ?? ['b1']).map((id) => ({ id }))
+    );
   mocks.findPurchaseOrder.mockResolvedValue({ branchId: 'b1', locationId: 'loc1' });
   mocks.findPurchaseReceipt.mockResolvedValue({ branchId: 'b1' });
   mocks.findStockLocation.mockResolvedValue({ branchId: 'b1' });
@@ -248,6 +250,107 @@ describe('Decimal-as-string serialization (D07)', () => {
 });
 
 describe('actor + idempotency plumbing', () => {
+  it('filters unscoped lists before querying orders and preserves pagination filters', async () => {
+    mocks.can.mockImplementation(async (_subject, action) => action !== 'restaurant:configure');
+    mocks.findBranches.mockResolvedValueOnce([{ id: 'b1' }, { id: 'b3' }]);
+    mocks.listPurchaseOrders.mockResolvedValueOnce({
+      orders: [{ ...minimalOrder(), lineCount: 0, receiptCount: 0 }],
+      nextCursor: 'po1',
+    });
+    mocks.findBranchAssignments.mockResolvedValue([{ branchId: 'b3' }]);
+
+    const result = await caller().listPurchaseOrders({
+      limit: 1,
+      cursor: 'previous',
+      supplierId: 's1',
+      status: 'APPROVED',
+    });
+
+    expect(result.orders.map(({ id }) => id)).toEqual(['po1']);
+    expect(result.nextCursor).toBe('po1');
+    expect(mocks.findBranches).toHaveBeenCalledWith({
+      where: {
+        organizationId: 'org_1',
+        active: true,
+        OR: [
+          { staffProfiles: { some: { id: 'staff_server' } } },
+          { assignments: { some: { userId: 'user_po' } } },
+        ],
+      },
+      select: { id: true },
+    });
+    expect(mocks.listPurchaseOrders).toHaveBeenCalledWith(expect.anything(), {
+      branchIds: ['b1', 'b3'],
+      limit: 1,
+      cursor: 'previous',
+      supplierId: 's1',
+      status: 'APPROVED',
+    });
+  });
+
+  it('limits an all-branch configurator list to active workspace branches', async () => {
+    mocks.findBranches.mockResolvedValueOnce([{ id: 'b1' }, { id: 'b2' }]);
+    mocks.listPurchaseOrders.mockResolvedValueOnce({ orders: [], nextCursor: null });
+
+    await caller().listPurchaseOrders({});
+
+    expect(mocks.findBranches).toHaveBeenCalledWith({
+      where: { organizationId: 'org_1', active: true },
+      select: { id: true },
+    });
+    expect(mocks.listPurchaseOrders).toHaveBeenCalledWith(expect.anything(), {
+      branchIds: ['b1', 'b2'],
+    });
+  });
+
+  it('keeps an empty authorized scope restricted', async () => {
+    mocks.findStaffProfiles.mockResolvedValue([{ id: 'staff_server', primaryBranchId: null }]);
+    mocks.findBranches.mockResolvedValueOnce([]);
+    mocks.can.mockImplementation(async (_subject, action) => action !== 'restaurant:configure');
+    mocks.listPurchaseOrders.mockResolvedValueOnce({ orders: [], nextCursor: null });
+
+    await expect(caller().listPurchaseOrders({})).resolves.toEqual({
+      orders: [],
+      nextCursor: null,
+    });
+    expect(mocks.listPurchaseOrders).toHaveBeenCalledWith(expect.anything(), { branchIds: [] });
+  });
+
+  it('rejects an explicit unassigned branch before listing orders', async () => {
+    mocks.can.mockImplementation(async (_subject, action) => action !== 'restaurant:configure');
+
+    await expect(caller().listPurchaseOrders({ branchId: 'b2' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mocks.listPurchaseOrders).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { profiles: [] },
+    {
+      profiles: [
+        { id: 'staff_one', primaryBranchId: 'b1' },
+        { id: 'staff_two', primaryBranchId: 'b1' },
+      ],
+    },
+  ])(
+    'rejects an unscoped list without one active staff mapping ($profiles)',
+    async ({ profiles }) => {
+      mocks.findStaffProfiles.mockResolvedValue(profiles);
+
+      await expect(caller().listPurchaseOrders({})).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(mocks.listPurchaseOrders).not.toHaveBeenCalled();
+    }
+  );
+
+  it('rejects client-supplied internal branch scope', async () => {
+    await expect(
+      // @ts-expect-error — only the server may supply an authorized branch set
+      caller().listPurchaseOrders({ branchIds: ['b2'] })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mocks.listPurchaseOrders).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['getPurchaseOrder', { purchaseOrderId: 'po1' }, 'getPurchaseOrder'],
     [

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 
 import { Prisma } from '@/generated/prisma/client';
+import { can, subjectFromSession } from '@/lib/abac';
 import { router, capabilityProcedure, type TRPCContext } from '../trpc';
 import { annotateAudit } from '../audit';
 import { resolveRestaurantActor } from '../restaurant-actor';
@@ -129,6 +130,37 @@ async function requirePurchaseOrderActor(ctx: TRPCContext, purchaseOrderId: stri
   return scope;
 }
 
+async function purchaseOrderListBranchIds(ctx: TRPCContext) {
+  const actor = await resolveRestaurantActor(ctx, []);
+  const user = ctx.session!.user;
+  const configuresAllBranches = await can(
+    subjectFromSession(user),
+    'restaurant:configure',
+    undefined,
+    {
+      db: ctx.db,
+      source: 'TRPC',
+      ip: ctx.requestMeta.ip,
+    }
+  );
+  const branches = await ctx.db.restaurantBranch.findMany({
+    where: {
+      organizationId: ctx.entitlements?.organizationId ?? user.organizationId!,
+      active: true,
+      ...(configuresAllBranches
+        ? {}
+        : {
+            OR: [
+              { staffProfiles: { some: { id: actor.staffProfileId } } },
+              { assignments: { some: { userId: user.id } } },
+            ],
+          }),
+    },
+    select: { id: true },
+  });
+  return branches.map(({ id }) => id);
+}
+
 async function requireLocationInBranch(
   ctx: TRPCContext,
   locationId: string,
@@ -228,7 +260,8 @@ export const restaurantPurchasingRouter = router({
     )
     .query(async ({ ctx, input }) => {
       if (input.branchId) await resolveRestaurantActor(ctx, [input.branchId]);
-      const result = await listPurchaseOrders(ctx.db, input);
+      const branchIds = input.branchId ? undefined : await purchaseOrderListBranchIds(ctx);
+      const result = await listPurchaseOrders(ctx.db, { ...input, branchIds });
       if (!input.branchId) {
         await resolveRestaurantActor(
           ctx,
