@@ -325,6 +325,14 @@ export default async function PharmacyReportsPage({
                 Supplier-credit follow-up
               </Link>
             ) : null}
+            {catalog.permissions.owner ? (
+              <Link
+                href={`/pharmacy/reports/branch-comparison?${new URLSearchParams({ from, to })}`}
+                className={buttonVariants({ variant: 'outline', size: 'lg' })}
+              >
+                Compare branches
+              </Link>
+            ) : null}
           </nav>
         }
       />

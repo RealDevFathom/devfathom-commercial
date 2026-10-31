@@ -198,7 +198,10 @@ export default async function PharmacyReceivingPage({
     (selectedReceipt.qualifiedPersonUserId ||
       selectedReceipt.lines.some((line) => line.medicine.controlled))
   );
-  const witnesses = needsWitness ? await caller.controlledWitnesses() : [];
+  const witnesses =
+    needsWitness && selectedReceipt
+      ? await caller.controlledWitnesses({ branchId, goodsReceiptId: selectedReceipt.id })
+      : [];
 
   // ── actions ───────────────────────────────────────────────────────────────
 
