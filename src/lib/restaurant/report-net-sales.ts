@@ -3,15 +3,24 @@ import { sub } from './money';
 
 type CloseSalesComponents = {
   grossSales: Prisma.Decimal;
+  netSales: Prisma.Decimal;
   compTotal: Prisma.Decimal;
   discountTotal: Prisma.Decimal;
   refundTotal: Prisma.Decimal;
 };
 
-/** Current reporting formula, derived from immutable close components.
- * Historical netSales may predate refunds; never subtract from that versioned value.
- * This read boundary leaves the recorded close and its tender/ledger totals intact.
+/**
+ * Read net sales across both immutable close formulas.
+ *
+ * Pre-WHA-1621 closes omitted refunds from their stored netSales. That legacy
+ * value is identifiable because it is exactly gross less comps and discounts.
+ * Newer closes store the component-aware value and remain authoritative (their
+ * refundTotal can also contain refunded tax/service charges).
  */
 export function reportNetSales(close: CloseSalesComponents): Prisma.Decimal {
-  return sub(sub(sub(close.grossSales, close.compTotal), close.discountTotal), close.refundTotal);
+  const legacyNetSales = sub(sub(close.grossSales, close.compTotal), close.discountTotal);
+  if (!close.refundTotal.isZero() && close.netSales.equals(legacyNetSales)) {
+    return sub(legacyNetSales, close.refundTotal);
+  }
+  return close.netSales;
 }

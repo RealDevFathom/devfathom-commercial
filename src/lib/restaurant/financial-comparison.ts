@@ -13,17 +13,18 @@ import {
 const definitions = {
   grossSales: 'Settled bill subtotals before comps and discounts, on bill business date.',
   netSales:
-    'Settled grossSales minus compTotal minus discountTotal minus refundTotal. Excludes tax, service charges, tips and delivery fees; not profit or cash.',
+    'Authoritative daily-close sales after comps, discounts and refunded pre-tax sales principal. Excludes tax, service charges, tips and delivery fees; not profit or cash.',
   discountTotal: 'Discounts on settled bills, on bill business date.',
   compTotal: 'Comps on settled bills, on bill business date.',
   refundTotal:
-    'Refund principal on processing business date, potentially for earlier sales; includes components not allocated by this reader. Already deducted from netSales.',
-  taxTotal: 'Tax on settled bills, before refunds, on bill business date.',
-  serviceChargeTotal: 'Service charges on settled bills, before refunds, on bill business date.',
+    'Refund amount excluding delivery fees on processing business date, potentially for earlier sales; only its pre-tax sales principal is deducted from netSales.',
+  taxTotal: 'Tax on settled bills minus refunded tax on processing business date.',
+  serviceChargeTotal:
+    'Service charges on settled bills minus refunded service charges on processing business date.',
   tipTotal: 'Tender tips on collection business date; not sales or net of tip refunds.',
   deliveryFeeSales: 'Delivery fees on settled bills, on bill business date.',
   deliveryFeeRefunds:
-    'Delivery fee refunds on processing business date; a component of refundTotal.',
+    'Delivery fee refunds on processing business date; reported separately from refundTotal.',
   voidTotal: 'Voided bill grand totals; excluded from settled sales, not realized loss.',
   cashExpected: 'Drawer ledger expected cash on drawer business date; not sales or profit.',
   cashCounted:

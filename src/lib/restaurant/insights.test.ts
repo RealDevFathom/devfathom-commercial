@@ -36,6 +36,7 @@ const dailyRow = {
   updatedAt: computedAt,
   branch: { name: 'Main', timezone: 'Asia/Karachi' },
   sourceDailyClose: {
+    netSales: D('120.25'),
     grossSales: D('125.50'),
     compTotal: D('5.25'),
     discountTotal: D('0'),
@@ -152,6 +153,7 @@ it.each(['7', '4'])(
       ...dailyRow,
       netSales: D(stored),
       sourceDailyClose: {
+        netSales: D('4'),
         grossSales: D('10'),
         compTotal: D('2'),
         discountTotal: D('1'),
@@ -176,7 +178,13 @@ it.each(['7', '4'])(
       expect.objectContaining({
         select: expect.objectContaining({
           sourceDailyClose: expect.objectContaining({
-            select: expect.objectContaining({ discountTotal: true, refundTotal: true }),
+            select: expect.objectContaining({
+              grossSales: true,
+              netSales: true,
+              compTotal: true,
+              discountTotal: true,
+              refundTotal: true,
+            }),
           }),
         }),
       })

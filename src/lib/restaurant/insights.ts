@@ -59,6 +59,7 @@ const DAILY_SELECT = {
   sourceDailyClose: {
     select: {
       grossSales: true,
+      netSales: true,
       compTotal: true,
       discountTotal: true,
       refundTotal: true,
@@ -110,6 +111,7 @@ type DailyRow = {
   branch: { name: string; timezone: string };
   sourceDailyClose: {
     grossSales: Prisma.Decimal;
+    netSales: Prisma.Decimal;
     compTotal: Prisma.Decimal;
     discountTotal: Prisma.Decimal;
     refundTotal: Prisma.Decimal;
@@ -189,7 +191,7 @@ function serializeDaily(
     ...(kind === 'financial'
       ? {
           grossSales: row.grossSales.toString(),
-          // Read the source components even for cached pre-v4 projections.
+          // Normalize the immutable source close even for cached pre-v4 projections.
           netSales: reportNetSales(row.sourceDailyClose).toString(),
           deliveryFeeSales: row.deliveryFeeSales.toString(),
           deliveryFeeRefunds: row.deliveryFeeRefunds.toString(),
