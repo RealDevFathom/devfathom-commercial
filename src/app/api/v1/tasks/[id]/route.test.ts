@@ -29,6 +29,9 @@ const mocks = vi.hoisted(() => {
     },
     taskAssignee,
     projectMember: {
+      count: vi.fn(
+        async ({ where }: { where: { userId: { in: string[] } } }) => where.userId.in.length
+      ),
       findMany: vi.fn(async () => [{ userId: 'destination-member' }]),
     },
   };
@@ -96,6 +99,54 @@ describe('PATCH /api/v1/tasks/:id cross-project moves', () => {
     expect(mocks.taskAssignee.createMany).toHaveBeenLastCalledWith({
       data: [{ taskId: 'task-1', userId: 'destination-member' }],
       skipDuplicates: true,
+    });
+  });
+});
+
+describe('PATCH /api/v1/tasks/:id assignees', () => {
+  it.each([
+    { field: 'assigneeIds', ids: ['project-member', 'outside-user'] },
+    { field: 'addAssigneeIds', ids: ['outside-user'] },
+  ])('rejects non-project members supplied through $field', async ({ field, ids }) => {
+    mocks.db.projectMember.count.mockResolvedValueOnce(ids.length - 1);
+
+    const response = await PATCH(
+      new Request('https://example.test/api/v1/tasks/task-1', {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ [field]: ids }),
+      }),
+      { params: Promise.resolve({ id: 'task-1' }) }
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: 'All assignees must be members of the project.',
+    });
+    expect(mocks.db.projectMember.count).toHaveBeenCalledWith({
+      where: { projectId: 'source-project', userId: { in: ids } },
+    });
+    expect(mocks.taskAssignee.deleteMany).not.toHaveBeenCalled();
+    expect(mocks.taskAssignee.createMany).not.toHaveBeenCalled();
+    expect(mocks.db.task.update).not.toHaveBeenCalled();
+  });
+
+  it('deduplicates replacement assignees before validation and insertion', async () => {
+    const response = await PATCH(
+      new Request('https://example.test/api/v1/tasks/task-1', {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ assigneeIds: ['project-member', 'project-member'] }),
+      }),
+      { params: Promise.resolve({ id: 'task-1' }) }
+    );
+
+    expect(response.status).toBe(200);
+    expect(mocks.db.projectMember.count).toHaveBeenCalledWith({
+      where: { projectId: 'source-project', userId: { in: ['project-member'] } },
+    });
+    expect(mocks.taskAssignee.createMany).toHaveBeenCalledWith({
+      data: [{ taskId: 'task-1', userId: 'project-member' }],
     });
   });
 });

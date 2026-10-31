@@ -166,7 +166,12 @@ function assign(f: ReturnType<typeof fixture>, branchIds: string[]) {
   );
 }
 
-const reads = () => [readCounterReceipt, readPharmacyReceiptFormat, readDispensingLabelSources];
+const reads = () => [
+  readCounterReceipt,
+  readPharmacyReceiptFormat,
+  readPharmacyReceiptTaxIdentity,
+  readDispensingLabelSources,
+];
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -220,6 +225,26 @@ const paths: {
 ];
 
 describe('counter receipt authorization', () => {
+  it('supplies the regulatory identity effective at completion to browser receipt callers', async () => {
+    const f = fixture(dispense);
+    assign(f, ['branch-a']);
+    vi.mocked(readPharmacyReceiptTaxIdentity).mockResolvedValue({
+      ntn: 'HISTORICAL-NTN',
+      strn: 'HISTORICAL-STRN',
+    });
+
+    await expect(
+      f.caller().counterReceipt({ branchId: 'branch-a', saleId: 'sale-a' })
+    ).resolves.toMatchObject({
+      taxIdentity: { ntn: 'HISTORICAL-NTN', strn: 'HISTORICAL-STRN' },
+    });
+    expect(readPharmacyReceiptTaxIdentity).toHaveBeenCalledWith(
+      f.db,
+      expect.objectContaining({ organizationId: 'org-a', branchId: 'branch-a' }),
+      new Date('2026-10-01T00:00:00.000Z')
+    );
+  });
+
   it('supplies the completion-time regulatory identity to browser receipts', async () => {
     const f = fixture(dispense);
     assign(f, ['branch-a']);
@@ -520,9 +545,10 @@ describe('counter receipt authorization', () => {
   });
 
   it.each(['*', 'pharmacy:*', 'pharmacy:counter'])(
-    'keeps Khata tender with %s off the branch-assignment guard',
+    'allows Khata tender with %s on the assigned branch',
     async (capability) => {
       const f = fixture([{ capability, effect: 'ALLOW' }]);
+      assign(f, ['branch-a']);
       f.db.$transaction.mockRejectedValue(new Error('khata-reached'));
       await expect(
         f.caller().tender({
@@ -536,10 +562,29 @@ describe('counter receipt authorization', () => {
           idempotencyKey: 'khata-1',
         })
       ).rejects.toThrow('khata-reached');
-      expect(f.db.pharmacyBranchAssignment.findMany).not.toHaveBeenCalled();
+      expect(f.db.pharmacyBranchAssignment.findMany).toHaveBeenCalled();
       expect(applyPharmacyTender).not.toHaveBeenCalled();
     }
   );
+
+  it('denies Khata tender when the cashier has no branch assignment', async () => {
+    const f = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }]);
+    await expect(
+      f.caller().tender({
+        branchId: 'branch-a',
+        saleId: 'sale-a',
+        deviceId: 'device-a',
+        businessDate: new Date('2026-10-01T00:00:00.000Z'),
+        type: 'KHATA',
+        amountMinor: 100,
+        familyAccountId: 'family-1',
+        idempotencyKey: 'khata-1',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+    expect(f.db.pharmacyBranchAssignment.findMany).toHaveBeenCalled();
+    expect(f.db.$transaction).not.toHaveBeenCalled();
+    expect(applyPharmacyTender).not.toHaveBeenCalled();
+  });
 
   it('denies Khata tender with clinical dispense access alone', async () => {
     const f = fixture(dispense);
