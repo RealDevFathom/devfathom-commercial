@@ -1,5 +1,5 @@
 import { Prisma } from '@/generated/prisma/client';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { providerForAnthropicBudget } from './router';
 import {
   calculateAIUsageCost,
@@ -82,4 +82,31 @@ describe('AI model spend', () => {
     expect(persisted.toFixed(6)).toBe('90.000000');
     expect(providerForAnthropicBudget(persisted, new Prisma.Decimal(80))).toBe('bedrock');
   });
+});
+
+const mocks = vi.hoisted(() => ({ withTenantDb: vi.fn(), create: vi.fn() }));
+vi.mock('@/lib/tenancy/scoped-db', () => ({ withTenantDb: mocks.withTenantDb }));
+
+import { recordAIUsage } from './spend';
+
+it('writes usage inside the attributed tenant scope', async () => {
+  mocks.withTenantDb.mockImplementation(async (_organizationId, run) =>
+    run({ aIUsage: { create: mocks.create } })
+  );
+  const usage = {
+    organizationId: 'org-a',
+    branchId: 'branch-a',
+    feature: 'pharmacy.marketing-assistance',
+    provider: 'google',
+    model: 'gemini-test',
+    inputTokens: 12,
+    outputTokens: 7,
+  };
+
+  await recordAIUsage(usage);
+
+  expect(mocks.withTenantDb).toHaveBeenCalledWith('org-a', expect.any(Function), {
+    skipDrain: true,
+  });
+  expect(mocks.create).toHaveBeenCalledWith({ data: usage });
 });

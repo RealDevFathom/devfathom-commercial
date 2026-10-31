@@ -111,8 +111,12 @@ function createConversationTransport(canChat: boolean) {
   let active = true;
   return {
     isActive: () => active,
-    activate: () => { active = true; },
-    deactivate: () => { active = false; },
+    activate: () => {
+      active = true;
+    },
+    deactivate: () => {
+      active = false;
+    },
     transport: new DefaultChatTransport({
       api: '/api/assistant',
       fetch: async (url, options) => {
@@ -464,8 +468,12 @@ function ToolPart({
   // Read tools start with a read verb; everything else changes data (and is
   // approval-gated). Keep this in sync with the tool naming convention.
   const isWrite =
-    !['askPharmacyReports', 'askPharmacyBusinessInsights', 'askPharmacyFinanceInsights', 'askRestaurantReports'].includes(toolName) &&
-    !/^(list|find|get|search|global)/.test(toolName);
+    ![
+      'askPharmacyReports',
+      'askPharmacyBusinessInsights',
+      'askPharmacyFinanceInsights',
+      'askRestaurantReports',
+    ].includes(toolName) && !/^(list|find|get|search|global)/.test(toolName);
 
   if (part.state === 'approval-requested' && part.approval) {
     return (

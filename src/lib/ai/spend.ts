@@ -1,3 +1,6 @@
+import 'server-only';
+
+import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { Prisma } from '@/generated/prisma/client';
 import type { RoutedAIProvider } from './model-defaults';
 
@@ -67,5 +70,26 @@ export function pricedAIUsage(
     effectiveModelPrice(prices, usage.provider, usage.model, usage.occurredAt),
     usage.inputTokens,
     usage.outputTokens
+  );
+}
+
+export type AIUsageRecord = {
+  organizationId: string;
+  branchId: string;
+  feature: string;
+  provider: string;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+};
+
+/** Persist tenant-attributed metering. Callers decide whether metering is fail-open. */
+export async function recordAIUsage(usage: AIUsageRecord): Promise<void> {
+  await withTenantDb(
+    usage.organizationId,
+    async (db) => {
+      await db.aIUsage.create({ data: usage });
+    },
+    { skipDrain: true }
   );
 }
