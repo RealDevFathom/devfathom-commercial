@@ -15,13 +15,13 @@ vi.mock('@/lib/abac', async (importOriginal) => ({
   can: vi.fn().mockResolvedValue(false),
 }));
 
-const ctx: AssistantContext = {
+const ctx = {
   organizationId: 'org_test',
   userId: 'user_test',
   role: 'EMPLOYEE',
   vertical: 'AGENCY',
   enabledModules: MODULE_CATALOG.map(({ key }) => key),
-};
+} satisfies AssistantContext;
 const adminCtx: AssistantContext = { ...ctx, role: 'ADMIN' };
 
 describe('assistant tool routing', () => {
@@ -55,6 +55,12 @@ describe('assistant tool routing', () => {
         'getOverview',
         'globalSearch',
         'getTeamMember',
+        'searchNotes',
+        'getNote',
+        'createNote',
+        'updateNote',
+        'deleteNote',
+        'setNoteShares',
       ])
         expect(tools).not.toHaveProperty(name);
       expect(tools).toHaveProperty('requestLeave');
@@ -87,6 +93,36 @@ describe('assistant tool routing', () => {
     expect(assistantToolChoice('I want to take leave', {})).toBe('auto');
     expect(buildAssistantTools({ ...adminCtx, enabledModules: ['hr'] })).not.toHaveProperty(
       'getTeamMember'
+    );
+  });
+
+  const noteToolNames = [
+    'searchNotes',
+    'getNote',
+    'createNote',
+    'updateNote',
+    'deleteNote',
+    'setNoteShares',
+  ];
+
+  it.each<[string, string, string[]]>([
+    ['full-set routing', '', noteToolNames],
+    ['client-aware Notes routing', 'find the Acme note', noteToolNames],
+    ['core-tool routing', 'show my tasks', ['searchNotes']],
+  ])('requires every Notes dependency through %s', (_route, hint, expectedNoteTools) => {
+    const noteDependencies = ['notes', 'projects', 'clients'];
+
+    for (const missingModule of noteDependencies) {
+      const tools = buildAssistantTools(
+        { ...ctx, enabledModules: ctx.enabledModules.filter((module) => module !== missingModule) },
+        { hint }
+      );
+      for (const name of noteToolNames) expect(tools).not.toHaveProperty(name);
+    }
+
+    const entitledTools = buildAssistantTools(ctx, { hint });
+    expect(Object.keys(entitledTools).filter((name) => noteToolNames.includes(name))).toEqual(
+      expectedNoteTools
     );
   });
 
