@@ -245,7 +245,7 @@ describe('restaurant notification webhook', () => {
     );
   });
 
-  it('records a redacted failure for retry and stops cleanly when disabled', async () => {
+  it('records a redacted failure and keeps a disabled delivery on the retry path', async () => {
     vi.stubEnv('NODE_ENV', 'test');
     const transport = vi.fn().mockResolvedValue(503);
     const client = db();
@@ -278,10 +278,12 @@ describe('restaurant notification webhook', () => {
     );
 
     const disabled = db(false);
-    await createNotificationWebhookJobHandler({ transport, lookup: publicLookup })({
-      db: disabled as never,
-      job,
-    });
+    await expect(
+      createNotificationWebhookJobHandler({ transport, lookup: publicLookup })({
+        db: disabled as never,
+        job,
+      })
+    ).rejects.toThrow('endpoint is disabled or missing');
     expect(disabled.restaurantNotification.findFirst).not.toHaveBeenCalled();
     expect(transport).toHaveBeenCalledTimes(1);
   });
