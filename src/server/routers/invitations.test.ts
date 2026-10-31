@@ -30,13 +30,17 @@ const pendingInvitation = {
   },
 };
 
-const db = {
+const transactionDb = {
   invitation: {
     findUnique: mocks.invitationFindUnique,
     updateMany: mocks.invitationUpdateMany,
   },
   user: { updateMany: mocks.userUpdateMany },
-  $transaction: async (fn: (tx: typeof db) => Promise<unknown>) => fn(db),
+};
+
+const db = {
+  ...transactionDb,
+  $transaction: async (fn: (tx: typeof transactionDb) => Promise<unknown>) => fn(transactionDb),
 };
 
 const caller = () =>
