@@ -30,6 +30,7 @@ import { Input } from '@/components/ui/input';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
 import { Textarea } from '@/components/ui/textarea';
+import { PendingLegalReviewNotice } from '@/components/pharmacy/pending-legal-review-notice';
 import {
   FISCAL_STATUSES,
   PROVISIONAL_LICENCE_CATEGORY,
@@ -82,6 +83,18 @@ function Field({
   );
 }
 
+function selectedProvince(data: Regulatory): string {
+  const code =
+    data.versions.find((version) => version.effective)?.provinceCode ??
+    data.branches.find((branch) => branch.id === data.selectedBranchId)?.provinceCode;
+  return (
+    data.jurisdictions.find(
+      (jurisdiction) =>
+        jurisdiction.provinceCode === code || jurisdiction.provinceCode === `PK-${code}`
+    )?.provinceCode ?? ''
+  );
+}
+
 export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory }) {
   const [data, setData] = useState<Regulatory>(initial);
   const [branchId, setBranchId] = useState<string>(initial.selectedBranchId ?? '');
@@ -90,17 +103,25 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [evidenceRef, setEvidenceRef] = useState('');
-  const [provinceCode, setProvinceCode] = useState<string>(
-    initial.jurisdictions[0]?.provinceCode ?? ''
-  );
+  const [provinceCode, setProvinceCode] = useState<string>(() => selectedProvince(initial));
   const formRef = useRef<HTMLFormElement>(null);
+  const refreshId = useRef(0);
 
   const utils = trpc.useUtils();
   const refresh = (nextBranchId = branchId) => {
+    const requestId = ++refreshId.current;
     void utils.pharmacyOnboarding.regulatory
       .fetch({ branchId: nextBranchId || undefined })
-      .then(setData)
-      .catch(() => setErrors({ form: 'That branch could not be loaded. Try again.' }));
+      .then((next) => {
+        if (requestId !== refreshId.current) return;
+        setData(next);
+        setProvinceCode(selectedProvince(next));
+      })
+      .catch(() => {
+        if (requestId === refreshId.current) {
+          setErrors({ form: 'That branch could not be loaded. Try again.' });
+        }
+      });
   };
 
   const save = trpc.pharmacyOnboarding.saveRegulatoryProfile.useMutation({
@@ -151,6 +172,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
   const schedules = jurisdiction?.permittedSchedules ?? [];
   const current = data.versions.find((version) => version.effective);
   const inForce = data.versions.find((version) => version.inForce);
+  const pendingProfile = current?.pendingLegalReview ? current : undefined;
 
   async function uploadEvidence(file: File) {
     setUploadError(null);
@@ -287,6 +309,17 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
         )}
       </SectionCard>
 
+      {pendingProfile ? (
+        <PendingLegalReviewNotice provinceName={pendingProfile.provinceName} />
+      ) : null}
+      {jurisdiction?.provisional &&
+      (!pendingProfile || pendingProfile.provinceCode !== jurisdiction.provinceCode) ? (
+        <PendingLegalReviewNotice
+          provinceName={jurisdiction.provinceName}
+          scope={current ? 'draft' : 'branch'}
+        />
+      ) : null}
+
       <SectionCard
         eyebrow="Effective-dated"
         title={inForce ? 'Record the next version' : 'Record the first version'}
@@ -340,7 +373,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
               htmlFor="provinceCode"
               hint={
                 jurisdiction?.provisional
-                  ? 'These rules are still provisional, so this branch cannot operate on them yet.'
+                  ? 'These rules are pending legal review; see the notice above.'
                   : 'Only provinces with published rules appear here.'
               }
               label="Province"
@@ -352,8 +385,12 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
                 id="provinceCode"
                 name="provinceCode"
                 onChange={(event) => setProvinceCode(event.target.value)}
+                required
                 value={provinceCode}
               >
+                {data.jurisdictions.length > 0 && !provinceCode ? (
+                  <option value="">Choose a province with published rules</option>
+                ) : null}
                 {data.jurisdictions.length === 0 ? (
                   <option value="">No published jurisdictions</option>
                 ) : null}

@@ -9,6 +9,7 @@ import {
 } from '@/lib/pharmacy/controlled-register';
 import { chooseRegisterPersonName } from '@/lib/pharmacy/register-print';
 import { maskCnic } from '@/lib/pharmacy/patient-prescriptions';
+import { provinceName, ruleSetOptions } from '@/lib/pharmacy/regulatory-profile-form';
 import { createInspectionPack } from '@/lib/pharmacy/inspection-pack';
 import { installPharmacySopLibrary } from '@/lib/pharmacy/sop-library';
 import { activeLegalHoldKeys } from '@/lib/pharmacy/retention';
@@ -31,12 +32,12 @@ async function organizationBranch(ctx: TRPCContext, branchId: string) {
   }
   const branch = await ctx.db.pharmacyBranch.findFirst({
     where: { id: branchId, organizationId, active: true },
-    select: { id: true },
+    select: { id: true, provinceCode: true },
   });
   if (!branch) {
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your pharmacy scope.' });
   }
-  return organizationId;
+  return { organizationId, provinceCode: branch.provinceCode };
 }
 
 const safety = capabilityProcedure('pharmacy:safety');
@@ -79,21 +80,70 @@ export const pharmacySafetyRouter = router({
   controlledRegister: safety
     .input(z.object({ branchId: z.string().min(1) }).strict())
     .query(async ({ ctx, input }) => {
-      const organizationId = await organizationBranch(ctx, input.branchId);
-      const entries = await ctx.db.pharmacyControlledRegisterEntry.findMany({
-        where: { organizationId, branchId: input.branchId },
-        orderBy: { serial: 'asc' },
-        include: {
-          patient: { select: { displayName: true, cnic: true } },
-          prescriber: true,
-          prescription: true,
-          medicine: { select: { productName: true, manufacturer: true } },
-          line: { include: { medicine: true } },
-          correctsEntry: { select: { serial: true } },
-          refEntry: { select: { serial: true } },
-          incidents: { include: { approvals: true } },
-        },
-      });
+      const { organizationId, provinceCode: branchProvinceCode } = await organizationBranch(
+        ctx,
+        input.branchId
+      );
+      const now = new Date();
+      const ruleFields = {
+        licenceCategories: true,
+        permittedSchedules: true,
+        pharmacistCoverageRule: true,
+      } as const;
+      const [entries, profile] = await Promise.all([
+        ctx.db.pharmacyControlledRegisterEntry.findMany({
+          where: { organizationId, branchId: input.branchId },
+          orderBy: { serial: 'asc' },
+          include: {
+            patient: { select: { displayName: true, cnic: true } },
+            prescriber: true,
+            prescription: true,
+            medicine: { select: { productName: true, manufacturer: true } },
+            line: { include: { medicine: true } },
+            correctsEntry: { select: { serial: true } },
+            refEntry: { select: { serial: true } },
+            incidents: { include: { approvals: true } },
+          },
+        }),
+        ctx.db.branchRegulatoryProfile.findFirst({
+          where: {
+            organizationId,
+            branchId: input.branchId,
+            effectiveFrom: { lte: now },
+            OR: [{ effectiveTo: null }, { effectiveTo: { gt: now } }],
+          },
+          orderBy: { effectiveFrom: 'desc' },
+          select: {
+            provinceCode: true,
+            jurisdictionRuleSet: { select: ruleFields },
+          },
+        }),
+      ]);
+      // The guard uses the effective profile's pinned rules, even after a newer
+      // provincial rule set is published. Branch metadata may also still use
+      // the legacy two-letter province code.
+      const provinceCode =
+        profile?.provinceCode ??
+        (branchProvinceCode.startsWith('PK-') ? branchProvinceCode : `PK-${branchProvinceCode}`);
+      const ruleSet =
+        profile?.jurisdictionRuleSet ??
+        (await ctx.db.jurisdictionRuleSet.findFirst({
+          where: {
+            code: provinceCode,
+            isPlaceholder: false,
+            effectiveFrom: { lte: now },
+            OR: [{ effectiveTo: null }, { effectiveTo: { gt: now } }],
+          },
+          orderBy: { effectiveFrom: 'desc' },
+          select: ruleFields,
+        }));
+      const pendingLegalReview = ruleSet
+        ? [
+            ruleSet.licenceCategories,
+            ruleSet.permittedSchedules,
+            ruleSet.pharmacistCoverageRule,
+          ].some((field) => ruleSetOptions(field).provisional)
+        : false;
       const witnessIds = [...new Set(entries.map((entry) => entry.witnessedByUserId))];
       const [witnesses, staff] = witnessIds.length
         ? await Promise.all([
@@ -116,6 +166,8 @@ export const pharmacySafetyRouter = router({
         staffNames.set(profile.userId, names);
       }
       return {
+        pendingLegalReview,
+        provinceName: provinceName(provinceCode),
         entries: entries.map((entry) => ({
           ...entry,
           patient: entry.patient
@@ -145,7 +197,7 @@ export const pharmacySafetyRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      const organizationId = await organizationBranch(ctx, input.branchId);
+      const { organizationId } = await organizationBranch(ctx, input.branchId);
       const actorId = ctx.session!.user.id;
       try {
         return await ctx.db.$transaction(async (tx) => {
