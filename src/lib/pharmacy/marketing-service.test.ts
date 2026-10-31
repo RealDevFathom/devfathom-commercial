@@ -8,6 +8,7 @@ import {
   marketingDraftInput,
   previewMarketingCampaign,
   requireCaptureWindow,
+  reviewMarketingCampaign,
   validateMarketingBody,
 } from './marketing-service';
 
@@ -122,6 +123,14 @@ beforeEach(() => {
 });
 
 describe('persisted capture workflow', () => {
+  it('exposes the effective monthly default for a saved campaign without rewriting its weekly cap', async () => {
+    const review = await reviewMarketingCampaign(db, scope, row.id);
+    expect(review.frequencyCap).toEqual({ max: 1, windowDays: 7, monthlyMax: 2 });
+    expect(row.frequencyCap).toEqual({ max: 1, windowDays: 7 });
+    expect(mock.pharmacyCampaign.update).not.toHaveBeenCalled();
+    expect(mock.pharmacyCampaign.updateMany).not.toHaveBeenCalled();
+  });
+
   it.each(['Paracetamol offer. STOP', 'Ask about antibiotics. STOP', 'Vitamin sale. STOP'])(
     'rejects medicine names and categories from WhatsApp copy: %s',
     (body) => expect(() => validateMarketingBody(body)).toThrow('generic retail copy')

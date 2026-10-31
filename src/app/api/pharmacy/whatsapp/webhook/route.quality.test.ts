@@ -1,12 +1,12 @@
 // @vitest-environment node
-import { createHmac } from 'node:crypto';
+import { createHmac, randomBytes } from 'node:crypto';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { Prisma } from '@/generated/prisma/client';
 
-const mocks = vi.hoisted(() => ({ write: vi.fn(), organization: vi.fn() }));
+const mocks = vi.hoisted(() => ({ write: vi.fn(), organization: vi.fn(), audit: vi.fn() }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({
   withTenantDb: async (_org: string, run: (db: unknown) => unknown) =>
-    run({ $executeRaw: mocks.write }),
+    run({ $executeRaw: mocks.write, auditLog: { create: mocks.audit } }),
 }));
 vi.mock('@/lib/tenancy/host', () => ({
   requestHost: () => 'tenant-a.localhost',
@@ -21,16 +21,17 @@ vi.mock('@/lib/pharmacy/whatsapp/inbound', () => ({ handleInboundWhatsAppMessage
 vi.mock('@/lib/pharmacy/marketing-delivery', () => ({ recordMarketingCallback: vi.fn() }));
 
 import { POST } from './route';
-const secret = 'quality-webhook-test-secret';
+const secret = randomBytes(32).toString('hex');
 function request(
   value: Record<string, unknown>,
   account = 'account-a',
   time = 1790000000,
-  validSignature = true
+  validSignature = true,
+  field = 'account_update'
 ) {
   const body = JSON.stringify({
     object: 'whatsapp_business_account',
-    entry: [{ id: account, time, changes: [{ field: 'account_update', value }] }],
+    entry: [{ id: account, time, changes: [{ field, value }] }],
   });
   return new Request('http://tenant-a.localhost/api/pharmacy/whatsapp/webhook', {
     method: 'POST',
@@ -47,6 +48,7 @@ beforeEach(() => {
   vi.stubEnv('PHARMACY_WHATSAPP_ORGANIZATION_ID', 'org-a');
   vi.stubEnv('PHARMACY_WHATSAPP_PHONE_NUMBER_ID', 'sender-a');
   vi.stubEnv('PHARMACY_WHATSAPP_BUSINESS_ACCOUNT_ID', 'account-a');
+  vi.stubEnv('PHARMACY_WHATSAPP_DISPLAY_PHONE_NUMBER', '+923001234567');
   mocks.organization.mockResolvedValue({
     id: 'org-a',
     status: 'ACTIVE',
@@ -63,6 +65,7 @@ it('rejects an invalid real HMAC before resolving the tenant or writing quality 
   ).toBe(401);
   expect(mocks.organization).not.toHaveBeenCalled();
   expect(mocks.write).not.toHaveBeenCalled();
+  expect(mocks.audit).not.toHaveBeenCalled();
 });
 
 it.each([
@@ -93,4 +96,42 @@ it('passes provider time and stable replay identity from signed quality events t
   expect(statements[1]).toContainEqual(new Date(1790000001000));
   expect(statements[1]).toEqual(statements[2]);
   expect(statements[0]).toEqual(expect.arrayContaining(['org-a', 'sender-a', 'RED', true]));
+});
+
+it('routes signed phone quality events only for the configured display number', async () => {
+  for (const display_phone_number of ['+923001234567', '+923009999999'])
+    expect(
+      (
+        await POST(
+          request(
+            { event: 'FLAGGED', display_phone_number },
+            'account-a',
+            1790000000,
+            true,
+            'phone_number_quality_update'
+          )
+        )
+      ).status
+    ).toBe(200);
+  expect(mocks.write).toHaveBeenCalledTimes(1);
+  expect(mocks.audit).toHaveBeenCalledWith({
+    data: expect.objectContaining({
+      action: 'pharmacyMarketing.qualityPaused',
+      targetId: 'sender-a',
+      metadata: expect.objectContaining({ reason: 'ACCOUNT_FLAGGED' }),
+    }),
+  });
+});
+
+it('audits numeric block-rate rises even when the signed quality score is GREEN', async () => {
+  await POST(request({ previous_block_rate: 0.01, block_rate: 0.03, quality_score: 'GREEN' }));
+  expect(mocks.audit).toHaveBeenCalledWith({
+    data: expect.objectContaining({
+      action: 'pharmacyMarketing.qualityPaused',
+      metadata: expect.objectContaining({
+        reason: 'ACCOUNT_BLOCK_RATE_RISE',
+        blockRate: { previous: 0.01, current: 0.03 },
+      }),
+    }),
+  });
 });

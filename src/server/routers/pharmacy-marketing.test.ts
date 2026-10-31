@@ -19,6 +19,9 @@ const mocks = vi.hoisted(() => ({
   assist: vi.fn(),
   capture: vi.fn(),
   tenant: vi.fn(),
+  qualityState: vi.fn(),
+  qualityResume: vi.fn(),
+  qualityAudit: vi.fn(),
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(), withTenantDb: mocks.tenant }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
@@ -67,6 +70,11 @@ function caller(role = 'ADMIN') {
     $queryRaw: mocks.branchMatch,
     organization: { findUnique: mocks.organization },
     pharmacyBranch: { findFirst: mocks.branch },
+    pharmacyMarketingSafetyState: {
+      findMany: mocks.qualityState,
+      updateMany: mocks.qualityResume,
+    },
+    auditLog: { create: mocks.qualityAudit },
   };
   const db = { ...transactionDb, $transaction: mocks.transaction };
   mocks.transaction.mockImplementation((fn) => fn(transactionDb));
@@ -102,9 +110,79 @@ beforeEach(() => {
   mocks.branch.mockResolvedValue({ id: 'branch-a' });
   mocks.history.mockResolvedValue({ campaigns: [] });
   mocks.capture.mockResolvedValue({ prepared: 1 });
+  mocks.qualityState.mockResolvedValue([]);
+  mocks.qualityResume.mockResolvedValue({ count: 1 });
 });
 const input = { branchId: 'branch-a' };
 describe('marketing workflow authorization', () => {
+  const recovery = {
+    ...input,
+    senderId: 'sender-a',
+    expectedEventKey: 'event-a',
+    reason: 'Provider issue resolved.',
+  };
+
+  it('reads quality state only within the authorized tenant', async () => {
+    await caller().qualityState(input);
+    expect(mocks.qualityState).toHaveBeenCalledWith({
+      where: { organizationId: 'org-a' },
+      select: { senderId: true, paused: true, reason: true, eventKey: true, occurredAt: true },
+      orderBy: { senderId: 'asc' },
+    });
+  });
+
+  it('binds manual quality recovery and its audit to the current owner transaction', async () => {
+    await expect(caller().resumeQuality(recovery)).resolves.toEqual({ paused: false });
+    expect(mocks.qualityResume).toHaveBeenCalledWith({
+      where: { organizationId: 'org-a', senderId: 'sender-a', eventKey: 'event-a', paused: true },
+      data: { paused: false, reason: 'OWNER_OVERRIDE' },
+    });
+    expect(mocks.qualityAudit).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        organizationId: 'org-a',
+        actorId: 'owner-a',
+        action: 'pharmacyMarketing.qualityOverride',
+      }),
+    });
+    expect(mocks.transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['STAFF', 'MANAGER', 'PHARMACIST'])(
+    'denies quality history and manual recovery to %s',
+    async (role) => {
+      const user = caller(role);
+      await expect(user.qualityState(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await expect(user.resumeQuality(recovery)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(mocks.qualityResume).not.toHaveBeenCalled();
+      expect(mocks.qualityState).not.toHaveBeenCalled();
+    }
+  );
+
+  it('rejects manual recovery after active owner access is revoked', async () => {
+    mocks.actor.mockResolvedValue(null);
+    await expect(caller().resumeQuality(recovery)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.qualityResume).not.toHaveBeenCalled();
+  });
+
+  it('rejects manual recovery outside an authorized active branch', async () => {
+    mocks.branch.mockResolvedValue(null);
+    await expect(caller().resumeQuality(recovery)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.qualityResume).not.toHaveBeenCalled();
+  });
+
+  it('requires an explanatory recovery reason before mutation', async () => {
+    await expect(caller().resumeQuality({ ...recovery, reason: ' ' })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(mocks.qualityResume).not.toHaveBeenCalled();
+  });
+
+  it('rejects a stale manual override without writing an audit', async () => {
+    mocks.qualityResume.mockResolvedValue({ count: 0 });
+    await expect(caller().resumeQuality(recovery)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mocks.qualityAudit).not.toHaveBeenCalled();
+  });
+
   it('exposes a quality pause as a user-facing capture failure', async () => {
     const message = 'Marketing is auto-paused by provider quality (ACCOUNT_QUALITY_RED).';
     mocks.capture.mockRejectedValue(new MarketingWorkflowError(message));

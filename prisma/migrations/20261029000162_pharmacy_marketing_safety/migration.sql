@@ -1,12 +1,12 @@
 CREATE TABLE "pharmacy_marketing_safety_states" (
-  "organizationId" TEXT NOT NULL,
+  "organizationId" TEXT NOT NULL DEFAULT current_setting('app.current_organization_id', true),
   "senderId" TEXT NOT NULL,
   "quality" TEXT NOT NULL,
   "paused" BOOLEAN NOT NULL,
   "reason" TEXT,
   "eventKey" TEXT NOT NULL,
   "occurredAt" TIMESTAMP(3) NOT NULL,
-  "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "updatedAt" TIMESTAMP(3) NOT NULL,
   PRIMARY KEY ("organizationId", "senderId"),
   UNIQUE ("organizationId", "eventKey")
 );

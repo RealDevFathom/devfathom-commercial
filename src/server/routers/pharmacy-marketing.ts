@@ -40,6 +40,10 @@ import {
   type MarketingScope,
 } from '@/lib/pharmacy/marketing-service';
 import { draftMarketingCopy, marketingAssistanceInput } from '@/lib/pharmacy/marketing-assistance';
+import {
+  resumeMarketingQuality,
+  resumeMarketingQualityInput,
+} from '@/lib/pharmacy/marketing-safety';
 import { protectedProcedure, router, type TRPCContext } from '../trpc';
 
 type MarketingAccessContext = Pick<TRPCContext, 'session' | 'entitlements' | 'audit'> & {
@@ -184,6 +188,28 @@ async function growthExecute<T>(
 
 // Integration export for WHA-1618; root.ts is outside this issue's ownership.
 export const pharmacyMarketingRouter = router({
+  qualityState: protectedProcedure
+    .input(marketingScopeInput)
+    .query(({ ctx, input }) =>
+      growthExecute(ctx, input.branchId, (db, resolved) =>
+        db.pharmacyMarketingSafetyState.findMany({
+          where: { organizationId: resolved.organizationId },
+          select: { senderId: true, paused: true, reason: true, eventKey: true, occurredAt: true },
+          orderBy: { senderId: 'asc' },
+        })
+      )
+    ),
+  resumeQuality: protectedProcedure
+    .input(marketingScopeInput.extend(resumeMarketingQualityInput.shape).strict())
+    .mutation(({ ctx, input }) =>
+      growthExecute(ctx, input.branchId, (db, resolved) =>
+        resumeMarketingQuality(db, resolved.organizationId, resolved.actorId, {
+          senderId: input.senderId,
+          expectedEventKey: input.expectedEventKey,
+          reason: input.reason,
+        })
+      )
+    ),
   growthHistory: protectedProcedure
     .input(marketingScopeInput)
     .query(({ ctx, input }) => growthExecute(ctx, input.branchId, listGrowthInsights)),

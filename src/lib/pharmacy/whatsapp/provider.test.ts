@@ -61,6 +61,11 @@ describe('readWhatsAppConfig', () => {
     expect(
       readWhatsAppConfig({ PHARMACY_WHATSAPP_BUSINESS_ACCOUNT_ID: ' account-a ' }).businessAccountId
     ).toBe('account-a');
+    expect(readWhatsAppConfig({}).displayPhoneNumber).toBeNull();
+    expect(
+      readWhatsAppConfig({ PHARMACY_WHATSAPP_DISPLAY_PHONE_NUMBER: ' +923001234567 ' })
+        .displayPhoneNumber
+    ).toBe('+923001234567');
   });
 
   it('rejects an out-of-range reminder lead', () => {

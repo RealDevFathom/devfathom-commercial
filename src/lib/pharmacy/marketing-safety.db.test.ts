@@ -49,6 +49,13 @@ const state = (senderId: string) =>
       where: { organizationId_senderId: { organizationId: org, senderId } },
     })
   );
+const audits = (senderId: string) =>
+  tenant(org, (tx) =>
+    tx.auditLog.findMany({
+      where: { organizationId: org, category: 'PHARMACY_MARKETING', targetId: senderId },
+      orderBy: { createdAt: 'asc' },
+    })
+  );
 
 suite('marketing quality state under PostgreSQL RLS', () => {
   beforeAll(async () => {
@@ -60,9 +67,10 @@ suite('marketing quality state under PostgreSQL RLS', () => {
   afterAll(async () => {
     try {
       for (const organizationId of [org, foreignOrg])
-        await tenant(organizationId, (tx) =>
-          tx.pharmacyMarketingSafetyState.deleteMany({ where: { organizationId } })
-        );
+        await tenant(organizationId, async (tx) => {
+          await tx.auditLog.deleteMany({ where: { organizationId } });
+          await tx.pharmacyMarketingSafetyState.deleteMany({ where: { organizationId } });
+        });
     } finally {
       await db!.$disconnect();
     }
@@ -73,6 +81,9 @@ suite('marketing quality state under PostgreSQL RLS', () => {
     expect(await write(id, 'RED', 1790000002)).toBe(1);
     expect(await write(id, 'GREEN', 1790000001)).toBe(0);
     expect(await write(id, 'RED', 1790000002)).toBe(0);
+    expect(await audits(id)).toMatchObject([
+      { action: 'pharmacyMarketing.qualityPaused', metadata: { reason: 'ACCOUNT_QUALITY_RED' } },
+    ]);
     expect(await state(id)).toMatchObject({
       paused: true,
       quality: 'RED',
@@ -81,6 +92,20 @@ suite('marketing quality state under PostgreSQL RLS', () => {
     expect(await write(id, 'GREEN', 1790000003)).toBe(1);
     expect(await state(id)).toMatchObject({ paused: false, quality: 'GREEN' });
     expect(await write(id, 'RED', 1790000002)).toBe(0);
+    const history = await audits(id);
+    expect(history).toHaveLength(2);
+    expect(history).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          action: 'pharmacyMarketing.qualityPaused',
+          metadata: expect.objectContaining({ reason: 'ACCOUNT_QUALITY_RED' }),
+        }),
+        expect.objectContaining({
+          action: 'pharmacyMarketing.qualityResumed',
+          metadata: expect.objectContaining({ quality: 'GREEN' }),
+        }),
+      ])
+    );
   });
 
   it('resolves equal-time contradictory evidence to a pause in either arrival order', async () => {
@@ -116,6 +141,7 @@ suite('marketing quality state under PostgreSQL RLS', () => {
       })
     ).rejects.toThrow('rollback quality transition');
     expect(await state(id)).toMatchObject({ paused: true, quality: 'RED' });
+    expect(await audits(id)).toMatchObject([{ action: 'pharmacyMarketing.qualityPaused' }]);
   });
 
   it('isolates tenants and rejects foreign writes through the atomic writer', async () => {
@@ -124,11 +150,18 @@ suite('marketing quality state under PostgreSQL RLS', () => {
       recordMarketingQualityUpdate(tx, foreignOrg, id, evidence('RED', undefined, id))
     );
     for (const organizationId of [org, ''])
-      expect(
-        await tenant(organizationId, (tx) =>
-          tx.pharmacyMarketingSafetyState.findMany({ where: { organizationId: foreignOrg } })
-        )
-      ).toEqual([]);
+      await tenant(organizationId, async (tx) => {
+        expect(
+          await tx.pharmacyMarketingSafetyState.findMany({
+            where: { organizationId: foreignOrg },
+          })
+        ).toEqual([]);
+        expect(
+          await tx.auditLog.findMany({
+            where: { organizationId: foreignOrg, targetId: id },
+          })
+        ).toEqual([]);
+      });
     await expect(
       tenant(org, (tx) =>
         recordMarketingQualityUpdate(tx, foreignOrg, id, evidence('GREEN', 1790000001, id))
