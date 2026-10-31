@@ -185,20 +185,6 @@ export const pharmacyBranchAssignmentsRouter = router({
         select: { id: true, branchId: true, userId: true },
       });
       if (!row) throw new TRPCError({ code: 'NOT_FOUND', message: 'Assignment was not found.' });
-      const member = await ctx.db.user.findFirst({
-        where: { id: row.userId, organizationId, status: { in: ['ACTIVE', 'ON_LEAVE'] } },
-        select: { role: true, organizationRole: { select: { key: true } } },
-      });
-      if (
-        member &&
-        (member.role === 'ADMIN' ||
-          ['owner', 'owner-operator'].includes(member.organizationRole?.key ?? ''))
-      ) {
-        throw new TRPCError({
-          code: 'FORBIDDEN',
-          message: 'Owners are automatically assigned to all pharmacy branches.',
-        });
-      }
       await ctx.db.pharmacyBranchAssignment.update({
         where: { id: row.id },
         data: { active: false },

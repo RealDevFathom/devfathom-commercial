@@ -62,7 +62,6 @@ function fixture(role: 'ADMIN' | 'EMPLOYEE' = 'ADMIN') {
           id: 'cashier-1',
           name: 'Amina',
           email: 'amina@example.test',
-          role: 'EMPLOYEE',
           organizationRole: cashierRole,
         };
       }),
@@ -189,23 +188,4 @@ describe('pharmacy branch assignments', () => {
     const f = fixture('EMPLOYEE');
     await expect(f.caller.list()).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
-});
-
-it.each([
-  ['ADMIN', 'cashier'],
-  ['EMPLOYEE', 'owner'],
-  ['EMPLOYEE', 'owner-operator'],
-])('preserves automatic owner assignments for %s/%s', async (role, key) => {
-  const f = fixture();
-  f.db.user.findFirst.mockResolvedValueOnce({
-    id: 'cashier-1',
-    name: 'Owner',
-    email: 'owner@example.test',
-    role,
-    organizationRole: { ...cashierRole, key },
-  });
-  await expect(f.caller.unassign({ assignmentId: 'pba-1' })).rejects.toMatchObject({
-    code: 'FORBIDDEN',
-  });
-  expect(f.db.pharmacyBranchAssignment.update).not.toHaveBeenCalled();
 });

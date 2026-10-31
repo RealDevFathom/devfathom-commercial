@@ -230,16 +230,20 @@ export const POLICIES: Record<Action, Policy[]> = {
   // no static agency-role policy, so it is DEFAULT DENY until an organization
   // grants it explicitly (or holds `*`, e.g. the restaurant Owner template).
   'menu:import': [],
-  // Full tenant administrators retain pharmacy operations. Explicit custom DENY
-  // rules are evaluated first by can(); clinical staff still need exact grants.
-  'pharmacy:counter': [isAdmin],
-  'pharmacy:manage': [isAdmin],
+  'pharmacy:counter': [],
+  'pharmacy:manage': [],
+  // Tenant administrators retain the operational purchasing access they had
+  // before pharmacy capabilities became explicit. A matching custom DENY is
+  // still resolved first by `can()` and therefore takes precedence.
   'pharmacy:procurement': [isAdmin],
-  'pharmacy:inventory': [isAdmin],
-  'pharmacy:dispense': [isAdmin],
-  'pharmacy:safety': [isAdmin],
-  'pharmacy:catalogue-review': [isAdmin],
-  'pharmacy:orders': [isAdmin],
+  'pharmacy:inventory': [],
+  // Dispensing is an exact-grant-only action: tenant administration alone is
+  // insufficient, and wildcard ALLOW rules cannot opt a user in. Wildcard DENY
+  // rules are still resolved by `can()` before this default-deny policy.
+  'pharmacy:dispense': [],
+  'pharmacy:safety': [],
+  'pharmacy:catalogue-review': [],
+  'pharmacy:orders': [],
 
   // H1-01: no static agency-role policy grants hospitality capabilities.
   // Explicit capabilities and wildcards use the existing customDecision path.

@@ -642,8 +642,6 @@ export const organizationAdminRouter = router({
         }
         if (branchIds.length > 0) {
           await tx.pharmacyBranchAssignment.createMany({
-            // Owner assignments may already exist from the user insert trigger.
-            skipDuplicates: true,
             data: branchIds.map((branchId) => ({
               organizationId: id,
               branchId,
