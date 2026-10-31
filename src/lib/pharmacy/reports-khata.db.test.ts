@@ -12,7 +12,7 @@ const orgB = `org_report_khata_b_${suffix}`;
 let withTenantDb: typeof import('@/lib/tenancy/scoped-db').withTenantDb;
 let readCommandCentre: typeof import('./reports').readPharmacyOwnerCommandCentre;
 
-type KhataFixture = { organizationId: string; branchId: string };
+type KhataFixture = { organizationId: string; branchId: string; familyAccountId: string };
 
 async function createFixture(
   organizationId: string,
@@ -145,7 +145,7 @@ async function createFixture(
       });
     }
     if (amounts.future) await charge(amounts.future, future);
-    return { organizationId, branchId: branch.id };
+    return { organizationId, branchId: branch.id, familyAccountId: family.id };
   });
 }
 
@@ -212,6 +212,76 @@ suite('owner command centre Khata aging under forced PostgreSQL RLS', () => {
       })
     );
     expect(result.metrics.khataAgingMinor).toBe(500);
+  });
+
+  it.each([40, 100, 150])(
+    'nets a repayment of %i against unlinked dishonoured debt within the same family',
+    async (repaid) => {
+      const fixture = await createFixture(orgA, `report-repaid-${repaid}-${suffix}`, {
+        overdue: [],
+        unlinked: { paid: 100, dishonoured: 100 },
+      });
+      await createFixture(
+        orgA,
+        `report-unpaid-${repaid}-${suffix}`,
+        { overdue: [70] },
+        fixture.branchId
+      );
+      const observed = await withTenantDb(orgA, async (db) => {
+        await db.$queryRawUnsafe(
+          "SELECT set_config('app.current_branch_id', $1, true)",
+          fixture.branchId
+        );
+        const charge = await db.pharmacyKhataEvent.findFirstOrThrow({
+          where: { familyAccountId: fixture.familyAccountId, kind: 'CHARGE' },
+        });
+        await db.pharmacyKhataEvent.create({
+          data: {
+            organizationId: orgA,
+            branchId: fixture.branchId,
+            familyAccountId: fixture.familyAccountId,
+            kind: 'PAYMENT',
+            amountMinor: repaid,
+            settlesChargeId: charge.id,
+            actorId: 'owner',
+          },
+        });
+        const { readKhataBalance } = await import('./family-khata');
+        const balance = await readKhataBalance(
+          db,
+          { organizationId: orgA, branchId: fixture.branchId, actorId: 'owner' },
+          fixture.familyAccountId
+        );
+        const report = await readCommandCentre(db, {
+          branchIds: [fixture.branchId],
+          from: '2026-01-01',
+          to: '2026-01-01',
+        });
+        return { balance, aging: report.metrics.khataAgingMinor };
+      });
+      expect(observed).toEqual({ balance: 100 - repaid, aging: 70 + Math.max(100 - repaid, 0) });
+    }
+  );
+
+  it('does not consume another family credit to clear an unlinked dishonour', async () => {
+    const fixture = await createFixture(orgA, `report-owing-${suffix}`, {
+      overdue: [],
+      unlinked: { paid: 100, dishonoured: 100 },
+    });
+    await createFixture(
+      orgA,
+      `report-credit-${suffix}`,
+      { overdue: [], partial: { amount: 100, paid: 200 } },
+      fixture.branchId
+    );
+    const report = await withTenantDb(orgA, (db) =>
+      readCommandCentre(db, {
+        branchIds: [fixture.branchId],
+        from: '2026-01-01',
+        to: '2026-01-01',
+      })
+    );
+    expect(report.metrics.khataAgingMinor).toBe(100);
   });
 
   it('aggregates real open items across authorized branches without leaking a supplied foreign branch', async () => {

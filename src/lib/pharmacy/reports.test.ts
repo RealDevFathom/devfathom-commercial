@@ -117,6 +117,9 @@ describe('PH-RPT metric contract', () => {
     expect(sql).toContain('settlements."familyAccountId"=unlinked."familyAccountId"');
     expect(sql).toContain('settlements."familyAccountId"=charge."familyAccountId"');
     expect(sql).toContain('LEAST(SUM(unlinked."amountMinor"),COALESCE((SELECT SUM(paid)');
+    expect(sql).toContain('SUM(GREATEST(settlements.paid-charge."amountMinor"::bigint,0))');
+    expect(sql).toContain('-COALESCE((SELECT credit FROM family_credits');
+    expect(sql).toContain('family_credits."familyAccountId"=unlinked."familyAccountId"');
     expect(sql).toContain('+(SELECT COALESCE(SUM(dishonoured),0) FROM unlinked_events)');
     expect(sql).toContain(')::bigint AS value');
     expect(sql).toContain(`charge."kind"='CHARGE' AND charge."dueAt"<=CURRENT_TIMESTAMP`);
