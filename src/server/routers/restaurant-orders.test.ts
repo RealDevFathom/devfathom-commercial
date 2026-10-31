@@ -199,7 +199,6 @@ describe('cancellation authorization and device directory', () => {
     });
     expect(mocks.authenticateOperator).toHaveBeenCalledWith(expect.anything(), {
       staffProfileId: 'manager_1',
-      deviceId: 'dev_1',
       type: 'PIN',
       secret: '482913',
       now: expect.any(Date),
@@ -267,6 +266,71 @@ describe('cancellation authorization and device directory', () => {
         code: 'FORBIDDEN',
       });
       expect(mocks.cancelOrder).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['PIN', 'BADGE'] as const)(
+    'requires organization-wide %s approval despite the selected device credential',
+    async (type) => {
+      const { hash } = await import('bcryptjs');
+      const { authenticateOperator } = await vi.importActual<
+        typeof import('@/lib/restaurant/terminal-auth')
+      >('@/lib/restaurant/terminal-auth');
+      mocks.authenticateOperator.mockImplementation(authenticateOperator);
+      const orgSecret = type === 'PIN' ? '482913' : 'org-manager-badge';
+      const deviceSecret = type === 'PIN' ? '729184' : 'device-manager-badge';
+      const deviceCredential = {
+        id: 'credential_device',
+        deviceId: 'dev_1',
+        credentialHash: await hash(deviceSecret, 4),
+        failedAttempts: 0,
+        lockedUntil: null,
+      };
+      const orgCredential = {
+        ...deviceCredential,
+        id: 'credential_org',
+        deviceId: null,
+        credentialHash: await hash(orgSecret, 4),
+      };
+      const credentials: (typeof deviceCredential | typeof orgCredential)[] = [deviceCredential];
+      const authDb = {
+        $queryRaw: mocks.credentialLock,
+        restaurantStaffProfile: {
+          findUnique: vi.fn(async () => ({
+            id: 'manager_1',
+            status: 'ACTIVE',
+            primaryBranchId: 'b1',
+          })),
+        },
+        restaurantOperatorCredential: {
+          // Return both scopes to exercise the real verifier's credential selection.
+          findMany: vi.fn(async () => credentials),
+          update: vi.fn(),
+        },
+      };
+      mocks.withTenantDb.mockImplementation(async (_org, work) => work(authDb));
+
+      await expect(
+        caller().cancel({
+          ...input,
+          ...approval,
+          approvingType: type,
+          approvingSecret: deviceSecret,
+        })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(mocks.cancelOrder).not.toHaveBeenCalled();
+
+      credentials.push(orgCredential);
+      await expect(
+        caller().cancel({ ...input, ...approval, approvingType: type, approvingSecret: orgSecret })
+      ).resolves.toEqual({ orderId: 'o1', replayed: false });
+      expect(authDb.restaurantOperatorCredential.findMany).toHaveBeenLastCalledWith({
+        where: { staffProfileId: 'manager_1', type, revokedAt: null, deviceId: null },
+      });
+      expect(mocks.cancelOrder).toHaveBeenCalledWith(
+        db,
+        expect.objectContaining({ actor: ACTOR, approvingStaffProfileId: 'manager_1' })
+      );
     }
   );
 

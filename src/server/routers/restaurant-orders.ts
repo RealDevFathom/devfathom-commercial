@@ -561,9 +561,10 @@ export const restaurantOrdersRouter = router({
             await authDb.$queryRaw`SELECT "id" FROM "restaurant_operator_credentials"
             WHERE "staffProfileId" = ${input.approvingStaffProfileId} AND "revokedAt" IS NULL
             ORDER BY "id" FOR UPDATE`;
+            // Back-office approval accepts only organization-wide credentials;
+            // the browser-selected device is retained solely for attribution.
             return authenticateOperator(authDb, {
               staffProfileId: input.approvingStaffProfileId!,
-              deviceId: device.id,
               type: input.approvingType!,
               secret: input.approvingSecret!,
               now,
