@@ -121,6 +121,9 @@ export function allocate(total: MoneyInput, weights: readonly number[]): Decimal
     }
   }
   const totalWeight = weights.reduce((acc, weight) => acc + weight, 0);
+  if (totalWeight === 0 && money(total).isZero()) {
+    return weights.map(() => new Decimal(0));
+  }
   if (totalWeight <= 0) {
     throw new RangeError('allocate() requires the weights to sum to a positive value.');
   }

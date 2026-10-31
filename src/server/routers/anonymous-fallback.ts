@@ -6,6 +6,15 @@ import {
   RESET_GENERIC_MESSAGE,
   SUPPLIER_LINK_GENERIC_MESSAGE,
 } from '@/lib/auth/anonymous-access';
+import {
+  anonymousTokenInput,
+  invitationAcceptInput,
+  passwordResetInput,
+  passwordResetRequestInput,
+  supplierLinkGetInput,
+  supplierLinkSubmitInput,
+  supplierLinkUploadInput,
+} from '@/lib/auth/anonymous-inputs';
 import { formatValidationError } from '@/lib/validation-error';
 
 /**
@@ -19,11 +28,9 @@ import { formatValidationError } from '@/lib/validation-error';
  * the batched-vs-single response shape. Serving them through `fetchRequestHandler`
  * with the same transformer means tRPC produces all of that, so the two paths
  * cannot drift apart as tRPC changes. The procedure shapes mirror the real ones
- * exactly — same paths, same query/mutation kinds.
- *
- * No `.input()` schemas: these resolvers ignore their input, and validating it
- * would answer a malformed payload differently from a well-formed one, which is
- * itself a distinguishable outcome.
+ * exactly — same paths, same query/mutation kinds, and the same shared input
+ * schemas. Validation must happen on both paths so malformed input cannot reveal
+ * whether the hostname was routed to a tenant.
  *
  * There is no context and no database handle here. Nothing in this router can
  * touch tenant data, which is the point — it runs precisely when no tenant has
@@ -39,11 +46,10 @@ import { formatValidationError } from '@/lib/validation-error';
  * and one omitting it tell an anonymous caller which of the two paths served
  * them. `anonymous-fallback.test.ts` pins exactly that much and no more: it
  * raises the same refusal through each tRPC INSTANCE — the real one against a
- * stand-in router that, like this one, declares no `.input()` schemas — and
- * compares the served bodies, so a formatter that stopped matching is caught
- * here. It proves nothing about the production `invitations` and
- * `passwordReset` routers, which do declare `.input()` schemas this router omits;
- * those router-level differences are not covered by that test.
+ * focused stand-in router — and compares the served bodies, so a formatter that
+ * stopped matching is caught here. The test also compares malformed input
+ * against the production anonymous routers so their validation behavior cannot
+ * drift apart.
  */
 const t = initTRPC.create({
   transformer: superjson,
@@ -74,19 +80,21 @@ const unroutableSupplierLink = () => {
 
 export const anonymousFallbackRouter = t.router({
   invitations: t.router({
-    get: t.procedure.query(unroutableInvitation),
-    accept: t.procedure.mutation(unroutableInvitation),
+    get: t.procedure.input(anonymousTokenInput).query(unroutableInvitation),
+    accept: t.procedure.input(invitationAcceptInput).mutation(unroutableInvitation),
   }),
   passwordReset: t.router({
     // Identical to a successful request for an address that has no account: the
     // endpoint never reveals whether anything was sent.
-    request: t.procedure.mutation(() => ({ success: true as const })),
-    validate: t.procedure.query(() => ({ valid: false as const })),
-    reset: t.procedure.mutation(unroutableReset),
+    request: t.procedure
+      .input(passwordResetRequestInput)
+      .mutation(() => ({ success: true as const })),
+    validate: t.procedure.input(anonymousTokenInput).query(() => ({ valid: false as const })),
+    reset: t.procedure.input(passwordResetInput).mutation(unroutableReset),
   }),
   pharmacySupplierLinks: t.router({
-    get: t.procedure.query(unroutableSupplierLink),
-    submit: t.procedure.mutation(unroutableSupplierLink),
-    uploadDocument: t.procedure.mutation(unroutableSupplierLink),
+    get: t.procedure.input(supplierLinkGetInput).query(unroutableSupplierLink),
+    submit: t.procedure.input(supplierLinkSubmitInput).mutation(unroutableSupplierLink),
+    uploadDocument: t.procedure.input(supplierLinkUploadInput).mutation(unroutableSupplierLink),
   }),
 });

@@ -2,9 +2,10 @@
 import { randomUUID } from 'node:crypto';
 import { Client } from 'pg';
 import { describe, expect, it } from 'vitest';
-const url = process.env.RESTAURANT_GROWTH_TEST_DATABASE_URL;
-const admitted = process.env.RESTAURANT_GROWTH_DB_ADMITTED === '1';
-const suite = admitted && url ? describe : describe.skip;
+// This suite rolls every fixture back and only needs the migrated restricted-role
+// database already supplied by the QA gate. A dedicated override remains available.
+const url = process.env.RESTAURANT_GROWTH_TEST_DATABASE_URL ?? process.env.DATABASE_URL;
+const suite = url ? describe : describe.skip;
 const hash = 'a'.repeat(64);
 const settings = JSON.stringify({ priority: 'NORMAL', objective: 'REVIEW_RETENTION' });
 async function fixture(

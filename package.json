@@ -2,6 +2,9 @@
   "name": "company-hub",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=22.20.0"
+  },
   "packageManager": "bun@1.4.2",
   "scripts": {
     "dev": "next dev",
