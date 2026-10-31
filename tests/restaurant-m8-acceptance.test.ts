@@ -56,18 +56,24 @@ describe.skipIf(!ownerDatabaseUrl || !runtimeDatabaseUrl)('WHA-100 M8 acceptance
   it.each(contractGroups)(
     '%s',
     (_name, files) => {
-      const result = spawnSync('bunx', ['vitest', 'run', ...files], {
-        cwd: process.cwd(),
-        env: {
-          ...process.env,
-          DATABASE_URL: runtimeDatabaseUrl,
-          TEST_DATABASE_URL: runtimeDatabaseUrl,
-          M8_TEST_RUNTIME_DATABASE_URL: runtimeDatabaseUrl,
-          M8_TEST_OWNER_DATABASE_URL: ownerDatabaseUrl,
-        },
-        encoding: 'utf8',
-        timeout: 120_000,
-      });
+      // The QA gate deliberately gives the shared Postgres lane one worker. Preserve that
+      // isolation in these child runs instead of re-enabling Vitest's file parallelism.
+      const result = spawnSync(
+        'bunx',
+        ['vitest', 'run', ...files, '--maxWorkers=1', '--no-file-parallelism'],
+        {
+          cwd: process.cwd(),
+          env: {
+            ...process.env,
+            DATABASE_URL: runtimeDatabaseUrl,
+            TEST_DATABASE_URL: runtimeDatabaseUrl,
+            M8_TEST_RUNTIME_DATABASE_URL: runtimeDatabaseUrl,
+            M8_TEST_OWNER_DATABASE_URL: ownerDatabaseUrl,
+          },
+          encoding: 'utf8',
+          timeout: 120_000,
+        }
+      );
 
       const output = [result.stdout, result.stderr].filter(Boolean).join('\n');
       expect(result.status, output).toBe(0);

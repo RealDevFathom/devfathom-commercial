@@ -40,7 +40,7 @@ import {
   ruleSetOptions,
   type RegulatoryProfileInput,
 } from '@/lib/pharmacy/regulatory-profile-form';
-import { assertBranchMayOperate, BranchOperationDeniedError } from '@/lib/pharmacy/regulatory';
+import { evaluateBranchRegulatoryStatus } from '@/lib/pharmacy/regulatory';
 import { adminProcedure, router, type TRPCContext } from '../trpc';
 
 /** The gates an operator may attest to; the rest are answered from data. */
@@ -342,34 +342,23 @@ export const pharmacyOnboardingRouter = router({
           const effective =
             version.effectiveFrom <= now &&
             (version.effectiveTo === null || version.effectiveTo > now);
-          let inForce = effective;
-          if (effective) {
-            try {
-              assertBranchMayOperate(
-                {
-                  ...version,
-                  permittedSchedules: Array.isArray(version.permittedSchedules)
-                    ? version.permittedSchedules.filter(
-                        (schedule): schedule is string => typeof schedule === 'string'
-                      )
-                    : [],
-                  ruleSet: jurisdictionRuleSet,
-                  auditDenied: () => undefined,
-                },
-                { name: 'REGULATORY_PROFILE_VIEW', at: now, requiresQualifiedPerson: true }
-              );
-            } catch (error) {
-              if (!(error instanceof BranchOperationDeniedError)) throw error;
-              inForce = false;
-            }
-          }
+          const status = evaluateBranchRegulatoryStatus(
+            {
+              ...version,
+              permittedSchedules: Array.isArray(version.permittedSchedules)
+                ? version.permittedSchedules.filter(
+                    (schedule): schedule is string => typeof schedule === 'string'
+                  )
+                : [],
+              ruleSet: jurisdictionRuleSet,
+            },
+            effective,
+            now
+          );
           return {
             ...version,
             provinceName: provinceName(version.provinceCode),
-            effective,
-            inForce,
-            licenceExpired: effective && now >= version.licenceValidTo,
-            qualifiedPersonCoverageExpired: effective && now >= version.qualifiedPersonValidTo,
+            ...status,
           };
         }),
       };

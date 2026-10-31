@@ -21,11 +21,13 @@ const NotePermissionEnum = z.enum(['VIEW', 'EDIT']);
 
 /** Build a minimal Tiptap doc (one paragraph per line) from plain text. */
 function textToTiptapDoc(text: string): Prisma.InputJsonValue {
-  const blocks = text.split(/\r?\n/).map((line) =>
-    line.length > 0
-      ? { type: 'paragraph', content: [{ type: 'text', text: line }] }
-      : { type: 'paragraph' }
-  );
+  const blocks = text
+    .split(/\r?\n/)
+    .map((line) =>
+      line.length > 0
+        ? { type: 'paragraph', content: [{ type: 'text', text: line }] }
+        : { type: 'paragraph' }
+    );
   return { type: 'doc', content: blocks.length > 0 ? blocks : [{ type: 'paragraph' }] };
 }
 
@@ -165,13 +167,15 @@ export function buildNotesTools(h: AssistantHelpers): ToolSet {
       title: z.string().describe('The note title (fuzzy match), e.g. "Onboarding checklist"'),
     }),
     execute: async ({ title }) => {
-      const rows = await h.db.note.findMany({ where: visibilityWhere, select: { id: true, title: true } });
+      const rows = await h.db.note.findMany({
+        where: visibilityWhere,
+        select: { id: true, title: true },
+      });
       const r = h.resolveNamed(
         title,
         rows.map((n) => ({ id: n.id, name: n.title }))
       );
-      if (r.kind === 'notfound')
-        return { error: `No note matches "${title}" that you can see.` };
+      if (r.kind === 'notfound') return { error: `No note matches "${title}" that you can see.` };
       if (r.kind === 'ambiguous')
         return { needsClarification: `Which note — ${r.candidates.join(', ')}?` };
 
@@ -235,7 +239,13 @@ export function buildNotesTools(h: AssistantHelpers): ToolSet {
       clientName: z.string().nullish().describe('Attach to this client (fuzzy name match)'),
     }),
     needsApproval: true,
-    execute: async ({ title: rawTitle, content, visibility: rawVisibility, projectName, clientName }) => {
+    execute: async ({
+      title: rawTitle,
+      content,
+      visibility: rawVisibility,
+      projectName,
+      clientName,
+    }) => {
       // .nullish() + execute-side defaults (Groq sends null for omitted optionals).
       const title = (rawTitle && rawTitle.trim()) || 'Untitled';
       const visibility = rawVisibility ?? 'PRIVATE';
@@ -312,12 +322,17 @@ export function buildNotesTools(h: AssistantHelpers): ToolSet {
 
   tools.updateNote = tool({
     description:
-      "Update an existing note / doc, found by its title (fuzzy match). Can change the title, replace the body (plain text), change visibility, or re-attach it to a project/client. Use for \"update the <X> note\", \"change the onboarding doc to say ...\", \"make the <X> note team-visible\". Only the author, anyone for a TEAM note, or someone with EDIT access on a SHARED note may update it. Replacing the body REPLACES the entire content.",
+      'Update an existing note / doc, found by its title (fuzzy match). Can change the title, replace the body (plain text), change visibility, or re-attach it to a project/client. Use for "update the <X> note", "change the onboarding doc to say ...", "make the <X> note team-visible". Only the author, anyone for a TEAM note, or someone with EDIT access on a SHARED note may update it. Replacing the body REPLACES the entire content.',
     inputSchema: z.object({
       title: z.string().describe('The current title of the note to update (fuzzy match)'),
       newTitle: z.string().min(1).nullish().describe('A new title'),
-      content: z.string().nullish().describe('New body as plain text — REPLACES the existing content'),
-      visibility: NoteVisibilityEnum.nullish().describe('Change visibility (PRIVATE / TEAM / SHARED)'),
+      content: z
+        .string()
+        .nullish()
+        .describe('New body as plain text — REPLACES the existing content'),
+      visibility: NoteVisibilityEnum.nullish().describe(
+        'Change visibility (PRIVATE / TEAM / SHARED)'
+      ),
       projectName: z.string().nullish().describe('Re-attach to this project (fuzzy name match)'),
       clientName: z.string().nullish().describe('Re-attach to this client (fuzzy name match)'),
     }),
@@ -331,12 +346,14 @@ export function buildNotesTools(h: AssistantHelpers): ToolSet {
         clientName == null
       ) {
         return {
-          error:
-            'Nothing to update — provide a new title, content, visibility, project or client.',
+          error: 'Nothing to update — provide a new title, content, visibility, project or client.',
         };
       }
 
-      const rows = await h.db.note.findMany({ where: visibilityWhere, select: { id: true, title: true } });
+      const rows = await h.db.note.findMany({
+        where: visibilityWhere,
+        select: { id: true, title: true },
+      });
       const r = h.resolveNamed(
         title,
         rows.map((n) => ({ id: n.id, name: n.title }))
@@ -447,7 +464,10 @@ export function buildNotesTools(h: AssistantHelpers): ToolSet {
     }),
     needsApproval: true,
     execute: async ({ title }) => {
-      const rows = await h.db.note.findMany({ where: visibilityWhere, select: { id: true, title: true } });
+      const rows = await h.db.note.findMany({
+        where: visibilityWhere,
+        select: { id: true, title: true },
+      });
       const r = h.resolveNamed(
         title,
         rows.map((n) => ({ id: n.id, name: n.title }))
@@ -490,8 +510,10 @@ export function buildNotesTools(h: AssistantHelpers): ToolSet {
       shares: z
         .array(
           z.object({
-            person: z.string().describe("The person's name to share with (e.g. \"Aisha\")"),
-            permission: NotePermissionEnum.nullish().describe('VIEW (read-only) or EDIT. Default VIEW.'),
+            person: z.string().describe('The person\'s name to share with (e.g. "Aisha")'),
+            permission: NotePermissionEnum.nullish().describe(
+              'VIEW (read-only) or EDIT. Default VIEW.'
+            ),
           })
         )
         .describe(
@@ -500,7 +522,10 @@ export function buildNotesTools(h: AssistantHelpers): ToolSet {
     }),
     needsApproval: true,
     execute: async ({ title, shares }) => {
-      const rows = await h.db.note.findMany({ where: visibilityWhere, select: { id: true, title: true } });
+      const rows = await h.db.note.findMany({
+        where: visibilityWhere,
+        select: { id: true, title: true },
+      });
       const r = h.resolveNamed(
         title,
         rows.map((n) => ({ id: n.id, name: n.title }))
@@ -516,11 +541,14 @@ export function buildNotesTools(h: AssistantHelpers): ToolSet {
       if (!note) return { error: 'That note was not found.' };
       // Only the author can change shares — mirrors notes.setShares.
       if (note.authorId !== h.ctx.userId) {
-        return { error: 'Only the note\'s author can change who it is shared with.' };
+        return { error: "Only the note's author can change who it is shared with." };
       }
 
       // Resolve each person; dedupe by userId (last permission wins).
-      const resolved = new Map<string, { userId: string; name: string; permission: 'VIEW' | 'EDIT' }>();
+      const resolved = new Map<
+        string,
+        { userId: string; name: string; permission: 'VIEW' | 'EDIT' }
+      >();
       for (const s of shares) {
         const pr = await h.resolvePerson(s.person, { includeInactive: true });
         if (pr.kind === 'notfound') return { error: `No team member matches "${s.person}".` };

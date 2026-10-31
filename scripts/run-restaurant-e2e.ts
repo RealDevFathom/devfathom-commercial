@@ -40,10 +40,13 @@ async function main() {
   }
   const quote = (value: string) => '"' + value.replaceAll('"', '""') + '"';
   // Discover through Playwright so filters and the registered corpus stay identical.
+  const listingEnv = { ...env };
+  delete listingEnv.PLAYWRIGHT_JSON_OUTPUT_FILE;
+  delete listingEnv.PLAYWRIGHT_JSON_OUTPUT_NAME;
   const listing = spawnSync(
     'bunx',
     ['playwright', 'test', config, ...args, '--list', '--reporter=json'],
-    { env: env as NodeJS.ProcessEnv, encoding: 'utf8' }
+    { env: listingEnv as NodeJS.ProcessEnv, encoding: 'utf8' }
   );
   if (listing.status !== 0) throw new Error(listing.stderr || 'Could not collect the corpus.');
   type Suite = { file?: string; suites?: Suite[]; specs?: unknown[] };
@@ -126,6 +129,25 @@ async function main() {
     }
   } finally {
     await pool.end();
+    const output = env.PLAYWRIGHT_JSON_OUTPUT_FILE ?? env.PLAYWRIGHT_JSON_OUTPUT_NAME;
+    if (output) {
+      const reports = results.map(({ report }) => JSON.parse(readFileSync(report, 'utf8')));
+      const combined = {
+        ...reports[0],
+        suites: reports.flatMap((report) => report.suites ?? []),
+        errors: reports.flatMap((report) => report.errors ?? []),
+        stats: {
+          startTime: reports[0]?.stats?.startTime,
+          duration: reports.reduce((total, report) => total + (report.stats?.duration ?? 0), 0),
+          expected: reports.reduce((total, report) => total + (report.stats?.expected ?? 0), 0),
+          unexpected: reports.reduce((total, report) => total + (report.stats?.unexpected ?? 0), 0),
+          flaky: reports.reduce((total, report) => total + (report.stats?.flaky ?? 0), 0),
+          skipped: reports.reduce((total, report) => total + (report.stats?.skipped ?? 0), 0),
+        },
+      };
+      mkdirSync(resolve(output, '..'), { recursive: true });
+      writeFileSync(output, JSON.stringify(combined, null, 2));
+    }
   }
   const combinedReport = env.PLAYWRIGHT_JSON_OUTPUT_NAME;
   if (combinedReport) {

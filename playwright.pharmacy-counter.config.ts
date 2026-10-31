@@ -1,9 +1,11 @@
 import { defineConfig, devices } from '@playwright/test';
 
 import { pharmacyE2eEnvironment } from './scripts/pharmacy-e2e-environment';
+import { browserUploadStore } from './tests/e2e/fixtures/upload-store';
 
 const env = pharmacyE2eEnvironment();
 const port = Number(process.env.PLAYWRIGHT_PORT ?? 4331);
+const uploads = browserUploadStore(port);
 const baseURL = `http://127.0.0.1:${port}`;
 
 export default defineConfig({
@@ -28,20 +30,26 @@ export default defineConfig({
     video: 'retain-on-failure',
   },
   projects: [{ name: 'pharmacy-counter-serial', use: { ...devices['Desktop Chrome'] } }],
-  webServer: {
-    command: process.env.CI
-      ? `bunx next start --port ${port}`
-      : `bun run dev --hostname 127.0.0.1 --port ${port}`,
-    url: baseURL,
-    reuseExistingServer: false,
-    timeout: 120_000,
-    env: {
-      DATABASE_URL: env.DATABASE_URL!,
-      TEST_DATABASE_URL: env.TEST_DATABASE_URL!,
-      PHARMACY_E2E: '1',
-      AUTH_SECRET: process.env.AUTH_SECRET ?? '',
-      AUTH_TRUST_HOST: 'true',
-      SHARED_APP_HOSTS: '127.0.0.1',
+  webServer: [
+    uploads.server,
+    {
+      command: process.env.CI
+        ? `bunx next start --port ${port}`
+        : `bun run dev --hostname 127.0.0.1 --port ${port}`,
+      url: baseURL,
+      reuseExistingServer: false,
+      timeout: 120_000,
+      env: {
+        ...uploads.env,
+        DATABASE_URL: env.DATABASE_URL!,
+        TEST_DATABASE_URL: env.TEST_DATABASE_URL!,
+        PHARMACY_E2E: '1',
+        AUTH_SECRET: process.env.AUTH_SECRET ?? '',
+        AUTH_TRUST_HOST: 'true',
+        AUTH_URL: process.env.PHARMACY_FIRST_SALE_TENANT_ORIGIN ?? process.env.AUTH_URL ?? baseURL,
+        SHARED_APP_HOSTS: '127.0.0.1,www.localhost',
+        PLATFORM_BASE_DOMAIN: 'localhost',
+      },
     },
-  },
+  ],
 });

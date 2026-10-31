@@ -143,6 +143,13 @@ describe('CounterUnitToggle (POS-03)', () => {
     expect(props.onQuantityChange).toHaveBeenLastCalledWith(7);
   });
 
+  it('provides 44px touch targets for every quantity stepper control', () => {
+    renderToggle();
+    expect(screen.getByRole('button', { name: 'Decrease quantity' })).toHaveClass('size-11');
+    expect(screen.getByLabelText('Quantity')).toHaveClass('h-11');
+    expect(screen.getByRole('button', { name: 'Increase quantity' })).toHaveClass('size-11');
+  });
+
   it('disables every control when the counter is busy', () => {
     renderToggle({ disabled: true });
     for (const radio of screen.getAllByRole('radio')) {

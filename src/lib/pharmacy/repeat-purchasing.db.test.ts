@@ -11,7 +11,8 @@ import { PrismaClient } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { readRepeatPurchasing, summarizeRepeatPurchasing } from './repeat-purchasing';
 
-const url = process.env.PHARMACY_REPEAT_PURCHASING_TEST_DATABASE_URL ?? process.env.TEST_DATABASE_URL;
+const url =
+  process.env.PHARMACY_REPEAT_PURCHASING_TEST_DATABASE_URL ?? process.env.TEST_DATABASE_URL;
 const filters = {
   branchIds: ['b1', 'b2'],
   from: '2026-01-01',
