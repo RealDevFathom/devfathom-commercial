@@ -71,7 +71,7 @@ export function OwnerImportWizard() {
             <StatusPill status="success" label={receipt.replayed ? 'Already committed · receipt recovered' : 'Committed'} />
             <p>{receipt.totalUnits} base units posted · Opening valuation {money(receipt.totalValueMinor)}.</p>
             <p className="break-all font-mono text-xs">Session: {receipt.sessionId}</p>
-            <p>The counted quantities are now in inventory. Existing reconciliation and sign-off requirements still apply.</p>
+            <p>The counted quantities are now in inventory. Variance explanations were recorded with each row; independent sign-off of this opening session is not yet available in this screen.</p>
           </div>
           <Link href="/pharmacy/inventory" className={buttonVariants({ className: 'mt-5' })}>View inventory</Link>
         </SectionCard> : !options.data?.branches.length || !options.data.locations.length ?
@@ -159,7 +159,7 @@ export function OwnerImportWizard() {
               try { setReceipt(await commit.mutateAsync({ ...source, branchId, stockLocationId, mapping, previewHash: preview.previewHash, confirmed: true })); }
               catch (failure) { setError(failure instanceof Error ? failure.message : 'Commit failed. Retry to recover its receipt safely.'); }
             }}>{commit.isPending ? 'Committing opening stock…' : 'Commit opening stock'}</Button>
-            <p className="mt-3 text-sm text-text-muted">This posts the entire reviewed file once. A retry recovers the same receipt. Posting retains the existing reconciliation and sign-off controls.</p>
+            <p className="mt-3 text-sm text-text-muted">This posts the entire reviewed file once. A retry recovers the same receipt. Every count difference must carry a variance explanation; independent sign-off is not performed by this import.</p>
           </SectionCard>}
         </>}
     </main>

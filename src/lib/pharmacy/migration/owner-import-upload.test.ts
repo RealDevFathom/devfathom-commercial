@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { Workbook } from 'exceljs';
 vi.mock('server-only', () => ({}));
-import { parseOwnerUpload } from './owner-import-upload';
+import { excelShowsDay, parseOwnerUpload } from './owner-import-upload';
 import { IMPORT_MAX_BYTES, IMPORT_MAX_ROWS, suggestImportMapping } from './owner-import-input';
 
 describe('owner CSV/XLSX upload boundary', () => {
@@ -53,5 +53,11 @@ describe('owner CSV/XLSX upload boundary', () => {
   });
   it('suggests separate expected and counted columns without reusing a column', () => {
     expect(suggestImportMapping(['Code', 'Barcode', 'QTY', 'Physical count', 'Batch'])).toEqual({ sourceRef: 0, pack: 1, batch: 4, expected: 2, counted: 3 });
+  });
+  it.each([
+    ['yyyy-mm', false], ['mmm-yy', false], ['mm/yyyy', false], ['"Exp "yyyy-mm', false],
+    ['yyyy-mm-dd', true], ['dd/mm/yyyy', true], ['[$-409]d-mmm-yy', true], [undefined, true], ['General', true],
+  ])('keeps month precision for XLSX date formats without a day: %s', (format, showsDay) => {
+    expect(excelShowsDay(format)).toBe(showsDay);
   });
 });

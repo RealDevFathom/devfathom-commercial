@@ -20,6 +20,16 @@ async function readable<T>(work: () => Promise<T>): Promise<T> {
   try { return await work(); }
   catch (error) {
     if (error instanceof OwnerImportError) throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
+    const name = error instanceof Error ? error.name : '';
+    const code = (error as { code?: unknown } | null)?.code;
+    // Refusals from the shared opening-stock/finance code, or a uniqueness or
+    // serialization race the database arbitrated: the transaction rolled back.
+    if (name === 'PharmacyOpeningError' || name === 'PharmacyFinanceError' || name === 'FinancePostingError') {
+      throw new TRPCError({ code: 'BAD_REQUEST', message: `Nothing was posted: opening stock was refused (${(error as Error).message}). Run the dry run again and review the rows.`, cause: error });
+    }
+    if (name === 'PrismaClientKnownRequestError' && (code === 'P2002' || code === 'P2034')) {
+      throw new TRPCError({ code: 'CONFLICT', message: 'Nothing was posted: inventory changed or a source reference is already in use. Run the dry run again and review the rows.', cause: error });
+    }
     throw error;
   }
 }

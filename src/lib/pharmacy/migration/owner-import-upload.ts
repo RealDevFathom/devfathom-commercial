@@ -82,6 +82,16 @@ function csvRecords(text: string): string[][] {
   return records;
 }
 
+/**
+ * Excel turns a typed `2027-06` into a date cell on the 1st. Its display format
+ * is the only record of month precision; keep it rather than invent a day.
+ */
+export function excelShowsDay(numFmt: string | undefined | null): boolean {
+  if (!numFmt) return true;
+  const tokens = numFmt.replace(/"[^"]*"|\[[^\]]*\]|\\./g, '').toLowerCase();
+  return !/[ym]/.test(tokens) || /d/.test(tokens);
+}
+
 export async function parseOwnerUpload(fileName: string, bytes: Buffer): Promise<SourceTable> {
   if (!bytes.length || bytes.length > IMPORT_MAX_BYTES) throw new OwnerImportError('Upload a nonempty CSV or XLSX file up to 1 MiB.');
   let records: string[][];
@@ -105,9 +115,10 @@ export async function parseOwnerUpload(fileName: string, bytes: Buffer): Promise
       sheet.eachRow((row) => {
         const values: string[] = [];
         for (let index = 1; index <= sheet.columnCount; index++) {
-          const value = row.getCell(index).value;
+          const cell = row.getCell(index);
+          const value = cell.value;
           if (value === null || value === undefined) values.push('');
-          else if (value instanceof Date) values.push(value.toISOString().slice(0, 10));
+          else if (value instanceof Date) values.push(value.toISOString().slice(0, excelShowsDay(cell.numFmt) ? 10 : 7));
           else if (typeof value === 'string' || typeof value === 'number') values.push(String(value).trim());
           else throw new OwnerImportError('Replace formulas, links, and rich text with plain values before uploading.');
         }

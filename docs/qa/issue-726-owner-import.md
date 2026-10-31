@@ -13,8 +13,16 @@ distinct medicine/batch/pack rows before ordinary stock operations begin.
 Dry runs do not write inventory. Commit rechecks the review, posts counted units
 through MIG-03, and calls the existing opening-stock finance adapter in the same
 tenant transaction. Source hashes, actor, mapping, destination and receipt are
-audited. Zero-valued openings have no finance journal entry. Existing variance
-explanations and independent sign-off remain in force.
+audited. Zero-valued openings have no finance journal entry. Variance explanations
+are required for every count difference. Independent sign-off
+(`signOffOpeningSession`) is not exposed by any router yet, so owner-imported
+sessions remain POSTED without sign-off; this import does not claim that control.
+
+Opening lots share the organization-wide key (OPENING, source reference,
+batch). The dry run flags a source reference already used for the same batch by
+an earlier opening import in any branch, so commit cannot fail on that key.
+XLSX date cells formatted without a day (e.g. `yyyy-mm`, `mmm-yy`) are read as
+month-precision expiries.
 
 Automated tests were added but **not run**, as directed for this issue. No
 typecheck, lint, build, migration, security scanner or browser QA was executed.

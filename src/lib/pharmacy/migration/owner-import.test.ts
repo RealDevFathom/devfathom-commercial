@@ -19,7 +19,7 @@ function makeDb() {
     pharmacyOpeningTotal: { findFirst: vi.fn().mockResolvedValue(null) },
     pharmacyStockMovement: { count: vi.fn().mockResolvedValue(0), create: vi.fn() },
     pharmacyManufacturingBatch: { findFirst: vi.fn().mockResolvedValue(null), create: vi.fn() },
-    pharmacyInventoryLot: { findMany: vi.fn().mockResolvedValue([]) },
+    pharmacyInventoryLot: { findMany: vi.fn().mockResolvedValue([]), findFirst: vi.fn().mockResolvedValue(null) },
     packLevel: { findMany: vi.fn().mockResolvedValue([{
       id: 'pack', presentation: { medicineId: 'medicine', medicine: { productName: 'Test', saleable: true, coldChain: false },
         packLevels: [{ id: 'pack', level: 'STRIP', unitsPerParent: 10, parentPackLevelId: null, effectiveFrom: new Date('2020-01-01'), effectiveTo: null }],
@@ -71,6 +71,16 @@ describe('owner opening import dry run', () => {
     await expect(previewOwnerImport(scoped(), scope, input())).rejects.toThrow('active branch');
     db.packLevel.findMany.mockResolvedValueOnce([]);
     expect((await previewOwnerImport(scoped(), scope, input())).canCommit).toBe(false);
+  });
+  it('blocks a source reference already used for the same batch by another branch opening import', async () => {
+    db.pharmacyManufacturingBatch.findFirst.mockResolvedValue({ id: 'batch', state: 'ACTIVE', expiryPrecision: 'MONTH', expiresAt: new Date('2099-06-30T00:00:00Z') });
+    db.pharmacyInventoryLot.findFirst.mockResolvedValueOnce({ id: 'lot_branch_a' });
+    const preview = await previewOwnerImport(scoped(), scope, input());
+    expect(preview.canCommit).toBe(false);
+    expect(preview.lines[0]!.errors.join(' ')).toMatch(/source reference was already used/);
+    expect(db.pharmacyInventoryLot.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: { organizationId: scope.organizationId, supplierName: 'OPENING', supplierInvoiceRef: 'SRC-1', manufacturingBatchId: 'batch' },
+    }));
   });
   it('blocks duplicate source references and lot rows', async () => {
     const value = input();

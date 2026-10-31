@@ -146,6 +146,13 @@ export async function previewOwnerImport(db: ScopedDb, scope: LedgerScope, input
     }) : [];
     const currentUnits = existingLots.reduce((sum, lot) => sum + lot.balances.reduce((units, balance) => units + balance.onHandUnits, 0), 0);
     if (existingLots.length) errors.push('This branch already holds a lot for this medicine/batch/pack. Use inventory counts to reconcile it; it cannot be imported twice.');
+    // Opening lots are keyed organization-wide by (OPENING, sourceRef, batch):
+    // another branch or an earlier file may already own this reference.
+    const referenceTaken = batch && sourceRef ? await db.pharmacyInventoryLot.findFirst({
+      where: { organizationId: scope.organizationId, supplierName: 'OPENING', supplierInvoiceRef: sourceRef, manufacturingBatchId: batch.id },
+      select: { id: true },
+    }) : null;
+    if (referenceTaken) errors.push('This source reference was already used for this batch in an earlier opening import (possibly another branch). Use a distinct source reference, e.g. prefix it with the branch code.');
     if (countedUnits !== null && unitCostMinor !== null) {
       totalUnits += countedUnits;
       totalValueMinor += BigInt(countedUnits) * BigInt(unitCostMinor);
