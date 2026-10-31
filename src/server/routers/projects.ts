@@ -12,6 +12,7 @@ import {
   assertTaskAccess,
 } from '../authz';
 import { assertInOrganization, workspaceId } from '../org-refs';
+import { withProjectMembershipChanges } from '../project-membership';
 
 // Format a task due date for emails, e.g. "Fri, Jun 20 · 5:00 PM".
 function formatDue(date: Date): string {
@@ -201,26 +202,67 @@ export const projectsRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const isAdmin = ctx.session.user.role === 'ADMIN';
-      const callerMembership = await ctx.db.projectMember.findUnique({
-        where: { projectId_userId: { projectId: input.projectId, userId: ctx.session.user.id } },
-      });
-      if (!isAdmin && callerMembership?.role !== 'LEAD') {
-        throw new TRPCError({
-          code: 'FORBIDDEN',
-          message: 'Only the project lead or an admin can add members.',
-        });
-      }
-      await assertInOrganization(ctx.db.user, workspaceId(ctx), [input.userId]);
+      const organizationId = workspaceId(ctx);
+      await assertInOrganization(ctx.db.user, organizationId, [input.userId]);
 
-      // Idempotent — if already a member, just update the role
-      const membership = await ctx.db.projectMember.upsert({
-        where: { projectId_userId: { projectId: input.projectId, userId: input.userId } },
-        create: { projectId: input.projectId, userId: input.userId, role: input.role },
-        update: { role: input.role },
-      });
+      const membership = await withProjectMembershipChanges(
+        ctx.db,
+        input.projectId,
+        organizationId,
+        async (tx) => {
+          const callerMembership = await tx.projectMember.findFirst({
+            where: {
+              projectId: input.projectId,
+              userId: ctx.session.user.id,
+              organizationId,
+            },
+          });
+          if (!isAdmin && callerMembership?.role !== 'LEAD') {
+            throw new TRPCError({
+              code: 'FORBIDDEN',
+              message: 'Only the project lead or an admin can add members.',
+            });
+          }
+
+          // addMember also acts as an idempotent role update for existing members.
+          if (input.role === 'MEMBER') {
+            const [target, leadCount] = await Promise.all([
+              tx.projectMember.findFirst({
+                where: { projectId: input.projectId, userId: input.userId, organizationId },
+              }),
+              tx.projectMember.count({
+                where: { projectId: input.projectId, organizationId, role: 'LEAD' },
+              }),
+            ]);
+            if (target?.role === 'LEAD' && leadCount <= 1) {
+              throw new TRPCError({
+                code: 'BAD_REQUEST',
+                message: 'Cannot demote the last lead. Promote another member first.',
+              });
+            }
+          }
+
+          return tx.projectMember.upsert({
+            where: { projectId_userId: { projectId: input.projectId, userId: input.userId } },
+            create: {
+              projectId: input.projectId,
+              userId: input.userId,
+              organizationId,
+              role: input.role,
+            },
+            update: { role: input.role },
+          });
+        }
+      );
       const [project, targetUser] = await Promise.all([
-        ctx.db.project.findUnique({ where: { id: input.projectId }, select: { name: true } }),
-        ctx.db.user.findUnique({ where: { id: input.userId }, select: { name: true } }),
+        ctx.db.project.findFirst({
+          where: { id: input.projectId, organizationId },
+          select: { name: true },
+        }),
+        ctx.db.user.findFirst({
+          where: { id: input.userId, organizationId },
+          select: { name: true },
+        }),
       ]);
       if (project && targetUser) {
         logActivity(ctx.db, ctx.session.user.id, {
@@ -250,43 +292,56 @@ export const projectsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const isAdmin = ctx.session.user.role === 'ADMIN';
       const isSelf = input.userId === ctx.session.user.id;
+      const organizationId = workspaceId(ctx);
 
-      const [target, callerMembership, leadCount] = await Promise.all([
-        ctx.db.projectMember.findUnique({
+      await withProjectMembershipChanges(ctx.db, input.projectId, organizationId, async (tx) => {
+        const [target, callerMembership, leadCount] = await Promise.all([
+          tx.projectMember.findFirst({
+            where: { projectId: input.projectId, userId: input.userId, organizationId },
+          }),
+          tx.projectMember.findFirst({
+            where: {
+              projectId: input.projectId,
+              userId: ctx.session.user.id,
+              organizationId,
+            },
+          }),
+          tx.projectMember.count({
+            where: { projectId: input.projectId, organizationId, role: 'LEAD' },
+          }),
+        ]);
+
+        if (!target)
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Member not on this project.' });
+
+        const callerIsLead = callerMembership?.role === 'LEAD';
+        if (!isAdmin && !callerIsLead && !isSelf) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'Only the project lead or an admin can remove other members.',
+          });
+        }
+
+        if (target.role === 'LEAD' && leadCount <= 1) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Cannot remove the last lead. Promote another member to lead first.',
+          });
+        }
+
+        await tx.projectMember.delete({
           where: { projectId_userId: { projectId: input.projectId, userId: input.userId } },
-        }),
-        ctx.db.projectMember.findUnique({
-          where: { projectId_userId: { projectId: input.projectId, userId: ctx.session.user.id } },
-        }),
-        ctx.db.projectMember.count({
-          where: { projectId: input.projectId, role: 'LEAD' },
-        }),
-      ]);
-
-      if (!target)
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'Member not on this project.' });
-
-      const callerIsLead = callerMembership?.role === 'LEAD';
-      if (!isAdmin && !callerIsLead && !isSelf) {
-        throw new TRPCError({
-          code: 'FORBIDDEN',
-          message: 'Only the project lead or an admin can remove other members.',
         });
-      }
-
-      if (target.role === 'LEAD' && leadCount <= 1) {
-        throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message: 'Cannot remove the last lead. Promote another member to lead first.',
-        });
-      }
-
-      await ctx.db.projectMember.delete({
-        where: { projectId_userId: { projectId: input.projectId, userId: input.userId } },
       });
       const [project, targetUser] = await Promise.all([
-        ctx.db.project.findUnique({ where: { id: input.projectId }, select: { name: true } }),
-        ctx.db.user.findUnique({ where: { id: input.userId }, select: { name: true } }),
+        ctx.db.project.findFirst({
+          where: { id: input.projectId, organizationId },
+          select: { name: true },
+        }),
+        ctx.db.user.findFirst({
+          where: { id: input.userId, organizationId },
+          select: { name: true },
+        }),
       ]);
       if (project && targetUser) {
         logActivity(ctx.db, ctx.session.user.id, {
@@ -315,35 +370,43 @@ export const projectsRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const isAdmin = ctx.session.user.role === 'ADMIN';
-      const callerMembership = await ctx.db.projectMember.findUnique({
-        where: { projectId_userId: { projectId: input.projectId, userId: ctx.session.user.id } },
-      });
-      if (!isAdmin && callerMembership?.role !== 'LEAD') {
-        throw new TRPCError({
-          code: 'FORBIDDEN',
-          message: 'Only the project lead or an admin can change roles.',
+      const organizationId = workspaceId(ctx);
+      return withProjectMembershipChanges(ctx.db, input.projectId, organizationId, async (tx) => {
+        const callerMembership = await tx.projectMember.findFirst({
+          where: {
+            projectId: input.projectId,
+            userId: ctx.session.user.id,
+            organizationId,
+          },
         });
-      }
-
-      // Block demoting the last lead
-      if (input.role === 'MEMBER') {
-        const leadCount = await ctx.db.projectMember.count({
-          where: { projectId: input.projectId, role: 'LEAD' },
-        });
-        const target = await ctx.db.projectMember.findUnique({
-          where: { projectId_userId: { projectId: input.projectId, userId: input.userId } },
-        });
-        if (target?.role === 'LEAD' && leadCount <= 1) {
+        if (!isAdmin && callerMembership?.role !== 'LEAD') {
           throw new TRPCError({
-            code: 'BAD_REQUEST',
-            message: 'Cannot demote the last lead. Promote another member first.',
+            code: 'FORBIDDEN',
+            message: 'Only the project lead or an admin can change roles.',
           });
         }
-      }
 
-      return ctx.db.projectMember.update({
-        where: { projectId_userId: { projectId: input.projectId, userId: input.userId } },
-        data: { role: input.role },
+        if (input.role === 'MEMBER') {
+          const [leadCount, target] = await Promise.all([
+            tx.projectMember.count({
+              where: { projectId: input.projectId, organizationId, role: 'LEAD' },
+            }),
+            tx.projectMember.findFirst({
+              where: { projectId: input.projectId, userId: input.userId, organizationId },
+            }),
+          ]);
+          if (target?.role === 'LEAD' && leadCount <= 1) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'Cannot demote the last lead. Promote another member first.',
+            });
+          }
+        }
+
+        return tx.projectMember.update({
+          where: { projectId_userId: { projectId: input.projectId, userId: input.userId } },
+          data: { role: input.role },
+        });
       });
     }),
 
