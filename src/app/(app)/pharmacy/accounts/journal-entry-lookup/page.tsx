@@ -27,6 +27,42 @@ const pageInput = z
     to: z.iso.datetime({ offset: true }),
   })
   .strict();
+type FieldName = 'branchId' | 'entryId' | 'from' | 'to';
+const fields: { name: FieldName; label: string }[] = [
+  { name: 'branchId', label: 'Branch ID' },
+  { name: 'entryId', label: 'Journal entry ID' },
+  { name: 'from', label: 'From (RFC3339 UTC)' },
+  { name: 'to', label: 'To, exclusive (RFC3339 UTC)' },
+];
+const idField = z.string().trim().min(1).max(128);
+const instantField = z.iso.datetime({ offset: true });
+
+function fieldErrors(query: Query): Partial<Record<FieldName, string>> {
+  const errors: Partial<Record<FieldName, string>> = {};
+  for (const { name } of fields) {
+    const raw = query[name];
+    if (Array.isArray(raw)) {
+      errors[name] = 'Provide this field only once.';
+      continue;
+    }
+    if (raw === undefined || raw.trim().length === 0) {
+      errors[name] = 'This field is required.';
+      continue;
+    }
+    if (name === 'branchId' || name === 'entryId') {
+      if (!idField.safeParse(raw).success) errors[name] = 'Use at most 128 characters.';
+    } else if (!instantField.safeParse(raw).success) {
+      errors[name] = 'Use an RFC3339 instant with an offset, for example 2026-08-01T00:00:00Z.';
+    }
+  }
+  if (!errors.from && !errors.to) {
+    const duration = Date.parse(query.to as string) - Date.parse(query.from as string);
+    if (!(duration > 0 && duration <= 92 * 86_400_000)) {
+      errors.to = 'Must be after From and no more than 92 days later.';
+    }
+  }
+  return errors;
+}
 
 export default async function JournalEntryLookupPage({
   searchParams,
@@ -46,6 +82,7 @@ export default async function JournalEntryLookupPage({
   const duration = parsed.success ? Date.parse(parsed.data.to) - Date.parse(parsed.data.from) : NaN;
   const valid = parsed.success && duration > 0 && duration <= 92 * 86_400_000;
   let state: ViewState = supplied ? { status: 'INVALID' } : { status: 'INITIAL' };
+  const errors = supplied && !valid ? fieldErrors(query) : {};
   if (valid && parsed.success) {
     try {
       const actor = await resolveTenantActor();
@@ -97,42 +134,29 @@ export default async function JournalEntryLookupPage({
           action="/pharmacy/accounts/journal-entry-lookup"
           className="grid gap-4 md:grid-cols-2"
         >
-          <label className="text-sm text-text-body">
-            Branch ID
-            <Input
-              name="branchId"
-              className="mt-1 min-h-11"
-              defaultValue={displayValues.branchId ?? ''}
-              required
-            />
-          </label>
-          <label className="text-sm text-text-body">
-            Journal entry ID
-            <Input
-              name="entryId"
-              className="mt-1 min-h-11"
-              defaultValue={displayValues.entryId ?? ''}
-              required
-            />
-          </label>
-          <label className="text-sm text-text-body">
-            From (RFC3339 UTC)
-            <Input
-              name="from"
-              className="mt-1 min-h-11"
-              defaultValue={displayValues.from ?? ''}
-              required
-            />
-          </label>
-          <label className="text-sm text-text-body">
-            To, exclusive (RFC3339 UTC)
-            <Input
-              name="to"
-              className="mt-1 min-h-11"
-              defaultValue={displayValues.to ?? ''}
-              required
-            />
-          </label>
+          {fields.map(({ name, label }) => {
+            const error = errors[name];
+            const errorId = `journal-lookup-${name}-error`;
+            return (
+              <div key={name} className="text-sm text-text-body">
+                <label htmlFor={`journal-lookup-${name}`}>{label}</label>
+                <Input
+                  id={`journal-lookup-${name}`}
+                  name={name}
+                  className="mt-1 min-h-11"
+                  defaultValue={displayValues[name] ?? ''}
+                  aria-invalid={error ? true : undefined}
+                  aria-describedby={error ? errorId : undefined}
+                  required
+                />
+                {error ? (
+                  <p id={errorId} className="mt-1 text-sm text-destructive">
+                    {error}
+                  </p>
+                ) : null}
+              </div>
+            );
+          })}
           <Button type="submit" className="min-h-11">
             Look up exact entry
           </Button>

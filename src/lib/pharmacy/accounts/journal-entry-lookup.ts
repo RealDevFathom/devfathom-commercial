@@ -115,8 +115,8 @@ export const journalEntryLookupRouter = router({
       return { status: 'TRUNCATED' } satisfies JournalEntryLookupResult;
 
     const seen = new Set<string>();
-    let debit = 0n;
-    let credit = 0n;
+    let debit = BigInt(0);
+    let credit = BigInt(0);
     const lines: SafeLine[] = [];
     const validHeader =
       boundedText(source.id) &&

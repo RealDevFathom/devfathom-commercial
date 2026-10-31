@@ -42,6 +42,20 @@ describe('journal lookup page', () => {
     expect(mocks.lookup).not.toHaveBeenCalled();
   });
 
+  it('associates field-level validation errors with the invalid inputs only', async () => {
+    const output = await html({ ...valid, entryId: 'x'.repeat(129), to: valid.from });
+    expect(output).toMatch(
+      /id="journal-lookup-entryId"[^>]*aria-invalid="true"[^>]*aria-describedby="journal-lookup-entryId-error"/
+    );
+    expect(output).toContain('id="journal-lookup-entryId-error"');
+    expect(output).toContain('Use at most 128 characters.');
+    expect(output).toMatch(/id="journal-lookup-to"[^>]*aria-invalid="true"/);
+    expect(output).toContain('Must be after From and no more than 92 days later.');
+    expect(output).not.toMatch(/id="journal-lookup-branchId"[^>]*aria-invalid/);
+    expect(output).not.toContain('journal-lookup-from-error');
+    expect(mocks.lookup).not.toHaveBeenCalled();
+  });
+
   it('wires the real server context to an exact lookup and renders escaped branch-slice detail', async () => {
     mocks.lookup.mockResolvedValue({
       status: 'FOUND',
