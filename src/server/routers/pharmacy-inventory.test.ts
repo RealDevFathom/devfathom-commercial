@@ -61,6 +61,7 @@ function makeDb() {
     packLevel: model(),
     camera: model(),
     pharmacyStockLocation: model(),
+    pharmacyColdChainSensor: Object.assign(model(), { findMany: vi.fn().mockResolvedValue([]) }),
     pharmacyTemperatureLog: Object.assign(model(), {
       createMany: vi.fn().mockResolvedValue({ count: 1 }),
     }),
@@ -767,5 +768,140 @@ describe('PUR-07 — the stock action centre transport', () => {
       })
     ).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
     expect(db.pharmacyRequisition.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('#732 — live cold-chain sensor management', () => {
+  const COLD_ZONE = {
+    id: 'fridge_1',
+    coldChain: true,
+    minimumTemperatureC: 2,
+    maximumTemperatureC: 8,
+  };
+  const ENROLL = {
+    branchId: 'branch_a',
+    stockLocationId: 'fridge_1',
+    name: 'Vaccine fridge probe',
+    deviceIdentifier: 'SN-001',
+  };
+
+  it('maps every sensor procedure to the pharmacy-inventory entitlement', () => {
+    for (const procedure of [
+      'coldChainSensors',
+      'enrollColdChainSensor',
+      'rotateColdChainSensorSecret',
+      'revokeColdChainSensor',
+    ]) {
+      expect(moduleForProcedure(`pharmacyInventory.${procedure}`)).toBe('pharmacy-inventory');
+    }
+  });
+
+  it('refuses credential issuance to a stock user who is not an admin', async () => {
+    grant([allow('pharmacy:inventory'), deny('admin:access')]);
+    db.pharmacyStockLocation.findFirst.mockResolvedValue(COLD_ZONE);
+    await expect(caller().enrollColdChainSensor(ENROLL)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    await expect(
+      caller().rotateColdChainSensorSecret({ branchId: 'branch_a', sensorId: 'sensor_1' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.pharmacyColdChainSensor.create).not.toHaveBeenCalled();
+    expect(db.pharmacyColdChainSensor.update).not.toHaveBeenCalled();
+  });
+
+  it('issues the secret once and stores only its hash, scoped to the session', async () => {
+    grant([]);
+    db.pharmacyStockLocation.findFirst.mockResolvedValue(COLD_ZONE);
+    const result = await caller().enrollColdChainSensor(ENROLL);
+    expect(result?.secret).toMatch(/^pcs_[A-Za-z0-9_-]{43}$/);
+    const [{ data }] = db.pharmacyColdChainSensor.create.mock.calls[0] as unknown as [
+      { data: Record<string, unknown> },
+    ];
+    expect(data).toMatchObject({
+      organizationId: 'org_a',
+      branchId: 'branch_a',
+      stockLocationId: 'fridge_1',
+      deviceIdentifier: 'SN-001',
+      enrolledByActorId: 'user_a',
+    });
+    expect(data.secretHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(JSON.stringify(data)).not.toContain(result!.secret);
+    expect(db.pharmacyStockLocation.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ organizationId: 'org_a', branchId: 'branch_a' }),
+      })
+    );
+  });
+
+  it('refuses to bind a sensor to a zone that is not a validated cold-chain zone', async () => {
+    grant([]);
+    db.pharmacyStockLocation.findFirst.mockResolvedValue(LOCATION_ROW);
+    await expect(caller().enrollColdChainSensor(ENROLL)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'LOCATION_NOT_COLD_CHAIN',
+    });
+    expect(db.pharmacyColdChainSensor.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a zone from another branch or tenant', async () => {
+    grant([]);
+    db.pharmacyStockLocation.findFirst.mockResolvedValue(null);
+    await expect(caller().enrollColdChainSensor(ENROLL)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(db.pharmacyColdChainSensor.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a serial already enrolled in the organization', async () => {
+    grant([]);
+    db.pharmacyStockLocation.findFirst.mockResolvedValue(COLD_ZONE);
+    db.pharmacyColdChainSensor.findFirst.mockResolvedValue({ id: 'sensor_existing' });
+    await expect(caller().enrollColdChainSensor(ENROLL)).rejects.toMatchObject({
+      code: 'CONFLICT',
+    });
+    expect(db.pharmacyColdChainSensor.create).not.toHaveBeenCalled();
+  });
+
+  it('gates listing and revocation behind pharmacy:inventory', async () => {
+    grant([allow('pharmacy:counter')]);
+    await expect(caller().coldChainSensors({ branchId: 'branch_a' })).rejects.toMatchObject(
+      CAPABILITY_REFUSAL
+    );
+    await expect(
+      caller().revokeColdChainSensor({ branchId: 'branch_a', sensorId: 'sensor_1' })
+    ).rejects.toMatchObject(CAPABILITY_REFUSAL);
+    expect(db.pharmacyColdChainSensor.findMany).not.toHaveBeenCalled();
+    expect(db.pharmacyColdChainSensor.update).not.toHaveBeenCalled();
+  });
+
+  it('lists sensors for the session branch without ever selecting the secret hash', async () => {
+    grant([allow('pharmacy:inventory')]);
+    await caller().coldChainSensors({ branchId: 'branch_a' });
+    const [query] = db.pharmacyColdChainSensor.findMany.mock.calls[0] as unknown as [
+      { where: object; select: Record<string, boolean> },
+    ];
+    expect(query.where).toEqual({ organizationId: 'org_a', branchId: 'branch_a' });
+    expect(query.select).not.toHaveProperty('secretHash');
+  });
+
+  it('revokes with a server timestamp inside the session branch', async () => {
+    grant([allow('pharmacy:inventory')]);
+    db.$queryRaw.mockResolvedValue([{ id: 'sensor_1', status: 'ACTIVE', revokedAt: null }]);
+    await caller().revokeColdChainSensor({ branchId: 'branch_a', sensorId: 'sensor_1' });
+    expect(db.pharmacyColdChainSensor.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { organizationId_id: { organizationId: 'org_a', id: 'sensor_1' } },
+        data: { status: 'REVOKED', revokedAt: expect.any(Date) },
+      })
+    );
+  });
+
+  it('reports an unknown sensor as NOT_FOUND on revoke', async () => {
+    grant([allow('pharmacy:inventory')]);
+    db.$queryRaw.mockResolvedValue([]);
+    await expect(
+      caller().revokeColdChainSensor({ branchId: 'branch_a', sensorId: 'sensor_other' })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(db.pharmacyColdChainSensor.update).not.toHaveBeenCalled();
   });
 });
