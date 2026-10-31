@@ -32,7 +32,9 @@ function fake() {
   };
   const table = {
     findFirst: vi.fn(async () => null),
-    findUnique: vi.fn(async () => record),
+    findUnique: vi.fn<
+      (args: { where: { id: string; organizationId?: string } }) => Promise<typeof record | null>
+    >(async () => record),
     findMany: vi.fn(async () => [record]),
     create: vi.fn(),
     delete: vi.fn(),
@@ -244,10 +246,8 @@ describe('retention survives failed deletion', () => {
     const { db, record, table, runtime } = fake();
     table.findMany.mockResolvedValueOnce([record]).mockResolvedValueOnce([]);
     table.findUnique.mockImplementation(async () => ({
-      organizationId: record.organizationId,
+      ...record,
       status: 'COMMITTED',
-      storageObjectName: record.storageObjectName,
-      createdAt: record.createdAt,
     }));
 
     await expect(purgeStaleMenuImports(db, { runtime })).resolves.toEqual({
@@ -276,9 +276,7 @@ describe('retention survives failed deletion', () => {
     const { db, record, table, runtime } = fake();
     table.findMany.mockResolvedValueOnce([record]).mockResolvedValueOnce([]);
     table.findUnique.mockResolvedValue({
-      organizationId: record.organizationId,
-      status: record.status,
-      storageObjectName: record.storageObjectName,
+      ...record,
       createdAt: new Date('2026-10-26T00:00:00.000Z'),
     });
 
@@ -297,9 +295,8 @@ describe('retention survives failed deletion', () => {
     table.findUnique.mockImplementation(async ({ where }) =>
       where.organizationId === 'org_actual'
         ? {
+            ...record,
             organizationId: 'org_actual',
-            status: 'PENDING_EXTRACTION',
-            storageObjectName: record.storageObjectName,
           }
         : null
     );
