@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import pg from 'pg';
 import { describe, expect, it } from 'vitest';
 
-const databaseUrl = process.env.DATABASE_URL;
+const databaseUrl = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
 const migration = readFileSync(
   'prisma/migrations/20261026120000_enforce_task_assignee_membership/migration.sql',
   'utf8'
