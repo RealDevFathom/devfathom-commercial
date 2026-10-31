@@ -201,6 +201,7 @@ export const pharmacyPrescriptionsRouter = router({
           channel,
           version: z.number().int().positive().optional(),
           granted: z.boolean(),
+          source: z.enum(['COUNTER_TABLET', 'QR']).default('COUNTER_TABLET'),
           supersedesId: z.string().optional(),
         })
         .strict()
@@ -211,7 +212,9 @@ export const pharmacyPrescriptionsRouter = router({
           db as typeof ctx.db,
           ctx.entitlements.organizationId,
           ctx.session.user.id,
-          input
+          // Source is client-labelled, so an authenticated staff session always
+          // stays attributable as the capturing staff member, QR included.
+          { ...input, staffId: ctx.session.user.id }
         )
       )
     ),

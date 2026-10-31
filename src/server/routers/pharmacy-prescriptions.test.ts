@@ -169,6 +169,27 @@ describe('prescription capture and private delivery', () => {
     expect(lock.mock.calls[0][0].values).toEqual(['org-a', 'patient-a']);
   });
 
+  it('keeps staff attribution when an authenticated session labels consent as QR', async () => {
+    const ctx = context();
+    const create = vi.fn(async ({ data }) => data);
+    const tx = {
+      $queryRaw: vi.fn().mockResolvedValue([{ id: 'patient-a' }]),
+      patientConsent: { findFirst: vi.fn().mockResolvedValue(null), create },
+    };
+    ctx.db = {
+      $transaction: async (run: (db: unknown) => unknown) => run(tx),
+    } as unknown as typeof ctx.db;
+    await expect(
+      caller(ctx).recordConsent({
+        patientId: 'patient-a',
+        purpose: 'MARKETING',
+        channel: 'WHATSAPP',
+        granted: true,
+        source: 'QR',
+      })
+    ).resolves.toMatchObject({ source: 'QR', staffId: 'user-a', recordedByUserId: 'user-a' });
+  });
+
   it('persists validated image capture and lines in one nested create', async () => {
     const receipt = await upload();
     const input = captureInput(receipt.url);
