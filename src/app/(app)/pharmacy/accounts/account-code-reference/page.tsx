@@ -33,12 +33,12 @@ const header = (
 
 function unavailable(title: string, detail: string) {
   return (
-    <main className="min-w-0 space-y-6">
+    <div className="min-w-0 space-y-6">
       {header}
       <SectionCard title={title} titleLevel={2}>
         <p className="text-sm text-text-muted">{detail}</p>
       </SectionCard>
-    </main>
+    </div>
   );
 }
 
@@ -111,7 +111,7 @@ export default async function AccountCodeReferencePage({
 
   const rows = accountCodeReference();
   return (
-    <main className="min-w-0 space-y-6">
+    <div className="min-w-0 space-y-6">
       {header}
       <SectionCard title="Canonical normal sides" titleLevel={2}>
         <p className="mb-4 text-sm text-text-muted">
@@ -137,6 +137,6 @@ export default async function AccountCodeReferencePage({
           </Table>
         </div>
       </SectionCard>
-    </main>
+    </div>
   );
 }

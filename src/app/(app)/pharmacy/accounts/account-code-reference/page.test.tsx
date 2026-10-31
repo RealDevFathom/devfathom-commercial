@@ -54,6 +54,19 @@ afterEach(() => {
 });
 
 describe('account code reference page authorization', () => {
+  it.each(['loaded', 'permission-denied'] as const)(
+    'preserves the shell as the only main landmark in the %s state',
+    async (state) => {
+      if (state === 'permission-denied') mocks.actor.mockResolvedValueOnce(null);
+
+      const page = await Page({ searchParams: Promise.resolve({}) });
+      render(<main data-slot="app-canvas">{page}</main>);
+
+      expect(screen.getAllByRole('main')).toHaveLength(1);
+      expect(screen.getByRole('main')).toHaveAttribute('data-slot', 'app-canvas');
+    }
+  );
+
   it('renders the canonical read-only reference for operational plus financial access', async () => {
     render(await Page({ searchParams: Promise.resolve({ branch: 'branch-1' }) }));
 
