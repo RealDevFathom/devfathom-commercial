@@ -27,6 +27,12 @@ const input = {
   rx: false,
 };
 describe('neutral hosted pharmacy receipt', () => {
+  it.each([4, 8, 12, 13, 14, 15])('rejects a truncated %i-byte authentication tag', (length) => {
+    const { token } = issueHostedReceipt({ ...input, now }, secret);
+    const parts = token.split('.');
+    parts[2] = Buffer.from(parts[2], 'base64url').subarray(0, length).toString('base64url');
+    expect(() => readHostedReceipt(parts.join('.'), secret, now)).toThrow('Invalid receipt link.');
+  });
   it('creates an opaque authenticated token with bounded expiry', () => {
     const issued = issueHostedReceipt({ ...input, now }, secret);
     expect(issued.token).not.toContain('R-42');

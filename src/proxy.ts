@@ -23,6 +23,7 @@ const publicPaths = [
   '/api/auth',
   '/brand',
   '/wallet',
+  '/r/pharmacy/',
 ];
 
 /**
@@ -80,6 +81,11 @@ export async function proxy(request: Request) {
     const response = NextResponse.next({ request: { headers: requestHeaders } });
     if (pathname === '/demo' || pathname.startsWith('/demo/')) {
       response.headers.set('X-Robots-Tag', 'noindex, nofollow');
+    }
+    if (pathname.startsWith('/r/pharmacy/')) {
+      response.headers.set('X-Robots-Tag', 'noindex, nofollow, noarchive');
+      response.headers.set('Cache-Control', 'private, no-store');
+      response.headers.set('Referrer-Policy', 'no-referrer');
     }
     return response;
   };

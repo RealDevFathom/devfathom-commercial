@@ -138,7 +138,9 @@ export function readHostedReceipt(token: string, secret: string, now = new Date(
   const parts = token.split('.');
   if (parts.length !== 3) throw new Error('Invalid receipt link.');
   try {
-    const decipher = createDecipheriv('aes-256-gcm', key(secret), unb64(parts[0]));
+    const decipher = createDecipheriv('aes-256-gcm', key(secret), unb64(parts[0]), {
+      authTagLength: 16,
+    });
     decipher.setAuthTag(unb64(parts[2]));
     const claims = parseClaims(
       JSON.parse(

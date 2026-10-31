@@ -1736,19 +1736,17 @@ export const pharmacySalesRouter = router({
       const receipt = await loadCounterReceipt(ctx, scope, input.saleId);
       if (receipt.receiptNumber === null || !receipt.completedAt)
         throw new TRPCError({ code: 'CONFLICT', message: 'Only a settled receipt can be sent.' });
-      const rx =
-        receipt.lines.some((line) => line.saleLineId.length > 0) &&
-        Boolean(
-          await ctx.db.pharmacySaleLine.findFirst({
-            where: {
-              organizationId: scope.organizationId,
-              branchId: scope.branchId,
-              saleId: input.saleId,
-              prescriptionLineId: { not: null },
-            },
-            select: { id: true },
-          })
-        );
+      const rx = Boolean(
+        await ctx.db.pharmacySaleLine.findFirst({
+          where: {
+            organizationId: scope.organizationId,
+            branchId: scope.branchId,
+            saleId: input.saleId,
+            OR: [{ medicine: { rx: true } }, { prescriptionLineId: { not: null } }],
+          },
+          select: { id: true },
+        })
+      );
       const now = new Date();
       const issued = issueHostedReceipt(
         {
@@ -1771,13 +1769,36 @@ export const pharmacySalesRouter = router({
         secret
       );
       const link = `${publicOrigin}/r/pharmacy/${issued.token}`;
-      const message = buildReceiptMessage({
-        branch: issued.receipt.branch,
-        receiptNumber: issued.receipt.receiptNumber,
-        total: issued.receipt.total,
-        paymentMethod: issued.receipt.paymentMethod,
-        link,
+      // Branch names and other utility fields are editable. Check the tenant's
+      // catalog too, so medicine information cannot enter the neutral template.
+      const catalog = await ctx.db.medicine.findMany({
+        where: { organizationId: scope.organizationId },
+        select: {
+          productName: true,
+          brandName: true,
+          productFamily: true,
+          aliases: { select: { value: true } },
+          strengths: { select: { ingredient: { select: { name: true } } } },
+        },
       });
+      const prohibitedTerms = catalog.flatMap((medicine) => [
+        medicine.productName,
+        ...(medicine.brandName ? [medicine.brandName] : []),
+        medicine.productFamily,
+        medicine.productFamily.replaceAll('_', ' '),
+        ...medicine.aliases.map((alias) => alias.value),
+        ...medicine.strengths.map((strength) => strength.ingredient.name),
+      ]);
+      const message = buildReceiptMessage(
+        {
+          branch: issued.receipt.branch,
+          receiptNumber: issued.receipt.receiptNumber,
+          total: issued.receipt.total,
+          paymentMethod: issued.receipt.paymentMethod,
+          link,
+        },
+        prohibitedTerms
+      );
       const recordId = await ctx.db.$transaction((tx) =>
         persistHostedReceipt(txDb(tx), issued.token, issued.receipt)
       );

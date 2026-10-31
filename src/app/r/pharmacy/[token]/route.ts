@@ -10,9 +10,17 @@ import { clientIp, rateLimit } from '@/lib/rate-limit';
 const privateHeaders = {
   'X-Robots-Tag': 'noindex, nofollow, noarchive',
   'Cache-Control': 'private, no-store',
+  'Referrer-Policy': 'no-referrer',
+  Vary: 'Accept',
 };
-export async function GET(_request: Request, context: { params: Promise<{ token: string }> }) {
+export async function GET(request: Request, context: { params: Promise<{ token: string }> }) {
   const { token } = await context.params;
+  // Preserve the JSON API while giving browser links a customer receipt page.
+  if (request.headers.get('accept')?.includes('text/html'))
+    return new NextResponse(null, {
+      status: 303,
+      headers: { ...privateHeaders, Location: `/r/pharmacy/${encodeURIComponent(token)}/view` },
+    });
   const secret = process.env.PHARMACY_HOSTED_RECEIPT_SECRET;
   if (!secret)
     return NextResponse.json(

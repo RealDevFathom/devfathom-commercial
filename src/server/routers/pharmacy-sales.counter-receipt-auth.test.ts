@@ -1,6 +1,19 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
+vi.mock('@/lib/pharmacy/whatsapp/provider', async (original) => ({
+  ...(await original<typeof import('@/lib/pharmacy/whatsapp/provider')>()),
+  createWhatsAppProvider: vi.fn(),
+}));
+vi.mock('@/lib/pharmacy/whatsapp/message-log', () => ({
+  sendAndLog: vi.fn(async (_entry: unknown, send: () => Promise<unknown>) => {
+    await send();
+    return 'PREPARED';
+  }),
+}));
+vi.mock('@/lib/pharmacy/whatsapp/hosted-receipt-store', () => ({
+  persistHostedReceipt: vi.fn(async () => 'hosted-1'),
+}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/entitlements', () => ({
@@ -62,6 +75,9 @@ vi.mock('@/lib/pharmacy/receipt-print', () => ({
 }));
 
 import { hasModule } from '@/lib/entitlements';
+import { createWhatsAppProvider } from '@/lib/pharmacy/whatsapp/provider';
+import { persistHostedReceipt } from '@/lib/pharmacy/whatsapp/hosted-receipt-store';
+import { readHostedReceipt } from '@/lib/pharmacy/whatsapp/hosted-receipt';
 import { readCounterCart, readCounterReceipt } from '@/lib/pharmacy/counter';
 import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-source';
 import { readReturnHistory } from '@/lib/pharmacy/sales';
@@ -79,6 +95,99 @@ const app = router({ pharmacySales: pharmacySalesRouter });
 type Permission = { capability: string; effect: 'ALLOW' | 'DENY' };
 
 const dispense: Permission[] = [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }];
+
+describe('hosted receipt delivery safety', () => {
+  const secret = 'test-hosted-receipt-secret-at-least-32-characters';
+  const sendText = vi.fn(async (_input: { to: string; body: string }) => ({
+    providerMessageId: 'mock-1',
+    acceptedByProvider: false,
+  }));
+  const request = {
+    branchId: 'branch-a',
+    saleId: 'sale-a',
+    phone: '+923001234567',
+    consent: 'CUSTOMER_REQUEST' as const,
+  };
+  const medicine = {
+    productName: 'Aspirin',
+    brandName: 'Disprin',
+    productFamily: 'PHARMACEUTICAL' as const,
+    aliases: [{ value: 'Acetylsalicylic' }],
+    strengths: [{ ingredient: { name: 'Salicylate' } }],
+  };
+
+  afterEach(() => vi.unstubAllEnvs());
+
+  function ready() {
+    vi.stubEnv('PHARMACY_HOSTED_RECEIPT_SECRET', secret);
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://pharmacy.example.test');
+    sendText.mockClear();
+    vi.mocked(createWhatsAppProvider).mockReturnValue({ sendText } as never);
+    vi.mocked(readCounterReceipt).mockResolvedValue({
+      receiptNumber: 7,
+      completedAt: new Date().toISOString(),
+      branchName: 'Gulberg',
+      currency: 'PKR',
+      totals: { netMinor: 1000 },
+      tenders: [{ type: 'CASH' }],
+      lines: [{ saleLineId: 'line-1' }],
+    } as never);
+    const f = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }]);
+    assign(f, ['branch-a']);
+    f.db.medicine.findMany.mockResolvedValue([medicine]);
+    return f;
+  }
+
+  it.each([
+    { rx: true, prescriptionLineId: null },
+    { rx: false, prescriptionLineId: 'prescription-line-1' },
+    { rx: false, prescriptionLineId: null },
+  ])('protects the sold medicine and retains linked-prescription protection: %j', async (line) => {
+    const f = ready();
+    f.db.pharmacySaleLine.findFirst.mockImplementation(async (args) => {
+      expect(args.where).toMatchObject({
+        organizationId: 'org-a',
+        branchId: 'branch-a',
+        saleId: 'sale-a',
+        OR: [{ medicine: { rx: true } }, { prescriptionLineId: { not: null } }],
+      });
+      return line.rx || line.prescriptionLineId ? { id: 'line-1' } : null;
+    });
+    await expect(f.caller().sendHostedReceipt(request)).resolves.toMatchObject({
+      outcome: 'PREPARED',
+    });
+    const protectedReceipt = line.rx || Boolean(line.prescriptionLineId);
+    const token = vi.mocked(persistHostedReceipt).mock.calls[0][1];
+    expect(readHostedReceipt(token, secret).rx).toBe(protectedReceipt);
+    expect(sendText).toHaveBeenCalledTimes(protectedReceipt ? 2 : 1);
+    if (protectedReceipt) expect(sendText.mock.calls[1][0].body).toContain('verification code');
+  });
+
+  it.each(['Aspirin', 'Disprin', 'Acetylsalicylic', 'Salicylate', 'Pharmaceutical'])(
+    'rejects catalog term %s in editable utility fields before persistence or sending',
+    async (term) => {
+      const f = ready();
+      f.db.pharmacySaleLine.findFirst.mockResolvedValue(null);
+      vi.mocked(readCounterReceipt).mockResolvedValue({
+        receiptNumber: 7,
+        completedAt: new Date().toISOString(),
+        branchName: term,
+        currency: 'PKR',
+        totals: { netMinor: 1000 },
+        tenders: [{ type: 'CASH' }],
+        lines: [{ saleLineId: 'line-1' }],
+      } as never);
+      await expect(f.caller().sendHostedReceipt(request)).rejects.toThrow('medicine information');
+      expect(f.db.medicine.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { organizationId: 'org-a' },
+        })
+      );
+      expect(persistHostedReceipt).not.toHaveBeenCalled();
+      expect(sendText).not.toHaveBeenCalled();
+    }
+  );
+});
 
 function fixture(
   permissions: Permission[],
@@ -129,6 +238,8 @@ function fixture(
         },
       ]),
     },
+    pharmacySaleLine: { findFirst: vi.fn() },
+    medicine: { findMany: vi.fn() },
     organization: { findUnique: vi.fn(async () => ({ currency: 'PKR' })) },
     $transaction: vi.fn(),
   };
