@@ -897,11 +897,13 @@ describeIfDatabase('orders command layer (real DB)', () => {
       orderId: opened.orderId,
       menuItemId: ids.menuItem,
       actor: actor(addKey),
+      now: AT,
     });
     const replay = await deps.orders.addItem(db, {
       orderId: opened.orderId,
       menuItemId: ids.menuItem,
       actor: actor(addKey),
+      now: new Date(AT.getTime() + 1_000),
     });
     expect(replay.replayed).toBe(true);
     expect(replay.itemId).toBe(first.itemId);
@@ -910,6 +912,122 @@ describeIfDatabase('orders command layer (real DB)', () => {
       tx.restaurantOrderItem.count({ where: { orderId: opened.orderId } })
     );
     expect(count).toBe(1); // the replay created nothing
+
+    const binding = await read((tx) =>
+      tx.restaurantOrderIdempotencyKey.findUnique({
+        where: { deviceId_key: { deviceId, key: addKey } },
+        select: { commandType: true, canonicalPayloadHash: true, resultRef: true },
+      })
+    );
+    expect(binding).toEqual({
+      commandType: 'item.add',
+      canonicalPayloadHash: expect.stringMatching(/^[0-9a-f]{64}$/),
+      resultRef: first.itemId,
+    });
+  });
+
+  it('rejects an idempotency key reused for another command type or payload', async () => {
+    const first = await openWithItem();
+    const second = await deps.orders.openOrder(first.db, {
+      organizationId: orgId,
+      entitlementLimits: { 'pos.orders.monthly': 1000000 },
+      branchId: ids.branch,
+      channel: 'DINE_IN',
+      publicationId: ids.publication,
+      actor: actor(),
+      now: AT,
+    });
+    const reusedKey = key();
+    await deps.orders.addItem(first.db, {
+      orderId: first.orderId,
+      menuItemId: ids.menuItem,
+      actor: actor(reusedKey),
+    });
+
+    await expect(
+      deps.orders.addItem(first.db, {
+        orderId: second.orderId,
+        menuItemId: ids.menuItem,
+        actor: actor(reusedKey),
+      })
+    ).rejects.toMatchObject({ reason: 'IDEMPOTENCY_CONFLICT' });
+    await expect(
+      deps.orders.sendOrder(first.db, {
+        orderId: first.orderId,
+        actor: actor(reusedKey),
+      })
+    ).rejects.toMatchObject({ reason: 'IDEMPOTENCY_CONFLICT' });
+
+    await expect(
+      read((tx) => tx.restaurantOrderItem.count({ where: { orderId: second.orderId } }))
+    ).resolves.toBe(0);
+  });
+
+  it('binds nested command data even when a field has a retry-metadata name', async () => {
+    const db = deps.createTenantDb(orgId);
+    const openKey = key();
+    const input = {
+      organizationId: orgId,
+      entitlementLimits: { 'pos.orders.monthly': 1000000, now: 1 },
+      branchId: ids.branch,
+      channel: 'DINE_IN' as const,
+      publicationId: ids.publication,
+      actor: actor(openKey),
+      now: AT,
+    };
+    await deps.orders.openOrder(db, input);
+
+    await expect(
+      deps.orders.openOrder(db, {
+        ...input,
+        entitlementLimits: { now: 1, 'pos.orders.monthly': 1000000 },
+        now: new Date(AT.getTime() + 1_000),
+      })
+    ).resolves.toMatchObject({ replayed: true });
+
+    await expect(
+      deps.orders.openOrder(db, {
+        ...input,
+        entitlementLimits: { ...input.entitlementLimits, now: 2 },
+        now: new Date(AT.getTime() + 2_000),
+      })
+    ).rejects.toMatchObject({ reason: 'IDEMPOTENCY_CONFLICT' });
+  });
+
+  it('fails closed when a legacy idempotency key has no payload hash', async () => {
+    const first = await openWithItem();
+    const second = await deps.orders.openOrder(first.db, {
+      organizationId: orgId,
+      entitlementLimits: { 'pos.orders.monthly': 1000000 },
+      branchId: ids.branch,
+      channel: 'DINE_IN',
+      publicationId: ids.publication,
+      actor: actor(),
+      now: AT,
+    });
+    const legacyKey = key();
+    await read((tx) =>
+      tx.restaurantOrderIdempotencyKey.create({
+        data: {
+          deviceId,
+          key: legacyKey,
+          commandType: 'item.add',
+          resultRef: first.itemId,
+          canonicalPayloadHash: null,
+        },
+      })
+    );
+
+    await expect(
+      deps.orders.addItem(first.db, {
+        orderId: second.orderId,
+        menuItemId: ids.menuItem,
+        actor: actor(legacyKey),
+      })
+    ).rejects.toMatchObject({ reason: 'IDEMPOTENCY_CONFLICT' });
+    await expect(
+      read((tx) => tx.restaurantOrderItem.count({ where: { orderId: second.orderId } }))
+    ).resolves.toBe(0);
   });
 
   it('keeps the ledger + outbox in lock-step, one monotonic sequence per order (C2)', async () => {

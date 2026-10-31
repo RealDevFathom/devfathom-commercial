@@ -207,6 +207,7 @@ describe('orderErrorResponse — domain error → HTTP status (no internals leak
     expect(orderErrorResponse(new OrderCommandError('x', 'ORDER_TERMINAL'))!.status).toBe(409);
     expect(orderErrorResponse(new OrderCommandError('x', 'ITEM_STATE'))!.status).toBe(409);
     expect(orderErrorResponse(new OrderCommandError('x', 'NOTHING_TO_SEND'))!.status).toBe(409);
+    expect(orderErrorResponse(new OrderCommandError('x', 'IDEMPOTENCY_CONFLICT'))!.status).toBe(409);
     expect(orderErrorResponse(new OrderCommandError('x', 'CO_AUTH_REQUIRED'))!.status).toBe(400);
     expect(orderErrorResponse(new OrderCommandError('x', 'REASON_REQUIRED'))!.status).toBe(400);
   });
