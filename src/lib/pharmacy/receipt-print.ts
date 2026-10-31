@@ -37,10 +37,11 @@ import {
   formatReceiptDate,
   type CounterReceipt,
   type CounterReceiptLocale,
+  type PharmacyReceiptTaxIdentity,
 } from './counter-receipt';
 
 /** Registered tax identity printed on the receipt; null fields are omitted, never invented. */
-export type PharmacyReceiptTaxIdentity = NonNullable<CounterReceipt['taxIdentity']>;
+export type { PharmacyReceiptTaxIdentity } from './counter-receipt';
 
 export type PharmacyReceiptEscPosJob = {
   document: PrintDocument;
