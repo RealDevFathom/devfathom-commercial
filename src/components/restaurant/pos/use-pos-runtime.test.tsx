@@ -68,6 +68,62 @@ function transport(extra: (path: string, init?: RequestInit) => Promise<Response
 afterEach(() => vi.unstubAllGlobals());
 
 describe('usePosRuntime boundaries', () => {
+  it.each(['revoked', 'omitted', 'operator removed'] as const)(
+    'uses current directory comp access when session access is stale (%s)',
+    async (change) => {
+      const legacyOperator = {
+        staffProfileId: operators[0].staffProfileId,
+        displayName: operators[0].displayName,
+        role: operators[0].role,
+        canApprove: operators[0].canApprove,
+      };
+      const directory =
+        change === 'operator removed'
+          ? []
+          : [change === 'omitted' ? legacyOperator : { ...operators[0], canComp: false }];
+      vi.stubGlobal(
+        'fetch',
+        transport((path) =>
+          path.endsWith('/operators') ? Promise.resolve(json({ operators: directory })) : undefined
+        )
+      );
+      const { result } = renderHook(() => usePosRuntime({ demo: true }));
+
+      await waitFor(() => expect(result.current.pending).toBeNull());
+      await waitFor(() => expect(result.current.operatorDirectoryState).toBe('ready'));
+      expect(result.current.runtime?.operator?.canComp).toBe(true);
+      expect(result.current.workspace!.checkoutPanelProps.canComp).toBe(false);
+    }
+  );
+
+  it('requires a successful directory load before offering comp and recovers on retry', async () => {
+    let release!: (response: Response) => void;
+    let attempts = 0;
+    vi.stubGlobal(
+      'fetch',
+      transport((path) => {
+        if (path.endsWith('/operators') && ++attempts === 1) {
+          return new Promise<Response>((resolve) => {
+            release = resolve;
+          });
+        }
+      })
+    );
+    const { result } = renderHook(() => usePosRuntime({ demo: true }));
+
+    await waitFor(() => expect(result.current.operatorDirectoryState).toBe('loading'));
+    expect(result.current.runtime?.operator?.canComp).toBe(true);
+    expect(result.current.workspace!.checkoutPanelProps.canComp).toBe(false);
+
+    await act(async () => release(json({ error: 'Directory unavailable.' }, 503)));
+    await waitFor(() => expect(result.current.operatorDirectoryState).toBe('error'));
+    expect(result.current.workspace!.checkoutPanelProps.canComp).toBe(false);
+
+    act(() => result.current.workspace!.retryOperators());
+    await waitFor(() => expect(result.current.operatorDirectoryState).toBe('ready'));
+    expect(result.current.workspace!.checkoutPanelProps.canComp).toBe(true);
+  });
+
   it('fails closed when legacy session data omits the comp capability', async () => {
     const legacyOperator = {
       staffProfileId: 'staff-1',
