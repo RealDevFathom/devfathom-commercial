@@ -12,6 +12,11 @@ import {
   assertTaskAccess,
 } from '../authz';
 import { assertInOrganization, workspaceId } from '../org-refs';
+import {
+  isProjectDateRangeViolation,
+  isValidProjectDateRange,
+  PROJECT_DATE_RANGE_MESSAGE,
+} from '@/lib/project-dates';
 
 // Format a task due date for emails, e.g. "Fri, Jun 20 · 5:00 PM".
 function formatDue(date: Date): string {
@@ -42,6 +47,24 @@ const hoursInput = z
 // same 2-decimal precision the column stores.
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
+export const createProjectInput = z
+  .object({
+    name: z.string().min(1, 'Project name is required'),
+    description: z.string().optional(),
+    type: z.enum(['CLIENT', 'INTERNAL']),
+    status: z.enum(['ACTIVE', 'IN_DEVELOPMENT', 'ON_HOLD']).default('ACTIVE'),
+    clientId: z.string().optional(),
+    startDate: z.date().optional(),
+    endDate: z.date().optional(),
+    techStack: z.array(z.string()).default([]),
+    memberIds: z.array(z.string()).default([]),
+    createDefaultBoard: z.boolean().default(true),
+  })
+  .refine(({ startDate, endDate }) => isValidProjectDateRange(startDate, endDate), {
+    message: PROJECT_DATE_RANGE_MESSAGE,
+    path: ['endDate'],
+  });
+
 export const projectsRouter = router({
   getAll: protectedProcedure.query(async ({ ctx }) => {
     const isAdmin = ctx.session.user.role === 'ADMIN';
@@ -65,77 +88,62 @@ export const projectsRouter = router({
     });
   }),
 
-  create: protectedProcedure
-    .input(
-      z.object({
-        name: z.string().min(1, 'Project name is required'),
-        description: z.string().optional(),
-        type: z.enum(['CLIENT', 'INTERNAL']),
-        status: z.enum(['ACTIVE', 'IN_DEVELOPMENT', 'ON_HOLD']).default('ACTIVE'),
-        clientId: z.string().optional(),
-        startDate: z.date().optional(),
-        endDate: z.date().optional(),
-        techStack: z.array(z.string()).default([]),
-        memberIds: z.array(z.string()).default([]),
-        createDefaultBoard: z.boolean().default(true),
-      })
-    )
-    .mutation(async ({ ctx, input }) => {
-      const { memberIds, createDefaultBoard, ...projectData } = input;
+  create: protectedProcedure.input(createProjectInput).mutation(async ({ ctx, input }) => {
+    const { memberIds, createDefaultBoard, ...projectData } = input;
 
-      // Always include creator as a member
-      const allMemberIds = [...new Set([ctx.session.user.id, ...memberIds])];
-      const orgId = workspaceId(ctx);
-      await assertInOrganization(ctx.db.user, orgId, allMemberIds);
-      await assertInOrganization(ctx.db.client, orgId, [projectData.clientId]);
+    // Always include creator as a member
+    const allMemberIds = [...new Set([ctx.session.user.id, ...memberIds])];
+    const orgId = workspaceId(ctx);
+    await assertInOrganization(ctx.db.user, orgId, allMemberIds);
+    await assertInOrganization(ctx.db.client, orgId, [projectData.clientId]);
 
-      const project = await ctx.db.project.create({
+    const project = await ctx.db.project.create({
+      data: {
+        ...projectData,
+        clientId: projectData.clientId || null,
+        members: {
+          create: allMemberIds.map((userId, i) => ({
+            userId,
+            role: i === 0 ? 'LEAD' : 'MEMBER',
+          })),
+        },
+      },
+    });
+
+    // Create a default board with standard columns
+    if (createDefaultBoard) {
+      await ctx.db.board.create({
         data: {
-          ...projectData,
-          clientId: projectData.clientId || null,
-          members: {
-            create: allMemberIds.map((userId, i) => ({
-              userId,
-              role: i === 0 ? 'LEAD' : 'MEMBER',
+          name: `${project.name} Board`,
+          projectId: project.id,
+          columns: {
+            create: ['Backlog', 'To Do', 'In Progress', 'Review', 'Done'].map((name, order) => ({
+              name,
+              order,
             })),
+          },
+          labels: {
+            create: [
+              { name: 'Bug', color: '#EF4444' },
+              { name: 'Feature', color: '#2563EB' },
+              { name: 'Enhancement', color: '#0EA5E9' },
+              { name: 'Design', color: '#F59E0B' },
+              { name: 'Urgent', color: '#DC2626' },
+            ],
           },
         },
       });
+    }
 
-      // Create a default board with standard columns
-      if (createDefaultBoard) {
-        await ctx.db.board.create({
-          data: {
-            name: `${project.name} Board`,
-            projectId: project.id,
-            columns: {
-              create: ['Backlog', 'To Do', 'In Progress', 'Review', 'Done'].map((name, order) => ({
-                name,
-                order,
-              })),
-            },
-            labels: {
-              create: [
-                { name: 'Bug', color: '#EF4444' },
-                { name: 'Feature', color: '#2563EB' },
-                { name: 'Enhancement', color: '#0EA5E9' },
-                { name: 'Design', color: '#F59E0B' },
-                { name: 'Urgent', color: '#DC2626' },
-              ],
-            },
-          },
-        });
-      }
+    logActivity(ctx.db, ctx.session.user.id, {
+      type: 'project_created',
+      message: `created project ${project.name}`,
+      entityType: 'Project',
+      entityId: project.id,
+    });
 
-      logActivity(ctx.db, ctx.session.user.id, {
-        type: 'project_created',
-        message: `created project ${project.name}`,
-        entityType: 'Project',
-        entityId: project.id,
-      });
-
-      return project;
-    }),
+    return project;
+  }),
 
   update: protectedProcedure
     .input(
@@ -154,7 +162,30 @@ export const projectsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const { id, ...data } = input;
       await assertProjectAccess(ctx, id);
-      const project = await ctx.db.project.update({ where: { id }, data });
+      const organizationId = workspaceId(ctx);
+      const existing = await ctx.db.project.findUnique({
+        where: { id, organizationId },
+        select: { startDate: true, endDate: true },
+      });
+      const startDate = data.startDate === undefined ? existing?.startDate : data.startDate;
+      const endDate = data.endDate === undefined ? existing?.endDate : data.endDate;
+      if (!isValidProjectDateRange(startDate, endDate)) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: PROJECT_DATE_RANGE_MESSAGE });
+      }
+      // The read above is not locked: a concurrent edit can still make the
+      // combined range invalid. The DB CHECK refuses it; report it as a 400.
+      const project = await ctx.db.project
+        .update({ where: { id, organizationId }, data })
+        .catch((error: unknown) => {
+          if (isProjectDateRangeViolation(error)) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: PROJECT_DATE_RANGE_MESSAGE,
+              cause: error,
+            });
+          }
+          throw error;
+        });
       logActivity(ctx.db, ctx.session.user.id, {
         type: 'project_updated',
         message:

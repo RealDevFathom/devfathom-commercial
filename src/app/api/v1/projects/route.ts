@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
-import { z } from 'zod';
 import { withApiAuth } from '@/lib/api-auth';
 import { readJson } from '@/lib/api-json';
 import { logActivity } from '@/server/activity';
+import { createProjectSchema } from './schema';
 
 export const GET = withApiAuth('projects:read', async (ctx, request) => {
   const url = new URL(request.url);
@@ -21,18 +21,6 @@ export const GET = withApiAuth('projects:read', async (ctx, request) => {
     orderBy: { updatedAt: 'desc' },
   });
   return NextResponse.json({ data: projects });
-});
-
-const createProjectSchema = z.object({
-  name: z.string().min(1),
-  description: z.string().optional(),
-  type: z.enum(['CLIENT', 'INTERNAL']),
-  status: z.enum(['ACTIVE', 'IN_DEVELOPMENT', 'ON_HOLD', 'COMPLETED']).default('ACTIVE'),
-  clientId: z.string().optional(),
-  startDate: z.string().datetime().optional(),
-  endDate: z.string().datetime().optional(),
-  techStack: z.array(z.string()).default([]),
-  memberIds: z.array(z.string()).default([]),
 });
 
 export const POST = withApiAuth('projects:write', async (ctx, request) => {
