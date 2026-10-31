@@ -7,7 +7,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
  * environment; see docs/pharmacy/whatsapp.md.
  */
 
-export type WhatsAppTemplateKey = 'refillReminder' | 'khataReminder';
+export type WhatsAppTemplateKey = 'refillReminder' | 'khataReminder' | 'ownerDigest';
 
 export type WhatsAppConfig = {
   provider: 'meta' | 'mock';
@@ -83,6 +83,7 @@ export function readWhatsAppConfig(env: Env = process.env): WhatsAppConfig {
     templates: {
       refillReminder: envValue(env, 'PHARMACY_WHATSAPP_TEMPLATE_REFILL_REMINDER'),
       khataReminder: envValue(env, 'PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER'),
+      ownerDigest: envValue(env, 'PHARMACY_WHATSAPP_TEMPLATE_OWNER_DIGEST'),
     },
     reminderLeadDays:
       Number.isSafeInteger(leadDays) && leadDays >= 0 && leadDays <= 30 ? leadDays : 3,

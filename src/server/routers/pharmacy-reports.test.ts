@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fetchRequestHandler } from '@trpc/server/adapters/fetch';
 
 const mocks = vi.hoisted(() => ({
@@ -6,6 +6,10 @@ const mocks = vi.hoisted(() => ({
   can: vi.fn<typeof import('@/lib/abac').can>(async () => false),
   branchFindMany: vi.fn(),
   settingUpsert: vi.fn(),
+  settingFindMany: vi.fn(),
+  captureFindMany: vi.fn(),
+  ownerFindUnique: vi.fn(),
+  organizationFindUnique: vi.fn(),
   userFindUnique: vi.fn(),
   branchFindFirst: vi.fn(),
   reportFindFirst: vi.fn(),
@@ -74,6 +78,7 @@ vi.mock('@/server/audit', () => ({
 }));
 
 import { hasModule } from '@/lib/entitlements';
+import { ownerDigestWhatsAppPhoneHash } from '@/lib/pharmacy/owner-digest';
 import type { TRPCContext } from '../trpc';
 import { pharmacyReportsRouter } from './pharmacy-reports';
 
@@ -88,8 +93,14 @@ function context(role = 'ADMIN') {
         update: mocks.reportUpdate,
         updateManyAndReturn: mocks.reportUpdateManyAndReturn,
       },
-      pharmacyOwnerDigestSetting: { upsert: mocks.settingUpsert },
-      user: { findUnique: mocks.userFindUnique },
+      pharmacyOwnerDigestSetting: { upsert: mocks.settingUpsert, findMany: mocks.settingFindMany },
+      pharmacyOwnerDigestCapture: { findMany: mocks.captureFindMany },
+      user: {
+        // Owner-digest phone reads and dashboard preference reads share ctx.db.user.
+        findUnique: (args: { select?: { phone?: boolean } }) =>
+          args?.select?.phone ? mocks.ownerFindUnique(args) : mocks.userFindUnique(args),
+      },
+      organization: { findUnique: mocks.organizationFindUnique },
     },
     entitlements: {
       organizationId: 'org_1',
@@ -792,5 +803,150 @@ describe('repeat purchasing authorization', () => {
       caller().repeatPurchasing({ ...input, supplierId: 'supplier' } as typeof input)
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(mocks.repeatRead).not.toHaveBeenCalled();
+  });
+});
+
+describe('owner digest WhatsApp consent', () => {
+  const phoneHash = ownerDigestWhatsAppPhoneHash('0300 1234567')!;
+  const input = { branchId: 'branch_1', enabled: true, time: '08:00' };
+
+  beforeEach(() => {
+    mocks.can.mockResolvedValue(true);
+    vi.mocked(hasModule).mockReturnValue(true);
+    mocks.branchFindMany.mockResolvedValue([{ id: 'branch_1', name: 'Main' }]);
+    mocks.organizationFindUnique.mockResolvedValue({ timezone: 'UTC' });
+    mocks.ownerFindUnique.mockResolvedValue({ phone: '0300 1234567' });
+    mocks.settingFindMany.mockResolvedValue([
+      {
+        branchId: 'branch_1',
+        enabled: true,
+        whatsappPhoneHash: phoneHash,
+        timeMinutes: 480,
+        nextDueAt: null,
+        branch: { name: 'Main' },
+      },
+    ]);
+    mocks.captureFindMany.mockResolvedValue([]);
+    mocks.settingUpsert.mockResolvedValue({ branchId: 'branch_1', enabled: true });
+    vi.stubEnv('PHARMACY_WHATSAPP_PROVIDER', 'meta');
+    vi.stubEnv('PHARMACY_WHATSAPP_ACCESS_TOKEN', 'token');
+    vi.stubEnv('PHARMACY_WHATSAPP_PHONE_NUMBER_ID', 'sender');
+    vi.stubEnv('PHARMACY_WHATSAPP_ORGANIZATION_ID', 'org_1');
+    vi.stubEnv('PHARMACY_WHATSAPP_TEMPLATE_OWNER_DIGEST', 'owner_digest_v1');
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('does not implicitly grant WhatsApp consent through an existing digest client', async () => {
+    await caller().updateDigestSetting(input);
+    const write = mocks.settingUpsert.mock.calls[0][0];
+    expect(write.create).not.toHaveProperty('whatsappPhoneHash');
+    expect(write.update).not.toHaveProperty('whatsappPhoneHash');
+    expect(mocks.ownerFindUnique).not.toHaveBeenCalled();
+  });
+
+  it('binds an explicit opt-in to the authenticated owner and current phone', async () => {
+    await caller().updateDigestSetting({
+      ...input,
+      whatsappEnabled: true,
+      whatsappPhoneHash: phoneHash,
+    });
+    expect(mocks.ownerFindUnique).toHaveBeenCalledWith({
+      where: { id: 'user_admin' },
+      select: { phone: true },
+    });
+    expect(mocks.settingUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          organizationId_userId_branchId: {
+            organizationId: 'org_1',
+            userId: 'user_admin',
+            branchId: 'branch_1',
+          },
+        },
+        create: expect.objectContaining({ whatsappPhoneHash: phoneHash }),
+        update: expect.objectContaining({ whatsappPhoneHash: phoneHash }),
+      })
+    );
+  });
+
+  it('revokes WhatsApp consent while retaining capture', async () => {
+    await caller().updateDigestSetting({ ...input, whatsappEnabled: false });
+    expect(mocks.settingUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        update: expect.objectContaining({ enabled: true, whatsappPhoneHash: null }),
+      })
+    );
+  });
+
+  it.each([null, 'bad', '0300 7654321'])(
+    'rejects consent when the stored profile phone is absent, invalid or changed: %s',
+    async (phone) => {
+      mocks.ownerFindUnique.mockResolvedValue({ phone });
+      await expect(
+        caller().updateDigestSetting({
+          ...input,
+          whatsappEnabled: true,
+          whatsappPhoneHash: phoneHash,
+        })
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      expect(mocks.settingUpsert).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['EMPLOYEE', 'SUPER_ADMIN'])(
+    'denies opt-in for non-owner role %s before reading or writing consent',
+    async (role) => {
+      await expect(
+        caller(role).updateDigestSetting({
+          ...input,
+          whatsappEnabled: true,
+          whatsappPhoneHash: phoneHash,
+        })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(mocks.ownerFindUnique).not.toHaveBeenCalled();
+      expect(mocks.settingUpsert).not.toHaveBeenCalled();
+    }
+  );
+
+  it('denies a foreign branch before reading or writing consent', async () => {
+    await expect(
+      caller().updateDigestSetting({
+        ...input,
+        branchId: 'foreign_branch',
+        whatsappEnabled: true,
+        whatsappPhoneHash: phoneHash,
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.ownerFindUnique).not.toHaveBeenCalled();
+    expect(mocks.settingUpsert).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'enabled',
+    'off',
+    'phone changed',
+    'wrong sender',
+    'not configured',
+    'capture disabled',
+  ])('reports the effective WhatsApp status: %s', async (state) => {
+    if (state === 'off')
+      mocks.settingFindMany.mockResolvedValue([
+        { branchId: 'branch_1', enabled: true, whatsappPhoneHash: null },
+      ]);
+    if (state === 'phone changed')
+      mocks.ownerFindUnique.mockResolvedValue({ phone: '0300 7654321' });
+    if (state === 'wrong sender') vi.stubEnv('PHARMACY_WHATSAPP_ORGANIZATION_ID', 'other_org');
+    if (state === 'not configured') vi.stubEnv('PHARMACY_WHATSAPP_TEMPLATE_OWNER_DIGEST', '');
+    if (state === 'capture disabled')
+      mocks.settingFindMany.mockResolvedValue([
+        { branchId: 'branch_1', enabled: false, whatsappPhoneHash: phoneHash },
+      ]);
+    const result = await caller().digestOverview();
+    expect(result.channels.whatsapp.enabled).toBe(state === 'enabled');
+    expect(result.channels.whatsapp.configured).toBe(
+      !['wrong sender', 'not configured'].includes(state)
+    );
+    expect(result.settings[0].whatsappEnabled).toBe(!['off', 'phone changed'].includes(state));
+    expect(result.settings[0]).not.toHaveProperty('whatsappPhoneHash');
   });
 });

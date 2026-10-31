@@ -5,6 +5,7 @@ import { Suspense } from 'react';
 
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Checkbox } from '@/components/ui/checkbox';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
@@ -16,6 +17,7 @@ import { createTRPCContext } from '@/server/trpc';
 import { DailyWorkPack, DailyWorkPackLoading } from './daily-work-pack';
 import { MarketingSummary } from './marketing-summary';
 import { ObservedDemand } from './observed-demand';
+import { DigestSaveButton } from './digest-save-button';
 
 export const metadata: Metadata = { title: 'Pharmacy reports' };
 
@@ -195,6 +197,8 @@ export default async function PharmacyReportsPage({
       await actionCaller.updateDigestSetting({
         branchId: String(data.get('branchId') ?? ''),
         enabled: data.get('enabled') === 'true',
+        whatsappEnabled: data.get('whatsappEnabled') === 'true',
+        whatsappPhoneHash: String(data.get('whatsappPhoneHash') ?? '') || undefined,
         time: String(data.get('time') ?? ''),
       });
     } catch {
@@ -923,7 +927,7 @@ export default async function PharmacyReportsPage({
               >
                 <p className="text-sm text-text-muted">
                   Opt in per branch. Times use your workspace timezone. Capture history is always
-                  stored; WhatsApp remains disabled until a provider integration is implemented.
+                  stored. WhatsApp is optional and sends financial figures only after you opt in.
                 </p>
                 {digestMessage === 'saved' ? (
                   <p className="mt-3 text-sm text-success" role="status">
@@ -931,7 +935,8 @@ export default async function PharmacyReportsPage({
                   </p>
                 ) : digestMessage === 'error' ? (
                   <p className="mt-3 text-sm text-destructive" role="alert">
-                    Digest settings could not be saved. Check the time and try again.
+                    Digest settings could not be saved. Reload, check the time and profile phone,
+                    and try again.
                   </p>
                 ) : null}
                 <div className="mt-5 grid gap-3 md:grid-cols-2">
@@ -949,11 +954,19 @@ export default async function PharmacyReportsPage({
                       >
                         <input name="branchId" type="hidden" value={item.id} />
                         <input
-                          name="enabled"
+                          name="whatsappPhoneHash"
                           type="hidden"
-                          value={setting?.enabled ? 'false' : 'true'}
+                          value={digest.channels.whatsapp.phoneHash ?? ''}
                         />
                         <h3 className="font-medium text-text-strong">{item.name}</h3>
+                        <label className="mt-3 flex min-h-11 items-center gap-3 text-sm text-text-body">
+                          <Checkbox
+                            name="enabled"
+                            value="true"
+                            defaultChecked={setting?.enabled ?? false}
+                          />
+                          Enable daily digest
+                        </label>
                         <label className="mt-3 block text-sm text-text-body">
                           Digest time
                           <Input
@@ -964,11 +977,41 @@ export default async function PharmacyReportsPage({
                             type="time"
                           />
                         </label>
+                        <label className="mt-3 flex min-h-11 items-start gap-3 py-3 text-sm text-text-body">
+                          <Checkbox
+                            className="mt-0.5"
+                            name="whatsappEnabled"
+                            value="true"
+                            defaultChecked={setting?.whatsappEnabled ?? false}
+                            disabled={!digest.channels.whatsapp.phoneHash}
+                          />
+                          <span>
+                            {digest.channels.whatsapp.phoneLast4
+                              ? `Send sales, cash and khata figures to my WhatsApp ending ${digest.channels.whatsapp.phoneLast4}. I confirm this is my number.`
+                              : 'Add a valid phone to your profile before opting in to WhatsApp.'}
+                          </span>
+                        </label>
                         <div className="mt-3 flex flex-wrap items-center gap-3">
-                          <Button type="submit" variant={setting?.enabled ? 'outline' : 'default'}>
-                            {setting?.enabled ? 'Turn off digest' : 'Turn on digest'}
-                          </Button>
+                          <DigestSaveButton />
                           <StatusPill status={setting?.enabled ? 'Active' : 'Disabled'} />
+                          <StatusPill
+                            status={
+                              !setting?.whatsappEnabled
+                                ? 'WhatsApp off'
+                                : !digest.channels.whatsapp.configured
+                                  ? 'WhatsApp not configured'
+                                  : setting.enabled
+                                    ? 'WhatsApp enabled'
+                                    : 'WhatsApp paused'
+                            }
+                            tone={
+                              setting?.enabled &&
+                              setting.whatsappEnabled &&
+                              digest.channels.whatsapp.configured
+                                ? 'success'
+                                : 'neutral'
+                            }
+                          />
                         </div>
                       </form>
                     );
@@ -977,12 +1020,17 @@ export default async function PharmacyReportsPage({
                 <div className="mt-5 rounded-md border border-border-subtle p-4">
                   <div className="flex flex-wrap items-center gap-3">
                     <h3 className="font-medium text-text-strong">WhatsApp</h3>
-                    <StatusPill status="Disabled" />
+                    <StatusPill
+                      status={digest.channels.whatsapp.enabled ? 'Enabled' : 'Off'}
+                      tone={digest.channels.whatsapp.enabled ? 'success' : 'neutral'}
+                    />
                   </div>
                   <p className="mt-2 text-sm text-text-muted">
                     {digest.channels.whatsapp.configured
-                      ? 'Provider credentials detected, but this P0-lite stub never sends messages.'
-                      : 'No provider configuration detected. No messages are sent.'}
+                      ? 'Provider configured for this workspace. Messages send only for enabled digests with your WhatsApp consent.'
+                      : 'WhatsApp is not configured for this workspace. No messages are sent.'}{' '}
+                    Uncheck WhatsApp and save to opt out. Changing your profile phone requires a new
+                    opt-in.
                   </p>
                 </div>
               </SectionCard>

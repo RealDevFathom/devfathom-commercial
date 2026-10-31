@@ -28,7 +28,12 @@ import {
   pharmacyReportCatalog,
   readPharmacyOwnerCommandCentre,
 } from '@/lib/pharmacy/reports';
-import { nextDigestDueAt, WhatsAppChannel } from '@/lib/pharmacy/owner-digest';
+import {
+  nextDigestDueAt,
+  ownerDigestWhatsAppPhoneHash,
+  WhatsAppChannel,
+} from '@/lib/pharmacy/owner-digest';
+import { normalizeWhatsAppNumber, phoneLast4 } from '@/lib/pharmacy/whatsapp/messages';
 import {
   acknowledgePharmacyAnomalySignal,
   readPharmacyAnomalySignals,
@@ -81,6 +86,11 @@ const digestSetting = z
   .object({
     branchId: z.string().trim().min(1).max(128),
     enabled: z.boolean(),
+    whatsappEnabled: z.boolean().optional(),
+    whatsappPhoneHash: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/)
+      .optional(),
     time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
   })
   .strict();
@@ -635,13 +645,14 @@ export const pharmacyReportsRouter = router({
     const available = await scope(ctx);
     if (ctx.session!.user.role !== 'ADMIN')
       throw new TRPCError({ code: 'FORBIDDEN', message: 'Owner access is required.' });
-    const [settings, history] = await Promise.all([
+    const [settings, history, owner] = await Promise.all([
       ctx.db.pharmacyOwnerDigestSetting.findMany({
         where: { userId: ctx.session!.user.id },
         orderBy: { branch: { name: 'asc' } },
         select: {
           branchId: true,
           enabled: true,
+          whatsappPhoneHash: true,
           timeMinutes: true,
           nextDueAt: true,
           branch: { select: { name: true } },
@@ -660,14 +671,33 @@ export const pharmacyReportsRouter = router({
           branch: { select: { name: true } },
         },
       }),
+      ctx.db.user.findUnique({
+        where: { id: ctx.session!.user.id },
+        select: { phone: true },
+      }),
     ]);
+    const whatsapp = new WhatsAppChannel();
+    const configured = whatsapp.isConfiguredFor(available.organizationId);
+    const phone = normalizeWhatsAppNumber(owner?.phone);
+    const phoneHash = ownerDigestWhatsAppPhoneHash(phone);
+    const consentedSettings = settings.map(({ whatsappPhoneHash, ...setting }) => ({
+      ...setting,
+      whatsappEnabled: Boolean(phoneHash && whatsappPhoneHash === phoneHash),
+    }));
     return {
       branches: available.branches,
-      settings,
+      settings: consentedSettings,
       history,
       channels: {
         capture: { enabled: true },
-        whatsapp: { enabled: false, configured: new WhatsAppChannel().configured },
+        whatsapp: {
+          enabled:
+            configured &&
+            consentedSettings.some((setting) => setting.enabled && setting.whatsappEnabled),
+          configured,
+          phoneLast4: phone ? phoneLast4(phone) : null,
+          phoneHash,
+        },
       },
     };
   }),
@@ -685,6 +715,22 @@ export const pharmacyReportsRouter = router({
       select: { timezone: true },
     });
     if (!organization) throw new TRPCError({ code: 'NOT_FOUND', message: 'Workspace not found.' });
+    let whatsappPhoneHash: string | null | undefined;
+    if (input.whatsappEnabled === true) {
+      const owner = await ctx.db.user.findUnique({
+        where: { id: ctx.session!.user.id },
+        select: { phone: true },
+      });
+      whatsappPhoneHash = ownerDigestWhatsAppPhoneHash(owner?.phone);
+      if (!whatsappPhoneHash || input.whatsappPhoneHash !== whatsappPhoneHash)
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Reload and confirm your current profile phone before enabling WhatsApp.',
+        });
+    } else if (input.whatsappEnabled === false) {
+      whatsappPhoneHash = null;
+    }
+    const consent = whatsappPhoneHash === undefined ? {} : { whatsappPhoneHash };
     return ctx.db.pharmacyOwnerDigestSetting.upsert({
       where: {
         organizationId_userId_branchId: {
@@ -694,6 +740,7 @@ export const pharmacyReportsRouter = router({
         },
       },
       update: {
+        ...consent,
         enabled: input.enabled,
         timeMinutes,
         nextDueAt: input.enabled
@@ -701,6 +748,7 @@ export const pharmacyReportsRouter = router({
           : null,
       },
       create: {
+        ...consent,
         organizationId: available.organizationId,
         userId: ctx.session!.user.id,
         branchId: input.branchId,
