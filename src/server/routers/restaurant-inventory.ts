@@ -138,6 +138,15 @@ async function requireTransferBranches(ctx: TRPCContext, stockTransferId: string
   return [transfer.sourceLocation.branchId, transfer.destinationLocation.branchId];
 }
 
+async function requireLowStockRuleBranch(ctx: TRPCContext, ruleId: string): Promise<string> {
+  const rule = await ctx.db.restaurantLowStockRule.findUnique({
+    where: { id: ruleId },
+    select: { location: { select: { branchId: true } } },
+  });
+  if (!rule) throw new TRPCError({ code: 'NOT_FOUND', message: 'Low-stock rule not found.' });
+  return rule.location.branchId;
+}
+
 function mapInventoryError(err: unknown): never {
   if (err instanceof InventoryError || err instanceof StockLedgerError) {
     const code =
@@ -496,6 +505,7 @@ export const restaurantInventoryRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      await resolveRestaurantActor(ctx, [await requireLocationBranch(ctx, input.locationId)]);
       const rule = await createLowStockRule(ctx.db, input).catch(mapInventoryError);
       return { ...rule, threshold: qty(rule.threshold) };
     }),
@@ -510,6 +520,7 @@ export const restaurantInventoryRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      await resolveRestaurantActor(ctx, [await requireLowStockRuleBranch(ctx, input.id)]);
       const rule = await updateLowStockRule(ctx.db, input.id, { threshold: input.threshold }).catch(
         mapInventoryError
       );
@@ -519,6 +530,7 @@ export const restaurantInventoryRouter = router({
   deleteLowStockRule: adjustProc
     .input(z.object({ id: ID }).strict())
     .mutation(async ({ ctx, input }) => {
+      await resolveRestaurantActor(ctx, [await requireLowStockRuleBranch(ctx, input.id)]);
       await deleteLowStockRule(ctx.db, input.id).catch(mapInventoryError);
       return { deleted: true };
     }),

@@ -35,6 +35,7 @@ const mocks = vi.hoisted(() => ({
   findStockLocation: vi.fn(),
   findStockCount: vi.fn(),
   findStockTransfer: vi.fn(),
+  findLowStockRule: vi.fn(),
   findBranch: vi.fn(),
   countStockLocations: vi.fn(),
   createStockLocation: vi.fn(),
@@ -122,6 +123,7 @@ const db = {
   },
   restaurantStockCount: { findUnique: mocks.findStockCount },
   restaurantStockTransfer: { findUnique: mocks.findStockTransfer },
+  restaurantLowStockRule: { findUnique: mocks.findLowStockRule },
   $queryRaw: mocks.queryRaw,
   $transaction: vi.fn(async (run: (tx: unknown) => unknown) => run(db)),
 } as unknown as ScopedDb;
@@ -164,6 +166,7 @@ beforeEach(() => {
     sourceLocation: { branchId: 'branch_1' },
     destinationLocation: { branchId: 'branch_1' },
   });
+  mocks.findLowStockRule.mockResolvedValue({ location: { branchId: 'branch_1' } });
   mocks.findBranch.mockResolvedValue({ id: 'branch_1', active: true });
   mocks.findStockLocation.mockImplementation(async ({ where }) => ({
     id: where.id,
@@ -579,6 +582,75 @@ describe('restaurantInventoryRouter', () => {
       })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(mocks.postWastage).not.toHaveBeenCalled();
+  });
+
+  it('denies low-stock rule mutations for a branch the actor is not assigned to', async () => {
+    mocks.findLowStockRule.mockResolvedValue({ location: { branchId: 'branch_2' } });
+
+    const attempts = [
+      () =>
+        caller().createLowStockRule({ stockItemId: 'item_1', locationId: 'loc_2', threshold: '5' }),
+      () => caller().updateLowStockRule({ id: 'rule_2', threshold: '6' }),
+      () => caller().deleteLowStockRule({ id: 'rule_2' }),
+    ];
+    for (const attempt of attempts) {
+      mocks.can.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+      await expect(attempt()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    }
+
+    expect(mocks.findStockLocation).toHaveBeenCalledWith({
+      where: { id: 'loc_2' },
+      select: { branchId: true },
+    });
+    expect(mocks.findLowStockRule).toHaveBeenCalledTimes(2);
+    expect(mocks.findLowStockRule).toHaveBeenCalledWith({
+      where: { id: 'rule_2' },
+      select: { location: { select: { branchId: true } } },
+    });
+    expect(mocks.createLowStockRule).not.toHaveBeenCalled();
+    expect(mocks.updateLowStockRule).not.toHaveBeenCalled();
+    expect(mocks.deleteLowStockRule).not.toHaveBeenCalled();
+  });
+
+  it('denies low-stock rule mutations when the user has no active staff profile', async () => {
+    mocks.findStaffProfiles.mockResolvedValue([]);
+
+    const api = caller();
+    const attempts = [
+      () => api.createLowStockRule({ stockItemId: 'item_1', locationId: 'loc_1', threshold: '5' }),
+      () => api.updateLowStockRule({ id: 'rule_1', threshold: '6' }),
+      () => api.deleteLowStockRule({ id: 'rule_1' }),
+    ];
+    for (const attempt of attempts) {
+      await expect(attempt()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    }
+
+    expect(mocks.createLowStockRule).not.toHaveBeenCalled();
+    expect(mocks.updateLowStockRule).not.toHaveBeenCalled();
+    expect(mocks.deleteLowStockRule).not.toHaveBeenCalled();
+  });
+
+  it('rejects missing low-stock locations and rules before attempting a mutation', async () => {
+    mocks.findStockLocation.mockResolvedValueOnce(null);
+    mocks.findLowStockRule.mockResolvedValue(null);
+
+    await expect(
+      caller().createLowStockRule({
+        stockItemId: 'item_1',
+        locationId: 'loc_missing',
+        threshold: '5',
+      })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    await expect(
+      caller().updateLowStockRule({ id: 'rule_missing', threshold: '6' })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    await expect(caller().deleteLowStockRule({ id: 'rule_missing' })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
+
+    expect(mocks.createLowStockRule).not.toHaveBeenCalled();
+    expect(mocks.updateLowStockRule).not.toHaveBeenCalled();
+    expect(mocks.deleteLowStockRule).not.toHaveBeenCalled();
   });
 
   it('denies line injection into unauthorized count and transfer branches before mutation', async () => {
