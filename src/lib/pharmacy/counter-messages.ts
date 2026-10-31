@@ -37,6 +37,7 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   INVALID_QUANTITY: 'Enter a whole quantity of at least one.',
   // Sale aggregate (POS).
   PRICE_ABOVE_MRP: 'That price is above the printed MRP, which is not allowed.',
+  PRICE_CHANGED: 'The batch price changed. Refresh the medicine and confirm the new price.',
   MARGIN_GUARDRAIL: 'That discount falls below the permitted margin.',
   APPROVAL_REQUIRED: 'A supervisor must approve this discount before it can be applied.',
   REGULATED_DISCOUNT_REFUSED: 'Regulated medicines cannot be discounted.',

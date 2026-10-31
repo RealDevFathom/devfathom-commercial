@@ -570,10 +570,44 @@ function ScopedPharmacyCounterConsole({
     [activeRow, saleUnit]
   );
 
-  const preview = useMemo(
-    () => counterSelectionPreview(activeRow, selectedOption, quantity),
-    [activeRow, quantity, selectedOption]
-  );
+  const preview = useMemo(() => {
+    if (
+      !activeRow ||
+      !selectedOption ||
+      activeRow.printedMrpMinor === null ||
+      activeRow.unitsPerPack === null
+    ) {
+      return null;
+    }
+    const overrideLot = lotOverride?.inventoryLotId
+      ? lotOptionsQuery.data?.find((lot) => lot.inventoryLotId === lotOverride.inventoryLotId)
+      : null;
+    // Never fall back to the FEFO quote while the selected batch is unavailable.
+    if (lotOverride?.inventoryLotId && (!overrideLot || !lotOptionsQuery.isSuccess)) return null;
+    try {
+      return previewSaleLine({
+        option: selectedOption,
+        quantity,
+        printedMrpMinor: overrideLot?.printedMrpMinor ?? activeRow.printedMrpMinor,
+        unitsPerPack: overrideLot?.unitsPerPack ?? activeRow.unitsPerPack,
+        roundingIncrementMinor:
+          overrideLot?.roundingIncrementMinor ?? activeRow.roundingIncrementMinor,
+        availableUnits:
+          overrideLot && (overrideLot.blockedBy !== null || overrideLot.sellableUnits <= 0)
+            ? 0
+            : activeRow.onHandUnits,
+      });
+    } catch {
+      return null;
+    }
+  }, [
+    activeRow,
+    quantity,
+    selectedOption,
+    lotOverride,
+    lotOptionsQuery.data,
+    lotOptionsQuery.isSuccess,
+  ]);
 
   const requestedCanonicalUnits = selectedOption
     ? selectedOption.canonicalUnitsPerSaleUnit * quantity
@@ -939,6 +973,7 @@ function ScopedPharmacyCounterConsole({
           saleUnit: option.kind,
           quantity: units,
           canonicalUnitsPerSaleUnit: option.canonicalUnitsPerSaleUnit,
+          expectedUnitPriceMinor: selectionPreview.unitPriceMinor,
           // A stable key per (sale, medicine, unit, quantity) so a double-press of
           // the add chord cannot post the same line twice.
           idempotencyKey: `counter:${activeSaleId}:${row.medicineId}:${option.packLevelId}:${option.kind}:${units}${overrideLotId ? `:${overrideLotId}` : ''}`,

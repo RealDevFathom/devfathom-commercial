@@ -33,6 +33,7 @@ const line = {
   saleUnit: 'UNIT' as const,
   quantity: 2,
   canonicalUnitsPerSaleUnit: 1,
+  expectedUnitPriceMinor: 100,
   idempotencyKey: 'counter:sale-1:controlled',
   controlledAuthorization: {
     patientId: 'patient-1',
@@ -116,7 +117,7 @@ describe('pharmacySales.addLine controlled actor', () => {
 
   it('honors an explicit ABAC deny even when the role grants dispense', async () => {
     const { caller, credential, register } = callerFor([
-      { capability: 'pharmacy.dispense', effect: 'ALLOW' },
+      { capability: 'pharmacy:dispense', effect: 'ALLOW' },
       { capability: 'pharmacy:dispense', effect: 'DENY' },
     ]);
     await expect(caller.addLine(line)).rejects.toMatchObject({ code: 'FORBIDDEN' });

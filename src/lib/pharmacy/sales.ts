@@ -138,6 +138,7 @@ export class PharmacySaleError extends Error {
       | 'NOT_FOUND'
       | 'INVALID_STATE'
       | 'INVALID_QUANTITY'
+      | 'PRICE_CHANGED'
       | 'PRICE_ABOVE_MRP'
       | 'MARGIN_GUARDRAIL'
       | 'APPROVAL_REQUIRED'
@@ -221,6 +222,7 @@ type AddSaleLineInput = {
   saleUnit: 'PACK' | 'STRIP' | 'UNIT';
   quantity: number;
   canonicalUnitsPerSaleUnit: number;
+  expectedUnitPriceMinor?: number;
   discountKind?: 'DISCOUNT' | 'PROMOTION' | 'COMPLIMENTARY';
   discountMinor?: number;
   approvedByUserId?: string;
@@ -298,7 +300,21 @@ async function addSaleLineWithAllocation(
       organizationId: scope.organizationId,
       branchId: scope.branchId,
     },
+    include: { batch: { select: { batchNumber: true } } },
   });
+  const mrps = await db.medicinePackMrp.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      OR: lots.map((lot) => ({
+        packLevelId: lot.packLevelId,
+        batchReference: lot.batch.batchNumber,
+      })),
+    },
+    select: { packLevelId: true, batchReference: true, roundingIncrementMinor: true },
+  });
+  const roundingByPackAndBatch = new Map(
+    mrps.map((mrp) => [`${mrp.packLevelId}\0${mrp.batchReference}`, mrp.roundingIncrementMinor])
+  );
   const lotById = new Map(lots.map((lot) => [lot.id, lot]));
   let unitPriceMinor = 0,
     ceiling = 0,
@@ -310,7 +326,14 @@ async function addSaleLineWithAllocation(
       printedMrpMinor: lot.printedMrpMinor,
       canonicalUnitsInPack: lot.unitsPerPack,
       canonicalUnitsPerSaleUnit: input.canonicalUnitsPerSaleUnit,
+      roundingIncrementMinor:
+        roundingByPackAndBatch.get(`${lot.packLevelId}\0${lot.batch.batchNumber}`) ?? 1,
     });
+    if (
+      input.expectedUnitPriceMinor !== undefined &&
+      price.unitPriceMinor !== input.expectedUnitPriceMinor
+    )
+      throw new PharmacySaleError('PRICE_CHANGED');
     unitPriceMinor = Math.max(unitPriceMinor, price.unitPriceMinor);
     ceiling = Math.max(ceiling, price.proRataCeilingMinor);
     costMinor += lot.unitCostMinor * part.units;

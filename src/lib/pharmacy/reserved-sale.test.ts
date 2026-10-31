@@ -56,12 +56,15 @@ function fixture() {
       findMany: vi.fn().mockResolvedValue(
         ['reserved', 'split'].map((id) => ({
           id,
+          packLevelId: 'pack',
+          batch: { batchNumber: id },
           printedMrpMinor: 100,
           unitsPerPack: 1,
           unitCostMinor: 50,
         }))
       ),
     },
+    medicinePackMrp: { findMany: vi.fn().mockResolvedValue([]) },
     pharmacySaleLine: { create: vi.fn(async ({ data }) => ({ id: 'sale-line', ...data })) },
     pharmacySaleLineAllocation: { create: vi.fn() },
     pharmacySaleEvent: { create: vi.fn() },
@@ -161,6 +164,8 @@ describe('internal reserved checkout allocation', () => {
     db.pharmacyInventoryLot.findMany.mockResolvedValue(
       ['reserved', 'split'].map((id) => ({
         id,
+        packLevelId: 'pack',
+        batch: { batchNumber: id },
         printedMrpMinor: 100,
         unitsPerPack: 1,
         unitCostMinor: 101,

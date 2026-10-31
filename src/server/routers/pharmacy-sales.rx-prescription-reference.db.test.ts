@@ -127,6 +127,7 @@ const line = (saleId: string, medicine: Medicine, extra: Record<string, unknown>
   saleUnit: 'STRIP',
   quantity: 1,
   canonicalUnitsPerSaleUnit: 10,
+  expectedUnitPriceMinor: 2000,
   idempotencyKey: key(),
   ...extra,
 });
