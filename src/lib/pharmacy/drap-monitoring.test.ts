@@ -34,6 +34,7 @@ describe('DRAP monitoring', () => {
     const updateMany = vi.fn();
     const movementCreate = vi.fn();
     const db = {
+      $queryRaw: vi.fn(async () => []),
       pharmacyDrapIngest: { findFirst: vi.fn(async () => null), create },
       medicine: { findMany: vi.fn(async () => [{ id: 'med-a' }, { id: 'med-b' }]) },
       pharmacyManufacturingBatch: { updateMany },
@@ -65,6 +66,7 @@ describe('DRAP monitoring', () => {
     const crypto = await import('node:crypto');
     const hash = crypto.createHash('sha256').update(JSON.stringify(notice)).digest('hex');
     const db = {
+      $queryRaw: vi.fn(async () => []),
       pharmacyDrapIngest: { findFirst: vi.fn(async () => ({ id: 'existing', payloadHash: hash })) },
     } as unknown as ScopedDb;
     await expect(

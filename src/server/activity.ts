@@ -32,15 +32,7 @@ export type ActivityType =
 export interface LogActivityArgs {
   type: ActivityType;
   message: string;
-  entityType?:
-    | 'Project'
-    | 'Task'
-    | 'Note'
-    | 'Client'
-    | 'Contract'
-    | 'Invoice'
-    | 'Meeting'
-    | 'User';
+  entityType?: 'Project' | 'Task' | 'Note' | 'Client' | 'Contract' | 'Invoice' | 'Meeting' | 'User';
   entityId?: string;
   metadata?: Record<string, unknown>;
 }

@@ -341,6 +341,24 @@ describe('updateRecipeVersion — C3 immutability', () => {
       VersionImmutabilityError
     );
   });
+
+  it('rechecks mutability after waiting for the version lock', async () => {
+    let status = 'DRAFT';
+    db.transactionQueryRaw.mockImplementation(async (query: TemplateStringsArray) => {
+      if (query.join('?').includes('FOR UPDATE')) status = 'ACTIVE';
+      return [{ organizationId: 'org_1' }];
+    });
+    db.restaurantRecipeVersion.findUnique.mockImplementation(async () => ({
+      id: 'v1',
+      status,
+      recipeId: 'r1',
+    }));
+
+    await expect(updateRecipeVersion(scoped(), 'v1', { notes: 'too late' })).rejects.toThrow(
+      VersionImmutabilityError
+    );
+    expect(db.restaurantRecipeVersion.update).not.toHaveBeenCalled();
+  });
 });
 
 describe('activateRecipeVersion', () => {
@@ -351,6 +369,11 @@ describe('activateRecipeVersion', () => {
       { id: 'v2', status: 'DRAFT', versionNumber: 2 },
     ]);
     await activateRecipeVersion(scoped(), 'r1', 'v2');
+    expect(
+      db.transactionQueryRaw.mock.calls.some(([query]) =>
+        (query as TemplateStringsArray).join('?').includes('ORDER BY id FOR UPDATE')
+      )
+    ).toBe(true);
     // Two updates inside the transaction: supersede v1, activate v2
     expect(db.restaurantRecipeVersion.update).toHaveBeenCalledTimes(2);
     const calls = db.restaurantRecipeVersion.update.mock.calls as Array<

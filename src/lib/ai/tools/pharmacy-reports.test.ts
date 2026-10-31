@@ -42,6 +42,28 @@ function toolExecute() {
   }) => Promise<Record<string, unknown>>;
 }
 
+function ownerQuestionExecute(role = 'ADMIN') {
+  const db = {
+    pharmacyBranch: { findMany: branchFindMany },
+    $queryRaw: queryRaw,
+    pharmacyRecallNotice: { count },
+    pharmacySupplierClaim: { count },
+    pharmacyReceivingException: { count },
+    branchRegulatoryProfile: { count },
+  } as never;
+  return buildPharmacyReportTools(
+    createAssistantHelpers(
+      { organizationId: 'org_1', userId: 'user_1', role, enabledModules: ['pharmacy-reports'] },
+      db
+    )
+  ).askPharmacyOwnerQuestion.execute! as (input: {
+    topic: 'sales' | 'stock' | 'khata' | 'lost_demand';
+    branch: string;
+    from: string;
+    to: string;
+  }) => Promise<Record<string, unknown>>;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   abacCan.mockResolvedValue(true);
@@ -51,6 +73,41 @@ beforeEach(() => {
 });
 
 describe('Ask Fathom pharmacy reports', () => {
+  it('keeps owner Q&A read-only and rejects non-owners and out-of-scope branches', async () => {
+    const input = {
+      topic: 'lost_demand' as const,
+      branch: 'branch_outside_scope',
+      from: '2026-09-05',
+      to: '2026-09-05',
+    };
+    await expect(ownerQuestionExecute('EMPLOYEE')(input)).resolves.toMatchObject({
+      kind: 'refusal',
+    });
+    await expect(ownerQuestionExecute()(input)).resolves.toMatchObject({ kind: 'refusal' });
+    expect(queryRaw).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['sales', 'salesMinor'],
+    ['stock', 'openStockSignals'],
+    ['khata', 'khataAgingMinor'],
+    ['lost_demand', 'lostDemandEvents'],
+  ] as const)('answers the owner %s topic through cited scoped readers', async (topic, key) => {
+    const result = await ownerQuestionExecute()({
+      topic,
+      branch: 'Main Pharmacy',
+      from: '2026-09-05',
+      to: '2026-09-05',
+    });
+    expect(result.kind).toBe('answer');
+    expect(result.claims).toEqual([
+      expect.objectContaining({
+        metricKey: key,
+        scope: expect.objectContaining({ branchIds: ['branch_1'] }),
+      }),
+    ]);
+  });
+
   it('refuses an unauthorized branch without reading report figures', async () => {
     const result = await toolExecute()({
       metricKeys: ['openStockSignals'],

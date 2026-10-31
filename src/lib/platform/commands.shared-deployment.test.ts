@@ -135,11 +135,19 @@ describe('organization.deployment.shared — shared host default', () => {
 
     expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
     const audit = mocks.auditCreate.mock.calls[0]![0] as {
-      data: { action: string; targetType: string; after: Record<string, unknown> };
+      data: {
+        action: string;
+        targetType: string;
+        after: Record<string, unknown>;
+        reason: string;
+        success: boolean;
+      };
     };
     expect(audit.data.action).toBe('organization.deployment.shared');
     expect(audit.data.targetType).toBe('OrganizationDeployment');
     expect(audit.data.after).toMatchObject({ reason, status: 'READY' });
+    expect(audit.data.reason).toBe(reason);
+    expect(audit.data.success).toBe(true);
     // `reason` is audit-only; it is not a column on the deployment row.
     const created = mocks.deploymentUpsert.mock.calls[0]![0] as { create: Record<string, unknown> };
     expect(created.create).not.toHaveProperty('reason');

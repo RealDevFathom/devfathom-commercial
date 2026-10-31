@@ -44,6 +44,27 @@ import { annotateAudit } from '../audit';
 import { auditedProtectedProcedure, capabilityProcedure, router } from '../trpc';
 
 const manageDevicesProcedure = capabilityProcedure('devices:manage');
+const coAuthorizationApprovalCapability = 'coauth:approve';
+
+async function assertApproverCanCoAuthorize(
+  db: ScopedDb,
+  staffProfileId: string,
+  branchId: string
+) {
+  if (
+    !(await staffHasCapability(
+      db,
+      staffProfileId,
+      branchId,
+      coAuthorizationApprovalCapability
+    ))
+  ) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'The approving staff member lacks co-authorization approval permission.',
+    });
+  }
+}
 
 /**
  * M2-L3 / §5 / C7 — back-office device administration.
@@ -317,7 +338,12 @@ export const restaurantDevicesRouter = router({
       const eligibility = await Promise.all(
         candidates.map(async (profile) => ({
           profile,
-          eligible: await staffHasCapability(ctx.db, profile.id, device.branchId, 'devices:manage'),
+          eligible: await staffHasCapability(
+            ctx.db,
+            profile.id,
+            device.branchId,
+            coAuthorizationApprovalCapability
+          ),
         }))
       );
 
@@ -476,6 +502,11 @@ export const restaurantDevicesRouter = router({
         throw err;
       }
 
+      await assertApproverCanCoAuthorize(
+        ctx.db,
+        input.approvingStaffProfileId,
+        device.branchId
+      );
       const now = new Date();
       const auth = await authenticateOperator(ctx.db, {
         staffProfileId: input.approvingStaffProfileId,
@@ -491,19 +522,6 @@ export const restaurantDevicesRouter = router({
           });
         }
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Invalid approving credential.' });
-      }
-      if (
-        !(await staffHasCapability(
-          ctx.db,
-          input.approvingStaffProfileId,
-          device.branchId,
-          'devices:manage'
-        ))
-      ) {
-        throw new TRPCError({
-          code: 'FORBIDDEN',
-          message: 'The approving manager lacks device-management permission.',
-        });
       }
 
       // The whole tRPC request runs inside one tenant transaction (the fetch
@@ -594,6 +612,11 @@ export const restaurantDevicesRouter = router({
         throw err;
       }
 
+      await assertApproverCanCoAuthorize(
+        ctx.db,
+        input.approvingStaffProfileId,
+        device.branchId
+      );
       const auth = await authenticateOperator(ctx.db, {
         staffProfileId: input.approvingStaffProfileId,
         type: input.approvingType,
@@ -608,19 +631,6 @@ export const restaurantDevicesRouter = router({
           });
         }
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Invalid approving credential.' });
-      }
-      if (
-        !(await staffHasCapability(
-          ctx.db,
-          input.approvingStaffProfileId,
-          device.branchId,
-          'devices:manage'
-        ))
-      ) {
-        throw new TRPCError({
-          code: 'FORBIDDEN',
-          message: 'The approving manager lacks device-management permission.',
-        });
       }
 
       try {

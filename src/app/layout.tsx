@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from 'next';
+import { headers } from 'next/headers';
 import localFont from 'next/font/local';
 import './globals.css';
 import { Providers } from '@/components/providers';
@@ -204,11 +205,13 @@ export const viewport: Viewport = {
   ],
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const nonce = (await headers()).get('x-nonce') ?? undefined;
+
   return (
     <html
       lang="en"
@@ -219,7 +222,7 @@ export default function RootLayout({
       suppressHydrationWarning
     >
       <head>
-        <PreferenceBootstrap />
+        <PreferenceBootstrap nonce={nonce} />
       </head>
       <body className="min-h-full">
         <Providers>{children}</Providers>
