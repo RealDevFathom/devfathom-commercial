@@ -10,7 +10,7 @@ import { passwordRules, passwordMeetsPolicy } from '@/lib/password-policy';
 import { cn } from '@/lib/utils';
 
 const inputClass =
-  'flex h-11 w-full rounded-sm border border-border-default bg-surface-sunken px-4 text-sm text-text-strong placeholder:text-text-faint transition-colors focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/30';
+  'flex h-12 w-full rounded-[var(--radius-sm)] border border-border-default bg-surface-card px-4 text-sm text-text-strong placeholder:text-text-faint transition-colors focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/30';
 
 export function ResetPasswordForm({ token }: { token: string }) {
   const router = useRouter();
@@ -48,7 +48,7 @@ export function ResetPasswordForm({ token }: { token: string }) {
         </p>
         <a
           href="/forgot-password"
-          className="inline-flex h-11 w-full items-center justify-center rounded-sm bg-primary text-sm font-semibold text-primary-foreground transition-all hover:bg-primary-hover active:scale-[0.98]"
+          className="inline-flex h-12 w-full items-center justify-center rounded-[var(--radius-sm)] bg-primary text-sm font-semibold text-primary-foreground transition-all hover:bg-primary-hover active:scale-[0.98]"
         >
           Request a new link
         </a>
@@ -71,7 +71,7 @@ export function ResetPasswordForm({ token }: { token: string }) {
         </p>
         <a
           href="/login"
-          className="inline-flex h-11 w-full items-center justify-center rounded-sm bg-primary text-sm font-semibold text-primary-foreground transition-all hover:bg-primary-hover active:scale-[0.98]"
+          className="inline-flex h-12 w-full items-center justify-center rounded-[var(--radius-sm)] bg-primary text-sm font-semibold text-primary-foreground transition-all hover:bg-primary-hover active:scale-[0.98]"
         >
           Go to sign in
         </a>
@@ -120,7 +120,7 @@ export function ResetPasswordForm({ token }: { token: string }) {
         <div
           id="account-error"
           role="alert"
-          className="mb-5 rounded-sm border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+          className="mb-5 rounded-[var(--radius-sm)] border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
         >
           {error}
         </div>
@@ -205,7 +205,7 @@ export function ResetPasswordForm({ token }: { token: string }) {
         <Button
           type="submit"
           disabled={!canSubmit}
-          className="group flex h-11 w-full items-center justify-center rounded-sm bg-primary text-sm font-semibold text-primary-foreground transition-all hover:bg-primary-hover active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50"
+          className="group flex h-12 w-full items-center justify-center rounded-[var(--radius-sm)] bg-primary text-sm font-semibold text-primary-foreground transition-all hover:bg-primary-hover active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50"
         >
           {reset.isPending ? (
             <>

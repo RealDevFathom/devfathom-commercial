@@ -1820,8 +1820,8 @@ function ScopedPharmacyCounterConsole({
             }`}
           >
             <StatusPill status={notice.tone} tone={notice.tone} />
-            <div className="min-w-0 space-y-2 text-sm text-text-body">
-              <p>{notice.message}</p>
+            <div className="min-w-0 space-y-2 text-sm">
+              <p className="text-text-body">{notice.message}</p>
               {notice.inventoryBranchId ? (
                 <Link
                   href={`/pharmacy/inventory?branch=${encodeURIComponent(notice.inventoryBranchId)}`}

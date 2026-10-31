@@ -293,6 +293,32 @@ describe('organization member last-admin guard', () => {
     expect(mocks.userUpdate).not.toHaveBeenCalled();
   });
 
+  it('refuses a sole admin who attempts to demote themselves', async () => {
+    mocks.userFindFirst.mockResolvedValue({
+      id: 'admin_a',
+      email: 'admin@example.test',
+      role: 'ADMIN',
+      status: 'ACTIVE',
+    });
+
+    await expect(caller().updateMember({ ...updateInput, id: 'admin_a' })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'Cannot demote or deactivate the last active admin.',
+    });
+
+    expect(mocks.queryRaw).toHaveBeenCalledOnce();
+    expect(mocks.userUpdate).not.toHaveBeenCalled();
+  });
+
+  it('allows an admin demotion when another active admin remains', async () => {
+    mocks.userCount.mockResolvedValue(2);
+
+    await expect(caller().updateMember(updateInput)).resolves.toMatchObject({ id: 'admin_b' });
+
+    expect(mocks.queryRaw).toHaveBeenCalledOnce();
+    expect(mocks.userUpdate).toHaveBeenCalledOnce();
+  });
+
   it('refuses to deactivate the last active admin', async () => {
     await expect(
       caller().updateMember({ ...updateInput, role: 'ADMIN', status: 'INACTIVE' })

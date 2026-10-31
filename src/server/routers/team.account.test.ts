@@ -335,6 +335,54 @@ describe('team.getAll and team:view', () => {
   });
 });
 
+/** The lightweight roster must not bypass the directory's `team:view` decision. */
+describe('team.getRoster and team:view', () => {
+  const self = { id: 'user_self', name: 'Me', avatar: null, title: 'Engineer' };
+  const colleague = {
+    id: 'user_other',
+    name: 'Front desk',
+    avatar: null,
+    title: 'Receptionist',
+  };
+
+  it('lists the roster when team:view is allowed', async () => {
+    mocks.findMany.mockResolvedValue([colleague, self]);
+
+    await expect(caller(['hr']).getRoster()).resolves.toEqual([colleague, self]);
+    expect(mocks.permissions).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'user_self' } })
+    );
+    expect(mocks.findMany).toHaveBeenCalledWith(
+      expect.not.objectContaining({ where: expect.anything() })
+    );
+  });
+
+  it.each([
+    [
+      'an override',
+      {
+        organizationRole: null,
+        permissionOverrides: [{ capability: 'team:view', effect: 'DENY' }],
+      },
+    ],
+    [
+      'the custom role',
+      {
+        organizationRole: { permissions: [{ capability: 'team:*', effect: 'DENY' }] },
+        permissionOverrides: [],
+      },
+    ],
+  ])('reads only the viewer’s own roster row when %s denies team:view', async (_label, rules) => {
+    mocks.permissions.mockResolvedValue(rules);
+    mocks.findMany.mockResolvedValue([self]);
+
+    await expect(caller(['hr']).getRoster()).resolves.toEqual([self]);
+    expect(mocks.findMany).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ where: { id: 'user_self' } })
+    );
+  });
+});
+
 describe('team.updateProfile', () => {
   it('saves the caller profile without the hr module', async () => {
     await expect(caller([]).updateProfile({ name: 'Hotel GM', skills: [] })).resolves.toMatchObject(

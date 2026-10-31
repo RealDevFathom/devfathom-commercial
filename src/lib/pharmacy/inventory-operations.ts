@@ -193,6 +193,21 @@ export async function approveCount(
   idempotencyKeyPrefix: string,
   pin?: string
 ) {
+  // Approval reads the lifecycle state and posts its variance as one critical
+  // section. Idempotency keys only deduplicate a replay that uses the same
+  // prefix; two operators may legitimately submit different prefixes. Locking
+  // the count before reading its status makes those requests serialize, so the
+  // follower observes APPROVED and cannot post the variance a second time.
+  // The router (and every direct domain caller) runs this operation inside an
+  // interactive transaction, which holds this lock through the movements and
+  // final status update.
+  await db.$queryRaw(
+    Prisma.sql`SELECT id FROM "pharmacy_inventory_counts"
+      WHERE id=${countId}
+        AND "organizationId"=${scope.organizationId}
+        AND "branchId"=${scope.branchId}
+      FOR UPDATE`
+  );
   const count = await db.pharmacyInventoryCount.findFirst({
     where: { id: countId, organizationId: scope.organizationId, branchId: scope.branchId },
     include: { lines: true },
