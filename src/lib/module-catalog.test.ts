@@ -164,6 +164,7 @@ describe('module catalog routing', () => {
   it.each([
     ['/pharmacy/reports', 'pharmacy-reports'],
     ['/pharmacy/reports/repeat-purchasing', 'pharmacy-reports'],
+    ['/pharmacy/accounts/balance-sheet', 'pharmacy-reports'],
     ['/pharmacy/finance', 'pharmacy-finance'],
     ['/pharmacy/inventory', 'pharmacy-inventory'],
     ['/pharmacy/purchasing', 'pharmacy-procurement'],
@@ -200,6 +201,7 @@ describe('module catalog routing', () => {
 
   it.each([
     ['/pharmacy/reports', 'pharmacy-reports'],
+    ['/pharmacy/accounts/balance-sheet', 'pharmacy-reports'],
     ['/pharmacy/finance', 'pharmacy-finance'],
     ['/pharmacy/inventory', 'pharmacy-inventory'],
     ['/pharmacy/purchasing/returns', 'pharmacy-procurement'],
