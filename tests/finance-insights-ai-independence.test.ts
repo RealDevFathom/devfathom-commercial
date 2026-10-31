@@ -100,6 +100,7 @@ function fixture(
     branch: { name: organizationId, timezone: 'Asia/Karachi' },
     sourceDailyClose: {
       grossSales: new Prisma.Decimal('125.50'),
+      netSales: new Prisma.Decimal('120.25'),
       compTotal: new Prisma.Decimal('0'),
       discountTotal: new Prisma.Decimal('5.25'),
       refundTotal: new Prisma.Decimal('0'),
