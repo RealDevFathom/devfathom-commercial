@@ -1,21 +1,23 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
-vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
+vi.mock('@/lib/tenancy/scoped-db', () => ({
+  createTenantDb: vi.fn(),
+  withTenantDb: vi.fn(async (_organizationId, work) => work({ auditLog: { create: vi.fn() } })),
+}));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/entitlements', () => ({
   hasModule: vi.fn(() => true),
   resolveOrganizationEntitlements: vi.fn(),
 }));
-vi.mock('@/server/audit', async () => ({
-  annotateAudit: (await vi.importActual<typeof import('@/server/audit')>('@/server/audit'))
-    .annotateAudit,
-  ipFromHeaders: vi.fn(() => null),
-  isAuditExcludedPath: vi.fn(() => false),
-  recordTrpcAudit: vi.fn(),
-}));
+// Observe middleware calls while exercising the real audit writer.
+vi.mock('@/server/audit', async () => {
+  const actual = await vi.importActual<typeof import('@/server/audit')>('@/server/audit');
+  return { ...actual, recordTrpcAudit: vi.fn(actual.recordTrpcAudit) };
+});
 
-import { recordTrpcAudit } from '@/server/audit';
+import { flushAuditWritesForTest, recordTrpcAudit } from '@/server/audit';
+import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { router, type TRPCContext } from '../trpc';
 import { pharmacySalesRouter } from './pharmacy-sales';
 
@@ -60,6 +62,7 @@ function fixture({
       })),
     },
     pharmacySale: { findFirst: saleRead, update: vi.fn() },
+    auditLog: { create: vi.fn().mockResolvedValue({ id: 'audit-1' }) },
   };
   const context = {
     db,
@@ -88,6 +91,7 @@ const input = { branchId: 'branch-1', saleId: 'sale-1', ingredientKey: 'paraceta
 beforeEach(() => {
   vi.clearAllMocks();
 });
+afterEach(() => flushAuditWritesForTest());
 
 describe('pharmacySales.acknowledgeDuplicateSalt (#724)', () => {
   it('audit-logs the acknowledgement of two paracetamol brands', async () => {
@@ -114,6 +118,46 @@ describe('pharmacySales.acknowledgeDuplicateSalt (#724)', () => {
     });
     // Acknowledging never mutates (or blocks) the sale.
     expect(f.db.pharmacySale.update).not.toHaveBeenCalled();
+    expect(f.db.auditLog.create).toHaveBeenCalledExactlyOnceWith({
+      data: expect.objectContaining({
+        organizationId: 'org-1',
+        actorId: 'actor-1',
+        action: 'duplicate_salt_acknowledged',
+        outcome: 'SUCCESS',
+        metadata: audit.detail?.metadata,
+      }),
+    });
+    expect(withTenantDb).not.toHaveBeenCalled();
+  });
+
+  it('does not return success until the acknowledgement audit write finishes', async () => {
+    const f = fixture();
+    let release!: (row: { id: string }) => void;
+    f.db.auditLog.create.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        })
+    );
+    let finished = false;
+    const call = f.caller.acknowledgeDuplicateSalt(input).then((result) => {
+      finished = true;
+      return result;
+    });
+    await vi.waitFor(() => expect(f.db.auditLog.create).toHaveBeenCalledOnce());
+    expect(finished).toBe(false);
+    release({ id: 'audit-1' });
+    await expect(call).resolves.toMatchObject({ saleId: 'sale-1' });
+  });
+
+  it('rejects the acknowledgement if the audit insert fails, without mutating the sale', async () => {
+    const f = fixture();
+    f.db.auditLog.create.mockRejectedValueOnce(new Error('audit insert failed'));
+    await expect(f.caller.acknowledgeDuplicateSalt(input)).rejects.toMatchObject({
+      code: 'INTERNAL_SERVER_ERROR',
+    });
+    expect(f.db.pharmacySale.update).not.toHaveBeenCalled();
+    expect(withTenantDb).not.toHaveBeenCalled();
   });
 
   it('refuses, and audits the failed attempt, when the bill has no such duplicate', async () => {

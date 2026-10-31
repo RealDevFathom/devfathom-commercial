@@ -775,6 +775,7 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
                         branchId={acknowledgementScope.branchId}
                         saleId={acknowledgementScope.saleId}
                         ingredientKey={alert.acknowledgement.ingredientKey}
+                        medicines={alert.acknowledgement.medicines}
                         disabled={disabled}
                       />
                     </>

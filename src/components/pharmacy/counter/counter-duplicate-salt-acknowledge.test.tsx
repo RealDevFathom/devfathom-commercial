@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -22,22 +22,29 @@ vi.mock('@/lib/trpc', () => ({
 
 import { CounterDuplicateSaltAcknowledge } from './counter-duplicate-salt-acknowledge';
 
+const medicines = [
+  { medicineId: 'panadol', displayName: 'Panadol', ref: 'line-1' },
+  { medicineId: 'calpol', displayName: 'Calpol', ref: 'line-2' },
+];
+const props = { branchId: 'branch-1', saleId: 'sale-1', ingredientKey: 'paracetamol', medicines };
+
 beforeEach(() => {
   mocks.mutate.mockReset();
+  mocks.mutate.mockImplementation((_input, options: { onSuccess: (data: typeof props) => void }) =>
+    options.onSuccess(props)
+  );
   mocks.state.isPending = false;
   mocks.state.error = null;
 });
 
 describe('CounterDuplicateSaltAcknowledge (#724)', () => {
   it('records the acknowledgement for this bill and salt, then shows it as acknowledged', () => {
-    mocks.mutate.mockImplementation((_input, options: { onSuccess: () => void }) =>
-      options.onSuccess()
-    );
     render(
       <CounterDuplicateSaltAcknowledge
         branchId="branch-1"
         saleId="sale-1"
         ingredientKey="paracetamol"
+        medicines={medicines}
       />
     );
 
@@ -58,6 +65,7 @@ describe('CounterDuplicateSaltAcknowledge (#724)', () => {
         branchId="branch-1"
         saleId="sale-1"
         ingredientKey="paracetamol"
+        medicines={medicines}
       />
     );
     expect(screen.getByRole('button', { name: 'Acknowledge' })).toBeEnabled();
@@ -70,9 +78,64 @@ describe('CounterDuplicateSaltAcknowledge (#724)', () => {
         branchId="branch-1"
         saleId="sale-1"
         ingredientKey="paracetamol"
+        medicines={medicines}
         disabled
       />
     );
     expect(screen.getByRole('button', { name: 'Acknowledge' })).toBeDisabled();
+  });
+
+  it.each<[string, typeof medicines]>([
+    ['adds a third medicine', [...medicines, { medicineId: 'pcm', displayName: 'PCM', ref: 'line-3' }]],
+    ['removes a medicine', medicines.slice(0, 1)],
+    ['replaces a medicine', [medicines[0]!, { medicineId: 'pcm', displayName: 'PCM', ref: 'line-3' }]],
+    ['replaces a sale line', [medicines[0]!, { ...medicines[1]!, ref: 'line-new' }]],
+  ])('requires acknowledgement again when the group %s', (_change, changed) => {
+    const { rerender } = render(<CounterDuplicateSaltAcknowledge {...props} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Acknowledge' }));
+    expect(screen.getByText('Acknowledged')).toBeInTheDocument();
+
+    rerender(<CounterDuplicateSaltAcknowledge {...props} medicines={changed} />);
+
+    expect(screen.queryByText('Acknowledged')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Acknowledge' })).toBeEnabled();
+  });
+
+  it('preserves acknowledgement when the same medicines and lines are reordered', () => {
+    const { rerender } = render(<CounterDuplicateSaltAcknowledge {...props} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Acknowledge' }));
+    rerender(<CounterDuplicateSaltAcknowledge {...props} medicines={[...medicines].reverse()} />);
+    expect(screen.getByText('Acknowledged')).toBeInTheDocument();
+  });
+
+  it('does not mark a changed group acknowledged when an older request succeeds', () => {
+    let complete!: (data: typeof props) => void;
+    mocks.mutate.mockImplementation((_input, options: { onSuccess: typeof complete }) => {
+      complete = options.onSuccess;
+    });
+    const { rerender } = render(<CounterDuplicateSaltAcknowledge {...props} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Acknowledge' }));
+    rerender(
+      <CounterDuplicateSaltAcknowledge
+        {...props}
+        medicines={[...medicines, { medicineId: 'pcm', displayName: 'PCM', ref: 'line-3' }]}
+      />
+    );
+    act(() => complete(props));
+    expect(screen.queryByText('Acknowledged')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Acknowledge' })).toBeEnabled();
+  });
+
+  it('only acknowledges the medicine group actually recorded by the server', () => {
+    mocks.mutate.mockImplementation((_input, options: { onSuccess: (data: typeof props) => void }) =>
+      options.onSuccess({
+        ...props,
+        medicines: [...medicines, { medicineId: 'pcm', displayName: 'PCM', ref: 'line-3' }],
+      })
+    );
+    render(<CounterDuplicateSaltAcknowledge {...props} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Acknowledge' }));
+    expect(screen.queryByText('Acknowledged')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Acknowledge' })).toBeEnabled();
   });
 });

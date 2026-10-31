@@ -19,7 +19,7 @@
  * operator who scrolls past repeats is an operator who stops reading.
  */
 
-import { duplicateSaltGroups } from './duplicate-salt';
+import { duplicateSaltGroups, type DuplicateSaltGroup } from './duplicate-salt';
 import type { BlockReason } from './inventory';
 
 export const COUNTER_ALERT_SEVERITIES = ['SAFETY_BLOCK', 'CLINICAL_ADVICE', 'COMMERCIAL'] as const;
@@ -39,7 +39,11 @@ export type CounterAlert = {
    * #724: present only on alerts the operator may acknowledge (never on a
    * SAFETY_BLOCK). Acknowledging records an audit entry; it never gates sale.
    */
-  acknowledgement?: { kind: 'DUPLICATE_ACTIVE_INGREDIENT'; ingredientKey: string };
+  acknowledgement?: {
+    kind: 'DUPLICATE_ACTIVE_INGREDIENT';
+    ingredientKey: string;
+    medicines: DuplicateSaltGroup['medicines'];
+  };
 };
 
 const SEVERITY_RANK: Record<CounterAlertSeverity, number> = {
@@ -282,7 +286,11 @@ function duplicateSaltAlerts(lines: readonly CounterAlertLine[]): CounterAlert[]
     message: `${group.medicines.map((medicine) => medicine.displayName).join(', ')} ${group.medicines.length === 2 ? 'both' : 'all'} contain ${group.ingredientName}. Check the patient is not double-dosing.`,
     saleLineRef: group.medicines[0]?.ref ?? null,
     remedy: 'Confirm each is intended, then acknowledge. The sale is not blocked.',
-    acknowledgement: { kind: 'DUPLICATE_ACTIVE_INGREDIENT', ingredientKey: group.ingredientKey },
+    acknowledgement: {
+      kind: 'DUPLICATE_ACTIVE_INGREDIENT',
+      ingredientKey: group.ingredientKey,
+      medicines: group.medicines,
+    },
   }));
 }
 

@@ -35,6 +35,15 @@ export function duplicateSaltIngredientKey(name: string): string {
   return name.trim().replace(/\s+/g, ' ').toLocaleLowerCase('en');
 }
 
+/** Match the audited medicines and representative sale lines, regardless of order. */
+export function duplicateSaltGroupFingerprint(
+  medicines: readonly Pick<DuplicateSaltGroup['medicines'][number], 'medicineId' | 'ref'>[]
+): string {
+  return JSON.stringify(
+    medicines.map(({ medicineId, ref }) => JSON.stringify([medicineId, ref])).sort()
+  );
+}
+
 /**
  * Every active ingredient shared by two or more DISTINCT medicines on the bill,
  * ordered by ingredient key so the result is deterministic.

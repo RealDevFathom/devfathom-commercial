@@ -1552,6 +1552,10 @@ export const pharmacySalesRouter = router({
             saleLineIds: acknowledgement.medicines.map((medicine) => medicine.ref),
           },
         });
+        // This audit row IS the acknowledgement. The audit middleware awaits
+        // writes bound to ctx.db and propagates failures; the HTTP boundary
+        // commits this tenant transaction before sending a successful response.
+        ctx.audit.db = ctx.db;
         return acknowledgement;
       } catch (error) {
         if (error instanceof DuplicateSaltAcknowledgementError) {

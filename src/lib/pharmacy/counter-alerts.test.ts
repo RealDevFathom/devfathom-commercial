@@ -277,7 +277,14 @@ describe('counterAlertsFor duplicate active salt (#724)', () => {
         message: 'Panadol, Calpol both contain Paracetamol. Check the patient is not double-dosing.',
         saleLineRef: 'line-1',
         remedy: 'Confirm each is intended, then acknowledge. The sale is not blocked.',
-        acknowledgement: { kind: 'DUPLICATE_ACTIVE_INGREDIENT', ingredientKey: 'paracetamol' },
+        acknowledgement: {
+          kind: 'DUPLICATE_ACTIVE_INGREDIENT',
+          ingredientKey: 'paracetamol',
+          medicines: [
+            { medicineId: 'panadol', displayName: 'Panadol', ref: 'line-1' },
+            { medicineId: 'calpol', displayName: 'Calpol', ref: 'line-2' },
+          ],
+        },
       },
     ]);
     expect(hasBlockingAlert(alerts)).toBe(false);

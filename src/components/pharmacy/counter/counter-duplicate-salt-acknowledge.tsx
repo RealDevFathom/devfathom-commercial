@@ -5,14 +5,28 @@ import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { StatusPill } from '@/components/ui/status-pill';
 import { counterErrorMessage } from '@/lib/pharmacy/counter-messages';
+import {
+  duplicateSaltGroupFingerprint,
+  type DuplicateSaltGroup,
+} from '@/lib/pharmacy/duplicate-salt';
 import { trpc } from '@/lib/trpc';
 
 export type CounterDuplicateSaltAcknowledgeProps = {
   branchId: string;
   saleId: string;
   ingredientKey: string;
+  medicines: DuplicateSaltGroup['medicines'];
   disabled?: boolean;
 };
+
+function identityFor({
+  branchId,
+  saleId,
+  ingredientKey,
+  medicines,
+}: Omit<CounterDuplicateSaltAcknowledgeProps, 'disabled'>): string {
+  return JSON.stringify([branchId, saleId, ingredientKey, duplicateSaltGroupFingerprint(medicines)]);
+}
 
 /**
  * #724: acknowledge a duplicate-salt warning.
@@ -26,11 +40,12 @@ export function CounterDuplicateSaltAcknowledge({
   branchId,
   saleId,
   ingredientKey,
+  medicines,
   disabled = false,
 }: CounterDuplicateSaltAcknowledgeProps) {
   const acknowledge = trpc.pharmacySales.acknowledgeDuplicateSalt.useMutation();
   const [acknowledgedFor, setAcknowledgedFor] = useState<string | null>(null);
-  const identity = `${branchId}:${saleId}:${ingredientKey}`;
+  const identity = identityFor({ branchId, saleId, ingredientKey, medicines });
 
   if (acknowledgedFor === identity) {
     return (
@@ -50,7 +65,7 @@ export function CounterDuplicateSaltAcknowledge({
         onClick={() =>
           acknowledge.mutate(
             { branchId, saleId, ingredientKey },
-            { onSuccess: () => setAcknowledgedFor(identity) }
+            { onSuccess: (recorded) => setAcknowledgedFor(identityFor(recorded)) }
           )
         }
       >

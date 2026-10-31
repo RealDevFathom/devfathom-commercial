@@ -2,8 +2,9 @@
  * #724 — duplicate-salt acknowledgement against PostgreSQL under RLS.
  *
  * Two paracetamol brands on one persisted bill are recognised from the
- * ingredient graph; the counter cart carries the salts; and the server refuses
- * to acknowledge a bill in another branch or another tenant.
+ * ingredient graph; the router persists the audit row in the request transaction;
+ * the counter cart carries the salts; and the server refuses to acknowledge a
+ * bill in another branch or another tenant.
  * Skipped unless TEST_DATABASE_URL is set (a NOSUPERUSER NOBYPASSRLS role).
  */
 import { randomUUID } from 'node:crypto';
@@ -12,6 +13,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { db } from '@/lib/db';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { router, type TRPCContext } from '@/server/trpc';
+import { pharmacySalesRouter } from '@/server/routers/pharmacy-sales';
 
 import { readCounterCart } from './counter';
 import {
@@ -28,7 +31,24 @@ const orgA = `org_ds724_a_${randomUUID()}`;
 const orgB = `org_ds724_b_${randomUUID()}`;
 const branchA = `br_ds724_a_${randomUUID()}`;
 const branchA2 = `br_ds724_a2_${randomUUID()}`;
-const actorId = 'ds724-actor';
+const actorId = `ds724-actor-${randomUUID()}`;
+const app = router({ pharmacySales: pharmacySalesRouter });
+
+function acknowledgementCaller(dbx: ScopedDb) {
+  const context = {
+    db: dbx,
+    entitlements: { organizationId: orgA, enabledModules: ['pharmacy-counter'], modules: [] },
+    session: {
+      expires: '2099-01-01T00:00:00Z',
+      user: { id: actorId, role: 'EMPLOYEE', status: 'ACTIVE', organizationId: orgA },
+    },
+    organization: { id: orgA, vertical: 'PHARMACY' },
+    support: null,
+    requestMeta: { ip: null, userAgent: null },
+    audit: { detail: {} },
+  } as unknown as TRPCContext;
+  return app.createCaller(context).pharmacySales;
+}
 
 function inOrg<T>(organizationId: string, work: (db: ScopedDb) => Promise<T>) {
   if (!client) throw new Error('TEST_DATABASE_URL required');
@@ -121,6 +141,27 @@ beforeAll(async () => {
     }
   });
   await inOrg(orgA, async (dbx) => {
+    await dbx.organizationDepartment.create({
+      data: { organizationId: orgA, key: 'PHARMACY', name: 'Pharmacy' },
+    });
+    await dbx.user.create({
+      data: {
+        id: actorId,
+        organizationId: orgA,
+        name: 'Counter operator',
+        email: `${actorId}@example.test`,
+        department: 'PHARMACY',
+        title: 'Counter operator',
+        permissionOverrides: {
+          create: {
+            organizationId: orgA,
+            capability: 'pharmacy:counter',
+            effect: 'ALLOW',
+            reason: 'Duplicate-salt acknowledgement fixture',
+          },
+        },
+      },
+    });
     for (const id of [branchA, branchA2]) {
       await dbx.pharmacyBranch.create({
         data: {
@@ -134,6 +175,9 @@ beforeAll(async () => {
         },
       });
     }
+    await dbx.pharmacyBranchAssignment.create({
+      data: { organizationId: orgA, userId: actorId, branchId: branchA },
+    });
     const paracetamol = await dbx.ingredient.create({
       data: { organizationId: orgA, name: 'Paracetamol' },
     });
@@ -152,6 +196,62 @@ beforeAll(async () => {
 afterAll(() => client?.$disconnect());
 
 describeIfDatabase('duplicate-salt acknowledgement (#724)', () => {
+  it('persists the router acknowledgement in the request transaction before returning success', async () => {
+    await inOrg(orgA, async (dbx) => {
+      await acknowledgementCaller(dbx).acknowledgeDuplicateSalt({
+        branchId: branchA,
+        saleId: duplicateSale.saleId,
+        ingredientKey: 'paracetamol',
+      });
+      // The row must already exist; no background-write flush is needed.
+      expect(
+        await dbx.auditLog.count({
+          where: { targetId: duplicateSale.saleId, action: 'duplicate_salt_acknowledged' },
+        })
+      ).toBe(1);
+    });
+
+    const rows = await inOrg(orgA, (dbx) =>
+      dbx.auditLog.findMany({
+        where: { targetId: duplicateSale.saleId, action: 'duplicate_salt_acknowledged' },
+      })
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      organizationId: orgA,
+      actorId,
+      category: 'PHARMACY_SAFETY',
+      outcome: 'SUCCESS',
+      metadata: {
+        branchId: branchA,
+        ingredientKey: 'paracetamol',
+        medicineIds: [panadolId, calpolId],
+        saleLineIds: duplicateSale.lineIds,
+      },
+    });
+    expect(
+      await inOrg(orgB, (dbx) =>
+        dbx.auditLog.findMany({ where: { targetId: duplicateSale.saleId } })
+      )
+    ).toEqual([]);
+  });
+
+  it('rolls the acknowledgement back with its owning transaction', async () => {
+    const where = { targetId: duplicateSale.saleId, action: 'duplicate_salt_acknowledged' };
+    const before = await inOrg(orgA, (dbx) => dbx.auditLog.count({ where }));
+    await expect(
+      inOrg(orgA, async (dbx) => {
+        await acknowledgementCaller(dbx).acknowledgeDuplicateSalt({
+          branchId: branchA,
+          saleId: duplicateSale.saleId,
+          ingredientKey: 'paracetamol',
+        });
+        throw new Error('abort acknowledgement transaction');
+      })
+    ).rejects.toThrow('abort acknowledgement transaction');
+    expect(await inOrg(orgA, (dbx) => dbx.auditLog.count({ where }))).toBe(before);
+  });
+
   it('recognises two paracetamol brands on one persisted bill', async () => {
     const acknowledgement = await inOrg(orgA, (dbx) =>
       verifyDuplicateSaltAcknowledgement(
