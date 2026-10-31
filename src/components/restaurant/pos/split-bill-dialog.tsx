@@ -113,7 +113,10 @@ export function SplitBillDialog({ items, disabled = false, onSplit }: SplitBillD
       >
         Split bill
       </DialogTrigger>
-      <DialogContent showCloseButton={false} className="sm:max-w-lg">
+      <DialogContent
+        showCloseButton={false}
+        className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg"
+      >
         <form onSubmit={submit}>
           <DialogHeader>
             <DialogTitle>Split bill</DialogTitle>
@@ -177,10 +180,21 @@ export function SplitBillDialog({ items, disabled = false, onSplit }: SplitBillD
                           value={assignments[item.id]}
                           disabled={pending}
                           onChange={(event) => {
-                            setAssignments((current) => ({
-                              ...current,
-                              [item.id]: Number(event.target.value),
-                            }));
+                            const selectedBill = Number(event.target.value);
+                            setAssignments((current) => {
+                              const next = { ...current, [item.id]: selectedBill };
+                              const billNumbers = [...new Set(Object.values(next))].sort(
+                                (a, b) => a - b
+                              );
+                              // Checkout numbers bills by their submitted group position.
+                              // Show that same numbering before the operator submits.
+                              return Object.fromEntries(
+                                Object.entries(next).map(([id, billNumber]) => [
+                                  id,
+                                  billNumbers.indexOf(billNumber) + 1,
+                                ])
+                              );
+                            });
                             setError(null);
                           }}
                           className="mt-1 h-11 w-full rounded-md border border-input bg-surface-card px-3 text-sm text-text-strong outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
