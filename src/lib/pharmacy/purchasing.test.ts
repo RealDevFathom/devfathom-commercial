@@ -452,6 +452,7 @@ describe('PUR-02 quote comparison', () => {
           ...supplier('s_lapsed', 'Lapsed'),
           supplierAuthorized: false,
           quoteId: 'q_lapsed',
+          pricePerPackMinor: 10_000,
           schemeBuyPacks: 5,
           schemeFreePacks: 1,
           forecastSellThroughPacks: 5,
