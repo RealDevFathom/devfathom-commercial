@@ -131,7 +131,7 @@ describe('account-code reference page: authorized', () => {
     expect(rows).toHaveLength(codes.length);
     rows.forEach((row, index) => {
       const cells = within(row).getAllByRole('cell');
-      expect(cells[0]).toHaveTextContent(new RegExp(`^${codes[index]}$`));
+      expect(cells[0]!.textContent).toBe(codes[index]);
       expect(cells[2]).toHaveTextContent(
         ACCOUNT_NORMAL_SIDE[codes[index]!] === 'DEBIT' ? 'Debit' : 'Credit'
       );
