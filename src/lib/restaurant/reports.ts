@@ -6,7 +6,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { businessDateToUtcDate } from './business-date';
 import { resolveChainTip } from './daily-close';
-import { computeRecipeCost, RecipeCostingError } from './recipe-costing';
+import { computeRecipeCost, computeRecipeCostInDb, RecipeCostingError } from './recipe-costing';
 
 export const MAX_REPORT_DAYS = 90;
 export const MAX_REPORT_BRANCHES = 100;
@@ -818,34 +818,55 @@ export async function readCateringReport(
   limit = MAX_INTERACTIVE_ROWS
 ) {
   const parsed = validateRestaurantReportRange(range);
-  const rows = await db.restaurantCateringOrder.findMany({
-    where: {
-      branchId: { in: range.branchIds },
-      eventDate: { gte: parsed.from, lte: parsed.to },
-    },
-    orderBy: [{ eventDate: 'asc' }, { id: 'asc' }],
-    take: limit + 1,
-    select: {
-      id: true,
-      organizationId: true,
-      eventName: true,
-      eventDate: true,
-      status: true,
-      quotedTotal: true,
-      branch: { select: { id: true, name: true } },
-      lines: {
-        orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
-        select: {
-          recipeId: true,
-          description: true,
-          portions: true,
-          costPerPortionSnapshot: true,
+  // Keyset pagination on the (eventDate, id) sort key. It does not depend on the
+  // previous page's last row still existing, so under the default READ COMMITTED
+  // isolation a concurrent edit/delete can never skip the remainder of the range
+  // and no order is counted twice.
+  async function* orderPages() {
+    let after: { eventDate: Date; id: string } | undefined;
+    while (true) {
+      const page = await db.restaurantCateringOrder.findMany({
+        where: {
+          branchId: { in: range.branchIds },
+          eventDate: { gte: parsed.from, lte: parsed.to },
+          ...(after
+            ? {
+                OR: [
+                  { eventDate: { gt: after.eventDate } },
+                  { eventDate: after.eventDate, id: { gt: after.id } },
+                ],
+              }
+            : {}),
         },
-      },
-      extraCosts: { select: { amount: true } },
-      delivery: { select: { scheduledAt: true, deliveredAt: true } },
-    },
-  });
+        orderBy: [{ eventDate: 'asc' }, { id: 'asc' }],
+        take: 500,
+        select: {
+          id: true,
+          organizationId: true,
+          eventName: true,
+          eventDate: true,
+          status: true,
+          quotedTotal: true,
+          branch: { select: { id: true, name: true } },
+          lines: {
+            orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
+            select: {
+              recipeId: true,
+              description: true,
+              portions: true,
+              costPerPortionSnapshot: true,
+            },
+          },
+          extraCosts: { select: { amount: true } },
+          delivery: { select: { scheduledAt: true, deliveredAt: true } },
+        },
+      });
+      yield* page;
+      if (page.length < 500) return;
+      const last = page[page.length - 1];
+      after = { eventDate: last.eventDate, id: last.id };
+    }
+  }
   const costCache = new Map<
     string,
     Awaited<ReturnType<typeof computeRecipeCost>> | RecipeCostingError
@@ -871,8 +892,10 @@ export async function readCateringReport(
   let incompleteMarginCount = 0;
   let deliveredCount = 0;
   let deliveredOnTimeCount = 0;
+  let orderCount = 0;
   const orders = [];
-  for (const order of rows.slice(0, limit)) {
+  for await (const order of orderPages()) {
+    orderCount += 1;
     let orderIngredientCost = ZERO;
     let orderMissingCostLineCount = 0;
     for (const line of order.lines) {
@@ -881,7 +904,7 @@ export async function readCateringReport(
         let cost = costCache.get(line.recipeId);
         if (!cost) {
           try {
-            cost = await computeRecipeCost({
+            cost = await computeRecipeCostInDb(db, {
               organizationId: order.organizationId,
               recipeId: line.recipeId,
             });
@@ -932,26 +955,28 @@ export async function readCateringReport(
     if (orderMargin) status.knownMargin = status.knownMargin.plus(orderMargin);
     else status.incompleteMarginCount += 1;
     statusRows.set(order.status, status);
-    orders.push({
-      id: order.id,
-      eventName: order.eventName,
-      eventDate: dateKey(order.eventDate),
-      branchId: order.branch.id,
-      branchName: order.branch.name,
-      status: order.status,
-      quotedTotal: order.quotedTotal ? serializeDecimal(order.quotedTotal) : null,
-      ingredientCost:
-        orderMissingCostLineCount === 0 ? serializeDecimal(orderIngredientCost) : null,
-      extras: serializeDecimal(orderExtras),
-      margin: orderMargin ? serializeDecimal(orderMargin) : null,
-      missingCostLineCount: orderMissingCostLineCount,
-      deliveredOnTime,
-    });
+    if (orders.length < limit) {
+      orders.push({
+        id: order.id,
+        eventName: order.eventName,
+        eventDate: dateKey(order.eventDate),
+        branchId: order.branch.id,
+        branchName: order.branch.name,
+        status: order.status,
+        quotedTotal: order.quotedTotal ? serializeDecimal(order.quotedTotal) : null,
+        ingredientCost:
+          orderMissingCostLineCount === 0 ? serializeDecimal(orderIngredientCost) : null,
+        extras: serializeDecimal(orderExtras),
+        margin: orderMargin ? serializeDecimal(orderMargin) : null,
+        missingCostLineCount: orderMissingCostLineCount,
+        deliveredOnTime,
+      });
+    }
   }
   return {
     range,
     totals: {
-      orderCount: orders.length,
+      orderCount,
       revenue: serializeDecimal(revenue),
       knownIngredientCost: serializeDecimal(knownIngredientCost),
       extras: serializeDecimal(extras),
@@ -979,7 +1004,7 @@ export async function readCateringReport(
         incompleteMarginCount: row.incompleteMarginCount,
       })),
     orders,
-    truncated: rows.length > limit,
+    truncated: orderCount > limit,
   };
 }
 
