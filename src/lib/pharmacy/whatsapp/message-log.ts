@@ -2,6 +2,7 @@ import 'server-only';
 
 import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 
+import { SmsProviderError } from '../sms/provider';
 import { WhatsAppProviderError, type WhatsAppSendResult } from './provider';
 
 export type MessageLogKind =
@@ -10,6 +11,7 @@ export type MessageLogKind =
   | 'ORDER_REQUEST'
   | 'ORDER_CONFIRMATION'
   | 'ORDER_FALLBACK'
+  | 'ORDER_READY'
   | 'OPT_OUT'
   | 'OPT_IN'
   | 'CONSENT_ACK';
@@ -18,6 +20,8 @@ export type MessageLogEntry = {
   organizationId: string;
   kind: MessageLogKind;
   dedupeKey: string;
+  /** Defaults to WHATSAPP (the column default); SMS rows come from the #723 fallback. */
+  channel?: 'WHATSAPP' | 'SMS';
   customerDayKey?: string;
   branchId?: string | null;
   customerId?: string | null;
@@ -91,7 +95,9 @@ export async function sendClaimedMessage(
   try {
     result = await send();
   } catch (error) {
-    const definitive = error instanceof WhatsAppProviderError && error.definitive;
+    const definitive =
+      (error instanceof WhatsAppProviderError || error instanceof SmsProviderError) &&
+      error.definitive;
     await updateMessageLog(entry.organizationId, logId, {
       status: definitive ? 'FAILED' : 'PENDING',
       // Never persist arbitrary transport errors: they can contain message/recipient data.

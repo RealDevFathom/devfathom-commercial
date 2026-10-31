@@ -112,6 +112,7 @@ describe('marketing report evidence', () => {
       where: {
         organizationId: 'org-a',
         branchId: null,
+        channel: 'WHATSAPP',
         direction: 'INBOUND',
         kind: 'OPT_OUT',
         createdAt: validateMarketingReportFilters(filters),

@@ -1,4 +1,5 @@
 import { TRPCError } from '@trpc/server';
+import { after } from 'next/server';
 import { z } from 'zod';
 
 import { can, subjectFromSession } from '@/lib/abac';
@@ -18,6 +19,7 @@ import {
   recordDeliveryCommand,
   PharmacyDeliveryError,
 } from '@/lib/pharmacy/customer-delivery';
+import { notifyOrderReadyBySms } from '@/lib/pharmacy/sms/order-ready';
 import type { LedgerScope } from '@/lib/pharmacy/stock-ledger';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
@@ -192,9 +194,38 @@ export const pharmacyOrderingRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await ctx.db.$transaction(async (tx) =>
-          transitionCustomerOrder(txDb(tx), await scopeFor(ctx, input.branchId), input)
-        );
+        const { result, scope } = await ctx.db.$transaction(async (tx) => {
+          const scope = await scopeFor(ctx, input.branchId);
+          return { result: await transitionCustomerOrder(txDb(tx), scope, input), scope };
+        });
+        if (input.action === 'ready') {
+          // The outer request transaction commits before `after` runs. Gateway
+          // latency must not hold the staff response or its database locks.
+          try {
+            after(async () => {
+              try {
+                await notifyOrderReadyBySms({
+                  organizationId: scope.organizationId,
+                  branchId: scope.branchId,
+                  orderId: input.orderId,
+                  actorUserId: scope.actorId,
+                });
+              } catch {
+                // Never log transport/DB error text, which may contain PII.
+                console.error('PHARMACY_ORDER_READY_SMS_FAILED', {
+                  organizationId: scope.organizationId,
+                  orderId: input.orderId,
+                });
+              }
+            });
+          } catch {
+            console.error('PHARMACY_ORDER_READY_SMS_SCHEDULE_FAILED', {
+              organizationId: scope.organizationId,
+              orderId: input.orderId,
+            });
+          }
+        }
+        return result;
       } catch (error) {
         fail(error);
       }

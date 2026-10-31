@@ -1143,6 +1143,9 @@ model PharmacyCustomer {
   orders                 PharmacyCustomerOrder[]
   whatsappOptIn          Boolean?
   whatsappOptInChangedAt DateTime?                    @db.Timestamp(3)
+  /// #723: SMS STOP/START flag. null = never replied; false = STOP (blocks SMS).
+  smsOptIn               Boolean?
+  smsOptInChangedAt      DateTime?                    @db.Timestamp(3)
 
   @@unique([organizationId, id])
   @@unique([organizationId, patientId])

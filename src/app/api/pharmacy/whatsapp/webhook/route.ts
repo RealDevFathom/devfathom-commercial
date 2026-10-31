@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { recordMarketingCallback } from '@/lib/pharmacy/marketing-delivery';
+import { recordReminderDelivery } from '@/lib/pharmacy/whatsapp/reminder-delivery';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { timingSafeEqual } from 'node:crypto';
 
@@ -111,6 +112,7 @@ export async function POST(request: Request) {
                           id: z.string().min(1).max(256),
                           status: z.string(),
                           timestamp: z.string().regex(/^\d+$/),
+                          errors: z.array(z.object({ code: z.number().int() })).max(50).optional(),
                         })
                       )
                       .max(500)
@@ -140,14 +142,20 @@ export async function POST(request: Request) {
                   : null;
           const occurredAt = new Date(Number(status.timestamp) * 1000);
           if (!state || !Number.isFinite(occurredAt.getTime())) continue;
-          await withTenantDb(organization.id, (db) =>
-            recordMarketingCallback(db, organization.id, config.phoneNumberId!, {
+          await withTenantDb(organization.id, async (db) => {
+            await recordMarketingCallback(db, organization.id, config.phoneNumberId!, {
               senderId: value.metadata!.phone_number_id,
               messageId: status.id,
               state,
               occurredAt,
-            })
-          );
+            });
+            await recordReminderDelivery(db, organization.id, {
+              messageId: status.id,
+              state,
+              occurredAt,
+              errorCodes: status.errors?.map((error) => error.code) ?? [],
+            });
+          });
         }
       }
   const messages = provider
