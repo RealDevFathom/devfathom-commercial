@@ -26,6 +26,11 @@ vi.mock('@/lib/pharmacy/stock-ledger', async (importOriginal) => ({
 
 import { PharmacyInventoryError } from '@/lib/pharmacy/inventory';
 import { addSaleLine } from '@/lib/pharmacy/sales';
+import { verifySmartDiscountOwner } from '@/lib/pharmacy/smart-discount-approval';
+vi.mock('@/lib/pharmacy/smart-discount-approval', async (original) => ({
+  ...(await original<typeof import('@/lib/pharmacy/smart-discount-approval')>()),
+  verifySmartDiscountOwner: vi.fn(),
+}));
 import { onHand } from '@/lib/pharmacy/stock-ledger';
 import { recordTrpcAudit } from '@/server/audit';
 import { router, type TRPCContext } from '../trpc';
@@ -88,6 +93,54 @@ function lastAudit() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+describe('smart discount PIN transport', () => {
+  it('derives approval identity from a verified owner and excludes the PIN from audit input', async () => {
+    const f = fixture();
+    const approval = {
+      organizationId: 'org-1',
+      branchId: 'branch-1',
+      actorId: 'actor-1',
+      ownerId: 'real-owner',
+      signatureRef: 'pin:verified',
+    };
+    vi.mocked(verifySmartDiscountOwner).mockResolvedValue({ approval });
+    vi.mocked(addSaleLine).mockResolvedValue({ line: { id: 'line-1' }, allocation: {} } as never);
+    await f.caller.addLine({
+      ...line,
+      discountMinor: 50,
+      discountKind: 'DISCOUNT',
+      approvedByUserId: 'forged-owner',
+      approvalPolicy: 'forged-policy',
+      ownerAuthorization: { staffProfileId: 'owner-staff', pin: '1234' },
+    });
+    expect(vi.mocked(addSaleLine).mock.calls[0]![2]).toMatchObject({
+      approvedByUserId: 'real-owner',
+      approvalPolicy: 'smart-discount-owner-pin',
+      smartDiscountApproval: approval,
+    });
+    expect(lastAudit().detail).toMatchObject({ skipInput: true });
+  });
+  it('returns failed PIN denials from the transaction without allocating stock', async () => {
+    const f = fixture();
+    vi.mocked(verifySmartDiscountOwner).mockResolvedValue({ blocked: 'Fresh owner PIN required' });
+    expect(
+      await f.caller.addLine({
+        ...line,
+        ownerAuthorization: { staffProfileId: 'owner', pin: '9999' },
+      })
+    ).toEqual({ blocked: 'Fresh owner PIN required' });
+    expect(addSaleLine).not.toHaveBeenCalled();
+    expect(f.transaction).toHaveBeenCalledOnce();
+  });
+  it('rejects client-supplied in-process approval proofs', async () => {
+    const f = fixture();
+    await expect(
+      f.caller.addLine({ ...line, smartDiscountApproval: { ownerId: 'forged' } } as never)
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(f.transaction).not.toHaveBeenCalled();
+  });
 });
 
 describe('pharmacySales.addLine batch override (PH-A4)', () => {

@@ -534,6 +534,7 @@ model Presentation {
   pharmacySaleLines  PharmacySaleLine[]
   customerOrderLines PharmacyCustomerOrderLine[]
 
+  @@unique([organizationId, id, medicineId], map: "pharmacy_discount_presentation_identity_key")
   @@index([organizationId, medicineId])
   @@map("pharmacy_presentations")
 }
@@ -569,6 +570,7 @@ model PackLevel {
   customerOrderLines    PharmacyCustomerOrderLine[]
 
   @@unique([organizationId, id], map: "pharmacy_pack_levels_org_id_key")
+  @@unique([organizationId, id, presentationId], map: "pharmacy_discount_pack_identity_key")
   @@unique([organizationId, versionGroupId, version])
   @@index([organizationId, presentationId])
   @@map("pharmacy_pack_levels")
@@ -15335,6 +15337,8 @@ model PharmacyCompetitorDiscountObservation {
   branchId             String
   medicineId           String
   packLevelId          String
+  /// Filled from the pack by the database identity trigger; composite FKs preserve it.
+  presentationId       String   @default(dbgenerated())
   competitor           String
   competitorPriceMinor Int
   observedDemandUnits  Int

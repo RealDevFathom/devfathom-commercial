@@ -190,6 +190,53 @@ async function seedCameraEvidence(db: ScopedDb, organizationId: string, branchId
 
 const describeIfDatabase = TEST_DATABASE_URL ? describe : describe.skip;
 
+async function seedSmartDiscountEvidence(db: ScopedDb, organizationId: string, branchId: string) {
+  const medicine = await db.medicine.create({
+    data: {
+      organizationId,
+      productName: 'Discount purge regression',
+      productFamily: 'PHARMACEUTICAL',
+      presentations: { create: { organizationId, presentation: 'Unit' } },
+    },
+    include: { presentations: true },
+  });
+  const pack = await db.packLevel.create({
+    data: {
+      organizationId,
+      presentationId: medicine.presentations[0]!.id,
+      versionGroupId: `discount_${organizationId}`,
+      version: 1,
+      level: 'UNIT',
+      unitsPerParent: 1,
+      effectiveFrom: new Date('2026-01-01'),
+    },
+  });
+  await db.pharmacySmartDiscountPolicy.create({
+    data: {
+      organizationId,
+      branchId,
+      minimumMarginBps: 2000,
+      minimumObservations: 3,
+      targetDemandLiftBps: 1000,
+      updatedById: 'owner',
+    },
+  });
+  await db.pharmacyCompetitorDiscountObservation.create({
+    data: {
+      id: `discount_${organizationId}`,
+      organizationId,
+      branchId,
+      medicineId: medicine.id,
+      packLevelId: pack.id,
+      competitor: 'Nearby store',
+      competitorPriceMinor: 900,
+      observedDemandUnits: 12,
+      observedAt: new Date(),
+      actorId: 'owner',
+    },
+  });
+}
+
 describeIfDatabase('tenant purge, against PostgreSQL', () => {
   beforeAll(async () => {
     ({ withPlatformDb, withTenantDb } = await import('@/lib/tenancy/scoped-db'));
@@ -215,6 +262,8 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
       );
       await seedRegulatoryProfile(db, PURGED_PROFILE_ID, PURGED_ORG, BRANCH_ID);
       await seedRegulatoryProfile(db, LIVE_PROFILE_ID, LIVE_ORG, LIVE_BRANCH_ID);
+      await seedSmartDiscountEvidence(db, PURGED_ORG, BRANCH_ID);
+      await seedSmartDiscountEvidence(db, LIVE_ORG, LIVE_BRANCH_ID);
       // Camera evidence is retained the same way: deleted only with its tenant.
       await seedCameraEvidence(db, PURGED_ORG, BRANCH_ID);
       await db.$executeRawUnsafe(
@@ -308,6 +357,26 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
       )
     );
     expect(live).toEqual({ profiles: BigInt(1), branches: BigInt(1) });
+    const discountCounts = await withPlatformDb(async (db) => ({
+      purgedPolicies: await db.pharmacySmartDiscountPolicy.count({
+        where: { organizationId: PURGED_ORG },
+      }),
+      purgedObservations: await db.pharmacyCompetitorDiscountObservation.count({
+        where: { organizationId: PURGED_ORG },
+      }),
+      livePolicies: await db.pharmacySmartDiscountPolicy.count({
+        where: { organizationId: LIVE_ORG },
+      }),
+      liveObservations: await db.pharmacyCompetitorDiscountObservation.count({
+        where: { organizationId: LIVE_ORG },
+      }),
+    }));
+    expect(discountCounts).toEqual({
+      purgedPolicies: 0,
+      purgedObservations: 0,
+      livePolicies: 1,
+      liveObservations: 1,
+    });
 
     const organization = await withPlatformDb((db) =>
       db.organization.findUniqueOrThrow({
@@ -691,6 +760,15 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
       )
     );
     expect(before.count).toBe(BigInt(1));
+
+    // Remove the newly added RESTRICT children before this test's direct parent deletion.
+    // The real purge worker and live-tenant preservation were asserted above.
+    await withPlatformDb(async (db) => {
+      await db.pharmacyCompetitorDiscountObservation.deleteMany({
+        where: { organizationId: LIVE_ORG },
+      });
+      await db.pharmacySmartDiscountPolicy.deleteMany({ where: { organizationId: LIVE_ORG } });
+    });
 
     await withPlatformDb((db) =>
       db.$executeRawUnsafe(`DELETE FROM organizations WHERE id = $1`, LIVE_ORG)
