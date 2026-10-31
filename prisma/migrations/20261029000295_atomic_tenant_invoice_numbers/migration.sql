@@ -26,7 +26,7 @@ SELECT "organizationId",
        substring("invoiceNumber" from '^INV-([0-9]{4})-')::INTEGER,
        MAX(substring("invoiceNumber" from '-([0-9]+)$')::INTEGER)
 FROM "invoices"
-WHERE "invoiceNumber" ~ '^INV-[0-9]{4}-[0-9]+$'
+WHERE "invoiceNumber" ~ '^INV-[0-9]{4}-[0-9]{1,9}$'
 GROUP BY "organizationId", substring("invoiceNumber" from '^INV-([0-9]{4})-')::INTEGER;
 
 ALTER TABLE "invoice_number_sequences" ENABLE ROW LEVEL SECURITY;
@@ -40,5 +40,34 @@ CREATE POLICY "tenant_isolation" ON "invoice_number_sequences"
     current_setting('app.is_platform_admin', true) = 'true'
     OR "organizationId" = NULLIF(current_setting('app.current_organization_id', true), '')
   );
+
+-- Rollout safety: application instances still running the legacy count-based
+-- writer keep inserting invoices after this migration commits and before the
+-- allocator-aware release is live. Advance the allocator from every standard
+-- invoice number written (legacy, seeded, or allocated) so it never falls behind
+-- and reserves a number that already exists. GREATEST never rewinds it, and the
+-- allocator's own row lock serializes this with concurrent reservations.
+CREATE FUNCTION "invoice_number_sequences_sync"() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW."invoiceNumber" ~ '^INV-[0-9]{4}-[0-9]{1,9}$' THEN
+    INSERT INTO "invoice_number_sequences" ("organizationId", "year", "lastNumber")
+    VALUES (
+      NEW."organizationId",
+      substring(NEW."invoiceNumber" from '^INV-([0-9]{4})-')::INTEGER,
+      substring(NEW."invoiceNumber" from '-([0-9]+)$')::INTEGER
+    )
+    ON CONFLICT ("organizationId", "year") DO UPDATE
+      SET "lastNumber" = GREATEST("invoice_number_sequences"."lastNumber", EXCLUDED."lastNumber"),
+          "updatedAt" = CURRENT_TIMESTAMP
+      WHERE "invoice_number_sequences"."lastNumber" < EXCLUDED."lastNumber";
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "invoices_invoice_number_sequence_sync"
+AFTER INSERT OR UPDATE OF "invoiceNumber" ON "invoices"
+FOR EACH ROW EXECUTE FUNCTION "invoice_number_sequences_sync"();
 
 COMMIT;

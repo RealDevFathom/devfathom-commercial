@@ -203,6 +203,27 @@ describeDatabase('atomic tenant invoice numbers on migrated PostgreSQL', () => {
     );
   });
 
+  it('keeps the allocator ahead of legacy count-based writers during rollout', async () => {
+    // A not-yet-upgraded instance inserts the next number without touching the allocator.
+    await tenant('tenant-a', (tx) => reserveInvoiceNumber(tx, 'tenant-a', 2033));
+    await tenant('tenant-a', async (tx) => {
+      await tx.$executeRaw`INSERT INTO invoices (id, "organizationId", "invoiceNumber")
+        VALUES ('legacy-rollout', 'tenant-a', 'INV-2033-002')`;
+    });
+    expect(await tenant('tenant-a', (tx) => reserveInvoiceNumber(tx, 'tenant-a', 2033))).toBe(
+      'INV-2033-003'
+    );
+    // Nonstandard and lower legacy numbers neither fail nor rewind the allocator.
+    await tenant('tenant-a', async (tx) => {
+      await tx.$executeRaw`INSERT INTO invoices (id, "organizationId", "invoiceNumber")
+        VALUES ('legacy-custom-2033', 'tenant-a', 'INV-2033-001-B'),
+               ('legacy-lower', 'tenant-a', 'INV-2033-001')`;
+    });
+    expect(await tenant('tenant-a', (tx) => reserveInvoiceNumber(tx, 'tenant-a', 2033))).toBe(
+      'INV-2033-004'
+    );
+  });
+
   it('rolls back application reservations and seed advances when invoice creation fails', async () => {
     for (const allocate of [
       (tx: Prisma.TransactionClient) => reserveInvoiceNumber(tx, 'tenant-a', 2032),
