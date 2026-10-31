@@ -12,7 +12,11 @@ import {
   assertTaskAccess,
 } from '../authz';
 import { assertInOrganization, workspaceId } from '../org-refs';
-import { isValidProjectDateRange, PROJECT_DATE_RANGE_MESSAGE } from '@/lib/project-dates';
+import {
+  isProjectDateRangeViolation,
+  isValidProjectDateRange,
+  PROJECT_DATE_RANGE_MESSAGE,
+} from '@/lib/project-dates';
 
 // Format a task due date for emails, e.g. "Fri, Jun 20 · 5:00 PM".
 function formatDue(date: Date): string {
@@ -168,7 +172,20 @@ export const projectsRouter = router({
       if (!isValidProjectDateRange(startDate, endDate)) {
         throw new TRPCError({ code: 'BAD_REQUEST', message: PROJECT_DATE_RANGE_MESSAGE });
       }
-      const project = await ctx.db.project.update({ where: { id, organizationId }, data });
+      // The read above is not locked: a concurrent edit can still make the
+      // combined range invalid. The DB CHECK refuses it; report it as a 400.
+      const project = await ctx.db.project
+        .update({ where: { id, organizationId }, data })
+        .catch((error: unknown) => {
+          if (isProjectDateRangeViolation(error)) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: PROJECT_DATE_RANGE_MESSAGE,
+              cause: error,
+            });
+          }
+          throw error;
+        });
       logActivity(ctx.db, ctx.session.user.id, {
         type: 'project_updated',
         message:

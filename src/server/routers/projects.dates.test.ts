@@ -167,4 +167,32 @@ describe('project date ranges', () => {
       data: { endDate: null },
     });
   });
+
+  it('maps a concurrent date-range CHECK violation to BAD_REQUEST', async () => {
+    projectFindUnique.mockResolvedValue({
+      startDate: new Date('2026-10-10T00:00:00.000Z'),
+      endDate: null,
+    });
+    projectUpdate.mockRejectedValue(
+      Object.assign(
+        new Error(
+          'new row for relation "projects" violates check constraint "projects_date_range_check"'
+        ),
+        { code: 'P2010', meta: { code: '23514' } }
+      )
+    );
+
+    await expect(
+      caller().update({ id: 'project_1', endDate: new Date('2026-10-20T00:00:00.000Z') })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+  });
+
+  it('does not mask unrelated update failures', async () => {
+    projectFindUnique.mockResolvedValue({ startDate: null, endDate: null });
+    projectUpdate.mockRejectedValue(new Error('connection reset'));
+
+    await expect(
+      caller().update({ id: 'project_1', endDate: new Date('2026-10-20T00:00:00.000Z') })
+    ).rejects.toMatchObject({ code: 'INTERNAL_SERVER_ERROR' });
+  });
 });

@@ -1,6 +1,11 @@
 -- Do not guess which date is authoritative for legacy invalid ranges. Blocking
 -- the migration preserves both original values and gives operators the project
 -- ids needed to remediate them through an approved, auditable process.
+--
+-- projects has FORCE ROW LEVEL SECURITY. The platform-admin flag is its own
+-- statement so the pre-check below sees every tenant's rows and can list them.
+SELECT set_config('app.is_platform_admin', 'true', true);
+
 DO $$
 DECLARE
   invalid_project_ids text;
