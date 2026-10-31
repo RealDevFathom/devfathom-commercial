@@ -42,6 +42,7 @@ import {
   type CounterTenderBillState,
 } from './counter-tender-panel';
 import { CounterUnitToggle } from './counter-unit-toggle';
+import { CounterUpsellSuggestions } from './counter-upsell-suggestions';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -2003,6 +2004,21 @@ function ScopedPharmacyCounterConsole({
               />
             </SectionCard>
           ) : null}
+
+          <CounterUpsellSuggestions
+            branchId={branchId}
+            medicineIds={currentBill ? cart.lines.map((line) => line.medicineId) : []}
+            disabled={busy || !branchAuthorized}
+            onChoose={(suggestion) => {
+              setQuery(suggestion.displayName);
+              setSubmittedSearch({
+                text: suggestion.displayName,
+                query: suggestion.displayName,
+                branchId,
+              });
+              setActiveRow(null);
+            }}
+          />
 
           <SectionCard
             compact

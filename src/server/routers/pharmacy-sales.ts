@@ -76,6 +76,7 @@ import {
   findSubstituteProposals,
   PharmacySubstituteError,
 } from '@/lib/pharmacy/substitute-finder';
+import { findUpsellSuggestions, UPSELL_MAX_TRIGGERS } from '@/lib/pharmacy/upsell-suggestions';
 import {
   DuplicateSaltAcknowledgementError,
   verifyDuplicateSaltAcknowledgement,
@@ -1488,6 +1489,26 @@ export const pharmacySalesRouter = router({
         throw error;
       }
     }),
+  /**
+   * #730: rule-based complementary-item suggestions for the bill. Read-only;
+   * never suggests Rx-only, controlled, restricted or high-alert items.
+   */
+  upsellSuggestions: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          medicineIds: z.array(z.string().min(1).max(128)).min(1).max(UPSELL_MAX_TRIGGERS),
+          limit: z.number().int().min(1).max(20).optional(),
+        })
+        .strict()
+    )
+    .query(async ({ ctx, input }) =>
+      findUpsellSuggestions(ctx.db, await scopeFor(ctx, input.branchId), {
+        medicineIds: input.medicineIds,
+        limit: input.limit,
+      })
+    ),
   declineSubstitute: protectedProcedure
     .input(
       z
