@@ -283,6 +283,9 @@ export const pharmacyMarketingRouter = router({
       const settings = await readAskFathomSettings(ctx.db, resolved.organizationId);
       if (!settings?.askFathomEnabled)
         return { available: false as const, body: null, approved: false as const };
-      return draftMarketingCopy({ occasion: input.occasion, tone: input.tone });
+      return draftMarketingCopy(
+        { occasion: input.occasion, tone: input.tone },
+        { organizationId: resolved.organizationId, branchId: resolved.branchId }
+      );
     }),
 });

@@ -247,6 +247,18 @@ export const PROCEDURE_MODULES: Record<string, string> = {
 };
 
 /**
+ * Shared-shell notification access belongs to the authenticated tenant session,
+ * not to HR. Exact full-path allowlist; the rest of the `team` namespace still
+ * resolves to the HR module (WHA-305). Keep this private so other modules cannot
+ * mutate the authorization allowlist at runtime.
+ */
+const ENTITLEMENT_INDEPENDENT_TEAM_NOTIFICATION_PROCEDURES: ReadonlySet<string> = new Set([
+  'team.getNotifications',
+  'team.markNotificationRead',
+  'team.markAllNotificationsRead',
+]);
+
+/**
  * Procedures that act only on the caller's own account: profile, password,
  * sessions and notification preferences, i.e. everything the Settings page
  * offers every signed-in member. The account is part of every workspace in
@@ -271,7 +283,12 @@ export function moduleForProcedure(path: string): string | null {
   if (path === 'team.inviteMember') return 'admin';
   // Navigation resolves all Pharmacy capabilities, including Essentials without Safety.
   if (path === 'pharmacySafety.navigationAccess') return 'pharmacy-core';
-  if (ACCOUNT_PROCEDURES.has(path)) return null;
+  if (
+    ACCOUNT_PROCEDURES.has(path) ||
+    ENTITLEMENT_INDEPENDENT_TEAM_NOTIFICATION_PROCEDURES.has(path)
+  ) {
+    return null;
+  }
   if (
     /^pharmacyFinance\.(perpetualValuation|grossMargin|leakageReport|marginComparison|financialStatements)$/.test(
       path
