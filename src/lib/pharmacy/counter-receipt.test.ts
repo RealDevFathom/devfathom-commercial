@@ -75,13 +75,32 @@ describe('formatMinor', () => {
 describe('mixed-lot receipt arithmetic', () => {
   const mixedLotLine = receiptLine({
     quantity: 3,
+    canonicalUnits: 3,
     unitPriceMinor: 100,
     discountMinor: 0,
     lineTotalMinor: 301,
+    allocations: [
+      {
+        allocationId: 'cheap',
+        inventoryLotId: 'cheap',
+        batchNumber: null,
+        expiresAt: null,
+        canonicalUnits: 2,
+        grossMinor: 200,
+      },
+      {
+        allocationId: 'dear',
+        inventoryLotId: 'dear',
+        batchNumber: null,
+        expiresAt: null,
+        canonicalUnits: 1,
+        grossMinor: 101,
+      },
+    ],
   });
 
   it('presents an exact unit-price allocation in the browser receipt', () => {
-    expect(exactReceiptPriceBreakdown(3, 301)).toBe('2 × 1.00 + 1 × 1.01');
+    expect(exactReceiptPriceBreakdown(3, 301)).toBe('3 · 3.01');
     const preview = buildCounterReceiptPreview(receipt({ lines: [mixedLotLine] }), 'en', 80);
     expect(preview).toContain('2 × 1.00 + 1 × 1.01');
     expect(preview).not.toContain('3 STRIP × 1.00');
@@ -129,9 +148,7 @@ describe('counterReceiptTotals', () => {
     (cashReceivedMinor) => {
       const totals = counterReceiptTotals({
         lines: [],
-        tenders: [
-          { type: 'CASH', amountMinor: 4_800, cashReceivedMinor, changeGivenMinor: null },
-        ],
+        tenders: [{ type: 'CASH', amountMinor: 4_800, cashReceivedMinor, changeGivenMinor: null }],
       });
 
       expect(totals.tenderedMinor).toBe(4_800);

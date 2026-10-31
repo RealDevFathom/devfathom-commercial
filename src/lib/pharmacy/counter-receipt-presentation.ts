@@ -41,17 +41,54 @@ export function exactReceiptPriceBreakdown(
   if (!Number.isSafeInteger(quantity) || quantity <= 0 || !Number.isSafeInteger(grossMinor)) {
     throw new Error('Receipt line pricing is invalid.');
   }
-  const lowerPrice = Math.floor(grossMinor / quantity);
-  const higherPriceCount = grossMinor - lowerPrice * quantity;
-  const lowerPriceCount = quantity - higherPriceCount;
-  if (higherPriceCount === 0) {
-    return `${quantity} ${multiplicationSign} ${formatMinor(lowerPrice)}`;
+  if (grossMinor % quantity === 0) {
+    return `${quantity} ${multiplicationSign} ${formatMinor(grossMinor / quantity)}`;
   }
-  const parts = [];
-  if (lowerPriceCount > 0)
-    parts.push(`${lowerPriceCount} ${multiplicationSign} ${formatMinor(lowerPrice)}`);
-  parts.push(`${higherPriceCount} ${multiplicationSign} ${formatMinor(lowerPrice + 1)}`);
-  return parts.join(' + ');
+  // State quantity and gross directly when one integer unit price cannot
+  // represent the charge. Never invent synthetic lot prices from an average.
+  return `${quantity}${multiplicationSign === 'x' ? ' - ' : ' · '}${formatMinor(grossMinor)}`;
+}
+
+export function counterLinePricing(
+  line: CounterReceiptLine,
+  locale: CounterReceiptLocale,
+  multiplicationSign = '×'
+): string {
+  const strings = COUNTER_RECEIPT_STRINGS[locale];
+  const priced = line.allocations?.filter((row) => row.grossMinor != null) ?? [];
+  const gross = line.lineTotalMinor + line.discountMinor;
+  const scale = line.canonicalUnits / line.quantity;
+  const separator = multiplicationSign === 'x' ? ' - ' : ' · ';
+  if (
+    priced.length &&
+    priced.length === line.allocations!.length &&
+    priced.reduce((sum, row) => sum + row.grossMinor!, 0) === gross
+  ) {
+    const wholeSaleUnits = priced.every((row) => {
+      const quantity = row.canonicalUnits / scale;
+      return Number.isSafeInteger(quantity) && quantity > 0 && row.grossMinor! % quantity === 0;
+    });
+    if (wholeSaleUnits) {
+      return `${strings.saleUnit[line.saleUnit]}: ${priced
+        .map((row) =>
+          exactReceiptPriceBreakdown(
+            row.canonicalUnits / scale,
+            row.grossMinor!,
+            multiplicationSign
+          )
+        )
+        .join(' + ')}`;
+    }
+    return priced
+      .map(
+        (row) =>
+          `${labels[locale].units}: ${row.canonicalUnits}${separator}${strings.gross}: ${formatMinor(row.grossMinor!)}`
+      )
+      .join(' + ');
+  }
+  return gross === line.quantity * line.unitPriceMinor
+    ? `${strings.saleUnit[line.saleUnit]}: ${exactReceiptPriceBreakdown(line.quantity, gross, multiplicationSign)}`
+    : `${strings.quantity}: ${line.quantity} ${strings.saleUnit[line.saleUnit]}${separator}${strings.gross}: ${formatMinor(gross)}`;
 }
 
 /** Missing status on legacy callers is not evidence of issued identity. */
@@ -97,10 +134,7 @@ export function buildCounterReceiptPreview(
         const presentation = counterLinePresentation(line, locale);
         return [
           presentation.identity,
-          `${strings.saleUnit[line.saleUnit]}: ${exactReceiptPriceBreakdown(
-            line.quantity,
-            line.lineTotalMinor + line.discountMinor
-          )}`,
+          counterLinePricing(line, locale),
           ...presentation.allocations,
           `${strings.lineTotal}: ${formatMinor(line.lineTotalMinor)}`,
         ].join('\n');

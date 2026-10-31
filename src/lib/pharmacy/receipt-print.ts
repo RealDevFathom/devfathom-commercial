@@ -38,7 +38,7 @@ import {
   type CounterReceipt,
   type CounterReceiptLocale,
 } from './counter-receipt';
-import { exactReceiptPriceBreakdown } from './counter-receipt-presentation';
+import { counterLinePricing } from './counter-receipt-presentation';
 
 /** Registered tax identity printed on the receipt; null fields are omitted, never invented. */
 export type PharmacyReceiptTaxIdentity = NonNullable<CounterReceipt['taxIdentity']>;
@@ -85,11 +85,7 @@ function escPosFacts(
       const issued = line.identityStatus === 'ISSUED';
       return [
         lineIdentity(line),
-        `${strings.saleUnit[line.saleUnit]}: ${exactReceiptPriceBreakdown(
-          line.quantity,
-          line.lineTotalMinor + line.discountMinor,
-          'x'
-        )}`,
+        counterLinePricing(line, 'en', 'x'),
         ...(line.allocations ?? []).map((allocation) => {
           const batch = issued ? allocation.batchNumber : null;
           const expiry = issued && allocation.expiresAt ? allocation.expiresAt : null;

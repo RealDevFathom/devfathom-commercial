@@ -1499,6 +1499,9 @@ model PharmacySaleLineAllocation {
   stockLocationId String
   canonicalUnits  Int
   stockMovementId String
+  /// Immutable charged/reversed money; null only on historical evidence.
+  grossMinor      Int?
+  discountMinor   Int?
   createdAt       DateTime             @default(now())
   saleLine        PharmacySaleLine     @relation(fields: [organizationId, saleLineId], references: [organizationId, id], onDelete: Restrict)
   lot             PharmacyInventoryLot @relation(fields: [organizationId, branchId, inventoryLotId], references: [organizationId, branchId, id], onDelete: Restrict)
@@ -1555,6 +1558,9 @@ model PharmacySaleReturnLine {
   canonicalUnits    Int
   integrityDecision String
   stockMovementId   String
+  /// Immutable charged/reversed money; null only on historical evidence.
+  grossMinor      Int?
+  discountMinor   Int?
   createdAt         DateTime             @default(now())
   saleReturn        PharmacySaleReturn   @relation(fields: [organizationId, branchId, returnId], references: [organizationId, branchId, id], onDelete: Restrict)
   saleLine          PharmacySaleLine     @relation(fields: [organizationId, saleLineId], references: [organizationId, id], onDelete: Restrict)
@@ -1577,6 +1583,9 @@ model PharmacyUnidentifiedReturnHold {
   canonicalUnits       Int
   integrityDecision    String
   actorId              String
+  /// Immutable charged/reversed money; null only on historical evidence.
+  grossMinor      Int?
+  discountMinor   Int?
   createdAt            DateTime                        @default(now())
   saleReturn           PharmacySaleReturn              @relation(fields: [organizationId, branchId, returnId], references: [organizationId, branchId, id], onDelete: Restrict, map: "return_hold_return_fk")
   saleLine             PharmacySaleLine                @relation(fields: [organizationId, branchId, saleLineId], references: [organizationId, branchId, id], onDelete: Restrict, map: "return_hold_line_fk")

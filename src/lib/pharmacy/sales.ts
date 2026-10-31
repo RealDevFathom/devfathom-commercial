@@ -3,6 +3,12 @@ import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { priceFromLot } from './medicine';
+import {
+  apportionDiscount,
+  saleAllocationMoney,
+  returnedMoney,
+  priceReturn,
+} from './sale-line-money';
 import { hashDeviceSecret } from '@/lib/retail-terminal/device-secret';
 import { canonicalJson } from './offline-snapshot-envelope';
 import { checkEnvelope } from './offline-snapshot-envelope';
@@ -175,14 +181,21 @@ export function priceMixedLotAllocation(
   quantity: number,
   canonicalUnitsPerSaleUnit: number
 ) {
-  const weightedMinorUnits = allocations.reduce(
-    (total, allocation) => total + allocation.units * allocation.unitPriceMinor,
-    0
-  );
+  let weightedMinorUnits = 0;
+  const allocationGrossMinors = allocations.map((allocation) => {
+    const before = Math.floor(weightedMinorUnits / canonicalUnitsPerSaleUnit);
+    weightedMinorUnits += allocation.units * allocation.unitPriceMinor;
+    return Math.floor(weightedMinorUnits / canonicalUnitsPerSaleUnit) - before;
+  });
   const grossMinor = Math.floor(weightedMinorUnits / canonicalUnitsPerSaleUnit);
-  if (!Number.isSafeInteger(grossMinor) || grossMinor < 0 || quantity <= 0)
+  if (
+    !Number.isSafeInteger(weightedMinorUnits) ||
+    !Number.isSafeInteger(grossMinor) ||
+    grossMinor < 0 ||
+    quantity <= 0
+  )
     throw new PharmacySaleError('INVALID_QUANTITY');
-  return { grossMinor, unitPriceMinor: Math.floor(grossMinor / quantity) };
+  return { grossMinor, unitPriceMinor: Math.floor(grossMinor / quantity), allocationGrossMinors };
 }
 
 async function saleInScope(db: ScopedDb, scope: LedgerScope, saleId: string) {
@@ -330,7 +343,7 @@ async function addSaleLineWithAllocation(
     ceiling = Math.max(ceiling, price.proRataCeilingMinor);
     costMinor += lot.unitCostMinor * part.units;
   }
-  const { grossMinor, unitPriceMinor } = priceMixedLotAllocation(
+  const { grossMinor, unitPriceMinor, allocationGrossMinors } = priceMixedLotAllocation(
     pricedAllocations,
     input.quantity,
     input.canonicalUnitsPerSaleUnit
@@ -367,6 +380,7 @@ async function addSaleLineWithAllocation(
       idempotencyKey: input.idempotencyKey,
     },
   });
+  const allocationDiscountMinors = apportionDiscount(discountMinor, allocationGrossMinors);
   await Promise.all(
     allocation.allocations.map((part, index) =>
       db.pharmacySaleLineAllocation.create({
@@ -377,6 +391,8 @@ async function addSaleLineWithAllocation(
           inventoryLotId: part.inventoryLotId,
           stockLocationId: part.stockLocationId,
           canonicalUnits: part.units,
+          grossMinor: allocationGrossMinors[index]!,
+          discountMinor: allocationDiscountMinors[index]!,
           stockMovementId: allocation.movementIds[index]!,
         },
       })
@@ -468,9 +484,20 @@ export function returnedLineValue(
     grossMinor?: number;
     discountMinor: number;
     canonicalUnits: number;
+    returnLines?: {
+      canonicalUnits: number;
+      grossMinor?: number | null;
+      discountMinor?: number | null;
+    }[];
+    unidentifiedReturnHolds?: {
+      canonicalUnits: number;
+      grossMinor?: number | null;
+      discountMinor?: number | null;
+    }[];
   },
   units: number
 ) {
+  if (line.returnLines && line.unidentifiedReturnHolds) return returnedMoney(line).netMinor;
   return Math.floor(
     (((line.grossMinor ?? line.quantity * line.unitPriceMinor) - line.discountMinor) * units) /
       line.canonicalUnits
@@ -737,6 +764,7 @@ export async function returnSaleLine(
     },
   });
   if (!input.lotId) {
+    const money = priceReturn(line, input.canonicalUnits);
     const holding = await db.pharmacyUnidentifiedReturnHold.create({
       data: {
         organizationId: scope.organizationId,
@@ -745,6 +773,7 @@ export async function returnSaleLine(
         saleLineId: line.id,
         quarantineLocationId: quarantineLocationId!,
         canonicalUnits: input.canonicalUnits,
+        ...money,
         integrityDecision: input.integrityDecision,
         actorId: scope.actorId,
       },
@@ -792,6 +821,7 @@ export async function returnSaleLine(
   const consumed = new Map<string, number>();
   for (const row of line.returnLines)
     consumed.set(row.inventoryLotId, (consumed.get(row.inventoryLotId) ?? 0) + row.canonicalUnits);
+  const moneyByAllocation = new Map(saleAllocationMoney(line).map((row) => [row.id, row]));
   for (const allocation of allocations) {
     const used = Math.min(allocation.canonicalUnits, consumed.get(allocation.inventoryLotId) ?? 0);
     consumed.set(allocation.inventoryLotId, (consumed.get(allocation.inventoryLotId) ?? 0) - used);
@@ -839,6 +869,15 @@ export async function returnSaleLine(
         idempotencyKey: `${input.idempotencyKey}:${allocation.id}`,
       },
     });
+    const charged = moneyByAllocation.get(allocation.id)!;
+    const delta = (amount: number) =>
+      Math.floor((amount * (used + units)) / allocation.canonicalUnits) -
+      Math.floor((amount * used) / allocation.canonicalUnits);
+    const discount = delta(charged.discountMinor);
+    const money = priceReturn(line, units, {
+      grossMinor: delta(charged.grossMinor - charged.discountMinor) + discount,
+      discountMinor: discount,
+    });
     const returnedLine = await db.pharmacySaleReturnLine.create({
       data: {
         organizationId: scope.organizationId,
@@ -848,10 +887,12 @@ export async function returnSaleLine(
         inventoryLotId: allocation.inventoryLotId,
         stockLocationId,
         canonicalUnits: units,
+        ...money,
         integrityDecision: `${disposition}: ${input.integrityDecision}`,
         stockMovementId: movement.id,
       },
     });
+    line.returnLines.push(returnedLine);
     await postSaleReturnEntry(db, scope, {
       saleReturnLineId: returnedLine.id,
       at: saleReturn.createdAt,

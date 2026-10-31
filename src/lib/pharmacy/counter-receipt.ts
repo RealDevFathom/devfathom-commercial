@@ -33,6 +33,7 @@ export type CounterReceiptLine = {
     batchNumber: string | null;
     expiresAt: string | null;
     canonicalUnits: number;
+    grossMinor?: number | null;
   }[];
   medicineName: string;
   /** Rendered strength, for example `500 mg`. Null for an unstrengthed item. */

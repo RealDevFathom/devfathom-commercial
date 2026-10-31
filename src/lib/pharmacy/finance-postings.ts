@@ -21,8 +21,8 @@
  *      goods raise quantity and lower unit cost, and no revenue account appears
  *      anywhere in a receipt posting.
  *
- *   3. EVERY LEG CARRIES ITS DIMENSIONS. Revenue and discount are split across
- *      the sale's allocations pro rata by units so that every leg — revenue,
+ *   3. EVERY LEG CARRIES ITS DIMENSIONS. Revenue and discount use each
+ *      allocation's immutable charged amounts so that every leg — revenue,
  *      discount and cost alike — names a branch, a product, a lot and the sale
  *      line it came from. That is what makes FIN-03's "margin by
  *      line/batch/product/branch" four groupings of one query instead of four
@@ -39,6 +39,8 @@ import {
   type JournalLineInput,
 } from '@/lib/finance/journal';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { saleAllocationMoney } from './sale-line-money';
+export { apportion } from './sale-line-money';
 
 export { FinancePostingError } from '@/lib/finance/journal';
 
@@ -60,26 +62,6 @@ export class PharmacyFinanceError extends Error {
 /** Deterministic, so the same event posts once however often it is retried. */
 function postingKey(sourceKind: FinanceSourceKind, sourceId: string): string {
   return `finance:${sourceKind}:${sourceId}`;
-}
-
-/**
- * Split `totalMinor` across `weights` in proportion, in whole minor units, with
- * the rounding remainder landing on the last share.
- *
- * Proportional shares of an integer amount do not divide evenly, and money that
- * is dropped in the rounding would leave the entry unbalanced. Giving the
- * remainder to the last share keeps `sum(shares) === totalMinor` exactly, for
- * any weights, which is the property the balance check depends on.
- */
-export function apportion(totalMinor: number, weights: readonly number[]): number[] {
-  const total = weights.reduce((sum, weight) => sum + weight, 0);
-  if (total <= 0 || weights.length === 0) return weights.map(() => 0);
-
-  const shares = weights.map((weight) => Math.floor((totalMinor * weight) / total));
-  const assigned = shares.reduce((sum, share) => sum + share, 0);
-  const last = shares.length - 1;
-  shares[last] = (shares[last] ?? 0) + (totalMinor - assigned);
-  return shares;
 }
 
 /** Drop zero-value legs. A zero leg is not a fact; it is a rounding artefact. */
@@ -200,10 +182,7 @@ export async function postSaleLineEntry(
     line.allocations.map((allocation) => allocation.inventoryLotId)
   );
 
-  const grossMinor = line.grossMinor;
-  const units = line.allocations.map((allocation) => allocation.canonicalUnits);
-  const grossShares = apportion(grossMinor, units);
-  const discountShares = apportion(line.discountMinor, units);
+  const chargedAllocations = saleAllocationMoney(line);
 
   const lines: JournalLineInput[] = [];
   for (const [index, allocation] of line.allocations.entries()) {
@@ -217,8 +196,8 @@ export async function postSaleLineEntry(
       locationId: allocation.stockLocationId,
       sourceLineId: line.id,
     };
-    const gross = grossShares[index] ?? 0;
-    const discount = discountShares[index] ?? 0;
+    const gross = chargedAllocations[index]!.grossMinor;
+    const discount = chargedAllocations[index]!.discountMinor;
     // FIN-03: the exact landed cost of the lot this part of the line came from.
     const cost = lot.unitCostMinor * allocation.canonicalUnits;
 
@@ -314,10 +293,10 @@ export async function postSaleReturnEntry(
   if (before < 0 || through > sold) throw new PharmacyFinanceError('INVALID_STATE');
   const delta = (amount: number) =>
     Math.floor((amount * through) / sold) - Math.floor((amount * before) / sold);
-  const discount = delta(saleLine.discountMinor);
+  const discount = returnLine.discountMinor ?? delta(saleLine.discountMinor);
   // Refund authorization rounds cumulative NET. Derive gross from that same
   // net plus discount, so every partial reversal clears its authorized refund.
-  const gross = delta(grossMinor - saleLine.discountMinor) + discount;
+  const gross = returnLine.grossMinor ?? delta(grossMinor - saleLine.discountMinor) + discount;
   const cost = lot.unitCostMinor * returned;
 
   const dimensions = {
@@ -391,8 +370,9 @@ export async function postUnidentifiedSaleReturnEntry(
   const delta = (amount: number) =>
     Math.floor((amount * through) / saleLine.canonicalUnits) -
     Math.floor((amount * before) / saleLine.canonicalUnits);
-  const discount = delta(saleLine.discountMinor);
-  const gross = delta(saleLine.grossMinor - saleLine.discountMinor) + discount;
+  const discount = holding.discountMinor ?? delta(saleLine.discountMinor);
+  const gross =
+    holding.grossMinor ?? delta(saleLine.grossMinor - saleLine.discountMinor) + discount;
   const dimensions = {
     branchId: holding.branchId,
     productId: saleLine.medicineId,
