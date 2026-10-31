@@ -155,6 +155,9 @@ jobs:
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.sha || github.sha }}
           fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.2
@@ -290,7 +293,13 @@ jobs:
           DATABASE_URL="$SUPERUSER_URL" TEST_DATABASE_URL="$SUPERUSER_URL" run test-rls bun run test:rls
           run lint bun run lint
 
-          git diff --name-only -z b20b577f..HEAD -- '*.ts' '*.tsx' '*.css' '*.md' '*.json' '*.mjs' > gate/prettier-files.zlist
+          prettier_base='${{ github.event.pull_request.base.sha || github.event.before }}'
+          if ! git cat-file -e "${prettier_base}^{commit}" 2>/dev/null; then
+            # A manual dispatch may verify a multi-commit PR by SHA. Compare
+            # its whole branch with develop, rather than only its final commit.
+            prettier_base=origin/develop
+          fi
+          git diff --name-only --diff-filter=ACMR -z "$prettier_base"...HEAD -- '*.ts' '*.tsx' '*.css' '*.md' '*.json' '*.mjs' > gate/prettier-files.zlist
           record prettier-file-list "$?"
           if [ -s gate/prettier-files.zlist ]; then
             xargs -0 bunx prettier --check < gate/prettier-files.zlist >gate/prettier-check.stdout.log 2>gate/prettier-check.stderr.log
@@ -404,6 +413,10 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.sha || github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.2

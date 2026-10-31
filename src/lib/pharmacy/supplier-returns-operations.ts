@@ -406,6 +406,15 @@ export async function recordSupplierCredit(
   });
 }
 
+type AllocateSupplierCreditInput = {
+  supplierCreditId: string;
+  debitNoteId: string;
+  amountMinor: number;
+  at: Date;
+};
+
+const allocationTurns = new WeakMap<Prisma.TransactionClient, Promise<void>>();
+
 /**
  * Settle part or all of a debit note from a recorded credit. The two ceilings —
  * the credit's unallocated remainder and the note's outstanding balance — are
@@ -413,13 +422,62 @@ export async function recordSupplierCredit(
  * closing the money on it (§8A invariant 26).
  */
 export async function allocateSupplierCredit(
-  db: ScopedDb,
+  db: Prisma.TransactionClient,
   scope: LedgerScope,
-  input: { supplierCreditId: string; debitNoteId: string; amountMinor: number; at: Date }
+  input: AllocateSupplierCreditInput
 ) {
+  // A tRPC batch shares one scoped transaction. PostgreSQL row locks do not
+  // exclude sibling mutations on that connection, so serialize the entire
+  // read/check/write operation as well as locking against other transactions.
+  const previous = allocationTurns.get(db) ?? Promise.resolve();
+  let release: () => void = () => {};
+  const turn = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  allocationTurns.set(db, turn);
+  await previous;
+  try {
+    return await allocateLockedSupplierCredit(db, scope, input);
+  } finally {
+    release();
+    if (allocationTurns.get(db) === turn) allocationTurns.delete(db);
+  }
+}
+
+async function allocateLockedSupplierCredit(
+  db: Prisma.TransactionClient,
+  scope: LedgerScope,
+  input: AllocateSupplierCreditInput
+) {
+  // Both rows are ceilings for the allocation. Lock them before reading either
+  // balance so allocations sharing a credit or a note cannot validate against
+  // the same stale remainder. The fixed credit-then-note order also prevents
+  // competing allocations from acquiring these locks in opposite orders.
+  const lockedCredits = await db.$queryRaw<Array<{ id: string }>>(
+    Prisma.sql`SELECT id FROM pharmacy_supplier_credits
+      WHERE id = ${input.supplierCreditId}
+        AND "organizationId" = ${scope.organizationId}
+        AND "branchId" = ${scope.branchId}
+      FOR UPDATE`
+  );
+  if (lockedCredits.length === 0) throw new PharmacySupplierReturnError('NOT_FOUND');
+
+  const lockedNotes = await db.$queryRaw<Array<{ id: string }>>(
+    Prisma.sql`SELECT id FROM pharmacy_debit_notes
+      WHERE id = ${input.debitNoteId}
+        AND "organizationId" = ${scope.organizationId}
+        AND "branchId" = ${scope.branchId}
+      FOR UPDATE`
+  );
+  if (lockedNotes.length === 0) throw new PharmacySupplierReturnError('NOT_FOUND');
+
   const [credit, note] = await Promise.all([
     db.pharmacySupplierCredit.findFirst({
-      where: { id: input.supplierCreditId, organizationId: scope.organizationId },
+      where: {
+        id: input.supplierCreditId,
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+      },
     }),
     db.pharmacyDebitNote.findFirst({
       where: {
@@ -472,13 +530,21 @@ export async function allocateSupplierCredit(
     allocations: [...note.allocations, allocation],
   });
   const updatedNote = await db.pharmacyDebitNote.update({
-    where: { id: note.id },
+    where: {
+      id: note.id,
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+    },
     data: { status: settled.status },
   });
   if (settled.status === 'SETTLED') {
     assertPurchaseReturnTransition(note.purchaseReturn.status as PurchaseReturnStatus, 'SETTLED');
     await db.pharmacyPurchaseReturn.update({
-      where: { id: note.purchaseReturnId },
+      where: {
+        id: note.purchaseReturnId,
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+      },
       data: { status: 'SETTLED', settledAt: input.at },
     });
   }

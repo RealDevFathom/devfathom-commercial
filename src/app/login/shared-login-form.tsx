@@ -122,6 +122,11 @@ export function SharedLoginForm({
       }
 
       await appProvidersReady.current;
+      // Auth.js has written the new session cookie, but the App Router can still
+      // hold the unauthenticated login tree in its client cache. Refresh it
+      // before replacing the route so workspace selection cannot bounce back to
+      // /login with a stale session view.
+      router.refresh();
       router.replace(callbackUrl);
     } catch {
       setError('Unable to sign in right now. Please check your connection and try again.');
