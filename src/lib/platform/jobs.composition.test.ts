@@ -16,6 +16,13 @@ const m = vi.hoisted(() => ({
   scope: vi.fn(),
   snapshot: vi.fn(),
   retention: vi.fn(),
+  deploymentUpsert: vi.fn(),
+  deploymentUpdate: vi.fn(),
+  createJob: vi.fn(),
+  getDeployment: vi.fn(),
+  createDeployment: vi.fn(),
+  getProject: vi.fn(),
+  createProjectEnv: vi.fn(),
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ withPlatformDb: m.scope }));
 vi.mock('@/lib/pharmacy/counter-evidence', () => ({
@@ -23,12 +30,19 @@ vi.mock('@/lib/pharmacy/counter-evidence', () => ({
   runCounterEvidenceSnapshotJob: m.snapshot,
   runCameraEvidenceRetentionJob: m.retention,
 }));
+vi.mock('@vercel/sdk', () => ({
+  Vercel: class {
+    deployments = { getDeployment: m.getDeployment, createDeployment: m.createDeployment };
+    projects = { getProject: m.getProject, createProjectEnv: m.createProjectEnv };
+  },
+}));
 import { processPlatformJobs } from './jobs';
 
 const db = {
   $queryRaw: m.query,
   $executeRawUnsafe: m.execute,
   platformJob: {
+    create: m.createJob,
     createMany: m.createMany,
     updateMany: m.updateMany,
     update: m.update,
@@ -36,7 +50,11 @@ const db = {
   },
   organization: { findUnique: m.organization, update: m.organizationUpdate },
   organizationLifecycleEvent: { create: m.lifecycle },
-  organizationDeployment: { updateMany: m.deployment },
+  organizationDeployment: {
+    updateMany: m.deployment,
+    upsert: m.deploymentUpsert,
+    update: m.deploymentUpdate,
+  },
   platformSupportSession: { updateMany: m.support },
 };
 const now = new Date('2026-10-12T01:15:00.000Z');
@@ -81,6 +99,103 @@ beforeEach(() => {
   m.deployment.mockResolvedValue({ count: 1 });
 });
 afterEach(() => vi.useRealTimers());
+
+describe('dedicated provisioning deployment responses', () => {
+  beforeEach(() => {
+    vi.stubEnv('VERCEL_ACCESS_TOKEN', 'test-token');
+    vi.stubEnv('VERCEL_TEAM_ID', 'team-test');
+    vi.stubEnv('VERCEL_GIT_REPO_ORG', 'test-org');
+    vi.stubEnv('VERCEL_GIT_REPO_NAME', 'test-repo');
+    m.organization.mockResolvedValue({ slug: 'tenant-a', displayName: 'Tenant A' });
+    m.deploymentUpsert.mockResolvedValue({ id: 'deployment-1' });
+    m.getProject.mockResolvedValue({ id: 'project-1' });
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
+  const responses = [
+    { response: { url: 'tenant-a.vercel.app' }, expectedUrl: 'https://tenant-a.vercel.app' },
+    { response: {}, expectedUrl: null },
+    { response: { url: '' }, expectedUrl: null },
+  ];
+
+  it.each(responses)(
+    'creates and watches a deployment with URL $expectedUrl',
+    async ({ response, expectedUrl }) => {
+      queue(job('PROVISION_DEDICATED'));
+      m.createDeployment.mockResolvedValue({ id: 'vercel-1', readyState: 'QUEUED', ...response });
+
+      await expect(processPlatformJobs(1)).resolves.toMatchObject({ succeeded: 1, retried: 0 });
+
+      expect(m.createDeployment).toHaveBeenCalledOnce();
+      expect(m.deploymentUpdate).toHaveBeenCalledWith({
+        where: { id: 'deployment-1' },
+        data: {
+          projectId: 'project-1',
+          url: expectedUrl,
+          health: {
+            vercelDeploymentId: 'vercel-1',
+            readyState: 'QUEUED',
+            requestedAt: now.toISOString(),
+          },
+        },
+      });
+      expect(m.createJob).toHaveBeenCalledWith({
+        data: {
+          organizationId: 'tenant-a',
+          type: 'PROVISION_DEDICATED',
+          scheduledAt: new Date(now.getTime() + 30_000),
+          maxAttempts: 3,
+          payload: { vercelDeploymentId: 'vercel-1' },
+          idempotencyKey: 'watch:vercel-1:initial',
+        },
+      });
+    }
+  );
+
+  it.each(responses)(
+    'completes a ready deployment with URL $expectedUrl',
+    async ({ response, expectedUrl }) => {
+      queue(job('PROVISION_DEDICATED', { payload: { vercelDeploymentId: 'vercel-1' } }));
+      m.getDeployment.mockResolvedValue({ id: 'vercel-1', readyState: 'READY', ...response });
+
+      await expect(processPlatformJobs(1)).resolves.toMatchObject({ succeeded: 1, retried: 0 });
+
+      expect(m.getDeployment).toHaveBeenCalledWith({
+        idOrUrl: 'vercel-1',
+        teamId: 'team-test',
+        withGitRepoInfo: 'true',
+      });
+      expect(m.deploymentUpdate).toHaveBeenCalledWith({
+        where: { id: 'deployment-1' },
+        data: {
+          status: 'READY',
+          url: expectedUrl,
+          lastHealthyAt: now,
+          health: {
+            vercelDeploymentId: 'vercel-1',
+            readyState: 'READY',
+            checkedAt: now.toISOString(),
+          },
+        },
+      });
+      expect(m.update).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            status: 'SUCCEEDED',
+            result: {
+              deploymentId: 'deployment-1',
+              vercelDeploymentId: 'vercel-1',
+              state: 'READY',
+              url: expectedUrl,
+            },
+          }),
+        })
+      );
+      expect(m.createJob).not.toHaveBeenCalled();
+      expect(m.createDeployment).not.toHaveBeenCalled();
+    }
+  );
+});
 
 describe('composed platform worker boundaries', () => {
   it('propagates enqueue failure before stale recovery or any claim', async () => {

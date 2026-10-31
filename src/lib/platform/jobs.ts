@@ -200,7 +200,7 @@ async function dedicatedProvision(
     });
     const state = deployment.readyState;
     if (state === 'READY') {
-      const url = deployment.url ? `https://${deployment.url}` : null;
+      const url = 'url' in deployment && deployment.url ? `https://${deployment.url}` : null;
       await db.organizationDeployment.update({
         where: { id: deploymentRecord.id },
         data: {
@@ -293,7 +293,7 @@ async function dedicatedProvision(
     where: { id: deploymentRecord.id },
     data: {
       projectId: project.id,
-      url: deployment.url ? `https://${deployment.url}` : null,
+      url: 'url' in deployment && deployment.url ? `https://${deployment.url}` : null,
       health: {
         vercelDeploymentId: deployment.id,
         readyState: deployment.readyState,
