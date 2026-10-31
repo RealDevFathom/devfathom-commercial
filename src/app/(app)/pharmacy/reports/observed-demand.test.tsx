@@ -28,6 +28,22 @@ const report: Awaited<ReturnType<typeof demandAggregate>> = {
 };
 
 describe('observed demand evidence', () => {
+  it('renders valid monetary aggregates above the per-event database limit', () => {
+    const highValueReport = {
+      ...report,
+      rows: report.rows.map((row) => ({
+        ...row,
+        _sum: { ...row._sum, estimatedValueMinor: 1_500_000_000 },
+      })),
+    };
+    const html = renderToStaticMarkup(
+      <ObservedDemand report={highValueReport} failed={false} selected financial />
+    );
+    expect(html).toContain('Recorded demand events');
+    expect(html).toContain('Procurement review recommended');
+    expect(html).toContain('estimated loss');
+  });
+
   it('distinguishes observations, units, null estimates and exclusions', () => {
     const html = renderToStaticMarkup(
       <ObservedDemand report={report} failed={false} selected financial />

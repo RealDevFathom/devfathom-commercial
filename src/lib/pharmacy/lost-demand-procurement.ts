@@ -30,9 +30,10 @@ export function evaluateLostDemandTriggers(
   config: LostDemandTriggerConfig
 ): LostDemandTrigger[] {
   if (
-    !Object.values(metrics).every((value) => safeNonNegative(value)) ||
+    // Aggregates can exceed the Int limit of an individual event or stock quantity.
+    !Object.values(metrics).every((value) => safeNonNegative(value, Number.MAX_SAFE_INTEGER)) ||
     !safeNonNegative(config.requestsInWindow) ||
-    !safeNonNegative(config.estimatedLossMinor) ||
+    !safeNonNegative(config.estimatedLossMinor, Number.MAX_SAFE_INTEGER) ||
     !safeNonNegative(config.requestWindowDays) ||
     config.requestWindowDays === 0 ||
     !safeNonNegative(config.lossWindowDays) ||
@@ -175,6 +176,8 @@ export async function actOnLostDemandAdvice(input: {
   fromBranchId?: string;
   boundary: LostDemandActionBoundary;
 }) {
+  if (!['DRAFT_PO', 'DRAFT_TRANSFER', 'IGNORE'].includes(input.action))
+    throw new Error('INVALID_LOST_DEMAND_ACTION');
   const actor = await input.boundary.authenticate({ pin: input.pin, action: input.action });
   return input.boundary.transaction(async (writer) => {
     const advice = await writer.loadCurrentAdvice({
@@ -182,7 +185,7 @@ export async function actOnLostDemandAdvice(input: {
       organizationId: actor.organizationId,
       userId: actor.userId,
     });
-    if (!advice || advice.organizationId !== actor.organizationId)
+    if (!advice || advice.id !== input.adviceId || advice.organizationId !== actor.organizationId)
       throw new Error('LOST_DEMAND_ADVICE_NOT_AVAILABLE');
     let result: { id: string; status: 'DRAFT' } | { status: 'IGNORED' };
     if (input.action === 'IGNORE') result = { status: 'IGNORED' };

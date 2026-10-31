@@ -6,6 +6,7 @@ import {
   lostDemandWhatsAppText,
   suggestedProcurementQuantity,
   type LostDemandActionBoundary,
+  type LostDemandAction,
   type LostDemandAdvice,
   type LostDemandTransaction,
 } from './lost-demand-procurement';
@@ -90,6 +91,25 @@ describe('lost-demand procurement advice', () => {
     ).toThrow('INVALID_LOST_DEMAND_QUANTITY');
   });
 
+  it('accepts safe aggregate totals above a single database integer', () => {
+    const metrics = { requests: 0, estimatedLossMinor: 3_000_000_000, walkOuts: 0, visits: 0 };
+    expect(evaluateLostDemandTriggers(metrics, DEFAULT_LOST_DEMAND_TRIGGER_CONFIG)).toEqual([
+      'ESTIMATED_LOSS',
+    ]);
+    expect(
+      evaluateLostDemandTriggers(metrics, {
+        ...DEFAULT_LOST_DEMAND_TRIGGER_CONFIG,
+        estimatedLossMinor: 3_000_000_000,
+      })
+    ).toEqual(['ESTIMATED_LOSS']);
+    expect(() =>
+      evaluateLostDemandTriggers(
+        { ...metrics, estimatedLossMinor: Number.MAX_SAFE_INTEGER + 1 },
+        DEFAULT_LOST_DEMAND_TRIGGER_CONFIG
+      )
+    ).toThrow('INVALID_LOST_DEMAND_METRICS');
+  });
+
   const advice: LostDemandAdvice = {
     id: 'advice-1',
     organizationId: 'org-1',
@@ -121,6 +141,40 @@ describe('lost-demand procurement advice', () => {
     };
     return { writer, boundary };
   }
+
+  it('rejects unknown actions before authentication or draft creation', async () => {
+    const { writer, boundary } = fixture();
+    await expect(
+      actOnLostDemandAdvice({
+        action: 'SEND_PO' as LostDemandAction,
+        adviceId: advice.id,
+        pin: '1234',
+        fromBranchId: 'branch-1',
+        boundary,
+      })
+    ).rejects.toThrow('INVALID_LOST_DEMAND_ACTION');
+    expect(boundary.authenticate).not.toHaveBeenCalled();
+    expect(boundary.transaction).not.toHaveBeenCalled();
+    expect(writer.createTransferDraft).not.toHaveBeenCalled();
+    expect(writer.appendAudit).not.toHaveBeenCalled();
+  });
+
+  it('rejects advice with a different ID from the approved request', async () => {
+    const { writer, boundary } = fixture({
+      loadCurrentAdvice: vi.fn(async () => ({ ...advice, id: 'other-advice' })),
+    });
+    await expect(
+      actOnLostDemandAdvice({
+        action: 'DRAFT_PO',
+        adviceId: advice.id,
+        pin: '1234',
+        supplierId: 'supplier-1',
+        boundary,
+      })
+    ).rejects.toThrow('LOST_DEMAND_ADVICE_NOT_AVAILABLE');
+    expect(writer.createPurchaseOrderDraft).not.toHaveBeenCalled();
+    expect(writer.appendAudit).not.toHaveBeenCalled();
+  });
 
   it('derives actor/tenant/capability through PIN boundary and audits every action', async () => {
     const { writer, boundary } = fixture();
