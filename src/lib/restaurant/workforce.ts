@@ -456,7 +456,11 @@ export async function reviewShiftSwap(
     }
     const request = await tx.restaurantShiftSwapRequest.findUnique({
       where: { id: input.requestId },
-      include: { decision: true, shift: true, replacement: true },
+      include: {
+        decision: true,
+        shift: { include: { breaks: { select: { id: true }, take: 1 } } },
+        replacement: true,
+      },
     });
     if (!request || request.decision) {
       throw new WorkforceError('This swap request has already been decided.', 'CONFLICT');
@@ -465,6 +469,16 @@ export async function reviewShiftSwap(
       throw new WorkforceError('A cancelled shift cannot be reassigned.', 'CONFLICT');
     }
     if (input.decision === 'APPROVED') {
+      if (
+        request.shift.clockedInAt ||
+        request.shift.clockedOutAt ||
+        request.shift.breaks.length > 0
+      ) {
+        throw new WorkforceError(
+          'A shift with recorded attendance cannot be reassigned.',
+          'CONFLICT'
+        );
+      }
       if (
         request.replacement.status !== 'ACTIVE' ||
         request.replacement.primaryBranchId !== input.branchId

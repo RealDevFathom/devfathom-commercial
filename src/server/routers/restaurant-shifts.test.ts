@@ -451,10 +451,16 @@ function makeDb() {
       findUnique: vi.fn(async ({ where }: { where: { id: string } }) => {
         const request = state.swapRequests.find((r) => r.id === where.id);
         if (!request) return null;
+        const shift = state.shifts.find((s) => s.id === request.shiftId)!;
         return {
           ...request,
           decision: state.decisions.find((d) => d.requestId === request.id) ?? null,
-          shift: state.shifts.find((s) => s.id === request.shiftId)!,
+          shift: {
+            ...shift,
+            breaks: state.breaks
+              .filter((row) => row.shiftId === shift.id)
+              .map(({ id }) => ({ id })),
+          },
           replacement: state.profiles.find((p) => p.id === request.replacementStaffProfileId)!,
         };
       }),
@@ -1046,6 +1052,121 @@ describe('restaurantShifts.reviewSwap', () => {
       })
     ).rejects.toMatchObject({ code: 'CONFLICT' });
     expect(state.decisions).toHaveLength(1);
+  });
+
+  it('refuses to reassign a shift after attendance has been recorded', async () => {
+    const request = await pendingSwap();
+    await caller('EMPLOYEE').clockIn({ shiftId: 'shift_emp', idempotencyKey: 'ci-before-swap' });
+
+    await expect(
+      caller('MANAGER').reviewSwap({
+        requestId: request!.id,
+        branchId: 'branch_1',
+        decision: 'APPROVED',
+        idempotencyKey: 'rv-attendance',
+      })
+    ).rejects.toMatchObject({
+      code: 'CONFLICT',
+      message: expect.stringContaining('recorded attendance'),
+    });
+
+    expect(state.shifts.find((shift) => shift.id === 'shift_emp')).toMatchObject({
+      staffProfileId: 'staff_emp',
+      clockedInAt: at('2026-09-20T09:02:00Z'),
+    });
+    expect(state.decisions).toHaveLength(0);
+    expect(eventsOf('SWAP_APPROVED')).toHaveLength(0);
+  });
+
+  it('refuses to reassign a shift with recorded clock-out attendance', async () => {
+    const request = await pendingSwap();
+    const shift = state.shifts.find((row) => row.id === 'shift_emp')!;
+    shift.clockedOutAt = at('2026-09-20T17:00:00Z');
+
+    await expect(
+      caller('MANAGER').reviewSwap({
+        requestId: request!.id,
+        branchId: 'branch_1',
+        decision: 'APPROVED',
+        idempotencyKey: 'rv-clock-out',
+      })
+    ).rejects.toMatchObject({
+      code: 'CONFLICT',
+      message: expect.stringContaining('recorded attendance'),
+    });
+
+    expect(shift).toMatchObject({
+      staffProfileId: 'staff_emp',
+      clockedOutAt: at('2026-09-20T17:00:00Z'),
+    });
+    expect(state.decisions).toHaveLength(0);
+    expect(eventsOf('SWAP_APPROVED')).toHaveLength(0);
+  });
+
+  it('refuses to reassign a shift with a historical break record', async () => {
+    const request = await pendingSwap();
+    state.breaks.push({
+      id: 'break_historical',
+      shiftId: 'shift_emp',
+      startedAt: at('2026-09-20T12:00:00Z'),
+      endedAt: at('2026-09-20T12:30:00Z'),
+    });
+
+    await expect(
+      caller('MANAGER').reviewSwap({
+        requestId: request!.id,
+        branchId: 'branch_1',
+        decision: 'APPROVED',
+        idempotencyKey: 'rv-historical-break',
+      })
+    ).rejects.toMatchObject({
+      code: 'CONFLICT',
+      message: expect.stringContaining('recorded attendance'),
+    });
+
+    expect(state.shifts.find((shift) => shift.id === 'shift_emp')!.staffProfileId).toBe(
+      'staff_emp'
+    );
+    expect(state.decisions).toHaveLength(0);
+    expect(eventsOf('SWAP_APPROVED')).toHaveLength(0);
+  });
+
+  it('allows rejecting a swap after attendance has been recorded', async () => {
+    const request = await pendingSwap();
+    await caller('EMPLOYEE').clockIn({ shiftId: 'shift_emp', idempotencyKey: 'ci-before-reject' });
+
+    await expect(
+      caller('MANAGER').reviewSwap({
+        requestId: request!.id,
+        branchId: 'branch_1',
+        decision: 'APPROVED',
+        idempotencyKey: 'rv-approve-before-reject',
+      })
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+    expect(state.commands.filter((command) => command.kind === 'SWAP_APPROVE')).toHaveLength(0);
+
+    const decision = await caller('MANAGER').reviewSwap({
+      requestId: request!.id,
+      branchId: 'branch_1',
+      decision: 'REJECTED',
+      // The failed approval must not consume its idempotency key or the pending request.
+      idempotencyKey: 'rv-approve-before-reject',
+    });
+
+    expect(decision).toMatchObject({ requestId: request!.id, decision: 'REJECTED' });
+    expect(state.shifts.find((shift) => shift.id === 'shift_emp')).toMatchObject({
+      staffProfileId: 'staff_emp',
+      clockedInAt: at('2026-09-20T09:02:00Z'),
+    });
+    expect(state.decisions).toContainEqual(
+      expect.objectContaining({
+        requestId: request!.id,
+        decision: 'REJECTED',
+      })
+    );
+    expect(eventsOf('SWAP_REJECTED')).toHaveLength(1);
+    expect(eventsOf('SWAP_APPROVED')).toHaveLength(0);
+    expect(state.commands.filter((command) => command.kind === 'SWAP_REJECT')).toHaveLength(1);
   });
 
   it('denies employees, other-branch managers, and replacements with an overlapping shift', async () => {
