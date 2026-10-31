@@ -3,6 +3,7 @@ import { StrictMode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { OrderPad } from './order-pad';
+import type { OrderDetail } from './order-ticket-panel';
 import { PosOfflineRuntime } from '@/lib/restaurant/pos-offline-runtime';
 import * as posStore from '@/lib/restaurant/pos-client-store';
 import { reviveCommercialTerms } from '@/lib/restaurant/commercial-terms';
@@ -119,10 +120,11 @@ function transport({
   customerSearchGates = [],
   deliveryZoneGates = [],
   checkoutSettled = false,
+  closeError,
 }: {
   failedOpenAttempts?: number;
   openErrors?: { status: number; error: string }[];
-  detailResponse?: typeof detail;
+  detailResponse?: OrderDetail;
   detailGate?: Promise<void>;
   failedAddAttempts?: number;
   refreshGate?: Promise<void>;
@@ -139,9 +141,11 @@ function transport({
   customerSearchGates?: Promise<void>[];
   deliveryZoneGates?: Promise<void>[];
   checkoutSettled?: boolean;
+  closeError?: { status: number; error: string };
 } = {}) {
   let openAttempts = 0;
   let addAttempts = 0;
+  let closeAttempts = 0;
   let openOrderReads = 0;
   let closed = false;
   let billCut = false;
@@ -274,6 +278,10 @@ function transport({
       return json({ itemId: 'item-1' }, 201);
     }
     if (path.endsWith('/orders/close')) {
+      closeAttempts += 1;
+      if (closeError && closeAttempts === 1) {
+        return json({ error: closeError.error }, closeError.status);
+      }
       closed = true;
       return json({ orderId: 'order-1', status: 'PAYMENT_PENDING' });
     }
@@ -802,6 +810,71 @@ describe('OrderPad transport', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add to order' }));
     expect(screen.getByText('Coffee added locally. No request was sent.')).toBeVisible();
     expect(fetch).toHaveBeenCalledTimes(callsBeforeTap);
+  });
+
+  it.each(['PAYMENT_PENDING', 'SERVED'])(
+    'finalizes a paid and delivered %s delivery order without reopening checkout',
+    async (status) => {
+      const fetch = transport({
+        detailResponse: {
+          ...detail,
+          channel: 'DELIVERY',
+          status,
+          deliveryStatus: 'DELIVERED',
+          settled: true,
+        },
+      });
+      await unlock(fetch);
+      fireEvent.click(screen.getByRole('button', { name: 'Open order' }));
+      await screen.findByText('Order 42');
+
+      const closeOrder = screen.getByRole('button', { name: 'Close order' });
+      fireEvent.click(closeOrder);
+      fireEvent.click(closeOrder);
+
+      await waitFor(() =>
+        expect(
+          fetch.mock.calls.filter(([input]) => String(input).endsWith('/orders/close'))
+        ).toHaveLength(1)
+      );
+      expect(
+        fetch.mock.calls.filter(([input]) => String(input).includes('/checkout/'))
+      ).toHaveLength(0);
+      expect(screen.queryByRole('heading', { name: 'Collect payment' })).not.toBeInTheDocument();
+      expect(await screen.findByRole('heading', { name: 'No active order' })).toBeVisible();
+    }
+  );
+
+  it('keeps a delivered delivery order active when finalization fails', async () => {
+    const fetch = transport({
+      detailResponse: {
+        ...detail,
+        channel: 'DELIVERY',
+        status: 'PAYMENT_PENDING',
+        deliveryStatus: 'DELIVERED',
+        settled: true,
+      },
+      closeError: { status: 409, error: 'Order settlement changed.' },
+    });
+    await unlock(fetch);
+    fireEvent.click(screen.getByRole('button', { name: 'Open order' }));
+    await screen.findByText('Order 42');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close order' }));
+
+    expect(await screen.findByText('Order settlement changed.')).toBeVisible();
+    expect(screen.getByText('Order 42')).toBeVisible();
+    const retryClose = screen.getByRole('button', { name: 'Close order' });
+    expect(retryClose).toBeEnabled();
+    expect(screen.queryByRole('heading', { name: 'No active order' })).not.toBeInTheDocument();
+
+    fireEvent.click(retryClose);
+    await waitFor(() =>
+      expect(
+        fetch.mock.calls.filter(([input]) => String(input).endsWith('/orders/close'))
+      ).toHaveLength(2)
+    );
+    expect(await screen.findByRole('heading', { name: 'No active order' })).toBeVisible();
   });
 
   it('keeps an unsettled check active when checkout closes', async () => {
