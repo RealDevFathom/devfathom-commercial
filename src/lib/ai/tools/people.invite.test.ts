@@ -14,16 +14,19 @@ const mocks = vi.hoisted(() => ({
   resolveEntitlements: vi.fn(),
   queryRaw: vi.fn(),
   count: vi.fn(),
+  sendEmail: vi.fn(),
+  audit: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/email', () => ({
   appUrl: vi.fn(() => 'https://www.devfathom.com'),
-  sendEmail: vi.fn(),
+  sendEmail: mocks.sendEmail,
   templates: { inviteMember: vi.fn(() => ({ subject: 's', html: 'h', text: 't' })) },
 }));
 vi.mock('@/lib/notifications', () => ({ notify: vi.fn() }));
-vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
+vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => db) }));
+vi.mock('@/server/audit', () => ({ recordAudit: mocks.audit }));
 vi.mock('@/lib/entitlements', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/entitlements')>();
   return { ...actual, resolveOrganizationEntitlements: mocks.resolveEntitlements };
@@ -31,6 +34,7 @@ vi.mock('@/lib/entitlements', async (importOriginal) => {
 
 import { buildPeopleTools } from './people';
 import type { AssistantHelpers } from '@/lib/ai/context';
+import { buildAssistantTools } from '@/lib/ai/tools';
 
 const transactionClient = {
   $queryRaw: mocks.queryRaw,
@@ -44,8 +48,22 @@ const db = {
   // configured catalog before writing.
   organizationDepartment: { findFirst: mocks.departmentFindFirst },
   invitation: { upsert: mocks.invitationUpsert },
-  $transaction: async (run: (tx: unknown) => Promise<unknown>) => run(transactionClient),
+  $transaction: vi.fn(async (run: (tx: unknown) => Promise<unknown>) => run(transactionClient)),
 };
+
+function wrappedInviteTool() {
+  return buildAssistantTools(
+    {
+      organizationId: 'org_1',
+      userId: 'user_admin',
+      name: 'Admin',
+      role: 'ADMIN',
+      vertical: 'AGENCY',
+      enabledModules: ['hr'],
+    },
+    { hint: 'invite a team member' }
+  ).inviteMember;
+}
 
 function inviteTool() {
   const helpers = {
@@ -107,13 +125,26 @@ describe('assistant inviteMember duplicate guard', () => {
   it('stores the canonical form for a genuinely new member', async () => {
     mocks.findFirst.mockResolvedValue(null);
 
-    await inviteTool().execute({ ...base, email: 'New.Person@Company.COM' });
+    const tool = wrappedInviteTool();
+    expect(tool.needsApproval).toBe(true);
+    await expect(
+      tool.execute!(
+        { ...base, email: 'New.Person@Company.COM' },
+        { toolCallId: 'invite', messages: [] }
+      )
+    ).resolves.toMatchObject({
+      name: 'Alex Carter',
+      email: 'new.person@company.com',
+      emailed: true,
+    });
 
     expect(mocks.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ email: 'new.person@company.com' }),
       })
     );
+    expect(mocks.sendEmail).toHaveBeenCalledOnce();
+    expect(mocks.audit).toHaveBeenCalledOnce();
   });
 
   it('refuses a new member when the workspace has no available seats', async () => {
@@ -130,7 +161,7 @@ describe('assistant inviteMember duplicate guard', () => {
 
     await expect(
       inviteTool().execute({ ...base, email: 'new.person@company.com' })
-    ).rejects.toThrow('Seat limit reached (10/10).');
+    ).resolves.toEqual({ error: 'Seat limit reached (10/10).' });
 
     expect(mocks.resolveEntitlements).toHaveBeenCalledWith('org_1', transactionClient);
     expect(mocks.queryRaw).toHaveBeenCalledOnce();
@@ -142,6 +173,53 @@ describe('assistant inviteMember duplicate guard', () => {
     });
     expect(mocks.create).not.toHaveBeenCalled();
     expect(mocks.invitationUpsert).not.toHaveBeenCalled();
+  });
+
+  it.each([1, 10])(
+    'preserves a full %i-seat license refusal through the assistant wrapper',
+    async (seatLimit) => {
+      mocks.findFirst.mockResolvedValue(null);
+      mocks.count.mockResolvedValue(seatLimit);
+      mocks.resolveEntitlements.mockResolvedValue({ seatLimit });
+
+      const result = await wrappedInviteTool().execute!(
+        { ...base, email: 'new.person@company.com' },
+        { toolCallId: 'invite', messages: [] }
+      );
+
+      expect(result).toEqual({ error: `Seat limit reached (${seatLimit}/${seatLimit}).` });
+      // The expected refusal must still reject the transaction before it is
+      // converted to a tool result outside the rollback boundary.
+      await expect(db.$transaction.mock.results[0].value).rejects.toThrow('Seat limit reached');
+      expect(mocks.create).not.toHaveBeenCalled();
+      expect(mocks.update).not.toHaveBeenCalled();
+      expect(mocks.invitationUpsert).not.toHaveBeenCalled();
+      expect(mocks.sendEmail).not.toHaveBeenCalled();
+      expect(mocks.audit).not.toHaveBeenCalled();
+    }
+  );
+
+  it('keeps unexpected transaction failures sanitized by the assistant wrapper', async () => {
+    mocks.findFirst.mockResolvedValue(null);
+    const failure = new Error('Seat limit reached (private database detail).');
+    mocks.queryRaw.mockRejectedValueOnce(failure);
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const result = await wrappedInviteTool().execute!(
+        { ...base, email: 'new.person@company.com' },
+        { toolCallId: 'invite', messages: [] }
+      );
+
+      expect(result).toEqual({ error: 'This action is currently unavailable. Please try again.' });
+      await expect(db.$transaction.mock.results[0].value).rejects.toBe(failure);
+      expect(log.mock.calls).toEqual([['ASSISTANT_TOOL_EXECUTION_FAILED']]);
+      expect(mocks.create).not.toHaveBeenCalled();
+      expect(mocks.invitationUpsert).not.toHaveBeenCalled();
+      expect(mocks.sendEmail).not.toHaveBeenCalled();
+      expect(mocks.audit).not.toHaveBeenCalled();
+    } finally {
+      log.mockRestore();
+    }
   });
 
   it('does not consume another seat when refreshing a pending invitation', async () => {

@@ -20,7 +20,7 @@ import { normalizeEmail } from '@/lib/email-address';
 import { resolveOrganizationEntitlements } from '@/lib/entitlements';
 import { generateInviteToken } from '@/lib/invite-token';
 import { passwordMeetsPolicy } from '@/lib/password-policy';
-import { lockAndAssertSeatAvailable } from '@/lib/seat-capacity';
+import { lockAndAssertSeatAvailable, SeatCapacityError } from '@/lib/seat-capacity';
 
 // "LEADERSHIP" → "Leadership", "ADMIN" → "Admin"; the acronym role stays as-is.
 const titleCase = (s: string) => (s === 'HR' ? 'HR' : s.charAt(0) + s.slice(1).toLowerCase());
@@ -797,32 +797,39 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
           skills: skills ?? [],
         };
 
-        const user = await h.db.$transaction(async (tx) => {
-          if (!existing) {
-            const { seatLimit } = await resolveOrganizationEntitlements(ctx.organizationId, tx);
-            await lockAndAssertSeatAvailable(tx, ctx.organizationId, seatLimit);
-          }
-          const u = existing
-            ? await tx.user.update({
-                where: { id: existing.id },
-                data: { ...profile, password: null, status: 'INVITED' },
-              })
-            : await tx.user.create({
-                data: { ...profile, email: lowerEmail, password: null, status: 'INVITED' },
-              });
-          await tx.invitation.upsert({
-            where: { userId: u.id },
-            create: {
-              userId: u.id,
-              email: lowerEmail,
-              tokenHash,
-              invitedById: ctx.userId,
-              expiresAt,
-            },
-            update: { tokenHash, expiresAt, acceptedAt: null, invitedById: ctx.userId },
+        const user = await h.db
+          .$transaction(async (tx) => {
+            if (!existing) {
+              const { seatLimit } = await resolveOrganizationEntitlements(ctx.organizationId, tx);
+              await lockAndAssertSeatAvailable(tx, ctx.organizationId, seatLimit);
+            }
+            const u = existing
+              ? await tx.user.update({
+                  where: { id: existing.id },
+                  data: { ...profile, password: null, status: 'INVITED' },
+                })
+              : await tx.user.create({
+                  data: { ...profile, email: lowerEmail, password: null, status: 'INVITED' },
+                });
+            await tx.invitation.upsert({
+              where: { userId: u.id },
+              create: {
+                userId: u.id,
+                email: lowerEmail,
+                tokenHash,
+                invitedById: ctx.userId,
+                expiresAt,
+              },
+              update: { tokenHash, expiresAt, acceptedAt: null, invitedById: ctx.userId },
+            });
+            return u;
+          })
+          .catch((error: unknown) => {
+            // Let the transaction roll back before returning an expected refusal.
+            if (error instanceof SeatCapacityError) return { error: error.message };
+            throw error;
           });
-          return u;
-        });
+        if ('error' in user) return user;
 
         const inviteUrl = `${appUrl()}/invite/${token}`;
         let emailed = true;
