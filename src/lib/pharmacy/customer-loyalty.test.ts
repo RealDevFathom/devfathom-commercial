@@ -15,6 +15,38 @@ import {
 const scope = { organizationId: 'org-a', branchId: 'branch-a', actorId: 'cashier-a' };
 
 describe('CRM-L01 pharmacy loyalty', () => {
+  it('refuses changing the recipient of a voucher cart and permits relinking the same customer', async () => {
+    const update = vi.fn();
+    const findVoucher = vi.fn().mockResolvedValue({ id: 'voucher-a' });
+    const db = {
+      $queryRaw: vi.fn().mockResolvedValue([]),
+      patientConsent: { findFirst: vi.fn().mockResolvedValue({ granted: true, revokedAt: null }) },
+      pharmacySale: { findFirst: vi.fn().mockResolvedValue({ id: 'sale-a' }), update },
+      pharmacySaleLine: { findFirst: vi.fn().mockResolvedValue(null) },
+      pharmacyCustomer: { upsert: vi.fn().mockResolvedValue({ id: 'customer-b' }) },
+      pharmacyVoucherRedemption: { findFirst: findVoucher },
+    };
+    const input = { saleId: 'sale-a', patientId: 'patient-b', displayName: 'Customer B' };
+    await expect(linkCustomerToSale(db as never, scope, input)).rejects.toEqual(
+      new PharmacyLoyaltyError('VOUCHER_CUSTOMER_MISMATCH')
+    );
+    expect(update).not.toHaveBeenCalled();
+    expect(findVoucher).toHaveBeenCalledWith({
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        saleLine: { saleId: 'sale-a' },
+        customerId: { not: 'customer-b' },
+      },
+      select: { id: true },
+    });
+    findVoucher.mockResolvedValue(null);
+    await expect(linkCustomerToSale(db as never, scope, input)).resolves.toMatchObject({
+      id: 'customer-b',
+    });
+    expect(update).toHaveBeenCalledOnce();
+  });
+
   it('links a retail customer only with current purpose-specific LOYALTY consent', async () => {
     const update = vi.fn();
     const db = {

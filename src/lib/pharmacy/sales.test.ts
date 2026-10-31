@@ -27,7 +27,10 @@ describe('voucher category enforcement', () => {
         })),
       },
       pharmacyCampaignCapture: {
-        findFirst: vi.fn(async () => ({ id: 'capture-a', voucherRedemption: redemption })),
+        findFirst: vi.fn(async () => ({
+          id: 'capture-a',
+          voucherRedemptions: redemption ? [redemption] : [],
+        })),
       },
     }) as never;
 

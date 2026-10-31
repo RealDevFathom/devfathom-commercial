@@ -13801,7 +13801,7 @@ model PharmacyCampaignCapture {
   channel          PharmacyMarketingChannel
   idempotencyKey   String
   capturedAt       DateTime                          @default(now())
-  voucherRedemption PharmacyVoucherRedemption?
+  voucherRedemptions PharmacyVoucherRedemption[]
 
   @@unique([organizationId, id])
   @@unique([organizationId, idempotencyKey])
@@ -13809,7 +13809,8 @@ model PharmacyCampaignCapture {
   @@map("pharmacy_campaign_captures")
 }
 
-/// Durable, single-use evidence that an issued campaign voucher funded a sale line.
+/// Immutable voucher reservation/funding evidence. An unpaid sale's VOIDED event
+/// releases its reservation; paid sales consume the capture permanently.
 model PharmacyVoucherRedemption {
   id               String                  @id @default(cuid())
   organizationId   String                  @default(dbgenerated("current_setting('app.current_organization_id', true)"))
@@ -13827,7 +13828,8 @@ model PharmacyVoucherRedemption {
   saleLine         PharmacySaleLine        @relation(fields: [organizationId, branchId, saleLineId], references: [organizationId, branchId, id], onDelete: Restrict)
 
   @@unique([organizationId, id])
-  @@unique([organizationId, captureId])
+  // A migration trigger locks the capture and enforces one unreleased reservation.
+  @@index([organizationId, captureId])
   @@unique([organizationId, branchId, saleLineId])
   @@index([organizationId, branchId, campaignId, redeemedAt])
   @@map("pharmacy_voucher_redemptions")

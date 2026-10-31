@@ -212,10 +212,25 @@ export async function assertVoucherEligibility(
       campaignId: voucherCampaignId,
       customerId,
     },
-    select: { id: true, voucherRedemption: { select: { id: true } } },
+    select: {
+      id: true,
+      voucherRedemptions: {
+        // The immutable VOIDED event releases an unpaid cart's reservation.
+        // Paid/part-paid sales keep consuming the voucher, including after a refund.
+        where: {
+          saleLine: {
+            sale: {
+              NOT: { status: 'VOID', tenders: { none: {} }, events: { some: { kind: 'VOIDED' } } },
+            },
+          },
+        },
+        select: { id: true },
+        take: 1,
+      },
+    },
   });
   if (!capture) throw new PharmacySaleError('VOUCHER_NOT_ELIGIBLE');
-  if (capture.voucherRedemption) throw new PharmacySaleError('VOUCHER_ALREADY_REDEEMED');
+  if (capture.voucherRedemptions.length) throw new PharmacySaleError('VOUCHER_ALREADY_REDEEMED');
   return { captureId: capture.id, customerId };
 }
 
@@ -333,9 +348,9 @@ async function addSaleLineWithAllocation(
   });
   if (!medicine) throw new PharmacySaleError('NOT_FOUND');
   const discountMinor = input.discountMinor ?? 0;
-  // PROMOTION is the voucher-funded path. Requiring both sides prevents a caller
-  // from omitting the campaign identifier while retaining the promotional price.
-  if ((input.discountKind === 'PROMOTION') !== Boolean(input.voucherCampaignId))
+  // Ordinary approved promotions remain available without a campaign. A voucher
+  // must use the promotional path and also pass the stricter campaign checks.
+  if (input.voucherCampaignId && input.discountKind !== 'PROMOTION')
     throw new PharmacySaleError('VOUCHER_NOT_ELIGIBLE');
   const voucher = input.voucherCampaignId
     ? await assertVoucherEligibility(
