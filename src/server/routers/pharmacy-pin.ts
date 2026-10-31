@@ -32,12 +32,26 @@ export const pharmacyPinRouter = router({
         .object({
           branchId: z.string().min(1),
           userId: z.string().min(1),
-          pin: z.string().regex(/^\d{4,8}$/, 'Use 4–8 digits.'),
+          // Only the PIN's owner may choose its secret. Resetting another member's PIN
+          // revokes it and leaves them to re-enroll their own through `enroll`; otherwise
+          // the resetter would know a second-person approval PIN and could witness or
+          // approve their own controlled sale under that member's identity.
+          pin: z
+            .string()
+            .regex(/^\d{4,8}$/, 'Use 4–8 digits.')
+            .optional(),
         })
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
       const { organizationId, userId: actorId } = pharmacyIdentity(ctx);
+      const selfReset = input.userId === actorId;
+      if (input.pin !== undefined && !selfReset)
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message:
+            "You cannot choose another member's PIN. Reset revokes it; they enroll a new one themselves.",
+        });
       const authenticatedAt = ctx.session!.user.passwordAuthenticatedAt;
       const age = Date.now() - (authenticatedAt ?? NaN);
       if (!Number.isFinite(age) || age < 0 || age > 5 * 60_000)
@@ -74,7 +88,7 @@ export const pharmacyPinRouter = router({
           });
         const profile = await ensurePharmacyStaffProfile(db, organizationId, input.userId);
         // Enrollment and resets serialize on the target user lock above.
-        await db.restaurantOperatorCredential.updateMany({
+        const revoked = await db.restaurantOperatorCredential.updateMany({
           where: {
             organizationId,
             staffProfileId: profile.id,
@@ -84,15 +98,18 @@ export const pharmacyPinRouter = router({
           },
           data: { revokedAt: new Date() },
         });
-        const credential = await db.restaurantOperatorCredential.create({
-          data: {
-            organizationId,
-            staffProfileId: profile.id,
-            type: 'PIN',
-            credentialHash: await hashOperatorCredential('PIN', input.pin),
-          },
-          select: { id: true },
-        });
+        const credential =
+          selfReset && input.pin !== undefined
+            ? await db.restaurantOperatorCredential.create({
+                data: {
+                  organizationId,
+                  staffProfileId: profile.id,
+                  type: 'PIN',
+                  credentialHash: await hashOperatorCredential('PIN', input.pin),
+                },
+                select: { id: true },
+              })
+            : null;
         await db.auditLog.create({
           data: {
             organizationId,
@@ -100,18 +117,20 @@ export const pharmacyPinRouter = router({
             source: 'TRPC',
             category: 'PHARMACY',
             action: 'PHARMACY:PIN_RESET',
-            targetType: 'RestaurantOperatorCredential',
-            targetId: credential.id,
+            targetType: credential ? 'RestaurantOperatorCredential' : 'RestaurantStaffProfile',
+            targetId: credential?.id ?? profile.id,
             metadata: {
               branchId: input.branchId,
               affectedBranchIds: targetBranches,
               userId: input.userId,
               staffProfileId: profile.id,
+              revokedCount: revoked.count,
+              outcome: credential ? 'ROTATED_OWN_PIN' : 'REVOKED_AWAITING_SELF_ENROLLMENT',
               reauthentication: 'PASSWORD',
             },
           },
         });
-        return { enrolled: true };
+        return { enrolled: credential !== null };
       });
     }),
   status: protectedProcedure.query(async ({ ctx }) => {

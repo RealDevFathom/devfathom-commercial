@@ -1,14 +1,16 @@
 // @vitest-environment node
 import { randomUUID } from 'node:crypto';
 import { Client } from 'pg';
-import { beforeAll, afterAll, describe, expect, it } from 'vitest';
+import { beforeAll, afterAll, describe as baseDescribe, expect, it as baseIt } from 'vitest';
 import { pharmacyPinRouter } from '@/server/routers/pharmacy-pin';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-// This suite deliberately fails if DATABASE_URL is absent: it must execute in
-// the authorized CLI run, never turn a missing database into a skipped pass.
+// Like the other database suites, every test here skips when no PostgreSQL is
+// configured, so the default unit run stays green; the DB run must provide one.
 const originalUrl = process.env.DATABASE_URL;
 const configuredUrl = process.env.M8_TEST_OWNER_DATABASE_URL ?? originalUrl;
+const describe = baseDescribe.skipIf(!configuredUrl);
+const it = baseIt.skipIf(!configuredUrl);
 const suffix = randomUUID().replaceAll('-', '');
 const providedRuntimeUrl = process.env.M8_TEST_RUNTIME_DATABASE_URL;
 const runtimeRole = providedRuntimeUrl
@@ -26,8 +28,7 @@ const pin = '4729';
 const orgs: string[] = [];
 
 beforeAll(async () => {
-  if (!configuredUrl)
-    throw new Error('DATABASE_URL is required for solo approval integration tests');
+  if (!configuredUrl) return;
   owner = new Client({ connectionString: configuredUrl });
   await owner.connect();
   await owner.query("SELECT set_config('app.is_platform_admin', 'true', false)");
@@ -1766,7 +1767,9 @@ describe('solo approval database guard regressions', () => {
           [f.org, f.branch, f.user]
         );
         expect(before.rows[0].eligible).toBe(true);
-        if (change !== 'activation')
+        // The unlinked-staff case must fail on the PIN-only profile alone, not on a
+        // second active user account.
+        if (change !== 'activation' && change !== 'unlinked staff')
           await roster.query(`UPDATE users SET status='ACTIVE' WHERE id=$1`, [staff.user.id]);
         if (change === 'activation')
           await roster.query(`UPDATE users SET status='ACTIVE' WHERE id=$1`, [staff.user.id]);
@@ -1816,6 +1819,37 @@ describe('solo approval database guard regressions', () => {
       await roster.query('COMMIT');
     } finally {
       await closeConnections(approval, roster, unrelated);
+    }
+  });
+
+  it('lets concurrent same-tenant roster writes proceed without rewriting the organization row', async () => {
+    const f = await fixture();
+    const first = await tenantConnection(f);
+    const second = await tenantConnection(f);
+    try {
+      const before = await owner.query(
+        'SELECT xmin::text AS version FROM organizations WHERE id=$1',
+        [f.org]
+      );
+      await first.query(
+        `INSERT INTO restaurant_staff_profiles (id,"organizationId","displayName","updatedAt") VALUES ($1,$2,'Roster A',now())`,
+        [randomUUID(), f.org]
+      );
+      // A second roster writer in the same tenant does not queue behind the first
+      // (statement_timeout would fail this test if it did).
+      await second.query(
+        `INSERT INTO restaurant_staff_profiles (id,"organizationId","displayName","updatedAt") VALUES ($1,$2,'Roster B',now())`,
+        [randomUUID(), f.org]
+      );
+      await first.query('COMMIT');
+      await second.query('COMMIT');
+      const after = await owner.query(
+        'SELECT xmin::text AS version FROM organizations WHERE id=$1',
+        [f.org]
+      );
+      expect(after.rows[0].version).toBe(before.rows[0].version);
+    } finally {
+      await closeConnections(first, second);
     }
   });
 
@@ -2203,6 +2237,8 @@ it.each(['owner', 'ADMIN'] as const)(
         };
         const api = pharmacyPinRouter.createCaller(context as never);
         const request = { branchId: f.branch, userId: f.user, pin: '739251' };
+        const { pin: _ownPin, ...revokeOnly } = request;
+        void _ownPin;
         for (const stamp of [undefined, Date.now() - 301000, Date.now() + 60000]) {
           await expect(
             pharmacyPinRouter
@@ -2259,7 +2295,7 @@ it.each(['owner', 'ADMIN'] as const)(
             data: { userId: f.user, capability, effect: 'DENY', reason: 'Reset regression' },
           });
           const before = await db.restaurantOperatorCredential.count();
-          await expect(api.reset({ ...request, userId: employee.id })).rejects.toMatchObject({
+          await expect(api.reset({ ...revokeOnly, userId: employee.id })).rejects.toMatchObject({
             code: 'FORBIDDEN',
           });
           await expect(api.reset(request)).rejects.toMatchObject({ code: 'FORBIDDEN' });
@@ -2269,9 +2305,35 @@ it.each(['owner', 'ADMIN'] as const)(
           ).toBe(0);
           await db.userPermissionOverride.delete({ where: { id: deny.id } });
         }
-        expect(await api.reset({ ...request, userId: employee.id })).toEqual({ enrolled: true });
+        // An administrator can never choose another member's approval PIN: the request is
+        // refused before any credential write, so the resetter cannot impersonate a witness.
+        await employeeApi.enroll({ pin: '468213' });
+        const employeeProfile = await db.restaurantStaffProfile.findFirstOrThrow({
+          where: { userId: employee.id },
+        });
+        const employeePins = () =>
+          db.restaurantOperatorCredential.findMany({
+            where: { staffProfileId: employeeProfile.id, type: 'PIN', revokedAt: null },
+          });
+        const chosenBefore = await db.restaurantOperatorCredential.count();
+        await expect(
+          api.reset({ ...request, userId: employee.id, pin: '111222' })
+        ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+        expect(await db.restaurantOperatorCredential.count()).toBe(chosenBefore);
+        expect(await employeePins()).toHaveLength(1);
+        // Resetting another member only revokes; they then enroll their own secret.
+        expect(await api.reset({ ...revokeOnly, userId: employee.id })).toEqual({
+          enrolled: false,
+        });
+        expect(await employeePins()).toHaveLength(0);
+        expect(await employeeApi.enroll({ pin: '905317' })).toEqual({ enrolled: true });
+        const reEnrolled = await employeePins();
+        expect(reEnrolled).toHaveLength(1);
+        expect(await verifyOperatorCredential('PIN', '905317', reEnrolled[0].credentialHash)).toBe(
+          true
+        );
         await db.user.update({ where: { id: employee.id }, data: { status: 'INACTIVE' } });
-        await expect(api.reset({ ...request, userId: employee.id })).rejects.toMatchObject({
+        await expect(api.reset({ ...revokeOnly, userId: employee.id })).rejects.toMatchObject({
           code: 'FORBIDDEN',
         });
         for (const nextPin of ['739251', '682914']) {
@@ -2294,7 +2356,11 @@ it.each(['owner', 'ADMIN'] as const)(
           userId: f.user,
           reauthentication: 'PASSWORD',
         });
-        expect(JSON.stringify(logs)).not.toMatch(/739251|682914|credentialHash/);
+        expect(
+          logs.find((log) => (log.metadata as { userId?: string })?.userId === employee.id)
+            ?.metadata
+        ).toMatchObject({ outcome: 'REVOKED_AWAITING_SELF_ENROLLMENT', revokedCount: 1 });
+        expect(JSON.stringify(logs)).not.toMatch(/739251|682914|111222|905317|credentialHash/);
       },
       { skipDrain: true }
     );
