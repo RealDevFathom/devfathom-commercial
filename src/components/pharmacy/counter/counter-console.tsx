@@ -1793,11 +1793,13 @@ function ScopedPharmacyCounterConsole({
                   : notice.tone === 'success'
                     ? 'border-success/30 bg-success/10'
                     : 'border-border-subtle bg-surface-sunken'
-            } ${notice.tone === 'success' ? 'text-success' : 'text-text-body'}`}
+            }`}
           >
             <StatusPill status={notice.tone} tone={notice.tone} />
             <div className="min-w-0 space-y-2 text-sm">
-              <p>{notice.message}</p>
+              <p className={notice.tone === 'success' ? 'text-success' : 'text-text-body'}>
+                {notice.message}
+              </p>
               {notice.inventoryBranchId ? (
                 <Link
                   href={`/pharmacy/inventory?branch=${encodeURIComponent(notice.inventoryBranchId)}`}

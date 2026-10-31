@@ -1183,8 +1183,9 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
     expect(successNotice).toHaveTextContent('1 × Paracetamol added.');
     expect(successNotice).toHaveAttribute('aria-live', 'polite');
     expect(successNotice).toHaveClass('border-success/30', 'bg-success/10');
-    expect(successNotice).toHaveClass('text-success');
-    expect(successNotice).not.toHaveClass('text-text-body');
+    expect(successMessage.tagName).toBe('P');
+    expect(successMessage).toHaveClass('text-success');
+    expect(successMessage).not.toHaveClass('text-text-body');
 
     mocks.mutations.addLine!.mockClear();
     mocks.queries.counterSearch = query({ rows: [row, { ...row, medicineId: 'med-other' }] });
