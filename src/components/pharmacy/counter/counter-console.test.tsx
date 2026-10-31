@@ -590,6 +590,62 @@ describe('PharmacyCounterConsole tender recovery', () => {
     expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
     expect(mocks.mutations.tender).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ['Asia/Karachi', '2026-10-21T18:59:59.999Z', false],
+    ['Asia/Karachi', '2026-10-21T19:00:00.000Z', true],
+    ['Asia/Karachi', '2026-10-22T12:00:00.000Z', true],
+    ['Asia/Karachi', '2026-10-22T19:00:00.000Z', false],
+    ['America/Los_Angeles', '2026-10-23T06:59:59.999Z', true],
+    ['America/Los_Angeles', '2026-10-23T07:00:00.000Z', false],
+  ])('gates payment by prescription calendar dates in %s at %s', (timezone, at, current) => {
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date(at) });
+    vi.stubEnv('TZ', 'Pacific/Kiritimati');
+    try {
+      const bill = cart();
+      bill.lines[0]!.rx = true;
+      mocks.queries.counterCart!.data = bill;
+      mocks.queries.counterBranches = query({
+        branches: [{ id: 'branch-a', name: 'Synthetic branch' }],
+        timezone,
+      });
+      mocks.queries.counterPatientPanel = query({
+        prescriptions: [
+          {
+            validFrom: '2026-10-22T00:00:00.000Z',
+            validUntil: '2026-10-22T00:00:00.000Z',
+            lines: [
+              {
+                prescriptionLineId: 'rx-line-a',
+                medicineId: 'synthetic-medicine',
+                verified: true,
+                remainingAuthorizedUnits: 10,
+              },
+            ],
+          },
+        ],
+      });
+
+      render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+
+      const payment = screen.getByRole('button', { name: 'Take payment' });
+      if (current) {
+        expect(payment).toBeEnabled();
+        expect(
+          screen.queryByText(/This bill carries an unresolved safety block/)
+        ).not.toBeInTheDocument();
+      } else {
+        expect(payment).toBeDisabled();
+        expect(
+          screen.getByText(/This bill carries an unresolved safety block/)
+        ).toBeInTheDocument();
+      }
+      expect(mocks.mutations.tender).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllEnvs();
+    }
+  });
 });
 
 const scope = { organizationId: 'org-a', accountId: 'account-a', branchId: 'branch-a' };
