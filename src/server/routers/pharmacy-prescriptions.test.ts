@@ -6,12 +6,14 @@ const mocks = vi.hoisted(() => ({
   can: vi.fn(),
   hasModule: vi.fn(),
   patient: vi.fn(),
+  patients: vi.fn(),
   prescriber: vi.fn(),
   find: vi.fn(),
   create: vi.fn(),
   putUpload: vi.fn(),
   getUpload: vi.fn(),
   audit: vi.fn(),
+  patientAudit: vi.fn(),
   actor: vi.fn(),
   context: vi.fn(),
   medicines: vi.fn(),
@@ -33,27 +35,36 @@ vi.mock('@/server/audit', () => ({
   ipFromHeaders: vi.fn(() => null),
   isAuditExcludedPath: vi.fn(() => false),
   recordTrpcAudit: mocks.audit,
+  recordAudit: mocks.patientAudit,
 }));
 vi.mock('@/server/trpc', async () => ({
   ...(await vi.importActual<typeof import('@/server/trpc')>('@/server/trpc')),
   createTRPCContext: mocks.context,
 }));
 
-import type { TRPCContext } from '../trpc';
+import { router, type TRPCContext } from '../trpc';
 import { pharmacyPrescriptionsRouter } from './pharmacy-prescriptions';
 import { GET } from '@/app/api/pharmacy/prescription-files/route';
 import { GET as sharedFileGET } from '@/app/api/files/[name]/route';
 
-function context(userId = 'user-a', organizationId = 'org-a', status = 'ACTIVE') {
+// Preserve the production procedure paths so the module-license guard runs.
+const testRouter = router({ pharmacyPrescriptions: pharmacyPrescriptionsRouter });
+
+function context(
+  userId = 'user-a',
+  organizationId = 'org-a',
+  status = 'ACTIVE',
+  enabledModules = ['pharmacy-dispensing']
+) {
   return {
     db: {
-      pharmacyPatient: { findFirst: mocks.patient },
+      pharmacyPatient: { findFirst: mocks.patient, findMany: mocks.patients },
       pharmacyPrescriber: { findFirst: mocks.prescriber },
       prescription: { findFirst: mocks.find, create: mocks.create },
       prescriptionLine: { findFirst: mocks.prescriptionLine },
       medicine: { findMany: mocks.medicines },
     },
-    entitlements: { organizationId, modules: [], enabledModules: ['pharmacy-dispensing'] },
+    entitlements: { organizationId, modules: [], enabledModules },
     session: { expires: 'later', user: { id: userId, organizationId, role: 'EMPLOYEE', status } },
     organization: { id: organizationId },
     support: null,
@@ -62,7 +73,7 @@ function context(userId = 'user-a', organizationId = 'org-a', status = 'ACTIVE')
   } as unknown as TRPCContext;
 }
 function caller(ctx = context()) {
-  return pharmacyPrescriptionsRouter.createCaller(ctx);
+  return testRouter.createCaller(ctx).pharmacyPrescriptions;
 }
 async function upload(patientId = 'patient-a') {
   const bytes = await sharp({ create: { width: 2, height: 2, channels: 3, background: 'white' } })
@@ -354,6 +365,100 @@ describe('prescription capture and private delivery', () => {
       'pharmacy:dispense',
       undefined,
       expect.objectContaining({ source: 'TRPC' })
+    );
+  });
+
+  it.each([
+    ['counterPatients', () => caller().counterPatients({ query: 'patient' })],
+    ['counterPatientPanel', () => caller().counterPatientPanel({ patientId: 'patient-a' })],
+  ])('refuses %s without counter or dispense capability', async (_procedure, invoke) => {
+    mocks.can.mockResolvedValue(false);
+
+    await expect(invoke()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+
+    expect(mocks.can).toHaveBeenNthCalledWith(
+      1,
+      expect.anything(),
+      'pharmacy:counter',
+      undefined,
+      expect.objectContaining({ source: 'TRPC' })
+    );
+    expect(mocks.can).toHaveBeenNthCalledWith(
+      2,
+      expect.anything(),
+      'pharmacy:dispense',
+      undefined,
+      expect.objectContaining({ source: 'TRPC' })
+    );
+    expect(mocks.patient).not.toHaveBeenCalled();
+    expect(mocks.patients).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['counterPatients', () => caller().counterPatients({ query: 'patient' })],
+    ['counterPatientPanel', () => caller().counterPatientPanel({ patientId: 'patient-a' })],
+  ])('refuses %s when neither eligible module is licensed', async (_procedure, invoke) => {
+    mocks.hasModule.mockReturnValue(false);
+
+    await expect(invoke()).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'The pharmacy-counter module is not enabled for this organization.',
+    });
+
+    expect(mocks.can).not.toHaveBeenCalled();
+    expect(mocks.patient).not.toHaveBeenCalled();
+    expect(mocks.patients).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['counter-only', 'pharmacy:counter'],
+    ['dispense-only', 'pharmacy:dispense'],
+  ] as const)('allows a %s caller to search and read counter patients', async (_grant, action) => {
+    const enabledModules =
+      action === 'pharmacy:counter' ? ['pharmacy-counter'] : ['pharmacy-dispensing'];
+    mocks.hasModule.mockImplementation((entitlements, moduleKey) =>
+      entitlements.enabledModules.includes(moduleKey)
+    );
+    mocks.can.mockImplementation(async (_subject, requestedAction) => requestedAction === action);
+    mocks.patients.mockResolvedValue([]);
+    mocks.patient.mockResolvedValue({
+      id: 'patient-a',
+      displayName: 'Patient A',
+      cnic: null,
+      phone: null,
+      address: null,
+      dateOfBirth: null,
+      consents: [],
+      prescriptions: [],
+    });
+
+    const counterCaller = caller(context('user-a', 'org-a', 'ACTIVE', enabledModules));
+    await expect(counterCaller.counterPatients({ query: 'patient' })).resolves.toEqual({
+      patients: [],
+    });
+    await expect(
+      counterCaller.counterPatientPanel({ patientId: 'patient-a' })
+    ).resolves.toMatchObject({ patientId: 'patient-a', prescriptions: [] });
+
+    expect(mocks.patients).toHaveBeenCalledOnce();
+    expect(mocks.patient).toHaveBeenCalledOnce();
+    expect(mocks.patientAudit).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        organizationId: 'org-a',
+        actorId: 'user-a',
+        action: 'pharmacy.patient.read',
+        targetId: 'patient-a',
+      })
+    );
+    expect(mocks.can.mock.calls.map(([, requestedAction]) => requestedAction)).toEqual(
+      action === 'pharmacy:counter'
+        ? ['pharmacy:counter', 'pharmacy:counter']
+        : [
+            'pharmacy:counter',
+            'pharmacy:dispense',
+            'pharmacy:counter',
+            'pharmacy:dispense',
+          ]
     );
   });
 
