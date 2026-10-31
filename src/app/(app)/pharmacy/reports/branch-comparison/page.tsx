@@ -54,7 +54,12 @@ export default async function BranchComparisonPage({
             days and is not realized loss. Lost demand is an <strong>Estimate</strong>:{' '}
             {comparison.estimateMethod} Excludes {comparison.estimateExclusions.join(' and ')}.
           </p>
-          <div className="overflow-x-auto rounded-md border border-border-subtle">
+          <div
+            role="region"
+            aria-label="Branch performance"
+            tabIndex={0}
+            className="overflow-x-auto rounded-md border border-border-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
             <table className="w-full min-w-[760px] text-sm tabular-nums">
               <thead className="bg-surface-sunken font-mono text-xs uppercase text-text-muted">
                 <tr>
