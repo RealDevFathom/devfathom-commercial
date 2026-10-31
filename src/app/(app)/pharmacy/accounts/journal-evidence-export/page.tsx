@@ -179,15 +179,15 @@ export default async function JournalEvidenceExportPage({
           </label>
           <label className="grid gap-2 text-sm">
             From (UTC)
-            <Input type="date" name="from" defaultValue={fromText} required />
+            <Input type="date" name="from" defaultValue={fromText} required className="min-h-11" />
           </label>
           <label className="grid gap-2 text-sm">
             To, exclusive (UTC)
-            <Input type="date" name="to" defaultValue={toText} required />
+            <Input type="date" name="to" defaultValue={toText} required className="min-h-11" />
           </label>
           <label className="grid gap-2 text-sm">
             Page
-            <Input type="number" min="1" max="10000" name="page" defaultValue={pageText} required />
+            <Input type="number" min="1" max="10000" name="page" defaultValue={pageText} required className="min-h-11" />
           </label>
           <Button
             type="submit"
