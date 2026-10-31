@@ -51,10 +51,11 @@ function serviceChargeError(error: unknown): never {
   throw error;
 }
 
+const localDateSchema = z.iso.date();
 const activationSchema = z.object({
   branchId: z.string().min(1),
   profileId: z.string().min(1),
-  effectiveFrom: z.iso.datetime(),
+  effectiveFrom: localDateSchema,
   accountantConfirmation: z.boolean(),
   approvalReference: z.string().trim().min(1).max(240),
   eligibilityConfirmations: z.array(z.string().min(1)).default([]),
@@ -67,7 +68,6 @@ const rateSchema = z
   .string()
   .trim()
   .regex(/^(?:0(?:\.\d{1,6})?|1(?:\.0{1,6})?)$/);
-const localDateSchema = z.iso.date();
 const customSchema = z.object({
   branchId: z.string().min(1),
   profileName: z.string().trim().min(1).max(120),
@@ -112,7 +112,7 @@ function canonicalActivationPayload(input: z.infer<typeof activationSchema>) {
   return {
     branchId: input.branchId,
     profileId: input.profileId,
-    effectiveFrom: new Date(input.effectiveFrom).toISOString(),
+    effectiveFrom: input.effectiveFrom,
     accountantConfirmation: input.accountantConfirmation,
     approvalReference: input.approvalReference.trim(),
     eligibilityConfirmations: [...new Set(input.eligibilityConfirmations)].sort(),
@@ -234,7 +234,7 @@ export const restaurantTaxRouter = router({
               officialSource: { select: { documentTitle: true, sourceUrl: true } },
             },
           },
-          branch: { select: { name: true } },
+          branch: { select: { name: true, timezone: true } },
         },
         orderBy: { effectiveFrom: 'desc' },
       }),
@@ -444,8 +444,7 @@ export const restaurantTaxRouter = router({
         message: 'Eligibility evidence does not match the selected profile.',
       });
     }
-    const effectiveFrom = new Date(input.effectiveFrom);
-    if (preset.effectiveFrom && effectiveFrom < new Date(`${preset.effectiveFrom}T00:00:00.000Z`)) {
+    if (preset.effectiveFrom && input.effectiveFrom < preset.effectiveFrom) {
       throw new TRPCError({
         code: 'BAD_REQUEST',
         message: `This profile is unavailable before ${preset.effectiveFrom}.`,
@@ -466,9 +465,10 @@ export const restaurantTaxRouter = router({
           organizationId: ctx.entitlements.organizationId,
           active: true,
         },
-        select: { id: true },
+        select: { id: true, timezone: true },
       });
       if (!branch) throw new TRPCError({ code: 'NOT_FOUND', message: 'Branch not found.' });
+      const effectiveFrom = zonedWallTimeToUtc(input.effectiveFrom, 0, branch.timezone).instant;
       const approvalReference = `${preset.id} · ${canonicalPayload.approvalReference}`;
       const result = await publishTaxProfile(tx, {
         organizationId: ctx.entitlements.organizationId,
