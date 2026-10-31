@@ -268,7 +268,7 @@ function editorFor(line: ImportLine): LineEditor {
   };
 }
 
-/** Blank means "no override" — send `null` so the server clears any earlier edit. */
+/** Send an explicit blank as `null`; acceptance validates required fields. */
 function override(value: string): string | null {
   const trimmed = value.trim();
   return trimmed === '' ? null : trimmed;
@@ -1057,8 +1057,8 @@ function LineEditorPanel({
             Correcting: <Extracted value={line.extractedProductName} fallback="(no product name)" />
           </h5>
           <p className="mt-1 text-xs text-text-muted">
-            Leave a field blank to keep the extracted value. Blanking a field you previously edited
-            clears that correction.
+            Product name and price are required to accept a line. To restore either, enter its
+            extracted value shown below. Blanking category or description clears its correction.
           </p>
         </div>
         <FlagChips flags={line.flags} />

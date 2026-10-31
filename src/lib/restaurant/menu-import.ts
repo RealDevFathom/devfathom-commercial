@@ -649,7 +649,9 @@ export async function reviewMenuImportLine(
     }
 
     let reviewedVariants: Prisma.InputJsonValue | undefined;
-    if (input.variants !== undefined) {
+    // Rejected and merged rows never import extracted variants. OCR errors in
+    // those values must not prevent recording either decision.
+    if (input.decision === 'ACCEPTED' && input.variants !== undefined) {
       const variants = input.variants.map((variant) => {
         const name = variant.name.trim().slice(0, 200);
         if (!name) {

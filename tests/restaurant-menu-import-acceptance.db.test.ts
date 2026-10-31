@@ -37,6 +37,7 @@ import { randomBytes } from 'node:crypto';
 
 import { Client } from 'pg';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
 import { seedDepartments } from '@/lib/test-support/departments';
 
 const TEST_DATABASE_URL =
@@ -187,6 +188,19 @@ async function linesOf(importId: string, db = dbA) {
   });
 }
 
+/** Explicitly confirm the complete variant list, including an empty list. */
+function variantsForReview(extracted: unknown) {
+  return z
+    .array(
+      z.object({
+        name: z.string(),
+        price: z.object({ amount: z.string().nullable() }),
+      })
+    )
+    .parse(extracted)
+    .map((variant) => ({ name: variant.name, priceAmount: variant.price.amount }));
+}
+
 /** Decide every line the same way, so a scenario can get to a committable state. */
 async function decideAll(
   importId: string,
@@ -199,6 +213,7 @@ async function decideAll(
       lineId: line.id,
       decision,
       reviewedById: reviewer,
+      ...(decision === 'ACCEPTED' ? { variants: variantsForReview(line.extractedVariants) } : {}),
     });
   }
 }
@@ -435,6 +450,67 @@ describeIfDatabase('WHA-194 menu import acceptance (real PostgreSQL)', () => {
     expect(summary.PENDING).toBeGreaterThan(0);
   });
 
+  it.each(['default', 'variants'] as const)(
+    'requires explicit variant review before accepting a %s line',
+    async (fixture) => {
+      const importId = await seedAwaitingReview(fixture, { label: 'variant-review-required' });
+      const [line] = await linesOf(importId);
+
+      await expect(
+        deps.menuImport.reviewMenuImportLine(dbA, {
+          lineId: line!.id,
+          decision: 'ACCEPTED',
+          reviewedById: userA,
+        })
+      ).rejects.toMatchObject({ reason: 'REVIEW_INCOMPLETE' });
+      expect(
+        await dbA.restaurantMenuImportLine.findUnique({ where: { id: line!.id } })
+      ).toMatchObject({ reviewStatus: 'PENDING', reviewedVariants: null, reviewedById: null });
+    }
+  );
+
+  it.each(['REJECTED', 'MERGED'] as const)(
+    'records %s despite an invalid extracted variant price',
+    async (decision) => {
+      const importId = await seedAwaitingReview('variants', {
+        label: `invalid-variant-${decision}`,
+      });
+      const [line] = await linesOf(importId);
+      const variants = variantsForReview(line!.extractedVariants);
+      variants[0]!.priceAmount = '12345678901.00';
+      const extractedVariants = variants.map(({ name, priceAmount }) => ({
+        name,
+        price: { amount: priceAmount },
+      }));
+      await dbA.restaurantMenuImportLine.update({
+        where: { id: line!.id },
+        data: { extractedVariants },
+      });
+      const target =
+        decision === 'MERGED'
+          ? await dbA.restaurantProduct.create({ data: { name: `Variant Merge Target ${suffix}` } })
+          : null;
+
+      const reviewed = await deps.menuImport.reviewMenuImportLine(dbA, {
+        lineId: line!.id,
+        decision,
+        reviewedById: userA,
+        variants,
+        ...(target ? { mergeProductId: target.id } : {}),
+      });
+
+      expect(reviewed.reviewStatus).toBe(decision);
+      expect(reviewed.reviewedById).toBe(userA);
+      expect(reviewed.reviewedAt).toBeInstanceOf(Date);
+      expect(reviewed.reviewedVariants).toBeNull();
+      expect(reviewed.extractedVariants).toEqual(extractedVariants);
+      expect(reviewed.mergeProductId).toBe(target?.id ?? null);
+      expect(
+        await dbA.restaurantMenuImportLine.findUnique({ where: { id: line!.id } })
+      ).toMatchObject({ reviewStatus: decision, reviewedById: userA, reviewedVariants: null });
+    }
+  );
+
   it('refuses to accept a line the menu gave no price, rather than inventing one', async () => {
     const importId = await seedAwaitingReview('blurred', { label: 'noprice' });
     const priceless = (await linesOf(importId)).find((line) => line.extractedPriceAmount === null);
@@ -445,6 +521,7 @@ describeIfDatabase('WHA-194 menu import acceptance (real PostgreSQL)', () => {
         lineId: priceless!.id,
         decision: 'ACCEPTED',
         reviewedById: userA,
+        variants: variantsForReview(priceless!.extractedVariants),
       })
     ).rejects.toMatchObject({ reason: 'PRICE_REQUIRED' });
 
@@ -454,6 +531,7 @@ describeIfDatabase('WHA-194 menu import acceptance (real PostgreSQL)', () => {
       decision: 'ACCEPTED',
       reviewedById: userA,
       priceAmount: '520.00',
+      variants: variantsForReview(priceless!.extractedVariants),
     });
     expect(fixed.reviewedPriceAmount?.toString()).toBe('520');
     expect(fixed.reviewedById).toBe(userA);
@@ -469,6 +547,7 @@ describeIfDatabase('WHA-194 menu import acceptance (real PostgreSQL)', () => {
       reviewedById: userA,
       productName: 'Nihari (Beef)',
       priceAmount: '1500.00',
+      variants: variantsForReview(line!.extractedVariants),
     });
     expect(edited.reviewedProductName).toBe('Nihari (Beef)');
     // The OCR record is never overwritten — the queue must show both.
@@ -506,6 +585,7 @@ describeIfDatabase('WHA-194 menu import acceptance (real PostgreSQL)', () => {
         decision: 'ACCEPTED',
         reviewedById: userA,
         mergeProductId: `nope_${suffix}`,
+        variants: variantsForReview(line!.extractedVariants),
       })
     ).rejects.toMatchObject({ reason: 'INVALID' });
   });

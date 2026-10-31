@@ -417,10 +417,13 @@ describe('Restaurant menu-import console', () => {
       );
     });
 
-    it('clears a correction when the reviewer blanks a previously edited field', () => {
+    it('explains required fields and submits an explicit blank for server validation', () => {
       renderConsole();
 
       fireEvent.click(screen.getByRole('button', { name: 'Edit Mutton Karahi' }));
+      expect(
+        screen.getByText(/Product name and price are required to accept a line/)
+      ).toHaveTextContent('To restore either, enter its extracted value shown below.');
       fireEvent.change(screen.getByLabelText('Product name'), { target: { value: '   ' } });
       fireEvent.click(screen.getByRole('button', { name: 'Accept with edits' }));
 

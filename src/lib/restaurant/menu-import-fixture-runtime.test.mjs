@@ -358,6 +358,38 @@ test('accepting a line requires an explicit review of an empty variant list', as
   assert.deepEqual(review[1].reviewedVariants, []);
 });
 
+for (const decision of ['ACCEPTED', 'REJECTED', 'MERGED']) {
+  for (const variant of [
+    { name: 'Large', priceAmount: '12345678901.00' },
+    { name: '   ', priceAmount: '15.00' },
+  ]) {
+    test(`${decision} only validates imported variants: ${JSON.stringify(variant)}`, async () => {
+      const f = setup('production', 'disabled');
+      const menu = f.load('@/lib/restaurant/menu-import');
+      f.record.status = 'AWAITING_REVIEW';
+      f.db.restaurantProduct.findUnique = async () => ({ id: 'product_1' });
+      const input = {
+        lineId: 'line_1',
+        decision,
+        reviewedById: 'user_1',
+        priceAmount: '10.00',
+        variants: [variant],
+        ...(decision === 'MERGED' ? { mergeProductId: 'product_1' } : {}),
+      };
+
+      if (decision === 'ACCEPTED') {
+        await assert.rejects(menu.reviewMenuImportLine(f.db, input), { reason: 'INVALID' });
+        assert.ok(!f.events.some((event) => Array.isArray(event) && event[0] === 'review'));
+      } else {
+        const reviewed = await menu.reviewMenuImportLine(f.db, input);
+        assert.equal(reviewed.reviewStatus, decision);
+        assert.equal(reviewed.reviewedById, 'user_1');
+        assert.equal(Object.hasOwn(reviewed, 'reviewedVariants'), false);
+      }
+    });
+  }
+}
+
 test('commit rejects an accepted line without explicit empty variant review evidence', async () => {
   const f = setup('production', 'disabled');
   const menu = f.load('@/lib/restaurant/menu-import');
