@@ -537,10 +537,12 @@ export const notesRouter = router({
         // Serialize the full read/snapshot/write sequence for this note. Without
         // this lock, two editors can both snapshot the same old value and one of
         // their edits is then absent from both the live note and its history.
+        // NO KEY UPDATE also permits the KEY SHARE locks taken by backlink
+        // foreign keys, so concurrent saves of mutually linked notes cannot deadlock.
         const lockedRows = await tx.$queryRaw<Array<{ id: string }>>`
           SELECT "id" FROM "notes"
           WHERE "id" = ${input.id} AND "organizationId" = ${orgId}
-          FOR UPDATE
+          FOR NO KEY UPDATE
         `;
         if (lockedRows.length === 0) throw new TRPCError({ code: 'NOT_FOUND' });
 

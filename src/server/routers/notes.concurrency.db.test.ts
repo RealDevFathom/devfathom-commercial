@@ -3,15 +3,13 @@
  *
  * Regression coverage for note saves against a real, migrated PostgreSQL database.
  * The test deliberately holds the note row from a separate connection, then queues
- * two router updates behind that lock. This proves the router's FOR UPDATE—not a
+ * two router updates behind that lock. This proves the router's FOR NO KEY UPDATE—not a
  * transaction mock—serializes the read/snapshot/write sequence.
  */
 import { randomUUID } from 'node:crypto';
 
-import { PrismaPg } from '@prisma/adapter-pg';
-import { PrismaClient } from '@/generated/prisma/client';
 import { Client } from 'pg';
-import { afterAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/lib/notifications', () => ({ notify: vi.fn() }));
 vi.mock('@/server/audit', () => ({
@@ -22,29 +20,26 @@ vi.mock('@/server/audit', () => ({
 }));
 
 import { notify } from '@/lib/notifications';
+import { db } from '@/lib/db';
+import { createTenantDb, withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import { notesRouter } from './notes';
 
-const databaseUrl = process.env.DATABASE_URL;
-const isLoopbackDatabase = (() => {
-  if (!databaseUrl) return false;
-  try {
-    return ['localhost', '127.0.0.1', '[::1]'].includes(new URL(databaseUrl).hostname);
-  } catch {
-    return false;
-  }
-})();
-const suite = databaseUrl && isLoopbackDatabase ? describe : describe.skip;
-const db =
-  databaseUrl && isLoopbackDatabase
-    ? new PrismaClient({ adapter: new PrismaPg({ connectionString: databaseUrl, max: 10 }) })
-    : null;
+// Only an explicitly configured disposable database may receive test fixtures.
+const databaseUrl = process.env.TEST_DATABASE_URL;
+const originalDatabaseUrl = process.env.DATABASE_URL;
+const suite = databaseUrl ? describe : describe.skip;
+let setup: Client | undefined;
+let runtimeRole: string | undefined;
 
 const doc = (text: string) => ({ type: 'doc', content: [{ type: 'text', text }] });
 
-function caller(userId: string, organizationId: string) {
-  if (!db) throw new Error('DATABASE_URL is required');
+function caller(
+  userId: string,
+  organizationId: string,
+  scoped = createTenantDb(organizationId, userId)
+) {
   return notesRouter.createCaller({
-    db,
+    db: scoped,
     session: {
       expires: 'later',
       user: {
@@ -72,7 +67,7 @@ async function waitForBlockedSaves(monitor: Client, baseline: number, count: num
          FROM pg_stat_activity
         WHERE datname = current_database()
           AND wait_event_type = 'Lock'
-          AND query LIKE '%FOR UPDATE%'
+          AND query LIKE '%FOR NO KEY UPDATE%'
           AND query LIKE '%notes%'`
     );
     if (result.rows[0]!.count >= baseline + count) return;
@@ -81,11 +76,49 @@ async function waitForBlockedSaves(monitor: Client, baseline: number, count: num
   throw new Error(`Timed out waiting for ${count} note saves to contend on the PostgreSQL lock`);
 }
 
-afterAll(async () => {
-  await db?.$disconnect();
-});
-
 suite('notes.update PostgreSQL concurrency', () => {
+  beforeAll(async () => {
+    setup = new Client({ connectionString: databaseUrl });
+    await setup.connect();
+    const { rows } = await setup.query<{ rolsuper: boolean; rolbypassrls: boolean }>(
+      'SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user'
+    );
+    const runtimeUrl = new URL(databaseUrl!);
+    if (rows[0]!.rolsuper || rows[0]!.rolbypassrls) {
+      // An admin URL may prepare fixtures, but router calls must still exercise RLS.
+      runtimeRole = `notes_test_${randomUUID().replaceAll('-', '')}`;
+      await setup.query(`CREATE ROLE "${runtimeRole}" NOLOGIN NOSUPERUSER NOBYPASSRLS`);
+      await setup.query(`GRANT USAGE ON SCHEMA public TO "${runtimeRole}"`);
+      await setup.query(
+        `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO "${runtimeRole}"`
+      );
+      await setup.query(
+        `GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO "${runtimeRole}"`
+      );
+      runtimeUrl.searchParams.set(
+        'options',
+        `${runtimeUrl.searchParams.get('options') ?? ''} -c role=${runtimeRole}`.trim()
+      );
+    }
+    process.env.DATABASE_URL = runtimeUrl.toString();
+    await withTenantDb('notes_test_probe', async (tx) => {
+      expect(
+        await tx.$queryRaw`SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user`
+      ).toEqual([{ rolsuper: false, rolbypassrls: false }]);
+    });
+  });
+
+  afterAll(async () => {
+    await db.$disconnect();
+    if (runtimeRole) {
+      await setup?.query(`DROP OWNED BY "${runtimeRole}"`);
+      await setup?.query(`DROP ROLE "${runtimeRole}"`);
+    }
+    await setup?.end();
+    if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
+    else process.env.DATABASE_URL = originalDatabaseUrl;
+  });
+
   it('preserves both accepted edits across live content and revision history', async () => {
     const sql = new Client({ connectionString: databaseUrl });
     const blocker = new Client({ connectionString: databaseUrl });
@@ -100,6 +133,8 @@ suite('notes.update PostgreSQL concurrency', () => {
 
     await Promise.all([sql.connect(), blocker.connect()]);
     try {
+      await sql.query(`SELECT set_config('app.is_platform_admin', 'true', false)`);
+      await blocker.query(`SELECT set_config('app.is_platform_admin', 'true', false)`);
       await sql.query(
         `INSERT INTO organizations (id, slug, "legalName", "displayName", "updatedAt")
          VALUES ($1, $1, 'Notes concurrency test', 'Notes concurrency test', now())`,
@@ -118,8 +153,8 @@ suite('notes.update PostgreSQL concurrency', () => {
       ]) {
         await sql.query(
           `INSERT INTO users
-             (id, "organizationId", name, email, department, "updatedAt")
-           VALUES ($1, $2, $3, $4, 'ENGINEERING', now())`,
+             (id, "organizationId", name, email, department, title, "updatedAt")
+           VALUES ($1, $2, $3, $4, 'ENGINEERING', 'Test editor', now())`,
           [id, organizationId, name, `${id}@example.test`]
         );
       }
@@ -135,7 +170,7 @@ suite('notes.update PostgreSQL concurrency', () => {
           await sql.query<{ count: number }>(
             `SELECT count(*)::int AS count FROM pg_stat_activity
               WHERE datname = current_database() AND wait_event_type = 'Lock'
-                AND query LIKE '%FOR UPDATE%' AND query LIKE '%notes%'`
+                AND query LIKE '%FOR NO KEY UPDATE%' AND query LIKE '%notes%'`
           )
         ).rows[0]!.count
       );
@@ -161,21 +196,144 @@ suite('notes.update PostgreSQL concurrency', () => {
         `SELECT "contentText" FROM notes WHERE id = $1`,
         [noteId]
       );
-      const revisions = await sql.query<{ contentText: string; editedById: string }>(
-        `SELECT "contentText", "editedById" FROM note_revisions
+      const revisions = await sql.query<{
+        contentText: string;
+        editedById: string;
+        organizationId: string;
+      }>(
+        `SELECT "contentText", "editedById", "organizationId" FROM note_revisions
           WHERE "noteId" = $1 ORDER BY "createdAt", id`,
         [noteId]
       );
       expect(note.rows).toEqual([{ contentText: 'C' }]);
       expect(revisions.rows).toEqual([
-        { contentText: 'A', editedById: editorBId },
-        { contentText: 'B', editedById: editorCId },
+        { contentText: 'A', editedById: editorBId, organizationId },
+        { contentText: 'B', editedById: editorCId, organizationId },
       ]);
     } finally {
       await blocker.query('ROLLBACK').catch(() => undefined);
       await Promise.allSettled(saves);
       await sql.query('DELETE FROM organizations WHERE id = $1', [organizationId]);
       await Promise.all([sql.end(), blocker.end()]);
+    }
+  }, 15_000);
+
+  it('saves mutually linked notes concurrently without a foreign-key lock deadlock', async () => {
+    const sql = new Client({ connectionString: databaseUrl });
+    const suffix = randomUUID();
+    const organizationId = `notes_links_${suffix}`;
+    const authorId = `author_${suffix}`;
+    const noteA = `note_a_${suffix}`;
+    const noteB = `note_b_${suffix}`;
+    let arrived = 0;
+    let release!: () => void;
+    const barrier = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let barrierTimedOut = false;
+    const timer = setTimeout(() => {
+      barrierTimedOut = true;
+      release();
+    }, 5_000);
+    const saves: Promise<unknown>[] = [];
+
+    await sql.connect();
+    try {
+      await sql.query(`SELECT set_config('app.is_platform_admin', 'true', false)`);
+      await sql.query(
+        `INSERT INTO organizations (id, slug, "legalName", "displayName", "updatedAt")
+         VALUES ($1, $1, 'Linked notes test', 'Linked notes test', now())`,
+        [organizationId]
+      );
+      await sql.query(
+        `INSERT INTO organization_departments (id, "organizationId", key, name, "updatedAt")
+         VALUES ($1, $2, 'ENGINEERING', 'Engineering', now())`,
+        [`department_${suffix}`, organizationId]
+      );
+      await sql.query(
+        `INSERT INTO users (id, "organizationId", name, email, department, title, "updatedAt")
+         VALUES ($1, $2, 'Author', $3, 'ENGINEERING', 'Test editor', now())`,
+        [authorId, organizationId, `${authorId}@example.test`]
+      );
+      for (const id of [noteA, noteB]) {
+        await sql.query(
+          `INSERT INTO notes
+             (id, "organizationId", title, "contentJson", "contentText", "authorId", visibility, "updatedAt")
+           VALUES ($1, $2, 'Linked plan', $3::jsonb, 'original', $4, 'TEAM', now())`,
+          [id, organizationId, JSON.stringify(doc('original')), authorId]
+        );
+      }
+
+      const save = (id: string, targetId: string) =>
+        withTenantDb(
+          organizationId,
+          async (tx) => {
+            // Pause after each router lock actually succeeds, so both note rows
+            // are locked before either save inserts its link to the other row.
+            const synchronized: ScopedDb = new Proxy(tx, {
+              get(target, key, receiver) {
+                if (key === '$transaction') {
+                  return (run: (inner: ScopedDb) => Promise<unknown>) => run(synchronized);
+                }
+                if (key === '$queryRaw') {
+                  return async (...args: Parameters<ScopedDb['$queryRaw']>) => {
+                    const rows = await target.$queryRaw(...args);
+                    if (++arrived === 2) release();
+                    await barrier;
+                    return rows;
+                  };
+                }
+                const value = Reflect.get(target, key, receiver) as unknown;
+                return typeof value === 'function' ? value.bind(target) : value;
+              },
+            });
+            return caller(authorId, organizationId, synchronized).update({
+              id,
+              contentJson: {
+                type: 'doc',
+                content: [
+                  { type: 'text', text: 'linked edit' },
+                  { type: 'noteLink', attrs: { id: targetId } },
+                ],
+              },
+            });
+          },
+          { userId: authorId, timeout: 10_000 }
+        );
+      saves.push(save(noteA, noteB), save(noteB, noteA));
+      const results = await Promise.allSettled(saves);
+      expect(barrierTimedOut).toBe(false);
+      expect(arrived).toBe(2);
+      expect(results.map((result) => result.status)).toEqual(['fulfilled', 'fulfilled']);
+      const notes = await sql.query<{ contentText: string }>(
+        `SELECT "contentText" FROM notes WHERE id = ANY($1)`,
+        [[noteA, noteB]]
+      );
+      expect(notes.rows).toEqual([{ contentText: 'linked edit' }, { contentText: 'linked edit' }]);
+      const links = await sql.query<{ fromNoteId: string; toNoteId: string }>(
+        `SELECT "fromNoteId", "toNoteId" FROM note_links
+         WHERE "organizationId" = $1 ORDER BY "fromNoteId"`,
+        [organizationId]
+      );
+      expect(links.rows).toEqual([
+        { fromNoteId: noteA, toNoteId: noteB },
+        { fromNoteId: noteB, toNoteId: noteA },
+      ]);
+      const revisions = await sql.query<{ noteId: string; contentText: string }>(
+        `SELECT "noteId", "contentText" FROM note_revisions
+         WHERE "organizationId" = $1 ORDER BY "noteId"`,
+        [organizationId]
+      );
+      expect(revisions.rows).toEqual([
+        { noteId: noteA, contentText: 'original' },
+        { noteId: noteB, contentText: 'original' },
+      ]);
+    } finally {
+      clearTimeout(timer);
+      release();
+      await Promise.allSettled(saves);
+      await sql.query('DELETE FROM organizations WHERE id = $1', [organizationId]);
+      await sql.end();
     }
   }, 15_000);
 
@@ -194,6 +352,7 @@ suite('notes.update PostgreSQL concurrency', () => {
 
     await sql.connect();
     try {
+      await sql.query(`SELECT set_config('app.is_platform_admin', 'true', false)`);
       for (const [organizationId, departmentId, label] of [
         [attackerOrgId, attackerDepartmentId, 'Attacker'],
         [victimOrgId, victimDepartmentId, 'Victim'],
@@ -216,8 +375,8 @@ suite('notes.update PostgreSQL concurrency', () => {
       ]) {
         await sql.query(
           `INSERT INTO users
-             (id, "organizationId", name, email, department, "updatedAt")
-           VALUES ($1, $2, $3, $4, 'ENGINEERING', now())`,
+             (id, "organizationId", name, email, department, title, "updatedAt")
+           VALUES ($1, $2, $3, $4, 'ENGINEERING', 'Test editor', now())`,
           [id, organizationId, name, `${id}@example.test`]
         );
       }

@@ -32,7 +32,9 @@ describe('notes.update concurrency', () => {
     let transactionTail = Promise.resolve();
 
     const tx = {
-      $queryRaw: vi.fn(async () => [{ id: note.id }]),
+      $queryRaw: vi.fn(async (_query: TemplateStringsArray, ..._values: unknown[]) => [
+        { id: note.id },
+      ]),
       note: {
         findFirst: vi.fn(async () => structuredClone(note)),
         findMany: vi.fn(async () => []),
@@ -56,9 +58,9 @@ describe('notes.update concurrency', () => {
       ...tx,
       project: { findMany: vi.fn() },
       client: { findMany: vi.fn() },
-      // A transaction queue models PostgreSQL's row-lock serialization. Keeping
-      // findUnique on the root also makes this test fail against the old router,
-      // where both callers read A before entering their transactions.
+      // A transaction queue models PostgreSQL's row-lock serialization. The old
+      // router reads A in both callers before entering these transactions, so
+      // this test catches its missing intermediate revision.
       $transaction: vi.fn(async (callback: (client: typeof tx) => Promise<unknown>) => {
         const run = transactionTail.then(() => callback(tx));
         transactionTail = run.then(
@@ -104,7 +106,7 @@ describe('notes.update concurrency', () => {
     expect(tx.$queryRaw).toHaveBeenCalledTimes(3);
     const lockQuery = tx.$queryRaw.mock.calls[0]?.[0].join('?');
     expect(lockQuery).toContain('"organizationId" = ?');
-    expect(lockQuery).toContain('FOR UPDATE');
+    expect(lockQuery).toContain('FOR NO KEY UPDATE');
     expect(tx.$queryRaw.mock.calls[0]?.slice(1)).toEqual([note.id, 'org_1']);
     expect(tx.note.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: note.id, organizationId: 'org_1' } })
