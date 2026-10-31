@@ -64,7 +64,7 @@ export default async function OrganizationsPage({
         action={
           <Link
             href="/platform/organizations/new"
-            className="inline-flex h-10 items-center gap-2 bg-primary px-4 text-xs font-semibold text-primary-foreground"
+            className="inline-flex h-10 items-center gap-2 rounded-sm bg-primary px-4 text-xs font-semibold text-primary-foreground"
           >
             Onboard organization
             <ArrowUpRight className="h-3.5 w-3.5" />
@@ -116,7 +116,7 @@ export default async function OrganizationsPage({
             ))}
           </select>
         </label>
-        <button className="h-10 bg-primary px-4 text-xs font-semibold text-primary-foreground">
+        <button className="h-10 rounded-sm bg-primary px-4 text-xs font-semibold text-primary-foreground">
           Apply filters
         </button>
       </form>
