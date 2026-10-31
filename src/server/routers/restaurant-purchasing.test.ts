@@ -48,6 +48,7 @@ const mocks = vi.hoisted(() => {
     getPurchaseReceipt: fn(),
     findStaffProfiles: fn(),
     findBranchAssignments: fn(),
+    findBranches: fn(),
     findPurchaseOrder: fn(),
     findPurchaseReceipt: fn(),
     findStockLocation: fn(),
@@ -104,9 +105,7 @@ function caller() {
       restaurantStaffProfile: { findMany: mocks.findStaffProfiles },
       restaurantBranchAssignment: { findMany: mocks.findBranchAssignments },
       restaurantBranch: {
-        findMany: vi.fn(async ({ where }: { where?: { id?: { in?: string[] } } }) =>
-          (where?.id?.in ?? []).map((id) => ({ id }))
-        ),
+        findMany: mocks.findBranches,
       },
       restaurantPurchaseOrder: { findUnique: mocks.findPurchaseOrder },
       restaurantPurchaseReceipt: { findUnique: mocks.findPurchaseReceipt },
@@ -143,6 +142,9 @@ beforeEach(() => {
   mocks.can.mockResolvedValue(true);
   mocks.findStaffProfiles.mockResolvedValue([{ id: 'staff_server', primaryBranchId: 'b1' }]);
   mocks.findBranchAssignments.mockResolvedValue([]);
+  mocks.findBranches.mockImplementation(async ({ where }: { where: { id: { in: string[] } } }) =>
+    where.id.in.map((id) => ({ id }))
+  );
   mocks.findPurchaseOrder.mockResolvedValue({ branchId: 'b1', locationId: 'loc1' });
   mocks.findPurchaseReceipt.mockResolvedValue({ branchId: 'b1' });
   mocks.findStockLocation.mockResolvedValue({ branchId: 'b1' });
@@ -248,6 +250,134 @@ describe('Decimal-as-string serialization (D07)', () => {
 });
 
 describe('branch authorization', () => {
+  it.each(['assigned', 'configured'])(
+    'keeps inactive-branch history, cancellation and closure available to %s staff',
+    async (access) => {
+      mocks.can.mockImplementation(
+        async (_subject, action) => action !== 'restaurant:configure' || access === 'configured'
+      );
+      mocks.findBranchAssignments.mockResolvedValue(
+        access === 'assigned' ? [{ branchId: 'b2' }] : []
+      );
+      mocks.findBranches.mockImplementation(
+        async ({ where }: { where: { id: { in: string[] }; active?: true } }) =>
+          where.active ? [] : where.id.in.map((id) => ({ id }))
+      );
+      const order = { ...minimalOrder(), branchId: 'b2' };
+      mocks.findPurchaseOrder.mockResolvedValue({ branchId: 'b2', locationId: 'loc2' });
+      mocks.findPurchaseReceipt.mockResolvedValue({ branchId: 'b2' });
+      mocks.listPurchaseOrders.mockResolvedValue({ orders: [], nextCursor: null });
+      mocks.getPurchaseOrder.mockResolvedValue(order);
+      mocks.getPurchaseReceipt.mockResolvedValue({
+        id: 'receipt2',
+        branchId: 'b2',
+        lines: [],
+        discrepancies: [],
+      });
+      mocks.cancelPurchaseOrder.mockResolvedValue({ ...order, status: 'CANCELLED' });
+      mocks.closePurchaseOrder.mockResolvedValue({ ...order, status: 'CLOSED' });
+
+      await expect(caller().listPurchaseOrders({ branchId: 'b2' })).resolves.toEqual({
+        orders: [],
+        nextCursor: null,
+      });
+      await expect(caller().getPurchaseOrder({ purchaseOrderId: 'po2' })).resolves.toMatchObject({
+        branchId: 'b2',
+      });
+      await expect(caller().getReceipt({ receiptId: 'receipt2' })).resolves.toMatchObject({
+        branchId: 'b2',
+      });
+      await expect(caller().cancelPurchaseOrder({ purchaseOrderId: 'po2' })).resolves.toMatchObject({
+        status: 'CANCELLED',
+      });
+      await expect(caller().closePurchaseOrder({ purchaseOrderId: 'po2' })).resolves.toMatchObject({
+        status: 'CLOSED',
+      });
+      expect(mocks.findBranches).toHaveBeenCalledTimes(5);
+      for (const [args] of mocks.findBranches.mock.calls) {
+        expect(args.where).toEqual({ id: { in: ['b2'] }, organizationId: 'org_1' });
+      }
+    }
+  );
+
+  it('still rejects operational writes to an inactive branch, including for configured staff', async () => {
+    mocks.findBranches.mockImplementation(
+      async ({ where }: { where: { id: { in: string[] }; active?: true } }) =>
+        where.active ? [] : where.id.in.map((id) => ({ id }))
+    );
+    const mutations = [
+      () => caller().createPurchaseOrder({ supplierId: 's1', branchId: 'b1' }),
+      () => caller().addPurchaseOrderLine({ purchaseOrderId: 'po1', line: lineInput() }),
+      () =>
+        caller().updatePurchaseOrderLine({ purchaseOrderId: 'po1', lineId: 'l1', unitCost: '2' }),
+      () => caller().removePurchaseOrderLine({ purchaseOrderId: 'po1', lineId: 'l1' }),
+      () => caller().submitPurchaseOrder({ purchaseOrderId: 'po1' }),
+      () => caller().approvePurchaseOrder({ purchaseOrderId: 'po1' }),
+      () =>
+        caller().receivePurchaseOrder({
+          purchaseOrderId: 'po1',
+          lines: [{ purchaseOrderLineId: 'l1', receivedQuantity: '1' }],
+        }),
+      () =>
+        caller().createSupplierReturn({
+          locationId: 'loc1',
+          lines: [{ stockItemId: 'si1', quantity: '1' }],
+        }),
+    ];
+    for (const mutation of mutations) {
+      await expect(mutation()).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    }
+    expect(mocks.createPurchaseOrder).not.toHaveBeenCalled();
+    expect(mocks.addPurchaseOrderLine).not.toHaveBeenCalled();
+    expect(mocks.updatePurchaseOrderLine).not.toHaveBeenCalled();
+    expect(mocks.removePurchaseOrderLine).not.toHaveBeenCalled();
+    expect(mocks.submitPurchaseOrder).not.toHaveBeenCalled();
+    expect(mocks.approvePurchaseOrder).not.toHaveBeenCalled();
+    expect(mocks.receivePurchaseOrder).not.toHaveBeenCalled();
+    expect(mocks.createSupplierReturn).not.toHaveBeenCalled();
+    expect(mocks.annotateAudit).not.toHaveBeenCalled();
+  });
+
+  it('checks organization membership even when inactive branches are allowed', async () => {
+    mocks.findBranches.mockResolvedValue([]);
+
+    await expect(caller().getPurchaseOrder({ purchaseOrderId: 'po1' })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    await expect(caller().getReceipt({ receiptId: 'receipt1' })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(mocks.getPurchaseOrder).not.toHaveBeenCalled();
+    expect(mocks.getPurchaseReceipt).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { mapping: 'missing', profiles: [] },
+    {
+      mapping: 'ambiguous',
+      profiles: [
+        { id: 'staff_one', primaryBranchId: 'b1' },
+        { id: 'staff_two', primaryBranchId: 'b1' },
+      ],
+    },
+  ])('denies reads when the active staff mapping is $mapping', async ({ profiles }) => {
+    mocks.findStaffProfiles.mockResolvedValue(profiles);
+
+    await expect(caller().listPurchaseOrders({ branchId: 'b1' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    await expect(caller().listPurchaseOrders({})).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(caller().getPurchaseOrder({ purchaseOrderId: 'po1' })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
+    await expect(caller().getReceipt({ receiptId: 'receipt1' })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
+    expect(mocks.listPurchaseOrders).not.toHaveBeenCalled();
+    expect(mocks.getPurchaseOrder).not.toHaveBeenCalled();
+    expect(mocks.getPurchaseReceipt).not.toHaveBeenCalled();
+  });
+
   it('allows purchase-order lists for primary and explicitly assigned branches', async () => {
     mocks.can.mockImplementation(async (_subject, action) => action !== 'restaurant:configure');
     mocks.findBranchAssignments.mockResolvedValue([{ branchId: 'b2' }]);
@@ -357,10 +487,12 @@ describe('branch authorization', () => {
       code: 'FORBIDDEN',
     });
     await expect(caller().getPurchaseOrder({ purchaseOrderId: 'po2' })).rejects.toMatchObject({
-      code: 'FORBIDDEN',
+      code: 'NOT_FOUND',
+      message: 'Purchase order not found.',
     });
     await expect(caller().getReceipt({ receiptId: 'receipt2' })).rejects.toMatchObject({
-      code: 'FORBIDDEN',
+      code: 'NOT_FOUND',
+      message: 'Purchase receipt not found.',
     });
 
     const mutations = [
@@ -375,9 +507,18 @@ describe('branch authorization', () => {
       () => caller().submitPurchaseOrder({ purchaseOrderId: 'po2' }),
       () => caller().cancelPurchaseOrder({ purchaseOrderId: 'po2' }),
       () => caller().closePurchaseOrder({ purchaseOrderId: 'po2' }),
+      () => caller().approvePurchaseOrder({ purchaseOrderId: 'po2' }),
+      () =>
+        caller().receivePurchaseOrder({
+          purchaseOrderId: 'po2',
+          lines: [{ purchaseOrderLineId: 'line2', receivedQuantity: '1' }],
+        }),
     ];
     for (const mutation of mutations) {
-      await expect(mutation()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await expect(mutation()).rejects.toMatchObject({
+        code: 'NOT_FOUND',
+        message: 'Purchase order not found.',
+      });
     }
 
     expect(mocks.listPurchaseOrders).not.toHaveBeenCalled();
@@ -389,6 +530,8 @@ describe('branch authorization', () => {
     expect(mocks.submitPurchaseOrder).not.toHaveBeenCalled();
     expect(mocks.cancelPurchaseOrder).not.toHaveBeenCalled();
     expect(mocks.closePurchaseOrder).not.toHaveBeenCalled();
+    expect(mocks.approvePurchaseOrder).not.toHaveBeenCalled();
+    expect(mocks.receivePurchaseOrder).not.toHaveBeenCalled();
     expect(mocks.annotateAudit).not.toHaveBeenCalled();
   });
 
@@ -398,9 +541,11 @@ describe('branch authorization', () => {
 
     await expect(caller().getPurchaseOrder({ purchaseOrderId: 'missing' })).rejects.toMatchObject({
       code: 'NOT_FOUND',
+      message: 'Purchase order not found.',
     });
     await expect(caller().getReceipt({ receiptId: 'missing' })).rejects.toMatchObject({
       code: 'NOT_FOUND',
+      message: 'Purchase receipt not found.',
     });
     await expect(caller().submitPurchaseOrder({ purchaseOrderId: 'missing' })).rejects.toMatchObject(
       { code: 'NOT_FOUND' }

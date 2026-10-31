@@ -9,8 +9,16 @@ const ACTOR_DENIED = new TRPCError({
   message: 'Your account is not linked to an active staff profile authorized for this branch.',
 });
 
-/** Resolve an authenticated web user to one eligible in-tenant restaurant actor. */
-export async function resolveRestaurantActor(ctx: TRPCContext, branchIds: string[]) {
+/**
+ * Resolve an authenticated web user to one eligible in-tenant restaurant actor.
+ * Inactive branches may be allowed for history and terminal lifecycle transitions;
+ * operational writes require active branches by default.
+ */
+export async function resolveRestaurantActor(
+  ctx: TRPCContext,
+  branchIds: string[],
+  options: { allowInactiveBranches?: boolean } = {}
+) {
   const user = ctx.session?.user;
   if (!user) throw new TRPCError({ code: 'UNAUTHORIZED' });
 
@@ -47,7 +55,7 @@ export async function resolveRestaurantActor(ctx: TRPCContext, branchIds: string
   const organizationId = ctx.entitlements?.organizationId ?? user.organizationId;
   if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
   await assertInOrganization(ctx.db.restaurantBranch, organizationId, requiredBranchIds, {
-    active: true,
+    active: options.allowInactiveBranches ? undefined : true,
   });
   return { staffProfileId: actor.id };
 }

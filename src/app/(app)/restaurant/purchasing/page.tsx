@@ -21,6 +21,7 @@ import {
 import { can, subjectFromSession } from '@/lib/abac';
 import { hasModule } from '@/lib/entitlements';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
+import { resolveRestaurantActor } from '@/server/restaurant-actor';
 import { restaurantPurchasingRouter } from '@/server/routers/restaurant-purchasing';
 import { createTRPCContext } from '@/server/trpc';
 import { ReceivingForm, type ReceivingState } from './receiving-form';
@@ -88,7 +89,7 @@ function AccessState({ moduleEnabled }: { moduleEnabled: boolean }) {
         </h2>
         <p className="mt-2 text-sm text-text-muted">
           {moduleEnabled
-            ? 'Inventory read permission is required to open the purchasing console.'
+            ? 'Inventory read permission and one active staff profile authorized for this branch are required to open the purchasing console.'
             : 'Enable the Restaurant Purchasing module to use purchasing.'}
         </p>
       </SectionCard>
@@ -126,10 +127,12 @@ export default async function PurchasingPage({
   const caller = restaurantPurchasingRouter.createCaller(ctx);
   let loaded;
   try {
+    // Validate staff mapping even when there are no branches to list.
+    await resolveRestaurantActor(ctx, []);
+    // Include authorized inactive branches so their purchasing history remains visible.
     const branches = await ctx.db.restaurantBranch.findMany({
       where: {
         organizationId: ctx.organization?.id ?? ctx.session!.user.organizationId,
-        active: true,
         ...(!configurable && {
           OR: [
             { staffProfiles: { some: { userId: user.id, status: 'ACTIVE' } } },
@@ -138,7 +141,7 @@ export default async function PurchasingPage({
         }),
       },
       orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
-      select: { id: true, name: true },
+      select: { id: true, name: true, active: true },
     });
     // The router reserves unfiltered lists for restaurant:configure. Keep every
     // branch-specific request authorized there, then merge the newest 100 orders.
@@ -151,6 +154,7 @@ export default async function PurchasingPage({
       ctx.db.restaurantStockLocation.findMany({
         where: {
           isActive: true,
+          branch: { active: true },
           ...(!configurable && { branchId: { in: branches.map(({ id }) => id) } }),
         },
         orderBy: { name: 'asc' },
@@ -194,14 +198,17 @@ export default async function PurchasingPage({
     loaded = {
       suppliers: supplierPage.suppliers,
       orders: visibleOrders,
-      branches,
+      branches: branches.filter((branch) => branch.active),
       locations,
       stockItems,
       units,
       selectedOrder,
       receipts,
     };
-  } catch {
+  } catch (error) {
+    if (error instanceof TRPCError && ['FORBIDDEN', 'UNAUTHORIZED'].includes(error.code)) {
+      return <AccessState moduleEnabled={moduleEnabled} />;
+    }
     return (
       <div className="space-y-6">
         <PageHeader

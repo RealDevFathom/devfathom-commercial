@@ -115,10 +115,31 @@ async function requirePurchaseOrderScope(ctx: TRPCContext, purchaseOrderId: stri
   return order;
 }
 
-async function requirePurchaseOrderAccess(ctx: TRPCContext, purchaseOrderId: string) {
+async function requireResourceBranchAccess(
+  ctx: TRPCContext,
+  branchId: string,
+  resource: 'Purchase order' | 'Purchase receipt',
+  options: { allowInactiveBranches?: boolean } = {}
+) {
+  try {
+    return await resolveRestaurantActor(ctx, [branchId], options);
+  } catch (error) {
+    // Resource ids must not disclose records in a branch the caller cannot access.
+    if (error instanceof TRPCError && error.code === 'FORBIDDEN') {
+      throw new TRPCError({ code: 'NOT_FOUND', message: `${resource} not found.` });
+    }
+    throw error;
+  }
+}
+
+async function requirePurchaseOrderAccess(
+  ctx: TRPCContext,
+  purchaseOrderId: string,
+  options: { allowInactiveBranches?: boolean } = {}
+) {
   const order = await requirePurchaseOrderScope(ctx, purchaseOrderId);
-  await resolveRestaurantActor(ctx, [order.branchId]);
-  return order;
+  const actor = await requireResourceBranchAccess(ctx, order.branchId, 'Purchase order', options);
+  return { ...order, actor };
 }
 
 async function requireReceiptAccess(ctx: TRPCContext, receiptId: string): Promise<void> {
@@ -127,12 +148,14 @@ async function requireReceiptAccess(ctx: TRPCContext, receiptId: string): Promis
     select: { branchId: true },
   });
   if (!receipt) throw new TRPCError({ code: 'NOT_FOUND', message: 'Purchase receipt not found.' });
-  await resolveRestaurantActor(ctx, [receipt.branchId]);
+  await requireResourceBranchAccess(ctx, receipt.branchId, 'Purchase receipt', {
+    allowInactiveBranches: true,
+  });
 }
 
 async function requirePurchaseOrderListAccess(ctx: TRPCContext, branchId?: string): Promise<void> {
   if (branchId) {
-    await resolveRestaurantActor(ctx, [branchId]);
+    await resolveRestaurantActor(ctx, [branchId], { allowInactiveBranches: true });
     return;
   }
 
@@ -259,7 +282,7 @@ export const restaurantPurchasingRouter = router({
     .input(z.object({ purchaseOrderId: ID }).strict())
     .query(({ ctx, input }) =>
       run(async () => {
-        await requirePurchaseOrderAccess(ctx, input.purchaseOrderId);
+        await requirePurchaseOrderAccess(ctx, input.purchaseOrderId, { allowInactiveBranches: true });
         return serializePurchaseOrder(await getPurchaseOrder(ctx.db, input.purchaseOrderId));
       })
     ),
@@ -378,8 +401,7 @@ export const restaurantPurchasingRouter = router({
     .input(z.object({ purchaseOrderId: ID }).strict())
     .mutation(({ ctx, input }) =>
       run(async () => {
-        const scope = await requirePurchaseOrderScope(ctx, input.purchaseOrderId);
-        const actor = await resolveRestaurantActor(ctx, [scope.branchId]);
+        const { actor } = await requirePurchaseOrderAccess(ctx, input.purchaseOrderId);
         const order = await approvePurchaseOrder(ctx.db, input.purchaseOrderId, {
           approvedByStaffProfileId: actor.staffProfileId,
         });
@@ -396,7 +418,7 @@ export const restaurantPurchasingRouter = router({
     .input(z.object({ purchaseOrderId: ID }).strict())
     .mutation(({ ctx, input }) =>
       run(async () => {
-        await requirePurchaseOrderAccess(ctx, input.purchaseOrderId);
+        await requirePurchaseOrderAccess(ctx, input.purchaseOrderId, { allowInactiveBranches: true });
         annotateAudit(ctx, {
           targetType: 'RestaurantPurchaseOrder',
           targetId: input.purchaseOrderId,
@@ -409,7 +431,7 @@ export const restaurantPurchasingRouter = router({
     .input(z.object({ purchaseOrderId: ID }).strict())
     .mutation(({ ctx, input }) =>
       run(async () => {
-        await requirePurchaseOrderAccess(ctx, input.purchaseOrderId);
+        await requirePurchaseOrderAccess(ctx, input.purchaseOrderId, { allowInactiveBranches: true });
         annotateAudit(ctx, {
           targetType: 'RestaurantPurchaseOrder',
           targetId: input.purchaseOrderId,
@@ -434,8 +456,8 @@ export const restaurantPurchasingRouter = router({
     )
     .mutation(({ ctx, input }) =>
       run(async () => {
-        const scope = await requirePurchaseOrderScope(ctx, input.purchaseOrderId);
-        const actor = await resolveRestaurantActor(ctx, [scope.branchId]);
+        const scope = await requirePurchaseOrderAccess(ctx, input.purchaseOrderId);
+        const { actor } = scope;
         const locationId = input.locationId ?? scope.locationId;
         if (locationId) await requireLocationInBranch(ctx, locationId, scope.branchId);
         const result = await receivePurchaseOrder(ctx.db, {
