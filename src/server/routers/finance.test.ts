@@ -96,7 +96,7 @@ describe('finance.getFinancialSummary', () => {
       currency: 'USD' as const,
       category: 'HOSTING' as const,
       interval: 'monthly',
-      nextDueDate: new Date('2026-10-01T00:00:00.000Z'),
+      nextDueDate: new Date(2026, 9, 1),
       vendorName: null,
       active: true,
     };
@@ -141,13 +141,13 @@ describe('finance.getFinancialSummary', () => {
           currency: 'USD',
           category: 'HOSTING',
           description: 'Hosting (recurring)',
-          date: new Date('2026-10-01T00:00:00.000Z'),
+          date: new Date(2026, 9, 1),
         },
       ],
     });
     expect(mocks.recurringUpdate).toHaveBeenCalledWith({
       where: { id: 'recurring-1' },
-      data: { nextDueDate: new Date('2026-11-01T00:00:00.000Z') },
+      data: { nextDueDate: new Date(2026, 10, 1) },
     });
     expect(summary.monthlyExpense).toEqual([{ currency: 'USD', amount: 100 }]);
     expect(summary.yearlyExpense).toEqual([{ currency: 'USD', amount: 100 }]);
@@ -160,7 +160,7 @@ describe('finance.getFinancialSummary', () => {
     vi.setSystemTime(new Date('2026-10-26T12:34:56.000Z'));
     mocks.transactionGroupBy.mockImplementation(
       ({ where }: { where: { type: 'INCOME' | 'EXPENSE'; date: { gte: Date } } }) => {
-        const yearly = where.date.gte.getUTCMonth() === 0;
+        const yearly = where.date.gte.getMonth() === 0;
         const amount = where.type === 'EXPENSE' ? (yearly ? 400 : 100) : yearly ? 1200 : 300;
         return Promise.resolve([
           {
@@ -187,7 +187,7 @@ describe('finance.getFinancialSummary', () => {
         _sum: { amount: true },
         where: {
           type: 'INCOME',
-          date: { gte: new Date('2026-10-01T00:00:00.000Z'), lte: new Date() },
+          date: { gte: new Date(2026, 9, 1), lte: new Date() },
         },
       },
       {
@@ -195,7 +195,7 @@ describe('finance.getFinancialSummary', () => {
         _sum: { amount: true },
         where: {
           type: 'EXPENSE',
-          date: { gte: new Date('2026-10-01T00:00:00.000Z'), lte: new Date() },
+          date: { gte: new Date(2026, 9, 1), lte: new Date() },
         },
       },
       {
@@ -203,7 +203,7 @@ describe('finance.getFinancialSummary', () => {
         _sum: { amount: true },
         where: {
           type: 'INCOME',
-          date: { gte: new Date('2026-01-01T00:00:00.000Z'), lte: new Date() },
+          date: { gte: new Date(2026, 0, 1), lte: new Date() },
         },
       },
       {
@@ -211,7 +211,7 @@ describe('finance.getFinancialSummary', () => {
         _sum: { amount: true },
         where: {
           type: 'EXPENSE',
-          date: { gte: new Date('2026-01-01T00:00:00.000Z'), lte: new Date() },
+          date: { gte: new Date(2026, 0, 1), lte: new Date() },
         },
       },
     ]);

@@ -11,7 +11,6 @@ import {
   diffByCurrency,
   currenciesPresent,
   moneyLabel,
-  type CurrencyAmount,
 } from '@/lib/finance/currency';
 import { invoiceStatusTransitionError, invoiceStatusUpdate } from '@/lib/finance/invoice-status';
 
