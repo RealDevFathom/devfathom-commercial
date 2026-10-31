@@ -95,20 +95,16 @@ import {
 import type { LedgerScope } from '@/lib/pharmacy/stock-ledger';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
+import { buildReceiptMessage, issueHostedReceipt } from '@/lib/pharmacy/whatsapp/hosted-receipt';
 import {
-  buildReceiptMessage,
-  createReceiptOtpCode,
-  issueHostedReceipt,
-} from '@/lib/pharmacy/whatsapp/hosted-receipt';
-import {
+  HOSTED_RECEIPT_SALE_ELIGIBILITY,
   hostedReceiptRecipientOptedOut,
   persistHostedReceipt,
   revokeHostedReceipts,
 } from '@/lib/pharmacy/whatsapp/hosted-receipt-store';
 import { rateLimit } from '@/lib/rate-limit';
-import { normalizeWhatsAppNumber, phoneLast4 } from '@/lib/pharmacy/whatsapp/messages';
-import { createWhatsAppProvider } from '@/lib/pharmacy/whatsapp/provider';
-import { sendAndLog } from '@/lib/pharmacy/whatsapp/message-log';
+import { normalizeWhatsAppNumber } from '@/lib/pharmacy/whatsapp/messages';
+import { queueHostedReceiptDelivery } from '@/lib/pharmacy/whatsapp/hosted-receipt-delivery';
 import { authenticatePharmacyPack } from '@/lib/pharmacy/pack-authentication-operations';
 import {
   applyPharmacyTender,
@@ -1807,11 +1803,21 @@ export const pharmacySalesRouter = router({
       if (receipt.receiptNumber === null || !receipt.completedAt)
         throw new TRPCError({ code: 'CONFLICT', message: 'Only a settled receipt can be sent.' });
       const sale = await ctx.db.pharmacySale.findFirst({
-        where: { organizationId: scope.organizationId, branchId: scope.branchId, id: input.saleId },
+        where: {
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          id: input.saleId,
+          ...HOSTED_RECEIPT_SALE_ELIGIBILITY,
+        },
         select: { customerId: true },
       });
+      if (!sale)
+        throw new TRPCError({
+          code: 'CONFLICT',
+          message: 'Only a completed receipt without returns or refunds can be sent.',
+        });
       if (
-        await hostedReceiptRecipientOptedOut(ctx.db, scope.organizationId, phone, sale?.customerId)
+        await hostedReceiptRecipientOptedOut(ctx.db, scope.organizationId, phone, sale.customerId)
       )
         throw new TRPCError({
           code: 'PRECONDITION_FAILED',
@@ -1850,19 +1856,10 @@ export const pharmacySalesRouter = router({
         secret
       );
       const link = `${publicOrigin}/r/pharmacy/${issued.token}`;
-      // Branch names and other utility fields are editable. Check the medicines
-      // sold on this receipt, so their names cannot enter the neutral template.
+      // Editable utility fields must be neutral against the entire tenant
+      // catalog, including medicines not sold on this receipt.
       const catalog = await ctx.db.medicine.findMany({
-        where: {
-          organizationId: scope.organizationId,
-          saleLines: {
-            some: {
-              organizationId: scope.organizationId,
-              branchId: scope.branchId,
-              saleId: input.saleId,
-            },
-          },
-        },
+        where: { organizationId: scope.organizationId },
         select: {
           productName: true,
           brandName: true,
@@ -1889,40 +1886,18 @@ export const pharmacySalesRouter = router({
         },
         prohibitedTerms
       );
-      const recordId = await ctx.db.$transaction((tx) =>
-        persistHostedReceipt(txDb(tx), issued.token, issued.receipt)
-      );
-      const provider = createWhatsAppProvider();
-      let providerMessageId: string | undefined;
-      const outcome = await sendAndLog(
-        {
-          organizationId: scope.organizationId,
-          branchId: scope.branchId,
-          kind: 'HOSTED_RECEIPT',
-          dedupeKey: `hosted-receipt:${recordId}`,
-          phoneLast4: phoneLast4(phone),
-          orderId: input.saleId,
-        },
-        async () => {
-          const delivery = await provider.sendText({ to: phone, body: message });
-          providerMessageId = delivery.providerMessageId;
-          if (rx)
-            await provider.sendText({
-              to: phone,
-              body: `Your receipt verification code is ${createReceiptOtpCode(issued.token, secret, now)}. It expires in 5 minutes.`,
-            });
-          return delivery;
-        }
-      );
-      if (outcome === 'SENT' || providerMessageId)
-        await ctx.db.pharmacyHostedReceipt.update({
-          where: { id: recordId },
-          data: {
-            ...(providerMessageId ? { providerMessageId } : {}),
-            // Only a real provider acknowledgement counts as delivery.
-            ...(outcome === 'SENT' ? { deliveredAt: new Date() } : {}),
-          },
-        });
+      // Both rows join the owning request transaction. The existing outbox
+      // drainer only calls the provider once that transaction has committed.
+      await ctx.db.$transaction(async (tx) => {
+        const db = txDb(tx);
+        const recordId = await persistHostedReceipt(db, issued.token, issued.receipt);
+        await queueHostedReceiptDelivery(
+          db,
+          { organizationId: scope.organizationId, recordId, token: issued.token, phone, message },
+          secret
+        );
+      });
+      const outcome = 'QUEUED' as const;
       annotateAudit(ctx, {
         category: 'PHARMACY',
         operation: 'CREATE',

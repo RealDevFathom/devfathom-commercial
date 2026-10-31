@@ -12,6 +12,7 @@ type Consent = 'CUSTOMER_REQUEST' | 'COUNTER_OPT_IN';
 type Notice = { tone: 'success' | 'danger'; message: string } | null;
 
 const OUTCOME_MESSAGES: Record<string, string> = {
+  QUEUED: 'Receipt link queued for WhatsApp delivery.',
   SENT: 'Receipt link sent on WhatsApp.',
   PREPARED: 'Receipt link prepared. WhatsApp delivery is not enabled for this workspace.',
   UNKNOWN: 'Receipt link sent; WhatsApp has not confirmed delivery yet.',
@@ -39,7 +40,7 @@ export function CounterHostedReceipt({
   const send = trpc.pharmacySales.sendHostedReceipt.useMutation({
     onSuccess: (result) =>
       setNotice({
-        tone: result.outcome === 'FAILED' ? 'danger' : 'success',
+        tone: ['FAILED'].includes(result.outcome) ? 'danger' : 'success',
         message: OUTCOME_MESSAGES[result.outcome] ?? 'Receipt link processed.',
       }),
     onError: (error) => setNotice({ tone: 'danger', message: counterErrorMessage(error) }),

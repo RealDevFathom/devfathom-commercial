@@ -153,10 +153,20 @@ export function scrubDeadEmailPayload(payload: Prisma.JsonValue): Prisma.InputJs
  */
 export async function runEffect(
   row: Pick<EffectRow, 'id' | 'kind' | 'payload'>,
-  lookupWebhook: (webhookId: string) => Promise<WebhookEndpoint | null> = async () => null
+  lookupWebhook: (webhookId: string) => Promise<WebhookEndpoint | null> = async () => null,
+  organizationId?: string
 ): Promise<EffectOutcome> {
   if (row.kind === 'email') return runEmail(row.payload);
   if (row.kind === 'webhook') return runWebhook(row, lookupWebhook);
+  if (row.kind === 'pharmacy-hosted-receipt' && organizationId) {
+    try {
+      const { deliverHostedReceipt } = await import('@/lib/pharmacy/whatsapp/hosted-receipt-delivery');
+      await deliverHostedReceipt(row.payload, organizationId);
+      return { ok: true, error: null };
+    } catch {
+      return { ok: false, error: 'Delivery failed' };
+    }
+  }
   return { ok: false, error: 'Delivery failed' };
 }
 
@@ -354,16 +364,19 @@ export async function drainOrganization(organizationId: string): Promise<void> {
   );
 
   for (const row of claimed) {
-    const outcome = await runEffect(row, (webhookId) =>
-      withTenantDb(
-        organizationId,
-        async (db) =>
-          db.webhook.findUnique({
-            where: { id: webhookId },
-            select: { url: true, secret: true, active: true },
-          }),
-        { skipDrain: true, timeout: 10_000 }
-      )
+    const outcome = await runEffect(
+      row,
+      (webhookId) =>
+        withTenantDb(
+          organizationId,
+          async (db) =>
+            db.webhook.findUnique({
+              where: { id: webhookId },
+              select: { url: true, secret: true, active: true },
+            }),
+          { skipDrain: true, timeout: 10_000 }
+        ),
+      organizationId
     );
     await withTenantDb(
       organizationId,

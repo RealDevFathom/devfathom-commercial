@@ -13,6 +13,11 @@ vi.mock('@/lib/pharmacy/whatsapp/message-log', () => ({
 }));
 vi.mock('@/lib/pharmacy/whatsapp/provider', () => ({ createWhatsAppProvider: vi.fn() }));
 vi.mock('@/lib/rate-limit', () => ({ clientIp: () => '127.0.0.1', rateLimit: vi.fn() }));
+const logs = vi.hoisted(() => ({ findFirst: vi.fn() }));
+vi.mock('@/lib/tenancy/scoped-db', () => ({
+  withTenantDb: (_organizationId: string, run: (db: unknown) => unknown) =>
+    run({ pharmacyMessageLog: { findFirst: logs.findFirst } }),
+}));
 
 import {
   authorizeHostedReceiptRecord,
@@ -72,6 +77,7 @@ beforeEach(() => {
   vi.mocked(authorizeHostedReceiptRecord).mockResolvedValue({ id: 'hosted-1', receipt });
   vi.mocked(createWhatsAppProvider).mockReturnValue({ sendText } as never);
   vi.mocked(rateLimit).mockResolvedValue({ ok: true, retryAfter: 0, remaining: 2 });
+  logs.findFirst.mockResolvedValue(null);
 });
 
 afterEach(() => vi.unstubAllEnvs());
@@ -113,6 +119,36 @@ describe('hosted Rx receipt code resend', () => {
     const response = await POST(request({ phone: '03001234567' }), context());
     expect(response.status).toBe(429);
     expect(response.headers.get('retry-after')).toBe('120');
+    expect(sendText).not.toHaveBeenCalled();
+  });
+
+  it.each(['FAILED', 'PREPARED', 'UNKNOWN'] as const)(
+    'reports an actionable delivery error for %s',
+    async (outcome) => {
+      vi.mocked(sendAndLog).mockResolvedValueOnce(outcome);
+      const response = await POST(request({ phone: '03001234567' }), context());
+      expect(response.status).toBe(503);
+      expect(response.headers.get('retry-after')).toBe('300');
+      expect(response.headers.get('cache-control')).toBe('private, no-store');
+      expect(await response.json()).toMatchObject({ error: expect.stringContaining('Try again in 5 minutes') });
+    }
+  );
+
+  it('does not turn an earlier failed or unconfirmed duplicate into success', async () => {
+    vi.mocked(sendAndLog).mockResolvedValueOnce('DUPLICATE');
+    const response = await POST(request({ phone: '03001234567' }), context());
+    expect(response.status).toBe(503);
+    expect(logs.findFirst).toHaveBeenCalledWith({
+      where: { organizationId: 'org-1', dedupeKey: expect.stringMatching(/^hosted-receipt-code:hosted-1:/), status: 'SENT' },
+      select: { id: true },
+    });
+    expect(sendText).not.toHaveBeenCalled();
+  });
+
+  it('accepts a duplicate whose earlier message was acknowledged', async () => {
+    vi.mocked(sendAndLog).mockResolvedValueOnce('DUPLICATE');
+    logs.findFirst.mockResolvedValueOnce({ id: 'message-1' });
+    expect((await POST(request({ phone: '03001234567' }), context())).status).toBe(202);
     expect(sendText).not.toHaveBeenCalled();
   });
 

@@ -4,7 +4,10 @@ import {
   createReceiptOtpProofFromCode,
   hasValidReceiptOtp,
 } from '@/lib/pharmacy/whatsapp/hosted-receipt';
-import { authorizeHostedReceipt } from '@/lib/pharmacy/whatsapp/hosted-receipt-store';
+import {
+  authorizeHostedReceipt,
+  authorizeHostedReceiptRecord,
+} from '@/lib/pharmacy/whatsapp/hosted-receipt-store';
 import { clientIp, rateLimit } from '@/lib/rate-limit';
 
 const privateHeaders = {
@@ -83,8 +86,24 @@ export async function POST(request: Request, context: { params: Promise<{ token:
       { status: 400, headers: privateHeaders }
     );
   try {
-    const receipt = await authorizeHostedReceipt(token, secret);
+    const { id, receipt } = await authorizeHostedReceiptRecord(token, secret);
     if (!receipt.rx) return NextResponse.json({ ok: true }, { headers: privateHeaders });
+    // The shared Postgres limiter reserves an attempt before checking the code.
+    // All IPs and workers consume the same receipt budget, including concurrent
+    // guesses. Resending a code does not reset this budget.
+    const receiptGate = await rateLimit(
+      `pharmacy-receipt-otp:receipt:${receipt.organizationId}:${id}`,
+      5,
+      10 * 60_000
+    );
+    if (!receiptGate.ok)
+      return NextResponse.json(
+        { error: 'Too many verification attempts. Try again later.' },
+        {
+          status: 429,
+          headers: { ...privateHeaders, 'Retry-After': String(receiptGate.retryAfter) },
+        }
+      );
     const proof = createReceiptOtpProofFromCode(token, body.code, secret);
     const response = NextResponse.json({ ok: true }, { headers: privateHeaders });
     response.cookies.set('pharmacy_receipt_otp', proof, {

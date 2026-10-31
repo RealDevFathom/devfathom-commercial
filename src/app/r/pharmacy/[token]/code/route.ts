@@ -8,6 +8,7 @@ import { sendAndLog } from '@/lib/pharmacy/whatsapp/message-log';
 import { normalizeWhatsAppNumber, phoneLast4 } from '@/lib/pharmacy/whatsapp/messages';
 import { createWhatsAppProvider } from '@/lib/pharmacy/whatsapp/provider';
 import { clientIp, rateLimit } from '@/lib/rate-limit';
+import { withTenantDb } from '@/lib/tenancy/scoped-db';
 
 const privateHeaders = {
   'X-Robots-Tag': 'noindex, nofollow, noarchive',
@@ -70,19 +71,20 @@ export async function POST(request: Request, context: { params: Promise<{ token:
   try {
     if (
       receiptPhoneMatches(receipt, phone, secret) &&
-      !(await tenantHostedReceiptRecipientOptedOut(receipt.organizationId, phone))
+      !(await tenantHostedReceiptRecipientOptedOut(receipt.organizationId, phone, receipt.saleId))
     ) {
       const now = new Date();
       const window = Math.floor(now.getTime() / OTP_WINDOW_MS);
       const provider = createWhatsAppProvider();
       // One code message per receipt per window; a repeat request in the same
       // window is a duplicate of a code the customer already received.
-      await sendAndLog(
+      const dedupeKey = `hosted-receipt-code:${id}:${window}`;
+      const outcome = await sendAndLog(
         {
           organizationId: receipt.organizationId,
           branchId: receipt.branchId,
           kind: 'HOSTED_RECEIPT',
-          dedupeKey: `hosted-receipt-code:${id}:${window}`,
+          dedupeKey,
           phoneLast4: phoneLast4(phone),
           orderId: receipt.saleId,
         },
@@ -92,6 +94,25 @@ export async function POST(request: Request, context: { params: Promise<{ token:
             body: `Your receipt verification code is ${createReceiptOtpCode(token, secret, now)}. It expires in 5 minutes.`,
           })
       );
+      // A duplicate only confirms delivery if the earlier attempt was accepted.
+      // Failed, mock, and uncertain attempts retain their claim until the next
+      // code window, so repeated requests must not turn them into success.
+      const sent =
+        outcome === 'SENT' ||
+        (outcome === 'DUPLICATE' &&
+          (await withTenantDb(receipt.organizationId, (db) =>
+            db.pharmacyMessageLog.findFirst({
+              where: { organizationId: receipt.organizationId, dedupeKey, status: 'SENT' },
+              select: { id: true },
+            })
+          )));
+      if (!sent)
+        return NextResponse.json(
+          {
+            error: 'Code delivery could not be confirmed. Try again in 5 minutes or contact the pharmacy.',
+          },
+          { status: 503, headers: { ...privateHeaders, 'Retry-After': '300' } }
+        );
     }
   } catch {
     return NextResponse.json(

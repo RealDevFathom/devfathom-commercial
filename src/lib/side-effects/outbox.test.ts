@@ -18,6 +18,9 @@ vi.mock('@/lib/webhooks/safe-url', () => ({ deliverWebhookRequest: mocks.deliver
 import { notify } from '@/lib/notifications';
 import { emitEvent } from '@/lib/webhooks';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
+import { issueHostedReceipt } from '@/lib/pharmacy/whatsapp/hosted-receipt';
+import { persistHostedReceipt } from '@/lib/pharmacy/whatsapp/hosted-receipt-store';
+import { queueHostedReceiptDelivery } from '@/lib/pharmacy/whatsapp/hosted-receipt-delivery';
 
 const entitlements = {
   organizationId: 'org_1',
@@ -153,4 +156,63 @@ describe('tenant transaction side effects', () => {
 
     expect(mocks.drain).not.toHaveBeenCalled();
   });
+
+  it.each(['commit', 'sibling failure', 'outbox failure'])(
+    'commits hosted receipt and delivery intent together: %s',
+    async (scenario) => {
+      const secret = 'test-hosted-receipt-secret-at-least-32-characters';
+      const issued = issueHostedReceipt({
+        organizationId: 'org_1', branchId: 'branch_1', saleId: 'sale_1', actorId: 'actor_1',
+        consent: 'CUSTOMER_REQUEST', consentedAt: new Date().toISOString(), version: 1,
+        branch: 'Gulberg', receiptNumber: '42', total: 'PKR 10.00', paymentMethod: 'CASH',
+        rx: false, expiryDays: 30,
+      }, secret);
+      const staged: string[] = [];
+      const committed: string[] = [];
+      const events: string[] = [];
+      const tx = {
+        $queryRawUnsafe: vi.fn(async () => []),
+        pharmacyHostedReceipt: {
+          create: vi.fn(async () => { staged.push('receipt'); return { id: 'hosted_1' }; }),
+        },
+        outboundEffect: {
+          create: vi.fn(async (args: { data: { payload: unknown } }) => {
+            expect(staged).toEqual(['receipt']);
+            expect(JSON.stringify(args.data.payload)).not.toContain(issued.token);
+            expect(JSON.stringify(args.data.payload)).not.toContain('923001234567');
+            if (scenario === 'outbox failure') throw new Error('outbox failed');
+            staged.push('delivery intent');
+            return { id: 'effect_1' };
+          }),
+        },
+      };
+      mocks.transaction.mockImplementation(async (run: (db: typeof tx) => Promise<unknown>) => {
+        const result = await run(tx);
+        committed.push(...staged);
+        events.push('commit');
+        return result;
+      });
+      mocks.drain.mockImplementation(async () => { events.push('deliver'); });
+      const request = withTenantDb('org_1', async (db) => {
+        await db.$transaction(async (inner) => {
+          const recordId = await persistHostedReceipt(inner as typeof db, issued.token, issued.receipt);
+          await queueHostedReceiptDelivery(inner as typeof db, {
+            organizationId: 'org_1', recordId, token: issued.token,
+            phone: '923001234567', message: 'neutral receipt message',
+          }, secret);
+        });
+        expect(mocks.drain).not.toHaveBeenCalled();
+        if (scenario === 'sibling failure') throw new Error('sibling mutation failed');
+      });
+      if (scenario === 'commit') {
+        await request;
+        expect(committed).toEqual(['receipt', 'delivery intent']);
+        expect(events).toEqual(['commit', 'deliver']);
+      } else {
+        await expect(request).rejects.toThrow(/failed/);
+        expect(committed).toEqual([]);
+        expect(mocks.drain).not.toHaveBeenCalled();
+      }
+    }
+  );
 });

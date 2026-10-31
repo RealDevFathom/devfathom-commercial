@@ -35,6 +35,13 @@ export async function persistHostedReceipt(
 /** Tenants that may no longer serve customer-facing pharmacy documents. */
 const UNSERVABLE_ORGANIZATION_STATUSES = ['SUSPENDED', 'TERMINATED', 'PURGING', 'PURGED'] as const;
 
+/** Shared by issuance and public authorization: totals must still be current. */
+export const HOSTED_RECEIPT_SALE_ELIGIBILITY = {
+  status: 'COMPLETED',
+  returns: { none: {} },
+  refunds: { none: {} },
+} as const;
+
 /**
  * Authenticates the claim, then requires a matching live row under tenant RLS.
  * The link also dies when the tenant is suspended or the sale has since been
@@ -59,7 +66,7 @@ export async function authorizeHostedReceiptRecord(
         revokedAt: null,
         expiresAt: { gt: now },
         organization: { status: { notIn: [...UNSERVABLE_ORGANIZATION_STATUSES] } },
-        sale: { status: 'COMPLETED', returns: { none: {} }, refunds: { none: {} } },
+        sale: HOSTED_RECEIPT_SALE_ELIGIBILITY,
       },
       select: { id: true },
     });
@@ -105,28 +112,47 @@ export async function hostedReceiptRecipientOptedOut(
   phone: string,
   customerId?: string | null
 ): Promise<boolean> {
-  const last4 = phone.slice(-4);
-  const candidates = await db.pharmacyCustomer.findMany({
-    where: {
-      organizationId,
-      whatsappOptIn: false,
-      OR: [
-        ...(customerId ? [{ id: customerId }] : []),
-        { patient: { phone: { endsWith: last4 } } },
-      ],
-    },
-    select: { id: true, patient: { select: { phone: true } } },
-    take: 50,
-  });
-  return candidates.some(
-    (candidate) =>
-      (customerId && candidate.id === customerId) ||
-      normalizeWhatsAppNumber(candidate.patient.phone) === phone
-  );
+  if (
+    customerId &&
+    (await db.pharmacyCustomer.findFirst({
+      where: { organizationId, id: customerId, whatsappOptIn: false },
+      select: { id: true },
+    }))
+  )
+    return true;
+
+  // Scan every opted-out identity. A raw suffix filter is unsafe for formatted
+  // numbers, Urdu digits, or trailing whitespace; normalize before comparing.
+  let afterId: string | undefined;
+  const pageSize = 200;
+  for (;;) {
+    const candidates = await db.pharmacyCustomer.findMany({
+      where: {
+        organizationId,
+        whatsappOptIn: false,
+        ...(afterId ? { id: { gt: afterId } } : {}),
+      },
+      select: { id: true, patient: { select: { phone: true } } },
+      orderBy: { id: 'asc' },
+      take: pageSize,
+    });
+    if (candidates.some((candidate) => normalizeWhatsAppNumber(candidate.patient.phone) === phone))
+      return true;
+    if (candidates.length < pageSize) return false;
+    afterId = candidates[candidates.length - 1].id;
+  }
 }
 
-export function tenantHostedReceiptRecipientOptedOut(organizationId: string, phone: string) {
-  return withTenantDb(organizationId, (db) =>
-    hostedReceiptRecipientOptedOut(db, organizationId, phone)
-  );
+export function tenantHostedReceiptRecipientOptedOut(
+  organizationId: string,
+  phone: string,
+  saleId: string
+) {
+  return withTenantDb(organizationId, async (db) => {
+    const sale = await db.pharmacySale.findFirst({
+      where: { organizationId, id: saleId },
+      select: { customerId: true },
+    });
+    return hostedReceiptRecipientOptedOut(db, organizationId, phone, sale?.customerId);
+  });
 }

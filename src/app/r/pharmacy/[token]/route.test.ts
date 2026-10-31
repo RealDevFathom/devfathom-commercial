@@ -4,17 +4,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('next/headers', () => ({ cookies: vi.fn() }));
 vi.mock('@/lib/pharmacy/whatsapp/hosted-receipt-store', () => ({
   authorizeHostedReceipt: vi.fn(),
+  authorizeHostedReceiptRecord: vi.fn(),
 }));
-vi.mock('@/lib/rate-limit', () => ({ clientIp: () => '127.0.0.1', rateLimit: vi.fn() }));
+vi.mock('@/lib/rate-limit', () => ({ clientIp: vi.fn(() => '127.0.0.1'), rateLimit: vi.fn() }));
 
 import { cookies } from 'next/headers';
-import { authorizeHostedReceipt } from '@/lib/pharmacy/whatsapp/hosted-receipt-store';
+import {
+  authorizeHostedReceipt,
+  authorizeHostedReceiptRecord,
+} from '@/lib/pharmacy/whatsapp/hosted-receipt-store';
 import {
   createReceiptOtpCode,
   issueHostedReceipt,
   readHostedReceipt,
 } from '@/lib/pharmacy/whatsapp/hosted-receipt';
-import { rateLimit } from '@/lib/rate-limit';
+import { clientIp, rateLimit } from '@/lib/rate-limit';
 import { GET, POST } from './route';
 
 const secret = 'test-hosted-receipt-secret-at-least-32-characters';
@@ -35,6 +39,7 @@ const request = (body?: object) =>
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(clientIp).mockReturnValue('127.0.0.1');
   vi.stubEnv('PHARMACY_HOSTED_RECEIPT_SECRET', secret);
   proof = undefined;
   const now = new Date();
@@ -60,6 +65,7 @@ beforeEach(() => {
   );
   token = issued.token;
   vi.mocked(authorizeHostedReceipt).mockResolvedValue(issued.receipt);
+  vi.mocked(authorizeHostedReceiptRecord).mockResolvedValue({ id: 'hosted-1', receipt: issued.receipt });
   vi.mocked(cookies).mockResolvedValue({
     get: () => (proof ? { value: proof } : undefined),
   } as never);
@@ -115,6 +121,32 @@ describe('hosted receipt customer access', () => {
     expect(response.status).toBe(429);
     expect(response.headers.get('retry-after')).toBe('60');
     expect(response.cookies.get('pharmacy_receipt_otp')).toBeUndefined();
+  });
+
+  it('shares the receipt attempt budget across rotating IPs and blocks even a valid sixth code', async () => {
+    const counts = new Map<string, number>();
+    vi.mocked(rateLimit).mockImplementation(async (key, limit) => {
+      const count = (counts.get(key) ?? 0) + 1;
+      counts.set(key, count);
+      return { ok: count <= limit, retryAfter: count > limit ? 600 : 0, remaining: Math.max(0, limit - count) };
+    });
+    const validCode = createReceiptOtpCode(token, secret);
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      vi.mocked(clientIp).mockReturnValue(`192.0.2.${attempt + 1}`);
+      expect((await POST(request({ code: 'invalid' }), context())).status).toBe(400);
+    }
+    vi.mocked(clientIp).mockReturnValue('192.0.2.99');
+    const response = await POST(request({ code: validCode }), context());
+    expect(response.status).toBe(429);
+    expect(response.headers.get('retry-after')).toBe('600');
+    expect(response.cookies.get('pharmacy_receipt_otp')).toBeUndefined();
+    expect(counts.get('pharmacy-receipt-otp:receipt:org-1:hosted-1')).toBe(6);
+
+    // Another receipt has its own budget.
+    vi.mocked(authorizeHostedReceiptRecord).mockResolvedValueOnce({
+      id: 'hosted-2', receipt: readHostedReceipt(token, secret),
+    });
+    expect((await POST(request({ code: validCode }), context())).status).toBe(200);
   });
 
   it.each(['Receipt link has expired.', 'Receipt link is unavailable.'])(
