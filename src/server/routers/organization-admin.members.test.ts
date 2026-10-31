@@ -254,6 +254,12 @@ describe('organization member creation', () => {
   });
 });
 
+// Raw lock queries are issued either as Prisma.sql objects or tagged templates.
+function lockedSql(call: number): string {
+  const arg = mocks.queryRaw.mock.calls[call]![0] as { sql?: string } | readonly string[];
+  return Array.isArray(arg) ? arg.join('?') : ((arg as { sql?: string }).sql ?? '');
+}
+
 describe('organization member last-admin guard', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -300,7 +306,10 @@ describe('organization member last-admin guard', () => {
       message: 'Cannot demote or deactivate the last active admin.',
     });
 
-    expect(mocks.queryRaw).toHaveBeenCalledOnce();
+    expect(mocks.queryRaw).toHaveBeenCalledTimes(2);
+    // Member row lock first, then the organization lock.
+    expect(lockedSql(0)).toMatch(/FROM users .*FOR UPDATE/);
+    expect(lockedSql(1)).toMatch(/FROM "organizations" .*FOR UPDATE/);
     expect(mocks.userUpdate).not.toHaveBeenCalled();
   });
 
@@ -309,7 +318,13 @@ describe('organization member last-admin guard', () => {
 
     await expect(caller().updateMember(updateInput)).resolves.toMatchObject({ id: 'admin_b' });
 
-    expect(mocks.queryRaw).toHaveBeenCalledOnce();
+    expect(mocks.queryRaw).toHaveBeenCalledTimes(2);
+    // Member row lock first, then the organization lock.
+    expect(lockedSql(0)).toMatch(/FROM users .*FOR UPDATE/);
+    expect(lockedSql(1)).toMatch(/FROM "organizations" .*FOR UPDATE/);
+    expect(mocks.queryRaw.mock.invocationCallOrder[1]).toBeLessThan(
+      mocks.userUpdate.mock.invocationCallOrder[0]!
+    );
     expect(mocks.userUpdate).toHaveBeenCalledOnce();
   });
 

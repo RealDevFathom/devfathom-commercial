@@ -762,7 +762,7 @@ describe('counter receipt authorization', () => {
     });
     expect(noCapability.db.$transaction).not.toHaveBeenCalled();
 
-    const unassigned = fixture(dispense);
+    const unassigned = fixture([...dispense, { capability: 'pharmacy:counter', effect: 'ALLOW' }]);
     await expect(path.run(unassigned.caller())).rejects.toMatchObject({
       code: 'FORBIDDEN',
       message: 'Branch is outside your scope.',
