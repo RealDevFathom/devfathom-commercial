@@ -31,12 +31,15 @@ import {
   createRecall,
   dispatchTransfer,
   nearExpiryBoard,
+  OpenRecallConflictError,
   quarantinePart,
   recallTrace,
   receiveTransferLine,
   reserveSupplierClaim,
+  setManufacturingBatchState,
   writeOff,
 } from '@/lib/pharmacy/inventory-operations';
+import { postWriteOffEntry } from '@/lib/pharmacy/finance-postings';
 import {
   allocateForSale,
   breakPack,
@@ -777,32 +780,29 @@ export const pharmacyInventoryRouter = router({
       z
         .object({
           manufacturingBatchId: z.string().min(1),
-          // Reactivation belongs to the recall close/reversal workflows, which
-          // verify the recall evidence before restoring affected stock.
-          state: z.enum(['RECALLED', 'QUARANTINED']),
+          // The domain serializes reactivation with recall creation and refuses
+          // it while a medicine-wide or batch-specific recall remains open.
+          state: z.enum(['ACTIVE', 'RECALLED', 'QUARANTINED']),
           reason: z.string().trim().max(500).optional(),
         })
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      const { organizationId } = actorFor(ctx);
-      const batch = await ctx.db.pharmacyManufacturingBatch.findFirst({
-        where: { id: input.manufacturingBatchId, organizationId },
-      });
-      if (!batch) throw new TRPCError({ code: 'NOT_FOUND', message: 'Batch not found.' });
-      if (!input.reason) {
+      if (input.state !== 'ACTIVE' && !input.reason) {
         throw new TRPCError({
           code: 'BAD_REQUEST',
           message: 'Blocking a batch requires a reason.',
         });
       }
-      return ctx.db.pharmacyManufacturingBatch.update({
-        where: { id: batch.id, organizationId },
-        data: {
-          state: input.state,
-          stateReason: input.reason,
-          stateChangedAt: new Date(),
-        },
+      return ctx.db.$transaction(async (tx) => {
+        try {
+          return await setManufacturingBatchState(txDb(tx), actorFor(ctx).organizationId, input);
+        } catch (error) {
+          if (error instanceof OpenRecallConflictError) {
+            throw new TRPCError({ code: 'CONFLICT', message: error.message });
+          }
+          domainError(error);
+        }
       });
     }),
 
@@ -1038,9 +1038,16 @@ export const pharmacyInventoryRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await ctx.db.$transaction(async (tx) =>
-          writeOff(txDb(tx), await scopeFor(ctx, input.branchId), input)
-        );
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          const scope = await scopeFor(ctx, input.branchId);
+          const written = await writeOff(db, scope, input);
+          await postWriteOffEntry(db, scope, {
+            stockMovementId: written.movement.id,
+            at: written.movement.occurredAt,
+          });
+          return written;
+        });
       } catch (error) {
         domainError(error);
       }

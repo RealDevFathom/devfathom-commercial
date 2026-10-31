@@ -5,7 +5,10 @@ import { resolve } from 'node:path';
 
 // Both Playwright's CommonJS loader and the native TS runner execute at repository root.
 export const acceptanceRoot = realpathSync(process.cwd());
-export const acceptanceEvidence = resolve(acceptanceRoot, 'restaurant-growth-completion-20261009/runtime');
+export const acceptanceEvidence = resolve(
+  acceptanceRoot,
+  'restaurant-growth-completion-20261009/runtime'
+);
 export const acceptanceOrigin = 'http://chai-chowk.localhost:4483';
 
 export type AcceptanceReceipt = {
