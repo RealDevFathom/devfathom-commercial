@@ -235,6 +235,22 @@ it('defers quiet-hour order notices to the next daytime scheduler run and sends 
   expect(store.scans[0]).toContain(`log."dedupeKey" = 'sms:order-ready:' || orders.id`);
 });
 
+it('sends deferred notices as the current reader instead of a former ready actor', async () => {
+  store.customers = [customer(null)];
+  store.consents = [consent('SMS')];
+  store.deferred = [{ orderId: ORDER_ID, branchId: 'branch-1', actorUserId: 'deactivated-staff' }];
+  const smsProvider = new MockSmsProvider(smsConfig);
+
+  await expect(processDeferredOrderReadySms({ now: NOW, smsConfig, smsProvider }))
+    .resolves.toEqual({ scanned: 1, outcomes: ['PREPARED'] });
+
+  expect(smsProvider.calls).toHaveLength(1);
+  expect(store.tenantCalls).toEqual([
+    { organizationId: 'org_a', userId: 'staff-1' },
+    { organizationId: 'org_a', userId: 'staff-1' },
+  ]);
+});
+
 it.each(['COMPLETED', 'CANCELLED'])('rechecks deferred order status before sending: %s', async (status) => {
   store.customers = [customer(null)];
   store.consents = [consent('SMS')];

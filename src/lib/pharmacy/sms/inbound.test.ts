@@ -75,6 +75,16 @@ beforeEach(() => {
 });
 
 describe('handleInboundSms (#723)', () => {
+  it('ignores a sender without four trailing digits before reading or changing consent', async () => {
+    const provider = new MockSmsProvider(config);
+    await expect(
+      handleInboundSms('org_a', config, provider, { ...message('m1', 'STOP'), from: 'invalid' }, NOW)
+    ).resolves.toBe('IGNORED');
+    expect(store.customer).toMatchObject({ smsOptIn: null, smsOptInChangedAt: null });
+    expect(store.logs).toEqual([]);
+    expect(provider.calls).toEqual([]);
+  });
+
   it.each(['STOP', 'stop', 'Unsubscribe', 'band karo', 'بند کریں'])(
     'opts the customer out of SMS on %s and acknowledges by SMS',
     async (text) => {

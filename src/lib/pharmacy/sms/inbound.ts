@@ -39,6 +39,7 @@ export async function handleInboundSms(
   const at = message.receivedAt > now ? now : message.receivedAt;
   const optIn = keyword === 'START';
   const last4 = phoneLast4(message.from);
+  if (!last4) return 'IGNORED';
 
   const { knownSender, customerId, inboundId, staleConsent } = await withTenantDb(organizationId, async (db) => {
     // A phone controls consent for every active customer using that number.

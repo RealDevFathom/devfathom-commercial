@@ -31,6 +31,9 @@ customer per day, one khata reminder per customer per day). Each SMS is claimed 
 Refill and khata SMS also carry a per-customer, per-local-day key
 (`refill-sms:<customer>:<day>`, `khata-sms:<customer>:<day>`), so a customer gets at
 most one SMS of each kind per day even when several captures are due.
+Refill batches exclude captures with no currently eligible channel before the
+batch limit is applied. A capture remains eligible for a later run if consent
+is granted before its run-out date.
 
 ## STOP / START
 
@@ -46,6 +49,18 @@ STOP is sticky until START; START clears it but does not grant consent by itself
 Other text is ignored; SMS has no order intake.
 
 Every utility SMS ends with "Reply STOP to opt out." (or the Urdu equivalent).
+
+## Message content and privacy
+
+Khata SMS includes the account display name and outstanding amount in PKR. SMS
+can be visible on a lock screen or shared phone, so these financial details may
+be visible to others with access to the recipient's device. Account names have
+links removed, whitespace collapsed and a 40-character cap. Refill SMS includes
+only the refill due date; no SMS template includes medicine names or links.
+
+The webhook signature covers the raw body without a separate timestamp. Replay
+protection uses the `sms-in:<provider message id>` claim; acknowledgements are
+sent only for messages less than 24 hours old.
 
 ## Configuration
 
@@ -65,7 +80,8 @@ The order-ready SMS is scheduled after the staff response and transaction commit
 as the acting staff user. Sanitized reason codes are logged if scheduling or
 pre-claim work fails. The existing `/api/pharmacy/whatsapp/reminders` scheduler also
 processes unclaimed ready-order notices, so quiet-hour notices (22:00–08:00 local)
-are deferred until a daytime run. It uses the ready event's staff identity and
-rechecks order status, branch, tenant lifecycle, entitlements and channel consent.
+are deferred until a daytime run. The scheduler scans and sends as a current
+active staff reader with order permission. It rechecks order status, branch,
+tenant lifecycle, entitlements and channel consent.
 Collected or cancelled orders are not notified, and an existing SMS claim prevents
 another send. Keep this scheduler running for SMS-only tenants as well.

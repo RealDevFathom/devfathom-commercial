@@ -140,6 +140,8 @@ export async function processDueWhatsAppRefillReminders(
 
   const limit = Math.max(1, Math.min(500, Math.floor(options.limit ?? 100)));
   const windowEnd = new Date(now.getTime() + config.reminderLeadDays * DAY_MS);
+  // Filter channel eligibility before LIMIT so captures awaiting consent cannot
+  // starve newer reminders. Consent is still rechecked under the patient lock.
   const captures = await withPlatformDb((db) =>
     db.$queryRaw<DueCapture[]>(Prisma.sql`
       SELECT capture."id", capture."organizationId", capture."branchId", capture."patientId",
@@ -150,6 +152,29 @@ export async function processDueWhatsAppRefillReminders(
         ON fill."organizationId" = capture."organizationId" AND fill."id" = capture."prescriptionFillId"
       JOIN "pharmacy_prescription_lines" line
         ON line."organizationId" = fill."organizationId" AND line."id" = fill."prescriptionLineId"
+      JOIN "pharmacy_customers" customer
+        ON customer."organizationId" = capture."organizationId" AND customer."patientId" = capture."patientId"
+      LEFT JOIN LATERAL (
+        SELECT consent.granted AND consent."revokedAt" IS NULL AND consent."recordedAt" <= ${now} AS allowed
+        FROM "pharmacy_patient_consents" consent
+        WHERE consent."organizationId" = capture."organizationId" AND consent."patientId" = capture."patientId"
+          AND consent.purpose = 'REMINDERS' AND consent.channel = 'WHATSAPP'
+        ORDER BY consent.version DESC LIMIT 1
+      ) whatsapp_consent ON true
+      LEFT JOIN LATERAL (
+        SELECT consent.granted AND consent."revokedAt" IS NULL AND consent."recordedAt" <= ${now} AS allowed
+        FROM "pharmacy_patient_consents" consent
+        WHERE consent."organizationId" = capture."organizationId" AND consent."patientId" = capture."patientId"
+          AND consent.purpose = 'REMINDERS' AND consent.channel = 'SMS'
+        ORDER BY consent.version DESC LIMIT 1
+      ) sms_consent ON true
+      CROSS JOIN LATERAL (
+        SELECT EXISTS (
+          SELECT 1 FROM "pharmacy_message_logs" log
+          WHERE log."organizationId" = capture."organizationId" AND log."refillCaptureId" = capture.id
+            AND log."channel" = 'WHATSAPP' AND log."status" = 'FAILED'
+        ) AS failed
+      ) whatsapp_delivery
       WHERE capture."channel" IN ('WHATSAPP', 'SMS')
         AND (capture."organizationId" = ${whatsappConfigured ? config.organizationId : null}
           OR capture."organizationId" = ${smsConfigured ? smsConfig.organizationId : null})
@@ -157,6 +182,17 @@ export async function processDueWhatsAppRefillReminders(
           OR capture."organizationId" = ${smsConfigured ? smsConfig.organizationId : null})
         AND capture."expectedExhaustionAt" > ${now}
         AND capture."expectedExhaustionAt" <= ${windowEnd}
+        AND customer.active = true
+        AND (
+          (capture."channel" = 'WHATSAPP'
+            AND capture."organizationId" = ${whatsappConfigured ? config.organizationId : null}
+            AND customer."whatsappOptIn" IS TRUE AND whatsapp_consent.allowed IS TRUE
+            AND NOT whatsapp_delivery.failed)
+          OR (capture."organizationId" = ${smsConfigured ? smsConfig.organizationId : null}
+            AND customer."smsOptIn" IS DISTINCT FROM false AND sms_consent.allowed IS TRUE
+            AND (capture."channel" = 'SMS' OR customer."whatsappOptIn" IS NOT TRUE
+              OR whatsapp_consent.allowed IS NOT TRUE OR whatsapp_delivery.failed))
+        )
         AND NOT EXISTS (
           SELECT 1 FROM "pharmacy_message_logs" log
           WHERE log."organizationId" = capture."organizationId"

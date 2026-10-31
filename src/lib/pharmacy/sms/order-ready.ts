@@ -142,7 +142,7 @@ export async function notifyOrderReadyBySms(input: {
 /**
  * Ready orders are the durable backlog for quiet hours and pre-claim failures.
  * Run from the existing reminder scheduler; completed/cancelled orders and any
- * claimed SMS are excluded. Reuse the ready event's staff identity for RLS and
+ * claimed SMS are excluded. Use a current authorized staff reader for RLS and
  * recheck all eligibility in notifyOrderReadyBySms before claiming or sending.
  */
 export async function processDeferredOrderReadySms(
@@ -161,7 +161,8 @@ export async function processDeferredOrderReadySms(
   const limit = Math.max(1, Math.min(500, Math.floor(options.limit ?? 100)));
   // Order RLS deliberately has no platform-admin bypass. Discover a current
   // pharmacy staff reader, then scan under that tenant/user rather than widening
-  // the order policies for this job. The sender still uses the ready actor.
+  // the order policies for this job. Use this current reader for sending too;
+  // the ready event's actor may have been deactivated or lost permission.
   const readers = await withPlatformDb((db) => db.$queryRaw<Array<{ id: string }>>(Prisma.sql`
     SELECT actor.id FROM users actor
     JOIN organization_roles role
@@ -183,13 +184,13 @@ export async function processDeferredOrderReadySms(
   const reader = readers[0];
   if (!reader) return { scanned: 0, outcomes: [] };
   const orders = await withTenantDb(organizationId, (db) =>
-    db.$queryRaw<Array<{ orderId: string; branchId: string; actorUserId: string }>>(Prisma.sql`
-    SELECT orders.id AS "orderId", orders."branchId", ready."actorUserId"
+    db.$queryRaw<Array<{ orderId: string; branchId: string }>>(Prisma.sql`
+    SELECT orders.id AS "orderId", orders."branchId"
     FROM pharmacy_customer_orders orders
     JOIN pharmacy_customers customer
       ON customer."organizationId" = orders."organizationId" AND customer.id = orders."customerId"
     JOIN LATERAL (
-      SELECT event."actorUserId" FROM pharmacy_customer_order_events event
+      SELECT event.id FROM pharmacy_customer_order_events event
       WHERE event."organizationId" = orders."organizationId" AND event."orderId" = orders.id
         AND event."branchId" = orders."branchId" AND event.kind = 'READY_FOR_COLLECTION'
       ORDER BY event."occurredAt" DESC, event.id DESC LIMIT 1
@@ -230,6 +231,7 @@ export async function processDeferredOrderReadySms(
         await notifyOrderReadyBySms({
           organizationId,
           ...order,
+          actorUserId: reader.id,
           now,
           smsConfig,
           smsProvider: options.smsProvider,
