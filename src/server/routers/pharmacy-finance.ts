@@ -169,9 +169,16 @@ const allocation = z.object({
 });
 
 export const pharmacyFinanceRouter = router({
-  cashFlowForecast: ledgerReportProcedure
-    .input(cashFlowForecastInput)
-    .query(({ input }) => forecastPharmacyCashFlow(input)),
+  cashFlowForecast: ledgerReportProcedure.input(cashFlowForecastInput).query(({ input }) => {
+    try {
+      return forecastPharmacyCashFlow(input);
+    } catch (error) {
+      if (error instanceof RangeError) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
+      }
+      throw error;
+    }
+  }),
   financialStatements: ledgerReportProcedure
     .input(reportPeriod.safeExtend({ page: z.number().int().min(1).max(10000).default(1) }))
     .query(async ({ ctx, input }) => ({

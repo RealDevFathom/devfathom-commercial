@@ -84,12 +84,25 @@ describe('30/60/90 pharmacy cash-flow forecast', () => {
   });
 
   it('preserves the configured reserve but never pushes a payment past its due date', () => {
-    const result = forecastPharmacyCashFlow({ ...fixture, openingCashMinor: 300_000 });
+    const result = forecastPharmacyCashFlow({ ...fixture, openingCashMinor: 290_000 });
     expect(result.payablesSchedule.find((item) => item.id === 'discounted')).toMatchObject({
       scheduledDate: '2026-12-28',
       recommendation: 'PAY_ON_DUE_DATE',
       reason: 'CASH_RESERVE',
     });
+  });
+
+  it.each([
+    { openingCashMinor: 292_000, recommendation: 'PAY_EARLY' },
+    { openingCashMinor: 291_999, recommendation: 'PAY_ON_DUE_DATE' },
+  ])('checks the exact reserve boundary with opening cash $openingCashMinor', (change) => {
+    const result = forecastPharmacyCashFlow({
+      ...fixture,
+      openingCashMinor: change.openingCashMinor,
+    });
+    expect(result.payablesSchedule.find((item) => item.id === 'discounted')?.recommendation).toBe(
+      change.recommendation
+    );
   });
 
   it('rejects invalid early-payment terms', () => {
@@ -107,5 +120,64 @@ describe('30/60/90 pharmacy cash-flow forecast', () => {
         ],
       })
     ).toThrow(/before dueDate/);
+  });
+
+  it.each(['2026-11-03', '2026-11-08'])(
+    'reserves cash for a bill due %s before accelerating another payment',
+    (dueDate) => {
+      const result = forecastPharmacyCashFlow({
+        ...fixture,
+        openingCashMinor: 1_000,
+        minimumCashReserveMinor: 100,
+        salesCashEstimates: [],
+        khataCollectionEstimates: [],
+        payables: [
+          { id: 'other-bill', dueDate, amountMinor: 850 },
+          {
+            id: 'discounted',
+            dueDate: '2026-11-18',
+            earlyPayDate: '2026-11-03',
+            amountMinor: 100,
+            earlyPayDiscountBps: 1_000,
+          },
+        ],
+      });
+      expect(result.payablesSchedule.find((item) => item.id === 'discounted')).toMatchObject({
+        scheduledDate: '2026-11-18',
+        recommendation: 'PAY_ON_DUE_DATE',
+        reason: 'CASH_RESERVE',
+      });
+    }
+  );
+
+  it('uses realized discount savings when assessing a later early payment', () => {
+    const result = forecastPharmacyCashFlow({
+      ...fixture,
+      openingCashMinor: 1_000,
+      minimumCashReserveMinor: 100,
+      salesCashEstimates: [],
+      khataCollectionEstimates: [],
+      payables: [
+        {
+          id: 'first',
+          dueDate: '2026-11-18',
+          earlyPayDate: '2026-11-03',
+          amountMinor: 600,
+          earlyPayDiscountBps: 5_000,
+        },
+        {
+          id: 'second',
+          dueDate: '2026-11-28',
+          earlyPayDate: '2026-11-20',
+          amountMinor: 500,
+          earlyPayDiscountBps: 1_000,
+        },
+      ],
+    });
+    expect(result.payablesSchedule.map((item) => item.recommendation)).toEqual([
+      'PAY_EARLY',
+      'PAY_EARLY',
+    ]);
+    expect(result.windows[0].closingCashMinor).toBe(250);
   });
 });

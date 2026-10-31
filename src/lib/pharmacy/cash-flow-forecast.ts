@@ -112,22 +112,7 @@ export function forecastPharmacyCashFlow(input: CashFlowForecastInput) {
       dateMs(a.dueDate, `${a.id} dueDate`) - dateMs(b.dueDate, `${b.id} dueDate`) ||
       a.id.localeCompare(b.id)
   );
-  const decisions: PayableDecision[] = [];
-  const projectedCashAt = (atMs: number) => {
-    const received = sum(
-      [...inflows]
-        .filter(([date]) => dateMs(date, 'inflow date') <= atMs)
-        .map(([, amount]) => amount)
-    );
-    const scheduled = sum(
-      decisions
-        .filter((decision) => dateMs(decision.scheduledDate, 'scheduledDate') <= atMs)
-        .map((decision) => decision.scheduledAmountMinor)
-    );
-    return sum([input.openingCashMinor, received, -scheduled]);
-  };
-
-  for (const payable of orderedPayables) {
+  const validatedPayables = orderedPayables.map((payable) => {
     integer(payable.amountMinor, `${payable.id} amountMinor`, 1);
     integer(payable.earlyPayDiscountBps ?? 0, `${payable.id} earlyPayDiscountBps`);
     if ((payable.earlyPayDiscountBps ?? 0) > BPS)
@@ -139,7 +124,28 @@ export function forecastPharmacyCashFlow(input: CashFlowForecastInput) {
       : null;
     if (earlyMs !== null && (earlyMs <= originMs || earlyMs >= dueMs))
       throw new RangeError(`${payable.id} earlyPayDate must be after asOfDate and before dueDate`);
+    return { payable, dueMs, earlyMs };
+  });
 
+  // Start with every bill paid on its due date. Accelerating a payment must
+  // preserve the reserve throughout the interval before that due date, not
+  // just on the early-payment date. Later decisions use the updated balances.
+  const cashEvents = new Map<number, number>();
+  for (const [date, amount] of inflows) cashEvents.set(dateMs(date, 'inflow date'), amount);
+  for (const { payable, dueMs, earlyMs } of validatedPayables) {
+    cashEvents.set(dueMs, sum([cashEvents.get(dueMs) ?? 0, -payable.amountMinor]));
+    if (earlyMs !== null && !cashEvents.has(earlyMs)) cashEvents.set(earlyMs, 0);
+  }
+  const eventDates = [...cashEvents.keys()].sort((a, b) => a - b);
+  const dateIndex = new Map(eventDates.map((date, index) => [date, index]));
+  let cash = input.openingCashMinor;
+  const cashByDate = eventDates.map((date) => {
+    cash = sum([cash, cashEvents.get(date)!]);
+    return cash;
+  });
+  const decisions: PayableDecision[] = [];
+
+  for (const { payable, dueMs, earlyMs } of validatedPayables) {
     const discountSavingMinor = multiplyDivide(
       payable.amountMinor,
       payable.earlyPayDiscountBps ?? 0,
@@ -155,10 +161,22 @@ export function forecastPharmacyCashFlow(input: CashFlowForecastInput) {
       earlyDays
     );
     const economical = earlyMs !== null && discountSavingMinor > keepCashCostMinor;
+    const earlyIndex = earlyMs === null ? null : dateIndex.get(earlyMs)!;
+    const dueIndex = dateIndex.get(dueMs)!;
     const affordable =
-      earlyMs !== null &&
-      projectedCashAt(earlyMs) - discountedAmount >= input.minimumCashReserveMinor;
+      economical &&
+      cashByDate
+        .slice(earlyIndex!, dueIndex)
+        .every((balance) => balance - discountedAmount >= input.minimumCashReserveMinor);
     const payEarly = economical && affordable;
+    if (payEarly) {
+      for (let index = earlyIndex!; index < cashByDate.length; index++) {
+        cashByDate[index] = sum([
+          cashByDate[index],
+          index < dueIndex ? -discountedAmount : discountSavingMinor,
+        ]);
+      }
+    }
     const scheduledMs = payEarly ? earlyMs! : dueMs;
     decisions.push({
       id: payable.id,
