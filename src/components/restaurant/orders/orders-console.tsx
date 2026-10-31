@@ -137,7 +137,10 @@ export function OrdersConsole() {
     { branchId: normalizedBranchId },
     { enabled: listEnabled }
   );
-  const devicesQuery = trpc.restaurantDevices.list.useQuery(undefined, { enabled: listEnabled });
+  const devicesQuery = trpc.restaurantOrders.listCancellationDevices.useQuery(
+    { branchId: normalizedBranchId },
+    { enabled: listEnabled }
+  );
   const listInput = {
     branchId: normalizedBranchId,
     ...(businessDate ? { businessDate } : {}),
@@ -197,12 +200,23 @@ export function OrdersConsole() {
     const form = event.currentTarget;
     const data = new FormData(form);
     const wastageDisposition = text(data, 'wastageDisposition') as Disposition | '';
+    const approvingStaffProfileId = text(data, 'approvingStaffProfileId') || null;
     setCancelError('');
+    if (approvingStaffProfileId && !text(data, 'approvingSecret')) {
+      setCancelError('The approving manager must provide their PIN or badge.');
+      return;
+    }
     cancel.mutate({
       orderId: selectedOrderId,
       reason: text(data, 'reason'),
       ...(wastageDisposition ? { wastageDisposition } : {}),
-      approvingStaffProfileId: text(data, 'approvingStaffProfileId') || null,
+      approvingStaffProfileId,
+      ...(approvingStaffProfileId
+        ? {
+            approvingType: text(data, 'approvingType') as 'PIN' | 'BADGE',
+            approvingSecret: String(data.get('approvingSecret') ?? ''),
+          }
+        : {}),
       actor: {
         staffProfileId: text(data, 'staffProfileId'),
         deviceId: text(data, 'deviceId'),
@@ -457,7 +471,10 @@ export function OrdersConsole() {
           if (!cancel.isPending) setCancelOpen(open);
         }}
       >
-        <DialogContent showCloseButton={false} className="sm:max-w-lg">
+        <DialogContent
+          showCloseButton={false}
+          className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg"
+        >
           <form className="space-y-4" onSubmit={submitCancellation}>
             <DialogHeader>
               <DialogTitle>
@@ -518,11 +535,37 @@ export function OrdersConsole() {
                 />
               </Field>
             </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label="Approving credential type">
+                <select name="approvingType" defaultValue="PIN" className={selectClass}>
+                  <option value="PIN">PIN</option>
+                  <option value="BADGE">Badge</option>
+                </select>
+              </Field>
+              <Field label="Approving PIN or badge secret">
+                <Input
+                  name="approvingSecret"
+                  type="password"
+                  autoComplete="new-password"
+                  maxLength={256}
+                  aria-invalid={cancelError ? true : undefined}
+                  aria-describedby={cancelError ? 'order-cancel-error' : undefined}
+                  className="h-11"
+                />
+              </Field>
+            </div>
+            <p className="text-xs text-text-muted">
+              Prepared items require a distinct manager to approve with their own PIN or badge.
+            </p>
             <p className="text-xs text-text-muted">
               A fresh device-scoped idempotency key is generated in this browser when submitted.
             </p>
             {cancelError ? (
-              <p role="alert" className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+              <p
+                id="order-cancel-error"
+                role="alert"
+                className="rounded-md bg-destructive/10 p-3 text-sm text-destructive"
+              >
                 {cancelError}
               </p>
             ) : null}

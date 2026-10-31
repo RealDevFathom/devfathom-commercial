@@ -39,6 +39,7 @@ export const ALL_ACTIONS = [
   // second-merged lane realigns — same adjacency rule as the other coordinated files).
   'orders:read', // restaurant M4-L2: order-read gate (org-role driven)
   'orders:manage', // restaurant M4-L2: order back-office mutation gate (org-role driven)
+  'orders:void', // restaurant: order cancellation (explicit org-role grant)
   'catering:read',
   'catering:manage',
   'money:read', // restaurant M5-L1: back-office money reads (bills/tenders/refunds/drawers/close) — org-role driven
@@ -167,6 +168,7 @@ export const POLICIES: Record<Action, Policy[]> = {
   'floor:manage': [],
   'orders:read': [],
   'orders:manage': [],
+  'orders:void': [],
   'catering:read': [],
   'catering:manage': [],
 
