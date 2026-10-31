@@ -47,9 +47,11 @@ export default async function ShelfLabelsPage({ searchParams }: {
   } catch (cause) {
     error = cause instanceof TRPCError && ['FORBIDDEN', 'UNAUTHORIZED'].includes(cause.code)
       ? 'Pharmacy inventory permission, an enabled Inventory module and an active branch are required. Ask your workspace administrator for access.'
-      : cause instanceof TRPCError && cause.code === 'NOT_FOUND'
-        ? 'This posted GRN is not available in the selected branch. Return to Goods in and select a posted receipt.'
-        : 'Labels could not be loaded. Check the filters and retry; no stock or prices have changed.';
+      : cause instanceof TRPCError && cause.code === 'CONFLICT'
+        ? cause.message
+        : cause instanceof TRPCError && cause.code === 'NOT_FOUND'
+          ? 'This posted GRN is not available in the selected branch. Return to Goods in and select a posted receipt.'
+          : 'Labels could not be loaded. Check the filters and retry; no stock or prices have changed.';
   }
   return <main className="min-w-0 space-y-6">
     <PageHeader eyebrow="Pharmacy / inventory" heading="Shelf and price labels" description="Print lot-specific prices for legacy packs and loose stock; scan a label at the counter to select its lot." />

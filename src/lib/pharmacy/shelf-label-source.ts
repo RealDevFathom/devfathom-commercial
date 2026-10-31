@@ -132,6 +132,24 @@ export async function readShelfLabelSources(
   }
   const page = requested ? lots : lots.slice(0, SHELF_LABEL_PAGE_SIZE);
 
+  // Legacy manufacturer/internal registrations can use these numeric strings.
+  // Refuse ambiguous labels rather than print a code that scans as another medicine.
+  if (page.length) {
+    const collision = await db.medicineBarcode.findFirst({
+      where: {
+        organizationId: scope.organizationId,
+        normalizedCode: { in: page.map((lot) => shelfLabelCode(lot.shelfLabelNumber)) },
+      },
+      select: { id: true },
+    });
+    if (collision) {
+      throw new TRPCError({
+        code: 'CONFLICT',
+        message: 'A shelf label code is already registered as a medicine barcode. Resolve the registered barcode before printing this lot.',
+      });
+    }
+  }
+
   const recordCache = new Map<string, Promise<number | null>>();
   const priceRecord = (packLevelId: string) => {
     let current = recordCache.get(packLevelId);

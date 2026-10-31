@@ -74,6 +74,7 @@ import {
 } from '@/lib/pharmacy/temperature-log';
 
 import {
+  assertModuleLicensed,
   auditedProtectedProcedure,
   capabilityProcedure,
   protectedProcedure,
@@ -89,6 +90,11 @@ const regulatory = capabilityProcedure('pharmacy:safety');
 // Storage zones and their cold-chain readings belong to whoever runs the stock
 // (the Inventory role, or `pharmacy:*`). Checked through `can()` before any read.
 const inventoryControl = capabilityProcedure('pharmacy:inventory');
+// RSCs call this child router directly, without a namespaced procedure path.
+const shelfLabelControl = inventoryControl.use(({ ctx, next }) => {
+  assertModuleLicensed(ctx, 'pharmacy-inventory');
+  return next();
+});
 const drapNotice = z.discriminatedUnion('kind', [
   z
     .object({
@@ -571,7 +577,7 @@ export const pharmacyInventoryRouter = router({
   // ── #719 — shelf and price labels for unbarcoded or loose stock ───────────
 
   /** Active branches a label run may be printed for. */
-  shelfLabelBranches: inventoryControl.query(async ({ ctx }) => {
+  shelfLabelBranches: shelfLabelControl.query(async ({ ctx }) => {
     const { organizationId } = actorFor(ctx);
     return ctx.db.pharmacyBranch.findMany({
       where: { organizationId, active: true },
@@ -581,7 +587,7 @@ export const pharmacyInventoryRouter = router({
   }),
 
   /** Received lots from a posted GRN, the medicine list, or a search. */
-  shelfLabelLots: inventoryControl
+  shelfLabelLots: shelfLabelControl
     .input(
       z
         .object({
@@ -601,7 +607,7 @@ export const pharmacyInventoryRouter = router({
    * from the client; name, strength, MRP, expiry and barcode are re-read here.
    * Nothing in stock or pricing changes; the print run is audited.
    */
-  printShelfLabels: inventoryControl
+  printShelfLabels: shelfLabelControl
     .input(
       z
         .object({

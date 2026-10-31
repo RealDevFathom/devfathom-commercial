@@ -45,6 +45,7 @@ function makeDb(options: {
   const findMany = vi.fn().mockResolvedValue(options.lots ?? []);
   return {
     db: {
+      medicineBarcode: { findFirst: vi.fn().mockResolvedValue(null) },
       pharmacyGoodsReceipt: { findFirst: vi.fn().mockResolvedValue(options.receipt ?? null) },
       pharmacyInventoryLot: { findMany },
       pharmacyPackPrice: { findFirst: vi.fn().mockResolvedValue(options.price ?? null) },
@@ -156,6 +157,17 @@ describe('#719 shelf-label source', () => {
     const where = findMany.mock.calls[0]![0].where;
     expect(where.shelfLabelNumber).toBe(7);
     expect(where.OR).toBeUndefined();
+  });
+
+  it('refuses to print a shelf code already owned by a registered barcode', async () => {
+    const { db } = makeDb({ lots: [lot('lot_1')] });
+    vi.mocked(db.medicineBarcode.findFirst).mockResolvedValue({ id: 'legacy' } as never);
+    await expect(readShelfLabelSources(db, scope, { inventoryLotIds: ['lot_1'] }, AT))
+      .rejects.toMatchObject({ code: 'CONFLICT' });
+    expect(db.medicineBarcode.findFirst).toHaveBeenCalledWith({
+      where: { organizationId: 'org_a', normalizedCode: { in: [shelfLabelCode(7)] } },
+      select: { id: true },
+    });
   });
 
   it('pages the medicine list 100 lots at a time', async () => {

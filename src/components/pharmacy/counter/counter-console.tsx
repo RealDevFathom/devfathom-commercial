@@ -851,7 +851,11 @@ function ScopedPharmacyCounterConsole({
     setActiveRow(row);
     setQuantity(1);
     setSaleUnit(row.saleUnits[0]?.kind ?? null);
-    setLotOverride(null);
+    setLotOverride(
+      row.labelLotId && row.labelLotId !== row.recommendedLotId
+        ? { inventoryLotId: row.labelLotId, reason: '' }
+        : null
+    );
   }, []);
 
   const ensureSale = useCallback(async () => {
@@ -880,6 +884,7 @@ function ScopedPharmacyCounterConsole({
         return;
       }
       const overrideLotId = batchOverride?.inventoryLotId ?? null;
+      const labelLotId = row.labelLotId ?? undefined;
       if (overrideLotId && !batchOverride?.reason.trim()) {
         setNotice({ tone: 'warning', message: 'Enter a reason before selling a non-FEFO batch.' });
         return;
@@ -939,9 +944,10 @@ function ScopedPharmacyCounterConsole({
           saleUnit: option.kind,
           quantity: units,
           canonicalUnitsPerSaleUnit: option.canonicalUnitsPerSaleUnit,
+          ...(labelLotId ? { labelLotId } : {}),
           // A stable key per (sale, medicine, unit, quantity) so a double-press of
           // the add chord cannot post the same line twice.
-          idempotencyKey: `counter:${activeSaleId}:${row.medicineId}:${option.packLevelId}:${option.kind}:${units}${overrideLotId ? `:${overrideLotId}` : ''}`,
+          idempotencyKey: `counter:${activeSaleId}:${row.medicineId}:${option.packLevelId}:${option.kind}:${units}${labelLotId || overrideLotId ? `:${labelLotId ?? overrideLotId}` : ''}`,
           ...(overrideLotId && batchOverride
             ? {
                 override: {
@@ -1017,12 +1023,11 @@ function ScopedPharmacyCounterConsole({
       );
       if (search.revision !== scannerRevision.current || result.rows.length !== 1) return;
       const row = result.rows[0]!;
-      // #719: a shelf label names one exact lot. When FEFO would draw another,
-      // stage the labelled batch as an override; the pharmacist still records why.
+      // Every label scan replaces the previous selection, even for the same
+      // medicine and sale unit. Pass the fresh row to avoid stale React state.
+      if (row.labelLotId) stageRow(row);
       const labelLotId = row.labelLotId ?? null;
       if (labelLotId && labelLotId !== row.recommendedLotId) {
-        stageRow(row);
-        setLotOverride({ inventoryLotId: labelLotId, reason: '' });
         setNotice({
           tone: 'warning',
           message:
@@ -1031,8 +1036,11 @@ function ScopedPharmacyCounterConsole({
         return;
       }
       const restage =
-        activeRow?.medicineId !== row.medicineId || saleUnit !== (row.saleUnits[0]?.kind ?? null);
-      if (restage) stageRow(row);
+        Boolean(labelLotId) ||
+        Boolean(activeRow?.labelLotId) ||
+        activeRow?.medicineId !== row.medicineId ||
+        saleUnit !== (row.saleUnits[0]?.kind ?? null);
+      if (restage && !labelLotId) stageRow(row);
       const scanPreview = restage
         ? counterSelectionPreview(row, row.saleUnits[0] ?? null, 1)
         : preview;
@@ -2054,7 +2062,16 @@ function ScopedPharmacyCounterConsole({
                   }
                   error={lotOptionsQuery.error ? messageFrom(lotOptionsQuery.error) : null}
                   disabled={busy}
-                  onChange={setLotOverride}
+                  onChange={(value) => {
+                    if (
+                      activeRow.labelLotId &&
+                      value?.inventoryLotId !== activeRow.labelLotId &&
+                      activeRow.fefoSelection
+                    ) {
+                      stageRow(activeRow.fefoSelection);
+                    }
+                    setLotOverride(value);
+                  }}
                   onRetry={() => void lotOptionsQuery.refetch()}
                 />
               </div>

@@ -1,7 +1,8 @@
 /**
  * #719 internal lot barcode: `71` + the lot's 14-digit zero-padded shelf-label
- * number. Sixteen digits is never a GTIN length (8/12/13/14), so a label can
- * not be mistaken for a manufacturer code, and it encodes as Code128 set C.
+ * number. Sixteen digits is never a GTIN length (8/12/13/14) and encodes as
+ * Code128 set C. Legacy registered codes may share this format: the registry
+ * retains precedence, and conflicting shelf labels must not be printed.
  */
 const SHELF_LABEL_CODE = /^71\d{14}$/;
 const MAX_LABEL_NUMBER = 2_147_483_647; // Postgres SERIAL ceiling.

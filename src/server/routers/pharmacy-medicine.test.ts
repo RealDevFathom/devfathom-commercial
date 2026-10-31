@@ -39,6 +39,7 @@ function makeDb() {
     presentation: model(),
     packLevel: model(),
     medicinePackMrp: model(),
+    medicineBarcode: model(),
   };
   return Object.assign(db, {
     $transaction: vi.fn(async (fn: (tx: typeof db) => unknown) => fn(db)),
@@ -93,6 +94,21 @@ describe('pharmacy medicine tenant and entitlement boundaries', () => {
       })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(db.packLevel.create).not.toHaveBeenCalled();
+  });
+
+  it.each(['MANUFACTURER', 'INTERNAL', 'GTIN'] as const)(
+    'reserves the shelf-label namespace for new %s barcode registrations', async (type) => {
+      await expect(caller().addBarcode({
+        presentationId: 'presentation-a', type, code: '7100000000000041',
+      })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      expect(db.medicineBarcode.create).not.toHaveBeenCalled();
+    }
+  );
+
+  it('keeps ordinary manufacturer barcode registration available', async () => {
+    await expect(caller().addBarcode({
+      presentationId: 'presentation-a', type: 'MANUFACTURER', code: 'maker-41',
+    })).resolves.toMatchObject({ normalizedCode: 'maker41' });
   });
 
   it('maps the public router prefix to the pharmacy-core entitlement', () => {

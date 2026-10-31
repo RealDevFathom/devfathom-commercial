@@ -63,9 +63,9 @@ export type CounterSearchRow = {
   printedMrpMinor: number | null;
   roundingIncrementMinor: number;
   batchNumber: string | null;
-  /** ISO instant of the nearest SAFE expiry; null when nothing is sellable. */
+  /** Selected lot expiry; ordinarily the nearest SAFE expiry chosen by FEFO. */
   nearestSafeExpiry: string | null;
-  /** Safe canonical units on hand for this branch (blocked stock excluded). */
+  /** Safe units in the scanned lot, or across the branch for ordinary searches. */
   onHandUnits: number;
   /** The saleable arrangement, per available sale unit (POS-02). */
   saleableUnits: Array<{
@@ -87,10 +87,10 @@ export type CounterSearchRow = {
   };
   storage: {
     coldChain: boolean;
-    /** The location kind holding the recommended lot, for the shelf marker. */
+    /** The location kind holding the selected lot, for the shelf marker. */
     locationKind: string | null;
     locationCode: string | null;
-    /** Actual location name for the recommended FEFO lot; never inferred. */
+    /** Actual location name for the selected lot; never inferred. */
     locationName?: string | null;
   };
   /** Why otherwise-present stock cannot be sold, deduplicated (INV-03). */
@@ -100,6 +100,8 @@ export type CounterSearchRow = {
    * Absent for every other kind of search.
    */
   labelLotId?: string | null;
+  /** The ordinary FEFO selection, restored when an operator leaves a label selection. */
+  fefoSelection?: Omit<CounterSearchRow, 'fefoSelection' | 'labelLotId'>;
 };
 
 type LotRow = {
@@ -110,6 +112,8 @@ type LotRow = {
   receivedAt: Date | null;
   batch: { batchNumber: string; expiresAt: Date; state: string; medicineId: string };
 };
+
+type LotSelection = { lot: LotRow; locationId: string };
 
 type BalanceRow = {
   inventoryLotId: string;
@@ -266,13 +270,20 @@ export async function searchCounterCatalog(
 ): Promise<{ rows: CounterSearchRow[]; truncated: boolean }> {
   const limit = Math.min(Math.max(input.limit ?? DEFAULT_LIMIT, 1), MAX_LIMIT);
   const at = input.at ?? new Date();
-  // #719: an internal shelf label resolves to one lot of this branch and wins
-  // outright, exactly like a manufacturer barcode; it never falls back to a
-  // fuzzy search, and a label from another branch or tenant matches nothing.
+  // Existing registered codes retain precedence, including codes that happen
+  // to use the shelf-label format. Unregistered labels never fall back to fuzzy search.
   const labelNumber = parseShelfLabelCode(input.query);
   let labelLot: { id: string; medicineId: string } | null = null;
   let matches: Map<string, CounterMatchKind>;
-  if (labelNumber !== null) {
+  const registered = labelNumber !== null
+    ? await db.medicineBarcode.findFirst({
+        where: { organizationId: scope.organizationId, normalizedCode: normalizeMedicineText(input.query) },
+        select: { presentation: { select: { medicineId: true } } },
+      })
+    : null;
+  if (registered) {
+    matches = new Map([[registered.presentation.medicineId, 'BARCODE']]);
+  } else if (labelNumber !== null) {
     const lot = await db.pharmacyInventoryLot.findFirst({
       where: {
         organizationId: scope.organizationId,
@@ -396,7 +407,10 @@ export async function searchCounterCatalog(
 
     let onHandUnits = 0;
     const blocked = new Set<BlockReason>();
-    let best: { lot: LotRow; locationId: string } | null = null;
+    const labelledBlocked = new Set<BlockReason>();
+    let best: LotSelection | null = null;
+    let labelled: LotSelection | null = null;
+    let labelledUnits = 0;
 
     for (const lot of medicineLots) {
       for (const balance of balancesByLot.get(lot.id) ?? []) {
@@ -404,106 +418,131 @@ export async function searchCounterCatalog(
         const reason = blockReasonFor(candidate, scope_);
         if (reason !== null) {
           // EMPTY is an exhausted bucket, not a condition an operator acts on.
-          if (reason !== 'EMPTY') blocked.add(reason);
+          if (reason !== 'EMPTY') {
+            blocked.add(reason);
+            if (lot.id === labelLot?.id) labelledBlocked.add(reason);
+          }
           continue;
         }
         onHandUnits += balance.onHandUnits;
+        if (lot.id === labelLot?.id) {
+          labelled = { lot, locationId: balance.stockLocationId };
+          labelledUnits += balance.onHandUnits;
+        }
         const better =
           best === null ||
           lot.batch.expiresAt.getTime() < best.lot.batch.expiresAt.getTime() ||
           (lot.batch.expiresAt.getTime() === best.lot.batch.expiresAt.getTime() &&
-            lot.id.localeCompare(best.lot.id) < 0);
+            ((lot.receivedAt?.getTime() ?? 0) < (best.lot.receivedAt?.getTime() ?? 0) ||
+              ((lot.receivedAt?.getTime() ?? 0) === (best.lot.receivedAt?.getTime() ?? 0) &&
+                lot.id.localeCompare(best.lot.id) < 0)));
         if (better) best = { lot, locationId: balance.stockLocationId };
       }
     }
 
-    const presentationId =
-      (best && presentationByPackLevel.get(best.lot.packLevelId)) ??
-      medicine.presentations[0]?.id ??
-      null;
-    if (!presentationId) continue;
-    const presentation =
-      medicine.presentations.find((entry) => entry.id === presentationId) ??
-      medicine.presentations[0]!;
+    const buildRow = (selection: LotSelection | null, availableUnits: number): CounterSearchRow | null => {
+      const presentationId =
+        (selection && presentationByPackLevel.get(selection.lot.packLevelId)) ??
+        medicine.presentations[0]?.id ??
+        null;
+      if (!presentationId) return null;
+      const presentation =
+        medicine.presentations.find((entry) => entry.id === presentationId) ??
+        medicine.presentations[0]!;
 
-    let saleUnits: SaleUnitOption[] = [];
-    if (best) {
-      try {
-        saleUnits = saleUnitOptions({
-          packLevels: packLevelsByPresentation.get(presentationId) ?? [],
-          rootPackLevelId: best.lot.packLevelId,
-          unitsPerPack: best.lot.unitsPerPack,
-        });
-      } catch {
-        // A pack hierarchy that disagrees with the received lot cannot be
-        // priced. The row still reports stock, but offers no sale unit rather
-        // than quoting a price the server would refuse.
-        saleUnits = [];
-      }
-    }
-
-    const roundingIncrementMinor = best ? (roundingByPackLevel.get(best.lot.packLevelId) ?? 1) : 1;
-
-    const saleableUnits = best
-      ? saleUnits.map((option) => {
-          const preview = previewSaleLine({
-            option,
-            quantity: 1,
-            printedMrpMinor: best!.lot.printedMrpMinor,
-            unitsPerPack: best!.lot.unitsPerPack,
-            roundingIncrementMinor,
-            availableUnits: onHandUnits,
+      let saleUnits: SaleUnitOption[] = [];
+      if (selection) {
+        try {
+          saleUnits = saleUnitOptions({
+            packLevels: packLevelsByPresentation.get(presentationId) ?? [],
+            rootPackLevelId: selection.lot.packLevelId,
+            unitsPerPack: selection.lot.unitsPerPack,
           });
-          return {
-            kind: option.kind,
-            levelLabel: option.levelLabel,
-            canonicalUnitsPerSaleUnit: option.canonicalUnitsPerSaleUnit,
-            wholeUnits: Math.floor(onHandUnits / option.canonicalUnitsPerSaleUnit),
-            unitPriceMinor: preview.unitPriceMinor,
-            proRataCeilingMinor: preview.proRataCeilingMinor,
-          };
-        })
-      : [];
+        } catch {
+          // A pack hierarchy that disagrees with the received lot cannot be
+          // priced. The row still reports stock, but offers no sale unit rather
+          // than quoting a price the server would refuse.
+          saleUnits = [];
+        }
+      }
 
-    const location = best ? locationById.get(best.locationId) : undefined;
-    rows.push({
-      medicineId: medicine.id,
-      displayName: medicine.productName,
-      brandName: medicine.brandName,
-      manufacturer: medicine.manufacturer,
-      strength: renderStrength(medicine.strengths),
-      presentationId,
-      presentation: presentation.presentation,
-      dosageForm: presentation.dosageForm,
-      route: presentation.route,
-      matchedOn: matches.get(medicine.id) ?? 'NAME',
-      recommendedLotId: best?.lot.id ?? null,
-      packLevelId: best?.lot.packLevelId ?? null,
-      unitsPerPack: best?.lot.unitsPerPack ?? null,
-      printedMrpMinor: best?.lot.printedMrpMinor ?? null,
-      roundingIncrementMinor,
-      batchNumber: best?.lot.batch.batchNumber ?? null,
-      nearestSafeExpiry: best?.lot.batch.expiresAt.toISOString() ?? null,
-      onHandUnits,
-      saleableUnits,
-      saleUnits,
-      restriction: {
-        rx: medicine.rx,
-        otc: medicine.otc,
-        restricted: medicine.restricted,
-        controlled: medicine.controlled,
-        highAlert: medicine.highAlert,
-        lasa: medicine.lasa,
-      },
-      storage: {
-        coldChain: medicine.coldChain,
-        locationKind: location?.kind ?? null,
-        locationCode: location?.code ?? null,
-        locationName: location?.name ?? null,
-      },
-      blocked: [...blocked].sort(),
-      ...(labelLot && labelLot.medicineId === medicine.id ? { labelLotId: labelLot.id } : {}),
-    });
+      const roundingIncrementMinor = selection
+        ? (roundingByPackLevel.get(selection.lot.packLevelId) ?? 1)
+        : 1;
+
+      const saleableUnits = selection
+        ? saleUnits.map((option) => {
+            const preview = previewSaleLine({
+              option,
+              quantity: 1,
+              printedMrpMinor: selection.lot.printedMrpMinor,
+              unitsPerPack: selection.lot.unitsPerPack,
+              roundingIncrementMinor,
+              availableUnits,
+            });
+            return {
+              kind: option.kind,
+              levelLabel: option.levelLabel,
+              canonicalUnitsPerSaleUnit: option.canonicalUnitsPerSaleUnit,
+              wholeUnits: Math.floor(availableUnits / option.canonicalUnitsPerSaleUnit),
+              unitPriceMinor: preview.unitPriceMinor,
+              proRataCeilingMinor: preview.proRataCeilingMinor,
+            };
+          })
+        : [];
+
+      const location = selection ? locationById.get(selection.locationId) : undefined;
+      return {
+        medicineId: medicine.id,
+        displayName: medicine.productName,
+        brandName: medicine.brandName,
+        manufacturer: medicine.manufacturer,
+        strength: renderStrength(medicine.strengths),
+        presentationId,
+        presentation: presentation.presentation,
+        dosageForm: presentation.dosageForm,
+        route: presentation.route,
+        matchedOn: matches.get(medicine.id) ?? 'NAME',
+        recommendedLotId: best?.lot.id ?? null,
+        packLevelId: selection?.lot.packLevelId ?? null,
+        unitsPerPack: selection?.lot.unitsPerPack ?? null,
+        printedMrpMinor: selection?.lot.printedMrpMinor ?? null,
+        roundingIncrementMinor,
+        batchNumber: selection?.lot.batch.batchNumber ?? null,
+        nearestSafeExpiry: selection?.lot.batch.expiresAt.toISOString() ?? null,
+        onHandUnits: availableUnits,
+        saleableUnits,
+        saleUnits,
+        restriction: {
+          rx: medicine.rx,
+          otc: medicine.otc,
+          restricted: medicine.restricted,
+          controlled: medicine.controlled,
+          highAlert: medicine.highAlert,
+          lasa: medicine.lasa,
+        },
+        storage: {
+          coldChain: medicine.coldChain,
+          locationKind: location?.kind ?? null,
+          locationCode: location?.code ?? null,
+          locationName: location?.name ?? null,
+        },
+        blocked: [...blocked].sort(),
+      };
+    };
+    const fefo = buildRow(best, onHandUnits);
+    if (!fefo) continue;
+    if (labelLot?.medicineId === medicine.id) {
+      const labelledLot = medicineLots.find((lot) => lot.id === labelLot.id);
+      const selected = buildRow(
+        labelled ?? (labelledLot ? { lot: labelledLot, locationId: '' } : null),
+        labelledUnits
+      );
+      if (!selected) continue;
+      rows.push({ ...selected, blocked: [...labelledBlocked].sort(), labelLotId: labelLot.id, fefoSelection: fefo });
+    } else {
+      rows.push(fefo);
+    }
   }
 
   rows.sort(

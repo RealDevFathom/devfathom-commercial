@@ -73,6 +73,7 @@ function makeDb() {
         where.id ? where.id.in.filter((id) => id === 'branch_a').map((id) => ({ id })) : [{ id: 'branch_a', name: 'Main' }]
       ),
     },
+    medicineBarcode: { findFirst: vi.fn().mockResolvedValue(null) },
     pharmacyGoodsReceipt: { findFirst: vi.fn().mockResolvedValue(null) },
     pharmacyInventoryLot: { findMany: vi.fn().mockResolvedValue([lot]) },
     pharmacyPackPrice: { findFirst: vi.fn().mockResolvedValue(null) },
@@ -139,12 +140,17 @@ describe('#719 shelf-label procedures', () => {
     expect(db.pharmacyInventoryLot.findMany).not.toHaveBeenCalled();
   });
 
-  it('requires the Pharmacy Inventory module', async () => {
+  it.each([
+    ['shelfLabelBranches', undefined],
+    ['shelfLabelLots', { branchId: 'branch_a' }],
+    ['printShelfLabels', printInput],
+  ] as const)('%s requires the Pharmacy Inventory module even through a child caller', async (procedure, input) => {
     grant([allow('pharmacy:inventory')]);
-    await expect(caller([]).printShelfLabels(printInput)).rejects.toMatchObject({
+    await expect(caller([])[procedure](input as never)).rejects.toMatchObject({
       code: 'FORBIDDEN',
     });
     expect(db.pharmacyInventoryLot.findMany).not.toHaveBeenCalled();
+    expect(db.pharmacyBranch.findMany).not.toHaveBeenCalled();
   });
 
   it('refuses a branch outside this workspace before reading lots', async () => {

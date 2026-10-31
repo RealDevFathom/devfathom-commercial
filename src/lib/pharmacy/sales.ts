@@ -225,6 +225,7 @@ type AddSaleLineInput = {
   discountMinor?: number;
   approvedByUserId?: string;
   approvalPolicy?: string;
+  labelLotId?: string;
   override?: { inventoryLotId: string; reason: string; approvalPolicy: string };
   idempotencyKey: string;
 };
@@ -288,6 +289,7 @@ async function addSaleLineWithAllocation(
     at: new Date(),
     idempotencyKeyPrefix: `sale:${input.idempotencyKey}`,
     override: input.override,
+    labelLotId: input.labelLotId,
   };
   const allocation = reservation
     ? await allocateReservedForSale(db, scope, allocationInput, input.packLevelId, reservation)
