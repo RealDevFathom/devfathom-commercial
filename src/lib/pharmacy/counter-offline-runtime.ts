@@ -50,6 +50,7 @@ import {
   nextCounterReplay,
   purgeCounterQueue,
   resumeCounterAfterReauth,
+  unsettledCommands,
 } from './counter-command-queue';
 import type {
   CounterCommandInput,
@@ -165,7 +166,9 @@ export class PharmacyCounterRuntime {
       if (
         result.state.queue &&
         (result.state.queue.deviceId !== this.scope.deviceId ||
-          !result.state.queue.commands.every((command) =>
+          // Settled history may refer to retired leases; only replayable work
+          // must still be backed by the counter's current receipt leases.
+          !unsettledCommands(result.state.queue).every((command) =>
             isValidQueuedCounterCommand(result.state.queue!, command)
           ))
       ) {

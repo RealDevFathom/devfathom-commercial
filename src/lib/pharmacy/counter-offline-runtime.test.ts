@@ -426,6 +426,73 @@ describe('PH-OFF OFF-04 — safety lease and recall bulletin', () => {
 });
 
 describe('PH-OFF OFF-01 — reconnect never renumbers an issued receipt', () => {
+  it.each([200, 400])(
+    'recovers pending work after replacing an exhausted lease with settled history (status %s)',
+    async (status) => {
+      const driver = createMemoryDriver();
+      const counter = await readyCounter(driver);
+      for (const receiptNumber of [900, 901, 902]) {
+        expect(await counter.enqueue(cashSale(1, receiptNumber), MATRIX)).toMatchObject({
+          ok: true,
+        });
+        await counter.replay(async () => ({ status, serverRef: `sale_${receiptNumber}` }));
+      }
+      const history = counter.snapshot().queue!.commands;
+      expect(history.map((command) => command.status)).toEqual(
+        Array(3).fill(status === 200 ? 'ACKNOWLEDGED' : 'QUARANTINED')
+      );
+
+      await counter.adoptLeases([
+        { leaseId: 'lease_2', blockStart: 1000, blockEnd: 1002, nextNumber: 1000 },
+      ]);
+      const pending = cashSale(1, 1000);
+      pending.payload.leasedReceipt.leaseId = 'lease_2';
+      expect(await counter.enqueue(pending, MATRIX)).toMatchObject({ ok: true });
+      const persisted = counter.snapshot();
+
+      const restarted = runtime(driver);
+      expect(await restarted.hydrate()).toBe('ready');
+      expect(restarted.snapshot()).toEqual(persisted);
+      const send = vi.fn(async () => ({ status: 200, serverRef: 'sale_1000' }));
+      expect(await restarted.replay(send)).toMatchObject({ state: 'IDLE' });
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(send.mock.calls[0]).toEqual([
+        expect.objectContaining({
+          body: expect.objectContaining({
+            sequence: 4,
+            idempotencyKey: pending.commandId,
+            leasedReceipt: pending.payload.leasedReceipt,
+          }),
+        }),
+      ]);
+      expect(restarted.snapshot().queue!.commands.slice(0, 3)).toEqual(history);
+    }
+  );
+
+  it.each(['PENDING', 'IN_FLIGHT'] as const)(
+    'refuses recovery when a %s command has lost its receipt lease',
+    async (status) => {
+      const driver = createMemoryDriver();
+      const counter = await readyCounter(driver);
+      expect(await counter.enqueue(cashSale(), MATRIX)).toMatchObject({ ok: true });
+      await counter.adoptLeases([
+        { leaseId: 'lease_2', blockStart: 1000, blockEnd: 1002, nextNumber: 1000 },
+      ]);
+      const persisted = counter.snapshot();
+      await driver.write('org_a::branch_a::counter_1', {
+        ...persisted,
+        queue: {
+          ...persisted.queue,
+          commands: persisted.queue!.commands.map((command) => ({ ...command, status })),
+        },
+      });
+
+      const restarted = runtime(driver);
+      expect(await restarted.hydrate()).toBe('unrecoverable');
+      expect(restarted.snapshot().queue?.commands).toEqual([]);
+    }
+  );
+
   it.each([null, 200, 400])(
     'refuses a reused command id after reload (replay status %s)',
     async (status) => {
