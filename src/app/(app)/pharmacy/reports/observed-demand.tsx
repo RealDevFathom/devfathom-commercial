@@ -61,7 +61,9 @@ export function ObservedDemand({
                 Trailing windows ending {alerts.at.toISOString().slice(0, 10)} UTC, independent of
                 the selected period: requests over {alerts.config.requestWindowDays} days
                 {financial ? `, estimated loss over ${alerts.config.lossWindowDays} days` : ''}.
-                Walk-out rate is not evaluated; visits and walk-outs are not recorded.
+                {alerts.walkOutRateEvaluated
+                  ? ` Walk-out rate uses ${alerts.visits} explicitly recorded branch visits in the request window. Coverage depends on consistent counter capture.`
+                  : ' Walk-out rate unavailable: no visits recorded in the request window.'}
               </p>
               <ul className="mt-2 space-y-1 text-text-body">
                 {alerts.alerts.slice(0, 10).map((alert) => (
@@ -73,6 +75,9 @@ export function ObservedDemand({
                     {financial && alert.estimatedLossMinor !== undefined
                       ? ` · estimated value ${(alert.estimatedLossMinor / 100).toFixed(2)} (currency unknown)`
                       : ''}{' '}
+                    {alert.visits
+                      ? ` · ${alert.walkOuts ?? 0}/${alert.visits} recorded visits walked out`
+                      : ''}
                     · crossed{' '}
                     {alert.fired
                       .filter((trigger) => financial || trigger !== 'ESTIMATED_LOSS')
@@ -82,8 +87,9 @@ export function ObservedDemand({
                 ))}
               </ul>
               <p className="mt-2 text-text-muted">
-                Review current stock and supplier terms before creating an inert draft; approval,
-                PIN and audit controls remain in the purchasing workflow.
+                Review quantities, supplier terms, alternatives and surplus in Lost-demand
+                procurement below. Actions require permission and a fresh PIN; drafts and decisions
+                are audited.
               </p>
               <Link
                 className="mt-3 inline-flex min-h-11 items-center font-medium text-primary hover:underline"

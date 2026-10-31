@@ -42,7 +42,8 @@ describe('observed demand evidence', () => {
   const alerts = {
     at: new Date('2026-09-02Z'),
     config: DEFAULT_LOST_DEMAND_TRIGGER_CONFIG,
-    walkOutRateEvaluated: false as const,
+    walkOutRateEvaluated: false,
+    visits: 0,
     alerts: [
       {
         scope: 'SKU' as const,

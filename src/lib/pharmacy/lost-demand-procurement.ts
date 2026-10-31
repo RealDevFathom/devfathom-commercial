@@ -1,4 +1,6 @@
 /** Lost-demand procurement advice. All writes stop at an inert DRAFT document. */
+import { Prisma } from '@/generated/prisma/client';
+import { z } from 'zod';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 const MAX_QUANTITY = 2_147_483_647;
@@ -17,6 +19,30 @@ export const DEFAULT_LOST_DEMAND_TRIGGER_CONFIG: Readonly<LostDemandTriggerConfi
   lossWindowDays: 30,
   walkOutRateBps: 1_000,
 };
+/** Persisted settings and API inputs share the same bounds; invalid settings fail closed. */
+export const lostDemandTriggerConfigSchema = z
+  .object({
+    requestsInWindow: z.number().int().min(1).max(MAX_QUANTITY),
+    requestWindowDays: z.number().int().min(1).max(365),
+    estimatedLossMinor: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
+    lossWindowDays: z.number().int().min(1).max(365),
+    walkOutRateBps: z.number().int().min(0).max(10_000),
+  })
+  .strict();
+
+export async function loadLostDemandConfig(
+  db: ScopedDb,
+  scope: { organizationId: string; branchId: string }
+): Promise<LostDemandTriggerConfig> {
+  const [branch] = await db.$queryRaw<Array<{ lostDemandConfig: unknown }>>(Prisma.sql`
+    SELECT "lostDemandConfig" FROM "pharmacy_branches"
+    WHERE "organizationId"=${scope.organizationId} AND "id"=${scope.branchId} AND "active"=true`);
+  if (!branch) throw new Error('BRANCH_NOT_AVAILABLE');
+  return lostDemandTriggerConfigSchema.parse(
+    branch.lostDemandConfig ?? DEFAULT_LOST_DEMAND_TRIGGER_CONFIG
+  );
+}
+
 export type LostDemandMetrics = {
   requests: number;
   estimatedLossMinor: number;
@@ -60,6 +86,7 @@ export type LostDemandWindowFact = {
   saltKey: string | null;
   requestsInRequestWindow: number;
   estimatedLossMinorInLossWindow: number;
+  walkOutsInRequestWindow?: number;
 };
 export type LostDemandScopeAlert = {
   scope: LostDemandScope;
@@ -69,6 +96,8 @@ export type LostDemandScopeAlert = {
   /** Omitted without financial permission; the loss trigger is then never evaluated. */
   estimatedLossMinor?: number;
   fired: LostDemandTrigger[];
+  walkOuts?: number;
+  visits?: number;
 };
 
 /**
@@ -80,9 +109,12 @@ export type LostDemandScopeAlert = {
 export function evaluateLostDemandScopes(
   facts: readonly LostDemandWindowFact[],
   config: LostDemandTriggerConfig,
-  options: { financial: boolean }
+  options: { financial: boolean; visits?: number }
 ): LostDemandScopeAlert[] {
-  const groups = new Map<string, Omit<LostDemandScopeAlert, 'fired'> & { loss: number }>();
+  const groups = new Map<
+    string,
+    Omit<LostDemandScopeAlert, 'fired'> & { loss: number; walkOuts: number }
+  >();
   const add = (scope: LostDemandScope, key: string, fact: LostDemandWindowFact) => {
     const id = `${scope}:${key}`;
     const group = groups.get(id) ?? {
@@ -91,10 +123,12 @@ export function evaluateLostDemandScopes(
       medicineIds: [],
       requests: 0,
       loss: 0,
+      walkOuts: 0,
     };
     group.medicineIds.push(fact.medicineId);
     group.requests += fact.requestsInRequestWindow;
     group.loss += fact.estimatedLossMinorInLossWindow;
+    group.walkOuts += fact.walkOutsInRequestWindow ?? 0;
     groups.set(id, group);
   };
   for (const fact of facts) {
@@ -102,14 +136,13 @@ export function evaluateLostDemandScopes(
     if (fact.saltKey) add('SALT', fact.saltKey, fact);
   }
   const alerts: LostDemandScopeAlert[] = [];
-  for (const { loss, ...group } of groups.values()) {
+  for (const { loss, walkOuts, ...group } of groups.values()) {
     const fired = evaluateLostDemandTriggers(
       {
         requests: group.requests,
         estimatedLossMinor: options.financial ? loss : 0,
-        // No visit or walk-out capture exists yet; the walk-out trigger cannot be evaluated.
-        walkOuts: 0,
-        visits: 0,
+        walkOuts,
+        visits: options.visits ?? 0,
       },
       options.financial ? config : { ...config, estimatedLossMinor: Number.MAX_SAFE_INTEGER }
     ).filter((trigger) => options.financial || trigger !== 'ESTIMATED_LOSS');
@@ -119,6 +152,7 @@ export function evaluateLostDemandScopes(
       ...group,
       medicineIds: [...group.medicineIds].sort(),
       ...(options.financial ? { estimatedLossMinor: loss } : {}),
+      ...(options.visits ? { walkOuts, visits: options.visits } : {}),
       fired,
     });
   }
@@ -134,7 +168,9 @@ export async function loadLostDemandScopeAlerts(
   options: { financial: boolean; at?: Date; config?: LostDemandTriggerConfig }
 ) {
   const at = options.at ?? new Date();
-  const config = options.config ?? DEFAULT_LOST_DEMAND_TRIGGER_CONFIG;
+  const config = options.config
+    ? lostDemandTriggerConfigSchema.parse(options.config)
+    : await loadLostDemandConfig(db, scope);
   const base = {
     organizationId: scope.organizationId,
     branchId: scope.branchId,
@@ -142,7 +178,7 @@ export async function loadLostDemandScopeAlerts(
   };
   const requestFrom = new Date(at.getTime() - config.requestWindowDays * DAY_MS);
   const lossFrom = new Date(at.getTime() - config.lossWindowDays * DAY_MS);
-  const [requestRows, lossRows] = await Promise.all([
+  const [requestRows, lossRows, visitRows] = await Promise.all([
     db.unfulfilledDemandEvent.groupBy({
       by: ['requestedMedicineId'],
       where: { ...base, createdAt: { gte: requestFrom, lt: at } },
@@ -155,6 +191,13 @@ export async function loadLostDemandScopeAlerts(
           _sum: { estimatedValueMinor: true },
         })
       : Promise.resolve([]),
+    db.$queryRaw<Array<{ medicineId: string | null; visits: number; walkOuts: number }>>(Prisma.sql`
+      SELECT "requestedMedicineId" AS "medicineId", count(*)::int AS "visits",
+        count(*) FILTER (WHERE "walkedOut")::int AS "walkOuts"
+      FROM "pharmacy_demand_visits"
+      WHERE "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId}
+        AND "createdAt">=${requestFrom} AND "createdAt"<${at}
+      GROUP BY "requestedMedicineId"`),
   ]);
   const facts = new Map<string, LostDemandWindowFact>();
   const fact = (medicineId: string) => {
@@ -174,6 +217,9 @@ export async function loadLostDemandScopeAlerts(
     if (row.requestedMedicineId)
       fact(row.requestedMedicineId).estimatedLossMinorInLossWindow =
         row._sum.estimatedValueMinor ?? 0;
+  const visits = visitRows.reduce((n, row) => n + row.visits, 0);
+  for (const row of visitRows)
+    if (row.medicineId) fact(row.medicineId).walkOutsInRequestWindow = row.walkOuts;
   if (facts.size) {
     const components = await db.medicineStrengthComponent.findMany({
       where: { organizationId: scope.organizationId, medicineId: { in: [...facts.keys()] } },
@@ -190,8 +236,9 @@ export async function loadLostDemandScopeAlerts(
   return {
     at,
     config,
-    walkOutRateEvaluated: false as const,
-    alerts: evaluateLostDemandScopes([...facts.values()], config, options),
+    walkOutRateEvaluated: visits > 0,
+    visits,
+    alerts: evaluateLostDemandScopes([...facts.values()], config, { ...options, visits }),
   };
 }
 
@@ -254,14 +301,38 @@ export type DistributorAdvice = {
   lastPricePerPackMinor: number | null;
   scheme: { buyPacks: number; freePacks: number } | null;
   leadTimeDays: number | null;
+  name?: string;
+  quotePricePerPackMinor?: number;
+  packLevelId?: string;
+  packUnits?: number;
+  quoteId?: string;
+  discountBps?: number;
+  quantity?: ProcurementQuantity;
 };
-export type AlternateAdvice = { medicineId: string; sameSaltAndStrength: true; marginBps: number };
-export type TransferAdvice = { fromBranchId: string; surplusUnits: number };
+export type AlternateAdvice = {
+  medicineId: string;
+  sameSaltAndStrength: true;
+  marginBps: number | null;
+  name?: string;
+};
+export type TransferAdvice = {
+  fromBranchId: string;
+  surplusUnits: number;
+  name?: string;
+  lines?: {
+    sourceLotId: string;
+    sourceStockLocationId: string;
+    destinationStockLocationId: string;
+    quantityUnits: number;
+  }[];
+};
 export type LostDemandAdvice = {
   id: string;
   organizationId: string;
   branchId: string;
   medicineId: string;
+  name?: string;
+  method?: string;
   fired: LostDemandTrigger[];
   metrics: LostDemandMetrics;
   quantity: ProcurementQuantity;
@@ -335,16 +406,17 @@ export async function actOnLostDemandAdvice(input: {
     let result: { id: string; status: 'DRAFT' } | { status: 'IGNORED' };
     if (input.action === 'IGNORE') result = { status: 'IGNORED' };
     else if (input.action === 'DRAFT_PO') {
-      if (advice.quantity.orderedPacks <= 0) throw new Error('NO_REPLENISHMENT_REQUIRED');
       const distributor = advice.distributors.find((row) => row.supplierId === input.supplierId);
       if (!distributor) throw new Error('SUPPLIER_NOT_ELIGIBLE');
+      const quantity = distributor.quantity ?? advice.quantity;
+      if (quantity.orderedPacks <= 0) throw new Error('NO_REPLENISHMENT_REQUIRED');
       result = await writer.createPurchaseOrderDraft({
         organizationId: actor.organizationId,
         branchId: advice.branchId,
         medicineId: advice.medicineId,
         supplierId: distributor.supplierId,
-        orderedPacks: advice.quantity.orderedPacks,
-        bonusPacks: advice.quantity.bonusPacks,
+        orderedPacks: quantity.orderedPacks,
+        bonusPacks: quantity.bonusPacks,
         createdByUserId: actor.userId,
         status: 'DRAFT',
       });

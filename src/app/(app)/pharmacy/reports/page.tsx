@@ -16,6 +16,7 @@ import { createTRPCContext } from '@/server/trpc';
 import { DailyWorkPack, DailyWorkPackLoading } from './daily-work-pack';
 import { MarketingSummary } from './marketing-summary';
 import { ObservedDemand } from './observed-demand';
+import { LostDemandWorkflow, type DemandActionState } from './lost-demand-workflow';
 
 export const metadata: Metadata = { title: 'Pharmacy reports' };
 
@@ -118,6 +119,7 @@ export default async function PharmacyReportsPage({
   let demand: Awaited<
     ReturnType<ReturnType<typeof pharmacySalesRouter.createCaller>['demandAggregate']>
   > | null = null;
+  let procurementAdvice: Awaited<ReturnType<typeof caller.lostDemandAdvice>> | null = null;
   let demandError = false;
   let demandAlerts: Awaited<
     ReturnType<ReturnType<typeof pharmacySalesRouter.createCaller>['lostDemandAlerts']>
@@ -163,18 +165,22 @@ export default async function PharmacyReportsPage({
     (Date.parse(to) - Date.parse(from)) / 86_400_000 < 90;
   if (demandScopeValid && branch && branchResult.branches.some((item) => item.id === branch)) {
     const salesCaller = pharmacySalesRouter.createCaller(ctx);
-    const [demandResult, alertResult] = await Promise.allSettled([
+    const [demandResult, alertResult, adviceResult] = await Promise.allSettled([
       salesCaller.demandAggregate({
         branchId: branch,
         from: new Date(`${from}T00:00:00.000Z`),
         to: new Date(new Date(`${to}T00:00:00.000Z`).getTime() + 86_400_000),
       }),
       salesCaller.lostDemandAlerts({ branchId: branch }),
+      Promise.resolve().then(() =>
+        catalog.permissions.financial ? caller.lostDemandAdvice({ branchId: branch }) : []
+      ),
     ]);
     if (demandResult.status === 'fulfilled') demand = demandResult.value;
     else demandError = true;
     // Alerts are independent trailing windows; their failure never hides the report.
     if (alertResult.status === 'fulfilled') demandAlerts = alertResult.value;
+    if (adviceResult.status === 'fulfilled') procurementAdvice = adviceResult.value;
   }
   const digestMessage = value(query.digest);
   const anomalyMessage = value(query.anomaly);
@@ -219,6 +225,77 @@ export default async function PharmacyReportsPage({
       failed = true;
     }
     redirect(reportActionRedirect(returnQueryString, 'anomaly', failed ? 'error' : 'saved'));
+  }
+  async function actOnDemand(
+    _state: DemandActionState,
+    data: FormData
+  ): Promise<DemandActionState> {
+    'use server';
+    try {
+      const actionCtx = await createTRPCContext();
+      const action = String(data.get('action'));
+      if (action !== 'DRAFT_PO' && action !== 'DRAFT_TRANSFER' && action !== 'IGNORE')
+        throw new Error('Invalid action');
+      const result = await pharmacyReportsRouter.createCaller(actionCtx).actOnLostDemandAdvice({
+        branchId: String(data.get('branchId') ?? ''),
+        adviceId: String(data.get('adviceId') ?? ''),
+        pin: String(data.get('pin') ?? ''),
+        action,
+        ...(data.get('supplierId') ? { supplierId: String(data.get('supplierId')) } : {}),
+        ...(data.get('fromBranchId') ? { fromBranchId: String(data.get('fromBranchId')) } : {}),
+      });
+      return {
+        success: true,
+        ...('id' in result
+          ? {
+              reviewHref:
+                action === 'DRAFT_TRANSFER'
+                  ? '/pharmacy/inventory/transfers?' +
+                    new URLSearchParams({ branch: String(data.get('fromBranchId')) })
+                  : '/pharmacy/purchasing',
+            }
+          : {}),
+        message:
+          'id' in result
+            ? `Draft saved: ${result.id}. Open the draft workflow for separate review and approval.`
+            : 'Advice ignored and audit saved. New recorded evidence will be evaluated on refresh.',
+      };
+    } catch {
+      return {
+        success: false,
+        message:
+          'Action not confirmed. Verify permission and your PIN, then refresh to review current advice before retrying.',
+      };
+    }
+  }
+  async function saveDemandConfig(
+    _state: DemandActionState,
+    data: FormData
+  ): Promise<DemandActionState> {
+    'use server';
+    try {
+      const actionCtx = await createTRPCContext();
+      await pharmacyReportsRouter.createCaller(actionCtx).updateLostDemandConfig({
+        branchId: String(data.get('branchId') ?? ''),
+        config: {
+          requestsInWindow: Number(data.get('requestsInWindow')),
+          requestWindowDays: Number(data.get('requestWindowDays')),
+          estimatedLossMinor: Number(data.get('estimatedLossMinor')),
+          lossWindowDays: Number(data.get('lossWindowDays')),
+          walkOutRateBps: Number(data.get('walkOutRateBps')),
+        },
+      });
+      return {
+        success: true,
+        message: 'Branch settings saved. Refresh to evaluate the new windows and thresholds.',
+      };
+    } catch {
+      return {
+        success: false,
+        message:
+          'Settings not saved. Check the field ranges and your owner/procurement permission.',
+      };
+    }
   }
   async function proposeReturn(data: FormData) {
     'use server';
@@ -402,6 +479,17 @@ export default async function PharmacyReportsPage({
         selected={!!branch}
         financial={catalog.permissions.financial}
       />
+      {branch && demandScopeValid && branchResult.branches.some((row) => row.id === branch) ? (
+        <LostDemandWorkflow
+          advice={procurementAdvice}
+          branchId={branch}
+          config={demandAlerts?.config ?? null}
+          financial={catalog.permissions.financial}
+          configure={ctx.session?.user.role === 'ADMIN'}
+          act={actOnDemand}
+          save={saveDemandConfig}
+        />
+      ) : null}
       {workPackScopeValid ? (
         <Suspense key={returnQuery.toString()} fallback={<DailyWorkPackLoading />}>
           <DailyWorkPack

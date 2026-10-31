@@ -193,6 +193,8 @@ model BranchRegulatoryProfile {
 /// `organizationId` remains the tenant boundary under FORCE row-level security;
 /// the branch is a scope *inside* that boundary, never a substitute for it.
 model PharmacyBranch {
+  lostDemandConfig       Json?
+  demandVisits           PharmacyDemandVisit[]
   whatsappMessageLogs    PharmacyMessageLog[]
   receiptLayout          Json?
   receiptLayoutRevision  Int                  @default(0)
@@ -455,6 +457,7 @@ model Ingredient {
 }
 
 model Medicine {
+  demandVisits                 PharmacyDemandVisit[]
   id                           String                               @id @default(cuid())
   organizationId               String                               @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   productName                  String
@@ -1636,6 +1639,22 @@ model UnfulfilledDemandEvent {
   @@unique([organizationId, id])
   @@index([organizationId, branchId, createdAt, reason])
   @@map("pharmacy_unfulfilled_demand_events")
+}
+
+/// Explicit, idempotent counter visit capture; never inferred from carts or searches.
+model PharmacyDemandVisit {
+  id                  String         @id
+  organizationId      String         @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId            String
+  requestedMedicineId String?
+  walkedOut           Boolean
+  capturedByUserId    String
+  createdAt           DateTime       @default(now())
+  branch              PharmacyBranch @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_demand_visits_branch_fkey")
+  medicine            Medicine?      @relation(fields: [organizationId, requestedMedicineId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_demand_visits_medicine_fkey")
+
+  @@index([organizationId, branchId, createdAt])
+  @@map("pharmacy_demand_visits")
 }
 
 /// DEM-03: an operator-created follow-up to one explicit POS-10 demand event.

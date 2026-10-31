@@ -124,6 +124,16 @@ export function TransferCard({
         {SLIP_STATUSES.has(transfer.status) ? (
           <PackingSlipPrintButton slip={packingSlipFor(transfer)} />
         ) : null}
+        {outbound && transfer.status === 'DRAFT' ? (
+          <TransferActionForm action={action}>
+            <input name="action" type="hidden" value="submitDraft" />
+            <input name="branchId" type="hidden" value={branchId} />
+            <input name="transferId" type="hidden" value={transfer.id} />
+            <Button type="submit" variant="outline" className="min-h-11">
+              Submit draft for approval
+            </Button>
+          </TransferActionForm>
+        ) : null}
         {outbound && transfer.status === 'ALLOCATED' ? (
           ownAllocation ? (
             <p className="text-xs text-text-muted">

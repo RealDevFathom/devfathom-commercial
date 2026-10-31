@@ -1,3 +1,5 @@
+import { hasModule } from '@/lib/entitlements';
+import { submitTransferDraft } from '@/lib/pharmacy/lost-demand-operations';
 /**
  * PH-INV / INV-01..04 — the minimal procedures behind the `pharmacy-inventory`
  * entitlement (module-catalog).
@@ -1094,6 +1096,16 @@ export const pharmacyInventoryRouter = router({
       } catch (error) {
         domainError(error);
       }
+    }),
+
+  submitTransferDraft: inventoryControl
+    .input(z.object({ branchId, transferId: z.string().trim().min(1).max(128) }).strict())
+    .mutation(async ({ ctx, input }) => {
+      if (!hasModule(ctx.entitlements, 'pharmacy-inventory'))
+        throw new TRPCError({ code: 'FORBIDDEN' });
+      return ctx.db.$transaction(async (db) =>
+        submitTransferDraft(db as ScopedDb, await scopeFor(ctx, input.branchId), input.transferId)
+      );
     }),
 
   approveTransfer: inventoryControl

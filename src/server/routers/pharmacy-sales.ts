@@ -1,3 +1,4 @@
+import { captureLostDemandVisit } from '@/lib/pharmacy/lost-demand-operations';
 import { ControlledRestorationDenied } from '@/lib/pharmacy/controlled-restoration-authorization';
 import { assertRxSaleAllowed, PharmacyRxSaleDenied } from '@/lib/pharmacy/rx-sale-gate';
 import {
@@ -1387,6 +1388,17 @@ export const pharmacySalesRouter = router({
         fail(error);
       }
     }),
+  captureDemandVisit: capabilityProcedure('pharmacy:counter')
+    .input(
+      z
+        .object({ branchId, id: z.uuid(), medicineId: branchId.optional(), walkedOut: z.boolean() })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (!hasModule(ctx.entitlements, 'pharmacy-counter'))
+        throw new TRPCError({ code: 'FORBIDDEN' });
+      return captureLostDemandVisit(ctx.db, await scopeFor(ctx, input.branchId), input);
+    }),
   captureDemand: protectedProcedure
     .input(
       z
@@ -1494,9 +1506,11 @@ export const pharmacySalesRouter = router({
       demandAggregate(ctx.db, await scopeFor(ctx, input.branchId), input.from, input.to)
     ),
   /** SKU/salt-scoped trailing-window alerts; loss figures require reports:financial. */
-  lostDemandAlerts: protectedProcedure
+  lostDemandAlerts: capabilityProcedure('reports:operational')
     .input(z.object({ branchId }).strict())
     .query(async ({ ctx, input }) => {
+      if (!hasModule(ctx.entitlements, 'pharmacy-reports'))
+        throw new TRPCError({ code: 'FORBIDDEN' });
       const scope = await scopeFor(ctx, input.branchId);
       const financial = await can(
         subjectFromSession(ctx.session!.user),

@@ -18,7 +18,7 @@ vi.mock('@/lib/entitlements', () => ({
 }));
 
 import { bindSideEffects } from '@/lib/side-effects/scope';
-import { flushAuditWritesForTest, recordTrpcAudit } from './audit';
+import { flushAuditWritesForTest, recordTrpcAudit, toAuditJson } from './audit';
 import { createTRPCContext, protectedProcedure, router, type TRPCContext } from './trpc';
 
 const organizationId = 'org_demo_restaurant_seat_1';
@@ -46,6 +46,14 @@ beforeEach(() => {
 });
 
 describe('transaction-bound seed audits', () => {
+  it('redacts fresh PINs even when a request fails before its resolver', () => {
+    expect(toAuditJson({ adviceId: 'advice', pin: '4821', nested: { PIN: '9999' } })).toEqual({
+      adviceId: 'advice',
+      pin: '[REDACTED]',
+      nested: { PIN: '[REDACTED]' },
+    });
+  });
+
   it('writes the uncommitted manager audit in the seed transaction and awaits durability', async () => {
     let release!: () => void;
     const pending = new Promise<void>((resolve) => {

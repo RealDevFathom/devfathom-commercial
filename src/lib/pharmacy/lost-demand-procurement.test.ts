@@ -145,6 +145,36 @@ describe('lost-demand procurement advice', () => {
     return { writer, boundary };
   }
 
+  it('uses the selected distributor quantity and bonus terms when drafting', async () => {
+    const { writer, boundary } = fixture({
+      loadCurrentAdvice: vi.fn(async () => ({
+        ...advice,
+        distributors: [
+          ...advice.distributors,
+          {
+            ...advice.distributors[0],
+            supplierId: 'supplier-2',
+            quantity: { requiredUnits: 20, orderedPacks: 1, bonusPacks: 1, suppliedUnits: 20 },
+          },
+        ],
+      })),
+    });
+    await actOnLostDemandAdvice({
+      action: 'DRAFT_PO',
+      adviceId: advice.id,
+      pin: '1234',
+      supplierId: 'supplier-2',
+      boundary,
+    });
+    expect(writer.createPurchaseOrderDraft).toHaveBeenCalledWith(
+      expect.objectContaining({
+        supplierId: 'supplier-2',
+        orderedPacks: 1,
+        bonusPacks: 1,
+      })
+    );
+  });
+
   it('rejects unknown actions before authentication or draft creation', async () => {
     const { writer, boundary } = fixture();
     await expect(
@@ -342,9 +372,76 @@ describe('lost-demand procurement advice', () => {
       ]);
     });
 
+    it('loads different validated thresholds per branch and evaluates actual recorded walk-outs', async () => {
+      const config = {
+        ...DEFAULT_LOST_DEMAND_TRIGGER_CONFIG,
+        requestsInWindow: 100,
+        requestWindowDays: 14,
+      };
+      const raw = vi.fn(async (query: { sql: string; values: unknown[] }) => {
+        if (query.sql.includes('pharmacy_branches'))
+          return [
+            {
+              lostDemandConfig: query.values.includes('strict')
+                ? { ...config, walkOutRateBps: 2000 }
+                : config,
+            },
+          ];
+        return [{ medicineId: 'a', visits: 100, walkOuts: 11 }];
+      });
+      const db = {
+        $queryRaw: raw,
+        unfulfilledDemandEvent: { groupBy: vi.fn(async () => []) },
+        medicineStrengthComponent: { findMany: vi.fn(async () => []) },
+      } as unknown as ScopedDb;
+      const at = new Date('2026-10-31T00:00:00Z');
+      const result = await loadLostDemandScopeAlerts(
+        db,
+        { organizationId: 'org', branchId: 'normal' },
+        { financial: false, at }
+      );
+      expect(result.walkOutRateEvaluated).toBe(true);
+      expect(result.alerts).toEqual([
+        expect.objectContaining({
+          key: 'a',
+          requests: 0,
+          walkOuts: 11,
+          visits: 100,
+          fired: ['WALK_OUT_RATE'],
+        }),
+      ]);
+      expect(result.config.requestWindowDays).toBe(14);
+      expect(raw.mock.calls[1][0].values).toEqual([
+        'org',
+        'normal',
+        new Date('2026-10-17T00:00:00Z'),
+        at,
+      ]);
+      expect(
+        (
+          await loadLostDemandScopeAlerts(
+            db,
+            { organizationId: 'org', branchId: 'strict' },
+            { financial: false, at }
+          )
+        ).alerts
+      ).toEqual([]);
+      raw.mockResolvedValueOnce([{ lostDemandConfig: { ...config, lossWindowDays: 0 } }]);
+      await expect(
+        loadLostDemandScopeAlerts(
+          db,
+          { organizationId: 'org', branchId: 'normal' },
+          { financial: false, at }
+        )
+      ).rejects.toThrow();
+    });
+
     it('queries each metric over its own window ending now and skips loss without permission', async () => {
       const groupBy = vi.fn().mockResolvedValue([]);
       const db = {
+        $queryRaw: vi.fn(async (query: { sql: string }) =>
+          query.sql.includes('pharmacy_branches') ? [{ lostDemandConfig: null }] : []
+        ),
         unfulfilledDemandEvent: { groupBy },
         medicineStrengthComponent: { findMany: vi.fn().mockResolvedValue([]) },
       } as unknown as ScopedDb;

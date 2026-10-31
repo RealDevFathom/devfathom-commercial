@@ -24,6 +24,19 @@ vi.mock('@/server/trpc', () => ({
 vi.mock('@/server/routers/pharmacy-sales', () => ({
   pharmacySalesRouter: {
     createCaller: () => ({
+      lostDemandAlerts: async () => ({
+        at: new Date('2026-09-04T00:00:00Z'),
+        config: {
+          requestsInWindow: 3,
+          requestWindowDays: 7,
+          estimatedLossMinor: 1000000,
+          lossWindowDays: 30,
+          walkOutRateBps: 1000,
+        },
+        walkOutRateEvaluated: false,
+        visits: 0,
+        alerts: [],
+      }),
       demandAggregate: async ({ from, to }: { from: Date; to: Date }) => ({
         label: 'Estimate',
         method: 'Explicit POS-10 events grouped by requested item and cause',
@@ -43,6 +56,7 @@ vi.mock('./daily-work-pack', () => ({
 vi.mock('@/server/routers/pharmacy-reports', () => ({
   pharmacyReportsRouter: {
     createCaller: () => ({
+      lostDemandAdvice: async () => [],
       branches: async () => ({ branches: [{ id: 'b1', name: 'Main' }] }),
       commandCentre,
       anomalySignals: async () => [
