@@ -38,21 +38,18 @@ import { AppShell, isPathModuleEnabled } from './app-shell';
 describe('AppShell module guard', () => {
   it('starts with a skip link targeting the main application canvas', () => {
     render(
-      createElement(
-        AppShell,
-        {
-          brand: {
-            organizationId: 'org_test',
-            displayName: 'Test pharmacy',
-            logoUrl: null,
-            markUrl: null,
-            faviconUrl: null,
-            primaryColor: null,
-            accentColor: null,
-          },
+      createElement(AppShell, {
+        brand: {
+          organizationId: 'org_test',
+          displayName: 'Test pharmacy',
+          logoUrl: null,
+          markUrl: null,
+          faviconUrl: null,
+          primaryColor: null,
+          accentColor: null,
         },
-        createElement('p', null, 'Counter')
-      )
+        children: createElement('p', null, 'Counter'),
+      })
     );
 
     const skipLink = screen.getByRole('link', { name: 'Skip to content' });
