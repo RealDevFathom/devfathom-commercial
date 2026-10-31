@@ -44,7 +44,7 @@
     "@ai-sdk/google": "^3.0.89",
     "@ai-sdk/google-vertex": "^4",
     "@ai-sdk/groq": "^3.0.42",
-    "@ai-sdk/react": "^3.0.209",
+    "@ai-sdk/react": "4.0.121",
     "@aws-sdk/client-s3": "^3.1154.0",
     "@azure/identity": "^4.13.1",
     "@azure/storage-blob": "^12.33.0",
@@ -137,7 +137,7 @@
     "unrs-resolver"
   ],
   "overrides": {
-    "@ai-sdk/provider-utils": {
+    "@ai-sdk/provider-utils@^4": {
       ".": "4.0.62",
       "undici": "6.29.1"
     },
