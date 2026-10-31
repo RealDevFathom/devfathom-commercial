@@ -5,10 +5,19 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { workspaceTimezone } from '@/lib/timezone';
 import { z } from 'zod';
 import { lockCustomerConsent } from './consent-writer';
+import {
+  clearLockout,
+  isLockedOut,
+  registerFailedAttempt,
+  verifyOperatorCredential,
+} from '@/lib/restaurant/operator-credentials';
 
 const id = z.string().trim().min(1).max(128);
 export const marketingScopeInput = z.object({ branchId: id }).strict();
 export const marketingCampaignInput = marketingScopeInput.extend({ campaignId: id }).strict();
+export const marketingApprovalInput = marketingCampaignInput
+  .extend({ pin: z.string().regex(/^\d{4,8}$/).optional() })
+  .strict();
 const rule = z
   .object({
     field: z.enum(['receiptCount', 'daysSinceLastReceipt']),
@@ -180,16 +189,59 @@ export async function approveMarketingCampaign(
   db: ScopedDb,
   scope: MarketingScope,
   campaignId: string,
-  now = new Date()
+  now = new Date(),
+  pin?: string
 ) {
+  await db.$queryRaw`SELECT id FROM pharmacy_campaigns WHERE "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} AND id=${campaignId} FOR UPDATE`;
   const { campaign } = await reviewMarketingCampaign(db, scope, campaignId);
+  if (campaign.status !== 'DRAFT') throw new MarketingWorkflowError('Only a draft can be approved.');
   if (campaign.promotesRegulatedItem)
     throw new MarketingWorkflowError('Regulated outreach is unavailable.');
   quietHours.parse(campaign.quietHours);
   frequencyCap.parse(campaign.frequencyCap);
+  let ownerApprovalPinCredentialId: string | null = null;
+  if (campaign.voucherEnabled) {
+    const blocked = { blocked: 'Enter your owner PIN to approve monetary vouchers.' };
+    if (!pin || !/^\d{4,8}$/.test(pin)) return blocked;
+    // Self-approval is allowed, but another person's PIN cannot authenticate this owner.
+    await db.$queryRaw`SELECT c.id FROM restaurant_operator_credentials c JOIN restaurant_staff_profiles s ON s.id=c."staffProfileId" AND s."organizationId"=c."organizationId" WHERE c."organizationId"=${scope.organizationId} AND s."userId"=${scope.actorId} AND c.type='PIN' AND c."revokedAt" IS NULL AND c."deviceId" IS NULL FOR UPDATE OF c`;
+    const credential = await db.restaurantOperatorCredential.findFirst({
+      where: {
+        organizationId: scope.organizationId,
+        type: 'PIN',
+        revokedAt: null,
+        deviceId: null,
+        staffProfile: {
+          organizationId: scope.organizationId,
+          status: 'ACTIVE',
+          userId: scope.actorId,
+          user: { organizationId: scope.organizationId, status: 'ACTIVE', role: 'ADMIN' },
+        },
+      },
+    });
+    if (!credential || isLockedOut(credential, now)) return blocked;
+    if (!(await verifyOperatorCredential('PIN', pin, credential.credentialHash))) {
+      await db.restaurantOperatorCredential.update({
+        where: { id: credential.id },
+        data: registerFailedAttempt(credential, now),
+      });
+      // Return a refusal so the transaction commits the durable lockout counter.
+      return blocked;
+    }
+    await db.restaurantOperatorCredential.update({
+      where: { id: credential.id },
+      data: clearLockout(),
+    });
+    ownerApprovalPinCredentialId = credential.id;
+  }
   const result = await db.pharmacyCampaign.updateMany({
     where: { ...whereScope(scope), id: campaignId, status: 'DRAFT' },
-    data: { status: 'APPROVED', ownerApprovedByUserId: scope.actorId, ownerApprovedAt: now },
+    data: {
+      status: 'APPROVED',
+      ownerApprovedByUserId: scope.actorId,
+      ownerApprovedAt: now,
+      ownerApprovalPinCredentialId,
+    },
   });
   if (result.count !== 1) throw new MarketingWorkflowError('Only a draft can be approved.');
   return { status: 'APPROVED' as const };
@@ -203,7 +255,8 @@ export function requireCaptureWindow(
   if (
     !['APPROVED', 'CAPTURED'].includes(campaign.status) ||
     !campaign.ownerApprovedByUserId ||
-    !campaign.ownerApprovedAt
+    !campaign.ownerApprovedAt ||
+    (campaign.voucherEnabled && !campaign.ownerApprovalPinCredentialId)
   )
     throw new MarketingWorkflowError('Owner approval is required before capture.');
   if (campaign.promotesRegulatedItem)
@@ -265,6 +318,8 @@ async function evaluateCampaign(
       Prisma.sql`SELECT id FROM pharmacy_campaigns WHERE "organizationId" = ${scope.organizationId} AND "branchId" = ${scope.branchId} AND id = ${campaignId} FOR UPDATE`
     );
   const { campaign, template, rules } = await reviewMarketingCampaign(db, scope, campaignId);
+  if (campaign.voucherEnabled && !campaign.ownerApprovalPinCredentialId)
+    throw new MarketingWorkflowError('Owner approval with a PIN is required before capture.');
   if (persist && campaign.status === 'CAPTURED')
     return {
       prepared: await db.pharmacyCampaignCapture.count({

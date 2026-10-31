@@ -30,6 +30,7 @@ import {
   captureMarketingCampaign,
   createMarketingDraft,
   marketingCampaignInput,
+  marketingApprovalInput,
   marketingDraftInput,
   marketingHistory,
   marketingScopeInput,
@@ -232,12 +233,26 @@ export const pharmacyMarketingRouter = router({
       )
     ),
   approve: protectedProcedure
-    .input(marketingCampaignInput)
-    .mutation(({ ctx, input }) =>
-      execute(ctx, input.branchId, (db, scope) =>
-        approveMarketingCampaign(db, scope, input.campaignId)
-      )
-    ),
+    .use(({ ctx, next }) => {
+      ctx.audit.detail = { action: 'pharmacy_marketing_approval', skipInput: true };
+      return next();
+    })
+    .input(marketingApprovalInput)
+    .mutation(async ({ ctx, input }) => {
+      const result = await execute(ctx, input.branchId, (db, scope) =>
+        approveMarketingCampaign(db, scope, input.campaignId, new Date(), input.pin)
+      );
+      ctx.audit.detail = {
+        action: 'pharmacy_marketing_approval',
+        targetType: 'PharmacyCampaign',
+        targetId: input.campaignId,
+        skipInput: true,
+      };
+      // Refuse outside the transaction so failed PIN attempts remain committed.
+      if ('blocked' in result)
+        throw new TRPCError({ code: 'FORBIDDEN', message: result.blocked });
+      return result;
+    }),
   preview: protectedProcedure
     .input(marketingCampaignInput)
     .query(({ ctx, input }) =>

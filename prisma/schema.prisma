@@ -13781,6 +13781,8 @@ model PharmacyCampaign {
   status                PharmacyCampaignStatus @default(DRAFT)
   ownerApprovedByUserId String?
   ownerApprovedAt       DateTime?
+  /// Server-recorded PIN credential verified for the approving owner; never a client assertion.
+  ownerApprovalPinCredentialId String?
   refusalReason         String?
   createdAt             DateTime               @default(now())
   voucherRedemptions    PharmacyVoucherRedemption[]
@@ -13813,7 +13815,7 @@ model PharmacyCampaignCapture {
 /// releases its reservation; paid sales consume the capture permanently.
 model PharmacyVoucherRedemption {
   id               String                  @id @default(cuid())
-  organizationId   String                  @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  organizationId   String                  @default(dbgenerated("current_setting('app.current_organization_id'::text, true)"))
   branchId         String
   campaignId       String
   captureId        String

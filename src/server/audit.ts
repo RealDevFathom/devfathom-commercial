@@ -99,7 +99,8 @@ function isSensitiveKey(key: string): boolean {
   const k = key.toLowerCase();
   // Camera renewal input can be audited before its resolver runs (including
   // denied or invalid requests). Match the identifier exactly, not all grants.
-  return k === 'previousgrantid' || SENSITIVE_SUBSTRINGS.some((s) => k.includes(s));
+  // PIN approval can be refused by authentication before resolver-level skipInput runs.
+  return k === 'pin' || k === 'previousgrantid' || SENSITIVE_SUBSTRINGS.some((s) => k.includes(s));
 }
 
 const MAX_STRING = 20_000;

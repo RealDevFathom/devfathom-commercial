@@ -65,6 +65,18 @@ it('requires explicit campaign approval confirmation', async () => {
   });
   expect(mocks.approve).not.toHaveBeenCalled();
 });
+it('forwards the owner PIN for voucher approval after explicit review', async () => {
+  mocks.approve.mockResolvedValue({ status: 'APPROVED' });
+  expect(
+    await marketingAction(form({
+      operation: 'approve',
+      campaignId: 'c1',
+      reviewed: 'on',
+      pin: '4821',
+    }))
+  ).toMatchObject({ error: false });
+  expect(mocks.approve).toHaveBeenCalledWith({ branchId: 'branch-a', campaignId: 'c1', pin: '4821' });
+});
 it('passes only insight reference and editable draft settings for server-bound review', async () => {
   mocks.reviewGrowth.mockResolvedValue({ decision: 'APPROVE', campaignId: 'from-insight' });
   const result = await marketingAction(

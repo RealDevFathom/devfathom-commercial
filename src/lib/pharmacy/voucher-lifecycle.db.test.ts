@@ -11,6 +11,8 @@ import {
 import { receiveLot } from '@/lib/pharmacy/stock-ledger';
 import { linkCustomerToSale } from '@/lib/pharmacy/customer-loyalty';
 import { applyPharmacyTender } from '@/lib/pharmacy/settlement';
+import { approveMarketingCampaign } from '@/lib/pharmacy/marketing-service';
+import { hashOperatorCredential } from '@/lib/restaurant/operator-credentials';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const describeIfDatabase = databaseUrl ? describe : describe.skip;
@@ -19,11 +21,12 @@ let withPlatformDb: typeof import('@/lib/tenancy/scoped-db').withPlatformDb;
 
 const suffix = randomUUID().slice(0, 8);
 const organizationId = `qa795_${suffix}`;
-const scope = { organizationId, branchId: `qa795_br_${suffix}`, actorId: 'qa795-actor' };
+const scope = { organizationId, branchId: `qa795_br_${suffix}`, actorId: `qa795_actor_${suffix}` };
 const otherBranchId = `qa795_other_${suffix}`;
 const otherOrg = `qa795_foreign_${suffix}`;
 const tenant = <T>(run: (db: ScopedDb) => Promise<T>) => withTenantDb(organizationId, run);
 let locationId: string;
+let ownerPinCredentialId: string;
 
 beforeAll(async () => {
   if (!databaseUrl) return;
@@ -41,6 +44,30 @@ beforeAll(async () => {
       );
   });
   await tenant(async (db) => {
+    await db.user.create({
+      data: {
+        id: scope.actorId,
+        organizationId,
+        name: 'Synthetic owner',
+        email: `${scope.actorId}@example.test`,
+        department: 'Pharmacy',
+        title: 'Owner',
+        role: 'ADMIN',
+      },
+    });
+    const staff = await db.restaurantStaffProfile.create({
+      data: { organizationId, userId: scope.actorId, displayName: 'Synthetic owner' },
+    });
+    ownerPinCredentialId = (
+      await db.restaurantOperatorCredential.create({
+        data: {
+          organizationId,
+          staffProfileId: staff.id,
+          type: 'PIN',
+          credentialHash: await hashOperatorCredential('PIN', '4821'),
+        },
+      })
+    ).id;
     for (const id of [scope.branchId, otherBranchId])
       await db.pharmacyBranch.create({
         data: {
@@ -120,11 +147,12 @@ async function fixture(
         frequencyCap: { max: 1, windowDays: 7 },
         voucherEnabled: true,
         voucherDiscountMinor: 250,
-        status: 'CAPTURED',
-        ownerApprovedByUserId: scope.actorId,
-        ownerApprovedAt: new Date(),
       },
     });
+    expect(
+      await approveMarketingCampaign(db, { ...scope, timezone: 'UTC' }, campaign.id, new Date(), '4821')
+    ).toEqual({ status: 'APPROVED' });
+    await db.pharmacyCampaign.update({ where: { id: campaign.id }, data: { status: 'CAPTURED' } });
     const capture = await db.pharmacyCampaignCapture.create({
       data: {
         organizationId,
@@ -225,6 +253,61 @@ const state = (f: Fixture) =>
   }));
 
 describeIfDatabase('voucher reservation lifecycle and evidence', () => {
+  it('commits failed PIN counters and only stores approval evidence after a correct owner PIN', async () => {
+    const f = await fixture();
+    await tenant((db) =>
+      db.pharmacyCampaign.update({
+        where: { id: f.campaignId },
+        data: {
+          status: 'DRAFT',
+          ownerApprovalPinCredentialId: null,
+          ownerApprovedAt: null,
+          ownerApprovedByUserId: null,
+        },
+      })
+    );
+    expect(
+      await tenant((db) =>
+        approveMarketingCampaign(db, { ...scope, timezone: 'UTC' }, f.campaignId, new Date(), '4822')
+      )
+    ).toHaveProperty('blocked');
+    expect(
+      await tenant((db) => db.restaurantOperatorCredential.findUniqueOrThrow({
+        where: { id: ownerPinCredentialId }, select: { failedAttempts: true },
+      }))
+    ).toEqual({ failedAttempts: 1 });
+    expect(
+      await tenant((db) => db.pharmacyCampaign.findFirstOrThrow({
+        where: { id: f.campaignId }, select: { status: true, ownerApprovalPinCredentialId: true },
+      }))
+    ).toEqual({ status: 'DRAFT', ownerApprovalPinCredentialId: null });
+    expect(
+      await tenant((db) =>
+        approveMarketingCampaign(db, { ...scope, timezone: 'UTC' }, f.campaignId, new Date(), '4821')
+      )
+    ).toEqual({ status: 'APPROVED' });
+  });
+  it('requires persisted owner PIN evidence before funding an otherwise approved voucher', async () => {
+    const f = await fixture();
+    const campaign = await tenant((db) =>
+      db.pharmacyCampaign.findFirstOrThrow({ where: { id: f.campaignId } })
+    );
+    expect(campaign).toMatchObject({
+      ownerApprovedByUserId: scope.actorId,
+      ownerApprovalPinCredentialId: ownerPinCredentialId,
+    });
+    await tenant((db) =>
+      db.pharmacyCampaign.update({
+        where: { id: f.campaignId }, data: { ownerApprovalPinCredentialId: null },
+      })
+    );
+    await expect(tenant((db) => addSaleLine(db, scope, lineInput(f)))).rejects.toMatchObject({
+      reason: 'VOUCHER_NOT_ELIGIBLE',
+    });
+    expect(
+      await tenant((db) => db.pharmacyVoucherRedemption.count({ where: { campaignId: f.campaignId } }))
+    ).toBe(0);
+  });
   it.each(['ReadCommitted', 'RepeatableRead'] as const)(
     'enforces single use for direct concurrent database claims at %s',
     async (isolationLevel) => {

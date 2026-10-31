@@ -175,16 +175,17 @@ describe('WHA-25 M2 binding contracts', () => {
     const serialized = JSON.stringify(
       toAuditJson({
         secret: marker,
+        pin: marker,
         approvingSecret: marker,
         credentialHash: marker,
         deviceSecret: marker,
         sessionToken: marker,
         authorization: `Bearer ${marker}`,
-        nested: { password: marker, otp: marker },
+        nested: { password: marker, otp: marker, PIN: marker },
       })
     );
 
     expect(serialized).not.toContain(marker);
-    expect(serialized.match(/\[REDACTED\]/g)?.length).toBe(8);
+    expect(serialized.match(/\[REDACTED\]/g)?.length).toBe(10);
   });
 });

@@ -74,7 +74,22 @@ it('shows a saved draft with review before approval', async () => {
   render(page);
   expect(screen.getByRole('checkbox', { name: /I reviewed the copy/ })).toBeRequired();
   expect(screen.getByRole('button', { name: 'Approve campaign' })).toBeInTheDocument();
+  expect(screen.queryByLabelText('Your owner PIN')).not.toBeInTheDocument();
   expect(screen.queryByRole('button', { name: 'Save prepared captures' })).not.toBeInTheDocument();
+});
+it('requires a masked owner PIN for monetary voucher approval', async () => {
+  mocks.review.mockResolvedValue({
+    campaign: { ...campaign, voucherEnabled: true },
+    quietHours: campaign.quietHours,
+    frequencyCap: campaign.frequencyCap,
+    template: { body: 'Visit our store. Reply STOP.' },
+    rules: { all: [] },
+  });
+  render(await Page({ searchParams: Promise.resolve({ campaign: 'campaign-a' }) }));
+  const pin = screen.getByLabelText('Your owner PIN');
+  expect(pin).toBeRequired();
+  expect(pin).toHaveAttribute('type', 'password');
+  expect(pin).toHaveAttribute('inputmode', 'numeric');
 });
 it('shows an explicit permission-denied state', async () => {
   mocks.branches.mockRejectedValue(new TRPCError({ code: 'FORBIDDEN' }));

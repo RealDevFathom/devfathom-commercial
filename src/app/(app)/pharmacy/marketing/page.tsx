@@ -186,6 +186,22 @@ export default async function PharmacyMarketingPage({
                 operation="approve"
                 label="Approve campaign"
               >
+                {review.campaign.voucherEnabled && (
+                  <label className="block text-sm">
+                    Your owner PIN
+                    <Input
+                      className="mt-1 min-h-11"
+                      name="pin"
+                      type="password"
+                      inputMode="numeric"
+                      autoComplete="current-password"
+                      pattern="[0-9]{4,8}"
+                      minLength={4}
+                      maxLength={8}
+                      required
+                    />
+                  </label>
+                )}
                 <label className="flex items-start gap-2 text-sm">
                   <input type="checkbox" name="reviewed" required className="mt-1 size-5" />I
                   reviewed the copy, retail rules, schedule and frequency limits.

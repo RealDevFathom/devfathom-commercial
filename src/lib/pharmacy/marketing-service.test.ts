@@ -1,5 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { verifyOperatorCredential } from '@/lib/restaurant/operator-credentials';
+vi.mock('@/lib/restaurant/operator-credentials', async () => ({
+  ...(await vi.importActual<typeof import('@/lib/restaurant/operator-credentials')>(
+    '@/lib/restaurant/operator-credentials'
+  )),
+  verifyOperatorCredential: vi.fn(),
+}));
 import {
   approveMarketingCampaign,
   captureMarketingCampaign,
@@ -25,6 +32,7 @@ const campaign = () => ({
   status: 'APPROVED',
   ownerApprovedByUserId: 'owner-a',
   ownerApprovedAt: now,
+  ownerApprovalPinCredentialId: null as string | null,
   templateId: 'template-a',
   segmentId: 'segment-a',
   scheduledAt: now,
@@ -44,6 +52,15 @@ let db: ScopedDb;
 let mock: ReturnType<typeof database>;
 function database() {
   return {
+    restaurantOperatorCredential: {
+      findFirst: vi.fn(async () => ({
+        id: 'owner-pin-a',
+        credentialHash: 'stored-hash',
+        failedAttempts: 0,
+        lockedUntil: null as Date | null,
+      })),
+      update: vi.fn(async () => ({})),
+    },
     $queryRaw: vi.fn(async () => [{ id: 'patient-a', patientId: 'patient-a' }]),
     pharmacyCampaign: {
       findFirst: vi.fn(async () => row),
@@ -113,6 +130,7 @@ function database() {
   };
 }
 beforeEach(() => {
+  vi.mocked(verifyOperatorCredential).mockReset().mockResolvedValue(true);
   row = campaign();
   captures = [];
   exclusions = [];
@@ -183,6 +201,78 @@ describe('persisted capture workflow', () => {
     row.status = 'DRAFT';
     expect(await approveMarketingCampaign(db, scope, row.id, now)).toEqual({ status: 'APPROVED' });
     expect(row.ownerApprovedByUserId).toBe('owner-a');
+    expect(verifyOperatorCredential).not.toHaveBeenCalled();
+  });
+  it('requires a PIN before approving a monetary voucher and leaves it in draft on refusal', async () => {
+    row.status = 'DRAFT';
+    row.voucherEnabled = true;
+    expect(await approveMarketingCampaign(db, scope, row.id, now)).toHaveProperty('blocked');
+    expect(mock.pharmacyCampaign.updateMany).not.toHaveBeenCalled();
+    expect(row.status).toBe('DRAFT');
+    expect(row.ownerApprovalPinCredentialId).toBeNull();
+  });
+  it('persists failed PIN attempts without approving and respects credential lockout', async () => {
+    row.status = 'DRAFT';
+    row.voucherEnabled = true;
+    vi.mocked(verifyOperatorCredential).mockResolvedValue(false);
+    expect(await approveMarketingCampaign(db, scope, row.id, now, '4822')).toHaveProperty('blocked');
+    expect(mock.restaurantOperatorCredential.update).toHaveBeenCalledWith({
+      where: { id: 'owner-pin-a' },
+      data: { failedAttempts: 1, lockedUntil: null },
+    });
+    expect(mock.pharmacyCampaign.updateMany).not.toHaveBeenCalled();
+    mock.restaurantOperatorCredential.findFirst.mockResolvedValueOnce({
+      id: 'owner-pin-a',
+      credentialHash: 'stored-hash',
+      failedAttempts: 0,
+      lockedUntil: new Date(now.getTime() + 60_000),
+    });
+    vi.mocked(verifyOperatorCredential).mockClear();
+    expect(await approveMarketingCampaign(db, scope, row.id, now, '4821')).toHaveProperty('blocked');
+    expect(verifyOperatorCredential).not.toHaveBeenCalled();
+  });
+  it('allows owner self-approval only with their active tenant PIN and records the evidence', async () => {
+    row.status = 'DRAFT';
+    row.voucherEnabled = true;
+    expect(await approveMarketingCampaign(db, scope, row.id, now, '4821')).toEqual({
+      status: 'APPROVED',
+    });
+    expect(verifyOperatorCredential).toHaveBeenCalledWith('PIN', '4821', 'stored-hash');
+    expect(mock.restaurantOperatorCredential.findFirst).toHaveBeenCalledWith({
+      where: {
+        organizationId: scope.organizationId,
+        type: 'PIN',
+        revokedAt: null,
+        deviceId: null,
+        staffProfile: {
+          organizationId: scope.organizationId,
+          status: 'ACTIVE',
+          userId: scope.actorId,
+          user: { organizationId: scope.organizationId, status: 'ACTIVE', role: 'ADMIN' },
+        },
+      },
+    });
+    expect(row).toMatchObject({
+      ownerApprovedByUserId: scope.actorId,
+      ownerApprovedAt: now,
+      ownerApprovalPinCredentialId: 'owner-pin-a',
+    });
+  });
+  it('refuses approval when the owner has no eligible active PIN credential', async () => {
+    row.status = 'DRAFT';
+    row.voucherEnabled = true;
+    mock.restaurantOperatorCredential.findFirst.mockResolvedValueOnce(null as never);
+    expect(await approveMarketingCampaign(db, scope, row.id, now, '4821')).toHaveProperty('blocked');
+    expect(verifyOperatorCredential).not.toHaveBeenCalled();
+    expect(mock.pharmacyCampaign.updateMany).not.toHaveBeenCalled();
+  });
+  it('refuses capture and preview of legacy voucher approvals without PIN evidence', async () => {
+    row.voucherEnabled = true;
+    for (const run of [previewMarketingCampaign, captureMarketingCampaign])
+      await expect(run(db, scope, row.id, now)).rejects.toThrow('Owner approval');
+    expect(captures).toEqual([]);
+    row.ownerApprovalPinCredentialId = 'owner-pin-a';
+    expect(await captureMarketingCampaign(db, scope, row.id, now)).toMatchObject({ prepared: 1 });
   });
   it('previews without writes and captures once with the stable key', async () => {
     expect(await previewMarketingCampaign(db, scope, row.id, now)).toMatchObject({ prepared: 1 });

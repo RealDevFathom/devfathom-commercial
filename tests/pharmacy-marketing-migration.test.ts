@@ -18,6 +18,11 @@ const voucherLifecycleSql = readFileSync(
   join(process.cwd(), 'prisma/migrations/20261031000182_pharmacy_voucher_lifecycle/migration.sql'),
   'utf8'
 );
+const schema = readFileSync(join(process.cwd(), 'prisma/schema.prisma'), 'utf8');
+const voucherPinSql = readFileSync(
+  join(process.cwd(), 'prisma/migrations/20261101000183_pharmacy_voucher_pin_approval/migration.sql'),
+  'utf8'
+);
 
 describe('pharmacy permissioned marketing migration', () => {
   it('stores segment definitions as auditable data and rejects clinical keys in the database', () => {
@@ -50,6 +55,17 @@ describe('pharmacy permissioned marketing migration', () => {
 });
 
 describe('pharmacy voucher migration', () => {
+  it('matches the tenant default expression PostgreSQL normalizes with an explicit text cast', () => {
+    const redemptionModel = schema.match(/model PharmacyVoucherRedemption \{([\s\S]*?)\n\}/)?.[1];
+    expect(redemptionModel).toContain(
+      `@default(dbgenerated("current_setting('app.current_organization_id'::text, true)"))`
+    );
+  });
+
+  it('adds nullable PIN approval evidence without fabricating proof for existing approvals', () => {
+    expect(voucherPinSql).toContain('ADD COLUMN "ownerApprovalPinCredentialId" TEXT');
+    expect(voucherPinSql).not.toMatch(/UPDATE|DEFAULT|NOT NULL/);
+  });
   it('keeps populated campaign tables compatible and validates constraints in stages', () => {
     expect(voucherSql).toContain('ADD COLUMN "voucherEnabled" BOOLEAN DEFAULT false');
     expect(voucherSql).toContain('NOT VALID');

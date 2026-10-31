@@ -189,6 +189,7 @@ export async function assertVoucherEligibility(
       status: 'CAPTURED',
       ownerApprovedByUserId: { not: null },
       ownerApprovedAt: { not: null },
+      ownerApprovalPinCredentialId: { not: null },
     },
     select: { eligibleCategoryAllowlist: true, voucherDiscountMinor: true },
   });
