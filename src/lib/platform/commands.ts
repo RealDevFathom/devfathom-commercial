@@ -863,6 +863,23 @@ async function bootstrapOrganization(
   input: z.infer<typeof organizationInput>,
   demo?: DemoOrganizationBootstrap
 ) {
+  // Both CRM conversion and organization onboarding can link an opportunity.
+  // Hold its row lock through provisioning and commit so retries cannot create
+  // another tenant or overwrite the original conversion and account links.
+  if (input.opportunityId) {
+    const [lockedOpportunity] = await db.$queryRaw<
+      Array<{ id: string; convertedOrganizationId: string | null }>
+    >`SELECT id, "convertedOrganizationId"
+      FROM platform_opportunities
+      WHERE id = ${input.opportunityId}
+      FOR UPDATE`;
+    if (!lockedOpportunity) {
+      throw new PlatformSecurityError('Opportunity not found.', 400);
+    }
+    if (lockedOpportunity.convertedOrganizationId) {
+      throw new PlatformSecurityError('Opportunity has already been converted.', 409);
+    }
+  }
   if (input.deploymentMode === 'DEDICATED' && !isDedicatedProvisioningConfigured()) {
     throw new PlatformSecurityError(
       'Dedicated provisioning is unavailable because Vercel provisioning is not configured for this environment. Choose Shared platform or ask a platform administrator to configure Vercel.',
@@ -3057,18 +3074,6 @@ async function runCommand(
       const input = organizationInput.parse(payload);
       if (!input.opportunityId) {
         throw new PlatformSecurityError('An opportunity is required for conversion.', 400);
-      }
-      const [lockedOpportunity] = await db.$queryRaw<
-        Array<{ id: string; convertedOrganizationId: string | null }>
-      >`SELECT id, "convertedOrganizationId"
-        FROM platform_opportunities
-        WHERE id = ${input.opportunityId}
-        FOR UPDATE`;
-      if (!lockedOpportunity) {
-        throw new PlatformSecurityError('Opportunity not found.', 400);
-      }
-      if (lockedOpportunity.convertedOrganizationId) {
-        throw new PlatformSecurityError('Opportunity has already been converted.', 409);
       }
       const organization = await bootstrapOrganization(db, actor, input);
       return {
