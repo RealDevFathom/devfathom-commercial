@@ -4,10 +4,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import PharmacyFinancePage from './page';
 import { MarginComparisonSection } from './margin-comparison';
 import { LedgerReportsSection } from './ledger-reports';
+import { SectionCard } from '@/components/ui/section-card';
 import { FinancialStatements } from './financial-statements';
 
 const mocks = vi.hoisted(() => ({
   financialStatements: vi.fn(),
+  expenseAging: vi.fn(),
+  expenseSuppliers: vi.fn(),
   branches: vi.fn(),
   workspace: vi.fn(),
   marginComparison: vi.fn(),
@@ -69,6 +72,11 @@ beforeEach(() => {
     { id: 'branch_1', name: 'Main' },
     { id: 'branch_2', name: 'Second authorized branch' },
   ]);
+  mocks.expenseAging.mockResolvedValue({
+    asOf: new Date(), from: new Date(), retrievedAt: new Date(),
+    bounds: { maxRows: 200, maxWindowDays: 366 }, rows: [], csv: '',
+  });
+  mocks.expenseSuppliers.mockResolvedValue([{ id: 'supplier-1', name: 'City Utilities' }]);
   mocks.workspace.mockResolvedValue({
     settlementCandidates: [],
     settlementBatches: [],
@@ -242,5 +250,61 @@ describe('shared Finance posting window', () => {
       branchId: 'branch_1',
       at: '2026-09-12T00:00:00.000Z',
     });
+  });
+});
+
+function nativeApHtml(tree: ReactNode) {
+  let section: ReactElement | undefined;
+  function visit(node: ReactNode) {
+    Children.forEach(node, child => {
+      if (!isValidElement<{ title?: string; children?: ReactNode }>(child)) return;
+      if (child.type === SectionCard && child.props.title === 'Non-stock supplier invoices') section = child;
+      else visit(child.props.children);
+    });
+  }
+  visit(tree);
+  if (!section) throw new Error('Expected native AP section');
+  const container = document.createElement('div');
+  container.innerHTML = renderToStaticMarkup(section);
+  return container;
+}
+
+describe('native AP isolation and supplier selection', () => {
+  it('retains all existing Finance sections when the aging reader fails', async () => {
+    mocks.expenseAging.mockRejectedValue(new Error('clock skew or database failure'));
+    const tree = await PharmacyFinancePage({ searchParams: Promise.resolve({}) });
+    expect(sectionProps(tree, LedgerReportsSection).branchId).toBe('branch_1');
+    expect(sectionProps(tree, FinancialStatements).branchId).toBe('branch_1');
+    expect(sectionProps(tree, MarginComparisonSection).branchId).toBe('branch_1');
+    const html = nativeApHtml(tree);
+    expect(html.querySelector('[role="alert"]')?.textContent).toContain('Supplier aging could not load');
+    expect(html.querySelector('[name="supplierId"] option[value="supplier-1"]')?.textContent).toBe('City Utilities');
+    expect(html.querySelector('[name="invoiceId"]')).toBeNull();
+  });
+
+  it('uses authorized supplier names and requests a database-clock snapshot with no age cutoff', async () => {
+    mocks.expenseAging.mockResolvedValue({
+      asOf: new Date(), retrievedAt: new Date(), from: new Date(), bounds: { maxRows: 200, maxWindowDays: 366 }, csv: '',
+      rows: [{ id: 'old-invoice', supplierInvoiceRef: 'OLD-2025', dueAt: new Date('2025-02-01Z'), outstandingMinor: 500, daysPastDue: 588 }],
+    });
+    const tree = await PharmacyFinancePage({ searchParams: Promise.resolve({ branch: 'branch_2' }) });
+    expect(mocks.expenseAging).toHaveBeenCalledWith({ branchId: 'branch_2', format: 'CSV', limit: 200 });
+    expect(mocks.expenseSuppliers).toHaveBeenCalledWith({ branchId: 'branch_2' });
+    const html = nativeApHtml(tree);
+    expect(html.querySelector('input[name="supplierId"]')).toBeNull();
+    expect(html.querySelector('select[name="supplierId"] option[value="supplier-1"]')?.textContent).toBe('City Utilities');
+    expect(html.querySelector('select[name="invoiceId"] option[value="old-invoice"]')?.textContent).toContain('OLD-2025');
+  });
+
+  it.each([null, []])('keeps Finance usable and disables invoice creation when supplier choices are %j', async suppliers => {
+    if (suppliers === null) mocks.expenseSuppliers.mockRejectedValue(new Error('unavailable'));
+    else mocks.expenseSuppliers.mockResolvedValue(suppliers);
+    const tree = await PharmacyFinancePage({ searchParams: Promise.resolve({}) });
+    expect(sectionProps(tree, LedgerReportsSection).branchId).toBe('branch_1');
+    const html = nativeApHtml(tree);
+    expect(html.querySelector('select[name="supplierId"]')?.hasAttribute('disabled')).toBe(true);
+    const createForm = html.querySelector('[value="create-expense-invoice"]')?.closest('form');
+    expect(createForm?.querySelector('button[type="submit"]')?.hasAttribute('disabled')).toBe(true);
+    expect(html.querySelector('#expense-supplier-help')?.textContent).toContain(suppliers === null ? 'could not load' : 'Add and authorize');
   });
 });

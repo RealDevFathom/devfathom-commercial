@@ -26,6 +26,7 @@ import {
   reverseSupplierExpenseSettlement,
   settleSupplierExpenseInvoice,
   supplierExpenseAging,
+  voidSupplierExpenseInvoice,
 } from '@/lib/pharmacy/native-ap';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { assertInOrganization } from '../org-refs';
@@ -152,12 +153,23 @@ const allocation = z.object({
 });
 
 export const pharmacyFinanceRouter = router({
+  expenseSuppliers: bookkeepingProcedure
+    .input(z.object({ branchId: id }))
+    .query(async ({ ctx, input }) => {
+      const scoped = await scope(ctx, input.branchId);
+      return ctx.db.pharmacySupplier.findMany({
+        where: { organizationId: scoped.organizationId, active: true, authorized: true },
+        select: { id: true, name: true },
+        orderBy: [{ name: 'asc' }, { id: 'asc' }],
+      });
+    }),
+
   expenseAging: bookkeepingProcedure
     .input(
       z.object({
         branchId: id,
-        from: at,
-        asOf: at,
+        from: at.optional(),
+        asOf: at.optional(),
         limit: z.number().int().min(1).max(200).default(200),
         format: z.enum(['JSON', 'CSV']).default('JSON'),
       })
@@ -199,6 +211,15 @@ export const pharmacyFinanceRouter = router({
       try {
         const scoped = await scope(ctx, input.branchId);
         return await ctx.db.$transaction(tx => reverseSupplierExpenseSettlement(txDb(tx), scoped, input));
+      } catch (error) { fail(error); }
+    }),
+
+  voidExpenseInvoice: bookkeepingProcedure
+    .input(z.object({ branchId: id, invoiceId: id, reason: z.string().trim().min(1).max(500), at, idempotencyKey: id }))
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const scoped = await scope(ctx, input.branchId);
+        return await ctx.db.$transaction(tx => voidSupplierExpenseInvoice(txDb(tx), scoped, input));
       } catch (error) { fail(error); }
     }),
 

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   can: vi.fn(),
+  supplierFindMany: vi.fn(),
   branchFindMany: vi.fn(),
   branchFindFirst: vi.fn(),
   reportFindFirst: vi.fn(),
@@ -55,6 +56,7 @@ function caller(role = 'ADMIN', context: Partial<TRPCContext> = {}) {
       },
       pharmacyOwnerDigestSetting: { upsert: mocks.settingUpsert },
       pharmacyBankStatementLine: { create: mocks.bankLineCreate },
+      pharmacySupplier: { findMany: mocks.supplierFindMany },
     },
     entitlements: {
       organizationId: 'org_1',
@@ -421,5 +423,34 @@ describe('finance comparison boundary', () => {
       code: 'BAD_REQUEST',
     });
     expect(mocks.comparison).not.toHaveBeenCalled();
+  });
+});
+
+describe('native AP supplier choices', () => {
+  it('returns only named active authorized suppliers inside the validated workspace', async () => {
+    mocks.branchFindMany.mockResolvedValue([{ id: 'branch_1' }]);
+    mocks.supplierFindMany.mockResolvedValue([{ id: 'supplier_1', name: 'Utilities' }]);
+    await expect(caller().expenseSuppliers({ branchId: 'branch_1' })).resolves.toEqual([{ id: 'supplier_1', name: 'Utilities' }]);
+    expect(mocks.supplierFindMany).toHaveBeenCalledWith({
+      where: { organizationId: 'org_1', active: true, authorized: true },
+      select: { id: true, name: true }, orderBy: [{ name: 'asc' }, { id: 'asc' }],
+    });
+  });
+
+  it('rejects a branch outside the workspace before reading suppliers', async () => {
+    mocks.branchFindMany.mockResolvedValue([]);
+    await expect(caller().expenseSuppliers({ branchId: 'foreign' })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mocks.supplierFindMany).not.toHaveBeenCalled();
+  });
+
+  it('requires the Finance entitlement before reading suppliers', async () => {
+    vi.mocked(hasModule).mockReturnValue(false);
+    await expect(caller().expenseSuppliers({ branchId: 'branch_1' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.supplierFindMany).not.toHaveBeenCalled();
+  });
+
+  it('requires an administrator before reading suppliers', async () => {
+    await expect(caller('EMPLOYEE').expenseSuppliers({ branchId: 'branch_1' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.supplierFindMany).not.toHaveBeenCalled();
   });
 });

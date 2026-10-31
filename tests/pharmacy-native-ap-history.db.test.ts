@@ -32,7 +32,8 @@ describeIfDatabase('native AP historical aging in PostgreSQL', () => {
         "occurredAt" timestamptz, "createdAt" timestamptz
       );
       INSERT INTO pharmacy_supplier_expense_invoices VALUES
-        ('invoice', 'org', 'branch', 'REF', 'Utilities', '2026-01-01Z', '2026-01-15Z', 100, '2026-01-01Z');
+        ('invoice', 'org', 'branch', 'REF', 'Utilities', '2026-01-01Z', '2026-01-15Z', 100, '2026-01-01Z'),
+        ('old-invoice', 'org', 'branch', 'OLD', 'Old utilities', '2024-01-01Z', '2024-02-01Z', 500, '2024-01-01Z');
       INSERT INTO pharmacy_supplier_expense_invoice_events VALUES
         ('void', 'org', 'invoice', 'VOID', '2026-01-15Z', '2026-03-02Z');
     `);
@@ -59,6 +60,7 @@ describeIfDatabase('native AP historical aging in PostgreSQL', () => {
       { from: new Date('2026-01-01Z'), asOf: new Date('2026-02-01Z') }
     );
     expect(report.rows).toEqual([
+      expect.objectContaining({ id: 'old-invoice', outstandingMinor: 500 }),
       expect.objectContaining({ id: 'invoice', outstandingMinor: 100 }),
     ]);
   });

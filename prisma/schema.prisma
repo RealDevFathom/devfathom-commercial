@@ -3628,14 +3628,14 @@ model PharmacySupplierExpenseInvoice {
   lines             PharmacySupplierExpenseInvoiceLine[]
   settlements       PharmacySupplierExpenseSettlement[]
   events            PharmacySupplierExpenseInvoiceEvent[]
-  supplier          PharmacySupplier @relation(fields: [organizationId, supplierId], references: [organizationId, id], onDelete: Restrict)
-  journalEntry      FinanceJournalEntry @relation(fields: [organizationId, journalEntryId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_supplier_expense_invoices_journal_fkey")
-  visibilityAnchor  PharmacyBranch @relation("PharmacySupplierExpenseInvoiceVisibilityAnchor", fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+  supplier          PharmacySupplier @relation(fields: [organizationId, supplierId], references: [organizationId, id], onDelete: Restrict, onUpdate: Cascade, map: "pharmacy_supplier_expense_invoices_supplier_fkey")
+  journalEntry      FinanceJournalEntry @relation(fields: [organizationId, journalEntryId], references: [organizationId, id], onDelete: Restrict, onUpdate: Cascade, map: "pharmacy_supplier_expense_invoices_journal_fkey")
+  visibilityAnchor  PharmacyBranch @relation("PharmacySupplierExpenseInvoiceVisibilityAnchor", fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_supplier_expense_invoices_branch_fkey")
 
-  @@unique([organizationId, id])
-  @@unique([organizationId, supplierId, supplierInvoiceRef])
-  @@unique([organizationId, idempotencyKey])
-  @@index([organizationId, branchId, dueAt, id])
+  @@unique([organizationId, id], map: "pharmacy_supplier_expense_invoices_org_id_key")
+  @@unique([organizationId, supplierId, supplierInvoiceRef], map: "pharmacy_supplier_expense_invoices_identity_key")
+  @@unique([organizationId, idempotencyKey], map: "pharmacy_supplier_expense_invoices_idempotency_key")
+  @@index([organizationId, branchId, dueAt, id], map: "pharmacy_supplier_expense_invoices_aging_idx")
   @@map("pharmacy_supplier_expense_invoices")
 }
 
@@ -3646,9 +3646,9 @@ model PharmacySupplierExpenseInvoiceLine {
   description    String
   amountMinor    Int
   createdAt      DateTime @default(now())
-  invoice PharmacySupplierExpenseInvoice @relation(fields: [organizationId, invoiceId], references: [organizationId, id], onDelete: Restrict)
-  @@unique([organizationId, id])
-  @@index([organizationId, invoiceId])
+  invoice PharmacySupplierExpenseInvoice @relation(fields: [organizationId, invoiceId], references: [organizationId, id], onDelete: Restrict, onUpdate: NoAction, map: "pharmacy_supplier_expense_invoice_lines_invoice_fkey")
+  @@unique([organizationId, id], map: "pharmacy_supplier_expense_invoice_lines_org_id_key")
+  @@index([organizationId, invoiceId], map: "pharmacy_supplier_expense_invoice_lines_invoice_idx")
   @@map("pharmacy_supplier_expense_invoice_lines")
 }
 
@@ -3665,14 +3665,15 @@ model PharmacySupplierExpenseSettlement {
   reference             String
   fundingAccount        String
   occurredAt            DateTime
+  createdByUserId       String
   createdAt             DateTime @default(now())
-  invoice PharmacySupplierExpenseInvoice @relation(fields: [organizationId, invoiceId], references: [organizationId, id], onDelete: Restrict)
-  bookkeepingTransaction PharmacyBookkeepingTransaction @relation(fields: [organizationId, bookkeepingTransactionId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_supplier_expense_settlements_transaction_fkey")
+  invoice PharmacySupplierExpenseInvoice @relation(fields: [organizationId, invoiceId], references: [organizationId, id], onDelete: Restrict, onUpdate: NoAction, map: "pharmacy_supplier_expense_settlements_invoice_fkey")
+  bookkeepingTransaction PharmacyBookkeepingTransaction @relation(fields: [organizationId, bookkeepingTransactionId], references: [organizationId, id], onDelete: Restrict, onUpdate: Cascade, map: "pharmacy_supplier_expense_settlements_transaction_fkey")
   reversals PharmacySupplierExpenseSettlementReversal[]
-  @@unique([organizationId, id])
-  @@unique([organizationId, idempotencyKey])
-  @@unique([organizationId, bookkeepingTransactionId])
-  @@index([organizationId, invoiceId, occurredAt])
+  @@unique([organizationId, id], map: "pharmacy_supplier_expense_settlements_org_id_key")
+  @@unique([organizationId, idempotencyKey], map: "pharmacy_supplier_expense_settlements_idempotency_key")
+  @@unique([organizationId, bookkeepingTransactionId], map: "pharmacy_supplier_expense_settlements_transaction_key")
+  @@index([organizationId, invoiceId, occurredAt], map: "pharmacy_supplier_expense_settlements_invoice_idx")
   @@map("pharmacy_supplier_expense_settlements")
 }
 
@@ -3685,10 +3686,10 @@ model PharmacySupplierExpenseSettlementReversal {
   reversedAt     DateTime
   createdByUserId String
   createdAt      DateTime @default(now())
-  settlement PharmacySupplierExpenseSettlement @relation(fields: [organizationId, settlementId], references: [organizationId, id], onDelete: Restrict)
-  @@unique([organizationId, id])
-  @@unique([organizationId, idempotencyKey])
-  @@unique([organizationId, settlementId])
+  settlement PharmacySupplierExpenseSettlement @relation(fields: [organizationId, settlementId], references: [organizationId, id], onDelete: Restrict, onUpdate: NoAction, map: "pharmacy_supplier_expense_settlement_reversals_settlement_fkey")
+  @@unique([organizationId, id], map: "pharmacy_supplier_expense_settlement_reversals_org_id_key")
+  @@unique([organizationId, idempotencyKey], map: "pharmacy_supplier_expense_settlement_reversals_idempotency_key")
+  @@unique([organizationId, settlementId], map: "pharmacy_supplier_expense_settlement_reversals_settlement_key")
   @@map("pharmacy_supplier_expense_settlement_reversals")
 }
 
@@ -3701,9 +3702,9 @@ model PharmacySupplierExpenseInvoiceEvent {
   occurredAt     DateTime
   detail         String?
   createdAt      DateTime @default(now())
-  invoice PharmacySupplierExpenseInvoice @relation(fields: [organizationId, invoiceId], references: [organizationId, id], onDelete: Restrict)
-  @@unique([organizationId, id])
-  @@index([organizationId, invoiceId, occurredAt])
+  invoice PharmacySupplierExpenseInvoice @relation(fields: [organizationId, invoiceId], references: [organizationId, id], onDelete: Restrict, onUpdate: NoAction, map: "pharmacy_supplier_expense_invoice_events_invoice_fkey")
+  @@unique([organizationId, id], map: "pharmacy_supplier_expense_invoice_events_org_id_key")
+  @@index([organizationId, invoiceId, occurredAt], map: "pharmacy_supplier_expense_invoice_events_invoice_idx")
   @@map("pharmacy_supplier_expense_invoice_events")
 }
 
