@@ -2633,6 +2633,9 @@ async function runCommand(
       const saved = roleId
         ? await db.organizationRole.update({ where: { id: roleId }, data: role })
         : await db.organizationRole.create({ data: role });
+      await db.$queryRaw(
+        Prisma.sql`SELECT id FROM organization_roles WHERE id=${saved.id} AND "organizationId"=${input.organizationId} FOR UPDATE`
+      );
       await db.organizationRolePermission.deleteMany({
         where: { organizationRoleId: saved.id },
       });
@@ -2690,6 +2693,9 @@ async function runCommand(
           expiresAt: optionalDate.optional(),
         })
         .parse(payload);
+      await db.$queryRaw(
+        Prisma.sql`SELECT id FROM users WHERE id=${input.userId} AND "organizationId"=${input.organizationId} FOR UPDATE`
+      );
       const saved = await db.userPermissionOverride.upsert({
         where: {
           userId_capability: {
@@ -2712,6 +2718,9 @@ async function runCommand(
       const input = z.object({ id }).parse(payload);
       const before = await db.userPermissionOverride.findUnique({ where: { id: input.id } });
       if (!before) throw new PlatformSecurityError('Permission override not found.', 400);
+      await db.$queryRaw(
+        Prisma.sql`SELECT id FROM users WHERE id=${before.userId} AND "organizationId"=${before.organizationId} FOR UPDATE`
+      );
       await db.userPermissionOverride.delete({ where: { id: before.id } });
       return {
         targetType: 'UserPermissionOverride',
@@ -2734,6 +2743,7 @@ async function runCommand(
         })
         .parse(payload);
       const { id: userId, ...data } = input;
+      await db.$queryRaw(Prisma.sql`SELECT id FROM users WHERE id=${userId} FOR UPDATE`);
       const before = await db.user.findUnique({ where: { id: userId } });
       if (!before) throw new PlatformSecurityError('Organization user not found.', 400);
       if (data.department !== undefined) {

@@ -357,9 +357,17 @@ function counterCapabilityDecision(
  * explicit assignment elsewhere. That exception is recorded on the audit.
  */
 /** A branch outside the session organization is a scope denial, not a bad request. */
-async function branchScopeOrForbidden(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
+async function branchScopeOrForbidden(
+  ctx: TRPCContext,
+  branch: string,
+  db: ScopedDb = ctx.db
+): Promise<LedgerScope> {
   try {
-    return await scopeFor(ctx, branch);
+    const organizationId = ctx.entitlements?.organizationId;
+    const actorId = ctx.session?.user?.id;
+    if (!organizationId || !actorId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+    await assertInOrganization(db.pharmacyBranch, organizationId, [branch], { active: true });
+    return { organizationId, branchId: branch, actorId };
   } catch (error) {
     if (error instanceof TRPCError && error.code === 'BAD_REQUEST') {
       throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
@@ -372,9 +380,10 @@ async function requireCounterReceiptAccess(
   ctx: TRPCContext,
   branch: string,
   requireCanonicalCounter = false,
-  authorizeMember?: (rules: { capability: string; effect: string }[]) => boolean
+  authorizeMember?: (rules: { capability: string; effect: string }[]) => boolean,
+  db: ScopedDb = ctx.db
 ): Promise<LedgerScope> {
-  const scope = await branchScopeOrForbidden(ctx, branch);
+  const scope = await branchScopeOrForbidden(ctx, branch, db);
   const user = ctx.session!.user;
   if (!user.organizationId || user.organizationId !== scope.organizationId) {
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
@@ -382,7 +391,10 @@ async function requireCounterReceiptAccess(
 
   if (
     requireCanonicalCounter &&
-    !(await can(subjectFromSession(user), 'pharmacy:counter', undefined, { db: ctx.db }))
+    !(await can(subjectFromSession(user), 'pharmacy:counter', undefined, {
+      db,
+      organizationId: scope.organizationId,
+    }))
   ) {
     throw new TRPCError({
       code: 'FORBIDDEN',
@@ -390,9 +402,10 @@ async function requireCounterReceiptAccess(
     });
   }
 
-  const member = await ctx.db.user.findUnique({
-    where: { id: user.id },
+  const member = await db.user.findUnique({
+    where: { organizationId_id: { id: user.id, organizationId: scope.organizationId } },
     select: {
+      role: true,
       status: true,
       organizationId: true,
       organizationRole: {
@@ -430,7 +443,7 @@ async function requireCounterReceiptAccess(
     });
   }
 
-  const available = await ctx.db.pharmacyBranch.findFirst({
+  const available = await db.pharmacyBranch.findFirst({
     where: { id: branch, organizationId: scope.organizationId, active: true },
     select: { id: true },
   });
@@ -438,7 +451,7 @@ async function requireCounterReceiptAccess(
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
   }
 
-  const rows = await ctx.db.pharmacyBranchAssignment.findMany({
+  const rows = await db.pharmacyBranchAssignment.findMany({
     where: {
       organizationId: scope.organizationId,
       userId: user.id,
@@ -450,9 +463,14 @@ async function requireCounterReceiptAccess(
   const assigned = new Set(rows.map((row) => row.branchId));
   if (assigned.has(branch)) return scope;
 
-  // Session role only. An organization-role key is not an administrator grant.
-  // An assigned admin still reaches every other active branch of this organization.
-  const orgAdmin = user.role === 'ADMIN' && user.organizationId === scope.organizationId;
+  // Require both session and current member authority: the locked re-read must
+  // observe an administrator demotion. A custom role key is not an admin grant.
+  // The tenant owner/admin retains all-capability access, including for stock and
+  // money mutations, when a solo-owner workspace has no branch assignments.
+  const orgAdmin =
+    user.role === 'ADMIN' &&
+    member.role === 'ADMIN' &&
+    user.organizationId === scope.organizationId;
   if (orgAdmin) {
     annotateAudit(ctx, {
       targetType: 'PharmacyBranch',
@@ -467,7 +485,108 @@ async function requireCounterReceiptAccess(
     });
     return scope;
   }
+  // Non-admin staff, including returns and refunds that move stock or money,
+  // must be actively assigned to the branch.
   throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+}
+
+/**
+ * Refund authority follows the stored tender. Khata-capable staff may refund a
+ * CREDIT tender without counter access (the Khata write gate still applies).
+ * Every other tender moves drawer, card, or wallet money and needs the receipt
+ * capability family plus the canonical `pharmacy:counter` capability. Pass the
+ * transaction client to re-read authority while the authorization rows are locked.
+ */
+async function requireRefundTenderAccess(
+  ctx: TRPCContext,
+  input: { branchId: string; originalTenderId: string },
+  db: ScopedDb = ctx.db
+): Promise<{ scope: LedgerScope; credit: boolean }> {
+  const organizationId = ctx.entitlements?.organizationId;
+  const canonicalCounter =
+    !!organizationId &&
+    (await can(subjectFromSession(ctx.session!.user), 'pharmacy:counter', undefined, {
+      db,
+      organizationId,
+    }));
+  let receiptAccess = false;
+  const scope = await requireCounterReceiptAccess(
+    ctx,
+    input.branchId,
+    false,
+    (rules) => {
+      receiptAccess = canonicalCounter && counterCapabilityDecision(rules) === 'ALLOW';
+      return receiptAccess || counterCapabilityDecision(rules, KHATA_CAPABILITIES) === 'ALLOW';
+    },
+    db
+  );
+  const tender = await db.pharmacyTender.findFirst({
+    where: {
+      id: input.originalTenderId,
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+    },
+    select: { type: true },
+  });
+  const credit = tender?.type === 'CREDIT';
+  if (!credit && !receiptAccess) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission for this action.',
+    });
+  }
+  return { scope, credit };
+}
+
+/**
+ * Stabilize the parent rows for counter authority plus the current grant rows.
+ * Authorization writers lock the same member/role parent before inserting,
+ * deleting, or changing a grant, so absent rows are serialized as well. The
+ * order is deliberate (branch, member, role, grants, assignment). PostgreSQL
+ * holds the locks until the money/stock transaction commits; a revocation
+ * therefore wins before a later action, or waits for an admitted action.
+ */
+async function lockCounterReceiptAuthorization(
+  db: ScopedDb,
+  organizationId: string,
+  userId: string,
+  branch: string
+): Promise<void> {
+  // Branch lifecycle changes take an UPDATE lock on this row. Holding a SHARE
+  // lock makes deactivation wait for an admitted money/stock mutation, while a
+  // deactivation that wins the race is observed by the authorization re-read.
+  await db.$queryRaw(Prisma.sql`
+    SELECT id FROM pharmacy_branches
+    WHERE "organizationId"=${organizationId} AND id=${branch} AND active=true
+    FOR SHARE
+  `);
+  await db.$queryRaw(Prisma.sql`
+    SELECT id FROM users
+    WHERE "organizationId"=${organizationId} AND id=${userId}
+    FOR UPDATE
+  `);
+  await db.$queryRaw(Prisma.sql`
+    SELECT r.id FROM organization_roles r
+    JOIN users u ON u."organizationRoleId"=r.id
+    WHERE u."organizationId"=${organizationId} AND u.id=${userId}
+    FOR SHARE OF r
+  `);
+  await db.$queryRaw(Prisma.sql`
+    SELECT p.id FROM organization_role_permissions p
+    JOIN users u ON u."organizationRoleId"=p."organizationRoleId"
+    WHERE u."organizationId"=${organizationId} AND u.id=${userId}
+    ORDER BY p.id FOR SHARE OF p
+  `);
+  await db.$queryRaw(Prisma.sql`
+    SELECT id FROM user_permission_overrides
+    WHERE "organizationId"=${organizationId} AND "userId"=${userId}
+    ORDER BY id FOR SHARE
+  `);
+  await db.$queryRaw(Prisma.sql`
+    SELECT id FROM pharmacy_branch_assignments
+    WHERE "organizationId"=${organizationId} AND "userId"=${userId} AND "branchId"=${branch}
+    FOR UPDATE
+  `);
 }
 
 const closeDate = z
@@ -870,30 +989,18 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        let receiptAccess = false;
-        const scope = await requireCounterReceiptAccess(ctx, input.branchId, false, (rules) => {
-          receiptAccess = counterCapabilityDecision(rules) === 'ALLOW';
-          // The stored tender selects the permission boundary after member/branch checks.
-          return receiptAccess || counterCapabilityDecision(rules, KHATA_CAPABILITIES) === 'ALLOW';
-        });
+        await requireRefundTenderAccess(ctx, input);
         return await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
-          const tender = await db.pharmacyTender.findFirst({
-            where: {
-              id: input.originalTenderId,
-              organizationId: scope.organizationId,
-              branchId: scope.branchId,
-            },
-            select: { type: true },
-          });
-          if (tender?.type !== 'CREDIT') {
-            if (!receiptAccess)
-              throw new TRPCError({
-                code: 'FORBIDDEN',
-                message: 'You do not have permission for this action.',
-              });
-            return refundPharmacyTender(db, scope, input);
-          }
+          await lockCounterReceiptAuthorization(
+            db,
+            ctx.entitlements!.organizationId,
+            ctx.session!.user.id,
+            input.branchId
+          );
+          // Re-read while the authorization rows remain locked through commit.
+          const { scope, credit } = await requireRefundTenderAccess(ctx, input, db);
+          if (!credit) return refundPharmacyTender(db, scope, input);
           await khataScope(ctx, input.branchId, 'write');
           await bindKhataBranch(db, scope);
           const charge = await db.pharmacyKhataEvent.findFirst({
@@ -1416,10 +1523,25 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+        await requireCounterReceiptAccess(ctx, input.branchId, true);
         return await ctx.db.$transaction(async (tx) => {
           try {
-            return await returnSaleLine(txDb(tx), scope, input);
+            const db = txDb(tx);
+            await lockCounterReceiptAuthorization(
+              db,
+              ctx.entitlements!.organizationId,
+              ctx.session!.user.id,
+              input.branchId
+            );
+            // Re-read while the authorization rows remain locked through commit.
+            const scope = await requireCounterReceiptAccess(
+              ctx,
+              input.branchId,
+              true,
+              undefined,
+              db
+            );
+            return await returnSaleLine(db, scope, input);
           } catch (error) {
             if (error instanceof ControlledRestorationDenied && !error.forbidden)
               return { blocked: error.message };

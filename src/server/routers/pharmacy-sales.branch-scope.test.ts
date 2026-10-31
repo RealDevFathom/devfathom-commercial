@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // The drawer and close family, and the tender and refund that move cash through
 // the same drawer, take their branch from the input. `scopeFor` refuses a branch
 // that is not an active pharmacy branch of the caller's organization (one
-// `assertInOrganization` lookup); the counter's cash tender reaches it through
+// `assertInOrganization` lookup); the counter's cash tender and refund reach it through
 // `branchScopeOrForbidden`, which words that refusal as a scope denial. Every one
 // of these nine procedures must refuse such a branch before the settlement
 // library takes a lock, reads a drawer or writes anything. The close procedures

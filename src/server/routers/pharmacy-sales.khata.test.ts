@@ -41,6 +41,7 @@ const input = {
 };
 function fixture() {
   const member = {
+    role: 'ADMIN',
     status: 'ACTIVE',
     organizationId: 'org-a',
     organizationRole: {

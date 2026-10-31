@@ -144,6 +144,51 @@ describe('opt-in pharmacy Owner / Operator access', () => {
   });
 });
 
+describe('tenant-scoped custom permissions', () => {
+  it('uses the organization-qualified user key when the caller supplies its tenant', async () => {
+    const db = authorizationDb({
+      overrides: [{ capability: 'pharmacy:counter', effect: 'ALLOW' }],
+    });
+
+    await expect(
+      can(employee, 'pharmacy:counter', undefined, { db, organizationId: 'org_expected' })
+    ).resolves.toBe(true);
+    expect(db.user.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          organizationId_id: { organizationId: 'org_expected', id: employee.id },
+        },
+      })
+    );
+  });
+
+  it('denies a same-id permission record owned by another organization', async () => {
+    const findUnique = vi.fn(
+      async (args: { where: { organizationId_id?: { organizationId: string; id: string } } }) =>
+        args.where.organizationId_id?.organizationId === 'org_foreign'
+          ? {
+              organizationRole: {
+                permissions: [{ capability: 'pharmacy:counter', effect: 'ALLOW' }],
+              },
+              permissionOverrides: [],
+            }
+          : null
+    );
+    const db = { user: { findUnique } } as unknown as AuthzDb;
+
+    await expect(
+      can(employee, 'pharmacy:counter', undefined, { db, organizationId: 'org_expected' })
+    ).resolves.toBe(false);
+    expect(findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          organizationId_id: { organizationId: 'org_expected', id: employee.id },
+        },
+      })
+    );
+  });
+});
+
 describe('custom ABAC decisions', () => {
   const pharmacyPermissionsFor = (roleKey: string): Permission[] =>
     roleTemplatesForVertical('PHARMACY')

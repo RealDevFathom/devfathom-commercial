@@ -24,16 +24,19 @@ export type CanOptions = {
   source?: Environment['source'];
   ip?: string | null;
   db?: AuthzDb;
+  /** Tenant expected to own the subject. Security-sensitive callers should always supply it. */
+  organizationId?: string;
 };
 
 async function customDecision(
   db: AuthzDb,
   userId: string,
+  organizationId: string | undefined,
   action: string,
   now: Date
 ): Promise<{ decision: boolean | null; hasOrganizationRole: boolean }> {
   const user = await db.user.findUnique({
-    where: { id: userId },
+    where: organizationId ? { organizationId_id: { organizationId, id: userId } } : { id: userId },
     select: {
       organizationRole: {
         select: { permissions: { select: { capability: true, effect: true } } },
@@ -79,7 +82,13 @@ export async function can(
     return false;
   }
   try {
-    const { decision, hasOrganizationRole } = await customDecision(db, subject.id, action, env.now);
+    const { decision, hasOrganizationRole } = await customDecision(
+      db,
+      subject.id,
+      opts.organizationId,
+      action,
+      env.now
+    );
     if (decision !== null) return decision;
     // Procurement's tenant-admin fallback exists only for legacy users who do
     // not yet have an organization role. Once a role is assigned, its

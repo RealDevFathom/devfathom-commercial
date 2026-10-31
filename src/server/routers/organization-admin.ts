@@ -424,21 +424,29 @@ export const organizationAdminRouter = router({
       if (existing?.isSystem) {
         throw new TRPCError({ code: 'FORBIDDEN', message: 'System roles cannot be modified.' });
       }
-      const role = roleId
-        ? await ctx.db.organizationRole.update({ where: { id: roleId }, data: values })
-        : await ctx.db.organizationRole.create({ data: { organizationId: id, ...values } });
-      await ctx.db.organizationRolePermission.deleteMany({
-        where: { organizationRoleId: role.id },
-      });
-      if (permissions.length) {
-        await ctx.db.organizationRolePermission.createMany({
-          data: permissions.map((permission) => ({
-            organizationId: id,
-            organizationRoleId: role.id,
-            ...permission,
-          })),
+      const role = await ctx.db.$transaction(async (tx) => {
+        const saved = roleId
+          ? await tx.organizationRole.update({ where: { id: roleId }, data: values })
+          : await tx.organizationRole.create({ data: { organizationId: id, ...values } });
+        // Counter mutations lock this stable parent too. This makes replacement
+        // of an empty permission set serialize with their authorization read.
+        await tx.$queryRaw(
+          Prisma.sql`SELECT id FROM organization_roles WHERE id=${saved.id} AND "organizationId"=${id} FOR UPDATE`
+        );
+        await tx.organizationRolePermission.deleteMany({
+          where: { organizationRoleId: saved.id },
         });
-      }
+        if (permissions.length) {
+          await tx.organizationRolePermission.createMany({
+            data: permissions.map((permission) => ({
+              organizationId: id,
+              organizationRoleId: saved.id,
+              ...permission,
+            })),
+          });
+        }
+        return saved;
+      });
       annotateAudit(ctx, {
         targetType: 'OrganizationRole',
         targetId: role.id,
@@ -512,6 +520,11 @@ export const organizationAdminRouter = router({
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'You cannot deactivate yourself.' });
       }
       const saved = await ctx.db.$transaction(async (tx) => {
+        // Serialize role/status changes with in-flight counter mutations and
+        // with permission-override and branch-assignment writers for this user.
+        await tx.$queryRaw(
+          Prisma.sql`SELECT id FROM users WHERE id=${input.id} AND "organizationId"=${id} FOR UPDATE`
+        );
         const removesActiveAdmin =
           before.role === 'ADMIN' &&
           before.status === 'ACTIVE' &&

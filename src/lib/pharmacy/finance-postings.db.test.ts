@@ -917,7 +917,7 @@ describeIfDatabase('FIN-01 — count adjustment', () => {
 });
 
 describeIfDatabase('FIN-01 — POS settlement and MIG-03 opening events', () => {
-  async function settlementRows(label: string) {
+  async function settlementRows(label: string, type: 'CASH' | 'CARD' | 'WALLET' = 'CASH') {
     const branchId = branch(label);
     return inOrg(ORG_A, async (db) => {
       await ensureBranch(db, ORG_A, branchId);
@@ -940,11 +940,11 @@ describeIfDatabase('FIN-01 — POS settlement and MIG-03 opening events', () => 
           organizationId: ORG_A,
           branchId,
           saleId: sale.id,
-          type: 'CASH',
+          type,
           amountMinor: 12_500,
-          cashReceivedMinor: 12_500,
-          changeGivenMinor: 0,
-          drawerSessionId: drawer.id,
+          cashReceivedMinor: type === 'CASH' ? 12_500 : null,
+          changeGivenMinor: type === 'CASH' ? 0 : null,
+          drawerSessionId: type === 'CASH' ? drawer.id : null,
           businessDate: SOLD_AT,
           actorId: ACTOR,
           deviceId,
@@ -995,6 +995,42 @@ describeIfDatabase('FIN-01 — POS settlement and MIG-03 opening events', () => 
     expect(entry).toMatchObject({ sourceKind: 'PHARMACY_REFUND', sourceId: refund.id });
     expect(totalFor(entry, 'CASH', 'CREDIT')).toBe(2_500);
   });
+
+  it.each(['CARD', 'WALLET'] as const)(
+    'posts a balanced cash fallback refund for a %s tender',
+    async (type) => {
+      const { branchId, sale, tender } = await settlementRows(`refund-${type}`, type);
+      const refund = await inOrg(ORG_A, async (db) => {
+        const drawer = await db.pharmacyDrawerSession.findFirstOrThrow({
+          where: { organizationId: ORG_A, branchId },
+        });
+        return db.pharmacyRefund.create({
+          data: {
+            organizationId: ORG_A,
+            branchId,
+            saleId: sale.id,
+            originalTenderId: tender.id,
+            amountMinor: 2_500,
+            drawerSessionId: drawer.id,
+            businessDate: LATER,
+            reason: '[CASH; MANUAL REVERSAL REQUIRED] Customer return',
+            actorId: ACTOR,
+          },
+        });
+      });
+      const entry = await inOrg(ORG_A, (db) =>
+        deps.postings.postTenderRefundEntry(
+          db,
+          { organizationId: ORG_A, branchId, actorId: ACTOR },
+          { refundId: refund.id, at: LATER }
+        )
+      );
+      expectBalanced(entry);
+      expect(entry).toMatchObject({ sourceKind: 'PHARMACY_REFUND', sourceId: refund.id });
+      expect(totalFor(entry, 'CASH', 'CREDIT')).toBe(2_500);
+      expect(totalFor(entry, 'BANK', 'CREDIT')).toBe(0);
+    }
+  );
 
   it('posts only the balanced cash variance from a daily close', async () => {
     const branchId = branch('close');

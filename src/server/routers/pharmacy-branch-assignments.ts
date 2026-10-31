@@ -1,5 +1,6 @@
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
+import { Prisma } from '@/generated/prisma/client';
 
 import { ACTIVE_STATUSES } from '@/lib/auth/session-state';
 import { PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
@@ -151,22 +152,27 @@ export const pharmacyBranchAssignmentsRouter = router({
           message: 'That member cannot be assigned to a pharmacy branch.',
         });
       }
-      const row = await ctx.db.pharmacyBranchAssignment.upsert({
-        where: {
-          organizationId_branchId_userId: {
+      const row = await ctx.db.$transaction(async (tx) => {
+        await tx.$queryRaw(
+          Prisma.sql`SELECT id FROM users WHERE id=${input.userId} AND "organizationId"=${organizationId} FOR UPDATE`
+        );
+        return tx.pharmacyBranchAssignment.upsert({
+          where: {
+            organizationId_branchId_userId: {
+              organizationId,
+              branchId: input.branchId,
+              userId: input.userId,
+            },
+          },
+          create: {
             organizationId,
             branchId: input.branchId,
             userId: input.userId,
+            active: true,
           },
-        },
-        create: {
-          organizationId,
-          branchId: input.branchId,
-          userId: input.userId,
-          active: true,
-        },
-        update: { active: true },
-        select: { id: true },
+          update: { active: true },
+          select: { id: true },
+        });
       });
       annotateAudit(ctx, {
         targetType: 'PharmacyBranchAssignment',
@@ -185,9 +191,14 @@ export const pharmacyBranchAssignmentsRouter = router({
         select: { id: true, branchId: true, userId: true },
       });
       if (!row) throw new TRPCError({ code: 'NOT_FOUND', message: 'Assignment was not found.' });
-      await ctx.db.pharmacyBranchAssignment.update({
-        where: { id: row.id },
-        data: { active: false },
+      await ctx.db.$transaction(async (tx) => {
+        await tx.$queryRaw(
+          Prisma.sql`SELECT id FROM users WHERE id=${row.userId} AND "organizationId"=${organizationId} FOR UPDATE`
+        );
+        await tx.pharmacyBranchAssignment.update({
+          where: { id: row.id },
+          data: { active: false },
+        });
       });
       annotateAudit(ctx, {
         targetType: 'PharmacyBranchAssignment',

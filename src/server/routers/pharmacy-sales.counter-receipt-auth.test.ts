@@ -33,7 +33,7 @@ vi.mock('@/lib/pharmacy/counter', async (original) => ({
 vi.mock('@/lib/pharmacy/sales', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/sales')>()),
   readReturnHistory: vi.fn(async () => [{ id: 'return-1' }]),
-  returnSaleLine: vi.fn(async () => ({ returnLineId: 'return-line-1' })),
+  returnSaleLine: vi.fn(async () => ({ returnLine: { id: 'return-line-1' } })),
 }));
 vi.mock('@/lib/pharmacy/settlement', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/settlement')>()),
@@ -89,14 +89,17 @@ function fixture(
   overrides: Permission[] = []
 ) {
   const db = {
-    $queryRaw: vi.fn(async () => []),
     user: {
-      findUnique: vi.fn(async () => ({
-        status: 'ACTIVE',
-        organizationId: 'org-a',
-        organizationRole: { permissions },
-        permissionOverrides: overrides,
-      })),
+      findUnique: vi.fn(async (args?: unknown) => {
+        void args;
+        return {
+          role,
+          status: 'ACTIVE',
+          organizationId: 'org-a',
+          organizationRole: { permissions },
+          permissionOverrides: overrides,
+        };
+      }),
     },
     pharmacyBranch: {
       findMany: vi.fn(async (args: { where: { id: { in: string[] }; organizationId?: string } }) =>
@@ -132,7 +135,12 @@ function fixture(
         },
       ]),
     },
+    pharmacyTender: { findFirst: vi.fn(async () => ({ type: 'CASH' })) },
     organization: { findUnique: vi.fn(async () => ({ currency: 'PKR' })) },
+    $queryRaw: vi.fn(async (query: { strings: readonly string[] }) => {
+      void query;
+      return [];
+    }),
     $transaction: vi.fn(),
   };
   db.$transaction.mockImplementation(async (fn: (inner: typeof db) => Promise<unknown>) => fn(db));
@@ -225,6 +233,225 @@ const paths: {
 ];
 
 describe('counter receipt authorization', () => {
+  const refundInput = {
+    branchId: 'branch-a',
+    originalTenderId: 'tender-1',
+    deviceId: 'device-a',
+    businessDate: new Date('2026-10-01T00:00:00.000Z'),
+    amountMinor: 100,
+    reason: 'Returned medicine',
+    manualCashFallback: true,
+    idempotencyKey: 'refund-1',
+  };
+  const returnInput = {
+    branchId: 'branch-a',
+    saleLineId: 'line-1',
+    lotId: 'lot-1',
+    canonicalUnits: 1,
+    disposition: 'QUARANTINE' as const,
+    reason: 'Customer return',
+    integrityDecision: 'Seal opened',
+    idempotencyKey: 'return-1',
+  };
+
+  it.each([
+    ['refundTender', (caller: Caller) => caller.refundTender(refundInput)],
+    ['returnLine', (caller: Caller) => caller.returnLine(returnInput)],
+  ])(
+    '%s denies users without canonical counter capability before opening a transaction',
+    async (_name, run) => {
+      // Receipt reads still recognize this legacy alias, but stock and money
+      // mutations require the canonical colon capability.
+      const f = fixture([{ capability: 'pharmacy.counter', effect: 'ALLOW' }]);
+      assign(f, ['branch-a']);
+
+      await expect(run(f.caller())).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(f.db.$transaction).not.toHaveBeenCalled();
+      expect(refundPharmacyTender).not.toHaveBeenCalled();
+      expect(returnSaleLine).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([
+    ['refundTender', (caller: Caller) => caller.refundTender(refundInput)],
+    ['returnLine', (caller: Caller) => caller.returnLine(returnInput)],
+  ])('%s denies a counter user who is not assigned to the branch', async (_name, run) => {
+    const f = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }]);
+
+    await expect(run(f.caller())).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Branch is outside your scope.',
+    });
+    expect(f.db.$transaction).not.toHaveBeenCalled();
+    expect(refundPharmacyTender).not.toHaveBeenCalled();
+    expect(returnSaleLine).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['refundTender', (caller: Caller) => caller.refundTender(refundInput)],
+    ['returnLine', (caller: Caller) => caller.returnLine(returnInput)],
+  ])(
+    '%s allows an unassigned organization administrator and records the exception',
+    async (_name, run) => {
+      const f = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }], 'ADMIN');
+
+      await expect(run(f.caller())).resolves.toBeDefined();
+      expect(f.context.audit.detail).toMatchObject({
+        targetType: 'PharmacyBranch',
+        targetId: 'branch-a',
+        metadata: {
+          branchId: 'branch-a',
+          reason: 'org-admin-receipt-access-without-branch-assignment',
+        },
+      });
+      expect(f.db.$transaction).toHaveBeenCalledOnce();
+    }
+  );
+
+  it.each([
+    [
+      'refundTender',
+      (caller: Caller) => caller.refundTender({ ...refundInput, branchId: 'closed-branch' }),
+    ],
+    [
+      'returnLine',
+      (caller: Caller) => caller.returnLine({ ...returnInput, branchId: 'closed-branch' }),
+    ],
+  ])('%s denies an assigned counter user at an inactive branch', async (_name, run) => {
+    const f = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }]);
+    assign(f, ['closed-branch']);
+
+    await expect(run(f.caller())).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Branch is outside your scope.',
+    });
+    expect(f.db.$transaction).not.toHaveBeenCalled();
+    expect(refundPharmacyTender).not.toHaveBeenCalled();
+    expect(returnSaleLine).not.toHaveBeenCalled();
+  });
+
+  it.each(['EMPLOYEE', 'ADMIN'] as const)(
+    'allows an assigned %s counter user to record a return and issue a cash fallback refund',
+    async (role) => {
+      const f = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }], role);
+      assign(f, ['branch-a']);
+      f.db.pharmacyTender.findFirst.mockResolvedValue({ type: 'CARD' });
+
+      await expect(f.caller().returnLine(returnInput)).resolves.toMatchObject({
+        returnLine: { id: 'return-line-1' },
+      });
+      await expect(f.caller().refundTender(refundInput)).resolves.toEqual({ refundId: 'refund-1' });
+      expect(returnSaleLine).toHaveBeenCalled();
+      expect(refundPharmacyTender).toHaveBeenCalledWith(
+        f.db,
+        expect.objectContaining({ branchId: 'branch-a' }),
+        expect.objectContaining({ manualCashFallback: true })
+      );
+      // Six PostgreSQL row-lock queries protect the branch, member, role grants,
+      // overrides, and exact assignment for each stock/money mutation.
+      expect(f.db.$queryRaw).toHaveBeenCalledTimes(12);
+      const lockSql = f.db.$queryRaw.mock.calls.map(([query]) => query.strings.join('?'));
+      expect(lockSql[0]).toContain('FROM pharmacy_branches');
+      expect(lockSql[0]).toContain('active=true');
+      expect(lockSql[0]).toContain('FOR SHARE');
+      expect(f.db.user.findUnique).toHaveBeenCalled();
+      for (const [query] of f.db.user.findUnique.mock.calls) {
+        expect(query).toEqual(
+          expect.objectContaining({
+            where: { organizationId_id: { id: 'user-a', organizationId: 'org-a' } },
+          })
+        );
+      }
+    }
+  );
+
+  it.each([
+    ['refundTender', (caller: Caller) => caller.refundTender(refundInput)],
+    ['returnLine', (caller: Caller) => caller.returnLine(returnInput)],
+  ])('%s revalidates administrator status inside the mutation transaction', async (_name, run) => {
+    const f = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }], 'ADMIN');
+    const member = await f.db.user.findUnique();
+    f.db.user.findUnique.mockClear();
+    f.db.$transaction.mockImplementationOnce(
+      async (fn: (inner: typeof f.db) => Promise<unknown>) => {
+        f.db.user.findUnique.mockResolvedValue({ ...member, role: 'EMPLOYEE' });
+        return fn(f.db);
+      }
+    );
+
+    await expect(run(f.caller())).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Branch is outside your scope.',
+    });
+    expect(f.db.$transaction).toHaveBeenCalledOnce();
+    expect(refundPharmacyTender).not.toHaveBeenCalled();
+    expect(returnSaleLine).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['refundTender', (caller: Caller) => caller.refundTender(refundInput)],
+    ['returnLine', (caller: Caller) => caller.returnLine(returnInput)],
+  ])('%s revalidates branch assignment inside the mutation transaction', async (_name, run) => {
+    const f = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }]);
+    f.db.pharmacyBranchAssignment.findMany
+      .mockResolvedValueOnce([{ branchId: 'branch-a' }])
+      .mockResolvedValueOnce([]);
+
+    await expect(run(f.caller())).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Branch is outside your scope.',
+    });
+    expect(f.db.$transaction).toHaveBeenCalledOnce();
+    expect(f.db.pharmacyBranchAssignment.findMany).toHaveBeenCalledTimes(2);
+    expect(refundPharmacyTender).not.toHaveBeenCalled();
+    expect(returnSaleLine).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['refundTender', (caller: Caller) => caller.refundTender(refundInput)],
+    ['returnLine', (caller: Caller) => caller.returnLine(returnInput)],
+  ])(
+    '%s revalidates the canonical capability inside the mutation transaction',
+    async (_name, run) => {
+      const f = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }]);
+      assign(f, ['branch-a']);
+      f.db.user.findUnique
+        .mockResolvedValueOnce({
+          role: 'EMPLOYEE',
+          status: 'ACTIVE',
+          organizationId: 'org-a',
+          organizationRole: {
+            permissions: [{ capability: 'pharmacy:counter', effect: 'ALLOW' }],
+          },
+          permissionOverrides: [],
+        })
+        .mockResolvedValueOnce({
+          role: 'EMPLOYEE',
+          status: 'ACTIVE',
+          organizationId: 'org-a',
+          organizationRole: {
+            permissions: [{ capability: 'pharmacy:counter', effect: 'ALLOW' }],
+          },
+          permissionOverrides: [],
+        })
+        .mockResolvedValueOnce({
+          role: 'EMPLOYEE',
+          status: 'ACTIVE',
+          organizationId: 'org-a',
+          organizationRole: { permissions: [] },
+          permissionOverrides: [],
+        });
+
+      await expect(run(f.caller())).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'You do not have permission for this action.',
+      });
+      expect(f.db.$transaction).toHaveBeenCalledOnce();
+      expect(refundPharmacyTender).not.toHaveBeenCalled();
+      expect(returnSaleLine).not.toHaveBeenCalled();
+    }
+  );
+
   it('supplies the regulatory identity effective at completion to browser receipt callers', async () => {
     const f = fixture(dispense);
     assign(f, ['branch-a']);
@@ -535,7 +762,7 @@ describe('counter receipt authorization', () => {
     });
     expect(noCapability.db.$transaction).not.toHaveBeenCalled();
 
-    const unassigned = fixture(dispense);
+    const unassigned = fixture([...dispense, { capability: 'pharmacy:counter', effect: 'ALLOW' }]);
     await expect(path.run(unassigned.caller())).rejects.toMatchObject({
       code: 'FORBIDDEN',
       message: 'Branch is outside your scope.',
@@ -671,6 +898,7 @@ describe('counter receipt authorization', () => {
   it('denies an inactive database user and an inactive assignment', async () => {
     const inactive = fixture(dispense);
     inactive.db.user.findUnique.mockResolvedValue({
+      role: 'EMPLOYEE',
       status: 'INACTIVE',
       organizationId: 'org-a',
       organizationRole: { permissions: dispense },

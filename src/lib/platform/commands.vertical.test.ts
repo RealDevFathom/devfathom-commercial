@@ -111,6 +111,7 @@ function record() {
 }
 
 const platformDb = {
+  $queryRaw: vi.fn().mockResolvedValue([]),
   $queryRawUnsafe: mocks.organizationExists,
   platformPackage: {
     findUnique: mocks.pkgFindUnique,
@@ -1270,6 +1271,7 @@ describe('pharmacy activation preflight', () => {
 describe('organization.user tenant-configured departments', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.organizationExists.mockResolvedValue([]);
     mocks.userFindUnique.mockResolvedValue({
       id: 'user_1',
       organizationId: 'org_1',

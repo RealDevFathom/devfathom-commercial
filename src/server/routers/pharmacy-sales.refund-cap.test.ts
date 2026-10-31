@@ -48,10 +48,11 @@ function fixture(returnedUnits: number, priorRefunds: number[] = []) {
   const db = {
     user: {
       findUnique: vi.fn().mockResolvedValue({
+        role: 'EMPLOYEE',
         status: 'ACTIVE',
-        organizationId: 'org-1',
+        organizationId: scope.organizationId,
         organizationRole: {
-          permissions: [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }],
+          permissions: [{ capability: 'pharmacy:counter', effect: 'ALLOW' }],
         },
         permissionOverrides: [],
       }),
