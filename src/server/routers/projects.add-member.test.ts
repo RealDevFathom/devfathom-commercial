@@ -188,4 +188,41 @@ describe('projects.addMember role invariants', () => {
     ).resolves.toEqual({ success: true });
     expect(membershipDelete).toHaveBeenCalledTimes(3);
   });
+
+  it('serializes duplicate adds sharing a transaction and records activity once', async () => {
+    const added = { id: 'membership_2', projectId: 'project_1', userId: 'user_2', role: 'MEMBER' };
+    let member: typeof added | null = null;
+    membershipFindUnique.mockImplementation(async ({ where }) =>
+      where.projectId_userId.userId === 'lead_1' ? { role: 'LEAD' } : member
+    );
+    userFindMany.mockResolvedValue([{ id: 'user_2' }]);
+    membershipCreate.mockImplementation(async () => {
+      if (member) throw new Error('Duplicate membership');
+      member = added;
+      return member;
+    });
+    const sharedCaller = caller();
+    const input = { projectId: 'project_1', userId: 'user_2', role: 'MEMBER' as const };
+
+    await expect(
+      Promise.all([sharedCaller.addMember(input), sharedCaller.addMember(input)])
+    ).resolves.toEqual([added, added]);
+    expect(membershipCreate).toHaveBeenCalledOnce();
+    expect(activityCreate).toHaveBeenCalledOnce();
+  });
+
+  it('continues queued membership callbacks after an invariant rejects', async () => {
+    const lead = { projectId: 'project_1', userId: 'lead_1', role: 'LEAD' };
+    const sharedCaller = caller();
+    const input = { projectId: 'project_1', userId: 'lead_1' };
+
+    const results = await Promise.allSettled([
+      sharedCaller.setMemberRole({ ...input, role: 'MEMBER' }),
+      sharedCaller.setMemberRole({ ...input, role: 'LEAD' }),
+    ]);
+
+    expect(results[0]).toMatchObject({ status: 'rejected', reason: { code: 'BAD_REQUEST' } });
+    expect(results[1]).toEqual({ status: 'fulfilled', value: lead });
+    expect(membershipUpdate).not.toHaveBeenCalled();
+  });
 });

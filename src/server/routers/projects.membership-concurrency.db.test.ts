@@ -5,8 +5,11 @@
  * disposable TEST_DATABASE_URL; it skips when that database is not configured.
  */
 import { randomBytes } from 'node:crypto';
+import { fetchRequestHandler } from '@trpc/server/adapters/fetch';
 import pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import type { TRPCContext } from '@/server/trpc';
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
@@ -28,6 +31,65 @@ const LEAD_A = `lead_a_${suffix}`;
 const LEAD_B = `lead_b_${suffix}`;
 let setup: pg.Client;
 let projectCaller: ReturnType<(typeof import('./projects'))['projectsRouter']['createCaller']>;
+let projectContext: (db: ScopedDb) => TRPCContext;
+
+const concurrentMutations = [
+  ['setMemberRole', 'setMemberRole'],
+  ['addMember', 'addMember'],
+  ['addMember', 'setMemberRole'],
+  ['removeMember', 'setMemberRole'],
+  ['removeMember', 'addMember'],
+  ['removeMember', 'removeMember'],
+] as const;
+
+/** Use the real HTTP batch adapter inside the same tenant wrapper as the route. */
+async function sharedTransactionBatch(
+  calls: { method: (typeof concurrentMutations)[number][number]; userId: string }[]
+) {
+  const { withTenantDb } = await import('@/lib/tenancy/scoped-db');
+  const { projectsRouter } = await import('./projects');
+  return withTenantDb(
+    ORG,
+    async (tx) => {
+      const response = await fetchRequestHandler({
+        endpoint: '/api/trpc',
+        router: projectsRouter,
+        createContext: () => projectContext(tx),
+        req: new Request(
+          `http://localhost/api/trpc/${calls.map((call) => call.method).join(',')}?batch=1`,
+          {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(
+              Object.fromEntries(
+                calls.map((call, index) => [
+                  index,
+                  { json: { projectId: PROJECT, userId: call.userId, role: 'MEMBER' } },
+                ])
+              )
+            ),
+          }
+        ),
+      });
+      const entries = (await response.json()) as {
+        result?: { data: { json: { id: string } } };
+        error?: { json: { data: { code: string } } };
+      }[];
+      const leadCount = await tx.projectMember.count({
+        where: { projectId: PROJECT, role: 'LEAD' },
+      });
+      // Like the HTTP route, reject the owning transaction if any sibling fails.
+      if (entries.some((entry) => entry.error)) {
+        throw Object.assign(new Error('Membership batch rolled back'), {
+          leadCount,
+          outcomes: entries.map((entry) => entry.error?.json.data.code ?? 'SUCCESS'),
+        });
+      }
+      return entries;
+    },
+    { userId: ADMIN }
+  );
+}
 
 describeIfDatabase('project membership concurrency against PostgreSQL', () => {
   beforeAll(async () => {
@@ -58,18 +120,20 @@ describeIfDatabase('project membership concurrency against PostgreSQL', () => {
     );
     const { createTenantDb } = await import('@/lib/tenancy/scoped-db');
     const { projectsRouter } = await import('./projects');
-    projectCaller = projectsRouter.createCaller({
-      db: createTenantDb(ORG, ADMIN),
-      session: {
-        expires: 'later',
-        user: { id: ADMIN, role: 'ADMIN', status: 'ACTIVE', organizationId: ORG },
-      },
-      organization: { id: ORG, isDemo: false },
-      entitlements: { organizationId: ORG, enabledModules: [], modules: [], limits: {} },
-      support: null,
-      requestMeta: { ip: null, userAgent: null },
-      audit: { detail: {} },
-    } as never);
+    projectContext = (db) =>
+      ({
+        db,
+        session: {
+          expires: 'later',
+          user: { id: ADMIN, role: 'ADMIN', status: 'ACTIVE', organizationId: ORG },
+        },
+        organization: { id: ORG, isDemo: false },
+        entitlements: { organizationId: ORG, enabledModules: [], modules: [], limits: {} },
+        support: null,
+        requestMeta: { ip: null, userAgent: null },
+        audit: { detail: {} },
+      }) as never;
+    projectCaller = projectsRouter.createCaller(projectContext(createTenantDb(ORG, ADMIN)));
   });
 
   beforeEach(async () => {
@@ -91,27 +155,63 @@ describeIfDatabase('project membership concurrency against PostgreSQL', () => {
     }
   });
 
-  it.each([
-    ['setMemberRole', 'setMemberRole'],
-    ['addMember', 'addMember'],
-    ['addMember', 'setMemberRole'],
-    ['removeMember', 'setMemberRole'],
-    ['removeMember', 'addMember'],
-    ['removeMember', 'removeMember'],
-  ] as const)('preserves a lead during concurrent %s and %s', async (first, second) => {
-    const results = await Promise.allSettled([
-      projectCaller[first]({ projectId: PROJECT, userId: LEAD_A, role: 'MEMBER' }),
-      projectCaller[second]({ projectId: PROJECT, userId: LEAD_B, role: 'MEMBER' }),
+  it.each(concurrentMutations)(
+    'preserves a lead during concurrent %s and %s',
+    async (first, second) => {
+      const results = await Promise.allSettled([
+        projectCaller[first]({ projectId: PROJECT, userId: LEAD_A, role: 'MEMBER' }),
+        projectCaller[second]({ projectId: PROJECT, userId: LEAD_B, role: 'MEMBER' }),
+      ]);
+
+      expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+      expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
+      const rejected = results.find((result) => result.status === 'rejected');
+      expect(rejected?.reason).toMatchObject({ code: 'BAD_REQUEST' });
+      const remaining = await setup.query<{ count: string }>(
+        `SELECT count(*) FROM project_members WHERE "projectId" = $1 AND role = 'LEAD'`,
+        [PROJECT]
+      );
+      expect(remaining.rows[0]?.count).toBe('1');
+    }
+  );
+
+  it('keeps duplicate adds idempotent within one HTTP batch transaction', async () => {
+    // ADMIN starts outside the project, so both calls would otherwise read a
+    // missing membership and the second INSERT would abort the whole batch.
+    const entries = await sharedTransactionBatch([
+      { method: 'addMember', userId: ADMIN },
+      { method: 'addMember', userId: ADMIN },
     ]);
 
-    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
-    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
-    const rejected = results.find((result) => result.status === 'rejected');
-    expect(rejected?.reason).toMatchObject({ code: 'BAD_REQUEST' });
-    const remaining = await setup.query<{ count: string }>(
-      `SELECT count(*) FROM project_members WHERE "projectId" = $1 AND role = 'LEAD'`,
-      [PROJECT]
+    expect(entries).toHaveLength(2);
+    expect(entries.every((entry) => entry.result && !entry.error)).toBe(true);
+    expect(entries[0].result?.data.json.id).toBe(entries[1].result?.data.json.id);
+    const added = await setup.query<{ count: string }>(
+      `SELECT count(*) FROM project_members WHERE "projectId" = $1 AND "userId" = $2`,
+      [PROJECT, ADMIN]
     );
-    expect(remaining.rows[0]?.count).toBe('1');
+    expect(added.rows[0]?.count).toBe('1');
   });
+
+  it.each(concurrentMutations)(
+    'preserves the last lead in a shared-transaction HTTP batch of %s and %s',
+    async (first, second) => {
+      await expect(
+        sharedTransactionBatch([
+          { method: first, userId: LEAD_A },
+          { method: second, userId: LEAD_B },
+        ])
+      ).rejects.toMatchObject({
+        leadCount: 1,
+        outcomes: expect.arrayContaining(['SUCCESS', 'BAD_REQUEST']),
+      });
+
+      // The failed batch rolls back its successful sibling too.
+      const remaining = await setup.query<{ count: string }>(
+        `SELECT count(*) FROM project_members WHERE "projectId" = $1 AND role = 'LEAD'`,
+        [PROJECT]
+      );
+      expect(remaining.rows[0]?.count).toBe('2');
+    }
+  );
 });

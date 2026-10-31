@@ -45,6 +45,8 @@ const round2 = (n: number) => Math.round(n * 100) / 100;
 
 type ProjectMemberRole = 'LEAD' | 'MEMBER';
 
+const membershipQueues = new WeakMap<Prisma.TransactionClient, Map<string, Promise<void>>>();
+
 /**
  * Serialize every membership mutation for a project. Check caller authority and
  * the remaining lead count after acquiring the lock so neither can go stale
@@ -56,8 +58,29 @@ async function withProjectMembershipLock<T>(
   run: (tx: Prisma.TransactionClient) => Promise<T>
 ): Promise<T> {
   return db.$transaction(async (tx) => {
-    await tx.$executeRawUnsafe('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', projectId);
-    return run(tx);
+    // HTTP batch siblings reuse this tx. Advisory locks are reentrant within a
+    // transaction, so also queue the entire callback, not just its SQL queries.
+    let queues = membershipQueues.get(tx);
+    if (!queues) {
+      queues = new Map();
+      membershipQueues.set(tx, queues);
+    }
+    const previous = queues.get(projectId) ?? Promise.resolve();
+    const result = previous.then(async () => {
+      await tx.$executeRawUnsafe('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', projectId);
+      return run(tx);
+    });
+    // A rejected invariant must release the queue for waiting batch siblings.
+    const settled = result.then(
+      () => undefined,
+      () => undefined
+    );
+    queues.set(projectId, settled);
+    try {
+      return await result;
+    } finally {
+      if (queues.get(projectId) === settled) queues.delete(projectId);
+    }
   });
 }
 
