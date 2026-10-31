@@ -8,6 +8,7 @@ import { assertSaleBatchesSellable } from './sale-batch-safety';
 import { PharmacyReceiptIdentityError, validateReceiptIdentity } from './receipt-identity';
 import { assertRxSaleAllowed } from './rx-sale-gate';
 import { recordCompletedPrescriptionReference } from './rx-prescription-reference';
+import { recoverCompletedDemand } from './lost-sales-recovery';
 
 export const completionSaleInclude = {
   lines: {
@@ -158,6 +159,7 @@ export async function completePaidPharmacySale(
   for (const line of sale.lines) {
     await postSaleLineEntry(db, scope, { saleLineId: line.id, at: issuedAt });
   }
+  await recoverCompletedDemand(db, scope, sale.id);
 
   return receiptNumber;
 }

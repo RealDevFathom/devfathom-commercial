@@ -1415,6 +1415,7 @@ export const pharmacySalesRouter = router({
             ])
             .optional(),
           terminalId: z.string().min(1).optional(),
+          visitType: z.enum(['PARTIAL', 'WALK_OUT']).optional(),
           substituteProductId: z.string().min(1).optional(),
           notifyOptIn: z.boolean().optional(),
           notifyPhone: z.string().trim().min(7).max(32).optional(),
@@ -1467,6 +1468,7 @@ export const pharmacySalesRouter = router({
       z
         .object({
           branchId,
+          terminalId: z.string().min(1).optional(),
           saleId: z.string().min(1).optional(),
           requestedMedicineId: z.string().min(1),
           requestedText: z.string().trim().min(1),
@@ -1514,9 +1516,19 @@ export const pharmacySalesRouter = router({
     }),
   demandAggregate: protectedProcedure
     .input(z.object({ branchId, from: z.date(), to: z.date() }).strict())
-    .query(async ({ ctx, input }) =>
-      demandAggregate(ctx.db, await scopeFor(ctx, input.branchId), input.from, input.to)
-    ),
+    .query(async ({ ctx, input }) => {
+      const scope = await scopeFor(ctx, input.branchId);
+      const financial = await can(
+        subjectFromSession(ctx.session!.user),
+        'reports:financial',
+        undefined,
+        {
+          db: ctx.db,
+          source: 'TRPC',
+        }
+      );
+      return demandAggregate(ctx.db, scope, input.from, input.to, financial);
+    }),
   addRestockInterest: protectedProcedure
     .input(
       z

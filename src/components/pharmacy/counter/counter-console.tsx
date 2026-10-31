@@ -77,13 +77,7 @@ import {
 } from '@/lib/pharmacy/counter-browser-print';
 import { workspaceToday } from '@/lib/timezone';
 import { trpc } from '@/lib/trpc';
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from '@/components/ui/sheet';
+import { CounterDemandCapture, type DemandCaptureOptions } from './counter-demand-capture';
 import type { LostSaleOutcome } from '@/lib/pharmacy/lost-sales';
 
 type Notice = {
@@ -1376,21 +1370,21 @@ function ScopedPharmacyCounterConsole({
     todayBusinessDate,
   ]);
 
-  const [outcomeSheetOpen, setOutcomeSheetOpen] = useState(false);
-  const [notifyWhenBack, setNotifyWhenBack] = useState(false);
-  const [notifyPhone, setNotifyPhone] = useState('');
   const captureShortfall = useCallback(
-    async (outcome: LostSaleOutcome = 'UNKNOWN') => {
-      if (busy || !branchAuthorized) return;
+    async (
+      outcome: LostSaleOutcome = 'UNKNOWN',
+      options: DemandCaptureOptions = { notifyOptIn: false }
+    ) => {
+      if (busy || !branchAuthorized || !deviceId) return false;
       const requested = activeRow?.displayName ?? query.trim();
       if (!requested) {
         setNotice({ tone: 'warning', message: 'Search for the medicine first, then capture it.' });
-        return;
+        return false;
       }
       const capturedUnits = activeRow ? shortfallUnits : quantity;
       if (!Number.isSafeInteger(capturedUnits) || capturedUnits <= 0) {
         setNotice({ tone: 'warning', message: 'There is no stock shortfall to capture.' });
-        return;
+        return false;
       }
       setPending('captureDemand');
       setNotice(null);
@@ -1415,17 +1409,18 @@ function ScopedPharmacyCounterConsole({
             capturedAt: new Date().toISOString(),
           },
           outcome,
-          notifyOptIn: notifyWhenBack,
-          ...(notifyWhenBack ? { notifyPhone, notifyConsentRecorded: true as const } : {}),
+          terminalId: deviceId,
+          ...options,
         });
-        setOutcomeSheetOpen(false);
         setNotice({
           tone: 'success',
           message: `Captured ${capturedUnits} canonical units of unfulfilled demand for ${requested}.`,
         });
         focusSearch();
+        return true;
       } catch (error) {
         setNotice({ tone: 'danger', message: messageFrom(error) });
+        return false;
       } finally {
         setPending(null);
       }
@@ -1439,8 +1434,7 @@ function ScopedPharmacyCounterConsole({
       focusSearch,
       query,
       quantity,
-      notifyPhone,
-      notifyWhenBack,
+      deviceId,
       saleId,
       saleUnit,
       selectedOption,
@@ -1455,6 +1449,7 @@ function ScopedPharmacyCounterConsole({
     try {
       await declineSubstitute.mutateAsync({
         branchId,
+        ...(deviceId ? { terminalId: deviceId } : {}),
         ...(saleId ? { saleId } : {}),
         requestedMedicineId: activeRow.medicineId,
         requestedText: activeRow.displayName,
@@ -1479,6 +1474,7 @@ function ScopedPharmacyCounterConsole({
     branchId,
     busy,
     declineSubstitute,
+    deviceId,
     quantity,
     saleId,
     saleUnit,
@@ -2037,74 +2033,14 @@ function ScopedPharmacyCounterConsole({
                   </div>
                 ) : null}
                 {shortfallUnits > 0 ? (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="h-auto min-h-11 whitespace-normal"
-                    disabled={busy || !branchAuthorized}
-                    onClick={() => setOutcomeSheetOpen(true)}
-                  >
-                    {pending === 'captureDemand'
-                      ? 'Capturing…'
-                      : `Capture shortfall: ${shortfallUnits} canonical units`}
-                  </Button>
+                  <CounterDemandCapture
+                    key={`${branchId}:${saleId}:${customerId}:${patientId}:${activeRow.medicineId}`}
+                    disabled={busy || !branchAuthorized || !deviceId}
+                    units={shortfallUnits}
+                    hasBasket={Boolean(cart?.lines.length)}
+                    onCapture={captureShortfall}
+                  />
                 ) : null}
-                <Sheet open={outcomeSheetOpen} onOpenChange={setOutcomeSheetOpen} modal={false}>
-                  <SheetContent side="bottom" className="p-4" showCloseButton>
-                    <SheetHeader className="p-0">
-                      <SheetTitle>What happened at the counter?</SheetTitle>
-                      <SheetDescription>
-                        Choose an outcome when ready, or close this sheet without saving. Tender
-                        stays available.
-                      </SheetDescription>
-                    </SheetHeader>
-                    <div
-                      className="flex flex-wrap gap-2"
-                      role="group"
-                      aria-label="Unfulfilled demand outcome"
-                    >
-                      {(
-                        [
-                          ['SUBSTITUTE_TAKEN', 'Substitute taken'],
-                          ['WILL_RETURN', 'Will return'],
-                          ['WENT_ELSEWHERE', 'Went elsewhere'],
-                          ['ORDERED_FOR_CUSTOMER', 'Ordered for customer'],
-                          ['UNKNOWN', 'Unknown'],
-                        ] as const
-                      ).map(([outcome, label]) => (
-                        <Button
-                          key={outcome}
-                          type="button"
-                          variant="outline"
-                          disabled={busy}
-                          onClick={() => void captureShortfall(outcome)}
-                        >
-                          {outcome === 'UNKNOWN' ? 'Save as unknown' : label}
-                        </Button>
-                      ))}
-                    </div>
-                    <label className="flex min-h-11 items-center gap-2">
-                      <input
-                        type="checkbox"
-                        checked={notifyWhenBack}
-                        onChange={(event) => setNotifyWhenBack(event.target.checked)}
-                      />
-                      Notify when back (opt-in)
-                    </label>
-                    {notifyWhenBack ? (
-                      <Input
-                        aria-label="Notification phone"
-                        inputMode="tel"
-                        placeholder="Phone number"
-                        value={notifyPhone}
-                        onChange={(event) => setNotifyPhone(event.target.value)}
-                        aria-invalid={
-                          notifyPhone.trim().length > 0 && notifyPhone.trim().length < 7
-                        }
-                      />
-                    ) : null}
-                  </SheetContent>
-                </Sheet>
                 <CounterLotOverride
                   value={lotOverride}
                   lots={lotOptionsQuery.data ?? []}

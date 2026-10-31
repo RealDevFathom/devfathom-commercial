@@ -104,6 +104,7 @@ function sale() {
 let order: string[];
 function makeDb() {
   return {
+    $executeRaw: vi.fn().mockResolvedValue(0),
     $queryRaw: vi.fn<(sql: unknown) => Promise<{ receipt_number: number }[]>>(async () => {
       order.push('sequence');
       return [{ receipt_number: 41 }];

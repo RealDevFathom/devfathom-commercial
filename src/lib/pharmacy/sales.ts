@@ -354,34 +354,6 @@ async function addSaleLineWithAllocation(
       idempotencyKey: input.idempotencyKey,
     },
   });
-  // A promised return is recovered by a later purchase of the requested medicine.
-  // Match only inside the same tenant/branch and either the originating sale,
-  // identified customer, or registered receipt terminal; anonymous operator
-  // fallbacks are deliberately not used as customer identity.
-  const recoveryIdentity: Prisma.UnfulfilledDemandEventWhereInput[] = [
-    { saleId: sale.id },
-    ...(sale.customerId ? [{ customerId: sale.customerId }] : []),
-    ...(sale.receiptDeviceId ? [{ terminalId: sale.receiptDeviceId }] : []),
-  ];
-  if (recoveryIdentity.length) {
-    await db.unfulfilledDemandEvent.updateMany({
-      where: {
-        organizationId: scope.organizationId,
-        branchId: scope.branchId,
-        requestedMedicineId: input.medicineId,
-        outcome: 'WILL_RETURN',
-        resolvedBySaleId: null,
-        createdAt: { gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) },
-        OR: recoveryIdentity,
-      },
-      data: {
-        resolvedBySaleId: sale.id,
-        resolvedAt: new Date(),
-        lossProbability: 0,
-        estLossPkr: 0,
-      },
-    });
-  }
   await Promise.all(
     allocation.allocations.map((part, index) =>
       db.pharmacySaleLineAllocation.create({
@@ -928,6 +900,7 @@ export async function captureDemand(
     customerId?: string;
     consentRecorded?: boolean;
     outcome?: LostSaleOutcome;
+    visitType?: 'PARTIAL' | 'WALK_OUT';
     terminalId?: string;
     substituteProductId?: string;
     notifyOptIn?: boolean;
@@ -950,11 +923,19 @@ export async function captureDemand(
   const sale = input.saleId
     ? await db.pharmacySale.findFirst({
         where: { id: input.saleId, organizationId: scope.organizationId, branchId: scope.branchId },
-        select: { customerId: true, receiptDeviceId: true, _count: { select: { lines: true } } },
+        select: {
+          customerId: true,
+          receiptDeviceId: true,
+          status: true,
+          lines: { select: { quantity: true, unitPriceMinor: true, discountMinor: true } },
+        },
       })
     : null;
   const terminalId = input.terminalId ?? sale?.receiptDeviceId ?? `operator:${scope.actorId}`;
-  if (input.terminalId) {
+  if (input.saleId && !sale) throw new PharmacySaleError('CROSS_BRANCH_REFERENCE');
+  // Browser counters have stable drawer/receipt IDs, but are not enrolled
+  // devices. This ID is a grouping hint only, never customer authentication.
+  if (input.terminalId && !/^counter-[0-9a-f-]{36}$/i.test(input.terminalId)) {
     const terminal = await db.pharmacyRegisteredDevice.findFirst({
       where: {
         id: input.terminalId,
@@ -966,9 +947,11 @@ export async function captureDemand(
     });
     if (!terminal) throw new PharmacySaleError('CROSS_BRANCH_REFERENCE');
   }
-  const productIds = [input.substituteProductId, input.matchedProductId].filter(
-    (id): id is string => Boolean(id)
-  );
+  const productIds = [
+    input.requestedMedicineId,
+    input.substituteProductId,
+    input.matchedProductId,
+  ].filter((id): id is string => Boolean(id));
   if (productIds.length) {
     const validProducts = await db.medicine.count({
       where: { id: { in: [...new Set(productIds)] }, organizationId: scope.organizationId },
@@ -976,13 +959,38 @@ export async function captureDemand(
     if (validProducts !== new Set(productIds).size)
       throw new PharmacySaleError('CROSS_BRANCH_REFERENCE');
   }
-  const customerId = input.customerId ?? sale?.customerId ?? undefined;
+  // customerId on demand is a PharmacyPatient FK. The sale instead links to a
+  // PharmacyCustomer; use that link for grouping without copying its identifier
+  // into the patient column or manufacturing patient consent.
+  const customerId = input.customerId;
+  const groupingIdentity = customerId
+    ? { customerId }
+    : {
+        customerId: null,
+        ...(sale?.customerId
+          ? { sale: { customerId: sale.customerId } }
+          : { OR: [{ saleId: null }, { sale: { customerId: null } }] }),
+      };
+  // All callers run inside the owning tenant transaction. Serialize the tuple
+  // before lookup/create so simultaneous captures share one visit.
+  await db.$queryRaw(
+    Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${JSON.stringify([
+      scope.organizationId,
+      scope.branchId,
+      terminalId,
+      customerId
+        ? `patient:${customerId}`
+        : sale?.customerId
+          ? `customer:${sale.customerId}`
+          : null,
+    ])}, 0))`
+  );
   const previous = await db.unfulfilledDemandEvent.findFirst({
     where: {
       organizationId: scope.organizationId,
       branchId: scope.branchId,
       terminalId,
-      customerId: customerId ?? null,
+      ...groupingIdentity,
       createdAt: { gte: new Date(now.getTime() - VISIT_WINDOW_MS) },
     },
     orderBy: { createdAt: 'desc' },
@@ -1037,6 +1045,28 @@ export async function captureDemand(
   // Price is deliberately resolved from branch inventory on the server; clients
   // cannot submit or alter lost-sales value.
   const unitPricePkr = lot ? lot.printedMrpMinor / lot.unitsPerPack / 100 : 0;
+  const visitId = previous?.visitId ?? crypto.randomUUID();
+  const visitType = input.visitType ?? (sale?.status === 'COMPLETED' ? 'PARTIAL' : 'WALK_OUT');
+  const basketAlreadyCounted =
+    sale && previous?.visitId
+      ? await db.unfulfilledDemandEvent.findFirst({
+          where: {
+            organizationId: scope.organizationId,
+            branchId: scope.branchId,
+            visitId,
+            saleId: input.saleId,
+            abandonedBasketPkr: { gt: 0 },
+          },
+          select: { id: true },
+        })
+      : null;
+  const abandonedBasketPkr =
+    visitType === 'WALK_OUT' && sale && sale.status !== 'COMPLETED' && !basketAlreadyCounted
+      ? sale.lines.reduce(
+          (sum, line) => sum + line.quantity * line.unitPriceMinor - line.discountMinor,
+          0
+        ) / 100
+      : 0;
   const legacyInput = { ...input };
   delete legacyInput.outcome;
   delete legacyInput.terminalId;
@@ -1048,12 +1078,14 @@ export async function captureDemand(
       customerId,
       outcome,
       terminalId,
-      visitId: previous?.visitId ?? crypto.randomUUID(),
-      visitType: sale?._count.lines ? 'PARTIAL' : 'WALK_OUT',
+      visitId,
+      visitType,
       requestedQty: input.quantity,
       unitPricePkr,
       lossProbability,
-      estLossPkr: estimatedLossPkr(input.quantity, unitPricePkr, lossProbability),
+      abandonedBasketPkr,
+      estLossPkr:
+        estimatedLossPkr(input.quantity, unitPricePkr, lossProbability) + abandonedBasketPkr,
       notifyPhone: input.notifyOptIn ? notifyPhone?.trim() : undefined,
       inventoryRuleSnapshot: input.inventoryRuleSnapshot as Prisma.InputJsonValue,
       organizationId: scope.organizationId,
@@ -1092,14 +1124,15 @@ export async function demandAggregate(
   db: ScopedDb,
   scope: Pick<LedgerScope, 'organizationId' | 'branchId'>,
   from: Date,
-  to: Date
+  to: Date,
+  financial = false
 ) {
   // A promised return becomes loss only after its seven-day matching window
   // closes. Recovery matching sets resolvedBySaleId and keeps the probability 0.
   await db.$executeRaw(Prisma.sql`
     UPDATE pharmacy_unfulfilled_demand_events
     SET "lossProbability" = 1,
-        "estLossPkr" = ROUND("requestedQty" * "unitPricePkr", 2)
+        "estLossPkr" = ROUND("requestedQty" * "unitPricePkr", 2) + "abandonedBasketPkr"
     WHERE "organizationId" = ${scope.organizationId}
       AND "branchId" = ${scope.branchId}
       AND outcome = 'WILL_RETURN'::"PharmacyDemandOutcome"
@@ -1129,9 +1162,20 @@ export async function demandAggregate(
     label: 'Estimate',
     method: 'Explicit POS-10 events grouped by requested item and cause',
     window: { from, to },
-    exclusions: ['searches without an explicit event', 'abandoned carts'],
+    exclusions: [
+      'searches without an explicit event',
+      'abandoned carts without an explicit demand event',
+    ],
     confidence: 'observed-events-only',
-    rows,
+    rows: rows.map((row) => ({
+      ...row,
+      _sum: {
+        ...row._sum,
+        estimatedValueMinor: financial ? row._sum.estimatedValueMinor : null,
+        estimatedMarginMinor: financial ? row._sum.estimatedMarginMinor : null,
+        estLossPkr: financial ? row._sum.estLossPkr : null,
+      },
+    })),
   };
 }
 

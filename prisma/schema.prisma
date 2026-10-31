@@ -1648,9 +1648,10 @@ model UnfulfilledDemandEvent {
   visitType             PharmacyDemandVisitType?
   outcome               PharmacyDemandOutcome     @default(UNKNOWN)
   requestedQty          Int?
-  unitPricePkr          Decimal                   @db.Decimal(12, 2)
-  estLossPkr            Decimal                   @db.Decimal(12, 2)
-  lossProbability       Decimal                   @db.Decimal(5, 4)
+  unitPricePkr          Decimal                   @default(0) @db.Decimal(12, 2)
+  estLossPkr            Decimal                   @default(0) @db.Decimal(12, 2)
+  abandonedBasketPkr    Decimal                   @default(0) @db.Decimal(12, 2)
+  lossProbability       Decimal                   @default(0.43) @db.Decimal(5, 4)
   substituteProductId   String?
   notifyOptIn           Boolean                   @default(false)
   notifyPhone           String?
