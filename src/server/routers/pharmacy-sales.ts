@@ -113,6 +113,7 @@ import {
   auditedProtectedProcedure,
   capabilityProcedure,
   protectedProcedure,
+  publicProcedure,
   router,
 } from '../trpc';
 import type { TRPCContext } from '../trpc';
@@ -1430,7 +1431,14 @@ export const pharmacySalesRouter = router({
         fail(error);
       }
     }),
-  captureDemand: protectedProcedure
+  captureDemand: publicProcedure
+    .use(({ ctx, next }) => {
+      // Run before auth and parsing: rejected consent/phone payloads also
+      // contain PII and must never enter the automatic raw-input audit.
+      ctx.audit.detail.skipInput = true;
+      return next();
+    })
+    .concat(auditedProtectedProcedure)
     .input(
       z
         .object({
@@ -1449,10 +1457,44 @@ export const pharmacySalesRouter = router({
           estimatedMarginMinor: z.number().int().optional(),
           customerId: z.string().min(1).optional(),
           consentRecorded: z.boolean().optional(),
+          outcome: z
+            .enum([
+              'SUBSTITUTE_TAKEN',
+              'WILL_RETURN',
+              'WENT_ELSEWHERE',
+              'ORDERED_FOR_CUSTOMER',
+              'UNKNOWN',
+            ])
+            .optional(),
+          terminalId: z.string().min(1).optional(),
+          visitType: z.enum(['PARTIAL', 'WALK_OUT']).optional(),
+          substituteProductId: z.string().min(1).optional(),
+          notifyOptIn: z.boolean().optional(),
+          notifyPhone: z.string().trim().min(7).max(32).optional(),
+          notifyConsentRecorded: z.literal(true).optional(),
+          freeText: z.string().trim().max(500).optional(),
+          matchedProductId: z.string().min(1).optional(),
+          matchConfidence: z.number().min(0).max(1).optional(),
         })
         .strict()
+        .superRefine((value, issue) => {
+          if (value.notifyOptIn && value.notifyConsentRecorded !== true)
+            issue.addIssue({
+              code: 'custom',
+              path: ['notifyConsentRecorded'],
+              message: 'Notification consent must be recorded.',
+            });
+        })
     )
     .mutation(async ({ ctx, input }) => {
+      annotateAudit(ctx, {
+        metadata: {
+          quantity: input.quantity,
+          outcome: input.outcome ?? 'UNKNOWN',
+          visitType: input.visitType ?? null,
+          notifyOptIn: input.notifyOptIn === true,
+        },
+      });
       try {
         return await captureDemand(ctx.db, await scopeFor(ctx, input.branchId), input);
       } catch (error) {
@@ -1486,6 +1528,7 @@ export const pharmacySalesRouter = router({
       z
         .object({
           branchId,
+          terminalId: z.string().min(1).optional(),
           saleId: z.string().min(1).optional(),
           requestedMedicineId: z.string().min(1),
           requestedText: z.string().trim().min(1),
@@ -1533,9 +1576,23 @@ export const pharmacySalesRouter = router({
     }),
   demandAggregate: protectedProcedure
     .input(z.object({ branchId, from: z.date(), to: z.date() }).strict())
-    .query(async ({ ctx, input }) =>
-      demandAggregate(ctx.db, await scopeFor(ctx, input.branchId), input.from, input.to)
-    ),
+    .query(async ({ ctx, input }) => {
+      const scope = await scopeFor(ctx, input.branchId);
+      const financial = await can(
+        subjectFromSession(ctx.session!.user),
+        'reports:financial',
+        undefined,
+        {
+          db: ctx.db,
+          source: 'TRPC',
+        }
+      );
+      // Expiry locks, updates and aggregates in several statements. Keep them in
+      // one transaction so the row locks are held until the expiry commits.
+      return ctx.db.$transaction(async (tx) =>
+        demandAggregate(txDb(tx), scope, input.from, input.to, financial)
+      );
+    }),
   addRestockInterest: protectedProcedure
     .input(
       z

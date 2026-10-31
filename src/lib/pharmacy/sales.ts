@@ -3,6 +3,7 @@ import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { priceFromLot } from './medicine';
+import { saleUnitOptions } from './counter-pricing';
 import { hashDeviceSecret } from '@/lib/retail-terminal/device-secret';
 import { canonicalJson } from './offline-snapshot-envelope';
 import { checkEnvelope } from './offline-snapshot-envelope';
@@ -17,6 +18,13 @@ import { appendControlledRestorations } from './controlled-register';
 import { allocateForSale, allocateReservedForSale, reverseMovements } from './stock-ledger';
 import type { LedgerScope, ReservedSaleAllocation } from './stock-ledger';
 import { postSaleReturnEntry, postUnidentifiedSaleReturnEntry } from './finance-postings';
+import {
+  outcomeLossProbability,
+  VISIT_WINDOW_MS,
+  WILL_RETURN_WINDOW_MS,
+  type LostSaleOutcome,
+} from './lost-sales';
+import { branchUnknownProbability } from './lost-sales-recovery';
 
 /**
  * Re-exported from `./medicine`, where MED-08 pricing now lives so the counter
@@ -892,14 +900,214 @@ export async function captureDemand(
     estimatedMarginMinor?: number;
     customerId?: string;
     consentRecorded?: boolean;
+    outcome?: LostSaleOutcome;
+    visitType?: 'PARTIAL' | 'WALK_OUT';
+    terminalId?: string;
+    substituteProductId?: string;
+    notifyOptIn?: boolean;
+    notifyPhone?: string;
+    notifyConsentRecorded?: true;
+    freeText?: string;
+    matchedProductId?: string;
+    matchConfidence?: number;
   }
 ) {
   if (!input.requestedMedicineId && !input.requestedText?.trim())
     throw new PharmacySaleError('INVALID_QUANTITY');
   if (input.customerId && !input.consentRecorded) throw new PharmacySaleError('CONSENT_REQUIRED');
+  if (input.notifyOptIn && !input.notifyPhone?.trim())
+    throw new PharmacySaleError('CONSENT_REQUIRED');
+  if (input.notifyOptIn && input.notifyConsentRecorded !== true)
+    throw new PharmacySaleError('CONSENT_REQUIRED');
+
+  const now = new Date();
+  // Checkout holds this same row lock through completion and demand recovery.
+  // Read the basket only after acquiring it so a racing capture sees completion.
+  if (input.saleId) {
+    await db.$queryRaw(Prisma.sql`SELECT id FROM pharmacy_sales
+      WHERE id = ${input.saleId} AND "organizationId" = ${scope.organizationId}
+        AND "branchId" = ${scope.branchId} FOR UPDATE`);
+  }
+  const sale = input.saleId
+    ? await db.pharmacySale.findFirst({
+        where: { id: input.saleId, organizationId: scope.organizationId, branchId: scope.branchId },
+        select: {
+          customerId: true,
+          receiptDeviceId: true,
+          status: true,
+          lines: { select: { quantity: true, unitPriceMinor: true, discountMinor: true } },
+        },
+      })
+    : null;
+  const terminalId = input.terminalId ?? sale?.receiptDeviceId ?? `operator:${scope.actorId}`;
+  if (input.saleId && !sale) throw new PharmacySaleError('CROSS_BRANCH_REFERENCE');
+  // Browser counters have stable drawer/receipt IDs, but are not enrolled
+  // devices. This ID is a grouping hint only, never customer authentication.
+  if (input.terminalId && !/^counter-[0-9a-f-]{36}$/i.test(input.terminalId)) {
+    const terminal = await db.pharmacyRegisteredDevice.findFirst({
+      where: {
+        id: input.terminalId,
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        status: 'ACTIVE',
+      },
+      select: { id: true },
+    });
+    if (!terminal) throw new PharmacySaleError('CROSS_BRANCH_REFERENCE');
+  }
+  const productIds = [
+    input.requestedMedicineId,
+    input.substituteProductId,
+    input.matchedProductId,
+  ].filter((id): id is string => Boolean(id));
+  if (productIds.length) {
+    const validProducts = await db.medicine.count({
+      where: { id: { in: [...new Set(productIds)] }, organizationId: scope.organizationId },
+    });
+    if (validProducts !== new Set(productIds).size)
+      throw new PharmacySaleError('CROSS_BRANCH_REFERENCE');
+  }
+  // customerId on demand is a PharmacyPatient FK. The sale instead links to a
+  // PharmacyCustomer; use that link for grouping without copying its identifier
+  // into the patient column or manufacturing patient consent.
+  const customerId = input.customerId;
+  const groupingIdentity = customerId
+    ? { customerId }
+    : {
+        customerId: null,
+        ...(sale?.customerId
+          ? { sale: { customerId: sale.customerId } }
+          : { OR: [{ saleId: null }, { sale: { customerId: null } }] }),
+      };
+  // All callers run inside the owning tenant transaction. Serialize the tuple
+  // before lookup/create so simultaneous captures share one visit.
+  await db.$queryRaw(
+    Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${JSON.stringify([
+      scope.organizationId,
+      scope.branchId,
+      terminalId,
+      customerId
+        ? `patient:${customerId}`
+        : sale?.customerId
+          ? `customer:${sale.customerId}`
+          : null,
+    ])}, 0))`
+  );
+  const previous = await db.unfulfilledDemandEvent.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      terminalId,
+      ...groupingIdentity,
+      createdAt: { gte: new Date(now.getTime() - VISIT_WINDOW_MS) },
+    },
+    orderBy: { createdAt: 'desc' },
+    select: { visitId: true },
+  });
+  const [unknownProbability, lot] = await Promise.all([
+    branchUnknownProbability(db, scope, now),
+    input.requestedMedicineId
+      ? db.pharmacyInventoryLot.findFirst({
+          where: {
+            organizationId: scope.organizationId,
+            branchId: scope.branchId,
+            batch: { medicineId: input.requestedMedicineId },
+          },
+          orderBy: { receivedAt: 'desc' },
+          select: {
+            printedMrpMinor: true,
+            unitsPerPack: true,
+            packLevelId: true,
+            packLevel: { select: { presentationId: true } },
+          },
+        })
+      : null,
+  ]);
+  const outcome = input.outcome ?? 'UNKNOWN';
+  // Only an explicit abandoned basket overrides the item outcome. An inferred
+  // walk-out still uses the configured/measured Unknown estimate.
+  const visitType = sale?.status === 'COMPLETED' ? 'PARTIAL' : input.visitType ?? 'WALK_OUT';
+  const lossProbability =
+    input.visitType === 'WALK_OUT' && visitType === 'WALK_OUT'
+      ? 1
+      : outcomeLossProbability(outcome, { unknownProbability });
+  let unitsPerSaleUnit = 1;
+  let conversionAvailable = input.saleUnit === 'UNIT';
+  if (input.saleUnit !== 'UNIT' && lot) {
+    const packLevels = await db.packLevel.findMany({
+      where: { organizationId: scope.organizationId, presentationId: lot.packLevel.presentationId },
+    });
+    const options = saleUnitOptions({
+      packLevels,
+      rootPackLevelId: lot.packLevelId,
+      unitsPerPack: lot.unitsPerPack,
+    }).filter((option) => option.kind === input.saleUnit);
+    if (options.length === 1) {
+      unitsPerSaleUnit = options[0]!.canonicalUnitsPerSaleUnit;
+      conversionAvailable = true;
+    }
+  }
+  // Demand for never-stocked or not-carried items (or an unavailable pack
+  // shape) is still captured. Without an inventory conversion the requested
+  // sale-unit count is kept as entered and no value is estimated from it.
+  // Price is deliberately resolved from branch inventory on the server; clients
+  // cannot submit or alter lost-sales value.
+  const unitPricePkr =
+    lot && conversionAvailable
+      ? new Prisma.Decimal(lot.printedMrpMinor)
+          .div(lot.unitsPerPack)
+          .div(100)
+          .toDecimalPlaces(12)
+          .toNumber()
+      : 0;
+  const requestedQty = input.quantity * unitsPerSaleUnit;
+  if (!Number.isSafeInteger(requestedQty) || requestedQty <= 0 || requestedQty > 2_147_483_647)
+    throw new PharmacySaleError('INVALID_QUANTITY');
+  const visitId = previous?.visitId ?? crypto.randomUUID();
+  const basketAlreadyCounted =
+    sale && previous?.visitId
+      ? await db.unfulfilledDemandEvent.findFirst({
+          where: {
+            organizationId: scope.organizationId,
+            branchId: scope.branchId,
+            visitId,
+            saleId: input.saleId,
+            abandonedBasketPkr: { gt: 0 },
+          },
+          select: { id: true },
+        })
+      : null;
+  const abandonedBasketPkr =
+    visitType === 'WALK_OUT' && sale && sale.status !== 'COMPLETED' && !basketAlreadyCounted
+      ? sale.lines.reduce(
+          (sum, line) => sum + line.quantity * line.unitPriceMinor - line.discountMinor,
+          0
+        ) / 100
+      : 0;
+  const legacyInput = { ...input };
+  delete legacyInput.outcome;
+  delete legacyInput.terminalId;
+  delete legacyInput.notifyConsentRecorded;
+  const { notifyPhone } = input;
   return db.unfulfilledDemandEvent.create({
     data: {
-      ...input,
+      ...legacyInput,
+      customerId,
+      outcome,
+      terminalId,
+      visitId,
+      visitType,
+      requestedQty,
+      unitPricePkr,
+      lossProbability,
+      abandonedBasketPkr,
+      estLossPkr:
+        new Prisma.Decimal(unitPricePkr)
+          .mul(requestedQty)
+          .mul(lossProbability)
+          .toDecimalPlaces(2)
+          .toNumber() + abandonedBasketPkr,
+      notifyPhone: input.notifyOptIn ? notifyPhone?.trim() : undefined,
       inventoryRuleSnapshot: input.inventoryRuleSnapshot as Prisma.InputJsonValue,
       organizationId: scope.organizationId,
       branchId: scope.branchId,
@@ -927,36 +1135,108 @@ export async function recoverDemandWithAlternate(
   });
   if (!demand || !line || !demand.saleId || demand.saleId !== line.saleId)
     throw new PharmacySaleError('CROSS_BRANCH_REFERENCE');
+  const recoveredAt = new Date();
   return db.unfulfilledDemandEvent.update({
     where: { organizationId_id: { organizationId: scope.organizationId, id: demandId } },
-    data: { status: 'RECOVERED', recoveredSaleLineId: saleLineId, recoveredAt: new Date() },
+    data: {
+      status: 'RECOVERED',
+      recoveredSaleLineId: saleLineId,
+      recoveredAt,
+      ...explicitRecoveryLossState(demand, line.saleId, recoveredAt),
+    },
   });
+}
+
+/**
+ * An explicit recovery fulfilled the item, so it is no longer a lost sale and
+ * a later return-window expiry must not count it. Only abandoned-basket value
+ * (cleared separately when that basket completes) remains on the event.
+ */
+function explicitRecoveryLossState(
+  demand: { resolvedBySaleId: string | null; abandonedBasketPkr: Prisma.Decimal },
+  saleId: string,
+  at: Date
+) {
+  if (demand.resolvedBySaleId) return {};
+  return {
+    resolvedBySaleId: saleId,
+    resolvedAt: at,
+    lossProbability: 0,
+    estLossPkr: demand.abandonedBasketPkr,
+  };
 }
 
 export async function demandAggregate(
   db: ScopedDb,
   scope: Pick<LedgerScope, 'organizationId' | 'branchId'>,
   from: Date,
-  to: Date
+  to: Date,
+  financial = false
 ) {
+  // A promised return becomes loss only after its seven-day matching window
+  // closes. Recovery matching sets resolvedBySaleId and keeps the probability 0.
+  const expiredBefore = new Date(Date.now() - WILL_RETURN_WINDOW_MS);
+  // Recovery locks these rows before allocating receipts. Take the same locks
+  // in order, then read allocations in the UPDATE's fresh statement snapshot.
+  await db.$executeRaw(Prisma.sql`
+    SELECT id FROM pharmacy_unfulfilled_demand_events
+    WHERE "organizationId" = ${scope.organizationId} AND "branchId" = ${scope.branchId}
+      AND outcome = 'WILL_RETURN'::"PharmacyDemandOutcome" AND "resolvedBySaleId" IS NULL
+      AND status <> 'RECOVERED' AND "createdAt" <= ${expiredBefore} AND "lossProbability" = 0
+    ORDER BY id FOR UPDATE
+  `);
+  await db.$executeRaw(Prisma.sql`
+    UPDATE pharmacy_unfulfilled_demand_events AS demand
+    SET "lossProbability" = 1,
+        "estLossPkr" = ROUND(("requestedQty" - COALESCE((
+          SELECT SUM(recovery."canonicalUnits") FROM pharmacy_demand_recoveries AS recovery
+          WHERE recovery."organizationId" = demand."organizationId"
+            AND recovery."branchId" = demand."branchId" AND recovery."demandId" = demand.id
+        ), 0)) * "unitPricePkr", 2) + "abandonedBasketPkr"
+    WHERE "organizationId" = ${scope.organizationId}
+      AND "branchId" = ${scope.branchId}
+      AND outcome = 'WILL_RETURN'::"PharmacyDemandOutcome"
+      AND "resolvedBySaleId" IS NULL
+      AND status <> 'RECOVERED'
+      AND "createdAt" <= ${expiredBefore}
+      AND "lossProbability" = 0
+  `);
   const rows = await db.unfulfilledDemandEvent.groupBy({
-    by: ['requestedMedicineId', 'requestedText', 'reason'],
+    by: ['visitId', 'visitType', 'outcome', 'requestedMedicineId', 'requestedText', 'reason'],
     where: {
       organizationId: scope.organizationId,
       branchId: scope.branchId,
       createdAt: { gte: from, lt: to },
     },
     _count: { _all: true },
-    _sum: { quantity: true, estimatedValueMinor: true, estimatedMarginMinor: true },
+    _sum: {
+      quantity: true,
+      requestedQty: true,
+      estimatedValueMinor: true,
+      estimatedMarginMinor: true,
+      estLossPkr: true,
+      lossProbability: true,
+    },
     orderBy: { _count: { requestedMedicineId: 'desc' } },
   });
   return {
     label: 'Estimate',
     method: 'Explicit POS-10 events grouped by requested item and cause',
     window: { from, to },
-    exclusions: ['searches without an explicit event', 'abandoned carts'],
+    exclusions: [
+      'searches without an explicit event',
+      'abandoned carts without an explicit demand event',
+    ],
     confidence: 'observed-events-only',
-    rows,
+    rows: rows.map((row) => ({
+      ...row,
+      _sum: {
+        ...row._sum,
+        estimatedValueMinor: financial ? row._sum.estimatedValueMinor : null,
+        estimatedMarginMinor: financial ? row._sum.estimatedMarginMinor : null,
+        estLossPkr: financial ? row._sum.estLossPkr : null,
+      },
+    })),
   };
 }
 
@@ -1166,7 +1446,12 @@ export async function recoverRestockInterest(
     where: {
       organizationId_id: { organizationId: scope.organizationId, id: interest.demandEventId },
     },
-    data: { status: 'RECOVERED', recoveredSaleLineId: line.id, recoveredAt },
+    data: {
+      status: 'RECOVERED',
+      recoveredSaleLineId: line.id,
+      recoveredAt,
+      ...explicitRecoveryLossState(interest.demandEvent, line.saleId, recoveredAt),
+    },
   });
   await db.pharmacyRestockReservation.updateMany({
     where: {

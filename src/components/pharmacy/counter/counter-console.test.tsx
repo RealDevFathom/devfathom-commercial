@@ -17,6 +17,7 @@ type Query = {
 };
 
 const mocks = vi.hoisted(() => ({
+  selectStockout: false,
   queries: {} as Record<string, Query>,
   mutations: {} as Record<string, ReturnType<typeof vi.fn>>,
   refetch: vi.fn(),
@@ -137,7 +138,16 @@ vi.mock('./counter-rx-panel', () => ({
     props.controlled ? <div data-testid="controlled-authorization" /> : null,
 }));
 vi.mock('./counter-keymap-legend', () => ({ CounterKeymapLegend: () => null }));
-vi.mock('./counter-search-results', () => ({ CounterSearchResults: () => null }));
+vi.mock('./counter-search-results', () => ({
+  CounterSearchResults: ({
+    onSelect,
+  }: {
+    onSelect: (row: ReturnType<typeof demandStockoutRow>) => void;
+  }) =>
+    mocks.selectStockout ? (
+      <button onClick={() => onSelect(demandStockoutRow())}>Select stockout</button>
+    ) : null,
+}));
 vi.mock('./counter-substitute-proposals', () => ({ CounterSubstituteProposals: () => null }));
 vi.mock('./counter-unit-toggle', () => ({ CounterUnitToggle: () => null }));
 
@@ -220,6 +230,7 @@ function enterPayment(type = 'CASH') {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.selectStockout = false;
   mocks.session = {
     status: 'authenticated',
     data: {
@@ -1354,5 +1365,151 @@ describe('PharmacyCounterConsole module boundaries', () => {
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     expect(mocks.queryOptions).toHaveBeenCalledWith('controlledPharmacists', { enabled: true });
     expect(screen.getByTestId('controlled-authorization')).toBeTruthy();
+  });
+});
+
+function demandStockoutRow() {
+  return {
+    medicineId: 'med-barcode',
+    displayName: 'Paracetamol',
+    brandName: null,
+    manufacturer: null,
+    strength: '500 mg',
+    presentationId: 'presentation-a',
+    presentation: 'Tablet',
+    dosageForm: 'Tablet',
+    route: 'Oral',
+    matchedOn: 'BARCODE',
+    recommendedLotId: 'lot-a',
+    packLevelId: 'pack-a',
+    unitsPerPack: 1,
+    printedMrpMinor: 10000,
+    roundingIncrementMinor: 1,
+    batchNumber: 'B-1',
+    nearestSafeExpiry: '2028-06-30T00:00:00.000Z',
+    onHandUnits: 0,
+    saleableUnits: [],
+    saleUnits: [
+      {
+        kind: 'UNIT',
+        packLevelId: 'pack-a',
+        levelLabel: 'UNIT',
+        canonicalUnitsPerSaleUnit: 1,
+      },
+    ],
+    restriction: {
+      rx: false,
+      otc: true,
+      restricted: false,
+      controlled: false,
+      highAlert: false,
+      lasa: false,
+    },
+    storage: {
+      coldChain: false,
+      locationKind: 'STORE',
+      locationCode: 'A',
+      locationName: 'Store',
+    },
+    blocked: [],
+  };
+}
+
+describe('PharmacyCounterConsole demand visit context', () => {
+  async function openCapture() {
+    fireEvent.click(screen.getByRole('button', { name: 'Select stockout' }));
+    fireEvent.click(screen.getByRole('button', { name: /Capture shortfall:/ }));
+    await screen.findByRole('button', { name: 'Went elsewhere' });
+  }
+  it('keeps tender usable while the five-second automatic capture request is pending', async () => {
+    mocks.selectStockout = true;
+    let finishCapture!: (value: unknown) => void;
+    mocks.mutations.captureDemand!.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishCapture = resolve;
+        })
+    );
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(screen.getByRole('button', { name: 'Select stockout' }));
+      fireEvent.click(screen.getByRole('button', { name: /Capture shortfall:/ }));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+      expect(mocks.mutations.captureDemand).toHaveBeenCalledOnce();
+      expect(screen.getByLabelText('Amount')).toBeEnabled();
+      expect(screen.getByLabelText('Cash received')).toBeEnabled();
+      fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '125.50' } });
+      fireEvent.change(screen.getByLabelText('Cash received'), { target: { value: '200.00' } });
+      expect(screen.getByRole('button', { name: 'Take payment' })).toBeEnabled();
+      await act(async () => {
+        finishCapture({ id: 'demand-a' });
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it('saves a pending default with its original context when the sheet is replaced', async () => {
+    mocks.selectStockout = true;
+    mocks.queries.counterBranches = query({
+      branches: [
+        { id: 'branch-a', name: 'Branch A' },
+        { id: 'branch-b', name: 'Branch B' },
+      ],
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    await openCapture();
+    fireEvent.click(screen.getByLabelText('Notify when back (opt-in)'));
+    fireEvent.change(screen.getByLabelText('Notification phone'), {
+      target: { value: '03001234567' },
+    });
+    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch-b' } });
+    await waitFor(() => expect(mocks.mutations.captureDemand).toHaveBeenCalledTimes(1));
+    expect(mocks.mutations.captureDemand!.mock.calls[0]![0]).toMatchObject({
+      branchId: 'branch-a',
+      requestedMedicineId: 'med-barcode',
+      outcome: 'UNKNOWN',
+      notifyOptIn: false,
+    });
+    expect(mocks.mutations.captureDemand!.mock.calls[0]![0]).not.toHaveProperty('notifyPhone');
+  });
+  it('passes the browser terminal and clears notification consent on a branch/sale change', async () => {
+    mocks.selectStockout = true;
+    mocks.queries.counterBranches = query({
+      branches: [
+        { id: 'branch-a', name: 'Branch A' },
+        { id: 'branch-b', name: 'Branch B' },
+      ],
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    await openCapture();
+    fireEvent.click(screen.getByLabelText('Notify when back (opt-in)'));
+    fireEvent.change(screen.getByLabelText('Notification phone'), {
+      target: { value: '03001234567' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Went elsewhere' }));
+    await waitFor(() => expect(mocks.mutations.captureDemand).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'Went elsewhere' })).not.toBeInTheDocument()
+    );
+    expect(mocks.mutations.captureDemand!.mock.calls[0]![0]).toMatchObject({
+      terminalId: window.localStorage.getItem('devfathom.pharmacy.counter.device'),
+      notifyOptIn: true,
+      notifyConsentRecorded: true,
+    });
+    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch-b' } });
+    await openCapture();
+    fireEvent.click(screen.getByRole('button', { name: 'Went elsewhere' }));
+    await waitFor(() => expect(mocks.mutations.captureDemand).toHaveBeenCalledTimes(2));
+    expect(mocks.mutations.captureDemand!.mock.calls[1]![0]).toMatchObject({
+      branchId: 'branch-b',
+      notifyOptIn: false,
+    });
+    expect(mocks.mutations.captureDemand!.mock.calls[1]![0]).not.toHaveProperty('notifyPhone');
+    expect(mocks.mutations.captureDemand!.mock.calls[1]![0]).not.toHaveProperty(
+      'notifyConsentRecorded'
+    );
   });
 });

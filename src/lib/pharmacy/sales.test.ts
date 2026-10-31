@@ -265,7 +265,11 @@ describe('DEM-03 restock interest', () => {
         findFirst: async () => ({
           id: 'interest-a',
           demandEventId: 'demand-a',
-          demandEvent: { requestedMedicineId: 'med-a' },
+          demandEvent: {
+            requestedMedicineId: 'med-a',
+            resolvedBySaleId: null,
+            abandonedBasketPkr: 0,
+          },
         }),
         update: async (args: { data: Record<string, unknown> }) => {
           writes.push(args.data);
@@ -294,7 +298,13 @@ describe('DEM-03 restock interest', () => {
     });
     expect(writes).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ status: 'RECOVERED', recoveredSaleLineId: 'line-a' }),
+        expect.objectContaining({
+          status: 'RECOVERED',
+          recoveredSaleLineId: 'line-a',
+          resolvedBySaleId: 'sale-a',
+          lossProbability: 0,
+          estLossPkr: 0,
+        }),
         expect.objectContaining({
           status: 'RECOVERED',
           recoveredSaleId: 'sale-a',
@@ -430,7 +440,12 @@ describe('POS-10 recovered alternate', () => {
     let update: unknown;
     const db = {
       unfulfilledDemandEvent: {
-        findFirst: async () => ({ id: 'demand-a', saleId: 'sale-a' }),
+        findFirst: async () => ({
+          id: 'demand-a',
+          saleId: 'sale-a',
+          resolvedBySaleId: null,
+          abandonedBasketPkr: 5,
+        }),
         update: async (args: unknown) => {
           update = args;
           return args;
@@ -439,6 +454,16 @@ describe('POS-10 recovered alternate', () => {
       pharmacySaleLine: { findFirst: async () => ({ id: 'line-a', saleId: 'sale-a' }) },
     };
     await recoverDemandWithAlternate(db as never, scope, 'demand-a', 'line-a');
-    expect(update).toMatchObject({ data: { status: 'RECOVERED', recoveredSaleLineId: 'line-a' } });
+    expect(update).toMatchObject({
+      data: {
+        status: 'RECOVERED',
+        recoveredSaleLineId: 'line-a',
+        // A fulfilled item can no longer expire into a lost sale.
+        resolvedBySaleId: 'sale-a',
+        resolvedAt: expect.any(Date),
+        lossProbability: 0,
+        estLossPkr: 5,
+      },
+    });
   });
 });

@@ -77,6 +77,15 @@ import {
 } from '@/lib/pharmacy/counter-browser-print';
 import { workspaceToday } from '@/lib/timezone';
 import { trpc } from '@/lib/trpc';
+import type { inferRouterInputs } from '@trpc/server';
+import type { AppRouter } from '@/server/routers/_app';
+import { CounterDemandCapture, type DemandCaptureOptions } from './counter-demand-capture';
+import type { LostSaleOutcome } from '@/lib/pharmacy/lost-sales';
+
+type DemandCaptureContext = Omit<
+  inferRouterInputs<AppRouter>['pharmacySales']['captureDemand'],
+  'outcome' | keyof DemandCaptureOptions
+>;
 
 type Notice = {
   tone: 'success' | 'warning' | 'danger' | 'neutral';
@@ -338,6 +347,7 @@ function ScopedPharmacyCounterConsole({
   const autoPrintRef = useRef<HTMLInputElement>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [pending, setPending] = useState<string | null>(null);
+  const demandCaptureInFlight = useRef(false);
   const [tenderOutcome, setTenderOutcome] = useState<CounterTenderResult | null>(null);
   const [tenderReadRequired, setTenderReadRequired] = useState(false);
   const [refreshingTenderBill, setRefreshingTenderBill] = useState(false);
@@ -1368,60 +1378,48 @@ function ScopedPharmacyCounterConsole({
     todayBusinessDate,
   ]);
 
-  const captureShortfall = useCallback(async () => {
-    if (busy || !branchAuthorized) return;
+  // Snapshot the visit context when capture starts. A pending default must keep
+  // this context even after a scan or customer change replaces the sheet.
+  const prepareShortfall = useCallback((): DemandCaptureContext | null => {
+    if (!branchAuthorized || !deviceId) return null;
     const requested = activeRow?.displayName ?? query.trim();
     if (!requested) {
       setNotice({ tone: 'warning', message: 'Search for the medicine first, then capture it.' });
-      return;
+      return null;
     }
     const capturedUnits = activeRow ? shortfallUnits : quantity;
     if (!Number.isSafeInteger(capturedUnits) || capturedUnits <= 0) {
       setNotice({ tone: 'warning', message: 'There is no stock shortfall to capture.' });
-      return;
+      return null;
     }
-    setPending('captureDemand');
-    setNotice(null);
-    try {
-      await captureDemand.mutateAsync({
-        branchId,
-        ...(saleId ? { saleId } : {}),
-        ...(activeRow ? { requestedMedicineId: activeRow.medicineId } : {}),
-        requestedText: requested,
-        saleUnit: 'UNIT',
-        quantity: capturedUnits,
-        reason: activeRow ? 'STOCKOUT' : 'NOT_CARRIED',
-        inventoryRuleSnapshot: {
-          query: query.trim(),
-          requestedQuantity: quantity,
-          requestedSaleUnit: saleUnit ?? 'UNIT',
-          canonicalUnitsPerSaleUnit: selectedOption?.canonicalUnitsPerSaleUnit ?? 1,
-          requestedCanonicalUnits: requestedCanonicalUnits ?? quantity,
-          shortfallCanonicalUnits: capturedUnits,
-          onHandUnits: activeRow?.onHandUnits ?? 0,
-          blocked: activeRow?.blocked ?? [],
-          capturedAt: new Date().toISOString(),
-        },
-      });
-      setNotice({
-        tone: 'success',
-        message: `Captured ${capturedUnits} canonical units of unfulfilled demand for ${requested}.`,
-      });
-      focusSearch();
-    } catch (error) {
-      setNotice({ tone: 'danger', message: messageFrom(error) });
-    } finally {
-      setPending(null);
-    }
+    return {
+      branchId,
+      ...(saleId ? { saleId } : {}),
+      ...(activeRow ? { requestedMedicineId: activeRow.medicineId } : {}),
+      requestedText: requested,
+      saleUnit: 'UNIT',
+      quantity: capturedUnits,
+      reason: activeRow ? 'STOCKOUT' : 'NOT_CARRIED',
+      inventoryRuleSnapshot: {
+        query: query.trim(),
+        requestedQuantity: quantity,
+        requestedSaleUnit: saleUnit ?? 'UNIT',
+        canonicalUnitsPerSaleUnit: selectedOption?.canonicalUnitsPerSaleUnit ?? 1,
+        requestedCanonicalUnits: requestedCanonicalUnits ?? quantity,
+        shortfallCanonicalUnits: capturedUnits,
+        onHandUnits: activeRow?.onHandUnits ?? 0,
+        blocked: activeRow?.blocked ?? [],
+        capturedAt: new Date().toISOString(),
+      },
+      terminalId: deviceId,
+    };
   }, [
     activeRow,
     branchAuthorized,
     branchId,
-    busy,
-    captureDemand,
-    focusSearch,
     query,
     quantity,
+    deviceId,
     saleId,
     saleUnit,
     selectedOption,
@@ -1429,12 +1427,53 @@ function ScopedPharmacyCounterConsole({
     shortfallUnits,
   ]);
 
+  const submitShortfall = useCallback(
+    async (
+      context: DemandCaptureContext,
+      outcome: LostSaleOutcome = 'UNKNOWN',
+      options: DemandCaptureOptions = { notifyOptIn: false }
+    ) => {
+      setNotice(null);
+      try {
+        await captureDemand.mutateAsync({ ...context, outcome, ...options });
+        setNotice({
+          tone: 'success',
+          message: `Captured ${context.quantity} canonical units of unfulfilled demand for ${context.requestedText ?? 'the requested item'}.`,
+        });
+        return true;
+      } catch (error) {
+        setNotice({ tone: 'danger', message: messageFrom(error) });
+        return false;
+      }
+    },
+    [captureDemand]
+  );
+
+  const captureShortfall = useCallback(
+    async (
+      outcome: LostSaleOutcome = 'UNKNOWN',
+      options: DemandCaptureOptions = { notifyOptIn: false }
+    ) => {
+      if (busy || demandCaptureInFlight.current) return false;
+      const context = prepareShortfall();
+      if (!context) return false;
+      demandCaptureInFlight.current = true;
+      try {
+        return await submitShortfall(context, outcome, options);
+      } finally {
+        demandCaptureInFlight.current = false;
+      }
+    },
+    [busy, prepareShortfall, submitShortfall]
+  );
+
   const declineVisibleSubstitutes = useCallback(async () => {
     if (!activeRow || busy) return;
     setPending('declineSubstitute');
     try {
       await declineSubstitute.mutateAsync({
         branchId,
+        ...(deviceId ? { terminalId: deviceId } : {}),
         ...(saleId ? { saleId } : {}),
         requestedMedicineId: activeRow.medicineId,
         requestedText: activeRow.displayName,
@@ -1459,6 +1498,7 @@ function ScopedPharmacyCounterConsole({
     branchId,
     busy,
     declineSubstitute,
+    deviceId,
     quantity,
     saleId,
     saleUnit,
@@ -2017,17 +2057,14 @@ function ScopedPharmacyCounterConsole({
                   </div>
                 ) : null}
                 {shortfallUnits > 0 ? (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="h-auto min-h-11 whitespace-normal"
-                    disabled={busy || !branchAuthorized}
-                    onClick={() => void captureShortfall()}
-                  >
-                    {pending === 'captureDemand'
-                      ? 'Capturing…'
-                      : `Capture shortfall: ${shortfallUnits} canonical units`}
-                  </Button>
+                  <CounterDemandCapture
+                    key={`${branchId}:${saleId}:${customerId}:${patientId}:${activeRow.medicineId}`}
+                    disabled={busy || !branchAuthorized || !deviceId}
+                    units={shortfallUnits}
+                    hasBasket={Boolean(cart?.lines.length)}
+                    onArm={prepareShortfall}
+                    onCapture={submitShortfall}
+                  />
                 ) : null}
                 <CounterLotOverride
                   value={lotOverride}

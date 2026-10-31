@@ -256,6 +256,7 @@ async function reserveOrderLine(
         requestedText: input.productName,
         saleUnit: input.saleUnit,
         quantity: allocation.units,
+        requestedQty: allocation.units,
         reason: 'SERVICE_FAILURE',
         inventoryRuleSnapshot: {
           source: 'MKT_ORDER_RESERVATION',
@@ -263,6 +264,12 @@ async function reserveOrderLine(
           orderLineId: input.orderLineId,
         },
         capturedByUserId: scope.actorId,
+        visitId: crypto.randomUUID(),
+        visitType: 'PARTIAL',
+        unitPricePkr: 0,
+        estLossPkr: 0,
+        lossProbability: 0,
+        terminalId: `marketplace:${input.orderId}`,
       },
     });
     const interest = await db.pharmacyRestockInterest.create({
