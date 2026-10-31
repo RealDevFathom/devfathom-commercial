@@ -279,6 +279,9 @@ function transport({
         derivedOrderTotal: '24.00',
         accountedTotal: billCut ? '24.00' : '0.00',
         unbilledItemIds: billCut ? [] : ['item-1'],
+        unbilledItems: billCut
+          ? []
+          : [{ id: 'item-1', name: 'Lunch special', quantity: 1, seatNumber: null, modifiers: [] }],
         bills: billCut
           ? [
               {

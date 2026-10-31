@@ -29,6 +29,58 @@ vi.mock('./tenders', async (importOriginal) => ({
 const decimal = (value: string) => new Prisma.Decimal(value);
 
 describe('checkout money serialization', () => {
+  it('includes human-readable context for unbilled order items', async () => {
+    vi.mocked(evaluateOrderSettlement).mockResolvedValue({
+      orderId: 'order-1',
+      settled: false,
+      blocker: 'NO_BILLS',
+      derivedOrderTotal: decimal('20'),
+      accountedTotal: decimal('0'),
+      unbilledItemIds: ['item-2', 'item-1'],
+      bills: [],
+    });
+    const db = {
+      restaurantOrder: {
+        findFirst: vi.fn().mockResolvedValue({ id: 'order-1', deliveryFulfillment: null }),
+      },
+      restaurantOrderItem: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'item-1',
+            name: 'Burger',
+            quantity: 1,
+            seatNumber: 3,
+            modifiers: [{ name: 'No onions' }],
+          },
+          {
+            id: 'item-2',
+            name: 'Soup',
+            quantity: 2,
+            seatNumber: null,
+            modifiers: [],
+          },
+        ]),
+      },
+    } as unknown as ScopedDb;
+
+    const summary = await getOrderSettlementForBranch(db, 'order-1', 'branch-1');
+
+    expect(db.restaurantOrderItem.findMany).toHaveBeenCalledWith({
+      where: { id: { in: ['item-2', 'item-1'] }, orderId: 'order-1' },
+      select: {
+        id: true,
+        name: true,
+        quantity: true,
+        seatNumber: true,
+        modifiers: { select: { name: true }, orderBy: { createdAt: 'asc' } },
+      },
+    });
+    expect(summary?.unbilledItems).toEqual([
+      { id: 'item-2', name: 'Soup', quantity: 2, seatNumber: null, modifiers: [] },
+      { id: 'item-1', name: 'Burger', quantity: 1, seatNumber: 3, modifiers: ['No onions'] },
+    ]);
+  });
+
   it.each([
     ['0', '0.00'],
     ['3', '3.00'],

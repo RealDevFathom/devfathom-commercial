@@ -42,6 +42,13 @@ type CheckoutSummary = {
   accountedTotal: string;
   deliveryFeeTotal: string | null;
   unbilledItemIds: string[];
+  unbilledItems: {
+    id: string;
+    name: string;
+    quantity: number;
+    seatNumber: number | null;
+    modifiers: string[];
+  }[];
   bills: {
     id: string;
     status: string;
@@ -909,7 +916,7 @@ export function CheckoutPanel({
                     {busy ? 'Creating bill…' : 'Cut single bill'}
                   </Button>
                   <SplitBillDialog
-                    itemIds={summary.unbilledItemIds}
+                    items={summary.unbilledItems}
                     disabled={busy}
                     onSplit={cut}
                   />

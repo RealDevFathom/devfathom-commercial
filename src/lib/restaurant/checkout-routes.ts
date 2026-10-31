@@ -663,6 +663,19 @@ export async function getOrderSettlementForBranch(
   if (!order) return null;
 
   const settlement = await evaluateOrderSettlement(db, orderId);
+  const unbilledItemRows = settlement.unbilledItemIds.length
+    ? await db.restaurantOrderItem.findMany({
+        where: { id: { in: settlement.unbilledItemIds }, orderId },
+        select: {
+          id: true,
+          name: true,
+          quantity: true,
+          seatNumber: true,
+          modifiers: { select: { name: true }, orderBy: { createdAt: 'asc' } },
+        },
+      })
+    : [];
+  const unbilledItemsById = new Map(unbilledItemRows.map((item) => [item.id, item]));
   const billLines = settlement.bills.length
     ? await db.restaurantBillLine.findMany({
         where: { billId: { in: settlement.bills.map((bill) => bill.id) } },
@@ -720,6 +733,20 @@ export async function getOrderSettlementForBranch(
       ? money(order.deliveryFulfillment.deliveryFeeSnapshot)
       : null,
     unbilledItemIds: settlement.unbilledItemIds,
+    unbilledItems: settlement.unbilledItemIds.flatMap((id) => {
+      const item = unbilledItemsById.get(id);
+      return item
+        ? [
+            {
+              id: item.id,
+              name: item.name,
+              quantity: item.quantity,
+              seatNumber: item.seatNumber,
+              modifiers: item.modifiers.map((modifier) => modifier.name),
+            },
+          ]
+        : [];
+    }),
     bills,
   };
 }

@@ -12,6 +12,9 @@ const unbilled = {
   accountedTotal: '0.00',
   deliveryFeeTotal: '4.00',
   unbilledItemIds: ['item-1'],
+  unbilledItems: [
+    { id: 'item-1', name: 'Lunch special', quantity: 1, seatNumber: null, modifiers: [] },
+  ],
   bills: [],
 };
 
@@ -20,6 +23,7 @@ const billed = {
   blocker: 'BILLS_OPEN',
   accountedTotal: '24.00',
   unbilledItemIds: [],
+  unbilledItems: [],
   bills: [
     {
       id: 'bill-1',
