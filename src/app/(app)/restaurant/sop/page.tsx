@@ -1235,11 +1235,7 @@ export default async function SopPage({ searchParams }: { searchParams: SearchPa
           windowEndsAt: item.windowEndsAt.toISOString(),
           completedSteps: item.steps.filter((step) => step.completed).length,
           totalSteps: item.steps.length,
-          claimable: Boolean(
-            item.poolJobRoleId &&
-            !item.claimedByStaffProfileId &&
-            ['SCHEDULED', 'REJECTED'].includes(group.status)
-          ),
+          claimable: item.canClaim,
         })),
       }));
       const allItems = groups.flatMap((group) => group.items);

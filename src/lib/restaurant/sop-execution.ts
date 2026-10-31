@@ -11,8 +11,11 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
  * sop-late-missed.ts; verification transitions are in sop-verification.ts):
  *
  *   SCHEDULED → IN_PROGRESS  (start)
- *   IN_PROGRESS → SUBMITTED  (submit — all steps needn't be checked, requirement
- *                              flags are recorded not enforced per BUILD-ASSUMPTIONS §SOP-defaults)
+ *   IN_PROGRESS → SUBMITTED  (submit — every checklist step must be completed and
+ *                              each step's requiresNote/Photo/Signature flag must be
+ *                              satisfied; M7-L1 only RECORDS the flags, this L4
+ *                              execution lane ENFORCES them — BUILD-ASSUMPTIONS
+ *                              §SOP-defaults (3))
  *   REJECTED → IN_PROGRESS   (restart after rejection — §4 rework path)
  *
  * Evidence is APPEND-ONLY (enforced by the RLS SELECT+INSERT-only policy on
