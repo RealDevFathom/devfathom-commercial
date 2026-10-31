@@ -5,6 +5,9 @@ import { describe, expect, it } from 'vitest';
 
 const migrationPath = 'prisma/migrations/20261021160000_outbound_effect_worker/migration.sql';
 const migration = readFileSync(migrationPath, 'utf8');
+const recursiveRepairPath =
+  'prisma/migrations/20261029000345_recursively_scrub_outbound_effect_credentials/migration.sql';
+const recursiveRepair = readFileSync(recursiveRepairPath, 'utf8');
 
 describe('outbound effect worker migration', () => {
   it('uses a timestamp after the pharmacy register migrations', () => {
@@ -30,6 +33,17 @@ describe('outbound effect worker migration', () => {
     expect(update).toBeLessThan(removeFailed);
     expect(migration).toContain(`payload - 'secret' - 'url'`);
     expect(migration).toContain(`DELETE FROM "rate_limit_buckets" WHERE key !~ '^[0-9a-f]{64}$'`);
+  });
+});
+
+describe('recursive outbound effect credential repair migration', () => {
+  it('recursively strips secret and url keys from objects and arrays', () => {
+    expect(existsSync(recursiveRepairPath)).toBe(true);
+    expect(recursiveRepair).toContain(`entry.key NOT IN ('secret', 'url')`);
+    expect(recursiveRepair).toContain('jsonb_each(value)');
+    expect(recursiveRepair).toContain('jsonb_array_elements(value) WITH ORDINALITY');
+    expect(recursiveRepair).toContain('SET payload = "scrub_outbound_effect_credentials"(payload)');
+    expect(recursiveRepair).toContain(`WHERE kind = 'webhook'`);
   });
 });
 
@@ -140,6 +154,15 @@ describe('outbound effect worker migration under forced RLS', () => {
               webhookId: 'wh_1',
               url: 'https://hooks.example/live',
               secret: 'super-secret-value',
+              meta: {
+                secret: 'nested-secret-value',
+                url: 'https://hooks.example/nested',
+                label: 'keep-meta',
+                deliveries: [
+                  { secret: 'array-secret-value', url: 'https://hooks.example/array', id: 1 },
+                  'keep-scalar',
+                ],
+              },
               event: 'task.created',
               body: '{}',
             }),
@@ -165,6 +188,7 @@ describe('outbound effect worker migration under forced RLS', () => {
         );
         expect(attributes.rows[0]).toEqual({ rolsuper: false, rolbypassrls: false });
         await owner.query(migration);
+        await owner.query(recursiveRepair);
       });
 
       await asRole(owner, role, async () => {
@@ -175,11 +199,16 @@ describe('outbound effect worker migration under forced RLS', () => {
         expect(effects.rows).toEqual([
           {
             id: 'webhook_1',
-            payload: { webhookId: 'wh_1', event: 'task.created', body: '{}' },
+            payload: {
+              webhookId: 'wh_1',
+              meta: { label: 'keep-meta', deliveries: [{ id: 1 }, 'keep-scalar'] },
+              event: 'task.created',
+              body: '{}',
+            },
           },
         ]);
         expect(JSON.stringify(effects.rows)).not.toMatch(
-          /super-secret-value|failed-secret|hooks\.example/
+          /super-secret-value|nested-secret-value|array-secret-value|failed-secret|hooks\.example/
         );
         const keys = await owner.query<{ key: string }>(
           'SELECT key FROM "rate_limit_buckets" ORDER BY key'
@@ -206,6 +235,7 @@ describe('outbound effect worker migration under forced RLS', () => {
         );
       });
       await asRole(owner, role, () => owner.query(migration));
+      await asRole(owner, role, () => owner.query(recursiveRepair));
       await asRole(owner, role, async () => {
         await owner.query(`SELECT set_config('app.is_platform_admin', 'true', true)`);
         const again = await owner.query<{ payload: Record<string, unknown> }>(
