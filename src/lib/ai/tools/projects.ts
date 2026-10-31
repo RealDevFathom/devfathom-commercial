@@ -22,7 +22,7 @@ import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
 import { matchScore, norm } from '@/lib/ai/context';
 import type { AssistantHelpers, ToolSet } from '@/lib/ai/context';
-import { lockProjectMembershipChanges } from '@/server/project-membership';
+import { withProjectMembershipChanges } from '@/server/project-membership';
 
 export function buildProjectsTools(h: AssistantHelpers): ToolSet {
   const { db } = h;
@@ -480,38 +480,46 @@ export function buildProjectsTools(h: AssistantHelpers): ToolSet {
         return { needsClarification: `Which one — ${r.candidates.join(', ')}?` };
 
       const targetRole = role ?? 'MEMBER';
-      const mutationError = await db.$transaction(async (tx) => {
-        await lockProjectMembershipChanges(tx, pr.id, h.ctx.organizationId);
-        const caller = await tx.projectMember.findFirst({
-          where: { projectId: pr.id, userId, organizationId: h.ctx.organizationId },
-        });
-        if (!isAdmin && caller?.role !== 'LEAD')
-          return 'Only the project lead or an admin can add members.';
+      const mutationError = await withProjectMembershipChanges(
+        db,
+        pr.id,
+        h.ctx.organizationId,
+        async (tx) => {
+          const caller = await tx.projectMember.findFirst({
+            where: { projectId: pr.id, userId, organizationId: h.ctx.organizationId },
+          });
+          if (!isAdmin && caller?.role !== 'LEAD')
+            return 'Only the project lead or an admin can add members.';
 
-        if (targetRole === 'MEMBER') {
-          const [target, leadCount] = await Promise.all([
-            tx.projectMember.findFirst({
-              where: { projectId: pr.id, userId: r.value.id, organizationId: h.ctx.organizationId },
-            }),
-            tx.projectMember.count({
-              where: { projectId: pr.id, organizationId: h.ctx.organizationId, role: 'LEAD' },
-            }),
-          ]);
-          if (target?.role === 'LEAD' && leadCount <= 1)
-            return 'Cannot demote the last lead. Promote another member first.';
+          if (targetRole === 'MEMBER') {
+            const [target, leadCount] = await Promise.all([
+              tx.projectMember.findFirst({
+                where: {
+                  projectId: pr.id,
+                  userId: r.value.id,
+                  organizationId: h.ctx.organizationId,
+                },
+              }),
+              tx.projectMember.count({
+                where: { projectId: pr.id, organizationId: h.ctx.organizationId, role: 'LEAD' },
+              }),
+            ]);
+            if (target?.role === 'LEAD' && leadCount <= 1)
+              return 'Cannot demote the last lead. Promote another member first.';
+          }
+          await tx.projectMember.upsert({
+            where: { projectId_userId: { projectId: pr.id, userId: r.value.id } },
+            create: {
+              projectId: pr.id,
+              userId: r.value.id,
+              organizationId: h.ctx.organizationId,
+              role: targetRole,
+            },
+            update: { role: targetRole },
+          });
+          return null;
         }
-        await tx.projectMember.upsert({
-          where: { projectId_userId: { projectId: pr.id, userId: r.value.id } },
-          create: {
-            projectId: pr.id,
-            userId: r.value.id,
-            organizationId: h.ctx.organizationId,
-            role: targetRole,
-          },
-          update: { role: targetRole },
-        });
-        return null;
-      });
+      );
       if (mutationError) return { error: mutationError };
 
       h.activity({
@@ -575,29 +583,37 @@ export function buildProjectsTools(h: AssistantHelpers): ToolSet {
       }
 
       const isSelf = targetUserId === userId;
-      const mutationError = await db.$transaction(async (tx) => {
-        await lockProjectMembershipChanges(tx, pr.id, h.ctx.organizationId);
-        const [target, caller, leadCount] = await Promise.all([
-          tx.projectMember.findFirst({
-            where: { projectId: pr.id, userId: targetUserId, organizationId: h.ctx.organizationId },
-          }),
-          tx.projectMember.findFirst({
-            where: { projectId: pr.id, userId, organizationId: h.ctx.organizationId },
-          }),
-          tx.projectMember.count({
-            where: { projectId: pr.id, organizationId: h.ctx.organizationId, role: 'LEAD' },
-          }),
-        ]);
-        if (!target) return `"${person}" is not a member of that project.`;
-        if (!isSelf && !isAdmin && caller?.role !== 'LEAD')
-          return 'Only the project lead or an admin can remove other members.';
-        if (target.role === 'LEAD' && leadCount <= 1)
-          return 'Cannot remove the last lead. Promote another member to lead first.';
-        await tx.projectMember.delete({
-          where: { projectId_userId: { projectId: pr.id, userId: targetUserId } },
-        });
-        return null;
-      });
+      const mutationError = await withProjectMembershipChanges(
+        db,
+        pr.id,
+        h.ctx.organizationId,
+        async (tx) => {
+          const [target, caller, leadCount] = await Promise.all([
+            tx.projectMember.findFirst({
+              where: {
+                projectId: pr.id,
+                userId: targetUserId,
+                organizationId: h.ctx.organizationId,
+              },
+            }),
+            tx.projectMember.findFirst({
+              where: { projectId: pr.id, userId, organizationId: h.ctx.organizationId },
+            }),
+            tx.projectMember.count({
+              where: { projectId: pr.id, organizationId: h.ctx.organizationId, role: 'LEAD' },
+            }),
+          ]);
+          if (!target) return `"${person}" is not a member of that project.`;
+          if (!isSelf && !isAdmin && caller?.role !== 'LEAD')
+            return 'Only the project lead or an admin can remove other members.';
+          if (target.role === 'LEAD' && leadCount <= 1)
+            return 'Cannot remove the last lead. Promote another member to lead first.';
+          await tx.projectMember.delete({
+            where: { projectId_userId: { projectId: pr.id, userId: targetUserId } },
+          });
+          return null;
+        }
+      );
       if (mutationError) return { error: mutationError };
 
       h.activity({
@@ -643,30 +659,34 @@ export function buildProjectsTools(h: AssistantHelpers): ToolSet {
       if (r.kind === 'notfound') return { error: `"${person}" is not a member of that project.` };
       if (r.kind === 'ambiguous')
         return { needsClarification: `Which one — ${r.candidates.join(', ')}?` };
-      const mutationError = await db.$transaction(async (tx) => {
-        await lockProjectMembershipChanges(tx, pr.id, h.ctx.organizationId);
-        const [caller, target, leadCount] = await Promise.all([
-          tx.projectMember.findFirst({
-            where: { projectId: pr.id, userId, organizationId: h.ctx.organizationId },
-          }),
-          tx.projectMember.findFirst({
-            where: { projectId: pr.id, userId: r.value.id, organizationId: h.ctx.organizationId },
-          }),
-          tx.projectMember.count({
-            where: { projectId: pr.id, organizationId: h.ctx.organizationId, role: 'LEAD' },
-          }),
-        ]);
-        if (!isAdmin && caller?.role !== 'LEAD')
-          return 'Only the project lead or an admin can change roles.';
-        if (!target) return `"${person}" is not a member of that project.`;
-        if (role === 'MEMBER' && target.role === 'LEAD' && leadCount <= 1)
-          return 'Cannot demote the last lead. Promote another member first.';
-        await tx.projectMember.update({
-          where: { projectId_userId: { projectId: pr.id, userId: r.value.id } },
-          data: { role },
-        });
-        return null;
-      });
+      const mutationError = await withProjectMembershipChanges(
+        db,
+        pr.id,
+        h.ctx.organizationId,
+        async (tx) => {
+          const [caller, target, leadCount] = await Promise.all([
+            tx.projectMember.findFirst({
+              where: { projectId: pr.id, userId, organizationId: h.ctx.organizationId },
+            }),
+            tx.projectMember.findFirst({
+              where: { projectId: pr.id, userId: r.value.id, organizationId: h.ctx.organizationId },
+            }),
+            tx.projectMember.count({
+              where: { projectId: pr.id, organizationId: h.ctx.organizationId, role: 'LEAD' },
+            }),
+          ]);
+          if (!isAdmin && caller?.role !== 'LEAD')
+            return 'Only the project lead or an admin can change roles.';
+          if (!target) return `"${person}" is not a member of that project.`;
+          if (role === 'MEMBER' && target.role === 'LEAD' && leadCount <= 1)
+            return 'Cannot demote the last lead. Promote another member first.';
+          await tx.projectMember.update({
+            where: { projectId_userId: { projectId: pr.id, userId: r.value.id } },
+            data: { role },
+          });
+          return null;
+        }
+      );
       if (mutationError) return { error: mutationError };
 
       h.audit({
