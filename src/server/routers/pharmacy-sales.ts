@@ -158,7 +158,7 @@ async function scopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> 
 }
 
 async function khataScope(ctx: TRPCContext, branch: string, access: 'read' | 'write') {
-  const scope = await scopeFor(ctx, branch);
+  const scope = await branchScopeOrForbidden(ctx, branch);
   if (
     ctx.organization?.vertical !== 'PHARMACY' ||
     ctx.organization.id !== scope.organizationId ||
@@ -171,27 +171,26 @@ async function khataScope(ctx: TRPCContext, branch: string, access: 'read' | 'wr
     db: ctx.db,
     source: 'TRPC',
   });
-  const hasRequiredAccess =
-    hasCounterAccess ||
-    (access === 'read' &&
-      (await can(subject, 'reports:financial', undefined, {
-        db: ctx.db,
-        source: 'TRPC',
-      })));
-  if (!hasRequiredAccess)
+  const financialReadAccess =
+    !hasCounterAccess &&
+    access === 'read' &&
+    (await can(subject, 'reports:financial', undefined, {
+      db: ctx.db,
+      source: 'TRPC',
+    }));
+  if (!hasCounterAccess && !financialReadAccess)
     throw new TRPCError({
       code: 'FORBIDDEN',
-      message: access === 'write'
-        ? 'Pharmacy counter permission required.'
-        : 'Pharmacy counter or financial reports permission required.',
+      message:
+        access === 'write'
+          ? 'Pharmacy counter permission required.'
+          : 'Pharmacy counter or financial reports permission required.',
     });
-  const available = await ctx.db.pharmacyBranch.findFirst({
-    where: { organizationId: scope.organizationId, id: branch, active: true },
-    select: { id: true },
+  // Finance reads and counter money operations share the active member/branch boundary.
+  return requireCounterReceiptAccess(ctx, branch, false, (rules) => {
+    const decision = counterCapabilityDecision(rules, KHATA_CAPABILITIES);
+    return decision === 'ALLOW' || (decision !== 'DENY' && financialReadAccess);
   });
-  if (!available)
-    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
-  return scope;
 }
 
 async function bindKhataBranch(db: ScopedDb, scope: LedgerScope) {
@@ -320,6 +319,10 @@ const RECEIPT_READ_CAPABILITIES = [
   'pharmacy:counter',
   'pharmacy.counter',
 ] as const;
+// Clinical restrictions do not revoke independently granted Khata access.
+const KHATA_CAPABILITIES = RECEIPT_READ_CAPABILITIES.filter(
+  (action) => action !== 'pharmacy:dispense' && action !== 'pharmacy.dispense'
+);
 
 function capabilityCovers(rule: string, action: string): boolean {
   // Dispensing is regulated: only its canonical, exact ALLOW can grant it. The
@@ -331,10 +334,11 @@ function capabilityCovers(rule: string, action: string): boolean {
 }
 
 function counterCapabilityDecision(
-  rules: { capability: string; effect: string }[]
+  rules: { capability: string; effect: string }[],
+  capabilities: readonly string[] = RECEIPT_READ_CAPABILITIES
 ): 'ALLOW' | 'DENY' | null {
   const matched = rules.filter((rule) =>
-    RECEIPT_READ_CAPABILITIES.some((action) =>
+    capabilities.some((action) =>
       action === 'pharmacy:dispense' && rule.effect === 'DENY'
         ? capabilityMatches(rule.capability, action, 'DENY')
         : capabilityCovers(rule.capability, action)
@@ -367,7 +371,8 @@ async function branchScopeOrForbidden(ctx: TRPCContext, branch: string): Promise
 async function requireCounterReceiptAccess(
   ctx: TRPCContext,
   branch: string,
-  requireCanonicalCounter = false
+  requireCanonicalCounter = false,
+  authorizeMember?: (rules: { capability: string; effect: string }[]) => boolean
 ): Promise<LedgerScope> {
   const scope = await branchScopeOrForbidden(ctx, branch);
   const user = ctx.session!.user;
@@ -414,7 +419,10 @@ async function requireCounterReceiptAccess(
   // can accidentally outrun an explicit DENY on another alias.
   // Combine user overrides and role rules into ONE family decision so any
   // explicit DENY (user or role, on any alias) beats any ALLOW.
-  const capable = counterCapabilityDecision([...overrides, ...roleRules]) === 'ALLOW';
+  const rules = [...overrides, ...roleRules];
+  const capable = authorizeMember
+    ? authorizeMember(rules)
+    : counterCapabilityDecision(rules) === 'ALLOW';
   if (!capable) {
     throw new TRPCError({
       code: 'FORBIDDEN',
@@ -774,7 +782,7 @@ export const pharmacySalesRouter = router({
     }),
   tenderOutcome: protectedProcedure.input(tenderInput).query(async ({ ctx, input }) => {
     const scope =
-      input.type === 'KHATA' || input.familyAccountId
+      input.type === 'KHATA' || input.type === 'CREDIT' || input.familyAccountId
         ? await khataScope(ctx, input.branchId, 'read')
         : await scopeFor(ctx, input.branchId);
     return readPharmacyTenderOutcome(ctx.db, scope, ledgerTender(input));
@@ -862,7 +870,12 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+        let receiptAccess = false;
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId, false, (rules) => {
+          receiptAccess = counterCapabilityDecision(rules) === 'ALLOW';
+          // The stored tender selects the permission boundary after member/branch checks.
+          return receiptAccess || counterCapabilityDecision(rules, KHATA_CAPABILITIES) === 'ALLOW';
+        });
         return await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
           const tender = await db.pharmacyTender.findFirst({
@@ -873,7 +886,14 @@ export const pharmacySalesRouter = router({
             },
             select: { type: true },
           });
-          if (tender?.type !== 'CREDIT') return refundPharmacyTender(db, scope, input);
+          if (tender?.type !== 'CREDIT') {
+            if (!receiptAccess)
+              throw new TRPCError({
+                code: 'FORBIDDEN',
+                message: 'You do not have permission for this action.',
+              });
+            return refundPharmacyTender(db, scope, input);
+          }
           await khataScope(ctx, input.branchId, 'write');
           await bindKhataBranch(db, scope);
           const charge = await db.pharmacyKhataEvent.findFirst({
@@ -1725,6 +1745,7 @@ export const pharmacySalesRouter = router({
         return {
           ...receipt,
           dispensingLabelSources,
+          // Completion-time identity keeps browser, A4, and Urdu copies aligned with ESC/POS.
           taxIdentity,
         };
       } catch (error) {

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { Prisma } from '@/generated/prisma/client';
 import { format } from 'date-fns';
 import { router, adminProcedure } from '../trpc';
 import { logActivity } from '../activity';
@@ -22,6 +23,29 @@ import {
   roundMoney,
   sumMoney,
 } from '@/lib/finance/money';
+
+type OutstandingInvoiceGroup = {
+  currency: string;
+  amount: unknown;
+  count: bigint | number;
+};
+
+export function getOutstandingInvoiceGroups(db: { $queryRaw<T>(query: Prisma.Sql): Promise<T> }) {
+  return db.$queryRaw<OutstandingInvoiceGroup[]>(Prisma.sql`
+    SELECT i.currency::text AS currency,
+           SUM(GREATEST(i.total - COALESCE(p.paid, 0), 0)) AS amount,
+           COUNT(*) AS count
+      FROM invoices AS i
+      LEFT JOIN (
+        SELECT "invoiceId", SUM(amount) AS paid
+          FROM payments
+         GROUP BY "invoiceId"
+      ) AS p ON p."invoiceId" = i.id
+     WHERE i.status IN ('SENT', 'OVERDUE')
+     GROUP BY i.currency
+     ORDER BY i.currency
+  `);
+}
 
 // Monthly-equivalent multiplier for a recurring expense's billing interval, so an
 // ongoing subscription's run-rate can be folded into burn/profit (FIN-05).
@@ -877,12 +901,10 @@ export const financeRouter = router({
         _count: true,
         where: { status: 'PAID' },
       }),
-      ctx.db.invoice.groupBy({
-        by: ['currency'],
-        _sum: { total: true },
-        _count: true,
-        where: { status: { in: ['SENT', 'OVERDUE'] } },
-      }),
+      // Keep this aggregation in Postgres. Loading every open invoice and all
+      // of its payments makes this dashboard query grow with the tenant's full
+      // receivables history. Both tables remain protected by request-scoped RLS.
+      getOutstandingInvoiceGroups(ctx.db),
       ctx.db.recurringExpense.findMany({
         where: { active: true },
         select: { amount: true, currency: true, interval: true },
@@ -924,6 +946,16 @@ export const financeRouter = router({
       recurringYearly
     );
 
+    // Postgres subtracts all partial payments per invoice and clamps anomalous
+    // legacy overpayments before summing, so one overpayment cannot hide another
+    // invoice's positive balance.
+    const totalOutstanding = sumByCurrency(
+      outstandingInvoicesG.map(({ currency, amount }) => ({
+        currency,
+        amount: Number(amount ?? 0),
+      }))
+    );
+
     return {
       monthlyIncome,
       monthlyExpense,
@@ -933,8 +965,8 @@ export const financeRouter = router({
       yearlyProfit: diffByCurrency(yearlyIncome, yearlyExpense),
       totalPaid: fromCurrencyGroups(paidInvoicesG, 'total'),
       paidCount: paidInvoicesG.reduce((s, g) => s + g._count, 0),
-      totalOutstanding: fromCurrencyGroups(outstandingInvoicesG, 'total'),
-      outstandingCount: outstandingInvoicesG.reduce((s, g) => s + g._count, 0),
+      totalOutstanding,
+      outstandingCount: outstandingInvoicesG.reduce((sum, group) => sum + Number(group.count), 0),
     };
   }),
 
