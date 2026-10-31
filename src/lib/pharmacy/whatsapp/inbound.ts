@@ -156,6 +156,9 @@ export async function handleInboundWhatsAppMessage(
   // leave the webhook retryable; no provider call occurs inside this transaction.
   const { customer, inboundId, staleConsent } = await withTenantDb(organizationId, async (db) => {
     const customer = await findCustomerByWhatsApp(db, organizationId, message.from);
+    // Lock patient then customer before the log insert takes a customer FK
+    // KEY SHARE lock; reversing that order can deadlock with reminder claims.
+    if (customer && keyword) await lockCustomerConsent(db, organizationId, customer.id);
     const inboundId = await claimMessageLogInTransaction(db, {
       organizationId,
       direction: 'INBOUND',
@@ -170,7 +173,6 @@ export async function handleInboundWhatsAppMessage(
     if (inboundId && customer && keyword) {
       if (!Number.isFinite(message.receivedAt.getTime()) || message.receivedAt > now)
         throw new Error('Invalid consent timestamp.');
-      await lockCustomerConsent(db, organizationId, customer.id);
       const optIn = keyword === 'START';
       const changed = await db.pharmacyCustomer.updateMany({
         where: {
