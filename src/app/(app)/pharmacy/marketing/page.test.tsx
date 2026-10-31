@@ -6,6 +6,7 @@ import { beforeEach, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   branches: vi.fn(),
   growthHistory: vi.fn(),
+  basketHistory: vi.fn(),
   history: vi.fn(),
   review: vi.fn(),
   deliveryHistory: vi.fn(),
@@ -28,6 +29,7 @@ const campaign = {
 beforeEach(() => {
   vi.resetAllMocks();
   mocks.growthHistory.mockResolvedValue({ insights: [], reviews: [] });
+  mocks.basketHistory.mockResolvedValue({ insights: [], reviews: [] });
   mocks.deliveryHistory.mockResolvedValue({
     accepted: 0,
     delivered: 0,
