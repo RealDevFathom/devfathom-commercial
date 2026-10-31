@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -17,6 +17,7 @@ import {
   recoverStaleJobs,
   releaseClaim,
   type ClaimedJob,
+  type SettleOptions,
 } from '@/lib/restaurant/scheduler';
 
 // A minimal in-memory ScopedDb that mirrors the exact Prisma operations the
@@ -176,6 +177,58 @@ function createFakeDb(seed: Row[] = []) {
 }
 
 const T0 = new Date('2026-08-20T12:00:00.000Z');
+
+describe.each(['complete', 'fail', 'releaseClaim'] as const)('%s ownership validation', (operation) => {
+  it.each([
+    { workerId: undefined },
+    { workerId: null },
+    { workerId: 42 },
+    { workerId: '' },
+    { workerId: ' ' },
+    { attempt: undefined },
+    { attempt: null },
+    { attempt: 0 },
+    { attempt: 1.5 },
+    { claimToken: undefined },
+    { claimToken: null },
+    { claimToken: 42 },
+    { claimToken: '' },
+    { claimToken: ' ' },
+  ])('rejects malformed ownership %j before accessing the job', async (invalid) => {
+    const original = {
+      id: 'j1',
+      status: 'RUNNING',
+      attempts: 1,
+      maxAttempts: 5,
+      claimedAt: T0,
+      claimedBy: 'worker-a',
+      claimToken: 'claim-current',
+    };
+    const { db, jobs, executions } = createFakeDb([original]);
+    const find = vi.spyOn(db.restaurantJob, 'findUnique');
+    const update = vi.spyOn(db.restaurantJob, 'updateMany');
+    // Model incomplete or malformed ownership received at a runtime boundary.
+    const opts = {
+      workerId: 'worker-a',
+      attempt: 1,
+      claimToken: 'claim-current',
+      ...invalid,
+    } as unknown as SettleOptions;
+
+    const settlement =
+      operation === 'complete'
+        ? complete(db, 'j1', opts)
+        : operation === 'fail'
+          ? fail(db, 'j1', new Error('boom'), opts)
+          : releaseClaim(db, 'j1', opts);
+
+    await expect(settlement).rejects.toMatchObject({ reason: 'INVALID' });
+    expect(find).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+    expect(jobs.get('j1')).toEqual(original);
+    expect(executions).toHaveLength(0);
+  });
+});
 
 describe('scheduler backoff', () => {
   it('is exponential from the base delay and capped', () => {

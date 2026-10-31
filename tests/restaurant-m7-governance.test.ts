@@ -18,11 +18,12 @@ const M7_COLUMNS = {
     'nextAttemptAt',
     'claimedAt',
     'claimedBy',
-    'claimToken',
     'lastError',
     'idempotencyKey',
     'createdAt',
     'updatedAt',
+    // ALTER TABLE appends the claim token after the existing columns.
+    'claimToken',
   ],
   restaurant_job_executions: [
     'id',

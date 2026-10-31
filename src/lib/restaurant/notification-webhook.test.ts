@@ -75,6 +75,7 @@ const job = {
   attempts: 1,
   maxAttempts: 5,
   claimedBy: 'worker_1',
+  claimToken: 'notification-webhook-test-claim',
   startedAt: new Date('2026-08-30T07:01:00.000Z'),
 };
 const publicLookup = vi.fn().mockResolvedValue([{ address: '93.184.216.34', family: 4 }]);

@@ -567,17 +567,7 @@ async function requireRunningClaim(
   jobId: string,
   claim: Pick<SettleOptions, 'workerId' | 'attempt' | 'claimToken'>
 ): Promise<RunningJob> {
-  if (
-    !claim.workerId.trim() ||
-    (typeof claim.claimToken !== 'string' || !claim.claimToken.trim()) ||
-    !Number.isInteger(claim.attempt) ||
-    claim.attempt < 1
-  ) {
-    throw new SchedulerError(
-      'Settlement requires a valid workerId, claim attempt, and claim token.',
-      'INVALID'
-    );
-  }
+  validateClaim(claim);
   const job = await tx.restaurantJob.findUnique({
     where: { id: jobId },
     select: {
@@ -616,6 +606,8 @@ function runningClaimWhere(
   jobId: string,
   claim: Pick<SettleOptions, 'workerId' | 'attempt' | 'claimToken'>
 ): Prisma.RestaurantJobWhereInput {
+  // Prisma omits undefined filters, so reject incomplete ownership before SQL.
+  validateClaim(claim);
   return {
     id: jobId,
     status: 'RUNNING',
@@ -623,6 +615,22 @@ function runningClaimWhere(
     claimedBy: claim.workerId,
     claimToken: claim.claimToken,
   };
+}
+
+function validateClaim(claim: Pick<SettleOptions, 'workerId' | 'attempt' | 'claimToken'>): void {
+  if (
+    typeof claim.workerId !== 'string' ||
+    !claim.workerId.trim() ||
+    typeof claim.claimToken !== 'string' ||
+    !claim.claimToken.trim() ||
+    !Number.isInteger(claim.attempt) ||
+    claim.attempt < 1
+  ) {
+    throw new SchedulerError(
+      'Settlement requires a valid workerId, claim attempt, and claim token.',
+      'INVALID'
+    );
+  }
 }
 
 function requireClaimUpdate(count: number, jobId: string): void {
