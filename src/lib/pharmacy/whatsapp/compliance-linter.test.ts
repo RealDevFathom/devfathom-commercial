@@ -110,6 +110,21 @@ describe('WhatsApp compliance linter', () => {
     ).toBe('BLOCK');
   });
 
+  it.each([
+    'Injections available',
+    'Vaccine available today',
+    'Inhalers in stock',
+    'Ointment available',
+    'Eye drops in stock',
+    'دوائی دستیاب ہے',
+    'm-e-d-i-c-i-n-e available',
+    'P a n a d o l available',
+  ])('blocks extra categories and letter-spaced evasion: %s', (templateText) => {
+    expect(lintWhatsAppContent({ templateText, intent: 'MARKETING', catalog }).outcome).toBe(
+      'BLOCK'
+    );
+  });
+
   it('rechecks variables and blocks a drug name at send time', () => {
     expect(
       lintWhatsAppContent({

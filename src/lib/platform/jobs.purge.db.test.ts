@@ -146,6 +146,17 @@ async function seedRegulatoryProfile(
   );
 }
 
+/** #755 WhatsApp compliance evidence: append-only, deleted only with its tenant. */
+async function seedComplianceLog(db: ScopedDb, organizationId: string, branchId: string) {
+  await db.$executeRawUnsafe(
+    `INSERT INTO pharmacy_whatsapp_compliance_logs (id, "organizationId", "branchId", subject, intent, outcome, reasons, "linterVersion")
+     VALUES ($1, $2, $3, 'send:khata:fixture', 'UTILITY', 'PASS', '[]'::jsonb, 'test')`,
+    `compliance_${organizationId}`,
+    organizationId,
+    branchId
+  );
+}
+
 /**
  * CAM-2 evidence: a counter camera on the branch and one still bound to a daily
  * close, whose capture failed. FAILED is terminal and kept as a record, and it is
@@ -217,6 +228,8 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
       await seedRegulatoryProfile(db, LIVE_PROFILE_ID, LIVE_ORG, LIVE_BRANCH_ID);
       // Camera evidence is retained the same way: deleted only with its tenant.
       await seedCameraEvidence(db, PURGED_ORG, BRANCH_ID);
+      await seedComplianceLog(db, PURGED_ORG, BRANCH_ID);
+      await seedComplianceLog(db, LIVE_ORG, LIVE_BRANCH_ID);
       await db.$executeRawUnsafe(
         `INSERT INTO pharmacy_stock_locations (id, "organizationId", "branchId", code, name, kind, "updatedAt")
          VALUES ($1, $2, $3, $1, 'Main store', 'STORE', now())`,
@@ -282,7 +295,8 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
                 (SELECT count(*) FROM pharmacy_onboarding_events WHERE "organizationId" = $1) AS events,
                 (SELECT count(*) FROM pharmacy_onboarding_states WHERE "organizationId" = $1) AS states,
                 (SELECT count(*) FROM camera_evidence WHERE "organizationId" = $1) AS evidence,
-                (SELECT count(*) FROM cameras WHERE "organizationId" = $1) AS cameras`,
+                (SELECT count(*) FROM cameras WHERE "organizationId" = $1) AS cameras,
+                (SELECT count(*) FROM pharmacy_whatsapp_compliance_logs WHERE "organizationId" = $1) AS "complianceLogs"`,
         PURGED_ORG
       )
     );
@@ -298,16 +312,18 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
       states: none,
       evidence: none,
       cameras: none,
+      complianceLogs: none,
     });
 
     const [live] = await withPlatformDb((db) =>
       db.$queryRawUnsafe<Array<Record<string, bigint>>>(
         `SELECT (SELECT count(*) FROM pharmacy_branch_regulatory_profiles WHERE "organizationId" = $1) AS profiles,
-                (SELECT count(*) FROM pharmacy_branches WHERE "organizationId" = $1) AS branches`,
+                (SELECT count(*) FROM pharmacy_branches WHERE "organizationId" = $1) AS branches,
+                (SELECT count(*) FROM pharmacy_whatsapp_compliance_logs WHERE "organizationId" = $1) AS "complianceLogs"`,
         LIVE_ORG
       )
     );
-    expect(live).toEqual({ profiles: BigInt(1), branches: BigInt(1) });
+    expect(live).toEqual({ profiles: BigInt(1), branches: BigInt(1), complianceLogs: BigInt(1) });
 
     const organization = await withPlatformDb((db) =>
       db.organization.findUniqueOrThrow({
@@ -351,6 +367,35 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
         return db.$executeRawUnsafe(
           `DELETE FROM pharmacy_branch_regulatory_profiles WHERE id = $1`,
           LIVE_PROFILE_ID
+        );
+      })
+    ).rejects.toThrow(/append-only/);
+
+    // WhatsApp compliance evidence: no platform delete or rewrite outside the
+    // exact purge context, and a purge of another tenant does not reach it.
+    await expect(
+      withPlatformDb((db) =>
+        db.$executeRawUnsafe(
+          `DELETE FROM pharmacy_whatsapp_compliance_logs WHERE "organizationId" = $1`,
+          LIVE_ORG
+        )
+      )
+    ).rejects.toThrow(/append-only/);
+    await expect(
+      withPlatformDb(async (db) => {
+        await db.$queryRaw`SELECT set_config('app.purging_organization_id', ${PURGED_ORG}, true)`;
+        return db.$executeRawUnsafe(
+          `DELETE FROM pharmacy_whatsapp_compliance_logs WHERE "organizationId" = $1`,
+          LIVE_ORG
+        );
+      })
+    ).rejects.toThrow(/append-only/);
+    await expect(
+      withPlatformDb(async (db) => {
+        await db.$queryRaw`SELECT set_config('app.purging_organization_id', ${LIVE_ORG}, true)`;
+        return db.$executeRawUnsafe(
+          `UPDATE pharmacy_whatsapp_compliance_logs SET outcome = 'BLOCK' WHERE "organizationId" = $1`,
+          LIVE_ORG
         );
       })
     ).rejects.toThrow(/append-only/);
@@ -703,6 +748,10 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
         `DELETE FROM pharmacy_branch_regulatory_profiles WHERE id = $1`,
         LIVE_PROFILE_ID
       );
+      await db.$executeRawUnsafe(
+        `DELETE FROM pharmacy_whatsapp_compliance_logs WHERE "organizationId" = $1`,
+        LIVE_ORG
+      );
       await db.$executeRawUnsafe(`DELETE FROM pharmacy_branches WHERE id = $1`, LIVE_BRANCH_ID);
     });
 
@@ -733,6 +782,7 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
       );
       await seedRegulatoryProfile(db, TENANT_PROFILE_ID, TENANT_ORG, TENANT_BRANCH_ID);
       await seedCameraEvidence(db, TENANT_ORG, TENANT_BRANCH_ID);
+      await seedComplianceLog(db, TENANT_ORG, TENANT_BRANCH_ID);
     });
     const hotel = await seedHotelInventory(HOTEL_TENANT_ORG, 'ACTIVE');
 
@@ -760,6 +810,14 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
         refusedDelete: /camera evidence is retained/,
         rewrite: `UPDATE camera_evidence SET "subjectId" = 'rewritten' WHERE "organizationId" = $1`,
         refusedRewrite: /binding is immutable/,
+      },
+      {
+        organizationId: TENANT_ORG,
+        userId: undefined,
+        table: 'pharmacy_whatsapp_compliance_logs',
+        refusedDelete: /append-only/,
+        rewrite: `UPDATE pharmacy_whatsapp_compliance_logs SET outcome = 'BLOCK' WHERE "organizationId" = $1`,
+        refusedRewrite: /append-only/,
       },
       {
         organizationId: HOTEL_TENANT_ORG,

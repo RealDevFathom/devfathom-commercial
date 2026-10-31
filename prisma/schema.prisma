@@ -13772,7 +13772,7 @@ model PharmacyWhatsAppComplianceLog {
   linterVersion  String
   createdAt      DateTime @default(now())
 
-  @@unique([organizationId, id])
+  @@unique([organizationId, id], map: "pharmacy_wa_compliance_org_id_key")
   @@index([organizationId, branchId, createdAt(sort: Desc)], map: "pharmacy_wa_compliance_scope_idx")
   @@map("pharmacy_whatsapp_compliance_logs")
 }

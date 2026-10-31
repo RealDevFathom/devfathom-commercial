@@ -35,6 +35,8 @@ let captures: Array<Record<string, unknown>>;
 let exclusions: Array<Record<string, unknown>>;
 let optIn: boolean | null;
 let revokedAt: Date | null;
+let catalog: Array<Record<string, unknown>>;
+let complianceLogs: Array<Record<string, unknown>>;
 let db: ScopedDb;
 let mock: ReturnType<typeof database>;
 function database() {
@@ -99,6 +101,13 @@ function database() {
       }),
       findMany: vi.fn(async () => captures),
     },
+    medicine: { findMany: vi.fn(async () => catalog) },
+    pharmacyWhatsAppComplianceLog: {
+      create: vi.fn(async ({ data }) => {
+        complianceLogs.push(data);
+        return data;
+      }),
+    },
     pharmacyCampaignExclusion: {
       create: vi.fn(async ({ data }) => {
         exclusions.push(data);
@@ -113,6 +122,8 @@ beforeEach(() => {
   exclusions = [];
   optIn = true;
   revokedAt = null;
+  catalog = [];
+  complianceLogs = [];
   mock = database();
   db = mock as unknown as ScopedDb;
 });
@@ -145,6 +156,49 @@ describe('persisted capture workflow', () => {
         channel: 'WHATSAPP',
       },
     });
+  });
+  it('re-lints a stored template against the current catalog at draft, approval and capture', async () => {
+    // A template approved before a matching brand joined the catalog.
+    mock.pharmacyMarketingTemplate.findFirst.mockImplementation(async () => ({
+      id: 'template-a',
+      body: 'Ask about Calpol today. Reply STOP to opt out.',
+      approvedByUserId: 'owner-a',
+      approvedAt: now,
+    }));
+    catalog = [{ productName: 'Calpol 120mg/5ml', brandName: null, aliases: [], strengths: [] }];
+    await expect(
+      createMarketingDraft(db, scope, {
+        branchId: scope.branchId,
+        name: 'Store update',
+        templateId: 'template-a',
+        definition: {
+          version: 1 as const,
+          all: [{ field: 'receiptCount' as const, operator: 'gte' as const, value: 1 }],
+        },
+        scheduledAt: now,
+        quietHours: row.quietHours,
+        frequencyCap: row.frequencyCap,
+        promotesRegulatedItem: false as const,
+      })
+    ).rejects.toThrow('WhatsApp compliance blocked');
+    expect(mock.pharmacyCampaign.create).not.toHaveBeenCalled();
+
+    row.status = 'DRAFT';
+    await expect(approveMarketingCampaign(db, scope, row.id, now)).rejects.toThrow(
+      'WhatsApp compliance blocked'
+    );
+    expect(row.status).toBe('DRAFT');
+
+    row.status = 'APPROVED';
+    await expect(captureMarketingCampaign(db, scope, row.id, now)).rejects.toThrow(
+      'WhatsApp compliance blocked'
+    );
+    expect(captures).toEqual([]);
+    expect(complianceLogs.map((log) => [log.subject, log.outcome])).toEqual([
+      ['draft:template-a', 'BLOCK'],
+      ['campaign-approval:campaign-a', 'BLOCK'],
+      ['campaign-capture:campaign-a', 'BLOCK'],
+    ]);
   });
   it('rejects unsupported or clinical segment fields', () => {
     for (const field of ['medicine', 'otcOnly', 'familyAccount']) {

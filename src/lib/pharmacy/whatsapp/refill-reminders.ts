@@ -16,7 +16,11 @@ import {
   type WhatsAppConfig,
   type WhatsAppProvider,
 } from './provider';
-import { lintAndLogWhatsAppContent } from './compliance-linter';
+import {
+  type ComplianceCatalog,
+  lintAndLogWhatsAppContent,
+  readComplianceCatalog,
+} from './compliance-linter';
 
 const DAY_MS = 86_400_000;
 
@@ -132,6 +136,8 @@ export async function processDueWhatsAppRefillReminders(
     `)
   );
 
+  // One catalog read per organization per run, not one per recipient transaction.
+  const catalogs = new Map<string, ComplianceCatalog>();
   for (const capture of captures) {
     result.scanned += 1;
     let plan: ReturnType<typeof planRefillReminder>;
@@ -231,6 +237,11 @@ export async function processDueWhatsAppRefillReminders(
         },
       });
       if (prior) return null;
+      let catalog = catalogs.get(capture.organizationId);
+      if (!catalog) {
+        catalog = await readComplianceCatalog(db, capture.organizationId);
+        catalogs.set(capture.organizationId, catalog);
+      }
       const compliance = await lintAndLogWhatsAppContent(
         db,
         { organizationId: capture.organizationId, branchId: capture.branchId },
@@ -239,7 +250,8 @@ export async function processDueWhatsAppRefillReminders(
           variables: [plan.dueDate],
           intent: 'UTILITY',
           subject: `send:refill:${capture.id}`,
-        }
+        },
+        { catalog }
       );
       if (compliance.outcome === 'BLOCK') return { outcome: 'COMPLIANCE_BLOCKED' as const };
       const logId = await claimMessageLogInTransaction(db, {

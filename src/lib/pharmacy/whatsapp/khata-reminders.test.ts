@@ -230,6 +230,21 @@ describe('processDueWhatsAppKhataReminders', () => {
     expect(store.logs).toEqual([]);
   });
 
+  it('logs one compliance decision per claimed send, not per re-run duplicate', async () => {
+    store.accounts = [account()];
+    store.customers = [customer(true)];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    const provider = new MockWhatsAppProvider(config);
+
+    await processDueWhatsAppKhataReminders({ now: NOW, config, provider });
+    const rerun = await processDueWhatsAppKhataReminders({ now: NOW, config, provider });
+
+    expect(rerun).toMatchObject({ duplicate: 1 });
+    expect(store.complianceLogs).toEqual([
+      expect.objectContaining({ outcome: 'PASS', subject: 'send:khata:family-1' }),
+    ]);
+  });
+
   it('reports a regulated send-time display name as compliance-blocked', async () => {
     store.accounts = [{ ...account(), displayName: 'Panadol household' }];
     store.customers = [customer(true)];
