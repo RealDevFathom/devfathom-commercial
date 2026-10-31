@@ -48,6 +48,29 @@ export const PATCH = withApiAuth(
     if (!existing) return NextResponse.json({ error: 'Transaction not found' }, { status: 404 });
 
     const { date, ...data } = parsed.data;
+
+    // Foreign-key constraints only prove that a referenced row exists; they do
+    // not prove that it belongs to the token's workspace. Keep nullable fields
+    // clearable, but explicitly scope every supplied reference before updating.
+    if (
+      data.projectId &&
+      !(await authCtx.db.project.findFirst({
+        where: { id: data.projectId, organizationId: authCtx.organizationId },
+        select: { id: true },
+      }))
+    ) {
+      return NextResponse.json({ error: 'projectId does not exist.' }, { status: 400 });
+    }
+    if (
+      data.clientId &&
+      !(await authCtx.db.client.findFirst({
+        where: { id: data.clientId, organizationId: authCtx.organizationId },
+        select: { id: true },
+      }))
+    ) {
+      return NextResponse.json({ error: 'clientId does not exist.' }, { status: 400 });
+    }
+
     const transaction = await authCtx.db.transaction.update({
       where: { id },
       data: { ...data, ...(date && { date: new Date(date) }) },

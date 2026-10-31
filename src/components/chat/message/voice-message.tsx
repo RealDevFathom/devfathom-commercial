@@ -45,7 +45,7 @@ function waveformBars(seed: string, count: number): number[] {
     h ^= h >>> 17;
     h ^= h << 5;
     h >>>= 0;
-    bars.push(0.3 + (h % 1000) / 1000 * 0.7); // 0.3 .. 1.0 of track height
+    bars.push(0.3 + ((h % 1000) / 1000) * 0.7); // 0.3 .. 1.0 of track height
   }
   return bars;
 }
