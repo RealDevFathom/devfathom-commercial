@@ -621,7 +621,7 @@ test('a published shift is stamped to the branch operating day, re-versions on e
     await expect(liveRow).toContainText(BRANCH_TIMEZONE);
     // The shifts panel titles itself with its own live count.
     await expect(
-      page.getByRole('heading', { level: 3, name: '1 scheduled shift', exact: true })
+      page.getByRole('heading', { level: 2, name: '1 scheduled shift', exact: true })
     ).toBeVisible();
 
     const published = await tenantQuery<{
@@ -703,7 +703,7 @@ test('a published shift is stamped to the branch operating day, re-versions on e
       cancelledRow.getByRole('button', { name: 'Cancel shift', exact: true })
     ).toBeDisabled();
     await expect(
-      page.getByRole('heading', { level: 3, name: '0 scheduled shifts', exact: true })
+      page.getByRole('heading', { level: 2, name: '0 scheduled shifts', exact: true })
     ).toBeVisible();
 
     const cancelled = await tenantQuery<{

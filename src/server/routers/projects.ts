@@ -686,6 +686,8 @@ export const projectsRouter = router({
   deleteTask: protectedProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
+      // Deleting is destructive: project membership grants task access, but only
+      // project leads and organization admins may manage (and therefore delete) it.
       await assertTaskAccess(ctx, input.id, { manage: true });
       return ctx.db.task.delete({ where: { id: input.id } });
     }),

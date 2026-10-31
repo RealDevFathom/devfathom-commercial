@@ -37,3 +37,26 @@ it('renders sign-in when the workspace guard rejects the session', async () => {
   expect(await LoginPage({ searchParams: Promise.resolve({}) })).toBeTruthy();
   expect(mocks.redirect).not.toHaveBeenCalled();
 });
+
+it.each([
+  [{}, '/dashboard?landing=1'],
+  [{ callbackUrl: '/dashboard' }, '/dashboard'],
+  [{ callbackUrl: '/pos?station=counter' }, '/pos?station=counter'],
+])(
+  'passes the default landing or explicit callback through to the form: %s',
+  async (params, expected) => {
+    mocks.actor.mockResolvedValue(null);
+    const page = await LoginPage({ searchParams: Promise.resolve(params) });
+    function findCallback(node: unknown): string | undefined {
+      if (!node || typeof node !== 'object') return;
+      const props = (node as { props?: { callbackUrl?: string; children?: unknown } }).props;
+      if (props?.callbackUrl) return props.callbackUrl;
+      const children = props?.children;
+      for (const child of Array.isArray(children) ? children : [children]) {
+        const found = findCallback(child);
+        if (found) return found;
+      }
+    }
+    expect(findCallback(page)).toBe(expected);
+  }
+);
