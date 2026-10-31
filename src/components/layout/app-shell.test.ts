@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react';
-import { createElement, type ComponentProps } from 'react';
+import { createElement, type ComponentProps, type ComponentType } from 'react';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
