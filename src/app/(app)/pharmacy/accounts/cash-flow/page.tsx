@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import { TRPCError } from '@trpc/server';
+import { unstable_rethrow } from 'next/navigation';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { Button } from '@/components/ui/button';
@@ -47,6 +48,9 @@ export default async function CashFlowPage({
     if (query.branch) {
       const start = new Date(`${from}T00:00:00Z`),
         end = new Date(`${to}T00:00:00Z`);
+      if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime())) {
+        throw new TRPCError({ code: 'BAD_REQUEST' });
+      }
       // This existing caller is intentionally the sole authorization, entitlement, capability,
       // tenant and active-branch gate. Only its returned scope reaches the all-entry loader.
       const authorized = await pharmacyFinanceRouter.createCaller(ctx).financialStatements({
@@ -58,10 +62,15 @@ export default async function CashFlowPage({
       projection = await loadCashFlowProjection(ctx.db, authorized.scope, { from: start, to: end });
     }
   } catch (error) {
-    message =
-      error instanceof TRPCError && ['FORBIDDEN', 'UNAUTHORIZED'].includes(error.code)
-        ? 'Owner Pharmacy Reports access and operational plus financial report capabilities are required.'
-        : 'Choose an active branch and a valid UTC window of at most 92 days, then retry.';
+    unstable_rethrow(error);
+    if (error instanceof TRPCError && ['FORBIDDEN', 'UNAUTHORIZED'].includes(error.code)) {
+      message =
+        'Owner Pharmacy Reports access and operational plus financial report capabilities are required.';
+    } else if (error instanceof TRPCError && error.code === 'BAD_REQUEST') {
+      message = 'Choose an active branch and a valid UTC window of at most 92 days, then retry.';
+    } else {
+      message = 'The cash-flow projection could not be read. Please retry.';
+    }
   }
   return (
     <main className="space-y-6">
@@ -96,7 +105,9 @@ export default async function CashFlowPage({
             To (exclusive)
             <Input type="date" name="to" defaultValue={to} required />
           </label>
-          <Button className="min-h-11">Read projection</Button>
+          <Button type="submit" className="min-h-11">
+            Read projection
+          </Button>
         </form>
       </SectionCard>
       {!projection ? (
