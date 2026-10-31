@@ -41,6 +41,8 @@ const input = {
 };
 function fixture() {
   const member = {
+    // ABAC reads the stored role; only admin:access and procurement have role policies.
+    role: 'ADMIN',
     status: 'ACTIVE',
     organizationId: 'org-a',
     organizationRole: {
@@ -265,9 +267,16 @@ describe.each(khataPaths)('Khata $name authorization', ({ run }) => {
   });
 
   it.each([{ assignments: [] }, { assignments: [{ branchId: 'branch-b' }] }])(
-    'preserves and audits tenant-admin access with assignments $assignments',
+    'preserves and audits system-owner access with assignments $assignments',
     async ({ assignments }) => {
       const f = fixture();
+      // Only a live system owner of this pharmacy reaches unassigned branches.
+      Object.assign(f.member, { organization: { vertical: 'PHARMACY' } });
+      Object.assign(f.member.organizationRole, {
+        organizationId: 'org-a',
+        key: 'owner',
+        isSystem: true,
+      });
       f.db.pharmacyBranchAssignment.findMany.mockResolvedValue(assignments);
       await expect(run(f.caller(), 'branch-a')).resolves.toBeDefined();
       expect(f.context.audit.detail).toMatchObject({

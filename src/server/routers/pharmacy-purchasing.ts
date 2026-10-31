@@ -1086,8 +1086,13 @@ const purchasingRouter = router({
             }
           }
           if (input.purchaseOrderId) {
+            // #580: the order must belong to the receiving branch.
             const order = await db.pharmacyPurchaseOrder.findFirst({
-              where: { id: input.purchaseOrderId, supplierId: input.supplierId },
+              where: {
+                id: input.purchaseOrderId,
+                supplierId: input.supplierId,
+                branchId: input.branchId,
+              },
             });
             if (!order) throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
             await assertOrderBranches(ctx, order);

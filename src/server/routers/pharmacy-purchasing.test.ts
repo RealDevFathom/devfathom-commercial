@@ -1094,6 +1094,10 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
       });
       await caller().createGoodsReceipt(RECEIPT);
       expect(db.pharmacyGoodsReceipt.create).toHaveBeenCalled();
+      // #580: the stored order is only found on the receiving branch.
+      expect(db.pharmacyPurchaseOrder.findFirst).toHaveBeenCalledWith({
+        where: expect.objectContaining({ branchId: RECEIPT.branchId }),
+      });
     }
   );
 
@@ -1117,6 +1121,8 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
       organizationRole: null,
       permissionOverrides: [],
     });
+    // A tenant admin reaches every active branch of the tenant.
+    db.pharmacyBranch.findMany.mockResolvedValue([{ id: 'branch_a' }]);
     await caller().createGoodsReceipt(RECEIPT);
     expect(db.pharmacyGoodsReceipt.create).toHaveBeenCalledOnce();
   });
@@ -1237,6 +1243,11 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
   });
 
   it('refuses a receipt for a different branch than its purchase order', async () => {
+    // The receiver may reach both branches; the order itself must match the branch.
+    db.pharmacyBranchAssignment.findMany.mockResolvedValue([
+      { branchId: 'branch_a' },
+      { branchId: 'branch_b' },
+    ]);
     db.pharmacyBranch.findFirst.mockResolvedValue({ id: 'branch_b' });
     db.pharmacyPurchaseOrder.findFirst.mockImplementation(async ({ where }) =>
       where.branchId === 'branch_a' ? { id: 'po_a', supplierId: 'supplier_a' } : null
