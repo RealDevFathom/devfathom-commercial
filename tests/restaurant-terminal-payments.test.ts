@@ -2,8 +2,11 @@ import { createHmac } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
-const { applyTenderInTransaction } = vi.hoisted(() => ({ applyTenderInTransaction: vi.fn() }));
-vi.mock('@/lib/restaurant/tenders', () => ({ applyTenderInTransaction }));
+const { applyTenderInTransaction, quoteOpenBillSettlement } = vi.hoisted(() => ({
+  applyTenderInTransaction: vi.fn(),
+  quoteOpenBillSettlement: vi.fn(),
+}));
+vi.mock('@/lib/restaurant/tenders', () => ({ applyTenderInTransaction, quoteOpenBillSettlement }));
 
 import {
   processTerminalEvent,
@@ -57,6 +60,8 @@ function makeDb(overrides: Record<string, unknown> = {}) {
 describe('provider-neutral terminal payments', () => {
   beforeEach(() => {
     applyTenderInTransaction.mockReset();
+    quoteOpenBillSettlement.mockReset();
+    quoteOpenBillSettlement.mockResolvedValue({ remainingDue: '12.50' });
     applyTenderInTransaction.mockResolvedValue({
       tenderId: 'tender-1',
       paymentId: 'payment-1',
@@ -138,6 +143,36 @@ describe('provider-neutral terminal payments', () => {
     expect(result.reconciliation).toMatchObject({ outcome: 'APPLIED' });
   });
 
+  it('validates an approval against the live tax-inclusive CARD settlement quote', async () => {
+    const { db, created } = makeDb();
+    db.restaurantBill.findFirst.mockResolvedValueOnce({
+      id: 'bill-1',
+      grandTotal: '10.00',
+      tenders: [],
+    } as never);
+    quoteOpenBillSettlement.mockResolvedValueOnce({ remainingDue: '10.80' });
+
+    await processTerminalEvent(db as never, {
+      source: 'provider-neutral',
+      externalEventId: 'event-tax-inclusive',
+      event: { ...baseEvent, amount: '10.80' },
+      requiredMode: 'WEBHOOK',
+    });
+
+    expect(quoteOpenBillSettlement).toHaveBeenCalledWith(db, 'bill-1', expect.any(Date), 'CARD');
+    const quotedAt = quoteOpenBillSettlement.mock.calls[0]![2];
+    expect(applyTenderInTransaction).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({
+        now: quotedAt,
+        tender: expect.objectContaining({ type: 'CARD', amount: expect.anything() }),
+      })
+    );
+    const appliedAmount = applyTenderInTransaction.mock.calls[0]![1].tender.amount;
+    expect(appliedAmount.toFixed(2)).toBe('10.80');
+    expect(created).toEqual([]);
+  });
+
   it('records an amount mismatch and never tenders', async () => {
     const { db, created } = makeDb();
     await processTerminalEvent(db as never, {
@@ -148,6 +183,50 @@ describe('provider-neutral terminal payments', () => {
     });
     expect(applyTenderInTransaction).not.toHaveBeenCalled();
     expect(created[0]).toMatchObject({ outcome: 'REJECTED', failureReason: 'AMOUNT_MISMATCH' });
+  });
+
+  it('rejects a pre-tax approval amount that does not match the live CARD quote', async () => {
+    const { db, created } = makeDb();
+    db.restaurantBill.findFirst.mockResolvedValueOnce({ id: 'bill-1' } as never);
+    quoteOpenBillSettlement.mockResolvedValueOnce({ remainingDue: '10.80' });
+
+    await processTerminalEvent(db as never, {
+      source: 'provider-neutral',
+      externalEventId: 'event-pre-tax-amount',
+      event: { ...baseEvent, amount: '10.00' },
+      requiredMode: 'WEBHOOK',
+    });
+
+    expect(applyTenderInTransaction).not.toHaveBeenCalled();
+    expect(quoteOpenBillSettlement).toHaveBeenCalledWith(db, 'bill-1', expect.any(Date), 'CARD');
+    expect(created[0]).toMatchObject({
+      amount: expect.objectContaining({ toFixed: expect.any(Function) }),
+      outcome: 'REJECTED',
+      failureReason: 'AMOUNT_MISMATCH',
+    });
+  });
+
+  it('rejects an event without throwing when the live settlement cannot be quoted', async () => {
+    const { db, created } = makeDb();
+    quoteOpenBillSettlement.mockResolvedValueOnce(null);
+
+    await processTerminalEvent(db as never, {
+      source: 'provider-neutral',
+      externalEventId: 'event-unquoted',
+      event: baseEvent,
+      requiredMode: 'WEBHOOK',
+    });
+
+    expect(applyTenderInTransaction).not.toHaveBeenCalled();
+    expect(quoteOpenBillSettlement).toHaveBeenCalledWith(db, 'bill-1', expect.any(Date), 'CARD');
+    expect(created[0]).toMatchObject({
+      outcome: 'REJECTED',
+      failureReason: 'SETTLEMENT_QUOTE_UNAVAILABLE',
+      amount: expect.objectContaining({ toFixed: expect.any(Function) }),
+    });
+    expect(
+      (created[0]!.amount as { toFixed: (places: number) => string }).toFixed(2)
+    ).toBe('12.50');
   });
 
   it('returns the reconciliation on replay without another tender', async () => {

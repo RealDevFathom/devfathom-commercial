@@ -7,8 +7,8 @@ import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { runMoneyTransaction } from './drawer-sessions';
-import { equals, money, sub, sum, ZERO } from './money';
-import { applyTenderInTransaction } from './tenders';
+import { equals, money, ZERO } from './money';
+import { applyTenderInTransaction, quoteOpenBillSettlement } from './tenders';
 
 const MONEY = z.string().regex(/^\d{1,10}(?:\.\d{1,2})?$/);
 
@@ -124,15 +124,15 @@ async function processTerminalEventInTransaction(db: ScopedDb, input: ProcessInp
   const amount = money(input.event.amount);
   const tipAmount = money(input.event.tipAmount ?? ZERO);
   const eventStatus = input.event.status.toUpperCase() as
-    'INITIATED' | 'APPROVED' | 'DECLINED' | 'VOIDED';
+    | 'INITIATED'
+    | 'APPROVED'
+    | 'DECLINED'
+    | 'VOIDED';
+  const at = new Date();
 
   const bill = await db.restaurantBill.findFirst({
     where: { id: input.event.reference, branchId: config.branchId, status: 'OPEN' },
-    select: {
-      id: true,
-      grandTotal: true,
-      tenders: { select: { amount: true } },
-    },
+    select: { id: true },
   });
   const operator = await db.restaurantStaffProfile.findFirst({
     where: {
@@ -142,16 +142,17 @@ async function processTerminalEventInTransaction(db: ScopedDb, input: ProcessInp
     },
     select: { id: true },
   });
-  const outstanding = bill
-    ? sub(bill.grandTotal, sum(bill.tenders.map((row) => row.amount)))
-    : null;
+  const settlement = bill ? await quoteOpenBillSettlement(db, bill.id, at, 'CARD') : null;
+  const outstanding = settlement?.remainingDue ?? null;
   const failureReason = !bill
     ? 'BILL_NOT_OPEN_OR_BRANCH_MISMATCH'
     : !operator
       ? 'OPERATOR_NOT_ACTIVE_IN_BRANCH'
-      : !equals(outstanding!, amount)
-        ? 'AMOUNT_MISMATCH'
-        : null;
+      : !settlement
+        ? 'SETTLEMENT_QUOTE_UNAVAILABLE'
+        : !equals(outstanding!, amount)
+          ? 'AMOUNT_MISMATCH'
+          : null;
 
   if (failureReason) {
     const reconciliation = await recordReconciliation(db, {
@@ -206,6 +207,7 @@ async function processTerminalEventInTransaction(db: ScopedDb, input: ProcessInp
       deviceId: config.deviceId,
       idempotencyKey: `terminal:${input.externalEventId}`,
     },
+    now: at,
   });
   const reconciliation = await db.restaurantTerminalReconciliation.findFirstOrThrow({
     where: { source: input.source, externalEventId: input.externalEventId },

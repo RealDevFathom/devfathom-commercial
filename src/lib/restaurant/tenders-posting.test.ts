@@ -8,7 +8,12 @@ import { getOrderSettlementForBranch } from './checkout-routes';
 import { closePreview } from './daily-close';
 import { appendMovement, closeDrawerSession, foldExpectedCash } from './drawer-sessions';
 import { refundTender } from './refunds';
-import { applyTenderInTransaction, type ApplyTenderInput } from './tenders';
+import { TaxConfigurationError } from './tax-calculator';
+import {
+  applyTenderInTransaction,
+  quoteOpenBillSettlement,
+  type ApplyTenderInput,
+} from './tenders';
 
 vi.mock('./bills', async (original) => ({
   ...(await original<typeof import('./bills')>()),
@@ -46,7 +51,10 @@ type Tender = {
 };
 
 function fixture() {
+  let taxRate = D('0');
   const tenders: Tender[] = [];
+  const payments: Record<string, unknown>[] = [];
+  const paymentEvents: Record<string, unknown>[] = [];
   const movements = [{ kind: 'OPENING_FLOAT' as const, amount: D('100') }] as Array<{
     kind: Parameters<typeof foldExpectedCash>[0][number]['kind'];
     amount: Prisma.Decimal;
@@ -253,7 +261,7 @@ function fixture() {
             profileVersionId: 'profile',
             paymentCategory,
             priceMode: 'EXCLUSIVE',
-            rate: D('0'),
+            rate: taxRate,
             ...effective,
             officialSource: { expiresAt: new Date('2027-08-01T00:00:00Z') },
           })),
@@ -278,9 +286,25 @@ function fixture() {
     },
     restaurantTaxTenderAllocationSnapshot: { findMany: vi.fn(async () => []) },
     restaurantTaxTransactionSnapshot: { findMany: vi.fn(async () => []) },
+    restaurantTerminalReconciliation: {
+      create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({
+        id: 'reconciliation',
+        ...data,
+      })),
+    },
     restaurantCoAuthorization: { create: vi.fn(async () => ({ id: 'approval' })) },
-    restaurantPayment: { create: vi.fn(async () => ({ id: 'payment' })) },
-    restaurantPaymentEvent: { create: vi.fn(async () => ({ id: 'event' })) },
+    restaurantPayment: {
+      create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
+        payments.push(data);
+        return { id: 'payment' };
+      }),
+    },
+    restaurantPaymentEvent: {
+      create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
+        paymentEvents.push(data);
+        return { id: 'event' };
+      }),
+    },
   };
   const db = raw as unknown as ScopedDb;
   vi.mocked(finalizeBillSettlement).mockImplementation(async (_tx, input) => {
@@ -303,6 +327,8 @@ function fixture() {
     bill,
     drawer,
     tenders,
+    payments,
+    paymentEvents,
     movements,
     collect,
     closedDays,
@@ -310,12 +336,138 @@ function fixture() {
     billsById,
     linesByBill,
     defaultLine,
+    setTaxRate: (rate: string) => {
+      taxRate = D(rate);
+    },
   };
 }
 
 beforeEach(() => vi.clearAllMocks());
 
 describe('collection posting and authoritative recorded balances (no DB)', () => {
+  it('quotes and persists the real tax-inclusive CARD balance with exact decimal cents', async () => {
+    const f = fixture();
+    f.bill.subtotal = D('10.00');
+    f.bill.compTotal = D('0');
+    f.bill.grandTotal = D('10.00');
+    f.defaultLine.unitPrice = D('10.00');
+    f.defaultLine.lineSubtotal = D('10.00');
+    f.defaultLine.compAmount = D('0');
+    f.setTaxRate('0.08');
+
+    const quote = await quoteOpenBillSettlement(f.db, f.bill.id, NOW, 'CARD');
+    expect(quote?.tax.toFixed(2)).toBe('0.80');
+    expect(quote?.remainingDue.toFixed(2)).toBe('10.80');
+
+    const result = await f.collect({
+      tender: {
+        type: 'CARD',
+        amount: quote!.remainingDue,
+        terminalConfirmation: {
+          configId: 'config',
+          branchId: 'branch',
+          externalEventId: 'event',
+          source: 'provider',
+          externalReference: 'bill',
+          providerRef: 'approval',
+        },
+      },
+    });
+
+    expect(result).toMatchObject({ settled: true });
+    expect(result.remainingDue.toFixed(2)).toBe('0.00');
+    expect(f.tenders).toHaveLength(1);
+    expect(f.tenders[0]!.amount.toFixed(2)).toBe('10.80');
+    expect((f.payments[0]!.amount as Prisma.Decimal).toFixed(2)).toBe('10.80');
+    expect((f.paymentEvents[0]!.amount as Prisma.Decimal).toFixed(2)).toBe('10.80');
+    expect(f.raw.restaurantTerminalReconciliation.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        outcome: 'APPLIED',
+        billId: f.bill.id,
+        paymentId: 'payment',
+        tenderId: f.tenders[0]!.id,
+        amount: quote!.remainingDue,
+      }),
+    });
+    const tenderTotal = f.tenders.reduce((total, row) => total.plus(row.amount), D('0'));
+    const paymentEventTotal = f.paymentEvents.reduce(
+      (total, row) => total.plus(row.amount as Prisma.Decimal),
+      D('0')
+    );
+    expect(tenderTotal.minus(paymentEventTotal).toFixed(2)).toBe('0.00');
+    expect(quote!.remainingDue.minus(tenderTotal).toFixed(2)).toBe('0.00');
+  });
+
+  it.each(['missing profile', 'missing CARD rule', 'expired source', 'conflicting profiles'])(
+    'returns no quote for %s while tender application still refuses the configuration',
+    async (scenario) => {
+      const f = fixture();
+      const profiles = await f.raw.restaurantTaxProfileVersion.findMany();
+      if (scenario === 'missing profile') profiles.length = 0;
+      if (scenario === 'missing CARD rule') {
+        profiles[0]!.rules = profiles[0]!.rules.filter((rule) => rule.paymentCategory !== 'CARD');
+      }
+      if (scenario === 'expired source') {
+        for (const rule of profiles[0]!.rules) rule.officialSource.expiresAt = D1;
+      }
+      if (scenario === 'conflicting profiles') profiles.push({ ...profiles[0]!, id: 'conflict' });
+      f.raw.restaurantTaxProfileVersion.findMany.mockResolvedValue(profiles);
+
+      await expect(quoteOpenBillSettlement(f.db, f.bill.id, NOW, 'CARD')).resolves.toBeNull();
+      await expect(f.collect({ tender: { type: 'CARD', amount: '3860' } })).rejects.toBeInstanceOf(
+        TaxConfigurationError
+      );
+      expect(f.tenders).toHaveLength(0);
+      expect(f.payments).toHaveLength(0);
+    }
+  );
+
+  it('propagates unexpected database failures instead of treating them as an unavailable quote', async () => {
+    const f = fixture();
+    const failure = new Error('database unavailable');
+    f.raw.organization.findUnique.mockRejectedValueOnce(failure);
+    await expect(quoteOpenBillSettlement(f.db, f.bill.id, NOW, 'CARD')).rejects.toBe(failure);
+  });
+
+  it('rejects a terminal approval when the locked CARD quote was repriced', async () => {
+    const f = fixture();
+    f.bill.subtotal = D('10.00');
+    f.bill.compTotal = D('0');
+    f.bill.grandTotal = D('10.00');
+    f.defaultLine.unitPrice = D('10.00');
+    f.defaultLine.lineSubtotal = D('10.00');
+    f.defaultLine.compAmount = D('0');
+    f.setTaxRate('0.08');
+    const approved = await quoteOpenBillSettlement(f.db, f.bill.id, NOW, 'CARD');
+
+    // The tax authority changes after webhook validation. applyTenderInTransaction
+    // re-quotes only after acquiring its order and bill locks.
+    f.setTaxRate('0.15');
+    await expect(
+      f.collect({
+        tender: {
+          type: 'CARD',
+          amount: approved!.remainingDue,
+          terminalConfirmation: {
+            configId: 'config',
+            branchId: 'branch',
+            externalEventId: 'repriced-event',
+            source: 'provider',
+            externalReference: 'bill',
+            providerRef: 'approval',
+          },
+        },
+      })
+    ).rejects.toMatchObject({ reason: 'TAX_SETTLEMENT_REPRICE_REQUIRED' });
+    expect(f.locks).toEqual([
+      'SELECT id FROM restaurant_orders WHERE id = ? FOR UPDATE',
+      'SELECT id FROM restaurant_bills WHERE id = ? FOR UPDATE',
+    ]);
+    expect(f.tenders).toHaveLength(0);
+    expect(f.payments).toHaveLength(0);
+    expect(f.paymentEvents).toHaveLength(0);
+  });
+
   it('closes the order and releases its table as part of the final tender transaction', async () => {
     const f = fixture();
 

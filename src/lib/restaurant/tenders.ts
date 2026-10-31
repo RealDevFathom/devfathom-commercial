@@ -36,6 +36,7 @@ import {
   quoteTaxSettlement,
   splitFractionalMoney,
   splitMoney,
+  TaxConfigurationError,
   type PaymentCategory,
   type TaxQuoteResult,
 } from './tax-calculator';
@@ -380,6 +381,18 @@ export async function applyTenderInTransaction(
   })) as TenderRow[];
   const settlement = await loadSettlementContext(tx, bill, existing, input.tender.type, at);
   const outstanding = settlement.quote.remainingDue;
+  // A terminal approval is authorization for the complete quoted balance, not a
+  // customer-selected partial tender. Recheck it after the bill lock so a bill
+  // change between webhook validation and application cannot strand an external
+  // approval as a partial payment.
+  if (input.tender.type === 'CARD' && input.tender.terminalConfirmation) {
+    if (!equals(amount, outstanding)) {
+      throw new TenderError(
+        'The terminal approval no longer matches the current server quote.',
+        'TAX_SETTLEMENT_REPRICE_REQUIRED'
+      );
+    }
+  }
   // Validate the amount AGAINST the outstanding balance so a zero amount is
   // accepted only as the settlement of an already-fully-covered bill (e.g. a
   // fully comped, zero grand-total bill). The applied amount may never exceed
@@ -480,16 +493,18 @@ export async function applyTenderInTransaction(
  * must recompute here to disclose tax and a `remainingDue` that actually settles
  * the bill rather than the pre-tax total.
  *
- * CASH is used as the proposed category because that is the TenderPad default; any
- * PRIOR tenders keep their own category weighting, so a summary taken after a
- * partial tender reports the true remaining tax rather than 0.00. Returns null when
- * the bill is missing, not OPEN, or its tax cannot be quoted (e.g. no effective
- * profile) — the caller then falls back to the stored totals.
+ * CASH is the default proposed category because that is the TenderPad default;
+ * callers validating another payment rail can request its category. Any PRIOR
+ * tenders keep their own category weighting, so a summary taken after a partial
+ * tender reports the true remaining tax rather than 0.00. Returns null when the
+ * bill is missing, not OPEN, or its tax cannot be quoted (e.g. no effective profile)
+ * — the caller then falls back to the stored totals.
  */
 export async function quoteOpenBillSettlement(
   tx: ScopedDb,
   billId: string,
-  at: Date
+  at: Date,
+  proposedTenderType: TenderType = 'CASH'
 ): Promise<TaxQuoteResult | null> {
   const bill = await tx.restaurantBill.findUnique({
     where: { id: billId },
@@ -519,10 +534,10 @@ export async function quoteOpenBillSettlement(
     orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
   })) as TenderRow[];
   try {
-    const settlement = await loadSettlementContext(tx, bill, existing, 'CASH', at);
+    const settlement = await loadSettlementContext(tx, bill, existing, proposedTenderType, at);
     return settlement.quote;
   } catch (err) {
-    if (err instanceof TenderError) return null;
+    if (err instanceof TenderError || err instanceof TaxConfigurationError) return null;
     throw err;
   }
 }
