@@ -239,6 +239,32 @@ describe('organization member Goods-in access', () => {
     }
   );
 
+  it.each(['pharmacy:procurement', 'pharmacy:*', '*'])(
+    'keeps a role %s denial effective for receiving and ABAC after a direct grant',
+    async (capability) => {
+      const { can } = await vi.importActual<typeof import('@/lib/abac')>('@/lib/abac');
+      const overrides: Array<{ capability: string; effect: 'ALLOW' | 'DENY' }> = [];
+      const authDb = {
+        user: {
+          findUnique: vi.fn(async () => ({
+            organizationRole: { permissions: [{ capability, effect: 'DENY' }] },
+            permissionOverrides: overrides,
+          })),
+        },
+      } as unknown as ScopedDb;
+      const subject = { id: 'member_a', role: 'EMPLOYEE', department: null, status: 'ACTIVE' };
+      mocks.overrideUpsert.mockImplementationOnce(async ({ create }) => {
+        overrides.push(create);
+        return create;
+      });
+
+      await caller().setMemberGoodsInAccess({ id: subject.id, granted: true });
+      expect(overrides).toContainEqual(expect.objectContaining({ effect: 'ALLOW' }));
+      expect(await can(subject, 'pharmacy:procurement', undefined, { db: authDb })).toBe(false);
+      expect(await actorCanProcure(authDb, subject.id)).toBe(false);
+    }
+  );
+
   it.each([true, false])(
     'does not mutate or audit a member outside the current organization when granted is %s',
     async (granted) => {

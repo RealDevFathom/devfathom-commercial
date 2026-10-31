@@ -35,4 +35,16 @@ describe('procurementCapabilityGranted', () => {
       })
     ).toBe(false);
   });
+
+  it.each(['pharmacy.procurement', 'pharmacy.*', 'pharmacy:procurement', 'pharmacy:*', '*'])(
+    'keeps the role denial %s effective over a direct user grant',
+    (capability) => {
+      expect(
+        procurementCapabilityGranted({
+          overrides: [{ capability: 'pharmacy:procurement', effect: 'ALLOW' }],
+          role: [{ capability, effect: 'DENY' }],
+        })
+      ).toBe(false);
+    }
+  );
 });

@@ -152,6 +152,12 @@ describe('organization overview assigned package', () => {
       overrides: [{ capability: 'pharmacy:procurement', effect: 'ALLOW' }],
       granted: true,
     },
+    ...['pharmacy:procurement', 'pharmacy:*', '*'].map((capability) => ({
+      name: `role denial ${capability} over a direct grant`,
+      role: [{ capability, effect: 'DENY' }],
+      overrides: [{ capability: 'pharmacy:procurement', effect: 'ALLOW' }],
+      granted: false,
+    })),
   ])('reports effective Goods-in access for $name', async ({ role, overrides, granted }) => {
     mocks.organization.mockResolvedValue({
       id: 'org_a',
