@@ -5,6 +5,80 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { arrangementFor, PharmacyInventoryError } from './inventory';
 import type { LedgerScope } from './stock-ledger';
 
+/** Serialize recall-authority decisions that can overlap at batch or medicine scope. */
+export async function lockRecallAuthority(db: ScopedDb, organizationId: string) {
+  await db.$queryRaw(
+    Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${`pharmacy-recall-authority:${organizationId}`}, 0))`
+  );
+}
+
+/** Caller holds the recall-authority lock until this notice is closed and committed. */
+export async function releaseRecallBatches(
+  db: ScopedDb,
+  organizationId: string,
+  notice: { id: string; batchId: string | null; medicineId: string | null }
+) {
+  // Decide per batch: a medicine recall can overlap batch recalls for only some
+  // of its batches, and a batch recall can overlap a medicine-wide recall.
+  await db.$executeRaw(Prisma.sql`
+    UPDATE "pharmacy_manufacturing_batches" AS batch
+    SET state = 'ACTIVE', "stateReason" = NULL, "stateChangedAt" = NULL,
+        "updatedAt" = clock_timestamp()
+    WHERE batch."organizationId" = ${organizationId}
+      AND ${notice.batchId ? Prisma.sql`batch.id = ${notice.batchId}` : Prisma.sql`batch."medicineId" = ${notice.medicineId}`}
+      AND NOT EXISTS (
+        SELECT 1 FROM "pharmacy_recall_notices" AS recall
+        WHERE recall."organizationId" = batch."organizationId"
+          AND recall.status = 'OPEN' AND recall.id <> ${notice.id}
+          AND (recall."batchId" = batch.id OR recall."medicineId" = batch."medicineId")
+      )
+  `);
+}
+
+export class OpenRecallConflictError extends Error {
+  constructor() {
+    super('Close the open recall before reactivating this batch.');
+  }
+}
+
+export async function setManufacturingBatchState(
+  db: ScopedDb,
+  organizationId: string,
+  input: {
+    manufacturingBatchId: string;
+    state: 'ACTIVE' | 'RECALLED' | 'QUARANTINED';
+    reason?: string;
+  }
+) {
+  // Callers run this inside a scoped interactive transaction. The lock is held
+  // through commit, closing the READ COMMITTED check/write race with recalls.
+  await lockRecallAuthority(db, organizationId);
+  const batch = await db.pharmacyManufacturingBatch.findFirst({
+    where: { id: input.manufacturingBatchId, organizationId },
+  });
+  if (!batch) throw new PharmacyInventoryError('NOT_FOUND');
+
+  if (input.state === 'ACTIVE') {
+    const openRecalls = await db.pharmacyRecallNotice.count({
+      where: {
+        organizationId,
+        status: 'OPEN',
+        OR: [{ batchId: batch.id }, { medicineId: batch.medicineId }],
+      },
+    });
+    if (openRecalls) throw new OpenRecallConflictError();
+  }
+
+  return db.pharmacyManufacturingBatch.update({
+    where: { id: batch.id },
+    data: {
+      state: input.state,
+      stateReason: input.state === 'ACTIVE' ? null : (input.reason ?? null),
+      stateChangedAt: input.state === 'ACTIVE' ? null : new Date(),
+    },
+  });
+}
+
 function assertPositive(units: number) {
   if (!Number.isSafeInteger(units) || units <= 0) throw new PharmacyInventoryError('INVALID_UNITS');
 }
@@ -165,6 +239,22 @@ export async function writeOff(
 ) {
   assertPositive(input.units);
   if (input.witnessId === scope.actorId) throw new PharmacyInventoryError('COAUTH_REQUIRED');
+  const witness = await db.user.findFirst({
+    where: {
+      id: input.witnessId,
+      organizationId: scope.organizationId,
+      status: 'ACTIVE',
+      pharmacyBranchAssignments: {
+        some: {
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          active: true,
+        },
+      },
+    },
+    select: { id: true },
+  });
+  if (!witness) throw new PharmacyInventoryError('COAUTH_REQUIRED');
   const lot = await db.pharmacyInventoryLot.findFirst({
     where: {
       id: input.inventoryLotId,
@@ -504,6 +594,7 @@ export async function createRecall(
 ) {
   if ((input.batchId ? 1 : 0) + (input.medicineId ? 1 : 0) !== 1)
     throw new PharmacyInventoryError('INVALID_STATE');
+  await lockRecallAuthority(db, scope.organizationId);
   const lockedBatches = await lockRecallBatches(db, scope.organizationId, input);
   if (!lockedBatches.length) throw new PharmacyInventoryError('NOT_FOUND');
   const where = input.batchId ? { id: input.batchId } : { medicineId: input.medicineId! };
@@ -602,6 +693,13 @@ export async function closeRecall(
   scope: Pick<LedgerScope, 'organizationId' | 'actorId'>,
   noticeId: string
 ) {
+  // Batch reactivation is organization-wide, so branch-narrowed RLS must not
+  // hide holdings or acknowledgements used to authorize that decision.
+  const [binding] = await db.$queryRaw<Array<{ branchId: string | null }>>(
+    Prisma.sql`SELECT NULLIF(current_setting('app.current_branch_id', true), '') AS "branchId"`
+  );
+  if (!binding || binding.branchId !== null) throw new PharmacyInventoryError('INVALID_STATE');
+  await lockRecallAuthority(db, scope.organizationId);
   const [lockedNotice] = await db.$queryRaw<Array<{ id: string }>>(Prisma.sql`
     SELECT id
     FROM "pharmacy_recall_notices"
@@ -619,23 +717,33 @@ export async function closeRecall(
   // never be hidden by the snapshot and then overwritten with ACTIVE.
   const lockedBatches = await lockRecallBatches(db, scope.organizationId, notice);
   if (!lockedBatches.length) throw new PharmacyInventoryError('INVALID_STATE');
+  const affectedLots = {
+    organizationId: scope.organizationId,
+    ...(notice.batchId
+      ? { manufacturingBatchId: notice.batchId }
+      : { batch: { medicineId: notice.medicineId! } }),
+  };
   const affectedBranches = await db.pharmacyInventoryLot.findMany({
     where: {
-      organizationId: scope.organizationId,
-      ...(notice.batchId
-        ? { manufacturingBatchId: notice.batchId }
-        : { batch: { medicineId: notice.medicineId! } }),
+      ...affectedLots,
       balances: { some: { onHandUnits: { gt: 0 } } },
     },
     distinct: ['branchId'],
     select: { branchId: true },
   });
   const acknowledgedBranches = new Set(notice.acknowledgements.map(({ branchId }) => branchId));
-  if (
-    !acknowledgedBranches.size ||
-    affectedBranches.some(({ branchId }) => !acknowledgedBranches.has(branchId))
-  )
+  if (affectedBranches.some(({ branchId }) => !acknowledgedBranches.has(branchId)))
     throw new PharmacyInventoryError('INVALID_STATE');
+  if (!acknowledgedBranches.size) {
+    // A registered batch can be recalled before receipt. No branch can
+    // acknowledge it then. Historical lots, including disposed stock, still
+    // require acknowledgement even when their current balances are zero.
+    const affectedLot = await db.pharmacyInventoryLot.findFirst({
+      where: affectedLots,
+      select: { id: true },
+    });
+    if (affectedLot) throw new PharmacyInventoryError('INVALID_STATE');
+  }
   const batchIds = lockedBatches.map(({ id }) => id);
   const medicineIds = [...new Set(lockedBatches.map(({ medicineId }) => medicineId))];
   const remaining = await db.pharmacyRecallNotice.findMany({
