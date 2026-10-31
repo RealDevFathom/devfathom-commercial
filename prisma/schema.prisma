@@ -13836,6 +13836,47 @@ model PharmacyCampaignExclusion {
   @@map("pharmacy_campaign_exclusions")
 }
 
+/// #729 — nightly RFM churn score per customer and branch. Retail-only inputs
+/// (receipt recency, receipt frequency, net line value); never clinical data.
+/// One current row per customer/branch, replaced atomically by each nightly run.
+model PharmacyCustomerChurnScore {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  customerId     String
+  businessDate   String
+  modelVersion   Int
+  recencyDays    Int
+  frequency      Int
+  monetaryMinor  BigInt
+  recencyScore   Int
+  frequencyScore Int
+  monetaryScore  Int
+  churnScore     Int
+  riskBand       String
+  scoredAt       DateTime @default(now())
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, branchId, customerId], map: "pharmacy_customer_churn_scores_customer_key")
+  @@index([organizationId, branchId, churnScore], map: "pharmacy_customer_churn_scores_score_idx")
+  @@map("pharmacy_customer_churn_scores")
+}
+
+/// #729 — idempotency ledger: one nightly churn scoring run per branch and local business date.
+model PharmacyChurnScoringRun {
+  id              String   @id @default(cuid())
+  organizationId  String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId        String
+  businessDate    String
+  modelVersion    Int
+  scoredCustomers Int
+  createdAt       DateTime @default(now())
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, branchId, businessDate], map: "pharmacy_churn_scoring_runs_daily_key")
+  @@map("pharmacy_churn_scoring_runs")
+}
+
 /// MKT-02 / invariant 22 — an explicitly estimated campaign→visit→receipt link.
 model PharmacyCampaignAttribution {
   id                   String   @id @default(cuid())

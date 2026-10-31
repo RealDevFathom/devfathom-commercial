@@ -2,6 +2,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { processPlatformJobs } from '@/lib/platform/jobs';
 import { processDueOwnerDigests } from '@/lib/pharmacy/owner-digest';
+import { processNightlyChurnScoring } from '@/lib/pharmacy/churn-scoring-job';
 
 export const maxDuration = 300;
 
@@ -20,11 +21,16 @@ export async function POST(request: Request) {
   const input = (await request.json().catch(() => ({}))) as { maxJobs?: unknown };
   const maxJobs =
     typeof input.maxJobs === 'number' && Number.isFinite(input.maxJobs) ? input.maxJobs : 25;
-  const [jobs, ownerDigests] = await Promise.all([
+  const [jobs, ownerDigests, churnScoring] = await Promise.all([
     processPlatformJobs(maxJobs),
     processDueOwnerDigests(new Date(), maxJobs),
+    // Derived marketing data: a scheduling failure must not fail the job tick.
+    processNightlyChurnScoring(new Date(), maxJobs).catch((error: unknown) => {
+      console.error('[churn-scoring] scheduler failed', error);
+      return { due: 0, scoredBranches: 0, scoredCustomers: 0, failed: 1 };
+    }),
   ]);
-  return NextResponse.json({ ...jobs, ownerDigests });
+  return NextResponse.json({ ...jobs, ownerDigests, churnScoring });
 }
 
 export const GET = POST;
