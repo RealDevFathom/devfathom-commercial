@@ -230,6 +230,17 @@ describe('PUR-02/PUR-03 — canonical units and landed unit cost', () => {
     expect(withBonus).toBeLessThan(paid);
   });
 
+  it('spreads a 10+1 scheme paid value across all eleven received units', () => {
+    expect(
+      receiptLineUnitCostMinor({
+        receivedPacks: 10,
+        bonusPacks: 1,
+        canonicalUnitsPerPack: 1,
+        invoicedPricePerPackMinor: 110,
+      })
+    ).toBe(100); // 1,100 paid / 11 units, not 110 / paid unit.
+  });
+
   it('excludes a creditable input tax from stock cost and includes a non-creditable one', () => {
     const terms = {
       receivedPacks: 10,

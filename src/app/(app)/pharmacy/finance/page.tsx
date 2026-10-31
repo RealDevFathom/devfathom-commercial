@@ -64,6 +64,7 @@ export default async function PharmacyFinancePage({
     ledgerTo?: string;
     ledgerAt?: string;
     ledgerBy?: string;
+    profitBy?: string;
     journalPage?: string;
   }>;
 }) {
@@ -282,7 +283,9 @@ export default async function PharmacyFinancePage({
         />
       </Suspense>
       <Suspense
-        key={[branch.id, ledgerFrom, ledgerTo, query.ledgerAt, query.ledgerBy].join(':')}
+        key={[branch.id, ledgerFrom, ledgerTo, query.ledgerAt, query.ledgerBy, query.profitBy].join(
+          ':'
+        )}
         fallback={<LedgerReportsLoading />}
       >
         <LedgerReportsSection
@@ -292,6 +295,7 @@ export default async function PharmacyFinancePage({
           to={ledgerTo}
           at={query.ledgerAt}
           by={query.ledgerBy}
+          profitBy={query.profitBy}
           marginFrom={query.marginFrom}
           marginTo={query.marginTo}
         />
@@ -312,6 +316,7 @@ export default async function PharmacyFinancePage({
           ledgerTo={query.ledgerTo}
           ledgerAt={query.ledgerAt}
           ledgerBy={query.ledgerBy}
+          profitBy={query.profitBy}
         />
       </Suspense>
       {query.notice ? (
@@ -325,7 +330,15 @@ export default async function PharmacyFinancePage({
       <SectionCard title="Working branch" eyebrow="Organization scope">
         <form method="get" className="flex flex-wrap items-end gap-3">
           {(
-            ['ledgerFrom', 'ledgerTo', 'ledgerAt', 'ledgerBy', 'marginFrom', 'marginTo'] as const
+            [
+              'ledgerFrom',
+              'ledgerTo',
+              'ledgerAt',
+              'ledgerBy',
+              'profitBy',
+              'marginFrom',
+              'marginTo',
+            ] as const
           ).map((key) =>
             query[key] ? <input key={key} type="hidden" name={key} value={query[key]} /> : null
           )}

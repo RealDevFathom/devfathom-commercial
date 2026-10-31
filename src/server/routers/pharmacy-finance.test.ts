@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   comparison: vi.fn(),
   valuation: vi.fn(),
   margin: vi.fn(),
+  landedProfit: vi.fn(),
   leakage: vi.fn(),
 }));
 vi.mock('@/lib/pharmacy/finance-reports', async () => ({
@@ -21,6 +22,7 @@ vi.mock('@/lib/pharmacy/finance-reports', async () => ({
   grossMarginComparison: mocks.comparison,
   perpetualValuation: mocks.valuation,
   grossMargin: mocks.margin,
+  landedProfit: mocks.landedProfit,
   leakageReport: mocks.leakage,
 }));
 vi.mock('server-only', () => ({}));
@@ -96,6 +98,9 @@ beforeEach(() => {
   mocks.margin.mockResolvedValue([
     { key: null, revenueMinor: -100, discountMinor: -10, cogsMinor: -60, grossMarginMinor: -30 },
   ]);
+  mocks.landedProfit.mockResolvedValue([
+    { key: 'OTC', revenueMinor: 1100, discountMinor: 0, landedCostMinor: 1000, profitMinor: 100 },
+  ]);
   mocks.leakage.mockResolvedValue([
     {
       branchId: 'branch_1',
@@ -137,6 +142,20 @@ const ledgerCases = [
       { to: input.from },
       { to: '2026-08-31T00:00:00Z' },
       { to: '2026-12-02T00:00:00.001Z' },
+      { by: 'arbitrary_sql' },
+      { by: undefined },
+    ],
+  },
+  {
+    name: 'landedProfit',
+    reader: mocks.landedProfit,
+    input: { ...input, by: 'category' },
+    expectedReaderInput: { from: new Date(input.from), to: new Date(input.to), by: 'category' },
+    invoke: (api: FinanceCaller, value: unknown) =>
+      api.landedProfit(value as Parameters<FinanceCaller['landedProfit']>[0]),
+    invalid: [
+      { from: '2026-09-01' },
+      { to: input.from },
       { by: 'arbitrary_sql' },
       { by: undefined },
     ],
@@ -280,6 +299,19 @@ describe.each(ledgerCases)(
 );
 
 describe('ledger date and dimension delegation', () => {
+  it.each(['item', 'category', 'hour', 'staff'] as const)(
+    'accepts landed-profit dimension %s',
+    async (by) => {
+      const result = await caller().landedProfit({ ...input, by });
+      expect(result.by).toBe(by);
+      expect(mocks.landedProfit.mock.calls[0][2]).toEqual({
+        from: new Date(input.from),
+        to: new Date(input.to),
+        by,
+      });
+    }
+  );
+
   it.each(['line', 'batch', 'product', 'branch'] as const)(
     'accepts margin dimension %s and exact 92-day boundary',
     async (by) => {

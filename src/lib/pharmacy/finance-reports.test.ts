@@ -3,6 +3,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
   explainGrossMargin,
   grossMarginComparison,
+  landedProfit,
   marginComparisonPeriods,
 } from './finance-reports';
 const row = (revenueMinor: number, discountMinor: number, cogsMinor: number) => ({
@@ -11,6 +12,82 @@ const row = (revenueMinor: number, discountMinor: number, cogsMinor: number) => 
   discountMinor,
   cogsMinor,
   grossMarginMinor: revenueMinor - discountMinor - cogsMinor,
+});
+
+describe('landed profit growth report', () => {
+  it.each([
+    ['item', 'line."productId"::text'],
+    ['category', 'medicine."productFamily"::text'],
+    ['hour', "date_trunc('hour'"],
+    ['staff', 'entry."actorId"::text'],
+  ] as const)('groups by %s while reusing posted landed COGS', async (by, dimensionSql) => {
+    const query = vi.fn().mockResolvedValue([]);
+    await landedProfit(
+      { $queryRaw: query } as unknown as ScopedDb,
+      { organizationId: 'org_1', branchId: 'branch_1' },
+      { from: new Date('2026-10-01Z'), to: new Date('2026-10-02Z'), by }
+    );
+    const sql = query.mock.calls[0][0];
+    expect(sql.sql).toContain(dimensionSql);
+    expect(sql.sql).toContain("'SALES_REVENUE', 'SALES_DISCOUNT', 'COST_OF_GOODS_SOLD'");
+    expect(sql.sql).toContain('AS "landedCostMinor"');
+    expect(sql.sql).toContain('AS "profitMinor"');
+    expect(sql.values).toEqual([
+      'org_1',
+      new Date('2026-10-01Z'),
+      new Date('2026-10-02Z'),
+      'branch_1',
+    ]);
+  });
+});
+
+describe('landed profit integer-money bounds', () => {
+  const scope = { organizationId: 'org_1', branchId: 'branch_1' };
+  const period = {
+    from: new Date('2026-10-01Z'),
+    to: new Date('2026-10-02Z'),
+    by: 'item' as const,
+  };
+
+  it('sums as bigint and returns exact numbers above the int4 range', async () => {
+    const query = vi.fn().mockResolvedValue([
+      {
+        key: 'medicine_a',
+        revenueMinor: BigInt(3_000_000_000),
+        discountMinor: BigInt(0),
+        landedCostMinor: BigInt(1_000_000_000),
+        profitMinor: BigInt(2_000_000_000),
+      },
+    ]);
+    const rows = await landedProfit({ $queryRaw: query } as unknown as ScopedDb, scope, period);
+    expect(query.mock.calls[0][0].sql).toContain('::bigint AS "revenueMinor"');
+    expect(query.mock.calls[0][0].sql).not.toContain('::int AS');
+    expect(rows).toEqual([
+      {
+        key: 'medicine_a',
+        revenueMinor: 3_000_000_000,
+        discountMinor: 0,
+        landedCostMinor: 1_000_000_000,
+        profitMinor: 2_000_000_000,
+      },
+    ]);
+  });
+
+  it('refuses totals beyond safe integer money', async () => {
+    const huge = BigInt(Number.MAX_SAFE_INTEGER) + BigInt(1);
+    const query = vi.fn().mockResolvedValue([
+      {
+        key: null,
+        revenueMinor: huge,
+        discountMinor: BigInt(0),
+        landedCostMinor: BigInt(0),
+        profitMinor: huge,
+      },
+    ]);
+    await expect(
+      landedProfit({ $queryRaw: query } as unknown as ScopedDb, scope, period)
+    ).rejects.toThrow(RangeError);
+  });
 });
 
 describe('gross-margin accounting comparison', () => {

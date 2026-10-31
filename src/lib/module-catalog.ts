@@ -288,7 +288,7 @@ export function moduleForProcedure(path: string): string | null {
     return null;
   }
   if (
-    /^pharmacyFinance\.(perpetualValuation|grossMargin|leakageReport|marginComparison|financialStatements)$/.test(
+    /^pharmacyFinance\.(perpetualValuation|grossMargin|landedProfit|leakageReport|marginComparison|financialStatements)$/.test(
       path
     )
   ) {

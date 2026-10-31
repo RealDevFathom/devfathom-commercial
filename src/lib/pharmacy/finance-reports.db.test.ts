@@ -2,7 +2,7 @@
 import { randomUUID } from 'node:crypto';
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { grossMargin, grossMarginComparison } from './finance-reports';
+import { grossMargin, grossMarginComparison, landedProfit } from './finance-reports';
 
 const url = process.env.WHA1372_TEST_DATABASE_URL || process.env.TEST_DATABASE_URL;
 if (url) process.env.DATABASE_URL = url;
@@ -20,7 +20,8 @@ async function post(
   revenue: number,
   discount: number,
   cogs: number,
-  returned = false
+  returned = false,
+  dimensions: { productId?: string; actorId?: string; sourceLineId?: string } = {}
 ) {
   await withTenantDb(organizationId, async (db: ScopedDb) => {
     const id = randomUUID();
@@ -39,7 +40,7 @@ async function post(
         sourceKind: returned ? 'PHARMACY_SALE_RETURN_LINE' : 'PHARMACY_SALE_LINE',
         sourceId: id,
         description: 'Disposable comparison test',
-        actorId: org,
+        actorId: dimensions.actorId ?? org,
         occurredAt: new Date(at),
         idempotencyKey: id,
         lines: {
@@ -48,6 +49,8 @@ async function post(
             .map((line) => ({
               ...line,
               branchId: branch,
+              productId: dimensions.productId,
+              sourceLineId: dimensions.sourceLineId,
               side: returned ? (line.side === 'DEBIT' ? 'CREDIT' : 'DEBIT') : line.side,
             })),
         },
@@ -72,6 +75,24 @@ beforeAll(async () => {
     )
   );
   withTenantDb = scoped.withTenantDb;
+  await withTenantDb(org, (db) =>
+    db.medicine.createMany({
+      data: [
+        {
+          id: `${org}_medicine_a`,
+          organizationId: org,
+          productName: 'Integration medicine A',
+          productFamily: 'PHARMACEUTICAL',
+        },
+        {
+          id: `${org}_medicine_b`,
+          organizationId: org,
+          productName: 'Integration medicine B',
+          productFamily: 'DEVICE',
+        },
+      ],
+    })
+  );
   await post(org, branchId, '2026-08-30T00:00:00Z', 10000, 500, 6000);
   await post(org, branchId, '2026-09-01T00:00:00Z', 12000, 1500, 8000);
   await post(org, branchId, '2026-09-02T23:59:59.999Z', 1000, 100, 600, true);
@@ -79,6 +100,21 @@ beforeAll(async () => {
   await post(org, branchId, '2026-08-29T23:59:59.999Z', 99999, 0, 0);
   await post(org, `${branchId}_other`, '2026-09-01T00:00:00Z', 99999, 0, 0);
   await post(otherOrg, branchId, '2026-09-01T00:00:00Z', 99999, 0, 0);
+  await post(org, branchId, '2026-09-01T10:15:00Z', 5000, 500, 2000, false, {
+    productId: `${org}_medicine_a`,
+    actorId: 'staff_a',
+    sourceLineId: 'sale_line_a',
+  });
+  await post(org, branchId, '2026-09-01T10:45:00Z', 1000, 100, 400, true, {
+    productId: `${org}_medicine_a`,
+    actorId: 'staff_a',
+    sourceLineId: 'return_line_a',
+  });
+  await post(org, branchId, '2026-09-01T11:05:00Z', 3000, 0, 1000, false, {
+    productId: `${org}_medicine_b`,
+    actorId: 'staff_b',
+    sourceLineId: 'sale_line_b',
+  });
 }, 30000);
 
 suite('comparison on migrated PostgreSQL with restricted runtime role', () => {
@@ -86,15 +122,78 @@ suite('comparison on migrated PostgreSQL with restricted runtime role', () => {
     await withTenantDb(org, async (db) => {
       const report = await grossMarginComparison(db, { organizationId: org, branchId }, period);
       expect(report.previous.grossMarginMinor).toBe(3500);
-      expect(report.current.grossMarginMinor).toBe(2200);
-      expect(report.differenceMinor).toBe(-1300);
-      expect(report.reconciledMinor).toBe(-1300);
+      expect(report.current.grossMarginMinor).toBe(6200);
+      expect(report.differenceMinor).toBe(2700);
+      expect(report.reconciledMinor).toBe(2700);
       const existing = await grossMargin(
         db,
         { organizationId: org, branchId },
         { ...period, by: 'branch' }
       );
       expect(report.current).toMatchObject(existing[0]!);
+    });
+  });
+  it('groups persisted landed postings, reversals, categories, nulls, hours, and staff', async () => {
+    await withTenantDb(org, async (db) => {
+      const scope = { organizationId: org, branchId };
+      const item = await landedProfit(db, scope, { ...period, by: 'item' });
+      expect(item).toEqual([
+        {
+          key: `${org}_medicine_a`,
+          revenueMinor: 4000,
+          discountMinor: 400,
+          landedCostMinor: 1600,
+          profitMinor: 2000,
+        },
+        {
+          key: `${org}_medicine_b`,
+          revenueMinor: 3000,
+          discountMinor: 0,
+          landedCostMinor: 1000,
+          profitMinor: 2000,
+        },
+        {
+          key: null,
+          revenueMinor: 11000,
+          discountMinor: 1400,
+          landedCostMinor: 7400,
+          profitMinor: 2200,
+        },
+      ]);
+      expect(await landedProfit(db, scope, { ...period, by: 'category' })).toEqual([
+        {
+          key: 'DEVICE',
+          revenueMinor: 3000,
+          discountMinor: 0,
+          landedCostMinor: 1000,
+          profitMinor: 2000,
+        },
+        {
+          key: 'PHARMACEUTICAL',
+          revenueMinor: 4000,
+          discountMinor: 400,
+          landedCostMinor: 1600,
+          profitMinor: 2000,
+        },
+        {
+          key: null,
+          revenueMinor: 11000,
+          discountMinor: 1400,
+          landedCostMinor: 7400,
+          profitMinor: 2200,
+        },
+      ]);
+      const hour = await landedProfit(db, scope, { ...period, by: 'hour' });
+      expect(hour.find((row) => row.key === '2026-09-01T10:00:00Z')).toMatchObject({
+        revenueMinor: 4000,
+        profitMinor: 2000,
+      });
+      const staff = await landedProfit(db, scope, { ...period, by: 'staff' });
+      expect(staff.find((row) => row.key === 'staff_a')).toMatchObject({
+        revenueMinor: 4000,
+        profitMinor: 2000,
+      });
+      expect(item.reduce((sum, row) => sum + row.profitMinor, 0)).toBe(6200);
     });
   });
   it('RLS denies a foreign tenant even when explicitly requested in SQL', async () => {
@@ -104,6 +203,21 @@ suite('comparison on migrated PostgreSQL with restricted runtime role', () => {
     expect(report.previous.hasEntries).toBe(false);
     expect(report.current.hasEntries).toBe(false);
   });
+  it.each(['item', 'category', 'hour', 'staff'] as const)(
+    'RLS denies foreign-tenant landed profit grouped by %s',
+    async (by) => {
+      const rows = await withTenantDb(org, (db) =>
+        landedProfit(db, { organizationId: otherOrg, branchId }, { ...period, by })
+      );
+      expect(rows).toEqual([]);
+      // The foreign fixture must exist so an empty result proves isolation.
+      const ownRows = await withTenantDb(otherOrg, (db) =>
+        landedProfit(db, { organizationId: otherOrg, branchId }, { ...period, by })
+      );
+      expect(ownRows).toHaveLength(1);
+      expect(ownRows[0]).toMatchObject({ revenueMinor: 99999, profitMinor: 99999 });
+    }
+  );
   it('returns absent groups honestly', async () => {
     const report = await withTenantDb(org, (db) =>
       grossMarginComparison(db, { organizationId: org, branchId: 'absent' }, period)

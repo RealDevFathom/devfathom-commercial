@@ -99,6 +99,87 @@ export type MarginRow = {
   grossMarginMinor: number;
 };
 
+export type LandedProfitDimension = 'item' | 'category' | 'hour' | 'staff';
+
+export type LandedProfitRow = {
+  key: string | null;
+  revenueMinor: number;
+  discountMinor: number;
+  landedCostMinor: number;
+  profitMinor: number;
+};
+
+/**
+ * Growth #739: sale contribution after the landed cost of the exact allocated
+ * lots. GRN stamps each lot with invoice value net of discount plus
+ * non-recoverable tax, spread over paid and bonus units; the sale posting
+ * carries that cost into COGS. Order-level freight and other charges are NOT
+ * yet stamped onto lots at GRN, so they are not in this cost. Reading the
+ * posting here deliberately extends that single source of truth rather than
+ * calculating purchasing cost a second time.
+ *
+ * Hour buckets are UTC. The staff dimension is the journal entry actor, so a
+ * return is attributed to the staff member who processed the return, not the
+ * original seller.
+ *
+ * This is separate from FIN-03 grossMargin so existing margin reports and their
+ * dimensions remain unchanged. "Profit" here excludes overhead and unposted
+ * costs; the router publishes that limitation with every result.
+ */
+export async function landedProfit(
+  db: ScopedDb,
+  scope: ReportScope,
+  input: { from: Date; to: Date; by: LandedProfitDimension }
+): Promise<LandedProfitRow[]> {
+  const key = {
+    item: Prisma.sql`line."productId"::text`,
+    category: Prisma.sql`medicine."productFamily"::text`,
+    hour: Prisma.sql`to_char(date_trunc('hour', entry."occurredAt" AT TIME ZONE 'UTC'), 'YYYY-MM-DD"T"HH24:00:00"Z"')`,
+    staff: Prisma.sql`entry."actorId"::text`,
+  }[input.by];
+
+  // Sums are bigint in SQL so a busy branch cannot overflow int4; each total
+  // is converted back only when it is a safe integer.
+  const rows = await db.$queryRaw<
+    {
+      key: string | null;
+      revenueMinor: bigint;
+      discountMinor: bigint;
+      landedCostMinor: bigint;
+      profitMinor: bigint;
+    }[]
+  >(Prisma.sql`
+    WITH signed AS (
+      SELECT ${key} AS "key", line."accountCode",
+             CASE WHEN line."side" = 'DEBIT' THEN line."amountMinor" ELSE -line."amountMinor" END AS "debitMinor"
+        FROM "finance_journal_lines" line
+        JOIN "finance_journal_entries" entry
+          ON entry."organizationId" = line."organizationId" AND entry."id" = line."entryId"
+        LEFT JOIN "pharmacy_medicines" medicine
+          ON medicine."organizationId" = line."organizationId" AND medicine."id" = line."productId"
+       WHERE line."organizationId" = ${scope.organizationId}
+         AND line."accountCode" IN ('SALES_REVENUE', 'SALES_DISCOUNT', 'COST_OF_GOODS_SOLD')
+         AND entry."occurredAt" >= ${input.from}
+         AND entry."occurredAt" < ${input.to}
+         ${branchFilter(scope)}
+    )
+    SELECT "key",
+           COALESCE(SUM(CASE WHEN "accountCode" = 'SALES_REVENUE' THEN -"debitMinor" ELSE 0 END), 0)::bigint AS "revenueMinor",
+           COALESCE(SUM(CASE WHEN "accountCode" = 'SALES_DISCOUNT' THEN "debitMinor" ELSE 0 END), 0)::bigint AS "discountMinor",
+           COALESCE(SUM(CASE WHEN "accountCode" = 'COST_OF_GOODS_SOLD' THEN "debitMinor" ELSE 0 END), 0)::bigint AS "landedCostMinor",
+           COALESCE(-SUM("debitMinor"), 0)::bigint AS "profitMinor"
+      FROM signed
+     GROUP BY "key"
+     ORDER BY "key"`);
+  return rows.map((row) => ({
+    key: row.key,
+    revenueMinor: exactMoney(BigInt(row.revenueMinor)),
+    discountMinor: exactMoney(BigInt(row.discountMinor)),
+    landedCostMinor: exactMoney(BigInt(row.landedCostMinor)),
+    profitMinor: exactMoney(BigInt(row.profitMinor)),
+  }));
+}
+
 /**
  * FIN-03: gross margin by sale line, manufacturing batch, product or branch.
  *
