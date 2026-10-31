@@ -52,6 +52,7 @@ export function InvoicePrintView({ invoiceId }: { invoiceId: string }) {
   const items = (Array.isArray(invoice.items) ? invoice.items : []) as unknown as LineItem[];
   const currency = invoice.currency;
   const subtotal = Number(invoice.subtotal);
+  const discount = Number(invoice.discount);
   const tax = Number(invoice.tax);
   const total = Number(invoice.total);
   const primaryContact = invoice.client.contacts?.[0];
@@ -199,6 +200,12 @@ export function InvoicePrintView({ invoiceId }: { invoiceId: string }) {
                 <span>Subtotal</span>
                 <span className="tabular-nums">{moneyLabel(subtotal, currency)}</span>
               </div>
+              {discount > 0 && (
+                <div className="flex justify-between text-slate-600">
+                  <span>Discount</span>
+                  <span className="tabular-nums">−{moneyLabel(discount, currency)}</span>
+                </div>
+              )}
               <div className="flex justify-between text-slate-600">
                 <span>Tax</span>
                 <span className="tabular-nums">{moneyLabel(tax, currency)}</span>

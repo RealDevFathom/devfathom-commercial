@@ -28,6 +28,9 @@ function context(status: string) {
         findUniqueOrThrow: vi.fn().mockResolvedValue(invoice),
         updateMany: vi.fn().mockResolvedValue({ count: 1 }),
       },
+      payment: {
+        aggregate: vi.fn().mockResolvedValue({ _sum: { amount: null } }),
+      },
     },
   };
 }
@@ -82,6 +85,30 @@ describe('PATCH /api/v1/invoices/:id invoice status', () => {
       data: { status: 'SENT', sentAt: expect.any(Date) },
     });
     expect(mocks.logActivity).toHaveBeenCalledOnce();
+  });
+
+  it('settles a fully discounted invoice as soon as it is sent', async () => {
+    const authCtx = context('DRAFT');
+    authCtx.db.invoice.findUniqueOrThrow.mockResolvedValue({ ...invoice, total: 0 });
+    const patchHandler = PATCH as unknown as (
+      authCtx: unknown,
+      request: Request,
+      context: { params: Promise<{ id: string }> }
+    ) => Promise<Response>;
+    const response = await patchHandler(
+      authCtx as never,
+      new Request('https://example.test/api/v1/invoices/invoice-1', {
+        method: 'PATCH',
+        body: JSON.stringify({ status: 'SENT' }),
+      }),
+      { params: Promise.resolve({ id: invoice.id }) }
+    );
+
+    expect(response.status).toBe(200);
+    expect(authCtx.db.invoice.updateMany).toHaveBeenLastCalledWith({
+      where: { id: invoice.id, status: 'SENT' },
+      data: { status: 'PAID', paidAt: expect.any(Date) },
+    });
   });
 
   it.each(['OVERDUE', 'CANCELLED'])('preserves sentAt for SENT to %s', async (status) => {

@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   paymentCreate: vi.fn(),
   logActivity: vi.fn(),
   emitEvent: vi.fn(),
+  groupBy: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -48,6 +49,7 @@ function caller() {
       create: mocks.paymentCreate,
     },
     $queryRaw: mocks.queryRaw,
+    transaction: { groupBy: mocks.groupBy },
   };
   return financeRouter.createCaller({
     db: {
@@ -100,6 +102,7 @@ describe('finance.createInvoice money calculation', () => {
             { description: 'Second', quantity: 3, rate: 0.335, amount: 1.01 },
           ],
           subtotal: 2.02,
+          discount: 0,
           tax: 0.01,
           total: 2.03,
         }),
@@ -142,7 +145,8 @@ describe('finance.updateInvoice money calculation and settlement serialization',
   });
 
   it('rounds updated line items and tax half up before persisting totals', async () => {
-    mocks.findUnique.mockResolvedValue({ status: 'DRAFT' });
+    mocks.findUnique.mockResolvedValue({ status: 'DRAFT', tax: 0, discount: 0 });
+    mocks.paymentAggregate.mockResolvedValue({ _sum: { amount: null } });
     mocks.update.mockResolvedValue({
       id: 'invoice-1',
       total: 2.03,
@@ -166,6 +170,7 @@ describe('finance.updateInvoice money calculation and settlement serialization',
             { description: 'Second', quantity: 3, rate: 0.335, amount: 1.01 },
           ],
           subtotal: 2.02,
+          discount: 0,
           tax: 0.01,
           total: 2.03,
         },
@@ -208,6 +213,7 @@ describe('invoice payment settlement serialization', () => {
     vi.clearAllMocks();
     mocks.can.mockResolvedValue(true);
     mocks.queryRaw.mockResolvedValue([{ id: 'invoice-1' }]);
+    mocks.paymentFindUnique.mockResolvedValue(null);
   });
 
   it('locks the invoice before adding and aggregating a payment', async () => {
@@ -221,16 +227,26 @@ describe('invoice payment settlement serialization', () => {
     mocks.paymentAggregate.mockResolvedValue({ _sum: { amount: 0 } });
     mocks.paymentCreate.mockResolvedValue({ id: 'payment-1', amount: 5 });
 
-    await caller().addPayment({ invoiceId: 'invoice-1', amount: 5 });
+    await caller().addPayment({
+      invoiceId: 'invoice-1',
+      idempotencyKey: 'payment-command-1',
+      amount: 5,
+    });
 
-    expect(mocks.queryRaw).toHaveBeenCalledWith(
-      ['SELECT id FROM invoices WHERE id = ', ' FOR UPDATE'],
-      'invoice-1'
+    expect(mocks.queryRaw).toHaveBeenNthCalledWith(
+      2,
+      [
+        '\n          SELECT id FROM invoices\n          WHERE id = ',
+        ' AND "organizationId" = ',
+        '\n          FOR UPDATE\n        ',
+      ],
+      'invoice-1',
+      'org-1'
     );
-    expect(mocks.queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(mocks.queryRaw.mock.invocationCallOrder[1]).toBeLessThan(
       mocks.findUnique.mock.invocationCallOrder[0]
     );
-    expect(mocks.queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(mocks.queryRaw.mock.invocationCallOrder[1]).toBeLessThan(
       mocks.paymentAggregate.mock.invocationCallOrder[0]
     );
   });
@@ -277,14 +293,18 @@ describe('invoice payment settlement serialization', () => {
     mocks.paymentAggregate.mockResolvedValue({ _sum: { amount: 0.2 } });
     mocks.paymentCreate.mockResolvedValue({ id: 'payment-1', amount: 1.01 });
 
-    const result = await caller().addPayment({ invoiceId: 'invoice-1', amount: 1.005 });
+    const result = await caller().addPayment({
+      invoiceId: 'invoice-1',
+      idempotencyKey: 'payment-command-1',
+      amount: 1.005,
+    });
 
     expect(mocks.paymentCreate).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ amount: 1.01 }) })
     );
     expect(result).toMatchObject({ amountPaid: 1.21, balance: 0, status: 'PAID' });
     expect(mocks.update).toHaveBeenCalledWith({
-      where: { id: 'invoice-1' },
+      where: { id: 'invoice-1', organizationId: 'org-1' },
       data: { status: 'PAID', paidAt: expect.any(Date) },
     });
     expect(mocks.emitEvent).toHaveBeenCalledWith(
@@ -306,7 +326,11 @@ describe('invoice payment settlement serialization', () => {
     mocks.paymentAggregate.mockResolvedValue({ _sum: { amount: 0.2 } });
 
     await expect(
-      caller().addPayment({ invoiceId: 'invoice-1', amount: 1.005 })
+      caller().addPayment({
+        invoiceId: 'invoice-1',
+        idempotencyKey: 'payment-command-1',
+        amount: 1.005,
+      })
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
 
     expect(mocks.paymentCreate).not.toHaveBeenCalled();
@@ -324,9 +348,30 @@ describe('invoice payment settlement serialization', () => {
     mocks.paymentAggregate.mockResolvedValue({ _sum: { amount: 0 } });
 
     await expect(
-      caller().addPayment({ invoiceId: 'invoice-1', amount: 0.001 })
+      caller().addPayment({
+        invoiceId: 'invoice-1',
+        idempotencyKey: 'payment-command-1',
+        amount: 0.001,
+      })
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
 
     expect(mocks.paymentCreate).not.toHaveBeenCalled();
+  });
+});
+
+describe('finance.getPnlReport loss rounding', () => {
+  it('reports a twenty-cent loss when income is 0.10 and expenses are 0.30', async () => {
+    mocks.groupBy
+      .mockResolvedValueOnce([{ currency: 'USD', _sum: { amount: '0.10' } }])
+      .mockResolvedValueOnce([{ currency: 'USD', _sum: { amount: '0.30' } }])
+      .mockResolvedValueOnce([]);
+
+    const report = await caller().getPnlReport({ months: 1, period: 'monthly' });
+
+    expect(report.byCurrency.USD.data[0]).toMatchObject({
+      income: 0.1,
+      expense: 0.3,
+      profit: -0.2,
+    });
   });
 });

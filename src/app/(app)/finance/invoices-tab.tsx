@@ -9,6 +9,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { invoiceTotalLabel, type InvoiceTotal } from '@/lib/finance/invoice-display';
+import { calculateInvoiceMoney } from '@/lib/finance/invoice-money';
 import { format } from 'date-fns';
 
 type InvoiceStatus = 'DRAFT' | 'SENT' | 'PAID' | 'OVERDUE' | 'CANCELLED';
@@ -310,6 +311,8 @@ export function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
   const [projectId, setProjectId] = useState('');
   const [dueDate, setDueDate] = useState('');
   const [notes, setNotes] = useState('');
+  const [tax, setTax] = useState(0);
+  const [discount, setDiscount] = useState(0);
   const [items, setItems] = useState([{ description: '', quantity: 1, rate: 0 }]);
 
   const addItem = () => setItems([...items, { description: '', quantity: 1, rate: 0 }]);
@@ -320,17 +323,45 @@ export function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
     setItems(updated);
   };
 
-  const subtotal = items.reduce((sum, item) => sum + item.quantity * item.rate, 0);
-  const total = subtotal;
+  const preview = calculateInvoiceMoney(
+    items.map((item) => ({
+      quantity: Number.isFinite(item.quantity) ? item.quantity : 0,
+      rate: Number.isFinite(item.rate) ? item.rate : 0,
+    })),
+    Number.isFinite(tax) ? tax : 0,
+    Number.isFinite(discount) ? discount : 0
+  );
+  const subtotal = preview.subtotal;
+  const discountNegative = !Number.isFinite(discount) || discount < 0;
+  const discountInvalid = discountNegative || preview.discountCents > preview.subtotalCents;
+  const taxInvalid = !Number.isFinite(tax) || tax < 0;
+  const itemsInvalid = items.some(
+    (item) =>
+      !item.description ||
+      !Number.isFinite(item.quantity) ||
+      item.quantity <= 0 ||
+      !Number.isFinite(item.rate) ||
+      item.rate <= 0
+  );
+  const total = preview.total;
 
   const handleSubmit = () => {
-    if (!clientId || !dueDate || items.length === 0 || items.some((i) => !i.description)) return;
+    if (
+      !clientId ||
+      !dueDate ||
+      items.length === 0 ||
+      discountInvalid ||
+      taxInvalid ||
+      itemsInvalid
+    )
+      return;
     createInvoice.mutate({
       clientId,
       projectId: projectId || undefined,
-      items: items.map((i) => ({ ...i, amount: i.quantity * i.rate })),
+      items: items.map((item, index) => ({ ...item, amount: preview.amounts[index] ?? 0 })),
       subtotal,
-      tax: 0,
+      discount,
+      tax,
       total,
       dueDate: new Date(dueDate),
       notes: notes || undefined,
@@ -417,7 +448,7 @@ export function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
                   className="col-span-2 rounded-lg border border-border bg-background px-3 py-1.5 text-sm text-foreground text-right focus:border-primary focus:outline-none"
                 />
                 <span className="col-span-2 text-sm font-medium text-foreground text-right tabular-nums">
-                  ${(item.quantity * item.rate).toLocaleString()}
+                  ${preview.amounts[i]?.toLocaleString() ?? '0'}
                 </span>
                 <button
                   onClick={() => removeItem(i)}
@@ -443,9 +474,52 @@ export function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
           </button>
         </div>
 
-        {/* Total */}
+        {/* Totals */}
         <div className="flex justify-end border-t border-border/60 pt-3">
-          <div className="text-right">
+          <div className="w-full max-w-xs space-y-2 text-right">
+            <div className="grid grid-cols-2 items-center gap-2">
+              <label htmlFor="invoice-discount" className="text-xs text-muted-foreground">
+                Discount
+              </label>
+              <input
+                id="invoice-discount"
+                type="number"
+                min="0"
+                max={subtotal}
+                step="0.01"
+                value={discount || ''}
+                onChange={(e) => setDiscount(parseFloat(e.target.value) || 0)}
+                aria-invalid={discountInvalid}
+                aria-describedby={discountInvalid ? 'invoice-discount-error' : undefined}
+                className="rounded-lg border border-border bg-background px-3 py-1.5 text-right text-sm tabular-nums text-foreground focus:border-primary focus:outline-none"
+              />
+              {discountInvalid && (
+                <p id="invoice-discount-error" className="col-span-2 text-xs text-destructive">
+                  {discountNegative
+                    ? 'Discount must be a non-negative amount.'
+                    : 'Discount cannot exceed the subtotal.'}
+                </p>
+              )}
+              <label htmlFor="invoice-tax" className="text-xs text-muted-foreground">
+                Tax
+              </label>
+              <input
+                id="invoice-tax"
+                type="number"
+                min="0"
+                step="0.01"
+                value={tax || ''}
+                onChange={(e) => setTax(parseFloat(e.target.value) || 0)}
+                aria-invalid={taxInvalid}
+                aria-describedby={taxInvalid ? 'invoice-tax-error' : undefined}
+                className="rounded-lg border border-border bg-background px-3 py-1.5 text-right text-sm tabular-nums text-foreground focus:border-primary focus:outline-none"
+              />
+              {taxInvalid && (
+                <p id="invoice-tax-error" className="col-span-2 text-xs text-destructive">
+                  Tax must be a non-negative amount.
+                </p>
+              )}
+            </div>
             <p className="text-xs text-muted-foreground">Total</p>
             <p className="font-display text-xl font-bold text-foreground">
               ${total.toLocaleString()}
@@ -465,6 +539,11 @@ export function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
         </div>
 
         <div className="flex justify-end gap-2">
+          {createInvoice.error && (
+            <p role="alert" className="mr-auto self-center text-xs text-destructive">
+              {createInvoice.error.message}
+            </p>
+          )}
           <button
             onClick={onClose}
             className="rounded-xl px-4 py-2 text-xs font-medium text-muted-foreground hover:text-foreground"
@@ -473,7 +552,15 @@ export function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
           </button>
           <button
             onClick={handleSubmit}
-            disabled={!clientId || !dueDate || items.length === 0 || createInvoice.isPending}
+            disabled={
+              !clientId ||
+              !dueDate ||
+              items.length === 0 ||
+              discountInvalid ||
+              taxInvalid ||
+              itemsInvalid ||
+              createInvoice.isPending
+            }
             className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
           >
             {createInvoice.isPending ? (
