@@ -7,7 +7,9 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 
 import { assertDisposableRlsDatabase } from './disposable-rls-database';
 
-const url = process.env.TEST_DATABASE_URL;
+// Dedicated superuser URL (like CATALOG_TEST_DATABASE_URL): the shared
+// TEST_DATABASE_URL is a restricted runtime role in CI and cannot CREATE DATABASE.
+const url = process.env.PG_TRGM_TEST_DATABASE_URL;
 const preparation = readFileSync('prisma/prepare-extensions.sql', 'utf8');
 const guard = readFileSync(
   'prisma/migrations/20261029000368_pg_trgm_migration_grant_guard/migration.sql',
@@ -154,6 +156,18 @@ describe.skipIf(!url)('pg_trgm preparation and migration on PostgreSQL', () => {
     await client.query(membership.rows[0].sql);
     await client.query(`SET LOCAL ROLE "${migrator}"`);
     await expect(client.query(guard)).rejects.toMatchObject({ code: 'P0001' });
+  });
+
+  it('accepts a migrator that owns similarity_op without a recorded grant option', async () => {
+    await client.query('CREATE EXTENSION pg_trgm');
+    await client.query(`
+      REVOKE EXECUTE ON FUNCTION public.similarity_op(text,text) FROM PUBLIC;
+      ALTER FUNCTION public.similarity_op(text,text) OWNER TO "${migrator}";
+      SET LOCAL ROLE "${migrator}";
+    `);
+    await client.query(guard);
+    await client.query(`GRANT EXECUTE ON FUNCTION public.similarity_op(text,text) TO "${runtime}"`);
+    await expectRuntimeSearch();
   });
 
   it('fails clearly when pg_trgm is absent', async () => {

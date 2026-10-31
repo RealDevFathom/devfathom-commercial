@@ -4,7 +4,9 @@ import pg from 'pg';
 
 async function main() {
   const databaseUrl = process.env.EXTENSION_ADMIN_DATABASE_URL;
-  const migrationDatabaseUrl = process.env.MIGRATION_DATABASE_URL ?? process.env.DATABASE_URL;
+  // Same resolution as prisma.config.ts so preparation delegates to the role that migrates.
+  const migrationDatabaseUrl =
+    process.env.MIGRATION_DATABASE_URL?.trim() || process.env.DATABASE_URL?.trim();
 
   if (!databaseUrl) {
     throw new Error(

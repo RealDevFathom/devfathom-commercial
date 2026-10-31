@@ -68,7 +68,9 @@ setup guide has the role statements.
 `bun prisma/prepare-extensions.ts` must run before `prisma migrate deploy`: it revokes
 `PUBLIC EXECUTE` on the trusted `btree_gist` / `pg_trgm` functions as the extension administrator,
 and the migration gate fails closed on a fresh database if it was skipped. It reads
-`EXTENSION_ADMIN_DATABASE_URL` — see **[the local setup guide](./docs/LOCAL_SETUP.md)**.
+`EXTENSION_ADMIN_DATABASE_URL`, plus `MIGRATION_DATABASE_URL` (or `DATABASE_URL`) on the same
+server and database: that URL's role receives `EXECUTE … WITH GRANT OPTION` on
+`pg_trgm`'s `similarity_op(text,text)` — see **[the local setup guide](./docs/LOCAL_SETUP.md)**.
 
 For local multi-host development, open
 `http://devfathom.localhost:3000` for the tenant workspace and

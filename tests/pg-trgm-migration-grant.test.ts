@@ -11,6 +11,8 @@ describe('pg_trgm migration grant', () => {
     const preparation = read('prisma', 'prepare-extensions.sql');
 
     expect(runner).toContain("set_config('devfathom.migration_role', $1, true)");
+    // Matches prisma.config.ts: a blank MIGRATION_DATABASE_URL falls back to DATABASE_URL.
+    expect(runner).toContain('process.env.MIGRATION_DATABASE_URL?.trim() ||');
     expect(preparation).toContain("target_extension = 'pg_trgm'");
     expect(preparation).toContain(
       "member.identity = pg_catalog.to_regprocedure('public.similarity_op(text,text)')"
@@ -28,6 +30,7 @@ describe('pg_trgm migration grant', () => {
     );
 
     expect(migration).toContain('acl.is_grantable');
+    expect(migration).toContain('procedure.proowner = role.oid');
     expect(migration).toContain('Run prisma/prepare-extensions.ts');
     expect(migration).not.toMatch(/^\s*GRANT\s+EXECUTE/im);
     expect(migration).not.toContain('devfathom_app');

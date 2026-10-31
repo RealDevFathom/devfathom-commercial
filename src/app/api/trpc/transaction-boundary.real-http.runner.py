@@ -36,7 +36,7 @@ try:
     # ALTER makes the negative capability explicit even if the cluster defaults
     # or a reused provisioning snippet ever changes.
     psql('roles', 'boundary_bootstrap', f"CREATE ROLE boundary_owner LOGIN PASSWORD '{password}' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT; CREATE ROLE boundary_runtime LOGIN PASSWORD '{password}' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT; CREATE DATABASE boundary_disposable OWNER boundary_owner;", 'postgres')
-    run('extensions', ['node', 'node_modules/tsx/dist/cli.mjs', 'prisma/prepare-extensions.ts'], {'EXTENSION_ADMIN_DATABASE_URL': url('boundary_bootstrap')})
+    run('extensions', ['node', 'node_modules/tsx/dist/cli.mjs', 'prisma/prepare-extensions.ts'], {'EXTENSION_ADMIN_DATABASE_URL': url('boundary_bootstrap'), 'MIGRATION_DATABASE_URL': url('boundary_owner')})
     psql('extension-grant', 'boundary_bootstrap', 'GRANT EXECUTE ON FUNCTION public.similarity_op(text,text) TO boundary_owner WITH GRANT OPTION;')
     run('migrate', ['node', 'node_modules/prisma/build/index.js', 'migrate', 'deploy'], {'DATABASE_URL': url('boundary_owner')})
     psql('seed', 'boundary_owner', '''

@@ -513,6 +513,8 @@ try {
   command(process.execPath, ['--no-env-file', 'prisma/prepare-extensions.ts'], undefined, {
     ...environment,
     EXTENSION_ADMIN_DATABASE_URL: adminUrl,
+    // migrate deploy below runs as adminUrl; delegate pg_trgm to that role.
+    MIGRATION_DATABASE_URL: adminUrl,
   });
   const config = join(directory, 'prisma.config.ts');
   await writeFile(

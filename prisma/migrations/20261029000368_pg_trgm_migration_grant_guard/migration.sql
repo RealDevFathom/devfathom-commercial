@@ -13,6 +13,13 @@ BEGIN
      WHERE role.rolname = current_user
        AND (
          role.rolsuper
+         -- The function owner holds the grant option implicitly.
+         OR EXISTS (
+           SELECT 1
+             FROM pg_catalog.pg_proc AS procedure
+            WHERE procedure.oid = 'public.similarity_op(text,text)'::regprocedure
+              AND procedure.proowner = role.oid
+         )
          OR EXISTS (
            SELECT 1
              FROM pg_catalog.pg_proc AS procedure
