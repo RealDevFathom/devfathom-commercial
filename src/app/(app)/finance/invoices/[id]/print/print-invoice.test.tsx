@@ -109,4 +109,26 @@ describe('InvoicePrintView branding', () => {
     fireEvent.load(updatedLogo);
     expect(await screen.findByRole('button', { name: 'Print / Save as PDF' })).toBeEnabled();
   });
+
+  it('stacks and wraps a long seller identity without displacing invoice metadata', () => {
+    const longName = 'A'.repeat(180);
+    mocks.useQuery.mockReturnValue({
+      data: {
+        ...invoice,
+        issuer: { ...invoice.issuer, displayName: longName, legalName: `${longName} Holdings LLC` },
+      },
+      isLoading: false,
+    });
+
+    render(<InvoicePrintView invoiceId="invoice-1" />);
+
+    const header = screen.getByTestId('invoice-header');
+    expect(header).toHaveClass('flex-col', 'sm:flex-row', 'print:flex-row');
+    expect(screen.getByTestId('invoice-seller')).toHaveClass('min-w-0', 'flex-1');
+    const name = screen.getByText(longName);
+    expect(name.parentElement).toHaveClass('min-w-0', '[overflow-wrap:anywhere]');
+    expect(screen.getByText(`${longName} Holdings LLC`)).toBeInTheDocument();
+    expect(screen.getByTestId('invoice-meta')).toHaveClass('shrink-0');
+    expect(screen.getByText('INV-001')).toBeInTheDocument();
+  });
 });

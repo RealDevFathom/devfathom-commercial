@@ -113,8 +113,11 @@ export function InvoicePrintView({ invoiceId }: { invoiceId: string }) {
           className="rounded-2xl border border-border/60 bg-white p-8 text-slate-900 shadow-sm sm:p-10"
         >
           {/* Header */}
-          <div className="flex items-start justify-between gap-6 border-b border-slate-200 pb-6">
-            <div className="flex items-start gap-3">
+          <div
+            data-testid="invoice-header"
+            className="flex flex-col gap-4 border-b border-slate-200 pb-6 sm:flex-row sm:items-start sm:justify-between sm:gap-6 print:flex-row print:items-start print:justify-between print:gap-6"
+          >
+            <div data-testid="invoice-seller" className="flex min-w-0 flex-1 items-start gap-3">
               {/* The authenticated proxy keeps external branding compatible with
                   the app's self-only image CSP and browser print-to-PDF. */}
               {showLogo && (
@@ -133,7 +136,7 @@ export function InvoicePrintView({ invoiceId }: { invoiceId: string }) {
                   }}
                 />
               )}
-              <div>
+              <div className="min-w-0 flex-1 [overflow-wrap:anywhere]">
                 <p className="font-display text-2xl font-bold tracking-tight text-[#0C2E2C]">
                   {invoice.issuer.displayName}
                 </p>
@@ -145,7 +148,10 @@ export function InvoicePrintView({ invoiceId }: { invoiceId: string }) {
                 )}
               </div>
             </div>
-            <div className="text-right">
+            <div
+              data-testid="invoice-meta"
+              className="shrink-0 text-left sm:text-right print:text-right"
+            >
               <p className="font-display text-xl font-bold tracking-tight text-slate-900">
                 INVOICE
               </p>
