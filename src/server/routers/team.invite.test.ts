@@ -12,6 +12,8 @@ const mocks = vi.hoisted(() => ({
   departmentFindFirst: vi.fn(),
   roleFindFirst: vi.fn(),
   sendEmail: vi.fn(),
+  appUrl: vi.fn(() => 'https://www.devfathom.com'),
+  annotateAudit: vi.fn(),
   can: vi.fn(async () => true),
 }));
 
@@ -26,11 +28,11 @@ vi.mock('@/server/audit', () => ({
   ipFromHeaders: vi.fn(() => null),
   isAuditExcludedPath: vi.fn(() => true),
   recordTrpcAudit: vi.fn(),
-  annotateAudit: vi.fn(),
+  annotateAudit: mocks.annotateAudit,
   diffChanges: vi.fn(() => ({})),
 }));
 vi.mock('@/lib/email', () => ({
-  appUrl: vi.fn(() => 'https://www.devfathom.com'),
+  appUrl: mocks.appUrl,
   sendEmail: mocks.sendEmail,
   templates: { inviteMember: vi.fn(() => ({ subject: 's', html: 'h', text: 't' })) },
 }));
@@ -80,6 +82,7 @@ const invite = {
 describe('team.inviteMember duplicate guard', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.appUrl.mockReturnValue('https://www.devfathom.com');
     mocks.can.mockResolvedValue(true);
     mocks.departmentFindFirst.mockResolvedValue({ id: 'dept_engineering' });
   });
@@ -113,6 +116,71 @@ describe('team.inviteMember duplicate guard', () => {
         data: expect.objectContaining({ email: 'new.person@company.com' }),
       })
     );
+  });
+
+  it('reports successful email delivery', async () => {
+    mocks.findFirst.mockResolvedValue(null);
+    mocks.create.mockResolvedValue({ id: 'user_2', name: 'Alex Carter' });
+    mocks.invitationUpsert.mockResolvedValue({});
+    mocks.sendEmail.mockResolvedValue({ messageId: 'message_1' });
+
+    await expect(
+      caller().inviteMember({ ...invite, email: 'new.person@company.com' })
+    ).resolves.toMatchObject({ id: 'user_2', emailDelivery: 'SENT' });
+    expect(mocks.annotateAudit).toHaveBeenCalledExactlyOnceWith(expect.anything(), {
+      targetType: 'User',
+      targetId: 'user_2',
+      result: { id: 'user_2', emailDelivery: 'SENT' },
+    });
+  });
+
+  it.each([null, { id: 'user_2', status: 'INVITED' }])(
+    'does not create or replace an invitation when the public URL is invalid (existing: %j)',
+    async (existing) => {
+      mocks.findFirst.mockResolvedValue(existing);
+      mocks.create.mockResolvedValue({ id: 'user_2', name: 'Alex Carter' });
+      mocks.update.mockResolvedValue({ id: 'user_2', name: 'Alex Carter' });
+      mocks.appUrl.mockImplementationOnce(() => {
+        throw new Error('Public application URL must use HTTPS in production.');
+      });
+
+      await expect(
+        caller().inviteMember({ ...invite, email: 'new.person@company.com' })
+      ).rejects.toThrow('Public application URL must use HTTPS in production.');
+      expect(mocks.create).not.toHaveBeenCalled();
+      expect(mocks.update).not.toHaveBeenCalled();
+      expect(mocks.invitationUpsert).not.toHaveBeenCalled();
+      expect(mocks.sendEmail).not.toHaveBeenCalled();
+    }
+  );
+
+  it('preserves the invite link and reports failed email delivery', async () => {
+    mocks.findFirst.mockResolvedValue(null);
+    mocks.create.mockResolvedValue({ id: 'user_2', name: 'Alex Carter' });
+    mocks.invitationUpsert.mockResolvedValue({});
+    mocks.sendEmail.mockRejectedValue(new Error('provider unavailable'));
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const result = await caller().inviteMember({ ...invite, email: 'new.person@company.com' });
+
+    expect(result).toMatchObject({ id: 'user_2', emailDelivery: 'FAILED' });
+    expect(result.inviteUrl).toMatch(/^https:\/\/www\.devfathom\.com\/invite\//);
+    expect(mocks.invitationUpsert).toHaveBeenCalledOnce();
+    expect(mocks.annotateAudit).toHaveBeenCalledExactlyOnceWith(expect.anything(), {
+      targetType: 'User',
+      targetId: 'user_2',
+      result: { id: 'user_2', emailDelivery: 'FAILED' },
+    });
+    const auditDetail = JSON.stringify(mocks.annotateAudit.mock.calls[0]?.[1]);
+    expect(auditDetail).not.toContain(result.inviteUrl.split('/').at(-1));
+    expect(auditDetail).not.toContain('new.person@company.com');
+    expect(auditDetail).not.toContain('provider unavailable');
+    expect(consoleError).toHaveBeenCalledWith('[inviteMember] invite email delivery failed', {
+      errorType: 'Error',
+    });
+    expect(JSON.stringify(consoleError.mock.calls)).not.toContain('new.person@company.com');
+    expect(JSON.stringify(consoleError.mock.calls)).not.toContain('provider unavailable');
+    consoleError.mockRestore();
   });
 
   it('stores a restaurant role template on the invited member', async () => {

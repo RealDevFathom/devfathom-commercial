@@ -190,6 +190,9 @@ export const teamRouter = router({
       }
 
       const { token, tokenHash } = generateInviteToken();
+      // Validate the public URL before creating a user or replacing a pending
+      // invitation; a configuration error must leave the existing link valid.
+      const inviteUrl = `${appUrl()}/invite/${token}`;
       const expiresAt = new Date(Date.now() + INVITE_TTL_MS);
       const profile = {
         name: input.name,
@@ -229,10 +232,8 @@ export const teamRouter = router({
         return u;
       });
 
-      const inviteUrl = `${appUrl()}/invite/${token}`;
-
-      // Best-effort send — never fail the mutation on an email hiccup; the admin
-      // still gets the inviteUrl back to share manually if delivery is unverified.
+      // Preserve the invitation when delivery fails so the administrator can
+      // still copy the link, but report the failure rather than claiming success.
       const mail = templates.inviteMember({
         name: user.name,
         inviterName: ctx.session.user.name ?? undefined,
@@ -241,6 +242,7 @@ export const teamRouter = router({
         acceptUrl: inviteUrl,
         expiresLabel: 'in 7 days',
       });
+      let emailDelivery: 'SENT' | 'FAILED' = 'SENT';
       try {
         await sendEmail({
           to: { email, name: user.name },
@@ -249,10 +251,21 @@ export const teamRouter = router({
           text: mail.text,
         });
       } catch (err) {
-        console.error('[inviteMember] invite email failed for', email, err);
+        emailDelivery = 'FAILED';
+        // Do not copy the recipient or provider response into application logs.
+        // The mutation's existing audit entry records the failure result without
+        // expanding provider-supplied metadata or invitation-recipient PII.
+        console.error('[inviteMember] invite email delivery failed', {
+          errorType: err instanceof Error ? err.name : 'UnknownError',
+        });
       }
 
-      return { id: user.id, inviteUrl };
+      annotateAudit(ctx, {
+        targetType: 'User',
+        targetId: user.id,
+        result: { id: user.id, emailDelivery },
+      });
+      return { id: user.id, inviteUrl, emailDelivery };
     }),
 
   getById: protectedProcedure.input(z.object({ id: z.string() })).query(async ({ ctx, input }) => {

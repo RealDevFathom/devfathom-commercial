@@ -13,6 +13,8 @@ import {
   Loader2,
   Check,
   Copy,
+  AlertTriangle,
+  RefreshCw,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -269,7 +271,11 @@ export function AddMemberModal({ onClose }: { onClose: () => void }) {
   const [skillInput, setSkillInput] = useState('');
   const [skills, setSkills] = useState<string[]>([]);
   const [error, setError] = useState('');
-  const [sent, setSent] = useState<{ email: string; inviteUrl: string } | null>(null);
+  const [sent, setSent] = useState<{
+    email: string;
+    inviteUrl: string | null;
+    emailDelivery: 'SENT' | 'FAILED';
+  } | null>(null);
   const [copied, setCopied] = useState(false);
 
   const selectedDepartment = departmentOptions.find((item) => item.key === department);
@@ -287,6 +293,10 @@ export function AddMemberModal({ onClose }: { onClose: () => void }) {
     )
       return;
     const submittedEmail = email.trim().toLowerCase();
+    // A retry rotates the token. Discard the previous URL before sending, even
+    // if the response is lost after the server commits the replacement.
+    setSent((current) => (current ? { ...current, inviteUrl: null } : null));
+    setCopied(false);
     inviteMember.mutate(
       {
         name: name.trim(),
@@ -302,7 +312,11 @@ export function AddMemberModal({ onClose }: { onClose: () => void }) {
       {
         onSuccess: (data) => {
           utils.team.getAll.invalidate();
-          setSent({ email: submittedEmail, inviteUrl: data.inviteUrl });
+          setSent({
+            email: submittedEmail,
+            inviteUrl: data.inviteUrl,
+            emailDelivery: data.emailDelivery,
+          });
         },
         onError: (err) => setError(err.message),
       }
@@ -310,7 +324,7 @@ export function AddMemberModal({ onClose }: { onClose: () => void }) {
   };
 
   const handleCopy = async () => {
-    if (!sent) return;
+    if (!sent?.inviteUrl || inviteMember.isPending) return;
     await navigator.clipboard.writeText(sent.inviteUrl);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
@@ -339,30 +353,74 @@ export function AddMemberModal({ onClose }: { onClose: () => void }) {
           {sent ? (
             <div className="p-6">
               <div className="flex flex-col items-center py-6 text-center">
-                <div className="flex h-14 w-14 items-center justify-center rounded-full bg-primary/10">
-                  <Check className="h-7 w-7 text-primary" />
+                <div
+                  className={cn(
+                    'flex h-14 w-14 items-center justify-center rounded-full',
+                    sent.emailDelivery === 'SENT' ? 'bg-success/10' : 'bg-warning/10'
+                  )}
+                >
+                  {sent.emailDelivery === 'SENT' ? (
+                    <Check className="h-7 w-7 text-success" />
+                  ) : (
+                    <AlertTriangle className="h-7 w-7 text-warning" />
+                  )}
                 </div>
                 <h3 className="mt-4 font-display text-lg font-semibold text-foreground">
-                  Invitation sent to {sent.email}
+                  {!sent.inviteUrl
+                    ? inviteMember.isPending
+                      ? 'Refreshing invitation…'
+                      : 'Invitation status unknown'
+                    : sent.emailDelivery === 'SENT'
+                      ? `Invitation sent to ${sent.email}`
+                      : 'Invitation created, but email delivery failed'}
                 </h3>
                 <p className="mt-1.5 text-sm text-muted-foreground">
-                  They&apos;ll receive an email to set their password and finish their profile.
+                  {!sent.inviteUrl
+                    ? inviteMember.isPending
+                      ? 'Wait for the updated invitation before sharing a link.'
+                      : 'The previous invite link may no longer work. Retry email to get a new link.'
+                    : sent.emailDelivery === 'SENT'
+                      ? 'They’ll receive an email to set their password and finish their profile.'
+                      : `No email was sent to ${sent.email}. Retry delivery or share the invite link below.`}
                 </p>
-                <div className="mt-6 w-full rounded-xl border border-border bg-card px-4 py-3 text-left">
-                  <p className="mb-1.5 text-xs font-medium text-muted-foreground">Invite link</p>
-                  <p className="break-all text-sm text-foreground">{sent.inviteUrl}</p>
-                </div>
+                {error && (
+                  <p role="alert" className="mt-4 text-sm text-destructive break-words">
+                    {error}
+                  </p>
+                )}
+                {sent.inviteUrl && (
+                  <div className="mt-6 w-full rounded-xl border border-border bg-card px-4 py-3 text-left">
+                    <p className="mb-1.5 text-xs font-medium text-muted-foreground">Invite link</p>
+                    <p className="break-all text-sm text-foreground">{sent.inviteUrl}</p>
+                  </div>
+                )}
                 <div className="mt-4 flex w-full items-center gap-2">
+                  {sent.emailDelivery === 'FAILED' && (
+                    <button
+                      onClick={handleSubmit}
+                      disabled={inviteMember.isPending}
+                      className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-border bg-card px-4 py-2.5 text-sm font-medium text-foreground transition-colors hover:bg-secondary disabled:pointer-events-none disabled:opacity-40"
+                    >
+                      {inviteMember.isPending ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <RefreshCw className="h-4 w-4" />
+                      )}
+                      Retry email
+                    </button>
+                  )}
                   <button
                     onClick={handleCopy}
-                    className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-border bg-card px-4 py-2.5 text-sm font-medium text-foreground transition-colors hover:bg-secondary"
+                    disabled={!sent.inviteUrl || inviteMember.isPending}
+                    className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-border bg-card px-4 py-2.5 text-sm font-medium text-foreground transition-colors hover:bg-secondary disabled:pointer-events-none disabled:opacity-40"
                   >
                     {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
                     {copied ? 'Copied!' : 'Copy invite link'}
                   </button>
                   <button
                     onClick={onClose}
-                    className="flex-1 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98]"
+                    disabled={!sent.inviteUrl || inviteMember.isPending}
+                    className="flex-1 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground transition-all hover:bg-primary-hover active:scale-[0.98] disabled:pointer-events-none disabled:opacity-40"
                   >
                     Done
                   </button>

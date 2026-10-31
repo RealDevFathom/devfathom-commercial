@@ -54,7 +54,10 @@ beforeEach(() => {
   state.departments.isFetching = state.departments.isError = state.invite.isPending = false;
   state.roles.isFetching = state.roles.isError = false;
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 function fill() {
   fireEvent.change(screen.getByPlaceholderText('John Doe'), {
     target: { value: 'Second operator' },
@@ -68,6 +71,125 @@ function fill() {
 }
 
 describe('tenant department invitation', () => {
+  it.each([
+    ['Forbidden', 'SENT'],
+    ['Network response lost', 'FAILED'],
+  ] as const)(
+    'discards stale links after %s and recovers with a %s response',
+    async (message, status) => {
+      const onClose = vi.fn();
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      vi.stubGlobal('navigator', { clipboard: { writeText } });
+      const view = render(<AddMemberModal onClose={onClose} />);
+      fill();
+      fireEvent.change(screen.getByLabelText('Department'), { target: { value: 'COUNTER' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Send Invite' }));
+      act(() =>
+        state.invite.mutate.mock.calls[0][1].onSuccess({
+          id: 'user_2',
+          inviteUrl: 'https://app.example/invite/token',
+          emailDelivery: 'FAILED',
+        })
+      );
+
+      await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Copy invite link' })));
+      expect(writeText).toHaveBeenCalledWith('https://app.example/invite/token');
+      expect(screen.getByRole('button', { name: 'Copied!' })).toBeEnabled();
+      writeText.mockClear();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Retry email' }));
+      expect(screen.queryByText('https://app.example/invite/token')).toBeNull();
+      expect(screen.getByRole('button', { name: 'Copy invite link' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Done' })).toBeDisabled();
+      state.invite.isPending = true;
+      view.rerender(<AddMemberModal onClose={onClose} />);
+      expect(screen.getByText('Refreshing invitation…')).toBeVisible();
+      expect(screen.getByRole('button', { name: 'Retry email' })).toBeDisabled();
+      fireEvent.click(screen.getByRole('button', { name: 'Copy invite link' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+      expect(writeText).not.toHaveBeenCalled();
+      expect(onClose).not.toHaveBeenCalled();
+
+      // The server may have committed a new token even though the response failed.
+      state.invite.isPending = false;
+      act(() => state.invite.mutate.mock.calls[1][1].onError({ message }));
+      expect(screen.getByRole('alert')).toHaveTextContent(message);
+      expect(screen.getByText('Invitation status unknown')).toBeVisible();
+      expect(screen.getByText(/The previous invite link may no longer work/)).toBeVisible();
+      expect(screen.queryByText('https://app.example/invite/token')).toBeNull();
+      expect(screen.getByRole('button', { name: 'Copy invite link' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Done' })).toBeDisabled();
+      fireEvent.click(screen.getByRole('button', { name: 'Copy invite link' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+      expect(writeText).not.toHaveBeenCalled();
+      expect(onClose).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Retry email' }));
+      expect(screen.queryByRole('alert')).toBeNull();
+      act(() =>
+        state.invite.mutate.mock.calls[2][1].onSuccess({
+          id: 'user_2',
+          inviteUrl: 'https://app.example/invite/refreshed-token',
+          emailDelivery: status,
+        })
+      );
+      expect(
+        screen.getByText(
+          status === 'SENT'
+            ? 'Invitation sent to second@e2e.invalid'
+            : 'Invitation created, but email delivery failed'
+        )
+      ).toBeVisible();
+      expect(screen.getByText('https://app.example/invite/refreshed-token')).toBeVisible();
+      expect(screen.queryByText('https://app.example/invite/token')).toBeNull();
+      expect(screen.queryByRole('alert')).toBeNull();
+      await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Copy invite link' })));
+      expect(writeText).toHaveBeenCalledExactlyOnceWith('https://app.example/invite/refreshed-token');
+      expect(screen.getByRole('button', { name: 'Done' })).toBeEnabled();
+      fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+      expect(onClose).toHaveBeenCalledOnce();
+    }
+  );
+
+  it.each([
+    ['SENT', 'Invitation sent to second@e2e.invalid'],
+    ['FAILED', 'Invitation created, but email delivery failed'],
+  ] as const)(
+    'renders the %s delivery result without losing the fallback link',
+    (status, heading) => {
+      render(<AddMemberModal onClose={vi.fn()} />);
+      fill();
+      fireEvent.change(screen.getByLabelText('Department'), { target: { value: 'COUNTER' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Send Invite' }));
+      act(() =>
+        state.invite.mutate.mock.calls[0][1].onSuccess({
+          id: 'user_2',
+          inviteUrl: 'https://app.example/invite/token',
+          emailDelivery: status,
+        })
+      );
+      expect(screen.getByText(heading)).toBeVisible();
+      expect(screen.getByText('https://app.example/invite/token')).toBeVisible();
+      expect(screen.getByRole('button', { name: 'Copy invite link' })).toBeVisible();
+      if (status === 'FAILED') {
+        fireEvent.click(screen.getByRole('button', { name: 'Retry email' }));
+        expect(state.invite.mutate).toHaveBeenCalledTimes(2);
+        act(() =>
+          state.invite.mutate.mock.calls[1][1].onSuccess({
+            id: 'user_2',
+            inviteUrl: 'https://app.example/invite/refreshed-token',
+            emailDelivery: 'SENT',
+          })
+        );
+        expect(screen.getByText('Invitation sent to second@e2e.invalid')).toBeVisible();
+        expect(screen.getByText('https://app.example/invite/refreshed-token')).toBeVisible();
+        expect(screen.queryByRole('button', { name: 'Retry email' })).toBeNull();
+      } else {
+        expect(screen.queryByRole('button', { name: 'Retry email' })).toBeNull();
+      }
+    }
+  );
+
   it.each([
     ['General Manager', 'role_gm'],
     ['Branch Manager', 'role_branch'],
