@@ -10,12 +10,14 @@ import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { invoiceTotalLabel, type InvoiceTotal } from '@/lib/finance/invoice-display';
 import { format } from 'date-fns';
+import { toast } from 'sonner';
+import {
+  INVOICE_STATUS_VALUES,
+  PAID_STATUS_ERROR,
+  type InvoiceStatusValue,
+} from '@/lib/finance/invoice-status';
 
-type InvoiceStatus = 'DRAFT' | 'SENT' | 'PAID' | 'OVERDUE' | 'CANCELLED';
-
-const INVOICE_STATUSES: InvoiceStatus[] = ['DRAFT', 'SENT', 'PAID', 'OVERDUE', 'CANCELLED'];
-
-const statusConfig: Record<string, { bg: string; label: string }> = {
+const statusConfig: Record<InvoiceStatusValue, { bg: string; label: string }> = {
   DRAFT: { bg: 'bg-muted text-muted-foreground', label: 'Draft' },
   SENT: { bg: 'bg-blue-500/10 text-blue-500', label: 'Sent' },
   PAID: { bg: 'bg-emerald-500/10 text-emerald-500', label: 'Paid' },
@@ -26,7 +28,7 @@ const statusConfig: Record<string, { bg: string; label: string }> = {
 type InvoiceRowData = InvoiceTotal & {
   id: string;
   invoiceNumber: string;
-  status: string;
+  status: InvoiceStatusValue;
   dueDate: Date | string;
   client: { name: string };
   project: { name: string } | null;
@@ -47,10 +49,11 @@ export function InvoicesTab() {
       );
       return { previous };
     },
-    onError: (_err, _vars, ctx) => {
+    onError: (err, _vars, ctx) => {
       if (ctx?.previous) {
         utils.finance.getInvoices.setData(undefined, ctx.previous);
       }
+      toast.error(err.message);
     },
     onSettled: () => {
       utils.finance.getFinancialSummary.invalidate();
@@ -58,7 +61,7 @@ export function InvoicesTab() {
   });
 
   const handleUpdateStatus = useCallback(
-    (id: string, status: InvoiceStatus) => mutateStatus({ id, status }),
+    (id: string, status: InvoiceStatusValue) => mutateStatus({ id, status }),
     [mutateStatus]
   );
 
@@ -167,12 +170,12 @@ export function InvoicesTab() {
 /* ============================================
    Invoice Row (memoized; owns its own status-menu open state)
    ============================================ */
-const InvoiceRow = memo(function InvoiceRow({
+export const InvoiceRow = memo(function InvoiceRow({
   inv,
   onUpdateStatus,
 }: {
   inv: InvoiceRowData;
-  onUpdateStatus: (id: string, status: InvoiceStatus) => void;
+  onUpdateStatus: (id: string, status: InvoiceStatusValue) => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
@@ -227,6 +230,8 @@ const InvoiceRow = memo(function InvoiceRow({
       <div className="col-span-2 flex justify-center">
         <button
           ref={btnRef}
+          aria-expanded={menuOpen}
+          aria-haspopup="menu"
           onClick={() => (menuOpen ? setMenuOpen(false) : openMenu())}
           className={cn(
             'inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium',
@@ -242,13 +247,20 @@ const InvoiceRow = memo(function InvoiceRow({
             <>
               <div className="fixed inset-0 z-[60]" onClick={() => setMenuOpen(false)} />
               <div
+                role="menu"
                 className="fixed z-[61] w-32 -translate-x-1/2 rounded-xl border border-border bg-card py-1 shadow-xl shadow-black/10"
                 style={{ top: menuPos.top, left: menuPos.left }}
               >
-                {INVOICE_STATUSES.map((s) => (
+                {INVOICE_STATUS_VALUES.map((s) => (
                   <button
                     key={s}
+                    role="menuitem"
                     onClick={() => {
+                      if (s === 'PAID') {
+                        toast.error(PAID_STATUS_ERROR);
+                        setMenuOpen(false);
+                        return;
+                      }
                       onUpdateStatus(inv.id, s);
                       setMenuOpen(false);
                     }}
