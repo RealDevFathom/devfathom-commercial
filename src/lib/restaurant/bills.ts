@@ -1,11 +1,16 @@
 import 'server-only';
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { buildCoAuthorizationRecord } from './co-authorization';
+import {
+  beginMoneyIdempotent as beginCanonicalMoneyIdempotent,
+  MoneyIdempotencyError,
+  recordMoneyResult,
+} from './drawer-sessions';
 import { accrueLoyaltyForSettledBill, releaseLoyaltyRedemption } from './loyalty';
 import {
   add,
@@ -1177,11 +1182,36 @@ export async function reverseCompLine(
     });
     if (!bill) throw new BillCommandError('The bill does not exist.', 'BILL_NOT_FOUND');
 
-    const idem = await beginMoneyIdempotent(tx, input.actor, 'bill.comp.reverse');
-    if (idem.replay) {
-      return { billLineId: idem.resultRef || input.billLineId, billId: bill.id, replayed: true };
-    }
     const reason = requireReason(input.reason);
+    const canonicalBytes = JSON.stringify({
+      version: 1,
+      billId: input.billId,
+      branchId: input.branchId,
+      billLineId: input.billLineId,
+      reason,
+      approvingStaffProfileId: input.approvingStaffProfileId,
+      actingStaffProfileId: input.actor.staffProfileId,
+      terminalSessionId: input.terminalSessionId ?? null,
+    });
+    const idem = await beginCanonicalMoneyIdempotent(tx, input.actor, 'bill.comp.reverse', {
+      bytes: canonicalBytes,
+      hash: createHash('sha256').update(canonicalBytes, 'utf8').digest('hex'),
+    });
+    if (idem.replay) {
+      // Return the frozen result, never identifiers supplied by this retry. Legacy
+      // bare-line records cannot prove payload identity and fail closed above.
+      const result = idem.resultPayload;
+      if (
+        !result ||
+        typeof result !== 'object' ||
+        Array.isArray(result) ||
+        typeof result.billId !== 'string' ||
+        typeof result.billLineId !== 'string'
+      ) {
+        throw new MoneyIdempotencyError('The original comp reversal result is unavailable.');
+      }
+      return { billId: result.billId, billLineId: result.billLineId, replayed: true };
+    }
     if (bill.status !== 'OPEN') {
       throw new BillCommandError('Only an OPEN bill can have a comp reversed.', 'BILL_NOT_OPEN');
     }
@@ -1275,8 +1305,9 @@ export async function reverseCompLine(
           : {}),
       },
     });
-    await recordMoneyIdempotentResult(tx, input.actor, line.id);
-    return { billLineId: line.id, billId: bill.id, replayed: false };
+    const result = { billLineId: line.id, billId: bill.id };
+    await recordMoneyResult(tx, input.actor, line.id, result);
+    return { ...result, replayed: false };
   });
 }
 

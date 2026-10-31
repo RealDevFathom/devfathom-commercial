@@ -1091,6 +1091,134 @@ describeIfDatabase('bills command layer (real DB)', () => {
     });
   });
 
+  it('binds reversal replays to their original bill, line, and canonical authorization payload', async () => {
+    const { orderId, db } = await openWithItems([{ seat: 1 }, { seat: 1 }, { seat: 2 }]);
+    const { billIds } = await deps.bills.cutBills(db, {
+      orderId,
+      branchId: ids.branch,
+      split: { kind: 'BY_SEAT' },
+      actor: actor(),
+    });
+    const lines = await read((tx) =>
+      tx.restaurantBillLine.findMany({ where: { billId: { in: billIds } } })
+    );
+    const first = lines.find((line) => line.billId === billIds[0])!;
+    const sibling = lines.find((line) => line.billId === first.billId && line.id !== first.id)!;
+    const other = lines.find((line) => line.billId !== first.billId)!;
+    for (const line of lines) {
+      await deps.bills.compLine(db, {
+        billId: line.billId,
+        branchId: ids.branch,
+        billLineId: line.id,
+        reason: 'guest complaint',
+        approvingStaffProfileId: ids.manager,
+        actor: actor(),
+      });
+    }
+    const input = {
+      billId: first.billId,
+      branchId: ids.branch,
+      billLineId: first.id,
+      reason: 'mistaken comp',
+      approvingStaffProfileId: ids.manager,
+      actor: actor(),
+    };
+    const original = await deps.bills.reverseCompLine(db, input);
+    expect(original).toEqual({ billId: first.billId, billLineId: first.id, replayed: false });
+
+    // A later comp must survive retries of this earlier reversal.
+    await deps.bills.compLine(db, { ...input, reason: 'new complaint', actor: actor() });
+    const snapshot = () =>
+      read(async (tx) => ({
+        bills: await tx.restaurantBill.findMany({
+          where: { id: { in: billIds } },
+          orderBy: { id: 'asc' },
+          include: { lines: { orderBy: { id: 'asc' } } },
+        }),
+        audits: await tx.restaurantCoAuthorization.findMany({
+          where: { targetId: { in: lines.map((line) => line.id) } },
+          orderBy: { id: 'asc' },
+        }),
+        replay: await tx.restaurantMoneyIdempotencyKey.findUniqueOrThrow({
+          where: {
+            deviceId_key: { deviceId, key: input.actor.idempotencyKey },
+          },
+        }),
+      }));
+    const before = await snapshot();
+    expect(before.replay.resultPayload).toEqual({ billId: first.billId, billLineId: first.id });
+    expect(await deps.bills.reverseCompLine(db, input)).toEqual({ ...original, replayed: true });
+    expect(await deps.bills.reverseCompLine(db, { ...input, reason: '  mistaken comp  ' })).toEqual({
+      ...original,
+      replayed: true,
+    });
+    for (const changed of [
+      { billLineId: sibling.id },
+      { billId: other.billId, billLineId: other.id },
+      { reason: 'different reason' },
+      { approvingStaffProfileId: ids.operator },
+      { actor: { ...input.actor, staffProfileId: ids.manager } },
+      { terminalSessionId: 'different-terminal-session' },
+    ]) {
+      await expect(deps.bills.reverseCompLine(db, { ...input, ...changed })).rejects.toMatchObject({
+        name: 'MoneyIdempotencyError',
+      });
+    }
+    expect(await snapshot()).toEqual(before);
+  });
+
+  it('rejects reversal keys belonging to other commands or lacking a canonical payload', async () => {
+    const { orderId, db } = await openWithItems([{}]);
+    const cutActor = actor();
+    const { billIds } = await deps.bills.cutBills(db, {
+      orderId,
+      branchId: ids.branch,
+      split: { kind: 'NONE' },
+      actor: cutActor,
+    });
+    const billId = billIds[0]!;
+    const line = await read((tx) =>
+      tx.restaurantBillLine.findFirstOrThrow({ where: { billId } })
+    );
+    const compActor = actor();
+    const input = {
+      billId,
+      branchId: ids.branch,
+      billLineId: line.id,
+      reason: 'mistaken comp',
+      approvingStaffProfileId: ids.manager,
+      actor: compActor,
+    };
+    await deps.bills.compLine(db, input);
+    const legacyActor = actor();
+    await read((tx) =>
+      tx.restaurantMoneyIdempotencyKey.create({
+        data: {
+          deviceId,
+          key: legacyActor.idempotencyKey,
+          commandType: 'bill.comp.reverse',
+          resultRef: line.id,
+        },
+      })
+    );
+    for (const reusedActor of [cutActor, compActor, legacyActor]) {
+      await expect(
+        deps.bills.reverseCompLine(db, { ...input, actor: reusedActor })
+      ).rejects.toMatchObject({ name: 'MoneyIdempotencyError' });
+    }
+    const after = await read((tx) =>
+      tx.restaurantBillLine.findUniqueOrThrow({ where: { id: line.id } })
+    );
+    expect(after.compAmount).toEqual(line.lineSubtotal);
+    expect(
+      await read((tx) =>
+        tx.restaurantCoAuthorization.count({
+          where: { targetType: 'RestaurantBillLineCompReversal', targetId: line.id },
+        })
+      )
+    ).toBe(0);
+  });
+
   it('clears zero-basis service-charge evidence and restores it on comp reversal', async () => {
     const { orderId, itemIds, db } = await openWithItems([{}, {}]);
     await read((tx) =>

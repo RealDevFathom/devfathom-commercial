@@ -9,6 +9,7 @@ import {
   getOrderSettlementForBranch,
   moneyErrorResponse,
 } from './checkout-routes';
+import { MoneyIdempotencyError } from './drawer-sessions';
 import { quoteOpenBillSettlement } from './tenders';
 
 vi.mock('./bills', async (importOriginal) => ({
@@ -224,6 +225,13 @@ describe('checkout money serialization', () => {
       ],
     });
   });
+});
+
+it('returns HTTP 409 when a comp reversal key is reused for a different command or payload', async () => {
+  const message = 'This idempotency key is already bound to a different canonical money payload.';
+  const response = moneyErrorResponse(new MoneyIdempotencyError(message))!;
+  expect(response.status).toBe(409);
+  expect(await response.json()).toEqual({ error: message });
 });
 
 it('refuses a comp reversal with missing service-charge evidence as a conflict', async () => {
