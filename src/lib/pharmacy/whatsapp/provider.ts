@@ -15,8 +15,12 @@ export type WhatsAppConfig = {
   phoneNumberId: string | null;
   /** Explicit owner of this deployment's configured sender. */
   organizationId?: string | null;
+  /** Tenant-owned WABA used to authenticate account-level webhook entries. */
+  businessAccountId?: string | null;
   appSecret: string | null;
   verifyToken: string | null;
+  /** Owner-facing Meta Account Quality destination included in strike alerts. */
+  accountAppealUrl: string;
   graphVersion: string;
   templateLanguage: string;
   templates: Record<WhatsAppTemplateKey, string | null>;
@@ -69,6 +73,19 @@ function envValue(env: Env, key: string): string | null {
   return value ? value : null;
 }
 
+const DEFAULT_ACCOUNT_APPEAL_URL = 'https://business.facebook.com/accountquality';
+
+function accountAppealUrl(value: string | null): string {
+  if (!value) return DEFAULT_ACCOUNT_APPEAL_URL;
+  try {
+    const url = new URL(value);
+    if (url.protocol === 'https:' && url.hostname === 'business.facebook.com') return url.href;
+  } catch {
+    // Invalid or untrusted configuration falls back to Meta's canonical account-quality page.
+  }
+  return DEFAULT_ACCOUNT_APPEAL_URL;
+}
+
 export function readWhatsAppConfig(env: Env = process.env): WhatsAppConfig {
   const leadDays = Number(envValue(env, 'PHARMACY_WHATSAPP_REMINDER_LEAD_DAYS') ?? 3);
   return {
@@ -76,8 +93,10 @@ export function readWhatsAppConfig(env: Env = process.env): WhatsAppConfig {
     accessToken: envValue(env, 'PHARMACY_WHATSAPP_ACCESS_TOKEN'),
     phoneNumberId: envValue(env, 'PHARMACY_WHATSAPP_PHONE_NUMBER_ID'),
     organizationId: envValue(env, 'PHARMACY_WHATSAPP_ORGANIZATION_ID'),
+    businessAccountId: envValue(env, 'PHARMACY_WHATSAPP_BUSINESS_ACCOUNT_ID'),
     appSecret: envValue(env, 'PHARMACY_WHATSAPP_APP_SECRET'),
     verifyToken: envValue(env, 'PHARMACY_WHATSAPP_VERIFY_TOKEN'),
+    accountAppealUrl: accountAppealUrl(envValue(env, 'PHARMACY_WHATSAPP_ACCOUNT_APPEAL_URL')),
     graphVersion: envValue(env, 'PHARMACY_WHATSAPP_GRAPH_VERSION') ?? 'v21.0',
     templateLanguage: envValue(env, 'PHARMACY_WHATSAPP_TEMPLATE_LANGUAGE') ?? 'en',
     templates: {

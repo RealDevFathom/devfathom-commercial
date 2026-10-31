@@ -98,6 +98,16 @@ export async function marketingAction(
         message = 'Draft saved. Review and approve the campaign before capture.';
         break;
       }
+      case 'account-quality-resume': {
+        if (form.get('confirmed') !== 'on')
+          return {
+            error: true,
+            message: 'Confirm the account is healthy in Meta Account Quality first.',
+          };
+        const result = await caller.resumeAccountQuality({ branchId, confirmed: true });
+        message = `WhatsApp feeds resumed. ${result.resolved} account-quality holds cleared and ${result.restored} campaigns restored to their prior state.`;
+        break;
+      }
       case 'approve':
         if (form.get('reviewed') !== 'on')
           return { error: true, message: 'Confirm you reviewed the campaign.' };

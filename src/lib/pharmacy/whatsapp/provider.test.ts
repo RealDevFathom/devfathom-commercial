@@ -56,6 +56,13 @@ describe('readWhatsAppConfig', () => {
     expect(readWhatsAppConfig({ PHARMACY_WHATSAPP_PROVIDER: 'twilio' }).provider).toBe('mock');
   });
 
+  it('reads the explicit business account binding and defaults to unbound', () => {
+    expect(readWhatsAppConfig({}).businessAccountId).toBeNull();
+    expect(
+      readWhatsAppConfig({ PHARMACY_WHATSAPP_BUSINESS_ACCOUNT_ID: ' waba-a ' }).businessAccountId
+    ).toBe('waba-a');
+  });
+
   it('rejects an out-of-range reminder lead', () => {
     expect(readWhatsAppConfig({ PHARMACY_WHATSAPP_REMINDER_LEAD_DAYS: '5' }).reminderLeadDays).toBe(
       5
@@ -63,6 +70,24 @@ describe('readWhatsAppConfig', () => {
     expect(
       readWhatsAppConfig({ PHARMACY_WHATSAPP_REMINDER_LEAD_DAYS: '-1' }).reminderLeadDays
     ).toBe(3);
+  });
+
+  it('accepts only HTTPS Meta account-quality appeal URLs', () => {
+    expect(
+      readWhatsAppConfig({
+        PHARMACY_WHATSAPP_ACCOUNT_APPEAL_URL:
+          'https://business.facebook.com/accountquality/example',
+      }).accountAppealUrl
+    ).toBe('https://business.facebook.com/accountquality/example');
+    for (const value of [
+      'javascript:alert(1)',
+      'http://business.facebook.com/accountquality',
+      'https://example.com/phishing',
+    ]) {
+      expect(
+        readWhatsAppConfig({ PHARMACY_WHATSAPP_ACCOUNT_APPEAL_URL: value }).accountAppealUrl
+      ).toBe('https://business.facebook.com/accountquality');
+    }
   });
 });
 

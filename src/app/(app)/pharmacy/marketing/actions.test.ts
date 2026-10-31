@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   reviewGrowth: vi.fn(),
   approve: vi.fn(),
   sandbox: vi.fn(),
+  resumeAccountQuality: vi.fn(),
 }));
 vi.mock('next/cache', () => ({ revalidatePath: mocks.revalidate }));
 vi.mock('@/server/trpc', () => ({ createTRPCContext: mocks.context }));
@@ -118,4 +119,19 @@ it('preserves sandbox replay key and retry intent without any live provider choi
     outcome: 'REJECTED',
   });
   expect(result.message).toContain('No live messages sent');
+});
+it('resumes WhatsApp feeds only after explicit owner confirmation', async () => {
+  expect(await marketingAction(form({ operation: 'account-quality-resume' }))).toMatchObject({
+    error: true,
+  });
+  expect(mocks.resumeAccountQuality).not.toHaveBeenCalled();
+  mocks.resumeAccountQuality.mockResolvedValue({ resolved: 2, restored: 3 });
+  expect(
+    await marketingAction(form({ operation: 'account-quality-resume', confirmed: 'on' }))
+  ).toMatchObject({ error: false, message: expect.stringContaining('3 campaigns restored') });
+  expect(mocks.resumeAccountQuality).toHaveBeenCalledWith({
+    branchId: 'branch-a',
+    confirmed: true,
+  });
+  expect(mocks.revalidate).toHaveBeenCalledWith('/pharmacy/marketing');
 });

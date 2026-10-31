@@ -4084,6 +4084,7 @@ model Notification {
   @@index([userId, isRead])
   @@index([createdAt])
   @@index([organizationId])
+  // WhatsApp account-quality retries use a partial unique index managed in SQL.
   @@map("notifications")
 }
 
@@ -13746,6 +13747,7 @@ enum PharmacyCampaignStatus {
   DRAFT
   APPROVED
   CAPTURED
+  ACCOUNT_QUALITY_HOLD
   REFUSED
 }
 
@@ -13796,11 +13798,35 @@ model PharmacyCampaign {
   ownerApprovedByUserId String?
   ownerApprovedAt       DateTime?
   refusalReason         String?
+  holdPreviousStatus    PharmacyCampaignStatus?
   createdAt             DateTime               @default(now())
 
   @@unique([organizationId, id])
   @@index([organizationId, branchId, scheduledAt])
   @@map("pharmacy_campaigns")
+}
+
+/// Ledger of Meta WhatsApp `account_update` events. An unresolved HOLD row is the
+/// account-level hold that gates every outbound WhatsApp feed for the tenant.
+model PharmacyWhatsAppQualityEvent {
+  id               String    @id @default(cuid())
+  organizationId   String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  /// Per-occurrence provider key; retried webhook deliveries collide here.
+  eventKey         String
+  event            String
+  /// DISABLED, RESTRICTION or VIOLATION. A recovery resolves holds of its own issue only.
+  issue            String
+  /// HOLD or RECOVER.
+  action           String
+  level            String
+  occurredAt       DateTime?
+  resolvedAt       DateTime?
+  resolvedByUserId String?
+  createdAt        DateTime  @default(now())
+
+  @@unique([organizationId, eventKey])
+  @@index([organizationId, resolvedAt])
+  @@map("pharmacy_whatsapp_quality_events")
 }
 
 /// Capture mode only: records intended delivery; no provider delivery state exists.

@@ -8,6 +8,7 @@ import {
 } from '@/lib/pharmacy/customer-ordering';
 import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 
+import { isWhatsAppAccountQualityHeld } from './account-quality';
 import {
   claimMessageLogInTransaction,
   sendAndLog,
@@ -224,12 +225,18 @@ export async function handleInboundWhatsAppMessage(
   const age = now.getTime() - message.receivedAt.getTime();
   const inReplyWindow = Number.isFinite(age) && age >= 0 && age < 24 * 60 * 60 * 1000;
 
-  const reply = (
+  const reply = async (
     replyKind: MessageLogKind,
     body: string,
     extra: { orderId?: string; branchId?: string } = {}
-  ) =>
-    sendAndLog(
+  ) => {
+    // A Meta account-quality hold pauses every outbound feed, auto-replies included.
+    // The inbound message, consent change and order are still recorded.
+    if (
+      await withTenantDb(organizationId, (db) => isWhatsAppAccountQualityHeld(db, organizationId))
+    )
+      return 'ACCOUNT_QUALITY_HOLD' as const;
+    return sendAndLog(
       {
         organizationId,
         kind: replyKind,
@@ -240,6 +247,7 @@ export async function handleInboundWhatsAppMessage(
       },
       () => provider.sendText({ to: message.from, body })
     );
+  };
 
   if (keyword) {
     const optIn = keyword === 'START';

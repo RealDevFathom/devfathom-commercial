@@ -9,6 +9,7 @@ import { claimMessageLogInTransaction, sendClaimedMessage } from './message-log'
 import { lockPatientConsent } from '../consent-writer';
 import { hasModule, resolveOrganizationEntitlements } from '@/lib/entitlements';
 import { isTenantLifecycleAccessible } from '@/lib/tenancy/host';
+import { isWhatsAppAccountQualityHeld } from './account-quality';
 import { canMessageCustomer, normalizeWhatsAppNumber, phoneLast4 } from './messages';
 import {
   createWhatsAppProvider,
@@ -71,6 +72,8 @@ export type RefillReminderRunResult = {
   failed: number;
   duplicate: number;
   skippedNoConsent: number;
+  /** Not sent: Meta account quality holds every outbound WhatsApp feed. */
+  skippedAccountHold: number;
   notDue: number;
 };
 
@@ -100,6 +103,7 @@ export async function processDueWhatsAppRefillReminders(
     failed: 0,
     duplicate: 0,
     skippedNoConsent: 0,
+    skippedAccountHold: 0,
     notDue: 0,
   };
   if (!result.configured || config.provider === 'meta') return { ...result, configured: false };
@@ -156,6 +160,8 @@ export async function processDueWhatsAppRefillReminders(
 
     const recipient = await withTenantDb(capture.organizationId, async (db) => {
       if (config.organizationId !== capture.organizationId || !config.phoneNumberId) return null;
+      if (await isWhatsAppAccountQualityHeld(db, capture.organizationId))
+        return 'ACCOUNT_QUALITY_HOLD' as const;
       const organization = await db.organization.findUnique({
         where: { id: capture.organizationId },
         select: { vertical: true, status: true, timezone: true },
@@ -244,6 +250,10 @@ export async function processDueWhatsAppRefillReminders(
       });
       return { customerId: customer.id, to, logId };
     });
+    if (recipient === 'ACCOUNT_QUALITY_HOLD') {
+      result.skippedAccountHold += 1;
+      continue;
+    }
     if (!recipient) {
       result.skippedNoConsent += 1;
       continue;

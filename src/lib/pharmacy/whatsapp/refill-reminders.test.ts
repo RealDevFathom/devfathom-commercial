@@ -7,6 +7,8 @@ const store = vi.hoisted(() => ({
   customers: [] as Array<Record<string, unknown>>,
   consents: [] as Array<Record<string, unknown>>,
   logs: [] as LogRow[],
+  /** An unresolved Meta account-quality hold for the tenant. */
+  accountHold: false,
   /** The workspace zone the organization row holds. */
   timezone: 'Asia/Karachi',
 }));
@@ -36,6 +38,9 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
     patientConsent: {
       findFirst: async ({ where }: { where: { patientId: string } }) =>
         store.consents.find((consent) => consent.patientId === where.patientId) ?? null,
+    },
+    pharmacyWhatsAppQualityEvent: {
+      findFirst: async () => (store.accountHold ? { id: 'hold-1' } : null),
     },
     pharmacyMessageLog: {
       count: async () => store.logs.length,
@@ -106,6 +111,7 @@ beforeEach(() => {
   store.customers = [];
   store.consents = [];
   store.logs = [];
+  store.accountHold = false;
   store.timezone = 'Asia/Karachi';
 });
 
@@ -210,6 +216,20 @@ describe('processDueWhatsAppRefillReminders', () => {
       processDueWhatsAppRefillReminders({ now: NOW, config, provider })
     ).resolves.toMatchObject({ scanned: 1, prepared: 1, failed: 0 });
     expect(provider.calls).toHaveLength(1);
+  });
+
+  it('sends and claims nothing while a WhatsApp account-quality hold is unresolved', async () => {
+    store.accountHold = true;
+    store.captures = [capture('capture-1')];
+    store.customers = [customer('patient-1', true)];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    const provider = new MockWhatsAppProvider(config);
+
+    const result = await processDueWhatsAppRefillReminders({ now: NOW, config, provider });
+
+    expect(result).toMatchObject({ scanned: 1, prepared: 0, skippedAccountHold: 1 });
+    expect(provider.calls).toEqual([]);
+    expect(store.logs).toEqual([]);
   });
 
   it('does nothing until the reminder template name is configured', async () => {
