@@ -33,6 +33,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import {
   COUNTER_RECEIPT_STRINGS,
+  receiptPromotionLabel,
   formatMinor,
   formatReceiptDate,
   type CounterReceipt,
@@ -93,6 +94,7 @@ function escPosFacts(
             expiry ? formatReceiptDate(expiry) : 'Unavailable'
           } | Units: ${allocation.canonicalUnits}`;
         }),
+        ...[receiptPromotionLabel(line, 'en')].filter(Boolean),
         `${strings.lineTotal}: ${formatMinor(line.lineTotalMinor)}`,
       ].join('\n');
     }),

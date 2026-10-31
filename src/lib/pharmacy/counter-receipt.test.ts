@@ -11,6 +11,10 @@ import {
   type CounterReceipt,
   type CounterReceiptLine,
 } from './counter-receipt';
+import { buildCounterReceiptPreview } from './counter-receipt-presentation';
+import { buildCounterBrowserReceipt } from './counter-browser-print';
+import { buildPharmacyReceiptPrintDocument } from './receipt-print';
+import { DEFAULT_RECEIPT_LAYOUT } from '@/lib/receipts/configuration';
 import { PrintDocumentSchema } from '@/lib/restaurant/printing/contract';
 
 function receiptLine(overrides: Partial<CounterReceiptLine> = {}): CounterReceiptLine {
@@ -246,5 +250,34 @@ describe('bilingual string table', () => {
       if (key === 'saleUnit') continue;
       expect(COUNTER_RECEIPT_STRINGS.ur[key], key).not.toBe(COUNTER_RECEIPT_STRINGS.en[key]);
     }
+  });
+});
+
+describe('#727 promotion receipt savings', () => {
+  it.each(['en', 'ur'] as const)('prints the issued promotion and discount once in %s with unchanged net', (locale) => {
+    const line = receiptLine({ promotionName: 'Nov offer', discountMinor: 101, lineTotalMinor: 4899 });
+    const model = receipt({ lines: [line] });
+    const document = buildCounterReceiptDocument(model, locale);
+    expect(document.lines).toHaveLength(2);
+    expect(document.lines[1]!.label).toContain('Nov offer (-1.01)');
+    expect(document.lines[1]!.label).toContain(COUNTER_RECEIPT_STRINGS[locale].promotion);
+    const preview = buildCounterReceiptPreview(model, locale, 58, true);
+    expect(preview).toContain('Nov offer (-1.01)');
+    expect(preview).toContain('48.99');
+    expect(buildCounterBrowserReceipt(model, locale, 'A4', true)).toContain('Nov offer (-1.01)');
+    expect(model.totals).toMatchObject({ grossMinor: 5000, discountMinor: 101, netMinor: 4899 });
+    expect(buildCounterReceiptDocument(model, locale, { reprint: true }).lines).toEqual(document.lines);
+  });
+  it('includes savings in the raw thermal facts and escapes promotion text in browser paper', () => {
+    const model = receipt({ lines: [receiptLine({
+      promotionName: '<Offer>', discountMinor: 100, lineTotalMinor: 4900,
+    })] });
+    const document = buildPharmacyReceiptPrintDocument(model, 'en', {
+      layout: DEFAULT_RECEIPT_LAYOUT, taxIdentity: { ntn: null, strn: null }, reprint: true,
+    });
+    expect(document.receiptSnapshot?.facts.lines[0]).toContain('Promotion: <Offer> (-1.00)');
+    const html = buildCounterBrowserReceipt(model, 'en', 'THERMAL');
+    expect(html).toContain('&lt;Offer&gt;');
+    expect(html).not.toContain('<Offer>');
   });
 });

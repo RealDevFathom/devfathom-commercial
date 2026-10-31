@@ -324,3 +324,17 @@ it.each([undefined, null, []])('renders no evidence section for %j', (evidence) 
   render(<CounterReceiptView {...props({ evidence })} />);
   expect(screen.queryByRole('region', { name: 'Camera evidence' })).toBeNull();
 });
+
+
+it.each(['en', 'ur'] as const)('#727 shows issued promotion savings in %s alongside the original line net', (locale) => {
+  const input = props({ locale });
+  input.receipt!.lines[0] = {
+    ...input.receipt!.lines[0]!, promotionName: 'Nov offer', discountMinor: 10, lineTotalMinor: 90,
+  };
+  input.receipt!.totals = {
+    grossMinor: 100, discountMinor: 10, netMinor: 90, tenderedMinor: 90, changeMinor: 0,
+  };
+  render(<CounterReceiptView {...input} />);
+  expect(screen.getByText(/Nov offer \(-0\.10\)/)).toBeVisible();
+  expect(screen.getByRole('listitem')).toHaveTextContent('0.90');
+});

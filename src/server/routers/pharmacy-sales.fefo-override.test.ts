@@ -104,6 +104,7 @@ describe('pharmacySales.addLine batch override (PH-A4)', () => {
     const [, scope, input] = vi.mocked(addSaleLine).mock.calls[0]!;
     expect(scope).toEqual({ organizationId: 'org-1', branchId: 'branch-1', actorId: 'actor-1' });
     expect(input.override).toEqual(override);
+    expect(vi.mocked(addSaleLine).mock.calls[0]![3]).toEqual({ applyCounterPromotions: true });
 
     const audit = lastAudit();
     expect(audit.outcome).toBe('SUCCESS');
