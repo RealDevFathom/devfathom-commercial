@@ -89,9 +89,14 @@ describe('AppShell module guard', () => {
   });
 
   it('clearly warns when the pharmacy licence is a placeholder', () => {
+    const TestAppShell = AppShell as ComponentType<{
+      brand: Parameters<typeof AppShell>[0]['brand'];
+      pharmacyPlaceholder?: boolean;
+      children?: React.ReactNode;
+    }>;
     render(
       createElement(
-        AppShell,
+        TestAppShell,
         {
           brand: {
             organizationId: 'org_test',
@@ -103,7 +108,6 @@ describe('AppShell module guard', () => {
             accentColor: null,
           },
           pharmacyPlaceholder: true,
-          children: null,
         },
         createElement('p', null, 'Dashboard')
       )

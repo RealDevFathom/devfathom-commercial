@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
-import { getPlatformSession } from '@/lib/platform/auth';
+import { getPlatformSession, platformLoginNeedsEnrollment } from '@/lib/platform/auth';
 import { PlatformLoginForm } from './platform-login-form';
 import { Logo, FathomMark } from '@/components/brand/logo';
 
@@ -80,7 +80,7 @@ export default async function PlatformLoginPage() {
               </p>
             </div>
 
-            <PlatformLoginForm />
+            <PlatformLoginForm initialEnrollment={await platformLoginNeedsEnrollment()} />
           </div>
 
           <p className="mt-8 text-xs text-muted-foreground">

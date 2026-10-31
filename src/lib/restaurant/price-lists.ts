@@ -394,7 +394,11 @@ export type ResolvePriceInput = {
 export async function resolvePrice(
   db: ScopedDb,
   input: ResolvePriceInput
-): Promise<{ price: Prisma.Decimal; entry: ResolvedPriceEntry; version: ResolvedPriceListVersion } | null> {
+): Promise<{
+  price: Prisma.Decimal;
+  entry: ResolvedPriceEntry;
+  version: ResolvedPriceListVersion;
+} | null> {
   const resolved = await resolveEffectiveEntries(db, input.priceListId, input.at);
   if (!resolved) return null;
   const entry = pickEntry(resolved.entries, input.productId, input.variantId ?? null);

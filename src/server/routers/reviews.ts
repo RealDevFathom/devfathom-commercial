@@ -102,48 +102,44 @@ export const reviewsRouter = router({
 
   // Close a cycle (locks it as the active management state; assignment is blocked
   // while CLOSED). Idempotent.
-  closeCycle: hrProcedure
-    .input(z.object({ id: z.string() }))
-    .mutation(async ({ ctx, input }) => {
-      const cycle = await ctx.db.reviewCycle.findUnique({ where: { id: input.id } });
-      if (!cycle) {
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'Review cycle not found.' });
-      }
-      const updated = await ctx.db.reviewCycle.update({
-        where: { id: input.id },
-        data: { status: 'CLOSED' },
-      });
-      annotateAudit(ctx, {
-        targetType: 'ReviewCycle',
-        targetId: cycle.id,
-        targetLabel: cycle.name,
-        description: `Closed review cycle "${cycle.name}"`,
-        changes: { status: { before: cycle.status, after: 'CLOSED' } },
-      });
-      return updated;
-    }),
+  closeCycle: hrProcedure.input(z.object({ id: z.string() })).mutation(async ({ ctx, input }) => {
+    const cycle = await ctx.db.reviewCycle.findUnique({ where: { id: input.id } });
+    if (!cycle) {
+      throw new TRPCError({ code: 'NOT_FOUND', message: 'Review cycle not found.' });
+    }
+    const updated = await ctx.db.reviewCycle.update({
+      where: { id: input.id },
+      data: { status: 'CLOSED' },
+    });
+    annotateAudit(ctx, {
+      targetType: 'ReviewCycle',
+      targetId: cycle.id,
+      targetLabel: cycle.name,
+      description: `Closed review cycle "${cycle.name}"`,
+      changes: { status: { before: cycle.status, after: 'CLOSED' } },
+    });
+    return updated;
+  }),
 
   // Reopen a closed cycle. Idempotent.
-  reopenCycle: hrProcedure
-    .input(z.object({ id: z.string() }))
-    .mutation(async ({ ctx, input }) => {
-      const cycle = await ctx.db.reviewCycle.findUnique({ where: { id: input.id } });
-      if (!cycle) {
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'Review cycle not found.' });
-      }
-      const updated = await ctx.db.reviewCycle.update({
-        where: { id: input.id },
-        data: { status: 'OPEN' },
-      });
-      annotateAudit(ctx, {
-        targetType: 'ReviewCycle',
-        targetId: cycle.id,
-        targetLabel: cycle.name,
-        description: `Reopened review cycle "${cycle.name}"`,
-        changes: { status: { before: cycle.status, after: 'OPEN' } },
-      });
-      return updated;
-    }),
+  reopenCycle: hrProcedure.input(z.object({ id: z.string() })).mutation(async ({ ctx, input }) => {
+    const cycle = await ctx.db.reviewCycle.findUnique({ where: { id: input.id } });
+    if (!cycle) {
+      throw new TRPCError({ code: 'NOT_FOUND', message: 'Review cycle not found.' });
+    }
+    const updated = await ctx.db.reviewCycle.update({
+      where: { id: input.id },
+      data: { status: 'OPEN' },
+    });
+    annotateAudit(ctx, {
+      targetType: 'ReviewCycle',
+      targetId: cycle.id,
+      targetLabel: cycle.name,
+      description: `Reopened review cycle "${cycle.name}"`,
+      changes: { status: { before: cycle.status, after: 'OPEN' } },
+    });
+    return updated;
+  }),
 
   // Assign a reviewer to evaluate a subject within a cycle (creates a DRAFT).
   // The composite unique [cycleId, subjectId, reviewerId] prevents duplicates;
@@ -293,10 +289,7 @@ export const reviewsRouter = router({
         ? cycleFilter
         : {
             ...cycleFilter,
-            OR: [
-              { reviewerId: me },
-              { subjectId: me, status: 'SUBMITTED' },
-            ],
+            OR: [{ reviewerId: me }, { subjectId: me, status: 'SUBMITTED' }],
           };
 
       return ctx.db.review.findMany({
