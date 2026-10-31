@@ -1,9 +1,12 @@
+import { createHash } from 'node:crypto';
+import { hash } from 'bcryptjs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/secret-crypto', () => ({ encryptSecret: vi.fn() }));
+vi.mock('bcryptjs', () => ({ hash: vi.fn(async () => 'hashed') }));
 vi.mock('@/lib/entitlements', () => ({
   hasModule: vi.fn(() => true),
   resolveOrganizationEntitlements: vi.fn(),
@@ -28,12 +31,13 @@ const db = {
     delete: vi.fn(),
   },
   organizationRolePermission: { deleteMany: vi.fn(), createMany: vi.fn() },
+  organizationScimToken: { findFirst: vi.fn(), create: vi.fn(), update: vi.fn() },
 };
 
-function caller() {
+function caller(enabledModules = ['identity']) {
   return organizationAdminRouter.createCaller({
     db,
-    entitlements: { enabledModules: [], activeSeats: 1, seatLimit: 10 },
+    entitlements: { enabledModules, activeSeats: 1, seatLimit: 10 },
     session: {
       expires: 'later',
       user: {
@@ -65,6 +69,9 @@ const memberInput = {
   title: 'Manager',
   department: 'LEADERSHIP',
 };
+// Synthetic policy-valid input; never used as a credential outside these mocks.
+const testPassword = 'Aa1'.repeat(4);
+const scimInput = { name: 'Test directory', expiresAt: null };
 const mutations = [
   {
     name: 'grant a base role',
@@ -88,7 +95,7 @@ const mutations = [
       caller().createMember({
         name: 'New admin',
         email: 'admin@example.test',
-        password: 'Temporary-123456',
+        password: testPassword,
         title: 'Manager',
         role: 'ADMIN',
         department: 'LEADERSHIP',
@@ -105,6 +112,18 @@ const mutations = [
   {
     name: 'delete a role template',
     run: () => caller().removeRole({ id: 'role_restricted' }),
+  },
+  {
+    name: 'reset another member’s password to assume their permissions',
+    run: () => caller().resetMemberPassword({ id: 'member_b', password: testPassword }),
+  },
+  {
+    name: 'create a SCIM token that can assign roles',
+    run: () => caller().createScimToken(scimInput),
+  },
+  {
+    name: 'revoke a SCIM provisioning token',
+    run: () => caller().revokeScimToken({ id: 'scim_token' }),
   },
 ];
 
@@ -155,10 +174,14 @@ describe('organization role authorization with the real ABAC engine', () => {
       expect(db.organizationRole.delete).not.toHaveBeenCalled();
       expect(db.organizationRolePermission.deleteMany).not.toHaveBeenCalled();
       expect(db.organizationRolePermission.createMany).not.toHaveBeenCalled();
+      expect(db.organizationScimToken.findFirst).not.toHaveBeenCalled();
+      expect(db.organizationScimToken.create).not.toHaveBeenCalled();
+      expect(db.organizationScimToken.update).not.toHaveBeenCalled();
+      expect(hash).not.toHaveBeenCalled();
     });
   });
 
-  it('keeps admin:access required even when team:setRole is allowed', async () => {
+  it.each(mutations)('keeps admin:access required to $name', async ({ run }) => {
     db.user.findUnique.mockResolvedValue({
       organizationRole: null,
       permissionOverrides: [
@@ -167,17 +190,97 @@ describe('organization role authorization with the real ABAC engine', () => {
       ],
     });
 
-    await expect(caller().upsertRole(roleInput)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(run()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.user.findUnique).toHaveBeenCalledTimes(1);
+    expect(db.user.findFirst).not.toHaveBeenCalled();
+    expect(db.organizationRole.findFirst).not.toHaveBeenCalled();
     expect(db.organizationRole.create).not.toHaveBeenCalled();
+    expect(db.organizationScimToken.findFirst).not.toHaveBeenCalled();
+    expect(db.organizationScimToken.create).not.toHaveBeenCalled();
   });
 
-  it('fails closed if the caller disappears during the role capability lookup', async () => {
-    db.user.findUnique
-      .mockResolvedValueOnce({ organizationRole: null, permissionOverrides: [] })
-      .mockResolvedValueOnce(null);
+  it.each(mutations)(
+    'fails closed if the caller disappears while authorizing $name',
+    async ({ run }) => {
+      db.user.findUnique
+        .mockResolvedValueOnce({ organizationRole: null, permissionOverrides: [] })
+        .mockResolvedValueOnce(null);
 
-    await expect(caller().upsertRole(roleInput)).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    expect(db.organizationRole.create).not.toHaveBeenCalled();
+      await expect(run()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(db.user.findFirst).not.toHaveBeenCalled();
+      expect(db.organizationRole.findFirst).not.toHaveBeenCalled();
+      expect(db.organizationRole.create).not.toHaveBeenCalled();
+      expect(db.organizationScimToken.findFirst).not.toHaveBeenCalled();
+      expect(db.organizationScimToken.create).not.toHaveBeenCalled();
+    }
+  );
+
+  it('allows an unrestricted admin to reset a password and revoke existing sessions', async () => {
+    db.user.findFirst.mockResolvedValue({ id: 'member_b', email: 'member@example.test' });
+
+    await expect(
+      caller().resetMemberPassword({ id: 'member_b', password: testPassword })
+    ).resolves.toEqual({ success: true });
+
+    expect(db.user.findFirst).toHaveBeenCalledWith({
+      where: { id: 'member_b', organizationId: 'org_a' },
+      select: { id: true, email: true },
+    });
+    expect(hash).toHaveBeenCalledWith(testPassword, 12);
+    expect(db.user.update).toHaveBeenCalledWith({
+      where: { id: 'member_b' },
+      data: {
+        password: 'hashed',
+        passwordChangedAt: null,
+        mustChangePassword: true,
+        tokenVersion: { increment: 1 },
+      },
+    });
+  });
+
+  it('allows an unrestricted admin to create a tenant-scoped SCIM credential', async () => {
+    const expiresAt = new Date('2027-01-01T00:00:00Z');
+    db.organizationScimToken.create.mockImplementation(async ({ data }) => ({
+      id: 'scim_token',
+      ...data,
+    }));
+
+    const saved = await caller().createScimToken({ ...scimInput, expiresAt });
+
+    expect(saved.token).toMatch(/^scim_/);
+    expect(db.organizationScimToken.create).toHaveBeenCalledWith({
+      data: {
+        organizationId: 'org_a',
+        name: scimInput.name,
+        prefix: saved.token.slice(0, 16),
+        tokenHash: createHash('sha256').update(saved.token).digest('hex'),
+        expiresAt,
+      },
+    });
+    expect(saved.tokenHash).toBeUndefined();
+  });
+
+  it('retains the identity license gate for SCIM token creation', async () => {
+    await expect(caller([]).createScimToken(scimInput)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'The identity module is not licensed.',
+    });
+    expect(db.organizationScimToken.create).not.toHaveBeenCalled();
+  });
+
+  it('allows an unrestricted admin to revoke a token in the caller’s tenant', async () => {
+    db.organizationScimToken.findFirst.mockResolvedValue({ id: 'scim_token' });
+    db.organizationScimToken.update.mockResolvedValue({ id: 'scim_token', revokedAt: new Date() });
+
+    await caller().revokeScimToken({ id: 'scim_token' });
+
+    expect(db.organizationScimToken.findFirst).toHaveBeenCalledWith({
+      where: { id: 'scim_token', organizationId: 'org_a' },
+    });
+    expect(db.organizationScimToken.update).toHaveBeenCalledWith({
+      where: { id: 'scim_token' },
+      data: { revokedAt: expect.any(Date) },
+    });
   });
 
   it('allows an unrestricted admin to create and edit role permissions', async () => {

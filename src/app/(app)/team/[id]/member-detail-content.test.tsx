@@ -90,8 +90,8 @@ describe('member profile saves', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
     fireEvent.change(screen.getByDisplayValue('Front Desk'), { target: { value: 'Updated Name' } });
     if (reselected) {
-      fireEvent.click(screen.getByRole('button', { name: 'Admin', exact: true }));
-      fireEvent.click(screen.getByRole('button', { name: 'Employee', exact: true }));
+      fireEvent.click(screen.getByRole('button', { name: 'Admin' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Employee' }));
     }
     fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
 
@@ -104,7 +104,7 @@ describe('member profile saves', () => {
   it('sends a changed role for server authorization', () => {
     render(<MemberDetailContent memberId="colleague" />);
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Admin', exact: true }));
+    fireEvent.click(screen.getByRole('button', { name: 'Admin' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
 
     expect(state.updateMember).toHaveBeenCalledWith(

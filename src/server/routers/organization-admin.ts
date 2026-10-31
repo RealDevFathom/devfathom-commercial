@@ -73,8 +73,9 @@ function organizationId(ctx: { session: { user: { organizationId?: string } } })
   return id;
 }
 
-// Member assignment and role-template edits both grant/revoke access. Keep the
-// admin gate, and honor a role DENY before the caller can alter its own policy.
+// Member assignments, role templates, provisioning credentials, and password
+// resets can all grant access. Keep the admin gate and honor a role DENY before
+// the caller can alter its policy or assume a less restricted member's identity.
 const roleAdminProcedure = adminProcedure.use(async ({ ctx, next }) => {
   const allowed = await can(subjectFromSession(ctx.session.user), 'team:setRole', undefined, {
     source: 'TRPC',
@@ -680,7 +681,7 @@ export const organizationAdminRouter = router({
       return created;
     }),
 
-  resetMemberPassword: adminProcedure
+  resetMemberPassword: roleAdminProcedure
     .input(z.object({ id: z.string(), password: passwordSchema.min(12).max(256) }))
     .mutation(async ({ ctx, input }) => {
       const id = organizationId(ctx);
@@ -770,7 +771,7 @@ export const organizationAdminRouter = router({
       return { jobId: job.id };
     }),
 
-  createScimToken: adminProcedure
+  createScimToken: roleAdminProcedure
     .input(
       z.object({
         name: z.string().trim().min(2).max(150),
@@ -805,7 +806,7 @@ export const organizationAdminRouter = router({
       return { ...saved, tokenHash: undefined, token };
     }),
 
-  revokeScimToken: adminProcedure
+  revokeScimToken: roleAdminProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const id = organizationId(ctx);
