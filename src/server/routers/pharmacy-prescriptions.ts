@@ -260,8 +260,8 @@ export const pharmacyPrescriptionsRouter = router({
     .input(
       z
         .object({
-          patientId: z.string().min(1),
-          prescriberId: z.string().min(1),
+          patientId: z.string().min(1).max(200),
+          prescriberId: z.string().min(1).max(200),
           sourceKind: z.enum(['PAPER_IMAGE', 'WHATSAPP_PHOTO']),
           sourceFileRef: prescriptionFileRefSchema,
           custodyState: z
@@ -275,14 +275,15 @@ export const pharmacyPrescriptionsRouter = router({
               z
                 .object({
                   lineNumber: z.number().int().positive(),
-                  medicineId: z.string().min(1),
-                  presentationId: z.string().min(1),
+                  medicineId: z.string().min(1).max(200),
+                  presentationId: z.string().min(1).max(200),
                   authorizedCanonicalUnits: z.number().int().positive(),
-                  directions: z.string().trim().min(1),
+                  directions: z.string().trim().min(1).max(2_000),
                 })
                 .strict()
             )
-            .min(1),
+            .min(1)
+            .max(30),
         })
         .strict()
     )

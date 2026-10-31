@@ -436,22 +436,23 @@ const purchasingRouter = router({
       z
         .object({
           reference: z.string().trim().min(1).max(100),
-          branchId: z.string().min(1).optional(),
+          branchId: z.string().min(1).max(200).optional(),
           neededBy: z.date().optional(),
           note: z.string().trim().max(2000).optional(),
           lines: z
             .array(
               z
                 .object({
-                  medicineId: z.string().min(1),
-                  packLevelId: z.string().min(1),
+                  medicineId: z.string().min(1).max(200),
+                  packLevelId: z.string().min(1).max(200),
                   quantityPacks: z.number().int().positive(),
                   canonicalUnitsPerPack: z.number().int().positive(),
                   note: z.string().trim().max(500).optional(),
                 })
                 .strict()
             )
-            .min(1),
+            .min(1)
+            .max(100),
         })
         .strict()
     )
