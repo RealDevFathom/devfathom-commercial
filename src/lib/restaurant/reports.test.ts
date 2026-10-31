@@ -218,7 +218,7 @@ describe('restaurant catering report', () => {
 
   it('aggregates across every cursor page while retaining only the bounded detail rows', async () => {
     const orders = Array.from({ length: 1001 }, (_, index) => ({
-      id: `o${String(index + 1).padStart(3, '0')}`,
+      id: `o${String(index + 1).padStart(4, '0')}`,
       organizationId: 'org1',
       eventName: `Event ${index + 1}`,
       eventDate: new Date('2026-01-10T00:00:00Z'),
@@ -297,7 +297,7 @@ describe('restaurant catering report', () => {
     expect(findMany.mock.calls[0][0]).not.toHaveProperty('cursor');
     expect(findMany.mock.calls[1][0]).toMatchObject({
       take: 500,
-      cursor: { id: 'o500' },
+      cursor: { id: 'o0500' },
       skip: 1,
     });
     expect(findMany.mock.calls[2][0]).toMatchObject({
