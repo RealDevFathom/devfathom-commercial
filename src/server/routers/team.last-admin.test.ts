@@ -121,6 +121,9 @@ describe('team last-admin serialization', () => {
     expect(mocks.queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.userCount.mock.invocationCallOrder[0]!
     );
+    expect(mocks.queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.userFindUnique.mock.invocationCallOrder[0]!
+    );
     expect(mocks.userUpdate).not.toHaveBeenCalled();
   });
 
@@ -136,7 +139,103 @@ describe('team last-admin serialization', () => {
     expect(mocks.userCount).toHaveBeenCalledWith({
       where: { organizationId: 'org_a', role: 'ADMIN', status: 'ACTIVE' },
     });
+    expect(mocks.queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.userFindUnique.mock.invocationCallOrder[0]!
+    );
     expect(mocks.userUpdate).not.toHaveBeenCalled();
+  });
+
+  it.each([{ role: 'ADMIN' as const }, { status: 'ACTIVE' as const }])(
+    'locks role/status changes %j before reading the member',
+    async (change) => {
+      mocks.userFindUnique.mockResolvedValue({ role: 'EMPLOYEE', status: 'INACTIVE' });
+
+      await caller().adminUpdateMember({ id: 'admin_target', ...change });
+
+      expect(mocks.queryRaw).toHaveBeenCalledOnce();
+      expect(mocks.queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+        mocks.userFindUnique.mock.invocationCallOrder[0]!
+      );
+      expect(mocks.userCount).not.toHaveBeenCalled();
+      expect(mocks.userUpdate).toHaveBeenCalledWith({
+        where: { id: 'admin_target' },
+        data: change,
+      });
+    }
+  );
+
+  describe.each([
+    { role: 'ADMIN', status: 'INACTIVE' },
+    { role: 'ADMIN', status: 'ON_LEAVE' },
+    { role: 'EMPLOYEE', status: 'ACTIVE' },
+  ])('when the target starts as $status $role', (initial) => {
+    it.each(['demote', 'deactivate', 'layoff'] as const)(
+      'rechecks the member before a delayed %s can remove the last active admin',
+      async (operation) => {
+        const users = new Map([
+          ['admin_actor', { id: 'admin_actor', role: 'ADMIN', status: 'ACTIVE' }],
+          ['admin_target', { id: 'admin_target', ...initial }],
+        ]);
+        let firstTransaction = true;
+        const raceDb: TeamDb = {
+          ...db,
+          user: {
+            findUnique: vi.fn(async ({ where }: { where: { id: string } }) => ({
+              ...users.get(where.id)!,
+              name: 'Admin',
+              email: 'admin@example.test',
+            })),
+            count: vi.fn(
+              async () =>
+                [...users.values()].filter((u) => u.role === 'ADMIN' && u.status === 'ACTIVE')
+                  .length
+            ),
+            update: vi.fn(async ({ where, data }) => {
+              const updated = { ...users.get(where.id)!, ...data };
+              users.set(where.id, updated);
+              return updated;
+            }),
+          },
+          $transaction: async (run) => {
+            if (firstTransaction) {
+              firstTransaction = false;
+              // Another request promotes/reactivates B and demotes A before the
+              // delayed request starts its transaction. An earlier snapshot of B
+              // must not let that request skip the last-admin guard.
+              await caller(raceDb).adminUpdateMember({
+                id: 'admin_target',
+                role: 'ADMIN',
+                status: 'ACTIVE',
+              });
+              await caller(raceDb).adminUpdateMember({ id: 'admin_actor', role: 'EMPLOYEE' });
+            }
+            return run(raceDb);
+          },
+        };
+
+        const request =
+          operation === 'layoff'
+            ? caller(raceDb).layOffMember({ id: 'admin_target', reason: 'Position eliminated' })
+            : caller(raceDb).adminUpdateMember({
+                id: 'admin_target',
+                ...(operation === 'demote'
+                  ? { role: 'EMPLOYEE' as const }
+                  : { status: 'INACTIVE' as const }),
+              });
+
+        await expect(request).rejects.toMatchObject({
+          code: 'BAD_REQUEST',
+          message:
+            operation === 'layoff'
+              ? 'You cannot lay off the last active admin'
+              : 'Cannot demote or deactivate the last active admin.',
+        });
+        expect(
+          [...users.values()].filter((u) => u.role === 'ADMIN' && u.status === 'ACTIVE')
+        ).toEqual([{ id: 'admin_target', role: 'ADMIN', status: 'ACTIVE' }]);
+        expect(mocks.sendEmail).not.toHaveBeenCalled();
+      }
+    );
   });
 
   it('serializes concurrent demotions so one of two active admins remains', async () => {
@@ -153,14 +252,22 @@ describe('team last-admin serialization', () => {
         }) as typeof mocks.userUpdate,
       },
       $transaction: async (run) => {
-        const prior = transactionTail;
-        let release!: () => void;
-        transactionTail = new Promise<void>((resolve) => (release = resolve));
-        await prior;
+        let release: (() => void) | undefined;
+        const tx: TeamDb = {
+          ...concurrentDb,
+          // Only the row lock serializes transactions; opening one alone must
+          // not make the concurrency test pass without a locking query.
+          $queryRaw: vi.fn(async () => {
+            const prior = transactionTail;
+            transactionTail = new Promise<void>((resolve) => (release = resolve));
+            await prior;
+            return [{ id: 'org_a' }];
+          }),
+        };
         try {
-          return await run(concurrentDb);
+          return await run(tx);
         } finally {
-          release();
+          release?.();
         }
       },
     };
