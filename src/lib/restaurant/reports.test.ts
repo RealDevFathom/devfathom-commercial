@@ -917,9 +917,22 @@ describe('restaurant wastage and stock movement reports', () => {
       );
       expect(sql).toContain("ELSE 'UNAVAILABLE'");
       expect(sql).toContain(`FILTER (WHERE "valuationSource" <> 'RECORDED')`);
-      expect(sql).toContain('movement."occurredAt" >=');
-      expect(sql).toContain('movement."occurredAt" <');
+      expect(sql).toContain(`(movement."occurredAt" AT TIME ZONE 'UTC') >=`);
+      expect(sql).toContain(`(movement."occurredAt" AT TIME ZONE 'UTC') <`);
+      expect(sql).toContain('AT TIME ZONE (CASE');
+      expect(sql).toContain(`TRANSLATE(LEFT(branch."timezone", 3), '+-', '-+')`);
+      expect(sql).toContain(`ELSE branch."timezone"`);
     }
+    expect(
+      queries.some((sql) =>
+        sql.includes(`("occurredAt" AT TIME ZONE 'UTC') AT TIME ZONE "branchTimezone"`)
+      )
+    ).toBe(true);
+    expect(
+      rawQueries.every(
+        (query) => query.values.includes('2026-01-01') && query.values.includes('2026-01-31')
+      )
+    ).toBe(true);
     expect(report.byDay[0]).toMatchObject({ day: '2026-01-02', movementCount: 3 });
     expect(report.byIngredient[0].canonicalUnit).toBe('kg');
   });
@@ -1136,9 +1149,11 @@ describe('restaurant wastage and stock movement reports', () => {
     expect(exported.content).toContain('REFERENCE,true');
     expect(exported.content.split('\n')).toHaveLength(5_001);
     expect(exported.truncated).toBe(true);
-    expect(queryText((db.$queryRaw as ReturnType<typeof vi.fn>).mock.calls[0]?.[0])).toContain(
-      'movement."locationId" ='
-    );
+    const sql = queryText((db.$queryRaw as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]);
+    expect(sql).toContain('movement."locationId" =');
+    expect(sql).toContain(`(movement."occurredAt" AT TIME ZONE 'UTC') >=`);
+    expect(sql).toContain(`(movement."occurredAt" AT TIME ZONE 'UTC') <`);
+    expect(sql).toContain(`("occurredAt" AT TIME ZONE 'UTC') AT TIME ZONE "branchTimezone"`);
   });
 });
 
@@ -1275,11 +1290,17 @@ describe('restaurant complete summaries with bounded details', () => {
             { status: 'DRAFT', count: 125 },
             { status: 'CLOSED', count: 125 },
           ];
-        if (text.includes('"supplierName"'))
+        if (text.includes('SUM(line."receivedQuantity"'))
           return [{ supplierName: 'Supplier', amount: new Prisma.Decimal(9000) }];
+        if (text.includes('SELECT discrepancy."id"'))
+          return discrepancies.map((item) => ({
+            id: item.id,
+            kind: item.kind,
+            receivedAt: item.purchaseReceipt.receivedAt,
+            supplierName: item.purchaseReceipt.supplier.name,
+          }));
         throw new Error(`Unexpected query: ${text}`);
       }),
-      restaurantReceivingDiscrepancy: { findMany: vi.fn(async () => discrepancies) },
     } as unknown as ScopedDb;
 
     const report = await readPurchasingReport(db, boundedRange);
@@ -1293,6 +1314,18 @@ describe('restaurant complete summaries with bounded details', () => {
       truncated: true,
     });
     expect(report.discrepancies).toHaveLength(200);
+    for (const [query] of (db.$queryRaw as ReturnType<typeof vi.fn>).mock.calls) {
+      const sql = queryText(query);
+      expect(sql).toContain('AT TIME ZONE (CASE');
+      expect(sql).toContain(`TRANSLATE(LEFT(branch."timezone", 3), '+-', '-+')`);
+      expect(sql).toContain(`ELSE branch."timezone"`);
+      expect(sql).toMatch(
+        /(?:purchase_order\."createdAt"|receipt\."receivedAt") AT TIME ZONE 'UTC'/
+      );
+      expect((query as { values: unknown[] }).values).toEqual(
+        expect.arrayContaining(['2026-01-01', '2026-01-31'])
+      );
+    }
   });
 
   it('aggregates every scheduled shift and labour fact without loading detail rows', async () => {
