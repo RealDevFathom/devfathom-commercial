@@ -171,13 +171,29 @@ export const pharmacyFinanceRouter = router({
         from: at.optional(),
         asOf: at.optional(),
         limit: z.number().int().min(1).max(200).default(200),
+        offset: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).default(0),
         format: z.enum(['JSON', 'CSV']).default('JSON'),
       })
     )
     .query(async ({ ctx, input }) => {
+      try {
+        const scoped = await scope(ctx, input.branchId);
+        const report = await supplierExpenseAging(ctx.db, scoped, input);
+        return input.format === 'CSV' ? { ...report, csv: nativeApAgingCsv(report) } : report;
+      } catch (error) { fail(error); }
+    }),
+
+  expenseSettlements: bookkeepingProcedure
+    .input(z.object({ branchId: id, offset: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).default(0) }))
+    .query(async ({ ctx, input }) => {
       const scoped = await scope(ctx, input.branchId);
-      const report = await supplierExpenseAging(ctx.db, scoped, input);
-      return input.format === 'CSV' ? { ...report, csv: nativeApAgingCsv(report) } : report;
+      const rows = await ctx.db.pharmacySupplierExpenseSettlement.findMany({
+        where: { organizationId: scoped.organizationId, invoice: { branchId: scoped.branchId }, status: 'POSTED' },
+        select: { id: true, reference: true, amountMinor: true, occurredAt: true, invoice: { select: { supplierInvoiceRef: true } } },
+        orderBy: [{ occurredAt: 'desc' }, { id: 'desc' }],
+        take: 51, skip: input.offset,
+      });
+      return { rows: rows.slice(0, 50), hasMore: rows.length > 50 };
     }),
 
   createExpenseInvoice: bookkeepingProcedure

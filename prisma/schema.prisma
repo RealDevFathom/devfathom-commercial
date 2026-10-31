@@ -3633,7 +3633,8 @@ model PharmacySupplierExpenseInvoice {
   visibilityAnchor  PharmacyBranch @relation("PharmacySupplierExpenseInvoiceVisibilityAnchor", fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_supplier_expense_invoices_branch_fkey")
 
   @@unique([organizationId, id], map: "pharmacy_supplier_expense_invoices_org_id_key")
-  @@unique([organizationId, supplierId, supplierInvoiceRef], map: "pharmacy_supplier_expense_invoices_identity_key")
+  // Active reference uniqueness is a migration-managed partial index:
+  // pharmacy_supplier_expense_invoices_identity_key (WHERE status <> 'VOID').
   @@unique([organizationId, idempotencyKey], map: "pharmacy_supplier_expense_invoices_idempotency_key")
   @@index([organizationId, branchId, dueAt, id], map: "pharmacy_supplier_expense_invoices_aging_idx")
   @@map("pharmacy_supplier_expense_invoices")

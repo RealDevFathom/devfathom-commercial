@@ -9,6 +9,7 @@ const migration = readFileSync(
 );
 
 const schema = readFileSync(resolve('prisma/schema.prisma'), 'utf8');
+const guards = readFileSync(resolve('prisma/migrations/20261031150000_pharmacy_native_ap_guards/migration.sql'), 'utf8');
 const actorMigration = readFileSync(
   resolve('prisma/migrations/20261031140000_pharmacy_native_ap_settlement_actor/migration.sql'), 'utf8'
 );
@@ -19,7 +20,15 @@ describe('native AP durable accounting migration', () => {
     expect(indices).toHaveLength(15);
     for (const name of indices) {
       expect(name.length).toBeLessThanOrEqual(63);
-      expect(schema).toContain(`map: "${name}"`);
+      if (name === 'pharmacy_supplier_expense_invoices_identity_key') {
+        const invoiceModel = schema.match(/model PharmacySupplierExpenseInvoice \{([\s\S]*?)\n\}/)?.[1];
+        expect(invoiceModel).toBeDefined();
+        expect(invoiceModel).not.toContain('@@unique([organizationId, supplierId, supplierInvoiceRef]');
+        expect(guards).toContain(`DROP INDEX ${name}`);
+        expect(guards).toMatch(/CREATE UNIQUE INDEX pharmacy_supplier_expense_invoices_identity_key[\s\S]*?WHERE status <> 'VOID'/);
+      } else {
+        expect(schema).toContain(`map: "${name}"`);
+      }
     }
     expect(new Set(indices).size).toBe(indices.length);
   });

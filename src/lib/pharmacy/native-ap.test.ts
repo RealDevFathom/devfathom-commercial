@@ -75,6 +75,10 @@ describe('native non-stock AP', () => {
     await expect(createSupplierExpenseInvoice(scoped(db), scope, createInput)).rejects.toThrow('INVALID_STATE');
     expect(postJournalEntry).not.toHaveBeenCalled();
     expect(db.auditLog.create).not.toHaveBeenCalled();
+    expect(db.pharmacySupplierExpenseInvoice.findFirst).toHaveBeenLastCalledWith({
+      where: { organizationId: scope.organizationId, supplierId: createInput.supplierId, supplierInvoiceRef: createInput.supplierInvoiceRef, status: { not: 'VOID' } },
+      select: { id: true },
+    });
   });
 
   it('takes the transaction key lock before reading a matching replay without rewriting evidence', async () => {
@@ -288,6 +292,22 @@ describe('native non-stock AP', () => {
     expect(db.$queryRaw.mock.calls[1]![0].strings.join('?')).not.toContain('i."dueAt" >=');
   });
 
+  it('uses an explicit issue-date filter and exposes the next page beyond the row bound', async () => {
+    const now = new Date('2026-10-26T12:00:00Z');
+    const from = new Date('2026-10-01Z');
+    const rows = Array.from({ length: 201 }, (_, index) => ({
+      id: `invoice-${index}`, dueAt: from, outstandingMinor: BigInt(100),
+    }));
+    const db = { $queryRaw: vi.fn().mockResolvedValueOnce([{ now }]).mockResolvedValueOnce(rows) };
+    const report = await supplierExpenseAging(scoped(db), scope, { from, offset: 200 });
+    expect(report.rows).toHaveLength(200);
+    expect(report.pagination).toEqual({ offset: 200, limit: 200, hasMore: true, nextOffset: 400 });
+    const statement = db.$queryRaw.mock.calls[1]![0] as Prisma.Sql;
+    expect(statement.strings.join('?')).toContain('i."issuedAt" >= ?');
+    expect(statement.values).toContain(from);
+    expect(statement.values.slice(-2)).toEqual([201, 200]);
+  });
+
   it('voids an unpaid invoice with a journal reversal, event and audit, and binds replay evidence', async () => {
     const db = {
       $queryRaw: vi.fn().mockResolvedValue([{ id: 'invoice-a', status: 'OPEN', issuedAt: new Date('2026-10-01Z'), journalEntryId: 'journal-a' }]),
@@ -322,7 +342,7 @@ describe('native non-stock AP', () => {
 
   it.each(['=cmd', '+cmd', '-cmd', '@cmd', '\t=cmd', '\r=cmd', '\n=cmd'])('escapes spreadsheet value %j and emits fixed native-only CSV columns', (reference) => {
     const csv = nativeApAgingCsv({
-      asOf: new Date(), from: new Date(), retrievedAt: new Date(), bounds: { maxRows: 200, maxWindowDays: 366 },
+      asOf: new Date(), from: new Date(), retrievedAt: new Date(), bounds: { maxRows: 200, maxWindowDays: 366 }, pagination: { offset: 0, limit: 200, hasMore: false, nextOffset: null },
       rows: [{ id: 'i', supplierInvoiceRef: reference, description: 'Power, "October"', issuedAt: new Date('2026-10-01Z'), dueAt: new Date('2026-10-02Z'), amountMinor: 100, outstandingMinor: 100, daysPastDue: 2 }],
     });
     expect(csv).toContain(`"'${reference}"`);

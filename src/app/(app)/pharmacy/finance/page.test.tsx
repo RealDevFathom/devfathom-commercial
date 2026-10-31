@@ -11,6 +11,9 @@ const mocks = vi.hoisted(() => ({
   financialStatements: vi.fn(),
   expenseAging: vi.fn(),
   expenseSuppliers: vi.fn(),
+  expenseSettlements: vi.fn(),
+  voidExpenseInvoice: vi.fn(),
+  reverseExpenseSettlement: vi.fn(),
   branches: vi.fn(),
   workspace: vi.fn(),
   marginComparison: vi.fn(),
@@ -74,9 +77,10 @@ beforeEach(() => {
   ]);
   mocks.expenseAging.mockResolvedValue({
     asOf: new Date(), from: new Date(), retrievedAt: new Date(),
-    bounds: { maxRows: 200, maxWindowDays: 366 }, rows: [], csv: '',
+    bounds: { maxRows: 200, maxWindowDays: 366 }, pagination: { offset: 0, limit: 200, hasMore: false, nextOffset: null }, rows: [], csv: '',
   });
   mocks.expenseSuppliers.mockResolvedValue([{ id: 'supplier-1', name: 'City Utilities' }]);
+  mocks.expenseSettlements.mockResolvedValue({ rows: [], hasMore: false });
   mocks.workspace.mockResolvedValue({
     settlementCandidates: [],
     settlementBatches: [],
@@ -269,13 +273,76 @@ function nativeApHtml(tree: ReactNode) {
   return container;
 }
 
+function financeAction(tree: ReactNode) {
+  let action: ((data: FormData) => Promise<void>) | undefined;
+  function visit(node: ReactNode) {
+    Children.forEach(node, child => {
+      if (!isValidElement<{ children?: ReactNode; action?: unknown }>(child)) return;
+      if (child.type === 'form' && typeof child.props.action === 'function') {
+        action = child.props.action as (data: FormData) => Promise<void>;
+      } else visit(child.props.children);
+    });
+  }
+  visit(tree);
+  if (!action) throw new Error('Expected Finance server action');
+  return action;
+}
+
 describe('native AP isolation and supplier selection', () => {
+  it.each([
+    { action: 'void-expense-invoice', id: 'invoiceId', value: 'invoice-1', mutation: mocks.voidExpenseInvoice },
+    { action: 'reverse-expense-settlement', id: 'settlementId', value: 'settlement-1', mutation: mocks.reverseExpenseSettlement },
+  ])('requires confirmation and routes $action through the native mutation', async ({ action, id, value, mutation }) => {
+    const perform = financeAction(await PharmacyFinancePage({ searchParams: Promise.resolve({}) }));
+    const data = new FormData();
+    for (const [key, field] of Object.entries({ action, branchId: 'branch_1', [id]: value, reason: 'Duplicate posting' })) data.set(key, field);
+    await expect(perform(data)).rejects.toThrow('NEXT_REDIRECT');
+    expect(mutation).not.toHaveBeenCalled();
+    data.set('confirmed', 'yes');
+    await expect(perform(data)).rejects.toThrow('NEXT_REDIRECT');
+    expect(mutation).toHaveBeenCalledExactlyOnceWith({
+      branchId: 'branch_1', [id]: value, reason: 'Duplicate posting', at: expect.any(Date), idempotencyKey: expect.any(String),
+    });
+  });
+
+  it('offers later invoice and payment pages while preserving branch and ledger filters', async () => {
+    mocks.expenseAging.mockResolvedValue({
+      asOf: new Date(), retrievedAt: new Date(), from: null, bounds: { maxRows: 200, maxWindowDays: 366 }, csv: '',
+      pagination: { offset: 200, limit: 200, hasMore: true, nextOffset: 400 },
+      rows: [{ id: 'later-invoice', supplierInvoiceRef: 'LATER', dueAt: new Date(), outstandingMinor: 500, daysPastDue: 0 }],
+    });
+    mocks.expenseSettlements.mockResolvedValue({ rows: [{ id: 'paid-settlement', reference: 'PAY', amountMinor: 100, invoice: { supplierInvoiceRef: 'PAID' } }], hasMore: true });
+    const tree = await PharmacyFinancePage({ searchParams: Promise.resolve({ branch: 'branch_2', apOffset: '200', apPaymentOffset: '50', ledgerFrom: '2026-08-01' }) });
+    expect(mocks.expenseAging).toHaveBeenCalledWith({ branchId: 'branch_2', format: 'CSV', limit: 200, offset: 200 });
+    expect(mocks.expenseSettlements).toHaveBeenCalledWith({ branchId: 'branch_2', offset: 50 });
+    const html = nativeApHtml(tree);
+    const next = html.querySelector('[aria-label="Supplier invoice pages"] a:last-child');
+    const params = new URL(next!.getAttribute('href')!, 'https://tenant.test').searchParams;
+    expect(Object.fromEntries(params)).toMatchObject({ branch: 'branch_2', apOffset: '400', ledgerFrom: '2026-08-01' });
+    expect(html.querySelector('select[name="invoiceId"] option[value="later-invoice"]')).not.toBeNull();
+    expect(html.querySelector('select[name="settlementId"] option[value="paid-settlement"]')?.textContent).toContain('PAID');
+    for (const action of ['void-expense-invoice', 'reverse-expense-settlement']) {
+      const form = html.querySelector(`input[value="${action}"]`)?.closest('form');
+      expect(form?.querySelector('input[name="reason"]')?.hasAttribute('required')).toBe(true);
+      expect(form?.querySelector('input[name="confirmed"]')?.hasAttribute('required')).toBe(true);
+    }
+  });
+
+  it('disables reversal when no posted payments exist and shows a read failure', async () => {
+    let html = nativeApHtml(await PharmacyFinancePage({ searchParams: Promise.resolve({}) }));
+    expect(html.querySelector('select[name="settlementId"]')?.hasAttribute('disabled')).toBe(true);
+    mocks.expenseSettlements.mockRejectedValue(new Error('unavailable'));
+    html = nativeApHtml(await PharmacyFinancePage({ searchParams: Promise.resolve({}) }));
+    expect(html.textContent).toContain('Invoice payments could not load');
+    expect(html.querySelector('select[name="settlementId"]')).toBeNull();
+  });
+
   it('retains all existing Finance sections when the aging reader fails', async () => {
     mocks.expenseAging.mockRejectedValue(new Error('clock skew or database failure'));
     const tree = await PharmacyFinancePage({ searchParams: Promise.resolve({}) });
-    expect(sectionProps(tree, LedgerReportsSection).branchId).toBe('branch_1');
+    expect(sectionProps(tree, LedgerReportsSection).branch.id).toBe('branch_1');
     expect(sectionProps(tree, FinancialStatements).branchId).toBe('branch_1');
-    expect(sectionProps(tree, MarginComparisonSection).branchId).toBe('branch_1');
+    expect(sectionProps(tree, MarginComparisonSection).branch.id).toBe('branch_1');
     const html = nativeApHtml(tree);
     expect(html.querySelector('[role="alert"]')?.textContent).toContain('Supplier aging could not load');
     expect(html.querySelector('[name="supplierId"] option[value="supplier-1"]')?.textContent).toBe('City Utilities');
@@ -284,7 +351,7 @@ describe('native AP isolation and supplier selection', () => {
 
   it('uses authorized supplier names and requests a database-clock snapshot with no age cutoff', async () => {
     mocks.expenseAging.mockResolvedValue({
-      asOf: new Date(), retrievedAt: new Date(), from: new Date(), bounds: { maxRows: 200, maxWindowDays: 366 }, csv: '',
+      asOf: new Date(), retrievedAt: new Date(), from: new Date(), bounds: { maxRows: 200, maxWindowDays: 366 }, pagination: { offset: 0, limit: 200, hasMore: false, nextOffset: null }, csv: '',
       rows: [{ id: 'old-invoice', supplierInvoiceRef: 'OLD-2025', dueAt: new Date('2025-02-01Z'), outstandingMinor: 500, daysPastDue: 588 }],
     });
     const tree = await PharmacyFinancePage({ searchParams: Promise.resolve({ branch: 'branch_2' }) });
@@ -300,7 +367,7 @@ describe('native AP isolation and supplier selection', () => {
     if (suppliers === null) mocks.expenseSuppliers.mockRejectedValue(new Error('unavailable'));
     else mocks.expenseSuppliers.mockResolvedValue(suppliers);
     const tree = await PharmacyFinancePage({ searchParams: Promise.resolve({}) });
-    expect(sectionProps(tree, LedgerReportsSection).branchId).toBe('branch_1');
+    expect(sectionProps(tree, LedgerReportsSection).branch.id).toBe('branch_1');
     const html = nativeApHtml(tree);
     expect(html.querySelector('select[name="supplierId"]')?.hasAttribute('disabled')).toBe(true);
     const createForm = html.querySelector('[value="create-expense-invoice"]')?.closest('form');

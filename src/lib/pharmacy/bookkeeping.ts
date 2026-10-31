@@ -221,13 +221,7 @@ export async function reverseBookkeepingTransaction(
   // This interlock deliberately runs before the canonical transaction's status/replay
   // handling.  Otherwise a caller could use a guessed transaction id and learn or
   // replay the reversal without proving which tenant/branch invoice owns it.
-  const nativeSettlement = await (
-    db as ScopedDb & {
-      pharmacySupplierExpenseSettlement?: {
-        findFirst(args: unknown): Promise<{ id: string } | null>;
-      };
-    }
-  ).pharmacySupplierExpenseSettlement?.findFirst({
+  const nativeSettlement = await db.pharmacySupplierExpenseSettlement.findFirst({
     where: {
       organizationId: scope.organizationId,
       bookkeepingTransactionId: input.transactionId,

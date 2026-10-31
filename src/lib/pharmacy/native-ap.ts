@@ -113,7 +113,7 @@ export async function createSupplierExpenseInvoice(
     FOR UPDATE
   `);
   const duplicate = await db.pharmacySupplierExpenseInvoice.findFirst({
-    where: { organizationId: scope.organizationId, supplierId: input.supplierId, supplierInvoiceRef: input.supplierInvoiceRef },
+    where: { organizationId: scope.organizationId, supplierId: input.supplierId, supplierInvoiceRef: input.supplierInvoiceRef, status: { not: 'VOID' } },
     select: { id: true },
   });
   if (duplicate) throw new PharmacyBookkeepingError('INVALID_STATE');
@@ -362,17 +362,18 @@ export async function voidSupplierExpenseInvoice(
   return { id: invoice.id, status: 'VOID' as const };
 }
 
-// `from` is retained as a validated report-range hint for existing callers;
-// outstanding balances are bounded by row count, never by their age.
-export type NativeApAgingInput = { asOf?: Date; from?: Date; limit?: number };
+// Without an explicit issue-date filter, include outstanding invoices of every age.
+export type NativeApAgingInput = { asOf?: Date; from?: Date; limit?: number; offset?: number };
 export async function supplierExpenseAging(database: ScopedDb, scope: Omit<BookkeepingScope, 'actorId'>, input: NativeApAgingInput) {
   const db = database;
   const nowRows = await db.$queryRaw<Array<{ now: Date }>>(Prisma.sql`SELECT CURRENT_TIMESTAMP AS now`);
   const retrievedAt = new Date(nowRows[0]!.now);
   const asOf = input.asOf ?? retrievedAt;
-  const from = input.from ?? new Date(asOf.getTime() - NATIVE_AP_MAX_WINDOW_DAYS * DAY);
+  const from = input.from ?? null;
   const limit = input.limit ?? NATIVE_AP_MAX_ROWS;
-  if (limit < 1 || limit > NATIVE_AP_MAX_ROWS || from > asOf || asOf > retrievedAt || asOf.getTime() - from.getTime() > NATIVE_AP_MAX_WINDOW_DAYS * DAY)
+  const offset = input.offset ?? 0;
+  if (!Number.isInteger(limit) || limit < 1 || limit > NATIVE_AP_MAX_ROWS || !Number.isSafeInteger(offset) || offset < 0 ||
+    !Number.isFinite(asOf.getTime()) || (from && (!Number.isFinite(from.getTime()) || from > asOf || asOf.getTime() - from.getTime() > NATIVE_AP_MAX_WINDOW_DAYS * DAY)) || asOf > retrievedAt)
     throw new PharmacyBookkeepingError('INVALID_STATE');
   const rows = await db.$queryRaw<Array<{ id: string; supplierInvoiceRef: string; description: string; issuedAt: Date; dueAt: Date; amountMinor: number; outstandingMinor: bigint }>>(Prisma.sql`
     SELECT i.id, i."supplierInvoiceRef", i.description, i."issuedAt", i."dueAt", i."amountMinor",
@@ -383,6 +384,7 @@ export async function supplierExpenseAging(database: ScopedDb, scope: Omit<Bookk
     LEFT JOIN "pharmacy_supplier_expense_settlements" s ON s."organizationId"=i."organizationId" AND s."invoiceId"=i.id
     LEFT JOIN "pharmacy_supplier_expense_settlement_reversals" r ON r."organizationId"=s."organizationId" AND r."settlementId"=s.id
     WHERE i."organizationId"=${scope.organizationId} AND i."branchId"=${scope.branchId}
+      AND (${from}::timestamp IS NULL OR i."issuedAt" >= ${from})
       AND i."issuedAt" <= ${asOf} AND i."createdAt" <= ${asOf} AND i."createdAt" <= ${retrievedAt}
       AND NOT EXISTS (
         SELECT 1 FROM "pharmacy_supplier_expense_invoice_events" v
@@ -392,9 +394,10 @@ export async function supplierExpenseAging(database: ScopedDb, scope: Omit<Bookk
     GROUP BY i.id HAVING i."amountMinor" - COALESCE(SUM(s."amountMinor") FILTER (WHERE s."occurredAt" <= ${asOf}
       AND s."createdAt" <= ${asOf} AND s."createdAt" <= ${retrievedAt}
       AND (r.id IS NULL OR NOT (r."reversedAt" <= ${asOf} AND r."createdAt" <= ${asOf} AND r."createdAt" <= ${retrievedAt}))),0) > 0
-    ORDER BY i."dueAt" ASC, i.id ASC LIMIT ${limit}
+    ORDER BY i."dueAt" ASC, i.id ASC LIMIT ${limit + 1} OFFSET ${offset}
   `);
-  return { asOf, from, retrievedAt, bounds: { maxRows: NATIVE_AP_MAX_ROWS, maxWindowDays: NATIVE_AP_MAX_WINDOW_DAYS }, rows: rows.map(row => ({ ...row, outstandingMinor: Number(row.outstandingMinor), daysPastDue: Math.max(0, Math.floor((asOf.getTime() - new Date(row.dueAt).getTime()) / DAY)) })) };
+  const hasMore = rows.length > limit;
+  return { asOf, from, retrievedAt, pagination: { offset, limit, hasMore, nextOffset: hasMore ? offset + limit : null }, bounds: { maxRows: NATIVE_AP_MAX_ROWS, maxWindowDays: NATIVE_AP_MAX_WINDOW_DAYS }, rows: rows.slice(0, limit).map(row => ({ ...row, outstandingMinor: Number(row.outstandingMinor), daysPastDue: Math.max(0, Math.floor((asOf.getTime() - new Date(row.dueAt).getTime()) / DAY)) })) };
 }
 
 export function nativeApAgingCsv(report: Awaited<ReturnType<typeof supplierExpenseAging>>) {

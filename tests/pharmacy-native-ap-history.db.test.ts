@@ -57,11 +57,25 @@ describeIfDatabase('native AP historical aging in PostgreSQL', () => {
     const report = await supplierExpenseAging(
       database,
       { organizationId: 'org', branchId: 'branch' },
-      { from: new Date('2026-01-01Z'), asOf: new Date('2026-02-01Z') }
+      { asOf: new Date('2026-02-01Z') }
     );
     expect(report.rows).toEqual([
       expect.objectContaining({ id: 'old-invoice', outstandingMinor: 500 }),
       expect.objectContaining({ id: 'invoice', outstandingMinor: 100 }),
     ]);
+    const filtered = await supplierExpenseAging(database, { organizationId: 'org', branchId: 'branch' }, {
+      from: new Date('2026-01-01Z'), asOf: new Date('2026-02-01Z'),
+    });
+    expect(filtered.rows).toEqual([expect.objectContaining({ id: 'invoice', outstandingMinor: 100 })]);
+    const firstPage = await supplierExpenseAging(database, { organizationId: 'org', branchId: 'branch' }, {
+      asOf: new Date('2026-02-01Z'), limit: 1,
+    });
+    expect(firstPage.rows.map(row => row.id)).toEqual(['old-invoice']);
+    expect(firstPage.pagination).toMatchObject({ hasMore: true, nextOffset: 1 });
+    const nextPage = await supplierExpenseAging(database, { organizationId: 'org', branchId: 'branch' }, {
+      asOf: new Date('2026-02-01Z'), limit: 1, offset: firstPage.pagination.nextOffset!,
+    });
+    expect(nextPage.rows.map(row => row.id)).toEqual(['invoice']);
+    expect(nextPage.pagination).toMatchObject({ hasMore: false, nextOffset: null });
   });
 });

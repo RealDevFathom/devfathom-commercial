@@ -4,6 +4,7 @@ import {
   bookkeepingJournalLines,
   createSettlementBatch,
   postBookkeepingTransaction,
+  reverseBookkeepingTransaction,
 } from './bookkeeping';
 
 const postJournalEntry = vi.fn();
@@ -66,6 +67,33 @@ describe('pharmacy bookkeeping journal mappings', () => {
     ).rejects.toMatchObject({ reason: 'INVALID_STATE' });
     expect(create).not.toHaveBeenCalled();
     expect(postJournalEntry).not.toHaveBeenCalled();
+  });
+
+  it('rejects a generic reversal of a native payment before canonical status or replay reads', async () => {
+    const findFirst = vi.fn();
+    const db = {
+      pharmacyAccountingPeriod: { findFirst: vi.fn().mockResolvedValue(null) },
+      pharmacySupplierExpenseSettlement: { findFirst: vi.fn().mockResolvedValue({ id: 'native-payment' }) },
+      pharmacyBookkeepingTransaction: { findFirst },
+    } as unknown as ScopedDb;
+    await expect(reverseBookkeepingTransaction(db, {
+      organizationId: 'org-a', branchId: 'branch-a', actorId: 'accountant-a',
+    }, { transactionId: 'transaction-a', at: base.occurredAt, reason: 'Mistake', idempotencyKey: 'reverse' }))
+      .rejects.toMatchObject({ reason: 'INVALID_STATE' });
+    expect(findFirst).not.toHaveBeenCalled();
+  });
+
+  it('fails closed if the native payment delegate is absent', async () => {
+    const findFirst = vi.fn();
+    const db = {
+      pharmacyAccountingPeriod: { findFirst: vi.fn().mockResolvedValue(null) },
+      pharmacyBookkeepingTransaction: { findFirst },
+    } as unknown as ScopedDb;
+    await expect(reverseBookkeepingTransaction(db, {
+      organizationId: 'org-a', branchId: 'branch-a', actorId: 'accountant-a',
+    }, { transactionId: 'transaction-a', at: base.occurredAt, reason: 'Mistake', idempotencyKey: 'reverse' }))
+      .rejects.toThrow(TypeError);
+    expect(findFirst).not.toHaveBeenCalled();
   });
 });
 
