@@ -11,8 +11,12 @@ vi.mock('@/lib/restaurant/operator-credentials', () => ({
 }));
 
 import { can } from '@/lib/abac';
-import { verifyOperatorCredential } from '@/lib/restaurant/operator-credentials';
-import { listGoodsReceiptPinWitnesses, verifyControlledPurchaseWitness } from './goods-receipt';
+import { isLockedOut, verifyOperatorCredential } from '@/lib/restaurant/operator-credentials';
+import {
+  listGoodsReceiptPinWitnesses,
+  listGoodsReceiptQualifiedPersons,
+  verifyControlledPurchaseWitness,
+} from './goods-receipt';
 
 const credential = {
   id: 'cred',
@@ -54,12 +58,13 @@ function witnessDb() {
   return { db, update };
 }
 
-describe('verifyControlledPurchaseWitness', () => {
-  beforeEach(() => {
-    vi.mocked(can).mockReset().mockResolvedValue(true);
-    vi.mocked(verifyOperatorCredential).mockReset().mockResolvedValue(false);
-  });
+beforeEach(() => {
+  vi.mocked(can).mockReset().mockResolvedValue(true);
+  vi.mocked(verifyOperatorCredential).mockReset().mockResolvedValue(false);
+  vi.mocked(isLockedOut).mockReset().mockReturnValue(false);
+});
 
+describe('verifyControlledPurchaseWitness', () => {
   it('does not ask for a PIN when the receipt has no controlled line', async () => {
     const { db } = witnessDb();
     vi.mocked(db.medicine.findMany).mockResolvedValueOnce([]);
@@ -146,40 +151,39 @@ describe('listGoodsReceiptPinWitnesses', () => {
   it.each([
     ['has no named qualified person', null],
     ['names the current actor', 'receiver'],
-  ])(
-    'does not enumerate profiles when the receipt %s',
-    async (_case, qualifiedPersonUserId) => {
-      const findFirst = vi.fn();
-      const db = {
-        pharmacyGoodsReceipt: {
-          findFirst: vi.fn().mockResolvedValue({ qualifiedPersonUserId }),
-        },
-        restaurantStaffProfile: { findFirst },
-      } as unknown as ScopedDb;
+  ])('does not enumerate profiles when the receipt %s', async (_case, qualifiedPersonUserId) => {
+    const findMany = vi.fn();
+    const db = {
+      pharmacyGoodsReceipt: {
+        findFirst: vi.fn().mockResolvedValue({ qualifiedPersonUserId }),
+      },
+      restaurantStaffProfile: { findMany },
+    } as unknown as ScopedDb;
 
-      await expect(
-        listGoodsReceiptPinWitnesses(
-          db,
-          { organizationId: 'org', branchId: 'branch', actorId: 'receiver' },
-          'receipt'
-        )
-      ).resolves.toEqual([]);
-      expect(findFirst).not.toHaveBeenCalled();
-    }
-  );
+    await expect(
+      listGoodsReceiptPinWitnesses(
+        db,
+        { organizationId: 'org', branchId: 'branch', actorId: 'receiver' },
+        'receipt'
+      )
+    ).resolves.toEqual([]);
+    expect(findMany).not.toHaveBeenCalled();
+  });
 
   it('returns only the receipt qualified person assigned to its branch', async () => {
-    const findFirst = vi.fn().mockResolvedValue({
-      id: 'staff',
-      displayName: 'Named pharmacist',
-      user: credential.staffProfile.user,
-      credentials: [credential],
-    });
+    const findMany = vi.fn().mockResolvedValue([
+      {
+        id: 'staff',
+        displayName: 'Named pharmacist',
+        user: credential.staffProfile.user,
+        credentials: [credential],
+      },
+    ]);
     const db = {
       pharmacyGoodsReceipt: {
         findFirst: vi.fn().mockResolvedValue({ qualifiedPersonUserId: 'pharmacist' }),
       },
-      restaurantStaffProfile: { findFirst },
+      restaurantStaffProfile: { findMany },
     } as unknown as ScopedDb;
 
     await expect(
@@ -189,7 +193,7 @@ describe('listGoodsReceiptPinWitnesses', () => {
         'receipt'
       )
     ).resolves.toEqual([{ id: 'staff', name: 'Named pharmacist' }]);
-    expect(findFirst).toHaveBeenCalledWith(
+    expect(findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
           organizationId: 'org',
@@ -214,7 +218,7 @@ describe('listGoodsReceiptPinWitnesses', () => {
       pharmacyGoodsReceipt: {
         findFirst: vi.fn().mockResolvedValue({ qualifiedPersonUserId: 'pharmacist' }),
       },
-      restaurantStaffProfile: { findFirst: vi.fn().mockResolvedValue(null) },
+      restaurantStaffProfile: { findMany: vi.fn().mockResolvedValue([]) },
     } as unknown as ScopedDb;
 
     await expect(
@@ -228,11 +232,11 @@ describe('listGoodsReceiptPinWitnesses', () => {
   });
 
   it('does not enumerate profiles when the receipt belongs to another branch', async () => {
-    const findFirst = vi.fn();
+    const findMany = vi.fn();
     const receiptFindFirst = vi.fn().mockResolvedValue(null);
     const db = {
       pharmacyGoodsReceipt: { findFirst: receiptFindFirst },
-      restaurantStaffProfile: { findFirst },
+      restaurantStaffProfile: { findMany },
     } as unknown as ScopedDb;
 
     await expect(
@@ -246,6 +250,48 @@ describe('listGoodsReceiptPinWitnesses', () => {
       where: { id: 'receipt', organizationId: 'org', branchId: 'branch' },
       select: { qualifiedPersonUserId: true },
     });
-    expect(findFirst).not.toHaveBeenCalled();
+    expect(findMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('goods receipt qualified-person eligibility', () => {
+  it.each(['locked', 'no-PIN', 'no-dispense-permission'])(
+    'excludes a %s person from drafting and correction',
+    async (kind) => {
+      vi.mocked(isLockedOut).mockReturnValue(kind === 'locked');
+      vi.mocked(can).mockResolvedValue(kind !== 'no-dispense-permission');
+      const db = {
+        restaurantStaffProfile: {
+          findMany: vi.fn().mockResolvedValue([
+            {
+              id: 'staff',
+              displayName: 'Pharmacist',
+              user: credential.staffProfile.user,
+              credentials: kind === 'no-PIN' ? [] : [credential],
+            },
+          ]),
+        },
+      } as unknown as ScopedDb;
+      await expect(
+        listGoodsReceiptQualifiedPersons(
+          db,
+          { organizationId: 'org', branchId: 'branch', actorId: 'receiver' },
+          'pharmacist'
+        )
+      ).resolves.toEqual([]);
+    }
+  );
+
+  it('excludes the receiving actor without querying PIN holders', async () => {
+    const findMany = vi.fn();
+    const db = { restaurantStaffProfile: { findMany } } as unknown as ScopedDb;
+    await expect(
+      listGoodsReceiptQualifiedPersons(
+        db,
+        { organizationId: 'org', branchId: 'branch', actorId: 'receiver' },
+        'receiver'
+      )
+    ).resolves.toEqual([]);
+    expect(findMany).not.toHaveBeenCalled();
   });
 });

@@ -115,6 +115,11 @@ const DOMAIN_MESSAGES: Record<string, { message: string; field?: string }> = {
     field: 'stockLocationId',
   },
   NOT_FOUND: { message: 'That record no longer exists. Reload the page.' },
+  QUALIFIED_PERSON_INELIGIBLE: {
+    message:
+      'Choose a different active person assigned to this branch with dispensing permission and an available PIN.',
+    field: 'qualifiedPersonUserId',
+  },
   CONTROLLED_WITNESS_REQUIRED: {
     message:
       'A controlled medicine needs the qualified person named on the receipt to enter their PIN before it can be posted.',
@@ -142,6 +147,7 @@ const DOMAIN_MESSAGES: Record<string, { message: string; field?: string }> = {
 };
 
 const KNOWN_REJECTIONS = new Set([
+  'QUALIFIED_PERSON_INELIGIBLE',
   'DUPLICATE_SERIAL',
   'EXPIRED_PACK',
   'GS1_INVALID',

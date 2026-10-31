@@ -98,10 +98,21 @@ export async function listGoodsReceiptPinWitnesses(
   });
   if (!receipt?.qualifiedPersonUserId || receipt.qualifiedPersonUserId === scope.actorId) return [];
 
-  const profile = await db.restaurantStaffProfile.findFirst({
+  const people = await listGoodsReceiptQualifiedPersons(db, scope, receipt.qualifiedPersonUserId);
+  return people.map(({ id, name }) => ({ id, name }));
+}
+
+/** Eligible named people for new receipts and correction of unposted drafts. */
+export async function listGoodsReceiptQualifiedPersons(
+  db: ScopedDb,
+  scope: ReceivingScope,
+  qualifiedPersonUserId?: string
+): Promise<Array<{ id: string; userId: string; name: string }>> {
+  if (qualifiedPersonUserId === scope.actorId) return [];
+  const profiles = await db.restaurantStaffProfile.findMany({
     where: {
       organizationId: scope.organizationId,
-      userId: receipt.qualifiedPersonUserId,
+      userId: qualifiedPersonUserId ?? { not: scope.actorId },
       status: 'ACTIVE',
       user: {
         organizationId: scope.organizationId,
@@ -124,16 +135,20 @@ export async function listGoodsReceiptPinWitnesses(
       },
     },
   });
-  const credential = profile?.credentials[0];
-  if (
-    !profile?.user ||
-    !credential ||
-    isLockedOut(credential, new Date()) ||
-    !(await can(profile.user, 'pharmacy:dispense', undefined, { db }))
-  ) {
-    return [];
+  const eligible: Array<{ id: string; userId: string; name: string }> = [];
+  const now = new Date();
+  for (const profile of profiles) {
+    const credential = profile.credentials[0];
+    if (
+      profile.user &&
+      credential &&
+      !isLockedOut(credential, now) &&
+      (await can(profile.user, 'pharmacy:dispense', undefined, { db, now }))
+    ) {
+      eligible.push({ id: profile.id, userId: profile.user.id, name: profile.displayName });
+    }
   }
-  return [{ id: profile.id, name: profile.displayName }];
+  return eligible;
 }
 
 /**

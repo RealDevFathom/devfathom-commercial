@@ -77,7 +77,7 @@ describe.each(['safety', 'purchasing'] as const)('%s witness enumeration', (surf
         where: { id: 'receipt', organizationId: 'org', branchId: 'branch' },
         select: { qualifiedPersonUserId: true },
       });
-      expect(f.db.restaurantStaffProfile.findFirst).toHaveBeenCalledWith(
+      expect(f.db.restaurantStaffProfile.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
           where: expect.objectContaining({
             organizationId: 'org',

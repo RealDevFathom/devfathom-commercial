@@ -52,6 +52,7 @@ export class PharmacyReceivingError extends Error {
       | 'CROSS_TENANT_REFERENCE'
       | 'CROSS_BRANCH_REFERENCE'
       | 'CONTROLLED_WITNESS_REQUIRED'
+      | 'QUALIFIED_PERSON_INELIGIBLE'
       | 'DUPLICATE_SERIAL'
       | 'GS1_INVALID'
       | 'GTIN_MEDICINE_MISMATCH'
