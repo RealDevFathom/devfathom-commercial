@@ -9,10 +9,8 @@ import { sendEmail, templates, appUrl } from '@/lib/email';
 import {
   fromCurrencyGroups,
   diffByCurrency,
-  sumByCurrency,
   currenciesPresent,
   moneyLabel,
-  type CurrencyAmount,
 } from '@/lib/finance/currency';
 import { invoiceStatusTransitionError, invoiceStatusUpdate } from '@/lib/finance/invoice-status';
 import {
@@ -22,14 +20,6 @@ import {
   roundMoney,
   sumMoney,
 } from '@/lib/finance/money';
-
-// Monthly-equivalent multiplier for a recurring expense's billing interval, so an
-// ongoing subscription's run-rate can be folded into burn/profit (FIN-05).
-const RECURRING_MONTHLY_FACTOR: Record<string, number> = {
-  monthly: 1,
-  quarterly: 1 / 3,
-  yearly: 1 / 12,
-};
 
 // Money columns (transaction.amount, invoice totals, etc.) are Decimal(12,2), so the
 // largest value Postgres will accept is 9,999,999,999.99. Bound amounts here so an
@@ -863,7 +853,6 @@ export const financeRouter = router({
       yearlyExpenseG,
       paidInvoicesG,
       outstandingInvoicesG,
-      recurring,
     ] = await Promise.all([
       // FIN-04: cap each "this period" window at `now` so future-dated rows can't
       // inflate it (the bounded P&L would otherwise disagree with these KPIs).
@@ -883,46 +872,16 @@ export const financeRouter = router({
         _count: true,
         where: { status: { in: ['SENT', 'OVERDUE'] } },
       }),
-      ctx.db.recurringExpense.findMany({
-        where: { active: true },
-        select: { amount: true, currency: true, interval: true },
-      }),
     ]);
 
     const monthlyIncome = fromCurrencyGroups(monthlyIncomeG, 'amount');
     const yearlyIncome = fromCurrencyGroups(yearlyIncomeG, 'amount');
 
-    // FIN-05: recurring expenses are never posted as transactions, so burn and
-    // profit silently omitted them. Fold each active subscription's monthly-
-    // equivalent run-rate (currency-aware) into the monthly/yearly expense.
-    const recurringMonthlyMap = new Map<string, number>();
-    for (const e of recurring) {
-      const factor = RECURRING_MONTHLY_FACTOR[e.interval.toLowerCase()] ?? 1;
-      recurringMonthlyMap.set(
-        e.currency,
-        (recurringMonthlyMap.get(e.currency) ?? 0) + Number(e.amount) * factor
-      );
-    }
-    const recurringMonthly: CurrencyAmount[] = Array.from(
-      recurringMonthlyMap,
-      ([currency, amount]) => ({
-        currency,
-        amount: Math.round(amount * 100) / 100,
-      })
-    );
-    const recurringYearly: CurrencyAmount[] = recurringMonthly.map((r) => ({
-      currency: r.currency,
-      amount: Math.round(r.amount * 12 * 100) / 100,
-    }));
-
-    const monthlyExpense = sumByCurrency(
-      fromCurrencyGroups(monthlyExpenseG, 'amount'),
-      recurringMonthly
-    );
-    const yearlyExpense = sumByCurrency(
-      fromCurrencyGroups(yearlyExpenseG, 'amount'),
-      recurringYearly
-    );
+    // Recurring expenses enter the ledger through postDueRecurringExpenses.
+    // Reporting only posted transactions keeps the overview reconciled to that
+    // ledger and prevents an active recurrence from counting a posted cycle twice.
+    const monthlyExpense = fromCurrencyGroups(monthlyExpenseG, 'amount');
+    const yearlyExpense = fromCurrencyGroups(yearlyExpenseG, 'amount');
 
     return {
       monthlyIncome,
