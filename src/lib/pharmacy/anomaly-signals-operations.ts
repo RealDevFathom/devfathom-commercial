@@ -182,8 +182,8 @@ export async function readPharmacyAnomalyFacts(
       : await db.$queryRaw<TenderMismatchRow[]>(Prisma.sql`
           SELECT c."id" AS "closeId", c."branchId", c."actorId" AS "userId", c."businessDate",
                  (cash."tenderMinor"-cash."refundMinor")::int AS "tenderNetMinor",
-                 c."cashExpectedMinor" AS "closeExpectedMinor",
-                 (cash."tenderMinor"-cash."refundMinor"-c."cashExpectedMinor")::int AS "mismatchMinor",
+                 (c."cashExpectedMinor"-drawer."adjustmentMinor")::int AS "closeExpectedMinor",
+                 (cash."tenderMinor"-cash."refundMinor"-c."cashExpectedMinor"+drawer."adjustmentMinor")::int AS "mismatchMinor",
                  c."createdAt" AS "occurredAt"
           FROM "pharmacy_daily_closes" c
           CROSS JOIN LATERAL (
@@ -196,6 +196,16 @@ export async function readPharmacyAnomalyFacts(
             WHERE t."organizationId"=c."organizationId" AND t."branchId"=c."branchId"
               AND t."businessDate"=c."businessDate" AND t."type"='CASH'
           ) cash
+          -- The close includes opening floats and paid-in/out movements. Remove
+          -- those adjustments to compare both sides on a net cash-tender basis.
+          CROSS JOIN LATERAL (
+            SELECT COALESCE(SUM(CASE WHEN m."kind"='PAID_OUT' THEN -m."amountMinor" ELSE m."amountMinor" END),0)::int AS "adjustmentMinor"
+            FROM "pharmacy_drawer_sessions" d
+            JOIN "pharmacy_drawer_movements" m ON m."organizationId"=d."organizationId" AND m."drawerSessionId"=d."id"
+            WHERE d."organizationId"=c."organizationId" AND d."branchId"=c."branchId"
+              AND d."businessDate"=c."businessDate"
+              AND m."kind" IN ('OPENING_FLOAT', 'PAID_IN', 'PAID_OUT')
+          ) drawer
           WHERE c."branchId" IN (${branches}) AND c."isFinal"=true
             AND c."businessDate">=${window.from} AND c."businessDate"<${window.to}
             AND NOT EXISTS (SELECT 1 FROM "pharmacy_daily_closes" newer WHERE newer."organizationId"=c."organizationId" AND newer."branchId"=c."branchId" AND newer."businessDate"=c."businessDate" AND newer."sequence">c."sequence")

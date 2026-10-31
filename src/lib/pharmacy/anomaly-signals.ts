@@ -364,7 +364,7 @@ export function detectPharmacyAnomalies(
             mismatchRateBps,
             materialityMinor,
           },
-          explanation: `Net cash tender evidence for ${fact.businessDate} is ${money(fact.tenderNetMinor)}, while the final close expects ${money(fact.closeExpectedMinor)}, a ${money(fact.mismatchMinor)} mismatch. Review tender and close audit records; this signal does not change the close.`,
+          explanation: `Net cash tender evidence for ${fact.businessDate} is ${money(fact.tenderNetMinor)}, while the final close expects ${money(fact.closeExpectedMinor)} after removing opening floats and paid-in/out adjustments, a ${money(fact.mismatchMinor)} mismatch. Review tender and close audit records; this signal does not change the close.`,
           sourceObservedAt: fact.sourceObservedAt,
           estimateMethod: null,
           estimateWindow: null,
