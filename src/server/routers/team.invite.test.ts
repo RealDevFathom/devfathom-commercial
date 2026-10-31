@@ -6,20 +6,23 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   findFirst: vi.fn(),
+  findUnique: vi.fn(),
   create: vi.fn(),
   update: vi.fn(),
   invitationUpsert: vi.fn(),
   departmentFindFirst: vi.fn(),
   roleFindFirst: vi.fn(),
   sendEmail: vi.fn(),
-  can: vi.fn(async () => true),
+  can: vi.fn<typeof import('@/lib/abac').can>(async () => true),
 }));
 
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/entitlements', () => ({
-  hasModule: vi.fn((_entitlements: unknown, key: string) => key === 'admin'),
+  hasModule: vi.fn((entitlements: { enabledModules: string[] }, key: string) =>
+    entitlements.enabledModules.includes(key)
+  ),
   resolveOrganizationEntitlements: vi.fn(async () => ({ enabledModules: [] })),
 }));
 vi.mock('@/server/audit', () => ({
@@ -44,7 +47,12 @@ import { teamRouter } from './team';
 import { router, type TRPCContext } from '../trpc';
 
 const db = {
-  user: { findFirst: mocks.findFirst, create: mocks.create, update: mocks.update },
+  user: {
+    findFirst: mocks.findFirst,
+    findUnique: mocks.findUnique,
+    create: mocks.create,
+    update: mocks.update,
+  },
   organizationDepartment: { findFirst: mocks.departmentFindFirst },
   organizationRole: { findFirst: mocks.roleFindFirst },
   invitation: { upsert: mocks.invitationUpsert },
@@ -55,10 +63,10 @@ const db = {
     }),
 };
 
-function caller(activeSeats = 1) {
+function caller(activeSeats = 1, enabledModules = ['admin']) {
   return router({ team: teamRouter }).createCaller({
     db,
-    entitlements: { enabledModules: [], modules: [], activeSeats, seatLimit: 50 },
+    entitlements: { enabledModules, modules: [], activeSeats, seatLimit: 50 },
     session: {
       expires: 'later',
       user: { id: 'user_admin', role: 'ADMIN', department: 'LEADERSHIP', status: 'ACTIVE' },
@@ -173,14 +181,45 @@ describe('team.inviteMember duplicate guard', () => {
     expect(mocks.create).not.toHaveBeenCalled();
   });
 
-  it('rejects an administrator denied team:setRole before updating a member role', async () => {
-    mocks.can.mockImplementation(async (_subject, action) => action !== 'team:setRole');
+  it.each(['ADMIN', 'HR', 'EMPLOYEE'] as const)(
+    'rejects an administrator denied team:setRole before assigning %s',
+    async (role) => {
+      mocks.can.mockImplementation(async (_subject, action) => action !== 'team:setRole');
 
+      await expect(
+        caller(1, ['admin', 'hr']).adminUpdateMember({ id: 'user_2', role })
+      ).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+      });
+
+      expect(mocks.can).toHaveBeenCalledWith(
+        expect.anything(),
+        'team:setRole',
+        undefined,
+        expect.objectContaining({ source: 'TRPC', db })
+      );
+      expect(mocks.departmentFindFirst).not.toHaveBeenCalled();
+      expect(mocks.findUnique).not.toHaveBeenCalled();
+      expect(mocks.update).not.toHaveBeenCalled();
+    }
+  );
+
+  it('retains the HR license gate for member updates', async () => {
     await expect(caller().adminUpdateMember({ id: 'user_2', role: 'ADMIN' })).rejects.toMatchObject(
       {
         code: 'FORBIDDEN',
+        message: 'The hr module is not enabled for this organization.',
       }
     );
+    expect(mocks.findUnique).not.toHaveBeenCalled();
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+
+  it('allows role updates when team:setRole is granted', async () => {
+    mocks.findUnique.mockResolvedValue({ id: 'user_2', role: 'EMPLOYEE' });
+    mocks.update.mockResolvedValue({ id: 'user_2', name: 'Alex Carter', role: 'ADMIN' });
+
+    await caller(1, ['admin', 'hr']).adminUpdateMember({ id: 'user_2', role: 'ADMIN' });
 
     expect(mocks.can).toHaveBeenCalledWith(
       expect.anything(),
@@ -188,8 +227,24 @@ describe('team.inviteMember duplicate guard', () => {
       undefined,
       expect.objectContaining({ source: 'TRPC', db })
     );
-    expect(mocks.departmentFindFirst).not.toHaveBeenCalled();
-    expect(mocks.update).not.toHaveBeenCalled();
+    expect(mocks.update).toHaveBeenCalledWith({
+      where: { id: 'user_2' },
+      data: { role: 'ADMIN' },
+    });
+  });
+
+  it('allows profile-only updates when team:setRole is denied', async () => {
+    mocks.can.mockImplementation(async (_subject, action) => action !== 'team:setRole');
+    mocks.findUnique.mockResolvedValue({ id: 'user_2', role: 'EMPLOYEE' });
+    mocks.update.mockResolvedValue({ id: 'user_2', name: 'Alex Carter' });
+
+    await caller(1, ['admin', 'hr']).adminUpdateMember({ id: 'user_2', title: 'Senior Engineer' });
+
+    expect(mocks.can.mock.calls.map(([, action]) => action)).toEqual(['admin:access']);
+    expect(mocks.update).toHaveBeenCalledWith({
+      where: { id: 'user_2' },
+      data: { title: 'Senior Engineer' },
+    });
   });
 
   it('retains seat limits without HR', async () => {
