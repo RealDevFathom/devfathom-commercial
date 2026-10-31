@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   close: null as Record<string, unknown> | null,
   mutate: vi.fn(),
   previewInput: vi.fn(),
+  printZReport: vi.fn(),
   /** The zone the workspace has stored. */
   zone: '',
 }));
@@ -38,7 +39,7 @@ vi.mock('@/lib/trpc', () => ({
     pharmacySales: {
       counterBranches: {
         useQuery: () => ({
-          data: { branches: [{ id: 'b', name: 'Main' }], timezone: mocks.zone },
+          data: { branches: [{ id: 'b', name: 'Main' }], currency: 'USD', timezone: mocks.zone },
           isSuccess: true,
         }),
       },
@@ -73,6 +74,9 @@ vi.mock('@/lib/trpc', () => ({
     },
   },
 }));
+vi.mock('@/lib/pharmacy/counter-browser-print', () => ({
+  printCounterBrowserZReport: mocks.printZReport,
+}));
 import { workspaceToday } from '@/lib/timezone';
 import { cashMinor, drawerOpenedLabel, PharmacyDayCloseConsole } from './day-close-console';
 afterEach(() => {
@@ -87,8 +91,50 @@ beforeEach(() => {
   mocks.close = null;
   mocks.mutate.mockReset();
   mocks.previewInput.mockReset();
+  mocks.printZReport.mockReset();
 });
 describe('day-close console', () => {
+  it('uses the organization currency throughout reconciliation', () => {
+    render(<PharmacyDayCloseConsole />);
+
+    expect(screen.getByText('Pharmacy · USD')).toBeInTheDocument();
+    expect(screen.getByText('Expected cash · USD')).toBeInTheDocument();
+    expect(screen.getByText('Counted cash · USD')).toBeInTheDocument();
+    expect(screen.getByText('Variance · USD')).toBeInTheDocument();
+    expect(screen.getByText('Expected: USD 125.00')).toBeInTheDocument();
+    expect(screen.getByLabelText('Counted cash for drawer 1 (USD)')).toBeInTheDocument();
+    expect(screen.queryByText(/PKR/)).not.toBeInTheDocument();
+  });
+
+  it('uses the organization currency in a recorded close and the printable Z-report', () => {
+    const recorded = {
+      id: 'c1',
+      sequence: 1,
+      supersedesCloseId: null,
+      reason: null,
+      grossSalesMinor: 10000,
+      refundTotalMinor: 0,
+      netSalesMinor: 10000,
+      cashExpectedMinor: 10000,
+      cashCountedMinor: 10000,
+      cashVarianceMinor: 0,
+      isFinal: true,
+    };
+    mocks.close = recorded;
+    render(<PharmacyDayCloseConsole />);
+
+    expect(screen.getByText('Pharmacy · USD')).toBeInTheDocument();
+    expect(screen.getByText('Expected cash · USD')).toBeInTheDocument();
+    expect(screen.getByText('Counted cash · USD')).toBeInTheDocument();
+    expect(screen.getByText('Variance · USD')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Print Z-report' }));
+    expect(mocks.printZReport).toHaveBeenCalledWith(
+      expect.objectContaining({ ...recorded, currency: 'USD' }),
+      'en'
+    );
+    expect(screen.queryByText(/PKR/)).not.toBeInTheDocument();
+  });
+
   it('parses exact cash minor units without rounding an invalid amount', () => {
     expect(cashMinor('125.01')).toBe(12501);
     expect(cashMinor('0')).toBe(0);
@@ -194,21 +240,21 @@ describe('day-close console', () => {
     render(<PharmacyDayCloseConsole />);
     const submit = screen.getByRole('button', { name: 'Close and lock day' });
     expect(submit).toBeDisabled();
-    fireEvent.change(screen.getByLabelText('Counted cash for drawer 1 (PKR)'), {
+    fireEvent.change(screen.getByLabelText('Counted cash for drawer 1 (USD)'), {
       target: { value: '124.00' },
     });
     expect(screen.getByTestId('Variance')).toHaveTextContent('-1.00');
     fireEvent.click(screen.getByRole('checkbox'));
     expect(submit).toBeDisabled();
     fireEvent.change(screen.getByLabelText(/Variance note/), {
-      target: { value: 'Short by one rupee' },
+      target: { value: 'Short by one dollar' },
     });
     expect(submit).toBeEnabled();
     fireEvent.click(submit);
     expect(mocks.mutate).toHaveBeenCalledWith(
       expect.objectContaining({
         counts: [{ drawerSessionId: 'd', countedCashMinor: 12400 }],
-        varianceNote: 'Short by one rupee',
+        varianceNote: 'Short by one dollar',
       })
     );
   });
