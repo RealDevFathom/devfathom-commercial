@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 
 import { Prisma } from '@/generated/prisma/client';
+import { can, subjectFromSession } from '@/lib/abac';
 import { router, capabilityProcedure, type TRPCContext } from '../trpc';
 import { annotateAudit } from '../audit';
 import { resolveRestaurantActor } from '../restaurant-actor';
@@ -114,6 +115,52 @@ async function requirePurchaseOrderScope(ctx: TRPCContext, purchaseOrderId: stri
   return order;
 }
 
+async function requirePurchaseReceiptScope(ctx: TRPCContext, receiptId: string) {
+  const receipt = await ctx.db.restaurantPurchaseReceipt.findUnique({
+    where: { id: receiptId },
+    select: { branchId: true },
+  });
+  if (!receipt) throw new TRPCError({ code: 'NOT_FOUND', message: 'Purchase receipt not found.' });
+  return receipt;
+}
+
+async function requirePurchaseOrderActor(ctx: TRPCContext, purchaseOrderId: string) {
+  const scope = await requirePurchaseOrderScope(ctx, purchaseOrderId);
+  await resolveRestaurantActor(ctx, [scope.branchId]);
+  return scope;
+}
+
+async function purchaseOrderListBranchIds(ctx: TRPCContext) {
+  const actor = await resolveRestaurantActor(ctx, []);
+  const user = ctx.session!.user;
+  const configuresAllBranches = await can(
+    subjectFromSession(user),
+    'restaurant:configure',
+    undefined,
+    {
+      db: ctx.db,
+      source: 'TRPC',
+      ip: ctx.requestMeta.ip,
+    }
+  );
+  const branches = await ctx.db.restaurantBranch.findMany({
+    where: {
+      organizationId: ctx.entitlements?.organizationId ?? user.organizationId!,
+      active: true,
+      ...(configuresAllBranches
+        ? {}
+        : {
+            OR: [
+              { staffProfiles: { some: { id: actor.staffProfileId } } },
+              { assignments: { some: { userId: user.id } } },
+            ],
+          }),
+    },
+    select: { id: true },
+  });
+  return branches.map(({ id }) => id);
+}
+
 async function requireLocationInBranch(
   ctx: TRPCContext,
   locationId: string,
@@ -212,21 +259,34 @@ export const restaurantPurchasingRouter = router({
         .strict()
     )
     .query(async ({ ctx, input }) => {
-      const result = await listPurchaseOrders(ctx.db, input);
+      if (input.branchId) await resolveRestaurantActor(ctx, [input.branchId]);
+      const branchIds = input.branchId ? undefined : await purchaseOrderListBranchIds(ctx);
+      const result = await listPurchaseOrders(ctx.db, { ...input, branchIds });
+      if (!input.branchId) {
+        await resolveRestaurantActor(
+          ctx,
+          result.orders.map(({ branchId }) => branchId)
+        );
+      }
       return { orders: result.orders.map(serializeOrderSummary), nextCursor: result.nextCursor };
     }),
 
   getPurchaseOrder: readProcedure
     .input(z.object({ purchaseOrderId: ID }).strict())
     .query(({ ctx, input }) =>
-      run(async () => serializePurchaseOrder(await getPurchaseOrder(ctx.db, input.purchaseOrderId)))
+      run(async () => {
+        await requirePurchaseOrderActor(ctx, input.purchaseOrderId);
+        return serializePurchaseOrder(await getPurchaseOrder(ctx.db, input.purchaseOrderId));
+      })
     ),
 
-  getReceipt: readProcedure
-    .input(z.object({ receiptId: ID }).strict())
-    .query(({ ctx, input }) =>
-      run(async () => serializeReceipt(await getPurchaseReceipt(ctx.db, input.receiptId)))
-    ),
+  getReceipt: readProcedure.input(z.object({ receiptId: ID }).strict()).query(({ ctx, input }) =>
+    run(async () => {
+      const scope = await requirePurchaseReceiptScope(ctx, input.receiptId);
+      await resolveRestaurantActor(ctx, [scope.branchId]);
+      return serializeReceipt(await getPurchaseReceipt(ctx.db, input.receiptId));
+    })
+  ),
 
   // ── Purchase orders — creation & line editing (DRAFT) ────────────────────────────
   createPurchaseOrder: writeProcedure
@@ -264,17 +324,18 @@ export const restaurantPurchasingRouter = router({
 
   addPurchaseOrderLine: writeProcedure
     .input(z.object({ purchaseOrderId: ID, line: PO_LINE_INPUT }).strict())
-    .mutation(({ ctx, input }) => {
-      annotateAudit(ctx, {
-        targetType: 'RestaurantPurchaseOrder',
-        targetId: input.purchaseOrderId,
-      });
-      return run(async () =>
-        serializePurchaseOrder(
+    .mutation(({ ctx, input }) =>
+      run(async () => {
+        await requirePurchaseOrderActor(ctx, input.purchaseOrderId);
+        annotateAudit(ctx, {
+          targetType: 'RestaurantPurchaseOrder',
+          targetId: input.purchaseOrderId,
+        });
+        return serializePurchaseOrder(
           await addPurchaseOrderLine(ctx.db, input.purchaseOrderId, input.line)
-        )
-      );
-    }),
+        );
+      })
+    ),
 
   updatePurchaseOrderLine: writeProcedure
     .input(
@@ -288,42 +349,45 @@ export const restaurantPurchasingRouter = router({
         })
         .strict()
     )
-    .mutation(({ ctx, input }) => {
-      const { purchaseOrderId, lineId, ...patch } = input;
-      annotateAudit(ctx, { targetType: 'RestaurantPurchaseOrder', targetId: purchaseOrderId });
-      return run(async () =>
-        serializePurchaseOrder(
+    .mutation(({ ctx, input }) =>
+      run(async () => {
+        const { purchaseOrderId, lineId, ...patch } = input;
+        await requirePurchaseOrderActor(ctx, purchaseOrderId);
+        annotateAudit(ctx, { targetType: 'RestaurantPurchaseOrder', targetId: purchaseOrderId });
+        return serializePurchaseOrder(
           await updatePurchaseOrderLine(ctx.db, purchaseOrderId, lineId, patch)
-        )
-      );
-    }),
+        );
+      })
+    ),
 
   removePurchaseOrderLine: writeProcedure
     .input(z.object({ purchaseOrderId: ID, lineId: ID }).strict())
-    .mutation(({ ctx, input }) => {
-      annotateAudit(ctx, {
-        targetType: 'RestaurantPurchaseOrder',
-        targetId: input.purchaseOrderId,
-      });
-      return run(async () =>
-        serializePurchaseOrder(
+    .mutation(({ ctx, input }) =>
+      run(async () => {
+        await requirePurchaseOrderActor(ctx, input.purchaseOrderId);
+        annotateAudit(ctx, {
+          targetType: 'RestaurantPurchaseOrder',
+          targetId: input.purchaseOrderId,
+        });
+        return serializePurchaseOrder(
           await removePurchaseOrderLine(ctx.db, input.purchaseOrderId, input.lineId)
-        )
-      );
-    }),
+        );
+      })
+    ),
 
   // ── Purchase orders — lifecycle transitions ──────────────────────────────────────
   submitPurchaseOrder: writeProcedure
     .input(z.object({ purchaseOrderId: ID }).strict())
-    .mutation(({ ctx, input }) => {
-      annotateAudit(ctx, {
-        targetType: 'RestaurantPurchaseOrder',
-        targetId: input.purchaseOrderId,
-      });
-      return run(async () =>
-        serializePurchaseOrder(await submitPurchaseOrder(ctx.db, input.purchaseOrderId))
-      );
-    }),
+    .mutation(({ ctx, input }) =>
+      run(async () => {
+        await requirePurchaseOrderActor(ctx, input.purchaseOrderId);
+        annotateAudit(ctx, {
+          targetType: 'RestaurantPurchaseOrder',
+          targetId: input.purchaseOrderId,
+        });
+        return serializePurchaseOrder(await submitPurchaseOrder(ctx.db, input.purchaseOrderId));
+      })
+    ),
 
   approvePurchaseOrder: approveProcedure
     .input(z.object({ purchaseOrderId: ID }).strict())
@@ -345,27 +409,29 @@ export const restaurantPurchasingRouter = router({
 
   cancelPurchaseOrder: writeProcedure
     .input(z.object({ purchaseOrderId: ID }).strict())
-    .mutation(({ ctx, input }) => {
-      annotateAudit(ctx, {
-        targetType: 'RestaurantPurchaseOrder',
-        targetId: input.purchaseOrderId,
-      });
-      return run(async () =>
-        serializePurchaseOrder(await cancelPurchaseOrder(ctx.db, input.purchaseOrderId))
-      );
-    }),
+    .mutation(({ ctx, input }) =>
+      run(async () => {
+        await requirePurchaseOrderActor(ctx, input.purchaseOrderId);
+        annotateAudit(ctx, {
+          targetType: 'RestaurantPurchaseOrder',
+          targetId: input.purchaseOrderId,
+        });
+        return serializePurchaseOrder(await cancelPurchaseOrder(ctx.db, input.purchaseOrderId));
+      })
+    ),
 
   closePurchaseOrder: writeProcedure
     .input(z.object({ purchaseOrderId: ID }).strict())
-    .mutation(({ ctx, input }) => {
-      annotateAudit(ctx, {
-        targetType: 'RestaurantPurchaseOrder',
-        targetId: input.purchaseOrderId,
-      });
-      return run(async () =>
-        serializePurchaseOrder(await closePurchaseOrder(ctx.db, input.purchaseOrderId))
-      );
-    }),
+    .mutation(({ ctx, input }) =>
+      run(async () => {
+        await requirePurchaseOrderActor(ctx, input.purchaseOrderId);
+        annotateAudit(ctx, {
+          targetType: 'RestaurantPurchaseOrder',
+          targetId: input.purchaseOrderId,
+        });
+        return serializePurchaseOrder(await closePurchaseOrder(ctx.db, input.purchaseOrderId));
+      })
+    ),
 
   // ── Receiving & returns ──────────────────────────────────────────────────────────
   receivePurchaseOrder: writeProcedure

@@ -720,6 +720,8 @@ export async function createSupplierReturn(
 
 export type ListPurchaseOrdersInput = {
   branchId?: string;
+  /** Server-resolved branch scope, applied before pagination (including an empty scope). */
+  branchIds?: string[];
   supplierId?: string;
   status?: PurchaseOrderStatus;
   limit?: number;
@@ -731,6 +733,7 @@ export async function listPurchaseOrders(db: ScopedDb, input: ListPurchaseOrders
   const rows = await db.restaurantPurchaseOrder.findMany({
     where: {
       branchId: input.branchId,
+      AND: input.branchIds ? [{ branchId: { in: input.branchIds } }] : undefined,
       supplierId: input.supplierId,
       status: input.status,
     },
