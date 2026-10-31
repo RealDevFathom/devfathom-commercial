@@ -47,6 +47,11 @@ function requireFiniteNonNegative(value: number, field: string) {
     throw new Error(`${field} must be a finite non-negative number.`);
 }
 
+function validateChurnScore(value: number, field: string) {
+  if (!Number.isFinite(value) || value < 0 || value > 1)
+    throw new Error(`${field} must be a finite number between zero and one.`);
+}
+
 function validateThresholds(values: readonly number[], field: string) {
   if (values.length !== 4) throw new Error(`${field} must contain four thresholds.`);
   values.forEach((value) => requireFiniteNonNegative(value, field));
@@ -81,8 +86,7 @@ export function computeRfmSegments(
     requireFiniteNonNegative(customer.receiptCount, 'receiptCount');
     requireFiniteNonNegative(customer.completedSalesMinor, 'completedSalesMinor');
     requireFiniteNonNegative(customer.observedPeriods, 'observedPeriods');
-    if (customer.churnScore < 0 || customer.churnScore > 1)
-      throw new Error('churnScore must be between zero and one.');
+    validateChurnScore(customer.churnScore, 'churnScore');
 
     // Lower recency is better. Exact configured boundaries belong to the less
     // recent band, making boundary behaviour stable and easy to audit.
@@ -129,8 +133,10 @@ export function planRfmWinBack(
   config: RfmWinBackConfig,
   nonDrugOfferText: string
 ): WinBackAction[] {
+  validateChurnScore(config.winBackChurnScore, 'winBackChurnScore');
   if (!nonDrugOfferText.trim()) throw new Error('A non-drug offer is required.');
   return customers.flatMap((customer): WinBackAction[] => {
+    validateChurnScore(customer.churnScore, 'churnScore');
     if (customer.churnScore < config.winBackChurnScore) return [];
     if (customer.hasDrugPurchase) {
       return customer.refillDue && customer.reminderWhatsAppConsent

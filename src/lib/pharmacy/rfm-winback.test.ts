@@ -24,6 +24,13 @@ const fixture = (overrides: Partial<RfmCustomerFacts> = {}): RfmCustomerFacts =>
 });
 
 describe('RFM segmentation', () => {
+  it.each([NaN, Infinity, -Infinity, -0.01, 1.01])(
+    'rejects invalid churn score %s',
+    (churnScore) => {
+      expect(() => computeRfmSegments([fixture({ churnScore })], config)).toThrow(/churnScore/);
+    }
+  );
+
   it('computes auditable segments and labels projected CLV as an estimate', () => {
     expect(
       computeRfmSegments(
@@ -63,6 +70,56 @@ describe('RFM segmentation', () => {
 });
 
 describe('RFM win-back policy', () => {
+  it.each([NaN, Infinity, -Infinity, -0.01, 1.01])(
+    'rejects invalid win-back threshold %s even without customers',
+    (winBackChurnScore) => {
+      expect(() => planRfmWinBack([], { ...config, winBackChurnScore }, 'Non-drug offer')).toThrow(
+        /winBackChurnScore/
+      );
+    }
+  );
+
+  it.each([NaN, Infinity, -Infinity, -0.01, 1.01])(
+    'rejects invalid churn score %s before planning either action',
+    (churnScore) => {
+      for (const hasDrugPurchase of [false, true]) {
+        expect(() =>
+          planRfmWinBack(
+            [
+              fixture({
+                churnScore,
+                hasDrugPurchase,
+                refillDue: true,
+                reminderWhatsAppConsent: true,
+                marketingWhatsAppConsent: true,
+              }),
+            ],
+            config,
+            'Non-drug offer'
+          )
+        ).toThrow(/churnScore/);
+      }
+    }
+  );
+
+  it.each([0, config.winBackChurnScore, 1])(
+    'includes valid scores at threshold %s',
+    (churnScore) => {
+      const customer = fixture({ churnScore, marketingWhatsAppConsent: true });
+      expect(computeRfmSegments([customer], config)[0]?.churnScore).toBe(churnScore);
+      expect(
+        planRfmWinBack([customer], { ...config, winBackChurnScore: churnScore }, 'Non-drug offer')
+      ).toEqual([
+        {
+          customerId: customer.customerId,
+          kind: 'NON_DRUG_MARKETING',
+          text: 'Non-drug offer',
+          includesOffer: true,
+        },
+      ]);
+    }
+  );
+
   it('uses fixed offer-free generic utility copy for every drug customer', () => {
     const [action] = planRfmWinBack(
       [
