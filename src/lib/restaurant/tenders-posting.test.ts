@@ -308,6 +308,11 @@ describe('collection posting and authoritative recorded balances (no DB)', () =>
     expect(result.remainingDue.toFixed(2)).toBe('0.00');
     expect(f.bill.businessDate).toEqual(D1);
     expect(f.tenders[0].businessDate).toEqual(D2);
+    expect(f.locks.filter((key) => key.startsWith('tenant:'))).toEqual([
+      'tenant:branch:2026-09-10',
+      'tenant:branch:2026-09-11',
+      'tenant:branch:2026-09-11', // The drawer append independently guards its day.
+    ]);
     expect(f.movements.filter((row) => row.kind === 'CASH_SALE')).toMatchObject([
       { tenderId: result.tenderId, amount: D('3860') },
     ]);
@@ -387,13 +392,28 @@ describe('collection posting and authoritative recorded balances (no DB)', () =>
     ).toEqual(['3859.99', '0.00']);
   });
 
-  it('leaves same-day posting unchanged', async () => {
-    const f = fixture();
-    f.bill.businessDate = D2;
-    await f.collect();
-    expect(f.tenders[0].businessDate).toEqual(D2);
-    expect(f.raw.$executeRaw).toHaveBeenCalledTimes(1);
-  });
+  it.each(['CASH', 'CARD', 'OTHER'] as const)(
+    'leaves same-day %s posting unchanged and guards the drawer append for cash',
+    async (type) => {
+      const f = fixture();
+      f.bill.businessDate = D2;
+      await f.collect({
+        tender:
+          type === 'CASH'
+            ? { type, amount: '3860', cashReceived: '4000' }
+            : { type, amount: '3860' },
+      });
+      expect(f.tenders[0].businessDate).toEqual(D2);
+      // The tender deduplicates bill/posting days; a cash movement then takes
+      // the same transaction-scoped lock again through its own day guard.
+      expect(f.raw.$executeRaw).toHaveBeenCalledTimes(type === 'CASH' ? 2 : 1);
+      expect(f.locks.filter((key) => key.startsWith('tenant:'))).toEqual(
+        type === 'CASH'
+          ? ['tenant:branch:2026-09-11', 'tenant:branch:2026-09-11']
+          : ['tenant:branch:2026-09-11']
+      );
+    }
+  );
 
   it.each(['CARD', 'OTHER'] as const)(
     'posts next-day %s principal and tip on processing date',
@@ -492,7 +512,46 @@ describe('collection posting and authoritative recorded balances (no DB)', () =>
     expect(f.tenders[0].businessDate).toEqual(D1);
     expect(f.locks.filter((key) => key.startsWith('tenant:'))).toEqual([
       'tenant:branch:2026-09-10',
+      'tenant:branch:2026-09-10', // Drawer guard uses the same cutoff-resolved day.
     ]);
+  });
+
+  it.each(['CASH_SALE', 'CASH_REFUND', 'PAID_IN', 'PAID_OUT', 'DROP', 'CLOSING_COUNT'] as const)(
+    'rejects a direct %s movement on a closed drawer day before locking or writing the drawer',
+    async (kind) => {
+      const f = fixture();
+      f.closedDays.add(D2.getTime());
+      await expect(
+        appendMovement(f.db, {
+          drawerSessionId: 'drawer',
+          kind,
+          amount: '1',
+          staffProfileId: 'operator',
+          deviceId: 'device',
+        })
+      ).rejects.toMatchObject({ reason: 'CLOSE_EXISTS' });
+      expect(f.locks).toEqual(['tenant:branch:2026-09-11']);
+      expect(f.raw.$queryRaw).not.toHaveBeenCalled();
+      expect(f.raw.restaurantDrawerMovement.create).not.toHaveBeenCalled();
+      expect(f.movements).toHaveLength(1);
+    }
+  );
+
+  it('rejects a drawer close on a financially closed day before changing its ledger or counts', async () => {
+    const f = fixture();
+    f.closedDays.add(D2.getTime());
+    await expect(
+      closeDrawerSession(f.db, {
+        drawerSessionId: 'drawer',
+        countedCash: '100',
+        actor: { ...actor, idempotencyKey: 'close' },
+      })
+    ).rejects.toMatchObject({ reason: 'CLOSE_EXISTS' });
+    expect(f.raw.$queryRaw).not.toHaveBeenCalled();
+    expect(f.raw.restaurantDrawerMovement.create).not.toHaveBeenCalled();
+    expect(f.raw.restaurantDrawerSession.update).not.toHaveBeenCalled();
+    expect(f.drawer.status).toBe('OPEN');
+    expect(f.movements).toHaveLength(1);
   });
 
   it.each(['branch', 'device', 'stale', 'closed'])(
