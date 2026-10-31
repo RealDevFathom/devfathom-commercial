@@ -17,6 +17,8 @@ vi.mock('@/lib/platform/page-access', () => ({
 }));
 const suffix = randomUUID();
 const org = `audit_${suffix}`;
+// A historical actor need not have a surviving account. The ledger must accept
+// these IDs without rewriting history or imposing account foreign keys.
 const actor = `actor_${suffix}`;
 const action = `test.${suffix}`;
 let scoped: typeof import('@/lib/tenancy/scoped-db').withPlatformDb;
@@ -132,5 +134,71 @@ describe.skipIf(!url)('platform audit ledger on disposable PostgreSQL', () => {
     vi.mocked(requirePlatformRead).mockRejectedValueOnce(new Error('denied'));
     await expect(page({ searchParams: Promise.resolve(filters) })).rejects.toThrow('denied');
     expect(requirePlatformRead).toHaveBeenLastCalledWith('/platform/audit');
+  });
+
+  it('searches both actor types by name and email without foreign keys', async () => {
+    const platformId = `platform_${suffix}`;
+    const tenantId = `tenant_${suffix}`;
+    await scoped(async (db) => {
+      await db.platformUser.create({
+        data: {
+          id: platformId,
+          name: `Platform Name ${suffix}`,
+          email: `${platformId}@example.test`,
+          passwordHash: 'unused-test-hash',
+        },
+      });
+      await db.organizationDepartment.create({
+        data: { organizationId: org, key: 'QA', name: 'QA' },
+      });
+      await db.user.create({
+        data: {
+          id: tenantId,
+          organizationId: org,
+          name: `Tenant Name ${suffix}`,
+          email: `${tenantId}@example.test`,
+          department: 'QA',
+          title: 'Operator',
+        },
+      });
+      await db.platformAuditLog.createMany({
+        data: [
+          { id: platformId, action: platformId, actorPlatformUserId: platformId },
+          { id: tenantId, action: tenantId, actorTenantUserId: tenantId },
+        ],
+      });
+    });
+    for (const [actorId, name] of [
+      [platformId, `Platform Name ${suffix}`],
+      [tenantId, `Tenant Name ${suffix}`],
+    ]) {
+      for (const q of [name.toUpperCase(), `${actorId}@example.test`.toUpperCase()]) {
+        const html = renderToStaticMarkup(await page({ searchParams: Promise.resolve({ q }) }));
+        expect(html).toContain('1 records on this page');
+        expect(html).toContain(name);
+        expect(html).toContain(`${actorId}@example.test`);
+      }
+    }
+
+    // Deletion must neither issue SET NULL against append-only rows nor erase
+    // the immutable actor references. Both account types used to fail here.
+    await scoped(async (db) => {
+      await db.platformUser.delete({ where: { id: platformId } });
+      await db.user.delete({ where: { id: tenantId } });
+      const platformLog = await db.platformAuditLog.findUniqueOrThrow({
+        where: { id: platformId },
+      });
+      const tenantLog = await db.platformAuditLog.findUniqueOrThrow({ where: { id: tenantId } });
+      expect(platformLog.actorPlatformUserId).toBe(platformId);
+      expect(tenantLog.actorTenantUserId).toBe(tenantId);
+    });
+    for (const actorId of [platformId, tenantId]) {
+      const html = renderToStaticMarkup(
+        await page({ searchParams: Promise.resolve({ actor: actorId }) })
+      );
+      expect(html).toContain('1 records on this page');
+      expect(html).toContain('Deleted or unavailable actor');
+      expect(html).toContain(`Actor ID: ${actorId}`);
+    }
   });
 });

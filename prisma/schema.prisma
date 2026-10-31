@@ -11503,6 +11503,8 @@ model PlatformSupportSession {
 model PlatformAuditLog {
   id                  String   @id @default(cuid())
   organizationId      String?
+  // Historical references intentionally have no foreign keys: account deletion
+  // must not mutate the append-only ledger or erase actor attribution.
   actorPlatformUserId String?
   actorTenantUserId   String?
   action              String
@@ -11523,6 +11525,7 @@ model PlatformAuditLog {
 
   @@index([organizationId, createdAt])
   @@index([actorPlatformUserId, createdAt])
+  @@index([actorTenantUserId, createdAt])
   @@index([action, createdAt])
   @@index([requestId])
   @@map("platform_audit_logs")

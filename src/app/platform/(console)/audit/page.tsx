@@ -53,6 +53,20 @@ export default async function PlatformAuditPage({
   const success =
     query.outcome === 'success' ? true : query.outcome === 'failure' ? false : undefined;
   const { rows, platformActorsById, tenantActorsById } = await withPlatformDb(async (db) => {
+    // Actor IDs are immutable historical references, not foreign keys: accounts
+    // may be deleted while their audit records must remain unchanged.
+    const actorSearch = {
+      OR: [
+        { name: { contains: q, mode: 'insensitive' as const } },
+        { email: { contains: q, mode: 'insensitive' as const } },
+      ],
+    };
+    const matchingPlatformActors =
+      q && !invalid
+        ? await db.platformUser.findMany({ where: actorSearch, select: { id: true } })
+        : [];
+    const matchingTenantActors =
+      q && !invalid ? await db.user.findMany({ where: actorSearch, select: { id: true } }) : [];
     const where: Prisma.PlatformAuditLogWhereInput = {
       ...(invalid ? { id: { in: [] } } : {}),
       ...(organizationId ? { organizationId } : {}),
@@ -88,6 +102,8 @@ export default async function PlatformAuditPage({
               { targetType: { contains: q, mode: 'insensitive' } },
               { targetId: { contains: q, mode: 'insensitive' } },
               { reason: { contains: q, mode: 'insensitive' } },
+              { actorPlatformUserId: { in: matchingPlatformActors.map((actor) => actor.id) } },
+              { actorTenantUserId: { in: matchingTenantActors.map((actor) => actor.id) } },
             ],
           }
         : {}),
@@ -98,10 +114,11 @@ export default async function PlatformAuditPage({
       include: { organization: { select: { displayName: true } } },
       take: pageSize + 1,
     });
-    const platformActorIds = logs.flatMap((log) =>
+    const visibleLogs = logs.slice(0, pageSize);
+    const platformActorIds = visibleLogs.flatMap((log) =>
       log.actorPlatformUserId ? [log.actorPlatformUserId] : []
     );
-    const tenantActorIds = logs.flatMap((log) =>
+    const tenantActorIds = visibleLogs.flatMap((log) =>
       log.actorTenantUserId ? [log.actorTenantUserId] : []
     );
     const platformActors = platformActorIds.length
@@ -116,7 +133,6 @@ export default async function PlatformAuditPage({
           select: { id: true, name: true, email: true },
         })
       : [];
-
     return {
       rows: logs,
       platformActorsById: new Map(platformActors.map((actor) => [actor.id, actor])),
@@ -187,12 +203,13 @@ export default async function PlatformAuditPage({
         description="Platform commands, support entry, lifecycle changes, denied operations, and actor attribution. Every command declares what it records: credentials and ciphertext are never written to this ledger."
       />
       <form className="mt-6 grid gap-3 border border-border-default bg-surface-card p-4 rounded-2xl sm:grid-cols-2 lg:grid-cols-4 sm:items-end">
-        <label className="grid gap-1.5 text-xs">
+        <label htmlFor="audit-search" className="grid gap-1.5 text-xs">
           Search
           <input
             name="q"
+            id="audit-search"
             defaultValue={q}
-            placeholder="Search action, target, or reason"
+            placeholder="Search actor, action, target, or reason"
             className="h-10 border border-border-default bg-surface-card px-3 text-sm outline-none focus:border-accent-brand"
           />
         </label>
@@ -215,12 +232,13 @@ export default async function PlatformAuditPage({
             />
           </label>
         ))}
-        <label className="grid gap-1.5">
+        <label htmlFor="audit-outcome" className="grid gap-1.5">
           <span className="font-mono text-[9px] uppercase tracking-[0.12em] text-text-body">
             Outcome
           </span>
           <select
             name="outcome"
+            id="audit-outcome"
             defaultValue={query.outcome ?? ''}
             className="h-10 w-full border border-border-default bg-surface-card px-3 text-sm"
           >
