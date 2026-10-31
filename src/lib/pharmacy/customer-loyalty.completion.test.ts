@@ -132,7 +132,7 @@ describe('ordinary loyalty settlement completion (held policy fixtures excluded)
       kind: 'TENDER',
       subjectId: 'tender-a',
     });
-    expect(db.$executeRaw).toHaveBeenCalledTimes(2);
+    expect(db.$executeRaw).toHaveBeenCalledTimes(5);
   });
   it('propagates posting failure to the enclosing transaction', async () => {
     const { db } = fixture();

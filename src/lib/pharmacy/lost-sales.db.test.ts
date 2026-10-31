@@ -4,7 +4,7 @@ import { Client } from 'pg';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Prisma } from '@/generated/prisma/client';
 import { recoverCompletedDemand } from './lost-sales-recovery';
-import { captureDemand } from './sales';
+import { captureDemand, demandAggregate } from './sales';
 
 const url = process.env.TEST_DATABASE_URL;
 const database = url ? describe : describe.skip;
@@ -16,9 +16,14 @@ const migration = readFileSync(
   'utf8'
 );
 const scope = { organizationId: 'org-a', branchId: 'branch-a', actorId: 'staff-a' };
+const recoveryMigration = readFileSync(
+  new URL('../../../prisma/migrations/20261031000000_pharmacy_demand_quantity_recovery/migration.sql', import.meta.url),
+  'utf8'
+);
 let client: Client;
 const sqlDb = () => ({
   $executeRaw: async (query: Prisma.Sql) => (await client.query(query.text, query.values)).rowCount,
+  unfulfilledDemandEvent: { groupBy: async () => [] },
 });
 
 database('lost-sales migration and purchase recovery', () => {
@@ -33,7 +38,7 @@ database('lost-sales migration and purchase recovery', () => {
       CREATE TEMP TABLE pharmacy_medicines ("organizationId" text, id text, PRIMARY KEY ("organizationId", id));
       CREATE TEMP TABLE pharmacy_sales ("organizationId" text, "branchId" text, id text, status text,
         "customerId" text, "receiptDeviceId" text, "completedAt" timestamp, PRIMARY KEY ("organizationId", "branchId", id));
-      CREATE TEMP TABLE pharmacy_sale_lines ("organizationId" text, "branchId" text, "saleId" text, "medicineId" text);
+      CREATE TEMP TABLE pharmacy_sale_lines ("organizationId" text, "branchId" text, "saleId" text, "medicineId" text, "canonicalUnits" integer);
       CREATE TEMP TABLE pharmacy_patients ("organizationId" text, id text, PRIMARY KEY ("organizationId", id));
       CREATE TEMP TABLE pharmacy_unfulfilled_demand_events (id text PRIMARY KEY, "organizationId" text,
         "branchId" text, "saleId" text, "customerId" text, "consentRecorded" boolean DEFAULT false,
@@ -52,6 +57,8 @@ database('lost-sales migration and purchase recovery', () => {
         'pg_temp.pharmacy_fill_legacy_demand_capture()'
       )
     );
+    await client.query(`SELECT set_config('app.current_organization_id', 'org-a', true)`);
+    await client.query(recoveryMigration);
   });
   afterEach(async () => {
     await client?.query('ROLLBACK');
@@ -93,7 +100,7 @@ database('lost-sales migration and purchase recovery', () => {
     await client.query(`INSERT INTO pharmacy_sales VALUES
       ('org-a', 'branch-a', 'origin', 'VOID', 'loyalty-a', 'terminal-a', NULL),
       ('org-a', 'branch-a', 'purchase', 'OPEN', 'loyalty-a', 'terminal-a', NULL);
-      INSERT INTO pharmacy_sale_lines VALUES ('org-a', 'branch-a', 'purchase', 'medicine-a');
+      INSERT INTO pharmacy_sale_lines VALUES ('org-a', 'branch-a', 'purchase', 'medicine-a', 3);
       INSERT INTO pharmacy_unfulfilled_demand_events
         (id, "organizationId", "branchId", "saleId", "requestedMedicineId", quantity, "visitId", "visitType",
          "requestedQty", "terminalId", outcome, "unitPricePkr", "lossProbability", "createdAt")
@@ -172,6 +179,86 @@ database('lost-sales migration and purchase recovery', () => {
         )
       ).rows[0]
     ).toMatchObject({ visitType: 'PARTIAL', abandonedBasketPkr: '0.00', estLossPkr: '3.00' });
+  });
+
+  const expireReturns = () => demandAggregate(sqlDb() as never, scope,
+    new Date('2000-01-01'), new Date('2100-01-01'), true);
+
+  it('never uses the originating partial basket to recover its three-unit shortfall', async () => {
+    await seedRecovery();
+    await client.query(`INSERT INTO pharmacy_sale_lines VALUES ('org-a', 'branch-a', 'origin', 'medicine-a', 2);
+      UPDATE pharmacy_sales SET status = 'COMPLETED', "completedAt" = now() WHERE id = 'origin'`);
+    await recoverCompletedDemand(sqlDb() as never, scope, 'origin');
+    expect((await client.query(`SELECT "resolvedBySaleId" FROM pharmacy_unfulfilled_demand_events WHERE id = 'return'`))
+      .rows[0].resolvedBySaleId).toBeNull();
+    await client.query(`UPDATE pharmacy_unfulfilled_demand_events SET "createdAt" = now() - interval '8 days' WHERE id = 'return'`);
+    await expireReturns();
+    expect((await client.query(`SELECT "estLossPkr" FROM pharmacy_unfulfilled_demand_events WHERE id = 'return'`))
+      .rows[0].estLossPkr).toBe('3.00');
+  });
+
+  it('allocates a partial return once and expires only the remaining units', async () => {
+    await seedRecovery();
+    await client.query(`UPDATE pharmacy_sale_lines SET "canonicalUnits" = 1;
+      UPDATE pharmacy_sales SET status = 'COMPLETED', "completedAt" = now() WHERE id = 'purchase'`);
+    await recoverCompletedDemand(sqlDb() as never, scope, 'purchase');
+    await recoverCompletedDemand(sqlDb() as never, scope, 'purchase');
+    expect((await client.query(`SELECT "canonicalUnits" FROM pharmacy_demand_recoveries`)).rows)
+      .toEqual([{ canonicalUnits: 1 }]);
+    expect((await client.query(`SELECT "resolvedBySaleId" FROM pharmacy_unfulfilled_demand_events WHERE id = 'return'`))
+      .rows[0].resolvedBySaleId).toBeNull();
+    await client.query(`UPDATE pharmacy_unfulfilled_demand_events SET "createdAt" = now() - interval '8 days' WHERE id = 'return'`);
+    await expireReturns();
+    expect((await client.query(`SELECT "estLossPkr" FROM pharmacy_unfulfilled_demand_events WHERE id = 'return'`))
+      .rows[0].estLossPkr).toBe('2.00');
+  });
+
+  it('combines quantities across later receipts before resolving a return', async () => {
+    await seedRecovery();
+    await client.query(`UPDATE pharmacy_sale_lines SET "canonicalUnits" = 1;
+      UPDATE pharmacy_sales SET status = 'COMPLETED', "completedAt" = now() WHERE id = 'purchase';
+      INSERT INTO pharmacy_sales VALUES ('org-a', 'branch-a', 'purchase-2', 'COMPLETED', 'loyalty-a', 'terminal-a', now());
+      INSERT INTO pharmacy_sale_lines VALUES ('org-a', 'branch-a', 'purchase-2', 'medicine-a', 2)`);
+    await recoverCompletedDemand(sqlDb() as never, scope, 'purchase');
+    await recoverCompletedDemand(sqlDb() as never, scope, 'purchase-2');
+    expect((await client.query(`SELECT "resolvedBySaleId", "estLossPkr" FROM pharmacy_unfulfilled_demand_events WHERE id = 'return'`))
+      .rows[0]).toMatchObject({ resolvedBySaleId: 'purchase-2', estLossPkr: '0.00' });
+  });
+
+  it('does not spend one receipt quantity on several missing-item events', async () => {
+    await seedRecovery();
+    await client.query(`INSERT INTO pharmacy_unfulfilled_demand_events
+      (id, "organizationId", "branchId", "saleId", "requestedMedicineId", quantity, "visitId", "visitType",
+       "requestedQty", "terminalId", outcome, "unitPricePkr", "lossProbability", "createdAt")
+      SELECT 'return-2', "organizationId", "branchId", "saleId", "requestedMedicineId", quantity, 'visit-b', "visitType",
+        "requestedQty", "terminalId", outcome, "unitPricePkr", "lossProbability", now() - interval '12 hours'
+      FROM pharmacy_unfulfilled_demand_events WHERE id = 'return';
+      UPDATE pharmacy_sales SET status = 'COMPLETED', "completedAt" = now() WHERE id = 'purchase'`);
+    await recoverCompletedDemand(sqlDb() as never, scope, 'purchase');
+    await recoverCompletedDemand(sqlDb() as never, scope, 'purchase');
+    expect((await client.query(`SELECT "demandId", "canonicalUnits" FROM pharmacy_demand_recoveries`)).rows)
+      .toEqual([{ demandId: 'return', canonicalUnits: 3 }]);
+    expect((await client.query(`SELECT "resolvedBySaleId" FROM pharmacy_unfulfilled_demand_events WHERE id = 'return-2'`))
+      .rows[0].resolvedBySaleId).toBeNull();
+  });
+
+  it('preserves the full PKR 10 value of a three-unit pack when returns expire', async () => {
+    await seedRecovery();
+    await client.query(`UPDATE pharmacy_unfulfilled_demand_events
+      SET "unitPricePkr" = 10::numeric / 3, "createdAt" = now() - interval '8 days' WHERE id = 'return'`);
+    await expireReturns();
+    expect((await client.query(`SELECT "estLossPkr" FROM pharmacy_unfulfilled_demand_events WHERE id = 'return'`))
+      .rows[0].estLossPkr).toBe('10.00');
+  });
+
+  it('requires the allocated demand and receipt to share a branch', async () => {
+    await seedRecovery();
+    await client.query(`INSERT INTO pharmacy_sales VALUES
+      ('org-a', 'branch-b', 'other-purchase', 'COMPLETED', 'loyalty-a', 'terminal-b', now())`);
+    await expect(client.query(`INSERT INTO pharmacy_demand_recoveries
+      ("organizationId", "branchId", "demandId", "saleId", "canonicalUnits")
+      VALUES ('org-a', 'branch-a', 'return', 'other-purchase', 1)`))
+      .rejects.toMatchObject({ code: '23503', constraint: 'ph_demand_recovery_sale_fk' });
   });
 
   it('serializes simultaneous captures for one terminal/customer tuple into one visit', async () => {

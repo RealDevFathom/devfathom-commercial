@@ -1413,6 +1413,36 @@ describe('PharmacyCounterConsole demand visit context', () => {
     fireEvent.click(screen.getByRole('button', { name: /Capture shortfall:/ }));
     await screen.findByRole('button', { name: 'Went elsewhere' });
   }
+  it('keeps tender usable while the five-second automatic capture request is pending', async () => {
+    mocks.selectStockout = true;
+    let finishCapture!: (value: unknown) => void;
+    mocks.mutations.captureDemand!.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishCapture = resolve;
+        })
+    );
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(screen.getByRole('button', { name: 'Select stockout' }));
+      fireEvent.click(screen.getByRole('button', { name: /Capture shortfall:/ }));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+      expect(mocks.mutations.captureDemand).toHaveBeenCalledOnce();
+      expect(screen.getByLabelText('Amount')).toBeEnabled();
+      expect(screen.getByLabelText('Cash received')).toBeEnabled();
+      fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '125.50' } });
+      fireEvent.change(screen.getByLabelText('Cash received'), { target: { value: '200.00' } });
+      expect(screen.getByRole('button', { name: 'Take payment' })).toBeEnabled();
+      await act(async () => {
+        finishCapture({ id: 'demand-a' });
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it('passes the browser terminal and clears notification consent on a branch/sale change', async () => {
     mocks.selectStockout = true;
     mocks.queries.counterBranches = query({

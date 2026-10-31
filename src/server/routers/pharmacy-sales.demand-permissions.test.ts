@@ -1,16 +1,27 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+const audits = vi.hoisted(() => ({ rows: [] as unknown[] }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/entitlements', () => ({
   hasModule: vi.fn(() => true),
   resolveOrganizationEntitlements: vi.fn(),
 }));
-vi.mock('@/server/audit', () => ({
-  ipFromHeaders: vi.fn(() => null),
-  isAuditExcludedPath: vi.fn(() => false),
-  recordTrpcAudit: vi.fn(),
-}));
+vi.mock('@/server/audit', async () => {
+  const actual = await vi.importActual<typeof import('@/server/audit')>('@/server/audit');
+  return {
+    ...actual,
+    ipFromHeaders: vi.fn(() => null),
+    isAuditExcludedPath: vi.fn(() => false),
+    recordTrpcAudit: vi.fn((entry: Parameters<typeof actual.recordTrpcAudit>[0]) => {
+      audits.rows.push({
+        input: entry.ctx.audit?.detail.skipInput ? '[skipped]' : entry.input,
+        metadata: entry.ctx.audit?.detail.metadata,
+        outcome: entry.outcome,
+      });
+    }),
+  };
+});
 vi.mock('@/lib/abac', async () => ({
   ...(await vi.importActual<typeof import('@/lib/abac')>('@/lib/abac')),
   can: vi.fn(),
@@ -23,11 +34,21 @@ import { pharmacySalesRouter } from './pharmacy-sales';
 const app = router({ pharmacySales: pharmacySalesRouter });
 const groupBy = vi.fn();
 const db = {
-  pharmacyBranch: { findMany: vi.fn().mockResolvedValue([{ id: 'branch-a' }]) },
+  pharmacyBranch: {
+    findMany: vi.fn().mockResolvedValue([{ id: 'branch-a' }]),
+    findFirstOrThrow: vi.fn().mockResolvedValue({ lostSalesUnknownProbability: 0.43,
+      lostSalesMeasuredRateMinimum: 200 }),
+  },
   $executeRaw: vi.fn().mockResolvedValue(0),
-  unfulfilledDemandEvent: { groupBy },
+  $queryRaw: vi.fn().mockResolvedValue([]),
+  unfulfilledDemandEvent: {
+    groupBy,
+    findFirst: vi.fn().mockResolvedValue(null),
+    count: vi.fn().mockResolvedValue(0),
+    create: vi.fn(async ({ data }) => ({ id: 'demand-a', ...data })),
+  },
 };
-function caller() {
+function caller(overrides: Partial<TRPCContext> = {}) {
   return app.createCaller({
     db,
     entitlements: { organizationId: 'org-a', enabledModules: ['pharmacy-counter'], modules: [] },
@@ -39,9 +60,12 @@ function caller() {
     support: null,
     requestMeta: { ip: null, userAgent: null },
     audit: { detail: {} },
+    ...overrides,
   } as unknown as TRPCContext).pharmacySales;
 }
 beforeEach(() => {
+  audits.rows.length = 0;
+  db.unfulfilledDemandEvent.create.mockClear();
   vi.mocked(can).mockReset().mockResolvedValue(false);
   groupBy.mockResolvedValue([
     {
@@ -62,6 +86,48 @@ beforeEach(() => {
       },
     },
   ]);
+});
+
+describe('demand notification audit privacy', () => {
+  const sensitive = {
+    branchId: 'branch-a', terminalId: 'counter-11111111-1111-4111-8111-111111111111',
+    requestedText: 'Private requested medicine', saleUnit: 'UNIT' as const, quantity: 3,
+    reason: 'NOT_CARRIED' as const, inventoryRuleSnapshot: {}, freeText: 'Private patient note',
+    notifyPhone: '03001234567',
+  };
+  it.each([true, false])('audits safe capture metadata with opt-in %s', async (notifyOptIn) => {
+    const result = await caller().captureDemand({ ...sensitive, notifyOptIn,
+      ...(notifyOptIn ? { notifyConsentRecorded: true as const } : {}) });
+    expect(result.notifyPhone).toBe(notifyOptIn ? sensitive.notifyPhone : undefined);
+    expect(audits.rows).toEqual([{
+      input: '[skipped]', outcome: 'SUCCESS',
+      metadata: { quantity: 3, outcome: 'UNKNOWN', visitType: null, notifyOptIn },
+    }]);
+    expect(JSON.stringify(audits.rows)).not.toContain(sensitive.notifyPhone);
+    expect(JSON.stringify(audits.rows)).not.toContain(sensitive.freeText);
+  });
+  it.each([
+    { notifyOptIn: true },
+    { notifyOptIn: true, notifyConsentRecorded: true as const, notifyPhone: '123' },
+  ])('suppresses sensitive input before validation rejects %j', async (invalid) => {
+    await expect(caller().captureDemand({ ...sensitive, ...invalid })).rejects.toThrow();
+    expect(db.unfulfilledDemandEvent.create).not.toHaveBeenCalled();
+    expect(audits.rows).toEqual([{ input: '[skipped]', metadata: undefined, outcome: 'FAILURE' }]);
+  });
+  it('suppresses sensitive input on unauthenticated attempts too', async () => {
+    await expect(caller({ session: null }).captureDemand(sensitive)).rejects.toThrow();
+    expect(audits.rows).toEqual([{ input: '[skipped]', metadata: undefined, outcome: 'FAILURE' }]);
+  });
+  it('keeps only safe metadata when capture rejects missing notification contact', async () => {
+    await expect(caller().captureDemand({
+      ...sensitive, notifyPhone: undefined, notifyOptIn: true, notifyConsentRecorded: true,
+    })).rejects.toThrow('CONSENT_REQUIRED');
+    expect(db.unfulfilledDemandEvent.create).not.toHaveBeenCalled();
+    expect(audits.rows).toEqual([{
+      input: '[skipped]', outcome: 'FAILURE',
+      metadata: { quantity: 3, outcome: 'UNKNOWN', visitType: null, notifyOptIn: true },
+    }]);
+  });
 });
 describe('demand financial permission', () => {
   it.each([false, true])(

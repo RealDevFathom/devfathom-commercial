@@ -27,8 +27,10 @@ function fixture() {
         }),
     },
     pharmacyInventoryLot: {
-      findFirst: vi.fn().mockResolvedValue({ printedMrpMinor: 100, unitsPerPack: 1 }),
+      findFirst: vi.fn().mockResolvedValue({ printedMrpMinor: 100, unitsPerPack: 1,
+        packLevelId: 'pack-a', packLevel: { presentationId: 'presentation-a' } }),
     },
+    packLevel: { findMany: vi.fn().mockResolvedValue([]) },
     unfulfilledDemandEvent: {
       findFirst: vi.fn().mockResolvedValue(null),
       count: vi.fn().mockResolvedValue(0),
@@ -123,6 +125,85 @@ describe('lost-sales capture regressions', () => {
     const sql = db.$queryRaw.mock.calls[0]![0] as unknown as { values: unknown[]; text: string };
     expect(sql.text).toContain('pg_advisory_xact_lock');
     expect(sql.values).toEqual([JSON.stringify(['org-a', 'branch-a', terminalId, null])]);
+  });
+
+  it('prices an explicitly abandoned Unknown basket at full missing-item value', async () => {
+    const db = fixture();
+    db.pharmacySale.findFirst.mockResolvedValue({ customerId: null, status: 'OPEN',
+      lines: [{ quantity: 1, unitPriceMinor: 1000, discountMinor: 0 }] } as never);
+    expect(await captureDemand(db as never, scope, {
+      ...input, saleId: 'sale-a', outcome: 'UNKNOWN', visitType: 'WALK_OUT',
+    })).toMatchObject({ lossProbability: 1, abandonedBasketPkr: 10, estLossPkr: 13 });
+    expect(await captureDemand(db as never, scope, {
+      ...input, saleId: 'sale-a', outcome: 'UNKNOWN', visitType: 'PARTIAL',
+    })).toMatchObject({ lossProbability: 0.43, abandonedBasketPkr: 0, estLossPkr: 1.29 });
+  });
+
+  it.each([['PACK', 100, 43], ['STRIP', 10, 4.3]] as const)(
+    'normalizes %s demand using the lot pack hierarchy', async (saleUnit, requestedQty, estLossPkr) => {
+      const db = fixture();
+      db.pharmacyInventoryLot.findFirst.mockResolvedValue({ printedMrpMinor: 10000, unitsPerPack: 100,
+        packLevelId: 'pack-a', packLevel: { presentationId: 'presentation-a' } });
+      db.packLevel.findMany.mockResolvedValue([
+        { id: 'pack-a', level: 'BOX', parentPackLevelId: null, unitsPerParent: 1 },
+        { id: 'strip-a', level: 'STRIP', parentPackLevelId: 'pack-a', unitsPerParent: 10 },
+        { id: 'unit-a', level: 'UNIT', parentPackLevelId: 'strip-a', unitsPerParent: 10 },
+      ] as never);
+      expect(await captureDemand(db as never, scope, {
+        ...input, saleUnit, quantity: 1, outcome: 'UNKNOWN',
+      })).toMatchObject({ quantity: 1, saleUnit, requestedQty, unitPricePkr: 1, estLossPkr });
+      expect(db.packLevel.findMany).toHaveBeenCalledWith({
+        where: { organizationId: 'org-a', presentationId: 'presentation-a' },
+      });
+    }
+  );
+
+  it('keeps fractional canonical-unit prices until the final loss is rounded', async () => {
+    const db = fixture();
+    db.pharmacyInventoryLot.findFirst.mockResolvedValue({ printedMrpMinor: 1000, unitsPerPack: 3,
+      packLevelId: 'pack-a', packLevel: { presentationId: 'presentation-a' } });
+    expect(await captureDemand(db as never, scope, input)).toMatchObject({
+      unitPricePkr: 3.333333333333, estLossPkr: 10,
+    });
+  });
+
+  it('waits for the shared checkout row lock before re-reading a completed basket', async () => {
+    const db = fixture();
+    db.$queryRaw.mockImplementation(async () => {
+      db.pharmacySale.findFirst.mockResolvedValue({ status: 'COMPLETED', customerId: null,
+        lines: [{ quantity: 2, unitPriceMinor: 100, discountMinor: 0 }] } as never);
+      return [];
+    });
+    expect(await captureDemand(db as never, scope, {
+      ...input, saleId: 'sale-a', outcome: 'UNKNOWN', visitType: 'WALK_OUT',
+    })).toMatchObject({ visitType: 'PARTIAL', abandonedBasketPkr: 0, lossProbability: 0.43 });
+    expect(db.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      db.pharmacySale.findFirst.mock.invocationCallOrder[0]!
+    );
+    const lock = db.$queryRaw.mock.calls[0]![0] as unknown as { text: string; values: unknown[] };
+    expect(lock.text).toContain('FOR UPDATE');
+    expect(lock.values).toEqual(['sale-a', 'org-a', 'branch-a']);
+  });
+
+  it('excludes fresh unresolved return promises from the measured-rate denominator', async () => {
+    const db = fixture();
+    db.unfulfilledDemandEvent.count.mockImplementation(async ({ where }) => {
+      // 200 fresh promises must not displace the configured Unknown estimate.
+      // A broad not-Unknown denominator would incorrectly count these as known.
+      return where.outcome?.not === 'UNKNOWN' ? 200 : 0;
+    });
+    expect(await captureDemand(db as never, scope, { ...input, outcome: 'UNKNOWN' }))
+      .toMatchObject({ lossProbability: 0.43 });
+    expect(db.unfulfilledDemandEvent.count).toHaveBeenNthCalledWith(1, {
+      where: {
+        organizationId: 'org-a', branchId: 'branch-a', OR: [
+          { outcome: { in: ['SUBSTITUTE_TAKEN', 'ORDERED_FOR_CUSTOMER', 'WENT_ELSEWHERE'] } },
+          { outcome: 'WILL_RETURN', OR: [
+            { resolvedBySaleId: { not: null } }, { createdAt: { lte: expect.any(Date) } },
+          ] },
+        ],
+      },
+    });
   });
 
   it('refuses medicine or sale references outside the current scope before writing', async () => {

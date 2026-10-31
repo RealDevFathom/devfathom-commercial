@@ -340,6 +340,7 @@ function ScopedPharmacyCounterConsole({
   const autoPrintRef = useRef<HTMLInputElement>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [pending, setPending] = useState<string | null>(null);
+  const demandCaptureInFlight = useRef(false);
   const [tenderOutcome, setTenderOutcome] = useState<CounterTenderResult | null>(null);
   const [tenderReadRequired, setTenderReadRequired] = useState(false);
   const [refreshingTenderBill, setRefreshingTenderBill] = useState(false);
@@ -1375,7 +1376,7 @@ function ScopedPharmacyCounterConsole({
       outcome: LostSaleOutcome = 'UNKNOWN',
       options: DemandCaptureOptions = { notifyOptIn: false }
     ) => {
-      if (busy || !branchAuthorized || !deviceId) return false;
+      if (busy || demandCaptureInFlight.current || !branchAuthorized || !deviceId) return false;
       const requested = activeRow?.displayName ?? query.trim();
       if (!requested) {
         setNotice({ tone: 'warning', message: 'Search for the medicine first, then capture it.' });
@@ -1386,7 +1387,7 @@ function ScopedPharmacyCounterConsole({
         setNotice({ tone: 'warning', message: 'There is no stock shortfall to capture.' });
         return false;
       }
-      setPending('captureDemand');
+      demandCaptureInFlight.current = true;
       setNotice(null);
       try {
         await captureDemand.mutateAsync({
@@ -1416,13 +1417,12 @@ function ScopedPharmacyCounterConsole({
           tone: 'success',
           message: `Captured ${capturedUnits} canonical units of unfulfilled demand for ${requested}.`,
         });
-        focusSearch();
         return true;
       } catch (error) {
         setNotice({ tone: 'danger', message: messageFrom(error) });
         return false;
       } finally {
-        setPending(null);
+        demandCaptureInFlight.current = false;
       }
     },
     [
@@ -1431,7 +1431,6 @@ function ScopedPharmacyCounterConsole({
       branchId,
       busy,
       captureDemand,
-      focusSearch,
       query,
       quantity,
       deviceId,

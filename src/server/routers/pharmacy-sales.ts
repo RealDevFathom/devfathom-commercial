@@ -113,6 +113,7 @@ import {
   auditedProtectedProcedure,
   capabilityProcedure,
   protectedProcedure,
+  publicProcedure,
   router,
 } from '../trpc';
 import type { TRPCContext } from '../trpc';
@@ -1386,7 +1387,14 @@ export const pharmacySalesRouter = router({
         fail(error);
       }
     }),
-  captureDemand: auditedProtectedProcedure
+  captureDemand: publicProcedure
+    .use(({ ctx, next }) => {
+      // Run before auth and parsing: rejected consent/phone payloads also
+      // contain PII and must never enter the automatic raw-input audit.
+      ctx.audit.detail.skipInput = true;
+      return next();
+    })
+    .concat(auditedProtectedProcedure)
     .input(
       z
         .object({
@@ -1435,6 +1443,14 @@ export const pharmacySalesRouter = router({
         })
     )
     .mutation(async ({ ctx, input }) => {
+      annotateAudit(ctx, {
+        metadata: {
+          quantity: input.quantity,
+          outcome: input.outcome ?? 'UNKNOWN',
+          visitType: input.visitType ?? null,
+          notifyOptIn: input.notifyOptIn === true,
+        },
+      });
       try {
         return await captureDemand(ctx.db, await scopeFor(ctx, input.branchId), input);
       } catch (error) {
