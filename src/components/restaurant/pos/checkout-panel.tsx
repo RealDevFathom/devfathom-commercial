@@ -34,6 +34,9 @@ export type TerminalRequestOptions = {
 
 export type TerminalRequest = <T>(path: string, options?: TerminalRequestOptions) => Promise<T>;
 
+// Restore the comp control only when the public endpoint supports it after MVP.
+const COMPLIMENTARY_ITEMS_AVAILABLE = false;
+
 type CheckoutSummary = {
   orderId: string;
   settled: boolean;
@@ -962,15 +965,17 @@ export function CheckoutPanel({
                 </dl>
                 {bill.status === 'OPEN' ? (
                   <>
-                    <CompControl
-                      billId={bill.id}
-                      lines={bill.lines ?? []}
-                      request={request}
-                      operators={operators}
-                      actingOperatorId={actingOperatorId}
-                      disabled={busy || tenderPending}
-                      onComped={loadSummary}
-                    />
+                    {COMPLIMENTARY_ITEMS_AVAILABLE ? (
+                      <CompControl
+                        billId={bill.id}
+                        lines={bill.lines ?? []}
+                        request={request}
+                        operators={operators}
+                        actingOperatorId={actingOperatorId}
+                        disabled={busy || tenderPending}
+                        onComped={loadSummary}
+                      />
+                    ) : null}
                     <TenderPad
                       billId={bill.id}
                       amountDue={bill.remainingDue}
