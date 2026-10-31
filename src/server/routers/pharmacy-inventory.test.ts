@@ -28,11 +28,13 @@ vi.mock('@/server/audit', () => ({
   isAuditExcludedPath: vi.fn(() => true),
   recordTrpcAudit: vi.fn(),
 }));
-vi.mock('@/lib/pharmacy/finance-postings', () => ({
+vi.mock('@/lib/pharmacy/finance-postings', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/pharmacy/finance-postings')>()),
   postWriteOffEntry: mocks.postWriteOffEntry,
 }));
 
 import { moduleForProcedure } from '@/lib/module-catalog';
+import { FinancePostingError, PharmacyFinanceError } from '@/lib/pharmacy/finance-postings';
 
 import { pharmacyInventoryRouter } from './pharmacy-inventory';
 import type { TRPCContext } from '../trpc';
@@ -152,6 +154,28 @@ beforeEach(() => {
 });
 
 describe('pharmacy write-off accounting', () => {
+  it.each([
+    { error: new PharmacyFinanceError('NOT_FOUND'), code: 'NOT_FOUND' },
+    { error: new PharmacyFinanceError('CROSS_BRANCH_REFERENCE'), code: 'FORBIDDEN' },
+    { error: new PharmacyFinanceError('INVALID_STATE'), code: 'BAD_REQUEST' },
+    { error: new FinancePostingError('INVALID_AMOUNT'), code: 'BAD_REQUEST' },
+  ])('maps finance refusal $error.reason to $code', async ({ error, code }) => {
+    grant([allow('pharmacy:inventory')]);
+    db.$transaction.mockRejectedValueOnce(error);
+    await expect(
+      caller().writeOff({
+        branchId: 'branch_a',
+        inventoryLotId: 'lot_1',
+        stockLocationId: 'location_1',
+        units: 10,
+        witnessId: 'user_b',
+        reason: 'Expired stock destroyed',
+        evidenceRef: 'DEST-1',
+        idempotencyKey: 'writeoff-finance-error',
+      })
+    ).rejects.toMatchObject({ code, message: error.reason });
+  });
+
   it('posts the write-off journal in the same transaction as the stock movement', async () => {
     grant([allow('pharmacy:inventory')]);
     const occurredAt = new Date('2026-10-29T00:02:07.000Z');

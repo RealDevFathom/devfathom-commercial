@@ -293,7 +293,16 @@ export async function leakageReport(
   scope: ReportScope,
   input: { from: Date; to: Date }
 ): Promise<LeakageRow[]> {
-  return db.$queryRaw<LeakageRow[]>(Prisma.sql`
+  const rows = await db.$queryRaw<
+    Array<
+      Omit<LeakageRow, 'discountMinor' | 'writeOffMinor' | 'shrinkageMinor' | 'totalMinor'> & {
+        discountMinor: bigint;
+        writeOffMinor: bigint;
+        shrinkageMinor: bigint;
+        totalMinor: bigint;
+      }
+    >
+  >(Prisma.sql`
     WITH signed AS (
       SELECT line."branchId", line."productId",
              line."accountCode",
@@ -309,13 +318,20 @@ export async function leakageReport(
     )
     SELECT "branchId",
            "productId" AS "medicineId",
-           COALESCE(SUM(CASE WHEN "accountCode" = 'SALES_DISCOUNT' THEN "debitMinor" ELSE 0 END), 0)::int AS "discountMinor",
-           COALESCE(SUM(CASE WHEN "accountCode" = 'INVENTORY_WRITE_OFF' THEN "debitMinor" ELSE 0 END), 0)::int AS "writeOffMinor",
-           COALESCE(SUM(CASE WHEN "accountCode" = 'INVENTORY_SHRINKAGE' THEN "debitMinor" ELSE 0 END), 0)::int AS "shrinkageMinor",
-           COALESCE(SUM("debitMinor"), 0)::int AS "totalMinor"
+           COALESCE(SUM(CASE WHEN "accountCode" = 'SALES_DISCOUNT' THEN "debitMinor" ELSE 0 END), 0)::bigint AS "discountMinor",
+           COALESCE(SUM(CASE WHEN "accountCode" = 'INVENTORY_WRITE_OFF' THEN "debitMinor" ELSE 0 END), 0)::bigint AS "writeOffMinor",
+           COALESCE(SUM(CASE WHEN "accountCode" = 'INVENTORY_SHRINKAGE' THEN "debitMinor" ELSE 0 END), 0)::bigint AS "shrinkageMinor",
+           COALESCE(SUM("debitMinor"), 0)::bigint AS "totalMinor"
       FROM signed
      GROUP BY "branchId", "productId"
      ORDER BY "branchId", "productId"`);
+  return rows.map((row) => ({
+    ...row,
+    discountMinor: exactMoney(row.discountMinor),
+    writeOffMinor: exactMoney(row.writeOffMinor),
+    shrinkageMinor: exactMoney(row.shrinkageMinor),
+    totalMinor: exactMoney(row.totalMinor),
+  }));
 }
 
 export type TrialBalanceRow = { accountCode: string; debitMinor: number; creditMinor: number };

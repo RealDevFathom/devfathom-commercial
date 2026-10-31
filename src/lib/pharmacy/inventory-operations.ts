@@ -528,6 +528,14 @@ export async function receiveTransferLine(
   input: { transferId: string; lineId: string; receivedUnits: number; idempotencyKeyPrefix: string }
 ) {
   assertPositive(input.receivedUnits);
+  // Share the closing-receipt lock so competing receipts read committed totals.
+  await db.$queryRaw(
+    Prisma.sql`SELECT id FROM "pharmacy_interbranch_transfers"
+      WHERE id=${input.transferId}
+        AND "organizationId"=${scope.organizationId}
+        AND "toBranchId"=${scope.branchId}
+      FOR UPDATE`
+  );
   const transfer = await db.pharmacyInterbranchTransfer.findFirst({
     where: {
       id: input.transferId,
