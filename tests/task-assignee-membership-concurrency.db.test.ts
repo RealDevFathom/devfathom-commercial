@@ -10,6 +10,13 @@ const migration = readFileSync(
   'utf8'
 );
 
+// Minimal projection of the existing audit table used by the cleanup SQL.
+const auditTable = `CREATE TABLE audit_logs (
+  id text PRIMARY KEY, "organizationId" text NOT NULL, "actorType" text,
+  source text, category text, operation text, action text,
+  "targetType" text, "targetId" text, metadata jsonb
+);`;
+
 const describeIfDatabase = databaseUrl ? describe : describe.skip;
 
 describeIfDatabase('task-assignee project membership database invariant', () => {
@@ -23,12 +30,13 @@ describeIfDatabase('task-assignee project membership database invariant', () => 
     try {
       await setup.query(`CREATE SCHEMA "${schema}"; SET search_path TO "${schema}"`);
       await setup.query(`
+        ${auditTable}
         CREATE TABLE projects (id text PRIMARY KEY);
         CREATE TABLE boards (id text PRIMARY KEY, "projectId" text NOT NULL);
         CREATE TABLE columns (id text PRIMARY KEY, "boardId" text NOT NULL);
         CREATE TABLE tasks (id text PRIMARY KEY, "columnId" text NOT NULL);
         CREATE TABLE project_members (id text PRIMARY KEY, "projectId" text NOT NULL, "userId" text NOT NULL);
-        CREATE TABLE task_assignees (id text PRIMARY KEY, "taskId" text NOT NULL, "userId" text NOT NULL);
+        CREATE TABLE task_assignees (id text PRIMARY KEY, "taskId" text NOT NULL, "userId" text NOT NULL, "organizationId" text NOT NULL DEFAULT 'organization');
         INSERT INTO projects VALUES ('project');
         INSERT INTO boards VALUES ('board', 'project');
         INSERT INTO columns VALUES ('column', 'board');
@@ -69,12 +77,13 @@ describeIfDatabase('task-assignee project membership database invariant', () => 
     try {
       await client.query(`CREATE SCHEMA "${schema}"; SET search_path TO "${schema}"`);
       await client.query(`
+        ${auditTable}
         CREATE TABLE projects (id text PRIMARY KEY);
         CREATE TABLE boards (id text PRIMARY KEY, "projectId" text NOT NULL);
         CREATE TABLE columns (id text PRIMARY KEY, "boardId" text NOT NULL);
         CREATE TABLE tasks (id text PRIMARY KEY, "columnId" text NOT NULL);
         CREATE TABLE project_members (id text PRIMARY KEY, "projectId" text NOT NULL, "userId" text NOT NULL);
-        CREATE TABLE task_assignees (id text PRIMARY KEY, "taskId" text NOT NULL, "userId" text NOT NULL);
+        CREATE TABLE task_assignees (id text PRIMARY KEY, "taskId" text NOT NULL, "userId" text NOT NULL, "organizationId" text NOT NULL DEFAULT 'organization');
         INSERT INTO projects VALUES ('project');
         INSERT INTO boards VALUES ('board', 'project');
         INSERT INTO columns VALUES ('column', 'board');
@@ -84,6 +93,13 @@ describeIfDatabase('task-assignee project membership database invariant', () => 
       `);
       const remaining = await client.query(`SELECT * FROM task_assignees`);
       expect(remaining.rows).toEqual([]);
+      const audit = await client.query(`SELECT "organizationId", action, "targetId", metadata FROM audit_logs`);
+      expect(audit.rows).toEqual([expect.objectContaining({
+        organizationId: 'organization',
+        action: 'task.assignee_membership_cleanup',
+        targetId: 'task',
+        metadata: expect.objectContaining({ userId: 'outsider', reason: 'migration_cleanup' }),
+      })]);
     } finally {
       await client.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`).catch(() => undefined);
       await client.end();
@@ -97,12 +113,13 @@ describeIfDatabase('task-assignee project membership database invariant', () => 
     try {
       await client.query(`CREATE SCHEMA "${schema}"; SET search_path TO "${schema}"`);
       await client.query(`
+        ${auditTable}
         CREATE TABLE projects (id text PRIMARY KEY);
         CREATE TABLE boards (id text PRIMARY KEY, "projectId" text NOT NULL);
         CREATE TABLE columns (id text PRIMARY KEY, "boardId" text NOT NULL);
         CREATE TABLE tasks (id text PRIMARY KEY, "columnId" text NOT NULL);
         CREATE TABLE project_members (id text PRIMARY KEY, "projectId" text NOT NULL, "userId" text NOT NULL);
-        CREATE TABLE task_assignees (id text PRIMARY KEY, "taskId" text NOT NULL, "userId" text NOT NULL);
+        CREATE TABLE task_assignees (id text PRIMARY KEY, "taskId" text NOT NULL, "userId" text NOT NULL, "organizationId" text NOT NULL DEFAULT 'organization');
         ${migration}
         INSERT INTO projects VALUES ('project'), ('other-project');
         INSERT INTO boards VALUES ('board', 'project');
@@ -127,12 +144,13 @@ describeIfDatabase('task-assignee project membership database invariant', () => 
     try {
       await client.query(`CREATE SCHEMA "${schema}"; SET search_path TO "${schema}"`);
       await client.query(`
+        ${auditTable}
         CREATE TABLE projects (id text PRIMARY KEY);
         CREATE TABLE boards (id text PRIMARY KEY, "projectId" text NOT NULL);
         CREATE TABLE columns (id text PRIMARY KEY, "boardId" text NOT NULL);
         CREATE TABLE tasks (id text PRIMARY KEY, "columnId" text NOT NULL);
         CREATE TABLE project_members (id text PRIMARY KEY, "projectId" text NOT NULL, "userId" text NOT NULL);
-        CREATE TABLE task_assignees (id text PRIMARY KEY, "taskId" text NOT NULL, "userId" text NOT NULL);
+        CREATE TABLE task_assignees (id text PRIMARY KEY, "taskId" text NOT NULL, "userId" text NOT NULL, "organizationId" text NOT NULL DEFAULT 'organization');
         ${migration}
         INSERT INTO projects VALUES ('project');
         INSERT INTO boards VALUES ('board', 'project');
@@ -163,6 +181,7 @@ describeIfDatabase('task-assignee project membership database invariant', () => 
       await setup.query(`CREATE SCHEMA "${schema}"`);
       await setup.query(`SET search_path TO "${schema}"`);
       await setup.query(`
+        ${auditTable}
         CREATE TABLE projects (id text PRIMARY KEY);
         CREATE TABLE boards (id text PRIMARY KEY, "projectId" text NOT NULL REFERENCES projects);
         CREATE TABLE columns (id text PRIMARY KEY, "boardId" text NOT NULL REFERENCES boards);
@@ -171,7 +190,8 @@ describeIfDatabase('task-assignee project membership database invariant', () => 
           id text PRIMARY KEY, "projectId" text NOT NULL REFERENCES projects, "userId" text NOT NULL
         );
         CREATE TABLE task_assignees (
-          id text PRIMARY KEY, "taskId" text NOT NULL REFERENCES tasks, "userId" text NOT NULL
+          id text PRIMARY KEY, "taskId" text NOT NULL REFERENCES tasks, "userId" text NOT NULL,
+          "organizationId" text NOT NULL DEFAULT 'organization'
         );
         ${migration}
         INSERT INTO projects VALUES ('project');
@@ -222,12 +242,13 @@ describeIfDatabase('task-assignee project membership database invariant', () => 
       await setup.query(`CREATE SCHEMA "${schema}"`);
       await setup.query(`SET search_path TO "${schema}"`);
       await setup.query(`
+        ${auditTable}
         CREATE TABLE projects (id text PRIMARY KEY);
         CREATE TABLE boards (id text PRIMARY KEY, "projectId" text NOT NULL REFERENCES projects);
         CREATE TABLE columns (id text PRIMARY KEY, "boardId" text NOT NULL REFERENCES boards);
         CREATE TABLE tasks (id text PRIMARY KEY, "columnId" text NOT NULL REFERENCES columns);
         CREATE TABLE project_members (id text PRIMARY KEY, "projectId" text NOT NULL, "userId" text NOT NULL);
-        CREATE TABLE task_assignees (id text PRIMARY KEY, "taskId" text NOT NULL, "userId" text NOT NULL);
+        CREATE TABLE task_assignees (id text PRIMARY KEY, "taskId" text NOT NULL, "userId" text NOT NULL, "organizationId" text NOT NULL DEFAULT 'organization');
         ${migration}
         INSERT INTO projects VALUES ('project');
         INSERT INTO boards VALUES ('board', 'project');
@@ -265,12 +286,13 @@ describeIfDatabase('task-assignee project membership database invariant', () => 
     try {
       await setup.query(`CREATE SCHEMA "${schema}"; SET search_path TO "${schema}"`);
       await setup.query(`
+        ${auditTable}
         CREATE TABLE projects (id text PRIMARY KEY);
         CREATE TABLE boards (id text PRIMARY KEY, "projectId" text NOT NULL);
         CREATE TABLE columns (id text PRIMARY KEY, "boardId" text NOT NULL);
         CREATE TABLE tasks (id text PRIMARY KEY, "columnId" text NOT NULL);
         CREATE TABLE project_members (id text PRIMARY KEY, "projectId" text NOT NULL, "userId" text NOT NULL);
-        CREATE TABLE task_assignees (id text PRIMARY KEY, "taskId" text NOT NULL, "userId" text NOT NULL);
+        CREATE TABLE task_assignees (id text PRIMARY KEY, "taskId" text NOT NULL, "userId" text NOT NULL, "organizationId" text NOT NULL DEFAULT 'organization');
         ${migration}
         INSERT INTO projects VALUES ('source'), ('destination');
         INSERT INTO boards VALUES ('source-board', 'source'), ('destination-board', 'destination');
@@ -312,12 +334,13 @@ describeIfDatabase('task-assignee project membership database invariant', () => 
     try {
       await setup.query(`CREATE SCHEMA "${schema}"; SET search_path TO "${schema}"`);
       await setup.query(`
+        ${auditTable}
         CREATE TABLE projects (id text PRIMARY KEY);
         CREATE TABLE boards (id text PRIMARY KEY, "projectId" text NOT NULL);
         CREATE TABLE columns (id text PRIMARY KEY, "boardId" text NOT NULL);
         CREATE TABLE tasks (id text PRIMARY KEY, "columnId" text NOT NULL);
         CREATE TABLE project_members (id text PRIMARY KEY, "projectId" text NOT NULL, "userId" text NOT NULL);
-        CREATE TABLE task_assignees (id text PRIMARY KEY, "taskId" text NOT NULL, "userId" text NOT NULL);
+        CREATE TABLE task_assignees (id text PRIMARY KEY, "taskId" text NOT NULL, "userId" text NOT NULL, "organizationId" text NOT NULL DEFAULT 'organization');
         ${migration}
         INSERT INTO projects VALUES ('source'), ('destination');
         INSERT INTO boards VALUES ('source-board', 'source'), ('destination-board', 'destination');

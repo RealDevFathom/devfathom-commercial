@@ -98,8 +98,16 @@ export const POST = withApiAuth('tasks:write', async (ctx, request) => {
       where: { projectId: column.board.project.id, userId: { in: uniqueAssigneeIds } },
     });
     if (memberCount !== uniqueAssigneeIds.length) {
+      // Preserve the existing REST error for unknown ids; distinguish real
+      // workspace users who cannot be assigned to this project.
+      const userCount = await ctx.db.user.count({ where: { id: { in: uniqueAssigneeIds } } });
       return NextResponse.json(
-        { error: 'All assignees must be members of the project.' },
+        {
+          error:
+            userCount !== uniqueAssigneeIds.length
+              ? 'One or more assigneeIds do not exist.'
+              : 'All assignees must be members of the project.',
+        },
         { status: 400 }
       );
     }

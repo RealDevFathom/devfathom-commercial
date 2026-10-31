@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
       count: vi.fn(async () => 0),
       findMany: vi.fn(async () => []),
     },
+    user: { count: vi.fn(async () => 1) },
     label: { count: vi.fn(async () => 0) },
     task: {
       aggregate: vi.fn(async () => ({ _max: { order: null } })),
@@ -46,6 +47,23 @@ import { POST } from './route';
 beforeEach(() => vi.clearAllMocks());
 
 describe('POST /api/v1/tasks', () => {
+  it('preserves the existing error message for an unknown assignee id', async () => {
+    mocks.db.user.count.mockResolvedValueOnce(0);
+    const response = await POST(
+      new Request('https://example.test/api/v1/tasks', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ title: 'Task', columnId: 'column-1', assigneeIds: ['missing'] }),
+      })
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: 'One or more assigneeIds do not exist.',
+    });
+    expect(mocks.db.task.create).not.toHaveBeenCalled();
+  });
+
   it('rejects an assignee who is not a member of the task project', async () => {
     const response = await POST(
       new Request('https://example.test/api/v1/tasks', {

@@ -6,18 +6,31 @@
 -- future migration which needs to lock the same invariant participants.
 LOCK TABLE task_assignees, project_members, tasks IN SHARE ROW EXCLUSIVE MODE;
 
--- Remove invalid rows created before this invariant existed.
-DELETE FROM task_assignees ta
- WHERE NOT EXISTS (
-   SELECT 1
-     FROM tasks t
-     JOIN columns c ON c.id = t."columnId"
-     JOIN boards b ON b.id = c."boardId"
-     JOIN project_members pm
-       ON pm."projectId" = b."projectId"
-      AND pm."userId" = ta."userId"
-    WHERE t.id = ta."taskId"
- );
+-- Remove invalid rows created before this invariant existed, retaining a
+-- tenant-scoped audit record for every discarded assignment.
+WITH removed AS (
+  DELETE FROM task_assignees ta
+   WHERE NOT EXISTS (
+     SELECT 1
+       FROM tasks t
+       JOIN columns c ON c.id = t."columnId"
+       JOIN boards b ON b.id = c."boardId"
+       JOIN project_members pm
+         ON pm."projectId" = b."projectId"
+        AND pm."userId" = ta."userId"
+      WHERE t.id = ta."taskId"
+   )
+   RETURNING ta.*
+)
+INSERT INTO audit_logs (
+  id, "organizationId", "actorType", source, category, operation, action,
+  "targetType", "targetId", metadata
+)
+SELECT gen_random_uuid()::text, "organizationId", 'SYSTEM', 'SYSTEM', 'TASK',
+       'DELETE', 'task.assignee_membership_cleanup', 'Task', "taskId",
+       jsonb_build_object('reason', 'migration_cleanup', 'userId', "userId",
+                          'assignmentId', id)
+  FROM removed;
 
 CREATE OR REPLACE FUNCTION enforce_task_assignee_project_membership()
 RETURNS trigger
@@ -61,13 +74,26 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
-  DELETE FROM task_assignees ta
-   USING tasks t, columns c, boards b
-   WHERE ta."taskId" = t.id
-     AND t."columnId" = c.id
-     AND c."boardId" = b.id
-     AND b."projectId" = OLD."projectId"
-     AND ta."userId" = OLD."userId";
+  WITH removed AS (
+    DELETE FROM task_assignees ta
+     USING tasks t, columns c, boards b
+     WHERE ta."taskId" = t.id
+       AND t."columnId" = c.id
+       AND c."boardId" = b.id
+       AND b."projectId" = OLD."projectId"
+       AND ta."userId" = OLD."userId"
+     RETURNING ta.*
+  )
+  INSERT INTO audit_logs (
+    id, "organizationId", "actorType", source, category, operation, action,
+    "targetType", "targetId", metadata
+  )
+  SELECT gen_random_uuid()::text, "organizationId", 'SYSTEM', 'SYSTEM', 'TASK',
+         'DELETE', 'task.assignee_membership_cleanup', 'Task', "taskId",
+         jsonb_build_object('reason', 'project_member_departure', 'userId', "userId",
+                            'assignmentId', id, 'projectId', OLD."projectId",
+                            'initiatingUserId', NULLIF(current_setting('app.current_user_id', true), ''))
+    FROM removed;
   RETURN OLD;
 END;
 $$;
@@ -91,17 +117,30 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
-  DELETE FROM task_assignees ta
-   WHERE ta."taskId" = NEW.id
-     AND NOT EXISTS (
-       SELECT 1
-         FROM columns c
-         JOIN boards b ON b.id = c."boardId"
-         JOIN project_members pm
-           ON pm."projectId" = b."projectId"
-          AND pm."userId" = ta."userId"
-        WHERE c.id = NEW."columnId"
-     );
+  WITH removed AS (
+    DELETE FROM task_assignees ta
+     WHERE ta."taskId" = NEW.id
+       AND NOT EXISTS (
+         SELECT 1
+           FROM columns c
+           JOIN boards b ON b.id = c."boardId"
+           JOIN project_members pm
+             ON pm."projectId" = b."projectId"
+            AND pm."userId" = ta."userId"
+          WHERE c.id = NEW."columnId"
+       )
+     RETURNING ta.*
+  )
+  INSERT INTO audit_logs (
+    id, "organizationId", "actorType", source, category, operation, action,
+    "targetType", "targetId", metadata
+  )
+  SELECT gen_random_uuid()::text, "organizationId", 'SYSTEM', 'SYSTEM', 'TASK',
+         'DELETE', 'task.assignee_membership_cleanup', 'Task', "taskId",
+         jsonb_build_object('reason', 'task_project_move', 'userId', "userId",
+                            'assignmentId', id, 'columnId', NEW."columnId",
+                            'initiatingUserId', NULLIF(current_setting('app.current_user_id', true), ''))
+    FROM removed;
   RETURN NEW;
 END;
 $$;
