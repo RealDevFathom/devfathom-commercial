@@ -97,7 +97,7 @@ async function occurrence(status: 'MISSED' | 'SCHEDULED' = 'MISSED') {
 
 const payload = (occurrenceId: string, secret = PIN) => ({
   occurrenceId,
-  approving: { staffProfileId: approverId, type: 'PIN', secret },
+  approving: { staffProfileId: approverId, type: 'PIN' as const, secret },
   reason: 'Operational waiver',
 });
 async function batch(inputs: unknown[], paths = inputs.map(() => 'restaurantSopExecution.waive')) {
@@ -202,6 +202,46 @@ afterEach(async () => {
 });
 
 suite('SOP waiver HTTP batch rollback (real PostgreSQL)', () => {
+  it('persists lockouts with all ten request connections occupied and then rolled back', async () => {
+    await reset();
+    const id = await occurrence();
+    const { createTRPCContext } = await import('@/server/trpc');
+    const { restaurantSopExecutionRouter } =
+      await import('@/server/routers/restaurant-sop-execution');
+    const { organization, session } = await mocks.actor();
+    let occupied = 0;
+    let release!: () => void;
+    const allOccupied = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const rollback = new Error('Roll back the request after authentication');
+
+    const requests = await Promise.allSettled(
+      Array.from({ length: 10 }, () =>
+        tenancy.withTenantDb(
+          orgId,
+          async (db) => {
+            if (++occupied === 10) release();
+            // Every outer connection is held before any authentication starts.
+            await allOccupied;
+            const ctx = await createTRPCContext({ db, organization, session });
+            await expect(
+              restaurantSopExecutionRouter.createCaller(ctx).waive(payload(id, '000000'))
+            ).resolves.toEqual({ blocked: 'Waiver authorization failed.' });
+            throw rollback;
+          },
+          { userId }
+        )
+      )
+    );
+    expect(requests).toEqual(
+      Array.from({ length: 10 }, () => ({ status: 'rejected', reason: rollback }))
+    );
+    const locked = await counters();
+    expect(locked.failedAttempts).toBe(0);
+    expect(locked.lockedUntil!.getTime()).toBeGreaterThan(Date.now());
+  }, 60_000);
+
   it('retains failed attempts and lockout when a validation-failing sibling rolls back the batch', async () => {
     await reset();
     const id = await occurrence('SCHEDULED');

@@ -30,6 +30,7 @@ function runtimeDatabaseUrl(): string {
 
 const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined;
+  credentialPrisma: PrismaClient | undefined;
   prismaVersion: string | undefined;
 };
 
@@ -143,8 +144,8 @@ function serializeInteractiveTransactions(factory: PrismaPg): PrismaPg {
   });
 }
 
-function createPrismaClient() {
-  const pool = new pg.Pool({ connectionString: runtimeDatabaseUrl(), max: 10 });
+function createPrismaClient(max = 10) {
+  const pool = new pg.Pool({ connectionString: runtimeDatabaseUrl(), max });
   const adapter = serializeInteractiveTransactions(new PrismaPg(pool));
 
   return new PrismaClient({
@@ -158,10 +159,12 @@ function createPrismaClient() {
 // Invalidate cached client if version changed (schema was updated)
 if (globalForPrisma.prismaVersion !== PRISMA_VERSION) {
   globalForPrisma.prisma = undefined;
+  globalForPrisma.credentialPrisma = undefined;
   globalForPrisma.prismaVersion = PRISMA_VERSION;
 }
 
 let client: PrismaClient | undefined;
+let credentialClient: PrismaClient | undefined;
 
 function getPrismaClient(): PrismaClient {
   if (!client) {
@@ -171,14 +174,33 @@ function getPrismaClient(): PrismaClient {
   return client;
 }
 
+function getCredentialPrismaClient(): PrismaClient {
+  if (!credentialClient) {
+    credentialClient = globalForPrisma.credentialPrisma ?? createPrismaClient(2);
+    if (process.env.NODE_ENV !== 'production') {
+      globalForPrisma.credentialPrisma = credentialClient;
+    }
+  }
+  return credentialClient;
+}
+
 // Route imports/build inspection must not require runtime credentials or create a pool.
 // Resolve the client on first use; Prisma methods must receive the real client as `this`.
-export const db = new Proxy({} as PrismaClient, {
-  get(_target, key) {
-    // Promise/await inspection must not turn this ordinary export into a DB operation.
-    if (key === 'then') return undefined;
-    const target = getPrismaClient();
-    const value = Reflect.get(target, key, target) as unknown;
-    return typeof value === 'function' ? value.bind(target) : value;
-  },
-});
+function lazyClient(resolve: () => PrismaClient): PrismaClient {
+  return new Proxy({} as PrismaClient, {
+    get(_target, key) {
+      // Promise/await inspection must not turn this ordinary export into a DB operation.
+      if (key === 'then') return undefined;
+      const target = resolve();
+      const value = Reflect.get(target, key, target) as unknown;
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+}
+
+export const db = lazyClient(getPrismaClient);
+
+// Credential attempts commit while a request transaction is still open. Reserve
+// a separate, bounded pool so ten occupied request connections cannot deadlock
+// waiting for their authentication transactions. Uses the same runtime role.
+export const credentialAttemptDb = lazyClient(getCredentialPrismaClient);

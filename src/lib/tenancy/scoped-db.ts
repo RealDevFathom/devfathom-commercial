@@ -1,7 +1,7 @@
 import 'server-only';
 
 import type { Prisma, PrismaClient } from '@/generated/prisma/client';
-import { db } from '@/lib/db';
+import { credentialAttemptDb, db } from '@/lib/db';
 import { bindSideEffects, type SideEffectScope } from '@/lib/side-effects/scope';
 
 /**
@@ -11,8 +11,8 @@ import { bindSideEffects, type SideEffectScope } from '@/lib/side-effects/scope'
  * identical. Exposing the common application-facing shape avoids forcing every
  * router helper to understand Prisma's transaction-only utility type.
  *
- * `withTenantDb` and `withPlatformDb` remain the only constructors: the cast
- * below never exposes an unscoped client at runtime.
+ * The tenant, credential, and platform wrappers below apply scope before
+ * exposing a client: the cast never exposes an unscoped client at runtime.
  */
 export type ScopedDb = PrismaClient;
 
@@ -142,6 +142,28 @@ export async function withTenantDb<T>(
     }
     return result;
   });
+}
+
+/** Independently commit credential lockouts without borrowing from the request pool. */
+export async function withTenantCredentialDb<T>(
+  organizationId: string,
+  run: (tx: ScopedDb) => Promise<T>,
+  options: { userId: string }
+): Promise<T> {
+  assertOrganizationId(organizationId);
+  return credentialAttemptDb.$transaction(
+    async (tx) => {
+      await tx.$queryRawUnsafe(
+        `SELECT set_config('app.current_organization_id', $1, true),
+                set_config('app.current_user_id', $2, true),
+                set_config('app.is_platform_admin', 'false', true)`,
+        organizationId,
+        options.userId
+      );
+      return run(exposeNestedTransaction(tx));
+    },
+    { maxWait: 10_000, timeout: 30_000 }
+  );
 }
 
 export async function withPlatformDb<T>(

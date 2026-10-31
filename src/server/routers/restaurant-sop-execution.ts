@@ -34,7 +34,7 @@ import {
   isValidPinFormat,
 } from '@/lib/restaurant/operator-credentials';
 import { staffHasCapability } from '@/lib/restaurant/job-roles';
-import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
+import { withTenantCredentialDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 
 /**
  * M7-L4 — the SOP execution router (branch-board reads + operator/verifier commands).
@@ -644,10 +644,11 @@ export const restaurantSopExecutionRouter = router({
 
           // Attempts must commit independently of the waiver/request: a later
           // state error or failing batch sibling must not erase lockout state.
-          const approval = await withTenantDb(
+          // Its reserved pool remains available even when requests fill theirs.
+          const approval = await withTenantCredentialDb(
             ctx.entitlements.organizationId,
             (authDb) => authenticateOperator(authDb, { ...input.approving, now: new Date() }),
-            { userId: ctx.session!.user.id, skipDrain: true }
+            { userId: ctx.session!.user.id }
           );
           if (
             !approval.ok ||

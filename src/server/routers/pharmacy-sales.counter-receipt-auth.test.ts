@@ -62,6 +62,7 @@ vi.mock('@/lib/pharmacy/receipt-print', () => ({
 }));
 
 import { hasModule } from '@/lib/entitlements';
+import { recordTrpcAudit } from '@/server/audit';
 import { readCounterCart, readCounterReceipt } from '@/lib/pharmacy/counter';
 import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-source';
 import { readReturnHistory } from '@/lib/pharmacy/sales';
@@ -550,7 +551,13 @@ describe('counter receipt authorization', () => {
     ).resolves.toMatchObject({
       receiptNumber: 7,
     });
-    expect(f.context.audit.detail).toMatchObject({
+    expect(f.context.audit.detail).toEqual({});
+    expect(recordTrpcAudit).toHaveBeenCalledOnce();
+    const audit = vi.mocked(recordTrpcAudit).mock.calls[0]![0];
+    expect(audit.path).toBe('pharmacySales.counterReceipt');
+    expect(audit.outcome).toBe('SUCCESS');
+    expect(audit.ctx.audit).not.toBe(f.context.audit);
+    expect(audit.ctx.audit?.detail).toMatchObject({
       targetType: 'PharmacyBranch',
       targetId: 'branch-a',
       metadata: {
@@ -579,7 +586,13 @@ describe('counter receipt authorization', () => {
         reprint: true,
       })
     ).resolves.toMatchObject({ status: 'READY', reprint: true });
-    expect(admin.context.audit.detail).toMatchObject({
+    expect(admin.context.audit.detail).toEqual({});
+    expect(recordTrpcAudit).toHaveBeenCalledOnce();
+    const audit = vi.mocked(recordTrpcAudit).mock.calls[0]![0];
+    expect(audit.path).toBe('pharmacySales.counterReceiptPrintJob');
+    expect(audit.outcome).toBe('SUCCESS');
+    expect(audit.ctx.audit).not.toBe(admin.context.audit);
+    expect(audit.ctx.audit?.detail).toMatchObject({
       metadata: { reason: 'org-admin-receipt-access' },
     });
   });

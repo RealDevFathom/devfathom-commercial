@@ -15,13 +15,13 @@ const mocks = vi.hoisted(() => ({
   recordTrpcAudit: vi.fn(),
   authenticateOperator: vi.fn(),
   staffHasCapability: vi.fn(async () => true),
-  withTenantDb: vi.fn(),
+  withTenantCredentialDb: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({
   createTenantDb: vi.fn(() => ({})),
-  withTenantDb: mocks.withTenantDb,
+  withTenantCredentialDb: mocks.withTenantCredentialDb,
 }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/entitlements', () => ({
@@ -114,7 +114,7 @@ beforeEach(() => {
     staffProfileId: 'staff_b',
   });
   mocks.staffHasCapability.mockResolvedValue(true);
-  mocks.withTenantDb.mockImplementation(async (_id, run) => run(db));
+  mocks.withTenantCredentialDb.mockImplementation(async (_id, run) => run(db));
 });
 
 /**
@@ -448,7 +448,7 @@ describe('waive', () => {
   it('commits authentication in a separate tenant scope before a later waiver state error', async () => {
     const authDb = { credentialTransaction: true };
     let authenticationCommitted = false;
-    mocks.withTenantDb.mockImplementation(async (_id, run) => {
+    mocks.withTenantCredentialDb.mockImplementation(async (_id, run) => {
       const result = await run(authDb);
       authenticationCommitted = true;
       return result;
@@ -467,9 +467,8 @@ describe('waive', () => {
       })
     ).rejects.toMatchObject({ code: 'CONFLICT' });
     expect(authenticationCommitted).toBe(true);
-    expect(mocks.withTenantDb).toHaveBeenCalledWith('org_1', expect.any(Function), {
+    expect(mocks.withTenantCredentialDb).toHaveBeenCalledWith('org_1', expect.any(Function), {
       userId: 'user_1',
-      skipDrain: true,
     });
     expect(mocks.authenticateOperator).toHaveBeenCalledWith(
       authDb,
