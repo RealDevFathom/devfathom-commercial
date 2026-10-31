@@ -2,7 +2,7 @@ import 'server-only';
 
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { businessDateToUtcDate } from '@/lib/restaurant/business-date';
+import { businessDateToUtcDate, resolveBusinessDate } from '@/lib/restaurant/business-date';
 import {
   RecurrenceError,
   type RecurrenceFrequency,
@@ -723,11 +723,28 @@ export async function updateAssignment(db: ScopedDb, id: string, patch: UpdateAs
 export async function setAssignmentActive(db: ScopedDb, id: string, active: boolean) {
   const existing = await db.restaurantSopAssignment.findUnique({
     where: { id },
-    select: { id: true, supersededAt: true },
+    select: {
+      id: true,
+      supersededAt: true,
+      endDate: true,
+      supersededBy: { select: { startDate: true } },
+      branch: { select: { timezone: true, businessDayCutoff: true } },
+    },
   });
   if (!existing) throw new SopTemplateError(`Assignment ${id} was not found.`, 'NOT_FOUND');
   if (active && existing.supersededAt) {
-    throw new SopTemplateError('A superseded assignment cannot be reactivated.', 'INVALID_STATE');
+    // A bounded predecessor may still own the current business day while its
+    // successor is pending. Same-start-date revisions retain historical bounds
+    // that overlap the successor, so those predecessors must stay inactive.
+    const canResume =
+      existing.endDate &&
+      existing.supersededBy &&
+      existing.endDate < existing.supersededBy.startDate &&
+      dateColumnToISO(existing.endDate) >=
+        resolveBusinessDate(new Date(), existing.branch.timezone, existing.branch.businessDayCutoff);
+    if (!canResume) {
+      throw new SopTemplateError('A superseded assignment cannot be reactivated.', 'INVALID_STATE');
+    }
   }
   return db.restaurantSopAssignment.update({ where: { id }, data: { active } });
 }
