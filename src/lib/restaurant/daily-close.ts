@@ -6,6 +6,7 @@ import { Prisma, type RestaurantTenderType } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { businessDateToUtcDate } from './business-date';
+import { DailyCloseError } from './daily-close-errors';
 import {
   beginMoneyIdempotent,
   foldExpectedCash,
@@ -15,15 +16,12 @@ import {
   type FoldableMovement,
   type MoneyActor,
 } from './drawer-sessions';
-import { DailyCloseError, lockDailyClose } from './money-day-guard';
-import { enqueueInsightRollup } from './insight-rollups';
 import { sub, sum, ZERO } from './money';
+import { enqueueInsightRollup } from './insight-rollups';
+import { lockMoneyDay } from './money-day';
 
-export {
-  assertMoneyDayOpen,
-  DailyCloseError,
-  type DailyCloseErrorReason,
-} from './money-day-guard';
+export { assertMoneyDayOpen } from './money-day';
+export { DailyCloseError, type DailyCloseErrorReason } from './daily-close-errors';
 
 /**
  * M5-L3 / C9 / §11.3 — the IMMUTABLE daily close.
@@ -424,7 +422,7 @@ export type CutCloseResult = {
 export async function cutClose(db: ScopedDb, input: CutCloseInput): Promise<CutCloseResult> {
   const businessDate = businessDateToUtcDate(input.businessDate);
   return runMoneyTransaction(db, async (tx) => {
-    await lockDailyClose(tx, input.branchId, input.businessDate);
+    await lockMoneyDay(tx, input.branchId, input.businessDate);
     const canonical = canonicalClosePayload({
       version: 1,
       branchId: input.branchId,
@@ -506,7 +504,7 @@ export async function correctClose(
   }
 
   return runMoneyTransaction(db, async (tx) => {
-    await lockDailyClose(tx, input.branchId, input.businessDate);
+    await lockMoneyDay(tx, input.branchId, input.businessDate);
     const canonical = canonicalClosePayload({
       version: 1,
       branchId: input.branchId,

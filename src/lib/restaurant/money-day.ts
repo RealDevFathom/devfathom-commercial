@@ -2,30 +2,10 @@ import 'server-only';
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-export type DailyCloseErrorReason =
-  | 'UNSETTLED_BILL'
-  | 'OPEN_DRAWER'
-  | 'CLOSE_EXISTS'
-  | 'NOTHING_TO_CORRECT'
-  | 'NOT_TIP'
-  | 'CO_AUTH_REQUIRED'
-  | 'REASON_REQUIRED'
-  | 'CLOSE_NOT_FOUND'
-  | 'INVALID';
+import { DailyCloseError } from './daily-close-errors';
 
-export class DailyCloseError extends Error {
-  constructor(
-    message: string,
-    readonly reason: DailyCloseErrorReason
-  ) {
-    super(message);
-    this.name = 'DailyCloseError';
-  }
-}
-
-/** Serialize a close chain at the organization + branch + business-date grain.
- * The transaction-scoped advisory lock releases automatically on commit/rollback. */
-export async function lockDailyClose(
+/** Serialize money writes at the organization + branch + business-date grain. */
+export async function lockMoneyDay(
   tx: ScopedDb,
   branchId: string,
   businessDate: string
@@ -46,7 +26,7 @@ export async function assertMoneyDayOpen(
   branchId: string,
   businessDate: Date
 ): Promise<void> {
-  await lockDailyClose(tx, branchId, businessDate.toISOString().slice(0, 10));
+  await lockMoneyDay(tx, branchId, businessDate.toISOString().slice(0, 10));
   const close = await tx.restaurantDailyClose.findFirst({
     where: { branchId, businessDate },
     select: { id: true },

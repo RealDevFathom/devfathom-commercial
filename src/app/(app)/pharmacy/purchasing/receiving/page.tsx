@@ -14,6 +14,7 @@ import {
   type Gs1WarningCode,
 } from '@/lib/pharmacy/gs1-datamatrix';
 import { actorCanProcure } from '@/lib/pharmacy/procurement-access';
+import { reconcileInputTaxBills } from '@/lib/pharmacy/input-tax-reconciliation';
 import type {
   GoodsReceiptDetail,
   MedicineOption,
@@ -197,7 +198,10 @@ export default async function PharmacyReceivingPage({
     (selectedReceipt.qualifiedPersonUserId ||
       selectedReceipt.lines.some((line) => line.medicine.controlled))
   );
-  const witnesses = needsWitness ? await caller.controlledWitnesses() : [];
+  const witnesses =
+    needsWitness && selectedReceipt
+      ? await caller.controlledWitnesses({ branchId, goodsReceiptId: selectedReceipt.id })
+      : [];
 
   // ── actions ───────────────────────────────────────────────────────────────
 
@@ -243,6 +247,8 @@ export default async function PharmacyReceivingPage({
         purchaseOrderId: order.id,
         supplierInvoiceRef: field(form, 'supplierInvoiceRef'),
         supplierInvoiceDate: dateField(form, 'supplierInvoiceDate', 'Invoice date'),
+        distributorNtn: optionalField(form, 'distributorNtn'),
+        distributorStrn: optionalField(form, 'distributorStrn'),
         warrantyEvidenceRef: field(form, 'warrantyEvidenceRef'),
         receivedAt: dateField(form, 'receivedAt', 'Received on'),
         note: optionalField(form, 'note'),
@@ -302,6 +308,8 @@ export default async function PharmacyReceivingPage({
         supplierId: field(form, 'supplierId'),
         supplierInvoiceRef: field(form, 'directInvoiceRef'),
         supplierInvoiceDate: dateField(form, 'directInvoiceDate', 'Invoice date'),
+        distributorNtn: optionalField(form, 'directDistributorNtn'),
+        distributorStrn: optionalField(form, 'directDistributorStrn'),
         warrantyEvidenceRef: field(form, 'directWarranty'),
         receivedAt: dateField(form, 'directReceivedAt', 'Received on'),
         directPurchase: {
@@ -450,6 +458,7 @@ export default async function PharmacyReceivingPage({
   }
 
   const openExceptionCount = exceptionStatus === 'OPEN' ? exceptions.length : null;
+  const inputTaxReport = reconcileInputTaxBills(receipts);
 
   return (
     <Frame branch={scope} notice={notice}>
@@ -578,6 +587,36 @@ export default async function PharmacyReceivingPage({
         )}
       </SectionCard>
 
+      <SectionCard eyebrow="Input-tax hygiene" title="Purchase bill reconciliation" titleLevel={2}>
+        <div className="grid gap-3 sm:grid-cols-3">
+          <Stat label="Bills needing tax identity" value={inputTaxReport.flaggedBillCount} />
+          <Stat label="Posted input tax" value={money(inputTaxReport.claimedInputTaxMinor)} />
+          <Stat label="Claim on flagged bills" value={money(inputTaxReport.flaggedClaimMinor)} />
+        </div>
+        <p className="mt-3 text-sm text-text-muted">
+          Input tax is calculated from posted, creditable invoice lines. Confirm the claim with your
+          tax adviser; this report is a reconciliation aid, not a tax filing.
+        </p>
+        {inputTaxReport.rows.some((row) => row.flagged) ? (
+          <ul className="mt-3 divide-y divide-border-subtle rounded-[var(--radius-sm)] border border-warning/40">
+            {inputTaxReport.rows
+              .filter((row) => row.flagged)
+              .map((row) => (
+                <li className="flex flex-wrap items-center justify-between gap-2 p-3" key={row.id}>
+                  <span className="text-sm text-text-strong">
+                    {row.reference} · invoice {row.supplierInvoiceRef}
+                  </span>
+                  <span className="text-sm font-medium text-warning">
+                    Missing {row.missing.join(' and ')} · claim {money(row.claimMinor)}
+                  </span>
+                </li>
+              ))}
+          </ul>
+        ) : (
+          <p className="mt-3 text-sm text-text-muted">Every recorded bill has both NTN and STRN.</p>
+        )}
+      </SectionCard>
+
       {/* ── PUR-02 capture against a purchase order ────────────────────────── */}
       <SectionCard eyebrow="PUR-02" title="Receive against a purchase order" titleLevel={2}>
         {receivable.length === 0 ? (
@@ -644,7 +683,19 @@ export default async function PharmacyReceivingPage({
                     type="date"
                   />
                   <TextField
-                    className="lg:col-span-4"
+                    label="Distributor NTN"
+                    name="distributorNtn"
+                    notice={notice}
+                    hint="As printed on this purchase bill. Missing values are flagged in reconciliation."
+                  />
+                  <TextField
+                    label="Distributor STRN"
+                    name="distributorStrn"
+                    notice={notice}
+                    hint="As printed on this purchase bill. Missing values are flagged in reconciliation."
+                  />
+                  <TextField
+                    className="lg:col-span-2"
                     label="Warranty / source evidence"
                     name="warrantyEvidenceRef"
                     notice={notice}
@@ -786,6 +837,18 @@ export default async function PharmacyReceivingPage({
                 name="directWarranty"
                 notice={notice}
                 required
+              />
+              <TextField
+                label="Distributor NTN"
+                name="directDistributorNtn"
+                notice={notice}
+                hint="As printed on this purchase bill."
+              />
+              <TextField
+                label="Distributor STRN"
+                name="directDistributorStrn"
+                notice={notice}
+                hint="As printed on this purchase bill."
               />
               <TextAreaField
                 className="sm:col-span-2"
@@ -1195,6 +1258,12 @@ function ReceiptDetail({
         {receipt.supplier.name} · invoice {receipt.supplierInvoiceRef} (
         {dateOnly(receipt.supplierInvoiceDate)}) · received {dateOnly(receipt.receivedAt)}
         {receipt.purchaseOrder ? ` · against ${receipt.purchaseOrder.reference}` : ''}
+      </p>
+      <p
+        className={`mt-1 text-sm ${receipt.distributorNtn && receipt.distributorStrn ? 'text-text-muted' : 'font-medium text-warning'}`}
+      >
+        Distributor NTN {receipt.distributorNtn ?? 'missing'} · STRN{' '}
+        {receipt.distributorStrn ?? 'missing'}
       </p>
       {receipt.directPurchase ? (
         <div className="mt-3 rounded-[var(--radius-sm)] border border-warning/40 bg-warning/5 p-3">

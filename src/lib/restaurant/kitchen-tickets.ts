@@ -129,7 +129,13 @@ export async function enqueueKitchenTicketPrintJobs(
       documentType: { in: ['KITCHEN_TICKET', 'BAR_TICKET'] },
     },
     orderBy: [{ stationId: 'desc' }, { documentType: 'desc' }],
-    select: { documentType: true, stationId: true, printerId: true, registeredPrinterId: true, enabled: true },
+    select: {
+      documentType: true,
+      stationId: true,
+      printerId: true,
+      registeredPrinterId: true,
+      enabled: true,
+    },
   });
   const service = new PrintBridgeService(tx);
   let enqueued = 0;
