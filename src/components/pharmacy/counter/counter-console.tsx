@@ -116,6 +116,15 @@ export function CounterWhatsAppOffer({
     confirmedOverride.previousValue === initialOptIn
       ? confirmedOverride.value
       : initialOptIn;
+  if (
+    confirmedOverride &&
+    (confirmedOverride.customerId !== customerId ||
+      confirmedOverride.previousValue !== initialOptIn)
+  ) {
+    // Once server data or the selected customer changes, retire the saved
+    // override so it cannot mask a later consent update with the same value.
+    setConfirmedOverride(null);
+  }
 
   return (
     <div className="flex items-center justify-between gap-3 rounded-[var(--radius-sm)] bg-surface-sunken p-3">

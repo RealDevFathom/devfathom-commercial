@@ -356,6 +356,47 @@ describe('CounterWhatsAppOffer', () => {
     expect(onError).not.toHaveBeenCalled();
   });
 
+  it('uses newer server consent after the saved change has been refreshed', async () => {
+    mocks.mutations.setCustomerWhatsAppOptIn.mockResolvedValue({ whatsappOptIn: false });
+    const props = {
+      branchId: 'branch-a',
+      customerId: 'customer-a',
+      onSaved: vi.fn(),
+      onError: vi.fn(),
+    };
+    const { rerender } = render(<CounterWhatsAppOffer {...props} initialOptIn={true} />);
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'WhatsApp consent' }));
+    await waitFor(() => expect(props.onSaved).toHaveBeenCalledOnce());
+    rerender(<CounterWhatsAppOffer {...props} initialOptIn={false} />);
+    expect(screen.getByRole('checkbox', { name: 'WhatsApp consent' })).not.toBeChecked();
+
+    // A later START or another operator's save must supersede the local opt-out.
+    rerender(<CounterWhatsAppOffer {...props} initialOptIn={true} />);
+    expect(screen.getByText('Current status: Opted in')).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'WhatsApp consent' })).toBeChecked();
+  });
+
+  it('discards a previous customer override when the selected customer changes', async () => {
+    mocks.mutations.setCustomerWhatsAppOptIn.mockResolvedValue({ whatsappOptIn: false });
+    const props = {
+      branchId: 'branch-a',
+      initialOptIn: true,
+      onSaved: vi.fn(),
+      onError: vi.fn(),
+    };
+    const { rerender } = render(<CounterWhatsAppOffer {...props} customerId="customer-a" />);
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'WhatsApp consent' }));
+    await waitFor(() => expect(props.onSaved).toHaveBeenCalledOnce());
+    rerender(<CounterWhatsAppOffer {...props} customerId="customer-b" />);
+    expect(screen.getByRole('checkbox', { name: 'WhatsApp consent' })).toBeChecked();
+
+    rerender(<CounterWhatsAppOffer {...props} customerId="customer-a" />);
+    expect(screen.getByText('Current status: Opted in')).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'WhatsApp consent' })).toBeChecked();
+  });
+
   it('reports a failed consent save without changing the confirmed state', async () => {
     const error = new Error('save failed');
     mocks.mutations.setCustomerWhatsAppOptIn.mockRejectedValue(error);

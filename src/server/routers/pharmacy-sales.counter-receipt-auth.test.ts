@@ -84,6 +84,7 @@ const app = router({ pharmacySales: pharmacySalesRouter });
 type Permission = { capability: string; effect: 'ALLOW' | 'DENY' };
 
 const dispense: Permission[] = [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }];
+const counter: Permission[] = [{ capability: 'pharmacy:counter', effect: 'ALLOW' }];
 
 function fixture(
   permissions: Permission[],
@@ -221,7 +222,7 @@ const paths: {
 
 describe('counter receipt authorization', () => {
   it('allows WhatsApp consent updates for an assigned counter user', async () => {
-    const f = fixture(dispense);
+    const f = fixture(counter);
     assign(f, ['branch-a']);
 
     await expect(
@@ -244,8 +245,19 @@ describe('counter receipt authorization', () => {
     expect(f.db.$transaction).toHaveBeenCalledOnce();
   });
 
-  it('denies WhatsApp consent updates without a counter capability', async () => {
-    const f = fixture([]);
+  it.each<{ name: string; permissions: Permission[] }>([
+    { name: 'no capability', permissions: [] },
+    { name: 'dispensing permission only', permissions: dispense },
+    {
+      name: 'legacy counter permission only',
+      permissions: [{ capability: 'pharmacy.counter', effect: 'ALLOW' }],
+    },
+    {
+      name: 'an explicit counter denial',
+      permissions: [...counter, { capability: 'pharmacy:counter', effect: 'DENY' }],
+    },
+  ])('denies WhatsApp consent updates with $name', async ({ permissions }) => {
+    const f = fixture(permissions);
     assign(f, ['branch-a']);
 
     await expect(
@@ -260,7 +272,7 @@ describe('counter receipt authorization', () => {
   });
 
   it('denies WhatsApp consent updates without an assignment to the requested branch', async () => {
-    const f = fixture(dispense);
+    const f = fixture(counter);
     assign(f, ['branch-b']);
 
     await expect(
@@ -270,6 +282,7 @@ describe('counter receipt authorization', () => {
         optedIn: false,
       })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(f.db.pharmacyBranchAssignment.findMany).toHaveBeenCalledOnce();
     expect(setCustomerWhatsAppOptIn).not.toHaveBeenCalled();
     expect(f.db.$transaction).not.toHaveBeenCalled();
   });
