@@ -209,6 +209,26 @@ const UNKNOWN_TENDER_MESSAGE =
 
 type ConsoleProps = { initialSaleId?: string | null; initialBranchId?: string };
 
+function counterSelectionPreview(
+  row: CounterSearchRow | null,
+  option: CounterSearchRow['saleUnits'][number] | null,
+  quantity: number
+) {
+  if (!row || !option || row.printedMrpMinor === null || row.unitsPerPack === null) return null;
+  try {
+    return previewSaleLine({
+      option,
+      quantity,
+      printedMrpMinor: row.printedMrpMinor,
+      unitsPerPack: row.unitsPerPack,
+      roundingIncrementMinor: row.roundingIncrementMinor,
+      availableUnits: row.onHandUnits,
+    });
+  } catch {
+    return null;
+  }
+}
+
 export function PharmacyCounterConsole(props: ConsoleProps = {}) {
   const { data: session, status } = useSession();
   const entitlements = useEntitlements();
@@ -278,7 +298,7 @@ function ScopedPharmacyCounterConsole({
   const [submittedSearch, setSubmittedSearch] = useState({ text: '', query: '', branchId: '' });
   const submittedQuery = submittedSearch.query;
   const scannerRevision = useRef(0);
-  const scannerInFlight = useRef(false);
+  const scannerInFlight = useRef<{ text: string } | null>(null);
   const [activeRow, setActiveRow] = useState<CounterSearchRow | null>(null);
   const [saleUnit, setSaleUnit] = useState<SaleUnitKind | null>(null);
   const [quantity, setQuantity] = useState(1);
@@ -326,7 +346,6 @@ function ScopedPharmacyCounterConsole({
   const outcomeInFlight = useRef(false);
 
   const searchRef = useRef<HTMLInputElement>(null);
-  const barcodeAdd = useRef<string | null>(null);
   const rxPanelRef = useRef<HTMLDivElement>(null);
   const tenderRef = useRef<HTMLDivElement>(null);
 
@@ -355,7 +374,6 @@ function ScopedPharmacyCounterConsole({
   useEffect(
     () => () => {
       scannerRevision.current += 1;
-      barcodeAdd.current = null;
     },
     [branchAuthorized, branchId]
   );
@@ -554,28 +572,10 @@ function ScopedPharmacyCounterConsole({
     [activeRow, saleUnit]
   );
 
-  const preview = useMemo(() => {
-    if (
-      !activeRow ||
-      !selectedOption ||
-      activeRow.printedMrpMinor === null ||
-      activeRow.unitsPerPack === null
-    ) {
-      return null;
-    }
-    try {
-      return previewSaleLine({
-        option: selectedOption,
-        quantity,
-        printedMrpMinor: activeRow.printedMrpMinor,
-        unitsPerPack: activeRow.unitsPerPack,
-        roundingIncrementMinor: activeRow.roundingIncrementMinor,
-        availableUnits: activeRow.onHandUnits,
-      });
-    } catch {
-      return null;
-    }
-  }, [activeRow, quantity, selectedOption]);
+  const preview = useMemo(
+    () => counterSelectionPreview(activeRow, selectedOption, quantity),
+    [activeRow, quantity, selectedOption]
+  );
 
   const requestedCanonicalUnits = selectedOption
     ? selectedOption.canonicalUnitsPerSaleUnit * quantity
@@ -813,6 +813,49 @@ function ScopedPharmacyCounterConsole({
     searchRef.current?.select();
   }, []);
 
+  const runSearch = useCallback(
+    async (submittedQuery?: string) => {
+      if (!branchAuthorized || busy) return;
+      const trimmed = (submittedQuery ?? query).trim();
+      if (trimmed.length < 2) {
+        setNotice({ tone: 'warning', message: 'Type at least two characters to search.' });
+        return;
+      }
+      const revision = ++scannerRevision.current;
+      const looksLikeGs1 = trimmed.startsWith(']d2') || trimmed.startsWith('(01)');
+      if (!looksLikeGs1) {
+        setSubmittedSearch({ text: trimmed, query: trimmed, branchId });
+        return { query: trimmed, revision, blocked: false };
+      }
+      setPending('authenticatePack');
+      try {
+        const verdict = await authenticatePack.mutateAsync({ branchId, payload: trimmed });
+        if (revision !== scannerRevision.current) return;
+        setSubmittedSearch({ text: trimmed, query: verdict.parsed?.gtin ?? trimmed, branchId });
+        setNotice({
+          tone:
+            verdict.status === 'VERIFIED'
+              ? 'success'
+              : verdict.status === 'BLOCKED_RECALL'
+                ? 'danger'
+                : 'warning',
+          message: verdict.explanation,
+        });
+        return {
+          query: verdict.parsed?.gtin ?? trimmed,
+          revision,
+          blocked: verdict.status === 'BLOCKED_RECALL',
+        };
+      } catch (error) {
+        if (revision !== scannerRevision.current) return;
+        setNotice({ tone: 'danger', message: messageFrom(error) });
+      } finally {
+        setPending(null);
+      }
+    },
+    [authenticatePack, branchAuthorized, branchId, busy, query]
+  );
+
   const stageRow = useCallback((row: CounterSearchRow) => {
     setActiveRow(row);
     setQuantity(1);
@@ -828,30 +871,25 @@ function ScopedPharmacyCounterConsole({
   }, [branchId, createSale, saleId, setActiveSale]);
 
   const addToCart = useCallback(
-    async (selection?: {
-      row: CounterSearchRow;
-      option: NonNullable<typeof selectedOption>;
-      quantity: number;
-      preview: NonNullable<typeof preview>;
-    }) => {
-      const row = selection?.row ?? activeRow;
-      const option = selection?.option ?? selectedOption;
-      const lineQuantity = selection?.quantity ?? quantity;
-      const linePreview = selection?.preview ?? preview;
-      // A GS1 scan reaches this callback while its authentication action still owns
-      // `pending`; that event path is allowed to hand off directly to add-to-cart.
-      if (!row || !option || !linePreview || (busy && !selection)) return;
-      if (!linePreview.sufficient) {
+    async (scannedRow?: CounterSearchRow, scanRevision?: number) => {
+      const scanIsCurrent = () =>
+        scanRevision === undefined || scanRevision === scannerRevision.current;
+      if (!scanIsCurrent()) return;
+      const row = scannedRow ?? activeRow;
+      const option = scannedRow ? (scannedRow.saleUnits[0] ?? null) : selectedOption;
+      const units = scannedRow ? 1 : quantity;
+      const selectionPreview = scannedRow ? counterSelectionPreview(row, option, units) : preview;
+      const batchOverride = scannedRow ? null : lotOverride;
+      if (!row || !option || !selectionPreview || busy) return;
+      if (!selectionPreview.sufficient) {
         setNotice({
           tone: 'warning',
-          message: `Only ${linePreview.availableUnits} safe units are on hand. Reduce the quantity or capture the shortfall.`,
+          message: `Only ${selectionPreview.availableUnits} safe units are on hand. Reduce the quantity or capture the shortfall.`,
         });
         return;
       }
-      // stageRow clears the previous medicine's override, but this callback may
-      // still hold that previous render while a scan is handed off directly.
-      const overrideLotId = selection ? null : (lotOverride?.inventoryLotId ?? null);
-      if (overrideLotId && !lotOverride?.reason.trim()) {
+      const overrideLotId = batchOverride?.inventoryLotId ?? null;
+      if (overrideLotId && !batchOverride?.reason.trim()) {
         setNotice({ tone: 'warning', message: 'Enter a reason before selling a non-FEFO batch.' });
         return;
       }
@@ -859,6 +897,8 @@ function ScopedPharmacyCounterConsole({
       setNotice(null);
       try {
         const activeSaleId = await ensureSale();
+        // Creating a bill can outlive this scan or the mounted counter.
+        if (!scanIsCurrent()) return;
         const controlled = row.restriction.controlled;
         const addressOk = patientAddress.trim().length >= 3;
         const prescriptionOk =
@@ -906,16 +946,16 @@ function ScopedPharmacyCounterConsole({
           presentationId: row.presentationId,
           packLevelId: option.packLevelId,
           saleUnit: option.kind,
-          quantity: lineQuantity,
+          quantity: units,
           canonicalUnitsPerSaleUnit: option.canonicalUnitsPerSaleUnit,
           // A stable key per (sale, medicine, unit, quantity) so a double-press of
           // the add chord cannot post the same line twice.
-          idempotencyKey: `counter:${activeSaleId}:${row.medicineId}:${option.packLevelId}:${option.kind}:${lineQuantity}${overrideLotId ? `:${overrideLotId}` : ''}`,
-          ...(overrideLotId && lotOverride
+          idempotencyKey: `counter:${activeSaleId}:${row.medicineId}:${option.packLevelId}:${option.kind}:${units}${overrideLotId ? `:${overrideLotId}` : ''}`,
+          ...(overrideLotId && batchOverride
             ? {
                 override: {
                   inventoryLotId: overrideLotId,
-                  reason: lotOverride.reason.trim(),
+                  reason: batchOverride.reason.trim(),
                   approvalPolicy: COUNTER_OVERRIDE_APPROVAL_POLICY,
                 },
               }
@@ -932,7 +972,7 @@ function ScopedPharmacyCounterConsole({
         setLotOverride(null);
         setNotice({
           tone: 'success',
-          message: `${lineQuantity} × ${row.displayName} added${overrideLotId ? ' with a recorded batch override' : ''}.`,
+          message: `${units} × ${row.displayName} added${overrideLotId ? ' with a recorded batch override' : ''}.`,
         });
         setQuery('');
         focusSearch();
@@ -969,79 +1009,46 @@ function ScopedPharmacyCounterConsole({
     ]
   );
 
-  const runSearch = useCallback(
+  // Authentication belongs to this scan; other pending actions must still block its add.
+  const barcodeBusy = useRef(false);
+  useEffect(() => {
+    barcodeBusy.current = busy && pending !== 'authenticatePack';
+  }, [busy, pending]);
+
+  const addBarcode = useCallback(
     async (submittedQuery?: string) => {
-      if (!branchAuthorized || busy || scannerInFlight.current) return;
-      const trimmed = (submittedQuery ?? query).trim();
-      if (trimmed.length < 2) {
-        setNotice({ tone: 'warning', message: 'Type at least two characters to search.' });
-        return;
-      }
-      const revision = ++scannerRevision.current;
-      const stageBarcodeResult = async (search: string) => {
-        setSubmittedSearch({ text: trimmed, query: search, branchId });
-        if (barcodeAdd.current !== trimmed) return;
-        const input = { branchId, query: search };
-        const result = await utils.client.pharmacySales.counterSearch.query(input);
-        if (revision !== scannerRevision.current || barcodeAdd.current !== trimmed) return;
-        utils.pharmacySales.counterSearch.setData(input, result);
-        barcodeAdd.current = null;
-        if (result.rows.length !== 1) return;
-        const row = result.rows[0]!;
-        const option = row.saleUnits[0];
-        stageRow(row);
-        if (!option || row.printedMrpMinor === null || row.unitsPerPack === null) return;
-        try {
-          const linePreview = previewSaleLine({
-            option,
-            quantity: 1,
-            printedMrpMinor: row.printedMrpMinor,
-            unitsPerPack: row.unitsPerPack,
-            roundingIncrementMinor: row.roundingIncrementMinor,
-            availableUnits: row.onHandUnits,
-          });
-          if (linePreview.sufficient)
-            await addToCart({ row, option, quantity: 1, preview: linePreview });
-        } catch {
-          // Keep the result staged so the operator can resolve invalid pricing manually.
-        }
-      };
-      const looksLikeGs1 = trimmed.startsWith(']d2') || trimmed.startsWith('(01)');
-      const scanning = looksLikeGs1 || barcodeAdd.current === trimmed;
-      if (scanning) {
-        scannerInFlight.current = true;
-        setPending(looksLikeGs1 ? 'authenticatePack' : 'searchBarcode');
-      }
+      const scan = { text: (submittedQuery ?? query).trim() };
+      if (busy || scannerInFlight.current?.text === scan.text) return;
+      scannerInFlight.current = scan;
+      let revision: number | undefined;
       try {
-        if (!looksLikeGs1) {
-          await stageBarcodeResult(trimmed);
+        const search = await runSearch(submittedQuery);
+        if (!search || search.blocked) return;
+        revision = search.revision;
+        const result = await utils.pharmacySales.counterSearch.fetch(
+          { branchId, query: search.query },
+          { staleTime: 10_000 }
+        );
+        if (revision !== scannerRevision.current || result.rows.length !== 1 || barcodeBusy.current)
           return;
+        const row = result.rows[0]!;
+        const restage =
+          activeRow?.medicineId !== row.medicineId || saleUnit !== (row.saleUnits[0]?.kind ?? null);
+        if (restage) stageRow(row);
+        const scanPreview = restage
+          ? counterSelectionPreview(row, row.saleUnits[0] ?? null, 1)
+          : preview;
+        if (scanPreview?.sufficient) {
+          await addToCart(restage ? row : undefined, revision);
         }
-        const verdict = await authenticatePack.mutateAsync({ branchId, payload: trimmed });
-        if (revision !== scannerRevision.current) return;
-        setNotice({
-          tone:
-            verdict.status === 'VERIFIED'
-              ? 'success'
-              : verdict.status === 'BLOCKED_RECALL'
-                ? 'danger'
-                : 'warning',
-          message: verdict.explanation,
-        });
-        if (verdict.status === 'BLOCKED_RECALL') barcodeAdd.current = null;
-        await stageBarcodeResult(verdict.parsed?.gtin ?? trimmed);
       } catch (error) {
-        if (revision !== scannerRevision.current) return;
-        barcodeAdd.current = null;
-        setNotice({ tone: 'danger', message: messageFrom(error) });
+        if (revision === scannerRevision.current)
+          setNotice({ tone: 'danger', message: messageFrom(error) });
       } finally {
-        if (scanning) {
-          scannerInFlight.current = false;
-          setPending(null);
-        }
+        if (scannerInFlight.current === scan) scannerInFlight.current = null;
       }
     },
-    [addToCart, authenticatePack, branchAuthorized, branchId, busy, query, stageRow, utils]
+    [activeRow, addToCart, branchId, busy, preview, query, runSearch, saleUnit, stageRow, utils]
   );
 
   const runTransition = useCallback(
@@ -1870,7 +1877,6 @@ function ScopedPharmacyCounterConsole({
                     aria-describedby="counter-search-help"
                     onChange={(event) => {
                       scannerRevision.current += 1;
-                      barcodeAdd.current = null;
                       setQuery(event.target.value);
                       setActiveRow(null);
                       setSaleUnit(null);
@@ -1885,10 +1891,7 @@ function ScopedPharmacyCounterConsole({
                         trimmed.startsWith(']d2') ||
                         trimmed.startsWith('(01)');
                       if (barcode) {
-                        barcodeAdd.current = trimmed;
-                        // Read from the input event: React may not have committed the
-                        // preceding change render before a scanner sends Enter.
-                        void runSearch(trimmed);
+                        void addBarcode(trimmed);
                         return;
                       }
                       if (activeRow) {

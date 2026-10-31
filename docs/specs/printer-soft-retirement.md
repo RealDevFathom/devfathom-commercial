@@ -170,7 +170,6 @@ stale-isolation tests remain a separately authorized database acceptance gate. R
 rollout must prevent old writers that ignore retirement from creating new registered work
 before a retirement endpoint is enabled. Source acceptance must state that dependency.
 
-
 ## Implemented backend slice
 
 The nullable `retiredAt` field and additive application migration are accompanied by an
