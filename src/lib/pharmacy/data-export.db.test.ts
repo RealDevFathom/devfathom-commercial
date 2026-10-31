@@ -64,7 +64,8 @@ async function seed(organizationId: string, label: string, catalogueEdges = fals
     const medicine = await db.medicine.create({
       data: {
         organizationId,
-        productName: `${label} Paracetamol 500mg`,
+        productName: catalogueEdges ? `+${label} Paracetamol 500mg` : `${label} Paracetamol 500mg`,
+        manufacturer: catalogueEdges ? "'@Manufacturer" : null,
         productFamily: 'PHARMACEUTICAL',
         presentations: { create: { organizationId, presentation: 'Tablet, 10 per strip' } },
       },
@@ -82,6 +83,12 @@ async function seed(organizationId: string, label: string, catalogueEdges = fals
       },
     });
     if (catalogueEdges) {
+      const ingredient = await db.ingredient.create({ data: {
+        organizationId, name: "'Paracetamol",
+      } });
+      await db.medicineStrengthComponent.create({ data: {
+        organizationId, medicineId: medicine.id, ingredientId: ingredient.id, value: '500.000001', unit: 'mg',
+      } });
       await db.packLevel.create({ data: {
         organizationId, presentationId: medicine.presentations[0]!.id,
         versionGroupId: `box-${label}-${suffix}`, version: 1, level: 'BOX',
@@ -90,6 +97,14 @@ async function seed(organizationId: string, label: string, catalogueEdges = fals
       await db.medicineBarcode.create({ data: {
         organizationId, presentationId: medicine.presentations[0]!.id, packLevelId: packLevel.id,
         type: 'INTERNAL', code: `catalogue${suffix}`, normalizedCode: `catalogue${suffix}`,
+      } });
+      await db.medicineBarcode.create({ data: {
+        organizationId, presentationId: medicine.presentations[0]!.id, packLevelId: packLevel.id,
+        type: 'MANUFACTURER', code: `+pack${suffix}`, normalizedCode: `pack${suffix}`,
+      } });
+      await db.medicineBarcode.create({ data: {
+        organizationId, presentationId: medicine.presentations[0]!.id, packLevelId: null,
+        type: 'INTERNAL', code: `'+presentation${suffix}`, normalizedCode: `presentation${suffix}`,
       } });
       await db.medicine.create({ data: {
         organizationId, productName: `${label} Unpacked medicine`, productFamily: 'PHARMACEUTICAL',
@@ -197,6 +212,7 @@ suite('owner data export under forced PostgreSQL RLS', () => {
     expect(organizationName).toBe('alpha Pharmacy');
     expect(dataset.branches).toHaveLength(1);
     expect(dataset.medicines).toHaveLength(3);
+    expect(dataset.medicineBarcodes).toHaveLength(3);
     expect(dataset.stockLots).toEqual([
       expect.objectContaining({ lot_code: seeded.lotId, quantity: 120, pack: 10, cost: '2.50' }),
     ]);
@@ -226,7 +242,7 @@ suite('owner data export under forced PostgreSQL RLS', () => {
     // Complete the supported catalogue path, rather than just counting profiler rows.
     const target = `${orgA}_import`;
     await withTenantDb(target, (db) => db.organization.create({ data: {
-      id: target, slug: target, legalName: 'Imported pharmacy', vertical: 'PHARMACY',
+      id: target, slug: target, legalName: 'Imported pharmacy', displayName: 'Imported pharmacy', vertical: 'PHARMACY',
     } }));
     const csv = files.find((file) => file.name === 'medicines.csv')!.data.toString('utf8');
     const imported = await withTenantDb(target, (db) =>

@@ -31,7 +31,7 @@ export type SourceTable = {
  * text and records the source file's hash so a wrong decode is detectable rather
  * than silently absorbed.
  */
-export function parseDelimitedText(text: string): SourceTable {
+export function parseDelimitedText(text: string, options: { trimCells?: boolean } = {}): SourceTable {
   const withoutBom = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
   if (withoutBom.trim().length === 0) return { headers: [], rows: [] };
 
@@ -45,7 +45,10 @@ export function parseDelimitedText(text: string): SourceTable {
     // A trailing newline yields one empty record; an all-blank row carries no
     // incumbent record and is not an exception either.
     .filter((record) => record.some((cell) => cell.trim().length > 0))
-    .map((record) => headers.map((_header, index) => (record[index] ?? '').trim()));
+    .map((record) => headers.map((_header, index) => {
+      const cell = record[index] ?? '';
+      return options.trimCells === false ? cell : cell.trim();
+    }));
 
   return { headers, rows };
 }

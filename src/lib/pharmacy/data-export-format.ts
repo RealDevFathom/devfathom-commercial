@@ -83,6 +83,26 @@ export const PHARMACY_EXPORT_FILES = {
       col('saleable', 'Saleable flag.'),
       col('medicine_code', 'DevFathom medicine identifier.'),
       col('presentation_code', 'DevFathom presentation identifier.'),
+      col('strength_components', 'JSON array of ingredient names, exact strength values and units for this medicine.'),
+      col('pack_barcodes', 'JSON array of all barcodes for this effective pack, with type and normalized_code.'),
+      col('presentation_barcodes', 'JSON array of barcodes attached to the presentation rather than a pack, with type and normalized_code.'),
+      col('catalogue_encoding', 'apostrophe-v1: formula prefixes and literal leading apostrophes are reversibly escaped.'),
+    ],
+  },
+  medicineBarcodes: {
+    name: 'medicine-barcodes.csv',
+    title: 'All medicine barcodes',
+    importable: false,
+    scope: 'Every barcode, including presentation-level barcodes and barcodes on historical or future packs. Current catalogue barcodes also appear in medicines.csv for import.',
+    columns: [
+      col('code', 'DevFathom barcode identifier.'),
+      col('medicine_code', 'Medicine identifier (medicines.csv medicine_code).'),
+      col('presentation_code', 'Presentation identifier (medicines.csv presentation_code).'),
+      col('pack_level_code', 'Pack identifier, blank for presentation-level barcodes.'),
+      col('barcode_value', 'Original barcode text.'),
+      col('barcode_type', 'GTIN, MANUFACTURER or INTERNAL.'),
+      col('normalized_code', 'Stored normalized barcode identity.'),
+      col('catalogue_encoding', 'apostrophe-v1: remove one leading apostrophe from doubled apostrophes or protected formula text to recover the original cell.'),
     ],
   },
   stockLots: {
@@ -374,19 +394,33 @@ export function neutralizeSpreadsheetFormula(text: string): string {
   return FORMULA.test(text) ? `'${text}` : text;
 }
 
-export function exportCsvCell(value: ExportCell): string {
+/** Reverse only our escape, including escaped literal apostrophes. */
+export function decodeSpreadsheetText(text: string): string {
+  if (text.startsWith("''") ||
+      (text.startsWith("'") && neutralizeSpreadsheetFormula(text.slice(1)) === text)) {
+    return text.slice(1);
+  }
+  return text;
+}
+
+export function exportCsvCell(value: ExportCell, reversibleText = false): string {
   if (value === null || value === undefined) return '';
   const text =
-    typeof value === 'string' ? neutralizeSpreadsheetFormula(value) : String(value);
+    typeof value === 'string'
+      ? reversibleText && value.startsWith("'") ? `'${value}` : neutralizeSpreadsheetFormula(value)
+      : String(value);
   return /[",\r\n]/.test(text) || text !== text.trim() ? `"${text.replaceAll('"', '""')}"` : text;
 }
 
 /** RFC 4180 CSV with CRLF line endings. The caller adds the UTF-8 BOM. */
 export function exportRowsToCsv(spec: ExportFileSpec, rows: readonly ExportRow[]): string {
   const headers = spec.columns.map((column) => column.header);
+  const reversibleText = headers.includes('catalogue_encoding');
   return [
     headers.join(','),
-    ...rows.map((row) => headers.map((header) => exportCsvCell(row[header])).join(',')),
+    ...rows.map((row) => headers.map((header) => exportCsvCell(
+      header === 'catalogue_encoding' ? 'apostrophe-v1' : row[header], reversibleText
+    )).join(',')),
   ]
     .join('\r\n')
     .concat('\r\n');
@@ -466,6 +500,14 @@ export function buildPharmacyExportReadme(
     'not merge into existing medicines or import stock. Packs keep their canonical',
     'conversions as independent levels. Batch, expiry and MRP belong to stock lots,',
     'so do not send medicines.csv through the stock migration profiler.',
+    'Ingredient strengths and all current pack/presentation barcodes are restored.',
+    'medicine-barcodes.csv additionally preserves barcode relationships to historical packs.',
+    'For medicines.csv above 5 MB or 10,000 rows, a database operator can import the',
+    'complete file without HTTP limits from the repository (DATABASE_URL targets the',
+    'receiving database):',
+    'bunx tsx --tsconfig scripts/tsconfig.json scripts/import-pharmacy-catalogue.ts --organization <target-id> --file <medicines.csv>',
+    'The local-file path validates the same catalogue, uses tenant RLS, and imports',
+    'all rows atomically into non-saleable drafts; no manual splitting is needed.',
     '',
     'Column names follow the DevFathom migration wizard (Excel/CSV source) import headers:',
     'code, product, pack, barcode, batch, expiry, mrp, cost, quantity, supplier, customer,',
@@ -479,6 +521,9 @@ export function buildPharmacyExportReadme(
     '- Quantities are canonical (smallest sellable) units unless the column says packs.',
     "- A text cell that a spreadsheet would run as a formula (starting with =, +, -, @, tab",
     "  or carriage return) is prefixed with an apostrophe ('). Plain numbers are unchanged.",
+    "- In catalogue CSVs marked apostrophe-v1, literal leading apostrophes are doubled.",
+    '  The catalogue importer reverses this',
+    '  encoding for apostrophe-v1 files, preserving the original text and whitespace.',
     '',
     'Files',
     '-----',

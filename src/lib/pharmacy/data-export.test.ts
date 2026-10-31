@@ -86,6 +86,7 @@ function seededDb() {
           lasa: false,
           coldChain: false,
           saleable: true,
+          strengths: [{ ingredient: { name: 'Paracetamol' }, value: '500', unit: 'mg' }],
           presentations: [
             {
               id: 'pr-1',
@@ -93,7 +94,7 @@ function seededDb() {
               dosageForm: 'Tablet',
               route: 'Oral',
               packLevels,
-              barcodes: [{ code: '8964000000011', packLevelId: 'pl-strip' }],
+              barcodes: [{ id: 'bc-1', type: 'GTIN', code: '8964000000011', normalizedCode: '8964000000011', packLevelId: 'pl-strip' as string | null }],
             },
           ],
         },
@@ -112,6 +113,7 @@ function seededDb() {
           lasa: false,
           coldChain: false,
           saleable: false,
+          strengths: [],
           presentations: [],
         },
       ]),
@@ -564,6 +566,34 @@ describe('request', () => {
 });
 
 describe('collection', () => {
+  it('preserves strengths and every barcode with its medicine, presentation and pack relationship', async () => {
+    const { db } = seededDb();
+    const medicines = await db.medicine.findMany();
+    const presentation = medicines[0]!.presentations[0]!;
+    presentation.barcodes.push(
+      { id: 'bc-2', type: 'MANUFACTURER', code: '+second', normalizedCode: 'second', packLevelId: 'pl-strip' },
+      { id: 'bc-3', type: 'INTERNAL', code: '@presentation', normalizedCode: 'presentation', packLevelId: null },
+      { id: 'bc-4', type: 'GTIN', code: 'retired', normalizedCode: 'retired', packLevelId: 'retired-pack' },
+    );
+    db.medicine.findMany.mockResolvedValueOnce(medicines);
+    const { dataset } = await collectPharmacyDataExport(db as unknown as ScopedDb, 'org-a', RANGE, NOW);
+    expect(JSON.parse(String(dataset.medicines[0]!.strength_components))).toEqual([
+      { ingredient: 'Paracetamol', value: '500', unit: 'mg' },
+    ]);
+    expect(JSON.parse(String(dataset.medicines[0]!.pack_barcodes))).toEqual([
+      { code: '8964000000011', type: 'GTIN', normalized_code: '8964000000011' },
+      { code: '+second', type: 'MANUFACTURER', normalized_code: 'second' },
+    ]);
+    expect(JSON.parse(String(dataset.medicines[0]!.presentation_barcodes))).toEqual([
+      { code: '@presentation', type: 'INTERNAL', normalized_code: 'presentation' },
+    ]);
+    expect(dataset.medicineBarcodes).toEqual(presentation.barcodes.map((barcode) => ({
+      code: barcode.id, medicine_code: 'med-1', presentation_code: 'pr-1',
+      pack_level_code: barcode.packLevelId, barcode_value: barcode.code,
+      barcode_type: barcode.type, normalized_code: barcode.normalizedCode,
+    })));
+  });
+
   it.each(['SUPPLIER_PAYMENT', 'CHEQUE', 'VOUCHER'])(
     'includes posted %s settlements and excludes reversed ones',
     async (kind) => {

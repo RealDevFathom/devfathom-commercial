@@ -436,6 +436,11 @@ export async function collectPharmacyDataExport(
       lasa: true,
       coldChain: true,
       saleable: true,
+      strengths: {
+        where: { organizationId },
+        orderBy: [{ ingredient: { name: 'asc' } }, { value: 'asc' }, { unit: 'asc' }],
+        select: { value: true, unit: true, ingredient: { select: { name: true } } },
+      },
       presentations: {
         where: { organizationId },
         orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
@@ -458,13 +463,14 @@ export async function collectPharmacyDataExport(
           barcodes: {
             where: { organizationId },
             orderBy: [{ code: 'asc' }, { id: 'asc' }],
-            select: { code: true, packLevelId: true },
+            select: { id: true, type: true, code: true, normalizedCode: true, packLevelId: true },
           },
         },
       },
     },
   });
   const medicineRows: ExportRow[] = [];
+  const barcodeRows: ExportRow[] = [];
   for (const medicine of medicines) {
     const shared = {
       product: medicine.productName,
@@ -481,18 +487,33 @@ export async function collectPharmacyDataExport(
       cold_chain: medicine.coldChain,
       saleable: medicine.saleable,
       medicine_code: medicine.id,
+      strength_components: JSON.stringify(medicine.strengths.map((component) => ({
+        ingredient: component.ingredient.name, value: component.value.toString(), unit: component.unit,
+      }))),
     };
     if (medicine.presentations.length === 0) {
       medicineRows.push({ code: medicine.id, ...shared });
       continue;
     }
     for (const presentation of medicine.presentations) {
+      const barcodeData = (barcode: typeof presentation.barcodes[number]) => ({
+        code: barcode.code, type: barcode.type, normalized_code: barcode.normalizedCode,
+      });
+      for (const barcode of presentation.barcodes) {
+        barcodeRows.push({
+          code: barcode.id, medicine_code: medicine.id, presentation_code: presentation.id,
+          pack_level_code: barcode.packLevelId, barcode_value: barcode.code,
+          barcode_type: barcode.type, normalized_code: barcode.normalizedCode,
+        });
+      }
       const base = {
         ...shared,
         presentation: presentation.presentation,
         dosage_form: presentation.dosageForm,
         route: presentation.route,
         presentation_code: presentation.id,
+        presentation_barcodes: JSON.stringify(presentation.barcodes
+          .filter((barcode) => barcode.packLevelId === null).map(barcodeData)),
       };
       const conversions = packConversions(presentation.packLevels, now);
       if (conversions.length === 0) {
@@ -505,6 +526,8 @@ export async function collectPharmacyDataExport(
           ...base,
           pack: conversion.canonicalUnitsPerPack,
           pack_level: conversion.level,
+          pack_barcodes: JSON.stringify(presentation.barcodes
+            .filter((barcode) => barcode.packLevelId === conversion.packLevelId).map(barcodeData)),
           barcode:
             presentation.barcodes.find((barcode) => barcode.packLevelId === conversion.packLevelId)
               ?.code ?? null,
@@ -1072,6 +1095,7 @@ export async function collectPharmacyDataExport(
     dataset: {
       branches: branchRows,
       medicines: medicineRows,
+      medicineBarcodes: barcodeRows,
       stockLots: stockRows,
       customers: customerRows,
       khataLedger: khataRows,
