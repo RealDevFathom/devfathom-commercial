@@ -3,14 +3,18 @@ import { TRPCError } from '@trpc/server';
 import { unstable_rethrow } from 'next/navigation';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
-import { Button } from '@/components/ui/button';
+import Link from 'next/link';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { loadCashFlowProjection } from '@/lib/pharmacy/accounts/cash-flow';
 import { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
 import { createTRPCContext } from '@/server/trpc';
 
 export const metadata: Metadata = { title: 'Classified cash-flow projection' };
+
+const EVIDENCE_PAGE_SIZE = 50;
 
 const money = (minor: bigint) => {
   const absolute = minor < BigInt(0) ? -minor : minor;
@@ -20,13 +24,14 @@ const money = (minor: bigint) => {
 export default async function CashFlowPage({
   searchParams,
 }: {
-  searchParams: Promise<{ branch?: string; from?: string; to?: string }>;
+  searchParams: Promise<{ branch?: string; from?: string; to?: string; page?: string }>;
 }) {
   const query = await searchParams;
   const now = new Date();
-  const today = now.toISOString().slice(0, 10);
   const from = query.from ?? new Date(now.getTime() - 30 * 86_400_000).toISOString().slice(0, 10);
-  const to = query.to ?? today;
+  // Exclusive UTC upper bound defaults to tomorrow so today's postings are included.
+  const to = query.to ?? new Date(now.getTime() + 86_400_000).toISOString().slice(0, 10);
+  const requestedPage = Number.parseInt(query.page ?? '1', 10);
   let branches: Array<{ id: string; name: string }> = [];
   let projection: Awaited<ReturnType<typeof loadCashFlowProjection>> | null = null;
   let message = query.branch
@@ -51,15 +56,32 @@ export default async function CashFlowPage({
       if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime())) {
         throw new TRPCError({ code: 'BAD_REQUEST' });
       }
-      // This existing caller is intentionally the sole authorization, entitlement, capability,
-      // tenant and active-branch gate. Only its returned scope reaches the all-entry loader.
-      const authorized = await pharmacyFinanceRouter.createCaller(ctx).financialStatements({
-        branchId: query.branch,
-        from: start.toISOString(),
-        to: end.toISOString(),
-        page: 1,
-      });
-      projection = await loadCashFlowProjection(ctx.db, authorized.scope, { from: start, to: end });
+      const branchId = query.branch;
+      // One repeatable-read transaction: authorization, canonical controls and the projection
+      // share a snapshot, so a concurrent posting cannot surface as a false discrepancy.
+      projection = await ctx.db.$transaction(
+        async (transaction) => {
+          const tx = transaction as ScopedDb;
+          // This existing caller is intentionally the sole authorization, entitlement, capability,
+          // tenant and active-branch gate. Only its returned scope reaches the loader, and its
+          // CASH/BANK account balances are the canonical reconciliation control.
+          const authorized = await pharmacyFinanceRouter
+            .createCaller({ ...ctx, db: tx })
+            .financialStatements({
+              branchId,
+              from: start.toISOString(),
+              to: end.toISOString(),
+              page: 1,
+            });
+          return loadCashFlowProjection(
+            tx,
+            authorized.scope,
+            { from: start, to: end },
+            authorized.accounts
+          );
+        },
+        { isolationLevel: 'RepeatableRead' }
+      );
     }
   } catch (error) {
     unstable_rethrow(error);
@@ -72,6 +94,18 @@ export default async function CashFlowPage({
       message = 'The cash-flow projection could not be read. Please retry.';
     }
   }
+  const pages = Math.max(1, Math.ceil((projection?.evidence.length ?? 0) / EVIDENCE_PAGE_SIZE));
+  const page = Number.isFinite(requestedPage) ? Math.min(Math.max(requestedPage, 1), pages) : 1;
+  const evidencePage =
+    projection?.evidence.slice((page - 1) * EVIDENCE_PAGE_SIZE, page * EVIDENCE_PAGE_SIZE) ?? [];
+  const evidenceRange = {
+    page,
+    pages,
+    first: evidencePage.length ? (page - 1) * EVIDENCE_PAGE_SIZE + 1 : 0,
+    last: (page - 1) * EVIDENCE_PAGE_SIZE + evidencePage.length,
+  };
+  const pageHref = (target: number) =>
+    `?${new URLSearchParams({ branch: query.branch ?? '', from, to, page: String(target) })}`;
   return (
     <main className="space-y-6">
       <PageHeader
@@ -122,7 +156,9 @@ export default async function CashFlowPage({
             <p className="text-sm text-text-muted">
               Recorded currency minor-unit totals from every scoped posted cash/bank line. Retrieved{' '}
               {projection.metadata.retrievedAt.toISOString()}. Completeness: unknown —{' '}
-              {projection.metadata.completenessReason}
+              {projection.metadata.completenessReason} Discrepancy is canonical CASH plus BANK
+              account closing from the financial statements, read in the same snapshot, minus the
+              projected closing.
             </p>
             <div className="overflow-x-auto">
               <table className="mt-4 w-full text-sm">
@@ -137,6 +173,7 @@ export default async function CashFlowPage({
                       'Unclassified',
                       'Net movement',
                       'Closing',
+                      'Canonical closing',
                       'Discrepancy',
                     ].map((x) => (
                       <th className="p-3 text-left" key={x}>
@@ -157,6 +194,7 @@ export default async function CashFlowPage({
                         row.unclassified,
                         row.netMovement,
                         row.closing,
+                        row.canonicalClosing,
                         row.discrepancy,
                       ].map((value, i) => (
                         <td className={`p-3 ${i ? 'text-right font-mono' : ''}`} key={i}>
@@ -179,7 +217,11 @@ export default async function CashFlowPage({
               Classification requires supported source and counterpart evidence. Ambiguous, mixed,
               and future policies remain unclassified; this is not a statutory or audited statement.
             </p>
-            {projection.evidence.map((entry) => (
+            <p className="mt-2 text-sm text-text-muted">
+              Showing {evidenceRange.first}–{evidenceRange.last} of {projection.evidence.length}{' '}
+              cash-moving entries; totals above include every entry in the period.
+            </p>
+            {evidencePage.map((entry) => (
               <details className="mt-3 rounded-sm border border-border-default p-3" key={entry.id}>
                 <summary className="min-h-11 cursor-pointer">
                   {entry.occurredAt.toISOString()} · {entry.classification} · {entry.currency}{' '}
@@ -193,6 +235,26 @@ export default async function CashFlowPage({
                 </p>
               </details>
             ))}
+            {evidenceRange.pages > 1 && (
+              <nav aria-label="Evidence pages" className="mt-4 flex flex-wrap gap-3">
+                {evidenceRange.page > 1 && (
+                  <Link
+                    className={buttonVariants({ variant: 'secondary', className: 'min-h-11' })}
+                    href={pageHref(evidenceRange.page - 1)}
+                  >
+                    Previous evidence
+                  </Link>
+                )}
+                {evidenceRange.page < evidenceRange.pages && (
+                  <Link
+                    className={buttonVariants({ variant: 'secondary', className: 'min-h-11' })}
+                    href={pageHref(evidenceRange.page + 1)}
+                  >
+                    Next evidence
+                  </Link>
+                )}
+              </nav>
+            )}
           </SectionCard>
         </>
       )}

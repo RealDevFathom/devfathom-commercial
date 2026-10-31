@@ -136,37 +136,123 @@ describe('classified cash-flow policy', () => {
 });
 
 describe('cash-flow loader reconciliation', () => {
-  it('uses half-open evidence and reports an independently established discrepancy', async () => {
-    const from = new Date('2026-10-01T00:00:00Z');
-    const to = new Date('2026-11-01T00:00:00Z');
-    const rows = [
-      evidence('PHARMACY_TENDER', null, [
-        debit('CASH', BigInt(100)),
-        credit('SALES_CLEARING', BigInt(100)),
-      ]),
-    ].map((entry) => ({
-      ...entry,
-      occurredAt: from,
-      lines: entry.lines.map((line) => ({ ...line, amountMinor: String(line.amountMinor) })),
-    }));
-    const queryRaw = vi
-      .fn()
-      .mockResolvedValueOnce(rows)
-      .mockResolvedValueOnce([{ currency: 'PKR', closing: BigInt(103) }]);
+  const from = new Date('2026-10-01T00:00:00Z');
+  const to = new Date('2026-11-01T00:00:00Z');
+  const scope = { organizationId: 'org', branchId: 'branch' };
+  const raw = (entry: CashFlowEvidence) => ({
+    ...entry,
+    occurredAt: entry.occurredAt.toISOString(),
+    lines: entry.lines.map((line) => ({ ...line, amountMinor: String(line.amountMinor) })),
+  });
+  const load = (
+    snapshot: { balances: unknown; evidence: unknown },
+    controls: Array<{ accountCode: string; currency: string; closingMinor: string }>
+  ) => {
+    const queryRaw = vi.fn().mockResolvedValueOnce([snapshot]);
+    return {
+      queryRaw,
+      result: loadCashFlowProjection(
+        { $queryRaw: queryRaw } as unknown as ScopedDb,
+        scope,
+        { from, to },
+        controls
+      ),
+    };
+  };
 
-    const result = await loadCashFlowProjection(
-      { $queryRaw: queryRaw } as unknown as ScopedDb,
-      { organizationId: 'org', branchId: 'branch' },
-      { from, to }
+  it('reads one bounded snapshot and reports a canonical-control mismatch', async () => {
+    const { queryRaw, result } = load(
+      {
+        balances: [{ currency: 'PKR', opening: '0' }],
+        evidence: [
+          raw({
+            ...evidence('PHARMACY_TENDER', null, [
+              debit('CASH', BigInt(100)),
+              credit('SALES_CLEARING', BigInt(100)),
+            ]),
+            occurredAt: from,
+          }),
+        ],
+      },
+      [
+        { accountCode: 'CASH', currency: 'PKR', closingMinor: '60' },
+        { accountCode: 'BANK', currency: 'PKR', closingMinor: '43' },
+        { accountCode: 'SALES_CLEARING', currency: 'PKR', closingMinor: '-100' },
+      ]
     );
+    const projection = await result;
 
-    expect(queryRaw).toHaveBeenCalledTimes(2);
-    expect(result.period.bounds).toBe('[from,to)');
-    expect(result.totals[0]).toMatchObject({
+    expect(queryRaw).toHaveBeenCalledOnce();
+    const sql = (queryRaw.mock.calls[0][0] as { sql: string }).sql;
+    expect(sql).toMatch(/"accountCode" IN \('CASH','BANK'\)/);
+    expect(sql).toMatch(/m\.net<>0/);
+    expect(projection.period.bounds).toBe('[from,to)');
+    expect(projection.evidence[0].occurredAt).toEqual(from);
+    expect(projection.totals[0]).toMatchObject({
       opening: BigInt(0),
       operating: BigInt(100),
       closing: BigInt(100),
+      canonicalClosing: BigInt(103),
       discrepancy: BigInt(3),
     });
+  });
+
+  it('keeps currencies separate and integer safe beyond Number precision', async () => {
+    const huge = BigInt(2) ** BigInt(60);
+    const { result } = load(
+      {
+        balances: [
+          { currency: 'USD', opening: huge.toString() },
+          { currency: 'PKR', opening: '5' },
+        ],
+        evidence: [
+          raw({
+            ...evidence('PHARMACY_TENDER', null, [
+              debit('CASH', huge + BigInt(1)),
+              credit('SALES_CLEARING', huge + BigInt(1)),
+            ]),
+            id: 'usd',
+            currency: 'USD',
+          }),
+          raw({
+            ...evidence('PHARMACY_OPENING_LEDGER', null, [
+              debit('BANK', BigInt(7)),
+              credit('OPENING_BALANCE_EQUITY', BigInt(7)),
+            ]),
+            id: 'pkr',
+          }),
+        ],
+      },
+      [
+        {
+          accountCode: 'CASH',
+          currency: 'USD',
+          closingMinor: (huge * BigInt(2) + BigInt(1)).toString(),
+        },
+        { accountCode: 'BANK', currency: 'PKR', closingMinor: '12' },
+      ]
+    );
+    const { totals } = await result;
+    expect(totals.map((row) => row.currency)).toEqual(['PKR', 'USD']);
+    expect(totals[0]).toMatchObject({
+      opening: BigInt(5),
+      financing: BigInt(7),
+      discrepancy: BigInt(0),
+    });
+    expect(totals[1]).toMatchObject({
+      opening: huge,
+      operating: huge + BigInt(1),
+      closing: huge * BigInt(2) + BigInt(1),
+      discrepancy: BigInt(0),
+    });
+  });
+
+  it('shows a canonical-only currency as a discrepancy rather than hiding it', async () => {
+    const { result } = load({ balances: null, evidence: null }, [
+      { accountCode: 'CASH', currency: 'USD', closingMinor: '9' },
+    ]);
+    expect((await result).totals).toEqual([
+      expect.objectContaining({ currency: 'USD', closing: BigInt(0), discrepancy: BigInt(9) }),
+    ]);
   });
 });
