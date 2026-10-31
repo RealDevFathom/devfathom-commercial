@@ -369,6 +369,7 @@ describe('custom ABAC decisions', () => {
       'pharmacy:safety',
       'pharmacy:catalogue-review',
       'pharmacy:orders',
+      'pharmacy:counter',
     ] as const satisfies readonly Action[];
 
     expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(46);
