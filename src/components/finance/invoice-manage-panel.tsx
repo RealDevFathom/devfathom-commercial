@@ -1,6 +1,6 @@
 'use client';
 
-import { memo, useCallback, useMemo, useState } from 'react';
+import { memo, useCallback, useId, useMemo, useState } from 'react';
 import {
   Pencil,
   Plus,
@@ -18,6 +18,7 @@ import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { format } from 'date-fns';
 import { moneyLabel } from '@/lib/finance/currency';
+import { calculateInvoiceMoney } from '@/lib/finance/invoice-money';
 
 // Money columns are Decimal(12,2); largest value Postgres accepts. Mirrors the
 // server bound so an oversized rate fails inline, not at the DB.
@@ -35,6 +36,7 @@ type ManageInvoice = {
   currency: string;
   total: unknown;
   tax: unknown;
+  discount: unknown;
   dueDate: Date | string;
   notes: string | null;
   items: unknown;
@@ -210,8 +212,10 @@ function InvoiceEditForm({ inv, onSaved }: { inv: ManageInvoice; onSaved: () => 
       : [{ description: '', quantity: 1, rate: 0 }];
   }, [inv.items]);
 
+  const adjustmentId = useId();
   const [items, setItems] = useState(initialItems);
   const [tax, setTax] = useState(String(Number(inv.tax) || 0));
+  const [discount, setDiscount] = useState(String(Number(inv.discount) || 0));
   const [dueDate, setDueDate] = useState(format(new Date(inv.dueDate), 'yyyy-MM-dd'));
   const [notes, setNotes] = useState(inv.notes ?? '');
 
@@ -225,16 +229,32 @@ function InvoiceEditForm({ inv, onSaved }: { inv: ManageInvoice; onSaved: () => 
     value: string | number
   ) => setItems((cur) => cur.map((it, idx) => (idx === i ? { ...it, [field]: value } : it)));
 
-  // Live preview — recomputed exactly as the server will (qty × rate, + tax).
-  const taxNum = parseFloat(tax) || 0;
-  const subtotal = items.reduce((s, it) => s + it.quantity * it.rate, 0);
-  const total = subtotal + taxNum;
-
+  // The preview uses the same rounded lines and adjustments as persistence.
+  const taxNum = Number(tax);
+  const discountNum = Number(discount);
+  let money;
+  let adjustmentError = '';
+  try {
+    money = calculateInvoiceMoney(items, taxNum, discountNum);
+  } catch (error) {
+    adjustmentError = error instanceof Error ? error.message : 'Invalid invoice totals';
+  }
   const hasValidItems =
     items.length > 0 &&
     items.every((it) => it.description.trim() && it.quantity > 0 && it.rate > 0);
-  const taxTooLarge = taxNum > MAX_MONEY;
-  const canSave = hasValidItems && !taxTooLarge && !!dueDate && !updateInvoice.isPending;
+  const taxTooLarge = !Number.isFinite(taxNum) || taxNum < 0 || taxNum > MAX_MONEY;
+  const invalidDiscount =
+    !Number.isFinite(discountNum) ||
+    discountNum < 0 ||
+    discountNum > MAX_MONEY ||
+    !!adjustmentError;
+  const canSave =
+    hasValidItems &&
+    !taxTooLarge &&
+    !invalidDiscount &&
+    !!money &&
+    !!dueDate &&
+    !updateInvoice.isPending;
 
   const submit = () => {
     if (!canSave) return;
@@ -246,6 +266,7 @@ function InvoiceEditForm({ inv, onSaved }: { inv: ManageInvoice; onSaved: () => 
         rate: it.rate,
       })),
       tax: taxNum,
+      discount: discountNum,
       dueDate: new Date(dueDate),
       notes: notes.trim() || undefined,
     });
@@ -305,10 +326,13 @@ function InvoiceEditForm({ inv, onSaved }: { inv: ManageInvoice; onSaved: () => 
         </button>
       </div>
 
-      {/* Tax + due date */}
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+      {/* Tax, discount + due date */}
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <div>
-          <label className="mb-1 block text-xs font-medium text-foreground">
+          <label
+            htmlFor={`${adjustmentId}-tax`}
+            className="mb-1 block text-xs font-medium text-foreground"
+          >
             Tax ({inv.currency})
           </label>
           <input
@@ -316,6 +340,9 @@ function InvoiceEditForm({ inv, onSaved }: { inv: ManageInvoice; onSaved: () => 
             step="0.01"
             min="0"
             max={MAX_MONEY}
+            id={`${adjustmentId}-tax`}
+            aria-invalid={taxTooLarge}
+            aria-describedby={taxTooLarge || invalidDiscount ? `${adjustmentId}-error` : undefined}
             value={tax}
             onChange={(e) => setTax(e.target.value)}
             placeholder="0.00"
@@ -326,6 +353,32 @@ function InvoiceEditForm({ inv, onSaved }: { inv: ManageInvoice; onSaved: () => 
                 : 'border-border focus:border-primary focus:ring-primary/20'
             )}
           />
+        </div>
+        <div>
+          <label
+            htmlFor={`${adjustmentId}-discount`}
+            className="mb-1 block text-xs font-medium text-foreground"
+          >
+            Discount ({inv.currency})
+          </label>
+          <input
+            type="number"
+            step="0.01"
+            min="0"
+            max={MAX_MONEY}
+            id={`${adjustmentId}-discount`}
+            aria-describedby={taxTooLarge || invalidDiscount ? `${adjustmentId}-error` : undefined}
+            value={discount}
+            onChange={(e) => setDiscount(e.target.value)}
+            aria-invalid={invalidDiscount}
+            className="w-full rounded-xl border border-border bg-background px-3 py-2 text-right text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+          />
+          {(taxTooLarge || invalidDiscount) && (
+            <p id={`${adjustmentId}-error`} className="mt-1 text-xs text-destructive">
+              {adjustmentError ||
+                'Tax and discount must be non-negative and at most 9,999,999,999.99.'}
+            </p>
+          )}
         </div>
         <div>
           <label className="mb-1 block text-xs font-medium text-foreground">Due date *</label>
@@ -354,7 +407,13 @@ function InvoiceEditForm({ inv, onSaved }: { inv: ManageInvoice; onSaved: () => 
         <div className="w-full max-w-[220px] space-y-1 text-sm">
           <div className="flex justify-between text-muted-foreground">
             <span>Subtotal</span>
-            <span className="tabular-nums">{moneyLabel(subtotal, inv.currency)}</span>
+            <span className="tabular-nums">
+              {money ? moneyLabel(money.subtotal, inv.currency) : '—'}
+            </span>
+          </div>
+          <div className="flex justify-between text-muted-foreground">
+            <span>Discount</span>
+            <span className="tabular-nums">-{moneyLabel(discountNum, inv.currency)}</span>
           </div>
           <div className="flex justify-between text-muted-foreground">
             <span>Tax</span>
@@ -362,7 +421,9 @@ function InvoiceEditForm({ inv, onSaved }: { inv: ManageInvoice; onSaved: () => 
           </div>
           <div className="flex justify-between border-t border-border/60 pt-1 font-semibold text-foreground">
             <span>Total</span>
-            <span className="tabular-nums">{moneyLabel(total, inv.currency)}</span>
+            <span className="tabular-nums">
+              {money ? moneyLabel(money.total, inv.currency) : '—'}
+            </span>
           </div>
         </div>
       </div>

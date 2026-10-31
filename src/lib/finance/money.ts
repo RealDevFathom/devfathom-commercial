@@ -1,6 +1,7 @@
-import { Prisma } from '@/generated/prisma/client';
+import { Prisma } from '@/generated/prisma/browser';
 
-type MoneyInput = number | string | Prisma.Decimal;
+type Decimal = InstanceType<typeof Prisma.Decimal>;
+type MoneyInput = number | string | Decimal;
 
 /** Largest value supported by the application's Decimal(12,2) money columns. */
 export const MAX_MONEY = 9_999_999_999.99;
@@ -20,7 +21,7 @@ export function multiplyMoney(left: MoneyInput, right: MoneyInput): number {
 /** Add monetary values as decimals and round the result to cents. */
 export function sumMoney(values: MoneyInput[]): number {
   return roundMoney(
-    values.reduce<Prisma.Decimal>((total, value) => total.plus(decimal(value)), decimal(0))
+    values.reduce<Decimal>((total, value) => total.plus(decimal(value)), decimal(0))
   );
 }
 

@@ -5,7 +5,9 @@ const mocks = vi.hoisted(() => ({
   findUnique: vi.fn(),
   findUniqueOrThrow: vi.fn(),
   updateMany: vi.fn(),
+  sendEmail: vi.fn(),
   logActivity: vi.fn(),
+  emitInvoicePaid: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -15,6 +17,11 @@ vi.mock('@/lib/abac', async () => ({
 }));
 vi.mock('@/lib/entitlements', () => ({ hasModule: vi.fn(() => true) }));
 vi.mock('../activity', () => ({ logActivity: mocks.logActivity }));
+vi.mock('@/lib/finance/invoice-paid-event', () => ({ emitInvoicePaid: mocks.emitInvoicePaid }));
+vi.mock('@/lib/email', async () => ({
+  ...(await vi.importActual<typeof import('@/lib/email')>('@/lib/email')),
+  sendEmail: mocks.sendEmail,
+}));
 vi.mock('../audit', () => ({
   ipFromHeaders: vi.fn(() => null),
   isAuditExcludedPath: vi.fn(() => true),
@@ -60,7 +67,7 @@ describe('finance.updateInvoiceStatus', () => {
   });
 
   it.each(['SENT', 'OVERDUE', 'PAID'])('rejects direct PAID from %s', async (status) => {
-    mocks.findUnique.mockResolvedValue({ status });
+    mocks.findUnique.mockResolvedValue({ status, total: 100 });
 
     await expect(
       caller().updateInvoiceStatus({ id: 'invoice-1', status: 'PAID' })
@@ -72,12 +79,12 @@ describe('finance.updateInvoiceStatus', () => {
   it.each(['OVERDUE', 'CANCELLED'] as const)(
     'preserves sentAt when changing SENT to %s using a status compare-and-set',
     async (status) => {
-      mocks.findUnique.mockResolvedValue({ status: 'SENT' });
+      mocks.findUnique.mockResolvedValue({ status: 'SENT', total: 100 });
 
       await caller().updateInvoiceStatus({ id: 'invoice-1', status });
 
       expect(mocks.updateMany).toHaveBeenCalledWith({
-        where: { id: 'invoice-1', status: 'SENT' },
+        where: { id: 'invoice-1', status: 'SENT', total: 100 },
         data: { status },
       });
     }
@@ -93,7 +100,7 @@ describe('finance.updateInvoiceStatus', () => {
   });
 
   it('reports a conflict and emits no activity if another caller wins', async () => {
-    mocks.findUnique.mockResolvedValue({ status: 'DRAFT' });
+    mocks.findUnique.mockResolvedValue({ status: 'DRAFT', total: 100 });
     mocks.updateMany.mockResolvedValue({ count: 0 });
 
     await expect(
@@ -101,5 +108,68 @@ describe('finance.updateInvoiceStatus', () => {
     ).rejects.toMatchObject({ code: 'CONFLICT' });
     expect(mocks.findUniqueOrThrow).not.toHaveBeenCalled();
     expect(mocks.logActivity).not.toHaveBeenCalled();
+  });
+
+  it('issues and settles a fully discounted draft with a total compare-and-set', async () => {
+    mocks.findUnique.mockResolvedValue({ status: 'DRAFT', total: 0 });
+    const settled = { id: 'invoice-1', status: 'PAID', total: 0, client: { name: 'Acme' } };
+    mocks.findUniqueOrThrow.mockResolvedValue(settled);
+    await caller().updateInvoiceStatus({ id: 'invoice-1', status: 'SENT' });
+    expect(mocks.updateMany).toHaveBeenCalledWith({
+      where: { id: 'invoice-1', status: 'DRAFT', total: 0 },
+      data: { status: 'PAID', sentAt: expect.any(Date), paidAt: expect.any(Date) },
+    });
+    expect(mocks.emitInvoicePaid).toHaveBeenCalledOnce();
+    expect(mocks.emitInvoicePaid).toHaveBeenCalledWith(expect.anything(), expect.anything(), settled);
+  });
+
+  it('does not emit invoice.paid for an ordinary status change', async () => {
+    mocks.findUnique.mockResolvedValue({ status: 'DRAFT', total: 100 });
+    await caller().updateInvoiceStatus({ id: 'invoice-1', status: 'SENT' });
+    expect(mocks.emitInvoicePaid).not.toHaveBeenCalled();
+  });
+
+  it.each([0, 100])(
+    'issues an emailed draft with total %s and settles only zero totals',
+    async (total) => {
+      mocks.findUnique.mockResolvedValue({
+        id: 'invoice-1',
+        invoiceNumber: 'INV-1',
+        status: 'DRAFT',
+        total,
+        currency: 'USD',
+        dueDate: new Date('2026-12-01'),
+        client: { name: 'Acme', contacts: [{ name: 'Client', email: 'client@example.test' }] },
+      });
+      const result = await caller().sendInvoiceEmail({ id: 'invoice-1' });
+      expect(mocks.sendEmail).toHaveBeenCalledOnce();
+      expect(mocks.updateMany).toHaveBeenCalledWith({
+        where: { id: 'invoice-1', status: 'DRAFT', total },
+        data:
+          total === 0
+            ? { status: 'PAID', sentAt: expect.any(Date), paidAt: expect.any(Date) }
+            : { status: 'SENT', sentAt: expect.any(Date) },
+      });
+      expect(result.status).toBe(total === 0 ? 'PAID' : 'SENT');
+      expect(mocks.emitInvoicePaid).toHaveBeenCalledTimes(total === 0 ? 1 : 0);
+    }
+  );
+
+  it('reports a conflict if an emailed draft changed while the email was being sent', async () => {
+    mocks.findUnique.mockResolvedValue({
+      id: 'invoice-1',
+      invoiceNumber: 'INV-1',
+      status: 'DRAFT',
+      total: 0,
+      currency: 'USD',
+      dueDate: new Date('2026-12-01'),
+      client: { name: 'Acme', contacts: [{ name: 'Client', email: 'client@example.test' }] },
+    });
+    mocks.updateMany.mockResolvedValue({ count: 0 });
+    await expect(caller().sendInvoiceEmail({ id: 'invoice-1' })).rejects.toMatchObject({
+      code: 'CONFLICT',
+    });
+    expect(mocks.logActivity).not.toHaveBeenCalled();
+    expect(mocks.emitInvoicePaid).not.toHaveBeenCalled();
   });
 });

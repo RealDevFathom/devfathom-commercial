@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { withApiAuth } from '@/lib/api-auth';
 import { readJson } from '@/lib/api-json';
 import { logActivity } from '@/server/activity';
+import { emitInvoicePaid } from '@/lib/finance/invoice-paid-event';
 import {
   INVOICE_STATUS_VALUES,
   invoiceStatusTransitionError,
@@ -68,8 +69,13 @@ export const PATCH = withApiAuth(
     // Compare-and-set makes the state check and write one atomic operation. Only
     // the request that wins this update may emit transition side effects.
     const changed = await authCtx.db.invoice.updateMany({
-      where: { id, status: existing.status },
-      data: invoiceStatusUpdate(existing.status as InvoiceStatusValue, next, new Date()),
+      where: { id, status: existing.status, total: existing.total },
+      data: invoiceStatusUpdate(
+        existing.status as InvoiceStatusValue,
+        next,
+        new Date(),
+        Number(existing.total)
+      ),
     });
     if (changed.count !== 1) {
       return NextResponse.json(
@@ -81,6 +87,9 @@ export const PATCH = withApiAuth(
       where: { id },
       include: { client: { select: { name: true } } },
     });
+
+    // Issuing a zero-total invoice settles it; emit the same event as a payment.
+    if (invoice.status === 'PAID') emitInvoicePaid(authCtx.db, authCtx.entitlements, invoice);
 
     if (next === 'SENT' && existing.status !== 'SENT') {
       logActivity(authCtx.db, authCtx.userId, {

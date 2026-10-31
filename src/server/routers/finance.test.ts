@@ -6,6 +6,7 @@ const validInvoice = {
   items: [{ description: 'Consulting', quantity: 1, rate: 100, amount: 100 }],
   subtotal: 100,
   tax: 0,
+  discount: 0,
   total: 100,
   dueDate: new Date('2026-10-31T00:00:00.000Z'),
 };
@@ -17,7 +18,7 @@ describe('createInvoiceInputSchema', () => {
     expect(result.success).toBe(false);
   });
 
-  it.each(['subtotal', 'tax', 'total'] as const)('rejects a negative %s', (field) => {
+  it.each(['subtotal', 'discount', 'tax', 'total'] as const)('rejects a negative %s', (field) => {
     const result = createInvoiceInputSchema.safeParse({ ...validInvoice, [field]: -1 });
 
     expect(result.success).toBe(false);

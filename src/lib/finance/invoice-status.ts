@@ -31,9 +31,14 @@ export function invoiceStatusTransitionError(
 export function invoiceStatusUpdate(
   prior: InvoiceStatusValue,
   next: InvoiceStatusValue,
-  changedAt: Date
-): { status: InvoiceStatusValue; sentAt?: Date | null; paidAt?: null } {
-  const data: { status: InvoiceStatusValue; sentAt?: Date | null; paidAt?: null } = {
+  changedAt: Date,
+  total?: number
+): { status: InvoiceStatusValue; sentAt?: Date | null; paidAt?: Date | null } {
+  // A fully discounted draft is issued and settled together; no cash changed hands.
+  if (next === 'SENT' && total === 0) {
+    return { status: 'PAID', sentAt: changedAt, paidAt: changedAt };
+  }
+  const data: { status: InvoiceStatusValue; sentAt?: Date | null; paidAt?: Date | null } = {
     status: next,
   };
   if (next === 'SENT') data.sentAt = changedAt;

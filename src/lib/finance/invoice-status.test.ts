@@ -71,3 +71,22 @@ describe('invoice status contract shared by REST, tRPC, and AI', () => {
     });
   });
 });
+
+describe('issuing a fully discounted invoice', () => {
+  it.each(['DRAFT', 'OVERDUE'] as const)(
+    'settles a zero-total %s invoice without a payment',
+    (prior) => {
+      const at = new Date('2026-10-31T00:00:00Z');
+      expect(invoiceStatusUpdate(prior, 'SENT', at, 0)).toEqual({
+        status: 'PAID',
+        sentAt: at,
+        paidAt: at,
+      });
+    }
+  );
+
+  it('leaves a nonzero invoice outstanding when issued', () => {
+    const at = new Date('2026-10-31T00:00:00Z');
+    expect(invoiceStatusUpdate('DRAFT', 'SENT', at, 0.01)).toEqual({ status: 'SENT', sentAt: at });
+  });
+});

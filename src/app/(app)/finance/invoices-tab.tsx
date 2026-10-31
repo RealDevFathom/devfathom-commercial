@@ -1,6 +1,6 @@
 'use client';
 
-import { memo, useCallback, useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { FileText, Plus, ChevronDown, X, Loader2 } from 'lucide-react';
 import { useVirtualizer } from '@tanstack/react-virtual';
@@ -10,6 +10,8 @@ import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { invoiceTotalLabel, type InvoiceTotal } from '@/lib/finance/invoice-display';
 import { format } from 'date-fns';
+import { calculateInvoiceMoney } from '@/lib/finance/invoice-money';
+import { MAX_MONEY } from '@/lib/finance/money';
 
 type InvoiceStatus = 'DRAFT' | 'SENT' | 'PAID' | 'OVERDUE' | 'CANCELLED';
 
@@ -51,6 +53,13 @@ export function InvoicesTab() {
       if (ctx?.previous) {
         utils.finance.getInvoices.setData(undefined, ctx.previous);
       }
+    },
+    onSuccess: (invoice) => {
+      // Issuing a fully discounted invoice settles it immediately. Replace the
+      // optimistic SENT status with the status actually persisted by the server.
+      utils.finance.getInvoices.setData(undefined, (old) =>
+        old?.map((inv) => (inv.id === invoice.id ? { ...inv, status: invoice.status } : inv))
+      );
     },
     onSettled: () => {
       utils.finance.getFinancialSummary.invalidate();
@@ -310,6 +319,9 @@ export function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
   const [projectId, setProjectId] = useState('');
   const [dueDate, setDueDate] = useState('');
   const [notes, setNotes] = useState('');
+  const adjustmentId = useId();
+  const [tax, setTax] = useState('0');
+  const [discount, setDiscount] = useState('0');
   const [items, setItems] = useState([{ description: '', quantity: 1, rate: 0 }]);
 
   const addItem = () => setItems([...items, { description: '', quantity: 1, rate: 0 }]);
@@ -320,18 +332,34 @@ export function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
     setItems(updated);
   };
 
-  const subtotal = items.reduce((sum, item) => sum + item.quantity * item.rate, 0);
-  const total = subtotal;
+  const taxAmount = Number(tax);
+  const discountAmount = Number(discount);
+  let money: ReturnType<typeof calculateInvoiceMoney> | undefined;
+  let adjustmentError = '';
+  try {
+    money = calculateInvoiceMoney(items, taxAmount, discountAmount);
+  } catch (error) {
+    adjustmentError = error instanceof Error ? error.message : 'Invalid invoice totals';
+  }
+  const invalidTax = !Number.isFinite(taxAmount) || taxAmount < 0 || taxAmount > MAX_MONEY;
+  const invalidDiscount =
+    !Number.isFinite(discountAmount) || discountAmount < 0 || discountAmount > MAX_MONEY;
+  const invalidAdjustment = invalidTax || invalidDiscount || !money;
 
   const handleSubmit = () => {
-    if (!clientId || !dueDate || items.length === 0 || items.some((i) => !i.description)) return;
+    if (
+      !clientId ||
+      !dueDate ||
+      items.length === 0 ||
+      items.some((i) => !i.description) ||
+      invalidAdjustment ||
+      !money
+    )
+      return;
     createInvoice.mutate({
       clientId,
       projectId: projectId || undefined,
-      items: items.map((i) => ({ ...i, amount: i.quantity * i.rate })),
-      subtotal,
-      tax: 0,
-      total,
+      ...money,
       dueDate: new Date(dueDate),
       notes: notes || undefined,
     });
@@ -443,12 +471,61 @@ export function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
           </button>
         </div>
 
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div>
+            <label
+              htmlFor={`${adjustmentId}-tax`}
+              className="mb-1 block text-xs font-medium text-foreground"
+            >
+              Tax
+            </label>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              id={`${adjustmentId}-tax`}
+              max={MAX_MONEY}
+              aria-invalid={invalidTax}
+              aria-describedby={invalidAdjustment ? `${adjustmentId}-error` : undefined}
+              value={tax}
+              onChange={(event) => setTax(event.target.value)}
+              className="w-full rounded-xl border border-border bg-background px-3 py-2 text-right text-sm text-foreground focus:border-primary focus:outline-none"
+            />
+          </div>
+          <div>
+            <label
+              htmlFor={`${adjustmentId}-discount`}
+              className="mb-1 block text-xs font-medium text-foreground"
+            >
+              Discount
+            </label>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              id={`${adjustmentId}-discount`}
+              max={MAX_MONEY}
+              aria-describedby={invalidAdjustment ? `${adjustmentId}-error` : undefined}
+              value={discount}
+              onChange={(event) => setDiscount(event.target.value)}
+              aria-invalid={invalidDiscount || !!adjustmentError}
+              className="w-full rounded-xl border border-border bg-background px-3 py-2 text-right text-sm text-foreground focus:border-primary focus:outline-none"
+            />
+            {invalidAdjustment && (
+              <p id={`${adjustmentId}-error`} className="mt-1 text-xs text-destructive">
+                {adjustmentError ||
+                  'Tax and discount must be non-negative and at most 9,999,999,999.99.'}
+              </p>
+            )}
+          </div>
+        </div>
+
         {/* Total */}
         <div className="flex justify-end border-t border-border/60 pt-3">
           <div className="text-right">
             <p className="text-xs text-muted-foreground">Total</p>
             <p className="font-display text-xl font-bold text-foreground">
-              ${total.toLocaleString()}
+              {money ? `$${money.total.toLocaleString()}` : '—'}
             </p>
           </div>
         </div>
@@ -464,6 +541,12 @@ export function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
           />
         </div>
 
+        {createInvoice.error && (
+          <p role="alert" className="text-xs text-destructive">
+            {createInvoice.error.message}
+          </p>
+        )}
+
         <div className="flex justify-end gap-2">
           <button
             onClick={onClose}
@@ -473,7 +556,13 @@ export function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
           </button>
           <button
             onClick={handleSubmit}
-            disabled={!clientId || !dueDate || items.length === 0 || createInvoice.isPending}
+            disabled={
+              !clientId ||
+              !dueDate ||
+              items.length === 0 ||
+              invalidAdjustment ||
+              createInvoice.isPending
+            }
             className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
           >
             {createInvoice.isPending ? (

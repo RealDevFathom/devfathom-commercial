@@ -3,12 +3,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   logActivity: vi.fn(),
+  emitInvoicePaid: vi.fn(),
 }));
 
 vi.mock('@/lib/api-auth', () => ({
   withApiAuth: (_scope: string, handler: unknown) => handler,
 }));
 vi.mock('@/server/activity', () => ({ logActivity: mocks.logActivity }));
+vi.mock('@/lib/finance/invoice-paid-event', () => ({ emitInvoicePaid: mocks.emitInvoicePaid }));
 
 import { PATCH } from './route';
 
@@ -24,7 +26,7 @@ function context(status: string) {
     userId: 'user-1',
     db: {
       invoice: {
-        findUnique: vi.fn().mockResolvedValue({ id: invoice.id, status }),
+        findUnique: vi.fn().mockResolvedValue({ id: invoice.id, status, total: 100 }),
         findUniqueOrThrow: vi.fn().mockResolvedValue(invoice),
         updateMany: vi.fn().mockResolvedValue({ count: 1 }),
       },
@@ -78,7 +80,7 @@ describe('PATCH /api/v1/invoices/:id invoice status', () => {
 
     expect(response.status).toBe(200);
     expect(authCtx.db.invoice.updateMany).toHaveBeenCalledWith({
-      where: { id: invoice.id, status: 'DRAFT' },
+      where: { id: invoice.id, status: 'DRAFT', total: 100 },
       data: { status: 'SENT', sentAt: expect.any(Date) },
     });
     expect(mocks.logActivity).toHaveBeenCalledOnce();
@@ -89,7 +91,7 @@ describe('PATCH /api/v1/invoices/:id invoice status', () => {
 
     expect(response.status).toBe(200);
     expect(authCtx.db.invoice.updateMany).toHaveBeenCalledWith({
-      where: { id: invoice.id, status: 'SENT' },
+      where: { id: invoice.id, status: 'SENT', total: 100 },
       data: { status },
     });
   });
@@ -114,5 +116,38 @@ describe('PATCH /api/v1/invoices/:id invoice status', () => {
     expect(response.status).toBe(409);
     expect(authCtx.db.invoice.findUniqueOrThrow).not.toHaveBeenCalled();
     expect(mocks.logActivity).not.toHaveBeenCalled();
+    expect(mocks.emitInvoicePaid).not.toHaveBeenCalled();
+  });
+
+  it('issues and settles a fully discounted draft atomically', async () => {
+    const authCtx = context('DRAFT');
+    authCtx.db.invoice.findUnique.mockResolvedValue({ id: invoice.id, status: 'DRAFT', total: 0 });
+    const settled = { ...invoice, total: 0, status: 'PAID' };
+    authCtx.db.invoice.findUniqueOrThrow.mockResolvedValue(settled);
+    const handler = PATCH as unknown as (
+      ctx: unknown,
+      request: Request,
+      route: { params: Promise<{ id: string }> }
+    ) => Promise<Response>;
+    const response = await handler(
+      authCtx,
+      new Request('https://example.test/api/v1/invoices/invoice-1', {
+        method: 'PATCH',
+        body: JSON.stringify({ status: 'SENT' }),
+      }),
+      { params: Promise.resolve({ id: invoice.id }) }
+    );
+    expect(response.status).toBe(200);
+    expect(authCtx.db.invoice.updateMany).toHaveBeenCalledWith({
+      where: { id: invoice.id, status: 'DRAFT', total: 0 },
+      data: { status: 'PAID', sentAt: expect.any(Date), paidAt: expect.any(Date) },
+    });
+    expect(mocks.emitInvoicePaid).toHaveBeenCalledOnce();
+    expect(mocks.emitInvoicePaid).toHaveBeenCalledWith(authCtx.db, undefined, settled);
+  });
+
+  it('does not emit invoice.paid for an ordinary issue', async () => {
+    await patch('SENT', 'DRAFT');
+    expect(mocks.emitInvoicePaid).not.toHaveBeenCalled();
   });
 });
