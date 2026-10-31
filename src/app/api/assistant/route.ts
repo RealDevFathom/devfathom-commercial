@@ -201,13 +201,13 @@ async function respond(req: Request) {
       }
       // Bind the client-generated attempt identifier to authenticated scope;
       // request contents are deliberately not used as identity.
-      routedRequestId = createHash('sha256')
+      const requestId = createHash('sha256')
         .update(`${organization.id}\0${session.user.id}\0${idempotencyKey.toLowerCase()}`)
         .digest('hex');
       const routed = await withTenantDb(organization.id, (tx) =>
         reserveAIUsage(tx, {
           organizationId: organization.id,
-          requestId: routedRequestId!,
+          requestId,
           tier: 'standard',
           monthlyBudgetUsd,
         })
@@ -215,6 +215,9 @@ async function respond(req: Request) {
       if (routed.isReplay) {
         return Response.json({ error: 'Assistant request already submitted.' }, { status: 409 });
       }
+      // Cleanup belongs only to the request that acquired this reservation.
+      // A failed retry transaction must not cancel another worker's paid work.
+      routedRequestId = requestId;
       ai = createRoutedAIModel(routed);
     } else {
       ai = createAIModel();
@@ -250,12 +253,20 @@ async function respond(req: Request) {
       providerOptions: ai.providerOptions,
       onFinish: routedRequestId
         ? async ({ totalUsage }) => {
+            const { inputTokens, outputTokens } = totalUsage;
+            // Missing usage is unknown spend, not evidence of a free call.
+            if (inputTokens == null || outputTokens == null) {
+              await withTenantDb(organization.id, (tx) =>
+                commitAIUsageReservation(tx, organization.id, routedRequestId!)
+              );
+              return;
+            }
             await withTenantDb(organization.id, (tx) =>
               recordAIUsage(tx, {
                 organizationId: organization.id,
                 requestId: routedRequestId!,
-                inputTokens: totalUsage.inputTokens ?? 0,
-                outputTokens: totalUsage.outputTokens ?? 0,
+                inputTokens,
+                outputTokens,
               })
             );
           }

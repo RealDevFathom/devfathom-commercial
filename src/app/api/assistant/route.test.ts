@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   reserve: vi.fn(),
   commit: vi.fn(),
   cancel: vi.fn(),
+  record: vi.fn(),
   routedModel: vi.fn(),
 }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: mocks.actor }));
@@ -29,6 +30,7 @@ vi.mock('@/lib/ai/ledger', async (importOriginal) => ({
   reserveAIUsage: mocks.reserve,
   commitAIUsageReservation: mocks.commit,
   cancelAIUsage: mocks.cancel,
+  recordAIUsage: mocks.record,
 }));
 vi.mock('@/lib/ai/tools', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/ai/tools')>();
@@ -169,6 +171,62 @@ describe('assistant API scope', () => {
     );
     expect(response.status).toBe(400);
     expect(mocks.reserve).not.toHaveBeenCalled();
+  });
+
+  it('does not cancel an active reservation when a competing retry fails to reserve', async () => {
+    vi.stubEnv('AI_ANTHROPIC_MONTHLY_BUDGET_USD', '5');
+    const key = crypto.randomUUID();
+    expect((await POST(request({ messages: [user] }, key))).status).toBe(200);
+
+    mocks.reserve.mockRejectedValueOnce(new Error('reservation transaction failed'));
+    expect((await POST(request({ messages: [user] }, key))).status).toBe(503);
+    expect(mocks.cancel).not.toHaveBeenCalled();
+    expect(mocks.stream).toHaveBeenCalledOnce();
+  });
+
+  it('releases its own reservation when routed model creation fails', async () => {
+    vi.stubEnv('AI_ANTHROPIC_MONTHLY_BUDGET_USD', '5');
+    mocks.routedModel.mockImplementationOnce(() => {
+      throw new Error('provider configuration missing');
+    });
+    expect((await POST(request({ messages: [user] }))).status).toBe(503);
+    expect(mocks.cancel).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      'server-org',
+      mocks.reserve.mock.calls[0][1].requestId
+    );
+    expect(mocks.stream).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { inputTokens: undefined, outputTokens: undefined },
+    { inputTokens: 100, outputTokens: undefined },
+    { inputTokens: undefined, outputTokens: 20 },
+  ])('retains the conservative charge when final usage is incomplete: %j', async (totalUsage) => {
+    vi.stubEnv('AI_ANTHROPIC_MONTHLY_BUDGET_USD', '5');
+    expect((await POST(request({ messages: [user] }))).status).toBe(200);
+    await mocks.stream.mock.calls[0][0].onFinish({ totalUsage });
+    expect(mocks.commit).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      'server-org',
+      mocks.reserve.mock.calls[0][1].requestId
+    );
+    expect(mocks.record).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { inputTokens: 100, outputTokens: 20 },
+    { inputTokens: 0, outputTokens: 0 },
+  ])('records reported final usage, including explicit zeroes: %j', async (totalUsage) => {
+    vi.stubEnv('AI_ANTHROPIC_MONTHLY_BUDGET_USD', '5');
+    expect((await POST(request({ messages: [user] }))).status).toBe(200);
+    await mocks.stream.mock.calls[0][0].onFinish({ totalUsage });
+    expect(mocks.record).toHaveBeenCalledExactlyOnceWith(expect.anything(), {
+      organizationId: 'server-org',
+      requestId: mocks.reserve.mock.calls[0][1].requestId,
+      ...totalUsage,
+    });
+    expect(mocks.commit).not.toHaveBeenCalled();
   });
 
   it('ignores forged client organization, role, vertical, modules and branch', async () => {
