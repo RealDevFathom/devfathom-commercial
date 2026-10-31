@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   suggestInterbranchTransfers,
   type TransferSuggestionPolicy,
+  type TransferSuggestionPosition,
 } from './interbranch-transfer-suggestions';
 
 const policy: TransferSuggestionPolicy = {
@@ -214,5 +215,94 @@ describe('growth #746 transfer suggestions', () => {
     expect(() => suggestInterbranchTransfers([], { ...policy, targetCoverDays: 2 }, asOf)).toThrow(
       'INVALID_POLICY:targetCoverDays'
     );
+  });
+
+  it.each(Object.keys(policy) as Array<keyof TransferSuggestionPolicy>)(
+    'rejects an omitted policy field: %s',
+    (field) => {
+      const incomplete = { ...policy };
+      Reflect.deleteProperty(incomplete, field);
+      expect(() => suggestInterbranchTransfers([], incomplete, asOf)).toThrow(
+        `INVALID_POLICY:${field}`
+      );
+    }
+  );
+
+  const lot = (lotId: string, availableUnits: number, days: number) => ({
+    lotId,
+    stockLocationId: 'shelf',
+    availableUnits,
+    expiresAt: new Date(asOf.getTime() + days * 86_400_000),
+  });
+  const source: TransferSuggestionPosition = {
+    branchId: 'source',
+    medicineId: 'item',
+    destinationStockLocationId: 'unused',
+    forecastDailyUnits: 0,
+    lots: [],
+  };
+  const destination: TransferSuggestionPosition = {
+    ...source,
+    branchId: 'short',
+    destinationStockLocationId: 'store',
+    forecastDailyUnits: 1,
+  };
+
+  it.each([
+    [5, 3],
+    [7, 5],
+  ])('shares expiry consumption capacity across lots expiring on day %i', (days, expected) => {
+    const result = suggestInterbranchTransfers(
+      [{ ...source, lots: [lot('first', 2, 5), lot('second', 10, days)] }, destination],
+      policy,
+      asOf
+    );
+    expect(result[0].quantityUnits).toBe(expected);
+    expect(result[0].lines.map((line) => line.quantityUnits)).toEqual([2, expected - 2]);
+  });
+
+  it.each([
+    [4, 1],
+    [10, 3],
+  ])('accounts for destination stock in FEFO order when its expiry is day %i', (days, expected) => {
+    const result = suggestInterbranchTransfers(
+      [
+        { ...source, lots: [lot('incoming', 10, 5)] },
+        { ...destination, lots: [lot('own', 2, days)] },
+      ],
+      policy,
+      asOf
+    );
+    expect(result[0].quantityUnits).toBe(expected);
+  });
+
+  it('excludes expired stock from destination coverage', () => {
+    const result = suggestInterbranchTransfers(
+      [
+        { ...source, lots: [lot('incoming', 10, 30)] },
+        { ...destination, lots: [lot('expired', 100, 0)] },
+      ],
+      policy,
+      asOf
+    );
+    expect(result).toEqual([
+      expect.objectContaining({ destinationCoverDays: 0, quantityUnits: 7 }),
+    ]);
+  });
+
+  it('excludes expired source stock when retaining the source reserve', () => {
+    const result = suggestInterbranchTransfers(
+      [
+        {
+          ...source,
+          forecastDailyUnits: 1,
+          lots: [lot('expired', 100, -1), lot('usable', 12, 30)],
+        },
+        destination,
+      ],
+      policy,
+      asOf
+    );
+    expect(result).toEqual([expect.objectContaining({ sourceCoverDays: 12, quantityUnits: 2 })]);
   });
 });

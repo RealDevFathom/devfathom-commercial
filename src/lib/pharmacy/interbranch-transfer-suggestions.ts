@@ -43,7 +43,13 @@ export type InterbranchTransferSuggestion = {
 const DAY_MS = 86_400_000;
 
 function assertPolicy(policy: TransferSuggestionPolicy) {
-  for (const [name, value] of Object.entries(policy)) {
+  for (const name of [
+    'shortageCoverDays',
+    'targetCoverDays',
+    'surplusReserveDays',
+    'minimumShelfLifeDays',
+  ] as const) {
+    const value = policy[name];
     if (!Number.isFinite(value) || value < 0) throw new Error(`INVALID_POLICY:${name}`);
   }
   if (policy.targetCoverDays < policy.shortageCoverDays)
@@ -77,15 +83,19 @@ export function suggestInterbranchTransfers(
 ): InterbranchTransferSuggestion[] {
   assertPolicy(policy);
   assertPlanningInput(positions, asOf);
+  const usablePositions = positions.map((position) => ({
+    ...position,
+    lots: position.lots.filter((lot) => lot.expiresAt.getTime() > asOf.getTime()),
+  }));
   const suggestions: InterbranchTransferSuggestion[] = [];
   const remaining = new Map<string, number>();
-  for (const position of positions)
+  for (const position of usablePositions)
     for (const lot of position.lots)
       remaining.set(`${position.branchId}:${lot.lotId}:${lot.stockLocationId}`, lot.availableUnits);
 
-  const medicines = [...new Set(positions.map((position) => position.medicineId))].sort();
+  const medicines = [...new Set(usablePositions.map((position) => position.medicineId))].sort();
   for (const medicineId of medicines) {
-    const matching = positions.filter((position) => position.medicineId === medicineId);
+    const matching = usablePositions.filter((position) => position.medicineId === medicineId);
     const shorts = matching
       .filter((position) => position.forecastDailyUnits > 0)
       .filter(
@@ -121,6 +131,7 @@ export function suggestInterbranchTransfers(
       for (const source of sources) {
         if (needed === 0) break;
         const lines: InterbranchTransferSuggestion['lines'] = [];
+        let plannedUnits = 0;
         const sourceUnits = source.lots.reduce(
           (sum, lot) =>
             sum + (remaining.get(`${source.branchId}:${lot.lotId}:${lot.stockLocationId}`) ?? 0),
@@ -140,7 +151,17 @@ export function suggestInterbranchTransfers(
             0,
             (lot.expiresAt.getTime() - asOf.getTime()) / DAY_MS - policy.minimumShelfLifeDays
           );
-          const consumableBeforeExpiry = Math.floor(saleDays * destination.forecastDailyUnits);
+          // Earlier FEFO stock and lines already planned share this sales window.
+          const earlierDestinationUnits = destination.lots.reduce(
+            (sum, ownLot) => sum + (ownLot.expiresAt <= lot.expiresAt ? ownLot.availableUnits : 0),
+            0
+          );
+          const consumableBeforeExpiry = Math.max(
+            0,
+            Math.floor(saleDays * destination.forecastDailyUnits) -
+              earlierDestinationUnits -
+              plannedUnits
+          );
           const quantity = Math.min(available, sourceSurplus, needed, consumableBeforeExpiry);
           if (quantity <= 0) continue;
           lines.push({
@@ -151,6 +172,7 @@ export function suggestInterbranchTransfers(
             expiresAt: lot.expiresAt,
           });
           remaining.set(key, available - quantity);
+          plannedUnits += quantity;
           sourceSurplus -= quantity;
           needed -= quantity;
           if (needed === 0 || sourceSurplus === 0) break;
