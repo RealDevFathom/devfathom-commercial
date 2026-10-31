@@ -56,7 +56,11 @@ function projectDb() {
         return { userId, ...members.get(userId)! };
       }),
     },
-    user: { findMany: vi.fn(async () => [{ id: 'lead-a' }, { id: 'lead-b' }]) },
+    user: {
+      findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
+        where.id.in.filter((id) => ['lead-a', 'lead-b'].includes(id)).map((id) => ({ id }))
+      ),
+    },
   };
 
   const db = {
@@ -142,10 +146,27 @@ describe('project lead invariant', () => {
         userId: 'lead-a',
         role: 'MEMBER',
       })
-    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    ).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'Cannot demote the last lead. Promote another member to lead first.',
+    });
 
     expect(members.get('lead-a')).toEqual({ role: 'LEAD' });
     expect(calls[0]).toBe('lock');
     expect(calls).not.toContain('upsert');
+  });
+
+  it('allows demoting a lead through addMember when another lead remains', async () => {
+    const { db, members } = projectDb();
+
+    await expect(
+      caller(db, 'lead-a').addMember({
+        projectId: 'project-1',
+        userId: 'lead-a',
+        role: 'MEMBER',
+      })
+    ).resolves.toMatchObject({ userId: 'lead-a', role: 'MEMBER' });
+
+    expect(members.get('lead-b')).toEqual({ role: 'LEAD' });
   });
 });

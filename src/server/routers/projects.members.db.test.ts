@@ -8,7 +8,7 @@
 import { randomBytes } from 'node:crypto';
 
 import pg from 'pg';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
@@ -69,20 +69,28 @@ suite('project lead invariant, against PostgreSQL', () => {
        VALUES ($1, $2, 'Lead race', 'INTERNAL', now())`,
       [projectId, organizationId]
     );
-    await fixture.query(
-      `INSERT INTO project_members (id, "organizationId", "projectId", "userId", role)
-       VALUES ($1, $3, $4, $5, 'LEAD'), ($2, $3, $4, $6, 'LEAD')`,
-      [`pm_a_${suffix}`, `pm_b_${suffix}`, organizationId, projectId, leadA, leadB]
-    );
-
     ({ createTenantDb } = await import('@/lib/tenancy/scoped-db'));
     ({ projectsRouter } = await import('./projects'));
   }, 30_000);
 
+  beforeEach(async () => {
+    await fixture.query(
+      `INSERT INTO project_members (id, "organizationId", "projectId", "userId", role)
+       VALUES ($1, $3, $4, $5, 'LEAD'), ($2, $3, $4, $6, 'LEAD')
+       ON CONFLICT ("projectId", "userId") DO UPDATE SET role = 'LEAD'`,
+      [`pm_a_${suffix}`, `pm_b_${suffix}`, organizationId, projectId, leadA, leadB]
+    );
+  });
+
   afterAll(async () => {
     if (fixture) {
-      await fixture.query('DELETE FROM organizations WHERE id = $1', [organizationId]);
-      await fixture.end();
+      try {
+        // Projects have no cascading organization FK, so remove the parent explicitly.
+        await fixture.query('DELETE FROM projects WHERE id = $1', [projectId]);
+        await fixture.query('DELETE FROM organizations WHERE id = $1', [organizationId]);
+      } finally {
+        await fixture.end();
+      }
     }
     const { db } = await import('@/lib/db');
     await db.$disconnect();
@@ -101,10 +109,17 @@ suite('project lead invariant, against PostgreSQL', () => {
     } as never);
   }
 
-  it('serializes concurrent addMember upsert demotions under RLS', async () => {
+  it.each([
+    ['addMember', 'addMember'],
+    ['removeMember', 'removeMember'],
+    ['setMemberRole', 'setMemberRole'],
+    ['addMember', 'removeMember'],
+    ['addMember', 'setMemberRole'],
+    ['removeMember', 'setMemberRole'],
+  ] as const)('serializes concurrent %s / %s lead reductions under RLS', async (first, second) => {
     const results = await Promise.allSettled([
-      caller(leadA).addMember({ projectId, userId: leadA, role: 'MEMBER' }),
-      caller(leadB).addMember({ projectId, userId: leadB, role: 'MEMBER' }),
+      caller(leadA)[first]({ projectId, userId: leadA, role: 'MEMBER' }),
+      caller(leadB)[second]({ projectId, userId: leadB, role: 'MEMBER' }),
     ]);
 
     expect(results.map(({ status }) => status).sort()).toEqual(['fulfilled', 'rejected']);
