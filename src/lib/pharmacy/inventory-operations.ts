@@ -83,23 +83,97 @@ function assertPositive(units: number) {
   if (!Number.isSafeInteger(units) || units <= 0) throw new PharmacyInventoryError('INVALID_UNITS');
 }
 
+/** Keep recall-managed units available for the safety-authorized reversal. */
+async function manualQuarantineBalance(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input: { inventoryLotId: string; stockLocationId: string; units: number }
+) {
+  // Lock before reading the reserve, then read it in a separate statement so a
+  // waiter sees the preceding transaction's committed balance and recall action.
+  // AVAILABLE comes first to match quarantinePart's movement order and avoid
+  // taking the two projection locks in opposite orders during a release.
+  await db.$queryRaw(Prisma.sql`
+    SELECT "disposition" FROM "pharmacy_stock_balances"
+    WHERE "organizationId" = ${scope.organizationId}
+      AND "branchId" = ${scope.branchId}
+      AND "inventoryLotId" = ${input.inventoryLotId}
+      AND "stockLocationId" = ${input.stockLocationId}
+      AND "disposition" IN ('AVAILABLE', 'QUARANTINE')
+    ORDER BY "disposition"
+    FOR UPDATE
+  `);
+  const [balance, recallActions] = await Promise.all([
+    db.pharmacyStockBalance.findFirst({
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        inventoryLotId: input.inventoryLotId,
+        stockLocationId: input.stockLocationId,
+        disposition: 'QUARANTINE',
+      },
+      select: { onHandUnits: true, sealedPacks: true, looseUnits: true },
+    }),
+    db.pharmacyRecallQuarantineAction.findMany({
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        inventoryLotId: input.inventoryLotId,
+        stockLocationId: input.stockLocationId,
+        reversedAt: null,
+      },
+      select: { quantityUnits: true, heldMovementId: true },
+    }),
+  ]);
+  const reservedUnits = recallActions.reduce((sum, action) => sum + action.quantityUnits, 0);
+  if (!balance || balance.onHandUnits - reservedUnits < input.units) {
+    throw new PharmacyInventoryError('INSUFFICIENT_STOCK');
+  }
+  if (!recallActions.length) return balance;
+  // Reversal negates each original movement's exact arrangement. Manual removals
+  // must leave those sealed packs and loose units intact, not just the total.
+  const recallReserve = await db.pharmacyStockMovement.aggregate({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      inventoryLotId: input.inventoryLotId,
+      stockLocationId: input.stockLocationId,
+      id: { in: recallActions.map((action) => action.heldMovementId) },
+    },
+    _sum: { sealedPackDelta: true, looseUnitDelta: true },
+  });
+  const manual = {
+    onHandUnits: balance.onHandUnits - reservedUnits,
+    sealedPacks: balance.sealedPacks - (recallReserve._sum.sealedPackDelta ?? 0),
+    looseUnits: balance.looseUnits - (recallReserve._sum.looseUnitDelta ?? 0),
+  };
+  if (manual.sealedPacks < 0 || manual.looseUnits < 0) {
+    throw new PharmacyInventoryError('INSUFFICIENT_STOCK');
+  }
+  return manual;
+}
+
 async function removalArrangement(
   db: ScopedDb,
   scope: LedgerScope,
   inventoryLotId: string,
   stockLocationId: string,
   units: number,
-  unitsPerPack: number
+  unitsPerPack: number,
+  disposition: 'AVAILABLE' | 'QUARANTINE' = 'AVAILABLE'
 ) {
-  const balance = await db.pharmacyStockBalance.findFirst({
-    where: {
-      organizationId: scope.organizationId,
-      branchId: scope.branchId,
-      inventoryLotId,
-      stockLocationId,
-      disposition: 'AVAILABLE',
-    },
-  });
+  const balance =
+    disposition === 'QUARANTINE'
+      ? await manualQuarantineBalance(db, scope, { inventoryLotId, stockLocationId, units })
+      : await db.pharmacyStockBalance.findFirst({
+          where: {
+            organizationId: scope.organizationId,
+            branchId: scope.branchId,
+            inventoryLotId,
+            stockLocationId,
+            disposition,
+          },
+        });
   if (!balance || balance.onHandUnits < units)
     throw new PharmacyInventoryError('INSUFFICIENT_STOCK');
   const looseUnits = Math.min(balance.looseUnits, units);
@@ -250,6 +324,7 @@ export async function writeOff(
     reason: string;
     evidenceRef: string;
     idempotencyKey: string;
+    disposition?: 'AVAILABLE' | 'QUARANTINE';
   }
 ) {
   assertPositive(input.units);
@@ -284,7 +359,8 @@ export async function writeOff(
     input.inventoryLotId,
     input.stockLocationId,
     input.units,
-    lot.unitsPerPack
+    lot.unitsPerPack,
+    input.disposition
   );
   const movement = await db.pharmacyStockMovement.create({
     data: {
@@ -293,7 +369,7 @@ export async function writeOff(
       inventoryLotId: input.inventoryLotId,
       stockLocationId: input.stockLocationId,
       kind: 'WRITE_OFF',
-      disposition: 'AVAILABLE',
+      disposition: input.disposition ?? 'AVAILABLE',
       quantityUnits: -input.units,
       sealedPackDelta: -a.sealedPacks,
       looseUnitDelta: -a.looseUnits,
@@ -375,6 +451,68 @@ export async function quarantinePart(
     },
   });
   return { removed, held };
+}
+
+/** Return manually held stock to saleable inventory after it has been cleared. */
+export async function releaseQuarantinedPart(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input: {
+    inventoryLotId: string;
+    stockLocationId: string;
+    units: number;
+    reason: string;
+    idempotencyKeyPrefix: string;
+  }
+) {
+  assertPositive(input.units);
+  const lot = await db.pharmacyInventoryLot.findFirst({
+    where: {
+      id: input.inventoryLotId,
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+    },
+  });
+  if (!lot) throw new PharmacyInventoryError('CROSS_BRANCH_REFERENCE');
+  const a = await removalArrangement(
+    db,
+    scope,
+    input.inventoryLotId,
+    input.stockLocationId,
+    input.units,
+    lot.unitsPerPack,
+    'QUARANTINE'
+  );
+  const common = {
+    organizationId: scope.organizationId,
+    branchId: scope.branchId,
+    inventoryLotId: input.inventoryLotId,
+    stockLocationId: input.stockLocationId,
+    kind: 'ADJUSTMENT' as const,
+    actorId: scope.actorId,
+    reason: input.reason,
+  };
+  const removed = await db.pharmacyStockMovement.create({
+    data: {
+      ...common,
+      disposition: 'QUARANTINE',
+      quantityUnits: -input.units,
+      sealedPackDelta: -a.sealedPacks,
+      looseUnitDelta: -a.looseUnits,
+      idempotencyKey: `${input.idempotencyKeyPrefix}:out`,
+    },
+  });
+  const released = await db.pharmacyStockMovement.create({
+    data: {
+      ...common,
+      disposition: 'AVAILABLE',
+      quantityUnits: input.units,
+      sealedPackDelta: a.sealedPacks,
+      looseUnitDelta: a.looseUnits,
+      idempotencyKey: `${input.idempotencyKeyPrefix}:in`,
+    },
+  });
+  return { removed, released };
 }
 
 export async function allocateTransfer(

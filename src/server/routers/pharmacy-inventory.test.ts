@@ -75,6 +75,10 @@ function makeDb() {
     pharmacyStockMovement: model(),
     pharmacyCustodyRecord: model(),
     pharmacyStockBalance: model(),
+    pharmacyRecallQuarantineAction: {
+      findMany: vi.fn().mockResolvedValue([]),
+    },
+    pharmacyCustodyRecord: model(),
     pharmacyAllocationOverride: model(),
     pharmacyStockDiscrepancy: model(),
     pharmacyRecallAcknowledgement: model(),
@@ -795,6 +799,98 @@ describe.each(GATED_MUTATIONS)(
   }
 );
 
+describe('manual quarantine resolution authorization', () => {
+  const input = {
+    branchId: 'branch_a',
+    inventoryLotId: 'lot_1',
+    stockLocationId: 'location_1',
+    units: 10,
+    reason: 'Inspection passed',
+    idempotencyKeyPrefix: 'release-1',
+  };
+
+  beforeEach(() => {
+    grant([allow('pharmacy:inventory')]);
+    db.pharmacyInventoryLot.findFirst.mockResolvedValue({ id: 'lot_1', unitsPerPack: 10 });
+    db.pharmacyStockBalance.findFirst.mockResolvedValue({
+      onHandUnits: 20,
+      sealedPacks: 2,
+      looseUnits: 0,
+    });
+  });
+
+  it('lets an inventory-only actor release a manual hold with session attribution', async () => {
+    await caller().releaseQuarantinedPart(input);
+    expect(db.pharmacyStockMovement.create).toHaveBeenCalledTimes(2);
+    expect(db.pharmacyStockMovement.create).toHaveBeenNthCalledWith(2, {
+      data: expect.objectContaining({
+        organizationId: 'org_a',
+        branchId: 'branch_a',
+        actorId: 'user_a',
+        disposition: 'AVAILABLE',
+        quantityUnits: 10,
+        reason: 'Inspection passed',
+      }),
+    });
+    expect(db.pharmacyRecallQuarantineAction.findMany).toHaveBeenCalledWith({
+      where: {
+        organizationId: 'org_a',
+        branchId: 'branch_a',
+        inventoryLotId: 'lot_1',
+        stockLocationId: 'location_1',
+        reversedAt: null,
+      },
+      select: { quantityUnits: true, heldMovementId: true },
+    });
+  });
+
+  it.each(['release', 'write-off'])(
+    'refuses regulatory stock through inventory-only %s before posting movements',
+    async (operation) => {
+      db.pharmacyRecallQuarantineAction.findMany.mockResolvedValue([
+        { quantityUnits: 20, heldMovementId: 'recall-held-1' },
+      ]);
+      const result =
+        operation === 'release'
+          ? caller().releaseQuarantinedPart(input)
+          : caller().writeOff({
+              branchId: input.branchId,
+              inventoryLotId: input.inventoryLotId,
+              stockLocationId: input.stockLocationId,
+              units: input.units,
+              reason: input.reason,
+              disposition: 'QUARANTINE',
+              witnessId: 'witness',
+              evidenceRef: 'certificate',
+              idempotencyKey: 'write-off-1',
+            });
+      await expect(result).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+        message: 'INSUFFICIENT_STOCK',
+      });
+      expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
+      expect(db.pharmacyCustodyRecord.create).not.toHaveBeenCalled();
+    }
+  );
+
+  it('still requires safety authority for the regulatory reversal', async () => {
+    await expect(
+      caller().reverseDrapRecall({ recallNoticeId: 'recall_1', reason: 'Cleared' })
+    ).rejects.toMatchObject(CAPABILITY_REFUSAL);
+    expect(db.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('rejects an out-of-tenant branch before looking up stock', async () => {
+    db.pharmacyBranch.findMany.mockResolvedValue([]);
+    await expect(caller().releaseQuarantinedPart(input)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'That record is not in this workspace.',
+    });
+    expect(db.pharmacyInventoryLot.findFirst).not.toHaveBeenCalled();
+    expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
+  });
+});
+
 describe('#355 — remaining stock mutations require pharmacy:inventory', () => {
   it.each([
     [
@@ -833,6 +929,28 @@ describe('#355 — remaining stock mutations require pharmacy:inventory', () => 
         transferId: 'transfer_1',
         lines: [{ lineId: 'line_1', receivedUnits: 1 }],
         idempotencyKeyPrefix: 'receive-1',
+      },
+    ],
+    [
+      'quarantinePart',
+      {
+        branchId: 'branch_a',
+        inventoryLotId: 'lot_1',
+        stockLocationId: 'location_1',
+        units: 1,
+        reason: 'Manual safety hold',
+        idempotencyKeyPrefix: 'hold-1',
+      },
+    ],
+    [
+      'releaseQuarantinedPart',
+      {
+        branchId: 'branch_a',
+        inventoryLotId: 'lot_1',
+        stockLocationId: 'location_1',
+        units: 1,
+        reason: 'Inspection passed',
+        idempotencyKeyPrefix: 'release-1',
       },
     ],
   ] as const)('honours an explicit DENY for %s before handler access', async (procedure, input) => {

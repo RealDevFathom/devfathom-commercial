@@ -240,6 +240,13 @@ export default async function PharmacyInventoryPage({
       .filter((balance) => balance.disposition === 'AVAILABLE' && balance.onHandUnits > 0)
       .map((balance) => ({ lot, balance }))
   );
+  const quarantined = lots.flatMap((lot) =>
+    lot.balances
+      .filter((balance) => balance.disposition === 'QUARANTINE' && balance.onHandUnits > 0)
+      .map((balance) => ({ lot, balance }))
+  );
+  const releasableQuarantined = quarantined.filter(({ lot }) => lot.batch.state === 'ACTIVE');
+  const writeOffPositions = [...available, ...quarantined];
   const totalUnits = available.reduce((sum, row) => sum + row.balance.onHandUnits, 0);
   const draftLotByMedicine = new Map(
     available.map(({ lot }) => [lot.batch.medicineId, lot] as const)
@@ -308,6 +315,16 @@ export default async function PharmacyInventoryPage({
           reason: field(data, 'reason'),
           evidenceRef: field(data, 'evidenceRef'),
           idempotencyKey: `ui-writeoff:${browserUuid()}`,
+          disposition: field(data, 'position').split(':')[2] as 'AVAILABLE' | 'QUARANTINE',
+        });
+      else if (action === 'release-quarantine')
+        await actionCaller.releaseQuarantinedPart({
+          branchId,
+          inventoryLotId: field(data, 'position').split(':')[0]!,
+          stockLocationId: field(data, 'position').split(':')[1]!,
+          units: number(data, 'units'),
+          reason: field(data, 'reason'),
+          idempotencyKeyPrefix: `ui-quarantine-release:${browserUuid()}`,
         });
       else if (action === 'allocate-transfer')
         await actionCaller.allocateTransfer({
@@ -762,20 +779,20 @@ export default async function PharmacyInventoryPage({
       </div>
 
       <SectionCard title="Adjustments and write-off custody" eyebrow="INV-06">
-        {available.length && users.length ? (
+        {writeOffPositions.length && users.length ? (
           <form action={perform} className="grid gap-3 md:grid-cols-3">
             <input name="action" type="hidden" value="write-off" />
             <input name="branchId" type="hidden" value={branch.id} />
             <label className="text-sm md:col-span-2">
               Lot
               <select className={inputClass} name="position">
-                {available.map(({ lot, balance }) => (
+                {writeOffPositions.map(({ lot, balance }) => (
                   <option
-                    key={`${lot.id}:${balance.stockLocationId}`}
-                    value={`${lot.id}:${balance.stockLocationId}`}
+                    key={`${lot.id}:${balance.stockLocationId}:${balance.disposition}`}
+                    value={`${lot.id}:${balance.stockLocationId}:${balance.disposition}`}
                   >
                     {lot.batch.medicine.productName} · {lot.batch.batchNumber} ·{' '}
-                    {balance.location.name}
+                    {balance.location.name} · {label(balance.disposition)}
                   </option>
                 ))}
               </select>
@@ -813,9 +830,44 @@ export default async function PharmacyInventoryPage({
           </form>
         ) : (
           <Empty>
-            A write-off needs available stock and a different active organization member as witness.
+            A write-off needs available or quarantined stock and a different active organization
+            member as witness.
           </Empty>
         )}
+        {releasableQuarantined.length ? (
+          <form action={perform} className="mt-6 grid gap-3 md:grid-cols-3">
+            <input name="action" type="hidden" value="release-quarantine" />
+            <input name="branchId" type="hidden" value={branch.id} />
+            <label className="text-sm md:col-span-2">
+              Manually held stock
+              <select className={inputClass} name="position">
+                {releasableQuarantined.map(({ lot, balance }) => (
+                  <option
+                    key={`${lot.id}:${balance.stockLocationId}`}
+                    value={`${lot.id}:${balance.stockLocationId}`}
+                  >
+                    {lot.batch.medicine.productName} · {lot.batch.batchNumber} ·{' '}
+                    {balance.location.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="text-sm">
+              Units
+              <Input className="mt-1" min="1" name="units" required type="number" />
+            </label>
+            <label className="text-sm md:col-span-2">
+              Clearance reason
+              <Input className="mt-1" name="reason" required />
+            </label>
+            <Button className="self-end" type="submit" variant="secondary">
+              Release manual hold
+            </Button>
+            <p className="text-xs text-text-muted md:col-span-3">
+              Regulatory recall units remain reserved for the safety-authorized recall reversal.
+            </p>
+          </form>
+        ) : null}
       </SectionCard>
 
       <SectionCard
