@@ -69,6 +69,22 @@ function transactionScopedDb(db: ScopedDb, tx: Prisma.TransactionClient): Scoped
   });
 }
 
+export async function withStaffCreationCapacity<T>(
+  db: ScopedDb,
+  limits: Readonly<Record<string, number>>,
+  work: (db: ScopedDb, tx: Prisma.TransactionClient) => Promise<T>,
+  status: CreateStaffProfileInput['status'] = 'ACTIVE'
+): Promise<T> {
+  const operatorsMax =
+    status === 'ACTIVE' ? configuredLimit(limits, RESTAURANT_OPERATORS_LIMIT) : undefined;
+  return db.$transaction(async (tx) => {
+    const scopedTx = transactionScopedDb(db, tx);
+    await lockOrganization(tx);
+    if (operatorsMax !== undefined) await assertOperatorCapacity(scopedTx, operatorsMax);
+    return work(scopedTx, tx);
+  });
+}
+
 async function lockOrganization(tx: Prisma.TransactionClient): Promise<void> {
   await tx.$queryRaw(
     Prisma.sql`SELECT id FROM organizations WHERE id = current_setting('app.current_organization_id', true) FOR UPDATE`
@@ -130,13 +146,7 @@ export async function createStaffProfileWithinCommercialLimit(
   if (input.status !== undefined && input.status !== 'ACTIVE') {
     return createStaffProfile(db, input);
   }
-  const operatorsMax = configuredLimit(limits, RESTAURANT_OPERATORS_LIMIT);
-  return db.$transaction(async (tx) => {
-    const scopedTx = transactionScopedDb(db, tx);
-    await lockOrganization(tx);
-    await assertOperatorCapacity(scopedTx, operatorsMax);
-    return createStaffProfile(scopedTx, input);
-  });
+  return withStaffCreationCapacity(db, limits, (scopedTx) => createStaffProfile(scopedTx, input));
 }
 
 export async function updateStaffProfileWithinCommercialLimit(

@@ -12,7 +12,15 @@ import {
   createStaffProfileWithinCommercialLimit,
   setStaffProfileStatusWithinCommercialLimit,
   updateStaffProfileWithinCommercialLimit,
+  withStaffCreationCapacity,
 } from '@/lib/restaurant/commercial-limits';
+import { createStaffProfile } from '@/lib/restaurant/staff';
+import { emailSchema } from '@/lib/email-address';
+import { generateInviteToken } from '@/lib/invite-token';
+import { appUrl, sendEmail, templates } from '@/lib/email';
+import { can, subjectFromSession, type Action } from '@/lib/abac';
+import { capabilityMatches } from '@/lib/abac/capabilities';
+import type { TRPCContext } from '../trpc';
 import {
   CredentialLifecycleError,
   issueOperatorCredential,
@@ -66,6 +74,7 @@ import {
 
 const STAFF_STATUS = z.enum(['ACTIVE', 'SUSPENDED', 'ARCHIVED']);
 const CREDENTIAL_TYPE = z.enum(['PIN', 'BADGE']);
+const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** Translate a staff-domain error into the right tRPC status; rethrow anything else. */
 function mapStaffError(err: unknown): never {
@@ -128,6 +137,55 @@ function workspaceOrganizationId(ctx: {
     throw new TRPCError({ code: 'NOT_FOUND', message: 'Workspace not found.' });
   }
   return organizationId;
+}
+
+type InvitePermission = { capability: string; effect: string };
+
+async function canAssignInviteRole(
+  ctx: TRPCContext,
+  permissions: InvitePermission[],
+  accountRole = 'EMPLOYEE'
+) {
+  const subject = subjectFromSession(ctx.session!.user);
+  const options = { db: ctx.db, source: 'TRPC' as const };
+  // Organization administrators already have role-assignment authority in team.inviteMember.
+  if (await can(subject, 'admin:access', undefined, options)) return true;
+  if (accountRole !== 'EMPLOYEE') return false;
+  for (const permission of permissions) {
+    if (permission.effect !== 'ALLOW') continue;
+    // A branch staff manager cannot delegate an open-ended wildcard or a grant
+    // they do not hold themselves. Check the actual permissions, never role names.
+    if (
+      !capabilityMatches(permission.capability, permission.capability) ||
+      !(await can(subject, permission.capability as Action, undefined, options))
+    )
+      return false;
+  }
+  return true;
+}
+
+async function deliverStaffInvite(
+  ctx: TRPCContext,
+  user: { name: string; email: string },
+  role: string,
+  token: string
+) {
+  const inviteUrl = `${appUrl()}/invite/${token}`;
+  const mail = templates.inviteMember({
+    name: user.name,
+    inviterName: ctx.session!.user.name ?? undefined,
+    role,
+    workspace: 'DevFathom',
+    acceptUrl: inviteUrl,
+    expiresLabel: 'in 7 days',
+  });
+  try {
+    await sendEmail({ to: { email: user.email, name: user.name }, ...mail });
+    return { inviteUrl, emailDelivered: true };
+  } catch (error) {
+    console.error('[restaurantStaff.invite] invite email failed for', user.email, error);
+    return { inviteUrl, emailDelivered: false };
+  }
 }
 
 export const restaurantStaffRouter = router({
@@ -269,6 +327,245 @@ export const restaurantStaffRouter = router({
     });
   }),
 
+  inviteOptions: staffProcedure.query(async ({ ctx }) => {
+    const organizationId = workspaceOrganizationId(ctx);
+    const [departments, roles] = await Promise.all([
+      ctx.db.organizationDepartment.findMany({
+        where: { organizationId, active: true },
+        orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+        select: { id: true, key: true, name: true },
+      }),
+      ctx.db.organizationRole.findMany({
+        where: { organizationId },
+        orderBy: { name: 'asc' },
+        select: {
+          id: true,
+          key: true,
+          name: true,
+          permissions: { select: { capability: true, effect: true } },
+        },
+      }),
+    ]);
+    const allowedRoles = [];
+    for (const role of roles) {
+      if (await canAssignInviteRole(ctx, role.permissions)) {
+        allowedRoles.push({ id: role.id, key: role.key, name: role.name });
+      }
+    }
+    return { departments, roles: allowedRoles };
+  }),
+
+  invite: staffProcedure
+    .input(
+      z.object({
+        displayName: z.string().min(1).max(200),
+        email: emailSchema,
+        title: z.string().min(1).max(200),
+        department: z
+          .string()
+          .trim()
+          .min(2)
+          .max(80)
+          .regex(/^[A-Z0-9_]+$/),
+        organizationRoleId: z.string().trim().min(1).max(128).nullable().default(null),
+        primaryBranchId: z.string().nullable().optional(),
+        status: STAFF_STATUS.optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const authorization = await resolveStaffBranchAuthorization(
+        ctx.db,
+        ctx.session!.user,
+        ctx.entitlements.organizationId
+      );
+      if (!authorization.organizationWide || input.primaryBranchId) {
+        assertAuthorizedBranch(authorization, input.primaryBranchId);
+      }
+      const organizationId = workspaceOrganizationId(ctx);
+      const { token, tokenHash } = generateInviteToken();
+      const expiresAt = new Date(Date.now() + INVITE_TTL_MS);
+      try {
+        const result = await withStaffCreationCapacity(
+          ctx.db,
+          ctx.entitlements.limits,
+          async (db, tx) => {
+            const department = await tx.organizationDepartment.findFirst({
+              where: { organizationId, key: input.department, active: true },
+              select: { id: true },
+            });
+            if (!department)
+              throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invalid department.' });
+            const organizationRole = input.organizationRoleId
+              ? await tx.organizationRole.findFirst({
+                  where: { id: input.organizationRoleId, organizationId },
+                  select: {
+                    id: true,
+                    name: true,
+                    permissions: { select: { capability: true, effect: true } },
+                  },
+                })
+              : null;
+            if (input.organizationRoleId && !organizationRole) {
+              throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invalid role template.' });
+            }
+            if (
+              organizationRole &&
+              !(await canAssignInviteRole(ctx, organizationRole.permissions))
+            ) {
+              throw new TRPCError({
+                code: 'FORBIDDEN',
+                message: 'You cannot assign this role template.',
+              });
+            }
+            if (await tx.user.findFirst({ where: { organizationId, email: input.email } })) {
+              throw new TRPCError({
+                code: 'CONFLICT',
+                message: 'A user with this email already exists',
+              });
+            }
+            const occupiedSeats = await tx.user.count({
+              where: { organizationId, status: { in: ['ACTIVE', 'ON_LEAVE', 'INVITED'] } },
+            });
+            if (occupiedSeats >= ctx.entitlements.seatLimit) {
+              throw new TRPCError({
+                code: 'FORBIDDEN',
+                message: `Seat limit reached (${occupiedSeats}/${ctx.entitlements.seatLimit}). Increase the organization license before inviting another member.`,
+              });
+            }
+            const user = await tx.user.create({
+              data: {
+                organizationId,
+                name: input.displayName,
+                email: input.email,
+                password: null,
+                status: 'INVITED',
+                role: 'EMPLOYEE',
+                department: input.department,
+                title: input.title,
+                organizationRoleId: organizationRole?.id ?? null,
+                skills: [],
+              },
+            });
+            await tx.invitation.create({
+              data: {
+                organizationId,
+                userId: user.id,
+                email: input.email,
+                tokenHash,
+                invitedById: ctx.session!.user.id,
+                expiresAt,
+              },
+            });
+            const staff = await createStaffProfile(db, {
+              displayName: input.displayName,
+              email: input.email,
+              userId: user.id,
+              primaryBranchId: input.primaryBranchId,
+              status: input.status,
+            });
+            return { user, staff, roleName: organizationRole?.name };
+          },
+          input.status
+        );
+        annotateAudit(ctx, {
+          targetType: 'RestaurantStaffProfile',
+          targetId: result.staff.id,
+          targetLabel: result.staff.displayName,
+          description: `Invited and created restaurant staff profile "${result.staff.displayName}"`,
+          metadata: { userId: result.user.id, primaryBranchId: result.staff.primaryBranchId },
+        });
+        const delivery = await deliverStaffInvite(
+          ctx,
+          result.user,
+          result.roleName ?? `Employee · ${input.department}`,
+          token
+        );
+        return { ...result.staff, ...delivery };
+      } catch (err) {
+        mapStaffError(err);
+      }
+    }),
+
+  resendInvite: staffProcedure
+    .input(z.object({ staffProfileId: z.string().min(1) }).strict())
+    .mutation(async ({ ctx, input }) => {
+      const authorization = await resolveStaffBranchAuthorization(
+        ctx.db,
+        ctx.session!.user,
+        ctx.entitlements.organizationId
+      );
+      await assertAuthorizedStaffProfile(ctx.db, authorization, input.staffProfileId);
+      const staff = await ctx.db.restaurantStaffProfile.findUnique({
+        where: { id: input.staffProfileId },
+        select: {
+          id: true,
+          user: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              status: true,
+              role: true,
+              department: true,
+              organizationRole: {
+                select: { name: true, permissions: { select: { capability: true, effect: true } } },
+              },
+              permissionOverrides: {
+                where: { OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] },
+                select: { capability: true, effect: true },
+              },
+            },
+          },
+        },
+      });
+      const user = staff?.user;
+      if (!user || user.status !== 'INVITED') {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'This staff member has no pending invitation.',
+        });
+      }
+      if (
+        !(await canAssignInviteRole(
+          ctx,
+          [...(user.organizationRole?.permissions ?? []), ...user.permissionOverrides],
+          user.role
+        ))
+      ) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'You cannot assign this role template.',
+        });
+      }
+      const { token, tokenHash } = generateInviteToken();
+      const changed = await ctx.db.invitation.updateMany({
+        where: { organizationId: workspaceOrganizationId(ctx), userId: user.id, acceptedAt: null },
+        data: {
+          tokenHash,
+          expiresAt: new Date(Date.now() + INVITE_TTL_MS),
+          invitedById: ctx.session!.user.id,
+        },
+      });
+      if (changed.count !== 1) {
+        throw new TRPCError({ code: 'CONFLICT', message: 'This invitation is no longer pending.' });
+      }
+      annotateAudit(ctx, {
+        targetType: 'RestaurantStaffProfile',
+        targetId: input.staffProfileId,
+        description: 'Resent restaurant staff invitation',
+      });
+      return {
+        id: input.staffProfileId,
+        email: user.email,
+        ...(await deliverStaffInvite(
+          ctx,
+          user,
+          user.organizationRole?.name ?? `Employee · ${user.department}`,
+          token
+        )),
+      };
+    }),
+
   // ── Staff profiles ────────────────────────────────────────────────────────
   list: staffProcedure
     .input(
@@ -297,6 +594,7 @@ export const restaurantStaffRouter = router({
           displayName: true,
           email: true,
           userId: true,
+          user: { select: { status: true } },
           primaryBranchId: true,
           status: true,
           createdAt: true,

@@ -115,7 +115,7 @@ describe('createStaffProfile', () => {
     expect(mocks.staffCreate).not.toHaveBeenCalled();
   });
 
-  it('links an existing user and branch when both are in scope', async () => {
+  it('links an active or newly invited user and branch when both are in scope', async () => {
     await createStaffProfile(db, {
       displayName: 'Linked',
       userId: 'user_1',
@@ -124,7 +124,7 @@ describe('createStaffProfile', () => {
     expect(mocks.userFindFirst).toHaveBeenCalledWith({
       where: {
         id: 'user_1',
-        status: 'ACTIVE',
+        status: { in: ['ACTIVE', 'INVITED'] },
         restaurantStaffProfiles: { none: {} },
       },
       select: { id: true },
@@ -168,7 +168,7 @@ describe('updateStaffProfile', () => {
     expect(mocks.userFindFirst).toHaveBeenCalledWith({
       where: {
         id: 'user_1',
-        status: 'ACTIVE',
+        status: { in: ['ACTIVE', 'INVITED'] },
         restaurantStaffProfiles: { every: { id: 'staff_1' } },
       },
       select: { id: true },
