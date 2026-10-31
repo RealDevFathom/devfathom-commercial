@@ -81,12 +81,14 @@ brand logo mark keeps its original `#ff684f` because it is a graphic, not text.
 | -------------------------------------------- | --------- | -------------------------------------- | ----- |
 | `--accent-brand` (light)                     | `#bd3f2a` | sunken `#f1f1ee`                       | 4.75  |
 | `--accent-brand-hover` (light)               | `#a5361f` | sunken `#f1f1ee`                       | 5.90  |
+| `--info` (light)                             | `#405c73` | `info/10` over secondary `#f1f1ee`     | 5.38  |
 | `--text-muted`, `--muted-foreground` (light) | `#6c6c68` | sunken `#f1f1ee`                       | 4.66  |
 | `--warning` via `--amber-600` (light)        | `#785217` | `warning/10` over a `warning/10` tint  | 4.68  |
 | `--success` via `--green-600` (light)        | `#42624a` | `success/10` over a `success/10` tint  | 4.61  |
 | `--destructive` via `--red-600` (light)      | `#904039` | `destructive/20` over sunken           | 4.63  |
 | `--success` (dark)                           | `#a3c8a6` | `success/20` over muted `#30302d`      | 4.65  |
 | `--destructive` (dark)                       | `#f0a89f` | `destructive/20` over raised `#2c2c29` | 4.71  |
+| `--info` (dark)                              | `#adc9df` | `info/10` over secondary `#30302d`     | 6.15  |
 
 Do not dim a text token with an opacity modifier (`text-muted-foreground/60`); it drops below AA
 on both themes. Use a semantic token (`text-success`) instead of a raw palette utility
@@ -108,7 +110,7 @@ avatar initials and the dashboard eyebrow) uses `text-foreground` / `text-text-m
 | Main action                                  | `--primary`, `--primary-foreground`, `--primary-hover`                               |
 | Brand signal                                 | `--accent-brand`, `--accent-brand-hover`, `--accent-quiet`                           |
 | Focus                                        | `--ring` / `ring-ring`                                                               |
-| State                                        | `--success`, `--warning`, `--destructive`, and matching foreground/background tokens |
+| State                                        | `--info`, `--success`, `--warning`, `--destructive`, and matching foreground/background tokens |
 
 Use semantic state tokens for success, warning, error, and information. Never represent a state
 with coral merely because it needs attention.

@@ -4,24 +4,43 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ThemeProvider, useTheme } from './theme-provider';
 
-function luminance(hex: string) {
-  const channels = hex
+type Rgb = [number, number, number];
+
+function channels(color: string | Rgb): Rgb {
+  if (typeof color !== 'string') return color;
+
+  return color
     .slice(1)
     .match(/.{2}/g)!
-    .map((channel) => Number.parseInt(channel, 16) / 255)
-    .map((channel) => (channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4));
-
-  return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+    .map((channel) => Number.parseInt(channel, 16)) as Rgb;
 }
 
-function contrast(foreground: string, background: string) {
+function luminance(color: string | Rgb) {
+  const linearChannels = channels(color)
+    .map((channel) => channel / 255)
+    .map((channel) => (channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4));
+
+  return 0.2126 * linearChannels[0] + 0.7152 * linearChannels[1] + 0.0722 * linearChannels[2];
+}
+
+function contrast(foreground: string | Rgb, background: string | Rgb) {
   const values = [luminance(foreground), luminance(background)].sort((a, b) => b - a);
   return (values[0] + 0.05) / (values[1] + 0.05);
 }
 
-function studioDarkTokens() {
+function tint(foreground: string, background: string, opacity: number) {
+  const foregroundChannels = channels(foreground);
+  const backgroundChannels = channels(background);
+
+  return foregroundChannels.map(
+    (channel, index) => channel * opacity + backgroundChannels[index] * (1 - opacity)
+  ) as Rgb;
+}
+
+function studioTokens(theme: 'light' | 'dark') {
   const css = readFileSync('src/app/globals.css', 'utf8');
-  const blocks = [...css.matchAll(/\[data-theme='dark'\]\s*\{([^}]+)\}/g)];
+  const selector = theme === 'dark' ? "\\[data-theme='dark'\\]" : ':root';
+  const blocks = [...css.matchAll(new RegExp(`${selector}\\s*\\{([^}]+)\\}`, 'g'))];
   const declarations = blocks.at(-1)?.[1] ?? '';
 
   return Object.fromEntries(
@@ -34,6 +53,12 @@ describe('ThemeProvider', () => {
     localStorage.clear();
     document.documentElement.removeAttribute('data-theme');
     document.documentElement.style.colorScheme = '';
+  });
+
+  it('exposes the information token to Tailwind utilities', () => {
+    const css = readFileSync('src/app/globals.css', 'utf8');
+
+    expect(css).toMatch(/--color-info:\s*var\(--info\);/);
   });
 
   it('applies theme tokens atomically while CSS transitions are disabled', () => {
@@ -63,7 +88,7 @@ describe('ThemeProvider', () => {
   });
 
   it('keeps dark secondary text at WCAG AA contrast on Studio surfaces', () => {
-    const tokens = studioDarkTokens();
+    const tokens = studioTokens('dark');
 
     for (const foreground of ['text-muted', 'text-faint']) {
       for (const background of ['surface-page', 'surface-card', 'surface-raised', 'secondary']) {
@@ -74,4 +99,17 @@ describe('ThemeProvider', () => {
       }
     }
   });
+
+  it.each(['light', 'dark'] as const)(
+    'keeps %s info status text at WCAG AA contrast on Studio surfaces',
+    (theme) => {
+      const tokens = studioTokens(theme);
+
+      for (const surface of ['surface-page', 'surface-card', 'surface-raised', 'secondary']) {
+        const infoTint = tint(tokens.info, tokens[surface], 0.1);
+
+        expect(contrast(tokens.info, infoTint), `info on ${surface}`).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  );
 });
