@@ -14,9 +14,11 @@ const mocks = vi.hoisted(() => ({
   putUpload: vi.fn(),
   getUpload: vi.fn(),
   audit: vi.fn(),
+  patientReadAudit: vi.fn(),
   actor: vi.fn(),
   context: vi.fn(),
   medicines: vi.fn(),
+  prescriptionLine: vi.fn(),
   objects: new Map<string, Buffer>(),
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
@@ -35,6 +37,7 @@ vi.mock('@/server/audit', () => ({
   ipFromHeaders: vi.fn(() => null),
   isAuditExcludedPath: vi.fn(() => false),
   recordTrpcAudit: mocks.audit,
+  recordAudit: mocks.patientReadAudit,
 }));
 vi.mock('@/server/trpc', async () => ({
   ...(await vi.importActual<typeof import('@/server/trpc')>('@/server/trpc')),
@@ -52,6 +55,7 @@ function context(userId = 'user-a', organizationId = 'org-a', status = 'ACTIVE')
       pharmacyPatient: { findFirst: mocks.patient },
       pharmacyPrescriber: { findFirst: mocks.prescriber, findMany: mocks.prescribers },
       prescription: { findFirst: mocks.find, create: mocks.create },
+      prescriptionLine: { findFirst: mocks.prescriptionLine },
       medicine: { findMany: mocks.medicines },
     },
     entitlements: { organizationId, modules: [], enabledModules: ['pharmacy-dispensing'] },
@@ -115,6 +119,7 @@ describe('prescription capture and private delivery', () => {
           : []
     );
     mocks.find.mockResolvedValue(null);
+    mocks.prescriptionLine.mockResolvedValue({ medicine: { controlled: false } });
     mocks.create.mockImplementation(async ({ data }) => ({
       ...data,
       lines: undefined,
@@ -275,6 +280,35 @@ describe('prescription capture and private delivery', () => {
     await expect(caller().capture(captureInput(receipt.url))).resolves.toHaveProperty('id');
   });
 
+  it.each([false, true])(
+    'exposes workspace navigation only with dispensing authority (%s)',
+    async (allowed) => {
+      mocks.can.mockResolvedValue(allowed);
+      mocks.patient.mockResolvedValue({
+        id: 'patient-a',
+        displayName: 'Patient A',
+        cnic: null,
+        phone: null,
+        address: null,
+        dateOfBirth: null,
+        consents: [],
+        prescriptions: [],
+      });
+
+      const panel = await caller().counterPatientPanel({ patientId: 'patient-a' });
+      expect(panel).toMatchObject({ patientId: 'patient-a', canDispense: allowed });
+      expect(mocks.can).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'user-a' }),
+        'pharmacy:dispense',
+        undefined,
+        expect.objectContaining({ db: expect.anything(), source: 'TRPC' })
+      );
+      expect(mocks.patientReadAudit).toHaveBeenCalledWith(
+        expect.objectContaining({ organizationId: 'org-a', targetId: 'patient-a' })
+      );
+    }
+  );
+
   it('tenant-scopes and minimizes every capture workspace lookup', async () => {
     const prescribers = [
       { id: 'prescriber-a', organizationId: 'org-a', name: 'Dr A', registrationNumber: 'A-1' },
@@ -370,6 +404,88 @@ describe('prescription capture and private delivery', () => {
       })
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(mocks.getUpload).not.toHaveBeenCalled();
+  });
+
+  it('refuses controlled fills so they cannot bypass witnessed counter dispensing', async () => {
+    const ctx = context();
+    const create = vi.fn();
+    (ctx.db as unknown as Record<string, unknown>).prescriptionFill = { create };
+    mocks.prescriptionLine.mockResolvedValue({ medicine: { controlled: true } });
+
+    await expect(
+      caller(ctx).fill({
+        id: 'fill-controlled',
+        prescriptionLineId: 'line-controlled',
+        fillSequence: 1,
+        quantityCanonicalUnits: 1,
+        idempotencyKey: 'fill-key-controlled',
+      })
+    ).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'Controlled medicines must be dispensed through the witnessed counter flow.',
+    });
+    expect(mocks.prescriptionLine).toHaveBeenCalledWith({
+      where: { id: 'line-controlled', organizationId: 'org-a' },
+      select: { medicine: { select: { controlled: true } } },
+    });
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('does not disclose or fill a missing or cross-tenant prescription line', async () => {
+    const ctx = context();
+    const create = vi.fn();
+    (ctx.db as unknown as Record<string, unknown>).prescriptionFill = { create };
+    mocks.prescriptionLine.mockResolvedValue(null);
+
+    await expect(
+      caller(ctx).fill({
+        id: 'fill-foreign',
+        prescriptionLineId: 'line-foreign',
+        fillSequence: 1,
+        quantityCanonicalUnits: 1,
+        idempotencyKey: 'fill-key-foreign',
+      })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND', message: 'Prescription line not found.' });
+    expect(mocks.prescriptionLine).toHaveBeenCalledWith({
+      where: { id: 'line-foreign', organizationId: 'org-a' },
+      select: { medicine: { select: { controlled: true } } },
+    });
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('continues to record non-controlled prescription fills', async () => {
+    const ctx = context();
+    const create = vi.fn(async ({ data }) => data);
+    (ctx.db as unknown as Record<string, unknown>).prescriptionFill = { create };
+
+    await expect(
+      caller(ctx).fill({
+        id: 'fill-ordinary',
+        prescriptionLineId: 'line-ordinary',
+        fillSequence: 1,
+        quantityCanonicalUnits: 2,
+        idempotencyKey: 'fill-key-ordinary',
+      })
+    ).resolves.toMatchObject({ id: 'fill-ordinary', dispensedByUserId: 'user-a' });
+    expect(create).toHaveBeenCalledWith({
+      data: {
+        id: 'fill-ordinary',
+        prescriptionLineId: 'line-ordinary',
+        fillSequence: 1,
+        quantityCanonicalUnits: 2,
+        idempotencyKey: 'fill-key-ordinary',
+        dispensedByUserId: 'user-a',
+      },
+    });
+  });
+
+  it('denies the cashier orders capability before showing the capture workspace or uploading', async () => {
+    mocks.can.mockImplementation(async (_subject, action) => action === 'pharmacy:orders');
+    mocks.canAny.mockResolvedValue(false);
+    await expect(caller().workspace()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(caller().captureWorkspace()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(upload()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.putUpload).not.toHaveBeenCalled();
   });
 
   it('keeps historical records and other operators retained images unavailable to capture-only users', async () => {
@@ -716,6 +832,33 @@ describe('PH-A3 prescription OCR prefill', () => {
       caller(context('capture-only-user')).extractSource({ sourceFileRef: receipt.url })
     ).rejects.toMatchObject({ code: 'NOT_FOUND' });
     expect(mocks.medicines).not.toHaveBeenCalled();
+  });
+
+  it("allows dispensing staff to OCR another operator's image only after scoped capture", async () => {
+    vi.stubEnv('PHARMACY_RX_OCR_ADAPTER', 'FIXTURE');
+    const receipt = await upload();
+    await expect(
+      caller(context('pharmacist')).extractSource({ sourceFileRef: receipt.url })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(mocks.medicines).not.toHaveBeenCalled();
+
+    mocks.find.mockResolvedValue({ id: 'captured-prescription' });
+    await expect(
+      caller(context('pharmacist')).extractSource({ sourceFileRef: receipt.url })
+    ).resolves.toMatchObject({ status: 'PROPOSED' });
+    expect(mocks.find).toHaveBeenLastCalledWith({
+      where: { organizationId: 'org-a', patientId: 'patient-a', sourceFileRef: receipt.url },
+      select: { id: true },
+    });
+    expect(mocks.create).not.toHaveBeenCalled();
+
+    await expect(
+      caller(context('pharmacist', 'org-b')).extractSource({ sourceFileRef: receipt.url })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    mocks.patient.mockResolvedValue(null);
+    await expect(
+      caller(context('pharmacist')).extractSource({ sourceFileRef: receipt.url })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
   });
 
   it('VISION without a configured provider fails with an operator sentence, not provider detail', async () => {

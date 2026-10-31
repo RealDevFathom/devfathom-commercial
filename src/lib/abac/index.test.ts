@@ -148,6 +148,26 @@ describe('opt-in pharmacy Owner / Operator access', () => {
       await expect(canAny(employee, workspaceActions, undefined, { db })).resolves.toBe(true);
     });
 
+    it('keeps assigned tenant-admin roles within their intake grants', async () => {
+      const roles: Permission[][] = [
+        [],
+        [{ capability: 'pharmacy:orders', effect: 'ALLOW' }],
+      ];
+      for (const rolePermissions of roles) {
+        const db = authorizationDb({ rolePermissions });
+        await expect(canAny(proprietor, workspaceActions, undefined, { db })).resolves.toBe(false);
+        await expect(
+          can(proprietor, 'pharmacy:prescriptions', undefined, { db })
+        ).resolves.toBe(false);
+      }
+    });
+
+    it('lets the cashier capture through its intake grant without dispensing', async () => {
+      const db = authorizationDb({ rolePermissions: permissionsFor('cashier') });
+      await expect(canAny(employee, workspaceActions, undefined, { db })).resolves.toBe(true);
+      await expect(can(employee, 'pharmacy:dispense', undefined, { db })).resolves.toBe(false);
+    });
+
     it('does not treat an orders grant as prescription intake authority', async () => {
       const db = authorizationDb({
         rolePermissions: [{ capability: 'pharmacy:orders', effect: 'ALLOW' }],
@@ -180,19 +200,68 @@ describe('opt-in pharmacy Owner / Operator access', () => {
 });
 
 describe('custom ABAC decisions', () => {
-  it('preserves procurement access for managers and tenant admins without a role', async () => {
-    const managerPermissions = roleTemplatesForVertical('PHARMACY')
-      .find((role) => role.key === 'manager')!
+  const pharmacyPermissionsFor = (roleKey: string): Permission[] =>
+    roleTemplatesForVertical('PHARMACY')
+      .find((role) => role.key === roleKey)!
       .capabilities.map((capability) => ({ capability, effect: 'ALLOW' as const }));
 
+  it('preserves procurement access for the Manager template (#375)', async () => {
     await expect(
       can(employee, 'pharmacy:procurement', undefined, {
-        db: authorizationDb({ rolePermissions: managerPermissions }),
+        db: authorizationDb({ rolePermissions: pharmacyPermissionsFor('manager') }),
       })
     ).resolves.toBe(true);
+  });
+
+  it('preserves procurement access for a tenant admin without a role (#375)', async () => {
     await expect(
       can({ ...employee, role: 'ADMIN' }, 'pharmacy:procurement', undefined, {
         db: authorizationDb({}),
+      })
+    ).resolves.toBe(true);
+  });
+
+  it('does not give the Pharmacist template procurement access by default (#375)', async () => {
+    await expect(
+      can(employee, 'pharmacy:procurement', undefined, {
+        db: authorizationDb({ rolePermissions: pharmacyPermissionsFor('pharmacist') }),
+      })
+    ).resolves.toBe(false);
+  });
+
+  it('does not let tenant admin authority bypass an assigned Pharmacist role (#375)', async () => {
+    await expect(
+      can({ ...employee, role: 'ADMIN' }, 'pharmacy:procurement', undefined, {
+        db: authorizationDb({ rolePermissions: pharmacyPermissionsFor('pharmacist') }),
+      })
+    ).resolves.toBe(false);
+  });
+
+  it('does not let tenant admin authority bypass an assigned custom role (#375)', async () => {
+    await expect(
+      can({ ...employee, role: 'ADMIN' }, 'pharmacy:procurement', undefined, {
+        db: authorizationDb({ rolePermissions: [] }),
+      })
+    ).resolves.toBe(false);
+  });
+
+  it.each([
+    ['pharmacy:procurement', 'pharmacy:dispense'],
+    ['pharmacy:dispense', 'pharmacy:procurement'],
+    ['pharmacy:prescriptions', 'pharmacy:dispense'],
+    ['pharmacy:dispense', 'pharmacy:prescriptions'],
+  ] as const)('bounds both aliases %s / %s by the assigned role', async (first, second) => {
+    await expect(
+      canAny({ ...employee, role: 'ADMIN' }, [first, second], undefined, {
+        db: authorizationDb({ rolePermissions: [] }),
+      })
+    ).resolves.toBe(false);
+  });
+
+  it('continues evaluating other policy aliases after a role-bounded procurement action', async () => {
+    await expect(
+      canAny({ ...employee, role: 'ADMIN' }, ['pharmacy:procurement', 'admin:access'], undefined, {
+        db: authorizationDb({ rolePermissions: [] }),
       })
     ).resolves.toBe(true);
   });

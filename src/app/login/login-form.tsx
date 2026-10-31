@@ -1,44 +1,64 @@
 'use client';
 
-import { useState, type FormEvent } from 'react';
+import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { signIn } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
-import { Building2, Eye, EyeOff, Loader2 } from 'lucide-react';
+import { Building2, Loader2 } from 'lucide-react';
 import { LOGIN_ERROR_MESSAGES, type LoginErrorKey } from './login-errors';
 import { useHydrated } from './use-hydrated';
+import { PasswordInput } from '@/components/ui/password-input';
+import { Button } from '@/components/ui/button';
+import type { LoginVertical } from './vertical';
 
 const inputClass =
-  'flex h-12 w-full rounded-[3px] border border-border-default bg-card px-4 text-sm text-foreground placeholder:text-text-faint transition-colors focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20';
+  'flex h-12 w-full rounded-[var(--radius-sm)] border border-border-default bg-card px-4 text-sm text-foreground placeholder:text-text-faint transition-colors focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20';
 
 export function LoginForm({
   connections,
   ssoEnforced,
   // D15: already validated on the server. The form no longer reads, or trusts,
   // the raw query string.
+  vertical = 'default',
   callbackUrl,
   // WHA-1623: the outcome of a native submit that landed before hydration.
   initialError,
 }: {
   connections: Array<{ id: string; name: string; protocol: 'OIDC' | 'SAML' }>;
   ssoEnforced: boolean;
+  vertical?: LoginVertical;
   callbackUrl: string;
   initialError?: LoginErrorKey;
 }) {
+  const errorId = useId();
   const router = useRouter();
   const hydrated = useHydrated();
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string>(
     initialError ? LOGIN_ERROR_MESSAGES[initialError] : ''
   );
+  const [invalidFields, setInvalidFields] = useState<'credentials' | 'totp' | null>(() =>
+    initialError === '2fa-required' || initialError === '2fa-invalid'
+      ? 'totp'
+      : initialError
+        ? 'credentials'
+        : null
+  );
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const emailRef = useRef<HTMLInputElement>(null);
+  const totpRef = useRef<HTMLInputElement>(null);
   // IMP-AUTH-02: revealed after a correct password when the account has 2FA on.
   const [twoFactor, setTwoFactor] = useState(
     initialError === '2fa-required' || initialError === '2fa-invalid'
   );
 
+  useEffect(() => {
+    if (invalidFields === 'totp') totpRef.current?.focus();
+  }, [invalidFields, twoFactor]);
+
   const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setError('');
+    setInvalidFields(null);
     setIsSubmitting(true);
 
     const formData = new FormData(event.currentTarget);
@@ -68,15 +88,19 @@ export function LoginForm({
         if (result.code === '2fa_required') {
           // Password was correct; the account needs a second factor. Reveal the field.
           setTwoFactor(true);
+          setInvalidFields('totp');
           setError('Enter the 6-digit code from your authenticator app.');
         } else if (result.code === '2fa_invalid') {
           setTwoFactor(true);
+          setInvalidFields('totp');
           setError('That code is incorrect or expired. Try again, or use a recovery code.');
         } else if (result.code === 'sso_required') {
           setTwoFactor(false);
+          setInvalidFields('credentials');
           setError('Password sign-in is disabled. Use your organization identity provider.');
         } else {
           setTwoFactor(false);
+          setInvalidFields('credentials');
           setError(
             result.code === 'suspended'
               ? 'Your account has been suspended. Please contact your workspace administrator.'
@@ -84,6 +108,9 @@ export function LoginForm({
           );
         }
         setIsSubmitting(false);
+        if (result.code !== '2fa_required' && result.code !== '2fa_invalid') {
+          emailRef.current?.focus();
+        }
         return;
       }
 
@@ -91,7 +118,9 @@ export function LoginForm({
       router.replace(callbackUrl);
     } catch {
       setError('Unable to sign in right now. Please check your connection and try again.');
+      setInvalidFields('credentials');
       setIsSubmitting(false);
+      emailRef.current?.focus();
     }
   };
 
@@ -99,8 +128,9 @@ export function LoginForm({
     <>
       {error && (
         <div
+          id={errorId}
           role="alert"
-          className="mb-5 rounded-[3px] border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+          className="mb-5 rounded-[var(--radius-sm)] border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
         >
           {error}
         </div>
@@ -112,7 +142,7 @@ export function LoginForm({
             <a
               key={connection.id}
               href={`/api/sso/${connection.protocol.toLowerCase()}/${connection.id}/start`}
-              className="flex h-12 w-full items-center justify-center gap-2 rounded-[3px] border border-border-default bg-card text-sm font-semibold text-foreground transition hover:border-primary hover:bg-muted"
+              className="flex h-12 w-full items-center justify-center gap-2 rounded-[var(--radius-sm)] border border-border-default bg-card text-sm font-semibold text-foreground transition hover:border-primary hover:bg-muted"
             >
               <Building2 className="h-4 w-4 text-accent-brand" />
               Continue with {connection.name}
@@ -146,13 +176,19 @@ export function LoginForm({
               Email
             </label>
             <input
+              ref={emailRef}
               id="email"
               type="email"
-              placeholder="you@company.com"
+              placeholder={vertical === 'default' ? 'you@company.com' : `you@${vertical}.pk`}
               autoComplete="email"
               autoFocus
               name="email"
               required
+              aria-invalid={invalidFields === 'credentials' || undefined}
+              aria-describedby={invalidFields === 'credentials' ? errorId : undefined}
+              onChange={() => {
+                if (invalidFields === 'credentials') setInvalidFields(null);
+              }}
               className={inputClass}
             />
           </div>
@@ -162,32 +198,29 @@ export function LoginForm({
               <label htmlFor="password" className="block text-sm font-semibold text-foreground">
                 Password
               </label>
+            </div>
+            <PasswordInput
+              id="password"
+              revealed={showPassword}
+              onReveal={() => setShowPassword((visible) => !visible)}
+              placeholder="Enter your password"
+              autoComplete="current-password"
+              name="password"
+              required
+              aria-invalid={invalidFields === 'credentials' || undefined}
+              aria-describedby={invalidFields === 'credentials' ? errorId : undefined}
+              onChange={() => {
+                if (invalidFields === 'credentials') setInvalidFields(null);
+              }}
+              className={inputClass}
+            />
+            <div className="text-end">
               <a
                 href="/forgot-password"
-                className="text-xs font-semibold text-text-muted underline-offset-4 transition-colors hover:text-primary hover:underline"
+                className="studio-auth-link text-xs font-semibold text-text-muted underline-offset-4 transition-colors hover:text-primary hover:underline"
               >
                 Forgot password?
               </a>
-            </div>
-            <div className="relative">
-              <input
-                id="password"
-                type={showPassword ? 'text' : 'password'}
-                placeholder="Enter your password"
-                autoComplete="current-password"
-                name="password"
-                required
-                className={`${inputClass} pr-10`}
-              />
-              <button
-                type="button"
-                onClick={() => setShowPassword((visible) => !visible)}
-                aria-label={showPassword ? 'Hide password' : 'Show password'}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted transition-colors hover:text-foreground"
-                tabIndex={-1}
-              >
-                {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-              </button>
             </div>
           </div>
 
@@ -197,6 +230,7 @@ export function LoginForm({
                 Authentication code
               </label>
               <input
+                ref={totpRef}
                 id="totp"
                 type="text"
                 inputMode="numeric"
@@ -205,6 +239,11 @@ export function LoginForm({
                 autoFocus
                 name="totp"
                 required
+                aria-invalid={invalidFields === 'totp' || undefined}
+                aria-describedby={invalidFields === 'totp' ? errorId : undefined}
+                onChange={() => {
+                  if (invalidFields === 'totp') setInvalidFields(null);
+                }}
                 className={inputClass}
               />
               <p className="text-xs text-text-muted">
@@ -213,23 +252,23 @@ export function LoginForm({
             </div>
           )}
 
-          <button
+          <Button
             type="submit"
             disabled={isSubmitting}
-            className="group flex h-12 w-full items-center justify-center rounded-[3px] bg-primary text-sm font-semibold text-primary-foreground shadow-[0_10px_22px_-14px_rgba(12,29,48,0.86)] transition-all hover:-translate-y-px hover:bg-primary-hover active:translate-y-0 disabled:pointer-events-none disabled:opacity-50"
+            className="group flex h-12 w-full items-center justify-center rounded-[var(--radius-sm)] bg-primary text-sm font-semibold text-primary-foreground shadow-none transition-all hover:-translate-y-px hover:bg-primary-hover active:translate-y-0 disabled:pointer-events-none disabled:opacity-50"
           >
             {isSubmitting ? (
               <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                <Loader2 className="me-2 h-4 w-4 animate-spin" />
                 Signing in...
               </>
             ) : (
               'Sign in'
             )}
-          </button>
+          </Button>
         </form>
       ) : (
-        <p className="border-l-2 border-accent-brand bg-muted px-4 py-3 text-xs leading-5 text-text-muted">
+        <p className="border-s-2 border-accent-brand bg-muted px-4 py-3 text-xs leading-5 text-text-muted">
           This organization requires enterprise SSO. Password authentication is unavailable.
         </p>
       )}

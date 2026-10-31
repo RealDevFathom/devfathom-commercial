@@ -1,6 +1,7 @@
 'use client';
 
 import { forwardRef, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import Link from 'next/link';
 
 import {
   attachmentUrl,
@@ -8,7 +9,7 @@ import {
   imageBase64,
   isImageType,
 } from '@/components/pharmacy/dispensing/prescriptions-console';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { StatusPill } from '@/components/ui/status-pill';
@@ -529,6 +530,7 @@ export type CounterRxPanelProps = {
   onSearch: () => void;
   onSelectPatient: (patientId: string) => void;
   onClearPatient: () => void;
+  canDispense?: boolean;
   onCapturePrescription?: (context: { patientId: string }) => void;
 };
 
@@ -563,6 +565,7 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
       onSearch,
       onSelectPatient,
       onClearPatient,
+      canDispense = false,
       onCapturePrescription,
     },
     ref
@@ -834,15 +837,23 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
                   >
                     Capture prescription
                   </Button>
-                ) : (
-                  <Button type="button" variant="outline" className="h-11" disabled>
-                    Capture prescription
-                  </Button>
-                )}
+                ) : null}
+                {canDispense && !disabled && state !== 'loading' && state !== 'error' ? (
+                  <Link
+                    className={buttonVariants({ variant: 'outline', className: 'h-11' })}
+                    href={`/pharmacy/prescriptions#patientId=${encodeURIComponent(patient.patientId)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    prefetch={false}
+                  >
+                    Open pharmacist workspace
+                    <span className="sr-only"> for {patient.displayName} (opens in a new tab)</span>
+                  </Link>
+                ) : null}
                 <p className="text-xs text-text-muted">
                   {onCapturePrescription
                     ? `Capture evidence for ${patient.displayName}.`
-                    : 'Use Photograph prescription below to capture evidence without opening the pharmacist workspace.'}{' '}
+                    : `Photograph the prescription below to capture evidence for ${patient.displayName}.`}{' '}
                   Capture does not replace pharmacist review or dispensing consent.
                 </p>
                 <CounterRxPhotoCapture

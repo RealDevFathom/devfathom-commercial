@@ -360,31 +360,67 @@ export function nextCounterReplay(
 }
 
 /** The replay request for one queued command. The key is the command id, always. */
+export type CounterReplaySignatures = {
+  command: string;
+  receipt: string;
+};
+
+/**
+ * Signs the final, server-validated replay objects after the queue has assigned
+ * its receipt number, sequence and idempotency key. The device credential stays
+ * in the live enrollment/session adapter and is never persisted in the outbox.
+ */
+export type CounterReplaySigner = (
+  body: Record<string, unknown>,
+  leasedReceipt: Record<string, unknown>
+) => Promise<CounterReplaySignatures> | CounterReplaySignatures;
+
 export type CounterReplayRequest = {
   path: string;
   method: 'POST';
-  headers: { 'Idempotency-Key': string };
+  headers: {
+    'Idempotency-Key': string;
+    'X-Command-Signature': string;
+    'X-Receipt-Signature': string;
+  };
   body: Record<string, unknown>;
 };
 
-export function buildCounterReplayRequest(
-  snapshot: CounterQueueSnapshot,
-  command: CounterQueuedCommand
-): CounterReplayRequest {
+export async function buildCounterReplayRequest(
+  _snapshot: CounterQueueSnapshot,
+  command: CounterQueuedCommand,
+  sign: CounterReplaySigner
+): Promise<CounterReplayRequest> {
+  const leasedReceipt = command.payload.leasedReceipt;
+  if (!leasedReceipt || typeof leasedReceipt !== 'object' || Array.isArray(leasedReceipt)) {
+    throw new Error('A queued pharmacy sale cannot replay without its leased receipt.');
+  }
+  // Local queue metadata is not part of the strict replay wire contract.
+  const finalReceipt = {
+    ...leasedReceipt,
+    receiptNumber: command.receiptNumber,
+    originalSaleAt: command.clientOriginAt,
+  };
+  const body: Record<string, unknown> = {
+    sequence: command.sequence,
+    idempotencyKey: command.idempotencyKey,
+    action: command.action,
+    leasedReceipt: finalReceipt,
+    snapshots: command.payload.snapshots,
+    lines: command.payload.lines,
+    amountMinor: command.payload.amountMinor,
+    cashReceivedMinor: command.payload.cashReceivedMinor,
+  };
+  const signatures = await sign(body, finalReceipt);
   return {
-    path: '/api/pharmacy/offline/commands',
+    path: '/api/pharmacy/counter/replay',
     method: 'POST',
-    headers: { 'Idempotency-Key': command.idempotencyKey },
-    body: {
-      deviceId: snapshot.deviceId,
-      sequence: command.sequence,
-      action: command.action,
-      payload: command.payload,
-      clientOriginAt: command.clientOriginAt,
-      // The number this counter ALREADY printed. The server records it; it never
-      // assigns a different one (§8A invariant 16).
-      receiptNumber: command.receiptNumber,
+    headers: {
+      'Idempotency-Key': command.idempotencyKey,
+      'X-Command-Signature': signatures.command,
+      'X-Receipt-Signature': signatures.receipt,
     },
+    body,
   };
 }
 

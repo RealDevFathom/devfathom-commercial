@@ -55,7 +55,8 @@ export function mapWorkforceError(err: unknown): never {
   if (hasSqlState(err, '23P01')) {
     throw new TRPCError({
       code: 'CONFLICT',
-      message: 'Approving this swap would create an overlapping shift for the replacement operator.',
+      message:
+        'Approving this swap would create an overlapping shift for the replacement operator.',
     });
   }
   throw err;

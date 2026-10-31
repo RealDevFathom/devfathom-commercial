@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   assertBranchMayOperate,
   BranchOperationDeniedError,
+  evaluateBranchRegulatoryStatus,
   type BranchRegulatoryState,
 } from './regulatory';
 
@@ -123,5 +124,31 @@ describe('assertBranchMayOperate', () => {
     const state = validState();
     state.ruleSet.licenceCategories = { provisional: true, values: ['PHARMACY'] };
     expectDenied(state, 'RULE_SET_UNCONFIRMED');
+  });
+});
+
+describe('evaluateBranchRegulatoryStatus', () => {
+  it('stops reporting in force at the exact licence-expiry instant', () => {
+    const state = validState();
+    state.licenceValidTo = new Date('2026-10-21T00:00:00.000Z');
+    const { auditDenied: _auditDenied, ...profile } = state;
+
+    expect(
+      evaluateBranchRegulatoryStatus(profile, true, new Date('2026-10-20T23:59:59.999Z'))
+    ).toMatchObject({ effective: true, inForce: true, licenceExpired: false });
+    expect(
+      evaluateBranchRegulatoryStatus(profile, true, new Date('2026-10-21T00:00:00.000Z'))
+    ).toMatchObject({ effective: true, inForce: false, licenceExpired: true });
+  });
+
+  it('does not call a historical, ineffective version in force', () => {
+    const { auditDenied: _auditDenied, ...profile } = validState();
+
+    expect(evaluateBranchRegulatoryStatus(profile, false, at)).toMatchObject({
+      effective: false,
+      inForce: false,
+      licenceExpired: false,
+      qualifiedPersonCoverageExpired: false,
+    });
   });
 });

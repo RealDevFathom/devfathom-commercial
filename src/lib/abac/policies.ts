@@ -70,10 +70,11 @@ export const ALL_ACTIONS = [
   'restaurant:configure', // restaurant M8: loyalty configuration and consolidated access — org-role driven
   'menu:import', // R-lane WHA-194: OCR menu import — upload, review queue, confirmed catalog import
   'pharmacy:counter',
+  'pharmacy:close',
   'pharmacy:manage',
   'pharmacy:procurement',
   'pharmacy:inventory',
-  'pharmacy:prescriptions', // RX capture/workspace; tenant admins or dispensing pharmacists
+  'pharmacy:prescriptions', // Prescription intake without dispensing authority
   'pharmacy:dispense', // RX-03/04: pharmacist decisions and substitution evidence
   'pharmacy:safety', // RX-05: controlled register and incident approval
   'pharmacy:catalogue-review', // MED-06: confirm or reject regulated connector proposals
@@ -232,14 +233,17 @@ export const POLICIES: Record<Action, Policy[]> = {
   // grants it explicitly (or holds `*`, e.g. the restaurant Owner template).
   'menu:import': [],
   'pharmacy:counter': [],
+  'pharmacy:close': [],
   'pharmacy:manage': [],
-  // Tenant administrators retain the operational purchasing access they had
-  // before pharmacy capabilities became explicit. A matching custom DENY is
-  // still resolved first by `can()` and therefore takes precedence.
+  // Tenant administrators without an assigned organization role retain the
+  // purchasing and Goods-in access they had before pharmacy capabilities became
+  // explicit (#375). `can()` prevents an assigned role with no matching grant
+  // from falling through to this policy, and resolves a custom DENY first.
   'pharmacy:procurement': [isAdmin],
   'pharmacy:inventory': [],
-  // Prescription intake is narrower than dispensing: tenant administrators may
-  // capture source evidence without gaining authority to dispense medication.
+  // Legacy tenant administrators without an assigned role may capture source
+  // evidence. Assigned roles require a matching intake or dispense grant;
+  // canAny() prevents this fallback from bypassing the role's boundary.
   'pharmacy:prescriptions': [isAdmin],
   // Dispensing is an exact-grant-only action: tenant administration alone is
   // insufficient, and wildcard ALLOW rules cannot opt a user in. Wildcard DENY

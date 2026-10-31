@@ -103,7 +103,8 @@ function contractExpiry(
   if (Number.isNaN(end)) return null;
   if (end < now) return { tone: 'expired', label: 'Expired' };
   const days = Math.ceil((end - now) / (24 * 60 * 60 * 1000));
-  if (days <= 30) return { tone: 'expiring', label: `Expires in ${days} day${days === 1 ? '' : 's'}` };
+  if (days <= 30)
+    return { tone: 'expiring', label: `Expires in ${days} day${days === 1 ? '' : 's'}` };
   return null;
 }
 
@@ -276,11 +277,7 @@ export function ClientDetailContent({ clientId }: { clientId: string }) {
                   >
                     {deleteClient.isPending ? 'Deleting...' : 'Confirm Delete'}
                   </Button>
-                  <Button
-                    variant="ghost"
-                    size="lg"
-                    onClick={() => setShowDeleteConfirm(false)}
-                  >
+                  <Button variant="ghost" size="lg" onClick={() => setShowDeleteConfirm(false)}>
                     Cancel
                   </Button>
                 </>
@@ -338,7 +335,9 @@ export function ClientDetailContent({ clientId }: { clientId: string }) {
                 <label className="block text-xs font-medium text-foreground mb-1">Status</label>
                 <select
                   value={editStatus}
-                  onChange={(e) => setEditStatus(e.target.value as 'ACTIVE' | 'INACTIVE' | 'PROSPECT')}
+                  onChange={(e) =>
+                    setEditStatus(e.target.value as 'ACTIVE' | 'INACTIVE' | 'PROSPECT')
+                  }
                   className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
                 >
                   <option value="PROSPECT">Prospect</option>
@@ -660,7 +659,13 @@ function ContactForm({
   pending,
 }: {
   initial?: ClientContact;
-  onSubmit: (d: { name: string; email: string; phone: string; role: string; isPrimary: boolean }) => void;
+  onSubmit: (d: {
+    name: string;
+    email: string;
+    phone: string;
+    role: string;
+    isPrimary: boolean;
+  }) => void;
   onCancel: () => void;
   pending: boolean;
 }) {
@@ -675,21 +680,58 @@ function ContactForm({
     <Card className="border-primary/20">
       <CardContent className="p-4 space-y-3">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name *" className={inp} />
-          <input value={role} onChange={(e) => setRole(e.target.value)} placeholder="Role" className={inp} />
-          <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" className={inp} />
-          <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="Phone" className={inp} />
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Name *"
+            className={inp}
+          />
+          <input
+            value={role}
+            onChange={(e) => setRole(e.target.value)}
+            placeholder="Role"
+            className={inp}
+          />
+          <input
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="Email"
+            className={inp}
+          />
+          <input
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+            placeholder="Phone"
+            className={inp}
+          />
         </div>
         <label className="flex items-center gap-2 text-xs text-foreground">
-          <input type="checkbox" checked={isPrimary} onChange={(e) => setIsPrimary(e.target.checked)} className="h-4 w-4 rounded border-border accent-primary" />
+          <input
+            type="checkbox"
+            checked={isPrimary}
+            onChange={(e) => setIsPrimary(e.target.checked)}
+            className="h-4 w-4 rounded border-border accent-primary"
+          />
           Primary contact
         </label>
         <div className="flex justify-end gap-2">
-          <button onClick={onCancel} className="rounded-xl px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground">
+          <button
+            onClick={onCancel}
+            className="rounded-xl px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground"
+          >
             Cancel
           </button>
           <button
-            onClick={() => name.trim() && onSubmit({ name: name.trim(), email: email.trim(), phone: phone.trim(), role: role.trim(), isPrimary })}
+            onClick={() =>
+              name.trim() &&
+              onSubmit({
+                name: name.trim(),
+                email: email.trim(),
+                phone: phone.trim(),
+                role: role.trim(),
+                isPrimary,
+              })
+            }
             disabled={!name.trim() || pending}
             className="flex items-center gap-1.5 rounded-xl bg-primary px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40"
           >
@@ -761,11 +803,19 @@ function ContactsTab({ clientId, contacts }: { clientId: string; contacts: Clien
                 <CardContent className="p-5">
                   <div className="flex items-center gap-3 mb-3">
                     <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10 text-primary font-semibold text-sm">
-                      {contact.name.split(' ').map((n) => n[0]).join('').slice(0, 2)}
+                      {contact.name
+                        .split(' ')
+                        .map((n) => n[0])
+                        .join('')
+                        .slice(0, 2)}
                     </div>
                     <div className="min-w-0">
-                      <p className="text-sm font-semibold text-foreground truncate">{contact.name}</p>
-                      {contact.role && <p className="text-xs text-muted-foreground truncate">{contact.role}</p>}
+                      <p className="text-sm font-semibold text-foreground truncate">
+                        {contact.name}
+                      </p>
+                      {contact.role && (
+                        <p className="text-xs text-muted-foreground truncate">{contact.role}</p>
+                      )}
                     </div>
                     {contact.isPrimary && (
                       <span className="ml-auto rounded-md bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary shrink-0">
@@ -823,7 +873,13 @@ function ContactsTab({ clientId, contacts }: { clientId: string; contacts: Clien
 function ClientActivityTab({ clientId }: { clientId: string }) {
   const { data, isLoading } = trpc.clients.getActivity.useQuery({ id: clientId });
   if (isLoading) {
-    return <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}</div>;
+    return (
+      <div className="space-y-2">
+        {Array.from({ length: 5 }).map((_, i) => (
+          <Skeleton key={i} className="h-12 w-full" />
+        ))}
+      </div>
+    );
   }
   if (!data || data.length === 0) {
     return (
@@ -840,7 +896,8 @@ function ClientActivityTab({ clientId }: { clientId: string }) {
           <div key={a.id} className="flex items-center gap-3 px-5 py-3">
             <div className="h-2 w-2 rounded-full bg-primary/50 shrink-0" />
             <p className="flex-1 text-sm text-muted-foreground">
-              <span className="font-medium text-foreground/80">{a.user?.name ?? 'Someone'}</span> {a.message}
+              <span className="font-medium text-foreground/80">{a.user?.name ?? 'Someone'}</span>{' '}
+              {a.message}
             </p>
             <span className="text-xs text-muted-foreground/50 shrink-0">
               {formatDistanceToNow(new Date(a.createdAt), { addSuffix: true })}
@@ -1290,9 +1347,7 @@ function ClientContractsTab({
         <p className="text-sm text-muted-foreground">
           {contracts.length} contract{contracts.length !== 1 ? 's' : ''} for {clientName}
           {expiringSoon > 0 && (
-            <span className="ml-2 text-amber-500">
-              · {expiringSoon} expiring soon
-            </span>
+            <span className="ml-2 text-amber-500">· {expiringSoon} expiring soon</span>
           )}
         </p>
         {!showForm && (
@@ -1311,9 +1366,7 @@ function ClientContractsTab({
               )}
               Check expiries
               {sweepResult !== null && (
-                <span className="text-primary">
-                  ({sweepResult} expired)
-                </span>
+                <span className="text-primary">({sweepResult} expired)</span>
               )}
             </button>
             <button
@@ -1326,9 +1379,7 @@ function ClientContractsTab({
           </div>
         )}
       </div>
-      {sweepExpired.error && (
-        <p className="text-xs text-red-500">{sweepExpired.error.message}</p>
-      )}
+      {sweepExpired.error && <p className="text-xs text-red-500">{sweepExpired.error.message}</p>}
 
       {/* IMP-CLI-05: per-client total contracted value, grouped by currency. */}
       {contractedValue && contractedValue.length > 0 && (
@@ -1380,9 +1431,7 @@ function ClientContractsTab({
                 <label className="block text-xs font-medium text-foreground mb-1">Status</label>
                 <select
                   value={status}
-                  onChange={(e) =>
-                    setStatus(e.target.value as (typeof CONTRACT_STATUSES)[number])
-                  }
+                  onChange={(e) => setStatus(e.target.value as (typeof CONTRACT_STATUSES)[number])}
                   className={inputClass}
                 >
                   {CONTRACT_STATUSES.map((s) => (
@@ -1449,7 +1498,9 @@ function ClientContractsTab({
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-foreground mb-1">Signed Date</label>
+                <label className="block text-xs font-medium text-foreground mb-1">
+                  Signed Date
+                </label>
                 <input
                   type="date"
                   value={signedAt}
@@ -1688,9 +1739,7 @@ function ClientContractsTab({
                             <>
                               {c.value != null && Number(c.value) > 0 && (
                                 <button
-                                  onClick={() =>
-                                    generateInvoice.mutate({ contractId: c.id })
-                                  }
+                                  onClick={() => generateInvoice.mutate({ contractId: c.id })}
                                   disabled={
                                     generateInvoice.isPending &&
                                     generateInvoice.variables?.contractId === c.id

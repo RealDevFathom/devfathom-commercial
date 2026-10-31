@@ -83,12 +83,13 @@ const dispensingFileProcedure = publicProcedure
     return next();
   });
 
-/** Load an intake image without granting access to another operator's capture. */
-async function uploaderSourceFile(
+/** Uploaders may read intake images; dispensing staff may read retained evidence. */
+async function readableSourceFile(
   ctx: {
     db: ScopedDb;
     entitlements: { organizationId: string };
-    session: { user: { id: string } };
+    session: { user: Parameters<typeof subjectFromSession>[0] };
+    requestMeta: { ip: string | null };
   },
   sourceFileRef: string
 ) {
@@ -98,8 +99,27 @@ async function uploaderSourceFile(
     where: { id: file.patientId, organizationId },
     select: { id: true },
   });
-  if (!patient || file.uploadedByUserId !== ctx.session.user.id) {
+  if (!patient) {
     throw new TRPCError({ code: 'NOT_FOUND', message: 'Prescription image unavailable.' });
+  }
+  if (file.uploadedByUserId !== ctx.session.user.id) {
+    const mayDispense = await can(
+      subjectFromSession(ctx.session.user),
+      'pharmacy:dispense',
+      undefined,
+      { db: ctx.db, source: 'TRPC', ip: ctx.requestMeta.ip }
+    );
+    const retained = mayDispense
+      ? await ctx.db.prescription.findFirst({
+          where: { organizationId, patientId: file.patientId, sourceFileRef },
+          select: { id: true },
+        })
+      : null;
+    // Another operator's upload is available only once a prescription binds it
+    // to the same tenant and patient, and only with dispensing authority.
+    if (!retained) {
+      throw new TRPCError({ code: 'NOT_FOUND', message: 'Prescription image unavailable.' });
+    }
   }
   return file;
 }
@@ -255,39 +275,7 @@ export const pharmacyPrescriptionsRouter = router({
   readSource: prescriptionFileProcedure
     .input(z.object({ sourceFileRef: prescriptionFileRefSchema }).strict())
     .query(async ({ ctx, input }) => {
-      const organizationId = ctx.entitlements.organizationId;
-      const file = await loadPrescriptionFile(organizationId, input.sourceFileRef);
-      const patient = await ctx.db.pharmacyPatient.findFirst({
-        where: { id: file.patientId, organizationId },
-        select: { id: true },
-      });
-      if (!patient) {
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'Prescription image unavailable.' });
-      }
-      if (file.uploadedByUserId === ctx.session.user.id) {
-        return { dataBase64: file.dataBase64, contentType: file.contentType };
-      }
-      const mayDispense = await can(
-        subjectFromSession(ctx.session.user),
-        'pharmacy:dispense',
-        undefined,
-        { db: ctx.db, source: 'TRPC', ip: ctx.requestMeta.ip }
-      );
-      const retained = mayDispense
-        ? await ctx.db.prescription.findFirst({
-            where: {
-              organizationId,
-              patientId: file.patientId,
-              sourceFileRef: input.sourceFileRef,
-            },
-            select: { id: true },
-          })
-        : null;
-      // Another operator's upload becomes dispensing evidence only after it is
-      // bound to a tenant- and patient-scoped prescription record.
-      if (!retained) {
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'Prescription image unavailable.' });
-      }
+      const file = await readableSourceFile(ctx, input.sourceFileRef);
       return { dataBase64: file.dataBase64, contentType: file.contentType };
     }),
 
@@ -306,9 +294,9 @@ export const pharmacyPrescriptionsRouter = router({
           message: 'Prescription reading is not enabled for this workspace.',
         });
       }
-      // Intake OCR is available only to the uploader. A captured image becomes
-      // a historical record, but that must not widen capture-only access.
-      const file = await uploaderSourceFile(ctx, input.sourceFileRef);
+      // OCR follows the same evidence access rules as preview; capture itself
+      // still requires the original uploader and patient binding.
+      const file = await readableSourceFile(ctx, input.sourceFileRef);
       let extraction;
       try {
         extraction = await resolveRxOcrAdapter(adapterName).extract({
@@ -528,9 +516,29 @@ export const pharmacyPrescriptionsRouter = router({
         })
         .strict()
     )
-    .mutation(({ ctx, input }) =>
-      ctx.db.prescriptionFill.create({ data: { ...input, dispensedByUserId: ctx.session.user.id } })
-    ),
+    .mutation(async ({ ctx, input }) => {
+      const line = await ctx.db.prescriptionLine.findFirst({
+        where: {
+          id: input.prescriptionLineId,
+          organizationId: ctx.entitlements.organizationId,
+        },
+        select: { medicine: { select: { controlled: true } } },
+      });
+      if (!line) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Prescription line not found.' });
+      }
+      // Controlled dispensing must use the counter flow, which atomically allocates stock and
+      // records both the witnessed fill and controlled-drug register entry.
+      if (line.medicine.controlled) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Controlled medicines must be dispensed through the witnessed counter flow.',
+        });
+      }
+      return ctx.db.prescriptionFill.create({
+        data: { ...input, dispensedByUserId: ctx.session.user.id },
+      });
+    }),
 
   captureRefillReminder: capabilityProcedure('pharmacy:dispense')
     .input(
@@ -615,7 +623,14 @@ export const pharmacyPrescriptionsRouter = router({
           actorId: ctx.session.user.id,
           patientId: panel.patientId,
         });
-        return panel;
+        const canDispense =
+          hasModule(ctx.entitlements, 'pharmacy-dispensing') &&
+          (await can(subjectFromSession(ctx.session.user), 'pharmacy:dispense', undefined, {
+            db: ctx.db,
+            source: 'TRPC',
+            ip: ctx.requestMeta.ip,
+          }));
+        return { ...panel, canDispense };
       } catch (error) {
         if (error instanceof PharmacyCounterPrescriptionError) {
           throw new TRPCError({

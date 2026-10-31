@@ -31,7 +31,7 @@ async function customDecision(
   userId: string,
   actions: readonly string[],
   now: Date
-): Promise<boolean | null> {
+): Promise<{ decision: boolean | null; hasOrganizationRole: boolean }> {
   const user = await db.user.findUnique({
     where: { id: userId },
     select: {
@@ -44,7 +44,7 @@ async function customDecision(
       },
     },
   });
-  if (!user) return false;
+  if (!user) return { decision: false, hasOrganizationRole: false };
   const matchingRules = [
     ...user.permissionOverrides,
     ...(user.organizationRole?.permissions ?? []),
@@ -53,9 +53,14 @@ async function customDecision(
       capabilityMatches(rule.capability, action, rule.effect === 'DENY' ? 'DENY' : 'ALLOW')
     )
   );
-  if (matchingRules.some((rule) => rule.effect === 'DENY')) return false;
-  if (matchingRules.some((rule) => rule.effect === 'ALLOW')) return true;
-  return null;
+  const hasOrganizationRole = user.organizationRole !== null;
+  if (matchingRules.some((rule) => rule.effect === 'DENY')) {
+    return { decision: false, hasOrganizationRole };
+  }
+  if (matchingRules.some((rule) => rule.effect === 'ALLOW')) {
+    return { decision: true, hasOrganizationRole };
+  }
+  return { decision: null, hasOrganizationRole };
 }
 
 /** True iff some policy registered for `action` allows the subject + resource. */
@@ -86,23 +91,33 @@ export async function canAny(
   };
   const db = opts.db;
   if (!db) {
-    console.error(`[abac] no tenant-scoped database supplied for "${actions.join(' | ')}"`);
+    console.error('[abac] no tenant-scoped database supplied for actions:', actions);
     return false;
   }
+  let hasOrganizationRole: boolean;
   try {
-    const decision = await customDecision(db, subject.id, actions, env.now);
-    if (decision !== null) return decision;
+    const custom = await customDecision(db, subject.id, actions, env.now);
+    if (custom.decision !== null) return custom.decision;
+    hasOrganizationRole = custom.hasOrganizationRole;
   } catch (err) {
-    console.error(`[abac] custom permission lookup for "${actions.join(' | ')}" threw:`, err);
+    console.error('[abac] custom permission lookup threw for actions:', actions, err);
     return false;
   }
   for (const action of actions) {
+    // Assigned roles bound procurement and prescription intake authority. Keep
+    // the tenant-admin fallback only for legacy users without a role (#375).
+    if (
+      hasOrganizationRole &&
+      (action === 'pharmacy:procurement' || action === 'pharmacy:prescriptions')
+    ) {
+      continue;
+    }
     for (const policy of POLICIES[action] ?? []) {
       try {
         if (await policy({ subject, resource, env, db })) return true;
       } catch (err) {
         // A policy that throws denies (fail-closed) but never crashes the request.
-        console.error(`[abac] policy for "${action}" threw:`, err);
+        console.error('[abac] policy threw for action:', action, err);
       }
     }
   }
