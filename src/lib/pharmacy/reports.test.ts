@@ -45,6 +45,41 @@ describe('PH-RPT metric contract', () => {
     expect(sql).not.toContain('SUM(t."amountMinor" - COALESCE(t."changeGivenMinor",0))');
   });
 
+  it('counts pharmacist coverage only during the qualified person validity window', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-29T12:00:00.000Z'));
+    try {
+      const queryRaw = vi.fn().mockResolvedValue([]);
+      const count = vi.fn().mockResolvedValue(0);
+
+      await readPharmacyOwnerCommandCentre(
+        {
+          $queryRaw: queryRaw,
+          pharmacyRecallNotice: { count },
+          pharmacySupplierClaim: { count },
+          pharmacyReceivingException: { count },
+          branchRegulatoryProfile: { count },
+        } as never,
+        { branchIds: ['branch_1'], from: '2026-10-29', to: '2026-10-29' }
+      );
+
+      expect(count).toHaveBeenLastCalledWith({
+        where: {
+          branchId: { in: ['branch_1'] },
+          effectiveFrom: { lte: new Date('2026-10-29T12:00:00.000Z') },
+          OR: [
+            { effectiveTo: null },
+            { effectiveTo: { gt: new Date('2026-10-29T12:00:00.000Z') } },
+          ],
+          qualifiedPersonValidFrom: { lte: new Date('2026-10-29T12:00:00.000Z') },
+          qualifiedPersonValidTo: { gt: new Date('2026-10-29T12:00:00.000Z') },
+        },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('reports overdue Khata principal net of payments with dishonours reinstated', async () => {
     const queryRaw = vi
       .fn()
