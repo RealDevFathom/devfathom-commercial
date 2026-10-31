@@ -138,6 +138,7 @@ describe('assistant tool routing', () => {
     expect(Object.keys(tools).sort()).toEqual([
       'askPharmacyBusinessInsights',
       'askPharmacyFinanceInsights',
+      'askPharmacyOwnerQuestion',
       'askPharmacyReports',
     ]);
     expect(buildAssistantTools(adminCtx, { hint })).not.toHaveProperty(
@@ -239,16 +240,22 @@ describe('assistant tool routing', () => {
 });
 
 describe('composed Pharmacy selection guards', () => {
-  it.each(['ADMIN', 'EMPLOYEE'] as const)('restricts finance and explicit work-pack selection for %s', (role) => {
-    const subject: AssistantContext = {...ctx, role, vertical:'PHARMACY'};
-    for (const hint of ['', 'pharmacy', 'finance']) {
-      const tools=buildAssistantTools(subject,{hint});
-      expect(tools).not.toHaveProperty('askPharmacyWorkPacks');
-      expect('askPharmacyFinanceInsights' in tools).toBe(role==='ADMIN');
+  it.each(['ADMIN', 'EMPLOYEE'] as const)(
+    'restricts finance and explicit work-pack selection for %s',
+    (role) => {
+      const subject: AssistantContext = { ...ctx, role, vertical: 'PHARMACY' };
+      for (const hint of ['', 'pharmacy', 'finance']) {
+        const tools = buildAssistantTools(subject, { hint });
+        expect(tools).not.toHaveProperty('askPharmacyWorkPacks');
+        expect('askPharmacyFinanceInsights' in tools).toBe(role === 'ADMIN');
+        expect('askPharmacyOwnerQuestion' in tools).toBe(role === 'ADMIN');
+      }
+      for (const hint of ['work packs', 'supplier credit follow-up']) {
+        expect(buildAssistantTools(subject, { hint })).toHaveProperty('askPharmacyWorkPacks');
+      }
+      expect(
+        buildAssistantTools({ ...subject, enabledModules: [] }, { hint: 'work packs' })
+      ).not.toHaveProperty('askPharmacyWorkPacks');
     }
-    for(const hint of ['work packs','supplier credit follow-up']) {
-      expect(buildAssistantTools(subject,{hint})).toHaveProperty('askPharmacyWorkPacks');
-    }
-    expect(buildAssistantTools({...subject,enabledModules:[]},{hint:'work packs'})).not.toHaveProperty('askPharmacyWorkPacks');
-  });
+  );
 });
