@@ -99,7 +99,11 @@ async function readyCounter(
   return counter;
 }
 
-function sale(deviceId = SCOPE.deviceId, clientOriginAt = new Date().toISOString()) {
+function sale(
+  deviceId = SCOPE.deviceId,
+  clientOriginAt = new Date().toISOString(),
+  receiptNumber = 1
+) {
   const envelope = {
     organizationId: SCOPE.organizationId,
     branchId: SCOPE.branchId,
@@ -119,13 +123,13 @@ function sale(deviceId = SCOPE.deviceId, clientOriginAt = new Date().toISOString
     signingKeyId: 'test-key',
   };
   return {
-    commandId: `command-${deviceId}-${clientOriginAt}`,
+    commandId: `command-${deviceId}-${receiptNumber}-${clientOriginAt}`,
     deviceId,
     action: 'CASH_OTC_SALE' as const,
     payload: {
       leasedReceipt: {
         leaseId: `lease_${deviceId}`,
-        receiptNumber: 1,
+        receiptNumber,
         originalSaleAt: clientOriginAt,
         envelope,
         signature: 'snapshot-signature',
@@ -286,8 +290,12 @@ describe('PH-OFF OFF-05 — offline verification gate', () => {
 
   it('clock skew orders replay by persisted sequence, never client timestamps', async () => {
     const counter = await readyCounter(createMemoryDriver(), { quotaUnits: 2 });
-    await counter.enqueue(sale(SCOPE.deviceId, '2099-01-01T00:00:00.000Z'), matrix());
-    await counter.enqueue(sale(SCOPE.deviceId, '2000-01-01T00:00:00.000Z'), matrix());
+    expect(
+      await counter.enqueue(sale(SCOPE.deviceId, '2099-01-01T00:00:00.000Z'), matrix())
+    ).toMatchObject({ ok: true });
+    expect(
+      await counter.enqueue(sale(SCOPE.deviceId, '2000-01-01T00:00:00.000Z', 2), matrix())
+    ).toMatchObject({ ok: true });
     const origins: unknown[] = [];
 
     await counter.replay(async (request) => {
@@ -300,7 +308,9 @@ describe('PH-OFF OFF-05 — offline verification gate', () => {
   it('sequence exhaustion fails closed without inventing a receipt number', async () => {
     const counter = await readyCounter(createMemoryDriver(), { receiptEnd: 1, quotaUnits: 2 });
     expect(await counter.enqueue(sale(), matrix())).toMatchObject({ ok: true });
-    expect(await counter.enqueue(sale(), matrix())).toMatchObject({
+    expect(
+      await counter.enqueue(sale(SCOPE.deviceId, new Date().toISOString(), 2), matrix())
+    ).toMatchObject({
       ok: false,
       reason: 'NO_RECEIPT_NUMBER',
     });

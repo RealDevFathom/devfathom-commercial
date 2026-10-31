@@ -308,10 +308,26 @@ export function enqueueCounterCommand(
   }
 
   const commandId = input.commandId ?? newId();
+  if (snapshot.commands.some((command) => command.commandId === commandId)) {
+    return {
+      ok: false,
+      reason: 'INVALID_REPLAY_CONTRACT',
+      message: 'Each queued command must have a unique idempotency key.',
+      decision: null,
+    };
+  }
   const issued = sale ? issueReceiptNumber(snapshot.leases) : null;
   let bucket = input.bucket ?? null;
   let requestedUnits = input.requestedUnits ?? 0;
   if (sale) {
+    if (!issued) {
+      return {
+        ok: false,
+        reason: 'NO_RECEIPT_NUMBER',
+        message: 'This counter has used every pre-allocated receipt number.',
+        decision: null,
+      };
+    }
     const parsed = counterReplaySchema.safeParse({
       ...input.payload,
       sequence: snapshot.nextSequence,
@@ -342,7 +358,6 @@ export function enqueueCounterCommand(
     if (
       !parsed.success ||
       !sameBucket ||
-      !issued ||
       parsed.data.leasedReceipt.receiptNumber !== issued.receiptNumber ||
       parsed.data.leasedReceipt.leaseId !== issued.leaseId ||
       !suppliedBucketMatches ||
