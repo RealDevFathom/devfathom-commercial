@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { cancelMyCustomerOrder, isCustomerOrderableMedicine } from './customer-ordering';
+import { cancelMyCustomerOrder, isCustomerOrderableMedicine, transitionCustomerOrder } from './customer-ordering';
 
 const otc = {
   saleable: true,
@@ -21,6 +21,15 @@ describe('MKT-03 customer-order catalogue eligibility', () => {
     expect(isCustomerOrderableMedicine({ ...otc, rx: true })).toBe(false);
     expect(isCustomerOrderableMedicine({ ...otc, restricted: true })).toBe(false);
     expect(isCustomerOrderableMedicine({ ...otc, controlled: true })).toBe(false);
+  });
+
+  it('permits reviewed Rx while retaining saleability, restricted and controlled guards', () => {
+    const rx = { ...otc, otc: false, rx: true };
+    expect(isCustomerOrderableMedicine(rx, true)).toBe(true);
+    expect(isCustomerOrderableMedicine(rx)).toBe(false);
+    expect(isCustomerOrderableMedicine({ ...rx, saleable: false }, true)).toBe(false);
+    expect(isCustomerOrderableMedicine({ ...rx, restricted: true }, true)).toBe(false);
+    expect(isCustomerOrderableMedicine({ ...rx, controlled: true }, true)).toBe(false);
   });
 });
 
@@ -99,4 +108,32 @@ describe('MKT-03/MKT-05 reservation lifecycle', () => {
       ])
     );
   });
+});
+
+
+describe('chronic refill PREPAY dispatch', () => {
+  it.each(['missing-sale', 'partial', 'credit', 'refunded'])(
+    'refuses %s payment evidence before releasing a delivery', async (scenario) => {
+      const db = {
+        $queryRaw: async () => [{ id: 'cycle-1' }],
+        pharmacyCustomerOrder: { findFirst: async () => ({
+          id: 'order-1', status: 'PACKING', fulfillment: 'DELIVER',
+          intendedPaymentMethod: 'BANK_TRANSFER',
+          counterSaleId: scenario === 'missing-sale' ? null : 'sale-1',
+        }) },
+        user: { findFirst: async () => ({ id: 'runner-1' }) },
+        pharmacySale: { findFirst: async () => ({
+          status: 'COMPLETED',
+          lines: [{ unitPriceMinor: 2000, quantity: 1, discountMinor: 0 }],
+          tenders: [{ type: scenario === 'credit' ? 'CREDIT' : 'BANK_TRANSFER',
+            amountMinor: scenario === 'partial' ? 1000 : 2000 }],
+          refunds: scenario === 'refunded' ? [{ amountMinor: 1000 }] : [],
+        }) },
+      };
+      await expect(transitionCustomerOrder(db as never, {
+        organizationId: 'org-1', branchId: 'branch-1', actorId: 'owner-1',
+      }, { orderId: 'order-1', action: 'dispatch', runnerUserId: 'runner-1' }))
+        .rejects.toMatchObject({ reason: 'PREPAY_REQUIRED' });
+    }
+  );
 });

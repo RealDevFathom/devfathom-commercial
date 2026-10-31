@@ -18,6 +18,7 @@ export const completionSaleInclude = {
     },
   },
   tenders: true,
+  customerOrder: { select: { id: true } },
 } satisfies Prisma.PharmacySaleInclude;
 
 // Internal: callers hold the sale lock and have verified exact paid coverage in this transaction.

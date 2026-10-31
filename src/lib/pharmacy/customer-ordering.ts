@@ -6,7 +6,10 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { blockReasonFor, planAllocation, PharmacyInventoryError } from './inventory';
 import { priceFromLot } from './medicine';
 import { deliveryTotals } from './customer-delivery';
+import { assertChronicRefillReviewCurrent } from './chronic-refill-review';
 import { saleTotalMinor } from './settlement';
+import { attachPrescriptionReference } from './rx-prescription-reference';
+import { assertSaleBatchesSellable } from './sale-batch-safety';
 import { addReservedSaleLine, createSale } from './sales';
 import type { LedgerScope } from './stock-ledger';
 
@@ -35,6 +38,7 @@ export class PharmacyCustomerOrderError extends Error {
       | 'ORDER_NOT_FOUND'
       | 'RUNNER_REQUIRED'
       | 'SALE_NOT_COMPLETED'
+      | 'PREPAY_REQUIRED'
       | 'RESERVATION_UNAVAILABLE'
   ) {
     super(reason);
@@ -71,18 +75,23 @@ type ReservationCandidate = {
 };
 
 const ACTIVE_ORDER_STATUSES: CustomerOrderStatus[] = ['PROPOSED', 'ACCEPTED', 'PACKING'];
+/** Upper bound for an internal scheduled-order stock hold. */
+const MAX_SCHEDULED_HOLD_MS = 14 * 86_400_000;
 
-export function isCustomerOrderableMedicine(medicine: {
-  saleable: boolean;
-  otc: boolean;
-  rx: boolean;
-  restricted: boolean;
-  controlled: boolean;
-}) {
+export function isCustomerOrderableMedicine(
+  medicine: {
+    saleable: boolean;
+    otc: boolean;
+    rx: boolean;
+    restricted: boolean;
+    controlled: boolean;
+  },
+  reviewedRx = false
+) {
   return (
     medicine.saleable &&
-    medicine.otc &&
-    !medicine.rx &&
+    (medicine.otc || (reviewedRx && medicine.rx)) &&
+    (!medicine.rx || reviewedRx) &&
     !medicine.restricted &&
     !medicine.controlled
   );
@@ -323,6 +332,13 @@ export async function placeCustomerOrder(
     city?: string;
     deliveryInstructions?: string;
     reservationMinutes?: number;
+    /**
+     * Internal staff-only hold for scheduled orders (chronic refills). Bounded so a caller
+     * cannot pin stock indefinitely; public order callers must never set this.
+     */
+    reservationExpiresAt?: Date;
+    /** Internal clinical gate. Public order callers must never set this. */
+    reviewedRx?: boolean;
     lines: Array<{
       medicineId: string;
       presentationId: string;
@@ -365,9 +381,17 @@ export async function placeCustomerOrder(
       city: input.fulfillment === 'DELIVER' ? city : null,
       deliveryInstructions:
         input.fulfillment === 'DELIVER' ? input.deliveryInstructions?.trim() || null : null,
-      reservationExpiresAt: new Date(
-        Date.now() + Math.min(Math.max(input.reservationMinutes ?? 30, 5), 120) * 60_000
-      ),
+      reservationExpiresAt:
+        input.staff && input.reservationExpiresAt
+          ? new Date(
+              Math.min(
+                Math.max(input.reservationExpiresAt.getTime(), Date.now() + 5 * 60_000),
+                Date.now() + MAX_SCHEDULED_HOLD_MS
+              )
+            )
+          : new Date(
+              Date.now() + Math.min(Math.max(input.reservationMinutes ?? 30, 5), 120) * 60_000
+            ),
     },
   });
 
@@ -386,7 +410,7 @@ export async function placeCustomerOrder(
     });
     if (
       !medicine ||
-      !isCustomerOrderableMedicine(medicine) ||
+      !isCustomerOrderableMedicine(medicine, input.reviewedRx) ||
       medicine.presentations[0]?.packLevels.length !== 1
     ) {
       throw new PharmacyCustomerOrderError('ITEM_NOT_ORDERABLE');
@@ -448,6 +472,7 @@ export async function placeCustomerOrder(
 }
 
 const orderInclude = {
+  chronicRefillCycles: { select: { id: true } },
   branch: { select: { id: true, name: true, city: true } },
   customer: { select: { id: true, displayName: true, phoneLast4: true } },
   runner: { select: { id: true, name: true } },
@@ -615,6 +640,34 @@ async function revalidateOrderReservations(db: ScopedDb, scope: LedgerScope, ord
            balance."disposition"::text AS disposition, batch."state"::text AS "batchState",
            batch."expiresAt", lot."receivedAt",
            medicine.saleable, medicine.otc, medicine.rx, medicine.restricted, medicine.controlled,
+           EXISTS (
+             SELECT 1 FROM "pharmacy_chronic_refill_cycles" cycle
+             JOIN "pharmacy_pharmacist_review_decisions" decision
+               ON decision."organizationId" = cycle."organizationId"
+              AND decision.id = cycle."pharmacistDecisionId"
+             JOIN "pharmacy_pharmacist_review_items" item
+               ON item."organizationId" = decision."organizationId"
+              AND item.id = decision."reviewItemId"
+             JOIN "pharmacy_sale_lines" reviewed_line
+               ON reviewed_line."organizationId" = item."organizationId"
+              AND reviewed_line.id = item."saleLineId"
+             WHERE cycle."organizationId" = line."organizationId"
+               AND cycle."branchId" = line."branchId" AND cycle."orderId" = line."orderId"
+               AND decision.kind = 'SIGN' AND decision."signedAt" IS NOT NULL
+               AND NOT EXISTS (
+                 SELECT 1 FROM "pharmacy_pharmacist_review_decisions" refusal
+                 WHERE refusal."organizationId" = decision."organizationId"
+                   AND refusal."reviewItemId" = decision."reviewItemId"
+                   AND refusal.kind = 'REFUSE' AND refusal."createdAt" >= decision."createdAt"
+               )
+               AND reviewed_line."branchId" = line."branchId"
+               AND reviewed_line."medicineId" = line."medicineId"
+               AND reviewed_line."presentationId" = line."presentationId"
+               AND reviewed_line."packLevelId" = line."packLevelId"
+               AND reviewed_line."saleUnit" = line."saleUnit"
+               AND reviewed_line.quantity = line.quantity
+               AND reviewed_line."canonicalUnits" = line."canonicalUnits"
+           ) AS "reviewedRx",
            (balance."onHandUnits" - COALESCE((
              SELECT SUM(other."reservedUnits") FROM "pharmacy_restock_reservations" other
              WHERE other."organizationId" = balance."organizationId"
@@ -664,13 +717,14 @@ async function revalidateOrderReservations(db: ScopedDb, scope: LedgerScope, ord
       Parameters<typeof isCustomerOrderableMedicine>[0] & {
         orderLineId: string;
         reservedUnits: number;
+        reviewedRx: boolean;
       })[]
   >(query);
   const at = new Date();
   const coverage = new Map<string, number>();
   for (const reservation of reservations) {
     if (
-      !isCustomerOrderableMedicine(reservation) ||
+      !isCustomerOrderableMedicine(reservation, reservation.reviewedRx) ||
       blockReasonFor(reservation, { ...scope, at }) ||
       !Number.isSafeInteger(reservation.reservedUnits) ||
       reservation.reservedUnits <= 0 ||
@@ -691,6 +745,56 @@ async function revalidateOrderReservations(db: ScopedDb, scope: LedgerScope, ord
     throw new PharmacyCustomerOrderError('RESERVATION_UNAVAILABLE');
   }
   return reservations;
+}
+
+// Payment mode is captured by the order, so editing a subscription cannot bypass this gate.
+async function isChronicRefillPrepay(
+  db: ScopedDb,
+  scope: LedgerScope,
+  order: { id: string; intendedPaymentMethod: string }
+) {
+  if (order.intendedPaymentMethod !== 'BANK_TRANSFER') return false;
+  const [cycle] = await db.$queryRaw<{ id: string }[]>(Prisma.sql`
+    SELECT "id" FROM "pharmacy_chronic_refill_cycles"
+    WHERE "organizationId" = ${scope.organizationId} AND "branchId" = ${scope.branchId}
+      AND "orderId" = ${order.id} LIMIT 1
+  `);
+  return Boolean(cycle);
+}
+
+async function assertPrepaidDelivery(
+  db: ScopedDb,
+  scope: LedgerScope,
+  orderId: string,
+  saleId: string | null
+) {
+  if (!saleId) throw new PharmacyCustomerOrderError('PREPAY_REQUIRED');
+  await db.$queryRaw(Prisma.sql`
+    SELECT "id" FROM "pharmacy_sales" WHERE "organizationId" = ${scope.organizationId}
+      AND "branchId" = ${scope.branchId} AND "id" = ${saleId} FOR UPDATE
+  `);
+  const sale = await db.pharmacySale.findFirst({
+    where: { id: saleId, organizationId: scope.organizationId, branchId: scope.branchId },
+    include: { lines: { include: { medicine: true } }, tenders: true, refunds: true },
+  });
+  if (
+    !sale || sale.status !== 'COMPLETED' || !sale.lines.length ||
+    sale.tenders.some((tender) => tender.type === 'CREDIT') ||
+    sale.tenders.reduce((sum, tender) => sum + tender.amountMinor, 0) -
+      sale.refunds.reduce((sum, refund) => sum + refund.amountMinor, 0) !== saleTotalMinor(sale.lines)
+  )
+    throw new PharmacyCustomerOrderError('PREPAY_REQUIRED');
+  const orderLines = await db.pharmacyCustomerOrderLine.findMany({
+    where: { organizationId: scope.organizationId, branchId: scope.branchId, orderId },
+  });
+  if (sale.lines.length !== orderLines.length || orderLines.some((expected) =>
+    !sale.lines.some((line) => line.medicineId === expected.medicineId &&
+      line.presentationId === expected.presentationId && line.packLevelId === expected.packLevelId &&
+      line.saleUnit === expected.saleUnit && line.quantity === expected.quantity &&
+      line.canonicalUnits === expected.canonicalUnits)) ||
+    sale.lines.some((line) => !isCustomerOrderableMedicine(line.medicine, true)))
+    throw new PharmacyCustomerOrderError('RESERVATION_UNAVAILABLE');
+  await assertSaleBatchesSellable(db, scope, sale.id);
 }
 
 export async function transitionCustomerOrder(
@@ -749,11 +853,17 @@ export async function transitionCustomerOrder(
     });
     if (!runner) throw new PharmacyCustomerOrderError('RUNNER_REQUIRED');
   }
+  const prepaidDispatch =
+    input.action === 'dispatch' && await isChronicRefillPrepay(db, scope, order);
+  if (prepaidDispatch) {
+    await assertPrepaidDelivery(db, scope, order.id, order.counterSaleId);
+  }
   if (input.action === 'ready' || input.action === 'dispatch') {
     if (order.reservationExpiresAt.getTime() <= Date.now()) {
       throw new PharmacyCustomerOrderError('RESERVATION_UNAVAILABLE');
     }
-    await revalidateOrderReservations(db, scope, order.id);
+    // Early PREPAY checkout already converted this hold into allocated sale stock.
+    if (!prepaidDispatch) await revalidateOrderReservations(db, scope, order.id);
     if (order.reservationExpiresAt.getTime() <= Date.now()) {
       throw new PharmacyCustomerOrderError('RESERVATION_UNAVAILABLE');
     }
@@ -788,7 +898,10 @@ export async function startCustomerOrderCheckout(
     },
   });
   if (!order) throw new PharmacyCustomerOrderError('ORDER_NOT_FOUND');
-  if (!['READY_FOR_COLLECTION', 'OUT_FOR_DELIVERY'].includes(order.status)) {
+  const earlyPrepay =
+    order.status === 'PACKING' && order.fulfillment === 'DELIVER' &&
+    await isChronicRefillPrepay(db, scope, order);
+  if (!earlyPrepay && !['READY_FOR_COLLECTION', 'OUT_FOR_DELIVERY'].includes(order.status)) {
     throw new PharmacyCustomerOrderError('INVALID_STATE');
   }
   if (
@@ -797,6 +910,7 @@ export async function startCustomerOrderCheckout(
     )
   )
     throw new PharmacyCustomerOrderError('INVALID_STATE');
+  await assertChronicRefillReviewCurrent(db, scope, order.id);
   if (order.counterSaleId) return { saleId: order.counterSaleId, replayed: true };
   const reservations = await revalidateOrderReservations(db, scope, order.id);
   if (order.reservationExpiresAt.getTime() <= Date.now()) {
@@ -809,7 +923,8 @@ export async function startCustomerOrderCheckout(
     data: { customerId: order.customerId },
   });
   for (const line of order.lines) {
-    await addReservedSaleLine(
+    const reviewedRx = reservations.some((row) => row.orderLineId === line.id && row.reviewedRx);
+    const added = await addReservedSaleLine(
       db,
       scope,
       {
@@ -824,6 +939,7 @@ export async function startCustomerOrderCheckout(
       },
       {
         expiresAt: order.reservationExpiresAt,
+        reviewedRx,
         allocations: reservations
           .filter((row) => row.orderLineId === line.id)
           .map((row) => ({
@@ -833,6 +949,35 @@ export async function startCustomerOrderCheckout(
           })),
       }
     );
+    if (reviewedRx) {
+      // A signed chronic refill cycle dispenses against its prescription: the sale line carries
+      // the reference, and completion records the immutable fill (and re-checks the remainder).
+      const [reference] = await db.$queryRaw<
+        { prescriptionLineId: string; patientId: string }[]
+      >(Prisma.sql`
+        SELECT subscription."prescriptionLineId", customer."patientId"
+        FROM "pharmacy_chronic_refill_cycles" cycle
+        JOIN "pharmacy_chronic_refill_subscriptions" subscription
+          ON subscription."organizationId" = cycle."organizationId"
+         AND subscription."branchId" = cycle."branchId" AND subscription."id" = cycle."subscriptionId"
+        JOIN "pharmacy_customers" customer
+          ON customer."organizationId" = subscription."organizationId"
+         AND customer."id" = subscription."customerId"
+        WHERE cycle."organizationId" = ${scope.organizationId}
+          AND cycle."branchId" = ${scope.branchId} AND cycle."orderId" = ${order.id}
+          AND cycle."pharmacistDecisionId" IS NOT NULL
+          AND subscription."prescriptionLineId" IS NOT NULL
+          AND subscription."medicineId" = ${line.medicineId}
+          AND subscription."presentationId" = ${line.presentationId}
+        LIMIT 1
+      `);
+      if (!reference) throw new PharmacyCustomerOrderError('RESERVATION_UNAVAILABLE');
+      await attachPrescriptionReference(db, scope, {
+        prescriptionLineId: reference.prescriptionLineId,
+        patientId: reference.patientId,
+        saleLineId: added.line.id,
+      });
+    }
   }
   await db.pharmacyCustomerOrder.update({
     where: { organizationId_id: { organizationId: scope.organizationId, id: order.id } },

@@ -1,4 +1,6 @@
 import { TRPCError } from '@trpc/server';
+import { annotateAudit } from '@/server/audit';
+import { approveChronicRefillAsOwner } from '@/lib/pharmacy/chronic-refill-owner-approval';
 import { z } from 'zod';
 
 import { can, subjectFromSession } from '@/lib/abac';
@@ -20,6 +22,13 @@ import {
 } from '@/lib/pharmacy/customer-delivery';
 import type { LedgerScope } from '@/lib/pharmacy/stock-ledger';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import {
+  ChronicRefillError,
+  createChronicRefillSubscription,
+  createDueChronicRefillOrder,
+  listChronicRefillSubscriptions,
+  updateChronicRefillSubscription,
+} from '@/lib/pharmacy/chronic-refills';
 
 import { assertInOrganization } from '../org-refs';
 import { capabilityProcedure, protectedProcedure, router, type TRPCContext } from '../trpc';
@@ -46,6 +55,16 @@ async function isStaff(ctx: TRPCContext) {
 }
 
 function fail(error: unknown): never {
+  if (error instanceof ChronicRefillError)
+    throw new TRPCError({
+      code:
+        error.reason === 'SUBSCRIPTION_NOT_FOUND'
+          ? 'NOT_FOUND'
+          : error.reason === 'DISPENSE_PERMISSION_REQUIRED'
+            ? 'FORBIDDEN'
+            : 'BAD_REQUEST',
+      message: error.reason,
+    });
   if (error instanceof PharmacyDeliveryError)
     throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
   if (error instanceof PharmacyCustomerOrderError) {
@@ -71,6 +90,133 @@ const orderLine = z
   .strict();
 
 export const pharmacyOrderingRouter = router({
+  chronicRefills: staffProcedure
+    .input(z.object({ branchId }).strict())
+    .query(async ({ ctx, input }) =>
+      ctx.db.$transaction(async (tx) =>
+        listChronicRefillSubscriptions(txDb(tx), await scopeFor(ctx, input.branchId))
+      )
+    ),
+
+  updateChronicRefill: staffProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          subscriptionId: z.string().min(1),
+          action: z.enum(['PAUSE', 'REACTIVATE', 'CANCEL']).optional(),
+          cadenceDays: z.number().int().min(1).max(365).optional(),
+          nextDueAt: z.date().optional(),
+          quantityPacks: z.number().int().min(1).max(100).optional(),
+          fulfillment: z.enum(['COLLECT', 'DELIVER']).optional(),
+          paymentMode: z.enum(['PREPAY', 'KHATA']).optional(),
+          addressLine: z.string().trim().min(1).max(300).nullable().optional(),
+          city: z.string().trim().min(1).max(120).nullable().optional(),
+          deliveryInstructions: z.string().trim().max(500).nullable().optional(),
+        })
+        .strict()
+        .refine(
+          (value) =>
+            Object.keys(value).some((key) => !['branchId', 'subscriptionId'].includes(key)),
+          'No change requested'
+        )
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await ctx.db.$transaction(async (tx) =>
+          updateChronicRefillSubscription(txDb(tx), await scopeFor(ctx, input.branchId), input)
+        );
+      } catch (error) {
+        fail(error);
+      }
+    }),
+
+  createChronicRefill: staffProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          customerId: z.string().min(1),
+          medicineId: z.string().min(1),
+          presentationId: z.string().min(1),
+          packLevelId: z.string().min(1),
+          quantityPacks: z.number().int().positive().max(100),
+          prescriptionLineId: z.string().min(1).optional(),
+          reminderConsentId: z.string().min(1).optional(),
+          fulfillment: z.enum(['COLLECT', 'DELIVER']),
+          paymentMode: z.enum(['PREPAY', 'KHATA']),
+          addressLine: z.string().trim().min(1).max(300).optional(),
+          city: z.string().trim().min(1).max(120).optional(),
+          deliveryInstructions: z.string().trim().max(500).optional(),
+          cadenceDays: z.number().int().positive().max(365),
+          nextDueAt: z.date(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await ctx.db.$transaction(async (tx) =>
+          createChronicRefillSubscription(txDb(tx), await scopeFor(ctx, input.branchId), input)
+        );
+      } catch (error) {
+        fail(error);
+      }
+    }),
+
+  createDueChronicRefillOrder: staffProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          subscriptionId: z.string().min(1),
+          pharmacistDecisionId: z.string().min(1).optional(),
+          ownerApproval: z
+            .object({
+              reviewItemId: z.string().min(1),
+              staffProfileId: z.string().min(1),
+              // The secret name also redacts denied requests before this resolver runs.
+              pinSecret: z.string().regex(/^\d{4,8}$/),
+              reason: z.string().trim().min(3).max(500),
+            })
+            .strict()
+            .optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        annotateAudit(ctx, {
+          action: 'pharmacy.chronicRefill.release',
+          targetType: 'PharmacyChronicRefillSubscription',
+          targetId: input.subscriptionId,
+          skipInput: true,
+        });
+        const result = await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          const scope = await scopeFor(ctx, input.branchId);
+          let pharmacistDecisionId = input.pharmacistDecisionId;
+          if (input.ownerApproval) {
+            if (pharmacistDecisionId) throw new TRPCError({ code: 'BAD_REQUEST' });
+            const approval = await approveChronicRefillAsOwner(db, scope, {
+              ...input.ownerApproval,
+              pin: input.ownerApproval.pinSecret,
+              subscriptionId: input.subscriptionId,
+            });
+            if ('blocked' in approval) return approval;
+            pharmacistDecisionId = approval.decisionId;
+          }
+          return createDueChronicRefillOrder(db, scope, {
+            subscriptionId: input.subscriptionId, pharmacistDecisionId,
+          });
+        });
+        // Return a denial so the request's owning tenant transaction commits PIN lockout counters.
+        if ('blocked' in result) return { blocked: 'Owner PIN approval refused.' };
+        return result;
+      } catch (error) {
+        fail(error);
+      }
+    }),
+
   deliveryCommand: staffProcedure.input(deliveryCommandInput).mutation(async ({ ctx, input }) => {
     try {
       return await ctx.db.$transaction(async (tx) =>

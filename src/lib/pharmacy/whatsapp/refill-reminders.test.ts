@@ -7,6 +7,7 @@ const store = vi.hoisted(() => ({
   customers: [] as Array<Record<string, unknown>>,
   consents: [] as Array<Record<string, unknown>>,
   logs: [] as LogRow[],
+  queries: [] as string[],
   /** The workspace zone the organization row holds. */
   timezone: 'Asia/Karachi',
 }));
@@ -19,8 +20,16 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
   const db = {
     // The real query also excludes captures that already have a log row; the
     // fake returns every capture so the dedupe-key claim is what is exercised.
-    $queryRaw: async (query: { sql: string }) =>
-      query.sql.includes('FOR UPDATE') ? [{ id: 'patient-1' }] : store.captures,
+    // Prescription captures and chronic subscriptions are read by separate queries.
+    $queryRaw: async (query: { sql: string }) => {
+      store.queries.push(query.sql);
+      if (query.sql.includes('FOR UPDATE')) return [{ id: 'patient-1' }];
+      return store.captures.filter(
+        (row) =>
+          Boolean(row.subscriptionId) ===
+          query.sql.includes('FROM "pharmacy_chronic_refill_subscriptions"')
+      );
+    },
     organization: {
       findUnique: async () => ({
         vertical: 'PHARMACY',
@@ -34,8 +43,13 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
         store.customers.find((customer) => customer.patientId === where.patientId) ?? null,
     },
     patientConsent: {
-      findFirst: async ({ where }: { where: { patientId: string } }) =>
-        store.consents.find((consent) => consent.patientId === where.patientId) ?? null,
+      findFirst: async ({ where }: { where: { patientId: string; id?: string } }) =>
+        store.consents
+          .filter(
+            (consent) =>
+              consent.patientId === where.patientId && (!where.id || consent.id === where.id)
+          )
+          .sort((a, b) => Number(b.version ?? 0) - Number(a.version ?? 0))[0] ?? null,
     },
     pharmacyMessageLog: {
       count: async () => store.logs.length,
@@ -138,6 +152,50 @@ describe('planRefillReminder', () => {
 });
 
 describe('processDueWhatsAppRefillReminders', () => {
+  it.each([true, false])(
+    'uses the latest consent for a chronic subscription (latest grant: %s)',
+    async (granted) => {
+      store.captures = [
+        {
+          ...capture('subscription-1'),
+          subscriptionId: 'subscription-1',
+          subscriptionDueAt: new Date('2026-10-01T09:00:00.000Z'),
+          consentEventId: 'original-grant',
+        },
+      ];
+      store.customers = [customer('patient-1', true)];
+      store.consents = [
+        {
+          id: 'original-grant',
+          patientId: 'patient-1',
+          version: 1,
+          granted: true,
+          revokedAt: null,
+        },
+        {
+          id: 'latest-consent',
+          patientId: 'patient-1',
+          version: 2,
+          granted,
+          revokedAt: granted ? null : NOW,
+          recordedAt: NOW,
+        },
+      ];
+      const provider = new MockWhatsAppProvider(config);
+
+      const result = await processDueWhatsAppRefillReminders({ now: NOW, config, provider });
+
+      expect(result.prepared).toBe(granted ? 1 : 0);
+      expect(provider.calls).toHaveLength(granted ? 1 : 0);
+      expect(store.logs).toHaveLength(granted ? 1 : 0);
+      if (granted)
+        expect(store.logs[0]).toMatchObject({
+          dedupeKey: 'chronic-refill:subscription-1:2026-10-01',
+          refillCaptureId: null,
+        });
+    }
+  );
+
   it('sends once per patient x medicine x due date across repeated runs', async () => {
     // Two fills of the same medicine with the same run-out date collapse to one reminder.
     store.captures = [capture('capture-1'), capture('capture-2')];
@@ -210,6 +268,24 @@ describe('processDueWhatsAppRefillReminders', () => {
       processDueWhatsAppRefillReminders({ now: NOW, config, provider })
     ).resolves.toMatchObject({ scanned: 1, prepared: 1, failed: 0 });
     expect(provider.calls).toHaveLength(1);
+  });
+
+  it('reads prescription captures and chronic subscriptions with separate budgets', async () => {
+    store.queries = [];
+    store.captures = [];
+    const provider = new MockWhatsAppProvider(config);
+    await processDueWhatsAppRefillReminders({ now: NOW, config, provider, limit: 5 });
+    const [captureSql, subscriptionSql] = store.queries;
+    expect(captureSql).toContain('FROM "pharmacy_refill_reminder_captures"');
+    expect(captureSql).not.toContain('pharmacy_chronic_refill_subscriptions');
+    expect(captureSql).toContain('LIMIT');
+    expect(subscriptionSql).toContain('FROM "pharmacy_chronic_refill_subscriptions"');
+    expect(subscriptionSql).toContain('LIMIT');
+    // The dedupe key must not depend on the database session TimeZone.
+    expect(subscriptionSql).toContain('to_char(schedule."dueAt", \'YYYY-MM-DD\')');
+    expect(subscriptionSql).toContain('SELECT cycle."dueAt"');
+    expect(subscriptionSql).toContain('UNION');
+    expect(subscriptionSql).not.toContain('AT TIME ZONE');
   });
 
   it('does nothing until the reminder template name is configured', async () => {
