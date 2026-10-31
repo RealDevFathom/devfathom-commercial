@@ -162,6 +162,25 @@ describe('assistant inviteMember duplicate guard', () => {
     );
   });
 
+  it.each([undefined, null])(
+    'preserves the pending restaurant role when the assistant sends %j',
+    async (restaurantRoleKey) => {
+      mocks.findFirst.mockResolvedValue({ id: 'user_2', status: 'INVITED' });
+      mocks.update.mockResolvedValue({ id: 'user_2', name: 'Alex Carter' });
+
+      await inviteTool().execute({
+        ...base,
+        email: 'manager@company.com',
+        restaurantRoleKey,
+      });
+
+      expect(mocks.update).toHaveBeenCalledOnce();
+      expect(mocks.update.mock.calls[0][0].data).not.toHaveProperty('organizationRoleId');
+      expect(mocks.roleFindFirst).not.toHaveBeenCalled();
+      expect(mocks.invitationUpsert).toHaveBeenCalledOnce();
+    }
+  );
+
   it.each([
     ['general-manager', 'General Manager'],
     ['branch-manager', 'Branch Manager'],
@@ -186,6 +205,37 @@ describe('assistant inviteMember duplicate guard', () => {
         data: expect.objectContaining({ organizationRoleId: `role_${key}` }),
       })
     );
+  });
+
+  it('clears a pending restaurant role only when explicitly requested', async () => {
+    mocks.findFirst.mockResolvedValue({ id: 'user_2', status: 'INVITED' });
+    mocks.update.mockResolvedValue({ id: 'user_2', name: 'Alex Carter' });
+
+    await inviteTool().execute({
+      ...base,
+      email: 'manager@company.com',
+      restaurantRoleKey: null,
+      clearRestaurantRole: true,
+    });
+
+    expect(mocks.update).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ data: expect.objectContaining({ organizationRoleId: null }) })
+    );
+    expect(mocks.roleFindFirst).not.toHaveBeenCalled();
+  });
+
+  it('rejects conflicting restaurant role assignment and clearing', async () => {
+    const result = await inviteTool().execute({
+      ...base,
+      email: 'manager@company.com',
+      restaurantRoleKey: 'general-manager',
+      clearRestaurantRole: true,
+    });
+
+    expect(result.error).toBe('Choose a restaurant role or clear it, not both.');
+    expect(mocks.create).not.toHaveBeenCalled();
+    expect(mocks.update).not.toHaveBeenCalled();
+    expect(mocks.invitationUpsert).not.toHaveBeenCalled();
   });
 
   it('rejects an assistant role outside the workspace catalog', async () => {

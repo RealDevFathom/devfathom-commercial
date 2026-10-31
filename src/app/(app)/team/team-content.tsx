@@ -261,7 +261,7 @@ export function AddMemberModal({ onClose }: { onClose: () => void }) {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [role, setRole] = useState<'ADMIN' | 'HR' | 'EMPLOYEE'>('EMPLOYEE');
-  const [organizationRoleId, setOrganizationRoleId] = useState('');
+  const [organizationRoleId, setOrganizationRoleId] = useState('unchanged');
   const [department, setDepartment] = useState('');
   const [title, setTitle] = useState('');
   const [phone, setPhone] = useState('');
@@ -292,9 +292,10 @@ export function AddMemberModal({ onClose }: { onClose: () => void }) {
         name: name.trim(),
         email: submittedEmail,
         role,
-        // When this email belongs to a pending invite, omitting an unselected
-        // template preserves its existing restaurant role on resend.
-        ...(organizationRoleId ? { organizationRoleId } : {}),
+        // Preserve pending roles by default; "No role template" explicitly clears.
+        ...(organizationRoleId !== 'unchanged'
+          ? { organizationRoleId: organizationRoleId || null }
+          : {}),
         department,
         title: title.trim(),
         phone: phone || undefined,
@@ -522,6 +523,7 @@ export function AddMemberModal({ onClose }: { onClose: () => void }) {
                     onChange={(event) => setOrganizationRoleId(event.target.value)}
                     className="w-full rounded-xl border border-border bg-card px-3 py-2.5 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
                   >
+                    <option value="unchanged">Keep existing role (if resending)</option>
                     <option value="">No role template</option>
                     {roleOptions.map((item) => (
                       <option key={item.id} value={item.id}>

@@ -752,7 +752,13 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
           .string()
           .nullish()
           .describe(
-            'Restaurant staff role key from this workspace, e.g. "general-manager", "branch-manager", "bar-barista", or "accountant"'
+            'Restaurant staff role key from this workspace, e.g. "general-manager", "branch-manager", "bar-barista", or "accountant". Null or omitted keeps the existing role on resend.'
+          ),
+        clearRestaurantRole: z
+          .boolean()
+          .nullish()
+          .describe(
+            'Set true only to explicitly remove the restaurant role. Do not set a role key when clearing.'
           ),
         department: departmentKey,
         title: z.string().min(1).describe('Their job title, e.g. "Senior Engineer"'),
@@ -766,6 +772,7 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
         email,
         role,
         restaurantRoleKey,
+        clearRestaurantRole,
         department,
         title,
         phone,
@@ -781,6 +788,9 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
           return { error: `"${email}" doesn't look like a valid email address.` };
         }
         const finalRole = role ?? 'EMPLOYEE';
+        if (clearRestaurantRole && restaurantRoleKey) {
+          return { error: 'Choose a restaurant role or clear it, not both.' };
+        }
 
         // Departments are tenant-configured: reject a key this workspace does
         // not have rather than letting the composite foreign key raise.
@@ -817,7 +827,8 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
         const profile = {
           name,
           role: finalRole,
-          ...(restaurantRoleKey !== undefined
+          // Models send null for omitted optionals; clearing requires explicit intent.
+          ...(organizationRole || clearRestaurantRole
             ? { organizationRoleId: organizationRole?.id ?? null }
             : {}),
           department,

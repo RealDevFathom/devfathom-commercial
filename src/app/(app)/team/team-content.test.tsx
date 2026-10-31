@@ -69,6 +69,34 @@ function fill() {
 
 describe('tenant department invitation', () => {
   it.each([
+    { choices: [], label: 'untouched', expectedRole: undefined },
+    { choices: [''], label: 'explicitly cleared', expectedRole: null },
+    { choices: ['role_gm', ''], label: 'selected then cleared', expectedRole: null },
+    {
+      choices: ['role_gm', 'unchanged'],
+      label: 'returned to keep existing role',
+      expectedRole: undefined,
+    },
+  ])('submits the correct role intent when $label', ({ choices, expectedRole }) => {
+    render(<AddMemberModal onClose={vi.fn()} />);
+    fill();
+    fireEvent.change(screen.getByLabelText('Department'), { target: { value: 'COUNTER' } });
+    const picker = screen.getByLabelText('Restaurant staff role');
+    expect(picker).toHaveDisplayValue('Keep existing role (if resending)');
+    for (const value of choices) fireEvent.change(picker, { target: { value } });
+    if (expectedRole === null) expect(picker).toHaveDisplayValue('No role template');
+    fireEvent.click(screen.getByRole('button', { name: 'Send Invite' }));
+
+    expect(state.invite.mutate).toHaveBeenCalledOnce();
+    const input = state.invite.mutate.mock.calls[0][0];
+    if (expectedRole === undefined) {
+      expect(input).not.toHaveProperty('organizationRoleId');
+    } else {
+      expect(input).toHaveProperty('organizationRoleId', null);
+    }
+  });
+
+  it.each([
     ['General Manager', 'role_gm'],
     ['Branch Manager', 'role_branch'],
     ['Bar / Barista', 'role_bar'],
