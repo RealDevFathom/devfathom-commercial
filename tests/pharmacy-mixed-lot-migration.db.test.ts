@@ -66,7 +66,22 @@ it.skipIf(!ownerUrl).each([0, 5001])(
       }
       await client.query(`INSERT INTO pharmacy_sale_lines
       (id, "organizationId", quantity, "unitPriceMinor", "proRataCeilingMinor", "unitCostMinor", "discountMinor", "grossMinor")
-      VALUES ('probe', 'b', 1, 100, 100, 1, 0, 100)`);
+      VALUES ('probe', 'b', 3, 100, 100, 1, 0, 250)`);
+      // The new app's explicit weighted gross must not be overwritten.
+      expect(
+        (await client.query('SELECT "grossMinor" FROM pharmacy_sale_lines WHERE id = $1', [
+          'probe',
+        ])).rows
+      ).toEqual([{ grossMinor: 250 }]);
+      // The predecessor is still serving during deployment and available for rollback.
+      await client.query(`INSERT INTO pharmacy_sale_lines
+      (id, "organizationId", quantity, "unitPriceMinor", "proRataCeilingMinor", "unitCostMinor", "discountMinor")
+      VALUES ('legacy', 'b', 3, 100, 100, 1, 0)`);
+      expect(
+        (await client.query('SELECT "grossMinor" FROM pharmacy_sale_lines WHERE id = $1', [
+          'legacy',
+        ])).rows
+      ).toEqual([{ grossMinor: 300 }]);
       // The role owns the table but cannot bypass FORCE RLS or the billed ceiling.
       await expect(
         client.query('UPDATE pharmacy_sale_lines SET "grossMinor" = 1000000 WHERE id = $1', [
@@ -77,10 +92,12 @@ it.skipIf(!ownerUrl).each([0, 5001])(
         client.query('UPDATE pharmacy_sale_lines SET "grossMinor" = NULL WHERE id = $1', ['probe'])
       ).rejects.toMatchObject({ code: '23502' });
       const functions = await client.query(
-        'SELECT count(*)::int AS count FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname=$1',
+        'SELECT p.proname, p.prokind FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname=$1',
         [name]
       );
-      expect(functions.rows[0].count).toBe(0);
+      expect(functions.rows).toEqual([
+        { proname: 'pharmacy_default_sale_line_gross_minor', prokind: 'f' },
+      ]);
     } finally {
       await client.query('RESET ROLE');
       await client.query('RESET search_path');

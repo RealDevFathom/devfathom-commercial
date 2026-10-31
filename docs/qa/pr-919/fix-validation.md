@@ -46,3 +46,22 @@ Running the whole existing finance-postings DB file also reproduced two unrelate
 witness but those fixtures do not provide one. The write-off implementation is
 identical to origin/develop and was not changed by this fix. No test or check was
 removed or weakened.
+
+## Follow-up to the failed review of f5930f8c1 (2026-11-01)
+
+- Retained the predecessor's gross fallback as an INSERT-only trigger after the
+  contract migration. Explicit weighted gross remains unchanged, and UPDATEs
+  still reject null gross. The migration regressions now cover both application
+  versions and require only the compatibility function to remain after cleanup.
+- Identified returns with zero gross, discount, and cost now post the same
+  balanced clearing marker used by unidentified returns. Added a mixed-lot DB
+  regression for a free zero-cost allocation, persisted stock restoration,
+  zero refundable value, and exactly one marker across retries.
+- Narrowed the concurrent tender result before reading `settled`, preserving
+  the assertion that both the original response and replay report settlement.
+
+No tests, builds, typechecks, lint, migrations, or security scans were run for
+this follow-up, as required by the strict review instructions. The supplied C
+report is evidence for f5930f8c1 only; verification of this commit is pending
+the checks machine. Its excluded refund-cap mock failure and unchanged storage
+build diagnostics were left outside this fix.

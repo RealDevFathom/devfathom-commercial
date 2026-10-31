@@ -306,6 +306,14 @@ export async function postSaleReturnEntry(
     locationId: returnLine.stockLocationId,
     sourceLineId: saleLine.id,
   };
+  const monetaryLines = nonZero([
+    { ...dimensions, accountCode: 'SALES_REVENUE', side: 'DEBIT', amountMinor: gross },
+    { ...dimensions, accountCode: 'SALES_CLEARING', side: 'CREDIT', amountMinor: gross },
+    { ...dimensions, accountCode: 'SALES_CLEARING', side: 'DEBIT', amountMinor: discount },
+    { ...dimensions, accountCode: 'SALES_DISCOUNT', side: 'CREDIT', amountMinor: discount },
+    { ...dimensions, accountCode: 'INVENTORY', side: 'DEBIT', amountMinor: cost },
+    { ...dimensions, accountCode: 'COST_OF_GOODS_SOLD', side: 'CREDIT', amountMinor: cost },
+  ]);
 
   return postJournalEntry(
     db,
@@ -317,19 +325,15 @@ export async function postSaleReturnEntry(
       occurredAt: input.at,
       idempotencyKey: postingKey('PHARMACY_SALE_RETURN_LINE', returnLine.id),
       branchId: returnLine.branchId,
-      lines: nonZero([
-        { ...dimensions, accountCode: 'SALES_REVENUE', side: 'DEBIT', amountMinor: gross },
-        { ...dimensions, accountCode: 'SALES_CLEARING', side: 'CREDIT', amountMinor: gross },
-        { ...dimensions, accountCode: 'SALES_CLEARING', side: 'DEBIT', amountMinor: discount },
-        { ...dimensions, accountCode: 'SALES_DISCOUNT', side: 'CREDIT', amountMinor: discount },
-        { ...dimensions, accountCode: 'INVENTORY', side: 'DEBIT', amountMinor: cost },
-        {
-          ...dimensions,
-          accountCode: 'COST_OF_GOODS_SOLD',
-          side: 'CREDIT',
-          amountMinor: cost,
-        },
-      ]),
+      // A free, zero-cost allocation still needs a durable posting receipt.
+      // Match unidentified returns with a balanced marker that changes no balance.
+      lines:
+        monetaryLines.length > 0
+          ? monetaryLines
+          : [
+              { ...dimensions, accountCode: 'SALES_CLEARING', side: 'DEBIT', amountMinor: 1 },
+              { ...dimensions, accountCode: 'SALES_CLEARING', side: 'CREDIT', amountMinor: 1 },
+            ],
     }
   );
 }

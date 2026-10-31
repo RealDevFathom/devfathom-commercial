@@ -50,7 +50,7 @@ beforeAll(async () => {
     ).id;
   });
 });
-async function cart(prices = [100, 200], quantities = [1, 1]) {
+async function cart(prices = [100, 200], quantities = [1, 1], costs = prices.map(() => 1)) {
   return tenant(async (db) => {
     const medicine = await db.medicine.create({
       data: {
@@ -93,7 +93,7 @@ async function cart(prices = [100, 200], quantities = [1, 1]) {
         unitsPerPack: 1,
         supplierName: 'QA',
         supplierInvoiceRef: randomUUID(),
-        unitCostMinor: 1,
+        unitCostMinor: costs[i]!,
         printedMrpMinor: prices[i]!,
         receivedExpiresAt: batch.expiresAt,
         receivedExpiryPrecision: 'DAY',
@@ -144,7 +144,7 @@ test('charges the weighted amount, completes once, freezes receipt identity, and
     tenant((db) => applyPharmacyTender(db, scope, input)),
     tenant((db) => applyPharmacyTender(db, scope, input)),
   ]);
-  expect(results.every((r) => r.settled)).toBe(true);
+  expect(results.every((r) => 'settled' in r && r.settled === true)).toBe(true);
   await tenant(async (db) => {
     const c = await readCounterCart(db, scope, f.sale.id);
     expect(c.totals.netMinor).toBe(301);
@@ -259,6 +259,70 @@ test.each([0, 1])(
     );
   }
 );
+test('restores a free zero-cost allocation and posts one balanced marker across retries', async () => {
+  const f = await cart([0, 200], [1, 1], [0, 1]);
+  await tenant((db) =>
+    applyPharmacyTender(db, scope, {
+      saleId: f.sale.id,
+      deviceId: randomUUID(),
+      businessDate: day,
+      type: 'BANK_TRANSFER',
+      amountMinor: 200,
+      idempotencyKey: randomUUID(),
+    })
+  );
+  const input = {
+    saleLineId: f.line.id,
+    lotId: f.lots[0]!.id,
+    canonicalUnits: 1,
+    disposition: 'RESTOCK' as const,
+    reason: 'Return free allocation',
+    integrityDecision: 'Sealed',
+    idempotencyKey: randomUUID(),
+  };
+  const returned = await tenant((db) => returnSaleLine(db, scope, input));
+  expect(returned.returnLine).toMatchObject({ grossMinor: 0, discountMinor: 0 });
+  const replay = await tenant((db) => returnSaleLine(db, scope, input));
+  expect(replay).toMatchObject({ returnId: returned.returnId, replayed: true });
+  await tenant(async (db) => {
+    const stock = await db.pharmacyStockBalance.findFirstOrThrow({
+      where: {
+        inventoryLotId: input.lotId,
+        stockLocationId: locationId,
+        disposition: 'AVAILABLE',
+      },
+    });
+    expect(stock.onHandUnits).toBe(1);
+    const entries = await db.financeJournalEntry.findMany({
+      where: {
+        sourceKind: 'PHARMACY_SALE_RETURN_LINE',
+        sourceId: returned.returnLine!.id,
+      },
+      include: { lines: true },
+    });
+    expect(entries).toHaveLength(1);
+    expect(entries[0]!.lines).toHaveLength(2);
+    expect(entries[0]!.lines).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          accountCode: 'SALES_CLEARING',
+          side: 'DEBIT',
+          amountMinor: 1,
+          lotId: input.lotId,
+          sourceLineId: f.line.id,
+        }),
+        expect.objectContaining({
+          accountCode: 'SALES_CLEARING',
+          side: 'CREDIT',
+          amountMinor: 1,
+          lotId: input.lotId,
+          sourceLineId: f.line.id,
+        }),
+      ])
+    );
+    expect((await readReturnHistory(db, scope, f.sale.id)).refundableMinor).toBe(0);
+  });
+});
 test('enforces an upper MRP bound on the new billed gross in PostgreSQL', async () => {
   const f = await cart([100], [1]);
   await expect(
