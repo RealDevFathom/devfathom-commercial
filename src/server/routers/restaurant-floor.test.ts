@@ -9,7 +9,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
-  can: vi.fn(async () => true),
+  can: vi.fn<typeof import('@/lib/abac').can>(async () => true),
   annotateAudit: vi.fn(),
   // floor lib
   createFloor: vi.fn(),
