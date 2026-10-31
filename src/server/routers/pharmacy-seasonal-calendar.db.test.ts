@@ -307,6 +307,17 @@ describe.skipIf(!TEST_DATABASE_URL)('seasonal calendar PostgreSQL regressions', 
     }
   });
 
+  it('returns NOT_FOUND when deleting a missing window', async () => {
+    await expect(
+      call('deleteSeasonalWindow', {
+        branchId: branch,
+        id: `${prefix}_missing`,
+        confirmationPin: pin,
+      })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    await audit.flushAuditWritesForTest();
+  });
+
   it('can save a valid owner window', async () => {
     const saved = (await call('saveSeasonalWindow', data)) as { id: string };
     expect(saved).toMatchObject({ branchId: branch, name: 'Season' });

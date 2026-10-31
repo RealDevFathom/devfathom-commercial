@@ -13,12 +13,12 @@ CREATE TABLE "pharmacy_seasonal_calendar_windows" (
   "updatedAt" TIMESTAMP(3) NOT NULL,
   CONSTRAINT "pharmacy_seasonal_calendar_windows_pkey" PRIMARY KEY ("id"),
   CONSTRAINT "pharmacy_seasonal_calendar_dates_check" CHECK ("endDate" >= "startDate"),
-  CONSTRAINT "pharmacy_seasonal_calendar_branch_fkey" FOREIGN KEY ("organizationId", "branchId")
+  CONSTRAINT "pharmacy_seasonal_calendar_windows_organizationId_branchId_fkey" FOREIGN KEY ("organizationId", "branchId")
     REFERENCES "pharmacy_branches" ("organizationId", "id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 CREATE UNIQUE INDEX "pharmacy_seasonal_calendar_windows_organizationId_id_key"
   ON "pharmacy_seasonal_calendar_windows" ("organizationId", "id");
-CREATE INDEX "pharmacy_seasonal_calendar_windows_organizationId_branchId_startDate_endDate_idx"
+CREATE INDEX "pharmacy_seasonal_calendar_windows_organizationId_branchId__idx"
   ON "pharmacy_seasonal_calendar_windows" ("organizationId", "branchId", "startDate", "endDate");
 
 ALTER TABLE "pharmacy_seasonal_calendar_windows" ENABLE ROW LEVEL SECURITY;

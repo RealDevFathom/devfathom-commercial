@@ -34,6 +34,7 @@ export async function readSeasonalSalesForecast(
   });
   const saltIds = [...new Set(strengths.map((strength) => strength.ingredientId))];
   const dailySales = new Map<string, Map<string, number>>();
+  let rowLimitExceeded = false;
   if (saltIds.length) {
     const lines = await db.pharmacySaleLine.findMany({
       where: {
@@ -71,9 +72,9 @@ export async function readSeasonalSalesForecast(
       orderBy: { id: 'asc' },
       take: 10_001,
     });
-    if (lines.length > 10_000)
-      throw new RangeError('Seasonal sales row limit exceeded; narrow the history.');
-    for (const line of lines) {
+    // Busy branches degrade to "no seasonal adjustment" instead of failing the whole report.
+    rowLimitExceeded = lines.length > 10_000;
+    for (const line of rowLimitExceeded ? [] : lines) {
       if (!line.sale.completedAt) continue;
       for (const saltId of new Set(
         line.medicine.strengths.map((strength) => strength.ingredientId)
@@ -144,6 +145,11 @@ export async function readSeasonalSalesForecast(
       'Salt signals aggregate recorded canonical sales units across medicines containing that ingredient; they do not estimate ingredient mass or therapeutic equivalence.',
       'Calendar factors use only recorded event and non-event days before origin. Spikes expire after seven UTC days. Multiple salt signals use the largest supported factor.',
       'Current records and calendars cannot establish historical versions or backtest eligibility. No orders or approval changes are created.',
+      ...(rowLimitExceeded
+        ? [
+            'Salt sales history exceeded the 10,000-line read limit, so no learned uplift or spike adjustment was applied.',
+          ]
+        : []),
     ],
   };
 }

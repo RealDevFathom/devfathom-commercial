@@ -211,8 +211,16 @@ export function learnCalendarUplift(input: {
   const eventUnits = ownHistory
     .filter((day) => active.startDate <= day.date && day.date <= active.endDate)
     .map((day) => day.units);
+  // Baseline days exclude every enabled branch window, not only the active one, so other
+  // events do not inflate the baseline and understate this window's uplift.
+  const branchWindows = input.calendar.filter(
+    (window) => window.enabled && window.branchId === input.branchId
+  );
   const baselineUnits = ownHistory
-    .filter((day) => day.date < active.startDate || day.date > active.endDate)
+    .filter(
+      (day) =>
+        !branchWindows.some((window) => window.startDate <= day.date && day.date <= window.endDate)
+    )
     .map((day) => day.units);
   if (
     eventUnits.length < config.minimumEventDays ||
@@ -300,8 +308,11 @@ export function seasonalForecastAdjustment(context: SeasonalForecastContext, fal
     })
     .at(-1);
   const calendarBps = learnedUplift?.upliftBps ?? fallbackBps;
+  // Spike ratios share the calendar uplift ceiling so one outlier day cannot multiply the
+  // forecast unboundedly (or overflow downstream integer arithmetic).
+  const maximumBps = (context.config ?? DEFAULT_SEASONAL_LEARNING_CONFIG).maximumUpliftBps;
   const seasonalityBps = detectedSpike
-    ? Math.max(calendarBps, detectedSpike.ratioBps)
+    ? Math.max(calendarBps, Math.min(maximumBps, detectedSpike.ratioBps))
     : calendarBps;
   return { seasonalityBps, learnedUplift, detectedSpike: detectedSpike ?? null };
 }

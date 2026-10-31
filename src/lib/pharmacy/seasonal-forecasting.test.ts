@@ -3,6 +3,7 @@ import {
   detectSalesSpikes,
   learnCalendarUplift,
   removeSeasonalWindow,
+  seasonalForecastAdjustment,
   upsertSeasonalWindow,
   type SaltSalesDay,
   type SeasonalCalendarWindow,
@@ -137,5 +138,51 @@ describe('branch and salt sales spike detection', () => {
         minimumUnits: 0,
       })
     ).toThrow(/configuration/);
+  });
+});
+
+describe('seasonal forecast adjustment bounds', () => {
+  it('caps an outlier spike at the calendar uplift ceiling', () => {
+    const history = [
+      ...baseline,
+      { branchId: 'branch-a', saltId: 'salt-a', date: '2026-06-11', units: 5_000 },
+    ];
+    const result = seasonalForecastAdjustment({
+      branchId: 'branch-a',
+      saltId: 'salt-a',
+      forecastDate: '2026-06-12',
+      calendar: [],
+      history,
+    });
+    expect(result.detectedSpike?.ratioBps).toBe(5_000_000);
+    expect(result.seasonalityBps).toBe(30_000);
+  });
+
+  it('excludes other enabled event windows from the learning baseline', () => {
+    const earlier: SeasonalCalendarWindow = {
+      ...window,
+      id: 'earlier',
+      startDate: '2026-06-01',
+      endDate: '2026-06-03',
+    };
+    const history: SaltSalesDay[] = [
+      ...baseline.map((day, index) => (index < 3 ? { ...day, units: 40 } : day)),
+      ...Array.from({ length: 5 }, (_, index) => ({
+        branchId: 'branch-a',
+        saltId: 'salt-a',
+        date: `2026-06-${String(index + 11).padStart(2, '0')}`,
+        units: 10,
+      })),
+      { branchId: 'branch-a', saltId: 'salt-a', date: '2026-07-01', units: 20 },
+      { branchId: 'branch-a', saltId: 'salt-a', date: '2026-07-02', units: 20 },
+    ];
+    const learned = learnCalendarUplift({
+      branchId: 'branch-a',
+      saltId: 'salt-a',
+      forecastDate: '2026-07-03',
+      calendar: [earlier, window],
+      history,
+    });
+    expect(learned).toMatchObject({ baselineDays: 12, baselineMeanUnits: 10, upliftBps: 20_000 });
   });
 });

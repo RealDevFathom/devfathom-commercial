@@ -140,7 +140,9 @@ export async function readPharmacyReplenishmentReport(
         days: baseForecast.days.map((day, index) => {
           if (day.units === null) return day;
           const factor = seasonalForecast.adjustments[index]!.seasonalityBps;
-          const units = Number((BigInt(day.units) * BigInt(factor) + 9_999n) / 10_000n);
+          const units = Number(
+            (BigInt(day.units) * BigInt(factor) + BigInt(9_999)) / BigInt(10_000)
+          );
           if (!Number.isSafeInteger(units))
             throw new RangeError('Seasonal forecast exceeds safe units.');
           return { ...day, units };

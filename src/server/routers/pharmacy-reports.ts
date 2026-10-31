@@ -221,6 +221,7 @@ export const pharmacyReportsRouter = router({
     .input(z.object({ branchId: z.string().trim().min(1).max(128) }).strict())
     .query(async ({ ctx, input }) => {
       await requireOwnerBranch(ctx, input.branchId);
+      await requireFinancialReports(ctx);
       return ctx.db.pharmacySeasonalCalendarWindow.findMany({
         where: { organizationId: ctx.entitlements.organizationId, branchId: input.branchId },
         orderBy: [{ startDate: 'asc' }, { id: 'asc' }],
@@ -317,8 +318,8 @@ export const pharmacyReportsRouter = router({
     .input(
       z
         .object({
-          branchId: z.string().min(1),
-          id: z.string().min(1),
+          branchId: z.string().trim().min(1).max(128),
+          id: z.string().trim().min(1).max(128),
           confirmationPin: z.string().regex(/^\d{4,12}$/),
         })
         .strict()
@@ -336,6 +337,15 @@ export const pharmacyReportsRouter = router({
       await requireOwnerBranch(ctx, input.branchId);
       await requireFinancialReports(ctx);
       await confirmOwnerPin(ctx, input.confirmationPin);
+      const existing = await ctx.db.pharmacySeasonalCalendarWindow.findFirst({
+        where: {
+          id: input.id,
+          organizationId: ctx.entitlements.organizationId,
+          branchId: input.branchId,
+        },
+        select: { id: true },
+      });
+      if (!existing) throw new TRPCError({ code: 'NOT_FOUND', message: 'Window not found.' });
       const removed = await ctx.db.pharmacySeasonalCalendarWindow.delete({
         where: {
           organizationId_id: { organizationId: ctx.entitlements.organizationId, id: input.id },
