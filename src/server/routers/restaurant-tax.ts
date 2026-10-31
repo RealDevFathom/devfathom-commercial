@@ -231,7 +231,7 @@ export const restaurantTaxRouter = router({
               officialSource: { select: { documentTitle: true, sourceUrl: true } },
             },
           },
-          branch: { select: { name: true } },
+          branch: { select: { name: true, timezone: true } },
         },
         orderBy: { effectiveFrom: 'desc' },
       }),
