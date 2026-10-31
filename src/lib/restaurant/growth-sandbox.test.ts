@@ -183,31 +183,54 @@ it('requires current review evidence even with persisted draft', async () => {
   });
   expect(write).not.toHaveBeenCalled();
 });
-it('normalizes STOP into existing withdrawn consent ledger', async () => {
-  await stopRestaurantGrowthSandbox(
-    h,
-    { branchId: 'b', customerId: 'c1', eventId: input.requestId, text: ' stop ' },
-    policy
-  );
-  expect(mocks.consent).toHaveBeenCalledWith(
-    expect.anything(),
-    expect.objectContaining({
-      channel: 'WHATSAPP',
-      granted: false,
-      source: 'TEST_SANDBOX_STOP',
-      idempotencyKey: 'restaurant-growth-stop:' + input.requestId,
-    })
-  );
-});
-it('does not accept an arbitrary inbound message', async () => {
+it.each([' stop ', 'STOP', '\nStOp\t', 'ＳＴＯＰ', ' بند '])(
+  'withdraws consent for %j and confirms with exactly one English line',
+  async (text) => {
+    const result = await stopRestaurantGrowthSandbox(
+      h,
+      { branchId: 'b', customerId: 'c1', eventId: input.requestId, text },
+      policy
+    );
+    expect(mocks.consent).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        channel: 'WHATSAPP',
+        granted: false,
+        source: 'TEST_SANDBOX_STOP',
+        actorId: 'u',
+        policyVersion: 'TEST_V1',
+        idempotencyKey: 'restaurant-growth-stop:' + input.requestId,
+      })
+    );
+    expect(result.confirmation).toBe(
+      'You will no longer receive WhatsApp growth messages. Reply START to opt back in.'
+    );
+    expect(result.confirmation).not.toContain('\n');
+  }
+);
+it.each(['subscribe', 'بند کریں', '', '   '])(
+  'does not accept inbound message %j',
+  async (text) => {
+    await expect(
+      stopRestaurantGrowthSandbox(
+        h,
+        { branchId: 'b', customerId: 'c1', eventId: input.requestId, text },
+        policy
+      )
+    ).rejects.toMatchObject({ code: 'INVALID' });
+    expect(mocks.consent).not.toHaveBeenCalled();
+  }
+);
+it('rejects STOP when consent withdrawal cannot be persisted', async () => {
+  const failure = new Error('Consent write failed');
+  mocks.consent.mockRejectedValueOnce(failure);
   await expect(
     stopRestaurantGrowthSandbox(
       h,
-      { branchId: 'b', customerId: 'c1', eventId: input.requestId, text: 'subscribe' },
+      { branchId: 'b', customerId: 'c1', eventId: input.requestId, text: 'STOP' },
       policy
     )
-  ).rejects.toMatchObject({ code: 'INVALID' });
-  expect(mocks.consent).not.toHaveBeenCalled();
+  ).rejects.toBe(failure);
 });
 it('diagnostic keeps costs and money unknown and predicates exact receipt lineage', async () => {
   const result = await diagnoseRestaurantGrowthSandbox(

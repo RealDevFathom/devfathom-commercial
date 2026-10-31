@@ -228,18 +228,29 @@ describe('handleInboundWhatsAppMessage consent gate', () => {
     expect(provider.calls).toEqual([]);
   });
 
-  it('STOP opts the customer out and later orders are not answered', async () => {
-    knownCustomer(true);
-    await expect(handleInboundWhatsAppMessage('org_a', provider, message('STOP'))).resolves.toBe(
-      'OPTED_OUT'
-    );
-    expect(store.customers[0]).toMatchObject({ whatsappOptIn: false });
-    expect(provider.calls).toHaveLength(1);
-    await expect(
-      handleInboundWhatsAppMessage('org_a', provider, message('Panadol 2 packs'))
-    ).resolves.toBe('NO_CONSENT');
-    expect(provider.calls).toHaveLength(1);
-  });
+  it.each(['STOP', 'بند'])(
+    '%s opts the customer out, sends the bilingual reply, and suppresses later orders',
+    async (text) => {
+      knownCustomer(true);
+      await expect(handleInboundWhatsAppMessage('org_a', provider, message(text))).resolves.toBe(
+        'OPTED_OUT'
+      );
+      expect(store.customers[0]).toMatchObject({ whatsappOptIn: false });
+      expect(provider.calls).toEqual([
+        {
+          kind: 'text',
+          to: FROM,
+          body:
+            'You will no longer receive WhatsApp messages from this pharmacy. Reply START to opt back in.\n' +
+            'آپ کو اب اس فارمیسی سے واٹس ایپ پیغامات نہیں ملیں گے۔ دوبارہ شروع کرنے کے لیے START لکھیں۔',
+        },
+      ]);
+      await expect(
+        handleInboundWhatsAppMessage('org_a', provider, message('Panadol 2 packs'))
+      ).resolves.toBe('NO_CONSENT');
+      expect(provider.calls).toHaveLength(1);
+    }
+  );
 
   it('Urdu STOP and START toggle the flag', async () => {
     knownCustomer(null);
