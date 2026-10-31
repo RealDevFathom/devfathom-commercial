@@ -602,6 +602,9 @@ export async function reviewMenuImportLine(
       importId: true,
       extractedProductName: true,
       extractedPriceAmount: true,
+      extractedCurrency: true,
+      reviewedPriceAmount: true,
+      reviewedCurrency: true,
       import: { select: { status: true } },
     },
   });
@@ -630,6 +633,28 @@ export async function reviewMenuImportLine(
         throw new MenuImportError('The price must be a positive decimal amount.', 'INVALID');
       }
       priceAmount = new Prisma.Decimal(input.priceAmount.trim());
+    }
+  }
+
+  // An amount is confirmed in a specific currency. When this review changes the
+  // line's currency without supplying a genuinely new amount (omitted, or the
+  // same figure that was already on the line, e.g. the editor's prepopulated
+  // value), the earlier amount is a relabel, not a conversion. Drop the reviewed
+  // amount so commit falls back to the extracted figure and its currency checks,
+  // which demand a fresh conversion for a foreign price.
+  const previousCurrency = (line.reviewedCurrency ?? line.extractedCurrency)?.toUpperCase() ?? null;
+  const nextCurrency =
+    currency === undefined
+      ? previousCurrency
+      : (currency ?? line.extractedCurrency?.toUpperCase() ?? null);
+  if (nextCurrency !== previousCurrency) {
+    const previousAmount = line.reviewedPriceAmount ?? line.extractedPriceAmount;
+    const isFreshAmount =
+      priceAmount !== undefined &&
+      priceAmount !== null &&
+      (previousAmount === null || !priceAmount.equals(previousAmount));
+    if (!isFreshAmount) {
+      priceAmount = null;
     }
   }
 

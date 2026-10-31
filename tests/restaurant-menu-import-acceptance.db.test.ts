@@ -546,6 +546,63 @@ describeIfDatabase('WHA-194 menu import acceptance (real PostgreSQL)', () => {
         currency: 'PKR',
       });
       await expect(commit()).rejects.toMatchObject({ reason: 'CURRENCY_MISMATCH' });
+
+      // Re-submitting the extracted figure with a new currency is still a relabel.
+      await deps.menuImport.reviewMenuImportLine(dbA, {
+        lineId: foreignLine.id,
+        decision: 'ACCEPTED',
+        reviewedById: userA,
+        priceAmount: foreignLine.extractedPriceAmount!.toString(),
+        currency: 'PKR',
+      });
+      await expect(commit()).rejects.toMatchObject({ reason: 'CURRENCY_MISMATCH' });
+
+      // Sequential review: confirm the amount in the foreign currency, then change
+      // only the currency (omitted amount, and the editor's prepopulated amount).
+      // Neither turns the foreign figure into a local price.
+      for (const relabel of [{}, { priceAmount: '13' }]) {
+        await deps.menuImport.reviewMenuImportLine(dbA, {
+          lineId: foreignLine.id,
+          decision: 'ACCEPTED',
+          reviewedById: userA,
+          priceAmount: '13',
+          currency,
+        });
+        await deps.menuImport.reviewMenuImportLine(dbA, {
+          lineId: foreignLine.id,
+          decision: 'ACCEPTED',
+          reviewedById: userA,
+          currency: 'PKR',
+          ...relabel,
+        });
+        const relabelled = await dbA.restaurantMenuImportLine.findUniqueOrThrow({
+          where: { id: foreignLine.id },
+        });
+        expect(relabelled.reviewedCurrency).toBe('PKR');
+        expect(relabelled.reviewedPriceAmount).toBeNull();
+        await expect(commit()).rejects.toMatchObject({ reason: 'CURRENCY_MISMATCH' });
+      }
+
+      // The same holds for a merged row.
+      const [mergeTarget] = await dbA.restaurantProduct.findMany({ take: 1, select: { id: true } });
+      if (mergeTarget) {
+        await deps.menuImport.reviewMenuImportLine(dbA, {
+          lineId: foreignLine.id,
+          decision: 'MERGED',
+          reviewedById: userA,
+          mergeProductId: mergeTarget.id,
+          priceAmount: '13',
+          currency,
+        });
+        await deps.menuImport.reviewMenuImportLine(dbA, {
+          lineId: foreignLine.id,
+          decision: 'MERGED',
+          reviewedById: userA,
+          mergeProductId: mergeTarget.id,
+          currency: 'PKR',
+        });
+        await expect(commit()).rejects.toMatchObject({ reason: 'CURRENCY_MISMATCH' });
+      }
       expect(await dbA.restaurantProduct.count()).toBe(productsBefore);
       expect(await dbA.restaurantMenu.count()).toBe(menusBefore);
       expect(await dbA.restaurantPriceListVersion.count()).toBe(versionsBefore);
