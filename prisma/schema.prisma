@@ -6804,6 +6804,7 @@ model RestaurantOrder {
 
   @@unique([branchId, businessDate, orderNumber])
   @@unique([organizationId, branchId, id])
+  @@index([branchId, businessDate, status])
   @@index([organizationId])
   @@index([branchId])
   @@index([status])
