@@ -519,7 +519,7 @@ export const financeRouter = router({
       const prior = current.status;
       const next = input.status;
 
-      const transitionError = invoiceStatusTransitionError(prior, next);
+      const transitionError = invoiceStatusTransitionError(prior, next, { recordsPayment: true });
       if (transitionError) {
         throw new TRPCError({
           code: 'BAD_REQUEST',
@@ -533,6 +533,68 @@ export const financeRouter = router({
           where: { id: input.id },
           include: { client: { select: { name: true } } },
         });
+      }
+
+      // Marking an issued invoice paid must also settle its ledger balance. Keep
+      // the balancing payment and status compare-and-set in one transaction so
+      // readers can never observe PAID with an outstanding balance.
+      if (next === 'PAID') {
+        const paid = await ctx.db.$transaction(async (tx) => {
+          // Payment additions/deletions take this same lock before reading the
+          // ledger, so a concurrent partial payment cannot stale the balance.
+          await tx.$queryRaw`SELECT id FROM invoices WHERE id = ${input.id} FOR UPDATE`;
+          const invoice = await tx.invoice.findUnique({
+            where: { id: input.id },
+            select: { id: true, total: true, currency: true },
+          });
+          if (!invoice) throw new TRPCError({ code: 'NOT_FOUND', message: 'Invoice not found' });
+
+          const priorPayments = await tx.payment.aggregate({
+            where: { invoiceId: invoice.id },
+            _sum: { amount: true },
+          });
+          const balance = round2(Number(invoice.total) - Number(priorPayments._sum.amount ?? 0));
+          const changedAt = new Date();
+          const changed = await tx.invoice.updateMany({
+            where: { id: invoice.id, status: prior },
+            data: { ...invoiceStatusUpdate(prior, next, changedAt), paidAt: changedAt },
+          });
+          if (changed.count !== 1) {
+            throw new TRPCError({
+              code: 'CONFLICT',
+              message: 'Invoice status changed concurrently. Refresh and try again.',
+            });
+          }
+          if (balance > PAYMENT_EPSILON) {
+            await tx.payment.create({
+              data: {
+                invoiceId: invoice.id,
+                amount: balance,
+                currency: invoice.currency,
+                method: 'Manual status update',
+              },
+            });
+          }
+          return tx.invoice.findUniqueOrThrow({
+            where: { id: invoice.id },
+            include: { client: { select: { name: true } } },
+          });
+        });
+
+        // Mirror addPayment: announce settlement only after the transaction commits.
+        emitEvent(ctx.db, ctx.entitlements, 'invoice.paid', {
+          invoiceId: paid.id,
+          total: round2(Number(paid.total)),
+          currency: paid.currency,
+          clientId: paid.clientId,
+        });
+        logActivity(ctx.db, ctx.session.user.id, {
+          type: 'invoice_paid',
+          message: `marked invoice ${paid.invoiceNumber} paid (${paid.client.name})`,
+          entityType: 'Invoice',
+          entityId: paid.id,
+        });
+        return paid;
       }
 
       const changed = await ctx.db.invoice.updateMany({

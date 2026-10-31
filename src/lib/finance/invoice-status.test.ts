@@ -12,6 +12,22 @@ describe('invoice status contract shared by REST, tRPC, and AI', () => {
     (prior) => expect(invoiceStatusTransitionError(prior, 'PAID')).toBe(PAID_STATUS_ERROR)
   );
 
+  it.each(['SENT', 'OVERDUE', 'PAID'] as const)(
+    'allows PAID from %s only for callers that settle the ledger',
+    (prior) => {
+      expect(invoiceStatusTransitionError(prior, 'PAID', { recordsPayment: true })).toBeNull();
+    }
+  );
+
+  it.each(['DRAFT', 'CANCELLED'] as const)(
+    'rejects settlement of an unissued %s invoice',
+    (prior) => {
+      expect(invoiceStatusTransitionError(prior, 'PAID', { recordsPayment: true })).toBe(
+        `Cannot change an invoice from ${prior} to PAID.`
+      );
+    }
+  );
+
   it.each([
     ['DRAFT', 'SENT'],
     ['DRAFT', 'CANCELLED'],

@@ -53,6 +53,10 @@ export function InvoicesTab() {
       }
     },
     onSettled: () => {
+      // The optimistic patch only flips `status`; the server may also record a
+      // balancing payment (Mark paid) and stamp paidAt/sentAt, which the payments
+      // panel reads from this same cache. Reconcile it with the server.
+      utils.finance.getInvoices.invalidate();
       utils.finance.getFinancialSummary.invalidate();
     },
   });

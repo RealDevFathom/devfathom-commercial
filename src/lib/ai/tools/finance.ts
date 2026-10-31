@@ -18,11 +18,9 @@ import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
 import type { AssistantHelpers, ToolSet } from '@/lib/ai/context';
 import { fromCurrencyGroups, diffByCurrency } from '@/lib/finance/currency';
-import {
-  invoiceStatusTransitionError,
-  invoiceStatusUpdate,
-  PAID_STATUS_ERROR,
-} from '@/lib/finance/invoice-status';
+import { invoiceStatusTransitionError, invoiceStatusUpdate } from '@/lib/finance/invoice-status';
+import { resolveOrganizationEntitlements } from '@/lib/entitlements';
+import { emitEvent } from '@/lib/webhooks';
 
 // Money columns are Decimal(12,2) — Postgres caps a value at 9,999,999,999.99.
 // Bound amounts here so an oversized input is a clean validation error, not a
@@ -569,7 +567,7 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
 
   tools.updateInvoiceStatus = tool({
     description:
-      "Change an invoice's status to SENT, OVERDUE, CANCELLED or back to DRAFT. Identify it by invoice number. Payments must be recorded with the payment tool; this tool cannot mark an invoice PAID. ADMIN ONLY.",
+      "Change an invoice's status to SENT, PAID, OVERDUE, CANCELLED or back to DRAFT. Marking it PAID records a balancing payment. Identify it by invoice number. ADMIN ONLY.",
     inputSchema: z.object({
       invoiceNumber: z.string().describe('Invoice number, e.g. "INV-2026-003"'),
       status: z.enum(['DRAFT', 'SENT', 'PAID', 'OVERDUE', 'CANCELLED']),
@@ -590,8 +588,6 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
         };
       const priorStatus = matches[0].status;
 
-      if (status === 'PAID') return { error: PAID_STATUS_ERROR };
-
       // FIN-06: no-op → don't re-stamp or re-fire side-effects.
       if (priorStatus === status) {
         return {
@@ -601,10 +597,88 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
         };
       }
       // FIN-06: enforce the status state-machine.
-      const transitionError = invoiceStatusTransitionError(priorStatus, status);
+      const transitionError = invoiceStatusTransitionError(priorStatus, status, {
+        recordsPayment: true,
+      });
       if (transitionError) {
         return {
           error: transitionError,
+        };
+      }
+
+      if (status === 'PAID') {
+        const invoice = await db.$transaction(async (tx) => {
+          // Share the invoice lock with payment entry/removal before summing.
+          await tx.$queryRaw`SELECT id FROM invoices WHERE id = ${matches[0].id} FOR UPDATE`;
+          const current = await tx.invoice.findUnique({
+            where: { id: matches[0].id },
+            select: { id: true, total: true, currency: true },
+          });
+          if (!current) return null;
+          const priorPayments = await tx.payment.aggregate({
+            where: { invoiceId: current.id },
+            _sum: { amount: true },
+          });
+          const balance = round2(Number(current.total) - Number(priorPayments._sum.amount ?? 0));
+          const changedAt = now();
+          const changed = await tx.invoice.updateMany({
+            where: { id: current.id, status: priorStatus },
+            data: { ...invoiceStatusUpdate(priorStatus, status, changedAt), paidAt: changedAt },
+          });
+          if (changed.count !== 1) return null;
+          if (balance > 0.005) {
+            await tx.payment.create({
+              data: {
+                invoiceId: current.id,
+                amount: balance,
+                currency: current.currency,
+                method: 'Manual status update',
+              },
+            });
+          }
+          return tx.invoice.findUniqueOrThrow({
+            where: { id: current.id },
+            include: { client: { select: { name: true } } },
+          });
+        });
+        if (!invoice)
+          return { error: 'Invoice status changed concurrently. Refresh and try again.' };
+
+        h.audit({
+          category: 'FINANCE',
+          action: 'update_invoice_status',
+          operation: 'UPDATE',
+          description: `Set invoice ${invoice.invoiceNumber} to ${status}`,
+          targetType: 'Invoice',
+          targetId: invoice.id,
+          targetLabel: invoice.invoiceNumber,
+          changes: { status: { before: priorStatus, after: status } },
+        });
+        h.activity({
+          type: 'invoice_paid',
+          message: `marked invoice ${invoice.invoiceNumber} paid (${invoice.client.name})`,
+          entityType: 'Invoice',
+          entityId: invoice.id,
+        });
+        // Mirror the tRPC paths: announce settlement only after the transaction
+        // commits. A webhook lookup failure must never undo the recorded payment.
+        try {
+          const entitlements = await resolveOrganizationEntitlements(h.ctx.organizationId, h.db);
+          emitEvent(h.db, entitlements, 'invoice.paid', {
+            invoiceId: invoice.id,
+            total: round2(Number(invoice.total)),
+            currency: invoice.currency,
+            clientId: invoice.clientId,
+          });
+        } catch (err) {
+          console.error('[assistant] invoice.paid webhook skipped', err);
+        }
+        return {
+          invoiceNumber: invoice.invoiceNumber,
+          client: invoice.client.name,
+          status: invoice.status,
+          paidAt: invoice.paidAt,
+          sentAt: invoice.sentAt,
         };
       }
 
