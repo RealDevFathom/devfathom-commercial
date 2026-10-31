@@ -6726,9 +6726,9 @@ model RestaurantPrintJob {
   @@map("restaurant_print_jobs")
 }
 
-/// M4: a routing rule targeting a station. Exactly one of `productId` or
-/// `categoryId` is set (a CHECK enforces the XOR in the migration). Resolution is
-/// most-specific-wins (product rule > category rule > branch default) with
+/// M4: a routing rule targeting a station. Exactly one of `productId`,
+/// `categoryId`, or `course` is set (a CHECK enforces the XOR in the migration). Resolution is
+/// most-specific-wins (product rule > category rule > course rule > branch default) with
 /// `priority` breaking ties within a level (src/lib/restaurant/station-routing.ts).
 model RestaurantStationRoutingRule {
   id             String   @id @default(cuid())
@@ -6736,6 +6736,7 @@ model RestaurantStationRoutingRule {
   stationId      String
   productId      String?
   categoryId     String?
+  course         Int?
   priority       Int      @default(0)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
@@ -6748,6 +6749,7 @@ model RestaurantStationRoutingRule {
   @@index([stationId])
   @@index([productId])
   @@index([categoryId])
+  @@index([course])
   @@map("restaurant_station_routing_rules")
 }
 
