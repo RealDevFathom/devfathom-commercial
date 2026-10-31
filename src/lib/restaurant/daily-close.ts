@@ -399,10 +399,16 @@ async function persistClose(
 /** Guard: a close can only be cut/corrected when every bill and billable order
  * for the date is resolved and every drawer session is CLOSED (C9). */
 function assertReadyToClose(loaded: LoadedInputs): void {
-  if (loaded.openBillCount > 0 || loaded.unresolvedOrderCount > 0) {
+  if (loaded.openBillCount > 0) {
     throw new DailyCloseError(
-      'The business day has unsettled bills or active orders; resolve them before closing.',
+      'The business day has unsettled bills; settle or void every bill before closing.',
       'UNSETTLED_BILL'
+    );
+  }
+  if (loaded.unresolvedOrderCount > 0) {
+    throw new DailyCloseError(
+      'The business day has active orders; resolve them before closing.',
+      'ACTIVE_ORDERS'
     );
   }
   if (loaded.openDrawerCount > 0) {

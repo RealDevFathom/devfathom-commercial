@@ -455,7 +455,7 @@ describeIfDatabase('orders command layer (real DB)', () => {
     expect(outcomes.filter((outcome) => outcome.status === 'rejected')).toHaveLength(1);
     const rejected = outcomes.find((outcome) => outcome.status === 'rejected');
     expect(rejected).toMatchObject({
-      reason: expect.objectContaining({ reason: expect.stringMatching(/DAY_CLOSED|UNSETTLED_BILL/) }),
+      reason: expect.objectContaining({ reason: expect.stringMatching(/DAY_CLOSED|ACTIVE_ORDERS/) }),
     });
   });
 

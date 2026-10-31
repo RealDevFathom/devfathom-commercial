@@ -484,6 +484,7 @@ export function moneyErrorResponse(err: unknown): NextResponse | null {
     const notFound = err.reason === 'CLOSE_NOT_FOUND';
     const conflict =
       err.reason === 'UNSETTLED_BILL' ||
+      err.reason === 'ACTIVE_ORDERS' ||
       err.reason === 'OPEN_DRAWER' ||
       err.reason === 'CLOSE_EXISTS' ||
       err.reason === 'NOTHING_TO_CORRECT' ||

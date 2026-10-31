@@ -10,6 +10,7 @@ import {
   moneyErrorResponse,
 } from './checkout-routes';
 import { OrderCommandError } from './orders';
+import { DailyCloseError } from './daily-close-errors';
 import { quoteOpenBillSettlement } from './tenders';
 
 vi.mock('./bills', async (importOriginal) => ({
@@ -275,6 +276,22 @@ describe('order command error responses', () => {
     expect(response.status).toBe(409);
     expect(await response.json()).toEqual({
       error: 'This business day is closed; no order can be opened.',
+    });
+  });
+});
+
+describe('daily close error responses', () => {
+  it('reports active orders as a conflict', async () => {
+    const response = moneyErrorResponse(
+      new DailyCloseError(
+        'The business day has active orders; resolve them before closing.',
+        'ACTIVE_ORDERS'
+      )
+    )!;
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: 'The business day has active orders; resolve them before closing.',
     });
   });
 });
