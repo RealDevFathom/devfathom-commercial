@@ -21,6 +21,7 @@ import {
 } from '@/lib/restaurant/job-runner';
 
 type Row = Record<string, unknown>;
+const FIELD_MAX_ATTEMPTS = Symbol('RestaurantJob.maxAttempts');
 
 function applyData(target: Row, data: Row): void {
   for (const [key, value] of Object.entries(data)) {
@@ -42,7 +43,14 @@ function applyData(target: Row, data: Row): void {
 function matchWhere(row: Row, where: Row): boolean {
   for (const [key, cond] of Object.entries(where)) {
     if (cond && typeof cond === 'object' && !(cond instanceof Date)) {
-      if ('lt' in cond) {
+      if ('gte' in cond) {
+        const compared = cond.gte === FIELD_MAX_ATTEMPTS ? row.maxAttempts : cond.gte;
+        if (!((row[key] as number) >= (compared as number))) return false;
+      } else if ('lt' in cond) {
+        if (cond.lt === FIELD_MAX_ATTEMPTS) {
+          if (!((row[key] as number) < (row.maxAttempts as number))) return false;
+          continue;
+        }
         const current = row[key] as Date | null | undefined;
         if (!(current instanceof Date) || !(current < (cond as { lt: Date }).lt)) return false;
       } else if ('not' in cond) {
@@ -67,6 +75,7 @@ function createJobDb(seed: Row[] = []) {
   for (const row of seed) jobs.set(row.id as string, { ...row });
 
   const restaurantJob = {
+    fields: { maxAttempts: FIELD_MAX_ATTEMPTS },
     findUnique: async ({ where }: { where: { id: string } }) => {
       const row = jobs.get(where.id);
       return row ? { ...row } : null;
@@ -323,6 +332,42 @@ describe('runRestaurantWorkerTick', () => {
     expect(result.jobs.succeeded).toBe(1);
     expect(org.jobs.get('j_stale')!.status).toBe('SUCCEEDED');
   });
+
+  it.each([3, 4])(
+    'does not dispatch a stale job with %i attempts against a budget of 3',
+    async (attempts) => {
+      const abandoned = {
+        status: 'RUNNING',
+        claimedAt: new Date(T0.getTime() - 60 * 60_000),
+        claimedBy: 'dead-worker',
+      };
+      const org = createJobDb([
+        queuedJob({ ...abandoned, id: 'exhausted', attempts, maxAttempts: 3 }),
+        queuedJob({ ...abandoned, id: 'retryable', attempts: 1, maxAttempts: 2 }),
+      ]);
+
+      const result = await runRestaurantWorkerTick({
+        workerId: 'worker-1',
+        now: T0,
+        discoverOrganizations: async () => ['org_a'],
+        runInOrg: (_orgId, work) => work(org.db),
+        outboxClient: () => createOutboxDb().db,
+      });
+
+      expect(result.recovered).toBe(2);
+      expect(result.jobs).toMatchObject({ claimed: 1, succeeded: 1 });
+      expect(mocks.runRestaurantJob).toHaveBeenCalledTimes(1);
+      expect(org.jobs.get('exhausted')).toMatchObject({
+        status: 'DEAD',
+        attempts,
+        claimedAt: null,
+        claimedBy: null,
+      });
+      expect(org.jobs.get('retryable')).toMatchObject({ status: 'SUCCEEDED', attempts: 2 });
+      expect(org.executions).toHaveLength(1);
+      expect(org.executions[0]!.jobId).toBe('retryable');
+    }
+  );
 
   it('stops before doing work when the signal is already aborted', async () => {
     const discover = vi.fn(async () => ['org_a']);

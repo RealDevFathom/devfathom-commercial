@@ -9,6 +9,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   can: vi.fn<(subject: unknown, action: unknown) => Promise<boolean>>(() => Promise.resolve(true)),
   enqueue: vi.fn(),
+  annotateAudit: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -22,7 +23,7 @@ vi.mock('@/server/audit', () => ({
   ipFromHeaders: vi.fn(() => null),
   isAuditExcludedPath: vi.fn(() => true),
   recordTrpcAudit: vi.fn(),
-  annotateAudit: vi.fn(),
+  annotateAudit: mocks.annotateAudit,
   diffChanges: vi.fn(() => ({})),
 }));
 vi.mock('@/lib/abac', async () => {
@@ -171,13 +172,57 @@ describe('restaurantJobsRouter — requeueDeadJob', () => {
 
     const result = await caller().requeueDeadJob({ jobId: 'dead_1' });
 
-    expect(result).toEqual({ requeuedFrom: 'dead_1', jobId: 'job_new', status: 'QUEUED' });
+    expect(result).toEqual({
+      requeuedFrom: 'dead_1',
+      jobId: 'job_new',
+      status: 'QUEUED',
+      deduplicated: false,
+    });
     const [, enqueueInput] = mocks.enqueue.mock.calls[0]!;
     expect(enqueueInput).toEqual({
       type: 'sop.sweep',
       payload: { assignmentId: 'a1' },
       maxAttempts: 5,
+      idempotencyKey: 'dead-job-requeue:dead_1',
     });
+    expect(mocks.annotateAudit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'restaurant.job.requeue',
+        targetId: 'dead_1',
+        metadata: {
+          requeuedFrom: 'dead_1',
+          successorJobId: 'job_new',
+          deduplicated: false,
+        },
+      })
+    );
+  });
+
+  it('returns the same successor when the requeue mutation is replayed', async () => {
+    db.restaurantJob.findUnique.mockResolvedValue({
+      id: 'dead_1',
+      type: 'sop.sweep',
+      payload: {},
+      maxAttempts: 5,
+      status: 'DEAD',
+    });
+    mocks.enqueue.mockResolvedValue({
+      job: { id: 'existing_retry', status: 'QUEUED' },
+      deduplicated: true,
+    });
+
+    const first = await caller().requeueDeadJob({ jobId: 'dead_1' });
+    const replay = await caller().requeueDeadJob({ jobId: 'dead_1' });
+
+    expect(first.jobId).toBe('existing_retry');
+    expect(replay).toEqual(first);
+    expect(replay.deduplicated).toBe(true);
+    expect(mocks.enqueue).toHaveBeenNthCalledWith(
+      2,
+      expect.anything(),
+      expect.objectContaining({ idempotencyKey: 'dead-job-requeue:dead_1' })
+    );
   });
 
   it('rejects a missing job with NOT_FOUND', async () => {

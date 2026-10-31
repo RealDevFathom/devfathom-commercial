@@ -376,22 +376,40 @@ export async function recoverStaleJobs(
     );
   }
   const cutoff = new Date(now.getTime() - leaseMs);
-  const result = await db.restaurantJob.updateMany({
-    where: {
-      status: 'RUNNING',
+  return runSchedulerTransaction(db, async (tx) => {
+    const where = {
+      status: 'RUNNING' as const,
       claimedAt: { lt: cutoff },
       ...(jobType && { type: jobType }),
       ...(excludeJobType && { type: { not: excludeJobType } }),
-    },
-    data: {
-      status: 'QUEUED',
-      nextAttemptAt: now,
-      claimedAt: null,
-      claimedBy: null,
-      lastError: 'Recovered after the worker lease expired.',
-    },
+    };
+    const exhausted = await tx.restaurantJob.updateMany({
+      where: {
+        ...where,
+        attempts: { gte: tx.restaurantJob.fields.maxAttempts },
+      },
+      data: {
+        status: 'DEAD',
+        claimedAt: null,
+        claimedBy: null,
+        lastError: 'Worker lease expired after the retry budget was exhausted.',
+      },
+    });
+    const retried = await tx.restaurantJob.updateMany({
+      where: {
+        ...where,
+        attempts: { lt: tx.restaurantJob.fields.maxAttempts },
+      },
+      data: {
+        status: 'QUEUED',
+        nextAttemptAt: now,
+        claimedAt: null,
+        claimedBy: null,
+        lastError: 'Recovered after the worker lease expired.',
+      },
+    });
+    return exhausted.count + retried.count;
   });
-  return result.count;
 }
 
 /**
