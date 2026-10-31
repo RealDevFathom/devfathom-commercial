@@ -42,7 +42,7 @@ function fixture(capabilities: string[], branches = ['branch-a']) {
     medicine: {
       findFirst: vi.fn(async () => ({
         id: 'medicine-a',
-        strengths: [],
+        strengths: [{ ingredientId: 'ingredient-a', value: '500', unit: 'mg' }],
         presentations: [{ id: 'presentation-a', dosageForm: 'Tablet', route: 'Oral' }],
       })),
     },

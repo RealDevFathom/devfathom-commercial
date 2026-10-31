@@ -90,12 +90,28 @@ async function branchFixture(
       },
     });
 
+    const ingredient = await db.ingredient.upsert({
+      where: { organizationId_name: { organizationId, name: `Paracetamol ${suffix}` } },
+      create: { organizationId, name: `Paracetamol ${suffix}` },
+      update: {},
+    });
     const medicine = await db.medicine.create({
       data: {
         organizationId,
         productName: `Paracetamol 500mg ${label}`,
         productFamily: 'PHARMACEUTICAL',
-        presentations: { create: { organizationId, presentation: 'Tablet, 10 per strip' } },
+        saleable: true,
+        strengths: {
+          create: { organizationId, ingredientId: ingredient.id, value: 500, unit: 'mg' },
+        },
+        presentations: {
+          create: {
+            organizationId,
+            presentation: 'Tablet, 10 per strip',
+            dosageForm: 'Tablet',
+            route: 'Oral',
+          },
+        },
       },
       include: { presentations: true },
     });

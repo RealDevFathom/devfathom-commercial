@@ -207,6 +207,17 @@ export async function findMarginOptimizedBrandProposals(
   );
   if (!requested || !requestedPresentation) throw new PharmacySubstituteError('NOT_FOUND');
 
+  // Matching absent facts cannot establish an exact equivalent. Requiring a
+  // complete reference also makes the equality checks reject incomplete candidates.
+  if (
+    requested.strengths.length === 0 ||
+    requested.strengths.some((component) => !normalized(component.unit)) ||
+    !normalized(requestedPresentation.dosageForm) ||
+    !normalized(requestedPresentation.route)
+  ) {
+    return [];
+  }
+
   const lots: CandidateLot[] = await db.pharmacyInventoryLot.findMany({
     where: {
       organizationId: scope.organizationId,

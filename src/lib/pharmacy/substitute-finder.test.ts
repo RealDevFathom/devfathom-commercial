@@ -245,6 +245,36 @@ describe('AI-05 deterministic substitute finder', () => {
     expect(rows).toEqual([]);
   });
 
+  it.each([
+    { name: 'missing strengths', strengths: [] },
+    { name: 'blank strength unit', strengths: [{ ...strength()[0]!, unit: ' ' }] },
+    { name: 'missing dosage form', dosageForm: null },
+    { name: 'blank dosage form', dosageForm: ' ' },
+    { name: 'missing route', route: null },
+    { name: 'blank route', route: ' ' },
+  ])('does not infer exact equivalence from $name on both medicines', async (facts) => {
+    const strengths = facts.strengths ?? strength();
+    const presentation = { ...requested.presentations[0]!, ...facts };
+    const db = {
+      ...dbWith([
+        lot({
+          batch: { medicine: { id: 'unrelated', productName: 'Unrelated', strengths } },
+          packLevel: { presentation: { ...presentation, id: 'unrelated-presentation' } },
+        }),
+      ]),
+      medicine: {
+        findFirst: async () => ({ ...requested, strengths, presentations: [presentation] }),
+      },
+    };
+    await expect(
+      findMarginOptimizedBrandProposals(db as never, scope, {
+        medicineId: 'requested',
+        presentationId: 'presentation-requested',
+        quantityCanonicalUnits: 10,
+      })
+    ).resolves.toEqual([]);
+  });
+
   it('closes a declined POS-10 event with reason substitute declined', async () => {
     let update: unknown;
     const db = {
