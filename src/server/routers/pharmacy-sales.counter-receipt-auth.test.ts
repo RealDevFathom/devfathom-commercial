@@ -166,7 +166,12 @@ function assign(f: ReturnType<typeof fixture>, branchIds: string[]) {
   );
 }
 
-const reads = () => [readCounterReceipt, readPharmacyReceiptFormat, readDispensingLabelSources];
+const reads = () => [
+  readCounterReceipt,
+  readPharmacyReceiptFormat,
+  readPharmacyReceiptTaxIdentity,
+  readDispensingLabelSources,
+];
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -220,6 +225,26 @@ const paths: {
 ];
 
 describe('counter receipt authorization', () => {
+  it('supplies the regulatory identity effective at completion to browser receipt callers', async () => {
+    const f = fixture(dispense);
+    assign(f, ['branch-a']);
+    vi.mocked(readPharmacyReceiptTaxIdentity).mockResolvedValue({
+      ntn: 'HISTORICAL-NTN',
+      strn: 'HISTORICAL-STRN',
+    });
+
+    await expect(
+      f.caller().counterReceipt({ branchId: 'branch-a', saleId: 'sale-a' })
+    ).resolves.toMatchObject({
+      taxIdentity: { ntn: 'HISTORICAL-NTN', strn: 'HISTORICAL-STRN' },
+    });
+    expect(readPharmacyReceiptTaxIdentity).toHaveBeenCalledWith(
+      f.db,
+      expect.objectContaining({ organizationId: 'org-a', branchId: 'branch-a' }),
+      new Date('2026-10-01T00:00:00.000Z')
+    );
+  });
+
   it('supplies the completion-time regulatory identity to browser receipts', async () => {
     const f = fixture(dispense);
     assign(f, ['branch-a']);

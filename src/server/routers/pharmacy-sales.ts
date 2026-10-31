@@ -1745,6 +1745,7 @@ export const pharmacySalesRouter = router({
         return {
           ...receipt,
           dispensingLabelSources,
+          // Completion-time identity keeps browser, A4, and Urdu copies aligned with ESC/POS.
           taxIdentity,
         };
       } catch (error) {

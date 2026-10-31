@@ -22,6 +22,9 @@ import type { SaleUnitKind } from './counter-pricing';
 
 export type CounterReceiptLocale = 'en' | 'ur';
 
+/** Regulatory identity in force when this receipt's sale completed. */
+export type PharmacyReceiptTaxIdentity = { ntn: string | null; strn: string | null };
+
 export type CounterReceiptLine = {
   saleLineId: string;
   /** Absent only for older callers; receipt reads always set this explicitly. */
@@ -60,8 +63,8 @@ export type CounterReceiptTender = {
 
 export type CounterReceipt = {
   dispensingLabelSources?: DispensingLabelSource[];
-  /** Regulatory identity effective when this sale completed. */
-  taxIdentity?: { ntn: string | null; strn: string | null };
+  /** Supplied by settled receipt reads; optional only for legacy in-memory callers. */
+  taxIdentity?: PharmacyReceiptTaxIdentity;
   saleId: string;
   /** Null until a tender settles the bill; never minted by a render. */
   receiptNumber: number | null;
