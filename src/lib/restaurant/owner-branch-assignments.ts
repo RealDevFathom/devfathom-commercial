@@ -4,7 +4,9 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { grantJobRole } from './job-roles';
 
 /** Called within provisioning/branch creation transactions. Never grants a full
- * owner role to an ordinary branch manager or revives an inactive role/profile. */
+ * owner role to an ordinary branch manager or revives an inactive role/profile.
+ * User overrides remain derived access: persisting ownership or assignments here
+ * would outlive their expiry or revocation. */
 export async function assignOwnersToBranch(db: ScopedDb, organizationId: string, branchId: string) {
   const profiles = await db.restaurantStaffProfile.findMany({
     where: {
@@ -16,18 +18,6 @@ export async function assignOwnersToBranch(db: ScopedDb, organizationId: string,
           user: {
             status: 'ACTIVE',
             organizationRole: { permissions: { some: { capability: '*', effect: 'ALLOW' } } },
-          },
-        },
-        {
-          user: {
-            status: 'ACTIVE',
-            permissionOverrides: {
-              some: {
-                capability: '*',
-                effect: 'ALLOW',
-                OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
-              },
-            },
           },
         },
       ],
