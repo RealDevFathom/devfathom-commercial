@@ -178,8 +178,15 @@ export async function recordOfflineCommand(
         deviceId: input.deviceId,
         sequence: input.sequence,
       },
-      select: { id: true },
     });
+    // A concurrent identical retry can miss the initial read, then wait for
+    // the winner's cursor update to commit. Read its command after losing the
+    // claim so that this retry still receives the original idempotent result.
+    if (occupied?.idempotencyKey === input.idempotencyKey) {
+      if (occupied.action !== input.action || occupied.payloadHash !== payloadHash)
+        throw new PharmacyOfflineCommandError('IDEMPOTENCY_CONFLICT');
+      return { command: occupied, replayed: true };
+    }
     throw new PharmacyOfflineCommandError(occupied ? 'SEQUENCE_CONFLICT' : 'SEQUENCE_OUT_OF_ORDER');
   }
 
