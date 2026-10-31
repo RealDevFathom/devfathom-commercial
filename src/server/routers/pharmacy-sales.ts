@@ -57,6 +57,7 @@ import {
   linkCustomerToSale,
   PharmacyLoyaltyError,
   readCustomerSnapshot,
+  setCustomerWhatsAppOptIn,
   redeemSalePoints,
 } from '@/lib/pharmacy/customer-loyalty';
 import { PharmacyInventoryError } from '@/lib/pharmacy/inventory';
@@ -624,6 +625,29 @@ export const pharmacySalesRouter = router({
           await scopeFor(ctx, input.branchId),
           input.customerId,
           input.page
+        );
+      } catch (error) {
+        fail(error);
+      }
+    }),
+  setCustomerWhatsAppOptIn: protectedProcedure
+    .input(z.object({ branchId, customerId: z.string().min(1), optedIn: z.boolean() }).strict())
+    .mutation(async ({ ctx, input }) => {
+      try {
+        if (!hasModule(ctx.entitlements, 'pharmacy-counter')) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'Pharmacy counter permission required.',
+          });
+        }
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
+        return await ctx.db.$transaction(async (tx) =>
+          setCustomerWhatsAppOptIn(
+            txDb(tx),
+            scope,
+            input.customerId,
+            input.optedIn
+          )
         );
       } catch (error) {
         fail(error);

@@ -9,6 +9,7 @@ import {
   linkCustomerToSale,
   PharmacyLoyaltyError,
   readCustomerSnapshot,
+  setCustomerWhatsAppOptIn,
   restoreRefundedLoyaltyPoints,
 } from './customer-loyalty';
 
@@ -128,6 +129,7 @@ describe('CRM-L01 pharmacy loyalty', () => {
           displayName: 'Retail name',
           phoneLast4: '1234',
           creditLimitMinor: 20_000,
+          whatsappOptIn: true,
         }),
       },
       pharmacyLoyaltyPointsEntry: {
@@ -149,6 +151,7 @@ describe('CRM-L01 pharmacy loyalty', () => {
     };
     const snapshot = await readCustomerSnapshot(db as never, scope, 'customer-a');
     expect(snapshot).toMatchObject({
+      customer: { id: 'customer-a', whatsappOptIn: true },
       pointsBalance: 35,
       creditBalanceMinor: 800,
       availableCreditMinor: 19_200,
@@ -160,5 +163,68 @@ describe('CRM-L01 pharmacy loyalty', () => {
         where: expect.objectContaining({ organizationId: 'org-a', branchId: 'branch-a' }),
       })
     );
+  });
+
+  it('timestamps a blocked counter opt-in after the inbound opt-out holding the lock', async () => {
+    const inboundOptOutAt = new Date('2026-10-26T12:00:00Z');
+    const changedAt = new Date('2026-10-26T12:00:01Z');
+    let releasePatientLock!: (rows: Array<{ id: string }>) => void;
+    const patientLock = new Promise<Array<{ id: string }>>((resolve) => {
+      releasePatientLock = resolve;
+    });
+    const clock = vi.fn(() => changedAt);
+    const db = {
+      pharmacyCustomer: {
+        findFirst: vi.fn().mockResolvedValue({ patientId: 'patient-a' }),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      $queryRaw: vi
+        .fn()
+        .mockReturnValueOnce(patientLock)
+        .mockResolvedValueOnce([{ patientId: 'patient-a' }]),
+    };
+
+    const update = setCustomerWhatsAppOptIn(
+      db as never,
+      scope,
+      'customer-a',
+      true,
+      clock
+    );
+    await vi.waitFor(() => expect(db.$queryRaw).toHaveBeenCalledTimes(1));
+    expect(clock).not.toHaveBeenCalled();
+    expect(db.pharmacyCustomer.updateMany).not.toHaveBeenCalled();
+
+    // The inbound STOP commits and releases the patient consent lock.
+    releasePatientLock([{ id: 'patient-a' }]);
+    await expect(update).resolves.toEqual({
+      customerId: 'customer-a',
+      whatsappOptIn: true,
+      whatsappOptInChangedAt: changedAt,
+    });
+    expect(clock).toHaveBeenCalledTimes(1);
+    expect(changedAt.getTime()).toBeGreaterThan(inboundOptOutAt.getTime());
+    expect(db.pharmacyCustomer.updateMany).toHaveBeenCalledWith({
+      where: { id: 'customer-a', organizationId: 'org-a', active: true },
+      data: { whatsappOptIn: true, whatsappOptInChangedAt: changedAt },
+    });
+  });
+
+  it('rejects a missing or inactive customer before taking the consent lock', async () => {
+    const db = {
+      pharmacyCustomer: {
+        findFirst: vi.fn().mockResolvedValue(null),
+      },
+      $queryRaw: vi.fn(),
+    };
+
+    await expect(
+      setCustomerWhatsAppOptIn(db as never, scope, 'customer-a', true)
+    ).rejects.toMatchObject({ reason: 'CUSTOMER_NOT_FOUND' });
+    expect(db.pharmacyCustomer.findFirst).toHaveBeenCalledWith({
+      where: { id: 'customer-a', organizationId: 'org-a', active: true },
+      select: { id: true },
+    });
+    expect(db.$queryRaw).not.toHaveBeenCalled();
   });
 });

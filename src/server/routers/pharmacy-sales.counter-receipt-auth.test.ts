@@ -35,6 +35,10 @@ vi.mock('@/lib/pharmacy/sales', async (original) => ({
   readReturnHistory: vi.fn(async () => [{ id: 'return-1' }]),
   returnSaleLine: vi.fn(async () => ({ returnLineId: 'return-line-1' })),
 }));
+vi.mock('@/lib/pharmacy/customer-loyalty', async (original) => ({
+  ...(await original<typeof import('@/lib/pharmacy/customer-loyalty')>()),
+  setCustomerWhatsAppOptIn: vi.fn(async () => ({ whatsappOptIn: true })),
+}));
 vi.mock('@/lib/pharmacy/settlement', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/settlement')>()),
   applyPharmacyTender: vi.fn(async () => ({ tenderId: 'tender-1' })),
@@ -68,6 +72,7 @@ import { readCounterCart, readCounterReceipt } from '@/lib/pharmacy/counter';
 import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-source';
 import { readReturnHistory, returnSaleLine } from '@/lib/pharmacy/sales';
 import { applyPharmacyTender, refundPharmacyTender } from '@/lib/pharmacy/settlement';
+import { setCustomerWhatsAppOptIn } from '@/lib/pharmacy/customer-loyalty';
 import {
   buildPharmacyReceiptEscPosJob,
   readPharmacyReceiptFormat,
@@ -82,6 +87,7 @@ const app = router({ pharmacySales: pharmacySalesRouter });
 type Permission = { capability: string; effect: 'ALLOW' | 'DENY' };
 
 const dispense: Permission[] = [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }];
+const counter: Permission[] = [{ capability: 'pharmacy:counter', effect: 'ALLOW' }];
 
 function fixture(
   permissions: Permission[],
@@ -220,6 +226,72 @@ const paths: {
 ];
 
 describe('counter receipt authorization', () => {
+  it('allows WhatsApp consent updates for an assigned counter user', async () => {
+    const f = fixture(counter);
+    assign(f, ['branch-a']);
+
+    await expect(
+      f.caller().setCustomerWhatsAppOptIn({
+        branchId: 'branch-a',
+        customerId: 'customer-a',
+        optedIn: true,
+      })
+    ).resolves.toEqual({ whatsappOptIn: true });
+    expect(setCustomerWhatsAppOptIn).toHaveBeenCalledWith(
+      f.db,
+      expect.objectContaining({
+        organizationId: 'org-a',
+        branchId: 'branch-a',
+        actorId: 'user-a',
+      }),
+      'customer-a',
+      true
+    );
+    expect(f.db.$transaction).toHaveBeenCalledOnce();
+  });
+
+  it.each<{ name: string; permissions: Permission[] }>([
+    { name: 'no capability', permissions: [] },
+    { name: 'dispensing permission only', permissions: dispense },
+    {
+      name: 'legacy counter permission only',
+      permissions: [{ capability: 'pharmacy.counter', effect: 'ALLOW' }],
+    },
+    {
+      name: 'an explicit counter denial',
+      permissions: [...counter, { capability: 'pharmacy:counter', effect: 'DENY' }],
+    },
+  ])('denies WhatsApp consent updates with $name', async ({ permissions }) => {
+    const f = fixture(permissions);
+    assign(f, ['branch-a']);
+
+    await expect(
+      f.caller().setCustomerWhatsAppOptIn({
+        branchId: 'branch-a',
+        customerId: 'customer-a',
+        optedIn: true,
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(setCustomerWhatsAppOptIn).not.toHaveBeenCalled();
+    expect(f.db.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('denies WhatsApp consent updates without an assignment to the requested branch', async () => {
+    const f = fixture(counter);
+    assign(f, ['branch-b']);
+
+    await expect(
+      f.caller().setCustomerWhatsAppOptIn({
+        branchId: 'branch-a',
+        customerId: 'customer-a',
+        optedIn: false,
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(f.db.pharmacyBranchAssignment.findMany).toHaveBeenCalledOnce();
+    expect(setCustomerWhatsAppOptIn).not.toHaveBeenCalled();
+    expect(f.db.$transaction).not.toHaveBeenCalled();
+  });
+
   it('supplies the completion-time regulatory identity to browser receipts', async () => {
     const f = fixture(dispense);
     assign(f, ['branch-a']);

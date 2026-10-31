@@ -112,6 +112,7 @@ vi.mock('@/lib/trpc', () => {
         'captureDemand',
         'declineSubstitute',
         'linkCustomer',
+        'setCustomerWhatsAppOptIn',
         'redeemPoints',
         'authenticatePack',
         'substituteProposals',
@@ -138,7 +139,7 @@ vi.mock('./counter-search-results', () => ({ CounterSearchResults: () => null })
 vi.mock('./counter-substitute-proposals', () => ({ CounterSubstituteProposals: () => null }));
 vi.mock('./counter-unit-toggle', () => ({ CounterUnitToggle: () => null }));
 
-import { PharmacyCounterConsole } from './counter-console';
+import { CounterWhatsAppOffer, PharmacyCounterConsole } from './counter-console';
 import {
   persistTenderAttempt,
   readTenderAttempt,
@@ -262,6 +263,7 @@ beforeEach(() => {
     'captureDemand',
     'declineSubstitute',
     'linkCustomer',
+    'setCustomerWhatsAppOptIn',
     'redeemPoints',
     'authenticatePack',
   ])
@@ -287,6 +289,194 @@ beforeEach(() => {
 });
 
 afterEach(() => vi.restoreAllMocks());
+
+describe('CounterWhatsAppOffer', () => {
+  it.each([
+    [true, 'Opted in', true],
+    [false, 'Opted out', false],
+    [null, 'Not recorded', false],
+  ] as const)('shows the current %s consent state as %s', (initialOptIn, status, checked) => {
+    render(
+      <CounterWhatsAppOffer
+        branchId="branch-a"
+        customerId="customer-a"
+        snapshotUpdatedAt={1}
+        initialOptIn={initialOptIn}
+        onSaved={vi.fn()}
+        onError={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText(`Current status: ${status}`)).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'WhatsApp consent' })).toHaveProperty(
+      'checked',
+      checked
+    );
+  });
+
+  it('shows current consent and saves with the matching pharmacy customer id', async () => {
+    mocks.mutations.setCustomerWhatsAppOptIn.mockResolvedValue({ whatsappOptIn: false });
+    const onSaved = vi.fn();
+    render(
+      <CounterWhatsAppOffer
+        branchId="branch-a"
+        customerId="customer-a"
+        snapshotUpdatedAt={1}
+        initialOptIn={true}
+        onSaved={onSaved}
+        onError={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText('Current status: Opted in')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'WhatsApp consent' }));
+    await waitFor(() =>
+      expect(mocks.mutations.setCustomerWhatsAppOptIn).toHaveBeenCalledWith({
+        branchId: 'branch-a',
+        customerId: 'customer-a',
+        optedIn: false,
+      })
+    );
+    expect(screen.getByText('Current status: Opted out')).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'WhatsApp consent' })).not.toBeChecked();
+    expect(onSaved).toHaveBeenCalledOnce();
+  });
+
+  it('keeps a committed consent change visible when the follow-up refresh fails', async () => {
+    mocks.mutations.setCustomerWhatsAppOptIn.mockResolvedValue({ whatsappOptIn: false });
+    const onError = vi.fn();
+    render(
+      <CounterWhatsAppOffer
+        branchId="branch-a"
+        customerId="customer-a"
+        snapshotUpdatedAt={1}
+        initialOptIn={true}
+        onSaved={vi.fn().mockRejectedValue(new Error('refresh failed'))}
+        onError={onError}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'WhatsApp consent' }));
+
+    await waitFor(() =>
+      expect(screen.getByText('Current status: Opted out')).toBeInTheDocument()
+    );
+    expect(screen.getByRole('checkbox', { name: 'WhatsApp consent' })).not.toBeChecked();
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it.each(['pending', 'failed'] as const)(
+    'uses a successful unchanged snapshot after opt-in and STOP with the follow-up refresh %s',
+    async (refreshState) => {
+      mocks.mutations.setCustomerWhatsAppOptIn.mockResolvedValue({ whatsappOptIn: true });
+      let finishRefresh: (() => void) | undefined;
+      const props = {
+        branchId: 'branch-a',
+        customerId: 'customer-a',
+        initialOptIn: false,
+        snapshotUpdatedAt: 1,
+        onSaved: vi.fn(
+          () =>
+            new Promise<void>((resolve, reject) => {
+              if (refreshState === 'failed') reject(new Error('refresh failed'));
+              else finishRefresh = resolve;
+            })
+        ),
+        onError: vi.fn(),
+      };
+      const { rerender } = render(<CounterWhatsAppOffer {...props} />);
+
+      fireEvent.click(screen.getByRole('checkbox', { name: 'WhatsApp consent' }));
+      await waitFor(() => expect(props.onSaved).toHaveBeenCalledOnce());
+      expect(screen.getByText('Current status: Opted in')).toBeInTheDocument();
+
+      // Cached data during a pending or failed read must preserve the saved opt-in.
+      rerender(<CounterWhatsAppOffer {...props} />);
+      expect(screen.getByRole('checkbox', { name: 'WhatsApp consent' })).toBeChecked();
+
+      // STOP landed before this successful read, returning the pre-save false.
+      await act(async () => {
+        rerender(<CounterWhatsAppOffer {...props} snapshotUpdatedAt={2} />);
+        finishRefresh?.();
+      });
+      expect(screen.getByText('Current status: Opted out')).toBeInTheDocument();
+      expect(screen.getByRole('checkbox', { name: 'WhatsApp consent' })).not.toBeChecked();
+
+      // Further successful reads must not revive the retired local override.
+      rerender(<CounterWhatsAppOffer {...props} snapshotUpdatedAt={3} />);
+      expect(screen.getByText('Current status: Opted out')).toBeInTheDocument();
+      expect(screen.getByRole('checkbox', { name: 'WhatsApp consent' })).not.toBeChecked();
+      expect(props.onError).not.toHaveBeenCalled();
+    }
+  );
+
+  it('uses newer server consent after the saved change has been refreshed', async () => {
+    mocks.mutations.setCustomerWhatsAppOptIn.mockResolvedValue({ whatsappOptIn: false });
+    const props = {
+      branchId: 'branch-a',
+      snapshotUpdatedAt: 1,
+      customerId: 'customer-a',
+      onSaved: vi.fn(),
+      onError: vi.fn(),
+    };
+    const { rerender } = render(<CounterWhatsAppOffer {...props} initialOptIn={true} />);
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'WhatsApp consent' }));
+    await waitFor(() => expect(props.onSaved).toHaveBeenCalledOnce());
+    rerender(<CounterWhatsAppOffer {...props} initialOptIn={false} />);
+    expect(screen.getByRole('checkbox', { name: 'WhatsApp consent' })).not.toBeChecked();
+
+    // A later START or another operator's save must supersede the local opt-out.
+    rerender(<CounterWhatsAppOffer {...props} initialOptIn={true} />);
+    expect(screen.getByText('Current status: Opted in')).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'WhatsApp consent' })).toBeChecked();
+  });
+
+  it('discards a previous customer override when the selected customer changes', async () => {
+    mocks.mutations.setCustomerWhatsAppOptIn.mockResolvedValue({ whatsappOptIn: false });
+    const props = {
+      branchId: 'branch-a',
+      snapshotUpdatedAt: 1,
+      initialOptIn: true,
+      onSaved: vi.fn(),
+      onError: vi.fn(),
+    };
+    const { rerender } = render(<CounterWhatsAppOffer {...props} customerId="customer-a" />);
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'WhatsApp consent' }));
+    await waitFor(() => expect(props.onSaved).toHaveBeenCalledOnce());
+    rerender(<CounterWhatsAppOffer {...props} customerId="customer-b" />);
+    expect(screen.getByRole('checkbox', { name: 'WhatsApp consent' })).toBeChecked();
+
+    rerender(<CounterWhatsAppOffer {...props} customerId="customer-a" />);
+    expect(screen.getByText('Current status: Opted in')).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'WhatsApp consent' })).toBeChecked();
+  });
+
+  it('reports a failed consent save without changing the confirmed state', async () => {
+    const error = new Error('save failed');
+    mocks.mutations.setCustomerWhatsAppOptIn.mockRejectedValue(error);
+    const onSaved = vi.fn();
+    const onError = vi.fn();
+    render(
+      <CounterWhatsAppOffer
+        branchId="branch-a"
+        customerId="customer-a"
+        snapshotUpdatedAt={1}
+        initialOptIn={true}
+        onSaved={onSaved}
+        onError={onError}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'WhatsApp consent' }));
+
+    await waitFor(() => expect(onError).toHaveBeenCalledWith(error));
+    expect(screen.getByText('Current status: Opted in')).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'WhatsApp consent' })).toBeChecked();
+    expect(onSaved).not.toHaveBeenCalled();
+  });
+});
 
 describe('PharmacyCounterConsole authoritative bill state', () => {
   it.each([

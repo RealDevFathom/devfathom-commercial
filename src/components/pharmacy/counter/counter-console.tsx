@@ -92,6 +92,95 @@ type ReceiptIntent = {
   printReservation?: CounterBrowserPrintReservation;
 };
 
+export function CounterWhatsAppOffer({
+  branchId,
+  customerId,
+  initialOptIn,
+  snapshotUpdatedAt,
+  onSaved,
+  onError,
+}: {
+  branchId: string;
+  customerId: string;
+  initialOptIn: boolean | null;
+  snapshotUpdatedAt: number;
+  onSaved: () => void | Promise<void>;
+  onError: (error: unknown) => void;
+}) {
+  const setOptIn = trpc.pharmacySales.setCustomerWhatsAppOptIn.useMutation();
+  const [confirmedOverride, setConfirmedOverride] = useState<{
+    customerId: string;
+    previousValue: boolean | null;
+    snapshotUpdatedAt: number;
+    value: boolean;
+  } | null>(null);
+  const displayedOptIn =
+    confirmedOverride?.customerId === customerId &&
+    confirmedOverride.previousValue === initialOptIn &&
+    confirmedOverride.snapshotUpdatedAt === snapshotUpdatedAt
+      ? confirmedOverride.value
+      : initialOptIn;
+  if (
+    confirmedOverride &&
+    (confirmedOverride.customerId !== customerId ||
+      confirmedOverride.previousValue !== initialOptIn ||
+      confirmedOverride.snapshotUpdatedAt !== snapshotUpdatedAt)
+  ) {
+    // A successful query refresh is authoritative even when STOP restored the
+    // pre-save boolean. Failed refreshes leave dataUpdatedAt unchanged.
+    setConfirmedOverride(null);
+  }
+
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-[var(--radius-sm)] bg-surface-sunken p-3">
+      <div>
+        <Label htmlFor="counter-whatsapp-opt-in">WhatsApp consent</Label>
+        <p className="text-xs text-text-muted">
+          Current status:{' '}
+          {displayedOptIn === true
+            ? 'Opted in'
+            : displayedOptIn === false
+              ? 'Opted out'
+              : 'Not recorded'}
+        </p>
+      </div>
+      <input
+        id="counter-whatsapp-opt-in"
+        type="checkbox"
+        checked={displayedOptIn === true}
+        disabled={setOptIn.isPending}
+        onChange={async (event) => {
+          const optedIn = event.currentTarget.checked;
+          try {
+            await setOptIn.mutateAsync({
+              branchId,
+              customerId,
+              optedIn,
+            });
+          } catch (error) {
+            onError(error);
+            return;
+          }
+
+          setConfirmedOverride({
+            customerId,
+            previousValue: initialOptIn,
+            snapshotUpdatedAt,
+            value: optedIn,
+          });
+          try {
+            await onSaved();
+          } catch {
+            // The consent write has committed. Keep its confirmed state visible
+            // even when the follow-up query refresh is temporarily unavailable.
+          }
+        }}
+        className="size-4 accent-[var(--color-accent)]"
+      />
+    </div>
+  );
+}
+
 /**
  * A stable per-browser identifier for the drawer session and receipt sequence.
  *
@@ -2254,6 +2343,17 @@ function ScopedPharmacyCounterConsole({
                     Available credit {formatMinor(customerQuery.data.availableCreditMinor)}
                   </p>
                 </div>
+                <CounterWhatsAppOffer
+                  branchId={branchId}
+                  customerId={customerQuery.data.customer.id}
+                  initialOptIn={customerQuery.data.customer.whatsappOptIn}
+                  snapshotUpdatedAt={customerQuery.dataUpdatedAt}
+                  onSaved={async () => {
+                    await customerQuery.refetch();
+                    setNotice({ tone: 'success', message: 'WhatsApp consent updated.' });
+                  }}
+                  onError={(error) => setNotice({ tone: 'danger', message: messageFrom(error) })}
+                />
                 <div className="flex gap-2">
                   <Label htmlFor="counter-redeem-points" className="sr-only">
                     Points to redeem
