@@ -143,6 +143,9 @@ beforeEach(() => {
   });
   db.pharmacyBranchAssignment.findMany.mockResolvedValue([{ branchId: 'branch_a' }]);
   db.pharmacyBranch.findFirst.mockResolvedValue({ id: 'branch_a' });
+  // Most fixtures use organization-wide (branchless) orders; the default buyer is
+  // an organization-wide central purchaser. Branch-only buyers are tested below.
+  db.pharmacyCentralPurchasingAccess.findMany.mockResolvedValue([{ branchId: null }]);
   mocks.hasModule.mockImplementation((view, key) => view.enabledModules.includes(key));
 });
 
@@ -1228,13 +1231,35 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
       });
       expect(result).toHaveProperty('blocked');
       expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+      // Another person's guesses are throttled separately; they never add strikes
+      // to the approver's shared operator credential (which would lock them out
+      // of unrelated workflows).
       if (mode === 'wrong-pin')
-        expect(db.restaurantOperatorCredential.update).toHaveBeenCalledWith({
-          where: { id: 'credential' },
-          data: { failedAttempts: 1, lockedUntil: null },
-        });
+        expect(db.restaurantOperatorCredential.update).not.toHaveBeenCalled();
     }
   );
+  it('bounds guesses at another approver PIN without locking their shared credential', async () => {
+    db.restaurantOperatorCredential.findFirst.mockResolvedValue({
+      id: 'credential',
+      credentialHash: APPROVER_HASH,
+      failedAttempts: 0,
+      lockedUntil: null,
+    });
+    const attempt = (pin: string) =>
+      caller().createGoodsReceipt({
+        ...withoutOrder(),
+        directPurchase: { reason: 'Urgent', approvedByUserId: 'user_throttled', pin },
+      });
+    for (let guess = 0; guess < 5; guess++) {
+      expect(await attempt('9999')).toHaveProperty('blocked');
+    }
+    expect(db.restaurantOperatorCredential.findFirst).toHaveBeenCalledTimes(5);
+    // The budget is spent: even the correct PIN is refused without being checked.
+    expect(await attempt('1234')).toHaveProperty('blocked');
+    expect(db.restaurantOperatorCredential.findFirst).toHaveBeenCalledTimes(5);
+    expect(db.restaurantOperatorCredential.update).not.toHaveBeenCalled();
+    expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+  });
   it('lets a solo owner authorize a direct purchase with PIN and preserves true receiver attribution', async () => {
     installedOwner();
     const result = await caller().createGoodsReceipt({
@@ -1309,6 +1334,11 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
 
   it('refuses a receipt for a different branch than its purchase order', async () => {
     db.pharmacyBranch.findFirst.mockResolvedValue({ id: 'branch_b' });
+    // The actor may receive at both branches; only the order/branch mismatch refuses.
+    db.pharmacyBranchAssignment.findMany.mockResolvedValue([
+      { branchId: 'branch_a' },
+      { branchId: 'branch_b' },
+    ]);
     db.pharmacyPurchaseOrder.findFirst.mockImplementation(async ({ where }) =>
       where.branchId === 'branch_a' ? { id: 'po_a', supplierId: 'supplier_a' } : null
     );
@@ -1956,10 +1986,88 @@ describe('stored procurement branch boundaries', () => {
   });
 });
 
+describe('organization-wide (branchless) procurement records', () => {
+  const REQUISITION_LINE = {
+    medicineId: 'medicine_a',
+    packLevelId: 'pack_a',
+    quantityPacks: 1,
+    canonicalUnitsPerPack: 10,
+  };
+  const actions = {
+    submitPurchaseOrder: () => caller().submitPurchaseOrder({ purchaseOrderId: 'po' }),
+    approvePurchaseOrder: () =>
+      caller().approvePurchaseOrder({ purchaseOrderId: 'po', decision: 'APPROVED' }),
+    sendPurchaseOrder: () => caller().sendPurchaseOrder({ purchaseOrderId: 'po' }),
+    landedCost: () => caller().landedCost({ purchaseOrderId: 'po' }),
+    compareQuotes: () => caller().compareQuotes({ requisitionLineId: 'line' }),
+    submitRequisition: () => caller().submitRequisition({ requisitionId: 'req' }),
+    createPurchaseOrder: () =>
+      caller().createPurchaseOrder({
+        supplierId: 'supplier_a',
+        reference: 'PO-CENTRAL',
+        lines: [ORDER_LINE],
+      }),
+    createRequisition: () =>
+      caller().createRequisition({ reference: 'REQ-CENTRAL', lines: [REQUISITION_LINE] }),
+  };
+
+  beforeEach(() => {
+    // A buyer assigned to branch_a only, with no organization-wide grant.
+    db.pharmacyCentralPurchasingAccess.findMany.mockResolvedValue([{ branchId: 'branch_a' }]);
+    db.pharmacyRequisition.findFirst.mockResolvedValue({
+      id: 'req',
+      branchId: null,
+      status: 'DRAFT',
+      lines: [],
+    });
+    db.pharmacyRequisitionLine.findFirst.mockResolvedValue({
+      id: 'line',
+      quantityPacks: 1,
+      requisition: { branchId: null },
+    });
+    db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
+      id: 'po',
+      branchId: null,
+      status: 'SUBMITTED',
+      supplierId: 'supplier_a',
+      createdByUserId: 'user_other',
+      requisition: null,
+      lines: [],
+      freightMinor: 0,
+      otherChargesMinor: 0,
+    });
+  });
+
+  it.each(Object.keys(actions) as (keyof typeof actions)[])(
+    'refuses %s for a branch-scoped buyer',
+    async (name) => {
+      await expect(actions[name]()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(db.pharmacyPurchaseOrder.update).not.toHaveBeenCalled();
+      expect(db.pharmacyPurchaseOrder.create).not.toHaveBeenCalled();
+      expect(db.pharmacyPurchaseOrderApproval.create).not.toHaveBeenCalled();
+      expect(db.pharmacyRequisition.update).not.toHaveBeenCalled();
+      expect(db.pharmacyRequisition.create).not.toHaveBeenCalled();
+      expect(db.pharmacyQuoteLine.findMany).not.toHaveBeenCalled();
+    }
+  );
+
+  it('lets an organization-wide central purchaser submit a branchless order', async () => {
+    db.pharmacyCentralPurchasingAccess.findMany.mockResolvedValue([{ branchId: null }]);
+    db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
+      id: 'po',
+      branchId: null,
+      status: 'DRAFT',
+    });
+    await caller().submitPurchaseOrder({ purchaseOrderId: 'po' });
+    expect(db.pharmacyPurchaseOrder.update).toHaveBeenCalledOnce();
+  });
+});
+
 const readActions = {
   compareQuotes: () => caller().compareQuotes({ requisitionLineId: 'req_line_a' }),
   landedCost: () => caller().landedCost({ purchaseOrderId: 'po_a' }),
-  controlledWitnesses: () => caller().controlledWitnesses(),
+  controlledWitnesses: () =>
+    caller().controlledWitnesses({ branchId: 'branch_a', goodsReceiptId: 'grn_a' }),
   receivingExceptions: () => caller().receivingExceptions({ branchId: 'branch_a' }),
   debitNotePositions: () => caller().debitNotePositions({ branchId: 'branch_a' }),
   workspace: () => caller().workspace(),
@@ -2162,6 +2270,9 @@ it('does not post a historical direct draft on a stored approver ID alone', asyn
 });
 
 describe('purchasing list branch boundaries', () => {
+  beforeEach(() => {
+    db.pharmacyCentralPurchasingAccess.findMany.mockResolvedValue([]);
+  });
   it.each(['requisitions', 'purchaseOrders'] as const)(
     'restricts %s to assigned branches',
     async (name) => {

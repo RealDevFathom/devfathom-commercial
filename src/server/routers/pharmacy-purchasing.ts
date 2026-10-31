@@ -351,6 +351,34 @@ async function purchasingOrderScope(ctx: TRPCContext) {
 }
 
 /**
+ * Requisitions and orders without a branch are organization-wide records. The
+ * list endpoints only show them to an installed owner or an organization-wide
+ * central purchaser, so writes and by-ID reads must apply the same boundary;
+ * a branch-scoped buyer must not reach them by guessing an ID.
+ */
+async function purchasingRecordScope(ctx: TRPCContext, branch: string | null | undefined) {
+  if (branch) {
+    await receivingScope(ctx, branch);
+    return;
+  }
+  const { organizationId } = tenantScope(ctx);
+  const userId = ctx.session!.user.id;
+  const central = await ctx.db.pharmacyCentralPurchasingAccess.findMany({
+    where: { organizationId, userId, branchId: null },
+    select: { branchId: true },
+  });
+  if (
+    central.some((grant) => grant.branchId === null) ||
+    (await actorIsPharmacyOwner(ctx.db, organizationId, userId))
+  )
+    return;
+  throw new TRPCError({
+    code: 'FORBIDDEN',
+    message: 'Organization-wide purchasing is outside your pharmacy scope.',
+  });
+}
+
+/**
  * PUR-01: refuse a supplier that may not be ordered from right now. `supplier`
  * is whatever the tenant-scoped client returned, so a row belonging to another
  * tenant arrives here as `null` and is refused on tenancy rather than licensing.
@@ -576,7 +604,7 @@ const purchasingRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      if (input.branchId) await receivingScope(ctx, input.branchId);
+      await purchasingRecordScope(ctx, input.branchId);
       try {
         for (const line of input.lines) {
           if (
@@ -614,7 +642,7 @@ const purchasingRouter = router({
           where: { id: input.requisitionId },
         });
         if (!requisition) throw new PharmacyPurchasingError('NOT_FOUND');
-        if (requisition.branchId) await receivingScope(ctx, requisition.branchId);
+        await purchasingRecordScope(ctx, requisition.branchId);
         assertRequisitionTransition(requisition.status, 'SUBMITTED');
         return await ctx.db.pharmacyRequisition.update({
           where: { id: requisition.id },
@@ -674,7 +702,7 @@ const purchasingRouter = router({
           include: { lines: true },
         });
         if (!requisition) throw new PharmacyPurchasingError('CROSS_TENANT_REFERENCE');
-        if (requisition.branchId) await receivingScope(ctx, requisition.branchId);
+        await purchasingRecordScope(ctx, requisition.branchId);
         const ownLines = new Set(requisition.lines.map((line) => line.id));
         for (const line of input.lines) {
           if (!ownLines.has(line.requisitionLineId))
@@ -704,8 +732,7 @@ const purchasingRouter = router({
           include: { requisition: { select: { branchId: true } } },
         });
         if (!requisitionLine) throw new PharmacyPurchasingError('NOT_FOUND');
-        if (requisitionLine.requisition?.branchId)
-          await receivingScope(ctx, requisitionLine.requisition.branchId);
+        await purchasingRecordScope(ctx, requisitionLine.requisition?.branchId);
         const quoteLines = await ctx.db.pharmacyQuoteLine.findMany({
           where: { requisitionLineId: requisitionLine.id },
           include: { quote: { include: { supplier: { include: { licences: true } } } } },
@@ -781,7 +808,7 @@ const purchasingRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      if (input.branchId) await receivingScope(ctx, input.branchId);
+      await purchasingRecordScope(ctx, input.branchId);
       try {
         // PUR-01: refuse an unauthorized or licence-expired supplier before anything is written.
         assertOrderableSupplier(
@@ -796,7 +823,7 @@ const purchasingRouter = router({
             where: { id: input.requisitionId },
           });
           if (!requisition) throw new PharmacyPurchasingError('CROSS_TENANT_REFERENCE');
-          if (requisition.branchId) await receivingScope(ctx, requisition.branchId);
+          await purchasingRecordScope(ctx, requisition.branchId);
         }
         if (input.quoteId) {
           const quote = await ctx.db.pharmacyQuote.findFirst({
@@ -804,7 +831,7 @@ const purchasingRouter = router({
             include: { requisition: { select: { branchId: true } } },
           });
           if (!quote) throw new PharmacyPurchasingError('CROSS_TENANT_REFERENCE');
-          if (quote.requisition?.branchId) await receivingScope(ctx, quote.requisition.branchId);
+          await purchasingRecordScope(ctx, quote.requisition?.branchId);
         }
         for (const line of input.lines) {
           if (
@@ -850,7 +877,7 @@ const purchasingRouter = router({
           where: { id: input.purchaseOrderId },
         });
         if (!order) throw new PharmacyPurchasingError('NOT_FOUND');
-        if (order.branchId) await receivingScope(ctx, order.branchId);
+        await purchasingRecordScope(ctx, order.branchId);
         assertPurchaseOrderTransition(order.status, 'SUBMITTED');
         return await ctx.db.pharmacyPurchaseOrder.update({
           where: { id: order.id },
@@ -888,7 +915,7 @@ const purchasingRouter = router({
             include: { requisition: true },
           });
           if (!order) throw new PharmacyPurchasingError('NOT_FOUND');
-          if (order.branchId) await receivingScope(ctx, order.branchId);
+          await purchasingRecordScope(ctx, order.branchId);
 
           const toStatus = input.decision === 'APPROVED' ? 'APPROVED' : 'DRAFT';
           assertPurchaseOrderTransition(order.status, toStatus);
@@ -914,6 +941,7 @@ const purchasingRouter = router({
               organizationId: tenantScope(ctx).organizationId,
               branchId: order.branchId,
               approverId: ctx.session.user.id,
+              actorId: ctx.session.user.id,
               pin: input.pin,
             });
             ctx.audit.detail = {
@@ -1006,7 +1034,7 @@ const purchasingRouter = router({
           where: { id: input.purchaseOrderId },
         });
         if (!order) throw new PharmacyPurchasingError('NOT_FOUND');
-        if (order.branchId) await receivingScope(ctx, order.branchId);
+        await purchasingRecordScope(ctx, order.branchId);
         assertPurchaseOrderTransition(order.status, 'SENT');
         // PUR-01 again: the supplier must still be orderable at the moment it is sent.
         assertOrderableSupplier(
@@ -1035,7 +1063,7 @@ const purchasingRouter = router({
           include: { lines: { orderBy: { lineNumber: 'asc' } } },
         });
         if (!order) throw new PharmacyPurchasingError('NOT_FOUND');
-        if (order.branchId) await receivingScope(ctx, order.branchId);
+        await purchasingRecordScope(ctx, order.branchId);
         const costed = landedCost({
           lines: order.lines.map((line) => ({
             orderedPacks: line.orderedPacks,
@@ -1195,6 +1223,7 @@ const purchasingRouter = router({
               organizationId: scope.organizationId,
               branchId: scope.branchId,
               approverId: input.directPurchase!.approvedByUserId,
+              actorId: scope.actorId,
               pin: input.directPurchase!.pin,
             });
             ctx.audit.detail = {
@@ -1442,6 +1471,7 @@ const purchasingRouter = router({
               organizationId: scope.organizationId,
               branchId: scope.branchId,
               approverId,
+              actorId: scope.actorId,
               pin: input.approvalPin,
             });
             if ('blocked' in result) return result;

@@ -1,5 +1,5 @@
 import { can, subjectFromSession } from '@/lib/abac';
-import { actorCanProcure } from './procurement-access';
+import { procurementGrantedForUser } from './procurement-access';
 import { soloOwnerApprovalAllowed } from './purchase-approval';
 /**
  * PH-PUR read models — PRD §6.3 PUR-01..PUR-06 as the purchasing consoles need
@@ -358,8 +358,14 @@ export async function purchasingWorkspace(
         id: true,
         name: true,
         email: true,
+        role: true,
+        status: true,
         organizationRole: {
-          select: { permissions: { select: { capability: true, effect: true } } },
+          select: {
+            key: true,
+            isSystem: true,
+            permissions: { select: { capability: true, effect: true } },
+          },
         },
         permissionOverrides: {
           where: { OR: [{ expiresAt: null }, { expiresAt: { gt: at } }] },
@@ -376,10 +382,16 @@ export async function purchasingWorkspace(
     // Retain the existing clinical projection for controlled receipt callers.
     if (
       user.id !== scope.actorId &&
-      (await can(subjectFromSession(user), 'pharmacy:dispense', undefined, { db, now: at }))
+      // Keep the clinical subject identical to its historical (ID-only) shape.
+      (await can(subjectFromSession({ id: user.id }), 'pharmacy:dispense', undefined, {
+        db,
+        now: at,
+      }))
     )
       eligibleApprovers.push(user);
-    if (await actorCanProcure(db, user.id)) {
+    // The rows above already carry the live role and unexpired overrides, so the
+    // procurement decision needs no per-person lookup.
+    if (procurementGrantedForUser(user)) {
       const person = { id: user.id, name: user.name, email: user.email };
       if (user.id !== scope.actorId) {
         procurementApprovers.push(person);
@@ -389,12 +401,18 @@ export async function purchasingWorkspace(
           scope.organizationId,
           user.id
         );
-        const soloBranchIds = [];
-        for (const branch of branches) {
-          if (await soloOwnerApprovalAllowed(db, scope.organizationId, user.id, branch.id)) {
-            soloBranchIds.push(branch.id);
-          }
-        }
+        // Nobody else active in the tenant means nobody else at any branch.
+        const soloBranchIds = soloOrganizationWide
+          ? branches.map((branch) => branch.id)
+          : (
+              await Promise.all(
+                branches.map(async (branch) =>
+                  (await soloOwnerApprovalAllowed(db, scope.organizationId, user.id, branch.id))
+                    ? branch.id
+                    : null
+                )
+              )
+            ).filter((branchId): branchId is string => branchId !== null);
         if (soloOrganizationWide || soloBranchIds.length) {
           procurementApprovers.push({ ...person, soloOrganizationWide, soloBranchIds });
         }

@@ -45,6 +45,7 @@ let pharmacyPurchasingRouter: typeof import('./pharmacy-purchasing').pharmacyPur
 const suffix = randomUUID().replaceAll('-', '').slice(0, 10);
 const organizationId = `pur472_org_${suffix}`;
 const supplierId = `pur472_supplier_${suffix}`;
+const reviewerIds = [`pur472_first_reviewer_${suffix}`, `pur472_second_reviewer_${suffix}`];
 const owner = new pg.Client({ connectionString: databaseUrl });
 
 function caller(db: ScopedDb, userId: string) {
@@ -131,6 +132,22 @@ describeIfDatabase('purchase-order decision concurrency against PostgreSQL', () 
        VALUES ($1, $2, $3, 'WHOLESALE', $1, 'Test authority', now(), '2099-01-01', now())`,
       [`pur472_licence_${suffix}`, organizationId, supplierId]
     );
+    // Procurement is checked against live tenant users, and a branchless order
+    // is reviewed only by organization-wide purchasers.
+    for (const reviewerId of reviewerIds) {
+      await owner.query(
+        `INSERT INTO users
+           (id, "organizationId", name, email, role, department, title, "updatedAt")
+         VALUES ($1, $2, $1, $1 || '@pur472.test', 'ADMIN', 'Pharmacy', 'Buyer', now())`,
+        [reviewerId, organizationId]
+      );
+      await owner.query(
+        `INSERT INTO pharmacy_central_purchasing_access
+           (id, "organizationId", "userId", "branchId", "grantedById")
+         VALUES ($1, $2, $3, NULL, $3)`,
+        [`${reviewerId}_central`, organizationId, reviewerId]
+      );
+    }
   });
 
   afterAll(async () => {
@@ -171,8 +188,8 @@ describeIfDatabase('purchase-order decision concurrency against PostgreSQL', () 
           });
         });
 
-      const first = decide('pur472_first_reviewer', firstDecision);
-      const second = decide('pur472_second_reviewer', secondDecision);
+      const first = decide(reviewerIds[0]!, firstDecision);
+      const second = decide(reviewerIds[1]!, secondDecision);
 
       const results = await Promise.allSettled([first, second]);
       expect(synchronized?.observedStatuses).toEqual(['SUBMITTED', 'SUBMITTED']);

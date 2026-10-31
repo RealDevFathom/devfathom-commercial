@@ -14,9 +14,22 @@ it('projects owner solo approval eligibility for each branch and the organizatio
     medicine: { findMany: vi.fn().mockResolvedValue([]) },
     pharmacySupplier: { findMany: vi.fn().mockResolvedValue([]) },
     user: {
-      findMany: vi
-        .fn()
-        .mockResolvedValue([{ id: 'owner', name: 'Owner', email: 'owner@test.invalid' }]),
+      // The workspace decides procurement from the listed row, without a per-person lookup.
+      findMany: vi.fn().mockResolvedValue([
+        {
+          id: 'owner',
+          name: 'Owner',
+          email: 'owner@test.invalid',
+          status: 'ACTIVE',
+          role: 'ADMIN',
+          organizationRole: {
+            key: 'owner',
+            isSystem: true,
+            permissions: [{ capability: '*', effect: 'ALLOW' }],
+          },
+          permissionOverrides: [],
+        },
+      ]),
       findUnique: vi.fn().mockResolvedValue({
         status: 'ACTIVE',
         role: 'ADMIN',

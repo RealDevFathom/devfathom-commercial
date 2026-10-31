@@ -52,6 +52,23 @@ export async function actorCanProcure(db: ScopedDb, userId: string, now = new Da
     },
   });
   if (!user) return false;
+  return procurementGrantedForUser(user);
+}
+
+/**
+ * The procurement decision for an already-loaded ACTIVE user row (live role,
+ * unexpired overrides). Lets list projections avoid one lookup per person.
+ */
+export function procurementGrantedForUser(user: {
+  status?: string;
+  role?: string;
+  organizationRole: {
+    key?: string;
+    isSystem?: boolean;
+    permissions: readonly CapabilityRule[];
+  } | null;
+  permissionOverrides: readonly CapabilityRule[];
+}): boolean {
   if (
     matching([...user.permissionOverrides, ...(user.organizationRole?.permissions ?? [])]).some(
       (rule) => rule.effect === 'DENY'

@@ -86,14 +86,18 @@ describe.each(['safety', 'purchasing'] as const)('%s witness enumeration', (surf
   }
 });
 
+function purchasingWitnesses(f: ReturnType<typeof fixture>) {
+  return f.purchasing.controlledWitnesses({ branchId: 'branch', goodsReceiptId: 'receipt' });
+}
+
 it('allows a procurement receiver to select a controlled purchase witness', async () => {
   const f = fixture('pharmacy:procurement');
-  await expect(f.purchasing.controlledWitnesses()).resolves.toEqual([]);
+  await expect(purchasingWitnesses(f)).resolves.toEqual([]);
 });
 it('rejects an inactive database actor before witness enumeration', async () => {
   const f = fixture('pharmacy:safety');
   f.db.user.findUnique.mockResolvedValue(null);
-  await expect(f.purchasing.controlledWitnesses()).rejects.toMatchObject({
+  await expect(purchasingWitnesses(f)).rejects.toMatchObject({
     code: 'FORBIDDEN',
   });
   expect(f.db.restaurantStaffProfile.findMany).not.toHaveBeenCalled();
@@ -102,6 +106,6 @@ it('rejects an inactive database actor before witness enumeration', async () => 
 it('does not enumerate purchasing witnesses without the procurement module', async () => {
   const f = fixture('pharmacy:safety');
   vi.mocked(hasModule).mockReturnValue(false);
-  await expect(f.purchasing.controlledWitnesses()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  await expect(purchasingWitnesses(f)).rejects.toMatchObject({ code: 'FORBIDDEN' });
   expect(f.db.restaurantStaffProfile.findMany).not.toHaveBeenCalled();
 });

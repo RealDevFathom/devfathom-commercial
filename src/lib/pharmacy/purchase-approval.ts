@@ -5,9 +5,12 @@ import { assignedRegisterBranchIds } from './controlled-register';
 import {
   clearLockout,
   isLockedOut,
+  LOCKOUT_DURATION_MS,
+  MAX_FAILED_ATTEMPTS,
   registerFailedAttempt,
   verifyOperatorCredential,
 } from '@/lib/restaurant/operator-credentials';
+import { clearRateLimit, rateLimit } from '@/lib/rate-limit';
 
 export const SOLO_OWNER_POLICY = 'PHARMACY_SOLO_OWNER_PIN';
 export const APPROVAL_BLOCKED = 'An authorized approver must enter a valid PIN.';
@@ -60,15 +63,28 @@ async function verifyApprover(
     organizationId: string;
     branchId?: string | null;
     approverId: string;
+    /** The signed-in requester. Omitted only when the approver is the requester. */
+    actorId?: string;
     pin?: string;
   }
 ): Promise<{ blocked: string } | { verified: true }> {
   const { organizationId, branchId, approverId, pin } = input;
+  const crossPerson = input.actorId !== undefined && input.actorId !== approverId;
   if (!pin || !/^\d{4,8}$/.test(pin) || !(await actorCanProcure(db, approverId)))
     return { blocked: APPROVAL_BLOCKED } as const;
   if (
     branchId &&
     !(await assignedRegisterBranchIds(db, organizationId, approverId)).includes(branchId)
+  )
+    return { blocked: APPROVAL_BLOCKED } as const;
+  // The approval PIN is the approver's shared operator credential. Guesses typed
+  // by somebody else must not lock that person out of their other workflows, so
+  // they are bounded by a per-approver budget (the same five attempts per lockout
+  // window) instead of the credential's strike counter.
+  const throttleKey = `pharmacy-purchase-approver-pin:${organizationId}:${approverId}`;
+  if (
+    crossPerson &&
+    !(await rateLimit(throttleKey, MAX_FAILED_ATTEMPTS, LOCKOUT_DURATION_MS)).ok
   )
     return { blocked: APPROVAL_BLOCKED } as const;
   // Serialize strikes even for simultaneous guesses of the same user's PIN.
@@ -91,16 +107,19 @@ async function verifyApprover(
   const now = new Date();
   if (!credential || isLockedOut(credential, now)) return { blocked: APPROVAL_BLOCKED } as const;
   if (!(await verifyOperatorCredential('PIN', pin, credential.credentialHash))) {
-    await db.restaurantOperatorCredential.update({
-      where: { id: credential.id },
-      data: registerFailedAttempt(credential, now),
-    });
+    if (!crossPerson) {
+      await db.restaurantOperatorCredential.update({
+        where: { id: credential.id },
+        data: registerFailedAttempt(credential, now),
+      });
+    }
     return { blocked: APPROVAL_BLOCKED } as const;
   }
   await db.restaurantOperatorCredential.update({
     where: { id: credential.id },
     data: clearLockout(),
   });
+  if (crossPerson) await clearRateLimit(throttleKey);
   return { verified: true } as const;
 }
 
