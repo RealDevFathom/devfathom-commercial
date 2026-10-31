@@ -1,4 +1,7 @@
 /** @vitest-environment node */
+import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { convertToModelMessages, generateText, streamText, Output } from 'ai';
 import { MockLanguageModelV3, convertArrayToReadableStream } from 'ai/test';
@@ -60,13 +63,16 @@ function selection(provider: 'anthropic' | 'bedrock' = 'anthropic'): AIModelSele
   };
 }
 
-beforeEach(() => {
+let journalDirectory: string;
+beforeEach(async () => {
   vi.resetAllMocks();
+  journalDirectory = await mkdtemp(join(tmpdir(), 'ai-metering-'));
+  vi.stubEnv('AI_USAGE_JOURNAL_DIR', journalDirectory);
   vi.stubEnv('AI_ANTHROPIC_MONTHLY_BUDGET_USD', '10');
   mocks.platform.mockImplementation(async (run) =>
     run({
       aIModelPrice: { findFirst: mocks.prices },
-      aIUsageLedger: { aggregate: mocks.aggregate, create: mocks.create },
+      aIUsageLedger: { aggregate: mocks.aggregate, createMany: mocks.create },
     })
   );
   mocks.tenant.mockImplementation(async (_org, run) =>
@@ -84,7 +90,8 @@ beforeEach(() => {
   mocks.availability.mockReturnValue({ available: true, provider: 'anthropic' });
   mocks.config.mockReturnValue({ provider: 'anthropic', model: DEFAULT_AI_MODELS.anthropic.cheap });
 });
-afterEach(() => {
+afterEach(async () => {
+  await rm(journalDirectory, { recursive: true, force: true });
   vi.useRealTimers();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
@@ -101,6 +108,7 @@ describe('production Claude routing and metering', () => {
     expect(result.text).toBe('paid output');
     expect(mocks.create).toHaveBeenCalledWith({
       data: {
+        id: expect.any(String),
         provider: 'anthropic',
         model: DEFAULT_AI_MODELS.anthropic.cheap,
         inputTokens: 1_000_000,
@@ -108,6 +116,7 @@ describe('production Claude routing and metering', () => {
         costUsd: new Prisma.Decimal(6),
         occurredAt: expect.any(Date),
       },
+      skipDuplicates: true,
     });
     expect(mocks.tenantCreate).toHaveBeenCalledWith({
       data: expect.objectContaining({
@@ -137,6 +146,7 @@ describe('production Claude routing and metering', () => {
         provider: 'bedrock',
         model: DEFAULT_AI_MODELS.bedrock.cheap,
       }),
+      skipDuplicates: true,
     });
   });
 
@@ -283,6 +293,24 @@ describe('production Claude routing and metering', () => {
                 },
               ],
             },
+            {
+              prompt: [
+                {
+                  role: 'tool',
+                  content: [
+                    {
+                      type: 'tool-result',
+                      toolCallId: 'call-1',
+                      toolName: 'safe',
+                      output: {
+                        type: 'content',
+                        value: [{ type: 'text', text: 'safe', providerOptions }],
+                      },
+                    },
+                  ],
+                },
+              ],
+            },
           ];
           for (const params of calls)
             await expect(
@@ -302,7 +330,6 @@ describe('production Claude routing and metering', () => {
     const prepared = await prepareAIModel(selected);
     const messages = await convertToModelMessages([
       {
-        id: 'user-1',
         role: 'user',
         parts: [
           {
@@ -425,6 +452,69 @@ describe('production Claude routing and metering', () => {
       text: 'paid output',
     });
     expect((selected.model as MockLanguageModelV3).doGenerateCalls).toHaveLength(1);
-    expect(log).toHaveBeenCalledExactlyOnceWith('AI_USAGE_PERSIST_FAILED');
+    const files = await readdir(journalDirectory);
+    expect(files).toHaveLength(1);
+    const recovery = JSON.parse(await readFile(join(journalDirectory, files[0]), 'utf8'));
+    expect(recovery).toEqual({
+      id: expect.any(String),
+      provider: 'anthropic',
+      model: DEFAULT_AI_MODELS.anthropic.cheap,
+      inputTokens: 1_000_000,
+      outputTokens: 1_000_000,
+      costUsd: '6.000000',
+      occurredAt: expect.any(String),
+    });
+    expect(log).toHaveBeenCalledExactlyOnceWith('AI_USAGE_PERSIST_FAILED', expect.any(String));
+    expect(JSON.parse(log.mock.calls[0][1])).toMatchObject({ id: recovery.id });
+    expect(JSON.stringify(log.mock.calls)).not.toContain('private database detail');
+    expect(JSON.stringify(log.mock.calls)).not.toContain('paid output');
+  });
+
+  it.each(['generate', 'stream'] as const)(
+    'reconciles failed %s writes before routing a fresh model at the recovered budget',
+    async (mode) => {
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      mocks.create.mockRejectedValueOnce(new Error('transaction timed out'));
+      const prepared = await prepareAIModel(selection());
+      if (mode === 'generate')
+        await expect(
+          generateText({ model: prepared.model, prompt: 'safe' })
+        ).resolves.toMatchObject({ text: 'paid output' });
+      else
+        await expect(streamText({ model: prepared.model, prompt: 'safe' }).text).resolves.toBe(
+          'paid output'
+        );
+      const failedData = mocks.create.mock.calls[0][0].data;
+      expect(await readdir(journalDirectory)).toEqual([`${failedData.id}.json`]);
+
+      // Simulate a later request or worker; recovery must not depend on the old wrapper.
+      mocks.create.mockImplementation(async () => {
+        mocks.aggregate.mockResolvedValue({ _sum: { costUsd: new Prisma.Decimal('10') } });
+      });
+      const recovered = await prepareAIModel(selection());
+      expect(recovered.provider).toBe('bedrock');
+      expect(mocks.create.mock.calls[1][0]).toEqual({ data: failedData, skipDuplicates: true });
+      expect(await readdir(journalDirectory)).toEqual([]);
+    }
+  );
+
+  it('stops a new purchase while a pending ledger write cannot be reconciled', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    mocks.create.mockRejectedValue(new Error('transaction timed out'));
+    const selected = selection();
+    const prepared = await prepareAIModel(selected);
+    await generateText({ model: prepared.model, prompt: 'safe' });
+    await expect(
+      generateText({ model: prepared.model, prompt: 'safe', maxRetries: 0 })
+    ).rejects.toThrow('transaction timed out');
+    expect((selected.model as MockLanguageModelV3).doGenerateCalls).toHaveLength(1);
+    expect(await readdir(journalDirectory)).toHaveLength(1);
+  });
+
+  it('fails before purchase without persistent journal configuration', async () => {
+    vi.stubEnv('AI_USAGE_JOURNAL_DIR', '');
+    const selected = selection();
+    await expect(prepareAIModel(selected)).rejects.toThrow('AI_USAGE_JOURNAL_DIR');
+    expect((selected.model as MockLanguageModelV3).doGenerateCalls).toHaveLength(0);
   });
 });

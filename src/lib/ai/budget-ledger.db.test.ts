@@ -163,6 +163,19 @@ describe.skipIf(!url)('AI budget database authorization and pricing', () => {
     await expect(db.query('TRUNCATE ai_usage_ledger')).rejects.toThrow('append-only');
   });
 
+  it('deduplicates recovery inserts without updating the append-only ledger', async () => {
+    const usageId = randomUUID();
+    const sql = `INSERT INTO ai_usage_ledger
+      (id,provider,model,"inputTokens","outputTokens","costUsd","occurredAt")
+      VALUES ($1,'anthropic','recovery-probe',1000000,1000000,6,$2)
+      ON CONFLICT DO NOTHING`;
+    expect((await db.query(sql, [usageId, at])).rowCount).toBe(1);
+    expect((await db.query(sql, [usageId, at])).rowCount).toBe(0);
+    expect(
+      (await db.query('SELECT "costUsd" FROM ai_usage_ledger WHERE id=$1', [usageId])).rows
+    ).toEqual([{ costUsd: '6.000000' }]);
+  });
+
   it('tenant scope cannot truncate the shared price catalog', async () => {
     await db.query("SELECT set_config('app.is_platform_admin','false',true)");
     await expect(db.query('TRUNCATE ai_model_prices')).rejects.toMatchObject({ code: '42501' });

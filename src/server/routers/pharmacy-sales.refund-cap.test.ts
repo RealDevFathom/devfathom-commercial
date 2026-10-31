@@ -57,6 +57,7 @@ function fixture(returnedUnits: number, priorRefunds: number[] = []) {
       }),
     },
     pharmacyBranch: {
+      findFirst: vi.fn().mockResolvedValue({ id: 'branch-1' }),
       findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
         where.id.in.map((id) => ({ id }))
       ),
@@ -140,6 +141,11 @@ for (const boundary of ['service', 'API'] as const) {
           : refundPharmacyTender(f.db as unknown as ScopedDb, scope, request);
       };
       const assertLocked = (f: ReturnType<typeof fixture>) => {
+        if (boundary === 'API')
+          expect(f.db.pharmacyBranch.findFirst).toHaveBeenCalledWith({
+            where: { id: 'branch-1', organizationId: 'org-1', active: true },
+            select: { id: true },
+          });
         // Integrated tip: the F3 day lock and the tip's tender-join lock run first, so find the
         // sale lock by content rather than by position; it must still precede the aggregate read.
         const index = f.db.$queryRaw.mock.calls.findIndex(([q]) => {
