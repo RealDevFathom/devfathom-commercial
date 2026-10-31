@@ -415,12 +415,20 @@ export default async function PharmacyInventoryPage({
         heading="Inventory"
         description="FEFO lots, controlled stock movements, chain operations, and the ranked work queue."
         actions={
-          <Link
-            href="/pharmacy/inventory/imports"
-            className={buttonVariants({ variant: 'secondary' })}
-          >
-            Imported stock / Awaiting verification
-          </Link>
+          <>
+            <Link
+              href="/pharmacy/inventory/import"
+              className={buttonVariants({ variant: 'secondary' })}
+            >
+              Import opening stock
+            </Link>
+            <Link
+              href="/pharmacy/inventory/imports"
+              className={buttonVariants({ variant: 'secondary' })}
+            >
+              Imported stock / Awaiting verification
+            </Link>
+          </>
         }
       />
       {query.notice ? (
