@@ -26,6 +26,7 @@ const LATER = new Date('2027-10-01T00:00:00.000Z');
 
 type Deps = {
   withTenantDb: (typeof import('@/lib/tenancy/scoped-db'))['withTenantDb'];
+  withPlatformDb: (typeof import('@/lib/tenancy/scoped-db'))['withPlatformDb'];
   devices: typeof import('@/lib/pharmacy/offline-devices');
   snapshots: typeof import('@/lib/pharmacy/offline-snapshots');
   leases: typeof import('@/lib/pharmacy/offline-receipt-leases');
@@ -202,7 +203,15 @@ beforeAll(async () => {
     import('@/lib/pharmacy/offline-command-log'),
     import('@/lib/testing/rls-role-guard'),
   ]);
-  deps = { withTenantDb: scopedDb.withTenantDb, devices, snapshots, leases, quotas, log };
+  deps = {
+    withTenantDb: scopedDb.withTenantDb,
+    withPlatformDb: scopedDb.withPlatformDb,
+    devices,
+    snapshots,
+    leases,
+    quotas,
+    log,
+  };
   await roleGuard.assertRlsEnforcingRole(scopedDb.withPlatformDb);
   // Integrated tip (20261012120000_visibility_context_anchors): tenant rows must reference an
   // existing organization, so anchor this suite's synthetic tenants before any test runs.
@@ -236,6 +245,429 @@ vi.mock('@/lib/rate-limit', () => ({
   rateLimit: () => ({ ok: true }),
   clientIp: () => '127.0.0.1',
 }));
+
+describeIfDatabase('offline quota stock reservation', () => {
+  it('projects only inserted quotas and the actual update arm of an upsert', async () => {
+    const fixture = await scenario(ORG_A, BRANCH_A, 'duplicate-quota', { units: 10 });
+    const quota = await inOrg(ORG_A, (db) =>
+      deps.quotas.grantDeviceLotQuota(db, scopeOf(fixture), {
+        deviceId: fixture.deviceId,
+        ...bucketOf(fixture),
+        units: 3,
+      })
+    );
+    await inOrg(ORG_A, async (db) => {
+      const inserted = await db.pharmacyDeviceLotQuota.createMany({
+        data: [quota, quota],
+        skipDuplicates: true,
+      });
+      expect(inserted.count).toBe(0);
+      const balance = () =>
+        db.pharmacyStockBalance.findFirstOrThrow({
+          where: { organizationId: ORG_A, ...bucketOf(fixture), disposition: 'AVAILABLE' },
+        });
+      expect((await balance()).offlineReservedUnits).toBe(3);
+      await db.$executeRaw`
+        INSERT INTO pharmacy_device_lot_quotas
+        SELECT * FROM pharmacy_device_lot_quotas WHERE id = ${quota.id}
+        ON CONFLICT (id) DO UPDATE
+          SET "consumedUnits" = pharmacy_device_lot_quotas."consumedUnits" + 1`;
+      expect((await balance()).offlineReservedUnits).toBe(2);
+      expect(await deps.quotas.outstandingQuotaUnits(db, scopeOf(fixture), bucketOf(fixture))).toBe(
+        2
+      );
+    });
+  });
+
+  it.each([10, 6])(
+    'allocates FEFO using free units with %i units reserved on the first lot',
+    async (reserved) => {
+      const fixture = await scenario(ORG_A, BRANCH_A, 'reserved-fefo', { units: 10 });
+      const ledger = await import('@/lib/pharmacy/stock-ledger');
+      const laterLot = await inOrg(ORG_A, async (db) => {
+        const batch = await db.pharmacyManufacturingBatch.create({
+          data: {
+            organizationId: ORG_A,
+            medicineId: fixture.medicineId,
+            batchNumber: tag('later-batch'),
+            expiresAt: new Date('2027-11-01T00:00:00.000Z'),
+            expiryPrecision: 'DAY',
+          },
+        });
+        const received = await ledger.receiveLot(db, scopeOf(fixture), {
+          manufacturingBatchId: batch.id,
+          packLevelId: fixture.packLevelId,
+          stockLocationId: fixture.locationId,
+          unitsPerPack: 10,
+          supplierName: 'Supplier',
+          supplierInvoiceRef: tag('later-invoice'),
+          unitCostMinor: 50,
+          printedMrpMinor: 1_000,
+          receivedExpiresAt: batch.expiresAt,
+          receivedExpiryPrecision: 'DAY',
+          receivedAt: NOW,
+          quantityUnits: 10,
+          idempotencyKey: tag('later-receipt'),
+        });
+        await deps.quotas.grantDeviceLotQuota(db, scopeOf(fixture), {
+          deviceId: fixture.deviceId,
+          ...bucketOf(fixture),
+          units: reserved,
+        });
+        // Unit sales require explicit pack breaking, even for offline reservations.
+        for (const inventoryLotId of [fixture.lotId, received.lot.id]) {
+          await ledger.breakPack(db, scopeOf(fixture), {
+            inventoryLotId,
+            stockLocationId: fixture.locationId,
+            requiredLooseUnits: 10,
+            idempotencyKey: tag('fefo-break'),
+            at: NOW,
+          });
+        }
+        return received.lot;
+      });
+      const result = await inOrg(ORG_A, async (db) => {
+        const onHand = await ledger.onHand(db, scopeOf(fixture), fixture.medicineId, NOW);
+        expect(onHand.map((bucket) => [bucket.inventoryLotId, bucket.onHandUnits])).toEqual([
+          [fixture.lotId, 10],
+          [laterLot.id, 10],
+        ]);
+        const candidates = await ledger.loadStockCandidatesForRead(
+          db,
+          scopeOf(fixture),
+          fixture.medicineId
+        );
+        expect(
+          candidates.map((candidate) => [candidate.inventoryLotId, candidate.availableUnits])
+        ).toEqual(
+          reserved === 10
+            ? [[laterLot.id, 10]]
+            : [
+                [fixture.lotId, 4],
+                [laterLot.id, 10],
+              ]
+        );
+        return ledger.allocateForSale(db, scopeOf(fixture), {
+          medicineId: fixture.medicineId,
+          requiredUnits: 10,
+          idempotencyKeyPrefix: tag('fefo-sale'),
+          at: NOW,
+        });
+      });
+      expect(result.allocations).toEqual(
+        reserved === 10
+          ? [{ inventoryLotId: laterLot.id, stockLocationId: fixture.locationId, units: 10 }]
+          : [
+              { inventoryLotId: fixture.lotId, stockLocationId: fixture.locationId, units: 4 },
+              { inventoryLotId: laterLot.id, stockLocationId: fixture.locationId, units: 6 },
+            ]
+      );
+      const balance = await inOrg(ORG_A, (db) =>
+        db.pharmacyStockBalance.findFirstOrThrow({
+          where: { organizationId: ORG_A, ...bucketOf(fixture), disposition: 'AVAILABLE' },
+        })
+      );
+      expect(balance.onHandUnits).toBe(reserved);
+      expect(balance.offlineReservedUnits).toBe(reserved);
+      const remainingOnHand = await inOrg(ORG_A, (db) =>
+        ledger.onHand(db, scopeOf(fixture), fixture.medicineId, NOW)
+      );
+      expect(
+        remainingOnHand.find((bucket) => bucket.inventoryLotId === fixture.lotId)
+      ).toMatchObject({
+        onHandUnits: reserved,
+        sealedPacks: 0,
+        looseUnits: reserved,
+      });
+    }
+  );
+
+  it('preserves granted stock from online movements until the quota is consumed', async () => {
+    const fixture = await scenario(ORG_A, BRANCH_A, 'reserved-stock', { units: 10 });
+    await inOrg(ORG_A, (db) =>
+      deps.quotas.grantDeviceLotQuota(db, scopeOf(fixture), {
+        deviceId: fixture.deviceId,
+        ...bucketOf(fixture),
+        units: 10,
+      })
+    );
+
+    const decrement = {
+      organizationId: ORG_A,
+      branchId: BRANCH_A,
+      inventoryLotId: fixture.lotId,
+      stockLocationId: fixture.locationId,
+      kind: 'ADJUSTMENT' as const,
+      disposition: 'AVAILABLE' as const,
+      quantityUnits: -10,
+      sealedPackDelta: -1,
+      looseUnitDelta: 0,
+      actorId: ACTOR,
+      occurredAt: NOW,
+    };
+
+    await expect(
+      inOrg(ORG_A, (db) =>
+        db.pharmacyStockMovement.create({
+          data: { ...decrement, idempotencyKey: `online-${tag('reserved-stock')}` },
+        })
+      )
+    ).rejects.toThrow('OFFLINE_QUOTA_RESERVES_STOCK');
+
+    const reservedBalance = await inOrg(ORG_A, (db) =>
+      db.pharmacyStockBalance.findFirstOrThrow({
+        where: { organizationId: ORG_A, ...bucketOf(fixture), disposition: 'AVAILABLE' },
+      })
+    );
+    expect(reservedBalance.onHandUnits).toBe(10);
+    expect(reservedBalance.offlineReservedUnits).toBe(10);
+
+    await inOrg(ORG_A, async (db) => {
+      await deps.quotas.consumeDeviceLotQuota(db, scopeOf(fixture), {
+        deviceId: fixture.deviceId,
+        ...bucketOf(fixture),
+        units: 10,
+      });
+      await db.pharmacyStockMovement.create({
+        data: { ...decrement, idempotencyKey: `offline-${tag('reserved-stock')}` },
+      });
+    });
+
+    const balance = await inOrg(ORG_A, (db) =>
+      db.pharmacyStockBalance.findFirstOrThrow({
+        where: { organizationId: ORG_A, ...bucketOf(fixture), disposition: 'AVAILABLE' },
+      })
+    );
+    expect(balance.onHandUnits).toBe(0);
+    expect(balance.offlineReservedUnits).toBe(0);
+  });
+
+  it('allows exactly the unreserved units and counts every device quota', async () => {
+    const fixture = await scenario(ORG_A, BRANCH_A, 'partial-reservation', { units: 15 });
+    const secondDevice = await inOrg(ORG_A, (db) =>
+      deps.devices.enrollPharmacyCounter(db, scopeOf(fixture), {
+        name: `Counter ${tag('second-reservation')}`,
+      })
+    );
+    for (const [deviceId, units] of [
+      [fixture.deviceId, 6],
+      [secondDevice.device.id, 4],
+    ] as const) {
+      await inOrg(ORG_A, (db) =>
+        deps.quotas.grantDeviceLotQuota(db, scopeOf(fixture), {
+          deviceId,
+          ...bucketOf(fixture),
+          units,
+        })
+      );
+    }
+
+    const movement = (units: number, label: string) =>
+      inOrg(ORG_A, (db) =>
+        db.pharmacyStockMovement.create({
+          data: {
+            organizationId: ORG_A,
+            branchId: BRANCH_A,
+            ...bucketOf(fixture),
+            kind: 'ADJUSTMENT',
+            disposition: 'AVAILABLE',
+            quantityUnits: units,
+            sealedPackDelta: 0,
+            looseUnitDelta: units,
+            actorId: ACTOR,
+            idempotencyKey: `partial-${tag(label)}`,
+            occurredAt: NOW,
+          },
+        })
+      );
+
+    await movement(-5, 'unreserved');
+    await expect(movement(-1, 'reserved')).rejects.toThrow('OFFLINE_QUOTA_RESERVES_STOCK');
+  });
+
+  it('rejects a multi-row insert whose combined decrement consumes reserved stock', async () => {
+    const fixture = await scenario(ORG_A, BRANCH_A, 'batched-reservation', { units: 8 });
+    await inOrg(ORG_A, (db) =>
+      deps.quotas.grantDeviceLotQuota(db, scopeOf(fixture), {
+        deviceId: fixture.deviceId,
+        ...bucketOf(fixture),
+        units: 3,
+      })
+    );
+
+    await expect(
+      inOrg(ORG_A, (db) =>
+        db.pharmacyStockMovement.createMany({
+          data: ['first', 'second'].map((label) => ({
+            organizationId: ORG_A,
+            branchId: BRANCH_A,
+            ...bucketOf(fixture),
+            kind: 'ADJUSTMENT' as const,
+            disposition: 'AVAILABLE' as const,
+            quantityUnits: -3,
+            sealedPackDelta: 0,
+            looseUnitDelta: -3,
+            actorId: ACTOR,
+            idempotencyKey: `batched-${tag(label)}`,
+            occurredAt: NOW,
+          })),
+        })
+      )
+    ).rejects.toThrow('OFFLINE_QUOTA_RESERVES_STOCK');
+
+    const balance = await inOrg(ORG_A, (db) =>
+      db.pharmacyStockBalance.findFirstOrThrow({
+        where: { organizationId: ORG_A, ...bucketOf(fixture), disposition: 'AVAILABLE' },
+      })
+    );
+    expect(balance.onHandUnits).toBe(8);
+  });
+
+  it('ignores released quotas, positive movements, and non-AVAILABLE stock', async () => {
+    const fixture = await scenario(ORG_A, BRANCH_A, 'released-reservation', { units: 10 });
+    const quota = await inOrg(ORG_A, (db) =>
+      deps.quotas.grantDeviceLotQuota(db, scopeOf(fixture), {
+        deviceId: fixture.deviceId,
+        ...bucketOf(fixture),
+        units: 10,
+      })
+    );
+    await inOrg(ORG_A, async (db) => {
+      await db.pharmacyStockMovement.create({
+        data: {
+          organizationId: ORG_A,
+          branchId: BRANCH_A,
+          ...bucketOf(fixture),
+          kind: 'ADJUSTMENT',
+          disposition: 'QUARANTINE',
+          quantityUnits: 1,
+          sealedPackDelta: 0,
+          looseUnitDelta: 1,
+          actorId: ACTOR,
+          idempotencyKey: `quarantine-in-${tag('released')}`,
+          occurredAt: NOW,
+        },
+      });
+      await db.pharmacyStockMovement.create({
+        data: {
+          organizationId: ORG_A,
+          branchId: BRANCH_A,
+          ...bucketOf(fixture),
+          kind: 'ADJUSTMENT',
+          disposition: 'QUARANTINE',
+          quantityUnits: -1,
+          sealedPackDelta: 0,
+          looseUnitDelta: -1,
+          actorId: ACTOR,
+          idempotencyKey: `quarantine-out-${tag('released')}`,
+          occurredAt: NOW,
+        },
+      });
+      await db.pharmacyStockMovement.create({
+        data: {
+          organizationId: ORG_A,
+          branchId: BRANCH_A,
+          ...bucketOf(fixture),
+          kind: 'ADJUSTMENT',
+          disposition: 'AVAILABLE',
+          quantityUnits: 1,
+          sealedPackDelta: 0,
+          looseUnitDelta: 1,
+          actorId: ACTOR,
+          idempotencyKey: `available-in-${tag('released')}`,
+          occurredAt: NOW,
+        },
+      });
+      await deps.quotas.releaseDeviceLotQuota(db, scopeOf(fixture), quota.id, NOW);
+      await db.pharmacyStockMovement.create({
+        data: {
+          organizationId: ORG_A,
+          branchId: BRANCH_A,
+          ...bucketOf(fixture),
+          kind: 'ADJUSTMENT',
+          disposition: 'AVAILABLE',
+          quantityUnits: -11,
+          sealedPackDelta: -1,
+          looseUnitDelta: -1,
+          actorId: ACTOR,
+          idempotencyKey: `released-out-${tag('released')}`,
+          occurredAt: NOW,
+        },
+      });
+    });
+  });
+
+  it('rejects a decrement whose statement snapshot predates a blocked quota grant', async () => {
+    const fixture = await scenario(ORG_A, BRANCH_A, 'concurrent-reservation', { units: 10 });
+    let grantReady!: () => void;
+    let commitGrant!: () => void;
+    let reportDecrementPid!: (pid: number) => void;
+    const grantIsReady = new Promise<void>((resolve) => (grantReady = resolve));
+    const mayCommitGrant = new Promise<void>((resolve) => (commitGrant = resolve));
+    const decrementPid = new Promise<number>((resolve) => (reportDecrementPid = resolve));
+
+    const grant = inOrg(ORG_A, async (db) => {
+      const quota = await deps.quotas.grantDeviceLotQuota(db, scopeOf(fixture), {
+        deviceId: fixture.deviceId,
+        ...bucketOf(fixture),
+        units: 10,
+      });
+      grantReady();
+      await mayCommitGrant;
+      return quota;
+    });
+    await grantIsReady;
+
+    const decrement = inOrg(ORG_A, async (db) => {
+      const [{ pid }] = await db.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+      reportDecrementPid(pid!);
+      return db.pharmacyStockMovement.create({
+        data: {
+          organizationId: ORG_A,
+          branchId: BRANCH_A,
+          ...bucketOf(fixture),
+          kind: 'ADJUSTMENT',
+          disposition: 'AVAILABLE',
+          quantityUnits: -10,
+          sealedPackDelta: -1,
+          looseUnitDelta: 0,
+          actorId: ACTOR,
+          idempotencyKey: `concurrent-${tag('reservation')}`,
+          occurredAt: NOW,
+        },
+      });
+    });
+
+    const pid = await decrementPid;
+    let blocked = false;
+    for (let attempt = 0; attempt < 100 && !blocked; attempt += 1) {
+      blocked = await deps.withPlatformDb(async (db) => {
+        const [row] = await db.$queryRaw<Array<{ blocked: boolean }>>`
+          SELECT cardinality(pg_blocking_pids(${pid})) > 0 AS blocked`;
+        return row?.blocked ?? false;
+      });
+      if (!blocked) await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    commitGrant();
+
+    const [grantResult, decrementResult] = await Promise.allSettled([grant, decrement]);
+
+    expect(blocked).toBe(true);
+    expect(grantResult.status).toBe('fulfilled');
+    expect(decrementResult.status).toBe('rejected');
+    const [balance, outstanding] = await Promise.all([
+      inOrg(ORG_A, (db) =>
+        db.pharmacyStockBalance.findFirst({
+          where: { organizationId: ORG_A, ...bucketOf(fixture), disposition: 'AVAILABLE' },
+        })
+      ),
+      inOrg(ORG_A, (db) =>
+        deps.quotas.outstandingQuotaUnits(db, scopeOf(fixture), bucketOf(fixture))
+      ),
+    ]);
+    expect((balance?.onHandUnits ?? 0) - outstanding).toBe(0);
+  });
+});
 
 async function setup() {
   const fixture = await scenario(ORG_A, BRANCH_A, 'transport');

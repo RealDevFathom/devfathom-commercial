@@ -2234,15 +2234,16 @@ model PharmacyStockMovement {
 /// maintained only by the ledger trigger and constrained non-negative, so a
 /// negative balance is unrepresentable. Never written by application code.
 model PharmacyStockBalance {
-  organizationId  String
-  branchId        String
-  inventoryLotId  String
-  stockLocationId String
-  disposition     PharmacyStockDisposition
-  onHandUnits     Int
-  sealedPacks     Int
-  looseUnits      Int
-  updatedAt       DateTime                 @default(now())
+  organizationId       String
+  branchId             String
+  inventoryLotId       String
+  stockLocationId      String
+  disposition          PharmacyStockDisposition
+  onHandUnits          Int
+  offlineReservedUnits Int                      @default(0)
+  sealedPacks          Int
+  looseUnits           Int
+  updatedAt            DateTime                 @default(now())
 
   lot      PharmacyInventoryLot  @relation(fields: [organizationId, branchId, inventoryLotId], references: [organizationId, branchId, id], onDelete: Restrict)
   location PharmacyStockLocation @relation(fields: [organizationId, stockLocationId], references: [organizationId, id], onDelete: Restrict)
