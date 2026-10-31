@@ -466,6 +466,18 @@ export async function prepareClosePacket(
       );
     }
   }
+  if (financial.data && financial.data.closeGuards.unbilledOrderCount === undefined) {
+    financial.missingEvidence.push(
+      evidence(
+        'ORDER_CLOSE_GUARD_UNAVAILABLE',
+        'The operational order guard could not be verified. Financial evidence alone does not establish daily-close readiness.',
+        'src/lib/restaurant/daily-close.ts#countUnbilledActiveOrders',
+        'SHIFT_MANAGER',
+        ['orders']
+      )
+    );
+    if (financial.status === 'READY') financial.status = 'UNKNOWN';
+  }
   const completedAt = new Date();
   const fresh = freshRequest && completedAt.getTime() - asOf.getTime() <= CLOSE_PACKET_MAX_AGE_MS;
   if (!fresh) {

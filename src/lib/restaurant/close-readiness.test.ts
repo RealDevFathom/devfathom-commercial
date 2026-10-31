@@ -302,8 +302,32 @@ describe('read-only close preparation', () => {
     expect(packet.financial.data?.closeGuards).not.toHaveProperty('unbilledOrderCount');
     expect(packet.financial.data?.closeGuards.allBillsResolved).toBe(true);
     expect(packet.financial.blockers).toEqual([]);
+    expect(packet.financial.status).toBe('UNKNOWN');
+    expect(packet.financial.missingEvidence).toEqual([
+      expect.objectContaining({ code: 'ORDER_CLOSE_GUARD_UNAVAILABLE', recordIds: [] }),
+    ]);
     expect(JSON.stringify(packet)).not.toContain('private-order');
     expect(packet.status).toBe('UNKNOWN');
+  });
+
+  it('does not infer a clear order guard from financial-only access even on an empty day', async () => {
+    const f = fixture();
+    const packet = await f.prepare(input, { ...access, operational: false });
+    expect(packet.financial.status).toBe('UNKNOWN');
+    expect(packet.financial.data?.closeGuards).not.toHaveProperty('unbilledOrderCount');
+    expect(f.db.restaurantOrder.count).not.toHaveBeenCalled();
+  });
+
+  it('preserves known blockers and closed status when order evidence is unauthorized', async () => {
+    const f = fixture();
+    f.state.bills.push(bill('OPEN'));
+    expect((await f.prepare(input, { ...access, operational: false })).financial.status).toBe(
+      'BLOCKED'
+    );
+    f.state.closes.push(close());
+    expect((await f.prepare(input, { ...access, operational: false })).financial.status).toBe(
+      'ALREADY_CLOSED'
+    );
   });
 
   it('blocks financial preparation when authorized order evidence blocks daily close', async () => {
@@ -398,7 +422,20 @@ describe('read-only close preparation', () => {
       missingEvidence: [{ code: 'OPERATIONAL_SOURCE_UNAVAILABLE' }],
     });
     expect(JSON.stringify(packet)).not.toContain('private database details');
-    expect(packet.financial.status).toBe('READY');
+    expect(packet.financial.status).toBe('UNKNOWN');
+    expect(packet.financial.missingEvidence).toEqual([
+      expect.objectContaining({ code: 'ORDER_CLOSE_GUARD_UNAVAILABLE' }),
+    ]);
+  });
+
+  it('does not label financial guards ready when only the authoritative order count fails', async () => {
+    const f = fixture();
+    f.db.restaurantOrder.count
+      .mockResolvedValueOnce(0)
+      .mockRejectedValueOnce(new Error('guard unavailable'));
+    const packet = await f.prepare();
+    expect(packet.financial.status).toBe('UNKNOWN');
+    expect(packet.financial.data?.closeGuards).not.toHaveProperty('unbilledOrderCount');
   });
 
   it('distinguishes unavailable financial reads and missing currency from zero money', async () => {
