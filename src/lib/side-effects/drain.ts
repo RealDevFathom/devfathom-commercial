@@ -153,8 +153,26 @@ export function scrubDeadEmailPayload(payload: Prisma.JsonValue): Prisma.InputJs
  */
 export async function runEffect(
   row: Pick<EffectRow, 'id' | 'kind' | 'payload'>,
-  lookupWebhook: (webhookId: string) => Promise<WebhookEndpoint | null> = async () => null
+  lookupWebhook: (webhookId: string) => Promise<WebhookEndpoint | null> = async () => null,
+  organizationId?: string
 ): Promise<EffectOutcome> {
+  if (row.kind === 'pharmacy-back-in-stock') {
+    const payload = asRecord(row.payload);
+    if (
+      !organizationId ||
+      typeof payload?.branchId !== 'string' ||
+      typeof payload.notificationId !== 'string'
+    )
+      return { ok: false, error: 'Delivery failed' };
+    const { deliverBackInStockNotification } = await import('@/lib/pharmacy/back-in-stock-worker');
+    await deliverBackInStockNotification(
+      { organizationId, branchId: payload.branchId },
+      payload.notificationId
+    );
+    // The notification owns its durable delivery claim and audit outcome. An
+    // ambiguous send must never be automatically retried by this outer outbox.
+    return { ok: true, error: null };
+  }
   if (row.kind === 'email') return runEmail(row.payload);
   if (row.kind === 'webhook') return runWebhook(row, lookupWebhook);
   return { ok: false, error: 'Delivery failed' };
@@ -354,16 +372,19 @@ export async function drainOrganization(organizationId: string): Promise<void> {
   );
 
   for (const row of claimed) {
-    const outcome = await runEffect(row, (webhookId) =>
-      withTenantDb(
-        organizationId,
-        async (db) =>
-          db.webhook.findUnique({
-            where: { id: webhookId },
-            select: { url: true, secret: true, active: true },
-          }),
-        { skipDrain: true, timeout: 10_000 }
-      )
+    const outcome = await runEffect(
+      row,
+      (webhookId) =>
+        withTenantDb(
+          organizationId,
+          async (db) =>
+            db.webhook.findUnique({
+              where: { id: webhookId },
+              select: { url: true, secret: true, active: true },
+            }),
+          { skipDrain: true, timeout: 10_000 }
+        ),
+      organizationId
     );
     await withTenantDb(
       organizationId,

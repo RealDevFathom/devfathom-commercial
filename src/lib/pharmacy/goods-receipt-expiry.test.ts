@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const receiveLot = vi.hoisted(() => vi.fn());
+const captureArrival = vi.hoisted(() => vi.fn());
+vi.mock('./sales', () => ({ captureSafeRestockArrival: captureArrival }));
 
 vi.mock('./stock-ledger', async () => {
   const actual = await vi.importActual<typeof import('./stock-ledger')>('./stock-ledger');
@@ -89,6 +91,7 @@ function receiptDb(line: {
 }
 
 beforeEach(() => {
+  captureArrival.mockReset().mockResolvedValue([]);
   receiveLot.mockReset().mockResolvedValue({
     lot: { id: 'lot' },
     movement: { id: 'move' },
@@ -158,6 +161,11 @@ describe('postGoodsReceipt expiry', () => {
 
   it('posts a fully rejected expired pack into quarantine', async () => {
     const { db } = receiptDb({ accepted: 0, rejected: 10, expiry: '2025-12-31' });
+    receiveLot.mockResolvedValueOnce({
+      lot: { id: 'lot' },
+      movement: null,
+      quarantineMovement: { id: 'quar' },
+    });
     await postGoodsReceipt(db, SCOPE, { goodsReceiptId: 'gr', at: AT });
     expect(receiveLot).toHaveBeenCalledWith(
       db,
@@ -182,4 +190,24 @@ describe('postGoodsReceipt expiry', () => {
       data: { inventoryLotId: 'lot', gs1Warnings: ['NEAR_EXPIRY'] },
     });
   });
+});
+
+it('queues back-in-stock work when a GRN posts accepted stock', async () => {
+  const { db } = receiptDb({ accepted: 10, rejected: 0, expiry: '2030-01-01' });
+  await postGoodsReceipt(db, SCOPE, { goodsReceiptId: 'gr', at: AT });
+  expect(captureArrival).toHaveBeenCalledWith(db, SCOPE, {
+    inventoryLotId: 'lot',
+    at: AT,
+    skipUnavailable: true,
+  });
+});
+it('does not queue notices for a fully rejected GRN line', async () => {
+  const { db } = receiptDb({ accepted: 0, rejected: 10, expiry: '2025-12-31' });
+  receiveLot.mockResolvedValueOnce({
+    lot: { id: 'lot' },
+    movement: null,
+    quarantineMovement: { id: 'quar' },
+  });
+  await postGoodsReceipt(db, SCOPE, { goodsReceiptId: 'gr', at: AT });
+  expect(captureArrival).not.toHaveBeenCalled();
 });

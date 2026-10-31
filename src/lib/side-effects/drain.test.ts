@@ -4,6 +4,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   sendEmail: vi.fn(),
   deliver: vi.fn(),
+  restock: vi.fn(),
+}));
+
+vi.mock('@/lib/pharmacy/back-in-stock-worker', () => ({
+  deliverBackInStockNotification: mocks.restock,
 }));
 
 vi.mock('@/lib/email', () => ({ sendEmail: mocks.sendEmail }));
@@ -318,4 +323,35 @@ describe('outbound effect worker', () => {
     expect(seen).toEqual(['org_a']);
     expect(DRAIN_TIME_BUDGET_MS).toBe(240_000);
   });
+});
+
+it('dispatches a restock notice with the trusted outbox tenant, ignoring payload tenant IDs', async () => {
+  mocks.restock.mockResolvedValue('UNKNOWN');
+  await expect(
+    runEffect(
+      {
+        id: 'effect_1',
+        kind: 'pharmacy-back-in-stock',
+        payload: { organizationId: 'untrusted', branchId: 'branch_1', notificationId: 'notice_1' },
+      },
+      undefined,
+      'org_1'
+    )
+  ).resolves.toEqual({ ok: true, error: null });
+  expect(mocks.restock).toHaveBeenCalledWith(
+    { organizationId: 'org_1', branchId: 'branch_1' },
+    'notice_1'
+  );
+});
+
+it('rejects restock delivery without a trusted tenant', async () => {
+  mocks.restock.mockClear();
+  await expect(
+    runEffect({
+      id: 'effect_1',
+      kind: 'pharmacy-back-in-stock',
+      payload: { organizationId: 'untrusted', branchId: 'branch_1', notificationId: 'notice_1' },
+    })
+  ).resolves.toEqual({ ok: false, error: 'Delivery failed' });
+  expect(mocks.restock).not.toHaveBeenCalled();
 });

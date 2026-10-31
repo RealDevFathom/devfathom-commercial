@@ -14,10 +14,16 @@ import {
   type ControlledRestorationPin,
 } from './controlled-restoration-authorization';
 import { appendControlledRestorations } from './controlled-register';
-import { allocateForSale, allocateReservedForSale, reverseMovements } from './stock-ledger';
+import {
+  allocateForSale,
+  allocateReservedForSale,
+  loadStockCandidatesForRead,
+  reverseMovements,
+} from './stock-ledger';
 import type { LedgerScope, ReservedSaleAllocation } from './stock-ledger';
 import { postSaleReturnEntry, postUnidentifiedSaleReturnEntry } from './finance-postings';
 import { isRecoverableSale, recoveryDashboard, RESTOCK_REQUEST_TTL_DAYS } from './back-in-stock';
+import { trackSideEffect } from '@/lib/side-effects/scope';
 
 /**
  * Re-exported from `./medicine`, where MED-08 pricing now lives so the counter
@@ -1018,7 +1024,7 @@ export async function addRestockInterest(
 export async function captureSafeRestockArrival(
   db: ScopedDb,
   scope: LedgerScope,
-  input: { inventoryLotId: string; at?: Date }
+  input: { inventoryLotId: string; at?: Date; skipUnavailable?: boolean }
 ) {
   const at = input.at ?? new Date();
   const lot = await db.pharmacyInventoryLot.findFirst({
@@ -1040,8 +1046,10 @@ export async function captureSafeRestockArrival(
     lot.batch.state !== 'ACTIVE' ||
     lot.batch.expiresAt.getTime() <= at.getTime() ||
     lot.balances.length === 0
-  )
+  ) {
+    if (input.skipUnavailable) return [];
     throw new PharmacySaleError('UNSAFE_STOCK');
+  }
 
   const interests = await db.pharmacyRestockInterest.findMany({
     where: {
@@ -1050,52 +1058,107 @@ export async function captureSafeRestockArrival(
       status: 'OPEN',
       createdAt: { gte: new Date(at.getTime() - RESTOCK_REQUEST_TTL_DAYS * 86_400_000) },
       demandEvent: { requestedMedicineId: lot.batch.medicineId, status: 'OPEN' },
+      notifications: { none: {} },
+      reservation: { is: null },
     },
     include: { patient: { select: { phone: true } } },
     orderBy: { createdAt: 'asc' },
   });
   const captured = [];
-  for (const interest of interests) {
+  for (const candidate of interests) {
+    // Serialize arrivals for this request, then recheck after taking the lock.
+    // A second lot must not reserve or enqueue it again while delivery is pending.
+    await db.$queryRaw(Prisma.sql`
+      SELECT id FROM pharmacy_restock_interests
+      WHERE "organizationId" = ${scope.organizationId} AND "branchId" = ${scope.branchId}
+        AND id = ${candidate.id} FOR UPDATE
+    `);
+    const interest = await db.pharmacyRestockInterest.findFirst({
+      where: {
+        id: candidate.id,
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        status: 'OPEN',
+        notifications: { none: {} },
+        reservation: { is: null },
+      },
+      include: { patient: { select: { phone: true } } },
+    });
+    if (!interest) continue;
+    const consent =
+      interest.patientId && interest.channel
+        ? await db.patientConsent.findFirst({
+            where: {
+              organizationId: scope.organizationId,
+              patientId: interest.patientId,
+              purpose: 'REMINDERS',
+              channel: interest.channel,
+            },
+            orderBy: { version: 'desc' },
+          })
+        : null;
+    if (
+      interest.patientId &&
+      interest.channel &&
+      (!consent?.granted || consent.revokedAt || !interest.patient?.phone)
+    ) {
+      if (input.skipUnavailable) continue;
+      throw new PharmacySaleError('CONSENT_REQUIRED');
+    }
+
     let reservation = null;
     if (interest.reserveOnArrival) {
+      let stockLocationId = lot.balances[0]!.stockLocationId;
+      if (input.skipUnavailable) {
+        // GRN posting must still succeed when an outstanding request is larger
+        // than this delivery. These new lot balances belong to its transaction.
+        const available = (await loadStockCandidatesForRead(db, scope, lot.batch.medicineId)).find(
+          (row) =>
+            row.inventoryLotId === lot.id &&
+            row.disposition === 'AVAILABLE' &&
+            row.availableUnits >= interest.quantityUnits
+        );
+        if (!available) continue;
+        stockLocationId = available.stockLocationId;
+      }
       reservation = await db.pharmacyRestockReservation.create({
         data: {
           organizationId: scope.organizationId,
           branchId: scope.branchId,
           interestId: interest.id,
           inventoryLotId: lot.id,
-          stockLocationId: lot.balances[0]!.stockLocationId,
+          stockLocationId,
           reservedUnits: interest.quantityUnits,
         },
       });
     }
-    if (!interest.patientId || !interest.channel) {
+    if (!interest.patientId || !interest.channel || !consent) {
       captured.push({ interestId: interest.id, reservation, notification: null });
       continue;
     }
-    const consent = await db.patientConsent.findFirst({
-      where: {
-        organizationId: scope.organizationId,
-        patientId: interest.patientId,
-        purpose: 'REMINDERS',
-        channel: interest.channel,
-      },
-      orderBy: { version: 'desc' },
-    });
-    if (!consent?.granted || consent.revokedAt || !interest.patient?.phone)
-      throw new PharmacySaleError('CONSENT_REQUIRED');
     const notification = await db.pharmacyRestockNotification.create({
       data: {
         organizationId: scope.organizationId,
         branchId: scope.branchId,
         interestId: interest.id,
         channel: interest.channel,
-        destination: interest.patient.phone,
+        destination: interest.patient!.phone!,
         consentId: consent.id,
         inventoryLotId: lot.id,
-        idempotencyKey: `restock:${interest.id}:${lot.id}`,
+        idempotencyKey: `restock:${interest.id}`,
       },
     });
+    // The notification and its outbox entry commit with stock receipt. The
+    // existing tenant drainer (and cron retry) dispatch only committed entries.
+    const queued = db.outboundEffect.create({
+      data: {
+        organizationId: scope.organizationId,
+        kind: 'pharmacy-back-in-stock',
+        payload: { branchId: scope.branchId, notificationId: notification.id },
+      },
+    });
+    trackSideEffect(queued);
+    await queued;
     captured.push({ interestId: interest.id, reservation, notification });
   }
   return captured;
@@ -1156,24 +1219,22 @@ export async function recoverRestockInterest(
   if (interest?.orderLineId) throw new PharmacySaleError('INVALID_STATE');
   const line = await db.pharmacySaleLine.findFirst({
     where: { id: input.saleLineId, organizationId: scope.organizationId, branchId: scope.branchId },
-    include: { sale: true },
+    include: { sale: { include: { customer: { select: { patientId: true } } } } },
   });
-  if (
-    !interest ||
-    !line ||
-    line.medicineId !== interest.demandEvent.requestedMedicineId ||
-    line.sale.status !== 'COMPLETED' ||
-    line.sale.receiptNumber === null
-  )
+  if (!interest || !line || line.sale.status !== 'COMPLETED' || line.sale.receiptNumber === null)
     throw new PharmacySaleError('CROSS_BRANCH_REFERENCE');
   const recoveredAt = new Date();
   const notifiedAt = interest.notifications[0]?.sentAt;
   if (
     !notifiedAt ||
+    !line.sale.completedAt ||
     !isRecoverableSale({
       notifiedAt,
-      soldAt: recoveredAt,
-      sameCustomer: false,
+      soldAt: line.sale.completedAt,
+      sameCustomer: Boolean(
+        line.sale.customer?.patientId &&
+        line.sale.customer.patientId === (interest.patientId ?? interest.demandEvent.customerId)
+      ),
       sameSku: line.medicineId === interest.demandEvent.requestedMedicineId,
     })
   )
@@ -1231,26 +1292,57 @@ export async function restockRecoveryReport(
           requestedText: true,
           quantity: true,
           estimatedValueMinor: true,
+          medicine: {
+            select: { strengths: { select: { ingredient: { select: { name: true } } } } },
+          },
         },
       },
+      notifications: { orderBy: { queuedAt: 'asc' }, take: 1, select: { inventoryLotId: true } },
       recoveredSale: {
         select: { id: true, receiptNumber: true, receiptDeviceId: true, businessDate: true },
       },
     },
     orderBy: { createdAt: 'desc' },
   });
+  const saleLines = await db.pharmacySaleLine.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      id: {
+        in: interests.flatMap((row) => (row.recoveredSaleLineId ? [row.recoveredSaleLineId] : [])),
+      },
+    },
+    select: { id: true, quantity: true, unitPriceMinor: true, discountMinor: true },
+  });
+  const lots = await db.pharmacyInventoryLot.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      id: {
+        in: interests.flatMap((row) => row.notifications.map((notice) => notice.inventoryLotId)),
+      },
+    },
+    select: { id: true, supplierName: true },
+  });
+  const lineById = new Map(saleLines.map((line) => [line.id, line]));
+  const lotById = new Map(lots.map((lot) => [lot.id, lot]));
   const dashboard = recoveryDashboard(
-    interests.map((interest) => ({
-      branch: scope.branchId,
-      salt:
-        interest.demandEvent.requestedText ?? interest.demandEvent.requestedMedicineId ?? 'Unknown',
-      distributor: 'Unassigned',
-      estimatedLostMinor: interest.demandEvent.estimatedValueMinor ?? 0,
-      // Attribution is explicitly an estimate: the original demand value is
-      // the stable like-for-like amount when the linked sale was recovered.
-      recoveredMinor:
-        interest.status === 'RECOVERED' ? (interest.demandEvent.estimatedValueMinor ?? 0) : 0,
-    }))
+    interests.map((interest) => {
+      const line = interest.recoveredSaleLineId ? lineById.get(interest.recoveredSaleLineId) : null;
+      const lotId = interest.notifications[0]?.inventoryLotId;
+      const salts =
+        interest.demandEvent.medicine?.strengths.map((part) => part.ingredient.name) ?? [];
+      return {
+        branch: scope.branchId,
+        salt: [...new Set(salts)].sort().join(' + ') || 'Unknown',
+        distributor: (lotId ? lotById.get(lotId)?.supplierName : null) ?? 'Unassigned',
+        estimatedLostMinor: interest.demandEvent.estimatedValueMinor ?? 0,
+        recoveredMinor:
+          interest.status === 'RECOVERED' && line
+            ? line.quantity * line.unitPriceMinor - line.discountMinor
+            : 0,
+      };
+    })
   );
   return { ...dashboard, interests };
 }

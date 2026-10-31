@@ -9,6 +9,7 @@ import {
   priceFromLot,
   recoverDemandWithAlternate,
   recoverRestockInterest,
+  restockRecoveryReport,
   returnSaleLine,
   validateDiscount,
 } from './sales';
@@ -278,7 +279,7 @@ describe('DEM-03 restock interest', () => {
           id: 'line-a',
           saleId: 'sale-a',
           medicineId: 'med-a',
-          sale: { status: 'COMPLETED', receiptNumber: 42 },
+          sale: { status: 'COMPLETED', receiptNumber: 42, completedAt: new Date() },
         }),
       },
       unfulfilledDemandEvent: {
@@ -321,7 +322,7 @@ describe('DEM-03 restock interest', () => {
         findFirst: async () => ({
           id: 'line-a',
           medicineId: 'med-a',
-          sale: { status: 'COMPLETED', receiptNumber: 42 },
+          sale: { status: 'COMPLETED', receiptNumber: 42, completedAt: new Date() },
         }),
       },
       unfulfilledDemandEvent: { update: write },
@@ -471,4 +472,140 @@ describe('POS-10 recovered alternate', () => {
     await recoverDemandWithAlternate(db as never, scope, 'demand-a', 'line-a');
     expect(update).toMatchObject({ data: { status: 'RECOVERED', recoveredSaleLineId: 'line-a' } });
   });
+});
+
+describe('back-in-stock receipt attribution', () => {
+  const notifiedAt = new Date('2026-09-01T12:00:00Z');
+  function recoveryDb(completedAt: Date, medicineId = 'med-a', patientId?: string) {
+    return {
+      pharmacyRestockInterest: {
+        findFirst: vi
+          .fn()
+          .mockResolvedValue({
+            id: 'interest-a',
+            patientId: 'patient-a',
+            demandEventId: 'demand-a',
+            demandEvent: { requestedMedicineId: 'med-a' },
+            notifications: [{ sentAt: notifiedAt }],
+          }),
+        update: vi.fn().mockResolvedValue({ status: 'RECOVERED' }),
+      },
+      pharmacySaleLine: {
+        findFirst: vi
+          .fn()
+          .mockResolvedValue({
+            id: 'line-a',
+            saleId: 'sale-a',
+            medicineId,
+            sale: {
+              status: 'COMPLETED',
+              receiptNumber: 1,
+              completedAt,
+              customer: patientId ? { patientId } : null,
+            },
+          }),
+      },
+      unfulfilledDemandEvent: { update: vi.fn().mockResolvedValue({}) },
+      pharmacyRestockReservation: { updateMany: vi.fn().mockResolvedValue({ count: 0 }) },
+    };
+  }
+
+  it.each(['2026-09-01T11:59:59Z', '2026-09-08T12:00:01Z'])(
+    'rejects a receipt outside the delivery window (%s)',
+    async (soldAt) => {
+      const db = recoveryDb(new Date(soldAt));
+      await expect(
+        recoverRestockInterest(db as never, scope, {
+          interestId: 'interest-a',
+          saleLineId: 'line-a',
+        })
+      ).rejects.toThrow('INVALID_STATE');
+      expect(db.unfulfilledDemandEvent.update).not.toHaveBeenCalled();
+    }
+  );
+
+  it('accepts an in-window receipt even when attributed weeks later', async () => {
+    const db = recoveryDb(new Date('2026-09-03T12:00:00Z'));
+    await expect(
+      recoverRestockInterest(db as never, scope, { interestId: 'interest-a', saleLineId: 'line-a' })
+    ).resolves.toMatchObject({ status: 'RECOVERED' });
+  });
+
+  it('accepts a different SKU bought by the same identified customer', async () => {
+    const db = recoveryDb(new Date('2026-09-03T12:00:00Z'), 'alternate-med', 'patient-a');
+    await expect(
+      recoverRestockInterest(db as never, scope, { interestId: 'interest-a', saleLineId: 'line-a' })
+    ).resolves.toMatchObject({ status: 'RECOVERED' });
+  });
+
+  it('refuses a different SKU bought by an unrelated customer', async () => {
+    const db = recoveryDb(new Date('2026-09-03T12:00:00Z'), 'alternate-med', 'unrelated-patient');
+    await expect(
+      recoverRestockInterest(db as never, scope, { interestId: 'interest-a', saleLineId: 'line-a' })
+    ).rejects.toThrow('INVALID_STATE');
+  });
+});
+
+it('reports actual linked line revenue after discount, with catalog salts and the arrival distributor', async () => {
+  const db = {
+    pharmacyRestockInterest: {
+      findMany: vi.fn().mockResolvedValue([
+        {
+          id: 'interest-a',
+          status: 'RECOVERED',
+          recoveredSaleLineId: 'line-a',
+          demandEvent: {
+            estimatedValueMinor: 10000,
+            requestedText: 'Brand label',
+            medicine: {
+              strengths: [{ ingredient: { name: 'Salt A' } }, { ingredient: { name: 'Salt B' } }],
+            },
+          },
+          notifications: [{ inventoryLotId: 'lot-a' }],
+        },
+        {
+          id: 'interest-b',
+          status: 'OPEN',
+          recoveredSaleLineId: null,
+          demandEvent: {
+            estimatedValueMinor: 1000,
+            medicine: { strengths: [{ ingredient: { name: 'Salt B' } }] },
+          },
+          notifications: [{ inventoryLotId: 'lot-b' }],
+        },
+      ]),
+    },
+    pharmacySaleLine: {
+      findMany: vi
+        .fn()
+        .mockResolvedValue([
+          { id: 'line-a', quantity: 2, unitPriceMinor: 1500, discountMinor: 500 },
+        ]),
+    },
+    pharmacyInventoryLot: {
+      findMany: vi.fn().mockResolvedValue([
+        { id: 'lot-a', supplierName: 'Distributor A' },
+        { id: 'lot-b', supplierName: 'Distributor B' },
+      ]),
+    },
+  };
+  const report = await restockRecoveryReport(db as never, scope);
+  expect(report).toMatchObject({
+    estimatedLostMinor: 11000,
+    recoveredMinor: 2500,
+    netMinor: 8500,
+    rows: [
+      { salt: 'Salt A + Salt B', distributor: 'Distributor A', recoveredMinor: 2500 },
+      { salt: 'Salt B', distributor: 'Distributor B', recoveredMinor: 0 },
+    ],
+  });
+  expect(db.pharmacySaleLine.findMany).toHaveBeenCalledWith(
+    expect.objectContaining({
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        id: { in: ['line-a'] },
+      },
+    })
+  );
 });

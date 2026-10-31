@@ -50,6 +50,7 @@ import {
   reverseMovements,
 } from './stock-ledger';
 import type { LedgerScope } from './stock-ledger';
+import { captureSafeRestockArrival } from './sales';
 
 export type ReceivingScope = LedgerScope;
 
@@ -357,6 +358,15 @@ export async function postGoodsReceipt(
     }
   }
 
+  for (const line of lines) {
+    if (line.acceptedMovementId) {
+      await captureSafeRestockArrival(db, scope, {
+        inventoryLotId: line.inventoryLotId,
+        at: input.at,
+        skipUnavailable: true,
+      });
+    }
+  }
   return { goodsReceiptId: receipt.id, postedAt: input.at, lines, exceptions };
 }
 

@@ -92,7 +92,6 @@ import {
   returnSaleLine,
   readReturnHistory,
 } from '@/lib/pharmacy/sales';
-import { deliverBackInStockNotification } from '@/lib/pharmacy/back-in-stock-worker';
 import type { LedgerScope } from '@/lib/pharmacy/stock-ledger';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { authenticatePharmacyPack } from '@/lib/pharmacy/pack-authentication-operations';
@@ -182,9 +181,10 @@ async function khataScope(ctx: TRPCContext, branch: string, access: 'read' | 'wr
   if (!hasRequiredAccess)
     throw new TRPCError({
       code: 'FORBIDDEN',
-      message: access === 'write'
-        ? 'Pharmacy counter permission required.'
-        : 'Pharmacy counter or financial reports permission required.',
+      message:
+        access === 'write'
+          ? 'Pharmacy counter permission required.'
+          : 'Pharmacy counter or financial reports permission required.',
     });
   const available = await ctx.db.pharmacyBranch.findFirst({
     where: { organizationId: scope.organizationId, id: branch, active: true },
@@ -1544,16 +1544,9 @@ export const pharmacySalesRouter = router({
     .input(z.object({ branchId, inventoryLotId: z.string().min(1) }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
-        const scope = await scopeFor(ctx, input.branchId);
-        const captured = await ctx.db.$transaction(async (tx) =>
-          captureSafeRestockArrival(txDb(tx), scope, input)
+        return await ctx.db.$transaction(async (tx) =>
+          captureSafeRestockArrival(txDb(tx), await scopeFor(ctx, input.branchId), input)
         );
-        await Promise.all(
-          captured
-            .filter((row) => row.notification?.channel === 'WHATSAPP')
-            .map((row) => deliverBackInStockNotification(ctx.db, scope, row.notification!.id))
-        );
-        return captured;
       } catch (error) {
         fail(error);
       }
