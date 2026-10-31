@@ -9,8 +9,12 @@ export function AccountActivityExportButton({ csv, filename }: { csv: string; fi
     const anchor = document.createElement('a');
     anchor.href = url;
     anchor.download = filename;
+    anchor.style.display = 'none';
+    document.body.appendChild(anchor);
     anchor.click();
-    URL.revokeObjectURL(url);
+    anchor.remove();
+    // Defer revocation so browsers that start the download asynchronously do not cancel it.
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
   return (

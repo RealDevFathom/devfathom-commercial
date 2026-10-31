@@ -118,4 +118,15 @@ describe('account activity bridge filters', () => {
       expect(mocks.financialStatements).not.toHaveBeenCalled();
     }
   );
+
+  it.each([
+    [{ from: '2026-13-45', to: '2026-14-01' }, 'valid UTC date window'],
+    [{ from: '2026-02-30', to: '2026-03-05' }, 'valid UTC date window'],
+    [{ from: '2026-01-01', to: '2026-06-01' }, 'at most 92 days'],
+  ])('explains an invalid date window %j without reading evidence', async (dates, message) => {
+    const result = await read({ ...window, ...dates });
+    expect(result.textContent).toContain('Invalid date window');
+    expect(result.textContent).toContain(message);
+    expect(mocks.financialStatements).not.toHaveBeenCalled();
+  });
 });

@@ -78,6 +78,23 @@ describe('single-account activity bridge', () => {
     expect(csv).toContain('"unknown"');
   });
 
+  it('keeps negative minor-unit amounts numeric in the CSV', () => {
+    const bridge = accountActivityBridge(
+      [
+        row({
+          openingMinor: '-12345',
+          debitMinor: '100',
+          creditMinor: '55',
+          closingMinor: '-12300',
+        }),
+      ],
+      { accountCode: 'CASH', currency: 'PKR' }
+    );
+    const csv = accountActivityBridgeCsv(bridge);
+    expect(csv).toContain('"-12345","100","55","-12300"');
+    expect(csv).not.toContain("'-");
+  });
+
   it.each(['\n=1+1', '\r\n+SUM(A1)', '\u00a0@SUM(A1)', '\u0000=1+1', '\ttext'])(
     'neutralizes spreadsheet control and whitespace prefixes: %j',
     (accountCode) => {

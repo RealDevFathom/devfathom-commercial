@@ -98,6 +98,8 @@ export function accountActivityBridge(
 }
 
 function csvCell(value: string): string {
+  // Validated minor-unit integers stay numeric; a leading '-' is a sign, not a formula.
+  if (integer.test(value)) return `"${value}"`;
   const safe = /^[\s\p{Cc}]*[=+\-@]/u.test(value) || /^[\t\r\n]/.test(value) ? `'${value}` : value;
   return `"${safe.replaceAll('"', '""')}"`;
 }

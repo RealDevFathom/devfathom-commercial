@@ -18,6 +18,13 @@ export const metadata: Metadata = { title: 'Account activity bridge' };
 
 type Search = Partial<Record<'branch' | 'from' | 'to' | 'selection', string | string[]>>;
 const date = /^\d{4}-\d{2}-\d{2}$/;
+const MAX_WINDOW_MS = 92 * 86_400_000;
+/** Rejects impossible calendar dates such as 2026-13-45 or 2026-02-30. */
+const validDate = (value: string) => {
+  if (!date.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+};
 const money = (value: string) => {
   const number = BigInt(value);
   const absolute = number < BigInt(0) ? -number : number;
@@ -71,11 +78,15 @@ export default async function AccountActivityBridgePage({
   const fallbackFrom = new Date(now.getTime() - 30 * 86_400_000).toISOString().slice(0, 10);
   const from = query.from ?? fallbackFrom;
   const to = query.to ?? fallbackTo;
-  if (!date.test(from) || !date.test(to) || from >= to)
+  if (!validDate(from) || !validDate(to) || from >= to)
     return (
       <State title="Invalid date window">
         Choose a valid UTC date window with an exclusive end.
       </State>
+    );
+  if (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`) > MAX_WINDOW_MS)
+    return (
+      <State title="Invalid date window">Choose a date window of at most 92 days.</State>
     );
 
   let statement;
