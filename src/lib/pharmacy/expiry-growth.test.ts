@@ -27,6 +27,20 @@ describe('expiry growth recovery facts', () => {
     expect(supplierReturnDates(expiry, null)).toBeNull();
   });
 
+  it('excludes expired positions, including a just-expired lot rounded up to zero days', () => {
+    expect(
+      expiryRiskBuckets([
+        { daysLeft: -1, valueAtRiskMinor: 100_000 },
+        { daysLeft: 0, valueAtRiskMinor: 50_000 },
+        { daysLeft: 1, valueAtRiskMinor: 25_000 },
+      ])
+    ).toEqual([
+      { days: 30, valueAtRiskMinor: 25_000 },
+      { days: 60, valueAtRiskMinor: 25_000 },
+      { days: 90, valueAtRiskMinor: 25_000 },
+    ]);
+  });
+
   it('never suggests a markdown for Rx/restricted/controlled stock', () => {
     const base = { otc: true, productFamily: 'PHARMACEUTICAL' };
     expect(

@@ -5,7 +5,7 @@ export type ExpiryRiskPosition = {
   valueAtRiskMinor: number;
 };
 
-/** Cumulative PKR-at-risk buckets; a lot due in 20 days belongs in 30, 60 and 90. */
+/** Cumulative PKR-at-risk buckets for unexpired lots (days left rounded up). */
 export function expiryRiskBuckets(
   rows: readonly ExpiryRiskPosition[],
   windows: readonly number[] = [30, 60, 90]
@@ -13,7 +13,7 @@ export function expiryRiskBuckets(
   return windows.map((days) => ({
     days,
     valueAtRiskMinor: rows
-      .filter((row) => row.daysLeft >= 0 && row.daysLeft <= days)
+      .filter((row) => row.daysLeft > 0 && row.daysLeft <= days)
       .reduce((total, row) => total + row.valueAtRiskMinor, 0),
   }));
 }
