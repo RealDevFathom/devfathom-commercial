@@ -287,7 +287,13 @@ export type NextReplay =
   | { status: 'IDLE' }
   | { status: 'PAUSED'; reason: 'REAUTH' }
   | { status: 'STOPPED'; reason: 'DEVICE_REVOKED' }
-  | { status: 'REFUSED'; reason: 'DEVICE_MISMATCH' | 'OPERATOR_MISMATCH' };
+  | { status: 'REFUSED'; reason: 'DEVICE_MISMATCH' }
+  | {
+      status: 'REFUSED';
+      reason: 'OPERATOR_MISMATCH';
+      /** Composers whose drafts wait for their own sign-in; null = legacy, no composer. */
+      composerStaffProfileIds: Array<string | null>;
+    };
 
 const REPLAYABLE: readonly PosDraftStatus[] = ['QUEUED', 'REPLAYING'];
 
@@ -321,16 +327,57 @@ export function nextReplayCommand(
     .filter((draft) => REPLAYABLE.includes(draft.status) && draft.deviceId === deviceId)
     .sort((a, b) => a.sequence - b.sequence);
 
+  const waitingComposers = new Set<string | null>();
   for (const draft of candidates) {
-    // Persisted legacy drafts have no composer and are deliberately not adoptable:
-    // replaying them as the current operator would recreate the attribution flaw.
+    // Another operator's draft is set aside, not adopted and not blocking: replaying
+    // it as the current operator would recreate the attribution flaw, while holding
+    // the current operator's own later drafts behind it strands them at a handover.
+    // Persisted legacy drafts have no composer and are likewise never adoptable.
     if (draft.composerStaffProfileId !== staffProfileId) {
-      return { status: 'REFUSED', reason: 'OPERATOR_MISMATCH' };
+      waitingComposers.add(draft.composerStaffProfileId ?? null);
+      continue;
     }
     const command = firstUnacknowledged(draft);
     if (command) return { status: 'READY', draft, command };
   }
+  if (waitingComposers.size > 0) {
+    return {
+      status: 'REFUSED',
+      reason: 'OPERATOR_MISMATCH',
+      composerStaffProfileIds: [...waitingComposers],
+    };
+  }
   return { status: 'IDLE' };
+}
+
+const COMPOSER_PROOF_RENEWAL_MARGIN_MS = 5 * 60 * 1000;
+
+/**
+ * Whether a queued composer proof must be renewed before replay: it is bound to
+ * another terminal session, expires within the margin, or cannot be read. This
+ * reads the unsigned claims only to avoid needless renewal round-trips; the
+ * server still verifies the signature on every command.
+ */
+export function composerProofNeedsRenewal(
+  proof: string,
+  sessionId: string,
+  nowMs: number
+): boolean {
+  try {
+    const payload = proof.split('.')[1];
+    if (!payload) return true;
+    const claims = JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/'))) as {
+      sessionId?: unknown;
+      expiresAt?: unknown;
+    };
+    return (
+      claims.sessionId !== sessionId ||
+      typeof claims.expiresAt !== 'number' ||
+      claims.expiresAt - COMPOSER_PROOF_RENEWAL_MARGIN_MS <= nowMs
+    );
+  } catch {
+    return true;
+  }
 }
 
 // ── Request construction (reuses the M4 routes; no bulk API) ─────────────────

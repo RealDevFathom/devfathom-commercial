@@ -90,6 +90,17 @@ export function messageFrom(body: unknown) {
   return 'Request failed without a safe server message.';
 }
 
+type ComposerProofRenewalListener = (originalProof: string, renewedProof: string) => void;
+const composerProofRenewalListeners = new Set<ComposerProofRenewalListener>();
+
+/** Lets a mounted terminal session adopt a proof renewed inside `request`. */
+export function onComposerProofRenewed(listener: ComposerProofRenewalListener): () => void {
+  composerProofRenewalListeners.add(listener);
+  return () => {
+    composerProofRenewalListeners.delete(listener);
+  };
+}
+
 export async function request<T>(
   path: string,
   init: RequestInit,
@@ -125,6 +136,9 @@ export async function request<T>(
       false
     );
     headers.set('X-POS-Composer-Proof', renewed.composerProof);
+    for (const listener of composerProofRenewalListeners) {
+      listener(originalProof, renewed.composerProof);
+    }
     return request<T>(path, { ...init, headers }, false);
   }
   if (!response.ok) throw new RequestError(response.status, messageFrom(body));
@@ -192,6 +206,18 @@ export function useTerminalSession({
     idempotencyKeys.current.clear();
     lifecycle.current.onClear?.();
   }, [setRuntime, lifecycle]);
+  useEffect(
+    () =>
+      onComposerProofRenewed((originalProof, renewedProof) => {
+        // Adopt the renewal only for the exact runtime that held the expired proof,
+        // so later commands do not each pay the 403 + renew round-trips again.
+        const current = runtimeBoundary.current;
+        if (current?.composerProof === originalProof) {
+          setRuntime({ ...current, composerProof: renewedProof });
+        }
+      }),
+    [setRuntime]
+  );
   useEffect(() => {
     const update = () => setOnline(navigator.onLine);
     update();

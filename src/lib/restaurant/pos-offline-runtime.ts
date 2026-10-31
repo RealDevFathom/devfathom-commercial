@@ -117,13 +117,15 @@ export class PosOfflineRuntime {
    */
   async renewComposerProof(
     staffProfileId: string,
-    renew: (originalProof: string) => Promise<string | null>
+    renew: (originalProof: string) => Promise<string | null>,
+    needsRenewal: (proof: string) => boolean = () => true
   ): Promise<void> {
     const candidates = this.queue().drafts.filter(
       (draft) =>
         draft.status !== 'COMPLETED' &&
         draft.review?.reason !== 'COMPOSER_UNVERIFIED' &&
-        draft.composerStaffProfileId === staffProfileId
+        draft.composerStaffProfileId === staffProfileId &&
+        needsRenewal(draft.composerProof)
     );
     for (const candidate of candidates) {
       const composerProof = await renew(candidate.composerProof);
@@ -176,6 +178,13 @@ export class PosOfflineRuntime {
   ): Promise<ReplayResult> {
     for (;;) {
       const next = nextReplayCommand(this.queue(), this.scope.deviceId, staffProfileId);
+      if (next.status === 'REFUSED' && next.reason === 'OPERATOR_MISMATCH') {
+        return {
+          state: 'REFUSED' as const,
+          discarded: null,
+          waitingComposers: next.composerStaffProfileIds,
+        };
+      }
       if (next.status !== 'READY') return { state: next.status, discarded: null };
       const built = buildReplayRequest(next.draft, next.command);
       if (!built.ok) return { state: 'REFUSED' as const, discarded: null };
@@ -226,4 +235,6 @@ export class PosOfflineRuntime {
 type ReplayResult = {
   state: 'IDLE' | 'PAUSED' | 'STOPPED' | 'REFUSED';
   discarded: { drafts: number; commands: number } | null;
+  /** Set when replay finished the current operator's work but other composers' drafts wait. */
+  waitingComposers?: Array<string | null>;
 };

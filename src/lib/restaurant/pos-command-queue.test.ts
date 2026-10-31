@@ -20,6 +20,7 @@ import {
   beginReplay,
   buildReplayRequest,
   classifyReplayOutcome,
+  composerProofNeedsRenewal,
   countQueuedCommands,
   createQueueSnapshot,
   discardQueuedWork,
@@ -400,7 +401,77 @@ describe('the visible 50-draft ceiling and device binding (criterion 3)', () => 
     expect(nextReplayCommand(snapshot, DEVICE, OPERATOR)).toEqual({
       status: 'REFUSED',
       reason: 'OPERATOR_MISMATCH',
+      composerStaffProfileIds: [null],
     });
+  });
+
+  it("sets another operator's draft aside without stranding the current operator's later work", () => {
+    const snapshot = seeded([
+      draftInput({ composerStaffProfileId: 'staff-2', composerProof: 'proof-b' }),
+      draftInput(),
+    ]);
+
+    const next = nextReplayCommand(snapshot, DEVICE, OPERATOR);
+    expect(next.status).toBe('READY');
+    if (next.status === 'READY') {
+      expect(next.draft.composerStaffProfileId).toBe(OPERATOR);
+      expect(next.draft.sequence).toBe(snapshot.drafts[1].sequence);
+    }
+
+    const done = {
+      ...snapshot,
+      drafts: snapshot.drafts.map((draft, index) =>
+        index === 1 ? { ...draft, status: 'COMPLETED' as const } : draft
+      ),
+    };
+    expect(nextReplayCommand(done, DEVICE, OPERATOR)).toEqual({
+      status: 'REFUSED',
+      reason: 'OPERATOR_MISMATCH',
+      composerStaffProfileIds: ['staff-2'],
+    });
+    expect(nextReplayCommand(done, DEVICE, 'staff-2').status).toBe('READY');
+  });
+});
+
+describe('composer proof renewal check', () => {
+  const NOW = Date.parse('2026-10-31T12:00:00.000Z');
+  const proof = (claims: Record<string, unknown>) =>
+    `v1.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.signature`;
+
+  it('skips renewal for a fresh proof bound to the current session', () => {
+    expect(
+      composerProofNeedsRenewal(
+        proof({ sessionId: 'session-1', expiresAt: NOW + 60 * 60 * 1000 }),
+        'session-1',
+        NOW
+      )
+    ).toBe(false);
+  });
+
+  it('renews expired, nearly expired, other-session, and unreadable proofs', () => {
+    expect(
+      composerProofNeedsRenewal(
+        proof({ sessionId: 'session-1', expiresAt: NOW - 1 }),
+        'session-1',
+        NOW
+      )
+    ).toBe(true);
+    expect(
+      composerProofNeedsRenewal(
+        proof({ sessionId: 'session-1', expiresAt: NOW + 60 * 1000 }),
+        'session-1',
+        NOW
+      )
+    ).toBe(true);
+    expect(
+      composerProofNeedsRenewal(
+        proof({ sessionId: 'session-0', expiresAt: NOW + 60 * 60 * 1000 }),
+        'session-1',
+        NOW
+      )
+    ).toBe(true);
+    expect(composerProofNeedsRenewal('signed-composer-proof', 'session-1', NOW)).toBe(true);
+    expect(composerProofNeedsRenewal('v1.%%%.sig', 'session-1', NOW)).toBe(true);
   });
 });
 

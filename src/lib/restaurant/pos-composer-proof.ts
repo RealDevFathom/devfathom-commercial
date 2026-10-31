@@ -14,14 +14,17 @@ export type PosComposerClaims = {
   expiresAt: number;
 };
 
-function secret(): string {
+const KEY_PURPOSE = 'devfathom:restaurant:pos-composer-proof:v1';
+
+/** A purpose-bound subkey, so composer proofs never share a MAC key with other AUTH_SECRET uses. */
+function proofKey(): Buffer {
   const value = process.env.AUTH_SECRET?.trim();
   if (!value) throw new Error('AUTH_SECRET is required for POS composer proofs.');
-  return value;
+  return createHmac('sha256', value).update(KEY_PURPOSE).digest();
 }
 
 function signature(payload: string): Buffer {
-  return createHmac('sha256', secret()).update(`${VERSION}.${payload}`).digest();
+  return createHmac('sha256', proofKey()).update(`${VERSION}.${payload}`).digest();
 }
 
 export function mintPosComposerProof(

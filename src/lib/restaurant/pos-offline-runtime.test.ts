@@ -66,6 +66,7 @@ describe('PosOfflineRuntime', () => {
     expect(await runtime.replay('staff-2', send)).toEqual({
       state: 'REFUSED',
       discarded: null,
+      waitingComposers: ['staff-1'],
     });
     expect(runtime.snapshot().queue?.drafts[0]?.status).toBe('QUEUED');
 
@@ -85,6 +86,46 @@ describe('PosOfflineRuntime', () => {
       expect(request.headers['X-POS-Composer-Proof']).toBe('renewed-proof');
       return { status: 201, serverRef: 'server-ref' };
     });
+  });
+
+  it('does not call renewal for proofs that are still valid', async () => {
+    const runtime = new PosOfflineRuntime(scope, createMemoryDriver());
+    await runtime.enqueue(input);
+    let renewals = 0;
+
+    await runtime.renewComposerProof(
+      'staff-1',
+      async () => {
+        renewals++;
+        return 'renewed-proof';
+      },
+      () => false
+    );
+    expect(renewals).toBe(0);
+    expect(runtime.snapshot().queue?.drafts[0]?.composerProof).toBe('signed-composer-proof');
+  });
+
+  it("replays the current operator's later draft while an earlier draft waits for its composer", async () => {
+    const runtime = new PosOfflineRuntime(scope, createMemoryDriver());
+    await runtime.enqueue(input);
+    await runtime.enqueue({
+      ...input,
+      composerStaffProfileId: 'staff-2',
+      composerProof: 'proof-b',
+    });
+    const sentProofs: string[] = [];
+
+    expect(
+      await runtime.replay('staff-2', async (request) => {
+        sentProofs.push(request.headers['X-POS-Composer-Proof']);
+        return { status: 201, serverRef: 'server-ref' };
+      })
+    ).toEqual({ state: 'REFUSED', discarded: null, waitingComposers: ['staff-1'] });
+    expect(new Set(sentProofs)).toEqual(new Set(['proof-b']));
+    expect(runtime.snapshot().queue?.drafts.map((draft) => draft.status)).toEqual([
+      'QUEUED',
+      'COMPLETED',
+    ]);
   });
 
   it('cannot renew after tampering the unsigned composer id', async () => {
