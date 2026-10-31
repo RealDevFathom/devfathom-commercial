@@ -76,6 +76,9 @@ export type ExpiryBoardProps = {
 
 export const MARKDOWN_PERCENTS = [10, 15, 20, 25, 30, 40, 50] as const;
 
+const INELIGIBLE_MARKDOWN_WARNING =
+  'Legacy draft — now ineligible; retain it as audit history and do not advance it.';
+
 const inputClass =
   'mt-1 min-h-10 w-full rounded-[var(--radius-sm)] border border-border-default bg-surface-raised px-3 text-sm text-text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50';
 
@@ -122,7 +125,7 @@ export function nearExpiryCsv(rows: readonly ExpiryBoardRow[]): string {
       (row.valueAtRiskMinor / 100).toFixed(2),
       row.supplierName,
       row.markdown
-        ? `${row.markdown.markdownPercent}% off (${(row.markdown.proposedPackPriceMinor / 100).toFixed(2)} per pack)`
+        ? `${row.markdown.markdownPercent}% off (${(row.markdown.proposedPackPriceMinor / 100).toFixed(2)} per pack)${row.markdownEligible ? '' : ` · ${INELIGIBLE_MARKDOWN_WARNING}`}`
         : '',
       row.returnDraft ? `${row.returnDraft.reference} (${row.returnDraft.status})` : '',
     ]
@@ -132,12 +135,22 @@ export function nearExpiryCsv(rows: readonly ExpiryBoardRow[]): string {
   return [header.map(csvCell).join(','), ...lines].join('\n');
 }
 
-function Totals({ rows, riskBuckets }: Pick<ExpiryBoardProps, 'rows' | 'riskBuckets'>) {
+function Totals({
+  rows,
+  riskBuckets,
+  withinDays,
+}: Pick<ExpiryBoardProps, 'rows' | 'riskBuckets' | 'withinDays'>) {
   const units = rows.reduce((total, row) => total + row.onHandUnits, 0);
+  const value = rows.reduce((total, row) => total + row.valueAtRiskMinor, 0);
   const expired = rows.filter((row) => row.expired).length;
   const drafted = rows.filter((row) => row.markdown || row.returnDraft).length;
   return (
     <section aria-label="Near-expiry summary" className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+      <Stat
+        label="Value at risk"
+        value={money(value)}
+        sub={`Selected ${withinDays}-day window, plus expired stock`}
+      />
       {riskBuckets.map((bucket) => (
         <Stat
           key={bucket.days}
@@ -211,6 +224,11 @@ function PrintableList(props: ExpiryBoardProps) {
                   </TableCell>
                   <TableCell className="text-xs">
                     {row.markdown ? `Mark-down ${row.markdown.markdownPercent}% · ` : ''}
+                    {row.markdown && !row.markdownEligible ? (
+                      <span className="block max-w-xs whitespace-normal text-warning" role="note">
+                        {INELIGIBLE_MARKDOWN_WARNING}
+                      </span>
+                    ) : null}
                     {row.returnDraft ? `Return ${row.returnDraft.reference}` : ''}
                     {!row.markdown && !row.returnDraft ? '—' : ''}
                   </TableCell>
@@ -451,7 +469,7 @@ export function ExpiryBoard(props: ExpiryBoardProps) {
   if (props.view === 'print') return <PrintableList {...props} />;
   return (
     <div className="space-y-6">
-      <Totals riskBuckets={props.riskBuckets} rows={props.rows} />
+      <Totals riskBuckets={props.riskBuckets} rows={props.rows} withinDays={props.withinDays} />
       <SectionCard
         actions={
           <Link
