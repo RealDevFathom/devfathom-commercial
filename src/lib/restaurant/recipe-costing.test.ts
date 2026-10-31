@@ -148,6 +148,48 @@ describe('explodeRecipe', () => {
     expect(result.ingredients[0]?.quantityInBaseUnit.equals('4012')).toBe(true);
   });
 
+  it('reports a self-reference before validating an absent yield', async () => {
+    mocks.db = makeDb({
+      versions: [
+        {
+          id: 'v_self',
+          recipeId: 'r_self',
+          status: 'ACTIVE',
+          yieldQuantity: null,
+          yieldUnitId: null,
+          portionCount: null,
+        },
+      ],
+      lines: {
+        v_self: [{ quantity: D('1'), unitId: 'u', ingredientId: null, subRecipeId: 'r_self' }],
+      },
+    });
+    await expect(
+      explodeRecipe({ organizationId: 'org_1', recipeId: 'r_self' })
+    ).rejects.toMatchObject({ message: 'Recipe cycle detected.', reason: 'CYCLE' });
+  });
+
+  it('reports an indirect cycle before validating missing sub-recipe yields', async () => {
+    mocks.db = makeDb({
+      versions: ['r1', 'r2'].map((recipeId, index) => ({
+        id: `v${index + 1}`,
+        recipeId,
+        status: 'ACTIVE' as const,
+        yieldQuantity: null,
+        yieldUnitId: null,
+        portionCount: null,
+      })),
+      lines: {
+        v1: [{ quantity: D('1'), unitId: 'u', ingredientId: null, subRecipeId: 'r2' }],
+        v2: [{ quantity: D('1'), unitId: 'u', ingredientId: null, subRecipeId: 'r1' }],
+      },
+    });
+    await expect(explodeRecipe({ organizationId: 'org_1', recipeId: 'r1' })).rejects.toMatchObject({
+      message: 'Recipe cycle detected.',
+      reason: 'CYCLE',
+    });
+  });
+
   it('fails closed when a sub-recipe cycle is encountered', async () => {
     const versions: Version[] = [
       {

@@ -193,13 +193,15 @@ describe('addPriceListEntry — canonical validation & immutability', () => {
   });
   it('rejects a product outside the organization', async () => {
     mocks.productFindUnique.mockResolvedValue(null);
-    await expect(addPriceListEntry(db, input)).rejects.toMatchObject({ reason: 'PRODUCT_NOT_FOUND' });
+    await expect(addPriceListEntry(db, input)).rejects.toMatchObject({
+      reason: 'PRODUCT_NOT_FOUND',
+    });
   });
   it('rejects a variant that belongs to another product', async () => {
     mocks.variantFindUnique.mockResolvedValue({ id: 'var_x', productId: 'other' });
-    await expect(
-      addPriceListEntry(db, { ...input, variantId: 'var_x' })
-    ).rejects.toMatchObject({ reason: 'VARIANT_MISMATCH' });
+    await expect(addPriceListEntry(db, { ...input, variantId: 'var_x' })).rejects.toMatchObject({
+      reason: 'VARIANT_MISMATCH',
+    });
   });
   it('rejects a duplicate (version, product, variant) entry', async () => {
     mocks.entryFindFirst.mockResolvedValue({ id: 'ple_existing' });
@@ -252,7 +254,14 @@ describe('resolvePrice — effective-dated resolution & boundary instant', () =>
     mocks.entryFindMany.mockImplementation(
       async ({ where }: { where: { priceListVersionId: string } }) => {
         const price = where.priceListVersionId === 'v2' ? '12.00' : '10.00';
-        return [{ id: `e_${where.priceListVersionId}`, productId: 'p1', variantId: null, price: D(price) }];
+        return [
+          {
+            id: `e_${where.priceListVersionId}`,
+            productId: 'p1',
+            variantId: null,
+            price: D(price),
+          },
+        ];
       }
     );
   });
