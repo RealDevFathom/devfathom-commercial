@@ -140,7 +140,23 @@ describeDb('#720 licence renewal reminders (forced RLS)', () => {
     expect(reminders.some((reminder) => reminder.reference === 'DSL-B')).toBe(false);
   });
 
-  it('stops the reminders once the renewed licences are saved', async () => {
+  it('keeps reminding about the verified supplier licence while its renewal is unverified', async () => {
+    await asOwner(async (owner) => {
+      await owner.query(
+        `INSERT INTO pharmacy_supplier_licences
+           (id, "organizationId", "supplierId", "licenceType", "licenceNumber",
+            "issuingAuthority", "issuedAt", "expiresAt", "supersedesId")
+         VALUES ($1, $2, $3, 'WHOLESALE', 'WS-PENDING', 'Test authority', now(), $4, $5)`,
+        [`licence_ren720_pending_${suffix}`, orgA, supplierA, inDays(730), `licence_ren720_a1_${suffix}`]
+      );
+    });
+    const reminders = await read(orgA, [branchA]);
+    expect(reminders.filter((reminder) => reminder.kind === 'SUPPLIER_LICENCE')).toEqual([
+      expect.objectContaining({ reference: 'WS-1', stage: 7 }),
+    ]);
+  });
+
+  it('stops the reminders once the renewed licences are saved and the supplier renewal is verified', async () => {
     await asOwner(async (owner) => {
       // Saved the way the regulatory profile form saves a new version.
       await owner.query(

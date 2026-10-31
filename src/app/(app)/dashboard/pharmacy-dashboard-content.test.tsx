@@ -189,7 +189,7 @@ describe('PharmacyDashboardContent states', () => {
     expect(screen.getByText(/expires in 30 days \(2026-10-04\) · Renewal fee Rs 3,000/i)).toBeVisible();
     expect(
       screen.getByRole('link', { name: 'Record the renewal on the regulatory profile' })
-    ).toHaveAttribute('href', '/pharmacy/regulatory');
+    ).toHaveAttribute('href', '/pharmacy/regulatory?branch=b1');
   });
 
   it('#720 hides the renewal banner when nothing is due and never mounts it for a member', () => {

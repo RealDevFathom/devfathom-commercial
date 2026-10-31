@@ -5,10 +5,11 @@ import { NextResponse } from 'next/server';
 import { processDueWhatsAppLicenceRenewalReminders } from '@/lib/pharmacy/whatsapp/licence-renewal-reminders';
 
 /**
- * #720 — scheduled owner-only WhatsApp licence renewal reminders. Called by the
- * platform scheduler with `Authorization: Bearer $CRON_SECRET`; safe to call as
- * often as desired because each reminder is claimed once per owner, licence,
- * expiry and stage before it is sent. Off until the template is configured.
+ * #720 — manual trigger for owner-only WhatsApp licence renewal reminders. The
+ * platform jobs cron also runs this worker. Requires `Authorization: Bearer
+ * $CRON_SECRET`; safe to call as often as desired because each reminder is
+ * claimed once per owner, licence, expiry and stage before it is sent. Off
+ * until the template is configured.
  */
 export const maxDuration = 300;
 

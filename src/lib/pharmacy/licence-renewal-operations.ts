@@ -13,7 +13,7 @@ import { planRenewalReminders, type RenewalReminder, type RenewalSubject } from 
  *    therefore replaces the old dates and the reminder stops;
  *  - supplier licences of active, authorized suppliers: per supplier and
  *    licence type, the latest expiry among verified filings that no later
- *    filing supersedes. Recording the renewed licence stops the reminder.
+ *    verified filing supersedes. Verifying the renewed licence stops the reminder.
  *
  * Runs on the caller's tenant-scoped client (FORCE RLS), and still names the
  * organization and branches in every predicate, as the other readers do.
@@ -49,7 +49,7 @@ export async function readLicenceRenewalSubjects(
     db.pharmacySupplierLicence.findMany({
       where: {
         organizationId,
-        supersededBy: { none: {} },
+        supersededBy: { none: { verifiedAt: { not: null } } },
         // The purchasing gate trades only on verified filings, so an unverified
         // renewal keeps the reminder running until someone verifies it.
         verifiedAt: { not: null },

@@ -20,7 +20,7 @@ function stageLabel(reminder: RenewalReminder) {
 function renewHref(reminder: RenewalReminder) {
   return reminder.kind === 'SUPPLIER_LICENCE'
     ? '/pharmacy/purchasing/suppliers'
-    : '/pharmacy/regulatory';
+    : `/pharmacy/regulatory?branch=${encodeURIComponent(reminder.branchId ?? reminder.subjectId)}`;
 }
 
 /**
