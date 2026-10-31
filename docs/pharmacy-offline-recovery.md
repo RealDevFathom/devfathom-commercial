@@ -15,11 +15,15 @@ command, without the surrounding recovery body. A nonempty reason is required.
 Recovery records that exact command as `REJECTED`, retaining its original payload,
 sequence and printed receipt number. It writes a `pharmacyOffline.rejectCommand`
 audit event with the manager, device, branch, sequence and reason in the same
-transaction. It creates no sale and consumes no stock, quota or receipt number.
+transaction. It validates that the printed receipt belongs to this device's lease
+and is its next number, then advances that lease atomically with the rejection
+and audit. It creates no sale and consumes no stock or quota. The rejected printed
+number is permanently retired; subsequent queued sales keep their original numbers
+from the same lease.
 An identical recovery retry returns the existing rejection; an accepted command
 cannot be rejected. After the server confirms recovery, retain the rejected command
 for review locally and resume replay at the next sequence. Do not renumber a printed
-receipt; obtain a fresh receipt lease if the old lease is no longer usable.
+receipt; obtain a fresh receipt lease for new work when the old lease is exhausted.
 
 An exhausted legacy device sequence remains exhausted: its durable cursor can hold
 `2147483648`, while commands retain their positive PostgreSQL integer sequence.

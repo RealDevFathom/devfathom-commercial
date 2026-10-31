@@ -632,6 +632,22 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
             return { commandId: recorded.command.id, status: 'REJECTED', replayed: true };
           if (recorded.command.status !== 'PENDING')
             throw new CounterTransportError('command_already_settled', 409);
+          // The receipt was already printed. Retire exactly the next number
+          // under the same lease checks as settlement, so recovery preserves
+          // the remaining printed receipts and never makes this one reusable.
+          const { leaseId, receiptNumber, originalSaleAt } = command.leasedReceipt;
+          const retired = await db.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+            UPDATE pharmacy_receipt_number_leases AS lease
+            SET "nextNumber" = ${receiptNumber} + 1
+            WHERE lease.id = ${leaseId}
+              AND lease."organizationId" = ${ctx.scope.organizationId}
+              AND lease."branchId" = ${ctx.scope.branchId}
+              AND lease."deviceId" = ${device.id}
+              AND lease."nextNumber" = ${receiptNumber}
+              AND ${receiptNumber} BETWEEN lease."blockStart" AND lease."blockEnd"
+              AND lease."issuedAt" <= ${new Date(originalSaleAt)}
+            RETURNING lease.id`);
+          if (!retired[0]) throw new CounterTransportError('INVALID_RECEIPT_LEASE', 409);
           await settleOfflineCommand(
             db,
             ctx.scope,

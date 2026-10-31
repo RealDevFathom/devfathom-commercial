@@ -453,18 +453,13 @@ describeIfDatabase('offline counter REST on forced-RLS PostgreSQL', () => {
     expect((await f.replay(failed)).status).toBe(409);
     expect(await f.counts()).toEqual(before);
 
-    const leased = await f.call('lease', { size: 2 });
-    expect(leased.status).toBe(200);
-    const replacementLease = await leased.json();
     const next = {
       ...f.command,
       sequence: 2,
       idempotencyKey: tag('after-rejection'),
       leasedReceipt: {
         ...f.command.leasedReceipt,
-        leaseId: replacementLease.id,
-        receiptNumber: replacementLease.blockStart,
-        originalSaleAt: new Date().toISOString(),
+        receiptNumber: f.lease.blockStart + 1,
       },
     };
     const gap = await f.replay(next);
@@ -474,7 +469,11 @@ describeIfDatabase('offline counter REST on forced-RLS PostgreSQL', () => {
     expect(rejected.status).toBe(200);
     const result = await rejected.json();
     expect(result).toMatchObject({ status: 'REJECTED', replayed: false });
-    expect(await f.counts()).toEqual({ ...before, commands: 1 });
+    expect(await f.counts()).toEqual({
+      ...before,
+      commands: 1,
+      nextNumber: f.lease.blockStart + 1,
+    });
     const [retryA, retryB] = await Promise.all([f.reject(failed), f.reject(failed)]);
     expect(await retryA.json()).toEqual({ ...result, replayed: true });
     expect(await retryB.json()).toEqual({ ...result, replayed: true });
@@ -503,10 +502,50 @@ describeIfDatabase('offline counter REST on forced-RLS PostgreSQL', () => {
       commands: 2,
       sales: 1,
       consumed: 1,
+      nextNumber: f.lease.blockEnd + 1,
     });
     expect((await f.reject(next)).status).toBe(409);
     expect((await f.counts()).sales).toBe(1);
   });
+  it('refuses a new sale using the printed number of a rejected command', async () => {
+    const f = await setup();
+    const failed = { ...f.command, amountMinor: 1 };
+    expect((await f.reject(failed)).status).toBe(200);
+    const before = await f.counts();
+    const reused = await f.replay({
+      ...f.command,
+      sequence: 2,
+      idempotencyKey: tag('reused-rejected-receipt'),
+    });
+    expect(reused.status).toBe(409);
+    expect(await reused.json()).toEqual({ error: 'INVALID_RECEIPT_LEASE' });
+    expect(await f.counts()).toEqual(before);
+  });
+  it.each(['missing', 'other-device', 'outside-block', 'skip-number', 'before-lease'] as const)(
+    'refuses recovery with a %s receipt lease without advancing either cursor',
+    async (mode) => {
+      const f = await setup();
+      const before = await f.counts();
+      const receipt = { ...f.command.leasedReceipt };
+      if (mode === 'missing') receipt.leaseId = tag('missing-lease');
+      if (mode === 'other-device') {
+        const other = await setup();
+        receipt.leaseId = other.lease.id;
+      }
+      if (mode === 'outside-block') receipt.receiptNumber = f.lease.blockEnd + 1;
+      if (mode === 'skip-number') receipt.receiptNumber += 1;
+      if (mode === 'before-lease') receipt.originalSaleAt = NOW.toISOString();
+      const rejected = await f.reject({ ...f.command, leasedReceipt: receipt });
+      expect(rejected.status).toBe(409);
+      expect(await rejected.json()).toEqual({ error: 'INVALID_RECEIPT_LEASE' });
+      expect(await f.counts()).toEqual(before);
+      const device = await inOrg(ORG_A, (db) =>
+        db.pharmacyRegisteredDevice.findFirstOrThrow({ where: { id: f.fixture.deviceId } })
+      );
+      expect(device.nextOfflineCommandSequence).toBe(BigInt(1));
+      expect((await f.reject()).status).toBe(200);
+    }
+  );
   it('requires manager authorization, a valid session and the signed original for recovery', async () => {
     const f = await setup();
     const before = await f.counts();
