@@ -4,7 +4,7 @@ import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { PharmacyInventoryError } from './inventory';
-import { quarantinePart } from './inventory-operations';
+import { lockRecallAuthority, quarantinePart, releaseRecallBatches } from './inventory-operations';
 import { confirmPriceChanges, currentPackPrice, resolveNoticePack } from './pricing';
 
 export type DrapPriceNotice = {
@@ -126,6 +126,7 @@ export async function ingestDrapNotice(
   adapter: DrapNoticeSource['adapter'],
   notice: DrapNotice
 ) {
+  if (notice.kind === 'RECALL') await lockRecallAuthority(db, scope.organizationId);
   const previous = await db.pharmacyDrapIngest.findFirst({
     where: {
       organizationId: scope.organizationId,
@@ -338,6 +339,7 @@ export async function reverseRecallQuarantine(
   reason: string
 ) {
   if (!reason.trim()) throw new PharmacyInventoryError('INVALID_STATE');
+  await lockRecallAuthority(db, scope.organizationId);
   const actions = await db.pharmacyRecallQuarantineAction.findMany({
     where: { organizationId: scope.organizationId, recallNoticeId, reversedAt: null },
   });
@@ -377,13 +379,7 @@ export async function reverseRecallQuarantine(
   const recall = await db.pharmacyRecallNotice.findFirstOrThrow({
     where: { organizationId: scope.organizationId, id: recallNoticeId },
   });
-  await db.pharmacyManufacturingBatch.updateMany({
-    where: {
-      organizationId: scope.organizationId,
-      ...(recall.batchId ? { id: recall.batchId } : { medicineId: recall.medicineId! }),
-    },
-    data: { state: 'ACTIVE', stateReason: null, stateChangedAt: null },
-  });
+  await releaseRecallBatches(db, scope.organizationId, recall);
   return db.pharmacyRecallNotice.update({
     where: { organizationId_id: { organizationId: scope.organizationId, id: recall.id } },
     data: { status: 'CLOSED', closedById: scope.actorId, closedAt: new Date() },

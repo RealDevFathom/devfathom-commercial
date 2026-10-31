@@ -1,14 +1,16 @@
 'use client';
 
 import { useState } from 'react';
+import { PasswordInput } from '@/components/ui/password-input';
+import { Button } from '@/components/ui/button';
 import { useRouter } from 'next/navigation';
-import { Eye, EyeOff, Loader2, Check, CheckCircle2 } from 'lucide-react';
+import { Loader2, Check, CheckCircle2 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { passwordRules, passwordMeetsPolicy } from '@/lib/password-policy';
 import { cn } from '@/lib/utils';
 
 const inputClass =
-  'flex h-11 w-full rounded-xl border border-white/10 bg-white/[0.04] px-4 text-sm text-white placeholder:text-[#5A6670] transition-colors focus:border-[#BC8850] focus:outline-none focus:ring-2 focus:ring-[#BC8850]/30';
+  'flex h-11 w-full rounded-sm border border-border-default bg-surface-sunken px-4 text-sm text-text-strong placeholder:text-text-faint transition-colors focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/30';
 
 export function ResetPasswordForm({ token }: { token: string }) {
   const router = useRouter();
@@ -25,8 +27,11 @@ export function ResetPasswordForm({ token }: { token: string }) {
   if (isLoading) {
     return (
       <div className="flex flex-col items-center justify-center gap-3 py-10 text-center">
-        <Loader2 className="h-6 w-6 animate-spin text-[#BC8850]" />
-        <p className="text-sm text-[#8A97A1]">Checking your reset link...</p>
+        <Loader2 className="h-6 w-6 animate-spin text-accent-brand" />
+        <h1 className="font-display text-2xl font-semibold tracking-tight text-text-strong">
+          Reset your password
+        </h1>
+        <p className="text-sm text-text-muted">Checking your reset link...</p>
       </div>
     );
   }
@@ -34,16 +39,16 @@ export function ResetPasswordForm({ token }: { token: string }) {
   // Invalid / expired link
   if (!data?.valid) {
     return (
-      <div className="space-y-5 text-center">
-        <h1 className="font-display text-xl font-semibold tracking-tight text-white">
+      <div role="status" aria-live="polite" className="space-y-5 text-center">
+        <h1 className="font-display text-2xl font-semibold tracking-tight text-text-strong">
           Link unavailable
         </h1>
-        <p className="text-sm text-[#8A97A1]">
+        <p className="text-sm text-text-muted">
           This reset link is invalid or has expired. Request a new one to continue.
         </p>
         <a
           href="/forgot-password"
-          className="inline-flex h-11 w-full items-center justify-center rounded-xl bg-primary text-sm font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98]"
+          className="inline-flex h-11 w-full items-center justify-center rounded-sm bg-primary text-sm font-semibold text-primary-foreground transition-all hover:bg-primary-hover active:scale-[0.98]"
         >
           Request a new link
         </a>
@@ -54,19 +59,19 @@ export function ResetPasswordForm({ token }: { token: string }) {
   // Success state
   if (done) {
     return (
-      <div className="space-y-5 text-center">
+      <div role="status" aria-live="polite" className="space-y-5 text-center">
         <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-success/15 text-success">
           <CheckCircle2 className="h-6 w-6" />
         </div>
-        <h1 className="font-display text-xl font-semibold tracking-tight text-white">
+        <h1 className="font-display text-2xl font-semibold tracking-tight text-text-strong">
           Password updated
         </h1>
-        <p className="text-sm text-[#8A97A1]">
+        <p className="text-sm text-text-muted">
           Your password has been changed. You can now sign in with it.
         </p>
         <a
           href="/login"
-          className="inline-flex h-11 w-full items-center justify-center rounded-xl bg-primary text-sm font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98]"
+          className="inline-flex h-11 w-full items-center justify-center rounded-sm bg-primary text-sm font-semibold text-primary-foreground transition-all hover:bg-primary-hover active:scale-[0.98]"
         >
           Go to sign in
         </a>
@@ -103,16 +108,20 @@ export function ResetPasswordForm({ token }: { token: string }) {
   return (
     <div>
       <div className="mb-7">
-        <h1 className="font-display text-xl font-semibold tracking-tight text-white">
+        <h1 className="font-display text-2xl font-semibold tracking-tight text-text-strong">
           Choose a new password
         </h1>
-        <p className="mt-1.5 text-sm text-[#8A97A1]">
+        <p className="mt-1.5 text-sm text-text-muted">
           Pick a strong password you don&apos;t use elsewhere.
         </p>
       </div>
 
       {error && (
-        <div className="mb-5 rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-400">
+        <div
+          id="account-error"
+          role="alert"
+          className="mb-5 rounded-sm border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+        >
           {error}
         </div>
       )}
@@ -120,33 +129,27 @@ export function ResetPasswordForm({ token }: { token: string }) {
       <form onSubmit={handleSubmit} className="space-y-5">
         {/* New password */}
         <div className="space-y-2">
-          <label htmlFor="password" className="block text-sm font-medium text-[#C2CBD1]">
+          <label htmlFor="password" className="block text-sm font-medium text-text-body">
             New Password
           </label>
-          <div className="relative">
-            <input
-              id="password"
-              type={showPassword ? 'text' : 'password'}
-              placeholder="Create a password"
-              autoComplete="new-password"
-              autoFocus
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className={`${inputClass} pr-12`}
-            />
-            <button
-              type="button"
-              onClick={() => setShowPassword((visible) => !visible)}
-              aria-label={showPassword ? 'Hide password' : 'Show password'}
-              aria-pressed={showPassword}
-              className="absolute right-0 top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center text-[#5A6670] transition-colors hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-            >
-              {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-            </button>
-          </div>
+          <PasswordInput
+            id="password"
+            aria-invalid={Boolean(error)}
+            aria-describedby={
+              error ? 'account-error password-requirements' : 'password-requirements'
+            }
+            revealed={showPassword}
+            onReveal={() => setShowPassword((visible) => !visible)}
+            placeholder="Create a password"
+            autoComplete="new-password"
+            autoFocus
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            className={inputClass}
+          />
 
           {/* Live password requirements checklist */}
-          <ul className="mt-2 space-y-1.5">
+          <ul id="password-requirements" className="mt-2 space-y-1.5">
             {passwordRules.map((rule) => {
               const met = rule.test(password);
               return (
@@ -154,16 +157,16 @@ export function ResetPasswordForm({ token }: { token: string }) {
                   <span
                     className={cn(
                       'flex h-4 w-4 shrink-0 items-center justify-center rounded-full transition-colors',
-                      met ? 'bg-success/20 text-success' : 'bg-white/5 text-transparent'
+                      met ? 'bg-success/20 text-success' : 'bg-muted text-transparent'
                     )}
                   >
                     {met ? (
                       <Check className="h-3 w-3" />
                     ) : (
-                      <span className="h-1.5 w-1.5 rounded-full bg-[#5A6670]" />
+                      <span className="h-1.5 w-1.5 rounded-full bg-text-faint" />
                     )}
                   </span>
-                  <span className={met ? 'text-[#C2CBD1]' : 'text-[#8A97A1]'}>{rule.label}</span>
+                  <span className={met ? 'text-text-body' : 'text-text-muted'}>{rule.label}</span>
                 </li>
               );
             })}
@@ -172,11 +175,19 @@ export function ResetPasswordForm({ token }: { token: string }) {
 
         {/* Confirm password */}
         <div className="space-y-2">
-          <label htmlFor="confirm" className="block text-sm font-medium text-[#C2CBD1]">
+          <label htmlFor="confirm" className="block text-sm font-medium text-text-body">
             Confirm Password
           </label>
           <input
             id="confirm"
+            aria-invalid={Boolean(error) || (confirm.length > 0 && !confirmOk)}
+            aria-describedby={
+              error
+                ? 'account-error'
+                : confirm.length > 0 && !confirmOk
+                  ? 'confirm-error'
+                  : undefined
+            }
             type={showPassword ? 'text' : 'password'}
             placeholder="Re-enter your password"
             autoComplete="new-password"
@@ -185,14 +196,16 @@ export function ResetPasswordForm({ token }: { token: string }) {
             className={inputClass}
           />
           {confirm.length > 0 && !confirmOk && (
-            <p className="text-xs text-red-400">Passwords do not match.</p>
+            <p id="confirm-error" role="status" className="text-xs text-destructive">
+              Passwords do not match.
+            </p>
           )}
         </div>
 
-        <button
+        <Button
           type="submit"
           disabled={!canSubmit}
-          className="group flex h-11 w-full items-center justify-center rounded-xl bg-primary text-sm font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50"
+          className="group flex h-11 w-full items-center justify-center rounded-sm bg-primary text-sm font-semibold text-primary-foreground transition-all hover:bg-primary-hover active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50"
         >
           {reset.isPending ? (
             <>
@@ -202,7 +215,7 @@ export function ResetPasswordForm({ token }: { token: string }) {
           ) : (
             'Reset password'
           )}
-        </button>
+        </Button>
       </form>
     </div>
   );
