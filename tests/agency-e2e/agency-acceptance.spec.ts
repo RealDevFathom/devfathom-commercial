@@ -95,11 +95,13 @@ test('Notes is licensed and a created note persists', async ({ page }) => {
   await page.locator('.ProseMirror').fill('Persisted by the Agency A7 acceptance flow.');
   await page.getByRole('button', { name: 'Save', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Edit' })).toBeVisible();
-  await expect(page.getByDisplayValue(title)).toBeVisible();
+  await expect(page.getByPlaceholder('Untitled')).toBeVisible();
+  await expect(page.getByPlaceholder('Untitled')).toHaveValue(title);
 
   const notePath = new URL(page.url()).pathname;
   await page.reload();
-  await expect(page.getByDisplayValue(title)).toBeVisible();
+  await expect(page.getByPlaceholder('Untitled')).toBeVisible();
+  await expect(page.getByPlaceholder('Untitled')).toHaveValue(title);
   await expect(page.locator('.ProseMirror')).toContainText(
     'Persisted by the Agency A7 acceptance flow.'
   );
@@ -109,7 +111,8 @@ test('Notes is licensed and a created note persists', async ({ page }) => {
   await expect(savedNote).toContainText(title);
   await savedNote.click();
   await expect(page).toHaveURL((url) => url.pathname === notePath);
-  await expect(page.getByDisplayValue(title)).toBeVisible();
+  await expect(page.getByPlaceholder('Untitled')).toBeVisible();
+  await expect(page.getByPlaceholder('Untitled')).toHaveValue(title);
   await expect(page.locator('.ProseMirror')).toContainText(
     'Persisted by the Agency A7 acceptance flow.'
   );
