@@ -30,6 +30,7 @@ import {
 } from '@/lib/restaurant/printing/contract';
 import { renderEscPos } from '@/lib/restaurant/printing/esc-pos';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { workspaceDateUtc } from '@/lib/timezone';
 
 import {
   COUNTER_RECEIPT_STRINGS,
@@ -39,6 +40,7 @@ import {
   type CounterReceiptLocale,
   type PharmacyReceiptTaxIdentity,
 } from './counter-receipt';
+import { effectiveRegulatoryProfileWhere } from './regulatory';
 
 /** Registered tax identity printed on the receipt; null fields are omitted, never invented. */
 export type { PharmacyReceiptTaxIdentity } from './counter-receipt';
@@ -209,14 +211,15 @@ export async function readPharmacyReceiptFormat(db: FormatDb, scope: BranchScope
 export async function readPharmacyReceiptTaxIdentity(
   db: FormatDb,
   scope: BranchScope,
-  at: Date
+  at: Date,
+  timeZone: string | null | undefined = 'UTC'
 ): Promise<PharmacyReceiptTaxIdentity> {
   const profile = await db.branchRegulatoryProfile.findFirst({
     where: {
       organizationId: scope.organizationId,
       branchId: scope.branchId,
-      effectiveFrom: { lte: at },
-      OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
+      // The same window the sale gate used at completion (workspace-day start).
+      ...effectiveRegulatoryProfileWhere(at, workspaceDateUtc(timeZone, at)),
     },
     orderBy: [{ effectiveFrom: 'desc' }, { version: 'desc' }],
     select: { ntn: true, strn: true },

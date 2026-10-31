@@ -74,17 +74,29 @@ function permits(values: readonly string[], value: string): boolean {
  *   Their boundaries keep instant semantics: a placeholder is in force from the
  *   moment it is applied and stops the moment it is locked.
  *
- * Ends of operator profiles are compared against the later of the instant and
- * the workspace day, so a date-only end closes at the start of that workspace
- * day while an end stamped at an instant (an operator profile superseded by a
- * placeholder) is never resurrected after that instant.
+ * Ends of operator profiles take two shapes. A date-only end (UTC midnight of
+ * the successor's start day, written when an operator saves the next version)
+ * closes at the start of that workspace day, so it is compared against the
+ * workspace day alone: comparing it against the instant would close it early
+ * west of UTC, where the instant reaches the next UTC midnight hours before the
+ * workspace day changes, leaving no version in force until the successor starts.
+ * An end stamped at an instant (an operator profile superseded by a
+ * placeholder) must never be resurrected after that instant, so it is also
+ * compared against the instant.
+ *
+ * In the database the shapes cannot be told apart directly. The workspace day
+ * is within a day of the instant (UTC offsets are under 24 hours), so the only
+ * date-only end later than the workspace day that the instant can already have
+ * reached is the next workspace day itself: that one value is admitted by
+ * equality, every other end must also lie after the instant.
  */
-function laterOf(a: Date, b: Date): Date {
-  return a > b ? a : b;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function nextCalendarDate(calendarDate: Date): Date {
+  return new Date(calendarDate.getTime() + DAY_MS);
 }
 
 export function effectiveRegulatoryProfileWhere(at: Date, calendarDate: Date) {
-  const operatorEnd = laterOf(at, calendarDate);
   return {
     OR: [
       {
@@ -95,7 +107,20 @@ export function effectiveRegulatoryProfileWhere(at: Date, calendarDate: Date) {
       {
         isPlaceholder: false,
         effectiveFrom: { lte: calendarDate },
-        OR: [{ effectiveTo: null }, { effectiveTo: { gt: operatorEnd } }],
+        OR: [
+          { effectiveTo: null },
+          {
+            AND: [
+              { effectiveTo: { gt: calendarDate } },
+              {
+                OR: [
+                  { effectiveTo: { gt: at } },
+                  { effectiveTo: { equals: nextCalendarDate(calendarDate) } },
+                ],
+              },
+            ],
+          },
+        ],
       },
     ],
   };
@@ -112,9 +137,12 @@ export function isRegulatoryProfileEffective(
       profile.effectiveFrom <= at && (profile.effectiveTo === null || profile.effectiveTo > at)
     );
   }
+  const end = profile.effectiveTo;
   return (
     profile.effectiveFrom <= calendarDate &&
-    (profile.effectiveTo === null || profile.effectiveTo > laterOf(at, calendarDate))
+    (end === null ||
+      (end > calendarDate &&
+        (end > at || end.getTime() === nextCalendarDate(calendarDate).getTime())))
   );
 }
 

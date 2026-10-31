@@ -35,29 +35,43 @@ const profile = {
   },
 };
 
-type EndCondition = { effectiveTo: null | { gt: Date } };
 type ProfileWhere = {
   organizationId: string;
   branchId?: string;
-  OR?: Array<{ isPlaceholder: boolean; effectiveFrom: { lte: Date }; OR: EndCondition[] }>;
+  OR?: unknown[];
 };
 
-/** Evaluates the effective-window filter the way Postgres would. */
-function matchesEffectiveWindow(
-  row: { isPlaceholder: boolean; effectiveFrom: Date; effectiveTo: Date | null },
-  where: ProfileWhere
-): boolean {
+type Row = Record<string, unknown>;
+
+function matchesField(value: unknown, condition: unknown): boolean {
+  if (condition === null) return value === null;
+  if (condition instanceof Date) return value instanceof Date && +value === +condition;
+  if (typeof condition !== 'object') return value === condition;
+  return Object.entries(condition as Record<string, unknown>).every(([op, operand]) => {
+    if (op === 'equals') return matchesField(value, operand);
+    if (!(value instanceof Date) || !(operand instanceof Date)) return false;
+    if (op === 'gt') return value > operand;
+    if (op === 'lte') return value <= operand;
+    throw new Error(`Unsupported operator ${op}`);
+  });
+}
+
+/** Evaluates a Prisma-style filter (AND/OR, gt/lte/equals, null) the way Postgres would. */
+function matchesFilter(row: Row, filter: Record<string, unknown>): boolean {
+  return Object.entries(filter).every(([key, condition]) => {
+    if (key === 'OR') {
+      return (condition as Record<string, unknown>[]).some((part) => matchesFilter(row, part));
+    }
+    if (key === 'AND') {
+      return (condition as Record<string, unknown>[]).every((part) => matchesFilter(row, part));
+    }
+    return matchesField(row[key], condition);
+  });
+}
+
+function matchesEffectiveWindow(row: Row, where: ProfileWhere): boolean {
   if (!where.OR) return false;
-  return where.OR.some(
-    (branch) =>
-      branch.isPlaceholder === row.isPlaceholder &&
-      row.effectiveFrom <= branch.effectiveFrom.lte &&
-      branch.OR.some(({ effectiveTo: condition }) =>
-        condition === null
-          ? row.effectiveTo === null
-          : row.effectiveTo !== null && row.effectiveTo > condition.gt
-      )
-  );
+  return matchesFilter(row, { OR: where.OR });
 }
 
 function fixture(
@@ -186,6 +200,58 @@ describe('pharmacy readiness and activation use the workspace calendar date', ()
         }
       )
     ).rejects.toMatchObject({ reason });
+  });
+});
+
+describe('operator profile handover west of UTC', () => {
+  // v1 ends and v2 starts on 2026-10-22; in Chicago (CDT, UTC-5) that day starts
+  // at 2026-10-22T05:00Z, five hours after the UTC midnight stored on the rows.
+  const handover = new Date('2026-10-22T00:00:00.000Z');
+
+  it.each([
+    ['2026-10-22T00:00:00.000Z', true],
+    ['2026-10-22T01:00:00.000Z', true],
+    ['2026-10-22T04:59:59.999Z', true],
+    ['2026-10-22T05:00:00.000Z', false],
+  ])(
+    'keeps the outgoing version in force until workspace midnight (%s)',
+    async (instant, ready) => {
+      db = fixture('America/Chicago', handover);
+      const readiness = await evaluatePharmacyReadiness(
+        db as unknown as PrismaClient,
+        profile.organizationId,
+        new Date(instant)
+      );
+      expect(readiness.ready).toBe(ready);
+    }
+  );
+
+  it.each([
+    ['2026-10-22T04:59:59.999Z', false],
+    ['2026-10-22T05:00:00.000Z', true],
+  ])('starts the successor at workspace midnight (%s)', async (instant, ready) => {
+    db = fixture('America/Chicago', null, {
+      effectiveFrom: handover,
+      licenceValidFrom: handover,
+      qualifiedPersonValidFrom: handover,
+    });
+    const readiness = await evaluatePharmacyReadiness(
+      db as unknown as PrismaClient,
+      profile.organizationId,
+      new Date(instant)
+    );
+    expect(readiness.ready).toBe(ready);
+  });
+
+  it('still closes an operator profile superseded at an instant west of UTC', async () => {
+    // Superseded at 2026-10-22T00:30Z, i.e. 19:30 CDT on 2026-10-21.
+    db = fixture('America/Chicago', new Date('2026-10-22T00:30:00.000Z'));
+    const readiness = await evaluatePharmacyReadiness(
+      db as unknown as PrismaClient,
+      profile.organizationId,
+      new Date('2026-10-22T01:00:00.000Z')
+    );
+    expect(readiness.ready).toBe(false);
   });
 });
 
