@@ -920,7 +920,9 @@
    DEVFATHOM STUDIO — spatial operating canvas
    Fog surround · paper workspace · ink structure · coral signal
    ============================================================ */
-:root {
+/* Explicit light surfaces (for example, invoice paper) also reuse these tokens. */
+:root,
+[data-theme='light'] {
   --surface-page: #f6f6f3;
   --surface-card: #ffffff;
   --surface-sunken: #f1f1ee;

@@ -94,27 +94,28 @@ export function InvoicePrintView({ invoiceId }: { invoiceId: string }) {
           </button>
         </div>
 
-        {/* The invoice paper */}
+        {/* Keep the paper and its semantic text tokens light in both screen and print media. */}
         <div
           id="invoice-print"
+          data-theme="light"
           className="rounded-2xl border border-border/60 bg-white p-8 text-slate-900 shadow-sm sm:p-10"
         >
           {/* Header */}
-          <div className="flex items-start justify-between gap-6 border-b border-slate-200 pb-6">
-            <div>
-              <p className="font-display text-2xl font-bold tracking-tight text-[#0C2E2C]">
+          <div className="flex flex-col items-start justify-between gap-6 border-b border-slate-200 pb-6 sm:flex-row print:flex-row">
+            <div className="min-w-0 w-full flex-1 wrap-anywhere">
+              <p className="font-display text-2xl font-bold tracking-tight text-text-strong">
                 {invoice.issuer?.legalName}
               </p>
               {invoice.issuer?.invoiceAddress && (
-                <p className="mt-1 max-w-sm whitespace-pre-line text-xs text-slate-500">
+                <p className="mt-1 max-w-sm whitespace-pre-line text-xs text-text-muted">
                   {invoice.issuer.invoiceAddress}
                 </p>
               )}
               {invoice.issuer?.taxId && (
-                <p className="mt-1 text-xs text-slate-500">Tax ID: {invoice.issuer.taxId}</p>
+                <p className="mt-1 text-xs text-text-muted">Tax ID: {invoice.issuer.taxId}</p>
               )}
             </div>
-            <div className="text-right">
+            <div className="min-w-0 wrap-anywhere sm:text-right print:text-right">
               <p className="font-display text-xl font-bold tracking-tight text-slate-900">
                 INVOICE
               </p>

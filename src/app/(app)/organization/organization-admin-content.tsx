@@ -7,6 +7,7 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Switch as StudioSwitch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { PageHeader } from '@/components/ui/page-header';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
@@ -431,10 +432,11 @@ export function OrganizationAdminContent() {
             </label>
             <label className="sm:col-span-2">
               <span className={labelClass}>Invoice address</span>
-              <Input
+              <Textarea
                 name="invoiceAddress"
                 defaultValue={organization.invoiceAddress ?? ''}
                 placeholder="Street, city, region, postal code, country"
+                maxLength={500}
               />
             </label>
             <label className="sm:col-span-2">
