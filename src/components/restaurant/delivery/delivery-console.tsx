@@ -357,6 +357,7 @@ export function DeliveryConsole() {
                           {zone.active ? (
                             <Button
                               variant="destructive"
+                              disabled={busy}
                               onClick={() =>
                                 setConfirmation({ kind: 'deactivate-zone', item: zone })
                               }
@@ -365,6 +366,7 @@ export function DeliveryConsole() {
                             </Button>
                           ) : (
                             <Button
+                              disabled={busy}
                               onClick={() =>
                                 setConfirmation({ kind: 'reactivate-zone', item: zone })
                               }

@@ -296,7 +296,7 @@ describe('DeliveryConsole', () => {
       </EntitlementsProvider>
     );
     expect(screen.getByRole('button', { name: 'Make default' })).toBeDisabled();
-    fireEvent.click(screen.getByRole('button', { name: action, exact: true }));
+    fireEvent.click(screen.getByRole('button', { name: action }));
     const dialog = screen.getByRole('dialog', { name: title });
     fireEvent.change(within(dialog).getByLabelText('Address label'), {
       target: { value: 'Unsaved office name' },
