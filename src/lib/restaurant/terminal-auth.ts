@@ -1,4 +1,5 @@
 import 'server-only';
+import { withOwnerReauthenticationScope } from './owner-reauthentication';
 
 import { hasStaffBranchAccess } from './branch-access';
 
@@ -495,17 +496,25 @@ export function withTerminalAuth<T extends unknown[]>(
           touchSession(db, session.id, now),
         ]);
 
-        return handler(
+        return withOwnerReauthenticationScope(
           {
-            organizationId: auth.organizationId,
-            device,
-            demoActor: auth.demoActor,
-            db,
-            session,
-            state: verdict.state,
+            actingStaffProfileId: session.activeStaffProfileId,
+            deviceId: device.id,
+            terminalSessionId: session.id,
           },
-          request,
-          ...args
+          () =>
+            handler(
+              {
+                organizationId: auth.organizationId,
+                device,
+                demoActor: auth.demoActor,
+                db,
+                session,
+                state: verdict.state,
+              },
+              request,
+              ...args
+            )
         );
       });
     } catch (err) {

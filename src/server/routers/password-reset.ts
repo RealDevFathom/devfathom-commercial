@@ -1,13 +1,15 @@
-import { z } from 'zod';
 import { hash } from 'bcryptjs';
 import { TRPCError } from '@trpc/server';
 import type { PrismaClient } from '@/generated/prisma/client';
 import { router, publicProcedure } from '../trpc';
-import { passwordSchema } from '@/lib/password-policy';
+import {
+  anonymousTokenInput,
+  passwordResetInput,
+  passwordResetRequestInput,
+} from '@/lib/auth/anonymous-inputs';
 import { hashInviteToken } from '@/lib/invite-token';
 import { rateLimit } from '@/lib/rate-limit';
 import { ACTIVE_STATUSES } from '@/lib/abac';
-import { emailLookupSchema } from '@/lib/email-address';
 import { emailPasswordReset, revokePasswordResetCredentials } from '@/lib/auth/password-reset';
 import { RESET_GENERIC_MESSAGE } from '@/lib/auth/anonymous-access';
 
@@ -16,8 +18,6 @@ import { RESET_GENERIC_MESSAGE } from '@/lib/auth/anonymous-access';
 // (PasswordResetToken.tokenHash), mirroring the invite flow. To verify, we hash
 // the presented raw token with the SAME sha256 (hashInviteToken) and look up by
 // tokenHash — no plaintext token ever lives in the DB.
-
-const tokenInput = z.object({ token: z.string().min(1) });
 
 // One message for every way a reset link can fail. Shared with the fallback
 // router the `/api/trpc` handler uses when a token names no tenant at all, so an
@@ -58,7 +58,7 @@ export const passwordResetRouter = router({
     // D10: lookup-only normalization. A malformed address must be indistinguish-
     // able from an unknown one here, so this deliberately does not validate the
     // format — it would turn the endpoint into an enumeration oracle.
-    .input(z.object({ email: emailLookupSchema }))
+    .input(passwordResetRequestInput)
     .mutation(async ({ ctx, input }) => {
       if (ctx.organization?.isDemo) return { success: true };
       const email = input.email;
@@ -100,78 +100,76 @@ export const passwordResetRouter = router({
 
   // Lightweight pre-check so the reset page can show an "expired link" state
   // before the user types anything. Reveals only whether the token is usable.
-  validate: publicProcedure.input(tokenInput).query(async ({ ctx, input }) => {
+  validate: publicProcedure.input(anonymousTokenInput).query(async ({ ctx, input }) => {
     const record = await loadUsableToken(ctx.db, input.token);
     return { valid: Boolean(record) };
   }),
 
   // Step 2 — consume the token and set a new password. Rejects missing / used /
   // expired tokens with one generic error.
-  reset: publicProcedure
-    .input(z.object({ token: z.string().min(1), newPassword: passwordSchema }))
-    .mutation(async ({ ctx, input }) => {
-      const record = await loadUsableToken(ctx.db, input.token);
-      if (!record) throw invalidResetLink();
+  reset: publicProcedure.input(passwordResetInput).mutation(async ({ ctx, input }) => {
+    const record = await loadUsableToken(ctx.db, input.token);
+    if (!record) throw invalidResetLink();
 
-      // Hash BEFORE opening the transaction.
-      //
-      // bcrypt at cost 12 takes on the order of a quarter of a second, and an
-      // interactive transaction pins one pooled connection for its whole
-      // lifetime. Hashing inside it meant every concurrent reset held a
-      // connection idle for that entire time, so a burst of resets could exhaust
-      // the pool and stall unrelated tenant traffic. `loadUsableToken` already
-      // rejects missing, used, and expired tokens without hashing, so the work
-      // moved here is only ever spent on a token that looked usable.
-      const hashed = await hash(input.newPassword, 12);
+    // Hash BEFORE opening the transaction.
+    //
+    // bcrypt at cost 12 takes on the order of a quarter of a second, and an
+    // interactive transaction pins one pooled connection for its whole
+    // lifetime. Hashing inside it meant every concurrent reset held a
+    // connection idle for that entire time, so a burst of resets could exhaust
+    // the pool and stall unrelated tenant traffic. `loadUsableToken` already
+    // rejects missing, used, and expired tokens without hashing, so the work
+    // moved here is only ever spent on a token that looked usable.
+    const hashed = await hash(input.newPassword, 12);
 
-      await ctx.db.$transaction(async (tx) => {
-        // AUTH-01: bump tokenVersion + stamp passwordChangedAt so every existing
-        // JWT session for this user is revoked on its next revalidation.
-        await tx.user.update({
-          where: { id: record.userId, organizationId: record.organizationId },
-          data: {
-            password: hashed,
-            passwordChangedAt: new Date(),
-            mustChangePassword: false,
-            tokenVersion: { increment: 1 },
-          },
-        });
-
-        // An admin may initiate recovery for an invited member. Inbox proof
-        // replaces the revoked invitation; never reactivate an inactive member.
-        await tx.user.updateMany({
-          where: { id: record.userId, organizationId: record.organizationId, status: 'INVITED' },
-          data: { status: 'ACTIVE' },
-        });
-
-        // Fresh, and read once: the same instant decides whether the token is
-        // still live and stamps its consumption.
-        const now = new Date();
-
-        // ATOMIC CLAIM.
-        //
-        // `loadUsableToken` and this write are separate statements, so two
-        // requests presenting the same token could both pass the read and both
-        // set a password. A conditional update makes consumption atomic:
-        // PostgreSQL serialises the two writers on the row, and the loser matches
-        // zero rows and gets the same generic error as any other unusable link.
-        //
-        // `expiresAt` is re-checked here rather than trusted from the read.
-        // Between the two statements the link can lapse, and expiry that is only
-        // enforced on the read is enforced nowhere that the write can see.
-        const claimed = await tx.passwordResetToken.updateMany({
-          where: { id: record.id, usedAt: null, expiresAt: { gt: now } },
-          data: { usedAt: now },
-        });
-        if (claimed.count !== 1) throw invalidResetLink();
-
-        await revokePasswordResetCredentials(
-          tx as PrismaClient,
-          record.organizationId,
-          record.userId
-        );
+    await ctx.db.$transaction(async (tx) => {
+      // AUTH-01: bump tokenVersion + stamp passwordChangedAt so every existing
+      // JWT session for this user is revoked on its next revalidation.
+      await tx.user.update({
+        where: { id: record.userId, organizationId: record.organizationId },
+        data: {
+          password: hashed,
+          passwordChangedAt: new Date(),
+          mustChangePassword: false,
+          tokenVersion: { increment: 1 },
+        },
       });
 
-      return { success: true };
-    }),
+      // An admin may initiate recovery for an invited member. Inbox proof
+      // replaces the revoked invitation; never reactivate an inactive member.
+      await tx.user.updateMany({
+        where: { id: record.userId, organizationId: record.organizationId, status: 'INVITED' },
+        data: { status: 'ACTIVE' },
+      });
+
+      // Fresh, and read once: the same instant decides whether the token is
+      // still live and stamps its consumption.
+      const now = new Date();
+
+      // ATOMIC CLAIM.
+      //
+      // `loadUsableToken` and this write are separate statements, so two
+      // requests presenting the same token could both pass the read and both
+      // set a password. A conditional update makes consumption atomic:
+      // PostgreSQL serialises the two writers on the row, and the loser matches
+      // zero rows and gets the same generic error as any other unusable link.
+      //
+      // `expiresAt` is re-checked here rather than trusted from the read.
+      // Between the two statements the link can lapse, and expiry that is only
+      // enforced on the read is enforced nowhere that the write can see.
+      const claimed = await tx.passwordResetToken.updateMany({
+        where: { id: record.id, usedAt: null, expiresAt: { gt: now } },
+        data: { usedAt: now },
+      });
+      if (claimed.count !== 1) throw invalidResetLink();
+
+      await revokePasswordResetCredentials(
+        tx as PrismaClient,
+        record.organizationId,
+        record.userId
+      );
+    });
+
+    return { success: true };
+  }),
 });

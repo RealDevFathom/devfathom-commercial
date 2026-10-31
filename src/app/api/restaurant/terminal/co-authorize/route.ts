@@ -136,6 +136,10 @@ export const POST = withTerminalAuth(async (ctx, request) => {
       approvingStaffProfileId: record.approvingStaffProfileId,
       capability: record.capability,
       reason: record.reason,
+      approvalMode:
+        record.actingStaffProfileId === record.approvingStaffProfileId
+          ? 'OWNER_PIN_REAUTHENTICATION'
+          : 'SECOND_OPERATOR',
     },
   });
   return NextResponse.json(

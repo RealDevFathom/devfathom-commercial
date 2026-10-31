@@ -1,4 +1,5 @@
 import 'server-only';
+import { recordOwnerPinReauthentication } from './owner-reauthentication';
 
 import { createHash } from 'node:crypto';
 
@@ -270,6 +271,9 @@ export async function authenticateApprover(
     }
     return { ok: false, response: json({ error: 'Invalid approving credential.' }, 401) };
   }
+  if (approving.type === 'PIN') {
+    await recordOwnerPinReauthentication(db, auth.staffProfileId, branchId);
+  }
   return { ok: true, staffProfileId: auth.staffProfileId };
 }
 
@@ -394,7 +398,7 @@ type PricedItem = {
   modifiers: { priceDelta: Prisma.Decimal }[];
 };
 
-/** Derived subtotal over non-voided items (there is no stored total, C3). */
+/** Derived subtotal over the supplied priced items (there is no stored total, C3). */
 function deriveSubtotal(items: readonly PricedItem[]): Prisma.Decimal {
   return items.reduce((sum, item) => {
     const modifiers = item.modifiers.reduce(
@@ -436,7 +440,9 @@ export async function listOpenOrdersForBranch(db: ScopedDb, branchId: string) {
       serverStaffProfileId: true,
       openedAt: true,
       items: {
-        where: { status: { not: 'VOIDED' } },
+        // List totals and counts describe purchased units, not kitchen remake
+        // workload. Remakes remain visible in the order-detail history below.
+        where: { status: { not: 'VOIDED' }, remakeOfItemId: null },
         select: { unitPrice: true, quantity: true, modifiers: { select: { priceDelta: true } } },
       },
       orderTables: { where: { active: true }, select: { tableId: true } },
@@ -536,12 +542,16 @@ export async function getOrderForBranch(db: ScopedDb, orderId: string, branchId:
   });
   if (!order) return null;
 
-  const activeItems = order.items.filter((i) => i.status !== 'VOIDED');
+  // Remakes remain part of the operational item history, but are not a new
+  // purchase and therefore must not contribute to guest-facing totals.
+  const purchasedItems = order.items.filter(
+    (item) => item.status !== 'VOIDED' && item.remakeOfItemId === null
+  );
   const at = new Date();
   const terms = reviveCommercialTerms(await loadBranchCommercialTerms(db, order.branchId, at));
   const quoted = quoteDraftCheckBreakdown({
     at,
-    lines: activeItems.map((item) => ({
+    lines: purchasedItems.map((item) => ({
       id: item.id,
       unitPrice: item.unitPrice.toString(),
       quantity: item.quantity,
@@ -605,7 +615,7 @@ export async function getOrderForBranch(db: ScopedDb, orderId: string, branchId:
       items: ticket.items,
     })),
     totals: {
-      subtotal: money(deriveSubtotal(activeItems)),
+      subtotal: money(deriveSubtotal(purchasedItems)),
       tax: quoted.tax,
       serviceCharge: order.bills.length > 0 ? money(billedServiceCharge) : quoted.serviceCharge,
       deliveryFee: money(order.deliveryFulfillment?.deliveryFeeSnapshot ?? new Prisma.Decimal(0)),

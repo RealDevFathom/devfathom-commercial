@@ -1,4 +1,8 @@
 import 'server-only';
+import {
+  hasOwnerPinReauthentication,
+  ownerReauthenticationSessionId,
+} from './owner-reauthentication';
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { authenticateOperator } from './terminal-auth';
@@ -80,7 +84,7 @@ export async function buildAuthenticatedCoAuthorizationRecord(
   assertCoAuthorizationFields(request);
   return {
     ...normalizeRecord(request),
-    reason: `${request.reason.trim()} [Solo owner; PIN re-authenticated; branch=${proof.branchId}; active staff=1]`,
+    reason: `${normalizeRecord(request).reason} [Solo owner; PIN re-authenticated; branch=${proof.branchId}; active staff=1]`,
   };
 }
 
@@ -90,8 +94,9 @@ export async function buildAuthenticatedCoAuthorizationRecord(
  * A co-authorization is the evidence that a sensitive action taken by one
  * operator (the *acting* staff) was authorised by a distinct manager (the
  * *approving* staff). Approval ADDS the manager's identity to the action — it
- * never replaces the actor (C6) — so the two identities must differ, and the
- * record pins both, plus the capability/action, the target, the reason, the
+ * never replaces the actor (C6). Identities differ unless a sole owner has just
+ * reauthenticated their PIN in this terminal request. The record pins both,
+ * plus the capability/action, the target, the reason, the
  * device and terminal session (present on the L3 terminal path, absent on the
  * L2 back-office path), and a SERVER timestamp (the DB default — client time is
  * untrusted).
@@ -106,7 +111,7 @@ export async function buildAuthenticatedCoAuthorizationRecord(
 export type CoAuthorizationRequest = {
   /** The operator performing the sensitive action. */
   actingStaffProfileId: string;
-  /** The manager granting approval. MUST differ from the acting operator (C6). */
+  /** The manager granting approval; a sole owner must reauthenticate their PIN. */
   approvingStaffProfileId: string;
   /** The capability/action being co-authorised, e.g. `orders:void`. */
   capability: string;
@@ -162,12 +167,12 @@ function optionalTrimmed(value: string | null | undefined): string | null {
 /**
  * Assert the co-authorization invariants (C6/C7). Throws `CoAuthorizationError`
  * on any violation. The load-bearing rule is that the approving manager cannot
- * be the acting operator: a self-approval is not a co-authorization.
+ * be the acting operator unless this request holds verified sole-owner PIN evidence.
  */
 export function assertCoAuthorization(request: CoAuthorizationRequest): void {
   const acting = requireNonEmpty(request.actingStaffProfileId, 'acting staff profile');
   const approving = requireNonEmpty(request.approvingStaffProfileId, 'approving staff profile');
-  if (acting === approving) {
+  if (acting === approving && !hasOwnerPinReauthentication(acting, request.deviceId)) {
     throw new CoAuthorizationError(
       'A co-authorization requires a second identity: the approving manager must differ from the acting operator.'
     );
@@ -203,10 +208,16 @@ function normalizeRecord(request: CoAuthorizationRequest): CoAuthorizationRecord
     actingStaffProfileId: request.actingStaffProfileId.trim(),
     approvingStaffProfileId: request.approvingStaffProfileId.trim(),
     capability: request.capability.trim(),
-    reason: request.reason.trim(),
+    reason:
+      request.reason.trim() +
+      (request.actingStaffProfileId.trim() === request.approvingStaffProfileId.trim()
+        ? ' [Owner PIN reauthentication]'
+        : ''),
     targetType: optionalTrimmed(request.targetType),
     targetId: optionalTrimmed(request.targetId),
     deviceId: optionalTrimmed(request.deviceId),
-    terminalSessionId: optionalTrimmed(request.terminalSessionId),
+    terminalSessionId:
+      optionalTrimmed(request.terminalSessionId) ??
+      ownerReauthenticationSessionId(request.actingStaffProfileId.trim(), request.deviceId),
   };
 }
