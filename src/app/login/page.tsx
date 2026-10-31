@@ -1,9 +1,9 @@
 import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
-import { Logo } from '@/components/brand/logo';
+import { AuthShell } from '@/components/auth/auth-shell';
 import { LoginForm } from './login-form';
-import { LoginHero } from './login-hero';
+import { loginVertical, verticalCopy, workspaceEyebrow } from './vertical';
 import { SharedLoginForm } from './shared-login-form';
 import { headers } from 'next/headers';
 import { resolveOrganizationByHost, TENANT_HOST_HEADER } from '@/lib/tenancy/host';
@@ -47,9 +47,13 @@ export default async function LoginPage(props: LoginPageProps) {
   const notice = typeof reason === 'string' ? SIGN_OUT_NOTICES[reason] : undefined;
   // D15: the callback URL is validated on the SERVER before it reaches any
   // client component, so no consumer ever holds the caller's raw string.
-  const callbackUrl = safeCallbackUrl(
+  const requestedCallback = safeCallbackUrl(
     typeof searchParams.callbackUrl === 'string' ? searchParams.callbackUrl : null
   );
+  const callbackUrl =
+    requestedCallback === '/dashboard' && !searchParams.callbackUrl
+      ? '/dashboard?landing=1'
+      : requestedCallback;
   // WHA-1623: a closed set of keys from /login/submit, never free text.
   const initialError = loginErrorKey(searchParams[LOGIN_ERROR_PARAM]);
   const requestHeaders = await headers();
@@ -61,6 +65,8 @@ export default async function LoginPage(props: LoginPageProps) {
   // and no slug in the URL. Credentials are proven first; workspaces come after.
   const shared = isSharedHost(host);
   const organization = shared ? null : await resolveOrganizationByHost(host);
+  const vertical = loginVertical(searchParams.vertical, host, organization?.vertical);
+  const copy = verticalCopy[vertical];
   const identity = organization
     ? await withTenantDb(organization.id, async (db) => {
         const entitlements = await resolveOrganizationEntitlements(organization.id, db);
@@ -80,65 +86,80 @@ export default async function LoginPage(props: LoginPageProps) {
     : { connections: [], enforced: false };
 
   return (
-    <div className="min-h-dvh bg-background text-foreground lg:grid lg:grid-cols-[minmax(0,1.08fr)_minmax(26rem,0.92fr)]">
-      {/* Blueprint field panel — desktop only */}
-      <LoginHero />
-
-      {/* Sign-in sheet */}
-      <div className="relative flex min-h-dvh items-center justify-center px-5 py-10 sm:px-10">
-        <div className="w-full max-w-[25rem] animate-slide-up">
-          <div className="mb-8 flex items-center gap-3 lg:hidden">
-            <Logo variant="auto" size="md" textClassName="text-foreground" />
-            <span className="font-mono text-[10px] font-semibold uppercase tracking-[0.18em] text-text-muted">
-              Fieldbook / access
-            </span>
-          </div>
-
-          <div className="border-l-2 border-primary pl-5 sm:pl-6">
-            {/* Mobile logo */}
-            {/* The shared form owns its heading because the heading changes with
+    <AuthShell vertical={vertical}>
+      <div className="min-w-0">
+        {/* Mobile logo */}
+        {/* The shared form owns its heading because the heading changes with
                 the step — "Welcome back" would be wrong on the selection screen.
                 Either way the page renders exactly one <h1>. */}
-            {shared ? null : (
-              <div className="mb-8">
-                <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.18em] text-accent-brand">
-                  Secure workspace access
-                </p>
-                <h1 className="mt-3 font-display text-[clamp(2rem,4vw,2.7rem)] font-semibold tracking-[-0.05em] text-foreground">
-                  Welcome back
-                </h1>
-                <p className="mt-2 max-w-sm text-sm leading-relaxed text-muted-foreground">
-                  Sign in to pick up the work your team is moving forward.
-                </p>
-              </div>
-            )}
-
-            {notice ? (
-              <p
-                role="status"
-                className="mb-5 border-l-2 border-accent-brand bg-muted px-4 py-3 text-sm leading-5 text-text-muted"
-              >
-                {notice}
-              </p>
-            ) : null}
-
-            {shared ? (
-              <SharedLoginForm callbackUrl={callbackUrl} initialError={initialError} />
-            ) : (
-              <LoginForm
-                connections={identity.connections}
-                ssoEnforced={identity.enforced}
-                callbackUrl={callbackUrl}
-                initialError={initialError}
-              />
-            )}
+        {shared ? null : (
+          <div className="mb-8">
+            <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.18em] text-accent-brand">
+              {workspaceEyebrow(vertical)}
+            </p>
+            <h1 className="mt-3 font-display text-[clamp(2rem,4vw,2.7rem)] font-semibold tracking-[-0.05em] text-foreground">
+              Welcome back
+            </h1>
+            <p className="mt-2 max-w-sm text-sm leading-relaxed text-muted-foreground">
+              {copy.signIn}
+            </p>
           </div>
+        )}
 
-          <p className="mt-8 text-xs text-muted-foreground">
-            Need access? Contact your workspace admin.
+        {notice ? (
+          <p
+            role="status"
+            className="mb-5 border-s-2 border-accent-brand bg-muted px-4 py-3 text-sm leading-5 text-text-muted"
+          >
+            {notice}
           </p>
-        </div>
+        ) : null}
+
+        {shared ? (
+          <SharedLoginForm
+            callbackUrl={callbackUrl}
+            initialError={initialError}
+            vertical={vertical}
+          />
+        ) : (
+          <LoginForm
+            vertical={vertical}
+            connections={identity.connections}
+            ssoEnforced={identity.enforced}
+            callbackUrl={callbackUrl}
+            initialError={initialError}
+          />
+        )}
       </div>
-    </div>
+
+      {vertical === 'restaurant' && (
+        <div className="mt-7 rounded-[var(--radius-md)] border border-border-subtle bg-surface-card p-5 text-sm">
+          <p className="font-semibold">On a till or kitchen screen?</p>
+          <p className="mt-2 text-xs leading-5 text-text-muted">
+            Enrolled devices unlock with a staff PIN. Servers and cooks don’t need an email to sign
+            in there.
+          </p>
+          <a className="studio-auth-link mt-4 block" href="/login/till">
+            Unlock a till with your PIN →
+          </a>
+        </div>
+      )}
+      <div className="mt-8 border-t border-border-subtle pt-6 text-sm">
+        <p className="text-text-muted">{copy.opening}</p>
+        <a
+          className="studio-auth-link mt-2 inline-block"
+          href={`/login/register${vertical === 'default' ? '' : `?vertical=${vertical}`}`}
+        >
+          {copy.setup} →
+        </a>
+      </div>
+      <p className="mt-6 text-xs leading-6 text-muted-foreground">
+        {vertical === 'pharmacy'
+          ? 'Pharmacist or counter staff? Your account comes by invite. Need access? Contact your workspace admin.'
+          : vertical === 'restaurant'
+            ? 'Managers get their accounts by invite. Need access? Contact your workspace admin.'
+            : 'Need access? Contact your workspace admin.'}
+      </p>
+    </AuthShell>
   );
 }
