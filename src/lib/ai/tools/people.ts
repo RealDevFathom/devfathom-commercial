@@ -857,9 +857,11 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
             ? await tx.user.update({
                 where: { id: existing.id },
                 data: { ...profile, password: null, status: 'INVITED' },
+                include: { organizationRole: { select: { id: true, key: true, name: true } } },
               })
             : await tx.user.create({
                 data: { ...profile, email: lowerEmail, password: null, status: 'INVITED' },
+                include: { organizationRole: { select: { id: true, key: true, name: true } } },
               });
           await tx.invitation.upsert({
             where: { userId: u.id },
@@ -880,7 +882,7 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
         const mail = templates.inviteMember({
           name: user.name,
           inviterName: ctx.name ?? undefined,
-          role: organizationRole?.name ?? `${titleCase(finalRole)} · ${titleCase(department)}`,
+          role: user.organizationRole?.name ?? `${titleCase(finalRole)} · ${titleCase(department)}`,
           workspace: 'DevFathom',
           acceptUrl: inviteUrl,
           expiresLabel: 'in 7 days',
@@ -908,7 +910,14 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
           metadata: {
             email: lowerEmail,
             role: finalRole,
-            restaurantRoleKey: organizationRole?.key ?? null,
+            restaurantRoleOperation: clearRestaurantRole
+              ? 'clear'
+              : organizationRole
+                ? 'assign'
+                : 'preserve',
+            restaurantRoleId: user.organizationRoleId,
+            restaurantRoleKey: user.organizationRole?.key ?? null,
+            restaurantRoleName: user.organizationRole?.name ?? null,
             department,
             reInvite: !!existing,
           },
@@ -918,7 +927,7 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
           name: user.name,
           email: lowerEmail,
           role: titleCase(finalRole),
-          restaurantRole: organizationRole?.name ?? null,
+          restaurantRole: user.organizationRole?.name ?? null,
           department: titleCase(department),
           emailed,
           inviteUrl,

@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   departmentFindFirst: vi.fn(),
   roleFindFirst: vi.fn(),
   sendEmail: vi.fn(),
+  inviteTemplate: vi.fn(() => ({ subject: 's', html: 'h', text: 't' })),
   can: vi.fn(async () => true),
 }));
 
@@ -32,7 +33,7 @@ vi.mock('@/server/audit', () => ({
 vi.mock('@/lib/email', () => ({
   appUrl: vi.fn(() => 'https://www.devfathom.com'),
   sendEmail: mocks.sendEmail,
-  templates: { inviteMember: vi.fn(() => ({ subject: 's', html: 'h', text: 't' })) },
+  templates: { inviteMember: mocks.inviteTemplate },
 }));
 vi.mock('@/lib/notifications', () => ({ notify: vi.fn() }));
 vi.mock('@/lib/abac', async () => {
@@ -82,6 +83,7 @@ describe('team.inviteMember duplicate guard', () => {
     vi.clearAllMocks();
     mocks.can.mockResolvedValue(true);
     mocks.departmentFindFirst.mockResolvedValue({ id: 'dept_engineering' });
+    mocks.roleFindFirst.mockResolvedValue(null);
   });
 
   it.each([['ALEX@COMPANY.COM'], ['Alex@Company.com'], ['  alex@company.com  ']])(
@@ -118,7 +120,11 @@ describe('team.inviteMember duplicate guard', () => {
   it('stores a restaurant role template on the invited member', async () => {
     mocks.findFirst.mockResolvedValue(null);
     mocks.roleFindFirst.mockResolvedValue({ id: 'role_gm', name: 'General Manager' });
-    mocks.create.mockResolvedValue({ id: 'user_2', name: 'Alex Carter' });
+    mocks.create.mockResolvedValue({
+      id: 'user_2',
+      name: 'Alex Carter',
+      organizationRole: { id: 'role_gm', name: 'General Manager' },
+    });
     mocks.invitationUpsert.mockResolvedValue({});
 
     await caller().inviteMember({
@@ -130,24 +136,42 @@ describe('team.inviteMember duplicate guard', () => {
     expect(mocks.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ organizationRoleId: 'role_gm' }),
+        include: { organizationRole: { select: { id: true, name: true } } },
       })
+    );
+    expect(mocks.inviteTemplate).toHaveBeenCalledWith(
+      expect.objectContaining({ role: 'General Manager' })
     );
   });
 
   it('preserves the restaurant role when resending without reselecting it', async () => {
     mocks.findFirst.mockResolvedValue({ id: 'user_2', status: 'INVITED' });
-    mocks.update.mockResolvedValue({ id: 'user_2', name: 'Alex Carter' });
+    mocks.update.mockResolvedValue({
+      id: 'user_2',
+      name: 'Alex Carter',
+      organizationRole: { id: 'role_gm', name: 'General Manager' },
+    });
     mocks.invitationUpsert.mockResolvedValue({});
 
     await caller().inviteMember({ ...invite, email: 'manager@company.com' });
 
     expect(mocks.update).toHaveBeenCalledOnce();
     expect(mocks.update.mock.calls[0]?.[0].data).not.toHaveProperty('organizationRoleId');
+    expect(mocks.update.mock.calls[0]?.[0]).toMatchObject({
+      include: { organizationRole: { select: { id: true, name: true } } },
+    });
+    expect(mocks.inviteTemplate).toHaveBeenCalledWith(
+      expect.objectContaining({ role: 'General Manager' })
+    );
   });
 
   it('clears the restaurant role when a resend explicitly selects no template', async () => {
     mocks.findFirst.mockResolvedValue({ id: 'user_2', status: 'INVITED' });
-    mocks.update.mockResolvedValue({ id: 'user_2', name: 'Alex Carter' });
+    mocks.update.mockResolvedValue({
+      id: 'user_2',
+      name: 'Alex Carter',
+      organizationRole: null,
+    });
     mocks.invitationUpsert.mockResolvedValue({});
 
     await caller().inviteMember({
@@ -160,6 +184,26 @@ describe('team.inviteMember duplicate guard', () => {
       expect.objectContaining({ data: expect.objectContaining({ organizationRoleId: null }) })
     );
     expect(mocks.roleFindFirst).not.toHaveBeenCalled();
+    expect(mocks.inviteTemplate).toHaveBeenCalledWith(
+      expect.objectContaining({ role: 'Employee · Engineering' })
+    );
+  });
+
+  it('uses the default role and department for a resend with no restaurant role', async () => {
+    mocks.findFirst.mockResolvedValue({ id: 'user_2', status: 'INVITED' });
+    mocks.update.mockResolvedValue({
+      id: 'user_2',
+      name: 'Alex Carter',
+      organizationRole: null,
+    });
+    mocks.invitationUpsert.mockResolvedValue({});
+
+    await caller().inviteMember({ ...invite, email: 'alex@company.com' });
+
+    expect(mocks.update.mock.calls[0]?.[0].data).not.toHaveProperty('organizationRoleId');
+    expect(mocks.inviteTemplate).toHaveBeenCalledWith(
+      expect.objectContaining({ role: 'Employee · Engineering' })
+    );
   });
 
   it('rejects a role template outside the tenant catalog', async () => {

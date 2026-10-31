@@ -13,13 +13,15 @@ const mocks = vi.hoisted(() => ({
   departmentFindFirst: vi.fn(),
   roleFindFirst: vi.fn(),
   resolveEntitlements: vi.fn(),
+  audit: vi.fn(),
+  inviteTemplate: vi.fn(() => ({ subject: 's', html: 'h', text: 't' })),
 }));
 
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/email', () => ({
   appUrl: vi.fn(() => 'https://www.devfathom.com'),
   sendEmail: vi.fn(),
-  templates: { inviteMember: vi.fn(() => ({ subject: 's', html: 'h', text: 't' })) },
+  templates: { inviteMember: mocks.inviteTemplate },
 }));
 vi.mock('@/lib/notifications', () => ({ notify: vi.fn() }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
@@ -59,7 +61,7 @@ function inviteTool() {
     isAdminOrHr: true,
     ctx: { userId: 'user_admin', name: 'Admin', organizationId: 'org_test' },
     can: vi.fn(async () => true),
-    audit: vi.fn(),
+    audit: mocks.audit,
   } as unknown as AssistantHelpers;
   const tools = buildPeopleTools(helpers);
   return tools.inviteMember as unknown as {
@@ -77,9 +79,15 @@ const base = {
 describe('assistant inviteMember guards', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.create.mockResolvedValue({ id: 'user_2', name: 'Alex Carter' });
+    mocks.create.mockResolvedValue({
+      id: 'user_2',
+      name: 'Alex Carter',
+      organizationRoleId: null,
+      organizationRole: null,
+    });
     mocks.invitationUpsert.mockResolvedValue({});
     mocks.departmentFindFirst.mockResolvedValue({ id: 'dept_1' });
+    mocks.roleFindFirst.mockResolvedValue(null);
     mocks.resolveEntitlements.mockResolvedValue({ activeSeats: 1, seatLimit: 5 });
   });
 
@@ -203,9 +211,14 @@ describe('assistant inviteMember guards', () => {
     'preserves the pending restaurant role when the assistant sends %j',
     async (restaurantRoleKey) => {
       mocks.findFirst.mockResolvedValue({ id: 'user_2', status: 'INVITED' });
-      mocks.update.mockResolvedValue({ id: 'user_2', name: 'Alex Carter' });
+      mocks.update.mockResolvedValue({
+        id: 'user_2',
+        name: 'Alex Carter',
+        organizationRoleId: 'role_gm',
+        organizationRole: { id: 'role_gm', key: 'general-manager', name: 'General Manager' },
+      });
 
-      await inviteTool().execute({
+      const result = await inviteTool().execute({
         ...base,
         email: 'manager@company.com',
         restaurantRoleKey,
@@ -213,8 +226,26 @@ describe('assistant inviteMember guards', () => {
 
       expect(mocks.update).toHaveBeenCalledOnce();
       expect(mocks.update.mock.calls[0][0].data).not.toHaveProperty('organizationRoleId');
+      expect(mocks.update.mock.calls[0][0]).toMatchObject({
+        include: { organizationRole: { select: { id: true, key: true, name: true } } },
+      });
       expect(mocks.roleFindFirst).not.toHaveBeenCalled();
       expect(mocks.invitationUpsert).toHaveBeenCalledOnce();
+      expect(result).toMatchObject({ restaurantRole: 'General Manager' });
+      expect(mocks.inviteTemplate).toHaveBeenCalledWith(
+        expect.objectContaining({ role: 'General Manager' })
+      );
+      expect(mocks.audit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: expect.objectContaining({
+            restaurantRoleOperation: 'preserve',
+            restaurantRoleId: 'role_gm',
+            restaurantRoleKey: 'general-manager',
+            restaurantRoleName: 'General Manager',
+            reInvite: true,
+          }),
+        })
+      );
     }
   );
 
@@ -226,8 +257,14 @@ describe('assistant inviteMember guards', () => {
   ])('assigns the %s restaurant role through an assistant invite', async (key, name) => {
     mocks.findFirst.mockResolvedValue(null);
     mocks.roleFindFirst.mockResolvedValue({ id: `role_${key}`, key, name });
+    mocks.create.mockResolvedValue({
+      id: 'user_2',
+      name: 'Alex Carter',
+      organizationRoleId: `role_${key}`,
+      organizationRole: { id: `role_${key}`, key, name },
+    });
 
-    await inviteTool().execute({
+    const result = await inviteTool().execute({
       ...base,
       email: `${key}@company.com`,
       restaurantRoleKey: key,
@@ -242,13 +279,30 @@ describe('assistant inviteMember guards', () => {
         data: expect.objectContaining({ organizationRoleId: `role_${key}` }),
       })
     );
+    expect(result).toMatchObject({ restaurantRole: name });
+    expect(mocks.inviteTemplate).toHaveBeenCalledWith(expect.objectContaining({ role: name }));
+    expect(mocks.audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          restaurantRoleOperation: 'assign',
+          restaurantRoleId: `role_${key}`,
+          restaurantRoleKey: key,
+          restaurantRoleName: name,
+        }),
+      })
+    );
   });
 
   it('clears a pending restaurant role only when explicitly requested', async () => {
     mocks.findFirst.mockResolvedValue({ id: 'user_2', status: 'INVITED' });
-    mocks.update.mockResolvedValue({ id: 'user_2', name: 'Alex Carter' });
+    mocks.update.mockResolvedValue({
+      id: 'user_2',
+      name: 'Alex Carter',
+      organizationRoleId: null,
+      organizationRole: null,
+    });
 
-    await inviteTool().execute({
+    const result = await inviteTool().execute({
       ...base,
       email: 'manager@company.com',
       restaurantRoleKey: null,
@@ -259,6 +313,48 @@ describe('assistant inviteMember guards', () => {
       expect.objectContaining({ data: expect.objectContaining({ organizationRoleId: null }) })
     );
     expect(mocks.roleFindFirst).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ restaurantRole: null });
+    expect(mocks.inviteTemplate).toHaveBeenCalledWith(
+      expect.objectContaining({ role: 'Employee · Engineering' })
+    );
+    expect(mocks.audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          restaurantRoleOperation: 'clear',
+          restaurantRoleId: null,
+          restaurantRoleKey: null,
+          restaurantRoleName: null,
+          reInvite: true,
+        }),
+      })
+    );
+  });
+
+  it('distinguishes preserving no restaurant role from explicitly clearing one', async () => {
+    mocks.findFirst.mockResolvedValue({ id: 'user_2', status: 'INVITED' });
+    mocks.update.mockResolvedValue({
+      id: 'user_2',
+      name: 'Alex Carter',
+      organizationRoleId: null,
+      organizationRole: null,
+    });
+
+    const result = await inviteTool().execute({ ...base, email: 'alex@company.com' });
+
+    expect(result).toMatchObject({ restaurantRole: null });
+    expect(mocks.inviteTemplate).toHaveBeenCalledWith(
+      expect.objectContaining({ role: 'Employee · Engineering' })
+    );
+    expect(mocks.audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          restaurantRoleOperation: 'preserve',
+          restaurantRoleId: null,
+          restaurantRoleKey: null,
+          restaurantRoleName: null,
+        }),
+      })
+    );
   });
 
   it('rejects conflicting restaurant role assignment and clearing', async () => {

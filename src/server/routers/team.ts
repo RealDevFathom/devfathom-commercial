@@ -213,9 +213,11 @@ export const teamRouter = router({
           ? await tx.user.update({
               where: { id: existing.id },
               data: { ...profile, password: null, status: 'INVITED' },
+              include: { organizationRole: { select: { id: true, name: true } } },
             })
           : await tx.user.create({
               data: { ...profile, email, password: null, status: 'INVITED' },
+              include: { organizationRole: { select: { id: true, name: true } } },
             });
 
         await tx.invitation.upsert({
@@ -240,7 +242,7 @@ export const teamRouter = router({
       const mail = templates.inviteMember({
         name: user.name,
         inviterName: ctx.session.user.name ?? undefined,
-        role: organizationRole?.name ?? `${titleCase(input.role)} · ${titleCase(input.department)}`,
+        role: user.organizationRole?.name ?? `${titleCase(input.role)} · ${titleCase(input.department)}`,
         workspace: 'DevFathom',
         acceptUrl: inviteUrl,
         expiresLabel: 'in 7 days',
