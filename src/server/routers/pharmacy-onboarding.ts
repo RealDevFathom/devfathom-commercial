@@ -40,7 +40,11 @@ import {
   ruleSetOptions,
   type RegulatoryProfileInput,
 } from '@/lib/pharmacy/regulatory-profile-form';
-import { assertBranchMayOperate, BranchOperationDeniedError } from '@/lib/pharmacy/regulatory';
+import {
+  effectiveRegulatoryProfileWhere,
+  evaluateBranchRegulatoryStatus,
+  isRegulatoryProfileEffective,
+} from '@/lib/pharmacy/regulatory';
 import { workspaceDateUtc, workspaceTimezone } from '@/lib/timezone';
 import { adminProcedure, router, type TRPCContext } from '../trpc';
 
@@ -117,8 +121,7 @@ async function readOverview(ctx: TRPCContext) {
     ctx.db.branchRegulatoryProfile.findFirst({
       where: {
         organizationId,
-        effectiveFrom: { lte: calendarDate },
-        OR: [{ effectiveTo: null }, { effectiveTo: { gt: calendarDate } }],
+        ...effectiveRegulatoryProfileWhere(now, calendarDate),
       },
       select: { licenceValidTo: true },
       orderBy: { effectiveFrom: 'desc' },
@@ -347,38 +350,25 @@ export const pharmacyOnboardingRouter = router({
         jurisdictions,
         selectedBranchId: selected?.id ?? null,
         versions: versions.map(({ jurisdictionRuleSet, ...version }) => {
-          const effective =
-            version.effectiveFrom <= calendarDate &&
-            (version.effectiveTo === null || version.effectiveTo > calendarDate);
-          let inForce = effective;
-          if (effective) {
-            try {
-              assertBranchMayOperate(
-                {
-                  ...version,
-                  permittedSchedules: Array.isArray(version.permittedSchedules)
-                    ? version.permittedSchedules.filter(
-                        (schedule): schedule is string => typeof schedule === 'string'
-                      )
-                    : [],
-                  ruleSet: jurisdictionRuleSet,
-                  auditDenied: () => undefined,
-                },
-                { name: 'REGULATORY_PROFILE_VIEW', at: now, requiresQualifiedPerson: true },
-                timeZone
-              );
-            } catch (error) {
-              if (!(error instanceof BranchOperationDeniedError)) throw error;
-              inForce = false;
-            }
-          }
+          const effective = isRegulatoryProfileEffective(version, now, calendarDate);
+          const status = evaluateBranchRegulatoryStatus(
+            {
+              ...version,
+              permittedSchedules: Array.isArray(version.permittedSchedules)
+                ? version.permittedSchedules.filter(
+                    (schedule): schedule is string => typeof schedule === 'string'
+                  )
+                : [],
+              ruleSet: jurisdictionRuleSet,
+            },
+            effective,
+            now,
+            timeZone
+          );
           return {
             ...version,
             provinceName: provinceName(version.provinceCode),
-            effective,
-            inForce,
-            licenceExpired: effective && now >= version.licenceValidTo,
-            qualifiedPersonCoverageExpired: effective && now >= version.qualifiedPersonValidTo,
+            ...status,
           };
         }),
       };

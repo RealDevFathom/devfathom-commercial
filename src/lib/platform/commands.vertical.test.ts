@@ -120,6 +120,9 @@ const platformDb = {
   organization: {
     create: mocks.orgCreate,
     findUnique: mocks.orgFindUnique,
+    // The stored regulatory guard reads the workspace timezone through
+    // `findFirst`; it resolves the same organization row as `findUnique`.
+    findFirst: (args: unknown) => mocks.orgFindUnique(args),
     update: mocks.orgUpdate,
   },
   organizationRole: { create: mocks.roleCreate, count: mocks.roleCount },

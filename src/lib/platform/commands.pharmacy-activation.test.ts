@@ -18,6 +18,7 @@ const profile = {
   branchId: 'branch_pharmacy',
   effectiveFrom,
   effectiveTo: null,
+  isPlaceholder: false,
   licenceCategory: 'PHARMACY',
   licenceValidFrom: effectiveFrom,
   licenceValidTo: new Date('2027-01-01T00:00:00.000Z'),
@@ -34,8 +35,37 @@ const profile = {
   },
 };
 
-function fixture(timezone: string, effectiveTo: Date | null = null) {
-  const storedProfile = { ...profile, effectiveTo };
+type EndCondition = { effectiveTo: null | { gt: Date } };
+type ProfileWhere = {
+  organizationId: string;
+  branchId?: string;
+  OR?: Array<{ isPlaceholder: boolean; effectiveFrom: { lte: Date }; OR: EndCondition[] }>;
+};
+
+/** Evaluates the effective-window filter the way Postgres would. */
+function matchesEffectiveWindow(
+  row: { isPlaceholder: boolean; effectiveFrom: Date; effectiveTo: Date | null },
+  where: ProfileWhere
+): boolean {
+  if (!where.OR) return false;
+  return where.OR.some(
+    (branch) =>
+      branch.isPlaceholder === row.isPlaceholder &&
+      row.effectiveFrom <= branch.effectiveFrom.lte &&
+      branch.OR.some(({ effectiveTo: condition }) =>
+        condition === null
+          ? row.effectiveTo === null
+          : row.effectiveTo !== null && row.effectiveTo > condition.gt
+      )
+  );
+}
+
+function fixture(
+  timezone: string,
+  effectiveTo: Date | null = null,
+  overrides: Partial<typeof profile> = {}
+) {
+  const storedProfile = { ...profile, ...overrides, effectiveTo };
   const organization = {
     id: profile.organizationId,
     status: 'ONBOARDING',
@@ -54,29 +84,12 @@ function fixture(timezone: string, effectiveTo: Date | null = null) {
       update: vi.fn(async () => ({ ...organization, status: 'ACTIVE' })),
     },
     branchRegulatoryProfile: {
-      findFirst: vi.fn(
-        async ({
-          where,
-        }: {
-          where: {
-            organizationId: string;
-            branchId?: string;
-            effectiveFrom?: { lte: Date };
-            OR?: Array<{ effectiveTo: null | { gt: Date } }>;
-          };
-        }) => {
-          if (!where.effectiveFrom || !where.OR) return null;
-          return where.organizationId === profile.organizationId &&
-            (!where.branchId || where.branchId === profile.branchId) &&
-            effectiveFrom <= where.effectiveFrom.lte &&
-            where.OR.some(({ effectiveTo: condition }) =>
-              condition === null
-                ? effectiveTo === null
-                : effectiveTo !== null && effectiveTo > condition.gt
-            )
-            ? storedProfile
-            : null;
-        }
+      findFirst: vi.fn(async ({ where }: { where: ProfileWhere }) =>
+        where.organizationId === storedProfile.organizationId &&
+        (!where.branchId || where.branchId === storedProfile.branchId) &&
+        matchesEffectiveWindow(storedProfile, where)
+          ? storedProfile
+          : null
       ),
     },
     pharmacyOnboardingGateState: {
@@ -173,5 +186,68 @@ describe('pharmacy readiness and activation use the workspace calendar date', ()
         }
       )
     ).rejects.toMatchObject({ reason });
+  });
+});
+
+describe('placeholder profile boundaries keep instant semantics', () => {
+  // Applied 2026-10-31 12:00 UTC (17:00 PKT); the workspace day began at 2026-10-30T19:00Z.
+  const appliedAt = new Date('2026-10-31T12:00:00.000Z');
+  const placeholder = { isPlaceholder: true, effectiveFrom: appliedAt };
+
+  it.each([
+    ['2026-10-31T11:59:59.999Z', false],
+    ['2026-10-31T12:00:00.000Z', true],
+  ])('a placeholder applied mid-day is in force from that instant (%s)', async (instant, ready) => {
+    db = fixture('Asia/Karachi', null, placeholder);
+    const readiness = await evaluatePharmacyReadiness(
+      db as unknown as PrismaClient,
+      profile.organizationId,
+      new Date(instant)
+    );
+    expect(readiness.ready).toBe(ready);
+  });
+
+  it('a locked placeholder stops the instant it is locked, not at workspace midnight', async () => {
+    const lockedAt = new Date('2026-10-31T13:00:00.000Z');
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-31T13:01:00.000Z'));
+    db = fixture('Asia/Karachi', lockedAt, placeholder);
+
+    const readiness = await evaluatePharmacyReadiness(
+      db as unknown as PrismaClient,
+      profile.organizationId
+    );
+    expect(readiness.ready).toBe(false);
+    expect(readiness.blocking).toEqual(['PREMISES_AND_LICENCES']);
+
+    await expect(
+      executePlatformCommand(
+        { id: 'operator', role: 'SUPER_ADMIN' } as never,
+        'organization.transition',
+        { id: profile.organizationId, status: 'ACTIVE', reason: 'Reactivate after lock' },
+        new Request('https://admin.devfathom.com/api/platform/control', { method: 'POST' })
+      )
+    ).rejects.toMatchObject({ status: 400 });
+    expect(db.organization.update).not.toHaveBeenCalled();
+
+    await expect(
+      assertStoredBranchMayOperate(
+        db as unknown as PrismaClient,
+        profile.organizationId,
+        profile.branchId,
+        { name: 'DISPENSE', schedule: 'RX' }
+      )
+    ).rejects.toMatchObject({ reason: 'PROFILE_MISSING' });
+  });
+
+  it('does not resurrect an operator profile superseded at an instant', async () => {
+    const supersededAt = new Date('2026-10-31T12:00:00.000Z');
+    db = fixture('Asia/Karachi', supersededAt);
+    const readiness = await evaluatePharmacyReadiness(
+      db as unknown as PrismaClient,
+      profile.organizationId,
+      new Date('2026-10-31T12:00:01.000Z')
+    );
+    expect(readiness.ready).toBe(false);
   });
 });

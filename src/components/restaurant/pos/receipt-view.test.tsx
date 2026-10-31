@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import { ReceiptView } from './receipt-view';
@@ -63,8 +63,9 @@ describe('ReceiptView', () => {
     expect(screen.getByText('2.00')).toBeVisible();
     expect(screen.getByText('Change')).toBeVisible();
     expect(screen.getByText('Delivery fee')).toBeVisible();
-    expect(screen.getByText('Discount')).toBeVisible();
-    expect(screen.getByText('0.50')).toBeVisible();
+    const discountRow = screen.getByText('Discount').closest('div');
+    expect(discountRow).not.toBeNull();
+    expect(within(discountRow!).getByText('0.50')).toBeVisible();
     expect(screen.getAllByText('4.00')).toHaveLength(2);
     expect(screen.getAllByText('24.00').length).toBeGreaterThan(0);
   });

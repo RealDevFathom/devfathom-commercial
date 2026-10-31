@@ -21,7 +21,11 @@ import type { PrismaClient } from '@/generated/prisma/client';
 import { workspaceDateUtc } from '@/lib/timezone';
 import { isPackageCompatibleWithVertical, roleTemplatesForVertical } from '@/lib/vertical-catalog';
 
-import { assertStoredBranchMayOperate, BranchOperationDeniedError } from './regulatory';
+import {
+  assertStoredBranchMayOperate,
+  BranchOperationDeniedError,
+  effectiveRegulatoryProfileWhere,
+} from './regulatory';
 
 export type PharmacyOnboardingGate =
   | 'ORG_TYPE'
@@ -263,8 +267,7 @@ export async function evaluatePharmacyReadiness(
       db.branchRegulatoryProfile.findFirst({
         where: {
           organizationId,
-          effectiveFrom: { lte: calendarDate },
-          OR: [{ effectiveTo: null }, { effectiveTo: { gt: calendarDate } }],
+          ...effectiveRegulatoryProfileWhere(at, calendarDate),
         },
         select: { branchId: true },
         orderBy: { effectiveFrom: 'desc' },

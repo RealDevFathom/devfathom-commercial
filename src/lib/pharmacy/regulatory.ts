@@ -42,6 +42,13 @@ export type BranchRegulatoryState = {
   auditDenied: (reason: BranchOperationDenialReason, action: BranchOperationAction) => void;
 };
 
+export type BranchRegulatoryStatus = {
+  effective: boolean;
+  inForce: boolean;
+  licenceExpired: boolean;
+  qualifiedPersonCoverageExpired: boolean;
+};
+
 type RuleField = { provisional?: boolean; values?: unknown };
 
 function ruleField(value: unknown): RuleField {
@@ -55,6 +62,60 @@ function stringValues(value: unknown): readonly string[] {
 
 function permits(values: readonly string[], value: string): boolean {
   return values.includes('*') || values.includes(value);
+}
+
+/**
+ * Regulatory profile windows mix two representations:
+ *
+ * - Operator-entered profiles store date-only boundaries (UTC midnight of the
+ *   chosen calendar day). Their start is compared against the workspace
+ *   calendar day so a profile effective "today" is in force from local midnight.
+ * - Platform placeholder profiles are applied and locked at exact instants.
+ *   Their boundaries keep instant semantics: a placeholder is in force from the
+ *   moment it is applied and stops the moment it is locked.
+ *
+ * Ends of operator profiles are compared against the later of the instant and
+ * the workspace day, so a date-only end closes at the start of that workspace
+ * day while an end stamped at an instant (an operator profile superseded by a
+ * placeholder) is never resurrected after that instant.
+ */
+function laterOf(a: Date, b: Date): Date {
+  return a > b ? a : b;
+}
+
+export function effectiveRegulatoryProfileWhere(at: Date, calendarDate: Date) {
+  const operatorEnd = laterOf(at, calendarDate);
+  return {
+    OR: [
+      {
+        isPlaceholder: true,
+        effectiveFrom: { lte: at },
+        OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
+      },
+      {
+        isPlaceholder: false,
+        effectiveFrom: { lte: calendarDate },
+        OR: [{ effectiveTo: null }, { effectiveTo: { gt: operatorEnd } }],
+      },
+    ],
+  };
+}
+
+/** In-memory twin of `effectiveRegulatoryProfileWhere`. */
+export function isRegulatoryProfileEffective(
+  profile: { effectiveFrom: Date; effectiveTo: Date | null; isPlaceholder: boolean },
+  at: Date,
+  calendarDate: Date
+): boolean {
+  if (profile.isPlaceholder) {
+    return (
+      profile.effectiveFrom <= at && (profile.effectiveTo === null || profile.effectiveTo > at)
+    );
+  }
+  return (
+    profile.effectiveFrom <= calendarDate &&
+    (profile.effectiveTo === null || profile.effectiveTo > laterOf(at, calendarDate))
+  );
 }
 
 /**
@@ -111,6 +172,40 @@ export function assertBranchMayOperate(
   }
 }
 
+/**
+ * Read-side status for a regulatory profile, evaluated by the same fail-closed
+ * primitive used by dispensing and activation. This prevents a profile from
+ * being presented as "in force" after the operation gate has started refusing
+ * it, including at the exact instant a licence or coverage period ends.
+ */
+export function evaluateBranchRegulatoryStatus(
+  branch: Omit<BranchRegulatoryState, 'auditDenied'>,
+  effective: boolean,
+  at: Date,
+  timeZone = 'UTC'
+): BranchRegulatoryStatus {
+  let inForce = effective;
+  if (effective) {
+    try {
+      assertBranchMayOperate(
+        { ...branch, auditDenied: () => undefined },
+        { name: 'REGULATORY_PROFILE_VIEW', at, requiresQualifiedPerson: true },
+        timeZone
+      );
+    } catch (error) {
+      if (!(error instanceof BranchOperationDeniedError)) throw error;
+      inForce = false;
+    }
+  }
+
+  return {
+    effective,
+    inForce,
+    licenceExpired: effective && at >= branch.licenceValidTo,
+    qualifiedPersonCoverageExpired: effective && at >= branch.qualifiedPersonValidTo,
+  };
+}
+
 export async function assertStoredBranchMayOperate(
   db: PrismaClient,
   organizationId: string,
@@ -128,8 +223,7 @@ export async function assertStoredBranchMayOperate(
     where: {
       organizationId,
       branchId,
-      effectiveFrom: { lte: calendarDate },
-      OR: [{ effectiveTo: null }, { effectiveTo: { gt: calendarDate } }],
+      ...effectiveRegulatoryProfileWhere(at, calendarDate),
     },
     include: { jurisdictionRuleSet: true },
     orderBy: { effectiveFrom: 'desc' },
