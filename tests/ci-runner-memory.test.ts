@@ -3,7 +3,7 @@ import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { assertCiMemory } from '../scripts/check-ci-memory.mjs';
+import { assertCiMemory, checkCiMemory } from '../scripts/check-ci-memory.mjs';
 
 const GiB = 1024 ** 3;
 
@@ -37,6 +37,26 @@ describe('QA runner memory preflight', () => {
   it('requires headroom above the V8 heap allowance', () => {
     expect(() => assertCiMemory(8 * GiB, 16 * GiB, [])).toThrow('at least 12288 MiB');
   });
+
+  it('fails closed when no memory value can be read', () => {
+    expect(() => assertCiMemory(Number.NaN, Number.NaN, ['max', ''])).toThrow(
+      'Cannot determine effective runner/Docker memory'
+    );
+    expect(() =>
+      checkCiMemory(Number.NaN, Number.NaN, [], { enforce: true, log: () => {} })
+    ).toThrow('Cannot determine');
+  });
+
+  it('only warns on a standard 7 GB hosted runner unless enforcement is enabled', () => {
+    const lines: string[] = [];
+    const log = (line: string) => lines.push(line);
+    expect(checkCiMemory(7 * GiB, 7 * GiB, ['max'], { log })).toBe(false);
+    expect(lines).toEqual([expect.stringMatching(/^::warning .*effective runner\/Docker memory is 7168 MiB/)]);
+    expect(() => checkCiMemory(7 * GiB, 7 * GiB, ['max'], { enforce: true, log })).toThrow(
+      'at least 12288 MiB'
+    );
+    expect(checkCiMemory(16 * GiB, 16 * GiB, ['max'], { log })).toBe(true);
+  });
 });
 
 describe('PR runner safety', () => {
@@ -59,6 +79,9 @@ describe('PR runner safety', () => {
     expect(source).not.toContain('command -v az');
     expect(source).not.toContain('az bicep install');
     expect(source.match(/uses: actions\/setup-node@[a-f0-9]{40} /g)).toHaveLength(2);
+    expect(source.match(/uses: actions\/setup-node@/g)).toHaveLength(2);
+    expect(source.match(/node-version: 22\.20\.0$/gm)).toHaveLength(2);
+    expect(source).not.toContain('CI_MEMORY_ENFORCE');
   });
 
   it('rejects a non-native runner before building the amd64 image', () => {

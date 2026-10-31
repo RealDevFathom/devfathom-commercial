@@ -350,8 +350,7 @@ export async function purchasingWorkspace(
     branches,
     stockLocations,
     suppliers,
-    approvers: eligibleApprovers
-      .map(({ id, name, email }) => ({ id, name, email })),
+    approvers: eligibleApprovers.map(({ id, name, email }) => ({ id, name, email })),
     medicines: medicines.map((medicine) => ({
       id: medicine.id,
       productName: medicine.productName,

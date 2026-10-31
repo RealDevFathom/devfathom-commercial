@@ -297,7 +297,6 @@ cap reservation ledger <------------------------------------+
 
 Implementation ordering follows the arrows. Offline enablement depends on the same canonical evaluator running in client-safe form plus server parity fixtures; capped promotion enablement additionally depends on the reservation ledger and concurrency battery.
 
-
 ## Bounded draft bundle authoring (000w)
 
 The owner/admin Offers editor supports 1–20 ordered `BUNDLE_PRICE` components. Each component has a positive integral quantity and product alternatives, category alternatives, or both. A component matches either alternative set. Rows can be added, removed, and moved; their order matters to the existing greedy evaluator. The editor preserves saved selection order and duplicate membership on unchanged and name-only saves. Changing a target type clears only incompatible targeting selections. Temporary benefit-type changes retain the in-progress bundle rows; saving another benefit type explicitly removes bundle components.

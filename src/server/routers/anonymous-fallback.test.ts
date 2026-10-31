@@ -13,7 +13,7 @@
  * byte for byte so the drift is caught here rather than by someone diffing
  * responses in the wild.
  */
-import { TRPCError } from '@trpc/server';
+import { TRPCError, type AnyRouter } from '@trpc/server';
 import { fetchRequestHandler } from '@trpc/server/adapters/fetch';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -34,9 +34,13 @@ vi.mock('@/server/audit', () => ({
 }));
 
 import { INVITATION_GENERIC_MESSAGE, RESET_GENERIC_MESSAGE } from '@/lib/auth/anonymous-access';
+import { anonymousTokenInput } from '@/lib/auth/anonymous-inputs';
 import { publicProcedure, router } from '@/server/trpc';
 
 import { anonymousFallbackRouter } from './anonymous-fallback';
+import { invitationsRouter } from './invitations';
+import { passwordResetRouter } from './password-reset';
+import { pharmacySupplierLinksRouter } from './pharmacy-supplier-links';
 
 const TRPC_ENDPOINT = '/api/trpc';
 
@@ -47,7 +51,7 @@ const TRPC_ENDPOINT = '/api/trpc';
  */
 const realRouter = router({
   invitations: router({
-    get: publicProcedure.query(() => {
+    get: publicProcedure.input(anonymousTokenInput).query(() => {
       throw new TRPCError({ code: 'NOT_FOUND', message: INVITATION_GENERIC_MESSAGE });
     }),
   }),
@@ -56,6 +60,12 @@ const realRouter = router({
       throw new TRPCError({ code: 'BAD_REQUEST', message: RESET_GENERIC_MESSAGE });
     }),
   }),
+});
+
+const productionAnonymousRouter = router({
+  invitations: invitationsRouter,
+  passwordReset: passwordResetRouter,
+  pharmacySupplierLinks: pharmacySupplierLinksRouter,
 });
 
 type ServedResponse = {
@@ -93,10 +103,7 @@ function stripStacks(value: unknown): { body: unknown; hasStack: boolean } {
   return { body: walk(value), hasStack };
 }
 
-async function serve(
-  router_: typeof realRouter | typeof anonymousFallbackRouter,
-  request: Request
-): Promise<ServedResponse> {
+async function serve(router_: AnyRouter, request: Request): Promise<ServedResponse> {
   const response = await fetchRequestHandler({
     endpoint: TRPC_ENDPOINT,
     req: request,
@@ -114,8 +121,21 @@ async function serve(
   };
 }
 
-const query = (path: string) =>
-  new Request(`http://acme.example.test${TRPC_ENDPOINT}/${path}?batch=1`, { method: 'GET' });
+const queryWithInput = (path: string, input: unknown) => {
+  const encoded = encodeURIComponent(JSON.stringify({ '0': { json: input } }));
+  return new Request(`http://acme.example.test${TRPC_ENDPOINT}/${path}?batch=1&input=${encoded}`, {
+    method: 'GET',
+  });
+};
+
+const batchQueryWithInput = (path: string, inputs: readonly unknown[]) => {
+  const encoded = encodeURIComponent(
+    JSON.stringify(Object.fromEntries(inputs.map((input, index) => [index, { json: input }])))
+  );
+  return new Request(`http://acme.example.test${TRPC_ENDPOINT}/${path}?batch=1&input=${encoded}`, {
+    method: 'GET',
+  });
+};
 
 const mutation = (path: string, input: unknown) =>
   new Request(`http://acme.example.test${TRPC_ENDPOINT}/${path}?batch=1`, {
@@ -125,8 +145,77 @@ const mutation = (path: string, input: unknown) =>
   });
 
 describe('fallback and real routers serialize refusals identically', () => {
+  it.each([
+    ['invitations.get', 'query', undefined],
+    ['invitations.get', 'query', null],
+    ['invitations.get', 'query', { token: '' }],
+    ['invitations.get', 'query', { token: 42 }],
+    [
+      'invitations.accept',
+      'mutation',
+      { token: 'token', password: 'short', phone: '+15555550123' },
+    ],
+    ['invitations.accept', 'mutation', { token: 'token' }],
+    ['passwordReset.request', 'mutation', { email: '' }],
+    ['passwordReset.request', 'mutation', { email: 42 }],
+    ['passwordReset.validate', 'query', { token: '' }],
+    ['passwordReset.validate', 'query', {}],
+    ['passwordReset.reset', 'mutation', { token: 'token', newPassword: 'short' }],
+    ['passwordReset.reset', 'mutation', { token: [], newPassword: 'Valid-password-123' }],
+    ['pharmacySupplierLinks.get', 'query', { token: '   ' }],
+    ['pharmacySupplierLinks.get', 'query', { token: 'token', unexpected: true }],
+    [
+      'pharmacySupplierLinks.submit',
+      'mutation',
+      { token: 'token', kind: 'UNKNOWN', idempotencyKey: 'key', payload: {} },
+    ],
+    [
+      'pharmacySupplierLinks.submit',
+      'mutation',
+      {
+        token: 'token',
+        kind: 'ACKNOWLEDGEMENT',
+        idempotencyKey: 'x'.repeat(201),
+        payload: {},
+      },
+    ],
+    [
+      'pharmacySupplierLinks.uploadDocument',
+      'mutation',
+      {
+        token: 'token',
+        idempotencyKey: 'key',
+        fileName: 'evidence.txt',
+        declaredMimeType: 'text/plain',
+        contentBase64: 'dGVzdA==',
+      },
+    ],
+    [
+      'pharmacySupplierLinks.uploadDocument',
+      'mutation',
+      {
+        token: 'token',
+        idempotencyKey: 'key',
+        fileName: 'evidence.pdf',
+        declaredMimeType: 'application/pdf',
+        contentBase64: '',
+      },
+    ],
+  ] as const)('matches production validation for malformed %s input', async (path, kind, input) => {
+    const request = () => (kind === 'query' ? queryWithInput(path, input) : mutation(path, input));
+
+    const real = await serve(productionAnonymousRouter, request());
+    const fallback = await serve(anonymousFallbackRouter, request());
+
+    expect(real.status).toBe(400);
+    expect(fallback.status).toBe(real.status);
+    expect(fallback.contentType).toBe(real.contentType);
+    expect(fallback.hasStack).toBe(real.hasStack);
+    expect(fallback.body).toEqual(real.body);
+  });
+
   it('matches on a NOT_FOUND from invitations.get', async () => {
-    const request = () => query('invitations.get');
+    const request = () => queryWithInput('invitations.get', { token: 'anything' });
 
     const real = await serve(realRouter, request());
     const fallback = await serve(anonymousFallbackRouter, request());
@@ -155,7 +244,11 @@ describe('fallback and real routers serialize refusals identically', () => {
    * back, only by the errors inside it.
    */
   it('matches on the batched-response envelope', async () => {
-    const request = () => query('invitations.get,invitations.get');
+    const request = () =>
+      batchQueryWithInput('invitations.get,invitations.get', [
+        { token: 'first' },
+        { token: 'second' },
+      ]);
 
     const real = await serve(realRouter, request());
     const fallback = await serve(anonymousFallbackRouter, request());

@@ -6,6 +6,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 const modelDouble = vi.hoisted(() => ({ generate: vi.fn() }));
 vi.mock('@/lib/ai/provider', () => ({
   readAIConfig: () => ({ provider: 'TEST_DOUBLE', model: 'DETERMINISTIC_CATERING_TOKENS' }),
+  readAIAvailability: () => ({ available: true }),
   createAIModel: () => ({ model: {} }),
 }));
 vi.mock('ai', async () => ({

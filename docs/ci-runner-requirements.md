@@ -5,7 +5,7 @@ on `ubuntu-latest`. Each job gets a disposable GitHub-hosted VM and Docker daemo
 The image build retains its native `RUNNER_ARCH=X64` guard. Jobs can use separate
 hosted runners; the browser gate still waits for the automated gate to pass.
 
-The final change pins the Node setup action to a commit and selects Node 22 in
+The final change pins the Node setup action to a commit and selects Node 22.20.0 in
 both QA jobs, adds a memory preflight script and regression tests, and documents
 the requirements for any future self-hosted rollout. All existing QA commands,
 coverage and failure checks remain. PostgreSQL client and Azure CLI/Bicep use the
@@ -14,11 +14,19 @@ downloaded root installer have been removed. This replaces the earlier PR scope
 claim that only runner labels and image-build steps changed.
 
 Both QA jobs check the runner, container and Docker daemon memory before
-installing application dependencies. They require at least 12 GiB of effective
-memory (16 GiB recommended): the existing 8 GiB V8 heap allowance, PostgreSQL
-services and native allocations cannot fit in the reviewed 6 GiB Mac Docker VM.
-The preflight remains a hard failure on undersized infrastructure. It does not
+installing application dependencies. The check recommends at least 12 GiB of
+effective memory (16 GiB preferred) for the 8 GiB V8 heap ceiling, PostgreSQL
+services and native allocations. The heap setting is a ceiling, not a measured
+requirement. Standard private-repo `ubuntu-latest` runners have about 7 GB, so
+the check is advisory: a shortfall, or memory it cannot read, is reported as a
+workflow warning and the gate continues. After moving the jobs to a runner
+sized for the recommendation, set `CI_MEMORY_ENFORCE=1` on the step to make a
+shortfall, or an unreadable memory value, a hard failure. The check does not
 resize a runner or prove that the complete workload will finish.
+
+Both QA jobs set up Node 22.20.0 once, with the setup action pinned to a commit.
+The automated gate no longer installs a second, floating Node 22 runtime after
+Bun.
 
 The `mac-runner` migration is deferred. Before allowing PR workflows onto
 self-hosted infrastructure, an administrator must provision a disposable VM and

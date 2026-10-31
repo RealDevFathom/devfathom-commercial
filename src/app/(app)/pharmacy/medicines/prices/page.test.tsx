@@ -100,6 +100,12 @@ describe('price intelligence page states', () => {
     expect(csv).toContain('"200","","",""');
     expect(csv.startsWith('\uFEFF')).toBe(true);
   });
+  it('identifies every price table header as a column header', () => {
+    render(<PriceNoticesView {...base} data={data} />);
+    const headers = screen.getAllByRole('columnheader');
+    expect(headers).toHaveLength(12);
+    for (const header of headers) expect(header).toHaveAttribute('scope', 'col');
+  });
 });
 
 describe('corrected reports', () => {
@@ -154,6 +160,9 @@ describe('corrected reports', () => {
     });
     expect(region).toHaveAttribute('tabindex', '0');
     expect(within(region).getByRole('table')).toBeVisible();
+    for (const header of within(region).getAllByRole('columnheader')) {
+      expect(header).toHaveAttribute('scope', 'col');
+    }
     expect(screen.getByText('Needs review')).toBeVisible();
     expect(screen.getByText('Reviewed')).toBeVisible();
     expect(screen.getAllByText(/123.00/)).toHaveLength(2);

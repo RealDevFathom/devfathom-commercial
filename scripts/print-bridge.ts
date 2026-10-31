@@ -7,7 +7,11 @@ import { lstat, mkdir, open } from 'node:fs/promises';
 import { connect } from 'node:net';
 import { dirname, isAbsolute, join, resolve, win32 } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { BridgeError, resolveTransport, type Transport } from '../src/lib/restaurant/printing/target';
+import {
+  BridgeError,
+  resolveTransport,
+  type Transport,
+} from '../src/lib/restaurant/printing/target';
 export { resolveTransport };
 
 const TRANSPORT_TIMEOUT_MS = 5_000;
@@ -113,46 +117,90 @@ export async function enrollPrintBridge(input: {
   signal?: AbortSignal;
 }): Promise<string> {
   requirePosixTokenFiles();
-  if (!isAbsolute(input.tokenFile) || input.code.length !== 36 || !/^pbe_[A-Za-z0-9_-]{32}$/.test(input.code))
+  if (
+    !isAbsolute(input.tokenFile) ||
+    input.code.length !== 36 ||
+    !/^pbe_[A-Za-z0-9_-]{32}$/.test(input.code)
+  )
     throw new BridgeError('Enrollment requires an exact code and an absolute new token-file path.');
   const endpoint = bridgeEndpoint(input.baseUrl);
   endpoint.pathname += '/enroll';
   let handle;
   try {
-    handle = await open(input.tokenFile, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+    handle = await open(
+      input.tokenFile,
+      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+      0o600
+    );
   } catch {
-    throw new BridgeError('Could not reserve a new owner-only token file. No enrollment was attempted.');
+    throw new BridgeError(
+      'Could not reserve a new owner-only token file. No enrollment was attempted.'
+    );
   }
   try {
     const reserved = await handle.stat();
     const verifyReservation = async () => {
       const current = await lstat(input.tokenFile);
-      if (!reserved.isFile() || current.isSymbolicLink() || current.dev !== reserved.dev || current.ino !== reserved.ino || current.uid !== process.geteuid!() || (current.mode & 0o777) !== 0o600)
+      if (
+        !reserved.isFile() ||
+        current.isSymbolicLink() ||
+        current.dev !== reserved.dev ||
+        current.ino !== reserved.ino ||
+        current.uid !== process.geteuid!() ||
+        (current.mode & 0o777) !== 0o600
+      )
         throw new Error('Token reservation changed.');
     };
     await verifyReservation();
     // Persist the reservation before sending the one-use exchange. Never unlink on failure.
     await handle.sync();
-    const directory = await open(dirname(input.tokenFile), constants.O_RDONLY | constants.O_DIRECTORY);
-    try { await directory.sync(); } finally { await directory.close(); }
+    const directory = await open(
+      dirname(input.tokenFile),
+      constants.O_RDONLY | constants.O_DIRECTORY
+    );
+    try {
+      await directory.sync();
+    } finally {
+      await directory.close();
+    }
     const timeout = AbortSignal.timeout(10_000);
     const response = await fetch(endpoint, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: input.code }),
-      redirect: 'error', signal: input.signal ? AbortSignal.any([input.signal, timeout]) : timeout,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: input.code }),
+      redirect: 'error',
+      signal: input.signal ? AbortSignal.any([input.signal, timeout]) : timeout,
     });
     if (!response.ok || !response.body) throw new Error('Enrollment refused.');
     const reader = response.body.getReader();
-    const chunks: Uint8Array[] = []; let size = 0;
+    const chunks: Uint8Array[] = [];
+    let size = 0;
     try {
       for (;;) {
-        const { done, value } = await reader.read(); if (done) break;
+        const { done, value } = await reader.read();
+        if (done) break;
         size += value.byteLength;
-        if (size > TOKEN_FILE_LIMIT) { await reader.cancel(); throw new Error('Invalid enrollment response.'); }
+        if (size > TOKEN_FILE_LIMIT) {
+          await reader.cancel();
+          throw new Error('Invalid enrollment response.');
+        }
         chunks.push(value);
       }
-    } finally { reader.releaseLock(); }
+    } finally {
+      reader.releaseLock();
+    }
     const body: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-    if (!body || typeof body !== 'object' || !('token' in body) || typeof body.token !== 'string' || !FILE_TOKEN.test(body.token) || body.token !== body.token.trim() || !('deviceId' in body) || typeof body.deviceId !== 'string' || !body.deviceId)
+    if (
+      !body ||
+      typeof body !== 'object' ||
+      !('token' in body) ||
+      typeof body.token !== 'string' ||
+      !FILE_TOKEN.test(body.token) ||
+      body.token !== body.token.trim() ||
+      !('deviceId' in body) ||
+      typeof body.deviceId !== 'string' ||
+      !body.deviceId
+    )
       throw new Error('Invalid enrollment response.');
     await verifyReservation();
     await handle.writeFile(`${body.token}\n`, 'utf8');
@@ -160,7 +208,9 @@ export async function enrollPrintBridge(input: {
     await verifyReservation();
     return body.token;
   } catch {
-    throw new BridgeError('Enrollment could not be confirmed. Keep the reserved token file and contact your administrator before recovery; do not retry the code.');
+    throw new BridgeError(
+      'Enrollment could not be confirmed. Keep the reserved token file and contact your administrator before recovery; do not retry the code.'
+    );
   } finally {
     await handle.close();
   }
@@ -175,14 +225,19 @@ export async function resolvePrintBridgeToken(input: {
 }): Promise<string> {
   if (input.token) return input.token;
   if (input.tokenFile) {
-    try { return await readPrintBridgeToken(input.tokenFile); }
-    catch (error) {
+    try {
+      return await readPrintBridgeToken(input.tokenFile);
+    } catch (error) {
       if (!input.enrollmentCode || (error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error;
     }
   }
-  if (input.enrollmentCode) return enrollPrintBridge({
-    baseUrl: input.baseUrl ?? '', code: input.enrollmentCode, tokenFile: input.tokenFile ?? '', signal: input.signal,
-  });
+  if (input.enrollmentCode)
+    return enrollPrintBridge({
+      baseUrl: input.baseUrl ?? '',
+      code: input.enrollmentCode,
+      tokenFile: input.tokenFile ?? '',
+      signal: input.signal,
+    });
   return '';
 }
 
