@@ -237,7 +237,12 @@ export async function StagedMedicineCatalogue({
               </li>
             ))}
           </ul>
-          <div className="overflow-x-auto">
+          <div
+            role="region"
+            aria-label="Staged medicine catalogue"
+            tabIndex={0}
+            className="overflow-x-auto focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+          >
             <table className="w-full text-sm">
               <caption className="sr-only">
                 Unverified source quantities. No saleable stock is created.

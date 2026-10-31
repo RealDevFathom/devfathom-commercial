@@ -4,6 +4,13 @@ import { withApiAuth } from '@/lib/api-auth';
 import { logActivity } from '@/server/activity';
 import { readJson } from '@/lib/api-json';
 import { reserveInvoiceNumber } from '@/lib/finance/invoice-number';
+import {
+  isPersistableMoney,
+  MAX_MONEY,
+  multiplyMoney,
+  roundMoney,
+  sumMoney,
+} from '@/lib/finance/money';
 
 export const GET = withApiAuth('finance:read', async (ctx, request) => {
   const url = new URL(request.url);
@@ -33,9 +40,6 @@ export const GET = withApiAuth('finance:read', async (ctx, request) => {
 // Money columns are Decimal(12,2): Postgres caps a value at 9,999,999,999.99.
 // Bound + non-negative so an oversized/negative input is a clean 400, not a raw
 // DB 500 (FIN-07) and not a paid/outstanding-corrupting negative (FIN-01).
-const MAX_MONEY = 9_999_999_999.99;
-const round2 = (n: number) => Math.round(n * 100) / 100;
-
 const lineItemSchema = z.object({
   description: z.string().min(1),
   quantity: z.number().positive().max(1_000_000),
@@ -48,7 +52,7 @@ const lineItemSchema = z.object({
 const createInvoiceSchema = z.object({
   clientId: z.string(),
   projectId: z.string().optional(),
-  items: z.array(lineItemSchema).min(1),
+  items: z.array(lineItemSchema).min(1).max(1_000),
   // subtotal/total are intentionally NOT accepted — they are derived server-side.
   tax: z.number().nonnegative().max(MAX_MONEY).default(0),
   currency: z.enum(['USD', 'PKR']).default('USD'),
@@ -73,11 +77,24 @@ export const POST = withApiAuth('finance:write', async (ctx, request) => {
     description: it.description,
     quantity: it.quantity,
     rate: it.rate,
-    amount: round2(it.quantity * it.rate),
+    amount: multiplyMoney(it.quantity, it.rate),
   }));
-  const subtotal = round2(items.reduce((s, it) => s + it.amount, 0));
-  const tax = round2(parsed.data.tax);
-  const total = round2(subtotal + tax);
+  const subtotal = sumMoney(items.map((it) => it.amount));
+  const tax = roundMoney(parsed.data.tax);
+  const total = sumMoney([subtotal, tax]);
+  if (
+    items.some((item) => !isPersistableMoney(item.amount)) ||
+    !isPersistableMoney(subtotal) ||
+    !isPersistableMoney(total)
+  ) {
+    return NextResponse.json(
+      {
+        error: 'Invalid input',
+        details: [{ message: 'Derived invoice amount exceeds the allowed range' }],
+      },
+      { status: 400 }
+    );
+  }
 
   const year = new Date().getFullYear();
   const invoice = await ctx.db.$transaction(async (tx) => {
