@@ -3,6 +3,7 @@ const sdk = vi.hoisted(() => {
   const select = vi.fn(() => ({ specificationVersion: 'v3' }));
   return {
     select,
+    bedrock: vi.fn(() => select),
     azure: vi.fn(() => select),
     google: vi.fn(() => select),
     vertex: vi.fn(() => select),
@@ -14,6 +15,7 @@ const sdk = vi.hoisted(() => {
     fetch: vi.fn(),
   };
 });
+vi.mock('@ai-sdk/amazon-bedrock', () => ({ createAmazonBedrock: sdk.bedrock }));
 vi.mock('@ai-sdk/azure', () => ({ createAzure: sdk.azure }));
 vi.mock('@ai-sdk/google', () => ({ createGoogleGenerativeAI: sdk.google }));
 vi.mock('@ai-sdk/google-vertex', () => ({ createVertex: sdk.vertex }));
@@ -27,7 +29,14 @@ vi.mock('ai', async (importOriginal) => ({
   generateText: sdk.generate,
   streamText: sdk.stream,
 }));
-import { AIUnavailableError, createAIModel, readAIAvailability, readAIConfig } from './provider';
+import {
+  AIUnavailableError,
+  createAIModel,
+  createRoutedAIModel,
+  readAIAvailability,
+  readAIConfig,
+} from './provider';
+import { DEFAULT_AI_MODELS } from './model-defaults';
 import { generateGrowthRecommendations, type GrowthInput } from './growth-recommendations';
 const inert = {
   AI_MODEL: 'inert-model',
@@ -122,5 +131,22 @@ describe('shared provider gate with real factory boundary', () => {
     expect(() => readAIConfig({ AI_PROVIDER: 'groq', AI_MODEL: 'model' })).toThrow(
       '[ai:groq] GROQ_API_KEY is required.'
     );
+  });
+});
+
+// Supported inference profiles, rather than base IDs that reject on-demand calls.
+describe('budget-routed Bedrock factory', () => {
+  it.each([
+    ['cheap', 'global.anthropic.claude-haiku-4-5-20251001-v1:0'],
+    ['standard', 'global.anthropic.claude-sonnet-4-5-20250929-v1:0'],
+    ['deep', 'us.anthropic.claude-opus-4-1-20250805-v1:0'],
+  ] as const)('passes the supported %s profile to the SDK', (tier, model) => {
+    const selection = createRoutedAIModel(
+      { provider: 'bedrock', model: DEFAULT_AI_MODELS.bedrock[tier] },
+      { AWS_REGION: 'us-west-2' }
+    );
+    expect(sdk.select).toHaveBeenCalledExactlyOnceWith(model);
+    expect(selection).toMatchObject({ provider: 'bedrock', modelId: model });
+    expect(sdk.fetch).not.toHaveBeenCalled();
   });
 });

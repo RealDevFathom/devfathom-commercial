@@ -98,6 +98,20 @@ afterEach(() => {
 });
 
 describe('assistant API scope', () => {
+  it.each([undefined, '', 'disabled', ' DISABLED ', 'unknown'])(
+    'preserves the provider gate with a configured budget: %s',
+    async (provider) => {
+      vi.stubEnv('AI_PROVIDER', provider);
+      vi.stubEnv('AI_ANTHROPIC_MONTHLY_BUDGET_USD', '5');
+      const response = await POST(request({ messages: [user] }));
+      expect(response.status).toBe(503);
+      expect(mocks.reserve).not.toHaveBeenCalled();
+      expect(mocks.routedModel).not.toHaveBeenCalled();
+      expect(mocks.model).not.toHaveBeenCalled();
+      expect(mocks.stream).not.toHaveBeenCalled();
+    }
+  );
+
   it('does not execute sequential or concurrent retries and conservatively charges aborts', async () => {
     vi.stubEnv('AI_ANTHROPIC_MONTHLY_BUDGET_USD', '5');
     let release!: () => void;

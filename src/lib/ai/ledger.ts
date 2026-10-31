@@ -47,7 +47,12 @@ export async function reserveAIUsage(
     where: {
       organizationId: input.organizationId,
       provider: 'anthropic',
-      occurredAt: { gte: monthStart(occurredAt), lte: occurredAt },
+      // Include every committed reservation in this budget month, even one
+      // timestamped after a request that was delayed before acquiring the lock.
+      occurredAt: {
+        gte: monthStart(occurredAt),
+        lt: new Date(Date.UTC(occurredAt.getUTCFullYear(), occurredAt.getUTCMonth() + 1, 1)),
+      },
       // Reservations remain part of the budget until an explicit terminal
       // transition. Expiry is diagnostic metadata, not proof that provider
       // work stopped or that no charge was incurred.

@@ -142,7 +142,7 @@ async function respond(req: Request) {
   }
   // Rechecked for every request, including approved tool continuations.
   const budgetValue = process.env.AI_ANTHROPIC_MONTHLY_BUDGET_USD?.trim();
-  if (!budgetValue && !readAIAvailability().available) {
+  if (!readAIAvailability().available) {
     return Response.json({ error: UNAVAILABLE }, { status: 503 });
   }
   const entitlements = await resolveOrganizationEntitlements(organization.id, tenantDb);

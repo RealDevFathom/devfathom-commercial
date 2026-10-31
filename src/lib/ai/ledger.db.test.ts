@@ -1,35 +1,39 @@
 import { randomUUID } from 'node:crypto';
 
 import { Client } from 'pg';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { Prisma } from '@/generated/prisma/client';
 import { DEFAULT_AI_MODELS } from './model-defaults';
 
-const DATABASE_URL = process.env.DATABASE_URL;
+const DATABASE_URL = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
 const describeIfDatabase = DATABASE_URL ? describe : describe.skip;
 const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
 const orgA = `org_ai_a_${suffix}`;
 const orgB = `org_ai_b_${suffix}`;
+const orgC = `org_ai_c_${suffix}`;
 let owner: Client;
 
 describeIfDatabase('AI ledger database integration', () => {
   beforeAll(async () => {
+    vi.stubEnv('DATABASE_URL', DATABASE_URL);
     owner = new Client({ connectionString: DATABASE_URL });
     await owner.connect();
     await owner.query(
       `INSERT INTO "organizations"
         ("id", "slug", "legalName", "displayName", "vertical", "status", "deploymentMode", "createdAt", "updatedAt")
        VALUES ($1, $2, 'AI A', 'AI A', 'RESTAURANT', 'ACTIVE', 'SHARED', now(), now()),
-              ($3, $4, 'AI B', 'AI B', 'RESTAURANT', 'ACTIVE', 'SHARED', now(), now())`,
-      [orgA, `ai-a-${suffix}`, orgB, `ai-b-${suffix}`]
+              ($3, $4, 'AI B', 'AI B', 'RESTAURANT', 'ACTIVE', 'SHARED', now(), now()),
+              ($5, $6, 'AI C', 'AI C', 'RESTAURANT', 'ACTIVE', 'SHARED', now(), now())`,
+      [orgA, `ai-a-${suffix}`, orgB, `ai-b-${suffix}`, orgC, `ai-c-${suffix}`]
     );
   });
 
   afterAll(async () => {
     if (!owner) return;
-    await owner.query('DELETE FROM "ai_usages" WHERE "organization_id" = ANY($1)', [[orgA, orgB]]);
-    await owner.query('DELETE FROM "organizations" WHERE "id" = ANY($1)', [[orgA, orgB]]);
+    await owner.query('DELETE FROM "ai_usages" WHERE "organization_id" = ANY($1)', [[orgA, orgB, orgC]]);
+    await owner.query('DELETE FROM "organizations" WHERE "id" = ANY($1)', [[orgA, orgB, orgC]]);
     await owner.end();
+    vi.unstubAllEnvs();
   });
 
   it('reads seeded prices, isolates tenants, and makes retries idempotent', async () => {
@@ -47,7 +51,10 @@ describeIfDatabase('AI ledger database integration', () => {
           monthlyBudgetUsd: new Prisma.Decimal(10),
         })
       );
-    const [first, retry] = await Promise.all([reserve(), reserve()]);
+    // Either concurrent caller may acquire the tenant lock first.
+    const [first, retry] = (await Promise.all([reserve(), reserve()])).sort(
+      (a, b) => Number(a.isReplay) - Number(b.isReplay)
+    );
     expect(first).toEqual(expect.objectContaining({ isReplay: false }));
     expect(retry).toEqual({ provider: first.provider, model: first.model, isReplay: true });
 
@@ -173,6 +180,31 @@ describeIfDatabase('AI ledger database integration', () => {
     expect(retry).toEqual(
       expect.objectContaining({ provider: 'anthropic', isReplay: false })
     );
+  });
+
+  it('counts later reservations in the same month when a request is delayed before locking', async () => {
+    const [{ withTenantDb }, { reserveAIUsage }] = await Promise.all([
+      import('@/lib/tenancy/scoped-db'),
+      import('./ledger'),
+    ]);
+    // Model an earlier request reaching the lock after a later request commits.
+    const delayedAt = new Date('2026-10-27T10:00:00Z');
+    const laterAt = new Date('2026-10-27T10:00:01Z');
+    const reserve = (requestId: string, occurredAt: Date) =>
+      withTenantDb(orgC, (db) =>
+        reserveAIUsage(db, {
+          organizationId: orgC,
+          requestId,
+          tier: 'standard',
+          monthlyBudgetUsd: new Prisma.Decimal('3.9'),
+          occurredAt,
+        })
+      );
+
+    // A reservation from the following month must not consume October's budget.
+    expect((await reserve(`next-month-${suffix}`, new Date('2026-11-01'))).provider).toBe('anthropic');
+    expect((await reserve(`later-${suffix}`, laterAt)).provider).toBe('anthropic');
+    expect((await reserve(`delayed-${suffix}`, delayedAt)).provider).toBe('bedrock');
   });
 
   it('has an effective catalog price for every default provider/model pair', async () => {
