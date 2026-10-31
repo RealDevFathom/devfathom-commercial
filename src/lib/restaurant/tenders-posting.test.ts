@@ -14,10 +14,12 @@ vi.mock('./bills', async (original) => ({
   ...(await original<typeof import('./bills')>()),
   finalizeBillSettlement: vi.fn(),
 }));
-vi.mock('./loyalty', async (original) => ({
-  ...(await original<typeof import('./loyalty')>()),
+vi.mock('./loyalty', () => ({
   reverseLoyaltyForRefund: vi.fn(),
+  earnLoyaltyForClosedOrder: vi.fn(),
 }));
+vi.mock('./inventory', () => ({ postOrderRecipeConsumption: vi.fn() }));
+vi.mock('./outbox', () => ({ appendOrderEvent: vi.fn() }));
 
 const D = (value: string) => new Prisma.Decimal(value);
 const D1 = new Date('2026-09-10T00:00:00Z');
@@ -153,6 +155,17 @@ function fixture() {
     },
     restaurantOrder: {
       count: vi.fn(async () => 0),
+      findUnique: vi.fn(async ({ where }: { where: Where }) =>
+        where.id === 'order'
+          ? {
+              id: 'order',
+              branchId: 'branch',
+              status: 'PAYMENT_PENDING',
+              channel: 'DINE_IN',
+              items: [{ id: 'item', status: 'SERVED' }],
+            }
+          : null
+      ),
       findFirst: vi.fn(async ({ where }: { where: Where }) =>
         matches({ id: 'order', branchId: 'branch' }, where)
           ? {
@@ -166,7 +179,9 @@ function fixture() {
             }
           : null
       ),
+      update: vi.fn(async () => undefined),
     },
+    restaurantOrderTable: { updateMany: vi.fn(async () => ({ count: 1 })) },
     restaurantBill: {
       findUnique: vi.fn(async ({ where }: { where: Where }) => billsById.get(where.id!) ?? bill),
       findMany: vi.fn(async ({ where }: { where: Where }) => (matches(bill, where) ? [bill] : [])),
@@ -302,6 +317,32 @@ function fixture() {
 beforeEach(() => vi.clearAllMocks());
 
 describe('collection posting and authoritative recorded balances (no DB)', () => {
+  it('closes the order and releases its table as part of the final tender transaction', async () => {
+    const f = fixture();
+
+    await expect(f.collect()).resolves.toMatchObject({ settled: true });
+
+    expect(f.raw.restaurantOrder.update).toHaveBeenCalledWith({
+      where: { id: 'order' },
+      data: { status: 'CLOSED', closedAt: NOW },
+    });
+    expect(f.raw.restaurantOrderTable.updateMany).toHaveBeenCalledWith({
+      where: { orderId: 'order', active: true },
+      data: { active: false, unlinkedAt: NOW },
+    });
+  });
+
+  it('does not close or release the table for a partial tender', async () => {
+    const f = fixture();
+
+    await expect(
+      f.collect({ tender: { type: 'CASH', amount: '1000', cashReceived: '1000' } })
+    ).resolves.toMatchObject({ settled: false });
+
+    expect(f.raw.restaurantOrder.update).not.toHaveBeenCalled();
+    expect(f.raw.restaurantOrderTable.updateMany).not.toHaveBeenCalled();
+  });
+
   it('collects a prior-day bill on the drawer date; reconciles sales and collections on their own days', async () => {
     const f = fixture();
     const result = await f.collect();

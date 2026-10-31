@@ -6,6 +6,7 @@ import { Prisma, type RestaurantTenderType } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { businessDateToUtcDate } from './business-date';
+import { DailyCloseError } from './daily-close-errors';
 import {
   beginMoneyIdempotent,
   foldExpectedCash,
@@ -17,6 +18,10 @@ import {
 } from './drawer-sessions';
 import { sub, sum, ZERO } from './money';
 import { enqueueInsightRollup } from './insight-rollups';
+import { lockMoneyDay } from './money-day';
+
+export { assertMoneyDayOpen } from './money-day';
+export { DailyCloseError, type DailyCloseErrorReason } from './daily-close-errors';
 
 /**
  * M5-L3 / C9 / §11.3 — the IMMUTABLE daily close.
@@ -55,27 +60,6 @@ import { enqueueInsightRollup } from './insight-rollups';
  * Every value is Prisma.Decimal (C2). Money never touches a float; equality is
  * exact Decimal string equality.
  */
-
-export type DailyCloseErrorReason =
-  | 'UNSETTLED_BILL'
-  | 'OPEN_DRAWER'
-  | 'CLOSE_EXISTS'
-  | 'NOTHING_TO_CORRECT'
-  | 'NOT_TIP'
-  | 'CO_AUTH_REQUIRED'
-  | 'REASON_REQUIRED'
-  | 'CLOSE_NOT_FOUND'
-  | 'INVALID';
-
-export class DailyCloseError extends Error {
-  constructor(
-    message: string,
-    readonly reason: DailyCloseErrorReason
-  ) {
-    super(message);
-    this.name = 'DailyCloseError';
-  }
-}
 
 type BillStatus = 'OPEN' | 'SETTLED' | 'VOID';
 type TenderType = 'CASH' | 'CARD' | 'OTHER';
@@ -504,7 +488,7 @@ export type CutCloseResult = {
 export async function cutClose(db: ScopedDb, input: CutCloseInput): Promise<CutCloseResult> {
   const businessDate = businessDateToUtcDate(input.businessDate);
   return runMoneyTransaction(db, async (tx) => {
-    await lockDailyClose(tx, input.branchId, input.businessDate);
+    await lockMoneyDay(tx, input.branchId, input.businessDate);
     const canonical = canonicalClosePayload({
       version: 1,
       branchId: input.branchId,
@@ -586,7 +570,7 @@ export async function correctClose(
   }
 
   return runMoneyTransaction(db, async (tx) => {
-    await lockDailyClose(tx, input.branchId, input.businessDate);
+    await lockMoneyDay(tx, input.branchId, input.businessDate);
     const canonical = canonicalClosePayload({
       version: 1,
       branchId: input.branchId,
@@ -716,38 +700,6 @@ function decodeFrozenCorrectCloseResult(
     throw new DailyCloseError('The stored daily-close replay result is invalid.', 'INVALID');
   }
   return { ...result, supersedesCloseId: String(payload.supersedesCloseId) };
-}
-
-/** Serialize a close chain at the organization + branch + business-date grain.
- * The transaction-scoped advisory lock releases automatically on commit/rollback. */
-async function lockDailyClose(tx: ScopedDb, branchId: string, businessDate: string): Promise<void> {
-  const branch = await tx.restaurantBranch.findUnique({
-    where: { id: branchId },
-    select: { organizationId: true },
-  });
-  if (!branch) throw new DailyCloseError('The branch does not exist.', 'INVALID');
-  const key = `${branch.organizationId}:${branchId}:${businessDate}`;
-  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`;
-}
-
-/** Money writers hold the same lock as cut/correct until their transaction ends.
- * ponytail: branch-day serialization; use shared writer locks if throughput requires it. */
-export async function assertMoneyDayOpen(
-  tx: ScopedDb,
-  branchId: string,
-  businessDate: Date
-): Promise<void> {
-  await lockDailyClose(tx, branchId, businessDate.toISOString().slice(0, 10));
-  const close = await tx.restaurantDailyClose.findFirst({
-    where: { branchId, businessDate },
-    select: { id: true },
-  });
-  if (close) {
-    throw new DailyCloseError(
-      'This business day is closed; no money can be posted.',
-      'CLOSE_EXISTS'
-    );
-  }
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
