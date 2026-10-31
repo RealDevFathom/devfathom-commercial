@@ -141,7 +141,7 @@ describe('organization member creation', () => {
   it('preserves manual admin reset and revokes all target credentials in the same tenant', async () => {
     mocks.userFindFirst.mockResolvedValue({ id: 'member_a', email: 'member@example.test' });
     expect(
-      await caller().resetMemberPassword({ id: 'member_a', password: 'Temporary-123456' })
+      await caller().resetMemberPassword({ id: 'member_a', password: input.password })
     ).toEqual({ success: true });
     expect(mocks.userUpdate).toHaveBeenCalledWith({
       where: { id: 'member_a' },
