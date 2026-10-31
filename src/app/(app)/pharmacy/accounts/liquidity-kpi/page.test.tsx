@@ -3,11 +3,15 @@ import { TRPCError } from '@trpc/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
+  assertModuleLicensed: vi.fn(),
   createTRPCContext: vi.fn(),
   branches: vi.fn(),
   financialStatements: vi.fn(),
 }));
-vi.mock('@/server/trpc', () => ({ createTRPCContext: mocks.createTRPCContext }));
+vi.mock('@/server/trpc', () => ({
+  assertModuleLicensed: mocks.assertModuleLicensed,
+  createTRPCContext: mocks.createTRPCContext,
+}));
 vi.mock('@/server/routers/pharmacy-reports', () => ({
   pharmacyReportsRouter: { createCaller: () => ({ branches: mocks.branches }) },
 }));
@@ -47,6 +51,10 @@ afterEach(() => {
 describe('posted cash coverage page', () => {
   it('reads the existing authorized aggregate and exposes an exact safe export', async () => {
     await show({ branch: 'branch-1', cutoff: '2026-10-27' });
+    expect(mocks.assertModuleLicensed).toHaveBeenCalledWith(
+      { tenant: 'scoped' },
+      'pharmacy-finance'
+    );
     expect(mocks.financialStatements).toHaveBeenCalledWith({
       branchId: 'branch-1',
       from: '2026-10-27T00:00:00.000Z',
@@ -60,6 +68,17 @@ describe('posted cash coverage page', () => {
     const exportLink = screen.getByRole('link', { name: 'Export safe CSV' });
     expect(exportLink).toHaveAttribute('download', 'posted-cash-coverage-2026-10-27.csv');
     expect(decodeURIComponent(exportLink.getAttribute('href')!)).toContain('"750/300"');
+  });
+
+  it('denies an unlicensed Finance page before reading branches or balances', async () => {
+    mocks.assertModuleLicensed.mockImplementation(() => {
+      throw new TRPCError({ code: 'FORBIDDEN' });
+    });
+    await show({ branch: 'branch-1' });
+    expect(screen.getByRole('alert')).toHaveTextContent('Owner financial-report permission');
+    expect(mocks.branches).not.toHaveBeenCalled();
+    expect(mocks.financialStatements).not.toHaveBeenCalled();
+    expect(screen.queryByRole('link', { name: 'Export safe CSV' })).toBeNull();
   });
 
   it('renders permission denial without data or export leakage', async () => {

@@ -324,7 +324,7 @@ jobs:
             const split = line.lastIndexOf('=');
             if (split < 1 || line.slice(split + 1) !== '0') failures.push(line);
           }
-          const requiredZero = ['numFailedTests', 'numFailedTestSuites', 'numTodoTests'];
+          const requiredZero = ['numFailedTests', 'numFailedTestSuites', 'numPendingTests', 'numPendingTestSuites', 'numTodoTests'];
           const requiredPositive = ['numTotalTests', 'numTotalTestSuites', 'numPassedTests', 'numPassedTestSuites'];
           const totals = Object.fromEntries([...requiredZero, ...requiredPositive].map((field) => [field, 0]));
           for (const lane of ['vitest', 'vitest-cohort', 'vitest-receipt', 'vitest-catering']) {
@@ -336,9 +336,8 @@ jobs:
                   failures.push(`${lane} JSON ${field}=${value}; require ${requiredZero.includes(field) ? 'numeric zero' : 'positive integer'}`);
                 else totals[field] += value;
               }
-              if (report.numPassedTests + report.numPendingTests !== report.numTotalTests ||
-                  report.numPassedTestSuites + report.numPendingTestSuites !== report.numTotalTestSuites)
-                failures.push(`${lane} JSON passed+pending/total mismatch`);
+              if (report.numPassedTests !== report.numTotalTests || report.numPassedTestSuites !== report.numTotalTestSuites)
+                failures.push(`${lane} JSON passed/total mismatch`);
               console.log(`${lane}: ${JSON.stringify(Object.fromEntries(Object.keys(totals).map((field) => [field, report[field]])))}`);
             } catch (error) {
               failures.push(`${lane} JSON unavailable: ${error.message}`);
@@ -510,9 +509,7 @@ jobs:
       - name: Record 05-run-agency
         if: always()
         run: printf '05-run-agency=%s\n' '${{ steps.agency.outcome == 'success' && '0' || '1' }}' >> gate/browser/exit-codes.txt
-      # The first-sale journey deliberately requires operator-attested evidence and an
-      # isolated HTTPS staging deployment. It must not be fabricated in a localhost lane.
-      - name: Run pharmacy counter
+      - name: Run pharmacy counter and time-to-first-sale
         id: pharmacy
         continue-on-error: true
         env:
@@ -525,10 +522,10 @@ jobs:
           PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/pharmacy
         run: >-
           bunx tsx scripts/run-pharmacy-e2e.ts --workers=1 --reporter=html,json
-          tests/e2e/pharmacy-counter.spec.ts
+          tests/e2e/pharmacy-counter.spec.ts tests/e2e/time-to-first-sale.spec.ts
       - name: Record pharmacy lane
         if: always()
-        run: printf 'pharmacy-counter=%s\n' '${{ steps.pharmacy.outcome == 'success' && '0' || '1' }}' >> gate/browser/exit-codes.txt
+        run: printf 'pharmacy-counter-time-to-first-sale=%s\n' '${{ steps.pharmacy.outcome == 'success' && '0' || '1' }}' >> gate/browser/exit-codes.txt
       - name: 21-run-all-lanes summary
         if: always()
         shell: bash
@@ -542,7 +539,7 @@ jobs:
             '02-run-restaurant',
             '03-run-platform',
             '05-run-agency',
-            'pharmacy-counter',
+            'pharmacy-counter-time-to-first-sale',
           ];
           let aggregate = 0;
           let lines = [];

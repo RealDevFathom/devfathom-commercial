@@ -13,7 +13,7 @@ import {
 } from '@/lib/pharmacy/accounts/liquidity-kpi';
 import { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
 import { pharmacyReportsRouter } from '@/server/routers/pharmacy-reports';
-import { createTRPCContext } from '@/server/trpc';
+import { assertModuleLicensed, createTRPCContext } from '@/server/trpc';
 
 export const metadata: Metadata = { title: 'Posted cash coverage · Pharmacy accounts' };
 const ROUTE = '/pharmacy/accounts/liquidity-kpi';
@@ -53,6 +53,9 @@ export default async function LiquidityKpiPage({
   try {
     if (invalidQuery) throw new TRPCError({ code: 'BAD_REQUEST' });
     const context = await createTRPCContext();
+    // Standalone report callers have no root-router module prefix. Enforce the
+    // page's Finance entitlement before reading branch or financial data.
+    assertModuleLicensed(context, 'pharmacy-finance');
     const reports = pharmacyReportsRouter.createCaller(context);
     const branches = (await reports.branches()).branches;
     const branchId = requestedBranch ?? (branches.length === 1 ? branches[0]!.id : '');
