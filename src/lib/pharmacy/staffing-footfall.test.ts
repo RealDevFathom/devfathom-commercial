@@ -49,7 +49,8 @@ describe('hourly staffing footfall suggestions', () => {
     expect(query.strings.join('?')).toContain(
       `EXTRACT(HOUR FROM ("completedAt" AT TIME ZONE 'UTC') AT TIME ZONE ?`
     );
-    expect(query.strings.join('?')).toContain('::date AT TIME ZONE ?');
+    expect(query.strings.join('?')).toContain('::date::timestamp AT TIME ZONE ?');
+    expect(query.strings.join('?')).toContain('::date + 1)::timestamp AT TIME ZONE ?');
     expect(query.values).toEqual([
       'Asia/Kolkata',
       'org_1',

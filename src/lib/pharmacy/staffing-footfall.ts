@@ -85,7 +85,9 @@ export async function readStaffingFootfall(
 
   // Aggregate in PostgreSQL so a 90-day report always returns at most 24 rows.
   // `AT TIME ZONE` resolves each local-midnight boundary with the correct offset,
-  // including days on either side of daylight-saving changes.
+  // including days on either side of daylight-saving changes. Cast dates to
+  // timestamp explicitly: date AT TIME ZONE otherwise selects the timestamptz
+  // overload, which interprets midnight in the database session's timezone.
   const aggregate = await db.$queryRaw<HourCount[]>(Prisma.sql`
     SELECT
       EXTRACT(HOUR FROM ("completedAt" AT TIME ZONE 'UTC') AT TIME ZONE ${timezone})::integer AS "hourLocal",
@@ -95,8 +97,8 @@ export async function readStaffingFootfall(
       AND "branchId" = ${input.branchId}
       AND status = 'COMPLETED'
       AND "receiptNumber" IS NOT NULL
-      AND "completedAt" >= ((${input.from}::date AT TIME ZONE ${timezone}) AT TIME ZONE 'UTC')
-      AND "completedAt" < (((${input.to}::date + 1) AT TIME ZONE ${timezone}) AT TIME ZONE 'UTC')
+      AND "completedAt" >= ((${input.from}::date::timestamp AT TIME ZONE ${timezone}) AT TIME ZONE 'UTC')
+      AND "completedAt" < (((${input.to}::date + 1)::timestamp AT TIME ZONE ${timezone}) AT TIME ZONE 'UTC')
     GROUP BY 1
     ORDER BY 1
   `);
