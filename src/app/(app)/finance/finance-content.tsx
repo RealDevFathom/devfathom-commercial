@@ -778,7 +778,10 @@ function RecurringTab() {
                   </div>
                   <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-secondary">
                     <div
-                      className={cn('h-full rounded-full', b.overBudget ? 'bg-red-500' : 'bg-primary')}
+                      className={cn(
+                        'h-full rounded-full',
+                        b.overBudget ? 'bg-red-500' : 'bg-primary'
+                      )}
                       style={{ width: `${Math.min(100, b.pct)}%` }}
                     />
                   </div>

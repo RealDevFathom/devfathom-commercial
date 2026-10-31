@@ -58,7 +58,8 @@ export function fromCurrencyGroups(
 /** Sum any number of per-currency breakdowns into one (currencies merged). */
 export function sumByCurrency(...lists: CurrencyAmount[][]): CurrencyAmount[] {
   const map = new Map<string, number>();
-  for (const list of lists) for (const r of list) map.set(r.currency, (map.get(r.currency) ?? 0) + r.amount);
+  for (const list of lists)
+    for (const r of list) map.set(r.currency, (map.get(r.currency) ?? 0) + r.amount);
   return sortCurrencies(
     Array.from(map, ([currency, amount]) => ({ currency, amount: round2(amount) }))
   );

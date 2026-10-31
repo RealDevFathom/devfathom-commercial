@@ -155,6 +155,10 @@ describe('allocate — largest-remainder, pinned tie-break (C4)', () => {
     expect(sum(shares).toFixed(2)).toBe('9.00');
   });
 
+  it.each([[0], [0, 0]])('allocates zero across zero weights %j', (...weights) => {
+    expect(allocate('0.00', weights).map(formatMoney)).toEqual(weights.map(() => '0.00'));
+  });
+
   it('rejects empty, negative, non-integer, and all-zero weights', () => {
     expect(() => allocate('1.00', [])).toThrow(RangeError);
     expect(() => allocate('1.00', [-1, 2])).toThrow(RangeError);
