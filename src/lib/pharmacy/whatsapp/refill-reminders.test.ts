@@ -34,8 +34,13 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
         store.customers.find((customer) => customer.patientId === where.patientId) ?? null,
     },
     patientConsent: {
-      findFirst: async ({ where }: { where: { patientId: string } }) =>
-        store.consents.find((consent) => consent.patientId === where.patientId) ?? null,
+      findFirst: async ({ where }: { where: { patientId: string; id?: string } }) =>
+        store.consents
+          .filter(
+            (consent) =>
+              consent.patientId === where.patientId && (!where.id || consent.id === where.id)
+          )
+          .sort((a, b) => Number(b.version ?? 0) - Number(a.version ?? 0))[0] ?? null,
     },
     pharmacyMessageLog: {
       count: async () => store.logs.length,
@@ -138,6 +143,50 @@ describe('planRefillReminder', () => {
 });
 
 describe('processDueWhatsAppRefillReminders', () => {
+  it.each([true, false])(
+    'uses the latest consent for a chronic subscription (latest grant: %s)',
+    async (granted) => {
+      store.captures = [
+        {
+          ...capture('subscription-1'),
+          subscriptionId: 'subscription-1',
+          subscriptionDueAt: new Date('2026-10-01T09:00:00.000Z'),
+          consentEventId: 'original-grant',
+        },
+      ];
+      store.customers = [customer('patient-1', true)];
+      store.consents = [
+        {
+          id: 'original-grant',
+          patientId: 'patient-1',
+          version: 1,
+          granted: true,
+          revokedAt: null,
+        },
+        {
+          id: 'latest-consent',
+          patientId: 'patient-1',
+          version: 2,
+          granted,
+          revokedAt: granted ? null : NOW,
+          recordedAt: NOW,
+        },
+      ];
+      const provider = new MockWhatsAppProvider(config);
+
+      const result = await processDueWhatsAppRefillReminders({ now: NOW, config, provider });
+
+      expect(result.prepared).toBe(granted ? 1 : 0);
+      expect(provider.calls).toHaveLength(granted ? 1 : 0);
+      expect(store.logs).toHaveLength(granted ? 1 : 0);
+      if (granted)
+        expect(store.logs[0]).toMatchObject({
+          dedupeKey: 'chronic-refill:subscription-1:2026-10-01',
+          refillCaptureId: null,
+        });
+    }
+  );
+
   it('sends once per patient x medicine x due date across repeated runs', async () => {
     // Two fills of the same medicine with the same run-out date collapse to one reminder.
     store.captures = [capture('capture-1'), capture('capture-2')];

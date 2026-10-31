@@ -61,12 +61,7 @@ type ReservationCandidate = {
   branchId: string;
   batchState: 'ACTIVE' | 'RECALLED' | 'QUARANTINED';
   disposition:
-    | 'AVAILABLE'
-    | 'QUARANTINE'
-    | 'DAMAGED'
-    | 'DESTROYED'
-    | 'IN_TRANSIT'
-    | 'RETURN_TO_SUPPLIER';
+    'AVAILABLE' | 'QUARANTINE' | 'DAMAGED' | 'DESTROYED' | 'IN_TRANSIT' | 'RETURN_TO_SUPPLIER';
   expiresAt: Date;
   receivedAt: Date | null;
   packLevelId: string;
@@ -625,6 +620,28 @@ async function revalidateOrderReservations(db: ScopedDb, scope: LedgerScope, ord
            balance."disposition"::text AS disposition, batch."state"::text AS "batchState",
            batch."expiresAt", lot."receivedAt",
            medicine.saleable, medicine.otc, medicine.rx, medicine.restricted, medicine.controlled,
+           EXISTS (
+             SELECT 1 FROM "pharmacy_chronic_refill_cycles" cycle
+             JOIN "pharmacy_pharmacist_review_decisions" decision
+               ON decision."organizationId" = cycle."organizationId"
+              AND decision.id = cycle."pharmacistDecisionId"
+             JOIN "pharmacy_pharmacist_review_items" item
+               ON item."organizationId" = decision."organizationId"
+              AND item.id = decision."reviewItemId"
+             JOIN "pharmacy_sale_lines" reviewed_line
+               ON reviewed_line."organizationId" = item."organizationId"
+              AND reviewed_line.id = item."saleLineId"
+             WHERE cycle."organizationId" = line."organizationId"
+               AND cycle."branchId" = line."branchId" AND cycle."orderId" = line."orderId"
+               AND decision.kind = 'SIGN' AND decision."signedAt" IS NOT NULL
+               AND reviewed_line."branchId" = line."branchId"
+               AND reviewed_line."medicineId" = line."medicineId"
+               AND reviewed_line."presentationId" = line."presentationId"
+               AND reviewed_line."packLevelId" = line."packLevelId"
+               AND reviewed_line."saleUnit" = line."saleUnit"
+               AND reviewed_line.quantity = line.quantity
+               AND reviewed_line."canonicalUnits" = line."canonicalUnits"
+           ) AS "reviewedRx",
            (balance."onHandUnits" - COALESCE((
              SELECT SUM(other."reservedUnits") FROM "pharmacy_restock_reservations" other
              WHERE other."organizationId" = balance."organizationId"
@@ -674,13 +691,14 @@ async function revalidateOrderReservations(db: ScopedDb, scope: LedgerScope, ord
       Parameters<typeof isCustomerOrderableMedicine>[0] & {
         orderLineId: string;
         reservedUnits: number;
+        reviewedRx: boolean;
       })[]
   >(query);
   const at = new Date();
   const coverage = new Map<string, number>();
   for (const reservation of reservations) {
     if (
-      !isCustomerOrderableMedicine(reservation) ||
+      !isCustomerOrderableMedicine(reservation, reservation.reviewedRx) ||
       blockReasonFor(reservation, { ...scope, at }) ||
       !Number.isSafeInteger(reservation.reservedUnits) ||
       reservation.reservedUnits <= 0 ||
@@ -834,6 +852,7 @@ export async function startCustomerOrderCheckout(
       },
       {
         expiresAt: order.reservationExpiresAt,
+        reviewedRx: reservations.some((row) => row.orderLineId === line.id && row.reviewedRx),
         allocations: reservations
           .filter((row) => row.orderLineId === line.id)
           .map((row) => ({

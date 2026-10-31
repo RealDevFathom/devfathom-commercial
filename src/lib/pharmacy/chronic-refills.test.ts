@@ -113,6 +113,7 @@ describe('chronic refill cycles', () => {
     );
     expect(database.$executeRaw).toHaveBeenCalledTimes(2);
     const approvalQuery = sqlText(database.$queryRaw.mock.calls[1]?.[0]);
+    expect(approvalQuery).toContain('JOIN "pharmacy_chronic_refill_subscriptions" subscription');
     expect(approvalQuery).toContain('sale_line."medicineId" = subscription."medicineId"');
     expect(approvalQuery).toContain('sale_line."presentationId" = subscription."presentationId"');
     expect(approvalQuery).toContain('customer."id" = subscription."customerId"');

@@ -256,6 +256,10 @@ export async function createDueChronicRefillOrder(
       ? await db.$queryRaw<{ id: string }[]>(Prisma.sql`
           SELECT decision."id"
           FROM "pharmacy_pharmacist_review_decisions" decision
+          JOIN "pharmacy_chronic_refill_subscriptions" subscription
+            ON subscription."organizationId" = decision."organizationId"
+           AND subscription."branchId" = ${scope.branchId}
+           AND subscription."id" = ${subscription.id}
           JOIN "pharmacy_pharmacist_review_items" item
             ON item."organizationId" = decision."organizationId"
            AND item."id" = decision."reviewItemId"
@@ -356,18 +360,21 @@ export async function processDueChronicRefills(options: { now?: Date; limit?: nu
   const result = { scanned: candidates.length, created: 0, failed: 0 };
   for (const candidate of candidates) {
     try {
-      await withTenantDb(candidate.organizationId, (db) =>
-        db.$transaction((tx) =>
-          createDueChronicRefillOrder(
-            tx as ScopedDb,
-            {
-              organizationId: candidate.organizationId,
-              branchId: candidate.branchId,
-              actorId: candidate.createdByUserId,
-            },
-            { subscriptionId: candidate.id, now }
-          )
-        )
+      await withTenantDb(
+        candidate.organizationId,
+        (db) =>
+          db.$transaction((tx) =>
+            createDueChronicRefillOrder(
+              tx as ScopedDb,
+              {
+                organizationId: candidate.organizationId,
+                branchId: candidate.branchId,
+                actorId: candidate.createdByUserId,
+              },
+              { subscriptionId: candidate.id, now }
+            )
+          ),
+        { userId: candidate.createdByUserId }
       );
       result.created += 1;
     } catch {

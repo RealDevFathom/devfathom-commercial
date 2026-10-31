@@ -236,7 +236,6 @@ export async function processDueWhatsAppRefillReminders(
             patientId: capture.patientId,
             purpose: 'REMINDERS',
             channel: 'WHATSAPP',
-            ...(capture.subscriptionId ? { id: capture.consentEventId } : {}),
           },
           orderBy: { version: 'desc' },
           select: { granted: true, revokedAt: true, recordedAt: true },

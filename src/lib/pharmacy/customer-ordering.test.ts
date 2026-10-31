@@ -22,6 +22,15 @@ describe('MKT-03 customer-order catalogue eligibility', () => {
     expect(isCustomerOrderableMedicine({ ...otc, restricted: true })).toBe(false);
     expect(isCustomerOrderableMedicine({ ...otc, controlled: true })).toBe(false);
   });
+
+  it('permits reviewed Rx while retaining saleability, restricted and controlled guards', () => {
+    const rx = { ...otc, otc: false, rx: true };
+    expect(isCustomerOrderableMedicine(rx, true)).toBe(true);
+    expect(isCustomerOrderableMedicine(rx)).toBe(false);
+    expect(isCustomerOrderableMedicine({ ...rx, saleable: false }, true)).toBe(false);
+    expect(isCustomerOrderableMedicine({ ...rx, restricted: true }, true)).toBe(false);
+    expect(isCustomerOrderableMedicine({ ...rx, controlled: true }, true)).toBe(false);
+  });
 });
 
 describe('MKT-03/MKT-05 reservation lifecycle', () => {
