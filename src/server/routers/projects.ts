@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { router, protectedProcedure } from '../trpc';
 import { TRPCError } from '@trpc/server';
+import type { Prisma, PrismaClient } from '@/generated/prisma/client';
 import { logActivity } from '../activity';
 import { emitEvent } from '@/lib/webhooks';
 import { appUrl, templates } from '@/lib/email';
@@ -41,6 +42,90 @@ const hoursInput = z
 // Prisma returns Decimal; rollups are computed as Number and rounded back to the
 // same 2-decimal precision the column stores.
 const round2 = (n: number) => Math.round(n * 100) / 100;
+
+type ProjectMemberRole = 'LEAD' | 'MEMBER';
+
+const membershipQueues = new WeakMap<Prisma.TransactionClient, Map<string, Promise<void>>>();
+
+/**
+ * Serialize every membership mutation for a project. Check caller authority and
+ * the remaining lead count after acquiring the lock so neither can go stale
+ * while a competing demotion or removal commits.
+ */
+async function withProjectMembershipLock<T>(
+  db: PrismaClient,
+  projectId: string,
+  run: (tx: Prisma.TransactionClient) => Promise<T>
+): Promise<T> {
+  return db.$transaction(async (tx) => {
+    // HTTP batch siblings reuse this tx. Advisory locks are reentrant within a
+    // transaction, so also queue the entire callback, not just its SQL queries.
+    let queues = membershipQueues.get(tx);
+    if (!queues) {
+      queues = new Map();
+      membershipQueues.set(tx, queues);
+    }
+    const previous = queues.get(projectId) ?? Promise.resolve();
+    const result = previous.then(async () => {
+      await tx.$executeRawUnsafe('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', projectId);
+      return run(tx);
+    });
+    // A rejected invariant must release the queue for waiting batch siblings.
+    const settled = result.then(
+      () => undefined,
+      () => undefined
+    );
+    queues.set(projectId, settled);
+    try {
+      return await result;
+    } finally {
+      if (queues.get(projectId) === settled) queues.delete(projectId);
+    }
+  });
+}
+
+// Called only while holding the project membership lock.
+async function changeProjectMemberRole(
+  tx: Prisma.TransactionClient,
+  input: { projectId: string; userId: string; role: ProjectMemberRole },
+  createIfMissing: boolean
+) {
+  const target = await tx.projectMember.findUnique({
+    where: { projectId_userId: { projectId: input.projectId, userId: input.userId } },
+  });
+
+  if (!target) {
+    if (!createIfMissing) {
+      throw new TRPCError({ code: 'NOT_FOUND', message: 'Member not on this project.' });
+    }
+    return {
+      created: true,
+      membership: await tx.projectMember.create({ data: input }),
+    };
+  }
+
+  if (target.role === input.role) return { created: false, membership: target };
+
+  if (target.role === 'LEAD' && input.role === 'MEMBER') {
+    const leadCount = await tx.projectMember.count({
+      where: { projectId: input.projectId, role: 'LEAD' },
+    });
+    if (leadCount <= 1) {
+      throw new TRPCError({
+        code: 'BAD_REQUEST',
+        message: 'Cannot demote the last lead. Promote another member first.',
+      });
+    }
+  }
+
+  return {
+    created: false,
+    membership: await tx.projectMember.update({
+      where: { projectId_userId: { projectId: input.projectId, userId: input.userId } },
+      data: { role: input.role },
+    }),
+  };
+}
 
 export const projectsRouter = router({
   getAll: protectedProcedure.query(async ({ ctx }) => {
@@ -198,37 +283,36 @@ export const projectsRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      const isAdmin = ctx.session.user.role === 'ADMIN';
-      const callerMembership = await ctx.db.projectMember.findUnique({
-        where: { projectId_userId: { projectId: input.projectId, userId: ctx.session.user.id } },
-      });
-      if (!isAdmin && callerMembership?.role !== 'LEAD') {
-        throw new TRPCError({
-          code: 'FORBIDDEN',
-          message: 'Only the project lead or an admin can add members.',
+      return withProjectMembershipLock(ctx.db, input.projectId, async (tx) => {
+        const isAdmin = ctx.session.user.role === 'ADMIN';
+        const callerMembership = await tx.projectMember.findUnique({
+          where: { projectId_userId: { projectId: input.projectId, userId: ctx.session.user.id } },
         });
-      }
-      await assertInOrganization(ctx.db.user, workspaceId(ctx), [input.userId]);
+        if (!isAdmin && callerMembership?.role !== 'LEAD') {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'Only the project lead or an admin can add members.',
+          });
+        }
+        await assertInOrganization(tx.user, workspaceId(ctx), [input.userId]);
 
-      // Idempotent — if already a member, just update the role
-      const membership = await ctx.db.projectMember.upsert({
-        where: { projectId_userId: { projectId: input.projectId, userId: input.userId } },
-        create: { projectId: input.projectId, userId: input.userId, role: input.role },
-        update: { role: input.role },
+        // Preserve the documented upsert semantics. Existing members are promoted
+        // or demoted through the same locked invariant used by setMemberRole.
+        const { membership, created } = await changeProjectMemberRole(tx, input, true);
+        const [project, targetUser] = await Promise.all([
+          tx.project.findUnique({ where: { id: input.projectId }, select: { name: true } }),
+          tx.user.findUnique({ where: { id: input.userId }, select: { name: true } }),
+        ]);
+        if (created && project && targetUser) {
+          logActivity(tx, ctx.session.user.id, {
+            type: 'project_member_added',
+            message: `added ${targetUser.name} to ${project.name}`,
+            entityType: 'Project',
+            entityId: input.projectId,
+          });
+        }
+        return membership;
       });
-      const [project, targetUser] = await Promise.all([
-        ctx.db.project.findUnique({ where: { id: input.projectId }, select: { name: true } }),
-        ctx.db.user.findUnique({ where: { id: input.userId }, select: { name: true } }),
-      ]);
-      if (project && targetUser) {
-        logActivity(ctx.db, ctx.session.user.id, {
-          type: 'project_member_added',
-          message: `added ${targetUser.name} to ${project.name}`,
-          entityType: 'Project',
-          entityId: input.projectId,
-        });
-      }
-      return membership;
     }),
 
   /**
@@ -246,57 +330,61 @@ export const projectsRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      const isAdmin = ctx.session.user.role === 'ADMIN';
-      const isSelf = input.userId === ctx.session.user.id;
+      return withProjectMembershipLock(ctx.db, input.projectId, async (tx) => {
+        const isAdmin = ctx.session.user.role === 'ADMIN';
+        const isSelf = input.userId === ctx.session.user.id;
 
-      const [target, callerMembership, leadCount] = await Promise.all([
-        ctx.db.projectMember.findUnique({
+        const [target, callerMembership, leadCount] = await Promise.all([
+          tx.projectMember.findUnique({
+            where: { projectId_userId: { projectId: input.projectId, userId: input.userId } },
+          }),
+          tx.projectMember.findUnique({
+            where: {
+              projectId_userId: { projectId: input.projectId, userId: ctx.session.user.id },
+            },
+          }),
+          tx.projectMember.count({
+            where: { projectId: input.projectId, role: 'LEAD' },
+          }),
+        ]);
+
+        if (!target)
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Member not on this project.' });
+
+        const callerIsLead = callerMembership?.role === 'LEAD';
+        if (!isAdmin && !callerIsLead && !isSelf) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'Only the project lead or an admin can remove other members.',
+          });
+        }
+
+        if (target.role === 'LEAD' && leadCount <= 1) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Cannot remove the last lead. Promote another member to lead first.',
+          });
+        }
+
+        await tx.projectMember.delete({
           where: { projectId_userId: { projectId: input.projectId, userId: input.userId } },
-        }),
-        ctx.db.projectMember.findUnique({
-          where: { projectId_userId: { projectId: input.projectId, userId: ctx.session.user.id } },
-        }),
-        ctx.db.projectMember.count({
-          where: { projectId: input.projectId, role: 'LEAD' },
-        }),
-      ]);
-
-      if (!target)
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'Member not on this project.' });
-
-      const callerIsLead = callerMembership?.role === 'LEAD';
-      if (!isAdmin && !callerIsLead && !isSelf) {
-        throw new TRPCError({
-          code: 'FORBIDDEN',
-          message: 'Only the project lead or an admin can remove other members.',
         });
-      }
-
-      if (target.role === 'LEAD' && leadCount <= 1) {
-        throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message: 'Cannot remove the last lead. Promote another member to lead first.',
-        });
-      }
-
-      await ctx.db.projectMember.delete({
-        where: { projectId_userId: { projectId: input.projectId, userId: input.userId } },
+        const [project, targetUser] = await Promise.all([
+          tx.project.findUnique({ where: { id: input.projectId }, select: { name: true } }),
+          tx.user.findUnique({ where: { id: input.userId }, select: { name: true } }),
+        ]);
+        if (project && targetUser) {
+          logActivity(tx, ctx.session.user.id, {
+            type: 'project_member_removed',
+            message: isSelf
+              ? `left project ${project.name}`
+              : `removed ${targetUser.name} from ${project.name}`,
+            entityType: 'Project',
+            entityId: input.projectId,
+          });
+        }
+        return { success: true };
       });
-      const [project, targetUser] = await Promise.all([
-        ctx.db.project.findUnique({ where: { id: input.projectId }, select: { name: true } }),
-        ctx.db.user.findUnique({ where: { id: input.userId }, select: { name: true } }),
-      ]);
-      if (project && targetUser) {
-        logActivity(ctx.db, ctx.session.user.id, {
-          type: 'project_member_removed',
-          message: isSelf
-            ? `left project ${project.name}`
-            : `removed ${targetUser.name} from ${project.name}`,
-          entityType: 'Project',
-          entityId: input.projectId,
-        });
-      }
-      return { success: true };
     }),
 
   /**
@@ -312,36 +400,20 @@ export const projectsRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      const isAdmin = ctx.session.user.role === 'ADMIN';
-      const callerMembership = await ctx.db.projectMember.findUnique({
-        where: { projectId_userId: { projectId: input.projectId, userId: ctx.session.user.id } },
-      });
-      if (!isAdmin && callerMembership?.role !== 'LEAD') {
-        throw new TRPCError({
-          code: 'FORBIDDEN',
-          message: 'Only the project lead or an admin can change roles.',
+      return withProjectMembershipLock(ctx.db, input.projectId, async (tx) => {
+        const isAdmin = ctx.session.user.role === 'ADMIN';
+        const callerMembership = await tx.projectMember.findUnique({
+          where: { projectId_userId: { projectId: input.projectId, userId: ctx.session.user.id } },
         });
-      }
-
-      // Block demoting the last lead
-      if (input.role === 'MEMBER') {
-        const leadCount = await ctx.db.projectMember.count({
-          where: { projectId: input.projectId, role: 'LEAD' },
-        });
-        const target = await ctx.db.projectMember.findUnique({
-          where: { projectId_userId: { projectId: input.projectId, userId: input.userId } },
-        });
-        if (target?.role === 'LEAD' && leadCount <= 1) {
+        if (!isAdmin && callerMembership?.role !== 'LEAD') {
           throw new TRPCError({
-            code: 'BAD_REQUEST',
-            message: 'Cannot demote the last lead. Promote another member first.',
+            code: 'FORBIDDEN',
+            message: 'Only the project lead or an admin can change roles.',
           });
         }
-      }
 
-      return ctx.db.projectMember.update({
-        where: { projectId_userId: { projectId: input.projectId, userId: input.userId } },
-        data: { role: input.role },
+        const { membership } = await changeProjectMemberRole(tx, input, false);
+        return membership;
       });
     }),
 

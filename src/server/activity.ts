@@ -42,7 +42,11 @@ export interface LogActivityArgs {
  * or rejects the surrounding mutation if the insert fails (the user action
  * succeeded; failing to log shouldn't surface an error to the client).
  */
-export function logActivity(db: PrismaClient, userId: string, args: LogActivityArgs): void {
+export function logActivity(
+  db: Pick<PrismaClient, 'activity'>,
+  userId: string,
+  args: LogActivityArgs
+): void {
   db.activity
     .create({
       data: {
