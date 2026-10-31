@@ -176,6 +176,9 @@ describe('pharmacy settlement invariants', () => {
       },
       camera: { findFirst: vi.fn().mockResolvedValue(null) },
       pharmacySaleEvent: { create: vi.fn().mockResolvedValue({}) },
+      // #708: the cash-memo buyer-name policy read; no owner policy on this branch.
+      pharmacyBranch: { findFirst: vi.fn().mockResolvedValue(null) },
+      branchRegulatoryProfile: { findFirst: vi.fn().mockResolvedValue(null) },
     };
     const input = {
       saleId: 'sale-1',

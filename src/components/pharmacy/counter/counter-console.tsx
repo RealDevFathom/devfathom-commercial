@@ -35,6 +35,7 @@ import { CounterReturnPanel } from './counter-return-panel';
 import { CounterRxPanel } from './counter-rx-panel';
 import { CounterSearchResults } from './counter-search-results';
 import { CounterSubstituteProposals } from './counter-substitute-proposals';
+import { CounterCashMemoBuyer } from './counter-cash-memo-buyer';
 import {
   CounterTenderPanel,
   type CounterTenderType,
@@ -342,6 +343,18 @@ function ScopedPharmacyCounterConsole({
   const [tenderReadRequired, setTenderReadRequired] = useState(false);
   const [refreshingTenderBill, setRefreshingTenderBill] = useState(false);
   const tenderInFlight = useRef(false);
+  const buyerNameSaving = useRef(false);
+  const [savingBuyerName, setSavingBuyerName] = useState(false);
+  const handleBuyerNameSaving = useCallback((saving: boolean) => {
+    buyerNameSaving.current = saving;
+    setSavingBuyerName(saving);
+  }, []);
+  const buyerNameUnsaved = useRef(false);
+  const [unsavedBuyerName, setUnsavedBuyerName] = useState(false);
+  const handleBuyerNameUnsaved = useCallback((unsaved: boolean) => {
+    buyerNameUnsaved.current = unsaved;
+    setUnsavedBuyerName(unsaved);
+  }, []);
   const [recoveryBranch, setRecoveryBranch] = useState('');
   const [storageError, setStorageError] = useState(false);
   const [attempt, setAttempt] = useState<TenderAttempt | null>(null);
@@ -477,6 +490,15 @@ function ScopedPharmacyCounterConsole({
   const cartQuery = trpc.pharmacySales.counterCart.useQuery(
     { branchId, saleId: saleId ?? '' },
     { enabled: Boolean(branchId && saleId), staleTime: 30_000 }
+  );
+  const handleBuyerNameSaved = useCallback(
+    (buyerName: string | null) => {
+      if (!saleId) return;
+      utils.pharmacySales.counterCart.setData({ branchId, saleId }, (savedCart) =>
+        savedCart ? { ...savedCart, buyerName } : savedCart
+      );
+    },
+    [branchId, saleId, utils]
   );
 
   // POS-07: one OPEN drawer per counter device. The header offers "Open drawer"
@@ -682,6 +704,7 @@ function ScopedPharmacyCounterConsole({
                     : 'unavailable';
   const busy =
     pending !== null ||
+    savingBuyerName ||
     tenderReadRequired ||
     unknownTender ||
     refreshingTenderBill ||
@@ -1159,11 +1182,15 @@ function ScopedPharmacyCounterConsole({
         blocked ||
         billState !== 'ready' ||
         tenderInFlight.current ||
+        buyerNameSaving.current ||
+        buyerNameUnsaved.current ||
         attemptRef.current
       ) {
         return {
           status: 'rejected',
-          message: 'Payment was not sent. Load a valid bill and resolve any safety block first.',
+          message: buyerNameUnsaved.current
+            ? 'Save the displayed buyer name before taking payment.'
+            : 'Payment was not sent. Load a valid bill and resolve any safety block first.',
         };
       }
       tenderInFlight.current = true;
@@ -1336,7 +1363,7 @@ function ScopedPharmacyCounterConsole({
   }, [branchId, busy, ensureSale, linkCustomer, patient]);
 
   const redeemCustomerPoints = useCallback(async () => {
-    if (!saleId || redeemPoints <= 0 || busy) return;
+    if (!saleId || redeemPoints <= 0 || busy || buyerNameUnsaved.current) return;
     setPending('redeem');
     try {
       const result = await redeemLoyalty.mutateAsync({
@@ -2136,8 +2163,29 @@ function ScopedPharmacyCounterConsole({
                 saleId={saleId}
                 deviceId={counterDeviceId()}
                 businessDate={todayBusinessDate()}
-                disabled={busy || blocked}
+                disabled={busy || blocked || unsavedBuyerName}
                 onRecorded={refreshCart}
+              />
+            ) : null}
+            {branchId ? (
+              <CounterCashMemoBuyer
+                key={`cash-memo:${branchId}:${saleId ?? 'none'}`}
+                branchId={branchId}
+                saleId={saleId}
+                buyerName={cart?.saleId === saleId ? cart.buyerName : null}
+                onSavingChange={handleBuyerNameSaving}
+                onUnsavedChange={handleBuyerNameUnsaved}
+                onSaved={handleBuyerNameSaved}
+                suggestedName={
+                  customerQuery.data?.customer.displayName ?? patient?.displayName ?? null
+                }
+                disabled={
+                  busy ||
+                  cartQuery.isFetching ||
+                  !cartQuery.isSuccess ||
+                  cart?.saleId !== saleId ||
+                  cart?.status !== 'OPEN'
+                }
               />
             ) : null}
             <CounterTenderPanel
@@ -2150,7 +2198,7 @@ function ScopedPharmacyCounterConsole({
               state={billState}
               blocked={blocked}
               pending={pending === 'tender'}
-              disabled={busy || !saleId}
+              disabled={busy || unsavedBuyerName || !saleId}
               initialDraft={
                 restoredAttempt
                   ? { ...restoredAttempt.draft, type: restoredAttempt.input.type }
@@ -2273,7 +2321,11 @@ function ScopedPharmacyCounterConsole({
                     type="button"
                     className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
                     disabled={
-                      busy || redeemPoints <= 0 || balanceMinor === null || balanceMinor <= 0
+                      busy ||
+                      unsavedBuyerName ||
+                      redeemPoints <= 0 ||
+                      balanceMinor === null ||
+                      balanceMinor <= 0
                     }
                     onClick={() => void redeemCustomerPoints()}
                   >

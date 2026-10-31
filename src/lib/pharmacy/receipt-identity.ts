@@ -18,6 +18,12 @@ const lineSchema = z
     presentationId: id,
     medicineName: id,
     strength: id.nullable(),
+    /**
+     * #708: the catalog manufacturer as issued, so a reprint of a Sindh cash memo
+     * shows the manufacturer printed originally. Optional: snapshots issued before
+     * #708 carry no manufacturer and render it as unavailable, never as today's.
+     */
+    manufacturer: z.string().min(1).max(200).nullable().optional(),
     presentation: id,
     allocations: z.array(allocationSchema).min(1),
   })
@@ -30,6 +36,18 @@ const snapshotSchema = z
     deviceId: id,
     businessDate: z.iso.date(),
     issuedAt: z.iso.datetime(),
+    // Absent only on legacy snapshots. Explicit null freezes a non-Sindh receipt too.
+    cashMemo: z
+      .object({
+        template: z.literal('SINDH_CASH_MEMO'),
+        licenceNumber: id.nullable(),
+        licenceValidFrom: z.iso.datetime().nullable(),
+        licenceValidTo: z.iso.datetime().nullable(),
+        pharmacistRegistration: id.nullable(),
+      })
+      .strict()
+      .nullable()
+      .optional(),
     lines: z.array(lineSchema).min(1),
   })
   .strict();

@@ -523,6 +523,7 @@ export type CounterCart = {
   saleId: string;
   status: string;
   receiptNumber: number | null;
+  buyerName: string | null;
   lines: CounterCartLine[];
   totals: { grossMinor: number; discountMinor: number; netMinor: number; tenderedMinor: number };
 };
@@ -629,6 +630,7 @@ export async function readCounterCart(
     saleId: sale.id,
     status: sale.status,
     receiptNumber: sale.receiptNumber,
+    buyerName: sale.buyerName ?? null,
     lines,
     totals: {
       grossMinor,
@@ -680,6 +682,8 @@ export async function readCounterReceipt(
       identityStatus: identity ? ('ISSUED' as const) : ('UNAVAILABLE' as const),
       medicineName: identity?.medicineName ?? 'Historical identity unavailable',
       strength: identity?.strength ?? null,
+      // #708: issued manufacturer only; never today's catalog value.
+      manufacturer: identity?.manufacturer ?? null,
       presentation: identity?.presentation ?? 'Historical identity unavailable',
       allocations,
       // Compatibility fields never associate the first lot with the entire line.
@@ -711,6 +715,9 @@ export async function readCounterReceipt(
     businessDate: sale.businessDate ? sale.businessDate.toISOString().slice(0, 10) : null,
     completedAt: sale.completedAt ? sale.completedAt.toISOString() : null,
     currency: branch.currency,
+    // #708: frozen at completion; a reprint prints the same buyer.
+    buyerName: sale.receiptNumber === null ? null : (sale.buyerName ?? null),
+    cashMemo: snapshot?.cashMemo,
     lines,
     tenders,
     totals: counterReceiptTotals({ lines, tenders }),

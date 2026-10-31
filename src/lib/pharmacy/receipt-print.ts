@@ -32,6 +32,12 @@ import { renderEscPos } from '@/lib/restaurant/printing/esc-pos';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import {
+  cashMemoHeaderLines,
+  cashMemoLineRows,
+  cashMemoSignatureLine,
+  isCashMemo,
+} from './cash-memo';
+import {
   COUNTER_RECEIPT_STRINGS,
   formatMinor,
   formatReceiptDate,
@@ -77,15 +83,22 @@ function escPosFacts(
 ): ReceiptPreviewFacts {
   const strings = COUNTER_RECEIPT_STRINGS.en;
   const date = `${strings.date}: ${receipt.businessDate ?? formatReceiptDate(receipt.completedAt)}`;
+  // #708: Sindh cash memo rows; every other receipt keeps its exact facts.
+  const memo = isCashMemo(receipt);
+  const dated = memo ? [date, ...cashMemoHeaderLines(receipt, 'en')].join('\n') : date;
   return {
     businessName: receipt.branchName,
     invoiceNumber: `${strings.receipt} ${receipt.receiptNumber}`,
-    issuedAt: reprint ? `${date}\n${REPRINT_MARKER}` : date,
+    issuedAt: reprint ? `${dated}\n${REPRINT_MARKER}` : dated,
     lines: receipt.lines.map((line) => {
       const issued = line.identityStatus === 'ISSUED';
       return [
         lineIdentity(line),
-        `${line.quantity} ${strings.saleUnit[line.saleUnit]} x ${formatMinor(line.unitPriceMinor)}`,
+        ...(memo
+          ? cashMemoLineRows(line, 'en', ' | ')
+          : [
+              `${line.quantity} ${strings.saleUnit[line.saleUnit]} x ${formatMinor(line.unitPriceMinor)}`,
+            ]),
         ...(line.allocations ?? []).map((allocation) => {
           const batch = issued ? allocation.batchNumber : null;
           const expiry = issued && allocation.expiresAt ? allocation.expiresAt : null;
@@ -110,9 +123,12 @@ function escPosFacts(
       `${strings.tendered}: ${formatMinor(receipt.totals.tenderedMinor)}`,
       `${strings.change}: ${formatMinor(receipt.totals.changeMinor)}`,
     ],
-    payments: receipt.tenders.length
-      ? receipt.tenders.map((tender) => `${tender.type}: ${formatMinor(tender.amountMinor)}`)
-      : ['Payment details unavailable'],
+    payments: [
+      ...(receipt.tenders.length
+        ? receipt.tenders.map((tender) => `${tender.type}: ${formatMinor(tender.amountMinor)}`)
+        : ['Payment details unavailable']),
+      ...(memo ? [cashMemoSignatureLine('en')] : []),
+    ],
   };
 }
 

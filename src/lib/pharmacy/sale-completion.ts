@@ -8,6 +8,12 @@ import { assertSaleBatchesSellable } from './sale-batch-safety';
 import { PharmacyReceiptIdentityError, validateReceiptIdentity } from './receipt-identity';
 import { assertRxSaleAllowed } from './rx-sale-gate';
 import { recordCompletedPrescriptionReference } from './rx-prescription-reference';
+import {
+  assertCashMemoBuyerName,
+  normalizeCashMemoText,
+  readPharmacyCashMemo,
+  resolveCompletionBuyerName,
+} from './cash-memo';
 
 export const completionSaleInclude = {
   lines: {
@@ -38,6 +44,20 @@ export async function completePaidPharmacySale(
   // #633: re-check every batch under lock before a receipt number is drawn. The receipt
   // snapshot below records these checked facts, not the ones loaded with the sale.
   const checkedBatches = await assertSaleBatchesSellable(db, scope, sale.id);
+  // #708: owner policy may require a buyer name on a Sindh cash memo. An offline
+  // replay (leased number) already happened at the counter and is recorded as it was.
+  // Frozen with the receipt number below; the database refuses a later change.
+  const buyerName = await resolveCompletionBuyerName(db, scope, sale);
+  if (leasedReceiptNumber === null)
+    await assertCashMemoBuyerName(db, scope, { buyerName, customerId: null }, new Date());
+  const buyerNameUpdate = buyerName && buyerName !== sale.buyerName ? { buyerName } : {};
+  const issuedAt = new Date();
+  const cashMemo = await readPharmacyCashMemo(db, scope, issuedAt);
+  // Validate the new printable fields before drawing a receipt number. Catalog
+  // text permits whitespace and controls that the receipt renderers refuse.
+  const manufacturers = sale.lines.map((line) =>
+    normalizeCashMemoText(line.medicine.manufacturer)
+  );
   let receiptNumber = leasedReceiptNumber;
   if (receiptNumber === null) {
     // Reserved (leased) numbers never return to this online sequence.
@@ -49,7 +69,6 @@ export async function completePaidPharmacySale(
       RETURNING "nextNumber" - 1 AS receipt_number`);
     receiptNumber = rows[0]!.receipt_number;
   }
-  const issuedAt = new Date();
   await db.pharmacySale.update({
     where: { organizationId_id: { organizationId: scope.organizationId, id: sale.id } },
     data: {
@@ -58,6 +77,7 @@ export async function completePaidPharmacySale(
       receiptNumber,
       receiptDeviceId: input.deviceId,
       businessDate: input.businessDate,
+      ...buyerNameUpdate,
     },
   });
   for (const line of sale.lines) {
@@ -107,7 +127,8 @@ export async function completePaidPharmacySale(
       deviceId: input.deviceId,
       businessDate: input.businessDate.toISOString().slice(0, 10),
       issuedAt: issuedAt.toISOString(),
-      lines: sale.lines.map((line) => ({
+      cashMemo,
+      lines: sale.lines.map((line, index) => ({
         saleLineId: line.id,
         medicineId: line.medicineId,
         presentationId: line.presentationId,
@@ -123,6 +144,8 @@ export async function completePaidPharmacySale(
               })
               .join(' + ')
           : null,
+        // Omitted, not null, when the catalog has none: older readers see the same snapshot.
+        ...(manufacturers[index] ? { manufacturer: manufacturers[index] } : {}),
         presentation: line.presentation.presentation,
         allocations: line.allocations.map((allocation) => {
           const batch = checkedBatches.get(allocation.inventoryLotId) ?? allocation.lot.batch;

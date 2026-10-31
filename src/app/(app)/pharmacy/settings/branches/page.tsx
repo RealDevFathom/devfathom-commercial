@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 
 import { BranchAssignmentsConsole } from '@/components/pharmacy/branch-assignments';
+import { CashMemoSettings } from '@/components/pharmacy/cash-memo-settings';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { pharmacyBranchAssignmentsRouter } from '@/server/routers/pharmacy-branch-assignments';
@@ -41,10 +42,13 @@ export default async function PharmacyBranchAssignmentsPage() {
       <PageHeader
         eyebrow="Pharmacy"
         heading="Branch assignments"
-        description="Assign an active pharmacy member to a branch, or remove an assignment. Administrators can still open every branch."
+        description="Assign pharmacy members to branches and configure the cash memo buyer-name policy. Administrators can still open every branch."
       />
       <SectionCard title="Who works at which branch" titleLevel={2}>
         <BranchAssignmentsConsole initial={initial} />
+      </SectionCard>
+      <SectionCard title="Cash memo policy" titleLevel={2}>
+        <CashMemoSettings branches={initial.branches} />
       </SectionCard>
     </main>
   );

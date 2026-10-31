@@ -27,6 +27,12 @@ import {
   buildCounterReceiptPreview,
   counterLinePresentation,
 } from '@/lib/pharmacy/counter-receipt-presentation';
+import {
+  cashMemoHeaderLines,
+  cashMemoLineRows,
+  cashMemoSignatureLine,
+  isCashMemo,
+} from '@/lib/pharmacy/cash-memo';
 
 export type CounterReceiptSettlement =
   | { status: 'pending' | 'unknown' }
@@ -304,6 +310,8 @@ export function CounterReceiptView({
   }
 
   const strings = COUNTER_RECEIPT_STRINGS[locale];
+  // #708: Sindh cash memo fields; any other receipt renders as before.
+  const cashMemo = isCashMemo(receipt);
   const direction = COUNTER_RECEIPT_DIRECTION[locale];
   const language = locale === 'ur' ? 'ur-PK' : 'en';
 
@@ -479,6 +487,18 @@ export function CounterReceiptView({
           <p className="text-text-muted">
             {strings.date}: {receipt.businessDate ?? formatReceiptDate(receipt.completedAt)}
           </p>
+          {cashMemo
+            ? cashMemoHeaderLines(receipt, locale).map((row, index) => (
+                <p
+                  key={`cash-memo-${index}`}
+                  className={
+                    index === 0 ? 'font-semibold text-text-strong' : 'break-words text-text-muted'
+                  }
+                >
+                  {row}
+                </p>
+              ))
+            : null}
           {receipt.receiptNumber === null ? (
             <p className="text-warning">{strings.noReceiptNumber}</p>
           ) : null}
@@ -507,10 +527,18 @@ export function CounterReceiptView({
                     {formatMinor(line.lineTotalMinor)}
                   </span>
                 </div>
-                <p className="text-text-muted">
-                  {line.quantity} {strings.saleUnit[line.saleUnit]} ×{' '}
-                  {formatMinor(line.unitPriceMinor)}
-                </p>
+                {cashMemo ? (
+                  cashMemoLineRows(line, locale).map((row) => (
+                    <p key={row} className="break-words tabular-nums text-text-muted">
+                      {row}
+                    </p>
+                  ))
+                ) : (
+                  <p className="text-text-muted">
+                    {line.quantity} {strings.saleUnit[line.saleUnit]} ×{' '}
+                    {formatMinor(line.unitPriceMinor)}
+                  </p>
+                )}
                 {counterLinePresentation(line, locale).allocations.map((allocation, index) => (
                   <p
                     key={line.allocations![index]!.allocationId}
@@ -585,6 +613,11 @@ export function CounterReceiptView({
               </div>
             ))}
           </div>
+        ) : null}
+        {cashMemo ? (
+          <p className="border-t border-border-subtle pt-6 text-text-strong">
+            {cashMemoSignatureLine(locale)}
+          </p>
         ) : null}
       </section>
 

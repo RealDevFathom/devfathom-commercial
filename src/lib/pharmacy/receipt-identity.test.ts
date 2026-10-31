@@ -52,6 +52,24 @@ describe('issued receipt identity correspondence', () => {
   it('preserves both actual quantities independently of allocation ID order', () => {
     expect(validateReceiptIdentity(snapshot, sale)).toEqual(snapshot);
   });
+  it('preserves frozen cash memo facts, including a non-Sindh null, without breaking legacy snapshots', () => {
+    for (const cashMemo of [
+      null,
+      {
+        template: 'SINDH_CASH_MEMO',
+        licenceNumber: 'DL-ISSUED',
+        licenceValidFrom: '2026-01-01T00:00:00.000Z',
+        licenceValidTo: '2027-12-31T00:00:00.000Z',
+        pharmacistRegistration: 'QP-ISSUED',
+      },
+    ]) {
+      expect(validateReceiptIdentity({ ...snapshot, cashMemo }, sale).cashMemo).toEqual(cashMemo);
+    }
+    expect(validateReceiptIdentity(snapshot, sale).cashMemo).toBeUndefined();
+    expect(() =>
+      validateReceiptIdentity({ ...snapshot, cashMemo: { template: 'SINDH_CASH_MEMO' } }, sale)
+    ).toThrow('INVALID_RECEIPT_IDENTITY');
+  });
   it('marks missing historic evidence unavailable, ignoring status-only completion', () => {
     expect(readReceiptIdentity([{ payload: null }, { payload: {} }], sale)).toBeNull();
   });

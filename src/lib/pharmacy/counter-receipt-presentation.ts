@@ -2,6 +2,13 @@ import { DEFAULT_RECEIPT_LAYOUT } from '@/lib/receipts/configuration';
 import { buildReceiptPreview } from '@/lib/receipts/preview';
 
 import {
+  cashMemoHeaderLines,
+  cashMemoLineRows,
+  cashMemoSignatureLine,
+  isCashMemo,
+} from './cash-memo';
+
+import {
   COUNTER_RECEIPT_STRINGS,
   formatMinor,
   formatReceiptDate,
@@ -61,17 +68,25 @@ export function buildCounterReceiptPreview(
   const strings = COUNTER_RECEIPT_STRINGS[locale];
   const ntn = receipt.taxIdentity?.ntn?.trim();
   const strn = receipt.taxIdentity?.strn?.trim();
+  // #708: a Sindh cash memo adds its header, per-line r.18 rows and signature;
+  // any other receipt renders exactly as before.
+  const memo = isCashMemo(receipt);
+  const date = `${strings.date}: ${receipt.businessDate ?? formatReceiptDate(receipt.completedAt)}`;
   return buildReceiptPreview(
     { ...DEFAULT_RECEIPT_LAYOUT, paperWidth, footerText: reprint ? strings.reprint : '' },
     {
       businessName: receipt.branchName,
       invoiceNumber: receiptTitle(receipt, locale),
-      issuedAt: `${strings.date}: ${receipt.businessDate ?? formatReceiptDate(receipt.completedAt)}`,
+      issuedAt: memo ? [date, ...cashMemoHeaderLines(receipt, locale)].join('\n') : date,
       lines: receipt.lines.map((line) => {
         const presentation = counterLinePresentation(line, locale);
         return [
           presentation.identity,
-          `${line.quantity} ${strings.saleUnit[line.saleUnit]} × ${formatMinor(line.unitPriceMinor)}`,
+          ...(memo
+            ? cashMemoLineRows(line, locale)
+            : [
+                `${line.quantity} ${strings.saleUnit[line.saleUnit]} × ${formatMinor(line.unitPriceMinor)}`,
+              ]),
           ...presentation.allocations,
           `${strings.lineTotal}: ${formatMinor(line.lineTotalMinor)}`,
         ].join('\n');
@@ -90,9 +105,12 @@ export function buildCounterReceiptPreview(
         `${strings.tendered}: ${formatMinor(receipt.totals.tenderedMinor)}`,
         `${strings.change}: ${formatMinor(receipt.totals.changeMinor)}`,
       ],
-      payments: receipt.tenders.length
-        ? receipt.tenders.map((tender) => `${tender.type}: ${formatMinor(tender.amountMinor)}`)
-        : [labels[locale].payments],
+      payments: [
+        ...(receipt.tenders.length
+          ? receipt.tenders.map((tender) => `${tender.type}: ${formatMinor(tender.amountMinor)}`)
+          : [labels[locale].payments]),
+        ...(memo ? [cashMemoSignatureLine(locale)] : []),
+      ],
     }
   );
 }

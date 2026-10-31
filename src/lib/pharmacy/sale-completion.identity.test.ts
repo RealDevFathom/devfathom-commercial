@@ -77,6 +77,7 @@ function line(id: string, medicineId: string, allocations: ReturnType<typeof all
     medicine: {
       organizationId: 'org_a',
       productName: `Product ${medicineId}`,
+      manufacturer: null as string | null,
       strengths: [{ value: '500.00', unit: 'mg' }],
     },
     presentation: { organizationId: 'org_a', medicineId, presentation: 'Tablet' },
@@ -120,6 +121,9 @@ function makeDb() {
         return {};
       }),
     },
+    // #708: the cash-memo buyer-name policy read; no owner policy on this branch.
+    pharmacyBranch: { findFirst: vi.fn().mockResolvedValue(null) },
+    branchRegulatoryProfile: { findFirst: vi.fn().mockResolvedValue(null) },
   };
 }
 let db = makeDb();
@@ -141,6 +145,43 @@ beforeEach(() => {
 });
 
 describe('R1 receipt identity carries every batch fact', () => {
+  it.each([
+    ['Acme\tPharma', 'Acme Pharma'],
+    [' Acme\nPharma\u001b\u202e ', 'Acme Pharma'],
+    ['a'.repeat(199) + '😀', 'a'.repeat(199)],
+  ])('freezes printable manufacturer text from %j', async (raw, expected) => {
+    const s = sale();
+    s.lines[0]!.medicine.manufacturer = raw;
+    await complete(s);
+    expect(mocks.validate.mock.calls[0]![0]).toMatchObject({
+      lines: [
+        expect.objectContaining({ manufacturer: expected }),
+        expect.not.objectContaining({ manufacturer: expect.anything() }),
+      ],
+    });
+  });
+
+  it('freezes the selected regulatory facts alongside the issued line identities', async () => {
+    db.branchRegulatoryProfile.findFirst.mockResolvedValueOnce({
+      provinceCode: 'PK-SD',
+      isPlaceholder: false,
+      licenceNumber: 'DL-ISSUED',
+      licenceValidFrom: new Date('2026-01-01T00:00:00.000Z'),
+      licenceValidTo: new Date('2027-12-31T00:00:00.000Z'),
+      qualifiedPersonRegistration: 'QP-ISSUED',
+    } as never);
+    await complete(sale());
+    expect(mocks.validate.mock.calls[0]![0]).toMatchObject({
+      cashMemo: {
+        template: 'SINDH_CASH_MEMO',
+        licenceNumber: 'DL-ISSUED',
+        licenceValidFrom: '2026-01-01T00:00:00.000Z',
+        licenceValidTo: '2027-12-31T00:00:00.000Z',
+        pharmacistRegistration: 'QP-ISSUED',
+      },
+    });
+  });
+
   it('hands the validator all three allocations with batch, expiry and units, and stores its result', async () => {
     await expect(complete(sale())).resolves.toBe(41);
     expect(mocks.validate).toHaveBeenCalledTimes(1);
@@ -157,6 +198,7 @@ describe('R1 receipt identity carries every batch fact', () => {
       receiptNumber: 41,
       deviceId: 'counter-a',
       businessDate: '2026-10-11',
+      cashMemo: null,
     });
     expect(snapshot.lines.map((l) => l.saleLineId)).toEqual(['line_1', 'line_2']);
     expect(snapshot.lines[0]!.strength).toBe('500 mg');

@@ -19,6 +19,7 @@ function cart(expiries: string[]): CounterCart {
     saleId: 'sale-a',
     status: 'OPEN',
     receiptNumber: null,
+    buyerName: null,
     lines: [
       {
         saleLineId: 'line-a',
