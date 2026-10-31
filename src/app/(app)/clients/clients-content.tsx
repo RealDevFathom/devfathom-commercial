@@ -65,16 +65,10 @@ export function ClientsContent() {
         eyebrow="WORKSPACE"
         heading="Clients"
         description={
-          <>
-            {clients?.length ?? 0} clients &middot; Manage relationships and contacts.
-          </>
+          <>{clients?.length ?? 0} clients &middot; Manage relationships and contacts.</>
         }
         actions={
-          <Button
-            size="lg"
-            className="h-10 px-4"
-            onClick={() => setShowCreate(true)}
-          >
+          <Button size="lg" className="h-10 px-4" onClick={() => setShowCreate(true)}>
             <Plus className="h-4 w-4" />
             Add Client
           </Button>
@@ -326,9 +320,7 @@ function CreateClientForm({ onClose }: { onClose: () => void }) {
         </div>
 
         {/* UX-01: surface validation/mutation errors (e.g. invalid website URL). */}
-        {createClient.error && (
-          <p className="text-xs text-red-500">{createClient.error.message}</p>
-        )}
+        {createClient.error && <p className="text-xs text-red-500">{createClient.error.message}</p>}
 
         <div className="flex justify-end gap-2">
           <button

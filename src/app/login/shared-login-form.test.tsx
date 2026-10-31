@@ -95,3 +95,38 @@ describe('SharedLoginForm rate-limit reporting', () => {
     expect(mocks.replace).not.toHaveBeenCalled();
   });
 });
+
+it('continues a solo owner straight into the sole workspace, preserving the callback', async () => {
+  mocks.signIn.mockResolvedValue({ ok: true });
+  vi.stubGlobal(
+    'fetch',
+    vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          outcome: 'single',
+          organizations: [
+            {
+              id: 'solo-owner-workspace',
+              slug: 'studio',
+              displayName: 'Solo studio',
+              ssoEnforced: false,
+              ssoUrl: null,
+            },
+          ],
+        }),
+        { status: 200 }
+      )
+    )
+  );
+  render(<SharedLoginForm vertical="agency" callbackUrl="/projects" />);
+  fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'owner@example.test' } });
+  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'correct-horse' } });
+  fireEvent.submit(screen.getByRole('button', { name: 'Sign in' }));
+  await waitFor(() => expect(mocks.replace).toHaveBeenCalledWith('/projects'));
+  expect(mocks.signIn).toHaveBeenCalledWith('login-intent', {
+    organizationId: 'solo-owner-workspace',
+    totp: '',
+    redirect: false,
+  });
+  expect(screen.queryByText('Where to?')).not.toBeInTheDocument();
+});

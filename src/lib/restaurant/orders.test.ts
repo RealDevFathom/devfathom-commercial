@@ -37,6 +37,7 @@ const ids = {
   floor: `floor_${suffix}`,
   tableA: `table_a_${suffix}`,
   tableB: `table_b_${suffix}`,
+  tableC: `table_c_${suffix}`,
   category: `cat_${suffix}`,
   product: `prod_${suffix}`,
   modGroup: `mgrp_${suffix}`,
@@ -204,6 +205,9 @@ beforeAll(async () => {
     });
     await tx.restaurantTable.create({
       data: { id: ids.tableB, floorId: ids.floor, code: 'A2', capacity: 2 },
+    });
+    await tx.restaurantTable.create({
+      data: { id: ids.tableC, floorId: ids.floor, code: 'A3', capacity: 2 },
     });
 
     await tx.restaurantCategory.create({ data: { id: ids.category, name: 'Mains' } });
@@ -816,6 +820,42 @@ describeIfDatabase('orders command layer (real DB)', () => {
     expect(order?.orderTables).toEqual([{ active: false, unlinkedAt: order?.cancelledAt }]);
     // No item may remain QUEUED/FIRING/PREPARED on a cancelled order.
     expect(order?.items.every((i) => i.status === 'VOIDED')).toBe(true);
+  });
+
+  it('serializes concurrent moves so one source link cannot produce two active destinations', async () => {
+    const { orderId, db } = await openWithItem({ tableIds: [ids.tableA] });
+
+    const results = await Promise.allSettled([
+      deps.orders.moveTable(db, {
+        orderId,
+        fromTableId: ids.tableA,
+        toTableId: ids.tableB,
+        actor: actor(),
+      }),
+      deps.orders.moveTable(db, {
+        orderId,
+        fromTableId: ids.tableA,
+        toTableId: ids.tableC,
+        actor: actor(),
+      }),
+    ]);
+
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    const rejected = results.find((result) => result.status === 'rejected');
+    expect(rejected).toMatchObject({
+      status: 'rejected',
+      reason: { reason: 'TABLE_LINK_NOT_FOUND' },
+    });
+
+    const activeLinks = await read((tx) =>
+      tx.restaurantOrderTable.findMany({
+        where: { orderId, active: true },
+        select: { tableId: true, linkReason: true },
+      })
+    );
+    expect(activeLinks).toHaveLength(1);
+    expect(activeLinks[0]).toMatchObject({ linkReason: 'MOVE' });
+    expect([ids.tableB, ids.tableC]).toContain(activeLinks[0]?.tableId);
   });
 
   it('requires co-authorization to cancel an order with prepared items', async () => {
