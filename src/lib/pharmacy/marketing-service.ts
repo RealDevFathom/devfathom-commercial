@@ -5,6 +5,10 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { workspaceTimezone } from '@/lib/timezone';
 import { z } from 'zod';
 import { lockCustomerConsent } from './consent-writer';
+import { requireMarketingQuality } from './marketing-safety';
+import { MarketingWorkflowError } from './marketing-errors';
+
+export { MarketingWorkflowError } from './marketing-errors';
 
 const id = z.string().trim().min(1).max(128);
 export const marketingScopeInput = z.object({ branchId: id }).strict();
@@ -21,7 +25,11 @@ const quietHours = z
   .object({ startHour: z.number().int().min(0).max(23), endHour: z.number().int().min(0).max(23) })
   .strict();
 const frequencyCap = z
-  .object({ max: z.number().int().min(1).max(10), windowDays: z.number().int().min(1).max(90) })
+  .object({
+    max: z.number().int().min(1).max(10),
+    windowDays: z.number().int().min(1).max(90),
+    monthlyMax: z.number().int().min(1).max(31).default(2),
+  })
   .strict();
 export const marketingDraftInput = marketingScopeInput
   .extend({
@@ -48,11 +56,14 @@ export type MarketingScope = {
   timezone: string;
 };
 
-export class MarketingWorkflowError extends Error {}
 const DAY = 86_400_000;
 
 export function validateMarketingBody(body: string) {
-  if (/prescription|condition|allerg|medicine|diagnos|patient|drug|\brx\b/i.test(body))
+  if (
+    /prescription|condition|allerg|medicine|diagnos|patient|drug|\brx\b|paracetamol|acetaminophen|ibuprofen|aspirin|antibiotic|analgesic|antihistamine|antacid|vitamin|supplement/i.test(
+      body
+    )
+  )
     throw new MarketingWorkflowError(
       'Use generic retail copy without clinical or medicine content.'
     );
@@ -99,27 +110,27 @@ async function templateFor(db: ScopedDb, scope: MarketingScope, templateId: stri
 export async function createMarketingDraft(
   db: ScopedDb,
   scope: MarketingScope,
-  input: z.infer<typeof marketingDraftInput>
+  input: z.input<typeof marketingDraftInput>
 ) {
-  marketingDraftInput.parse(input);
-  await templateFor(db, scope, input.templateId);
+  const validated = marketingDraftInput.parse(input);
+  await templateFor(db, scope, validated.templateId);
   const segment = await db.pharmacyMarketingSegment.create({
     data: {
       ...whereScope(scope),
-      name: `${input.name}-${crypto.randomUUID()}`,
-      definition: input.definition,
+      name: `${validated.name}-${crypto.randomUUID()}`,
+      definition: validated.definition,
       createdByUserId: scope.actorId,
     },
   });
   return db.pharmacyCampaign.create({
     data: {
       ...whereScope(scope),
-      name: input.name,
+      name: validated.name,
       segmentId: segment.id,
-      templateId: input.templateId,
-      scheduledAt: input.scheduledAt,
-      quietHours: input.quietHours,
-      frequencyCap: input.frequencyCap,
+      templateId: validated.templateId,
+      scheduledAt: validated.scheduledAt,
+      quietHours: validated.quietHours,
+      frequencyCap: validated.frequencyCap,
       promotesRegulatedItem: false,
       status: 'DRAFT',
     },
@@ -234,6 +245,7 @@ async function evaluateCampaign(
   now: Date,
   persist: boolean
 ) {
+  await requireMarketingQuality(db, scope.organizationId);
   if (persist)
     await db.$queryRaw(
       Prisma.sql`SELECT id FROM pharmacy_campaigns WHERE "organizationId" = ${scope.organizationId} AND "branchId" = ${scope.branchId} AND id = ${campaignId} FOR UPDATE`
@@ -293,15 +305,25 @@ async function evaluateCampaign(
     if (persist) await lockCustomerConsent(db, scope.organizationId, sale.customerId);
     let reason = await marketingConsent(db, scope, sale.customerId, now);
     if (!reason) {
-      const prior = await db.pharmacyCampaignCapture.count({
-        where: {
-          organizationId: scope.organizationId,
-          customerId: sale.customerId,
-          channel: 'WHATSAPP',
-          capturedAt: { gte: new Date(now.getTime() - cap.windowDays * DAY) },
-        },
-      });
-      if (prior >= cap.max) reason = 'FREQUENCY_CAP';
+      const [prior, monthlyPrior] = await Promise.all([
+        db.pharmacyCampaignCapture.count({
+          where: {
+            organizationId: scope.organizationId,
+            customerId: sale.customerId,
+            channel: 'WHATSAPP',
+            capturedAt: { gte: new Date(now.getTime() - cap.windowDays * DAY) },
+          },
+        }),
+        db.pharmacyCampaignCapture.count({
+          where: {
+            organizationId: scope.organizationId,
+            customerId: sale.customerId,
+            channel: 'WHATSAPP',
+            capturedAt: { gte: new Date(now.getTime() - 30 * DAY) },
+          },
+        }),
+      ]);
+      if (prior >= cap.max || monthlyPrior >= cap.monthlyMax) reason = 'FREQUENCY_CAP';
     }
     if (reason) {
       exclusions[reason] = (exclusions[reason] ?? 0) + 1;

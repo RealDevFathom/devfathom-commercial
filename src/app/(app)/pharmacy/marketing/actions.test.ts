@@ -1,4 +1,5 @@
 import { beforeEach, expect, it, vi } from 'vitest';
+import { TRPCError } from '@trpc/server';
 const mocks = vi.hoisted(() => ({
   context: vi.fn(),
   revalidate: vi.fn(),
@@ -6,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   reviewGrowth: vi.fn(),
   approve: vi.fn(),
   sandbox: vi.fn(),
+  capture: vi.fn(),
 }));
 vi.mock('next/cache', () => ({ revalidatePath: mocks.revalidate }));
 vi.mock('@/server/trpc', () => ({ createTRPCContext: mocks.context }));
@@ -24,6 +26,20 @@ beforeEach(() => {
   vi.resetAllMocks();
   mocks.context.mockResolvedValue({});
 });
+it.each(['capture', 'sandbox'] as const)(
+  'shows the provider pause reason for %s without retry guidance',
+  async (operation) => {
+    const message = 'Marketing is auto-paused by provider quality (ACCOUNT_QUALITY_RED).';
+    mocks[operation].mockRejectedValue(new TRPCError({ code: 'BAD_REQUEST', message }));
+    expect(
+      await marketingAction(form({ operation, campaignId: 'campaign-a', outcome: 'DELIVERED' }))
+    ).toEqual({
+      error: true,
+      message,
+    });
+    expect(mocks.revalidate).not.toHaveBeenCalled();
+  }
+);
 it('returns the saved manual draft for navigation with bounded retail settings', async () => {
   mocks.createDraft.mockResolvedValue({ id: 'saved-draft' });
   const result = await marketingAction(
@@ -47,7 +63,7 @@ it('returns the saved manual draft for navigation with bounded retail settings',
       promotesRegulatedItem: false,
       definition: { version: 1, all: [{ field: 'receiptCount', operator: 'gte', value: 1 }] },
       quietHours: { startHour: 22, endHour: 8 },
-      frequencyCap: { max: 1, windowDays: 7 },
+      frequencyCap: { max: 1, windowDays: 7, monthlyMax: 2 },
     })
   );
   expect(mocks.approve).not.toHaveBeenCalled();

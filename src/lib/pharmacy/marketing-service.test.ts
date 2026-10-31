@@ -8,6 +8,8 @@ import {
   marketingDraftInput,
   previewMarketingCampaign,
   requireCaptureWindow,
+  reviewMarketingCampaign,
+  validateMarketingBody,
 } from './marketing-service';
 
 const scope = {
@@ -49,6 +51,9 @@ function database() {
         return { count: 1 };
       }),
       update: vi.fn(async ({ data }) => Object.assign(row, data)),
+    },
+    pharmacyMarketingSafetyState: {
+      findFirst: vi.fn(async (): Promise<{ reason: string } | null> => null),
     },
     pharmacyMarketingTemplate: {
       findFirst: vi.fn(async () => ({
@@ -118,6 +123,18 @@ beforeEach(() => {
 });
 
 describe('persisted capture workflow', () => {
+  it('exposes the effective monthly default for a saved campaign without rewriting its weekly cap', async () => {
+    const review = await reviewMarketingCampaign(db, scope, row.id);
+    expect(review.frequencyCap).toEqual({ max: 1, windowDays: 7, monthlyMax: 2 });
+    expect(row.frequencyCap).toEqual({ max: 1, windowDays: 7 });
+    expect(mock.pharmacyCampaign.update).not.toHaveBeenCalled();
+    expect(mock.pharmacyCampaign.updateMany).not.toHaveBeenCalled();
+  });
+
+  it.each(['Paracetamol offer. STOP', 'Ask about antibiotics. STOP', 'Vitamin sale. STOP'])(
+    'rejects medicine names and categories from WhatsApp copy: %s',
+    (body) => expect(() => validateMarketingBody(body)).toThrow('generic retail copy')
+  );
   it('creates a draft linked to an immutable reviewed template and stored retail rules', async () => {
     const input = {
       branchId: scope.branchId,
@@ -264,6 +281,14 @@ describe('persisted capture workflow', () => {
     row.status = 'APPROVED';
     row.promotesRegulatedItem = true;
     await expect(captureMarketingCampaign(db, scope, row.id, now)).rejects.toThrow('Regulated');
+    expect(captures).toEqual([]);
+  });
+  it('auto-pauses capture before any campaign mutation when account quality drops', async () => {
+    mock.pharmacyMarketingSafetyState.findFirst.mockResolvedValue({
+      reason: 'ACCOUNT_QUALITY_RED',
+    });
+    await expect(captureMarketingCampaign(db, scope, row.id, now)).rejects.toThrow('auto-paused');
+    expect(mock.$queryRaw).not.toHaveBeenCalled();
     expect(captures).toEqual([]);
   });
   it('reads quiet hours in UTC for a stored zone Intl refuses, instead of throwing', () => {

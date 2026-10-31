@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   organization: vi.fn(),
   inbound: vi.fn(),
   callback: vi.fn(),
+  quality: vi.fn(),
 }));
 vi.mock('@/lib/pharmacy/whatsapp/provider', () => ({
   readWhatsAppConfig: mocks.config,
@@ -13,6 +14,12 @@ vi.mock('@/lib/pharmacy/whatsapp/provider', () => ({
 }));
 vi.mock('@/lib/pharmacy/whatsapp/inbound', () => ({ handleInboundWhatsAppMessage: mocks.inbound }));
 vi.mock('@/lib/pharmacy/marketing-delivery', () => ({ recordMarketingCallback: mocks.callback }));
+vi.mock('@/lib/pharmacy/marketing-safety', async () => ({
+  ...(await vi.importActual<typeof import('@/lib/pharmacy/marketing-safety')>(
+    '@/lib/pharmacy/marketing-safety'
+  )),
+  recordMarketingQualityUpdate: mocks.quality,
+}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({
   withTenantDb: async (_org: string, fn: (db: unknown) => unknown) => fn({}),
 }));
@@ -30,7 +37,11 @@ const request = () =>
   });
 beforeEach(() => {
   vi.resetAllMocks();
-  mocks.config.mockReturnValue({ phoneNumberId: 'sender-a', organizationId: 'org-a' });
+  mocks.config.mockReturnValue({
+    phoneNumberId: 'sender-a',
+    organizationId: 'org-a',
+    businessAccountId: 'account-a',
+  });
   mocks.verify.mockReturnValue(true);
   mocks.organization.mockResolvedValue({
     id: 'org-a',
@@ -104,4 +115,30 @@ it('routes authenticated status evidence only for the owned sender', async () =>
   mocks.callback.mockClear();
   expect((await POST(payload('sender-a'))).status).toBe(401);
   expect(mocks.callback).not.toHaveBeenCalled();
+});
+
+it('auto-pauses marketing when an authenticated account_update reports a quality drop', async () => {
+  const response = await POST(
+    new Request('http://pharmacy.localhost/api/pharmacy/whatsapp/webhook', {
+      method: 'POST',
+      body: JSON.stringify({
+        object: 'whatsapp_business_account',
+        entry: [
+          {
+            id: 'account-a',
+            time: 1790000000,
+            changes: [{ field: 'account_update', value: { new_quality_score: 'RED' } }],
+          },
+        ],
+      }),
+    })
+  );
+  expect(response.status).toBe(200);
+  expect(mocks.quality).toHaveBeenCalledWith({}, 'org-a', 'sender-a', {
+    quality: 'RED',
+    paused: true,
+    reason: 'ACCOUNT_QUALITY_RED',
+    occurredAt: new Date(1790000000000),
+    eventKey: expect.any(String),
+  });
 });

@@ -62,6 +62,9 @@ it('shows empty and disabled states with honest preparation language', async () 
   expect(screen.getByText(/No campaigns yet/)).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Save draft' })).toBeDisabled();
   expect(screen.getByText(/No customer messages are sent/)).toBeInTheDocument();
+  expect(screen.getByText(/Campaigns saved before monthly limits/)).toHaveTextContent(
+    'limit of 2 per customer in a rolling 30 days'
+  );
 });
 it('shows a saved draft with review before approval', async () => {
   mocks.history.mockResolvedValue({
@@ -74,6 +77,7 @@ it('shows a saved draft with review before approval', async () => {
   render(page);
   expect(screen.getByRole('checkbox', { name: /I reviewed the copy/ })).toBeRequired();
   expect(screen.getByRole('button', { name: 'Approve campaign' })).toBeInTheDocument();
+  expect(screen.getByText(/Quiet hours:/)).toHaveTextContent('2 per rolling 30 days');
   expect(screen.queryByRole('button', { name: 'Save prepared captures' })).not.toBeInTheDocument();
 });
 it('shows an explicit permission-denied state', async () => {

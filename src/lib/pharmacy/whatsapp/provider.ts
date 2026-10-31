@@ -15,6 +15,10 @@ export type WhatsAppConfig = {
   phoneNumberId: string | null;
   /** Explicit owner of this deployment's configured sender. */
   organizationId?: string | null;
+  /** Explicit account binding for account-level quality webhooks. */
+  businessAccountId?: string | null;
+  /** Exact display number for phone-scoped quality webhooks without a sender ID. */
+  displayPhoneNumber?: string | null;
   appSecret: string | null;
   verifyToken: string | null;
   graphVersion: string;
@@ -76,6 +80,8 @@ export function readWhatsAppConfig(env: Env = process.env): WhatsAppConfig {
     accessToken: envValue(env, 'PHARMACY_WHATSAPP_ACCESS_TOKEN'),
     phoneNumberId: envValue(env, 'PHARMACY_WHATSAPP_PHONE_NUMBER_ID'),
     organizationId: envValue(env, 'PHARMACY_WHATSAPP_ORGANIZATION_ID'),
+    businessAccountId: envValue(env, 'PHARMACY_WHATSAPP_BUSINESS_ACCOUNT_ID'),
+    displayPhoneNumber: envValue(env, 'PHARMACY_WHATSAPP_DISPLAY_PHONE_NUMBER'),
     appSecret: envValue(env, 'PHARMACY_WHATSAPP_APP_SECRET'),
     verifyToken: envValue(env, 'PHARMACY_WHATSAPP_VERIFY_TOKEN'),
     graphVersion: envValue(env, 'PHARMACY_WHATSAPP_GRAPH_VERSION') ?? 'v21.0',

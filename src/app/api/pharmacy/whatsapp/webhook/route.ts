@@ -1,5 +1,9 @@
 import { z } from 'zod';
 import { recordMarketingCallback } from '@/lib/pharmacy/marketing-delivery';
+import {
+  parseMarketingQualityUpdates,
+  recordMarketingQualityUpdate,
+} from '@/lib/pharmacy/marketing-safety';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { timingSafeEqual } from 'node:crypto';
 
@@ -150,6 +154,15 @@ export async function POST(request: Request) {
           );
         }
       }
+  for (const update of parseMarketingQualityUpdates(
+    payload,
+    config.phoneNumberId,
+    config.businessAccountId,
+    config.displayPhoneNumber
+  ))
+    await withTenantDb(organization.id, (db) =>
+      recordMarketingQualityUpdate(db, organization.id, config.phoneNumberId!, update)
+    );
   const messages = provider
     .parseInbound(payload)
     .filter(

@@ -116,6 +116,11 @@ export default async function PharmacyMarketingPage({
           Local sandbox only. No customer messages are sent. Sandbox delivery is simulated. Quiet
           hours use {history.timezone}; schedules below use explicit UTC timestamps.
         </p>
+        <p className="mt-3 text-sm text-text-muted">
+          Campaigns saved before monthly limits were introduced now use a limit of 2 per customer
+          in a rolling 30 days. Captures and sandbox reservations count toward this limit.
+          New drafts can set a different monthly limit below.
+        </p>
       </SectionCard>
       <SectionCard title="Run due sandbox campaigns" titleLevel={2}>
         <p className="mb-3 text-sm text-text-muted">
@@ -177,7 +182,8 @@ export default async function PharmacyMarketingPage({
               Quiet hours: {String(review.quietHours.startHour).padStart(2, '0')}:00–
               {String(review.quietHours.endHour).padStart(2, '0')}:00 ({history.timezone}). Maximum{' '}
               {review.frequencyCap.max} captures per customer over {review.frequencyCap.windowDays}{' '}
-              days. Consent and caps are checked again at capture.
+              days, and {review.frequencyCap.monthlyMax ?? 2} per rolling 30 days. Consent and caps
+              are checked again at capture.
             </p>
             {review.campaign.status === 'DRAFT' && (
               <MarketingActionForm
@@ -500,7 +506,7 @@ export default async function PharmacyMarketingPage({
                   type="number"
                   min={0}
                   max={23}
-                  defaultValue={8}
+                  defaultValue={9}
                   required
                 />
               </label>
@@ -525,6 +531,18 @@ export default async function PharmacyMarketingPage({
                   min={1}
                   max={90}
                   defaultValue={7}
+                  required
+                />
+              </label>
+              <label className="block text-sm">
+                Maximum captures per customer (30 days)
+                <Input
+                  name="monthlyCap"
+                  className="mt-1 min-h-11"
+                  type="number"
+                  min={1}
+                  max={31}
+                  defaultValue={2}
                   required
                 />
               </label>
