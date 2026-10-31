@@ -138,6 +138,51 @@ function cashSale(units = 1) {
   };
 }
 
+describe('#710 offline manual merchant evidence', () => {
+  it('persists a Raast tender through restart and signs the same evidence on retry', async () => {
+    const driver = createMemoryDriver();
+    const counter = await readyCounter(driver);
+    await install(counter, 'RULES', { manualMerchantPolicies: { RAAST: { allowReferenceSkip: false } } }, { version: 2 });
+    const manualCapture = { type: 'RAAST', providerRef: '001234', payerName: 'Ayesha' };
+    const result = await counter.enqueue({ ...cashSale(), action: 'MANUAL_OTC_SALE', payload: {
+      ...cashSale().payload, amountMinor: 100, manualCapture: { ...manualCapture, payerName: ' Ayesha ' },
+      snapshots: counter.snapshot().catalog!.snapshots.map(({ envelope, signature, payload }) => ({ envelope, signature, payload })),
+    } }, MATRIX);
+    expect(result).toMatchObject({ ok: true, command: { receiptNumber: 900 } });
+    const restarted = runtime(driver);
+    expect(await restarted.hydrate()).toBe('ready');
+    const bodies: unknown[] = [];
+    const send = vi.fn(async (request: { body: Record<string, unknown> }) => {
+      bodies.push(request.body);
+      return bodies.length === 1 ? { status: 0 } : { status: 200, serverRef: 'sale-1' };
+    });
+    await restarted.replay(send, replaySigner);
+    await restarted.replay(send, replaySigner);
+    expect(bodies).toHaveLength(2);
+    expect(bodies[0]).toEqual(bodies[1]);
+    expect(bodies[0]).toMatchObject({ action: 'MANUAL_OTC_SALE', manualCapture, leasedReceipt: { receiptNumber: 900 } });
+    expect(bodies[0]).not.toHaveProperty('cashReceivedMinor');
+    expect(restarted.snapshot().queue?.quotas[0]?.consumedUnits).toBe(1);
+    expect(restarted.snapshot().queue?.commands[0]?.status).toBe('ACKNOWLEDGED');
+  });
+  it('refuses a missing reference or unauthorized skip without consuming stock or receipts', async () => {
+    const counter = await readyCounter(createMemoryDriver());
+    await install(counter, 'RULES', { manualMerchantPolicies: { RAAST: { allowReferenceSkip: false } } }, { version: 2 });
+    for (const manualCapture of [
+      { type: 'RAAST', payerName: 'Ayesha' },
+      { type: 'RAAST', payerName: 'Ayesha', referenceSkipped: true },
+      { type: 'JAZZCASH', payerName: 'Ayesha', providerRef: '1234' },
+    ]) {
+      expect(await counter.enqueue({ ...cashSale(), action: 'MANUAL_OTC_SALE', payload: { ...cashSale().payload, manualCapture } }, MATRIX)).toMatchObject({ ok: false });
+    }
+    expect(counter.snapshot().queue).toMatchObject({ commands: [], leases: [{ nextNumber: 900 }], quotas: [{ consumedUnits: 0 }] });
+    await install(counter, 'RULES', { manualMerchantPolicies: { RAAST: { allowReferenceSkip: true } } }, { version: 3 });
+    expect(await counter.enqueue({ ...cashSale(), action: 'MANUAL_OTC_SALE', payload: {
+      ...cashSale().payload, manualCapture: { type: 'RAAST', payerName: 'Ayesha', referenceSkipped: true },
+    } }, MATRIX)).toMatchObject({ ok: true });
+  });
+});
+
 describe('PH-OFF OFF-01 — hydration fails closed', () => {
   it('starts empty on a fresh counter', async () => {
     const counter = runtime(createMemoryDriver());

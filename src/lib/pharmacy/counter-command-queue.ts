@@ -409,7 +409,9 @@ export async function buildCounterReplayRequest(
     snapshots: command.payload.snapshots,
     lines: command.payload.lines,
     amountMinor: command.payload.amountMinor,
-    cashReceivedMinor: command.payload.cashReceivedMinor,
+    ...(command.action === 'MANUAL_OTC_SALE'
+      ? { manualCapture: command.payload.manualCapture }
+      : { cashReceivedMinor: command.payload.cashReceivedMinor }),
   };
   const signatures = await sign(body, finalReceipt);
   return {

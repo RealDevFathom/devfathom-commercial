@@ -533,6 +533,9 @@ function ScopedPharmacyCounterConsole({
   const addLine = trpc.pharmacySales.addLine.useMutation();
   const transition = trpc.pharmacySales.transition.useMutation();
   const tender = trpc.pharmacySales.tender.useMutation({ retry: false });
+  const manualSettings = trpc.pharmacySales.manualPaymentSettings.useQuery(
+    { branchId }, { enabled: Boolean(branchId) }
+  );
   const openDrawer = trpc.pharmacySales.openDrawer.useMutation();
   const captureDemand = trpc.pharmacySales.captureDemand.useMutation();
   const declineSubstitute = trpc.pharmacySales.declineSubstitute.useMutation();
@@ -1150,6 +1153,9 @@ function ScopedPharmacyCounterConsole({
         cashReceivedMinor?: number;
         familyAccountId?: string;
         ownerOverride?: boolean;
+        providerRef?: string;
+        payerName?: string;
+        referenceSkipped?: boolean;
       },
       draft: TenderDraft
     ): Promise<CounterTenderResult> => {
@@ -1190,12 +1196,15 @@ function ScopedPharmacyCounterConsole({
           ...(input.cashReceivedMinor !== undefined
             ? { cashReceivedMinor: input.cashReceivedMinor }
             : {}),
-          idempotencyKey: input.familyAccountId
+          idempotencyKey: input.familyAccountId || input.payerName !== undefined
             ? `counter-tender:${saleId}:${input.type}:${browserUuid()}`
             : `counter-tender:${saleId}:${input.type}:${input.amountMinor}`,
           ...(input.familyAccountId
             ? { familyAccountId: input.familyAccountId, ownerOverride: input.ownerOverride }
             : {}),
+          ...(input.providerRef !== undefined ? { providerRef: input.providerRef } : {}),
+          ...(input.payerName !== undefined ? { payerName: input.payerName } : {}),
+          ...(input.referenceSkipped !== undefined ? { referenceSkipped: input.referenceSkipped } : {}),
         };
         const original: TenderAttempt = { version: 1, scope: recoveryScope, input: payload, draft };
         // Persistence and read-back must succeed before any money write starts.
@@ -2143,6 +2152,10 @@ function ScopedPharmacyCounterConsole({
             <CounterTenderPanel
               key={`${branchId}:${saleId ?? 'none'}:${restoredAttempt?.input.idempotencyKey ?? ''}`}
               ref={tenderRef}
+              manualSettings={manualSettings.data?.settings}
+              manualSettingsLoading={manualSettings.isLoading}
+              manualSettingsError={manualSettings.isError}
+              onReloadManualSettings={() => void manualSettings.refetch()}
               loadKhataAccounts={loadKhataAccounts}
               reauthenticateOwner={reauthenticateOwner}
               printKhataStatement={printKhataStatement}
@@ -2153,7 +2166,9 @@ function ScopedPharmacyCounterConsole({
               disabled={busy || !saleId}
               initialDraft={
                 restoredAttempt
-                  ? { ...restoredAttempt.draft, type: restoredAttempt.input.type }
+                  ? { ...restoredAttempt.draft, type: restoredAttempt.input.type,
+                    payerName: restoredAttempt.input.payerName, providerRef: restoredAttempt.input.providerRef,
+                    referenceSkipped: restoredAttempt.input.referenceSkipped }
                   : undefined
               }
               recoveryOutcome={tenderOutcome}

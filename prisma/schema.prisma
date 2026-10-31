@@ -197,6 +197,8 @@ model PharmacyBranch {
   aiUsages               AIUsage[]
   receiptLayout          Json?
   receiptLayoutRevision  Int                  @default(0)
+  manualPaymentSettings  Json?
+  manualPaymentRevision  Int                  @default(0)
   id                     String               @id @default(cuid())
   organizationId         String               @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   code                   String
@@ -995,6 +997,9 @@ enum PharmacyTenderType {
   WALLET
   CREDIT
   LOYALTY
+  RAAST
+  JAZZCASH
+  EASYPAISA
 }
 
 enum PharmacyLoyaltyEntryKind {
@@ -1308,6 +1313,8 @@ model PharmacyTender {
   changeGivenMinor  Int?
   provider          String?
   providerRef       String?
+  payerName         String?
+  referenceSkipped  Boolean                      @default(false)
   drawerSessionId   String?
   businessDate      DateTime                     @db.Date
   actorId           String
@@ -1401,6 +1408,7 @@ model PharmacyDailyClose {
   cashVarianceMinor   Int
   controlledCountHook Json?
   sourceHash          String
+  tenderTotals        Json?
   actorId             String
   /// MIG-05 — whether this close is final. False while the branch is still
   /// switching: the first DevFathom close only becomes final once the
@@ -3648,6 +3656,7 @@ model PharmacySettlementBatch {
   createdAt       DateTime           @default(now())
 
   tenders          PharmacySettlementTender[]
+  bankMatches      PharmacyBankReconciliation[]
   visibilityAnchor PharmacyBranch             @relation("PharmacySettlementBatchVisibilityAnchor", fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_settlement_batches_visibility_fkey")
 
   @@unique([organizationId, id])
@@ -3697,7 +3706,8 @@ model PharmacyBankReconciliation {
   id              String    @id @default(cuid())
   organizationId  String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   statementLineId String
-  transactionId   String
+  transactionId   String?
+  settlementBatchId String?
   amountMinor     Int
   matchedByUserId String
   matchedAt       DateTime  @default(now())
@@ -3705,11 +3715,14 @@ model PharmacyBankReconciliation {
   reversalReason  String?
 
   statementLine PharmacyBankStatementLine      @relation(fields: [organizationId, statementLineId], references: [organizationId, id], onDelete: Restrict)
-  transaction   PharmacyBookkeepingTransaction @relation(fields: [organizationId, transactionId], references: [organizationId, id], onDelete: Restrict)
+  transaction   PharmacyBookkeepingTransaction? @relation(fields: [organizationId, transactionId], references: [organizationId, id], onDelete: Restrict)
+  settlementBatch PharmacySettlementBatch? @relation(fields: [organizationId, settlementBatchId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_bank_reconciliations_settlement_fkey")
 
   @@unique([organizationId, id])
   @@unique([organizationId, statementLineId, transactionId])
   @@index([organizationId, transactionId])
+  @@unique([organizationId, statementLineId, settlementBatchId], map: "pharmacy_bank_reconciliations_org_line_batch_key")
+  @@index([organizationId, settlementBatchId], map: "pharmacy_bank_reconciliations_org_batch_idx")
   @@map("pharmacy_bank_reconciliations")
 }
 
@@ -13507,6 +13520,7 @@ enum PharmacyOfflineAction {
   SEARCH_CATALOG
   SCAN_BARCODE
   CASH_OTC_SALE
+  MANUAL_OTC_SALE
   KHATA_SALE_WITHIN_CACHED_LIMIT
   PERMITTED_REFUND
   PROVISIONAL_CLOSE

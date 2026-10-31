@@ -6,6 +6,10 @@ import { MarginComparisonSection } from './margin-comparison';
 import { LedgerReportsSection } from './ledger-reports';
 import { FinancialStatements } from './financial-statements';
 
+vi.mock('@/components/pharmacy/counter/manual-payment-settings-panel', () => ({
+  ManualPaymentSettingsPanel: () => null,
+}));
+
 const mocks = vi.hoisted(() => ({
   financialStatements: vi.fn(),
   branches: vi.fn(),

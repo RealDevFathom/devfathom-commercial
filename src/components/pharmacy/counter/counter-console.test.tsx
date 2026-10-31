@@ -97,6 +97,7 @@ vi.mock('@/lib/trpc', () => {
     trpc: {
       useUtils: () => utils,
       pharmacySales: router([
+        'manualPaymentSettings',
         'counterBranches',
         'counterKeymap',
         'counterSaveKeymap',
@@ -145,6 +146,7 @@ import { PharmacyCounterConsole } from './counter-console';
 import {
   persistTenderAttempt,
   readTenderAttempt,
+  TENDER_STORAGE_MESSAGE,
   tenderAttemptStorageKey,
   type TenderAttempt,
 } from './tender-attempt-storage';
@@ -235,6 +237,7 @@ beforeEach(() => {
     .mockReset()
     .mockResolvedValue({ isSuccess: true, data: { saleId: 'sale-a', receiptNumber: 42 } });
   for (const name of [
+    'manualPaymentSettings',
     'counterBranches',
     'counterKeymap',
     'counterSearch',
@@ -377,6 +380,18 @@ describe('PharmacyCounterConsole authoritative bill state', () => {
 });
 
 describe('PharmacyCounterConsole tender recovery', () => {
+  it('#710 submits manual evidence and clears its recovery record only after acceptance', async () => {
+    mocks.queries.manualPaymentSettings = query({ settings: { RAAST: { destination: 'Merchant till', allowReferenceSkip: false } }, revision: 0 });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'RAAST' } });
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '125.50' } });
+    fireEvent.change(screen.getByLabelText('Payer’s name'), { target: { value: 'Ayesha' } });
+    fireEvent.change(screen.getByLabelText('Transaction ID (last 4–6 digits)'), { target: { value: '001234' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
+    await waitFor(() => expect(mocks.mutations.tender).toHaveBeenCalledWith(expect.objectContaining({ type: 'RAAST', providerRef: '001234', payerName: 'Ayesha', amountMinor: 12550 })));
+    await waitFor(() => expect(readTenderAttempt({ organizationId: 'org-a', accountId: 'account-a', branchId: 'branch-a' })).toEqual({ status: 'empty' }));
+    expect(screen.queryByText(TENDER_STORAGE_MESSAGE)).not.toBeInTheDocument();
+  });
   it.each([
     ['BAD_REQUEST', 'DRAWER_NOT_OPEN', 'CASH'],
     ['FORBIDDEN', 'Access refused.', 'CASH'],

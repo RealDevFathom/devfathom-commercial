@@ -17,6 +17,7 @@ vi.mock('@/lib/entitlements', () => ({
   resolveOrganizationEntitlements: vi.fn(),
 }));
 vi.mock('@/server/audit', () => ({
+  annotateAudit: vi.fn(),
   ipFromHeaders: vi.fn(() => null),
   isAuditExcludedPath: vi.fn(() => false),
   recordTrpcAudit: vi.fn(),
@@ -40,6 +41,8 @@ const NOT_IN_WORKSPACE: Refusal = {
 const OUTSIDE: Refusal = { code: 'FORBIDDEN', message: 'Branch is outside your scope.' };
 
 const procedures: Array<[string, (caller: Caller) => Promise<unknown>, Refusal]> = [
+  ['manualPaymentSettings', (c) => c.manualPaymentSettings({ branchId: BRANCH }), OUTSIDE],
+  ['saveManualPaymentSettings', (c) => c.saveManualPaymentSettings({ branchId: BRANCH, revision: 0, settings: {} }), OUTSIDE],
   [
     'drawerStatus',
     (c) => c.drawerStatus({ branchId: BRANCH, deviceId: 'counter-device' }),
@@ -167,6 +170,12 @@ beforeEach(() => {
 });
 
 describe('pharmacy drawer, close and cash procedures: the branch in the input', () => {
+  it('refuses non-admin changes to reference-skip policy before accessing the branch', async () => {
+    await expect(caller('EMPLOYEE').saveManualPaymentSettings({ branchId: BRANCH, revision: 0, settings: {
+      RAAST: { destination: 'Till', allowReferenceSkip: true },
+    } })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.pharmacyBranch.findMany).not.toHaveBeenCalled();
+  });
   it.each(procedures)(
     '%s refuses a branch that is not an active branch of the organization, touching nothing',
     async (_name, run, refusal) => {
