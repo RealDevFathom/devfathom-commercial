@@ -94,7 +94,7 @@ describe('FBR Tier-1 self-check UI regressions', () => {
       const choice = group.querySelector('input')?.getAttribute('name') === 'bankCardPos'
         ? 'Yes'
         : 'No';
-      fireEvent.click(within(group).getByRole('radio', { name: choice, exact: true }));
+      fireEvent.click(within(group).getByRole('radio', { name: choice }));
     }
     fireEvent.change(screen.getByLabelText(/total electricity bill/), {
       target: { value: '300,000' },
