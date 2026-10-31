@@ -3,6 +3,7 @@ import { StrictMode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { OrderPad } from './order-pad';
+import type { OrderDetail } from './order-ticket-panel';
 import { PosOfflineRuntime } from '@/lib/restaurant/pos-offline-runtime';
 import { reviveCommercialTerms } from '@/lib/restaurant/commercial-terms';
 import { quoteDraftCheckTotal } from '@/lib/restaurant/draft-check-total';
@@ -122,7 +123,7 @@ function transport({
 }: {
   failedOpenAttempts?: number;
   openErrors?: { status: number; error: string }[];
-  detailResponse?: typeof detail;
+  detailResponse?: OrderDetail;
   detailGate?: Promise<void>;
   failedAddAttempts?: number;
   refreshGate?: Promise<void>;
