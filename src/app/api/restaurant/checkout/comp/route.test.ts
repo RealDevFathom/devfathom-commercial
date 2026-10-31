@@ -55,6 +55,32 @@ describe('checkout comp route authorization', () => {
     expect(compLine).not.toHaveBeenCalled();
   });
 
+  it('records the authenticated active terminal session with the comp', async () => {
+    vi.mocked(requireBillInDeviceBranch).mockResolvedValue(true);
+    vi.mocked(resolveApprover).mockResolvedValue({
+      ok: true,
+      staffProfileId: 'approving-manager',
+    });
+    vi.mocked(compLine).mockResolvedValue({
+      billLineId: 'line',
+      billId: 'bill',
+      releasedDiscount: {} as never,
+      replayed: false,
+    });
+
+    await run(args);
+
+    expect(compLine).toHaveBeenCalledWith(
+      args.ctx.db,
+      expect.objectContaining({
+        billId: 'bill',
+        billLineId: 'line',
+        approvingStaffProfileId: 'approving-manager',
+        terminalSessionId: 'session',
+      })
+    );
+  });
+
   it('gates the acting operator on orders:complimentary', () => {
     expect(POST).toMatchObject({ capability: 'orders:complimentary' });
   });

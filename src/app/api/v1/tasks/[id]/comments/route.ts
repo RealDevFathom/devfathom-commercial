@@ -59,6 +59,19 @@ export const POST = withApiAuth(
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
+    if (parsed.data.parentId) {
+      const parent = await authCtx.db.taskComment.findFirst({
+        where: { id: parsed.data.parentId, taskId: id },
+        select: { id: true },
+      });
+      if (!parent) {
+        return NextResponse.json(
+          { error: 'Parent comment not found on this task' },
+          { status: 400 }
+        );
+      }
+    }
+
     const comment = await authCtx.db.taskComment.create({
       data: {
         content: parsed.data.content,

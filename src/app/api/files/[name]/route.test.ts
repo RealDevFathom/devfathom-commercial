@@ -11,6 +11,7 @@ vi.mock('@/lib/storage', async (importOriginal) => {
 import { StorageUnavailableError } from '@/lib/storage';
 import { GET } from './route';
 const db = {
+  branchRegulatoryProfile: { findFirst: vi.fn() },
   restaurantSopEvidence: { findFirst: vi.fn() },
   restaurantBranchAssignment: { findUnique: vi.fn() },
   messageAttachment: { findFirst: vi.fn() },
@@ -28,6 +29,7 @@ beforeEach(() => {
   mocks.actor.mockResolvedValue(actor());
   mocks.tenantDb.mockImplementation(async (_org, fn) => fn(db));
   mocks.getUpload.mockResolvedValue(Buffer.from([1, 2, 3]));
+  db.branchRegulatoryProfile.findFirst.mockResolvedValue(null);
   db.restaurantSopEvidence.findFirst.mockResolvedValue(null);
   db.messageAttachment.findFirst.mockResolvedValue(null);
 });
@@ -99,6 +101,31 @@ describe('private attachment delivery', () => {
     mocks.actor.mockResolvedValue(actor('ADMIN'));
     db.restaurantBranchAssignment.findUnique.mockResolvedValue(null);
     expect((await read('sop.png')).status).toBe(200);
+  });
+
+  it('hides pharmacy licence evidence from non-admin tenant members before storage', async () => {
+    db.branchRegulatoryProfile.findFirst.mockResolvedValue({ id: 'profile_1' });
+
+    const response = await read('licence.pdf');
+
+    expect(response.status).toBe(404);
+    expect(await response.text()).toBe('Not found');
+    expect(db.branchRegulatoryProfile.findFirst).toHaveBeenCalledWith({
+      where: { licenceEvidenceFileRef: '/api/files/licence.pdf' },
+      select: { id: true },
+    });
+    expect(mocks.tenantDb).toHaveBeenCalledWith('org_a', expect.any(Function));
+    expect(db.restaurantSopEvidence.findFirst).not.toHaveBeenCalled();
+    expect(db.messageAttachment.findFirst).not.toHaveBeenCalled();
+    expect(mocks.getUpload).not.toHaveBeenCalled();
+  });
+
+  it('allows admins to read pharmacy licence evidence', async () => {
+    mocks.actor.mockResolvedValue(actor('ADMIN'));
+    db.branchRegulatoryProfile.findFirst.mockResolvedValue({ id: 'profile_1' });
+
+    expect((await read('licence.pdf')).status).toBe(200);
+    expect(mocks.getUpload).toHaveBeenCalledExactlyOnceWith('org_a', 'licence.pdf');
   });
 
   it('keeps chat membership required even for admins', async () => {
