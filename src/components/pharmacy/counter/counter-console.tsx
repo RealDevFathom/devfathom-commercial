@@ -1190,9 +1190,13 @@ function ScopedPharmacyCounterConsole({
           ...(input.cashReceivedMinor !== undefined
             ? { cashReceivedMinor: input.cashReceivedMinor }
             : {}),
+          // Equal split amounts are distinct at different paid balances. A refused
+          // attempt at the same balance keeps its key; unknown attempts use recovery.
           idempotencyKey: input.familyAccountId
             ? `counter-tender:${saleId}:${input.type}:${browserUuid()}`
-            : `counter-tender:${saleId}:${input.type}:${input.amountMinor}`,
+            : `counter-tender:${saleId}:${input.type}:${input.amountMinor}${
+                cart && cart.totals.tenderedMinor > 0 ? `:after:${cart.totals.tenderedMinor}` : ''
+              }`,
           ...(input.familyAccountId
             ? { familyAccountId: input.familyAccountId, ownerOverride: input.ownerOverride }
             : {}),
@@ -1254,6 +1258,7 @@ function ScopedPharmacyCounterConsole({
       blocked,
       branchId,
       busy,
+      cart,
       discardReceiptIntent,
       recoveryScope,
       refreshTenderBill,
@@ -2147,6 +2152,7 @@ function ScopedPharmacyCounterConsole({
               reauthenticateOwner={reauthenticateOwner}
               printKhataStatement={printKhataStatement}
               balanceMinor={balanceMinor}
+              tenders={currentBill ? cart.tenders : undefined}
               state={billState}
               blocked={blocked}
               pending={pending === 'tender'}

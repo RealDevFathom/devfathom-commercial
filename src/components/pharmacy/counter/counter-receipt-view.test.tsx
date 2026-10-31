@@ -61,6 +61,36 @@ it('offers labeled paper selection and routes printing through the provided hand
   expect(screen.getByText(/saved designer settings are not connected yet/i)).toBeTruthy();
 });
 
+it('lists every tender on one settled sale receipt', () => {
+  const input = props();
+  input.receipt!.tenders = [
+    { tenderId: 'cash', type: 'CASH', amountMinor: 60000, changeGivenMinor: 0 },
+    { tenderId: 'credit', type: 'CREDIT', amountMinor: 30000, changeGivenMinor: null },
+    { tenderId: 'wallet', type: 'WALLET', amountMinor: 10000, changeGivenMinor: null },
+  ];
+  input.receipt!.totals = {
+    grossMinor: 100000,
+    discountMinor: 0,
+    netMinor: 100000,
+    tenderedMinor: 100000,
+    changeMinor: 0,
+  };
+  input.receipt!.lines[0] = {
+    ...input.receipt!.lines[0]!,
+    unitPriceMinor: 100000,
+    lineTotalMinor: 100000,
+  };
+  render(<CounterReceiptView {...input} />);
+  const receipt = within(screen.getByRole('region', { name: 'Receipt 12' }));
+  for (const [type, amount] of [
+    ['CASH', '600.00'],
+    ['CREDIT', '300.00'],
+    ['WALLET', '100.00'],
+  ] as const) {
+    expect(receipt.getByText(type).parentElement).toHaveTextContent(amount);
+  }
+});
+
 it('disables controls while refreshing the receipt', () => {
   render(<CounterReceiptView {...props({ printing: true })} />);
   expect(screen.getByLabelText('Format')).toBeDisabled();

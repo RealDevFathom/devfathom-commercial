@@ -935,6 +935,73 @@ describe('PharmacyCounterConsole durable tender recovery', () => {
   });
 });
 
+describe('PharmacyCounterConsole split tender', () => {
+  it.each(['CASH', 'WALLET'])('settles equal %s rows with distinct keys', async (type) => {
+    const bill = cart({
+      lines: cart().lines.map((line) => ({
+        ...line,
+        unitPriceMinor: 100000,
+        proRataCeilingMinor: 100000,
+        lineTotalMinor: 100000,
+      })),
+      totals: { grossMinor: 100000, discountMinor: 0, netMinor: 100000, tenderedMinor: 0 },
+    });
+    mocks.queries.counterCart!.data = bill;
+    const receipt: CounterReceipt = {
+      saleId: 'sale-a',
+      receiptNumber: 42,
+      branchName: 'Synthetic branch',
+      businessDate: '2026-11-01',
+      completedAt: '2026-11-01T10:00:00Z',
+      currency: 'PKR',
+      lines: bill.lines.map((line) => ({ ...line, batchNumber: 'BATCH-A', expiresAt: '2036-01-01' })),
+      tenders: [0, 1].map((index) => ({
+        tenderId: `tender-${index}`,
+        type,
+        amountMinor: 50000,
+        changeGivenMinor: 0,
+      })),
+      totals: { ...bill.totals, tenderedMinor: 100000, changeMinor: 0 },
+    };
+    mocks.receiptRefetch.mockResolvedValue({ isSuccess: true, data: receipt });
+    mocks.mutations.tender!.mockImplementation(async () => {
+      const count = mocks.mutations.tender!.mock.calls.length;
+      mocks.queries.counterCart!.data = cart({
+        lines: bill.lines,
+        status: count === 2 ? 'COMPLETED' : 'OPEN',
+        receiptNumber: count === 2 ? 42 : null,
+        tenders: Array.from({ length: count }, (_, index) => ({
+          tenderId: `tender-${index}`,
+          type,
+          amountMinor: 50000,
+        })),
+        totals: {
+          ...bill.totals,
+          tenderedMinor: count * 50000,
+        },
+      });
+      return { ...accepted(count === 2 ? 0 : 50000), tenderId: `tender-${count - 1}` };
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    fireEvent.change(screen.getByLabelText('Tender'), { target: { value: type } });
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '500' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Take payment' })).toBeEnabled());
+    expect(screen.queryByText('Settled')).not.toBeInTheDocument();
+    expect(screen.getByRole('list', { name: 'Recorded tenders' }).children).toHaveLength(1);
+    // The blank next amount pays the authoritative remainder, also Rs 500.
+    fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
+    await screen.findByText('Settled');
+    expect(mocks.mutations.tender).toHaveBeenCalledTimes(2);
+    expect(mocks.mutations.tender!.mock.calls.map(([input]) => input.idempotencyKey)).toEqual([
+      `counter-tender:sale-a:${type}:50000`,
+      `counter-tender:sale-a:${type}:50000:after:50000`,
+    ]);
+    expect(screen.getByRole('list', { name: 'Recorded tenders' }).children).toHaveLength(2);
+    expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
+  });
+});
+
 describe('PharmacyCounterConsole Khata wiring', () => {
   it('persists and dispatches the selected family with no password fields', async () => {
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
