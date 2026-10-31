@@ -6,7 +6,9 @@ name: Image build
 # native x64 runner, before merge. It needs no secret: the Dockerfile supplies
 # its own AUTH_SECRET=container-build-only, and nothing here pushes or deploys.
 
-on: pull_request
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
 
 permissions:
   contents: read
@@ -18,6 +20,7 @@ concurrency:
 jobs:
   build:
     name: Build the image on native amd64
+    if: contains(github.event.pull_request.labels.*.name, 'ci-ready') || github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
       # The point of this job is the architecture. If `ubuntu-latest` ever moves
