@@ -500,6 +500,46 @@ describe('handleInboundWhatsAppMessage consent gate', () => {
     }
   );
 
+  it.each([false, true])(
+    'STOP revokes older promotional grants regardless of delivery order (START first: %s)',
+    async (startFirst) => {
+      knownCustomer(true);
+      const at = new Date('2026-10-06T09:00:00Z');
+      const whatsapp = { ...recordedConsent('MARKETING', true, at), id: 'wa' };
+      const sms = { ...recordedConsent('MARKETING', true, at), id: 'sms', channel: 'SMS' };
+      const email = { ...recordedConsent('MARKETING', true, at), id: 'email', channel: 'EMAIL' };
+      store.consents = [whatsapp, sms, email];
+      const stop = { ...message('STOP'), receivedAt: new Date('2026-10-06T10:00:00Z') };
+      const start = { ...message('START'), receivedAt: new Date('2026-10-06T10:01:00Z') };
+      if (startFirst) {
+        await expect(handleInboundWhatsAppMessage('org_a', provider, start)).resolves.toBe(
+          'OPTED_IN'
+        );
+        await expect(handleInboundWhatsAppMessage('org_a', provider, stop)).resolves.toBe(
+          'STALE_CONSENT'
+        );
+        expect(store.logs.at(-1)).toMatchObject({ error: 'STALE_UTILITY_CONSENT' });
+        expect(store.logs.at(-1)?.status).not.toBe('IGNORED');
+      } else {
+        await handleInboundWhatsAppMessage('org_a', provider, stop);
+        await handleInboundWhatsAppMessage('org_a', provider, start);
+      }
+      expect(store.customers[0].whatsappOptIn).toBe(true);
+      const written = store.consents.slice(3);
+      expect(written.map((row) => [row.purpose, row.channel, row.supersedesId])).toEqual(
+        expect.arrayContaining([
+          ['MARKETING', 'WHATSAPP', 'wa'],
+          ['MARKETING', 'SMS', 'sms'],
+          ['MARKETING', 'EMAIL', 'email'],
+        ])
+      );
+      expect(written).toHaveLength(3);
+      for (const row of written)
+        expect(row).toMatchObject({ granted: false, source: 'REPLY', recordedAt: stop.receivedAt });
+      expect(await marketingEligibility()).toBe('OPTED_OUT');
+    }
+  );
+
   it('does not let a replayed STOP undo a later START', async () => {
     knownCustomer(true);
     const stop = message('STOP');

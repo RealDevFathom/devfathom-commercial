@@ -205,10 +205,13 @@ export async function handleInboundWhatsAppMessage(
         data: { whatsappOptIn: optIn, whatsappOptInChangedAt: message.receivedAt },
       });
       staleConsent = changed.count === 0;
+      let revoked = 0;
       // START enables utility replies only. Marketing grants require their own
       // explicit counter/QR consent; STOP revokes promotional consent on every
       // channel, while service purposes (dispensing, reminders) are untouched.
-      if (!staleConsent && !optIn) {
+      // Each purpose/channel is judged against its own history, not the utility
+      // flag: a STOP delivered after a newer START still withdraws older grants.
+      if (!optIn) {
         for (const purpose of STOP_REVOKED_PURPOSES)
           for (const channel of CONSENT_CHANNELS) {
             const latest = await db.patientConsent.findFirst({
@@ -237,12 +240,16 @@ export async function handleInboundWhatsAppMessage(
               },
               message.receivedAt
             );
+            revoked += 1;
           }
       }
       if (staleConsent)
         await db.pharmacyMessageLog.update({
           where: { id: inboundId },
-          data: { status: 'IGNORED', error: 'STALE_CONSENT' },
+          data:
+            revoked > 0
+              ? { error: 'STALE_UTILITY_CONSENT' }
+              : { status: 'IGNORED', error: 'STALE_CONSENT' },
         });
     }
     return { customer, inboundId, staleConsent };
