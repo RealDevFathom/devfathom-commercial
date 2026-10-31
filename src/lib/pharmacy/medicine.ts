@@ -97,14 +97,37 @@ export function priceFromLot(input: {
   canonicalUnitsPerSaleUnit: number;
   roundingIncrementMinor?: number;
 }): { unitPriceMinor: number; proRataCeilingMinor: number } {
-  const loose = deriveLooseUnitPrice({
+  const roundingIncrementMinor = input.roundingIncrementMinor ?? 1;
+  // Reuse the loose-price validation, then calculate the pro-rata amount for
+  // this sale unit directly. Multiplying an already-floored loose price loses
+  // the pack's remainder (for example, 1000 / 3 * 3 used to charge 999).
+  deriveLooseUnitPrice({
     printedMrpMinor: input.printedMrpMinor,
     canonicalUnitsInPack: input.canonicalUnitsInPack,
-    roundingIncrementMinor: input.roundingIncrementMinor ?? 1,
+    roundingIncrementMinor,
   });
+  if (
+    !Number.isSafeInteger(input.canonicalUnitsPerSaleUnit) ||
+    input.canonicalUnitsPerSaleUnit <= 0 ||
+    input.canonicalUnitsPerSaleUnit > input.canonicalUnitsInPack
+  ) {
+    throw new PharmacyMedicineError('INVALID_PRICE');
+  }
+
+  const proRataCeilingMinor = Number(
+    (BigInt(input.printedMrpMinor) * BigInt(input.canonicalUnitsPerSaleUnit)) /
+      BigInt(input.canonicalUnitsInPack)
+  );
+  // A sealed pack carries its printed MRP exactly. Partial sale units remain
+  // rounded down to the configured increment and therefore never exceed their
+  // pro-rata share.
+  const unitPriceMinor =
+    input.canonicalUnitsPerSaleUnit === input.canonicalUnitsInPack
+      ? input.printedMrpMinor
+      : Math.floor(proRataCeilingMinor / roundingIncrementMinor) * roundingIncrementMinor;
   return {
-    unitPriceMinor: loose.unitPriceMinor * input.canonicalUnitsPerSaleUnit,
-    proRataCeilingMinor: loose.proRataCeilingMinor * input.canonicalUnitsPerSaleUnit,
+    unitPriceMinor,
+    proRataCeilingMinor,
   };
 }
 

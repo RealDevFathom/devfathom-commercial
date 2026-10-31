@@ -2,7 +2,7 @@ name: QA gate
 
 on:
   push:
-    branches: [restaurantv2]
+    branches: [restaurantv2, develop]
   pull_request:
     types: [opened, synchronize, reopened, labeled]
     branches:
@@ -155,12 +155,20 @@ jobs:
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.sha || github.sha }}
           fetch-depth: 0
+      # Vitest's jsdom dependency currently resolves undici 8, which uses the
+      # zstd API available in Node 22.20+. setup-bun alone leaves the runner's moving Node default in
+      # place, and `bunx vitest` uses that Node runtime for worker processes.
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22.20.0
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.2
+      # Vitest fork workers execute under Node. Undici in the frozen lockfile
+      # requires the Zstd APIs available in current Node 22, not Node 20.
       - uses: actions/setup-node@v6
         with:
-          node-version: 24
+          node-version: 22
       - run: bun install --frozen-lockfile
       - name: Run automated gate and retain every exit code
         shell: bash
@@ -276,10 +284,22 @@ jobs:
             : > gate/reserved-role-check.stdout.log
             record reserved-role-check 1
           fi
-          DATABASE_URL="$COHORT_RUNTIME_URL" TEST_DATABASE_URL="$COHORT_RUNTIME_URL" PHARMACY_REPEAT_PURCHASING_TEST_DATABASE_URL="$COHORT_RUNTIME_URL" run vitest-cohort bunx vitest run src/lib/pharmacy/repeat-purchasing.db.test.ts --pool=threads --maxWorkers=1 --no-file-parallelism --reporter=json --outputFile=gate/vitest-cohort.json
-          DATABASE_URL="$RECEIPT_RUNTIME_URL" TEST_DATABASE_URL="$RECEIPT_RUNTIME_URL" WHA1364_RECEIPT_TEST_DATABASE_URL="$RECEIPT_RUNTIME_URL" run vitest-receipt bunx vitest run src/lib/pharmacy/receipt-identity.db.test.ts --pool=threads --maxWorkers=1 --no-file-parallelism --reporter=json --outputFile=gate/vitest-receipt.json
-          CATERING_MONEY_DB_SLOT=reserved DATABASE_URL="$CATERING_RUNTIME_URL" TEST_DATABASE_URL="$CATERING_RUNTIME_URL" run vitest-catering bunx vitest run src/lib/restaurant/catering-money.db.test.ts src/lib/restaurant/catering-runtime.db.test.ts src/lib/restaurant/catering-endpoints.db.test.ts --pool=threads --maxWorkers=1 --no-file-parallelism --reporter=json --outputFile=gate/vitest-catering.json
-          RESTAURANT_DEMO_RESET_DB=1 run vitest bunx vitest run --exclude=src/lib/pharmacy/repeat-purchasing.db.test.ts --exclude=src/lib/pharmacy/receipt-identity.db.test.ts --exclude=src/lib/restaurant/catering-money.db.test.ts --exclude=src/lib/restaurant/catering-runtime.db.test.ts --exclude=src/lib/restaurant/catering-endpoints.db.test.ts --pool=threads --maxWorkers=1 --no-file-parallelism --reporter=json --outputFile=gate/vitest.json
+          DATABASE_URL="$COHORT_RUNTIME_URL" TEST_DATABASE_URL="$COHORT_RUNTIME_URL" PHARMACY_REPEAT_PURCHASING_TEST_DATABASE_URL="$COHORT_RUNTIME_URL" run vitest-cohort bunx vitest run src/lib/pharmacy/repeat-purchasing.db.test.ts --maxWorkers=1 --no-file-parallelism --reporter=json --outputFile=gate/vitest-cohort.json
+          DATABASE_URL="$RECEIPT_RUNTIME_URL" TEST_DATABASE_URL="$RECEIPT_RUNTIME_URL" WHA1364_RECEIPT_TEST_DATABASE_URL="$RECEIPT_RUNTIME_URL" run vitest-receipt bunx vitest run src/lib/pharmacy/receipt-identity.db.test.ts --maxWorkers=1 --no-file-parallelism --reporter=json --outputFile=gate/vitest-receipt.json
+          CATERING_MONEY_DB_SLOT=reserved DATABASE_URL="$CATERING_RUNTIME_URL" TEST_DATABASE_URL="$CATERING_RUNTIME_URL" run vitest-catering bunx vitest run src/lib/restaurant/catering-money.db.test.ts src/lib/restaurant/catering-runtime.db.test.ts src/lib/restaurant/catering-endpoints.db.test.ts --maxWorkers=1 --no-file-parallelism --reporter=json --outputFile=gate/vitest-catering.json
+          run reserved-db-start docker run -d --name reserved-tests-postgres --network host -e POSTGRES_PASSWORD=gate-reserved-ci-only postgres:16 -p 55677 -c listen_addresses=127.0.0.1
+          # ci-reserved-tests runs the isolated suites and writes each Vitest JSON report into
+          # CI_RESERVED_EVIDENCE_DIR. Keep the report contract explicit here so the final gate can
+          # never silently depend on a lane that this step did not produce.
+          CI_RESERVED_EVIDENCE_DIR=gate CI_RESERVED_ADMIN_DATABASE_URL=postgresql://postgres:gate-reserved-ci-only@127.0.0.1:55677/postgres run vitest-reserved bunx tsx scripts/ci-reserved-tests.ts
+          run vitest-reserved-reports test -s gate/vitest-counter-evidence.json -a -s gate/vitest-growth.json -a -s gate/vitest-platform-concurrency.json -a -s gate/vitest-price-intelligence.json -a -s gate/vitest-returns.json
+          run boundary-db-start docker run -d --name boundary-tests-postgres --network host -e POSTGRES_PASSWORD=gate-reserved-ci-only postgres:16 -p 55678 -c listen_addresses=127.0.0.1
+          CI_RESERVED_EVIDENCE_DIR=gate CI_RESERVED_ADMIN_DATABASE_URL=postgresql://postgres:gate-reserved-ci-only@127.0.0.1:55678/postgres run vitest-boundary bunx tsx scripts/ci-reserved-tests.ts
+          run vitest-boundary-report test -s gate/vitest-boundary-http.json
+          run growth-acceptance-db-start docker run -d --name growth-acceptance-postgres --network host -e POSTGRES_PASSWORD=gate-reserved-ci-only postgres:16 -p 55683 -c listen_addresses=127.0.0.1
+          CI_RESERVED_EVIDENCE_DIR=gate CI_RESERVED_ADMIN_DATABASE_URL=postgresql://postgres:gate-reserved-ci-only@127.0.0.1:55683/postgres run vitest-growth-acceptance bunx tsx scripts/ci-reserved-tests.ts
+          run vitest-growth-acceptance-reports test -s gate/vitest-growth-ready.json -a -s gate/vitest-growth-sandbox.json
+          RESTAURANT_DEMO_RESET_DB=1 run vitest bunx vitest run --exclude=tests/platform-login-accessibility.browser.test.ts --exclude=src/lib/pharmacy/counter-evidence.db.test.ts --exclude=tests/restaurant-growth-ready.db.test.ts --exclude=tests/restaurant-growth-sandbox.db.test.ts --exclude=src/app/api/trpc/transaction-boundary.real-http.test.ts --exclude=src/lib/restaurant/growth-concurrency.db.test.ts --exclude=tests/platform-sensitive-concurrency.db.test.ts --exclude=tests/pharmacy-price-intelligence.integration.test.ts --exclude=src/lib/pharmacy/settlement.returns.db.test.ts --exclude=src/lib/pharmacy/repeat-purchasing.db.test.ts --exclude=src/lib/pharmacy/receipt-identity.db.test.ts --exclude=src/lib/restaurant/catering-money.db.test.ts --exclude=src/lib/restaurant/catering-runtime.db.test.ts --exclude=src/lib/restaurant/catering-endpoints.db.test.ts --maxWorkers=1 --no-file-parallelism --reporter=json --outputFile=gate/vitest.json
           # test:rls creates its own NOLOGIN role and does not start the app.
           DATABASE_URL="$SUPERUSER_URL" TEST_DATABASE_URL="$SUPERUSER_URL" run test-rls bun run test:rls
           run lint bun run lint
@@ -297,6 +317,8 @@ jobs:
 
           NODE_OPTIONS=--max-old-space-size=8192 run typecheck bun run typecheck
           NODE_OPTIONS=--max-old-space-size=8192 run build bun run build
+          run browser-dependencies bunx playwright install --with-deps chromium
+          run vitest-platform-login bunx tsx scripts/ci-platform-login-a11y.ts
           for file in infra/*.bicep; do
             name="bicep-$(basename "$file" .bicep)"
             run "$name" az bicep build --file "$file" --outfile "gate/${name}.json"
@@ -327,7 +349,7 @@ jobs:
           const requiredZero = ['numFailedTests', 'numFailedTestSuites', 'numPendingTests', 'numPendingTestSuites', 'numTodoTests'];
           const requiredPositive = ['numTotalTests', 'numTotalTestSuites', 'numPassedTests', 'numPassedTestSuites'];
           const totals = Object.fromEntries([...requiredZero, ...requiredPositive].map((field) => [field, 0]));
-          for (const lane of ['vitest', 'vitest-cohort', 'vitest-receipt', 'vitest-catering']) {
+          for (const lane of ['vitest', 'vitest-cohort', 'vitest-receipt', 'vitest-catering', 'vitest-counter-evidence', 'vitest-growth', 'vitest-platform-concurrency', 'vitest-price-intelligence', 'vitest-returns', 'vitest-boundary-http', 'vitest-growth-ready', 'vitest-growth-sandbox', 'vitest-platform-login']) {
             try {
               const report = JSON.parse(fs.readFileSync(`gate/${lane}.json`, 'utf8'));
               for (const field of [...requiredZero, ...requiredPositive]) {
@@ -361,7 +383,7 @@ jobs:
         image: postgres:16
         env:
           POSTGRES_PASSWORD: gate-postgres-ci-only
-        ports: ['55432:5432']
+        ports: ['55676:5432']
         options: >-
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s
@@ -396,12 +418,12 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.sha || github.sha }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22.20.0
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.2
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 24
       - run: bun install --frozen-lockfile
       - name: Install Chromium
         run: bunx playwright install --with-deps chromium
@@ -420,13 +442,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          owner_base='postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432'
-          PGPASSWORD=gate-postgres-ci-only psql -h 127.0.0.1 -p 55432 -U postgres -d postgres -v ON_ERROR_STOP=1 <<'SQL'
+          owner_base='postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55676'
+          PGPASSWORD=gate-postgres-ci-only psql -h 127.0.0.1 -p 55676 -U postgres -d postgres -v ON_ERROR_STOP=1 <<'SQL'
           CREATE ROLE gate_owner LOGIN PASSWORD 'gate-owner-ci-only' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT;
           CREATE ROLE gate_runtime LOGIN PASSWORD 'gate-runtime-ci-only' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT;
           SQL
           for db in restaurant_e2e_gate platform_e2e_gate agency_e2e_gate pharmacy_e2e_gate; do
-            PGPASSWORD=gate-postgres-ci-only psql -h 127.0.0.1 -p 55432 -U postgres -d postgres -v ON_ERROR_STOP=1 \
+            PGPASSWORD=gate-postgres-ci-only psql -h 127.0.0.1 -p 55676 -U postgres -d postgres -v ON_ERROR_STOP=1 \
               -c "CREATE DATABASE $db OWNER gate_owner;" \
               -c "REVOKE ALL ON DATABASE $db FROM PUBLIC;" \
               -c "GRANT CONNECT, TEMPORARY ON DATABASE $db TO gate_runtime;"
@@ -439,8 +461,11 @@ jobs:
               -c 'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO gate_runtime;' \
               -c 'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO gate_runtime;'
             DATABASE_URL="$owner_base/$db" MIGRATION_DATABASE_URL="$owner_base/$db" bunx prisma db seed
+            # Match the narrow medicine-search grant in prepare-runtime-role.ts.
+            PGPASSWORD=gate-postgres-ci-only psql -h 127.0.0.1 -p 55676 -U postgres -d "$db" -v ON_ERROR_STOP=1 \
+              -c 'GRANT EXECUTE ON FUNCTION public.similarity_op(text,text) TO gate_runtime;'
           done
-          role_attributes=$(PGPASSWORD=gate-runtime-ci-only psql -h 127.0.0.1 -p 55432 -U gate_runtime -d restaurant_e2e_gate -Atc "SELECT rolsuper::text || ':' || rolbypassrls::text || ':' || EXISTS (SELECT 1 FROM pg_roles r WHERE r.rolname <> current_user AND (r.rolsuper OR r.rolbypassrls) AND pg_has_role(current_user, r.oid, 'member'))::text FROM pg_roles WHERE rolname = current_user")
+          role_attributes=$(PGPASSWORD=gate-runtime-ci-only psql -h 127.0.0.1 -p 55676 -U gate_runtime -d restaurant_e2e_gate -Atc "SELECT rolsuper::text || ':' || rolbypassrls::text || ':' || EXISTS (SELECT 1 FROM pg_roles r WHERE r.rolname <> current_user AND (r.rolsuper OR r.rolbypassrls) AND pg_has_role(current_user, r.oid, 'member'))::text FROM pg_roles WHERE rolname = current_user")
           if [ "$role_attributes" != 'false:false:false' ]; then
             echo "Runtime database role is not restricted: ${role_attributes:-<empty>}" >&2
             exit 1
@@ -452,22 +477,27 @@ jobs:
         id: restaurant
         continue-on-error: true
         env:
-          DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/restaurant_e2e_gate
-          TEST_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/restaurant_e2e_gate
-          RESTAURANT_E2E_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/restaurant_e2e_gate
+          DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55676/restaurant_e2e_gate
+          TEST_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55676/restaurant_e2e_gate
+          RESTAURANT_E2E_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55676/restaurant_e2e_gate
           RESTAURANT_INTEGRATED_E2E: '1'
+          DEFAULT_ORGANIZATION_ID: org_chai_chowk
+          RESTAURANT_E2E_CLONE_ADMIN_URL: postgresql://postgres:gate-postgres-ci-only@127.0.0.1:55676/restaurant_e2e_gate
+          RESTAURANT_ACTOR_OWNER_DATABASE_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55676/restaurant_e2e_gate
+          RESTAURANT_E2E_SKIP_BUILD: '1'
+          RESTAURANT_E2E_EVIDENCE_DIR: gate/browser/restaurant-files
           PLAYWRIGHT_JSON_OUTPUT_NAME: gate/browser/restaurant-results.json
           PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/restaurant
         run: >-
           bunx tsx scripts/run-restaurant-e2e.ts
           tests/e2e/restaurant-controls-final.spec.ts
-          tests/e2e/restaurant-catering.spec.ts
           tests/e2e/restaurant-integrated.spec.ts
           tests/e2e/restaurant-insights-completion.spec.ts
           tests/e2e/restaurant-lifecycles-final.spec.ts
           tests/e2e/restaurant-pos-kds.spec.ts
           tests/e2e/restaurant-pos-kds-resilience.spec.ts
           tests/e2e/restaurant-delivery.spec.ts
+          tests/e2e/time-to-first-sale.spec.ts
           tests/e2e/restaurant-foh-lifecycle-acceptance.spec.ts
           tests/e2e/restaurant-admin-lifecycle-acceptance.spec.ts
           tests/e2e/restaurant-backoffice-lifecycle-acceptance.spec.ts
@@ -480,13 +510,26 @@ jobs:
       - name: Record 02-run-restaurant
         if: always()
         run: printf '02-run-restaurant=%s\n' '${{ steps.restaurant.outcome == 'success' && '0' || '1' }}' >> gate/browser/exit-codes.txt
+      - name: 04-run-catering
+        id: catering
+        continue-on-error: true
+        env:
+          CI_RESERVED_ADMIN_DATABASE_URL: postgresql://postgres:gate-catering-ci-only@127.0.0.1:55683/postgres
+          CI_RESERVED_EVIDENCE_DIR: gate/browser/catering
+          PLAYWRIGHT_JSON_OUTPUT_FILE: ${{ github.workspace }}/gate/browser/catering-results.json
+        run: |
+          docker run -d --name catering-acceptance-postgres --network host -e POSTGRES_PASSWORD=gate-catering-ci-only postgres:16 -p 55683 -c listen_addresses=127.0.0.1
+          bunx tsx scripts/ci-restaurant-catering-e2e.ts
+      - name: Record 04-run-catering
+        if: always()
+        run: printf '04-run-catering=%s\n' '${{ steps.catering.outcome == 'success' && '0' || '1' }}' >> gate/browser/exit-codes.txt
       - name: 03-run-platform
         id: platform
         continue-on-error: true
         env:
-          DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/platform_e2e_gate
-          TEST_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/platform_e2e_gate
-          PLAYWRIGHT_DATABASE_ADMIN_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/platform_e2e_gate?options=-c%20app.is_platform_admin%3Dtrue
+          DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55676/platform_e2e_gate
+          TEST_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55676/platform_e2e_gate
+          PLAYWRIGHT_DATABASE_ADMIN_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55676/platform_e2e_gate?options=-c%20app.is_platform_admin%3Dtrue
           TRUSTED_PROXY_HOPS: '1'
           PLAYWRIGHT_JSON_OUTPUT_FILE: ${{ github.workspace }}/gate/browser/platform-results.json
           PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/platform
@@ -498,9 +541,9 @@ jobs:
         id: agency
         continue-on-error: true
         env:
-          DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/agency_e2e_gate
-          TEST_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/agency_e2e_gate
-          AGENCY_E2E_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/agency_e2e_gate
+          DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55676/agency_e2e_gate
+          TEST_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55676/agency_e2e_gate
+          AGENCY_E2E_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55676/agency_e2e_gate
           AGENCY_E2E: '1'
           TRUSTED_PROXY_HOPS: '1'
           PLAYWRIGHT_JSON_OUTPUT_NAME: gate/browser/agency-results.json
@@ -513,9 +556,9 @@ jobs:
         id: pharmacy
         continue-on-error: true
         env:
-          DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/pharmacy_e2e_gate
-          TEST_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/pharmacy_e2e_gate
-          PHARMACY_E2E_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/pharmacy_e2e_gate
+          DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55676/pharmacy_e2e_gate
+          TEST_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55676/pharmacy_e2e_gate
+          PHARMACY_E2E_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55676/pharmacy_e2e_gate
           PHARMACY_E2E: '1'
           TRUSTED_PROXY_HOPS: '1'
           PLAYWRIGHT_JSON_OUTPUT_NAME: gate/browser/pharmacy-results.json
@@ -538,6 +581,7 @@ jobs:
             '01-provision',
             '02-run-restaurant',
             '03-run-platform',
+            '04-run-catering',
             '05-run-agency',
             'pharmacy-counter-time-to-first-sale',
           ];
@@ -608,16 +652,15 @@ jobs:
           }
           const restaurant = totals('restaurant');
           const platform = totals('platform');
+          const catering = totals('catering');
           const agency = totals('agency');
           const pharmacy = totals('pharmacy');
-          // 68, counted from the lane's own `--list` output rather than by hand:
-          // 18 legacy cases (controls-final 5, pos-kds-resilience 3, integrated 3,
-          // lifecycles-final 2, catering 2, pos-kds 1, delivery 1,
-          // time-to-first-sale 1) + 7 insights-completion + the 43 WHA-1542
-          // acceptance cases (4+3+5+8+3+7+3+10). Every failure guard is unchanged:
-          // a skip, a did-not-run or an unexpected result still fails.
-          if (restaurant.expected !== 68 || restaurant.unexpected !== 0 || restaurant.skipped !== 0 || restaurant.didNotRun !== 0)
-            failures.push(`restaurant totals ${JSON.stringify(restaurant)}; require 68/68, unexpected 0, skipped 0, did-not-run 0`);
+          // 70 generic cases plus seven admitted catering cases, including time-to-first-sale.
+          // A skip, a did-not-run or an unexpected result still fails.
+          if (restaurant.expected !== 70 || restaurant.unexpected !== 0 || restaurant.skipped !== 0 || restaurant.didNotRun !== 0)
+            failures.push(`restaurant totals ${JSON.stringify(restaurant)}; require 70/70, unexpected 0, skipped 0, did-not-run 0`);
+          if (catering.expected !== 7 || catering.unexpected !== 0 || catering.skipped !== 0 || catering.didNotRun !== 0)
+            failures.push(`catering totals ${JSON.stringify(catering)}; require 7/7, unexpected 0, skipped 0, did-not-run 0`);
           if (platform.unexpected !== 0 || platform.didNotRun !== 0 || platform.skipped !== 0)
             failures.push(`platform totals ${JSON.stringify(platform)}; require unexpected 0, did-not-run 0, skipped 0`);
           if (agency.expected !== 8 || agency.unexpected !== 0 || agency.skipped !== 0)

@@ -60,9 +60,11 @@ describe('OrderTicketPanel', () => {
       />
     );
 
-    expect(screen.getByRole('button', { name: 'Hold' })).toHaveClass('h-11');
-    expect(screen.getByRole('button', { name: 'Fire' })).toHaveClass('h-11');
-    expect(screen.getByRole('button', { name: 'Void Steak' })).toHaveClass('h-11');
+    for (const name of ['Hold', 'Fire', 'Void Steak']) {
+      const action = screen.getByRole('button', { name });
+      expect(action).toHaveClass('h-11');
+      expect(action).not.toHaveClass('h-8');
+    }
   });
 
   it('routes hold, fire, and whole-order send actions', () => {
