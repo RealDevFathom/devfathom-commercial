@@ -413,7 +413,7 @@ type AllocateSupplierCreditInput = {
   at: Date;
 };
 
-const allocationTurns = new WeakMap<ScopedDb, Promise<void>>();
+const allocationTurns = new WeakMap<Prisma.TransactionClient, Promise<void>>();
 
 /**
  * Settle part or all of a debit note from a recorded credit. The two ceilings —
@@ -422,7 +422,7 @@ const allocationTurns = new WeakMap<ScopedDb, Promise<void>>();
  * closing the money on it (§8A invariant 26).
  */
 export async function allocateSupplierCredit(
-  db: ScopedDb,
+  db: Prisma.TransactionClient,
   scope: LedgerScope,
   input: AllocateSupplierCreditInput
 ) {
@@ -445,7 +445,7 @@ export async function allocateSupplierCredit(
 }
 
 async function allocateLockedSupplierCredit(
-  db: ScopedDb,
+  db: Prisma.TransactionClient,
   scope: LedgerScope,
   input: AllocateSupplierCreditInput
 ) {

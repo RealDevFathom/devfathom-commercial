@@ -212,6 +212,19 @@ beforeAll(async () => {
   ]);
   deps = { withTenantDb: scopedDb.withTenantDb, ledger, returns };
   await roleGuard.assertRlsEnforcingRole(scopedDb.withPlatformDb);
+  // Journal visibility anchors require real tenants before returns post claims.
+  await scopedDb.withPlatformDb((db) =>
+    db.organization.createMany({
+      data: [ORG_A, ORG_B].map((id) => ({
+        id,
+        slug: id,
+        legalName: id,
+        displayName: id,
+        vertical: 'PHARMACY' as const,
+        status: 'ACTIVE' as const,
+      })),
+    })
+  );
 }, 120_000);
 
 // ── PUR-06 acceptance: a claimed quantity cannot be sold ────────────────────
