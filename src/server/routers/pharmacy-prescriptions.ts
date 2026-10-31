@@ -16,6 +16,7 @@ import {
   searchCounterPatients,
 } from '@/lib/pharmacy/counter-prescriptions';
 import { auditPatientRead, maskedPatient } from '@/lib/pharmacy/patient-prescriptions';
+import { readableCustomerRequestPhoto } from '@/lib/pharmacy/customer-portal-staff';
 import { captureRefillReminder, RefillSupportError } from '@/lib/pharmacy/refill-support';
 import {
   configuredRxOcrAdapterName,
@@ -67,7 +68,7 @@ async function readableSourceFile(
   ctx: {
     db: ScopedDb;
     entitlements: { organizationId: string };
-    session: { user: { id: string } };
+    session: { user: { id: string; role?: string | null } };
   },
   sourceFileRef: string
 ) {
@@ -81,7 +82,20 @@ async function readableSourceFile(
     where: { organizationId, patientId: file.patientId, sourceFileRef },
     select: { id: true },
   });
-  if (!patient || (!prescription && file.uploadedByUserId !== ctx.session.user.id)) {
+  const customerFile = file.uploadedByUserId.startsWith('customer:');
+  const readable =
+    file.uploadedByUserId === ctx.session.user.id ||
+    (!customerFile && prescription) ||
+    (customerFile &&
+      (await readableCustomerRequestPhoto(
+        ctx.db,
+        organizationId,
+        ctx.session.user,
+        file,
+        sourceFileRef,
+        true
+      )));
+  if (!patient || !readable) {
     throw new TRPCError({ code: 'NOT_FOUND', message: 'Prescription image unavailable.' });
   }
   return file;
@@ -290,7 +304,17 @@ export const pharmacyPrescriptionsRouter = router({
       const { lines, ...prescription } = input;
       const organizationId = ctx.entitlements.organizationId;
       const file = await loadPrescriptionFile(organizationId, input.sourceFileRef);
-      if (file.patientId !== input.patientId || file.uploadedByUserId !== ctx.session.user.id) {
+      if (
+        file.patientId !== input.patientId ||
+        (file.uploadedByUserId !== ctx.session.user.id &&
+          !(await readableCustomerRequestPhoto(
+            ctx.db,
+            organizationId,
+            ctx.session.user,
+            file,
+            input.sourceFileRef
+          )))
+      ) {
         throw new TRPCError({
           code: 'NOT_FOUND',
           message: 'Prescription image unavailable for this patient.',

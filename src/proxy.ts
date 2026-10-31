@@ -23,6 +23,7 @@ const publicPaths = [
   '/api/auth',
   '/brand',
   '/wallet',
+  '/pharmacy/customer',
 ];
 
 /**

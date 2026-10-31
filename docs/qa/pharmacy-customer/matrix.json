@@ -1,0 +1,165 @@
+{
+  "matrix": [
+    {
+      "width": 375,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "entry": 200,
+      "overflow": false,
+      "touchTargets": true,
+      "axeViolations": 0,
+      "emptyState": true
+    },
+    {
+      "width": 375,
+      "theme": "light",
+      "reducedMotion": "reduce",
+      "entry": 200,
+      "overflow": false,
+      "touchTargets": true,
+      "axeViolations": 0,
+      "emptyState": true
+    },
+    {
+      "width": 375,
+      "theme": "dark",
+      "reducedMotion": "no-preference",
+      "entry": 200,
+      "overflow": false,
+      "touchTargets": true,
+      "axeViolations": 0,
+      "emptyState": true
+    },
+    {
+      "width": 375,
+      "theme": "dark",
+      "reducedMotion": "reduce",
+      "entry": 200,
+      "overflow": false,
+      "touchTargets": true,
+      "axeViolations": 0,
+      "emptyState": true
+    },
+    {
+      "width": 768,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "entry": 200,
+      "overflow": false,
+      "touchTargets": true,
+      "axeViolations": 0,
+      "emptyState": true
+    },
+    {
+      "width": 768,
+      "theme": "light",
+      "reducedMotion": "reduce",
+      "entry": 200,
+      "overflow": false,
+      "touchTargets": true,
+      "axeViolations": 0,
+      "emptyState": true
+    },
+    {
+      "width": 768,
+      "theme": "dark",
+      "reducedMotion": "no-preference",
+      "entry": 200,
+      "overflow": false,
+      "touchTargets": true,
+      "axeViolations": 0,
+      "emptyState": true
+    },
+    {
+      "width": 768,
+      "theme": "dark",
+      "reducedMotion": "reduce",
+      "entry": 200,
+      "overflow": false,
+      "touchTargets": true,
+      "axeViolations": 0,
+      "emptyState": true
+    },
+    {
+      "width": 1024,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "entry": 200,
+      "overflow": false,
+      "touchTargets": true,
+      "axeViolations": 0,
+      "emptyState": true
+    },
+    {
+      "width": 1024,
+      "theme": "light",
+      "reducedMotion": "reduce",
+      "entry": 200,
+      "overflow": false,
+      "touchTargets": true,
+      "axeViolations": 0,
+      "emptyState": true
+    },
+    {
+      "width": 1024,
+      "theme": "dark",
+      "reducedMotion": "no-preference",
+      "entry": 200,
+      "overflow": false,
+      "touchTargets": true,
+      "axeViolations": 0,
+      "emptyState": true
+    },
+    {
+      "width": 1024,
+      "theme": "dark",
+      "reducedMotion": "reduce",
+      "entry": 200,
+      "overflow": false,
+      "touchTargets": true,
+      "axeViolations": 0,
+      "emptyState": true
+    },
+    {
+      "width": 1440,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "entry": 200,
+      "overflow": false,
+      "touchTargets": true,
+      "axeViolations": 0,
+      "emptyState": true
+    },
+    {
+      "width": 1440,
+      "theme": "light",
+      "reducedMotion": "reduce",
+      "entry": 200,
+      "overflow": false,
+      "touchTargets": true,
+      "axeViolations": 0,
+      "emptyState": true
+    },
+    {
+      "width": 1440,
+      "theme": "dark",
+      "reducedMotion": "no-preference",
+      "entry": 200,
+      "overflow": false,
+      "touchTargets": true,
+      "axeViolations": 0,
+      "emptyState": true
+    },
+    {
+      "width": 1440,
+      "theme": "dark",
+      "reducedMotion": "reduce",
+      "entry": 200,
+      "overflow": false,
+      "touchTargets": true,
+      "axeViolations": 0,
+      "emptyState": true
+    }
+  ],
+  "errors": []
+}

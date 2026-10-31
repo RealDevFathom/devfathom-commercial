@@ -15343,6 +15343,83 @@ model RateLimitBucket {
   @@map("rate_limit_buckets")
 }
 
+// Customer portal scalar mappings. The ordered SQL migration owns composite
+// identity FKs, checks, FORCE RLS, and append-only audit events (never db push).
+model PharmacyCustomerPortalSetting {
+  organizationId  String
+  branchId        String
+  config          Json
+  updatedByUserId String
+
+  @@id([organizationId, branchId])
+  @@map("pharmacy_customer_portal_settings")
+}
+
+model PharmacyCustomerOtpChallenge {
+  id             String    @id
+  organizationId String
+  branchId       String
+  customerId     String
+  phoneHash      String
+  digest         Bytes
+  salt           String
+  expiresAt      DateTime   @db.Timestamptz(3)
+  attempts       Int        @default(0)
+  maxAttempts    Int
+  consumedAt     DateTime?  @db.Timestamptz(3)
+  audit          Json       @default("[]")
+
+  @@index([expiresAt], map: "pharmacy_customer_otp_expiry")
+  @@map("pharmacy_customer_otp_challenges")
+}
+
+model PharmacyCustomerSession {
+  tokenHash      String    @id
+  organizationId String
+  branchId       String
+  customerId     String
+  phoneHash      String
+  expiresAt      DateTime  @db.Timestamptz(3)
+  revokedAt      DateTime? @db.Timestamptz(3)
+
+  @@index([expiresAt], map: "pharmacy_customer_session_expiry")
+  @@map("pharmacy_customer_sessions")
+}
+
+model PharmacyCustomerRequest {
+  id               String   @id
+  organizationId   String
+  branchId         String
+  customerId       String
+  kind             String
+  status           String   @default("AWAITING_PHARMACIST")
+  sourceSaleId     String?
+  sourceFileRef    String?
+  fulfilledSaleId  String?
+  idempotencyKey   String
+  payloadHash      String
+  createdAt        DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([organizationId, branchId, customerId, idempotencyKey])
+  @@unique([organizationId, branchId, id])
+  @@index([organizationId, branchId, status, createdAt], map: "pharmacy_customer_requests_queue")
+  @@map("pharmacy_customer_requests")
+}
+
+model PharmacyCustomerPortalEvent {
+  id             String   @id
+  organizationId String
+  branchId       String
+  customerId     String?
+  actorId        String
+  kind           String
+  requestId      String?
+  occurredAt     DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([organizationId, branchId, occurredAt], map: "pharmacy_customer_portal_events_scope")
+  @@map("pharmacy_customer_portal_events")
+}
+
 /// Work committed with a tenant mutation and delivered after that transaction.
 /// SMTP and outbound HTTP must not run on the request's pooled connection.
 model OutboundEffect {

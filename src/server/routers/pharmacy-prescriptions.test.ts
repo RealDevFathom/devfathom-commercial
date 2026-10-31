@@ -407,6 +407,45 @@ describe('prescription capture and private delivery', () => {
     });
   });
 
+  it('captures a customer-request photo only through its patient and assigned branch, even after capture', async () => {
+    const receipt = await upload();
+    for (const [key, bytes] of mocks.objects) {
+      const stored = JSON.parse(bytes.toString('utf8'));
+      stored.uploadedByUserId = 'customer:customer-a';
+      mocks.objects.set(key, Buffer.from(JSON.stringify(stored)));
+    }
+    const ctx = context();
+    const query = vi.fn().mockResolvedValue([{ branchId: 'branch-a' }]);
+    const assignment = vi.fn().mockResolvedValue({ id: 'assignment-a' });
+    Object.assign(ctx.db, {
+      $queryRaw: query,
+      pharmacyBranch: { findFirst: vi.fn().mockResolvedValue({ id: 'branch-a' }) },
+      pharmacyBranchAssignment: { findFirst: assignment },
+    });
+    await expect(caller(ctx).capture(captureInput(receipt.url))).resolves.toHaveProperty(
+      'sourceFileRef',
+      receipt.url
+    );
+    expect(query.mock.calls[0][0].values).toEqual(
+      expect.arrayContaining(['org-a', receipt.url, 'patient-a', 'customer:customer-a'])
+    );
+    expect(assignment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { organizationId: 'org-a', branchId: 'branch-a', userId: 'user-a', active: true },
+      })
+    );
+    mocks.find.mockResolvedValue({ id: 'already-captured' });
+    assignment.mockResolvedValue(null);
+    await expect(caller(ctx).readSource({ sourceFileRef: receipt.url })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
+    mocks.create.mockClear();
+    await expect(caller(ctx).capture(captureInput(receipt.url))).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
+    expect(mocks.create).not.toHaveBeenCalled();
+  });
+
   it('delivers private image bytes with no-store/nosniff headers', async () => {
     const receipt = await upload();
     const response = await GET(new Request(`http://localhost${receipt.url}`));
