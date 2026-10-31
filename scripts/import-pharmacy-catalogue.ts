@@ -1,8 +1,10 @@
 import 'dotenv/config';
 import { readFile } from 'node:fs/promises';
+import { basename } from 'node:path';
 import { parseArgs } from 'node:util';
 import { db } from '@/lib/db';
-import { importPharmacyExportCatalogue, PharmacyCatalogueImportError } from '@/lib/pharmacy/data-export-catalogue';
+import { PharmacyCatalogueImportError } from '@/lib/pharmacy/data-export-catalogue';
+import { importCatalogueSource } from '@/lib/pharmacy/migration/workbench';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { recordAudit } from '@/server/audit';
 
@@ -15,14 +17,15 @@ async function main() {
   if (!organizationId || !values.file) {
     throw new Error('Usage: import-pharmacy-catalogue.ts --organization <target-id> --file <medicines.csv>');
   }
+  const fileName = basename(values.file);
   const csv = await readFile(values.file, 'utf8');
   const result = await withTenantDb(organizationId, async (tx) => {
     const organization = await tx.organization.findUnique({
       where: { id: organizationId }, select: { vertical: true },
     });
     if (organization?.vertical !== 'PHARMACY') throw new Error('Target must be a pharmacy workspace.');
-    const imported = await importPharmacyExportCatalogue(tx, organizationId, csv, new Date(), {
-      source: 'local-file',
+    const imported = await importCatalogueSource(tx, {
+      organizationId, fileName, csv, source: 'local-file',
     });
     await recordAudit({
       organizationId, actorType: 'SYSTEM', source: 'SYSTEM', category: 'pharmacy',

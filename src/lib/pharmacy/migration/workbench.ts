@@ -22,12 +22,20 @@ import { createHash } from 'node:crypto';
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-import type {
-  ExceptionBucket,
-  MigrationSourceKind,
-  ProfileResult,
-  SourceProfiler,
+import {
+  importPharmacyExportCatalogue,
+  parsePharmacyExportCatalogue,
+  PharmacyCatalogueImportError,
+} from '../data-export-catalogue';
+import { devfathomCatalogueProfiler } from './devfathom-catalogue-profiler';
+import {
+  profileTable,
+  type ExceptionBucket,
+  type MigrationSourceKind,
+  type ProfileResult,
+  type SourceProfiler,
 } from './profiler';
+import { parseDelimitedText } from './source-values';
 
 /** SHA-256 of the handed-over bytes, lowercase hex. The source's identity. */
 export function hashSourceBytes(bytes: Uint8Array | string): string {
@@ -232,4 +240,74 @@ export async function openExceptionCounts(
   const counts: Partial<Record<ExceptionBucket, number>> = {};
   for (const group of grouped) counts[group.bucket] = group._count._all;
   return counts;
+}
+
+export type CatalogueSourceImport = {
+  sourceId: string;
+  batchId: string;
+  exceptionCount: number;
+  rows: number;
+  medicines: number;
+  presentations: number;
+  packs: number;
+};
+
+/**
+ * #716 — re-import a DevFathom owner-export `medicines.csv` through the wizard.
+ *
+ * One transaction: the file is registered as read-only source evidence, profiled
+ * by the catalogue-only adapter and persisted as a batch (one migration row per
+ * CSV row, keeping each exported row code as its source key), and then loaded as
+ * new, non-saleable catalogue drafts. A file the adapter does not recognise, or
+ * one that raises any BLOCKING exception, writes nothing at all.
+ *
+ * Stock is never created here: batch, expiry and MRP arrive with
+ * `stock-lots.csv`, which goes through the ordinary Excel/CSV profiler and its
+ * MIG-02 exception review.
+ */
+export async function importCatalogueSource(
+  db: ScopedDb,
+  input: {
+    organizationId: string;
+    fileName: string;
+    csv: string;
+    now?: Date;
+    /** Only the local database-operator command uses this; never supplied by HTTP input. */
+    source?: 'local-file';
+  }
+): Promise<CatalogueSourceImport> {
+  const now = input.now ?? new Date();
+  const options = input.source ? { source: input.source } : {};
+  // Validate size, headers and identities before any evidence is written.
+  parsePharmacyExportCatalogue(input.csv, options);
+  const profile = profileTable(devfathomCatalogueProfiler, parseDelimitedText(input.csv));
+  if (profile.exceptions.some((exception) => exception.severity === 'BLOCKING')) {
+    throw new PharmacyCatalogueImportError();
+  }
+  return db.$transaction(async (tx) => {
+    const source = await recordSource(tx, {
+      kind: devfathomCatalogueProfiler.kind,
+      fileName: input.fileName,
+      bytes: input.csv,
+    });
+    const persisted = await persistProfile(tx, {
+      sourceId: source.id,
+      label: `DevFathom catalogue import: ${input.fileName}`,
+      profiler: devfathomCatalogueProfiler,
+      result: profile,
+    });
+    const imported = await importPharmacyExportCatalogue(
+      tx,
+      input.organizationId,
+      input.csv,
+      now,
+      options
+    );
+    return {
+      sourceId: source.id,
+      batchId: persisted.batchId,
+      exceptionCount: persisted.exceptionCount,
+      ...imported,
+    };
+  });
 }

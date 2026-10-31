@@ -8,10 +8,8 @@ import {
   requestPharmacyDataExport,
 } from '@/lib/pharmacy/data-export';
 import { annotateAudit } from '@/server/audit';
-import {
-  importPharmacyExportCatalogue,
-  PharmacyCatalogueImportError,
-} from '@/lib/pharmacy/data-export-catalogue';
+import { PharmacyCatalogueImportError } from '@/lib/pharmacy/data-export-catalogue';
+import { importCatalogueSource } from '@/lib/pharmacy/migration/workbench';
 
 import { adminProcedure, router, type TRPCContext } from '../trpc';
 
@@ -80,7 +78,12 @@ export const pharmacyDataExportRouter = router({
     .mutation(async ({ ctx, input }) => {
       const { organizationId } = ownerOrganizationId(ctx);
       try {
-        const result = await importPharmacyExportCatalogue(ctx.db, organizationId, input.csv);
+        // Through the migration wizard: source evidence + profiled batch + drafts, atomically.
+        const result = await importCatalogueSource(ctx.db, {
+          organizationId,
+          fileName: 'medicines.csv',
+          csv: input.csv,
+        });
         annotateAudit(ctx, {
           category: 'pharmacy',
           operation: 'CREATE',

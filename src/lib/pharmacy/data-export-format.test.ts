@@ -17,6 +17,7 @@ import {
   type PharmacyExportDataset,
 } from './data-export-format';
 import { parsePharmacyExportCatalogue } from './data-export-catalogue';
+import { devfathomCatalogueProfiler } from './migration/devfathom-catalogue-profiler';
 import { excelCsvProfiler } from './migration/excel-csv-profiler';
 import { profileTable } from './migration/profiler';
 import { parseDelimitedText } from './migration/source-values';
@@ -207,16 +208,22 @@ describe('owner data export — import preset columns', () => {
       }).find((item) => item.name === PHARMACY_EXPORT_FILES[key].name)!;
       expect(PHARMACY_EXPORT_FILES[key].importable).toBe(true);
       const table = parseDelimitedText(file.data.toString('utf8'));
-      const profiled = profileTable(excelCsvProfiler, table);
+      // The wizard routes medicines.csv to its catalogue adapter; every other file to Excel/CSV.
+      const profiled = profileTable(
+        key === 'medicines' ? devfathomCatalogueProfiler : excelCsvProfiler,
+        table
+      );
       expect(profiled.rows).toHaveLength(dataset[key].length);
+      expect(profiled.exceptions).toEqual([]);
       if (key === 'medicines') {
         const catalogue = parsePharmacyExportCatalogue(file.data.toString('utf8'));
         expect(catalogue).toHaveLength(dataset.medicines.length);
         expect(catalogue.map((row) => row.pack)).toEqual([10, 200, null]);
         // The stock profiler still refuses catalogue rows without lot evidence.
-        expect(profiled.exceptions.some((exception) => exception.bucket === 'MISSING_BATCH')).toBe(true);
+        const stockProfile = profileTable(excelCsvProfiler, table);
+        expect(stockProfile.exceptions.some((exception) => exception.bucket === 'MISSING_BATCH')).toBe(true);
       } else {
-        expect(profiled.exceptions).toEqual([]);
+        expect(devfathomCatalogueProfiler.resolveColumns(table)).toBeNull();
       }
       expect(profiled.rows.map((row) => row.sourceKey)).toEqual(
         dataset[key].map((row) => String(row.code))

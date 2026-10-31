@@ -11,9 +11,10 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 /**
  * #716 acceptance against a real database under forced RLS: an export of a
- * seeded tenant re-imports through the migration wizard's Excel/CSV profiler
- * with matching row counts and no blocking exceptions. Catalogue rows also
- * complete an import into real draft medicines/packs in another tenant.
+ * seeded tenant re-imports through the migration wizard (its Excel/CSV profiler,
+ * and its DevFathom catalogue adapter for medicines.csv) with matching row
+ * counts and no exceptions. Catalogue rows also complete a wizard import into
+ * real draft medicines/packs, with source evidence, in another tenant.
  */
 const url = process.env.TEST_DATABASE_URL;
 if (url) process.env.DATABASE_URL = url;
@@ -28,7 +29,8 @@ const NOW = new Date('2026-10-31T07:00:00.000Z');
 
 let withTenantDb: typeof import('@/lib/tenancy/scoped-db').withTenantDb;
 let withPlatformDb: typeof import('@/lib/tenancy/scoped-db').withPlatformDb;
-let catalogue: typeof import('./data-export-catalogue');
+let workbench: typeof import('./migration/workbench');
+let catalogueProfiler: typeof import('./migration/devfathom-catalogue-profiler');
 let exporter: typeof import('./data-export');
 let format: typeof import('./data-export-format');
 let profiler: typeof import('./migration/profiler');
@@ -193,7 +195,8 @@ beforeAll(async () => {
   await assertRlsEnforcingRole(scoped.withPlatformDb);
   withTenantDb = scoped.withTenantDb;
   withPlatformDb = scoped.withPlatformDb;
-  catalogue = await import('./data-export-catalogue');
+  workbench = await import('./migration/workbench');
+  catalogueProfiler = await import('./migration/devfathom-catalogue-profiler');
   exporter = await import('./data-export');
   format = await import('./data-export-format');
   profiler = await import('./migration/profiler');
@@ -234,9 +237,14 @@ suite('owner data export under forced PostgreSQL RLS', () => {
       if (!spec.importable) continue;
       const file = files.find((item) => item.name === spec.name)!;
       const table = sourceValues.parseDelimitedText(file.data.toString('utf8'));
-      const profiled = profiler.profileTable(csvProfiler.excelCsvProfiler, table);
+      const profiled = profiler.profileTable(
+        key === 'medicines'
+          ? catalogueProfiler.devfathomCatalogueProfiler
+          : csvProfiler.excelCsvProfiler,
+        table
+      );
       expect(profiled.rows, spec.name).toHaveLength(dataset[key].length);
-      if (key !== 'medicines') expect(profiled.exceptions, spec.name).toEqual([]);
+      expect(profiled.exceptions, spec.name).toEqual([]);
     }
 
     // Complete the supported catalogue path, rather than just counting profiler rows.
@@ -246,9 +254,29 @@ suite('owner data export under forced PostgreSQL RLS', () => {
     } }));
     const csv = files.find((file) => file.name === 'medicines.csv')!.data.toString('utf8');
     const imported = await withTenantDb(target, (db) =>
-      catalogue.importPharmacyExportCatalogue(db, target, csv, NOW)
+      workbench.importCatalogueSource(db, {
+        organizationId: target, fileName: 'medicines.csv', csv, now: NOW,
+      })
     );
-    expect(imported).toEqual({ rows: 3, medicines: 2, presentations: 1, packs: 2 });
+    expect(imported).toEqual({
+      sourceId: expect.any(String), batchId: expect.any(String), exceptionCount: 0,
+      rows: 3, medicines: 2, presentations: 1, packs: 2,
+    });
+    // The wizard kept the file as evidence and one profiled row per CSV row, with no exceptions.
+    const evidence = await withTenantDb(target, async (db) => ({
+      source: await db.pharmacyMigrationSource.findMany(),
+      batch: await db.pharmacyMigrationBatch.findMany({ include: { rows: true, exceptions: true } }),
+    }));
+    expect(evidence.source).toEqual([
+      expect.objectContaining({ id: imported.sourceId, kind: 'EXCEL_CSV', fileName: 'medicines.csv' }),
+    ]);
+    expect(evidence.batch).toEqual([expect.objectContaining({
+      id: imported.batchId, status: 'PROFILED', rowCount: 3, exceptionCount: 0,
+      profilerVersion: 'devfathom-catalogue/1', exceptions: [],
+    })]);
+    expect(evidence.batch[0]!.rows.map((row) => row.sourceKey).sort()).toEqual(
+      dataset.medicines.map((row) => String(row.code)).sort()
+    );
     const restored = await withTenantDb(target, (db) =>
       exporter.collectPharmacyDataExport(db, target, { from: '2026-10-01', to: '2026-10-30' }, NOW)
     );

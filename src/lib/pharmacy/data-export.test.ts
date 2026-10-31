@@ -29,6 +29,7 @@ import {
   runPharmacyDataExportJob,
   viewPharmacyDataExport,
 } from './data-export';
+import { PHARMACY_EXPORT_FILES } from './data-export-format';
 import { packConversions } from './pack-conversion';
 import { registerPrintTotals } from './register-print';
 
@@ -751,6 +752,10 @@ describe('collection', () => {
     expect(dataset.saleLines).toEqual([
       expect.objectContaining({ sale_code: 'sale-1', quantity: 20, sale_quantity: 2, net: '5.50' }),
     ]);
+    // Sales store unitCostMinor per sale unit; the column must export it unchanged and say so.
+    expect(dataset.saleLines[0]).toMatchObject({ sale_unit: 'STRIP', pack: 10, cost: '0.25' });
+    const costColumn = PHARMACY_EXPORT_FILES.saleLines.columns.find((c) => c.header === 'cost');
+    expect(costColumn?.description).toMatch(/one sale unit \(not one canonical unit\)/);
   });
 
   it('exports the controlled register exactly as the printed register shows it', async () => {

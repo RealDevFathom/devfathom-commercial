@@ -5,6 +5,7 @@ import { z } from 'zod';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { decodeSpreadsheetText, PHARMACY_EXPORT_FILES } from './data-export-format';
 import { normalizeMedicineText } from './medicine';
+import { isDevfathomCatalogueTable } from './migration/devfathom-catalogue-profiler';
 import { parseDelimitedText } from './migration/source-values';
 import { MANUAL_FILE_RIGHTS } from './reference-connectors';
 
@@ -54,9 +55,6 @@ type CatalogueImportOptions = {
   /** Only the local database-operator command uses this; never supplied by HTTP input. */
   source?: 'local-file';
 };
-const EXTENDED_HEADERS = new Set([
-  'strength_components', 'pack_barcodes', 'presentation_barcodes', 'catalogue_encoding',
-]);
 
 export class PharmacyCatalogueImportError extends Error {
   constructor() {
@@ -70,10 +68,7 @@ export function parsePharmacyExportCatalogue(csv: string, options: CatalogueImpo
   if (!localFile && Buffer.byteLength(csv, 'utf8') > 5_000_000) throw new PharmacyCatalogueImportError();
   const table = parseDelimitedText(csv, { trimCells: false });
   const headers = PHARMACY_EXPORT_FILES.medicines.columns.map((column) => column.header);
-  const legacyHeaders = headers.filter((header) => !EXTENDED_HEADERS.has(header));
-  if ((table.headers.join('\0') !== headers.join('\0') &&
-       table.headers.join('\0') !== legacyHeaders.join('\0')) ||
-      (!localFile && table.rows.length > 10_000)) {
+  if (!isDevfathomCatalogueTable(table) || (!localFile && table.rows.length > 10_000)) {
     throw new PharmacyCatalogueImportError();
   }
   const result = z.array(rowSchema).safeParse(table.rows.map((cells) => {

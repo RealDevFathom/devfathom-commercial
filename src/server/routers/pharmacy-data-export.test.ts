@@ -50,6 +50,20 @@ function fixture(
   const database = {
     $queryRaw: vi.fn(async () => []),
     medicine: { create: vi.fn(async () => ({ id: 'imported-medicine' })) },
+    // The migration wizard's source evidence and profiled batch for a catalogue import.
+    pharmacyMigrationSource: {
+      findFirst: vi.fn(async () => null),
+      create: vi.fn(async (args: { data: Row }) => ({ id: 'mig-source-1', ...args.data })),
+    },
+    pharmacyMigrationBatch: {
+      create: vi.fn(async () => ({ id: 'mig-batch-1' })),
+      update: vi.fn(async () => ({})),
+    },
+    pharmacyMigrationRow: {
+      createMany: vi.fn(async () => ({ count: 1 })),
+      findMany: vi.fn(async () => [{ id: 'mig-row-1', sourceKey: 'foreign-id' }]),
+    },
+    pharmacyMigrationException: { createMany: vi.fn(async () => ({ count: 0 })) },
     pharmacyDataExport: {
       findMany: vi.fn(async () => rows),
       findFirst: vi.fn(async (args: { where: { id?: string; status?: string } }) => {
@@ -137,8 +151,21 @@ describe('pharmacy owner data export router', () => {
       controlled: false, high_alert: false, lasa: false, cold_chain: false, saleable: true,
     }]);
     await expect(f.caller.importCatalogue({ csv })).resolves.toEqual({
+      sourceId: 'mig-source-1', batchId: 'mig-batch-1', exceptionCount: 0,
       rows: 1, medicines: 1, presentations: 0, packs: 0,
     });
+    // Imported through the wizard: source evidence plus one profiled row per CSV row.
+    expect(f.db.pharmacyMigrationSource.create).toHaveBeenCalledWith({ data: expect.objectContaining({
+      kind: 'EXCEL_CSV', fileName: 'medicines.csv',
+    }) });
+    expect(f.db.pharmacyMigrationBatch.create).toHaveBeenCalledWith({ data: expect.objectContaining({
+      sourceId: 'mig-source-1', profilerVersion: 'devfathom-catalogue/1',
+    }) });
+    expect(f.db.pharmacyMigrationRow.createMany).toHaveBeenCalledWith({ data: [expect.objectContaining({
+      batchId: 'mig-batch-1', sourceKey: 'foreign-id', productName: 'Catalogue medicine',
+      batchNumber: null, expiryDate: null, mrpMinor: null,
+    })] });
+    expect(f.db.pharmacyMigrationException.createMany).not.toHaveBeenCalled();
     expect(f.db.medicine.create).toHaveBeenCalledWith({ data: expect.objectContaining({
       organizationId: 'org-a', productName: 'Catalogue medicine', saleable: false,
       provenance: { create: expect.objectContaining({ sourceType: 'IMPORT', status: 'UNREVIEWED' }) },
@@ -153,6 +180,7 @@ describe('pharmacy owner data export router', () => {
     await expect(f.caller.importCatalogue({ csv: 'product,batch\nPanadol,B1' }))
       .rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(f.db.medicine.create).not.toHaveBeenCalled();
+    expect(f.db.pharmacyMigrationSource.create).not.toHaveBeenCalled();
   });
 
   it.each(['EMPLOYEE', 'MANAGER'] as const)('refuses a %s with FORBIDDEN (403)', async (role) => {
@@ -178,7 +206,7 @@ describe('pharmacy owner data export router', () => {
   });
 
   it('refuses a workspace that is not a pharmacy', async () => {
-    const f = fixture({ vertical: 'RESTAURANT' });
+    const f = fixture({ vertical: 'AGENCY' });
     await expect(f.caller.list()).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
 

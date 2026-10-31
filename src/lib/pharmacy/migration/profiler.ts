@@ -88,6 +88,15 @@ export interface SourceProfiler {
   readonly version: string;
   /** `null` when this table is not the format the adapter recognises. */
   resolveColumns(table: SourceTable): ColumnMap | null;
+  /**
+   * The source declares medicine identity only and never creates stock (for
+   * example a DevFathom `medicines.csv` export). Batch, expiry and MRP belong to
+   * received lots, so the MISSING_BATCH / MISSING_EXPIRY / MISSING_MRP buckets
+   * do not apply: nothing is defaulted because no lot is created at all. Product
+   * duplicates are judged by barcode only, because a catalogue legitimately
+   * carries one name across several manufacturers or presentations.
+   */
+  readonly catalogueOnly?: boolean;
 }
 
 export type ProfiledRow = {
@@ -159,7 +168,13 @@ export function profileTable(
   if (!columnMap) throw new UnrecognisedSourceError(profiler.kind);
 
   const rows = table.rows.map((cells, index) => buildRow(table, columnMap, cells, index));
-  const exceptions = deriveExceptions(rows, table, columnMap, context);
+  const exceptions = deriveExceptions(
+    rows,
+    table,
+    columnMap,
+    context,
+    profiler.catalogueOnly === true
+  );
 
   return { columnMap, rows, exceptions };
 }
@@ -293,7 +308,8 @@ function deriveExceptions(
   rows: readonly ProfiledRow[],
   table: SourceTable,
   columnMap: ColumnMap,
-  context: ProfileContext
+  context: ProfileContext,
+  catalogueOnly: boolean
 ): ProfiledException[] {
   const exceptions: ProfiledException[] = [];
   const raise = (rowIndex: number | null, bucket: ExceptionBucket, detail: string) => {
@@ -306,7 +322,7 @@ function deriveExceptions(
     const cells = table.rows[index] ?? [];
     const where = `source key ${row.sourceKey}`;
 
-    if (row.targetModelKey === MIGRATION_TARGET_KEYS.PRODUCT) {
+    if (row.targetModelKey === MIGRATION_TARGET_KEYS.PRODUCT && !catalogueOnly) {
       if (!row.batchNumber) {
         raise(index, 'MISSING_BATCH', `No batch number for ${where}; it cannot be inferred.`);
       }
@@ -328,7 +344,9 @@ function deriveExceptions(
             : `No MRP for ${where}; it cannot be inferred.`
         );
       }
+    }
 
+    if (row.targetModelKey === MIGRATION_TARGET_KEYS.PRODUCT) {
       const packRaw = rawOf(columnMap, cells, 'pack');
       if (packRaw && row.packFactor === null) {
         raise(index, 'UNIT_AMBIGUOUS', `Pack "${packRaw}" for ${where} names no countable unit.`);
@@ -342,7 +360,7 @@ function deriveExceptions(
         );
       }
 
-      if (row.targetNaturalKey) {
+      if (row.targetNaturalKey && (!catalogueOnly || row.barcode)) {
         const previous = seenProductKeys.get(row.targetNaturalKey);
         if (previous) {
           raise(
