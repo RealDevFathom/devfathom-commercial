@@ -26,6 +26,7 @@ const attemptSchema = z.discriminatedUnion('kind', [
       reason: z.string(),
       integrityDecision: z.string(),
       idempotencyKey: z.string(),
+      controlledWitness: z.object({ staffProfileId: z.string(), pin: z.string() }).optional(),
     }),
   }),
   z.object({
@@ -124,6 +125,8 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
   const [disposition, setDisposition] = useState<'RESTOCK' | 'QUARANTINE'>('QUARANTINE');
   const [location, setLocation] = useState('');
   const [integrity, setIntegrity] = useState('');
+  const [witnessId, setWitnessId] = useState('');
+  const [witnessPin, setWitnessPin] = useState('');
   const [tenderId, setTenderId] = useState('');
   const [amount, setAmount] = useState('');
   const [manual, setManual] = useState(false);
@@ -153,6 +156,16 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
   const refund = trpc.pharmacySales.refundTender.useMutation();
   const data = history.data;
   const line = data?.lines.find((row) => row.id === lineId);
+  const recoveryLine =
+    attempt?.kind === 'return'
+      ? data?.lines.find((row) => row.id === attempt.input.saleLineId)
+      : undefined;
+  const recoveryReturnPending = attempt?.kind === 'return' && !recoveryLine;
+  const recoveryNeedsWitness = !!recoveryLine?.controlled;
+  const witnesses = trpc.pharmacySafety.controlledPharmacists.useQuery(undefined, {
+    enabled: ready && online && (!!line?.controlled || recoveryNeedsWitness),
+    retry: false,
+  });
   const selectedLot = line?.lots.find((row) => row.lotId === lotId);
   const maximumUnits =
     selectedLot?.returnableUnits ?? (line ? line.canonicalUnits - line.returnedUnits : 0);
@@ -172,16 +185,29 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
     setBusy(true);
     setError('');
     setMessage('');
+    let witnessDenied = false;
+    let mutationSucceeded = false;
     try {
-      // Write before sending; an ambiguous network outcome can only replay this exact request.
-      localStorage.setItem(storageKey, JSON.stringify(next));
-      setAttempt(next);
-      if (next.kind === 'return') await returnLine.mutateAsync(next.input);
-      else
+      // Write the idempotent operation before sending, but never persist a witness credential.
+      const saved =
+        next.kind === 'return'
+          ? { ...next, input: { ...next.input, controlledWitness: undefined } }
+          : next;
+      // Witness credentials remain in memory only; a recovered controlled return needs a fresh PIN.
+      localStorage.setItem(storageKey, JSON.stringify(saved));
+      setAttempt(saved);
+      if (next.kind === 'return') {
+        const result = await returnLine.mutateAsync(next.input);
+        if (result && 'blocked' in result) {
+          witnessDenied = true;
+          throw Object.assign(new Error(result.blocked), { data: { code: 'BAD_REQUEST' } });
+        }
+      } else
         await refund.mutateAsync({
           ...next.input,
           businessDate: new Date(next.input.businessDate),
         });
+      mutationSucceeded = true;
       await history.refetch({ throwOnError: true });
       localStorage.removeItem(storageKey);
       setAttempt(null);
@@ -195,7 +221,12 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
       );
     } catch (cause) {
       const code = (cause as { data?: { code?: string } })?.data?.code;
-      if (['BAD_REQUEST', 'FORBIDDEN', 'NOT_FOUND', 'UNAUTHORIZED'].includes(code ?? '')) {
+      if (
+        ['BAD_REQUEST', 'FORBIDDEN', 'NOT_FOUND', 'UNAUTHORIZED'].includes(code ?? '') &&
+        !mutationSucceeded &&
+        // A witness denial happens before replay lookup and cannot resolve an earlier outcome.
+        !(witnessDenied && attempt?.kind === 'return')
+      ) {
         try {
           localStorage.removeItem(storageKey);
           setAttempt(null);
@@ -207,6 +238,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
         `${counterErrorMessage(cause)} Check history before handing out cash; an unknown outcome must use the saved retry.`
       );
     } finally {
+      setWitnessPin('');
       latch.current = false;
       setBusy(false);
     }
@@ -258,13 +290,72 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
       )}
       {message && <p role="status">{message}</p>}
       {attempt && (
-        <Button
-          className="h-11"
-          disabled={busy || !online || !ready}
-          onClick={() => void execute(attempt)}
-        >
-          Retry saved {attempt.kind}
-        </Button>
+        <div className="space-y-3 rounded-lg border border-border-subtle p-4">
+          {attempt.kind === 'return' && recoveryNeedsWitness && (
+            <>
+              <p className="font-medium">Reauthorize controlled return recovery</p>
+              <p className="text-sm text-text-muted">
+                The saved operation contains no PIN. A different pharmacist must enter a fresh PIN
+                to reconcile the original reference.
+              </p>
+              <Label htmlFor="recovery-witness">Witness pharmacist</Label>
+              <select
+                id="recovery-witness"
+                className={selectClass}
+                value={witnessId}
+                onChange={(event) => {
+                  setWitnessId(event.target.value);
+                  setWitnessPin('');
+                }}
+              >
+                <option value="">Select pharmacist</option>
+                {witnesses.data?.map((staff) => (
+                  <option key={staff.id} value={staff.id}>
+                    {staff.name}
+                  </option>
+                ))}
+              </select>
+              <Label htmlFor="recovery-witness-pin">Witness PIN</Label>
+              <Input
+                id="recovery-witness-pin"
+                type="password"
+                inputMode="numeric"
+                autoComplete="off"
+                minLength={4}
+                maxLength={8}
+                className="h-11"
+                disabled={!witnessId}
+                value={witnessPin}
+                onChange={(event) => setWitnessPin(event.target.value)}
+              />
+            </>
+          )}
+          <Button
+            className="h-11"
+            disabled={
+              busy ||
+              !online ||
+              !ready ||
+              recoveryReturnPending ||
+              (recoveryNeedsWitness && (!witnessId || !/^\d{4,8}$/.test(witnessPin)))
+            }
+            onClick={() =>
+              void execute(
+                attempt.kind === 'return' && recoveryNeedsWitness
+                  ? {
+                      ...attempt,
+                      input: {
+                        ...attempt.input,
+                        controlledWitness: { staffProfileId: witnessId, pin: witnessPin },
+                      },
+                    }
+                  : attempt
+              )
+            }
+          >
+            Retry saved {attempt.kind}
+          </Button>
+        </div>
       )}
       <form
         className="flex flex-wrap items-end gap-2"
@@ -361,6 +452,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
                 setLotId('');
                 setDisposition('QUARANTINE');
                 setConfirmed(false);
+                setWitnessPin('');
               }}
             >
               <option value="">Choose a line</option>
@@ -491,6 +583,55 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
               Restock only inspected medicine with acceptable storage and intact packaging. Expired
               or recalled lots are refused by the server.
             </p>
+            {line?.controlled && (
+              <div className="space-y-3 rounded-md border border-border-subtle p-3">
+                <p className="font-medium">Controlled medicine witness</p>
+                <p className="text-sm text-text-muted">
+                  A different pharmacist must authorize the return with their fresh PIN.
+                </p>
+                <Label htmlFor="return-witness">Witness pharmacist</Label>
+                <select
+                  id="return-witness"
+                  className={selectClass}
+                  value={witnessId}
+                  onChange={(event) => {
+                    setWitnessId(event.target.value);
+                    setWitnessPin('');
+                    setConfirmed(false);
+                  }}
+                >
+                  <option value="">Select pharmacist</option>
+                  {witnesses.data?.map((staff) => (
+                    <option key={staff.id} value={staff.id}>
+                      {staff.name}
+                    </option>
+                  ))}
+                </select>
+                {witnesses.isFetching ? (
+                  <p role="status">Loading pharmacists…</p>
+                ) : witnesses.isError ? (
+                  <p role="alert">Pharmacists could not be loaded. Refresh the counter to retry.</p>
+                ) : witnesses.data?.length === 0 ? (
+                  <p role="alert">No independent pharmacist with an active PIN is available.</p>
+                ) : null}
+                <Label htmlFor="return-witness-pin">Witness PIN</Label>
+                <Input
+                  id="return-witness-pin"
+                  type="password"
+                  inputMode="numeric"
+                  autoComplete="off"
+                  minLength={4}
+                  maxLength={8}
+                  className="h-11"
+                  disabled={!witnessId}
+                  value={witnessPin}
+                  onChange={(event) => {
+                    setWitnessPin(event.target.value);
+                    setConfirmed(false);
+                  }}
+                />
+              </div>
+            )}
             <label className="flex min-h-11 items-center gap-2">
               <input
                 type="checkbox"
@@ -510,7 +651,8 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
                 Number(units) < 1 ||
                 Number(units) > maximumUnits ||
                 (disposition === 'RESTOCK' && !selectedLot?.restockAllowed) ||
-                (disposition === 'QUARANTINE' && !location)
+                (disposition === 'QUARANTINE' && !location) ||
+                (line.controlled && (!witnessId || !/^\d{4,8}$/.test(witnessPin)))
               }
               onClick={() =>
                 void execute({
@@ -526,6 +668,9 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
                     reason,
                     integrityDecision: integrity,
                     idempotencyKey: browserUuid(),
+                    controlledWitness: line?.controlled
+                      ? { staffProfileId: witnessId, pin: witnessPin }
+                      : undefined,
                   },
                 })
               }

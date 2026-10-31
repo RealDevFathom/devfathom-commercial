@@ -1725,6 +1725,9 @@ type PurchasingCaller = Omit<
 // tRPC 11 widens input-dependent output to a union. These server-caller overloads preserve
 // existing array callers; transport output remains the honest union. The runtime procedures
 // above choose the envelope only for `page`, covered by router + serialization tests.
+// Keep the unmodified router type for tRPC's client-side procedure inference. The exported
+// server caller below adds overloads for legacy array callers without widening the transport.
+export const pharmacyPurchasingTransportRouter = purchasingRouter;
 export const pharmacyPurchasingRouter: Omit<typeof purchasingRouter, 'createCaller'> & {
   createCaller: (...args: Parameters<typeof purchasingRouter.createCaller>) => PurchasingCaller;
 } = Object.assign(purchasingRouter, {

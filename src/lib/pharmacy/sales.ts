@@ -466,7 +466,7 @@ export async function readReturnHistory(db: ScopedDb, scope: LedgerScope, saleId
     include: {
       lines: {
         include: {
-          medicine: { select: { productName: true } },
+          medicine: { select: { productName: true, controlled: true } },
           returnLines: true,
           unidentifiedReturnHolds: true,
           allocations: { include: { lot: { include: { batch: true } } } },
@@ -515,6 +515,7 @@ export async function readReturnHistory(db: ScopedDb, scope: LedgerScope, saleId
     return {
       id: line.id,
       name: line.medicine.productName,
+      controlled: line.medicine.controlled,
       saleUnit: line.saleUnit,
       quantity: line.quantity,
       canonicalUnitsPerSaleUnit: line.canonicalUnitsPerSaleUnit,
