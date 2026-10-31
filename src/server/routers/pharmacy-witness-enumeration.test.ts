@@ -23,8 +23,13 @@ function fixture(capability: string) {
         permissionOverrides: [],
       }),
     },
-    restaurantStaffProfile: { findMany: vi.fn().mockResolvedValue([]) },
-    pharmacyGoodsReceipt: { findFirst: vi.fn().mockResolvedValue(null) },
+    restaurantStaffProfile: {
+      findMany: vi.fn().mockResolvedValue([]),
+      findFirst: vi.fn().mockResolvedValue(null),
+    },
+    pharmacyGoodsReceipt: {
+      findFirst: vi.fn().mockResolvedValue({ qualifiedPersonUserId: 'qualified-person' }),
+    },
   };
   const ctx = {
     db,
@@ -52,17 +57,52 @@ describe.each(['safety', 'purchasing'] as const)('%s witness enumeration', (surf
     const f = fixture('pharmacy.counter');
     await expect(query(f)).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(f.db.restaurantStaffProfile.findMany).not.toHaveBeenCalled();
+    expect(f.db.restaurantStaffProfile.findFirst).not.toHaveBeenCalled();
   });
   it.each(['pharmacy:safety', 'pharmacy:dispense'])('allows %s', async (capability) => {
     const f = fixture(capability);
     await expect(query(f)).resolves.toEqual([]);
     if (surface === 'safety') {
-      expect(f.db.restaurantStaffProfile.findMany).toHaveBeenCalled();
+      expect(f.db.restaurantStaffProfile.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            organizationId: 'org',
+            user: { organizationId: 'org', status: 'ACTIVE' },
+            userId: { not: 'actor' },
+          }),
+        })
+      );
     } else {
       expect(f.db.pharmacyGoodsReceipt.findFirst).toHaveBeenCalledWith({
         where: { id: 'receipt', organizationId: 'org', branchId: 'branch' },
         select: { qualifiedPersonUserId: true },
       });
+      expect(f.db.restaurantStaffProfile.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            organizationId: 'org',
+            userId: 'qualified-person',
+            user: expect.objectContaining({
+              organizationId: 'org',
+              status: 'ACTIVE',
+              pharmacyBranchAssignments: {
+                some: { organizationId: 'org', branchId: 'branch', active: true },
+              },
+            }),
+          }),
+        })
+      );
     }
   });
+
+  if (surface === 'purchasing') {
+    it('offers nobody when the receipt has no different named qualified person', async () => {
+      const f = fixture('pharmacy:dispense');
+      f.db.pharmacyGoodsReceipt.findFirst.mockResolvedValueOnce({ qualifiedPersonUserId: 'actor' });
+
+      await expect(query(f)).resolves.toEqual([]);
+      expect(f.db.restaurantStaffProfile.findMany).not.toHaveBeenCalled();
+      expect(f.db.restaurantStaffProfile.findFirst).not.toHaveBeenCalled();
+    });
+  }
 });
