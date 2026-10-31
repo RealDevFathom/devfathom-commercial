@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   departmentFindFirst: vi.fn(),
   roleFindFirst: vi.fn(),
   sendEmail: vi.fn(),
+  appUrl: vi.fn(() => 'https://www.devfathom.com'),
   can: vi.fn(async () => true),
 }));
 
@@ -30,7 +31,7 @@ vi.mock('@/server/audit', () => ({
   diffChanges: vi.fn(() => ({})),
 }));
 vi.mock('@/lib/email', () => ({
-  appUrl: vi.fn(() => 'https://www.devfathom.com'),
+  appUrl: mocks.appUrl,
   sendEmail: mocks.sendEmail,
   templates: { inviteMember: vi.fn(() => ({ subject: 's', html: 'h', text: 't' })) },
 }));
@@ -80,6 +81,7 @@ const invite = {
 describe('team.inviteMember duplicate guard', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.appUrl.mockReturnValue('https://www.devfathom.com');
     mocks.can.mockResolvedValue(true);
     mocks.departmentFindFirst.mockResolvedValue({ id: 'dept_engineering' });
   });
@@ -125,6 +127,26 @@ describe('team.inviteMember duplicate guard', () => {
       caller().inviteMember({ ...invite, email: 'new.person@company.com' })
     ).resolves.toMatchObject({ id: 'user_2', emailDelivery: 'SENT' });
   });
+
+  it.each([null, { id: 'user_2', status: 'INVITED' }])(
+    'does not create or replace an invitation when the public URL is invalid (existing: %j)',
+    async (existing) => {
+      mocks.findFirst.mockResolvedValue(existing);
+      mocks.create.mockResolvedValue({ id: 'user_2', name: 'Alex Carter' });
+      mocks.update.mockResolvedValue({ id: 'user_2', name: 'Alex Carter' });
+      mocks.appUrl.mockImplementationOnce(() => {
+        throw new Error('Public application URL must use HTTPS in production.');
+      });
+
+      await expect(
+        caller().inviteMember({ ...invite, email: 'new.person@company.com' })
+      ).rejects.toThrow('Public application URL must use HTTPS in production.');
+      expect(mocks.create).not.toHaveBeenCalled();
+      expect(mocks.update).not.toHaveBeenCalled();
+      expect(mocks.invitationUpsert).not.toHaveBeenCalled();
+      expect(mocks.sendEmail).not.toHaveBeenCalled();
+    }
+  );
 
   it('preserves the invite link and reports failed email delivery', async () => {
     mocks.findFirst.mockResolvedValue(null);

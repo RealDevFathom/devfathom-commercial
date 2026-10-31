@@ -182,6 +182,9 @@ export const teamRouter = router({
       }
 
       const { token, tokenHash } = generateInviteToken();
+      // Validate the public URL before creating a user or replacing a pending
+      // invitation; a configuration error must leave the existing link valid.
+      const inviteUrl = `${appUrl()}/invite/${token}`;
       const expiresAt = new Date(Date.now() + INVITE_TTL_MS);
       const profile = {
         name: input.name,
@@ -220,8 +223,6 @@ export const teamRouter = router({
 
         return u;
       });
-
-      const inviteUrl = `${appUrl()}/invite/${token}`;
 
       // Preserve the invitation when delivery fails so the administrator can
       // still copy the link, but report the failure rather than claiming success.

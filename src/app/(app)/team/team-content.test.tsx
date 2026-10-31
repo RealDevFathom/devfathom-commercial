@@ -68,6 +68,39 @@ function fill() {
 }
 
 describe('tenant department invitation', () => {
+  it('shows a rejected email retry and preserves the fallback link through recovery', () => {
+    render(<AddMemberModal onClose={vi.fn()} />);
+    fill();
+    fireEvent.change(screen.getByLabelText('Department'), { target: { value: 'COUNTER' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send Invite' }));
+    act(() =>
+      state.invite.mutate.mock.calls[0][1].onSuccess({
+        id: 'user_2',
+        inviteUrl: 'https://app.example/invite/token',
+        emailDelivery: 'FAILED',
+      })
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry email' }));
+    act(() => state.invite.mutate.mock.calls[1][1].onError({ message: 'Forbidden' }));
+    expect(screen.getByRole('alert')).toHaveTextContent('Forbidden');
+    expect(screen.getByText('https://app.example/invite/token')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Copy invite link' })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry email' }));
+    expect(screen.queryByRole('alert')).toBeNull();
+    act(() =>
+      state.invite.mutate.mock.calls[2][1].onSuccess({
+        id: 'user_2',
+        inviteUrl: 'https://app.example/invite/refreshed-token',
+        emailDelivery: 'SENT',
+      })
+    );
+    expect(screen.getByText('Invitation sent to second@e2e.invalid')).toBeVisible();
+    expect(screen.getByText('https://app.example/invite/refreshed-token')).toBeVisible();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
   it.each([
     ['SENT', 'Invitation sent to second@e2e.invalid'],
     ['FAILED', 'Invitation created, but email delivery failed'],

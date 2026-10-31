@@ -371,6 +371,11 @@ export function AddMemberModal({ onClose }: { onClose: () => void }) {
                     ? 'They’ll receive an email to set their password and finish their profile.'
                     : `No email was sent to ${sent.email}. Retry delivery or share the invite link below.`}
                 </p>
+                {error && (
+                  <p role="alert" className="mt-4 text-sm text-destructive break-words">
+                    {error}
+                  </p>
+                )}
                 <div className="mt-6 w-full rounded-xl border border-border bg-card px-4 py-3 text-left">
                   <p className="mb-1.5 text-xs font-medium text-muted-foreground">Invite link</p>
                   <p className="break-all text-sm text-foreground">{sent.inviteUrl}</p>
