@@ -62,14 +62,14 @@ describe('assistant updateInvoiceStatus', () => {
     }
   );
 
-  it('clears sentAt with a compare-and-set when SENT becomes OVERDUE', async () => {
+  it('preserves sentAt with a compare-and-set when SENT becomes OVERDUE', async () => {
     const { db, tool } = setup('SENT');
 
     await tool.execute({ invoiceNumber: invoice.invoiceNumber, status: 'OVERDUE' });
 
     expect(db.invoice.updateMany).toHaveBeenCalledWith({
       where: { id: invoice.id, status: 'SENT' },
-      data: { status: 'OVERDUE', sentAt: null },
+      data: { status: 'OVERDUE' },
     });
   });
 
