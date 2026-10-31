@@ -245,6 +245,8 @@ async function establishAsciiPosTerminal(
     },
   });
   expect(unlocked.status(), await unlocked.text()).toBe(200);
+  const { composerProof } = (await unlocked.json()) as { composerProof: string };
+  expect(typeof composerProof).toBe('string');
 
   return {
     deviceId: ASCII_RECEIPT_BRANCH.device.deviceId,
@@ -254,6 +256,7 @@ async function establishAsciiPosTerminal(
       authorization,
       'x-terminal-session': body.sessionToken,
       'x-forwarded-for': device.clientIp,
+      'x-pos-composer-proof': composerProof,
     },
   };
 }
