@@ -16,6 +16,11 @@ import {
   type WhatsAppConfig,
   type WhatsAppProvider,
 } from './provider';
+import {
+  type ComplianceCatalog,
+  lintAndLogWhatsAppContent,
+  readComplianceCatalog,
+} from './compliance-linter';
 
 const DAY_MS = 86_400_000;
 
@@ -70,6 +75,7 @@ export type RefillReminderRunResult = {
   unknown: number;
   failed: number;
   duplicate: number;
+  complianceBlocked: number;
   skippedNoConsent: number;
   notDue: number;
 };
@@ -99,6 +105,7 @@ export async function processDueWhatsAppRefillReminders(
     unknown: 0,
     failed: 0,
     duplicate: 0,
+    complianceBlocked: 0,
     skippedNoConsent: 0,
     notDue: 0,
   };
@@ -129,6 +136,8 @@ export async function processDueWhatsAppRefillReminders(
     `)
   );
 
+  // One catalog read per organization per run, not one per recipient transaction.
+  const catalogs = new Map<string, ComplianceCatalog>();
   for (const capture of captures) {
     result.scanned += 1;
     let plan: ReturnType<typeof planRefillReminder>;
@@ -228,6 +237,23 @@ export async function processDueWhatsAppRefillReminders(
         },
       });
       if (prior) return null;
+      let catalog = catalogs.get(capture.organizationId);
+      if (!catalog) {
+        catalog = await readComplianceCatalog(db, capture.organizationId);
+        catalogs.set(capture.organizationId, catalog);
+      }
+      const compliance = await lintAndLogWhatsAppContent(
+        db,
+        { organizationId: capture.organizationId, branchId: capture.branchId },
+        {
+          templateText: 'Your refill reminder is due on {{1}}.',
+          variables: [plan.dueDate],
+          intent: 'UTILITY',
+          subject: `send:refill:${capture.id}`,
+        },
+        { catalog }
+      );
+      if (compliance.outcome === 'BLOCK') return { outcome: 'COMPLIANCE_BLOCKED' as const };
       const logId = await claimMessageLogInTransaction(db, {
         organizationId: capture.organizationId,
         direction: 'OUTBOUND',
@@ -242,10 +268,14 @@ export async function processDueWhatsAppRefillReminders(
         refillCaptureId: capture.id,
         dueDate: plan.dueDate,
       });
-      return { customerId: customer.id, to, logId };
+      return { outcome: 'ELIGIBLE' as const, customerId: customer.id, to, logId };
     });
     if (!recipient) {
       result.skippedNoConsent += 1;
+      continue;
+    }
+    if (recipient.outcome === 'COMPLIANCE_BLOCKED') {
+      result.complianceBlocked += 1;
       continue;
     }
 

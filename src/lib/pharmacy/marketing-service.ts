@@ -5,6 +5,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { workspaceTimezone } from '@/lib/timezone';
 import { z } from 'zod';
 import { lockCustomerConsent } from './consent-writer';
+import { lintAndLogWhatsAppContent } from './whatsapp/compliance-linter';
 
 const id = z.string().trim().min(1).max(128);
 export const marketingScopeInput = z.object({ branchId: id }).strict();
@@ -64,6 +65,29 @@ const whereScope = (scope: MarketingScope) => ({
   branchId: scope.branchId,
 });
 
+/**
+ * Lint marketing copy against the current organization catalog and keep the
+ * decision. Stored templates are re-checked at every later gate because they
+ * may predate the linter or a newly added brand, alias, or salt.
+ */
+async function assertMarketingCompliance(
+  db: ScopedDb,
+  scope: MarketingScope,
+  templateText: string,
+  subject: string
+) {
+  const compliance = await lintAndLogWhatsAppContent(
+    db,
+    scope,
+    { templateText, intent: 'MARKETING', subject },
+    { retainBlockedDecision: true }
+  );
+  if (compliance.outcome === 'BLOCK')
+    throw new MarketingWorkflowError(
+      `WhatsApp compliance blocked this template (${compliance.reasons.map((reason) => reason.code).join(', ')}).`
+    );
+}
+
 /** Human-reviewed templates are immutable; AI assistance never calls this writer. */
 export async function approveMarketingTemplate(
   db: ScopedDb,
@@ -73,6 +97,7 @@ export async function approveMarketingTemplate(
 ) {
   marketingTemplateInput.parse(input);
   validateMarketingBody(input.body);
+  await assertMarketingCompliance(db, scope, input.body, `template:${input.name}`);
   return db.pharmacyMarketingTemplate.create({
     data: {
       ...whereScope(scope),
@@ -102,7 +127,8 @@ export async function createMarketingDraft(
   input: z.infer<typeof marketingDraftInput>
 ) {
   marketingDraftInput.parse(input);
-  await templateFor(db, scope, input.templateId);
+  const template = await templateFor(db, scope, input.templateId);
+  await assertMarketingCompliance(db, scope, template.body, `draft:${template.id}`);
   const segment = await db.pharmacyMarketingSegment.create({
     data: {
       ...whereScope(scope),
@@ -156,9 +182,10 @@ export async function approveMarketingCampaign(
   campaignId: string,
   now = new Date()
 ) {
-  const { campaign } = await reviewMarketingCampaign(db, scope, campaignId);
+  const { campaign, template } = await reviewMarketingCampaign(db, scope, campaignId);
   if (campaign.promotesRegulatedItem)
     throw new MarketingWorkflowError('Regulated outreach is unavailable.');
+  await assertMarketingCompliance(db, scope, template.body, `campaign-approval:${campaign.id}`);
   quietHours.parse(campaign.quietHours);
   frequencyCap.parse(campaign.frequencyCap);
   const result = await db.pharmacyCampaign.updateMany({
@@ -249,6 +276,9 @@ async function evaluateCampaign(
       body: template.body,
     };
   requireCaptureWindow(campaign, scope, now);
+  // Capture is the last gate before delivery: re-check against today's catalog.
+  if (persist)
+    await assertMarketingCompliance(db, scope, template.body, `campaign-capture:${campaign.id}`);
   const cap = frequencyCap.parse(campaign.frequencyCap);
   // Only commercial receipt counts and recency. Never select names, phone,
   // medicine, line details, prescriptions, or clinical segmentation fields.

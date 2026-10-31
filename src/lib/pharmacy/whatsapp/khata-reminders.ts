@@ -16,6 +16,12 @@ import {
   type WhatsAppConfig,
   type WhatsAppProvider,
 } from './provider';
+import {
+  type ComplianceCatalog,
+  lintWhatsAppContent,
+  logWhatsAppComplianceDecision,
+  readComplianceCatalog,
+} from './compliance-linter';
 
 const DAY_MS = 86_400_000;
 const WEEK_MS = 7 * DAY_MS;
@@ -75,6 +81,7 @@ export type KhataReminderRunResult = {
   unknown: number;
   failed: number;
   duplicate: number;
+  complianceBlocked: number;
   skippedNoConsent: number;
   notDue: number;
 };
@@ -107,6 +114,7 @@ export async function processDueWhatsAppKhataReminders(
     unknown: 0,
     failed: 0,
     duplicate: 0,
+    complianceBlocked: 0,
     skippedNoConsent: 0,
     notDue: 0,
   };
@@ -119,6 +127,8 @@ export async function processDueWhatsAppKhataReminders(
     readDueKhataAccounts(db, organizationId, now, limit, minBalanceMinor)
   );
 
+  // One catalog read per run (a single organization), not one per recipient transaction.
+  let catalog: ComplianceCatalog | undefined;
   for (const account of accounts) {
     result.scanned += 1;
     const balanceMinor = Number(account.balanceMinor);
@@ -206,6 +216,26 @@ export async function processDueWhatsAppKhataReminders(
         month: '2-digit',
         day: '2-digit',
       }).format(now);
+      const variables = [
+        sanitizeReminderDisplayName(account.displayName),
+        formatMinor(balanceMinor),
+      ];
+      catalog ??= await readComplianceCatalog(db, account.organizationId);
+      const complianceScope = {
+        organizationId: account.organizationId,
+        branchId: account.branchId,
+      };
+      const complianceInput = {
+        templateText: 'Hello {{1}}, your account balance is {{2}}.',
+        variables,
+        intent: 'UTILITY' as const,
+        subject: `send:khata:${account.familyAccountId}`,
+      };
+      const compliance = lintWhatsAppContent({ ...complianceInput, catalog });
+      if (compliance.outcome === 'BLOCK') {
+        await logWhatsAppComplianceDecision(db, complianceScope, complianceInput, compliance);
+        return { outcome: 'COMPLIANCE_BLOCKED' as const };
+      }
       const logId = await claimMessageLogInTransaction(db, {
         organizationId: account.organizationId,
         direction: 'OUTBOUND',
@@ -220,10 +250,23 @@ export async function processDueWhatsAppKhataReminders(
         templateName: config.templates.khataReminder,
         dueDate: plan.dueDate,
       });
-      return { customerId: customer.id, patientId: customer.patientId, to, logId };
+      // A re-run that loses the dedupe claim sent nothing new, so it logs nothing new.
+      if (logId)
+        await logWhatsAppComplianceDecision(db, complianceScope, complianceInput, compliance);
+      return {
+        outcome: 'ELIGIBLE' as const,
+        customerId: customer.id,
+        patientId: customer.patientId,
+        to,
+        logId,
+      };
     });
     if (!recipient) {
       result.skippedNoConsent += 1;
+      continue;
+    }
+    if (recipient.outcome === 'COMPLIANCE_BLOCKED') {
+      result.complianceBlocked += 1;
       continue;
     }
     if (!recipient.logId) {

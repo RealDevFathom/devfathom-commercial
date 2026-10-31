@@ -7,6 +7,8 @@ const store = vi.hoisted(() => ({
   customers: [] as Array<Record<string, unknown>>,
   consents: [] as Array<Record<string, unknown>>,
   logs: [] as LogRow[],
+  medicines: [] as Array<Record<string, unknown>>,
+  complianceLogs: [] as Array<Record<string, unknown>>,
   /** The workspace zone the organization row holds. */
   timezone: 'Asia/Karachi',
 }));
@@ -36,6 +38,13 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
     patientConsent: {
       findFirst: async ({ where }: { where: { patientId: string } }) =>
         store.consents.find((consent) => consent.patientId === where.patientId) ?? null,
+    },
+    medicine: { findMany: async () => store.medicines },
+    pharmacyWhatsAppComplianceLog: {
+      create: async ({ data }: { data: Record<string, unknown> }) => {
+        store.complianceLogs.push(data);
+        return data;
+      },
     },
     pharmacyMessageLog: {
       count: async () => store.logs.length,
@@ -106,6 +115,8 @@ beforeEach(() => {
   store.customers = [];
   store.consents = [];
   store.logs = [];
+  store.medicines = [];
+  store.complianceLogs = [];
   store.timezone = 'Asia/Karachi';
 });
 
@@ -196,6 +207,28 @@ describe('processDueWhatsAppRefillReminders', () => {
     expect(result).toMatchObject({ scanned: 1, sent: 0, skippedNoConsent: 1 });
     expect(provider.calls).toEqual([]);
     expect(store.logs).toEqual([]);
+  });
+
+  it('reports a regulated send-time due-date variable as compliance-blocked', async () => {
+    store.captures = [capture('capture-1')];
+    store.customers = [customer('patient-1', true)];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    store.medicines = [{ productName: '2026-10-01', brandName: null, aliases: [], strengths: [] }];
+    const provider = new MockWhatsAppProvider(config);
+
+    const result = await processDueWhatsAppRefillReminders({ now: NOW, config, provider });
+
+    expect(result).toMatchObject({
+      scanned: 1,
+      complianceBlocked: 1,
+      skippedNoConsent: 0,
+      prepared: 0,
+    });
+    expect(provider.calls).toEqual([]);
+    expect(store.logs).toEqual([]);
+    expect(store.complianceLogs).toContainEqual(
+      expect.objectContaining({ outcome: 'BLOCK', subject: 'send:refill:capture-1' })
+    );
   });
 
   it('reads the send window in UTC for a stored zone Intl refuses, instead of failing the run', async () => {

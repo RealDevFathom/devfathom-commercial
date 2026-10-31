@@ -132,7 +132,18 @@ export async function withTenantDb<T>(
     } finally {
       // Failure audits also run after rollback; never compete with the owning
       // transaction for a pool connection or locks held on its actor row.
-      for (const work of scope.afterTransaction) work();
+      // One failing callback must neither replace the caller's own result or
+      // error nor skip the callbacks queued after it.
+      for (const work of scope.afterTransaction) {
+        try {
+          await work();
+        } catch (error) {
+          console.error(
+            '[side-effects] after-transaction work failed',
+            error instanceof Error ? error.name : 'error'
+          );
+        }
+      }
     }
     if (scope.enqueued) {
       const { drainOrganization } = await import('@/lib/side-effects/drain');

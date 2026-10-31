@@ -13781,6 +13781,24 @@ model PharmacyMarketingTemplate {
   @@map("pharmacy_marketing_templates")
 }
 
+/// Append-only evidence for deterministic WhatsApp template and send-time linting.
+model PharmacyWhatsAppComplianceLog {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  actorId        String?
+  subject        String
+  intent         String
+  outcome        String
+  reasons        Json
+  linterVersion  String
+  createdAt      DateTime @default(now())
+
+  @@unique([organizationId, id], map: "pharmacy_wa_compliance_org_id_key")
+  @@index([organizationId, branchId, createdAt(sort: Desc)], map: "pharmacy_wa_compliance_scope_idx")
+  @@map("pharmacy_whatsapp_compliance_logs")
+}
+
 model PharmacyCampaign {
   id                    String                 @id @default(cuid())
   organizationId        String                 @default(dbgenerated("current_setting('app.current_organization_id', true)"))

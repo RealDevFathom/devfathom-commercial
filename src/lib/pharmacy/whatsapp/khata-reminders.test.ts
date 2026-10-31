@@ -7,6 +7,8 @@ const store = vi.hoisted(() => ({
   customers: [] as Array<Record<string, unknown>>,
   consents: [] as Array<Record<string, unknown>>,
   logs: [] as LogRow[],
+  medicines: [] as Array<Record<string, unknown>>,
+  complianceLogs: [] as Array<Record<string, unknown>>,
   /** The workspace zone the organization row holds. */
   timezone: 'Asia/Karachi',
 }));
@@ -39,6 +41,13 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
     patientConsent: {
       findFirst: async ({ where }: { where: { patientId: string } }) =>
         store.consents.find((consent) => consent.patientId === where.patientId) ?? null,
+    },
+    medicine: { findMany: async () => store.medicines },
+    pharmacyWhatsAppComplianceLog: {
+      create: async ({ data }: { data: Record<string, unknown> }) => {
+        store.complianceLogs.push(data);
+        return data;
+      },
     },
     pharmacyMessageLog: {
       count: async () => store.logs.length,
@@ -111,6 +120,8 @@ beforeEach(() => {
   store.customers = [];
   store.consents = [];
   store.logs = [];
+  store.medicines = [];
+  store.complianceLogs = [];
   store.timezone = 'Asia/Karachi';
 });
 
@@ -217,6 +228,45 @@ describe('processDueWhatsAppKhataReminders', () => {
     expect(result).toMatchObject({ scanned: 1, sent: 0, skippedNoConsent: 1 });
     expect(provider.calls).toEqual([]);
     expect(store.logs).toEqual([]);
+  });
+
+  it('logs one compliance decision per claimed send, not per re-run duplicate', async () => {
+    store.accounts = [account()];
+    store.customers = [customer(true)];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    const provider = new MockWhatsAppProvider(config);
+
+    await processDueWhatsAppKhataReminders({ now: NOW, config, provider });
+    const rerun = await processDueWhatsAppKhataReminders({ now: NOW, config, provider });
+
+    expect(rerun).toMatchObject({ duplicate: 1 });
+    expect(store.complianceLogs).toEqual([
+      expect.objectContaining({ outcome: 'PASS', subject: 'send:khata:family-1' }),
+    ]);
+  });
+
+  it('reports a regulated send-time display name as compliance-blocked', async () => {
+    store.accounts = [{ ...account(), displayName: 'Panadol household' }];
+    store.customers = [customer(true)];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    store.medicines = [
+      { productName: 'Panadol household', brandName: null, aliases: [], strengths: [] },
+    ];
+    const provider = new MockWhatsAppProvider(config);
+
+    const result = await processDueWhatsAppKhataReminders({ now: NOW, config, provider });
+
+    expect(result).toMatchObject({
+      scanned: 1,
+      complianceBlocked: 1,
+      skippedNoConsent: 0,
+      prepared: 0,
+    });
+    expect(provider.calls).toEqual([]);
+    expect(store.logs).toEqual([]);
+    expect(store.complianceLogs).toContainEqual(
+      expect.objectContaining({ outcome: 'BLOCK', subject: 'send:khata:family-1' })
+    );
   });
 
   it('reads the send window and the day in UTC for a stored zone Intl refuses, instead of failing the run', async () => {

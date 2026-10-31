@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({ transaction: vi.fn(), scope: vi.fn(), query: vi.fn() }));
 vi.mock('@/lib/db', () => ({ db: { $transaction: mocks.transaction } }));
 import { createTenantDb, withTenantDb, withPlatformDb } from './scoped-db';
+import { afterTenantTransaction } from '@/lib/side-effects/scope';
 beforeEach(() => {
   vi.resetAllMocks();
   mocks.transaction.mockImplementation(async (run) =>
@@ -11,6 +12,45 @@ beforeEach(() => {
   mocks.query.mockResolvedValue([]);
 });
 describe('tenant transaction isolation options', () => {
+  it.each([false, true])(
+    'awaits deferred evidence after the transaction ends (rollback=%s)',
+    async (rollback) => {
+      const events: string[] = [];
+      let release: () => void = () => {};
+      const evidence = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      mocks.transaction.mockImplementation(async (run) => {
+        try {
+          return await run({ $queryRawUnsafe: mocks.scope });
+        } finally {
+          events.push('transaction ended');
+        }
+      });
+      const operation = withTenantDb('org', async () => {
+        afterTenantTransaction(async () => {
+          events.push('evidence started');
+          await evidence;
+          events.push('evidence saved');
+        });
+        if (rollback) throw new Error('rejected');
+      });
+      const settled = operation.then(
+        () => events.push('resolved'),
+        () => events.push('rejected')
+      );
+      await vi.waitFor(() => expect(events).toEqual(['transaction ended', 'evidence started']));
+      release();
+      await settled;
+      expect(events).toEqual([
+        'transaction ended',
+        'evidence started',
+        'evidence saved',
+        rollback ? 'rejected' : 'resolved',
+      ]);
+    }
+  );
+
   it('forwards explicit isolation while applying tenant and user scope before queries', async () => {
     await withTenantDb('org', (tx) => tx.restaurantPrintRoute.findMany(), {
       userId: 'operator',
