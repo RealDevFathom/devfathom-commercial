@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createProjectSchema } from '@/app/api/v1/projects/route';
+import { createProjectSchema } from '@/app/api/v1/projects/schema';
 
 describe('REST project date ranges', () => {
   it('rejects an end date before the start date', () => {
