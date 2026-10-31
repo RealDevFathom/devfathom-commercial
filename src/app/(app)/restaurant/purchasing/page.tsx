@@ -114,10 +114,11 @@ export default async function PurchasingPage({
   if (!user) return <AccessState moduleEnabled={moduleEnabled} />;
 
   const subject = subjectFromSession(user);
-  const [readable, creatable, approvable] = await Promise.all([
+  const [readable, creatable, approvable, configurable] = await Promise.all([
     can(subject, 'inventory:read', undefined, { db: ctx.db, source: 'TRPC' }),
     can(subject, 'purchasing:create', undefined, { db: ctx.db, source: 'TRPC' }),
     can(subject, 'purchasing:approve', undefined, { db: ctx.db, source: 'TRPC' }),
+    can(subject, 'restaurant:configure', undefined, { db: ctx.db, source: 'TRPC' }),
   ]);
 
   if (!moduleEnabled || !readable) return <AccessState moduleEnabled={moduleEnabled} />;
@@ -125,19 +126,33 @@ export default async function PurchasingPage({
   const caller = restaurantPurchasingRouter.createCaller(ctx);
   let loaded;
   try {
-    const [supplierPage, orderPage, branches, locations, stockItems, units] = await Promise.all([
+    const branches = await ctx.db.restaurantBranch.findMany({
+      where: {
+        organizationId: ctx.organization?.id ?? ctx.session!.user.organizationId,
+        active: true,
+        ...(!configurable && {
+          OR: [
+            { staffProfiles: { some: { userId: user.id, status: 'ACTIVE' } } },
+            { assignments: { some: { userId: user.id } } },
+          ],
+        }),
+      },
+      orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
+      select: { id: true, name: true },
+    });
+    // The router reserves unfiltered lists for restaurant:configure. Keep every
+    // branch-specific request authorized there, then merge the newest 100 orders.
+    const orderPages = configurable
+      ? [caller.listPurchaseOrders({ limit: 100 })]
+      : branches.map(({ id }) => caller.listPurchaseOrders({ branchId: id, limit: 100 }));
+    const [supplierPage, pages, locations, stockItems, units] = await Promise.all([
       caller.listSuppliers({ activeOnly: true, limit: 100 }),
-      caller.listPurchaseOrders({ limit: 100 }),
-      ctx.db.restaurantBranch.findMany({
-        where: {
-          organizationId: ctx.organization?.id ?? ctx.session!.user.organizationId,
-          active: true,
-        },
-        orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
-        select: { id: true, name: true },
-      }),
+      Promise.all(orderPages),
       ctx.db.restaurantStockLocation.findMany({
-        where: { isActive: true },
+        where: {
+          isActive: true,
+          ...(!configurable && { branchId: { in: branches.map(({ id }) => id) } }),
+        },
         orderBy: { name: 'asc' },
         select: { id: true, branchId: true, name: true },
       }),
@@ -155,10 +170,18 @@ export default async function PurchasingPage({
         select: { id: true, name: true, abbreviation: true },
       }),
     ]);
+    const orders = pages.flatMap((page) => page.orders);
+    if (!configurable) {
+      orders.sort(
+        (a, b) =>
+          b.createdAt.getTime() - a.createdAt.getTime() || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0)
+      );
+    }
+    const visibleOrders = orders.slice(0, 100);
     const selectedSummary =
-      orderPage.orders.find((order) => order.id === query.selected) ??
-      orderPage.orders.find((order) => order.receiptCount > 0) ??
-      orderPage.orders[0] ??
+      visibleOrders.find((order) => order.id === query.selected) ??
+      visibleOrders.find((order) => order.receiptCount > 0) ??
+      visibleOrders[0] ??
       null;
     const selectedOrder = selectedSummary
       ? await caller.getPurchaseOrder({ purchaseOrderId: selectedSummary.id })
@@ -170,7 +193,7 @@ export default async function PurchasingPage({
       : [];
     loaded = {
       suppliers: supplierPage.suppliers,
-      orders: orderPage.orders,
+      orders: visibleOrders,
       branches,
       locations,
       stockItems,

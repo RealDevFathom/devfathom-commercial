@@ -175,6 +175,100 @@ describe('PurchasingPage order selection', () => {
   });
 });
 
+describe('PurchasingPage branch scope', () => {
+  beforeEach(() => {
+    mocks.resolveTenantActor.mockResolvedValue(actor);
+    mocks.can.mockImplementation(async (_subject, action) => action !== 'restaurant:configure');
+  });
+
+  it('loads primary and assigned branches without requesting an all-branch list', async () => {
+    const ctx = contextStub();
+    ctx.db.restaurantBranch.findMany.mockResolvedValue([
+      { id: 'primary', name: 'Primary' },
+      { id: 'assigned', name: 'Assigned' },
+    ]);
+    mocks.createTRPCContext.mockResolvedValue(ctx);
+    const summary = (id: string, branchId: string, createdAt: string) => ({
+      id,
+      branchId,
+      createdAt: new Date(createdAt),
+      reference: id,
+      supplierName: 'Supplier',
+      status: 'DRAFT',
+      receiptCount: 0,
+    });
+    const primary = summary('primary-order', 'primary', '2026-10-01');
+    const assigned = summary('assigned-order', 'assigned', '2026-10-02');
+    const listPurchaseOrders = vi.fn(async (input: { branchId?: string }) => {
+      if (!input.branchId) throw new TRPCError({ code: 'FORBIDDEN' });
+      return { orders: input.branchId === 'primary' ? [primary] : [assigned] };
+    });
+    const getPurchaseOrder = vi.fn().mockResolvedValue({ ...assigned, lines: [], receipts: [] });
+    mocks.createCaller.mockReturnValue({
+      listSuppliers: vi.fn().mockResolvedValue({ suppliers: [] }),
+      listPurchaseOrders,
+      getPurchaseOrder,
+    });
+
+    render(await PurchasingPage({ searchParams }));
+
+    expect(screen.queryByText('Purchasing could not load')).toBeNull();
+    expect(screen.getByText('primary-order')).toBeDefined();
+    expect(screen.getByRole('cell', { name: 'assigned-order' })).toBeDefined();
+    expect(getPurchaseOrder).toHaveBeenCalledWith({ purchaseOrderId: 'assigned-order' });
+    expect(listPurchaseOrders.mock.calls).toEqual([
+      [{ branchId: 'primary', limit: 100 }],
+      [{ branchId: 'assigned', limit: 100 }],
+    ]);
+    expect(ctx.db.restaurantBranch.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          organizationId: 'org-1',
+          active: true,
+          OR: [
+            { staffProfiles: { some: { userId: 'user-1', status: 'ACTIVE' } } },
+            { assignments: { some: { userId: 'user-1' } } },
+          ],
+        },
+      })
+    );
+    expect(ctx.db.restaurantStockLocation.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { isActive: true, branchId: { in: ['primary', 'assigned'] } },
+      })
+    );
+  });
+
+  it('keeps an empty branch scope empty instead of falling back to all branches', async () => {
+    const ctx = contextStub();
+    mocks.createTRPCContext.mockResolvedValue(ctx);
+    const caller = mocks.createCaller();
+
+    render(await PurchasingPage({ searchParams }));
+
+    expect(screen.queryByText('Purchasing could not load')).toBeNull();
+    expect(caller.listPurchaseOrders).not.toHaveBeenCalled();
+    expect(ctx.db.restaurantStockLocation.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { isActive: true, branchId: { in: [] } } })
+    );
+  });
+
+  it('preserves all-branch lists for staff with restaurant:configure', async () => {
+    mocks.can.mockResolvedValue(true);
+    const ctx = contextStub();
+    mocks.createTRPCContext.mockResolvedValue(ctx);
+    const caller = mocks.createCaller();
+
+    render(await PurchasingPage({ searchParams }));
+
+    expect(screen.queryByText('Purchasing could not load')).toBeNull();
+    expect(caller.listPurchaseOrders).toHaveBeenCalledWith({ limit: 100 });
+    expect(ctx.db.restaurantBranch.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { organizationId: 'org-1', active: true } })
+    );
+  });
+});
+
 type ReceivingProps = ComponentProps<typeof ReceivingForm>;
 
 function receivingProps(node: ReactNode): ReceivingProps | undefined {
