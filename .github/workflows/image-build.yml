@@ -2,8 +2,8 @@ name: Image build
 
 # The staging image build is the only thing that compiles this app for a
 # container, and it only runs after a merge — so a build that dies on x86_64 is
-# found in the deploy, not in the pull request. This runs the same build for
-# linux/amd64 (emulated on the self-hosted Mac runner), before merge. It needs no secret: the Dockerfile supplies
+# found in the deploy, not in the pull request. This runs the same build on a
+# native x64 runner, before merge. It needs no secret: the Dockerfile supplies
 # its own AUTH_SECRET=container-build-only, and nothing here pushes or deploys.
 
 on:
@@ -21,11 +21,16 @@ jobs:
   build:
     name: Build the image on native amd64
     if: contains(github.event.pull_request.labels.*.name, 'ci-ready') || github.event_name != 'pull_request'
-    # Self-hosted Linux runner in Docker on the Mac (arm64 host). The build is
-    # forced to linux/amd64 through buildx emulation, so an x86_64-only build
-    # failure still shows up here, without spending GitHub-hosted minutes.
-    runs-on: [self-hosted, linux, mac-runner]
+    runs-on: ubuntu-latest
     steps:
+      # The point of this job is the architecture. If `ubuntu-latest` ever moves
+      # to arm64, a passing build would stop meaning what it says here.
+      - name: Require a native x64 runner
+        run: |
+          if [ "$RUNNER_ARCH" != "X64" ]; then
+            echo "::error::this check only proves anything on x64, but the runner reported $RUNNER_ARCH"
+            exit 1
+          fi
       - uses: actions/checkout@v7
-      - name: Build the image for linux/amd64
-        run: docker buildx build --platform linux/amd64 --progress=plain .
+      - name: Build the image
+        run: docker build --progress=plain .

@@ -1,8 +1,15 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import { assertCiMemory } from '../scripts/check-ci-memory.mjs';
 
 const GiB = 1024 ** 3;
+
+function workflow(name: string) {
+  return readFileSync(join(process.cwd(), '.github', 'workflows', name), 'utf8');
+}
 
 describe('QA runner memory preflight', () => {
   it('rejects the reviewed 6 GiB Docker VM even on a larger host', () => {
@@ -29,5 +36,37 @@ describe('QA runner memory preflight', () => {
 
   it('requires headroom above the V8 heap allowance', () => {
     expect(() => assertCiMemory(8 * GiB, 16 * GiB, [])).toThrow('at least 12288 MiB');
+  });
+});
+
+describe('PR runner safety', () => {
+  it.each([
+    ['qa.yml', 2],
+    ['image-build.yml', 1],
+  ] as const)('keeps every job in %s on a disposable hosted VM', (name, jobCount) => {
+    const source = workflow(name);
+    const runners = [...source.matchAll(/^    runs-on: (.+)$/gm)].map((match) => match[1]);
+    expect(runners).toEqual(Array(jobCount).fill('ubuntu-latest'));
+    expect(source).not.toContain('self-hosted,');
+  });
+
+  it('retains the QA memory checks without persistent-host tool installers', () => {
+    const source = workflow('qa.yml');
+    expect(source.match(/run: node scripts\/check-ci-memory\.mjs/g)).toHaveLength(2);
+    expect(source).not.toContain('InstallAzureCLIDeb');
+    expect(source).not.toContain('sudo bash');
+    expect(source).not.toContain('command -v psql');
+    expect(source).not.toContain('command -v az');
+    expect(source).not.toContain('az bicep install');
+    expect(source.match(/uses: actions\/setup-node@[a-f0-9]{40} /g)).toHaveLength(2);
+  });
+
+  it('rejects a non-native runner before building the amd64 image', () => {
+    const source = workflow('image-build.yml');
+    const guard = source.indexOf('if [ "$RUNNER_ARCH" != "X64" ]; then');
+    const build = source.indexOf('run: docker build --progress=plain .');
+    expect(guard).toBeGreaterThan(-1);
+    expect(build).toBeGreaterThan(guard);
+    expect(source.slice(guard, build)).toContain('exit 1');
   });
 });

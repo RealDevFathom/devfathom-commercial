@@ -24,9 +24,9 @@ concurrency:
 jobs:
   automated-gate:
     name: WHA-1125 automated gate
-    # Runs on the self-hosted Linux runner in Docker on the Mac (one job at a time), not GitHub-hosted minutes.
+    # Keep PR code on disposable hosted VMs until self-hosted isolation is provisioned.
     if: contains(github.event.pull_request.labels.*.name, 'ci-ready') || github.event_name != 'pull_request'
-    runs-on: [self-hosted, linux, mac-runner]
+    runs-on: ubuntu-latest
     services:
       postgres:
         image: postgres:16
@@ -152,28 +152,12 @@ jobs:
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.sha || github.sha }}
           fetch-depth: 0
-      # The self-hosted runner image ships an old system Node; pin a modern one.
-      - uses: actions/setup-node@v4
+      # Vitest workers use Node; select Node 22 independently of the hosted image default.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
       - name: Check runner memory budget
         run: node scripts/check-ci-memory.mjs
-      - name: Install PostgreSQL client
-        run: |
-          if ! command -v psql >/dev/null; then
-            sudo apt-get update
-            sudo apt-get install --yes postgresql-client
-          fi
-          psql --version
-      - name: Install Azure CLI and Bicep
-        run: |
-          if ! command -v az >/dev/null; then
-            curl --fail --silent --show-error --location https://aka.ms/InstallAzureCLIDeb --output "$RUNNER_TEMP/install-azure-cli.sh"
-            sudo bash "$RUNNER_TEMP/install-azure-cli.sh"
-          fi
-          az version
-          az bicep install
-          az bicep version
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.2
@@ -367,8 +351,8 @@ jobs:
     name: WHA-1132 browser gate
     needs: automated-gate
     if: always() && needs.automated-gate.result == 'success'
-    # Runs on the self-hosted Linux runner in Docker on the Mac (one job at a time), not GitHub-hosted minutes.
-    runs-on: [self-hosted, linux, mac-runner]
+    # Keep PR code on disposable hosted VMs until self-hosted isolation is provisioned.
+    runs-on: ubuntu-latest
     services:
       postgres:
         image: postgres:16
@@ -405,19 +389,12 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.sha || github.sha }}
-      # The self-hosted runner image ships an old system Node; pin a modern one.
-      - uses: actions/setup-node@v4
+      # Vitest workers use Node; select Node 22 independently of the hosted image default.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
       - name: Check runner memory budget
         run: node scripts/check-ci-memory.mjs
-      - name: Install PostgreSQL client
-        run: |
-          if ! command -v psql >/dev/null; then
-            sudo apt-get update
-            sudo apt-get install --yes postgresql-client
-          fi
-          psql --version
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.2
