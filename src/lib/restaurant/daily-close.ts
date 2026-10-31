@@ -456,7 +456,6 @@ export async function cutClose(db: ScopedDb, input: CutCloseInput): Promise<CutC
   const businessDate = businessDateToUtcDate(input.businessDate);
   return runMoneyTransaction(db, async (tx) => {
     const branch = await lockDailyClose(tx, input.branchId, input.businessDate);
-    assertCloseDateEligible(input.businessDate, branch);
     const canonical = canonicalClosePayload({
       version: 1,
       branchId: input.branchId,
@@ -464,6 +463,8 @@ export async function cutClose(db: ScopedDb, input: CutCloseInput): Promise<CutC
     });
     const idem = await beginMoneyIdempotent(tx, input.actor, 'cash.day_close', canonical);
     if (idem.replay) return decodeFrozenCloseResult(idem.resultPayload);
+    // Configuration changes must not invalidate a completed command's receipt.
+    assertCloseDateEligible(input.businessDate, branch);
 
     const existing = await tx.restaurantDailyClose.count({
       where: { branchId: input.branchId, businessDate },
@@ -539,7 +540,6 @@ export async function correctClose(
 
   return runMoneyTransaction(db, async (tx) => {
     const branch = await lockDailyClose(tx, input.branchId, input.businessDate);
-    assertCloseDateEligible(input.businessDate, branch);
     const canonical = canonicalClosePayload({
       version: 1,
       branchId: input.branchId,
@@ -550,6 +550,8 @@ export async function correctClose(
     });
     const idem = await beginMoneyIdempotent(tx, input.actor, 'cash.day_correct', canonical);
     if (idem.replay) return decodeFrozenCorrectCloseResult(idem.resultPayload);
+    // Configuration changes must not invalidate a completed command's receipt.
+    assertCloseDateEligible(input.businessDate, branch);
 
     const chain = await tx.restaurantDailyClose.findMany({
       where: { branchId: input.branchId, businessDate },
