@@ -139,6 +139,7 @@ vi.mock('./counter-rx-panel', () => ({
 vi.mock('./counter-keymap-legend', () => ({ CounterKeymapLegend: () => null }));
 vi.mock('./counter-search-results', () => ({ CounterSearchResults: () => null }));
 vi.mock('./counter-substitute-proposals', () => ({ CounterSubstituteProposals: () => null }));
+vi.mock('./counter-upsell-suggestions', () => ({ CounterUpsellSuggestions: () => null }));
 vi.mock('./counter-unit-toggle', () => ({ CounterUnitToggle: () => null }));
 
 import { PharmacyCounterConsole } from './counter-console';
