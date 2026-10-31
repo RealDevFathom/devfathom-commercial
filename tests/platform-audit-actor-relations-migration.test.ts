@@ -10,6 +10,13 @@ const migration = readFileSync(
   ),
   'utf8'
 );
+const purgeSafeMigration = readFileSync(
+  join(
+    process.cwd(),
+    'prisma/migrations/20261031120000_platform_audit_purge_safe_tenant_actor/migration.sql'
+  ),
+  'utf8'
+);
 
 describe('platform audit actor relation migration', () => {
   it('enforces both actor relations without discarding historical orphan identifiers', () => {
@@ -27,5 +34,16 @@ describe('platform audit actor relation migration', () => {
       'CHECK ("actorTenantUserId" IS NULL OR "organizationId" IS NOT NULL) NOT VALID'
     );
     expect(migration.match(/ON DELETE RESTRICT ON UPDATE CASCADE NOT VALID/g)).toHaveLength(2);
+  });
+
+  it('validates new tenant attribution without coupling retained audit rows to user deletion', () => {
+    expect(purgeSafeMigration).toContain(
+      'DROP CONSTRAINT "platform_audit_logs_actorTenantUserId_fkey"'
+    );
+    expect(purgeSafeMigration).toContain('BEFORE INSERT ON "platform_audit_logs"');
+    expect(purgeSafeMigration).toContain('"organizationId" = NEW."organizationId"');
+    expect(purgeSafeMigration).toContain('id = NEW."actorTenantUserId"');
+    expect(purgeSafeMigration).toContain('FOR KEY SHARE');
+    expect(purgeSafeMigration).toContain("ERRCODE = '23503'");
   });
 });

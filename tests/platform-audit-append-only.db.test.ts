@@ -96,6 +96,37 @@ describe.skipIf(!url)('platform audit ledger on disposable PostgreSQL', () => {
       )
     ).rejects.toThrow(/foreign key constraint/i);
   });
+  it.each([
+    { organizationId: otherOrg, actorTenantUserId: `missing_${suffix}` },
+    { actorTenantUserId: tenantActor },
+  ])('rejects missing tenant actor or organization context: %j', async (attribution) => {
+    await expect(
+      scoped((db) =>
+        db.platformAuditLog.create({
+          data: { ...attribution, action: `${action}.invalid_actor` },
+        })
+      )
+    ).rejects.toThrow();
+  });
+  it('retains an unchanged audit row after deleting its tenant actor', async () => {
+    const saved = await scoped((db) =>
+      db.platformAuditLog.create({
+        data: {
+          organizationId: otherOrg,
+          actorTenantUserId: tenantActor,
+          action: `${action}.retained_actor`,
+        },
+      })
+    );
+    await scoped((db) => db.user.delete({ where: { id: tenantActor } }));
+    const retained = await scoped((db) =>
+      db.platformAuditLog.findUniqueOrThrow({
+        where: { id: saved.id },
+        include: { actorTenantUser: true },
+      })
+    );
+    expect(retained).toEqual({ ...saved, actorTenantUser: null });
+  });
   afterAll(async () => {
     await (await import('@/lib/db')).db.$disconnect();
   });

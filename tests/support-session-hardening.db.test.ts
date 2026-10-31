@@ -1,17 +1,24 @@
 // @vitest-environment node
 import { beforeAll, afterAll, describe, expect, it, vi } from 'vitest';
+import { randomUUID } from 'node:crypto';
 import type { PlatformIdentity } from '@/lib/platform/auth';
 import { assertDisposableRlsDatabase } from './disposable-rls-database';
 
 const url = process.env.TEST_DATABASE_URL;
+const suffix = randomUUID();
 const actor: PlatformIdentity = {
-  id: 'wha1598_operator',
+  id: `wha1598_operator_${suffix}`,
   sessionId: 'wha1598_session',
   name: 'Support Test',
-  email: 'support@example.test',
+  email: `support_${suffix}@example.test`,
   role: 'SUPPORT',
   mfaEnabled: true,
   expiresAt: new Date(Date.now() + 600000),
+};
+const otherOperator = {
+  ...actor,
+  id: `wha1598_other_operator_${suffix}`,
+  email: `other_support_${suffix}@example.test`,
 };
 let scoped: typeof import('@/lib/tenancy/scoped-db');
 let support: typeof import('@/lib/tenancy/support-session');
@@ -33,6 +40,17 @@ describe.skipIf(!url)('support hardening on restricted PostgreSQL', () => {
     >`SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user`;
     expect(role).toEqual([{ rolsuper: false, rolbypassrls: false }]);
     await scoped.withPlatformDb(async (tx) => {
+      for (const operator of [actor, otherOperator]) {
+        await tx.platformUser.create({
+          data: {
+            id: operator.id,
+            name: operator.name,
+            email: operator.email,
+            role: operator.role,
+            passwordHash: 'fixture',
+          },
+        });
+      }
       const org = await tx.organization.create({
         data: {
           slug: `wha1598-${Date.now()}`,
@@ -112,7 +130,6 @@ describe.skipIf(!url)('support hardening on restricted PostgreSQL', () => {
       supportSessionId: session.supportSessionId,
       tenantUserRole: 'ADMIN',
     });
-    const otherOperator = { ...actor, id: 'wha1598_other_operator' };
     await support.forceEndSupportSession({
       actor: otherOperator,
       supportSessionId: session.supportSessionId,

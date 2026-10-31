@@ -83,6 +83,8 @@ const BRANCH_ID = `wha1209_branch_${suffix}`;
 const LIVE_BRANCH_ID = `wha1209_live_branch_${suffix}`;
 const LOCATION_ID = `wha1209_loc_${suffix}`;
 const JOB_ID = `wha1209_job_${suffix}`;
+const AUDITED_USER_ID = `purge_audited_user_${suffix}`;
+const AUDIT_ID = `purge_audit_${suffix}`;
 const PURGED_PROFILE_ID = `wha1220_profile_${suffix}`;
 const LIVE_PROFILE_ID = `wha1220_live_profile_${suffix}`;
 const HOTEL_PURGED_ORG = `hotel_purge_${suffix}`;
@@ -99,6 +101,7 @@ type ScopedDb = import('@/lib/tenancy/scoped-db').ScopedDb;
 let withPlatformDb: typeof import('@/lib/tenancy/scoped-db').withPlatformDb;
 let withTenantDb: typeof import('@/lib/tenancy/scoped-db').withTenantDb;
 let processPlatformJobs: typeof import('./jobs').processPlatformJobs;
+let retainedAudit: import('@/generated/prisma/client').PlatformAuditLog;
 
 /** An organization plus the onboarding history that made it undeletable. */
 async function seedTenant(db: ScopedDb, organizationId: string, status: string) {
@@ -199,6 +202,30 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
       await seedTenant(db, PURGED_ORG, 'PURGING');
       await seedTenant(db, LIVE_ORG, 'ACTIVE');
 
+      await db.organizationDepartment.create({
+        data: { organizationId: PURGED_ORG, key: 'ADMINISTRATION', name: 'Administration' },
+      });
+      await db.user.create({
+        data: {
+          id: AUDITED_USER_ID,
+          organizationId: PURGED_ORG,
+          name: 'Previously supported administrator',
+          email: `${AUDITED_USER_ID}@example.test`,
+          role: 'ADMIN',
+          department: 'ADMINISTRATION',
+          title: 'Administrator',
+        },
+      });
+      retainedAudit = await db.platformAuditLog.create({
+        data: {
+          id: AUDIT_ID,
+          organizationId: PURGED_ORG,
+          actorTenantUserId: AUDITED_USER_ID,
+          action: 'support.session.started',
+          targetType: 'PlatformSupportSession',
+        },
+      });
+
       // The mutually-referencing pair: a branch that names a default stock
       // location which in turn belongs to that branch.
       await db.$executeRawUnsafe(
@@ -246,7 +273,7 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
     });
   }, 60_000);
 
-  it('purges a pharmacy tenant that has confirmed an onboarding step', async () => {
+  it('purges a pharmacy tenant with onboarding history and an audited support actor', async () => {
     const result = await processPlatformJobs(1);
 
     const job = await withPlatformDb((db) =>
@@ -316,6 +343,17 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
       })
     );
     expect(organization.status).toBe('PURGED');
+    expect(
+      await withPlatformDb((db) => db.user.count({ where: { organizationId: PURGED_ORG } }))
+    ).toBe(0);
+    expect(
+      await withPlatformDb((db) =>
+        db.platformAuditLog.findUniqueOrThrow({
+          where: { id: AUDIT_ID },
+          include: { actorTenantUser: true },
+        })
+      )
+    ).toEqual({ ...retainedAudit, actorTenantUser: null });
   });
 
   it('keeps regulatory profiles append-only outside the exact purge context', async () => {
