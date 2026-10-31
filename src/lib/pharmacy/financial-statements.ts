@@ -1,6 +1,9 @@
 import 'server-only';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { projectProfitAndLoss } from './accounts/profit-loss';
+
+export { projectProfitAndLoss } from './accounts/profit-loss';
 
 type Scope = { organizationId: string; branchId: string };
 type AccountTotals = {
@@ -10,61 +13,6 @@ type AccountTotals = {
   debit: bigint;
   credit: bigint;
 };
-
-const profitAndLossAccounts = [
-  'SALES_REVENUE',
-  'SALES_DISCOUNT',
-  'COST_OF_GOODS_SOLD',
-  'INVENTORY_WRITE_OFF',
-  'INVENTORY_SHRINKAGE',
-  'OPERATING_EXPENSE',
-  'LOYALTY_REDEMPTION',
-  'CASH_OVER_SHORT',
-] as const;
-
-type ProfitAndLossAccount = (typeof profitAndLossAccounts)[number];
-
-/**
- * Project net profit or loss from period movements in the canonical journal.
- *
- * Every P&L account is expressed in its natural presentation direction:
- * revenue is credit minus debit, while contra-revenue and expenses are debit
- * minus credit. Net profit is consequently revenue minus every other row. A
- * reversal needs no special handling because its journal sides are reversed.
- */
-export function projectProfitAndLoss(totals: AccountTotals[]) {
-  const accounts = new Set<string>(profitAndLossAccounts);
-  const currencies = new Map<string, Map<ProfitAndLossAccount, bigint>>();
-
-  for (const total of totals) {
-    if (
-      !accounts.has(total.accountCode) ||
-      (total.debit === BigInt(0) && total.credit === BigInt(0))
-    )
-      continue;
-    const accountCode = total.accountCode as ProfitAndLossAccount;
-    const rows = currencies.get(total.currency) ?? new Map<ProfitAndLossAccount, bigint>();
-    rows.set(
-      accountCode,
-      accountCode === 'SALES_REVENUE' ? total.credit - total.debit : total.debit - total.credit
-    );
-    currencies.set(total.currency, rows);
-  }
-
-  return [...currencies.entries()]
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([currency, values]) => {
-      const rows = profitAndLossAccounts.map((accountCode) => ({
-        accountCode,
-        amountMinor: (values.get(accountCode) ?? BigInt(0)).toString(),
-      }));
-      const revenue = values.get('SALES_REVENUE') ?? BigInt(0);
-      const deductions = profitAndLossAccounts
-        .filter((accountCode) => accountCode !== 'SALES_REVENUE')
-        .reduce((sum, accountCode) => sum + (values.get(accountCode) ?? BigInt(0)), BigInt(0));
-      return { currency, rows, netProfitMinor: (revenue - deductions).toString() };
-    });
-}
 
 /** Signed debit balances, including additive reversals. No operational revaluation. */
 export async function financialStatements(
