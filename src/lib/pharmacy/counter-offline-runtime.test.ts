@@ -21,7 +21,7 @@ import { createMemoryDriver } from '@/lib/retail-terminal/local-store';
 import type { TerminalStorageDriver } from '@/lib/retail-terminal/local-store';
 
 import { PharmacyCounterRuntime } from './counter-offline-runtime';
-import type { SnapshotVerifier } from './counter-offline-runtime';
+import type { CounterRuntimeState, SnapshotVerifier } from './counter-offline-runtime';
 import type { CachedSnapshotState, PharmacyOfflineSnapshotKind } from './offline-action-matrix';
 import type { OfflineSnapshotEnvelope } from './offline-snapshot-envelope';
 
@@ -257,6 +257,100 @@ describe('PH-OFF OFF-01 — signed snapshots', () => {
     expect(counter.payloadFor('PRICES')).toEqual({ priceMinor: 200 });
   });
 
+  it('cannot commit an older snapshot after a newer verification finishes first', async () => {
+    const releases = new Map<number, (valid: boolean) => void>();
+    const verificationStarted = new Map<number, Promise<void>>();
+    const markStarted = new Map<number, () => void>();
+    for (const version of [2, 3]) {
+      verificationStarted.set(
+        version,
+        new Promise<void>((resolve) => markStarted.set(version, resolve))
+      );
+    }
+    const verifier: SnapshotVerifier = {
+      verify: ({ envelope, signature, publicKey: key }) => {
+        markStarted.get(envelope.version)?.();
+        return new Promise<boolean>((resolve) => {
+          releases.set(envelope.version, (valid) => {
+            resolve(valid && signing.verifySnapshotSignature(envelope, signature, key));
+          });
+        });
+      },
+    };
+    const counter = runtime(createMemoryDriver(), verifier);
+    await counter.hydrate();
+
+    const older = install(counter, 'PRICES', { priceMinor: 200 }, { version: 2 });
+    await verificationStarted.get(2);
+    const newer = install(counter, 'PRICES', { priceMinor: 300 }, { version: 3 });
+    await verificationStarted.get(3);
+
+    releases.get(3)?.(true);
+    expect(await newer).toMatchObject({ ok: true });
+    releases.get(2)?.(true);
+    expect(await older).toMatchObject({ ok: false, reason: 'STALE_VERSION' });
+    expect(counter.payloadFor('PRICES')).toEqual({ priceMinor: 300 });
+  });
+
+  it('cannot recreate a counter revoked while snapshot verification is in flight', async () => {
+    const driver = createMemoryDriver();
+    const enrolled = runtime(driver);
+    await enrolled.hydrate();
+    await install(enrolled, 'RULES');
+
+    let verificationStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      verificationStarted = resolve;
+    });
+    let finishVerification: (() => void) | undefined;
+    const finish = new Promise<void>((resolve) => {
+      finishVerification = resolve;
+    });
+    const delayedVerifier: SnapshotVerifier = {
+      verify: async ({ envelope, signature, publicKey: key }) => {
+        verificationStarted?.();
+        await finish;
+        return signing.verifySnapshotSignature(envelope, signature, key);
+      },
+    };
+    const installing = runtime(driver, delayedVerifier);
+    const revoking = runtime(driver);
+    expect(await installing.hydrate()).toBe('ready');
+    expect(await revoking.hydrate()).toBe('ready');
+
+    const installation = install(installing, 'PRICES', { priceMinor: 100 });
+    await started;
+    expect(await revoking.revoke()).toEqual({ commands: 0 });
+    finishVerification?.();
+
+    expect(await installation).toMatchObject({ ok: false, reason: 'DEVICE_REVOKED' });
+    expect(await driver.read('org_a::branch_a::counter_1')).toMatchObject({
+      queue: { replay: 'STOPPED_REVOKED' },
+    });
+    expect(installing.cachedSnapshotStates()).toEqual([]);
+  });
+
+  it('cannot reinstall a cached snapshot after revocation has completed', async () => {
+    const driver = createMemoryDriver();
+    const enrolled = runtime(driver);
+    await enrolled.hydrate();
+    await install(enrolled, 'RULES');
+
+    // This context retained the public verification key and a previously issued
+    // signed envelope, but does not read storage until after revocation.
+    const stale = runtime(driver);
+    expect(await enrolled.revoke()).toEqual({ commands: 0 });
+
+    expect(await install(stale, 'RULES')).toMatchObject({
+      ok: false,
+      reason: 'DEVICE_REVOKED',
+    });
+    expect(await driver.read('org_a::branch_a::counter_1')).toMatchObject({
+      catalog: { snapshots: [] },
+      queue: { replay: 'STOPPED_REVOKED' },
+    });
+  });
+
   it('survives a reload: an installed snapshot is read back from storage', async () => {
     const driver = createMemoryDriver();
     const first = runtime(driver);
@@ -275,6 +369,120 @@ describe('PH-OFF OFF-02 — the matrix gates what may be composed', () => {
     const result = await counter.enqueue(cashSale(2), MATRIX);
     expect(result.ok).toBe(true);
     expect(counter.snapshot().queue?.quotas[0]).toMatchObject({ consumedUnits: 2 });
+  });
+
+  it('serializes concurrent enqueues before allocating receipts, sequence and quota', async () => {
+    const driver = createMemoryDriver();
+    const counter = await readyCounter(driver);
+    const durableCompareAndSwap = driver.compareAndSwap;
+    let releaseFirstWrite: (() => void) | undefined;
+    let firstWriteStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      firstWriteStarted = resolve;
+    });
+    const release = new Promise<void>((resolve) => {
+      releaseFirstWrite = resolve;
+    });
+    let writes = 0;
+    driver.compareAndSwap = async (scopeKey, expected, value) => {
+      writes += 1;
+      if (writes === 1) {
+        firstWriteStarted?.();
+        await release;
+      }
+      return durableCompareAndSwap(scopeKey, expected, value);
+    };
+
+    const first = counter.enqueue(cashSale(1), MATRIX);
+    await started;
+    const second = counter.enqueue(cashSale(1), MATRIX);
+
+    // The second transition must not even persist until the first has become
+    // durable and published its newly consumed receipt, sequence and quota.
+    await Promise.resolve();
+    expect(writes).toBe(1);
+    releaseFirstWrite?.();
+    const results = await Promise.all([first, second]);
+
+    expect(results.every((result) => result.ok)).toBe(true);
+    expect(results.map((result) => (result.ok ? result.command.receiptNumber : null))).toEqual([
+      900, 901,
+    ]);
+    expect(results.map((result) => (result.ok ? result.command.sequence : null))).toEqual([1, 2]);
+    expect(counter.snapshot().queue).toMatchObject({
+      nextSequence: 3,
+      quotas: [{ consumedUnits: 2 }],
+    });
+    expect(counter.snapshot().queue?.commands).toHaveLength(2);
+
+    const reloaded = runtime(driver);
+    expect(await reloaded.hydrate()).toBe('ready');
+    expect(reloaded.snapshot().queue?.commands).toHaveLength(2);
+    expect(reloaded.snapshot().queue?.commands.map((command) => command.receiptNumber)).toEqual([
+      900, 901,
+    ]);
+  });
+
+  it('preserves concurrent sales from separately hydrated runtimes', async () => {
+    const driver = createMemoryDriver();
+    const first = await readyCounter(driver);
+    const second = runtime(driver);
+    expect(await second.hydrate()).toBe('ready');
+
+    const results = await Promise.all([
+      first.enqueue(cashSale(1), MATRIX),
+      second.enqueue(cashSale(1), MATRIX),
+    ]);
+
+    expect(results.every((result) => result.ok)).toBe(true);
+    expect(
+      results.map((result) => (result.ok ? result.command.receiptNumber : null)).sort()
+    ).toEqual([900, 901]);
+    expect(results.map((result) => (result.ok ? result.command.sequence : null)).sort()).toEqual([
+      1, 2,
+    ]);
+
+    const reloaded = runtime(driver);
+    expect(await reloaded.hydrate()).toBe('ready');
+    expect(reloaded.snapshot().queue).toMatchObject({
+      nextSequence: 3,
+      quotas: [{ consumedUnits: 2 }],
+    });
+    expect(reloaded.snapshot().queue?.commands).toHaveLength(2);
+  });
+
+  it('does not recreate a counter purged by another hydrated runtime', async () => {
+    const driver = createMemoryDriver();
+    const revoking = await readyCounter(driver);
+    const stale = runtime(driver);
+    expect(await stale.hydrate()).toBe('ready');
+
+    expect(await revoking.revoke()).toEqual({ commands: 0 });
+    expect(await stale.enqueue(cashSale(1), MATRIX)).toMatchObject({ ok: false });
+
+    expect(await driver.read('org_a::branch_a::counter_1')).toMatchObject({
+      queue: { replay: 'STOPPED_REVOKED' },
+    });
+    expect(stale.snapshot().queue?.commands).toEqual([]);
+    expect(stale.snapshot().queue?.leases).toEqual([]);
+    expect(stale.snapshot().queue?.quotas).toEqual([]);
+    expect(stale.cachedSnapshotStates()).toEqual([]);
+  });
+
+  it('clears stale counter state when rehydration finds a revoked scope', async () => {
+    const driver = createMemoryDriver();
+    const revoking = await readyCounter(driver);
+    const stale = runtime(driver);
+    expect(await stale.hydrate()).toBe('ready');
+    expect(await stale.enqueue(cashSale(1), MATRIX)).toMatchObject({ ok: true });
+
+    expect(await revoking.revoke()).toEqual({ commands: 1 });
+    expect(await stale.hydrate()).toBe('ready');
+
+    expect(stale.snapshot().queue?.commands).toEqual([]);
+    expect(stale.snapshot().queue?.leases).toEqual([]);
+    expect(stale.snapshot().queue?.quotas).toEqual([]);
+    expect(stale.cachedSnapshotStates()).toEqual([]);
   });
 
   it('refuses a denied action and queues nothing', async () => {
@@ -468,6 +676,136 @@ describe('PH-OFF OFF-01 — reconnect never renumbers an issued receipt', () => 
 });
 
 describe('PH-OFF OFF-01 — replay: re-auth pauses, revocation purges', () => {
+  it.each(['IN_FLIGHT', 'ACKNOWLEDGED'])(
+    'retries a conflicting %s write without resending the completed request',
+    async (status) => {
+      const driver = createMemoryDriver();
+      const counter = await readyCounter(driver);
+      await counter.enqueue(cashSale(), MATRIX);
+      const other = runtime(driver);
+      await other.hydrate();
+      const compareAndSwap = driver.compareAndSwap;
+      let conflictInjected = false;
+      driver.compareAndSwap = async (key, expected, value) => {
+        if (
+          !conflictInjected &&
+          (value as CounterRuntimeState).queue?.commands[0]?.status === status
+        ) {
+          conflictInjected = true;
+          await other.enqueue(cashSale(), MATRIX);
+        }
+        return compareAndSwap(key, expected, value);
+      };
+
+      const sent: unknown[] = [];
+      expect(
+        await counter.replay(async (request) => {
+          sent.push(request.body.receiptNumber);
+          return { status: 200 };
+        })
+      ).toMatchObject({ state: 'IDLE' });
+      expect(conflictInjected).toBe(true);
+      expect(sent).toEqual([900, 901]);
+      const reloaded = runtime(driver);
+      await reloaded.hydrate();
+      expect(reloaded.snapshot().queue?.commands.map((command) => command.status)).toEqual([
+        'ACKNOWLEDGED',
+        'ACKNOWLEDGED',
+      ]);
+    }
+  );
+
+  it('replays sales added by another context without losing acknowledgements', async () => {
+    const driver = createMemoryDriver();
+    const counter = await readyCounter(driver);
+    await counter.enqueue(cashSale(), MATRIX);
+    const other = runtime(driver);
+    await other.hydrate();
+
+    const sent: unknown[] = [];
+    const outcome = await counter.replay(async (request) => {
+      sent.push(request.body.receiptNumber);
+      if (sent.length === 1) {
+        expect(await other.enqueue(cashSale(), MATRIX)).toMatchObject({ ok: true });
+      }
+      return { status: 200, serverRef: `sale_${String(request.body.receiptNumber)}` };
+    });
+
+    expect(outcome.state).toBe('IDLE');
+    expect(sent).toEqual([900, 901]);
+    const reloaded = runtime(driver);
+    await reloaded.hydrate();
+    expect(reloaded.snapshot().queue?.commands.map((command) => command.status)).toEqual([
+      'ACKNOWLEDGED',
+      'ACKNOWLEDGED',
+    ]);
+    expect(reloaded.snapshot().queue?.quotas[0]?.consumedUnits).toBe(2);
+  });
+
+  it('purges all durable work when a revocation response races another context', async () => {
+    const driver = createMemoryDriver();
+    const counter = await readyCounter(driver);
+    await counter.enqueue(cashSale(), MATRIX);
+    const other = runtime(driver);
+    await other.hydrate();
+
+    const outcome = await counter.replay(async () => {
+      expect(await other.enqueue(cashSale(), MATRIX)).toMatchObject({ ok: true });
+      return { status: 403, serverMessage: 'This device has been revoked.' };
+    });
+
+    expect(outcome).toEqual({ state: 'STOPPED', discarded: { commands: 2 } });
+    const reloaded = runtime(driver);
+    await reloaded.hydrate();
+    expect(reloaded.snapshot()).toMatchObject({
+      catalog: { snapshotPublicKey: '', snapshots: [] },
+      queue: { replay: 'STOPPED_REVOKED', commands: [], leases: [], quotas: [] },
+    });
+  });
+
+  it.each(['same', 'other'])(
+    'keeps the revocation marker after %s-context revocation',
+    async (context) => {
+      const driver = createMemoryDriver();
+      const counter = await readyCounter(driver);
+      await counter.enqueue(cashSale(), MATRIX);
+      const revoking = context === 'same' ? counter : runtime(driver);
+
+      const outcome = await counter.replay(async () => {
+        await revoking.revoke();
+        return { status: 401, serverMessage: 'Session expired.' };
+      });
+
+      expect(outcome.state).toBe('STOPPED');
+      expect(await install(counter, 'RULES')).toMatchObject({
+        ok: false,
+        reason: 'DEVICE_REVOKED',
+      });
+      expect(await driver.read('org_a::branch_a::counter_1')).toMatchObject({
+        queue: { replay: 'STOPPED_REVOKED' },
+      });
+    }
+  );
+
+  it('does not reopen a command settled by another replay after a late re-auth response', async () => {
+    const driver = createMemoryDriver();
+    const counter = await readyCounter(driver);
+    await counter.enqueue(cashSale(), MATRIX);
+    const other = runtime(driver);
+
+    await counter.replay(async () => {
+      await other.replay(async () => ({ status: 200, serverRef: 'sale_900' }));
+      return { status: 401, serverMessage: 'Session expired.' };
+    });
+
+    const reloaded = runtime(driver);
+    await reloaded.hydrate();
+    expect(reloaded.snapshot().queue).toMatchObject({
+      replay: 'READY',
+      commands: [{ status: 'ACKNOWLEDGED', serverRef: 'sale_900' }],
+    });
+  });
+
   it('pauses and keeps the queue on a generic 401', async () => {
     const counter = await readyCounter(createMemoryDriver());
     await counter.enqueue(cashSale(1), MATRIX);
@@ -496,7 +834,20 @@ describe('PH-OFF OFF-01 — replay: re-auth pauses, revocation purges', () => {
     expect(counter.snapshot().queue?.commands).toEqual([]);
     // A revoked counter must not keep printing from a block it no longer owns.
     expect(counter.snapshot().queue?.leases).toEqual([]);
-    expect(await driver.read('org_a::branch_a::counter_1')).toBeUndefined();
+    expect(await driver.read('org_a::branch_a::counter_1')).toEqual({
+      schemaVersion: 2,
+      scope: { organizationId: 'org_a', branchId: 'branch_a', deviceId: 'counter_1' },
+      catalog: { snapshotPublicKey: '', snapshots: [] },
+      queue: {
+        deviceId: 'counter_1',
+        nextSequence: 1,
+        replay: 'STOPPED_REVOKED',
+        commands: [],
+        leases: [],
+        quotas: [],
+        safetyLeaseEvents: [],
+      },
+    });
   });
 
   it('quarantines a command the server refuses outright instead of looping', async () => {

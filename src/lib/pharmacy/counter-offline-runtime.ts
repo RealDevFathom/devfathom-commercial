@@ -25,12 +25,12 @@
  * enforcement is the guard on every write, not a promise in a comment.
  */
 import {
+  assertPersistSafe,
   createMemoryDriver,
   createTerminalIndexedDbDriver,
   emptyTerminalState,
-  purgeTerminalScope,
   readTerminalState,
-  writeTerminalState,
+  terminalScopeKey,
 } from '@/lib/retail-terminal/local-store';
 import type {
   PersistedTerminalState,
@@ -112,7 +112,7 @@ export interface SnapshotVerifier {
 
 export type InstallSnapshotResult =
   | { ok: true; snapshot: StoredCounterSnapshot }
-  | { ok: false; reason: EnvelopeRejection | 'BAD_SIGNATURE'; message: string };
+  | { ok: false; reason: EnvelopeRejection | 'BAD_SIGNATURE' | 'DEVICE_REVOKED'; message: string };
 
 export type CounterReplayResponse = {
   status: number;
@@ -128,7 +128,14 @@ type ReplayResult = {
 
 export class PharmacyCounterRuntime {
   private state: CounterRuntimeState;
+  private persistedState: CounterRuntimeState | undefined;
   private activeReplay: Promise<ReplayResult> | null = null;
+  /**
+   * Enqueue is a read-modify-write of the one persisted counter document. Keep
+   * those transitions in invocation order so two UI events cannot allocate
+   * from the same lease/quota snapshot while the first write is in flight.
+   */
+  private enqueueTail: Promise<void> = Promise.resolve();
 
   constructor(
     readonly scope: TerminalScope,
@@ -169,6 +176,19 @@ export class PharmacyCounterRuntime {
         queue: result.state.queue ?? createCounterQueue(this.scope.deviceId),
         catalog: result.state.catalog ?? this.cache(),
       };
+      this.persistedState = result.state;
+    } else {
+      // Hydration can be repeated on a long-lived runtime. If another context
+      // revoked and removed this counter, do not keep exposing its stale
+      // leases, quotas, or verified snapshots from an earlier hydration.
+      const snapshotPublicKey = this.cache().snapshotPublicKey;
+      this.state = emptyTerminalState<CounterQueueSnapshot, CounterCache>(
+        this.scope,
+        COUNTER_STORE_SCHEMA_VERSION
+      );
+      this.state.queue = createCounterQueue(this.scope.deviceId);
+      this.state.catalog = { snapshotPublicKey, snapshots: [] };
+      this.persistedState = undefined;
     }
     return 'ready';
   }
@@ -186,7 +206,91 @@ export class PharmacyCounterRuntime {
     payloadHash: string;
     nowMs: number;
   }): Promise<InstallSnapshotResult> {
-    const cache = this.cache();
+    return this.installSnapshotTransition(input, false);
+  }
+
+  private async installSnapshotTransition(
+    input: {
+      envelope: OfflineSnapshotEnvelope;
+      signature: string;
+      payload: unknown;
+      payloadHash: string;
+      nowMs: number;
+    },
+    rejectMissing: boolean
+  ): Promise<InstallSnapshotResult> {
+    try {
+      return await this.installSnapshotOnce(input, rejectMissing);
+    } catch (error) {
+      if (error instanceof CounterStorageConflictError) {
+        // Verification may take long enough for another context to publish a
+        // newer snapshot. Re-read and repeat every check rather than applying
+        // a replacement derived from the stale document. Once a CAS has
+        // conflicted, however, absence is a revocation boundary rather than a
+        // fresh scope that this in-flight installation may recreate.
+        return this.installSnapshotTransition(input, true);
+      }
+      throw error;
+    }
+  }
+
+  private async installSnapshotOnce(
+    input: {
+      envelope: OfflineSnapshotEnvelope;
+      signature: string;
+      payload: unknown;
+      payloadHash: string;
+      nowMs: number;
+    },
+    rejectMissing: boolean
+  ): Promise<InstallSnapshotResult> {
+    const durable = await readTerminalState<CounterQueueSnapshot, CounterCache>(
+      this.driver,
+      this.scope,
+      COUNTER_STORE_SCHEMA_VERSION
+    );
+    if (durable.status === 'unrecoverable') throw new Error(durable.message);
+    if (durable.status === 'ok' && durable.state.queue?.replay === 'STOPPED_REVOKED') {
+      this.adoptRevokedState(durable.state);
+      return {
+        ok: false,
+        reason: 'DEVICE_REVOKED',
+        message: 'This counter has been revoked and cannot install snapshots.',
+      };
+    }
+    if (durable.status === 'empty' && rejectMissing) {
+      const snapshotPublicKey = this.cache().snapshotPublicKey;
+      this.state = emptyTerminalState<CounterQueueSnapshot, CounterCache>(
+        this.scope,
+        COUNTER_STORE_SCHEMA_VERSION
+      );
+      this.state.queue = createCounterQueue(this.scope.deviceId);
+      this.state.catalog = { snapshotPublicKey, snapshots: [] };
+      this.persistedState = undefined;
+      return {
+        ok: false,
+        reason: 'DEVICE_REVOKED',
+        message: 'This counter was removed while the snapshot was being installed.',
+      };
+    }
+
+    const expectedState = durable.status === 'ok' ? durable.state : undefined;
+    const sourceState: CounterRuntimeState =
+      durable.status === 'ok'
+        ? {
+            ...durable.state,
+            queue: durable.state.queue ?? createCounterQueue(this.scope.deviceId),
+            catalog: durable.state.catalog ?? this.cache(),
+          }
+        : {
+            ...emptyTerminalState<CounterQueueSnapshot, CounterCache>(
+              this.scope,
+              COUNTER_STORE_SCHEMA_VERSION
+            ),
+            queue: createCounterQueue(this.scope.deviceId),
+            catalog: { snapshotPublicKey: this.cache().snapshotPublicKey, snapshots: [] },
+          };
+    const cache = sourceState.catalog ?? { snapshotPublicKey: '', snapshots: [] };
     const held = cache.snapshots.find((stored) => stored.envelope.kind === input.envelope.kind);
     const envelopeCheck = checkEnvelope({
       envelope: input.envelope,
@@ -218,10 +322,13 @@ export class PharmacyCounterRuntime {
       payload: input.payload,
       verified: true,
     };
-    const previousLease = this.safetyLeaseState().lease;
+    const queue = sourceState.queue ?? createCounterQueue(this.scope.deviceId);
+    const leases = cache.snapshots.map((snapshot) => snapshot.envelope.safetyLease);
+    const previousLease =
+      leases.sort((a, b) => Date.parse(b.issuedAt) - Date.parse(a.issuedAt))[0] ?? null;
     const eventType = previousLease ? 'RENEWED' : 'ISSUED';
     const nextState: CounterRuntimeState = {
-      ...this.state,
+      ...sourceState,
       catalog: {
         ...cache,
         snapshots: [
@@ -230,9 +337,9 @@ export class PharmacyCounterRuntime {
         ],
       },
       queue: {
-        ...this.queue(),
+        ...queue,
         safetyLeaseEvents: [
-          ...this.queue().safetyLeaseEvents,
+          ...queue.safetyLeaseEvents,
           {
             type: eventType,
             occurredAt: input.envelope.safetyLease.issuedAt,
@@ -243,7 +350,7 @@ export class PharmacyCounterRuntime {
         ],
       },
     };
-    await this.commit(nextState);
+    await this.commit(nextState, expectedState);
     return { ok: true, snapshot: stored };
   }
 
@@ -294,7 +401,7 @@ export class PharmacyCounterRuntime {
         ],
       },
     };
-    await this.commit(nextState);
+    await this.commit(nextState, this.persistedState);
     return true;
   }
 
@@ -310,12 +417,18 @@ export class PharmacyCounterRuntime {
 
   /** Record the receipt-number blocks this counter reserved before going offline. */
   async adoptLeases(leases: readonly CounterLeaseCursor[]): Promise<void> {
-    await this.commit({ ...this.state, queue: { ...this.queue(), leases: [...leases] } });
+    await this.commit(
+      { ...this.state, queue: { ...this.queue(), leases: [...leases] } },
+      this.persistedState
+    );
   }
 
   /** Record the OFF-03 quotas this counter was granted before going offline. */
   async adoptQuotas(quotas: readonly CounterQuota[]): Promise<void> {
-    await this.commit({ ...this.state, queue: { ...this.queue(), quotas: [...quotas] } });
+    await this.commit(
+      { ...this.state, queue: { ...this.queue(), quotas: [...quotas] } },
+      this.persistedState
+    );
   }
 
   /**
@@ -327,6 +440,72 @@ export class PharmacyCounterRuntime {
     input: CounterCommandInput,
     matrix: Omit<CounterMatrixInputs, 'snapshots'>
   ): Promise<CounterEnqueueResult> {
+    const result = this.enqueueTail.then(() => this.enqueueTransition(input, matrix));
+    // A failed persistence attempt must reject its caller without poisoning the
+    // queue: a later attempt still gets to evaluate the last published state.
+    this.enqueueTail = result.then(
+      () => undefined,
+      () => undefined
+    );
+    return result;
+  }
+
+  private async enqueueTransition(
+    input: CounterCommandInput,
+    matrix: Omit<CounterMatrixInputs, 'snapshots'>
+  ): Promise<CounterEnqueueResult> {
+    try {
+      return await this.enqueueTransitionOnce(input, matrix);
+    } catch (error) {
+      if (error instanceof CounterStorageConflictError) {
+        return this.enqueueTransition(input, matrix);
+      }
+      throw error;
+    }
+  }
+
+  private async enqueueTransitionOnce(
+    input: CounterCommandInput,
+    matrix: Omit<CounterMatrixInputs, 'snapshots'>
+  ): Promise<CounterEnqueueResult> {
+    // Refresh before deriving identifiers. The compare-and-swap in commit then
+    // closes the gap between this read and the write across tabs/processes.
+    const durable = await readTerminalState<CounterQueueSnapshot, CounterCache>(
+      this.driver,
+      this.scope,
+      COUNTER_STORE_SCHEMA_VERSION
+    );
+    if (durable.status === 'unrecoverable') {
+      throw new Error(durable.message);
+    }
+    if (durable.status === 'ok') {
+      this.state = {
+        ...durable.state,
+        queue: durable.state.queue ?? createCounterQueue(this.scope.deviceId),
+        catalog: durable.state.catalog ?? this.cache(),
+      };
+      this.persistedState = durable.state;
+    } else {
+      // A missing document may mean another tab confirmed revocation and
+      // purged this scope. Discard every hydrated lease, snapshot and quota so
+      // this tab cannot recreate the revoked counter from stale live state.
+      const snapshotPublicKey = this.cache().snapshotPublicKey;
+      this.state = emptyTerminalState<CounterQueueSnapshot, CounterCache>(
+        this.scope,
+        COUNTER_STORE_SCHEMA_VERSION
+      );
+      this.state.queue = createCounterQueue(this.scope.deviceId);
+      this.state.catalog = { snapshotPublicKey, snapshots: [] };
+      this.persistedState = undefined;
+    }
+    if (this.queue().replay === 'STOPPED_REVOKED') {
+      return {
+        ok: false,
+        reason: 'DEVICE_REVOKED',
+        message: 'This counter has been revoked and cannot queue offline work.',
+        decision: null,
+      };
+    }
     const leaseState = this.safetyLeaseState();
     const leaseCheck = checkSafetyLease(leaseState, matrix.nowMs);
     if (!leaseCheck.ok && leaseCheck.reason === 'EXPIRED') {
@@ -350,7 +529,7 @@ export class PharmacyCounterRuntime {
             ],
           },
         };
-        await this.commit(nextState);
+        await this.commit(nextState, this.persistedState);
       }
     }
     const batchId = input.bucket?.inventoryLotId ?? null;
@@ -361,12 +540,15 @@ export class PharmacyCounterRuntime {
       batchRecalled: batchId !== null && leaseState.recalledBatchIds.includes(batchId),
     });
     if (!result.ok) return result;
-    await this.commit({ ...this.state, queue: result.snapshot });
+    await this.commit({ ...this.state, queue: result.snapshot }, this.persistedState);
     return result;
   }
 
   async resume(): Promise<void> {
-    await this.commit({ ...this.state, queue: resumeCounterAfterReauth(this.queue()) });
+    await this.commit(
+      { ...this.state, queue: resumeCounterAfterReauth(this.queue()) },
+      this.persistedState
+    );
   }
 
   replay(
@@ -386,14 +568,25 @@ export class PharmacyCounterRuntime {
     send: (request: CounterReplayRequest) => Promise<CounterReplayResponse>
   ): Promise<ReplayResult> {
     for (;;) {
+      if ((await this.hydrate()) === 'unrecoverable') {
+        return { state: 'REFUSED', discarded: null };
+      }
       const next = nextCounterReplay(this.queue(), this.scope.deviceId);
       if (next.status !== 'READY') return { state: next.status, discarded: null };
 
       const request = buildCounterReplayRequest(this.queue(), next.command);
-      await this.commit({
-        ...this.state,
-        queue: beginCounterReplay(this.queue(), next.command.commandId),
-      });
+      try {
+        await this.commit(
+          {
+            ...this.state,
+            queue: beginCounterReplay(this.queue(), next.command.commandId),
+          },
+          this.persistedState
+        );
+      } catch (error) {
+        if (error instanceof CounterStorageConflictError) continue;
+        throw error;
+      }
 
       let response: CounterReplayResponse;
       try {
@@ -402,29 +595,69 @@ export class PharmacyCounterRuntime {
         response = { status: 0 };
       }
       const outcome = classifyReplayOutcome(response);
-      const applied = applyCounterReplayOutcome(this.queue(), {
-        commandId: next.command.commandId,
-        outcome,
-        serverRef: response.serverRef,
-      });
-      const nextState = { ...this.state, queue: applied.snapshot };
-
-      if (applied.snapshot.replay === 'STOPPED_REVOKED') {
-        this.state = nextState;
-        await purgeTerminalScope(this.driver, this.scope);
-        return { state: 'STOPPED', discarded: applied.discarded };
+      if (outcome.action === 'PURGE') {
+        // Revocation must purge the latest durable document, including work
+        // queued in another context while this request was in flight.
+        return { state: 'STOPPED', discarded: await this.revoke() };
       }
-      await this.commit(nextState);
-      if (outcome.action !== 'ACK') return { state: 'PAUSED', discarded: applied.discarded };
+      for (;;) {
+        if ((await this.hydrate()) === 'unrecoverable') {
+          return { state: 'REFUSED', discarded: null };
+        }
+        if (this.queue().replay === 'STOPPED_REVOKED') {
+          return { state: 'STOPPED', discarded: null };
+        }
+        const command = this.queue().commands.find(
+          (command) => command.commandId === next.command.commandId
+        );
+        // Another replay may already have settled this command. A late retry
+        // or re-auth response must not return it to the pending queue.
+        if (!command || command.status === 'ACKNOWLEDGED' || command.status === 'QUARANTINED') {
+          break;
+        }
+        const applied = applyCounterReplayOutcome(this.queue(), {
+          commandId: next.command.commandId,
+          outcome,
+          serverRef: response.serverRef,
+        });
+        try {
+          await this.commit({ ...this.state, queue: applied.snapshot }, this.persistedState);
+          break;
+        } catch (error) {
+          if (!(error instanceof CounterStorageConflictError)) throw error;
+        }
+      }
+      if (outcome.action !== 'ACK') return { state: 'PAUSED', discarded: null };
     }
   }
 
   /** Confirmed revocation outside a replay (a heartbeat said so). */
   async revoke(): Promise<{ commands: number } | null> {
-    const purged = purgeCounterQueue(this.queue());
-    this.state = { ...this.state, queue: purged.snapshot };
-    await purgeTerminalScope(this.driver, this.scope);
-    return purged.discarded;
+    for (;;) {
+      const durable = await readTerminalState<CounterQueueSnapshot, CounterCache>(
+        this.driver,
+        this.scope,
+        COUNTER_STORE_SCHEMA_VERSION
+      );
+      if (durable.status === 'unrecoverable') throw new Error(durable.message);
+      if (durable.status === 'ok' && durable.state.queue?.replay === 'STOPPED_REVOKED') {
+        this.adoptRevokedState(durable.state);
+        return null;
+      }
+      const source = durable.status === 'ok' ? durable.state : this.state;
+      const purged = purgeCounterQueue(source.queue ?? createCounterQueue(this.scope.deviceId));
+      const tombstone: CounterRuntimeState = {
+        ...source,
+        catalog: { snapshotPublicKey: '', snapshots: [] },
+        queue: purged.snapshot,
+      };
+      try {
+        await this.commit(tombstone, durable.status === 'ok' ? durable.state : undefined);
+        return purged.discarded;
+      } catch (error) {
+        if (!(error instanceof CounterStorageConflictError)) throw error;
+      }
+    }
   }
 
   close(): void {
@@ -439,9 +672,43 @@ export class PharmacyCounterRuntime {
     return this.state.catalog ?? { snapshotPublicKey: '', snapshots: [] };
   }
 
+  private adoptRevokedState(state: CounterRuntimeState): void {
+    this.state = {
+      ...state,
+      catalog: state.catalog ?? {
+        snapshotPublicKey: this.cache().snapshotPublicKey,
+        snapshots: [],
+      },
+      queue: state.queue ?? purgeCounterQueue(createCounterQueue(this.scope.deviceId)).snapshot,
+    };
+    this.persistedState = state;
+  }
+
   /** Publish a state transition only after its whole-document write succeeds. */
-  private async commit(nextState: CounterRuntimeState): Promise<void> {
-    await writeTerminalState(this.driver, nextState, COUNTER_STORE_SCHEMA_VERSION);
+  private async commit(
+    nextState: CounterRuntimeState,
+    expectedState: CounterRuntimeState | undefined
+  ): Promise<void> {
+    // Keep the storage seam's fail-closed validation, but use a transaction CAS
+    // to prevent a stale tab overwriting a newer whole document.
+    if (nextState.schemaVersion !== COUNTER_STORE_SCHEMA_VERSION) {
+      throw new CounterStorageConflictError();
+    }
+    assertPersistSafe(nextState);
+    const written = await this.driver.compareAndSwap(
+      terminalScopeKey(this.scope),
+      expectedState,
+      nextState
+    );
+    if (!written) throw new CounterStorageConflictError();
     this.state = nextState;
+    this.persistedState = nextState;
+  }
+}
+
+class CounterStorageConflictError extends Error {
+  constructor() {
+    super('Counter state changed in another browser context. Retry the operation.');
+    this.name = 'CounterStorageConflictError';
   }
 }

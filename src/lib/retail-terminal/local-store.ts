@@ -252,6 +252,8 @@ export function assertPersistSafe(value: unknown): void {
 export interface TerminalStorageDriver {
   read(scopeKey: string): Promise<unknown>;
   write(scopeKey: string, record: unknown): Promise<void>;
+  /** Atomically replace a record only when it still equals the value last read. */
+  compareAndSwap(scopeKey: string, expected: unknown, record: unknown): Promise<boolean>;
   remove(scopeKey: string): Promise<void>;
   close(): void;
 }
@@ -343,6 +345,27 @@ export function createTerminalIndexedDbDriver(
     write: async (scopeKey, record) => {
       await transact('readwrite', (store) => store.put(record, scopeKey));
     },
+    compareAndSwap: async (scopeKey, expected, record) => {
+      const db = await connection();
+      const tx = db.transaction(database.objectStoreName, 'readwrite');
+      const settled = new Promise<void>((resolve, reject) => {
+        tx.oncomplete = () => resolve();
+        tx.onabort = () => reject(tx.error ?? new Error('IndexedDB transaction aborted.'));
+        tx.onerror = () => reject(tx.error ?? new Error('IndexedDB transaction failed.'));
+      });
+      const store = tx.objectStore(database.objectStoreName);
+      const current = await requestToPromise(store.get(scopeKey));
+      if (JSON.stringify(current) !== JSON.stringify(expected)) {
+        // Let the read-only transaction finish normally. Resolving only after
+        // completion keeps the CAS contract durable for both outcomes and
+        // avoids surfacing an intentional mismatch as an abort error.
+        await settled;
+        return false;
+      }
+      await requestToPromise(store.put(record, scopeKey));
+      await settled;
+      return true;
+    },
     remove: async (scopeKey) => {
       await transact('readwrite', (store) => store.delete(scopeKey));
     },
@@ -364,6 +387,7 @@ export function createMemoryDriver(
   seed?: Iterable<readonly [string, unknown]>
 ): TerminalStorageDriver {
   const rows = new Map<string, string>();
+  let mutationTail: Promise<void> = Promise.resolve();
   for (const [key, value] of seed ?? []) rows.set(key, JSON.stringify(value));
   return {
     read: async (scopeKey) => {
@@ -372,6 +396,20 @@ export function createMemoryDriver(
     },
     write: async (scopeKey, record) => {
       rows.set(scopeKey, JSON.stringify(record));
+    },
+    compareAndSwap: (scopeKey, expected, record) => {
+      const operation = mutationTail.then(() => {
+        const current = rows.get(scopeKey);
+        const expectedJson = expected === undefined ? undefined : JSON.stringify(expected);
+        if (current !== expectedJson) return false;
+        rows.set(scopeKey, JSON.stringify(record));
+        return true;
+      });
+      mutationTail = operation.then(
+        () => undefined,
+        () => undefined
+      );
+      return operation;
     },
     remove: async (scopeKey) => {
       rows.delete(scopeKey);
