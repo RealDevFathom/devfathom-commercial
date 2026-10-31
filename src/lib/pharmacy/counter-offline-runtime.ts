@@ -568,17 +568,25 @@ export class PharmacyCounterRuntime {
     send: (request: CounterReplayRequest) => Promise<CounterReplayResponse>
   ): Promise<ReplayResult> {
     for (;;) {
+      if ((await this.hydrate()) === 'unrecoverable') {
+        return { state: 'REFUSED', discarded: null };
+      }
       const next = nextCounterReplay(this.queue(), this.scope.deviceId);
       if (next.status !== 'READY') return { state: next.status, discarded: null };
 
       const request = buildCounterReplayRequest(this.queue(), next.command);
-      await this.commit(
-        {
-          ...this.state,
-          queue: beginCounterReplay(this.queue(), next.command.commandId),
-        },
-        this.persistedState
-      );
+      try {
+        await this.commit(
+          {
+            ...this.state,
+            queue: beginCounterReplay(this.queue(), next.command.commandId),
+          },
+          this.persistedState
+        );
+      } catch (error) {
+        if (error instanceof CounterStorageConflictError) continue;
+        throw error;
+      }
 
       let response: CounterReplayResponse;
       try {
@@ -587,22 +595,39 @@ export class PharmacyCounterRuntime {
         response = { status: 0 };
       }
       const outcome = classifyReplayOutcome(response);
-      const applied = applyCounterReplayOutcome(this.queue(), {
-        commandId: next.command.commandId,
-        outcome,
-        serverRef: response.serverRef,
-      });
-      const nextState = { ...this.state, queue: applied.snapshot };
-
-      if (applied.snapshot.replay === 'STOPPED_REVOKED') {
-        await this.commit(
-          { ...nextState, catalog: { snapshotPublicKey: '', snapshots: [] } },
-          this.persistedState
-        );
-        return { state: 'STOPPED', discarded: applied.discarded };
+      if (outcome.action === 'PURGE') {
+        // Revocation must purge the latest durable document, including work
+        // queued in another context while this request was in flight.
+        return { state: 'STOPPED', discarded: await this.revoke() };
       }
-      await this.commit(nextState, this.persistedState);
-      if (outcome.action !== 'ACK') return { state: 'PAUSED', discarded: applied.discarded };
+      for (;;) {
+        if ((await this.hydrate()) === 'unrecoverable') {
+          return { state: 'REFUSED', discarded: null };
+        }
+        if (this.queue().replay === 'STOPPED_REVOKED') {
+          return { state: 'STOPPED', discarded: null };
+        }
+        const command = this.queue().commands.find(
+          (command) => command.commandId === next.command.commandId
+        );
+        // Another replay may already have settled this command. A late retry
+        // or re-auth response must not return it to the pending queue.
+        if (!command || command.status === 'ACKNOWLEDGED' || command.status === 'QUARANTINED') {
+          break;
+        }
+        const applied = applyCounterReplayOutcome(this.queue(), {
+          commandId: next.command.commandId,
+          outcome,
+          serverRef: response.serverRef,
+        });
+        try {
+          await this.commit({ ...this.state, queue: applied.snapshot }, this.persistedState);
+          break;
+        } catch (error) {
+          if (!(error instanceof CounterStorageConflictError)) throw error;
+        }
+      }
+      if (outcome.action !== 'ACK') return { state: 'PAUSED', discarded: null };
     }
   }
 

@@ -21,7 +21,7 @@ import { createMemoryDriver } from '@/lib/retail-terminal/local-store';
 import type { TerminalStorageDriver } from '@/lib/retail-terminal/local-store';
 
 import { PharmacyCounterRuntime } from './counter-offline-runtime';
-import type { SnapshotVerifier } from './counter-offline-runtime';
+import type { CounterRuntimeState, SnapshotVerifier } from './counter-offline-runtime';
 import type { CachedSnapshotState, PharmacyOfflineSnapshotKind } from './offline-action-matrix';
 import type { OfflineSnapshotEnvelope } from './offline-snapshot-envelope';
 
@@ -676,6 +676,136 @@ describe('PH-OFF OFF-01 — reconnect never renumbers an issued receipt', () => 
 });
 
 describe('PH-OFF OFF-01 — replay: re-auth pauses, revocation purges', () => {
+  it.each(['IN_FLIGHT', 'ACKNOWLEDGED'])(
+    'retries a conflicting %s write without resending the completed request',
+    async (status) => {
+      const driver = createMemoryDriver();
+      const counter = await readyCounter(driver);
+      await counter.enqueue(cashSale(), MATRIX);
+      const other = runtime(driver);
+      await other.hydrate();
+      const compareAndSwap = driver.compareAndSwap;
+      let conflictInjected = false;
+      driver.compareAndSwap = async (key, expected, value) => {
+        if (
+          !conflictInjected &&
+          (value as CounterRuntimeState).queue?.commands[0]?.status === status
+        ) {
+          conflictInjected = true;
+          await other.enqueue(cashSale(), MATRIX);
+        }
+        return compareAndSwap(key, expected, value);
+      };
+
+      const sent: unknown[] = [];
+      expect(
+        await counter.replay(async (request) => {
+          sent.push(request.body.receiptNumber);
+          return { status: 200 };
+        })
+      ).toMatchObject({ state: 'IDLE' });
+      expect(conflictInjected).toBe(true);
+      expect(sent).toEqual([900, 901]);
+      const reloaded = runtime(driver);
+      await reloaded.hydrate();
+      expect(reloaded.snapshot().queue?.commands.map((command) => command.status)).toEqual([
+        'ACKNOWLEDGED',
+        'ACKNOWLEDGED',
+      ]);
+    }
+  );
+
+  it('replays sales added by another context without losing acknowledgements', async () => {
+    const driver = createMemoryDriver();
+    const counter = await readyCounter(driver);
+    await counter.enqueue(cashSale(), MATRIX);
+    const other = runtime(driver);
+    await other.hydrate();
+
+    const sent: unknown[] = [];
+    const outcome = await counter.replay(async (request) => {
+      sent.push(request.body.receiptNumber);
+      if (sent.length === 1) {
+        expect(await other.enqueue(cashSale(), MATRIX)).toMatchObject({ ok: true });
+      }
+      return { status: 200, serverRef: `sale_${String(request.body.receiptNumber)}` };
+    });
+
+    expect(outcome.state).toBe('IDLE');
+    expect(sent).toEqual([900, 901]);
+    const reloaded = runtime(driver);
+    await reloaded.hydrate();
+    expect(reloaded.snapshot().queue?.commands.map((command) => command.status)).toEqual([
+      'ACKNOWLEDGED',
+      'ACKNOWLEDGED',
+    ]);
+    expect(reloaded.snapshot().queue?.quotas[0]?.consumedUnits).toBe(2);
+  });
+
+  it('purges all durable work when a revocation response races another context', async () => {
+    const driver = createMemoryDriver();
+    const counter = await readyCounter(driver);
+    await counter.enqueue(cashSale(), MATRIX);
+    const other = runtime(driver);
+    await other.hydrate();
+
+    const outcome = await counter.replay(async () => {
+      expect(await other.enqueue(cashSale(), MATRIX)).toMatchObject({ ok: true });
+      return { status: 403, serverMessage: 'This device has been revoked.' };
+    });
+
+    expect(outcome).toEqual({ state: 'STOPPED', discarded: { commands: 2 } });
+    const reloaded = runtime(driver);
+    await reloaded.hydrate();
+    expect(reloaded.snapshot()).toMatchObject({
+      catalog: { snapshotPublicKey: '', snapshots: [] },
+      queue: { replay: 'STOPPED_REVOKED', commands: [], leases: [], quotas: [] },
+    });
+  });
+
+  it.each(['same', 'other'])(
+    'keeps the revocation marker after %s-context revocation',
+    async (context) => {
+      const driver = createMemoryDriver();
+      const counter = await readyCounter(driver);
+      await counter.enqueue(cashSale(), MATRIX);
+      const revoking = context === 'same' ? counter : runtime(driver);
+
+      const outcome = await counter.replay(async () => {
+        await revoking.revoke();
+        return { status: 401, serverMessage: 'Session expired.' };
+      });
+
+      expect(outcome.state).toBe('STOPPED');
+      expect(await install(counter, 'RULES')).toMatchObject({
+        ok: false,
+        reason: 'DEVICE_REVOKED',
+      });
+      expect(await driver.read('org_a::branch_a::counter_1')).toMatchObject({
+        queue: { replay: 'STOPPED_REVOKED' },
+      });
+    }
+  );
+
+  it('does not reopen a command settled by another replay after a late re-auth response', async () => {
+    const driver = createMemoryDriver();
+    const counter = await readyCounter(driver);
+    await counter.enqueue(cashSale(), MATRIX);
+    const other = runtime(driver);
+
+    await counter.replay(async () => {
+      await other.replay(async () => ({ status: 200, serverRef: 'sale_900' }));
+      return { status: 401, serverMessage: 'Session expired.' };
+    });
+
+    const reloaded = runtime(driver);
+    await reloaded.hydrate();
+    expect(reloaded.snapshot().queue).toMatchObject({
+      replay: 'READY',
+      commands: [{ status: 'ACKNOWLEDGED', serverRef: 'sale_900' }],
+    });
+  });
+
   it('pauses and keeps the queue on a generic 401', async () => {
     const counter = await readyCounter(createMemoryDriver());
     await counter.enqueue(cashSale(1), MATRIX);
