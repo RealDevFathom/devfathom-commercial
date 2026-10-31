@@ -28,6 +28,7 @@ type Config = {
     menuId: string;
     priceListId: string | null;
     channels: string[];
+    branchId?: string;
     timezone?: string;
   } | null;
   menuItem?: {
@@ -74,7 +75,10 @@ function makeDb(config: Config): ScopedDb {
               menuId: config.publication.menuId,
               priceListId: config.publication.priceListId,
               channels: config.publication.channels,
-              branch: { timezone: config.publication.timezone ?? 'UTC' },
+              branch: {
+                id: config.publication.branchId ?? 'branch_1',
+                timezone: config.publication.timezone ?? 'UTC',
+              },
             }
           : null,
     },
@@ -504,6 +508,19 @@ describe('resolveModifierSnapshots', () => {
 });
 
 describe('resolveOrderPricingRefs', () => {
+  it('rejects a publication that does not exist', async () => {
+    const db = makeDb({ publication: null });
+
+    await expect(
+      resolveOrderPricingRefs(db, {
+        publicationId: 'missing',
+        branchId: 'branch_1',
+        channel: 'DINE_IN',
+        at: AT,
+      })
+    ).rejects.toMatchObject({ reason: 'PUBLICATION_NOT_FOUND' });
+  });
+
   it('returns the effective price-list version to stamp on the order', async () => {
     const db = makeDb({
       publication: basePublication,
@@ -511,6 +528,7 @@ describe('resolveOrderPricingRefs', () => {
     });
     const refs = await resolveOrderPricingRefs(db, {
       publicationId: 'pub_1',
+      branchId: 'branch_1',
       channel: 'DINE_IN',
       at: AT,
     });
@@ -522,9 +540,42 @@ describe('resolveOrderPricingRefs', () => {
     const db = makeDb({ publication: { ...basePublication, priceListId: null } });
     const refs = await resolveOrderPricingRefs(db, {
       publicationId: 'pub_1',
+      branchId: 'branch_1',
       channel: 'DINE_IN',
       at: AT,
     });
     expect(refs.priceListVersionId).toBeNull();
+  });
+
+  it('does not disclose channel availability for a publication belonging to another branch', async () => {
+    const db = makeDb({
+      publication: { ...basePublication, branchId: 'branch_2', channels: ['TAKEAWAY'] },
+    });
+    const findPriceListVersions = vi.spyOn(db.restaurantPriceListVersion, 'findMany');
+
+    await expect(
+      resolveOrderPricingRefs(db, {
+        publicationId: 'pub_1',
+        branchId: 'branch_1',
+        channel: 'DINE_IN',
+        at: AT,
+      })
+    ).rejects.toMatchObject({ reason: 'PUBLICATION_NOT_FOUND' });
+    expect(findPriceListVersions).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unpublished channel for a publication belonging to the requested branch', async () => {
+    const db = makeDb({
+      publication: { ...basePublication, channels: ['TAKEAWAY'] },
+    });
+
+    await expect(
+      resolveOrderPricingRefs(db, {
+        publicationId: 'pub_1',
+        branchId: 'branch_1',
+        channel: 'DINE_IN',
+        at: AT,
+      })
+    ).rejects.toMatchObject({ reason: 'CHANNEL_NOT_PUBLISHED' });
   });
 });

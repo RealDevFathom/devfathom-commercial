@@ -530,6 +530,7 @@ export async function openOrder(db: ScopedDb, input: OpenOrderInput): Promise<Op
     if (input.publicationId) {
       const refs = await resolveOrderPricingRefs(tx, {
         publicationId: input.publicationId,
+        branchId: branch.id,
         channel: input.channel,
         at,
       });
