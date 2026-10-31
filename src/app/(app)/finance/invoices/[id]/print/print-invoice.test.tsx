@@ -40,7 +40,7 @@ describe('InvoicePrintView branding', () => {
     vi.restoreAllMocks();
   });
 
-  it('waits for the tenant logo before printing', () => {
+  it('waits for the tenant logo before printing', async () => {
     render(<InvoicePrintView invoiceId="invoice-1" />);
 
     const loadingButton = screen.getByRole('button', { name: 'Loading branding…' });
@@ -49,7 +49,7 @@ describe('InvoicePrintView branding', () => {
     expect(window.print).not.toHaveBeenCalled();
 
     fireEvent.load(screen.getByRole('img', { name: 'Acme logo' }));
-    const printButton = screen.getByRole('button', { name: 'Print / Save as PDF' });
+    const printButton = await screen.findByRole('button', { name: 'Print / Save as PDF' });
     expect(printButton).toBeEnabled();
     fireEvent.click(printButton);
     expect(window.print).toHaveBeenCalledOnce();
@@ -84,10 +84,11 @@ describe('InvoicePrintView branding', () => {
     expect(screen.getByRole('button', { name: 'Print / Save as PDF' })).toBeEnabled();
   });
 
-  it('reloads branding when the configured tenant logo changes', () => {
+  it('reloads branding when the configured tenant logo changes', async () => {
     const { rerender } = render(<InvoicePrintView invoiceId="invoice-1" />);
     const originalLogo = screen.getByRole('img', { name: 'Acme logo' });
     fireEvent.load(originalLogo);
+    expect(await screen.findByRole('button', { name: 'Print / Save as PDF' })).toBeEnabled();
 
     mocks.useQuery.mockReturnValue({
       data: {
@@ -103,8 +104,9 @@ describe('InvoicePrintView branding', () => {
 
     const updatedLogo = screen.getByRole('img', { name: 'Acme logo' });
     expect(updatedLogo).not.toBe(originalLogo);
+    expect(updatedLogo.getAttribute('src')).not.toBe(originalLogo.getAttribute('src'));
     expect(screen.getByRole('button', { name: 'Loading branding…' })).toBeDisabled();
     fireEvent.load(updatedLogo);
-    expect(screen.getByRole('button', { name: 'Print / Save as PDF' })).toBeEnabled();
+    expect(await screen.findByRole('button', { name: 'Print / Save as PDF' })).toBeEnabled();
   });
 });

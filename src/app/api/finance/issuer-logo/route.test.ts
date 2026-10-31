@@ -37,9 +37,7 @@ describe('GET /api/finance/issuer-logo', () => {
       where: { organizationId: 'org-1' },
       select: { logoUrl: true },
     });
-    expect(mocks.loadRemoteImage).toHaveBeenCalledWith(
-      'https://assets.example/northstar.svg'
-    );
+    expect(mocks.loadRemoteImage).toHaveBeenCalledWith('https://assets.example/northstar.svg');
     expect(response.status).toBe(200);
     expect(response.headers.get('content-type')).toBe('image/svg+xml');
     expect(await response.text()).toBe('<svg />');
@@ -52,6 +50,21 @@ describe('GET /api/finance/issuer-logo', () => {
       401
     );
     expect(mocks.findBrand).not.toHaveBeenCalled();
+  });
+
+  it('preserves binary image bytes, including a view into a larger buffer', async () => {
+    const bytes = Uint8Array.from([99, 137, 80, 78, 71, 0, 255, 99]);
+    mocks.loadRemoteImage.mockResolvedValue({
+      body: bytes.subarray(1, -1),
+      contentType: 'image/png',
+    });
+
+    const response = await GET(new Request('https://tenant.example/api/finance/issuer-logo?v=2'));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe('image/png');
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(bytes.subarray(1, -1));
+    expect(mocks.loadRemoteImage).toHaveBeenCalledWith('https://assets.example/northstar.svg');
   });
 
   it('fails closed when the configured remote logo cannot be safely loaded', async () => {

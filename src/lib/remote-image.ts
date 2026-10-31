@@ -55,7 +55,12 @@ export type RemoteImage = { body: Uint8Array; contentType: string };
 /** Fetch a public HTTPS image while pinning the validated DNS result to prevent SSRF/rebinding. */
 export async function loadRemoteImage(value: string): Promise<RemoteImage> {
   const url = new URL(value);
-  if (url.protocol !== 'https:' || url.username || url.password || (url.port && url.port !== '443')) {
+  if (
+    url.protocol !== 'https:' ||
+    url.username ||
+    url.password ||
+    (url.port && url.port !== '443')
+  ) {
     throw new Error('Logo must use a public HTTPS URL.');
   }
 
@@ -77,18 +82,20 @@ export async function loadRemoteImage(value: string): Promise<RemoteImage> {
   const target = addresses[0]!;
 
   return new Promise((resolve, reject) => {
-    let deadline: ReturnType<typeof setTimeout> | undefined;
     const finish = <T>(callback: (value: T) => void, value: T) => {
-      if (deadline) clearTimeout(deadline);
+      clearTimeout(deadline);
       callback(value);
     };
     const request = httpsRequest(url, {
       method: 'GET',
       servername: hostname,
       headers: { Accept: 'image/png,image/jpeg,image/gif,image/webp,image/svg+xml' },
-      lookup: (_host, _options, callback) => callback(null, target.address, target.family),
+      lookup: (_host, options, callback) => {
+        if (options.all) callback(null, [target]);
+        else callback(null, target.address, target.family);
+      },
     });
-    deadline = setTimeout(
+    const deadline = setTimeout(
       () => request.destroy(new Error('Logo request timed out.')),
       REQUEST_TIMEOUT_MS
     );
@@ -99,7 +106,7 @@ export async function loadRemoteImage(value: string): Promise<RemoteImage> {
     request.on('response', (response) => {
       const contentType = (response.headers['content-type'] ?? '').split(';')[0]!.toLowerCase();
       if (response.statusCode !== 200 || !ALLOWED_TYPES.has(contentType)) {
-        response.resume();
+        response.destroy();
         finish(reject, new Error('Logo server did not return a supported image.'));
         return;
       }
@@ -110,9 +117,7 @@ export async function loadRemoteImage(value: string): Promise<RemoteImage> {
         if (size > MAX_IMAGE_BYTES) request.destroy(new Error('Logo exceeds the size limit.'));
         else chunks.push(chunk);
       });
-      response.on('end', () =>
-        finish(resolve, { body: Buffer.concat(chunks), contentType })
-      );
+      response.on('end', () => finish(resolve, { body: Buffer.concat(chunks), contentType }));
       response.on('error', (error) => finish(reject, error));
     });
     request.end();

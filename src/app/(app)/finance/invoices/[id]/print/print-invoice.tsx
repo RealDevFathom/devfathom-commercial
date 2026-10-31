@@ -120,7 +120,7 @@ export function InvoicePrintView({ invoiceId }: { invoiceId: string }) {
               {showLogo && (
                 <Image
                   key={logoUrl}
-                  src="/api/finance/issuer-logo"
+                  src={`/api/finance/issuer-logo?v=${encodeURIComponent(logoUrl)}`}
                   alt={`${invoice.issuer.displayName} logo`}
                   width={48}
                   height={48}

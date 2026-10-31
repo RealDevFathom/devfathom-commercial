@@ -23,7 +23,7 @@ export async function GET(request: Request) {
 
   try {
     const image = await loadRemoteImage(brand.logoUrl);
-    return new Response(image.body, {
+    return new Response(new Uint8Array(image.body), {
       headers: { ...responseHeaders, 'Content-Type': image.contentType },
     });
   } catch {
