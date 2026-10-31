@@ -2,10 +2,12 @@
 
 import { useMemo, useState, type FormEvent } from 'react';
 import type { inferRouterOutputs } from '@trpc/server';
+import Link from 'next/link';
+import { useSession } from 'next-auth/react';
 import { toast } from 'sonner';
 
 import { useEntitlements } from '@/components/entitlements-provider';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { Eyebrow } from '@/components/ui/eyebrow';
 import {
   Dialog,
@@ -30,6 +32,7 @@ import {
 } from '@/components/ui/table';
 import { StaffJobRolesDialog } from '@/components/restaurant/staff-job-roles-dialog';
 import { trpc } from '@/lib/trpc';
+import { isModuleGranted, moduleForProcedure } from '@/lib/module-catalog';
 import type { AppRouter } from '@/server/routers/_app';
 import { RestaurantBranchSelect } from './restaurant-branch-select';
 import { RestaurantDeviceSelect } from './restaurant-device-select';
@@ -65,8 +68,15 @@ function StaffTableSkeleton() {
   );
 }
 
-export function RestaurantStaffConsole() {
+export function RestaurantStaffConsole({ invitedEmail }: { invitedEmail?: string }) {
+  const { data: session, status: sessionStatus } = useSession();
   const entitlements = useEntitlements();
+  // Decide invite access only after the session resolves, matching Team.
+  const inviteAccessPending = sessionStatus === 'loading';
+  const canInvite =
+    !inviteAccessPending &&
+    session?.user?.role === 'ADMIN' &&
+    isModuleGranted(moduleForProcedure('team.inviteMember')!, entitlements.enabledModules);
   const restaurantModule = entitlements.modules.find((module) => module.key === 'restaurant-core');
   const restaurantEnabled =
     restaurantModule?.enabled ?? entitlements.enabledModules.includes('restaurant-core');
@@ -82,7 +92,8 @@ export function RestaurantStaffConsole() {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<'ALL' | StaffStatus>('ALL');
   const [branchFilter, setBranchFilter] = useState('');
-  const [staffFormOpen, setStaffFormOpen] = useState(false);
+  const [invitationTargetEmail, setInvitationTargetEmail] = useState(invitedEmail);
+  const [staffFormOpen, setStaffFormOpen] = useState(Boolean(invitedEmail));
   const [editingStaff, setEditingStaff] = useState<StaffProfile | null>(null);
   const [selectedStaff, setSelectedStaff] = useState<StaffProfile | null>(null);
   // SOP-1: the job-role multi-select target (separate from the credentials dialog).
@@ -94,6 +105,15 @@ export function RestaurantStaffConsole() {
   const eligibleUsersQuery = trpc.restaurantStaff.listEligibleUsers.useQuery(undefined, {
     enabled: restaurantEnabled && staffFormOpen,
   });
+  const invitedUser = eligibleUsersQuery.data?.find(
+    (user) => user.email.toLowerCase() === invitationTargetEmail?.toLowerCase()
+  );
+  const returningFromInvite = !editingStaff && Boolean(invitationTargetEmail);
+  const invitedUserReady =
+    !eligibleUsersQuery.isLoading &&
+    !eligibleUsersQuery.error &&
+    invitedUser?.status === 'ACTIVE' &&
+    invitedUser.restaurantStaffProfiles.length === 0;
 
   const credentialsQuery = trpc.restaurantStaff.listCredentials.useQuery(
     { staffProfileId: selectedStaff?.id ?? '', includeRevoked: true },
@@ -189,6 +209,7 @@ export function RestaurantStaffConsole() {
   const credentialsPending = issueCredential.isPending || rotateCredential.isPending;
 
   const openCreate = () => {
+    setInvitationTargetEmail(undefined);
     setEditingStaff(null);
     createStaff.reset();
     updateStaff.reset();
@@ -204,6 +225,7 @@ export function RestaurantStaffConsole() {
 
   const submitStaff = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (returningFromInvite && !invitedUserReady) return;
     const data = new FormData(event.currentTarget);
     const payload = {
       displayName: formText(data, 'displayName'),
@@ -451,14 +473,51 @@ export function RestaurantStaffConsole() {
           if (!staffFormPending) setStaffFormOpen(open);
         }}
       >
-        <DialogContent className="sm:max-w-xl">
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-xl">
           <DialogHeader>
             <DialogTitle>{editingStaff ? 'Edit staff member' : 'Add staff member'}</DialogTitle>
             <DialogDescription>
-              Profile details control restaurant access and branch assignment.
+              {editingStaff
+                ? 'Profile details control restaurant access and branch assignment.'
+                : 'Link an existing workspace user, or invite a new person before assigning their restaurant access.'}
             </DialogDescription>
           </DialogHeader>
-          <form key={editingStaff?.id ?? 'new-staff'} className="space-y-4" onSubmit={submitStaff}>
+          <form
+            key={
+              editingStaff?.id ?? `new-staff-${invitedUser?.id ?? ''}-${invitedUser?.status ?? ''}`
+            }
+            className="space-y-4"
+            onSubmit={submitStaff}
+          >
+            {returningFromInvite ? (
+              <div className="rounded-md border border-border-default bg-surface-sunken p-3 text-sm">
+                <p role="status" className="text-text-muted">
+                  {eligibleUsersQuery.isLoading
+                    ? 'Loading the invited workspace user…'
+                    : eligibleUsersQuery.error
+                      ? 'The invited workspace user could not be loaded. Try refreshing users.'
+                      : invitedUser?.restaurantStaffProfiles.length
+                        ? 'This user already has a staff profile. Close this dialog to manage their Job roles.'
+                        : invitedUserReady
+                          ? 'The invited user is ready to link. Save their staff profile, then manage Job roles to assign waiter or manager access.'
+                          : !invitedUser
+                            ? 'No workspace user matches the invited email. Check the invitation in Team, then refresh users.'
+                            : invitedUser.status === 'INVITED'
+                              ? 'Waiting for the invited user to accept their workspace invitation. Refresh users after they accept to link their account.'
+                              : 'This workspace user is not active, so they cannot be linked. Reactivate them in Team, then refresh users.'}
+                </p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="mt-3"
+                  disabled={eligibleUsersQuery.isFetching}
+                  onClick={() => void eligibleUsersQuery.refetch()}
+                >
+                  Refresh users
+                </Button>
+              </div>
+            ) : null}
             {(createStaff.error || updateStaff.error) && (
               <p role="alert" className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
                 {(createStaff.error ?? updateStaff.error)?.message}
@@ -468,7 +527,9 @@ export function RestaurantStaffConsole() {
               <span className={labelClass}>Display name</span>
               <Input
                 name="displayName"
-                defaultValue={editingStaff?.displayName}
+                defaultValue={
+                  editingStaff?.displayName ?? (returningFromInvite ? invitedUser?.name : '')
+                }
                 required
                 maxLength={200}
                 className="h-11"
@@ -480,7 +541,9 @@ export function RestaurantStaffConsole() {
                 <Input
                   name="email"
                   type="email"
-                  defaultValue={editingStaff?.email ?? ''}
+                  defaultValue={
+                    editingStaff?.email ?? (returningFromInvite ? invitationTargetEmail : '')
+                  }
                   className="h-11"
                 />
               </label>
@@ -491,7 +554,10 @@ export function RestaurantStaffConsole() {
                 <select
                   id="staff-organization-user"
                   name="userId"
-                  defaultValue={editingStaff?.userId ?? ''}
+                  defaultValue={
+                    editingStaff?.userId ??
+                    (returningFromInvite && invitedUserReady ? invitedUser?.id : '')
+                  }
                   className={selectClass}
                   disabled={eligibleUsersQuery.isLoading || Boolean(eligibleUsersQuery.error)}
                   aria-describedby="staff-user-help"
@@ -534,6 +600,36 @@ export function RestaurantStaffConsole() {
                     ? 'No active, unlinked organization users are available.'
                     : 'Unavailable users remain visible for context but cannot be selected.'}
                 </span>
+                {!editingStaff ? (
+                  <div className="rounded-md border border-border-default bg-surface-sunken p-3 text-sm">
+                    <p className="font-medium text-text-strong">Need to add someone new?</p>
+                    <p className="mt-1 leading-relaxed text-text-muted">
+                      {inviteAccessPending
+                        ? 'Checking invitation access…'
+                        : canInvite
+                          ? 'Invite the waiter or manager in Team, then return here. After they accept, link their account and manage Job roles to assign restaurant access.'
+                          : 'Ask a workspace admin to invite the waiter or manager. After they accept, link their account here and manage Job roles to assign restaurant access.'}
+                    </p>
+                    {canInvite ? (
+                      <Link
+                        href={{
+                          pathname: '/team',
+                          query: {
+                            invite: '1',
+                            returnTo: '/restaurant/staff',
+                          },
+                        }}
+                        className={buttonVariants({
+                          variant: 'outline',
+                          size: 'sm',
+                          className: 'mt-3',
+                        })}
+                      >
+                        Invite a new team member
+                      </Link>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
               <div className="space-y-1.5">
                 <label htmlFor="staff-primary-branch" className={labelClass}>
@@ -575,7 +671,11 @@ export function RestaurantStaffConsole() {
               >
                 Cancel
               </Button>
-              <Button type="submit" className="min-h-11" disabled={staffFormPending}>
+              <Button
+                type="submit"
+                className="min-h-11"
+                disabled={staffFormPending || (returningFromInvite && !invitedUserReady)}
+              >
                 {staffFormPending ? 'Saving…' : 'Save staff member'}
               </Button>
             </DialogFooter>

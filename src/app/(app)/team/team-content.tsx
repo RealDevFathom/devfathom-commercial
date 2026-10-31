@@ -45,8 +45,14 @@ const statusDot: Record<string, string> = {
   INVITED: 'bg-sky-500',
 };
 
-export function TeamContent() {
-  const { data: session } = useSession();
+export function TeamContent({
+  initialShowAddMember = false,
+  invitationReturnTo,
+}: {
+  initialShowAddMember?: boolean;
+  invitationReturnTo?: '/restaurant/staff';
+}) {
+  const { data: session, status: sessionStatus } = useSession();
   const entitlements = useEntitlements();
   const canReadDirectory = isModuleGranted('hr', entitlements.enabledModules);
   const isAdmin =
@@ -54,7 +60,11 @@ export function TeamContent() {
     isModuleGranted(moduleForProcedure('team.inviteMember')!, entitlements.enabledModules);
   const [search, setSearch] = useState('');
   const [deptFilter, setDeptFilter] = useState('ALL');
-  const [showAddMember, setShowAddMember] = useState(false);
+  // Keep the request while the session loads, then discard it if access is denied.
+  const [showAddMember, setShowAddMember] = useState(initialShowAddMember);
+  if (showAddMember && sessionStatus !== 'loading' && !isAdmin) {
+    setShowAddMember(false);
+  }
   const { data: team, isLoading } = trpc.team.getAll.useQuery(undefined, {
     enabled: canReadDirectory,
   });
@@ -170,7 +180,9 @@ export function TeamContent() {
         </div>
       )}
 
-      {showAddMember && <AddMemberModal onClose={() => setShowAddMember(false)} />}
+      {isAdmin && showAddMember && (
+        <AddMemberModal onClose={() => setShowAddMember(false)} returnTo={invitationReturnTo} />
+      )}
     </div>
   );
 }
@@ -250,7 +262,13 @@ const TeamMemberCard = memo(function TeamMemberCard({ member }: { member: TeamMe
   );
 });
 
-export function AddMemberModal({ onClose }: { onClose: () => void }) {
+export function AddMemberModal({
+  onClose,
+  returnTo,
+}: {
+  onClose: () => void;
+  returnTo?: '/restaurant/staff';
+}) {
   const utils = trpc.useUtils();
   const inviteMember = trpc.team.inviteMember.useMutation();
   const departmentQuery = trpc.organizationAdmin.departments.useQuery(undefined, { retry: false });
@@ -367,6 +385,14 @@ export function AddMemberModal({ onClose }: { onClose: () => void }) {
                     Done
                   </button>
                 </div>
+                {returnTo ? (
+                  <Link
+                    href={`${returnTo}?invitedEmail=${encodeURIComponent(sent.email)}`}
+                    className="mt-3 text-sm font-medium text-primary hover:underline"
+                  >
+                    Return to Restaurant staff
+                  </Link>
+                ) : null}
               </div>
             </div>
           ) : (
