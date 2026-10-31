@@ -38,6 +38,8 @@ function receiptDb(line: {
           authorized: true,
           licences: [
             {
+              id: 'licence_a',
+              supersedesId: null,
               expiresAt: new Date('2030-01-01T00:00:00.000Z'),
               verifiedAt: new Date('2020-01-01T00:00:00.000Z'),
             },

@@ -50,7 +50,11 @@ function callerFor(permissions: Array<{ capability: string; effect: 'ALLOW' | 'D
   const register = vi.fn();
   const db = {
     $transaction: async (callback: (tx: unknown) => unknown) => callback(db),
-    pharmacyBranch: { findMany: async () => [{ id: 'branch-1' }] },
+    pharmacyBranch: {
+      findMany: async () => [{ id: 'branch-1' }],
+      findFirst: async () => ({ id: 'branch-1' }),
+    },
+    pharmacyBranchAssignment: { findMany: async () => [{ branchId: 'branch-1' }] },
     branchRegulatoryProfile: {
       findFirst: async () => ({
         branchId: 'branch-1',
@@ -76,6 +80,7 @@ function callerFor(permissions: Array<{ capability: string; effect: 'ALLOW' | 'D
     user: {
       findUnique: async () => ({
         status: 'ACTIVE',
+        organizationId: 'org-1',
         organizationRole: { permissions },
         permissionOverrides: [],
       }),

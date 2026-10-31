@@ -27,6 +27,9 @@ function fixture() {
     unitPriceMinor: 200,
     discountMinor: 0,
     medicine: {
+      rx: false,
+      restricted: false,
+      controlled: false,
       organizationId: scope.organizationId,
       productName: 'Synthetic item',
       strengths: [],
@@ -63,6 +66,12 @@ function fixture() {
     tenders: [],
   };
   const db = {
+    user: {
+      findUnique: vi.fn(async () => ({
+        organizationRole: { permissions: [] },
+        permissionOverrides: [],
+      })),
+    },
     $queryRaw: vi
       .fn()
       .mockImplementation(async (q) =>
@@ -131,7 +140,20 @@ describe('ordinary loyalty settlement completion (held policy fixtures excluded)
       kind: 'TENDER',
       subjectId: 'tender-a',
     });
+    expect(db.user.findUnique).not.toHaveBeenCalled();
   });
+  it.each(['rx', 'restricted'] as const)(
+    'refuses a cashier redemption of a %s bill',
+    async (flag) => {
+      const { db, sale } = fixture();
+      sale.lines[0].medicine[flag] = true;
+      await expect(redeemSalePoints(db as never, scope, input)).rejects.toMatchObject({
+        name: 'PharmacyRxSaleDenied',
+      });
+      expect(db.pharmacyTender.create).not.toHaveBeenCalled();
+      expect(db.pharmacyLoyaltyPointsEntry.create).not.toHaveBeenCalled();
+    }
+  );
   it('propagates posting failure to the enclosing transaction', async () => {
     const { db } = fixture();
     vi.mocked(postTenderEntry).mockRejectedValueOnce(new Error('POSTING_FAILED'));

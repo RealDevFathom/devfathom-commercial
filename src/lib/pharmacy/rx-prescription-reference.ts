@@ -1,4 +1,5 @@
 import { Prisma } from '@/generated/prisma/client';
+import { can } from '@/lib/abac';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import type { LedgerScope } from './stock-ledger';
@@ -144,6 +145,10 @@ export async function recordCompletedPrescriptionReference(
 ): Promise<void> {
   if (input.organizationId !== scope.organizationId || input.branchId !== scope.branchId)
     throw new PharmacyRxReferenceError('PRESCRIPTION_NOT_FOUND');
+  // Completing a referenced OTC line also records a pharmacist's act. The
+  // medicine flags alone cannot authorize the actor named on the immutable fill.
+  if (!(await can({ id: scope.actorId, role: 'EMPLOYEE' }, 'pharmacy:dispense', undefined, { db })))
+    throw new PharmacyRxReferenceError('PRESCRIPTION_NEEDS_PHARMACIST');
   await db.$queryRaw(
     Prisma.sql`SELECT id FROM pharmacy_sales WHERE "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} AND id=${input.saleId} FOR UPDATE`
   );

@@ -676,9 +676,9 @@ export const pharmacySalesRouter = router({
         fail(error);
       }
     }),
-  // Loyalty redemption can complete any sale, including an all-OTC sale, so it
-  // always requires the exact dispense capability before entering the domain.
-  redeemPoints: capabilityProcedure('pharmacy:dispense')
+  // The domain applies dispensing authorization to Rx lines; OTC redemptions
+  // use the same counter and branch authorization as other tenders.
+  redeemPoints: protectedProcedure
     .input(
       z
         .object({
@@ -693,9 +693,8 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await ctx.db.$transaction(async (tx) =>
-          redeemSalePoints(txDb(tx), await scopeFor(ctx, input.branchId), input)
-        );
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+        return await ctx.db.$transaction(async (tx) => redeemSalePoints(txDb(tx), scope, input));
       } catch (error) {
         fail(error);
       }
