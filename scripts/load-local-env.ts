@@ -34,7 +34,17 @@ export function requireEnvironment(
 export const OFFLINE_PRISMA_COMMANDS = new Set(['generate', 'validate', 'format', 'version', 'help']);
 
 function prismaCommand(argv: readonly string[]): string | undefined {
-  return argv.slice(2).find((arg) => !arg.startsWith('-'));
+  for (let index = 2; index < argv.length; index++) {
+    const arg = argv[index];
+    // Separate option values are paths/metadata, even if they match a command.
+    // The --option=value form is already skipped by the flag check below.
+    if (['--config', '--schema', '--telemetry-information'].includes(arg)) {
+      index++;
+      continue;
+    }
+    if (!arg.startsWith('-')) return arg;
+  }
+  return undefined;
 }
 
 /**

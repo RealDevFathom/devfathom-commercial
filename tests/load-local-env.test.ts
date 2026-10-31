@@ -23,7 +23,7 @@ describe('loadLocalEnvironment', () => {
     writeFileSync(join(directory, '.env'), 'DATABASE_URL=from-dot-env\nFALLBACK=from-dot-env\n');
     writeFileSync(join(directory, '.env.local'), 'DATABASE_URL=from-dot-env-local\n');
 
-    const environment: NodeJS.ProcessEnv = {};
+    const environment: NodeJS.ProcessEnv = { NODE_ENV: 'test' };
     loadLocalEnvironment(environment, directory);
 
     expect(environment.DATABASE_URL).toBe('from-dot-env-local');
@@ -35,7 +35,7 @@ describe('loadLocalEnvironment', () => {
     directories.push(directory);
     writeFileSync(join(directory, '.env'), 'DATABASE_URL=from-dot-env\n');
 
-    const environment: NodeJS.ProcessEnv = {};
+    const environment: NodeJS.ProcessEnv = { NODE_ENV: 'test' };
     loadLocalEnvironment(environment, directory);
 
     expect(environment.DATABASE_URL).toBe('from-dot-env');
@@ -46,7 +46,7 @@ describe('loadLocalEnvironment', () => {
     directories.push(directory);
     writeFileSync(join(directory, '.env.local'), 'DATABASE_URL=from-dot-env-local\n');
 
-    const environment: NodeJS.ProcessEnv = {};
+    const environment: NodeJS.ProcessEnv = { NODE_ENV: 'test' };
     loadLocalEnvironment(environment, directory);
 
     expect(environment.DATABASE_URL).toBe('from-dot-env-local');
@@ -58,7 +58,7 @@ describe('loadLocalEnvironment', () => {
     writeFileSync(join(directory, '.env'), 'DATABASE_URL=from-dot-env\n');
     writeFileSync(join(directory, '.env.local'), 'DATABASE_URL=from-dot-env-local\n');
 
-    const environment = { DATABASE_URL: 'from-platform' };
+    const environment: NodeJS.ProcessEnv = { NODE_ENV: 'test', DATABASE_URL: 'from-platform' };
     loadLocalEnvironment(environment, directory);
 
     expect(environment.DATABASE_URL).toBe('from-platform');
@@ -69,7 +69,7 @@ describe('loadLocalEnvironment', () => {
     directories.push(directory);
     writeFileSync(join(directory, '.env.local'), 'DATABASE_URL=from-dot-env-local\n');
 
-    const environment = { DATABASE_URL: '   ' };
+    const environment: NodeJS.ProcessEnv = { NODE_ENV: 'test', DATABASE_URL: '   ' };
     loadLocalEnvironment(environment, directory);
 
     expect(() => requireEnvironment('DATABASE_URL', environment)).toThrow(
@@ -83,7 +83,7 @@ describe('loadLocalEnvironment', () => {
     writeFileSync(join(directory, '.env'), 'DATABASE_URL=from-dot-env\n');
     writeFileSync(join(directory, '.env.local'), 'DATABASE_URL=   \n');
 
-    const environment: NodeJS.ProcessEnv = {};
+    const environment: NodeJS.ProcessEnv = { NODE_ENV: 'test' };
     loadLocalEnvironment(environment, directory);
 
     expect(() => requireEnvironment('DATABASE_URL', environment)).toThrow(
@@ -92,21 +92,24 @@ describe('loadLocalEnvironment', () => {
   });
 
   it('names the missing variable and both searched files', () => {
-    expect(() => requireEnvironment('DATABASE_URL', {})).toThrow(
+    expect(() => requireEnvironment('DATABASE_URL', { NODE_ENV: 'test' })).toThrow(
       'Missing required environment variable: DATABASE_URL. Searched .env.local and .env'
     );
   });
 
   it('rejects a whitespace-only required variable', () => {
-    expect(() => requireEnvironment('DATABASE_URL', { DATABASE_URL: '   ' })).toThrow(
+    expect(() => requireEnvironment('DATABASE_URL', { NODE_ENV: 'test', DATABASE_URL: '   ' })).toThrow(
       'Missing required environment variable: DATABASE_URL'
     );
   });
 
   it('trims a required variable before returning it', () => {
-    expect(requireEnvironment('DATABASE_URL', { DATABASE_URL: '  postgres://localhost/db  ' })).toBe(
-      'postgres://localhost/db'
-    );
+    expect(
+      requireEnvironment('DATABASE_URL', {
+        NODE_ENV: 'test',
+        DATABASE_URL: '  postgres://localhost/db  ',
+      })
+    ).toBe('postgres://localhost/db');
   });
 });
 
@@ -116,27 +119,45 @@ describe('resolvePrismaDatasourceUrl', () => {
   it.each([['generate'], ['validate'], ['format'], ['version'], ['--version']])(
     'allows offline `prisma %s` without database credentials',
     (command) => {
-      expect(resolvePrismaDatasourceUrl({}, cli(command))).toBeUndefined();
+      expect(resolvePrismaDatasourceUrl({ NODE_ENV: 'test' }, cli(command))).toBeUndefined();
     }
   );
 
-  it('allows offline generate with flags before the command', () => {
-    expect(
-      resolvePrismaDatasourceUrl({}, cli('--schema=prisma/schema.prisma', 'generate'))
-    ).toBeUndefined();
+  it.each([
+    ['--schema=prisma/schema.prisma', 'generate'],
+    ['--schema', 'prisma/schema.prisma', 'generate'],
+    ['--config', 'prisma.config.ts', 'generate'],
+    ['--config=prisma.config.ts', 'generate'],
+    ['--config', 'migrate', 'generate'],
+    ['--config', 'prisma.config.ts', '--schema', 'prisma/schema.prisma', 'generate'],
+    ['--telemetry-information', 'metadata', 'generate'],
+    ['--config', 'prisma.config.ts', '--version'],
+    ['--config', 'prisma.config.ts', '--help'],
+    ['generate', '--config', 'prisma.config.ts'],
+  ])('allows offline commands with options: %j', (...args) => {
+    expect(resolvePrismaDatasourceUrl({ NODE_ENV: 'test' }, cli(...args))).toBeUndefined();
   });
 
-  it.each([['migrate', 'deploy'], ['db', 'seed'], ['studio']])(
+  it.each([
+    ['migrate', 'deploy'],
+    ['db', 'seed'],
+    ['studio'],
+    ['--config', 'prisma.config.ts', 'migrate', 'deploy'],
+    ['--config=prisma.config.ts', 'migrate', 'deploy'],
+    ['--config', 'generate', 'migrate', 'deploy'],
+    ['--schema', 'generate', 'db', 'seed'],
+    ['--telemetry-information', 'generate', 'studio'],
+  ])(
     'requires DATABASE_URL for database command `prisma %s`',
     (...command) => {
-      expect(() => resolvePrismaDatasourceUrl({}, cli(...command))).toThrow(
+      expect(() => resolvePrismaDatasourceUrl({ NODE_ENV: 'test' }, cli(...command))).toThrow(
         'Missing required environment variable: DATABASE_URL'
       );
     }
   );
 
   it('requires DATABASE_URL when the command cannot be identified', () => {
-    expect(() => resolvePrismaDatasourceUrl({}, ['node', 'loader'])).toThrow(
+    expect(() => resolvePrismaDatasourceUrl({ NODE_ENV: 'test' }, ['node', 'loader'])).toThrow(
       'Missing required environment variable: DATABASE_URL'
     );
   });
@@ -144,14 +165,18 @@ describe('resolvePrismaDatasourceUrl', () => {
   it('prefers a trimmed MIGRATION_DATABASE_URL over DATABASE_URL', () => {
     expect(
       resolvePrismaDatasourceUrl(
-        { MIGRATION_DATABASE_URL: ' postgres://owner ', DATABASE_URL: 'postgres://app' },
+        {
+          NODE_ENV: 'test',
+          MIGRATION_DATABASE_URL: ' postgres://owner ',
+          DATABASE_URL: 'postgres://app',
+        },
         cli('migrate', 'deploy')
       )
     ).toBe('postgres://owner');
   });
 
   it('falls back to a trimmed DATABASE_URL for database and offline commands', () => {
-    const environment = { DATABASE_URL: ' postgres://app ' };
+    const environment: NodeJS.ProcessEnv = { NODE_ENV: 'test', DATABASE_URL: ' postgres://app ' };
     expect(resolvePrismaDatasourceUrl(environment, cli('migrate', 'deploy'))).toBe('postgres://app');
     expect(resolvePrismaDatasourceUrl(environment, cli('generate'))).toBe('postgres://app');
   });
