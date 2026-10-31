@@ -702,6 +702,73 @@ describe('restaurant corrected-close backbone', () => {
     expect(exported.content).toContain('Blank cashCounted/cashVariance means unavailable');
     expect(db.restaurantDrawerSession.findMany).not.toHaveBeenCalled();
   });
+
+  it('pages drawer sessions past 500 by id cursor and counts every session once', async () => {
+    const date = new Date('2026-01-01T00:00:00Z');
+    const money = (value: number) => new Prisma.Decimal(value);
+    const zero = money(0);
+    const sessions = Array.from({ length: 501 }, (_, index) => ({
+      id: `d${String(index).padStart(4, '0')}`,
+      branchId: 'b1',
+      businessDate: date,
+      createdAt: new Date('2026-01-01T12:00:00Z'),
+      closedAt: new Date('2026-01-01T23:00:00Z'),
+      status: 'CLOSED',
+      countedCash: money(index === 500 ? 1 : 0),
+    }));
+    const findMany = vi.fn(async (args: { cursor?: { id: string }; skip?: number }) => {
+      const start = args.cursor
+        ? sessions.findIndex((session) => session.id === args.cursor!.id) + (args.skip ?? 0)
+        : 0;
+      return sessions.slice(start, start + 500);
+    });
+    const db = {
+      restaurantDrawerSession: { findMany },
+      restaurantDailyClose: {
+        findMany: vi.fn(async () => [
+          {
+            id: 'close',
+            branchId: 'b1',
+            businessDate: date,
+            supersedesCloseId: null,
+            createdAt: new Date('2026-01-02T00:00:00Z'),
+            branch: { name: 'One' },
+            tenderTotals: [],
+            grossSales: zero,
+            deliveryFeeSales: zero,
+            deliveryFeeRefunds: zero,
+            netSales: zero,
+            taxTotal: zero,
+            serviceChargeTotal: zero,
+            tipTotal: zero,
+            compTotal: zero,
+            discountTotal: zero,
+            refundTotal: zero,
+            voidTotal: zero,
+            cashExpected: money(1),
+            cashCounted: money(1),
+            cashVariance: zero,
+          },
+        ]),
+      },
+      insightDailyRollup: { findMany: vi.fn(async () => []) },
+      $queryRaw: vi.fn(async () => []),
+    } as unknown as ScopedDb;
+    const payments = await readPaymentsReport(db, {
+      branchIds: ['b1'],
+      from: '2026-01-01',
+      to: '2026-01-01',
+    });
+    expect(findMany).toHaveBeenCalledTimes(2);
+    expect(findMany.mock.calls[1][0]).toMatchObject({ cursor: { id: 'd0499' }, skip: 1 });
+    expect(payments.cashCountCoverage).toMatchObject({
+      status: 'COMPLETE',
+      drawerSessionCount: 501,
+      missingCountSessionCount: 0,
+      unverifiedCloseSessionCount: 0,
+      mismatchedCloseDayCount: 0,
+    });
+  });
 });
 
 function queryText(query: unknown): string {

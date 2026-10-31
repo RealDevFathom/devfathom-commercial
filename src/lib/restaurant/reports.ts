@@ -366,8 +366,7 @@ async function readCashCountCoverage(
       });
       yield* page;
       if (page.length < 500) return;
-      const last = page[page.length - 1];
-      after = { eventDate: last.eventDate, id: last.id };
+      cursor = page[page.length - 1].id;
     }
   }
   let drawerSessionCount = 0;
