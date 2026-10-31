@@ -243,8 +243,8 @@ describeIfDatabase('WHA-194 menu import acceptance (real PostgreSQL)', () => {
     ]) {
       await sql.query(
         `INSERT INTO "organizations"
-           ("id", "slug", "legalName", "displayName", "status", "deploymentMode", "vertical", "createdAt", "updatedAt")
-         VALUES ($1, $2, 'WHA194 Test Co', 'WHA194', 'ACTIVE', 'SHARED', 'RESTAURANT', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+           ("id", "slug", "legalName", "displayName", "status", "deploymentMode", "vertical", "currency", "createdAt", "updatedAt")
+         VALUES ($1, $2, 'WHA194 Test Co', 'WHA194', 'ACTIVE', 'SHARED', 'RESTAURANT', 'PKR', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
         [id, slug]
       );
     }
@@ -511,6 +511,65 @@ describeIfDatabase('WHA-194 menu import acceptance (real PostgreSQL)', () => {
   });
 
   // ── Commit ─────────────────────────────────────────────────────────────────
+
+  it.each(['EUR', 'USD'])(
+    'requires a reviewed PKR amount before importing a %s price',
+    async (currency) => {
+      const importId = await seedAwaitingReview('locale', { label: `conversion-${currency}` });
+      const lines = await linesOf(importId);
+      const foreignLine = lines.find((line) => line.extractedCurrency === currency)!;
+      expect(foreignLine).toBeDefined();
+      for (const line of lines) {
+        await deps.menuImport.reviewMenuImportLine(dbA, {
+          lineId: line.id,
+          decision: line.id === foreignLine.id ? 'ACCEPTED' : 'REJECTED',
+          reviewedById: userA,
+        });
+      }
+
+      const productsBefore = await dbA.restaurantProduct.count();
+      const menusBefore = await dbA.restaurantMenu.count();
+      const versionsBefore = await dbA.restaurantPriceListVersion.count();
+      const commit = () =>
+        deps.menuImport.commitMenuImport(
+          dbA,
+          { importId, committedById: userA },
+          { runtime: store.runtime }
+        );
+      await expect(commit()).rejects.toMatchObject({ reason: 'CURRENCY_MISMATCH' });
+
+      // Relabelling the extracted amount is not a reviewed conversion.
+      await deps.menuImport.reviewMenuImportLine(dbA, {
+        lineId: foreignLine.id,
+        decision: 'ACCEPTED',
+        reviewedById: userA,
+        currency: 'PKR',
+      });
+      await expect(commit()).rejects.toMatchObject({ reason: 'CURRENCY_MISMATCH' });
+      expect(await dbA.restaurantProduct.count()).toBe(productsBefore);
+      expect(await dbA.restaurantMenu.count()).toBe(menusBefore);
+      expect(await dbA.restaurantPriceListVersion.count()).toBe(versionsBefore);
+
+      await deps.menuImport.reviewMenuImportLine(dbA, {
+        lineId: foreignLine.id,
+        decision: 'ACCEPTED',
+        reviewedById: userA,
+        priceAmount: '3500',
+        currency: 'PKR',
+      });
+      const result = await commit();
+      const entries = await dbA.restaurantPriceListEntry.findMany({
+        where: { priceListVersionId: result.priceListVersionId },
+      });
+      expect(entries).toHaveLength(1);
+      expect(entries[0]!.price.toString()).toBe('3500');
+      const persisted = await dbA.restaurantMenuImportLine.findUniqueOrThrow({
+        where: { id: foreignLine.id },
+      });
+      expect(persisted.extractedCurrency).toBe(currency);
+      expect(persisted.reviewedCurrency).toBe('PKR');
+    }
+  );
 
   it('imports confirmed rows into catalog, a DRAFT menu and a DRAFT price version', async () => {
     const importId = await seedAwaitingReview('variants', { label: 'commit' });

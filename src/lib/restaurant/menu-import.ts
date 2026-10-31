@@ -1012,7 +1012,8 @@ export async function commitMenuImport(
           'REVIEW_INCOMPLETE'
         );
       }
-      const priceCurrency = (line.reviewedCurrency ?? line.extractedCurrency)?.toUpperCase() ?? null;
+      const priceCurrency =
+        (line.reviewedCurrency ?? line.extractedCurrency)?.toUpperCase() ?? null;
       const convertsForeignPrice =
         line.extractedCurrency?.toUpperCase() !== tenantCurrency &&
         line.reviewedCurrency?.toUpperCase() === tenantCurrency &&
@@ -1029,11 +1030,13 @@ export async function commitMenuImport(
           'CURRENCY_MISMATCH'
         );
       }
-      const variants = resolveVariants(line.extractedVariants);
+      // Merges write only the reviewed base price to the chosen catalog target;
+      // extracted sizes are imported only when creating a new product.
+      const variants =
+        line.reviewStatus === 'MERGED' ? [] : resolveVariants(line.extractedVariants);
       if (
         variants.some(
-          (variant) =>
-            variant.amount !== null && variant.currency?.toUpperCase() !== tenantCurrency
+          (variant) => variant.amount !== null && variant.currency?.toUpperCase() !== tenantCurrency
         )
       ) {
         throw new MenuImportError(

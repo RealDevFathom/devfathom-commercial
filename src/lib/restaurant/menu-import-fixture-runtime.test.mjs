@@ -384,7 +384,8 @@ test('commit rejects a reviewed foreign-currency amount without an explicit loca
   assert.ok(
     !f.events.some(
       (event) =>
-        Array.isArray(event) && ['createProduct', 'createMenu', 'addPriceListEntry'].includes(event[0])
+        Array.isArray(event) &&
+        ['createProduct', 'createMenu', 'addPriceListEntry'].includes(event[0])
     )
   );
 });
@@ -418,7 +419,9 @@ test('commit accepts an explicitly reviewed local conversion when extracted curr
   assert.ok(
     f.events.some(
       (event) =>
-        Array.isArray(event) && event[0] === 'addPriceListEntry' && event[2]?.price === '3500'
+        Array.isArray(event) &&
+        event[0] === 'addPriceListEntry' &&
+        event[2]?.price.toString() === '3500'
     )
   );
 });
@@ -451,7 +454,8 @@ test('commit accepts priced variants in the current organization currency', asyn
   await menu.commitMenuImport(f.db, { importId: 'imp_1', committedById: 'user_1' });
   assert.ok(
     f.events.some(
-      (event) => Array.isArray(event) && event[0] === 'addPriceListEntry' && event[2]?.price === '650'
+      (event) =>
+        Array.isArray(event) && event[0] === 'addPriceListEntry' && event[2]?.price === '650'
     )
   );
 });
@@ -519,6 +523,53 @@ test('commit rejects a priced variant when its currency is missing', async () =>
   );
   assert.ok(!f.events.some((event) => Array.isArray(event) && event[0] === 'createProduct'));
 });
+
+for (const variantCurrency of ['USD', null]) {
+  test(`commit merges a converted base price without importing ${variantCurrency} extracted variant prices`, async () => {
+    const f = setup('production', 'disabled');
+    const menu = f.load('@/lib/restaurant/menu-import');
+    const { Decimal } = f.load('@/generated/prisma/client').Prisma;
+    f.record.status = 'AWAITING_REVIEW';
+    f.record.fileName = 'merged-menu.png';
+    f.record.defaultCurrency = 'PKR';
+    f.lines.push({
+      id: 'line_1',
+      reviewStatus: 'MERGED',
+      sortOrder: 1,
+      extractedCategoryName: null,
+      extractedProductName: 'Merged item',
+      extractedDescription: null,
+      extractedPriceAmount: new Decimal('10'),
+      extractedCurrency: 'USD',
+      extractedVariants: [{ name: 'Large', price: { amount: '15', currency: variantCurrency } }],
+      reviewedCategoryName: null,
+      reviewedProductName: null,
+      reviewedDescription: null,
+      reviewedPriceAmount: new Decimal('2800'),
+      reviewedCurrency: 'PKR',
+      mergeProductId: 'existing_product',
+      mergeVariantId: 'existing_variant',
+    });
+
+    const outcome = await menu.commitMenuImport(f.db, {
+      importId: 'imp_1',
+      committedById: 'user_1',
+    });
+    assert.equal(outcome.mergedProductIds[0], 'existing_product');
+    const entries = f.events.filter(
+      (event) => Array.isArray(event) && event[0] === 'addPriceListEntry'
+    );
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0][2].price.toString(), '2800');
+    assert.equal(entries[0][2].productId, 'existing_product');
+    assert.equal(entries[0][2].variantId, 'existing_variant');
+    assert.ok(
+      !f.events.some(
+        (event) => Array.isArray(event) && ['createProduct', 'createVariant'].includes(event[0])
+      )
+    );
+  });
+}
 
 test('commit validates reviewed prices against the current organization currency', async () => {
   const f = setup('production', 'disabled');
