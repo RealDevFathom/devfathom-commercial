@@ -221,6 +221,8 @@ export const PROCEDURE_MODULES: Record<string, string> = {
   // activation status are the pharmacy workspace's own front door — mandatory
   // Pharmacy Core, not a separately licensed console.
   pharmacyOnboarding: 'pharmacy-core',
+  // #716: the owner's full data export belongs to the pharmacy workspace itself.
+  pharmacyDataExport: 'pharmacy-core',
   // PH-PUR (PUR-01..05): suppliers, requisitions, quotes, purchase orders and
   // goods receiving are licensed as Pharmacy Procurement, separately from the
   // mandatory medicine identity in Core — the registry key is
@@ -374,6 +376,7 @@ export const ROUTE_MODULES: ReadonlyArray<readonly [string, string]> = [
   ['/pharmacy/reports', 'pharmacy-reports'],
   ['/pharmacy/medicines', 'pharmacy-core'],
   ['/pharmacy/settings/branches', 'pharmacy-core'],
+  ['/pharmacy/settings/data-export', 'pharmacy-core'],
   ['/pharmacy/marketing', 'pharmacy-crm'],
   ['/pharmacy/loyalty', 'pharmacy-crm'],
   ['/pharmacy/cameras', 'pharmacy-core'],

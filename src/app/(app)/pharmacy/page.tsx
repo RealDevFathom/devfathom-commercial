@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import Link from 'next/link';
 
 import { PharmacyOnboardingConsole } from '@/components/pharmacy/onboarding-console';
 import { PageHeader } from '@/components/ui/page-header';
@@ -48,6 +49,20 @@ export default async function PharmacyOnboardingPage() {
         description="The twelve steps between a new pharmacy workspace and its first legal sale. Each step says what it needs and where to do it."
       />
       <PharmacyOnboardingConsole initial={overview} />
+      {ctx.session?.user?.role === 'ADMIN' ? (
+        <SectionCard title="Your data" titleLevel={2}>
+          <p className="text-sm text-text-body">
+            Download a complete copy of your pharmacy&apos;s data as CSV files you can open anywhere
+            or import back into DevFathom.{' '}
+            <Link
+              className="font-semibold text-text-strong underline underline-offset-4 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+              href="/pharmacy/settings/data-export"
+            >
+              Download my data
+            </Link>
+          </p>
+        </SectionCard>
+      ) : null}
     </main>
   );
 }

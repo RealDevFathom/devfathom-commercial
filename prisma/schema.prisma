@@ -2698,6 +2698,7 @@ enum PlatformJobType {
   RESUME
   PHARMACY_CAMERA_SNAPSHOT_V1  @map("pharmacy.camera.snapshot.v1")
   CAMERA_EVIDENCE_RETENTION_V1 @map("camera.evidence.retention.v1")
+  PHARMACY_DATA_EXPORT_V1      @map("pharmacy.data.export.v1")
 }
 
 enum PlatformJobStatus {
@@ -4919,6 +4920,7 @@ model Organization {
   restaurantActivationAcknowledgements      RestaurantActivationAcknowledgement[]
   pharmacyOwnerDigestSettings               PharmacyOwnerDigestSetting[]
   pharmacyOwnerDigestCaptures               PharmacyOwnerDigestCapture[]
+  pharmacyDataExports                       PharmacyDataExport[]
   visibilityFinanceJournalEntry             FinanceJournalEntry[]                 @relation("FinanceJournalEntryVisibilityAnchor")
   visibilityPharmacyMoneyIdempotencyKey     PharmacyMoneyIdempotencyKey[]         @relation("PharmacyMoneyIdempotencyKeyVisibilityAnchor")
   visibilityRestaurantTaxOfficialSource     RestaurantTaxOfficialSource[]         @relation("RestaurantTaxOfficialSourceVisibilityAnchor")
@@ -13734,6 +13736,47 @@ model PharmacyOwnerDigestCapture {
   @@unique([organizationId, userId, branchId, businessDate], map: "pharmacy_owner_digest_captures_daily_key")
   @@index([organizationId, userId, capturedAt(sort: Desc)], map: "pharmacy_owner_digest_captures_history_idx")
   @@map("pharmacy_owner_digest_captures")
+}
+
+enum PharmacyDataExportStatus {
+  QUEUED
+  READY
+  FAILED
+  EXPIRED
+}
+
+/// #716 — the owner's "Download my data" archive. One row per request; the
+/// platform worker builds a ZIP of UTF-8 CSVs (column names follow the
+/// migration wizard's Excel/CSV import headers) and stores it under the
+/// organization's private upload namespace. The download link is valid for
+/// 24 hours from `completedAt`; after `expiresAt` the stored object is removed
+/// and the row is kept as history. Tenant-isolated by RLS (migration).
+model PharmacyDataExport {
+  id                String                   @id @default(cuid())
+  organizationId    String                   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  requestedByUserId String
+  status            PharmacyDataExportStatus @default(QUEUED)
+  /// Inclusive Pakistan-time business-date range applied to the sales files.
+  salesFrom         DateTime                 @db.Date
+  salesTo           DateTime                 @db.Date
+  storageKey        String?
+  fileName          String?
+  sizeBytes         Int?
+  sha256            String?
+  rowCounts         Json?
+  error             String?
+  requestedAt       DateTime                 @default(now())
+  completedAt       DateTime?
+  expiresAt         DateTime?
+  downloadCount     Int                      @default(0)
+  lastDownloadedAt  DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, id], map: "pharmacy_data_exports_org_id_key")
+  @@index([organizationId, requestedAt], map: "pharmacy_data_exports_org_requested_idx")
+  @@index([status, expiresAt], map: "pharmacy_data_exports_status_expiry_idx")
+  @@map("pharmacy_data_exports")
 }
 
 enum PharmacyMarketingChannel {
