@@ -3,6 +3,13 @@
 Route: `/pharmacy/accounts/fiscal-exceptions?branchId=<active-branch>&from=2026-07-01&to=2026-10-01`.
 CSV: the same query at `/pharmacy/accounts/fiscal-exceptions/csv`.
 
+PR #943 review follow-up: corrected both test setup hooks to return no cleanup
+callback, explicitly reject unsupported URL keys (including `__proto__`) before
+reader parsing, and use neutral wrappers beneath the tenant shell's main landmark.
+Regression assertions cover page/CSV refusal before reader access, encoded special
+keys, safe error responses, and landmark ownership. These changes received source
+and diff review only; execution of the updated tests and checks remains with machine C.
+
 The implementation reuses the tenant shell, PageHeader, SectionCard, Input, Button,
 StatusPill and semantic Studio tokens. No shared routes, navigation, schema, fiscal
 writers or report counts were changed. Sensitive reads retain the existing audit path.

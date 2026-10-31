@@ -19,10 +19,12 @@ export const metadata: Metadata = { title: 'Fiscal exception evidence · Pharmac
 export default async function FiscalExceptionsPage({ searchParams }: {
   searchParams: Promise<FiscalExceptionQuery>;
 }) {
-  const input = fiscalExceptionQuery(await searchParams);
+  const query = await searchParams;
+  let input: ReturnType<typeof fiscalExceptionQuery> | null = null;
   let register: FiscalExceptionRegister | null = null;
   let error: string | null = null;
   try {
+    input = fiscalExceptionQuery(query);
     register = await loadFiscalExceptionRegister(input);
   } catch (cause) {
     error = fiscalExceptionError(cause);
@@ -30,7 +32,7 @@ export default async function FiscalExceptionsPage({ searchParams }: {
   const scalar = (value: unknown) => typeof value === 'string' ? value : '';
 
   return (
-    <main className="min-w-0 space-y-6">
+    <div className="min-w-0 space-y-6">
       <PageHeader eyebrow="Pharmacy accounts" heading="Fiscal exception evidence"
         description="Inspect local queued, rejected and dead fiscal documents for one active branch." />
       <p className="text-sm text-text-muted">{FISCAL_EXCEPTION_NOTICE}</p>
@@ -38,21 +40,21 @@ export default async function FiscalExceptionsPage({ searchParams }: {
         <form action="/pharmacy/accounts/fiscal-exceptions" className="grid gap-4 md:grid-cols-2">
           <label className="text-sm text-text-body">
             Active branch ID
-            <Input name="branchId" defaultValue={scalar(input.branchId)} required maxLength={128}
+            <Input name="branchId" defaultValue={scalar(input?.branchId ?? query.branchId)} required maxLength={128}
               className="mt-1 min-h-11" aria-describedby="fiscal-window-help" />
           </label>
           <label className="text-sm text-text-body">
             Created from (UTC, inclusive)
-            <Input name="from" type="date" defaultValue={scalar(input.from)} required className="mt-1 min-h-11" />
+            <Input name="from" type="date" defaultValue={scalar(input?.from ?? query.from)} required className="mt-1 min-h-11" />
           </label>
           <label className="text-sm text-text-body">
             Created before (UTC, exclusive)
-            <Input name="to" type="date" defaultValue={scalar(input.to)} required className="mt-1 min-h-11" />
+            <Input name="to" type="date" defaultValue={scalar(input?.to ?? query.to)} required className="mt-1 min-h-11" />
           </label>
           <label className="text-sm text-text-body">
             Rows per page
             <Input name="pageSize" type="number" min={1} max={100} required
-              defaultValue={Number.isFinite(input.pageSize) ? input.pageSize : 50} className="mt-1 min-h-11" />
+              defaultValue={Number.isFinite(input?.pageSize) ? input?.pageSize : 50} className="mt-1 min-h-11" />
           </label>
           <p id="fiscal-window-help" className="text-sm text-text-muted md:col-span-2">
             Use the branch ID from your workspace administrator. Maximum 92 days, excluding the end date.
@@ -131,6 +133,6 @@ export default async function FiscalExceptionsPage({ searchParams }: {
           </nav>
         </SectionCard>
       ) : null}
-    </main>
+    </div>
   );
 }

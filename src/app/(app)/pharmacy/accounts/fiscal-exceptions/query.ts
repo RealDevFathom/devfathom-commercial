@@ -3,8 +3,14 @@ import type { FiscalExceptionInput } from '@/lib/pharmacy/accounts/fiscal-except
 
 export type FiscalExceptionQuery = Record<string, string | string[] | undefined>;
 
-/** Duplicate, unknown and malformed query values fail closed in the strict reader schema. */
+const allowedKeys = new Set(['branchId', 'from', 'to', 'page', 'pageSize']);
+
+/** Reject unknown URL keys explicitly; Zod's strict object check skips __proto__. */
 export function fiscalExceptionQuery(query: FiscalExceptionQuery) {
+  if (Object.keys(query).some((key) => !allowedKeys.has(key))) {
+    throw new TRPCError({ code: 'BAD_REQUEST', message: 'Unsupported fiscal evidence query field.' });
+  }
+  // Preserve duplicate and malformed values for rejection by the reader schema.
   const today = new Date();
   const midnight = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
   const from = new Date(midnight - 6 * 86_400_000).toISOString().slice(0, 10);

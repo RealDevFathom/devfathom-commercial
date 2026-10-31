@@ -8,7 +8,8 @@ vi.mock('../access', () => ({ loadFiscalExceptionRegister: mocks.load }));
 import { GET } from './route';
 
 const url = 'https://workspace.example/pharmacy/accounts/fiscal-exceptions/csv?branchId=main&from=2026-07-01&to=2026-10-01';
-beforeEach(() => mocks.load.mockReset());
+// Returning the mock would register it as a Vitest cleanup callback.
+beforeEach(() => { mocks.load.mockReset(); });
 
 describe('fiscal exception page CSV download', () => {
   it('re-enters the authorized reader with request metadata, exports only the page, and disables caching', async () => {
@@ -59,5 +60,15 @@ describe('fiscal exception page CSV download', () => {
       throw new Error('Expected input refusal');
     });
     expect((await GET(new Request(url + extra))).status).toBe(400);
+  });
+
+  it.each(['organizationId', '__proto__', 'constructor', 'toString', '%5F%5Fproto%5F%5F'])
+  ('rejects unsupported URL key %s before entering the reader', async (key) => {
+    const response = await GET(new Request(`${url}&${key}=foreign`));
+    expect(response.status).toBe(400);
+    expect(mocks.load).not.toHaveBeenCalled();
+    expect(response.headers.get('cache-control')).toContain('no-store');
+    expect(response.headers.get('content-disposition')).toBeNull();
+    expect(await response.text()).not.toContain('foreign');
   });
 });

@@ -24,12 +24,14 @@ function register(): FiscalExceptionRegister {
   };
 }
 
-beforeEach(() => mocks.load.mockResolvedValue(register()));
+// Returning the mock would register it as a Vitest cleanup callback.
+beforeEach(() => { mocks.load.mockResolvedValue(register()); });
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
 describe('fiscal exception evidence page', () => {
   it('renders explicit configuration and recorded mode, bounded metadata and honest coverage', async () => {
     render(await Page({ searchParams: Promise.resolve(query) }));
+    expect(screen.queryByRole('main')).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { level: 1, name: 'Fiscal exception evidence' })).toBeVisible();
     expect(screen.getByText('Configured: OFF')).toBeVisible();
     expect(screen.getByText('SANDBOX')).toBeVisible();
@@ -78,6 +80,17 @@ describe('fiscal exception evidence page', () => {
     expect(screen.queryByRole('link', { name: 'Download page CSV' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Download page CSV' })).toBeDisabled();
     expect(screen.getByLabelText('Active branch ID')).toHaveValue(query.branchId);
+    expect(screen.queryByRole('main')).not.toBeInTheDocument();
+  });
+
+  it.each(['organizationId', '__proto__', 'constructor', 'toString'])
+  ('rejects unsupported URL key %s with a safe error and no read or export', async (key) => {
+    render(await Page({ searchParams: Promise.resolve({ ...query, [key]: 'foreign' }) }));
+    expect(mocks.load).not.toHaveBeenCalled();
+    expect(screen.getByRole('alert')).toHaveTextContent('Enter an active branch ID');
+    expect(screen.queryByRole('link', { name: 'Download page CSV' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Download page CSV' })).toBeDisabled();
+    expect(screen.getByLabelText('Active branch ID')).toHaveValue(query.branchId);
   });
 
   it('provides loading and recoverable error states', () => {
@@ -85,15 +98,22 @@ describe('fiscal exception evidence page', () => {
     expect(screen.getByRole('status', { name: 'Loading fiscal exception evidence' })).toBeVisible();
     loading.unmount();
     render(<ErrorState reset={vi.fn()} />);
+    expect(screen.queryByRole('main')).not.toBeInTheDocument();
     expect(screen.getByRole('alert')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeVisible();
   });
 });
 
 describe('local URL interpretation', () => {
-  it('preserves duplicates and unknown fields for strict reader rejection', () => {
-    expect(fiscalExceptionQuery({ ...query, page: ['1', '2'], tenantId: 'foreign' })).toMatchObject({
-      page: NaN, tenantId: 'foreign',
+  it.each(['tenantId', '__proto__', 'constructor', 'toString'])('rejects unknown URL key %s', (key) => {
+    expect(() => fiscalExceptionQuery({ ...query, [key]: 'foreign' })).toThrow(expect.objectContaining({
+      code: 'BAD_REQUEST',
+    }));
+  });
+
+  it('preserves duplicates and malformed fields for strict reader rejection', () => {
+    expect(fiscalExceptionQuery({ ...query, page: ['1', '2'] })).toMatchObject({
+      page: NaN,
     });
     expect(fiscalExceptionQuery({ ...query, branchId: ['one', 'two'] }).branchId).toEqual(['one', 'two']);
     expect(fiscalExceptionQuery({ ...query, pageSize: '1e2' }).pageSize).toBeNaN();
