@@ -3,6 +3,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 const mocks = vi.hoisted(() => ({ enqueue: vi.fn() }));
 vi.mock('@/lib/restaurant/scheduler', () => ({ enqueue: mocks.enqueue }));
 import {
+  defaultMenuImportRuntime,
   configuredAdapterName,
   createMenuImport,
   runMenuImportExtraction,
@@ -62,6 +63,27 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllEnvs());
 
 describe('explicit extraction selection', () => {
+  it('runs the configured fixture through the HTTP and worker runtime in a test sandbox', async () => {
+    const adapter = defaultMenuImportRuntime.resolveAdapter('FIXTURE');
+    const extracted = await adapter.extract({
+      content: PNG,
+      mimeType: 'image/png',
+      pageCount: 1,
+      defaultCurrency: 'PKR',
+      importId: 'imp_1',
+    });
+    expect(extracted.pages[0].lines.map((line) => line.productName)).toContain(
+      'Chicken Malai Boti'
+    );
+  });
+
+  it('refuses the fixture runtime in production even if explicitly selected', () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    expect(() => defaultMenuImportRuntime.resolveAdapter('FIXTURE')).toThrow(
+      expect.objectContaining({ reason: 'ADAPTER_UNAVAILABLE' })
+    );
+  });
+
   for (const node of [undefined, 'production', 'test', 'development', 'Development']) {
     for (const adapter of [undefined, '', ' ', 'typo', 'disabled', 'VISION', 'FIXTURE']) {
       for (const ai of ['disabled', 'google']) {
