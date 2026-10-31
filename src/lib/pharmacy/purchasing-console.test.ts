@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
+  listGoodsReceipts,
   listPurchaseReturns,
   listSupplierCredits,
   type PurchasingReadBounds,
@@ -28,6 +29,57 @@ function database(rows: ReturnType<typeof row>[] = []) {
     } as unknown as ScopedDb,
   };
 }
+
+describe('receipt reversal witness evidence', () => {
+  it.each([true, false])('requires a witness only with a purchase entry: %s', async (registered) => {
+    const receipts = [
+      {
+        id: 'receipt',
+        status: 'POSTED',
+        qualifiedPersonUserId: 'original-witness',
+        lines: [{ id: 'line', medicine: { controlled: true }, acceptedCanonicalUnits: 0 }],
+      },
+      { id: 'other', status: 'POSTED', lines: [{ id: 'other-line' }] },
+    ];
+    const movements = vi.fn().mockResolvedValue([
+      { id: 'movement', idempotencyKey: 'pharmacy-receipt:line:quarantine' },
+      { id: 'other-movement', idempotencyKey: 'pharmacy-receipt:other-line:accepted' },
+    ]);
+    const purchases = vi.fn().mockResolvedValue([
+      ...(registered ? [{ stockMovementId: 'movement' }] : []),
+      { stockMovementId: 'other-movement' },
+    ]);
+    const db = {
+      pharmacyGoodsReceipt: { findMany: vi.fn().mockResolvedValue(receipts) },
+      pharmacyStockMovement: { findMany: movements },
+      pharmacyControlledRegisterEntry: { findMany: purchases },
+    } as unknown as ScopedDb;
+    const result = await listGoodsReceipts(db, scope);
+    expect(result.map((receipt) => receipt.reversalRequiresWitness)).toEqual([registered, true]);
+    expect(movements).toHaveBeenCalledWith({
+      where: {
+        ...scope,
+        idempotencyKey: {
+          in: [
+            'pharmacy-receipt:line:accepted',
+            'pharmacy-receipt:line:quarantine',
+            'pharmacy-receipt:other-line:accepted',
+            'pharmacy-receipt:other-line:quarantine',
+          ],
+        },
+      },
+      select: { id: true, idempotencyKey: true },
+    });
+    expect(purchases).toHaveBeenCalledWith({
+      where: {
+        ...scope,
+        entryKind: 'PURCHASE',
+        stockMovementId: { in: ['movement', 'other-movement'] },
+      },
+      select: { stockMovementId: true },
+    });
+  });
+});
 
 describe.each([
   ['returns', listPurchaseReturns, 'createdAt'],

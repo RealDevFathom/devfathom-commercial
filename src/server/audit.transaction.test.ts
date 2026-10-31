@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { TRPCError } from '@trpc/server';
+import { z } from 'zod';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 const mocks = vi.hoisted(() => ({
@@ -23,7 +25,22 @@ import { createTRPCContext, protectedProcedure, router, type TRPCContext } from 
 
 const organizationId = 'org_demo_restaurant_seat_1';
 const actorId = 'user_demo_restaurant_seat_1_manager';
-const probe = router({ create: protectedProcedure.mutation(() => 'created') });
+const probe = router({
+  create: protectedProcedure.mutation(() => 'created'),
+  witness: protectedProcedure
+    .input(
+      z.object({
+        controlledWitness: z.object({
+          staffProfileId: z.string(),
+          pin: z.string().regex(/^\d{4,8}$/),
+        }),
+      })
+    )
+    .mutation(({ input }) => {
+      if (input.controlledWitness.pin !== '1234') throw new TRPCError({ code: 'FORBIDDEN' });
+      return 'witnessed';
+    }),
+});
 
 async function context(db: ScopedDb, transactional = true) {
   return createTRPCContext({
@@ -46,6 +63,29 @@ beforeEach(() => {
 });
 
 describe('transaction-bound seed audits', () => {
+  it.each(['1234', '0000', 'invalid'])(
+    'redacts witness PIN %s before auditing success or refusal',
+    async (pin) => {
+      const ctx = await context({} as ScopedDb, false);
+      const call = probe.createCaller(ctx).witness({
+        controlledWitness: { staffProfileId: 'staff-witness', pin },
+      });
+      if (pin === '1234') await expect(call).resolves.toBe('witnessed');
+      else
+        await expect(call).rejects.toMatchObject({
+          code: pin === '0000' ? 'FORBIDDEN' : 'BAD_REQUEST',
+        });
+      await flushAuditWritesForTest();
+      expect(mocks.outsideCreate).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          action: 'witness',
+          outcome: pin === '1234' ? 'SUCCESS' : 'FAILURE',
+          input: { controlledWitness: { staffProfileId: 'staff-witness', pin: '[REDACTED]' } },
+        }),
+      });
+    }
+  );
+
   it('writes the uncommitted manager audit in the seed transaction and awaits durability', async () => {
     let release!: () => void;
     const pending = new Promise<void>((resolve) => {

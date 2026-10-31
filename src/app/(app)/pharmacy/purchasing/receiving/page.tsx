@@ -194,9 +194,11 @@ export default async function PharmacyReceivingPage({
   }
   const needsWitness = Boolean(
     selectedReceipt &&
-    (selectedReceipt.status === 'DRAFT' || selectedReceipt.status === 'POSTED') &&
-    (selectedReceipt.qualifiedPersonUserId ||
-      selectedReceipt.lines.some((line) => line.medicine.controlled))
+    (selectedReceipt.status === 'POSTED'
+      ? selectedReceipt.reversalRequiresWitness
+      : selectedReceipt.status === 'DRAFT' &&
+        (selectedReceipt.qualifiedPersonUserId ||
+          selectedReceipt.lines.some((line) => line.medicine.controlled)))
   );
   let witnessLoadFailed = false;
   const witnesses =
@@ -1417,8 +1419,7 @@ function ReceiptDetail({
               notice={notice}
               required
             />
-            {receipt.qualifiedPersonUserId ||
-            receipt.lines.some((line) => line.medicine.controlled) ? (
+            {receipt.reversalRequiresWitness ? (
               <div className="grid w-full gap-3 sm:grid-cols-2">
                 <SelectField
                   emptyHint={
@@ -1447,11 +1448,7 @@ function ReceiptDetail({
             ) : null}
             <SubmitButton
               variant="destructive"
-              disabled={Boolean(
-                (receipt.qualifiedPersonUserId ||
-                  receipt.lines.some((line) => line.medicine.controlled)) &&
-                witnesses.length === 0
-              )}
+              disabled={receipt.reversalRequiresWitness && witnesses.length === 0}
             >
               Reverse posting
             </SubmitButton>

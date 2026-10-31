@@ -3,6 +3,9 @@ import { can } from '@/lib/abac';
 import { verifyOperatorCredential } from '@/lib/restaurant/operator-credentials';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { reverseGoodsReceipt } from './goods-receipt';
+import { withTenantDb } from '@/lib/tenancy/scoped-db';
+
+vi.mock('@/lib/tenancy/scoped-db', () => ({ withTenantDb: vi.fn() }));
 
 vi.mock('@/lib/abac', () => ({ can: vi.fn() }));
 vi.mock('@/lib/restaurant/operator-credentials', () => ({
@@ -83,6 +86,7 @@ function fixture() {
     },
     pharmacyStockBalance: { aggregate: vi.fn().mockResolvedValue({ _sum: { onHandUnits: 0 } }) },
   };
+  vi.mocked(withTenantDb).mockImplementation(async (_organizationId, run) => run(db as never));
   return {
     db,
     run: (request: Parameters<typeof reverseGoodsReceipt>[2] = input) =>
@@ -152,6 +156,19 @@ describe('controlled goods receipt reversal authorization', () => {
       reversalMovementIds: ['reversal'],
     });
     expect(db.restaurantOperatorCredential.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('locks the branch register before the first compensating stock movement', async () => {
+    const { db, run } = fixture();
+    await run();
+    const lockIndex = db.$queryRaw.mock.calls.findIndex(([sql]) =>
+      String(sql).includes('pg_advisory_xact_lock')
+    );
+    expect(lockIndex).toBeGreaterThanOrEqual(0);
+    expect(db.$queryRaw.mock.calls[lockIndex]!.slice(1)).toEqual(['org:branch']);
+    expect(db.$queryRaw.mock.invocationCallOrder[lockIndex]).toBeLessThan(
+      db.pharmacyStockMovement.create.mock.invocationCallOrder[0]!
+    );
   });
 
   it('reverses two posted lines that landed on the same controlled lot', async () => {

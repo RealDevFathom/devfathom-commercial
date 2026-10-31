@@ -29,6 +29,7 @@ import {
   appendControlledPurchaseEntries,
   appendControlledPurchaseReversals,
   assignedRegisterBranchIds,
+  lockRegister,
 } from './controlled-register';
 import {
   clearLockout,
@@ -59,17 +60,9 @@ import {
   reverseMovements,
 } from './stock-ledger';
 import type { LedgerScope } from './stock-ledger';
+import { acceptedKey, goodsReceiptMovementKeys, quarantineKey } from './goods-receipt-keys';
 
 export type ReceivingScope = LedgerScope;
-
-/** Deterministic, so a reversal can find exactly the postings a receipt made. */
-function acceptedKey(receiptLineId: string): string {
-  return `pharmacy-receipt:${receiptLineId}:accepted`;
-}
-
-function quarantineKey(receiptLineId: string): string {
-  return `pharmacy-receipt:${receiptLineId}:quarantine`;
-}
 
 export type PostGoodsReceiptResult = {
   goodsReceiptId: string;
@@ -504,7 +497,7 @@ export async function reverseGoodsReceipt(
 
   // The keys are derived, not stored, so this finds precisely the movements
   // this receipt posted and nothing that happened to the lot afterwards.
-  const keys = receipt.lines.flatMap((line) => [acceptedKey(line.id), quarantineKey(line.id)]);
+  const keys = goodsReceiptMovementKeys(receipt.lines.map((line) => line.id));
   const posted = await db.pharmacyStockMovement.findMany({
     where: {
       organizationId: scope.organizationId,
@@ -539,6 +532,9 @@ export async function reverseGoodsReceipt(
       input.controlledWitness,
       'pharmacy:safety'
     );
+    // Dispensing takes the branch register lock before any stock balance lock.
+    // Use the same order even when a receipt has multiple movements to reverse.
+    await lockRegister(db, scope.organizationId, scope.branchId);
   }
 
   // Reverse one movement, then write its register row, before the next one.

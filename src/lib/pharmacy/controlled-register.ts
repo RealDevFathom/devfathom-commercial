@@ -59,7 +59,7 @@ export function derivedCorrectionDelta(
   return delta;
 }
 
-async function lockRegister(db: ScopedDb, organizationId: string, branchId: string) {
+export async function lockRegister(db: ScopedDb, organizationId: string, branchId: string) {
   await db.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${organizationId + ':' + branchId}, 0))`;
 }
 

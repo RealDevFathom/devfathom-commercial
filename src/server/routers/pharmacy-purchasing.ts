@@ -1302,22 +1302,14 @@ const purchasingRouter = router({
       await assertProcurement(ctx);
       const scope = receivingScope(ctx, input.branchId);
       try {
-        const result = await ctx.db.$transaction(async (tx) => {
-          try {
-            return await reverseGoodsReceipt(txDb(tx), scope, {
-              goodsReceiptId: input.goodsReceiptId,
-              reason: input.reason,
-              at: new Date(),
-              controlledWitness: input.controlledWitness,
-            });
-          } catch (error) {
-            // Commit failed PIN counters without posting any stock movements.
-            if (error instanceof ControlledRestorationDenied && !error.forbidden) return error;
-            throw error;
-          }
-        });
-        if (result instanceof ControlledRestorationDenied) throw result;
-        return result;
+        return await ctx.db.$transaction((tx) =>
+          reverseGoodsReceipt(txDb(tx), scope, {
+            goodsReceiptId: input.goodsReceiptId,
+            reason: input.reason,
+            at: new Date(),
+            controlledWitness: input.controlledWitness,
+          })
+        );
       } catch (error) {
         domainError(error);
       }

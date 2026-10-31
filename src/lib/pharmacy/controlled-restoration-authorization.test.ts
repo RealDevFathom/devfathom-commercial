@@ -3,6 +3,8 @@ import { authorizeControlledRestoration } from './controlled-restoration-authori
 import { changeSaleStatus, returnSaleLine } from './sales';
 import { can } from '@/lib/abac';
 import { verifyOperatorCredential } from '@/lib/restaurant/operator-credentials';
+import { withTenantDb } from '@/lib/tenancy/scoped-db';
+vi.mock('@/lib/tenancy/scoped-db', () => ({ withTenantDb: vi.fn() }));
 vi.mock('@/lib/abac', () => ({ can: vi.fn() }));
 vi.mock('@/lib/restaurant/operator-credentials', () => ({
   verifyOperatorCredential: vi.fn(),
@@ -39,6 +41,7 @@ function fixture() {
     },
     pharmacyStockMovement: { create: vi.fn() },
   };
+  vi.mocked(withTenantDb).mockImplementation(async (_organizationId, run) => run(db as never));
   return { db, witness };
 }
 const pin = { staffProfileId: 'staff', pin: '1234' };
@@ -79,6 +82,10 @@ describe('fresh controlled restoration authorization', () => {
     expect(db.restaurantOperatorCredential.update).toHaveBeenCalledWith({
       where: { id: 'cred' },
       data: { failedAttempts: 1 },
+    });
+    expect(withTenantDb).toHaveBeenCalledWith('org', expect.any(Function), {
+      userId: 'actor',
+      skipDrain: true,
     });
   });
   it('rejects self-witnessing and a witness denied by ABAC', async () => {

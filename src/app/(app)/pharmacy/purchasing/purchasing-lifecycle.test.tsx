@@ -777,6 +777,7 @@ it('collects a fresh independent witness when reversing a controlled receipt', a
     supplierInvoiceDate: new Date('2026-09-01'),
     receivedAt: new Date('2026-09-01'),
     qualifiedPersonUserId: 'old-witness',
+    reversalRequiresWitness: true,
     lines: [],
     exceptions: [],
   };
@@ -831,6 +832,7 @@ it('keeps controlled reversal disabled when witness choices fail to load', async
           supplierInvoiceDate: new Date('2026-09-01'),
           receivedAt: new Date('2026-09-01'),
           qualifiedPersonUserId: 'old-witness',
+          reversalRequiresWitness: true,
           lines: [],
           exceptions: [],
         },
@@ -841,4 +843,68 @@ it('keeps controlled reversal disabled when witness choices fail to load', async
   render(await ReceivingPage({ searchParams: params({ receipt: 'gr-controlled' }) }));
   expect(screen.getByRole('button', { name: 'Reverse posting' })).toBeDisabled();
   expect(screen.getByText(/Witness choices could not load/)).toBeVisible();
+});
+
+it('allows a wholly quarantined controlled receipt to reverse without safety witness access', async () => {
+  const receipt = {
+    id: 'gr-quarantined',
+    reference: 'GR-Q',
+    status: 'POSTED',
+    supplier: licensedSupplier,
+    supplierInvoiceRef: 'INV-Q',
+    supplierInvoiceDate: new Date('2026-09-01'),
+    receivedAt: new Date('2026-09-01'),
+    qualifiedPersonUserId: 'original-witness',
+    reversalRequiresWitness: false,
+    lines: [
+      {
+        id: 'quarantined-line',
+        medicine: { productName: 'Controlled medicine', controlled: true },
+        unitCostMinor: 100,
+        batchNumber: 'BATCH-Q',
+        printedExpiry: new Date('2027-09-01'),
+        expiryPrecision: 'DAY',
+        printedMrpMinor: 100,
+        receivedPacks: 1,
+        bonusPacks: 0,
+        canonicalUnitsPerPack: 10,
+        receivedCanonicalUnits: 10,
+        bonusCanonicalUnits: 0,
+        acceptedCanonicalUnits: 0,
+        rejectedCanonicalUnits: 10,
+        rejectionReason: 'Damaged',
+        packLevel: { level: 'PACK' },
+        stockLocation: { name: 'Shelf' },
+        quarantineLocation: { name: 'Quarantine' },
+      },
+    ],
+    exceptions: [],
+  };
+  const reverse = vi.fn().mockResolvedValue({});
+  const reversalWitnesses = vi.fn().mockRejectedValue(new Error('FORBIDDEN'));
+  mocks.createCaller.mockReturnValue(
+    callerStub({
+      goodsReceipts: vi.fn().mockResolvedValue([receipt]),
+      reverseGoodsReceipt: reverse,
+      controlledReversalWitnesses: reversalWitnesses,
+    })
+  );
+  vi.stubGlobal('window', { document, location: { origin: 'https://workspace.test' } });
+  render(await ReceivingPage({ searchParams: params({ receipt: receipt.id }) }));
+  expect(reversalWitnesses).not.toHaveBeenCalled();
+  expect(screen.queryByLabelText('Reversal witness')).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Reverse posting' })).toBeEnabled();
+  fireEvent.change(screen.getByLabelText(/Why is this being reversed/), {
+    target: { value: 'Wrong quarantined consignment' },
+  });
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: 'Reverse posting' }));
+  });
+  expect(reverse).toHaveBeenCalledWith(
+    expect.objectContaining({
+      goodsReceiptId: receipt.id,
+      reason: 'Wrong quarantined consignment',
+      controlledWitness: undefined,
+    })
+  );
 });

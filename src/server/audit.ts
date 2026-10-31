@@ -97,6 +97,8 @@ const SENSITIVE_SUBSTRINGS = [
 
 function isSensitiveKey(key: string): boolean {
   const k = key.toLowerCase();
+  // PINs must be redacted even when validation or authorization rejects input.
+  if (k === 'pin') return true;
   // Camera renewal input can be audited before its resolver runs (including
   // denied or invalid requests). Match the identifier exactly, not all grants.
   return k === 'previousgrantid' || SENSITIVE_SUBSTRINGS.some((s) => k.includes(s));
