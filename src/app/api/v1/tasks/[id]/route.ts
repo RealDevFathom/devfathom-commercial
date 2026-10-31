@@ -90,11 +90,27 @@ export const PATCH = withApiAuth(
       parsed.data;
 
     // Load the existing task so we can detect a column move and reorder properly.
-    const existing = await authCtx.db.task.findUnique({
+    let existing = await authCtx.db.task.findUnique({
       where: { id },
       include: { column: { select: { id: true, name: true } } },
     });
     if (!existing) return NextResponse.json({ error: 'Task not found' }, { status: 404 });
+
+    if (columnId !== undefined) {
+      // withApiAuth holds this transaction through the entire request. Match
+      // tRPC's lock order so moves and column renames cannot race this write.
+      const lockIds = [...new Set([existing.columnId, columnId])].sort();
+      await authCtx.db.$queryRaw`SELECT id FROM columns WHERE id = ANY(${lockIds}) ORDER BY id FOR UPDATE`;
+      const current = await authCtx.db.task.findUnique({
+        where: { id },
+        include: { column: { select: { id: true, name: true } } },
+      });
+      if (!current) return NextResponse.json({ error: 'Task not found' }, { status: 404 });
+      if (current.columnId !== existing.columnId) {
+        return NextResponse.json({ error: 'Task moved concurrently; retry' }, { status: 409 });
+      }
+      existing = current;
+    }
 
     const isColumnMove = columnId !== undefined && columnId !== existing.columnId;
 

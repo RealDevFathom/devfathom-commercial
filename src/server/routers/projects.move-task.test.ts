@@ -41,11 +41,14 @@ const tx = {
       .mockResolvedValueOnce([{ id: 'task-1' }])
       .mockResolvedValueOnce([]),
     update: taskUpdate,
-    findUnique: vi.fn(async () => ({ columnId: 'source-column' })),
+    updateMany: vi.fn(async () => ({ count: 1 })),
+    findUnique: vi.fn(async () => ({ columnId: 'source-column', column: { name: 'To Do' } })),
   },
   $queryRaw: vi.fn(async () => []),
   column: {
     findUnique: vi.fn(async () => ({ name: 'Done', board: { projectId: 'destination-project' } })),
+    findUniqueOrThrow: vi.fn(async () => ({ name: 'To Do' })),
+    update: vi.fn(async () => ({ id: 'target-column', name: 'Done' })),
   },
   taskAssignee: { deleteMany: assigneeDeleteMany, createMany: vi.fn() },
   columnDefaultAssignee: { findMany: defaultAssigneeFindMany },
@@ -163,12 +166,41 @@ describe('projects.moveTask', () => {
 
 describe('projects.moveTask concurrency', () => {
   it('locks the columns and refuses a task that moved since the access check', async () => {
-    tx.task.findUnique.mockResolvedValueOnce({ columnId: 'elsewhere' });
+    tx.task.findUnique.mockResolvedValueOnce({ columnId: 'elsewhere', column: { name: 'To Do' } });
     await expect(
       caller().moveTask({ taskId: 'task-1', targetColumnId: 'target-column', newOrder: 0 })
     ).rejects.toMatchObject({ code: 'CONFLICT' });
     expect(tx.$queryRaw).toHaveBeenCalled();
     expect(taskUpdate).not.toHaveBeenCalled();
+  });
+
+  it('uses the source status read after locking when a column was renamed', async () => {
+    tx.task.findUnique.mockResolvedValueOnce({
+      columnId: 'source-column',
+      column: { name: 'Closed' },
+    });
+
+    await caller().moveTask({ taskId: 'task-1', targetColumnId: 'target-column', newOrder: 0 });
+
+    expect(taskUpdate).toHaveBeenCalledWith({
+      where: { id: 'task-1' },
+      data: { columnId: 'target-column', completedAt: undefined },
+    });
+  });
+});
+
+describe('projects.updateColumn completion', () => {
+  it('records completion for existing tasks when their column becomes Done', async () => {
+    await caller().updateColumn({ id: 'target-column', name: 'Done', wipLimit: 4 });
+
+    expect(tx.task.updateMany).toHaveBeenCalledWith({
+      where: { columnId: 'target-column' },
+      data: { completedAt: expect.any(Date) },
+    });
+    expect(tx.column.update).toHaveBeenCalledWith({
+      where: { id: 'target-column' },
+      data: { name: 'Done', wipLimit: 4 },
+    });
   });
 });
 

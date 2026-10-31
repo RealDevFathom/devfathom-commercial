@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => {
     createMany: vi.fn(async () => ({ count: 1 })),
   };
   const db = {
+    $queryRaw: vi.fn().mockResolvedValue([]),
     task: {
       findUnique: vi.fn(async () => ({
         id: 'task-1',
@@ -96,6 +97,63 @@ describe('PATCH /api/v1/tasks/:id cross-project moves', () => {
     expect(mocks.taskAssignee.createMany).toHaveBeenLastCalledWith({
       data: [{ taskId: 'task-1', userId: 'destination-member' }],
       skipDuplicates: true,
+    });
+  });
+
+  it('rejects a stale move before changing tasks or assignees', async () => {
+    mocks.db.task.findUnique.mockResolvedValueOnce({
+      id: 'task-1',
+      title: 'Private task',
+      columnId: 'closed-column',
+      order: 0,
+      column: { id: 'closed-column', name: 'Closed' },
+    });
+    // The normal mock now returns To Do, representing a concurrent reopening.
+    const response = await PATCH(
+      new Request('https://example.test/api/v1/tasks/task-1', {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ columnId: 'target-column', assigneeIds: [] }),
+      }),
+      { params: Promise.resolve({ id: 'task-1' }) }
+    );
+
+    expect(response.status).toBe(409);
+    expect(mocks.db.$queryRaw.mock.calls[0][1]).toEqual(['closed-column', 'target-column']);
+    expect(mocks.db.task.update).not.toHaveBeenCalled();
+    expect(mocks.db.task.updateMany).not.toHaveBeenCalled();
+    expect(mocks.taskAssignee.deleteMany).not.toHaveBeenCalled();
+    expect(mocks.taskAssignee.createMany).not.toHaveBeenCalled();
+  });
+
+  it('uses the current source status after a concurrent column rename', async () => {
+    mocks.db.task.findUnique.mockResolvedValueOnce({
+      id: 'task-1',
+      title: 'Private task',
+      columnId: 'source-column',
+      order: 0,
+      column: { id: 'source-column', name: 'Closed' },
+    });
+    mocks.db.column.findUnique.mockResolvedValueOnce({
+      id: 'target-column',
+      name: 'Done',
+      board: { project: { id: 'destination-project', name: 'Destination' } },
+      defaultAssignees: [],
+    });
+
+    const response = await PATCH(
+      new Request('https://example.test/api/v1/tasks/task-1', {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ columnId: 'target-column' }),
+      }),
+      { params: Promise.resolve({ id: 'task-1' }) }
+    );
+
+    expect(response.status).toBe(200);
+    expect(mocks.db.task.update).toHaveBeenCalledWith({
+      where: { id: 'task-1' },
+      data: expect.objectContaining({ completedAt: expect.any(Date) }),
     });
   });
 });

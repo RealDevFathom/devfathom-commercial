@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { completionTimestampForMove, isDoneColumn } from '@/lib/tasks/completion';
+import { updateColumnWithCompletion } from '@/lib/tasks/columns';
 import { router, protectedProcedure } from '../trpc';
 import { TRPCError } from '@trpc/server';
 import { logActivity } from '../activity';
@@ -711,7 +712,7 @@ export const projectsRouter = router({
         await tx.$queryRaw`SELECT id FROM columns WHERE id = ANY(${lockIds}) ORDER BY id FOR UPDATE`;
         const current = await tx.task.findUnique({
           where: { id: input.taskId },
-          select: { columnId: true },
+          select: { columnId: true, column: { select: { name: true } } },
         });
         if (!current) throw new TRPCError({ code: 'NOT_FOUND' });
         if (current.columnId !== sourceColumnId) {
@@ -759,7 +760,7 @@ export const projectsRouter = router({
             where: { id: input.taskId },
             data: {
               columnId: input.targetColumnId,
-              completedAt: completionTimestampForMove(task.column.name, targetColumn.name),
+              completedAt: completionTimestampForMove(current.column.name, targetColumn.name),
             },
           });
 
@@ -1240,11 +1241,11 @@ export const projectsRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       await assertColumnAccess(ctx, input.id);
-      return ctx.db.column.update({
-        where: { id: input.id },
+      return updateColumnWithCompletion(ctx.db, input.id, {
         // Prisma treats `undefined` as "don't touch" and `null` as "set null",
         // which is exactly the semantics we want for an optional clearable limit.
-        data: { name: input.name, wipLimit: input.wipLimit },
+        name: input.name,
+        wipLimit: input.wipLimit,
       });
     }),
 

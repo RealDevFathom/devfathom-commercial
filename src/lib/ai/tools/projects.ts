@@ -22,6 +22,7 @@ import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
 import { matchScore, norm } from '@/lib/ai/context';
 import type { AssistantHelpers, ToolSet } from '@/lib/ai/context';
+import { updateColumnWithCompletion } from '@/lib/tasks/columns';
 
 export function buildProjectsTools(h: AssistantHelpers): ToolSet {
   const { db } = h;
@@ -954,10 +955,7 @@ export function buildProjectsTools(h: AssistantHelpers): ToolSet {
       if (cr.kind === 'ambiguous')
         return { needsClarification: `Which column — ${cr.candidates.join(', ')}?` };
 
-      const updated = await db.column.update({
-        where: { id: cr.value.id },
-        data: { name: newName },
-      });
+      const updated = await updateColumnWithCompletion(db, cr.value.id, { name: newName }, h.now());
 
       h.audit({
         category: 'PROJECT',
