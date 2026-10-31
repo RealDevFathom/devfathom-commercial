@@ -1,10 +1,6 @@
 import { z } from 'zod';
 import { router, protectedProcedure, adminProcedure } from '../trpc';
-import {
-  fromCurrencyGroups,
-  currenciesPresent,
-  type CurrencyAmount,
-} from '@/lib/finance/currency';
+import { fromCurrencyGroups, currenciesPresent, type CurrencyAmount } from '@/lib/finance/currency';
 
 // IMP-DASH-02: stable keys for the dashboard widgets a user may hide. The Next
 // Meeting banner, KPI cards, and admin Revenue chart are intentionally NOT
@@ -51,7 +47,8 @@ export const dashboardRouter = router({
         select: { preferences: true },
       });
       const base =
-        existing?.preferences && typeof existing.preferences === 'object' &&
+        existing?.preferences &&
+        typeof existing.preferences === 'object' &&
         !Array.isArray(existing.preferences)
           ? (existing.preferences as Record<string, unknown>)
           : {};
@@ -85,7 +82,8 @@ export const dashboardRouter = router({
         select: { preferences: true },
       });
       const base =
-        existing?.preferences && typeof existing.preferences === 'object' &&
+        existing?.preferences &&
+        typeof existing.preferences === 'object' &&
         !Array.isArray(existing.preferences)
           ? (existing.preferences as Record<string, unknown>)
           : {};
@@ -322,12 +320,20 @@ export const dashboardRouter = router({
   }),
 
   getMyTasks: protectedProcedure.query(async ({ ctx }) => {
+    const isAdmin = ctx.session.user.role === 'ADMIN';
     const userId = ctx.session.user.id;
 
     return ctx.db.task.findMany({
       where: {
         assignees: { some: { userId } },
-        column: { name: { not: 'Done' } },
+        column: {
+          name: { not: 'Done' },
+          // Assignee rows can outlive a cross-project move performed by an old
+          // client or integration. Do not let that stale relationship disclose
+          // the destination project through the dashboard. Organization admins
+          // retain their existing all-project capability.
+          ...(isAdmin ? {} : { board: { project: { members: { some: { userId } } } } }),
+        },
       },
       include: {
         column: {

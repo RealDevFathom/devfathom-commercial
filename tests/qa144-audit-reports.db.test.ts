@@ -4,8 +4,9 @@ import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { beforeAll, afterAll, describe, expect, it } from 'vitest';
 
-const runtimeUrl = process.env.QA144_DATABASE_URL;
-const ownerUrl = process.env.QA144_OWNER_DATABASE_URL;
+// Prefer dedicated overrides, but use the QA gate's restricted runtime/owner pair.
+const runtimeUrl = process.env.QA144_DATABASE_URL ?? process.env.DATABASE_URL;
+const ownerUrl = process.env.QA144_OWNER_DATABASE_URL ?? process.env.OWNER_DATABASE_URL;
 if (runtimeUrl) process.env.DATABASE_URL = runtimeUrl;
 const suite = runtimeUrl && ownerUrl ? describe : describe.skip;
 const prefix = `qa144_${randomUUID().replaceAll('-', '')}`;

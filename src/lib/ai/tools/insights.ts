@@ -62,10 +62,7 @@ export function buildInsightsTools(h: AssistantHelpers): ToolSet {
         }),
         h.db.meeting.count({
           where: {
-            OR: [
-              { createdById: h.ctx.userId },
-              { attendees: { some: { userId: h.ctx.userId } } },
-            ],
+            OR: [{ createdById: h.ctx.userId }, { attendees: { some: { userId: h.ctx.userId } } }],
             startTime: { gte: now, lte: weekAhead },
           },
         }),
@@ -482,29 +479,31 @@ export function buildInsightsTools(h: AssistantHelpers): ToolSet {
       const userId = h.ctx.userId;
       const now = h.now();
 
-      const [activeProjects, totalTasks, completedTasksThisWeek, pendingLeaves] = await Promise.all([
-        h.db.project.count({
-          where: isAdmin
-            ? { status: 'ACTIVE' }
-            : { members: { some: { userId } }, status: 'ACTIVE' },
-        }),
-        h.db.task.count({
-          where: isAdmin ? {} : { assignees: { some: { userId } } },
-        }),
-        h.db.task.count({
-          where: {
-            ...(isAdmin ? {} : { assignees: { some: { userId } } }),
-            column: { name: 'Done' },
-            // #410: entered Done this week, mirroring the dashboard.
-            completedAt: { gte: new Date(now.getTime() - 7 * DAY_MS) },
-          },
-        }),
-        // AI-03: mirror DASH-02 — admins see the company-wide pending-leave count,
-        // everyone else only their own (no company-wide count over the assistant).
-        h.db.leaveRequest.count({
-          where: { status: 'PENDING', ...(isAdmin ? {} : { userId }) },
-        }),
-      ]);
+      const [activeProjects, totalTasks, completedTasksThisWeek, pendingLeaves] = await Promise.all(
+        [
+          h.db.project.count({
+            where: isAdmin
+              ? { status: 'ACTIVE' }
+              : { members: { some: { userId } }, status: 'ACTIVE' },
+          }),
+          h.db.task.count({
+            where: isAdmin ? {} : { assignees: { some: { userId } } },
+          }),
+          h.db.task.count({
+            where: {
+              ...(isAdmin ? {} : { assignees: { some: { userId } } }),
+              column: { name: 'Done' },
+              // #410: entered Done this week, mirroring the dashboard.
+              completedAt: { gte: new Date(now.getTime() - 7 * DAY_MS) },
+            },
+          }),
+          // AI-03: mirror DASH-02 — admins see the company-wide pending-leave count,
+          // everyone else only their own (no company-wide count over the assistant).
+          h.db.leaveRequest.count({
+            where: { status: 'PENDING', ...(isAdmin ? {} : { userId }) },
+          }),
+        ]
+      );
 
       const result: Record<string, unknown> = {
         activeProjects,
@@ -663,7 +662,7 @@ export function buildInsightsTools(h: AssistantHelpers): ToolSet {
           operation: r.operation,
           category: r.category,
           source: r.source,
-          target: r.targetLabel ?? (r.targetType ?? null),
+          target: r.targetLabel ?? r.targetType ?? null,
           targetType: r.targetType,
           outcome: r.outcome,
           description: r.description,

@@ -53,6 +53,19 @@ describe('projects.deleteTask authorization', () => {
       code: 'FORBIDDEN',
     });
     expect(taskDelete).not.toHaveBeenCalled();
+    expect(membershipFindUnique).toHaveBeenCalledWith({
+      where: { projectId_userId: { projectId: 'project_1', userId: 'user_1' } },
+      select: { role: true },
+    });
+  });
+
+  it('forbids an employee who is not a project member before deleting the task', async () => {
+    membershipFindUnique.mockResolvedValue(null);
+
+    await expect(caller().deleteTask({ id: 'task_1' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(taskDelete).not.toHaveBeenCalled();
   });
 
   it('allows a project LEAD to delete the task', async () => {
@@ -62,8 +75,18 @@ describe('projects.deleteTask authorization', () => {
     expect(taskDelete).toHaveBeenCalledWith({ where: { id: 'task_1' } });
   });
 
-  it('allows an ADMIN without requiring project membership', async () => {
+  it('keeps ADMIN all-capability access without requiring project membership', async () => {
     await expect(caller('ADMIN').deleteTask({ id: 'task_1' })).resolves.toEqual({ id: 'task_1' });
     expect(membershipFindUnique).not.toHaveBeenCalled();
+  });
+
+  it('returns NOT_FOUND without attempting deletion when the task does not exist', async () => {
+    taskFindUnique.mockResolvedValue(null);
+
+    await expect(caller().deleteTask({ id: 'missing_task' })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
+    expect(membershipFindUnique).not.toHaveBeenCalled();
+    expect(taskDelete).not.toHaveBeenCalled();
   });
 });

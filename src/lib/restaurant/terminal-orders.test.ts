@@ -43,7 +43,7 @@ function req(headers: Record<string, string> = {}): Request {
 }
 
 describe('listOpenOrdersForBranch', () => {
-  it('counts item units rather than order lines', async () => {
+  it('counts purchased units and excludes remakes from the subtotal', async () => {
     const db = {
       restaurantOrder: {
         findMany: vi.fn().mockResolvedValue([
@@ -67,6 +67,16 @@ describe('listOpenOrdersForBranch', () => {
     const result = await listOpenOrdersForBranch(db, 'branch_1');
 
     expect(result.orders[0]?.itemCount).toBe(2);
+    expect(result.orders[0]?.subtotal).toBe('25');
+    expect(db.restaurantOrder.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        select: expect.objectContaining({
+          items: expect.objectContaining({
+            where: { status: { not: 'VOIDED' }, remakeOfItemId: null },
+          }),
+        }),
+      })
+    );
   });
 });
 

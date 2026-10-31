@@ -78,6 +78,7 @@ import {
   canPlatform,
   createPlatformSession,
   getPlatformSession,
+  platformLoginNeedsEnrollment,
   requirePlatformSession,
   requirePlatformMfaSession,
   revokePlatformSession,
@@ -117,7 +118,9 @@ beforeEach(() => {
     encryptedTotpSecret: null,
   };
 });
-afterEach(() => { vi.unstubAllEnvs(); });
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 describe('restricted enrollment sessions', () => {
   it.each(['SUPER_ADMIN', 'OPERATIONS', 'SUPPORT'])(
     '%s gets enrollment only by default',
@@ -128,6 +131,7 @@ describe('restricted enrollment sessions', () => {
       expect(session.expiresAt.getTime() - Date.now()).toBeLessThanOrEqual(600000);
       expect(canPlatform(session.identity, 'organizations:read')).toBe(false);
       expect(await getPlatformSession(request(session.token))).toBeNull();
+      expect(await platformLoginNeedsEnrollment(request(session.token))).toBe(true);
       await expect(requirePlatformSession(request(session.token))).rejects.toMatchObject({
         status: 401,
       });
@@ -150,6 +154,7 @@ describe('restricted enrollment sessions', () => {
     const session = await signIn();
     expect(session.identity.enrollmentOnly).toBe(false);
     expect(await getPlatformSession(request(session.token))).not.toBeNull();
+    expect(await platformLoginNeedsEnrollment(request(session.token))).toBe(false);
   });
   it('allows the explicit test override but still honors user policy', async () => {
     vi.stubEnv('PLATFORM_MFA_ENFORCE', 'false');
@@ -225,19 +230,31 @@ describe('restricted enrollment sessions', () => {
 describe('enrollment integration guards', () => {
   it('logs out an enrollment cookie through the real JSON-origin route boundary', async () => {
     const session = await signIn();
-    const headers = { cookie: `df_platform_session=${session.token}`, origin: 'http://admin.localhost' };
-    const missingType = await logout(new Request('http://admin.localhost/api/platform/session', { method: 'DELETE', headers }));
+    const headers = {
+      cookie: `df_platform_session=${session.token}`,
+      origin: 'http://admin.localhost',
+    };
+    const missingType = await logout(
+      new Request('http://admin.localhost/api/platform/session', { method: 'DELETE', headers })
+    );
     expect(missingType.status).toBe(400);
     expect((await requirePlatformMfaSession(request(session.token))).enrollmentOnly).toBe(true);
-    const response = await logout(new Request('http://admin.localhost/api/platform/session', {
-      method: 'DELETE', headers: { ...headers, 'content-type': 'application/json' },
-    }));
+    const response = await logout(
+      new Request('http://admin.localhost/api/platform/session', {
+        method: 'DELETE',
+        headers: { ...headers, 'content-type': 'application/json' },
+      })
+    );
     expect(response.status).toBe(200);
     expect(response.headers.get('set-cookie')).toContain('Max-Age=0');
-    await expect(requirePlatformMfaSession(request(session.token))).rejects.toMatchObject({ status: 401 });
+    await expect(requirePlatformMfaSession(request(session.token))).rejects.toMatchObject({
+      status: 401,
+    });
   });
   it('refuses issuance if the verified account changes before its locked recheck', async () => {
-    db.platformUser.findUnique.mockResolvedValueOnce({ ...state.user }).mockResolvedValueOnce({ ...state.user, role: 'SALES' });
+    db.platformUser.findUnique
+      .mockResolvedValueOnce({ ...state.user })
+      .mockResolvedValueOnce({ ...state.user, role: 'SALES' });
     await expect(signIn()).rejects.toMatchObject({ status: 401 });
     expect(state.sessions).toHaveLength(0);
   });
@@ -250,9 +267,16 @@ describe('enrollment integration guards', () => {
   it('refuses role-required MFA disable even from an enrolled regular session', async () => {
     state.user.mfaEnabledAt = new Date();
     state.user.encryptedTotpSecret = 'synthetic-secret';
-    const session = await createPlatformSession('admin@example.com', 'valid-password', '123456', request());
+    const session = await createPlatformSession(
+      'admin@example.com',
+      'valid-password',
+      '123456',
+      request()
+    );
     expect(session.identity.enrollmentOnly).toBe(false);
-    expect((await POST(request(session.token, { action: 'disable', code: '123456' }))).status).toBe(403);
+    expect((await POST(request(session.token, { action: 'disable', code: '123456' }))).status).toBe(
+      403
+    );
     expect(state.user.encryptedTotpSecret).toBe('synthetic-secret');
   });
 });
