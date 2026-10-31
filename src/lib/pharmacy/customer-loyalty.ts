@@ -444,7 +444,7 @@ export async function readLoyaltyHistory(
   await assertLoyaltyHistoryBranch(db, scope);
   const customer = await db.pharmacyCustomer.findFirst({
     where: { id: customerId, organizationId: scope.organizationId, active: true },
-    select: { id: true, displayName: true, phoneLast4: true },
+    select: { id: true, displayName: true, phoneLast4: true, preferredLanguage: true },
   });
   if (!customer) throw new PharmacyLoyaltyError('CUSTOMER_NOT_FOUND');
   const where = { organizationId: scope.organizationId, branchId: scope.branchId, customerId };

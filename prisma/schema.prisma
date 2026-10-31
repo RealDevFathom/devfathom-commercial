@@ -1143,6 +1143,7 @@ model PharmacyCustomer {
   orders                 PharmacyCustomerOrder[]
   whatsappOptIn          Boolean?
   whatsappOptInChangedAt DateTime?                    @db.Timestamp(3)
+  preferredLanguage      String                       @default("en") @db.VarChar(2)
 
   @@unique([organizationId, id])
   @@unique([organizationId, patientId])
