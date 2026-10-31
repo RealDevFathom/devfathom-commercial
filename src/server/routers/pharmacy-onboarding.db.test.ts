@@ -228,16 +228,32 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
   });
 
   it('refuses a province with no published rules, on the province field', async () => {
-    await withTenantDb(organizationId, async (db) => {
-      await expect(
-        // A province no rule set can name, so this stays true whatever else the
-        // shared jurisdiction table holds.
-        caller(db).saveRegulatoryProfile({ ...profile, provinceCode: 'PK-ZZ' })
-      ).rejects.toMatchObject({
-        code: 'BAD_REQUEST',
-        message: expect.stringContaining('No jurisdiction rules are published'),
+    // Keep the profile bound to its branch so this reaches the published-rules
+    // check rather than failing the earlier province/premises checks.
+    await owner.query(`UPDATE pharmacy_branches SET "provinceCode" = 'ZZ' WHERE id = $1`, [
+      secondBranchId,
+    ]);
+    try {
+      await withTenantDb(organizationId, async (db) => {
+        await expect(
+          // A province no rule set can name, so this stays true whatever else the
+          // shared jurisdiction table holds.
+          caller(db).saveRegulatoryProfile({
+            ...profile,
+            branchId: secondBranchId,
+            premisesAddressLine: '9 Link Road',
+            provinceCode: 'PK-ZZ',
+          })
+        ).rejects.toMatchObject({
+          code: 'BAD_REQUEST',
+          message: expect.stringContaining('No jurisdiction rules are published'),
+        });
       });
-    });
+    } finally {
+      await owner.query(`UPDATE pharmacy_branches SET "provinceCode" = 'PB' WHERE id = $1`, [
+        secondBranchId,
+      ]);
+    }
   });
 
   it('binds the regulatory province and premises to the selected branch', async () => {

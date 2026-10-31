@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { recordAudit } from '@/server/audit';
 import {
   assertBranchMayOperate,
   assertStoredBranchMayOperate,
@@ -152,6 +153,37 @@ describe('assertStoredBranchMayOperate', () => {
     } as never;
   }
 
+  it('permits a matching profile and scopes the lookup to the requested tenant and branch', async () => {
+    const findFirst = vi.fn(async () => storedProfile());
+    const db = { branchRegulatoryProfile: { findFirst } } as never;
+    await expect(
+      assertStoredBranchMayOperate(db, 'org-a', 'branch-a', { name: 'ACTIVATE', at })
+    ).resolves.toBeUndefined();
+    expect(findFirst).toHaveBeenCalledExactlyOnceWith({
+      where: {
+        organizationId: 'org-a',
+        branchId: 'branch-a',
+        effectiveFrom: { lte: at },
+        OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
+      },
+      include: { jurisdictionRuleSet: true, branch: true },
+      orderBy: { effectiveFrom: 'desc' },
+    });
+  });
+
+  it('accepts equivalent province codes, casing and whitespace in premises', async () => {
+    const profile = storedProfile({
+      provinceCode: ' pk-pb ',
+      premises: { addressLine: ' 12  MALL Road ', city: ' LAHORE ' },
+    });
+    await expect(
+      assertStoredBranchMayOperate(storedDb(profile), 'org-a', 'branch-a', {
+        name: 'ACTIVATE',
+        at,
+      })
+    ).resolves.toBeUndefined();
+  });
+
   it('refuses an otherwise valid profile when its branch is inactive', async () => {
     const profile = storedProfile({
       branch: { ...storedProfile().branch, active: false },
@@ -168,6 +200,8 @@ describe('assertStoredBranchMayOperate', () => {
     ['province', { provinceCode: 'PK-SD' }],
     ['address', { premises: { addressLine: '99 Other Road', city: 'Lahore' } }],
     ['city', { premises: { addressLine: '12 Mall Road', city: 'Karachi' } }],
+    ['missing premises', { premises: null }],
+    ['malformed premises', { premises: { addressLine: 12, city: 'Lahore' } }],
   ])('refuses a profile whose %s is not bound to the branch', async (_field, mismatch) => {
     await expect(
       assertStoredBranchMayOperate(storedDb(storedProfile(mismatch)), 'org-a', 'branch-a', {
@@ -175,5 +209,13 @@ describe('assertStoredBranchMayOperate', () => {
         at,
       })
     ).rejects.toThrowError(new BranchOperationDeniedError('PROFILE_PREMISES_MISMATCH'));
+    expect(recordAudit).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        organizationId: 'org-a',
+        targetId: 'branch-a',
+        errorCode: 'PROFILE_PREMISES_MISMATCH',
+        outcome: 'FAILURE',
+      })
+    );
   });
 });
