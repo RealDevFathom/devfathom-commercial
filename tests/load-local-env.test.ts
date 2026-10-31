@@ -4,7 +4,11 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { loadLocalEnvironment, requireEnvironment } from './load-local-env';
+import {
+  loadLocalEnvironment,
+  requireEnvironment,
+  resolvePrismaDatasourceUrl,
+} from '../scripts/load-local-env';
 
 const directories: string[] = [];
 
@@ -103,5 +107,52 @@ describe('loadLocalEnvironment', () => {
     expect(requireEnvironment('DATABASE_URL', { DATABASE_URL: '  postgres://localhost/db  ' })).toBe(
       'postgres://localhost/db'
     );
+  });
+});
+
+describe('resolvePrismaDatasourceUrl', () => {
+  const cli = (...args: string[]) => ['node', 'prisma', ...args];
+
+  it.each([['generate'], ['validate'], ['format'], ['version'], ['--version']])(
+    'allows offline `prisma %s` without database credentials',
+    (command) => {
+      expect(resolvePrismaDatasourceUrl({}, cli(command))).toBeUndefined();
+    }
+  );
+
+  it('allows offline generate with flags before the command', () => {
+    expect(
+      resolvePrismaDatasourceUrl({}, cli('--schema=prisma/schema.prisma', 'generate'))
+    ).toBeUndefined();
+  });
+
+  it.each([['migrate', 'deploy'], ['db', 'seed'], ['studio']])(
+    'requires DATABASE_URL for database command `prisma %s`',
+    (...command) => {
+      expect(() => resolvePrismaDatasourceUrl({}, cli(...command))).toThrow(
+        'Missing required environment variable: DATABASE_URL'
+      );
+    }
+  );
+
+  it('requires DATABASE_URL when the command cannot be identified', () => {
+    expect(() => resolvePrismaDatasourceUrl({}, ['node', 'loader'])).toThrow(
+      'Missing required environment variable: DATABASE_URL'
+    );
+  });
+
+  it('prefers a trimmed MIGRATION_DATABASE_URL over DATABASE_URL', () => {
+    expect(
+      resolvePrismaDatasourceUrl(
+        { MIGRATION_DATABASE_URL: ' postgres://owner ', DATABASE_URL: 'postgres://app' },
+        cli('migrate', 'deploy')
+      )
+    ).toBe('postgres://owner');
+  });
+
+  it('falls back to a trimmed DATABASE_URL for database and offline commands', () => {
+    const environment = { DATABASE_URL: ' postgres://app ' };
+    expect(resolvePrismaDatasourceUrl(environment, cli('migrate', 'deploy'))).toBe('postgres://app');
+    expect(resolvePrismaDatasourceUrl(environment, cli('generate'))).toBe('postgres://app');
   });
 });

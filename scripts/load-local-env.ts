@@ -30,4 +30,31 @@ export function requireEnvironment(
   return value;
 }
 
+/** Prisma CLI commands that never open a database connection. */
+export const OFFLINE_PRISMA_COMMANDS = new Set(['generate', 'validate', 'format', 'version', 'help']);
+
+function prismaCommand(argv: readonly string[]): string | undefined {
+  return argv.slice(2).find((arg) => !arg.startsWith('-'));
+}
+
+/**
+ * Resolve the Prisma datasource URL. Database commands (migrate, db, studio, …)
+ * fail fast without credentials; offline commands such as `prisma generate`
+ * (postinstall, Docker builder) must keep working with no database configured.
+ */
+export function resolvePrismaDatasourceUrl(
+  environment: NodeJS.ProcessEnv = process.env,
+  argv: readonly string[] = process.argv
+): string | undefined {
+  const migrationUrl = environment['MIGRATION_DATABASE_URL']?.trim();
+  if (migrationUrl) return migrationUrl;
+  const command = prismaCommand(argv);
+  const offline =
+    command === undefined
+      ? argv.some((arg) => ['-v', '--version', '-h', '--help'].includes(arg))
+      : OFFLINE_PRISMA_COMMANDS.has(command);
+  if (offline) return environment['DATABASE_URL']?.trim() || undefined;
+  return requireEnvironment('DATABASE_URL', environment);
+}
+
 loadLocalEnvironment();
