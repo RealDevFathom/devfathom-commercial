@@ -90,7 +90,11 @@ export function messageFrom(body: unknown) {
   return 'Request failed without a safe server message.';
 }
 
-export async function request<T>(path: string, init: RequestInit): Promise<T> {
+export async function request<T>(
+  path: string,
+  init: RequestInit,
+  canRenewProof = true
+): Promise<T> {
   const response = await fetch(path, {
     ...init,
     cache: 'no-store',
@@ -98,6 +102,31 @@ export async function request<T>(path: string, init: RequestInit): Promise<T> {
     signal: AbortSignal.timeout(10_000),
   });
   const body: unknown = await response.json().catch(() => undefined);
+  const headers = new Headers(init.headers);
+  const originalProof = headers.get('X-POS-Composer-Proof');
+  if (
+    canRenewProof &&
+    response.status === 403 &&
+    messageFrom(body) === 'Missing or invalid POS composer proof.' &&
+    originalProof
+  ) {
+    // Proof validation precedes every command effect. Retry once with the same
+    // body and idempotency key after the server verifies the signed composer.
+    const renewed = await request<{ composerProof: string }>(
+      '/api/restaurant/terminal/renew-composer-proof',
+      {
+        method: 'POST',
+        headers: {
+          'X-Terminal-Session': headers.get('X-Terminal-Session') ?? '',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ originalProof }),
+      },
+      false
+    );
+    headers.set('X-POS-Composer-Proof', renewed.composerProof);
+    return request<T>(path, { ...init, headers }, false);
+  }
   if (!response.ok) throw new RequestError(response.status, messageFrom(body));
   if (body === undefined || (body === null && (init.method ?? 'GET').toUpperCase() !== 'GET'))
     throw new Error('Server response was unreadable. Retry the same command.');

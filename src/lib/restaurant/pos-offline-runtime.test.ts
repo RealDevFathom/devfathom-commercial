@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { createMemoryDriver } from './pos-client-store';
+import { createMemoryDriver, writePosState } from './pos-client-store';
 import { PosOfflineRuntime } from './pos-offline-runtime';
 
 const scope = { organizationId: 'org-1', branchId: 'branch-1', deviceId: 'device-1' };
@@ -21,6 +21,43 @@ const input = {
 };
 
 describe('PosOfflineRuntime', () => {
+  it.each(['composerStaffProfileId', 'composerProof'])(
+    'quarantines legacy drafts missing %s without blocking signed work',
+    async (field) => {
+      const driver = createMemoryDriver();
+      const first = new PosOfflineRuntime(scope, driver);
+      await first.enqueue(input);
+      await first.enqueue(input);
+      const legacy = first.snapshot().queue!.drafts[0];
+      Reflect.deleteProperty(legacy, field);
+      await writePosState(driver, first.snapshot());
+
+      const reloaded = new PosOfflineRuntime(scope, driver);
+      expect(await reloaded.hydrate()).toBe('ready');
+      expect(reloaded.snapshot().queue!.drafts[0]).toMatchObject({
+        draftId: legacy.draftId,
+        status: 'QUARANTINED',
+        review: { reason: 'COMPOSER_UNVERIFIED' },
+        commands: legacy.commands,
+      });
+      await reloaded.resolveReview(legacy.draftId, 'REPLAY');
+      expect(reloaded.snapshot().queue!.drafts[0].status).toBe('QUARANTINED');
+      let sent = 0;
+      await reloaded.replay('staff-1', async (request) => {
+        expect(request.headers['X-POS-Composer-Proof']).toBe(input.composerProof);
+        sent++;
+        return { status: 201, serverRef: 'server-ref' };
+      });
+      expect(sent).toBe(2); // Only the signed draft's open/add commands.
+      expect(reloaded.snapshot().queue!.drafts[1].status).toBe('COMPLETED');
+      await reloaded.resolveReview(legacy.draftId, 'DISCARD');
+      const again = new PosOfflineRuntime(scope, driver);
+      await again.hydrate();
+      expect(again.snapshot().queue!.drafts.map((draft) => draft.draftId)).not.toContain(
+        legacy.draftId
+      );
+    }
+  );
   it('replays a persisted draft only as the operator who composed it', async () => {
     const runtime = new PosOfflineRuntime(scope, createMemoryDriver());
     await runtime.enqueue(input);

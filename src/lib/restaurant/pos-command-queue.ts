@@ -104,6 +104,7 @@ export type PosDraftReviewReason =
   | 'PRICE_CHANGED'
   | 'ITEM_UNAVAILABLE'
   | 'CHANNEL_CLOSED'
+  | 'COMPOSER_UNVERIFIED'
   | 'REJECTED';
 
 export type PosDraftReview = {
@@ -673,6 +674,12 @@ export function resolveReviewedDraft(
   if (decision === 'DISCARD') {
     return { ...snapshot, drafts: snapshot.drafts.filter((d) => d.draftId !== draftId) };
   }
+  // A review cannot establish authorship for work saved before composer proofs.
+  if (
+    snapshot.drafts.find((draft) => draft.draftId === draftId)?.review?.reason ===
+    'COMPOSER_UNVERIFIED'
+  )
+    return snapshot;
   return mapDraft(snapshot, draftId, (draft) => ({
     ...draft,
     status: 'QUEUED',

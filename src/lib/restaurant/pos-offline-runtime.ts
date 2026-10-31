@@ -62,6 +62,26 @@ export class PosOfflineRuntime {
         ...result.state,
         queue: result.state.queue ?? createQueueSnapshot(this.scope.deviceId),
       };
+      // Schema v1 also contains pre-proof drafts. Preserve them for explicit
+      // discard, but never let unverifiable authorship block newer signed work.
+      this.state.queue = {
+        ...this.queue(),
+        drafts: this.queue().drafts.map((draft) =>
+          draft.status !== 'COMPLETED' && (!draft.composerStaffProfileId || !draft.composerProof)
+            ? {
+                ...draft,
+                status: 'QUARANTINED',
+                review: {
+                  reason: 'COMPOSER_UNVERIFIED',
+                  message:
+                    'This saved order has no verified composer. Recreate it and discard this copy.',
+                  atCommandId: null,
+                },
+              }
+            : draft
+        ),
+      };
+      await this.persist();
     }
     return 'ready';
   }
@@ -100,7 +120,10 @@ export class PosOfflineRuntime {
     renew: (originalProof: string) => Promise<string | null>
   ): Promise<void> {
     const candidates = this.queue().drafts.filter(
-      (draft) => draft.status !== 'COMPLETED' && draft.composerStaffProfileId === staffProfileId
+      (draft) =>
+        draft.status !== 'COMPLETED' &&
+        draft.review?.reason !== 'COMPOSER_UNVERIFIED' &&
+        draft.composerStaffProfileId === staffProfileId
     );
     for (const candidate of candidates) {
       const composerProof = await renew(candidate.composerProof);

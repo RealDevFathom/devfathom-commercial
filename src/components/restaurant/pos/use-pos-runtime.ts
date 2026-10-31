@@ -664,7 +664,8 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
       }
       const local = offlineRuntime.current;
       if (!local) throw new Error('Local POS storage is unavailable.');
-      if (!runtime.composerProof) throw new Error('Reauthenticate before saving offline work.');
+      if (!runtime.operator || !runtime.composerProof)
+        throw new Error('Reauthenticate before saving offline work.');
       const enqueued = await local.enqueue({
         deviceId: runtime.deviceId,
         composerStaffProfileId: runtime.operator.staffProfileId,

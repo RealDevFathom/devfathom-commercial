@@ -27,7 +27,6 @@ export const POST = withTerminalAuth(async (ctx, request) => {
       organizationId: ctx.organizationId,
       branchId: ctx.device.branchId,
       deviceId: ctx.device.id,
-      sessionId: ctx.session.id,
       staffProfileId,
     })
   ) {

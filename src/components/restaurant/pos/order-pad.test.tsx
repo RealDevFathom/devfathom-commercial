@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { OrderPad } from './order-pad';
 import { PosOfflineRuntime } from '@/lib/restaurant/pos-offline-runtime';
+import * as posStore from '@/lib/restaurant/pos-client-store';
 import { reviveCommercialTerms } from '@/lib/restaurant/commercial-terms';
 import { quoteDraftCheckTotal } from '@/lib/restaurant/draft-check-total';
 
@@ -190,6 +191,7 @@ function transport({
     }
     if (path.endsWith('/terminal/unlock')) {
       return json({
+        composerProof: 'signed-proof-staff-1',
         session: { id: 'session-1', state: 'UNLOCKED', activeStaffProfileId: 'staff-1' },
       });
     }
@@ -198,8 +200,12 @@ function transport({
     }
     if (path.endsWith('/terminal/switch')) {
       return json({
+        composerProof: 'signed-proof-staff-2',
         session: { id: 'session-1', state: 'UNLOCKED', activeStaffProfileId: 'staff-2' },
       });
+    }
+    if (path.endsWith('/terminal/renew-composer-proof')) {
+      return json({ composerProof: 'renewed-proof-staff-1' });
     }
     if (path.endsWith('/orders/delivery/zones')) {
       await deliveryZoneGates[deliveryZoneAttempts++];
@@ -830,6 +836,48 @@ describe('OrderPad transport', () => {
     expect(screen.getByText(/Checkout, tenders, refunds, drawers/)).toBeVisible();
   });
 
+  it('offers discard without replay for legacy drafts whose composer cannot be verified', async () => {
+    const driver = posStore.createMemoryDriver();
+    const local = new PosOfflineRuntime(
+      {
+        organizationId: 'organization-1',
+        branchId: 'branch-1',
+        deviceId: 'device-1',
+      },
+      driver
+    );
+    await local.enqueue({
+      deviceId: 'device-1',
+      composerStaffProfileId: 'staff-1',
+      composerProof: 'original-proof',
+      catalogVersion: 'version-draft-DINE_IN',
+      clientOriginAt: '2026-08-31T00:00:00Z',
+      open: { channel: 'DINE_IN', publicationId: 'draft-DINE_IN' },
+      lines: [{ menuItemId: 'menu-item-1', quantity: 1, quotedUnitPrice: '4.00' }],
+    });
+    Reflect.deleteProperty(local.snapshot().queue!.drafts[0], 'composerProof');
+    await posStore.writePosState(driver, local.snapshot());
+    vi.spyOn(posStore, 'createMemoryDriver').mockReturnValue(driver);
+    const fetch = transport();
+    await unlock(fetch);
+
+    expect(await screen.findByText(/This saved order has no verified composer/)).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Send deliberately' })).toBeDisabled();
+    expect(fetch.mock.calls.some(([path]) => String(path).endsWith('/orders/open'))).toBe(false);
+    expect(fetch.mock.calls.some(([path]) => String(path).endsWith('/renew-composer-proof'))).toBe(
+      false
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Discard queued order' }));
+    await waitFor(() =>
+      expect(
+        screen.queryByText(/This saved order has no verified composer/)
+      ).not.toBeInTheDocument()
+    );
+    const reloaded = new PosOfflineRuntime(local.scope, driver);
+    await reloaded.hydrate();
+    expect(reloaded.snapshot().queue!.drafts).toEqual([]);
+  });
+
   it('requires reauthentication after replay pauses and resumes the preserved queue on unlock', async () => {
     let connected = false;
     vi.spyOn(window.navigator, 'onLine', 'get').mockImplementation(() => connected);
@@ -854,6 +902,19 @@ describe('OrderPad transport', () => {
         fetch.mock.calls.filter(([input]) => String(input).endsWith('/orders/open'))
       ).toHaveLength(2)
     );
+    const renewals = fetch.mock.calls.filter(([path]) =>
+      String(path).endsWith('/renew-composer-proof')
+    );
+    expect(renewals.length).toBeGreaterThan(0);
+    expect(JSON.parse(String(renewals[0][1]!.body))).toEqual({
+      originalProof: 'signed-proof-staff-1',
+    });
+    expect(new Headers(renewals[0][1]!.headers).get('X-Terminal-Session')).toBe('session-token');
+    for (const [, init] of fetch.mock.calls.filter(([path]) =>
+      String(path).endsWith('/orders/open')
+    )) {
+      expect(new Headers(init!.headers).get('X-POS-Composer-Proof')).toBe('renewed-proof-staff-1');
+    }
   });
 
   it('fails closed when IndexedDB hydration is unrecoverable', async () => {

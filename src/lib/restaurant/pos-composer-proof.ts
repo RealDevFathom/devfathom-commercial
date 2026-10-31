@@ -42,10 +42,10 @@ export function verifyPosComposerProof(
   return verifyProof(proof, expected, now, true);
 }
 
-/** Verify composer continuity for reauthentication, even when the old proof expired. */
+/** Verify signed device/operator continuity across expiry or session replacement. */
 export function verifyPosComposerProofForRenewal(
   proof: string,
-  expected: Omit<PosComposerClaims, 'expiresAt'>,
+  expected: Omit<PosComposerClaims, 'expiresAt' | 'sessionId'>,
   now = new Date()
 ): boolean {
   return verifyProof(proof, expected, now, false);
@@ -53,7 +53,7 @@ export function verifyPosComposerProofForRenewal(
 
 function verifyProof(
   proof: string,
-  expected: Omit<PosComposerClaims, 'expiresAt'>,
+  expected: Omit<PosComposerClaims, 'expiresAt' | 'sessionId'> & { sessionId?: string },
   now: Date,
   enforceExpiry: boolean
 ): boolean {
@@ -78,7 +78,7 @@ function verifyProof(
     claims.organizationId === expected.organizationId &&
     claims.branchId === expected.branchId &&
     claims.deviceId === expected.deviceId &&
-    claims.sessionId === expected.sessionId &&
+    (!enforceExpiry || claims.sessionId === expected.sessionId) &&
     claims.staffProfileId === expected.staffProfileId
   );
 }
