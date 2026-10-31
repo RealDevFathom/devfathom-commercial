@@ -211,7 +211,7 @@ export function AppShell({
     <div className="studio-viewport h-dvh overflow-hidden" style={brandStyle}>
       <a
         href="#main-content"
-        className="sr-only fixed top-3 left-3 z-[60] rounded-[var(--radius-xs)] bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground focus:not-sr-only"
+        className="sr-only top-3 left-3 z-[60] rounded-[var(--radius-xs)] bg-primary text-sm font-semibold text-primary-foreground focus:not-sr-only focus:fixed focus:px-4 focus:py-2"
       >
         Skip to content
       </a>

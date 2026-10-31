@@ -3,6 +3,7 @@ import { createElement, type ComponentType } from 'react';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { compile } from 'tailwindcss';
 
 const mocks = vi.hoisted(() => ({ pathname: vi.fn(() => '/dashboard') }));
 
@@ -96,7 +97,7 @@ describe('AppShell module guard', () => {
 
   it.each(['/dashboard', '/pharmacy/counter'])(
     'makes the skip link the first shell element and targets the main landmark on %s',
-    (pathname) => {
+    async (pathname) => {
       mocks.pathname.mockReturnValue(pathname);
       const TestAppShell = AppShell as ComponentType<{
         brand: Parameters<typeof AppShell>[0]['brand'];
@@ -127,6 +128,19 @@ describe('AppShell module guard', () => {
       expect(skipLink).toHaveAttribute('href', '#main-content');
       expect(main).toHaveAttribute('id', 'main-content');
       expect(main).toHaveAttribute('tabindex', '-1');
+
+      const stylesheet = document.createElement('style');
+      const compiler = await compile('@tailwind utilities;');
+      stylesheet.textContent = compiler.build([...skipLink.classList]);
+      document.head.append(stylesheet);
+      try {
+        skipLink.focus();
+        expect(skipLink).toHaveFocus();
+        expect(getComputedStyle(skipLink).clipPath).toBe('none');
+        expect(getComputedStyle(skipLink).position).toBe('fixed');
+      } finally {
+        stylesheet.remove();
+      }
     }
   );
 
