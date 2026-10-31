@@ -1137,6 +1137,9 @@ export const pharmacySalesRouter = router({
             if (!patient?.cnic?.trim() || !authorization.prescriberName) return blocked;
             const units = input.quantity * input.canonicalUnitsPerSaleUnit;
             const since = new Date(now.getTime() - EMERGENCY_NO_RX_WINDOW_MS);
+            // The limit is organization-wide, so serialize this patient/medicine eligibility
+            // check independently of the branch lock used for stock and register numbering.
+            await db.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${scope.organizationId + ':controlled-emergency:' + authorization.patientId + ':' + medicine.id},0))`;
             const recentSupplies = await db.pharmacyControlledRegisterEntry.count({
               where: {
                 organizationId: scope.organizationId,
