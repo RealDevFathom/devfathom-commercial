@@ -47,6 +47,7 @@ type Deps = {
   withTenantDb: (typeof import('@/lib/tenancy/scoped-db'))['withTenantDb'];
   ledger: typeof import('./stock-ledger');
   branchScope: typeof import('./branch-scope');
+  substituteFinder: typeof import('./substitute-finder');
 };
 let deps: Deps;
 
@@ -58,6 +59,7 @@ type BranchFixture = {
   organizationId: string;
   branchId: string;
   medicineId: string;
+  presentationId: string;
   locationId: string;
   purchaseOrderId: string;
 };
@@ -88,12 +90,28 @@ async function branchFixture(
       },
     });
 
+    const ingredient = await db.ingredient.upsert({
+      where: { organizationId_name: { organizationId, name: `Paracetamol ${suffix}` } },
+      create: { organizationId, name: `Paracetamol ${suffix}` },
+      update: {},
+    });
     const medicine = await db.medicine.create({
       data: {
         organizationId,
         productName: `Paracetamol 500mg ${label}`,
         productFamily: 'PHARMACEUTICAL',
-        presentations: { create: { organizationId, presentation: 'Tablet, 10 per strip' } },
+        saleable: true,
+        strengths: {
+          create: { organizationId, ingredientId: ingredient.id, value: 500, unit: 'mg' },
+        },
+        presentations: {
+          create: {
+            organizationId,
+            presentation: 'Tablet, 10 per strip',
+            dosageForm: 'Tablet',
+            route: 'Oral',
+          },
+        },
       },
       include: { presentations: true },
     });
@@ -171,6 +189,7 @@ async function branchFixture(
       organizationId,
       branchId,
       medicineId: medicine.id,
+      presentationId: medicine.presentations[0]!.id,
       locationId: location.id,
       purchaseOrderId: purchaseOrder.id,
     };
@@ -183,6 +202,7 @@ beforeAll(async () => {
     withTenantDb: (await import('@/lib/tenancy/scoped-db')).withTenantDb,
     ledger: await import('./stock-ledger'),
     branchScope: await import('./branch-scope'),
+    substituteFinder: await import('./substitute-finder'),
   };
   one = await branchFixture(ORG_A, BRANCH_ONE, `one-${suffix}`);
   two = await branchFixture(ORG_A, BRANCH_TWO, `two-${suffix}`);
@@ -228,6 +248,137 @@ describeIfDatabase('PLAT-04 ledger read — cross-branch id substitution', () =>
     );
     expect(rows).toEqual([]);
   });
+});
+
+describeIfDatabase('margin optimizer cost isolation under restricted PostgreSQL', () => {
+  it('returns only costs from the requested tenant and branch', async () => {
+    const rows = await inOrg(ORG_A, (db) =>
+      deps.substituteFinder.findMarginOptimizedBrandProposals(
+        db,
+        { organizationId: ORG_A, branchId: BRANCH_ONE },
+        {
+          medicineId: one.medicineId,
+          presentationId: one.presentationId,
+          quantityCanonicalUnits: 10,
+          at: NOW,
+        }
+      )
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ medicineId: one.medicineId, costMinor: 12_000 });
+    expect(rows.map((row) => row.medicineId)).not.toContain(two.medicineId);
+    expect(rows.map((row) => row.medicineId)).not.toContain(foreign.medicineId);
+  });
+
+  it.each([
+    { label: 'supplier', supplierUnits: 35, restockUnits: 0 },
+    { label: 'restock', supplierUnits: 0, restockUnits: 35 },
+    { label: 'combined', supplierUnits: 15, restockUnits: 20 },
+  ])(
+    'excludes $label reservations from available units',
+    async ({ label, supplierUnits, restockUnits }) => {
+      const fixture = await branchFixture(
+        ORG_A,
+        `branch_margin_${label}_${suffix}`,
+        `margin-${label}-${suffix}`
+      );
+      await inOrg(ORG_A, async (db) => {
+        await db.$queryRaw`SELECT set_config('app.current_branch_id', ${fixture.branchId}, true)`;
+        const lot = await db.pharmacyInventoryLot.findFirstOrThrow({
+          where: { organizationId: ORG_A, branchId: fixture.branchId },
+        });
+        if (supplierUnits > 0) {
+          await db.pharmacySupplierClaim.create({
+            data: {
+              organizationId: ORG_A,
+              branchId: fixture.branchId,
+              inventoryLotId: lot.id,
+              reservedUnits: supplierUnits,
+              returnBy: EXPIRES_AT,
+              createdById: ACTOR,
+            },
+          });
+        }
+        if (restockUnits > 0) {
+          const demand = await db.unfulfilledDemandEvent.create({
+            data: {
+              organizationId: ORG_A,
+              branchId: fixture.branchId,
+              requestedMedicineId: fixture.medicineId,
+              saleUnit: 'UNIT',
+              quantity: restockUnits,
+              reason: 'STOCKOUT',
+              inventoryRuleSnapshot: {},
+              capturedByUserId: ACTOR,
+            },
+          });
+          const interest = await db.pharmacyRestockInterest.create({
+            data: {
+              organizationId: ORG_A,
+              branchId: fixture.branchId,
+              demandEventId: demand.id,
+              reserveOnArrival: true,
+              quantityUnits: restockUnits,
+              createdByUserId: ACTOR,
+            },
+          });
+          await db.pharmacyRestockReservation.create({
+            data: {
+              organizationId: ORG_A,
+              branchId: fixture.branchId,
+              interestId: interest.id,
+              inventoryLotId: lot.id,
+              stockLocationId: fixture.locationId,
+              reservedUnits: restockUnits,
+            },
+          });
+        }
+      });
+      // A fresh tenant-only connection has no branch GUC. The optimizer must
+      // bind it itself or branch-RLS would silently hide the restock hold.
+      const compare = (db: ScopedDb, quantityCanonicalUnits: number) =>
+        deps.substituteFinder.findMarginOptimizedBrandProposals(
+          db,
+          { organizationId: ORG_A, branchId: fixture.branchId },
+          {
+            medicineId: fixture.medicineId,
+            presentationId: fixture.presentationId,
+            quantityCanonicalUnits,
+            at: NOW,
+          }
+        );
+      const read = (quantityCanonicalUnits: number) =>
+        inOrg(ORG_A, (db) => compare(db, quantityCanonicalUnits));
+      await expect(read(10)).resolves.toEqual([]);
+      const rows = await read(5);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.availableCanonicalUnits).toBe(5);
+
+      // HTTP batches share one outer transaction; nested callbacks reuse it.
+      await inOrg(ORG_A, async (db) => {
+        const [reserved, sibling] = await Promise.all([
+          compare(db, 5),
+          deps.substituteFinder.findMarginOptimizedBrandProposals(
+            db,
+            { organizationId: ORG_A, branchId: BRANCH_ONE },
+            {
+              medicineId: one.medicineId,
+              presentationId: one.presentationId,
+              quantityCanonicalUnits: 10,
+              at: NOW,
+            }
+          ),
+        ]);
+        expect(reserved).toHaveLength(1);
+        expect(reserved[0]!.availableCanonicalUnits).toBe(5);
+        expect(sibling).toHaveLength(1);
+        expect(sibling[0]!.availableCanonicalUnits).toBe(40);
+        const [restored] = await db.$queryRaw<{ branch: string | null }[]>`
+          SELECT current_setting('app.current_branch_id', true) AS branch`;
+        expect(restored?.branch ?? '').toBe('');
+      });
+    }
+  );
 });
 
 describeIfDatabase('PLAT-04 purchasing read — cross-branch id substitution', () => {

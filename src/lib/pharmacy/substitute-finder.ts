@@ -1,5 +1,7 @@
 import type { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { blockReasonFor } from './inventory';
+import { loadStockCandidatesForRead } from './stock-ledger';
 
 export class PharmacySubstituteError extends Error {
   constructor(readonly code: 'NOT_FOUND' | 'NOT_EQUIVALENT' | 'NOT_SALEABLE') {
@@ -8,15 +10,23 @@ export class PharmacySubstituteError extends Error {
   }
 }
 
-const candidateArgs = {
-  include: {
-    balances: { where: { disposition: 'AVAILABLE' as const, onHandUnits: { gt: 0 } } },
-    batch: { include: { medicine: { include: { strengths: true } } } },
-    packLevel: { include: { presentation: true } },
-  },
-} satisfies Prisma.PharmacyInventoryLotDefaultArgs;
+const candidateArgs = (scope: { organizationId: string; branchId: string }) =>
+  ({
+    include: {
+      balances: {
+        where: {
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          disposition: 'AVAILABLE' as const,
+          onHandUnits: { gt: 0 },
+        },
+      },
+      batch: { include: { medicine: { include: { strengths: true } } } },
+      packLevel: { include: { presentation: true } },
+    },
+  }) satisfies Prisma.PharmacyInventoryLotDefaultArgs;
 
-type CandidateLot = Prisma.PharmacyInventoryLotGetPayload<typeof candidateArgs>;
+type CandidateLot = Prisma.PharmacyInventoryLotGetPayload<ReturnType<typeof candidateArgs>>;
 
 export type SubstituteProposal = {
   medicineId: string;
@@ -31,6 +41,12 @@ export type SubstituteProposal = {
   priceMinor: number;
   priceDifferenceMinor: number;
   equivalenceBasis: string;
+};
+
+export type MarginOptimizedBrandProposal = SubstituteProposal & {
+  costMinor: number;
+  marginMinor: number;
+  marginBps: number;
 };
 
 function normalized(value: string | null | undefined) {
@@ -109,9 +125,16 @@ export async function findSubstituteProposals(
         expiresAt: { gt: at },
         medicine: { saleable: true },
       },
-      balances: { some: { disposition: 'AVAILABLE', onHandUnits: { gt: 0 } } },
+      balances: {
+        some: {
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          disposition: 'AVAILABLE',
+          onHandUnits: { gt: 0 },
+        },
+      },
     },
-    ...candidateArgs,
+    ...candidateArgs(scope),
   });
 
   const requestedStrength = strengthKey(requested.strengths);
@@ -155,6 +178,171 @@ export async function findSubstituteProposals(
   return proposals.sort(
     (left, right) =>
       left.priceMinor - right.priceMinor ||
+      left.displayName.localeCompare(right.displayName, 'en') ||
+      left.inventoryLotId.localeCompare(right.inventoryLotId, 'en')
+  );
+}
+
+const branchReadQueues = new WeakMap<Prisma.TransactionClient, Promise<void>>();
+
+function serializeBranchRead<T>(tx: Prisma.TransactionClient, read: () => Promise<T>) {
+  // Batched procedures share this transaction client. Serializing statements
+  // alone lets another comparison change the branch between ledger reads.
+  const result = (branchReadQueues.get(tx) ?? Promise.resolve()).then(read);
+  branchReadQueues.set(
+    tx,
+    result.then(
+      () => undefined,
+      () => undefined
+    )
+  );
+  return result;
+}
+
+type BrandComparisonInput = {
+  medicineId: string;
+  presentationId: string;
+  quantityCanonicalUnits: number;
+  at?: Date;
+};
+
+/**
+ * #745: pharmacist/purchasing decision support for brand mix. Unlike the
+ * patient-savings finder above, this ranks only exact, saleable equivalents by
+ * the observed lot margin. It remains read-only and deliberately does not
+ * infer an equivalent salt, strength, form, or route.
+ */
+export function findMarginOptimizedBrandProposals(
+  db: ScopedDb,
+  scope: { organizationId: string; branchId: string },
+  input: BrandComparisonInput
+): Promise<MarginOptimizedBrandProposal[]> {
+  return db.$transaction((tx) =>
+    serializeBranchRead(tx, async () => {
+      // Bind every branch-protected read to this connection, including the
+      // initial lot query and restock reservations in subsequent ledger reads.
+      const [previous] = await tx.$queryRaw<{ branch: string | null }[]>`
+        SELECT current_setting('app.current_branch_id', true) AS branch`;
+      await tx.$queryRaw`SELECT set_config('app.current_branch_id', ${scope.branchId}, true)`;
+      try {
+        return await readMarginOptimizedBrandProposals(tx as ScopedDb, scope, input);
+      } finally {
+        await tx.$queryRaw`SELECT set_config('app.current_branch_id', ${previous?.branch ?? ''}, true)`;
+      }
+    })
+  );
+}
+
+async function readMarginOptimizedBrandProposals(
+  db: ScopedDb,
+  scope: { organizationId: string; branchId: string },
+  input: BrandComparisonInput
+): Promise<MarginOptimizedBrandProposal[]> {
+  const at = input.at ?? new Date();
+  const requested = await db.medicine.findFirst({
+    where: { id: input.medicineId, organizationId: scope.organizationId },
+    include: { strengths: true, presentations: true },
+  });
+  const requestedPresentation = requested?.presentations.find(
+    (presentation) => presentation.id === input.presentationId
+  );
+  if (!requested || !requestedPresentation) throw new PharmacySubstituteError('NOT_FOUND');
+
+  // Matching absent facts cannot establish an exact equivalent. Requiring a
+  // complete reference also makes the equality checks reject incomplete candidates.
+  if (
+    requested.strengths.length === 0 ||
+    requested.strengths.some((component) => !normalized(component.unit)) ||
+    !normalized(requestedPresentation.dosageForm) ||
+    !normalized(requestedPresentation.route)
+  ) {
+    return [];
+  }
+
+  const lots: CandidateLot[] = await db.pharmacyInventoryLot.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      receivedAt: { not: null },
+      batch: {
+        state: 'ACTIVE',
+        expiresAt: { gt: at },
+        medicine: { saleable: true },
+      },
+      balances: {
+        some: {
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          disposition: 'AVAILABLE',
+          onHandUnits: { gt: 0 },
+        },
+      },
+    },
+    ...candidateArgs(scope),
+  });
+
+  const requestedStrength = strengthKey(requested.strengths);
+  const matchingLots = lots.filter((lot) => {
+    const presentation = lot.packLevel.presentation;
+    return (
+      strengthKey(lot.batch.medicine.strengths) === requestedStrength &&
+      normalized(presentation.dosageForm) === normalized(requestedPresentation.dosageForm) &&
+      normalized(presentation.route) === normalized(requestedPresentation.route)
+    );
+  });
+  const availableByLot = new Map<string, number>();
+  // Use the same reservation-aware evidence and saleability rules as allocation.
+  // Read each matching medicine once, even when it has multiple receipt lots.
+  for (const medicineId of new Set(matchingLots.map((lot) => lot.batch.medicine.id))) {
+    const candidates = await loadStockCandidatesForRead(db, scope, medicineId);
+    for (const candidate of candidates) {
+      if (blockReasonFor(candidate, { ...scope, at }) !== null) continue;
+      availableByLot.set(
+        candidate.inventoryLotId,
+        (availableByLot.get(candidate.inventoryLotId) ?? 0) + candidate.availableUnits
+      );
+    }
+  }
+  const proposals = matchingLots.flatMap((lot): MarginOptimizedBrandProposal[] => {
+    const medicine = lot.batch.medicine;
+    const presentation = lot.packLevel.presentation;
+    const availableCanonicalUnits = availableByLot.get(lot.id) ?? 0;
+    if (availableCanonicalUnits < input.quantityCanonicalUnits) {
+      return [];
+    }
+    const priceMinor = Math.floor(
+      (lot.printedMrpMinor * input.quantityCanonicalUnits) / lot.unitsPerPack
+    );
+    const costMinor = lot.unitCostMinor * input.quantityCanonicalUnits;
+    const marginMinor = priceMinor - costMinor;
+    return [
+      {
+        medicineId: medicine.id,
+        presentationId: presentation.id,
+        inventoryLotId: lot.id,
+        packLevelId: lot.packLevelId,
+        displayName: medicine.productName,
+        strength: displayStrength(medicine.strengths),
+        dosageForm: presentation.dosageForm,
+        route: presentation.route,
+        availableCanonicalUnits,
+        priceMinor,
+        priceDifferenceMinor: 0,
+        costMinor,
+        marginMinor,
+        marginBps: priceMinor > 0 ? Math.trunc((marginMinor * 10_000) / priceMinor) : 0,
+        equivalenceBasis: 'Exact ingredient(s), strength component(s), dosage form and route',
+      },
+    ];
+  });
+
+  // "Margin optimiser" means contribution for the requested quantity. Rate is
+  // only a deterministic tie-breaker; purchasing decisions optimize cash
+  // contribution rather than silently changing semantics when pack prices vary.
+  return proposals.sort(
+    (left, right) =>
+      right.marginMinor - left.marginMinor ||
+      right.marginBps - left.marginBps ||
       left.displayName.localeCompare(right.displayName, 'en') ||
       left.inventoryLotId.localeCompare(right.inventoryLotId, 'en')
   );
