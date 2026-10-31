@@ -13874,7 +13874,9 @@ model PharmacyCampaignAttribution {
 enum PharmacyAnomalySignalKind {
   SHRINKAGE
   DISCOUNT_OVERRIDE
+  VOID_ABUSE
   GHOST_RETURN
+  TENDER_MISMATCH
   CASH_VARIANCE
   PURCHASE_PRICE_DRIFT
 }
