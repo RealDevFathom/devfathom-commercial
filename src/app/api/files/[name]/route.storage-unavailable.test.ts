@@ -24,7 +24,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   m.actor.mockResolvedValue({
     organization: { id: 'org-a' },
-    session: { user: { id: 'user-a', role: 'STAFF' } },
+    session: { user: { id: 'user-a', role: 'EMPLOYEE' } },
   });
   m.tenant.mockImplementation(async (_org, callback) =>
     callback({
@@ -55,6 +55,28 @@ test('SOP branch denial hides resource even when storage is disabled', async () 
   expect((await read()).status).toBe(404);
   expect(m.get).not.toHaveBeenCalled();
 });
+test.each(['EMPLOYEE', 'HR'])(
+  'licence evidence denial hides resource from %s even when storage is disabled',
+  async (role) => {
+    m.actor.mockResolvedValue({
+      organization: { id: 'org-a' },
+      session: { user: { id: 'user-a', role } },
+    });
+    m.licence.mockResolvedValue({ id: 'regulatory-profile' });
+    expect((await read()).status).toBe(404);
+    expect(m.tenant).toHaveBeenCalledTimes(1);
+    expect(m.tenant).toHaveBeenNthCalledWith(1, 'org-a', expect.any(Function));
+    expect(m.licence).toHaveBeenCalledExactlyOnceWith({
+      where: {
+        organizationId: 'org-a',
+        licenceEvidenceFileRef: '/api/files/proof.png',
+      },
+      select: { id: true },
+    });
+    expect(m.attachment).not.toHaveBeenCalled();
+    expect(m.get).not.toHaveBeenCalled();
+  }
+);
 test('licence evidence denial hides resource even when storage is disabled', async () => {
   m.licence.mockResolvedValue({ id: 'regulatory-profile' });
   expect((await read('licence.pdf')).status).toBe(404);

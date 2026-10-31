@@ -54,19 +54,26 @@ export async function GET(request: Request, ctx: { params: Promise<{ name: strin
     return new Response('Not found', { status: 404 });
   }
   const organization = actor.organization;
-  const fileRef = '/api/files/' + name;
+  const fileRef = `/api/files/${name}`;
 
-  // Pharmacy licence evidence belongs to the admin-only regulatory profile.
-  // Look it up inside the tenant scope before touching storage, and use a 404
-  // for denials so a member cannot confirm that a guessed file reference exists.
-  const licenceEvidence = await withTenantDb(organization.id, (db) =>
-    db.branchRegulatoryProfile.findFirst({
-      where: { licenceEvidenceFileRef: fileRef },
-      select: { id: true },
-    })
-  );
-  if (licenceEvidence && session.user.role !== 'ADMIN') {
-    return new Response('Not found', { status: 404 });
+  // The regulatory profile itself is admin-only. Apply the same role gate to
+  // its licence evidence so knowing (or leaking) the otherwise opaque URL does
+  // not let an ordinary tenant member bypass that profile's authorization.
+  // The tenant-scoped transaction and explicit predicate keep the lookup from
+  // classifying a file referenced by another organization as this tenant's.
+  if (session.user.role !== 'ADMIN') {
+    const licenceEvidence = await withTenantDb(organization.id, (db) =>
+      db.branchRegulatoryProfile.findFirst({
+        where: {
+          organizationId: organization.id,
+          licenceEvidenceFileRef: fileRef,
+        },
+        select: { id: true },
+      })
+    );
+    if (licenceEvidence) {
+      return new Response('Not found', { status: 404 });
+    }
   }
 
   const sopEvidence = await withTenantDb(organization.id, (db) =>

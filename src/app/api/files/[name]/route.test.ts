@@ -85,7 +85,57 @@ describe('private attachment delivery', () => {
     expect(db.messageAttachment.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({ where: { url: '/api/files/' + name } })
     );
+    expect(db.branchRegulatoryProfile.findFirst).toHaveBeenCalledWith({
+      where: {
+        organizationId: 'org_a',
+        licenceEvidenceFileRef: '/api/files/' + name,
+      },
+      select: { id: true },
+    });
     expect(mocks.tenantDb.mock.calls.every(([org]) => org === 'org_a')).toBe(true);
+  });
+
+  it.each(['EMPLOYEE', 'HR'])('hides licence evidence from the %s role', async (role) => {
+    db.branchRegulatoryProfile.findFirst.mockResolvedValue({ id: 'profile_1' });
+    mocks.actor.mockResolvedValue(actor(role));
+
+    expect((await read('pharmacy-licence.pdf')).status).toBe(404);
+    expect(db.branchRegulatoryProfile.findFirst).toHaveBeenCalledExactlyOnceWith({
+      where: {
+        organizationId: 'org_a',
+        licenceEvidenceFileRef: '/api/files/pharmacy-licence.pdf',
+      },
+      select: { id: true },
+    });
+    expect(mocks.tenantDb).toHaveBeenCalledTimes(1);
+    expect(mocks.tenantDb).toHaveBeenNthCalledWith(1, 'org_a', expect.any(Function));
+    expect(mocks.getUpload).not.toHaveBeenCalled();
+    expect(db.messageAttachment.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('allows admins to read licence evidence', async () => {
+    db.branchRegulatoryProfile.findFirst.mockResolvedValue({ id: 'profile_1' });
+
+    mocks.actor.mockResolvedValue(actor('ADMIN'));
+    expect((await read('pharmacy-licence.pdf')).status).toBe(200);
+    expect(db.branchRegulatoryProfile.findFirst).not.toHaveBeenCalled();
+    expect(mocks.getUpload).toHaveBeenCalledExactlyOnceWith('org_a', 'pharmacy-licence.pdf');
+  });
+
+  it("does not apply another tenant's licence evidence restriction", async () => {
+    db.branchRegulatoryProfile.findFirst.mockImplementation(async ({ where }) =>
+      where.organizationId === 'org_a' ? null : { id: 'foreign_profile' }
+    );
+
+    expect((await read('shared-name.pdf')).status).toBe(200);
+    expect(db.branchRegulatoryProfile.findFirst).toHaveBeenCalledExactlyOnceWith({
+      where: {
+        organizationId: 'org_a',
+        licenceEvidenceFileRef: '/api/files/shared-name.pdf',
+      },
+      select: { id: true },
+    });
+    expect(mocks.getUpload).toHaveBeenCalledExactlyOnceWith('org_a', 'shared-name.pdf');
   });
 
   it('keeps the SOP branch membership gate and admin exception', async () => {
@@ -111,7 +161,7 @@ describe('private attachment delivery', () => {
     expect(response.status).toBe(404);
     expect(await response.text()).toBe('Not found');
     expect(db.branchRegulatoryProfile.findFirst).toHaveBeenCalledWith({
-      where: { licenceEvidenceFileRef: '/api/files/licence.pdf' },
+      where: { organizationId: 'org_a', licenceEvidenceFileRef: '/api/files/licence.pdf' },
       select: { id: true },
     });
     expect(mocks.tenantDb).toHaveBeenCalledWith('org_a', expect.any(Function));
