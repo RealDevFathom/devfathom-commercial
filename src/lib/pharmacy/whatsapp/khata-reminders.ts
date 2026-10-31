@@ -11,6 +11,22 @@ import { lockPatientConsent } from '../consent-writer';
 import { claimMessageLogInTransaction, sendClaimedMessage } from './message-log';
 import { canMessageCustomer, normalizeWhatsAppNumber, phoneLast4 } from './messages';
 import {
+  claimSmsFallbackInTransaction,
+  countSmsOutcome,
+  emptySmsCounters,
+  sendSmsFallbackAfterWhatsAppFailure,
+  sendSmsFallbackClaim,
+  type SmsFallbackCounters,
+} from '../sms/fallback';
+import {
+  createSmsProvider,
+  readSmsConfig,
+  smsFallbackEnabled,
+  type SmsConfig,
+  type SmsProvider,
+} from '../sms/provider';
+import { SMS_TEMPLATES } from '../sms/templates';
+import {
   createWhatsAppProvider,
   readWhatsAppConfig,
   type WhatsAppConfig,
@@ -77,6 +93,8 @@ export type KhataReminderRunResult = {
   duplicate: number;
   skippedNoConsent: number;
   notDue: number;
+  /** #723: SMS fallback outcomes (no WhatsApp consent, or a permanent WhatsApp failure). */
+  sms: SmsFallbackCounters;
 };
 
 /**
@@ -93,11 +111,15 @@ export async function processDueWhatsAppKhataReminders(
     minBalanceMinor?: number;
     config?: WhatsAppConfig;
     provider?: WhatsAppProvider;
+    smsConfig?: SmsConfig;
+    smsProvider?: SmsProvider;
   } = {}
 ): Promise<KhataReminderRunResult> {
   const now = options.now ?? new Date();
   const config = options.config ?? readWhatsAppConfig();
   const provider = options.provider ?? createWhatsAppProvider(config);
+  const smsConfig = options.smsConfig ?? readSmsConfig();
+  const smsProvider = options.smsProvider ?? createSmsProvider(smsConfig);
   const minBalanceMinor = options.minBalanceMinor ?? DEFAULT_MIN_BALANCE_MINOR;
   const result: KhataReminderRunResult = {
     configured: Boolean(config.templates.khataReminder),
@@ -109,6 +131,7 @@ export async function processDueWhatsAppKhataReminders(
     duplicate: 0,
     skippedNoConsent: 0,
     notDue: 0,
+    sms: emptySmsCounters(),
   };
   const organizationId = config.organizationId;
   if (!result.configured || config.provider === 'meta' || !organizationId || !config.phoneNumberId)
@@ -192,20 +215,34 @@ export async function processDueWhatsAppKhataReminders(
         select: { granted: true, revokedAt: true, recordedAt: true },
       });
       const to = normalizeWhatsAppNumber(customer.patient.phone);
-      if (
-        !to ||
-        !canMessageCustomer(customer) ||
-        !consent?.granted ||
-        consent.revokedAt ||
-        consent.recordedAt > now
-      )
-        return null;
+      const whatsappAllowed = Boolean(
+        to &&
+          canMessageCustomer(customer) &&
+          consent?.granted &&
+          !consent.revokedAt &&
+          !(consent.recordedAt > now)
+      );
+      // #723: without WhatsApp consent the reminder may go by SMS, never otherwise.
+      if (!whatsappAllowed && !smsFallbackEnabled(smsConfig, account.organizationId)) return null;
       const day = new Intl.DateTimeFormat('en-CA', {
         timeZone,
         year: 'numeric',
         month: '2-digit',
         day: '2-digit',
       }).format(now);
+      if (!whatsappAllowed || !to) {
+        const sms = await claimSmsFallbackInTransaction(db, smsConfig, {
+          organizationId: account.organizationId,
+          customerId: customer.id,
+          kind: 'KHATA_REMINDER',
+          dedupeKey: `sms:${plan.dedupeKey}`,
+          customerDayKey: `khata-sms:${customer.id}:${day}`,
+          branchId: account.branchId,
+          dueDate: plan.dueDate,
+          now,
+        });
+        return sms ? { channel: 'SMS' as const, sms } : null;
+      }
       const logId = await claimMessageLogInTransaction(db, {
         organizationId: account.organizationId,
         direction: 'OUTBOUND',
@@ -220,10 +257,31 @@ export async function processDueWhatsAppKhataReminders(
         templateName: config.templates.khataReminder,
         dueDate: plan.dueDate,
       });
-      return { customerId: customer.id, patientId: customer.patientId, to, logId };
+      return {
+        channel: 'WHATSAPP' as const,
+        customerId: customer.id,
+        patientId: customer.patientId,
+        to,
+        logId,
+        day,
+      };
     });
     if (!recipient) {
       result.skippedNoConsent += 1;
+      continue;
+    }
+    const smsBody = SMS_TEMPLATES.khataReminder(smsConfig.language, {
+      accountName: sanitizeReminderDisplayName(account.displayName),
+      amount: formatMinor(balanceMinor),
+    });
+    if (recipient.channel === 'SMS') {
+      const { sms } = recipient;
+      countSmsOutcome(
+        result.sms,
+        sms.logId
+          ? await sendSmsFallbackClaim(smsProvider, { ...sms, logId: sms.logId }, smsBody)
+          : 'DUPLICATE'
+      );
       continue;
     }
     if (!recipient.logId) {
@@ -257,6 +315,25 @@ export async function processDueWhatsAppKhataReminders(
     else if (outcome === 'UNKNOWN') result.unknown += 1;
     else if (outcome === 'FAILED') result.failed += 1;
     else result.duplicate += 1;
+    if (outcome === 'FAILED') {
+      // #723: a permanent WhatsApp failure falls back to SMS when SMS consent exists.
+      const smsOutcome = await sendSmsFallbackAfterWhatsAppFailure(
+        smsConfig,
+        smsProvider,
+        {
+          organizationId: account.organizationId,
+          customerId: recipient.customerId,
+          kind: 'KHATA_REMINDER',
+          dedupeKey: `sms:${plan.dedupeKey}`,
+          customerDayKey: `khata-sms:${recipient.customerId}:${recipient.day}`,
+          branchId: account.branchId,
+          dueDate: plan.dueDate,
+          now,
+        },
+        smsBody
+      );
+      if (smsOutcome) countSmsOutcome(result.sms, smsOutcome);
+    }
   }
   return result;
 }

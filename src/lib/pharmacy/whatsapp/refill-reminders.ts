@@ -11,6 +11,22 @@ import { hasModule, resolveOrganizationEntitlements } from '@/lib/entitlements';
 import { isTenantLifecycleAccessible } from '@/lib/tenancy/host';
 import { canMessageCustomer, normalizeWhatsAppNumber, phoneLast4 } from './messages';
 import {
+  claimSmsFallbackInTransaction,
+  countSmsOutcome,
+  emptySmsCounters,
+  sendSmsFallbackAfterWhatsAppFailure,
+  sendSmsFallbackClaim,
+  type SmsFallbackCounters,
+} from '../sms/fallback';
+import {
+  createSmsProvider,
+  readSmsConfig,
+  smsFallbackEnabled,
+  type SmsConfig,
+  type SmsProvider,
+} from '../sms/provider';
+import { SMS_TEMPLATES } from '../sms/templates';
+import {
   createWhatsAppProvider,
   readWhatsAppConfig,
   type WhatsAppConfig,
@@ -72,6 +88,8 @@ export type RefillReminderRunResult = {
   duplicate: number;
   skippedNoConsent: number;
   notDue: number;
+  /** #723: SMS fallback outcomes (no WhatsApp consent, or a permanent WhatsApp failure). */
+  sms: SmsFallbackCounters;
 };
 
 /**
@@ -86,11 +104,15 @@ export async function processDueWhatsAppRefillReminders(
     limit?: number;
     config?: WhatsAppConfig;
     provider?: WhatsAppProvider;
+    smsConfig?: SmsConfig;
+    smsProvider?: SmsProvider;
   } = {}
 ): Promise<RefillReminderRunResult> {
   const now = options.now ?? new Date();
   const config = options.config ?? readWhatsAppConfig();
   const provider = options.provider ?? createWhatsAppProvider(config);
+  const smsConfig = options.smsConfig ?? readSmsConfig();
+  const smsProvider = options.smsProvider ?? createSmsProvider(smsConfig);
   const result: RefillReminderRunResult = {
     configured: Boolean(config.templates.refillReminder),
     scanned: 0,
@@ -101,6 +123,7 @@ export async function processDueWhatsAppRefillReminders(
     duplicate: 0,
     skippedNoConsent: 0,
     notDue: 0,
+    sms: emptySmsCounters(),
   };
   if (!result.configured || config.provider === 'meta') return { ...result, configured: false };
 
@@ -209,15 +232,16 @@ export async function processDueWhatsAppRefillReminders(
         }),
       ]);
       const to = normalizeWhatsAppNumber(customer?.patient.phone);
-      if (
-        !customer ||
-        !to ||
-        !canMessageCustomer(customer) ||
-        !consent?.granted ||
-        consent.revokedAt ||
-        consent.recordedAt > now
-      )
-        return null;
+      if (!customer) return null;
+      const whatsappAllowed = Boolean(
+        to &&
+          canMessageCustomer(customer) &&
+          consent?.granted &&
+          !consent.revokedAt &&
+          !(consent.recordedAt > now)
+      );
+      // #723: without WhatsApp consent the reminder may go by SMS, never otherwise.
+      if (!whatsappAllowed && !smsFallbackEnabled(smsConfig, capture.organizationId)) return null;
       const prior = await db.pharmacyMessageLog.count({
         where: {
           organizationId: capture.organizationId,
@@ -228,6 +252,19 @@ export async function processDueWhatsAppRefillReminders(
         },
       });
       if (prior) return null;
+      if (!whatsappAllowed || !to) {
+        const sms = await claimSmsFallbackInTransaction(db, smsConfig, {
+          organizationId: capture.organizationId,
+          customerId: customer.id,
+          kind: 'REFILL_REMINDER',
+          dedupeKey: `sms:${plan.dedupeKey}`,
+          branchId: capture.branchId,
+          refillCaptureId: capture.id,
+          dueDate: plan.dueDate,
+          now,
+        });
+        return sms ? { channel: 'SMS' as const, sms } : null;
+      }
       const logId = await claimMessageLogInTransaction(db, {
         organizationId: capture.organizationId,
         direction: 'OUTBOUND',
@@ -242,10 +279,21 @@ export async function processDueWhatsAppRefillReminders(
         refillCaptureId: capture.id,
         dueDate: plan.dueDate,
       });
-      return { customerId: customer.id, to, logId };
+      return { channel: 'WHATSAPP' as const, customerId: customer.id, to, logId };
     });
     if (!recipient) {
       result.skippedNoConsent += 1;
+      continue;
+    }
+    const smsBody = SMS_TEMPLATES.refillReminder(smsConfig.language, { dueDate: plan.dueDate });
+    if (recipient.channel === 'SMS') {
+      const { sms } = recipient;
+      countSmsOutcome(
+        result.sms,
+        sms.logId
+          ? await sendSmsFallbackClaim(smsProvider, { ...sms, logId: sms.logId }, smsBody)
+          : 'DUPLICATE'
+      );
       continue;
     }
 
@@ -279,6 +327,25 @@ export async function processDueWhatsAppRefillReminders(
     else if (outcome === 'UNKNOWN') result.unknown += 1;
     else if (outcome === 'FAILED') result.failed += 1;
     else result.duplicate += 1;
+    if (outcome === 'FAILED') {
+      // #723: a permanent WhatsApp failure falls back to SMS when SMS consent exists.
+      const smsOutcome = await sendSmsFallbackAfterWhatsAppFailure(
+        smsConfig,
+        smsProvider,
+        {
+          organizationId: capture.organizationId,
+          customerId: recipient.customerId,
+          kind: 'REFILL_REMINDER',
+          dedupeKey: `sms:${plan.dedupeKey}`,
+          branchId: capture.branchId,
+          refillCaptureId: capture.id,
+          dueDate: plan.dueDate,
+          now,
+        },
+        smsBody
+      );
+      if (smsOutcome) countSmsOutcome(result.sms, smsOutcome);
+    }
   }
   return result;
 }

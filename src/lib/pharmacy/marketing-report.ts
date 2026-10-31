@@ -124,6 +124,8 @@ export async function readPharmacyMarketingReport(
       db.pharmacyMessageLog.count({
         where: {
           ...scope,
+          // #723: SMS STOP rows share the log; this metric stays WhatsApp-only.
+          channel: 'WHATSAPP',
           direction: 'INBOUND',
           kind: 'OPT_OUT',
           createdAt: period,
@@ -134,6 +136,8 @@ export async function readPharmacyMarketingReport(
         where: {
           organizationId,
           branchId: null,
+          // #723: SMS STOP rows share the log; this metric stays WhatsApp-only.
+          channel: 'WHATSAPP',
           direction: 'INBOUND',
           kind: 'OPT_OUT',
           createdAt: period,

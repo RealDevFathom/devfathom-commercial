@@ -18,6 +18,7 @@ import {
   recordDeliveryCommand,
   PharmacyDeliveryError,
 } from '@/lib/pharmacy/customer-delivery';
+import { notifyOrderReadyBySms } from '@/lib/pharmacy/sms/order-ready';
 import type { LedgerScope } from '@/lib/pharmacy/stock-ledger';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
@@ -192,9 +193,22 @@ export const pharmacyOrderingRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await ctx.db.$transaction(async (tx) =>
-          transitionCustomerOrder(txDb(tx), await scopeFor(ctx, input.branchId), input)
-        );
+        const { result, scope } = await ctx.db.$transaction(async (tx) => {
+          const scope = await scopeFor(ctx, input.branchId);
+          return { result: await transitionCustomerOrder(txDb(tx), scope, input), scope };
+        });
+        if (input.action === 'ready') {
+          // #723: SMS fallback after the transition committed. Best effort: the
+          // claimed message log is the audit trail, and a gateway problem must
+          // never undo or fail the staff transition.
+          await notifyOrderReadyBySms({
+            organizationId: scope.organizationId,
+            branchId: scope.branchId,
+            orderId: input.orderId,
+            actorUserId: scope.actorId,
+          }).catch(() => null);
+        }
+        return result;
       } catch (error) {
         fail(error);
       }
