@@ -2,7 +2,7 @@
  * @vitest-environment node
  *
  * Regression coverage for activity writes made from a real interactive Prisma
- * transaction. Requires a migrated PostgreSQL database in DATABASE_URL.
+ * transaction. Requires a migrated PostgreSQL database in TEST_DATABASE_URL.
  */
 import { randomUUID } from 'node:crypto';
 
@@ -10,8 +10,10 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 
-const DATABASE_URL = process.env.DATABASE_URL;
-const describeIfDatabase = DATABASE_URL ? describe : describe.skip;
+const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
+if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
+
+const describeIfDatabase = TEST_DATABASE_URL ? describe : describe.skip;
 const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
 const organizationId = `activity_tx_${suffix}`;
 const userId = `activity_user_${suffix}`;
@@ -61,6 +63,7 @@ describeIfDatabase('activity writes in PostgreSQL tenant transactions', () => {
   afterAll(async () => {
     if (!deps) return;
     await deps.withPlatformDb(async (tx) => {
+      await tx.activity.deleteMany({ where: { organizationId } });
       await tx.organization.deleteMany({ where: { id: organizationId } });
     });
   });
