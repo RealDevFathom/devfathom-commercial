@@ -955,15 +955,18 @@ export async function commitMenuImport(
       );
     }
 
-    // Lock the organization row before reading its currency. PostgreSQL row
-    // updates take the conflicting lock, so a platform currency change either
-    // completes before this read or waits until all imported prices commit.
-    // The upload-time default remains extraction context only.
+    // Share-lock the organization row before reading its currency. A platform
+    // currency UPDATE conflicts with FOR SHARE, so it either completes before
+    // this read or waits until all imported prices commit. FOR SHARE (unlike
+    // FOR UPDATE) does not conflict with the FOR KEY SHARE locks taken by
+    // foreign-key inserts, so the tenant's other writes (orders, payments) are
+    // not blocked for the length of a large commit. The upload-time default
+    // remains extraction context only.
     const [organization] = await tx.$queryRaw<Array<{ currency: string | null }>>`
       SELECT "currency"
       FROM "organizations"
       WHERE "id" = ${record.organizationId}
-      FOR UPDATE
+      FOR SHARE
     `;
     const tenantCurrency = organization?.currency?.toUpperCase() ?? null;
 
@@ -1012,18 +1015,18 @@ export async function commitMenuImport(
           'REVIEW_INCOMPLETE'
         );
       }
-      const priceCurrency =
-        (line.reviewedCurrency ?? line.extractedCurrency)?.toUpperCase() ?? null;
-      const convertsForeignPrice =
-        line.extractedCurrency?.toUpperCase() !== tenantCurrency &&
-        line.reviewedCurrency?.toUpperCase() === tenantCurrency &&
-        line.reviewedPriceAmount !== null;
+      const extractedCurrency = line.extractedCurrency?.toUpperCase() ?? null;
+      const reviewedCurrency = line.reviewedCurrency?.toUpperCase() ?? null;
+      const priceCurrency = reviewedCurrency ?? extractedCurrency;
+      const extractedIsForeign = extractedCurrency !== null && extractedCurrency !== tenantCurrency;
+      // A foreign extracted price is acceptable only when the reviewer typed an
+      // amount in the organization currency; relabelling alone is not a conversion.
+      const hasReviewedConversion =
+        reviewedCurrency === tenantCurrency && line.reviewedPriceAmount !== null;
       if (
         !tenantCurrency ||
         priceCurrency !== tenantCurrency ||
-        (line.extractedCurrency !== null &&
-          line.extractedCurrency.toUpperCase() !== tenantCurrency &&
-          !convertsForeignPrice)
+        (extractedIsForeign && !hasReviewedConversion)
       ) {
         throw new MenuImportError(
           'Every confirmed price must agree with the organization currency, or include an explicitly reviewed conversion.',
@@ -1034,9 +1037,17 @@ export async function commitMenuImport(
       // extracted sizes are imported only when creating a new product.
       const variants =
         line.reviewStatus === 'MERGED' ? [] : resolveVariants(line.extractedVariants);
+      // Menus often print one currency for a whole line ("Small 500 / Large 800"),
+      // so a size price with no currency of its own inherits the line's confirmed
+      // currency (already verified equal to the organization's above). This never
+      // applies when the extracted base price was foreign: those sizes are most
+      // likely in the same foreign currency and the reviewer converted only the base.
+      const inheritedVariantCurrency = extractedIsForeign ? null : priceCurrency;
       if (
         variants.some(
-          (variant) => variant.amount !== null && variant.currency?.toUpperCase() !== tenantCurrency
+          (variant) =>
+            variant.amount !== null &&
+            (variant.currency?.toUpperCase() ?? inheritedVariantCurrency) !== tenantCurrency
         )
       ) {
         throw new MenuImportError(

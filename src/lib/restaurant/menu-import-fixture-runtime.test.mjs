@@ -193,7 +193,8 @@ function setup(node = 'test', selected = 'FIXTURE') {
     $queryRaw: async (strings, ...values) => {
       const query = strings.join('?');
       if (query.includes('FROM "organizations"')) {
-        assert.match(query, /FROM "organizations"[\s\S]+FOR UPDATE/);
+        assert.match(query, /FROM "organizations"[\s\S]+FOR SHARE/);
+        assert.doesNotMatch(query, /FOR UPDATE/);
         events.push(['organization-currency-lock', ...values]);
         return [{ currency: record.currentCurrency ?? record.defaultCurrency }];
       }
@@ -492,20 +493,15 @@ test('commit rejects a foreign priced variant even when the base price has a rev
   assert.ok(!f.events.some((event) => Array.isArray(event) && event[0] === 'createProduct'));
 });
 
-test('commit rejects a priced variant when its currency is missing', async () => {
-  const f = setup('production', 'disabled');
-  const menu = f.load('@/lib/restaurant/menu-import');
-  f.record.status = 'AWAITING_REVIEW';
-  f.record.fileName = 'ambiguous-variant-menu.png';
-  f.record.defaultCurrency = 'PKR';
-  f.lines.push({
+function currencylessVariantLine(Decimal, overrides) {
+  return {
     id: 'line_1',
     reviewStatus: 'ACCEPTED',
     sortOrder: 1,
     extractedCategoryName: null,
-    extractedProductName: 'Ambiguous variant item',
+    extractedProductName: 'Sized item',
     extractedDescription: null,
-    extractedPriceAmount: new (f.load('@/generated/prisma/client').Prisma.Decimal)('500'),
+    extractedPriceAmount: new Decimal('500'),
     extractedCurrency: 'PKR',
     extractedVariants: [{ name: 'Large', price: { amount: '650' } }],
     reviewedCategoryName: null,
@@ -515,7 +511,66 @@ test('commit rejects a priced variant when its currency is missing', async () =>
     reviewedCurrency: null,
     mergeProductId: null,
     mergeVariantId: null,
+    ...overrides,
+  };
+}
+
+for (const [label, overrides] of [
+  ['the extracted line currency', {}],
+  ['a reviewer-confirmed line currency', { extractedCurrency: null, reviewedCurrency: 'pkr' }],
+]) {
+  test(`commit imports a currencyless size price in ${label}`, async () => {
+    const f = setup('production', 'disabled');
+    const menu = f.load('@/lib/restaurant/menu-import');
+    const { Decimal } = f.load('@/generated/prisma/client').Prisma;
+    f.record.status = 'AWAITING_REVIEW';
+    f.record.fileName = 'sized-menu.png';
+    f.record.defaultCurrency = 'PKR';
+    f.lines.push(currencylessVariantLine(Decimal, overrides));
+
+    await menu.commitMenuImport(f.db, { importId: 'imp_1', committedById: 'user_1' });
+    assert.ok(f.events.some((event) => Array.isArray(event) && event[0] === 'createVariant'));
+    assert.ok(
+      f.events.some(
+        (event) =>
+          Array.isArray(event) && event[0] === 'addPriceListEntry' && event[2]?.price === '650'
+      )
+    );
   });
+}
+
+test('commit rejects a currencyless size price when the line has no confirmed currency', async () => {
+  const f = setup('production', 'disabled');
+  const menu = f.load('@/lib/restaurant/menu-import');
+  const { Decimal } = f.load('@/generated/prisma/client').Prisma;
+  f.record.status = 'AWAITING_REVIEW';
+  f.record.fileName = 'ambiguous-variant-menu.png';
+  f.record.defaultCurrency = 'PKR';
+  f.lines.push(currencylessVariantLine(Decimal, { extractedCurrency: null }));
+
+  await assert.rejects(
+    menu.commitMenuImport(f.db, { importId: 'imp_1', committedById: 'user_1' }),
+    { reason: 'CURRENCY_MISMATCH' }
+  );
+  assert.ok(!f.events.some((event) => Array.isArray(event) && event[0] === 'createProduct'));
+});
+
+test('commit rejects a currencyless size price when only the foreign base price was converted', async () => {
+  const f = setup('production', 'disabled');
+  const menu = f.load('@/lib/restaurant/menu-import');
+  const { Decimal } = f.load('@/generated/prisma/client').Prisma;
+  f.record.status = 'AWAITING_REVIEW';
+  f.record.fileName = 'foreign-sized-menu.png';
+  f.record.defaultCurrency = 'PKR';
+  f.lines.push(
+    currencylessVariantLine(Decimal, {
+      extractedPriceAmount: new Decimal('10'),
+      extractedCurrency: 'USD',
+      extractedVariants: [{ name: 'Large', price: { amount: '15' } }],
+      reviewedPriceAmount: new Decimal('2800'),
+      reviewedCurrency: 'PKR',
+    })
+  );
 
   await assert.rejects(
     menu.commitMenuImport(f.db, { importId: 'imp_1', committedById: 'user_1' }),
