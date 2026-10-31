@@ -296,8 +296,17 @@ function billTone(status: string): StatusTone {
   return 'neutral';
 }
 
+// A Map (not an object literal) so inherited keys such as `constructor` never resolve,
+// and unknown kinds fall back to fixed copy instead of exposing the raw server value.
+const splitKindLabels = new Map<string, string>([
+  ['NONE', 'Whole order'],
+  ['BY_ITEM', 'By item'],
+  ['BY_SEAT', 'By seat'],
+  ['FRACTIONAL', 'Fractional'],
+]);
+
 function billTitle(splitKind: string) {
-  return splitKind === 'NONE' ? 'Whole order' : splitKind.replaceAll('_', ' ');
+  return splitKindLabels.get(splitKind) ?? 'Bill details';
 }
 
 const blockerLabels: Record<Exclude<CheckoutSummary['blocker'], null>, string> = {

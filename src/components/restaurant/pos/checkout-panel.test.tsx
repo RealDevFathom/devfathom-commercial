@@ -49,6 +49,43 @@ const billed = {
 };
 
 describe('CheckoutPanel', () => {
+  it.each([
+    ['NONE', 'Whole order'],
+    ['BY_ITEM', 'By item'],
+    ['BY_SEAT', 'By seat'],
+    ['FRACTIONAL', 'Fractional'],
+  ])('uses the customer-facing label for the %s split kind', async (splitKind, label) => {
+    const request: TerminalRequest = async <T,>() =>
+      ({ ...billed, bills: [{ ...billed.bills[0], splitKind }] }) as T;
+    render(<CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />);
+
+    expect(await screen.findByText(label)).toBeVisible();
+    expect(screen.getByText('Bill 1')).toBeVisible();
+    expect(screen.queryByText(splitKind)).not.toBeInTheDocument();
+  });
+
+  it.each(['UNRECOGNIZED', 'constructor'])(
+    'does not expose the unexpected split kind %s',
+    async (splitKind) => {
+      const request: TerminalRequest = async <T,>() =>
+        ({ ...billed, bills: [{ ...billed.bills[0], splitKind }] }) as T;
+      render(<CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />);
+
+      expect(await screen.findByText('Bill details')).toBeVisible();
+      expect(screen.getByText('Bill 1')).toBeVisible();
+      expect(screen.queryByText(splitKind)).not.toBeInTheDocument();
+    }
+  );
+
+  it('prefers the receipt number over the split kind label', async () => {
+    const request: TerminalRequest = async <T,>() =>
+      ({ ...billed, bills: [{ ...billed.bills[0], receiptNumber: 100 }] }) as T;
+    render(<CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />);
+
+    expect(await screen.findByText('Receipt 100')).toBeVisible();
+    expect(screen.queryByText('Whole order')).not.toBeInTheDocument();
+  });
+
   it("labels an unsplit bill as 'Whole order' instead of exposing the NONE sentinel", async () => {
     const request: TerminalRequest = async <T,>() => billed as T;
     render(<CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />);
