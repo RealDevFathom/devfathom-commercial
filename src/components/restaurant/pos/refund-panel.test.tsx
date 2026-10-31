@@ -78,7 +78,9 @@ describe('RefundPanel', () => {
     });
     expect(screen.getByLabelText('Refund amount')).toHaveValue('0.00');
     expect(screen.getByLabelText('Tip refund')).toHaveValue('2.00');
-    fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Return remaining tip' } });
+    fireEvent.change(screen.getByLabelText('Reason'), {
+      target: { value: 'Return remaining tip' },
+    });
     fireEvent.change(screen.getByLabelText('Approving manager'), { target: { value: 'manager' } });
     fireEvent.change(screen.getByLabelText('Manager PIN'), { target: { value: '1234' } });
     fireEvent.click(screen.getByRole('button', { name: 'Review refund' }));

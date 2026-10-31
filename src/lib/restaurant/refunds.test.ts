@@ -647,7 +647,7 @@ describeIfDatabase('card refunds (real DB)', () => {
       }),
     }));
     expect(persisted.payment?.status).toBe('REFUNDED');
-    expect(persisted.payment?.events.map((event) => event.amount.toString())).toEqual([
+    expect(persisted.payment?.events.map((event) => event.amount?.toString())).toEqual([
       '12.5',
       '0',
     ]);
@@ -719,7 +719,7 @@ describeIfDatabase('card refunds (real DB)', () => {
     );
     expect(payment.status).toBe('VOIDED');
     expect(payment.events).toHaveLength(1);
-    expect(payment.events[0]!.amount.toString()).toBe('12.5');
+    expect(payment.events[0]!.amount?.toString()).toBe('12.5');
     expect(payment.events[0]!.payload).toEqual(
       expect.objectContaining({ amount: '12.5', tipAmount: '2' })
     );
@@ -855,10 +855,7 @@ describeIfDatabase('cash refunds + co-authorization (real DB)', () => {
     ]);
     expect(
       movements
-        .reduce(
-          (total, movement) => total.plus(movement.amount),
-          movements[0]!.amount.mul(0)
-        )
+        .reduce((total, movement) => total.plus(movement.amount), movements[0]!.amount.mul(0))
         .toFixed(2)
     ).toBe('12.60');
   });
