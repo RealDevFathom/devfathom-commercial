@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { resolveRestaurantActor } from './restaurant-actor';
 import { can, subjectFromSession } from '@/lib/abac';
-import { ALL_ACTIONS } from '@/lib/abac/policies';
 
 function fixture(role = 'EMPLOYEE', key = 'cashier') {
   const db = {
@@ -36,17 +35,61 @@ function fixture(role = 'EMPLOYEE', key = 'cashier') {
   };
 }
 
+const ORG_ROLE_ONLY_ACTIONS = [
+  'pharmacy:dispense',
+  'pharmacy:safety',
+  'pharmacy:catalogue-review',
+  'sop:verify',
+  'restaurant:configure',
+  'money:read',
+  'staff:manage',
+  'hotel:folio',
+] as const;
+
 describe('owner/admin capability and automatic branch access', () => {
   it.each([
     ['ADMIN', 'cashier'],
+    ['ADMIN', 'owner'],
     ['EMPLOYEE', 'owner'],
-  ])('%s / %s has every tenant capability and needs no branch assignment', async (role, key) => {
-    const { db, user, ctx } = fixture(role, key);
-    for (const action of ALL_ACTIONS) {
-      expect(await can(subjectFromSession(user), action, undefined, { db: db as never })).toBe(
-        true
-      );
+    ['EMPLOYEE', 'owner-operator'],
+    ['EMPLOYEE', 'admin'],
+  ])(
+    '%s / %s gets no implicit capability or branch access without explicit grants',
+    async (role, key) => {
+      const { db, user, ctx } = fixture(role, key);
+      for (const action of ORG_ROLE_ONLY_ACTIONS) {
+        expect(await can(subjectFromSession(user), action, undefined, { db: db as never })).toBe(
+          false
+        );
+      }
+      expect(
+        await can(
+          subjectFromSession(user),
+          'resignation:review',
+          { type: 'Resignation', userId: user.id, status: 'PENDING' },
+          { db: db as never }
+        )
+      ).toBe(false);
+      await expect(resolveRestaurantActor(ctx as never, ['remote'])).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+      });
     }
+  );
+  it('gives automatic branch access only through an explicit restaurant:configure grant', async () => {
+    const { db, user, ctx } = fixture('EMPLOYEE', 'owner');
+    db.user.findUnique.mockResolvedValue({
+      role: 'EMPLOYEE',
+      status: 'ACTIVE',
+      organizationRole: { key: 'owner', permissions: [{ capability: '*', effect: 'ALLOW' }] },
+      permissionOverrides: [],
+    });
+    expect(
+      await can(subjectFromSession(user), 'restaurant:configure', undefined, { db: db as never })
+    ).toBe(true);
+    // Wildcards never grant exact-only pharmacy decisions.
+    expect(
+      await can(subjectFromSession(user), 'pharmacy:dispense', undefined, { db: db as never })
+    ).toBe(false);
     await expect(resolveRestaurantActor(ctx as never, ['remote'])).resolves.toEqual({
       staffProfileId: 'session-staff',
     });
@@ -95,7 +138,7 @@ describe('terminal owner capabilities', () => {
   it.each([
     ['ADMIN', 'cashier'],
     ['EMPLOYEE', 'owner'],
-  ])('grants %s / %s all capabilities across branches', async (role, key) => {
+  ])('does not grant %s / %s every capability across branches', async (role, key) => {
     const { operatorHasCapability } = await import('@/lib/restaurant/checkout-routes');
     const db = {
       restaurantStaffJobRole: { findMany: vi.fn().mockResolvedValue([]) },
@@ -104,20 +147,24 @@ describe('terminal owner capabilities', () => {
         findUnique: vi.fn().mockResolvedValue({
           status: 'ACTIVE',
           primaryBranchId: 'home',
-          user: { role, status: 'ACTIVE', organizationRole: { key } },
+          user: { role, status: 'ACTIVE', organizationRole: { key, permissions: [] } },
           jobRoles: [],
           directCapabilityGrants: [],
         }),
       },
     };
-    expect(
-      await operatorHasCapability(db as never, 'owner', 'future:capability', new Date(), 'remote')
-    ).toBe(true);
+    for (const branch of ['remote', 'home']) {
+      expect(
+        await operatorHasCapability(db as never, 'owner', 'future:capability', new Date(), branch)
+      ).toBe(false);
+    }
   });
-  it('grants a branch owner all capabilities only within their held branch', async () => {
+  it('does not treat an owner job-role key as granting every capability', async () => {
     const { operatorHasCapability } = await import('@/lib/restaurant/checkout-routes');
     const db = {
-      restaurantStaffJobRole: { findMany: vi.fn().mockResolvedValue([]) },
+      restaurantStaffJobRole: {
+        findMany: vi.fn().mockResolvedValue([{ jobRole: { capabilities: [] } }]),
+      },
       restaurantStaffCapabilityGrant: { findMany: vi.fn().mockResolvedValue([]) },
       restaurantStaffProfile: {
         findUnique: vi.fn().mockResolvedValue({
@@ -131,15 +178,6 @@ describe('terminal owner capabilities', () => {
     };
     expect(
       await operatorHasCapability(db as never, 'owner', 'future:capability', new Date(), 'owned')
-    ).toBe(true);
-    expect(
-      await operatorHasCapability(
-        db as never,
-        'owner',
-        'future:capability',
-        new Date(),
-        'unassigned'
-      )
     ).toBe(false);
   });
 });

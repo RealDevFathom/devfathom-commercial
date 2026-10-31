@@ -10,7 +10,6 @@
  *   if (!(await can(subject, 'resignation:review', { type: 'Resignation', ... })))
  *     throw new TRPCError({ code: 'FORBIDDEN' });
  */
-import { isTenantAdministrator } from './tenant-administrator';
 import { capabilityMatches } from './capabilities';
 import type { AuthzDb } from '@/lib/authz';
 import { POLICIES, type Action } from './policies';
@@ -36,9 +35,8 @@ async function customDecision(
   const user = await db.user.findUnique({
     where: { id: userId },
     select: {
-      role: true,
       organizationRole: {
-        select: { key: true, permissions: { select: { capability: true, effect: true } } },
+        select: { permissions: { select: { capability: true, effect: true } } },
       },
       permissionOverrides: {
         where: { OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] },
@@ -57,8 +55,7 @@ async function customDecision(
   if (matchingRules.some((rule) => rule.effect === 'DENY')) {
     return { decision: false, hasOrganizationRole };
   }
-  // Server-loaded tenant ownership retains its grants; explicit DENY still wins.
-  if (isTenantAdministrator(user) || matchingRules.some((rule) => rule.effect === 'ALLOW')) {
+  if (matchingRules.some((rule) => rule.effect === 'ALLOW')) {
     return { decision: true, hasOrganizationRole };
   }
   return { decision: null, hasOrganizationRole };

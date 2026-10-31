@@ -149,6 +149,17 @@ suite('SOP waiver credential durability through the real HTTP rollback boundary'
     const hash = await hashOperatorCredential('PIN', PIN);
     await deps.withTenantDb(fixture.org, async (db) => {
       await db.organizationDepartment.create({ data: { key: 'ops', name: 'Operations' } });
+      // The owner holds the seeded, immutable system owner role (as onboarding
+      // provisions it). User.role === 'ADMIN' alone grants no restaurant access.
+      await db.organizationRole.create({
+        data: {
+          id: id('owner-org-role'),
+          key: 'owner',
+          name: 'Owner',
+          isSystem: true,
+          permissions: { create: [{ capability: '*' }] },
+        },
+      });
       await db.user.create({
         data: {
           id: fixture.user,
@@ -157,6 +168,7 @@ suite('SOP waiver credential durability through the real HTTP rollback boundary'
           role: 'ADMIN',
           department: 'ops',
           title: 'Owner',
+          organizationRoleId: id('owner-org-role'),
         },
       });
       for (const name of ['primary', 'target'])
@@ -167,6 +179,21 @@ suite('SOP waiver credential durability through the real HTTP rollback boundary'
           userId: fixture.user,
           displayName: 'Owner',
           primaryBranchId: id('primary'),
+        },
+      });
+      // Terminal capability checks need an explicit binding at the target
+      // branch; tenant ownership is not an implicit all-branch grant.
+      await db.restaurantJobRole.create({
+        data: { id: id('owner-job-role'), key: 'owner', name: 'Owner', isSystem: true },
+      });
+      await db.restaurantJobRoleCapability.create({
+        data: { jobRoleId: id('owner-job-role'), capability: 'coauth:approve' },
+      });
+      await db.restaurantStaffJobRole.create({
+        data: {
+          staffProfileId: id('owner'),
+          jobRoleId: id('owner-job-role'),
+          branchId: id('target'),
         },
       });
       await db.restaurantOperatorCredential.create({
@@ -430,7 +457,10 @@ suite('SOP waiver credential durability through the real HTTP rollback boundary'
     await expect(
       client().mutation('restaurantSopExecution.waive', waiver(id('multi'), 'invalid-pin'))
     ).rejects.toMatchObject({ data: { code: 'BAD_REQUEST' } });
-    await tenantDb.user.update({ where: { id: fixture.user }, data: { role: 'EMPLOYEE' } });
+    await tenantDb.user.update({
+      where: { id: fixture.user },
+      data: { role: 'EMPLOYEE', organizationRoleId: null },
+    });
     fixture.role = 'EMPLOYEE';
     try {
       await expect(
@@ -445,7 +475,10 @@ suite('SOP waiver credential durability through the real HTTP rollback boundary'
       expect(JSON.stringify(logs)).not.toContain('8765');
     } finally {
       fixture.role = 'ADMIN';
-      await tenantDb.user.update({ where: { id: fixture.user }, data: { role: 'ADMIN' } });
+      await tenantDb.user.update({
+        where: { id: fixture.user },
+        data: { role: 'ADMIN', organizationRoleId: id('owner-org-role') },
+      });
     }
   });
 });

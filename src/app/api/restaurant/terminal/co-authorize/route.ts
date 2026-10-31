@@ -5,6 +5,7 @@ import { readJson } from '@/lib/api-json';
 import { rateLimit } from '@/lib/rate-limit';
 import {
   CoAuthorizationError,
+  SoloOwnerPinError,
   buildCoAuthorizationRecord,
   buildSoloOwnerCoAuthorization,
 } from '@/lib/restaurant/co-authorization';
@@ -68,6 +69,7 @@ export const POST = withTerminalAuth(async (ctx, request) => {
 
   // Ordinary approval requires distinct identities. The solo-owner exception
   // rechecks owner status, branch staffing, and the owner's PIN on the server.
+  const soloOwner = actingStaffProfileId === approvingStaffProfileId;
   let record;
   try {
     const approvalRequest = {
@@ -80,16 +82,16 @@ export const POST = withTerminalAuth(async (ctx, request) => {
       deviceId: ctx.device.id,
       terminalSessionId: ctx.session.id,
     };
-    record =
-      actingStaffProfileId === approvingStaffProfileId
-        ? await buildSoloOwnerCoAuthorization(
-            ctx.db,
-            approvalRequest,
-            ctx.device.branchId,
-            type === 'PIN' ? secret : undefined
-          )
-        : buildCoAuthorizationRecord(approvalRequest);
+    record = soloOwner
+      ? await buildSoloOwnerCoAuthorization(
+          ctx.db,
+          approvalRequest,
+          ctx.device.branchId,
+          type === 'PIN' ? secret : undefined
+        )
+      : buildCoAuthorizationRecord(approvalRequest);
   } catch (err) {
+    if (err instanceof SoloOwnerPinError) return credentialFailure(err.retryAfterMs);
     if (err instanceof CoAuthorizationError) {
       return NextResponse.json({ error: err.message }, { status: 400 });
     }
@@ -97,25 +99,22 @@ export const POST = withTerminalAuth(async (ctx, request) => {
   }
 
   const now = new Date();
-  const auth = await authenticateOperator(ctx.db, {
-    staffProfileId: approvingStaffProfileId,
-    deviceId: ctx.device.id,
-    branchId: ctx.device.branchId,
-    type,
-    secret,
-    now,
-  });
-  if (!auth.ok) {
-    if (auth.reason === 'LOCKED') {
-      return NextResponse.json(
-        { error: "Approving manager's credential is temporarily locked." },
-        { status: 423, headers: { 'Retry-After': String(Math.ceil(auth.retryAfterMs / 1000)) } }
-      );
-    }
-    return NextResponse.json({ error: 'Invalid approving credential.' }, { status: 401 });
+  // The solo-owner builder already verified this PIN (in its own committed
+  // transaction) and the owner's coauth:approve capability; verify only once.
+  if (!soloOwner) {
+    const auth = await authenticateOperator(ctx.db, {
+      staffProfileId: approvingStaffProfileId,
+      deviceId: ctx.device.id,
+      branchId: ctx.device.branchId,
+      type,
+      secret,
+      now,
+    });
+    if (!auth.ok) return credentialFailure(auth.reason === 'LOCKED' ? auth.retryAfterMs : null);
   }
 
   if (
+    !soloOwner &&
     !(await operatorHasCapability(
       ctx.db,
       approvingStaffProfileId,
@@ -146,7 +145,7 @@ export const POST = withTerminalAuth(async (ctx, request) => {
       approvingStaffProfileId: record.approvingStaffProfileId,
       capability: record.capability,
       reason: record.reason,
-      soloOwnerPinReauthenticated: actingStaffProfileId === approvingStaffProfileId,
+      soloOwnerPinReauthenticated: soloOwner,
       approvalMode:
         record.actingStaffProfileId === record.approvingStaffProfileId
           ? 'OWNER_PIN_REAUTHENTICATION'
@@ -168,3 +167,13 @@ export const POST = withTerminalAuth(async (ctx, request) => {
     { status: 201 }
   );
 });
+
+function credentialFailure(retryAfterMs: number | null) {
+  if (retryAfterMs !== null) {
+    return NextResponse.json(
+      { error: "Approving manager's credential is temporarily locked." },
+      { status: 423, headers: { 'Retry-After': String(Math.ceil(retryAfterMs / 1000)) } }
+    );
+  }
+  return NextResponse.json({ error: 'Invalid approving credential.' }, { status: 401 });
+}

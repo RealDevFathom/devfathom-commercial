@@ -12,6 +12,9 @@ type Permission = { capability: string; effect: 'ALLOW' | 'DENY' };
 function authorizationDb(options: {
   overrides?: Permission[];
   rolePermissions?: Permission[];
+  /** Persisted User.role and organization role key, as a real row carries them. */
+  userRole?: string;
+  roleKey?: string;
   throws?: boolean;
 }): AuthzDb {
   return {
@@ -19,8 +22,9 @@ function authorizationDb(options: {
       findUnique: options.throws
         ? vi.fn().mockRejectedValue(new Error('database unavailable'))
         : vi.fn().mockResolvedValue({
+            role: options.userRole ?? 'EMPLOYEE',
             organizationRole: options.rolePermissions
-              ? { permissions: options.rolePermissions }
+              ? { key: options.roleKey ?? 'custom', permissions: options.rolePermissions }
               : null,
             permissionOverrides: options.overrides ?? [],
           }),
@@ -414,41 +418,86 @@ describe('hospitality capability namespace', () => {
   });
 });
 
-describe('server-loaded tenant owners and administrators', () => {
-  it.each(['owner', 'admin', 'owner-operator', 'ADMIN'])(
-    'grants %s every capability while preserving explicit denies',
-    async (key) => {
-      const db = {
-        user: {
-          findUnique: vi.fn().mockResolvedValue({
-            role: key === 'ADMIN' ? 'ADMIN' : 'EMPLOYEE',
-            organizationRole: { key, permissions: [] },
-            permissionOverrides: [],
-          }),
-        },
-      } as unknown as AuthzDb;
-      for (const action of ALL_ACTIONS) {
-        await expect(can(employee, action, undefined, { db })).resolves.toBe(true);
+describe('tenant ADMIN and owner-like role keys grant nothing implicitly', () => {
+  const admin = { ...employee, role: 'ADMIN' };
+  const ownerLikeKeys = ['owner', 'admin', 'owner-operator'];
+
+  it.each(ownerLikeKeys)(
+    'denies org-role-only actions to a persisted ADMIN whose %s role has no permissions',
+    async (roleKey) => {
+      const db = authorizationDb({ userRole: 'ADMIN', roleKey, rolePermissions: [] });
+      for (const action of [
+        'pharmacy:dispense',
+        'pharmacy:safety',
+        'pharmacy:catalogue-review',
+        'sop:verify',
+        'restaurant:configure',
+        'money:read',
+        'staff:manage',
+        'hotel:folio',
+      ] as const) {
+        await expect(can(admin, action, undefined, { db })).resolves.toBe(false);
       }
-      const denied = {
-        user: {
-          findUnique: vi.fn().mockResolvedValue({
-            role: key === 'ADMIN' ? 'ADMIN' : 'EMPLOYEE',
-            organizationRole: { key, permissions: [] },
-            permissionOverrides: [{ capability: '*', effect: 'DENY' }],
-          }),
-        },
-      } as unknown as AuthzDb;
-      for (const action of ALL_ACTIONS)
-        await expect(can(employee, action, undefined, { db: denied })).resolves.toBe(false);
     }
   );
+
+  it.each(ownerLikeKeys)(
+    'denies org-role-only actions to an employee holding a mutable %s role key',
+    async (roleKey) => {
+      const db = authorizationDb({ roleKey, rolePermissions: [] });
+      for (const action of ['pharmacy:dispense', 'money:read', 'staff:manage'] as const) {
+        await expect(can(employee, action, undefined, { db })).resolves.toBe(false);
+      }
+    }
+  );
+
+  it('keeps pharmacy:procurement denied to an ADMIN whose assigned role lacks the grant', async () => {
+    const db = authorizationDb({
+      userRole: 'ADMIN',
+      roleKey: 'owner',
+      rolePermissions: [{ capability: 'pharmacy:inventory', effect: 'ALLOW' }],
+    });
+    await expect(can(admin, 'pharmacy:procurement', undefined, { db })).resolves.toBe(false);
+  });
+
+  it('keeps resignation:review attribute checks for a persisted ADMIN', async () => {
+    const db = authorizationDb({ userRole: 'ADMIN', roleKey: 'owner', rolePermissions: [] });
+    await expect(
+      can(
+        admin,
+        'resignation:review',
+        { type: 'Resignation', userId: admin.id, status: 'PENDING' },
+        { db }
+      )
+    ).resolves.toBe(false);
+    await expect(
+      can(
+        admin,
+        'resignation:review',
+        { type: 'Resignation', userId: 'u2', status: 'APPROVED' },
+        { db }
+      )
+    ).resolves.toBe(false);
+    await expect(
+      can(
+        admin,
+        'resignation:review',
+        { type: 'Resignation', userId: 'u2', status: 'PENDING' },
+        { db }
+      )
+    ).resolves.toBe(true);
+  });
+
   it.each(['pharmacy:dispense', 'pharmacy:safety', 'pharmacy:catalogue-review'] as const)(
-    'keeps %s exact-grant-only for nonowners',
+    'keeps %s exact-grant-only, even for a persisted ADMIN owner',
     async (action) => {
       await expect(
-        can(employee, action, undefined, {
-          db: authorizationDb({ rolePermissions: [{ capability: '*', effect: 'ALLOW' }] }),
+        can(admin, action, undefined, {
+          db: authorizationDb({
+            userRole: 'ADMIN',
+            roleKey: 'owner',
+            rolePermissions: [{ capability: '*', effect: 'ALLOW' }],
+          }),
         })
       ).resolves.toBe(false);
       await expect(

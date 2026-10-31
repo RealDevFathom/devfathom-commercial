@@ -325,6 +325,13 @@ function StaffSelect({
   );
 }
 
+/** The server always records the signed-in user's staff profile as the actor. */
+function SessionActorNote({ role }: { role: string }) {
+  return (
+    <p className="text-sm text-text-muted">{role}: recorded as your signed-in staff profile.</p>
+  );
+}
+
 function Status({ status }: { status: SopStatus }) {
   return <StatusPill status={status} label={STATUS_LABEL[status]} tone={STATUS_TONE[status]} />;
 }
@@ -606,7 +613,7 @@ function SopBoardView(props: SopBoardViewProps) {
                       businessDate={businessDate}
                       occurrenceId={selected.id}
                     />
-                    <StaffSelect label="Acting staff" staff={staff} />
+                    <SessionActorNote role="Acting staff" />
                     <div className="flex flex-wrap gap-2">
                       {startAllowed ? (
                         <Button
@@ -742,7 +749,7 @@ function SopBoardView(props: SopBoardViewProps) {
                                 name="templateStepId"
                                 value={step.templateStepId}
                               />
-                              <StaffSelect label="Completing staff" staff={staff} />
+                              <SessionActorNote role="Completing staff" />
                               <label className="text-sm text-text-body">
                                 Completion note
                                 <Input className="mt-1 min-h-11" maxLength={2000} name="note" />
@@ -774,7 +781,7 @@ function SopBoardView(props: SopBoardViewProps) {
                           businessDate={businessDate}
                           occurrenceId={selected.id}
                         />
-                        <StaffSelect label="Verifier" staff={staff} />
+                        <SessionActorNote role="Verifier" />
                         <label className="text-sm text-text-body sm:col-span-2">
                           Verification PIN (required for your own work)
                           <Input
@@ -833,7 +840,7 @@ function SopBoardView(props: SopBoardViewProps) {
                           intent="waive"
                           occurrenceId={selected.id}
                         />
-                        <StaffSelect label="Acting verifier" required staff={staff} />
+                        <SessionActorNote role="Acting verifier" />
                         <StaffSelect
                           label="Approving co-author"
                           name="approvingStaffProfileId"
@@ -842,7 +849,7 @@ function SopBoardView(props: SopBoardViewProps) {
                         />
                         <p className="text-xs text-text-muted sm:col-span-2">
                           A second approver is required unless you are the only active staff member
-                          and an owner or administrator.
+                          and the organization or branch owner.
                         </p>
                         <label className="text-sm text-text-body sm:col-span-2">
                           Approver PIN
@@ -879,7 +886,7 @@ function SopBoardView(props: SopBoardViewProps) {
                     ) : null}
                     {!reviewAllowed && !waiveAllowed ? (
                       <div className="mt-3">
-                        <StaffSelect label="Verifier" staff={staff} />
+                        <SessionActorNote role="Verifier" />
                         <p className="mt-2 text-sm text-text-muted">
                           No verifier action is valid for{' '}
                           {STATUS_LABEL[selected.status].toLowerCase()} occurrences.
@@ -1111,7 +1118,7 @@ export default async function SopPage({ searchParams }: { searchParams: SearchPa
         }
         case 'waive': {
           const approvingStaffProfileId = field(form, 'approvingStaffProfileId');
-          if (!actorStaffProfileId || !approvingStaffProfileId) {
+          if (!approvingStaffProfileId) {
             throw new TRPCError({
               code: 'BAD_REQUEST',
               message: 'Select an active approving staff profile for co-authorization.',

@@ -1,4 +1,3 @@
-import { isTenantAdministrator } from '@/lib/abac/tenant-administrator';
 import 'server-only';
 import { withOwnerReauthenticationScope } from './owner-reauthentication';
 
@@ -602,14 +601,7 @@ export async function authenticateOperator(
         status: true,
         jobRoles: { where: { jobRole: { active: true } }, select: { branchId: true } },
         directCapabilityGrants: { select: { branchId: true } },
-        user: {
-          select: {
-            role: true,
-            status: true,
-            organizationRole: { select: { key: true } },
-            restaurantBranchAssignments: { select: { branchId: true } },
-          },
-        },
+        user: { select: { restaurantBranchAssignments: { select: { branchId: true } } } },
       },
     }),
     // Completion wave: whether THIS branch requires a rostered shift. Read
@@ -647,8 +639,7 @@ export async function authenticateOperator(
       profile.primaryBranchId !== branchId &&
       !profile.jobRoles?.some((row) => row.branchId === branchId) &&
       !profile.directCapabilityGrants?.some((row) => row.branchId === branchId) &&
-      !profile.user?.restaurantBranchAssignments?.some((row) => row.branchId === branchId) &&
-      !(profile.user?.status === 'ACTIVE' && isTenantAdministrator(profile.user))) ||
+      !profile.user?.restaurantBranchAssignments?.some((row) => row.branchId === branchId)) ||
     !credential
   ) {
     // Fail closed, but still burn a compare so absence is timing-opaque.

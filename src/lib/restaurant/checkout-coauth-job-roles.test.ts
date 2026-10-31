@@ -96,35 +96,33 @@ function fakeDb(options: {
 }
 
 describe('operatorHasCapability — SOP-1 job-role path (QA-145)', () => {
-  it.each(['owner', 'admin'])(
-    'allows organization %s on every branch and capability',
+  it.each(['owner', 'admin', 'owner-operator'])(
+    'grants organization role key %s nothing beyond its permissions or branch binding',
     async (key) => {
-      const db = fakeDb({
+      const unbound = fakeDb({
         primaryBranchId: 'another',
         user: { organizationRole: { key, permissions: [{ capability: '*', effect: 'ALLOW' }] } },
       });
-      await expect(operatorHasCapability(db, 'staff', 'sop:verify', NOW, BRANCH)).resolves.toBe(
-        true
-      );
-      await expect(operatorHasCapability(db, 'staff', 'coauth:approve', NOW, BRANCH)).resolves.toBe(
-        true
-      );
+      await expect(
+        operatorHasCapability(unbound, 'staff', 'coauth:approve', NOW, BRANCH)
+      ).resolves.toBe(false);
+      const empty = fakeDb({ user: { organizationRole: { key, permissions: [] } } });
+      await expect(
+        operatorHasCapability(empty, 'staff', 'coauth:approve', NOW, BRANCH)
+      ).resolves.toBe(false);
+      await expect(
+        operatorHasCapability(empty, 'staff', 'refund:issue', NOW, BRANCH)
+      ).resolves.toBe(false);
     }
   );
-  it('allows an administrator on every branch while retaining explicit denies', async () => {
-    const db = fakeDb({ primaryBranchId: null, user: { role: 'ADMIN' } });
-    await expect(operatorHasCapability(db, 'staff', 'coauth:approve', NOW, BRANCH)).resolves.toBe(
-      true
-    );
-    const denied = fakeDb({
-      primaryBranchId: null,
-      user: {
-        role: 'ADMIN',
-        permissionOverrides: [{ capability: 'coauth:approve', effect: 'DENY' }],
-      },
-    });
+  it('gives a tenant ADMIN no implicit branch access or money capability', async () => {
+    const unbound = fakeDb({ primaryBranchId: null, user: { role: 'ADMIN' } });
     await expect(
-      operatorHasCapability(denied, 'staff', 'coauth:approve', NOW, BRANCH)
+      operatorHasCapability(unbound, 'staff', 'coauth:approve', NOW, BRANCH)
+    ).resolves.toBe(false);
+    const bound = fakeDb({ user: { role: 'ADMIN' } });
+    await expect(
+      operatorHasCapability(bound, 'staff', 'coauth:approve', NOW, BRANCH)
     ).resolves.toBe(false);
   });
   it('allows a PIN-only approver whose job role grants coauth:approve', async () => {

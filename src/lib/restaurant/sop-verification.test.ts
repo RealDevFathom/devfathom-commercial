@@ -241,7 +241,7 @@ describe('waiver credential and solo-owner boundary', () => {
       organizationId: 'org_1',
       status: 'ACTIVE',
       jobRoles: [],
-      user: { role: 'EMPLOYEE', status: 'ACTIVE', organizationRole: { key: 'owner' } },
+      user: { status: 'ACTIVE', organizationRole: { key: 'owner', isSystem: true } },
     });
   });
   it('permits only the sole active owner after PIN verification and records both identities', async () => {
@@ -259,6 +259,8 @@ describe('waiver credential and solo-owner boundary', () => {
     );
     expect(approval.independent).toHaveBeenCalledWith('org_1', expect.any(Function), {
       skipDrain: true,
+      maxWait: 2_000,
+      timeout: 5_000,
     });
     expect(db.auditLog.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
@@ -298,11 +300,28 @@ describe('waiver credential and solo-owner boundary', () => {
       status: 'ACTIVE',
       id: ACTOR_ID,
       jobRoles: [],
-      user: { role: 'EMPLOYEE', status: 'ACTIVE', organizationRole: { key: 'manager' } },
+      user: { status: 'ACTIVE', organizationRole: { key: 'manager', isSystem: true } },
     });
     await expect(waiveOccurrence(db as unknown as ScopedDb, input)).rejects.toMatchObject({
       reason: 'CO_AUTH_REQUIRED',
     });
+  });
+  it.each([
+    { role: 'ADMIN', organizationRole: { key: 'cashier', isSystem: true } },
+    { role: 'EMPLOYEE', organizationRole: { key: 'owner', isSystem: false } },
+    { role: 'EMPLOYEE', organizationRole: { key: 'owner-operator', isSystem: false } },
+  ])('denies solo self-approval to mutable owner-like identity %j', async (identity) => {
+    db.restaurantStaffProfile.findUnique.mockResolvedValue({
+      status: 'ACTIVE',
+      id: ACTOR_ID,
+      organizationId: 'org_1',
+      jobRoles: [],
+      user: { status: 'ACTIVE', ...identity },
+    });
+    await expect(waiveOccurrence(db as unknown as ScopedDb, input)).rejects.toMatchObject({
+      reason: 'CO_AUTH_REQUIRED',
+    });
+    expect(db.restaurantCoAuthorization.create).not.toHaveBeenCalled();
   });
   it.each(['INVALID', 'LOCKED'])('denies a %s PIN without writing a waiver', async (reason) => {
     approval.authenticate.mockResolvedValueOnce({ ok: false, reason });

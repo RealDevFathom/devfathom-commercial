@@ -611,7 +611,8 @@ export const restaurantSopExecutionRouter = router({
       z
         .object({
           occurrenceId: OCCURRENCE_ID,
-          actorStaffProfileId: z.string().min(1),
+          // Ignored: the acting verifier is always the session actor.
+          actorStaffProfileId: OPTIONAL_ACTOR,
           approvingStaffProfileId: z.string().trim().min(1),
           approvalPin: z.string().min(1).max(128).optional(),
           approvingPin: z

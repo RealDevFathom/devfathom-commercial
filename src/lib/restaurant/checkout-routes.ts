@@ -1,4 +1,3 @@
-import { isTenantAdministrator } from '@/lib/abac/tenant-administrator';
 import { capabilityMatches } from '@/lib/abac/capabilities';
 import 'server-only';
 
@@ -230,16 +229,12 @@ export async function operatorHasCapability(
     select: {
       status: true,
       primaryBranchId: true,
-      jobRoles: {
-        where: { branchId },
-        select: { branchId: true, jobRole: { select: { key: true, active: true } } },
-      },
+      jobRoles: { where: { branchId }, select: { branchId: true } },
       directCapabilityGrants: { where: { branchId }, select: { branchId: true } },
       user: {
         select: {
-          role: true,
           organizationRole: {
-            select: { key: true, permissions: { select: { capability: true, effect: true } } },
+            select: { permissions: { select: { capability: true, effect: true } } },
           },
           permissionOverrides: {
             where: { OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] },
@@ -252,8 +247,7 @@ export async function operatorHasCapability(
   if (
     !profile ||
     profile.status !== 'ACTIVE' ||
-    (!isTenantAdministrator(profile.user) &&
-      profile.primaryBranchId !== branchId &&
+    (profile.primaryBranchId !== branchId &&
       !profile.jobRoles.some((row) => row.branchId === branchId) &&
       !profile.directCapabilityGrants.some((row) => row.branchId === branchId))
   )
@@ -282,8 +276,6 @@ export async function operatorHasCapability(
   return (
     overrides === true ||
     role === true ||
-    isTenantAdministrator(user) ||
-    profile.jobRoles.some((row) => row.jobRole?.active && row.jobRole.key === 'owner') ||
     [...staff.effective].some((rule) => capabilityMatches(rule, capability, 'ALLOW'))
   );
 }

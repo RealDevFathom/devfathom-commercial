@@ -22,14 +22,20 @@ const request = {
   targetType: 'RestaurantSopOccurrence',
   targetId: 'occurrence',
 };
-function database({ colleagues = 0, tenantOwner = true, branchOwner = false } = {}) {
+const SYSTEM_OWNER = { status: 'ACTIVE', organizationRole: { key: 'owner', isSystem: true } };
+function database({
+  colleagues = 0,
+  tenantOwner = true,
+  branchOwner = false,
+  user = undefined as Record<string, unknown> | undefined,
+} = {}) {
   const db = {
     restaurantStaffProfile: {
       findUnique: vi.fn().mockResolvedValue({
         id: 'owner',
         organizationId: 'org',
         status: 'ACTIVE',
-        user: tenantOwner ? { role: 'ADMIN', status: 'ACTIVE' } : null,
+        user: user ?? (tenantOwner ? SYSTEM_OWNER : null),
         jobRoles: branchOwner ? [{ id: 'owner-role' }] : [],
       }),
       count: vi.fn().mockResolvedValue(colleagues),
@@ -186,4 +192,32 @@ it('preserves an explicit approval capability denial even for a solo owner', asy
     buildSoloOwnerCoAuthorization(db as never, request, 'branch', '4821')
   ).rejects.toThrow('capability');
   expect(mocks.authenticate).not.toHaveBeenCalled();
+});
+
+it.each([
+  { role: 'ADMIN', status: 'ACTIVE', organizationRole: null },
+  { role: 'ADMIN', status: 'ACTIVE', organizationRole: { key: 'cashier', isSystem: true } },
+  { status: 'ACTIVE', organizationRole: { key: 'owner', isSystem: false } },
+  { status: 'ACTIVE', organizationRole: { key: 'admin', isSystem: false } },
+  { status: 'ACTIVE', organizationRole: { key: 'owner-operator', isSystem: false } },
+  { status: 'SUSPENDED', organizationRole: { key: 'owner', isSystem: true } },
+])('does not treat User.role or a mutable role key as solo ownership: %j', async (user) => {
+  await expect(
+    buildSoloOwnerCoAuthorization(database({ user }) as never, request, 'branch', '4821')
+  ).rejects.toThrow('Only a solo');
+  expect(mocks.authenticate).not.toHaveBeenCalled();
+});
+
+it('only counts the immutable system owner job role at the branch', async () => {
+  const db = database({ tenantOwner: false, branchOwner: true });
+  await buildSoloOwnerCoAuthorization(db as never, request, 'branch', '4821');
+  expect(db.restaurantStaffProfile.findUnique).toHaveBeenCalledWith(
+    expect.objectContaining({
+      select: expect.objectContaining({
+        jobRoles: expect.objectContaining({
+          where: { branchId: 'branch', jobRole: { key: 'owner', active: true, isSystem: true } },
+        }),
+      }),
+    })
+  );
 });

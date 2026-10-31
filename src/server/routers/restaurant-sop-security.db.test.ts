@@ -90,6 +90,20 @@ async function scenario(
           where: { id: ids.otherUser },
           data: { organizationRoleId: staffRole.id },
         });
+        // The owner holds the seeded, immutable system owner role (as onboarding
+        // provisions it); User.role === 'ADMIN' alone grants no restaurant access.
+        const ownerRole = await db.organizationRole.create({
+          data: {
+            key: 'owner',
+            name: 'Owner',
+            isSystem: true,
+            permissions: { create: [{ capability: '*' }] },
+          },
+        });
+        await db.user.update({
+          where: { id: ids.ownerUser },
+          data: { organizationRoleId: ownerRole.id },
+        });
         await db.restaurantBranch.createMany({
           data: [
             { id: ids.home, name: 'Home' },

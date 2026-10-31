@@ -168,6 +168,36 @@ describe('waiver credential form', () => {
       reason: 'Emergency',
     });
   });
+  it('does not offer actor pickers the server ignores', async () => {
+    const { tree } = await readyBoard();
+    render(tree);
+    expect(screen.queryByLabelText('Acting verifier')).toBeNull();
+    expect(screen.queryByLabelText('Verifier')).toBeNull();
+    expect(
+      screen.getByText('Acting verifier: recorded as your signed-in staff profile.')
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText('Approving co-author')).toBeRequired();
+  });
+  it('submits a waiver without a client-selected acting verifier', async () => {
+    const { tree, caller } = await readyBoard();
+    const form = new FormData();
+    for (const [key, value] of Object.entries({
+      intent: 'waive',
+      occurrenceId: 'occ-1',
+      approvingStaffProfileId: 'owner-1',
+      approvingPin: '4821',
+      reason: 'Emergency',
+    }))
+      form.set(key, value);
+    await tree.props.action(form);
+    expect(caller.waive).toHaveBeenCalledWith({
+      occurrenceId: 'occ-1',
+      actorStaffProfileId: undefined,
+      approvingStaffProfileId: 'owner-1',
+      approvingPin: '4821',
+      reason: 'Emergency',
+    });
+  });
   it('forwards own-work verification PINs through the existing server action', async () => {
     const { tree, caller } = await readyBoard();
     const form = new FormData();

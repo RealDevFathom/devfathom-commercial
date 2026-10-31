@@ -25,7 +25,7 @@ function database() {
         id: 'owner',
         organizationId: 'org',
         status: 'ACTIVE',
-        user: { role: 'ADMIN', status: 'ACTIVE' },
+        user: { status: 'ACTIVE', organizationRole: { key: 'owner', isSystem: true } },
         jobRoles: [],
       }),
       count: vi.fn().mockResolvedValue(0),
@@ -102,7 +102,32 @@ describe('terminal solo owner approval', () => {
   });
   it('denies an invalid or locked PIN without writing approval evidence', async () => {
     mocks.authenticate.mockResolvedValue({ ok: false, reason: 'INVALID' });
+    expect((await POST(request())).status).toBe(401);
+    mocks.authenticate.mockResolvedValue({ ok: false, reason: 'LOCKED', retryAfterMs: 30_000 });
+    const locked = await POST(request());
+    expect(locked.status).toBe(423);
+    expect(locked.headers.get('Retry-After')).toBe('30');
+    expect(db.restaurantCoAuthorization.create).not.toHaveBeenCalled();
+  });
+  it('verifies the solo owner PIN exactly once, in the committed credential transaction', async () => {
+    expect((await POST(request())).status).toBe(201);
+    expect(mocks.authenticate).toHaveBeenCalledTimes(1);
+    expect(mocks.independent).toHaveBeenCalledTimes(1);
+  });
+  it('does not let a tenant ADMIN without the system owner role self-approve', async () => {
+    db.restaurantStaffProfile.findUnique.mockResolvedValue({
+      id: 'owner',
+      organizationId: 'org',
+      status: 'ACTIVE',
+      user: {
+        role: 'ADMIN',
+        status: 'ACTIVE',
+        organizationRole: { key: 'owner', isSystem: false },
+      },
+      jobRoles: [],
+    });
     expect((await POST(request())).status).toBe(400);
+    expect(mocks.authenticate).not.toHaveBeenCalled();
     expect(db.restaurantCoAuthorization.create).not.toHaveBeenCalled();
   });
   it('preserves distinct manager approval with a branch-scoped credential check', async () => {

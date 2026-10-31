@@ -6,6 +6,9 @@ import { authenticateOperator } from './terminal-auth';
 /** The tenant ID must come from a scoped database row, never caller input.
  * A failed request rolls back its HTTP transaction, so credential attempts use
  * a new committed transaction. Returning failure normally preserves lockouts.
+ * The caller may still hold its own connection, so the credential transaction
+ * waits only briefly for a pooled connection and fails closed (throws) under
+ * pool exhaustion instead of stalling the outer transaction.
  */
 export function authenticateApprovalPin(
   organizationId: string,
@@ -23,6 +26,6 @@ export function authenticateApprovalPin(
       );
       return authenticateOperator(credentialDb, params);
     },
-    { skipDrain: true }
+    { skipDrain: true, maxWait: 2_000, timeout: 5_000 }
   );
 }

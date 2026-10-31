@@ -1,5 +1,4 @@
 import 'server-only';
-import { isTenantAdministrator } from '@/lib/abac/tenant-administrator';
 import { authenticateApprovalPin } from './approval-auth';
 import {
   hasOwnerPinReauthentication,
@@ -69,6 +68,14 @@ export class CoAuthorizationError extends Error {
   }
 }
 
+/** A solo-owner PIN failure; callers map it like any other failed credential. */
+export class SoloOwnerPinError extends CoAuthorizationError {
+  constructor(readonly retryAfterMs: number | null) {
+    super('PIN reauthentication failed.');
+    this.name = 'SoloOwnerPinError';
+  }
+}
+
 function requireNonEmpty(value: string, field: string): string {
   const trimmed = value.trim();
   if (trimmed.length === 0) {
@@ -91,7 +98,11 @@ function optionalTrimmed(value: string | null | undefined): string | null {
 function validateRequest(request: CoAuthorizationRequest, soloOwner = false): void {
   const acting = requireNonEmpty(request.actingStaffProfileId, 'acting staff profile');
   const approving = requireNonEmpty(request.approvingStaffProfileId, 'approving staff profile');
-  if (acting === approving && !soloOwner && !hasOwnerPinReauthentication(acting, request.deviceId)) {
+  if (
+    acting === approving &&
+    !soloOwner &&
+    !hasOwnerPinReauthentication(acting, request.deviceId)
+  ) {
     throw new CoAuthorizationError(
       'A co-authorization requires a second identity: the approving manager must differ from the acting operator.'
     );
@@ -161,14 +172,22 @@ export async function buildSoloOwnerCoAuthorization(
       id: true,
       organizationId: true,
       status: true,
-      user: { select: { role: true, status: true, organizationRole: { select: { key: true } } } },
+      user: {
+        select: { status: true, organizationRole: { select: { key: true, isSystem: true } } },
+      },
+      // Only the seeded system owner job role counts; tenant-created roles
+      // cannot set isSystem, so a free-form "owner" key grants nothing here.
       jobRoles: {
-        where: { branchId, jobRole: { key: 'owner', active: true } },
+        where: { branchId, jobRole: { key: 'owner', active: true, isSystem: true } },
         select: { id: true },
       },
     },
   });
-  const tenantOwner = profile?.user?.status === 'ACTIVE' && isTenantAdministrator(profile.user);
+  // Ownership is an immutable system role, never User.role or a mutable key.
+  const tenantOwner =
+    profile?.user?.status === 'ACTIVE' &&
+    profile.user.organizationRole?.isSystem === true &&
+    profile.user.organizationRole.key === 'owner';
   if (profile?.status !== 'ACTIVE' || (!tenantOwner && !profile.jobRoles?.length)) {
     throw new CoAuthorizationError('Only a solo tenant or branch owner may self-approve.');
   }
@@ -193,6 +212,6 @@ export async function buildSoloOwnerCoAuthorization(
     secret: pin,
     now: new Date(),
   });
-  if (!auth.ok) throw new CoAuthorizationError('PIN reauthentication failed.');
+  if (!auth.ok) throw new SoloOwnerPinError(auth.reason === 'LOCKED' ? auth.retryAfterMs : null);
   return normalizedRecord({ ...request, reason: `[SOLO_OWNER_PIN_REAUTH] ${request.reason}` });
 }
