@@ -128,6 +128,74 @@ describe('regulatory profile province selection', () => {
     expect(screen.queryByText('Pending legal review')).not.toBeInTheDocument();
   });
 
+  it('keeps the effective profile warning when newer rules or the draft province are confirmed', () => {
+    render(
+      <PharmacyRegulatoryProfileForm
+        initial={{
+          ...initial,
+          jurisdictions: initial.jurisdictions.map((jurisdiction) => ({
+            ...jurisdiction,
+            provisional: false,
+          })),
+          versions: [
+            {
+              id: 'profile-1',
+              version: 1,
+              effective: true,
+              inForce: false,
+              pendingLegalReview: true,
+              provinceCode: 'PK-SD',
+              provinceName: 'Sindh',
+              effectiveFrom: new Date('2026-01-01'),
+              effectiveTo: null,
+              licenceValidTo: new Date('2027-01-01'),
+              qualifiedPersonValidTo: new Date('2027-01-01'),
+            } as Regulatory['versions'][number],
+          ],
+        }}
+      />
+    );
+
+    expect(screen.getByRole('status')).toHaveTextContent('Sindh rules are pending legal review.');
+    fireEvent.change(screen.getByLabelText('Province'), { target: { value: 'PK-PB' } });
+    expect(screen.getByRole('status')).toHaveTextContent('Sindh rules are pending legal review.');
+  });
+
+  it('distinguishes provisional draft rules from a confirmed profile in force', () => {
+    render(
+      <PharmacyRegulatoryProfileForm
+        initial={{
+          ...initial,
+          versions: [
+            {
+              id: 'profile-1',
+              version: 1,
+              effective: true,
+              inForce: true,
+              pendingLegalReview: false,
+              provinceCode: 'PK-SD',
+              provinceName: 'Sindh',
+              effectiveFrom: new Date('2026-01-01'),
+              effectiveTo: null,
+              licenceValidTo: new Date('2027-01-01'),
+              qualifiedPersonValidTo: new Date('2027-01-01'),
+            } as Regulatory['versions'][number],
+          ],
+        }}
+      />
+    );
+
+    expect(screen.getAllByText('In force')[0]).toBeVisible();
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Sindh rules for the new version are pending legal review.'
+    );
+    expect(screen.getByRole('status')).not.toHaveTextContent(
+      'dispensing and activation remain blocked'
+    );
+    fireEvent.change(screen.getByLabelText('Province'), { target: { value: 'PK-PB' } });
+    expect(screen.queryByText('Pending legal review')).not.toBeInTheDocument();
+  });
+
   it('refreshes the province on branch changes and ignores an obsolete branch response', async () => {
     let resolveOld!: (data: Regulatory) => void;
     fetchRegulatory.mockReturnValueOnce(

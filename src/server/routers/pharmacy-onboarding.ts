@@ -366,6 +366,11 @@ export const pharmacyOnboardingRouter = router({
           return {
             ...version,
             provinceName: provinceName(version.provinceCode),
+            pendingLegalReview: [
+              jurisdictionRuleSet.licenceCategories,
+              jurisdictionRuleSet.permittedSchedules,
+              jurisdictionRuleSet.pharmacistCoverageRule,
+            ].some((field) => ruleSetOptions(field).provisional),
             effective,
             inForce,
             licenceExpired: effective && now >= version.licenceValidTo,

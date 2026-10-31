@@ -172,6 +172,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
   const schedules = jurisdiction?.permittedSchedules ?? [];
   const current = data.versions.find((version) => version.effective);
   const inForce = data.versions.find((version) => version.inForce);
+  const pendingProfile = current?.pendingLegalReview ? current : undefined;
 
   async function uploadEvidence(file: File) {
     setUploadError(null);
@@ -308,8 +309,15 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
         )}
       </SectionCard>
 
-      {jurisdiction?.provisional ? (
-        <PendingLegalReviewNotice provinceName={jurisdiction.provinceName} />
+      {pendingProfile ? (
+        <PendingLegalReviewNotice provinceName={pendingProfile.provinceName} />
+      ) : null}
+      {jurisdiction?.provisional &&
+      (!pendingProfile || pendingProfile.provinceCode !== jurisdiction.provinceCode) ? (
+        <PendingLegalReviewNotice
+          provinceName={jurisdiction.provinceName}
+          scope={current ? 'draft' : 'branch'}
+        />
       ) : null}
 
       <SectionCard
