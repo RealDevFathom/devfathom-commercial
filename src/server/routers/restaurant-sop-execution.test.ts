@@ -242,18 +242,141 @@ describe('listOccurrences', () => {
       })
     );
   });
+
+  it('does not grant pool visibility or claims through an inactive role', async () => {
+    mocks.can.mockImplementation(async (...args) => args[1] === 'sop:complete');
+    db.restaurantStaffProfile.findFirst.mockImplementation(async ({ select }) => ({
+      id: 'staff_1',
+      jobRoles: select.jobRoles?.where.jobRole?.active ? [] : [{ jobRoleId: 'inactive_role' }],
+    }));
+
+    await caller().listOccurrences({ branchId: 'branch_1' });
+    expect(db.restaurantSopOccurrence.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          OR: [{ assignedStaffProfileId: 'staff_1' }, { claimedByStaffProfileId: 'staff_1' }],
+        }),
+      })
+    );
+
+    db.restaurantSopOccurrence.findUnique.mockResolvedValue({
+      branchId: 'branch_1',
+      status: 'SCHEDULED',
+      assignedStaffProfileId: null,
+      claimedByStaffProfileId: null,
+      poolJobRoleId: 'inactive_role',
+    });
+    await expect(caller().getOccurrence({ id: OCC_ID })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
+    await expect(caller().claim({ occurrenceId: OCC_ID })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(db.restaurantSopOccurrence.updateMany).not.toHaveBeenCalled();
+  });
 });
 
 describe('claim', () => {
-  it('binds an atomic role-pool claim to the authenticated active staff profile', async () => {
+  it.each(['SCHEDULED', 'REJECTED'])(
+    'binds an atomic %s role-pool claim to the authenticated active staff profile',
+    async (status) => {
+      db.restaurantSopOccurrence.findUnique
+        .mockResolvedValueOnce({ branchId: 'branch_1', status, poolJobRoleId: 'role_1' })
+        .mockResolvedValueOnce({
+          id: OCC_ID,
+          branchId: 'branch_1',
+          status,
+          poolJobRoleId: 'role_1',
+          claimedByStaffProfileId: null,
+          claimedAt: null,
+        });
+      db.restaurantStaffProfile.findFirst.mockResolvedValue({
+        id: 'staff_1',
+        jobRoles: [{ jobRoleId: 'role_1' }],
+      });
+      db.restaurantStaffJobRole.findMany.mockResolvedValue([
+        { staffProfileId: 'staff_1', staffProfile: { id: 'staff_1', status: 'ACTIVE' } },
+      ]);
+      db.restaurantSopOccurrence.updateMany.mockResolvedValue({ count: 1 });
+
+      await expect(caller().claim({ occurrenceId: OCC_ID })).resolves.toMatchObject({
+        status: 'CLAIMED',
+        claimedByStaffProfileId: 'staff_1',
+      });
+      expect(db.restaurantSopOccurrence.updateMany).toHaveBeenCalledWith({
+        where: {
+          id: OCC_ID,
+          claimedByStaffProfileId: null,
+          status: { in: ['SCHEDULED', 'REJECTED'] },
+        },
+        data: { claimedByStaffProfileId: 'staff_1', claimedAt: expect.any(Date) },
+      });
+    }
+  );
+
+  it.each(['before reload', 'before write'])(
+    'does not claim an occurrence closed %s',
+    async (closedAt) => {
+      db.restaurantSopOccurrence.findUnique
+        .mockResolvedValueOnce({
+          branchId: 'branch_1',
+          status: 'SCHEDULED',
+          poolJobRoleId: 'role_1',
+        })
+        .mockResolvedValueOnce({
+          id: OCC_ID,
+          branchId: 'branch_1',
+          status: closedAt === 'before reload' ? 'MISSED' : 'SCHEDULED',
+          poolJobRoleId: 'role_1',
+          claimedByStaffProfileId: null,
+          claimedAt: null,
+        })
+        .mockResolvedValueOnce({
+          status: 'MISSED',
+          claimedByStaffProfileId: null,
+          claimedAt: null,
+        });
+      db.restaurantStaffProfile.findFirst.mockResolvedValue({
+        id: 'staff_1',
+        jobRoles: [{ jobRoleId: 'role_1' }],
+      });
+      db.restaurantStaffJobRole.findMany.mockResolvedValue([
+        { staffProfileId: 'staff_1', staffProfile: { id: 'staff_1', status: 'ACTIVE' } },
+      ]);
+      // The scheduler commits MISSED after the last read. PostgreSQL evaluates
+      // the conditional write against that state, so a status guard must reject it.
+      db.restaurantSopOccurrence.updateMany.mockImplementation(async ({ where }) => ({
+        count: where.status && !where.status.in.includes('MISSED') ? 0 : 1,
+      }));
+
+      await expect(caller().claim({ occurrenceId: OCC_ID })).rejects.toMatchObject({
+        code: 'CONFLICT',
+      });
+      if (closedAt === 'before reload') {
+        expect(db.restaurantSopOccurrence.updateMany).not.toHaveBeenCalled();
+      }
+      expect(mocks.annotateAudit).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([
+    ['staff_1', 'ALREADY_CLAIMED_BY_CALLER'],
+    ['staff_2', 'CLAIMED_BY_OTHER'],
+  ])('reports the settled claim by %s even if work has since started', async (winner, status) => {
     db.restaurantSopOccurrence.findUnique
-      .mockResolvedValueOnce({ branchId: 'branch_1', status: 'SCHEDULED' })
+      .mockResolvedValueOnce({ branchId: 'branch_1', status: 'SCHEDULED', poolJobRoleId: 'role_1' })
       .mockResolvedValueOnce({
         id: OCC_ID,
         branchId: 'branch_1',
+        status: 'SCHEDULED',
         poolJobRoleId: 'role_1',
         claimedByStaffProfileId: null,
         claimedAt: null,
+      })
+      .mockResolvedValueOnce({
+        status: 'IN_PROGRESS',
+        claimedByStaffProfileId: winner,
+        claimedAt: new Date(),
       });
     db.restaurantStaffProfile.findFirst.mockResolvedValue({
       id: 'staff_1',
@@ -262,16 +385,12 @@ describe('claim', () => {
     db.restaurantStaffJobRole.findMany.mockResolvedValue([
       { staffProfileId: 'staff_1', staffProfile: { id: 'staff_1', status: 'ACTIVE' } },
     ]);
-    db.restaurantSopOccurrence.updateMany.mockResolvedValue({ count: 1 });
 
     await expect(caller().claim({ occurrenceId: OCC_ID })).resolves.toMatchObject({
-      status: 'CLAIMED',
-      claimedByStaffProfileId: 'staff_1',
+      status,
+      claimedByStaffProfileId: winner,
     });
-    expect(db.restaurantSopOccurrence.updateMany).toHaveBeenCalledWith({
-      where: { id: OCC_ID, claimedByStaffProfileId: null },
-      data: { claimedByStaffProfileId: 'staff_1', claimedAt: expect.any(Date) },
-    });
+    expect(mocks.annotateAudit).not.toHaveBeenCalled();
   });
 });
 

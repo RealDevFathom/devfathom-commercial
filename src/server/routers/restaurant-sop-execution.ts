@@ -169,7 +169,7 @@ async function executionScope(ctx: TRPCContext, branchId: string) {
     where: { userId: user.id, status: 'ACTIVE' },
     select: {
       id: true,
-      jobRoles: { where: { branchId }, select: { jobRoleId: true } },
+      jobRoles: { where: { branchId, jobRole: { active: true } }, select: { jobRoleId: true } },
     },
   });
   return {
@@ -491,7 +491,7 @@ export const restaurantSopExecutionRouter = router({
       assertSopDepth(ctx.entitlements, 'sop.execution');
       const occurrence = await ctx.db.restaurantSopOccurrence.findUnique({
         where: { id: input.occurrenceId },
-        select: { branchId: true, status: true },
+        select: { branchId: true, status: true, poolJobRoleId: true },
       });
       if (!occurrence) throw new TRPCError({ code: 'NOT_FOUND', message: 'Occurrence not found.' });
       if (!['SCHEDULED', 'REJECTED'].includes(occurrence.status)) {
@@ -507,10 +507,21 @@ export const restaurantSopExecutionRouter = router({
           message: 'An active staff profile linked to your account is required to claim SOP work.',
         });
       }
+      if (!occurrence.poolJobRoleId || !scope.jobRoleIds.includes(occurrence.poolJobRoleId)) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'You are not eligible for this role-pool occurrence.',
+        });
+      }
       const outcome = await claimSopOccurrence(ctx.db, input.occurrenceId, scope.staffProfileId);
       if (outcome.status === 'NOT_CLAIMABLE') {
         throw new TRPCError({
-          code: outcome.reason === 'NOT_FOUND' ? 'NOT_FOUND' : 'FORBIDDEN',
+          code:
+            outcome.reason === 'NOT_FOUND'
+              ? 'NOT_FOUND'
+              : outcome.reason === 'INVALID_STATE'
+                ? 'CONFLICT'
+                : 'FORBIDDEN',
           message:
             outcome.reason === 'NOT_ELIGIBLE'
               ? 'You are not eligible for this role-pool occurrence.'
