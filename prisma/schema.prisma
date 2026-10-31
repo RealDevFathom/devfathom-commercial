@@ -11535,6 +11535,8 @@ model PlatformAuditLog {
 enum PharmacyMigrationSourceKind {
   ABUZAR
   EXCEL_CSV
+  TALLY_XML
+  MARG_EXCEL
 }
 
 enum PharmacyMigrationBatchStatus {
