@@ -27,10 +27,8 @@ import { beforeAll, describe, expect, it } from 'vitest';
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-const TEST_DATABASE_URL =
-  process.env.M8_TEST_RUNTIME_DATABASE_URL ??
-  process.env.TEST_DATABASE_URL ??
-  process.env.DATABASE_URL;
+// Fixtures commit writes; only an explicit test URL may enable this suite.
+const TEST_DATABASE_URL = process.env.M8_TEST_RUNTIME_DATABASE_URL ?? process.env.TEST_DATABASE_URL;
 if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
 process.env.PLATFORM_ENCRYPTION_KEY ??= randomBytes(32).toString('base64');
 
