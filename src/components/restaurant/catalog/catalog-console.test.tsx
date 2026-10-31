@@ -11,6 +11,9 @@ const mocks = vi.hoisted(() => ({
     isError: true,
     refetch: vi.fn(),
   },
+  createProduct: vi.fn(),
+  addRecipeLineSubstitute: vi.fn(),
+  removeRecipeLineSubstitute: vi.fn(),
   mutate: vi.fn(),
   invalidate: vi.fn(),
   refresh: vi.fn(),
@@ -29,7 +32,19 @@ vi.mock('@/lib/trpc', () => ({
         get: (target, procedure: string) =>
           procedure in target
             ? target[procedure as keyof typeof target]
-            : { useMutation: () => ({ mutate: mocks.mutate, isPending: false }) },
+            : {
+                useMutation: () => ({
+                  mutate:
+                    procedure === 'createProduct'
+                      ? mocks.createProduct
+                      : procedure === 'addRecipeLineSubstitute'
+                        ? mocks.addRecipeLineSubstitute
+                        : procedure === 'removeRecipeLineSubstitute'
+                          ? mocks.removeRecipeLineSubstitute
+                          : mocks.mutate,
+                  isPending: false,
+                }),
+              },
       }
     ),
   },
@@ -207,13 +222,64 @@ describe('RestaurantCatalogConsole gap recovery flows', () => {
     });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Add product' }));
 
-    expect(mocks.mutate).toHaveBeenCalledWith({
+    expect(mocks.createProduct).toHaveBeenCalledWith({
       name: 'House burger',
       description: null,
       categoryId: null,
       sortOrder: 0,
       type: 'COMBO',
     });
+  });
+
+  it('creates a plain catalog item through the existing router', () => {
+    renderCatalog();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Add product' })[0]!);
+    const dialog = screen.getByRole('dialog', { name: 'Add product' });
+    fireEvent.change(within(dialog).getByLabelText('Product name'), {
+      target: { value: 'House burger' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('Description'), {
+      target: { value: 'Beef and pickles' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add product' }));
+
+    expect(mocks.createProduct).toHaveBeenCalledWith({
+      name: 'House burger',
+      description: 'Beef and pickles',
+      categoryId: null,
+      sortOrder: 0,
+      type: 'ITEM',
+    });
+  });
+
+  it('shows recipe costs, branch food-cost percentage, and missing ingredients', () => {
+    Object.assign(mocks.recipeCost, {
+      data: {
+        batchCost: '12',
+        costPerPortion: '3',
+        costPerYieldUnit: '6',
+        missing: ['Truffle'],
+        priceComparisons: [
+          {
+            branchId: 'branch_1',
+            branchName: 'Downtown',
+            price: '10',
+            foodCostPercent: '30',
+          },
+        ],
+      },
+      isError: false,
+    });
+    renderCatalog();
+    fireEvent.click(screen.getByRole('tab', { name: /Recipes/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Manage versions' }));
+
+    expect(screen.getByText('12')).toBeInTheDocument();
+    expect(screen.getByText('3')).toBeInTheDocument();
+    expect(screen.getByText('6')).toBeInTheDocument();
+    expect(screen.getByText('Missing cost')).toBeInTheDocument();
+    expect(screen.getByText('Truffle')).toBeInTheDocument();
+    expect(screen.getByText('30% at 10')).toBeInTheDocument();
   });
 
   it('shows existing combo choice cardinality, components, price delta, and authoring actions', () => {
@@ -236,13 +302,13 @@ describe('RestaurantCatalogConsole gap recovery flows', () => {
     const substitutePicker = screen.getByLabelText('Approved substitute ingredient');
     fireEvent.change(substitutePicker, { target: { value: 'ingredient_3' } });
     fireEvent.submit(substitutePicker.closest('form')!);
-    expect(mocks.mutate).toHaveBeenCalledWith({
+    expect(mocks.addRecipeLineSubstitute).toHaveBeenCalledWith({
       recipeLineId: 'line_1',
       substituteIngredientId: 'ingredient_3',
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'Remove Rice flour' }));
-    expect(mocks.mutate).toHaveBeenCalledWith({ id: 'substitute_1' });
+    expect(mocks.removeRecipeLineSubstitute).toHaveBeenCalledWith({ id: 'substitute_1' });
   });
 
   it('preserves the actionable costing error and directs the operator to corrective catalog data', () => {
