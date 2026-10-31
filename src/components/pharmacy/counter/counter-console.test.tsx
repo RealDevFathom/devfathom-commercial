@@ -1555,6 +1555,45 @@ describe('PharmacyCounterConsole barcode safety', () => {
     );
   });
 
+  it('retries the same barcode on a new branch while the cancelled lookup is still pending', async () => {
+    let resolveOldSearch!: (value: unknown) => void;
+    mocks.searchQuery.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveOldSearch = resolve;
+        })
+    );
+    mocks.searchQuery.mockResolvedValue({
+      rows: [barcodeRow({ medicineId: 'branch-b-medicine', displayName: 'Branch B medicine' })],
+      truncated: false,
+    });
+    mocks.mutations.create!.mockResolvedValue({ id: 'sale-b' });
+    mocks.queries.counterBranches = query({
+      branches: [
+        { id: 'branch-a', name: 'A' },
+        { id: 'branch-b', name: 'B' },
+      ],
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    scan();
+    await waitFor(() => expect(mocks.searchQuery).toHaveBeenCalledTimes(1));
+    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch-b' } });
+    scan();
+    await waitFor(() =>
+      expect(mocks.searchQuery).toHaveBeenLastCalledWith(
+        { branchId: 'branch-b', query: '123456' },
+        { staleTime: 10_000 }
+      )
+    );
+    await screen.findByText('1 × Branch B medicine added.');
+    await act(async () => {
+      resolveOldSearch({ rows: [barcodeRow()], truncated: false });
+    });
+    expect(mocks.mutations.addLine).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ medicineId: 'branch-b-medicine' })
+    );
+  });
+
   it('shows lookup failures and releases the scan field for a retry', async () => {
     mocks.searchQuery.mockRejectedValueOnce(new Error('Search unavailable.'));
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);

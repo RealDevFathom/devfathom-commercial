@@ -298,7 +298,9 @@ function ScopedPharmacyCounterConsole({
   const [submittedSearch, setSubmittedSearch] = useState({ text: '', query: '', branchId: '' });
   const submittedQuery = submittedSearch.query;
   const scannerRevision = useRef(0);
-  const scannerInFlight = useRef<{ text: string } | null>(null);
+  const scannerInFlight = useRef<{ text: string; branchId: string; revision: number } | null>(
+    null
+  );
   const [activeRow, setActiveRow] = useState<CounterSearchRow | null>(null);
   const [saleUnit, setSaleUnit] = useState<SaleUnitKind | null>(null);
   const [quantity, setQuantity] = useState(1);
@@ -1017,12 +1019,24 @@ function ScopedPharmacyCounterConsole({
 
   const addBarcode = useCallback(
     async (submittedQuery?: string) => {
-      const scan = { text: (submittedQuery ?? query).trim() };
-      if (busy || scannerInFlight.current?.text === scan.text) return;
+      const scan = { text: (submittedQuery ?? query).trim(), branchId, revision: -1 };
+      const inFlight = scannerInFlight.current;
+      // A lock only suppresses duplicates of a scan that is still live; a branch switch or
+      // other invalidation bumps the revision so the operator's retry is not swallowed.
+      if (
+        busy ||
+        (inFlight?.text === scan.text &&
+          inFlight.branchId === scan.branchId &&
+          inFlight.revision === scannerRevision.current)
+      )
+        return;
       scannerInFlight.current = scan;
       let revision: number | undefined;
       try {
-        const search = await runSearch(submittedQuery);
+        const searching = runSearch(submittedQuery);
+        // runSearch claims its revision synchronously, before its first await.
+        scan.revision = scannerRevision.current;
+        const search = await searching;
         if (!search || search.blocked) return;
         revision = search.revision;
         const result = await utils.pharmacySales.counterSearch.fetch(
