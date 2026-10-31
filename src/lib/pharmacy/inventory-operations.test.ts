@@ -39,7 +39,7 @@ function database(witness: { id: string } | null) {
 }
 
 describe('writeOff witness validation', () => {
-  it('requires the witness to be an active user in the current tenant', async () => {
+  it('requires an active tenant witness with an active assignment to the current branch', async () => {
     const db = database(null);
 
     await expect(writeOff(db as unknown as ScopedDb, scope, input)).rejects.toMatchObject({
@@ -51,6 +51,13 @@ describe('writeOff witness validation', () => {
         id: input.witnessId,
         organizationId: scope.organizationId,
         status: 'ACTIVE',
+        pharmacyBranchAssignments: {
+          some: {
+            organizationId: scope.organizationId,
+            branchId: scope.branchId,
+            active: true,
+          },
+        },
       },
       select: { id: true },
     });
@@ -59,7 +66,20 @@ describe('writeOff witness validation', () => {
     expect(db.pharmacyCustodyRecord.create).not.toHaveBeenCalled();
   });
 
-  it('records the write-off when the tenant-scoped witness is active', async () => {
+  it('rejects self-witnessing before querying or writing stock', async () => {
+    const db = database({ id: scope.actorId });
+
+    await expect(
+      writeOff(db as unknown as ScopedDb, scope, { ...input, witnessId: scope.actorId })
+    ).rejects.toMatchObject({ reason: 'COAUTH_REQUIRED' });
+
+    expect(db.user.findFirst).not.toHaveBeenCalled();
+    expect(db.pharmacyInventoryLot.findFirst).not.toHaveBeenCalled();
+    expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
+    expect(db.pharmacyCustodyRecord.create).not.toHaveBeenCalled();
+  });
+
+  it('records the write-off when the active tenant witness is assigned to the branch', async () => {
     const db = database({ id: input.witnessId });
 
     await expect(writeOff(db as unknown as ScopedDb, scope, input)).resolves.toEqual({

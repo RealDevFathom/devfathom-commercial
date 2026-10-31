@@ -319,12 +319,20 @@ export const dashboardRouter = router({
   }),
 
   getMyTasks: protectedProcedure.query(async ({ ctx }) => {
+    const isAdmin = ctx.session.user.role === 'ADMIN';
     const userId = ctx.session.user.id;
 
     return ctx.db.task.findMany({
       where: {
         assignees: { some: { userId } },
-        column: { name: { not: 'Done' } },
+        column: {
+          name: { not: 'Done' },
+          // Assignee rows can outlive a cross-project move performed by an old
+          // client or integration. Do not let that stale relationship disclose
+          // the destination project through the dashboard. Organization admins
+          // retain their existing all-project capability.
+          ...(isAdmin ? {} : { board: { project: { members: { some: { userId } } } } }),
+        },
       },
       include: {
         column: {
