@@ -7,6 +7,7 @@ const fake = vi.hoisted(() => ({
 }));
 
 vi.mock('./customer-ordering', () => ({ placeCustomerOrder: vi.fn() }));
+vi.mock('./sales', () => ({ changeSaleStatus: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('./rx-sale-gate', () => ({
   assertRxSaleAllowed: vi.fn().mockResolvedValue(undefined),
   PharmacyRxSaleDenied: class PharmacyRxSaleDenied extends Error {},
@@ -25,6 +26,7 @@ vi.mock('@/lib/tenancy/scoped-db', () => ({
 }));
 
 import { placeCustomerOrder } from './customer-ordering';
+import { changeSaleStatus } from './sales';
 import { assertRxSaleAllowed, PharmacyRxSaleDenied } from './rx-sale-gate';
 import {
   chronicRefillReminderText,
@@ -149,7 +151,7 @@ describe('chronic refill cycles', () => {
     const database = db([
       [subscription],
       [],
-      [{ id: 'approval-1', canonicalUnits: 10 }],
+      [{ id: 'approval-1', canonicalUnits: 10, saleId: 'review-sale-1' }],
       [allowance()],
     ]);
     vi.mocked(placeCustomerOrder).mockResolvedValueOnce({ id: 'order-1' } as never);
@@ -183,17 +185,37 @@ describe('chronic refill cycles', () => {
     // Bound to this cycle: signed after the subscription/previous cycle, on a sale that never
     // completed or filled, and locked so that sale cannot complete concurrently.
     expect(approvalQuery).toContain('decision."createdAt" >= COALESCE(');
-    expect(approvalQuery).toContain(`sale."status" <> 'COMPLETED'`);
+    expect(approvalQuery).toContain(`sale."status" IN ('OPEN', 'HELD')`);
+    expect(approvalQuery).toContain('FROM "pharmacy_tenders" tender');
     expect(approvalQuery).toContain('"pharmacy_prescription_fills" fill');
     expect(approvalQuery).toContain('FOR UPDATE OF sale');
     const allowanceQuery = sqlText(database.$queryRaw.mock.calls[3]?.[0]);
     expect(allowanceQuery).toContain('customer."id" =');
     expect(allowanceQuery).toContain('"pendingUnits"');
     expect(sqlValues(database.$executeRaw.mock.calls[0]?.[0])).toContain('approval-1');
+    expect(changeSaleStatus).toHaveBeenLastCalledWith(database, scope, 'review-sale-1', 'void',
+      expect.stringContaining(subscription.id));
+    expect(vi.mocked(changeSaleStatus).mock.invocationCallOrder.at(-1)!).toBeLessThan(
+      vi.mocked(placeCustomerOrder).mock.invocationCallOrder.at(-1)!
+    );
     expect(result).toEqual({
       order: { id: 'order-1' },
       nextDueAt: new Date('2026-11-28T00:00:00.000Z'),
     });
+  });
+
+  it('resumes and reverses a held review sale in the same release transaction', async () => {
+    const database = db([[subscription], [], [{ id: 'approval-held', canonicalUnits: 10,
+      saleId: 'review-held', saleStatus: 'HELD' }], [allowance()]]);
+    const before = vi.mocked(changeSaleStatus).mock.calls.length;
+    vi.mocked(placeCustomerOrder).mockResolvedValueOnce({ id: 'order-held' } as never);
+    await createDueChronicRefillOrder(database as never, scope, {
+      subscriptionId: subscription.id, pharmacistDecisionId: 'approval-held', now: subscription.nextDueAt,
+    });
+    expect(vi.mocked(changeSaleStatus).mock.calls.slice(before)).toEqual([
+      [database, scope, 'review-held', 'resume'],
+      [database, scope, 'review-held', 'void', expect.stringContaining(subscription.id)],
+    ]);
   });
 
   it.each([
@@ -204,7 +226,7 @@ describe('chronic refill cycles', () => {
     const database = db([
       [subscription],
       [],
-      [{ id: 'approval-1', canonicalUnits: 10 }],
+      [{ id: 'approval-1', canonicalUnits: 10, saleId: 'review-sale-1' }],
       [remaining],
     ]);
     await expect(

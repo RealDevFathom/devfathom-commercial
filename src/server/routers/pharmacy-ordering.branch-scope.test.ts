@@ -16,12 +16,22 @@ vi.mock('@/server/audit', () => ({
   ipFromHeaders: vi.fn(() => null),
   isAuditExcludedPath: vi.fn(() => false),
   recordTrpcAudit: vi.fn(),
+  annotateAudit: vi.fn(),
 }));
 vi.mock('@/lib/pharmacy/customer-delivery', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/pharmacy/customer-delivery')>()),
   recordDeliveryCommand: vi.fn(),
 }));
 
+vi.mock('@/lib/pharmacy/chronic-refill-owner-approval', () => ({ approveChronicRefillAsOwner: vi.fn() }));
+vi.mock('@/lib/pharmacy/chronic-refills', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/pharmacy/chronic-refills')>()),
+  createDueChronicRefillOrder: vi.fn(),
+}));
+
+import { approveChronicRefillAsOwner } from '@/lib/pharmacy/chronic-refill-owner-approval';
+import { createDueChronicRefillOrder } from '@/lib/pharmacy/chronic-refills';
+import { annotateAudit } from '@/server/audit';
 import { recordDeliveryCommand } from '@/lib/pharmacy/customer-delivery';
 import { router, type TRPCContext } from '../trpc';
 import { pharmacyOrderingRouter } from './pharmacy-ordering';
@@ -104,5 +114,35 @@ describe('pharmacyOrdering.deliveryCommand: the branch in the input', () => {
       { organizationId: 'org-1', branchId: BRANCH, actorId: 'actor-1' },
       remittance
     );
+  });
+});
+
+
+describe('pharmacyOrdering owner PIN release', () => {
+  const input = {
+    branchId: BRANCH, subscriptionId: 'subscription-1',
+    ownerApproval: { reviewItemId: 'review-1', staffProfileId: 'owner-staff',
+      pinSecret: '872641', reason: 'Reviewed the current refill' },
+  };
+
+  it('returns a PIN denial normally so the owning request can commit lockout counters', async () => {
+    db.pharmacyBranch.findMany.mockResolvedValue([{ id: BRANCH }]);
+    vi.mocked(approveChronicRefillAsOwner).mockResolvedValueOnce({ blocked: true });
+    await expect(caller().createDueChronicRefillOrder(input)).resolves.toEqual({ blocked: 'Owner PIN approval refused.' });
+    expect(annotateAudit).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ skipInput: true }));
+  });
+
+  it('releases using the verified signature inside the same transaction', async () => {
+    db.pharmacyBranch.findMany.mockResolvedValue([{ id: BRANCH }]);
+    vi.mocked(approveChronicRefillAsOwner).mockResolvedValueOnce({ decisionId: 'verified-owner-signature' });
+    vi.mocked(createDueChronicRefillOrder).mockResolvedValueOnce({ order: { id: 'order-owner' }, nextDueAt: new Date() } as never);
+    await caller().createDueChronicRefillOrder(input);
+    expect(approveChronicRefillAsOwner).toHaveBeenLastCalledWith(db,
+      { organizationId: 'org-1', branchId: BRANCH, actorId: 'actor-1' },
+      expect.objectContaining({ pin: input.ownerApproval.pinSecret }));
+    expect(createDueChronicRefillOrder).toHaveBeenLastCalledWith(db,
+      { organizationId: 'org-1', branchId: BRANCH, actorId: 'actor-1' },
+      { subscriptionId: input.subscriptionId, pharmacistDecisionId: 'verified-owner-signature' });
+    expect(db.$transaction).toHaveBeenCalledOnce();
   });
 });

@@ -122,6 +122,34 @@ async function seedTenant(db: ScopedDb, organizationId: string, status: string) 
   );
 }
 
+/** Refill rows must be removed before their customer, item, order and branch parents. */
+async function seedChronicRefill(organizationId: string, branchId: string) {
+  await withTenantDb(organizationId, async (db) => {
+    await db.organizationDepartment.create({ data: { organizationId, key: 'REFILL', name: 'Refill' } });
+    const actor = await db.user.create({ data: { organizationId, name: 'Refill owner',
+      email: `${organizationId}@example.test`, department: 'REFILL', title: 'Owner' } });
+    const medicine = await db.medicine.create({ data: { organizationId, productName: 'Purge fixture',
+      productFamily: 'PHARMACEUTICAL', otc: true, saleable: true,
+      presentations: { create: { organizationId, presentation: 'Tablets' } } }, include: { presentations: true } });
+    const presentationId = medicine.presentations[0]!.id;
+    const pack = await db.packLevel.create({ data: { organizationId, presentationId, versionGroupId: `pack_${organizationId}`,
+      version: 1, level: 'STRIP', unitsPerParent: 10, effectiveFrom: new Date() } });
+    const patient = await db.pharmacyPatient.create({ data: { organizationId, displayName: 'Purge fixture' } });
+    const customer = await db.pharmacyCustomer.create({ data: { organizationId, patientId: patient.id, displayName: 'Purge fixture' } });
+    const order = await db.pharmacyCustomerOrder.create({ data: { organizationId, branchId, customerId: customer.id,
+      placedByUserId: actor.id, fulfillment: 'COLLECT', intendedPaymentMethod: 'CREDIT', reservationExpiresAt: new Date() } });
+    const subscriptionId = `refill_${organizationId}`;
+    await db.pharmacyChronicRefillSubscription.create({ data: { id: subscriptionId, organizationId, branchId,
+      customerId: customer.id, medicineId: medicine.id, presentationId, packLevelId: pack.id,
+      quantityPacks: 1, fulfillment: 'COLLECT', paymentMode: 'KHATA', cadenceDays: 30,
+      nextDueAt: new Date(), createdByUserId: actor.id } });
+    await db.pharmacyChronicRefillCycle.create({ data: { id: `cycle_${organizationId}`, organizationId, branchId,
+      subscriptionId, orderId: order.id, dueAt: new Date(), createdByUserId: actor.id } });
+    await db.pharmacyChronicRefillEvent.create({ data: { id: `refill_event_${organizationId}`, organizationId, branchId,
+      subscriptionId, kind: 'PAUSE', actorUserId: actor.id } });
+  });
+}
+
 async function seedRegulatoryProfile(
   db: ScopedDb,
   id: string,
@@ -244,6 +272,8 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
         JOB_ID
       );
     });
+    await seedChronicRefill(PURGED_ORG, BRANCH_ID);
+    await seedChronicRefill(LIVE_ORG, LIVE_BRANCH_ID);
   }, 60_000);
 
   it('purges a pharmacy tenant that has confirmed an onboarding step', async () => {
@@ -316,6 +346,13 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
       })
     );
     expect(organization.status).toBe('PURGED');
+    for (const [tenantId, expected] of [[PURGED_ORG, 0], [LIVE_ORG, 1]] as const) {
+      expect(await withTenantDb(tenantId, async (db) => [
+        await db.pharmacyChronicRefillSubscription.count({ where: { organizationId: tenantId } }),
+        await db.pharmacyChronicRefillCycle.count({ where: { organizationId: tenantId } }),
+        await db.pharmacyChronicRefillEvent.count({ where: { organizationId: tenantId } }),
+      ])).toEqual([expected, expected, expected]);
+    }
   });
 
   it('keeps regulatory profiles append-only outside the exact purge context', async () => {

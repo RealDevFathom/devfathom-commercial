@@ -1,4 +1,6 @@
 import { TRPCError } from '@trpc/server';
+import { annotateAudit } from '@/server/audit';
+import { approveChronicRefillAsOwner } from '@/lib/pharmacy/chronic-refill-owner-approval';
 import { z } from 'zod';
 
 import { can, subjectFromSession } from '@/lib/abac';
@@ -168,14 +170,48 @@ export const pharmacyOrderingRouter = router({
           branchId,
           subscriptionId: z.string().min(1),
           pharmacistDecisionId: z.string().min(1).optional(),
+          ownerApproval: z
+            .object({
+              reviewItemId: z.string().min(1),
+              staffProfileId: z.string().min(1),
+              // The secret name also redacts denied requests before this resolver runs.
+              pinSecret: z.string().regex(/^\d{4,8}$/),
+              reason: z.string().trim().min(3).max(500),
+            })
+            .strict()
+            .optional(),
         })
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await ctx.db.$transaction(async (tx) =>
-          createDueChronicRefillOrder(txDb(tx), await scopeFor(ctx, input.branchId), input)
-        );
+        annotateAudit(ctx, {
+          action: 'pharmacy.chronicRefill.release',
+          targetType: 'PharmacyChronicRefillSubscription',
+          targetId: input.subscriptionId,
+          skipInput: true,
+        });
+        const result = await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          const scope = await scopeFor(ctx, input.branchId);
+          let pharmacistDecisionId = input.pharmacistDecisionId;
+          if (input.ownerApproval) {
+            if (pharmacistDecisionId) throw new TRPCError({ code: 'BAD_REQUEST' });
+            const approval = await approveChronicRefillAsOwner(db, scope, {
+              ...input.ownerApproval,
+              pin: input.ownerApproval.pinSecret,
+              subscriptionId: input.subscriptionId,
+            });
+            if ('blocked' in approval) return approval;
+            pharmacistDecisionId = approval.decisionId;
+          }
+          return createDueChronicRefillOrder(db, scope, {
+            subscriptionId: input.subscriptionId, pharmacistDecisionId,
+          });
+        });
+        // Return a denial so the request's owning tenant transaction commits PIN lockout counters.
+        if ('blocked' in result) return { blocked: 'Owner PIN approval refused.' };
+        return result;
       } catch (error) {
         fail(error);
       }

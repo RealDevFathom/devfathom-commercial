@@ -15,6 +15,7 @@ import { firstCloseIsFinal } from './migration/first-close';
 import { assertSaleBatchesSellable } from './sale-batch-safety';
 import { completePaidPharmacySale, completionSaleInclude } from './sale-completion';
 import { assertRxSaleAllowed } from './rx-sale-gate';
+import { assertChronicRefillReviewCurrent } from './chronic-refill-review';
 import type { LedgerScope } from './stock-ledger';
 import { paymentSandboxAdmitted } from './payment-sandbox-admission';
 import { authenticatePharmacyCommand, validateLeasedReceiptReplay } from './sales';
@@ -307,6 +308,9 @@ export async function applyPharmacyTender(
   // #633: before any lease, provider charge, tender or posting. A batch recalled,
   // quarantined or expired since add-to-cart refuses the payment.
   await assertSaleBatchesSellable(db, scope, sale.id);
+  // Reject a revoked refill before charging a provider or recording any tender.
+  if (sale.customerOrder)
+    await assertChronicRefillReviewCurrent(db, scope, sale.customerOrder.id);
   const totalMinor = saleTotalMinor(sale.lines);
   const tenderedMinor = sale.tenders.reduce((sum, tender) => sum + tender.amountMinor, 0);
   if (input.amountMinor > totalMinor - tenderedMinor)

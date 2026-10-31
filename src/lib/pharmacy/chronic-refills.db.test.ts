@@ -12,6 +12,7 @@ import {
   createDueChronicRefillOrder,
   listChronicRefillSubscriptions,
   processDueChronicRefills,
+  updateChronicRefillSubscription,
 } from './chronic-refills';
 import { writePatientConsent } from './consent-writer';
 import {
@@ -20,6 +21,9 @@ import {
   transitionCustomerOrder,
 } from './customer-ordering';
 import { addSaleLine, createSale } from './sales';
+import { applyPharmacyTender } from './settlement';
+import { approveChronicRefillAsOwner } from './chronic-refill-owner-approval';
+import { hashOperatorCredential } from '@/lib/restaurant/operator-credentials';
 import { receiveLot } from './stock-ledger';
 import { MockWhatsAppProvider, readWhatsAppConfig } from './whatsapp/provider';
 import { processDueWhatsAppRefillReminders } from './whatsapp/refill-reminders';
@@ -444,11 +448,172 @@ describeIfDatabase('chronic refill runtime regressions', () => {
     ).rejects.toMatchObject({ reason: 'RESERVATION_UNAVAILABLE' });
   });
 
+  it('releases a reviewed pack without consuming another pack or leaving the review sale open', async () => {
+    const subscription = await subscribe(rx, { prescriptionLineId });
+    const stock = () => tenant((db) => db.$queryRaw<{ units: number }[]>`
+      SELECT SUM(balance."onHandUnits")::integer AS units FROM pharmacy_stock_balances balance
+      JOIN pharmacy_inventory_lots lot ON lot."organizationId" = balance."organizationId" AND lot.id = balance."inventoryLotId"
+      WHERE balance."organizationId" = ${organizationId} AND balance."branchId" = ${branchId}
+        AND lot."packLevelId" = ${rx.packLevelId}
+    `);
+    const before = (await stock())[0]!.units;
+    const approval = await approveRx();
+    expect((await stock())[0]!.units).toBe(before - 10);
+    const { order } = await tenant((db) => createDueChronicRefillOrder(db, scope, {
+      subscriptionId: subscription.id, pharmacistDecisionId: approval.id, now,
+    }));
+    expect((await stock())[0]!.units).toBe(before);
+    expect(await tenant((db) => db.pharmacySale.findUnique({ where: { id: approval.saleId } })))
+      .toMatchObject({ status: 'VOID' });
+    const reservations = await tenant((db) => db.pharmacyRestockReservation.findMany({
+      where: { interest: { orderLine: { orderId: order!.id } }, status: 'RESERVED' },
+    }));
+    expect(reservations.reduce((sum, row) => sum + row.reservedUnits, 0)).toBe(10);
+  });
+
+  it.each([
+    ['before-handoff', 'COLLECT'], ['before-handoff', 'DELIVER'],
+    ['after-checkout', 'COLLECT'], ['after-checkout', 'DELIVER'],
+  ] as const)('honors a refusal %s for %s', async (stage, fulfillment) => {
+    const subscription = await subscribe(rx, { prescriptionLineId, fulfillment,
+      ...(fulfillment === 'DELIVER' ? { addressLine: '1 Test', city: 'Lahore' } : {}),
+    });
+    const approval = await approveRx();
+    const { order } = await tenant((db) => createDueChronicRefillOrder(db, scope, {
+      subscriptionId: subscription.id, pharmacistDecisionId: approval.id, now,
+    }));
+    for (const action of ['accept', 'pack'] as const)
+      await tenant((db) => transitionCustomerOrder(db, scope, { orderId: order!.id, action }));
+    const handoff = { orderId: order!.id, runnerUserId: actorId,
+      action: fulfillment === 'DELIVER' ? 'dispatch' as const : 'ready' as const };
+    let saleId: string | undefined;
+    if (stage === 'after-checkout') {
+      await tenant((db) => transitionCustomerOrder(db, scope, handoff));
+      saleId = (await tenant((db) => startCustomerOrderCheckout(db, scope, order!.id))).saleId;
+    }
+    await tenant((db) => db.pharmacyPharmacistReviewDecision.create({ data: {
+      organizationId, reviewItemId: approval.reviewItemId, kind: 'REFUSE', actorUserId: actorId,
+      reason: 'Stop this dispense',
+    } }));
+    if (saleId) {
+      await expect(tenant((db) => applyPharmacyTender(db, scope, {
+        saleId: saleId!, deviceId: `refill_device_${suffix}`, businessDate: now,
+        type: 'BANK_TRANSFER', amountMinor: 2000, idempotencyKey: randomUUID(),
+      }))).rejects.toThrow(/refused/);
+      await expect(tenant((db) => db.$executeRaw`
+        UPDATE pharmacy_sales SET status = 'COMPLETED' WHERE id = ${saleId}
+      `)).rejects.toThrow(/refused/);
+      await expect(tenant((db) => db.$executeRaw`
+        UPDATE pharmacy_customer_orders SET status = 'COMPLETED' WHERE id = ${order!.id}
+      `)).rejects.toThrow(/refused/);
+      await expect(tenant((db) => startCustomerOrderCheckout(db, scope, order!.id))).rejects.toThrow(/refused/);
+    } else {
+      await expect(tenant((db) => transitionCustomerOrder(db, scope, handoff))).rejects.toMatchObject({ reason: 'RESERVATION_UNAVAILABLE' });
+    }
+  });
+
+  it('requires owner PIN reauthentication and immutable audit for requester self-approval', async () => {
+    const subscription = await subscribe(rx, { prescriptionLineId });
+    const original = await tenant((db) => db.user.findUniqueOrThrow({ where: { id: actorId } }));
+    const credentialHash = await hashOperatorCredential('PIN', '812679');
+    const { staff, credential, review } = await tenant(async (db) => {
+      const role = await db.organizationRole.create({ data: {
+        organizationId, key: 'owner-operator', name: 'Owner operator',
+        permissions: { create: [{ organizationId, capability: 'pharmacy:dispense', effect: 'ALLOW' }] },
+      } });
+      await db.user.update({ where: { id: actorId }, data: { organizationRoleId: role.id } });
+      const staff = await db.restaurantStaffProfile.create({ data: { organizationId, userId: actorId, displayName: 'Solo owner' } });
+      const credential = await db.restaurantOperatorCredential.create({ data: {
+        organizationId, staffProfileId: staff.id, type: 'PIN', credentialHash,
+      } });
+      const sale = await createSale(db, scope);
+      const { line } = await addSaleLine(db, scope, {
+        saleId: sale.id, ...rx, saleUnit: 'PACK', quantity: 1,
+        canonicalUnitsPerSaleUnit: 10, idempotencyKey: randomUUID(),
+      });
+      const review = await db.pharmacyPharmacistReviewItem.create({ data: {
+        organizationId, prescriptionLineId, saleLineId: line.id, requestedByUserId: actorId,
+      } });
+      return { staff, credential, review };
+    });
+    try {
+      await expect(tenant((db) => db.pharmacyPharmacistReviewDecision.create({ data: {
+        organizationId, reviewItemId: review.id, kind: 'SIGN', actorUserId: actorId, signedAt: new Date(),
+      } }))).rejects.toThrow(/cannot approve/);
+      const input = { subscriptionId: subscription.id, reviewItemId: review.id,
+        staffProfileId: staff.id, reason: 'Owner reviewed this refill', pin: '000000' };
+      expect(await tenant((db) => approveChronicRefillAsOwner(db, scope, input))).toEqual({ blocked: true });
+      expect(await tenant((db) => db.restaurantOperatorCredential.findUnique({ where: { id: credential.id } })))
+        .toMatchObject({ failedAttempts: 1 });
+      const released = await tenant(async (db) => {
+        const approval = await approveChronicRefillAsOwner(db, scope, { ...input, pin: '812679' });
+        if ('blocked' in approval) throw new Error('Owner approval unexpectedly refused');
+        return createDueChronicRefillOrder(db, scope, {
+          subscriptionId: subscription.id, pharmacistDecisionId: approval.decisionId, now,
+        });
+      });
+      expect(released.order).toBeTruthy();
+      const events = await tenant((db) => db.$queryRaw<{ kind: string; details: unknown }[]>`
+        SELECT kind, details FROM pharmacy_chronic_refill_events WHERE "subscriptionId" = ${subscription.id}
+      `);
+      expect(events).toEqual([expect.objectContaining({ kind: 'OWNER_PIN_APPROVED' })]);
+      expect(JSON.stringify(events)).not.toContain('812679');
+    } finally {
+      await tenant((db) => db.user.update({ where: { id: actorId }, data: { organizationRoleId: original.organizationRoleId } }));
+    }
+  });
+
+  it('keeps refill history immutable outside the named platform purge', async () => {
+    const subscription = await subscribe(otc);
+    await tenant((db) => createDueChronicRefillOrder(db, scope, { subscriptionId: subscription.id, now }));
+    await tenant((db) => updateChronicRefillSubscription(db, scope, { subscriptionId: subscription.id, action: 'PAUSE' }));
+    for (const table of ['pharmacy_chronic_refill_cycles', 'pharmacy_chronic_refill_events']) {
+      await expect(tenant(async (db) => {
+        await db.$queryRaw`SELECT set_config('app.purging_organization_id', ${organizationId}, true)`;
+        await db.$executeRawUnsafe(`DELETE FROM "${table}" WHERE "subscriptionId" = $1`, subscription.id);
+      })).rejects.toThrow(/append-only/);
+      expect(await withPlatformDb((db) => db.$executeRawUnsafe(
+        `DELETE FROM "${table}" WHERE "subscriptionId" = $1`, subscription.id
+      ))).toBe(0);
+      expect(await withPlatformDb(async (db) => {
+        await db.$queryRaw`SELECT set_config('app.purging_organization_id', 'another-tenant', true)`;
+        return db.$executeRawUnsafe(`DELETE FROM "${table}" WHERE "subscriptionId" = $1`, subscription.id);
+      })).toBe(0);
+    }
+  });
+
+  it('requires received payment before a PREPAY delivery can dispatch', async () => {
+    const subscription = await subscribe(otc, {
+      fulfillment: 'DELIVER', addressLine: '1 Test', city: 'Lahore', paymentMode: 'PREPAY',
+    });
+    const { order } = await tenant((db) => createDueChronicRefillOrder(db, scope, { subscriptionId: subscription.id, now }));
+    for (const action of ['accept', 'pack'] as const)
+      await tenant((db) => transitionCustomerOrder(db, scope, { orderId: order!.id, action }));
+    const dispatch = () => tenant((db) => transitionCustomerOrder(db, scope, {
+      orderId: order!.id, action: 'dispatch', runnerUserId: actorId,
+    }));
+    await expect(dispatch()).rejects.toMatchObject({ reason: 'PREPAY_REQUIRED' });
+    const { saleId } = await tenant((db) => startCustomerOrderCheckout(db, scope, order!.id));
+    await expect(dispatch()).rejects.toMatchObject({ reason: 'PREPAY_REQUIRED' });
+    await tenant((db) => applyPharmacyTender(db, scope, {
+      saleId, deviceId: `refill_device_${suffix}`, businessDate: now,
+      type: 'BANK_TRANSFER', amountMinor: 1000, idempotencyKey: randomUUID(),
+    }));
+    await expect(dispatch()).rejects.toMatchObject({ reason: 'PREPAY_REQUIRED' });
+    await tenant((db) => applyPharmacyTender(db, scope, {
+      saleId, deviceId: `refill_device_${suffix}`, businessDate: now,
+      type: 'BANK_TRANSFER', amountMinor: 1000, idempotencyKey: randomUUID(),
+    }));
+    expect(await dispatch()).toMatchObject({ status: 'OUT_FOR_DELIVERY' });
+  });
+
   it('finds chronic reminders in platform scope and honors appended consent withdrawal', async () => {
     const due = new Date(now.getTime() + DAY);
-    await subscribe(otc, { nextDueAt: due, reminderConsentId: consentId });
+    const subscription = await subscribe(otc, { nextDueAt: due, reminderConsentId: consentId });
+    await tenant((db) => createDueChronicRefillOrder(db, scope, { subscriptionId: subscription.id, now }));
     const config = readWhatsAppConfig({
       PHARMACY_WHATSAPP_TEMPLATE_REFILL_REMINDER: 'neutral_due_v1',
+      PHARMACY_WHATSAPP_REMINDER_LEAD_DAYS: '1',
       PHARMACY_WHATSAPP_ORGANIZATION_ID: organizationId,
       PHARMACY_WHATSAPP_PHONE_NUMBER_ID: 'synthetic',
     });

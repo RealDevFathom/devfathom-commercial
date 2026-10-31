@@ -40,6 +40,7 @@ function message(error: { message: string }) {
     INVALID_STATE: 'That order has already moved to another stage. Refresh and try again.',
     RUNNER_REQUIRED: 'Assign a staff runner before dispatch.',
     SALE_NOT_COMPLETED: 'Complete the linked counter sale before completing this order.',
+    PREPAY_REQUIRED: 'Settle the linked counter sale in full before sending this prepaid delivery.',
   };
   return messages[error.message] ?? error.message;
 }
@@ -72,7 +73,11 @@ function OrderCard({
         : order.status === 'PACKING'
           ? order.fulfillment === 'COLLECT'
             ? 'ready'
-            : 'dispatch'
+            : order.intendedPaymentMethod === 'BANK_TRANSFER' &&
+                order.chronicRefillCycles.length > 0 &&
+                !order.counterSaleId
+              ? 'checkout'
+              : 'dispatch'
           : order.status === 'READY_FOR_COLLECTION' || order.status === 'OUT_FOR_DELIVERY'
             ? order.counterSaleId
               ? 'complete'

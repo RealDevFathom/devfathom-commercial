@@ -9,6 +9,7 @@ import { isTenantLifecycleAccessible } from '@/lib/tenancy/host';
 import { withPlatformDb, withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { placeCustomerOrder } from './customer-ordering';
+import { changeSaleStatus } from './sales';
 import { assertRxSaleAllowed, PharmacyRxSaleDenied } from './rx-sale-gate';
 import type { LedgerScope } from './stock-ledger';
 
@@ -358,8 +359,13 @@ export async function createDueChronicRefillOrder(
     // cycle), on a reviewed line that never dispensed, not since refused, and never used before.
     // Locking the reviewed sale makes a concurrent completion of it wait and then be refused by
     // the pharmacy_sale_chronic_review_claim_guard trigger.
-    const [approval] = await db.$queryRaw<{ id: string; canonicalUnits: number }[]>(Prisma.sql`
-      SELECT decision."id", sale_line."canonicalUnits"
+    const [approval] = await db.$queryRaw<{
+      id: string;
+      canonicalUnits: number;
+      saleId: string;
+      saleStatus: 'OPEN' | 'HELD';
+    }[]>(Prisma.sql`
+      SELECT decision."id", sale_line."canonicalUnits", sale."id" AS "saleId", sale."status"::text AS "saleStatus"
       FROM "pharmacy_pharmacist_review_decisions" decision
       JOIN "pharmacy_chronic_refill_subscriptions" subscription
         ON subscription."organizationId" = decision."organizationId"
@@ -391,7 +397,17 @@ export async function createDueChronicRefillOrder(
         AND sale_line."packLevelId" = subscription."packLevelId"
         AND sale_line."saleUnit" = 'PACK'
         AND sale_line."quantity" = subscription."quantityPacks"
-        AND sale."status" <> 'COMPLETED'
+        AND sale."status" IN ('OPEN', 'HELD')
+        -- Only a dedicated, unpaid review sale can be voided and reused as an order hold.
+        AND NOT EXISTS (
+          SELECT 1 FROM "pharmacy_sale_lines" other
+          WHERE other."organizationId" = sale."organizationId" AND other."saleId" = sale."id"
+            AND other."id" <> sale_line."id"
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM "pharmacy_tenders" tender
+          WHERE tender."organizationId" = sale."organizationId" AND tender."saleId" = sale."id"
+        )
         AND NOT EXISTS (
           SELECT 1 FROM "pharmacy_prescription_fills" fill
           WHERE fill."organizationId" = sale_line."organizationId"
@@ -408,7 +424,7 @@ export async function createDueChronicRefillOrder(
           WHERE cycle."organizationId" = decision."organizationId"
             AND cycle."pharmacistDecisionId" = decision."id"
         )
-      FOR UPDATE OF sale
+      FOR UPDATE OF sale, item
     `);
     if (!approval) throw new ChronicRefillError('PHARMACIST_APPROVAL_REQUIRED');
 
@@ -491,6 +507,14 @@ export async function createDueChronicRefillOrder(
         Number(allowance.authorizedRepeats)
     )
       throw new ChronicRefillError('PRESCRIPTION_EXHAUSTED');
+    // Reuse the existing audited void/reversal path before reserving the same pack.
+    // Both operations and the cycle claim commit together; a failed hold rolls back the void.
+    if (approval.saleStatus === 'HELD')
+      await changeSaleStatus(db, scope, approval.saleId, 'resume');
+    await changeSaleStatus(
+      db, scope, approval.saleId, 'void',
+      `Stock transferred to chronic refill subscription ${subscription.id}`
+    );
   }
 
   const holdFrom = Math.max(subscription.nextDueAt.getTime(), now.getTime());

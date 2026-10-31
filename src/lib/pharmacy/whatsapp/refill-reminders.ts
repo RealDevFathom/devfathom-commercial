@@ -133,27 +133,40 @@ export async function processDueWhatsAppRefillReminders(
       ORDER BY capture."expectedExhaustionAt", capture."id"
       LIMIT ${limit}
     `)),
-    // "nextDueAt" is a UTC timestamp without time zone; format it directly so the key matches
-    // the JS toISOString() key whatever the database session TimeZone is.
+    // Keep released cycles discoverable after the subscription advances to its next date.
+    // Format UTC timestamps directly so keys do not depend on the database TimeZone.
     ...(await db.$queryRaw<DueCapture[]>(Prisma.sql`
       SELECT subscription."id", subscription."organizationId", subscription."branchId",
              customer."patientId", subscription."medicineId", '' AS "medicineName",
              '' AS "directionsEnglish", subscription."quantityPacks" AS "quantityDispensed",
-             subscription."nextDueAt" AS "dispensedAt", subscription."id" AS "subscriptionId",
-             subscription."nextDueAt" AS "subscriptionDueAt", subscription."reminderConsentId" AS "consentEventId"
+             schedule."dueAt" AS "dispensedAt", subscription."id" AS "subscriptionId",
+             schedule."dueAt" AS "subscriptionDueAt", subscription."reminderConsentId" AS "consentEventId"
       FROM "pharmacy_chronic_refill_subscriptions" subscription
       JOIN "pharmacy_customers" customer
         ON customer."organizationId" = subscription."organizationId"
        AND customer."id" = subscription."customerId"
+      CROSS JOIN LATERAL (
+        SELECT subscription."nextDueAt" AS "dueAt"
+        UNION
+        SELECT cycle."dueAt"
+        FROM "pharmacy_chronic_refill_cycles" cycle
+        JOIN "pharmacy_customer_orders" customer_order
+          ON customer_order."organizationId" = cycle."organizationId"
+         AND customer_order."branchId" = cycle."branchId" AND customer_order."id" = cycle."orderId"
+        WHERE cycle."organizationId" = subscription."organizationId"
+          AND cycle."branchId" = subscription."branchId" AND cycle."subscriptionId" = subscription."id"
+          AND cycle."dueAt" > ${now} AND cycle."dueAt" <= ${windowEnd}
+          AND customer_order."status" NOT IN ('CANCELLED', 'EXPIRED', 'RETURNED')
+      ) schedule
       WHERE subscription."active" AND subscription."cancelledAt" IS NULL
         AND subscription."reminderConsentId" IS NOT NULL
-        AND subscription."nextDueAt" > ${now} AND subscription."nextDueAt" <= ${windowEnd}
+        AND schedule."dueAt" > ${now} AND schedule."dueAt" <= ${windowEnd}
         AND NOT EXISTS (
           SELECT 1 FROM "pharmacy_message_logs" log
           WHERE log."organizationId" = subscription."organizationId"
-            AND log."dedupeKey" = 'chronic-refill:' || subscription."id" || ':' || to_char(subscription."nextDueAt", 'YYYY-MM-DD')
+            AND log."dedupeKey" = 'chronic-refill:' || subscription."id" || ':' || to_char(schedule."dueAt", 'YYYY-MM-DD')
         )
-      ORDER BY subscription."nextDueAt", subscription."id"
+      ORDER BY schedule."dueAt", subscription."id"
       LIMIT ${limit}
     `)),
   ]);

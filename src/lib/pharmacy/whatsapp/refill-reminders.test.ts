@@ -282,7 +282,9 @@ describe('processDueWhatsAppRefillReminders', () => {
     expect(subscriptionSql).toContain('FROM "pharmacy_chronic_refill_subscriptions"');
     expect(subscriptionSql).toContain('LIMIT');
     // The dedupe key must not depend on the database session TimeZone.
-    expect(subscriptionSql).toContain('to_char(subscription."nextDueAt", \'YYYY-MM-DD\')');
+    expect(subscriptionSql).toContain('to_char(schedule."dueAt", \'YYYY-MM-DD\')');
+    expect(subscriptionSql).toContain('SELECT cycle."dueAt"');
+    expect(subscriptionSql).toContain('UNION');
     expect(subscriptionSql).not.toContain('AT TIME ZONE');
   });
 
