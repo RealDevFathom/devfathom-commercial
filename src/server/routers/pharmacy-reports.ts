@@ -41,6 +41,7 @@ import {
   readPackAuthenticationFlags,
 } from '@/lib/pharmacy/pack-authentication-operations';
 import { readPharmacyBranchComparison } from '@/lib/pharmacy/branch-comparison';
+import { readLicenceRenewalReminders } from '@/lib/pharmacy/licence-renewal-operations';
 import { auditedProtectedProcedure, capabilityProcedure, router, type TRPCContext } from '../trpc';
 
 const reports = capabilityProcedure('reports:operational');
@@ -375,6 +376,28 @@ export const pharmacyReportsRouter = router({
       };
     }),
   branches: reports.query(({ ctx }) => scope(ctx)),
+  /**
+   * #720 — licences inside their 90-day renewal window, for the owner's
+   * dashboard banner. Owner-only, like the digest that carries the same lines.
+   * Reads stored dates only; the sale gate stays the authority on trading.
+   */
+  licenceRenewals: reports
+    .input(z.object({ branchId: z.string().trim().min(1).max(128).optional() }).strict())
+    .query(async ({ ctx, input }) => {
+      const available = await scope(ctx);
+      if (ctx.session!.user.role !== 'ADMIN')
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Owner access is required.' });
+      if (input.branchId && !available.branches.some((branch) => branch.id === input.branchId))
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your report scope.' });
+      const branchIds = input.branchId
+        ? [input.branchId]
+        : available.branches.map((branch) => branch.id);
+      const reminders = await readLicenceRenewalReminders(ctx.db, {
+        organizationId: available.organizationId,
+        branchIds,
+      });
+      return { reminders };
+    }),
   replenishment: reports.input(pharmacyReplenishmentReportInput).query(async ({ ctx, input }) => {
     // Existing capability middleware denies before report reads; scope enforces licensing.
     const available = await scope(ctx);

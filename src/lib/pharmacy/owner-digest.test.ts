@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   readPharmacyOwnerCommandCentre: vi.fn(),
   readPharmacyAnomalySignals: vi.fn(),
+  readLicenceRenewalReminders: vi.fn(),
   refreshPharmacyAnomalySignals: vi.fn(),
   can: vi.fn(),
   resolveOrganizationEntitlements: vi.fn(),
@@ -50,6 +51,11 @@ vi.mock('./anomaly-signals-operations', () => ({
   ],
 }));
 
+vi.mock('./licence-renewal-operations', () => ({
+  readLicenceRenewalReminders: mocks.readLicenceRenewalReminders,
+}));
+
+import { planRenewalReminders } from './licence-renewal';
 import {
   CaptureChannel,
   composeOwnerDigest,
@@ -69,6 +75,7 @@ describe('RPT-03 owner digest', () => {
     mocks.tenantDb.pharmacyOwnerDigestSetting.updateMany.mockResolvedValue({ count: 1 });
     mocks.platformDb.pharmacyOwnerDigestSetting.findMany.mockResolvedValue([]);
     mocks.readPharmacyAnomalySignals.mockResolvedValue([]);
+    mocks.readLicenceRenewalReminders.mockResolvedValue([]);
     mocks.refreshPharmacyAnomalySignals.mockResolvedValue({ evaluated: 0, signals: [] });
     mocks.readPharmacyOwnerCommandCentre.mockResolvedValue({
       freshness: { status: 'CURRENT', asOf: '2026-09-04T08:00:00.000Z', source: 'ledgers' },
@@ -143,6 +150,53 @@ describe('RPT-03 owner digest', () => {
     });
     expect(digest.rendered).toContain('Anomaly review signals: 1');
     expect(digest.rendered).toContain('review the close evidence');
+  });
+
+  it('#720 adds a renewal line for a branch licence expiring in 30 days, and none once renewed', async () => {
+    const at = new Date('2026-09-04T08:00:00.000Z');
+    const due = planRenewalReminders(
+      [
+        {
+          kind: 'BRANCH_LICENCE',
+          subjectId: 'branch_1',
+          branchId: 'branch_1',
+          label: 'Main drug sale licence',
+          reference: 'DSL-123',
+          expiresAt: new Date('2026-10-04T08:00:00.000Z'),
+          provinceCode: 'PK-PB',
+          licenceCategory: 'PHARMACY',
+        },
+      ],
+      at
+    );
+    mocks.readLicenceRenewalReminders.mockResolvedValueOnce(due);
+    const digest = await composeOwnerDigest({} as never, {
+      organizationId: 'org_1',
+      userId: 'user_1',
+      branchId: 'branch_1',
+      branchName: 'Main',
+      businessDate: '2026-09-04',
+    });
+    expect(mocks.readLicenceRenewalReminders).toHaveBeenCalledWith(expect.anything(), {
+      organizationId: 'org_1',
+      branchIds: ['branch_1'],
+    });
+    expect(digest.renewals).toHaveLength(1);
+    expect(digest.rendered).toContain('Licence renewals due: 1');
+    expect(digest.rendered).toContain(
+      '- Main drug sale licence DSL-123 expires in 30 days (2026-10-04) · renewal fee Rs 3,000 (pharmacy)'
+    );
+
+    // The renewed licence is read as the new profile version: nothing is due.
+    const renewed = await composeOwnerDigest({} as never, {
+      organizationId: 'org_1',
+      userId: 'user_1',
+      branchId: 'branch_1',
+      branchName: 'Main',
+      businessDate: '2026-09-05',
+    });
+    expect(renewed.renewals).toEqual([]);
+    expect(renewed.rendered).not.toContain('Licence renewals due');
   });
 
   it('persists capture delivery with the daily idempotency key', async () => {

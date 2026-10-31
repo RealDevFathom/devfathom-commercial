@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { ArrowDown, ArrowUp, Eye, EyeOff, Pencil, RotateCcw, Save } from 'lucide-react';
 
 import { useEntitlements } from '@/components/entitlements-provider';
+import { LicenceRenewalBanner } from '@/components/pharmacy/licence-renewal-banner';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
@@ -275,6 +276,7 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
                 : 'Loading today’s figures…'}
         </p>
       </SectionCard>
+      {role === 'ADMIN' ? <LicenceRenewalBanner branchId={branchId || undefined} /> : null}
       {editing ? (
         <SectionCard
           eyebrow="Edit mode"

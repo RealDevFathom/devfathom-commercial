@@ -21,11 +21,16 @@ const mocks = vi.hoisted(() => ({
   refresh: vi.fn(),
   createDraft: vi.fn(),
   comparisonRead: vi.fn(),
+  renewalsRead: vi.fn(),
   comparisonTx: {},
   transaction: vi.fn(),
 }));
 vi.mock('@/lib/pharmacy/branch-comparison', () => ({
   readPharmacyBranchComparison: mocks.comparisonRead,
+}));
+
+vi.mock('@/lib/pharmacy/licence-renewal-operations', () => ({
+  readLicenceRenewalReminders: mocks.renewalsRead,
 }));
 
 vi.mock('@/lib/pharmacy/stock-signals-operations', () => ({
@@ -792,5 +797,50 @@ describe('repeat purchasing authorization', () => {
       caller().repeatPurchasing({ ...input, supplierId: 'supplier' } as typeof input)
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(mocks.repeatRead).not.toHaveBeenCalled();
+  });
+});
+
+describe('#720 licence renewal reminders', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.can.mockResolvedValue(true);
+    vi.mocked(hasModule).mockImplementation(
+      (_entitlements, module) => module === 'pharmacy-reports'
+    );
+    mocks.branchFindMany.mockResolvedValue([
+      { id: 'branch_1', name: 'Main' },
+      { id: 'branch_2', name: 'Second' },
+    ]);
+    mocks.renewalsRead.mockResolvedValue([{ kind: 'BRANCH_LICENCE', subjectId: 'branch_1' }]);
+  });
+
+  it('reads the owner’s active tenant branches, or the one branch asked for', async () => {
+    await expect(caller().licenceRenewals({})).resolves.toEqual({
+      reminders: [{ kind: 'BRANCH_LICENCE', subjectId: 'branch_1' }],
+    });
+    expect(mocks.renewalsRead).toHaveBeenLastCalledWith(expect.anything(), {
+      organizationId: 'org_1',
+      branchIds: ['branch_1', 'branch_2'],
+    });
+    await caller().licenceRenewals({ branchId: 'branch_2' });
+    expect(mocks.renewalsRead).toHaveBeenLastCalledWith(expect.anything(), {
+      organizationId: 'org_1',
+      branchIds: ['branch_2'],
+    });
+  });
+
+  it('is owner-only, branch-scoped, licensed and capability-gated', async () => {
+    await expect(caller('EMPLOYEE').licenceRenewals({})).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    await expect(
+      caller().licenceRenewals({ branchId: 'other-tenant-branch' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    vi.mocked(hasModule).mockReturnValue(false);
+    await expect(caller().licenceRenewals({})).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    vi.mocked(hasModule).mockReturnValue(true);
+    mocks.can.mockResolvedValue(false);
+    await expect(caller().licenceRenewals({})).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.renewalsRead).not.toHaveBeenCalled();
   });
 });

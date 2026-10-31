@@ -14,6 +14,7 @@ const state = vi.hoisted(() => ({
   catalog: undefined as unknown,
   command: undefined as unknown,
   preferences: undefined as unknown,
+  renewals: undefined as unknown,
   enabledModules: [] as string[],
 }));
 
@@ -46,6 +47,7 @@ vi.mock('@/lib/trpc', () => ({
           }),
       },
       commandCentre: { useQuery: () => mounted.record('commandCentre', state.command) },
+      licenceRenewals: { useQuery: () => mounted.record('licenceRenewals', state.renewals) },
     },
   },
 }));
@@ -95,6 +97,7 @@ beforeEach(() => {
     permissions: { operational: true, financial: false },
   });
   state.preferences = query(undefined);
+  state.renewals = query({ reminders: [] });
   state.command = query({
     freshness: { asOf: '2026-09-04T10:00:00Z', source: 'transactional pharmacy ledgers' },
     permissions: { operational: true, financial: false },
@@ -151,6 +154,50 @@ describe('PharmacyDashboardContent states', () => {
     expect(mounted.hooks).toEqual(expect.arrayContaining(REPORT_HOOKS));
     expect(screen.getByRole('button', { name: 'Edit dashboard' })).toBeVisible();
     expect(screen.queryByText('Reports are not part of your package')).not.toBeInTheDocument();
+  });
+
+  it('#720 shows the renewal banner for a licence expiring in 30 days, owner only', () => {
+    state.renewals = query({
+      reminders: [
+        {
+          kind: 'BRANCH_LICENCE',
+          subjectId: 'b1',
+          branchId: 'b1',
+          label: 'Main drug sale licence',
+          reference: 'DSL-123',
+          expiresAt: new Date('2026-10-04T00:00:00.000Z'),
+          provinceCode: 'PK-PB',
+          licenceCategory: 'PHARMACY',
+          daysLeft: 30,
+          stage: 30,
+          expired: false,
+          dedupeKey: 'renewal:BRANCH_LICENCE:b1:2026-10-04:30',
+          checklist: {
+            province: 'Punjab',
+            documents: ['Fee challan paid at the designated bank.'],
+            fee: 'Rs 3,000 (pharmacy)',
+            provisional: true,
+            source: null,
+          },
+        },
+      ],
+    });
+    render(<PharmacyDashboardContent role="ADMIN" />);
+    expect(screen.getByTestId('licence-renewal-banner')).toBeVisible();
+    expect(screen.getByRole('heading', { name: '1 licence due for renewal' })).toBeVisible();
+    expect(screen.getByText('30-day reminder')).toBeVisible();
+    expect(screen.getByText(/expires in 30 days \(2026-10-04\) · Renewal fee Rs 3,000/i)).toBeVisible();
+    expect(
+      screen.getByRole('link', { name: 'Record the renewal on the regulatory profile' })
+    ).toHaveAttribute('href', '/pharmacy/regulatory?branch=b1');
+  });
+
+  it('#720 hides the renewal banner when nothing is due and never mounts it for a member', () => {
+    render(<PharmacyDashboardContent role="ADMIN" />);
+    expect(screen.queryByTestId('licence-renewal-banner')).not.toBeInTheDocument();
+    mounted.hooks.length = 0;
+    render(<PharmacyDashboardContent role="EMPLOYEE" />);
+    expect(mounted.hooks).not.toContain('licenceRenewals');
   });
 
   it('asks Pharmacy Reports nothing without the module and says it is not in the package', () => {
