@@ -2,6 +2,7 @@ import { TRPCError } from '@trpc/server';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { workspaceTimezone } from '@/lib/timezone';
 import type { LedgerScope } from './stock-ledger';
+import { aggregateTenderTotals } from './manual-payments';
 import {
   closePharmacyDrawer,
   computePharmacyClose,
@@ -20,7 +21,7 @@ export async function readPharmacyClose(db: ScopedDb, scope: LedgerScope, busine
     select: { name: true },
   });
   if (!branch) throw new TRPCError({ code: 'NOT_FOUND', message: 'Pharmacy branch not found.' });
-  const [close, drawers, sales, refunds, organization] = await Promise.all([
+  const [close, drawers, sales, refunds, organization, tenders] = await Promise.all([
     db.pharmacyDailyClose.findFirst({ where, orderBy: { sequence: 'desc' } }),
     db.pharmacyDrawerSession.findMany({
       where,
@@ -31,7 +32,7 @@ export async function readPharmacyClose(db: ScopedDb, scope: LedgerScope, busine
       where: { ...where, status: 'COMPLETED' },
       include: { lines: true },
     }),
-    db.pharmacyRefund.findMany({ where }),
+    db.pharmacyRefund.findMany({ where, include: { originalTender: { select: { type: true } } } }),
     // The workspace's zone, which the close screen shows every time in: a
     // pharmacy branch has no zone of its own, and the viewer's browser zone is
     // not the pharmacy's. A stored value Intl refuses is handed over as UTC.
@@ -39,6 +40,7 @@ export async function readPharmacyClose(db: ScopedDb, scope: LedgerScope, busine
       where: { id: scope.organizationId },
       select: { timezone: true },
     }),
+    db.pharmacyTender.findMany({ where, select: { id: true, type: true, amountMinor: true } }),
   ]);
   // Who opened each drawer, so the close screen can name the drawer by its
   // opener and time rather than by the counter's device identifier.
@@ -62,6 +64,7 @@ export async function readPharmacyClose(db: ScopedDb, scope: LedgerScope, busine
     countedMinor: d.countedCashMinor,
   }));
   const totals = computePharmacyClose({
+    tenders,
     sales: sales.map((s) => ({ id: s.id, totalMinor: saleTotalMinor(s.lines) })),
     refunds: refunds.map((r) => ({ id: r.id, amountMinor: r.amountMinor })),
     drawers: rows.map((d) => ({
@@ -75,6 +78,7 @@ export async function readPharmacyClose(db: ScopedDb, scope: LedgerScope, busine
     businessDate,
     drawers: rows,
     totals,
+    tenderTotals: aggregateTenderTotals(tenders, refunds),
     close,
     timezone: workspaceTimezone(organization?.timezone),
   };

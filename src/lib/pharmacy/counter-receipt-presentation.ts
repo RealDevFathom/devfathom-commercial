@@ -1,4 +1,5 @@
 import { DEFAULT_RECEIPT_LAYOUT } from '@/lib/receipts/configuration';
+import { tenderTotalsSchema } from './manual-payments';
 import { buildReceiptPreview } from '@/lib/receipts/preview';
 
 import {
@@ -162,6 +163,7 @@ export function buildCounterReceiptPreview(
 
 /** Aggregate-only report: no patient, medicine, or tender identity is exported. */
 export type CounterZReport = {
+  tenderTotals?: unknown;
   id: string;
   branchName: string;
   businessDate: string;
@@ -222,6 +224,8 @@ export function buildCounterZReportPreview(
     `#${report.sequence} · ${report.id}`,
     report.currency,
     ...amounts.map((amount, i) => `${labels[i + 2]}: ${formatMinor(amount)}`),
+    ...(report.tenderTotals == null ? [] : tenderTotalsSchema.parse(report.tenderTotals).map((row) =>
+      `${row.type}: ${formatMinor(row.amountMinor)} · ${locale === 'ur' ? 'واپسی' : 'Refunds'}: ${formatMinor(row.refundMinor)} · ${locale === 'ur' ? 'خالص' : 'Net'}: ${formatMinor(row.netMinor)}`)),
     `${labels[8]}: ${report.reason ?? '—'}`,
     report.isFinal ? 'Final' : 'Provisional — migration reconciliation pending',
   ].join('\n');
