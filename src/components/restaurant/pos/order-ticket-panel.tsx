@@ -242,18 +242,20 @@ export function OrderTicketPanel({
                         <Button
                           type="button"
                           variant="outline"
+                          size="touch"
                           onClick={() => onHold(course)}
                           disabled={pending}
-                          className="h-11 shadow-none hover:translate-y-0 active:translate-y-0"
+                          className="shadow-none hover:translate-y-0 active:translate-y-0"
                         >
                           Hold
                         </Button>
                         <Button
                           type="button"
                           variant="outline"
+                          size="touch"
                           onClick={() => onFire(course)}
                           disabled={pending}
-                          className="h-11 shadow-none hover:translate-y-0 active:translate-y-0"
+                          className="shadow-none hover:translate-y-0 active:translate-y-0"
                         >
                           Fire
                         </Button>
@@ -293,9 +295,10 @@ export function OrderTicketPanel({
                               <Button
                                 type="button"
                                 variant="destructive"
+                                size="touch"
                                 onClick={() => openVoid(item)}
                                 disabled={pending || item.status === 'VOIDED'}
-                                className="h-11 shadow-none hover:translate-y-0 active:translate-y-0"
+                                className="shadow-none hover:translate-y-0 active:translate-y-0"
                               >
                                 Void {item.name}
                               </Button>

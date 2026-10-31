@@ -24,6 +24,7 @@ import {
 } from '@/lib/pharmacy/dashboard';
 import {
   PHARMACY_METRIC_CONTRACT,
+  MAX_PHARMACY_REPORT_DAYS,
   pharmacyReportCatalog,
   readPharmacyOwnerCommandCentre,
 } from '@/lib/pharmacy/reports';
@@ -39,6 +40,7 @@ import {
   acknowledgePackAuthenticationFlag,
   readPackAuthenticationFlags,
 } from '@/lib/pharmacy/pack-authentication-operations';
+import { readPharmacyBranchComparison } from '@/lib/pharmacy/branch-comparison';
 import { auditedProtectedProcedure, capabilityProcedure, router, type TRPCContext } from '../trpc';
 
 const reports = capabilityProcedure('reports:operational');
@@ -457,11 +459,44 @@ export const pharmacyReportsRouter = router({
     metrics: PHARMACY_METRIC_CONTRACT,
     permissions: {
       operational: true,
+      owner: ctx.session!.user.role === 'ADMIN',
       financial: await can(subjectFromSession(ctx.session!.user), 'reports:financial', undefined, {
         db: ctx.db,
       }),
     },
   })),
+  branchComparison: reports
+    .input(
+      z
+        .object({ from: z.iso.date(), to: z.iso.date() })
+        .strict()
+        .refine((input) => input.from <= input.to, {
+          message: 'The report start date must not be after the end date.',
+        })
+        .refine(
+          (input) =>
+            (Date.parse(input.to) - Date.parse(input.from)) / 86_400_000 + 1 <=
+            MAX_PHARMACY_REPORT_DAYS,
+          {
+            message: `Interactive pharmacy reports are limited to ${MAX_PHARMACY_REPORT_DAYS} days.`,
+          }
+        )
+    )
+    .query(async ({ ctx, input }) => {
+      await requireFinancialReports(ctx);
+      if (ctx.session!.user.role !== 'ADMIN')
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Owner access is required.' });
+      const available = await scope(ctx);
+      // The RSC tenant facade otherwise gives each statement its own transaction, losing
+      // the transaction-local branch context before the khata ledger is read.
+      return ctx.db.$transaction((tx) =>
+        readPharmacyBranchComparison(tx as typeof ctx.db, {
+          branches: available.branches,
+          from: input.from,
+          to: input.to,
+        })
+      );
+    }),
   repeatPurchasing: reports
     .input(
       filters
