@@ -6,7 +6,19 @@ import type { EntitlementView } from '@/lib/module-catalog';
 import { Sidebar, TopNavigation } from './sidebar';
 
 const useSessionMock = vi.hoisted(() =>
-  vi.fn(() => ({ data: { user: { role: 'ADMIN', name: 'Test operator' } } }))
+  vi.fn<
+    () => {
+      data: {
+        user: {
+          role: string;
+          name: string;
+          id?: string;
+          organizationId?: string;
+          status?: string;
+        };
+      };
+    }
+  >(() => ({ data: { user: { role: 'ADMIN', name: 'Test operator' } } }))
 );
 const usePathnameMock = vi.hoisted(() => vi.fn(() => '/dashboard'));
 // The hospitality rail's one read; unanswered unless a hospitality case sets it.
