@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "prisma generate && next build",
+    "check:docker-build-contract": "node scripts/check-docker-build-contract.mjs",
     "postinstall": "prisma generate",
     "start": "node scripts/start-standalone.mjs",
     "typecheck": "tsc --noEmit",
