@@ -83,6 +83,13 @@ vi.mock('@/lib/trpc', () => {
       counterReceipt: { invalidate: mocks.receiptInvalidate },
       counterEvidence: { reset: vi.fn() },
       drawerStatus: { invalidate: mocks.drawerStatusInvalidate },
+      counterSearch: { invalidate: vi.fn().mockResolvedValue(undefined) },
+    },
+    pharmacyPrescriptions: {
+      counterPatientPanel: { invalidate: vi.fn().mockResolvedValue(undefined) },
+    },
+    pharmacySafety: {
+      controlledRegister: { invalidate: vi.fn().mockResolvedValue(undefined) },
     },
   };
   return {
@@ -1171,7 +1178,8 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
         expect.objectContaining({ medicineId: 'med-barcode', quantity: 1 })
       )
     );
-    const successNotice = await screen.findByRole('status');
+    const successMessage = await screen.findByText('1 × Paracetamol added.');
+    const successNotice = successMessage.closest('[role="status"]');
     expect(successNotice).toHaveTextContent('1 × Paracetamol added.');
     expect(successNotice).toHaveAttribute('aria-live', 'polite');
     expect(successNotice).toHaveClass('border-success/30', 'bg-success/10');
