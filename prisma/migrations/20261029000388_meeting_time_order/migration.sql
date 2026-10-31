@@ -2,12 +2,20 @@
 -- meeting duration. Application validation supplies the user-facing error.
 -- Repair legacy rows accepted before #451 so deploying the constraint cannot
 -- strand an existing tenant on a failed migration.
+BEGIN;
+
+-- FORCE RLS also applies to a non-bypassing table owner. Repair every tenant's
+-- legacy rows, and release the platform scope when this transaction commits.
+SELECT set_config('app.is_platform_admin', 'true', true);
+
 UPDATE "meetings"
 SET "endTime" = "startTime" + INTERVAL '1 minute'
 WHERE "endTime" <= "startTime";
 
 ALTER TABLE "meetings"
     ADD CONSTRAINT "meetings_time_order_check" CHECK ("endTime" > "startTime") NOT VALID;
+
+COMMIT;
 
 -- Keep the validation scan out of the ACCESS EXCLUSIVE lock used to install
 -- the constraint. New writes are protected as soon as the NOT VALID constraint

@@ -18,5 +18,14 @@ describe('meeting time-order migration', () => {
   it('installs without validating under the strong lock, then validates separately', () => {
     expect(sql).toMatch(/ADD CONSTRAINT[\s\S]*CHECK \("endTime" > "startTime"\) NOT VALID;/);
     expect(sql).toContain('VALIDATE CONSTRAINT "meetings_time_order_check"');
+    expect(sql.indexOf('COMMIT;')).toBeGreaterThan(sql.indexOf('ADD CONSTRAINT'));
+    expect(sql.indexOf('COMMIT;')).toBeLessThan(sql.indexOf('VALIDATE CONSTRAINT'));
+  });
+
+  it('scopes the cross-tenant repair to a platform transaction', () => {
+    const scope = sql.indexOf("SELECT set_config('app.is_platform_admin', 'true', true);");
+    expect(sql.indexOf('BEGIN;')).toBeGreaterThanOrEqual(0);
+    expect(scope).toBeGreaterThan(sql.indexOf('BEGIN;'));
+    expect(scope).toBeLessThan(sql.indexOf('UPDATE "meetings"'));
   });
 });
