@@ -1442,7 +1442,7 @@ export function CateringConsole({ currency }: { currency: string | null }) {
                         value={money(costs.data.grossMargin, costCurrency)}
                         delta={
                           'marginPercent' in costs.data && costs.data.marginPercent
-                            ? `${costs.data.marginPercent}%`
+                            ? `${Number(costs.data.marginPercent).toFixed(1)}%`
                             : '—'
                         }
                         deltaDirection={costs.data.grossMargin?.startsWith('-') ? 'down' : 'up'}

@@ -38,9 +38,33 @@ function isPublicPath(pathname: string): boolean {
   );
 }
 
+/** Decode repeatedly so double-encoded separators cannot reach static serving. */
+function isPrivateUploadPath(pathname: string): boolean {
+  let decoded = pathname;
+  for (;;) {
+    // Treat backslashes and duplicate separators conservatively, too.
+    const segments: string[] = [];
+    for (const segment of decoded.replace(/\\/g, '/').toLowerCase().split('/')) {
+      if (segment === '..') segments.pop();
+      else if (segment && segment !== '.') segments.push(segment);
+    }
+    if (segments[0] === 'uploads' || segments[0] === 'private-uploads') return true;
+    // Decode individual octets so an unrelated malformed escape cannot hide
+    // a valid encoded upload prefix. Each iteration shortens the string.
+    const next = decoded.replace(/%([0-9a-f]{2})/gi, (_, hex: string) =>
+      String.fromCharCode(parseInt(hex, 16))
+    );
+    if (next === decoded) return false;
+    decoded = next;
+  }
+}
+
 export async function proxy(request: Request) {
   const url = new URL(request.url);
   const pathname = url.pathname;
+  // Before auth, host redirects, and especially the static-extension bypass.
+  // File access belongs exclusively to the authorized /api/files route.
+  if (isPrivateUploadPath(pathname)) return new NextResponse(null, { status: 404 });
   const forwardedHost = request.headers.get('x-forwarded-host') ?? request.headers.get('host');
   const hostWithPort = forwardedHost?.split(',')[0]?.trim().toLowerCase() ?? '';
   const host = hostWithPort.replace(/:\d+$/, '').replace(/\.$/, '');

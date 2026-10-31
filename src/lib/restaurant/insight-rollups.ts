@@ -374,7 +374,7 @@ export async function rollupDay(db: ScopedDb, input: RollupDayInput) {
       select: {
         coverCount: true,
         items: {
-          where: { status: { not: 'VOIDED' } },
+          where: { status: { not: 'VOIDED' }, remakeOfItemId: null },
           select: {
             productId: true,
             unitPrice: true,
