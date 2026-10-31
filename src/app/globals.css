@@ -1588,6 +1588,112 @@
   background-color: var(--accent-quiet);
 }
 
+/* Authentication uses the Studio split recipe and the existing semantic themes. */
+.studio-auth {
+  min-block-size: 100dvh;
+  background: var(--surface-page);
+  color: var(--text-strong);
+}
+.studio-auth-hero {
+  display: none;
+  color: var(--text-on-accent);
+}
+.studio-auth-main {
+  display: flex;
+  min-inline-size: 0;
+  min-block-size: 100dvh;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 24px;
+}
+.studio-auth-link {
+  display: inline-flex;
+  min-block-size: 44px;
+  align-items: center;
+  font-weight: 600;
+  border-radius: var(--radius-xs);
+}
+.studio-auth a:hover {
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+.studio-auth :is(a, button, input, select):focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 4px;
+}
+.studio-auth input:not([type='checkbox']),
+.studio-auth select {
+  min-block-size: 48px;
+  inline-size: 100%;
+  min-inline-size: 0;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: var(--surface-card);
+  color: var(--text-strong);
+  padding-inline: 16px;
+  font-size: 14px;
+}
+/* Keep reveal space in both masked and revealed states, independent of input type. */
+.studio-auth input[data-password-reveal] {
+  padding-inline-end: 3rem;
+}
+.studio-auth input[type='file'] {
+  padding-block: 12px;
+}
+.studio-auth input[type='checkbox'] {
+  inline-size: 20px;
+  block-size: 20px;
+  accent-color: var(--accent-brand);
+}
+.studio-auth fieldset {
+  min-inline-size: 0;
+}
+.studio-auth label {
+  font-size: 13px;
+  font-weight: 600;
+}
+.studio-auth legend {
+  margin-block-end: 24px;
+  font-weight: 600;
+}
+.studio-auth [data-slot='button'] {
+  min-block-size: 48px;
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+}
+@media (min-width: 1024px) {
+  .studio-auth {
+    display: grid;
+    grid-template-columns: minmax(0, 1.08fr) minmax(0, 0.92fr);
+  }
+  .studio-auth-hero {
+    display: flex;
+    position: sticky;
+    inset-block-start: 0;
+    block-size: 100dvh;
+    flex-direction: column;
+    padding: 48px 40px;
+    overflow: auto;
+  }
+  .studio-auth-main {
+    padding: 64px 48px;
+  }
+  .studio-auth-register {
+    grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  }
+  .studio-auth-register .studio-auth-main {
+    align-items: start;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .studio-auth *,
+  .studio-auth *::before,
+  .studio-auth *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
 /* Keep this rule unlayered and important so it wins over legacy focus resets.
    Draw the outline inside the control so overflow regions cannot clip it.
    Component-specific rings can still add emphasis, but no keyboard-reachable
@@ -1595,4 +1701,9 @@
 :focus-visible {
   outline: 2px solid var(--ring) !important;
   outline-offset: -2px !important;
+}
+
+/* Auth controls sit in unclipped layout; keep their designed outset ring. */
+.studio-auth :is(a, button, input, select):focus-visible {
+  outline-offset: 4px !important;
 }

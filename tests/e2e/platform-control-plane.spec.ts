@@ -8,6 +8,7 @@ import {
   platformFixture,
   platformMutationHeaders,
   prepareControlPlaneFixture,
+  signInProvisionedTenant,
   withAdminDatabase,
 } from './fixtures/platform-control-plane';
 import { assertKeyboardFocusWalk, focusThemes, useFocusTheme } from './helpers/focus-visible';
@@ -422,7 +423,10 @@ test('restaurant onboarding reaches ACTIVE', async ({ page }) => {
     expect(ready.rowCount).toBe(1);
   });
   await page.getByLabel('Move to').selectOption('ACTIVE');
-  await page.getByLabel('Operator reason').fill('E2E activation denied before setup');
+  await page
+    .locator('#lifecycle')
+    .getByLabel('Reason (required)')
+    .fill('E2E activation denied before setup');
   await page.getByRole('button', { name: 'Apply lifecycle change' }).click();
   await expect(page.getByText('Activation preflight failed:', { exact: false })).toBeVisible();
   await expect(page.getByText('ONBOARDING', { exact: true }).first()).toBeVisible();
@@ -446,7 +450,10 @@ test('restaurant onboarding reaches ACTIVE', async ({ page }) => {
   await expect(page.locator('input[name="taxPolicyReference"]')).toHaveValue('tax-policy-v1');
 
   await page.getByLabel('Move to').selectOption('ACTIVE');
-  await page.getByLabel('Operator reason').fill('E2E activation after Restaurant setup');
+  await page
+    .locator('#lifecycle')
+    .getByLabel('Reason (required)')
+    .fill('E2E activation after Restaurant setup');
   await page.getByRole('button', { name: 'Apply lifecycle change' }).click();
   await expect(page.getByText('ACTIVE', { exact: true }).first()).toBeVisible();
 
@@ -520,11 +527,12 @@ test('shared-host login succeeds and forged tenant selection is generic', async 
 
   const loginContext = await browser.newContext();
   const page = await loginContext.newPage();
-  await page.goto(`${sharedBaseUrl}/login`);
-  await page.getByLabel('Email').fill(platformFixture.tenant.email);
-  await page.locator('input[name="password"]').fill(platformFixture.tenant.password);
-  await page.getByRole('button', { name: 'Sign in' }).click();
-  await expect(page).toHaveURL(/\/dashboard(?:\?|$)/);
+  const tenantPassword = await signInProvisionedTenant(
+    page,
+    sharedBaseUrl!,
+    platformFixture.tenant,
+    /\/restaurant\/menus(?:\?|$)/
+  );
   expect(page.url()).not.toMatch(/organizationId|workspace|org_/);
 
   await page.goto(`${sharedBaseUrl}/restaurant/staff`);
@@ -540,7 +548,7 @@ test('shared-host login succeeds and forged tenant selection is generic', async 
   const forgedContext = await browser.newContext({ baseURL: sharedBaseUrl });
   const intent = await forgedContext.request.post('/api/login', {
     headers: { origin: new URL(sharedBaseUrl!).origin },
-    data: { email: platformFixture.tenant.email, password: platformFixture.tenant.password },
+    data: { email: platformFixture.tenant.email, password: tenantPassword },
   });
   expect(intent.ok()).toBe(true);
   const forged = await forgedContext.request.post('/api/auth/callback/login-intent', {

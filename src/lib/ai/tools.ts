@@ -66,6 +66,7 @@ const CORE_TOOLS = new Set([
   'askPharmacyReports',
   'askPharmacyBusinessInsights',
   'askPharmacyFinanceInsights',
+  'askPharmacyOwnerQuestion',
   'getOverview',
   'globalSearch',
   'getRecentActivity',
@@ -91,7 +92,7 @@ const SELF_LEAVE_REQUEST =
 const FINANCE_INTENT =
   /invoic|revenue|profit|expense|transaction|p&l|pnl|budget|\bpaid\b|owe|financ|money|billing|\bbill\b|payment|cash|margin/i;
 const PHARMACY_REPORT_INTENT =
-  /pharmacy|medicine|stock signal|expiry|quarantine|recall|pharmacist|dispensing|supplier claim/i;
+  /pharmacy|medicine|stock signal|expiry|quarantine|recall|pharmacist|dispensing|supplier claim|khata|lost demand|فروخت|سٹاک|کھاتہ|نہ مل/i;
 const PHARMACY_WORK_PACK_INTENT =
   /\bwork[ -]?packs?\b|\bsupplier[ -]+(?:credit[ -]+)?follow[ -]?up\b|\bfollow[ -]?up\b.{0,40}\bsupplier(?:s|[ -]+credits?)?\b|\b(?:outstanding|unmatched)[ -]+supplier[ -]+credits?\b/i;
 
@@ -199,6 +200,7 @@ export function buildAssistantTools(ctx: AssistantContext, opts: { hint?: string
   if (!agency || !granted('projects')) delete perDomain.people.getTeamMember;
   // This owner-only adapter also rechecks report permissions at execution time.
   if (ctx.role !== 'ADMIN') delete perDomain.pharmacyReports.askPharmacyFinanceInsights;
+  if (ctx.role !== 'ADMIN') delete perDomain.pharmacyReports.askPharmacyOwnerQuestion;
   // Read-only preparation needs an explicit relevant hint, even in the full
   // approval-continuation set. Broad Pharmacy/finance hints keep their existing tools.
   if (!PHARMACY_WORK_PACK_INTENT.test(hint)) delete perDomain.pharmacyReports.askPharmacyWorkPacks;
