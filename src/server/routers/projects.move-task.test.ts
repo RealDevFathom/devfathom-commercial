@@ -32,7 +32,11 @@ import { projectsRouter } from './projects';
 
 const taskUpdate = vi.fn(async () => ({}));
 const assigneeDeleteMany = vi.fn(async () => ({ count: 1 }));
-const defaultAssigneeFindMany = vi.fn(async () => []);
+const defaultAssigneeFindMany = vi.fn(async () => [
+  { userId: 'admin-default' },
+  { userId: 'destination-member' },
+]);
+const assigneeCreateMany = vi.fn(async () => ({ count: 2 }));
 
 const tx = {
   task: {
@@ -47,7 +51,7 @@ const tx = {
   column: {
     findUnique: vi.fn(async () => ({ board: { projectId: 'destination-project' } })),
   },
-  taskAssignee: { deleteMany: assigneeDeleteMany, createMany: vi.fn() },
+  taskAssignee: { deleteMany: assigneeDeleteMany, createMany: assigneeCreateMany },
   columnDefaultAssignee: { findMany: defaultAssigneeFindMany },
 };
 
@@ -86,6 +90,7 @@ describe('projects.moveTask', () => {
       where: {
         taskId: 'task-1',
         user: {
+          role: { not: 'ADMIN' },
           projectMembers: { none: { projectId: 'destination-project' } },
         },
       },
@@ -93,18 +98,37 @@ describe('projects.moveTask', () => {
     expect(defaultAssigneeFindMany).toHaveBeenCalledWith({
       where: {
         columnId: 'target-column',
-        user: { projectMembers: { some: { projectId: 'destination-project' } } },
+        user: {
+          OR: [
+            { role: 'ADMIN' },
+            { projectMembers: { some: { projectId: 'destination-project' } } },
+          ],
+        },
       },
       select: { userId: true },
     });
+    expect(assigneeCreateMany).toHaveBeenCalledWith({
+      data: [
+        { taskId: 'task-1', userId: 'admin-default' },
+        { taskId: 'task-1', userId: 'destination-member' },
+      ],
+      skipDuplicates: true,
+    });
   });
 
-  it('does not change assignees when moving between boards in the same project', async () => {
+  it('does not remove assignees when moving between boards in the same project', async () => {
     tx.column.findUnique.mockResolvedValueOnce({ board: { projectId: 'source-project' } });
 
     await caller().moveTask({ taskId: 'task-1', targetColumnId: 'target-column', newOrder: 0 });
 
     expect(assigneeDeleteMany).not.toHaveBeenCalled();
+    expect(assigneeCreateMany).toHaveBeenCalledWith({
+      data: [
+        { taskId: 'task-1', userId: 'admin-default' },
+        { taskId: 'task-1', userId: 'destination-member' },
+      ],
+      skipDuplicates: true,
+    });
   });
 
   it('removes unauthorized assignees from every cross-project bulk move', async () => {
@@ -133,6 +157,7 @@ describe('projects.moveTask', () => {
       where: {
         taskId: { in: ['task-1'] },
         user: {
+          role: { not: 'ADMIN' },
           projectMembers: { none: { projectId: 'destination-project' } },
         },
       },
@@ -140,9 +165,23 @@ describe('projects.moveTask', () => {
     expect(defaultAssigneeFindMany).toHaveBeenCalledWith({
       where: {
         columnId: 'target-column',
-        user: { projectMembers: { some: { projectId: 'destination-project' } } },
+        user: {
+          OR: [
+            { role: 'ADMIN' },
+            { projectMembers: { some: { projectId: 'destination-project' } } },
+          ],
+        },
       },
       select: { userId: true },
+    });
+    expect(assigneeCreateMany).toHaveBeenCalledWith({
+      data: [
+        { taskId: 'task-1', userId: 'admin-default' },
+        { taskId: 'task-1', userId: 'destination-member' },
+        { taskId: 'task-2', userId: 'admin-default' },
+        { taskId: 'task-2', userId: 'destination-member' },
+      ],
+      skipDuplicates: true,
     });
   });
 });
