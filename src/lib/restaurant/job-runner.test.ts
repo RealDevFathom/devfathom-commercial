@@ -109,6 +109,8 @@ function createJobDb(seed: Row[] = []) {
 
   const db = {
     $transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(db),
+    // Producer savepoints (SAVEPOINT / RELEASE / ROLLBACK TO) are no-ops here.
+    $executeRaw: async () => 0,
     $queryRaw: async (sql: { values: unknown[]; strings?: readonly string[] }) => {
       const now = sql.values[0] as Date;
       const typeFilter = sql.values[1] as string | undefined;
@@ -309,6 +311,32 @@ describe('runRestaurantWorkerTick', () => {
     expect(result.organizations).toBe(2);
     expect(orgA.jobs.size).toBe(500);
     expect(orgB.jobs.get('b1')!.status).toBe('SUCCEEDED');
+  });
+
+  it('isolates a failing escalation producer so recovery and drain still run', async () => {
+    mocks.runRestaurantJob.mockResolvedValue(undefined);
+    const orgA = createJobDb([queuedJob({ id: 'a1' })]);
+    const orgB = createJobDb([queuedJob({ id: 'b1' })]);
+    const dbs = { org_a: orgA.db, org_b: orgB.db };
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await runRestaurantWorkerTick({
+      workerId: 'worker-1',
+      now: T0,
+      discoverOrganizations: async () => ['org_a', 'org_b'],
+      produceDueJobs: async () => {
+        throw new Error('sweep exploded');
+      },
+      runInOrg: (orgId, work) => work(dbs[orgId as keyof typeof dbs]),
+      outboxClient: () => createOutboxDb().db,
+    });
+
+    expect(result.organizations).toBe(2);
+    expect(result.jobs.succeeded).toBe(2);
+    expect(orgA.jobs.get('a1')!.status).toBe('SUCCEEDED');
+    expect(orgB.jobs.get('b1')!.status).toBe('SUCCEEDED');
+    expect(consoleError).toHaveBeenCalledTimes(2);
+    consoleError.mockRestore();
   });
 
   it('settles a failing handler as a retry and records the execution', async () => {

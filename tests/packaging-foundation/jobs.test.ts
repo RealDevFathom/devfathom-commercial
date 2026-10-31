@@ -32,6 +32,8 @@ vi.mock('@/lib/restaurant/sop-occurrence-generation', () => ({
 vi.mock('@/lib/restaurant/sop-late-missed', () => ({
   SOP_LATE_MISSED_JOB: 'late',
   sopLateMissedHandler: vi.fn(),
+  enqueueDueSopEscalations: vi.fn().mockResolvedValue(0),
+  escalationLookbackStart: (now: Date) => new Date(now.getTime() - 7 * 24 * 60 * 60_000),
 }));
 vi.mock('@/lib/restaurant/sop-escalation', () => ({
   SOP_ESCALATION_JOB: 'escalation',

@@ -87,6 +87,18 @@ export const SOP_LATE_MISSED_JOB = 'sop.sweepLateMissed';
 export const MAX_ESCALATION_POLICIES_PER_TICK = 20;
 export const MAX_ESCALATION_OCCURRENCES_PER_TICK = 25;
 export const MAX_ESCALATION_PAIR_EVALUATIONS_PER_TICK = 500;
+/**
+ * How far back (by `windowEndsAt`) the producer and worker discovery look for
+ * escalation work. Escalation is an operational alert, not a backfill: rows older
+ * than this are never paged, so exhausted-but-unverified chains age out of the
+ * bounded page rotation instead of slowing it down forever.
+ */
+export const ESCALATION_LOOKBACK_MS = 7 * 24 * 60 * 60_000;
+
+/** Lower `windowEndsAt` bound for escalation work at `now`. */
+export function escalationLookbackStart(now: Date): Date {
+  return new Date(now.getTime() - ESCALATION_LOOKBACK_MS);
+}
 
 const ESCALATION_PAGE_INTERVAL_MS = 60_000;
 
@@ -136,7 +148,7 @@ export async function enqueueDueSopEscalations(db: ScopedDb, now: Date): Promise
     steps: { some: {} },
   } satisfies Prisma.RestaurantSopEscalationPolicyWhereInput;
   const occurrenceWhere = {
-    windowEndsAt: { lte: now },
+    windowEndsAt: { lte: now, gte: escalationLookbackStart(now) },
     status: { in: ['SCHEDULED', 'IN_PROGRESS', 'SUBMITTED', 'LATE', 'MISSED'] },
     // STOPPED terminates every policy chain, so do not let old terminal rows
     // consume a bounded occurrence page forever.
@@ -162,6 +174,7 @@ export async function enqueueDueSopEscalations(db: ScopedDb, now: Date): Promise
     scope: 'ORG' | 'BRANCH';
     branchId: string | null;
     stopOnAcknowledged: boolean;
+    createdAt: Date;
     quietHoursStartMinutes: number | null;
     quietHoursEndMinutes: number | null;
     steps: Array<{ id: string; delayMinutes: number }>;
@@ -175,6 +188,7 @@ export async function enqueueDueSopEscalations(db: ScopedDb, now: Date): Promise
       scope: true,
       branchId: true,
       stopOnAcknowledged: true,
+      createdAt: true,
       quietHoursStartMinutes: true,
       quietHoursEndMinutes: true,
       steps: {
@@ -209,6 +223,12 @@ export async function enqueueDueSopEscalations(db: ScopedDb, now: Date): Promise
       if (evaluatedPairs >= MAX_ESCALATION_PAIR_EVALUATIONS_PER_TICK) return enqueued;
       evaluatedPairs += 1;
       if (policy.scope === 'BRANCH' && policy.branchId !== occurrence.branchId) continue;
+      // A newly activated policy governs work that becomes overdue under it; it
+      // must not flood staff with alerts for occurrences that closed before it
+      // existed.
+      if (policy.createdAt && occurrence.windowEndsAt.getTime() < policy.createdAt.getTime()) {
+        continue;
+      }
       if (occurrence.escalationEvents.some((event) => event.kind === 'STOPPED')) continue;
       if (
         policy.stopOnAcknowledged &&
@@ -248,6 +268,10 @@ export async function enqueueDueSopEscalations(db: ScopedDb, now: Date): Promise
         continue;
       }
 
+      // `enqueue`'s nested `$transaction` reuses this tenant transaction, so a
+      // unique-key violation would abort the whole transaction (25P02 on the next
+      // statement). Isolate each insert in a savepoint so a lost race is local.
+      await db.$executeRaw`SAVEPOINT sop_escalation_enqueue`;
       try {
         const result = await enqueue(db, {
           type: SOP_ESCALATION_JOB,
@@ -255,11 +279,13 @@ export async function enqueueDueSopEscalations(db: ScopedDb, now: Date): Promise
           idempotencyKey: sopEscalationJobKey(occurrence.id, policy.id, nextStep.id),
           scheduledAt: now,
         });
+        await db.$executeRaw`RELEASE SAVEPOINT sop_escalation_enqueue`;
         if (!result.deduplicated) enqueued += 1;
       } catch (error) {
         // Two tenant-scoped sweepers may race after the pre-insert lookup. The
         // unique key is the winner; the loser has reached the desired state.
         if (!(error instanceof SchedulerError) || error.reason !== 'DUPLICATE_ENQUEUE') throw error;
+        await db.$executeRaw`ROLLBACK TO SAVEPOINT sop_escalation_enqueue`;
       }
     }
   }
