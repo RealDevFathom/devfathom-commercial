@@ -23,6 +23,9 @@ WORKDIR /app
 # container this size, which `tsc` exhausts outright (`Ineffective mark-compacts
 # near heap limit`, exit 134). `.github/workflows/deploy-staging.yml` already
 # raises this for `tsc` on the runner. Match that job's 8192 ceiling here.
+# This is a per-process limit, not a budget shared by the build. It is safe only
+# in conjunction with `experimental.cpus: 1` in next.config.ts; increasing the
+# worker count requires re-sizing this heap against the image builder's total RAM.
 ENV NODE_OPTIONS=--max-old-space-size=8192
 COPY --from=dependencies /app/node_modules ./node_modules
 COPY . .
@@ -38,6 +41,8 @@ ENV NEXT_BUILD_SKIP_TYPECHECK=1 \
 # Invoked through `node` and a real path, not `next build` and not `bun run build`.
 # A `.bin` shim picks its interpreter back up from a shebang and `PATH`, and
 # `oven/bun` ships a `node` that is a symlink to `bun` — being explicit is the point.
+# scripts/check-docker-build-contract.mjs guards this explicit Prisma/typegen/tsc/build
+# sequence against silent drift from package.json's build contract.
 # NEXT_PUBLIC_* values are inlined into client bundles at build time. Pass per environment,
 # e.g. --build-arg NEXT_PUBLIC_APP_URL=https://staging.devfathom.com. Empty keeps the fallback.
 ARG NEXT_PUBLIC_APP_URL=
@@ -48,6 +53,8 @@ RUN AUTH_SECRET=container-build-only node node_modules/next/dist/bin/next build
 RUN ./scripts/prepare-runtime-src.sh ./src /runtime-src
 
 FROM oven/bun:1.4.3-slim AS runner
+# Bun remains an accepted serving-time risk, not a risk closed by a green smoke
+# deploy. See docs/operations/build-runtime.md before changing this stage or CMD.
 WORKDIR /app
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \

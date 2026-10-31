@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { can, subjectFromSession } from '@/lib/abac';
 import { hasModule } from '@/lib/entitlements';
 import { financialStatements } from '@/lib/pharmacy/financial-statements';
+import { forecastPharmacyCashFlow } from '@/lib/pharmacy/cash-flow-forecast';
 import {
   grossMargin,
   grossMarginComparison,
@@ -52,6 +53,29 @@ const reportPeriod = z
     },
     { message: 'Choose a valid period of at most 92 days.' }
   );
+
+const cashEstimate = z.object({
+  id,
+  date: z.iso.date(),
+  amountMinor: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+});
+const forecastPayable = z.object({
+  id,
+  dueDate: z.iso.date(),
+  amountMinor: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  earlyPayDate: z.iso.date().optional(),
+  earlyPayDiscountBps: z.number().int().min(0).max(10_000).optional(),
+});
+const cashFlowForecastInput = z.object({
+  branchId: id,
+  asOfDate: z.iso.date(),
+  openingCashMinor: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+  minimumCashReserveMinor: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+  annualCashValueBps: z.number().int().min(0).max(100_000),
+  salesCashEstimates: z.array(cashEstimate).max(366),
+  khataCollectionEstimates: z.array(cashEstimate).max(10_000),
+  payables: z.array(forecastPayable).max(10_000),
+});
 
 const ledgerReportProcedure = adminProcedure
   .input(z.object({ branchId: id }))
@@ -145,12 +169,22 @@ const allocation = z.object({
 });
 
 export const pharmacyFinanceRouter = router({
+  cashFlowForecast: ledgerReportProcedure.input(cashFlowForecastInput).query(({ input }) => {
+    try {
+      return forecastPharmacyCashFlow(input);
+    } catch (error) {
+      if (error instanceof RangeError) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
+      }
+      throw error;
+    }
+  }),
   financialStatements: ledgerReportProcedure
     .input(reportPeriod.safeExtend({ page: z.number().int().min(1).max(10000).default(1) }))
     .query(async ({ ctx, input }) => ({
       ...ledgerMetadata(
         ctx.reportScope,
-        'Branch journal lines posted before the exclusive cutoff. Opening balances precede from; movements use [from,to). Receivables are debit balances; payables are credit balances. CASH and BANK are netted per entry, excluding internal transfers from cash inflow/outflow. Unposted activity and due-date aging remain unknown.'
+        'Branch journal lines posted before the exclusive cutoff. Opening balances precede from; movements use [from,to). Net P&L is projected only from canonical revenue, contra-revenue, and expense journal movements in that window. Receivables are debit balances; payables are credit balances. CASH and BANK are netted per entry, excluding internal transfers from cash inflow/outflow. Unposted activity and due-date aging remain unknown.'
       ),
       ...(await financialStatements(ctx.db, ctx.reportScope, {
         from: new Date(input.from),

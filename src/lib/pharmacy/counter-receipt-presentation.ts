@@ -104,6 +104,7 @@ export type CounterZReport = {
   id: string;
   branchName: string;
   businessDate: string;
+  currency: string;
   sequence: number;
   grossSalesMinor: number;
   refundTotalMinor: number;
@@ -158,7 +159,7 @@ export function buildCounterZReportPreview(
     report.branchName,
     `${labels[1]}: ${report.businessDate}`,
     `#${report.sequence} · ${report.id}`,
-    'PKR',
+    report.currency,
     ...amounts.map((amount, i) => `${labels[i + 2]}: ${formatMinor(amount, locale)}`),
     `${labels[8]}: ${report.reason ?? '—'}`,
     report.isFinal ? 'Final' : 'Provisional — migration reconciliation pending',

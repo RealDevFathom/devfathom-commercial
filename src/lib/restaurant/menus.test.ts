@@ -164,6 +164,13 @@ describe('createMenuItem — canonical same-org reference validation (C2)', () =
     await expect(createMenuItem(db, input)).rejects.toMatchObject({ reason: 'PRODUCT_NOT_FOUND' });
     expect(mocks.itemCreate).not.toHaveBeenCalled();
   });
+  it('rejects a COMBO product until ordering supports combo selections', async () => {
+    mocks.productFindUnique.mockResolvedValue({ id: 'prod_1', type: 'COMBO' });
+    await expect(createMenuItem(db, input)).rejects.toMatchObject({
+      reason: 'COMBO_NOT_ORDERABLE',
+    });
+    expect(mocks.itemCreate).not.toHaveBeenCalled();
+  });
   it('rejects a variant belonging to another product', async () => {
     mocks.variantFindUnique.mockResolvedValue({ id: 'var_x', productId: 'other_prod' });
     await expect(createMenuItem(db, { ...input, variantId: 'var_x' })).rejects.toMatchObject({

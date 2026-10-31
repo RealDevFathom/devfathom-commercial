@@ -1143,6 +1143,7 @@ model PharmacyCustomer {
   orders                 PharmacyCustomerOrder[]
   whatsappOptIn          Boolean?
   whatsappOptInChangedAt DateTime?                    @db.Timestamp(3)
+  preferredLanguage      String                       @default("en") @db.VarChar(2)
 
   @@unique([organizationId, id])
   @@unique([organizationId, patientId])
@@ -6725,9 +6726,9 @@ model RestaurantPrintJob {
   @@map("restaurant_print_jobs")
 }
 
-/// M4: a routing rule targeting a station. Exactly one of `productId` or
-/// `categoryId` is set (a CHECK enforces the XOR in the migration). Resolution is
-/// most-specific-wins (product rule > category rule > branch default) with
+/// M4: a routing rule targeting a station. Exactly one of `productId`,
+/// `categoryId`, or `course` is set (a CHECK enforces the XOR in the migration). Resolution is
+/// most-specific-wins (product rule > category rule > course rule > branch default) with
 /// `priority` breaking ties within a level (src/lib/restaurant/station-routing.ts).
 model RestaurantStationRoutingRule {
   id             String   @id @default(cuid())
@@ -6735,6 +6736,7 @@ model RestaurantStationRoutingRule {
   stationId      String
   productId      String?
   categoryId     String?
+  course         Int?
   priority       Int      @default(0)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
@@ -6747,6 +6749,7 @@ model RestaurantStationRoutingRule {
   @@index([stationId])
   @@index([productId])
   @@index([categoryId])
+  @@index([course])
   @@map("restaurant_station_routing_rules")
 }
 
@@ -8427,6 +8430,7 @@ model RestaurantJob {
   nextAttemptAt  DateTime            @default(now())
   claimedAt      DateTime?
   claimedBy      String?
+  claimToken     String?
   lastError      String?
   idempotencyKey String?
   createdAt      DateTime            @default(now())
@@ -10540,6 +10544,9 @@ model RestaurantShiftBreak {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
+  /// Database-maintained projection; raw endedAt stays absent after a repair.
+  closedByAdjustment Boolean @default(false)
+
   shift       RestaurantShift              @relation(fields: [shiftId], references: [id], onDelete: Cascade)
   adjustments RestaurantTimeAdjustment[]
   commands    RestaurantWorkforceCommand[]
@@ -10616,7 +10623,7 @@ model RestaurantTimeAdjustment {
   shiftId                  String
   breakId                  String?
   kind                     RestaurantTimeAdjustmentKind
-  originalAt               DateTime
+  originalAt               DateTime?
   correctedAt              DateTime
   reason                   String
   adjustedByUserId         String
@@ -11882,8 +11889,10 @@ model PharmacyQuoteLine {
   leadTimeDays          Int      @default(0)
   /// Shortest remaining shelf life the supplier will ship, in days.
   minimumExpiryDays     Int      @default(0)
-  canonicalUnitsPerPack Int
-  createdAt             DateTime @default(now())
+  /// Configured demand forecast through the offered expiry window.
+  forecastSellThroughPacks Int?
+  canonicalUnitsPerPack    Int
+  createdAt                DateTime @default(now())
 
   quote           PharmacyQuote           @relation(fields: [organizationId, quoteId], references: [organizationId, id], onDelete: Restrict)
   requisitionLine PharmacyRequisitionLine @relation(fields: [organizationId, requisitionLineId], references: [organizationId, id], onDelete: Restrict)
@@ -11956,7 +11965,11 @@ model PharmacyPurchaseOrderLine {
   taxBps                Int      @default(0)
   /// A creditable input tax is recovered and so is not stock cost.
   taxCreditable         Boolean  @default(false)
-  createdAt             DateTime @default(now())
+  /// Quote-time comparison assumptions retained on the draft for review.
+  forecastSellThroughPacks Int?
+  minimumExpiryDays        Int?
+  leadTimeDays             Int?
+  createdAt                DateTime @default(now())
 
   purchaseOrder       PharmacyPurchaseOrder        @relation(fields: [organizationId, purchaseOrderId], references: [organizationId, id], onDelete: Restrict)
   medicine            Medicine                     @relation(fields: [medicineId], references: [id], onDelete: Restrict)
@@ -12149,6 +12162,13 @@ enum PrescriptionCustodyState {
   TRANSFERRED
 }
 
+enum PatientConsentSource {
+  COUNTER_TABLET
+  QR
+  REPLY
+  LEGACY
+}
+
 enum PharmacyPharmacovigilanceKind {
   ADVERSE_DRUG_REACTION
   MEDICATION_ERROR
@@ -12202,6 +12222,8 @@ model PatientConsent {
   version          Int
   granted          Boolean
   recordedByUserId String
+  source           PatientConsentSource              @default(LEGACY)
+  staffId          String?
   recordedAt       DateTime                        @default(now())
   revokedAt        DateTime?
   supersedesId     String?
@@ -13861,7 +13883,9 @@ model PharmacyCampaignAttribution {
 enum PharmacyAnomalySignalKind {
   SHRINKAGE
   DISCOUNT_OVERRIDE
+  VOID_ABUSE
   GHOST_RETURN
+  TENDER_MISMATCH
   CASH_VARIANCE
   PURCHASE_PRICE_DRIFT
 }
@@ -14461,6 +14485,23 @@ model PharmacyMessageLog {
   @@index([organizationId, customerId, createdAt(sort: Desc)], map: "pharmacy_message_logs_customer_idx")
   @@index([organizationId, kind, status], map: "pharmacy_message_logs_kind_status_idx")
   @@map("pharmacy_message_logs")
+}
+
+/// Minimized consent evidence surviving tenant erasure for a bounded period.
+/// Fingerprints are keyed HMACs; this table intentionally has no organization
+/// foreign key or contact, message, customer, or patient data.
+model PharmacyWhatsAppConsentArchive {
+  id                          String   @id @default(cuid())
+  organizationFingerprint     String
+  customerFingerprint         String
+  optedIn                     Boolean
+  consentChangedAt            DateTime @db.Timestamp(3)
+  archivedAt                  DateTime @default(now()) @db.Timestamp(3)
+  expiresAt                   DateTime @db.Timestamp(3)
+
+  @@unique([organizationFingerprint, customerFingerprint, consentChangedAt], map: "pharmacy_wa_consent_archive_event_key")
+  @@index([expiresAt], map: "pharmacy_wa_consent_archive_expiry_idx")
+  @@map("pharmacy_whatsapp_consent_archives")
 }
 
 model PharmacyOrderDeliveryEvidence {

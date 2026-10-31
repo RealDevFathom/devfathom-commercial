@@ -4,8 +4,9 @@ import { Suspense } from 'react';
 import { MarginComparisonSection } from './margin-comparison';
 import { LedgerReportsSection, LedgerReportsLoading } from './ledger-reports';
 import type { Metadata } from 'next';
+import Link from 'next/link';
 import { redirect, unstable_rethrow } from 'next/navigation';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
@@ -271,6 +272,14 @@ export default async function PharmacyFinancePage({
         eyebrow="Pharmacy operations"
         heading="Finance"
         description="Post and allocate money, reconcile the bank, control periods, and publish approved tax versions."
+        actions={
+          <Link
+            href={`/pharmacy/accounts/balance-sheet?${new URLSearchParams({ branch: branch.id })}`}
+            className={buttonVariants({ variant: 'outline', size: 'lg' })}
+          >
+            Balance sheet
+          </Link>
+        }
       />
       <Suspense fallback={<LedgerReportsLoading />}>
         <FinancialStatements
@@ -722,6 +731,12 @@ export default async function PharmacyFinancePage({
           )}
         </SectionCard>
         <SectionCard title="Publish tax profile" eyebrow="FIN-04 · Accountant approval">
+          <a
+            href={`/pharmacy/accounts/tax-profile-review?${new URLSearchParams({ branch: branch.id })}`}
+            className="mb-5 inline-flex min-h-11 items-center text-sm text-primary underline underline-offset-4 hover:text-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            Review recorded tax profile versions
+          </a>
           <form action={perform} className="grid gap-3 sm:grid-cols-2">
             <input type="hidden" name="action" value="tax" />
             <input type="hidden" name="branchId" value={branch.id} />

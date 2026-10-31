@@ -11,6 +11,7 @@ import { readJson } from '@/lib/api-json';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { loadBranchCommercialTerms } from './branch-commercial-terms';
+import { evaluateOrderSettlement } from './bills';
 import { reviveCommercialTerms } from './commercial-terms';
 import { CoAuthorizationError } from './co-authorization';
 import { quoteDraftCheckBreakdown } from './draft-check-total';
@@ -562,7 +563,7 @@ export async function getOrderForBranch(db: ScopedDb, orderId: string, branchId:
         where: { status: { not: 'VOID' } },
         select: { serviceChargeTotal: true },
       },
-      deliveryFulfillment: { select: { deliveryFeeSnapshot: true } },
+      deliveryFulfillment: { select: { deliveryFeeSnapshot: true, status: true } },
     },
   });
   if (!order) return null;
@@ -592,6 +593,9 @@ export async function getOrderForBranch(db: ScopedDb, orderId: string, branchId:
     (total, bill) => total.plus(bill.serviceChargeTotal),
     new Prisma.Decimal(0)
   );
+  const settlement = order.deliveryFulfillment
+    ? await evaluateOrderSettlement(db, order.id)
+    : null;
   return {
     id: order.id,
     branchId: order.branchId,
@@ -599,6 +603,8 @@ export async function getOrderForBranch(db: ScopedDb, orderId: string, branchId:
     businessDate: order.businessDate.toISOString().slice(0, 10),
     status: order.status,
     channel: order.channel,
+    deliveryStatus: order.deliveryFulfillment?.status ?? null,
+    settled: settlement?.settled ?? false,
     coverCount: order.coverCount,
     sectionId: order.sectionId,
     serverStaffProfileId: order.serverStaffProfileId,

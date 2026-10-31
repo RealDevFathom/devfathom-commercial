@@ -32,6 +32,7 @@ vi.mock('@/lib/pharmacy/counter', async (original) => ({
 }));
 vi.mock('@/lib/pharmacy/sales', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/sales')>()),
+  changeSaleStatus: vi.fn(async () => ({ sale: { id: 'sale-a', status: 'HELD' } })),
   readReturnHistory: vi.fn(async () => [{ id: 'return-1' }]),
   returnSaleLine: vi.fn(async () => ({ returnLineId: 'return-line-1' })),
 }));
@@ -66,7 +67,7 @@ vi.mock('@/lib/pharmacy/receipt-print', () => ({
 import { hasModule } from '@/lib/entitlements';
 import { readCounterCart, readCounterReceipt } from '@/lib/pharmacy/counter';
 import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-source';
-import { readReturnHistory, returnSaleLine } from '@/lib/pharmacy/sales';
+import { changeSaleStatus, readReturnHistory, returnSaleLine } from '@/lib/pharmacy/sales';
 import { applyPharmacyTender, refundPharmacyTender } from '@/lib/pharmacy/settlement';
 import {
   buildPharmacyReceiptEscPosJob,
@@ -291,6 +292,42 @@ describe('counter receipt authorization', () => {
       })
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(f.db.$transaction).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      source: 'role',
+      permissions: [{ capability: 'pharmacy:counter', effect: 'DENY' as const }],
+      overrides: [{ capability: '*', effect: 'ALLOW' as const }],
+    },
+    {
+      source: 'user',
+      permissions: [{ capability: '*', effect: 'ALLOW' as const }],
+      overrides: [{ capability: 'pharmacy:counter', effect: 'DENY' as const }],
+    },
+  ])('blocks transition when an admin has an explicit $source DENY', async (rules) => {
+    const f = fixture(rules.permissions, 'ADMIN', rules.overrides);
+
+    await expect(
+      f.caller().transition({ branchId: 'branch-a', saleId: 'sale-a', action: 'hold' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(changeSaleStatus).not.toHaveBeenCalled();
+  });
+
+  it('keeps the all-capability admin transition shortcut without a branch assignment', async () => {
+    const f = fixture([{ capability: '*', effect: 'ALLOW' }], 'ADMIN');
+
+    await expect(
+      f.caller().transition({ branchId: 'branch-a', saleId: 'sale-a', action: 'hold' })
+    ).resolves.toMatchObject({ sale: { id: 'sale-a', status: 'HELD' } });
+    expect(changeSaleStatus).toHaveBeenCalledWith(
+      f.db,
+      expect.objectContaining({ organizationId: 'org-a', branchId: 'branch-a' }),
+      'sale-a',
+      'hold',
+      undefined,
+      undefined
+    );
   });
 
   it.each(paths)('$name allows an assigned dispenser on their own branch', async (path) => {
