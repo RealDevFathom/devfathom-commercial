@@ -238,7 +238,8 @@ export async function clockIn(
     const { shift } = await requireOwnLiveShift(tx, input.shiftId, input.userId);
     const replay = await commandReplay(tx, { idempotencyKey, kind: 'CLOCK_IN', shiftId: shift.id });
     if (replay) return presentWorkforceShift(await loadShift(tx, shift.id));
-    if (shift.clockedInAt)
+    const effective = presentWorkforceShift(shift);
+    if (effective.clockedInAt || effective.clockedOutAt)
       throw new WorkforceError('This shift is already clocked in.', 'CONFLICT');
     const now = input.now ?? new Date();
     if (now.getTime() < shift.startAt.getTime() - 30 * MINUTE_MS) {
@@ -266,14 +267,19 @@ export async function startBreak(
       shiftId: shift.id,
     });
     if (replay) return presentWorkforceShift(await loadShift(tx, shift.id));
-    if (!shift.clockedInAt || shift.clockedOutAt) {
+    const effective = presentWorkforceShift(shift);
+    if (!effective.clockedInAt || effective.clockedOutAt) {
       throw new WorkforceError('Breaks require an active clock-in.', 'CONFLICT');
     }
-    if (shift.breaks.some((row) => row.endedAt === null)) {
+    if (effective.breaks.some((row) => row.endedAt === null)) {
       throw new WorkforceError('A break is already active.', 'CONFLICT');
     }
+    const now = input.now ?? new Date();
+    if (now < effective.clockedInAt || effective.breaks.some((row) => row.endedAt! > now)) {
+      throw new WorkforceError('A break cannot begin before prior attendance.', 'CONFLICT');
+    }
     const created = await tx.restaurantShiftBreak.create({
-      data: { shiftId: shift.id, startedAt: input.now ?? new Date() },
+      data: { shiftId: shift.id, startedAt: now },
     });
     await createCommand(tx, {
       idempotencyKey,
@@ -298,11 +304,19 @@ export async function endBreak(
       shiftId: shift.id,
     });
     if (replay) return presentWorkforceShift(await loadShift(tx, shift.id));
-    const open = shift.breaks.find((row) => row.endedAt === null);
+    const effective = presentWorkforceShift(shift);
+    if (!effective.clockedInAt || effective.clockedOutAt) {
+      throw new WorkforceError('Breaks require an active clock-in.', 'CONFLICT');
+    }
+    const open = effective.breaks.find((row) => row.endedAt === null);
     if (!open) throw new WorkforceError('No active break exists.', 'CONFLICT');
+    const now = input.now ?? new Date();
+    if (now < open.startedAt) {
+      throw new WorkforceError('Break end cannot be before break start.', 'CONFLICT');
+    }
     await tx.restaurantShiftBreak.update({
       where: { id: open.id },
-      data: { endedAt: input.now ?? new Date() },
+      data: { endedAt: now },
     });
     await createCommand(tx, {
       idempotencyKey,
@@ -320,21 +334,41 @@ export async function clockOut(
 ) {
   const idempotencyKey = requireIdempotencyKey(input.idempotencyKey);
   return db.$transaction(async (tx) => {
-    const { shift } = await requireOwnLiveShift(tx, input.shiftId, input.userId);
+    const { shift, actor } = await requireOwnLiveShift(tx, input.shiftId, input.userId);
     const replay = await commandReplay(tx, {
       idempotencyKey,
       kind: 'CLOCK_OUT',
       shiftId: shift.id,
     });
     if (replay) return presentWorkforceShift(await loadShift(tx, shift.id));
-    if (!shift.clockedInAt || shift.clockedOutAt) {
+    const effective = presentWorkforceShift(shift);
+    if (!effective.clockedInAt || effective.clockedOutAt) {
       throw new WorkforceError('This shift does not have an active clock-in.', 'CONFLICT');
     }
-    if (shift.breaks.some((row) => row.endedAt === null)) {
+    if (effective.breaks.some((row) => row.endedAt === null)) {
       throw new WorkforceError('End the active break before clocking out.', 'CONFLICT');
     }
     const now = input.now ?? new Date();
-    await tx.restaurantShift.update({ where: { id: shift.id }, data: { clockedOutAt: now } });
+    if (now < effective.clockedInAt || effective.breaks.some((row) => row.endedAt! > now)) {
+      throw new WorkforceError('Clock-out cannot be before prior attendance.', 'CONFLICT');
+    }
+    if (!shift.clockedInAt || now < shift.clockedInAt) {
+      // The raw timekeeping CHECK requires a raw clock-in. Preserve its absence
+      // and record this server-observed clock-out in the append-only history.
+      await tx.restaurantTimeAdjustment.create({
+        data: {
+          shiftId: shift.id,
+          kind: 'CLOCK_OUT',
+          originalAt: null,
+          correctedAt: now,
+          reason: 'Employee clock-out after a clock-in correction.',
+          adjustedByUserId: input.userId,
+          adjustedByStaffProfileId: actor.id,
+        },
+      });
+    } else {
+      await tx.restaurantShift.update({ where: { id: shift.id }, data: { clockedOutAt: now } });
+    }
     await createCommand(tx, { idempotencyKey, kind: 'CLOCK_OUT', shiftId: shift.id });
     return presentWorkforceShift(await loadShift(tx, shift.id), now);
   });
@@ -550,6 +584,9 @@ export async function appendTimeAdjustment(
     const breakRow = input.breakId
       ? (shift.breaks.find((row) => row.id === input.breakId) ?? null)
       : null;
+    if (isBreakAdjustment && !breakRow) {
+      throw new WorkforceError('Break not found in this shift.', 'NOT_FOUND');
+    }
     const originalAt =
       input.kind === 'CLOCK_IN'
         ? adjustedAt(shift, 'CLOCK_IN', shift.clockedInAt)
@@ -571,6 +608,9 @@ export async function appendTimeAdjustment(
       input.kind === 'CLOCK_OUT'
         ? input.correctedAt
         : adjustedAt(shift, 'CLOCK_OUT', shift.clockedOutAt);
+    if (projectedClockOut && !projectedClockIn) {
+      throw new WorkforceError('Add the missing clock-in before clock-out.', 'INVALID');
+    }
     if (projectedClockIn && projectedClockOut && projectedClockOut < projectedClockIn) {
       throw new WorkforceError('Clock-out cannot be before clock-in.', 'INVALID');
     }
@@ -591,6 +631,9 @@ export async function appendTimeAdjustment(
       }
       if (projectedClockOut && projectedEnd && projectedEnd > projectedClockOut) {
         throw new WorkforceError('A break cannot end after clock-out.', 'INVALID');
+      }
+      if (projectedClockOut && !projectedEnd) {
+        throw new WorkforceError('Add the missing break end before clock-out.', 'INVALID');
       }
     }
     return tx.restaurantTimeAdjustment.create({
@@ -630,12 +673,11 @@ export async function exportWorkforceAttendanceCsv(
       );
     }, 0);
     const workedMinutes =
-      shift.clockedInAt && shift.clockedOutAt
+      shift.clockedInAt && shift.clockedOutAt && shift.breaks.every((item) => item.endedAt)
         ? Math.max(
             0,
-            Math.round(
-              (shift.clockedOutAt.getTime() - shift.clockedInAt.getTime()) / MINUTE_MS
-            ) - breakMinutes
+            Math.round((shift.clockedOutAt.getTime() - shift.clockedInAt.getTime()) / MINUTE_MS) -
+              breakMinutes
           )
         : null;
     return {

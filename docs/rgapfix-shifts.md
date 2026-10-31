@@ -39,8 +39,33 @@ these findings. This is not a definitive check of inaccessible private GitHub is
   records, and append-only missing-clock-out repair (`src/lib/restaurant/workforce.test.ts:33-105`,
   `src/server/routers/restaurant-shifts.test.ts:1077-1168`).
 
-## Verification limitation
+## Review remediation — 2026-10-31
 
-Tests and generation were not run because dependencies are unavailable in this environment. The
-attempted `bunx prisma generate` was blocked by the documented npm registry HTTP 403 response before
-any formatter or test command could execute.
+The five findings from the failed follow-up review are addressed:
+
+1. Employee punches now use corrected attendance for transition and ordering checks. A server-observed
+   clock-out after a missing clock-in repair is appended to history, preserving the absent raw punch
+   and the existing raw-time database CHECK. Replays retain their command receipts.
+2. Managers can open the correction dialog when both source punches are missing.
+3. Break corrections explicitly reject missing and other-shift break targets with `NOT_FOUND`.
+4. Completing attendance requires an effective clock-in and completed, ordered breaks. Incomplete
+   breaks also leave exported worked-time values blank until repaired.
+5. `COMPLETE_LATE` retains warning styling in both roster views and the employee lateness explanation.
+
+The additive `20261031090000_restaurant_effective_break_closure` migration maintains a derived
+`closedByAdjustment` flag from immutable break-end history. The unique open-break index uses this
+projection so a repaired break permits the next break without changing its absent raw end. Direct
+writes cannot forge the projection. Tenant RLS, history immutability, raw punch guards, and the
+one-open-break arbiter remain enforced. The migration backfills existing repairs under forced RLS.
+
+Verification passed all 87 focused presenter/export, router, component, migration-contract, routing,
+and restricted-role PostgreSQL tests, including `workforce.db.test.ts` and
+`restaurant-shifts-rls.test.ts`. Database checks used an isolated clone of the review database; a
+separate upgrade probe verified pre-existing repairs with a non-superuser, non-bypass-RLS owner.
+
+Browser component checks used the real roster, shared components, tokens, and local fonts with
+fixture data: 375/768/1024/1440px, light/dark, normal/reduced motion, missing-punch repair, warning
+statuses, cancelled and pending controls, dialog focus trapping/restoration and Escape, bounded
+overflow, loading/empty/error/permission-denied states, and no browser console/render errors. This
+fixture does not verify authenticated Next.js routing or hydration. The prohibited broad checks
+remain delegated to the separate checks machine.

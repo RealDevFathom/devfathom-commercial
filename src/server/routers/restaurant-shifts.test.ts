@@ -1075,6 +1075,127 @@ describe('restaurantShifts.reviewSwap', () => {
 // ---------------------------------------------------------------------------
 
 describe('restaurantShifts.correctTime', () => {
+  it('requires missing clock-ins and break ends before completing attendance', async () => {
+    const repair = {
+      shiftId: 'shift_emp',
+      branchId: 'branch_1',
+      kind: 'CLOCK_OUT' as const,
+      correctedAt: at('2026-09-20T17:00:00Z'),
+      reason: 'Repair missing punch',
+    };
+    await expect(caller('MANAGER').correctTime(repair)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    await caller('EMPLOYEE').clockIn({ shiftId: 'shift_emp', idempotencyKey: 'ci' });
+    vi.setSystemTime(at('2026-09-20T12:00:00Z'));
+    await caller('EMPLOYEE').startBreak({ shiftId: 'shift_emp', idempotencyKey: 'break' });
+    await expect(caller('MANAGER').correctTime(repair)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(state.adjustments).toHaveLength(0);
+  });
+
+  it.each(['BREAK_START', 'BREAK_END'] as const)(
+    'rejects %s for a missing break or a break on another shift',
+    async (kind) => {
+      state.breaks.push({
+        id: 'other_break',
+        shiftId: 'shift_other',
+        startedAt: at('2026-09-20T12:00:00Z'),
+        endedAt: null,
+      });
+      for (const breakId of ['missing_break', 'other_break']) {
+        await expect(
+          caller('MANAGER').correctTime({
+            shiftId: 'shift_emp',
+            branchId: 'branch_1',
+            kind,
+            breakId,
+            correctedAt: at('2026-09-20T12:30:00Z'),
+            reason: 'Repair break',
+          })
+        ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+      }
+      expect(state.adjustments).toHaveLength(0);
+    }
+  );
+
+  it('uses a repaired clock-in for employee punches without replacing the missing source punch', async () => {
+    await caller('MANAGER').correctTime({
+      shiftId: 'shift_emp',
+      branchId: 'branch_1',
+      kind: 'CLOCK_IN',
+      correctedAt: at('2026-09-20T09:00:00Z'),
+      reason: 'Reader was offline',
+    });
+    await expect(
+      caller('EMPLOYEE').clockIn({ shiftId: 'shift_emp', idempotencyKey: 'duplicate-ci' })
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+    vi.setSystemTime(at('2026-09-20T12:00:00Z'));
+    await caller('EMPLOYEE').startBreak({ shiftId: 'shift_emp', idempotencyKey: 'break' });
+    vi.setSystemTime(at('2026-09-20T12:30:00Z'));
+    await caller('EMPLOYEE').endBreak({ shiftId: 'shift_emp', idempotencyKey: 'end' });
+    vi.setSystemTime(at('2026-09-20T17:00:00Z'));
+    const done = await caller('EMPLOYEE').clockOut({ shiftId: 'shift_emp', idempotencyKey: 'co' });
+    expect(done).toMatchObject({
+      clockedOutAt: at('2026-09-20T17:00:00Z'),
+      attendanceStatus: 'COMPLETE',
+    });
+    const replay = await caller('EMPLOYEE').clockOut({
+      shiftId: 'shift_emp',
+      idempotencyKey: 'co',
+    });
+    expect(replay!.clockedOutAt).toEqual(done!.clockedOutAt);
+    expect(state.shifts.find((s) => s.id === 'shift_emp')!.clockedInAt).toBeNull();
+    expect(state.adjustments).toHaveLength(2);
+    expect(state.adjustments[1]).toMatchObject({ kind: 'CLOCK_OUT', originalAt: null });
+  });
+
+  it('does not let an employee punch again after a missing clock-out repair', async () => {
+    await caller('EMPLOYEE').clockIn({ shiftId: 'shift_emp', idempotencyKey: 'ci' });
+    await caller('MANAGER').correctTime({
+      shiftId: 'shift_emp',
+      branchId: 'branch_1',
+      kind: 'CLOCK_OUT',
+      correctedAt: at('2026-09-20T17:00:00Z'),
+      reason: 'Forgot clock-out',
+    });
+    vi.setSystemTime(at('2026-09-20T17:05:00Z'));
+    await expect(
+      caller('EMPLOYEE').clockOut({ shiftId: 'shift_emp', idempotencyKey: 'co' })
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+    await expect(
+      caller('EMPLOYEE').startBreak({ shiftId: 'shift_emp', idempotencyKey: 'break' })
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+    expect(state.shifts.find((s) => s.id === 'shift_emp')!.clockedOutAt).toBeNull();
+  });
+
+  it('treats a repaired break end as closed for subsequent punches', async () => {
+    await caller('EMPLOYEE').clockIn({ shiftId: 'shift_emp', idempotencyKey: 'ci' });
+    vi.setSystemTime(at('2026-09-20T12:00:00Z'));
+    await caller('EMPLOYEE').startBreak({ shiftId: 'shift_emp', idempotencyKey: 'break' });
+    await caller('MANAGER').correctTime({
+      shiftId: 'shift_emp',
+      branchId: 'branch_1',
+      kind: 'BREAK_END',
+      breakId: state.breaks[0]!.id,
+      correctedAt: at('2026-09-20T12:30:00Z'),
+      reason: 'Reader offline',
+    });
+    vi.setSystemTime(at('2026-09-20T13:00:00Z'));
+    await expect(
+      caller('EMPLOYEE').endBreak({ shiftId: 'shift_emp', idempotencyKey: 'duplicate-end' })
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+    await caller('EMPLOYEE').startBreak({ shiftId: 'shift_emp', idempotencyKey: 'second-break' });
+    vi.setSystemTime(at('2026-09-20T13:15:00Z'));
+    await caller('EMPLOYEE').endBreak({ shiftId: 'shift_emp', idempotencyKey: 'second-end' });
+    vi.setSystemTime(at('2026-09-20T17:00:00Z'));
+    const done = await caller('EMPLOYEE').clockOut({ shiftId: 'shift_emp', idempotencyKey: 'co' });
+    expect(done!.clockedOutAt).toEqual(at('2026-09-20T17:00:00Z'));
+    expect(state.breaks[0]!.endedAt).toBeNull();
+    expect(state.breaks[1]!.endedAt).toEqual(at('2026-09-20T13:15:00Z'));
+  });
+
   it('appends a reasoned correction that later reads (and payroll) honour', async () => {
     await caller('EMPLOYEE').clockIn({ shiftId: 'shift_emp', idempotencyKey: 'ci' });
     const adjustment = await caller('MANAGER').correctTime({

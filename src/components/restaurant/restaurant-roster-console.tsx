@@ -468,10 +468,16 @@ export function RestaurantRosterConsole() {
                       </div>
                       <StatusPill
                         status={shift.attendanceStatus.replaceAll('_', ' ')}
-                        tone={shift.attendanceStatus === 'LATE' ? 'warning' : 'neutral'}
+                        tone={
+                          shift.attendanceStatus === 'LATE' ||
+                          shift.attendanceStatus === 'COMPLETE_LATE'
+                            ? 'warning'
+                            : 'neutral'
+                        }
                       />
                     </div>
-                    {shift.attendanceStatus === 'LATE' ? (
+                    {shift.attendanceStatus === 'LATE' ||
+                    shift.attendanceStatus === 'COMPLETE_LATE' ? (
                       <p className="mt-2 text-xs text-text-muted">
                         {shift.lateMinutes} minutes after the {shift.lateThresholdMinutes}-minute
                         attendance threshold.
@@ -739,6 +745,7 @@ export function RestaurantRosterConsole() {
                             cancelled
                               ? 'danger'
                               : shift.attendanceStatus === 'LATE' ||
+                                  shift.attendanceStatus === 'COMPLETE_LATE' ||
                                   shift.attendanceStatus === 'ABSENT'
                                 ? 'warning'
                                 : 'success'
@@ -814,7 +821,7 @@ export function RestaurantRosterConsole() {
                             <Button
                               variant="outline"
                               size="sm"
-                              disabled={cancelled || (!shift.clockedInAt && !shift.clockedOutAt)}
+                              disabled={cancelled}
                               onClick={() => setCorrecting(shift)}
                             >
                               Correct time

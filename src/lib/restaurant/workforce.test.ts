@@ -103,4 +103,35 @@ describe('restaurant workforce presentation and export', () => {
     expect(completedRow).toContain(',30,450,7.50,COMPLETE_LATE,7');
     expect(openRow).toContain(',0,,,LATE,7');
   });
+
+  it('leaves worked time blank until a missing break end is repaired', async () => {
+    const incomplete = {
+      ...baseShift,
+      clockedOutAt: new Date('2026-08-20T17:07:00Z'),
+      breaks: [{ id: 'break_1', startedAt: new Date('2026-08-20T12:00:00Z'), endedAt: null }],
+    };
+    const repaired = {
+      ...incomplete,
+      adjustments: [
+        {
+          id: 'a1',
+          breakId: 'break_1',
+          kind: 'BREAK_END' as const,
+          correctedAt: new Date('2026-08-20T12:30:00Z'),
+          createdAt: new Date('2026-08-21T09:00:00Z'),
+        },
+      ],
+    };
+    const db = {
+      restaurantShift: { findMany: vi.fn(async () => [incomplete, repaired]) },
+    } as unknown as ScopedDb;
+    const result = await exportWorkforceAttendanceCsv(db, {
+      branchId: 'branch_1',
+      fromBusinessDate: baseShift.businessDate,
+      toBusinessDate: baseShift.businessDate,
+    });
+    const [, openRow, repairedRow] = result.csv.split('\n');
+    expect(openRow).toContain(',0,,,COMPLETE_LATE,7');
+    expect(repairedRow).toContain(',30,450,7.50,COMPLETE_LATE,7');
+  });
 });
