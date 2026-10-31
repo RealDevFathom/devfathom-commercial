@@ -14,6 +14,10 @@ const voucherSql = readFileSync(
   join(process.cwd(), 'prisma/migrations/20261029000182_pharmacy_voucher_scoping/migration.sql'),
   'utf8'
 );
+const voucherLifecycleSql = readFileSync(
+  join(process.cwd(), 'prisma/migrations/20261031000182_pharmacy_voucher_lifecycle/migration.sql'),
+  'utf8'
+);
 
 describe('pharmacy permissioned marketing migration', () => {
   it('stores segment definitions as auditable data and rejects clinical keys in the database', () => {
@@ -53,11 +57,27 @@ describe('pharmacy voucher migration', () => {
     expect(voucherSql.indexOf('NOT VALID')).toBeLessThan(voucherSql.indexOf('SET NOT NULL'));
   });
 
-  it('persists a tenant-isolated, single-use capture-to-sale-line redemption', () => {
+  it('persists a tenant-isolated capture-to-sale-line redemption', () => {
     expect(voucherSql).toContain('CREATE TABLE "pharmacy_voucher_redemptions"');
-    expect(voucherSql).toContain('UNIQUE ("organizationId", "captureId")');
     expect(voucherSql).toContain('REFERENCES "pharmacy_sale_lines"');
     expect(voucherSql).toContain('FORCE ROW LEVEL SECURITY');
     expect(voucherSql).toContain('app.current_branch_id');
+  });
+
+  it('replaces lifetime uniqueness with an append-only reservation guard and unpaid-void release', () => {
+    expect(voucherSql).toContain('UNIQUE ("organizationId", "captureId")');
+    expect(voucherLifecycleSql).toContain(
+      'DROP CONSTRAINT "pharmacy_voucher_redemptions_organizationId_captureId_key"'
+    );
+    expect(voucherLifecycleSql).toContain(
+      'CREATE INDEX "pharmacy_voucher_redemptions_organizationId_captureId_idx"'
+    );
+    expect(voucherLifecycleSql).toContain('BEFORE UPDATE OR DELETE ON "pharmacy_voucher_redemptions"');
+    expect(voucherLifecycleSql).toContain('CREATE TRIGGER pharmacy_voucher_claim_capture_guard');
+    expect(voucherLifecycleSql).toContain('FOR UPDATE');
+    expect(voucherLifecycleSql).toContain("s.status = 'VOID'");
+    expect(voucherLifecycleSql).toContain('NOT EXISTS (SELECT 1 FROM pharmacy_tenders t');
+    expect(voucherLifecycleSql).toContain("e.kind = 'VOIDED'");
+    expect(voucherLifecycleSql).toContain("CONSTRAINT = 'pharmacy_voucher_capture_active_key'");
   });
 });

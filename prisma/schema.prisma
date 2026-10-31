@@ -13822,16 +13822,16 @@ model PharmacyVoucherRedemption {
   discountMinor    Int
   redeemedByUserId String
   redeemedAt       DateTime                @default(now())
-  campaign         PharmacyCampaign        @relation(fields: [organizationId, campaignId], references: [organizationId, id], onDelete: Restrict)
-  capture          PharmacyCampaignCapture @relation(fields: [organizationId, captureId], references: [organizationId, id], onDelete: Restrict)
-  customer         PharmacyCustomer        @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict)
-  saleLine         PharmacySaleLine        @relation(fields: [organizationId, branchId, saleLineId], references: [organizationId, branchId, id], onDelete: Restrict)
+  campaign         PharmacyCampaign        @relation(fields: [organizationId, campaignId], references: [organizationId, id], onDelete: Restrict, onUpdate: NoAction)
+  capture          PharmacyCampaignCapture @relation(fields: [organizationId, captureId], references: [organizationId, id], onDelete: Restrict, onUpdate: NoAction)
+  customer         PharmacyCustomer        @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict, onUpdate: NoAction)
+  saleLine         PharmacySaleLine        @relation(fields: [organizationId, branchId, saleLineId], references: [organizationId, branchId, id], onDelete: Restrict, onUpdate: NoAction)
 
   @@unique([organizationId, id])
   // A migration trigger locks the capture and enforces one unreleased reservation.
   @@index([organizationId, captureId])
   @@unique([organizationId, branchId, saleLineId])
-  @@index([organizationId, branchId, campaignId, redeemedAt])
+  @@index([organizationId, branchId, campaignId, redeemedAt], map: "pharmacy_voucher_redemptions_org_branch_campaign_idx")
   @@map("pharmacy_voucher_redemptions")
 }
 
