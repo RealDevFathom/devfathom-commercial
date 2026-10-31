@@ -46,9 +46,11 @@ import {
   buildCounterReplayRequest,
   createCounterQueue,
   enqueueCounterCommand,
+  isValidQueuedCounterCommand,
   nextCounterReplay,
   purgeCounterQueue,
   resumeCounterAfterReauth,
+  unsettledCommands,
 } from './counter-command-queue';
 import type {
   CounterCommandInput,
@@ -66,7 +68,7 @@ import { applyRecallBulletin, checkSafetyLease } from './offline-safety-lease';
 import type { OfflineRecallBulletin, SafetyLeaseState } from './offline-safety-lease';
 
 /** Bump when the persisted document shape changes; an older record fails closed. */
-export const COUNTER_STORE_SCHEMA_VERSION = 2;
+export const COUNTER_STORE_SCHEMA_VERSION = 3;
 
 export const COUNTER_STORE_DATABASE: TerminalStoreDatabase = {
   // A distinct database name from the Restaurant POS: a device enrolled in both
@@ -161,7 +163,15 @@ export class PharmacyCounterRuntime {
     );
     if (result.status === 'unrecoverable') return 'unrecoverable';
     if (result.status === 'ok') {
-      if (result.state.queue && result.state.queue.deviceId !== this.scope.deviceId) {
+      if (
+        result.state.queue &&
+        (result.state.queue.deviceId !== this.scope.deviceId ||
+          // Settled history may refer to retired leases; only replayable work
+          // must still be backed by the counter's current receipt leases.
+          !unsettledCommands(result.state.queue).every((command) =>
+            isValidQueuedCounterCommand(result.state.queue!, command)
+          ))
+      ) {
         return 'unrecoverable';
       }
       this.state = {
@@ -353,7 +363,10 @@ export class PharmacyCounterRuntime {
         await this.commit(nextState);
       }
     }
-    const batchId = input.bucket?.inventoryLotId ?? null;
+    const batchId =
+      input.action === 'CASH_OTC_SALE' || input.action === 'CONTROLLED_MEDICINE_SALE'
+        ? (input.payload.lines[0]?.inventoryLotId ?? null)
+        : (input.bucket?.inventoryLotId ?? null);
     const result = enqueueCounterCommand(this.queue(), input, {
       ...matrix,
       snapshots: this.cachedSnapshotStates(),
@@ -389,7 +402,23 @@ export class PharmacyCounterRuntime {
       const next = nextCounterReplay(this.queue(), this.scope.deviceId);
       if (next.status !== 'READY') return { state: next.status, discarded: null };
 
-      const request = buildCounterReplayRequest(this.queue(), next.command);
+      let request: CounterReplayRequest;
+      try {
+        request = buildCounterReplayRequest(this.queue(), next.command);
+      } catch (error) {
+        if (!(error instanceof Error) || error.message !== 'INVALID_REPLAY_CONTRACT') throw error;
+
+        const applied = applyCounterReplayOutcome(this.queue(), {
+          commandId: next.command.commandId,
+          outcome: {
+            action: 'QUARANTINE',
+            reason: 'REJECTED',
+            message: 'This queued action has no pharmacy counter replay contract.',
+          },
+        });
+        await this.commit({ ...this.state, queue: applied.snapshot });
+        continue;
+      }
       await this.commit({
         ...this.state,
         queue: beginCounterReplay(this.queue(), next.command.commandId),

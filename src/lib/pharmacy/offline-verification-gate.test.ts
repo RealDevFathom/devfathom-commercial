@@ -99,11 +99,58 @@ async function readyCounter(
   return counter;
 }
 
-function sale(deviceId = SCOPE.deviceId, clientOriginAt = new Date().toISOString()) {
+function sale(
+  deviceId = SCOPE.deviceId,
+  clientOriginAt = new Date().toISOString(),
+  receiptNumber = 1
+) {
+  const envelope = {
+    organizationId: SCOPE.organizationId,
+    branchId: SCOPE.branchId,
+    deviceId,
+    kind: 'RULES' as const,
+    version: 1,
+    payloadHash: HASH,
+    issuedAt: START.toISOString(),
+    expiresAt: new Date(START.getTime() + FOUR_HOURS_MS + 1).toISOString(),
+    safetyLease: {
+      issuedAt: START.toISOString(),
+      expiresAt: new Date(START.getTime() + FOUR_HOURS_MS + 1).toISOString(),
+      recallVersion: 0,
+      licenceVersion: 1,
+      ruleVersion: 1,
+    },
+    signingKeyId: 'test-key',
+  };
   return {
+    commandId: `command-${deviceId}-${receiptNumber}-${clientOriginAt}`,
     deviceId,
     action: 'CASH_OTC_SALE' as const,
-    payload: { lines: [{ inventoryLotId: 'last_lot', units: 1 }] },
+    payload: {
+      leasedReceipt: {
+        leaseId: `lease_${deviceId}`,
+        receiptNumber,
+        originalSaleAt: clientOriginAt,
+        envelope,
+        signature: 'snapshot-signature',
+      },
+      snapshots: [],
+      lines: [
+        {
+          medicineId: 'medicine',
+          presentationId: 'presentation',
+          packLevelId: 'pack',
+          saleUnit: 'UNIT' as const,
+          quantity: 1,
+          canonicalUnitsPerSaleUnit: 1,
+          inventoryLotId: 'last_lot',
+          stockLocationId: 'dispensary',
+        },
+      ],
+      amountMinor: 100,
+      cashReceivedMinor: 100,
+    },
+    authentication: { commandSignature: 'command-mac', receiptSignature: 'receipt-mac' },
     clientOriginAt,
     bucket: { inventoryLotId: 'last_lot', stockLocationId: 'dispensary' },
     requestedUnits: 1,
@@ -243,12 +290,16 @@ describe('PH-OFF OFF-05 — offline verification gate', () => {
 
   it('clock skew orders replay by persisted sequence, never client timestamps', async () => {
     const counter = await readyCounter(createMemoryDriver(), { quotaUnits: 2 });
-    await counter.enqueue(sale(SCOPE.deviceId, '2099-01-01T00:00:00.000Z'), matrix());
-    await counter.enqueue(sale(SCOPE.deviceId, '2000-01-01T00:00:00.000Z'), matrix());
+    expect(
+      await counter.enqueue(sale(SCOPE.deviceId, '2099-01-01T00:00:00.000Z'), matrix())
+    ).toMatchObject({ ok: true });
+    expect(
+      await counter.enqueue(sale(SCOPE.deviceId, '2000-01-01T00:00:00.000Z', 2), matrix())
+    ).toMatchObject({ ok: true });
     const origins: unknown[] = [];
 
     await counter.replay(async (request) => {
-      origins.push(request.body.clientOriginAt);
+      origins.push(request.body.leasedReceipt.originalSaleAt);
       return { status: 201 };
     });
     expect(origins).toEqual(['2099-01-01T00:00:00.000Z', '2000-01-01T00:00:00.000Z']);
@@ -257,7 +308,9 @@ describe('PH-OFF OFF-05 — offline verification gate', () => {
   it('sequence exhaustion fails closed without inventing a receipt number', async () => {
     const counter = await readyCounter(createMemoryDriver(), { receiptEnd: 1, quotaUnits: 2 });
     expect(await counter.enqueue(sale(), matrix())).toMatchObject({ ok: true });
-    expect(await counter.enqueue(sale(), matrix())).toMatchObject({
+    expect(
+      await counter.enqueue(sale(SCOPE.deviceId, new Date().toISOString(), 2), matrix())
+    ).toMatchObject({
       ok: false,
       reason: 'NO_RECEIPT_NUMBER',
     });

@@ -15,7 +15,7 @@
  */
 import { randomBytes } from 'node:crypto';
 
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { createMemoryDriver } from '@/lib/retail-terminal/local-store';
 import type { TerminalStorageDriver } from '@/lib/retail-terminal/local-store';
@@ -125,11 +125,38 @@ const MATRIX = {
   deviceUsable: true,
 };
 
-function cashSale(units = 1) {
+let cashCommandSequence = 0;
+function cashSale(units = 1, receiptNumber = 900) {
+  const receiptEnvelope = envelopeFor('RULES', { kind: 'RULES' });
   return {
+    commandId: `command_${++cashCommandSequence}`,
     deviceId: SCOPE.deviceId,
     action: 'CASH_OTC_SALE' as const,
-    payload: { lines: [{ medicineId: 'med_1', units }] },
+    payload: {
+      leasedReceipt: {
+        leaseId: 'lease_1',
+        receiptNumber,
+        originalSaleAt: '2026-09-02T12:05:00.000Z',
+        envelope: receiptEnvelope,
+        signature: signing.signSnapshotEnvelope(receiptEnvelope),
+      },
+      snapshots: [],
+      lines: [
+        {
+          medicineId: 'med_1',
+          presentationId: 'presentation_1',
+          packLevelId: 'pack_1',
+          saleUnit: 'UNIT' as const,
+          quantity: units,
+          canonicalUnitsPerSaleUnit: 1,
+          inventoryLotId: 'lot_1',
+          stockLocationId: 'loc_1',
+        },
+      ],
+      amountMinor: 100,
+      cashReceivedMinor: 100,
+    },
+    authentication: { commandSignature: 'command-mac', receiptSignature: 'receipt-mac' },
     clientOriginAt: '2026-09-02T12:05:00.000Z',
     bucket: { inventoryLotId: 'lot_1', stockLocationId: 'loc_1' },
     requestedUnits: units,
@@ -148,7 +175,7 @@ describe('PH-OFF OFF-01 — hydration fails closed', () => {
       [
         'org_a::branch_a::counter_1',
         {
-          schemaVersion: 2,
+          schemaVersion: 3,
           scope: SCOPE,
           catalog: null,
           queue: {
@@ -180,7 +207,7 @@ describe('PH-OFF OFF-01 — hydration fails closed', () => {
     const driver = createMemoryDriver([
       [
         'org_a::branch_a::counter_1',
-        { schemaVersion: 2, scope: { ...SCOPE, branchId: 'branch_b' }, catalog: null, queue: null },
+        { schemaVersion: 3, scope: { ...SCOPE, branchId: 'branch_b' }, catalog: null, queue: null },
       ],
     ]);
     expect(await runtime(driver).hydrate()).toBe('unrecoverable');
@@ -299,7 +326,10 @@ describe('PH-OFF OFF-02 — the matrix gates what may be composed', () => {
   it('refuses once the pre-allocated numbers run out rather than inventing one', async () => {
     const counter = await readyCounter(createMemoryDriver());
     for (const attempt of [0, 1, 2]) {
-      expect((await counter.enqueue(cashSale(1), MATRIX)).ok, `attempt ${attempt}`).toBe(true);
+      expect(
+        (await counter.enqueue(cashSale(1, 900 + attempt), MATRIX)).ok,
+        `attempt ${attempt}`
+      ).toBe(true);
     }
     const exhausted = await counter.enqueue(cashSale(1), MATRIX);
     expect(exhausted).toMatchObject({ ok: false, reason: 'NO_RECEIPT_NUMBER' });
@@ -389,22 +419,180 @@ describe('PH-OFF OFF-04 — safety lease and recall bulletin', () => {
       ok: false,
       reason: 'SAFETY_LEASE_EXPIRED',
     });
-    expect(
-      await counter.enqueue(
-        { ...cashSale(), medicineSale: false, payload: { lines: [{ sku: 'soap', units: 1 }] } },
-        afterLease
-      )
-    ).toMatchObject({ ok: true });
+    expect(await counter.enqueue({ ...cashSale(), medicineSale: false }, afterLease)).toMatchObject(
+      { ok: true }
+    );
   });
 });
 
 describe('PH-OFF OFF-01 — reconnect never renumbers an issued receipt', () => {
+  it.each([200, 400])(
+    'recovers pending work after replacing an exhausted lease with settled history (status %s)',
+    async (status) => {
+      const driver = createMemoryDriver();
+      const counter = await readyCounter(driver);
+      for (const receiptNumber of [900, 901, 902]) {
+        expect(await counter.enqueue(cashSale(1, receiptNumber), MATRIX)).toMatchObject({
+          ok: true,
+        });
+        await counter.replay(async () => ({ status, serverRef: `sale_${receiptNumber}` }));
+      }
+      const history = counter.snapshot().queue!.commands;
+      expect(history.map((command) => command.status)).toEqual(
+        Array(3).fill(status === 200 ? 'ACKNOWLEDGED' : 'QUARANTINED')
+      );
+
+      await counter.adoptLeases([
+        { leaseId: 'lease_2', blockStart: 1000, blockEnd: 1002, nextNumber: 1000 },
+      ]);
+      const pending = cashSale(1, 1000);
+      pending.payload.leasedReceipt.leaseId = 'lease_2';
+      expect(await counter.enqueue(pending, MATRIX)).toMatchObject({ ok: true });
+      const persisted = counter.snapshot();
+
+      const restarted = runtime(driver);
+      expect(await restarted.hydrate()).toBe('ready');
+      expect(restarted.snapshot()).toEqual(persisted);
+      const send = vi.fn(async () => ({ status: 200, serverRef: 'sale_1000' }));
+      expect(await restarted.replay(send)).toMatchObject({ state: 'IDLE' });
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(send.mock.calls[0]).toEqual([
+        expect.objectContaining({
+          body: expect.objectContaining({
+            sequence: 4,
+            idempotencyKey: pending.commandId,
+            leasedReceipt: pending.payload.leasedReceipt,
+          }),
+        }),
+      ]);
+      expect(restarted.snapshot().queue!.commands.slice(0, 3)).toEqual(history);
+    }
+  );
+
+  it.each(['PENDING', 'IN_FLIGHT'] as const)(
+    'refuses recovery when a %s command has lost its receipt lease',
+    async (status) => {
+      const driver = createMemoryDriver();
+      const counter = await readyCounter(driver);
+      expect(await counter.enqueue(cashSale(), MATRIX)).toMatchObject({ ok: true });
+      await counter.adoptLeases([
+        { leaseId: 'lease_2', blockStart: 1000, blockEnd: 1002, nextNumber: 1000 },
+      ]);
+      const persisted = counter.snapshot();
+      await driver.write('org_a::branch_a::counter_1', {
+        ...persisted,
+        queue: {
+          ...persisted.queue,
+          commands: persisted.queue!.commands.map((command) => ({ ...command, status })),
+        },
+      });
+
+      const restarted = runtime(driver);
+      expect(await restarted.hydrate()).toBe('unrecoverable');
+      expect(restarted.snapshot().queue?.commands).toEqual([]);
+    }
+  );
+
+  it.each([null, 200, 400])(
+    'refuses a reused command id after reload (replay status %s)',
+    async (status) => {
+      const driver = createMemoryDriver();
+      const counter = await readyCounter(driver);
+      const first = cashSale();
+      expect(await counter.enqueue(first, MATRIX)).toMatchObject({ ok: true });
+      if (status !== null) await counter.replay(async () => ({ status }));
+
+      const restarted = runtime(driver);
+      expect(await restarted.hydrate()).toBe('ready');
+      const before = restarted.snapshot();
+      const duplicate = { ...cashSale(1, 901), commandId: first.commandId };
+      expect(await restarted.enqueue(duplicate, MATRIX)).toMatchObject({
+        ok: false,
+        reason: 'INVALID_REPLAY_CONTRACT',
+      });
+      expect(restarted.snapshot()).toEqual(before);
+      const persisted = runtime(driver);
+      expect(await persisted.hydrate()).toBe('ready');
+      expect(persisted.snapshot()).toEqual(before);
+    }
+  );
+
+  it('refuses a malformed sale payload without throwing or mutating the queue', async () => {
+    const counter = await readyCounter(createMemoryDriver());
+    const input = cashSale();
+    input.payload.lines = [];
+    input.payload.amountMinor = 0;
+
+    await expect(counter.enqueue(input, MATRIX)).resolves.toMatchObject({
+      ok: false,
+      reason: 'INVALID_REPLAY_CONTRACT',
+    });
+    expect(counter.snapshot().queue).toMatchObject({
+      leases: [{ nextNumber: 900 }],
+      quotas: [{ consumedUnits: 0 }],
+      commands: [],
+    });
+  });
+
+  it.each([
+    ['receipt number', { receiptNumber: 901 }],
+    ['lease id', { leaseId: 'another_lease' }],
+  ])('rejects a mismatched signed %s without consuming receipt or quota', async (_, change) => {
+    const counter = await readyCounter(createMemoryDriver());
+    const input = cashSale();
+    input.payload.leasedReceipt = { ...input.payload.leasedReceipt, ...change };
+
+    expect(await counter.enqueue(input, MATRIX)).toMatchObject({
+      ok: false,
+      reason: 'INVALID_REPLAY_CONTRACT',
+    });
+    expect(counter.snapshot().queue).toMatchObject({
+      leases: [{ nextNumber: 900 }],
+      quotas: [{ consumedUnits: 0 }],
+      commands: [],
+    });
+  });
+
+  it.each([
+    ['understated units', (input: ReturnType<typeof cashSale>) => (input.requestedUnits = 1)],
+    [
+      'mismatched lot',
+      (input: ReturnType<typeof cashSale>) => (input.bucket!.inventoryLotId = 'another_lot'),
+    ],
+    [
+      'mismatched location',
+      (input: ReturnType<typeof cashSale>) => (input.bucket!.stockLocationId = 'another_location'),
+    ],
+    [
+      'multiple quota buckets',
+      (input: ReturnType<typeof cashSale>) =>
+        input.payload.lines.push({
+          ...input.payload.lines[0]!,
+          inventoryLotId: 'another_lot',
+        }),
+    ],
+  ])('rejects %s without consuming receipt or quota', async (_, mutate) => {
+    const counter = await readyCounter(createMemoryDriver());
+    const input = cashSale(2);
+    mutate(input);
+
+    expect(await counter.enqueue(input, MATRIX)).toMatchObject({
+      ok: false,
+      reason: 'INVALID_REPLAY_CONTRACT',
+    });
+    expect(counter.snapshot().queue).toMatchObject({
+      leases: [{ nextNumber: 900 }],
+      quotas: [{ consumedUnits: 0 }],
+      commands: [],
+    });
+  });
+
   it('replays the number printed offline, across a reload and a lost response', async () => {
     const driver = createMemoryDriver();
     const offline = await readyCounter(driver);
 
-    const first = await offline.enqueue(cashSale(1), MATRIX);
-    const second = await offline.enqueue(cashSale(1), MATRIX);
+    const first = await offline.enqueue(cashSale(1, 900), MATRIX);
+    const second = await offline.enqueue(cashSale(1, 901), MATRIX);
     expect(first.ok && second.ok).toBe(true);
     const printed = [first, second].map((r) => (r.ok ? r.command.receiptNumber : null));
     // Consecutive, from the reserved block, and handed to the customer already.
@@ -422,14 +610,17 @@ describe('PH-OFF OFF-01 — reconnect never renumbers an issued receipt', () => 
     const outcome = await reconnected.replay(async (request) => {
       sent.push({
         key: request.headers['Idempotency-Key'],
-        receiptNumber: request.body.receiptNumber,
+        receiptNumber: request.body.leasedReceipt.receiptNumber,
         sequence: request.body.sequence,
       });
       if (failFirst) {
         failFirst = false;
         return { status: 0 };
       }
-      return { status: 200, serverRef: `sale_${String(request.body.receiptNumber)}` };
+      return {
+        status: 200,
+        serverRef: `sale_${String(request.body.leasedReceipt.receiptNumber)}`,
+      };
     });
     expect(outcome.state).toBe('PAUSED');
 
@@ -437,10 +628,13 @@ describe('PH-OFF OFF-01 — reconnect never renumbers an issued receipt', () => 
     const drained = await reconnected.replay(async (request) => {
       sent.push({
         key: request.headers['Idempotency-Key'],
-        receiptNumber: request.body.receiptNumber,
+        receiptNumber: request.body.leasedReceipt.receiptNumber,
         sequence: request.body.sequence,
       });
-      return { status: 200, serverRef: `sale_${String(request.body.receiptNumber)}` };
+      return {
+        status: 200,
+        serverRef: `sale_${String(request.body.leasedReceipt.receiptNumber)}`,
+      };
     });
     expect(drained.state).toBe('IDLE');
 
@@ -462,12 +656,64 @@ describe('PH-OFF OFF-01 — reconnect never renumbers an issued receipt', () => 
     const counter = await readyCounter(createMemoryDriver());
     await counter.enqueue(cashSale(1), MATRIX);
     await counter.replay(async () => ({ status: 500 }));
-    const next = await counter.enqueue(cashSale(1), MATRIX);
+    const next = await counter.enqueue(cashSale(1, 901), MATRIX);
     expect(next.ok && next.command.receiptNumber).toBe(901);
   });
 });
 
 describe('PH-OFF OFF-01 — replay: re-auth pauses, revocation purges', () => {
+  it('quarantines a non-sale action instead of rejecting replay', async () => {
+    const counter = await readyCounter(createMemoryDriver());
+    expect(
+      await counter.enqueue(
+        {
+          deviceId: SCOPE.deviceId,
+          action: 'SEARCH_CATALOG',
+          payload: { query: 'aspirin' },
+          clientOriginAt: '2026-09-02T12:05:00.000Z',
+          medicineSale: false,
+        },
+        MATRIX
+      )
+    ).toMatchObject({ ok: true });
+
+    const send = vi.fn(async () => ({ status: 200 }));
+    await expect(counter.replay(send)).resolves.toMatchObject({ state: 'IDLE' });
+    expect(send).not.toHaveBeenCalled();
+    expect(counter.snapshot().queue?.commands[0]).toMatchObject({
+      status: 'QUARANTINED',
+      rejection: 'This queued action has no pharmacy counter replay contract.',
+    });
+  });
+
+  it('quarantines a non-sale action ahead of a sale and continues replay', async () => {
+    const counter = await readyCounter(createMemoryDriver());
+    await counter.enqueue(
+      {
+        deviceId: SCOPE.deviceId,
+        action: 'SEARCH_CATALOG',
+        payload: { query: 'aspirin' },
+        clientOriginAt: '2026-09-02T12:05:00.000Z',
+        medicineSale: false,
+      },
+      MATRIX
+    );
+    await counter.enqueue(cashSale(1), MATRIX);
+
+    const sentSequences: number[] = [];
+    const outcome = await counter.replay(async (request) => {
+      sentSequences.push(request.body.sequence);
+      return { status: 200, serverRef: 'sale_900' };
+    });
+
+    expect(outcome.state).toBe('IDLE');
+    expect(sentSequences).toEqual([2]);
+    expect(counter.snapshot().queue?.commands).toMatchObject([
+      { action: 'SEARCH_CATALOG', status: 'QUARANTINED' },
+      { action: 'CASH_OTC_SALE', status: 'ACKNOWLEDGED' },
+    ]);
+  });
+
   it('pauses and keeps the queue on a generic 401', async () => {
     const counter = await readyCounter(createMemoryDriver());
     await counter.enqueue(cashSale(1), MATRIX);
@@ -528,21 +774,57 @@ describe('PH-OFF OFF-01 — replay: re-auth pauses, revocation purges', () => {
 describe('PH-OFF OFF-01 — storage minimization is enforced on every write', () => {
   it('refuses to persist a forbidden field rather than writing it', async () => {
     const counter = await readyCounter(createMemoryDriver());
+    const input = cashSale(1);
     await expect(
       counter.enqueue(
         {
-          ...cashSale(1),
-          payload: { lines: [], customerPhone: '+92-300-0000000' },
+          ...input,
+          payload: {
+            ...input.payload,
+            snapshots: [
+              {
+                envelope: input.payload.leasedReceipt.envelope,
+                signature: input.payload.leasedReceipt.signature,
+                payload: { customerPhone: '+92-300-0000000' },
+              },
+            ],
+          },
         },
         MATRIX
       )
     ).rejects.toMatchObject({ reason: 'FORBIDDEN_FIELD' });
+    expect(counter.snapshot().queue).toMatchObject({
+      commands: [],
+      leases: [{ nextNumber: 900 }],
+      quotas: [{ consumedUnits: 0 }],
+    });
   });
 
   it('refuses a device secret anywhere in the document', async () => {
     const counter = await readyCounter(createMemoryDriver());
+    const input = cashSale(1);
     await expect(
-      counter.enqueue({ ...cashSale(1), payload: { deviceSecret: 'pcd_x' } }, MATRIX)
+      counter.enqueue(
+        {
+          ...input,
+          payload: {
+            ...input.payload,
+            snapshots: [
+              {
+                envelope: input.payload.leasedReceipt.envelope,
+                signature: input.payload.leasedReceipt.signature,
+                payload: { deviceSecret: 'pcd_x' },
+              },
+            ],
+          },
+        },
+        MATRIX
+      )
     ).rejects.toMatchObject({ reason: 'FORBIDDEN_FIELD' });
+    expect(counter.snapshot().queue).toMatchObject({
+      commands: [],
+      leases: [{ nextNumber: 900 }],
+      quotas: [{ consumedUnits: 0 }],
+    });
   });
 });
