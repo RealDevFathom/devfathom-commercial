@@ -145,6 +145,9 @@ export default async function PharmacyReceivingPage({
   }
 
   const branchId = scope.branch.id;
+  const procurementApprovers = workspace.procurementApprovers.filter(
+    (person) => person.id !== ctx.session!.user.id || person.soloBranchIds?.includes(branchId)
+  );
   const exceptionStatus = param(query, 'exceptions') === 'resolved' ? 'RESOLVED' : 'OPEN';
 
   let receipts: GoodsReceiptDetail[];
@@ -737,7 +740,7 @@ export default async function PharmacyReceivingPage({
           same as receiving against an order — the only difference is that a bypass reason and a
           named approver stand in place of the order.
         </p>
-        {workspace.procurementApprovers.length === 0 ? (
+        {procurementApprovers.length === 0 ? (
           <div className="mt-4">
             <EmptyState
               title="No authorized approver is available"
@@ -812,7 +815,7 @@ export default async function PharmacyReceivingPage({
                 label="Approved by"
                 name="bypassApprovedByUserId"
                 notice={notice}
-                options={workspace.procurementApprovers.map((approver) => ({
+                options={procurementApprovers.map((approver) => ({
                   value: approver.id,
                   label: approver.name ? `${approver.name} (${approver.email})` : approver.email,
                 }))}

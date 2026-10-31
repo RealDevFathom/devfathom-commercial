@@ -705,7 +705,7 @@ describeIfDatabase(
       expect(outcome.action.kind).toBe('DRAFT_REQUISITION');
     });
 
-    it('allows a live all-capability admin to draft despite narrower denies', async () => {
+    it('honors a procurement DENY for a live all-capability admin without creating a draft', async () => {
       const fixture = await scenario(ORG_A, 'owner-draft');
       await inOrg(ORG_A, async (db) => {
         await stockLot(db, fixture, { units: 40, label: 'owner-draft' });
@@ -731,16 +731,21 @@ describeIfDatabase(
           ],
         });
         try {
-          const action = await deps.signals.createDraftAction(db, scopeOf(fixture), {
-            kind: 'DRAFT_REQUISITION',
-            signalId: refreshed.signals[0]!.id,
-            reference: `REQ-${tag('owner-draft')}`,
-            medicineId: fixture.medicineId,
-            packLevelId: fixture.packLevelId,
-            canonicalUnitsPerPack: 10,
-            quantityPacks: 8,
-          });
-          expect(action.kind).toBe('DRAFT_REQUISITION');
+          const before = await db.pharmacyRequisition.count({ where: { organizationId: ORG_A } });
+          await expect(
+            deps.signals.createDraftAction(db, scopeOf(fixture), {
+              kind: 'DRAFT_REQUISITION',
+              signalId: refreshed.signals[0]!.id,
+              reference: `REQ-${tag('owner-draft')}`,
+              medicineId: fixture.medicineId,
+              packLevelId: fixture.packLevelId,
+              canonicalUnitsPerPack: 10,
+              quantityPacks: 8,
+            })
+          ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+          expect(await db.pharmacyRequisition.count({ where: { organizationId: ORG_A } })).toBe(
+            before
+          );
         } finally {
           await db.userPermissionOverride.deleteMany({
             where: { userId: ACTOR, reason: 'Owner regression' },

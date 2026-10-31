@@ -704,18 +704,17 @@ async function authorizeDraftIntent(
     throw new PharmacyDraftIntentError('FORBIDDEN', 'Draft actor is not authorized.');
 
   // These are the native PHARMACY_ROLE_TEMPLATES grants, not Restaurant actions.
-  // Preserve ordinary grant precedence; live owner/admin authority covers all capabilities.
+  // A matching DENY always revokes even an owner's operational grant.
   const capability =
     input.kind === 'DRAFT_TRANSFER' ? 'pharmacy:inventory' : 'pharmacy:procurement';
   const matches = (rule: { capability: string; effect: string }) =>
     capabilityMatches(rule.capability, capability, rule.effect === 'DENY' ? 'DENY' : 'ALLOW');
-  const overrides = user.permissionOverrides.filter(matches);
-  const rules = overrides.length
-    ? overrides
-    : (user.organizationRole?.permissions ?? []).filter(matches);
+  const rules = [...user.permissionOverrides, ...(user.organizationRole?.permissions ?? [])].filter(
+    matches
+  );
   if (
-    !hasAllCapabilityAccess(user) &&
-    (rules.some((rule) => rule.effect === 'DENY') || !rules.some((rule) => rule.effect === 'ALLOW'))
+    rules.some((rule) => rule.effect === 'DENY') ||
+    (!hasAllCapabilityAccess(user) && !rules.some((rule) => rule.effect === 'ALLOW'))
   ) {
     throw new PharmacyDraftIntentError('FORBIDDEN', 'Draft capability is not authorized.');
   }

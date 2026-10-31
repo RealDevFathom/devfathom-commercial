@@ -7,9 +7,16 @@ import {
   verifyPurchaseApprover,
 } from '@/lib/pharmacy/purchase-approval';
 import { TRPCError } from '@trpc/server';
+import {
+  issueOperatorCredential,
+  CredentialLifecycleError,
+} from '@/lib/restaurant/credential-lifecycle';
 import { z } from 'zod';
 import { can, subjectFromSession } from '@/lib/abac';
-import { actorCanSelectPurchaseWitness } from '@/lib/pharmacy/procurement-access';
+import {
+  actorCanSelectPurchaseWitness,
+  actorIsPharmacyOwner,
+} from '@/lib/pharmacy/procurement-access';
 import { hasModule } from '@/lib/entitlements';
 import {
   listReceivingExceptions,
@@ -18,7 +25,10 @@ import {
   reverseGoodsReceipt,
   verifyControlledPurchaseWitness,
 } from '@/lib/pharmacy/goods-receipt';
-import { listControlledPinWitnesses } from '@/lib/pharmacy/controlled-register';
+import {
+  assignedRegisterBranchIds,
+  listControlledPinWitnesses,
+} from '@/lib/pharmacy/controlled-register';
 import { PharmacyInventoryError } from '@/lib/pharmacy/inventory';
 import {
   allocateCentralReceipt,
@@ -299,9 +309,7 @@ async function receivingScope(ctx: TRPCContext, branch: string): Promise<Receivi
 }
 
 /**
- * The organization-only half of the same rule, for the reads that are not
- * branch-scoped. Suppliers, requisitions and orders are tenant-level records;
- * their `branchId`, where they carry one, is a filter and not a boundary.
+ * Organization scope for records shared by all branches, such as suppliers.
  */
 function tenantScope(ctx: TRPCContext): { organizationId: string } {
   const organizationId = ctx.entitlements?.organizationId;
@@ -309,6 +317,37 @@ function tenantScope(ctx: TRPCContext): { organizationId: string } {
     throw new TRPCError({ code: 'UNAUTHORIZED', message: 'No tenant actor on this request.' });
   }
   return { organizationId };
+}
+
+async function purchasingOrderScope(ctx: TRPCContext) {
+  const { organizationId } = tenantScope(ctx);
+  const userId = ctx.session!.user.id;
+  const assigned = await assignedRegisterBranchIds(ctx.db, organizationId, userId);
+  const central = await ctx.db.pharmacyCentralPurchasingAccess.findMany({
+    where: { organizationId, userId },
+    select: { branchId: true },
+  });
+  const includeUnscoped =
+    central.some((grant) => grant.branchId === null) ||
+    (await actorIsPharmacyOwner(ctx.db, organizationId, userId));
+  const branchIds = includeUnscoped
+    ? (
+        await ctx.db.pharmacyBranch.findMany({
+          where: { organizationId, active: true },
+          select: { id: true },
+        })
+      ).map((branch) => branch.id)
+    : [
+        ...new Set([
+          ...assigned,
+          ...central.flatMap((grant) => (grant.branchId ? [grant.branchId] : [])),
+        ]),
+      ];
+  return {
+    organizationId,
+    branchIds,
+    includeUnscoped,
+  };
 }
 
 /**
@@ -351,7 +390,6 @@ async function supplierFollowUpScope(ctx: TRPCContext, branch: string) {
   if (!hasModule(ctx.entitlements, 'pharmacy-procurement')) {
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Pharmacy procurement access required.' });
   }
-  await assertPurchasingRead(ctx);
   if (
     !(await can(subjectFromSession(ctx.session!.user), 'reports:financial', undefined, {
       db: ctx.db,
@@ -382,6 +420,70 @@ const auditedPurchasingRead = auditedProtectedProcedure.use(async ({ ctx, next }
 });
 
 const purchasingRouter = router({
+  /** Pharmacy-only tenants can establish their own approval PIN without restaurant modules. */
+  provisionMyPurchasePin: auditedProcurement
+    .input(z.object({ pin: z.string().regex(/^\d{4,8}$/) }).strict())
+    .mutation(async ({ ctx, input }) => {
+      ctx.audit.detail.skipInput = true;
+      if (!hasModule(ctx.entitlements, 'pharmacy-procurement')) {
+        throw new TRPCError({ code: 'FORBIDDEN' });
+      }
+      const { organizationId } = tenantScope(ctx);
+      const userId = ctx.session.user.id;
+      return ctx.db.$transaction(async (tx) => {
+        // Serialize initial profile/credential creation for this person.
+        await tx.$queryRaw`SELECT id FROM users WHERE id=${userId} AND "organizationId"=${organizationId} FOR UPDATE`;
+        const priorPin = await tx.restaurantOperatorCredential.findFirst({
+          where: {
+            organizationId,
+            type: 'PIN',
+            deviceId: null,
+            staffProfile: { organizationId, userId },
+          },
+          select: { id: true },
+        });
+        if (priorPin) {
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message:
+              'An approval PIN has already been issued. Ask your administrator to manage it.',
+          });
+        }
+        let profile = await tx.restaurantStaffProfile.findFirst({
+          where: { organizationId, userId },
+          orderBy: { id: 'asc' },
+        });
+        if (profile && profile.status !== 'ACTIVE') {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'Ask your administrator to activate your staff profile.',
+          });
+        }
+        if (!profile) {
+          profile = await tx.restaurantStaffProfile.create({
+            data: {
+              organizationId,
+              userId,
+              displayName: ctx.session.user.name ?? ctx.session.user.email ?? 'Pharmacy buyer',
+            },
+          });
+        }
+        try {
+          const credential = await issueOperatorCredential(txDb(tx), {
+            staffProfileId: profile.id,
+            type: 'PIN',
+            secret: input.pin,
+          });
+          return { id: credential.id, staffProfileId: profile.id };
+        } catch (error) {
+          if (error instanceof CredentialLifecycleError && error.reason === 'ALREADY_EXISTS') {
+            throw new TRPCError({ code: 'CONFLICT', message: 'You already have an approval PIN.' });
+          }
+          throw error;
+        }
+      });
+    }),
+
   // ----- PUR-01 licensed suppliers -----
 
   createSupplier: procurement
@@ -1348,6 +1450,9 @@ const purchasingRouter = router({
 
   /** Qualified people who can enter a PIN when a controlled receipt is posted. */
   controlledWitnesses: protectedProcedure.query(async ({ ctx }) => {
+    if (!hasModule(ctx.entitlements, 'pharmacy-procurement')) {
+      throw new TRPCError({ code: 'FORBIDDEN', message: 'Pharmacy procurement access required.' });
+    }
     const actorId = ctx.session?.user?.id;
     if (!actorId) throw new TRPCError({ code: 'UNAUTHORIZED' });
     const active = await ctx.db.user.findUnique({
@@ -1651,11 +1756,13 @@ const purchasingRouter = router({
     ),
 
   /** PUR-02 — requisitions with their lines, quotes and resulting orders. */
-  requisitions: purchasingRead.query(async ({ ctx }) => listRequisitions(ctx.db, tenantScope(ctx))),
+  requisitions: purchasingRead.query(async ({ ctx }) =>
+    listRequisitions(ctx.db, await purchasingOrderScope(ctx))
+  ),
 
   /** PUR-02/PUR-03 — orders with lines, approval history and posted receipts. */
   purchaseOrders: purchasingRead.query(async ({ ctx }) =>
-    listPurchaseOrders(ctx.db, tenantScope(ctx))
+    listPurchaseOrders(ctx.db, await purchasingOrderScope(ctx))
   ),
 
   /**
@@ -1665,11 +1772,23 @@ const purchasingRouter = router({
    */
   receivedAgainstOrder: purchasingRead
     .input(z.object({ purchaseOrderId: z.string().min(1) }).strict())
-    .query(async ({ ctx, input }) =>
-      Object.fromEntries(
-        await receivedAgainstOrder(ctx.db, tenantScope(ctx), input.purchaseOrderId)
-      )
-    ),
+    .query(async ({ ctx, input }) => {
+      const scope = await purchasingOrderScope(ctx);
+      const order = await ctx.db.pharmacyPurchaseOrder.findFirst({
+        where: { id: input.purchaseOrderId, organizationId: scope.organizationId },
+        select: { branchId: true },
+      });
+      if (
+        !order ||
+        (order.branchId ? !scope.branchIds.includes(order.branchId) : !scope.includeUnscoped)
+      ) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Order is outside your pharmacy scope.',
+        });
+      }
+      return Object.fromEntries(await receivedAgainstOrder(ctx.db, scope, input.purchaseOrderId));
+    }),
 
   /** PUR-02 receiving / PUR-05 — the receipts filed at one branch. */
   goodsReceipts: purchasingRead

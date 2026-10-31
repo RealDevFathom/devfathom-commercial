@@ -10,7 +10,8 @@ import { assertDisposableRlsDatabase } from '../../../tests/disposable-rls-datab
 vi.mock('@/lib/storage', () => ({ putUpload: vi.fn().mockResolvedValue({}) }));
 import { putUpload } from '@/lib/storage';
 
-const enabled = Boolean(process.env.DATABASE_URL && process.env.FIX469_OWNER_DATABASE_URL);
+const runtimeUrl = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
+const enabled = Boolean(runtimeUrl && process.env.FIX469_OWNER_DATABASE_URL);
 const org = `pur_security_${randomUUID().replaceAll('-', '')}`;
 const id = (key: string) => `${org}_${key}`;
 let withTenantDb: (typeof import('@/lib/tenancy/scoped-db'))['withTenantDb'];
@@ -100,7 +101,8 @@ async function newLink() {
   'purchasing security boundaries on restricted PostgreSQL',
   () => {
     beforeAll(async () => {
-      assertDisposableRlsDatabase(process.env.DATABASE_URL!);
+      assertDisposableRlsDatabase(runtimeUrl!);
+      vi.stubEnv('DATABASE_URL', runtimeUrl!);
       assertDisposableRlsDatabase(process.env.FIX469_OWNER_DATABASE_URL!);
       vi.stubEnv('AUTH_SECRET', 'local-security-fixture-signing-key');
       const owner = new pg.Client({ connectionString: process.env.FIX469_OWNER_DATABASE_URL });
@@ -255,7 +257,7 @@ async function newLink() {
       });
     }, 60000);
 
-    it('gives the live owner every capability and every active tenant branch without assignments', async () => {
+    it('honors owner DENYs and retains every active branch after the denial is removed', async () => {
       const { can } = await import('@/lib/abac');
       const { ALL_ACTIONS } = await import('@/lib/abac/policies');
       const { assignedRegisterBranchIds } = await import('./controlled-register');
@@ -282,8 +284,16 @@ async function newLink() {
                 undefined,
                 { db }
               )
-            ).toBe(true);
+            ).toBe(false);
           }
+          expect(await actorCanProcure(db, id('owner'))).toBe(false);
+          expect(await actorCanReadPurchasing(db, id('owner'))).toBe(false);
+          await expect(assertProcurementBranch(context(db), id('branch'))).rejects.toMatchObject({
+            code: 'FORBIDDEN',
+          });
+          await db.userPermissionOverride.deleteMany({
+            where: { userId: id('owner'), reason: 'Owner authority regression fixture' },
+          });
           await db.pharmacyBranch.create({
             data: {
               id: id('newBranch'),
@@ -409,6 +419,41 @@ async function newLink() {
           data: { failedAttempts: 0, lockedUntil: null },
         });
       });
+    });
+
+    it('retains PIN strikes when a sibling operation rolls back the request', async () => {
+      await inOrg((db) =>
+        db.restaurantOperatorCredential.update({
+          where: { id: id('credential') },
+          data: { failedAttempts: 0, lockedUntil: null },
+        })
+      );
+      for (let attempt = 0; attempt < 5; attempt++) {
+        await expect(
+          inOrg(async (db) => {
+            const result = await purchasing
+              .createCaller(context(db))
+              .createGoodsReceipt(receiptInput(id('owner'), '9999'));
+            expect(result).toHaveProperty('blocked');
+            throw new Error('Deliberate sibling failure');
+          })
+        ).rejects.toThrow('Deliberate sibling failure');
+      }
+      await inOrg(async (db) => {
+        const credential = await db.restaurantOperatorCredential.findUniqueOrThrow({
+          where: { id: id('credential') },
+        });
+        expect(credential.lockedUntil!.getTime()).toBeGreaterThan(Date.now());
+        expect(
+          await purchasing.createCaller(context(db)).createGoodsReceipt(receiptInput())
+        ).toHaveProperty('blocked');
+      });
+      await inOrg((db) =>
+        db.restaurantOperatorCredential.update({
+          where: { id: id('credential') },
+          data: { failedAttempts: 0, lockedUntil: null },
+        })
+      );
     });
 
     it('requires second approval with another active staff member; checks credential and branch, not ID', async () => {

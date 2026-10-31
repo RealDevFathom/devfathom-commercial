@@ -32,6 +32,16 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 export type OrganizationScope = { organizationId: string };
 export type BranchScope = OrganizationScope & { branchId: string };
+type PurchasingOrderScope = OrganizationScope & { branchIds: string[]; includeUnscoped: boolean };
+
+function orderBranchFilter(scope: PurchasingOrderScope) {
+  return {
+    OR: [
+      { branchId: { in: scope.branchIds } },
+      ...(scope.includeUnscoped ? [{ branchId: null }] : []),
+    ],
+  };
+}
 
 /**
  * PUR-01 — why a supplier may or may not be ordered from *right now*, in the
@@ -243,7 +253,10 @@ export type PurchasingWorkspace = {
   medicines: MedicineOption[];
   suppliers: SupplierSummary[];
   approvers: ApproverOption[];
-  procurementApprovers: ApproverOption[];
+  procurementApprovers: (ApproverOption & {
+    soloBranchIds?: string[];
+    soloOrganizationWide?: boolean;
+  })[];
 };
 
 function conversionLabel(
@@ -357,7 +370,7 @@ export async function purchasingWorkspace(
   ]);
 
   const eligibleApprovers = [];
-  const procurementApprovers = [];
+  const procurementApprovers: PurchasingWorkspace['procurementApprovers'] = [];
   for (const user of approvers) {
     // Clinical witnesses and procurement approvers are different capabilities.
     // Retain the existing clinical projection for controlled receipt callers.
@@ -366,19 +379,26 @@ export async function purchasingWorkspace(
       (await can(subjectFromSession(user), 'pharmacy:dispense', undefined, { db, now: at }))
     )
       eligibleApprovers.push(user);
-    if (
-      (await actorCanProcure(db, user.id)) &&
-      (user.id !== scope.actorId ||
-        (await soloOwnerApprovalAllowed(db, scope.organizationId, user.id)) ||
-        (
-          await Promise.all(
-            branches.map((branch) =>
-              soloOwnerApprovalAllowed(db, scope.organizationId, user.id, branch.id)
-            )
-          )
-        ).some(Boolean))
-    ) {
-      procurementApprovers.push(user);
+    if (await actorCanProcure(db, user.id)) {
+      const person = { id: user.id, name: user.name, email: user.email };
+      if (user.id !== scope.actorId) {
+        procurementApprovers.push(person);
+      } else {
+        const soloOrganizationWide = await soloOwnerApprovalAllowed(
+          db,
+          scope.organizationId,
+          user.id
+        );
+        const soloBranchIds = [];
+        for (const branch of branches) {
+          if (await soloOwnerApprovalAllowed(db, scope.organizationId, user.id, branch.id)) {
+            soloBranchIds.push(branch.id);
+          }
+        }
+        if (soloOrganizationWide || soloBranchIds.length) {
+          procurementApprovers.push({ ...person, soloOrganizationWide, soloBranchIds });
+        }
+      }
     }
   }
   return {
@@ -386,7 +406,7 @@ export async function purchasingWorkspace(
     stockLocations,
     suppliers,
     approvers: eligibleApprovers.map(({ id, name, email }) => ({ id, name, email })),
-    procurementApprovers: procurementApprovers.map(({ id, name, email }) => ({ id, name, email })),
+    procurementApprovers,
     medicines: medicines.map((medicine) => ({
       id: medicine.id,
       productName: medicine.productName,
@@ -414,9 +434,9 @@ export async function purchasingWorkspace(
 // PUR-02 — requisitions, quotes, purchase orders
 // ---------------------------------------------------------------------------
 
-export async function listRequisitions(db: ScopedDb, scope: OrganizationScope) {
+export async function listRequisitions(db: ScopedDb, scope: PurchasingOrderScope) {
   return db.pharmacyRequisition.findMany({
-    where: { organizationId: scope.organizationId },
+    where: { organizationId: scope.organizationId, ...orderBranchFilter(scope) },
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     include: {
       branch: { select: { id: true, name: true } },
@@ -438,9 +458,9 @@ export async function listRequisitions(db: ScopedDb, scope: OrganizationScope) {
 
 export type RequisitionDetail = Awaited<ReturnType<typeof listRequisitions>>[number];
 
-export async function listPurchaseOrders(db: ScopedDb, scope: OrganizationScope) {
+export async function listPurchaseOrders(db: ScopedDb, scope: PurchasingOrderScope) {
   return db.pharmacyPurchaseOrder.findMany({
-    where: { organizationId: scope.organizationId },
+    where: { organizationId: scope.organizationId, ...orderBranchFilter(scope) },
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     include: {
       supplier: { select: { id: true, name: true, authorized: true } },

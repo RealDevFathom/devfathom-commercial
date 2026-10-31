@@ -10,7 +10,10 @@ const mocks = vi.hoisted(() => {
 });
 vi.mock('@/lib/abac', () => ({ can: mocks.can, subjectFromSession: (user: unknown) => user }));
 vi.mock('server-only', () => ({}));
-vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
+vi.mock('@/lib/tenancy/scoped-db', () => ({
+  createTenantDb: vi.fn(() => ({})),
+  withTenantDb: vi.fn(async (_org: string, run: (tx: unknown) => unknown) => run(db)),
+}));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/entitlements', () => ({
   hasModule: mocks.hasModule,
@@ -64,8 +67,10 @@ function makeDb() {
     pharmacySupplierCredit: model(),
     pharmacyBranch: model(),
     pharmacyBranchAssignment: model(),
+    pharmacyCentralPurchasingAccess: model(),
     user: { ...model(), count: vi.fn().mockResolvedValue(1) },
     restaurantOperatorCredential: model(),
+    restaurantStaffProfile: model(),
     auditLog: model(),
     $queryRaw: vi.fn().mockResolvedValue([]),
     medicineBarcode: model(),
@@ -583,16 +588,14 @@ describe.each(['purchaseReturns', 'supplierCredits'] as const)(
       }
     );
 
-    it('denies financial-only readers without procurement or receiving-view', async () => {
+    it('allows assigned Finance readers without a purchasing grant', async () => {
       db.user.findUnique.mockResolvedValue({
         id: 'user_a',
-        organizationRole: { permissions: [] },
+        organizationRole: { permissions: [{ capability: 'reports:financial', effect: 'ALLOW' }] },
         permissionOverrides: [],
       });
-      await expect(caller()[endpoint]({ branchId: 'branch_a' })).rejects.toMatchObject({
-        code: 'FORBIDDEN',
-      });
-      expect(source().findMany).not.toHaveBeenCalled();
+      await expect(caller()[endpoint]({ branchId: 'branch_a' })).resolves.toEqual([]);
+      expect(source().findMany).toHaveBeenCalled();
     });
 
     it('rechecks deactivation and assignment removal on a reused financial caller', async () => {
@@ -1875,7 +1878,10 @@ describe('every purchasing read boundary', () => {
   });
   it.each(Object.entries(readActions))(
     'denies unrelated, inactive and explicitly denied actors on %s',
-    async (_name, act) => {
+    async (name, act) => {
+      // Financial readers have their own capability, independent of goods-in access.
+      if (name === 'purchaseReturns' || name === 'supplierCredits')
+        mocks.can.mockResolvedValue(false);
       for (const user of [
         null,
         {
@@ -2045,4 +2051,129 @@ it('does not post a historical direct draft on a stored approver ID alone', asyn
   expect(result).toHaveProperty('blocked');
   expect(db.pharmacyGoodsReceipt.update).not.toHaveBeenCalled();
   expect(db.auditLog.create).not.toHaveBeenCalled();
+});
+
+describe('purchasing list branch boundaries', () => {
+  it.each(['requisitions', 'purchaseOrders'] as const)(
+    'restricts %s to assigned branches',
+    async (name) => {
+      await caller()[name]();
+      const source = name === 'requisitions' ? db.pharmacyRequisition : db.pharmacyPurchaseOrder;
+      expect(source.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { organizationId: 'org_a', OR: [{ branchId: { in: ['branch_a'] } }] },
+        })
+      );
+    }
+  );
+  it.each(['branch_b', null])(
+    'rejects receipt quantities for an unauthorized order scope %s',
+    async (branchId) => {
+      db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({ branchId });
+      await expect(
+        caller().receivedAgainstOrder({ purchaseOrderId: 'foreign' })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(db.pharmacyGoodsReceiptLine.findMany).not.toHaveBeenCalled();
+    }
+  );
+  it('reads receipt quantities for an assigned order', async () => {
+    db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({ branchId: 'branch_a' });
+    await expect(caller().receivedAgainstOrder({ purchaseOrderId: 'mine' })).resolves.toEqual({});
+  });
+  it('keeps organization-wide orders visible to the installed owner', async () => {
+    installedOwner();
+    await caller().purchaseOrders();
+    expect(db.pharmacyPurchaseOrder.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          organizationId: 'org_a',
+          OR: [{ branchId: { in: ['branch_a', 'branch_b'] } }, { branchId: null }],
+        },
+      })
+    );
+  });
+});
+
+describe('pharmacy-only approval PIN provisioning', () => {
+  it('issues only the current buyer a hashed PIN with no restaurant entitlement', async () => {
+    db.restaurantStaffProfile.create.mockResolvedValue({ id: 'my-profile' });
+    db.restaurantStaffProfile.findUnique.mockResolvedValue({ id: 'my-profile', status: 'ACTIVE' });
+    await expect(caller().provisionMyPurchasePin({ pin: '4821' })).resolves.toEqual({
+      id: 'new',
+      staffProfileId: 'my-profile',
+    });
+    expect(db.restaurantStaffProfile.create).toHaveBeenCalledWith({
+      data: {
+        organizationId: 'org_a',
+        userId: 'user_a',
+        displayName: 'Pharmacy buyer',
+      },
+    });
+    const data = db.restaurantOperatorCredential.create.mock.calls[0]![0].data as {
+      credentialHash: string;
+    };
+    expect(data.credentialHash).not.toBe('4821');
+    const { compare } = await import('bcryptjs');
+    expect(await compare('4821', data.credentialHash)).toBe(true);
+  });
+  it('does not overwrite an existing PIN or clear its lockout', async () => {
+    db.restaurantStaffProfile.findFirst.mockResolvedValue({ id: 'my-profile' });
+    db.restaurantStaffProfile.findUnique.mockResolvedValue({ id: 'my-profile', status: 'ACTIVE' });
+    db.restaurantOperatorCredential.findFirst.mockResolvedValue({ id: 'existing' });
+    await expect(caller().provisionMyPurchasePin({ pin: '4821' })).rejects.toMatchObject({
+      code: 'CONFLICT',
+    });
+    expect(db.restaurantOperatorCredential.create).not.toHaveBeenCalled();
+    expect(db.restaurantOperatorCredential.update).not.toHaveBeenCalled();
+  });
+  it('rejects users without procurement or the pharmacy module before creating profiles', async () => {
+    await expect(
+      caller('user_a', []).provisionMyPurchasePin({ pin: '4821' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    db.user.findUnique.mockResolvedValue(null);
+    await expect(caller().provisionMyPurchasePin({ pin: '4821' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(db.restaurantStaffProfile.create).not.toHaveBeenCalled();
+  });
+});
+
+it('preserves explicit organization-wide central purchasing read access', async () => {
+  db.pharmacyCentralPurchasingAccess.findMany.mockResolvedValue([{ branchId: null }]);
+  db.pharmacyBranch.findMany.mockResolvedValue([{ id: 'branch_a' }, { id: 'branch_b' }]);
+  await caller().purchaseOrders();
+  expect(db.pharmacyPurchaseOrder.findMany).toHaveBeenCalledWith(
+    expect.objectContaining({
+      where: {
+        organizationId: 'org_a',
+        OR: [{ branchId: { in: ['branch_a', 'branch_b'] } }, { branchId: null }],
+      },
+    })
+  );
+});
+it('limits branch-specific central purchasing grants to their granted branches', async () => {
+  db.pharmacyCentralPurchasingAccess.findMany.mockResolvedValue([{ branchId: 'branch_b' }]);
+  await caller().requisitions();
+  expect(db.pharmacyRequisition.findMany).toHaveBeenCalledWith(
+    expect.objectContaining({
+      where: { organizationId: 'org_a', OR: [{ branchId: { in: ['branch_a', 'branch_b'] } }] },
+    })
+  );
+});
+
+it('does not let self-provisioning replace a revoked PIN', async () => {
+  db.restaurantOperatorCredential.findFirst.mockResolvedValue({ id: 'revoked', revokedAt: PAST });
+  await expect(caller().provisionMyPurchasePin({ pin: '4821' })).rejects.toMatchObject({
+    code: 'CONFLICT',
+  });
+  expect(db.restaurantStaffProfile.create).not.toHaveBeenCalled();
+  expect(db.restaurantOperatorCredential.create).not.toHaveBeenCalled();
+});
+it('does not let self-provisioning reactivate an archived staff profile', async () => {
+  db.restaurantStaffProfile.findFirst.mockResolvedValue({ id: 'archived', status: 'ARCHIVED' });
+  await expect(caller().provisionMyPurchasePin({ pin: '4821' })).rejects.toMatchObject({
+    code: 'FORBIDDEN',
+  });
+  expect(db.restaurantStaffProfile.create).not.toHaveBeenCalled();
+  expect(db.restaurantOperatorCredential.create).not.toHaveBeenCalled();
 });

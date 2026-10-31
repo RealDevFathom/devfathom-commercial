@@ -1,9 +1,9 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/entitlements', () => ({
-  hasModule: () => true,
+  hasModule: vi.fn(() => true),
   resolveOrganizationEntitlements: vi.fn(),
 }));
 vi.mock('@/server/audit', () => ({
@@ -14,6 +14,8 @@ vi.mock('@/server/audit', () => ({
 import { pharmacySafetyRouter } from './pharmacy-safety';
 import { pharmacyPurchasingRouter } from './pharmacy-purchasing';
 import { router, type TRPCContext } from '../trpc';
+import { hasModule } from '@/lib/entitlements';
+afterEach(() => vi.mocked(hasModule).mockReturnValue(true));
 const app = router({ safety: pharmacySafetyRouter, purchasing: pharmacyPurchasingRouter });
 function fixture(capability: string) {
   const db = {
@@ -76,5 +78,12 @@ it('rejects an inactive database actor before witness enumeration', async () => 
   await expect(f.purchasing.controlledWitnesses()).rejects.toMatchObject({
     code: 'FORBIDDEN',
   });
+  expect(f.db.restaurantStaffProfile.findMany).not.toHaveBeenCalled();
+});
+
+it('does not enumerate purchasing witnesses without the procurement module', async () => {
+  const f = fixture('pharmacy:safety');
+  vi.mocked(hasModule).mockReturnValue(false);
+  await expect(f.purchasing.controlledWitnesses()).rejects.toMatchObject({ code: 'FORBIDDEN' });
   expect(f.db.restaurantStaffProfile.findMany).not.toHaveBeenCalled();
 });

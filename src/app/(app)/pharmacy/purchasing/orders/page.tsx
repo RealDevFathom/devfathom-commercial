@@ -615,7 +615,11 @@ export default async function PharmacyOrdersPage({
             <OrderDetailPanel
               actorId={ctx.session.user.id}
               soloOwnerEligible={workspace.procurementApprovers.some(
-                (person) => person.id === ctx.session!.user.id
+                (person) =>
+                  person.id === ctx.session!.user.id &&
+                  (order.branchId
+                    ? person.soloBranchIds?.includes(order.branchId)
+                    : person.soloOrganizationWide)
               )}
               landed={landed}
               notice={notice}

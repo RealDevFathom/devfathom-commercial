@@ -11,7 +11,6 @@
  *     throw new TRPCError({ code: 'FORBIDDEN' });
  */
 import { capabilityMatches } from './capabilities';
-import { hasAllCapabilityAccess } from './owner-access';
 import type { AuthzDb } from '@/lib/authz';
 import { POLICIES, type Action } from './policies';
 import type { Environment, ResourceAttributes, Subject } from './types';
@@ -52,7 +51,6 @@ async function customDecision(
     },
   });
   if (!user) return false;
-  if (hasAllCapabilityAccess(user)) return true;
   const matchingRules = [
     ...user.permissionOverrides,
     ...(user.organizationRole?.permissions ?? []),
@@ -83,7 +81,16 @@ export async function can(
   }
   try {
     const decision = await customDecision(db, subject.id, action, env.now);
-    if (decision !== null) return decision;
+    if (decision === false) return false;
+    // Capability grants cannot waive the resource restrictions below.
+    if (action === 'resignation:review' || action === 'team:layoff') {
+      return (
+        await Promise.all(
+          (POLICIES[action] ?? []).map((policy) => policy({ subject, resource, env, db }))
+        )
+      ).some(Boolean);
+    }
+    if (decision === true) return true;
   } catch (err) {
     console.error(`[abac] custom permission lookup for "${action}" threw:`, err);
     return false;

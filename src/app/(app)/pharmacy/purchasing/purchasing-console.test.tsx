@@ -908,12 +908,63 @@ describe('purchasing PIN controls', () => {
     render(await ReceivingPage({ searchParams: params({ branch: 'branch-1' }) }));
     expect(screen.getByLabelText('Approver PIN')).toBeDefined();
   });
+  it.each(['branch-2', null])(
+    'does not offer owner self-approval outside the solo branch (%s)',
+    async (branchId) => {
+      mocks.createCaller.mockReturnValue(
+        callerStub({
+          workspace: vi
+            .fn()
+            .mockResolvedValue({
+              ...workspace,
+              procurementApprovers: [
+                {
+                  id: 'user-1',
+                  name: 'Owner',
+                  email: 'owner@example.test',
+                  soloBranchIds: ['branch-1'],
+                  soloOrganizationWide: false,
+                },
+              ],
+            }),
+          purchaseOrders: vi.fn().mockResolvedValue([
+            {
+              id: 'po-1',
+              reference: 'STAFFED-PO',
+              status: 'SUBMITTED',
+              supplier: { id: 'sup-ok', name: 'Supplier' },
+              branch: null,
+              branchId,
+              supplierId: 'sup-ok',
+              requisition: null,
+              lines: [],
+              approvals: [],
+              goodsReceipts: [],
+              createdByUserId: 'user-1',
+            },
+          ]),
+          landedCost: vi.fn().mockResolvedValue(null),
+        })
+      );
+      render(await OrdersPage({ searchParams: params({ po: 'po-1' }) }));
+      expect(screen.queryByLabelText('Owner PIN')).toBeNull();
+      expect(screen.queryByRole('button', { name: /^Approve$/ })).toBeNull();
+    }
+  );
   it('offers a PIN-protected decision to a solo owner while preserving the multi-staff refusal', async () => {
     mocks.createCaller.mockReturnValue(
       callerStub({
         workspace: vi.fn().mockResolvedValue({
           ...workspace,
-          procurementApprovers: [{ id: 'user-1', name: 'Owner', email: 'owner@example.test' }],
+          procurementApprovers: [
+            {
+              id: 'user-1',
+              name: 'Owner',
+              email: 'owner@example.test',
+              soloOrganizationWide: true,
+              soloBranchIds: ['branch-1'],
+            },
+          ],
         }),
         purchaseOrders: vi.fn().mockResolvedValue([
           {

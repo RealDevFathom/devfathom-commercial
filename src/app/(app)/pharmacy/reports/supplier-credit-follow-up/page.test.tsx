@@ -415,6 +415,16 @@ describe('supplier-credit Reports preparation', () => {
     const caller = pharmacyPurchasingRouter.createCaller({
       ...context(),
       db: {
+        user: {
+          findUnique: vi.fn().mockResolvedValue({
+            id: 'user-1',
+            status: 'ACTIVE',
+            organizationRole: {
+              permissions: [{ capability: 'reports:financial', effect: 'ALLOW' }],
+            },
+            permissionOverrides: [],
+          }),
+        },
         pharmacyBranch: { findFirst: vi.fn().mockResolvedValue({ id: scope.branchId }) },
         pharmacyBranchAssignment: {
           findMany: vi.fn().mockResolvedValue([{ branchId: scope.branchId }]),

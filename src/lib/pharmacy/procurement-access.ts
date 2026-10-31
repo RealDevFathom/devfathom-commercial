@@ -18,8 +18,7 @@ function matching(rules: readonly CapabilityRule[]) {
 
 /**
  * Goods-in is the procurement capability. A cashier grant such as
- * `pharmacy.counter` or `pharmacy:orders` does not cover it. DENY wins for
- * ordinary grants; callers resolve live owner/admin authority separately.
+ * `pharmacy.counter` or `pharmacy:orders` does not cover it. DENY always wins.
  */
 export function procurementCapabilityGranted(input: {
   overrides: readonly CapabilityRule[];
@@ -52,6 +51,12 @@ export async function actorCanProcure(db: ScopedDb, userId: string, now = new Da
     },
   });
   if (!user) return false;
+  if (
+    matching([...user.permissionOverrides, ...(user.organizationRole?.permissions ?? [])]).some(
+      (rule) => rule.effect === 'DENY'
+    )
+  )
+    return false;
   if (hasAllCapabilityAccess(user)) return true;
   return procurementCapabilityGranted({
     overrides: user.permissionOverrides,
@@ -74,6 +79,12 @@ export async function actorIsPharmacyOwner(db: ScopedDb, organizationId: string,
     },
   });
   if (!user) return false;
+  if (
+    matching([...user.permissionOverrides, ...(user.organizationRole?.permissions ?? [])]).some(
+      (rule) => rule.effect === 'DENY'
+    )
+  )
+    return false;
   if (hasAllCapabilityAccess(user)) return true;
   const role = user.organizationRole;
   return Boolean(
@@ -106,6 +117,16 @@ export async function actorCanReadPurchasing(db: ScopedDb, userId: string, now =
     },
   });
   if (!user) return false;
+  const allRules = [...user.permissionOverrides, ...(user.organizationRole?.permissions ?? [])];
+  if (
+    allRules.some(
+      (rule) =>
+        rule.effect === 'DENY' &&
+        (PROCUREMENT_ACTIONS.some((action) => covers(rule.capability, action)) ||
+          covers(rule.capability, 'pharmacy:receiving-view'))
+    )
+  )
+    return false;
   if (hasAllCapabilityAccess(user)) return true;
   if (
     procurementCapabilityGranted({

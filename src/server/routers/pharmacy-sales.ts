@@ -404,10 +404,10 @@ async function requireCounterReceiptAccess(
   // Treat the names as one capability family. Otherwise an ALLOW on one alias
   // can accidentally outrun an explicit DENY on another alias.
   // Combine user overrides and role rules into ONE family decision so any
-  // explicit DENY (user or role, on any alias) beats ordinary grants. Live
-  // all-capability owner/admin authority is resolved separately.
+  // explicit DENY (user or role, on any alias) beats all grants.
   const owner = hasAllCapabilityAccess(member);
-  const capable = owner || counterCapabilityDecision([...overrides, ...roleRules]) === 'ALLOW';
+  const decision = counterCapabilityDecision([...overrides, ...roleRules]);
+  const capable = decision !== 'DENY' && (owner || decision === 'ALLOW');
   if (!capable) {
     throw new TRPCError({
       code: 'FORBIDDEN',
@@ -423,7 +423,14 @@ async function requireCounterReceiptAccess(
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
   }
 
-  if (owner) return scope;
+  if (owner && member.organizationRole?.isSystem && member.organizationRole.key === 'owner') {
+    annotateAudit(ctx, {
+      targetType: 'PharmacyBranch',
+      targetId: branch,
+      metadata: { branchId: branch, reason: 'tenant-owner-receipt-access' },
+    });
+    return scope;
+  }
 
   const rows = await ctx.db.pharmacyBranchAssignment.findMany({
     where: {

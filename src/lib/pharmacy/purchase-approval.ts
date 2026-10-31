@@ -1,5 +1,5 @@
 import { SEGREGATION_OF_DUTIES_POLICY } from './purchasing';
-import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import { actorCanProcure, actorIsPharmacyOwner } from './procurement-access';
 import { assignedRegisterBranchIds } from './controlled-register';
 import {
@@ -53,7 +53,7 @@ export async function soloOwnerApprovalAllowed(
   return others === 0;
 }
 
-/** Caller commits a blocked result so PIN lockout survives refusal. Never logs PINs. */
+/** Runs in an independent tenant transaction so request rollback cannot undo strikes. */
 async function verifyApprover(
   db: ScopedDb,
   input: {
@@ -101,27 +101,24 @@ async function verifyApprover(
     where: { id: credential.id },
     data: clearLockout(),
   });
-  await db.$queryRaw`SELECT set_config('app.pharmacy_purchase_pin_verified_user_id', ${approverId}, true)`;
   return { verified: true } as const;
 }
 
-const approvalQueues = new WeakMap<object, Map<string, Promise<unknown>>>();
 export async function verifyPurchaseApprover(
   db: ScopedDb,
   input: Parameters<typeof verifyApprover>[1]
 ) {
-  let queues = approvalQueues.get(db);
-  if (!queues) approvalQueues.set(db, (queues = new Map()));
-  const key = `${input.organizationId}:${input.approverId}`;
-  const work = (queues.get(key) ?? Promise.resolve())
-    .catch(() => undefined)
-    .then(() => verifyApprover(db, input));
-  queues.set(key, work);
-  try {
-    return await work;
-  } finally {
-    if (queues.get(key) === work) queues.delete(key);
+  // The request's $transaction reuses its outer transaction. Only a fresh
+  // withTenantDb commits the credential counter before any business work.
+  const result = await withTenantDb(
+    input.organizationId,
+    (credentialDb) => verifyApprover(credentialDb, input),
+    { skipDrain: true }
+  );
+  if ('verified' in result) {
+    await db.$queryRaw`SELECT set_config('app.pharmacy_purchase_pin_verified_user_id', ${input.approverId}, true)`;
   }
+  return result;
 }
 
 /** Durable proof is part of the draft transaction, not a best-effort UI audit. */

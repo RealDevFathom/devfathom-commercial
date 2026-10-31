@@ -6,6 +6,9 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, labeled]
     branches:
+      - develop
+      - staging
+      - main
       - 'integration/**'
   workflow_dispatch:
     inputs:
@@ -76,6 +79,7 @@ jobs:
       CATALOG_TEST_DATABASE_URL: postgresql://postgres:gate-postgres-ci-only@127.0.0.1:55432/devfathom_gate_test
       DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/devfathom_gate_test
       TEST_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/devfathom_gate_test
+      FIX469_OWNER_DATABASE_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/devfathom_gate_test
       SHADOW_DATABASE_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/devfathom_gate_shadow_test
       RESTAURANT_E2E_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/devfathom_gate_test
       AGENCY_E2E_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/devfathom_gate_test
@@ -324,9 +328,8 @@ jobs:
             const split = line.lastIndexOf('=');
             if (split < 1 || line.slice(split + 1) !== '0') failures.push(line);
           }
-          // Optional integration suites report pending tests when their dedicated
-          // database lane is not selected. Failures and TODOs remain forbidden;
-          // each reserved lane below must still collect and pass real tests.
+          // Optional integration suites use separate database lanes. Every
+          // authorization/RLS regression below must still collect and pass.
           const requiredZero = ['numFailedTests', 'numFailedTestSuites', 'numTodoTests'];
           const requiredPositive = ['numTotalTests', 'numTotalTestSuites', 'numPassedTests', 'numPassedTestSuites'];
           const totals = Object.fromEntries([...requiredZero, ...requiredPositive].map((field) => [field, 0]));
@@ -341,6 +344,29 @@ jobs:
               }
               if (lane !== 'vitest' && (report.numPendingTests !== 0 || report.numPendingTestSuites !== 0))
                 failures.push(`${lane} JSON contains pending tests or suites`);
+              if (lane !== 'vitest' && (report.numPassedTests !== report.numTotalTests || report.numPassedTestSuites !== report.numTotalTestSuites))
+                failures.push(`${lane} JSON passed/total mismatch`);
+              if (lane === 'vitest') {
+                const securitySuites = {
+                  'src/lib/abac/index.test.ts': 127,
+                  'src/lib/pharmacy/procurement-access.test.ts': 8,
+                  'src/lib/pharmacy/purchase-approval.test.ts': 2,
+                  'src/server/routers/pharmacy-purchasing.test.ts': 253,
+                  'src/lib/pharmacy/stock-signals-operations.security.test.ts': 2,
+                  'src/server/routers/pharmacy-supplier-links.security.test.ts': 20,
+                  'src/server/routers/pharmacy-sales.counter-receipt-auth.test.ts': 53,
+                  'src/server/routers/pharmacy-witness-enumeration.test.ts': 8,
+                  'src/lib/pharmacy/purchasing-security.db.test.ts': 10,
+                  'tests/pharmacy-capabilities.db.test.ts': 1,
+                };
+                for (const [file, minimum] of Object.entries(securitySuites)) {
+                  const suite = report.testResults?.find((result) => result.name.endsWith(`/${file}`));
+                  const tests = suite?.assertionResults;
+                  if (!suite || suite.status !== 'passed' || !Array.isArray(tests) ||
+                      tests.length < minimum || tests.some((test) => test.status !== 'passed'))
+                    failures.push(`${lane} required security suite ${file} must pass at least ${minimum} tests with no skips`);
+                }
+              }
               console.log(`${lane}: ${JSON.stringify(Object.fromEntries(Object.keys(totals).map((field) => [field, report[field]])))}`);
             } catch (error) {
               failures.push(`${lane} JSON unavailable: ${error.message}`);
