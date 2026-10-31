@@ -13,6 +13,16 @@ function context({
   run = 1,
   ref = `refs/pull/${pr}/merge`,
   inputSha = '',
+}: {
+  event?: string;
+  action?: string;
+  label?: string;
+  ready?: boolean;
+  pr?: number;
+  sha?: string;
+  run?: number;
+  ref?: string;
+  inputSha?: string;
 } = {}) {
   return {
     github: {
