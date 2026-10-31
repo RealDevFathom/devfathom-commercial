@@ -96,12 +96,14 @@ export function CounterWhatsAppOffer({
   branchId,
   customerId,
   initialOptIn,
+  snapshotUpdatedAt,
   onSaved,
   onError,
 }: {
   branchId: string;
   customerId: string;
   initialOptIn: boolean | null;
+  snapshotUpdatedAt: number;
   onSaved: () => void | Promise<void>;
   onError: (error: unknown) => void;
 }) {
@@ -109,20 +111,23 @@ export function CounterWhatsAppOffer({
   const [confirmedOverride, setConfirmedOverride] = useState<{
     customerId: string;
     previousValue: boolean | null;
+    snapshotUpdatedAt: number;
     value: boolean;
   } | null>(null);
   const displayedOptIn =
     confirmedOverride?.customerId === customerId &&
-    confirmedOverride.previousValue === initialOptIn
+    confirmedOverride.previousValue === initialOptIn &&
+    confirmedOverride.snapshotUpdatedAt === snapshotUpdatedAt
       ? confirmedOverride.value
       : initialOptIn;
   if (
     confirmedOverride &&
     (confirmedOverride.customerId !== customerId ||
-      confirmedOverride.previousValue !== initialOptIn)
+      confirmedOverride.previousValue !== initialOptIn ||
+      confirmedOverride.snapshotUpdatedAt !== snapshotUpdatedAt)
   ) {
-    // Once server data or the selected customer changes, retire the saved
-    // override so it cannot mask a later consent update with the same value.
+    // A successful query refresh is authoritative even when STOP restored the
+    // pre-save boolean. Failed refreshes leave dataUpdatedAt unchanged.
     setConfirmedOverride(null);
   }
 
@@ -157,7 +162,12 @@ export function CounterWhatsAppOffer({
             return;
           }
 
-          setConfirmedOverride({ customerId, previousValue: initialOptIn, value: optedIn });
+          setConfirmedOverride({
+            customerId,
+            previousValue: initialOptIn,
+            snapshotUpdatedAt,
+            value: optedIn,
+          });
           try {
             await onSaved();
           } catch {
@@ -2337,6 +2347,7 @@ function ScopedPharmacyCounterConsole({
                   branchId={branchId}
                   customerId={customerQuery.data.customer.id}
                   initialOptIn={customerQuery.data.customer.whatsappOptIn}
+                  snapshotUpdatedAt={customerQuery.dataUpdatedAt}
                   onSaved={async () => {
                     await customerQuery.refetch();
                     setNotice({ tone: 'success', message: 'WhatsApp consent updated.' });

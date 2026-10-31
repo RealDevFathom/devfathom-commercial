@@ -300,6 +300,7 @@ describe('CounterWhatsAppOffer', () => {
       <CounterWhatsAppOffer
         branchId="branch-a"
         customerId="customer-a"
+        snapshotUpdatedAt={1}
         initialOptIn={initialOptIn}
         onSaved={vi.fn()}
         onError={vi.fn()}
@@ -320,6 +321,7 @@ describe('CounterWhatsAppOffer', () => {
       <CounterWhatsAppOffer
         branchId="branch-a"
         customerId="customer-a"
+        snapshotUpdatedAt={1}
         initialOptIn={true}
         onSaved={onSaved}
         onError={vi.fn()}
@@ -347,6 +349,7 @@ describe('CounterWhatsAppOffer', () => {
       <CounterWhatsAppOffer
         branchId="branch-a"
         customerId="customer-a"
+        snapshotUpdatedAt={1}
         initialOptIn={true}
         onSaved={vi.fn().mockRejectedValue(new Error('refresh failed'))}
         onError={onError}
@@ -362,10 +365,56 @@ describe('CounterWhatsAppOffer', () => {
     expect(onError).not.toHaveBeenCalled();
   });
 
+  it.each(['pending', 'failed'] as const)(
+    'uses a successful unchanged snapshot after opt-in and STOP with the follow-up refresh %s',
+    async (refreshState) => {
+      mocks.mutations.setCustomerWhatsAppOptIn.mockResolvedValue({ whatsappOptIn: true });
+      let finishRefresh: (() => void) | undefined;
+      const props = {
+        branchId: 'branch-a',
+        customerId: 'customer-a',
+        initialOptIn: false,
+        snapshotUpdatedAt: 1,
+        onSaved: vi.fn(
+          () =>
+            new Promise<void>((resolve, reject) => {
+              if (refreshState === 'failed') reject(new Error('refresh failed'));
+              else finishRefresh = resolve;
+            })
+        ),
+        onError: vi.fn(),
+      };
+      const { rerender } = render(<CounterWhatsAppOffer {...props} />);
+
+      fireEvent.click(screen.getByRole('checkbox', { name: 'WhatsApp consent' }));
+      await waitFor(() => expect(props.onSaved).toHaveBeenCalledOnce());
+      expect(screen.getByText('Current status: Opted in')).toBeInTheDocument();
+
+      // Cached data during a pending or failed read must preserve the saved opt-in.
+      rerender(<CounterWhatsAppOffer {...props} />);
+      expect(screen.getByRole('checkbox', { name: 'WhatsApp consent' })).toBeChecked();
+
+      // STOP landed before this successful read, returning the pre-save false.
+      await act(async () => {
+        rerender(<CounterWhatsAppOffer {...props} snapshotUpdatedAt={2} />);
+        finishRefresh?.();
+      });
+      expect(screen.getByText('Current status: Opted out')).toBeInTheDocument();
+      expect(screen.getByRole('checkbox', { name: 'WhatsApp consent' })).not.toBeChecked();
+
+      // Further successful reads must not revive the retired local override.
+      rerender(<CounterWhatsAppOffer {...props} snapshotUpdatedAt={3} />);
+      expect(screen.getByText('Current status: Opted out')).toBeInTheDocument();
+      expect(screen.getByRole('checkbox', { name: 'WhatsApp consent' })).not.toBeChecked();
+      expect(props.onError).not.toHaveBeenCalled();
+    }
+  );
+
   it('uses newer server consent after the saved change has been refreshed', async () => {
     mocks.mutations.setCustomerWhatsAppOptIn.mockResolvedValue({ whatsappOptIn: false });
     const props = {
       branchId: 'branch-a',
+      snapshotUpdatedAt: 1,
       customerId: 'customer-a',
       onSaved: vi.fn(),
       onError: vi.fn(),
@@ -387,6 +436,7 @@ describe('CounterWhatsAppOffer', () => {
     mocks.mutations.setCustomerWhatsAppOptIn.mockResolvedValue({ whatsappOptIn: false });
     const props = {
       branchId: 'branch-a',
+      snapshotUpdatedAt: 1,
       initialOptIn: true,
       onSaved: vi.fn(),
       onError: vi.fn(),
@@ -412,6 +462,7 @@ describe('CounterWhatsAppOffer', () => {
       <CounterWhatsAppOffer
         branchId="branch-a"
         customerId="customer-a"
+        snapshotUpdatedAt={1}
         initialOptIn={true}
         onSaved={onSaved}
         onError={onError}
