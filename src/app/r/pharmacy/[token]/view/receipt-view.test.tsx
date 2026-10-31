@@ -107,3 +107,27 @@ it('handles network failure without exposing a blank page', async () => {
   render(<HostedReceiptView token="offline" />);
   await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Network unavailable.'));
 });
+
+it('lets the customer request a new code for the bound WhatsApp number', async () => {
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValueOnce(json({ otpRequired: true }, 401))
+    .mockResolvedValueOnce({
+      ok: true,
+      status: 202,
+      json: async () => ({ ok: true, message: 'A new code is on its way.' }),
+    });
+  vi.stubGlobal('fetch', fetchMock);
+  render(<HostedReceiptView token="rx-token" />);
+  const phone = await screen.findByLabelText('WhatsApp number this receipt was sent to');
+  expect(screen.getByRole('button', { name: 'Send a new code' })).toBeDisabled();
+  fireEvent.change(phone, { target: { value: '0300 1234567' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Send a new code' }));
+  expect(await screen.findByText('A new code is on its way.')).toBeVisible();
+  expect(fetchMock).toHaveBeenNthCalledWith(2, '/r/pharmacy/rx-token/code', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{"phone":"0300 1234567"}',
+  });
+  expect(screen.getByLabelText('Six-digit code')).toBeEnabled();
+});

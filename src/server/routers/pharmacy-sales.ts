@@ -100,7 +100,12 @@ import {
   createReceiptOtpCode,
   issueHostedReceipt,
 } from '@/lib/pharmacy/whatsapp/hosted-receipt';
-import { persistHostedReceipt } from '@/lib/pharmacy/whatsapp/hosted-receipt-store';
+import {
+  hostedReceiptRecipientOptedOut,
+  persistHostedReceipt,
+  revokeHostedReceipts,
+} from '@/lib/pharmacy/whatsapp/hosted-receipt-store';
+import { rateLimit } from '@/lib/rate-limit';
 import { normalizeWhatsAppNumber, phoneLast4 } from '@/lib/pharmacy/whatsapp/messages';
 import { createWhatsAppProvider } from '@/lib/pharmacy/whatsapp/provider';
 import { sendAndLog } from '@/lib/pharmacy/whatsapp/message-log';
@@ -1733,9 +1738,33 @@ export const pharmacySalesRouter = router({
           code: 'PRECONDITION_FAILED',
           message: 'Hosted receipt delivery is not configured.',
         });
+      // Bound outbound messaging: per destination number and per sale, so a
+      // counter session cannot repeatedly message an arbitrary number.
+      for (const [key, limit] of [
+        [`pharmacy-hosted-receipt:phone:${scope.organizationId}:${phone}`, 3],
+        [`pharmacy-hosted-receipt:sale:${scope.organizationId}:${input.saleId}`, 5],
+      ] as const) {
+        const gate = await rateLimit(key, limit, 60 * 60_000);
+        if (!gate.ok)
+          throw new TRPCError({
+            code: 'TOO_MANY_REQUESTS',
+            message: 'Too many receipt links were sent. Try again later.',
+          });
+      }
       const receipt = await loadCounterReceipt(ctx, scope, input.saleId);
       if (receipt.receiptNumber === null || !receipt.completedAt)
         throw new TRPCError({ code: 'CONFLICT', message: 'Only a settled receipt can be sent.' });
+      const sale = await ctx.db.pharmacySale.findFirst({
+        where: { organizationId: scope.organizationId, branchId: scope.branchId, id: input.saleId },
+        select: { customerId: true },
+      });
+      if (
+        await hostedReceiptRecipientOptedOut(ctx.db, scope.organizationId, phone, sale?.customerId)
+      )
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message: 'This customer has opted out of WhatsApp messages.',
+        });
       const rx = Boolean(
         await ctx.db.pharmacySaleLine.findFirst({
           where: {
@@ -1769,10 +1798,19 @@ export const pharmacySalesRouter = router({
         secret
       );
       const link = `${publicOrigin}/r/pharmacy/${issued.token}`;
-      // Branch names and other utility fields are editable. Check the tenant's
-      // catalog too, so medicine information cannot enter the neutral template.
+      // Branch names and other utility fields are editable. Check the medicines
+      // sold on this receipt, so their names cannot enter the neutral template.
       const catalog = await ctx.db.medicine.findMany({
-        where: { organizationId: scope.organizationId },
+        where: {
+          organizationId: scope.organizationId,
+          saleLines: {
+            some: {
+              organizationId: scope.organizationId,
+              branchId: scope.branchId,
+              saleId: input.saleId,
+            },
+          },
+        },
         select: {
           productName: true,
           brandName: true,
@@ -1803,6 +1841,7 @@ export const pharmacySalesRouter = router({
         persistHostedReceipt(txDb(tx), issued.token, issued.receipt)
       );
       const provider = createWhatsAppProvider();
+      let providerMessageId: string | undefined;
       const outcome = await sendAndLog(
         {
           organizationId: scope.organizationId,
@@ -1814,6 +1853,7 @@ export const pharmacySalesRouter = router({
         },
         async () => {
           const delivery = await provider.sendText({ to: phone, body: message });
+          providerMessageId = delivery.providerMessageId;
           if (rx)
             await provider.sendText({
               to: phone,
@@ -1822,10 +1862,14 @@ export const pharmacySalesRouter = router({
           return delivery;
         }
       );
-      if (outcome === 'SENT')
+      if (outcome === 'SENT' || providerMessageId)
         await ctx.db.pharmacyHostedReceipt.update({
           where: { id: recordId },
-          data: { deliveredAt: new Date() },
+          data: {
+            ...(providerMessageId ? { providerMessageId } : {}),
+            // Only a real provider acknowledgement counts as delivery.
+            ...(outcome === 'SENT' ? { deliveredAt: new Date() } : {}),
+          },
         });
       annotateAudit(ctx, {
         category: 'PHARMACY',
@@ -1843,6 +1887,30 @@ export const pharmacySalesRouter = router({
         },
       });
       return { outcome, expiresAt: issued.receipt.expiresAt };
+    }),
+
+  /** Ends every live hosted-receipt link for a sale (wrong number, customer request). */
+  revokeHostedReceipts: auditedProtectedProcedure
+    .input(z.object({ branchId, saleId: z.string().min(1) }).strict())
+    .mutation(async ({ ctx, input }) => {
+      const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
+      const revoked = await revokeHostedReceipts(
+        ctx.db,
+        scope.organizationId,
+        input.saleId,
+        scope.actorId,
+        new Date(),
+        scope.branchId
+      );
+      annotateAudit(ctx, {
+        category: 'PHARMACY',
+        operation: 'UPDATE',
+        action: 'pharmacySales.revokeHostedReceipts',
+        targetType: 'PharmacySale',
+        targetId: input.saleId,
+        metadata: { branchId: scope.branchId, revoked: revoked.count },
+      });
+      return { revoked: revoked.count };
     }),
 
   /**

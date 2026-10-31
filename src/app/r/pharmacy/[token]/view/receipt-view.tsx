@@ -42,6 +42,10 @@ export function HostedReceiptView({ token }: { token: string }) {
   const [code, setCode] = useState('');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
+  const [phone, setPhone] = useState('');
+  const [resendPending, setResendPending] = useState(false);
+  const [resendNotice, setResendNotice] = useState('');
+  const [resendError, setResendError] = useState('');
 
   useEffect(() => {
     const controller = new AbortController();
@@ -77,6 +81,29 @@ export function HostedReceiptView({ token }: { token: string }) {
     }
   }
 
+  async function requestCode(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setResendPending(true);
+    setResendNotice('');
+    setResendError('');
+    try {
+      const response = await fetch(`${endpoint}/code`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone }),
+      });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error || 'A code could not be sent.');
+      setResendNotice(body.message || 'A new code is on its way.');
+      setCode('');
+      setError('');
+    } catch (cause) {
+      setResendError(cause instanceof Error ? cause.message : 'A code could not be sent.');
+    } finally {
+      setResendPending(false);
+    }
+  }
+
   const receipt = state.kind === 'receipt' ? state.receipt : null;
   const qrUrl = receipt?.fbrQrUrl?.startsWith('https://') ? receipt.fbrQrUrl : null;
 
@@ -102,8 +129,8 @@ export function HostedReceiptView({ token }: { token: string }) {
         ) : state.kind === 'verify' ? (
           <SectionCard title="Verify your receipt">
             <p className="mb-5 text-sm text-text-muted">
-              Enter the six-digit code sent to your WhatsApp number. If it has expired, ask the
-              pharmacy for a new receipt link and code.
+              Enter the six-digit code sent to your WhatsApp number. If it has expired, request a
+              new code below.
             </p>
             <form onSubmit={verify} className="space-y-4">
               <label htmlFor="receipt-code" className="block text-sm font-semibold">
@@ -135,6 +162,57 @@ export function HostedReceiptView({ token }: { token: string }) {
                 disabled={pending || code.length !== 6}
               >
                 {pending ? 'Verifying…' : 'View receipt'}
+              </Button>
+            </form>
+            <form
+              onSubmit={requestCode}
+              className="mt-6 space-y-4 border-t border-border-subtle pt-6"
+              aria-labelledby="receipt-resend-heading"
+            >
+              <h2 id="receipt-resend-heading" className="text-sm font-semibold text-text-strong">
+                Need a new code?
+              </h2>
+              <label htmlFor="receipt-phone" className="block text-sm font-semibold">
+                WhatsApp number this receipt was sent to
+              </label>
+              <Input
+                id="receipt-phone"
+                type="tel"
+                inputMode="tel"
+                autoComplete="tel"
+                maxLength={32}
+                required
+                value={phone}
+                onChange={(event) => setPhone(event.target.value)}
+                disabled={resendPending}
+                aria-invalid={resendError ? true : undefined}
+                aria-describedby={
+                  resendError
+                    ? 'receipt-resend-error'
+                    : resendNotice
+                      ? 'receipt-resend-notice'
+                      : undefined
+                }
+                className="min-h-11"
+              />
+              {resendError ? (
+                <p id="receipt-resend-error" role="alert" className="text-sm text-destructive">
+                  {resendError}
+                </p>
+              ) : null}
+              {resendNotice ? (
+                <p id="receipt-resend-notice" role="status" className="text-sm text-text-muted">
+                  {resendNotice}
+                </p>
+              ) : null}
+              <Button
+                type="submit"
+                variant="outline"
+                size="lg"
+                className="min-h-11 w-full"
+                disabled={resendPending || phone.trim().length < 8}
+              >
+                {resendPending ? 'Sending…' : 'Send a new code'}
               </Button>
             </form>
           </SectionCard>

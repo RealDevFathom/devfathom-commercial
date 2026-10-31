@@ -8,6 +8,7 @@ import {
   issueHostedReceipt,
   lintReceiptMessage,
   readHostedReceipt,
+  receiptPhoneMatches,
 } from './hosted-receipt';
 const secret = 'a-production-length-secret-that-is-not-real';
 const now = new Date('2026-10-29T00:00:00.000Z');
@@ -82,6 +83,37 @@ describe('neutral hosted pharmacy receipt', () => {
     expect(() => lintReceiptMessage(`${text}\nAspirin`, ['Aspirin'])).toThrow(
       'medicine information'
     );
+  });
+  it('lints only the editable fields, never the link token or fixed labels', () => {
+    const link = 'https://example.test/r/pharmacy/xORSzincABC.def-Iron_9';
+    expect(() =>
+      buildReceiptMessage({ ...input, link }, ['ORS', 'Zinc', 'Iron', 'cure', 'Method'])
+    ).not.toThrow();
+    for (const field of ['branch', 'receiptNumber', 'total', 'paymentMethod'] as const)
+      expect(() => buildReceiptMessage({ ...input, [field]: 'Zinc 50', link }, ['zinc'])).toThrow(
+        'medicine information'
+      );
+    expect(() =>
+      buildReceiptMessage({ ...input, branch: 'Gulberg\nAspirin', link }, ['Aspirin'])
+    ).toThrow('medicine information');
+    expect(() => buildReceiptMessage({ ...input, branch: 'A\nB', link })).toThrow(
+      'approved utility format'
+    );
+  });
+  it('matches a customer-entered number against the Rx phone binding', () => {
+    const { receipt } = issueHostedReceipt(
+      { ...input, rx: true, phone: '923001234567', now },
+      secret
+    );
+    expect(receiptPhoneMatches(receipt, '923001234567', secret)).toBe(true);
+    expect(receiptPhoneMatches(receipt, '923110000000', secret)).toBe(false);
+    expect(
+      receiptPhoneMatches(
+        issueHostedReceipt({ ...input, now }, secret).receipt,
+        '923001234567',
+        secret
+      )
+    ).toBe(false);
   });
   it('carries optional FBR evidence only in the protected hosted receipt', () => {
     const issued = issueHostedReceipt(

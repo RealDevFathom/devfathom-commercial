@@ -26,7 +26,9 @@ CREATE TABLE "pharmacy_hosted_receipts" (
   CONSTRAINT "pharmacy_hosted_receipts_organization_fkey" FOREIGN KEY ("organizationId") REFERENCES "organizations"("id") ON DELETE CASCADE ON UPDATE CASCADE,
   CONSTRAINT "pharmacy_hosted_receipts_branch_fkey" FOREIGN KEY ("organizationId", "branchId") REFERENCES "pharmacy_branches"("organizationId", "id") ON DELETE RESTRICT ON UPDATE CASCADE,
   CONSTRAINT "pharmacy_hosted_receipts_sale_fkey" FOREIGN KEY ("organizationId", "branchId", "saleId") REFERENCES "pharmacy_sales"("organizationId", "branchId", "id") ON DELETE RESTRICT ON UPDATE CASCADE,
-  CONSTRAINT "pharmacy_hosted_receipts_actor_fkey" FOREIGN KEY ("actorId") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE CASCADE
+  -- Composite user keys force the issuing and revoking staff into the receipt's tenant.
+  CONSTRAINT "pharmacy_hosted_receipts_actor_fkey" FOREIGN KEY ("organizationId", "actorId") REFERENCES "users"("organizationId", "id") ON DELETE RESTRICT ON UPDATE CASCADE,
+  CONSTRAINT "pharmacy_hosted_receipts_revoker_fkey" FOREIGN KEY ("organizationId", "revokedByActorId") REFERENCES "users"("organizationId", "id") ON DELETE RESTRICT ON UPDATE CASCADE
 );
 
 CREATE UNIQUE INDEX "pharmacy_hosted_receipts_org_digest_key" ON "pharmacy_hosted_receipts"("organizationId", "tokenDigest");

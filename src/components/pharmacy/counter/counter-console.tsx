@@ -77,6 +77,7 @@ import {
 } from '@/lib/pharmacy/counter-browser-print';
 import { workspaceToday } from '@/lib/timezone';
 import { trpc } from '@/lib/trpc';
+import { CounterHostedReceipt } from './counter-hosted-receipt';
 
 type Notice = {
   tone: 'success' | 'warning' | 'danger' | 'neutral';
@@ -2220,6 +2221,12 @@ function ScopedPharmacyCounterConsole({
               onSettlementPresented={receiptPresented}
             />
           </SectionCard>
+
+          {billState === 'settled' && saleId && receiptQuery.data?.saleId === saleId ? (
+            <SectionCard compact className="shrink-0" eyebrow="POS-08" title="WhatsApp receipt">
+              <CounterHostedReceipt key={saleId} branchId={branchId} saleId={saleId} />
+            </SectionCard>
+          ) : null}
         </div>
 
         <div className="min-h-0 space-y-2 overflow-y-auto md:col-start-1">

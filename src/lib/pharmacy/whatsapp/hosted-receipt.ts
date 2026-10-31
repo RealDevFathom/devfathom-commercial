@@ -275,15 +275,45 @@ export function hasValidReceiptOtp(
 
 const SAFE_TEMPLATE =
   'Receipt from {{branch}}\nReceipt: {{receiptNumber}}\nTotal: {{total}}\nMethod: {{paymentMethod}}\nSecure receipt: {{link}}';
-export function lintReceiptMessage(message: string, prohibitedTerms: readonly string[] = []) {
-  const normalized = message.toLocaleLowerCase();
-  const prohibited = prohibitedTerms.find(
+const FIELD_LABELS = ['Receipt from ', 'Receipt: ', 'Total: ', 'Method: '] as const;
+const LINK_LABEL = 'Secure receipt: ';
+
+/**
+ * Only the editable values can carry medicine information. The fixed labels and
+ * the random link token are excluded: a short catalog term ("ORS", "Zinc") would
+ * otherwise collide with base64 token text or template words such as "secure".
+ */
+function editableValues(lines: readonly string[]): string[] {
+  return lines.flatMap((line, index) => {
+    if (index === 4 && line.startsWith(LINK_LABEL)) return [];
+    const label = FIELD_LABELS[index];
+    return [label && line.startsWith(label) ? line.slice(label.length) : line];
+  });
+}
+function containsProhibitedTerm(value: string, prohibitedTerms: readonly string[]) {
+  const normalized = value.toLocaleLowerCase();
+  return prohibitedTerms.some(
     (term) => term.trim() && normalized.includes(term.trim().toLocaleLowerCase())
   );
-  if (prohibited) throw new Error('WhatsApp receipt must not contain medicine information.');
+}
+export function lintReceiptMessage(message: string, prohibitedTerms: readonly string[] = []) {
   const lines = message.split('\n');
-  if (lines.length !== 5 || !lines[4]?.startsWith('Secure receipt: https://'))
+  if (editableValues(lines).some((value) => containsProhibitedTerm(value, prohibitedTerms)))
+    throw new Error('WhatsApp receipt must not contain medicine information.');
+  if (
+    lines.length !== 5 ||
+    FIELD_LABELS.some((label, index) => !lines[index]?.startsWith(label)) ||
+    !/^Secure receipt: https:\/\/\S+$/.test(lines[4] ?? '')
+  )
     throw new Error('WhatsApp receipt is not the approved utility format.');
+}
+
+/** True when `phone` is the number the Rx receipt was bound to at issue time. */
+export function receiptPhoneMatches(receipt: HostedReceipt, phone: string, secret: string) {
+  if (!receipt.rx || !receipt.phoneBinding) return false;
+  const expected = Buffer.from(receipt.phoneBinding, 'hex');
+  const actual = Buffer.from(phoneBinding(secret, phone), 'hex');
+  return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
 export function buildReceiptMessage(
   values: {

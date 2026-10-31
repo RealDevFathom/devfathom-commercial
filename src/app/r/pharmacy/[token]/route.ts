@@ -49,8 +49,10 @@ export async function GET(request: Request, context: { params: Promise<{ token: 
       { headers: privateHeaders }
     );
   } catch (error) {
+    // Never echo internal (database/driver) error text to an anonymous caller.
+    const expired = error instanceof Error && error.message === 'Receipt link has expired.';
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Invalid receipt link.' },
+      { error: expired ? 'Receipt link has expired.' : 'Receipt link is unavailable.' },
       { status: 410, headers: privateHeaders }
     );
   }

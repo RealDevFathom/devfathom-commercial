@@ -126,4 +126,13 @@ describe('hosted receipt customer access', () => {
       expect(await response.json()).toEqual({ error });
     }
   );
+
+  it('never returns internal error text to an anonymous caller', async () => {
+    vi.mocked(authorizeHostedReceipt).mockRejectedValue(
+      new Error('Invalid `prisma.pharmacyHostedReceipt.findFirst()` invocation: connection refused')
+    );
+    const response = await GET(request(), context());
+    expect(response.status).toBe(410);
+    expect(await response.json()).toEqual({ error: 'Receipt link is unavailable.' });
+  });
 });
