@@ -25,12 +25,12 @@ describe('login password visibility controls', () => {
   it.each([
     [
       'tenant login',
-      <LoginForm connections={[]} ssoEnforced={false} callbackUrl="/dashboard" />,
+      () => <LoginForm connections={[]} ssoEnforced={false} callbackUrl="/dashboard" />,
     ],
-    ['shared-host login', <SharedLoginForm callbackUrl="/dashboard" />],
-    ['platform login', <PlatformLoginForm />],
-  ])('provides an accessible password toggle on %s', (_name, form) => {
-    render(form);
+    ['shared-host login', () => <SharedLoginForm callbackUrl="/dashboard" />],
+    ['platform login', () => <PlatformLoginForm />],
+  ])('provides an accessible password toggle on %s', (_name, renderForm) => {
+    render(renderForm());
 
     const password = screen.getByLabelText('Password');
     const toggle = screen.getByRole('button', { name: 'Show password' });
