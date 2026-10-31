@@ -4,6 +4,7 @@ import { generateObject, NoObjectGeneratedError } from 'ai';
 import { z } from 'zod';
 
 import { createAIModel, readAIAvailability, type AIModelSelection } from '@/lib/ai/provider';
+import { prepareAIModel } from '@/lib/ai/metered-model';
 import {
   MenuExtractionError,
   normalizeExtraction,
@@ -152,7 +153,7 @@ export function createVisionMenuExtractionAdapter(
       }
       let selection: AIModelSelection;
       try {
-        selection = selectModel();
+        selection = await prepareAIModel(selectModel());
       } catch {
         // A missing AI_PROVIDER/API key is a configuration fault, not a bad
         // menu — it must not burn the job's retry budget as a provider failure.

@@ -40,6 +40,8 @@
     "seed": "bunx tsx prisma/seed.ts"
   },
   "dependencies": {
+    "@ai-sdk/amazon-bedrock": "^4",
+    "@ai-sdk/anthropic": "^3.0.104",
     "@ai-sdk/azure": "^3",
     "@ai-sdk/google": "^3.0.89",
     "@ai-sdk/google-vertex": "^4",

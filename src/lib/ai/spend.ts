@@ -1,6 +1,34 @@
+import 'server-only';
+
 import { Prisma } from '@/generated/prisma/client';
 import { DEFAULT_AI_MODELS, type RoutedAIProvider } from './model-defaults';
 
+export type AIUsageRecord = {
+  organizationId: string;
+  branchId: string;
+  feature: string;
+  provider: string;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+};
+
+/** Preserve both tenant-attributed metering and the priced-ledger API. */
+export function recordAIUsage(usage: AIUsageRecord): Promise<void>;
+export function recordAIUsage(usage: PricedAIUsageRecord): Promise<Prisma.Decimal>;
+export async function recordAIUsage(
+  usage: AIUsageRecord | PricedAIUsageRecord
+): Promise<void | Prisma.Decimal> {
+  if ('prices' in usage) return recordPricedAIUsage(usage);
+  const { withTenantDb } = await import('@/lib/tenancy/scoped-db');
+  await withTenantDb(
+    usage.organizationId,
+    async (db) => {
+      await db.aIUsage.create({ data: usage });
+    },
+    { skipDrain: true }
+  );
+}
 export type ModelPrice = {
   provider: string;
   model: string;
@@ -66,7 +94,7 @@ export function calculateAIUsageCost(
     .toDecimalPlaces(6, Prisma.Decimal.ROUND_HALF_UP);
 }
 
-export async function recordAIUsage(input: {
+export type PricedAIUsageRecord = {
   prices: UsagePriceCatalog;
   ledger: UsageLedger;
   provider: string;
@@ -74,7 +102,9 @@ export async function recordAIUsage(input: {
   inputTokens: number;
   outputTokens: number;
   occurredAt?: Date;
-}): Promise<Prisma.Decimal> {
+};
+
+export async function recordPricedAIUsage(input: PricedAIUsageRecord): Promise<Prisma.Decimal> {
   const occurredAt = input.occurredAt ?? new Date();
   const price = await input.prices.findFirst({
     where: { provider: input.provider, model: input.model, effectiveFrom: { lte: occurredAt } },

@@ -4,6 +4,7 @@ import { generateObject, NoObjectGeneratedError } from 'ai';
 import { z } from 'zod';
 
 import { createAIModel, type AIModelSelection } from '@/lib/ai/provider';
+import { prepareAIModel } from '@/lib/ai/metered-model';
 import {
   clampConfidence,
   sanitizeExtractedText,
@@ -181,7 +182,7 @@ export function createVisionRxOcrAdapter(options: VisionRxOcrOptions = {}): RxOc
     async extract(request) {
       let selection: AIModelSelection;
       try {
-        selection = selectModel();
+        selection = await prepareAIModel(selectModel());
       } catch (error) {
         throw new RxOcrError(
           `The prescription reader is not configured: ${

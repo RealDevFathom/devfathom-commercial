@@ -10,6 +10,7 @@ import {
 } from 'ai';
 import { z } from 'zod';
 import { createAIModel, readAIConfig, readAIAvailability } from './provider';
+import { prepareAIModel } from './metered-model';
 
 export const GROWTH_SCHEMA_VERSION = 1 as const;
 export const GROWTH_MIN_COHORT = 10;
@@ -244,7 +245,9 @@ export async function generateGrowthRecommendations(raw: GrowthInput): Promise<G
   };
   try {
     checkDeadline();
-    const selected = createAIModel();
+    const selected = await Promise.race([prepareAIModel(createAIModel()), deadline]);
+    result.provider = selected.provider;
+    result.model = selected.modelId;
     for (let attempt = 0; attempt < 2; attempt++) {
       checkDeadline();
       let rawOutput: unknown;

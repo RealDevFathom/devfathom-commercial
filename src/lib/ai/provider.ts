@@ -1,12 +1,15 @@
 import { createAzure } from '@ai-sdk/azure';
+import { createAnthropic } from '@ai-sdk/anthropic';
+import { createAmazonBedrock } from '@ai-sdk/amazon-bedrock';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createVertex } from '@ai-sdk/google-vertex';
 import { createGroq } from '@ai-sdk/groq';
 import { DefaultAzureCredential, getBearerTokenProvider } from '@azure/identity';
 import type { LanguageModel } from 'ai';
+import { defaultAIModel, type AIModelClass } from './model-defaults';
 
 type Env = Record<string, string | undefined>;
-export type AIProviderName = 'azure' | 'groq' | 'google' | 'vertex';
+export type AIProviderName = 'azure' | 'groq' | 'google' | 'vertex' | 'anthropic' | 'bedrock';
 
 export type AIAvailability =
   | { available: true; provider: AIProviderName }
@@ -21,6 +24,8 @@ export function readAIAvailability(env: Env = process.env): AIAvailability {
     case 'groq':
     case 'google':
     case 'vertex':
+    case 'anthropic':
+    case 'bedrock':
       return { available: true, provider };
     default:
       return { available: false, reason: 'INVALID_PROVIDER' };
@@ -35,6 +40,8 @@ export class AIUnavailableError extends Error {
 }
 
 export type AIConfig =
+  | { provider: 'anthropic'; model: string; apiKey: string }
+  | { provider: 'bedrock'; model: string; region: string }
   | { provider: 'azure'; model: string; resourceName: string }
   | { provider: 'groq'; model: string; apiKey: string }
   | { provider: 'google'; model: string; apiKey: string }
@@ -63,9 +70,23 @@ export function readAIConfig(env: Env = process.env): AIConfig {
   const availability = readAIAvailability(env);
   if (!availability.available) throw new AIUnavailableError(availability.reason);
   const provider = availability.provider;
-  const model = required(env, 'AI_MODEL', provider);
+  let model = env.AI_MODEL?.trim();
+  if (provider === 'anthropic' || provider === 'bedrock') {
+    const modelClass = env.AI_MODEL_CLASS?.trim() || 'standard';
+    if (!['cheap', 'standard', 'deep'].includes(modelClass))
+      throw new Error('Invalid AI_MODEL_CLASS.');
+    model =
+      env[provider === 'anthropic' ? 'AI_ANTHROPIC_MODEL' : 'AI_BEDROCK_MODEL']?.trim() ||
+      model ||
+      defaultAIModel(provider, modelClass as AIModelClass);
+  }
+  model ||= required(env, 'AI_MODEL', provider);
 
   switch (provider) {
+    case 'anthropic':
+      return { provider, model, apiKey: required(env, 'ANTHROPIC_API_KEY', provider) };
+    case 'bedrock':
+      return { provider, model, region: required(env, 'AWS_REGION', provider) };
     case 'azure':
       return {
         provider,
@@ -97,6 +118,18 @@ export function createAIModel(env: Env = process.env): AIModelSelection {
   const config = readAIConfig(env);
 
   switch (config.provider) {
+    case 'anthropic':
+      return {
+        model: createAnthropic({ apiKey: config.apiKey })(config.model),
+        provider: config.provider,
+        modelId: config.model,
+      };
+    case 'bedrock':
+      return {
+        model: createAmazonBedrock({ region: config.region })(config.model),
+        provider: config.provider,
+        modelId: config.model,
+      };
     case 'azure': {
       const tokenProvider = getBearerTokenProvider(
         new DefaultAzureCredential(),

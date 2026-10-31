@@ -1,12 +1,39 @@
-import { Prisma } from '@/generated/prisma/client';
 import { describe, expect, it, vi } from 'vitest';
+import { Prisma } from '@/generated/prisma/client';
 import { DEFAULT_AI_MODELS } from './model-defaults';
+
+const mocks = vi.hoisted(() => ({ withTenantDb: vi.fn(), create: vi.fn() }));
+vi.mock('@/lib/tenancy/scoped-db', () => ({ withTenantDb: mocks.withTenantDb }));
+
 import {
+  recordAIUsage,
+  recordPricedAIUsage,
   UnknownAIModelPriceError,
   calculateAIUsageCost,
-  recordAIUsage,
   type ModelPrice,
 } from './spend';
+
+it('writes usage inside the attributed tenant scope', async () => {
+  mocks.withTenantDb.mockImplementation(async (_organizationId, run) =>
+    run({ aIUsage: { create: mocks.create } })
+  );
+  const usage = {
+    organizationId: 'org-a',
+    branchId: 'branch-a',
+    feature: 'pharmacy.marketing-assistance',
+    provider: 'google',
+    model: 'gemini-test',
+    inputTokens: 12,
+    outputTokens: 7,
+  };
+
+  await recordAIUsage(usage);
+
+  expect(mocks.withTenantDb).toHaveBeenCalledWith('org-a', expect.any(Function), {
+    skipDrain: true,
+  });
+  expect(mocks.create).toHaveBeenCalledWith({ data: usage });
+});
 
 const rates = new Map([
   ['cheap', ['1', '5']],
@@ -71,7 +98,7 @@ describe('AI usage pricing', () => {
       ),
     };
     await expect(
-      recordAIUsage({
+      recordPricedAIUsage({
         prices,
         ledger: { create: vi.fn() },
         provider: 'anthropic',
@@ -106,7 +133,7 @@ describe('AI usage pricing', () => {
   it('fails closed without writing when the exact model has no effective price', async () => {
     const ledger = { create: vi.fn() };
     await expect(
-      recordAIUsage({
+      recordPricedAIUsage({
         prices: { findFirst: vi.fn().mockResolvedValue(null) },
         ledger,
         provider: 'anthropic',

@@ -7,6 +7,8 @@ const sdk = vi.hoisted(() => {
     google: vi.fn(() => select),
     vertex: vi.fn(() => select),
     groq: vi.fn(() => select),
+    anthropic: vi.fn(() => select),
+    bedrock: vi.fn(() => select),
     credential: vi.fn(function () {}),
     token: vi.fn(),
     generate: vi.fn(),
@@ -15,6 +17,8 @@ const sdk = vi.hoisted(() => {
   };
 });
 vi.mock('@ai-sdk/azure', () => ({ createAzure: sdk.azure }));
+vi.mock('@ai-sdk/anthropic', () => ({ createAnthropic: sdk.anthropic }));
+vi.mock('@ai-sdk/amazon-bedrock', () => ({ createAmazonBedrock: sdk.bedrock }));
 vi.mock('@ai-sdk/google', () => ({ createGoogleGenerativeAI: sdk.google }));
 vi.mock('@ai-sdk/google-vertex', () => ({ createVertex: sdk.vertex }));
 vi.mock('@ai-sdk/groq', () => ({ createGroq: sdk.groq }));
@@ -122,5 +126,40 @@ describe('shared provider gate with real factory boundary', () => {
     expect(() => readAIConfig({ AI_PROVIDER: 'groq', AI_MODEL: 'model' })).toThrow(
       '[ai:groq] GROQ_API_KEY is required.'
     );
+  });
+  it.each(['anthropic', 'bedrock'] as const)('constructs the seeded %s model', (provider) => {
+    const env = {
+      AI_PROVIDER: provider,
+      AI_MODEL_CLASS: 'deep',
+      ANTHROPIC_API_KEY: 'inert-key',
+      AWS_REGION: 'us-east-1',
+    };
+    const selection = createAIModel(env);
+    expect(selection).toMatchObject({
+      provider,
+      modelId:
+        provider === 'anthropic'
+          ? 'claude-opus-4-1-20250805'
+          : 'us.anthropic.claude-opus-4-1-20250805-v1:0',
+    });
+    expect(sdk[provider]).toHaveBeenCalledWith(
+      provider === 'anthropic' ? { apiKey: 'inert-key' } : { region: 'us-east-1' }
+    );
+    expect(sdk.fetch).not.toHaveBeenCalled();
+  });
+  it('validates Claude configuration and preserves exact model overrides', () => {
+    expect(() => readAIConfig({ AI_PROVIDER: 'anthropic' })).toThrow('ANTHROPIC_API_KEY');
+    expect(() => readAIConfig({ AI_PROVIDER: 'bedrock' })).toThrow('AWS_REGION');
+    expect(() => readAIConfig({ AI_PROVIDER: 'bedrock', AI_MODEL_CLASS: 'typo' })).toThrow(
+      'AI_MODEL_CLASS'
+    );
+    expect(
+      readAIConfig({
+        AI_PROVIDER: 'bedrock',
+        AI_MODEL: 'anthropic-model',
+        AI_BEDROCK_MODEL: 'bedrock-model',
+        AWS_REGION: 'us-east-1',
+      })
+    ).toMatchObject({ model: 'bedrock-model' });
   });
 });
