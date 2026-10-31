@@ -312,7 +312,7 @@ describe('restaurantInventoryRouter', () => {
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
   });
 
-  it.each(['-1', 'NaN', 'Infinity', '1e3', ' 1', ''])(
+  it.each(['-1', 'NaN', 'Infinity', '1e3', ' 1', '', '1\n', '1\r\n'])(
     'rejects invalid counted quantity %j before calling the domain service',
     async (countedQuantity) => {
       await expect(
@@ -326,7 +326,7 @@ describe('restaurantInventoryRouter', () => {
     }
   );
 
-  it.each(['0', '0.0', '-1', 'NaN', 'Infinity', '1e3'])(
+  it.each(['0', '0.0', '-1', 'NaN', 'Infinity', '1e3', '', 'abc', '1.2.3', ' 1'])(
     'rejects non-positive or invalid movement quantity %j before calling a domain service',
     async (quantity) => {
       const api = caller();
