@@ -5,6 +5,7 @@ import { completePaidPharmacySale, completionSaleInclude } from './sale-completi
 import { postTenderEntry } from './finance-postings';
 import { requestCounterEvidence } from './counter-evidence';
 import { lockCustomerConsent } from './consent-writer';
+import { assertRxSaleAllowed } from './rx-sale-gate';
 
 import { Prisma } from '@/generated/prisma/client';
 import { pointsForNetPaid, redemptionFor } from '@/lib/commerce/loyalty-arithmetic';
@@ -166,6 +167,13 @@ export async function redeemSalePoints(
   });
   if (!sale) throw new PharmacyLoyaltyError('SALE_NOT_OPEN');
   if (!sale.customerId) throw new PharmacyLoyaltyError('SALE_NOT_LINKED');
+  // A points redemption is still payment. Apply the same line-aware Rx gate as every
+  // other tender, while leaving OTC loyalty redemption available to counter staff.
+  await assertRxSaleAllowed(
+    db,
+    scope,
+    sale.lines.map((line) => line.medicine)
+  );
   // #633: a points tender is a tender: refuse it while any batch on the bill is unsafe.
   await assertSaleBatchesSellable(db, scope, sale.id);
   await lockCustomerConsent(db, scope.organizationId, sale.customerId);
