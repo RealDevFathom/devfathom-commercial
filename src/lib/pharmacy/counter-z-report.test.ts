@@ -29,6 +29,12 @@ describe('Z report', () => {
     expect(html).toContain('متوقع نقد');
     expect(html).toContain('Provisional');
   });
+  it('prints Urdu Z-report amounts in Urdu digits', () => {
+    const html = buildCounterBrowserZReport(report, 'ur');
+    expect(html).toContain('متوقع نقد: ۱۲۵٫۰۰');
+    expect(html).toContain('فرق: -۱٫۰۰');
+    expect(html).not.toContain('125.00');
+  });
   it('refuses invalid amounts', () => {
     expect(() => buildCounterBrowserZReport({ ...report, cashCountedMinor: NaN }, 'en')).toThrow();
   });

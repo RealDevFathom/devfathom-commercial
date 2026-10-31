@@ -170,13 +170,36 @@ export const COUNTER_RECEIPT_DIRECTION: Readonly<Record<CounterReceiptLocale, 'l
  * Never divides by 100 in floating point: `Math.round(x / 100 * 100)` is how a
  * receipt total starts disagreeing with the ledger by a paisa.
  */
-export function formatMinor(amountMinor: number): string {
-  if (!Number.isSafeInteger(amountMinor)) return '0.00';
+export function formatMinor(amountMinor: number, locale: CounterReceiptLocale = 'en'): string {
+  if (!Number.isSafeInteger(amountMinor)) return localizeReceiptNumber('0.00', locale);
   const negative = amountMinor < 0;
   const absolute = Math.abs(amountMinor);
   const major = Math.floor(absolute / 100);
   const fraction = absolute % 100;
-  return `${negative ? '-' : ''}${major}.${String(fraction).padStart(2, '0')}`;
+  return localizeReceiptNumber(
+    `${negative ? '-' : ''}${major}.${String(fraction).padStart(2, '0')}`,
+    locale
+  );
+}
+
+/** Extended Arabic-Indic digits (U+06F0–U+06F9), the digit set Urdu uses. */
+const URDU_DIGITS = ['۰', '۱', '۲', '۳', '۴', '۵', '۶', '۷', '۸', '۹'] as const;
+/** Arabic decimal separator (U+066B), CLDR's decimal for `ur-u-nu-arabext`. */
+const URDU_DECIMAL_SEPARATOR = '٫';
+
+/**
+ * An already-computed ASCII receipt number rendered in the locale's digits.
+ *
+ * Deliberately a character mapping rather than `Intl.NumberFormat`: the amount
+ * is computed once on integers, and the glyphs must not depend on the ICU data
+ * a given browser or Node build ships (bidi marks, grouping, a missing
+ * numbering system). English stays byte-for-byte unchanged.
+ */
+export function localizeReceiptNumber(value: string, locale: CounterReceiptLocale): string {
+  if (locale !== 'ur') return value;
+  return value.replace(/[0-9.]/g, (char) =>
+    char === '.' ? URDU_DECIMAL_SEPARATOR : URDU_DIGITS[Number(char)]!
+  );
 }
 
 /** ISO timestamp reduced to the date a receipt prints. */
@@ -208,7 +231,7 @@ export function receiptLineLabel(line: CounterReceiptLine, locale: CounterReceip
     `${strings.batch} ${line.batchNumber}`,
     `${strings.expiry} ${formatReceiptDate(line.expiresAt)}`,
     `${line.quantity} ${strings.saleUnit[line.saleUnit]}`,
-    formatMinor(line.lineTotalMinor),
+    formatMinor(line.lineTotalMinor, locale),
   ].join(' · ');
 
   const full = `${identity} (${line.presentation}) · ${tail}`;
@@ -232,11 +255,11 @@ function footerFor(
 ): string {
   const strings = COUNTER_RECEIPT_STRINGS[locale];
   const parts = [
-    `${strings.gross} ${formatMinor(receipt.totals.grossMinor)}`,
-    `${strings.discount} ${formatMinor(receipt.totals.discountMinor)}`,
-    `${strings.net} ${formatMinor(receipt.totals.netMinor)}`,
-    `${strings.tendered} ${formatMinor(receipt.totals.tenderedMinor)}`,
-    `${strings.change} ${formatMinor(receipt.totals.changeMinor)}`,
+    `${strings.gross} ${formatMinor(receipt.totals.grossMinor, locale)}`,
+    `${strings.discount} ${formatMinor(receipt.totals.discountMinor, locale)}`,
+    `${strings.net} ${formatMinor(receipt.totals.netMinor, locale)}`,
+    `${strings.tendered} ${formatMinor(receipt.totals.tenderedMinor, locale)}`,
+    `${strings.change} ${formatMinor(receipt.totals.changeMinor, locale)}`,
   ];
   if (receipt.receiptNumber === null) parts.push(strings.noReceiptNumber);
   if (reprint) parts.push(strings.reprint);

@@ -5,6 +5,7 @@ import {
   COUNTER_RECEIPT_STRINGS,
   counterReceiptTotals,
   formatMinor,
+  localizeReceiptNumber,
   PharmacyCounterReceiptError,
   receiptLineLabel,
   receiptTitle,
@@ -63,6 +64,28 @@ describe('formatMinor', () => {
     // 1000 × 0.01 must be exactly 10.00, which is what a float would lose.
     const total = Array.from({ length: 1_000 }, () => 1).reduce((sum, value) => sum + value, 0);
     expect(formatMinor(total)).toBe('10.00');
+  });
+
+  it('keeps English (and the default) on ASCII digits', () => {
+    expect(formatMinor(123_456, 'en')).toBe('1234.56');
+    expect(formatMinor(123_456)).toBe(formatMinor(123_456, 'en'));
+  });
+
+  it('renders Urdu amounts in Extended Arabic-Indic digits with the Arabic decimal separator', () => {
+    expect(formatMinor(0, 'ur')).toBe('۰٫۰۰');
+    expect(formatMinor(5, 'ur')).toBe('۰٫۰۵');
+    expect(formatMinor(2_500, 'ur')).toBe('۲۵٫۰۰');
+    expect(formatMinor(123_456, 'ur')).toBe('۱۲۳۴٫۵۶');
+    expect(formatMinor(-250, 'ur')).toBe('-۲٫۵۰');
+    expect(formatMinor(Number.NaN, 'ur')).toBe('۰٫۰۰');
+    expect(formatMinor(123_456, 'ur')).not.toMatch(/[0-9]/);
+  });
+
+  it('localizes the same integer-computed value, never a re-rounded one', () => {
+    for (const amount of [1, 99, 100, 7_919, 1_000_001, -42]) {
+      expect(formatMinor(amount, 'ur')).toBe(localizeReceiptNumber(formatMinor(amount), 'ur'));
+    }
+    expect(localizeReceiptNumber('1234.56', 'en')).toBe('1234.56');
   });
 });
 
@@ -152,6 +175,13 @@ describe('receiptLineLabel (POS-08 label fields)', () => {
     expect(label).toContain(COUNTER_RECEIPT_STRINGS.ur.expiry);
     expect(label).toContain('B-2201');
   });
+
+  it('prints the Urdu line amount in Urdu digits', () => {
+    const label = receiptLineLabel(receiptLine(), 'ur');
+    expect(label).toContain('۵۰٫۰۰');
+    expect(label).not.toContain('50.00');
+    expect(receiptLineLabel(receiptLine(), 'en')).toContain('50.00');
+  });
 });
 
 describe('buildCounterReceiptDocument (printing seam)', () => {
@@ -205,6 +235,14 @@ describe('buildCounterReceiptDocument (printing seam)', () => {
     const document = buildCounterReceiptDocument(receipt(), 'ur');
     expect(document.title).toContain(COUNTER_RECEIPT_STRINGS.ur.receipt);
     expect(document.footer).toContain(COUNTER_RECEIPT_STRINGS.ur.net);
+  });
+
+  it('formats every Urdu footer amount with the selected locale', () => {
+    const document = buildCounterReceiptDocument(receipt(), 'ur');
+    expect(document.footer).toContain(`${COUNTER_RECEIPT_STRINGS.ur.net} ۵۰٫۰۰`);
+    expect(document.footer).toContain(`${COUNTER_RECEIPT_STRINGS.ur.tendered} ۵۰٫۰۰`);
+    expect(document.footer).toContain(`${COUNTER_RECEIPT_STRINGS.ur.change} ۰٫۰۰`);
+    expect(document.footer).not.toMatch(/\d\.\d\d/);
   });
 
   it('refuses an empty receipt rather than printing a blank slip', () => {

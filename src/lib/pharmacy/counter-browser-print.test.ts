@@ -171,6 +171,25 @@ describe('isolated Pharmacy browser receipt', () => {
     expect(html).toContain('قابلِ ادائیگی');
   });
 
+  it.each(['THERMAL_58', 'THERMAL', 'A4'] as const)(
+    'formats Urdu %s amounts in Urdu digits',
+    (format) => {
+      const html = buildCounterBrowserReceipt(receipt, 'ur', format);
+      const text = new DOMParser()
+        .parseFromString(html, 'text/html')
+        .body.textContent!.replace(/\s+/g, ' ');
+      expect(text).toContain('× ۱٫۰۰');
+      expect(text).toContain('رقم: ۱٫۷۹');
+      expect(text).toContain('کل رقم: ۲٫۰۰');
+      expect(text).toContain('رعایت: ۰٫۲۱');
+      expect(text).toContain('قابلِ ادائیگی: ۱٫۷۹');
+      expect(text).toContain('ادا شدہ: ۱٫۹۰');
+      expect(text).toContain('واپسی: ۰٫۱۱');
+      expect(text).toContain('CASH: ۱٫۹۰');
+      expect(text).not.toMatch(/\b1\.79\b|\b0\.11\b|\b1\.90\b/);
+    }
+  );
+
   it.each([
     ['en', 'THERMAL_58'],
     ['en', 'THERMAL'],
