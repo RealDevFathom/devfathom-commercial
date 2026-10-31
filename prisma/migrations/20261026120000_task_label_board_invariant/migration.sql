@@ -1,5 +1,9 @@
 BEGIN;
 
+-- Cleanup must see every tenant even when the migrator cannot bypass forced
+-- RLS. Limit this context to the migration transaction.
+SELECT set_config('app.is_platform_admin', 'true', true);
+
 -- Prevent an old application instance from writing a link after the cleanup's
 -- snapshot but before the guards are installed. The lock is held through the
 -- whole migration and conflicts with normal inserts, updates, and deletes.

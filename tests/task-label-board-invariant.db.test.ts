@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -5,7 +6,7 @@ import { join } from 'node:path';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-const DATABASE_URL = process.env.DATABASE_URL;
+const DATABASE_URL = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
 const describeIfDatabase = DATABASE_URL ? describe : describe.skip;
 const schema = `task_label_race_${randomUUID().replaceAll('-', '')}`;
 const migration = readFileSync(
@@ -229,6 +230,69 @@ const baseTables = `
 `;
 
 describeIfDatabase('task-label board invariant migration', () => {
+  it('cleans every tenant under forced RLS without retaining platform-admin context', async () => {
+    const client = new pg.Client({ connectionString: DATABASE_URL });
+    const migrationSchema = `task_label_rls_${randomUUID().replaceAll('-', '')}`;
+
+    await client.connect();
+    try {
+      const role = await client.query(
+        'SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user'
+      );
+      expect(role.rows[0]).toEqual({ rolsuper: false, rolbypassrls: false });
+      await client.query(`CREATE SCHEMA "${migrationSchema}"`);
+      await client.query(`SET search_path TO "${migrationSchema}"`);
+      await client.query(`
+        ${baseTables}
+        INSERT INTO "boards" VALUES
+          ('board_a', 'org_a'), ('other_board_a', 'org_a'),
+          ('board_b', 'org_b'), ('other_board_b', 'org_b');
+        INSERT INTO "columns" VALUES
+          ('column_a', 'board_a', 'org_a'), ('column_b', 'board_b', 'org_b');
+        INSERT INTO "tasks" VALUES
+          ('task_a', 'column_a', 'org_a'), ('task_b', 'column_b', 'org_b');
+        INSERT INTO "labels" VALUES
+          ('valid_a', 'board_a', 'org_a'), ('invalid_a', 'other_board_a', 'org_a'),
+          ('valid_b', 'board_b', 'org_b'), ('invalid_b', 'other_board_b', 'org_b');
+        INSERT INTO "task_labels" VALUES
+          ('keep_a', 'task_a', 'valid_a', 'org_a'),
+          ('remove_a', 'task_a', 'invalid_a', 'org_a'),
+          ('keep_b', 'task_b', 'valid_b', 'org_b'),
+          ('remove_b', 'task_b', 'invalid_b', 'org_b');
+      `);
+      for (const table of ['boards', 'columns', 'tasks', 'labels', 'task_labels']) {
+        await client.query(`
+          ALTER TABLE "${table}" ENABLE ROW LEVEL SECURITY;
+          ALTER TABLE "${table}" FORCE ROW LEVEL SECURITY;
+          CREATE POLICY tenant_isolation ON "${table}"
+            USING (current_setting('app.is_platform_admin', true) = 'true'
+              OR "organizationId" = NULLIF(current_setting('app.current_organization_id', true), ''))
+            WITH CHECK (current_setting('app.is_platform_admin', true) = 'true'
+              OR "organizationId" = NULLIF(current_setting('app.current_organization_id', true), ''));
+        `);
+      }
+      await client.query("SELECT set_config('app.is_platform_admin', 'false', false)");
+      expect((await client.query('SELECT id FROM "task_labels"')).rows).toEqual([]);
+
+      await client.query(migration);
+
+      const context = await client.query("SELECT current_setting('app.is_platform_admin') AS admin");
+      expect(context.rows[0].admin).toBe('false');
+      await client.query("SELECT set_config('app.is_platform_admin', 'true', false)");
+      const remaining = await client.query('SELECT id FROM "task_labels" ORDER BY id');
+      expect(remaining.rows).toEqual([{ id: 'keep_a' }, { id: 'keep_b' }]);
+      await client.query("SELECT set_config('app.is_platform_admin', 'false', false)");
+      await client.query("SELECT set_config('app.current_organization_id', 'org_a', false)");
+      await expect(
+        client.query(`INSERT INTO "task_labels" VALUES ('rejected', 'task_a', 'invalid_a', 'org_a')`)
+      ).rejects.toMatchObject({ code: '23514' });
+    } finally {
+      await client.query('ROLLBACK');
+      await client.query(`DROP SCHEMA IF EXISTS "${migrationSchema}" CASCADE`);
+      await client.end();
+    }
+  });
+
   it('removes legacy links with mismatched column or board organizations', async () => {
     const client = new pg.Client({ connectionString: DATABASE_URL });
     const migrationSchema = `task_label_cleanup_${randomUUID().replaceAll('-', '')}`;
