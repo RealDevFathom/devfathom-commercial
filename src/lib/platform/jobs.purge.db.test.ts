@@ -120,6 +120,10 @@ async function seedTenant(db: ScopedDb, organizationId: string, status: string) 
     `event_${organizationId}`,
     organizationId
   );
+  await db.$executeRaw`
+    INSERT INTO audit_logs (id, "organizationId", source, category, action)
+    VALUES (${`audit_${organizationId}`}, ${organizationId}, 'TRPC', 'SYSTEM', 'purge.fixture')
+  `;
 }
 
 async function seedRegulatoryProfile(
@@ -282,7 +286,8 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
                 (SELECT count(*) FROM pharmacy_onboarding_events WHERE "organizationId" = $1) AS events,
                 (SELECT count(*) FROM pharmacy_onboarding_states WHERE "organizationId" = $1) AS states,
                 (SELECT count(*) FROM camera_evidence WHERE "organizationId" = $1) AS evidence,
-                (SELECT count(*) FROM cameras WHERE "organizationId" = $1) AS cameras`,
+                (SELECT count(*) FROM cameras WHERE "organizationId" = $1) AS cameras,
+                (SELECT count(*) FROM audit_logs WHERE "organizationId" = $1) AS audits`,
         PURGED_ORG
       )
     );
@@ -298,16 +303,18 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
       states: none,
       evidence: none,
       cameras: none,
+      audits: none,
     });
 
     const [live] = await withPlatformDb((db) =>
       db.$queryRawUnsafe<Array<Record<string, bigint>>>(
         `SELECT (SELECT count(*) FROM pharmacy_branch_regulatory_profiles WHERE "organizationId" = $1) AS profiles,
-                (SELECT count(*) FROM pharmacy_branches WHERE "organizationId" = $1) AS branches`,
+                (SELECT count(*) FROM pharmacy_branches WHERE "organizationId" = $1) AS branches,
+                (SELECT count(*) FROM audit_logs WHERE "organizationId" = $1) AS audits`,
         LIVE_ORG
       )
     );
-    expect(live).toEqual({ profiles: BigInt(1), branches: BigInt(1) });
+    expect(live).toEqual({ profiles: BigInt(1), branches: BigInt(1), audits: BigInt(1) });
 
     const organization = await withPlatformDb((db) =>
       db.organization.findUniqueOrThrow({

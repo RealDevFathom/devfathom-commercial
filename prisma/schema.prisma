@@ -4106,7 +4106,8 @@ model AuditLog {
   actorId             String? // the acting User (FK -> users). null for anonymous (e.g. failed login)
   // A restaurant terminal operator is a staff profile, NOT a User (C2/C3), so its
   // audit rows attribute here instead of `actorId` — the two are mutually exclusive
-  // and a RESTAURANT_OPERATOR row must set this one (enforced by a DB CHECK). Used
+  // and a new RESTAURANT_OPERATOR row must set this one (DB insert guard). A
+  // deleted profile leaves this NULL while snapshots and history survive. Used
   // by the M2 terminal mutations (unlock/switch/co-authorize/lock).
   actorStaffProfileId String? // the acting RestaurantStaffProfile, when actorType = RESTAURANT_OPERATOR
   actorName           String?

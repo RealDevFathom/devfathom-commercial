@@ -57,12 +57,23 @@ suite('QA #144 real PostgreSQL audits and reports (migrated disposable database)
   }, 30000);
   afterAll(async () => {
     if (owner) {
-      await owner.query('DELETE FROM audit_logs WHERE "organizationId"=$1', [org]);
-      await owner.query('DELETE FROM restaurant_daily_closes WHERE "organizationId"=$1', [org]);
-      await owner.query('DELETE FROM restaurant_drawer_sessions WHERE "organizationId"=$1', [org]);
-      await owner.query('DELETE FROM users WHERE "organizationId"=$1', [org]);
-      await owner.query('DELETE FROM organizations WHERE id=$1', [org]);
-      await owner.end();
+      try {
+        await owner.query('BEGIN');
+        await owner.query("SELECT set_config('app.purging_organization_id', $1, true)", [org]);
+        await owner.query('DELETE FROM audit_logs WHERE "organizationId"=$1', [org]);
+        await owner.query('DELETE FROM restaurant_daily_closes WHERE "organizationId"=$1', [org]);
+        await owner.query('DELETE FROM restaurant_drawer_sessions WHERE "organizationId"=$1', [
+          org,
+        ]);
+        await owner.query('DELETE FROM users WHERE "organizationId"=$1', [org]);
+        await owner.query('DELETE FROM organizations WHERE id=$1', [org]);
+        await owner.query('COMMIT');
+      } catch (error) {
+        await owner.query('ROLLBACK');
+        throw error;
+      } finally {
+        await owner.end();
+      }
     }
     const { db } = await import('@/lib/db');
     await db.$disconnect();
