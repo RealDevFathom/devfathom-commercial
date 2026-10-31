@@ -192,7 +192,7 @@ export function MenuGrid({ menu, pending, onAdd, cacheState = 'live' }: MenuGrid
               aria-describedby="pos-menu-search-help"
               onChange={(event) => setFilter(event.target.value)}
               onKeyDown={onSearchKeyDown}
-              className="h-9"
+              className="h-11"
             />
             <p id="pos-menu-search-help" className="text-xs text-text-muted">
               F2 search · Enter add · F9 pay
@@ -233,7 +233,7 @@ export function MenuGrid({ menu, pending, onAdd, cacheState = 'live' }: MenuGrid
                               setModifierIds([]);
                               setModifierError(null);
                             }}
-                            className="h-9 min-w-0 justify-between gap-2 px-2 text-left text-sm font-medium shadow-none hover:translate-y-0 active:translate-y-0"
+                            className="h-11 min-w-0 justify-between gap-2 px-2 text-left text-sm font-medium shadow-none hover:translate-y-0 active:translate-y-0"
                           >
                             <span className="min-w-0 truncate">{name}</span>
                             <span className="w-12 shrink-0 text-right font-mono text-xs tabular-nums">
@@ -253,14 +253,14 @@ export function MenuGrid({ menu, pending, onAdd, cacheState = 'live' }: MenuGrid
             <p className="text-sm font-semibold text-text-strong">
               {selected ? (selected.displayName ?? selected.product.name) : 'Select an item'}
             </p>
-            <div className="grid grid-cols-3 gap-2">
-              <div className="space-y-1">
+            <div className="grid grid-cols-2 gap-2">
+              <div className="col-span-2 space-y-1">
                 <Label htmlFor="pos-quantity">Quantity</Label>
                 <div className="flex items-center gap-1">
                   <button
                     type="button"
                     aria-label="Decrease quantity"
-                    className="inline-flex size-8 items-center justify-center rounded-md border border-border-subtle text-sm"
+                    className="inline-flex size-11 shrink-0 items-center justify-center rounded-md border border-border-subtle text-sm"
                     onClick={() =>
                       setQuantity((current) =>
                         String(Math.max(1, (Number.parseInt(current, 10) || 1) - 1))
@@ -276,12 +276,12 @@ export function MenuGrid({ menu, pending, onAdd, cacheState = 'live' }: MenuGrid
                     inputMode="numeric"
                     value={quantity}
                     onChange={(event) => setQuantity(event.target.value)}
-                    className="h-8 text-center tabular-nums"
+                    className="h-11 text-center tabular-nums"
                   />
                   <button
                     type="button"
                     aria-label="Increase quantity"
-                    className="inline-flex size-8 items-center justify-center rounded-md border border-border-subtle text-sm"
+                    className="inline-flex size-11 shrink-0 items-center justify-center rounded-md border border-border-subtle text-sm"
                     onClick={() =>
                       setQuantity((current) => String((Number.parseInt(current, 10) || 1) + 1))
                     }
@@ -299,7 +299,7 @@ export function MenuGrid({ menu, pending, onAdd, cacheState = 'live' }: MenuGrid
                   inputMode="numeric"
                   value={course}
                   onChange={(event) => setCourse(event.target.value)}
-                  className="h-8"
+                  className="h-11"
                 />
               </div>
               <div className="space-y-1">
@@ -312,7 +312,7 @@ export function MenuGrid({ menu, pending, onAdd, cacheState = 'live' }: MenuGrid
                   placeholder="Optional"
                   value={seat}
                   onChange={(event) => setSeat(event.target.value)}
-                  className="h-8"
+                  className="h-11"
                 />
               </div>
             </div>
@@ -339,7 +339,7 @@ export function MenuGrid({ menu, pending, onAdd, cacheState = 'live' }: MenuGrid
                     return (
                       <label
                         key={option.id}
-                        className="flex min-h-8 items-center gap-2 rounded-md border border-border-subtle px-2 py-1 text-sm focus-within:ring-3 focus-within:ring-ring/50"
+                        className="flex min-h-11 items-center gap-2 rounded-md border border-border-subtle px-2 py-1 text-sm focus-within:ring-3 focus-within:ring-ring/50"
                       >
                         <input
                           type="checkbox"
