@@ -218,6 +218,57 @@ describe('CheckoutPanel', () => {
     expect(await screen.findByRole('button', { name: 'Comp item' })).toBeDisabled();
   });
 
+  it('offers an audited comp reversal for a comped line', async () => {
+    const calls: { path: string; options?: TerminalRequestOptions }[] = [];
+    const comped = {
+      ...billed,
+      bills: [
+        {
+          ...billed.bills[0],
+          compTotal: '20.00',
+          remainingDue: '4.00',
+          lines: [{ ...billed.bills[0].lines[0], compAmount: '20.00' }],
+        },
+      ],
+    };
+    const request: TerminalRequest = async <T,>(path: string, options?: TerminalRequestOptions) => {
+      calls.push({ path, options });
+      return comped as T;
+    };
+    render(
+      <CheckoutPanel
+        open
+        orderId="order-1"
+        request={request}
+        actingOperatorId="cashier-1"
+        operators={[{ id: 'manager-1', displayName: 'Mina Manager', role: 'Manager' }]}
+        onClose={vi.fn()}
+      />
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Reverse comp' }));
+    fireEvent.change(screen.getByLabelText('Bill item'), { target: { value: 'line-1' } });
+    fireEvent.change(screen.getByLabelText('Reversal reason'), {
+      target: { value: 'Mistaken comp' },
+    });
+    fireEvent.change(screen.getByLabelText('Approving manager'), {
+      target: { value: 'manager-1' },
+    });
+    fireEvent.change(screen.getByLabelText('Manager PIN'), { target: { value: '5678' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm reversal' }));
+
+    await waitFor(() =>
+      expect(calls).toContainEqual({
+        path: '/api/restaurant/checkout/comp/reverse',
+        options: expect.objectContaining({
+          method: 'POST',
+          intent: expect.stringContaining('checkout-comp-reverse:'),
+        }),
+      })
+    );
+    expect(calls.find((call) => call.options?.intent)?.options?.intent).not.toContain('5678');
+  });
+
   it('renders permission denial with a retry action', async () => {
     const denied = Object.assign(new Error('Missing payments:collect capability.'), {
       status: 403,

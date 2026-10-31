@@ -1,11 +1,16 @@
 import 'server-only';
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { buildCoAuthorizationRecord } from './co-authorization';
+import {
+  beginMoneyIdempotent as beginCanonicalMoneyIdempotent,
+  MoneyIdempotencyError,
+  recordMoneyResult,
+} from './drawer-sessions';
 import { accrueLoyaltyForSettledBill, releaseLoyaltyRedemption } from './loyalty';
 import {
   add,
@@ -74,7 +79,9 @@ export type BillCommandErrorReason =
   | 'BILL_NOT_OPEN'
   | 'LINE_NOT_FOUND'
   | 'ALREADY_COMPED'
+  | 'NOT_COMPED'
   | 'COMP_EXCEEDS_BILL'
+  | 'SERVICE_CHARGE_EVIDENCE_MISSING'
   | 'INVALID_SPLIT'
   | 'PARTITION_INCOMPLETE'
   | 'RESPLIT_LOCKED'
@@ -860,9 +867,10 @@ export type CompLineInput = {
   actor: MoneyCommandActor;
 };
 
-/** The release-idempotency key a comp of this line owns. One key per line, so the
- * first call and every replay of it name the same release. */
-const compReleaseKey = (billLineId: string) => `comp:${billLineId}`;
+/** A reversal makes the line eligible again. Each approved comp owns its release;
+ * money-command replays return before a new authorization or release is written. */
+const compReleaseKey = (billLineId: string, coAuthorizationId: string) =>
+  `comp:${billLineId}:${coAuthorizationId}`;
 
 /**
  * The comp's OWN idempotency record carries both facts its replay has to answer with:
@@ -1019,6 +1027,17 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
         : [];
     const removedServiceCharge = sub(bill.serviceChargeTotal, serviceChargeTotal);
 
+    const coAuthorizationId = await persistCoAuth(tx, {
+      actingStaffProfileId: input.actor.staffProfileId,
+      approvingStaffProfileId: input.approvingStaffProfileId,
+      capability: 'orders:complimentary',
+      reason,
+      targetType: 'RestaurantBillLine',
+      targetId: line.id,
+      deviceId: input.actor.deviceId,
+      terminalSessionId: input.terminalSessionId,
+    });
+
     // What the comp cannot absorb out of the bill's own balance (B3).
     const compedPayable = add(line.lineSubtotal, removedServiceCharge);
     const shortfall = sub(compedPayable, bill.grandTotal);
@@ -1029,7 +1048,7 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
         shortfall,
         actorId: input.actor.staffProfileId,
         reason: `Loyalty redemption released to comp bill line ${line.id}: ${reason}`,
-        idempotencyKey: compReleaseKey(line.id),
+        idempotencyKey: compReleaseKey(line.id, coAuthorizationId),
         at: new Date(),
       });
       // A replay here would mean an earlier transaction already rolled this release off
@@ -1046,17 +1065,6 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
         'COMP_EXCEEDS_BILL'
       );
     }
-
-    const coAuthorizationId = await persistCoAuth(tx, {
-      actingStaffProfileId: input.actor.staffProfileId,
-      approvingStaffProfileId: input.approvingStaffProfileId,
-      capability: 'orders:complimentary',
-      reason,
-      targetType: 'RestaurantBillLine',
-      targetId: line.id,
-      deviceId: input.actor.deviceId,
-      terminalSessionId: input.terminalSessionId,
-    });
 
     await tx.restaurantBillLine.update({
       where: { id: line.id },
@@ -1099,6 +1107,212 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
 
     await recordMoneyIdempotentResult(tx, input.actor, encodeCompResult(line.id, releasedDiscount));
     return { billLineId: line.id, billId: bill.id, releasedDiscount, replayed: false };
+  });
+}
+
+export type ReverseCompLineInput = CompLineInput;
+export type ReverseCompLineResult = Omit<CompLineResult, 'releasedDiscount'>;
+
+/** Reconstruct the cut-time allocation from immutable bill-line subtotals in the
+ * bill order saved by cutBills. Settlement removes included tax from bill subtotals,
+ * while comps change service totals. Neither can supply the original cap. */
+async function originalServiceCharge(
+  tx: ScopedDb,
+  billId: string,
+  orderId: string,
+  rate: Prisma.Decimal
+): Promise<Prisma.Decimal> {
+  const cut = await tx.restaurantMoneyIdempotencyKey.findFirst({
+    where: { commandType: 'bill.cut', resultRef: { contains: JSON.stringify(billId) } },
+    select: { resultRef: true },
+  });
+  const missingEvidence = () =>
+    new BillCommandError(
+      'The original service-charge allocation is unavailable.',
+      'SERVICE_CHARGE_EVIDENCE_MISSING'
+    );
+  if (!cut?.resultRef?.startsWith(CUT_RESULT_PREFIX)) throw missingEvidence();
+  let result: Partial<CutBillsReplay>;
+  try {
+    result = JSON.parse(cut.resultRef.slice(CUT_RESULT_PREFIX.length));
+  } catch {
+    throw missingEvidence();
+  }
+  if (
+    result?.orderId !== orderId ||
+    !Array.isArray(result.billIds) ||
+    !result.billIds.every((id) => typeof id === 'string') ||
+    !result.billIds.includes(billId)
+  ) {
+    throw missingEvidence();
+  }
+  const bills = await tx.restaurantBill.findMany({
+    where: { id: { in: result.billIds }, orderId },
+    select: { id: true, lines: { select: { lineSubtotal: true } } },
+  });
+  if (bills.length !== result.billIds.length) throw missingEvidence();
+  const subtotals = result.billIds.map((id) =>
+    sum(bills.find((bill) => bill.id === id)!.lines.map((line) => line.lineSubtotal))
+  );
+  return allocate(
+    roundMoney(multiply(sum(subtotals), rate)),
+    subtotals.map((subtotal) => subtotal.mul(100).toNumber())
+  )[result.billIds.indexOf(billId)]!;
+}
+
+/**
+ * Reverse a mistaken line comp while preserving both authorization events in the
+ * co-authorization audit trail. Partial tenders do not lock this correction: restoring
+ * the charge increases the open bill balance and leaves every posted tender untouched.
+ */
+export async function reverseCompLine(
+  db: ScopedDb,
+  input: ReverseCompLineInput
+): Promise<ReverseCompLineResult> {
+  return runInTransaction(db, async (tx) => {
+    await tx.$queryRaw`SELECT id FROM restaurant_bills WHERE id = ${input.billId} AND "branchId" = ${input.branchId} FOR UPDATE`;
+    const bill = await tx.restaurantBill.findFirst({
+      where: { id: input.billId, branchId: input.branchId },
+      select: {
+        id: true,
+        orderId: true,
+        status: true,
+        subtotal: true,
+        compTotal: true,
+        grandTotal: true,
+        serviceChargeTotal: true,
+        serviceChargeBasis: true,
+        order: { select: { serviceChargePolicyVersion: { select: { id: true, rate: true } } } },
+      },
+    });
+    if (!bill) throw new BillCommandError('The bill does not exist.', 'BILL_NOT_FOUND');
+
+    const reason = requireReason(input.reason);
+    const canonicalBytes = JSON.stringify({
+      version: 1,
+      billId: input.billId,
+      branchId: input.branchId,
+      billLineId: input.billLineId,
+      reason,
+      approvingStaffProfileId: input.approvingStaffProfileId,
+      actingStaffProfileId: input.actor.staffProfileId,
+      terminalSessionId: input.terminalSessionId ?? null,
+    });
+    const idem = await beginCanonicalMoneyIdempotent(tx, input.actor, 'bill.comp.reverse', {
+      bytes: canonicalBytes,
+      hash: createHash('sha256').update(canonicalBytes, 'utf8').digest('hex'),
+    });
+    if (idem.replay) {
+      // Return the frozen result, never identifiers supplied by this retry. Legacy
+      // bare-line records cannot prove payload identity and fail closed above.
+      const result = idem.resultPayload;
+      if (
+        !result ||
+        typeof result !== 'object' ||
+        Array.isArray(result) ||
+        typeof result.billId !== 'string' ||
+        typeof result.billLineId !== 'string'
+      ) {
+        throw new MoneyIdempotencyError('The original comp reversal result is unavailable.');
+      }
+      return { billId: result.billId, billLineId: result.billLineId, replayed: true };
+    }
+    if (bill.status !== 'OPEN') {
+      throw new BillCommandError('Only an OPEN bill can have a comp reversed.', 'BILL_NOT_OPEN');
+    }
+    const line = await tx.restaurantBillLine.findFirst({
+      where: { id: input.billLineId, billId: bill.id },
+      select: { id: true, lineSubtotal: true, compAmount: true },
+    });
+    if (!line)
+      throw new BillCommandError('The bill line does not belong to this bill.', 'LINE_NOT_FOUND');
+    if (line.compAmount.isZero()) {
+      throw new BillCommandError('The line is not comped.', 'NOT_COMPED');
+    }
+
+    await persistCoAuth(tx, {
+      actingStaffProfileId: input.actor.staffProfileId,
+      approvingStaffProfileId: input.approvingStaffProfileId,
+      capability: 'orders:complimentary',
+      reason,
+      targetType: 'RestaurantBillLineCompReversal',
+      targetId: line.id,
+      deviceId: input.actor.deviceId,
+      terminalSessionId: input.terminalSessionId,
+    });
+
+    // The order's immutable policy survives zero-basis comps, whose bill metadata
+    // must be cleared to satisfy the service-charge evidence constraint.
+    const policy = bill.order.serviceChargePolicyVersion;
+    const participates = policy !== null;
+    const serviceChargeBasis = participates
+      ? add(bill.serviceChargeBasis, line.lineSubtotal)
+      : bill.serviceChargeBasis;
+    const originalCharge = policy
+      ? await originalServiceCharge(tx, bill.id, bill.orderId, policy.rate)
+      : bill.serviceChargeTotal;
+    const serviceChargeTotal = participates
+      ? serviceChargeBasis.equals(bill.subtotal)
+        ? originalCharge
+        : Prisma.Decimal.min(originalCharge, roundMoney(multiply(serviceChargeBasis, policy.rate)))
+      : bill.serviceChargeTotal;
+    const serviceAdded = sub(serviceChargeTotal, bill.serviceChargeTotal);
+    const activeLines = participates
+      ? await tx.restaurantBillLine.findMany({
+          where: { billId: bill.id, OR: [{ id: line.id }, { compAmount: ZERO }] },
+          select: { id: true, lineSubtotal: true },
+          orderBy: { id: 'asc' },
+        })
+      : [];
+    const allocations = participates
+      ? allocate(
+          serviceChargeTotal,
+          activeLines.map((active) => active.lineSubtotal.mul(100).toNumber())
+        )
+      : [];
+    for (const [index, active] of activeLines.entries()) {
+      const serviceChargeAmount = allocations[index]!;
+      await tx.restaurantBillLine.update({
+        where: { id: active.id },
+        data: {
+          serviceChargeAmount,
+          lineTotal: add(active.lineSubtotal, serviceChargeAmount),
+          ...(active.id === line.id
+            ? { compAmount: ZERO, compReason: null, compCoAuthorizationId: null }
+            : {}),
+        },
+      });
+    }
+    if (!participates) {
+      await tx.restaurantBillLine.update({
+        where: { id: line.id },
+        data: {
+          compAmount: ZERO,
+          lineTotal: line.lineSubtotal,
+          compReason: null,
+          compCoAuthorizationId: null,
+        },
+      });
+    }
+    await tx.restaurantBill.update({
+      where: { id: bill.id },
+      data: {
+        compTotal: sub(bill.compTotal, line.compAmount),
+        grandTotal: add(bill.grandTotal, add(line.lineSubtotal, serviceAdded)),
+        serviceChargeTotal,
+        serviceChargeBasis,
+        ...(policy && !serviceChargeBasis.isZero()
+          ? {
+              serviceChargePolicyVersionId: policy.id,
+              serviceChargeRate: policy.rate,
+              serviceChargeTaxTreatment: 'NON_TAXABLE',
+            }
+          : {}),
+      },
+    });
+    const result = { billLineId: line.id, billId: bill.id };
+    await recordMoneyResult(tx, input.actor, line.id, result);
+    return { ...result, replayed: false };
   });
 }
 
@@ -1668,7 +1882,10 @@ export async function finalizeBillSettlement(
 
 /** Why an order is not yet fully settled (the first failing condition). */
 export type OrderSettlementBlocker =
-  'NO_BILLS' | 'ITEMS_UNBILLED' | 'BILLS_OPEN' | 'TOTAL_MISMATCH';
+  | 'NO_BILLS'
+  | 'ITEMS_UNBILLED'
+  | 'BILLS_OPEN'
+  | 'TOTAL_MISMATCH';
 
 export type OrderSettlement = {
   orderId: string;

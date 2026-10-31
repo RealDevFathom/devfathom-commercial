@@ -1217,9 +1217,165 @@ describeIfDatabase('bills command layer (real DB)', () => {
         actor: actor(),
       })
     ).rejects.toMatchObject({ reason: 'ALREADY_COMPED' });
+
+    await deps.bills.reverseCompLine(db, {
+      billId: billIds[0]!,
+      branchId: ids.branch,
+      billLineId: line!.id,
+      reason: 'comp entered by mistake',
+      approvingStaffProfileId: ids.manager,
+      actor: actor(),
+    });
+    const restored = await read((tx) =>
+      tx.restaurantBillLine.findUnique({
+        where: { id: line!.id },
+        select: { compAmount: true, lineTotal: true, compReason: true },
+      })
+    );
+    expect(restored).toMatchObject({ compReason: null });
+    expect(restored?.compAmount.toString()).toBe('0');
+    expect(restored?.lineTotal.toString()).toBe(line!.lineSubtotal.toString());
+    const reversalAudit = await read((tx) =>
+      tx.restaurantCoAuthorization.findFirst({
+        where: { targetType: 'RestaurantBillLineCompReversal', targetId: line!.id },
+        select: { reason: true, capability: true },
+      })
+    );
+    expect(reversalAudit).toEqual({
+      reason: 'comp entered by mistake',
+      capability: 'orders:complimentary',
+    });
   });
 
-  it('clears pinned service-charge evidence after the last service-bearing line is comped', async () => {
+  it('binds reversal replays to their original bill, line, and canonical authorization payload', async () => {
+    const { orderId, db } = await openWithItems([{ seat: 1 }, { seat: 1 }, { seat: 2 }]);
+    const { billIds } = await deps.bills.cutBills(db, {
+      orderId,
+      branchId: ids.branch,
+      split: { kind: 'BY_SEAT' },
+      actor: actor(),
+    });
+    const lines = await read((tx) =>
+      tx.restaurantBillLine.findMany({ where: { billId: { in: billIds } } })
+    );
+    const first = lines.find((line) => line.billId === billIds[0])!;
+    const sibling = lines.find((line) => line.billId === first.billId && line.id !== first.id)!;
+    const other = lines.find((line) => line.billId !== first.billId)!;
+    for (const line of lines) {
+      await deps.bills.compLine(db, {
+        billId: line.billId,
+        branchId: ids.branch,
+        billLineId: line.id,
+        reason: 'guest complaint',
+        approvingStaffProfileId: ids.manager,
+        actor: actor(),
+      });
+    }
+    const input = {
+      billId: first.billId,
+      branchId: ids.branch,
+      billLineId: first.id,
+      reason: 'mistaken comp',
+      approvingStaffProfileId: ids.manager,
+      actor: actor(),
+    };
+    const original = await deps.bills.reverseCompLine(db, input);
+    expect(original).toEqual({ billId: first.billId, billLineId: first.id, replayed: false });
+
+    // A later comp must survive retries of this earlier reversal.
+    await deps.bills.compLine(db, { ...input, reason: 'new complaint', actor: actor() });
+    const snapshot = () =>
+      read(async (tx) => ({
+        bills: await tx.restaurantBill.findMany({
+          where: { id: { in: billIds } },
+          orderBy: { id: 'asc' },
+          include: { lines: { orderBy: { id: 'asc' } } },
+        }),
+        audits: await tx.restaurantCoAuthorization.findMany({
+          where: { targetId: { in: lines.map((line) => line.id) } },
+          orderBy: { id: 'asc' },
+        }),
+        replay: await tx.restaurantMoneyIdempotencyKey.findUniqueOrThrow({
+          where: {
+            deviceId_key: { deviceId, key: input.actor.idempotencyKey },
+          },
+        }),
+      }));
+    const before = await snapshot();
+    expect(before.replay.resultPayload).toEqual({ billId: first.billId, billLineId: first.id });
+    expect(await deps.bills.reverseCompLine(db, input)).toEqual({ ...original, replayed: true });
+    expect(await deps.bills.reverseCompLine(db, { ...input, reason: '  mistaken comp  ' })).toEqual({
+      ...original,
+      replayed: true,
+    });
+    for (const changed of [
+      { billLineId: sibling.id },
+      { billId: other.billId, billLineId: other.id },
+      { reason: 'different reason' },
+      { approvingStaffProfileId: ids.operator },
+      { actor: { ...input.actor, staffProfileId: ids.manager } },
+      { terminalSessionId: 'different-terminal-session' },
+    ]) {
+      await expect(deps.bills.reverseCompLine(db, { ...input, ...changed })).rejects.toMatchObject({
+        name: 'MoneyIdempotencyError',
+      });
+    }
+    expect(await snapshot()).toEqual(before);
+  });
+
+  it('rejects reversal keys belonging to other commands or lacking a canonical payload', async () => {
+    const { orderId, db } = await openWithItems([{}]);
+    const cutActor = actor();
+    const { billIds } = await deps.bills.cutBills(db, {
+      orderId,
+      branchId: ids.branch,
+      split: { kind: 'NONE' },
+      actor: cutActor,
+    });
+    const billId = billIds[0]!;
+    const line = await read((tx) =>
+      tx.restaurantBillLine.findFirstOrThrow({ where: { billId } })
+    );
+    const compActor = actor();
+    const input = {
+      billId,
+      branchId: ids.branch,
+      billLineId: line.id,
+      reason: 'mistaken comp',
+      approvingStaffProfileId: ids.manager,
+      actor: compActor,
+    };
+    await deps.bills.compLine(db, input);
+    const legacyActor = actor();
+    await read((tx) =>
+      tx.restaurantMoneyIdempotencyKey.create({
+        data: {
+          deviceId,
+          key: legacyActor.idempotencyKey,
+          commandType: 'bill.comp.reverse',
+          resultRef: line.id,
+        },
+      })
+    );
+    for (const reusedActor of [cutActor, compActor, legacyActor]) {
+      await expect(
+        deps.bills.reverseCompLine(db, { ...input, actor: reusedActor })
+      ).rejects.toMatchObject({ name: 'MoneyIdempotencyError' });
+    }
+    const after = await read((tx) =>
+      tx.restaurantBillLine.findUniqueOrThrow({ where: { id: line.id } })
+    );
+    expect(after.compAmount).toEqual(line.lineSubtotal);
+    expect(
+      await read((tx) =>
+        tx.restaurantCoAuthorization.count({
+          where: { targetType: 'RestaurantBillLineCompReversal', targetId: line.id },
+        })
+      )
+    ).toBe(0);
+  });
+
+  it('clears zero-basis service-charge evidence and restores it on comp reversal', async () => {
     const { orderId, itemIds, db } = await openWithItems([{}, {}]);
     await read((tx) =>
       tx.restaurantServiceChargePolicyVersion.updateMany({
@@ -1317,6 +1473,39 @@ describeIfDatabase('bills command layer (real DB)', () => {
       rate: null,
       taxTreatment: null,
       total: '0.00',
+    });
+
+    // Reverse in the opposite order to the comps. The policy and original charge
+    // must survive even though the zero-basis row cannot retain policy metadata.
+    for (const line of [...lines].reverse()) {
+      const input = {
+        billId,
+        branchId: ids.branch,
+        billLineId: line.id,
+        reason: 'mistaken comp',
+        approvingStaffProfileId: ids.manager,
+        actor: actor(),
+      };
+      expect((await deps.bills.reverseCompLine(db, input)).replayed).toBe(false);
+      expect((await deps.bills.reverseCompLine(db, input)).replayed).toBe(true);
+    }
+    const restored = await read((tx) =>
+      tx.restaurantBill.findUniqueOrThrow({ where: { id: billId } })
+    );
+    expect({
+      service: restored.serviceChargeTotal.toFixed(2),
+      basis: restored.serviceChargeBasis.toFixed(2),
+      policy: restored.serviceChargePolicyVersionId,
+      rate: restored.serviceChargeRate?.toFixed(6),
+      taxTreatment: restored.serviceChargeTaxTreatment,
+      total: restored.grandTotal.toFixed(2),
+    }).toEqual({
+      service: '10.00',
+      basis: '100.00',
+      policy: policy.id,
+      rate: '0.100000',
+      taxTreatment: 'NON_TAXABLE',
+      total: '110.00',
     });
   });
 
@@ -1580,6 +1769,306 @@ describeIfDatabase('bills command layer (real DB)', () => {
       expect(fullyComped.serviceChargePolicyVersionId).toBeNull();
     }
   );
+
+  it.each(
+    (['BY_ITEM', 'BY_SEAT'] as const).flatMap((kind, kindIndex) =>
+      [
+        { prices: ['0.05', '0.02', '0.03'], targetIndex: 1, charges: ['0.01', '0.00'] },
+        { prices: ['0.03', '0.01', '0.02'], targetIndex: 0, charges: ['0.01', '0.00'] },
+      ].map((scenario, scenarioIndex) => ({
+        ...scenario,
+        kind,
+        offset: kindIndex * 2 + scenarioIndex,
+      }))
+    )
+  )(
+    'restores the original $kind allocation for $prices across comp cycles',
+    async ({ kind, prices, targetIndex, charges, offset }) => {
+      const policyStart = new Date(AT.getTime() + 20 + offset * 2);
+      const policy = await read((tx) =>
+        tx.restaurantServiceChargePolicyVersion.create({
+          data: {
+            branchId: ids.branch,
+            rate: '0.100000',
+            effectiveFrom: policyStart,
+            effectiveTo: new Date(policyStart.getTime() + 1),
+            acknowledgedAt: AT,
+            acknowledgementRef: 'comp-reversal-rounding',
+            idempotencyKey: `reverse_rounding_${offset}_${suffix}`,
+            payloadHash: `reverse-rounding-${offset}-${suffix}`,
+          },
+        })
+      );
+      const { db, orderId, itemIds } = await openWithItems(
+        [{ seat: targetIndex === 0 ? 2 : 1 }, { seat: targetIndex + 1 }, { seat: targetIndex + 1 }],
+        policyStart
+      );
+      await read(async (tx) => {
+        for (const [index, id] of itemIds.entries()) {
+          await tx.restaurantOrderItem.update({
+            where: { id },
+            data: { unitPrice: prices[index] },
+          });
+        }
+        await tx.restaurantOrder.update({
+          where: { id: orderId },
+          data: { serviceChargePolicyVersionId: policy.id },
+        });
+      });
+      const targetItems = [itemIds[1]!, itemIds[2]!];
+      const groups =
+        targetIndex === 0 ? [targetItems, [itemIds[0]!]] : [[itemIds[0]!], targetItems];
+      const { billIds } = await deps.bills.cutBills(db, {
+        orderId,
+        branchId: ids.branch,
+        split: kind === 'BY_ITEM' ? { kind, groups } : { kind },
+        actor: actor(),
+      });
+      const load = async () => {
+        const bills = await read((tx) =>
+          tx.restaurantBill.findMany({
+            where: { id: { in: billIds } },
+            include: { lines: { orderBy: { lineSubtotal: 'asc' } } },
+          })
+        );
+        return billIds.map((id) => bills.find((bill) => bill.id === id)!);
+      };
+      const before = await load();
+      expect(before.map((bill) => bill.serviceChargeTotal.toFixed(2))).toEqual(charges);
+      const target = before[targetIndex]!;
+      const baseInput = {
+        billId: target.id,
+        branchId: ids.branch,
+        reason: 'mistaken comp',
+        approvingStaffProfileId: ids.manager,
+      };
+      const assertRestored = async () => {
+        const after = await load();
+        expect(after[1 - targetIndex]).toEqual(before[1 - targetIndex]);
+        expect(after.map((bill) => bill.serviceChargeTotal)).toEqual(
+          before.map((bill) => bill.serviceChargeTotal)
+        );
+        expect(after[targetIndex]!.grandTotal).toEqual(target.grandTotal);
+        expect(after[targetIndex]!.serviceChargeBasis).toEqual(target.subtotal);
+        expect(after[targetIndex]!.serviceChargePolicyVersionId).toBe(policy.id);
+        expect(
+          after[targetIndex]!.lines.reduce((total, line) => total.add(line.lineTotal), D(0))
+        ).toEqual(target.grandTotal);
+      };
+      // The review's reproducer: comp 0.02 on the bill allocated no service cent.
+      await deps.bills.compLine(db, {
+        ...baseInput,
+        billLineId: target.lines[0]!.id,
+        actor: actor(),
+      });
+      const reverse = { ...baseInput, billLineId: target.lines[0]!.id, actor: actor() };
+      await deps.bills.reverseCompLine(db, reverse);
+      expect((await deps.bills.reverseCompLine(db, reverse)).replayed).toBe(true);
+      await assertRestored();
+
+      // Full comp clears the bill policy; reversing in either order must still
+      // recover the original cap, including a cent awarded by largest remainder.
+      for (const line of target.lines) {
+        await deps.bills.compLine(db, { ...baseInput, billLineId: line.id, actor: actor() });
+      }
+      for (const line of [...target.lines].reverse()) {
+        await deps.bills.reverseCompLine(db, { ...baseInput, billLineId: line.id, actor: actor() });
+      }
+      await assertRestored();
+    }
+  );
+
+  it.each(['BY_ITEM', 'BY_SEAT'] as const)(
+    'restores the original %s service allocation after a sibling settles with inclusive tax',
+    async (kind) => {
+      const tenders = await import('./tenders');
+      const at = new Date(AT.getTime() + (kind === 'BY_ITEM' ? 40 : 42));
+      const effectiveTo = new Date(at.getTime() + 1);
+      const policy = await read(async (tx) => {
+        await tx.restaurantTaxRuleVersion.createMany({
+          data: (['CASH', 'OTHER'] as const).map((paymentCategory) => ({
+            profileVersionId: ids.taxProfile,
+            officialSourceId: ids.taxSource,
+            ruleCode: `REVERSE_INCLUSIVE_${kind}_${paymentCategory}`,
+            paymentCategory,
+            priceMode: 'INCLUSIVE' as const,
+            rate: '0.200000',
+            status: 'PUBLISHED' as const,
+            effectiveFrom: at,
+            effectiveTo,
+            approvalReference: 'comp-reversal-inclusive-tax',
+            approvedAt: AT,
+            publishedAt: AT,
+          })),
+        });
+        return tx.restaurantServiceChargePolicyVersion.create({
+          data: {
+            branchId: ids.branch,
+            rate: '0.100000',
+            effectiveFrom: at,
+            effectiveTo,
+            acknowledgedAt: AT,
+            acknowledgementRef: 'comp-reversal-inclusive-tax',
+            idempotencyKey: `reverse_inclusive_${kind}_${suffix}`,
+            payloadHash: `reverse-inclusive-${kind}-${suffix}`,
+          },
+        });
+      });
+      const { db, orderId, itemIds } = await openWithItems([{ seat: 1 }, { seat: 2 }], at);
+      await read(async (tx) => {
+        for (const [index, id] of itemIds.entries()) {
+          await tx.restaurantOrderItem.update({
+            where: { id },
+            data: { unitPrice: index === 0 ? '0.10' : '0.05' },
+          });
+        }
+        await tx.restaurantOrder.update({
+          where: { id: orderId },
+          data: { serviceChargePolicyVersionId: policy.id },
+        });
+      });
+      const { billIds } = await deps.bills.cutBills(db, {
+        orderId,
+        branchId: ids.branch,
+        split: kind === 'BY_ITEM' ? { kind, groups: itemIds.map((id) => [id]) } : { kind },
+        actor: actor(),
+      });
+      const loadBill = (billId: string) =>
+        read((tx) =>
+          tx.restaurantBill.findUniqueOrThrow({ where: { id: billId }, include: { lines: true } })
+        );
+      const siblingId = billIds[0]!;
+      const targetId = billIds[1]!;
+      const before = await loadBill(targetId);
+      expect((await loadBill(siblingId)).serviceChargeTotal.toFixed(2)).toBe('0.01');
+      expect(before.serviceChargeTotal.toFixed(2)).toBe('0.01');
+
+      expect(
+        await tenders.applyTender(db, {
+          billId: siblingId,
+          branchId: ids.branch,
+          tender: { type: 'OTHER', amount: '0.11' },
+          actor: actor(),
+          now: at,
+        })
+      ).toMatchObject({ settled: true });
+      const settledSibling = await loadBill(siblingId);
+      // Reusing this net subtotal would reduce the order's service charge from
+      // 0.02 to 0.01 and incorrectly remove the target bill's original cent.
+      expect(settledSibling.subtotal.toFixed(2)).toBe('0.08');
+      expect(settledSibling.taxTotal.toFixed(2)).toBe('0.02');
+      expect(settledSibling.lines[0]!.lineSubtotal.toFixed(2)).toBe('0.10');
+
+      const comp = {
+        billId: targetId,
+        branchId: ids.branch,
+        billLineId: before.lines[0]!.id,
+        reason: 'mistaken comp after sibling settlement',
+        approvingStaffProfileId: ids.manager,
+      };
+      await deps.bills.compLine(db, { ...comp, actor: actor() });
+      expect((await loadBill(targetId)).serviceChargeTotal.toFixed(2)).toBe('0.00');
+      const reversal = { ...comp, actor: actor() };
+      await deps.bills.reverseCompLine(db, reversal);
+      expect((await deps.bills.reverseCompLine(db, reversal)).replayed).toBe(true);
+      const restored = await loadBill(targetId);
+      expect(restored.serviceChargeTotal).toEqual(before.serviceChargeTotal);
+      expect(restored.serviceChargeBasis).toEqual(before.serviceChargeBasis);
+      expect(restored.grandTotal).toEqual(before.grandTotal);
+      expect(restored.lines[0]).toMatchObject({
+        lineSubtotal: before.lines[0]!.lineSubtotal,
+        serviceChargeAmount: D('0.01'),
+        compAmount: D(0),
+        lineTotal: before.grandTotal,
+        compReason: null,
+        compCoAuthorizationId: null,
+      });
+      expect(await loadBill(siblingId)).toEqual(settledSibling);
+
+      const quote = await read((tx) => tenders.quoteOpenBillSettlement(tx, targetId, at));
+      expect(quote?.serviceChargePayable.toFixed(2)).toBe('0.01');
+      expect(quote?.grandTotal.toFixed(2)).toBe('0.06');
+      const result = await tenders.applyTender(db, {
+        billId: targetId,
+        branchId: ids.branch,
+        tender: { type: 'OTHER', amount: '0.06' },
+        actor: actor(),
+        now: at,
+      });
+      expect(result.settled).toBe(true);
+      expect(result.remainingDue.toFixed(2)).toBe('0.00');
+      expect((await loadBill(targetId)).serviceChargeTotal.toFixed(2)).toBe('0.01');
+    }
+  );
+
+  it('releases loyalty again when a reversed line is comped in a new cycle', async () => {
+    const loyalty = await import('./loyalty');
+    const { db, orderId } = await openWithItems([{}]);
+    const customer = await read((tx) =>
+      tx.restaurantCustomer.create({ data: { displayName: 'Comp cycle guest' } })
+    );
+    const account = await read((tx) =>
+      tx.loyaltyAccount.create({ data: { customerId: customer.id } })
+    );
+    await read((tx) =>
+      tx.restaurantOrder.update({ where: { id: orderId }, data: { customerId: customer.id } })
+    );
+    await loyalty.adjustLoyaltyPoints(db, {
+      accountId: account.id,
+      points: 200,
+      actorId: ids.operator,
+      reason: 'opening balance',
+      idempotencyKey: key(),
+    });
+    const { billIds } = await deps.bills.cutBills(db, {
+      orderId,
+      branchId: ids.branch,
+      split: { kind: 'NONE' },
+      actor: actor(),
+    });
+    const billId = billIds[0]!;
+    const line = await read((tx) => tx.restaurantBillLine.findFirstOrThrow({ where: { billId } }));
+    const input = {
+      billId,
+      branchId: ids.branch,
+      billLineId: line.id,
+      reason: 'comp cycle regression',
+      approvingStaffProfileId: ids.manager,
+    };
+    const comps = [];
+    for (let cycle = 0; cycle < 2; cycle++) {
+      await loyalty.redeemLoyaltyPoints(db, {
+        accountId: account.id,
+        billId,
+        points: 200,
+        actorId: ids.operator,
+        idempotencyKey: key(),
+      });
+      const compInput = { ...input, actor: actor() };
+      const result = await deps.bills.compLine(db, compInput);
+      expect(result.releasedDiscount.toFixed(2)).toBe('10.00');
+      comps.push(compInput);
+      if (cycle === 0) {
+        await deps.bills.reverseCompLine(db, { ...input, actor: actor() });
+      }
+    }
+    for (const comp of comps) {
+      const replay = await deps.bills.compLine(db, comp);
+      expect(replay.replayed).toBe(true);
+      expect(replay.releasedDiscount.toFixed(2)).toBe('10.00');
+    }
+    expect(await loyalty.loyaltyBalance(db, account.id)).toBe(200);
+    const releases = await read((tx) =>
+      tx.loyaltyPointsEntry.findMany({ where: { billId, kind: 'ADJUSTMENT' } })
+    );
+    expect(releases).toHaveLength(2);
+    expect(new Set(releases.map((entry) => entry.idempotencyKey)).size).toBe(2);
+    expect(releases.map((entry) => entry.points)).toEqual([200, 200]);
+    const bill = await read((tx) => tx.restaurantBill.findUniqueOrThrow({ where: { id: billId } }));
+    expect(bill.compTotal.toFixed(2)).toBe('12.50');
+    expect(bill.discountTotal.toFixed(2)).toBe('0.00');
+    expect(bill.grandTotal.toFixed(2)).toBe('0.00');
+  });
 
   it('leaves the zero service-charge sentinel unchanged when comping a non-participating line', async () => {
     const { db, orderId } = await openWithItems([{}]);
