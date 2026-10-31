@@ -215,7 +215,7 @@ describe('organization.create CRM conversion isolation', () => {
           opportunityId: 'opp_1',
           fromStage: 'WON',
           toStage: 'WON',
-          changedById: actor.id,
+          changedById: 'op_1',
           reason: 'Converted into an organization',
         },
       });
