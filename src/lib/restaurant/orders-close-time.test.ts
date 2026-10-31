@@ -39,7 +39,12 @@ const order = {
 };
 
 function makeDb() {
-  let idempotency: { resultRef: string | null } | null = null;
+  type IdempotencyRecord = {
+    commandType: string;
+    canonicalPayloadHash: string;
+    resultRef: string | null;
+  };
+  let idempotency: IdempotencyRecord | null = null;
   const tx = {
     $queryRaw: vi.fn(async () => []),
     restaurantOrder: {
@@ -49,12 +54,13 @@ function makeDb() {
     restaurantOrderTable: { updateMany: vi.fn() },
     restaurantOrderIdempotencyKey: {
       findUnique: vi.fn(async () => idempotency),
-      create: vi.fn(async () => {
-        idempotency = { resultRef: null };
+      create: vi.fn(async ({ data }: { data: Omit<IdempotencyRecord, 'resultRef'> }) => {
+        idempotency = { ...data, resultRef: null };
         return idempotency;
       }),
       update: vi.fn(async ({ data }: { data: { resultRef: string } }) => {
-        idempotency = { resultRef: data.resultRef };
+        if (!idempotency) throw new Error('Cannot update a missing idempotency key');
+        idempotency = { ...idempotency, ...data };
         return idempotency;
       }),
     },
@@ -81,7 +87,9 @@ describe('closeOrder close time', () => {
       orderId: order.id,
       replayed: false,
     });
-    await expect(closeOrder(db, { orderId: order.id, actor, now: historical })).resolves.toEqual({
+    await expect(
+      closeOrder(db, { orderId: order.id, actor, now: new Date(historical.getTime() + 1_000) })
+    ).resolves.toEqual({
       orderId: order.id,
       replayed: true,
     });
@@ -106,6 +114,23 @@ describe('closeOrder close time', () => {
       { staffProfileId: actor.staffProfileId, deviceId: actor.deviceId },
       historical
     );
+  });
+
+  it.each([
+    { orderId: 'order-2', actor },
+    { orderId: order.id, actor: { ...actor, staffProfileId: 'staff-2' } },
+  ])('rejects a replay with changed command data: %j', async (changedInput) => {
+    const { db, tx } = makeDb();
+    await closeOrder(db, { orderId: order.id, actor });
+
+    await expect(closeOrder(db, changedInput)).rejects.toMatchObject({
+      reason: 'IDEMPOTENCY_CONFLICT',
+    });
+
+    expect(tx.restaurantOrder.findUnique).toHaveBeenCalledTimes(1);
+    expect(tx.restaurantOrder.update).toHaveBeenCalledTimes(1);
+    expect(mocks.earnLoyaltyForClosedOrder).toHaveBeenCalledTimes(1);
+    expect(mocks.postOrderRecipeConsumption).toHaveBeenCalledTimes(1);
   });
 
   it('rejects an invalid time before opening a transaction', async () => {
