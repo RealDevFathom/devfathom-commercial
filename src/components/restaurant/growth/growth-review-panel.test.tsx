@@ -40,7 +40,9 @@ it.each(['DENIED', 'UNAVAILABLE', 'INSUFFICIENT_DATA', 'INVALID', 'NOT_FOUND', '
   }
 );
 it('preserves edited priority and requires explicit confirmation', async () => {
-  const submit = vi.fn(async (_input: GrowthReviewInput) => ({ status: 'UNAVAILABLE' as const }));
+  const submit = vi.fn<(input: GrowthReviewInput) => Promise<{ status: 'UNAVAILABLE' }>>(
+    async () => ({ status: 'UNAVAILABLE' as const })
+  );
   render(<GrowthReviewPanel view={view} onReview={submit} />);
   fireEvent.change(screen.getByLabelText('Review priority'), { target: { value: 'HIGH' } });
   fireEvent.click(screen.getByRole('button', { name: 'Approve to draft' }));

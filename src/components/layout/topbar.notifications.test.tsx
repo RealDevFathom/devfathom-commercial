@@ -46,8 +46,7 @@ import { NotificationBell } from './topbar';
 
 beforeEach(() => {
   vi.clearAllMocks();
-  // An Agency package licenses `hr`, which is the module `team.getNotifications`
-  // gates on. Pharmacy packages do not — that is WHA-1207.
+  // Shell notifications remain available with or without an HR entitlement.
   mocks.enabledModules = ['hr'];
   mocks.teamQuery.mockReturnValue({ data: [] });
   mocks.restaurantQuery.mockReturnValue({ data: { items: [] } });
@@ -173,15 +172,12 @@ describe('Restaurant notification bell when the poll is denied', () => {
 });
 
 /**
- * WHA-1207 — every non-Restaurant vertical falls through to the shared team
- * bell, and `team.getNotifications` gates on the `hr` module (PROCEDURE_MODULES).
- * A pharmacy package does not license `hr`, so on every page load the bell used
- * to fire a call the server answers 403 and then render a bare empty bell.
- *
- * UX rule 17: a 403 is definitive. Don't issue it, and say what happened plus
- * the next step instead of an empty inbox that silently never fills.
+ * WHA-305 — every non-Restaurant vertical uses the shared team bell. Its
+ * personal notification procedures are available without HR; keep client
+ * polling and read actions aligned with the server's exact-path exception.
+ * A server-side denial must still override any cached notification data.
  */
-describe('Team notification bell when the package does not license notifications', () => {
+describe('Team notification bell without an HR entitlement', () => {
   beforeEach(() => {
     mocks.vertical = 'PHARMACY';
     // A pharmacy package: pharmacy modules, no `hr`.
@@ -189,40 +185,42 @@ describe('Team notification bell when the package does not license notifications
     mocks.teamQuery.mockReturnValue({ data: undefined, error: null });
   });
 
-  it('never issues the denied query on an unlicensed workspace', () => {
+  it('polls for personal notifications when HR is absent', () => {
     render(<NotificationBell />);
 
     expect(mocks.teamQuery).toHaveBeenCalledOnce();
-    // `enabled: false` is what keeps this off the wire entirely — not even the
-    // single attempt `retryQuery` would otherwise allow.
-    expect(mocks.teamQuery).toHaveBeenCalledWith(undefined, { enabled: false });
+    expect(mocks.teamQuery).toHaveBeenCalledWith(undefined, { enabled: true });
     // The Restaurant bell must stay untouched: this is the shared fallback path.
     expect(mocks.restaurantQuery).not.toHaveBeenCalled();
   });
 
-  it('shows one quiet state naming the cause and the next step', () => {
+  it('shows the ordinary empty inbox when HR is absent', () => {
     render(<NotificationBell />);
     fireEvent.click(screen.getByRole('button', { name: 'Notifications' }));
 
+    expect(screen.getByText('No notifications')).toBeInTheDocument();
     expect(
-      screen.getByText('Notifications are not part of this workspace’s plan')
-    ).toBeInTheDocument();
+      screen.queryByText('Notifications are not part of this workspace’s plan')
+    ).not.toBeInTheDocument();
     expect(
-      screen.getByText('Ask your platform administrator to enable the HR module.')
-    ).toBeInTheDocument();
-    expect(screen.queryByText('No notifications')).not.toBeInTheDocument();
+      screen.queryByText('Ask your platform administrator to enable the HR module.')
+    ).not.toBeInTheDocument();
     // Nothing to act on: no unread badge, no "Mark all read".
     expect(screen.queryByRole('button', { name: 'Mark all read' })).not.toBeInTheDocument();
   });
 
-  it('still polls and renders normally when the package does license `hr`', () => {
-    mocks.enabledModules = ['pharmacy-core', 'hr'];
+  it.each([false, true])('renders and marks notifications read with HR enabled=%s', (hasHr) => {
+    if (hasHr) mocks.enabledModules.push('hr');
+    const markRead = vi.fn();
+    const markAllRead = vi.fn();
+    mocks.teamMarkRead.mockReturnValue({ mutate: markRead });
+    mocks.teamMarkAllRead.mockReturnValue({ mutate: markAllRead });
     mocks.teamQuery.mockReturnValue({
       data: [
         {
           id: 'team-1',
-          title: 'Licensed update',
-          message: 'Body of a licensed notification',
+          title: 'Personal update',
+          message: 'Body of a personal notification',
           createdAt: new Date(),
           isRead: false,
         },
@@ -234,16 +232,29 @@ describe('Team notification bell when the package does not license notifications
     fireEvent.click(screen.getByRole('button', { name: 'Notifications, 1 unread' }));
 
     expect(mocks.teamQuery).toHaveBeenCalledWith(undefined, { enabled: true });
-    expect(screen.getByText('Body of a licensed notification')).toBeInTheDocument();
+    expect(screen.getByText('Body of a personal notification')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('Personal update'));
+    fireEvent.click(screen.getByRole('button', { name: 'Mark all read' }));
+    expect(markRead).toHaveBeenCalledExactlyOnceWith({ id: 'team-1' });
+    expect(markAllRead).toHaveBeenCalledExactlyOnceWith();
+    expect(mocks.restaurantQuery).not.toHaveBeenCalled();
     expect(
       screen.queryByText('Notifications are not part of this workspace’s plan')
     ).not.toBeInTheDocument();
   });
 
-  it('honours a server denial even if the resolved entitlements claim the licence', () => {
-    mocks.enabledModules = ['pharmacy-core', 'hr'];
+  it.each([false, true])('honours a server denial with HR enabled=%s', (hasHr) => {
+    if (hasHr) mocks.enabledModules.push('hr');
     mocks.teamQuery.mockReturnValue({
-      data: undefined,
+      data: [
+        {
+          id: 'cached-1',
+          title: 'Cached notification',
+          message: 'Cached body',
+          createdAt: new Date(),
+          isRead: false,
+        },
+      ],
       error: { data: { code: 'FORBIDDEN' } },
     });
 
@@ -254,9 +265,12 @@ describe('Team notification bell when the package does not license notifications
       screen.getByText('Notifications are not part of this workspace’s plan')
     ).toBeInTheDocument();
     expect(screen.queryByText('No notifications')).not.toBeInTheDocument();
+    expect(screen.queryByText('Cached notification')).not.toBeInTheDocument();
+    expect(screen.queryByText('Cached body')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Mark all read' })).not.toBeInTheDocument();
   });
 
-  it('does not mistake a non-authorization failure for an unlicensed package', () => {
+  it('does not mistake a non-authorization failure for a permission denial', () => {
     mocks.enabledModules = ['pharmacy-core', 'hr'];
     mocks.teamQuery.mockReturnValue({
       data: undefined,

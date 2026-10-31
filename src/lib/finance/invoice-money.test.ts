@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { calculateInvoiceMoney } from './invoice-money';
+import { calculateInvoiceMoney, invoiceLineCents, moneyCents } from './invoice-money';
 
 describe('calculateInvoiceMoney invoice form preview', () => {
   it('rounds a line-item decimal midpoint half up to match persistence', () => {
@@ -35,5 +35,25 @@ describe('calculateInvoiceMoney invoice form preview', () => {
     expect(preview.subtotalCents).toBe(999_999_999_999n);
     expect(preview.totalCents).toBe(999_999_999_999n);
     expect(preview.total).toBe(9_999_999_999.99);
+  });
+});
+
+describe('moneyCents signed rounding', () => {
+  it.each([
+    [-0.2, -20n],
+    [0.1 - 0.3, -20n],
+    [-1.004, -100n],
+    [-1.005, -101n],
+    [-1.006, -101n],
+    [-0.005, -1n],
+    [-1e-7, 0n],
+    [-1e3, -100000n],
+  ])('rounds %s to %s cents', (amount, expected) => {
+    expect(moneyCents(amount)).toBe(expected);
+    expect(moneyCents(-amount)).toBe(-expected);
+  });
+
+  it('rounds a negative decimal line midpoint away from zero', () => {
+    expect(invoiceLineCents({ quantity: 3, rate: -0.335 })).toBe(-101n);
   });
 });

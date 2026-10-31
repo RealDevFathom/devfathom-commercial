@@ -17,6 +17,7 @@ import {
 } from '@/lib/finance/currency';
 import { invoiceStatusTransitionError, invoiceStatusUpdate } from '@/lib/finance/invoice-status';
 import { calculateInvoiceMoney, fromCents, moneyCents } from '@/lib/finance/invoice-money';
+import { MAX_MONEY, roundMoney, sumMoney } from '@/lib/finance/money';
 
 // Monthly-equivalent multiplier for a recurring expense's billing interval, so an
 // ongoing subscription's run-rate can be folded into burn/profit (FIN-05).
@@ -29,7 +30,6 @@ const RECURRING_MONTHLY_FACTOR: Record<string, number> = {
 // Money columns (transaction.amount, invoice totals, etc.) are Decimal(12,2), so the
 // largest value Postgres will accept is 9,999,999,999.99. Bound amounts here so an
 // oversized input fails as a clean validation error instead of a raw DB 500.
-const MAX_MONEY = 9_999_999_999.99;
 const MAX_MONEY_CENTS = 999_999_999_999n;
 const MAX_INVOICE_QUANTITY = 1_000_000;
 const MAX_INVOICE_ITEMS = 100;
@@ -83,7 +83,7 @@ export const createInvoiceInputSchema = z.object({
 // Round to 2 decimal places (cents). Used to derive invoice money server-side so
 // caller-supplied subtotal/total are never trusted (FIN-01). Discounts are
 // bounded by the derived subtotal so an invoice can never have a negative net.
-const round2 = (n: number) => fromCents(moneyCents(n));
+const round2 = roundMoney;
 
 function assertMoneyRange(cents: bigint) {
   if (cents > MAX_MONEY_CENTS) {
@@ -388,6 +388,9 @@ export const financeRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      // Reject invalid derived inputs before opening a transaction. Stored adjustments
+      // are reapplied only after acquiring the invoice lock below.
+      calculateInvoiceTotals(input.items, input.tax ?? 0, input.discount ?? 0);
       const orgId = workspaceId(ctx);
       return ctx.db.$transaction(async (tx) => {
         // Serialize edits with payment recording. Re-read only after acquiring the
@@ -546,7 +549,7 @@ export const financeRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       // FIN-06: enforce a status state-machine, never re-fire side-effects on a
-      // no-op, and clear paidAt/sentAt when the invoice leaves PAID/SENT.
+      // no-op, and reset payment/issue timestamps only when the transition requires it.
       const current = await ctx.db.invoice.findUnique({
         where: { id: input.id },
         select: { status: true },
@@ -616,6 +619,11 @@ export const financeRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      // Settlement must use the same cent value as the Decimal(12,2) payment row.
+      const amount = round2(input.amount);
+      if (amount <= 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Payment must be at least 0.01.' });
+      }
       const orgId = workspaceId(ctx);
       const requestFingerprint = paymentCommandFingerprint(input);
       // IMP-REST-03: captured inside the tx, fired only AFTER it commits.
@@ -707,7 +715,7 @@ export const financeRouter = router({
           _sum: { amount: true },
         });
         const alreadyPaid = round2(Number(prior._sum.amount ?? 0));
-        const newPaid = round2(alreadyPaid + input.amount);
+        const newPaid = sumMoney([alreadyPaid, amount]);
 
         // Reject overpayment beyond a half-cent rounding tolerance.
         if (newPaid > total + PAYMENT_EPSILON) {
@@ -724,7 +732,7 @@ export const financeRouter = router({
             idempotencyKey: input.idempotencyKey,
             requestFingerprint,
             invoiceId: invoice.id,
-            amount: input.amount,
+            amount,
             currency: invoice.currency,
             method: input.method?.trim() || null,
             note: input.note?.trim() || null,
@@ -777,6 +785,10 @@ export const financeRouter = router({
         });
         if (!payment) throw new TRPCError({ code: 'NOT_FOUND', message: 'Payment not found' });
 
+        // Join updateInvoice and addPayment's invoice-row serialization protocol
+        // before changing either the payment set or the derived invoice status.
+        await tx.$queryRaw`SELECT id FROM invoices WHERE id = ${payment.invoiceId} FOR UPDATE`;
+
         await tx.payment.delete({ where: { id: payment.id } });
 
         const invoice = await tx.invoice.findUnique({
@@ -809,7 +821,7 @@ export const financeRouter = router({
   markOverdueInvoices: adminProcedure.mutation(async ({ ctx }) => {
     const result = await ctx.db.invoice.updateMany({
       where: { status: 'SENT', dueDate: { lt: new Date() } },
-      data: { status: 'OVERDUE', sentAt: null },
+      data: invoiceStatusUpdate('SENT', 'OVERDUE', new Date()),
     });
     return { count: result.count };
   }),

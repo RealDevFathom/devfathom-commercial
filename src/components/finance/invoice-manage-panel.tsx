@@ -1,6 +1,6 @@
 'use client';
 
-import { memo, useCallback, useMemo, useState } from 'react';
+import { memo, useCallback, useId, useMemo, useState } from 'react';
 import {
   Pencil,
   Plus,
@@ -201,6 +201,8 @@ const InvoiceManageRow = memo(function InvoiceManageRow({ inv }: { inv: ManageIn
 });
 
 function InvoiceEditForm({ inv, onSaved }: { inv: ManageInvoice; onSaved: () => void }) {
+  const discountId = useId();
+  const discountErrorId = `${discountId}-error`;
   const initialItems = useMemo<{ description: string; quantity: number; rate: number }[]>(() => {
     const raw = (Array.isArray(inv.items) ? inv.items : []) as unknown as LineItem[];
     return raw.length
@@ -222,8 +224,11 @@ function InvoiceEditForm({ inv, onSaved }: { inv: ManageInvoice; onSaved: () => 
 
   const addItem = () => setItems((cur) => [...cur, { description: '', quantity: 1, rate: 0 }]);
   const removeItem = (i: number) => setItems((cur) => cur.filter((_, idx) => idx !== i));
-  const updateItem = (i: number, field: 'description' | 'quantity' | 'rate', value: string | number) =>
-    setItems((cur) => cur.map((it, idx) => (idx === i ? { ...it, [field]: value } : it)));
+  const updateItem = (
+    i: number,
+    field: 'description' | 'quantity' | 'rate',
+    value: string | number
+  ) => setItems((cur) => cur.map((it, idx) => (idx === i ? { ...it, [field]: value } : it)));
 
   const discountNum = parseFloat(discount) || 0;
   const taxNum = parseFloat(tax) || 0;
@@ -330,10 +335,11 @@ function InvoiceEditForm({ inv, onSaved }: { inv: ManageInvoice; onSaved: () => 
       {/* Adjustments + due date */}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <div>
-          <label className="mb-1 block text-xs font-medium text-foreground">
+          <label htmlFor={discountId} className="mb-1 block text-xs font-medium text-foreground">
             Discount ({inv.currency})
           </label>
           <input
+            id={discountId}
             type="number"
             step="0.01"
             min="0"
@@ -342,6 +348,7 @@ function InvoiceEditForm({ inv, onSaved }: { inv: ManageInvoice; onSaved: () => 
             onChange={(e) => setDiscount(e.target.value)}
             placeholder="0.00"
             aria-invalid={discountInvalid}
+            aria-describedby={discountInvalid ? discountErrorId : undefined}
             className={cn(
               'w-full rounded-xl border bg-background px-3 py-2 text-right text-sm text-foreground focus:outline-none focus:ring-2',
               discountInvalid
@@ -350,7 +357,9 @@ function InvoiceEditForm({ inv, onSaved }: { inv: ManageInvoice; onSaved: () => 
             )}
           />
           {discountInvalid && (
-            <p className="mt-1 text-xs text-destructive">Discount cannot exceed the subtotal.</p>
+            <p id={discountErrorId} className="mt-1 text-xs text-destructive">
+              Discount cannot exceed the subtotal.
+            </p>
           )}
         </div>
         <div>

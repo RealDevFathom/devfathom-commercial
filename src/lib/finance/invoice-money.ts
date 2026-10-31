@@ -14,7 +14,9 @@ function decimalParts(value: number): { coefficient: bigint; scale: number } {
 function roundedCents(coefficient: bigint, scale: number): bigint {
   if (scale <= 2) return coefficient * 10n ** BigInt(2 - scale);
   const divisor = 10n ** BigInt(scale - 2);
-  return coefficient / divisor + ((coefficient % divisor) * 2n >= divisor ? 1n : 0n);
+  const sign = coefficient < 0n ? -1n : 1n;
+  const magnitude = coefficient * sign;
+  return sign * (magnitude / divisor + ((magnitude % divisor) * 2n >= divisor ? 1n : 0n));
 }
 
 export function moneyCents(value: number): bigint {
@@ -34,11 +36,7 @@ export function invoiceLineCents({ quantity, rate }: InvoiceMoneyItem): bigint {
 export const fromCents = (cents: bigint) => Number(cents) / 100;
 
 /** Canonical cent-based preview shared by invoice forms and server persistence. */
-export function calculateInvoiceMoney(
-  items: InvoiceMoneyItem[],
-  tax = 0,
-  discount = 0
-) {
+export function calculateInvoiceMoney(items: InvoiceMoneyItem[], tax = 0, discount = 0) {
   const amountCents = items.map(invoiceLineCents);
   const subtotalCents = amountCents.reduce((sum, amount) => sum + amount, 0n);
   const discountCents = moneyCents(discount);

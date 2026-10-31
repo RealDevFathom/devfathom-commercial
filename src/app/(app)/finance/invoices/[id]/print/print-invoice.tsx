@@ -109,7 +109,9 @@ export function InvoicePrintView({ invoiceId }: { invoiceId: string }) {
               <p className="mt-1 text-xs text-slate-500">hub.devfathom.com</p>
             </div>
             <div className="text-right">
-              <p className="font-display text-xl font-bold tracking-tight text-slate-900">INVOICE</p>
+              <p className="font-display text-xl font-bold tracking-tight text-slate-900">
+                INVOICE
+              </p>
               <p className="mt-1 font-mono text-sm text-slate-700">{invoice.invoiceNumber}</p>
               <span
                 className={cn(
