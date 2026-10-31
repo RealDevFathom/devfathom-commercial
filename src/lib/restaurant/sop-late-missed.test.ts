@@ -464,6 +464,7 @@ describe('enqueueDueSopEscalations', () => {
             escalationEvents: [
               {
                 escalationStepId: 'step_1',
+                kind: 'FIRED',
                 createdAt: new Date('2026-08-20T12:10:00.000Z'),
               },
             ],
@@ -514,6 +515,7 @@ describe('enqueueDueSopEscalations', () => {
             escalationEvents: [
               {
                 escalationStepId: 'another_policy_step',
+                kind: 'FIRED',
                 createdAt: new Date('2026-08-20T12:05:00.000Z'),
               },
             ],

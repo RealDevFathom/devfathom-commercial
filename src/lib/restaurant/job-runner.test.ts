@@ -268,7 +268,8 @@ describe('runRestaurantWorkerTick', () => {
     const orgB = createJobDb([queuedJob({ id: 'b1' })]);
     Object.assign(orgA.db, {
       restaurantSopEscalationPolicy: {
-        findMany: async () =>
+        count: async () => 50,
+        findMany: async ({ skip, take }: { skip: number; take: number }) =>
           Array.from({ length: 50 }, (_, i) => ({
             id: `policy_${i}`,
             scope: 'ORG',
@@ -277,22 +278,23 @@ describe('runRestaurantWorkerTick', () => {
             quietHoursStartMinutes: null,
             quietHoursEndMinutes: null,
             steps: [{ id: `step_${i}`, delayMinutes: 0 }],
-          })),
+          })).slice(skip, skip + take),
       },
       restaurantSopOccurrence: {
-        findMany: async () =>
+        count: async () => 100,
+        findMany: async ({ skip, take }: { skip: number; take: number }) =>
           Array.from({ length: 100 }, (_, i) => ({
             id: `occ_${i}`,
             branchId: 'branch_1',
             windowEndsAt: T0,
             branch: { timezone: 'UTC' },
             escalationEvents: [],
-          })),
+          })).slice(skip, skip + take),
       },
     });
     Object.assign(orgB.db, {
-      restaurantSopEscalationPolicy: { findMany: async () => [] },
-      restaurantSopOccurrence: { findMany: async () => [] },
+      restaurantSopEscalationPolicy: { count: async () => 0, findMany: async () => [] },
+      restaurantSopOccurrence: { count: async () => 0, findMany: async () => [] },
     });
     const dbs = { org_a: orgA.db, org_b: orgB.db };
 
