@@ -110,6 +110,32 @@ describe.skipIf(!url)('allocation money migration on populated, append-only evid
     }
   });
 
+  it('never backfills more discount than gross onto a partial-pack allocation', async () => {
+    await client.query(`
+      INSERT INTO pg_temp.pharmacy_sale_lines VALUES ('pack', 'org', 1, 4, 4, 4, 0, 3);
+      INSERT INTO pg_temp.pharmacy_sale_line_allocations VALUES
+        ('c', 'org', 'pack', 'lot-c', 1),
+        ('d', 'org', 'pack', 'lot-d', 1),
+        ('e', 'org', 'pack', 'lot-e', 2);
+      INSERT INTO pg_temp.pharmacy_sale_return_lines VALUES
+        ('r4', 'org', 'pack', 'lot-c', 1, '2026-01-01'),
+        ('r5', 'org', 'pack', 'lot-d', 1, '2026-01-02'),
+        ('r6', 'org', 'pack', 'lot-e', 2, '2026-01-03');
+    `);
+    await client.query(grossMigration);
+    await client.query(allocationMigration);
+    for (const table of ['pharmacy_sale_line_allocations', 'pharmacy_sale_return_lines']) {
+      const { rows } = await client.query(`SELECT "grossMinor", "discountMinor"
+        FROM pg_temp.${table} WHERE "saleLineId" = 'pack' ORDER BY id`);
+      expect(rows.reduce((sum, row) => sum + row.grossMinor, 0)).toBe(4);
+      expect(rows.reduce((sum, row) => sum + row.discountMinor, 0)).toBe(3);
+      for (const row of rows) {
+        expect(row.discountMinor).toBeGreaterThanOrEqual(0);
+        expect(row.discountMinor).toBeLessThanOrEqual(row.grossMinor);
+      }
+    }
+  });
+
   it('rolls back schema changes and trigger suspension if a backfill fails', async () => {
     await client.query(grossMigration);
     await client.query(

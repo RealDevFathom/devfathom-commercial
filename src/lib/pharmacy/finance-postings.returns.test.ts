@@ -221,3 +221,36 @@ it('keeps unidentified net postings aligned with the refundable net at rounding 
     ])
   );
 });
+
+it('posts the exact final unidentified refund when the intermediate product exceeds safe integers', async () => {
+  const db = {
+    pharmacyUnidentifiedReturnHold: {
+      findFirst: vi.fn().mockResolvedValue({
+        id: 'hold',
+        branchId: 'branch',
+        quarantineLocationId: 'quarantine',
+        canonicalUnits: 1,
+        saleLine: {
+          id: 'line',
+          medicineId: 'medicine',
+          grossMinor: 2_147_483_647,
+          discountMinor: 0,
+          canonicalUnits: 2_147_483_646,
+          returnLines: [],
+          unidentifiedReturnHolds: [{ canonicalUnits: 2_147_483_645 }, { canonicalUnits: 1 }],
+        },
+      }),
+    },
+    financeJournalEntry: { findFirst: vi.fn().mockResolvedValue(null) },
+  };
+  await postUnidentifiedSaleReturnEntry(
+    db as unknown as ScopedDb,
+    { organizationId: 'org', branchId: 'branch', actorId: 'actor' },
+    { holdingId: 'hold', at: new Date('2026-10-21') }
+  );
+  const posted = vi.mocked(postJournalEntry).mock.calls.at(-1)![2];
+  expect(posted.lines).toEqual([
+    expect.objectContaining({ accountCode: 'SALES_REVENUE', side: 'DEBIT', amountMinor: 2 }),
+    expect.objectContaining({ accountCode: 'SALES_CLEARING', side: 'CREDIT', amountMinor: 2 }),
+  ]);
+});

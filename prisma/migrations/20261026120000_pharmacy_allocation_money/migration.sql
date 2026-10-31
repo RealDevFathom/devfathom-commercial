@@ -11,22 +11,33 @@ ALTER TABLE "pharmacy_sale_line_allocations"
 ADD COLUMN "grossMinor" INTEGER NOT NULL DEFAULT 0,
 ADD COLUMN "discountMinor" INTEGER NOT NULL DEFAULT 0;
 
--- Historical lines only exposed a unit-weighted value. Preserve that contract
+-- Historical lines only exposed a unit-weighted gross. Preserve that contract
 -- while assigning every rounding remainder to the final deterministic row.
-WITH shares AS (
-  SELECT a.id,
+WITH gross_shares AS (
+  SELECT a.id, a."organizationId", a."saleLineId",
+    l."grossMinor" AS line_gross, l."discountMinor" AS line_discount,
     CASE WHEN row_number() OVER (PARTITION BY a."saleLineId" ORDER BY a.id DESC) = 1
       THEN l."grossMinor" - SUM(FLOOR(l."grossMinor"::numeric * a."canonicalUnits" / l."canonicalUnits"))
         OVER (PARTITION BY a."saleLineId")
         + FLOOR(l."grossMinor"::numeric * a."canonicalUnits" / l."canonicalUnits")
-      ELSE FLOOR(l."grossMinor"::numeric * a."canonicalUnits" / l."canonicalUnits") END::integer AS gross,
-    CASE WHEN row_number() OVER (PARTITION BY a."saleLineId" ORDER BY a.id DESC) = 1
-      THEN l."discountMinor" - SUM(FLOOR(l."discountMinor"::numeric * a."canonicalUnits" / l."canonicalUnits"))
-        OVER (PARTITION BY a."saleLineId")
-        + FLOOR(l."discountMinor"::numeric * a."canonicalUnits" / l."canonicalUnits")
-      ELSE FLOOR(l."discountMinor"::numeric * a."canonicalUnits" / l."canonicalUnits") END::integer AS discount
+      ELSE FLOOR(l."grossMinor"::numeric * a."canonicalUnits" / l."canonicalUnits") END::integer AS gross
   FROM "pharmacy_sale_line_allocations" a
   JOIN "pharmacy_sale_lines" l ON l.id = a."saleLineId" AND l."organizationId" = a."organizationId"
+), cumulative_gross AS (
+  SELECT *, SUM(gross) OVER (
+    PARTITION BY "organizationId", "saleLineId" ORDER BY id
+    ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+  ) AS through_gross
+  FROM gross_shares
+), shares AS (
+  -- Discount follows the rounded gross shares, just as for new sales. Rounding
+  -- it independently by units can put more discount than gross on the last row.
+  SELECT id, gross,
+    CASE WHEN line_gross = 0 THEN 0 ELSE
+      FLOOR(line_discount::numeric * through_gross / line_gross)
+      - FLOOR(line_discount::numeric * (through_gross - gross) / line_gross)
+    END::integer AS discount
+  FROM cumulative_gross
 )
 UPDATE "pharmacy_sale_line_allocations" a
 SET "grossMinor" = shares.gross, "discountMinor" = shares.discount

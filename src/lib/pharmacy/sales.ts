@@ -3,6 +3,7 @@ import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { priceFromLot } from './medicine';
+import { proportionalMinor } from './money';
 import {
   canonicalUnitsForPackLevel,
   saleUnitOptions,
@@ -577,9 +578,10 @@ export function returnedLineValue(
   },
   units: number
 ) {
-  return Math.floor(
-    (((line.grossMinor ?? line.quantity * line.unitPriceMinor) - line.discountMinor) * units) /
-      line.canonicalUnits
+  return proportionalMinor(
+    (line.grossMinor ?? line.quantity * line.unitPriceMinor) - line.discountMinor,
+    units,
+    line.canonicalUnits
   );
 }
 
@@ -612,7 +614,7 @@ export function returnedSaleLineValue(line: {
     (line.grossMinor ?? line.quantity * line.unitPriceMinor) - line.discountMinor - identifiedValue;
   return (
     identifiedValue +
-    (remainingUnits ? Math.floor((remainingValue * unidentifiedUnits) / remainingUnits) : 0)
+    (remainingUnits ? proportionalMinor(remainingValue, unidentifiedUnits, remainingUnits) : 0)
   );
 }
 
@@ -986,8 +988,8 @@ export async function returnSaleLine(
     // Round net cumulatively so a partial refund cannot become negative when
     // gross and discount cross different minor-unit boundaries.
     const delta = (amount: number) =>
-      Math.floor((amount * (used + units)) / allocation.canonicalUnits) -
-      Math.floor((amount * used) / allocation.canonicalUnits);
+      proportionalMinor(amount, used + units, allocation.canonicalUnits) -
+      proportionalMinor(amount, used, allocation.canonicalUnits);
     const discountMinor = delta(allocation.discountMinor);
     const returnedLine = await db.pharmacySaleReturnLine.create({
       data: {

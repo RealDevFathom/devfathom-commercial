@@ -181,6 +181,43 @@ describe('counter return boundaries', () => {
     const line = { quantity: 1, unitPriceMinor: 100, discountMinor: 2, canonicalUnits: 3 };
     expect([1, 2, 3].map((n) => returnedLineValue(line, n))).toEqual([32, 65, 98]);
   });
+  it('floors refund values exactly when the intermediate product exceeds safe integers', () => {
+    const line = {
+      quantity: 1,
+      unitPriceMinor: 2_147_483_647,
+      grossMinor: 2_147_483_647,
+      discountMinor: 0,
+      canonicalUnits: 2_147_483_646,
+    };
+    expect(returnedLineValue(line, 2_147_483_645)).toBe(2_147_483_645);
+    expect(
+      returnedSaleLineValue({
+        ...line,
+        returnLines: [],
+        unidentifiedReturnHolds: [{ canonicalUnits: 2_147_483_645 }],
+      })
+    ).toBe(2_147_483_645);
+  });
+  it('assigns the exact final remainder to an identified return with a large product', async () => {
+    const { db, line } = fixture();
+    line.canonicalUnits = 2_147_483_646;
+    line.allocations = [
+      {
+        id: 'a2',
+        inventoryLotId: 'lot2',
+        stockLocationId: 'shelf2',
+        canonicalUnits: 2_147_483_646,
+        grossMinor: 2_147_483_647,
+        discountMinor: 0,
+      },
+    ];
+    line.returnLines = [{ inventoryLotId: 'lot2', canonicalUnits: 2_147_483_645 }];
+    await returnSaleLine(db as never, scope, { ...input, canonicalUnits: 1 });
+    expect(db.pharmacySaleReturnLine.create.mock.calls[0]![0].data).toMatchObject({
+      grossMinor: 2,
+      discountMinor: 0,
+    });
+  });
   it('adds exact identified value to the reserved share for unidentified holds', () => {
     expect(
       returnedSaleLineValue({

@@ -39,6 +39,7 @@ import {
   type JournalLineInput,
 } from '@/lib/finance/journal';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { proportionalMinor } from './money';
 
 export { FinancePostingError } from '@/lib/finance/journal';
 
@@ -371,8 +372,8 @@ export async function postUnidentifiedSaleReturnEntry(
   const remainingUnits = saleLine.canonicalUnits - identifiedUnits;
   if (before < 0 || through > remainingUnits) throw new PharmacyFinanceError('INVALID_STATE');
   const delta = (amount: number) =>
-    Math.floor((amount * through) / remainingUnits) -
-    Math.floor((amount * before) / remainingUnits);
+    proportionalMinor(amount, through, remainingUnits) -
+    proportionalMinor(amount, before, remainingUnits);
   const discount = delta(saleLine.discountMinor - identifiedDiscount);
   const gross =
     delta(saleLine.grossMinor - identifiedGross - saleLine.discountMinor + identifiedDiscount) +

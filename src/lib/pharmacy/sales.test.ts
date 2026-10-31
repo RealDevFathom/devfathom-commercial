@@ -589,7 +589,15 @@ describe('POS-06 linked returns', () => {
           canonicalUnits: 10,
           sale: { status: 'COMPLETED' },
           medicine: { controlled: false },
-          allocations: [{ id: 'allocation-a', inventoryLotId: 'lot-a', canonicalUnits: 10 }],
+          allocations: [
+            {
+              id: 'allocation-a',
+              inventoryLotId: 'lot-a',
+              canonicalUnits: 10,
+              grossMinor: 100,
+              discountMinor: 0,
+            },
+          ],
           unidentifiedReturnHolds: [],
           returnLines: [],
         }),
