@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { router, protectedProcedure } from '../trpc';
 import { TRPCError } from '@trpc/server';
+import type { Prisma, PrismaClient } from '@/generated/prisma/client';
 import { logActivity } from '../activity';
 import { emitEvent } from '@/lib/webhooks';
 import { appUrl, templates } from '@/lib/email';
@@ -50,9 +51,9 @@ type ProjectMemberRole = 'LEAD' | 'MEMBER';
  * while a competing demotion or removal commits.
  */
 async function withProjectMembershipLock<T>(
-  db: Parameters<typeof logActivity>[0],
+  db: PrismaClient,
   projectId: string,
-  run: (tx: Parameters<typeof logActivity>[0]) => Promise<T>
+  run: (tx: Prisma.TransactionClient) => Promise<T>
 ): Promise<T> {
   return db.$transaction(async (tx) => {
     await tx.$executeRawUnsafe('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', projectId);
@@ -62,7 +63,7 @@ async function withProjectMembershipLock<T>(
 
 // Called only while holding the project membership lock.
 async function changeProjectMemberRole(
-  tx: Parameters<typeof logActivity>[0],
+  tx: Prisma.TransactionClient,
   input: { projectId: string; userId: string; role: ProjectMemberRole },
   createIfMissing: boolean
 ) {
