@@ -39,7 +39,7 @@ describe('recipe measurement domain migration', () => {
   });
 });
 
-const databaseUrl = process.env.DATABASE_URL;
+const databaseUrl = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
 (databaseUrl ? describe : describe.skip)('recipe measurement migration on PostgreSQL', () => {
   it('fails fast with record context when legacy invalid rows exist', async () => {
     const client = new Client({ connectionString: databaseUrl });
@@ -89,6 +89,55 @@ const databaseUrl = process.env.DATABASE_URL;
       ).rejects.toMatchObject({
         code: '23514',
       });
+    } finally {
+      await client.query('ROLLBACK');
+      await client.end();
+    }
+  });
+
+  it('rejects nonpositive measurements, negative costs, and infinities after installation', async () => {
+    const client = new Client({ connectionString: databaseUrl });
+    await client.connect();
+    try {
+      await client.query('BEGIN');
+      await createTemporaryTables(client);
+      await client.query(migration);
+      for (const [table, column, allowsZero] of [
+        ['restaurant_unit_conversions', 'factor', false],
+        ['restaurant_recipe_versions', 'yieldQuantity', false],
+        ['restaurant_recipe_lines', 'quantity', false],
+        ['restaurant_ingredients', 'referenceCost', true],
+      ] as const) {
+        const invalidValues = ['-1', 'Infinity', '-Infinity', ...(allowsZero ? [] : ['0'])];
+        for (const value of invalidValues) {
+          await client.query('SAVEPOINT invalid_measurement');
+          await expect(
+            client.query(`INSERT INTO "${table}" ("${column}") VALUES ($1)`, [value])
+          ).rejects.toMatchObject({ code: '23514' });
+          await client.query('ROLLBACK TO SAVEPOINT invalid_measurement');
+        }
+      }
+    } finally {
+      await client.query('ROLLBACK');
+      await client.end();
+    }
+  });
+
+  it('accepts positive measurements, zero reference costs, and optional nulls', async () => {
+    const client = new Client({ connectionString: databaseUrl });
+    await client.connect();
+    try {
+      await client.query('BEGIN');
+      await createTemporaryTables(client);
+      await client.query(migration);
+      await client.query(`
+        INSERT INTO "restaurant_unit_conversions" ("factor") VALUES (0.000001);
+        INSERT INTO "restaurant_recipe_versions" ("yieldQuantity") VALUES (0.001), (NULL);
+        INSERT INTO "restaurant_recipe_lines" ("quantity") VALUES (0.0001);
+        INSERT INTO "restaurant_ingredients" ("referenceCost") VALUES (0), (0.0001), (NULL);
+      `);
+      const result = await client.query('SELECT COUNT(*)::int AS count FROM "restaurant_ingredients"');
+      expect(result.rows[0].count).toBe(3);
     } finally {
       await client.query('ROLLBACK');
       await client.end();

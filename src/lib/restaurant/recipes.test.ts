@@ -230,6 +230,7 @@ describe('createIngredient', () => {
   it.each(['0.00001', '100000000'])(
     'rejects a reference cost outside Decimal(12,4): %s',
     async (referenceCost) => {
+      db.restaurantUnit.findUnique.mockResolvedValue({ id: 'u1' });
       await expect(
         createIngredient(scoped(), { name: 'Flour', baseUnitId: 'u1', referenceCost })
       ).rejects.toMatchObject({ reason: 'INVALID' });
