@@ -635,6 +635,7 @@ describe('PH-A3 prescription OCR prefill', () => {
     vi.unstubAllEnvs();
     mocks.objects.clear();
     mocks.can.mockResolvedValue(true);
+    mocks.canAny.mockResolvedValue(true);
     mocks.hasModule.mockReturnValue(true);
     mocks.patient.mockResolvedValue({ id: 'patient-a' });
     mocks.find.mockResolvedValue(null);
@@ -694,11 +695,11 @@ describe('PH-A3 prescription OCR prefill', () => {
     await expect(
       caller(context('user-a', 'org-b')).extractSource({ sourceFileRef: receipt.url })
     ).rejects.toMatchObject({ code: 'NOT_FOUND' });
-    mocks.can.mockResolvedValue(false);
+    mocks.canAny.mockResolvedValue(false);
     await expect(caller().extractSource({ sourceFileRef: receipt.url })).rejects.toMatchObject({
       code: 'FORBIDDEN',
     });
-    mocks.can.mockResolvedValue(true);
+    mocks.canAny.mockResolvedValue(true);
     await expect(
       caller().extractSource({ sourceFileRef: 'https://foreign.test/rx.png' })
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
@@ -708,6 +709,7 @@ describe('PH-A3 prescription OCR prefill', () => {
   it("does not OCR another uploader's retained prescription for a capture-only user", async () => {
     vi.stubEnv('PHARMACY_RX_OCR_ADAPTER', 'FIXTURE');
     const receipt = await upload();
+    mocks.can.mockResolvedValue(false);
     mocks.find.mockResolvedValue({ id: 'captured-prescription' });
 
     await expect(
