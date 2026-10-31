@@ -182,11 +182,8 @@ const InvoiceRow = memo(function InvoiceRow({
   const openMenu = useCallback(() => {
     const rect = btnRef.current?.getBoundingClientRect();
     if (!rect) return;
-    const MENU_HEIGHT = 160; // ~5 status rows
-    const below = rect.bottom + 4;
-    const openUp = below + MENU_HEIGHT > window.innerHeight;
     setMenuPos({
-      top: openUp ? rect.top - MENU_HEIGHT - 4 : below,
+      top: rect.bottom + 4,
       left: rect.left + rect.width / 2,
     });
     setMenuOpen(true);
@@ -239,6 +236,14 @@ const InvoiceRow = memo(function InvoiceRow({
             <>
               <div className="fixed inset-0 z-[60]" onClick={() => setMenuOpen(false)} />
               <div
+                ref={(menu) => {
+                  const rect = btnRef.current?.getBoundingClientRect();
+                  if (!menu || !rect) return;
+                  // Measure the rendered choices before paint; each status has a different height.
+                  const height = menu.getBoundingClientRect().height;
+                  const below = rect.bottom + 4;
+                  menu.style.top = `${below + height > window.innerHeight ? rect.top - height - 4 : below}px`;
+                }}
                 className="fixed z-[61] w-32 -translate-x-1/2 rounded-xl border border-border bg-card py-1 shadow-xl shadow-black/10"
                 style={{ top: menuPos.top, left: menuPos.left }}
               >
