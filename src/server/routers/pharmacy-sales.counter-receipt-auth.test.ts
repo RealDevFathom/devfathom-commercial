@@ -88,11 +88,11 @@ function fixture(
   overrides: Permission[] = []
 ) {
   const db = {
-    $queryRaw: vi.fn(async () => []),
     user: {
       findUnique: vi.fn(async (args?: unknown) => {
         void args;
         return {
+          role,
           status: 'ACTIVE',
           organizationId: 'org-a',
           organizationRole: { permissions },
@@ -361,6 +361,29 @@ describe('counter receipt authorization', () => {
   it.each([
     ['refundTender', (caller: Caller) => caller.refundTender(refundInput)],
     ['returnLine', (caller: Caller) => caller.returnLine(returnInput)],
+  ])('%s revalidates administrator status inside the mutation transaction', async (_name, run) => {
+    const f = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }], 'ADMIN');
+    const member = await f.db.user.findUnique();
+    f.db.user.findUnique.mockClear();
+    f.db.$transaction.mockImplementationOnce(
+      async (fn: (inner: typeof f.db) => Promise<unknown>) => {
+        f.db.user.findUnique.mockResolvedValue({ ...member, role: 'EMPLOYEE' });
+        return fn(f.db);
+      }
+    );
+
+    await expect(run(f.caller())).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Branch is outside your scope.',
+    });
+    expect(f.db.$transaction).toHaveBeenCalledOnce();
+    expect(refundPharmacyTender).not.toHaveBeenCalled();
+    expect(returnSaleLine).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['refundTender', (caller: Caller) => caller.refundTender(refundInput)],
+    ['returnLine', (caller: Caller) => caller.returnLine(returnInput)],
   ])('%s revalidates branch assignment inside the mutation transaction', async (_name, run) => {
     const f = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }]);
     f.db.pharmacyBranchAssignment.findMany
@@ -387,6 +410,7 @@ describe('counter receipt authorization', () => {
       assign(f, ['branch-a']);
       f.db.user.findUnique
         .mockResolvedValueOnce({
+          role: 'EMPLOYEE',
           status: 'ACTIVE',
           organizationId: 'org-a',
           organizationRole: {
@@ -395,6 +419,7 @@ describe('counter receipt authorization', () => {
           permissionOverrides: [],
         })
         .mockResolvedValueOnce({
+          role: 'EMPLOYEE',
           status: 'ACTIVE',
           organizationId: 'org-a',
           organizationRole: {
@@ -403,6 +428,7 @@ describe('counter receipt authorization', () => {
           permissionOverrides: [],
         })
         .mockResolvedValueOnce({
+          role: 'EMPLOYEE',
           status: 'ACTIVE',
           organizationId: 'org-a',
           organizationRole: { permissions: [] },
@@ -724,6 +750,7 @@ describe('counter receipt authorization', () => {
   it('denies an inactive database user and an inactive assignment', async () => {
     const inactive = fixture(dispense);
     inactive.db.user.findUnique.mockResolvedValue({
+      role: 'EMPLOYEE',
       status: 'INACTIVE',
       organizationId: 'org-a',
       organizationRole: { permissions: dispense },

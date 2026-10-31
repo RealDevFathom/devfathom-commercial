@@ -44,6 +44,20 @@ function fixture() {
   const db = {
     $queryRaw: vi.fn().mockResolvedValue([]),
     $transaction: vi.fn(),
+    user: {
+      findUnique: vi.fn().mockResolvedValue({
+        role: 'ADMIN',
+        status: 'ACTIVE',
+        organizationId: 'org-a',
+        organizationRole: {
+          permissions: [{ capability: 'pharmacy:counter', effect: 'ALLOW' }],
+        },
+        permissionOverrides: [],
+      }),
+    },
+    pharmacyBranchAssignment: {
+      findMany: vi.fn().mockResolvedValue([{ branchId: 'branch-a' }]),
+    },
     pharmacyBranch: {
       findFirst: vi.fn().mockResolvedValue({ id: 'branch-a' }),
       findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>

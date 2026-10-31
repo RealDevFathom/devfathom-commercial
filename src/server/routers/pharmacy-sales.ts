@@ -386,6 +386,7 @@ async function requireCounterReceiptAccess(
   const member = await db.user.findUnique({
     where: { organizationId_id: { id: user.id, organizationId: scope.organizationId } },
     select: {
+      role: true,
       status: true,
       organizationId: true,
       organizationRole: {
@@ -440,10 +441,14 @@ async function requireCounterReceiptAccess(
   const assigned = new Set(rows.map((row) => row.branchId));
   if (assigned.has(branch)) return scope;
 
-  // Session role only. An organization-role key is not an administrator grant.
+  // Require both session and current member authority: the locked re-read must
+  // observe an administrator demotion. A custom role key is not an admin grant.
   // The tenant owner/admin retains all-capability access, including for stock and
   // money mutations, when a solo-owner workspace has no branch assignments.
-  const orgAdmin = user.role === 'ADMIN' && user.organizationId === scope.organizationId;
+  const orgAdmin =
+    user.role === 'ADMIN' &&
+    member.role === 'ADMIN' &&
+    user.organizationId === scope.organizationId;
   if (orgAdmin) {
     annotateAudit(ctx, {
       targetType: 'PharmacyBranch',
