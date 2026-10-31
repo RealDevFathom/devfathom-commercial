@@ -326,7 +326,7 @@ jobs:
           done
       - name: Upload automated-gate evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: automated-gate
           path: gate/
@@ -607,7 +607,7 @@ jobs:
           cp gate/browser/exit-codes.txt gate/browser/21-run-all-lanes.txt
       - name: Upload browser evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: browser-gate
           path: |
