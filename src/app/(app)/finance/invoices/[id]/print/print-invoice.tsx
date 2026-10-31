@@ -103,9 +103,15 @@ export function InvoicePrintView({ invoiceId }: { invoiceId: string }) {
           <div className="flex items-start justify-between gap-6 border-b border-slate-200 pb-6">
             <div>
               <p className="font-display text-2xl font-bold tracking-tight text-[#0C2E2C]">
-                DevFathom
+                {invoice.issuer.displayName}
               </p>
-              <p className="mt-1 text-xs text-slate-500">hub.devfathom.com</p>
+              {invoice.issuer.legalName &&
+                invoice.issuer.legalName !== invoice.issuer.displayName && (
+                  <p className="mt-1 text-xs text-slate-500">{invoice.issuer.legalName}</p>
+                )}
+              {invoice.issuer.primaryContactEmail && (
+                <p className="text-xs text-slate-500">{invoice.issuer.primaryContactEmail}</p>
+              )}
             </div>
             <div className="text-right">
               <p className="font-display text-xl font-bold tracking-tight text-slate-900">

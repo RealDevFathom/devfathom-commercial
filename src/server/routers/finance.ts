@@ -278,8 +278,9 @@ export const financeRouter = router({
   getInvoiceById: adminProcedure
     .input(z.object({ id: z.string() }))
     .query(async ({ ctx, input }) => {
-      const invoice = await ctx.db.invoice.findUnique({
-        where: { id: input.id },
+      const orgId = workspaceId(ctx);
+      const invoice = await ctx.db.invoice.findFirst({
+        where: { organizationId: orgId, id: input.id },
         include: {
           client: { include: { contacts: { where: { isPrimary: true }, take: 1 } } },
           project: { select: { id: true, name: true } },
@@ -288,8 +289,17 @@ export const financeRouter = router({
         },
       });
       if (!invoice) return null;
+      const issuer = await ctx.db.organization.findUniqueOrThrow({
+        where: { id: orgId },
+        select: { displayName: true, legalName: true, primaryContactEmail: true },
+      });
       const amountPaid = round2(invoice.payments.reduce((s, p) => s + Number(p.amount), 0));
-      return { ...invoice, amountPaid, balance: round2(Number(invoice.total) - amountPaid) };
+      return {
+        ...invoice,
+        issuer,
+        amountPaid,
+        balance: round2(Number(invoice.total) - amountPaid),
+      };
     }),
 
   createInvoice: adminProcedure.input(createInvoiceInputSchema).mutation(async ({ ctx, input }) => {
