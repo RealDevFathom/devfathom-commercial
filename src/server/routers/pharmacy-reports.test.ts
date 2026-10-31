@@ -110,6 +110,10 @@ describe('delivery-radius profitability capability boundary', () => {
     radiiKm: [1, 5],
   };
 
+  beforeEach(() => {
+    vi.mocked(hasModule).mockReturnValue(true);
+  });
+
   it('denies callers without reports:financial', async () => {
     mocks.can.mockResolvedValue(false);
     await expect(caller('EMPLOYEE').deliveryRadiusProfitability(input)).rejects.toMatchObject({
@@ -129,6 +133,25 @@ describe('delivery-radius profitability capability boundary', () => {
       basis: 'CONFIGURED_ESTIMATE',
       rows: [expect.objectContaining({ radiusKm: 1 }), expect.objectContaining({ radiusKm: 5 })],
     });
+  });
+
+  it('denies the disabled Reports module even with financial capability', async () => {
+    mocks.can.mockResolvedValue(true);
+    vi.mocked(hasModule).mockReturnValue(false);
+    await expect(caller().deliveryRadiusProfitability(input)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+  });
+
+  it('rejects overflowing configured estimates as invalid input', async () => {
+    mocks.can.mockResolvedValue(true);
+    await expect(
+      caller().deliveryRadiusProfitability({
+        ...input,
+        baseDeliveryCostMinor: Number.MAX_SAFE_INTEGER,
+        deliveryCostPerKmMinor: Number.MAX_SAFE_INTEGER,
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
   });
 });
 

@@ -308,8 +308,9 @@ const sameNameOrQualifiedName = (left: string, right: string) => {
   );
 };
 
-const sameStrength = (left: string, right: string) =>
-  token(left).replaceAll(' ', '') === token(right).replaceAll(' ', '');
+// Decimal points, signs and unit separators carry meaning; only ignore spacing and case.
+const strengthToken = (value: string) => value.normalize('NFKC').toLowerCase().replace(/\s+/g, '');
+const sameStrength = (left: string, right: string) => strengthToken(left) === strengthToken(right);
 
 /** Map read drug names onto catalogue medicines as candidates, never a choice. */
 export function proposeRxPrefill(
@@ -340,33 +341,37 @@ export function proposeRxPrefill(
     const readSalt = line.drugName.value;
     const readStrength = line.strength.value;
     const normalizedSalt = token(readSalt ?? '');
-    const normalizedStrength = token(readStrength ?? '');
+    const normalizedStrength = strengthToken(readStrength ?? '');
     const candidates =
       !normalizedSalt || !normalizedStrength
         ? []
         : medicines
-            .flatMap((medicine) =>
-              (medicine.strengths ?? [])
-                .filter((strength) => {
-                  const catalogueStrength = token(`${strength.value} ${strength.unit}`);
-                  const medicineNames = [
-                    medicine.productName,
-                    medicine.brandName ?? '',
-                    ...(medicine.strengths ?? []).map((item) => item.ingredient),
-                  ];
-                  return (
-                    medicineNames.some((name) => sameNameOrQualifiedName(name, readSalt ?? '')) &&
-                    sameStrength(catalogueStrength, normalizedStrength)
-                  );
-                })
+            .flatMap((medicine) => {
+              const strengths = medicine.strengths ?? [];
+              const matchingIngredients = strengths.filter((strength) =>
+                sameNameOrQualifiedName(strength.ingredient, readSalt ?? '')
+              );
+              // A named ingredient must use its own strength, even when the product
+              // name also includes it. Brand names may refer to any component.
+              const namedStrengths = matchingIngredients.length
+                ? matchingIngredients
+                : [medicine.productName, medicine.brandName ?? ''].some((name) =>
+                      sameNameOrQualifiedName(name, readSalt ?? '')
+                    )
+                  ? strengths
+                  : [];
+              return namedStrengths
+                .filter((strength) =>
+                  sameStrength(`${strength.value} ${strength.unit}`, normalizedStrength)
+                )
                 .map((strength) => ({
                   medicineId: medicine.id,
                   label: medicine.productName,
                   matchedSalt: strength.ingredient,
                   matchedStrength: `${strength.value} ${strength.unit}`,
                   match: 'SALT_AND_STRENGTH' as const,
-                }))
-            )
+                }));
+            })
             .slice(0, 5);
     return { lineNumber: index + 1, readSalt, readStrength, candidates };
   });

@@ -175,12 +175,24 @@ async function requireOwnerBranch(ctx: TRPCContext, branchId: string) {
 export const pharmacyReportsRouter = router({
   deliveryRadiusProfitability: financialReports
     .input(deliveryProfitabilityInput)
-    .query(({ input }) => ({
-      basis: 'CONFIGURED_ESTIMATE' as const,
-      disclaimer:
-        'Planning estimate from configured inputs; excludes taxes, returns, failed delivery, and overhead.',
-      rows: deliveryRadiusProfitabilityReport(input),
-    })),
+    .query(({ ctx, input }) => {
+      if (!hasModule(ctx.entitlements, 'pharmacy-reports'))
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Pharmacy reports are not licensed.' });
+      try {
+        return {
+          basis: 'CONFIGURED_ESTIMATE' as const,
+          disclaimer:
+            'Planning estimate from configured inputs; excludes taxes, returns, failed delivery, and overhead.',
+          rows: deliveryRadiusProfitabilityReport(input),
+        };
+      } catch (error) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'The configured delivery estimate exceeds supported monetary limits.',
+          cause: error,
+        });
+      }
+    }),
   marketing: reports
     .input(filters.pick({ branchId: true, from: true, to: true }))
     .query(async ({ ctx, input }) => {
