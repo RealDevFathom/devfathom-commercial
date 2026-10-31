@@ -12,7 +12,11 @@ const D = (value: string) => new Prisma.Decimal(value);
 
 function dbFor(
   channel: 'DINE_IN' | 'TAKEAWAY',
-  options: { serviceChargeRate?: string; billedServiceCharges?: string[] } = {}
+  options: {
+    serviceChargeRate?: string;
+    billedServiceCharges?: string[];
+    quantities?: number[];
+  } = {}
 ) {
   const tax = {
     findMany: vi.fn(async () => [
@@ -85,33 +89,31 @@ function dbFor(
         openedAt: at,
         closedAt: null,
         cancelledAt: null,
-        items: [
-          {
-            id: 'coffee',
-            course: 1,
-            seatNumber: null,
-            productId: 'product-1',
-            variantId: null,
-            name: 'Coffee',
-            unitPrice: D('4.00'),
-            quantity: 1,
-            taxAmount: D('99.00'),
-            serviceChargeAmount: D('99.00'),
-            status: 'SENT',
-            remakeOfItemId: null,
-            voidedPostPrep: false,
-            wastageDisposition: null,
-            voidReason: null,
-            modifiers: [
-              {
-                id: 'mod-1',
-                modifierOptionId: 'oat',
-                name: 'Oat',
-                priceDelta: D('0.50'),
-              },
-            ],
-          },
-        ],
+        items: (options.quantities ?? [1]).map((quantity, index) => ({
+          id: `coffee-${index}`,
+          course: 1,
+          seatNumber: null,
+          productId: 'product-1',
+          variantId: null,
+          name: 'Coffee',
+          unitPrice: D('4.00'),
+          quantity,
+          taxAmount: D('99.00'),
+          serviceChargeAmount: D('99.00'),
+          status: 'SENT',
+          remakeOfItemId: null,
+          voidedPostPrep: false,
+          wastageDisposition: null,
+          voidReason: null,
+          modifiers: [
+            {
+              id: 'mod-1',
+              modifierOptionId: 'oat',
+              name: 'Oat',
+              priceDelta: D('0.50'),
+            },
+          ],
+        })),
         orderTables: [],
         kitchenTickets: [],
         bills: (options.billedServiceCharges ?? []).map((serviceChargeTotal) => ({
@@ -130,6 +132,28 @@ function dbFor(
 }
 
 describe('order totals ignore stored tax and service', () => {
+  it.each([
+    { quantities: [101], subtotal: '454.5', tax: '23.23', serviceCharge: '45.45' },
+    {
+      quantities: [...Array.from({ length: 100 }, () => 100), 1],
+      subtotal: '45004.5',
+      tax: '2300.23',
+      serviceCharge: '4500.45',
+    },
+  ])(
+    'reads persisted orders with $quantities.length lines above former quote limits',
+    async ({ quantities, subtotal, tax, serviceCharge }) => {
+      const detail = await getOrderForBranch(
+        dbFor('DINE_IN', { quantities }) as unknown as ScopedDb,
+        'order-1',
+        'branch-1'
+      );
+
+      expect(detail?.items.map((item) => item.quantity)).toEqual(quantities);
+      expect(detail?.totals).toMatchObject({ subtotal, tax, serviceCharge });
+    }
+  );
+
   it('quotes published dine-in tax and service, so a merchandise-only tender does not settle', async () => {
     const db = dbFor('DINE_IN');
     const detail = await getOrderForBranch(db as unknown as ScopedDb, 'order-1', 'branch-1');

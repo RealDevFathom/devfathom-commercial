@@ -1,12 +1,5 @@
 import { add, formatMoney, multiply, roundMoney, sum } from '@/lib/restaurant/money-arithmetic';
-import {
-  isValidOrderItemQuantity,
-  MAX_ORDER_ITEM_QUANTITY,
-} from '@/lib/restaurant/order-quantity';
 import { quoteTaxSettlement, type TaxProfile, type TaxRule } from '@/lib/restaurant/tax-calculator';
-
-/** Upper bound for the eager per-unit representation used by draft tax quotes. */
-export const MAX_DRAFT_CHECK_UNITS = 10_000;
 
 export type DraftCheckLine = {
   id: string;
@@ -46,32 +39,25 @@ export type DraftCheckBreakdown = {
 export function quoteDraftCheckBreakdown(input: DraftCheckTotalInput): DraftCheckBreakdown {
   const at = input.at ?? new Date();
   const fallback = input.profiles ? null : zeroTax(at);
-  let unitCount = 0;
   for (const line of input.lines) {
-    if (!isValidOrderItemQuantity(line.quantity)) {
-      throw new RangeError(
-        `Draft check line quantity must be an integer between 1 and ${MAX_ORDER_ITEM_QUANTITY}.`
-      );
-    }
-    unitCount += line.quantity;
-    if (unitCount > MAX_DRAFT_CHECK_UNITS) {
-      throw new RangeError(`Draft check cannot exceed ${MAX_DRAFT_CHECK_UNITS} physical units.`);
+    // Persisted lines can predate the current command quantity limit.
+    if (!Number.isSafeInteger(line.quantity) || line.quantity < 1) {
+      throw new RangeError('Draft check line quantity must be a positive safe integer.');
     }
   }
-  // Settlement taxes each physical unit independently. Expand draft lines the
-  // same way so per-line tax rounding cannot make a preview disagree with the
-  // amount required at tender time.
-  const lines = input.lines.flatMap((line) => {
-    const modifierTotal = formatMoney(sum(line.modifierDeltas ?? []));
-    return Array.from({ length: line.quantity }, (_, unitOrdinal) => ({
-      id: `${line.id}:${unitOrdinal}`,
-      unitPrice: line.unitPrice,
-      quantity: 1,
-      modifierTotal,
-    }));
-  });
+  // A draft uses a single CASH category, so every unit of a line has the same
+  // rounded tax. Quote one unit and multiply its result instead of allocating
+  // an object for every physical unit in a potentially large persisted order.
+  const lines = input.lines.map((line) => ({
+    id: line.id,
+    unitPrice: line.unitPrice,
+    quantity: 1,
+    modifierTotal: formatMoney(sum(line.modifierDeltas ?? [])),
+  }));
   const basis = sum(
-    lines.map((line) => multiply(add(line.unitPrice, line.modifierTotal), line.quantity))
+    lines.map((line, index) =>
+      multiply(add(line.unitPrice, line.modifierTotal), input.lines[index].quantity)
+    )
   );
   const serviceAmount =
     input.serviceChargeRate != null
@@ -86,9 +72,17 @@ export function quoteDraftCheckBreakdown(input: DraftCheckTotalInput): DraftChec
     serviceCharge: { amount: serviceAmount, taxable: false },
   });
   return {
-    tax: formatMoney(quote.tax.toString()),
+    tax: formatMoney(
+      sum(quote.lines.map((line, index) => multiply(line.tax, input.lines[index].quantity)))
+    ),
     serviceCharge: formatMoney(quote.serviceChargePayable.toString()),
-    total: formatMoney(add(quote.grandTotal.toString(), input.deliveryFee ?? '0.00')),
+    total: formatMoney(
+      sum([
+        ...quote.lines.map((line, index) => multiply(line.gross, input.lines[index].quantity)),
+        quote.serviceChargePayable,
+        input.deliveryFee ?? '0.00',
+      ])
+    ),
   };
 }
 
