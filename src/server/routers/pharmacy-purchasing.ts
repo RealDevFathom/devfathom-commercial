@@ -996,7 +996,11 @@ const purchasingRouter = router({
         }
         const purchaseOrder = input.purchaseOrderId
           ? await ctx.db.pharmacyPurchaseOrder.findFirst({
-              where: { id: input.purchaseOrderId, supplierId: input.supplierId, branchId: input.branchId },
+              where: {
+                id: input.purchaseOrderId,
+                supplierId: input.supplierId,
+                branchId: input.branchId,
+              },
               include: { lines: { orderBy: { lineNumber: 'asc' } } },
             })
           : null;
@@ -1123,7 +1127,7 @@ const purchasingRouter = router({
               rebateBps: orderLine?.rebateBps ?? 0,
               taxBps: line.taxBps,
               taxCreditable: line.taxCreditable,
-              // Replaced with the cumulative residual inside the serializable
+              // Replaced with the cumulative residual inside the locked
               // write transaction below, after prior receipts are known.
               allocatedChargeMinor: 0,
             }),
@@ -1136,86 +1140,95 @@ const purchasingRouter = router({
           });
         }
 
-        return await ctx.db.$transaction(
-          async (tx) => {
-            const orderLineIds = [
-              ...new Set(
-                lines.flatMap((line) =>
-                  line.purchaseOrderLineId ? [line.purchaseOrderLineId] : []
-                )
-              ),
-            ];
-            const priorLines = orderLineIds.length
-              ? await tx.pharmacyGoodsReceiptLine.findMany({
-                  where: { purchaseOrderLineId: { in: orderLineIds } },
-                  select: { purchaseOrderLineId: true, receivedPacks: true },
-                })
-              : [];
-            const cumulativePacks = new Map<string, number>();
-            for (const prior of priorLines) {
-              if (!prior.purchaseOrderLineId) continue;
-              const total =
-                (cumulativePacks.get(prior.purchaseOrderLineId) ?? 0) + prior.receivedPacks;
-              if (!Number.isSafeInteger(total))
-                throw new PharmacyReceivingError('INVALID_QUANTITY');
-              cumulativePacks.set(prior.purchaseOrderLineId, total);
-            }
-            for (const line of lines) {
-              if (!line.purchaseOrderLineId) continue;
-              const orderLine = ownOrderLines.get(line.purchaseOrderLineId);
-              const orderLineCost = landedCostByOrderLine.get(line.purchaseOrderLineId);
-              if (!orderLine || !orderLineCost) continue;
-              const previouslyReceivedPacks = cumulativePacks.get(line.purchaseOrderLineId) ?? 0;
-              const allocatedChargeMinor = cumulativeAllocatedChargeMinor({
-                allocatedChargeMinor: orderLineCost.allocatedChargeMinor,
-                orderedPacks: orderLine.orderedPacks,
-                previouslyReceivedPacks,
-                receivedPacks: line.receivedPacks,
-              });
-              line.unitCostMinor = receiptLineUnitCostMinor({
-                receivedPacks: line.receivedPacks,
-                bonusPacks: line.bonusPacks ?? 0,
-                canonicalUnitsPerPack: line.canonicalUnitsPerPack,
-                invoicedPricePerPackMinor: line.invoicedPricePerPackMinor,
-                discountBps: line.discountBps ?? 0,
-                rebateBps: orderLine.rebateBps,
-                taxBps: line.taxBps ?? 0,
-                taxCreditable: line.taxCreditable ?? false,
-                allocatedChargeMinor,
-              });
-              const totalReceivedPacks = previouslyReceivedPacks + line.receivedPacks;
-              if (!Number.isSafeInteger(totalReceivedPacks))
-                throw new PharmacyReceivingError('INVALID_QUANTITY');
-              cumulativePacks.set(line.purchaseOrderLineId, totalReceivedPacks);
-            }
-
-            return tx.pharmacyGoodsReceipt.create({
-              data: {
-                organizationId: scope.organizationId,
-                branchId: scope.branchId,
-                reference: input.reference,
-                supplierId: input.supplierId,
-                purchaseOrderId: input.purchaseOrderId ?? null,
-                supplierInvoiceRef: input.supplierInvoiceRef,
-                supplierInvoiceDate: input.supplierInvoiceDate,
-                distributorNtn: input.distributorNtn ?? null,
-                distributorStrn: input.distributorStrn ?? null,
-                warrantyEvidenceRef: input.warrantyEvidenceRef,
-                receivedByUserId: scope.actorId,
-                receivedAt: input.receivedAt,
-                directPurchase: Boolean(input.directPurchase),
-                bypassReason: input.directPurchase?.reason ?? null,
-                bypassApprovedByUserId: input.directPurchase?.approvedByUserId ?? null,
-                bypassApprovedAt: input.directPurchase ? new Date() : null,
-                note: input.note,
-                qualifiedPersonUserId: input.qualifiedPersonUserId ?? null,
-                lines: { create: lines },
-              },
-              include: { lines: { orderBy: { lineNumber: 'asc' } } },
+        return await ctx.db.$transaction(async (tx) => {
+          // HTTP requests already run in a tenant transaction; nested
+          // isolation options cannot upgrade it. Serialize allocation on the
+          // PO itself before reading prior receipts, even at READ COMMITTED.
+          if (purchaseOrder) {
+            await tx.$queryRaw`
+              SELECT id FROM pharmacy_purchase_orders
+              WHERE id = ${purchaseOrder.id} AND "organizationId" = ${scope.organizationId}
+              FOR UPDATE
+            `;
+          }
+          const orderLineIds = [
+            ...new Set(
+              lines.flatMap((line) => (line.purchaseOrderLineId ? [line.purchaseOrderLineId] : []))
+            ),
+          ];
+          // Drafts reserve their share and posted receipts retain it. Inactive
+          // receipts release that share for a replacement delivery.
+          const priorLines = orderLineIds.length
+            ? await tx.pharmacyGoodsReceiptLine.findMany({
+                where: {
+                  purchaseOrderLineId: { in: orderLineIds },
+                  goodsReceipt: { status: { in: ['DRAFT', 'POSTED'] } },
+                },
+                select: { purchaseOrderLineId: true, receivedPacks: true },
+              })
+            : [];
+          const cumulativePacks = new Map<string, number>();
+          for (const prior of priorLines) {
+            if (!prior.purchaseOrderLineId) continue;
+            const total =
+              (cumulativePacks.get(prior.purchaseOrderLineId) ?? 0) + prior.receivedPacks;
+            if (!Number.isSafeInteger(total)) throw new PharmacyReceivingError('INVALID_QUANTITY');
+            cumulativePacks.set(prior.purchaseOrderLineId, total);
+          }
+          for (const line of lines) {
+            if (!line.purchaseOrderLineId) continue;
+            const orderLine = ownOrderLines.get(line.purchaseOrderLineId);
+            const orderLineCost = landedCostByOrderLine.get(line.purchaseOrderLineId);
+            if (!orderLine || !orderLineCost) continue;
+            const previouslyReceivedPacks = cumulativePacks.get(line.purchaseOrderLineId) ?? 0;
+            const allocatedChargeMinor = cumulativeAllocatedChargeMinor({
+              allocatedChargeMinor: orderLineCost.allocatedChargeMinor,
+              orderedPacks: orderLine.orderedPacks,
+              previouslyReceivedPacks,
+              receivedPacks: line.receivedPacks,
             });
-          },
-          { isolationLevel: 'Serializable' }
-        );
+            line.unitCostMinor = receiptLineUnitCostMinor({
+              receivedPacks: line.receivedPacks,
+              bonusPacks: line.bonusPacks ?? 0,
+              canonicalUnitsPerPack: line.canonicalUnitsPerPack,
+              invoicedPricePerPackMinor: line.invoicedPricePerPackMinor,
+              discountBps: line.discountBps ?? 0,
+              rebateBps: orderLine.rebateBps,
+              taxBps: line.taxBps ?? 0,
+              taxCreditable: line.taxCreditable ?? false,
+              allocatedChargeMinor,
+            });
+            const totalReceivedPacks = previouslyReceivedPacks + line.receivedPacks;
+            if (!Number.isSafeInteger(totalReceivedPacks))
+              throw new PharmacyReceivingError('INVALID_QUANTITY');
+            cumulativePacks.set(line.purchaseOrderLineId, totalReceivedPacks);
+          }
+
+          return tx.pharmacyGoodsReceipt.create({
+            data: {
+              organizationId: scope.organizationId,
+              branchId: scope.branchId,
+              reference: input.reference,
+              supplierId: input.supplierId,
+              purchaseOrderId: input.purchaseOrderId ?? null,
+              supplierInvoiceRef: input.supplierInvoiceRef,
+              supplierInvoiceDate: input.supplierInvoiceDate,
+              distributorNtn: input.distributorNtn ?? null,
+              distributorStrn: input.distributorStrn ?? null,
+              warrantyEvidenceRef: input.warrantyEvidenceRef,
+              receivedByUserId: scope.actorId,
+              receivedAt: input.receivedAt,
+              directPurchase: Boolean(input.directPurchase),
+              bypassReason: input.directPurchase?.reason ?? null,
+              bypassApprovedByUserId: input.directPurchase?.approvedByUserId ?? null,
+              bypassApprovedAt: input.directPurchase ? new Date() : null,
+              note: input.note,
+              qualifiedPersonUserId: input.qualifiedPersonUserId ?? null,
+              lines: { create: lines },
+            },
+            include: { lines: { orderBy: { lineNumber: 'asc' } } },
+          });
+        });
       } catch (error) {
         domainError(error);
       }

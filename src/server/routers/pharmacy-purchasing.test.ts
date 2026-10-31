@@ -43,6 +43,9 @@ function model() {
 
 function makeDb() {
   const db = {
+    $queryRaw: vi
+      .fn<(sql: TemplateStringsArray, ...values: unknown[]) => Promise<unknown[]>>()
+      .mockResolvedValue([]),
     medicine: model(),
     packLevel: model(),
     pharmacySupplier: model(),
@@ -800,10 +803,18 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     const line = db.pharmacyGoodsReceipt.create.mock.calls[0]![0].data.lines.create[0];
     expect(line.unitCostMinor).toBe(0);
     expect(db.pharmacyGoodsReceiptLine.findMany).toHaveBeenCalledWith({
-      where: { purchaseOrderLineId: { in: ['poline_a'] } },
+      where: {
+        purchaseOrderLineId: { in: ['poline_a'] },
+        goodsReceipt: { status: { in: ['DRAFT', 'POSTED'] } },
+      },
       select: { purchaseOrderLineId: true, receivedPacks: true },
     });
-    expect(db.$transaction.mock.calls[0]![1]).toEqual({ isolationLevel: 'Serializable' });
+    const [sql, orderId, organizationId] = db.$queryRaw.mock.calls[0]!;
+    expect(sql.join('?')).toContain('FOR UPDATE');
+    expect([orderId, organizationId]).toEqual(['po_a', 'org_a']);
+    expect(db.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      db.pharmacyGoodsReceiptLine.findMany.mock.invocationCallOrder[0]!
+    );
   });
 
   it('takes the receiver from the session, never from the payload', async () => {
