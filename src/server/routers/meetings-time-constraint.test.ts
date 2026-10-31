@@ -4,10 +4,7 @@ import pg from 'pg';
 import { describe, expect, it } from 'vitest';
 
 const migration = readFileSync(
-  resolve(
-    process.cwd(),
-    'prisma/migrations/20261026000000_meeting_time_range_check/migration.sql'
-  ),
+  resolve(process.cwd(), 'prisma/migrations/20261026000000_meeting_time_range_check/migration.sql'),
   'utf8'
 );
 
@@ -19,11 +16,12 @@ describe('meeting time database invariant', () => {
   });
 });
 
-const describeIfDatabase = process.env.DATABASE_URL ? describe : describe.skip;
+const databaseUrl = process.env.TEST_DATABASE_URL || process.env.DATABASE_URL;
+const describeIfDatabase = databaseUrl ? describe : describe.skip;
 
 describeIfDatabase('meeting time constraint migration against PostgreSQL', () => {
   it('repairs equal and reversed legacy rows before enforcing the invariant', async () => {
-    const client = new pg.Client({ connectionString: process.env.DATABASE_URL });
+    const client = new pg.Client({ connectionString: databaseUrl });
     await client.connect();
 
     try {

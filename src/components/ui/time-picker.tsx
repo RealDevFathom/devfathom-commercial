@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Clock } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -73,6 +73,7 @@ export function TimePicker({
   'aria-invalid': ariaInvalid,
 }: TimePickerProps) {
   const [open, setOpen] = useState(false);
+  const listId = useId();
   const triggerRef = useRef<HTMLButtonElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const [coords, setCoords] = useState<{
@@ -179,12 +180,15 @@ export function TimePicker({
         ref={triggerRef}
         id={id}
         type="button"
+        role="combobox"
         disabled={disabled}
         aria-label={ariaLabel}
         aria-describedby={ariaDescribedBy}
         aria-invalid={ariaInvalid}
         aria-haspopup="listbox"
         aria-expanded={open}
+        aria-controls={open ? listId : undefined}
+        aria-activedescendant={open ? `${listId}-option-${activeIndex}` : undefined}
         onClick={() => !disabled && (open ? setOpen(false) : openMenu())}
         onKeyDown={onKeyDown}
         className={cn(
@@ -203,7 +207,9 @@ export function TimePicker({
         createPortal(
           <div
             ref={listRef}
+            id={listId}
             role="listbox"
+            aria-label={ariaLabel}
             tabIndex={-1}
             style={{
               position: 'fixed',
@@ -223,6 +229,8 @@ export function TimePicker({
                   key={opt}
                   type="button"
                   role="option"
+                  id={`${listId}-option-${i}`}
+                  tabIndex={-1}
                   aria-selected={isSelected}
                   data-index={i}
                   onClick={() => commit(opt)}

@@ -8,6 +8,8 @@ CHECK ("endTime" > "startTime") NOT VALID;
 -- Preserve each affected meeting's start and use the smallest duration the
 -- scheduling UI supports. This deterministic repair covers both equal and
 -- reversed legacy ranges without deleting meetings or moving their start.
+-- Deployment: this repair takes row locks on affected meetings, and constraint
+-- validation scans the table. Allow for contention on large installations.
 UPDATE "meetings"
 SET "endTime" = "startTime" + INTERVAL '1 minute'
 WHERE "endTime" <= "startTime";
