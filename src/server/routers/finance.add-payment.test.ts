@@ -87,7 +87,12 @@ describe('finance.addPayment', () => {
 
       const result = await caller().addPayment({ invoiceId: 'invoice-1', amount: 60 });
 
-      expect(result.status).toBe('PAID');
+      expect(result).toEqual({
+        payment: { id: 'payment-1', amount: 60 },
+        amountPaid: 100,
+        balance: 0,
+        status: 'PAID',
+      });
       expect(mocks.invoiceFindUnique).toHaveBeenCalledWith(
         expect.objectContaining({
           select: expect.objectContaining({ invoiceNumber: true }),
@@ -119,8 +124,14 @@ describe('finance.addPayment', () => {
   it('does not log invoice_paid for a partial payment', async () => {
     mocks.paymentCreate.mockResolvedValue({ id: 'payment-1', amount: 50 });
 
-    await caller().addPayment({ invoiceId: 'invoice-1', amount: 50 });
+    const result = await caller().addPayment({ invoiceId: 'invoice-1', amount: 50 });
 
+    expect(result).toEqual({
+      payment: { id: 'payment-1', amount: 50 },
+      amountPaid: 90,
+      balance: 10,
+      status: 'SENT',
+    });
     expect(mocks.paymentCreate).toHaveBeenCalledOnce();
     expect(mocks.invoiceUpdate).not.toHaveBeenCalled();
     expect(mocks.logActivity).not.toHaveBeenCalled();

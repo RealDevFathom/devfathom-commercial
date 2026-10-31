@@ -522,16 +522,8 @@ export const financeRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      // IMP-REST-03: captured inside the tx, fired only AFTER it commits.
-      let paidEvent: {
-        invoiceId: string;
-        invoiceNumber: string;
-        total: number;
-        currency: string;
-        clientId: string;
-      } | null = null;
-
-      const result = await ctx.db.$transaction(async (tx) => {
+      // IMP-REST-03: return the event from the tx, fire it only AFTER commit.
+      const { result, paidEvent } = await ctx.db.$transaction(async (tx) => {
         const invoice = await tx.invoice.findUnique({
           where: { id: input.invoiceId },
           select: {
@@ -602,20 +594,24 @@ export const financeRouter = router({
             where: { id: invoice.id },
             data: { status: 'PAID', paidAt: new Date() },
           });
-          paidEvent = {
-            invoiceId: invoice.id,
-            invoiceNumber: invoice.invoiceNumber,
-            total,
-            currency: invoice.currency,
-            clientId: invoice.clientId,
-          };
         }
 
         return {
-          payment,
-          amountPaid: newPaid,
-          balance: round2(total - newPaid),
-          status: fullyPaid ? ('PAID' as const) : invoice.status,
+          result: {
+            payment,
+            amountPaid: newPaid,
+            balance: round2(total - newPaid),
+            status: fullyPaid ? ('PAID' as const) : invoice.status,
+          },
+          paidEvent: fullyPaid
+            ? {
+                invoiceId: invoice.id,
+                invoiceNumber: invoice.invoiceNumber,
+                total,
+                currency: invoice.currency,
+                clientId: invoice.clientId,
+              }
+            : null,
         };
       });
 
