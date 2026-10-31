@@ -112,10 +112,7 @@ function walkParts(
   for (const child of part.parts ?? []) walkParts(child, acc);
 }
 
-function normalize(
-  msg: gmail_v1.Schema$Message,
-  opts: { withBody: boolean }
-): NormalizedMessage {
+function normalize(msg: gmail_v1.Schema$Message, opts: { withBody: boolean }): NormalizedMessage {
   const headers = msg.payload?.headers ?? [];
   const acc = { html: '', text: '', hasAttachments: false };
   if (opts.withBody) walkParts(msg.payload, acc);

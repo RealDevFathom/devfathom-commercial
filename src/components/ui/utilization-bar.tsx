@@ -30,7 +30,9 @@ function UtilizationBar({
         <div className="flex items-center justify-between gap-2">
           {label != null ? <span className="eyebrow">{label}</span> : <span />}
           {!hidePercent ? (
-            <span className="font-mono text-xs tabular-nums text-text-body">{Math.round(pct)}%</span>
+            <span className="font-mono text-xs tabular-nums text-text-body">
+              {Math.round(pct)}%
+            </span>
           ) : null}
         </div>
       ) : null}

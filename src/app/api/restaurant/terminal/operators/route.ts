@@ -1,3 +1,4 @@
+import { isSoloOwner } from '@/lib/restaurant/owner-reauthentication';
 import { NextResponse } from 'next/server';
 
 import { operatorHasCapability } from '@/lib/restaurant/checkout-routes';
@@ -37,6 +38,7 @@ export const GET = withTerminalAuth(async (ctx) => {
         staffProfileId: operator.id,
         displayName: operator.displayName,
         role: operator.user?.organizationRole?.name ?? operator.user?.title ?? 'Staff',
+        canSelfApprove: await isSoloOwner(ctx.db, operator.id, ctx.device.branchId),
         canApprove: await operatorHasCapability(
           ctx.db,
           operator.id,
