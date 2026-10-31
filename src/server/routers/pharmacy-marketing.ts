@@ -40,6 +40,10 @@ import {
   type MarketingScope,
 } from '@/lib/pharmacy/marketing-service';
 import { draftMarketingCopy, marketingAssistanceInput } from '@/lib/pharmacy/marketing-assistance';
+import {
+  resumeWhatsAppAccountQualityHold,
+  whatsAppAccountQualityStatus,
+} from '@/lib/pharmacy/whatsapp/account-quality';
 import { protectedProcedure, router, type TRPCContext } from '../trpc';
 
 type MarketingAccessContext = Pick<TRPCContext, 'session' | 'entitlements' | 'audit'> & {
@@ -214,6 +218,21 @@ export const pharmacyMarketingRouter = router({
   history: protectedProcedure
     .input(marketingScopeInput)
     .query(({ ctx, input }) => execute(ctx, input.branchId, marketingHistory)),
+  accountQuality: protectedProcedure
+    .input(marketingScopeInput)
+    .query(({ ctx, input }) =>
+      execute(ctx, input.branchId, (db, resolved) =>
+        whatsAppAccountQualityStatus(db, resolved.organizationId)
+      )
+    ),
+  /** Owner confirms Meta Account Quality is healthy; resumes every held WhatsApp feed. */
+  resumeAccountQuality: protectedProcedure
+    .input(marketingScopeInput.extend({ confirmed: z.literal(true) }).strict())
+    .mutation(({ ctx, input }) =>
+      execute(ctx, input.branchId, (db, resolved) =>
+        resumeWhatsAppAccountQualityHold(db, resolved.organizationId, resolved.actorId)
+      )
+    ),
   approveTemplate: protectedProcedure
     .input(marketingTemplateInput)
     .mutation(({ ctx, input }) =>

@@ -10,6 +10,7 @@ const store = vi.hoisted(() => ({
   failConsent: false,
   failCommit: false,
   failOrder: false,
+  accountHold: false,
 }));
 
 vi.mock('@/lib/tenancy/scoped-db', () => {
@@ -49,6 +50,9 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
       },
     },
     pharmacyCustomerOrder: { findFirst: async () => null },
+    pharmacyWhatsAppQualityEvent: {
+      findFirst: async () => (store.accountHold ? { id: 'hold-1' } : null),
+    },
     pharmacyBranch: { findMany: async () => [{ id: 'branch-1', name: 'Gulberg' }] },
     pharmacyMessageLog: {
       createManyAndReturn: async ({ data }: { data: Array<Record<string, unknown>> }) => {
@@ -146,6 +150,7 @@ beforeEach(() => {
   store.failConsent = false;
   store.failCommit = false;
   store.failOrder = false;
+  store.accountHold = false;
   provider = new MockWhatsAppProvider(readWhatsAppConfig({}));
 });
 afterEach(() => vi.useRealTimers());
@@ -345,5 +350,21 @@ describe('handleInboundWhatsAppMessage consent gate', () => {
     await expect(handleInboundWhatsAppMessage('org_a', provider, stop)).resolves.toBe('DUPLICATE');
     expect(store.customers[0].whatsappOptIn).toBe(true);
     expect(provider.calls).toHaveLength(2);
+  });
+});
+
+describe('handleInboundWhatsAppMessage account-quality hold', () => {
+  it('records consent and orders but sends no auto-reply while the account is held', async () => {
+    store.accountHold = true;
+    knownCustomer(true);
+    await expect(
+      handleInboundWhatsAppMessage('org_a', provider, message('Panadol 2 packs'))
+    ).resolves.toBe('ORDER_PLACED');
+    expect(store.placed).toHaveLength(1);
+    await expect(handleInboundWhatsAppMessage('org_a', provider, message('STOP'))).resolves.toBe(
+      'OPTED_OUT'
+    );
+    expect(store.customers[0].whatsappOptIn).toBe(false);
+    expect(provider.calls).toEqual([]);
   });
 });

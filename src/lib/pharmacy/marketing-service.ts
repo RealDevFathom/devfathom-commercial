@@ -5,6 +5,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { workspaceTimezone } from '@/lib/timezone';
 import { z } from 'zod';
 import { lockCustomerConsent } from './consent-writer';
+import { isWhatsAppAccountQualityHeld } from './whatsapp/account-quality';
 
 const id = z.string().trim().min(1).max(128);
 export const marketingScopeInput = z.object({ branchId: id }).strict();
@@ -49,6 +50,14 @@ export type MarketingScope = {
 };
 
 export class MarketingWorkflowError extends Error {}
+
+const ACCOUNT_QUALITY_HOLD_MESSAGE =
+  'WhatsApp sending is on an account-quality hold. Resolve it in Meta Account Quality, then resume WhatsApp feeds.';
+
+async function requireWhatsAppSendingAllowed(db: ScopedDb, organizationId: string) {
+  if (await isWhatsAppAccountQualityHeld(db, organizationId))
+    throw new MarketingWorkflowError(ACCOUNT_QUALITY_HOLD_MESSAGE);
+}
 const DAY = 86_400_000;
 
 export function validateMarketingBody(body: string) {
@@ -161,6 +170,7 @@ export async function approveMarketingCampaign(
     throw new MarketingWorkflowError('Regulated outreach is unavailable.');
   quietHours.parse(campaign.quietHours);
   frequencyCap.parse(campaign.frequencyCap);
+  await requireWhatsAppSendingAllowed(db, scope.organizationId);
   const result = await db.pharmacyCampaign.updateMany({
     where: { ...whereScope(scope), id: campaignId, status: 'DRAFT' },
     data: { status: 'APPROVED', ownerApprovedByUserId: scope.actorId, ownerApprovedAt: now },
@@ -249,6 +259,7 @@ async function evaluateCampaign(
       body: template.body,
     };
   requireCaptureWindow(campaign, scope, now);
+  if (persist) await requireWhatsAppSendingAllowed(db, scope.organizationId);
   const cap = frequencyCap.parse(campaign.frequencyCap);
   // Only commercial receipt counts and recency. Never select names, phone,
   // medicine, line details, prescriptions, or clinical segmentation fields.

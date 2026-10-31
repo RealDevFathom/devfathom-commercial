@@ -23,6 +23,13 @@ async function loadWorkspace(params: Record<string, string | string[] | undefine
   const branchId = scalar(params.branch) ?? branches[0]?.id;
   if (!branchId) return null;
   const history = await caller.history({ branchId });
+  // Account-quality status is advisory on this page; a read failure must not hide campaigns.
+  let accountQuality: Awaited<ReturnType<typeof caller.accountQuality>> | null = null;
+  try {
+    accountQuality = await caller.accountQuality({ branchId });
+  } catch {
+    accountQuality = null;
+  }
   const campaignId = scalar(params.campaign);
   const review = campaignId ? await caller.review({ branchId, campaignId }) : null;
   const delivery = campaignId ? await caller.deliveryHistory({ branchId, campaignId }) : null;
@@ -33,7 +40,16 @@ async function loadWorkspace(params: Record<string, string | string[] | undefine
   } catch {
     growthUnavailable = true;
   }
-  return { branches, branchId, history, review, delivery, growth, growthUnavailable };
+  return {
+    branches,
+    branchId,
+    history,
+    accountQuality,
+    review,
+    delivery,
+    growth,
+    growthUnavailable,
+  };
 }
 
 export default async function PharmacyMarketingPage({
@@ -92,7 +108,16 @@ export default async function PharmacyMarketingPage({
         </SectionCard>
       </main>
     );
-  const { branches, branchId, history, review, delivery, growth, growthUnavailable } = workspace;
+  const {
+    branches,
+    branchId,
+    history,
+    accountQuality,
+    review,
+    delivery,
+    growth,
+    growthUnavailable,
+  } = workspace;
   return (
     <main key={branchId} className="min-w-0 space-y-6">
       {heading}
@@ -117,6 +142,41 @@ export default async function PharmacyMarketingPage({
           hours use {history.timezone}; schedules below use explicit UTC timestamps.
         </p>
       </SectionCard>
+      {accountQuality?.held && (
+        <SectionCard title="WhatsApp account-quality hold" titleLevel={2}>
+          <div className="space-y-4">
+            <StatusPill
+              className="text-text-body"
+              status={
+                accountQuality.holds.some((hold) => hold.level === 'block') ? 'blocked' : 'warning'
+              }
+              label="Outbound WhatsApp paused"
+            />
+            <p className="text-sm text-text-body">
+              Meta reported an account-quality issue. Campaign approval and capture, refill and
+              khata reminders, and WhatsApp auto-replies are paused. {accountQuality.heldCampaigns}{' '}
+              held campaigns keep their prior state and return to it when sending resumes.
+            </p>
+            <ul className="space-y-1 text-sm text-text-muted">
+              {accountQuality.holds.map((hold) => (
+                <li key={`${hold.event}-${hold.createdAt.toISOString()}`} className="break-words">
+                  {hold.event} ({hold.level}), received {hold.createdAt.toISOString()}
+                </li>
+              ))}
+            </ul>
+            <MarketingActionForm
+              branchId={branchId}
+              operation="account-quality-resume"
+              label="Resume WhatsApp feeds"
+            >
+              <label className="flex items-start gap-2 text-sm">
+                <input type="checkbox" name="confirmed" required className="mt-1 size-5" />I
+                confirmed in Meta Account Quality that the account is healthy and may send again.
+              </label>
+            </MarketingActionForm>
+          </div>
+        </SectionCard>
+      )}
       <SectionCard title="Run due sandbox campaigns" titleLevel={2}>
         <p className="mb-3 text-sm text-text-muted">
           Explicitly process up to five due, approved and captured campaigns. Existing consent,

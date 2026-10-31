@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   history: vi.fn(),
   review: vi.fn(),
   deliveryHistory: vi.fn(),
+  accountQuality: vi.fn(),
 }));
 vi.mock('@/server/trpc', () => ({ createTRPCContext: async () => ({}) }));
 vi.mock('@/server/routers/pharmacy-marketing', () => ({
@@ -75,6 +76,36 @@ it('shows a saved draft with review before approval', async () => {
   expect(screen.getByRole('checkbox', { name: /I reviewed the copy/ })).toBeRequired();
   expect(screen.getByRole('button', { name: 'Approve campaign' })).toBeInTheDocument();
   expect(screen.queryByRole('button', { name: 'Save prepared captures' })).not.toBeInTheDocument();
+});
+it('shows a WhatsApp account-quality hold with a confirmed owner resume action', async () => {
+  mocks.accountQuality.mockResolvedValue({
+    held: true,
+    heldCampaigns: 2,
+    holds: [
+      {
+        event: 'DISABLED_UPDATE:DISABLE',
+        level: 'block',
+        issue: 'DISABLED',
+        occurredAt: null,
+        createdAt: new Date('2026-10-30T07:00:00Z'),
+      },
+    ],
+  });
+  const page = await Page({ searchParams: Promise.resolve({}) });
+  render(page);
+  expect(
+    screen.getByRole('heading', { name: 'WhatsApp account-quality hold', level: 2 })
+  ).toBeInTheDocument();
+  expect(screen.getByText(/2 held\s+campaigns keep their prior state/)).toBeInTheDocument();
+  expect(screen.getByText(/DISABLED_UPDATE:DISABLE \(block\)/)).toBeInTheDocument();
+  expect(screen.getByRole('checkbox', { name: /account is healthy/ })).toBeRequired();
+  expect(screen.getByRole('button', { name: 'Resume WhatsApp feeds' })).toBeInTheDocument();
+});
+it('keeps campaigns available when account-quality status cannot be read', async () => {
+  mocks.accountQuality.mockRejectedValue(new Error('status unavailable'));
+  render(await Page({ searchParams: Promise.resolve({}) }));
+  expect(screen.queryByText('WhatsApp account-quality hold')).not.toBeInTheDocument();
+  expect(screen.getByText(/No campaigns yet/)).toBeInTheDocument();
 });
 it('shows an explicit permission-denied state', async () => {
   mocks.branches.mockRejectedValue(new TRPCError({ code: 'FORBIDDEN' }));

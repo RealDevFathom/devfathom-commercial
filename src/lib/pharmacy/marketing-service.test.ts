@@ -35,6 +35,7 @@ let captures: Array<Record<string, unknown>>;
 let exclusions: Array<Record<string, unknown>>;
 let optIn: boolean | null;
 let revokedAt: Date | null;
+let accountHeld: boolean;
 let db: ScopedDb;
 let mock: ReturnType<typeof database>;
 function database() {
@@ -105,6 +106,9 @@ function database() {
         return data;
       }),
     },
+    pharmacyWhatsAppQualityEvent: {
+      findFirst: vi.fn(async () => (accountHeld ? { id: 'hold-a' } : null)),
+    },
   };
 }
 beforeEach(() => {
@@ -113,6 +117,7 @@ beforeEach(() => {
   exclusions = [];
   optIn = true;
   revokedAt = null;
+  accountHeld = false;
   mock = database();
   db = mock as unknown as ScopedDb;
 });
@@ -167,6 +172,25 @@ describe('persisted capture workflow', () => {
     row.status = 'DRAFT';
     expect(await approveMarketingCampaign(db, scope, row.id, now)).toEqual({ status: 'APPROVED' });
     expect(row.ownerApprovedByUserId).toBe('owner-a');
+  });
+  it('refuses approval and capture while a WhatsApp account-quality hold is unresolved', async () => {
+    accountHeld = true;
+    row.status = 'DRAFT';
+    await expect(approveMarketingCampaign(db, scope, row.id, now)).rejects.toThrow(
+      'account-quality hold'
+    );
+    expect(row.status).toBe('DRAFT');
+    row.status = 'APPROVED';
+    await expect(captureMarketingCampaign(db, scope, row.id, now)).rejects.toThrow(
+      'account-quality hold'
+    );
+    expect(captures).toEqual([]);
+    expect(mock.pharmacyWhatsAppQualityEvent.findFirst).toHaveBeenCalledWith({
+      where: { organizationId: 'org-a', action: 'HOLD', resolvedAt: null },
+      select: { id: true },
+    });
+    // Preview writes nothing and stays available for owner review during a hold.
+    expect(await previewMarketingCampaign(db, scope, row.id, now)).toMatchObject({ prepared: 1 });
   });
   it('previews without writes and captures once with the stable key', async () => {
     expect(await previewMarketingCampaign(db, scope, row.id, now)).toMatchObject({ prepared: 1 });

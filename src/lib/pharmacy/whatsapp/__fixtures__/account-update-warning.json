@@ -3,10 +3,14 @@
   "entry": [
     {
       "id": "waba-fixture",
+      "time": 1761800000,
       "changes": [
         {
           "field": "account_update",
-          "value": { "event": "ACCOUNT_VIOLATION" }
+          "value": {
+            "event": "ACCOUNT_VIOLATION",
+            "violation_info": { "violation_type": "SCAM" }
+          }
         }
       ]
     }

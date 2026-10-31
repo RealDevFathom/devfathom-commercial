@@ -9,6 +9,7 @@ import { workspaceTimezone } from '@/lib/timezone';
 import { formatMinor } from '../counter-receipt';
 import { lockPatientConsent } from '../consent-writer';
 import { claimMessageLogInTransaction, sendClaimedMessage } from './message-log';
+import { isWhatsAppAccountQualityHeld } from './account-quality';
 import { canMessageCustomer, normalizeWhatsAppNumber, phoneLast4 } from './messages';
 import {
   createWhatsAppProvider,
@@ -76,6 +77,8 @@ export type KhataReminderRunResult = {
   failed: number;
   duplicate: number;
   skippedNoConsent: number;
+  /** Not sent: Meta account quality holds every outbound WhatsApp feed. */
+  skippedAccountHold: number;
   notDue: number;
 };
 
@@ -108,6 +111,7 @@ export async function processDueWhatsAppKhataReminders(
     failed: 0,
     duplicate: 0,
     skippedNoConsent: 0,
+    skippedAccountHold: 0,
     notDue: 0,
   };
   const organizationId = config.organizationId;
@@ -138,6 +142,8 @@ export async function processDueWhatsAppKhataReminders(
 
     const recipient = await withTenantDb(account.organizationId, async (db) => {
       if (config.organizationId !== account.organizationId || !config.phoneNumberId) return null;
+      if (await isWhatsAppAccountQualityHeld(db, account.organizationId))
+        return 'ACCOUNT_QUALITY_HOLD' as const;
       const organization = await db.organization.findUnique({
         where: { id: account.organizationId },
         select: { vertical: true, status: true, timezone: true },
@@ -222,6 +228,10 @@ export async function processDueWhatsAppKhataReminders(
       });
       return { customerId: customer.id, patientId: customer.patientId, to, logId };
     });
+    if (recipient === 'ACCOUNT_QUALITY_HOLD') {
+      result.skippedAccountHold += 1;
+      continue;
+    }
     if (!recipient) {
       result.skippedNoConsent += 1;
       continue;
