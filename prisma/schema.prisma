@@ -10544,6 +10544,9 @@ model RestaurantShiftBreak {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
+  /// Database-maintained projection; raw endedAt stays absent after a repair.
+  closedByAdjustment Boolean @default(false)
+
   shift       RestaurantShift              @relation(fields: [shiftId], references: [id], onDelete: Cascade)
   adjustments RestaurantTimeAdjustment[]
   commands    RestaurantWorkforceCommand[]
@@ -10620,7 +10623,7 @@ model RestaurantTimeAdjustment {
   shiftId                  String
   breakId                  String?
   kind                     RestaurantTimeAdjustmentKind
-  originalAt               DateTime
+  originalAt               DateTime?
   correctedAt              DateTime
   reason                   String
   adjustedByUserId         String
