@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   putUpload: vi.fn(),
   getUpload: vi.fn(),
   audit: vi.fn(),
+  patientAudit: vi.fn(),
   actor: vi.fn(),
   context: vi.fn(),
   medicines: vi.fn(),
@@ -33,16 +34,20 @@ vi.mock('@/server/audit', () => ({
   ipFromHeaders: vi.fn(() => null),
   isAuditExcludedPath: vi.fn(() => false),
   recordTrpcAudit: mocks.audit,
+  recordAudit: mocks.patientAudit,
 }));
 vi.mock('@/server/trpc', async () => ({
   ...(await vi.importActual<typeof import('@/server/trpc')>('@/server/trpc')),
   createTRPCContext: mocks.context,
 }));
 
-import type { TRPCContext } from '../trpc';
+import { router, type TRPCContext } from '../trpc';
 import { pharmacyPrescriptionsRouter } from './pharmacy-prescriptions';
 import { GET } from '@/app/api/pharmacy/prescription-files/route';
 import { GET as sharedFileGET } from '@/app/api/files/[name]/route';
+
+// Preserve the production procedure paths so the module-license guard runs.
+const testRouter = router({ pharmacyPrescriptions: pharmacyPrescriptionsRouter });
 
 function context(
   userId = 'user-a',
@@ -66,7 +71,7 @@ function context(
   } as unknown as TRPCContext;
 }
 function caller(ctx = context()) {
-  return pharmacyPrescriptionsRouter.createCaller(ctx);
+  return testRouter.createCaller(ctx).pharmacyPrescriptions;
 }
 async function upload() {
   const bytes = await sharp({ create: { width: 2, height: 2, channels: 3, background: 'white' } })
@@ -330,6 +335,14 @@ describe('prescription capture and private delivery', () => {
 
     expect(mocks.patients).toHaveBeenCalledOnce();
     expect(mocks.patient).toHaveBeenCalledOnce();
+    expect(mocks.patientAudit).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        organizationId: 'org-a',
+        actorId: 'user-a',
+        action: 'pharmacy.patient.read',
+        targetId: 'patient-a',
+      })
+    );
     expect(mocks.can.mock.calls.map(([, requestedAction]) => requestedAction)).toEqual(
       action === 'pharmacy:counter'
         ? ['pharmacy:counter', 'pharmacy:counter']
