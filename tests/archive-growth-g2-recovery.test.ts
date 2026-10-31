@@ -7,7 +7,13 @@ type Recovery = {
   archive: string;
   tip: string;
   decision: string;
-  commits: Array<{ sha: string; disposition: string; evidence: string[] }>;
+  commits: Array<{
+    sha: string;
+    disposition: string;
+    rationale?: string;
+    retiredBehavior?: string[];
+    evidence: string[];
+  }>;
 };
 
 const root = resolve(import.meta.dirname, '..');
@@ -47,5 +53,26 @@ describe('archived AI growth G2 recovery decision', () => {
         expect(existsSync(resolve(root, path)), `${commit.sha}: ${path}`).toBe(true);
       }
     }
+  });
+
+  it('explicitly accounts for the unimplemented receipt loyalty additions as retired', () => {
+    const receiptLoyalty = recovery.commits.find(({ sha }) => sha === 'd3e8cdad');
+
+    expect(receiptLoyalty).toMatchObject({
+      disposition: 'retired',
+      rationale: expect.stringMatching(/\S/),
+      retiredBehavior: [
+        'receipt.loyalty.pointsBalance',
+        'receipt.loyalty.balancePkr',
+        'receipt.loyalty.pointsEarned',
+        'receipt.loyalty.pointsPerPkr',
+        'getLoyaltySummary',
+      ],
+      evidence: expect.arrayContaining([
+        'src/lib/restaurant/checkout-routes.ts',
+        'src/components/restaurant/pos/receipt-view.tsx',
+        'src/app/api/restaurant/checkout/receipt/receipt-dispatch.ts',
+      ]),
+    });
   });
 });

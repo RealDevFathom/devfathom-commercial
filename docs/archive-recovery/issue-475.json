@@ -3,7 +3,7 @@
   "archive": "archive/improve/ai-growth-g2",
   "tip": "304a4aa6",
   "decision": "obsolete",
-  "rationale": "Do not restore or cherry-pick the archived branch. Develop has a later, tenant-scoped growth implementation with code-owned safe actions, append-only review lineage, live cutoff-bound source reads, and explicit UTC fixtures. The archived nightly snapshot job and demo-only settings seeds would duplicate those contracts and can make recommendations stale. The unrelated loyalty receipt change is also already represented by the current receipt wallet implementation.",
+  "rationale": "Do not restore or cherry-pick the archived branch. Develop has a later, tenant-scoped growth implementation with code-owned safe actions, append-only review lineage, live cutoff-bound source reads, and explicit UTC fixtures. The archived nightly snapshot job and demo-only settings seeds would duplicate those contracts and can make recommendations stale. The unrelated archived loyalty summary and receipt display additions are explicitly retired below; current wallet lookup and checkout redemption do not implement them.",
   "commits": [
     {
       "sha": "304a4aa6",
@@ -60,10 +60,20 @@
     },
     {
       "sha": "d3e8cdad",
-      "disposition": "already-implemented",
+      "disposition": "retired",
+      "rationale": "The archived receipt loyalty balance, wallet value, earned points, earn rate, and getLoyaltySummary helper are absent from develop and are intentionally not restored by issue #475. The archived helper reads the live points ledger and currently effective program when a receipt is requested, so later wallet activity or program changes can change wallet figures on reprints. Restoring that display requires a separate decision about settlement snapshots and reprint semantics. Existing wallet lookup, loyalty accrual, and checkout redemption remain implemented; they are not evidence of receipt display parity.",
+      "retiredBehavior": [
+        "receipt.loyalty.pointsBalance",
+        "receipt.loyalty.balancePkr",
+        "receipt.loyalty.pointsEarned",
+        "receipt.loyalty.pointsPerPkr",
+        "getLoyaltySummary"
+      ],
       "evidence": [
-        "src/lib/restaurant/terminal-wallet.test.ts",
-        "src/components/restaurant/pos/checkout-panel.tsx"
+        "src/lib/restaurant/checkout-routes.ts",
+        "src/components/restaurant/pos/receipt-view.tsx",
+        "src/app/api/restaurant/checkout/receipt/receipt-dispatch.ts",
+        "src/lib/restaurant/loyalty.ts"
       ]
     },
     {
