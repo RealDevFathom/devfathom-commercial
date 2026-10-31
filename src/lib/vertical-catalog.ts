@@ -735,6 +735,7 @@ export const PHARMACY_CAPABILITIES: readonly string[] = [
   'pharmacy:catalogue-review',
   'pharmacy:manage',
   'pharmacy:counter',
+  'pharmacy:close',
   'pharmacy:procurement',
   'pharmacy:inventory',
   'pharmacy:orders',
@@ -746,6 +747,7 @@ export const PHARMACY_CAPABILITIES: readonly string[] = [
 /** Canonical actions checked by pharmacy workflows, including shared report gates. */
 export const PHARMACY_CHECKED_CAPABILITIES = [
   'pharmacy:counter',
+  'pharmacy:close',
   'pharmacy:manage',
   'pharmacy:procurement',
   'pharmacy:inventory',
@@ -769,6 +771,9 @@ export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
     // for business/cashier guards that require literal ADMIN; EMPLOYEE plus this
     // template is not equivalent. Provisioning does not assign it to existing owners.
     // These grants neither verify clinical qualifications nor permit self-review/signing.
+    // Sole exception: in a tenant with no other active staff, a pharmacovigilance report
+    // may be marked READY by its own maker only after fresh server-side PIN
+    // reauthentication, with a durable audit row (pharmacy-reports PV:SOLO_OWNER_PIN).
     key: 'owner-operator',
     name: 'Owner / Operator',
     isSystem: true,
@@ -785,12 +790,14 @@ export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
     key: 'pharmacist',
     name: 'Pharmacist',
     isSystem: true,
-    capabilities: ['pharmacy:dispense', 'pharmacy:catalogue-review'],
+    capabilities: ['pharmacy:dispense', 'pharmacy:catalogue-review', 'pharmacy:close'],
   },
   {
     key: 'manager',
     name: 'Manager',
     isSystem: true,
+    // Managers retain the purchasing and Goods-in access that predates the
+    // explicit pharmacy capability model (#375).
     capabilities: ['pharmacy:manage', 'pharmacy:orders', 'pharmacy:procurement'],
   },
   {

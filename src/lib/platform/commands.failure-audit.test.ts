@@ -198,15 +198,14 @@ describe('platform command failure auditing', () => {
     expect(JSON.stringify(state.audits[0])).not.toContain('hunter2');
   });
 
-  it('preserves success audit semantics inside one transaction', async () => {
+  it('records an explicit successful outcome inside one transaction', async () => {
     await expect(
       executePlatformCommand(actor(), 'setting.upsert', setting(), request())
     ).resolves.toMatchObject({ id: 'setting_1' });
 
     expect(state.transactionCalls).toBe(1);
     expect(state.audits).toHaveLength(1);
-    expect(state.audits[0]).toMatchObject({ action: 'setting.upsert' });
-    expect(state.audits[0].success).toBeUndefined();
+    expect(state.audits[0]).toMatchObject({ action: 'setting.upsert', success: true });
   });
 
   it('deduplicates a replay by actor, action, category, and correlation id', async () => {

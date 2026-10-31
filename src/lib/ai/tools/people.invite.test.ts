@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   update: vi.fn(),
   invitationUpsert: vi.fn(),
   departmentFindFirst: vi.fn(),
+  resolveEntitlements: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -21,6 +22,16 @@ vi.mock('@/lib/email', () => ({
 }));
 vi.mock('@/lib/notifications', () => ({ notify: vi.fn() }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
+vi.mock('@/lib/entitlements', () => ({
+  resolveOrganizationEntitlements: mocks.resolveEntitlements,
+  assertSeatAvailable: (entitlements: { activeSeats: number; seatLimit: number }) => {
+    if (entitlements.activeSeats >= entitlements.seatLimit) {
+      throw new Error(
+        `Seat limit reached (${entitlements.activeSeats}/${entitlements.seatLimit}).`
+      );
+    }
+  },
+}));
 
 import { buildPeopleTools } from './people';
 import type { AssistantHelpers } from '@/lib/ai/context';
@@ -44,7 +55,7 @@ function inviteTool() {
     isAdmin: true,
     isHr: false,
     isAdminOrHr: true,
-    ctx: { userId: 'user_admin', name: 'Admin' },
+    ctx: { organizationId: 'org_1', userId: 'user_admin', name: 'Admin' },
     can: vi.fn(async () => true),
     audit: vi.fn(),
   } as unknown as AssistantHelpers;
@@ -61,12 +72,13 @@ const base = {
   role: 'EMPLOYEE',
 };
 
-describe('assistant inviteMember duplicate guard', () => {
+describe('assistant inviteMember guards', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.create.mockResolvedValue({ id: 'user_2', name: 'Alex Carter' });
     mocks.invitationUpsert.mockResolvedValue({});
     mocks.departmentFindFirst.mockResolvedValue({ id: 'dept_1' });
+    mocks.resolveEntitlements.mockResolvedValue({ activeSeats: 1, seatLimit: 5 });
   });
 
   it.each([['ALEX@COMPANY.COM'], ['Alex@Company.com'], ['  alex@company.com  ']])(
@@ -97,6 +109,31 @@ describe('assistant inviteMember duplicate guard', () => {
     );
   });
 
+  it('refuses a new member when the workspace has reached its seat limit', async () => {
+    mocks.findFirst.mockResolvedValue(null);
+    mocks.resolveEntitlements.mockResolvedValue({ activeSeats: 5, seatLimit: 5 });
+
+    const result = await inviteTool().execute({ ...base, email: 'new.person@company.com' });
+
+    expect(result.error).toBe('Seat limit reached (5/5).');
+    expect(mocks.resolveEntitlements).toHaveBeenCalledWith('org_1', db);
+    expect(mocks.create).not.toHaveBeenCalled();
+    expect(mocks.invitationUpsert).not.toHaveBeenCalled();
+  });
+
+  it('refreshes a pending invite at the seat limit without consuming another seat', async () => {
+    mocks.findFirst.mockResolvedValue({ id: 'user_invited', status: 'INVITED' });
+    mocks.update.mockResolvedValue({ id: 'user_invited', name: 'Alex Carter' });
+    mocks.resolveEntitlements.mockResolvedValue({ activeSeats: 5, seatLimit: 5 });
+
+    const result = await inviteTool().execute({ ...base, email: 'alex@company.com' });
+
+    expect(result.error).toBeUndefined();
+    expect(mocks.resolveEntitlements).not.toHaveBeenCalled();
+    expect(mocks.update).toHaveBeenCalled();
+    expect(mocks.invitationUpsert).toHaveBeenCalled();
+  });
+
   // WHA-278 — departments are tenant-configured rows behind a composite foreign
   // key. A key this workspace does not have must be refused with a stated
   // message rather than surfacing as a raw constraint violation.
@@ -124,7 +161,7 @@ describe('assistant inviteMember duplicate guard', () => {
       isAdmin: true,
       isHr: false,
       isAdminOrHr: true,
-      ctx: { userId: 'user_admin', name: 'Admin' },
+      ctx: { organizationId: 'org_1', userId: 'user_admin', name: 'Admin' },
       can: vi.fn(async () => true),
       audit: vi.fn(),
     } as unknown as AssistantHelpers;

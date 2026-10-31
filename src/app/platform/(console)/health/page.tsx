@@ -72,7 +72,12 @@ export default async function HealthPage({
         >
           <label className="space-y-2 text-sm font-semibold">
             Vertical
-            <select name="vertical" defaultValue={data.filters.vertical ?? ''} className={control}>
+            <select
+              aria-label="Vertical"
+              name="vertical"
+              defaultValue={data.filters.vertical ?? ''}
+              className={control}
+            >
               <option value="">All verticals</option>
               <option value="AGENCY">Agency</option>
               <option value="PHARMACY">Pharmacy</option>

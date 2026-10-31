@@ -1,4 +1,4 @@
-/** PV boundary and owner branch lifecycle against PostgreSQL. */
+/** PV boundary and solo-owner approval against PostgreSQL. */
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { Client } from 'pg';
@@ -17,7 +17,6 @@ if (databaseUrl) process.env.DATABASE_URL = databaseUrl;
 const suite = databaseUrl ? describe : describe.skip;
 let withTenantDb: typeof import('@/lib/tenancy/scoped-db').withTenantDb;
 let router: typeof import('./pharmacy-reports').pharmacyReportsRouter;
-let membersRouter: typeof import('./organization-admin').organizationAdminRouter;
 let hashPin: typeof import('@/lib/restaurant/operator-credentials').hashOperatorCredential;
 let seedDepartments: typeof import('@/lib/test-support/departments').seedDepartments;
 let pinHash: string;
@@ -27,7 +26,6 @@ const rollback = new Error('rollback-only security fixture');
 beforeAll(async () => {
   ({ withTenantDb } = await import('@/lib/tenancy/scoped-db'));
   ({ pharmacyReportsRouter: router } = await import('./pharmacy-reports'));
-  ({ organizationAdminRouter: membersRouter } = await import('./organization-admin'));
   ({ hashOperatorCredential: hashPin } = await import('@/lib/restaurant/operator-credentials'));
   ({ seedDepartments } = await import('@/lib/test-support/departments'));
   pinHash = await hashPin('PIN', '1234');
@@ -69,7 +67,6 @@ async function fixture(
     org: string;
     owner: string;
     branch: string;
-    members: ReturnType<typeof membersRouter.createCaller>;
     api: (
       userId: string,
       role?: 'ADMIN' | 'EMPLOYEE',
@@ -95,6 +92,14 @@ async function fixture(
           },
         });
         await seedDepartments(db, [org], ['LEADERSHIP']);
+        // Tenant ADMIN alone is insufficient: pharmacy:safety is exact-grant-only.
+        const ownerRole = await db.organizationRole.create({
+          data: {
+            key: 'owner-operator',
+            name: 'Owner / Operator',
+            permissions: { create: [{ capability: 'pharmacy:safety', effect: 'ALLOW' }] },
+          },
+        });
         await db.user.create({
           data: {
             id: owner,
@@ -103,6 +108,7 @@ async function fixture(
             role: 'ADMIN',
             department: 'LEADERSHIP',
             title: 'Owner',
+            organizationRoleId: ownerRole.id,
           },
         });
         await db.pharmacyBranch.create({
@@ -115,6 +121,7 @@ async function fixture(
             provinceCode: 'PB',
           },
         });
+        await db.pharmacyBranchAssignment.create({ data: { branchId: branch, userId: owner } });
         const profile = await db.restaurantStaffProfile.create({
           data: { userId: owner, displayName: 'Owner' },
         });
@@ -149,14 +156,7 @@ async function fixture(
           }) as unknown as TRPCContext;
         const api = (userId: string, role: 'ADMIN' | 'EMPLOYEE' = 'ADMIN', licensed = true) =>
           router.createCaller(context(userId, role, licensed));
-        await run({
-          db,
-          org,
-          owner,
-          branch,
-          api,
-          members: membersRouter.createCaller(context(owner)),
-        });
+        await run({ db, org, owner, branch, api });
         throw rollback;
       },
       { timeout: 60_000, skipDrain: true }
@@ -180,82 +180,22 @@ async function reviewable(db: ScopedDb, branchId: string, creator: string) {
 }
 
 suite('PV security persistence and compatibility', () => {
-  it.each(['admin', 'owner', 'owner-operator'] as const)(
-    'creates a new %s with explicit branches alongside automatic owner assignments',
-    async (kind) => {
-      await fixture(async ({ db, org, branch, members }) => {
-        const sibling = await db.pharmacyBranch.create({
-          data: {
-            code: 'SIBLING',
-            name: 'Sibling',
-            addressLine: 'Test',
-            city: 'Lahore',
-            provinceCode: 'PB',
-          },
-        });
-        const role =
-          kind === 'admin'
-            ? null
-            : await db.organizationRole.create({
-                data: { key: kind, name: kind },
-              });
-        const member = await members.createMember({
-          name: 'New owner',
-          email: `${org}_new@example.test`,
-          password: 'Temporary-123456',
-          title: 'Owner',
-          role: kind === 'admin' ? 'ADMIN' : 'EMPLOYEE',
-          department: 'LEADERSHIP',
-          organizationRoleId: role?.id ?? null,
-          branchIds: [branch],
-        });
-        const assignments = await db.pharmacyBranchAssignment.findMany({
-          where: { userId: member.id, active: true },
-          select: { branchId: true },
-        });
-        expect(assignments).toHaveLength(2);
-        expect(assignments).toEqual(
-          expect.arrayContaining([{ branchId: branch }, { branchId: sibling.id }])
-        );
-      });
-    }
-  );
-
-  it('auto-assigns admin owners on branch creation and late promotion, without assigning ordinary staff', async () => {
-    await fixture(async ({ db, org, owner, branch }) => {
-      expect(
-        await db.pharmacyBranchAssignment.findMany({ where: { userId: owner, active: true } })
-      ).toEqual([expect.objectContaining({ organizationId: org, branchId: branch })]);
-      const user = await db.user.create({
+  it('denies a tenant ADMIN without an exact pharmacy:safety grant', async () => {
+    await fixture(async ({ db, org, branch, api }) => {
+      const admin = await db.user.create({
         data: {
-          name: 'Staff',
-          email: `${org}@example.test`,
+          name: 'Admin',
+          email: `${org}_admin@example.test`,
+          role: 'ADMIN',
           department: 'LEADERSHIP',
-          title: 'Staff',
+          title: 'Admin',
         },
       });
-      expect(await db.pharmacyBranchAssignment.count({ where: { userId: user.id } })).toBe(0);
-      await db.user.update({ where: { id: user.id }, data: { role: 'ADMIN' } });
-      expect(
-        await db.pharmacyBranchAssignment.count({
-          where: { userId: user.id, branchId: branch, active: true },
-        })
-      ).toBe(1);
-      const next = await db.pharmacyBranch.create({
-        data: {
-          code: 'NEXT',
-          name: 'Next',
-          addressLine: 'Test',
-          city: 'Lahore',
-          provinceCode: 'PB',
-        },
-      });
-      expect(
-        await db.pharmacyBranchAssignment.count({ where: { branchId: next.id, active: true } })
-      ).toBe(2);
-      expect(
-        await db.pharmacyBranchAssignment.count({ where: { organizationId: { not: org } } })
-      ).toBe(0);
+      await db.pharmacyBranchAssignment.create({ data: { branchId: branch, userId: admin.id } });
+      const dates = { from: new Date('2020-01-01'), to: new Date('2099-01-01') };
+      await expect(
+        api(admin.id).exportPharmacovigilanceDrap({ branchId: branch, ...dates })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     });
   });
 

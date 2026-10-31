@@ -32,6 +32,7 @@ import {
 } from '@/lib/pharmacy/dashboard';
 import {
   PHARMACY_METRIC_CONTRACT,
+  MAX_PHARMACY_REPORT_DAYS,
   pharmacyReportCatalog,
   readPharmacyOwnerCommandCentre,
 } from '@/lib/pharmacy/reports';
@@ -47,10 +48,27 @@ import {
   acknowledgePackAuthenticationFlag,
   readPackAuthenticationFlags,
 } from '@/lib/pharmacy/pack-authentication-operations';
-import { capabilityProcedure, router, type TRPCContext } from '../trpc';
+import { readPharmacyBranchComparison } from '@/lib/pharmacy/branch-comparison';
+import { auditedProtectedProcedure, capabilityProcedure, router, type TRPCContext } from '../trpc';
 
 const reports = capabilityProcedure('reports:operational');
 const safety = capabilityProcedure('pharmacy:safety');
+// Product decision (#479): clinical dispensing staff may FILE adverse-reaction and
+// medication-error reports, but review, readiness, submission and export stay with
+// exact `pharmacy:safety` holders. Both actions are exact-grant-only in can().
+const PV_FILING_ACTIONS = ['pharmacy:safety', 'pharmacy:dispense'] as const;
+
+async function requirePvFiling(ctx: TRPCContext) {
+  const subject = subjectFromSession(ctx.session!.user);
+  const env = { db: ctx.db, source: 'TRPC' as const, ip: ctx.requestMeta.ip };
+  for (const action of PV_FILING_ACTIONS) {
+    if (await can(subject, action, undefined, env)) return;
+  }
+  throw new TRPCError({
+    code: 'FORBIDDEN',
+    message: 'You do not have permission for this action.',
+  });
+}
 const widget = z
   .object({
     key: z.enum(PHARMACY_WIDGET_KEYS),
@@ -100,6 +118,15 @@ const transitions: Record<z.infer<typeof pvState>, readonly z.infer<typeof pvSta
   READY: ['UNDER_REVIEW', 'SUBMITTED', 'CLOSED'],
   SUBMITTED: ['CLOSED'],
   CLOSED: [],
+};
+const externalTransitions: Record<
+  z.infer<typeof externalState>,
+  readonly z.infer<typeof externalState>[]
+> = {
+  NOT_SUBMITTED: ['PENDING', 'SUBMITTED', 'FAILED'],
+  PENDING: ['SUBMITTED', 'FAILED'],
+  SUBMITTED: [],
+  FAILED: ['PENDING', 'SUBMITTED'],
 };
 
 async function requirePvBranch(ctx: TRPCContext, branchId: string) {
@@ -190,7 +217,7 @@ export const pharmacyReportsRouter = router({
       }
       return readPharmacyMarketingReport(ctx.db, ctx.entitlements.organizationId, scoped);
     }),
-  createPharmacovigilanceReport: safety
+  createPharmacovigilanceReport: auditedProtectedProcedure
     .input(
       z
         .object({
@@ -210,6 +237,7 @@ export const pharmacyReportsRouter = router({
         })
     )
     .mutation(async ({ ctx, input }) => {
+      await requirePvFiling(ctx);
       const organizationId = await requirePvBranch(ctx, input.branchId);
       if (input.inventoryLotId) {
         const lot = await ctx.db.pharmacyInventoryLot.findFirst({
@@ -256,9 +284,6 @@ export const pharmacyReportsRouter = router({
       const actorId = ctx.session.user.id;
       return ctx.db.$transaction(async (tx) => {
         const db = tx as ScopedDb;
-        // Serialize readiness decisions and use the same organization lock as seat creation.
-        await db.$queryRaw`SELECT id FROM organizations WHERE id=${organizationId} FOR UPDATE`;
-        await db.$queryRaw`SELECT id FROM pharmacy_pharmacovigilance_reports WHERE id=${input.id} AND "organizationId"=${organizationId} AND "branchId"=${input.branchId} FOR UPDATE`;
         const report = await db.pharmacyPharmacovigilanceReport.findFirst({
           where: { id: input.id, branchId: input.branchId, organizationId },
         });
@@ -268,8 +293,15 @@ export const pharmacyReportsRouter = router({
             code: 'BAD_REQUEST',
             message: 'Invalid report lifecycle transition.',
           });
+        if (report.externalSubmissionState === 'SUBMITTED' && input.state === 'UNDER_REVIEW')
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'A submitted report cannot return to review.',
+          });
         if (input.state === 'READY' && report.createdByUserId === actorId) {
           // Solo is a tenant staffing fact, never inferred from approver availability.
+          // Only this path takes the organization lock shared with seat creation.
+          await db.$queryRaw`SELECT id FROM organizations WHERE id=${organizationId} FOR UPDATE`;
           const actor = await db.user.findFirst({
             where: { id: actorId, organizationId, status: 'ACTIVE' },
             select: { role: true, organizationRole: { select: { key: true } } },
@@ -345,10 +377,23 @@ export const pharmacyReportsRouter = router({
             },
           });
         }
-        return db.pharmacyPharmacovigilanceReport.update({
-          where: { id: report.id },
+        // Compare-and-set (#480): a concurrent lifecycle or submission change wins.
+        const [updated] = await db.pharmacyPharmacovigilanceReport.updateManyAndReturn({
+          where: {
+            id: report.id,
+            branchId: input.branchId,
+            organizationId,
+            state: report.state,
+            externalSubmissionState: report.externalSubmissionState,
+          },
           data: { state: input.state, reviewedByUserId: actorId },
         });
+        if (!updated)
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: 'Report lifecycle changed; refresh and try again.',
+          });
+        return updated;
       });
     }),
   recordPharmacovigilanceSubmission: safety
@@ -381,17 +426,44 @@ export const pharmacyReportsRouter = router({
       const organizationId = await requirePvBranch(ctx, input.branchId);
       const report = await ctx.db.pharmacyPharmacovigilanceReport.findFirst({
         where: { id: input.id, branchId: input.branchId, organizationId },
-        select: { id: true },
       });
       if (!report) throw new TRPCError({ code: 'NOT_FOUND', message: 'Report not found.' });
-      return ctx.db.pharmacyPharmacovigilanceReport.update({
-        where: { id: report.id },
+      if (!['READY', 'SUBMITTED'].includes(report.state))
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Report must be ready before recording a submission.',
+        });
+      const isIdempotent =
+        report.externalSubmissionState === input.state &&
+        report.externalReference ===
+          (input.state === 'SUBMITTED' ? input.externalReference : null) &&
+        report.externalFailureReason === (input.state === 'FAILED' ? input.failureReason : null);
+      if (isIdempotent) return report;
+      if (!externalTransitions[report.externalSubmissionState].includes(input.state))
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Invalid external submission transition.',
+        });
+      const [updated] = await ctx.db.pharmacyPharmacovigilanceReport.updateManyAndReturn({
+        where: {
+          id: report.id,
+          branchId: input.branchId,
+          organizationId,
+          state: report.state,
+          externalSubmissionState: report.externalSubmissionState,
+        },
         data: {
           externalSubmissionState: input.state,
           externalReference: input.state === 'SUBMITTED' ? input.externalReference : null,
           externalFailureReason: input.state === 'FAILED' ? input.failureReason : null,
         },
       });
+      if (!updated)
+        throw new TRPCError({
+          code: 'CONFLICT',
+          message: 'Submission state changed; refresh and try again.',
+        });
+      return updated;
     }),
   exportPharmacovigilanceDrap: safety
     .input(
@@ -513,11 +585,44 @@ export const pharmacyReportsRouter = router({
     metrics: PHARMACY_METRIC_CONTRACT,
     permissions: {
       operational: true,
+      owner: ctx.session!.user.role === 'ADMIN',
       financial: await can(subjectFromSession(ctx.session!.user), 'reports:financial', undefined, {
         db: ctx.db,
       }),
     },
   })),
+  branchComparison: reports
+    .input(
+      z
+        .object({ from: z.iso.date(), to: z.iso.date() })
+        .strict()
+        .refine((input) => input.from <= input.to, {
+          message: 'The report start date must not be after the end date.',
+        })
+        .refine(
+          (input) =>
+            (Date.parse(input.to) - Date.parse(input.from)) / 86_400_000 + 1 <=
+            MAX_PHARMACY_REPORT_DAYS,
+          {
+            message: `Interactive pharmacy reports are limited to ${MAX_PHARMACY_REPORT_DAYS} days.`,
+          }
+        )
+    )
+    .query(async ({ ctx, input }) => {
+      await requireFinancialReports(ctx);
+      if (ctx.session!.user.role !== 'ADMIN')
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Owner access is required.' });
+      const available = await scope(ctx);
+      // The RSC tenant facade otherwise gives each statement its own transaction, losing
+      // the transaction-local branch context before the khata ledger is read.
+      return ctx.db.$transaction((tx) =>
+        readPharmacyBranchComparison(tx as typeof ctx.db, {
+          branches: available.branches,
+          from: input.from,
+          to: input.to,
+        })
+      );
+    }),
   repeatPurchasing: reports
     .input(
       filters
