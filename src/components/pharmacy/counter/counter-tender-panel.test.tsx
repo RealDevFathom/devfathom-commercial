@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -287,4 +287,98 @@ describe('family Khata tender', () => {
       { amount: '', cashReceived: '' }
     );
   });
+});
+
+describe('split tender rows', () => {
+  it('records Rs 600 cash then offers the Rs 400 remainder to a customer Khata account', async () => {
+    const loadKhataAccounts = vi.fn().mockResolvedValue([
+      { id: 'family-a', displayName: 'Family A', balanceMinor: 0, creditLimitMinor: 40000 },
+    ]);
+    const { props, rerender } = setup({ balanceMinor: 100000, loadKhataAccounts });
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '600' } });
+    expect(screen.getByText(/Remaining after this tender/)).toHaveTextContent('400.00');
+    fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
+    await screen.findByText('Payment recorded.');
+    expect(props.onTender).toHaveBeenNthCalledWith(
+      1,
+      { type: 'CASH', amountMinor: 60000 },
+      { amount: '600', cashReceived: '' }
+    );
+
+    const cash = { tenderId: 'cash-a', type: 'CASH', amountMinor: 60000 };
+    rerender(<CounterTenderPanel {...props} balanceMinor={40000} tenders={[cash]} />);
+    expect(
+      within(screen.getByRole('list', { name: 'Recorded tenders' })).getByText('600.00')
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Tender 2\./)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'KHATA' } });
+    await screen.findByText(/Ledger balance/);
+    // The account's limit covers only the remainder, not the original sale total.
+    expect(screen.queryByText(/exceeds the family credit limit/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
+    await waitFor(() => expect(props.onTender).toHaveBeenCalledTimes(2));
+    expect(props.onTender).toHaveBeenLastCalledWith(
+      { type: 'KHATA', amountMinor: 40000, familyAccountId: 'family-a', ownerOverride: false },
+      { amount: '', cashReceived: '' }
+    );
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Take payment' })).toBeEnabled());
+    rerender(
+      <CounterTenderPanel
+        {...props}
+        state="settled"
+        balanceMinor={0}
+        tenders={[cash, { tenderId: 'credit-a', type: 'CREDIT', amountMinor: 40000 }]}
+      />
+    );
+    expect(screen.getByText('Settled')).toBeInTheDocument();
+    expect(screen.getByText(/Khata \/ credit · Recorded/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
+    expect(screen.queryByText(/Split payment:/)).not.toBeInTheDocument();
+  });
+
+  it('requires a linked customer account and blocks a remainder over the limit', async () => {
+    const { props, rerender } = setup({
+      balanceMinor: 40000,
+      tenders: [{ tenderId: 'cash-a', type: 'CASH', amountMinor: 60000 }],
+      loadKhataAccounts: vi.fn().mockResolvedValue([]),
+    });
+    fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'KHATA' } });
+    await screen.findByText(/Link a customer/);
+    expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
+    rerender(
+      <CounterTenderPanel
+        {...props}
+        loadKhataAccounts={vi.fn().mockResolvedValue([
+          { id: 'family-a', displayName: 'Family A', balanceMinor: 1, creditLimitMinor: 40000 },
+        ])}
+      />
+    );
+    await screen.findByText(/exceeds the family credit limit/);
+    expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
+    expect(props.onTender).not.toHaveBeenCalled();
+  });
+
+  it.each(['rejected', 'unknown'] as const)(
+    'keeps earlier rows and the remaining wallet draft when the next payment is %s',
+    async (status) => {
+      const { props } = setup({
+        balanceMinor: 40000,
+        tenders: [{ tenderId: 'cash-a', type: 'CASH', amountMinor: 60000 }],
+        onTender: vi.fn().mockResolvedValue({ status, message: `Wallet ${status}.` }),
+      });
+      fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'WALLET' } });
+      fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '400' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
+      await screen.findByText(`Wallet ${status}.`);
+      expect(screen.getByRole('list', { name: 'Recorded tenders' }).children).toHaveLength(1);
+      expect(screen.getByLabelText('Amount')).toHaveValue('400');
+      expect(props.onTender).toHaveBeenCalledExactlyOnceWith(
+        { type: 'WALLET', amountMinor: 40000 },
+        { amount: '400', cashReceived: '' }
+      );
+      if (status === 'unknown') {
+        expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
+      }
+    }
+  );
 });

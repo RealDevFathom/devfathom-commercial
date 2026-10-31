@@ -49,6 +49,51 @@ const receipt: CounterReceipt = {
 afterEach(() => vi.restoreAllMocks());
 
 describe('isolated Pharmacy browser receipt', () => {
+  it.each(['en', 'ur'] as const)('includes every split tender in %s receipt output', (locale) => {
+    const split: CounterReceipt = {
+      ...receipt,
+      lines: [
+        {
+          ...receipt.lines[0]!,
+          quantity: 1,
+          canonicalUnits: 1,
+          unitPriceMinor: 100000,
+          lineTotalMinor: 100000,
+        },
+      ],
+      tenders: [
+        { tenderId: 'cash', type: 'CASH', amountMinor: 60000, changeGivenMinor: 0 },
+        { tenderId: 'khata', type: 'CREDIT', amountMinor: 30000, changeGivenMinor: null },
+        { tenderId: 'wallet', type: 'WALLET', amountMinor: 10000, changeGivenMinor: null },
+      ],
+      totals: {
+        grossMinor: 100000,
+        discountMinor: 0,
+        netMinor: 100000,
+        tenderedMinor: 100000,
+        changeMinor: 0,
+      },
+    };
+    for (const format of ['THERMAL_58', 'THERMAL', 'A4'] as const) {
+      const html = buildCounterBrowserReceipt(split, locale, format);
+      expect(html).toContain('CASH: 600.00');
+      expect(html).toContain('CREDIT: 300.00');
+      expect(html).toContain('WALLET: 100.00');
+    }
+    if (locale === 'en') {
+      const thermal = buildPharmacyReceiptPrintDocument(split, locale, {
+        layout: DEFAULT_RECEIPT_LAYOUT,
+        taxIdentity: { ntn: null, strn: null },
+        reprint: false,
+      });
+      expect(thermal.receiptSnapshot?.facts.payments).toEqual([
+        'CASH: 600.00',
+        'CREDIT: 300.00',
+        'WALLET: 100.00',
+      ]);
+    }
+  });
+
   it('reads and normalizes the profile in force at completion', async () => {
     const at = new Date('2026-09-05T10:00:00Z');
     const findFirst = vi.fn(async () => ({ ntn: ' NTN-HISTORICAL ', strn: '   ' }));

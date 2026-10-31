@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { StatusPill } from '@/components/ui/status-pill';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
+import type { CounterCartTender } from '@/lib/pharmacy/counter';
 import type { TenderDraft } from './tender-attempt-storage';
 
 /** The tenders POS-05 recognises. Card and wallet need a certified adapter. */
@@ -36,6 +37,7 @@ export type KhataAccount = {
   balanceMinor: number;
 };
 export type CounterTenderPanelProps = {
+  tenders?: readonly CounterCartTender[];
   loadKhataAccounts?: () => Promise<KhataAccount[]>;
   reauthenticateOwner?: (password: string, totp: string) => Promise<void>;
   printKhataStatement?: (familyAccountId: string) => Promise<void>;
@@ -79,7 +81,8 @@ function parseAmountMinor(value: string): number | null {
  * the operator is told before they take money:
  *
  * - A bill carrying an unresolved SAFETY_BLOCK cannot be tendered at all.
- * - Cash tendered below the amount due is not change, it is a short payment.
+ * - Cash received below this tender's amount is a short payment. A tender may
+ *   cover only part of the bill; the next row pays the remaining balance.
  *
  * The server still enforces both. This only shortens the feedback loop; it is
  * not the authority.
@@ -88,6 +91,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
   function CounterTenderPanel(
     {
       balanceMinor,
+      tenders = [],
       state,
       blocked,
       pending = false,
@@ -278,6 +282,36 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           ) : null}
         </div>
 
+        {tenders.length > 0 ? (
+          <ol aria-label="Recorded tenders" className="space-y-2">
+            {tenders.map((tender, index) => (
+              <li
+                key={tender.tenderId}
+                className="flex flex-wrap justify-between gap-2 rounded-md border border-border-subtle bg-surface-card p-3 text-sm"
+              >
+                <span className="text-text-body">
+                  {index + 1}.{' '}
+                  {tender.type === 'CREDIT'
+                    ? 'Khata / credit'
+                    : (TENDER_TYPES.find((entry) => entry.value === tender.type)?.label ??
+                      tender.type)}{' '}
+                  · Recorded
+                </span>
+                <span className="font-mono tabular-nums text-text-strong">
+                  {formatMinor(tender.amountMinor)}
+                </span>
+              </li>
+            ))}
+          </ol>
+        ) : null}
+        {state === 'ready' && balanceKnown && balanceMinor > 0 && !unknown ? (
+          <p className="text-sm text-text-muted">
+            {tenders.length > 0 ? `Tender ${tenders.length + 1}. ` : ''}
+            Split payment: enter the amount for this tender, then add another payment until the
+            balance due is zero. Leave Amount blank to pay the remainder.
+          </p>
+        ) : null}
+
         <p
           ref={statusRef}
           tabIndex={-1}
@@ -368,6 +402,14 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           {state === 'ready' && amount.trim() !== '' && !amountValid ? (
             <p id="tender-amount-error" className="text-sm text-destructive" role="alert">
               Enter an amount between 0.01 and the balance due.
+            </p>
+          ) : null}
+          {state === 'ready' && amountValid && !unknown ? (
+            <p className="text-sm text-text-body" aria-live="polite">
+              Remaining after this tender{' '}
+              <span className="font-mono tabular-nums text-text-strong">
+                {formatMinor(balanceMinor! - amountMinor!)}
+              </span>
             </p>
           ) : null}
         </div>
