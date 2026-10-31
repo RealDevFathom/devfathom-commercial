@@ -76,7 +76,9 @@ function CounterRxPhotoCapture({
 }) {
   const utils = trpc.useUtils();
   const [open, setOpen] = useState(false);
-  const workspace = trpc.pharmacyPrescriptions.workspace.useQuery(undefined, { enabled: open });
+  const workspace = trpc.pharmacyPrescriptions.captureWorkspace.useQuery(undefined, {
+    enabled: open,
+  });
   const uploadSource = trpc.pharmacyPrescriptions.uploadSource.useMutation();
   const extractSource = trpc.pharmacyPrescriptions.extractSource.useMutation();
   const capture = trpc.pharmacyPrescriptions.capture.useMutation();
@@ -199,7 +201,7 @@ function CounterRxPhotoCapture({
     }
     await Promise.allSettled([
       utils.pharmacyPrescriptions.counterPatientPanel.invalidate({ patientId }),
-      utils.pharmacyPrescriptions.workspace.invalidate(),
+      utils.pharmacyPrescriptions.captureWorkspace.invalidate(),
     ]);
   }
 
@@ -528,6 +530,7 @@ export type CounterRxPanelProps = {
   onSearch: () => void;
   onSelectPatient: (patientId: string) => void;
   onClearPatient: () => void;
+  canDispense?: boolean;
   onCapturePrescription?: (context: { patientId: string }) => void;
 };
 
@@ -562,6 +565,7 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
       onSearch,
       onSelectPatient,
       onClearPatient,
+      canDispense = false,
       onCapturePrescription,
     },
     ref
@@ -833,11 +837,8 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
                   >
                     Capture prescription
                   </Button>
-                ) : disabled || state === 'loading' || state === 'error' ? (
-                  <Button type="button" variant="outline" className="h-11" disabled>
-                    Capture prescription
-                  </Button>
-                ) : (
+                ) : null}
+                {canDispense && !disabled && state !== 'loading' && state !== 'error' ? (
                   <Link
                     className={buttonVariants({ variant: 'outline', className: 'h-11' })}
                     href={`/pharmacy/prescriptions#patientId=${encodeURIComponent(patient.patientId)}`}
@@ -845,14 +846,14 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
                     rel="noopener noreferrer"
                     prefetch={false}
                   >
-                    Capture prescription
+                    Open pharmacist workspace
                     <span className="sr-only"> for {patient.displayName} (opens in a new tab)</span>
                   </Link>
-                )}
+                ) : null}
                 <p className="text-xs text-text-muted">
                   {onCapturePrescription
                     ? `Capture evidence for ${patient.displayName}.`
-                    : `Opens capture for ${patient.displayName} in a new tab. This bill stays open.`}{' '}
+                    : `Photograph the prescription below to capture evidence for ${patient.displayName}.`}{' '}
                   Capture does not replace pharmacist review or dispensing consent.
                 </p>
                 <CounterRxPhotoCapture

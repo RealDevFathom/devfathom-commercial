@@ -519,7 +519,10 @@ describe('optional pharmacy Owner / Operator', () => {
         key: 'manager',
         capabilities: ['pharmacy:manage', 'pharmacy:orders', 'pharmacy:procurement'],
       },
-      { key: 'cashier', capabilities: ['pharmacy:counter', 'pharmacy:orders'] },
+      {
+        key: 'cashier',
+        capabilities: ['pharmacy:counter', 'pharmacy:orders', 'pharmacy:prescriptions'],
+      },
       { key: 'procurement', capabilities: ['pharmacy:procurement'] },
       { key: 'inventory', capabilities: ['pharmacy:inventory'] },
       { key: 'finance', capabilities: ['reports:financial'] },

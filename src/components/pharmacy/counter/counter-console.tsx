@@ -2371,6 +2371,7 @@ function ScopedPharmacyCounterConsole({
               }
               alerts={alerts}
               patient={patient}
+              canDispense={patientPanelQuery.data?.canDispense ?? false}
               candidates={patientsQuery.data?.patients ?? []}
               query={patientQuery}
               state={

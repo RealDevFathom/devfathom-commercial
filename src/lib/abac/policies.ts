@@ -74,6 +74,7 @@ export const ALL_ACTIONS = [
   'pharmacy:manage',
   'pharmacy:procurement',
   'pharmacy:inventory',
+  'pharmacy:prescriptions', // Prescription intake without dispensing authority
   'pharmacy:dispense', // RX-03/04: pharmacist decisions and substitution evidence
   'pharmacy:safety', // RX-05: controlled register and incident approval
   'pharmacy:catalogue-review', // MED-06: confirm or reject regulated connector proposals
@@ -240,6 +241,10 @@ export const POLICIES: Record<Action, Policy[]> = {
   // from falling through to this policy, and resolves a custom DENY first.
   'pharmacy:procurement': [isAdmin],
   'pharmacy:inventory': [],
+  // Legacy tenant administrators without an assigned role may capture source
+  // evidence. Assigned roles require a matching intake or dispense grant;
+  // canAny() prevents this fallback from bypassing the role's boundary.
+  'pharmacy:prescriptions': [isAdmin],
   // Dispensing is an exact-grant-only action: tenant administration alone is
   // insufficient, and wildcard ALLOW rules cannot opt a user in. Wildcard DENY
   // rules are still resolved by `can()` before this default-deny policy.

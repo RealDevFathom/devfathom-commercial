@@ -29,7 +29,7 @@ export type CanOptions = {
 async function customDecision(
   db: AuthzDb,
   userId: string,
-  action: string,
+  actions: readonly string[],
   now: Date
 ): Promise<{ decision: boolean | null; hasOrganizationRole: boolean }> {
   const user = await db.user.findUnique({
@@ -49,7 +49,9 @@ async function customDecision(
     ...user.permissionOverrides,
     ...(user.organizationRole?.permissions ?? []),
   ].filter((rule) =>
-    capabilityMatches(rule.capability, action, rule.effect === 'DENY' ? 'DENY' : 'ALLOW')
+    actions.some((action) =>
+      capabilityMatches(rule.capability, action, rule.effect === 'DENY' ? 'DENY' : 'ALLOW')
+    )
   );
   const hasOrganizationRole = user.organizationRole !== null;
   if (matchingRules.some((rule) => rule.effect === 'DENY')) {
@@ -68,6 +70,20 @@ export async function can(
   resource?: ResourceAttributes,
   opts: CanOptions = {}
 ): Promise<boolean> {
+  return canAny(subject, [action], resource, opts);
+}
+
+/**
+ * Authorize one workspace represented by capability aliases. A DENY matching
+ * any alias wins before an ALLOW or static policy for another alias. This is
+ * intentionally different from independently OR-ing multiple `can()` calls.
+ */
+export async function canAny(
+  subject: Subject,
+  actions: readonly Action[],
+  resource?: ResourceAttributes,
+  opts: CanOptions = {}
+): Promise<boolean> {
   const env: Environment = {
     now: opts.now ?? new Date(),
     source: opts.source,
@@ -75,27 +91,34 @@ export async function can(
   };
   const db = opts.db;
   if (!db) {
-    console.error(`[abac] no tenant-scoped database supplied for "${action}"`);
+    console.error('[abac] no tenant-scoped database supplied for actions:', actions);
     return false;
   }
+  let hasOrganizationRole: boolean;
   try {
-    const { decision, hasOrganizationRole } = await customDecision(db, subject.id, action, env.now);
-    if (decision !== null) return decision;
-    // Procurement's tenant-admin fallback exists only for legacy users who do
-    // not yet have an organization role. Once a role is assigned, its
-    // capabilities are the boundary: an omitted procurement grant must not
-    // fall through to the coarse ADMIN policy.
-    if (action === 'pharmacy:procurement' && hasOrganizationRole) return false;
+    const custom = await customDecision(db, subject.id, actions, env.now);
+    if (custom.decision !== null) return custom.decision;
+    hasOrganizationRole = custom.hasOrganizationRole;
   } catch (err) {
-    console.error(`[abac] custom permission lookup for "${action}" threw:`, err);
+    console.error('[abac] custom permission lookup threw for actions:', actions, err);
     return false;
   }
-  for (const policy of POLICIES[action] ?? []) {
-    try {
-      if (await policy({ subject, resource, env, db })) return true;
-    } catch (err) {
-      // A policy that throws denies (fail-closed) but never crashes the request.
-      console.error(`[abac] policy for "${action}" threw:`, err);
+  for (const action of actions) {
+    // Assigned roles bound procurement and prescription intake authority. Keep
+    // the tenant-admin fallback only for legacy users without a role (#375).
+    if (
+      hasOrganizationRole &&
+      (action === 'pharmacy:procurement' || action === 'pharmacy:prescriptions')
+    ) {
+      continue;
+    }
+    for (const policy of POLICIES[action] ?? []) {
+      try {
+        if (await policy({ subject, resource, env, db })) return true;
+      } catch (err) {
+        // A policy that throws denies (fail-closed) but never crashes the request.
+        console.error('[abac] policy threw for action:', action, err);
+      }
     }
   }
   return false;
