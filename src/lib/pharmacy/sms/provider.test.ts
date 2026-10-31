@@ -1,4 +1,4 @@
-import { createHmac } from 'node:crypto';
+import { createHmac, randomBytes } from 'node:crypto';
 
 import { describe, expect, it } from 'vitest';
 
@@ -87,8 +87,12 @@ describe('SMS providers', () => {
 
   it('verifies the webhook HMAC and fails closed without a secret', () => {
     const body = '{"messages":[]}';
-    const signature = `sha256=${createHmac('sha256', 'secret').update(body).digest('hex')}`;
-    const signed = createSmsProvider(readSmsConfig({ PHARMACY_SMS_WEBHOOK_SECRET: 'secret' }));
+    // Per-run fixture key (not a hardcoded secret).
+    const webhookSecret = randomBytes(32).toString('hex');
+    const signature = `sha256=${createHmac('sha256', webhookSecret).update(body).digest('hex')}`;
+    const signed = createSmsProvider(
+      readSmsConfig({ PHARMACY_SMS_WEBHOOK_SECRET: webhookSecret })
+    );
     expect(signed.verifyWebhook(body, signature)).toBe(true);
     expect(signed.verifyWebhook(`${body} `, signature)).toBe(false);
     expect(signed.verifyWebhook(body, null)).toBe(false);

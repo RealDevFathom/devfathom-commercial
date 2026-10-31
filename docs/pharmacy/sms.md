@@ -23,6 +23,9 @@ lifecycle, `pharmacy-crm` entitlement, 08:00–22:00 local hours, one refill rem
 customer per day, one khata reminder per customer per day). Each SMS is claimed in
 `pharmacy_message_logs` with `channel = 'SMS'` before the gateway is called
 (at-most-once), using its own dedupe key (`sms:<whatsapp key>`, `sms:order-ready:<id>`).
+Refill and khata SMS also carry a per-customer, per-local-day key
+(`refill-sms:<customer>:<day>`, `khata-sms:<customer>:<day>`), so a customer gets at
+most one SMS of each kind per day even when several captures are due.
 
 ## STOP / START
 

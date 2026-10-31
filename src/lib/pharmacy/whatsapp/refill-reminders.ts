@@ -209,6 +209,13 @@ export async function processDueWhatsAppRefillReminders(
         }).format(now)
       );
       if (hour >= 22 || hour < 8) return null;
+      // #723: per-customer, per-local-day cap on refill SMS (mirrors khata-sms).
+      const day = new Intl.DateTimeFormat('en-CA', {
+        timeZone: workspaceTimezone(organization.timezone),
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      }).format(now);
       await lockPatientConsent(db, capture.organizationId, capture.patientId);
       const [customer, consent] = await Promise.all([
         db.pharmacyCustomer.findFirst({
@@ -258,6 +265,7 @@ export async function processDueWhatsAppRefillReminders(
           customerId: customer.id,
           kind: 'REFILL_REMINDER',
           dedupeKey: `sms:${plan.dedupeKey}`,
+          customerDayKey: `refill-sms:${customer.id}:${day}`,
           branchId: capture.branchId,
           refillCaptureId: capture.id,
           dueDate: plan.dueDate,
@@ -279,7 +287,7 @@ export async function processDueWhatsAppRefillReminders(
         refillCaptureId: capture.id,
         dueDate: plan.dueDate,
       });
-      return { channel: 'WHATSAPP' as const, customerId: customer.id, to, logId };
+      return { channel: 'WHATSAPP' as const, customerId: customer.id, to, logId, day };
     });
     if (!recipient) {
       result.skippedNoConsent += 1;
@@ -337,6 +345,7 @@ export async function processDueWhatsAppRefillReminders(
           customerId: recipient.customerId,
           kind: 'REFILL_REMINDER',
           dedupeKey: `sms:${plan.dedupeKey}`,
+          customerDayKey: `refill-sms:${recipient.customerId}:${recipient.day}`,
           branchId: capture.branchId,
           refillCaptureId: capture.id,
           dueDate: plan.dueDate,

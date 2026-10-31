@@ -21,7 +21,7 @@ export function sanitizeSmsParameter(value: string, fallback: string, max = 40):
           /(?:[a-z][a-z0-9+.-]*:\/\/|www\.)\S+|\b(?:[a-z0-9-]+\.)+[a-z]{2,}(?:[/:?#]\S*)?/gi,
           ''
         )
-        .replace(/[\r\n  ]+/g, ' ')
+        .replace(/[\r\n\u2028\u2029]+/g, ' ')
         .replace(/\s+/g, ' ')
         .trim()
     )

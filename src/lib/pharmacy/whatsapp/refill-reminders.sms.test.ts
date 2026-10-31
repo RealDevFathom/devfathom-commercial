@@ -50,7 +50,10 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
         const row = data[0]!;
         if (
           store.logs.some(
-            (log) => log.organizationId === row.organizationId && log.dedupeKey === row.dedupeKey
+            (log) =>
+              log.organizationId === row.organizationId &&
+              (log.dedupeKey === row.dedupeKey ||
+                (row.customerDayKey !== undefined && log.customerDayKey === row.customerDayKey))
           )
         )
           return [];
@@ -159,6 +162,8 @@ describe('processDueWhatsAppRefillReminders SMS fallback (#723)', () => {
       kind: 'REFILL_REMINDER',
       direction: 'OUTBOUND',
       dedupeKey: 'sms:refill:patient-1:medicine-1:2026-10-01',
+      // Per-customer, per-local-day cap on refill SMS.
+      customerDayKey: expect.stringMatching(/^refill-sms:customer-1:\d{4}-\d{2}-\d{2}$/),
       refillCaptureId: 'capture-1',
       phoneLast4: '4567',
       status: 'IGNORED',
