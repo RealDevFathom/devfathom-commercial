@@ -46,6 +46,11 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
         ) ?? null,
     },
     pharmacyMessageLog: {
+      findFirst: async ({ where }: { where: { organizationId: string; dedupeKey: string; channel: string } }) =>
+        store.logs.find(
+          (log) => log.organizationId === where.organizationId &&
+            log.dedupeKey === where.dedupeKey && (log.channel ?? 'WHATSAPP') === where.channel
+        ) ?? null,
       count: async () => store.logs.length,
       createManyAndReturn: async ({ data }: { data: Array<Omit<LogRow, 'id'>> }) => {
         const row = data[0]!;
@@ -213,4 +218,33 @@ describe('processDueWhatsAppKhataReminders SMS fallback (#723)', () => {
     expect(result).toMatchObject({ skippedNoConsent: 1 });
     expect(smsProvider.calls).toEqual([]);
   });
+});
+
+it.each([
+  readWhatsAppConfig({}),
+  { ...config, templates: { ...config.templates, khataReminder: null } },
+  { ...config, provider: 'meta' as const },
+])('sends khata SMS independently of WhatsApp configuration: %j', async (whatsapp) => {
+  store.customers = [customer(null)];
+  store.consents = [consent('SMS')];
+  const provider = new MockWhatsAppProvider(whatsapp);
+  const smsProvider = new MockSmsProvider(smsConfig);
+  const result = await processDueWhatsAppKhataReminders({ now: NOW, config: whatsapp, provider, smsConfig, smsProvider });
+  expect(result.configured).toBe(true);
+  expect(smsProvider.calls).toHaveLength(1);
+  expect(provider.calls).toEqual([]);
+});
+
+it('falls back once for a permanent delivery failure recorded after the send', async () => {
+  store.customers = [customer(true)];
+  store.consents = [consent('WHATSAPP'), consent('SMS')];
+  const provider = new MockWhatsAppProvider(config);
+  const smsProvider = new MockSmsProvider(smsConfig);
+  const run = () => processDueWhatsAppKhataReminders({ now: NOW, config, provider, smsConfig, smsProvider });
+  await run();
+  Object.assign(store.logs[0]!, { status: 'FAILED', error: 'WHATSAPP_DELIVERY_FAILED' });
+  await run();
+  await run();
+  expect(provider.calls).toHaveLength(1);
+  expect(smsProvider.calls).toHaveLength(1);
 });

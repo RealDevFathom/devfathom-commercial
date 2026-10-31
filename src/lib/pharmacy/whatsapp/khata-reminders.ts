@@ -121,8 +121,17 @@ export async function processDueWhatsAppKhataReminders(
   const smsConfig = options.smsConfig ?? readSmsConfig();
   const smsProvider = options.smsProvider ?? createSmsProvider(smsConfig);
   const minBalanceMinor = options.minBalanceMinor ?? DEFAULT_MIN_BALANCE_MINOR;
+  const whatsappConfigured = Boolean(
+    config.templates.khataReminder &&
+    config.provider !== 'meta' &&
+    config.organizationId &&
+    config.phoneNumberId
+  );
+  const smsConfigured = Boolean(
+    smsConfig.organizationId && smsFallbackEnabled(smsConfig, smsConfig.organizationId)
+  );
   const result: KhataReminderRunResult = {
-    configured: Boolean(config.templates.khataReminder),
+    configured: whatsappConfigured || smsConfigured,
     scanned: 0,
     sent: 0,
     prepared: 0,
@@ -133,14 +142,22 @@ export async function processDueWhatsAppKhataReminders(
     notDue: 0,
     sms: emptySmsCounters(),
   };
-  const organizationId = config.organizationId;
-  if (!result.configured || config.provider === 'meta' || !organizationId || !config.phoneNumberId)
-    return { ...result, configured: false };
+  if (!result.configured) return result;
+  const organizationIds = [
+    ...new Set([
+      ...(whatsappConfigured && config.organizationId ? [config.organizationId] : []),
+      ...(smsConfigured && smsConfig.organizationId ? [smsConfig.organizationId] : []),
+    ]),
+  ];
 
   const limit = Math.max(1, Math.min(500, Math.floor(options.limit ?? 100)));
-  const accounts = await withPlatformDb((db) =>
-    readDueKhataAccounts(db, organizationId, now, limit, minBalanceMinor)
-  );
+  const accounts = await withPlatformDb(async (db) => {
+    const rows: DueAccount[] = [];
+    for (const organizationId of organizationIds) {
+      rows.push(...(await readDueKhataAccounts(db, organizationId, now, limit, minBalanceMinor)));
+    }
+    return rows;
+  });
 
   for (const account of accounts) {
     result.scanned += 1;
@@ -160,7 +177,8 @@ export async function processDueWhatsAppKhataReminders(
     }
 
     const recipient = await withTenantDb(account.organizationId, async (db) => {
-      if (config.organizationId !== account.organizationId || !config.phoneNumberId) return null;
+      const canUseWhatsApp = whatsappConfigured && config.organizationId === account.organizationId;
+      if (!canUseWhatsApp && !smsFallbackEnabled(smsConfig, account.organizationId)) return null;
       const organization = await db.organization.findUnique({
         where: { id: account.organizationId },
         select: { vertical: true, status: true, timezone: true },
@@ -222,15 +240,25 @@ export async function processDueWhatsAppKhataReminders(
           !consent.revokedAt &&
           !(consent.recordedAt > now)
       );
-      // #723: without WhatsApp consent the reminder may go by SMS, never otherwise.
-      if (!whatsappAllowed && !smsFallbackEnabled(smsConfig, account.organizationId)) return null;
+      const previous = await db.pharmacyMessageLog.findFirst({
+        where: {
+          organizationId: account.organizationId,
+          channel: 'WHATSAPP',
+          direction: 'OUTBOUND',
+          dedupeKey: plan.dedupeKey,
+        },
+        select: { status: true },
+      });
+      const useSms = !whatsappAllowed || previous?.status === 'FAILED';
+      if (useSms ? !smsFallbackEnabled(smsConfig, account.organizationId) : !canUseWhatsApp)
+        return null;
       const day = new Intl.DateTimeFormat('en-CA', {
         timeZone,
         year: 'numeric',
         month: '2-digit',
         day: '2-digit',
       }).format(now);
-      if (!whatsappAllowed || !to) {
+      if (useSms || !to) {
         const sms = await claimSmsFallbackInTransaction(db, smsConfig, {
           organizationId: account.organizationId,
           customerId: customer.id,

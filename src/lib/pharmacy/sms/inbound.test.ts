@@ -1,34 +1,34 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 type LogRow = { id: string; dedupeKey: string; [key: string]: unknown };
+type CustomerRow = { id: string; smsOptIn: boolean | null; smsOptInChangedAt: Date | null; phone?: string };
 
 const store = vi.hoisted(() => ({
-  customer: null as null | {
-    id: string;
-    smsOptIn: boolean | null;
-    smsOptInChangedAt: Date | null;
-  },
+  customer: null as CustomerRow | null,
+  shared: [] as CustomerRow[],
   logs: [] as LogRow[],
 }));
 
 vi.mock('../consent-writer', () => ({ lockCustomerConsent: async () => undefined }));
-vi.mock('../whatsapp/inbound', () => ({
-  findCustomerByWhatsApp: async (_db: unknown, _org: string, from: string) =>
-    store.customer && from === '923001234567'
-      ? { id: store.customer.id, userId: null, active: true, whatsappOptIn: null }
-      : null,
-}));
 vi.mock('@/lib/tenancy/scoped-db', () => {
   const db = {
     pharmacyCustomer: {
+      findMany: async () => [store.customer, ...store.shared]
+        .filter((row): row is CustomerRow => row !== null)
+        .map((row) => ({
+          id: row.id,
+          patientId: `patient-${row.id}`,
+          patient: { phone: row.phone ?? '0300-1234567' },
+        })),
       updateMany: async ({
         where,
         data,
       }: {
-        where: { OR: Array<{ smsOptInChangedAt: null | Date | { lt: Date } }> };
+        where: { id: string; OR: Array<{ smsOptInChangedAt: null | Date | { lt: Date } }> };
         data: { smsOptIn: boolean; smsOptInChangedAt: Date };
       }) => {
-        const current = store.customer!.smsOptInChangedAt;
+        const customer = [store.customer, ...store.shared].find((row) => row?.id === where.id)!;
+        const current = customer.smsOptInChangedAt;
         const allowed = where.OR.some((clause) => {
           const value = clause.smsOptInChangedAt;
           if (value === null) return current === null;
@@ -36,7 +36,7 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
           return current !== null && current < value.lt;
         });
         if (!allowed) return { count: 0 };
-        Object.assign(store.customer!, data);
+        Object.assign(customer, data);
         return { count: 1 };
       },
     },
@@ -70,6 +70,7 @@ function message(id: string, text: string, receivedAt = new Date(NOW.getTime() -
 
 beforeEach(() => {
   store.customer = { id: 'customer-1', smsOptIn: null, smsOptInChangedAt: null };
+  store.shared = [];
   store.logs = [];
 });
 
@@ -176,4 +177,35 @@ describe('handleInboundSms (#723)', () => {
     expect(store.logs).toEqual([]);
     expect(provider.calls).toEqual([]);
   });
+});
+
+it('applies shared-phone STOP and START to every match and acknowledges only once per message', async () => {
+  store.shared = [
+    { id: 'customer-2', smsOptIn: true, smsOptInChangedAt: null },
+    // Same last four digits must not be enough to change another phone's consent.
+    { id: 'customer-3', smsOptIn: true, smsOptInChangedAt: null, phone: '03009994567' },
+  ];
+  const provider = new MockSmsProvider(config);
+  const stop = message('shared-stop', 'STOP', new Date(NOW.getTime() - 120_000));
+  await expect(handleInboundSms('org_a', config, provider, stop, NOW)).resolves.toBe('OPTED_OUT');
+  expect(store.customer!.smsOptIn).toBe(false);
+  expect(store.shared[0]!.smsOptIn).toBe(false);
+  expect(store.shared[1]!.smsOptIn).toBe(true);
+  expect(store.logs[0]).toMatchObject({ customerId: null, kind: 'OPT_OUT' });
+  await expect(handleInboundSms('org_a', config, provider, stop, NOW)).resolves.toBe('DUPLICATE');
+  expect(provider.calls).toHaveLength(1);
+  await expect(handleInboundSms('org_a', config, provider, message('shared-start', 'START'), NOW)).resolves.toBe('OPTED_IN');
+  expect(store.customer!.smsOptIn).toBe(true);
+  expect(store.shared[0]!.smsOptIn).toBe(true);
+  expect(provider.calls).toHaveLength(2);
+});
+
+it('preserves timestamp ordering independently for each customer on a shared phone', async () => {
+  store.customer!.smsOptInChangedAt = NOW;
+  store.customer!.smsOptIn = false;
+  store.shared = [{ id: 'customer-2', smsOptIn: true, smsOptInChangedAt: null }];
+  const provider = new MockSmsProvider(config);
+  await expect(handleInboundSms('org_a', config, provider, message('shared-stop', 'STOP'), NOW)).resolves.toBe('OPTED_OUT');
+  expect(store.customer).toMatchObject({ smsOptIn: false, smsOptInChangedAt: NOW });
+  expect(store.shared[0]!.smsOptIn).toBe(false);
 });

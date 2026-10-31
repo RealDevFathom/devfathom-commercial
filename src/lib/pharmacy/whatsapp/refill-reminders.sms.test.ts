@@ -11,6 +11,7 @@ type ConsentRow = {
 
 const store = vi.hoisted(() => ({
   captures: [] as Array<Record<string, unknown>>,
+  captureQueries: [] as string[],
   customers: [] as Array<Record<string, unknown>>,
   consents: [] as ConsentRow[],
   logs: [] as LogRow[],
@@ -22,8 +23,11 @@ vi.mock('@/lib/entitlements', () => ({
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => {
   const db = {
-    $queryRaw: async (query: { sql: string }) =>
-      query.sql.includes('FOR UPDATE') ? [{ id: 'patient-1' }] : store.captures,
+    $queryRaw: async (query: { sql: string }) => {
+      if (query.sql.includes('FOR UPDATE')) return [{ id: 'patient-1' }];
+      store.captureQueries.push(query.sql);
+      return store.captures;
+    },
     organization: {
       findUnique: async () => ({
         vertical: 'PHARMACY',
@@ -45,7 +49,12 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
         ) ?? null,
     },
     pharmacyMessageLog: {
-      count: async () => store.logs.length,
+      findFirst: async ({ where }: { where: { organizationId: string; dedupeKey: string; channel: string } }) =>
+        store.logs.find(
+          (log) => log.organizationId === where.organizationId &&
+            log.dedupeKey === where.dedupeKey && (log.channel ?? 'WHATSAPP') === where.channel
+        ) ?? null,
+      count: async () => store.logs.filter((log) => !(log.channel === 'WHATSAPP' && log.status === 'FAILED')).length,
       createManyAndReturn: async ({ data }: { data: Array<Omit<LogRow, 'id'>> }) => {
         const row = data[0]!;
         if (
@@ -90,6 +99,7 @@ const smsConfig = readSmsConfig({ PHARMACY_SMS_ORGANIZATION_ID: 'org_a' });
 function capture() {
   return {
     id: 'capture-1',
+    channel: 'WHATSAPP',
     organizationId: 'org_a',
     branchId: 'branch-1',
     patientId: 'patient-1',
@@ -127,6 +137,7 @@ class FailingWhatsApp extends MockWhatsAppProvider {
 
 beforeEach(() => {
   store.captures = [capture()];
+  store.captureQueries = [];
   store.customers = [];
   store.consents = [];
   store.logs = [];
@@ -336,5 +347,67 @@ describe('processDueWhatsAppRefillReminders SMS fallback (#723)', () => {
     // The fake log count makes the per-customer daily guard skip the second run.
     expect(second).toMatchObject({ skippedNoConsent: 1 });
     expect(smsProvider.calls).toHaveLength(1);
+  });
+});
+
+describe('SMS refill captures and independent sender configuration', () => {
+  it.each([false, true])('selects SMS captures and respects that channel with WhatsApp consent = %s', async (whatsappOptIn) => {
+    store.captures = [{ ...capture(), channel: 'SMS' }];
+    store.customers = [customer(whatsappOptIn)];
+    store.consents = [consent('SMS'), ...(whatsappOptIn ? [consent('WHATSAPP')] : [])];
+    const provider = new MockWhatsAppProvider(config);
+    const smsProvider = new MockSmsProvider(smsConfig);
+    await processDueWhatsAppRefillReminders({ now: NOW, config, provider, smsConfig, smsProvider });
+    // Assert the actual SQL passed to Prisma, so the fake cannot hide a
+    // regression back to selecting WhatsApp captures only.
+    expect(store.captureQueries[0]).toContain(`capture."channel" IN ('WHATSAPP', 'SMS')`);
+    expect(store.captureQueries[0]).toContain('capture."channel",');
+    expect(smsProvider.calls).toHaveLength(1);
+    expect(provider.calls).toEqual([]);
+    expect(store.logs[0]).toMatchObject({ channel: 'SMS', refillCaptureId: 'capture-1' });
+  });
+
+  it.each([
+    readWhatsAppConfig({}),
+    { ...config, templates: { ...config.templates, refillReminder: null } },
+    { ...config, organizationId: 'org_b' },
+    { ...config, provider: 'meta' as const },
+  ])('allows SMS without a usable WhatsApp sender: %j', async (whatsapp) => {
+    store.customers = [customer(null)];
+    store.consents = [consent('SMS')];
+    const provider = new MockWhatsAppProvider(whatsapp);
+    const smsProvider = new MockSmsProvider(smsConfig);
+    const result = await processDueWhatsAppRefillReminders({
+      now: NOW, config: whatsapp, provider, smsConfig, smsProvider,
+    });
+    expect(result.configured).toBe(true);
+    expect(smsProvider.calls).toHaveLength(1);
+    expect(provider.calls).toEqual([]);
+  });
+
+  it('does not treat disabled WhatsApp configuration as missing customer consent', async () => {
+    store.customers = [customer(true)];
+    store.consents = [consent('WHATSAPP'), consent('SMS')];
+    const smsProvider = new MockSmsProvider(smsConfig);
+    await processDueWhatsAppRefillReminders({
+      now: NOW, config: readWhatsAppConfig({}), smsConfig, smsProvider,
+    });
+    expect(smsProvider.calls).toEqual([]);
+  });
+
+  it('picks up a permanent delivery failure on a subsequent run, once', async () => {
+    store.customers = [customer(true)];
+    store.consents = [consent('WHATSAPP'), consent('SMS')];
+    store.logs = [{ id: 'wa-log', organizationId: 'org_a', channel: 'WHATSAPP',
+      dedupeKey: 'refill:patient-1:medicine-1:2026-10-01', status: 'FAILED',
+      refillCaptureId: 'capture-1', error: 'WHATSAPP_DELIVERY_FAILED' }];
+    const provider = new MockWhatsAppProvider(config);
+    const smsProvider = new MockSmsProvider(smsConfig);
+    const run = () => processDueWhatsAppRefillReminders({ now: NOW, config, provider, smsConfig, smsProvider });
+    await run();
+    await run();
+    expect(smsProvider.calls).toHaveLength(1);
+    expect(provider.calls).toEqual([]);
+    expect(store.captureQueries[0]).toContain(`log."channel" = 'WHATSAPP' AND log."status" = 'FAILED'`);
   });
 });

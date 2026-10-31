@@ -120,3 +120,35 @@ suite('#723 SMS fallback schema (restricted PostgreSQL)', () => {
     expect(updated).toEqual({ smsOptIn: false, smsOptInChangedAt: at });
   });
 });
+
+suite('#723 asynchronous WhatsApp reminder failures (restricted PostgreSQL)', () => {
+  it('records permanent failure once, rejects transient failure, and lets delivery confirmation win', async () => {
+    const { recordReminderDelivery } = await import('../whatsapp/reminder-delivery');
+    const occurredAt = new Date('2026-10-21T08:00:00.000Z');
+    const now = new Date('2026-10-21T08:01:00.000Z');
+    const messageId = `delivery-${suffix}`;
+    const transientId = `transient-${suffix}`;
+    await tenant(orgA, (db) => db.pharmacyMessageLog.createMany({
+      data: [messageId, transientId].map((id) => ({
+        organizationId: orgA,
+        channel: 'WHATSAPP', direction: 'OUTBOUND', kind: 'REFILL_REMINDER', status: 'SENT',
+        dedupeKey: id, providerMessageId: id, customerId: customerA.id,
+        // Meta timestamp precision is seconds; claims need not start at .000.
+        createdAt: new Date(occurredAt.getTime() + 250),
+      })),
+    }));
+    const record = (id: string, state: 'FAILED' | 'DELIVERED', errorCodes: number[]) =>
+      tenant(orgA, (db) => recordReminderDelivery(db, orgA, { messageId: id, state, errorCodes, occurredAt }, now));
+    const status = (id: string) => tenant(orgA, (db) => db.pharmacyMessageLog.findFirst({
+      where: { organizationId: orgA, providerMessageId: id }, select: { status: true, error: true },
+    }));
+    await record(messageId, 'FAILED', [131026]);
+    await record(messageId, 'FAILED', [131026]);
+    expect(await status(messageId)).toEqual({ status: 'FAILED', error: 'WHATSAPP_DELIVERY_FAILED' });
+    await record(transientId, 'FAILED', [131000]);
+    expect(await status(transientId)).toEqual({ status: 'SENT', error: null });
+    await record(messageId, 'DELIVERED', []);
+    await record(messageId, 'FAILED', [131026]);
+    expect(await status(messageId)).toEqual({ status: 'SENT', error: 'DELIVERY_CONFIRMED' });
+  });
+});

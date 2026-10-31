@@ -3,9 +3,8 @@ import 'server-only';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 
 import { lockCustomerConsent } from '../consent-writer';
-import { findCustomerByWhatsApp } from '../whatsapp/inbound';
 import { claimMessageLogInTransaction, sendAndLog } from '../whatsapp/message-log';
-import { consentKeyword, phoneLast4 } from '../whatsapp/messages';
+import { consentKeyword, normalizeWhatsAppNumber, phoneLast4 } from '../whatsapp/messages';
 import type { SmsConfig, SmsInboundMessage, SmsProvider } from './provider';
 import { SMS_TEMPLATES } from './templates';
 
@@ -41,8 +40,18 @@ export async function handleInboundSms(
   const optIn = keyword === 'START';
   const last4 = phoneLast4(message.from);
 
-  const { customer, inboundId, staleConsent } = await withTenantDb(organizationId, async (db) => {
-    const customer = await findCustomerByWhatsApp(db, organizationId, message.from);
+  const { knownSender, customerId, inboundId, staleConsent } = await withTenantDb(organizationId, async (db) => {
+    // A phone controls consent for every active customer using that number.
+    // Do not use the order-intake resolver, which rejects ambiguous identities.
+    const candidates = await db.pharmacyCustomer.findMany({
+      where: { organizationId, active: true, patient: { phone: { endsWith: last4 } } },
+      select: { id: true, patientId: true, patient: { select: { phone: true } } },
+      orderBy: [{ patientId: 'asc' }, { id: 'asc' }],
+    });
+    const customers = candidates.filter(
+      (candidate) => normalizeWhatsAppNumber(candidate.patient.phone) === message.from
+    );
+    const customer = customers.length === 1 ? customers[0]! : null;
     const inboundId = await claimMessageLogInTransaction(db, {
       organizationId,
       channel: 'SMS',
@@ -54,38 +63,45 @@ export async function handleInboundSms(
       phoneLast4: last4,
       providerMessageId: message.providerMessageId,
     });
-    if (inboundId && !customer)
+    if (inboundId && customers.length === 0)
       await db.pharmacyMessageLog.update({
         where: { id: inboundId },
         data: { status: 'IGNORED', error: 'UNKNOWN_SENDER' },
       });
-    let staleConsent = false;
-    if (inboundId && customer) {
-      await lockCustomerConsent(db, organizationId, customer.id);
-      const changed = await db.pharmacyCustomer.updateMany({
-        where: {
-          organizationId,
-          id: customer.id,
-          OR: [
-            { smsOptInChangedAt: null },
-            { smsOptInChangedAt: { lt: at } },
-            // STOP wins an equal-time race, as on WhatsApp.
-            ...(!optIn ? [{ smsOptInChangedAt: at }] : []),
-          ],
-        },
-        data: { smsOptIn: optIn, smsOptInChangedAt: at },
-      });
-      staleConsent = changed.count === 0;
-      if (staleConsent)
+    let changedCount = 0;
+    if (inboundId && customers.length) {
+      for (const match of customers) {
+        await lockCustomerConsent(db, organizationId, match.id);
+        const changed = await db.pharmacyCustomer.updateMany({
+          where: {
+            organizationId,
+            id: match.id,
+            OR: [
+              { smsOptInChangedAt: null },
+              { smsOptInChangedAt: { lt: at } },
+              // STOP wins an equal-time race, as on WhatsApp.
+              ...(!optIn ? [{ smsOptInChangedAt: at }] : []),
+            ],
+          },
+          data: { smsOptIn: optIn, smsOptInChangedAt: at },
+        });
+        changedCount += changed.count;
+      }
+      if (changedCount === 0)
         await db.pharmacyMessageLog.update({
           where: { id: inboundId },
           data: { status: 'IGNORED', error: 'STALE_CONSENT' },
         });
     }
-    return { customer, inboundId, staleConsent };
+    return {
+      knownSender: customers.length > 0,
+      customerId: customer?.id ?? null,
+      inboundId,
+      staleConsent: customers.length > 0 && changedCount === 0,
+    };
   });
   if (!inboundId) return 'DUPLICATE';
-  if (!customer) return 'UNKNOWN_SENDER';
+  if (!knownSender) return 'UNKNOWN_SENDER';
   if (staleConsent) return 'STALE_CONSENT';
 
   // The acknowledgement answers the customer's own request; only for fresh messages.
@@ -97,7 +113,7 @@ export async function handleInboundSms(
         channel: 'SMS',
         kind: 'CONSENT_ACK',
         dedupeKey: `sms-out:${message.providerMessageId}`,
-        customerId: customer.id,
+        customerId,
         phoneLast4: last4,
       },
       () =>

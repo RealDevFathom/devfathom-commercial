@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // #723: marking an order ready triggers the SMS fallback after the transition
 // commits, as the acting staff user. The notice is best effort and never fails
 // or undoes the staff transition; other actions never notify.
+const background = vi.hoisted(() => ({ tasks: [] as Array<() => Promise<unknown>> }));
+vi.mock('next/server', () => ({ after: (task: () => Promise<unknown>) => background.tasks.push(task) }));
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
@@ -52,6 +54,7 @@ function caller() {
 }
 
 beforeEach(() => {
+  background.tasks = [];
   vi.mocked(transitionCustomerOrder)
     .mockReset()
     .mockResolvedValue(order as never);
@@ -73,6 +76,9 @@ describe('pharmacyOrdering.transition SMS order-ready fallback', () => {
     await expect(
       caller().transition({ branchId: BRANCH, orderId: 'order-1', action: 'ready' })
     ).resolves.toEqual(order);
+    expect(notifyOrderReadyBySms).not.toHaveBeenCalled();
+    expect(background.tasks).toHaveLength(1);
+    await background.tasks[0]!();
     expect(notifyOrderReadyBySms).toHaveBeenCalledExactlyOnceWith({
       organizationId: 'org-1',
       branchId: BRANCH,
@@ -90,10 +96,17 @@ describe('pharmacyOrdering.transition SMS order-ready fallback', () => {
   );
 
   it('keeps the transition result when the SMS notice fails', async () => {
-    vi.mocked(notifyOrderReadyBySms).mockRejectedValue(new Error('gateway down'));
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.mocked(notifyOrderReadyBySms).mockRejectedValue(new Error('sensitive gateway payload'));
     await expect(
       caller().transition({ branchId: BRANCH, orderId: 'order-1', action: 'ready' })
     ).resolves.toEqual(order);
+    await expect(background.tasks[0]!()).resolves.toBeUndefined();
+    expect(error).toHaveBeenCalledWith('PHARMACY_ORDER_READY_SMS_FAILED', {
+      organizationId: 'org-1', orderId: 'order-1',
+    });
+    expect(JSON.stringify(error.mock.calls)).not.toContain('sensitive');
+    error.mockRestore();
   });
 
   it('does not notify when the transition itself fails', async () => {

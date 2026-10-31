@@ -44,7 +44,7 @@ export type RefillReminderPlanInput = {
 };
 
 /**
- * Pure schedule for one captured WhatsApp refill reminder. The due date is the
+ * Pure schedule for one captured refill reminder. The due date is the
  * RX-07 run-out date from `deriveRefillSchedule`; the send window opens
  * `leadDays` before it and closes at run-out. The dedupe key is stable per
  * patient x medicine x due date, so repeated job runs claim it only once.
@@ -73,6 +73,7 @@ type DueCapture = {
   patientId: string;
   medicineId: string;
   medicineName: string;
+  channel: 'WHATSAPP' | 'SMS';
   directionsEnglish: string;
   quantityDispensed: number;
   dispensedAt: Date;
@@ -94,9 +95,10 @@ export type RefillReminderRunResult = {
 
 /**
  * Scheduled job: sends the approved refill-reminder template for WhatsApp
- * reminder captures (created by `captureRefillReminder`) that fall inside the
- * send window. Only customers who opted in on WhatsApp AND whose latest
- * REMINDERS/WHATSAPP patient consent is granted are messaged.
+ * and SMS reminder captures (created by `captureRefillReminder`) inside the
+ * send window. SMS captures use SMS directly; WhatsApp captures fall back only
+ * without WhatsApp consent or after a permanent failure. Each channel requires
+ * its own current consent and tenant sender binding.
  */
 export async function processDueWhatsAppRefillReminders(
   options: {
@@ -113,8 +115,17 @@ export async function processDueWhatsAppRefillReminders(
   const provider = options.provider ?? createWhatsAppProvider(config);
   const smsConfig = options.smsConfig ?? readSmsConfig();
   const smsProvider = options.smsProvider ?? createSmsProvider(smsConfig);
+  const whatsappConfigured = Boolean(
+    config.templates.refillReminder &&
+    config.provider !== 'meta' &&
+    config.organizationId &&
+    config.phoneNumberId
+  );
+  const smsConfigured = Boolean(
+    smsConfig.organizationId && smsFallbackEnabled(smsConfig, smsConfig.organizationId)
+  );
   const result: RefillReminderRunResult = {
-    configured: Boolean(config.templates.refillReminder),
+    configured: whatsappConfigured || smsConfigured,
     scanned: 0,
     sent: 0,
     prepared: 0,
@@ -125,27 +136,32 @@ export async function processDueWhatsAppRefillReminders(
     notDue: 0,
     sms: emptySmsCounters(),
   };
-  if (!result.configured || config.provider === 'meta') return { ...result, configured: false };
+  if (!result.configured) return result;
 
   const limit = Math.max(1, Math.min(500, Math.floor(options.limit ?? 100)));
   const windowEnd = new Date(now.getTime() + config.reminderLeadDays * DAY_MS);
   const captures = await withPlatformDb((db) =>
     db.$queryRaw<DueCapture[]>(Prisma.sql`
       SELECT capture."id", capture."organizationId", capture."branchId", capture."patientId",
-             line."medicineId", capture."medicineName", capture."directionsEnglish",
+             line."medicineId", capture."medicineName", capture."channel", capture."directionsEnglish",
              capture."quantityDispensed", fill."dispensedAt"
       FROM "pharmacy_refill_reminder_captures" capture
       JOIN "pharmacy_prescription_fills" fill
         ON fill."organizationId" = capture."organizationId" AND fill."id" = capture."prescriptionFillId"
       JOIN "pharmacy_prescription_lines" line
         ON line."organizationId" = fill."organizationId" AND line."id" = fill."prescriptionLineId"
-      WHERE capture."channel" = 'WHATSAPP'
+      WHERE capture."channel" IN ('WHATSAPP', 'SMS')
+        AND (capture."organizationId" = ${whatsappConfigured ? config.organizationId : null}
+          OR capture."organizationId" = ${smsConfigured ? smsConfig.organizationId : null})
+        AND (capture."channel" <> 'SMS'
+          OR capture."organizationId" = ${smsConfigured ? smsConfig.organizationId : null})
         AND capture."expectedExhaustionAt" > ${now}
         AND capture."expectedExhaustionAt" <= ${windowEnd}
         AND NOT EXISTS (
           SELECT 1 FROM "pharmacy_message_logs" log
           WHERE log."organizationId" = capture."organizationId"
             AND log."refillCaptureId" = capture."id"
+            AND NOT (log."channel" = 'WHATSAPP' AND log."status" = 'FAILED')
         )
       ORDER BY capture."expectedExhaustionAt", capture."id"
       LIMIT ${limit}
@@ -178,7 +194,8 @@ export async function processDueWhatsAppRefillReminders(
     }
 
     const recipient = await withTenantDb(capture.organizationId, async (db) => {
-      if (config.organizationId !== capture.organizationId || !config.phoneNumberId) return null;
+      const canUseWhatsApp = whatsappConfigured && config.organizationId === capture.organizationId;
+      if (!canUseWhatsApp && !smsFallbackEnabled(smsConfig, capture.organizationId)) return null;
       const organization = await db.organization.findUnique({
         where: { id: capture.organizationId },
         select: { vertical: true, status: true, timezone: true },
@@ -247,19 +264,30 @@ export async function processDueWhatsAppRefillReminders(
           !consent.revokedAt &&
           !(consent.recordedAt > now)
       );
-      // #723: without WhatsApp consent the reminder may go by SMS, never otherwise.
-      if (!whatsappAllowed && !smsFallbackEnabled(smsConfig, capture.organizationId)) return null;
+      const previous = await db.pharmacyMessageLog.findFirst({
+        where: {
+          organizationId: capture.organizationId,
+          channel: 'WHATSAPP',
+          direction: 'OUTBOUND',
+          dedupeKey: plan.dedupeKey,
+        },
+        select: { status: true },
+      });
+      const useSms = capture.channel === 'SMS' || !whatsappAllowed || previous?.status === 'FAILED';
+      if (useSms ? !smsFallbackEnabled(smsConfig, capture.organizationId) : !canUseWhatsApp)
+        return null;
       const prior = await db.pharmacyMessageLog.count({
         where: {
           organizationId: capture.organizationId,
           customerId: customer.id,
           direction: 'OUTBOUND',
           kind: 'REFILL_REMINDER',
+          NOT: { channel: 'WHATSAPP', status: 'FAILED' },
           createdAt: { gte: new Date(now.getTime() - DAY_MS) },
         },
       });
       if (prior) return null;
-      if (!whatsappAllowed || !to) {
+      if (useSms || !to) {
         const sms = await claimSmsFallbackInTransaction(db, smsConfig, {
           organizationId: capture.organizationId,
           customerId: customer.id,

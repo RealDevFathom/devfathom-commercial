@@ -3,7 +3,7 @@ import 'server-only';
 import { Prisma } from '@/generated/prisma/client';
 import { hasModule, resolveOrganizationEntitlements } from '@/lib/entitlements';
 import { isTenantLifecycleAccessible } from '@/lib/tenancy/host';
-import { withTenantDb } from '@/lib/tenancy/scoped-db';
+import { withPlatformDb, withTenantDb } from '@/lib/tenancy/scoped-db';
 import { workspaceTimezone } from '@/lib/timezone';
 
 import { lockPatientConsent } from '../consent-writer';
@@ -137,4 +137,107 @@ export async function notifyOrderReadyBySms(input: {
     branch: branchName,
   });
   return sendSmsFallbackClaim(smsProvider, { ...claim, logId: claim.logId }, body);
+}
+
+/**
+ * Ready orders are the durable backlog for quiet hours and pre-claim failures.
+ * Run from the existing reminder scheduler; completed/cancelled orders and any
+ * claimed SMS are excluded. Reuse the ready event's staff identity for RLS and
+ * recheck all eligibility in notifyOrderReadyBySms before claiming or sending.
+ */
+export async function processDeferredOrderReadySms(
+  options: {
+    now?: Date;
+    limit?: number;
+    smsConfig?: SmsConfig;
+    smsProvider?: SmsProvider;
+  } = {}
+): Promise<{ scanned: number; outcomes: OrderReadySmsOutcome[] }> {
+  const smsConfig = options.smsConfig ?? readSmsConfig();
+  const organizationId = smsConfig.organizationId;
+  if (!organizationId || !smsFallbackEnabled(smsConfig, organizationId))
+    return { scanned: 0, outcomes: [] };
+  const now = options.now ?? new Date();
+  const limit = Math.max(1, Math.min(500, Math.floor(options.limit ?? 100)));
+  // Order RLS deliberately has no platform-admin bypass. Discover a current
+  // pharmacy staff reader, then scan under that tenant/user rather than widening
+  // the order policies for this job. The sender still uses the ready actor.
+  const readers = await withPlatformDb((db) => db.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+    SELECT actor.id FROM users actor
+    JOIN organization_roles role
+      ON role.id = actor."organizationRoleId" AND role."organizationId" = actor."organizationId"
+    WHERE actor."organizationId" = ${organizationId} AND actor.status = 'ACTIVE'
+      AND EXISTS (
+        SELECT 1 FROM organization_role_permissions permission
+        WHERE permission."organizationId" = actor."organizationId" AND permission."organizationRoleId" = role.id
+          AND permission.effect = 'ALLOW' AND permission.capability IN ('*', 'pharmacy:*', 'pharmacy:orders')
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM user_permission_overrides denied
+        WHERE denied."organizationId" = actor."organizationId" AND denied."userId" = actor.id
+          AND denied.effect = 'DENY' AND denied.capability IN ('*', 'pharmacy:*', 'pharmacy:orders')
+          AND (denied."expiresAt" IS NULL OR denied."expiresAt" > ${now})
+      )
+    ORDER BY actor.id LIMIT 1
+  `));
+  const reader = readers[0];
+  if (!reader) return { scanned: 0, outcomes: [] };
+  const orders = await withTenantDb(organizationId, (db) =>
+    db.$queryRaw<Array<{ orderId: string; branchId: string; actorUserId: string }>>(Prisma.sql`
+    SELECT orders.id AS "orderId", orders."branchId", ready."actorUserId"
+    FROM pharmacy_customer_orders orders
+    JOIN pharmacy_customers customer
+      ON customer."organizationId" = orders."organizationId" AND customer.id = orders."customerId"
+    JOIN LATERAL (
+      SELECT event."actorUserId" FROM pharmacy_customer_order_events event
+      WHERE event."organizationId" = orders."organizationId" AND event."orderId" = orders.id
+        AND event."branchId" = orders."branchId" AND event.kind = 'READY_FOR_COLLECTION'
+      ORDER BY event."occurredAt" DESC, event.id DESC LIMIT 1
+    ) ready ON true
+    WHERE orders."organizationId" = ${organizationId} AND orders.status = 'READY_FOR_COLLECTION'
+      AND customer.active = true AND customer."smsOptIn" IS DISTINCT FROM false
+      AND EXISTS (
+        SELECT 1 FROM pharmacy_patient_consents consent
+        WHERE consent."organizationId" = orders."organizationId" AND consent."patientId" = customer."patientId"
+          AND consent.purpose = 'REMINDERS' AND consent.channel = 'SMS'
+          AND consent.granted = true AND consent."revokedAt" IS NULL AND consent."recordedAt" <= ${now}
+          AND consent.version = (SELECT MAX(latest.version) FROM pharmacy_patient_consents latest
+            WHERE latest."organizationId" = consent."organizationId" AND latest."patientId" = consent."patientId"
+              AND latest.purpose = consent.purpose AND latest.channel = consent.channel)
+      )
+      AND NOT (customer."whatsappOptIn" IS TRUE AND EXISTS (
+        SELECT 1 FROM pharmacy_patient_consents consent
+        WHERE consent."organizationId" = orders."organizationId" AND consent."patientId" = customer."patientId"
+          AND consent.purpose = 'REMINDERS' AND consent.channel = 'WHATSAPP'
+          AND consent.granted = true AND consent."revokedAt" IS NULL AND consent."recordedAt" <= ${now}
+          AND consent.version = (SELECT MAX(latest.version) FROM pharmacy_patient_consents latest
+            WHERE latest."organizationId" = consent."organizationId" AND latest."patientId" = consent."patientId"
+              AND latest.purpose = consent.purpose AND latest.channel = consent.channel)
+      ))
+      AND NOT EXISTS (
+        SELECT 1 FROM pharmacy_message_logs log
+        WHERE log."organizationId" = orders."organizationId"
+          AND log."dedupeKey" = 'sms:order-ready:' || orders.id
+      )
+    ORDER BY orders."readyAt", orders.id LIMIT ${limit}
+    `),
+    { userId: reader.id }
+  );
+  const outcomes: OrderReadySmsOutcome[] = [];
+  for (const order of orders) {
+    try {
+      outcomes.push(
+        await notifyOrderReadyBySms({
+          organizationId,
+          ...order,
+          now,
+          smsConfig,
+          smsProvider: options.smsProvider,
+        })
+      );
+    } catch {
+      console.error('PHARMACY_ORDER_READY_SMS_FAILED', { organizationId, orderId: order.orderId });
+    }
+  }
+  return { scanned: orders.length, outcomes };
 }

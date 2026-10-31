@@ -2,6 +2,7 @@ import { timingSafeEqual } from 'node:crypto';
 
 import { NextResponse } from 'next/server';
 
+import { processDeferredOrderReadySms } from '@/lib/pharmacy/sms/order-ready';
 import { processDueWhatsAppRefillReminders } from '@/lib/pharmacy/whatsapp/refill-reminders';
 
 /**
@@ -26,5 +27,7 @@ export async function POST(request: Request) {
   }
   const input = (await request.json().catch(() => ({}))) as { limit?: unknown };
   const limit = typeof input.limit === 'number' && Number.isFinite(input.limit) ? input.limit : 100;
-  return NextResponse.json(await processDueWhatsAppRefillReminders({ limit }));
+  const result = await processDueWhatsAppRefillReminders({ limit });
+  const orderReady = await processDeferredOrderReadySms({ limit });
+  return NextResponse.json({ ...result, orderReady });
 }

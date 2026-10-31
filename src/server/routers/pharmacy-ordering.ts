@@ -1,4 +1,5 @@
 import { TRPCError } from '@trpc/server';
+import { after } from 'next/server';
 import { z } from 'zod';
 
 import { can, subjectFromSession } from '@/lib/abac';
@@ -198,15 +199,31 @@ export const pharmacyOrderingRouter = router({
           return { result: await transitionCustomerOrder(txDb(tx), scope, input), scope };
         });
         if (input.action === 'ready') {
-          // #723: SMS fallback after the transition committed. Best effort: the
-          // claimed message log is the audit trail, and a gateway problem must
-          // never undo or fail the staff transition.
-          await notifyOrderReadyBySms({
-            organizationId: scope.organizationId,
-            branchId: scope.branchId,
-            orderId: input.orderId,
-            actorUserId: scope.actorId,
-          }).catch(() => null);
+          // The outer request transaction commits before `after` runs. Gateway
+          // latency must not hold the staff response or its database locks.
+          try {
+            after(async () => {
+              try {
+                await notifyOrderReadyBySms({
+                  organizationId: scope.organizationId,
+                  branchId: scope.branchId,
+                  orderId: input.orderId,
+                  actorUserId: scope.actorId,
+                });
+              } catch {
+                // Never log transport/DB error text, which may contain PII.
+                console.error('PHARMACY_ORDER_READY_SMS_FAILED', {
+                  organizationId: scope.organizationId,
+                  orderId: input.orderId,
+                });
+              }
+            });
+          } catch {
+            console.error('PHARMACY_ORDER_READY_SMS_SCHEDULE_FAILED', {
+              organizationId: scope.organizationId,
+              orderId: input.orderId,
+            });
+          }
         }
         return result;
       } catch (error) {

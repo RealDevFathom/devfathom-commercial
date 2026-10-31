@@ -13,9 +13,9 @@ import { smsFallbackEnabled, type SmsConfig, type SmsProvider } from './provider
 
 /**
  * #723 — SMS fallback for utility messages (refill-due, order-ready,
- * khata-due). SMS is used ONLY when the customer has no WhatsApp consent or a
- * WhatsApp send failed permanently, and ONLY when the customer holds a granted
- * REMINDERS/SMS consent and has not replied STOP by SMS.
+ * khata-due). WhatsApp reminders fall back only without WhatsApp consent or
+ * after a permanent failure. Refill captures explicitly scheduled on SMS use
+ * SMS directly. Every SMS requires a granted REMINDERS/SMS consent and no STOP.
  */
 
 export type SmsFallbackKind = 'REFILL_REMINDER' | 'KHATA_REMINDER' | 'ORDER_READY';
