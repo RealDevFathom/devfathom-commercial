@@ -749,6 +749,18 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
         // `format` keywords (400s the whole request). Validated in execute.
         email: z.string().describe('Their work email — the invite is sent here'),
         role: z.enum(['ADMIN', 'HR', 'EMPLOYEE']).nullish().describe('Default EMPLOYEE'),
+        restaurantRoleKey: z
+          .string()
+          .nullish()
+          .describe(
+            'Restaurant staff role key from this workspace, e.g. "general-manager", "branch-manager", "bar-barista", or "accountant". Null or omitted keeps the existing role on resend.'
+          ),
+        clearRestaurantRole: z
+          .boolean()
+          .nullish()
+          .describe(
+            'Set true only to explicitly remove the restaurant role. Do not set a role key when clearing.'
+          ),
         department: departmentKey,
         title: z.string().min(1).describe('Their job title, e.g. "Senior Engineer"'),
         phone: z.string().nullish(),
@@ -756,7 +768,18 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
         skills: z.array(z.string()).nullish(),
       }),
       needsApproval: true,
-      execute: async ({ name, email, role, department, title, phone, bio, skills }) => {
+      execute: async ({
+        name,
+        email,
+        role,
+        restaurantRoleKey,
+        clearRestaurantRole,
+        department,
+        title,
+        phone,
+        bio,
+        skills,
+      }) => {
         if (!h.isAdmin) return { error: 'Only admins can invite members.' };
         // D10: normalize BEFORE validating, so a padded or upper-cased address
         // the model echoed back from a chat message is accepted and stored in the
@@ -766,6 +789,9 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
           return { error: `"${email}" doesn't look like a valid email address.` };
         }
         const finalRole = role ?? 'EMPLOYEE';
+        if (clearRestaurantRole && restaurantRoleKey) {
+          return { error: 'Choose a restaurant role or clear it, not both.' };
+        }
 
         // Departments are tenant-configured: reject a key this workspace does
         // not have rather than letting the composite foreign key raise.
@@ -775,6 +801,18 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
         });
         if (!departmentRow) {
           return { error: `"${department}" is not an active department in this workspace.` };
+        }
+
+        const organizationRole = restaurantRoleKey
+          ? await h.db.organizationRole.findFirst({
+              where: { key: restaurantRoleKey, organizationId: ctx.organizationId },
+              select: { id: true, key: true, name: true },
+            })
+          : null;
+        if (restaurantRoleKey && !organizationRole) {
+          return {
+            error: `"${restaurantRoleKey}" is not a role in this workspace.`,
+          };
         }
 
         const existing = await h.db.user.findFirst({
@@ -803,6 +841,10 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
         const profile = {
           name,
           role: finalRole,
+          // Models send null for omitted optionals; clearing requires explicit intent.
+          ...(organizationRole || clearRestaurantRole
+            ? { organizationRoleId: organizationRole?.id ?? null }
+            : {}),
           department,
           title,
           phone: phone ?? null,
@@ -815,9 +857,11 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
             ? await tx.user.update({
                 where: { id: existing.id },
                 data: { ...profile, password: null, status: 'INVITED' },
+                include: { organizationRole: { select: { id: true, key: true, name: true } } },
               })
             : await tx.user.create({
                 data: { ...profile, email: lowerEmail, password: null, status: 'INVITED' },
+                include: { organizationRole: { select: { id: true, key: true, name: true } } },
               });
           await tx.invitation.upsert({
             where: { userId: u.id },
@@ -838,7 +882,7 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
         const mail = templates.inviteMember({
           name: user.name,
           inviterName: ctx.name ?? undefined,
-          role: `${titleCase(finalRole)} · ${titleCase(department)}`,
+          role: user.organizationRole?.name ?? `${titleCase(finalRole)} · ${titleCase(department)}`,
           workspace: 'DevFathom',
           acceptUrl: inviteUrl,
           expiresLabel: 'in 7 days',
@@ -863,13 +907,27 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
           targetType: 'User',
           targetId: user.id,
           targetLabel: user.name,
-          metadata: { email: lowerEmail, role: finalRole, department, reInvite: !!existing },
+          metadata: {
+            email: lowerEmail,
+            role: finalRole,
+            restaurantRoleOperation: clearRestaurantRole
+              ? 'clear'
+              : organizationRole
+                ? 'assign'
+                : 'preserve',
+            restaurantRoleId: user.organizationRoleId,
+            restaurantRoleKey: user.organizationRole?.key ?? null,
+            restaurantRoleName: user.organizationRole?.name ?? null,
+            department,
+            reInvite: !!existing,
+          },
         });
 
         return {
           name: user.name,
           email: lowerEmail,
           role: titleCase(finalRole),
+          restaurantRole: user.organizationRole?.name ?? null,
           department: titleCase(department),
           emailed,
           inviteUrl,

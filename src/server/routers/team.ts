@@ -145,7 +145,9 @@ export const teamRouter = router({
         // alex@company.com without the guard ever firing.
         email: emailSchema,
         role: z.enum(['ADMIN', 'HR', 'EMPLOYEE']).default('EMPLOYEE'),
-        organizationRoleId: z.string().trim().min(1).max(128).nullable().default(null),
+        // Omitted means "leave the role alone" when refreshing a pending
+        // invitation. `null` remains an explicit way for API callers to clear it.
+        organizationRoleId: z.string().trim().min(1).max(128).nullable().optional(),
         department: z
           .string()
           .trim()
@@ -194,7 +196,9 @@ export const teamRouter = router({
       const profile = {
         name: input.name,
         role: input.role,
-        organizationRoleId: organizationRole?.id ?? null,
+        ...(input.organizationRoleId !== undefined
+          ? { organizationRoleId: organizationRole?.id ?? null }
+          : {}),
         department: input.department,
         title: input.title,
         phone: input.phone ?? null,
@@ -209,9 +213,11 @@ export const teamRouter = router({
           ? await tx.user.update({
               where: { id: existing.id },
               data: { ...profile, password: null, status: 'INVITED' },
+              include: { organizationRole: { select: { id: true, name: true } } },
             })
           : await tx.user.create({
               data: { ...profile, email, password: null, status: 'INVITED' },
+              include: { organizationRole: { select: { id: true, name: true } } },
             });
 
         await tx.invitation.upsert({
@@ -236,7 +242,7 @@ export const teamRouter = router({
       const mail = templates.inviteMember({
         name: user.name,
         inviterName: ctx.session.user.name ?? undefined,
-        role: organizationRole?.name ?? `${titleCase(input.role)} · ${titleCase(input.department)}`,
+        role: user.organizationRole?.name ?? `${titleCase(input.role)} · ${titleCase(input.department)}`,
         workspace: 'DevFathom',
         acceptUrl: inviteUrl,
         expiresLabel: 'in 7 days',
