@@ -112,7 +112,15 @@ export const teamRouter = router({
 
   // Lightweight roster — just enough to render avatars and names.
   getRoster: protectedProcedure.query(async ({ ctx }) => {
+    const me = ctx.session.user.id;
+    // Keep this lightweight directory consistent with getAll: an explicit
+    // team:view denial must not turn the roster into a directory side door.
+    const directory = await can(subjectFromSession(ctx.session.user), 'team:view', undefined, {
+      source: 'TRPC',
+      db: ctx.db,
+    });
     return ctx.db.user.findMany({
+      ...(directory ? {} : { where: { id: me } }),
       select: {
         id: true,
         name: true,
@@ -861,7 +869,28 @@ export const teamRouter = router({
         }
       }
 
-      const updated = await ctx.db.user.update({ where: { id }, data });
+      // Return only the member profile needed by callers. Prisma returns every
+      // scalar column when `select` is omitted, which would expose credential
+      // and session fields (including the bcrypt password hash) over tRPC.
+      const updated = await ctx.db.user.update({
+        where: { id },
+        data,
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          role: true,
+          department: true,
+          title: true,
+          avatar: true,
+          phone: true,
+          bio: true,
+          skills: true,
+          startDate: true,
+          status: true,
+          lastActiveAt: true,
+        },
+      });
       annotateAudit(ctx, {
         targetType: 'User',
         targetId: id,

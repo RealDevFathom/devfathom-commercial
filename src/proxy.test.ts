@@ -30,6 +30,17 @@ function authenticatedTenantRequest(path: string) {
 }
 
 describe('platform host routing', () => {
+  it('sets a unique nonce policy on document requests without unsafe-inline scripts', async () => {
+    const first = await proxy(tenantRequest('/login'));
+    const second = await proxy(tenantRequest('/login'));
+    const firstPolicy = first.headers.get('content-security-policy');
+    const secondPolicy = second.headers.get('content-security-policy');
+
+    expect(firstPolicy).toMatch(/script-src 'self' 'nonce-[^']+'/);
+    expect(firstPolicy).not.toContain("script-src 'self' 'unsafe-inline'");
+    expect(secondPolicy).not.toBe(firstPolicy);
+  });
+
   it('never redirects framework assets away from their asset URL', async () => {
     const response = await proxy(adminRequest('/_next/static/chunks/app.js'));
 
