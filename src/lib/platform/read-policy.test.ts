@@ -21,7 +21,7 @@ const routes = [
   '/platform/organizations',
   '/platform/deployments',
   '/platform/jobs',
-    '/platform/health',
+  '/platform/health',
   '/platform/catalog',
 ] as const satisfies readonly PlatformReadHref[];
 

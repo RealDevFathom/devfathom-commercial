@@ -46,7 +46,7 @@ const billed = {
 
 describe('CheckoutPanel', () => {
   it.each([
-    ['NONE', 'Single bill'],
+    ['NONE', 'Whole order'],
     ['BY_ITEM', 'By item'],
     ['BY_SEAT', 'By seat'],
     ['FRACTIONAL', 'Fractional'],
@@ -79,7 +79,15 @@ describe('CheckoutPanel', () => {
     render(<CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />);
 
     expect(await screen.findByText('Receipt 100')).toBeVisible();
-    expect(screen.queryByText('Single bill')).not.toBeInTheDocument();
+    expect(screen.queryByText('Whole order')).not.toBeInTheDocument();
+  });
+
+  it("labels an unsplit bill as 'Whole order' instead of exposing the NONE sentinel", async () => {
+    const request: TerminalRequest = async <T,>() => billed as T;
+    render(<CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />);
+
+    expect(await screen.findByRole('heading', { name: 'Whole order' })).toBeVisible();
+    expect(screen.queryByRole('heading', { name: 'NONE' })).not.toBeInTheDocument();
   });
 
   it.each(['3860.00', '2860.25', '0.00'])(
