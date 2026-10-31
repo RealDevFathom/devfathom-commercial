@@ -217,4 +217,82 @@ describe('JWT session cookie refresh window', () => {
     expect(response.headers.getSetCookie()).not.toContain(SESSION_COOKIE);
     expect(response.headers.getSetCookie()).toContain(deletion);
   });
+
+  it('persists explicit session updates during the refresh window', async () => {
+    const first = await handleAuthRequest(
+      new Request('https://tenant.test/api/auth/session'),
+      rotatingHandler(),
+      { secret: SECRET, now: 4_000 }
+    );
+    const marker = first.headers
+      .getSetCookie()
+      .find((cookie) => cookie.startsWith('__Secure-authjs.session-updated='))!;
+    const response = await handleAuthRequest(
+      new Request('https://tenant.test/api/auth/session', {
+        method: 'POST',
+        headers: { cookie: marker.split(';', 1)[0]! },
+        body: JSON.stringify({ data: { name: 'Updated name' } }),
+      }),
+      rotatingHandler(),
+      { secret: SECRET, now: 4_001 }
+    );
+
+    expect(response.headers.getSetCookie()).toContain(SESSION_COOKIE);
+    expect(response.headers.getSetCookie()).toHaveLength(2);
+  });
+
+  it.each([
+    ['__Secure-authjs.session-token.0', '__Secure-authjs.session-token'],
+    ['__Secure-authjs.session-token', '__Secure-authjs.session-token.0'],
+    ['__Secure-authjs.session-token.1', '__Secure-authjs.session-token.0'],
+  ])('keeps replacement cookies when rotation cleans up %s', async (oldName, newName) => {
+    const first = await handleAuthRequest(
+      new Request('https://tenant.test/api/auth/session'),
+      rotatingHandler(),
+      { secret: SECRET, now: 4_000 }
+    );
+    const marker = first.headers
+      .getSetCookie()
+      .find((cookie) => cookie.startsWith('__Secure-authjs.session-updated='))!;
+    const deletion = `${oldName}=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax`;
+    const replacement = `${newName}=new-token; Path=/; Secure; HttpOnly; SameSite=Lax`;
+    const csrf = 'authjs.csrf-token=csrf; Path=/; HttpOnly; SameSite=Lax';
+    const response = await handleAuthRequest(
+      new Request('https://tenant.test/api/auth/session', {
+        headers: { cookie: `${marker.split(';', 1)[0]!}; ${oldName}=old-token` },
+      }),
+      async () => {
+        const headers = new Headers();
+        for (const cookie of [deletion, replacement, csrf]) headers.append('set-cookie', cookie);
+        return new Response('{}', { headers });
+      },
+      { secret: SECRET, now: 4_001 }
+    );
+
+    expect(response.headers.getSetCookie()).toContain(deletion);
+    expect(response.headers.getSetCookie()).toContain(replacement);
+    expect(response.headers.getSetCookie()).toContain(csrf);
+  });
+
+  it('preserves deletion-only responses for invalid sessions', async () => {
+    const first = await handleAuthRequest(
+      new Request('https://tenant.test/api/auth/session'),
+      rotatingHandler(),
+      { secret: SECRET, now: 4_000 }
+    );
+    const marker = first.headers
+      .getSetCookie()
+      .find((cookie) => cookie.startsWith('__Secure-authjs.session-updated='))!;
+    const deletion =
+      '__Secure-authjs.session-token=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax';
+    const response = await handleAuthRequest(
+      new Request('https://tenant.test/api/auth/session', {
+        headers: { cookie: marker.split(';', 1)[0]! },
+      }),
+      async () => new Response('null', { headers: { 'set-cookie': deletion } }),
+      { secret: SECRET, now: 4_001 }
+    );
+
+    expect(response.headers.getSetCookie()).toEqual([deletion]);
+  });
 });

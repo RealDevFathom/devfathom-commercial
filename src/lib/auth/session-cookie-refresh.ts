@@ -54,9 +54,9 @@ function updateCookie(cookieName: string, secret: string, now: number, secure: b
  * callbacks intact, but discard that redundant rotation inside the update
  * window. A signed HttpOnly marker prevents a client from extending the window.
  */
-export async function handleAuthRequest(
-  request: Request,
-  handler: (request: Request) => Promise<Response>,
+export async function handleAuthRequest<T extends Request>(
+  request: T,
+  handler: (request: T) => Promise<Response>,
   options: { secret?: string; now?: number } = {}
 ): Promise<Response> {
   const response = await handler(request);
@@ -70,8 +70,16 @@ export async function handleAuthRequest(
   if (issuedSessionCookies.length === 0) return response;
 
   const now = options.now ?? Math.floor(Date.now() / 1000);
-  const isSessionRead = new URL(request.url).pathname.endsWith('/api/auth/session');
-  if (isSessionRead && validUpdateCookie(request, secret, now)) {
+  const isSessionRead =
+    request.method === 'GET' && new URL(request.url).pathname.endsWith('/api/auth/session');
+  const issuedNames = new Set(issuedSessionCookies.map((cookie) => cookie.split('=', 1)[0]));
+  // Auth.js deletes obsolete chunks when the token changes cookie layout. Keep
+  // that rotation together: forwarding cleanup without its replacement would
+  // corrupt the token still held by the browser. Deletions always pass through.
+  const changesCookieLayout = setCookies.some(
+    (cookie) => SESSION_COOKIE_PATTERN.test(cookie) && !issuedNames.has(cookie.split('=', 1)[0])
+  );
+  if (isSessionRead && !changesCookieLayout && validUpdateCookie(request, secret, now)) {
     response.headers.delete('set-cookie');
     for (const cookie of setCookies) {
       if (!issuedSessionCookies.includes(cookie)) response.headers.append('set-cookie', cookie);
