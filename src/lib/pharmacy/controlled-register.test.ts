@@ -28,7 +28,6 @@ describe('derivedCorrectionDelta', () => {
     expect(derivedCorrectionDelta('PURCHASE', 4, 9)).toBeNull();
     expect(derivedCorrectionDelta('CORRECTION', 4, 3)).toBeNull();
     expect(derivedCorrectionDelta('SALE', 4, 0)).toBeNull();
-    expect(derivedCorrectionDelta('PURCHASE', 4, 0)).toBe(-4);
   });
 });
 

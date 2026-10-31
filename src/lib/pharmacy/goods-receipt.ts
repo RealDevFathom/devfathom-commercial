@@ -541,20 +541,38 @@ export async function reverseGoodsReceipt(
     );
   }
 
-  const reversals = await reverseMovements(db, scope, {
-    movementIds: posted.map((movement) => movement.id),
-    reason: input.reason,
-    at: input.at,
-  });
-
-  await appendControlledPurchaseReversals(db, {
-    organizationId: scope.organizationId,
-    branchId: scope.branchId,
-    recordedByUserId: scope.actorId,
-    reason: input.reason,
-    reversedMovementIds: posted.map((movement) => movement.id),
-    witness,
-  });
+  // Reverse one movement, then write its register row, before the next one.
+  // The register trigger checks each row's running balance against sellable
+  // stock at insert time, so two posted lines landing on the same controlled
+  // lot only reconcile if each correction is written right after its movement.
+  const reversals: Awaited<ReturnType<typeof reverseMovements>> = [];
+  for (const movement of posted) {
+    reversals.push(
+      ...(await reverseMovements(db, scope, {
+        movementIds: [movement.id],
+        reason: input.reason,
+        at: input.at,
+      }))
+    );
+    if (!controlled) continue;
+    try {
+      await appendControlledPurchaseReversals(db, {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        recordedByUserId: scope.actorId,
+        reason: input.reason,
+        reversedMovementIds: [movement.id],
+        witness,
+      });
+    } catch (error) {
+      // The register refuses when stock has moved on since posting; surface
+      // that as a domain error instead of a generic server failure.
+      if (error instanceof Error && (error.message === 'STOCK' || error.message === 'BALANCE')) {
+        throw new PharmacyInventoryError('INSUFFICIENT_STOCK');
+      }
+      throw error;
+    }
+  }
 
   await db.pharmacyGoodsReceipt.update({
     where: { id: receipt.id },

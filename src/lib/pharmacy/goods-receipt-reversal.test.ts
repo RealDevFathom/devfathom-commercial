@@ -153,4 +153,74 @@ describe('controlled goods receipt reversal authorization', () => {
     });
     expect(db.restaurantOperatorCredential.findFirst).not.toHaveBeenCalled();
   });
+
+  it('reverses two posted lines that landed on the same controlled lot', async () => {
+    const { db, run } = fixture();
+    const base = {
+      medicineId: 'medicine',
+      inventoryLotId: 'lot',
+      batchNumber: 'batch',
+      witnessedByUserId: scope.actorId,
+      signatureRef: 'pin:historical',
+    };
+    const purchases = [
+      { ...base, id: 'p1', stockMovementId: 'm1', quantityCanonicalUnits: 2 },
+      { ...base, id: 'p2', stockMovementId: 'm2', quantityCanonicalUnits: 3 },
+    ];
+    const originals: Record<string, number> = { m1: 2, m2: 3 };
+    let onHand = 5;
+    let running = 5;
+    const reversed: Record<string, number> = {};
+    db.pharmacyStockMovement.findMany.mockResolvedValue([{ id: 'm1' }, { id: 'm2' }]);
+    db.pharmacyStockMovement.findFirst.mockImplementation(async ({ where }) =>
+      where.reversesMovementId
+        ? reversed[where.reversesMovementId] === undefined
+          ? null
+          : {
+              id: `${where.reversesMovementId}:rev`,
+              quantityUnits: reversed[where.reversesMovementId],
+            }
+        : {
+            id: where.id,
+            inventoryLotId: 'lot',
+            quantityUnits: originals[where.id],
+            sealedPackDelta: originals[where.id],
+            looseUnitDelta: 0,
+          }
+    );
+    db.pharmacyStockMovement.create.mockImplementation(async ({ data }) => {
+      reversed[data.reversesMovementId] = data.quantityUnits;
+      onHand += data.quantityUnits;
+      return { id: `${data.reversesMovementId}:rev` };
+    });
+    db.pharmacyStockBalance.aggregate.mockImplementation(async () => ({
+      _sum: { onHandUnits: onHand },
+    }));
+    db.pharmacyControlledRegisterEntry.findMany.mockImplementation(async ({ where }) =>
+      purchases.filter((entry) => where.stockMovementId.in.includes(entry.stockMovementId))
+    );
+    db.pharmacyControlledRegisterEntry.findFirst.mockImplementation(async ({ where }) =>
+      where.inventoryLotId ? { runningBalance: running } : purchases[0]
+    );
+    db.pharmacyControlledRegisterEntry.create.mockImplementation(async ({ data }) => {
+      running = data.runningBalance;
+      return { id: 'row' };
+    });
+
+    await expect(run()).resolves.toMatchObject({ reversalMovementIds: ['m1:rev', 'm2:rev'] });
+    expect(db.pharmacyControlledRegisterEntry.create).toHaveBeenCalledTimes(2);
+    expect(db.pharmacyControlledRegisterEntry.create).toHaveBeenNthCalledWith(1, {
+      data: expect.objectContaining({ correctsEntryId: 'p1', balanceDelta: -2, runningBalance: 3 }),
+    });
+    expect(db.pharmacyControlledRegisterEntry.create).toHaveBeenNthCalledWith(2, {
+      data: expect.objectContaining({ correctsEntryId: 'p2', balanceDelta: -3, runningBalance: 0 }),
+    });
+  });
+
+  it('reports stock that moved on since posting as a domain error', async () => {
+    const { db, run } = fixture();
+    db.pharmacyStockBalance.aggregate.mockResolvedValue({ _sum: { onHandUnits: 1 } });
+    await expect(run()).rejects.toMatchObject({ reason: 'INSUFFICIENT_STOCK' });
+    expect(db.pharmacyControlledRegisterEntry.create).not.toHaveBeenCalled();
+  });
 });

@@ -50,12 +50,7 @@ export function derivedCorrectionDelta(
 ): number | null {
   if (entryKind === 'CORRECTION') return null;
   if (!Number.isSafeInteger(originalQuantity) || originalQuantity <= 0) return null;
-  if (
-    !Number.isSafeInteger(correctedQuantity) ||
-    correctedQuantity < 0 ||
-    (entryKind !== 'PURCHASE' && correctedQuantity === 0)
-  )
-    return null;
+  if (!Number.isSafeInteger(correctedQuantity) || correctedQuantity <= 0) return null;
   const delta =
     entryKind === 'SALE'
       ? originalQuantity - correctedQuantity
