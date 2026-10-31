@@ -7,6 +7,7 @@ const store = vi.hoisted(() => ({
   customers: [] as Array<Record<string, unknown>>,
   consents: [] as Array<Record<string, unknown>>,
   logs: [] as LogRow[],
+  updates: [] as Array<{ where: { id: string; organizationId?: string }; data: object }>,
   /** The workspace zone the organization row holds. */
   timezone: 'Asia/Karachi',
 }));
@@ -42,6 +43,28 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
     },
     pharmacyMessageLog: {
       count: async () => store.logs.length,
+      findFirst: async ({
+        where,
+      }: {
+        where: {
+          organizationId: string;
+          kind?: string;
+          customerDayKey?: string;
+          dedupeKey?: { in: string[] };
+          createdAt?: { gte: Date; lt: Date };
+        };
+      }) =>
+        store.logs.find(
+          (log) =>
+            log.organizationId === where.organizationId &&
+            (where.kind === undefined || log.kind === where.kind) &&
+            (where.customerDayKey === undefined || log.customerDayKey === where.customerDayKey) &&
+            (where.dedupeKey === undefined || where.dedupeKey.in.includes(log.dedupeKey)) &&
+            (where.createdAt === undefined ||
+              (log.createdAt instanceof Date &&
+                log.createdAt >= where.createdAt.gte &&
+                log.createdAt < where.createdAt.lt))
+        ) ?? null,
       createManyAndReturn: async ({ data }: { data: Array<Omit<LogRow, 'id'>> }) => {
         const row = data[0]!;
         if (
@@ -57,8 +80,20 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
         store.logs.push(created);
         return [{ id: created.id }];
       },
-      update: async ({ where, data }: { where: { id: string }; data: object }) => {
-        const log = store.logs.find((row) => row.id === where.id)!;
+      update: async ({
+        where,
+        data,
+      }: {
+        where: { id: string; organizationId?: string };
+        data: object;
+      }) => {
+        store.updates.push({ where, data });
+        const log = store.logs.find(
+          (row) =>
+            row.id === where.id &&
+            (where.organizationId === undefined || row.organizationId === where.organizationId)
+        );
+        if (!log) throw new Error('Message log not found in organization');
         Object.assign(log, data);
         return log;
       },
@@ -111,6 +146,7 @@ beforeEach(() => {
   store.customers = [];
   store.consents = [];
   store.logs = [];
+  store.updates = [];
   store.timezone = 'Asia/Karachi';
 });
 
@@ -121,7 +157,7 @@ describe('planKhataReminder', () => {
       NOW
     );
     expect(plan).toMatchObject({ due: true, dueDate: '2026-10-21' });
-    expect(plan.dedupeKey).toMatch(/^khata:family-1:w\d+$/);
+    expect(plan.dedupeKey).toMatch(/^khata:family-1:w\d{4}-\d{2}$/);
   });
 
   it('is not due without an overdue charge, below the floor, or in the future', () => {
@@ -161,6 +197,20 @@ describe('planKhataReminder', () => {
     expect(sameInstant.dedupeKey).toBe(base.dedupeKey);
     expect(nextWeek.dedupeKey).not.toBe(base.dedupeKey);
   });
+
+  it('starts a new reminder week at Monday midnight in Asia/Karachi', () => {
+    const sunday = planKhataReminder(
+      { familyAccountId: 'family-1', balanceMinor: 50_000, oldestOverdueAt: NOW },
+      new Date('2026-10-25T18:59:59.999Z')
+    );
+    const monday = planKhataReminder(
+      { familyAccountId: 'family-1', balanceMinor: 50_000, oldestOverdueAt: NOW },
+      new Date('2026-10-25T19:00:00.000Z')
+    );
+
+    expect(sunday.dedupeKey).toBe('khata:family-1:w2026-43');
+    expect(monday.dedupeKey).toBe('khata:family-1:w2026-44');
+  });
 });
 
 describe('processDueWhatsAppKhataReminders', () => {
@@ -190,8 +240,9 @@ describe('processDueWhatsAppKhataReminders', () => {
         parameters: ['Khan household', '500.00'],
       },
     ]);
-    expect(store.logs).toHaveLength(1);
-    expect(store.logs[0]).toMatchObject({
+    expect(store.logs).toHaveLength(2);
+    expect(store.logs[0]).toMatchObject({ status: 'IGNORED' });
+    expect(store.logs[1]).toMatchObject({
       kind: 'KHATA_REMINDER',
       direction: 'OUTBOUND',
       status: 'IGNORED',
@@ -199,6 +250,173 @@ describe('processDueWhatsAppKhataReminders', () => {
       dueDate: '2026-10-10',
     });
   });
+
+  it('honors a legacy epoch-week claim made earlier in the same Karachi week', async () => {
+    store.accounts = [account()];
+    store.customers = [customer(true)];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    const legacySentAt = new Date('2026-10-20T08:00:00.000Z');
+    store.logs = [
+      {
+        id: 'legacy-log',
+        organizationId: 'org_a',
+        kind: 'KHATA_REMINDER',
+        dedupeKey: `khata:family-1:w${Math.floor(legacySentAt.getTime() / (7 * 86_400_000))}`,
+        createdAt: legacySentAt,
+      },
+    ];
+    const provider = new MockWhatsAppProvider(config);
+
+    const result = await processDueWhatsAppKhataReminders({ now: NOW, config, provider });
+
+    expect(result).toMatchObject({ scanned: 1, sent: 0, duplicate: 1 });
+    expect(provider.calls).toEqual([]);
+    expect(store.logs).toHaveLength(1);
+  });
+
+  it('cannot update a compatibility log outside the owning organization', async () => {
+    store.accounts = [account()];
+    store.customers = [customer(true)];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    const provider = new MockWhatsAppProvider(config);
+
+    await processDueWhatsAppKhataReminders({ now: NOW, config, provider });
+
+    expect(store.updates[0]).toMatchObject({
+      where: { id: 'log-1', organizationId: 'org_a' },
+      data: { status: 'IGNORED' },
+    });
+  });
+
+  it('honors the other legacy epoch bucket overlapping a Karachi week', async () => {
+    const friday = new Date('2026-10-23T08:00:00.000Z');
+    const legacySentAt = new Date('2026-10-20T08:00:00.000Z');
+    store.accounts = [account()];
+    store.customers = [customer(true)];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    store.logs = [
+      {
+        id: 'legacy-log',
+        organizationId: 'org_a',
+        kind: 'KHATA_REMINDER',
+        dedupeKey: `khata:family-1:w${Math.floor(legacySentAt.getTime() / (7 * 86_400_000))}`,
+        createdAt: legacySentAt,
+      },
+    ];
+    const provider = new MockWhatsAppProvider(config);
+
+    const result = await processDueWhatsAppKhataReminders({ now: friday, config, provider });
+
+    expect(result).toMatchObject({ scanned: 1, sent: 0, duplicate: 1 });
+    expect(provider.calls).toEqual([]);
+    expect(store.logs).toHaveLength(2);
+    expect(store.logs[1]).toMatchObject({ status: 'IGNORED' });
+  });
+
+  it('atomically shares the legacy claim with a concurrently running old worker', async () => {
+    store.accounts = [account()];
+    store.customers = [customer(true)];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    const provider = new MockWhatsAppProvider(config);
+    const legacyKey = `khata:family-1:w${Math.floor(NOW.getTime() / (7 * 86_400_000))}`;
+
+    const oldWorker = async () => {
+      if (store.logs.some((log) => log.dedupeKey === legacyKey)) return;
+      store.logs.push({
+        id: 'old-worker-log',
+        organizationId: 'org_a',
+        kind: 'KHATA_REMINDER',
+        dedupeKey: legacyKey,
+      });
+      await provider.sendTemplate({
+        to: '923001234567',
+        template: 'khataReminder',
+        parameters: ['Khan household', '500.00'],
+      });
+    };
+
+    await Promise.all([
+      oldWorker(),
+      processDueWhatsAppKhataReminders({ now: NOW, config, provider }),
+    ]);
+
+    expect(provider.calls).toHaveLength(1);
+    expect(store.logs.filter((log) => log.dedupeKey === legacyKey)).toHaveLength(1);
+  });
+
+  it('uses only Karachi ISO-week claims after the compatibility window', async () => {
+    store.accounts = [account()];
+    store.customers = [customer(true)];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    const provider = new MockWhatsAppProvider(config);
+
+    const sunday = await processDueWhatsAppKhataReminders({
+      now: new Date('2026-11-08T08:00:00.000Z'),
+      config,
+      provider,
+    });
+    const monday = await processDueWhatsAppKhataReminders({
+      now: new Date('2026-11-09T08:00:00.000Z'),
+      config,
+      provider,
+    });
+
+    expect(sunday).toMatchObject({ prepared: 1, duplicate: 0 });
+    expect(monday).toMatchObject({ prepared: 1, duplicate: 0 });
+    expect(provider.calls).toHaveLength(2);
+    expect(store.logs.map((log) => log.dedupeKey)).toEqual([
+      'khata:family-1:w2026-45',
+      'khata:family-1:w2026-46',
+    ]);
+    expect(store.updates).toEqual([
+      {
+        where: { id: 'log-1' },
+        data: { status: 'IGNORED', error: 'MOCK_PREPARED', providerMessageId: 'mock-wamid-1' },
+      },
+      {
+        where: { id: 'log-2' },
+        data: { status: 'IGNORED', error: 'MOCK_PREPARED', providerMessageId: 'mock-wamid-2' },
+      },
+    ]);
+  });
+
+  it.each(['2026-11-03T08:00:00.000Z', '2026-11-06T08:00:00.000Z'])(
+    'honors a legacy reminder in the same Karachi week after the cutoff at %s',
+    async (instant) => {
+      store.accounts = [account()];
+      store.customers = [customer(true)];
+      store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+      const legacySentAt = new Date('2026-11-02T08:00:00.000Z');
+      store.logs = [
+        {
+          id: 'legacy-log',
+          organizationId: 'org_a',
+          kind: 'KHATA_REMINDER',
+          dedupeKey: `khata:family-1:w${Math.floor(legacySentAt.getTime() / (7 * 86_400_000))}`,
+          createdAt: legacySentAt,
+        },
+      ];
+      const provider = new MockWhatsAppProvider(config);
+
+      const result = await processDueWhatsAppKhataReminders({
+        now: new Date(instant),
+        config,
+        provider,
+      });
+
+      expect(result).toMatchObject({ duplicate: 1, prepared: 0 });
+      expect(provider.calls).toEqual([]);
+      expect(store.logs).toHaveLength(1);
+
+      const nextWeek = await processDueWhatsAppKhataReminders({
+        now: new Date('2026-11-09T08:00:00.000Z'),
+        config,
+        provider,
+      });
+      expect(nextWeek).toMatchObject({ duplicate: 0, prepared: 1 });
+      expect(provider.calls).toHaveLength(1);
+    }
+  );
 
   it.each([
     ['never asked (null opt-in)', null, { granted: true, revokedAt: null }],
@@ -219,6 +437,31 @@ describe('processDueWhatsAppKhataReminders', () => {
     expect(store.logs).toEqual([]);
   });
 
+  it.each([
+    ['at the 22:00 start boundary', '2026-10-21T17:00:00.000Z'],
+    ['immediately before the 08:00 end boundary', '2026-10-22T02:59:59.999Z'],
+  ])('counts a consented customer skipped %s separately', async (_label, instant) => {
+    store.accounts = [account()];
+    store.customers = [customer(true)];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    const provider = new MockWhatsAppProvider(config);
+
+    const result = await processDueWhatsAppKhataReminders({
+      now: new Date(instant),
+      config,
+      provider,
+    });
+
+    expect(result).toMatchObject({
+      scanned: 1,
+      sent: 0,
+      skippedQuietHours: 1,
+      skippedNoConsent: 0,
+    });
+    expect(provider.calls).toEqual([]);
+    expect(store.logs).toEqual([]);
+  });
+
   it('reads the send window and the day in UTC for a stored zone Intl refuses, instead of failing the run', async () => {
     // NOW is 08:00 UTC, inside the 08:00-22:00 window in UTC.
     store.timezone = 'PKT';
@@ -231,7 +474,7 @@ describe('processDueWhatsAppKhataReminders', () => {
       processDueWhatsAppKhataReminders({ now: NOW, config, provider })
     ).resolves.toMatchObject({ scanned: 1, prepared: 1, failed: 0 });
     expect(provider.calls).toHaveLength(1);
-    expect(store.logs[0]).toMatchObject({ customerDayKey: 'khata:customer-1:2026-10-21' });
+    expect(store.logs[1]).toMatchObject({ customerDayKey: 'khata:customer-1:2026-10-21' });
   });
 
   it('does nothing until the reminder template name is configured', async () => {
@@ -265,13 +508,26 @@ describe('reminder text and daily customer dedupe', () => {
       processDueWhatsAppKhataReminders({ now: NOW, config, provider }),
     ]);
     expect(provider.calls).toHaveLength(1);
-    expect(store.logs[0].customerDayKey).toBe('khata:customer-1:2026-10-21');
+    expect(store.logs[1].customerDayKey).toBe('khata:customer-1:2026-10-21');
+    expect(store.logs.some((log) => log.dedupeKey.startsWith('khata:family-2:'))).toBe(false);
     await processDueWhatsAppKhataReminders({
       now: new Date('2026-10-22T08:00:00Z'),
       config,
       provider,
     });
     expect(provider.calls).toHaveLength(2);
+    expect(store.logs).toContainEqual(
+      expect.objectContaining({
+        dedupeKey: 'khata:family-2:w2026-43',
+        customerDayKey: 'khata:customer-1:2026-10-22',
+      })
+    );
+    await processDueWhatsAppKhataReminders({
+      now: new Date('2026-10-29T08:00:00Z'),
+      config,
+      provider,
+    });
+    expect(provider.calls).toHaveLength(3);
   });
   it('sends the sanitized name to the provider', async () => {
     store.accounts = [{ ...account(), displayName: 'Khan\nhttps://evil.test' }];

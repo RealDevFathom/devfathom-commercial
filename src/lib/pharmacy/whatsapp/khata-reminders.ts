@@ -17,8 +17,13 @@ import {
   type WhatsAppProvider,
 } from './provider';
 
+const KHATA_TIME_ZONE = 'Asia/Karachi';
 const DAY_MS = 86_400_000;
 const WEEK_MS = 7 * DAY_MS;
+const KARACHI_UTC_OFFSET_MS = 5 * 60 * 60 * 1_000;
+// Old workers use epoch-week keys. Keep claiming those keys for one rollout
+// week, then let the Karachi ISO-week cadence operate independently.
+const LEGACY_WEEK_COMPATIBILITY_END = new Date('2026-11-02T19:00:00.000Z').getTime();
 
 /** Do not nag over a few paisa: a reminder needs a real outstanding balance. */
 const DEFAULT_MIN_BALANCE_MINOR = 10_000;
@@ -28,6 +33,57 @@ export type KhataReminderCandidate = {
   balanceMinor: number;
   oldestOverdueAt: Date | null;
 };
+
+/** ISO week for the Karachi calendar date containing the instant. */
+function karachiWeek(now: Date): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: KHATA_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(now);
+  const value = (type: Intl.DateTimeFormatPartTypes) =>
+    Number(parts.find((part) => part.type === type)?.value);
+  const localDate = new Date(Date.UTC(value('year'), value('month') - 1, value('day')));
+  const weekday = localDate.getUTCDay() || 7;
+  localDate.setUTCDate(localDate.getUTCDate() + 4 - weekday);
+  const weekYear = localDate.getUTCFullYear();
+  const firstDay = Date.UTC(weekYear, 0, 1);
+  const week = Math.ceil((localDate.getTime() - firstDay + 86_400_000) / 604_800_000);
+  return `${weekYear}-${String(week).padStart(2, '0')}`;
+}
+
+/** The key an old worker would atomically claim for this instant. */
+function legacyWeekKey(familyAccountId: string, now: Date): string {
+  return `khata:${familyAccountId}:w${Math.floor(now.getTime() / WEEK_MS)}`;
+}
+
+/** Legacy keys and UTC bounds overlapping the containing Karachi ISO week. */
+function overlappingLegacyWeek(
+  familyAccountId: string,
+  now: Date
+): { keys: string[]; start: Date; end: Date } {
+  const localNow = new Date(now.getTime() + KARACHI_UTC_OFFSET_MS);
+  const weekday = localNow.getUTCDay() || 7;
+  const start = new Date(
+    Date.UTC(
+      localNow.getUTCFullYear(),
+      localNow.getUTCMonth(),
+      localNow.getUTCDate() - weekday + 1
+    ) - KARACHI_UTC_OFFSET_MS
+  );
+  const end = new Date(start.getTime() + WEEK_MS);
+  return {
+    keys: [
+      ...new Set([
+        Math.floor(start.getTime() / WEEK_MS),
+        Math.floor((end.getTime() - 1) / WEEK_MS),
+      ]),
+    ].map((week) => `khata:${familyAccountId}:w${week}`),
+    start,
+    end,
+  };
+}
 
 /**
  * CRM-L06 pure reminder plan for one family khata account. A reminder is due
@@ -47,13 +103,12 @@ export function planKhataReminder(
     candidate.oldestOverdueAt.getTime() <= now.getTime() &&
     Number.isSafeInteger(candidate.balanceMinor) &&
     candidate.balanceMinor >= floor;
-  const week = Math.floor(now.getTime() / WEEK_MS);
   return {
     due,
     dueDate: candidate.oldestOverdueAt
       ? candidate.oldestOverdueAt.toISOString().slice(0, 10)
       : null,
-    dedupeKey: `khata:${candidate.familyAccountId}:w${week}`,
+    dedupeKey: `khata:${candidate.familyAccountId}:w${karachiWeek(now)}`,
   };
 }
 
@@ -76,6 +131,7 @@ export type KhataReminderRunResult = {
   failed: number;
   duplicate: number;
   skippedNoConsent: number;
+  skippedQuietHours: number;
   notDue: number;
 };
 
@@ -108,6 +164,7 @@ export async function processDueWhatsAppKhataReminders(
     failed: 0,
     duplicate: 0,
     skippedNoConsent: 0,
+    skippedQuietHours: 0,
     notDue: 0,
   };
   const organizationId = config.organizationId;
@@ -168,7 +225,6 @@ export async function processDueWhatsAppKhataReminders(
           hourCycle: 'h23',
         }).format(now)
       );
-      if (hour >= 22 || hour < 8) return null;
       const customer = await db.pharmacyCustomer.findFirst({
         where: { organizationId: account.organizationId, id: account.payerCustomerId },
         select: {
@@ -200,19 +256,93 @@ export async function processDueWhatsAppKhataReminders(
         consent.recordedAt > now
       )
         return null;
+      if (hour >= 22 || hour < 8) return { skipReason: 'QUIET_HOURS' } as const;
       const day = new Intl.DateTimeFormat('en-CA', {
         timeZone,
         year: 'numeric',
         month: '2-digit',
         day: '2-digit',
       }).format(now);
+      const customerDayKey = `khata:${customer.id}:${day}`;
+      const claimLegacyWeek = now.getTime() < LEGACY_WEEK_COMPATIBILITY_END;
+      if (claimLegacyWeek) {
+        // The patient lock serializes this payer's claims. A daily-limit skip
+        // must not reserve a legacy weekly key and prevent tomorrow's reminder.
+        const dailyClaim = await db.pharmacyMessageLog.findFirst({
+          where: { organizationId: account.organizationId, customerDayKey },
+          select: { id: true },
+        });
+        if (dailyClaim) {
+          return {
+            customerId: customer.id,
+            patientId: customer.patientId,
+            to,
+            logId: null,
+            skipReason: undefined,
+          };
+        }
+        // Claim the exact key a pre-migration worker uses before claiming the
+        // new key. The one-week rollout window serializes old/new workers
+        // without permanently retaining the legacy Thursday boundary.
+        const legacyClaimId = await claimMessageLogInTransaction(db, {
+          organizationId: account.organizationId,
+          direction: 'OUTBOUND',
+          status: 'PENDING',
+          kind: 'KHATA_REMINDER',
+          dedupeKey: legacyWeekKey(account.familyAccountId, now),
+          branchId: account.branchId,
+          customerId: customer.id,
+          patientId: customer.patientId,
+          phoneLast4: phoneLast4(to),
+          templateName: config.templates.khataReminder,
+          dueDate: plan.dueDate,
+        });
+        if (!legacyClaimId) {
+          return {
+            customerId: customer.id,
+            patientId: customer.patientId,
+            to,
+            logId: null,
+            skipReason: undefined,
+          };
+        }
+        await db.pharmacyMessageLog.update({
+          where: { id: legacyClaimId, organizationId: account.organizationId },
+          data: { status: 'IGNORED' },
+        });
+      }
+      // Retain reads after legacy writes stop: an old reminder earlier in this
+      // Karachi week still consumes its weekly slot across the rollout cutoff.
+      const overlap = overlappingLegacyWeek(account.familyAccountId, now);
+      const otherLegacyClaim = await db.pharmacyMessageLog.findFirst({
+        where: {
+          organizationId: account.organizationId,
+          kind: 'KHATA_REMINDER',
+          dedupeKey: {
+            in: overlap.keys.filter(
+              (key) => !claimLegacyWeek || key !== legacyWeekKey(account.familyAccountId, now)
+            ),
+          },
+          createdAt: { gte: overlap.start, lt: overlap.end },
+        },
+        select: { id: true },
+      });
+      if (otherLegacyClaim) {
+        return {
+          customerId: customer.id,
+          patientId: customer.patientId,
+          to,
+          logId: null,
+          skipReason: undefined,
+        };
+      }
       const logId = await claimMessageLogInTransaction(db, {
         organizationId: account.organizationId,
         direction: 'OUTBOUND',
         status: 'PENDING',
         kind: 'KHATA_REMINDER',
         dedupeKey: plan.dedupeKey,
-        customerDayKey: `khata:${customer.id}:${day}`,
+        customerDayKey,
         branchId: account.branchId,
         customerId: customer.id,
         patientId: customer.patientId,
@@ -220,8 +350,18 @@ export async function processDueWhatsAppKhataReminders(
         templateName: config.templates.khataReminder,
         dueDate: plan.dueDate,
       });
-      return { customerId: customer.id, patientId: customer.patientId, to, logId };
+      return {
+        customerId: customer.id,
+        patientId: customer.patientId,
+        to,
+        logId,
+        skipReason: undefined,
+      };
     });
+    if (recipient?.skipReason === 'QUIET_HOURS') {
+      result.skippedQuietHours += 1;
+      continue;
+    }
     if (!recipient) {
       result.skippedNoConsent += 1;
       continue;
