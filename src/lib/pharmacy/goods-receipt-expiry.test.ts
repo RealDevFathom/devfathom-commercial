@@ -17,9 +17,10 @@ function receiptDb(line: {
   accepted: number;
   rejected: number;
   expiry: string;
+  precision?: 'DAY' | 'MONTH';
   warnings?: string[];
   purchaseOrderStatus?: 'DRAFT' | 'SENT' | 'RECEIVING';
-  purchaseOrderBranchId?: string;
+  purchaseOrderBranchId?: string | null;
   purchaseOrderSupplierId?: string;
 }) {
   const batchFind = vi.fn().mockResolvedValue(null);
@@ -33,7 +34,10 @@ function receiptDb(line: {
             ? [
                 {
                   id: 'po',
-                  branchId: line.purchaseOrderBranchId ?? 'branch_a',
+                  branchId:
+                    line.purchaseOrderBranchId === undefined
+                      ? 'branch_a'
+                      : line.purchaseOrderBranchId,
                   supplierId: line.purchaseOrderSupplierId ?? 'supplier_a',
                   status: line.purchaseOrderStatus,
                 },
@@ -57,7 +61,8 @@ function receiptDb(line: {
         purchaseOrder: line.purchaseOrderStatus
           ? {
               id: 'po',
-              branchId: line.purchaseOrderBranchId ?? 'branch_a',
+              branchId:
+                line.purchaseOrderBranchId === undefined ? 'branch_a' : line.purchaseOrderBranchId,
               status: line.purchaseOrderStatus,
             }
           : null,
@@ -82,7 +87,7 @@ function receiptDb(line: {
             acceptedCanonicalUnits: line.accepted,
             rejectedCanonicalUnits: line.rejected,
             gs1Warnings: line.warnings ?? [],
-            expiryPrecision: 'DAY',
+            expiryPrecision: line.precision ?? 'DAY',
             medicineId: 'med',
             packLevelId: 'pack',
             stockLocationId: 'loc',
@@ -109,7 +114,12 @@ function receiptDb(line: {
     },
     pharmacyPurchaseOrder: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
   };
-  return { db: db as unknown as ScopedDb, batchFind, lineUpdate };
+  return {
+    db: db as unknown as ScopedDb,
+    batchFind,
+    batchCreate: db.pharmacyManufacturingBatch.create,
+    lineUpdate,
+  };
 }
 
 beforeEach(() => {
@@ -121,6 +131,24 @@ beforeEach(() => {
 });
 
 describe('postGoodsReceipt expiry', () => {
+  it.each(['SENT', 'RECEIVING'] as const)(
+    'posts a receipt for a %s organization-wide purchase order',
+    async (purchaseOrderStatus) => {
+      const { db } = receiptDb({
+        accepted: 10,
+        rejected: 0,
+        expiry: '2027-12-31',
+        purchaseOrderStatus,
+        purchaseOrderBranchId: null,
+      });
+
+      await expect(
+        postGoodsReceipt(db, SCOPE, { goodsReceiptId: 'gr', at: AT })
+      ).resolves.toMatchObject({ goodsReceiptId: 'gr' });
+      expect(receiveLot).toHaveBeenCalledWith(db, SCOPE, expect.any(Object));
+    }
+  );
+
   it('refuses to post an existing draft against an order that was never sent', async () => {
     const { db, batchFind } = receiptDb({
       accepted: 10,
@@ -176,6 +204,56 @@ describe('postGoodsReceipt expiry', () => {
       postGoodsReceipt(db, SCOPE, { goodsReceiptId: 'gr', at: AT })
     ).rejects.toMatchObject({ reason: 'CROSS_TENANT_REFERENCE' });
     expect(batchFind).not.toHaveBeenCalled();
+    expect(receiveLot).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['DAY', '2027-06-16T00:00:00.000Z', '2027-06-15T19:00:00.000Z'],
+    ['DAY', '2027-06-15T19:00:00.000Z', '2027-06-15T19:00:00.000Z'],
+    ['MONTH', '2027-07-01T00:00:00.000Z', '2027-06-30T19:00:00.000Z'],
+    ['MONTH', '2027-06-30T19:00:00.000Z', '2027-06-30T19:00:00.000Z'],
+  ] as const)('joins a %s receipt to an existing batch at %s', async (precision, stored, pkt) => {
+    const { db, batchFind, batchCreate } = receiptDb({
+      accepted: 10,
+      rejected: 0,
+      expiry: '2027-06-15',
+      precision,
+    });
+    batchFind.mockResolvedValue({ id: 'existing_batch', expiresAt: new Date(stored) });
+
+    const posted = await postGoodsReceipt(db, SCOPE, { goodsReceiptId: 'gr', at: AT });
+
+    expect(posted.lines).toHaveLength(1);
+    expect(batchCreate).not.toHaveBeenCalled();
+    expect(receiveLot).toHaveBeenCalledWith(
+      db,
+      SCOPE,
+      expect.objectContaining({
+        manufacturingBatchId: 'existing_batch',
+        receivedExpiresAt: new Date(pkt),
+        receivedExpiryPrecision: precision,
+        quantityUnits: 10,
+      })
+    );
+  });
+
+  it.each([
+    ['DAY', '2027-06-17T00:00:00.000Z'],
+    ['MONTH', '2027-07-02T00:00:00.000Z'],
+    ['DAY', '2027-06-15T19:00:00.001Z'],
+  ] as const)('refuses a conflicting %s batch expiry at %s', async (precision, stored) => {
+    const { db, batchFind, batchCreate } = receiptDb({
+      accepted: 10,
+      rejected: 0,
+      expiry: '2027-06-15',
+      precision,
+    });
+    batchFind.mockResolvedValue({ id: 'existing_batch', expiresAt: new Date(stored) });
+
+    await expect(
+      postGoodsReceipt(db, SCOPE, { goodsReceiptId: 'gr', at: AT })
+    ).rejects.toMatchObject({ reason: 'BATCH_EXPIRY_CONFLICT' });
+    expect(batchCreate).not.toHaveBeenCalled();
     expect(receiveLot).not.toHaveBeenCalled();
   });
 

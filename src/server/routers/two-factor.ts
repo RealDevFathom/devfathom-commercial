@@ -95,7 +95,9 @@ export const twoFactorRouter = router({
         throw new TRPCError({ code: 'BAD_REQUEST', message: '2FA is not enabled.' });
 
       const okTotp = verifyTotp(user.twoFactorSecret, input.token);
-      const okRecovery = okTotp ? false : await consumeRecoveryCode(ctx.db, ctx.session.user.id, input.token);
+      const okRecovery = okTotp
+        ? false
+        : await consumeRecoveryCode(ctx.db, ctx.session.user.id, input.token);
       if (!okTotp && !okRecovery)
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invalid code.' });
 

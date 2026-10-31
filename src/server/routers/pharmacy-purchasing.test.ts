@@ -393,6 +393,30 @@ describe('PUR-02 approval', () => {
     expect(db.pharmacyPurchaseOrder.update.mock.calls[0]![0].data).toEqual({ status: 'DRAFT' });
   });
 
+  it('does not record an event when another decision wins the conditional update', async () => {
+    db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
+      id: 'po_a',
+      status: 'SUBMITTED',
+      supplierId: 'supplier_a',
+      createdByUserId: 'user_a',
+      requisition: null,
+    });
+    db.pharmacyPurchaseOrder.update.mockRejectedValue(
+      Object.assign(new Error('Record to update not found.'), { code: 'P2025' })
+    );
+
+    await expect(
+      caller('user_c').approvePurchaseOrder({ purchaseOrderId: 'po_a', decision: 'APPROVED' })
+    ).rejects.toMatchObject({
+      code: 'CONFLICT',
+      message: 'Purchase order has already been reviewed.',
+    });
+    expect(db.pharmacyPurchaseOrder.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'po_a', status: 'SUBMITTED' } })
+    );
+    expect(db.pharmacyPurchaseOrderApproval.create).not.toHaveBeenCalled();
+  });
+
   it('refuses to approve an order that was never submitted', async () => {
     db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
       id: 'po_a',
@@ -606,7 +630,9 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
       branchId: 'branch_a',
       status: 'SENT',
     });
-    db.pharmacyPurchaseOrderLine.findMany.mockResolvedValue([{ id: 'poline_a' }]);
+    db.pharmacyPurchaseOrderLine.findMany.mockResolvedValue([
+      { id: 'poline_a', medicineId: 'medicine_a', packLevelId: 'pack_a' },
+    ]);
   }
 
   beforeEach(() => {
@@ -633,6 +659,31 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     },
     permissionOverrides: [],
   };
+
+  it('lets a tenant admin without an organization role create a goods receipt (#375)', async () => {
+    db.user.findUnique.mockResolvedValue({
+      role: 'ADMIN',
+      organizationRole: null,
+      permissionOverrides: [],
+    });
+    await caller().createGoodsReceipt(RECEIPT);
+    expect(db.pharmacyGoodsReceipt.create).toHaveBeenCalledOnce();
+  });
+
+  it.each(['pharmacy:procurement', 'pharmacy:*', '*'])(
+    'keeps a %s DENY effective for a tenant admin without a role',
+    async (capability) => {
+      db.user.findUnique.mockResolvedValue({
+        role: 'ADMIN',
+        organizationRole: null,
+        permissionOverrides: [{ capability, effect: 'DENY' }],
+      });
+      await expect(caller().createGoodsReceipt(RECEIPT)).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+      });
+      expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+    }
+  );
 
   it('derives canonical units and the landed unit cost instead of trusting the payload', async () => {
     await caller().createGoodsReceipt(RECEIPT);
@@ -732,6 +783,24 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
   });
 
+  it('refuses a receipt for a different branch than its purchase order', async () => {
+    db.pharmacyBranch.findFirst.mockResolvedValue({ id: 'branch_b' });
+    db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
+      id: 'po_a',
+      supplierId: 'supplier_a',
+      branchId: 'branch_a',
+      status: 'SENT',
+    });
+
+    await expect(
+      caller().createGoodsReceipt({ ...RECEIPT, branchId: 'branch_b' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'CROSS_BRANCH_REFERENCE' });
+    expect(db.pharmacyPurchaseOrder.findFirst).toHaveBeenCalledWith({
+      where: { id: 'po_a', organizationId: 'org_a', supplierId: 'supplier_a' },
+    });
+    expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+  });
+
   it('refuses a cross-tenant medicine on a receipt line', async () => {
     db.medicine.findFirst.mockResolvedValue(null);
     await expect(caller().createGoodsReceipt(RECEIPT)).rejects.toMatchObject({
@@ -763,6 +832,23 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     });
     expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
   });
+
+  it.each(['SENT', 'RECEIVING'])(
+    'drafts a branch receipt against a %s organization-wide order',
+    async (status) => {
+      db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
+        id: 'po_a',
+        supplierId: 'supplier_a',
+        branchId: null,
+        status,
+      });
+
+      await expect(caller().createGoodsReceipt(RECEIPT)).resolves.toBeDefined();
+      expect(db.pharmacyGoodsReceipt.create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ branchId: 'branch_a' }) })
+      );
+    }
+  );
 
   it('allows another receipt while the purchase order is receiving', async () => {
     db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
@@ -802,6 +888,34 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     await expect(caller().createGoodsReceipt(RECEIPT)).rejects.toMatchObject({
       code: 'FORBIDDEN',
       message: 'CROSS_BRANCH_REFERENCE',
+    });
+    expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a medicine that does not match the referenced purchase order line', async () => {
+    db.medicine.findFirst.mockResolvedValue({ id: 'medicine_b' });
+    await expect(
+      caller().createGoodsReceipt({
+        ...RECEIPT,
+        lines: [{ ...RECEIPT_LINE, medicineId: 'medicine_b' }],
+      })
+    ).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'PURCHASE_ORDER_LINE_ITEM_MISMATCH',
+    });
+    expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a pack that does not match the referenced purchase order line', async () => {
+    db.packLevel.findFirst.mockResolvedValue({ id: 'pack_b' });
+    await expect(
+      caller().createGoodsReceipt({
+        ...RECEIPT,
+        lines: [{ ...RECEIPT_LINE, packLevelId: 'pack_b' }],
+      })
+    ).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'PURCHASE_ORDER_LINE_ITEM_MISMATCH',
     });
     expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
   });
@@ -876,6 +990,16 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     });
     await expect(
       caller().postGoodsReceipt({ branchId: 'branch_a', goodsReceiptId: 'gr_a' })
+    ).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission for this action.',
+    });
+    await expect(
+      caller().reverseGoodsReceipt({
+        branchId: 'branch_a',
+        goodsReceiptId: 'gr_a',
+        reason: 'Posted in error',
+      })
     ).rejects.toMatchObject({
       code: 'FORBIDDEN',
       message: 'You do not have permission for this action.',

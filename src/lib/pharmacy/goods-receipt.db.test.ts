@@ -110,7 +110,12 @@ type Fixture = {
  * trigger and the PUR-02 status machine all apply to the fixture too — a
  * fixture that had to bypass them would not be evidence about the product.
  */
-async function fixture(organizationId: string, branchId: string, label: string): Promise<Fixture> {
+async function fixture(
+  organizationId: string,
+  branchId: string,
+  label: string,
+  organizationWide = false
+): Promise<Fixture> {
   return inOrg(organizationId, async (db) => {
     await ensureBranch(db, organizationId, branchId);
     const medicine = await db.medicine.create({
@@ -175,7 +180,7 @@ async function fixture(organizationId: string, branchId: string, label: string):
     const order = await db.pharmacyPurchaseOrder.create({
       data: {
         organizationId,
-        branchId,
+        branchId: organizationWide ? null : branchId,
         reference: `PO-${tag(label)}`,
         supplierId: supplier.id,
         createdByUserId: 'user_buyer',
@@ -468,6 +473,39 @@ describeIfDatabase('PUR-02 — posting a receipt into the batch ledger', () => {
     // PUR-02: the order is now being received against.
     expect(result.order.status).toBe('RECEIVING');
     expect(result.posted.exceptions).toEqual([]);
+  });
+
+  it('drafts and posts branch receipts against SENT and RECEIVING organization-wide orders', async () => {
+    const f = await fixture(ORG_A, BRANCH_A, 'org-wide', true);
+    const result = await inOrg(ORG_A, async (db) => {
+      const balances = [];
+      for (const delivery of ['first', 'second']) {
+        const order = await deps.receipts.lockReceivablePurchaseOrder(db, scopeOf(f), {
+          purchaseOrderId: f.purchaseOrderId,
+          supplierId: f.supplierId,
+        });
+        expect(order.branchId).toBeNull();
+        expect(order.status).toBe(delivery === 'first' ? 'SENT' : 'RECEIVING');
+        const receipt = await draftReceipt(db, f, `org-wide-${delivery}`, {
+          line: { receivedPacks: 5, bonusPacks: 0 },
+        });
+        const posted = await deps.receipts.postGoodsReceipt(db, scopeOf(f), {
+          goodsReceiptId: receipt.id,
+          at: RECEIVED_AT,
+        });
+        expect(receipt.branchId).toBe(BRANCH_A);
+        balances.push(await balancesFor(db, ORG_A, posted.lines[0]!.inventoryLotId));
+      }
+      return {
+        balances,
+        order: await db.pharmacyPurchaseOrder.findFirstOrThrow({
+          where: { id: f.purchaseOrderId },
+        }),
+      };
+    });
+
+    expect(result.balances).toEqual([{ AVAILABLE: 50 }, { AVAILABLE: 50 }]);
+    expect(result.order).toMatchObject({ branchId: null, status: 'RECEIVING' });
   });
 
   it('serializes posting against cancellation of the linked order', async () => {

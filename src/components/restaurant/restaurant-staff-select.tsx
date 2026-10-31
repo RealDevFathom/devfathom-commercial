@@ -4,6 +4,7 @@ export type RestaurantStaffOption = {
   id: string;
   displayName: string;
   role: string;
+  canSelfApprove?: boolean;
 };
 
 const selectClass =

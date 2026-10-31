@@ -43,7 +43,12 @@ import {
   type OrderedTerms,
 } from './receiving';
 import { nearExpiryWarning, packIsExpired } from './gs1-datamatrix';
-import { expiryInstant, receiveLot, reverseMovements } from './stock-ledger';
+import {
+  expiryInstant,
+  normalizeExpiryBoundary,
+  receiveLot,
+  reverseMovements,
+} from './stock-ledger';
 import type { LedgerScope } from './stock-ledger';
 
 export type ReceivingScope = LedgerScope;
@@ -166,7 +171,9 @@ export async function lockReceivablePurchaseOrder(
     },
   });
   if (!order) throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
-  if (order.branchId !== scope.branchId) {
+  // A null branch denotes an organization-wide order; its receipts still
+  // belong to the branch receiving the delivery.
+  if (order.branchId !== null && order.branchId !== scope.branchId) {
     throw new PharmacyReceivingError('CROSS_BRANCH_REFERENCE');
   }
   if (order.status !== 'SENT' && order.status !== 'RECEIVING') {
@@ -216,7 +223,7 @@ export async function postGoodsReceipt(
     if (purchaseOrder.supplierId !== receipt.supplierId) {
       throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
     }
-    if (purchaseOrder.branchId !== scope.branchId) {
+    if (purchaseOrder.branchId !== null && purchaseOrder.branchId !== scope.branchId) {
       throw new PharmacyReceivingError('CROSS_BRANCH_REFERENCE');
     }
     if (purchaseOrder.status !== 'SENT' && purchaseOrder.status !== 'RECEIVING') {
@@ -440,10 +447,13 @@ async function resolveManufacturingBatch(
     },
   });
   if (existing) {
-    if (existing.expiresAt.getTime() !== expiresAt.getTime()) {
+    if (
+      normalizeExpiryBoundary(existing.expiresAt).getTime() !==
+      normalizeExpiryBoundary(expiresAt).getTime()
+    ) {
       throw new PharmacyReceivingError('BATCH_EXPIRY_CONFLICT');
     }
-    return existing;
+    return { ...existing, expiresAt };
   }
   return db.pharmacyManufacturingBatch.create({
     data: {
