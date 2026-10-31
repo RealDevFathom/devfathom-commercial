@@ -10,13 +10,15 @@
 -- reconcile the disconnected counter's promise; silently shrinking or
 -- releasing an auditable quota here could permit an already completed offline
 -- sale to be allocated twice.
--- The migration owner is subject to FORCE RLS too. Use the existing platform
--- policy for every tenant during reconciliation and backfill; this scope ends
--- with the migration transaction.
+-- The balance policy permits platform access, but quota policies are strictly
+-- tenant-scoped. Temporarily exempt the migration's table owner from forced
+-- quota RLS under an exclusive lock, then restore FORCE before releasing it.
+-- Non-owner roles remain subject to the unchanged tenant policies throughout.
 SELECT set_config('app.is_platform_admin', 'true', true);
 
 LOCK TABLE "pharmacy_stock_balances" IN ACCESS EXCLUSIVE MODE;
-LOCK TABLE "pharmacy_device_lot_quotas" IN SHARE ROW EXCLUSIVE MODE;
+LOCK TABLE "pharmacy_device_lot_quotas" IN ACCESS EXCLUSIVE MODE;
+ALTER TABLE "pharmacy_device_lot_quotas" NO FORCE ROW LEVEL SECURITY;
 
 DO $$
 DECLARE
@@ -79,6 +81,7 @@ WHERE balance."organizationId" = quota."organizationId"
   AND balance."stockLocationId" = quota."stockLocationId"
   AND balance."disposition" = 'AVAILABLE';
 ALTER TABLE "pharmacy_stock_balances" ENABLE TRIGGER USER;
+ALTER TABLE "pharmacy_device_lot_quotas" FORCE ROW LEVEL SECURITY;
 
 ALTER TABLE "pharmacy_stock_balances"
   ADD CONSTRAINT "pharmacy_stock_balances_offline_reserved_check"

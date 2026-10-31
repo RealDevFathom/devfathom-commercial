@@ -40,7 +40,6 @@ async function withLegacyDatabase(work: (client: Client) => Promise<void>) {
     await client.query(`CREATE SCHEMA "${schema}"`);
     await client.query(`SET LOCAL search_path TO "${schema}"`);
     await client.query(`
-      SELECT set_config('app.is_platform_admin', 'true', true);
       CREATE TABLE pharmacy_stock_balances (
         "organizationId" text NOT NULL, "branchId" text NOT NULL,
         "inventoryLotId" text NOT NULL, "stockLocationId" text NOT NULL,
@@ -70,13 +69,27 @@ async function withLegacyDatabase(work: (client: Client) => Promise<void>) {
       await client.query(`
         ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY;
         ALTER TABLE ${table} FORCE ROW LEVEL SECURITY;
-        CREATE POLICY tenant_isolation ON ${table}
-          USING (current_setting('app.is_platform_admin', true) = 'true'
-            OR "organizationId" = NULLIF(current_setting('app.current_organization_id', true), ''))
-          WITH CHECK (current_setting('app.is_platform_admin', true) = 'true'
-            OR "organizationId" = NULLIF(current_setting('app.current_organization_id', true), ''));
       `);
     }
+    // Match the production policies: only balances have a platform-admin bypass.
+    await client.query(`
+      CREATE POLICY tenant_branch_isolation ON pharmacy_stock_balances
+        USING (current_setting('app.is_platform_admin', true) = 'true' OR (
+          "organizationId" = NULLIF(current_setting('app.current_organization_id', true), '')
+          AND (NULLIF(current_setting('app.current_branch_id', true), '') IS NULL
+            OR "branchId" = current_setting('app.current_branch_id', true))))
+        WITH CHECK (current_setting('app.is_platform_admin', true) = 'true' OR (
+          "organizationId" = NULLIF(current_setting('app.current_organization_id', true), '')
+          AND (NULLIF(current_setting('app.current_branch_id', true), '') IS NULL
+            OR "branchId" = current_setting('app.current_branch_id', true))));
+      CREATE POLICY pharmacy_device_lot_quotas_tenant_select ON pharmacy_device_lot_quotas
+        FOR SELECT USING ("organizationId" = NULLIF(current_setting('app.current_organization_id', true), ''));
+      CREATE POLICY pharmacy_device_lot_quotas_tenant_insert ON pharmacy_device_lot_quotas
+        FOR INSERT WITH CHECK ("organizationId" = NULLIF(current_setting('app.current_organization_id', true), ''));
+      CREATE POLICY pharmacy_device_lot_quotas_tenant_update ON pharmacy_device_lot_quotas
+        FOR UPDATE USING ("organizationId" = NULLIF(current_setting('app.current_organization_id', true), ''))
+        WITH CHECK ("organizationId" = NULLIF(current_setting('app.current_organization_id', true), ''));
+    `);
     const quotaMigration = '20260902200000_pharmacy_offline_counter_runtime';
     const ledgerMigration = '20260902130000_pharmacy_batch_stock_ledger';
     for (const declaration of [
@@ -132,6 +145,7 @@ describeIfDatabase('offline quota reservation migration', () => {
       );
       await client.query('ALTER TABLE pharmacy_stock_balances ENABLE TRIGGER USER');
       await client.query("SELECT set_config('app.is_platform_admin', 'false', true)");
+      await client.query('SAVEPOINT migration_attempt');
       const failure = await client.query(sql).catch((error: unknown) => error);
       expect(failure).toMatchObject({
         message: expect.stringMatching(/OFFLINE_QUOTA_BACKFILL_REQUIRES_RECONCILIATION/),
@@ -139,12 +153,36 @@ describeIfDatabase('offline quota reservation migration', () => {
         hint: expect.stringContaining('release excess open quotas'),
       });
       expect(failure).toMatchObject({ detail: expect.stringContaining('outstanding=5 onHand=2') });
+      await client.query('ROLLBACK TO SAVEPOINT migration_attempt');
+      expect(
+        (
+          await client.query(`
+          SELECT relrowsecurity, relforcerowsecurity FROM pg_class
+          WHERE oid = 'pharmacy_device_lot_quotas'::regclass
+        `)
+        ).rows
+      ).toEqual([{ relrowsecurity: true, relforcerowsecurity: true }]);
+      expect((await client.query('SELECT * FROM pharmacy_device_lot_quotas')).rows).toEqual([]);
     });
   });
 
   it('backfills all tenants and preserves consumption, release, movement and projection guards', async () => {
     await withLegacyDatabase(async (client) => {
       await client.query(sql);
+      expect(
+        (
+          await client.query(`
+          SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class
+          WHERE oid IN ('pharmacy_stock_balances'::regclass, 'pharmacy_device_lot_quotas'::regclass)
+          ORDER BY relname
+        `)
+        ).rows
+      ).toEqual([
+        { relname: 'pharmacy_device_lot_quotas', relrowsecurity: true, relforcerowsecurity: true },
+        { relname: 'pharmacy_stock_balances', relrowsecurity: true, relforcerowsecurity: true },
+      ]);
+      // Even the owner with the platform flag cannot see quotas without a tenant.
+      expect((await client.query('SELECT * FROM pharmacy_device_lot_quotas')).rows).toEqual([]);
       expect(
         (
           await client.query(`
@@ -171,6 +209,10 @@ describeIfDatabase('offline quota reservation migration', () => {
       `);
       expect(
         (await client.query('SELECT DISTINCT "organizationId" FROM pharmacy_stock_balances')).rows
+      ).toEqual([{ organizationId: 'org-a' }]);
+      expect(
+        (await client.query('SELECT DISTINCT "organizationId" FROM pharmacy_device_lot_quotas'))
+          .rows
       ).toEqual([{ organizationId: 'org-a' }]);
       await expectRejected(
         client,
