@@ -7,8 +7,13 @@ const mocks = vi.hoisted(() => ({
   can: vi.fn(),
   resolveOrganizationEntitlements: vi.fn(),
   sendAndLog: vi.fn(),
+  claimMessageLogInTransaction: vi.fn(),
+  sendClaimedMessage: vi.fn(),
   activeTenantTransactions: 0,
-  platformDb: { pharmacyOwnerDigestSetting: { findMany: vi.fn() } },
+  platformDb: {
+    pharmacyOwnerDigestSetting: { findMany: vi.fn() },
+    pharmacyOwnerDigestCapture: { findMany: vi.fn() },
+  },
   tenantDb: {
     $queryRaw: vi.fn(),
     pharmacyOwnerDigestSetting: { findFirst: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
@@ -16,6 +21,7 @@ const mocks = vi.hoisted(() => ({
       findUnique: vi.fn(),
       createMany: vi.fn(),
       findUniqueOrThrow: vi.fn(),
+      update: vi.fn(),
     },
   },
 }));
@@ -64,7 +70,11 @@ vi.mock('./anomaly-signals-operations', () => ({
     ...signals.map((signal) => `- ${signal.explanation}`),
   ],
 }));
-vi.mock('./whatsapp/message-log', () => ({ sendAndLog: mocks.sendAndLog }));
+vi.mock('./whatsapp/message-log', () => ({
+  sendAndLog: mocks.sendAndLog,
+  claimMessageLogInTransaction: mocks.claimMessageLogInTransaction,
+  sendClaimedMessage: mocks.sendClaimedMessage,
+}));
 
 import {
   CaptureChannel,
@@ -77,6 +87,7 @@ import {
   renderOwnerBriefing,
   WhatsAppChannel,
 } from './owner-digest';
+import { Prisma } from '@/generated/prisma/client';
 import { MetaWhatsAppProvider } from './whatsapp/provider';
 
 describe('RPT-03 owner digest', () => {
@@ -93,6 +104,9 @@ describe('RPT-03 owner digest', () => {
     });
     mocks.tenantDb.pharmacyOwnerDigestSetting.updateMany.mockResolvedValue({ count: 1 });
     mocks.platformDb.pharmacyOwnerDigestSetting.findMany.mockResolvedValue([]);
+    mocks.platformDb.pharmacyOwnerDigestCapture.findMany.mockResolvedValue([]);
+    mocks.claimMessageLogInTransaction.mockResolvedValue('log_1');
+    mocks.sendClaimedMessage.mockResolvedValue('SENT');
     mocks.readPharmacyAnomalySignals.mockResolvedValue([]);
     mocks.refreshPharmacyAnomalySignals.mockResolvedValue({ evaluated: 0, signals: [] });
     mocks.sendAndLog.mockResolvedValue('SENT');
@@ -237,9 +251,13 @@ describe('RPT-03 owner digest', () => {
         new Date('2026-09-04T19:00:00.000Z'),
       ])
     );
-    expect(statement.sql).toContain("SELECT * FROM all_period_demand WHERE status='OPEN'");
-    expect(statement.sql).toContain('FROM open_period_demand GROUP BY');
-    expect(statement.sql).toContain('SUM("estimatedValueMinor") FROM open_period_demand');
+    // Declined-substitute walk-outs are CLOSED, not recovered; only RECOVERED is excluded.
+    expect(statement.sql).toContain(
+      "SELECT * FROM all_period_demand WHERE status IN ('OPEN','CLOSED')"
+    );
+    expect(statement.sql).toContain('FROM keyed_demand GROUP BY gap_key');
+    expect(statement.sql).not.toContain('GROUP BY "requestedMedicineId"');
+    expect(statement.sql).toContain('SUM("estimatedValueMinor") FROM unrecovered_period_demand');
   });
 
   it('delivers the safe briefing through the configured owner template and audit log', async () => {
@@ -464,64 +482,235 @@ describe('RPT-03 owner digest', () => {
     };
   }
 
+  function stubWhatsAppEnv() {
+    vi.stubEnv('PHARMACY_WHATSAPP_PROVIDER', 'meta');
+    vi.stubEnv('PHARMACY_WHATSAPP_ACCESS_TOKEN', 'token');
+    vi.stubEnv('PHARMACY_WHATSAPP_PHONE_NUMBER_ID', 'sender');
+    vi.stubEnv('PHARMACY_WHATSAPP_ORGANIZATION_ID', 'org_1');
+    vi.stubEnv('PHARMACY_WHATSAPP_TEMPLATE_OWNER_DIGEST', 'owner_digest_v1');
+  }
+
+  /** A minimal in-memory capture outbox behind the mocked Prisma and raw lock queries. */
+  function installCaptureOutbox(settings: Array<ReturnType<typeof dueSetting>>) {
+    const captures = new Map<
+      string,
+      {
+        id: string;
+        organizationId: string;
+        userId: string;
+        branchId: string;
+        businessDate: string;
+        whatsappPendingAt: Date | null;
+        whatsappParameters: unknown;
+      }
+    >();
+    const captureId = (key: { userId: string; branchId: string; businessDate: string }) =>
+      `capture_${key.userId}_${key.branchId}_${key.businessDate}`;
+    mocks.tenantDb.pharmacyOwnerDigestCapture.findUnique.mockImplementation(
+      async ({ where }) =>
+        captures.get(captureId(where.organizationId_userId_branchId_businessDate)) ?? null
+    );
+    mocks.tenantDb.pharmacyOwnerDigestCapture.createMany.mockImplementation(async ({ data }) => {
+      const id = captureId(data);
+      if (captures.has(id)) return { count: 0 };
+      captures.set(id, {
+        id,
+        organizationId: data.organizationId,
+        userId: data.userId,
+        branchId: data.branchId,
+        businessDate: data.businessDate,
+        whatsappPendingAt: data.whatsappPendingAt ?? null,
+        whatsappParameters: data.whatsappParameters ?? null,
+      });
+      return { count: 1 };
+    });
+    mocks.tenantDb.pharmacyOwnerDigestCapture.findUniqueOrThrow.mockImplementation(
+      async ({ where }) => ({ id: captureId(where.organizationId_userId_branchId_businessDate) })
+    );
+    mocks.tenantDb.pharmacyOwnerDigestCapture.update.mockImplementation(async ({ where, data }) => {
+      const capture = captures.get(where.id)!;
+      capture.whatsappPendingAt = data.whatsappPendingAt;
+      capture.whatsappParameters =
+        data.whatsappParameters === Prisma.DbNull ? null : data.whatsappParameters;
+      return capture;
+    });
+    mocks.platformDb.pharmacyOwnerDigestCapture.findMany.mockImplementation(async () =>
+      [...captures.values()]
+        .filter((capture) => capture.whatsappPendingAt)
+        .map(({ id, organizationId, userId, branchId, businessDate }) => ({
+          id,
+          organizationId,
+          userId,
+          branchId,
+          businessDate,
+        }))
+    );
+    mocks.tenantDb.$queryRaw.mockImplementation(async (statement: Prisma.Sql) => {
+      if (statement.sql.includes('FROM "users"')) return [{ id: statement.values[1] }];
+      if (statement.sql.includes('FROM "pharmacy_owner_digest_settings"')) {
+        const [, userId, branchId] = statement.values;
+        const setting = settings.find(
+          (item) => item.userId === userId && item.branchId === branchId
+        );
+        return setting ? [{ id: setting.id }] : [];
+      }
+      if (statement.sql.includes('FROM "pharmacy_owner_digest_captures"')) {
+        const capture = captures.get(statement.values[1] as string);
+        return capture ? [capture] : [];
+      }
+      return [];
+    });
+    return captures;
+  }
+
   it.each(['compose', 'recheck', 'log', 'provider'])(
     'continues processing the next owner after a %s failure',
     async (failure) => {
-      vi.stubEnv('PHARMACY_WHATSAPP_PROVIDER', 'meta');
-      vi.stubEnv('PHARMACY_WHATSAPP_ACCESS_TOKEN', 'token');
-      vi.stubEnv('PHARMACY_WHATSAPP_PHONE_NUMBER_ID', 'sender');
-      vi.stubEnv('PHARMACY_WHATSAPP_ORGANIZATION_ID', 'org_1');
-      vi.stubEnv('PHARMACY_WHATSAPP_TEMPLATE_OWNER_DIGEST', 'owner_digest_v1');
+      stubWhatsAppEnv();
       const now = new Date('2026-09-04T08:00:00Z');
       const first = dueSetting(now);
       const second = { ...dueSetting(now), id: 'setting_2', userId: 'user_2' };
+      second.user = { ...second.user, id: 'user_2' };
       mocks.platformDb.pharmacyOwnerDigestSetting.findMany.mockResolvedValue([first, second]);
+      const captures = installCaptureOutbox([first, second]);
       let firstReads = 0;
       mocks.tenantDb.pharmacyOwnerDigestSetting.findFirst.mockImplementation(async ({ where }) => {
         if (where.id === second.id) return second;
         firstReads += 1;
+        // Read 4 is the locked recipient recheck, before the send reservation.
         if (failure === 'recheck' && firstReads === 4) throw new Error('private database error');
         return first;
       });
-      mocks.tenantDb.pharmacyOwnerDigestCapture.findUnique.mockResolvedValue(null);
-      mocks.tenantDb.pharmacyOwnerDigestCapture.findUniqueOrThrow.mockResolvedValue({
-        id: 'capture',
-      });
-      mocks.tenantDb.pharmacyOwnerDigestCapture.createMany.mockResolvedValue({ count: 1 });
       if (failure === 'compose')
         mocks.readPharmacyOwnerCommandCentre.mockRejectedValueOnce(new Error('private SQL error'));
       if (failure === 'log')
-        mocks.sendAndLog.mockRejectedValueOnce(new Error('private persistence error'));
-      if (failure === 'provider') mocks.sendAndLog.mockResolvedValueOnce('FAILED');
+        mocks.claimMessageLogInTransaction.mockRejectedValueOnce(
+          new Error('private persistence error')
+        );
+      if (failure === 'provider') mocks.sendClaimedMessage.mockResolvedValueOnce('FAILED');
       await expect(processDueOwnerDigests(now)).resolves.toEqual({
         due: 2,
         captured: failure === 'compose' ? 1 : 2,
         failed: 1,
       });
-      expect(mocks.sendAndLog).toHaveBeenCalledWith(
+      expect(mocks.claimMessageLogInTransaction).toHaveBeenCalledWith(
+        mocks.tenantDb,
+        expect.objectContaining({ dedupeKey: 'owner-digest:user_2:branch_1:2026-09-04' })
+      );
+      expect(mocks.sendClaimedMessage).toHaveBeenCalledWith(
         expect.objectContaining({ dedupeKey: 'owner-digest:user_2:branch_1:2026-09-04' }),
+        'log_1',
         expect.any(Function)
       );
+      if (failure === 'recheck' || failure === 'log') {
+        // The failed reservation rolled back: the first owner's work is still queued.
+        expect(captures.get('capture_user_1_branch_1_2026-09-04')?.whatsappPendingAt).toEqual(
+          expect.any(Date)
+        );
+      }
     }
   );
 
+  it('retries WhatsApp work when a database failure precedes the send reservation', async () => {
+    stubWhatsAppEnv();
+    const now = new Date('2026-09-04T08:00:00.000Z');
+    const setting = dueSetting(now);
+    mocks.platformDb.pharmacyOwnerDigestSetting.findMany.mockResolvedValueOnce([setting]);
+    mocks.tenantDb.pharmacyOwnerDigestSetting.findFirst.mockResolvedValue(setting);
+    const captures = installCaptureOutbox([setting]);
+    const raw = mocks.tenantDb.$queryRaw.getMockImplementation()!;
+    let retrying = false;
+    mocks.tenantDb.$queryRaw.mockImplementation(async (statement: Prisma.Sql) => {
+      if (!retrying && statement.sql.includes('FOR SHARE'))
+        throw new Error('transient lock failure');
+      return raw(statement);
+    });
+
+    await expect(processDueOwnerDigests(now)).resolves.toEqual({
+      due: 1,
+      captured: 1,
+      failed: 1,
+    });
+    expect(mocks.claimMessageLogInTransaction).not.toHaveBeenCalled();
+    expect(mocks.sendClaimedMessage).not.toHaveBeenCalled();
+    const capture = captures.get('capture_user_1_branch_1_2026-09-04')!;
+    expect(capture.whatsappPendingAt).toEqual(expect.any(Date));
+    expect(capture.whatsappParameters).toHaveLength(21);
+
+    // The occurrence is no longer due, but its durable WhatsApp work is.
+    retrying = true;
+    await expect(processDueOwnerDigests(new Date('2026-09-04T08:05:00.000Z'))).resolves.toEqual({
+      due: 0,
+      captured: 0,
+      failed: 0,
+    });
+    expect(mocks.claimMessageLogInTransaction).toHaveBeenCalledOnce();
+    expect(mocks.sendClaimedMessage).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ dedupeKey: 'owner-digest:user_1:branch_1:2026-09-04' }),
+      'log_1',
+      expect.any(Function)
+    );
+    expect(capture.whatsappPendingAt).toBeNull();
+    expect(capture.whatsappParameters).toBeNull();
+
+    // Once reserved, the work is consumed: at-most-once after a provider attempt.
+    await processDueOwnerDigests(new Date('2026-09-04T08:10:00.000Z'));
+    expect(mocks.sendClaimedMessage).toHaveBeenCalledOnce();
+  });
+
+  it('drops queued WhatsApp work that is too stale to be useful', async () => {
+    stubWhatsAppEnv();
+    const now = new Date('2026-09-04T08:00:00.000Z');
+    const setting = dueSetting(now);
+    mocks.tenantDb.pharmacyOwnerDigestSetting.findFirst.mockResolvedValue(setting);
+    const captures = installCaptureOutbox([setting]);
+    captures.set('capture_user_1_branch_1_2026-09-02', {
+      id: 'capture_user_1_branch_1_2026-09-02',
+      organizationId: 'org_1',
+      userId: 'user_1',
+      branchId: 'branch_1',
+      businessDate: '2026-09-02',
+      whatsappPendingAt: new Date(Date.now() - 25 * 60 * 60 * 1000),
+      whatsappParameters: Array.from({ length: 21 }, () => 'PKR 0.00'),
+    });
+    await expect(processDueOwnerDigests(now)).resolves.toEqual({
+      due: 0,
+      captured: 0,
+      failed: 0,
+    });
+    expect(mocks.claimMessageLogInTransaction).not.toHaveBeenCalled();
+    expect(mocks.sendClaimedMessage).not.toHaveBeenCalled();
+    expect(captures.get('capture_user_1_branch_1_2026-09-02')?.whatsappPendingAt).toBeNull();
+  });
+
+  it('does not queue WhatsApp work when the owner has not consented at capture', async () => {
+    stubWhatsAppEnv();
+    const now = new Date('2026-09-04T08:00:00.000Z');
+    const setting = { ...dueSetting(now), whatsappPhoneHash: null };
+    mocks.platformDb.pharmacyOwnerDigestSetting.findMany.mockResolvedValue([setting]);
+    mocks.tenantDb.pharmacyOwnerDigestSetting.findFirst.mockResolvedValue(setting);
+    const captures = installCaptureOutbox([setting]);
+    await expect(processDueOwnerDigests(now)).resolves.toEqual({
+      due: 1,
+      captured: 1,
+      failed: 0,
+    });
+    expect(captures.get('capture_user_1_branch_1_2026-09-04')?.whatsappPendingAt).toBeNull();
+    expect(mocks.claimMessageLogInTransaction).not.toHaveBeenCalled();
+  });
+
   it.each(['disabled', 'revoked', 'opted out', 'phone changed', 'unchanged'])(
-    'rechecks the WhatsApp recipient after capture commits: %s',
+    'rechecks the WhatsApp recipient under lock after capture commits: %s',
     async (change) => {
-      vi.stubEnv('PHARMACY_WHATSAPP_PROVIDER', 'meta');
-      vi.stubEnv('PHARMACY_WHATSAPP_ACCESS_TOKEN', 'token');
-      vi.stubEnv('PHARMACY_WHATSAPP_PHONE_NUMBER_ID', 'sender');
-      vi.stubEnv('PHARMACY_WHATSAPP_ORGANIZATION_ID', 'org_1');
-      vi.stubEnv('PHARMACY_WHATSAPP_TEMPLATE_OWNER_DIGEST', 'owner_digest_v1');
+      stubWhatsAppEnv();
       const now = new Date('2026-09-04T08:00:00.000Z');
       const setting = dueSetting(now);
       mocks.platformDb.pharmacyOwnerDigestSetting.findMany.mockResolvedValue([setting]);
       mocks.tenantDb.pharmacyOwnerDigestSetting.findFirst.mockResolvedValue(setting);
-      mocks.tenantDb.pharmacyOwnerDigestCapture.findUnique.mockResolvedValue(null);
-      mocks.tenantDb.pharmacyOwnerDigestCapture.findUniqueOrThrow.mockResolvedValue({
-        id: 'capture_1',
-      });
-      mocks.tenantDb.pharmacyOwnerDigestCapture.createMany.mockImplementation(async () => {
+      const captures = installCaptureOutbox([setting]);
+      const createCapture =
+        mocks.tenantDb.pharmacyOwnerDigestCapture.createMany.getMockImplementation()!;
+      mocks.tenantDb.pharmacyOwnerDigestCapture.createMany.mockImplementation(async (args) => {
         if (change === 'disabled') {
           mocks.tenantDb.pharmacyOwnerDigestSetting.findFirst.mockResolvedValue(null);
         } else if (change === 'revoked') {
@@ -531,10 +720,10 @@ describe('RPT-03 owner digest', () => {
         } else if (change === 'phone changed') {
           setting.user.phone = '0300 7654321';
         }
-        return { count: 1 };
+        return createCapture(args);
       });
 
-      mocks.sendAndLog.mockImplementation(async () => {
+      mocks.sendClaimedMessage.mockImplementation(async () => {
         expect(mocks.activeTenantTransactions).toBe(0);
         return 'SENT';
       });
@@ -544,12 +733,51 @@ describe('RPT-03 owner digest', () => {
         failed: 0,
       });
 
+      // The queued work is consumed whether it was reserved or found ineligible.
+      expect(captures.get('capture_user_1_branch_1_2026-09-04')?.whatsappPendingAt).toBeNull();
       if (change !== 'unchanged') {
-        expect(mocks.sendAndLog).not.toHaveBeenCalled();
+        expect(mocks.claimMessageLogInTransaction).not.toHaveBeenCalled();
+        expect(mocks.sendClaimedMessage).not.toHaveBeenCalled();
       } else {
-        expect(mocks.sendAndLog).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({ phoneLast4: '4567' }),
+        expect(mocks.claimMessageLogInTransaction).toHaveBeenCalledExactlyOnceWith(
+          mocks.tenantDb,
+          expect.objectContaining({
+            kind: 'OWNER_DIGEST',
+            direction: 'OUTBOUND',
+            status: 'PENDING',
+            phoneLast4: '4567',
+          })
+        );
+        expect(mocks.sendClaimedMessage).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ phoneLast4: '4567', templateName: 'owner_digest_v1' }),
+          'log_1',
           expect.any(Function)
+        );
+        // Owner, setting and capture rows are locked before the final recheck and reservation.
+        const statements = mocks.tenantDb.$queryRaw.mock.calls.map(([statement]) => statement.sql);
+        const lockIndex = (needle: string) =>
+          statements.findIndex((sql: string) => sql.includes(needle));
+        expect(statements[lockIndex('FROM "users"')]).toContain('FOR SHARE');
+        expect(statements[lockIndex('FROM "pharmacy_owner_digest_settings"')]).toContain(
+          'FOR UPDATE'
+        );
+        expect(statements[lockIndex('FROM "pharmacy_owner_digest_captures"')]).toContain(
+          'FOR UPDATE'
+        );
+        const lastLock = Math.max(
+          ...mocks.tenantDb.$queryRaw.mock.invocationCallOrder.filter((_order, index) =>
+            /FOR (SHARE|UPDATE)/.test(statements[index])
+          )
+        );
+        expect(lastLock).toBeLessThan(
+          mocks.claimMessageLogInTransaction.mock.invocationCallOrder[0]
+        );
+        const lastRecheck = Math.max(
+          ...mocks.tenantDb.pharmacyOwnerDigestSetting.findFirst.mock.invocationCallOrder
+        );
+        expect(lastLock).toBeLessThan(lastRecheck);
+        expect(lastRecheck).toBeLessThan(
+          mocks.claimMessageLogInTransaction.mock.invocationCallOrder[0]
         );
       }
     }

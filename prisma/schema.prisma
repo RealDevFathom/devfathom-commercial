@@ -13728,6 +13728,10 @@ model PharmacyOwnerDigestCapture {
   rendered       String
   metrics        Json
   capturedAt     DateTime @default(now())
+  /// Durable WhatsApp work queued with the capture; cleared when the send is reserved or dropped.
+  whatsappPendingAt  DateTime?
+  /// Fixed template variables for the pending send; never contains catalog or branch names.
+  whatsappParameters Json?
 
   organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   user         User           @relation(fields: [userId], references: [id], onDelete: Cascade)

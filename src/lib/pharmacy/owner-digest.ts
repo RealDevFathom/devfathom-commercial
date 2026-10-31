@@ -22,7 +22,12 @@ import {
   type WhatsAppProvider,
 } from './whatsapp/provider';
 import { normalizeWhatsAppNumber, phoneLast4 } from './whatsapp/messages';
-import { sendAndLog } from './whatsapp/message-log';
+import {
+  claimMessageLogInTransaction,
+  sendAndLog,
+  sendClaimedMessage,
+  type MessageLogEntry,
+} from './whatsapp/message-log';
 
 const DIGEST_METRIC_KEYS = [
   'salesMinor',
@@ -149,17 +154,30 @@ export async function readOwnerBriefingFigures(
       FROM "pharmacy_unfulfilled_demand_events" d
       LEFT JOIN "pharmacy_medicines" m ON m."organizationId"=d."organizationId" AND m."id"=d."requestedMedicineId"
       WHERE d."branchId"=${branchId} AND d."createdAt">=${start} AND d."createdAt"<${end}
-    ), open_period_demand AS (
-      SELECT * FROM all_period_demand WHERE status='OPEN'
+    ), unrecovered_period_demand AS (
+      -- A declined substitute closes the event as a genuine walk-out; only recovered demand is excluded.
+      SELECT * FROM all_period_demand WHERE status IN ('OPEN','CLOSED')
+    ), keyed_demand AS (
+      -- Unmatched free-text requests group by their recorded identity, never into one null bucket.
+      SELECT *,
+        CASE
+          WHEN "requestedMedicineId" IS NOT NULL THEN 'medicine:' || "requestedMedicineId"
+          WHEN NULLIF(btrim("requestedText"),'') IS NOT NULL THEN 'text:' || lower(btrim("requestedText"))
+            || '|' || lower(COALESCE(btrim("strength"),'')) || '|' || lower(COALESCE(btrim("form"),''))
+          ELSE 'event:' || "id"
+        END AS gap_key,
+        COALESCE("productName", NULLIF(concat_ws(' ', NULLIF(btrim("requestedText"),''),
+          NULLIF(btrim("strength"),''), NULLIF(btrim("form"),'')),'')) AS gap_name
+      FROM unrecovered_period_demand
     ), gaps AS (
-      SELECT "requestedMedicineId", MAX("productName") AS name,
+      SELECT gap_key, MAX("requestedMedicineId") AS "requestedMedicineId", MAX(gap_name) AS name,
         COALESCE(SUM("estimatedValueMinor"),0)::bigint AS value
-      FROM open_period_demand GROUP BY "requestedMedicineId"
-      ORDER BY value DESC, "requestedMedicineId" NULLS LAST LIMIT 1
+      FROM keyed_demand GROUP BY gap_key
+      ORDER BY value DESC, gap_key LIMIT 1
     )
     SELECT
-      COALESCE((SELECT SUM("estimatedValueMinor") FROM open_period_demand),0)::bigint AS lost,
-      (SELECT COUNT(*) FROM open_period_demand)::bigint AS "walkOuts",
+      COALESCE((SELECT SUM("estimatedValueMinor") FROM unrecovered_period_demand),0)::bigint AS lost,
+      (SELECT COUNT(*) FROM unrecovered_period_demand)::bigint AS "walkOuts",
       COALESCE((SELECT SUM("estimatedValueMinor") FROM "pharmacy_unfulfilled_demand_events" WHERE "branchId"=${branchId} AND status='RECOVERED' AND "recoveredAt">=${start} AND "recoveredAt"<${end}),0)::bigint AS recovered,
       gaps.name AS "topGapName", COALESCE(gaps.value,0)::bigint AS "topGapValue",
       COALESCE(EXISTS(SELECT 1 FROM "pharmacy_purchase_order_lines" pol JOIN "pharmacy_purchase_orders" po ON po."organizationId"=pol."organizationId" AND po.id=pol."purchaseOrderId" WHERE po."branchId"=${branchId} AND po.status='DRAFT' AND pol."medicineId"=gaps."requestedMedicineId"),false) AS "topGapDraftPo"
@@ -300,7 +318,11 @@ export async function composeOwnerDigest(
 export class CaptureChannel implements DigestChannel {
   readonly name = 'capture';
 
-  async deliver(db: ScopedDb, digest: OwnerDigest) {
+  async deliver(
+    db: ScopedDb,
+    digest: OwnerDigest,
+    options: { whatsappParameters?: string[] | null } = {}
+  ) {
     const key = {
       organizationId: digest.organizationId,
       userId: digest.userId,
@@ -314,6 +336,10 @@ export class CaptureChannel implements DigestChannel {
         ...key,
         rendered: digest.rendered,
         metrics: JSON.parse(JSON.stringify(digest.metrics)) as Prisma.InputJsonValue,
+        // Pending WhatsApp work commits atomically with the capture and schedule claim.
+        ...(options.whatsappParameters
+          ? { whatsappPendingAt: new Date(), whatsappParameters: options.whatsappParameters }
+          : {}),
       },
       skipDuplicates: true,
     });
@@ -331,6 +357,14 @@ export class CaptureChannel implements DigestChannel {
 export function ownerDigestWhatsAppPhoneHash(phone: string | null | undefined): string | null {
   const normalized = normalizeWhatsAppNumber(phone);
   return normalized ? createHash('sha256').update(normalized).digest('hex') : null;
+}
+
+export const OWNER_DIGEST_WHATSAPP_PARAMETER_COUNT = 21;
+/** A queued send older than this is stale business news; drop it rather than deliver late. */
+const OWNER_DIGEST_WHATSAPP_MAX_PENDING_MS = 24 * 60 * 60 * 1000;
+
+function ownerDigestDedupeKey(input: { userId: string; branchId: string; businessDate: string }) {
+  return `owner-digest:${input.userId}:${input.branchId}:${input.businessDate}`;
 }
 
 /** Ordered body variables for the fixed, approved template in docs/pharmacy/owner-digest-whatsapp.md. */
@@ -379,35 +413,143 @@ export class WhatsAppChannel {
     return this.configured && this.config.organizationId === organizationId;
   }
 
+  /** The normalized recipient only when this sender and the owner's phone-bound consent allow it. */
+  recipientFor(
+    organizationId: string,
+    phone: string | null | undefined,
+    consentHash: string | null | undefined
+  ): string | null {
+    const to = normalizeWhatsAppNumber(phone);
+    return this.isConfiguredFor(organizationId) &&
+      to &&
+      consentHash &&
+      consentHash === ownerDigestWhatsAppPhoneHash(to)
+      ? to
+      : null;
+  }
+
+  messageEntry(
+    input: { organizationId: string; userId: string; branchId: string; businessDate: string },
+    to: string
+  ): MessageLogEntry {
+    return {
+      organizationId: input.organizationId,
+      branchId: input.branchId,
+      kind: 'OWNER_DIGEST',
+      dedupeKey: ownerDigestDedupeKey(input),
+      phoneLast4: phoneLast4(to),
+      templateName: this.config.templates.ownerDigest,
+      dueDate: input.businessDate,
+    };
+  }
+
+  private send(to: string, parameters: string[]) {
+    return () => this.provider.sendTemplate({ to, template: 'ownerDigest', parameters });
+  }
+
   async deliver(digest: OwnerDigest) {
-    const to = normalizeWhatsAppNumber(digest.ownerPhone);
-    if (
-      !this.isConfiguredFor(digest.organizationId) ||
-      !to ||
-      !digest.whatsappPhoneHash ||
-      digest.whatsappPhoneHash !== ownerDigestWhatsAppPhoneHash(to)
-    ) {
-      return { delivered: false };
-    }
+    const to = this.recipientFor(
+      digest.organizationId,
+      digest.ownerPhone,
+      digest.whatsappPhoneHash
+    );
+    if (!to) return { delivered: false };
     const outcome = await sendAndLog(
-      {
-        organizationId: digest.organizationId,
-        branchId: digest.branchId,
-        kind: 'OWNER_DIGEST',
-        dedupeKey: `owner-digest:${digest.userId}:${digest.branchId}:${digest.businessDate}`,
-        phoneLast4: phoneLast4(to),
-        templateName: this.config.templates.ownerDigest,
-        dueDate: digest.businessDate,
-      },
-      () =>
-        this.provider.sendTemplate({
-          to,
-          template: 'ownerDigest',
-          parameters: ownerDigestWhatsAppParameters(digest),
-        })
+      this.messageEntry(digest, to),
+      this.send(to, ownerDigestWhatsAppParameters(digest))
     );
     return { delivered: outcome === 'SENT', reference: outcome };
   }
+
+  /** Contacts Meta for a reservation whose eligibility checks already committed. */
+  async deliverReserved(reservation: {
+    entry: MessageLogEntry;
+    logId: string;
+    to: string;
+    parameters: string[];
+  }) {
+    const outcome = await sendClaimedMessage(
+      reservation.entry,
+      reservation.logId,
+      this.send(reservation.to, reservation.parameters)
+    );
+    return { delivered: outcome === 'SENT', reference: outcome };
+  }
+}
+
+function pendingParameters(value: unknown): string[] | null {
+  return Array.isArray(value) &&
+    value.length === OWNER_DIGEST_WHATSAPP_PARAMETER_COUNT &&
+    value.every((item) => typeof item === 'string')
+    ? value
+    : null;
+}
+
+/**
+ * Locks the owner, the digest setting and the pending capture, rechecks access,
+ * consent and phone, then reserves the message in this one transaction. A consent
+ * revocation or phone edit either commits first (and wins) or waits for commit.
+ * Meta is contacted only after this returns, outside any transaction.
+ */
+async function reserveOwnerDigestWhatsApp(
+  whatsapp: WhatsAppChannel,
+  pending: {
+    id: string;
+    organizationId: string;
+    userId: string;
+    branchId: string;
+    businessDate: string;
+  },
+  now: Date
+) {
+  return withTenantDb(pending.organizationId, async (db) => {
+    const { organizationId, userId, branchId } = pending;
+    // Lock order user -> setting -> capture; the scheduler claim locks only setting then inserts capture.
+    await db.$queryRaw(Prisma.sql`
+      SELECT id FROM "users" WHERE "organizationId"=${organizationId} AND id=${userId} FOR SHARE
+    `);
+    const [setting] = await db.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      SELECT id FROM "pharmacy_owner_digest_settings"
+      WHERE "organizationId"=${organizationId} AND "userId"=${userId} AND "branchId"=${branchId}
+      FOR UPDATE
+    `);
+    const [capture] = await db.$queryRaw<
+      Array<{ whatsappPendingAt: Date | null; whatsappParameters: unknown }>
+    >(Prisma.sql`
+      SELECT "whatsappPendingAt", "whatsappParameters" FROM "pharmacy_owner_digest_captures"
+      WHERE "organizationId"=${organizationId} AND id=${pending.id}
+      FOR UPDATE
+    `);
+    // A competing worker already reserved or dropped this work.
+    if (!capture?.whatsappPendingAt) return null;
+    const authorized = setting
+      ? await readAuthorizedDigestSetting(db, setting.id, organizationId)
+      : null;
+    const to =
+      authorized && authorized.userId === userId && authorized.branchId === branchId
+        ? whatsapp.recipientFor(organizationId, authorized.user.phone, authorized.whatsappPhoneHash)
+        : null;
+    const parameters = pendingParameters(capture.whatsappParameters);
+    const fresh =
+      now.getTime() - new Date(capture.whatsappPendingAt).getTime() <=
+      OWNER_DIGEST_WHATSAPP_MAX_PENDING_MS;
+    const logId =
+      to && parameters && fresh
+        ? await claimMessageLogInTransaction(db, {
+            ...whatsapp.messageEntry(pending, to),
+            direction: 'OUTBOUND',
+            status: 'PENDING',
+          })
+        : null;
+    // Reserved, ineligible, stale or duplicate: the work is consumed either way.
+    await db.pharmacyOwnerDigestCapture.update({
+      where: { id: pending.id },
+      data: { whatsappPendingAt: null, whatsappParameters: Prisma.DbNull },
+    });
+    return logId && to && parameters
+      ? { entry: whatsapp.messageEntry(pending, to), logId, to, parameters }
+      : null;
+  });
 }
 
 /** The workspace's wall clock; a stored zone Intl refuses reads as UTC rather than throwing. */
@@ -509,6 +651,7 @@ export async function processDueOwnerDigests(now = new Date(), limit = 25) {
   );
   let captured = 0;
   let failed = 0;
+  const whatsapp = new WhatsAppChannel();
   for (const item of due) {
     try {
       const digest = await withTenantDb(item.organizationId, async (db) => {
@@ -578,39 +721,57 @@ export async function processDueOwnerDigests(now = new Date(), limit = 25) {
           // Throw through withTenantDb so the claim and anomaly writes roll back.
           throw new DigestAuthorityChanged();
         }
-        const captured = await new CaptureChannel().deliver(db, digest);
+        const queueWhatsApp = whatsapp.recipientFor(
+          item.organizationId,
+          authorized.user.phone,
+          authorized.whatsappPhoneHash
+        );
+        const captured = await new CaptureChannel().deliver(db, digest, {
+          whatsappParameters: queueWhatsApp ? ownerDigestWhatsAppParameters(digest) : null,
+        });
         return captured.delivered ? digest : null;
       }).catch((error: unknown) => {
         if (error instanceof DigestAuthorityChanged) return null;
         throw error;
       });
-      if (digest) {
-        captured += 1;
-        const recipient = await withTenantDb(item.organizationId, async (db) => {
-          // Capture committed before this separate effect. Recheck access and the
-          // recipient so a disable, revocation or phone edit wins before sending.
-          const authorized = await readAuthorizedDigestSetting(db, item.id, item.organizationId);
-          if (
-            !authorized ||
-            authorized.userId !== digest.userId ||
-            authorized.branchId !== digest.branchId
-          )
-            return;
-          return {
-            ...digest,
-            ownerPhone: authorized.user.phone,
-            whatsappPhoneHash: authorized.whatsappPhoneHash,
-          };
-        });
-        if (recipient) {
-          const delivery = await new WhatsAppChannel().deliver(recipient);
-          if (delivery.reference === 'FAILED' || delivery.reference === 'UNKNOWN') failed += 1;
-        }
-      }
+      if (digest) captured += 1;
     } catch {
-      // One tenant's query, recheck or log failure must not abort other jobs/owners.
-      // Leave committed message claims intact; an uncertain send must never be retried.
+      // One tenant's query or capture failure must not abort other jobs/owners.
       failed += 1;
+    }
+  }
+
+  // Drain durable WhatsApp work, including work left by an earlier failed run.
+  if (whatsapp.configured) {
+    const pending = await withPlatformDb((db) =>
+      db.pharmacyOwnerDigestCapture.findMany({
+        where: { whatsappPendingAt: { not: null } },
+        orderBy: { whatsappPendingAt: 'asc' },
+        take: Math.max(1, Math.min(100, Math.floor(limit))),
+        select: {
+          id: true,
+          organizationId: true,
+          userId: true,
+          branchId: true,
+          businessDate: true,
+        },
+      })
+    ).catch(() => {
+      // Captures already committed; their pending work stays queued for the next run.
+      failed += 1;
+      return [];
+    });
+    for (const item of pending) {
+      try {
+        // A failure here rolls back with the work still pending, so a later run retries it.
+        const reservation = await reserveOwnerDigestWhatsApp(whatsapp, item, new Date());
+        if (!reservation) continue;
+        const delivery = await whatsapp.deliverReserved(reservation);
+        if (delivery.reference === 'FAILED' || delivery.reference === 'UNKNOWN') failed += 1;
+      } catch {
+        // Leave committed message claims intact; an uncertain send must never be retried.
+        failed += 1;
+      }
     }
   }
   return { due: due.length, captured, failed };

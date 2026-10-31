@@ -45,3 +45,20 @@ describe('owner digest WhatsApp consent migration', () => {
     expect(consentMigration).not.toMatch(/\b(?:UPDATE|DEFAULT|NOT NULL|DROP|DISABLE)\b/);
   });
 });
+
+describe('owner digest WhatsApp outbox migration', () => {
+  const outboxMigration = readFileSync(
+    'prisma/migrations/20261101000000_owner_digest_whatsapp_outbox/migration.sql',
+    'utf8'
+  );
+
+  it('adds only nullable pending-delivery columns, so existing captures are never re-sent', () => {
+    expect(outboxMigration).toContain(
+      'ALTER TABLE "pharmacy_owner_digest_captures" ADD COLUMN "whatsappPendingAt" TIMESTAMP(3)'
+    );
+    expect(outboxMigration).toContain(
+      'ALTER TABLE "pharmacy_owner_digest_captures" ADD COLUMN "whatsappParameters" JSONB'
+    );
+    expect(outboxMigration).not.toMatch(/\b(?:UPDATE|DEFAULT|NOT NULL|DROP|DISABLE)\b/);
+  });
+});

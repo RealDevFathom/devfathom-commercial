@@ -30,7 +30,8 @@ describe.skipIf(!url)('owner briefing demand aggregates in PostgreSQL', () => {
     await client.query(`
       CREATE TEMP TABLE pharmacy_unfulfilled_demand_events (
         "organizationId" text, "branchId" text, "requestedMedicineId" text,
-        "estimatedValueMinor" integer, status text, "createdAt" timestamp, "recoveredAt" timestamp
+        "estimatedValueMinor" integer, status text, "createdAt" timestamp, "recoveredAt" timestamp,
+        "requestedText" text, strength text, form text, id text DEFAULT md5(random()::text)
       );
       CREATE TEMP TABLE pharmacy_medicines (
         "organizationId" text, id text, "productName" text
@@ -52,6 +53,18 @@ describe.skipIf(!url)('owner briefing demand aggregates in PostgreSQL', () => {
         ('org_1', 'branch_1', 'medicine_1', 900, 'RECOVERED', '2026-09-04 08:00', '2026-09-04 19:00'),
         ('org_1', 'branch_1', 'medicine_1', 800, 'RECOVERED', '2026-08-28 08:00', '2026-08-28 18:59'),
         ('org_1', 'branch_2', 'medicine_1', 5000, 'RECOVERED', '2026-09-04 08:00', '2026-09-04 09:00');
+      INSERT INTO pharmacy_unfulfilled_demand_events
+        ("organizationId", "branchId", "requestedMedicineId", "estimatedValueMinor", status,
+         "createdAt", "recoveredAt", "requestedText", strength, form)
+      VALUES
+        -- declineSubstitute() closes a genuine walk-out.
+        ('org_1', 'branch_3', 'medicine_1', 700, 'CLOSED', '2026-09-04 08:00', NULL, NULL, NULL, NULL),
+        ('org_1', 'branch_3', 'medicine_1', 5000, 'RECOVERED', '2026-09-04 08:00', '2026-09-04 09:00', NULL, NULL, NULL),
+        ('org_1', 'branch_3', NULL, 200, 'OPEN', '2026-09-04 08:00', NULL, 'Brufen', '400mg', 'tablet'),
+        ('org_1', 'branch_3', NULL, 250, 'CLOSED', '2026-09-04 09:00', NULL, ' brufen ', '400MG', 'Tablet'),
+        ('org_1', 'branch_3', NULL, 600, 'OPEN', '2026-09-04 10:00', NULL, 'Augmentin', NULL, NULL),
+        ('org_1', 'branch_3', NULL, 100, 'OPEN', '2026-09-04 10:00', NULL, NULL, NULL, NULL),
+        ('org_1', 'branch_3', NULL, 100, 'OPEN', '2026-09-04 11:00', NULL, '  ', NULL, NULL);
     `);
     db = {
       $queryRaw: async (statement: Prisma.Sql) =>
@@ -93,6 +106,54 @@ describe.skipIf(!url)('owner briefing demand aggregates in PostgreSQL', () => {
       });
     }
   );
+
+  it('counts declined-substitute walk-outs and keeps unmatched requests as separate gaps', async () => {
+    const figures = await readOwnerBriefingFigures(
+      db,
+      'branch_3',
+      '2026-09-04',
+      '2026-09-04',
+      'Asia/Karachi'
+    );
+    expect(figures).toMatchObject({
+      // 700 closed + 200 + 250 + 600 + 100 + 100 open/closed; the recovered 5000 is excluded.
+      lostDemandEstimatedMinor: 1950,
+      walkOuts: 6,
+      recoveredEstimatedMinor: 5000,
+      // Six unmatched requests total 1250, but no single one outranks the declined medicine.
+      topGapName: 'Paracetamol',
+      topGapEstimatedMinor: 700,
+      topGapDraftPo: true,
+    });
+  });
+
+  it('ranks a free-text gap by its recorded identity with an app-facing name', async () => {
+    await client.query(`
+      INSERT INTO pharmacy_unfulfilled_demand_events
+        ("organizationId", "branchId", "requestedMedicineId", "estimatedValueMinor", status,
+         "createdAt", "requestedText", strength, form)
+      VALUES
+        ('org_1', 'branch_4', 'medicine_1', 500, 'OPEN', '2026-09-04 08:00', NULL, NULL, NULL),
+        ('org_1', 'branch_4', NULL, 300, 'OPEN', '2026-09-04 08:00', 'Brufen', '400mg', 'tablet'),
+        ('org_1', 'branch_4', NULL, 350, 'CLOSED', '2026-09-04 09:00', ' BRUFEN', '400mg', 'tablet'),
+        ('org_1', 'branch_4', NULL, 450, 'OPEN', '2026-09-04 10:00', 'Augmentin', NULL, NULL);
+    `);
+    const figures = await readOwnerBriefingFigures(
+      db,
+      'branch_4',
+      '2026-09-04',
+      '2026-09-04',
+      'Asia/Karachi'
+    );
+    expect(figures).toMatchObject({
+      lostDemandEstimatedMinor: 1600,
+      walkOuts: 4,
+      topGapName: expect.stringMatching(/^brufen 400mg tablet$/i),
+      topGapEstimatedMinor: 650,
+      // Free text has no catalog medicine, so no draft PO can match it.
+      topGapDraftPo: false,
+    });
+  });
 });
 
 // Keep the date-window fixture above; this second connection uses migrated public

@@ -34,6 +34,14 @@ settings authorize in-app capture only. Owners explicitly enable WhatsApp per
 branch on Reports and confirm their profile phone. Consent stores only a hash of
 the normalized phone; changing that phone stops sending until the owner opts in
 again. Unchecking WhatsApp and saving revokes consent without disabling capture.
-The job rechecks authorization and consent after capture commits, closes the
-read transaction, and logs/claims the send before contacting Meta. A failure for
-one owner is counted in the job's `failed` result and does not abort the batch.
+When the owner has consented at capture time, the capture row stores the 21
+template variables as pending WhatsApp work in the same transaction as the capture
+and schedule advance. The job then drains pending work: one transaction locks the
+owner, the digest setting and the capture, rechecks authorization, consent and the
+current phone, reserves the message-log claim and clears the pending work. Meta is
+contacted only after that commits. A consent revocation or phone edit therefore
+either commits first and wins, or waits until the reservation commits. A failure
+before the reservation rolls back and the next run retries it; once reserved, a
+send is never retried. Pending work older than 24 hours is dropped unsent. A
+failure for one owner is counted in the job's `failed` result and does not abort
+the batch.
