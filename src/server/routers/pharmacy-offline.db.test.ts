@@ -327,6 +327,11 @@ describeIfDatabase('offline quota stock reservation', () => {
         return received.lot;
       });
       const result = await inOrg(ORG_A, async (db) => {
+        const onHand = await ledger.onHand(db, scopeOf(fixture), fixture.medicineId, NOW);
+        expect(onHand.map((bucket) => [bucket.inventoryLotId, bucket.onHandUnits])).toEqual([
+          [fixture.lotId, 10],
+          [laterLot.id, 10],
+        ]);
         const candidates = await ledger.loadStockCandidatesForRead(
           db,
           scopeOf(fixture),
@@ -364,6 +369,16 @@ describeIfDatabase('offline quota stock reservation', () => {
       );
       expect(balance.onHandUnits).toBe(reserved);
       expect(balance.offlineReservedUnits).toBe(reserved);
+      const remainingOnHand = await inOrg(ORG_A, (db) =>
+        ledger.onHand(db, scopeOf(fixture), fixture.medicineId, NOW)
+      );
+      expect(
+        remainingOnHand.find((bucket) => bucket.inventoryLotId === fixture.lotId)
+      ).toMatchObject({
+        onHandUnits: reserved,
+        sealedPacks: 0,
+        looseUnits: reserved,
+      });
     }
   );
 

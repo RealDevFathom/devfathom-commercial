@@ -51,6 +51,7 @@ type CandidateRow = {
   disposition: StockDisposition;
   expiresAt: Date;
   receivedAt: Date | null;
+  onHandUnits: number;
   availableUnits: number;
   unitsPerPack: number;
   sealedPacks: number;
@@ -79,6 +80,7 @@ const CANDIDATE_COLUMNS = Prisma.sql`
   balance."disposition"::text AS "disposition",
   batch."expiresAt"           AS "expiresAt",
   lot."receivedAt"            AS "receivedAt",
+  balance."onHandUnits"       AS "onHandUnits",
   (balance."onHandUnits" - balance."offlineReservedUnits" - COALESCE((
     SELECT SUM(claim."reservedUnits") FROM "pharmacy_supplier_claims" claim
     WHERE claim."organizationId" = balance."organizationId"
@@ -114,12 +116,14 @@ const CANDIDATE_JOINS = Prisma.sql`
  *
  * @param lock take a row lock on each candidate balance, in FEFO order, for the
  * remainder of the caller's transaction.
+ * @param includeReserved include fully reserved buckets for physical stock reads.
  */
 async function loadCandidates(
   db: ScopedDb,
   scope: Pick<LedgerScope, 'organizationId' | 'branchId'>,
   medicineId: string,
-  lock: boolean
+  lock: boolean,
+  includeReserved = false
 ): Promise<CandidateRow[]> {
   const query = Prisma.sql`
     SELECT ${CANDIDATE_COLUMNS}
@@ -128,7 +132,7 @@ async function loadCandidates(
       AND balance."branchId" = ${scope.branchId}
       AND batch."medicineId" = ${medicineId}
       AND balance."onHandUnits" > 0
-      AND (balance."onHandUnits" - balance."offlineReservedUnits" - COALESCE((
+      AND (${includeReserved} OR (balance."onHandUnits" - balance."offlineReservedUnits" - COALESCE((
         SELECT SUM(claim."reservedUnits") FROM "pharmacy_supplier_claims" claim
         WHERE claim."organizationId" = balance."organizationId"
           AND claim."branchId" = balance."branchId"
@@ -141,7 +145,7 @@ async function loadCandidates(
           AND reservation."inventoryLotId" = balance."inventoryLotId"
           AND reservation."stockLocationId" = balance."stockLocationId"
           AND reservation."status" = 'RESERVED'
-      ), 0)) > 0
+      ), 0)) > 0)
     ORDER BY batch."expiresAt" ASC, lot."receivedAt" ASC NULLS FIRST,
              balance."inventoryLotId" ASC, balance."stockLocationId" ASC`;
 
@@ -872,13 +876,13 @@ export async function onHand(
   medicineId: string,
   at: Date
 ) {
-  const rows = await loadCandidates(db, scope, medicineId, false);
+  const rows = await loadCandidates(db, scope, medicineId, false, true);
   return rows.map((row) => {
     const bucket = {
       inventoryLotId: row.inventoryLotId,
       stockLocationId: row.stockLocationId,
       disposition: row.disposition,
-      onHandUnits: Number(row.availableUnits),
+      onHandUnits: Number(row.onHandUnits),
       sealedPacks: Number(row.sealedPacks),
       looseUnits: Number(row.looseUnits),
       unitsPerPack: row.unitsPerPack,
