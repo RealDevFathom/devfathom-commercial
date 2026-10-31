@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
+  PHARMACY_GROWTH_ACTION_KINDS,
   growthInputSchema,
   prepareGrowthInput,
   validateGrowthOutput,
@@ -193,15 +194,119 @@ export async function buildPharmacyGrowthInput(
           freshAt: now.toISOString(),
         });
     }
+    facts.push(...(await pharmacyLoyaltyAndInventoryFacts(db, scope, label, p, now, facts.length)));
   }
+  // RETAIL_REVIEW stays a1 for history compatibility. Loyalty and inventory-cost reviews are
+  // offered only when grounded, unsuppressed evidence for them exists in this snapshot.
+  const actions: GrowthInput['actions'] = [{ ref: 'a1', kind: 'RETAIL_REVIEW' }];
+  if (facts.some((f) => f.metric === 'loyalty_eligible_count'))
+    actions.push({ ref: `a${actions.length + 1}`, kind: 'LOYALTY_REVIEW' });
+  if (facts.some((f) => f.metric === 'wastage_minor' || f.metric === 'inventory_value_minor'))
+    actions.push({ ref: `a${actions.length + 1}`, kind: 'INVENTORY_COST_REVIEW' });
   // Pharmacy Finance is PKR minor units; no client-supplied currency or values.
   return prepareGrowthInput({
     vertical: 'PHARMACY',
     ...periods,
     currency: 'PKR',
     facts,
-    actions: [{ ref: 'a1', kind: 'RETAIL_REVIEW' }],
+    actions,
   });
+}
+/**
+ * Aggregate loyalty and inventory-cost evidence for one period. Counts and branch totals only:
+ * no customer, patient, product, lot or clinical field leaves this function.
+ */
+export async function pharmacyLoyaltyAndInventoryFacts(
+  db: ScopedDb,
+  scope: MarketingScope,
+  label: 'CURRENT' | 'COMPARISON',
+  p: { from: string; cutoff: string },
+  now: Date,
+  offset: number
+): Promise<GrowthInput['facts']> {
+  const facts: GrowthInput['facts'] = [];
+  const from = new Date(p.from);
+  const cutoff = new Date(p.cutoff);
+  const fact = (
+    metric: GrowthInput['facts'][number]['metric'],
+    value: string,
+    cohortSize: number,
+    coverage: GrowthInput['facts'][number]['coverage']
+  ) =>
+    facts.push({
+      ref: `e${offset + facts.length + 1}`,
+      metric,
+      value,
+      period: label,
+      cohortSize,
+      coverage,
+      freshAt: now.toISOString(),
+    });
+  // Loyalty cohort: active customers who earned points in this branch during the period and whose
+  // latest LOYALTY consent is currently granted. Current consent, not historical permission.
+  const loyalty = await db.$queryRaw<Array<{ count: number }>>(Prisma.sql`
+    SELECT COUNT(DISTINCT c.id)::integer AS count FROM pharmacy_customers c
+    JOIN LATERAL (SELECT granted,"revokedAt","recordedAt" FROM pharmacy_patient_consents pc
+      WHERE pc."organizationId"=c."organizationId" AND pc."patientId"=c."patientId" AND pc.purpose='LOYALTY'
+      ORDER BY pc.version DESC,pc."recordedAt" DESC,pc.id ASC LIMIT 1) consent ON true
+    WHERE c."organizationId"=${scope.organizationId} AND c.active
+      AND consent.granted AND consent."revokedAt" IS NULL AND consent."recordedAt"<=${now}
+      AND EXISTS (SELECT 1 FROM pharmacy_loyalty_points_entries l WHERE l."organizationId"=c."organizationId"
+        AND l."branchId"=${scope.branchId} AND l."customerId"=c.id AND l.kind='EARN'
+        AND l."occurredAt">=${from} AND l."occurredAt"<${cutoff})
+  `);
+  const eligible = loyalty[0]?.count ?? 0;
+  if (eligible >= 10) fact('loyalty_eligible_count', String(eligible), eligible, 'COMPLETE');
+  // Wastage: exact posted INVENTORY_WRITE_OFF cost for this period's original write-off movements.
+  // Any unposted or reversed write-off withholds the money rather than understating it.
+  const wastage = await db.$queryRaw<
+    Array<{ movements: number; posted: number; reversed: number; amount: string }>
+  >(Prisma.sql`
+    SELECT COUNT(*)::integer AS movements,
+      COUNT(*) FILTER (WHERE posting.entries > 0)::integer AS posted,
+      COUNT(*) FILTER (WHERE reversal.found)::integer AS reversed,
+      COALESCE(SUM(posting.amount),0)::text AS amount
+    FROM pharmacy_stock_movements m
+    LEFT JOIN LATERAL (
+      SELECT COUNT(DISTINCT e.id) AS entries,
+        COALESCE(SUM(CASE WHEN j.side='DEBIT' THEN j."amountMinor" ELSE -j."amountMinor" END),0) AS amount
+      FROM finance_journal_entries e JOIN finance_journal_lines j ON j."organizationId"=e."organizationId" AND j."entryId"=e.id
+      WHERE e."organizationId"=m."organizationId" AND e."sourceKind"='PHARMACY_STOCK_WRITE_OFF' AND e."sourceId"=m.id
+        AND e."occurredAt"<${cutoff} AND j."accountCode"='INVENTORY_WRITE_OFF' AND j."branchId"=m."branchId"
+    ) posting ON true
+    LEFT JOIN LATERAL (
+      SELECT EXISTS (SELECT 1 FROM pharmacy_stock_movements r WHERE r."organizationId"=m."organizationId"
+        AND r."reversesMovementId"=m.id AND r."occurredAt"<${cutoff}) AS found
+    ) reversal ON true
+    WHERE m."organizationId"=${scope.organizationId} AND m."branchId"=${scope.branchId} AND m.kind='WRITE_OFF'
+      AND m."reversesMovementId" IS NULL AND m."occurredAt">=${from} AND m."occurredAt"<${cutoff}
+  `);
+  const w = wastage[0];
+  if (w && w.movements >= 10 && w.posted === w.movements && w.reversed === 0)
+    fact('wastage_minor', w.amount, w.movements, 'COMPLETE');
+  // Valuation: eligible AVAILABLE ledger units at cutoff times frozen lot receipt cost.
+  // Batch safety state is current (there is no versioned batch-state history), so recalled or
+  // quarantined batches are conservatively excluded even for earlier cutoffs. Receipt and expiry
+  // eligibility use the cutoff and the same stored exclusive expiry boundary as the allocator.
+  // This is a stock-ledger estimate, not the posted Finance inventory balance: always ESTIMATED.
+  const valuation = await db.$queryRaw<Array<{ lots: number; value: string }>>(Prisma.sql`
+    SELECT COUNT(*)::integer AS lots, COALESCE(SUM(held.units * held.cost),0)::text AS value FROM (
+      SELECT m."inventoryLotId", SUM(m."quantityUnits")::bigint AS units, MAX(lot."unitCostMinor")::bigint AS cost
+      FROM pharmacy_stock_movements m JOIN pharmacy_inventory_lots lot
+        ON lot."organizationId"=m."organizationId" AND lot."branchId"=m."branchId" AND lot.id=m."inventoryLotId"
+      JOIN pharmacy_manufacturing_batches batch
+        ON batch."organizationId"=lot."organizationId" AND batch.id=lot."manufacturingBatchId"
+      WHERE m."organizationId"=${scope.organizationId} AND m."branchId"=${scope.branchId}
+        AND m.disposition='AVAILABLE' AND m."occurredAt"<${cutoff}
+        AND lot."receivedAt" IS NOT NULL AND lot."receivedAt"<=${cutoff}
+        AND batch.state='ACTIVE'
+        AND batch."expiresAt">${cutoff}
+      GROUP BY m."inventoryLotId" HAVING SUM(m."quantityUnits")>0
+    ) held
+  `);
+  const v = valuation[0];
+  if (v && v.lots >= 10) fact('inventory_value_minor', v.value, v.lots, 'ESTIMATED');
+  return facts;
 }
 export async function saveGrowthInsight(db: ScopedDb, scope: MarketingScope, result: GrowthResult) {
   const id = randomUUID();
@@ -239,8 +344,15 @@ export async function reviewGrowthInsight(
   const snapshot = growthInputSchema.parse(insight.snapshot);
   const output = validateGrowthOutput(insight.output, snapshot);
   const rec = output.recommendations[input.recommendation];
-  if (!rec || snapshot.actions.find((a) => a.ref === rec.actionRef)?.kind !== 'RETAIL_REVIEW')
+  const kind = rec && snapshot.actions.find((a) => a.ref === rec.actionRef)?.kind;
+  if (!kind || !(PHARMACY_GROWTH_ACTION_KINDS as readonly string[]).includes(kind))
     throw new MarketingWorkflowError('Unsupported recommendation.');
+  // Loyalty and inventory-cost reviews never create campaigns, recipients, stock or price changes.
+  // A human may only dismiss them here; the work itself happens in the linked workspace.
+  if (kind !== 'RETAIL_REVIEW' && input.decision !== 'REJECT')
+    throw new MarketingWorkflowError(
+      'Loyalty and inventory reviews are review-only. Open the linked workspace or reject the insight.'
+    );
   const prior = await db.$queryRaw<
     Array<{ decision: string; campaignId: string | null; settings: GrowthReviewRow['settings'] }>
   >(

@@ -301,3 +301,69 @@ it('opens the persisted campaign after a saved insight approval without offering
     screen.getByText(/Message cost is unavailable; net campaign profit is unknown/)
   ).toBeInTheDocument();
 });
+
+it('shows loyalty and inventory-cost insights as review-only with workspace links', async () => {
+  const fact = {
+    period: 'CURRENT',
+    cohortSize: 12,
+    coverage: 'COMPLETE',
+    freshAt: '2026-10-01T00:00:00Z',
+  };
+  mocks.growthHistory.mockResolvedValue({
+    insights: [
+      {
+        id: 'ready-review',
+        status: 'READY',
+        createdAt: new Date('2026-10-07'),
+        snapshot: {
+          vertical: 'PHARMACY',
+          current: { from: '2026-09-01T00:00:00Z', cutoff: '2026-10-01T00:00:00Z' },
+          comparison: { from: '2026-08-02T00:00:00Z', cutoff: '2026-09-01T00:00:00Z' },
+          currency: 'PKR',
+          facts: [
+            { ...fact, ref: 'e1', metric: 'loyalty_eligible_count', value: '14' },
+            { ...fact, ref: 'e2', metric: 'wastage_minor', value: '45000' },
+          ],
+          actions: [
+            { ref: 'a1', kind: 'RETAIL_REVIEW' },
+            { ref: 'a2', kind: 'LOYALTY_REVIEW' },
+            { ref: 'a3', kind: 'INVENTORY_COST_REVIEW' },
+          ],
+        },
+        output: {
+          recommendations: [
+            {
+              evidenceRefs: ['e1'],
+              actionRef: 'a2',
+              hypothesis: 'REVIEW_RETENTION',
+              limitations: ['OBSERVATIONAL'],
+            },
+            {
+              evidenceRefs: ['e2'],
+              actionRef: 'a3',
+              hypothesis: 'REVIEW_INVENTORY_COST',
+              limitations: ['OBSERVATIONAL'],
+            },
+          ],
+        },
+      },
+    ],
+    reviews: [
+      { insightId: 'ready-review', recommendation: 1, decision: 'REJECT', campaignId: null },
+    ],
+  });
+  render(await Page({ searchParams: Promise.resolve({}) }));
+  expect(screen.getByRole('link', { name: 'Open loyalty review' })).toHaveAttribute(
+    'href',
+    '/pharmacy/loyalty?branchId=branch-a'
+  );
+  expect(screen.getByRole('link', { name: 'Open inventory review' })).toHaveAttribute(
+    'href',
+    '/pharmacy/inventory?branch=branch-a'
+  );
+  // Only the unresolved loyalty card offers a decision, and it can only reject.
+  expect(screen.getAllByRole('button', { name: 'Reject insight' })).toHaveLength(1);
+  expect(screen.queryByRole('button', { name: 'Save review decision' })).not.toBeInTheDocument();
+  expect(screen.queryByText(/Approve insight and create draft/)).not.toBeInTheDocument();
+  expect(screen.getByText('Rejected. No campaign created.')).toBeInTheDocument();
+});
