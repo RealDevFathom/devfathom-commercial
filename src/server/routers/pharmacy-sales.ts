@@ -1738,6 +1738,17 @@ export const pharmacySalesRouter = router({
             readPharmacyReceiptFormat(tx, scope),
             readPharmacyReceiptTaxIdentity(tx, scope, new Date(receipt.completedAt)),
           ]);
+          // Validate both variants before writing. ScopedDb may reuse an outer
+          // transaction, where returning FALLBACK would commit an allocation.
+          const options = { layout: format.layout, taxIdentity };
+          const originalJob = buildPharmacyReceiptEscPosJob(receipt, input.locale, {
+            ...options,
+            reprint: false,
+          });
+          const reprintJob = buildPharmacyReceiptEscPosJob(receipt, input.locale, {
+            ...options,
+            reprint: true,
+          });
 
           // The upsert serializes concurrent first-print requests on the unique
           // sale key; the atomic increment then assigns exactly one original.
@@ -1752,12 +1763,7 @@ export const pharmacySalesRouter = router({
             RETURNING "copyCount"
           `);
           if (!state) throw new Error('Receipt print copy allocation failed.');
-          const reprint = state.copyCount > 1;
-          const job = buildPharmacyReceiptEscPosJob(receipt, input.locale, {
-            layout: format.layout,
-            taxIdentity,
-            reprint,
-          });
+          const job = state.copyCount > 1 ? reprintJob : originalJob;
           await tx.$executeRaw(Prisma.sql`
             INSERT INTO "pharmacy_receipt_print_dispatches"
               ("id", "organizationId", "branchId", "saleId", "copyNumber", "actorId", "locale")

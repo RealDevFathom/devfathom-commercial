@@ -41,6 +41,7 @@ const ids = {
   saleA: `sale_rcpt_a_${suffix}`,
   saleB: `sale_rcpt_b_${suffix}`,
   printableSale: `sale_rcpt_print_${suffix}`,
+  browserSale: `sale_rcpt_browser_${suffix}`,
 };
 
 type SalesCaller = {
@@ -239,33 +240,38 @@ beforeAll(async () => {
         effectiveFrom: new Date('2026-01-01T00:00:00.000Z'),
       },
     });
-    await tx.pharmacySale.create({
-      data: {
-        id: ids.printableSale,
-        branchId: ids.branchA,
-        status: 'COMPLETED',
-        createdByUserId: ids.dispenser,
-        receiptNumber: 8,
-        receiptDeviceId: 'device-a',
-        businessDate: new Date('2026-10-01T00:00:00.000Z'),
-        completedAt: new Date('2026-10-01T08:00:00.000Z'),
-        lines: {
-          create: {
-            medicineId: medicine.id,
-            presentationId: medicine.presentations[0]!.id,
-            packLevelId: packLevel.id,
-            saleUnit: 'UNIT',
-            quantity: 1,
-            canonicalUnitsPerSaleUnit: 1,
-            canonicalUnits: 1,
-            unitPriceMinor: 100,
-            proRataCeilingMinor: 100,
-            unitCostMinor: 50,
-            idempotencyKey: `receipt-line-${suffix}`,
+    for (const [id, receiptNumber] of [
+      [ids.printableSale, 8],
+      [ids.browserSale, 9],
+    ] as const) {
+      await tx.pharmacySale.create({
+        data: {
+          id,
+          branchId: ids.branchA,
+          status: 'COMPLETED',
+          createdByUserId: ids.dispenser,
+          receiptNumber,
+          receiptDeviceId: 'device-a',
+          businessDate: new Date('2026-10-01T00:00:00.000Z'),
+          completedAt: new Date('2026-10-01T08:00:00.000Z'),
+          lines: {
+            create: {
+              medicineId: medicine.id,
+              presentationId: medicine.presentations[0]!.id,
+              packLevelId: packLevel.id,
+              saleUnit: 'UNIT',
+              quantity: 1,
+              canonicalUnitsPerSaleUnit: 1,
+              canonicalUnits: 1,
+              unitPriceMinor: 100,
+              proRataCeilingMinor: 100,
+              unitCostMinor: 50,
+              idempotencyKey: `receipt-line-${id}`,
+            },
           },
         },
-      },
-    });
+      });
+    }
   });
 
   await withTenantDb(ids.orgB, async (tx) => {
@@ -306,6 +312,18 @@ const receiptUser = { id: ids.receiptClerk, role: 'EMPLOYEE' as const, organizat
 
 describeIfDatabase('counter receipt authorization against Postgres', () => {
   it('durably allocates one original and sequential marked copies under concurrency', async () => {
+    // A fallback is returned successfully inside an existing tenant transaction.
+    // It must not consume the original copy before any job has been delivered.
+    await expect(
+      act(ids.orgA, dispenser, (api) =>
+        api.counterReceiptPrintJob({
+          branchId: ids.branchA,
+          saleId: ids.printableSale,
+          locale: 'ur',
+        })
+      )
+    ).resolves.toMatchObject({ status: 'FALLBACK', fallback: 'BROWSER_OS' });
+
     const print = () =>
       act(ids.orgA, dispenser, (api) =>
         api.counterReceiptPrintJob({
@@ -368,7 +386,7 @@ describeIfDatabase('counter receipt authorization against Postgres', () => {
       act(ids.orgA, dispenser, (api) =>
         api.counterReceiptBrowserPrint({
           branchId: ids.branchA,
-          saleId: ids.printableSale,
+          saleId: ids.browserSale,
           locale: 'en',
         })
       );
@@ -381,7 +399,7 @@ describeIfDatabase('counter receipt authorization against Postgres', () => {
     await expect(
       withTenantDb(ids.orgA, (tx) =>
         tx.pharmacyReceiptPrintDispatch.count({
-          where: { branchId: ids.branchA, saleId: ids.printableSale },
+          where: { branchId: ids.branchA, saleId: ids.browserSale },
         })
       )
     ).resolves.toBe(0);
@@ -390,7 +408,7 @@ describeIfDatabase('counter receipt authorization against Postgres', () => {
       await act(ids.orgA, dispenser, (api) =>
         api.counterReceiptBrowserPrintDispatched({
           branchId: ids.branchA,
-          saleId: ids.printableSale,
+          saleId: ids.browserSale,
           locale: 'en',
           copyNumber: allocation.copyNumber,
         })
@@ -399,7 +417,7 @@ describeIfDatabase('counter receipt authorization against Postgres', () => {
 
     const dispatches = await withTenantDb(ids.orgA, (tx) =>
       tx.pharmacyReceiptPrintDispatch.findMany({
-        where: { branchId: ids.branchA, saleId: ids.printableSale },
+        where: { branchId: ids.branchA, saleId: ids.browserSale },
         orderBy: { copyNumber: 'asc' },
       })
     );

@@ -66,6 +66,7 @@ import { readCounterCart, readCounterReceipt } from '@/lib/pharmacy/counter';
 import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-source';
 import { readReturnHistory } from '@/lib/pharmacy/sales';
 import { applyPharmacyTender } from '@/lib/pharmacy/settlement';
+import { RawPrintValidationError } from '@/lib/restaurant/printing/contract';
 import {
   buildPharmacyReceiptEscPosJob,
   readPharmacyReceiptFormat,
@@ -627,6 +628,28 @@ describe('counter receipt authorization', () => {
       copyNumber: 2,
     });
     expect(f.db.$executeRaw).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not consume the original copy when thermal validation falls back inside a tenant transaction', async () => {
+    // ScopedDb reuses the request's transaction, so a caught validation error
+    // does not roll back an allocation made before the error.
+    const f = fixture(dispense, 'ADMIN');
+    const input = { branchId: 'branch-a', saleId: 'sale-a', locale: 'en' as const };
+    vi.mocked(buildPharmacyReceiptEscPosJob).mockImplementationOnce(() => {
+      throw new RawPrintValidationError('UNSUPPORTED_PRINT_TEXT');
+    });
+
+    await expect(f.caller().counterReceiptPrintJob(input)).resolves.toMatchObject({
+      status: 'FALLBACK',
+      fallback: 'BROWSER_OS',
+    });
+    expect(f.db.$queryRaw).not.toHaveBeenCalled();
+    expect(f.db.$executeRaw).not.toHaveBeenCalled();
+
+    await expect(f.caller().counterReceiptBrowserPrint(input)).resolves.toEqual({
+      copyNumber: 1,
+      reprint: false,
+    });
   });
 
   it('requires an active branch before an administrator saves the receipt format', async () => {
