@@ -42,8 +42,8 @@ const scope = { organizationId: 'org', actorId: 'owner', branchId: 'branch' };
 function fixture(solo = true) {
   const actor = { id: 'owner', organizationId: 'org', status: 'ACTIVE', role: 'ADMIN' };
   const db = {
-    $queryRaw: vi.fn(async (strings: TemplateStringsArray) =>
-      strings.join('').includes('restaurant_staff_profiles')
+    $queryRaw: vi.fn(async (query: TemplateStringsArray | { strings: readonly string[] }) =>
+      ('strings' in query ? query.strings : query).join('').includes('restaurant_staff_profiles')
         ? [{ userId: 'owner' }]
         : [{ allowed: solo }]
     ),

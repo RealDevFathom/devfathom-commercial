@@ -571,6 +571,70 @@ describeIfDatabase('PUR-02 — posting a receipt into the batch ledger', () => {
     });
   });
 
+  it('accepts replacement stock for rejected units while retaining delivered totals and the acceptance cap', async () => {
+    const f = await fixture(ORG_A, BRANCH_A, 'replacement', 0);
+    const first = await inOrg(ORG_A, async (db) => {
+      const drafted = await draftReceipt(db, f, 'rejected-delivery', {
+        line: { bonusPacks: 0, rejectedCanonicalUnits: 30 },
+      });
+      return deps.receipts.postGoodsReceipt(db, scopeOf(f), {
+        goodsReceiptId: drafted.id,
+        at: RECEIVED_AT,
+      });
+    });
+    const replacement = await inOrg(ORG_A, async (db) => {
+      const drafted = await draftReceipt(db, f, 'replacement-delivery', {
+        line: { receivedPacks: 3, bonusPacks: 0 },
+      });
+      return deps.receipts.postGoodsReceipt(db, scopeOf(f), {
+        goodsReceiptId: drafted.id,
+        at: RECEIVED_AT,
+      });
+    });
+
+    await inOrg(ORG_A, async (db) => {
+      expect(await balancesFor(db, ORG_A, first.lines[0]!.inventoryLotId)).toEqual({
+        AVAILABLE: 70,
+        QUARANTINE: 30,
+      });
+      expect(await balancesFor(db, ORG_A, replacement.lines[0]!.inventoryLotId)).toEqual({
+        AVAILABLE: 30,
+      });
+      // Replacements fulfill the order, but all 130 delivered units still
+      // participate in discrepancy reporting, including the rejected 30.
+      expect(
+        await db.pharmacyReceivingException.findMany({
+          where: { goodsReceiptId: replacement.goodsReceiptId },
+          select: { kind: true, expectedUnits: true, observedUnits: true },
+        })
+      ).toEqual([{ kind: 'OVERAGE', expectedUnits: 100, observedUnits: 130 }]);
+    });
+
+    const excess = await inOrg(ORG_A, (db) =>
+      draftReceipt(db, f, 'replacement-excess', {
+        line: { receivedPacks: 1, bonusPacks: 0 },
+      })
+    );
+    await expect(
+      inOrg(ORG_A, (db) =>
+        deps.receipts.postGoodsReceipt(db, scopeOf(f), {
+          goodsReceiptId: excess.id,
+          at: RECEIVED_AT,
+        })
+      )
+    ).rejects.toMatchObject({ reason: 'INVALID_QUANTITY' });
+    await inOrg(ORG_A, async (db) => {
+      expect(
+        (await db.pharmacyGoodsReceipt.findFirstOrThrow({ where: { id: excess.id } })).status
+      ).toBe('DRAFT');
+      expect(
+        await db.pharmacyInventoryLot.count({
+          where: { supplierInvoiceRef: `${excess.supplierInvoiceRef}#1` },
+        })
+      ).toBe(0);
+    });
+  });
+
   it('creates the lot and the RECEIPT movement, and on-hand projects from them', async () => {
     const f = await fixture(ORG_A, BRANCH_A, 'post');
     const result = await inOrg(ORG_A, async (db) => {

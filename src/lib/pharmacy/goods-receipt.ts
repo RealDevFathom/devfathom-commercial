@@ -277,7 +277,7 @@ export async function postGoodsReceipt(
           0,
           ordered.orderedCanonicalUnits +
             ordered.bonusCanonicalUnits -
-            ordered.previouslyReceivedUnits
+            ordered.previouslyAcceptedUnits
         )
     ) {
       throw new PharmacyReceivingError('INVALID_QUANTITY');
@@ -469,16 +469,16 @@ async function resolveManufacturingBatch(
 }
 
 /**
- * The order leg of the three-way match, with the quantity already booked
- * against this order line by *other* posted receipts — so partial deliveries
- * accumulate instead of each one reporting the full shortage again.
+ * The order leg of the three-way match, with delivered units for discrepancy
+ * reporting and accepted units for the fulfillment limit. Only *other* posted
+ * receipts count, so rejected goods leave room for replacement stock.
  */
 async function orderedTermsFor(
   db: ScopedDb,
   scope: ReceivingScope,
   purchaseOrderLineId: string | null,
   currentReceiptId: string
-): Promise<OrderedTerms | null> {
+): Promise<(OrderedTerms & { previouslyAcceptedUnits: number }) | null> {
   if (!purchaseOrderLineId) return null;
   const orderLine = await db.pharmacyPurchaseOrderLine.findFirst({
     where: { id: purchaseOrderLineId, organizationId: scope.organizationId },
@@ -492,7 +492,11 @@ async function orderedTermsFor(
       goodsReceiptId: { not: currentReceiptId },
       goodsReceipt: { organizationId: scope.organizationId, status: 'POSTED' },
     },
-    select: { receivedCanonicalUnits: true, bonusCanonicalUnits: true },
+    select: {
+      receivedCanonicalUnits: true,
+      bonusCanonicalUnits: true,
+      acceptedCanonicalUnits: true,
+    },
   });
 
   return {
@@ -500,6 +504,7 @@ async function orderedTermsFor(
     orderedCanonicalUnits: orderLine.orderedCanonicalUnits,
     bonusCanonicalUnits: orderLine.bonusCanonicalUnits,
     listPricePerPackMinor: orderLine.listPricePerPackMinor,
+    previouslyAcceptedUnits: earlier.reduce((total, line) => total + line.acceptedCanonicalUnits, 0),
     previouslyReceivedUnits: earlier.reduce(
       (total, line) => total + line.receivedCanonicalUnits + line.bonusCanonicalUnits,
       0

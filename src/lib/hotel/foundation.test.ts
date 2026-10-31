@@ -23,8 +23,8 @@ import {
 const priorCatalogDigests = {
   AGENCY: '54e0ca2cb112bd14c7bde79c1aba7ceeb7875fc51c5a0e5dd05c0db326440769',
   RESTAURANT: '94d6616c691e680b51b340e75547478e5fdd98e9aa208efc12ce64670dc950a7',
-  // PR 683: explicit owner capabilities and package seat ceilings.
-  PHARMACY: 'c09c0610cbe61b6bf94b6f5341868fc1e2a3bbc67cc3f7445e3bbe808283ce8e',
+  // PR 683: explicit regulated owner grants on the merged develop catalog.
+  PHARMACY: 'c37f1577e7f2e402cd28ee996de4ecfe89655ff3942ecb3eebac0cb4de027414',
 };
 
 const property = {

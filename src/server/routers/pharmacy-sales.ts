@@ -200,7 +200,12 @@ async function khataScope(ctx: TRPCContext, branch: string, access: 'read' | 'wr
   // Finance reads and counter money operations share the active member/branch boundary.
   return requireCounterReceiptAccess(ctx, branch, false, (rules) => {
     const decision = counterCapabilityDecision(rules, KHATA_CAPABILITIES);
-    return decision === 'ALLOW' || (decision !== 'DENY' && financialReadAccess);
+    // Khata money operations require a canonical counter grant; legacy receipt
+    // aliases still participate in DENY precedence and other counter workflows.
+    const canonicalCounterGrant = rules.some(
+      (rule) => rule.effect === 'ALLOW' && capabilityMatches(rule.capability, 'pharmacy:counter')
+    );
+    return decision !== 'DENY' && (canonicalCounterGrant || financialReadAccess);
   });
 }
 

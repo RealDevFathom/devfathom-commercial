@@ -39,13 +39,17 @@ const input = {
   idempotencyKey: 'key-a',
   familyAccountId: 'family-a',
 };
-function fixture() {
+function fixture(owner = false) {
   const member = {
     id: 'owner-a',
-    role: 'EMPLOYEE',
+    role: owner ? 'ADMIN' : 'EMPLOYEE',
     status: 'ACTIVE',
     organizationId: 'org-a',
+    organization: { vertical: 'PHARMACY' },
     organizationRole: {
+      organizationId: 'org-a',
+      key: owner ? 'owner' : 'cashier',
+      isSystem: true,
       permissions: [{ capability: 'pharmacy:counter', effect: 'ALLOW' }],
     },
     permissionOverrides: [] as { capability: string; effect: string }[],
@@ -53,7 +57,10 @@ function fixture() {
   const db = {
     $queryRaw: vi.fn().mockResolvedValue([]),
     $transaction: vi.fn(),
-    user: { findUnique: vi.fn(async () => member) },
+    user: {
+      findUnique: vi.fn(async () => member),
+      count: vi.fn().mockResolvedValue(2),
+    },
     pharmacyBranchAssignment: {
       findMany: vi.fn(async () => [{ branchId: 'branch-a' }]),
     },
@@ -258,9 +265,9 @@ describe.each(khataPaths)('Khata $name authorization', ({ run }) => {
   });
 
   it.each([{ assignments: [] }, { assignments: [{ branchId: 'branch-b' }] }])(
-    'preserves and audits tenant-admin access with assignments $assignments',
+    'preserves and audits system-owner access with assignments $assignments',
     async ({ assignments }) => {
-      const f = fixture();
+      const f = fixture(true);
       f.db.pharmacyBranchAssignment.findMany.mockResolvedValue(assignments);
       await expect(run(f.caller(), 'branch-a')).resolves.toBeDefined();
       expect(f.context.audit.detail).toMatchObject({
@@ -507,7 +514,7 @@ describe('Khata router trust and recovery boundary', () => {
     expect(f.db.pharmacyKhataEvent.create).not.toHaveBeenCalled();
   });
   it('hands only the fresh server-session claim to the audited owner gate', async () => {
-    const f = fixture();
+    const f = fixture(true);
     await f.caller().tender({ ...input, amountMinor: 101, ownerOverride: true });
     expect(f.db.pharmacyKhataLimitDecision.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
@@ -529,13 +536,14 @@ describe('Khata router trust and recovery boundary', () => {
     }
   );
   it('rejects stale owner evidence and non-owner override', async () => {
-    const f = fixture();
+    const f = fixture(true);
     f.user.passwordAuthenticatedAt -= 301000;
     await expect(
       f.caller().tender({ ...input, amountMinor: 101, ownerOverride: true })
     ).rejects.toMatchObject({ message: 'OWNER_ACTION_REQUIRED' });
     f.user.passwordAuthenticatedAt = Date.now();
     f.user.role = 'EMPLOYEE';
+    f.member.organizationRole.key = 'cashier';
     await expect(
       f.caller().tender({ ...input, amountMinor: 101, ownerOverride: true })
     ).rejects.toMatchObject({ message: 'OWNER_ACTION_REQUIRED' });
