@@ -56,7 +56,10 @@ export function buildChatTools(h: AssistantHelpers): ToolSet {
     });
     if (m && (m.role === 'OWNER' || m.role === 'ADMIN')) return true;
     if (h.isAdmin) {
-      const ch = await h.db.channel.findUnique({ where: { id: channelId }, select: { type: true } });
+      const ch = await h.db.channel.findUnique({
+        where: { id: channelId },
+        select: { type: true },
+      });
       return !!ch && ch.type !== 'DM';
     }
     return false;
@@ -105,7 +108,14 @@ export function buildChatTools(h: AssistantHelpers): ToolSet {
             name: true,
             type: true,
             topic: true,
-            members: { select: { userId: true, lastReadAt: true, muted: true, user: { select: { name: true } } } },
+            members: {
+              select: {
+                userId: true,
+                lastReadAt: true,
+                muted: true,
+                user: { select: { name: true } },
+              },
+            },
           },
         });
         return Promise.all(
@@ -114,10 +124,18 @@ export function buildChatTools(h: AssistantHelpers): ToolSet {
             const since = mine?.lastReadAt ?? new Date(0);
             const [unread, mentions] = await Promise.all([
               h.db.message.count({
-                where: { channelId: ch.id, deletedAt: null, senderId: { not: me }, createdAt: { gt: since } },
+                where: {
+                  channelId: ch.id,
+                  deletedAt: null,
+                  senderId: { not: me },
+                  createdAt: { gt: since },
+                },
               }),
               h.db.messageMention.count({
-                where: { userId: me, message: { channelId: ch.id, deletedAt: null, createdAt: { gt: since } } },
+                where: {
+                  userId: me,
+                  message: { channelId: ch.id, deletedAt: null, createdAt: { gt: since } },
+                },
               }),
             ]);
             const isDM = ch.type === 'DM';
@@ -141,7 +159,10 @@ export function buildChatTools(h: AssistantHelpers): ToolSet {
         'Search chat messages by text, across only the channels YOU belong to (DMs included). Optionally scope to one named channel you are in. Use for "find the message about the launch", "search chat for the staging URL", "did anyone mention the budget".',
       inputSchema: z.object({
         query: z.string().min(1).describe('Text to search for in message content'),
-        channel: z.string().nullish().describe('Optional: limit to one named channel you belong to'),
+        channel: z
+          .string()
+          .nullish()
+          .describe('Optional: limit to one named channel you belong to'),
       }),
       execute: async ({ query, channel }) => {
         let channelId: string | undefined;
@@ -175,7 +196,11 @@ export function buildChatTools(h: AssistantHelpers): ToolSet {
               select: {
                 name: true,
                 type: true,
-                members: { where: { userId: { not: me } }, select: { user: { select: { name: true } } }, take: 1 },
+                members: {
+                  where: { userId: { not: me } },
+                  select: { user: { select: { name: true } } },
+                  take: 1,
+                },
               },
             },
           },
@@ -201,7 +226,11 @@ export function buildChatTools(h: AssistantHelpers): ToolSet {
         'Read the most recent messages in a named channel you belong to, oldest → newest, so you can summarize or catch up. Use for "what\'s the latest in #general", "catch me up on the design channel", "summarize #eng today". Give the channel name.',
       inputSchema: z.object({
         channel: z.string().describe('Channel name (fuzzy match), e.g. "general" or "#eng"'),
-        limit: z.number().int().nullish().describe('How many recent messages to fetch (default 30, max 50)'),
+        limit: z
+          .number()
+          .int()
+          .nullish()
+          .describe('How many recent messages to fetch (default 30, max 50)'),
       }),
       execute: async ({ channel, limit }) => {
         const r = await resolveMyChannel(channel);
@@ -239,7 +268,10 @@ export function buildChatTools(h: AssistantHelpers): ToolSet {
         'Post a message to a channel you belong to, OR direct-message a person. Give EITHER `channel` (a channel name) OR `toPerson` (a name) — not both. Use for "post in #general that the deploy is done", "tell the design channel ...", "DM Aisha that I\'ll be late". Optionally @-mention channel members by name to notify them.',
       inputSchema: z.object({
         channel: z.string().nullish().describe('Channel name to post in (a channel you belong to)'),
-        toPerson: z.string().nullish().describe('A person to direct-message instead of posting in a channel'),
+        toPerson: z
+          .string()
+          .nullish()
+          .describe('A person to direct-message instead of posting in a channel'),
         text: z.string().describe('The message text to send'),
         mention: z
           .array(z.string())

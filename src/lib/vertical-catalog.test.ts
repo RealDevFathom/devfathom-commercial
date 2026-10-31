@@ -503,7 +503,7 @@ describe('optional pharmacy Owner / Operator', () => {
     }
   });
 
-  it('preserves all eight standard roles and their existing grants', () => {
+  it('preserves all eight standard roles and their intended grants', () => {
     expect(
       PHARMACY_ROLE_TEMPLATES.filter((role) => role.key !== 'owner-operator').map((role) => ({
         key: role.key,
@@ -513,7 +513,7 @@ describe('optional pharmacy Owner / Operator', () => {
       { key: 'owner', capabilities: ['pharmacy:*', 'reports:operational', 'reports:financial'] },
       {
         key: 'pharmacist',
-        capabilities: ['pharmacy:dispense', 'pharmacy:catalogue-review'],
+        capabilities: ['pharmacy:dispense', 'pharmacy:catalogue-review', 'pharmacy:close'],
       },
       {
         key: 'manager',

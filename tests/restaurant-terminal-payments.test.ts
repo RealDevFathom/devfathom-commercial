@@ -45,6 +45,9 @@ function makeDb(overrides: Record<string, unknown> = {}) {
       findFirst: vi.fn(async () => ({ id: 'bill-1', grandTotal: '12.50', tenders: [] })),
     },
     restaurantStaffProfile: { findFirst: vi.fn(async () => ({ id: 'staff-1' })) },
+    $queryRaw: vi.fn(async (_sql: TemplateStringsArray, ..._values: unknown[]) => [
+      { pg_advisory_xact_lock: '' },
+    ]),
     $transaction: vi.fn(async (work: (tx: unknown) => unknown) => work(db)),
     ...overrides,
   };
@@ -119,6 +122,11 @@ describe('provider-neutral terminal payments', () => {
     });
 
     expect(applyTenderInTransaction).toHaveBeenCalledOnce();
+    expect(db.$queryRaw).toHaveBeenCalledOnce();
+    const [lockSql, lockedSource, lockedEventId] = db.$queryRaw.mock.calls[0]!;
+    expect(lockSql.join('?')).toContain("current_setting('app.current_organization_id')");
+    expect(lockSql.join('?')).toContain('pg_advisory_xact_lock');
+    expect([lockedSource, lockedEventId]).toEqual(['provider-neutral', 'event-1']);
     expect(applyTenderInTransaction).toHaveBeenCalledWith(
       db,
       expect.objectContaining({

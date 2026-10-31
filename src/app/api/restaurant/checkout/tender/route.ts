@@ -18,6 +18,7 @@ import {
 export const POST = moneyMutationRoute({
   schema: tenderBody,
   capability: 'payments:collect',
+  obscureBillId: (data) => data.billId,
   run: async ({ ctx, data, actor, now }) =>
     serializeTenderResult(
       await applyTender(ctx.db, {

@@ -24,6 +24,7 @@ function expectCredentialError(
 ) {
   expect(email).toHaveAttribute('aria-invalid', 'true');
   expect(password).toHaveAttribute('aria-invalid', 'true');
+  expect(errorId).not.toBe('');
   expect(alert).toHaveAttribute('id', errorId);
   expect(email).toHaveAttribute('aria-describedby', errorId);
   expect(password).toHaveAttribute('aria-describedby', errorId);
@@ -39,24 +40,32 @@ describe('login credential error accessibility', () => {
     vi.unstubAllGlobals();
   });
 
-  it('associates a server-rendered tenant sign-in failure with both credential fields', () => {
-    render(
-      <LoginForm
-        connections={[]}
-        ssoEnforced={false}
-        callbackUrl="/dashboard"
-        initialError="invalid"
-      />
-    );
+  it.each(['default', 'restaurant', 'pharmacy', 'hotel', 'agency'] as const)(
+    'associates a server-rendered %s tenant sign-in failure with both credential fields',
+    (vertical) => {
+      render(
+        <LoginForm
+          connections={[]}
+          ssoEnforced={false}
+          callbackUrl="/dashboard"
+          initialError="invalid"
+          vertical={vertical}
+        />
+      );
 
-    const alert = screen.getByRole('alert');
-    expectCredentialError(
-      screen.getByLabelText('Email'),
-      screen.getByLabelText('Password'),
-      alert,
-      'login-sign-in-error'
-    );
-  });
+      const alert = screen.getByRole('alert');
+      expect(screen.getByLabelText('Email')).toHaveAttribute(
+        'placeholder',
+        vertical === 'default' ? 'you@company.com' : `you@${vertical}.pk`
+      );
+      expectCredentialError(
+        screen.getByLabelText('Email'),
+        screen.getByLabelText('Password'),
+        alert,
+        alert.id
+      );
+    }
+  );
 
   it('associates a tenant sign-in failure with both fields until either field is edited', async () => {
     mocks.signIn.mockResolvedValue({ error: 'CredentialsSignin', code: 'credentials' });
@@ -69,7 +78,7 @@ describe('login credential error accessibility', () => {
     fireEvent.submit(screen.getByRole('button', { name: 'Sign in' }));
 
     const alert = await screen.findByRole('alert');
-    expectCredentialError(email, password, alert, 'login-sign-in-error');
+    expectCredentialError(email, password, alert, alert.id);
 
     fireEvent.change(password, { target: { value: 'another-password' } });
     expect(email).not.toHaveAttribute('aria-invalid');
@@ -90,7 +99,6 @@ describe('login credential error accessibility', () => {
   it('associates a platform sign-in failure with both fields until either field is edited', async () => {
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce({ ok: true, json: async () => ({}) })
       .mockResolvedValueOnce({
         ok: false,
         json: async () => ({ error: 'Email or password is incorrect.' }),
@@ -138,7 +146,7 @@ describe('login credential error accessibility', () => {
     fireEvent.submit(screen.getByRole('button', { name: 'Sign in' }));
 
     const alert = await screen.findByRole('alert');
-    expectCredentialError(email, password, alert, 'login-sign-in-error');
+    expectCredentialError(email, password, alert, alert.id);
   });
 
   it.each(['2fa_required', '2fa_invalid'])(
@@ -153,9 +161,9 @@ describe('login credential error accessibility', () => {
       const email = screen.getByLabelText('Email');
       const password = screen.getByLabelText('Password');
       const authenticationCode = screen.getByLabelText('Authentication code');
-      expect(alert).toHaveAttribute('id', 'login-sign-in-error');
+      expect(alert.id).not.toBe('');
       expect(authenticationCode).toHaveAttribute('aria-invalid', 'true');
-      expect(authenticationCode).toHaveAttribute('aria-describedby', 'login-sign-in-error');
+      expect(authenticationCode).toHaveAttribute('aria-describedby', alert.id);
       expect(authenticationCode).toHaveFocus();
       expect(email).not.toHaveAttribute('aria-invalid');
       expect(password).not.toHaveAttribute('aria-invalid');
@@ -169,13 +177,7 @@ describe('login credential error accessibility', () => {
   );
 
   it('associates a platform network failure with both credential fields', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi
-        .fn()
-        .mockResolvedValueOnce({ ok: true, json: async () => ({}) })
-        .mockRejectedValueOnce(new Error('network unavailable'))
-    );
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValueOnce(new Error('network unavailable')));
     render(<PlatformLoginForm />);
 
     const email = screen.getByLabelText('Work email');
@@ -191,15 +193,12 @@ describe('login credential error accessibility', () => {
   it('associates a platform MFA failure with every implicated field', async () => {
     vi.stubGlobal(
       'fetch',
-      vi
-        .fn()
-        .mockResolvedValueOnce({ ok: true, json: async () => ({}) })
-        .mockResolvedValueOnce({
-          ok: false,
-          json: async () => ({
-            error: 'Email, password, or authentication code is incorrect.',
-          }),
-        })
+      vi.fn().mockResolvedValueOnce({
+        ok: false,
+        json: async () => ({
+          error: 'Email, password, or authentication code is incorrect.',
+        }),
+      })
     );
     render(<PlatformLoginForm />);
 
