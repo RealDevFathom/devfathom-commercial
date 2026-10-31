@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto';
 
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 
+import type { SnapshotVerifier } from '@/lib/pharmacy/counter-offline-runtime';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 const TEST_DATABASE_URL = process.env.M8_TEST_RUNTIME_DATABASE_URL ?? process.env.TEST_DATABASE_URL;
@@ -367,6 +368,41 @@ describeIfDatabase('offline counter REST on forced-RLS PostgreSQL', () => {
       consumed: 1,
       nextNumber: f.lease.blockStart + 1,
     });
+    const journal = await inOrg(ORG_A, async (db) => {
+      const sale = await db.pharmacySale.findFirstOrThrow({
+        where: { id: results[0].saleId },
+        select: { lines: { select: { id: true } }, tenders: { select: { id: true } } },
+      });
+      return db.financeJournalEntry.findMany({
+        where: {
+          OR: [
+            { sourceKind: 'PHARMACY_SALE_LINE', sourceId: { in: sale.lines.map(({ id }) => id) } },
+            { sourceKind: 'PHARMACY_TENDER', sourceId: { in: sale.tenders.map(({ id }) => id) } },
+          ],
+        },
+        select: { lines: { select: { side: true, amountMinor: true } } },
+      });
+    });
+    expect(journal).toHaveLength(2);
+    for (const entry of journal) {
+      const debit = entry.lines
+        .filter(({ side }) => side === 'DEBIT')
+        .reduce((sum, { amountMinor }) => sum + amountMinor, 0);
+      const credit = entry.lines
+        .filter(({ side }) => side === 'CREDIT')
+        .reduce((sum, { amountMinor }) => sum + amountMinor, 0);
+      expect(debit).toBe(credit);
+    }
+    const totals = journal
+      .flatMap(({ lines }) => lines)
+      .reduce(
+        (sum, line) =>
+          line.side === 'DEBIT'
+            ? { ...sum, debit: sum.debit + line.amountMinor }
+            : { ...sum, credit: sum.credit + line.amountMinor },
+        { debit: 0, credit: 0 }
+      );
+    expect(totals).toEqual({ debit: 250, credit: 250 });
   });
   it.each(['signature', 'scope', 'payload'] as const)(
     'rejects bad snapshot %s with no effects',
@@ -480,5 +516,472 @@ describeIfDatabase('offline transport authorization and conflicts', () => {
     expect(r.status).toBe(403);
     expect(await r.json()).toEqual({ error: 'medicine_not_offline_otc' });
     expect((await f.counts()).commands).toBe(0);
+  });
+  it('rejects replay when the command lot was recalled after snapshot issuance', async () => {
+    const f = await setup();
+    await inOrg(ORG_A, async (db) => {
+      const lot = await db.pharmacyInventoryLot.findFirstOrThrow({
+        where: { id: f.fixture.lotId },
+        select: { manufacturingBatchId: true },
+      });
+      await db.pharmacyManufacturingBatch.update({
+        where: { id: lot.manufacturingBatchId },
+        data: { state: 'RECALLED', stateReason: 'Test recall', stateChangedAt: new Date() },
+      });
+    });
+
+    const response = await f.replay();
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: 'BATCH_RECALLED' });
+    expect(await f.counts()).toEqual({
+      commands: 0,
+      sales: 0,
+      consumed: 0,
+      nextNumber: f.lease.blockStart,
+    });
+    expect(
+      await inOrg(ORG_A, (db) =>
+        db.pharmacyStockMovement.count({
+          where: { inventoryLotId: f.fixture.lotId, kind: 'SALE' },
+        })
+      )
+    ).toBe(0);
+  });
+
+  it('rejects replay when the command lot was quarantined after snapshot issuance', async () => {
+    const f = await setup();
+    await inOrg(ORG_A, async (db) => {
+      const lot = await db.pharmacyInventoryLot.findFirstOrThrow({
+        where: { id: f.fixture.lotId },
+        select: { manufacturingBatchId: true },
+      });
+      await db.pharmacyManufacturingBatch.update({
+        where: { id: lot.manufacturingBatchId },
+        data: {
+          state: 'QUARANTINED',
+          stateReason: 'Test quarantine',
+          stateChangedAt: new Date(),
+        },
+      });
+    });
+
+    const response = await f.replay();
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: 'BATCH_RECALLED' });
+    expect(await f.counts()).toEqual({
+      commands: 0,
+      sales: 0,
+      consumed: 0,
+      nextNumber: f.lease.blockStart,
+    });
+    expect(
+      await inOrg(ORG_A, (db) =>
+        db.pharmacyStockMovement.count({
+          where: { inventoryLotId: f.fixture.lotId, kind: 'SALE' },
+        })
+      )
+    ).toBe(0);
+  });
+
+  it('returns the accepted sale on an identical retry after a production recall', async () => {
+    const f = await setup();
+    const first = await f.replay();
+    expect(first.status).toBe(200);
+    const accepted = await first.json();
+    const before = await f.counts();
+    const { createRecall } = await import('@/lib/pharmacy/inventory-operations');
+    await inOrg(ORG_A, async (db) => {
+      const lot = await db.pharmacyInventoryLot.findFirstOrThrow({
+        where: { id: f.fixture.lotId },
+      });
+      await createRecall(db, scopeOf(f.fixture), {
+        batchId: lot.manufacturingBatchId,
+        reference: tag('accepted-recall'),
+        reason: 'Recall after the accepted sale',
+      });
+    });
+
+    const retry = await f.replay();
+    expect(retry.status).toBe(200);
+    expect(await retry.json()).toEqual({ ...accepted, replayed: true });
+    const changed = await f.replay({ ...f.command, amountMinor: 99 });
+    expect(changed.status).toBe(409);
+    expect(await changed.json()).toEqual({ error: 'IDEMPOTENCY_CONFLICT' });
+    expect(await f.counts()).toEqual(before);
+    expect(
+      await inOrg(ORG_A, (db) =>
+        db.pharmacyStockMovement.count({
+          where: { inventoryLotId: f.fixture.lotId, kind: 'SALE' },
+        })
+      )
+    ).toBe(1);
+  });
+
+  it('serializes a concurrent recall on the batch locked by replay', async () => {
+    const f = await setup();
+    const { lockReplayLotBatchStates } = await import('./pharmacy-offline');
+    let releaseLock!: () => void;
+    const release = new Promise<void>((resolve) => {
+      releaseLock = resolve;
+    });
+    let locked!: () => void;
+    const lockAcquired = new Promise<void>((resolve) => {
+      locked = resolve;
+    });
+
+    const replayTransaction = inOrg(ORG_A, async (db) => {
+      const rows = await lockReplayLotBatchStates(db, scopeOf(f.fixture), [f.fixture.lotId]);
+      expect(rows).toEqual([{ id: f.fixture.lotId, batchState: 'ACTIVE' }]);
+      locked();
+      await release;
+    });
+    await lockAcquired;
+
+    let recallCommitted = false;
+    const recallTransaction = inOrg(ORG_A, async (db) => {
+      const lot = await db.pharmacyInventoryLot.findFirstOrThrow({
+        where: { id: f.fixture.lotId },
+        select: { manufacturingBatchId: true },
+      });
+      await db.pharmacyManufacturingBatch.update({
+        where: { id: lot.manufacturingBatchId },
+        data: { state: 'RECALLED', stateReason: 'Concurrent recall', stateChangedAt: new Date() },
+      });
+      recallCommitted = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(recallCommitted).toBe(false);
+
+    releaseLock();
+    await replayTransaction;
+    await recallTransaction;
+    expect(recallCommitted).toBe(true);
+  });
+
+  it('holds the recall lock from full replay authorization through sale settlement', async () => {
+    const f = await setup();
+    const { replayCounterCommand } = await import('./pharmacy-offline');
+    const { createRecall } = await import('@/lib/pharmacy/inventory-operations');
+    const { signPharmacyCommand } = await import('@/lib/pharmacy/sales');
+    const scope = scopeOf(f.fixture);
+    const lot = await inOrg(ORG_A, (db) =>
+      db.pharmacyInventoryLot.findFirstOrThrow({ where: { id: f.fixture.lotId } })
+    );
+    let releaseReplay!: () => void;
+    const release = new Promise<void>((resolve) => {
+      releaseReplay = resolve;
+    });
+    let reachedSale = false;
+    let replayPid = 0;
+    let recallPid = 0;
+    let recallCommitted = false;
+
+    // Pause at the first write after authorization, before any sale or tender
+    // code can acquire its own batch locks. Every query still uses PostgreSQL.
+    const replay = inOrg(ORG_A, async (db) => {
+      [{ pid: replayPid }] = await db.$queryRawUnsafe<Array<{ pid: number }>>(
+        'SELECT pg_backend_pid() AS pid'
+      );
+      const saleDelegate = new Proxy(db.pharmacySale, {
+        get(target, key) {
+          if (key === 'create')
+            return async (...args: Parameters<typeof target.create>) => {
+              reachedSale = true;
+              await release;
+              return target.create(...args);
+            };
+          return Reflect.get(target, key);
+        },
+      });
+      const pausedDb = new Proxy(db, {
+        get(target, key) {
+          return key === 'pharmacySale' ? saleDelegate : Reflect.get(target, key);
+        },
+      });
+      return replayCounterCommand(
+        { db: pausedDb, scope, deviceId: f.fixture.deviceId, deviceSecret: f.fixture.deviceSecret },
+        f.command,
+        signPharmacyCommand(scope, f.fixture.deviceId, f.command, f.fixture.deviceSecret),
+        signPharmacyCommand(
+          scope,
+          f.fixture.deviceId,
+          f.command.leasedReceipt,
+          f.fixture.deviceSecret
+        )
+      );
+    });
+    let recall: Promise<unknown> | undefined;
+    try {
+      await Promise.race([
+        vi.waitFor(() => expect(reachedSale).toBe(true), { timeout: 5_000 }),
+        replay.then(() => {
+          throw new Error('Replay finished before the sale checkpoint');
+        }),
+      ]);
+      recall = inOrg(ORG_A, async (db) => {
+        [{ pid: recallPid }] = await db.$queryRawUnsafe<Array<{ pid: number }>>(
+          'SELECT pg_backend_pid() AS pid'
+        );
+        return createRecall(db, scope, {
+          batchId: lot.manufacturingBatchId,
+          reference: tag('concurrent-recall'),
+          reason: 'Concurrent production recall',
+        });
+      }).then((notice) => {
+        recallCommitted = true;
+        return notice;
+      });
+      // Observe the actual lock wait rather than assuming a timer means the
+      // recall has reached its UPDATE. Removing/moving replay's lock fails here.
+      await vi.waitFor(
+        async () => {
+          expect(recallPid).not.toBe(0);
+          const [row] = await inOrg(ORG_A, (db) =>
+            db.$queryRawUnsafe<Array<{ blockers: number[] }>>(
+              'SELECT pg_blocking_pids($1::int) AS blockers',
+              recallPid
+            )
+          );
+          expect(row.blockers).toContain(replayPid);
+          expect(recallCommitted).toBe(false);
+        },
+        { timeout: 5_000 }
+      );
+    } finally {
+      releaseReplay();
+      await Promise.all([replay, recall]);
+    }
+    expect(recallCommitted).toBe(true);
+    expect(await f.counts()).toEqual({
+      commands: 1,
+      sales: 1,
+      consumed: 1,
+      nextNumber: f.lease.blockStart + 1,
+    });
+    const state = await inOrg(ORG_A, async (db) => ({
+      batch: await db.pharmacyManufacturingBatch.findFirstOrThrow({
+        where: { id: lot.manufacturingBatchId },
+      }),
+      sales: await db.pharmacyStockMovement.count({
+        where: { inventoryLotId: f.fixture.lotId, kind: 'SALE' },
+      }),
+    }));
+    expect(state.batch.state).toBe('RECALLED');
+    expect(state.sales).toBe(1);
+  }, 20_000);
+
+  it.each(['before', 'after'] as const)(
+    'preserves a recall delivered %s installing a refresh that read pre-recall state',
+    async (delivery) => {
+      const f = await setup();
+      const { PharmacyCounterRuntime, createMemoryDriver } =
+        await import('@/lib/pharmacy/counter-offline-runtime');
+      const { createRecall } = await import('@/lib/pharmacy/inventory-operations');
+      const scoped = await import('@/lib/tenancy/scoped-db');
+      const scope = scopeOf(f.fixture);
+      const batchId = await inOrg(ORG_A, async (db) => {
+        const lot = await db.pharmacyInventoryLot.findFirstOrThrow({
+          where: { id: f.fixture.lotId },
+        });
+        return lot.manufacturingBatchId;
+      });
+      const driver = createMemoryDriver();
+      const verifier: SnapshotVerifier = {
+        verify: ({ envelope, signature, publicKey }) =>
+          deps.snapshots.verifySnapshotSignature(envelope, signature, publicKey),
+      };
+      const terminalScope = {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        deviceId: f.fixture.deviceId,
+      };
+      const counter = new PharmacyCounterRuntime(
+        terminalScope,
+        driver,
+        verifier,
+        deps.snapshots.snapshotPublicKey()
+      );
+      async function install(snapshots: typeof f.command.snapshots) {
+        for (const snapshot of snapshots) {
+          expect(
+            await counter.installSnapshot({
+              ...snapshot,
+              payloadHash: deps.snapshots.snapshotPayloadHash(snapshot.payload),
+              nowMs: Date.now(),
+            })
+          ).toMatchObject({ ok: true });
+        }
+      }
+      await install(f.command.snapshots);
+      await counter.adoptLeases([
+        {
+          leaseId: f.lease.id,
+          blockStart: f.lease.blockStart,
+          blockEnd: f.lease.blockEnd,
+          nextNumber: f.lease.blockStart,
+        },
+      ]);
+      await counter.adoptQuotas([{ ...bucketOf(f.fixture), quotaUnits: 10, consumedUnits: 0 }]);
+
+      let resume!: () => void;
+      const release = new Promise<void>((resolve) => {
+        resume = resolve;
+      });
+      let reachedCatalog = false;
+      // Pause after the real lot/batch read, before the remaining snapshot
+      // reads. The production recall can commit while this refresh is in flight.
+      const originalWithTenantDb = scoped.withTenantDb;
+      const spy = vi.spyOn(scoped, 'withTenantDb').mockImplementation((org, work, options) =>
+        originalWithTenantDb(
+          org,
+          (db) =>
+            work(
+              new Proxy(db, {
+                get(target, key) {
+                  if (key !== 'medicine') return Reflect.get(target, key);
+                  return new Proxy(target.medicine, {
+                    get(delegate, method) {
+                      if (method !== 'findMany') return Reflect.get(delegate, method);
+                      return async (...args: Parameters<typeof delegate.findMany>) => {
+                        reachedCatalog = true;
+                        await release;
+                        return delegate.findMany(...args);
+                      };
+                    },
+                  });
+                },
+              })
+            ),
+          options
+        )
+      );
+      const refreshing = f.call('snapshot');
+      try {
+        await Promise.race([
+          vi.waitFor(() => expect(reachedCatalog).toBe(true), { timeout: 5_000 }),
+          refreshing.then(() => {
+            throw new Error('Refresh finished before the catalog checkpoint');
+          }),
+        ]);
+        await inOrg(ORG_A, (db) =>
+          createRecall(db, scope, {
+            batchId,
+            reference: tag('refresh-recall'),
+            reason: 'Recall during snapshot refresh',
+          })
+        );
+        const bulletin = {
+          issuedAt: new Date().toISOString(),
+          recallVersion: 0,
+          recalledBatchIds: [batchId],
+        };
+        if (delivery === 'before') expect(await counter.applyRecallBulletin(bulletin)).toBe(true);
+        // Ensure a completion-time timestamp would be strictly newer than the
+        // bulletin, so the original regression cannot pass by millisecond ties.
+        await vi.waitFor(() => expect(Date.now()).toBeGreaterThan(Date.parse(bulletin.issuedAt)));
+        resume();
+        const response = await refreshing;
+        expect(response.status).toBe(200);
+        const { snapshots } = await response.json();
+        const prices = snapshots.find(
+          (snapshot: { envelope: { kind: string } }) => snapshot.envelope.kind === 'PRICES'
+        );
+        expect(prices.payload).toContainEqual(
+          expect.objectContaining({
+            id: f.fixture.lotId,
+            manufacturingBatch: { state: 'ACTIVE' },
+          })
+        );
+        await install(snapshots);
+        if (delivery === 'after') expect(await counter.applyRecallBulletin(bulletin)).toBe(true);
+
+        const reloaded = new PharmacyCounterRuntime(
+          terminalScope,
+          driver,
+          verifier,
+          deps.snapshots.snapshotPublicKey()
+        );
+        expect(await reloaded.hydrate()).toBe('ready');
+        for (const current of [counter, reloaded]) {
+          expect(
+            await current.enqueue(
+              {
+                deviceId: f.fixture.deviceId,
+                action: 'CASH_OTC_SALE',
+                payload: { medicineId: f.fixture.medicineId },
+                clientOriginAt: new Date().toISOString(),
+                bucket: bucketOf(f.fixture),
+                requestedUnits: 1,
+              },
+              {
+                nowMs: Date.now(),
+                cachedCreditRemainingMinor: 0,
+                controlledMedicinesPermittedOffline: false,
+                originalSaleAvailable: false,
+                deviceUsable: true,
+              }
+            )
+          ).toMatchObject({ ok: false, reason: 'BATCH_RECALLED' });
+          expect(current.snapshot().queue).toMatchObject({
+            commands: [],
+            leases: [{ nextNumber: f.lease.blockStart }],
+            quotas: [{ consumedUnits: 0 }],
+          });
+        }
+        expect(Date.parse(prices.envelope.issuedAt)).toBeLessThanOrEqual(
+          Date.parse(bulletin.issuedAt)
+        );
+      } finally {
+        resume();
+        await refreshing;
+        spy.mockRestore();
+      }
+    },
+    20_000
+  );
+
+  it('includes a recalled quota-bearing lot without serializing unrelated branch lots', async () => {
+    const f = await setup();
+    await inOrg(ORG_A, async (db) => {
+      const lot = await db.pharmacyInventoryLot.findFirstOrThrow({
+        where: { id: f.fixture.lotId },
+        select: { manufacturingBatchId: true, packLevelId: true },
+      });
+      await db.pharmacyInventoryLot.createMany({
+        data: Array.from({ length: 1000 }, (_, index) => ({
+          id: `a-${suffix}-${String(index).padStart(4, '0')}`,
+          organizationId: f.fixture.organizationId,
+          branchId: f.fixture.branchId,
+          manufacturingBatchId: lot.manufacturingBatchId,
+          packLevelId: lot.packLevelId,
+          unitsPerPack: 10,
+          supplierName: 'Snapshot completeness fixture',
+          supplierInvoiceRef: `INV-${index}`,
+          unitCostMinor: 50,
+          printedMrpMinor: 1_000,
+          receivedExpiresAt: LATER,
+          receivedExpiryPrecision: 'DAY',
+          receivedAt: NOW,
+        })),
+      });
+      await db.pharmacyManufacturingBatch.update({
+        where: { id: lot.manufacturingBatchId },
+        data: { state: 'RECALLED', stateReason: 'Test recall', stateChangedAt: new Date() },
+      });
+    });
+
+    const response = await f.call('snapshot');
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    const prices = body.snapshots.find(
+      (snapshot: { envelope: { kind: string } }) => snapshot.envelope.kind === 'PRICES'
+    );
+    expect(prices.payload).toHaveLength(1);
+    expect(prices.payload).toContainEqual(
+      expect.objectContaining({
+        id: f.fixture.lotId,
+        manufacturingBatch: { state: 'RECALLED' },
+      })
+    );
   });
 });

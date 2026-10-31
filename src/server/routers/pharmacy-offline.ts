@@ -226,6 +226,14 @@ export async function replayCounterCommand(
   validateLeasedReceiptReplay(scope, deviceId, command.leasedReceipt);
   const originalMs = Date.parse(command.leasedReceipt.originalSaleAt);
   const snapshots = command.snapshots.map((snapshot) => {
+    const leaseCheck = checkSafetyLease(
+      {
+        lease: snapshot.envelope.safetyLease,
+        appliedRecallVersion: snapshot.envelope.safetyLease.recallVersion,
+        recalledBatchIds: [],
+      },
+      originalMs
+    );
     if (
       !verifySnapshotSignature(snapshot.envelope, snapshot.signature) ||
       !checkEnvelope({
@@ -235,14 +243,7 @@ export async function replayCounterCommand(
         heldVersion: null,
         payloadHash: snapshotPayloadHash(snapshot.payload),
       }).ok ||
-      !checkSafetyLease(
-        {
-          lease: snapshot.envelope.safetyLease,
-          appliedRecallVersion: snapshot.envelope.safetyLease.recallVersion,
-          recalledBatchIds: [],
-        },
-        originalMs
-      ).ok
+      !leaseCheck.ok
     )
       throw new CounterTransportError('invalid_snapshot', 403);
     return {
@@ -251,25 +252,9 @@ export async function replayCounterCommand(
       expiresAtMs: Date.parse(snapshot.envelope.expiresAt),
     };
   });
-  const requestedUnits = command.lines.reduce(
-    (n, line) => n + line.quantity * line.canonicalUnitsPerSaleUnit,
-    0
-  );
-  authorizeReplayedCommand(command.action, {
-    nowMs: originalMs,
-    snapshots,
-    receiptNumbersRemaining: 1,
-    quotaUnitsAvailable: requestedUnits,
-    requestedUnits,
-    requestedCreditMinor: 0,
-    cachedCreditRemainingMinor: 0,
-    controlledMedicinesPermittedOffline: false,
-    originalSaleAvailable: false,
-    deviceUsable: true,
-    medicineSale: true,
-    safetyLeaseOk: true,
-    batchRecalled: false,
-  });
+  // An authenticated retry of an accepted command returns its stored outcome,
+  // even if a recall arrived after that sale committed. New/PENDING commands
+  // still pass the live batch check below; a refusal rolls back this log write.
   const recorded = await recordOfflineCommand(db, scope, {
     deviceId,
     sequence: command.sequence,
@@ -285,6 +270,39 @@ export async function replayCounterCommand(
       receiptNumber: recorded.command.receiptNumber,
       replayed: true,
     };
+  const requestedUnits = command.lines.reduce(
+    (n, line) => n + line.quantity * line.canonicalUnitsPerSaleUnit,
+    0
+  );
+  // Recall is a live, organization-wide batch property. A signed offline
+  // snapshot helps the counter refuse the sale while disconnected, but replay
+  // must still re-read the authoritative state in this transaction.
+  const requestedLotIds = [...new Set(command.lines.map((line) => line.inventoryLotId))];
+  // The share lock is deliberately held to transaction end. Recall paths update
+  // these same batch rows, so a replay and a recall have one serial order rather
+  // than a check/use window between this read and sale settlement.
+  const replayLots = await lockReplayLotBatchStates(db, scope, requestedLotIds);
+  const batchRecalled =
+    replayLots.length !== requestedLotIds.length ||
+    replayLots.some((lot) => lot.batchState !== 'ACTIVE');
+  if (batchRecalled) throw new CounterTransportError('BATCH_RECALLED', 409);
+  authorizeReplayedCommand(command.action, {
+    nowMs: originalMs,
+    snapshots,
+    receiptNumbersRemaining: 1,
+    quotaUnitsAvailable: requestedUnits,
+    requestedUnits,
+    requestedCreditMinor: 0,
+    cachedCreditRemainingMinor: 0,
+    controlledMedicinesPermittedOffline: false,
+    originalSaleAvailable: false,
+    deviceUsable: true,
+    medicineSale: true,
+    // Every snapshot lease was checked above; a failed check throws before
+    // authorization can reach this point.
+    safetyLeaseOk: true,
+    batchRecalled,
+  });
   if (recorded.command.status !== 'PENDING')
     throw new CounterTransportError('command_rejected', 409);
   const earlier = await db.pharmacyOfflineCommand.findFirst({
@@ -435,6 +453,24 @@ function verifyToken(token: string, ctx: PharmacyCounterContext) {
 }
 export type CounterOperation = 'establish' | 'snapshot' | 'replay' | 'lease' | 'quota';
 
+export async function lockReplayLotBatchStates(
+  db: ScopedDb,
+  scope: Pick<LedgerScope, 'organizationId' | 'branchId'>,
+  requestedLotIds: string[]
+) {
+  return db.$queryRaw<Array<{ id: string; batchState: string }>>(Prisma.sql`
+    SELECT lot.id, batch.state::text AS "batchState"
+    FROM pharmacy_inventory_lots lot
+    JOIN pharmacy_manufacturing_batches batch
+      ON batch.id = lot."manufacturingBatchId"
+     AND batch."organizationId" = lot."organizationId"
+    WHERE lot."organizationId" = ${scope.organizationId}
+      AND lot."branchId" = ${scope.branchId}
+      AND lot.id IN (${Prisma.join(requestedLotIds)})
+    ORDER BY batch.id
+    FOR SHARE OF batch`);
+}
+
 /** Live web actor plus enrolled device, with an actor/device-bound terminal
  * token after establishment. Errors are mapped only outside the transaction. */
 export function pharmacyCounterRoute(operation: CounterOperation) {
@@ -525,8 +561,33 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
           await db.$queryRaw(
             Prisma.sql`SELECT id FROM pharmacy_registered_devices WHERE id=${device.id} AND "organizationId"=${ctx.scope.organizationId} FOR UPDATE`
           );
+          // The signed timestamp is a lower bound on the state reads, not the
+          // response time. A recall can commit while catalog/tax reads run;
+          // its bulletin must survive installation of this in-flight snapshot.
+          const now = new Date();
+          const quotas = await db.pharmacyDeviceLotQuota.findMany({
+            where: {
+              organizationId: ctx.scope.organizationId,
+              branchId: device.branchId,
+              deviceId: device.id,
+              releasedAt: null,
+            },
+            select: {
+              inventoryLotId: true,
+              stockLocationId: true,
+              quotaUnits: true,
+              consumedUnits: true,
+            },
+          });
+          // PRICES is authoritative only for lots this device can actually sell.
+          // Scoping it to active quotas keeps the signed snapshot bounded by the
+          // counter's delegated stock rather than branch inventory history.
           const lots = await db.pharmacyInventoryLot.findMany({
-            where: { organizationId: ctx.scope.organizationId, branchId: device.branchId },
+            where: {
+              organizationId: ctx.scope.organizationId,
+              branchId: device.branchId,
+              id: { in: [...new Set(quotas.map((quota) => quota.inventoryLotId))] },
+            },
             select: {
               id: true,
               manufacturingBatchId: true,
@@ -534,8 +595,8 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
               unitsPerPack: true,
               printedMrpMinor: true,
               receivedExpiresAt: true,
+              batch: { select: { state: true } },
             },
-            take: 1000,
             orderBy: { id: 'asc' },
           });
           const catalog = await db.medicine.findMany({
@@ -554,20 +615,6 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
             take: 1000,
             orderBy: { id: 'asc' },
           });
-          const quotas = await db.pharmacyDeviceLotQuota.findMany({
-            where: {
-              organizationId: ctx.scope.organizationId,
-              branchId: device.branchId,
-              deviceId: device.id,
-              releasedAt: null,
-            },
-            select: {
-              inventoryLotId: true,
-              stockLocationId: true,
-              quotaUnits: true,
-              consumedUnits: true,
-            },
-          });
           const taxes = await db.pharmacyTaxProfileVersion.findMany({
             where: {
               organizationId: ctx.scope.organizationId,
@@ -577,11 +624,10 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
             include: { rules: true },
             take: 20,
           });
-          const now = new Date();
           const expiry = new Date(now.getTime() + 8 * 60 * 60 * 1000);
           const payloads = {
             CATALOG: catalog,
-            PRICES: lots,
+            PRICES: lots.map(({ batch, ...lot }) => ({ ...lot, manufacturingBatch: batch })),
             TAX: taxes,
             RULES: { controlledMedicinesPermittedOffline: false, rxPermittedOffline: false },
             LOT_BALANCES: quotas,

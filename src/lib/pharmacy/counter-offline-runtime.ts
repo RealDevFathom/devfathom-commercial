@@ -220,6 +220,7 @@ export class PharmacyCounterRuntime {
     };
     const previousLease = this.safetyLeaseState().lease;
     const eventType = previousLease ? 'RENEWED' : 'ISSUED';
+    const recalledBatchIds = recalledLotIdsFromSnapshot(input.envelope.kind, input.payload);
     const nextState: CounterRuntimeState = {
       ...this.state,
       catalog: {
@@ -238,7 +239,7 @@ export class PharmacyCounterRuntime {
             occurredAt: input.envelope.safetyLease.issuedAt,
             lease: input.envelope.safetyLease,
             recallVersion: input.envelope.safetyLease.recallVersion,
-            recalledBatchIds: [],
+            recalledBatchIds,
           },
         ],
       },
@@ -263,13 +264,33 @@ export class PharmacyCounterRuntime {
   safetyLeaseState(): SafetyLeaseState {
     const leases = this.cache().snapshots.map((snapshot) => snapshot.envelope.safetyLease);
     const lease = leases.sort((a, b) => Date.parse(b.issuedAt) - Date.parse(a.issuedAt))[0] ?? null;
-    const recallEvents = this.queue().safetyLeaseEvents.filter(
-      (event) => event.type === 'RECALL_APPLIED'
+    // PRICES is a complete, signed view of every lot this counter may dispense.
+    // Consequently a newer snapshot replaces (rather than unions with) the
+    // previous snapshot's recall set. Bulletins issued at or after that snapshot
+    // remain incremental even at the same recall version, until newer PRICES
+    // supersedes them.
+    const prices = this.cache().snapshots.find((snapshot) => snapshot.envelope.kind === 'PRICES');
+    const snapshotRecallVersion = prices?.envelope.safetyLease.recallVersion ?? 0;
+    const bulletinEvents = this.queue().safetyLeaseEvents.filter(
+      (event) =>
+        event.type === 'RECALL_APPLIED' &&
+        (event.recallVersion > snapshotRecallVersion ||
+          (event.recallVersion === snapshotRecallVersion &&
+            (!prices || Date.parse(event.occurredAt) >= Date.parse(prices.envelope.issuedAt))))
     );
+    const snapshotRecalledIds = prices ? recalledLotIdsFromSnapshot('PRICES', prices.payload) : [];
     return {
       lease,
-      appliedRecallVersion: Math.max(0, ...recallEvents.map((event) => event.recallVersion)),
-      recalledBatchIds: [...new Set(recallEvents.flatMap((event) => event.recalledBatchIds))],
+      appliedRecallVersion: Math.max(
+        snapshotRecallVersion,
+        ...bulletinEvents.map((event) => event.recallVersion)
+      ),
+      recalledBatchIds: [
+        ...new Set([
+          ...snapshotRecalledIds,
+          ...bulletinEvents.flatMap((event) => event.recalledBatchIds),
+        ]),
+      ],
     };
   }
 
@@ -353,12 +374,34 @@ export class PharmacyCounterRuntime {
         await this.commit(nextState);
       }
     }
-    const batchId = input.bucket?.inventoryLotId ?? null;
+    const lotId = input.bucket?.inventoryLotId ?? null;
+    const prices = this.payloadFor('PRICES');
+    const lot:
+      | {
+          manufacturingBatchId?: unknown;
+          manufacturingBatch?: { state?: unknown };
+        }
+      | undefined = Array.isArray(prices)
+      ? prices.find(
+          (candidate) =>
+            typeof candidate === 'object' && candidate !== null && candidate.id === lotId
+        )
+      : undefined;
+    const batchId = typeof lot?.manufacturingBatchId === 'string' ? lot.manufacturingBatchId : null;
+    const lotIsAuthoritativelyActive =
+      lotId === null || lot?.manufacturingBatch?.state === 'ACTIVE';
     const result = enqueueCounterCommand(this.queue(), input, {
       ...matrix,
       snapshots: this.cachedSnapshotStates(),
       safetyLeaseOk: leaseCheck.ok,
-      batchRecalled: batchId !== null && leaseState.recalledBatchIds.includes(batchId),
+      // Missing or unrecognized state is unsafe: only an explicit ACTIVE state
+      // in the signed snapshot permits dispensing.
+      batchRecalled:
+        !lotIsAuthoritativelyActive ||
+        // Snapshot-derived events and older bulletins may still name a lot;
+        // batch bulletins must block every lot from that manufacturing batch.
+        (lotId !== null && leaseState.recalledBatchIds.includes(lotId)) ||
+        (batchId !== null && leaseState.recalledBatchIds.includes(batchId)),
     });
     if (!result.ok) return result;
     await this.commit({ ...this.state, queue: result.snapshot });
@@ -444,4 +487,20 @@ export class PharmacyCounterRuntime {
     await writeTerminalState(this.driver, nextState, COUNTER_STORE_SCHEMA_VERSION);
     this.state = nextState;
   }
+}
+
+/** Batch state travels inside the signed PRICES payload so a disconnected
+ * counter can reject any lot that is not explicitly active before replay. */
+function recalledLotIdsFromSnapshot(kind: PharmacyOfflineSnapshotKind, payload: unknown): string[] {
+  if (kind !== 'PRICES' || !Array.isArray(payload)) return [];
+  return payload.flatMap((lot) => {
+    if (
+      typeof lot === 'object' &&
+      lot !== null &&
+      typeof (lot as { id?: unknown }).id === 'string' &&
+      (lot as { manufacturingBatch?: { state?: unknown } }).manufacturingBatch?.state !== 'ACTIVE'
+    )
+      return [(lot as { id: string }).id];
+    return [];
+  });
 }

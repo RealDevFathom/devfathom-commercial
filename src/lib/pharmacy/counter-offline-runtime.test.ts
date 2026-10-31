@@ -107,7 +107,12 @@ async function install(
 async function readyCounter(driver: TerminalStorageDriver) {
   const counter = runtime(driver);
   await counter.hydrate();
-  for (const kind of CATALOG_KINDS) await install(counter, kind);
+  for (const kind of CATALOG_KINDS)
+    await install(
+      counter,
+      kind,
+      kind === 'PRICES' ? [{ id: 'lot_1', manufacturingBatch: { state: 'ACTIVE' } }] : { kind }
+    );
   await counter.adoptLeases([
     { leaseId: 'lease_1', blockStart: 900, blockEnd: 902, nextNumber: 900 },
   ]);
@@ -313,6 +318,214 @@ describe('PH-OFF OFF-02 — the matrix gates what may be composed', () => {
 });
 
 describe('PH-OFF OFF-04 — safety lease and recall bulletin', () => {
+  it('blocks every lot in a bulletin manufacturing batch, including after reload', async () => {
+    const driver = createMemoryDriver();
+    const counter = await readyCounter(driver);
+    const lots = [
+      { id: 'lot_1', manufacturingBatchId: 'batch_1' },
+      { id: 'lot_2', manufacturingBatchId: 'batch_1' },
+      { id: 'lot_3', manufacturingBatchId: 'batch_2' },
+    ];
+    await install(
+      counter,
+      'PRICES',
+      lots.map((lot) => ({ ...lot, manufacturingBatch: { state: 'ACTIVE' } })),
+      { version: 2 }
+    );
+    await counter.adoptQuotas(
+      lots.map((lot) => ({
+        inventoryLotId: lot.id,
+        stockLocationId: 'loc_1',
+        quotaUnits: 5,
+        consumedUnits: 0,
+      }))
+    );
+    expect(
+      await counter.applyRecallBulletin({
+        issuedAt: '2026-09-02T11:00:00.000Z',
+        recallVersion: SAFETY_LEASE.recallVersion,
+        recalledBatchIds: ['batch_1'],
+      })
+    ).toBe(true);
+
+    const reloaded = runtime(driver);
+    expect(await reloaded.hydrate()).toBe('ready');
+    for (const current of [counter, reloaded]) {
+      for (const inventoryLotId of ['lot_1', 'lot_2']) {
+        expect(
+          await current.enqueue(
+            { ...cashSale(), bucket: { inventoryLotId, stockLocationId: 'loc_1' } },
+            MATRIX
+          )
+        ).toMatchObject({ ok: false, reason: 'BATCH_RECALLED' });
+      }
+      expect(current.snapshot().queue).toMatchObject({
+        commands: [],
+        leases: [{ nextNumber: 900 }],
+        quotas: lots.map(() => ({ consumedUnits: 0 })),
+      });
+    }
+    expect(
+      await counter.enqueue(
+        { ...cashSale(), bucket: { inventoryLotId: 'lot_3', stockLocationId: 'loc_1' } },
+        MATRIX
+      )
+    ).toMatchObject({ ok: true });
+  });
+
+  it.each([ISSUED_AT, '2026-09-02T11:00:00.000Z'])(
+    'blocks a same-version bulletin issued at %s, including after reload',
+    async (issuedAt) => {
+      const driver = createMemoryDriver();
+      const counter = await readyCounter(driver);
+      expect(
+        await counter.applyRecallBulletin({
+          issuedAt,
+          recallVersion: SAFETY_LEASE.recallVersion,
+          recalledBatchIds: ['lot_1'],
+        })
+      ).toBe(true);
+
+      const reloaded = runtime(driver);
+      expect(await reloaded.hydrate()).toBe('ready');
+      for (const current of [counter, reloaded]) {
+        expect(await current.enqueue(cashSale(), MATRIX)).toMatchObject({
+          ok: false,
+          reason: 'BATCH_RECALLED',
+        });
+        expect(current.snapshot().queue).toMatchObject({
+          commands: [],
+          leases: [{ nextNumber: 900 }],
+          quotas: [{ consumedUnits: 0 }],
+        });
+      }
+    }
+  );
+
+  it('replaces an older bulletin with a newer prices snapshot at the same recall version', async () => {
+    const counter = await readyCounter(createMemoryDriver());
+    await counter.applyRecallBulletin({
+      issuedAt: '2026-09-02T10:00:00.000Z',
+      recallVersion: SAFETY_LEASE.recallVersion,
+      recalledBatchIds: ['lot_1'],
+    });
+    const issuedAt = '2026-09-02T11:00:00.000Z';
+    expect(
+      await install(counter, 'PRICES', [{ id: 'lot_1', manufacturingBatch: { state: 'ACTIVE' } }], {
+        version: 2,
+        issuedAt,
+        safetyLease: { ...SAFETY_LEASE, issuedAt },
+      })
+    ).toMatchObject({ ok: true });
+
+    expect(counter.safetyLeaseState().recalledBatchIds).toEqual([]);
+    expect((await counter.enqueue(cashSale(), MATRIX)).ok).toBe(true);
+  });
+
+  it('blocks a lot marked recalled by the signed prices snapshot', async () => {
+    const counter = await readyCounter(createMemoryDriver());
+    await install(
+      counter,
+      'PRICES',
+      [
+        { id: 'lot_2', manufacturingBatch: { state: 'ACTIVE' } },
+        { id: 'lot_1', manufacturingBatch: { state: 'RECALLED' } },
+      ],
+      { version: 2 }
+    );
+
+    expect(await counter.enqueue(cashSale(), MATRIX)).toMatchObject({
+      ok: false,
+      reason: 'BATCH_RECALLED',
+    });
+    expect(counter.snapshot().queue).toMatchObject({
+      commands: [],
+      leases: [{ nextNumber: 900 }],
+      quotas: [{ consumedUnits: 0 }],
+    });
+  });
+
+  it('blocks a lot marked quarantined by the signed prices snapshot', async () => {
+    const counter = await readyCounter(createMemoryDriver());
+    await install(
+      counter,
+      'PRICES',
+      [{ id: 'lot_1', manufacturingBatch: { state: 'QUARANTINED' } }],
+      { version: 2 }
+    );
+
+    expect(await counter.enqueue(cashSale(), MATRIX)).toMatchObject({
+      ok: false,
+      reason: 'BATCH_RECALLED',
+    });
+    expect(counter.snapshot().queue).toMatchObject({
+      commands: [],
+      leases: [{ nextNumber: 900 }],
+      quotas: [{ consumedUnits: 0 }],
+    });
+  });
+
+  it('uses a newer prices snapshot as an authoritative recall replacement', async () => {
+    const counter = await readyCounter(createMemoryDriver());
+    await install(counter, 'PRICES', [{ id: 'lot_1', manufacturingBatch: { state: 'RECALLED' } }], {
+      version: 2,
+      safetyLease: { ...SAFETY_LEASE, recallVersion: 1 },
+    });
+    expect(await counter.enqueue(cashSale(), MATRIX)).toMatchObject({
+      ok: false,
+      reason: 'BATCH_RECALLED',
+    });
+
+    await install(counter, 'PRICES', [{ id: 'lot_1', manufacturingBatch: { state: 'ACTIVE' } }], {
+      version: 3,
+      safetyLease: { ...SAFETY_LEASE, recallVersion: 2 },
+    });
+    expect(counter.safetyLeaseState()).toMatchObject({
+      appliedRecallVersion: 2,
+      recalledBatchIds: [],
+    });
+    expect((await counter.enqueue(cashSale(), MATRIX)).ok).toBe(true);
+  });
+
+  it('applies a nonzero recall version when the authoritative set is empty', async () => {
+    const counter = await readyCounter(createMemoryDriver());
+    await install(counter, 'PRICES', [], {
+      version: 2,
+      safetyLease: { ...SAFETY_LEASE, recallVersion: 4 },
+    });
+    expect(counter.safetyLeaseState()).toMatchObject({
+      appliedRecallVersion: 4,
+      recalledBatchIds: [],
+    });
+    expect(counter.counterStatus(NOW)).toMatchObject({
+      safetyLeaseStatus: 'ACTIVE',
+      appliedRecallVersion: 4,
+    });
+  });
+
+  it('fails closed when a quota-bearing lot is absent from authoritative prices', async () => {
+    const counter = await readyCounter(createMemoryDriver());
+    await install(
+      counter,
+      'PRICES',
+      [{ id: 'another_lot', manufacturingBatch: { state: 'ACTIVE' } }],
+      { version: 2 }
+    );
+    expect(await counter.enqueue(cashSale(), MATRIX)).toMatchObject({
+      ok: false,
+      reason: 'BATCH_RECALLED',
+    });
+  });
+
+  it('fails closed when a quota-bearing lot has no authoritative batch state', async () => {
+    const counter = await readyCounter(createMemoryDriver());
+    await install(counter, 'PRICES', [{ id: 'lot_1', manufacturingBatch: {} }], { version: 2 });
+    expect(await counter.enqueue(cashSale(), MATRIX)).toMatchObject({
+      ok: false,
+      reason: 'BATCH_RECALLED',
+    });
+  });
+
   it('issues, renews and reports an expired lease in the append-only event log', async () => {
     const counter = await readyCounter(createMemoryDriver());
     expect(counter.counterStatus(NOW)).toMatchObject({ safetyLeaseStatus: 'ACTIVE' });

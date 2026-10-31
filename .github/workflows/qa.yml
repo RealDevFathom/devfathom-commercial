@@ -161,6 +161,9 @@ jobs:
       - run: bun install --frozen-lockfile
       - name: Run automated gate and retain every exit code
         shell: bash
+        env:
+          QA_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          QA_BASE_REF: ${{ github.event.repository.default_branch }}
         run: |
           set +e
           mkdir -p gate
@@ -290,7 +293,9 @@ jobs:
           DATABASE_URL="$SUPERUSER_URL" TEST_DATABASE_URL="$SUPERUSER_URL" run test-rls bun run test:rls
           run lint bun run lint
 
-          git diff --name-only -z b20b577f..HEAD -- '*.ts' '*.tsx' '*.css' '*.md' '*.json' '*.mjs' > gate/prettier-files.zlist
+          prettier_base=$(git merge-base "${QA_BASE_SHA:-origin/$QA_BASE_REF}" HEAD)
+          record prettier-base "$?"
+          git diff --name-only --diff-filter=ACMR -z "$prettier_base" HEAD -- '*.ts' '*.tsx' '*.css' '*.md' '*.json' '*.mjs' > gate/prettier-files.zlist
           record prettier-file-list "$?"
           if [ -s gate/prettier-files.zlist ]; then
             xargs -0 bunx prettier --check < gate/prettier-files.zlist >gate/prettier-check.stdout.log 2>gate/prettier-check.stderr.log

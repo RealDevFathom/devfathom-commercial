@@ -74,7 +74,10 @@ async function readyCounter(
       await counter.installSnapshot({
         envelope,
         signature: 'valid',
-        payload: { kind },
+        payload:
+          kind === 'PRICES'
+            ? [{ id: 'last_lot', manufacturingBatch: { state: 'ACTIVE' } }]
+            : { kind },
         payloadHash: HASH,
         nowMs: Date.now(),
       })
