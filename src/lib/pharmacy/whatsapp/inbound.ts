@@ -201,20 +201,35 @@ export async function handleInboundWhatsAppMessage(
         data: { whatsappOptIn: optIn, whatsappOptInChangedAt: message.receivedAt },
       });
       staleConsent = changed.count === 0;
-      if (!staleConsent) {
-        await writePatientConsent(
-          db,
-          organizationId,
-          customer.userId ?? `whatsapp:${last4}`,
-          {
+      // START enables utility replies only. Marketing grants require their own
+      // explicit counter/QR consent; STOP can revoke that consent.
+      if (!staleConsent && !optIn) {
+        const latestMarketing = await db.patientConsent.findFirst({
+          where: {
+            organizationId,
             patientId: customer.patientId,
             purpose: 'MARKETING',
             channel: 'WHATSAPP',
-            granted: optIn,
-            source: 'REPLY',
           },
-          message.receivedAt
-        );
+          orderBy: [{ version: 'desc' }, { id: 'asc' }],
+          select: { recordedAt: true },
+        });
+        // The patient lock also serializes counter/QR writes. A delayed reply
+        // must not supersede a newer purpose-specific event; STOP wins ties.
+        if (!latestMarketing || latestMarketing.recordedAt <= message.receivedAt)
+          await writePatientConsent(
+            db,
+            organizationId,
+            customer.userId ?? `whatsapp:${last4}`,
+            {
+              patientId: customer.patientId,
+              purpose: 'MARKETING',
+              channel: 'WHATSAPP',
+              granted: false,
+              source: 'REPLY',
+            },
+            message.receivedAt
+          );
       }
       if (staleConsent)
         await db.pharmacyMessageLog.update({

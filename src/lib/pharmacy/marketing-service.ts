@@ -217,10 +217,14 @@ export async function marketingConsent(
     },
   });
   if (!customer?.active) return 'INACTIVE';
-  const adultCutoff = new Date(
-    Date.UTC(now.getUTCFullYear() - 18, now.getUTCMonth(), now.getUTCDate())
-  );
-  if (customer.patient.dateOfBirth && customer.patient.dateOfBirth > adultCutoff) return 'UNDER_18';
+  const birth = customer.patient.dateOfBirth;
+  if (birth) {
+    const birthdayPending =
+      now.getUTCMonth() < birth.getUTCMonth() ||
+      (now.getUTCMonth() === birth.getUTCMonth() && now.getUTCDate() < birth.getUTCDate());
+    const age = now.getUTCFullYear() - birth.getUTCFullYear() - (birthdayPending ? 1 : 0);
+    if (age < 18) return 'UNDER_18';
+  }
   if (customer.whatsappOptIn === false) return 'OPTED_OUT';
   if (customer.whatsappOptIn !== true) return 'NO_CONSENT';
   const consent = await db.patientConsent.findFirst({

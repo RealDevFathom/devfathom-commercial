@@ -17,7 +17,11 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
   const db = {
     $queryRaw: async () => [{ id: 'patient-a', patientId: 'patient-a' }],
     pharmacyCustomer: {
-      findFirst: async () => ({ patientId: 'patient-a' }),
+      findFirst: async () => ({
+        ...store.customers[0],
+        patientId: 'patient-a',
+        patient: { dateOfBirth: null },
+      }),
       findMany: async () =>
         store.customers.map((customer) => ({
           ...customer,
@@ -54,7 +58,10 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
       },
     },
     patientConsent: {
-      findFirst: async () => store.consents.at(-1) ?? null,
+      findFirst: async ({ where }: { where: Record<string, unknown> }) =>
+        store.consents
+          .filter((row) => Object.entries(where).every(([key, value]) => row[key] === value))
+          .sort((a, b) => Number(b.version) - Number(a.version))[0] ?? null,
       create: async ({ data }: { data: Record<string, unknown> }) => {
         const row = { id: `consent-${store.consents.length + 1}`, ...data } as Row;
         store.consents.push(row);
@@ -111,6 +118,8 @@ vi.mock('@/lib/pharmacy/customer-ordering', () => ({
 
 import { handleInboundWhatsAppMessage } from './inbound';
 import { MockWhatsAppProvider, readWhatsAppConfig } from './provider';
+import { marketingConsent } from '../marketing-service';
+import { withTenantDb } from '@/lib/tenancy/scoped-db';
 
 const FROM = '923001234567';
 let sequence = 0;
@@ -142,6 +151,37 @@ function knownCustomer(whatsappOptIn: boolean | null) {
 
 let provider: MockWhatsAppProvider;
 
+function recordedConsent(
+  purpose: 'MARKETING' | 'REMINDERS',
+  granted: boolean,
+  recordedAt: Date,
+  source: 'COUNTER_TABLET' | 'QR' = 'COUNTER_TABLET'
+) {
+  return {
+    id: 'existing-consent',
+    organizationId: 'org_a',
+    patientId: 'patient-a',
+    purpose,
+    channel: 'WHATSAPP',
+    version: 1,
+    granted,
+    revokedAt: granted ? null : recordedAt,
+    recordedAt,
+    source,
+  };
+}
+
+function marketingEligibility() {
+  return withTenantDb('org_a', (db) =>
+    marketingConsent(
+      db,
+      { organizationId: 'org_a', branchId: 'branch-1', actorId: 'staff-1', timezone: 'UTC' },
+      'customer-1',
+      new Date()
+    )
+  );
+}
+
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date('2026-10-06T13:00:00Z'));
@@ -167,6 +207,71 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe('handleInboundWhatsAppMessage consent gate', () => {
+  it('START enables utility replies without granting marketing consent', async () => {
+    knownCustomer(false);
+    const utility = recordedConsent('REMINDERS', true, new Date('2026-10-06T09:00:00Z'));
+    store.consents = [utility];
+    await expect(handleInboundWhatsAppMessage('org_a', provider, message('START'))).resolves.toBe(
+      'OPTED_IN'
+    );
+    expect(store.customers[0].whatsappOptIn).toBe(true);
+    expect(store.consents).toEqual([utility]);
+    expect(await marketingEligibility()).toBe('NO_CONSENT');
+    await expect(
+      handleInboundWhatsAppMessage('org_a', provider, message('Panadol 2 packs'))
+    ).resolves.toBe('ORDER_PLACED');
+  });
+
+  it.each(['COUNTER_TABLET', 'QR'] as const)(
+    'START never supersedes a separate %s marketing refusal, regardless of delivery time',
+    async (source) => {
+      knownCustomer(false);
+      const refusal = recordedConsent('MARKETING', false, new Date('2026-10-06T11:00:00Z'), source);
+      store.consents = [refusal];
+      for (const timestamp of ['2026-10-06T10:00:00Z', '2026-10-06T12:00:00Z']) {
+        const start = { ...message('START'), receivedAt: new Date(timestamp) };
+        await expect(handleInboundWhatsAppMessage('org_a', provider, start)).resolves.toBe(
+          'OPTED_IN'
+        );
+        expect(store.consents).toEqual([refusal]);
+        expect(await marketingEligibility()).toBe('OPTED_OUT');
+      }
+    }
+  );
+
+  it.each(['COUNTER_TABLET', 'QR'] as const)(
+    'delayed STOP does not supersede newer %s marketing consent',
+    async (source) => {
+      knownCustomer(true);
+      const grant = recordedConsent('MARKETING', true, new Date('2026-10-06T11:00:00Z'), source);
+      store.consents = [grant];
+      const stop = { ...message('STOP'), receivedAt: new Date('2026-10-06T10:00:00Z') };
+      await expect(handleInboundWhatsAppMessage('org_a', provider, stop)).resolves.toBe(
+        'OPTED_OUT'
+      );
+      expect(store.customers[0].whatsappOptIn).toBe(false);
+      expect(store.consents).toEqual([grant]);
+      expect(await marketingEligibility()).toBe('OPTED_OUT');
+    }
+  );
+
+  it('STOP revokes marketing consent at an equal timestamp without changing utility consent', async () => {
+    knownCustomer(true);
+    const stop = message('STOP');
+    const grant = recordedConsent('MARKETING', true, stop.receivedAt);
+    const utility = recordedConsent('REMINDERS', true, stop.receivedAt);
+    store.consents = [grant, utility];
+    await handleInboundWhatsAppMessage('org_a', provider, stop);
+    expect(store.consents).toHaveLength(3);
+    expect(store.consents.at(-1)).toMatchObject({
+      purpose: 'MARKETING',
+      granted: false,
+      version: 2,
+      supersedesId: grant.id,
+    });
+    expect(store.consents[1]).toEqual(utility);
+  });
+
   it('does not order or reply outside the 24-hour service window', async () => {
     knownCustomer(true);
     const old = { ...message('Panadol 2 packs'), receivedAt: new Date('2026-10-05T13:00:00Z') };
@@ -368,6 +473,8 @@ describe('handleInboundWhatsAppMessage consent gate', () => {
     await expect(handleInboundWhatsAppMessage('org_a', provider, stop)).resolves.toBe('DUPLICATE');
     expect(store.customers[0].whatsappOptIn).toBe(true);
     expect(provider.calls).toHaveLength(2);
+    expect(store.consents).toHaveLength(1);
+    expect(await marketingEligibility()).toBe('OPTED_OUT');
   });
 });
 
