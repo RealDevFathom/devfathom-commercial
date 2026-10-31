@@ -47,3 +47,12 @@ this checkout.
 
 No migration or authorization-policy change was required. All writes continue to pass through the
 router's central `menu:write` capability procedure and existing tenant-reference validation.
+
+## Review follow-up
+
+- `src/lib/restaurant/menus.ts` — `createMenuItem` rejects COMBO products (`COMBO_NOT_ORDERABLE`,
+  mapped to `BAD_REQUEST`). Ordering does not yet accept component selections, price combo
+  deltas/cardinality, or consume component stock, so combos stay authoring-only until it does; the
+  console states this on the combo panel.
+- Combo component-option removal now uses the shared destructive confirmation dialog.
+- The substitute empty state uses `text-text-muted` to meet the Studio 4.5:1 contrast contract.

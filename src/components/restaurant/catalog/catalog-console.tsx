@@ -1119,6 +1119,10 @@ export function RestaurantCatalogConsole({
                           <p className="text-sm text-text-muted">
                             Configure required choices and their component products.
                           </p>
+                          <p className="text-sm text-text-muted">
+                            Combos cannot be added to menus or ordered until the order flow
+                            supports combo selections.
+                          </p>
                         </div>
                         {canWrite ? (
                           <Button
@@ -1225,7 +1229,15 @@ export function RestaurantCatalogConsole({
                                             variant="ghost"
                                             disabled={busy}
                                             onClick={() =>
-                                              deleteComboOption.mutate({ id: option.id })
+                                              ask({
+                                                title: `Remove ${component?.name ?? 'component option'}?`,
+                                                description:
+                                                  'This component option and its price delta will be removed from the choice group.',
+                                                label: 'Remove option',
+                                                destructive: true,
+                                                run: () =>
+                                                  deleteComboOption.mutate({ id: option.id }),
+                                              })
                                             }
                                           >
                                             Remove
@@ -2300,7 +2312,7 @@ export function RestaurantCatalogConsole({
                                                 </span>
                                               ))}
                                               {line.approvedSubstitutes.length === 0 ? (
-                                                <span className="text-xs text-text-faint">
+                                                <span className="text-xs text-text-muted">
                                                   No approved substitutes
                                                 </span>
                                               ) : null}

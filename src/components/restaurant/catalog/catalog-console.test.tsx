@@ -291,6 +291,19 @@ describe('RestaurantCatalogConsole gap recovery flows', () => {
     expect(screen.getAllByText('Fries').length).toBeGreaterThan(0);
     expect(screen.getByText('150')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Add component option' })).toBeEnabled();
+    expect(screen.getByText(/Combos cannot be added to menus or ordered/)).toBeInTheDocument();
+  });
+
+  it('confirms before removing a combo component option', () => {
+    renderCatalog();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Manage' })[0]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    expect(mocks.mutate).not.toHaveBeenCalled();
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toHaveTextContent('Remove Fries?');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Remove option' }));
+    expect(mocks.mutate).toHaveBeenCalledWith({ id: 'combo_option_1' });
   });
 
   it('shows approved substitutes and attaches and removes them from draft ingredient lines', () => {
