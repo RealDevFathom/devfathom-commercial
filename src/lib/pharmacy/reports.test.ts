@@ -192,17 +192,23 @@ describe('PH-RPT aggregate corrections', () => {
     );
     expect(sql).toContain('FROM "pharmacy_medicine_strength_components" component');
     expect(sql).toContain('filter_lot."manufacturingBatchId"=?');
-    expect(sql).toContain('filter_receipt."supplierId"=?');
+    expect(sql).toContain('receipt."supplierId"=?');
     expect(sql).toContain('FROM "pharmacy_recall_notices" recall');
     expect(sql).toContain(
       'recall."batchId" IS NULL AND recall_batch."medicineId"=recall."medicineId"'
     );
     expect(recallCount).not.toHaveBeenCalled();
-    expect(claimCount).toHaveBeenCalledWith({
-      where: expect.objectContaining({
-        lot: expect.objectContaining({ manufacturingBatchId: 'batch_1' }),
-      }),
-    });
+    expect(claimCount).not.toHaveBeenCalled();
+    const claimQuery = queryRaw.mock.calls.find(([query]) =>
+      (query as { strings: readonly string[] }).strings
+        .join('?')
+        .includes('FROM "pharmacy_supplier_claims" claim')
+    )![0] as { strings: readonly string[]; values: unknown[] };
+    expect(claimQuery.strings.join('?')).toContain('lot."manufacturingBatchId"=?');
+    expect(claimQuery.strings.join('?')).toContain('WITH RECURSIVE provenance');
+    expect(claimQuery.values).toEqual(
+      expect.arrayContaining(['branch_1', 'supplier_1', 'ingredient_1', 'batch_1'])
+    );
     expect(receivingCount).toHaveBeenCalledWith({
       where: expect.objectContaining({
         goodsReceipt: { supplierId: 'supplier_1' },

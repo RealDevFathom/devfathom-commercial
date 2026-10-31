@@ -2,7 +2,7 @@ import 'server-only';
 
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { grossMarginQuery, marginDimensionFilter } from './finance-reports';
+import { grossMarginQuery, marginDimensionFilter, supplierLotFilter } from './finance-reports';
 
 export const MAX_PHARMACY_REPORT_DAYS = 90;
 export const MAX_PHARMACY_REPORT_BRANCHES = 100;
@@ -323,10 +323,28 @@ export async function readPharmacyOwnerCommandCentre(db: ScopedDb, filters: Phar
   const lotDimensions = (lot: Prisma.Sql) => Prisma.sql`
     ${filters.batchId ? Prisma.sql`AND ${lot}."manufacturingBatchId"=${filters.batchId}` : Prisma.empty}
     ${filters.ingredientId ? Prisma.sql`AND EXISTS (SELECT 1 FROM "pharmacy_manufacturing_batches" filter_batch JOIN "pharmacy_medicine_strength_components" component ON component."organizationId"=filter_batch."organizationId" AND component."medicineId"=filter_batch."medicineId" WHERE filter_batch."organizationId"=${lot}."organizationId" AND filter_batch."id"=${lot}."manufacturingBatchId" AND component."ingredientId"=${filters.ingredientId})` : Prisma.empty}
-    ${filters.supplierId ? Prisma.sql`AND EXISTS (SELECT 1 FROM "pharmacy_goods_receipt_lines" filter_line JOIN "pharmacy_goods_receipts" filter_receipt ON filter_receipt."organizationId"=filter_line."organizationId" AND filter_receipt."branchId"=filter_line."branchId" AND filter_receipt."id"=filter_line."goodsReceiptId" WHERE filter_line."organizationId"=${lot}."organizationId" AND filter_line."branchId"=${lot}."branchId" AND filter_line."inventoryLotId"=${lot}."id" AND filter_receipt."supplierId"=${filters.supplierId})` : Prisma.empty}`;
+    ${supplierLotFilter(lot, filters.supplierId)}`;
+  // Replenishment signals describe a medicine, so they have no inventoryLotId.
+  // Match their supplier/batch through that medicine's lots in the same branch.
   const stockDimensions = Prisma.sql`
     ${ingredientForMedicine(Prisma.sql`s."medicineId"`)}
-    ${filters.batchId || filters.supplierId ? Prisma.sql`AND EXISTS (SELECT 1 FROM "pharmacy_inventory_lots" filter_lot WHERE filter_lot."organizationId"=s."organizationId" AND filter_lot."branchId"=s."branchId" AND filter_lot."id"=s."inventoryLotId" ${lotDimensions(Prisma.sql`filter_lot`)})` : Prisma.empty}`;
+    ${
+      filters.batchId || filters.supplierId
+        ? Prisma.sql`AND EXISTS (
+      SELECT 1 FROM "pharmacy_inventory_lots" filter_lot
+      WHERE filter_lot."organizationId"=s."organizationId"
+        AND filter_lot."branchId"=s."branchId"
+        AND (filter_lot."id"=s."inventoryLotId"
+          OR (s."inventoryLotId" IS NULL AND EXISTS (
+            SELECT 1 FROM "pharmacy_manufacturing_batches" signal_batch
+            WHERE signal_batch."organizationId"=filter_lot."organizationId"
+              AND signal_batch."id"=filter_lot."manufacturingBatchId"
+              AND signal_batch."medicineId"=s."medicineId"
+          )))
+        ${lotDimensions(Prisma.sql`filter_lot`)}
+    )`
+        : Prisma.empty
+    }`;
   const dimensionFiltered = Boolean(filters.supplierId || filters.ingredientId || filters.batchId);
   // A line can draw from several lots. The journal has revenue and discount apportioned onto
   // those lot legs. Keep the sales metric's completed-sale and business-date scope;
@@ -364,7 +382,9 @@ export async function readPharmacyOwnerCommandCentre(db: ScopedDb, filters: Phar
         ? db
             .$queryRaw<Array<{ value: number }>>(
               Prisma.sql`SELECT COUNT(*)::int AS value FROM "pharmacy_recall_notices" recall WHERE recall."status"='OPEN'
-                AND EXISTS (
+                AND ((recall."batchId" IS NULL AND ${!filters.batchId && !filters.supplierId}
+                    ${ingredientForMedicine(Prisma.sql`recall."medicineId"`)})
+                  OR EXISTS (
                   SELECT 1 FROM "pharmacy_manufacturing_batches" recall_batch
                   WHERE recall_batch."organizationId"=recall."organizationId"
                     AND ((recall."batchId" IS NOT NULL AND recall_batch."id"=recall."batchId")
@@ -372,29 +392,19 @@ export async function readPharmacyOwnerCommandCentre(db: ScopedDb, filters: Phar
                     ${filters.batchId ? Prisma.sql`AND recall_batch."id"=${filters.batchId}` : Prisma.empty}
                     ${ingredientForMedicine(Prisma.sql`recall_batch."medicineId"`)}
                     ${filters.supplierId ? Prisma.sql`AND EXISTS (SELECT 1 FROM "pharmacy_inventory_lots" filter_lot WHERE filter_lot."organizationId"=recall_batch."organizationId" AND filter_lot."manufacturingBatchId"=recall_batch."id" ${lotDimensions(Prisma.sql`filter_lot`)})` : Prisma.empty}
-                )`
+                ))`
             )
             .then((rows) => rows[0]?.value ?? 0)
         : db.pharmacyRecallNotice.count({ where: { status: 'OPEN' } }),
-      db.pharmacySupplierClaim.count({
-        where: {
-          branchId: { in: filters.branchIds },
-          status: 'RESERVED',
-          lot: {
-            ...(filters.batchId ? { manufacturingBatchId: filters.batchId } : {}),
-            ...(filters.ingredientId
-              ? {
-                  batch: {
-                    medicine: { strengths: { some: { ingredientId: filters.ingredientId } } },
-                  },
-                }
-              : {}),
-            ...(filters.supplierId
-              ? { receiptLines: { some: { goodsReceipt: { supplierId: filters.supplierId } } } }
-              : {}),
-          },
-        },
-      }),
+      db
+        .$queryRaw<Array<{ value: number }>>(
+          Prisma.sql`SELECT COUNT(*)::int AS value FROM "pharmacy_supplier_claims" claim
+          JOIN "pharmacy_inventory_lots" lot ON lot."organizationId"=claim."organizationId" AND lot."branchId"=claim."branchId" AND lot."id"=claim."inventoryLotId"
+          WHERE claim."organizationId"=current_setting('app.current_organization_id',true)
+            AND claim."branchId" IN (${branches}) AND claim."status"='RESERVED'
+            ${lotDimensions(Prisma.sql`lot`)}`
+        )
+        .then((rows) => rows[0]?.value ?? 0),
       db.pharmacyReceivingException.count({
         where: {
           branchId: { in: filters.branchIds },

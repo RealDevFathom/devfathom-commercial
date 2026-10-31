@@ -10,6 +10,10 @@ const suffix = randomUUID();
 const orgA = `report_dimensions_a_${suffix}`;
 const orgB = `report_dimensions_b_${suffix}`;
 const orgSales = `report_dimensions_sales_${suffix}`;
+const orgTransfer = `report_dimensions_transfer_${suffix}`;
+const orgSignals = `report_dimensions_signals_${suffix}`;
+const orgOperational = `report_dimensions_operational_${suffix}`;
+const orgRecall = `report_dimensions_recall_${suffix}`;
 let withTenantDb: typeof import('@/lib/tenancy/scoped-db').withTenantDb;
 let readReport: typeof import('./reports').readPharmacyOwnerCommandCentre;
 
@@ -324,7 +328,7 @@ beforeAll(async () => {
   await scoped.withPlatformDb((db) =>
     db.$executeRawUnsafe(
       `INSERT INTO organizations (id, slug, "legalName", "displayName", vertical, status, "deploymentMode", "createdAt", "updatedAt") SELECT id,id,id,id,'PHARMACY','ACTIVE','SHARED',now(),now() FROM unnest($1::text[]) id ON CONFLICT DO NOTHING`,
-      [orgA, orgB, orgSales]
+      [orgA, orgB, orgSales, orgTransfer, orgSignals, orgOperational, orgRecall]
     )
   );
 }, 30_000);
@@ -463,5 +467,447 @@ suite('owner report dimensions on non-empty PostgreSQL', () => {
     expect(unfiltered.metrics.salesMinor).toBe(100);
     expect(unfiltered.metrics.marginMinor).toBe(65);
     expect(unfiltered.metrics.openRecalls).toBe(2);
+  });
+});
+
+suite('owner report operational dimensions', () => {
+  it('counts an ingredient-matched medicine recall before any batch has been received', async () => {
+    const fixture = await withTenantDb(orgRecall, async (db) => {
+      const branch = await db.pharmacyBranch.create({
+        data: {
+          organizationId: orgRecall,
+          code: 'RECALL',
+          name: 'Recall branch',
+          addressLine: '1 Test Road',
+          city: 'Lahore',
+          provinceCode: 'PB',
+        },
+      });
+      const ingredient = await db.ingredient.create({
+        data: { organizationId: orgRecall, name: `Unreceived ingredient ${suffix}` },
+      });
+      const medicine = await db.medicine.create({
+        data: {
+          organizationId: orgRecall,
+          productName: 'Unreceived recalled medicine',
+          productFamily: 'PHARMACEUTICAL',
+          strengths: {
+            create: {
+              organizationId: orgRecall,
+              ingredientId: ingredient.id,
+              value: 10,
+              unit: 'mg',
+            },
+          },
+        },
+      });
+      await db.pharmacyRecallNotice.create({
+        data: {
+          organizationId: orgRecall,
+          medicineId: medicine.id,
+          reference: `unreceived-${suffix}`,
+          reason: 'all batches',
+          createdById: 'owner',
+        },
+      });
+      expect(await db.pharmacyManufacturingBatch.count()).toBe(0);
+      return { branchId: branch.id, ingredientId: ingredient.id };
+    });
+    const report = (dimensions: { ingredientId?: string; supplierId?: string; batchId?: string }) =>
+      withTenantDb(orgRecall, (db) =>
+        readReport(db, {
+          branchIds: [fixture.branchId],
+          from: '2026-09-04',
+          to: '2026-09-04',
+          ...dimensions,
+        })
+      );
+    expect((await report({ ingredientId: fixture.ingredientId })).metrics.openRecalls).toBe(1);
+    expect((await report({ ingredientId: 'unknown-ingredient' })).metrics.openRecalls).toBe(0);
+    expect(
+      (await report({ ingredientId: fixture.ingredientId, batchId: 'unknown-batch' })).metrics
+        .openRecalls
+    ).toBe(0);
+    expect(
+      (await report({ ingredientId: fixture.ingredientId, supplierId: 'unknown-supplier' })).metrics
+        .openRecalls
+    ).toBe(0);
+  });
+
+  it('retains supplier attribution through repeated interbranch transfers', async () => {
+    const a = await fixture(orgTransfer);
+    const ops = await import('./inventory-operations');
+    const destination = await withTenantDb(orgTransfer, async (db) => {
+      const sourceLot = await db.pharmacyInventoryLot.findFirstOrThrow({ where: { id: a.lotA } });
+      const sourceLocation = await db.pharmacyStockLocation.findFirstOrThrow({
+        where: { branchId: a.branchId },
+      });
+      await db.pharmacyStockMovement.create({
+        data: {
+          organizationId: orgTransfer,
+          branchId: a.branchId,
+          inventoryLotId: a.lotA,
+          stockLocationId: sourceLocation.id,
+          kind: 'RECEIPT',
+          disposition: 'AVAILABLE',
+          quantityUnits: 4,
+          sealedPackDelta: 4,
+          looseUnitDelta: 0,
+          actorId: 'owner',
+          idempotencyKey: `probe-receipt-${suffix}`,
+        },
+      });
+      let branchId = a.branchId;
+      let lot = sourceLot;
+      let location = sourceLocation;
+      for (const hop of [1, 2]) {
+        const branch = await db.pharmacyBranch.create({
+          data: {
+            organizationId: orgTransfer,
+            code: `DEST-${hop}-${suffix}`,
+            name: 'Destination',
+            addressLine: '1 Test Road',
+            city: 'Lahore',
+            provinceCode: 'PB',
+          },
+        });
+        const destinationLocation = await db.pharmacyStockLocation.create({
+          data: {
+            organizationId: orgTransfer,
+            branchId: branch.id,
+            code: 'DEST',
+            name: 'Destination',
+            kind: 'STORE',
+          },
+        });
+        const scope = { organizationId: orgTransfer, branchId, actorId: 'owner' };
+        const transfer = await ops.allocateTransfer(db, scope, {
+          toBranchId: branch.id,
+          lines: [
+            {
+              sourceLotId: lot.id,
+              sourceStockLocationId: location.id,
+              destinationStockLocationId: destinationLocation.id,
+              quantityUnits: 4,
+            },
+          ],
+        });
+        await ops.approveTransfer(db, { ...scope, actorId: 'approver' }, transfer.id);
+        await ops.dispatchTransfer(db, scope, transfer.id, `transfer-dispatch-${hop}-${suffix}`);
+        await ops.receiveTransferLine(
+          db,
+          { ...scope, branchId: branch.id },
+          {
+            transferId: transfer.id,
+            lineId: transfer.lines[0]!.id,
+            receivedUnits: 4,
+            idempotencyKeyPrefix: `transfer-receive-${hop}-${suffix}`,
+          }
+        );
+        branchId = branch.id;
+        lot = await db.pharmacyInventoryLot.findFirstOrThrow({ where: { branchId } });
+        location = destinationLocation;
+      }
+      const scope = { organizationId: orgTransfer, branchId, actorId: 'owner' };
+      await ops.quarantinePart(db, scope, {
+        inventoryLotId: lot.id,
+        stockLocationId: location.id,
+        units: 4,
+        reason: 'Review quarantine',
+        idempotencyKeyPrefix: `probe-quarantine-${suffix}`,
+      });
+      await db.pharmacySupplierClaim.create({
+        data: {
+          organizationId: orgTransfer,
+          branchId,
+          inventoryLotId: lot.id,
+          reservedUnits: 1,
+          returnBy: new Date('2028-01-01'),
+          createdById: 'owner',
+        },
+      });
+      const original = await db.pharmacySaleLine.findFirstOrThrow({ where: { id: a.saleLineId } });
+      const sale = await db.pharmacySale.create({
+        data: {
+          organizationId: orgTransfer,
+          branchId,
+          status: 'COMPLETED',
+          createdByUserId: 'owner',
+          completedAt: new Date('2026-09-04T12:00:00Z'),
+          businessDate: new Date('2026-09-04'),
+        },
+      });
+      const saleLine = await db.pharmacySaleLine.create({
+        data: {
+          organizationId: orgTransfer,
+          branchId,
+          saleId: sale.id,
+          medicineId: a.medicineId,
+          presentationId: original.presentationId,
+          packLevelId: lot.packLevelId,
+          saleUnit: 'PACK',
+          quantity: 1,
+          canonicalUnitsPerSaleUnit: 1,
+          canonicalUnits: 1,
+          unitPriceMinor: 100,
+          proRataCeilingMinor: 100,
+          unitCostMinor: 40,
+          idempotencyKey: `transfer-sale-line-${suffix}`,
+        },
+      });
+      const { postJournalEntry } = await import('@/lib/finance/journal');
+      await postJournalEntry(
+        db,
+        { organizationId: orgTransfer, actorId: 'owner' },
+        {
+          branchId,
+          sourceKind: 'PHARMACY_SALE_LINE',
+          sourceId: saleLine.id,
+          description: 'Transferred lot sale',
+          occurredAt: new Date('2026-09-04T12:00:00Z'),
+          idempotencyKey: `transfer-sale-${suffix}`,
+          lines: [
+            {
+              accountCode: 'SALES_REVENUE',
+              side: 'CREDIT',
+              amountMinor: 100,
+              productId: a.medicineId,
+              lotId: lot.id,
+              sourceLineId: saleLine.id,
+            },
+            {
+              accountCode: 'COST_OF_GOODS_SOLD',
+              side: 'DEBIT',
+              amountMinor: 40,
+              productId: a.medicineId,
+              lotId: lot.id,
+              sourceLineId: saleLine.id,
+            },
+            { accountCode: 'SALES_CLEARING', side: 'DEBIT', amountMinor: 100 },
+            { accountCode: 'INVENTORY', side: 'CREDIT', amountMinor: 40 },
+          ],
+        }
+      );
+      return { branchId, lotId: lot.id };
+    });
+    const report = (supplierId?: string) =>
+      withTenantDb(orgTransfer, (db) =>
+        readReport(db, {
+          branchIds: [destination.branchId],
+          from: '2026-09-04',
+          to: '2026-09-04',
+          batchId: a.batchA,
+          supplierId,
+        })
+      );
+    const all = await report();
+    const supplier = await report(a.supplierA);
+    expect(all.metrics.quarantineUnits).toBe(4);
+    expect(supplier.metrics.quarantineUnits).toBe(4);
+    expect(supplier.metrics.salesMinor).toBe(100);
+    expect(supplier.metrics.marginMinor).toBe(60);
+    expect(supplier.metrics.openClaims).toBe(1);
+    const wrongSupplier = await report(a.supplierB);
+    expect(wrongSupplier.metrics.quarantineUnits).toBe(0);
+    expect(wrongSupplier.metrics.salesMinor).toBe(0);
+    expect(wrongSupplier.metrics.marginMinor).toBeNull();
+    expect(wrongSupplier.metrics.openClaims).toBe(0);
+  });
+
+  it('retains product-level replenishment signals when their supplier is selected', async () => {
+    const a = await fixture(orgSignals);
+    const { refreshStockSignals, createDraftAction } = await import('./stock-signals-operations');
+    await withTenantDb(orgSignals, async (db) => {
+      await db.organizationDepartment.create({
+        data: { organizationId: orgSignals, key: 'probe', name: 'Probe' },
+      });
+      const role = await db.organizationRole.create({
+        data: {
+          organizationId: orgSignals,
+          key: 'probe',
+          name: 'Probe',
+          permissions: {
+            create: {
+              organizationId: orgSignals,
+              capability: 'pharmacy:procurement',
+              effect: 'ALLOW',
+            },
+          },
+        },
+      });
+      const actor = await db.user.create({
+        data: {
+          organizationId: orgSignals,
+          name: 'Probe purchaser',
+          email: `probe-${suffix}@example.test`,
+          department: 'probe',
+          title: 'Purchaser',
+          organizationRoleId: role.id,
+        },
+      });
+      const at = new Date();
+      await db.pharmacySafetyStock.create({
+        data: {
+          organizationId: orgSignals,
+          branchId: a.branchId,
+          medicineId: a.medicineId,
+          safetyStockUnits: 5,
+          coverageDays: 30,
+          approvedByUserId: 'approver',
+          approvedAt: at,
+        },
+      });
+      const scope = { organizationId: orgSignals, branchId: a.branchId, actorId: actor.id };
+      await refreshStockSignals(db, scope, at);
+      const signal = await db.pharmacyStockSignal.findFirstOrThrow({
+        where: { branchId: a.branchId, kind: 'STOCKOUT' },
+      });
+      expect(signal.inventoryLotId).toBeNull();
+      const lot = await db.pharmacyInventoryLot.findFirstOrThrow({ where: { id: a.lotA } });
+      await createDraftAction(db, scope, {
+        kind: 'DRAFT_REQUISITION',
+        signalId: signal.id,
+        reference: `probe-req-${suffix}`,
+        medicineId: a.medicineId,
+        packLevelId: lot.packLevelId,
+        canonicalUnitsPerPack: 1,
+        quantityPacks: 5,
+      });
+    });
+    const report = (supplierId?: string) =>
+      withTenantDb(orgSignals, (db) =>
+        readReport(db, {
+          branchIds: [a.branchId],
+          from: '2026-09-04',
+          to: '2026-09-04',
+          ingredientId: a.ingredientId,
+          supplierId,
+        })
+      );
+    const all = await report();
+    const supplier = await report(a.supplierA);
+    expect(all.metrics.recommendedOrders).toBe(1);
+    expect(supplier.metrics.recommendedOrders).toBe(1);
+    expect(supplier.metrics.openStockSignals).toBe(1);
+    const unknown = await report('unknown-supplier');
+    expect(unknown.metrics.openStockSignals).toBe(0);
+    expect(unknown.metrics.recommendedOrders).toBe(0);
+  });
+
+  it('executes nonempty operational filters and rejects foreign and SQL-like dimensions', async () => {
+    const a = await fixture(orgOperational);
+    const { evaluateStockSignals } = await import('./stock-signals');
+    await withTenantDb(orgOperational, async (db) => {
+      const lot = await db.pharmacyInventoryLot.findFirstOrThrow({ where: { id: a.lotA } });
+      const location = await db.pharmacyStockLocation.findFirstOrThrow({
+        where: { branchId: a.branchId },
+      });
+      await db.pharmacyStockMovement.create({
+        data: {
+          organizationId: orgOperational,
+          branchId: a.branchId,
+          inventoryLotId: lot.id,
+          stockLocationId: location.id,
+          kind: 'RECEIPT',
+          disposition: 'QUARANTINE',
+          quantityUnits: 2,
+          sealedPackDelta: 2,
+          looseUnitDelta: 0,
+          actorId: 'owner',
+          idempotencyKey: `positive-receipt-${suffix}`,
+        },
+      });
+      await db.pharmacySupplierClaim.create({
+        data: {
+          organizationId: orgOperational,
+          branchId: a.branchId,
+          inventoryLotId: lot.id,
+          reservedUnits: 1,
+          returnBy: new Date('2028-01-01'),
+          createdById: 'owner',
+        },
+      });
+      const line = await db.pharmacyGoodsReceiptLine.findFirstOrThrow({
+        where: { inventoryLotId: lot.id },
+      });
+      await db.pharmacyReceivingException.create({
+        data: {
+          organizationId: orgOperational,
+          branchId: a.branchId,
+          goodsReceiptId: line.goodsReceiptId,
+          goodsReceiptLineId: line.id,
+          kind: 'SHORTAGE',
+          detail: 'Review missing units',
+        },
+      });
+      const at = new Date();
+      const [draft] = evaluateStockSignals({
+        organizationId: orgOperational,
+        branchId: a.branchId,
+        at,
+        sourceObservedAt: at,
+        lots: [
+          {
+            inventoryLotId: lot.id,
+            medicineId: a.medicineId,
+            stockLocationId: location.id,
+            expiresAt: new Date('2028-01-01'),
+            receivedAt: at,
+            disposition: 'QUARANTINE',
+            batchState: 'ACTIVE',
+            onHandUnits: 2,
+            reservedUnits: 0,
+            returnWindowEndsAt: null,
+            medicineColdChain: false,
+            locationColdChain: false,
+            recallReference: null,
+            unsettled: false,
+          },
+        ],
+        inbound: [],
+        countVariances: [],
+        safetyStocks: [],
+      });
+      await db.pharmacyStockSignal.create({
+        data: { ...draft!, organizationId: orgOperational, branchId: a.branchId },
+      });
+    });
+    const report = (dimensions: { supplierId?: string; ingredientId?: string; batchId?: string }) =>
+      withTenantDb(orgOperational, (db) =>
+        readReport(db, {
+          branchIds: [a.branchId],
+          from: '2026-09-04',
+          to: '2026-09-04',
+          ...dimensions,
+        })
+      );
+    for (const dimensions of [
+      { supplierId: a.supplierA },
+      { ingredientId: a.ingredientId },
+      { batchId: a.batchA },
+      { supplierId: a.supplierA, ingredientId: a.ingredientId, batchId: a.batchA },
+    ]) {
+      const result = await report(dimensions);
+      expect(result.metrics.quarantineUnits).toBe(2);
+      expect(result.metrics.openStockSignals).toBe(1);
+      expect(result.metrics.openClaims).toBe(1);
+      expect(result.metrics.openReceivingExceptions).toBe(1);
+    }
+    for (const dimensions of [
+      { supplierId: 'foreign-supplier' },
+      { ingredientId: 'foreign-ingredient' },
+      { batchId: 'foreign-batch' },
+      { supplierId: "' OR TRUE --" },
+      { ingredientId: "' OR TRUE --" },
+      { batchId: "' OR TRUE --" },
+    ]) {
+      const result = await report(dimensions);
+      expect(result.metrics.salesMinor).toBe(0);
+      expect(result.metrics.marginMinor).toBeNull();
+      expect(result.metrics.quarantineUnits).toBe(0);
+      expect(result.metrics.openStockSignals).toBe(0);
+      expect(result.metrics.openClaims).toBe(0);
+      expect(result.metrics.openReceivingExceptions).toBe(0);
+    }
   });
 });

@@ -41,6 +41,46 @@ function branchFilter(scope: JournalReportScope) {
     : Prisma.sql`AND TRUE`;
 }
 
+/** Follow the receipt provenance encoded by receiveTransferLine, including repeated transfers. */
+export function supplierLotFilter(lot: Prisma.Sql, supplierId?: string) {
+  if (!supplierId) return Prisma.empty;
+  return Prisma.sql`AND EXISTS (
+    WITH RECURSIVE provenance AS (
+      SELECT ${lot}."id", ${lot}."organizationId", ${lot}."branchId",
+             ${lot}."supplierInvoiceRef", ${lot}."manufacturingBatchId", ${lot}."packLevelId"
+      UNION
+      SELECT source."id", source."organizationId", source."branchId",
+             source."supplierInvoiceRef", source."manufacturingBatchId", source."packLevelId"
+      FROM provenance destination
+      JOIN "pharmacy_interbranch_transfer_lines" transfer_line
+        ON transfer_line."organizationId"=destination."organizationId"
+       AND transfer_line."id"=substring(destination."supplierInvoiceRef" from ':transfer:([^:]+):[0-9]+$')
+       AND transfer_line."receivedUnits">0
+      JOIN "pharmacy_interbranch_transfers" transfer
+        ON transfer."organizationId"=transfer_line."organizationId"
+       AND transfer."id"=transfer_line."transferId"
+       AND transfer."toBranchId"=destination."branchId"
+      JOIN "pharmacy_inventory_lots" source
+        ON source."organizationId"=transfer_line."organizationId"
+       AND source."branchId"=transfer_line."sourceBranchId"
+       AND source."id"=transfer_line."sourceLotId"
+       AND source."manufacturingBatchId"=destination."manufacturingBatchId"
+       AND source."packLevelId"=destination."packLevelId"
+       AND source."supplierInvoiceRef"=regexp_replace(destination."supplierInvoiceRef", ':transfer:[^:]+:[0-9]+$', '')
+    )
+    SELECT 1 FROM provenance
+    JOIN "pharmacy_goods_receipt_lines" receipt_line
+      ON receipt_line."organizationId"=provenance."organizationId"
+     AND receipt_line."branchId"=provenance."branchId"
+     AND receipt_line."inventoryLotId"=provenance."id"
+    JOIN "pharmacy_goods_receipts" receipt
+      ON receipt."organizationId"=receipt_line."organizationId"
+     AND receipt."branchId"=receipt_line."branchId"
+     AND receipt."id"=receipt_line."goodsReceiptId"
+    WHERE receipt."supplierId"=${supplierId}
+  )`;
+}
+
 /** Shared lot dimensions for journal margin and completed-sale revenue reads. */
 export function marginDimensionFilter(
   scope: Pick<JournalReportScope, 'supplierId' | 'ingredientId' | 'batchId'>
@@ -57,22 +97,7 @@ export function marginDimensionFilter(
           )`
         : Prisma.empty
     }
-    ${
-      scope.supplierId
-        ? Prisma.sql`AND EXISTS (
-            SELECT 1
-              FROM "pharmacy_goods_receipt_lines" receipt_line
-              JOIN "pharmacy_goods_receipts" receipt
-                ON receipt."organizationId" = receipt_line."organizationId"
-               AND receipt."branchId" = receipt_line."branchId"
-               AND receipt."id" = receipt_line."goodsReceiptId"
-             WHERE receipt_line."organizationId" = line."organizationId"
-               AND receipt_line."branchId" = line."branchId"
-               AND receipt_line."inventoryLotId" = line."lotId"
-               AND receipt."supplierId" = ${scope.supplierId}
-          )`
-        : Prisma.empty
-    }`;
+    ${supplierLotFilter(Prisma.sql`lot`, scope.supplierId)}`;
 }
 
 export type ValuationRow = {
