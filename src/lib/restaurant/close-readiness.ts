@@ -2,7 +2,7 @@ import 'server-only';
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { businessDateToUtcDate, resolveBusinessDate } from './business-date';
-import { closePreview, resolveChainTip } from './daily-close';
+import { closeFinancialPreview, countUnbilledActiveOrders, resolveChainTip } from './daily-close';
 import { readPaymentsReport } from './reports';
 
 export type CloseReadinessStatus = 'READY' | 'BLOCKED' | 'UNKNOWN' | 'ALREADY_CLOSED';
@@ -82,7 +82,10 @@ type AmountKey = keyof typeof definitions;
 type PaymentsReport = Awaited<ReturnType<typeof readPaymentsReport>>;
 type FinancialData = {
   existingCloseId: string | null;
-  closeGuards: Awaited<ReturnType<typeof closePreview>>['readiness'];
+  closeGuards: Awaited<ReturnType<typeof closeFinancialPreview>>['readiness'] & {
+    /** Present only when reports:operational authorizes the order evidence. */
+    unbilledOrderCount?: number;
+  };
   currency: string | null;
   currencyBasis: string;
   moneyUnit: 'DECIMAL_MAJOR';
@@ -196,7 +199,7 @@ export async function prepareClosePacket(
         where: { id: access.organizationId },
         select: { currency: true },
       });
-      const preview = await closePreview(db, input);
+      const preview = await closeFinancialPreview(db, input);
       const bills = await db.restaurantBill.findMany({
         where: { ...where, status: 'OPEN' },
         select: { id: true },
@@ -435,6 +438,25 @@ export async function prepareClosePacket(
           )
         );
         operational.status = 'UNKNOWN';
+      }
+      // This close guard includes empty active orders as well as orders with
+      // items. Keep the existing handover evidence and its definition intact.
+      const unbilledOrderCount = await countUnbilledActiveOrders(db, input.branchId, businessDate);
+      if (financial.data) {
+        financial.data.closeGuards.unbilledOrderCount = unbilledOrderCount;
+        financial.data.closeGuards.allBillsResolved &&= unbilledOrderCount === 0;
+        if (unbilledOrderCount > 0) {
+          financial.blockers.push(
+            evidence(
+              'UNBILLED_ORDERS',
+              `${unbilledOrderCount} active orders without a live bill prevent the existing daily close.`,
+              'src/lib/restaurant/daily-close.ts#assertReadyToClose',
+              'CASHIER',
+              ['orders']
+            )
+          );
+          if (financial.status !== 'ALREADY_CLOSED') financial.status = 'BLOCKED';
+        }
       }
     } catch {
       operational = unavailable(

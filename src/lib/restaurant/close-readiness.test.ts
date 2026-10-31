@@ -294,11 +294,60 @@ describe('read-only close preparation', () => {
 
   it('does not read operational records for a financial-only consumer', async () => {
     const f = fixture();
+    f.state.unbilled.push({ id: 'private-order' });
     const packet = await f.prepare(input, { ...access, operational: false });
     expect(packet.operational.data).toBeNull();
     expect(f.db.restaurantOrder.count).not.toHaveBeenCalled();
     expect(f.db.restaurantOrder.findMany).not.toHaveBeenCalled();
+    expect(packet.financial.data?.closeGuards).not.toHaveProperty('unbilledOrderCount');
+    expect(packet.financial.data?.closeGuards.allBillsResolved).toBe(true);
+    expect(packet.financial.blockers).toEqual([]);
+    expect(JSON.stringify(packet)).not.toContain('private-order');
     expect(packet.status).toBe('UNKNOWN');
+  });
+
+  it('blocks financial preparation when authorized order evidence blocks daily close', async () => {
+    const f = fixture();
+    f.state.unbilled.push({ id: 'order1' });
+    const packet = await f.prepare();
+    expect(packet.status).toBe('BLOCKED');
+    expect(packet.financial.status).toBe('BLOCKED');
+    expect(packet.financial.data?.closeGuards).toMatchObject({
+      allBillsResolved: false,
+      openBillCount: 0,
+      unbilledOrderCount: 1,
+      openDrawerCount: 0,
+    });
+    expect(packet.financial.blockers).toMatchObject([
+      {
+        code: 'UNBILLED_ORDERS',
+        source: 'src/lib/restaurant/daily-close.ts#assertReadyToClose',
+        allowedExistingRoutes: [{ procedure: 'restaurantOrders.listOrders' }],
+      },
+    ]);
+  });
+
+  it('includes the authoritative guard for active orders without items', async () => {
+    const f = fixture();
+    // The existing operational handover predicate requires items; the close
+    // command also blocks empty active orders. Exercise that distinction.
+    f.db.restaurantOrder.count.mockResolvedValueOnce(0).mockResolvedValueOnce(1);
+    const packet = await f.prepare(input, { ...access, allowedRoutes: [] });
+    expect(packet.operational.data?.unbilledOrders.count).toBe(0);
+    expect(packet.financial.status).toBe('BLOCKED');
+    expect(packet.financial.data?.closeGuards.allBillsResolved).toBe(false);
+    expect(packet.financial.blockers[0]).toMatchObject({
+      code: 'UNBILLED_ORDERS',
+      allowedExistingRoutes: [],
+    });
+    expect(f.db.restaurantOrder.count).toHaveBeenLastCalledWith({
+      where: {
+        branchId: 'b1',
+        businessDate: date,
+        status: { in: ['OPEN', 'SENT', 'IN_PREPARATION', 'READY', 'SERVED', 'PAYMENT_PENDING'] },
+        bills: { none: { status: { in: ['OPEN', 'SETTLED'] } } },
+      },
+    });
   });
 
   it('proves tenant branch membership before domain reads and rejects missing grants', async () => {

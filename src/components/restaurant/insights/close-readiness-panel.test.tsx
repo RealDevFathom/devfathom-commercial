@@ -29,6 +29,7 @@ function packet(input: PrepareClosePacketInput): RestaurantClosePacket {
           allBillsResolved: true,
           allDrawersClosed: true,
           openBillCount: 0,
+          unbilledOrderCount: 0,
           openDrawerCount: 0,
         },
         currency: 'PKR',

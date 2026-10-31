@@ -152,6 +152,7 @@ function fixture() {
       ),
     },
     restaurantOrder: {
+      count: vi.fn(async () => 0),
       findFirst: vi.fn(async ({ where }: { where: Where }) =>
         matches({ id: 'order', branchId: 'branch' }, where)
           ? {

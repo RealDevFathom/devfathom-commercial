@@ -238,11 +238,11 @@ export function resolveChainTip<T extends CloseChainNode>(closes: readonly T[]):
 
 // ── Row loading (shared by preview / cut / correct) ───────────────────────────
 
-type LoadedInputs = AggregateInputs & {
+type LoadedFinancialInputs = AggregateInputs & {
   openBillCount: number;
-  unbilledOrderCount: number;
   openDrawerCount: number;
 };
+type LoadedInputs = LoadedFinancialInputs & { unbilledOrderCount: number };
 
 const UNRESOLVED_ORDER_STATUSES = [
   'OPEN',
@@ -253,11 +253,34 @@ const UNRESOLVED_ORDER_STATUSES = [
   'PAYMENT_PENDING',
 ] as const;
 
+/** The operational guard shared by daily close and authorized preparation reads. */
+export function countUnbilledActiveOrders(db: ScopedDb, branchId: string, businessDate: Date) {
+  // Orders whose only prior bills were voided can still be billed.
+  return db.restaurantOrder.count({
+    where: {
+      branchId,
+      businessDate,
+      status: { in: [...UNRESOLVED_ORDER_STATUSES] },
+      bills: { none: { status: { in: ['OPEN', 'SETTLED'] } } },
+    },
+  });
+}
+
 async function loadCloseInputs(
   db: ScopedDb,
   branchId: string,
   businessDate: Date
 ): Promise<LoadedInputs> {
+  const financial = await loadFinancialInputs(db, branchId, businessDate);
+  const unbilledOrderCount = await countUnbilledActiveOrders(db, branchId, businessDate);
+  return { ...financial, unbilledOrderCount };
+}
+
+async function loadFinancialInputs(
+  db: ScopedDb,
+  branchId: string,
+  businessDate: Date
+): Promise<LoadedFinancialInputs> {
   // Sequential (not Promise.all): `db` may be an interactive-transaction client,
   // which does not support concurrent queries.
   const bills = await db.restaurantBill.findMany({
@@ -271,16 +294,6 @@ async function loadCloseInputs(
       compTotal: true,
       discountTotal: true,
       grandTotal: true,
-    },
-  });
-  // A bill can still be cut for an active order whose only prior bills were
-  // voided. Such an order is unresolved even though no OPEN bill exists yet.
-  const unbilledOrderCount = await db.restaurantOrder.count({
-    where: {
-      branchId,
-      businessDate,
-      status: { in: [...UNRESOLVED_ORDER_STATUSES] },
-      bills: { none: { status: { in: ['OPEN', 'SETTLED'] } } },
     },
   });
   const tenders = await db.restaurantTender.findMany({
@@ -315,7 +328,6 @@ async function loadCloseInputs(
       countedCash: d.countedCash,
     })),
     openBillCount: bills.filter((b) => b.status === 'OPEN').length,
-    unbilledOrderCount,
     openDrawerCount: drawers.filter((d) => d.status === 'OPEN').length,
   };
 }
@@ -338,14 +350,40 @@ export type ClosePreview = CloseAggregate & {
   existingCloseId: string | null;
 };
 
+export type FinancialClosePreview = Omit<ClosePreview, 'readiness'> & {
+  readiness: Omit<ClosePreview['readiness'], 'unbilledOrderCount'>;
+};
+
 /**
  * Aggregate the persisted day without writing anything — the register/back-office
  * preview of what a cut would snapshot, plus whether the guards are satisfied and
  * whether a close already exists (in which case a correction, not a cut, is next).
  */
 export async function closePreview(db: ScopedDb, input: ClosePreviewInput): Promise<ClosePreview> {
+  const financial = await closeFinancialPreview(db, input);
+  const unbilledOrderCount = await countUnbilledActiveOrders(
+    db,
+    input.branchId,
+    financial.businessDate
+  );
+  return {
+    ...financial,
+    readiness: {
+      ...financial.readiness,
+      allBillsResolved: financial.readiness.allBillsResolved && unbilledOrderCount === 0,
+      unbilledOrderCount,
+    },
+  };
+}
+
+/** Financial reports must not read or expose operational order evidence. This
+ * previews bill/drawer guards only; close commands always apply every guard. */
+export async function closeFinancialPreview(
+  db: ScopedDb,
+  input: ClosePreviewInput
+): Promise<FinancialClosePreview> {
   const businessDate = businessDateToUtcDate(input.businessDate);
-  const loaded = await loadCloseInputs(db, input.branchId, businessDate);
+  const loaded = await loadFinancialInputs(db, input.branchId, businessDate);
   const aggregate = computeCloseAggregate(loaded);
   const existing = await db.restaurantDailyClose.findMany({
     where: { branchId: input.branchId, businessDate },
@@ -357,10 +395,9 @@ export async function closePreview(db: ScopedDb, input: ClosePreviewInput): Prom
     businessDate,
     ...aggregate,
     readiness: {
-      allBillsResolved: loaded.openBillCount === 0 && loaded.unbilledOrderCount === 0,
+      allBillsResolved: loaded.openBillCount === 0,
       allDrawersClosed: loaded.openDrawerCount === 0,
       openBillCount: loaded.openBillCount,
-      unbilledOrderCount: loaded.unbilledOrderCount,
       openDrawerCount: loaded.openDrawerCount,
     },
     existingCloseId: resolveChainTip(existing)?.id ?? null,
