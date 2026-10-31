@@ -73,4 +73,33 @@ describeDatabase('pharmacy general-journal database contract', () => {
     await expect(client.query(`UPDATE journal_immutability_test SET status = 'DRAFT' WHERE reference = 'posted'`)).rejects.toThrow(/status cannot regress/);
     await expect(client.query(`UPDATE journal_immutability_test SET "reversalEntryId" = 'unrelated-reversal' WHERE reference = 'posted'`)).rejects.toThrow(/immutable/);
   });
+
+  it('rejects forged lifecycle inserts and preserves posted and reversed evidence on delete', async () => {
+    await client.query(`CREATE TEMP TABLE journal_lifecycle_test (
+      id text, status "PharmacyGeneralJournalStatus" NOT NULL DEFAULT 'DRAFT',
+      "journalEntryId" text, "reversalEntryId" text, "postedAt" timestamp,
+      "cancelledAt" timestamp, "reversedAt" timestamp, "postKey" text,
+      "postPayloadHash" text, "reverseKey" text, "reversePayloadHash" text
+    )`);
+    await client.query(`CREATE TRIGGER journal_lifecycle_test_trigger BEFORE INSERT OR DELETE ON journal_lifecycle_test
+      FOR EACH ROW EXECUTE FUNCTION prevent_pharmacy_general_journal_lifecycle_bypass()`);
+    for (const status of ['POSTED', 'REVERSED', 'CANCELLED']) {
+      await expect(client.query(`INSERT INTO journal_lifecycle_test (id, status) VALUES ('forged', $1)`, [status]))
+        .rejects.toThrow(/unposted drafts/);
+    }
+    await expect(client.query(`INSERT INTO journal_lifecycle_test (id, "journalEntryId") VALUES ('forged', 'entry-1')`))
+      .rejects.toThrow(/unposted drafts/);
+    await client.query(`INSERT INTO journal_lifecycle_test (id) VALUES ('draft'), ('posted'), ('reversed')`);
+    // Isolate the INSERT/DELETE guard; canonical UPDATE linkage is tested above.
+    await client.query(`UPDATE journal_lifecycle_test SET status = 'POSTED' WHERE id = 'posted'`);
+    await client.query(`UPDATE journal_lifecycle_test SET status = 'REVERSED' WHERE id = 'reversed'`);
+    for (const id of ['posted', 'reversed']) {
+      await expect(client.query(`DELETE FROM journal_lifecycle_test WHERE id = $1`, [id]))
+        .rejects.toThrow(/cannot be deleted/);
+    }
+    await expect(client.query(`DELETE FROM journal_lifecycle_test WHERE id = 'draft'`)).resolves.toMatchObject({ rowCount: 1 });
+    const trigger = await client.query(`SELECT pg_get_triggerdef(oid) AS definition FROM pg_trigger
+      WHERE tgrelid = 'pharmacy_general_journal_documents'::regclass AND tgname = 'pharmacy_general_journal_lifecycle_guard'`);
+    expect(trigger.rows[0]?.definition).toMatch(/BEFORE INSERT OR DELETE/);
+  });
 });

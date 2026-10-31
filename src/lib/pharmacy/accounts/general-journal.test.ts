@@ -13,7 +13,6 @@ vi.mock('@/lib/finance/journal', () => ({
 import {
   cancelGeneralJournal,
   createGeneralJournalDraft,
-  PharmacyGeneralJournalError,
   postGeneralJournal,
   reverseGeneralJournal,
 } from './general-journal';
@@ -40,21 +39,22 @@ describe('pharmacy journal input boundary', () => {
 describe('draft creation replay', () => {
   const scope = { organizationId: 'org-1', branchId: 'branch-1', actorId: 'user-1' };
   const input = { branchId: 'branch-1', reference: 'JV-1', purpose: 'NONTRADE_OPERATING_ACCRUAL' as const, amountMinor: 100, currency: 'PKR' as const, occurredAt: new Date('2026-10-25T12:00:00Z'), evidence: ' invoice ', reason: ' accrual ', idempotencyKey: 'key-1' };
-  const baseDb = () => ({ $executeRaw: async () => 1, pharmacyGeneralJournalDocument: { findFirst: async () => null, create: async ({ data }: { data: object }) => data } });
+  type ReplayDocument = Pick<Awaited<ReturnType<typeof createGeneralJournalDraft>>, 'id'> & { createPayloadHash?: string };
+  const baseDb = () => ({ $executeRaw: async () => 1, pharmacyGeneralJournalDocument: { findFirst: async (): Promise<ReplayDocument | null> => null, create: async ({ data }: { data: object }) => data } });
 
   it('returns a same-branch replay only when the canonical payload matches', async () => {
     const first = await createGeneralJournalDraft(baseDb() as never, scope, input);
     const db = baseDb();
     db.pharmacyGeneralJournalDocument.findFirst = async () => first;
     await expect(createGeneralJournalDraft(db as never, scope, input)).resolves.toEqual(first);
-    await expect(createGeneralJournalDraft(db as never, scope, { ...input, amountMinor: 101 })).rejects.toMatchObject<Partial<PharmacyGeneralJournalError>>({ reason: 'REPLAY_MISMATCH' });
+    await expect(createGeneralJournalDraft(db as never, scope, { ...input, amountMinor: 101 })).rejects.toMatchObject({ reason: 'REPLAY_MISMATCH' });
   });
 
   it('does not return a document associated with the same key in another branch', async () => {
     const db = baseDb();
     let call = 0;
     db.pharmacyGeneralJournalDocument.findFirst = async () => (++call === 1 ? null : { id: 'other-branch-document' });
-    await expect(createGeneralJournalDraft(db as never, scope, input)).rejects.toMatchObject<Partial<PharmacyGeneralJournalError>>({ reason: 'REPLAY_MISMATCH' });
+    await expect(createGeneralJournalDraft(db as never, scope, input)).rejects.toMatchObject({ reason: 'REPLAY_MISMATCH' });
   });
 });
 

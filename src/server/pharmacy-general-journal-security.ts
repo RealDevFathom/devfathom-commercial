@@ -1,17 +1,19 @@
 import { TRPCError } from '@trpc/server';
 import { can, subjectFromSession } from '@/lib/abac';
 import { hasModule } from '@/lib/entitlements';
+import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import type { TRPCContext } from './trpc';
 
 /** Canonical authorization and tenant/active-branch resolution for every JV operation. */
 export async function authorizePharmacyGeneralJournalCapability(ctx: TRPCContext) {
-  const actorId = ctx.session?.user?.id;
+  const user = ctx.session?.user;
+  const actorId = user?.id;
   const organizationId = ctx.organization?.id;
-  if (!actorId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+  if (!user || !actorId) throw new TRPCError({ code: 'UNAUTHORIZED' });
   if (!organizationId || ctx.entitlements.organizationId !== organizationId || !hasModule(ctx.entitlements, 'pharmacy-finance')) {
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Pharmacy Finance access is required.' });
   }
-  if (!(await can(subjectFromSession(ctx.session.user), 'reports:financial', undefined, { db: ctx.db, source: 'TRPC', ip: ctx.requestMeta.ip }))) {
+  if (!(await can(subjectFromSession(user), 'reports:financial', undefined, { db: ctx.db, source: 'TRPC', ip: ctx.requestMeta.ip }))) {
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Financial permission is required.' });
   }
   return { organizationId, actorId };
@@ -20,7 +22,8 @@ export async function authorizePharmacyGeneralJournalCapability(ctx: TRPCContext
 /** Authorize a collection read and persist admission before returning protected data. */
 export async function authorizePharmacyGeneralJournalCollection(ctx: TRPCContext) {
   const scope = await authorizePharmacyGeneralJournalCapability(ctx);
-  await ctx.db.auditLog.create({
+  // Admission is durable even if the caller's business transaction rolls back.
+  await withTenantDb(scope.organizationId, (auditDb) => auditDb.auditLog.create({
     data: {
       organizationId: scope.organizationId,
       actorId: scope.actorId,
@@ -33,7 +36,7 @@ export async function authorizePharmacyGeneralJournalCollection(ctx: TRPCContext
       result: { decision: 'ADMITTED' },
       outcome: 'SUCCESS',
     },
-  });
+  }), { userId: scope.actorId, skipDrain: true });
   return scope;
 }
 
@@ -42,7 +45,7 @@ export async function authorizePharmacyGeneralJournal(ctx: TRPCContext, branchId
   const { organizationId, actorId } = await authorizePharmacyGeneralJournalCapability(ctx);
   const branch = await ctx.db.pharmacyBranch.findFirst({ where: { organizationId, id: branchId, active: true }, select: { id: true } });
   if (!branch) throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
-  await ctx.db.auditLog.create({
+  await withTenantDb(organizationId, (auditDb) => auditDb.auditLog.create({
     data: {
       organizationId,
       actorId,
@@ -55,6 +58,6 @@ export async function authorizePharmacyGeneralJournal(ctx: TRPCContext, branchId
       result: { decision: 'ADMITTED' },
       outcome: 'SUCCESS',
     },
-  });
+  }), { userId: actorId, skipDrain: true });
   return { organizationId, branchId: branch.id, actorId };
 }
