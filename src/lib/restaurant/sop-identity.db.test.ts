@@ -269,7 +269,10 @@ describeIfDatabase('SOP authenticated identity PostgreSQL regression', () => {
     });
     expect(credential?.failedAttempts).toBe(0);
     expect(credential?.lockedUntil).toBeInstanceOf(Date);
-    await expect(api.waive(waiver())).rejects.toMatchObject({ code: 'TOO_MANY_REQUESTS' });
+    await expect(api.waive(waiver())).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Approving credential is invalid or locked.',
+    });
     expect(await tenantDb(dbIds.organization).restaurantCoAuthorization.count()).toBe(0);
   }, 30000);
 
@@ -293,7 +296,10 @@ describeIfDatabase('SOP authenticated identity PostgreSQL regression', () => {
     });
     expect(credential?.lockedUntil).toBeInstanceOf(Date);
     expect(credential?.failedAttempts).toBe(0);
-    await expect(api.waive(waiver())).rejects.toMatchObject({ code: 'TOO_MANY_REQUESTS' });
+    await expect(api.waive(waiver())).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Approving credential is invalid or locked.',
+    });
     expect(await db.restaurantCoAuthorization.count()).toBe(0);
   }, 30000);
 

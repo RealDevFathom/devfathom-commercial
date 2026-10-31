@@ -651,7 +651,8 @@ export const restaurantSopExecutionRouter = router({
         });
         if (!auth.ok) {
           throw new TRPCError({
-            code: auth.reason === 'LOCKED' ? 'TOO_MANY_REQUESTS' : 'FORBIDDEN',
+            // One code for every refusal: callers must not learn lockout state.
+            code: 'FORBIDDEN',
             message: 'Approving credential is invalid or locked.',
           });
         }

@@ -799,7 +799,8 @@ describe('authenticated SOP identity boundary', () => {
       occurrence('MISSED');
       mocks.authenticateOperator.mockResolvedValue({ ok: false, reason });
       await expect(caller().waive(waiver)).rejects.toMatchObject({
-        code: reason === 'LOCKED' ? 'TOO_MANY_REQUESTS' : 'FORBIDDEN',
+        code: 'FORBIDDEN',
+        message: 'Approving credential is invalid or locked.',
       });
       expect(db.restaurantCoAuthorization.create).not.toHaveBeenCalled();
       expect(db.restaurantSopVerification.create).not.toHaveBeenCalled();
@@ -959,7 +960,8 @@ describe('authenticated SOP identities', () => {
       });
       mocks.authenticateOperator.mockResolvedValue({ ok: false, reason });
       await expect(caller().waive(waiver)).rejects.toMatchObject({
-        code: reason === 'LOCKED' ? 'TOO_MANY_REQUESTS' : 'FORBIDDEN',
+        code: 'FORBIDDEN',
+        message: 'Approving credential is invalid or locked.',
       });
       expect(db.restaurantCoAuthorization.create).not.toHaveBeenCalled();
       expect(db.restaurantSopOccurrence.update).not.toHaveBeenCalled();
