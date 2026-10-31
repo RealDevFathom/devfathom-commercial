@@ -1017,6 +1017,19 @@ function ScopedPharmacyCounterConsole({
       );
       if (search.revision !== scannerRevision.current || result.rows.length !== 1) return;
       const row = result.rows[0]!;
+      // #719: a shelf label names one exact lot. When FEFO would draw another,
+      // stage the labelled batch as an override; the pharmacist still records why.
+      const labelLotId = row.labelLotId ?? null;
+      if (labelLotId && labelLotId !== row.recommendedLotId) {
+        stageRow(row);
+        setLotOverride({ inventoryLotId: labelLotId, reason: '' });
+        setNotice({
+          tone: 'warning',
+          message:
+            'This shelf label is for a batch FEFO would not sell first. Enter a reason to sell the labelled batch, or choose the FEFO batch.',
+        });
+        return;
+      }
       const restage =
         activeRow?.medicineId !== row.medicineId || saleUnit !== (row.saleUnits[0]?.kind ?? null);
       if (restage) stageRow(row);

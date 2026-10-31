@@ -63,6 +63,8 @@ import {
   roleDashboard,
   snoozeSignal,
 } from '@/lib/pharmacy/stock-signals-operations';
+import { buildShelfLabels, MAX_SHELF_LABELS } from '@/lib/pharmacy/shelf-label';
+import { readShelfLabelSources } from '@/lib/pharmacy/shelf-label-source';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
   CsvTemperatureReadingSource,
@@ -82,6 +84,7 @@ import type { TRPCContext } from '../trpc';
 
 const branchId = z.string().trim().min(1).max(128);
 const expiryPrecision = z.enum(['DAY', 'MONTH']);
+const shelfLabelFormat = z.enum(['38x25', '50x25', 'A4']);
 const regulatory = capabilityProcedure('pharmacy:safety');
 // Storage zones and their cold-chain readings belong to whoever runs the stock
 // (the Inventory role, or `pharmacy:*`). Checked through `can()` before any read.
@@ -565,6 +568,106 @@ async function receiveTransferWithVariance(
 }
 
 export const pharmacyInventoryRouter = router({
+  // ── #719 — shelf and price labels for unbarcoded or loose stock ───────────
+
+  /** Active branches a label run may be printed for. */
+  shelfLabelBranches: inventoryControl.query(async ({ ctx }) => {
+    const { organizationId } = actorFor(ctx);
+    return ctx.db.pharmacyBranch.findMany({
+      where: { organizationId, active: true },
+      select: { id: true, name: true },
+      orderBy: [{ name: 'asc' }, { id: 'asc' }],
+    });
+  }),
+
+  /** Received lots from a posted GRN, the medicine list, or a search. */
+  shelfLabelLots: inventoryControl
+    .input(
+      z
+        .object({
+          branchId,
+          goodsReceiptId: z.string().trim().min(1).max(128).optional(),
+          query: z.string().trim().max(120).optional(),
+          after: z.string().trim().min(1).max(128).optional(),
+        })
+        .strict()
+    )
+    .query(async ({ ctx, input }) =>
+      readShelfLabelSources(ctx.db, await scopeFor(ctx, input.branchId), input)
+    ),
+
+  /**
+   * Render the labels from server-owned lot data. Only lot IDs and counts come
+   * from the client; name, strength, MRP, expiry and barcode are re-read here.
+   * Nothing in stock or pricing changes; the print run is audited.
+   */
+  printShelfLabels: inventoryControl
+    .input(
+      z
+        .object({
+          branchId,
+          goodsReceiptId: z.string().trim().min(1).max(128).optional(),
+          format: shelfLabelFormat,
+          items: z
+            .array(
+              z
+                .object({
+                  inventoryLotId: z.string().trim().min(1).max(128),
+                  count: z.number().int().min(1).max(MAX_SHELF_LABELS),
+                })
+                .strict()
+            )
+            .min(1)
+            .max(100),
+        })
+        .strict()
+        .refine(
+          (value) =>
+            new Set(value.items.map((item) => item.inventoryLotId)).size === value.items.length,
+          { message: 'Each lot may appear once.', path: ['items'] }
+        )
+        .refine(
+          (value) => value.items.reduce((sum, item) => sum + item.count, 0) <= MAX_SHELF_LABELS,
+          { message: 'At most 5,000 labels per print request.', path: ['items'] }
+        )
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scope = await scopeFor(ctx, input.branchId);
+      const { rows } = await readShelfLabelSources(ctx.db, scope, {
+        goodsReceiptId: input.goodsReceiptId,
+        inventoryLotIds: input.items.map((item) => item.inventoryLotId),
+      });
+      const countByLot = new Map(input.items.map((item) => [item.inventoryLotId, item.count]));
+      const labels = rows.map((row) => ({ ...row, count: countByLot.get(row.inventoryLotId) ?? 0 }));
+      const total = labels.reduce((sum, row) => sum + row.count, 0);
+      ctx.audit.detail = {
+        category: 'PHARMACY',
+        action: 'shelf_label_print',
+        description: `Printed ${total} shelf and price labels.`,
+        targetType: 'PharmacyInventoryLot',
+        metadata: {
+          branchId: scope.branchId,
+          goodsReceiptId: input.goodsReceiptId ?? null,
+          format: input.format,
+          totalLabels: total,
+          lots: labels.map((row) => ({
+            inventoryLotId: row.inventoryLotId,
+            code: row.code,
+            count: row.count,
+            packMrpMinor: row.packMrpMinor,
+          })),
+        },
+      };
+      try {
+        return { html: buildShelfLabels(labels, input.format), total };
+      } catch (error) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: error instanceof Error ? error.message : 'Labels could not be prepared.',
+        });
+      }
+    }),
+
   ingestDrapManual: regulatory
     .input(z.object({ notices: z.array(drapNotice).min(1).max(100) }).strict())
     .mutation(async ({ ctx, input }) =>

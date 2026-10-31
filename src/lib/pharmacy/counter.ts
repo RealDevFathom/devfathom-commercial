@@ -30,6 +30,7 @@ import {
 import { counterReceiptTotals, type CounterReceipt } from './counter-receipt';
 import { normalizeMedicineText } from './medicine';
 import { readReceiptIdentity } from './receipt-identity';
+import { parseShelfLabelCode } from './shelf-label-code';
 import type { LedgerScope } from './stock-ledger';
 
 export class PharmacyCounterError extends Error {
@@ -94,6 +95,11 @@ export type CounterSearchRow = {
   };
   /** Why otherwise-present stock cannot be sold, deduplicated (INV-03). */
   blocked: BlockReason[];
+  /**
+   * #719: the exact lot a scanned internal shelf label names, in this branch.
+   * Absent for every other kind of search.
+   */
+  labelLotId?: string | null;
 };
 
 type LotRow = {
@@ -260,7 +266,28 @@ export async function searchCounterCatalog(
 ): Promise<{ rows: CounterSearchRow[]; truncated: boolean }> {
   const limit = Math.min(Math.max(input.limit ?? DEFAULT_LIMIT, 1), MAX_LIMIT);
   const at = input.at ?? new Date();
-  const matches = await matchMedicineIds(db, scope, input.query, limit);
+  // #719: an internal shelf label resolves to one lot of this branch and wins
+  // outright, exactly like a manufacturer barcode; it never falls back to a
+  // fuzzy search, and a label from another branch or tenant matches nothing.
+  const labelNumber = parseShelfLabelCode(input.query);
+  let labelLot: { id: string; medicineId: string } | null = null;
+  let matches: Map<string, CounterMatchKind>;
+  if (labelNumber !== null) {
+    const lot = await db.pharmacyInventoryLot.findFirst({
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        shelfLabelNumber: labelNumber,
+        batch: { medicine: { saleable: true } },
+      },
+      select: { id: true, batch: { select: { medicineId: true } } },
+    });
+    if (!lot) return { rows: [], truncated: false };
+    labelLot = { id: lot.id, medicineId: lot.batch.medicineId };
+    matches = new Map([[labelLot.medicineId, 'BARCODE']]);
+  } else {
+    matches = await matchMedicineIds(db, scope, input.query, limit);
+  }
   const medicineIds = [...matches.keys()].slice(0, limit);
   if (medicineIds.length === 0) return { rows: [], truncated: false };
 
@@ -475,6 +502,7 @@ export async function searchCounterCatalog(
         locationName: location?.name ?? null,
       },
       blocked: [...blocked].sort(),
+      ...(labelLot && labelLot.medicineId === medicine.id ? { labelLotId: labelLot.id } : {}),
     });
   }
 

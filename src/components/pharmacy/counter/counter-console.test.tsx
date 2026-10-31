@@ -1278,6 +1278,74 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
     expect(mocks.mutations.addLine).not.toHaveBeenCalled();
   });
 
+  it.each(['fefo', 'other'] as const)(
+    '#719 a scanned shelf label selects its exact lot (%s batch)',
+    async (mode) => {
+      const row = {
+        medicineId: 'med-label',
+        displayName: 'Loose Strip',
+        brandName: null,
+        manufacturer: null,
+        strength: '500 mg',
+        presentationId: 'presentation-a',
+        presentation: 'Tablet',
+        dosageForm: 'Tablet',
+        route: 'Oral',
+        matchedOn: 'BARCODE',
+        recommendedLotId: 'lot-fefo',
+        labelLotId: mode === 'fefo' ? 'lot-fefo' : 'lot-labelled',
+        packLevelId: 'pack-a',
+        unitsPerPack: 1,
+        printedMrpMinor: 10000,
+        roundingIncrementMinor: 1,
+        batchNumber: 'B-1',
+        nearestSafeExpiry: '2028-06-30T00:00:00.000Z',
+        onHandUnits: 10,
+        saleableUnits: [],
+        saleUnits: [
+          { kind: 'UNIT', packLevelId: 'pack-a', levelLabel: 'UNIT', canonicalUnitsPerSaleUnit: 1 },
+        ],
+        restriction: {
+          rx: false,
+          otc: true,
+          restricted: false,
+          controlled: false,
+          highAlert: false,
+          lasa: false,
+        },
+        storage: { coldChain: false, locationKind: 'STORE', locationCode: 'A', locationName: 'Store' },
+        blocked: [],
+      };
+      mocks.queries.counterSearch = query({ rows: [row] });
+      mocks.mutations.addLine!.mockResolvedValue({});
+      render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      const search = screen.getByLabelText('Scan or search');
+      fireEvent.change(search, { target: { value: '7100000000000041' } });
+      fireEvent.keyDown(search, { key: 'Enter' });
+      await waitFor(() =>
+        expect(mocks.searchFetch).toHaveBeenCalledWith(
+          { branchId: 'branch-a', query: '7100000000000041' },
+          { staleTime: 10_000 }
+        )
+      );
+      if (mode === 'fefo') {
+        await waitFor(() =>
+          expect(mocks.mutations.addLine).toHaveBeenCalledWith(
+            expect.objectContaining({ medicineId: 'med-label', quantity: 1 })
+          )
+        );
+        expect(mocks.mutations.addLine!.mock.calls[0]![0]).not.toHaveProperty('override');
+        return;
+      }
+      // A non-FEFO labelled batch is staged as an override; nothing is sold
+      // until the pharmacist records why.
+      expect(
+        await screen.findByText(/This shelf label is for a batch FEFO would not sell first/)
+      ).toBeInTheDocument();
+      expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+    }
+  );
+
   it('does not run F9 while a field is focused or a dialog is open', () => {
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     const amount = screen.getByLabelText('Amount');

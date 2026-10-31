@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import type * as React from 'react';
 import { revalidatePath } from 'next/cache';
+import Link from 'next/link';
 import { PurchasingActionForm } from '../_components/action-form';
 import { PurchasingOutcomeScope, PurchasingOutcomes } from '../_components/action-outcomes';
 
@@ -1339,6 +1340,14 @@ function ReceiptDetail({
               ))}
             </ul>
           )}
+          {lots.length > 0 ? (
+            <Link
+              className="mt-2 inline-flex min-h-11 items-center text-sm text-text-strong underline focus-visible:outline-2 focus-visible:outline-ring"
+              href={`/pharmacy/inventory/labels?${new URLSearchParams({ branch: branchId, receipt: receipt.id })}`}
+            >
+              Print shelf and price labels for this GRN
+            </Link>
+          ) : null}
         </div>
       ) : null}
 
