@@ -5,6 +5,10 @@
     {
       "path": "/api/platform/jobs/process",
       "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/pharmacy/chronic-refills/process",
+      "schedule": "0 * * * *"
     }
   ]
 }

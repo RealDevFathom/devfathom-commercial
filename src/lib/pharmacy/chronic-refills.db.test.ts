@@ -95,7 +95,13 @@ beforeAll(async () => {
         organizationId,
         key: 'refill-staff',
         name: 'Refill staff',
-        permissions: { create: { organizationId, capability: 'pharmacy:orders', effect: 'ALLOW' } },
+        // Releasing an Rx cycle needs the same grant as selling an Rx line.
+        permissions: {
+          create: [
+            { organizationId, capability: 'pharmacy:orders', effect: 'ALLOW' },
+            { organizationId, capability: 'pharmacy:dispense', effect: 'ALLOW' },
+          ],
+        },
       },
     });
     for (const id of [actorId, cashierId])
@@ -246,7 +252,7 @@ async function approveRx() {
         requestedByUserId: cashierId,
       },
     });
-    return db.pharmacyPharmacistReviewDecision.create({
+    const decision = await db.pharmacyPharmacistReviewDecision.create({
       data: {
         organizationId,
         reviewItemId: item.id,
@@ -255,6 +261,7 @@ async function approveRx() {
         signedAt: now,
       },
     });
+    return Object.assign(decision, { saleId: sale.id });
   });
 }
 
@@ -363,8 +370,15 @@ describeIfDatabase('chronic refill runtime regressions', () => {
       const lines = await tenant((db) =>
         db.pharmacySaleLine.findMany({ where: { saleId: checkout.saleId } })
       );
+      // The refill dispenses against its prescription: completion records the fill.
       expect(lines).toEqual([
-        expect.objectContaining({ medicineId: rx.medicineId, quantity: 1, canonicalUnits: 10 }),
+        expect.objectContaining({
+          medicineId: rx.medicineId,
+          quantity: 1,
+          canonicalUnits: 10,
+          prescriptionLineId,
+          prescriptionPatientId: patientId,
+        }),
       ]);
       const another = await subscribe(rx, { prescriptionLineId });
       await expect(
@@ -378,6 +392,39 @@ describeIfDatabase('chronic refill runtime regressions', () => {
       ).rejects.toMatchObject({ reason: 'PHARMACIST_APPROVAL_REQUIRED' });
     }
   );
+
+  it('refuses a pharmacist signature made before the subscription existed', async () => {
+    const stale = await approveRx();
+    const subscription = await subscribe(rx, { prescriptionLineId });
+    await expect(
+      tenant((db) =>
+        createDueChronicRefillOrder(db, scope, {
+          subscriptionId: subscription.id,
+          pharmacistDecisionId: stale.id,
+          now,
+        })
+      )
+    ).rejects.toMatchObject({ reason: 'PHARMACIST_APPROVAL_REQUIRED' });
+  });
+
+  it('keeps a consumed signature from also completing its reviewed sale', async () => {
+    const subscription = await subscribe(rx, { prescriptionLineId });
+    const approval = await approveRx();
+    await tenant((db) =>
+      createDueChronicRefillOrder(db, scope, {
+        subscriptionId: subscription.id,
+        pharmacistDecisionId: approval.id,
+        now,
+      })
+    );
+    await expect(
+      tenant(
+        (db) => db.$executeRaw`
+        UPDATE pharmacy_sales SET status = 'COMPLETED' WHERE id = ${approval.saleId}
+      `
+      )
+    ).rejects.toThrow(/consumed by a chronic refill cycle/);
+  });
 
   it('refuses Rx handoff without an approved cycle', async () => {
     const order = await tenant((db) =>

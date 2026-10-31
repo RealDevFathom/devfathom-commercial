@@ -7,6 +7,7 @@ import { blockReasonFor, planAllocation, PharmacyInventoryError } from './invent
 import { priceFromLot } from './medicine';
 import { deliveryTotals } from './customer-delivery';
 import { saleTotalMinor } from './settlement';
+import { attachPrescriptionReference } from './rx-prescription-reference';
 import { addReservedSaleLine, createSale } from './sales';
 import type { LedgerScope } from './stock-ledger';
 
@@ -71,6 +72,8 @@ type ReservationCandidate = {
 };
 
 const ACTIVE_ORDER_STATUSES: CustomerOrderStatus[] = ['PROPOSED', 'ACCEPTED', 'PACKING'];
+/** Upper bound for an internal scheduled-order stock hold. */
+const MAX_SCHEDULED_HOLD_MS = 14 * 86_400_000;
 
 export function isCustomerOrderableMedicine(
   medicine: {
@@ -326,6 +329,11 @@ export async function placeCustomerOrder(
     city?: string;
     deliveryInstructions?: string;
     reservationMinutes?: number;
+    /**
+     * Internal staff-only hold for scheduled orders (chronic refills). Bounded so a caller
+     * cannot pin stock indefinitely; public order callers must never set this.
+     */
+    reservationExpiresAt?: Date;
     /** Internal clinical gate. Public order callers must never set this. */
     reviewedRx?: boolean;
     lines: Array<{
@@ -370,9 +378,17 @@ export async function placeCustomerOrder(
       city: input.fulfillment === 'DELIVER' ? city : null,
       deliveryInstructions:
         input.fulfillment === 'DELIVER' ? input.deliveryInstructions?.trim() || null : null,
-      reservationExpiresAt: new Date(
-        Date.now() + Math.min(Math.max(input.reservationMinutes ?? 30, 5), 120) * 60_000
-      ),
+      reservationExpiresAt:
+        input.staff && input.reservationExpiresAt
+          ? new Date(
+              Math.min(
+                Math.max(input.reservationExpiresAt.getTime(), Date.now() + 5 * 60_000),
+                Date.now() + MAX_SCHEDULED_HOLD_MS
+              )
+            )
+          : new Date(
+              Date.now() + Math.min(Math.max(input.reservationMinutes ?? 30, 5), 120) * 60_000
+            ),
     },
   });
 
@@ -837,7 +853,8 @@ export async function startCustomerOrderCheckout(
     data: { customerId: order.customerId },
   });
   for (const line of order.lines) {
-    await addReservedSaleLine(
+    const reviewedRx = reservations.some((row) => row.orderLineId === line.id && row.reviewedRx);
+    const added = await addReservedSaleLine(
       db,
       scope,
       {
@@ -852,7 +869,7 @@ export async function startCustomerOrderCheckout(
       },
       {
         expiresAt: order.reservationExpiresAt,
-        reviewedRx: reservations.some((row) => row.orderLineId === line.id && row.reviewedRx),
+        reviewedRx,
         allocations: reservations
           .filter((row) => row.orderLineId === line.id)
           .map((row) => ({
@@ -862,6 +879,35 @@ export async function startCustomerOrderCheckout(
           })),
       }
     );
+    if (reviewedRx) {
+      // A signed chronic refill cycle dispenses against its prescription: the sale line carries
+      // the reference, and completion records the immutable fill (and re-checks the remainder).
+      const [reference] = await db.$queryRaw<
+        { prescriptionLineId: string; patientId: string }[]
+      >(Prisma.sql`
+        SELECT subscription."prescriptionLineId", customer."patientId"
+        FROM "pharmacy_chronic_refill_cycles" cycle
+        JOIN "pharmacy_chronic_refill_subscriptions" subscription
+          ON subscription."organizationId" = cycle."organizationId"
+         AND subscription."branchId" = cycle."branchId" AND subscription."id" = cycle."subscriptionId"
+        JOIN "pharmacy_customers" customer
+          ON customer."organizationId" = subscription."organizationId"
+         AND customer."id" = subscription."customerId"
+        WHERE cycle."organizationId" = ${scope.organizationId}
+          AND cycle."branchId" = ${scope.branchId} AND cycle."orderId" = ${order.id}
+          AND cycle."pharmacistDecisionId" IS NOT NULL
+          AND subscription."prescriptionLineId" IS NOT NULL
+          AND subscription."medicineId" = ${line.medicineId}
+          AND subscription."presentationId" = ${line.presentationId}
+        LIMIT 1
+      `);
+      if (!reference) throw new PharmacyCustomerOrderError('RESERVATION_UNAVAILABLE');
+      await attachPrescriptionReference(db, scope, {
+        prescriptionLineId: reference.prescriptionLineId,
+        patientId: reference.patientId,
+        saleLineId: added.line.id,
+      });
+    }
   }
   await db.pharmacyCustomerOrder.update({
     where: { organizationId_id: { organizationId: scope.organizationId, id: order.id } },

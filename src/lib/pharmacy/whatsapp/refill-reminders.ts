@@ -109,8 +109,10 @@ export async function processDueWhatsAppRefillReminders(
 
   const limit = Math.max(1, Math.min(500, Math.floor(options.limit ?? 100)));
   const windowEnd = new Date(now.getTime() + config.reminderLeadDays * DAY_MS);
-  const captures = await withPlatformDb((db) =>
-    db.$queryRaw<DueCapture[]>(Prisma.sql`
+  // Each source has its own budget: chronic subscriptions skipped for consent, quiet hours or the
+  // daily cap (which write no log row) must never crowd prescription refill captures out.
+  const captures = await withPlatformDb(async (db) => [
+    ...(await db.$queryRaw<DueCapture[]>(Prisma.sql`
       SELECT capture."id", capture."organizationId", capture."branchId", capture."patientId",
              line."medicineId", capture."medicineName", capture."directionsEnglish",
              capture."quantityDispensed", fill."dispensedAt", NULL::text AS "subscriptionId",
@@ -128,7 +130,12 @@ export async function processDueWhatsAppRefillReminders(
           WHERE log."organizationId" = capture."organizationId"
             AND log."refillCaptureId" = capture."id"
         )
-      UNION ALL
+      ORDER BY capture."expectedExhaustionAt", capture."id"
+      LIMIT ${limit}
+    `)),
+    // "nextDueAt" is a UTC timestamp without time zone; format it directly so the key matches
+    // the JS toISOString() key whatever the database session TimeZone is.
+    ...(await db.$queryRaw<DueCapture[]>(Prisma.sql`
       SELECT subscription."id", subscription."organizationId", subscription."branchId",
              customer."patientId", subscription."medicineId", '' AS "medicineName",
              '' AS "directionsEnglish", subscription."quantityPacks" AS "quantityDispensed",
@@ -138,17 +145,18 @@ export async function processDueWhatsAppRefillReminders(
       JOIN "pharmacy_customers" customer
         ON customer."organizationId" = subscription."organizationId"
        AND customer."id" = subscription."customerId"
-      WHERE subscription."active" AND subscription."reminderConsentId" IS NOT NULL
+      WHERE subscription."active" AND subscription."cancelledAt" IS NULL
+        AND subscription."reminderConsentId" IS NOT NULL
         AND subscription."nextDueAt" > ${now} AND subscription."nextDueAt" <= ${windowEnd}
         AND NOT EXISTS (
           SELECT 1 FROM "pharmacy_message_logs" log
           WHERE log."organizationId" = subscription."organizationId"
-            AND log."dedupeKey" = 'chronic-refill:' || subscription."id" || ':' || to_char(subscription."nextDueAt" AT TIME ZONE 'UTC', 'YYYY-MM-DD')
+            AND log."dedupeKey" = 'chronic-refill:' || subscription."id" || ':' || to_char(subscription."nextDueAt", 'YYYY-MM-DD')
         )
-      ORDER BY "subscriptionDueAt" NULLS LAST, "id"
+      ORDER BY subscription."nextDueAt", subscription."id"
       LIMIT ${limit}
-    `)
-  );
+    `)),
+  ]);
 
   for (const capture of captures) {
     result.scanned += 1;

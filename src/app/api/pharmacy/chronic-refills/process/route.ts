@@ -23,3 +23,6 @@ export async function POST(request: Request) {
   const limit = typeof input.limit === 'number' && Number.isFinite(input.limit) ? input.limit : 100;
   return NextResponse.json(await processDueChronicRefills({ limit }));
 }
+
+// Vercel Cron invokes scheduled paths with GET and the same bearer secret.
+export const GET = POST;

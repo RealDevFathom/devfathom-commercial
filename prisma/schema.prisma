@@ -240,6 +240,7 @@ model PharmacyBranch {
   visibilityUnfulfilledDemandEvent         UnfulfilledDemandEvent[]          @relation("UnfulfilledDemandEventVisibilityAnchor")
   visibilityPharmacyRestockInterest        PharmacyRestockInterest[]         @relation("PharmacyRestockInterestVisibilityAnchor")
   branchAssignments                        PharmacyBranchAssignment[]
+  chronicRefillSubscriptions PharmacyChronicRefillSubscription[]
 
   @@unique([organizationId, id], map: "pharmacy_branches_org_id_key")
   @@unique([organizationId, code], map: "pharmacy_branches_org_code_key")
@@ -497,6 +498,7 @@ model Medicine {
   priceChangeProposals         PharmacyPriceChangeProposal[]
   connectorProposals           PharmacyReferenceConnectorProposal[]
   customerOrderLines           PharmacyCustomerOrderLine[]
+  chronicRefillSubscriptions PharmacyChronicRefillSubscription[]
 
   @@unique([organizationId, id], map: "pharmacy_medicines_org_id_key")
   @@index([organizationId, productName])
@@ -534,6 +536,7 @@ model Presentation {
   prescriptionLines  PrescriptionLine[]
   pharmacySaleLines  PharmacySaleLine[]
   customerOrderLines PharmacyCustomerOrderLine[]
+  chronicRefillSubscriptions PharmacyChronicRefillSubscription[]
 
   @@index([organizationId, medicineId])
   @@map("pharmacy_presentations")
@@ -568,6 +571,7 @@ model PackLevel {
   inventoryLots         PharmacyInventoryLot[]
   saleLines             PharmacySaleLine[]
   customerOrderLines    PharmacyCustomerOrderLine[]
+  chronicRefillSubscriptions PharmacyChronicRefillSubscription[]
 
   @@unique([organizationId, id], map: "pharmacy_pack_levels_org_id_key")
   @@unique([organizationId, versionGroupId, version])
@@ -1143,6 +1147,7 @@ model PharmacyCustomer {
   orders                 PharmacyCustomerOrder[]
   whatsappOptIn          Boolean?
   whatsappOptInChangedAt DateTime?                    @db.Timestamp(3)
+  chronicRefillSubscriptions PharmacyChronicRefillSubscription[]
 
   @@unique([organizationId, id])
   @@unique([organizationId, patientId])
@@ -1753,6 +1758,7 @@ model PharmacyCustomerOrder {
   events      PharmacyCustomerOrderEvent[]
 
   deliveryEvidence PharmacyOrderDeliveryEvidence[]
+  chronicRefillCycles PharmacyChronicRefillCycle[]
 
   @@unique([organizationId, id])
   @@unique([organizationId, branchId, id])
@@ -2881,6 +2887,9 @@ model User {
 
   hotelPropertyAssignments HotelPropertyAssignment[]
   pharmacyBranchAssignments PharmacyBranchAssignment[]
+  chronicRefillSubscriptionsCreated PharmacyChronicRefillSubscription[]
+  chronicRefillCyclesCreated PharmacyChronicRefillCycle[]
+  chronicRefillEvents PharmacyChronicRefillEvent[]
 
   @@unique([organizationId, id])
   @@unique([organizationId, email])
@@ -12209,6 +12218,7 @@ model PatientConsent {
   supersedes       PatientConsent?                 @relation("ConsentVersions", fields: [organizationId, supersedesId], references: [organizationId, id], onDelete: Restrict)
   supersededBy     PatientConsent[]                @relation("ConsentVersions")
   reminderCaptures PharmacyRefillReminderCapture[]
+  chronicRefillSubscriptions PharmacyChronicRefillSubscription[]
 
   @@unique([organizationId, id])
   @@unique([organizationId, patientId, purpose, channel, version])
@@ -12305,6 +12315,7 @@ model PrescriptionLine {
   presentation              Presentation                      @relation(fields: [presentationId], references: [id], onDelete: Restrict)
   fills                     PrescriptionFill[]
   saleLines                 PharmacySaleLine[]
+  chronicRefillSubscriptions PharmacyChronicRefillSubscription[]
 
   @@unique([organizationId, id])
   @@unique([organizationId, prescriptionId, lineNumber])
@@ -12370,6 +12381,92 @@ model PharmacyRefillReminderCapture {
   @@map("pharmacy_refill_reminder_captures")
 }
 
+enum PharmacyChronicRefillPayment {
+  PREPAY
+  KHATA
+}
+
+/// #743 recurring chronic refill pack. Rx subscriptions need a fresh pharmacist signature per cycle.
+model PharmacyChronicRefillSubscription {
+  id                   String                           @id
+  organizationId       String                           @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId             String
+  customerId           String
+  medicineId           String
+  presentationId       String
+  packLevelId          String
+  quantityPacks        Int
+  prescriptionLineId   String?
+  reminderConsentId    String?
+  fulfillment          PharmacyCustomerOrderFulfillment
+  paymentMode          PharmacyChronicRefillPayment
+  addressLine          String?
+  city                 String?
+  deliveryInstructions String?
+  cadenceDays          Int
+  nextDueAt            DateTime
+  active               Boolean                          @default(true)
+  cancelledAt          DateTime?
+  createdByUserId      String
+  createdAt            DateTime                         @default(now())
+  updatedAt            DateTime                         @default(now()) @updatedAt
+  schedulerRetryAt     DateTime?
+  schedulerFailure     String?
+  branch               PharmacyBranch                   @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: NoAction, map: "pharmacy_chronic_refill_subscription_branch_fkey")
+  customer             PharmacyCustomer                 @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict, onUpdate: NoAction, map: "pharmacy_chronic_refill_subscription_customer_fkey")
+  medicine             Medicine                         @relation(fields: [organizationId, medicineId], references: [organizationId, id], onDelete: Restrict, onUpdate: NoAction, map: "pharmacy_chronic_refill_subscription_medicine_fkey")
+  presentation         Presentation                     @relation(fields: [presentationId], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "pharmacy_chronic_refill_subscription_presentation_fkey")
+  packLevel            PackLevel                        @relation(fields: [organizationId, packLevelId], references: [organizationId, id], onDelete: Restrict, onUpdate: NoAction, map: "pharmacy_chronic_refill_subscription_pack_fkey")
+  prescriptionLine     PrescriptionLine?                @relation(fields: [organizationId, prescriptionLineId], references: [organizationId, id], onDelete: Restrict, onUpdate: NoAction, map: "pharmacy_chronic_refill_subscription_prescription_fkey")
+  reminderConsent      PatientConsent?                  @relation(fields: [organizationId, reminderConsentId], references: [organizationId, id], onDelete: Restrict, onUpdate: NoAction, map: "pharmacy_chronic_refill_subscription_reminder_consent_fkey")
+  createdBy            User                             @relation(fields: [organizationId, createdByUserId], references: [organizationId, id], onDelete: Restrict, onUpdate: NoAction, map: "pharmacy_chronic_refill_subscription_user_fkey")
+  cycles               PharmacyChronicRefillCycle[]
+  events               PharmacyChronicRefillEvent[]
+
+  @@unique([organizationId, branchId, id], map: "pharmacy_chronic_refill_subscription_scope_key")
+  @@index([organizationId, branchId, active, nextDueAt], map: "pharmacy_chronic_refill_subscription_due_idx")
+  @@map("pharmacy_chronic_refill_subscriptions")
+}
+
+/// One released cycle (order + stock hold) per subscription due date. Append-only.
+model PharmacyChronicRefillCycle {
+  id                   String                            @id
+  organizationId       String                            @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId             String
+  subscriptionId       String
+  dueAt                DateTime
+  orderId              String
+  pharmacistDecisionId String?
+  createdByUserId      String
+  createdAt            DateTime                          @default(now())
+  subscription         PharmacyChronicRefillSubscription @relation(fields: [organizationId, branchId, subscriptionId], references: [organizationId, branchId, id], onDelete: Restrict, onUpdate: NoAction, map: "pharmacy_chronic_refill_cycle_subscription_fkey")
+  order                PharmacyCustomerOrder             @relation(fields: [organizationId, branchId, orderId], references: [organizationId, branchId, id], onDelete: Restrict, onUpdate: NoAction, map: "pharmacy_chronic_refill_cycle_order_fkey")
+  pharmacistDecision   PharmacyPharmacistReviewDecision? @relation(fields: [organizationId, pharmacistDecisionId], references: [organizationId, id], onDelete: Restrict, onUpdate: NoAction, map: "pharmacy_chronic_refill_cycle_pharmacist_fkey")
+  createdBy            User                              @relation(fields: [organizationId, createdByUserId], references: [organizationId, id], onDelete: Restrict, onUpdate: NoAction, map: "pharmacy_chronic_refill_cycle_user_fkey")
+
+  @@unique([organizationId, branchId, subscriptionId, dueAt], map: "pharmacy_chronic_refill_cycle_once_key")
+  @@unique([organizationId, pharmacistDecisionId], map: "pharmacy_chronic_refill_cycle_approval_once_key")
+  @@index([organizationId, branchId, orderId], map: "pharmacy_chronic_refill_cycle_order_idx")
+  @@map("pharmacy_chronic_refill_cycles")
+}
+
+/// Immutable staff/scheduler evidence for subscription edits and lifecycle changes.
+model PharmacyChronicRefillEvent {
+  id             String                            @id
+  organizationId String                            @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  subscriptionId String
+  kind           String
+  actorUserId    String
+  details        Json                              @default("{}")
+  createdAt      DateTime                          @default(now())
+  subscription   PharmacyChronicRefillSubscription @relation(fields: [organizationId, branchId, subscriptionId], references: [organizationId, branchId, id], onDelete: Restrict, onUpdate: NoAction, map: "pharmacy_chronic_refill_event_subscription_fkey")
+  actor          User                              @relation(fields: [organizationId, actorUserId], references: [organizationId, id], onDelete: Restrict, onUpdate: NoAction, map: "pharmacy_chronic_refill_event_actor_fkey")
+
+  @@index([organizationId, branchId, subscriptionId, createdAt], map: "pharmacy_chronic_refill_event_timeline_idx")
+  @@map("pharmacy_chronic_refill_events")
+}
+
 enum PharmacyReviewDecisionKind {
   VERIFY
   CLARIFY
@@ -12412,6 +12509,7 @@ model PharmacyPharmacistReviewDecision {
   createdAt        DateTime                        @default(now())
   reviewItem       PharmacyPharmacistReviewItem    @relation(fields: [organizationId, reviewItemId], references: [organizationId, id], onDelete: Restrict)
   reminderCaptures PharmacyRefillReminderCapture[]
+  chronicRefillCycle PharmacyChronicRefillCycle?
 
   @@unique([organizationId, id])
   @@index([organizationId, reviewItemId, createdAt])

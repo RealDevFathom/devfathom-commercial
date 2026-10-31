@@ -55,7 +55,12 @@ async function isStaff(ctx: TRPCContext) {
 function fail(error: unknown): never {
   if (error instanceof ChronicRefillError)
     throw new TRPCError({
-      code: error.reason === 'SUBSCRIPTION_NOT_FOUND' ? 'NOT_FOUND' : 'BAD_REQUEST',
+      code:
+        error.reason === 'SUBSCRIPTION_NOT_FOUND'
+          ? 'NOT_FOUND'
+          : error.reason === 'DISPENSE_PERMISSION_REQUIRED'
+            ? 'FORBIDDEN'
+            : 'BAD_REQUEST',
       message: error.reason,
     });
   if (error instanceof PharmacyDeliveryError)
