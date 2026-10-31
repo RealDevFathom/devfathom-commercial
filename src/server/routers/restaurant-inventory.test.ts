@@ -324,6 +324,43 @@ describe('restaurantInventoryRouter', () => {
     }
   });
 
+  it.each([
+    { name: 'missing', actors: [] },
+    {
+      name: 'ambiguous',
+      actors: [
+        { id: 'staff_1', primaryBranchId: 'branch_1' },
+        { id: 'staff_2', primaryBranchId: 'branch_2' },
+      ],
+    },
+  ])(
+    'rejects every reader for a $name staff mapping, even with configure access',
+    async ({ actors }) => {
+      mocks.findStaffProfiles.mockResolvedValue(actors);
+      const api = caller();
+      for (const read of [
+        () => api.listStockOnHand({}),
+        () => api.listStockMovements({}),
+        () => api.listStockCounts({}),
+        () => api.listStockTransfers({}),
+        () => api.evaluateLowStockRules({}),
+        () => api.listStockBatches({}),
+      ]) {
+        await expect(read()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      }
+      for (const reader of [
+        mocks.listStockOnHand,
+        mocks.listStockMovements,
+        mocks.listStockCounts,
+        mocks.listStockTransfers,
+        mocks.evaluateLowStockRules,
+        mocks.listStockBatches,
+      ]) {
+        expect(reader).not.toHaveBeenCalled();
+      }
+    }
+  );
+
   it('rejects wastage mutations when ABAC denies inventory:waste', async () => {
     mocks.can.mockResolvedValue(false);
     await expect(

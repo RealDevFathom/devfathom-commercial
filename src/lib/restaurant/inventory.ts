@@ -666,7 +666,8 @@ export async function listStockOnHand(
   // Determine location IDs for this branch when branchId is supplied.
   let locationIds: string[] | undefined;
   if (filter.branchId || filter.branchIds) {
-    if (filter.branchId && filter.branchIds && !filter.branchIds.includes(filter.branchId)) return [];
+    if (filter.branchId && filter.branchIds && !filter.branchIds.includes(filter.branchId))
+      return [];
     const locations = await db.restaurantStockLocation.findMany({
       where: {
         branchId: filter.branchId ?? { in: filter.branchIds! },
@@ -878,7 +879,12 @@ export async function listStockBatches(
   const rows = await db.restaurantStockBatch.findMany({
     where: {
       ...(filter.stockItemId ? { stockItemId: filter.stockItemId } : {}),
-      ...(filter.branchIds ? { receipt: { branchId: { in: filter.branchIds } } } : {}),
+      // A batch can be receipt-less or received again/transferred elsewhere.
+      // Keep its metadata available wherever it has ledger history, including
+      // depleted stock, so historical inventory remains readable.
+      ...(filter.branchIds
+        ? { movements: { some: { location: { branchId: { in: filter.branchIds } } } } }
+        : {}),
       ...(filter.cursor ? { id: { lt: filter.cursor } } : {}),
     },
     orderBy: { createdAt: 'desc' },
