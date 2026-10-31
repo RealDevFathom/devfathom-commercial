@@ -166,7 +166,19 @@ describe('baseline workspace invitations', () => {
     expect(screen.queryByText('Add Team Member')).toBeNull();
   });
 
-  it.each(['role', 'module', 'unauthenticated'])(
+  it('keeps the deep-linked form for an ADMIN because the admin module is baseline', () => {
+    // team.inviteMember is gated by the BASELINE `admin` module, so an empty
+    // enabledModules list cannot revoke invitation access for an ADMIN.
+    state.sessionStatus = 'loading';
+    const view = render(<TeamContent initialShowAddMember />);
+    expect(screen.queryByText('Add Team Member')).toBeNull();
+    state.sessionStatus = 'authenticated';
+    state.modules = [];
+    view.rerender(<TeamContent initialShowAddMember />);
+    expect(screen.getByText('Add Team Member')).toBeVisible();
+  });
+
+  it.each(['role', 'unauthenticated'])(
     'discards a deep-linked request when session loading resolves without permission (%s)',
     (denial) => {
       state.sessionStatus = 'loading';
@@ -175,7 +187,6 @@ describe('baseline workspace invitations', () => {
 
       state.sessionStatus = denial === 'unauthenticated' ? 'unauthenticated' : 'authenticated';
       if (denial === 'role') state.role = 'EMPLOYEE';
-      if (denial === 'module') state.modules = [];
       view.rerender(<TeamContent initialShowAddMember />);
       expect(screen.queryByText('Add Team Member')).toBeNull();
       expect(screen.queryByRole('button', { name: 'Add Member' })).toBeNull();

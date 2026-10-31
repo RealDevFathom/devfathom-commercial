@@ -16,6 +16,7 @@ type MutationOptions = {
 
 const mocks = vi.hoisted(() => ({
   workspaceRole: 'ADMIN' as string | undefined,
+  sessionStatus: 'authenticated' as 'loading' | 'authenticated',
   refreshUsers: vi.fn(),
   staff: {
     data: [
@@ -82,7 +83,10 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 vi.mock('next-auth/react', () => ({
-  useSession: () => ({ data: { user: { role: mocks.workspaceRole } } }),
+  useSession: () => ({
+    data: mocks.sessionStatus === 'loading' ? null : { user: { role: mocks.workspaceRole } },
+    status: mocks.sessionStatus,
+  }),
 }));
 vi.mock('@/lib/trpc', () => ({
   trpc: {
@@ -308,6 +312,50 @@ describe('Restaurant staff credential UI', () => {
       expect(within(newDialog).getByRole('button', { name: 'Save staff member' })).toBeEnabled();
     }
   );
+
+  it.each([
+    ['missing@example.com', /No workspace user matches the invited email/],
+    ['inactive@example.com', /not active, so they cannot be linked/],
+  ])('explains why an invitation return target %s cannot be linked', (email, message) => {
+    mocks.eligibleUsers.push({
+      id: 'user_inactive',
+      name: 'Inactive User',
+      email: 'inactive@example.com',
+      status: 'INACTIVE',
+      restaurantStaffProfiles: [],
+    });
+    try {
+      render(
+        <EntitlementsProvider value={entitlements}>
+          <RestaurantStaffConsole invitedEmail={email} />
+        </EntitlementsProvider>
+      );
+      const dialog = screen.getByRole('dialog', { name: 'Add staff member' });
+      expect(within(dialog).getByText(message)).toBeVisible();
+      expect(within(dialog).queryByText(/Waiting for the invited user/)).toBeNull();
+      expect(within(dialog).getByRole('button', { name: 'Save staff member' })).toBeDisabled();
+    } finally {
+      mocks.eligibleUsers.pop();
+    }
+  });
+
+  it('waits for the session before choosing the invitation hint', () => {
+    mocks.sessionStatus = 'loading';
+    try {
+      render(
+        <EntitlementsProvider value={entitlements}>
+          <RestaurantStaffConsole />
+        </EntitlementsProvider>
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'Add staff member' }));
+      const dialog = screen.getByRole('dialog', { name: 'Add staff member' });
+      expect(within(dialog).getByText('Checking invitation access…')).toBeVisible();
+      expect(within(dialog).queryByText(/Ask a workspace admin to invite/)).toBeNull();
+      expect(within(dialog).queryByRole('link', { name: 'Invite a new team member' })).toBeNull();
+    } finally {
+      mocks.sessionStatus = 'authenticated';
+    }
+  });
 
   it('offers the contextual Team invitation handoff only while creating staff', () => {
     render(

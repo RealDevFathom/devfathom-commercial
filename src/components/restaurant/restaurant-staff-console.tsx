@@ -69,9 +69,12 @@ function StaffTableSkeleton() {
 }
 
 export function RestaurantStaffConsole({ invitedEmail }: { invitedEmail?: string }) {
-  const { data: session } = useSession();
+  const { data: session, status: sessionStatus } = useSession();
   const entitlements = useEntitlements();
+  // Decide invite access only after the session resolves, matching Team.
+  const inviteAccessPending = sessionStatus === 'loading';
   const canInvite =
+    !inviteAccessPending &&
     session?.user?.role === 'ADMIN' &&
     isModuleGranted(moduleForProcedure('team.inviteMember')!, entitlements.enabledModules);
   const restaurantModule = entitlements.modules.find((module) => module.key === 'restaurant-core');
@@ -497,7 +500,11 @@ export function RestaurantStaffConsole({ invitedEmail }: { invitedEmail?: string
                         ? 'This user already has a staff profile. Close this dialog to manage their Job roles.'
                         : invitedUserReady
                           ? 'The invited user is ready to link. Save their staff profile, then manage Job roles to assign waiter or manager access.'
-                          : 'Waiting for the invited user to accept their workspace invitation. Refresh users after they accept to link their account.'}
+                          : !invitedUser
+                            ? 'No workspace user matches the invited email. Check the invitation in Team, then refresh users.'
+                            : invitedUser.status === 'INVITED'
+                              ? 'Waiting for the invited user to accept their workspace invitation. Refresh users after they accept to link their account.'
+                              : 'This workspace user is not active, so they cannot be linked. Reactivate them in Team, then refresh users.'}
                 </p>
                 <Button
                   type="button"
@@ -597,9 +604,11 @@ export function RestaurantStaffConsole({ invitedEmail }: { invitedEmail?: string
                   <div className="rounded-md border border-border-default bg-surface-sunken p-3 text-sm">
                     <p className="font-medium text-text-strong">Need to add someone new?</p>
                     <p className="mt-1 leading-relaxed text-text-muted">
-                      {canInvite
-                        ? 'Invite the waiter or manager in Team, then return here. After they accept, link their account and manage Job roles to assign restaurant access.'
-                        : 'Ask a workspace admin to invite the waiter or manager. After they accept, link their account here and manage Job roles to assign restaurant access.'}
+                      {inviteAccessPending
+                        ? 'Checking invitation access…'
+                        : canInvite
+                          ? 'Invite the waiter or manager in Team, then return here. After they accept, link their account and manage Job roles to assign restaurant access.'
+                          : 'Ask a workspace admin to invite the waiter or manager. After they accept, link their account here and manage Job roles to assign restaurant access.'}
                     </p>
                     {canInvite ? (
                       <Link
