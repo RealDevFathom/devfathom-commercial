@@ -72,6 +72,7 @@ async function lockActiveOrganizationAdmins(
     WHERE "organizationId" = ${organizationId}
       AND "role" = 'ADMIN'
       AND "status" = 'ACTIVE'
+    ORDER BY "id"
     FOR UPDATE
   `;
 }

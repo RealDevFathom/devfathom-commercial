@@ -111,7 +111,6 @@ import { assertInOrganization } from '../org-refs';
 import {
   adminProcedure,
   auditedProtectedProcedure,
-  capabilityProcedure,
   protectedProcedure,
   router,
 } from '../trpc';
