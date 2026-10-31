@@ -102,4 +102,39 @@ describe('#719 shelf-label print panel', () => {
       expect(screen.getByRole('button', { name: /^Print/ })).toBeDisabled();
     }
   });
+
+  it('disables only the conflicting lot and prints the remaining selection', async () => {
+    const popup = {
+      opener: {}, closed: false,
+      document: { open: vi.fn(), write: vi.fn(), close: vi.fn(), querySelectorAll: vi.fn(() => []) },
+      focus: vi.fn(), print: vi.fn(), close: vi.fn(),
+    };
+    const open = vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window);
+    const reason = 'Resolve the registered barcode before printing this lot.';
+    render(<ShelfLabelPrintPanel branchId="branch_a" goodsReceiptId="grn_1" rows={[
+      { ...rows[0]!, unavailableReason: reason }, rows[1]!,
+    ]} />);
+
+    const blocked = screen.getByLabelText(/Label count for Loose Strip/);
+    expect(blocked).toBeDisabled();
+    expect(blocked).toHaveValue(0);
+    expect(blocked).toHaveAccessibleDescription(`Unavailable: ${reason}`);
+    expect(screen.getByLabelText(/Label count for Legacy Syrup/)).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Print 4 labels' }));
+    await waitFor(() => expect(mocks.mutateAsync).toHaveBeenCalledWith({
+      branchId: 'branch_a', goodsReceiptId: 'grn_1', format: '38x25',
+      items: [{ inventoryLotId: 'lot_2', count: 4 }],
+    }));
+    await waitFor(() => expect(popup.print).toHaveBeenCalled());
+    open.mockRestore();
+  });
+
+  it('keeps unavailable rows visible and disables printing when none can be selected', () => {
+    render(<ShelfLabelPrintPanel branchId="branch_a" rows={rows.map((row) => ({
+      ...row, unavailableReason: 'Resolve the registered barcode.',
+    }))} />);
+    expect(screen.getByText('Loose Strip')).toBeInTheDocument();
+    expect(screen.getByText('Legacy Syrup')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Print 0 labels' })).toBeDisabled();
+  });
 });

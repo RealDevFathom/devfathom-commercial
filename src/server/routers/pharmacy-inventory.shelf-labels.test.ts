@@ -73,7 +73,7 @@ function makeDb() {
         where.id ? where.id.in.filter((id) => id === 'branch_a').map((id) => ({ id })) : [{ id: 'branch_a', name: 'Main' }]
       ),
     },
-    medicineBarcode: { findFirst: vi.fn().mockResolvedValue(null) },
+    medicineBarcode: { findMany: vi.fn().mockResolvedValue([]) },
     pharmacyGoodsReceipt: { findFirst: vi.fn().mockResolvedValue(null) },
     pharmacyInventoryLot: { findMany: vi.fn().mockResolvedValue([lot]) },
     pharmacyPackPrice: { findFirst: vi.fn().mockResolvedValue(null) },
@@ -190,6 +190,21 @@ describe('#719 shelf-label procedures', () => {
     expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
     expect(db.pharmacyStockBalance.update).not.toHaveBeenCalled();
     expect(db.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('rechecks barcode ownership at print time and refuses a newly conflicting selection', async () => {
+    grant([allow('pharmacy:inventory')]);
+    const api = caller();
+    const listing = await api.shelfLabelLots({ branchId: 'branch_a' });
+    expect(listing.rows[0]).toMatchObject({ inventoryLotId: 'lot_1', unavailableReason: null });
+
+    db.medicineBarcode.findMany.mockResolvedValue([{ normalizedCode: shelfLabelCode(41) }]);
+    await expect(api.printShelfLabels(printInput)).rejects.toMatchObject({ code: 'CONFLICT' });
+    expect(audit.detail).toEqual({});
+    const refreshed = await api.shelfLabelLots({ branchId: 'branch_a' });
+    expect(refreshed.rows[0]).toMatchObject({
+      inventoryLotId: 'lot_1', count: 0, unavailableReason: expect.stringContaining('already registered'),
+    });
   });
 
   it('refuses client-supplied money, duplicate lots and oversized runs at the boundary', async () => {

@@ -53,6 +53,12 @@ describe('#719 shelf and price label document', () => {
     expect(html).toContain('&quot;5&quot; &amp; &lt;b&gt;');
   });
 
+  it('refuses to render an unavailable selection while allowing an omitted unavailable lot', () => {
+    const unavailable = row({ unavailableReason: 'Resolve the registered barcode.' });
+    expect(() => buildShelfLabels([unavailable], '38x25')).toThrow('Resolve the registered barcode.');
+    expect(labelsIn(buildShelfLabels([row(), { ...unavailable, count: 0 }], '38x25'))).toBe(2);
+  });
+
   it('refuses unsupported sizes, empty or oversized runs, and invalid money or expiry', () => {
     expect(() => buildShelfLabels([row()], 'Letter' as never)).toThrow('supported label size');
     expect(() => buildShelfLabels([], '38x25')).toThrow();

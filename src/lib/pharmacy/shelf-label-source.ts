@@ -11,6 +11,7 @@ import { normalizeExpiryBoundary } from './stock-ledger';
 import { MAX_SHELF_LABELS, type ShelfLabelSource } from './shelf-label';
 
 export const SHELF_LABEL_PAGE_SIZE = 100;
+const BARCODE_CONFLICT = 'A shelf label code is already registered as a medicine barcode. Resolve the registered barcode before printing this lot.';
 
 export type ShelfLabelFilter = {
   goodsReceiptId?: string;
@@ -133,19 +134,22 @@ export async function readShelfLabelSources(
   const page = requested ? lots : lots.slice(0, SHELF_LABEL_PAGE_SIZE);
 
   // Legacy manufacturer/internal registrations can use these numeric strings.
-  // Refuse ambiguous labels rather than print a code that scans as another medicine.
+  // Keep unavailable lots in the listing so valid rows and pagination survive.
+  // Explicit print selections must still reject any ambiguous code.
+  const conflictingCodes = new Set<string>();
   if (page.length) {
-    const collision = await db.medicineBarcode.findFirst({
+    const collisions = await db.medicineBarcode.findMany({
       where: {
         organizationId: scope.organizationId,
         normalizedCode: { in: page.map((lot) => shelfLabelCode(lot.shelfLabelNumber)) },
       },
-      select: { id: true },
+      select: { normalizedCode: true },
     });
-    if (collision) {
+    for (const collision of collisions) conflictingCodes.add(collision.normalizedCode);
+    if (requested && conflictingCodes.size) {
       throw new TRPCError({
         code: 'CONFLICT',
-        message: 'A shelf label code is already registered as a medicine barcode. Resolve the registered barcode before printing this lot.',
+        message: BARCODE_CONFLICT,
       });
     }
   }
@@ -169,11 +173,13 @@ export async function readShelfLabelSources(
       const recordMrpMinor = await priceRecord(lot.packLevelId);
       let stripMrpMinor: number | null = null;
       try {
+        // The counter's STRIP kind includes all intermediate levels, such as
+        // BOX. Use the actual level, including a STRIP received as the pack.
         const strip = saleUnitOptions({
           packLevels: lot.packLevel.presentation.packLevels,
           rootPackLevelId: lot.packLevelId,
           unitsPerPack: lot.unitsPerPack,
-        }).find((option) => option.kind === 'STRIP');
+        }).find((option) => option.levelLabel === 'STRIP');
         // Same derivation as the sale line, so the strip label equals the till.
         stripMrpMinor = strip
           ? priceFromLot({
@@ -188,9 +194,12 @@ export async function readShelfLabelSources(
       }
       const medicine = lot.batch.medicine;
       const requestedCount = input.goodsReceiptId ? (counts.get(lot.id) ?? 0) : 1;
+      const code = shelfLabelCode(lot.shelfLabelNumber);
+      const unavailableReason = conflictingCodes.has(code) ? BARCODE_CONFLICT : null;
       return {
         inventoryLotId: lot.id,
-        code: shelfLabelCode(lot.shelfLabelNumber),
+        code,
+        unavailableReason,
         name: medicine.productName,
         strength:
           medicine.strengths.map((s) => `${renderStrengthValue(s.value)} ${s.unit}`).join(' + ') ||
@@ -201,7 +210,7 @@ export async function readShelfLabelSources(
           recordMrpMinor !== null && recordMrpMinor !== packMrpMinor ? recordMrpMinor : null,
         expiry: printedExpiry(lot.receivedExpiresAt, lot.receivedExpiryPrecision),
         batchNumber: lot.batch.batchNumber,
-        count: Math.min(requestedCount, MAX_SHELF_LABELS),
+        count: unavailableReason ? 0 : Math.min(requestedCount, MAX_SHELF_LABELS),
       };
     })
   );

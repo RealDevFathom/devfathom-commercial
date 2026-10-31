@@ -13,12 +13,12 @@ export function ShelfLabelPrintPanel({ branchId, goodsReceiptId, rows }: {
   goodsReceiptId?: string;
   rows: ShelfLabelSource[];
 }) {
-  const [counts, setCounts] = useState<Record<string, string>>(() => Object.fromEntries(rows.map((row) => [row.inventoryLotId, String(row.count)])));
+  const [counts, setCounts] = useState<Record<string, string>>(() => Object.fromEntries(rows.map((row) => [row.inventoryLotId, String(row.unavailableReason ? 0 : row.count)])));
   const [format, setFormat] = useState<ShelfLabelFormat>('38x25');
   const [notice, setNotice] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   const print = trpc.pharmacyInventory.printShelfLabels.useMutation();
-  const items = rows.map((row) => ({ inventoryLotId: row.inventoryLotId, count: Number(counts[row.inventoryLotId]) }));
+  const items = rows.map((row) => ({ inventoryLotId: row.inventoryLotId, count: row.unavailableReason ? 0 : Number(counts[row.inventoryLotId]) }));
   const total = items.reduce((sum, item) => sum + item.count, 0);
   const invalid = items.some((item) => !Number.isSafeInteger(item.count) || item.count < 0 || item.count > MAX_SHELF_LABELS) || total > MAX_SHELF_LABELS;
 
@@ -54,14 +54,15 @@ export function ShelfLabelPrintPanel({ branchId, goodsReceiptId, rows }: {
               <th scope="col" className="p-3 text-right">Labels</th>
             </tr></thead>
             <tbody>{rows.map((row) => {
-              const count = Number(counts[row.inventoryLotId]);
+              const count = row.unavailableReason ? 0 : Number(counts[row.inventoryLotId]);
               const countInvalid = !Number.isSafeInteger(count) || count < 0 || count > MAX_SHELF_LABELS;
+              const unavailableId = `shelf-label-unavailable-${row.inventoryLotId}`;
               return <tr key={row.inventoryLotId} className="border-t border-border-subtle hover:bg-surface-sunken">
-                <td className="p-3"><span className="font-medium text-text-strong">{row.name}</span><div className="text-xs text-text-muted">{row.strength ?? 'Strength not applicable'} · Batch {row.batchNumber}</div><div className="font-mono text-xs text-text-muted">{row.code}</div></td>
+                <td className="p-3"><span className="font-medium text-text-strong">{row.name}</span><div className="text-xs text-text-muted">{row.strength ?? 'Strength not applicable'} · Batch {row.batchNumber}</div><div className="font-mono text-xs text-text-muted">{row.code}</div>{row.unavailableReason ? <p id={unavailableId} className="mt-1 text-xs text-warning">Unavailable: {row.unavailableReason}</p> : null}</td>
                 <td className="whitespace-nowrap p-3 font-mono tabular-nums">{row.expiry}</td>
                 <td className="p-3 text-right font-mono tabular-nums">{formatMinor(row.packMrpMinor)}{row.priceRecordMrpMinor != null ? <div className="font-sans text-xs text-warning">Price record says {formatMinor(row.priceRecordMrpMinor)}. The label and the counter use the lot MRP.</div> : null}</td>
                 <td className="p-3 text-right font-mono tabular-nums">{row.stripMrpMinor === null ? 'N/A' : formatMinor(row.stripMrpMinor)}</td>
-                <td className="p-3"><label className="block min-w-24"><span className="sr-only">Label count for {row.name}, batch {row.batchNumber}, lot {row.code}</span><Input type="number" min={0} max={5000} step={1} value={counts[row.inventoryLotId]} disabled={print.isPending} aria-invalid={countInvalid} aria-describedby={countInvalid ? 'shelf-label-count-error' : undefined} className="min-h-11 text-right" onChange={(event) => setCounts((previous) => ({ ...previous, [row.inventoryLotId]: event.target.value }))} /></label></td>
+                <td className="p-3"><label className="block min-w-24"><span className="sr-only">Label count for {row.name}, batch {row.batchNumber}, lot {row.code}</span><Input type="number" min={0} max={5000} step={1} value={row.unavailableReason ? '0' : counts[row.inventoryLotId]} disabled={print.isPending || !!row.unavailableReason} aria-invalid={countInvalid} aria-describedby={row.unavailableReason ? unavailableId : countInvalid ? 'shelf-label-count-error' : undefined} className="min-h-11 text-right" onChange={(event) => setCounts((previous) => ({ ...previous, [row.inventoryLotId]: event.target.value }))} /></label></td>
               </tr>;
             })}</tbody>
           </table>

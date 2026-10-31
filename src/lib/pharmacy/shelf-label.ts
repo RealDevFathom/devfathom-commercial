@@ -9,6 +9,8 @@ export const MAX_SHELF_LABELS = 5000;
 export type ShelfLabelSource = {
   inventoryLotId: string;
   code: string;
+  /** An unavailable lot stays visible but must not be selected for printing. */
+  unavailableReason?: string | null;
   name: string;
   strength: string | null;
   packMrpMinor: number;
@@ -33,6 +35,7 @@ export function buildShelfLabels(rows: readonly ShelfLabelSource[], format: Shel
   }
   const width = format === '38x25' ? 38 : 50;
   const labels = rows.flatMap((row) => {
+    if (row.count > 0 && row.unavailableReason) throw new Error(row.unavailableReason);
     if (!Number.isSafeInteger(row.count) || row.count < 0 || row.count > MAX_SHELF_LABELS ||
         !Number.isSafeInteger(row.packMrpMinor) || row.packMrpMinor < 0 ||
         (row.stripMrpMinor !== null && (!Number.isSafeInteger(row.stripMrpMinor) || row.stripMrpMinor < 0)) ||

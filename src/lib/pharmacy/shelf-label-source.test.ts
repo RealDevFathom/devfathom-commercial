@@ -45,7 +45,7 @@ function makeDb(options: {
   const findMany = vi.fn().mockResolvedValue(options.lots ?? []);
   return {
     db: {
-      medicineBarcode: { findFirst: vi.fn().mockResolvedValue(null) },
+      medicineBarcode: { findMany: vi.fn().mockResolvedValue([]) },
       pharmacyGoodsReceipt: { findFirst: vi.fn().mockResolvedValue(options.receipt ?? null) },
       pharmacyInventoryLot: { findMany },
       pharmacyPackPrice: { findFirst: vi.fn().mockResolvedValue(options.price ?? null) },
@@ -96,6 +96,7 @@ describe('#719 shelf-label source', () => {
       {
         inventoryLotId: 'lot_1',
         code: shelfLabelCode(7),
+        unavailableReason: null,
         name: 'Loose Strip',
         strength: '500 mg',
         packMrpMinor: 3001,
@@ -123,6 +124,49 @@ describe('#719 shelf-label source', () => {
 
   it('does not invent a strip price when the pack hierarchy disagrees with the lot', async () => {
     const { db } = makeDb({ lots: [lot('lot_1', { unitsPerPack: 25 })] });
+    const { rows } = await readShelfLabelSources(db, scope, {}, AT);
+    expect(rows[0]!.stripMrpMinor).toBeNull();
+  });
+
+  it('prices the actual strip below a carton and box, regardless of pack-level order', async () => {
+    const cartonLevels = [
+      { id: 'carton', level: 'CARTON', parentPackLevelId: null, unitsPerParent: 1 },
+      { ...packLevels[0]!, parentPackLevelId: 'carton', unitsPerParent: 10 },
+      packLevels[1]!,
+      packLevels[2]!,
+    ];
+    const { db } = makeDb({ lots: [lot('lot_1', {
+      packLevelId: 'carton',
+      unitsPerPack: 300,
+      printedMrpMinor: 30_000,
+      packLevel: { presentation: { packLevels: cartonLevels.reverse() } },
+    })] });
+    const { rows } = await readShelfLabelSources(db, scope, {}, AT);
+    expect(rows[0]).toMatchObject({ packMrpMinor: 30_000, stripMrpMinor: 1000 });
+  });
+
+  it.each([
+    ['within a hierarchy', packLevels],
+    ['standalone', [{ id: 'strip', level: 'STRIP', parentPackLevelId: null, unitsPerParent: 10 }]],
+  ])('uses the lot MRP when the received pack is a strip %s', async (_label, levels) => {
+    const { db } = makeDb({ lots: [lot('lot_1', {
+      packLevelId: 'strip', unitsPerPack: 10, printedMrpMinor: 1001,
+      packLevel: { presentation: { packLevels: levels } },
+    })] });
+    const { rows } = await readShelfLabelSources(db, scope, {}, AT);
+    expect(rows[0]).toMatchObject({ packMrpMinor: 1001, stripMrpMinor: 1001 });
+  });
+
+  it('does not relabel an intermediate box as a strip when no strip level exists', async () => {
+    const { db } = makeDb({ lots: [lot('lot_1', {
+      packLevelId: 'carton',
+      unitsPerPack: 300,
+      packLevel: { presentation: { packLevels: [
+        { id: 'carton', level: 'CARTON', parentPackLevelId: null, unitsPerParent: 1 },
+        { id: 'box', level: 'BOX', parentPackLevelId: 'carton', unitsPerParent: 10 },
+        { id: 'tab', level: 'UNIT', parentPackLevelId: 'box', unitsPerParent: 30 },
+      ] } },
+    })] });
     const { rows } = await readShelfLabelSources(db, scope, {}, AT);
     expect(rows[0]!.stripMrpMinor).toBeNull();
   });
@@ -161,22 +205,67 @@ describe('#719 shelf-label source', () => {
 
   it('refuses to print a shelf code already owned by a registered barcode', async () => {
     const { db } = makeDb({ lots: [lot('lot_1')] });
-    vi.mocked(db.medicineBarcode.findFirst).mockResolvedValue({ id: 'legacy' } as never);
+    vi.mocked(db.medicineBarcode.findMany).mockResolvedValue([{ normalizedCode: shelfLabelCode(7) }] as never);
     await expect(readShelfLabelSources(db, scope, { inventoryLotIds: ['lot_1'] }, AT))
       .rejects.toMatchObject({ code: 'CONFLICT' });
-    expect(db.medicineBarcode.findFirst).toHaveBeenCalledWith({
+    expect(db.medicineBarcode.findMany).toHaveBeenCalledWith({
       where: { organizationId: 'org_a', normalizedCode: { in: [shelfLabelCode(7)] } },
-      select: { id: true },
+      select: { normalizedCode: true },
     });
   });
 
-  it('pages the medicine list 100 lots at a time', async () => {
+  it('retains valid GRN selections when another lot has a barcode collision', async () => {
+    const { db, findMany } = makeDb({
+      receipt: { lines: [
+        { inventoryLotId: 'lot_1', acceptedCanonicalUnits: 60, canonicalUnitsPerPack: 30 },
+        { inventoryLotId: 'lot_2', acceptedCanonicalUnits: 90, canonicalUnitsPerPack: 30 },
+      ] },
+      lots: [lot('lot_1'), lot('lot_2', { shelfLabelNumber: 8 })],
+    });
+    vi.mocked(db.medicineBarcode.findMany).mockResolvedValue([{ normalizedCode: shelfLabelCode(7) }] as never);
+    const { rows } = await readShelfLabelSources(db, scope, { goodsReceiptId: 'grn_1' }, AT);
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({ inventoryLotId: 'lot_1', count: 0, unavailableReason: expect.stringContaining('already registered') });
+    expect(rows[1]).toMatchObject({ inventoryLotId: 'lot_2', count: 3, unavailableReason: null });
+
+    // Only selected codes are checked when printing, so the valid lot can print.
+    findMany.mockResolvedValue([lot('lot_2', { shelfLabelNumber: 8 })]);
+    vi.mocked(db.medicineBarcode.findMany).mockResolvedValue([]);
+    const printed = await readShelfLabelSources(db, scope, {
+      goodsReceiptId: 'grn_1', inventoryLotIds: ['lot_2'],
+    }, AT);
+    expect(printed.rows[0]).toMatchObject({ inventoryLotId: 'lot_2', unavailableReason: null });
+    expect(db.medicineBarcode.findMany).toHaveBeenLastCalledWith({
+      where: { organizationId: 'org_a', normalizedCode: { in: [shelfLabelCode(8)] } },
+      select: { normalizedCode: true },
+    });
+  });
+
+  it('pages the medicine list 100 lots at a time even with multiple barcode collisions', async () => {
     const lots = Array.from({ length: 101 }, (_, index) =>
       lot(`lot_${String(index).padStart(3, '0')}`, { shelfLabelNumber: index + 1 })
     );
     const { db } = makeDb({ lots });
+    vi.mocked(db.medicineBarcode.findMany).mockResolvedValue([
+      { normalizedCode: shelfLabelCode(1) },
+      { normalizedCode: shelfLabelCode(100) },
+    ] as never);
     const { rows, next } = await readShelfLabelSources(db, scope, { query: 'loose' }, AT);
     expect(rows).toHaveLength(100);
     expect(next).toBe('lot_099');
+    expect(rows[0]).toMatchObject({ count: 0, unavailableReason: expect.any(String) });
+    expect(rows[99]).toMatchObject({ count: 0, unavailableReason: expect.any(String) });
+    expect(rows[1]).toMatchObject({ count: 1, unavailableReason: null });
+    expect(db.pharmacyInventoryLot.findMany).toHaveBeenCalledWith(expect.objectContaining({ take: 101 }));
+
+    vi.mocked(db.pharmacyInventoryLot.findMany).mockResolvedValue(lots.slice(100) as never);
+    vi.mocked(db.medicineBarcode.findMany).mockResolvedValue([]);
+    const following = await readShelfLabelSources(db, scope, { query: 'loose', after: next! }, AT);
+    expect(following.rows).toHaveLength(1);
+    expect(following.rows[0]).toMatchObject({ inventoryLotId: 'lot_100', count: 1 });
+    expect(following.next).toBeNull();
+    expect(db.pharmacyInventoryLot.findMany).toHaveBeenLastCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ AND: [{ id: { gt: 'lot_099' } }] }),
+    }));
   });
 });
