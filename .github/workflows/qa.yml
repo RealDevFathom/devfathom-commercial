@@ -4,7 +4,6 @@ on:
   push:
     branches: [restaurantv2, develop]
   pull_request:
-    types: [opened, synchronize, reopened, labeled]
     branches:
       - 'integration/**'
       - develop
@@ -28,7 +27,6 @@ jobs:
   automated-gate:
     name: WHA-1125 automated gate
     # For more CPU/RAM, replace ubuntu-latest with a configured larger GitHub-hosted runner label.
-    if: contains(github.event.pull_request.labels.*.name, 'ci-ready') || github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     services:
       postgres:

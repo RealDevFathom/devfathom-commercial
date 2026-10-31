@@ -652,7 +652,6 @@ function decodeFrozenCorrectCloseResult(
   return { ...result, supersedesCloseId: String(payload.supersedesCloseId) };
 }
 
-
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
 function splitAggregate(aggregate: CloseAggregate): {
