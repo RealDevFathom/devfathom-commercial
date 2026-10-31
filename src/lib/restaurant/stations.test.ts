@@ -27,6 +27,11 @@ const P2002 = new Prisma.PrismaClientKnownRequestError('unique', {
   clientVersion: 'test',
 });
 
+const P2025 = new Prisma.PrismaClientKnownRequestError('record not found', {
+  code: 'P2025',
+  clientVersion: 'test',
+});
+
 const mocks = vi.hoisted(() => ({
   branchFindUnique: vi.fn(),
   stationFindUnique: vi.fn(),
@@ -70,6 +75,26 @@ const db = {
   },
   $transaction: mocks.transaction,
 } as unknown as ScopedDb;
+
+/** Model a competing write committed after the initial read, before our update. */
+function raceStationChange(change: { active?: boolean; isDefault?: boolean }) {
+  const station = { id: 'station_1', branchId: 'branch_1', active: true, isDefault: false };
+  mocks.stationFindUnique.mockImplementationOnce(async () => {
+    const snapshot = { ...station };
+    Object.assign(station, change);
+    return snapshot;
+  });
+  mocks.stationUpdate.mockImplementationOnce(
+    async ({ where, data }: { where: Record<string, unknown>; data: Record<string, unknown> }) => {
+      if (!Object.entries(where).every(([key, value]) => Reflect.get(station, key) === value)) {
+        throw P2025;
+      }
+      Object.assign(station, data);
+      return { ...station };
+    }
+  );
+  return station;
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -170,6 +195,15 @@ describe('createStation (one-default-per-branch invariant)', () => {
 });
 
 describe('updateStation', () => {
+  it('refuses deactivation if the station becomes default after the initial read', async () => {
+    const station = raceStationChange({ isDefault: true });
+
+    await expect(updateStation(db, station.id, { active: false })).rejects.toMatchObject({
+      reason: 'INVALID',
+    });
+    expect(station).toMatchObject({ active: true, isDefault: true });
+  });
+
   it('refuses to deactivate the current default station', async () => {
     mocks.stationFindUnique.mockResolvedValue({
       id: 'station_1',
@@ -185,7 +219,7 @@ describe('updateStation', () => {
   it('updates name and active for a non-default station', async () => {
     await updateStation(db, 'station_1', { name: 'Grill 2', active: false });
     expect(mocks.stationUpdate).toHaveBeenCalledWith({
-      where: { id: 'station_1' },
+      where: { id: 'station_1', isDefault: false },
       data: { name: 'Grill 2', active: false },
     });
   });
@@ -199,6 +233,13 @@ describe('updateStation', () => {
 });
 
 describe('setDefaultStation', () => {
+  it('refuses promotion if the station becomes inactive after the initial read', async () => {
+    const station = raceStationChange({ active: false });
+
+    await expect(setDefaultStation(db, station.id)).rejects.toMatchObject({ reason: 'INVALID' });
+    expect(station).toMatchObject({ active: false, isDefault: false });
+  });
+
   it('clears the incumbent default (excluding self) and promotes the target', async () => {
     mocks.stationFindUnique.mockResolvedValue({
       id: 'station_2',
@@ -212,7 +253,7 @@ describe('setDefaultStation', () => {
       data: { isDefault: false },
     });
     expect(mocks.stationUpdate).toHaveBeenCalledWith({
-      where: { id: 'station_2' },
+      where: { id: 'station_2', active: true },
       data: { isDefault: true },
     });
   });

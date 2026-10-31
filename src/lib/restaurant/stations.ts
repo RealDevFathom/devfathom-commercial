@@ -57,6 +57,10 @@ function isUniqueViolation(err: unknown): boolean {
   return err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002';
 }
 
+function isRecordNotFound(err: unknown): boolean {
+  return err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2025';
+}
+
 async function assertBranchInScope(db: ScopedDb, branchId: string): Promise<void> {
   const branch = await db.restaurantBranch.findUnique({
     where: { id: branchId },
@@ -156,7 +160,22 @@ export async function updateStation(db: ScopedDb, id: string, patch: UpdateStati
     }
     data.active = patch.active;
   }
-  return db.restaurantKitchenStation.update({ where: { id }, data });
+  try {
+    // Recheck at write time: another request may have promoted this station
+    // since requireStation read it. The predicate is evaluated under the row lock.
+    return await db.restaurantKitchenStation.update({
+      where: { id, ...(patch.active === false ? { isDefault: false } : {}) },
+      data,
+    });
+  } catch (err) {
+    if (patch.active === false && isRecordNotFound(err)) {
+      throw new StationError(
+        'The station changed concurrently; reload before deactivating it.',
+        'INVALID'
+      );
+    }
+    throw err;
+  }
 }
 
 /**
@@ -180,9 +199,20 @@ export async function setDefaultStation(db: ScopedDb, id: string) {
         where: { branchId: station.branchId, isDefault: true, id: { not: id } },
         data: { isDefault: false },
       });
-      return tx.restaurantKitchenStation.update({ where: { id }, data: { isDefault: true } });
+      // A concurrent deactivation must reject the promotion and roll back the
+      // incumbent's demotion in this transaction.
+      return tx.restaurantKitchenStation.update({
+        where: { id, active: true },
+        data: { isDefault: true },
+      });
     });
   } catch (err) {
+    if (isRecordNotFound(err)) {
+      throw new StationError(
+        'The station changed concurrently; reload before making it the branch default.',
+        'INVALID'
+      );
+    }
     if (isUniqueViolation(err)) {
       throw new StationError(
         'Another default station was set for this branch concurrently; retry.',
