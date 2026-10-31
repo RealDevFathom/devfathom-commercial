@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
@@ -7,10 +7,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  * working with the reduced lists and never words a filtered list as the whole:
  * "No projects assigned" would tell a member their colleague is idle.
  */
-const state = vi.hoisted(() => ({ member: null as unknown }));
+const state = vi.hoisted(() => ({
+  member: null as unknown,
+  viewerRole: 'EMPLOYEE',
+  updateMember: vi.fn(),
+}));
 const idle = { data: undefined, isLoading: false, isError: false };
+const idleMutation = { mutate: vi.fn(), reset: vi.fn(), isPending: false };
 vi.mock('next-auth/react', () => ({
-  useSession: () => ({ data: { user: { id: 'viewer', role: 'EMPLOYEE' } } }),
+  useSession: () => ({ data: { user: { id: 'viewer', role: state.viewerRole } } }),
 }));
 vi.mock('@/lib/breadcrumb-store', () => ({ useBreadcrumbLabel: vi.fn() }));
 vi.mock('@/lib/trpc', () => ({
@@ -20,6 +25,12 @@ vi.mock('@/lib/trpc', () => ({
       getById: { useQuery: () => ({ data: state.member, isLoading: false }) },
       listPerformanceNotes: { useQuery: () => idle },
       getLeaveBalances: { useQuery: () => idle },
+      adminUpdateMember: {
+        useMutation: () => ({ mutate: state.updateMember, isPending: false }),
+      },
+      layOffMember: { useMutation: () => idleMutation },
+      addPerformanceNote: { useMutation: () => idleMutation },
+      deletePerformanceNote: { useMutation: () => idleMutation },
     },
     teamStats: { getForUser: { useQuery: () => idle } },
   },
@@ -64,6 +75,42 @@ const visibleTask = {
 
 beforeEach(() => {
   state.member = colleague({});
+  state.viewerRole = 'EMPLOYEE';
+  state.updateMember.mockClear();
+});
+
+describe('member profile saves', () => {
+  beforeEach(() => {
+    state.viewerRole = 'ADMIN';
+    state.member = colleague({ department: 'ENGINEERING' });
+  });
+
+  it.each([false, true])('omits an unchanged role (reselected: %s)', (reselected) => {
+    render(<MemberDetailContent memberId="colleague" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.change(screen.getByDisplayValue('Front Desk'), { target: { value: 'Updated Name' } });
+    if (reselected) {
+      fireEvent.click(screen.getByRole('button', { name: 'Admin', exact: true }));
+      fireEvent.click(screen.getByRole('button', { name: 'Employee', exact: true }));
+    }
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+    expect(state.updateMember).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'colleague', name: 'Updated Name' })
+    );
+    expect(state.updateMember.mock.calls[0]![0]).not.toHaveProperty('role');
+  });
+
+  it('sends a changed role for server authorization', () => {
+    render(<MemberDetailContent memberId="colleague" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Admin', exact: true }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+    expect(state.updateMember).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'colleague', role: 'ADMIN' })
+    );
+  });
 });
 afterEach(cleanup);
 

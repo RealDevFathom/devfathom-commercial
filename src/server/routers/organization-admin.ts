@@ -3,6 +3,7 @@ import { TRPCError } from '@trpc/server';
 import { hash } from 'bcryptjs';
 import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
+import { can, subjectFromSession } from '@/lib/abac';
 import { readAskFathomSettings } from '@/lib/ai/ask-fathom-settings';
 import { passwordSchema } from '@/lib/password-policy';
 import { encryptSecret } from '@/lib/secret-crypto';
@@ -71,6 +72,22 @@ function organizationId(ctx: { session: { user: { organizationId?: string } } })
   if (!id) throw new TRPCError({ code: 'NOT_FOUND', message: 'Workspace not found.' });
   return id;
 }
+
+// Member assignment and role-template edits both grant/revoke access. Keep the
+// admin gate, and honor a role DENY before the caller can alter its own policy.
+const roleAdminProcedure = adminProcedure.use(async ({ ctx, next }) => {
+  const allowed = await can(subjectFromSession(ctx.session.user), 'team:setRole', undefined, {
+    source: 'TRPC',
+    db: ctx.db,
+  });
+  if (!allowed) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission for this action.',
+    });
+  }
+  return next();
+});
 
 export const organizationAdminRouter = router({
   askFathomSettings: protectedProcedure.input(z.void()).query(async ({ ctx }) => {
@@ -388,7 +405,7 @@ export const organizationAdminRouter = router({
       return { ...saved, encryptedApiKey: Boolean(saved.encryptedApiKey) };
     }),
 
-  upsertRole: adminProcedure
+  upsertRole: roleAdminProcedure
     .input(
       z.object({
         id: z.string().optional(),
@@ -449,7 +466,7 @@ export const organizationAdminRouter = router({
       return role;
     }),
 
-  removeRole: adminProcedure
+  removeRole: roleAdminProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const id = organizationId(ctx);
@@ -477,7 +494,7 @@ export const organizationAdminRouter = router({
       return { success: true };
     }),
 
-  updateMember: adminProcedure
+  updateMember: roleAdminProcedure
     .input(
       z.object({
         id: z.string(),
@@ -559,7 +576,7 @@ export const organizationAdminRouter = router({
       return saved;
     }),
 
-  createMember: adminProcedure
+  createMember: roleAdminProcedure
     .input(
       z.object({
         name: z.string().trim().min(1).max(150),
