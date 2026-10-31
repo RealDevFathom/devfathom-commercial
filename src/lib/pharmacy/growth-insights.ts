@@ -284,15 +284,23 @@ export async function pharmacyLoyaltyAndInventoryFacts(
   const w = wastage[0];
   if (w && w.movements >= 10 && w.posted === w.movements && w.reversed === 0)
     fact('wastage_minor', w.amount, w.movements, 'COMPLETE');
-  // Valuation: sellable ledger units at cutoff times frozen lot receipt cost. This is a stock-ledger
-  // estimate, not the posted Finance inventory balance, so it is always labelled ESTIMATED.
+  // Valuation: eligible AVAILABLE ledger units at cutoff times frozen lot receipt cost.
+  // Batch safety state is current (there is no versioned batch-state history), so recalled or
+  // quarantined batches are conservatively excluded even for earlier cutoffs. Receipt and expiry
+  // eligibility use the cutoff and the same stored exclusive expiry boundary as the allocator.
+  // This is a stock-ledger estimate, not the posted Finance inventory balance: always ESTIMATED.
   const valuation = await db.$queryRaw<Array<{ lots: number; value: string }>>(Prisma.sql`
     SELECT COUNT(*)::integer AS lots, COALESCE(SUM(held.units * held.cost),0)::text AS value FROM (
       SELECT m."inventoryLotId", SUM(m."quantityUnits")::bigint AS units, MAX(lot."unitCostMinor")::bigint AS cost
       FROM pharmacy_stock_movements m JOIN pharmacy_inventory_lots lot
         ON lot."organizationId"=m."organizationId" AND lot."branchId"=m."branchId" AND lot.id=m."inventoryLotId"
+      JOIN pharmacy_manufacturing_batches batch
+        ON batch."organizationId"=lot."organizationId" AND batch.id=lot."manufacturingBatchId"
       WHERE m."organizationId"=${scope.organizationId} AND m."branchId"=${scope.branchId}
         AND m.disposition='AVAILABLE' AND m."occurredAt"<${cutoff}
+        AND lot."receivedAt" IS NOT NULL AND lot."receivedAt"<=${cutoff}
+        AND batch.state='ACTIVE'
+        AND batch."expiresAt">${cutoff}
       GROUP BY m."inventoryLotId" HAVING SUM(m."quantityUnits")>0
     ) held
   `);

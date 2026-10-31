@@ -1,5 +1,6 @@
 import { Prisma } from '@/generated/prisma/client';
 import { generateGrowthRecommendations } from '@/lib/ai/growth-recommendations';
+import { can, subjectFromSession } from '@/lib/abac';
 import {
   buildPharmacyGrowthInput,
   growthPeriodInput,
@@ -164,6 +165,21 @@ async function growthExecute<T>(
         code: 'FORBIDDEN',
         message: 'Current owner and branch access are required.',
       });
+    // Snapshots contain Finance evidence. Match the ledger report gates for reads,
+    // generation and review, and recheck them after provider latency before saving.
+    for (const action of ['reports:operational', 'reports:financial'] as const) {
+      if (
+        !(await can(subjectFromSession(ctx.session!.user), action, undefined, {
+          db,
+          source: 'TRPC',
+          ip: ctx.requestMeta.ip,
+        }))
+      )
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Financial report permission is required.',
+        });
+    }
     try {
       return await fn(db as ScopedDb, resolved);
     } catch (error) {
