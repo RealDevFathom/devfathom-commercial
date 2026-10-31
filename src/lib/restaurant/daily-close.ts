@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { Prisma, type RestaurantTenderType } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-import { businessDateToUtcDate } from './business-date';
+import { businessDateToUtcDate, resolveBusinessDate } from './business-date';
 import { DailyCloseError } from './daily-close-errors';
 import {
   beginMoneyIdempotent,
@@ -419,7 +419,11 @@ export type CutCloseResult = {
  * the date (a correction supersedes an existing close instead). Snapshot + tender
  * children are written in ONE transaction; idempotent (`cash:close`).
  */
-export async function cutClose(db: ScopedDb, input: CutCloseInput): Promise<CutCloseResult> {
+export async function cutClose(
+  db: ScopedDb,
+  input: CutCloseInput,
+  now?: Date
+): Promise<CutCloseResult> {
   const businessDate = businessDateToUtcDate(input.businessDate);
   return runMoneyTransaction(db, async (tx) => {
     await lockMoneyDay(tx, input.branchId, input.businessDate);
@@ -428,6 +432,30 @@ export async function cutClose(db: ScopedDb, input: CutCloseInput): Promise<CutC
       branchId: input.branchId,
       businessDate: input.businessDate,
     });
+    // A completed close must stay replayable even if the cutoff/timezone (or DST)
+    // later makes its date resolve as "future". An existing key is validated by
+    // beginMoneyIdempotent (same command + payload hash + completed) or rejected;
+    // only brand-new closes are subject to the future-date guard below.
+    const priorKey = await tx.restaurantMoneyIdempotencyKey.findUnique({
+      where: { deviceId_key: { deviceId: input.actor.deviceId, key: input.actor.idempotencyKey } },
+      select: { commandType: true },
+    });
+    if (priorKey) {
+      const prior = await beginMoneyIdempotent(tx, input.actor, 'cash.day_close', canonical);
+      if (prior.replay) return decodeFrozenCloseResult(prior.resultPayload);
+    }
+    const branch = await tx.restaurantBranch.findUnique({
+      where: { id: input.branchId },
+      select: { timezone: true, businessDayCutoff: true },
+    });
+    if (!branch) throw new DailyCloseError('The branch does not exist.', 'INVALID');
+    // Sample the server clock after lock acquisition: waiting can cross the cutoff.
+    if (
+      input.businessDate >
+      resolveBusinessDate(now ?? new Date(), branch.timezone, branch.businessDayCutoff)
+    ) {
+      throw new DailyCloseError('A future business day cannot be closed.', 'INVALID');
+    }
     const idem = await beginMoneyIdempotent(tx, input.actor, 'cash.day_close', canonical);
     if (idem.replay) return decodeFrozenCloseResult(idem.resultPayload);
 
