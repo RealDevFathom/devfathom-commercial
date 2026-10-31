@@ -279,13 +279,8 @@ function fail(error: unknown): never {
   throw error;
 }
 
-type CounterReceiptDb = Pick<
-  TRPCContext['db'],
-  'pharmacyBranch' | 'organization' | 'pharmacySale' | 'pharmacySaleLine'
->;
-
 async function loadCounterReceipt(
-  ctx: Omit<TRPCContext, 'db'> & { db: CounterReceiptDb },
+  ctx: Omit<TRPCContext, 'db'> & { db: ScopedDb },
   scope: LedgerScope,
   saleId: string
 ) {
@@ -1730,7 +1725,7 @@ export const pharmacySalesRouter = router({
       const scope = await requireCounterReceiptAccess(ctx, input.branchId);
       try {
         return await ctx.db.$transaction(async (tx) => {
-          const receipt = await loadCounterReceipt({ ...ctx, db: tx }, scope, input.saleId);
+          const receipt = await loadCounterReceipt({ ...ctx, db: txDb(tx) }, scope, input.saleId);
           if (receipt.receiptNumber === null || !receipt.completedAt) {
             throw new PharmacyReceiptPrintError('RECEIPT_NOT_ISSUED');
           }
@@ -1799,7 +1794,7 @@ export const pharmacySalesRouter = router({
       const scope = await requireCounterReceiptAccess(ctx, input.branchId);
       try {
         return await ctx.db.$transaction(async (tx) => {
-          const receipt = await loadCounterReceipt({ ...ctx, db: tx }, scope, input.saleId);
+          const receipt = await loadCounterReceipt({ ...ctx, db: txDb(tx) }, scope, input.saleId);
           if (receipt.receiptNumber === null || !receipt.completedAt) {
             throw new PharmacyReceiptPrintError('RECEIPT_NOT_ISSUED');
           }
