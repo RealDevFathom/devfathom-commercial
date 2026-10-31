@@ -295,9 +295,11 @@ jobs:
 
           prettier_base='${{ github.event.pull_request.base.sha || github.event.before }}'
           if ! git cat-file -e "${prettier_base}^{commit}" 2>/dev/null; then
-            prettier_base=$(git rev-parse HEAD^)
+            # A manual dispatch may verify a multi-commit PR by SHA. Compare
+            # its whole branch with develop, rather than only its final commit.
+            prettier_base=origin/develop
           fi
-          git diff --name-only -z "$prettier_base"..HEAD -- '*.ts' '*.tsx' '*.css' '*.md' '*.json' '*.mjs' > gate/prettier-files.zlist
+          git diff --name-only --diff-filter=ACMR -z "$prettier_base"...HEAD -- '*.ts' '*.tsx' '*.css' '*.md' '*.json' '*.mjs' > gate/prettier-files.zlist
           record prettier-file-list "$?"
           if [ -s gate/prettier-files.zlist ]; then
             xargs -0 bunx prettier --check < gate/prettier-files.zlist >gate/prettier-check.stdout.log 2>gate/prettier-check.stderr.log
