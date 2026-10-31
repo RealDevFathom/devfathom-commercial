@@ -253,8 +253,14 @@ beforeAll(async () => {
     const managerRole = await tx.restaurantJobRole.create({
       data: { key: `device-manager-${suffix}`, name: 'Device manager', active: true },
     });
+    const approverRole = await tx.restaurantJobRole.create({
+      data: { key: `device-approver-${suffix}`, name: 'Device approver', active: true },
+    });
     await tx.restaurantJobRoleCapability.create({
       data: { jobRoleId: managerRole.id, capability: 'devices:manage' },
+    });
+    await tx.restaurantJobRoleCapability.create({
+      data: { jobRoleId: approverRole.id, capability: 'coauth:approve' },
     });
     await tx.restaurantStaffJobRole.create({
       data: { staffProfileId: actingStaffId, jobRoleId: managerRole.id, branchId },
@@ -262,9 +268,12 @@ beforeAll(async () => {
     await tx.restaurantStaffJobRole.create({
       data: {
         staffProfileId: approvingStaffId,
-        jobRoleId: managerRole.id,
+        jobRoleId: approverRole.id,
         branchId,
       },
+    });
+    await tx.restaurantStaffJobRole.create({
+      data: { staffProfileId: unprivilegedStaffId, jobRoleId: managerRole.id, branchId },
     });
   });
   await deps.withTenantDb(otherOrgId, async (tx) => {
@@ -380,7 +389,7 @@ describeIfDatabase('restaurantDevices router (real DB)', () => {
     expect(row as Record<string, unknown>).not.toHaveProperty('deviceSecretHash');
   });
 
-  it('lists only distinct eligible approvers using devices:manage branch scope', async () => {
+  it('lists only distinct eligible approvers using coauth:approve branch scope', async () => {
     mocks.can.mockImplementation(async (...args: unknown[]) => args[1] === 'devices:manage');
     const api = caller();
     const enrolled = await api.initiateEnrollment({ branchId, name: 'POS-approvers' });
@@ -449,9 +458,48 @@ describeIfDatabase('restaurantDevices router (real DB)', () => {
     expect(failed!.failedAttempts).toBeGreaterThanOrEqual(1);
   });
 
-  it('rejects a valid approving credential without device-management capability', async () => {
+  it.each(['revoke', 'rotate'] as const)(
+    'rejects %s with a valid credential that has devices:manage but not coauth:approve',
+    async (operation) => {
+      const api = caller();
+      const { device } = await api.initiateEnrollment({
+        branchId,
+        name: `POS-no-approval-${operation}`,
+      });
+
+      const input = {
+        deviceId: device.id,
+        approvingStaffProfileId: unprivilegedStaffId,
+        approvingType: 'PIN' as const,
+        approvingSecret: APPROVING_PIN,
+        reason: 'capability check',
+      };
+      const before = await rotationState(device.id);
+      const attempt = operation === 'revoke' ? api.revoke(input) : api.rotate(input);
+
+      await expect(attempt).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'The approving staff member lacks co-authorization approval permission.',
+      });
+      await expectUnchangedRotationState(device.id, before);
+
+      const still = (await api.list()).find((d) => d.id === device.id);
+      expect(still!.status).toBe('ACTIVE');
+    }
+  );
+
+  it('rejects an ineligible approver before evaluating their credential', async () => {
     const api = caller();
-    const { device } = await api.initiateEnrollment({ branchId, name: 'POS-no-capability' });
+    const { device } = await api.initiateEnrollment({
+      branchId,
+      name: 'POS-ineligible-credential',
+    });
+    const credentialBefore = await deps.withTenantDb(orgId, (tx) =>
+      tx.restaurantOperatorCredential.findFirstOrThrow({
+        where: { staffProfileId: unprivilegedStaffId },
+        select: { failedAttempts: true },
+      })
+    );
 
     await expect(
       api.revoke({
@@ -459,13 +507,86 @@ describeIfDatabase('restaurantDevices router (real DB)', () => {
         actingStaffProfileId: actingStaffId,
         approvingStaffProfileId: unprivilegedStaffId,
         approvingType: 'PIN',
-        approvingSecret: APPROVING_PIN,
-        reason: 'capability check',
+        approvingSecret: '000000',
+        reason: 'capability before credential',
       })
-    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    ).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'The approving staff member lacks co-authorization approval permission.',
+    });
 
-    const still = (await api.list()).find((d) => d.id === device.id);
-    expect(still!.status).toBe('ACTIVE');
+    await expect(
+      deps.withTenantDb(orgId, (tx) =>
+        tx.restaurantOperatorCredential.findFirstOrThrow({
+          where: { staffProfileId: unprivilegedStaffId },
+          select: { failedAttempts: true },
+        })
+      )
+    ).resolves.toEqual(credentialBefore);
+  });
+
+  it('excludes and rejects an approver whose inherited coauth:approve is explicitly denied', async () => {
+    const api = caller();
+    const revokeEnrollment = await api.initiateEnrollment({
+      branchId,
+      name: 'POS-denied-approval-revoke',
+    });
+    const rotateEnrollment = await api.initiateEnrollment({
+      branchId,
+      name: 'POS-denied-approval-rotate',
+    });
+
+    await deps.withTenantDb(orgId, (tx) =>
+      tx.restaurantStaffCapabilityGrant.create({
+        data: {
+          staffProfileId: approvingStaffId,
+          branchId,
+          capability: 'coauth:approve',
+          effect: 'DENY',
+        },
+      })
+    );
+
+    try {
+      await expect(
+        api.listApprovers({ deviceId: revokeEnrollment.device.id })
+      ).resolves.toMatchObject({ approvers: [] });
+
+      for (const [operation, deviceId] of [
+        ['revoke', revokeEnrollment.device.id],
+        ['rotate', rotateEnrollment.device.id],
+      ] as const) {
+        const input = {
+          deviceId,
+          approvingStaffProfileId: approvingStaffId,
+          approvingType: 'PIN' as const,
+          approvingSecret: APPROVING_PIN,
+          reason: 'explicit deny check',
+        };
+        const before = await rotationState(deviceId);
+        const attempt = operation === 'revoke' ? api.revoke(input) : api.rotate(input);
+
+        await expect(attempt).rejects.toMatchObject({
+          code: 'FORBIDDEN',
+          message: 'The approving staff member lacks co-authorization approval permission.',
+        });
+        await expectUnchangedRotationState(deviceId, before);
+        const still = (await api.list()).find((device) => device.id === deviceId);
+        expect(still!.status).toBe('ACTIVE');
+      }
+    } finally {
+      await deps.withTenantDb(orgId, (tx) =>
+        tx.restaurantStaffCapabilityGrant.delete({
+          where: {
+            staffProfileId_branchId_capability: {
+              staffProfileId: approvingStaffId,
+              branchId,
+              capability: 'coauth:approve',
+            },
+          },
+        })
+      );
+    }
   });
 
   it('revokes with manager co-authorization, writing the C7 evidence record atomically', async () => {
@@ -705,14 +826,14 @@ describeIfDatabase('restaurantDevices router (real DB)', () => {
   it('lets an organization-wide owner list approvers and revoke on a branch they are not linked to', async () => {
     // The acting owner's staff profile is linked only to Downtown; the device is at Airport.
     const device = await deps.withTenantDb(orgId, async (tx) => {
-      const managerRole = await tx.restaurantJobRole.findFirstOrThrow({
-        where: { key: `device-manager-${suffix}` },
+      const approverRole = await tx.restaurantJobRole.findFirstOrThrow({
+        where: { key: `device-approver-${suffix}` },
         select: { id: true },
       });
       await tx.restaurantStaffJobRole.create({
         data: {
           staffProfileId: approvingStaffId,
-          jobRoleId: managerRole.id,
+          jobRoleId: approverRole.id,
           branchId: otherBranchId,
         },
       });

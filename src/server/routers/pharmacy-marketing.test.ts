@@ -190,10 +190,13 @@ describe('marketing workflow authorization', () => {
     });
     expect(mocks.assist).not.toHaveBeenCalled();
   });
-  it('strips branch context from the allowed AI input', async () => {
+  it('passes server-authorized tenant attribution separately from the allowed AI input', async () => {
     mocks.settings.mockResolvedValue({ askFathomEnabled: true });
     await caller().assist({ ...input, occasion: 'WELCOME', tone: 'FRIENDLY' });
-    expect(mocks.assist).toHaveBeenCalledWith({ occasion: 'WELCOME', tone: 'FRIENDLY' });
+    expect(mocks.assist).toHaveBeenCalledWith(
+      { occasion: 'WELCOME', tone: 'FRIENDLY' },
+      { organizationId: 'org-a', branchId: 'branch-a' }
+    );
   });
   it('authorizes and audits review drafting without retaining review text', async () => {
     mocks.settings.mockResolvedValue({ askFathomEnabled: true });
