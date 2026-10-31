@@ -15,7 +15,7 @@
  */
 import { randomBytes } from 'node:crypto';
 
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { createMemoryDriver } from '@/lib/retail-terminal/local-store';
 import type { TerminalStorageDriver } from '@/lib/retail-terminal/local-store';
@@ -117,6 +117,8 @@ async function readyCounter(driver: TerminalStorageDriver) {
   return counter;
 }
 
+const replaySigner = () => ({ command: 'command-signature', receipt: 'receipt-signature' });
+
 const MATRIX = {
   nowMs: NOW,
   cachedCreditRemainingMinor: 100_000,
@@ -129,7 +131,7 @@ function cashSale(units = 1) {
   return {
     deviceId: SCOPE.deviceId,
     action: 'CASH_OTC_SALE' as const,
-    payload: { lines: [{ medicineId: 'med_1', units }] },
+    payload: { leasedReceipt: { leaseId: 'lease_1' }, lines: [{ medicineId: 'med_1', units }] },
     clientOriginAt: '2026-09-02T12:05:00.000Z',
     bucket: { inventoryLotId: 'lot_1', stockLocationId: 'loc_1' },
     requestedUnits: units,
@@ -422,26 +424,28 @@ describe('PH-OFF OFF-01 — reconnect never renumbers an issued receipt', () => 
     const outcome = await reconnected.replay(async (request) => {
       sent.push({
         key: request.headers['Idempotency-Key'],
-        receiptNumber: request.body.receiptNumber,
+        receiptNumber: (request.body.leasedReceipt as { receiptNumber: unknown }).receiptNumber,
         sequence: request.body.sequence,
       });
       if (failFirst) {
         failFirst = false;
         return { status: 0 };
       }
-      return { status: 200, serverRef: `sale_${String(request.body.receiptNumber)}` };
-    });
+      const receipt = request.body.leasedReceipt as { receiptNumber: unknown };
+      return { status: 200, serverRef: `sale_${String(receipt.receiptNumber)}` };
+    }, replaySigner);
     expect(outcome.state).toBe('PAUSED');
 
     // Drain the rest with a healthy server.
     const drained = await reconnected.replay(async (request) => {
       sent.push({
         key: request.headers['Idempotency-Key'],
-        receiptNumber: request.body.receiptNumber,
+        receiptNumber: (request.body.leasedReceipt as { receiptNumber: unknown }).receiptNumber,
         sequence: request.body.sequence,
       });
-      return { status: 200, serverRef: `sale_${String(request.body.receiptNumber)}` };
-    });
+      const receipt = request.body.leasedReceipt as { receiptNumber: unknown };
+      return { status: 200, serverRef: `sale_${String(receipt.receiptNumber)}` };
+    }, replaySigner);
     expect(drained.state).toBe('IDLE');
 
     // Three attempts for two commands: the lost one, its retry, and the second
@@ -461,20 +465,66 @@ describe('PH-OFF OFF-01 — reconnect never renumbers an issued receipt', () => 
   it('never issues the same number twice, even after a replay failure', async () => {
     const counter = await readyCounter(createMemoryDriver());
     await counter.enqueue(cashSale(1), MATRIX);
-    await counter.replay(async () => ({ status: 500 }));
+    await counter.replay(async () => ({ status: 500 }), replaySigner);
     const next = await counter.enqueue(cashSale(1), MATRIX);
     expect(next.ok && next.command.receiptNumber).toBe(901);
   });
 });
 
 describe('PH-OFF OFF-01 — replay: re-auth pauses, revocation purges', () => {
+  it.each(['resolve', 'reject'])(
+    'keeps revocation final when signing later %ss',
+    async (result) => {
+      const driver = createMemoryDriver();
+      const counter = await readyCounter(driver);
+      await counter.enqueue(cashSale(1), MATRIX);
+      const send = vi.fn(async () => ({ status: 200 }));
+
+      await expect(
+        counter.replay(send, async () => {
+          await counter.revoke();
+          if (result === 'reject') throw new Error('credential revoked');
+          return replaySigner();
+        })
+      ).resolves.toMatchObject({ state: 'STOPPED' });
+
+      expect(send).not.toHaveBeenCalled();
+      expect(counter.snapshot().queue?.replay).toBe('STOPPED_REVOKED');
+      expect(counter.snapshot().queue?.commands).toEqual([]);
+      expect(await driver.read('org_a::branch_a::counter_1')).toBeUndefined();
+    }
+  );
+
+  it('pauses without losing an upgraded persisted command when replay signing cannot complete', async () => {
+    const counter = await readyCounter(createMemoryDriver());
+    await counter.enqueue(cashSale(1), MATRIX);
+
+    await expect(
+      counter.replay(
+        async () => {
+          throw new Error('transport must not receive an unsigned command');
+        },
+        async () => {
+          throw new Error('enrollment credential unavailable');
+        }
+      )
+    ).resolves.toMatchObject({ state: 'PAUSED' });
+    expect(counter.snapshot().queue).toMatchObject({
+      replay: 'PAUSED_REAUTH',
+      commands: [{ status: 'PENDING' }],
+    });
+  });
+
   it('pauses and keeps the queue on a generic 401', async () => {
     const counter = await readyCounter(createMemoryDriver());
     await counter.enqueue(cashSale(1), MATRIX);
-    const outcome = await counter.replay(async () => ({
-      status: 401,
-      serverMessage: 'Session expired.',
-    }));
+    const outcome = await counter.replay(
+      async () => ({
+        status: 401,
+        serverMessage: 'Session expired.',
+      }),
+      replaySigner
+    );
     expect(outcome.state).toBe('PAUSED');
     expect(counter.snapshot().queue?.replay).toBe('PAUSED_REAUTH');
     expect(counter.snapshot().queue?.commands).toHaveLength(1);
@@ -488,10 +538,13 @@ describe('PH-OFF OFF-01 — replay: re-auth pauses, revocation purges', () => {
     const counter = await readyCounter(driver);
     await counter.enqueue(cashSale(1), MATRIX);
 
-    const outcome = await counter.replay(async () => ({
-      status: 403,
-      serverMessage: 'This device has been revoked.',
-    }));
+    const outcome = await counter.replay(
+      async () => ({
+        status: 403,
+        serverMessage: 'This device has been revoked.',
+      }),
+      replaySigner
+    );
     expect(outcome).toMatchObject({ state: 'STOPPED', discarded: { commands: 1 } });
     expect(counter.snapshot().queue?.commands).toEqual([]);
     // A revoked counter must not keep printing from a block it no longer owns.
@@ -502,12 +555,12 @@ describe('PH-OFF OFF-01 — replay: re-auth pauses, revocation purges', () => {
   it('quarantines a command the server refuses outright instead of looping', async () => {
     const counter = await readyCounter(createMemoryDriver());
     await counter.enqueue(cashSale(1), MATRIX);
-    const outcome = await counter.replay(async () => ({ status: 400 }));
+    const outcome = await counter.replay(async () => ({ status: 400 }), replaySigner);
     expect(outcome.state).toBe('PAUSED');
     expect(counter.snapshot().queue?.commands[0]).toMatchObject({ status: 'QUARANTINED' });
 
     // A quarantined command is not retried, so the queue drains to idle.
-    expect((await counter.replay(async () => ({ status: 200 }))).state).toBe('IDLE');
+    expect((await counter.replay(async () => ({ status: 200 }), replaySigner)).state).toBe('IDLE');
   });
 
   it('refuses to replay another counter’s queue', async () => {
@@ -521,7 +574,7 @@ describe('PH-OFF OFF-01 — replay: re-auth pauses, revocation purges', () => {
       publicKey
     );
     await impostor.hydrate();
-    expect((await impostor.replay(async () => ({ status: 200 }))).state).toBe('IDLE');
+    expect((await impostor.replay(async () => ({ status: 200 }), replaySigner)).state).toBe('IDLE');
   });
 });
 

@@ -2,6 +2,7 @@
 import { beforeEach, expect, test, vi } from 'vitest';
 const m = vi.hoisted(() => ({
   actor: vi.fn(),
+  licence: vi.fn(),
   sop: vi.fn(),
   branch: vi.fn(),
   attachment: vi.fn(),
@@ -27,6 +28,7 @@ beforeEach(() => {
   });
   m.tenant.mockImplementation(async (_org, callback) =>
     callback({
+      branchRegulatoryProfile: { findFirst: m.licence },
       restaurantSopEvidence: { findFirst: m.sop },
       restaurantBranchAssignment: { findUnique: m.branch },
       messageAttachment: { findFirst: m.attachment },
@@ -51,6 +53,11 @@ test('anonymous and traversal requests never reach storage', async () => {
 test('SOP branch denial hides resource even when storage is disabled', async () => {
   m.sop.mockResolvedValue({ occurrence: { branchId: 'branch-a' } });
   expect((await read()).status).toBe(404);
+  expect(m.get).not.toHaveBeenCalled();
+});
+test('licence evidence denial hides resource even when storage is disabled', async () => {
+  m.licence.mockResolvedValue({ id: 'regulatory-profile' });
+  expect((await read('licence.pdf')).status).toBe(404);
   expect(m.get).not.toHaveBeenCalled();
 });
 test('chat membership denial hides resource even when storage is disabled', async () => {

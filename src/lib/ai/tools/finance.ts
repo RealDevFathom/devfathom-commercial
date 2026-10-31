@@ -19,6 +19,8 @@ import { Prisma } from '@/generated/prisma/client';
 import type { AssistantHelpers, ToolSet } from '@/lib/ai/context';
 import { fromCurrencyGroups, diffByCurrency } from '@/lib/finance/currency';
 import { invoiceStatusTransitionError, invoiceStatusUpdate } from '@/lib/finance/invoice-status';
+import { resolveOrganizationEntitlements } from '@/lib/entitlements';
+import { emitEvent } from '@/lib/webhooks';
 
 // Money columns are Decimal(12,2) — Postgres caps a value at 9,999,999,999.99.
 // Bound amounts here so an oversized input is a clean validation error, not a
@@ -652,6 +654,25 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
           targetLabel: invoice.invoiceNumber,
           changes: { status: { before: priorStatus, after: status } },
         });
+        h.activity({
+          type: 'invoice_paid',
+          message: `marked invoice ${invoice.invoiceNumber} paid (${invoice.client.name})`,
+          entityType: 'Invoice',
+          entityId: invoice.id,
+        });
+        // Mirror the tRPC paths: announce settlement only after the transaction
+        // commits. A webhook lookup failure must never undo the recorded payment.
+        try {
+          const entitlements = await resolveOrganizationEntitlements(h.ctx.organizationId, h.db);
+          emitEvent(h.db, entitlements, 'invoice.paid', {
+            invoiceId: invoice.id,
+            total: round2(Number(invoice.total)),
+            currency: invoice.currency,
+            clientId: invoice.clientId,
+          });
+        } catch (err) {
+          console.error('[assistant] invoice.paid webhook skipped', err);
+        }
         return {
           invoiceNumber: invoice.invoiceNumber,
           client: invoice.client.name,

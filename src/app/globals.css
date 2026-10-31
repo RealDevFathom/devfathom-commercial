@@ -1693,3 +1693,21 @@
     transition: none !important;
   }
 }
+
+/*
+ * Keyboard focus is a product-wide accessibility guarantee. Keep this rule
+ * unlayered and after component styles so bespoke controls cannot accidentally
+ * erase the indicator with an `outline-none` utility. Components may add a
+ * ring or change their border as well, but the outline remains the dependable
+ * fallback on tenant, restaurant, terminal, and platform surfaces.
+ */
+:focus-visible {
+  outline: 3px solid var(--ring);
+  outline-offset: 3px;
+}
+
+@media (forced-colors: active) {
+  :focus-visible {
+    outline-color: Highlight;
+  }
+}

@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   findPayment: vi.fn(),
   deletePayment: vi.fn(),
   logActivity: vi.fn(),
+  emitEvent: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -21,6 +22,7 @@ vi.mock('@/lib/abac', async () => ({
 }));
 vi.mock('@/lib/entitlements', () => ({ hasModule: vi.fn(() => true) }));
 vi.mock('../activity', () => ({ logActivity: mocks.logActivity }));
+vi.mock('@/lib/webhooks', () => ({ emitEvent: mocks.emitEvent }));
 vi.mock('../audit', () => ({
   ipFromHeaders: vi.fn(() => null),
   isAuditExcludedPath: vi.fn(() => true),
@@ -76,8 +78,30 @@ describe('finance.updateInvoiceStatus', () => {
       invoiceNumber: 'INV-1',
       status: 'SENT',
       total: 100,
+      currency: 'USD',
+      clientId: 'client-1',
       client: { name: 'Acme' },
     });
+  });
+
+  it('emits invoice.paid and logs invoice_paid after a manual settlement commits', async () => {
+    mocks.findUnique
+      .mockResolvedValueOnce({ status: 'SENT' })
+      .mockResolvedValueOnce({ id: 'invoice-1', total: 100, currency: 'USD' });
+
+    await caller().updateInvoiceStatus({ id: 'invoice-1', status: 'PAID' });
+
+    expect(mocks.emitEvent).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      'invoice.paid',
+      { invoiceId: 'invoice-1', total: 100, currency: 'USD', clientId: 'client-1' }
+    );
+    expect(mocks.logActivity).toHaveBeenCalledWith(
+      expect.anything(),
+      'admin-1',
+      expect.objectContaining({ type: 'invoice_paid', entityId: 'invoice-1' })
+    );
   });
 
   it.each(['SENT', 'OVERDUE'])(
@@ -102,7 +126,6 @@ describe('finance.updateInvoiceStatus', () => {
         data: {
           status: 'PAID',
           paidAt: expect.any(Date),
-          ...(status === 'SENT' && { sentAt: null }),
         },
       });
       expect(mocks.queryRaw).toHaveBeenCalledWith(
@@ -174,6 +197,7 @@ describe('finance.updateInvoiceStatus', () => {
     expect(mocks.createPayment).not.toHaveBeenCalled();
     expect(mocks.findUniqueOrThrow).not.toHaveBeenCalled();
     expect(mocks.logActivity).not.toHaveBeenCalled();
+    expect(mocks.emitEvent).not.toHaveBeenCalled();
   });
 
   it('locks payment entry before reading the ledger used by settlement', async () => {
@@ -217,14 +241,26 @@ describe('finance.updateInvoiceStatus', () => {
     });
   });
 
-  it('clears sentAt using a status compare-and-set', async () => {
-    mocks.findUnique.mockResolvedValue({ status: 'SENT' });
+  it.each(['OVERDUE', 'CANCELLED'] as const)(
+    'preserves sentAt when changing SENT to %s using a status compare-and-set',
+    async (status) => {
+      mocks.findUnique.mockResolvedValue({ status: 'SENT' });
 
-    await caller().updateInvoiceStatus({ id: 'invoice-1', status: 'CANCELLED' });
+      await caller().updateInvoiceStatus({ id: 'invoice-1', status });
+
+      expect(mocks.updateMany).toHaveBeenCalledWith({
+        where: { id: 'invoice-1', status: 'SENT' },
+        data: { status },
+      });
+    }
+  );
+
+  it('preserves sentAt when bulk marking past-due invoices overdue', async () => {
+    await caller().markOverdueInvoices();
 
     expect(mocks.updateMany).toHaveBeenCalledWith({
-      where: { id: 'invoice-1', status: 'SENT' },
-      data: { status: 'CANCELLED', sentAt: null },
+      where: { status: 'SENT', dueDate: { lt: expect.any(Date) } },
+      data: { status: 'OVERDUE' },
     });
   });
 

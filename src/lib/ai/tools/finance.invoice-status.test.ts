@@ -1,7 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AssistantHelpers } from '@/lib/ai/context';
 
+const mocks = vi.hoisted(() => ({
+  emitEvent: vi.fn(),
+  resolveOrganizationEntitlements: vi.fn(async () => ({ organizationId: 'org-1' })),
+}));
+
 vi.mock('server-only', () => ({}));
+vi.mock('@/lib/webhooks', () => ({ emitEvent: mocks.emitEvent }));
+vi.mock('@/lib/entitlements', () => ({
+  resolveOrganizationEntitlements: mocks.resolveOrganizationEntitlements,
+}));
 
 import { buildFinanceTools } from './finance';
 
@@ -11,6 +20,7 @@ const invoice = {
   status: 'SENT',
   total: 100,
   currency: 'USD',
+  clientId: 'client-1',
   paidAt: null,
   sentAt: null,
   client: { name: 'Acme' },
@@ -38,7 +48,7 @@ function setup(prior: string, changed = 1) {
   const helpers = {
     db,
     isAdmin: true,
-    ctx: { userId: 'admin-1' },
+    ctx: { userId: 'admin-1', organizationId: 'org-1' },
     now: () => new Date('2026-10-21T00:00:00Z'),
     activity: vi.fn(),
     audit: vi.fn(),
@@ -74,7 +84,6 @@ describe('assistant updateInvoiceStatus', () => {
         data: {
           status: 'PAID',
           paidAt: new Date('2026-10-21T00:00:00Z'),
-          ...(prior === 'SENT' && { sentAt: null }),
         },
       });
       expect(db.$queryRaw).toHaveBeenCalledWith(
@@ -84,9 +93,17 @@ describe('assistant updateInvoiceStatus', () => {
       expect(db.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
         db.payment.aggregate.mock.invocationCallOrder[0]
       );
-      expect(helpers.activity).not.toHaveBeenCalled();
+      expect(helpers.activity).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'invoice_paid', entityId: invoice.id })
+      );
       expect(helpers.audit).toHaveBeenCalledOnce();
       expect(helpers.notifyUsers).not.toHaveBeenCalled();
+      expect(mocks.emitEvent).toHaveBeenCalledWith(
+        db,
+        { organizationId: 'org-1' },
+        'invoice.paid',
+        { invoiceId: invoice.id, total: 100, currency: 'USD', clientId: 'client-1' }
+      );
     }
   );
 
@@ -120,6 +137,7 @@ describe('assistant updateInvoiceStatus', () => {
     expect(db.payment.create).not.toHaveBeenCalled();
     expect(db.invoice.findUniqueOrThrow).not.toHaveBeenCalled();
     expect(helpers.audit).not.toHaveBeenCalled();
+    expect(mocks.emitEvent).not.toHaveBeenCalled();
   });
 
   it('creates no zero payment when the ledger already covers the invoice', async () => {
@@ -142,16 +160,17 @@ describe('assistant updateInvoiceStatus', () => {
 
     expect(db.invoice.findUniqueOrThrow).not.toHaveBeenCalled();
     expect(helpers.audit).not.toHaveBeenCalled();
+    expect(mocks.emitEvent).not.toHaveBeenCalled();
   });
 
-  it('clears sentAt with a compare-and-set when SENT becomes OVERDUE', async () => {
+  it('preserves sentAt with a compare-and-set when SENT becomes OVERDUE', async () => {
     const { db, tool } = setup('SENT');
 
     await tool.execute({ invoiceNumber: invoice.invoiceNumber, status: 'OVERDUE' });
 
     expect(db.invoice.updateMany).toHaveBeenCalledWith({
       where: { id: invoice.id, status: 'SENT' },
-      data: { status: 'OVERDUE', sentAt: null },
+      data: { status: 'OVERDUE' },
     });
   });
 
