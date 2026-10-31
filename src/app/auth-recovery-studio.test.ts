@@ -35,6 +35,14 @@ describe('Studio account-recovery composition', () => {
     }
   );
 
+  it.each(recoveryFlowFiles.filter((path) => path.endsWith('form.tsx')))(
+    '%s uses the Studio radius scale rather than framework radius aliases',
+    (path) => {
+      expect(source(path)).not.toMatch(/\brounded-(?:xs|sm|md|lg|xl|2xl)\b/);
+      expect(source(path)).toContain('rounded-[var(--radius-');
+    }
+  );
+
   it('delegates recovery and every public auth layout to one Studio shell', () => {
     expect(recoveryShell()).toContain('<AuthShell context={context}>');
     for (const path of ['login/page.tsx', 'login/register/page.tsx', 'login/till/page.tsx']) {

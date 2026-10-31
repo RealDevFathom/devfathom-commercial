@@ -107,6 +107,16 @@ export const pharmacyPrescriptionsRouter = router({
       if (input?.branchId && !selectedBranch)
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Pharmacy branch not found.' });
 
+      // Prescription access is narrower than dispensing (tenant admins may
+      // capture without an exact dispense grant). Report whether the caller can
+      // also record fills / refill reminders so the console hides actions that
+      // the `pharmacy:dispense` gate would refuse.
+      const canDispense = await can(
+        subjectFromSession(ctx.session.user),
+        'pharmacy:dispense',
+        undefined,
+        { db: ctx.db, source: 'TRPC', ip: ctx.requestMeta.ip }
+      );
       const [patients, prescribers, medicines, prescriptions, reminderCaptures] = await Promise.all(
         [
           ctx.db.pharmacyPatient.findMany({ orderBy: { displayName: 'asc' } }),
@@ -142,6 +152,7 @@ export const pharmacyPrescriptionsRouter = router({
       return {
         branches,
         selectedBranchId: selectedBranch?.id ?? null,
+        canDispense,
         patients: patients.map(maskedPatient),
         prescribers,
         medicines,
@@ -403,9 +414,29 @@ export const pharmacyPrescriptionsRouter = router({
         })
         .strict()
     )
-    .mutation(({ ctx, input }) =>
-      ctx.db.prescriptionFill.create({ data: { ...input, dispensedByUserId: ctx.session.user.id } })
-    ),
+    .mutation(async ({ ctx, input }) => {
+      const line = await ctx.db.prescriptionLine.findFirst({
+        where: {
+          id: input.prescriptionLineId,
+          organizationId: ctx.entitlements.organizationId,
+        },
+        select: { medicine: { select: { controlled: true } } },
+      });
+      if (!line) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Prescription line not found.' });
+      }
+      // Controlled dispensing must use the counter flow, which atomically allocates stock and
+      // records both the witnessed fill and controlled-drug register entry.
+      if (line.medicine.controlled) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Controlled medicines must be dispensed through the witnessed counter flow.',
+        });
+      }
+      return ctx.db.prescriptionFill.create({
+        data: { ...input, dispensedByUserId: ctx.session.user.id },
+      });
+    }),
 
   captureRefillReminder: capabilityProcedure('pharmacy:dispense')
     .input(
