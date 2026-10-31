@@ -164,6 +164,7 @@ describe('pharmacy write-off accounting', () => {
     grant([allow('pharmacy:inventory')]);
     db.user.findFirst.mockResolvedValue({ id: 'user_b' });
     const occurredAt = new Date('2026-10-29T00:02:07.000Z');
+    db.user.findFirst.mockResolvedValue({ id: 'user_b' });
     db.pharmacyInventoryLot.findFirst.mockResolvedValue({
       id: 'lot_1',
       unitsPerPack: 10,
@@ -648,9 +649,17 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
       },
       permissionOverrides: [],
     });
+    db.$queryRaw.mockResolvedValueOnce([{ id: 'recall_1' }] as never);
+    db.pharmacyRecallNotice.findFirst.mockResolvedValue({
+      id: 'recall_1',
+      batchId: 'batch_1',
+      medicineId: null,
+    });
+    db.pharmacyInventoryLot.findFirst.mockResolvedValue({ id: 'lot_1' });
 
     await caller().acknowledgeRecall({ branchId: 'branch_a', recallNoticeId: 'recall_1' });
 
+    expect(db.$transaction).toHaveBeenCalledTimes(1);
     expect(db.pharmacyRecallAcknowledgement.create).toHaveBeenCalledWith({
       data: {
         organizationId: 'org_a',
@@ -781,6 +790,10 @@ describe.each(GATED_MUTATIONS)(
 
     it('runs for the exact grant', async () => {
       grant([allow(capability)]);
+      if (procedure === 'createRecall') {
+        db.$queryRaw.mockResolvedValueOnce([]);
+        db.$queryRaw.mockResolvedValueOnce([{ id: 'batch_1', medicineId: 'medicine_1' }] as never);
+      }
       await run();
       for (const write of writes()) expect(write).toHaveBeenCalledTimes(1);
     });
