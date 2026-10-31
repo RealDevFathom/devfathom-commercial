@@ -16,6 +16,7 @@ import {
 import {
   COUNTER_RECEIPT_DIRECTION,
   COUNTER_RECEIPT_STRINGS,
+  receiptPromotionLabel,
   formatMinor,
   formatReceiptDate,
   receiptTitle,
@@ -511,6 +512,9 @@ export function CounterReceiptView({
                   {line.quantity} {strings.saleUnit[line.saleUnit]} ×{' '}
                   {formatMinor(line.unitPriceMinor)}
                 </p>
+                {receiptPromotionLabel(line, locale) ? (
+                  <p className="break-words text-text-muted">{receiptPromotionLabel(line, locale)}</p>
+                ) : null}
                 {counterLinePresentation(line, locale).allocations.map((allocation, index) => (
                   <p
                     key={line.allocations![index]!.allocationId}

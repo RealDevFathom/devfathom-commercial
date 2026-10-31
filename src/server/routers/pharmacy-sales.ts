@@ -1,3 +1,4 @@
+import { pharmacyPromotionInput } from '@/lib/pharmacy/promotions';
 import { ControlledRestorationDenied } from '@/lib/pharmacy/controlled-restoration-authorization';
 import { assertRxSaleAllowed, PharmacyRxSaleDenied } from '@/lib/pharmacy/rx-sale-gate';
 import {
@@ -155,6 +156,21 @@ async function scopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> 
   if (!organizationId || !actorId) throw new TRPCError({ code: 'UNAUTHORIZED' });
   await assertInOrganization(ctx.db.pharmacyBranch, organizationId, [branch], { active: true });
   return { organizationId, branchId: branch, actorId };
+}
+
+async function promotionAdminScope(ctx: TRPCContext, branch: string) {
+  const scope = await branchScopeOrForbidden(ctx, branch);
+  if (ctx.session?.user.role !== 'ADMIN' ||
+      ctx.session.user.organizationId !== scope.organizationId ||
+      ctx.organization?.vertical !== 'PHARMACY' ||
+      !hasModule(ctx.entitlements, 'pharmacy-counter'))
+    throw new TRPCError({ code: 'FORBIDDEN' });
+  const actor = await ctx.db.user.findFirst({
+    where: { id: scope.actorId, organizationId: scope.organizationId, role: 'ADMIN', status: 'ACTIVE' },
+    select: { id: true },
+  });
+  if (!actor) throw new TRPCError({ code: 'FORBIDDEN' });
+  return scope;
 }
 
 async function khataScope(ctx: TRPCContext, branch: string, access: 'read' | 'write') {
@@ -1040,7 +1056,7 @@ export const pharmacySalesRouter = router({
             // #518: an Rx/restricted line needs the exact dispense grant (DENY wins).
             if (medicine) await assertRxSaleAllowed(db, scope, [medicine]);
             const { prescription, ...lineInput } = input;
-            if (!prescription) return addSaleLine(db, scope, lineInput);
+            if (!prescription) return addSaleLine(db, scope, lineInput, { applyCounterPromotions: true });
             // Recording a prescription fill is a pharmacist's act, whatever the medicine.
             if (
               !(await can(subjectFromSession(ctx.session!.user), 'pharmacy:dispense', undefined, {
@@ -1056,7 +1072,7 @@ export const pharmacySalesRouter = router({
               presentationId: input.presentationId,
               units,
             });
-            const result = await addSaleLine(db, scope, lineInput);
+            const result = await addSaleLine(db, scope, lineInput, { applyCounterPromotions: true });
             await attachPrescriptionReference(db, scope, {
               ...reference,
               saleLineId: result.line.id,
@@ -1177,7 +1193,7 @@ export const pharmacySalesRouter = router({
               return { blocked: 'Patient dispensing consent is required.' };
             }
             await db.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${scope.organizationId + ':' + scope.branchId},0))`;
-            const result = await addSaleLine(db, scope, input);
+            const result = await addSaleLine(db, scope, input, { applyCounterPromotions: true });
             await appendControlledSaleEntries(db, {
               organizationId: scope.organizationId,
               branchId: scope.branchId,
@@ -1268,7 +1284,7 @@ export const pharmacySalesRouter = router({
           });
           if (!consent?.granted || consent.revokedAt)
             return { blocked: 'Patient dispensing consent is required.' };
-          const result = await addSaleLine(db, scope, input);
+          const result = await addSaleLine(db, scope, input, { applyCounterPromotions: true });
           await db.prescriptionFill.create({
             data: {
               organizationId: scope.organizationId,
@@ -1809,6 +1825,51 @@ export const pharmacySalesRouter = router({
         }
         fail(error);
       }
+    }),
+
+  // #727: rule content is immutable. Administrators disable an offer and create
+  // a replacement; issued line prices and receipt names are never recomputed.
+  promotions: adminProcedure
+    .input(z.object({ branchId }).strict())
+    .query(async ({ ctx, input }) => {
+      const scope = await promotionAdminScope(ctx, input.branchId);
+      return ctx.db.pharmacyPromotion.findMany({
+        where: { organizationId: scope.organizationId, branchId: scope.branchId },
+        orderBy: [{ priority: 'desc' }, { id: 'asc' }],
+      });
+    }),
+  createPromotion: adminProcedure
+    .input(pharmacyPromotionInput)
+    .mutation(async ({ ctx, input }) => {
+      const scope = await promotionAdminScope(ctx, input.branchId);
+      if (input.medicineId) {
+        const medicine = await ctx.db.medicine.findFirst({
+          where: { id: input.medicineId, organizationId: scope.organizationId, saleable: true },
+          select: { rx: true, restricted: true, controlled: true },
+        });
+        if (!medicine || medicine.rx || medicine.restricted || medicine.controlled)
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'Select a saleable, non-regulated medicine.' });
+      }
+      annotateAudit(ctx, { action: 'pharmacy_promotion_created', targetType: 'PharmacyPromotion' });
+      const promotion = await ctx.db.pharmacyPromotion.create({
+        data: { ...input, organizationId: scope.organizationId, createdByUserId: scope.actorId },
+      });
+      annotateAudit(ctx, { targetId: promotion.id });
+      return promotion;
+    }),
+  disablePromotion: adminProcedure
+    .input(z.object({ branchId, promotionId: z.string().min(1) }).strict())
+    .mutation(async ({ ctx, input }) => {
+      const scope = await promotionAdminScope(ctx, input.branchId);
+      annotateAudit(ctx, {
+        action: 'pharmacy_promotion_disabled', targetType: 'PharmacyPromotion', targetId: input.promotionId,
+      });
+      const result = await ctx.db.pharmacyPromotion.updateMany({
+        where: { id: input.promotionId, organizationId: scope.organizationId, branchId: scope.branchId },
+        data: { active: false },
+      });
+      if (result.count !== 1) throw new TRPCError({ code: 'NOT_FOUND' });
+      return { disabled: true };
     }),
 
   /** PH-A7: this branch's saved receipt format (shared layout), for the counter. */

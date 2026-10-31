@@ -6,6 +6,7 @@ import {
   formatMinor,
   formatReceiptDate,
   receiptTitle,
+  receiptPromotionLabel,
   type CounterReceipt,
   type CounterReceiptLine,
   type CounterReceiptLocale,
@@ -73,6 +74,7 @@ export function buildCounterReceiptPreview(
           presentation.identity,
           `${line.quantity} ${strings.saleUnit[line.saleUnit]} × ${formatMinor(line.unitPriceMinor)}`,
           ...presentation.allocations,
+          ...[receiptPromotionLabel(line, locale)].filter(Boolean),
           `${strings.lineTotal}: ${formatMinor(line.lineTotalMinor)}`,
         ].join('\n');
       }),

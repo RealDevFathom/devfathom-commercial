@@ -693,6 +693,7 @@ export async function readCounterReceipt(
       canonicalUnits: line.canonicalUnits,
       unitPriceMinor: line.unitPriceMinor,
       discountMinor: line.discountMinor,
+      promotionName: line.promotionName,
       lineTotalMinor: line.unitPriceMinor * line.quantity - line.discountMinor,
     };
   });

@@ -239,6 +239,7 @@ model PharmacyBranch {
   visibilityPharmacyTaxProfileVersion      PharmacyTaxProfileVersion[]       @relation("PharmacyTaxProfileVersionVisibilityAnchor")
   visibilityUnfulfilledDemandEvent         UnfulfilledDemandEvent[]          @relation("UnfulfilledDemandEventVisibilityAnchor")
   visibilityPharmacyRestockInterest        PharmacyRestockInterest[]         @relation("PharmacyRestockInterestVisibilityAnchor")
+  promotions                              PharmacyPromotion[]
   branchAssignments                        PharmacyBranchAssignment[]
 
   @@unique([organizationId, id], map: "pharmacy_branches_org_id_key")
@@ -497,6 +498,7 @@ model Medicine {
   priceChangeProposals         PharmacyPriceChangeProposal[]
   connectorProposals           PharmacyReferenceConnectorProposal[]
   customerOrderLines           PharmacyCustomerOrderLine[]
+  promotions                   PharmacyPromotion[]
 
   @@unique([organizationId, id], map: "pharmacy_medicines_org_id_key")
   @@index([organizationId, productName])
@@ -1451,6 +1453,31 @@ model PharmacyCounterKeymapPreference {
   @@map("pharmacy_counter_keymap_preferences")
 }
 
+/// #727: immutable, administrator-authorized counter offers. Disable and create
+/// a replacement to change a rule; sale lines retain their issued name and price.
+model PharmacyPromotion {
+  id                 String                  @id @default(cuid())
+  organizationId     String                  @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId           String
+  name               String
+  medicineId         String?
+  effectiveFrom      DateTime
+  effectiveTo        DateTime
+  benefitBasisPoints Int?
+  benefitMinor       Int?
+  priority           Int                     @default(0)
+  active             Boolean                 @default(true)
+  createdByUserId     String
+  createdAt          DateTime                @default(now())
+  branch             PharmacyBranch          @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_promotions_branch_fkey")
+  medicine           Medicine?               @relation(fields: [organizationId, medicineId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_promotions_medicine_fkey")
+  saleLines          PharmacySaleLine[]
+
+  @@unique([organizationId, branchId, id])
+  @@index([organizationId, branchId, active, effectiveFrom, effectiveTo], map: "pharmacy_promotions_active_window_idx")
+  @@map("pharmacy_promotions")
+}
+
 model PharmacySaleLine {
   id                        String                       @id @default(cuid())
   organizationId            String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
@@ -1466,6 +1493,9 @@ model PharmacySaleLine {
   unitPriceMinor            Int
   proRataCeilingMinor       Int
   unitCostMinor             Int
+  promotionId               String?
+  promotionName             String?
+  promotion                 PharmacyPromotion?           @relation(fields: [organizationId, branchId, promotionId], references: [organizationId, branchId, id], onDelete: Restrict, map: "pharmacy_sale_lines_promotion_fkey")
   discountKind              PharmacyDiscountKind?
   discountMinor             Int                          @default(0)
   approvalPolicy            String?
