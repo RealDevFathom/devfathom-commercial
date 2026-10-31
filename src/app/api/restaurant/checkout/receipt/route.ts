@@ -20,9 +20,8 @@ const query = z.object({ billId: z.string().min(1) });
  */
 export const GET = moneyReadRoute({
   capability: 'payments:collect',
+  deviceKind: 'POS',
   run: async (ctx, request) => {
-    if (ctx.device.kind !== 'POS')
-      return NextResponse.json({ error: 'A POS register is required.' }, { status: 403 });
     const parsed = query.safeParse(Object.fromEntries(new URL(request.url).searchParams));
     if (!parsed.success) {
       return NextResponse.json({ error: 'A non-empty billId query is required.' }, { status: 400 });
@@ -40,6 +39,8 @@ export const GET = moneyReadRoute({
 
 export const POST = moneyMutationRoute({
   capability: 'payments:collect',
+  deviceKind: 'POS',
   schema: receiptPrintBody,
+  obscureBillId: (data) => data.billId,
   run: dispatchReceipt,
 });

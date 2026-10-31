@@ -163,7 +163,8 @@ describe('50 × 30 mm dispensing labels', () => {
       close: vi.fn(),
     };
     vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window);
-    const print = () => printCounterBrowserReceipt(receipt, 'en', 'LABEL_50x30', false, undefined, [source]);
+    const print = () =>
+      printCounterBrowserReceipt(receipt, 'en', 'LABEL_50x30', false, undefined, [source]);
     if (overflow) {
       expect(print).toThrow('exceeds 50 × 30 mm');
       expect(popup.print).not.toHaveBeenCalled();

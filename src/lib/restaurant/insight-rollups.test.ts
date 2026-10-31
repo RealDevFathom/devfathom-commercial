@@ -14,6 +14,7 @@ import {
   computeLoyaltyLiability,
   computeReconciledFinancials,
   enqueueInsightBackfill,
+  type ItemMixInput,
   rollupDay,
   rollupDayHandler,
 } from './insight-rollups';
@@ -321,7 +322,11 @@ function rollupDb(input?: {
         async () => ({ id: 'liability_1' })
       ),
     },
-    restaurantOrder: { findMany: vi.fn(async () => []) },
+    restaurantOrder: {
+      findMany: vi.fn<
+        (args?: unknown) => Promise<Array<{ coverCount: number | null; items: ItemMixInput[] }>>
+      >(async () => []),
+    },
     loyaltyProgramVersion: {
       findFirst: vi.fn<() => Promise<{ id: string; redemptionValue: Prisma.Decimal } | null>>(
         async () => null
@@ -413,6 +418,57 @@ describe('rollupDay handler idempotency and correction', () => {
       })
     );
   });
+  it.each([1, 2])(
+    'excludes an original item\'s %i non-voided remake(s) from item-mix sales',
+    async (remakeCount) => {
+      const db = rollupDb();
+      const purchasedItem = {
+        productId: 'product_1',
+        unitPrice: D('30'),
+        quantity: 1,
+        modifiers: [],
+        billLines: [],
+        remakeOfItemId: null,
+      };
+      const orderItems = [
+        purchasedItem,
+        ...Array.from({ length: remakeCount }, (_, index) => ({
+          ...purchasedItem,
+          remakeOfItemId: index === 0 ? 'purchased_item' : `remake_${index}`,
+        })),
+      ];
+      db.restaurantOrder.findMany.mockImplementation(async (args?: unknown) => {
+        expect(args).toEqual(
+          expect.objectContaining({
+            select: expect.objectContaining({
+              items: expect.objectContaining({
+                where: { status: { not: 'VOIDED' }, remakeOfItemId: null },
+              }),
+            }),
+          })
+        );
+        return [{ coverCount: 1, items: orderItems.filter((item) => !item.remakeOfItemId) }];
+      });
+
+      const result = await rollupDay(db as unknown as ScopedDb, {
+        branchId: 'branch_1',
+        businessDate: '2026-08-20',
+        force: true,
+      });
+
+      expect(result.itemCount).toBe(1);
+      expect(db.insightItemMixRollup.createMany).toHaveBeenCalledWith({
+        data: [
+          expect.objectContaining({
+            productId: 'product_1',
+            quantity: 1,
+            grossSales: D('30'),
+            netSales: D('30'),
+          }),
+        ],
+      });
+    }
+  );
 
   it.each(['ADJUSTMENT', 'EXPIRY', 'REVERSAL'] as const)(
     'refreshes loyalty liability on ordinary replay after a backdated %s',
