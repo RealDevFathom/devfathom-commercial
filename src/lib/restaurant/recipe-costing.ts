@@ -141,6 +141,34 @@ async function conversionFactor(
   return conversion.factor;
 }
 
+/** Validate graph structure before independent yield/conversion arithmetic can mask a cycle. */
+async function assertAcyclicRecipe(
+  db: ScopedDb,
+  organizationId: string,
+  version: Version,
+  ancestors = new Set<string>(),
+  complete = new Set<string>(),
+  depth = 0
+): Promise<void> {
+  if (ancestors.has(version.recipeId))
+    throw new RecipeCostingError('Recipe cycle detected.', 'CYCLE');
+  if (depth >= MAX_DEPTH)
+    throw new RecipeCostingError(`Recipe depth exceeds ${MAX_DEPTH}.`, 'DEPTH_EXCEEDED');
+  if (complete.has(version.recipeId)) return;
+  const next = new Set(ancestors).add(version.recipeId);
+  const lines = await db.restaurantRecipeLine.findMany({
+    where: { recipeVersionId: version.id },
+    select: { subRecipeId: true },
+  });
+  for (const line of lines) {
+    if (!line.subRecipeId) continue;
+    if (next.has(line.subRecipeId)) throw new RecipeCostingError('Recipe cycle detected.', 'CYCLE');
+    const child = await resolveVersion(db, { organizationId, recipeId: line.subRecipeId });
+    await assertAcyclicRecipe(db, organizationId, child, next, complete, depth + 1);
+  }
+  complete.add(version.recipeId);
+}
+
 async function explodeVersion(
   db: ScopedDb,
   organizationId: string,
@@ -196,6 +224,9 @@ async function explodeVersion(
       continue;
     }
     if (!line.subRecipeId) continue;
+    if (nextAncestors.has(line.subRecipeId)) {
+      throw new RecipeCostingError('Recipe cycle detected.', 'CYCLE');
+    }
     const subVersion = await resolveVersion(db, {
       organizationId,
       recipeId: line.subRecipeId,
@@ -249,6 +280,7 @@ export async function explodeRecipeInDb(
   if (!batches.isFinite() || batches.isNegative()) {
     throw new RecipeCostingError('Recipe scale must be finite and nonnegative.', 'INVALID');
   }
+  await assertAcyclicRecipe(db, input.organizationId, version);
   const leaves = await explodeVersion(
     db,
     input.organizationId,

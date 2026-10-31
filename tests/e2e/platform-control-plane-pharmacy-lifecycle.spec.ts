@@ -60,11 +60,14 @@ test('SuperAdmin completes the audited PHARMACY lifecycle and cross-vertical req
   await page.getByRole('link', { name: /Continue as Pharmacy/ }).click();
 
   const packageSelect = page.locator('select[name="packageId"]');
-  await expect(packageSelect.locator('option')).toHaveText([
-    'Pharmacy Chain · 2500 default seats',
-    'Pharmacy Essentials · 10 default seats',
-    'Pharmacy Professional · 50 default seats',
-  ]);
+  const packageLabels = await withAdminDatabase(async (db) => {
+    const catalog = await db.query<{ name: string; defaultSeats: number }>(
+      `SELECT name, "defaultSeats" FROM platform_packages WHERE active AND vertical='PHARMACY' ORDER BY name`
+    );
+    return catalog.rows.map((row) => `${row.name} · ${row.defaultSeats} default seats`);
+  });
+  expect(packageLabels.length).toBeGreaterThanOrEqual(3);
+  await expect(packageSelect.locator('option')).toHaveText(packageLabels);
   await expect(packageSelect.locator('option')).not.toContainText(['E2E Agency Only']);
 
   await page.getByLabel('Display name').fill('E2E Pharmacy');
@@ -159,7 +162,7 @@ test('SuperAdmin completes the audited PHARMACY lifecycle and cross-vertical req
     const regulatoryProfiles = await db.query(
       `SELECT version,"jurisdictionRuleSetId","effectiveFrom","effectiveTo"
        FROM pharmacy_branch_regulatory_profiles
-       WHERE "organizationId"=$1 AND "branchId"='e2e_pharmacy_branch'
+       WHERE "organizationId"=$1 AND "branchId"=(SELECT id FROM pharmacy_branches WHERE "organizationId"=$1 AND code='MAIN')
        ORDER BY version`,
       [organizationId]
     );
@@ -194,7 +197,7 @@ async function transition(page: import('@playwright/test').Page, status: string,
       candidate.url().endsWith('/api/platform/control') && candidate.request().method() === 'POST'
   );
   await page.getByLabel('Move to').selectOption(status);
-  await page.getByLabel('Operator reason').fill(reason);
+  await page.locator('#lifecycle').getByLabel('Reason (required)').fill(reason);
   await page.getByRole('button', { name: 'Apply lifecycle change' }).click();
   return response;
 }
@@ -212,17 +215,21 @@ async function packageSelectOnProfile(page: import('@playwright/test').Page, pac
   expect((await response).status()).toBe(200);
 }
 
+let pharmacyBranchId: string;
+
 async function seedProvisionalProfile(organizationId: string) {
   await withAdminDatabase(async (db) => {
-    await db.query(
-      `INSERT INTO pharmacy_branches (id,"organizationId",code,name,"addressLine",city,"provinceCode",active,"updatedAt") VALUES ('e2e_pharmacy_branch',$1,'MAIN','Main Pharmacy','1 Mall Road','Lahore','PK-PB',true,now())`,
+    const branches = await db.query<{ id: string }>(
+      `SELECT id FROM pharmacy_branches WHERE "organizationId"=$1 AND code='MAIN'`,
       [organizationId]
     );
+    expect(branches.rows).toHaveLength(1);
+    pharmacyBranchId = branches.rows[0]!.id;
     await db.query(
       `INSERT INTO pharmacy_branch_regulatory_profiles
        (id,"organizationId","branchId",version,"effectiveFrom","provinceCode","jurisdictionRuleSetId",premises,"licenceCategory","licenceNumber","licenceValidFrom","licenceValidTo","licenceEvidenceFileRef","permittedSchedules","qualifiedPersonRegistration","qualifiedPersonValidFrom","qualifiedPersonValidTo","qualifiedPersonCoverageRosterRef","fiscalStatus","retentionPolicy")
-       VALUES ('e2e_pharmacy_profile_provisional',$1,'e2e_pharmacy_branch',1,'2026-09-02T00:00:00.000Z','PK-PB','pk_pb_provisional_v1','{}','PHARMACY','PB-E2E-1',now()-interval '1 day',now()+interval '1 year','evidence://licence',ARRAY['RX'],'QP-E2E-1',now()-interval '1 day',now()+interval '1 year','evidence://roster','REGISTERED','{}')`,
-      [organizationId]
+       VALUES ('e2e_pharmacy_profile_provisional',$1,$2,1,'2026-09-02T00:00:00.000Z','PK-PB','pk_pb_provisional_v1','{}','PHARMACY','PB-E2E-1',now()-interval '1 day',now()+interval '1 year','evidence://licence',ARRAY['RX'],'QP-E2E-1',now()-interval '1 day',now()+interval '1 year','evidence://roster','REGISTERED','{}')`,
+      [organizationId, pharmacyBranchId]
     );
   });
 }
@@ -251,8 +258,8 @@ async function seedMinimalReadiness(organizationId: string) {
     await db.query(
       `INSERT INTO pharmacy_branch_regulatory_profiles
        (id,"organizationId","branchId",version,"effectiveFrom","provinceCode","jurisdictionRuleSetId",premises,"licenceCategory","licenceNumber","licenceValidFrom","licenceValidTo","licenceEvidenceFileRef","permittedSchedules","qualifiedPersonRegistration","qualifiedPersonValidFrom","qualifiedPersonValidTo","qualifiedPersonCoverageRosterRef","fiscalStatus","retentionPolicy")
-       VALUES ('e2e_pharmacy_profile_confirmed',$1,'e2e_pharmacy_branch',2,'2026-09-02T01:00:00.000Z','PK-PB','e2e_pk_pb_confirmed','{}','PHARMACY','PB-E2E-1',now()-interval '1 day',now()+interval '1 year','evidence://licence',ARRAY['RX'],'QP-E2E-1',now()-interval '1 day',now()+interval '1 year','evidence://roster','REGISTERED','{}')`,
-      [organizationId]
+       VALUES ('e2e_pharmacy_profile_confirmed',$1,$2,2,'2026-09-02T01:00:00.000Z','PK-PB','e2e_pk_pb_confirmed','{}','PHARMACY','PB-E2E-1',now()-interval '1 day',now()+interval '1 year','evidence://licence',ARRAY['RX'],'QP-E2E-1',now()-interval '1 day',now()+interval '1 year','evidence://roster','REGISTERED','{}')`,
+      [organizationId, pharmacyBranchId]
     );
     await db.query(
       `INSERT INTO pharmacy_medicines (id,"organizationId","productName","productFamily",saleable,"updatedAt") VALUES ('e2e_medicine',$1,'E2E Medicine','PHARMACEUTICAL',true,now())`,
@@ -267,7 +274,7 @@ async function seedMinimalReadiness(organizationId: string) {
       [organizationId]
     );
     await db.query(
-      `INSERT INTO pharmacy_medicine_provenance (id,"organizationId","medicineId",field,source,"sourceType","retrievedAt",status,"assertedValue") VALUES ('e2e_assertion',$1,'e2e_medicine','productName','E2E','USER',now(),'ACCEPTED','"E2E Medicine"')`,
+      `INSERT INTO pharmacy_medicine_provenance (id,"organizationId","medicineId",field,source,"sourceType","retrievedAt",status,"assertedValue",reviewer) VALUES ('e2e_assertion',$1,'e2e_medicine','productName','E2E','USER',now(),'ACCEPTED','"E2E Medicine"','e2e_platform_admin')`,
       [organizationId]
     );
     await db.query(
@@ -283,7 +290,7 @@ async function seedMinimalReadiness(organizationId: string) {
       [organizationId]
     );
     await db.query(
-      `INSERT INTO pharmacy_inventory_lots (id,"organizationId","branchId","manufacturingBatchId","packLevelId","unitsPerPack","supplierName","supplierInvoiceRef","unitCostMinor","printedMrpMinor","receivedExpiresAt","receivedExpiryPrecision","receivedAt","updatedAt") VALUES ('e2e_lot',$1,'e2e_pharmacy_branch','e2e_batch','e2e_pack',10,'E2E Supplier','INV-1',100,150,now()+interval '1 year','DAY',now(),now())`,
+      `INSERT INTO pharmacy_inventory_lots (id,"organizationId","branchId","manufacturingBatchId","packLevelId","unitsPerPack","supplierName","supplierInvoiceRef","unitCostMinor","printedMrpMinor","receivedExpiresAt","receivedExpiryPrecision","receivedAt","updatedAt") VALUES ('e2e_lot',$1,(SELECT id FROM pharmacy_branches WHERE "organizationId"=$1 AND code='MAIN'),'e2e_batch','e2e_pack',10,'E2E Supplier','INV-1',100,150,now()+interval '1 year','DAY',now(),now())`,
       [organizationId]
     );
     await db.query(
@@ -296,7 +303,7 @@ async function seedMinimalReadiness(organizationId: string) {
     );
     await db.query(
       `INSERT INTO pharmacy_onboarding_gate_states (id,"organizationId",gate,status,"evidenceRef","branchId","actorId","recordedAt","updatedAt")
-       SELECT 'e2e_gate_'||gate,$1,gate::"PharmacyOnboardingGate",'PASSED','evidence://'||gate,CASE WHEN gate IN ('PREMISES_AND_LICENCES','BRANCHES_AND_LOCATIONS') THEN 'e2e_pharmacy_branch' END,'e2e_platform_admin',now(),now()
+       SELECT 'e2e_gate_'||gate,$1,gate::"PharmacyOnboardingGate",'PASSED','evidence://'||gate,CASE WHEN gate IN ('PREMISES_AND_LICENCES','BRANCHES_AND_LOCATIONS') THEN (SELECT id FROM pharmacy_branches WHERE "organizationId"=$1 AND code='MAIN') END,'e2e_platform_admin',now(),now()
        FROM unnest(enum_range(NULL::"PharmacyOnboardingGate")::text[]) gate`,
       [organizationId]
     );

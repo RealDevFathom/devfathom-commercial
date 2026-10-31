@@ -12,7 +12,6 @@ afterEach(() => {
 it('keeps enrollment on the login screen, preserves errors, and shows recovery codes before continuing', async () => {
   const fetchMock = vi
     .fn()
-    .mockResolvedValueOnce({ ok: false })
     .mockResolvedValueOnce({ ok: true, json: async () => ({ enrollmentRequired: true }) })
     .mockResolvedValueOnce({ ok: true, json: async () => ({ secret: 'SYNTHETICKEY' }) })
     .mockResolvedValueOnce({
@@ -36,13 +35,14 @@ it('keeps enrollment on the login screen, preserves errors, and shows recovery c
   expect(router.replace).toHaveBeenCalledWith('/platform');
 });
 it('resumes an enrollment cookie after refresh and permits logout', async () => {
-  const fetchMock = vi
-    .fn()
-    .mockResolvedValueOnce({ ok: true, json: async () => ({ enrollmentOnly: true }) })
-    .mockResolvedValueOnce({ ok: true });
+  const fetchMock = vi.fn().mockResolvedValueOnce({ ok: true });
   vi.stubGlobal('fetch', fetchMock);
-  render(<PlatformLoginForm />);
+  render(<PlatformLoginForm initialEnrollment />);
+  expect(fetchMock).not.toHaveBeenCalled();
   fireEvent.click(await screen.findByRole('button', { name: 'Sign out' }));
   await waitFor(() => expect(screen.getByLabelText('Work email')).toBeVisible());
-  expect(fetchMock).toHaveBeenLastCalledWith('/api/platform/session', { method: 'DELETE', headers: { 'Content-Type': 'application/json' } });
+  expect(fetchMock).toHaveBeenLastCalledWith('/api/platform/session', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+  });
 });

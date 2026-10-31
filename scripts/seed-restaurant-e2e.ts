@@ -222,6 +222,7 @@ export const RESTAURANT_E2E_OWNED_FIXTURES = [
       'permission_restaurant_e2e_operator_3',
       'permission_restaurant_e2e_operator_4',
       'permission_restaurant_e2e_operator_5',
+      'permission_restaurant_e2e_operator_6',
       'permission_restaurant_e2e_delivery_denied',
       'permission_restaurant_e2e_manager_all',
       'permission_restaurant_e2e_reports_operational',
@@ -1292,6 +1293,7 @@ async function main() {
                 'cash:close',
                 'orders:take',
                 'customers:read',
+                'kitchen:operate',
               ].map((capability, index) => ({
                 id: `permission_restaurant_e2e_operator_${index}`,
                 capability,
@@ -1312,6 +1314,7 @@ async function main() {
                 'cash:close',
                 'orders:take',
                 'customers:read',
+                'kitchen:operate',
               ].map((capability, index) => ({
                 id: `permission_restaurant_e2e_operator_${index}`,
                 capability,
@@ -1512,7 +1515,7 @@ async function main() {
               title: user.title,
               status: 'ACTIVE',
               startDate: FIXED_AT,
-              role: 'EMPLOYEE',
+              role: user.id === IDS.alexUser ? 'ADMIN' : 'EMPLOYEE',
               avatar: null,
               phone: null,
               bio: null,
@@ -1531,6 +1534,7 @@ async function main() {
               name: user.name,
               email: user.email,
               password: user.password,
+              role: user.id === IDS.alexUser ? 'ADMIN' : 'EMPLOYEE',
               // A restaurant has no LEADERSHIP department; both fixture users
               // work the floor.
               department: adminDepartmentKeyForVertical('RESTAURANT'),
