@@ -920,6 +920,22 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['medicine', { medicineId: 'medicine_b' }],
+    ['pack', { packLevelId: 'pack_b' }],
+  ])('refuses a receipt whose later line has a mismatched %s', async (_, mismatch) => {
+    await expect(
+      caller().createGoodsReceipt({
+        ...RECEIPT,
+        lines: [RECEIPT_LINE, { ...RECEIPT_LINE, ...mismatch }],
+      })
+    ).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'PURCHASE_ORDER_LINE_ITEM_MISMATCH',
+    });
+    expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+  });
+
   it('refuses rejected units with no quarantine destination or reason (PUR-04)', async () => {
     await expect(
       caller().createGoodsReceipt({
