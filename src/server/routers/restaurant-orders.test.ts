@@ -24,6 +24,14 @@ const mocks = vi.hoisted(() => ({
   sendOrder: vi.fn(),
   voidItem: vi.fn(),
   cancelOrder: vi.fn(),
+  staffFindMany: vi.fn(),
+  staffFindFirst: vi.fn(),
+  assignmentFindMany: vi.fn(),
+  assignmentFindFirst: vi.fn(),
+  deviceFindUnique: vi.fn(),
+  deviceFindMany: vi.fn(),
+  authenticateOperator: vi.fn(),
+  operatorHasCapability: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -44,6 +52,12 @@ vi.mock('@/lib/abac', async () => {
   const actual = await vi.importActual<typeof import('@/lib/abac')>('@/lib/abac');
   return { ...actual, can: mocks.can };
 });
+vi.mock('@/lib/restaurant/terminal-auth', () => ({
+  authenticateOperator: mocks.authenticateOperator,
+}));
+vi.mock('@/lib/restaurant/checkout-routes', () => ({
+  operatorHasCapability: mocks.operatorHasCapability,
+}));
 vi.mock('@/lib/restaurant/orders', async () => {
   const actual =
     await vi.importActual<typeof import('@/lib/restaurant/orders')>('@/lib/restaurant/orders');
@@ -67,6 +81,15 @@ const db = {
   user: { findUnique: mocks.userFindUnique },
   restaurantOrder: { findMany: mocks.orderFindMany, findUnique: mocks.orderFindUnique },
   restaurantKitchenTicket: { findMany: mocks.ticketFindMany },
+  restaurantStaffProfile: { findMany: mocks.staffFindMany, findFirst: mocks.staffFindFirst },
+  restaurantBranchAssignment: {
+    findMany: mocks.assignmentFindMany,
+    findFirst: mocks.assignmentFindFirst,
+  },
+  restaurantRegisteredDevice: {
+    findUnique: mocks.deviceFindUnique,
+    findMany: mocks.deviceFindMany,
+  },
   restaurantBranch: {
     findMany: vi.fn(async ({ where }: { where: { id?: { in: string[] } } }) =>
       (where.id?.in ?? []).map((id) => ({ id }))
@@ -102,7 +125,22 @@ beforeEach(() => {
   mocks.can.mockResolvedValue(true);
   mocks.orderFindMany.mockResolvedValue([]);
   mocks.ticketFindMany.mockResolvedValue([]);
+  // Cancellation prerequisites: the session user is linked to one ACTIVE staff
+  // profile whose primary branch is b1, and dev_1 is an ACTIVE b1 terminal.
+  mocks.staffFindMany.mockResolvedValue([{ id: 'staff_session', primaryBranchId: 'b1' }]);
+  mocks.assignmentFindMany.mockResolvedValue([]);
+  mocks.staffFindFirst.mockResolvedValue(null);
+  mocks.assignmentFindFirst.mockResolvedValue(null);
+  mocks.deviceFindUnique.mockResolvedValue({ id: 'dev_1', branchId: 'b1', status: 'ACTIVE' });
+  mocks.deviceFindMany.mockResolvedValue([]);
+  mocks.authenticateOperator.mockResolvedValue({ ok: true, staffProfileId: 'manager_1' });
+  mocks.operatorHasCapability.mockResolvedValue(true);
 });
+
+/** Make `o1` resolve to a b1 order for the cancellation path. */
+function primeCancellableOrder(branchId = 'b1') {
+  mocks.orderFindUnique.mockResolvedValue({ id: 'o1', branchId });
+}
 
 describe('read model (C10)', () => {
   it('keeps historical DELIVERY orders readable through the channel filter', async () => {
@@ -275,6 +313,7 @@ describe('capability gating + strict inputs', () => {
   it('allows order cancellation with orders:void rather than orders:manage', async () => {
     mocks.can.mockImplementation(async (_subject, action) => action === 'orders:void');
     mocks.cancelOrder.mockResolvedValue({ orderId: 'o1', replayed: false });
+    primeCancellableOrder();
 
     await expect(
       caller().cancel({ orderId: 'o1', reason: 'Guest request', actor: ACTOR })
@@ -311,6 +350,7 @@ describe('cancellation through real ABAC middleware', () => {
     const actual = await vi.importActual<typeof import('@/lib/abac')>('@/lib/abac');
     mocks.can.mockImplementation(actual.can);
     mocks.cancelOrder.mockResolvedValue({ orderId: 'o1', replayed: false });
+    primeCancellableOrder();
   });
 
   it.each(['owner', 'general-manager', 'branch-manager'])(
@@ -368,6 +408,210 @@ describe('cancellation through real ABAC middleware', () => {
       caller().cancel({ orderId: 'o1', reason: 'Guest request', actor: ACTOR })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(mocks.cancelOrder).not.toHaveBeenCalled();
+  });
+});
+
+describe('cancellation branch scope, attribution and approval', () => {
+  beforeEach(() => {
+    mocks.can.mockImplementation(async (_subject, action) => action === 'orders:void');
+    mocks.cancelOrder.mockResolvedValue({ orderId: 'o1', replayed: false });
+  });
+
+  it('refuses to cancel an order in a branch the manager is not authorized for', async () => {
+    primeCancellableOrder('b2');
+
+    await expect(
+      caller().cancel({ orderId: 'o1', reason: 'Guest request', actor: ACTOR })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.can.mock.calls.some((call) => call[1] === 'restaurant:configure')).toBe(true);
+    expect(mocks.cancelOrder).not.toHaveBeenCalled();
+  });
+
+  it('allows an explicit branch assignment to authorize another branch', async () => {
+    primeCancellableOrder('b2');
+    mocks.assignmentFindMany.mockResolvedValue([{ branchId: 'b2' }]);
+    mocks.deviceFindUnique.mockResolvedValue({ id: 'dev_1', branchId: 'b2', status: 'ACTIVE' });
+
+    await expect(
+      caller().cancel({ orderId: 'o1', reason: 'Guest request', actor: ACTOR })
+    ).resolves.toMatchObject({ orderId: 'o1' });
+  });
+
+  it('returns NOT_FOUND for an order outside the tenant', async () => {
+    mocks.orderFindUnique.mockResolvedValue(null);
+
+    await expect(
+      caller().cancel({ orderId: 'o1', reason: 'Guest request', actor: ACTOR })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(mocks.cancelOrder).not.toHaveBeenCalled();
+  });
+
+  it('derives the acting staff identity from the session, ignoring a client-supplied id', async () => {
+    primeCancellableOrder();
+
+    await caller().cancel({
+      orderId: 'o1',
+      reason: 'Guest request',
+      actor: { ...ACTOR, staffProfileId: 'someone_else' },
+    });
+
+    expect(mocks.cancelOrder).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({
+        approvingStaffProfileId: null,
+        actor: { staffProfileId: 'staff_session', deviceId: 'dev_1', idempotencyKey: 'key_1' },
+      })
+    );
+  });
+
+  it('rejects a session user without exactly one active staff profile', async () => {
+    primeCancellableOrder();
+    mocks.staffFindMany.mockResolvedValue([]);
+
+    await expect(
+      caller().cancel({ orderId: 'o1', reason: 'Guest request', actor: ACTOR })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.cancelOrder).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['unknown', null],
+    ['in another branch', { id: 'dev_1', branchId: 'b2', status: 'ACTIVE' }],
+    ['revoked', { id: 'dev_1', branchId: 'b1', status: 'REVOKED' }],
+  ])('rejects a device that is %s', async (_label, device) => {
+    primeCancellableOrder();
+    mocks.deviceFindUnique.mockResolvedValue(device);
+
+    await expect(
+      caller().cancel({ orderId: 'o1', reason: 'Guest request', actor: ACTOR })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mocks.cancelOrder).not.toHaveBeenCalled();
+  });
+
+  it('no longer accepts a bare approving staff id without a credential', async () => {
+    primeCancellableOrder();
+
+    await expect(
+      caller().cancel({
+        orderId: 'o1',
+        reason: 'Guest request',
+        // @ts-expect-error — an unauthenticated approver id is no longer part of the contract
+        approvingStaffProfileId: 'manager_1',
+        actor: ACTOR,
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mocks.cancelOrder).not.toHaveBeenCalled();
+  });
+
+  it('verifies the approver credential and coauth:approve before recording the approval', async () => {
+    primeCancellableOrder();
+    const approving = { staffProfileId: 'manager_1', type: 'PIN' as const, secret: '2468' };
+
+    await caller().cancel({
+      orderId: 'o1',
+      reason: 'Guest request',
+      wastageDisposition: 'WASTE',
+      approving,
+      actor: ACTOR,
+    });
+
+    expect(mocks.authenticateOperator).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({
+        staffProfileId: 'manager_1',
+        deviceId: 'dev_1',
+        branchId: 'b1',
+        type: 'PIN',
+        secret: '2468',
+      })
+    );
+    expect(mocks.operatorHasCapability).toHaveBeenCalledWith(
+      db,
+      'manager_1',
+      'coauth:approve',
+      expect.any(Date),
+      'b1'
+    );
+    expect(mocks.cancelOrder).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({ approvingStaffProfileId: 'manager_1', wastageDisposition: 'WASTE' })
+    );
+    // The approver secret never reaches the audit log.
+    expect(mocks.annotateAudit).toHaveBeenCalledWith(expect.anything(), { skipInput: true });
+  });
+
+  it.each([
+    [{ ok: false, reason: 'INVALID' }, 'FORBIDDEN'],
+    [{ ok: false, reason: 'LOCKED' }, 'TOO_MANY_REQUESTS'],
+  ])('rejects a failed approver credential (%o)', async (auth, code) => {
+    primeCancellableOrder();
+    mocks.authenticateOperator.mockResolvedValue(auth);
+
+    await expect(
+      caller().cancel({
+        orderId: 'o1',
+        reason: 'Guest request',
+        approving: { staffProfileId: 'manager_1', type: 'PIN', secret: 'wrong' },
+        actor: ACTOR,
+      })
+    ).rejects.toMatchObject({ code });
+    expect(mocks.cancelOrder).not.toHaveBeenCalled();
+  });
+
+  it('rejects an authenticated approver lacking coauth:approve', async () => {
+    primeCancellableOrder();
+    mocks.operatorHasCapability.mockResolvedValue(false);
+
+    await expect(
+      caller().cancel({
+        orderId: 'o1',
+        reason: 'Guest request',
+        approving: { staffProfileId: 'manager_1', type: 'BADGE', secret: 'badge' },
+        actor: ACTOR,
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.cancelOrder).not.toHaveBeenCalled();
+  });
+});
+
+describe('cancellation directory', () => {
+  it('lists only active devices and staff for an authorized branch under orders:void', async () => {
+    mocks.can.mockImplementation(async (_subject, action) => action === 'orders:void');
+    const device = {
+      id: 'dev_1',
+      name: 'Front Register',
+      status: 'ACTIVE',
+      branch: { id: 'b1', name: 'Downtown' },
+    };
+    mocks.deviceFindMany.mockResolvedValue([device]);
+    mocks.staffFindMany.mockResolvedValue([{ id: 'manager_1', displayName: 'Mina' }]);
+    mocks.staffFindFirst.mockResolvedValue({ id: 'staff_session' });
+
+    await expect(caller().cancellationDirectory({ branchId: 'b1' })).resolves.toEqual({
+      devices: [device],
+      approvers: [{ id: 'manager_1', displayName: 'Mina' }],
+    });
+    expect(mocks.can.mock.calls.some((call) => call[1] === 'devices:manage')).toBe(false);
+    expect(mocks.deviceFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { branchId: 'b1', status: 'ACTIVE' } })
+    );
+  });
+
+  it('denies a branch the caller is not scoped to', async () => {
+    mocks.can.mockImplementation(async (_subject, action) => action === 'orders:void');
+
+    await expect(caller().cancellationDirectory({ branchId: 'b2' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mocks.deviceFindMany).not.toHaveBeenCalled();
+  });
+
+  it('requires orders:void', async () => {
+    mocks.can.mockResolvedValue(false);
+
+    await expect(caller().cancellationDirectory({ branchId: 'b1' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
   });
 });
 

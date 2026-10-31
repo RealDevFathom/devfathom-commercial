@@ -137,7 +137,17 @@ export function OrdersConsole() {
     { branchId: normalizedBranchId },
     { enabled: listEnabled }
   );
-  const devicesQuery = trpc.restaurantDevices.list.useQuery(undefined, { enabled: listEnabled });
+  // Branch-authorized, orders:void-gated directory: cancelling never requires
+  // device or staff administration rights.
+  const cancellationDirectoryQuery = trpc.restaurantOrders.cancellationDirectory.useQuery(
+    { branchId: normalizedBranchId },
+    { enabled: listEnabled && cancelOpen }
+  );
+  const approverOptions = (cancellationDirectoryQuery.data?.approvers ?? []).map((person) => ({
+    id: person.id,
+    displayName: person.displayName,
+    role: 'Staff',
+  }));
   const listInput = {
     branchId: normalizedBranchId,
     ...(businessDate ? { businessDate } : {}),
@@ -197,14 +207,28 @@ export function OrdersConsole() {
     const form = event.currentTarget;
     const data = new FormData(form);
     const wastageDisposition = text(data, 'wastageDisposition') as Disposition | '';
+    const approvingStaffProfileId = text(data, 'approvingStaffProfileId');
+    const approvingSecret = String(data.get('approvingSecret') ?? '');
+    const approvingType = text(data, 'approvingType') === 'BADGE' ? 'BADGE' : 'PIN';
+    if (approvingStaffProfileId && !approvingSecret) {
+      setCancelError("Enter the approving manager's PIN or badge.");
+      return;
+    }
     setCancelError('');
     cancel.mutate({
       orderId: selectedOrderId,
       reason: text(data, 'reason'),
       ...(wastageDisposition ? { wastageDisposition } : {}),
-      approvingStaffProfileId: text(data, 'approvingStaffProfileId') || null,
+      ...(approvingStaffProfileId
+        ? {
+            approving: {
+              staffProfileId: approvingStaffProfileId,
+              type: approvingType,
+              secret: approvingSecret,
+            },
+          }
+        : {}),
       actor: {
-        staffProfileId: text(data, 'staffProfileId'),
         deviceId: text(data, 'deviceId'),
         idempotencyKey: browserUuid(),
       },
@@ -473,27 +497,18 @@ export function OrdersConsole() {
                 This order is already terminal and cannot be cancelled.
               </p>
             ) : null}
-            <div className="grid gap-4 sm:grid-cols-2">
-              <Field label="Acting staff member">
-                <RestaurantStaffSelect
-                  name="staffProfileId"
-                  required
-                  staff={staffQuery.data ?? []}
-                  loading={staffQuery.isLoading}
-                  error={Boolean(staffQuery.error)}
-                  label="Acting staff member"
-                />
-              </Field>
-              <Field label="Device">
-                <RestaurantDeviceSelect
-                  devices={devicesQuery.data ?? []}
-                  branchId={normalizedBranchId}
-                  loading={devicesQuery.isLoading}
-                  error={Boolean(devicesQuery.error)}
-                  required
-                />
-              </Field>
-            </div>
+            <p className="text-sm text-text-muted">
+              The cancellation is attributed to the staff profile linked to your account.
+            </p>
+            <Field label="Device">
+              <RestaurantDeviceSelect
+                devices={cancellationDirectoryQuery.data?.devices ?? []}
+                branchId={normalizedBranchId}
+                loading={cancellationDirectoryQuery.isLoading}
+                error={Boolean(cancellationDirectoryQuery.error)}
+                required
+              />
+            </Field>
             <Field label="Reason">
               <Input name="reason" required className="h-11" />
             </Field>
@@ -509,15 +524,35 @@ export function OrdersConsole() {
               <Field label="Approving staff member (optional)">
                 <RestaurantStaffSelect
                   name="approvingStaffProfileId"
-                  staff={staffQuery.data ?? []}
-                  loading={staffQuery.isLoading}
-                  error={Boolean(staffQuery.error)}
+                  staff={approverOptions}
+                  loading={cancellationDirectoryQuery.isLoading}
+                  error={Boolean(cancellationDirectoryQuery.error)}
                   allowEmpty
                   emptyLabel="No additional approval"
                   label="Approving staff member"
                 />
               </Field>
             </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label="Approver credential type">
+                <select name="approvingType" className={selectClass} defaultValue="PIN">
+                  <option value="PIN">PIN</option>
+                  <option value="BADGE">Badge</option>
+                </select>
+              </Field>
+              <Field label="Approver PIN or badge">
+                <Input
+                  name="approvingSecret"
+                  type="password"
+                  autoComplete="off"
+                  className="h-11"
+                />
+              </Field>
+            </div>
+            <p className="text-xs text-text-muted">
+              Orders with prepared items need a manager holding co-authorization approval to
+              enter their own credential.
+            </p>
             <p className="text-xs text-text-muted">
               A fresh device-scoped idempotency key is generated in this browser when submitted.
             </p>

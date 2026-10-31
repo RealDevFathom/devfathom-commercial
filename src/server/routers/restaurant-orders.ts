@@ -6,6 +6,10 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { router, capabilityProcedure } from '../trpc';
 import { assertInOrganization } from '../org-refs';
 import { annotateAudit } from '../audit';
+import { resolveRestaurantActor } from '../restaurant-actor';
+import { requireRestaurantBranchScope } from '../restaurant-branch-scope';
+import { operatorHasCapability } from '@/lib/restaurant/checkout-routes';
+import { authenticateOperator } from '@/lib/restaurant/terminal-auth';
 import { businessDateToUtcDate } from '@/lib/restaurant/business-date';
 import { CoAuthorizationError } from '@/lib/restaurant/co-authorization';
 import { KitchenTicketError } from '@/lib/restaurant/kitchen-tickets';
@@ -91,6 +95,26 @@ const ACTOR = z.object({
   deviceId: ID,
   idempotencyKey: ID,
 });
+
+/** Cancellation envelope: the acting staff identity is derived from the session,
+ * so a client-supplied `staffProfileId` is accepted only for compatibility and is
+ * never trusted. */
+const CANCEL_ACTOR = z
+  .object({
+    staffProfileId: ID.optional(),
+    deviceId: ID,
+    idempotencyKey: ID,
+  })
+  .strict();
+
+/** An approving manager's own credential, verified server-side (C6). */
+const APPROVING = z
+  .object({
+    staffProfileId: ID,
+    type: z.enum(['PIN', 'BADGE']),
+    secret: z.string().min(1),
+  })
+  .strict();
 
 function toActor(actor: z.infer<typeof ACTOR>): CommandActor {
   return {
@@ -463,6 +487,46 @@ export const restaurantOrdersRouter = router({
       return result;
     }),
 
+  /**
+   * Minimal directory the back-office cancellation form needs for ONE branch the
+   * caller is authorized for: the branch's ACTIVE registered devices (id/name
+   * only — no device administration, secrets or health) and the ACTIVE staff who
+   * may be named as the approving manager. Gated by `orders:void`, so a manager
+   * can cancel without being granted `devices:manage` or `staff:manage`.
+   */
+  cancellationDirectory: voidProcedure
+    .input(z.object({ branchId: ID }).strict())
+    .query(async ({ ctx, input }) => {
+      await requireRestaurantBranchScope(ctx, input.branchId);
+      const [devices, approvers] = await Promise.all([
+        ctx.db.restaurantRegisteredDevice.findMany({
+          where: { branchId: input.branchId, status: 'ACTIVE' },
+          select: {
+            id: true,
+            name: true,
+            status: true,
+            branch: { select: { id: true, name: true } },
+          },
+          orderBy: [{ name: 'asc' }, { id: 'asc' }],
+        }),
+        ctx.db.restaurantStaffProfile.findMany({
+          where: { primaryBranchId: input.branchId, status: 'ACTIVE' },
+          select: { id: true, displayName: true },
+          orderBy: [{ displayName: 'asc' }, { id: 'asc' }],
+        }),
+      ]);
+      return { devices, approvers };
+    }),
+
+  /**
+   * Cancel an order from the back office. Mirrors the terminal cancellation route
+   * (`/api/restaurant/orders/cancel`): the order's branch must be in the caller's
+   * branch scope, the acting staff identity is DERIVED from the session (never
+   * client-selected), the device must be an ACTIVE terminal of that branch, and a
+   * co-authorizing manager must prove their own credential and hold
+   * `coauth:approve` at the branch. `skipInput` keeps the approver secret out of
+   * the audit log.
+   */
   cancel: voidProcedure
     .input(
       z
@@ -470,26 +534,95 @@ export const restaurantOrdersRouter = router({
           orderId: ID,
           reason: z.string().min(1),
           wastageDisposition: DISPOSITION.optional(),
-          approvingStaffProfileId: ID.nullish(),
-          actor: ACTOR,
+          approving: APPROVING.optional(),
+          actor: CANCEL_ACTOR,
         })
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      annotateAudit(ctx, { skipInput: true });
+
+      const order = await ctx.db.restaurantOrder.findUnique({
+        where: { id: input.orderId },
+        select: { id: true, branchId: true },
+      });
+      if (!order) throw new TRPCError({ code: 'NOT_FOUND', message: 'Order not found.' });
+      // Branch boundary above tenant RLS + session-derived acting identity.
+      const { staffProfileId: actingStaffProfileId } = await resolveRestaurantActor(ctx, [
+        order.branchId,
+      ]);
+
+      const device = await ctx.db.restaurantRegisteredDevice.findUnique({
+        where: { id: input.actor.deviceId },
+        select: { id: true, branchId: true, status: true },
+      });
+      if (!device || device.branchId !== order.branchId || device.status !== 'ACTIVE') {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: "The device is not an active terminal of this order's branch.",
+        });
+      }
+
+      let approvingStaffProfileId: string | null = null;
+      if (input.approving) {
+        const now = new Date();
+        const auth = await authenticateOperator(ctx.db, {
+          staffProfileId: input.approving.staffProfileId,
+          deviceId: device.id,
+          branchId: order.branchId,
+          type: input.approving.type,
+          secret: input.approving.secret,
+          now,
+        });
+        if (!auth.ok) {
+          if (auth.reason === 'LOCKED') {
+            throw new TRPCError({
+              code: 'TOO_MANY_REQUESTS',
+              message: "Approving manager's credential is temporarily locked.",
+            });
+          }
+          throw new TRPCError({ code: 'FORBIDDEN', message: 'Invalid approving credential.' });
+        }
+        if (
+          !(await operatorHasCapability(
+            ctx.db,
+            auth.staffProfileId,
+            'coauth:approve',
+            now,
+            order.branchId
+          ))
+        ) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'The approving manager lacks the "coauth:approve" capability.',
+          });
+        }
+        approvingStaffProfileId = auth.staffProfileId;
+      }
+
       const result = await run(() =>
         cancelOrder(ctx.db, {
-          orderId: input.orderId,
+          orderId: order.id,
           reason: input.reason,
           wastageDisposition: input.wastageDisposition,
-          approvingStaffProfileId: input.approvingStaffProfileId ?? null,
-          actor: toActor(input.actor),
+          approvingStaffProfileId,
+          actor: {
+            staffProfileId: actingStaffProfileId,
+            deviceId: device.id,
+            idempotencyKey: input.actor.idempotencyKey,
+          },
         })
       );
       annotateAudit(ctx, {
         targetType: 'RestaurantOrder',
-        targetId: input.orderId,
+        targetId: order.id,
         description: 'Cancelled an order',
-        metadata: { replayed: result.replayed },
+        metadata: {
+          replayed: result.replayed,
+          actingStaffProfileId,
+          approvingStaffProfileId,
+          deviceId: device.id,
+        },
       });
       return result;
     }),

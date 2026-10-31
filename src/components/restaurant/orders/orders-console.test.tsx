@@ -69,6 +69,7 @@ const mocks = vi.hoisted(() => ({
   },
   listCalls: [] as Array<{ input: unknown; enabled: boolean }>,
   detailCalls: [] as Array<{ input: unknown; enabled: boolean }>,
+  directoryCalls: [] as Array<{ input: unknown; enabled: boolean }>,
   cancel: vi.fn(),
   invalidate: vi.fn(),
 }));
@@ -98,18 +99,10 @@ vi.mock('@/lib/trpc', () => ({
     },
     restaurantDevices: {
       list: {
-        useQuery: () => ({
-          data: [
-            {
-              id: 'device_1',
-              name: 'Front Register',
-              branch: { id: 'branch_1', name: 'Downtown' },
-              status: 'ACTIVE',
-            },
-          ],
-          error: null,
-          isLoading: false,
-        }),
+        // Requires devices:manage — the cancellation form must never depend on it.
+        useQuery: () => {
+          throw new Error('cancellation must not query the device administration list');
+        },
       },
     },
     useUtils: () => ({
@@ -129,6 +122,26 @@ vi.mock('@/lib/trpc', () => ({
         useQuery: (input: unknown, options: { enabled: boolean }) => {
           mocks.detailCalls.push({ input, enabled: options.enabled });
           return mocks.order;
+        },
+      },
+      cancellationDirectory: {
+        useQuery: (input: unknown, options: { enabled: boolean }) => {
+          mocks.directoryCalls.push({ input, enabled: options.enabled });
+          return {
+            data: {
+              devices: [
+                {
+                  id: 'device_1',
+                  name: 'Front Register',
+                  branch: { id: 'branch_1', name: 'Downtown' },
+                  status: 'ACTIVE',
+                },
+              ],
+              approvers: [{ id: 'manager_1', displayName: 'Mina Manager' }],
+            },
+            error: null,
+            isLoading: false,
+          };
         },
       },
       cancel: {
@@ -174,6 +187,7 @@ describe('OrdersConsole', () => {
     vi.clearAllMocks();
     mocks.listCalls.length = 0;
     mocks.detailCalls.length = 0;
+    mocks.directoryCalls.length = 0;
   });
 
   it('gates list and detail reads by entitlement, branch, and selection', () => {
@@ -230,8 +244,10 @@ describe('OrdersConsole', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Cancel order' }));
 
     const dialog = screen.getByRole('dialog', { name: 'Cancel order #42?' });
-    fireEvent.change(within(dialog).getByLabelText('Acting staff member'), {
-      target: { value: 'staff_1' },
+    expect(within(dialog).queryByLabelText('Acting staff member')).not.toBeInTheDocument();
+    expect(mocks.directoryCalls.at(-1)).toEqual({
+      input: { branchId: 'branch_1' },
+      enabled: true,
     });
     fireEvent.change(within(dialog).getByLabelText('Device'), {
       target: { value: 'device_1' },
@@ -247,15 +263,17 @@ describe('OrdersConsole', () => {
     fireEvent.change(within(dialog).getByLabelText('Approving staff member (optional)'), {
       target: { value: 'manager_1' },
     });
+    fireEvent.change(within(dialog).getByLabelText('Approver PIN or badge'), {
+      target: { value: '2468' },
+    });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm cancellation' }));
 
     expect(mocks.cancel).toHaveBeenCalledWith({
       orderId: 'order_1',
       reason: 'Guest left',
       wastageDisposition: 'WASTE',
-      approvingStaffProfileId: 'manager_1',
+      approving: { staffProfileId: 'manager_1', type: 'PIN', secret: '2468' },
       actor: {
-        staffProfileId: 'staff_1',
         deviceId: 'device_1',
         idempotencyKey: '00000000-0000-4000-8000-000000000045',
       },
