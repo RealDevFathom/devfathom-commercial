@@ -96,6 +96,7 @@ const priorHrefs = [
   '/pharmacy/counter',
   '/pharmacy/counter/close',
   '/pharmacy/inventory',
+  '/pharmacy/accounts/liquidity-kpi',
   '/pharmacy/purchasing',
   '/pharmacy/finance',
   '/pharmacy/reports',
@@ -161,7 +162,7 @@ beforeEach(() => {
 afterEach(cleanup);
 describe('Hotel navigation composition', () => {
   it('retains Menu import and every accepted link alongside the six hospitality routes', () => {
-    expect(priorHrefs).toHaveLength(58);
+    expect(priorHrefs).toHaveLength(59);
     expect(navigation).toHaveLength(priorHrefs.length + hospitalityHrefs.length);
     const hrefs = navigation.map((n) => n.href);
     expect(hrefs).toEqual(expect.arrayContaining(priorHrefs));

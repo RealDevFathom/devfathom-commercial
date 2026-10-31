@@ -99,5 +99,27 @@ describe('posted cash coverage page', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('No financial data was changed');
     expect(screen.queryByText('2.50×')).toBeNull();
     expect(screen.queryByRole('link', { name: 'Export safe CSV' })).toBeNull();
+    // Recoverable errors keep the authorized branches so the form can be resubmitted.
+    expect(screen.getByRole('option', { name: 'Main branch' })).toHaveValue('branch-1');
+    expect(screen.getByRole('combobox')).toHaveValue('branch-1');
+    expect(screen.getByLabelText('Posted through (UTC)')).toHaveValue('2026-10-28');
+  });
+
+  it('offers a retry for the verified branch and cutoff when the balance reader fails', async () => {
+    mocks.financialStatements.mockRejectedValue(new Error('offline'));
+    await show({ branch: 'branch-1', cutoff: '2026-10-27' });
+    expect(screen.getByRole('link', { name: 'Retry posted balances' })).toHaveAttribute(
+      'href',
+      '/pharmacy/accounts/liquidity-kpi?branch=branch-1&cutoff=2026-10-27'
+    );
+    expect(screen.getByLabelText('Posted through (UTC)')).toHaveValue('2026-10-27');
+  });
+
+  it('withholds the branch list when the balance reader denies access', async () => {
+    mocks.financialStatements.mockRejectedValue(new TRPCError({ code: 'FORBIDDEN' }));
+    await show({ branch: 'branch-1' });
+    expect(screen.getByRole('alert')).toHaveTextContent('Owner financial-report permission');
+    expect(screen.queryByRole('option', { name: 'Main branch' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Retry posted balances' })).toBeNull();
   });
 });

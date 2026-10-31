@@ -24,6 +24,8 @@ const validDate = (value: string) => {
   const parsed = new Date(`${value}T00:00:00.000Z`);
   return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
 };
+const isAuthError = (error: unknown) =>
+  error instanceof TRPCError && ['FORBIDDEN', 'UNAUTHORIZED'].includes(error.code);
 const money = (minor: string) => {
   const value = BigInt(minor);
   const absolute = value < BigInt(0) ? -value : value;
@@ -41,54 +43,75 @@ export default async function LiquidityKpiPage({
   const requestedBranch = scalar(query.branch);
   const invalidQuery =
     Object.values(query).some(Array.isArray) || !validDate(cutoff) || cutoff > today;
+  // Keep the form submittable after a rejected cutoff: the date input's max is today.
+  const formCutoff = validDate(cutoff) && cutoff <= today ? cutoff : today;
+  type Branch = { id: string; name: string };
+  let branches: Branch[] = [];
   let state:
     | {
         kind: 'ready';
-        branches: { id: string; name: string }[];
+        branches: Branch[];
         branchId: string;
         accounts: readonly { accountCode: string; currency: string; closingMinor: string }[];
         retrievedAt: Date;
       }
-    | { kind: 'denied' | 'error'; branches: { id: string; name: string }[] };
+    | { kind: 'denied'; branches: Branch[] }
+    | { kind: 'error'; branches: Branch[]; retryHref: string | null };
   try {
-    if (invalidQuery) throw new TRPCError({ code: 'BAD_REQUEST' });
     const context = await createTRPCContext();
     // Standalone report callers have no root-router module prefix. Enforce the
     // page's Finance entitlement before reading branch or financial data.
     assertModuleLicensed(context, 'pharmacy-finance');
     const reports = pharmacyReportsRouter.createCaller(context);
-    const branches = (await reports.branches()).branches;
+    branches = (await reports.branches()).branches;
+    if (invalidQuery) throw new TRPCError({ code: 'BAD_REQUEST' });
     const branchId = requestedBranch ?? (branches.length === 1 ? branches[0]!.id : '');
     if (!branchId || !branches.some((branch) => branch.id === branchId)) {
-      state = { kind: 'error', branches };
+      state = { kind: 'error', branches, retryHref: null };
     } else {
       const to = new Date(`${cutoff}T00:00:00.000Z`);
       to.setUTCDate(to.getUTCDate() + 1);
       const from = new Date(to);
       from.setUTCDate(from.getUTCDate() - 1);
-      const result = await pharmacyFinanceRouter.createCaller(context).financialStatements({
-        branchId,
-        from: from.toISOString(),
-        to: to.toISOString(),
-        page: 1,
-      });
-      state = {
-        kind: 'ready',
-        branches,
-        branchId,
-        accounts: result.accounts,
-        retrievedAt: result.freshness.retrievedAt,
-      };
+      const retryHref = `${ROUTE}?${new URLSearchParams({ branch: branchId, cutoff })}`;
+      const result = await pharmacyFinanceRouter
+        .createCaller(context)
+        .financialStatements({
+          branchId,
+          from: from.toISOString(),
+          to: to.toISOString(),
+          page: 1,
+        })
+        .catch((error: unknown) => {
+          if (isAuthError(error)) throw error;
+          // A transient balance-read failure keeps the verified branch and cutoff retryable.
+          return null;
+        });
+      state = result
+        ? {
+            kind: 'ready',
+            branches,
+            branchId,
+            accounts: result.accounts,
+            retrievedAt: result.freshness.retrievedAt,
+          }
+        : { kind: 'error', branches, retryHref };
     }
   } catch (error) {
-    state = {
-      kind:
-        error instanceof TRPCError && ['FORBIDDEN', 'UNAUTHORIZED'].includes(error.code)
-          ? 'denied'
-          : 'error',
-      branches: [],
-    };
+    // Authorization failures disclose no branch list; recoverable errors keep the
+    // authorized branches so the operator can correct the query and resubmit.
+    state = isAuthError(error)
+      ? { kind: 'denied', branches: [] }
+      : { kind: 'error', branches, retryHref: null };
   }
+  const selectedBranch =
+    state.kind === 'ready'
+      ? state.branchId
+      : state.branches.some((branch) => branch.id === requestedBranch)
+        ? requestedBranch!
+        : state.branches.length === 1
+          ? state.branches[0]!.id
+          : '';
 
   const rows = state.kind === 'ready' ? postedCashCoverage(state.accounts) : [];
   const csv = state.kind === 'ready' ? postedCashCoverageCsv(rows) : null;
@@ -105,7 +128,7 @@ export default async function LiquidityKpiPage({
             Branch
             <select
               name="branch"
-              defaultValue={state.kind === 'ready' ? state.branchId : (requestedBranch ?? '')}
+              defaultValue={selectedBranch}
               className="mt-1 min-h-11 w-full rounded-md border border-input bg-surface-raised px-2.5 text-sm focus-visible:outline-2 focus-visible:outline-ring"
               required
             >
@@ -123,7 +146,7 @@ export default async function LiquidityKpiPage({
               className="mt-1 min-h-11"
               type="date"
               name="cutoff"
-              defaultValue={cutoff}
+              defaultValue={formCutoff}
               max={today}
               required
             />
@@ -144,8 +167,16 @@ export default async function LiquidityKpiPage({
           <p role="alert" className="text-sm text-text-muted">
             {state.kind === 'denied'
               ? 'Owner financial-report permission, Pharmacy reports access, and an authorized active branch are required.'
-              : 'The cutoff or branch could not be verified, or posted balances could not be read. No financial data was changed.'}
+              : 'The cutoff or branch could not be verified, or posted balances could not be read. No financial data was changed. Choose an authorized branch and cutoff above, then read again.'}
           </p>
+          {state.kind === 'error' && state.retryHref ? (
+            <a
+              className="mt-3 inline-flex min-h-11 items-center text-sm underline focus-visible:outline-2 focus-visible:outline-ring"
+              href={state.retryHref}
+            >
+              Retry posted balances
+            </a>
+          ) : null}
         </SectionCard>
       ) : (
         <SectionCard
