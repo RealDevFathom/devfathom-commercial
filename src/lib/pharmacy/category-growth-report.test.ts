@@ -74,4 +74,40 @@ describe('pharmacy OTC and cosmetics category growth report', () => {
       shareGapPercentagePoints: null,
     });
   });
+
+  it.each([
+    { from: '2026-02-30' },
+    { to: '2026-02-30' },
+    { from: '2026-13-01' },
+    { from: '2026-2-01' },
+    { to: '2026-05-03' }, // 91 days from February 1, exclusive cutoff.
+    { to: '2026-02-01' },
+    { to: '2026-01-31' },
+    { branchIds: [] },
+    { branchIds: Array.from({ length: 101 }, (_, i) => `b${i}`) },
+  ])('rejects invalid dates or unbounded scope before SQL: %j', async (overrides) => {
+    const db = { $queryRaw: vi.fn() };
+    await expect(
+      readPharmacyCategoryGrowthReport(db as never, 'org', {
+        branchIds: ['b1'],
+        from: '2026-02-01',
+        to: '2026-02-02',
+        configuration: [],
+        ...overrides,
+      })
+    ).rejects.toThrow();
+    expect(db.$queryRaw).not.toHaveBeenCalled();
+  });
+
+  it('allows exactly 90 days and 100 branches', async () => {
+    const db = { $queryRaw: vi.fn().mockResolvedValue([]) };
+    const report = await readPharmacyCategoryGrowthReport(db as never, 'org', {
+      branchIds: Array.from({ length: 100 }, (_, i) => `b${i}`),
+      from: '2026-02-01',
+      to: '2026-05-02',
+      configuration: [],
+    });
+    expect(report).toHaveLength(100);
+    expect(db.$queryRaw).toHaveBeenCalledOnce();
+  });
 });

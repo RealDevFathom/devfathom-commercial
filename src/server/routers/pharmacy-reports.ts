@@ -26,6 +26,7 @@ import {
   PHARMACY_METRIC_CONTRACT,
   pharmacyReportCatalog,
   readPharmacyOwnerCommandCentre,
+  validatePharmacyReportFilters,
 } from '@/lib/pharmacy/reports';
 import { nextDigestDueAt, WhatsAppChannel } from '@/lib/pharmacy/owner-digest';
 import {
@@ -187,13 +188,20 @@ export const pharmacyReportsRouter = router({
     )
     .query(async ({ ctx, input }) => {
       const scoped = await ownerFilters(ctx, input);
+      let period: ReturnType<typeof validatePharmacyReportFilters>;
+      try {
+        period = validatePharmacyReportFilters(scoped);
+      } catch (error) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: error instanceof Error ? error.message : 'Invalid category growth report dates.',
+        });
+      }
       return readPharmacyCategoryGrowthReport(ctx.db, ctx.entitlements.organizationId, {
         branchIds: scoped.branchIds,
         from: input.from,
         // Public report filters are inclusive; the evidence reader uses an exclusive cutoff.
-        to: new Date(new Date(`${input.to}T00:00:00.000Z`).getTime() + 86_400_000)
-          .toISOString()
-          .slice(0, 10),
+        to: period.to.toISOString().slice(0, 10),
         configuration: input.configuration,
       });
     }),

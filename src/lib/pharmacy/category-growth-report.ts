@@ -2,6 +2,7 @@ import 'server-only';
 
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { MAX_PHARMACY_REPORT_BRANCHES, MAX_PHARMACY_REPORT_DAYS } from './reports';
 
 export const PHARMACY_GROWTH_CATEGORIES = ['OTC', 'COSMETICS'] as const;
 export type PharmacyGrowthCategory = (typeof PHARMACY_GROWTH_CATEGORIES)[number];
@@ -38,9 +39,9 @@ export function validateCategoryGrowthConfiguration(configuration: CategoryGrowt
 
 type CategoryTotalRow = {
   branchId: string;
-  category: PharmacyGrowthCategory;
-  salesMinor: bigint | number | string;
-  units: bigint | number | string;
+  category: PharmacyGrowthCategory | null;
+  salesMinor: bigint | number | string | null;
+  units: bigint | number | string | null;
   branchSalesMinor: bigint | number | string;
 };
 
@@ -59,30 +60,41 @@ export async function readPharmacyCategoryGrowthReport(
   const cutoff = new Date(`${input.to}T00:00:00.000Z`);
   if (
     !input.branchIds.length ||
+    input.branchIds.length > MAX_PHARMACY_REPORT_BRANCHES ||
+    !/^\d{4}-\d{2}-\d{2}$/.test(input.from) ||
+    !/^\d{4}-\d{2}-\d{2}$/.test(input.to) ||
     !Number.isFinite(from.getTime()) ||
-    !Number.isFinite(cutoff.getTime())
+    !Number.isFinite(cutoff.getTime()) ||
+    from.toISOString().slice(0, 10) !== input.from ||
+    cutoff.toISOString().slice(0, 10) !== input.to ||
+    cutoff.getTime() - from.getTime() > MAX_PHARMACY_REPORT_DAYS * 86_400_000
   )
-    throw new Error('Choose branches and valid report dates.');
+    throw new Error('Use valid UTC dates spanning at most 90 days and 1–100 authorized branches.');
   if (from >= cutoff) throw new Error('The exclusive report cutoff must follow the start date.');
 
   const rows = await db.$queryRaw<CategoryTotalRow[]>(Prisma.sql`
     WITH scoped AS (
-      SELECT l.*, m."productFamily", m.otc,
-        SUM(l.quantity::bigint * l."unitPriceMinor" - l."discountMinor") OVER (PARTITION BY l."branchId") AS "branchSalesMinor"
+      SELECT l.*, m."productFamily", m.otc
       FROM pharmacy_sale_lines l
       JOIN pharmacy_sales s ON s."organizationId"=l."organizationId" AND s."branchId"=l."branchId" AND s.id=l."saleId"
       JOIN pharmacy_medicines m ON m."organizationId"=l."organizationId" AND m.id=l."medicineId"
       WHERE l."organizationId"=${organizationId} AND l."branchId" IN (${Prisma.join(input.branchIds)})
         AND s.status='COMPLETED' AND s."receiptNumber" IS NOT NULL
         AND s."completedAt">=${from} AND s."completedAt"<${cutoff}
+    ), branch_totals AS (
+      SELECT "branchId", SUM(quantity::bigint * "unitPriceMinor" - "discountMinor") AS "branchSalesMinor"
+      FROM scoped GROUP BY "branchId"
+    ), category_totals AS (
+      SELECT l."branchId", CASE WHEN l."productFamily"='FRONT_SHOP' THEN 'COSMETICS' ELSE 'OTC' END AS category,
+        COALESCE(SUM(l."canonicalUnits"),0) AS units,
+        COALESCE(SUM(l.quantity::bigint * l."unitPriceMinor" - l."discountMinor"),0) AS "salesMinor"
+      FROM scoped l
+      WHERE l."productFamily"='FRONT_SHOP' OR l.otc=true
+      GROUP BY l."branchId",category
     )
-    SELECT l."branchId", CASE WHEN l."productFamily"='FRONT_SHOP' THEN 'COSMETICS' ELSE 'OTC' END AS category,
-      COALESCE(SUM(l."canonicalUnits"),0) AS units,
-      COALESCE(SUM(l.quantity::bigint * l."unitPriceMinor" - l."discountMinor"),0) AS "salesMinor",
-      l."branchSalesMinor"
-    FROM scoped l
-    WHERE l."productFamily"='FRONT_SHOP' OR l.otc=true
-    GROUP BY l."branchId",category,l."branchSalesMinor" ORDER BY l."branchId",category
+    SELECT b."branchId", c.category, c.units, c."salesMinor", b."branchSalesMinor"
+    FROM branch_totals b LEFT JOIN category_totals c ON c."branchId"=b."branchId"
+    ORDER BY b."branchId", c.category
   `);
   const config = new Map(input.configuration.map((item) => [item.category, item]));
   const byBranch = new Map<string, CategoryTotalRow[]>();
