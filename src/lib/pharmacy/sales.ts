@@ -24,6 +24,7 @@ import type { LedgerScope, ReservedSaleAllocation } from './stock-ledger';
 import { postSaleReturnEntry, postUnidentifiedSaleReturnEntry } from './finance-postings';
 import { isRecoverableSale, recoveryDashboard, RESTOCK_REQUEST_TTL_DAYS } from './back-in-stock';
 import { trackSideEffect } from '@/lib/side-effects/scope';
+import { lockPatientConsent } from './consent-writer';
 
 /**
  * Re-exported from `./medicine`, where MED-08 pricing now lives so the counter
@@ -1103,6 +1104,12 @@ export async function captureSafeRestockArrival(
       include: { patient: { select: { phone: true } } },
     });
     if (!interest) continue;
+    // Consent writers hold this lock through commit. Keep the consent read and
+    // notification insert in the same critical section so revocation cannot
+    // invalidate the consent ID and roll back the goods receipt.
+    if (interest.patientId && interest.channel) {
+      await lockPatientConsent(db, scope.organizationId, interest.patientId);
+    }
     const consent =
       interest.patientId && interest.channel
         ? await db.patientConsent.findFirst({

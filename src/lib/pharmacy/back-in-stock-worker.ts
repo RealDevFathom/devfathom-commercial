@@ -4,7 +4,11 @@ import { Prisma } from '@/generated/prisma/client';
 
 import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 
-import { restockPublicToken, sendBackInStockNotice } from './back-in-stock';
+import {
+  RESTOCK_REQUEST_TTL_DAYS,
+  restockPublicToken,
+  sendBackInStockNotice,
+} from './back-in-stock';
 import { lockPatientConsent } from './consent-writer';
 import { canMessageCustomer, normalizeWhatsAppNumber } from './whatsapp/messages';
 import {
@@ -91,6 +95,14 @@ export async function deliverBackInStockNotification(
       select: { active: true, whatsappOptIn: true, patient: { select: { phone: true } } },
     });
     const now = options.now ?? new Date();
+    const cutoff = new Date(now.getTime() - RESTOCK_REQUEST_TTL_DAYS * 86_400_000);
+    if (row.interest.createdAt < cutoff) {
+      await db.pharmacyRestockNotification.updateMany({
+        where: { id: row.id, ...scope, status: 'CAPTURED' },
+        data: { status: 'CANCELLED', cancelledAt: now, lastError: 'INTEREST_EXPIRED' },
+      });
+      return null;
+    }
     const to = normalizeWhatsAppNumber(customer?.patient.phone);
     if (
       !consent?.granted ||
@@ -112,7 +124,12 @@ export async function deliverBackInStockNotification(
     });
     if (!branchLocation) throw new Error('Branch not found');
     const claim = await db.pharmacyRestockNotification.updateMany({
-      where: { id: row.id, ...scope, status: 'CAPTURED', interest: { status: 'OPEN' } },
+      where: {
+        id: row.id,
+        ...scope,
+        status: 'CAPTURED',
+        interest: { status: 'OPEN', createdAt: { gte: cutoff } },
+      },
       data: { status: 'PROCESSING', lastError: null },
     });
     return claim.count === 1 ? { ...row, destination: to, branchLocation } : null;

@@ -173,6 +173,11 @@ export async function postGoodsReceipt(
   if (receipt.branchId !== scope.branchId) {
     throw new PharmacyReceivingError('CROSS_BRANCH_REFERENCE');
   }
+  // Restock RLS requires a branch even when the caller only bound the tenant.
+  await db.$queryRawUnsafe(
+    "SELECT set_config('app.current_branch_id', $1, true)",
+    scope.branchId
+  );
   assertGoodsReceiptTransition(receipt.status, 'POSTED');
   if (receipt.lines.length === 0) throw new PharmacyReceivingError('INVALID_QUANTITY');
 

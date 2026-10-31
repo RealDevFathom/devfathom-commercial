@@ -277,12 +277,23 @@ describe.skipIf(!url)('back-in-stock committed delivery on PostgreSQL', () => {
   });
 
   it.each([
-    { reserve: false, quantity: 1, sent: 1 },
-    { reserve: true, quantity: 100, sent: 0 },
+    { reserve: false, quantity: 1, revoked: false, sent: 1 },
+    { reserve: true, quantity: 100, revoked: false, sent: 0 },
+    { reserve: false, quantity: 1, revoked: true, sent: 0 },
   ])(
     'posts GRN stock and dispatches available requests (%j)',
-    async ({ reserve, quantity, sent }) => {
+    async ({ reserve, quantity, revoked, sent }) => {
       const f = await fixture();
+      if (revoked) {
+        await tenant((db) =>
+          consent.writePatientConsent(db, scope.organizationId, scope.actorId, {
+            patientId: f.patient.id,
+            purpose: 'REMINDERS',
+            channel: 'WHATSAPP',
+            granted: false,
+          })
+        );
+      }
       await tenant((db) =>
         db.pharmacyRestockInterest.update({
           where: { id: f.interest.id },
@@ -348,11 +359,18 @@ describe.skipIf(!url)('back-in-stock committed delivery on PostgreSQL', () => {
         });
       });
       const { postGoodsReceipt } = await import('./goods-receipt');
-      await tenant(
+      // Match the purchasing API: tenant transaction, no pre-bound branch.
+      await tenancy.withTenantDb(
+        scope.organizationId,
         (db) => postGoodsReceipt(db, scope, { goodsReceiptId: receipt.id, at: now }),
-        true
+        { skipDrain: false }
       );
       expect(sends.sendTemplate).toHaveBeenCalledTimes(sent);
+      expect(
+        await tenant((db) =>
+          db.pharmacyGoodsReceipt.findFirstOrThrow({ where: { id: receipt.id } })
+        )
+      ).toMatchObject({ status: 'POSTED' });
       expect(
         await tenant((db) =>
           db.pharmacyRestockNotification.count({
@@ -384,6 +402,62 @@ describe.skipIf(!url)('back-in-stock committed delivery on PostgreSQL', () => {
         })
       )
     ).toBe(1);
+  });
+
+  it('holds the consent-writer lock until capture commits', async () => {
+    const f = await fixture();
+    const [captured] = await tenant(async (db) => {
+      const result = await sales.captureSafeRestockArrival(db, scope, {
+        inventoryLotId: f.lots[0].id,
+        skipUnavailable: true,
+      });
+      // Revocation must wait for the entire receiving/capture transaction,
+      // including notification insertion, rather than invalidate its consent ID.
+      await expect(
+        tenant(async (writerDb) => {
+          await writerDb.$executeRawUnsafe("SET LOCAL lock_timeout = '100ms'");
+          return consent.writePatientConsent(writerDb, scope.organizationId, scope.actorId, {
+            patientId: f.patient.id,
+            purpose: 'REMINDERS',
+            channel: 'WHATSAPP',
+            granted: false,
+          });
+        })
+      ).rejects.toThrow(/lock timeout/);
+      return result;
+    });
+    await tenant((db) =>
+      consent.writePatientConsent(db, scope.organizationId, scope.actorId, {
+        patientId: f.patient.id,
+        purpose: 'REMINDERS',
+        channel: 'WHATSAPP',
+        granted: false,
+      })
+    );
+    await expect(
+      worker.deliverBackInStockNotification(scope, captured.notification!.id)
+    ).resolves.toBe('SKIPPED');
+    expect(sends.sendTemplate).not.toHaveBeenCalled();
+  });
+
+  it('cancels a queued notice after the request expires', async () => {
+    const f = await fixture();
+    const [captured] = await tenant((db) =>
+      sales.captureSafeRestockArrival(db, scope, { inventoryLotId: f.lots[0].id })
+    );
+    const expiredAt = new Date(f.interest.createdAt.getTime() + 14 * 86_400_000 + 1);
+    await expect(
+      worker.deliverBackInStockNotification(scope, captured.notification!.id, { now: expiredAt })
+    ).resolves.toBe('SKIPPED');
+    expect(sends.sendTemplate).not.toHaveBeenCalled();
+    const notice = await tenant((db) =>
+      db.pharmacyRestockNotification.findFirstOrThrow({ where: { id: captured.notification!.id } })
+    );
+    expect(notice).toMatchObject({
+      status: 'CANCELLED',
+      cancelledAt: expiredAt,
+      lastError: 'INTEREST_EXPIRED',
+    });
   });
 
   it.each(['revoked', 'STOP'] as const)('rechecks %s after capture', async (change) => {

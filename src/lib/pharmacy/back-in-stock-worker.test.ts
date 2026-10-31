@@ -106,6 +106,45 @@ function fixture() {
 beforeEach(() => vi.clearAllMocks());
 
 describe('back-in-stock durable delivery worker', () => {
+  it('cancels a notice that expires while queued and never claims or sends it', async () => {
+    const f = fixture();
+    f.row.interest.createdAt = new Date('2026-10-14T23:59:59.999Z');
+
+    await expect(f.send()).resolves.toBe('SKIPPED');
+    expect(f.row).toMatchObject({
+      status: 'CANCELLED',
+      cancelledAt: now,
+      lastError: 'INTEREST_EXPIRED',
+      interest: { status: 'OPEN' },
+    });
+    expect(f.db.pharmacyRestockNotification.updateMany).toHaveBeenCalledTimes(1);
+    expect(f.provider.sendTemplate).not.toHaveBeenCalled();
+    await expect(f.send()).resolves.toBe('SKIPPED');
+    expect(f.provider.sendTemplate).not.toHaveBeenCalled();
+  });
+
+  it.each(['2026-10-15T00:00:00.000Z', '2026-10-15T00:00:00.001Z'])(
+    'allows a request within the inclusive 14-day window (%s)',
+    async (createdAt) => {
+      const f = fixture();
+      f.row.interest.createdAt = new Date(createdAt);
+
+      await expect(f.send()).resolves.toBe('SENT');
+      expect(f.provider.sendTemplate).toHaveBeenCalledTimes(1);
+      expect(f.db.pharmacyRestockNotification.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            interest: {
+              status: 'OPEN',
+              createdAt: { gte: new Date('2026-10-15T00:00:00.000Z') },
+            },
+          }),
+          data: { status: 'PROCESSING', lastError: null },
+        })
+      );
+    }
+  );
+
   it('commits its claim before sending, records acknowledgement, and sends only once', async () => {
     const f = fixture();
     await expect(f.send()).resolves.toBe('SENT');

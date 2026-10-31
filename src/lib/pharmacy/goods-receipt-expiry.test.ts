@@ -25,6 +25,7 @@ function receiptDb(line: {
   const batchFind = vi.fn().mockResolvedValue(null);
   const lineUpdate = vi.fn().mockResolvedValue({});
   const db = {
+    $queryRawUnsafe: vi.fn().mockResolvedValue([]),
     medicine: { findMany: vi.fn().mockResolvedValue([]) },
     pharmacyGoodsReceipt: {
       findFirst: vi.fn().mockResolvedValue({
@@ -195,6 +196,13 @@ describe('postGoodsReceipt expiry', () => {
 it('queues back-in-stock work when a GRN posts accepted stock', async () => {
   const { db } = receiptDb({ accepted: 10, rejected: 0, expiry: '2030-01-01' });
   await postGoodsReceipt(db, SCOPE, { goodsReceiptId: 'gr', at: AT });
+  expect(db.$queryRawUnsafe).toHaveBeenCalledWith(
+    "SELECT set_config('app.current_branch_id', $1, true)",
+    SCOPE.branchId
+  );
+  expect(vi.mocked(db.$queryRawUnsafe).mock.invocationCallOrder[0]).toBeLessThan(
+    captureArrival.mock.invocationCallOrder[0]
+  );
   expect(captureArrival).toHaveBeenCalledWith(db, SCOPE, {
     inventoryLotId: 'lot',
     at: AT,

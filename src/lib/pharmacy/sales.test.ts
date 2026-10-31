@@ -203,6 +203,76 @@ describe('POS-03 lot-derived pack/strip/unit pricing', () => {
 });
 
 describe('DEM-03 restock interest', () => {
+  it.each([true, false])(
+    'reads consent after acquiring the consent-writer lock (granted: %s)',
+    async (granted) => {
+      const events: string[] = [];
+      const interest = {
+        id: 'interest-a',
+        patientId: 'patient-a',
+        channel: 'WHATSAPP',
+        patient: { phone: '923001234567' },
+        reserveOnArrival: false,
+      };
+      const db = {
+        $queryRaw: vi.fn().mockImplementation(async (query: { sql: string; values: unknown[] }) => {
+          if (query.sql.includes('pharmacy_patients')) {
+            expect(query.values).toEqual([scope.organizationId, interest.patientId]);
+            events.push('patient-lock');
+            return [{ id: interest.patientId }];
+          }
+          events.push('interest-lock');
+          return [{ id: interest.id }];
+        }),
+        pharmacyInventoryLot: {
+          findFirst: vi.fn().mockResolvedValue({
+            id: 'lot-a',
+            receivedAt: new Date('2026-10-21'),
+            batch: { medicineId: 'med-a', state: 'ACTIVE', expiresAt: new Date('2035-01-01') },
+            balances: [{ stockLocationId: 'shelf-a' }],
+          }),
+        },
+        pharmacyRestockInterest: {
+          findMany: vi.fn().mockResolvedValue([interest]),
+          findFirst: vi.fn().mockResolvedValue(interest),
+        },
+        patientConsent: {
+          findFirst: vi.fn().mockImplementation(async () => {
+            // A revocation committed while we waited must be visible here.
+            expect(events).toEqual(['interest-lock', 'patient-lock']);
+            events.push('consent-read');
+            return { id: 'latest-consent', granted, revokedAt: granted ? null : new Date() };
+          }),
+        },
+        pharmacyRestockNotification: {
+          create: vi.fn().mockImplementation(async () => {
+            events.push('notification-insert');
+            return { id: 'notification-a' };
+          }),
+        },
+        outboundEffect: { create: vi.fn().mockResolvedValue({ id: 'effect-a' }) },
+      };
+
+      const result = await captureSafeRestockArrival(db as never, scope, {
+        inventoryLotId: 'lot-a',
+        at: new Date('2026-10-21'),
+        skipUnavailable: true,
+      });
+      expect(events).toEqual([
+        'interest-lock', 'patient-lock', 'consent-read',
+        ...(granted ? ['notification-insert'] : []),
+      ]);
+      expect(result).toHaveLength(granted ? 1 : 0);
+      expect(db.pharmacyRestockNotification.create).toHaveBeenCalledTimes(granted ? 1 : 0);
+      expect(db.outboundEffect.create).toHaveBeenCalledTimes(granted ? 1 : 0);
+      if (granted) {
+        expect(db.pharmacyRestockNotification.create).toHaveBeenCalledWith(
+          expect.objectContaining({ data: expect.objectContaining({ consentId: 'latest-consent' }) })
+        );
+      }
+    }
+  );
+
   it('refuses a contact when current reminders consent is not granted', async () => {
     const db = {
       unfulfilledDemandEvent: { findFirst: async () => ({ id: 'demand-a' }) },
