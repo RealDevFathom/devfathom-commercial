@@ -115,7 +115,17 @@ import { restaurantFloorRouter } from './restaurant-floor';
 import { FloorError } from '@/lib/restaurant/floor';
 import { SectionError } from '@/lib/restaurant/sections';
 import { StationError } from '@/lib/restaurant/stations';
+import { RESTAURANT_JOB_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
 import type { TRPCContext } from '../trpc';
+
+const tableFindMany = vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
+  where.id.in
+    .filter((id) => id !== 'missing_resource')
+    .map((id) => ({
+      id,
+      floor: { branchId: id === 'branch_b_resource' ? 'branch_b' : 'branch_1' },
+    }))
+);
 
 function caller(primaryBranchId = 'branch_1', roleBranchId: string | null = null) {
   const branch = (id: string) =>
@@ -156,6 +166,7 @@ function caller(primaryBranchId = 'branch_1', roleBranchId: string | null = null
           const resourceBranch = branch(where.id);
           return resourceBranch ? { floor: resourceBranch } : undefined;
         }),
+        findMany: tableFindMany,
       },
       restaurantServerSection: {
         findUnique: vi.fn(async ({ where }: ResourceLookup) => branch(where.id)),
@@ -256,13 +267,16 @@ describe('capability gating', () => {
     expect(mocks.updateRoutingRule).not.toHaveBeenCalled();
   });
 
-  it('allows a manager whose job role at a secondary branch grants the capability', async () => {
+  it('allows a manager whose seeded `manager` job role is held at a secondary branch', async () => {
+    // Use the real seeded job-role capabilities, not a hand-built set, so this
+    // fails if the catalog's `manager` job role stops carrying floor duty.
+    const managerJobRole = RESTAURANT_JOB_ROLE_TEMPLATES.find((role) => role.key === 'manager')!;
     mocks.can.mockImplementation(
       async (_subject, capability) => capability !== 'restaurant:configure'
     );
     mocks.resolveStaffCapabilities.mockImplementation(
       async (_db, _staffProfileId, branchId) =>
-        new Set(branchId === 'branch_b' ? ['orders:read', 'floor:manage'] : [])
+        new Set(branchId === 'branch_b' ? managerJobRole.capabilities : [])
     );
     mocks.updateFloor.mockResolvedValue({ id: 'branch_b_resource', name: 'Patio' });
     mocks.updateStation.mockResolvedValue({ id: 'branch_b_resource', name: 'Grill' });
@@ -299,6 +313,29 @@ describe('capability gating', () => {
       manager().updateFloor({ id: 'branch_b_resource', name: 'Nope' })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(mocks.updateFloor).not.toHaveBeenCalled();
+  });
+
+  it('checks section table membership with one batched lookup and the branch guard', async () => {
+    mocks.setSectionTables.mockResolvedValue([]);
+    const tableIds = Array.from({ length: 500 }, (_, index) => `table_${index}`);
+
+    await caller().setSectionTables({ sectionId: 'section_1', tableIds });
+
+    expect(tableFindMany).toHaveBeenCalledTimes(1);
+    expect(mocks.setSectionTables).toHaveBeenCalledWith(expect.anything(), 'section_1', tableIds);
+  });
+
+  it('rejects section membership with an unknown or out-of-scope table', async () => {
+    mocks.can.mockImplementation(
+      async (_subject, capability) => capability !== 'restaurant:configure'
+    );
+    await expect(
+      caller().setSectionTables({ sectionId: 'section_1', tableIds: ['t1', 'missing_resource'] })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      caller().setSectionTables({ sectionId: 'section_1', tableIds: ['t1', 'branch_b_resource'] })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.setSectionTables).not.toHaveBeenCalled();
   });
 
   it('allows an organization-wide restaurant administrator across branches', async () => {

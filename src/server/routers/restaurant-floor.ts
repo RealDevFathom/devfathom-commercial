@@ -171,6 +171,26 @@ async function requireResourceBranch(
   await assertActiveBranch(ctx, branchId, capability);
 }
 
+/**
+ * Batch form of `requireResourceBranch(ctx, 'table', id)` for set-membership
+ * inputs: one lookup for every table, then one branch check per DISTINCT branch
+ * (normally one), instead of a guard round-trip per table. An id that does not
+ * resolve (unknown or another tenant's, hidden by RLS) is FORBIDDEN, exactly as
+ * the single-resource guard.
+ */
+async function requireTablesBranches(ctx: TRPCContext, tableIds: readonly string[]) {
+  const uniqueIds = [...new Set(tableIds)];
+  if (uniqueIds.length === 0) return;
+  const rows = await ctx.db.restaurantTable.findMany({
+    where: { id: { in: uniqueIds } },
+    select: { id: true, floor: { select: { branchId: true } } },
+  });
+  if (rows.length !== uniqueIds.length) throw new TRPCError({ code: 'FORBIDDEN' });
+  for (const branchId of new Set(rows.map((row) => row.floor.branchId))) {
+    await assertActiveBranch(ctx, branchId);
+  }
+}
+
 export const restaurantFloorRouter = router({
   // ── Floors & tables ────────────────────────────────────────────────────────
   listFloors: readProcedure
@@ -415,9 +435,7 @@ export const restaurantFloorRouter = router({
     .mutation(async ({ ctx, input }) => {
       try {
         await requireResourceBranch(ctx, 'section', input.sectionId);
-        for (const tableId of input.tableIds) {
-          await requireResourceBranch(ctx, 'table', tableId);
-        }
+        await requireTablesBranches(ctx, input.tableIds);
         const membership = await setSectionTables(ctx.db, input.sectionId, input.tableIds);
         annotateAudit(ctx, {
           targetType: 'RestaurantServerSection',

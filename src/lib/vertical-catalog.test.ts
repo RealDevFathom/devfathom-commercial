@@ -326,6 +326,16 @@ describe('B1/WHA-285 job-role profiles (§8 cont.)', () => {
     expect(RESTAURANT_JOB_ROLE_TEMPLATES).toHaveLength(10);
   });
 
+  it('grants floor management to the branch-running job roles (manager, owner) only', () => {
+    // The Floor branch guard admits a secondary branch reached only through a
+    // job-role holding when that role's capabilities include `floor:manage`.
+    const grants = RESTAURANT_JOB_ROLE_TEMPLATES.filter((role) =>
+      role.capabilities.includes('floor:manage')
+    ).map((role) => role.key);
+
+    expect(grants).toEqual(['manager', 'owner']);
+  });
+
   it('jobRoleTemplatesForVertical is restaurant-only', () => {
     expect(jobRoleTemplatesForVertical('RESTAURANT')).toEqual(RESTAURANT_JOB_ROLE_TEMPLATES);
     expect(jobRoleTemplatesForVertical('AGENCY')).toEqual([]);

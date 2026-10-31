@@ -1250,6 +1250,9 @@ const MANAGES_A_BRANCH: readonly string[] = [
   'devices:manage',
   'terminal:operate',
   'sop:manage',
+  // Floor configuration (floors, tables, sections, stations) at the branch the
+  // role is held — the Floor console's branch guard resolves job-role capabilities.
+  'floor:manage',
 ];
 
 export const RESTAURANT_JOB_ROLE_TEMPLATES: readonly JobRoleTemplate[] = [
