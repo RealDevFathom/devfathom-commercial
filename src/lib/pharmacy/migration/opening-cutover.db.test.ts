@@ -377,7 +377,10 @@ describeIfDatabase('MIG-03 — posting opening stock', () => {
           where: { sessionId: session.id },
         });
         const reports = await import('../finance-reports');
-        const rows = await reports.perpetualValuation(db, scopeOf(f), new Date('2099-01-01'));
+        expect(
+          await reports.perpetualValuation(db, scopeOf(f), new Date(OPENING_AT.getTime() - 1))
+        ).toEqual([]);
+        const rows = await reports.perpetualValuation(db, scopeOf(f), OPENING_AT);
         expect(rows).toHaveLength(2);
         for (const line of openingLines) {
           expect(rows.find((row) => row.lotId === line.postedLotId)).toMatchObject({
@@ -392,7 +395,7 @@ describeIfDatabase('MIG-03 — posting opening stock', () => {
         );
         const trial = await reports.trialBalance(db, scopeOf(f), {
           from: OPENING_AT,
-          to: new Date('2099-01-01'),
+          to: new Date(OPENING_AT.getTime() + 1),
         });
         expect(trial.find((row) => row.accountCode === 'INVENTORY')?.debitMinor).toBe(
           Number(posted.total.totalValueMinor)
@@ -429,6 +432,7 @@ describeIfDatabase('MIG-03 — posting opening stock', () => {
           include: { lines: true },
         });
         expect(entries).toHaveLength(1);
+        expect(entries[0]!.occurredAt).toEqual(OPENING_AT);
         const bank = entries[0]!.lines.filter((line) => line.accountCode === 'BANK');
         expect(
           bank.reduce(
@@ -440,7 +444,7 @@ describeIfDatabase('MIG-03 — posting opening stock', () => {
         const reports = await import('../finance-reports');
         const trial = await reports.trialBalance(db, scopeOf(f), {
           from: OPENING_AT,
-          to: new Date('2099-01-01'),
+          to: new Date(OPENING_AT.getTime() + 1),
         });
         expect(trial.find((row) => row.accountCode === 'BANK')).toMatchObject({
           debitMinor: amount > BigInt(0) ? Number(amount) : 0,
