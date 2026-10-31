@@ -374,19 +374,22 @@ export class PharmacyCounterRuntime {
         await this.commit(nextState);
       }
     }
-    const batchId = input.bucket?.inventoryLotId ?? null;
+    const lotId = input.bucket?.inventoryLotId ?? null;
     const prices = this.payloadFor('PRICES');
+    const lot:
+      | {
+          manufacturingBatchId?: unknown;
+          manufacturingBatch?: { state?: unknown };
+        }
+      | undefined = Array.isArray(prices)
+      ? prices.find(
+          (candidate) =>
+            typeof candidate === 'object' && candidate !== null && candidate.id === lotId
+        )
+      : undefined;
+    const batchId = typeof lot?.manufacturingBatchId === 'string' ? lot.manufacturingBatchId : null;
     const lotIsAuthoritativelyActive =
-      batchId === null ||
-      (Array.isArray(prices) &&
-        prices.some(
-          (lot) =>
-            typeof lot === 'object' &&
-            lot !== null &&
-            (lot as { id?: unknown }).id === batchId &&
-            (lot as { manufacturingBatch?: { state?: unknown } }).manufacturingBatch?.state ===
-              'ACTIVE'
-        ));
+      lotId === null || lot?.manufacturingBatch?.state === 'ACTIVE';
     const result = enqueueCounterCommand(this.queue(), input, {
       ...matrix,
       snapshots: this.cachedSnapshotStates(),
@@ -395,6 +398,9 @@ export class PharmacyCounterRuntime {
       // in the signed snapshot permits dispensing.
       batchRecalled:
         !lotIsAuthoritativelyActive ||
+        // Snapshot-derived events and older bulletins may still name a lot;
+        // batch bulletins must block every lot from that manufacturing batch.
+        (lotId !== null && leaseState.recalledBatchIds.includes(lotId)) ||
         (batchId !== null && leaseState.recalledBatchIds.includes(batchId)),
     });
     if (!result.ok) return result;

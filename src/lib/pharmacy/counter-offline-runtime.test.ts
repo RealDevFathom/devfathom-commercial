@@ -318,6 +318,61 @@ describe('PH-OFF OFF-02 — the matrix gates what may be composed', () => {
 });
 
 describe('PH-OFF OFF-04 — safety lease and recall bulletin', () => {
+  it('blocks every lot in a bulletin manufacturing batch, including after reload', async () => {
+    const driver = createMemoryDriver();
+    const counter = await readyCounter(driver);
+    const lots = [
+      { id: 'lot_1', manufacturingBatchId: 'batch_1' },
+      { id: 'lot_2', manufacturingBatchId: 'batch_1' },
+      { id: 'lot_3', manufacturingBatchId: 'batch_2' },
+    ];
+    await install(
+      counter,
+      'PRICES',
+      lots.map((lot) => ({ ...lot, manufacturingBatch: { state: 'ACTIVE' } })),
+      { version: 2 }
+    );
+    await counter.adoptQuotas(
+      lots.map((lot) => ({
+        inventoryLotId: lot.id,
+        stockLocationId: 'loc_1',
+        quotaUnits: 5,
+        consumedUnits: 0,
+      }))
+    );
+    expect(
+      await counter.applyRecallBulletin({
+        issuedAt: '2026-09-02T11:00:00.000Z',
+        recallVersion: SAFETY_LEASE.recallVersion,
+        recalledBatchIds: ['batch_1'],
+      })
+    ).toBe(true);
+
+    const reloaded = runtime(driver);
+    expect(await reloaded.hydrate()).toBe('ready');
+    for (const current of [counter, reloaded]) {
+      for (const inventoryLotId of ['lot_1', 'lot_2']) {
+        expect(
+          await current.enqueue(
+            { ...cashSale(), bucket: { inventoryLotId, stockLocationId: 'loc_1' } },
+            MATRIX
+          )
+        ).toMatchObject({ ok: false, reason: 'BATCH_RECALLED' });
+      }
+      expect(current.snapshot().queue).toMatchObject({
+        commands: [],
+        leases: [{ nextNumber: 900 }],
+        quotas: lots.map(() => ({ consumedUnits: 0 })),
+      });
+    }
+    expect(
+      await counter.enqueue(
+        { ...cashSale(), bucket: { inventoryLotId: 'lot_3', stockLocationId: 'loc_1' } },
+        MATRIX
+      )
+    ).toMatchObject({ ok: true });
+  });
+
   it.each([ISSUED_AT, '2026-09-02T11:00:00.000Z'])(
     'blocks a same-version bulletin issued at %s, including after reload',
     async (issuedAt) => {
