@@ -16,6 +16,7 @@ import { readPharmacyCashCloseCheck } from '@/lib/pharmacy/cash-close-check-oper
 import { buildPharmacyReportTools } from './pharmacy-reports';
 
 const branchFindMany = vi.fn();
+const organizationFindUnique = vi.fn();
 const check = {
   policyVersion: 'CC01-2026-11-01',
   businessDate: '2026-10-30',
@@ -52,6 +53,7 @@ function execute(role = 'ADMIN', enabledModules = ['pharmacy-reports']) {
   const tools = buildPharmacyReportTools(
     createAssistantHelpers({ organizationId: 'org_1', userId: 'user_1', role, enabledModules }, {
       pharmacyBranch: { findMany: branchFindMany },
+      organization: { findUnique: organizationFindUnique },
     } as never)
   );
   return tools.askPharmacyCashCloseCheck?.execute as
@@ -65,6 +67,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   abacCan.mockResolvedValue(true);
   branchFindMany.mockResolvedValue([{ id: 'branch_1', name: 'Main Pharmacy' }]);
+  organizationFindUnique.mockResolvedValue({ timezone: 'Asia/Karachi' });
   vi.mocked(readPharmacyCashCloseCheck).mockResolvedValue(check);
 });
 
@@ -124,6 +127,26 @@ describe('Ask Fathom cash-close anomaly check (#728)', () => {
       kind: 'invalid_input',
     });
     expect(readPharmacyCashCloseCheck).not.toHaveBeenCalled();
+  });
+
+  it("accepts the workspace's current day before UTC reaches it", async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      // 01:00 on the 31st in Karachi is still the 30th in UTC.
+      vi.setSystemTime(new Date('2026-10-30T20:00:00.000Z'));
+      const result = await execute()!({ ...input, businessDate: '2026-10-31' });
+      expect(result).toMatchObject({ kind: 'answer' });
+      expect(readPharmacyCashCloseCheck).toHaveBeenCalledWith(
+        expect.anything(),
+        { organizationId: 'org_1', branchId: 'branch_1' },
+        new Date('2026-10-31T00:00:00.000Z')
+      );
+      expect(await execute()!({ ...input, businessDate: '2026-11-01' })).toMatchObject({
+        kind: 'invalid_input',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('reports unavailable rather than leaking a reader failure', async () => {

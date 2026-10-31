@@ -20,6 +20,7 @@ vi.mock('@/lib/abac', async () => ({
   can: vi.fn(async (subject: { role?: string }) => subject.role === 'ADMIN'),
 }));
 
+import { can } from '@/lib/abac';
 import { router, type TRPCContext } from '../trpc';
 import { pharmacySalesRouter } from './pharmacy-sales';
 
@@ -109,6 +110,27 @@ describe('pharmacySales.closeAnomalyCheck', () => {
       staff.caller.closeAnomalyCheck({ branchId: BRANCH, businessDate })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(staff.db.pharmacyDailyClose.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('refuses an owner denied financial reports before reading any close evidence', async () => {
+    vi.mocked(can).mockImplementation(
+      async (subject, action) => subject.role === 'ADMIN' && action !== 'reports:financial'
+    );
+    try {
+      await expect(
+        f.caller.closeAnomalyCheck({ branchId: BRANCH, businessDate })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(vi.mocked(can)).toHaveBeenCalledWith(
+        expect.anything(),
+        'reports:financial',
+        undefined,
+        expect.anything()
+      );
+      expect(f.db.pharmacyDailyClose.findFirst).not.toHaveBeenCalled();
+      expect(f.db.pharmacySaleEvent.findMany).not.toHaveBeenCalled();
+    } finally {
+      vi.mocked(can).mockImplementation(async (subject) => subject.role === 'ADMIN');
+    }
   });
 
   it('refuses a branch outside the organization', async () => {

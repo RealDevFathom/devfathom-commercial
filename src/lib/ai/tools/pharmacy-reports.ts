@@ -10,6 +10,7 @@ import { listPurchaseReturns, listSupplierCredits } from '@/lib/pharmacy/purchas
 import { supplierCreditFollowUp } from '@/lib/pharmacy/supplier-credit-follow-up';
 import { PHARMACY_METRIC_CONTRACT, readPharmacyOwnerCommandCentre } from '@/lib/pharmacy/reports';
 import { readPharmacyCashCloseCheck } from '@/lib/pharmacy/cash-close-check-operations';
+import { workspaceToday } from '@/lib/timezone';
 
 import {
   grossMarginComparison,
@@ -612,11 +613,18 @@ function cashCloseCheckTool(h: AssistantHelpers) {
         )
           return { kind: 'refusal', message: REFUSAL };
         const parsed = cashCloseCheckInput.safeParse(input);
-        if (!parsed.success || parsed.data.businessDate > utcDate())
-          return {
-            kind: 'invalid_input',
-            message: 'Use one exact branch and a nonfuture business date.',
-          };
+        const invalid = {
+          kind: 'invalid_input',
+          message: 'Use one exact branch and a nonfuture business date.',
+        } as const;
+        if (!parsed.success) return invalid;
+        // "Future" is judged in the workspace's own zone: at 01:00 in Karachi the
+        // pharmacy is already on a day UTC has not reached.
+        const organization = await h.db.organization.findUnique({
+          where: { id: h.ctx.organizationId },
+          select: { timezone: true },
+        });
+        if (parsed.data.businessDate > workspaceToday(organization?.timezone)) return invalid;
         const branches = await h.db.pharmacyBranch.findMany({
           where: { organizationId: h.ctx.organizationId, active: true },
           orderBy: { name: 'asc' },

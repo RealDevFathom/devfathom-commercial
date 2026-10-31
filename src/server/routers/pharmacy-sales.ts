@@ -623,6 +623,19 @@ export const pharmacySalesRouter = router({
   closeAnomalyCheck: adminProcedure
     .input(z.object({ branchId, businessDate: closeDate }).strict())
     .query(async ({ ctx, input }) => {
+      // Refund/void analytics and staff findings are financial reporting: an owner
+      // explicitly denied `reports:financial` is refused before any evidence read,
+      // as the anomaly report and the Ask Fathom tool already do.
+      if (
+        !(await can(subjectFromSession(ctx.session!.user), 'reports:financial', undefined, {
+          db: ctx.db,
+          source: 'TRPC',
+        }))
+      )
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Financial reports permission required.',
+        });
       try {
         const scope = await scopeFor(ctx, input.branchId);
         return await ctx.db.$transaction(async (tx) =>

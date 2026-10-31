@@ -159,6 +159,48 @@ describe('readPharmacyCashCloseCheck (#728)', () => {
     expect(db.pharmacyRefund.findMany).not.toHaveBeenCalled();
   });
 
+  it('reads voids over exactly the workspace-local day interval', async () => {
+    const { db, scoped } = fixture();
+    await readPharmacyCashCloseCheck(scoped, scope, businessDate);
+    // Karachi (UTC+5): the 30th runs from 2026-10-29T19:00Z to 2026-10-30T19:00Z.
+    expect(db.pharmacySaleEvent.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          occurredAt: {
+            gte: new Date('2026-10-29T19:00:00.000Z'),
+            lt: new Date('2026-10-30T19:00:00.000Z'),
+          },
+        }),
+      })
+    );
+  });
+
+  it('reads every page of void events so none are silently truncated', async () => {
+    const { db, scoped } = fixture();
+    db.pharmacyRefund.findMany.mockResolvedValue([]);
+    const event = (index: number) => ({
+      id: `event_${index}`,
+      saleId: `void_${index}`,
+      actorId: 'user_1',
+      occurredAt: new Date('2026-10-30T05:00:00Z'),
+      sale: { lines: [line(10)] },
+    });
+    const firstPage = Array.from({ length: 1_000 }, (_, index) => event(index));
+    db.pharmacySaleEvent.findMany
+      .mockReset()
+      .mockResolvedValueOnce(firstPage)
+      .mockResolvedValueOnce([event(1_000), event(1_001)]);
+
+    const check = await readPharmacyCashCloseCheck(scoped, scope, businessDate);
+
+    expect(db.pharmacySaleEvent.findMany).toHaveBeenCalledTimes(2);
+    expect(db.pharmacySaleEvent.findMany).toHaveBeenLastCalledWith(
+      expect.objectContaining({ cursor: { id: 'event_999' }, skip: 1 })
+    );
+    expect(check.totals.voidCount).toBe(1_002);
+    expect(check.totals.voidValueMinor).toBe(10_020);
+  });
+
   it('skips the return lookup when nothing was refunded', async () => {
     const { db, scoped } = fixture();
     db.pharmacyRefund.findMany.mockResolvedValue([]);

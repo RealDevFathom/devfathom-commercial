@@ -3,11 +3,13 @@ import 'server-only';
 import { TRPCError } from '@trpc/server';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { workspaceTimezone, workspaceToday } from '@/lib/timezone';
+import { zonedWallTimeToUtc } from '@/lib/restaurant/sop-recurrence';
 import { foldExpectedCash, saleTotalMinor, type DrawerMovement } from './settlement';
 import { checkPharmacyCashClose, type CashCloseCheck } from './cash-close-check';
 
 const DAY_MS = 86_400_000;
-const MAX_ROWS = 2_000;
+/** Page size for the void-event read; every page is read, so nothing is truncated. */
+const VOID_PAGE = 1_000;
 
 /**
  * #728 — reads one branch/business day's close evidence and runs the cash-close
@@ -25,8 +27,21 @@ export async function readPharmacyCashCloseCheck(
     select: { name: true },
   });
   if (!branch) throw new TRPCError({ code: 'NOT_FOUND', message: 'Pharmacy branch not found.' });
+  const organization = await db.organization.findUnique({
+    where: { id: scope.organizationId },
+    select: { timezone: true },
+  });
+  const timezone = workspaceTimezone(organization?.timezone);
+  const day = businessDate.toISOString().slice(0, 10);
+  const nextDay = new Date(businessDate.getTime() + DAY_MS).toISOString().slice(0, 10);
+  // A sale is voided while still OPEN, so it has no business date. Its VOIDED
+  // event belongs to the day by the workspace zone the counter stamps in: read
+  // exactly that local day's UTC interval, every page of it.
+  const dayStart = zonedWallTimeToUtc(day, 0, timezone).instant;
+  const dayEnd = zonedWallTimeToUtc(nextDay, 0, timezone).instant;
+
   const where = { organizationId: scope.organizationId, branchId: scope.branchId, businessDate };
-  const [close, drawers, sales, refunds, organization, voidEvents] = await Promise.all([
+  const [close, drawers, sales, refunds, voidEvents] = await Promise.all([
     db.pharmacyDailyClose.findFirst({ where, orderBy: { sequence: 'desc' } }),
     db.pharmacyDrawerSession.findMany({
       where,
@@ -45,39 +60,9 @@ export async function readPharmacyCashCloseCheck(
       select: { id: true, saleId: true, actorId: true, amountMinor: true },
       orderBy: { createdAt: 'asc' },
     }),
-    db.organization.findUnique({
-      where: { id: scope.organizationId },
-      select: { timezone: true },
-    }),
-    // A sale is voided while still OPEN, so it has no business date. Its VOIDED
-    // event is attributed to the day by the workspace zone the counter stamps in;
-    // the UTC window is widened to cover every zone offset and filtered below.
-    db.pharmacySaleEvent.findMany({
-      where: {
-        organizationId: scope.organizationId,
-        branchId: scope.branchId,
-        kind: 'VOIDED',
-        occurredAt: {
-          gte: new Date(businessDate.getTime() - DAY_MS),
-          lt: new Date(businessDate.getTime() + 2 * DAY_MS),
-        },
-      },
-      select: {
-        saleId: true,
-        actorId: true,
-        occurredAt: true,
-        sale: {
-          select: {
-            lines: { select: { quantity: true, unitPriceMinor: true, discountMinor: true } },
-          },
-        },
-      },
-      orderBy: { occurredAt: 'asc' },
-      take: MAX_ROWS,
-    }),
+    readAllVoidEvents(db, scope, dayStart, dayEnd),
   ]);
-  const timezone = workspaceTimezone(organization?.timezone);
-  const day = businessDate.toISOString().slice(0, 10);
+  // Belt and braces: the interval already is the local day.
   const voids = voidEvents.filter((event) => workspaceToday(timezone, event.occurredAt) === day);
 
   const refundedSaleIds = [...new Set(refunds.map((refund) => refund.saleId))];
@@ -152,4 +137,40 @@ export async function readPharmacyCashCloseCheck(
     actorNames,
   });
   return { ...check, branchName: branch.name, timezone };
+}
+
+async function readAllVoidEvents(
+  db: ScopedDb,
+  scope: { organizationId: string; branchId: string },
+  dayStart: Date,
+  dayEnd: Date
+) {
+  const query = (cursor?: string) =>
+    db.pharmacySaleEvent.findMany({
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        kind: 'VOIDED',
+        occurredAt: { gte: dayStart, lt: dayEnd },
+      },
+      select: {
+        id: true,
+        saleId: true,
+        actorId: true,
+        occurredAt: true,
+        sale: {
+          select: {
+            lines: { select: { quantity: true, unitPriceMinor: true, discountMinor: true } },
+          },
+        },
+      },
+      orderBy: [{ occurredAt: 'asc' }, { id: 'asc' }],
+      take: VOID_PAGE,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+    });
+  const events: Awaited<ReturnType<typeof query>> = [];
+  for (let page = await query(); ; page = await query(page[page.length - 1].id)) {
+    events.push(...page);
+    if (page.length < VOID_PAGE) return events;
+  }
 }
