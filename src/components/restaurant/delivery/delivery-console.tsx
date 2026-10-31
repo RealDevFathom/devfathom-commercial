@@ -144,9 +144,13 @@ export function DeliveryConsole() {
   const updateAddress = trpc.restaurantDelivery.updateAddress.useMutation(
     options('Saved address updated.')
   );
-  const setDefaultAddress = trpc.restaurantDelivery.setDefaultAddress.useMutation(
-    options('Default address updated.')
-  );
+  const setDefaultAddress = trpc.restaurantDelivery.setDefaultAddress.useMutation({
+    onSuccess: () => {
+      void utils.restaurantDelivery.listAddresses.invalidate();
+      toast.success('Default address updated.');
+    },
+    onError: fail,
+  });
   const deleteAddress = trpc.restaurantDelivery.deleteAddress.useMutation(
     options('Saved address deactivated.')
   );
@@ -428,7 +432,7 @@ export function DeliveryConsole() {
                           .join(', ')}
                       </address>
                     </div>
-                    <div className="flex gap-2">
+                    <div className="flex flex-wrap gap-2">
                       {!address.isDefault ? (
                         <Button
                           variant="outline"

@@ -20,3 +20,9 @@ The repository has no configured Git remote (`git remote -v` returns no entries)
 - Tenant and branch predicates remain mandatory for zone state changes.
 - Every new server mutation continues to use the central `restaurant:configure` capability procedure and branch-scope check.
 - The fourth, lower-ranked customer-pagination finding is outside this top-three change.
+
+## QA follow-up — 2026-10-31
+
+- Give **Make default** its own success handler so a delayed response refreshes saved addresses and reports success without closing an unrelated editor or confirmation. Regression tests cover unsaved input in both Edit and Add address forms.
+- Allow saved-address actions to wrap so all three buttons remain inside the card at 320px.
+- Validation: all 65 tests across the delivery console, domain, and router passed. A Chromium component harness using the real console, shared components, and global styles with mocked data passed 20 combinations of 320/375/768/1024/1440px, light/dark themes, and normal/reduced motion. Checks covered bounded action rows, no canvas overflow, keyboard focus trapping/restoration and Escape, delayed Make default responses preserving Edit/Add drafts, loading/empty/error/denied states, and destructive confirmation. No page errors occurred. These checks do not replace authenticated end-to-end or database-backed validation.
