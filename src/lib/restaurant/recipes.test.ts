@@ -347,19 +347,20 @@ describe('createRecipeVersion', () => {
 });
 
 describe('updateRecipeVersion — C3 immutability', () => {
-  it('rejects a nonpositive yield quantity on a draft', async () => {
-    db.restaurantRecipeVersion.findUnique.mockResolvedValue({
-      id: 'v1',
-      status: 'DRAFT',
-      recipeId: 'r1',
-    });
-    await expect(updateRecipeVersion(scoped(), 'v1', { yieldQuantity: '0' })).rejects.toMatchObject(
-      {
+  it.each(['0', '-1', 'NaN', 'Infinity', '1.0001', '1000000000'])(
+    'rejects an invalid yield quantity %s on a draft',
+    async (yieldQuantity) => {
+      db.restaurantRecipeVersion.findUnique.mockResolvedValue({
+        id: 'v1',
+        status: 'DRAFT',
+        recipeId: 'r1',
+      });
+      await expect(updateRecipeVersion(scoped(), 'v1', { yieldQuantity })).rejects.toMatchObject({
         reason: 'INVALID',
-      }
-    );
-    expect(db.restaurantRecipeVersion.update).not.toHaveBeenCalled();
-  });
+      });
+      expect(db.restaurantRecipeVersion.update).not.toHaveBeenCalled();
+    }
+  );
 
   it('allows editing DRAFT version', async () => {
     db.restaurantRecipeVersion.findUnique.mockResolvedValue({
@@ -392,6 +393,24 @@ describe('updateRecipeVersion — C3 immutability', () => {
       VersionImmutabilityError
     );
   });
+
+  it('rechecks mutability after waiting for the version lock', async () => {
+    let status = 'DRAFT';
+    db.$queryRaw.mockImplementation(async (query: TemplateStringsArray) => {
+      if (query.join('?').includes('FOR UPDATE')) status = 'ACTIVE';
+      return [{ organizationId: 'org_1' }];
+    });
+    db.restaurantRecipeVersion.findUnique.mockImplementation(async () => ({
+      id: 'v1',
+      status,
+      recipeId: 'r1',
+    }));
+
+    await expect(updateRecipeVersion(scoped(), 'v1', { notes: 'too late' })).rejects.toThrow(
+      VersionImmutabilityError
+    );
+    expect(db.restaurantRecipeVersion.update).not.toHaveBeenCalled();
+  });
 });
 
 describe('activateRecipeVersion', () => {
@@ -402,6 +421,11 @@ describe('activateRecipeVersion', () => {
       { id: 'v2', status: 'DRAFT', versionNumber: 2 },
     ]);
     await activateRecipeVersion(scoped(), 'r1', 'v2');
+    expect(
+      db.$queryRaw.mock.calls.some(([query]) =>
+        (query as TemplateStringsArray).join('?').includes('ORDER BY id FOR UPDATE')
+      )
+    ).toBe(true);
     // Two updates inside the transaction: supersede v1, activate v2
     expect(db.restaurantRecipeVersion.update).toHaveBeenCalledTimes(2);
     const calls = db.restaurantRecipeVersion.update.mock.calls as Array<
@@ -479,7 +503,7 @@ describe('listRecipeVersions', () => {
 // ── Recipe-line cycle detection ───────────────────────────────────────────────
 
 describe('createRecipeLine — recipe cycle detection', () => {
-  it.each(['0', '-1', 'Infinity'])(
+  it.each(['0', '-1', 'NaN', 'Infinity', '1.00001', '100000000'])(
     'rejects an invalid BOM quantity %s before writing',
     async (quantity) => {
       await expect(
@@ -494,17 +518,52 @@ describe('createRecipeLine — recipe cycle detection', () => {
     }
   );
 
-  it('rejects a nonpositive BOM quantity on update', async () => {
-    db.restaurantRecipeLine.findUnique.mockResolvedValue({ id: 'line1', recipeVersionId: 'v1' });
+  it.each(['0', '-1', 'NaN', 'Infinity', '1.00001', '100000000'])(
+    'rejects an invalid BOM quantity %s on update',
+    async (quantity) => {
+      db.restaurantRecipeLine.findUnique.mockResolvedValue({ id: 'line1', recipeVersionId: 'v1' });
+      db.restaurantRecipeVersion.findUnique.mockResolvedValue({
+        id: 'v1',
+        status: 'DRAFT',
+        recipeId: 'r1',
+      });
+      await expect(updateRecipeLine(scoped(), 'line1', { quantity })).rejects.toMatchObject({
+        reason: 'INVALID',
+      });
+      expect(db.restaurantRecipeLine.update).not.toHaveBeenCalled();
+    }
+  );
+
+  it('persists representable measurements through locked draft writes', async () => {
     db.restaurantRecipeVersion.findUnique.mockResolvedValue({
       id: 'v1',
       status: 'DRAFT',
       recipeId: 'r1',
     });
-    await expect(updateRecipeLine(scoped(), 'line1', { quantity: '0' })).rejects.toMatchObject({
-      reason: 'INVALID',
+    db.restaurantRecipeLine.findUnique.mockResolvedValue({ id: 'line1', recipeVersionId: 'v1' });
+    db.restaurantUnit.findUnique.mockResolvedValue({ id: 'u1' });
+    db.restaurantIngredient.findUnique.mockResolvedValue({ id: 'i1' });
+
+    await updateRecipeVersion(scoped(), 'v1', { yieldQuantity: '0001.125' });
+    await createRecipeLine(scoped(), {
+      recipeVersionId: 'v1',
+      ingredientId: 'i1',
+      quantity: '0002.1234',
+      unitId: 'u1',
     });
-    expect(db.restaurantRecipeLine.update).not.toHaveBeenCalled();
+    await updateRecipeLine(scoped(), 'line1', { quantity: '0003.1234' });
+
+    expect(db.restaurantRecipeVersion.update.mock.calls[0][0].data.yieldQuantity.toString()).toBe(
+      '1.125'
+    );
+    expect(db.restaurantRecipeLine.create.mock.calls[0][0].data.quantity.toString()).toBe('2.1234');
+    expect(db.restaurantRecipeLine.update.mock.calls[0][0].data.quantity.toString()).toBe('3.1234');
+    expect(db.$transaction).toHaveBeenCalledTimes(3);
+    expect(
+      db.$queryRaw.mock.calls.filter(([query]) =>
+        (query as TemplateStringsArray).join('?').includes('FOR UPDATE')
+      )
+    ).toHaveLength(3);
   });
 
   it('rejects a direct self-referencing sub-recipe line', async () => {

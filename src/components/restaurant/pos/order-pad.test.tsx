@@ -1163,7 +1163,7 @@ describe('OrderPad transport', () => {
     ]);
   });
 
-  it('keeps the open-order form uncapped and prices modifiers into the draft total', async () => {
+  it('labels the modifier-priced draft total as an estimated cash total', async () => {
     await unlock(transport());
     const card = screen
       .getByRole('heading', { name: 'Open order' })
@@ -1182,7 +1182,7 @@ describe('OrderPad transport', () => {
       lines: [{ id: 'coffee', unitPrice: '4.00', quantity: 1, modifierDeltas: ['0.50'] }],
     });
     expect(priced).toBe('5.18');
-    expect(screen.getByText('Cash total')).toBeVisible();
+    expect(screen.getByText('Estimated cash total')).toBeVisible();
     expect(await screen.findByText(priced)).toBeVisible();
   });
 
