@@ -17,7 +17,6 @@ const labelClass =
   'block font-mono text-[0.6875rem] font-semibold uppercase tracking-wide text-text-muted';
 const selectClass =
   'h-11 w-full rounded-md border border-input bg-surface-raised px-3 text-sm text-text-strong outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50';
-const formatDate = new Intl.DateTimeFormat('en-PK', { dateStyle: 'medium' });
 const paymentCategories = ['CASH', 'CARD', 'OTHER'] as const;
 type PaymentCategory = (typeof paymentCategories)[number];
 type RateErrors = Partial<Record<PaymentCategory, string>>;
@@ -490,7 +489,11 @@ export function RestaurantTaxConsole() {
                       <StatusPill status="Published" tone="success" />
                     </div>
                     <p className="mt-2 text-sm text-text-muted">
-                      Effective {formatDate.format(new Date(profile.effectiveFrom))} ·{' '}
+                      Effective{' '}
+                      {new Intl.DateTimeFormat('en-PK', {
+                        dateStyle: 'medium',
+                        timeZone: profile.branch.timezone,
+                      }).format(new Date(profile.effectiveFrom))} ·{' '}
                       {profile.approvalReference}
                     </p>
                     <p className="mt-1 font-mono text-xs text-text-faint">
