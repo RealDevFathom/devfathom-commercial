@@ -676,7 +676,7 @@ export const pharmacySalesRouter = router({
       }
     }),
   // The domain applies dispensing authorization to Rx lines; OTC redemptions
-  // use the same counter and branch authorization as other tenders.
+  // use the same canonical counter and branch authorization as other tenders.
   redeemPoints: protectedProcedure
     .input(
       z
@@ -692,7 +692,8 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+        // A redemption is a tender: it needs pharmacy:counter, not receipt access alone.
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
         return await ctx.db.$transaction(async (tx) => redeemSalePoints(txDb(tx), scope, input));
       } catch (error) {
         fail(error);

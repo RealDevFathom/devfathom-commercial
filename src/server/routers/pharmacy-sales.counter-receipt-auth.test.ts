@@ -732,6 +732,27 @@ describe('counter receipt authorization', () => {
     }
   });
 
+  it('denies loyalty redemption to an assigned user holding only receipt access', async () => {
+    for (const capability of ['pharmacy:receipt', 'pharmacy.receipt'] as const) {
+      const f = fixture([{ capability, effect: 'ALLOW' }]);
+      assign(f, ['branch-a']);
+      await expect(
+        f.caller().redeemPoints({
+          branchId: 'branch-a',
+          saleId: 'sale-a',
+          points: 1,
+          deviceId: 'device-a',
+          businessDate: new Date('2026-10-01T00:00:00.000Z'),
+          idempotencyKey: `redeem-assigned-${capability}`,
+        })
+      ).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'You do not have permission for this action.',
+      });
+      expect(f.db.$transaction).not.toHaveBeenCalled();
+    }
+  });
+
   it('denies an inactive database user and an inactive assignment', async () => {
     const inactive = fixture(dispense);
     inactive.db.user.findUnique.mockResolvedValue({
