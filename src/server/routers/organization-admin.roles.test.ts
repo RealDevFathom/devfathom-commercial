@@ -88,9 +88,11 @@ describe('organization role replacement', () => {
     vi.clearAllMocks();
     permissions = [{ capability: 'existing:permission', effect: 'ALLOW' }];
     db.organizationRole.findFirst.mockResolvedValue(role);
-    db.organizationRolePermission.createMany.mockImplementation(async ({ data }) => {
-      permissions = data;
-    });
+    db.organizationRolePermission.createMany.mockImplementation(
+      async ({ data }: { data: typeof permissions }) => {
+        permissions = data;
+      }
+    );
   });
 
   it('rejects duplicate capabilities after trimming before starting a mutation', async () => {
