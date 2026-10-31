@@ -9,14 +9,15 @@ export async function lockMoneyDay(
   tx: ScopedDb,
   branchId: string,
   businessDate: string
-): Promise<void> {
+): Promise<{ organizationId: string; timezone: string; businessDayCutoff: string }> {
   const branch = await tx.restaurantBranch.findUnique({
     where: { id: branchId },
-    select: { organizationId: true },
+    select: { organizationId: true, timezone: true, businessDayCutoff: true },
   });
   if (!branch) throw new DailyCloseError('The branch does not exist.', 'INVALID');
   const key = `${branch.organizationId}:${branchId}:${businessDate}`;
   await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`;
+  return branch;
 }
 
 /** Money writers hold the same lock as cut/correct until their transaction ends.

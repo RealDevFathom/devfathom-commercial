@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { Prisma, type RestaurantTenderType } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-import { businessDateToUtcDate } from './business-date';
+import { businessDateToUtcDate, resolveBusinessDate } from './business-date';
 import { DailyCloseError } from './daily-close-errors';
 import {
   beginMoneyIdempotent,
@@ -402,6 +402,22 @@ function assertReadyToClose(loaded: LoadedInputs): void {
   }
 }
 
+/** Reject caller-selected dates that the branch calendar has not reached yet.
+ * The comparison is safe because both values are canonical YYYY-MM-DD strings. */
+export function assertCloseDateEligible(
+  businessDate: string,
+  branch: { timezone: string; businessDayCutoff: string },
+  now: Date = new Date()
+): void {
+  const currentBusinessDate = resolveBusinessDate(now, branch.timezone, branch.businessDayCutoff);
+  if (businessDate > currentBusinessDate) {
+    throw new DailyCloseError(
+      'A future branch business date cannot be closed before trading begins.',
+      'FUTURE_BUSINESS_DATE'
+    );
+  }
+}
+
 // ── Cut (first close for a branch × date) ─────────────────────────────────────
 
 export type CutCloseInput = { branchId: string; businessDate: string; actor: MoneyActor };
@@ -422,7 +438,7 @@ export type CutCloseResult = {
 export async function cutClose(db: ScopedDb, input: CutCloseInput): Promise<CutCloseResult> {
   const businessDate = businessDateToUtcDate(input.businessDate);
   return runMoneyTransaction(db, async (tx) => {
-    await lockMoneyDay(tx, input.branchId, input.businessDate);
+    const branch = await lockMoneyDay(tx, input.branchId, input.businessDate);
     const canonical = canonicalClosePayload({
       version: 1,
       branchId: input.branchId,
@@ -430,6 +446,8 @@ export async function cutClose(db: ScopedDb, input: CutCloseInput): Promise<CutC
     });
     const idem = await beginMoneyIdempotent(tx, input.actor, 'cash.day_close', canonical);
     if (idem.replay) return decodeFrozenCloseResult(idem.resultPayload);
+    // Configuration changes must not invalidate a completed command's receipt.
+    assertCloseDateEligible(input.businessDate, branch);
 
     const existing = await tx.restaurantDailyClose.count({
       where: { branchId: input.branchId, businessDate },
@@ -504,7 +522,7 @@ export async function correctClose(
   }
 
   return runMoneyTransaction(db, async (tx) => {
-    await lockMoneyDay(tx, input.branchId, input.businessDate);
+    const branch = await lockMoneyDay(tx, input.branchId, input.businessDate);
     const canonical = canonicalClosePayload({
       version: 1,
       branchId: input.branchId,
@@ -515,6 +533,8 @@ export async function correctClose(
     });
     const idem = await beginMoneyIdempotent(tx, input.actor, 'cash.day_correct', canonical);
     if (idem.replay) return decodeFrozenCorrectCloseResult(idem.resultPayload);
+    // Configuration changes must not invalidate a completed command's receipt.
+    assertCloseDateEligible(input.businessDate, branch);
 
     const chain = await tx.restaurantDailyClose.findMany({
       where: { branchId: input.branchId, businessDate },

@@ -16,10 +16,27 @@ import { beforeAll, describe, expect, it } from 'vitest';
 
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { computeCloseAggregate, resolveChainTip } from './daily-close';
+import { assertCloseDateEligible, computeCloseAggregate, resolveChainTip } from './daily-close';
 import { insightRollupJobKey } from './insight-rollups';
 
 const D = (v: string) => new Prisma.Decimal(v);
+
+describe('assertCloseDateEligible (branch calendar)', () => {
+  const branch = { timezone: 'Asia/Karachi', businessDayCutoff: '04:00' };
+
+  it('rejects a date after the server-derived current business date', () => {
+    // 03:30 local is still the prior business day at a 04:00 cutoff.
+    expect(() =>
+      assertCloseDateEligible('2026-10-29', branch, new Date('2026-10-28T22:30:00.000Z'))
+    ).toThrowError(expect.objectContaining({ reason: 'FUTURE_BUSINESS_DATE' }));
+  });
+
+  it('allows the current and earlier branch business dates', () => {
+    const now = new Date('2026-10-28T23:30:00.000Z'); // 04:30 local on October 29
+    expect(() => assertCloseDateEligible('2026-10-29', branch, now)).not.toThrow();
+    expect(() => assertCloseDateEligible('2026-10-28', branch, now)).not.toThrow();
+  });
+});
 
 // ── Pure aggregation + chain tip (no database) ────────────────────────────────
 
@@ -429,6 +446,27 @@ beforeAll(async () => {
 });
 
 describeIfDatabase('daily close (real DB)', () => {
+  it('rejects an empty future day without persisting a close', async () => {
+    const date = '2099-01-01';
+    const db = deps.createTenantDb(orgId);
+
+    await expect(
+      deps.close.cutClose(db, {
+        branchId: ids.branch,
+        businessDate: date,
+        actor: mActor(ids.seedDevice),
+      })
+    ).rejects.toMatchObject({ reason: 'FUTURE_BUSINESS_DATE' });
+
+    await deps.withTenantDb(orgId, async (tx) => {
+      await expect(
+        tx.restaurantDailyClose.count({
+          where: { branchId: ids.branch, businessDate: utcDate(date) },
+        })
+      ).resolves.toBe(0);
+    });
+  });
+
   it('cross-business-date: a D2 refund of a D1 tender lands on D2, leaving D1 unchanged', async () => {
     const D1 = '2026-09-01';
     const D2 = '2026-09-02';
