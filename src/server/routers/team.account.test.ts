@@ -350,7 +350,7 @@ describe('team.getRoster and team:view', () => {
 
     await expect(caller(['hr']).getRoster()).resolves.toEqual([colleague, self]);
     expect(mocks.permissions).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: 'user_self' } })
+      expect.objectContaining({ where: { id: 'user_self', organizationId: 'org_1' } })
     );
     expect(mocks.findMany).toHaveBeenCalledWith(
       expect.not.objectContaining({ where: expect.anything() })

@@ -33,10 +33,20 @@ export async function soloOwnerEligible(
 /** Verifies a live user PIN with durable, serialized credential lockout state. */
 export async function verifyPharmacyUserPin(
   scope: { organizationId: string; actorId: string },
-  pin?: string
+  pin?: string,
+  /** Who typed the PIN for a named checker. One requester cannot exhaust the checker's budget. */
+  requesterId?: string
 ): Promise<boolean> {
   const { organizationId, actorId } = scope;
   if (!pin || !/^\d{4,8}$/.test(pin)) return false;
+  // Delegated attempts are throttled per requester and checker below the checker's
+  // own 5-attempt window, so one colleague naming a checker with wrong PINs cannot
+  // exhaust that window alone and is slowed well before the durable lockout.
+  const delegatedKey =
+    requesterId && requesterId !== actorId
+      ? `pharmacy:delegated-pin:${organizationId}:${requesterId}:${actorId}`
+      : null;
+  if (delegatedKey && !(await rateLimit(delegatedKey, 3, 15 * 60_000)).ok) return false;
   if (!(await rateLimit(`pharmacy:solo-owner-pin:${organizationId}:${actorId}`, 5, 15 * 60_000)).ok)
     return false;
   // Failed attempts must survive rollback of the purchasing request. This
@@ -74,7 +84,10 @@ export async function verifyPharmacyUserPin(
     },
     { userId: actorId, skipDrain: true }
   );
-  if (valid) await clearRateLimit(`pharmacy:solo-owner-pin:${organizationId}:${actorId}`);
+  if (valid) {
+    await clearRateLimit(`pharmacy:solo-owner-pin:${organizationId}:${actorId}`);
+    if (delegatedKey) await clearRateLimit(delegatedKey);
+  }
   return valid;
 }
 

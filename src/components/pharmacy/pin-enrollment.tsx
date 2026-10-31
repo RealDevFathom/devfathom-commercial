@@ -9,6 +9,7 @@ import { trpc } from '@/lib/trpc';
 export function PharmacyPinEnrollment() {
   const status = trpc.pharmacyPin.status.useQuery();
   const [currentPin, setCurrentPin] = useState('');
+  const [currentPassword, setCurrentPassword] = useState('');
   const [pin, setPin] = useState('');
   const [confirmation, setConfirmation] = useState('');
   const [error, setError] = useState('');
@@ -16,6 +17,7 @@ export function PharmacyPinEnrollment() {
     onSuccess: () => {
       setPin('');
       setCurrentPin('');
+      setCurrentPassword('');
       setConfirmation('');
       void status.refetch();
     },
@@ -27,7 +29,7 @@ export function PharmacyPinEnrollment() {
       return;
     }
     setError('');
-    enroll.mutate({ pin, currentPin: status.data?.enrolled ? currentPin : undefined });
+    enroll.mutate(status.data?.enrolled ? { pin, currentPin } : { pin, currentPassword });
   }
   if (status.isPending) return <p role="status">Loading your PIN enrollment…</p>;
   if (status.error)
@@ -54,6 +56,20 @@ export function PharmacyPinEnrollment() {
             required
             value={currentPin}
             onChange={(event) => setCurrentPin(event.target.value)}
+            className="min-h-11"
+          />
+        </div>
+      )}
+      {!status.data?.enrolled && (
+        <div className="space-y-2">
+          <Label htmlFor="pharmacy-account-password">Account password</Label>
+          <Input
+            id="pharmacy-account-password"
+            type="password"
+            autoComplete="current-password"
+            required
+            value={currentPassword}
+            onChange={(event) => setCurrentPassword(event.target.value)}
             className="min-h-11"
           />
         </div>

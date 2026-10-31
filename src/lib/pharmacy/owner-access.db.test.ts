@@ -19,7 +19,8 @@ vi.mock('@/server/audit', async (original) => ({
 }));
 afterAll(() => db.$disconnect());
 
-describe('shared owner capabilities and automatic branch scope (PostgreSQL)', () => {
+// Skips like the other database suites when no PostgreSQL is configured.
+describe.skipIf(!process.env.DATABASE_URL)('shared owner capabilities and automatic branch scope (PostgreSQL)', () => {
   it('covers default roles, existing owners, new branches, safety/reports and isolation', async () => {
     expect(Boolean(process.env.DATABASE_URL)).toBe(true);
     const org = `owner_${randomUUID().replaceAll('-', '')}`;

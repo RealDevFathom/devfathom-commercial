@@ -19,8 +19,8 @@ const staffed = {
 };
 const roles = (org: string, key: string) => `${org}-${key}`;
 beforeAll(async () => {
-  if (!process.env.DATABASE_URL)
-    throw new Error('Local DATABASE_URL required; operating-mode integration never skips');
+  // Without PostgreSQL every test below is skipped; there is nothing to seed.
+  if (!process.env.DATABASE_URL) return;
   const { assertRlsEnforcingRole } = await import('@/lib/testing/rls-role-guard');
   await assertRlsEnforcingRole(withPlatformDb);
   for (const [scope, mode] of [
@@ -112,176 +112,179 @@ const kinds: PharmacyApprovalKind[] = [
   'ADJUSTMENT',
   'PURCHASE',
 ];
-describe.each(kinds)('%s real PIN and audit policy', (kind) => {
-  const targetId = `${kind}-${suffix}`;
-  it.each(['user', 'role'])(
-    'rejects an explicit %s DENY even with the correct SOLO PIN',
-    async (source) => {
-      const deniedTarget = `denied-${source}-${targetId}`;
-      const capability =
-        kind === 'RX'
-          ? 'pharmacy:dispense'
-          : kind === 'PURCHASE'
-            ? 'pharmacy:procurement'
-            : kind === 'ADJUSTMENT'
-              ? 'pharmacy:inventory'
-              : 'pharmacy:counter';
-      await expect(
-        withTenantDb(
+// Skips like the other database suites when no PostgreSQL is configured.
+describe.skipIf(!process.env.DATABASE_URL)('pharmacy operating mode (PostgreSQL)', () => {
+  describe.each(kinds)('%s real PIN and audit policy', (kind) => {
+    const targetId = `${kind}-${suffix}`;
+    it.each(['user', 'role'])(
+      'rejects an explicit %s DENY even with the correct SOLO PIN',
+      async (source) => {
+        const deniedTarget = `denied-${source}-${targetId}`;
+        const capability =
+          kind === 'RX'
+            ? 'pharmacy:dispense'
+            : kind === 'PURCHASE'
+              ? 'pharmacy:procurement'
+              : kind === 'ADJUSTMENT'
+                ? 'pharmacy:inventory'
+                : 'pharmacy:counter';
+        await expect(
+          withTenantDb(
+            solo.organizationId,
+            async (db) => {
+              if (source === 'user') {
+                await db.userPermissionOverride.create({
+                  data: {
+                    userId: solo.actorId,
+                    capability,
+                    effect: 'DENY',
+                    reason: 'Approval regression',
+                  },
+                });
+              } else {
+                const owner = await db.user.findUniqueOrThrow({ where: { id: solo.actorId } });
+                await db.organizationRolePermission.update({
+                  where: {
+                    organizationRoleId_capability: {
+                      organizationRoleId: owner.organizationRoleId!,
+                      capability,
+                    },
+                  },
+                  data: { effect: 'DENY' },
+                });
+              }
+              await enforceOperatingMode(db, solo, {
+                kind,
+                makerIds: [solo.actorId],
+                targetType: 'PolicyRegression',
+                targetId: deniedTarget,
+                pin,
+              });
+            },
+            { skipDrain: true }
+          )
+        ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        await withTenantDb(
           solo.organizationId,
           async (db) => {
-            if (source === 'user') {
-              await db.userPermissionOverride.create({
-                data: {
-                  userId: solo.actorId,
-                  capability,
-                  effect: 'DENY',
-                  reason: 'Approval regression',
-                },
-              });
-            } else {
-              const owner = await db.user.findUniqueOrThrow({ where: { id: solo.actorId } });
-              await db.organizationRolePermission.update({
-                where: {
-                  organizationRoleId_capability: {
-                    organizationRoleId: owner.organizationRoleId!,
-                    capability,
-                  },
-                },
-                data: { effect: 'DENY' },
-              });
-            }
-            await enforceOperatingMode(db, solo, {
-              kind,
-              makerIds: [solo.actorId],
-              targetType: 'PolicyRegression',
-              targetId: deniedTarget,
-              pin,
-            });
+            expect(await db.auditLog.count({ where: { targetId: deniedTarget } })).toBe(0);
           },
           { skipDrain: true }
-        )
+        );
+      }
+    );
+    it('denies SOLO without PIN, allows verified owner, and retains secret-free evidence', async () => {
+      const input = { kind, makerIds: [solo.actorId], targetType: 'PolicyRegression', targetId };
+      await expect(
+        withTenantDb(solo.organizationId, (db) => enforceOperatingMode(db, solo, input), {
+          skipDrain: true,
+        })
       ).rejects.toMatchObject({ code: 'FORBIDDEN' });
       await withTenantDb(
         solo.organizationId,
         async (db) => {
-          expect(await db.auditLog.count({ where: { targetId: deniedTarget } })).toBe(0);
+          expect(await db.auditLog.count({ where: { targetId } })).toBe(0);
+          await expect(enforceOperatingMode(db, solo, { ...input, pin })).resolves.toHaveProperty(
+            'policy',
+            'PHARMACY:SOLO_OWNER_PIN'
+          );
+          const audit = await db.auditLog.findFirstOrThrow({ where: { targetId } });
+          expect(audit.metadata).toMatchObject({
+            operatingMode: 'SOLO',
+            reauthentication: 'PIN',
+            branchId: solo.branchId,
+          });
+          expect(JSON.stringify(audit)).not.toContain(pin);
         },
         { skipDrain: true }
       );
-    }
-  );
-  it('denies SOLO without PIN, allows verified owner, and retains secret-free evidence', async () => {
-    const input = { kind, makerIds: [solo.actorId], targetType: 'PolicyRegression', targetId };
-    await expect(
-      withTenantDb(solo.organizationId, (db) => enforceOperatingMode(db, solo, input), {
-        skipDrain: true,
-      })
-    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    await withTenantDb(
-      solo.organizationId,
-      async (db) => {
-        expect(await db.auditLog.count({ where: { targetId } })).toBe(0);
-        await expect(enforceOperatingMode(db, solo, { ...input, pin })).resolves.toHaveProperty(
-          'policy',
-          'PHARMACY:SOLO_OWNER_PIN'
-        );
-        const audit = await db.auditLog.findFirstOrThrow({ where: { targetId } });
-        expect(audit.metadata).toMatchObject({
-          operatingMode: 'SOLO',
-          reauthentication: 'PIN',
-          branchId: solo.branchId,
-        });
-        expect(JSON.stringify(audit)).not.toContain(pin);
-      },
-      { skipDrain: true }
-    );
-  });
-  it('denies STAFFED owner self approval even with correct PIN; accepts qualified independent checker', async () => {
-    const input = { kind, makerIds: [staffed.actorId], targetType: 'PolicyRegression', targetId };
-    await expect(
-      withTenantDb(
+    });
+    it('denies STAFFED owner self approval even with correct PIN; accepts qualified independent checker', async () => {
+      const input = { kind, makerIds: [staffed.actorId], targetType: 'PolicyRegression', targetId };
+      await expect(
+        withTenantDb(
+          staffed.organizationId,
+          (db) => enforceOperatingMode(db, staffed, { ...input, pin }),
+          { skipDrain: true }
+        )
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      const checker = roles(staffed.organizationId, kind === 'RX' ? 'pharmacist' : 'manager');
+      await withTenantDb(
         staffed.organizationId,
-        (db) => enforceOperatingMode(db, staffed, { ...input, pin }),
+        (db) => enforceOperatingMode(db, { ...staffed, actorId: checker }, input),
         { skipDrain: true }
-      )
-    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    const checker = roles(staffed.organizationId, kind === 'RX' ? 'pharmacist' : 'manager');
+      );
+      await expect(
+        withTenantDb(
+          staffed.organizationId,
+          (db) =>
+            enforceOperatingMode(
+              db,
+              { ...staffed, actorId: roles(staffed.organizationId, 'cashier') },
+              input
+            ),
+          { skipDrain: true }
+        )
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    });
+  });
+  it('STAFFED refuses both the #683 self-approval API and direct forged SOLO audit evidence', async () => {
     await withTenantDb(
       staffed.organizationId,
-      (db) => enforceOperatingMode(db, { ...staffed, actorId: checker }, input),
+      async (db) => {
+        expect(
+          await authorizeSoloApproval(db, staffed, { type: 'PolicyRegression', id: 'forged' }, pin)
+        ).toBe(false);
+      },
       { skipDrain: true }
     );
     await expect(
       withTenantDb(
         staffed.organizationId,
         (db) =>
-          enforceOperatingMode(
-            db,
-            { ...staffed, actorId: roles(staffed.organizationId, 'cashier') },
-            input
-          ),
+          db.auditLog.create({
+            data: {
+              actorId: staffed.actorId,
+              source: 'TRPC',
+              category: 'PHARMACY',
+              action: 'PHARMACY:SOLO_OWNER_PIN',
+              targetType: 'PolicyRegression',
+              targetId: 'forged',
+              metadata: { reauthentication: 'PIN' },
+            },
+          }),
         { skipDrain: true }
       )
-    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    ).rejects.toThrow(/SOLO operating mode/);
   });
-});
-it('STAFFED refuses both the #683 self-approval API and direct forged SOLO audit evidence', async () => {
-  await withTenantDb(
-    staffed.organizationId,
-    async (db) => {
-      expect(
-        await authorizeSoloApproval(db, staffed, { type: 'PolicyRegression', id: 'forged' }, pin)
-      ).toBe(false);
-    },
-    { skipDrain: true }
-  );
-  await expect(
-    withTenantDb(
-      staffed.organizationId,
-      (db) =>
-        db.auditLog.create({
-          data: {
-            actorId: staffed.actorId,
-            source: 'TRPC',
-            category: 'PHARMACY',
-            action: 'PHARMACY:SOLO_OWNER_PIN',
-            targetType: 'PolicyRegression',
-            targetId: 'forged',
-            metadata: { reauthentication: 'PIN' },
-          },
-        }),
-      { skipDrain: true }
-    )
-  ).rejects.toThrow(/SOLO operating mode/);
-});
 
-it('rolls back SOLO evidence if its transaction changes to STAFFED before committing', async () => {
-  const targetId = `mode-race-${suffix}`;
-  await expect(
-    withTenantDb(
+  it('rolls back SOLO evidence if its transaction changes to STAFFED before committing', async () => {
+    const targetId = `mode-race-${suffix}`;
+    await expect(
+      withTenantDb(
+        solo.organizationId,
+        async (db) => {
+          expect(
+            await authorizeSoloApproval(db, solo, { type: 'PolicyRegression', id: targetId }, pin)
+          ).toBe(true);
+          await db.organization.update({
+            where: { id: solo.organizationId },
+            data: { pharmacyOperatingMode: 'STAFFED' },
+          });
+        },
+        { skipDrain: true }
+      )
+    ).rejects.toThrow(/SOLO operating mode/);
+    await withTenantDb(
       solo.organizationId,
       async (db) => {
+        expect(await db.auditLog.count({ where: { targetId } })).toBe(0);
         expect(
-          await authorizeSoloApproval(db, solo, { type: 'PolicyRegression', id: targetId }, pin)
-        ).toBe(true);
-        await db.organization.update({
-          where: { id: solo.organizationId },
-          data: { pharmacyOperatingMode: 'STAFFED' },
-        });
+          (await db.organization.findUniqueOrThrow({ where: { id: solo.organizationId } }))
+            .pharmacyOperatingMode
+        ).toBe('SOLO');
       },
       { skipDrain: true }
-    )
-  ).rejects.toThrow(/SOLO operating mode/);
-  await withTenantDb(
-    solo.organizationId,
-    async (db) => {
-      expect(await db.auditLog.count({ where: { targetId } })).toBe(0);
-      expect(
-        (await db.organization.findUniqueOrThrow({ where: { id: solo.organizationId } }))
-          .pharmacyOperatingMode
-      ).toBe('SOLO');
-    },
-    { skipDrain: true }
-  );
+    );
+  });
 });

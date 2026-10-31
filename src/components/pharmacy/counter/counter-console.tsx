@@ -2427,7 +2427,7 @@ function ScopedPharmacyCounterConsole({
                       onChange={(event) => setRxCheckerId(event.target.value)}
                       disabled={busy || rxApproversQuery.isLoading || rxApproversQuery.isError}
                     >
-                      <option value="">Select independent pharmacist</option>
+                      <option value="">I am dispensing (no delegated pharmacist)</option>
                       {rxApproversQuery.data?.users.map((checker) => (
                         <option key={checker.id} value={checker.id}>
                           {checker.name || checker.email}

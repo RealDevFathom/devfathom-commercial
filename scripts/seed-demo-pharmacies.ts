@@ -147,6 +147,29 @@ export const demoSalesDays = 30;
 const otcSaleIndexes = [1, 2, 3, 13, 15, 28, 29, 30, 31, 32, 33, 34];
 const rxSaleIndexes = [4, 5, 6, 7, 8, 10, 11, 12, 14, 16, 17, 20, 21, 22, 23, 24, 25, 26, 35, 39];
 
+// Demo tenants have real password logins: never create them in production.
+// Staging images also set NODE_ENV=production, so DEPLOY_ENV=staging stays allowed.
+const PRODUCTION_NAME = /(?:^|[._-])(prod|production)(?:[._-]|$)/i;
+export function assertDemoSeedNotProduction(env: NodeJS.ProcessEnv = process.env) {
+  const deployEnv = env.DEPLOY_ENV?.trim().toLowerCase();
+  if (
+    deployEnv === 'production' ||
+    deployEnv === 'prod' ||
+    (env.NODE_ENV === 'production' && deployEnv !== 'staging')
+  )
+    throw new Error('Refusing to seed demo pharmacies in production.');
+  if (!env.DATABASE_URL) return;
+  let target: URL;
+  try {
+    target = new URL(env.DATABASE_URL);
+  } catch {
+    throw new Error('Refusing to seed demo pharmacies: DATABASE_URL is not a valid URL.');
+  }
+  const database = decodeURIComponent(target.pathname.replace(/^\//, ''));
+  if (PRODUCTION_NAME.test(target.hostname) || PRODUCTION_NAME.test(database))
+    throw new Error('Refusing to seed demo pharmacies into a production database.');
+}
+
 export function readDemoPasswords(env: NodeJS.ProcessEnv = process.env) {
   const missing = REQUIRED_PASSWORDS.filter((key) => !env[key]?.trim());
   if (missing.length)
@@ -163,6 +186,7 @@ export async function seedDemoPharmacies(
   env = process.env,
   plans = demoPharmacyPlan
 ) {
+  assertDemoSeedNotProduction(env);
   const passwords = readDemoPasswords(env);
   for (const plan of plans) {
     await prisma.$transaction(
@@ -673,8 +697,9 @@ export async function seedDemoPharmacies(
   }
 }
 async function main() {
-  readDemoPasswords();
   if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is required');
+  assertDemoSeedNotProduction();
+  readDemoPasswords();
   const prisma = new PrismaClient({
     adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }),
   });
@@ -688,7 +713,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href)
   main().catch((error: unknown) => {
     console.error(
       error instanceof Error &&
-        error.message.startsWith('Missing required demo password environment variables:')
+        (error.message.startsWith('Missing required demo password environment variables:') ||
+          error.message.startsWith('Refusing to seed demo pharmacies'))
         ? error.message
         : 'Demo seed failed; check configuration and database prerequisites.'
     );

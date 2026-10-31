@@ -35,3 +35,13 @@ Visual QA covered PIN enrollment plus SOLO and STAFFED inventory write-offs and 
 Focused verification passed for the operating-mode policy and API, navigation, settings component, role catalog, Rx approval, FEFO override and refund-cap unit suites. PostgreSQL checks passed for operating mode, stock ledger, Rx sale gates, prescription references and the capability migration, using restricted runtime roles and a separate migration-test role. No full suite, build, typecheck, lint or Prisma migration command was run in this follow-up.
 
 Browser checks covered 375, 768, 1024 and 1440 pixels, light/dark themes and normal/reduced motion. The new link is reachable, has the active-page state and a keyboard focus indicator, and introduces no document overflow. Screenshots were captured. A real incorrect-PIN submission stayed in Settings and the session remained usable after reload, with no page errors. The unchanged mobile shell closes on Escape but does not restore focus to its opener; this pre-existing shell limitation is outside these review fixes.
+
+## PR #734 second review follow-up
+
+- The operating-mode migrations are renamed to `20261101000100_*` and `20261101000200_*` so they sort after every #683 and develop migration. They no longer redefine `pharmacy_solo_owner_eligible`, so applying them after #683 cannot drop the "exactly one active user" rule. SOLO mode is still enforced by `soloOwnerEligible` and the `pharmacy_solo_mode_audit` triggers.
+- #683's `20261101000000_pharmacy_solo_roster_advisory_lock` is included unchanged (same name, so it is never applied twice). Roster writes take a shared per-tenant advisory lock instead of locking and rewriting the organization row. SOLO approvals take the organization row and the exclusive roster lock. STAFFED approvals take neither, because the independent-checker rule holds in either mode, so counters no longer serialize on one tenant row.
+- Rx eligibility uses the live `pharmacy:dispense` grant instead of the `pharmacist` role key, at approval, at payment recheck, and in the approver list. A dispense holder may approve their own STAFFED Rx line, as before operating modes. Cashiers still need an independent dispense holder with a PIN.
+- First PIN enrollment requires the account password. It is rate-limited and never audited.
+- Delegated checker PINs are throttled per requester and checker (3 per 15 minutes), below the checker's own 5-attempt window.
+- `scripts/seed-demo-pharmacies.ts` refuses `DEPLOY_ENV=production`, `NODE_ENV=production` without `DEPLOY_ENV=staging`, and production-named database hosts or names.
+- New database suites skip without `DATABASE_URL`, like the other database suites. The demo-seed suite reads fixtures inside the same RLS context the seed uses.

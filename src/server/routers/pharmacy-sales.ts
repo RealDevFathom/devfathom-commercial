@@ -1840,15 +1840,27 @@ export const pharmacySalesRouter = router({
   /** Live branch-scoped identities; the write repeats role, permission and PIN checks. */
   rxApprovers: protectedProcedure.input(z.object({ branchId })).query(async ({ ctx, input }) => {
     const scope = await scopeFor(ctx, input.branchId);
-    const users = await ctx.db.user.findMany({
+    const assigned = await ctx.db.user.findMany({
       where: {
         organizationId: scope.organizationId,
         status: 'ACTIVE',
-        organizationRole: { key: 'pharmacist' },
         pharmacyBranchAssignments: { some: { branchId: input.branchId, active: true } },
       },
       select: { id: true, name: true, email: true },
     });
+    // Offer every live pharmacy:dispense holder (custom pharmacist roles and
+    // pharmacist-owners included); the write repeats this check with the PIN.
+    const users: typeof assigned = [];
+    for (const user of assigned)
+      if (
+        await can(
+          { id: user.id, role: 'EMPLOYEE', organizationId: scope.organizationId },
+          'pharmacy:dispense',
+          undefined,
+          { db: ctx.db }
+        )
+      )
+        users.push(user);
     const soloApprovalAllowed = await soloOwnerEligible(ctx.db, scope);
     return {
       mode: soloApprovalAllowed ? ('SOLO' as const) : ('STAFFED' as const),

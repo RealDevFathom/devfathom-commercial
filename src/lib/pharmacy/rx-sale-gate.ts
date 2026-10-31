@@ -131,7 +131,18 @@ export async function assertRxSaleLinesAllowed(
         where: { id: checkerId, organizationId: scope.organizationId, status: 'ACTIVE' },
         select: { organizationRole: { select: { key: true } } },
       });
-      if (checkerId === sale.createdByUserId || checker?.organizationRole?.key !== 'pharmacist')
+      // Clinical eligibility is the live pharmacy:dispense grant, not a role key,
+      // so custom pharmacist roles and pharmacist-owners keep working.
+      if (
+        checkerId === sale.createdByUserId ||
+        !checker ||
+        !(await can(
+          { id: checkerId, role: 'EMPLOYEE', organizationId: scope.organizationId },
+          'pharmacy:dispense',
+          undefined,
+          { db }
+        ))
+      )
         throw new PharmacyRxSaleDenied();
     }
     await assertBranchAssignment(db, { ...scope, actorId: checkerId });

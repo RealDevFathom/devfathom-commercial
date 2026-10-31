@@ -128,6 +128,7 @@ test('pharmacy PIN enrollment is discoverable, accessible and works without Rest
     .include('[data-slot="section-card"]')
     .analyze();
   expect(accessibility.violations).toEqual([]);
+  await page.getByLabel('Account password', { exact: true }).fill(FIXTURE.receiver.password);
   await pin.fill('482916');
   await page.getByLabel('Confirm pharmacy PIN', { exact: true }).fill('482917');
   await page.getByRole('button', { name: 'Enroll pharmacy PIN' }).click();

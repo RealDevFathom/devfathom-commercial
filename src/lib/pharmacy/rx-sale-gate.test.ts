@@ -71,8 +71,11 @@ describe('recorded Rx approvals when the payer can dispense', () => {
       if (change === 'permission')
         mocks.can.mockImplementation(async (subject) => subject.id === 'owner');
       if (change === 'assignment') mocks.branch.mockRejectedValue(new PharmacyRxSaleDenied());
-      if (change === 'role')
+      // Eligibility is the live dispense grant: a role change that drops it denies.
+      if (change === 'role') {
         db.user.findFirst.mockResolvedValue({ organizationRole: { key: 'cashier' } });
+        mocks.can.mockImplementation(async (subject) => subject.id === 'owner');
+      }
       if (change === 'status') db.user.findFirst.mockResolvedValue(null);
       await expect(completePaidPharmacySale(db as never, scope, sale as never, {
         deviceId: 'device', businessDate: new Date(),
@@ -95,6 +98,14 @@ describe('recorded Rx approvals when the payer can dispense', () => {
     const { db, sale, approval } = fixture();
     approval.metadata.canonicalUnits = 1;
     await expect(assertRxSaleLinesAllowed(db as never, scope, sale)).rejects.toBeInstanceOf(PharmacyRxSaleDenied);
+  });
+
+  it('accepts a checker holding pharmacy:dispense through a custom role', async () => {
+    const { db, sale } = fixture();
+    db.user.findFirst.mockResolvedValue({ organizationRole: { key: 'dispensary-lead' } });
+    await expect(assertRxSaleLinesAllowed(db as never, scope, sale)).resolves.toEqual(
+      new Map([['line', 'pharmacist']])
+    );
   });
 
   it('preserves direct dispensing without delegated evidence and denies an unapproved cashier', async () => {

@@ -96,7 +96,8 @@ const exportInput = {
 const ownerAuthorization = { staffProfileId: id('staff'), pin };
 
 afterAll(() => db.$disconnect());
-describe('pharmacovigilance PostgreSQL authorization and review', () => {
+// Skips like the other database suites when no PostgreSQL is configured.
+describe.skipIf(!process.env.DATABASE_URL)('pharmacovigilance PostgreSQL authorization and review', () => {
   it('enforces denial, owner scope, fresh solo PIN and independent staffed review', async () => {
     expect(Boolean(process.env.DATABASE_URL)).toBe(true);
     const credentialHash = await hashOperatorCredential('PIN', pin);

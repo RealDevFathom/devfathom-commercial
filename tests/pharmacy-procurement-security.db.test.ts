@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { clearRateLimit, rateLimit } from '@/lib/rate-limit';
 import { randomUUID } from 'node:crypto';
+import { hash } from 'bcryptjs';
 import { Client } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { db } from '@/lib/db';
@@ -23,6 +24,7 @@ const ownerUrl = process.env.SECURITY_TEST_OWNER_DATABASE_URL;
 let org = `sec_h3_${randomUUID().replaceAll('-', '')}`;
 const rollback = new Error('rollback test fixtures');
 const pin = '482916';
+const OWNER_PASSWORD = `Pw1-${randomUUID()}`;
 
 async function fixture(run: (tx: ScopedDb, ctx: TRPCContext) => Promise<void>) {
   org = `sec_h3_${randomUUID().replaceAll('-', '')}`;
@@ -60,6 +62,7 @@ async function fixture(run: (tx: ScopedDb, ctx: TRPCContext) => Promise<void>) {
           id: `${org}_owner`,
           name: 'Owner',
           email: `${org}@example.test`,
+          password: await hash(OWNER_PASSWORD, 4),
           department: 'PHARMACY',
           title: 'Owner',
           organizationRoleId: role.id,
@@ -78,7 +81,7 @@ async function fixture(run: (tx: ScopedDb, ctx: TRPCContext) => Promise<void>) {
           requestMeta: { ip: null, userAgent: null },
           audit: { detail: {}, db: tx },
         } as unknown as TRPCContext)
-        .enroll({ pin });
+        .enroll({ pin, currentPassword: OWNER_PASSWORD });
       const supplier = await tx.pharmacySupplier.create({
         data: { name: 'Supplier', authorized: true },
       });

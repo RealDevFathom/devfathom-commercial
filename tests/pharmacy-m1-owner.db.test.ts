@@ -119,7 +119,7 @@ const url = process.env.DATABASE_URL;
   }
 );
 
-it('migrates real bootstrap admin identities, preserves DENYs and manual assignment provenance, and safely repeats the owner migration', async () => {
+it.skipIf(!url)('migrates real bootstrap admin identities, preserves DENYs and manual assignment provenance, and safely repeats the owner migration', async () => {
   expect(url).toBeTruthy();
   const { readFile } = await import('node:fs/promises');
   // Replacing migration functions requires their schema owner, while the

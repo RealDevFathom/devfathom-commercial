@@ -28,13 +28,28 @@ export async function enforceOperatingMode(
     checkerId?: string;
   }
 ) {
-  await db.$queryRaw`SELECT id FROM organizations WHERE id=${scope.organizationId} FOR NO KEY UPDATE`;
-  const organization = await db.organization.findFirstOrThrow({
-    where: { id: scope.organizationId, vertical: 'PHARMACY' },
-    select: { pharmacyOperatingMode: true },
-  });
+  const readMode = async () =>
+    (
+      await db.organization.findFirstOrThrow({
+        where: { id: scope.organizationId, vertical: 'PHARMACY' },
+        select: { pharmacyOperatingMode: true },
+      })
+    ).pharmacyOperatingMode;
+  let mode = await readMode();
+  // Only SOLO evidence depends on the mode at commit (pharmacy_solo_mode_audit), so
+  // only SOLO approvals hold the organization row. STAFFED approvals need an
+  // independent checker whatever the mode becomes, so concurrent counters do not
+  // serialize on one tenant row. A concurrent switch to SOLO can only make this
+  // approval stricter.
+  if (mode === 'SOLO') {
+    await db.$queryRaw`SELECT id FROM organizations WHERE id=${scope.organizationId} FOR NO KEY UPDATE`;
+    // Roster writers take the shared roster lock, not the organization row: hold the
+    // exclusive one so the singleton-owner check cannot race a staff activation.
+    await db.$queryRaw`SELECT pharmacy_lock_solo_roster(${scope.organizationId})::text`;
+    mode = await readMode();
+  }
   if (
-    organization.pharmacyOperatingMode === 'SOLO' &&
+    mode === 'SOLO' &&
     (input.checkerId ?? scope.actorId) === scope.actorId &&
     input.makerIds.includes(scope.actorId)
   ) {
@@ -73,10 +88,11 @@ export async function enforceOperatingMode(
     if (!actor)
       throw new TRPCError({ code: 'FORBIDDEN', message: 'Active checker membership required.' });
     const role = actor.organizationRole?.key;
+    // Rx is a clinical grant, not a role name: any live pharmacy:dispense holder
+    // (including a custom pharmacist role or a pharmacist-owner) may check it.
     const eligible =
       input.kind === 'RX'
-        ? role === 'pharmacist' &&
-          (await can(
+        ? (await can(
             { id: checkerId, role: 'EMPLOYEE', organizationId: scope.organizationId },
             'pharmacy:dispense',
             undefined,
@@ -91,10 +107,14 @@ export async function enforceOperatingMode(
               undefined,
               { db }
             ));
-    if (eligible && !input.makerIds.includes(checkerId)) {
+    // A dispense-qualified seller approving their own Rx line is the pharmacist
+    // dispensing, as before operating modes. Only a delegated checker needs a PIN;
+    // cashiers still need an independent dispense holder.
+    const selfDispense = input.kind === 'RX' && checkerId === scope.actorId;
+    if (eligible && (selfDispense || !input.makerIds.includes(checkerId))) {
       if (
         checkerId !== scope.actorId &&
-        !(await verifyPharmacyUserPin({ ...scope, actorId: checkerId }, input.pin))
+        !(await verifyPharmacyUserPin({ ...scope, actorId: checkerId }, input.pin, scope.actorId))
       )
         throw new TRPCError({
           code: 'FORBIDDEN',
@@ -114,6 +134,7 @@ export async function enforceOperatingMode(
             branchId: scope.branchId,
             operatingMode: 'STAFFED',
             makerIds: input.makerIds,
+            ...(selfDispense && input.makerIds.includes(checkerId) ? { selfDispense: true } : {}),
           },
         },
       });
