@@ -2,7 +2,9 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   actOnLostDemandAdvice,
   DEFAULT_LOST_DEMAND_TRIGGER_CONFIG,
+  evaluateLostDemandScopes,
   evaluateLostDemandTriggers,
+  loadLostDemandScopeAlerts,
   lostDemandWhatsAppText,
   suggestedProcurementQuantity,
   type LostDemandActionBoundary,
@@ -10,6 +12,7 @@ import {
   type LostDemandAdvice,
   type LostDemandTransaction,
 } from './lost-demand-procurement';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 describe('lost-demand procurement advice', () => {
   it('validates metrics/config and preserves inclusive thresholds', () => {
@@ -279,5 +282,87 @@ describe('lost-demand procurement advice', () => {
     expect(text).toContain('estimated demand');
     expect(text).not.toContain(advice.medicineId);
     expect(text).toContain('nothing has been sent');
+  });
+
+  describe('SKU/salt-scoped trailing windows', () => {
+    const fact = (
+      medicineId: string,
+      requests: number,
+      loss = 0,
+      saltKey: string | null = null
+    ) => ({
+      medicineId,
+      saltKey,
+      requestsInRequestWindow: requests,
+      estimatedLossMinorInLossWindow: loss,
+    });
+
+    it('never sums unrelated items into one request trigger', () => {
+      expect(
+        evaluateLostDemandScopes(
+          [fact('a', 1), fact('b', 1), fact('c', 1)],
+          DEFAULT_LOST_DEMAND_TRIGGER_CONFIG,
+          { financial: true }
+        )
+      ).toEqual([]);
+      expect(
+        evaluateLostDemandScopes([fact('a', 3)], DEFAULT_LOST_DEMAND_TRIGGER_CONFIG, {
+          financial: true,
+        })
+      ).toEqual([
+        expect.objectContaining({ scope: 'SKU', key: 'a', requests: 3, fired: ['REQUESTS'] }),
+      ]);
+    });
+
+    it('combines brands only when they share salt and strength', () => {
+      const alerts = evaluateLostDemandScopes(
+        [
+          fact('a', 2, 0, 'para@500mg'),
+          fact('b', 1, 0, 'para@500mg'),
+          fact('c', 2, 0, 'ibu@200mg'),
+        ],
+        DEFAULT_LOST_DEMAND_TRIGGER_CONFIG,
+        { financial: true }
+      );
+      expect(alerts).toEqual([
+        expect.objectContaining({ scope: 'SALT', key: 'para@500mg', medicineIds: ['a', 'b'] }),
+      ]);
+    });
+
+    it('excludes the loss metric and trigger without financial permission', () => {
+      const facts = [fact('a', 0, 1_500_000), fact('b', 3, 1_500_000)];
+      expect(
+        evaluateLostDemandScopes(facts, DEFAULT_LOST_DEMAND_TRIGGER_CONFIG, { financial: true })
+      ).toHaveLength(2);
+      const restricted = evaluateLostDemandScopes(facts, DEFAULT_LOST_DEMAND_TRIGGER_CONFIG, {
+        financial: false,
+      });
+      expect(restricted).toEqual([
+        { scope: 'SKU', key: 'b', medicineIds: ['b'], requests: 3, fired: ['REQUESTS'] },
+      ]);
+    });
+
+    it('queries each metric over its own window ending now and skips loss without permission', async () => {
+      const groupBy = vi.fn().mockResolvedValue([]);
+      const db = {
+        unfulfilledDemandEvent: { groupBy },
+        medicineStrengthComponent: { findMany: vi.fn().mockResolvedValue([]) },
+      } as unknown as ScopedDb;
+      const at = new Date('2026-10-31T00:00:00.000Z');
+      const scope = { organizationId: 'org', branchId: 'br' };
+      await loadLostDemandScopeAlerts(db, scope, { financial: true, at });
+      expect(groupBy.mock.calls.map(([args]) => args.where.createdAt)).toEqual([
+        { gte: new Date('2026-10-24T00:00:00.000Z'), lt: at },
+        { gte: new Date('2026-10-01T00:00:00.000Z'), lt: at },
+      ]);
+      expect(groupBy.mock.calls[0][0].where).toMatchObject({
+        organizationId: 'org',
+        branchId: 'br',
+      });
+      groupBy.mockClear();
+      await loadLostDemandScopeAlerts(db, scope, { financial: false, at });
+      expect(groupBy).toHaveBeenCalledOnce();
+      expect(groupBy.mock.calls[0][0]._sum).toBeUndefined();
+    });
   });
 });

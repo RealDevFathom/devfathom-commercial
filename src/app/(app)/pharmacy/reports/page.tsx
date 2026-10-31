@@ -119,6 +119,9 @@ export default async function PharmacyReportsPage({
     ReturnType<ReturnType<typeof pharmacySalesRouter.createCaller>['demandAggregate']>
   > | null = null;
   let demandError = false;
+  let demandAlerts: Awaited<
+    ReturnType<ReturnType<typeof pharmacySalesRouter.createCaller>['lostDemandAlerts']>
+  > | null = null;
   const reportFilters = {
     ...(branch ? { branchId: branch } : {}),
     ...(supplier ? { supplierId: supplier } : {}),
@@ -159,15 +162,19 @@ export default async function PharmacyReportsPage({
     ![query.branch, query.from, query.to].some(Array.isArray) &&
     (Date.parse(to) - Date.parse(from)) / 86_400_000 < 90;
   if (demandScopeValid && branch && branchResult.branches.some((item) => item.id === branch)) {
-    try {
-      demand = await pharmacySalesRouter.createCaller(ctx).demandAggregate({
+    const salesCaller = pharmacySalesRouter.createCaller(ctx);
+    const [demandResult, alertResult] = await Promise.allSettled([
+      salesCaller.demandAggregate({
         branchId: branch,
         from: new Date(`${from}T00:00:00.000Z`),
         to: new Date(new Date(`${to}T00:00:00.000Z`).getTime() + 86_400_000),
-      });
-    } catch {
-      demandError = true;
-    }
+      }),
+      salesCaller.lostDemandAlerts({ branchId: branch }),
+    ]);
+    if (demandResult.status === 'fulfilled') demand = demandResult.value;
+    else demandError = true;
+    // Alerts are independent trailing windows; their failure never hides the report.
+    if (alertResult.status === 'fulfilled') demandAlerts = alertResult.value;
   }
   const digestMessage = value(query.digest);
   const anomalyMessage = value(query.anomaly);
@@ -390,6 +397,7 @@ export default async function PharmacyReportsPage({
       />
       <ObservedDemand
         report={demand}
+        alerts={demandAlerts}
         failed={demandError}
         selected={!!branch}
         financial={catalog.permissions.financial}

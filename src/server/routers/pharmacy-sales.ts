@@ -14,6 +14,7 @@ import {
 import { paymentSandboxAdmitted } from '@/lib/pharmacy/payment-sandbox-admission';
 import { readCounterEvidence, readDailyCloseEvidence } from '@/lib/pharmacy/counter-evidence';
 import { can, subjectFromSession } from '@/lib/abac';
+import { loadLostDemandScopeAlerts } from '@/lib/pharmacy/lost-demand-procurement';
 import { capabilityMatches } from '@/lib/abac/capabilities';
 import {
   appendControlledSaleEntries,
@@ -1492,6 +1493,19 @@ export const pharmacySalesRouter = router({
     .query(async ({ ctx, input }) =>
       demandAggregate(ctx.db, await scopeFor(ctx, input.branchId), input.from, input.to)
     ),
+  /** SKU/salt-scoped trailing-window alerts; loss figures require reports:financial. */
+  lostDemandAlerts: protectedProcedure
+    .input(z.object({ branchId }).strict())
+    .query(async ({ ctx, input }) => {
+      const scope = await scopeFor(ctx, input.branchId);
+      const financial = await can(
+        subjectFromSession(ctx.session!.user),
+        'reports:financial',
+        undefined,
+        { db: ctx.db, source: 'TRPC' }
+      );
+      return loadLostDemandScopeAlerts(ctx.db, scope, { financial });
+    }),
   addRestockInterest: protectedProcedure
     .input(
       z

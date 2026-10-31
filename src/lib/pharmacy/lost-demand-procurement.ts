@@ -1,4 +1,6 @@
 /** Lost-demand procurement advice. All writes stop at an inert DRAFT document. */
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+
 const MAX_QUANTITY = 2_147_483_647;
 
 export type LostDemandTriggerConfig = {
@@ -48,6 +50,149 @@ export function evaluateLostDemandTriggers(
   if (metrics.visits > 0 && (metrics.walkOuts / metrics.visits) * 10_000 > config.walkOutRateBps)
     fired.push('WALK_OUT_RATE');
   return fired;
+}
+
+export type LostDemandScope = 'SKU' | 'SALT';
+/** One medicine's raw facts in each independently configured trailing window. */
+export type LostDemandWindowFact = {
+  medicineId: string;
+  /** Stable salt/strength identity; null when the medicine has no strength components. */
+  saltKey: string | null;
+  requestsInRequestWindow: number;
+  estimatedLossMinorInLossWindow: number;
+};
+export type LostDemandScopeAlert = {
+  scope: LostDemandScope;
+  key: string;
+  medicineIds: string[];
+  requests: number;
+  /** Omitted without financial permission; the loss trigger is then never evaluated. */
+  estimatedLossMinor?: number;
+  fired: LostDemandTrigger[];
+};
+
+/**
+ * Evaluates triggers per SKU and per salt/strength, never across unrelated items.
+ * Request counts and loss sums arrive already restricted to their own windows.
+ * Without financial permission the loss metric is excluded from evaluation and output,
+ * so the alert cannot disclose whether a monetary threshold was crossed.
+ */
+export function evaluateLostDemandScopes(
+  facts: readonly LostDemandWindowFact[],
+  config: LostDemandTriggerConfig,
+  options: { financial: boolean }
+): LostDemandScopeAlert[] {
+  const groups = new Map<string, Omit<LostDemandScopeAlert, 'fired'> & { loss: number }>();
+  const add = (scope: LostDemandScope, key: string, fact: LostDemandWindowFact) => {
+    const id = `${scope}:${key}`;
+    const group = groups.get(id) ?? {
+      scope,
+      key,
+      medicineIds: [],
+      requests: 0,
+      loss: 0,
+    };
+    group.medicineIds.push(fact.medicineId);
+    group.requests += fact.requestsInRequestWindow;
+    group.loss += fact.estimatedLossMinorInLossWindow;
+    groups.set(id, group);
+  };
+  for (const fact of facts) {
+    add('SKU', fact.medicineId, fact);
+    if (fact.saltKey) add('SALT', fact.saltKey, fact);
+  }
+  const alerts: LostDemandScopeAlert[] = [];
+  for (const { loss, ...group } of groups.values()) {
+    const fired = evaluateLostDemandTriggers(
+      {
+        requests: group.requests,
+        estimatedLossMinor: options.financial ? loss : 0,
+        // No visit or walk-out capture exists yet; the walk-out trigger cannot be evaluated.
+        walkOuts: 0,
+        visits: 0,
+      },
+      options.financial ? config : { ...config, estimatedLossMinor: Number.MAX_SAFE_INTEGER }
+    ).filter((trigger) => options.financial || trigger !== 'ESTIMATED_LOSS');
+    // A salt alert made of a single SKU repeats that SKU alert.
+    if (!fired.length || (group.scope === 'SALT' && group.medicineIds.length < 2)) continue;
+    alerts.push({
+      ...group,
+      medicineIds: [...group.medicineIds].sort(),
+      ...(options.financial ? { estimatedLossMinor: loss } : {}),
+      fired,
+    });
+  }
+  return alerts.sort((a, b) => b.requests - a.requests || a.key.localeCompare(b.key));
+}
+
+const DAY_MS = 86_400_000;
+
+/** Reads trailing windows ending at `at` for one authorized branch. */
+export async function loadLostDemandScopeAlerts(
+  db: ScopedDb,
+  scope: { organizationId: string; branchId: string },
+  options: { financial: boolean; at?: Date; config?: LostDemandTriggerConfig }
+) {
+  const at = options.at ?? new Date();
+  const config = options.config ?? DEFAULT_LOST_DEMAND_TRIGGER_CONFIG;
+  const base = {
+    organizationId: scope.organizationId,
+    branchId: scope.branchId,
+    requestedMedicineId: { not: null },
+  };
+  const requestFrom = new Date(at.getTime() - config.requestWindowDays * DAY_MS);
+  const lossFrom = new Date(at.getTime() - config.lossWindowDays * DAY_MS);
+  const [requestRows, lossRows] = await Promise.all([
+    db.unfulfilledDemandEvent.groupBy({
+      by: ['requestedMedicineId'],
+      where: { ...base, createdAt: { gte: requestFrom, lt: at } },
+      _count: { _all: true },
+    }),
+    options.financial
+      ? db.unfulfilledDemandEvent.groupBy({
+          by: ['requestedMedicineId'],
+          where: { ...base, createdAt: { gte: lossFrom, lt: at } },
+          _sum: { estimatedValueMinor: true },
+        })
+      : Promise.resolve([]),
+  ]);
+  const facts = new Map<string, LostDemandWindowFact>();
+  const fact = (medicineId: string) => {
+    const row = facts.get(medicineId) ?? {
+      medicineId,
+      saltKey: null,
+      requestsInRequestWindow: 0,
+      estimatedLossMinorInLossWindow: 0,
+    };
+    facts.set(medicineId, row);
+    return row;
+  };
+  for (const row of requestRows)
+    if (row.requestedMedicineId)
+      fact(row.requestedMedicineId).requestsInRequestWindow = row._count._all;
+  for (const row of lossRows)
+    if (row.requestedMedicineId)
+      fact(row.requestedMedicineId).estimatedLossMinorInLossWindow =
+        row._sum.estimatedValueMinor ?? 0;
+  if (facts.size) {
+    const components = await db.medicineStrengthComponent.findMany({
+      where: { organizationId: scope.organizationId, medicineId: { in: [...facts.keys()] } },
+      select: { medicineId: true, ingredientId: true, value: true, unit: true },
+    });
+    const byMedicine = new Map<string, string[]>();
+    for (const row of components) {
+      const parts = byMedicine.get(row.medicineId) ?? [];
+      parts.push(`${row.ingredientId}@${row.value.toString()}${row.unit.trim().toLowerCase()}`);
+      byMedicine.set(row.medicineId, parts);
+    }
+    for (const [medicineId, parts] of byMedicine) fact(medicineId).saltKey = parts.sort().join('+');
+  }
+  return {
+    at,
+    config,
+    walkOutRateEvaluated: false as const,
+    alerts: evaluateLostDemandScopes([...facts.values()], config, options),
+  };
 }
 
 export type ReplenishmentTerms = {
