@@ -2890,10 +2890,9 @@ model User {
 
 // A self-service "quit the company" request. An employee submits one (reason +
 // proposed last working day); it sits PENDING until an HR or ADMIN reviewer
-// approves/declines it. Approval records the confirmed lastWorkingDay but does
-// NOT itself deactivate the account — offboarding happens on/after that day
-// (e.g. via the Lay-off action), so access is not pulled out from under someone
-// who is still working their notice period.
+// approves/declines it. Approval records the confirmed lastWorkingDay; the
+// scheduled offboarding worker deactivates the account on/after that day, so
+// access is not pulled out from under someone still working their notice period.
 model Resignation {
   id              String            @id @default(cuid())
   organizationId  String            @default(dbgenerated("current_setting('app.current_organization_id', true)"))
@@ -2905,6 +2904,7 @@ model Resignation {
   reviewedAt      DateTime?
   reviewNote      String?
   lastWorkingDay  DateTime?
+  offboardedAt    DateTime?
   createdAt       DateTime          @default(now())
   updatedAt       DateTime          @updatedAt
 

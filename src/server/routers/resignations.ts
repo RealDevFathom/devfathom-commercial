@@ -202,15 +202,17 @@ export const resignationsRouter = router({
         },
       });
 
-      // IMP-HR-02: off-boarding automation. Once the approved last working day has
-      // arrived (on/before today), deactivate the account. The JWT revalidation
-      // re-reads `status` (~60s), so this also cuts the employee's active sessions
-      // without needing the AUTH-01 token-version column. (A future last day would
-      // be enforced by a scheduled job — not wired here.)
+      // IMP-HR-02: handle an already-due approval immediately. Future dates are
+      // handled by the authenticated platform cron. The token-version bump also
+      // invalidates already-issued sessions at their next revalidation.
       if (approved && updated.lastWorkingDay && updated.lastWorkingDay <= new Date()) {
         await ctx.db.user.update({
           where: { id: resignation.userId },
-          data: { status: 'INACTIVE' },
+          data: { status: 'INACTIVE', tokenVersion: { increment: 1 } },
+        });
+        await ctx.db.resignation.update({
+          where: { id: updated.id },
+          data: { offboardedAt: new Date() },
         });
       }
 

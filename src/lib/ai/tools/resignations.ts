@@ -238,12 +238,12 @@ export function buildResignationsTools(h: AssistantHelpers): ToolSet {
   // Mirror of resignations.review — approve or decline someone's PENDING
   // resignation (HR / admin). Resource-level authz (PENDING, not your own, HR
   // may not review an admin) is enforced via the ABAC engine. Approval records
-  // the last working day but does NOT deactivate the account — offboarding is
-  // a separate step on the last day.
+  // the last working day; the scheduled offboarding worker deactivates the
+  // account once that day arrives.
   if (h.isAdminOrHr) {
     tools.reviewResignation = tool({
       description:
-        'Approve or decline a team member\'s pending resignation (HR / admin). Give the person\'s name, the decision, and — when approving — optionally their confirmed last working day (defaults to the proposed last day) and an optional note for them. The employee is emailed the outcome. This records the decision only; it does NOT deactivate the account (offboarding happens separately). Use for "approve <name>\'s resignation", "decline the resignation from <name>".',
+        'Approve or decline a team member\'s pending resignation (HR / admin). Give the person\'s name, the decision, and — when approving — optionally their confirmed last working day (defaults to the proposed last day) and an optional note for them. The employee is emailed the outcome and their account is automatically deactivated when the confirmed day arrives. Use for "approve <name>\'s resignation", "decline the resignation from <name>".',
       inputSchema: z.object({
         person: z
           .string()
@@ -316,6 +316,19 @@ export function buildResignationsTools(h: AssistantHelpers): ToolSet {
             lastWorkingDay: resolvedLastDay,
           },
         });
+
+        // Match the router path for approvals whose confirmed day has already
+        // arrived; future approvals are picked up by the platform cron.
+        if (approved && updated.lastWorkingDay && updated.lastWorkingDay <= h.now()) {
+          await h.db.user.update({
+            where: { id: resignation.userId },
+            data: { status: 'INACTIVE', tokenVersion: { increment: 1 } },
+          });
+          await h.db.resignation.update({
+            where: { id: updated.id },
+            data: { offboardedAt: h.now() },
+          });
+        }
 
         h.audit({
           category: 'RESIGNATIONS',
