@@ -781,17 +781,25 @@ it('collects a fresh independent witness when reversing a controlled receipt', a
     exceptions: [],
   };
   const reverse = vi.fn().mockResolvedValue({});
+  const postingWitnesses = vi.fn().mockResolvedValue([]);
+  const reversalWitnesses = vi
+    .fn()
+    .mockResolvedValue([{ id: 'fresh-staff', name: 'Fresh pharmacist' }]);
   mocks.createCaller.mockReturnValue(
     callerStub({
       goodsReceipts: vi.fn().mockResolvedValue([receipt]),
       reverseGoodsReceipt: reverse,
-      controlledWitnesses: vi
-        .fn()
-        .mockResolvedValue([{ id: 'fresh-staff', name: 'Fresh pharmacist' }]),
+      controlledWitnesses: postingWitnesses,
+      controlledReversalWitnesses: reversalWitnesses,
     })
   );
   vi.stubGlobal('window', { document, location: { origin: 'https://workspace.test' } });
   render(await ReceivingPage({ searchParams: params({ receipt: receipt.id }) }));
+  // Reversal must not reuse the posting query, which only offers the original qualified person.
+  expect(reversalWitnesses).toHaveBeenCalledWith(
+    expect.objectContaining({ goodsReceiptId: receipt.id })
+  );
+  expect(postingWitnesses).not.toHaveBeenCalled();
   fireEvent.change(screen.getByLabelText(/Why is this being reversed/), {
     target: { value: 'Wrong consignment' },
   });
@@ -827,7 +835,7 @@ it('keeps controlled reversal disabled when witness choices fail to load', async
           exceptions: [],
         },
       ]),
-      controlledWitnesses: vi.fn().mockRejectedValue(new Error('FORBIDDEN')),
+      controlledReversalWitnesses: vi.fn().mockRejectedValue(new Error('FORBIDDEN')),
     })
   );
   render(await ReceivingPage({ searchParams: params({ receipt: 'gr-controlled' }) }));

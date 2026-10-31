@@ -566,14 +566,15 @@ export async function assignedRegisterBranchIds(
 export async function listControlledPinWitnesses(
   db: ScopedDb,
   organizationId: string,
-  actorId: string
+  actorId: string,
+  qualifiedPersonUserId?: string
 ) {
   const staff = await db.restaurantStaffProfile.findMany({
     where: {
       organizationId,
       user: { organizationId, status: 'ACTIVE' },
       status: 'ACTIVE',
-      userId: { not: actorId },
+      userId: qualifiedPersonUserId ?? { not: actorId },
       credentials: { some: { type: 'PIN', revokedAt: null, deviceId: null } },
     },
     include: {

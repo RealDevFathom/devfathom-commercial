@@ -24,6 +24,9 @@ function fixture(capability: string) {
       }),
     },
     restaurantStaffProfile: { findMany: vi.fn().mockResolvedValue([]) },
+    pharmacyGoodsReceipt: {
+      findFirst: vi.fn().mockResolvedValue({ qualifiedPersonUserId: 'qualified-person' }),
+    },
   };
   const ctx = {
     db,
@@ -39,8 +42,13 @@ describe.each(['safety', 'purchasing'] as const)('%s witness enumeration', (surf
     return surface === 'safety'
       ? f.caller.safety.controlledPharmacists()
       : (
-          f.caller.purchasing as unknown as { controlledWitnesses: () => Promise<unknown> }
-        ).controlledWitnesses();
+          f.caller.purchasing as unknown as {
+            controlledWitnesses: (input: {
+              branchId: string;
+              goodsReceiptId: string;
+            }) => Promise<unknown>;
+          }
+        ).controlledWitnesses({ branchId: 'branch', goodsReceiptId: 'receipt' });
   }
   it('denies a cashier before enumerating PIN holders', async () => {
     const f = fixture('pharmacy.counter');
@@ -55,9 +63,65 @@ describe.each(['safety', 'purchasing'] as const)('%s witness enumeration', (surf
         where: expect.objectContaining({
           organizationId: 'org',
           user: { organizationId: 'org', status: 'ACTIVE' },
+          userId: surface === 'purchasing' ? 'qualified-person' : { not: 'actor' },
+        }),
+      })
+    );
+  });
+
+  if (surface === 'purchasing') {
+    it('offers nobody when the receipt has no different named qualified person', async () => {
+      const f = fixture('pharmacy:dispense');
+      f.db.pharmacyGoodsReceipt.findFirst.mockResolvedValueOnce({ qualifiedPersonUserId: 'actor' });
+
+      await expect(query(f)).resolves.toEqual([]);
+      expect(f.db.restaurantStaffProfile.findMany).not.toHaveBeenCalled();
+    });
+  }
+});
+
+describe('purchasing reversal witness enumeration', () => {
+  function query(f: ReturnType<typeof fixture>) {
+    return (
+      f.caller.purchasing as unknown as {
+        controlledReversalWitnesses: (input: {
+          branchId: string;
+          goodsReceiptId: string;
+        }) => Promise<unknown>;
+      }
+    ).controlledReversalWitnesses({ branchId: 'branch', goodsReceiptId: 'receipt' });
+  }
+  it.each(['pharmacy.counter', 'pharmacy:dispense'])(
+    'denies %s without pharmacy:safety before enumerating PIN holders',
+    async (capability) => {
+      const f = fixture(capability);
+      await expect(query(f)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(f.db.restaurantStaffProfile.findMany).not.toHaveBeenCalled();
+    }
+  );
+  it('offers any other PIN-holding pharmacist, not only the original qualified person', async () => {
+    const f = fixture('pharmacy:safety');
+    f.db.pharmacyGoodsReceipt.findFirst.mockResolvedValueOnce({ id: 'receipt' });
+    await expect(query(f)).resolves.toEqual([]);
+    expect(f.db.pharmacyGoodsReceipt.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'receipt', organizationId: 'org', branchId: 'branch', status: 'POSTED' },
+      })
+    );
+    expect(f.db.restaurantStaffProfile.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          organizationId: 'org',
+          user: { organizationId: 'org', status: 'ACTIVE' },
           userId: { not: 'actor' },
         }),
       })
     );
+  });
+  it('offers nobody when the receipt is not posted in this branch', async () => {
+    const f = fixture('pharmacy:safety');
+    f.db.pharmacyGoodsReceipt.findFirst.mockResolvedValueOnce(null);
+    await expect(query(f)).resolves.toEqual([]);
+    expect(f.db.restaurantStaffProfile.findMany).not.toHaveBeenCalled();
   });
 });
