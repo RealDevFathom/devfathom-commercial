@@ -115,6 +115,18 @@ describe('account code reference page authorization', () => {
         } as never);
       },
     ],
+    [
+      'null session',
+      async () => {
+        const { createTRPCContext } = await import('@/server/trpc');
+        vi.mocked(createTRPCContext).mockResolvedValueOnce({
+          session: null,
+          entitlements: { organizationId: 'org-1' },
+          requestMeta: { ip: null },
+          db: { pharmacyBranch: { findMany: mocks.branchRead } },
+        } as never);
+      },
+    ],
     ['disabled module', () => mocks.hasModule.mockReturnValueOnce(false)],
     [
       'missing operational permission',

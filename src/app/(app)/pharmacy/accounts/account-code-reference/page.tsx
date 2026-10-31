@@ -56,15 +56,16 @@ export default async function AccountCodeReferencePage({
     organization: actor.organization,
     support: actor.support,
   });
-  if (!isSessionUsable(ctx.session?.user) || !hasModule(ctx.entitlements, 'pharmacy-reports')) {
+  const user = ctx.session?.user;
+  if (!user || !isSessionUsable(user) || !hasModule(ctx.entitlements, 'pharmacy-reports')) {
     return unavailable(
       'Reference unavailable',
       'An active session and the Pharmacy reports module are required.'
     );
   }
 
-  if (ctx.session.user.role !== 'ADMIN') {
-    const subject = subjectFromSession(ctx.session.user);
+  if (user.role !== 'ADMIN') {
+    const subject = subjectFromSession(user);
     const decisionContext = { db: ctx.db, source: 'TRPC' as const, ip: ctx.requestMeta.ip };
     const [operational, financial] = await Promise.all([
       can(subject, 'reports:operational', undefined, decisionContext),
