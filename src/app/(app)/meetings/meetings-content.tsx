@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useCallback, memo } from 'react';
+import { useState, useMemo, useCallback, useId, memo } from 'react';
 import Link from 'next/link';
 import { useSession } from 'next-auth/react';
 import {
@@ -423,6 +423,8 @@ const MeetingCard = memo(function MeetingCard({
   const [eTitle, setETitle] = useState('');
   const [eDesc, setEDesc] = useState('');
   const [eDate, setEDate] = useState('');
+  const [eEndDate, setEEndDate] = useState<string | null>(null);
+  const editFormId = useId();
   const [eStart, setEStart] = useState('');
   const [eEnd, setEEnd] = useState('');
   const [eLoc, setELoc] = useState('');
@@ -444,17 +446,19 @@ const MeetingCard = memo(function MeetingCard({
   const start = useMemo(() => new Date(meeting.startTime), [meeting.startTime]);
   const end = useMemo(() => new Date(meeting.endTime), [meeting.endTime]);
 
-  // Preserve the calendar-day span of overnight/multi-day meetings, including
-  // when moving their date. Set the end date before applying its local time.
-  const editEndDate = eDate
-    ? format(
-        addDays(new Date(`${eDate}T00:00`), differenceInCalendarDays(end, start)),
-        'yyyy-MM-dd'
-      )
-    : '';
+  // Preserve the original calendar-day span until an end date is explicitly
+  // chosen, so moving a meeting still carries its overnight/multi-day span.
+  const editEndDate =
+    eEndDate ??
+    (eDate
+      ? format(
+          addDays(new Date(`${eDate}T00:00`), differenceInCalendarDays(end, start)),
+          'yyyy-MM-dd'
+        )
+      : '');
   const editStartTime = new Date(`${eDate}T${eStart}`);
   const editEndTime = new Date(`${editEndDate}T${eEnd}`);
-  const hasCompleteEditTimeRange = Boolean(eDate && eStart && eEnd);
+  const hasCompleteEditTimeRange = Boolean(eDate && editEndDate && eStart && eEnd);
   const hasInvalidEditTimeRange =
     hasCompleteEditTimeRange && !isValidMeetingTimeRange(editStartTime, editEndTime);
 
@@ -485,6 +489,7 @@ const MeetingCard = memo(function MeetingCard({
     setETitle(meeting.title);
     setEDesc(meeting.description || '');
     setEDate(format(s, 'yyyy-MM-dd'));
+    setEEndDate(null);
     setEStart(format(s, 'HH:mm'));
     setEEnd(format(e, 'HH:mm'));
     setELoc(meeting.location || '');
@@ -539,13 +544,21 @@ const MeetingCard = memo(function MeetingCard({
               />
             </div>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label className="block text-[10px] font-medium text-foreground mb-1">Date</label>
+              <label
+                htmlFor={`${editFormId}-start-date`}
+                className="block text-[10px] font-medium text-foreground mb-1"
+              >
+                Start date
+              </label>
               <input
+                id={`${editFormId}-start-date`}
                 type="date"
                 value={eDate}
                 onChange={(e) => setEDate(e.target.value)}
+                aria-invalid={hasInvalidEditTimeRange}
+                aria-describedby={hasInvalidEditTimeRange ? `${editFormId}-time-error` : undefined}
                 className="w-full rounded-lg border border-border bg-background px-2 py-1.5 text-sm text-foreground focus:border-primary focus:outline-none"
               />
             </div>
@@ -559,6 +572,23 @@ const MeetingCard = memo(function MeetingCard({
               />
             </div>
             <div>
+              <label
+                htmlFor={`${editFormId}-end-date`}
+                className="block text-[10px] font-medium text-foreground mb-1"
+              >
+                End date
+              </label>
+              <input
+                id={`${editFormId}-end-date`}
+                type="date"
+                value={editEndDate}
+                onChange={(e) => setEEndDate(e.target.value)}
+                aria-invalid={hasInvalidEditTimeRange}
+                aria-describedby={hasInvalidEditTimeRange ? `${editFormId}-time-error` : undefined}
+                className="w-full rounded-lg border border-border bg-background px-2 py-1.5 text-sm text-foreground focus:border-primary focus:outline-none"
+              />
+            </div>
+            <div>
               <label className="block text-[10px] font-medium text-foreground mb-1">End</label>
               <TimePicker
                 value={eEnd}
@@ -569,7 +599,11 @@ const MeetingCard = memo(function MeetingCard({
             </div>
           </div>
           {hasInvalidEditTimeRange && (
-            <p role="alert" className="text-xs font-medium text-destructive">
+            <p
+              id={`${editFormId}-time-error`}
+              role="alert"
+              className="text-xs font-medium text-destructive"
+            >
               {MEETING_TIME_ORDER_MESSAGE}
             </p>
           )}

@@ -418,15 +418,10 @@ export function buildMeetingsTools(h: AssistantHelpers): ToolSet {
           data.endTime = d;
         }
 
-        const nextStart = data.startTime instanceof Date ? data.startTime : r.value.startTime;
-        const nextEnd = data.endTime instanceof Date ? data.endTime : r.value.endTime;
-        if (!isValidMeetingTimeRange(nextStart, nextEnd)) {
-          return { error: MEETING_TIME_ORDER_MESSAGE };
-        }
-
-        // Replace the attendee list when provided (mirrors the router: the
-        // acting user is always kept on the list).
+        // Resolve names before taking the meeting lock; no writes happen until
+        // every attendee is unambiguous and the current range is validated.
         let attendeeNames: string[] | undefined;
+        let attendeeIds: string[] | undefined;
         if (attendees != null) {
           const ids: string[] = [];
           const names: string[] = [];
@@ -438,30 +433,57 @@ export function buildMeetingsTools(h: AssistantHelpers): ToolSet {
             ids.push(pr.value.id);
             names.push(pr.value.name);
           }
-          await db.meetingAttendee.deleteMany({ where: { meetingId } });
-          const allAttendees = [...new Set([h.ctx.userId, ...ids])];
-          await db.meetingAttendee.createMany({
-            data: allAttendees.map((userId) => ({ meetingId, userId })),
-          });
+          attendeeIds = [...new Set([h.ctx.userId, ...ids])];
           attendeeNames = names;
         }
 
-        const updated = await db.meeting.update({
-          where: { id: meetingId },
-          data,
-          select: {
-            title: true,
-            startTime: true,
-            endTime: true,
-            location: true,
-            recurrence: true,
-          },
-        });
+        const result = await db.$transaction(async (tx) => {
+          // The fuzzy-resolution range can be stale. Read it again under a row
+          // lock in this tenant-scoped transaction so concurrent edits cannot
+          // change either endpoint between validation and the writes below.
+          const [current] = await tx.$queryRaw<Array<{ startTime: Date; endTime: Date }>>`
+            SELECT "startTime", "endTime" FROM meetings
+            WHERE id = ${meetingId} FOR UPDATE
+          `;
+          if (!current) return { error: 'That meeting was not found.' };
+          if (!(await authz.canManageMeeting(tx, h.ctx.userId, h.ctx.role, meetingId))) {
+            return {
+              error: 'You can only edit meetings you created (admins can edit any meeting).',
+            };
+          }
+          const nextStart = data.startTime instanceof Date ? data.startTime : current.startTime;
+          const nextEnd = data.endTime instanceof Date ? data.endTime : current.endTime;
+          if (!isValidMeetingTimeRange(nextStart, nextEnd)) {
+            return { error: MEETING_TIME_ORDER_MESSAGE };
+          }
 
-        // Reconcile after the edit, as `meetings.update` does: add the slots the
-        // new rule produces, cancel the FUTURE ones that left it, touch nothing
-        // already in the past.
-        await materializeMeetingOccurrences(db, meetingId);
+          // Keep attendee replacement and occurrence reconciliation atomic with
+          // the meeting update, including failures after attendee deletion.
+          if (attendeeIds) {
+            await tx.meetingAttendee.deleteMany({ where: { meetingId } });
+            await tx.meetingAttendee.createMany({
+              data: attendeeIds.map((userId) => ({ meetingId, userId })),
+            });
+          }
+          const updated = await tx.meeting.update({
+            where: { id: meetingId },
+            data,
+            select: {
+              title: true,
+              startTime: true,
+              endTime: true,
+              location: true,
+              recurrence: true,
+            },
+          });
+
+          // Add newly scheduled slots and cancel future slots that left the
+          // rule, leaving past occurrences untouched, as the router does.
+          await materializeMeetingOccurrences(tx, meetingId);
+          return { updated };
+        });
+        if ('error' in result) return result;
+        const { updated } = result;
 
         h.audit({
           category: 'MEETING',

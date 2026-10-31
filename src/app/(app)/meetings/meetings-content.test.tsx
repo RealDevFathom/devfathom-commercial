@@ -270,6 +270,67 @@ describe('meeting time validation', () => {
     );
   });
 
+  it('lets an overnight meeting be shortened to a same-day meeting', () => {
+    const original = meeting('Overnight meeting', new Date(2026, 9, 29, 23));
+    original.endTime = new Date(2026, 9, 30, 1);
+    mocks.upcoming = [original];
+
+    render(<MeetingsContent />);
+    fireEvent.click(screen.getByTitle('Edit'));
+    expect(screen.getByLabelText('End date')).toHaveValue('2026-10-30');
+    fireEvent.click(screen.getByLabelText('Start time'));
+    fireEvent.click(screen.getByRole('option', { name: '9:00 AM' }));
+    fireEvent.click(screen.getByLabelText('End time'));
+    fireEvent.click(screen.getByRole('option', { name: '10:00 AM' }));
+    fireEvent.change(screen.getByLabelText('End date'), { target: { value: '2026-10-29' } });
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    expect(mocks.updateMeeting).toHaveBeenCalledWith(
+      expect.objectContaining({
+        startTime: new Date(2026, 9, 29, 9),
+        endTime: new Date(2026, 9, 29, 10),
+      })
+    );
+  });
+
+  it('lets a same-day meeting be extended across multiple days', () => {
+    mocks.upcoming = [meeting('Long meeting', new Date(2026, 9, 29, 10))];
+
+    render(<MeetingsContent />);
+    fireEvent.click(screen.getByTitle('Edit'));
+    fireEvent.change(screen.getByLabelText('End date'), { target: { value: '2026-10-31' } });
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    expect(mocks.updateMeeting).toHaveBeenCalledWith(
+      expect.objectContaining({
+        startTime: new Date(2026, 9, 29, 10),
+        endTime: new Date(2026, 9, 31, 11),
+      })
+    );
+  });
+
+  it.each(['2026-10-28', ''])(
+    'blocks saving an end date before the start or missing (%s)',
+    (endDate) => {
+      mocks.upcoming = [meeting('Same-day meeting', new Date(2026, 9, 29, 10))];
+
+      render(<MeetingsContent />);
+      fireEvent.click(screen.getByTitle('Edit'));
+      fireEvent.change(screen.getByLabelText('End date'), { target: { value: endDate } });
+
+      if (endDate) {
+        expect(screen.getByRole('alert')).toHaveTextContent(
+          'The end time must be after the start time.'
+        );
+        expect(screen.getByLabelText('End date')).toHaveAttribute('aria-invalid', 'true');
+      }
+      const save = screen.getByRole('button', { name: /^save$/i });
+      expect(save).toBeDisabled();
+      fireEvent.click(save);
+      expect(mocks.updateMeeting).not.toHaveBeenCalled();
+    }
+  );
+
   it.each([
     ['equal to', '10:00 AM'],
     ['before', '9:45 AM'],
