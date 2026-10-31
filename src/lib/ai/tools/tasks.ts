@@ -19,6 +19,7 @@
  */
 import { tool } from 'ai';
 import { z } from 'zod';
+import { completionTimestampForMove, isDoneColumn } from '@/lib/tasks/completion';
 import { Prisma } from '@/generated/prisma/client';
 import type { AssistantHelpers, ToolSet } from '@/lib/ai/context';
 import { matchScore, norm } from '@/lib/ai/context';
@@ -515,6 +516,7 @@ export function buildTasksTools(h: AssistantHelpers): ToolSet {
           priority: priority ?? 'MEDIUM',
           dueDate: dueAt,
           createdById: h.ctx.userId,
+          completedAt: isDoneColumn(column.name) ? h.now() : null,
           assignees: { create: merged.map((id) => ({ userId: id })) },
         },
         select: { id: true, title: true, priority: true, dueDate: true, description: true },
@@ -669,17 +671,35 @@ export function buildTasksTools(h: AssistantHelpers): ToolSet {
       if (target.id === task.columnId)
         return { success: true, note: `Task is already in ${target.name}.` };
 
-      // Append to the bottom of the destination column.
-      const maxOrder = await h.db.task.aggregate({
-        _max: { order: true },
-        where: { columnId: target.id },
-      });
-      const newOrder = (maxOrder._max.order ?? -1) + 1;
+      const moveError = await h.db.$transaction(async (tx) => {
+        const lockIds = [...new Set([task.columnId, target.id])].sort();
+        await tx.$queryRaw`SELECT id FROM columns WHERE id = ANY(${lockIds}) ORDER BY id FOR UPDATE`;
+        const current = await tx.task.findUnique({
+          where: { id: task.id },
+          select: { columnId: true, order: true, column: { select: { name: true } } },
+        });
+        const currentTarget = await tx.column.findUnique({
+          where: { id: target.id },
+          select: { name: true },
+        });
+        if (
+          !current ||
+          current.columnId !== task.columnId ||
+          current.column.name !== task.column.name ||
+          currentTarget?.name !== target.name
+        ) {
+          return { error: 'Task or column changed concurrently; retry the move.' };
+        }
+        // Append only after locking, so concurrent appends cannot share an order.
+        const maxOrder = await tx.task.aggregate({
+          _max: { order: true },
+          where: { columnId: target.id },
+        });
+        const newOrder = (maxOrder._max.order ?? -1) + 1;
 
-      await h.db.$transaction(async (tx) => {
         // Close the gap left in the source column.
         await tx.task.updateMany({
-          where: { columnId: task.columnId, order: { gt: task.order } },
+          where: { columnId: task.columnId, order: { gt: current.order } },
           data: { order: { decrement: 1 } },
         });
         // Make room in the target column (no-op when appending at the end).
@@ -689,7 +709,11 @@ export function buildTasksTools(h: AssistantHelpers): ToolSet {
         });
         await tx.task.update({
           where: { id: task.id },
-          data: { columnId: target.id, order: newOrder },
+          data: {
+            columnId: target.id,
+            order: newOrder,
+            completedAt: completionTimestampForMove(task.column.name, target.name, h.now()),
+          },
         });
         // Auto-assign the target column's default assignees (additive).
         const defaults = await tx.columnDefaultAssignee.findMany({
@@ -703,6 +727,7 @@ export function buildTasksTools(h: AssistantHelpers): ToolSet {
           });
         }
       });
+      if (moveError) return moveError;
 
       // Completion: entering a Done column from a non-Done one.
       const enteringDone =
