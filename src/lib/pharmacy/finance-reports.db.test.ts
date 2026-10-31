@@ -203,6 +203,21 @@ suite('comparison on migrated PostgreSQL with restricted runtime role', () => {
     expect(report.previous.hasEntries).toBe(false);
     expect(report.current.hasEntries).toBe(false);
   });
+  it.each(['item', 'category', 'hour', 'staff'] as const)(
+    'RLS denies foreign-tenant landed profit grouped by %s',
+    async (by) => {
+      const rows = await withTenantDb(org, (db) =>
+        landedProfit(db, { organizationId: otherOrg, branchId }, { ...period, by })
+      );
+      expect(rows).toEqual([]);
+      // The foreign fixture must exist so an empty result proves isolation.
+      const ownRows = await withTenantDb(otherOrg, (db) =>
+        landedProfit(db, { organizationId: otherOrg, branchId }, { ...period, by })
+      );
+      expect(ownRows).toHaveLength(1);
+      expect(ownRows[0]).toMatchObject({ revenueMinor: 99999, profitMinor: 99999 });
+    }
+  );
   it('returns absent groups honestly', async () => {
     const report = await withTenantDb(org, (db) =>
       grossMarginComparison(db, { organizationId: org, branchId: 'absent' }, period)

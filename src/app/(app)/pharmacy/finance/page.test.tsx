@@ -95,10 +95,18 @@ it('renders the usable landed-profit totals, grouping, and exact-cost explanatio
       report={{
         scope: { organizationId: 'organization_1', branchId: 'branch_1' },
         timezone: 'UTC',
-        currency: 'PKR',
+        moneyUnit: 'integer_minor',
+        currency: null,
+        currencyStatus: 'not_recorded_by_ledger_reader',
         definition: 'Posted revenue less discount and exact landed cost.',
         source: 'finance_journal_lines',
-        coverage: { completeness: 'posted_only', costCoverage: 'unknown' },
+        coverage: {
+          basis: 'posted_entries_only',
+          completeness: 'unknown',
+          costCoverage: 'unknown',
+          refunds: 'included_only_when_posted_as_reversals',
+          emptyRows: 'no_matching_postings_not_proof_of_zero_activity',
+        },
         freshness: { retrievedAt: new Date('2026-09-12T12:00:00Z'), latestPostingAt: null },
         period: {
           from: new Date('2026-09-01T00:00:00Z'),
@@ -119,7 +127,7 @@ it('renders the usable landed-profit totals, grouping, and exact-cost explanatio
     />
   );
   expect(html).toContain('Landed profit grouped by item in UTC');
-  expect(html).toContain('PKR 25.00');
+  expect(html).toContain('Currency unknown 25.00');
   expect(html).toContain('apportioned freight, non-recoverable tax, and bonus units');
   expect(html).toContain('medicine_a');
 });
