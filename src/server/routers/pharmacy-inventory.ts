@@ -1051,7 +1051,9 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  quarantinePart: inventoryControl
+  // Taking stock off sale for a safety reason is a recall/quarantine decision, so it
+  // needs the exact pharmacy:safety grant, not general stock control.
+  quarantinePart: regulatory
     .input(
       z
         .object({
