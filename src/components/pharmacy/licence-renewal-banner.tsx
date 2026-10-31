@@ -80,11 +80,11 @@ export function LicenceRenewalBanner({ branchId }: { branchId?: string }) {
           {reminders.map((reminder) => (
             <li
               key={`${reminder.kind}:${reminder.subjectId}`}
-              className="space-y-2 py-3"
+              className="space-y-2 py-3 [overflow-wrap:anywhere]"
               data-renewal-kind={reminder.kind}
             >
               <div className="flex flex-wrap items-center gap-2">
-                <span className="mr-auto min-w-0 text-sm font-medium text-text-strong">
+                <span className="mr-auto min-w-0 max-w-full text-sm font-medium text-text-strong">
                   {reminder.label}{' '}
                   <span className="font-mono text-xs text-text-muted">{reminder.reference}</span>
                 </span>
