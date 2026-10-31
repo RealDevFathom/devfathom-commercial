@@ -31,12 +31,15 @@ import {
   createRecall,
   dispatchTransfer,
   nearExpiryBoard,
+  OpenRecallConflictError,
   quarantinePart,
   recallTrace,
   receiveTransferLine,
   reserveSupplierClaim,
+  setManufacturingBatchState,
   writeOff,
 } from '@/lib/pharmacy/inventory-operations';
+import { postWriteOffEntry } from '@/lib/pharmacy/finance-postings';
 import {
   allocateForSale,
   breakPack,
@@ -783,23 +786,21 @@ export const pharmacyInventoryRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      const batch = await ctx.db.pharmacyManufacturingBatch.findFirst({
-        where: { id: input.manufacturingBatchId },
-      });
-      if (!batch) throw new TRPCError({ code: 'NOT_FOUND', message: 'Batch not found.' });
       if (input.state !== 'ACTIVE' && !input.reason) {
         throw new TRPCError({
           code: 'BAD_REQUEST',
           message: 'Blocking a batch requires a reason.',
         });
       }
-      return ctx.db.pharmacyManufacturingBatch.update({
-        where: { id: batch.id },
-        data: {
-          state: input.state,
-          stateReason: input.state === 'ACTIVE' ? null : (input.reason ?? null),
-          stateChangedAt: input.state === 'ACTIVE' ? null : new Date(),
-        },
+      return ctx.db.$transaction(async (tx) => {
+        try {
+          return await setManufacturingBatchState(txDb(tx), actorFor(ctx).organizationId, input);
+        } catch (error) {
+          if (error instanceof OpenRecallConflictError) {
+            throw new TRPCError({ code: 'CONFLICT', message: error.message });
+          }
+          domainError(error);
+        }
       });
     }),
 
@@ -1035,9 +1036,16 @@ export const pharmacyInventoryRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await ctx.db.$transaction(async (tx) =>
-          writeOff(txDb(tx), await scopeFor(ctx, input.branchId), input)
-        );
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          const scope = await scopeFor(ctx, input.branchId);
+          const written = await writeOff(db, scope, input);
+          await postWriteOffEntry(db, scope, {
+            stockMovementId: written.movement.id,
+            at: written.movement.occurredAt,
+          });
+          return written;
+        });
       } catch (error) {
         domainError(error);
       }

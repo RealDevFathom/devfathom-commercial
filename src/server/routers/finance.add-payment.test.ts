@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   invoiceUpdate: vi.fn(),
   paymentAggregate: vi.fn(),
   paymentCreate: vi.fn(),
+  queryRaw: vi.fn(),
   transaction: vi.fn(),
 }));
 
@@ -30,6 +31,7 @@ import { financeRouter } from './finance';
 
 function transactionClient() {
   return {
+    $queryRaw: mocks.queryRaw,
     invoice: { findUnique: mocks.invoiceFindUnique, update: mocks.invoiceUpdate },
     payment: { aggregate: mocks.paymentAggregate, create: mocks.paymentCreate },
   };
@@ -67,6 +69,7 @@ describe('finance.addPayment', () => {
     mocks.paymentAggregate.mockResolvedValue({ _sum: { amount: 40 } });
     mocks.paymentCreate.mockResolvedValue({ id: 'payment-1', amount: 60 });
     mocks.invoiceUpdate.mockResolvedValue({});
+    mocks.queryRaw.mockResolvedValue([{ id: 'invoice-1' }]);
     mocks.transaction.mockImplementation(
       async (callback: (transaction: ReturnType<typeof transactionClient>) => unknown) =>
         callback(transactionClient())
@@ -102,7 +105,7 @@ describe('finance.addPayment', () => {
       expect(mocks.logActivity).toHaveBeenCalledOnce();
       expect(mocks.logActivity).toHaveBeenCalledWith(expect.anything(), 'admin-1', {
         type: 'invoice_paid',
-        message: 'marked invoice INV-1 as paid ($100)',
+        message: 'marked invoice INV-1 as paid (USD 100.00)',
         entityType: 'Invoice',
         entityId: 'invoice-1',
       });
@@ -120,6 +123,36 @@ describe('finance.addPayment', () => {
       );
     }
   );
+
+  it('locks the invoice row before settling and logs a single full payment', async () => {
+    mocks.invoiceFindUnique.mockResolvedValue({
+      id: 'invoice-1',
+      invoiceNumber: 'INV-1',
+      status: 'SENT',
+      total: 250,
+      currency: 'PKR',
+      clientId: 'client-1',
+    });
+    mocks.paymentAggregate.mockResolvedValue({ _sum: { amount: null } });
+    mocks.paymentCreate.mockResolvedValue({ id: 'payment-1', amount: 250 });
+
+    const result = await caller().addPayment({ invoiceId: 'invoice-1', amount: 250 });
+
+    expect(result).toMatchObject({ amountPaid: 250, balance: 0, status: 'PAID' });
+    expect(mocks.queryRaw).toHaveBeenCalledOnce();
+    expect(mocks.queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.invoiceFindUnique.mock.invocationCallOrder[0]
+    );
+    expect(mocks.paymentCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({ amount: 250, currency: 'PKR' }),
+    });
+    expect(mocks.logActivity).toHaveBeenCalledWith(expect.anything(), 'admin-1', {
+      type: 'invoice_paid',
+      message: 'marked invoice INV-1 as paid (PKR 250.00)',
+      entityType: 'Invoice',
+      entityId: 'invoice-1',
+    });
+  });
 
   it('does not log invoice_paid for a partial payment', async () => {
     mocks.paymentCreate.mockResolvedValue({ id: 'payment-1', amount: 50 });
