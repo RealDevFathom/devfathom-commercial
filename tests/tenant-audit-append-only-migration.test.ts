@@ -32,4 +32,29 @@ describe('tenant audit append-only migration', () => {
     );
     expect(triggerFunctionMigration).not.toContain('app.purging_organization_id');
   });
+
+  it('limits actor cleanup to nested FK updates without changing any other audit facts', () => {
+    expect(migration).toContain('pg_trigger_depth() > 1');
+    expect(migration).toMatch(
+      /to_jsonb\(NEW\) - 'actorId' - 'actorStaffProfileId'\s*= to_jsonb\(OLD\) - 'actorId' - 'actorStaffProfileId'/
+    );
+    expect(migration).toContain('NOT EXISTS (SELECT 1 FROM users WHERE id = OLD."actorId")');
+    expect(migration).toMatch(
+      /NOT EXISTS \(SELECT 1 FROM restaurant_staff_profiles\s+WHERE id = OLD\."actorStaffProfileId"\)/
+    );
+    expect(migration).toMatch(
+      /CREATE TRIGGER audit_logs_actor_on_insert\s+BEFORE INSERT ON audit_logs\s+FOR EACH ROW EXECUTE FUNCTION refuse_tenant_audit_mutation\(\);/
+    );
+    expect(migration).toContain("CONSTRAINT = 'audit_logs_operator_actor_ck'");
+  });
+
+  it('guards TRUNCATE on tenant and platform ledgers at statement level', () => {
+    for (const table of ['audit_logs', 'platform_audit_logs', 'organization_lifecycle_events']) {
+      expect(migration).toMatch(
+        new RegExp(
+          `CREATE TRIGGER ${table}_no_truncate\\s+BEFORE TRUNCATE ON ${table}\\s+FOR EACH STATEMENT EXECUTE FUNCTION refuse_platform_history_mutation\\(\\);`
+        )
+      );
+    }
+  });
 });

@@ -84,6 +84,8 @@ describeIfOptedIn('Restaurant demo reset database guard (real disposable DB)', (
     const tenderId = `demo_tender_${suffix}`;
     const branchId = `demo_branch_${suffix}`;
     const staffId = `demo_staff_${suffix}`;
+    const auditedStaffId = `demo_audited_staff_${suffix}`;
+    const operatorAuditId = `demo_operator_audit_${suffix}`;
     const deviceId = `demo_device_${suffix}`;
     const orderId = `demo_order_${suffix}`;
     const billId = `demo_bill_${suffix}`;
@@ -197,6 +199,23 @@ describeIfOptedIn('Restaurant demo reset database guard (real disposable DB)', (
          VALUES ($1, $2, 'Reset guard', $3, clock_timestamp())`,
         [staffId, demoOrganizationId, branchId]
       );
+      await client.query(
+        `INSERT INTO restaurant_staff_profiles
+           (id, "organizationId", "displayName", "primaryBranchId", "updatedAt")
+         VALUES ($1, $2, 'Temporary demo operator', $3, clock_timestamp())`,
+        [auditedStaffId, demoOrganizationId, branchId]
+      );
+      await client.query(
+        `INSERT INTO audit_logs
+           (id, "organizationId", source, category, action, "actorType",
+            "actorStaffProfileId", "actorName", metadata)
+         VALUES ($1, $2, 'REST_API', 'TERMINAL', 'restaurant.terminal.unlock',
+                 'RESTAURANT_OPERATOR', $3, 'Temporary demo operator', $4::jsonb)`,
+        [operatorAuditId, demoOrganizationId, auditedStaffId, JSON.stringify({ deviceId })]
+      );
+      const operatorAuditBefore = await client.query('SELECT * FROM audit_logs WHERE id = $1', [
+        operatorAuditId,
+      ]);
       await client.query(
         `INSERT INTO restaurant_registered_devices
            (id, "organizationId", "branchId", name, "deviceSecretHash", "updatedAt")
@@ -374,6 +393,25 @@ describeIfOptedIn('Restaurant demo reset database guard (real disposable DB)', (
       }
       await client.query('ROLLBACK TO SAVEPOINT immutable_update');
       expect(updateError).toMatchObject({ code: '55000', message: 'tax record is immutable' });
+
+      // Match reset.ts's deletion of unretained staff in the tenant demo-reset
+      // context. Historical terminal audits must survive with only the FK cleared.
+      expect(
+        (
+          await client.query(
+            `DELETE FROM restaurant_staff_profiles
+             WHERE "organizationId" = $1 AND NOT (id = ANY($2::text[]))`,
+            [demoOrganizationId, [staffId]]
+          )
+        ).rowCount
+      ).toBe(1);
+      await client.query('SET CONSTRAINTS ALL IMMEDIATE');
+      expect(
+        (await client.query('SELECT * FROM audit_logs WHERE id = $1', [operatorAuditId])).rows
+      ).toEqual([{ ...operatorAuditBefore.rows[0], actorStaffProfileId: null }]);
+      expect(
+        (await client.query('SELECT id FROM restaurant_staff_profiles WHERE id = $1', [staffId])).rows
+      ).toEqual([{ id: staffId }]);
     } finally {
       await client.query('ROLLBACK').catch(() => undefined);
       client.release();

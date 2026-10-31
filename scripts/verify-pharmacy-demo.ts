@@ -789,10 +789,17 @@ try {
       const req = request('removed');
       const plan = await runDisposablePharmacyDraft(target, req);
       const result = await runDisposablePharmacyDraft(target, req, confirm(plan.planDigest));
-      sql(`DELETE FROM pharmacy_purchase_order_lines WHERE "purchaseOrderId" IN
+      // Simulate lost history via the retention guard, confined to this owned
+      // disposable fixture. Transaction-local settings cannot leak to a replay.
+      sql(`BEGIN;
+      SELECT set_config('app.is_platform_admin', 'true', true),
+             set_config('app.purging_organization_id', 'wha1388_test_org', true);
+      DELETE FROM pharmacy_purchase_order_lines WHERE "purchaseOrderId" IN
       (SELECT id FROM pharmacy_purchase_orders WHERE "branchId"='wha1388_removed');
       DELETE FROM pharmacy_purchase_orders WHERE "branchId"='wha1388_removed';
-      DELETE FROM audit_logs WHERE "targetId"='${result.namespace}';`);
+      DELETE FROM audit_logs WHERE "organizationId"='wha1388_test_org'
+        AND "targetId"='${result.namespace}';
+      COMMIT;`);
       const beforeCounts = counts();
       await assert.rejects(
         runDisposablePharmacyDraft(target, req, confirm(plan.planDigest)),

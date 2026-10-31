@@ -4,6 +4,7 @@ import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '@/generated/prisma/client';
 import { beforeAll, afterAll, describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 const url = process.env.TEST_DATABASE_URL;
 if (url) process.env.DATABASE_URL = url;
@@ -182,6 +183,150 @@ describe.skipIf(!url)('platform audit ledger on disposable PostgreSQL', () => {
       )
     ).resolves.toEqual([{ action }]);
   });
+
+  for (const platform of [false, true]) {
+    it(`preserves audit facts when ${platform ? 'platform' : 'tenant'} scope deletes actors`, async () => {
+      const { withTenantDb } = await import('@/lib/tenancy/scoped-db');
+      const scope = platform
+        ? scoped
+        : <T,>(run: (db: ScopedDb) => Promise<T>) => withTenantDb(org, run);
+      const prefix = `${org}_${platform ? 'platform' : 'tenant'}_actor`;
+      const userId = `${prefix}_user`;
+      const staffId = `${prefix}_staff`;
+      const before = await scope(async (db) => {
+        await db.organizationDepartment.create({
+          data: { organizationId: org, key: prefix, name: prefix },
+        });
+        await db.user.create({
+          data: {
+            id: userId,
+            organizationId: org,
+            name: 'Historical user',
+            email: `${userId}@example.invalid`,
+            department: prefix,
+            title: 'Test',
+          },
+        });
+        await db.restaurantStaffProfile.create({
+          data: { id: staffId, organizationId: org, displayName: 'Historical operator' },
+        });
+        await db.auditLog.createMany({
+          data: [
+            {
+              id: userId,
+              organizationId: org,
+              source: 'TRPC',
+              category: 'SYSTEM',
+              action,
+              actorType: 'USER',
+              actorId: userId,
+              actorName: 'Historical user',
+              actorEmail: `${userId}@example.invalid`,
+              input: { original: 'user input' },
+              metadata: { original: 'user context' },
+            },
+            {
+              id: staffId,
+              organizationId: org,
+              source: 'REST_API',
+              category: 'TERMINAL',
+              action,
+              actorType: 'RESTAURANT_OPERATOR',
+              actorStaffProfileId: staffId,
+              actorName: 'Historical operator',
+              actorRole: 'CASHIER',
+              input: { original: 'operator input' },
+              metadata: { staffId, deviceId: 'test' },
+            },
+          ],
+        });
+        return db.auditLog.findMany({
+          where: { id: { in: [userId, staffId] } },
+          orderBy: { id: 'asc' },
+        });
+      });
+
+      // Clients cannot erase attribution or change facts alongside it.
+      for (const [id, assignment] of [
+        [userId, '"actorId" = NULL'],
+        [staffId, '"actorStaffProfileId" = NULL'],
+        [staffId, '"actorStaffProfileId" = NULL, "actorName" = \'tampered\''],
+        [userId, `"actorId" = NULL, "actorType" = 'SYSTEM'`],
+      ]) {
+        await expect(
+          scope((db) =>
+            db.$executeRawUnsafe(`UPDATE audit_logs SET ${assignment} WHERE id = $1`, id)
+          )
+        ).rejects.toMatchObject({
+          meta: { driverAdapterError: { cause: { originalCode: '55000' } } },
+        });
+      }
+
+      await scope(async (db) => {
+        await db.user.delete({ where: { id: userId } });
+        await db.restaurantStaffProfile.delete({ where: { id: staffId } });
+        // Force deferred tenant FKs to be checked before comparing the retained rows.
+        await db.$executeRawUnsafe('SET CONSTRAINTS ALL IMMEDIATE');
+        expect(
+          await db.auditLog.findMany({
+            where: { id: { in: [userId, staffId] } },
+            orderBy: { id: 'asc' },
+          })
+        ).toEqual(before.map((row) => ({ ...row, actorId: null, actorStaffProfileId: null })));
+      });
+
+      await expect(
+        scope((db) => db.$executeRaw`
+          UPDATE audit_logs SET "actorName" = 'tampered' WHERE id = ${staffId}
+        `)
+      ).rejects.toThrow(/append-only/);
+      await expect(
+        scope((db) => db.$executeRaw`
+          INSERT INTO audit_logs (id, "organizationId", source, category, action, "actorType")
+          VALUES (${`${prefix}_invalid_operator`}, ${org}, 'REST_API', 'TERMINAL',
+                  ${action}, 'RESTAURANT_OPERATOR')
+        `)
+      ).rejects.toMatchObject({
+        meta: { driverAdapterError: { cause: { originalCode: '23514' } } },
+      });
+      await expect(
+        scope((db) => db.$executeRaw`
+          INSERT INTO audit_logs
+            (id, "organizationId", source, category, action, "actorType", "actorStaffProfileId")
+          VALUES (${`${prefix}_invalid_user`}, ${org}, 'REST_API', 'SYSTEM',
+                  ${action}, 'USER', ${staffId})
+        `)
+      ).rejects.toMatchObject({
+        meta: { driverAdapterError: { cause: { originalCode: '23514' } } },
+      });
+    });
+  }
+
+  for (const table of ['audit_logs', 'platform_audit_logs', 'organization_lifecycle_events']) {
+    it(`${table} has an unconditional statement-level TRUNCATE guard`, async () => {
+      await scoped(async (db) => {
+        const triggers = await db.$queryRaw<{ tgtype: number; tgenabled: string }[]>`
+          SELECT tgtype::int, tgenabled::text FROM pg_trigger
+          WHERE tgrelid = ${table}::regclass AND tgname = ${`${table}_no_truncate`}
+        `;
+        // BEFORE (2) + TRUNCATE (32), without the ROW bit (1).
+        expect(triggers).toEqual([{ tgtype: 34, tgenabled: 'O' }]);
+      });
+      const error = await scoped(async (db) => {
+        await db.$queryRaw`SELECT set_config('app.purging_organization_id', ${org}, true)`;
+        await db.$executeRawUnsafe(`TRUNCATE TABLE ${table}`);
+        // Keep this attempted destructive operation rolled back even if the guard regresses.
+        throw new Error('TRUNCATE unexpectedly succeeded');
+      }).catch((cause: unknown) => cause);
+      expect(error).toMatchObject({
+        meta: {
+          driverAdapterError: {
+            cause: { originalCode: expect.stringMatching(/^(42501|55000)$/) },
+          },
+        },
+      });
+    });
+  }
 
   const filters = { org, actor, action, from: '2026-09-20', through: '2026-09-20' };
   it('filters, exports escaped CSV, and pages tied timestamps without duplicates', async () => {
