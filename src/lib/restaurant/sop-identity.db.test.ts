@@ -16,10 +16,9 @@ const userId = 'user_h5_' + randomBytes(6).toString('hex');
 const approverId = 'staff_h5_' + randomBytes(6).toString('hex');
 const credentialId = 'cred_h5_' + randomBytes(6).toString('hex');
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
-const OWNER_DATABASE_URL = process.env.WHA434_TEST_OWNER_DATABASE_URL;
 if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
 process.env.PLATFORM_ENCRYPTION_KEY ??= randomBytes(32).toString('base64');
-const describeIfDatabase = TEST_DATABASE_URL && OWNER_DATABASE_URL ? describe : describe.skip;
+const describeIfDatabase = TEST_DATABASE_URL ? describe : describe.skip;
 const dbSuffix = randomBytes(6).toString('hex');
 const dbIds = {
   organization: `org_wha434_${dbSuffix}`,
@@ -36,19 +35,24 @@ let tenantDb: (typeof import('@/lib/tenancy/scoped-db'))['createTenantDb'];
 
 describeIfDatabase('SOP authenticated identity PostgreSQL regression', () => {
   beforeAll(async () => {
-    expect(OWNER_DATABASE_URL).not.toBe(TEST_DATABASE_URL);
-    const owner = new Client({ connectionString: OWNER_DATABASE_URL });
-    await owner.connect();
+    const setup = new Client({ connectionString: TEST_DATABASE_URL });
+    await setup.connect();
     try {
-      await owner.query(`SET app.is_platform_admin = 'true'`);
-      await owner.query(
+      const role = await setup.query(
+        'SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user'
+      );
+      expect(role.rows).toEqual([{ rolsuper: false, rolbypassrls: false }]);
+      // Fixture provisioning uses the same explicit platform scope as other DB
+      // suites; every command below runs through the tenant-scoped runtime role.
+      await setup.query(`SET app.is_platform_admin = 'true'`);
+      await setup.query(
         `INSERT INTO "organizations"
           ("id", "slug", "legalName", "displayName", "status", "deploymentMode", "createdAt", "updatedAt")
          VALUES ($1, $2, 'WHA-434 Test Co', 'WHA-434 Test', 'ACTIVE', 'SHARED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
         [dbIds.organization, `wha434-${dbSuffix}`]
       );
     } finally {
-      await owner.end();
+      await setup.end();
     }
 
     ({ createTenantDb: tenantDb } = await import('@/lib/tenancy/scoped-db'));
@@ -150,14 +154,14 @@ describeIfDatabase('SOP authenticated identity PostgreSQL regression', () => {
   }, 30000);
 
   afterAll(async () => {
-    if (!OWNER_DATABASE_URL) return;
-    const owner = new Client({ connectionString: OWNER_DATABASE_URL });
-    await owner.connect();
+    if (!TEST_DATABASE_URL) return;
+    const cleanup = new Client({ connectionString: TEST_DATABASE_URL });
+    await cleanup.connect();
     try {
-      await owner.query(`SET app.is_platform_admin = 'true'`);
-      await owner.query(`DELETE FROM "organizations" WHERE "id" = $1`, [dbIds.organization]);
+      await cleanup.query(`SET app.is_platform_admin = 'true'`);
+      await cleanup.query(`DELETE FROM "organizations" WHERE "id" = $1`, [dbIds.organization]);
     } finally {
-      await owner.end();
+      await cleanup.end();
     }
   });
 
