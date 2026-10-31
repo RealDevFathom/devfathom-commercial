@@ -53,6 +53,7 @@ beforeAll(async () => {
           for (const capability of key === 'cashier'
             ? ['pharmacy:counter']
             : [
+                'pharmacy:counter',
                 'pharmacy:inventory',
                 'pharmacy:procurement',
                 ...(key === 'pharmacist' || mode === 'SOLO' ? ['pharmacy:dispense'] : []),
@@ -113,6 +114,63 @@ const kinds: PharmacyApprovalKind[] = [
 ];
 describe.each(kinds)('%s real PIN and audit policy', (kind) => {
   const targetId = `${kind}-${suffix}`;
+  it.each(['user', 'role'])(
+    'rejects an explicit %s DENY even with the correct SOLO PIN',
+    async (source) => {
+      const deniedTarget = `denied-${source}-${targetId}`;
+      const capability =
+        kind === 'RX'
+          ? 'pharmacy:dispense'
+          : kind === 'PURCHASE'
+            ? 'pharmacy:procurement'
+            : kind === 'ADJUSTMENT'
+              ? 'pharmacy:inventory'
+              : 'pharmacy:counter';
+      await expect(
+        withTenantDb(
+          solo.organizationId,
+          async (db) => {
+            if (source === 'user') {
+              await db.userPermissionOverride.create({
+                data: {
+                  userId: solo.actorId,
+                  capability,
+                  effect: 'DENY',
+                  reason: 'Approval regression',
+                },
+              });
+            } else {
+              const owner = await db.user.findUniqueOrThrow({ where: { id: solo.actorId } });
+              await db.organizationRolePermission.update({
+                where: {
+                  organizationRoleId_capability: {
+                    organizationRoleId: owner.organizationRoleId!,
+                    capability,
+                  },
+                },
+                data: { effect: 'DENY' },
+              });
+            }
+            await enforceOperatingMode(db, solo, {
+              kind,
+              makerIds: [solo.actorId],
+              targetType: 'PolicyRegression',
+              targetId: deniedTarget,
+              pin,
+            });
+          },
+          { skipDrain: true }
+        )
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await withTenantDb(
+        solo.organizationId,
+        async (db) => {
+          expect(await db.auditLog.count({ where: { targetId: deniedTarget } })).toBe(0);
+        },
+        { skipDrain: true }
+      );
+    }
+  );
   it('denies SOLO without PIN, allows verified owner, and retains secret-free evidence', async () => {
     const input = { kind, makerIds: [solo.actorId], targetType: 'PolicyRegression', targetId };
     await expect(

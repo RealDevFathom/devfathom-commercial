@@ -53,7 +53,7 @@ export const pharmacyOperatingModeRouter = router({
         const valid = await verifyPharmacyUserPin({ organizationId, actorId }, input.pin);
         if (!valid)
           throw new TRPCError({
-            code: 'UNAUTHORIZED',
+            code: 'FORBIDDEN',
             message: 'Owner PIN re-authentication failed.',
           });
         const updated = await tx.organization.update({

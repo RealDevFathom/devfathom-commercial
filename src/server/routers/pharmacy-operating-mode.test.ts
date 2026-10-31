@@ -52,7 +52,8 @@ describe('owner-only operating-mode toggle', () => {
     async (mode) => {
       const f = fixture(mode);
       await expect(f.caller.set({ mode, pin: '0000' })).rejects.toMatchObject({
-        code: 'UNAUTHORIZED',
+        code: 'FORBIDDEN',
+        message: 'Owner PIN re-authentication failed.',
       });
       expect(f.db.organization.update).not.toHaveBeenCalled();
       expect(f.db.auditLog.create).not.toHaveBeenCalled();

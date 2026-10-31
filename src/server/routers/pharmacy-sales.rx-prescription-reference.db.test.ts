@@ -81,6 +81,7 @@ const lines = {
   completed: '',
   retried: '',
   fullCompletion: '',
+  cashierCompletion: '',
   concurrent: '',
 };
 
@@ -387,6 +388,7 @@ beforeAll(async () => {
       'voided',
       'completed',
       'fullCompletion',
+      'cashierCompletion',
       'retried',
       'concurrent',
     ] as const) {
@@ -564,9 +566,57 @@ describeIfDatabase('prescription references on counter sale lines (#518)', () =>
     );
   });
 
-  it('lets only a pharmacist record a prescription, on an Rx or an OTC line', async () => {
-    await expectRefused(ids.cashier, rx, withReference(lines.valid), RX_DENIED);
-    await expectRefused(ids.cashier, otc, withReference(lines.otcForAyesha), NEEDS_PHARMACIST);
+  it('requires pharmacist authority to record a prescription, on an Rx or an OTC line', async () => {
+    await expectRefused(
+      ids.cashier,
+      rx,
+      {
+        ...withReference(lines.valid),
+        prescriptionApproval: undefined,
+      },
+      RX_DENIED
+    );
+    await expectRefused(
+      ids.cashier,
+      otc,
+      {
+        ...withReference(lines.otcForAyesha),
+        prescriptionApproval: undefined,
+      },
+      NEEDS_PHARMACIST
+    );
+  });
+
+  it('attributes a cashier’s PIN-authorized prescription fill to the independent pharmacist', async () => {
+    const saleId = await newSale(ids.cashier);
+    const added = await act(ids.cashier, (api) =>
+      api.addLine(line(saleId, rx, withReference(lines.cashierCompletion)))
+    );
+    const { completePaidPharmacySale, completionSaleInclude } =
+      await import('@/lib/pharmacy/sale-completion');
+    await act(ids.cashier, async (_api, tx) => {
+      const sale = await tx.pharmacySale.findFirstOrThrow({
+        where: { id: saleId },
+        include: completionSaleInclude,
+      });
+      await completePaidPharmacySale(
+        tx,
+        { organizationId: ids.org, branchId: ids.branch, actorId: ids.cashier },
+        sale,
+        { deviceId: `dev_cashier_${suffix}`, businessDate: new Date('2026-10-23T00:00:00.000Z') }
+      );
+    });
+    await act(ids.cashier, async (_api, tx) => {
+      expect(
+        await tx.prescriptionFill.findFirstOrThrow({
+          where: { prescriptionLineId: lines.cashierCompletion },
+        })
+      ).toMatchObject({
+        dispensedByUserId: ids.checker,
+        quantityCanonicalUnits: 10,
+        idempotencyKey: `rx-reference:${added.line.id}`,
+      });
+    });
   });
 
   async function addReferencedSale(prescriptionLineId: string) {

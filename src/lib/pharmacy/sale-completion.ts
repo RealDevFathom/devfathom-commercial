@@ -6,7 +6,7 @@ import type { LedgerScope } from './stock-ledger';
 import { postSaleLineEntry } from './finance-postings';
 import { assertSaleBatchesSellable } from './sale-batch-safety';
 import { PharmacyReceiptIdentityError, validateReceiptIdentity } from './receipt-identity';
-import { assertRxSaleAllowed } from './rx-sale-gate';
+import { assertRxSaleLinesAllowed } from './rx-sale-gate';
 import { recordCompletedPrescriptionReference } from './rx-prescription-reference';
 
 export const completionSaleInclude = {
@@ -30,11 +30,7 @@ export async function completePaidPharmacySale(
   leasedReceiptNumber: number | null = null
 ) {
   // #518: every completion path re-checks who may sell Rx/restricted non-controlled lines.
-  await assertRxSaleAllowed(
-    db,
-    scope,
-    sale.lines.map((line) => line.medicine)
-  );
+  const rxCheckers = await assertRxSaleLinesAllowed(db, scope, sale);
   // #633: re-check every batch under lock before a receipt number is drawn. The receipt
   // snapshot below records these checked facts, not the ones loaded with the sale.
   const checkedBatches = await assertSaleBatchesSellable(db, scope, sale.id);
@@ -64,7 +60,7 @@ export async function completePaidPharmacySale(
     if (line.prescriptionLineId) {
       await recordCompletedPrescriptionReference(
         db,
-        scope,
+        { ...scope, actorId: rxCheckers.get(line.id) ?? scope.actorId },
         {
           id: line.id,
           organizationId: line.organizationId,

@@ -109,6 +109,7 @@ const priorHrefs = [
   '/pharmacy/regulatory',
   '/pharmacy/settings/branches',
   '/pharmacy/settings/pin',
+  '/pharmacy/settings/operating-mode',
   '/reviews',
   '/team/stats',
   '/hr',
@@ -161,9 +162,26 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 describe('Hotel navigation composition', () => {
+  it('makes pharmacy operating mode discoverable through the licensed shared navigation', () => {
+    const entry = visibleNavigation(
+      { vertical: 'PHARMACY', enabledModules: ['pharmacy-core'] },
+      'ADMIN'
+    ).find((item) => item.href === '/pharmacy/settings/operating-mode');
+    expect(entry).toMatchObject({
+      label: 'Operating mode',
+      group: 'Pharmacy',
+      module: 'pharmacy-core',
+    });
+    expect(
+      visibleNavigation({ vertical: 'PHARMACY', enabledModules: [] }, 'ADMIN')
+    ).not.toContainEqual(entry);
+    expect(
+      visibleNavigation({ vertical: 'RESTAURANT', enabledModules: ['pharmacy-core'] }, 'ADMIN')
+    ).not.toContainEqual(entry);
+  });
   it('retains every accepted link and adds exactly the six hospitality routes', () => {
-    expect(priorHrefs).toHaveLength(59);
-    expect(navigation).toHaveLength(65);
+    expect(priorHrefs).toHaveLength(60);
+    expect(navigation).toHaveLength(66);
     const hrefs = navigation.map((n) => n.href);
     expect(hrefs).toEqual(expect.arrayContaining(priorHrefs));
     expect(navigation.filter((n) => n.group === 'Hospitality').map((n) => n.href)).toEqual(

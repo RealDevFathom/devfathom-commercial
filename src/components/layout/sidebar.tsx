@@ -418,6 +418,13 @@ export const navigation: NavItem[] = [
     module: 'pharmacy-core',
   },
   {
+    label: 'Operating mode',
+    href: '/pharmacy/settings/operating-mode',
+    icon: Settings,
+    group: 'Pharmacy',
+    module: 'pharmacy-core',
+  },
+  {
     label: 'Branch assignments',
     href: '/pharmacy/settings/branches',
     icon: MapPin,

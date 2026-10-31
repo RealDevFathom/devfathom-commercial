@@ -64,6 +64,12 @@ function fixture() {
         role: 'EMPLOYEE',
         status: 'ACTIVE',
         organizationId: 'org-1',
+        organizationRole: {
+          key: 'manager',
+          organizationId: 'org-1',
+          permissions: [{ capability: 'pharmacy:counter', effect: 'ALLOW' }],
+        },
+        permissionOverrides: [],
       })),
     },
     pharmacyBranchAssignment: { findMany: vi.fn(async () => [{ branchId: 'branch-1' }]) },

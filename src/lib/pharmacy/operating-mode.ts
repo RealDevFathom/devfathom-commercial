@@ -38,6 +38,19 @@ export async function enforceOperatingMode(
     (input.checkerId ?? scope.actorId) === scope.actorId &&
     input.makerIds.includes(scope.actorId)
   ) {
+    const capable =
+      input.kind === 'PURCHASE'
+        ? await actorCanProcure(db, scope.actorId)
+        : await can(
+            { id: scope.actorId, role: 'EMPLOYEE', organizationId: scope.organizationId },
+            input.kind === 'RX'
+              ? 'pharmacy:dispense'
+              : NON_CLINICAL_APPROVAL_CAPABILITY[input.kind],
+            undefined,
+            { db }
+          );
+    if (!capable)
+      throw new TRPCError({ code: 'FORBIDDEN', message: 'Approval capability required.' });
     if (
       await authorizeSoloApproval(
         db,

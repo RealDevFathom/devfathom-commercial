@@ -14,6 +14,7 @@ vi.mock('@/lib/pharmacy/branch-assignment', () => ({ assertBranchAssignment: moc
 vi.mock('@/lib/pharmacy/rx-sale-gate', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/rx-sale-gate')>()),
   assertRxSaleAllowed: vi.fn(),
+  assertRxDelegationAllowed: vi.fn(),
 }));
 vi.mock('@/lib/pharmacy/sales', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/sales')>()),
@@ -35,6 +36,7 @@ describe('Rx approval on a discounted line', () => {
       pharmacyBranch: { findMany: vi.fn(async () => [{ id: 'branch' }]) },
       medicine: { findFirst: vi.fn(async () => ({ rx: true, controlled: false })) },
       pharmacySale: { findFirst: vi.fn(async () => ({ createdByUserId: 'maker' })) },
+      auditLog: { create: vi.fn() },
       $transaction: (run: (db: unknown) => unknown) => run(db),
     };
     const ctx = {

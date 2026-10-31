@@ -14,7 +14,7 @@ import { postTenderEntry, postTenderRefundEntry } from './finance-postings';
 import { firstCloseIsFinal } from './migration/first-close';
 import { assertSaleBatchesSellable } from './sale-batch-safety';
 import { completePaidPharmacySale, completionSaleInclude } from './sale-completion';
-import { assertRxSaleAllowed } from './rx-sale-gate';
+import { assertRxSaleLinesAllowed } from './rx-sale-gate';
 import type { LedgerScope } from './stock-ledger';
 import { paymentSandboxAdmitted } from './payment-sandbox-admission';
 import { authenticatePharmacyCommand, validateLeasedReceiptReplay } from './sales';
@@ -299,11 +299,7 @@ export async function applyPharmacyTender(
   });
   if (!sale || sale.status !== 'OPEN') throw new PharmacySettlementError('SALE_NOT_OPEN');
   // #518: a line added earlier cannot be paid for by someone who may not sell it.
-  await assertRxSaleAllowed(
-    db,
-    scope,
-    sale.lines.map((line) => line.medicine)
-  );
+  await assertRxSaleLinesAllowed(db, scope, sale);
   // #633: before any lease, provider charge, tender or posting. A batch recalled,
   // quarantined or expired since add-to-cart refuses the payment.
   await assertSaleBatchesSellable(db, scope, sale.id);

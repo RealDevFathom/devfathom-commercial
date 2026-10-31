@@ -7,7 +7,12 @@ import {
   soloOwnerEligible,
 } from '@/lib/pharmacy/solo-approval';
 import { ControlledRestorationDenied } from '@/lib/pharmacy/controlled-restoration-authorization';
-import { assertRxSaleAllowed, PharmacyRxSaleDenied } from '@/lib/pharmacy/rx-sale-gate';
+import {
+  assertRxSaleAllowed,
+  assertRxDelegationAllowed,
+  PharmacyRxSaleDenied,
+  RX_LINE_APPROVAL,
+} from '@/lib/pharmacy/rx-sale-gate';
 import {
   PharmacyRxReferenceError,
   attachPrescriptionReference,
@@ -1080,9 +1085,25 @@ export const pharmacySalesRouter = router({
             // nothing on this line, so it is refused instead of being silently ignored.
             if (input.controlledAuthorization)
               throw new PharmacyRxReferenceError('CONTROLLED_AUTHORIZATION_NOT_APPLICABLE');
-            // #518: an Rx/restricted line needs the exact dispense grant (DENY wins).
-            if (medicine) await assertRxSaleAllowed(db, scope, [medicine]);
+            let rxCheckerId = scope.actorId;
+            // An independent checker must prove their identity before their
+            // dispensing grant can authorize the cashier's line.
+            if (medicine && !input.prescriptionApproval?.checkerId) {
+              await assertRxSaleAllowed(db, scope, [medicine]);
+              if (
+                input.prescription &&
+                !(await can(subjectFromSession(ctx.session!.user), 'pharmacy:dispense', undefined, {
+                  db,
+                }))
+              )
+                throw new PharmacyRxReferenceError('PRESCRIPTION_NEEDS_PHARMACIST');
+            }
             if (medicine && (medicine.rx || medicine.restricted || input.prescription)) {
+              if (
+                input.prescriptionApproval?.checkerId &&
+                input.prescriptionApproval.checkerId !== scope.actorId
+              )
+                await assertRxDelegationAllowed(db, scope);
               const sale = await db.pharmacySale.findFirst({
                 where: {
                   id: input.saleId,
@@ -1094,7 +1115,7 @@ export const pharmacySalesRouter = router({
               if (checkerId && checkerId !== scope.actorId) {
                 await assertBranchAssignment(db, { ...scope, actorId: checkerId });
               }
-              await enforceOperatingMode(db, scope, {
+              const approval = await enforceOperatingMode(db, scope, {
                 kind: 'RX',
                 makerIds: [sale?.createdByUserId ?? scope.actorId],
                 targetType: 'PrescriptionSale',
@@ -1105,6 +1126,8 @@ export const pharmacySalesRouter = router({
                   input.approvalPin,
                 checkerId,
               });
+              rxCheckerId = approval.actorId;
+              await assertRxSaleAllowed(db, { actorId: rxCheckerId }, [medicine]);
             }
 
             const {
@@ -1115,12 +1138,41 @@ export const pharmacySalesRouter = router({
             } = input;
             void _linePin;
             void _rxApproval;
-            if (!prescription) return addSaleLine(db, scope, lineInput);
+            const recordApproval = async (result: Awaited<ReturnType<typeof addSaleLine>>) => {
+              if (medicine && (medicine.rx || medicine.restricted || prescription)) {
+                await db.auditLog.create({
+                  data: {
+                    organizationId: scope.organizationId,
+                    actorId: rxCheckerId,
+                    source: 'TRPC',
+                    category: 'PHARMACY',
+                    action: RX_LINE_APPROVAL,
+                    targetType: 'PharmacySaleLine',
+                    targetId: result.line.id,
+                    metadata: {
+                      saleId: input.saleId,
+                      branchId: scope.branchId,
+                      requestedById: scope.actorId,
+                      medicineId: input.medicineId,
+                      presentationId: input.presentationId,
+                      canonicalUnits: input.quantity * input.canonicalUnitsPerSaleUnit,
+                    },
+                  },
+                });
+              }
+              return result;
+            };
+            if (!prescription) return recordApproval(await addSaleLine(db, scope, lineInput));
             // Recording a prescription fill is a pharmacist's act, whatever the medicine.
             if (
-              !(await can(subjectFromSession(ctx.session!.user), 'pharmacy:dispense', undefined, {
-                db,
-              }))
+              !(await can(
+                { id: rxCheckerId, role: 'EMPLOYEE', organizationId: scope.organizationId },
+                'pharmacy:dispense',
+                undefined,
+                {
+                  db,
+                }
+              ))
             )
               throw new PharmacyRxReferenceError('PRESCRIPTION_NEEDS_PHARMACIST');
             const units = input.quantity * input.canonicalUnitsPerSaleUnit;
@@ -1144,7 +1196,7 @@ export const pharmacySalesRouter = router({
                 prescriptionSaleLineId: result.line.id,
               },
             });
-            return result;
+            return recordApproval(result);
           }
           // #518: a controlled line takes its prescription only through controlledAuthorization.
           if (input.prescription)

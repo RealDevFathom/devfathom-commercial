@@ -57,6 +57,15 @@ describe.each<PharmacyApprovalKind>([
     expect(db.auditLog.create).not.toHaveBeenCalled();
     expect(mocks.solo).not.toHaveBeenCalled();
   });
+  it('honors a SOLO capability denial before PIN verification or approval evidence', async () => {
+    mocks.can.mockResolvedValue(false);
+    const db = fixture('SOLO');
+    await expect(
+      enforceOperatingMode(db as never, scope, { ...input, pin: '4729' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.solo).not.toHaveBeenCalled();
+    expect(db.auditLog.create).not.toHaveBeenCalled();
+  });
   it('denies cashier and inappropriate role; accepts independent qualified checker with secret-free audit', async () => {
     if (kind === 'PURCHASE') mocks.can.mockResolvedValue(false);
     for (const role of ['cashier', kind === 'RX' ? 'owner' : 'pharmacist'])
