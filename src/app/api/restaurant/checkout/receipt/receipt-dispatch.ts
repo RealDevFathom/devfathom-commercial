@@ -305,7 +305,13 @@ export async function dispatchReceipt({
       {
         branchId: ctx.device.branchId,
         routes: [
-          { documentType: 'RECEIPT', stationId: null, printerId: state.printerId, registeredPrinterId: state.registeredPrinterId, enabled: true },
+          {
+            documentType: 'RECEIPT',
+            stationId: null,
+            printerId: state.printerId,
+            registeredPrinterId: state.registeredPrinterId,
+            enabled: true,
+          },
         ],
       },
       { branchId: ctx.device.branchId, stationId: null, idempotencyKey, document }

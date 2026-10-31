@@ -183,7 +183,8 @@ test('admin follows the first-run checklist to the first completed sale', async 
   const fourXx = observe4xx(page);
   const vertical = process.env.PHARMACY_E2E === '1' ? 'PHARMACY' : 'RESTAURANT';
 
-  if (vertical === 'PHARMACY') await freshPharmacyFirstSale(page, browser, metric, fourXx);
+  if (vertical === 'PHARMACY')
+    await freshPharmacyFirstSale(page, browser, metric, fourXx, testInfo);
   else await restaurantFirstSale(page, browser, metric, fourXx);
 
   const wallTimeMs = Date.now() - started;

@@ -1,5 +1,38 @@
+import { randomUUID } from 'node:crypto';
 import { expect, test } from '@playwright/test';
-import { loginPlatform } from './fixtures/platform-control-plane';
+import {
+  ensureControlPlaneCatalog,
+  loginPlatform,
+  withAdminDatabase,
+} from './fixtures/platform-control-plane';
+
+const fixtureKey = `e2e_health_${randomUUID().replaceAll('-', '')}`;
+const organizationIds = [`${fixtureKey}_restaurant`, `${fixtureKey}_pharmacy`];
+
+// Browser CI uses a separate database from Vitest. Own these rows rather than
+// relying on platform-health.db.test.ts (or a sibling spec) having run first.
+test.beforeAll(async () => {
+  await ensureControlPlaneCatalog();
+  await withAdminDatabase(async (db) => {
+    for (const [index, vertical, name] of [
+      [0, 'RESTAURANT', 'Health Restaurant'],
+      [1, 'PHARMACY', 'Health Pharmacy'],
+    ] as const) {
+      await db.query(
+        `INSERT INTO organizations
+          (id, slug, "legalName", "displayName", vertical, status, "updatedAt")
+         VALUES ($1, $1, $2, $2, $3::"OrganizationVertical", 'ACTIVE', now())`,
+        [organizationIds[index], name, vertical]
+      );
+    }
+  });
+});
+
+test.afterAll(async () => {
+  await withAdminDatabase(async (db) => {
+    await db.query('DELETE FROM organizations WHERE id = ANY($1::text[])', [organizationIds]);
+  });
+});
 
 test('health route requires a platform session', async ({ page }) => {
   await page.goto('/platform/health');
