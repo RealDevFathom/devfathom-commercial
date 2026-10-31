@@ -25,6 +25,7 @@ const CLASSIFICATIONS: Record<string, Classification> = {
   SALES_REVENUE: { section: 'currentResult', normalSide: 'CREDIT' },
   COST_OF_GOODS_SOLD: { section: 'currentResult', normalSide: 'DEBIT' },
   SALES_DISCOUNT: { section: 'currentResult', normalSide: 'DEBIT' },
+  LOYALTY_REDEMPTION: { section: 'currentResult', normalSide: 'DEBIT' },
   INVENTORY_WRITE_OFF: { section: 'currentResult', normalSide: 'DEBIT' },
   INVENTORY_SHRINKAGE: { section: 'currentResult', normalSide: 'DEBIT' },
   OPERATING_EXPENSE: { section: 'currentResult', normalSide: 'DEBIT' },

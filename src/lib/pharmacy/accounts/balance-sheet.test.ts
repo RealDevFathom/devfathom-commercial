@@ -65,6 +65,33 @@ describe('classifyBalanceSheet', () => {
     expect(sheet.reconciled).toBe(true);
   });
 
+  it.each([
+    { name: 'redemption', refundedMinor: BigInt('0') },
+    { name: 'partial refund', refundedMinor: BigInt('100') },
+    { name: 'full refund', refundedMinor: BigInt('200') },
+  ])('includes loyalty $name in the cumulative posted result', ({ refundedMinor }) => {
+    // A 1000 sale is settled by 800 cash and 200 loyalty, then loyalty is refunded.
+    const loyaltyMinor = BigInt('200') - refundedMinor;
+    const [sheet] = classifyBalanceSheet([
+      row('CASH', BigInt('800')),
+      row('SALES_CLEARING', BigInt('0')),
+      row('SALES_REVENUE', -BigInt('1000') + refundedMinor),
+      row('LOYALTY_REDEMPTION', loyaltyMinor),
+    ]);
+
+    expect(
+      sheet.accounts.find((account) => account.accountCode === 'LOYALTY_REDEMPTION')
+    ).toMatchObject({
+      section: 'currentResult',
+      normalSide: 'DEBIT',
+      normalBalanceMinor: loyaltyMinor.toString(),
+    });
+    expect(sheet.currentResultMinor).toBe('800');
+    expect(sheet.unmappedAccountCodes).toEqual([]);
+    expect(sheet.reconciliationGapMinor).toBe('0');
+    expect(sheet.reconciled).toBe(true);
+  });
+
   it('keeps currencies separate and safely handles integer values beyond Number precision', () => {
     const huge = BigInt('9007199254740993');
     const sheets = classifyBalanceSheet([
