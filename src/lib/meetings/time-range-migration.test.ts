@@ -9,6 +9,14 @@ const sql = readFileSync(
 );
 
 describe('meeting time-order migration', () => {
+  it('blocks concurrent legacy writes before repairing rows until the constraint is installed', () => {
+    const lock = sql.indexOf('LOCK TABLE "meetings" IN ACCESS EXCLUSIVE MODE;');
+    expect(lock).toBeGreaterThan(sql.indexOf('BEGIN;'));
+    expect(lock).toBeLessThan(sql.indexOf('UPDATE "meetings"'));
+    expect(sql.indexOf('COMMIT;')).toBeGreaterThan(sql.indexOf('ADD CONSTRAINT'));
+    expect(sql.slice(lock, sql.indexOf('ADD CONSTRAINT'))).not.toContain('COMMIT;');
+  });
+
   it('repairs legacy invalid rows before installing the constraint', () => {
     expect(sql.indexOf('UPDATE "meetings"')).toBeGreaterThanOrEqual(0);
     expect(sql.indexOf('UPDATE "meetings"')).toBeLessThan(sql.indexOf('ADD CONSTRAINT'));

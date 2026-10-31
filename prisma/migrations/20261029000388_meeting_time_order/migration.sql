@@ -8,6 +8,10 @@ BEGIN;
 -- legacy rows, and release the platform scope when this transaction commits.
 SELECT set_config('app.is_platform_admin', 'true', true);
 
+-- Block legacy writers before taking the repair snapshot. Keep this lock until
+-- the constraint is installed so no invalid row can slip between the two.
+LOCK TABLE "meetings" IN ACCESS EXCLUSIVE MODE;
+
 UPDATE "meetings"
 SET "endTime" = "startTime" + INTERVAL '1 minute'
 WHERE "endTime" <= "startTime";

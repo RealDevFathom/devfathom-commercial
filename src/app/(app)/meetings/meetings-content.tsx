@@ -30,7 +30,7 @@ import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { computePunctuality } from '@/lib/meeting-occurrence';
 import { MEETING_TIME_ORDER_MESSAGE, isValidMeetingTimeRange } from '@/lib/meetings/time-range';
-import { format, isToday, isTomorrow } from 'date-fns';
+import { addDays, differenceInCalendarDays, format, isToday, isTomorrow } from 'date-fns';
 
 const recurrenceLabels: Record<string, string> = {
   daily: 'Daily',
@@ -430,10 +430,6 @@ const MeetingCard = memo(function MeetingCard({
     ''
   );
   const [eAttendees, setEAttendees] = useState<string[]>([]);
-  const hasCompleteEditTimeRange = Boolean(eDate && eStart && eEnd);
-  const hasInvalidEditTimeRange =
-    hasCompleteEditTimeRange &&
-    !isValidMeetingTimeRange(new Date(`${eDate}T${eStart}`), new Date(`${eDate}T${eEnd}`));
 
   const updateMeeting = trpc.meetings.update.useMutation({
     onSuccess: () => {
@@ -447,6 +443,20 @@ const MeetingCard = memo(function MeetingCard({
   // re-renders (these feed the attendance computation below).
   const start = useMemo(() => new Date(meeting.startTime), [meeting.startTime]);
   const end = useMemo(() => new Date(meeting.endTime), [meeting.endTime]);
+
+  // Preserve the calendar-day span of overnight/multi-day meetings, including
+  // when moving their date. Set the end date before applying its local time.
+  const editEndDate = eDate
+    ? format(
+        addDays(new Date(`${eDate}T00:00`), differenceInCalendarDays(end, start)),
+        'yyyy-MM-dd'
+      )
+    : '';
+  const editStartTime = new Date(`${eDate}T${eStart}`);
+  const editEndTime = new Date(`${editEndDate}T${eEnd}`);
+  const hasCompleteEditTimeRange = Boolean(eDate && eStart && eEnd);
+  const hasInvalidEditTimeRange =
+    hasCompleteEditTimeRange && !isValidMeetingTimeRange(editStartTime, editEndTime);
 
   // Precompute per-attendee punctuality once per attendee/occurrence change
   // instead of on every render of the attendance panel.
@@ -489,8 +499,8 @@ const MeetingCard = memo(function MeetingCard({
       id: meeting.id,
       title: eTitle.trim(),
       description: eDesc.trim() || null,
-      startTime: new Date(`${eDate}T${eStart}`),
-      endTime: new Date(`${eDate}T${eEnd}`),
+      startTime: editStartTime,
+      endTime: editEndTime,
       location: eLoc || null,
       recurrence: eRecurrence || null,
       attendeeIds: eAttendees,
