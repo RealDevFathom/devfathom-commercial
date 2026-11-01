@@ -777,6 +777,10 @@ export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
     // for business/cashier guards that require literal ADMIN; EMPLOYEE plus this
     // template is not equivalent. Provisioning does not assign it to existing owners.
     // These grants neither verify clinical qualifications nor permit self-review/signing.
+    // #975: a proprietor runs the whole shop, so the template also grants the
+    // operational actions (Goods-in, stock, counter, day close, management). Every
+    // grant stays exact (no wildcard), so the separation-of-duties caps remain
+    // explicit and individually revocable by DENY.
     key: 'owner-operator',
     name: 'Owner / Operator',
     isSystem: true,
@@ -787,6 +791,11 @@ export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
       'pharmacy:dispense',
       'pharmacy:catalogue-review',
       'pharmacy:safety',
+      'pharmacy:procurement',
+      'pharmacy:inventory',
+      'pharmacy:counter',
+      'pharmacy:close',
+      'pharmacy:manage',
     ],
   },
   {
