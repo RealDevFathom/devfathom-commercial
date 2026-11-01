@@ -5,10 +5,12 @@ const actionPattern = /^[a-z][a-z0-9-]*:[a-zA-Z][a-zA-Z0-9-]*(?![\s\S])/;
 const wildcardPattern = /^[a-z][a-z0-9-]*:\*(?![\s\S])/;
 
 /** Sensitive pharmacy actions are granted only by their exact name: neither `*` nor
- * `pharmacy:*` matches them (controlled drugs, pharmacist decisions, regulated catalogue).
+ * `pharmacy:*` matches them (prescription records, controlled drugs, pharmacist decisions,
+ * regulated catalogue). Static tenant-admin policies are evaluated separately.
  */
 export const EXACT_GRANT_ONLY_ACTIONS: ReadonlySet<string> = new Set([
   'pharmacy:dispense',
+  'pharmacy:prescriptions',
   'pharmacy:safety',
   'pharmacy:catalogue-review',
 ]);

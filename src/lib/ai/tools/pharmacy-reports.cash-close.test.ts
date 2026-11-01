@@ -20,6 +20,7 @@ const organizationFindUnique = vi.fn();
 const check = {
   policyVersion: 'CC01-2026-11-01',
   businessDate: '2026-10-30',
+  currency: 'USD',
   closed: true,
   closeId: 'close_1',
   readOnly: true as const,
@@ -43,7 +44,7 @@ const check = {
       severity: 'URGENT' as const,
       subject: { businessDate: '2026-10-30' },
       exactNumbers: { varianceMinor: -300_000 },
-      explanation: 'Cash counted PKR 47000.00 against PKR 50000.00 expected.',
+      explanation: 'Cash counted USD 47000.00 against USD 50000.00 expected.',
     },
   ],
   narrative: 'Cash-close check for 2026-10-30 (closed). 1 item to review, 1 urgent:',
@@ -57,8 +58,7 @@ function execute(role = 'ADMIN', enabledModules = ['pharmacy-reports']) {
     } as never)
   );
   return tools.askPharmacyCashCloseCheck?.execute as
-    | ((input: unknown) => Promise<Record<string, unknown>>)
-    | undefined;
+    ((input: unknown) => Promise<Record<string, unknown>>) | undefined;
 }
 
 const input = { branch: 'Main Pharmacy', businessDate: '2026-10-30' };
@@ -85,6 +85,8 @@ describe('Ask Fathom cash-close anomaly check (#728)', () => {
       closed: true,
       policyVersion: 'CC01-2026-11-01',
       moneyUnit: 'integer_minor',
+      // #487: the organization's currency, never a hard-coded PKR.
+      currency: 'USD',
       narrative: check.narrative,
       findings: [
         {

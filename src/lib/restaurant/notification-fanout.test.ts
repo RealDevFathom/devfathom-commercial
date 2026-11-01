@@ -118,6 +118,7 @@ describe('notification request outbox', () => {
           attempts: 1,
           maxAttempts: 5,
           claimedBy: 'worker_1',
+          claimToken: 'notification-fanout-test-claim',
           startedAt: new Date(),
         },
       })

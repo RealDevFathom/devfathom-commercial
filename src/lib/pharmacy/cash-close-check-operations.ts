@@ -29,7 +29,7 @@ export async function readPharmacyCashCloseCheck(
   if (!branch) throw new TRPCError({ code: 'NOT_FOUND', message: 'Pharmacy branch not found.' });
   const organization = await db.organization.findUnique({
     where: { id: scope.organizationId },
-    select: { timezone: true },
+    select: { timezone: true, currency: true },
   });
   const timezone = workspaceTimezone(organization?.timezone);
   const day = businessDate.toISOString().slice(0, 10);
@@ -102,6 +102,9 @@ export async function readPharmacyCashCloseCheck(
   });
   const check = checkPharmacyCashClose({
     businessDate: day,
+    // #487: amounts are stated in the organization's currency, never a fixed PKR;
+    // the fallback mirrors the day-close console's `counterBranches` reader.
+    currency: organization?.currency ?? 'PKR',
     close: close
       ? {
           id: close.id,
@@ -112,6 +115,9 @@ export async function readPharmacyCashCloseCheck(
           varianceNote: close.reason,
         }
       : null,
+    // Goods gross from line totals (quantity × price − discount). Service charge and
+    // tax are not included, so against a Z-report gross that carries them the refund
+    // rate can read slightly high — conservative for a review prompt, never understated.
     grossSalesMinor: sales.reduce((sum, sale) => sum + saleTotalMinor(sale.lines), 0),
     completedSales: sales.length,
     drawers: drawers.map((drawer) => ({

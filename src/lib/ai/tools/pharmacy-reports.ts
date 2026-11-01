@@ -598,6 +598,13 @@ const cashCloseCheckInput = z
  * #728 — owner-only AI narrative over the cash-close anomaly rules. The model
  * narrates the returned rule findings; it never decides them. Read-only: no day
  * lock, no signal, posting, reopen, notification or provider call.
+ *
+ * Licensing is deliberate, not incidental: like every Ask Fathom pharmacy report
+ * tool this one is gated by the `pharmacy-reports` module, while the day-close
+ * panel (`pharmacySales.closeAnomalyCheck`) sits on the counter close screen and
+ * is gated by `pharmacy-counter` with the rest of that router. A tenant licensed
+ * for only one of the two sees the check only on that surface; both enforce the
+ * same owner-only and `reports:financial` rules over the same reader.
  */
 function cashCloseCheckTool(h: AssistantHelpers) {
   return tool({
@@ -649,7 +656,7 @@ function cashCloseCheckTool(h: AssistantHelpers) {
           closed: check.closed,
           policyVersion: check.policyVersion,
           moneyUnit: 'integer_minor' as const,
-          currency: 'PKR',
+          currency: check.currency,
           totals: check.totals,
           findings: check.findings.map((finding) => ({
             kind: finding.kind,

@@ -73,6 +73,21 @@ describe('cash-close anomaly check (#728)', () => {
       }),
     ]);
     expect(review.findings[0].explanation).toContain('short PKR 1000.00');
+    // #487: the organization's currency, never a hard-coded PKR.
+    const inUsd = checkPharmacyCashClose({
+      ...facts({
+        close: {
+          ...facts().close!,
+          cashCountedMinor: 4_900_000,
+          cashVarianceMinor: -100_000,
+          varianceNote: 'Short',
+        },
+      }),
+      currency: 'USD',
+    });
+    expect(inUsd.currency).toBe('USD');
+    expect(inUsd.findings[0].explanation).toContain('short USD 1000.00');
+    expect(`${inUsd.narrative} ${inUsd.findings[0].explanation}`).not.toContain('PKR');
     const urgent = checkPharmacyCashClose(
       facts({
         close: {
@@ -184,9 +199,9 @@ describe('cash-close anomaly check (#728)', () => {
         valueMinor: 1_000,
       }));
     expect(kinds(facts({ voids: voids(3), completedSales: 100 }))).not.toContain('VOID_VOLUME');
-    expect(
-      checkPharmacyCashClose(facts({ voids: voids(3), completedSales: 20 })).findings
-    ).toEqual([expect.objectContaining({ kind: 'VOID_VOLUME', severity: 'REVIEW' })]);
+    expect(checkPharmacyCashClose(facts({ voids: voids(3), completedSales: 20 })).findings).toEqual(
+      [expect.objectContaining({ kind: 'VOID_VOLUME', severity: 'REVIEW' })]
+    );
     expect(
       checkPharmacyCashClose(facts({ voids: voids(10), completedSales: 1_000 })).findings[0]
     ).toMatchObject({ kind: 'VOID_VOLUME', severity: 'URGENT' });

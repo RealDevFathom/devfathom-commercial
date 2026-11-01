@@ -90,10 +90,18 @@ async function receiptFacts(
     issuedAt: `${receipt.settledAt!.toISOString()} / Business date ${receipt.businessDate}`,
     orderNumber: String(receipt.orderNumber),
     channel: receipt.channel,
-    lines: receipt.lines.map((line) => {
-      const amounts = saved.lines.find((row) => row.id === line.id)!;
-      return `${line.quantity} x ${line.name} @ ${line.unitPrice}\nLine subtotal ${line.lineSubtotal} / Comp ${line.compAmount} / Line total ${line.lineTotal}\nLine tax ${amounts.taxAmount.toFixed(2)} / Line service ${amounts.serviceChargeAmount.toFixed(2)}`;
-    }),
+    lines:
+      receipt.splitKind === 'FRACTIONAL' &&
+      receipt.fractionNumerator !== null &&
+      receipt.fractionDenominator !== null &&
+      receipt.lines.length === 0
+        ? [
+            `Fractional share ${receipt.fractionNumerator}/${receipt.fractionDenominator}: ${receipt.totals.grandTotal}`,
+          ]
+        : receipt.lines.map((line) => {
+            const amounts = saved.lines.find((row) => row.id === line.id)!;
+            return `${line.quantity} x ${line.name} @ ${line.unitPrice}\nLine subtotal ${line.lineSubtotal} / Comp ${line.compAmount} / Line total ${line.lineTotal}\nLine tax ${amounts.taxAmount.toFixed(2)} / Line service ${amounts.serviceChargeAmount.toFixed(2)}`;
+          }),
     taxLines: [
       `Tax ${receipt.totals.taxTotal}`,
       ...saved.taxTransactionSnapshots.flatMap((tax) => [

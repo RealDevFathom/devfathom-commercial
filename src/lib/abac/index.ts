@@ -45,11 +45,18 @@ async function customDecision(
     },
   });
   if (!user) return { decision: false, hasOrganizationRole: false };
+  // Prescription capture is narrower than dispensing. Existing pharmacist
+  // grants remain authoritative for it, including DENYs, without granting
+  // tenant administrators the wider dispensing capability.
+  const matchingActions =
+    action === 'pharmacy:prescriptions' ? [action, 'pharmacy:dispense'] : [action];
   const matchingRules = [
     ...user.permissionOverrides,
     ...(user.organizationRole?.permissions ?? []),
   ].filter((rule) =>
-    capabilityMatches(rule.capability, action, rule.effect === 'DENY' ? 'DENY' : 'ALLOW')
+    matchingActions.some((candidate) =>
+      capabilityMatches(rule.capability, candidate, rule.effect === 'DENY' ? 'DENY' : 'ALLOW')
+    )
   );
   const hasOrganizationRole = user.organizationRole !== null;
   if (matchingRules.some((rule) => rule.effect === 'DENY')) {
@@ -87,7 +94,7 @@ export async function can(
     // fall through to the coarse ADMIN policy.
     if (action === 'pharmacy:procurement' && hasOrganizationRole) return false;
   } catch (err) {
-    console.error(`[abac] custom permission lookup for "${action}" threw:`, err);
+    console.error('[abac] custom permission lookup for "%s" threw:', action, err);
     return false;
   }
   for (const policy of POLICIES[action] ?? []) {
@@ -95,7 +102,7 @@ export async function can(
       if (await policy({ subject, resource, env, db })) return true;
     } catch (err) {
       // A policy that throws denies (fail-closed) but never crashes the request.
-      console.error(`[abac] policy for "${action}" threw:`, err);
+      console.error('[abac] policy for "%s" threw:', action, err);
     }
   }
   return false;

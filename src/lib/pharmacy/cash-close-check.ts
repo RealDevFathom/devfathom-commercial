@@ -28,6 +28,12 @@ export type CashCloseFindingKind =
 
 export type CashCloseFacts = {
   businessDate: string;
+  /**
+   * The organization's ISO currency code every amount is in (#487: never a
+   * hard-coded PKR). The reader always supplies it; the PKR fallback only keeps
+   * pure-rule callers that omit it on the day-close console's own fallback.
+   */
+  currency?: string;
   /** The latest Z report for the day, or null when the day is still open. */
   close: {
     id: string;
@@ -70,6 +76,8 @@ export type CashCloseFinding = {
 export type CashCloseCheck = {
   policyVersion: string;
   businessDate: string;
+  /** The currency code every amount and explanation is stated in. */
+  currency: string;
   closed: boolean;
   closeId: string | null;
   readOnly: true;
@@ -93,12 +101,15 @@ const abs = (value: number) => Math.abs(value);
 const rateBps = (part: number, total: number) =>
   total <= 0 ? 0 : Math.round((abs(part) * 10_000) / abs(total));
 const pct = (bps: number) => `${(bps / 100).toFixed(2)}%`;
-export const formatCloseMoney = (minor: number) =>
-  `${minor < 0 ? '-' : ''}PKR ${(abs(minor) / 100).toFixed(2)}`;
-const signed = (minor: number) =>
-  minor === 0
-    ? formatCloseMoney(0)
-    : `${minor > 0 ? 'over' : 'short'} ${formatCloseMoney(abs(minor))}`;
+export const formatCloseMoney = (minor: number, currency = 'PKR') =>
+  `${minor < 0 ? '-' : ''}${currency} ${(abs(minor) / 100).toFixed(2)}`;
+/** Binds the money formatters to one organization currency. */
+function moneyIn(currency: string) {
+  const money = (minor: number) => formatCloseMoney(minor, currency);
+  const signed = (minor: number) =>
+    minor === 0 ? money(0) : `${minor > 0 ? 'over' : 'short'} ${money(abs(minor))}`;
+  return { money, signed };
+}
 
 function materiality(expectedMinor: number, policy = CASH_CLOSE_CHECK_POLICY) {
   return Math.max(
@@ -115,6 +126,8 @@ export function checkPharmacyCashClose(
   policy = CASH_CLOSE_CHECK_POLICY
 ): CashCloseCheck {
   const findings: CashCloseFinding[] = [];
+  const currency = facts.currency ?? 'PKR';
+  const { money, signed } = moneyIn(currency);
   const name = (actorId: string) => facts.actorNames?.[actorId] ?? 'a team member';
 
   const counted = facts.drawers.filter((drawer) => drawer.countedMinor !== null);
@@ -146,7 +159,7 @@ export function checkPharmacyCashClose(
           varianceRateBps: rateBps(cashVarianceMinor, cashExpectedMinor),
           materialityMinor: floor,
         },
-        explanation: `Cash counted ${formatCloseMoney(cashCountedMinor)} against ${formatCloseMoney(cashExpectedMinor)} expected — ${signed(cashVarianceMinor)} (${pct(rateBps(cashVarianceMinor, cashExpectedMinor))}), at or above the ${formatCloseMoney(floor)} review floor.`,
+        explanation: `Cash counted ${money(cashCountedMinor)} against ${money(cashExpectedMinor)} expected — ${signed(cashVarianceMinor)} (${pct(rateBps(cashVarianceMinor, cashExpectedMinor))}), at or above the ${money(floor)} review floor.`,
       });
     }
   }
@@ -167,7 +180,7 @@ export function checkPharmacyCashClose(
         varianceMinor: variance,
         materialityMinor: floor,
       },
-      explanation: `Drawer ${drawer.label} was ${signed(variance)} (${formatCloseMoney(drawer.countedMinor ?? 0)} counted, ${formatCloseMoney(drawer.expectedMinor)} expected).`,
+      explanation: `Drawer ${drawer.label} was ${signed(variance)} (${money(drawer.countedMinor ?? 0)} counted, ${money(drawer.expectedMinor)} expected).`,
     });
   }
 
@@ -205,8 +218,8 @@ export function checkPharmacyCashClose(
       },
       explanation:
         facts.grossSalesMinor <= 0
-          ? `${facts.refunds.length} refunds totalling ${formatCloseMoney(refundTotalMinor)} were paid on a day with no completed sales.`
-          : `${facts.refunds.length} refunds totalling ${formatCloseMoney(refundTotalMinor)} are ${pct(refundRateBps)} of ${formatCloseMoney(facts.grossSalesMinor)} gross sales, at or above the ${pct(policy.refundRate.minimumRateBps)} review threshold.`,
+          ? `${facts.refunds.length} refunds totalling ${money(refundTotalMinor)} were paid on a day with no completed sales.`
+          : `${facts.refunds.length} refunds totalling ${money(refundTotalMinor)} are ${pct(refundRateBps)} of ${money(facts.grossSalesMinor)} gross sales, at or above the ${pct(policy.refundRate.minimumRateBps)} review threshold.`,
     });
   }
 
@@ -223,7 +236,7 @@ export function checkPharmacyCashClose(
         unmatchedAmountMinor: amount,
         thresholdRefunds: policy.unmatchedRefunds.minimum,
       },
-      explanation: `${unmatched.length} refunds totalling ${formatCloseMoney(amount)} have no matching stock-return record.`,
+      explanation: `${unmatched.length} refunds totalling ${money(amount)} have no matching stock-return record.`,
     });
   }
 
@@ -232,8 +245,7 @@ export function checkPharmacyCashClose(
   const voidRateBps = rateBps(facts.voids.length, facts.voids.length + facts.completedSales);
   if (
     facts.voids.length >= policy.voids.absoluteCount ||
-    (facts.voids.length >= policy.voids.minimumCount &&
-      voidRateBps >= policy.voids.minimumRateBps)
+    (facts.voids.length >= policy.voids.minimumCount && voidRateBps >= policy.voids.minimumRateBps)
   ) {
     findings.push({
       kind: 'VOID_VOLUME',
@@ -251,7 +263,7 @@ export function checkPharmacyCashClose(
         thresholdCount: policy.voids.minimumCount,
         thresholdRateBps: policy.voids.minimumRateBps,
       },
-      explanation: `${facts.voids.length} sales worth ${formatCloseMoney(voidValueMinor)} were voided against ${facts.completedSales} completed (${pct(voidRateBps)} of sale attempts).`,
+      explanation: `${facts.voids.length} sales worth ${money(voidValueMinor)} were voided against ${facts.completedSales} completed (${pct(voidRateBps)} of sale attempts).`,
     });
   }
 
@@ -304,12 +316,19 @@ export function checkPharmacyCashClose(
   return {
     policyVersion: policy.version,
     businessDate: facts.businessDate,
+    currency,
     closed: Boolean(facts.close),
     closeId: facts.close?.id ?? null,
     readOnly: true,
     totals,
     findings,
-    narrative: narrateCashCloseCheck(facts.businessDate, Boolean(facts.close), totals, findings),
+    narrative: narrateCashCloseCheck(
+      facts.businessDate,
+      Boolean(facts.close),
+      totals,
+      findings,
+      currency
+    ),
   };
 }
 
@@ -322,14 +341,16 @@ export function narrateCashCloseCheck(
   businessDate: string,
   closed: boolean,
   totals: CashCloseCheck['totals'],
-  findings: CashCloseFinding[]
+  findings: CashCloseFinding[],
+  currency = 'PKR'
 ): string {
+  const { money, signed } = moneyIn(currency);
   const status = closed ? 'closed' : 'still open (preview figures)';
   const cash =
     totals.cashVarianceMinor === null || totals.cashCountedMinor === null
-      ? `Expected drawer cash is ${formatCloseMoney(totals.cashExpectedMinor)}; not every drawer has been counted yet.`
-      : `Cash counted ${formatCloseMoney(totals.cashCountedMinor)} against ${formatCloseMoney(totals.cashExpectedMinor)} expected (${signed(totals.cashVarianceMinor)}).`;
-  const activity = `Gross sales ${formatCloseMoney(totals.grossSalesMinor)} across ${totals.completedSales} sales; ${totals.refundCount} refunds (${formatCloseMoney(totals.refundTotalMinor)}); ${totals.voidCount} voids (${formatCloseMoney(totals.voidValueMinor)}).`;
+      ? `Expected drawer cash is ${money(totals.cashExpectedMinor)}; not every drawer has been counted yet.`
+      : `Cash counted ${money(totals.cashCountedMinor)} against ${money(totals.cashExpectedMinor)} expected (${signed(totals.cashVarianceMinor)}).`;
+  const activity = `Gross sales ${money(totals.grossSalesMinor)} across ${totals.completedSales} sales; ${totals.refundCount} refunds (${money(totals.refundTotalMinor)}); ${totals.voidCount} voids (${money(totals.voidValueMinor)}).`;
   const head = `Cash-close check for ${businessDate} (${status}). ${cash} ${activity}`;
   if (!findings.length)
     return `${head} No rule flagged this close. This check is read-only and changes nothing.`;

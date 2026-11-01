@@ -74,7 +74,9 @@ function fixture() {
         },
       ]),
     },
-    organization: { findUnique: vi.fn().mockResolvedValue({ timezone: 'Asia/Karachi' }) },
+    organization: {
+      findUnique: vi.fn().mockResolvedValue({ timezone: 'Asia/Karachi', currency: 'USD' }),
+    },
     user: {
       findMany: vi.fn().mockResolvedValue([
         { id: 'user_1', name: 'Ayesha' },
@@ -113,6 +115,8 @@ describe('readPharmacyCashCloseCheck (#728)', () => {
     expect(check).toMatchObject({
       branchName: 'Main',
       timezone: 'Asia/Karachi',
+      // #487: amounts are stated in the organization's currency.
+      currency: 'USD',
       businessDate: '2026-10-30',
       closed: true,
       closeId: 'close_1',
@@ -136,6 +140,9 @@ describe('readPharmacyCashCloseCheck (#728)', () => {
       'ACTOR_CONCENTRATION',
     ]);
     expect(check.narrative).toContain('Cash-close check for 2026-10-30 (closed)');
+    expect(check.narrative).toContain('USD 47000.00');
+    expect(check.narrative).not.toContain('PKR');
+    expect(check.findings.map((finding) => finding.explanation).join(' ')).not.toContain('PKR');
   });
 
   it('is read-only: no day lock, no write of any kind', async () => {

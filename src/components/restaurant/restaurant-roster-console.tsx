@@ -368,10 +368,15 @@ export function RestaurantRosterConsole() {
     event.preventDefault();
     if (!correcting) return;
     const data = new FormData(event.currentTarget);
+    const [kind, breakId] = formText(data, 'kind').split(':') as [
+      'CLOCK_IN' | 'CLOCK_OUT' | 'BREAK_START' | 'BREAK_END',
+      string | undefined,
+    ];
     correctTimeMutation.mutate({
       shiftId: correcting.id,
       branchId: correcting.branchId,
-      kind: formText(data, 'kind') as 'CLOCK_IN' | 'CLOCK_OUT',
+      kind,
+      breakId,
       correctedAt: branchInputToDate(formText(data, 'correctedAt'), branchTimezone),
       reason: formText(data, 'reason'),
     });
@@ -463,10 +468,16 @@ export function RestaurantRosterConsole() {
                       </div>
                       <StatusPill
                         status={shift.attendanceStatus.replaceAll('_', ' ')}
-                        tone={shift.attendanceStatus === 'LATE' ? 'warning' : 'neutral'}
+                        tone={
+                          shift.attendanceStatus === 'LATE' ||
+                          shift.attendanceStatus === 'COMPLETE_LATE'
+                            ? 'warning'
+                            : 'neutral'
+                        }
                       />
                     </div>
-                    {shift.attendanceStatus === 'LATE' ? (
+                    {shift.attendanceStatus === 'LATE' ||
+                    shift.attendanceStatus === 'COMPLETE_LATE' ? (
                       <p className="mt-2 text-xs text-text-muted">
                         {shift.lateMinutes} minutes after the {shift.lateThresholdMinutes}-minute
                         attendance threshold.
@@ -734,6 +745,7 @@ export function RestaurantRosterConsole() {
                             cancelled
                               ? 'danger'
                               : shift.attendanceStatus === 'LATE' ||
+                                  shift.attendanceStatus === 'COMPLETE_LATE' ||
                                   shift.attendanceStatus === 'ABSENT'
                                 ? 'warning'
                                 : 'success'
@@ -809,7 +821,7 @@ export function RestaurantRosterConsole() {
                             <Button
                               variant="outline"
                               size="sm"
-                              disabled={cancelled || (!shift.clockedInAt && !shift.clockedOutAt)}
+                              disabled={cancelled}
                               onClick={() => setCorrecting(shift)}
                             >
                               Correct time
@@ -951,8 +963,9 @@ export function RestaurantRosterConsole() {
           <DialogHeader>
             <DialogTitle>Append a time correction</DialogTitle>
             <DialogDescription>
-              The original server timestamp remains unchanged. This adds a reasoned adjustment to
-              the permanent workforce history. Enter the correction in {branchTimezone}.
+              Existing server timestamps remain unchanged. A missing punch is recorded as absent,
+              and this reasoned adjustment is added to the permanent workforce history. Enter the
+              correction in {branchTimezone}.
             </DialogDescription>
           </DialogHeader>
           <form className="space-y-4" onSubmit={submitCorrection}>
@@ -964,8 +977,22 @@ export function RestaurantRosterConsole() {
             <label className="space-y-1.5">
               <span className={labelClass}>Timestamp</span>
               <select name="kind" className={selectClass} required>
-                {correcting?.clockedInAt ? <option value="CLOCK_IN">Clock in</option> : null}
-                {correcting?.clockedOutAt ? <option value="CLOCK_OUT">Clock out</option> : null}
+                <option value="CLOCK_IN">
+                  {correcting?.clockedInAt ? 'Correct clock in' : 'Add missing clock in'}
+                </option>
+                <option value="CLOCK_OUT">
+                  {correcting?.clockedOutAt ? 'Correct clock out' : 'Add missing clock out'}
+                </option>
+                {correcting?.breaks.flatMap((item, index) => [
+                  <option key={`${item.id}-start`} value={`BREAK_START:${item.id}`}>
+                    Correct break {index + 1} start
+                  </option>,
+                  <option key={`${item.id}-end`} value={`BREAK_END:${item.id}`}>
+                    {item.endedAt
+                      ? `Correct break ${index + 1} end`
+                      : `Add missing break ${index + 1} end`}
+                  </option>,
+                ])}
               </select>
             </label>
             <label className="space-y-1.5">

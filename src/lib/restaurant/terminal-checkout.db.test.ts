@@ -1,6 +1,7 @@
 /**
  * M5-L5 — the route-level named checks that only a database can establish, driving the
- * ACTUAL checkout + cash REST handlers exactly as an HTTP request would:
+ * checkout + cash REST handlers exactly as an HTTP request would. The public comp
+ * endpoint is denial-only in MVP; retained comp domain checks use a test-only adapter:
  *
  *  - a HAPPY PATH per route: bill cut / split / re-cut, comp, tender, refund, the
  *    settlement summary + settled-bill receipt reads, drawer open / movement / close,
@@ -279,6 +280,7 @@ beforeAll(async () => {
     import('@/app/api/restaurant/terminal/establish/route'),
     import('@/app/api/restaurant/terminal/unlock/route'),
     import('@/app/api/restaurant/orders/close/route'),
+    import('@/lib/test-support/retained-comp-route'),
   ]);
 
   const [
@@ -299,6 +301,7 @@ beforeAll(async () => {
     establish,
     unlock,
     orderClose,
+    retainedComp,
   ] = routeMods as RouteModule[];
 
   deps = {
@@ -310,6 +313,7 @@ beforeAll(async () => {
     routes: {
       bill,
       comp,
+      retainedComp,
       tender,
       refund,
       summary,
@@ -733,7 +737,63 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
       expect(after).toEqual(before);
     });
 
-    it('comps a bill line with manager co-authorization (orders:complimentary)', async () => {
+    it.each(['manager', 'job-role approver', 'invalid PIN'])(
+      'denies the public MVP comp endpoint with a %s and leaves persistence unchanged',
+      async (approval) => {
+        const { orderId } = await seedOrder(ctx.branchA, ctx.posA.deviceId, TODAY, ['8.00']);
+        const cut = await call(deps.routes.bill, {
+          secret: ctx.posA.secret,
+          session: token,
+          key: uniqueKey('mvp-comp-cut'),
+          body: { orderId, split: { kind: 'NONE' } },
+        });
+        expect(cut.status).toBe(200);
+        const billId = (cut.json.billIds as string[])[0]!;
+        const snapshot = async () => ({
+          counts: await moneyCounts(),
+          ...(await deps.withTenantDb(orgA, async (tx) => ({
+            bill: await tx.restaurantBill.findUniqueOrThrow({ where: { id: billId } }),
+            lines: await tx.restaurantBillLine.findMany({
+              where: { billId },
+              orderBy: { id: 'asc' },
+            }),
+            device: await tx.restaurantRegisteredDevice.findUniqueOrThrow({
+              where: { id: ctx.posA.deviceId },
+            }),
+            credentials: await tx.restaurantOperatorCredential.findMany({ orderBy: { id: 'asc' } }),
+          }))),
+        });
+        const before = await snapshot();
+        const key = uniqueKey('mvp-comp');
+        const body = {
+          billId,
+          billLineId: before.lines[0]!.id,
+          reason: 'kitchen error',
+          approving: {
+            staffProfileId: approval === 'job-role approver' ? ctx.floorApprover : ctx.managerA,
+            type: 'PIN',
+            secret: approval === 'invalid PIN' ? '000000' : PIN,
+          },
+        };
+
+        // A retry with the same key must also deny without consuming it or authenticating.
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          const denied = await call(deps.routes.comp, {
+            secret: ctx.posA.secret,
+            session: token,
+            key,
+            body,
+          });
+          expect(denied).toEqual({
+            status: 403,
+            json: { error: 'Complimentary items are not available in this version.' },
+          });
+          expect(await snapshot()).toEqual(before);
+        }
+      }
+    );
+
+    it('retains domain comp and manager co-authorization coverage through the test adapter', async () => {
       const { orderId } = await seedOrder(ctx.branchA, ctx.posA.deviceId, TODAY, ['8.00']);
       const cut = await call(deps.routes.bill, {
         secret: ctx.posA.secret,
@@ -746,7 +806,7 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
         tx.restaurantBillLine.findFirst({ where: { billId }, select: { id: true } })
       );
 
-      const res = await call(deps.routes.comp, {
+      const res = await call(deps.routes.retainedComp, {
         secret: ctx.posA.secret,
         session: token,
         key: uniqueKey('comp'),
@@ -1119,7 +1179,7 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
         reason: 'same branch regression',
         approving: { staffProfileId: ctx.managerA, type: 'PIN' as const, secret: PIN },
       };
-      const sameBranchComp = await call(deps.routes.comp, {
+      const sameBranchComp = await call(deps.routes.retainedComp, {
         secret: ctx.posB.secret,
         session: tokenB,
         key: branchBCompKey,
@@ -1134,7 +1194,7 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
         body: { orderId: branchBOrder.orderId, split: { kind: 'NONE' } },
       });
       expect(sameBranchCutReplay.json).toEqual({ ...branchBCut.json, replayed: true });
-      const sameBranchCompReplay = await call(deps.routes.comp, {
+      const sameBranchCompReplay = await call(deps.routes.retainedComp, {
         secret: ctx.posB.secret,
         session: tokenB,
         key: branchBCompKey,
@@ -1187,7 +1247,7 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
         );
       const beforePin = await pinState();
       for (const billId of [branchBBillId, `missing_bill_${suffix}`]) {
-        const deniedComp = await call(deps.routes.comp, {
+        const deniedComp = await call(deps.routes.retainedComp, {
           secret: ctx.posA.secret,
           session: tokenA,
           key: uniqueKey('wha977-cross-branch-comp'),
@@ -1219,7 +1279,7 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
         status: 404,
         json: { error: 'The order does not exist.' },
       });
-      const deniedCompReplay = await call(deps.routes.comp, {
+      const deniedCompReplay = await call(deps.routes.retainedComp, {
         secret: ctx.posB.secret,
         session: tokenB,
         key: branchBCompKey,
@@ -1624,7 +1684,7 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
       [
         { r: 'bill', body: { orderId: 'o', split: { kind: 'NONE' } } },
         {
-          r: 'comp',
+          r: 'retainedComp',
           body: {
             billId: 'b',
             billLineId: 'l',
@@ -1706,7 +1766,7 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
       const mutations: { r: string; body: unknown }[] = [
         { r: 'bill', body: { orderId: 'o', split: { kind: 'NONE' } } },
         {
-          r: 'comp',
+          r: 'retainedComp',
           body: {
             billId: 'b',
             billLineId: 'l',
@@ -1775,7 +1835,7 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
       );
 
       // staffNoCap holds a valid credential but only `menu:read` — not `coauth:approve`.
-      const res = await call(deps.routes.comp, {
+      const res = await call(deps.routes.retainedComp, {
         secret: ctx.posA.secret,
         session: token,
         key: uniqueKey('compco'),
@@ -1835,7 +1895,7 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
       expect(coAuth?.actingStaffProfileId).toBe(ctx.staffA);
     });
 
-    it('lets the same PIN-only approver authorize a comp', async () => {
+    it('lets the same PIN-only approver authorize a retained domain comp through the test adapter', async () => {
       const token = await establishUnlock(ctx.posA.secret);
       const { orderId } = await seedOrder(ctx.branchA, ctx.posA.deviceId, TODAY, ['8.00']);
       const cut = await call(deps.routes.bill, {
@@ -1849,7 +1909,7 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
         tx.restaurantBillLine.findFirst({ where: { billId }, select: { id: true } })
       );
 
-      const res = await call(deps.routes.comp, {
+      const res = await call(deps.routes.retainedComp, {
         secret: ctx.posA.secret,
         session: token,
         key: uniqueKey('qa145-comp'),

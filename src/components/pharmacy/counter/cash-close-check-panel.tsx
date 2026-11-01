@@ -24,6 +24,17 @@ export function CashCloseCheckPanel({ branchId, date }: { branchId: string; date
         <p role="status">Checking close variance, refunds and voids…</p>
       </SectionCard>
     );
+  // A refusal (owner explicitly denied `reports:financial`, or not the owner) is
+  // permanent: say so instead of offering a retry that can never succeed.
+  if (check.error?.data?.code === 'FORBIDDEN')
+    return (
+      <SectionCard title="Cash-close check" titleLevel={2}>
+        <p role="status">
+          You don&apos;t have permission to view the cash-close check. The close itself is
+          unaffected.
+        </p>
+      </SectionCard>
+    );
   if (check.error || !check.data)
     return (
       <SectionCard title="Cash-close check" titleLevel={2}>

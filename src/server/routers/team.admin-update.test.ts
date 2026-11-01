@@ -57,11 +57,15 @@ const storedUser = {
 };
 
 function caller() {
+  const db = {
+    user: { findUnique: mocks.findUnique, update: mocks.update, count: mocks.count },
+    organizationDepartment: { findFirst: mocks.departmentFindFirst },
+    $queryRaw: vi.fn(async () => [{ id: 'org_test' }]),
+    // adminUpdateMember runs its read/check/write inside an interactive transaction.
+    $transaction: (run: (tx: unknown) => Promise<unknown>) => run(db),
+  };
   return router({ team: teamRouter }).createCaller({
-    db: {
-      user: { findUnique: mocks.findUnique, update: mocks.update, count: mocks.count },
-      organizationDepartment: { findFirst: mocks.departmentFindFirst },
-    },
+    db,
     entitlements: { enabledModules: ['hr'], modules: [], activeSeats: 2, seatLimit: 50 },
     session: {
       expires: 'later',

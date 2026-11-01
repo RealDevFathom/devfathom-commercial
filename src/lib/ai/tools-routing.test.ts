@@ -134,7 +134,7 @@ describe('assistant tool routing', () => {
     });
     const result = await tools.askPharmacyReports.execute!(
       { metricKeys: ['unsupported'] },
-      { toolCallId: 'test', messages: [] }
+      { toolCallId: 'test', messages: [], context: {} }
     );
     expect(result).toMatchObject({ kind: 'refusal' });
   });
@@ -151,7 +151,7 @@ describe('assistant tool routing', () => {
     });
     const result = await tools.askPharmacyReports.execute!(
       { metricKeys: ['unsupported'] },
-      { toolCallId: 'test', messages: [] }
+      { toolCallId: 'test', messages: [], context: {} }
     );
     expect(result).toEqual({ error: 'This action is currently unavailable. Please try again.' });
     expect(log.mock.calls).toEqual([['ASSISTANT_TOOL_EXECUTION_FAILED']]);
@@ -221,7 +221,7 @@ describe('assistant tool routing', () => {
   );
 
   it('retains role and permission denials in both real report executions', async () => {
-    const options = { toolCallId: 'test', messages: [] };
+    const options = { toolCallId: 'test', messages: [], context: {} };
     const pharmacy = buildAssistantTools(
       { ...ctx, vertical: 'PHARMACY', enabledModules: ['pharmacy-reports'] },
       { hint: 'margin retention' }

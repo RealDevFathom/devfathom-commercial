@@ -32,7 +32,12 @@ import type { OperatorSwitch } from './operator-switch';
 import type { Input } from '@/components/ui/input';
 import type { StatusPill } from '@/components/ui/status-pill';
 import type { RefundPanel } from './refund-panel';
-import type { OrderTicketPanel, OrderDetail, VoidItemInput } from './order-ticket-panel';
+import {
+  canCloseDeliveredOrder,
+  type OrderTicketPanel,
+  type OrderDetail,
+  type VoidItemInput,
+} from './order-ticket-panel';
 import { type OrderChannel } from '@/lib/restaurant/order-channels';
 import {
   createIndexedDbDriver,
@@ -170,6 +175,7 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
   const [draftLines, setDraftLines] = useState<LocalDraftLine[]>([]);
   const [checkoutOrderId, setCheckoutOrderId] = useState<string | null>(null);
   const stateEpoch = useRef(0);
+  const closeInFlight = useRef(false);
   const deliveryCustomerBoundary = useRef<DeliveryCustomer | null>(null);
   const offlineRuntime = useRef<PosOfflineRuntime | null>(null);
   const [queue, setQueue] = useState<PosQueueSnapshot | null>(null);
@@ -733,7 +739,19 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
 
   async function closeForPayment() {
     const activeOrder = order;
-    if (!activeOrder || pending) return;
+    if (!activeOrder || pending || closeInFlight.current) return;
+    const finalizingDeliveredOrder = canCloseDeliveredOrder(activeOrder);
+    if (finalizingDeliveredOrder) {
+      closeInFlight.current = true;
+      try {
+        if (await mutate('close', { orderId: activeOrder.id }, 'Order closed.', false)) {
+          startFreshDraft();
+        }
+      } finally {
+        closeInFlight.current = false;
+      }
+      return;
+    }
     if (activeOrder.status === 'PAYMENT_PENDING') {
       setCheckoutOrderId(activeOrder.id);
       return;

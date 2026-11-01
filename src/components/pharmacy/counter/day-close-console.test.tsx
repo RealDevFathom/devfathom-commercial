@@ -8,10 +8,13 @@ const mocks = vi.hoisted(() => ({
   close: null as Record<string, unknown> | null,
   mutate: vi.fn(),
   previewInput: vi.fn(),
+  printZReport: vi.fn(),
   /** The zone the workspace has stored. */
   zone: '',
   /** Findings the read-only cash-close check returns for a closed day. */
   checkFindings: [] as Array<{ kind: string; severity: string; explanation: string }>,
+  /** The error the cash-close check query returns, if any. */
+  checkError: null as { message: string; data?: { code: string } } | null,
 }));
 /**
  * The workspace's zone in these fixtures: neither Asia/Karachi (which the screen
@@ -41,7 +44,7 @@ vi.mock('@/lib/trpc', () => ({
     pharmacySales: {
       counterBranches: {
         useQuery: () => ({
-          data: { branches: mocks.branches, timezone: mocks.zone },
+          data: { branches: mocks.branches, currency: 'USD', timezone: mocks.zone },
           isSuccess: true,
         }),
       },
@@ -76,17 +79,22 @@ vi.mock('@/lib/trpc', () => ({
       closeAnomalyCheck: {
         useQuery: () => ({
           isLoading: false,
-          error: null,
+          error: mocks.checkError,
           refetch: vi.fn(),
-          data: {
-            policyVersion: 'CC01-2026-11-01',
-            narrative: 'Cash-close check for 2026-09-29 (closed). No rule flagged this close.',
-            findings: mocks.checkFindings,
-          },
+          data: mocks.checkError
+            ? undefined
+            : {
+                policyVersion: 'CC01-2026-11-01',
+                narrative: 'Cash-close check for 2026-09-29 (closed). No rule flagged this close.',
+                findings: mocks.checkFindings,
+              },
         }),
       },
     },
   },
+}));
+vi.mock('@/lib/pharmacy/counter-browser-print', () => ({
+  printCounterBrowserZReport: mocks.printZReport,
 }));
 import { workspaceToday } from '@/lib/timezone';
 import { cashMinor, drawerOpenedLabel, PharmacyDayCloseConsole } from './day-close-console';
@@ -102,10 +110,53 @@ beforeEach(() => {
   mocks.error = null;
   mocks.close = null;
   mocks.checkFindings = [];
+  mocks.checkError = null;
   mocks.mutate.mockReset();
   mocks.previewInput.mockReset();
+  mocks.printZReport.mockReset();
 });
 describe('day-close console', () => {
+  it('uses the organization currency throughout reconciliation', () => {
+    render(<PharmacyDayCloseConsole />);
+
+    expect(screen.getByText('Pharmacy · USD')).toBeInTheDocument();
+    expect(screen.getByText('Expected cash · USD')).toBeInTheDocument();
+    expect(screen.getByText('Counted cash · USD')).toBeInTheDocument();
+    expect(screen.getByText('Variance · USD')).toBeInTheDocument();
+    expect(screen.getByText('Expected: USD 125.00')).toBeInTheDocument();
+    expect(screen.getByLabelText('Counted cash for drawer 1 (USD)')).toBeInTheDocument();
+    expect(screen.queryByText(/PKR/)).not.toBeInTheDocument();
+  });
+
+  it('uses the organization currency in a recorded close and the printable Z-report', () => {
+    const recorded = {
+      id: 'c1',
+      sequence: 1,
+      supersedesCloseId: null,
+      reason: null,
+      grossSalesMinor: 10000,
+      refundTotalMinor: 0,
+      netSalesMinor: 10000,
+      cashExpectedMinor: 10000,
+      cashCountedMinor: 10000,
+      cashVarianceMinor: 0,
+      isFinal: true,
+    };
+    mocks.close = recorded;
+    render(<PharmacyDayCloseConsole />);
+
+    expect(screen.getByText('Pharmacy · USD')).toBeInTheDocument();
+    expect(screen.getByText('Expected cash · USD')).toBeInTheDocument();
+    expect(screen.getByText('Counted cash · USD')).toBeInTheDocument();
+    expect(screen.getByText('Variance · USD')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Print Z-report' }));
+    expect(mocks.printZReport).toHaveBeenCalledWith(
+      expect.objectContaining({ ...recorded, currency: 'USD' }),
+      'en'
+    );
+    expect(screen.queryByText(/PKR/)).not.toBeInTheDocument();
+  });
+
   it('parses exact cash minor units without rounding an invalid amount', () => {
     expect(cashMinor('125.01')).toBe(12501);
     expect(cashMinor('0')).toBe(0);
@@ -211,21 +262,21 @@ describe('day-close console', () => {
     render(<PharmacyDayCloseConsole />);
     const submit = screen.getByRole('button', { name: 'Close and lock day' });
     expect(submit).toBeDisabled();
-    fireEvent.change(screen.getByLabelText('Counted cash for drawer 1 (PKR)'), {
+    fireEvent.change(screen.getByLabelText('Counted cash for drawer 1 (USD)'), {
       target: { value: '124.00' },
     });
     expect(screen.getByTestId('Variance')).toHaveTextContent('-1.00');
     fireEvent.click(screen.getByRole('checkbox'));
     expect(submit).toBeDisabled();
     fireEvent.change(screen.getByLabelText(/Variance note/), {
-      target: { value: 'Short by one rupee' },
+      target: { value: 'Short by one dollar' },
     });
     expect(submit).toBeEnabled();
     fireEvent.click(submit);
     expect(mocks.mutate).toHaveBeenCalledWith(
       expect.objectContaining({
         counts: [{ drawerSessionId: 'd', countedCashMinor: 12400 }],
-        varianceNote: 'Short by one rupee',
+        varianceNote: 'Short by one dollar',
       })
     );
   });
@@ -245,7 +296,7 @@ describe('day-close console', () => {
       {
         kind: 'UNMATCHED_REFUNDS',
         severity: 'URGENT',
-        explanation: '4 refunds totalling PKR 900.00 have no matching stock-return record.',
+        explanation: '4 refunds totalling USD 900.00 have no matching stock-return record.',
       },
     ];
     view.rerender(<PharmacyDayCloseConsole />);
@@ -253,11 +304,31 @@ describe('day-close console', () => {
     expect(screen.getByText('1 to review')).toBeInTheDocument();
     expect(screen.getByText('Urgent')).toBeInTheDocument();
     expect(
-      screen.getByText('4 refunds totalling PKR 900.00 have no matching stock-return record.')
+      screen.getByText('4 refunds totalling USD 900.00 have no matching stock-return record.')
     ).toBeInTheDocument();
     expect(screen.getByText(/Nothing is posted, reopened or sent/)).toBeInTheDocument();
     // Read-only: the panel offers no action beyond the existing close controls.
     expect(screen.queryByRole('button', { name: /acknowledge|resolve|reopen/i })).toBeNull();
+  });
+  it('says a refused cash-close check is not permitted instead of offering a retry', () => {
+    mocks.close = {
+      cashExpectedMinor: 12500,
+      cashCountedMinor: 12500,
+      isFinal: true,
+      id: 'c1',
+      sequence: 1,
+      supersedesCloseId: null,
+      reason: null,
+    };
+    mocks.checkError = {
+      message: 'Financial reports permission required.',
+      data: { code: 'FORBIDDEN' },
+    };
+    render(<PharmacyDayCloseConsole />);
+    expect(
+      screen.getByText(/You don.t have permission to view the cash-close check/)
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retry check' })).toBeNull();
   });
   it('opens on the deep-linked branch and business day instead of today and the first branch', () => {
     mocks.branches = [
