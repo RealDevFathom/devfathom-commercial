@@ -39,6 +39,7 @@ function record() {
 }
 
 const platformDb = {
+  $queryRaw: vi.fn(async () => []),
   platformPackage: {
     findUnique: vi.fn(async () => ({
       id: 'pkg_1',
@@ -64,7 +65,7 @@ const platformDb = {
   },
   organizationRole: { create: vi.fn(async () => ({ id: 'role_admin' })) },
   organizationDepartment: { createMany: vi.fn(async () => ({ count: 6 })) },
-  user: { findFirst: mocks.userFindFirst, create: mocks.userCreate },
+  user: { count: vi.fn(async () => 0), findFirst: mocks.userFindFirst, create: mocks.userCreate },
   organizationModule: {
     createMany: mocks.moduleCreateMany,
     create: mocks.moduleCreate,

@@ -1,13 +1,13 @@
 import { TRPCError } from '@trpc/server';
-import { responseForPasswordChange } from '@/lib/auth/session-state';
+import { withApiRoute } from '@/lib/api-route';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { createTRPCContext } from '@/server/trpc';
 import { pharmacyPrescriptionsRouter } from '@/server/routers/pharmacy-prescriptions';
 
 export const runtime = 'nodejs';
 
-export async function GET(request: Request) {
-  try {
+export const GET = withApiRoute(
+  async (request: Request) => {
     const actor = await resolveTenantActor({ request });
     if (!actor?.session.user?.id) return new Response('Unauthorized', { status: 401 });
     const context = await createTRPCContext({
@@ -29,9 +29,8 @@ export async function GET(request: Request) {
         'Content-Security-Policy': "default-src 'none'; sandbox",
       },
     });
-  } catch (error) {
-    const passwordChange = responseForPasswordChange(error);
-    if (passwordChange) return passwordChange;
+  },
+  (error) => {
     const status =
       error instanceof TRPCError
         ? ((
@@ -49,4 +48,4 @@ export async function GET(request: Request) {
       }
     );
   }
-}
+);

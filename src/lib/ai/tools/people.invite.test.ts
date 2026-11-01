@@ -21,7 +21,11 @@ vi.mock('@/lib/email', () => ({
 }));
 vi.mock('@/lib/notifications', () => ({ notify: vi.fn() }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
+vi.mock('@/lib/entitlements', () => ({
+  resolveOrganizationEntitlements: vi.fn(async () => ({ activeSeats: 1, seatLimit: 50 })),
+}));
 
+import { resolveOrganizationEntitlements } from '@/lib/entitlements';
 import { buildPeopleTools } from './people';
 import type { AssistantHelpers } from '@/lib/ai/context';
 
@@ -33,7 +37,9 @@ const db = {
   invitation: { upsert: mocks.invitationUpsert },
   $transaction: async (run: (tx: unknown) => Promise<unknown>) =>
     run({
-      user: { create: mocks.create, update: mocks.update },
+      // Seat lock: `FOR UPDATE` row read + occupied-seat count.
+      $queryRaw: vi.fn(async () => []),
+      user: { create: mocks.create, update: mocks.update, count: vi.fn(async () => 0) },
       invitation: { upsert: mocks.invitationUpsert },
     }),
 };
@@ -95,6 +101,9 @@ describe('assistant inviteMember duplicate guard', () => {
         data: expect.objectContaining({ email: 'new.person@company.com' }),
       })
     );
+    const entitlementDb = vi.mocked(resolveOrganizationEntitlements).mock.calls.at(-1)?.[1];
+    expect(entitlementDb).not.toBe(db);
+    expect(entitlementDb).toEqual(expect.objectContaining({ $queryRaw: expect.any(Function) }));
   });
 
   // WHA-278 — departments are tenant-configured rows behind a composite foreign

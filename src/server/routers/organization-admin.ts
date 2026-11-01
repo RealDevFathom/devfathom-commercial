@@ -1,3 +1,4 @@
+import { lockOrganizationSeat, occupiesSeat } from '@/lib/organization-seat';
 import { createHash, randomBytes } from 'node:crypto';
 import { TRPCError } from '@trpc/server';
 import { hash } from 'bcryptjs';
@@ -29,12 +30,6 @@ const departmentKey = z
   .min(2)
   .max(80)
   .regex(/^[A-Z0-9_]+$/, 'Use uppercase letters, numbers, and underscores only.');
-const OCCUPIED_SEAT_STATUSES = ['ACTIVE', 'ON_LEAVE', 'INVITED'] as const;
-
-function occupiesSeat(status: string): boolean {
-  return (OCCUPIED_SEAT_STATUSES as readonly string[]).includes(status);
-}
-
 function duplicateMember(error: unknown): boolean {
   return (
     typeof error === 'object' &&
@@ -42,23 +37,6 @@ function duplicateMember(error: unknown): boolean {
     'code' in error &&
     (error as { code?: unknown }).code === 'P2002'
   );
-}
-
-async function lockOrganizationSeat(
-  tx: Prisma.TransactionClient,
-  organizationId: string,
-  seatLimit: number
-): Promise<void> {
-  await tx.$queryRaw`SELECT "id" FROM "organizations" WHERE "id" = ${organizationId} FOR UPDATE`;
-  const activeSeats = await tx.user.count({
-    where: { organizationId, status: { in: [...OCCUPIED_SEAT_STATUSES] } },
-  });
-  if (activeSeats >= seatLimit) {
-    throw new TRPCError({
-      code: 'PRECONDITION_FAILED',
-      message: `Seat limit reached (${activeSeats}/${seatLimit}).`,
-    });
-  }
 }
 
 async function lockActiveOrganizationAdmins(

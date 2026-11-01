@@ -1,3 +1,4 @@
+import { lockOrganizationSeat, occupiesSeat } from '@/lib/organization-seat';
 import 'server-only';
 
 import { hash } from 'bcryptjs';
@@ -955,6 +956,7 @@ async function bootstrapOrganization(
   if (existingAdmin) {
     throw new PlatformSecurityError('A user with this email already exists.', 409);
   }
+  await lockOrganizationSeat(db, organization.id, seatLimit);
   const admin = await db.user.create({
     data: {
       ...(demo ? { id: demo.identity.managerUserId } : {}),
@@ -971,6 +973,7 @@ async function bootstrapOrganization(
     },
   });
   if (demo) {
+    await lockOrganizationSeat(db, organization.id, seatLimit);
     await db.user.create({
       data: {
         id: demoRestaurantApproverUserId(demo.identity.seatNumber),
@@ -2493,6 +2496,9 @@ async function runCommand(
         if (!department) {
           throw new PlatformSecurityError('Invalid organization department.', 400);
         }
+      }
+      if (data.status && occupiesSeat(data.status)) {
+        await lockOrganizationSeat(db, before.organizationId, undefined, before.id);
       }
       const auditableBefore = omit(before, 'password', 'twoFactorSecret');
       const saved = await db.user.update({

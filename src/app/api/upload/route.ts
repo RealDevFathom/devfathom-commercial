@@ -1,12 +1,12 @@
 import crypto from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { MAX_ATTACHMENT_BYTES } from '@/lib/chat/contract';
-import { responseForPasswordChange } from '@/lib/auth/session-state';
+import { withApiRoute } from '@/lib/api-route';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { putUpload, StorageUnavailableError } from '@/lib/storage';
 
-export async function POST(request: Request) {
-  try {
+export const POST = withApiRoute(
+  async (request: Request) => {
     const actor = await resolveTenantActor({ request });
     if (!actor?.session.user?.id) {
       return new Response('Unauthorized', { status: 401 });
@@ -88,13 +88,12 @@ export async function POST(request: Request) {
       size: file.size,
       type: file.type,
     });
-  } catch (error) {
-    const passwordChange = responseForPasswordChange(error);
-    if (passwordChange) return passwordChange;
+  },
+  (error) => {
     if (error instanceof StorageUnavailableError) {
       return NextResponse.json({ error: 'Uploads are unavailable.' }, { status: 503 });
     }
     console.error('[upload] failed');
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
-}
+);

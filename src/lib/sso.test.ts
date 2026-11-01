@@ -25,14 +25,22 @@ vi.mock('@/lib/entitlements', () => ({
   resolveOrganizationEntitlements: mocks.entitlements,
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({
-  withTenantDb: vi.fn(
-    async (_organizationId: string, run: (db: unknown) => Promise<unknown>) =>
-      await run({
-        user: { findFirst: mocks.findFirst, create: mocks.create, update: mocks.update },
-        organization: { findUnique: mocks.organizationFindUnique },
-        organizationDepartment: { findMany: mocks.departmentFindMany },
-      })
-  ),
+  withTenantDb: vi.fn(async (_organizationId: string, run: (db: unknown) => Promise<unknown>) => {
+    const tenantDb: Record<string, unknown> = {
+      user: {
+        findFirst: mocks.findFirst,
+        create: mocks.create,
+        update: mocks.update,
+        // Seat lock reads the occupied-seat count under `FOR UPDATE`.
+        count: vi.fn(async () => 0),
+      },
+      organization: { findUnique: mocks.organizationFindUnique },
+      organizationDepartment: { findMany: mocks.departmentFindMany },
+      $queryRaw: vi.fn(async () => []),
+      $transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(tenantDb),
+    };
+    return run(tenantDb);
+  }),
 }));
 
 import { provisionIdentityUser, type ActiveIdentityConnection } from './sso';

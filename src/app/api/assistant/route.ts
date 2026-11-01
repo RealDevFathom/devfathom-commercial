@@ -19,7 +19,7 @@ import { readAskFathomSettings } from '@/lib/ai/ask-fathom-settings';
 import { createAIModel, readAIAvailability } from '@/lib/ai/provider';
 import { assistantToolChoice, buildAssistantTools } from '@/lib/ai/tools';
 import { assistantSystemPrompt } from '@/lib/ai/prompt';
-import { responseForPasswordChange } from '@/lib/auth/session-state';
+import { withApiRoute } from '@/lib/api-route';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { createTenantDb } from '@/lib/tenancy/scoped-db';
 import { resolveOrganizationEntitlements } from '@/lib/entitlements';
@@ -48,16 +48,15 @@ function recentUserText(messages: UIMessage[]): string {
 
 const UNAVAILABLE = 'Ask Fathom is currently unavailable. No cached answer was used.';
 
-export async function POST(req: Request) {
-  try {
+export const POST = withApiRoute(
+  async (req: Request) => {
     return await respond(req);
-  } catch (error) {
-    const passwordChange = responseForPasswordChange(error);
-    if (passwordChange) return passwordChange;
+  },
+  () => {
     console.error('ASSISTANT_REQUEST_FAILED');
     return Response.json({ error: UNAVAILABLE }, { status: 503 });
   }
-}
+);
 
 async function respond(req: Request) {
   const actor = await resolveTenantActor({ request: req });

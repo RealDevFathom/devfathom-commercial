@@ -1,6 +1,6 @@
 import { hasModule, resolveOrganizationEntitlements } from '@/lib/entitlements';
 import { cameraGatewayRuntime } from '@/lib/restaurant/camera-gateway-runtime';
-import { responseForPasswordChange } from '@/lib/auth/session-state';
+import { withApiRoute } from '@/lib/api-route';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { CameraTransportError, rewriteCameraManifest } from '@/lib/restaurant/cameras/mediamtx';
@@ -9,15 +9,8 @@ function response(message: string, status: number) {
   return new Response(message, { status, headers: { 'Cache-Control': 'no-store' } });
 }
 
-export async function GET(request: Request, context: { params: Promise<{ cameraId: string }> }) {
-  let actor;
-  try {
-    actor = await resolveTenantActor({ request });
-  } catch (error) {
-    const passwordChange = responseForPasswordChange(error);
-    if (passwordChange) return passwordChange;
-    throw error;
-  }
+async function handleGET(request: Request, context: { params: Promise<{ cameraId: string }> }) {
+  const actor = await resolveTenantActor({ request });
   if (!actor?.session.user?.id) return response('Unauthorized', 401);
   if (actor.organization.isDemo) return response('Not available in demo.', 403);
   const organizationId = actor.organization.id;
@@ -95,3 +88,5 @@ export async function GET(request: Request, context: { params: Promise<{ cameraI
     return response('Gateway unavailable', 502);
   }
 }
+
+export const GET = withApiRoute(handleGET);

@@ -1,3 +1,4 @@
+import { lockOrganizationSeat } from '@/lib/organization-seat';
 import { z } from 'zod';
 import { hash } from 'bcryptjs';
 import { TRPCError } from '@trpc/server';
@@ -38,6 +39,7 @@ async function loadPendingInvitation(db: PrismaClient, token: string) {
           title: true,
           department: true,
           role: true,
+          organizationId: true,
           organization: { select: { isDemo: true } },
         },
       },
@@ -91,6 +93,7 @@ export const invitationsRouter = router({
       // already rejects missing, accepted, and expired tokens without hashing,
       // so the work moved here is only ever spent on a token that looked usable.
       return ctx.db.$transaction(async (tx) => {
+        await lockOrganizationSeat(tx, invitation.user.organizationId, undefined, invitation.userId);
         // Fresh, and read once: the same instant decides whether the invitation
         // is still live and stamps the acceptance.
         const now = new Date();

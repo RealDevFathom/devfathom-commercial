@@ -112,6 +112,7 @@ function record() {
 
 const platformDb = {
   $queryRawUnsafe: mocks.organizationExists,
+  $queryRaw: vi.fn(async () => []),
   platformPackage: {
     findUnique: mocks.pkgFindUnique,
     create: mocks.pkgCreate,
@@ -132,6 +133,7 @@ const platformDb = {
     findFirst: mocks.departmentFindFirst,
   },
   user: {
+    count: vi.fn(async () => 0),
     findUnique: mocks.userFindUnique,
     update: mocks.userUpdate,
     findFirst: mocks.userFindFirst,
