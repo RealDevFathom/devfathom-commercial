@@ -588,20 +588,57 @@ describe('void/cancel approver authentication (H5)', () => {
     expect(mocks.authenticateOperator).not.toHaveBeenCalled();
   });
 
-  it.each([{ profiles: [] }, { profiles: [{ id: 'a' }, { id: 'b' }] }])(
-    'fails closed without a unique active session staff profile',
-    async ({ profiles }) => {
-      mocks.staffFindMany.mockResolvedValue(profiles);
-      await expect(
-        caller().voidItem({
-          ...POST_PREP_VOID,
-          approvingStaffProfileId: 'mgr_1',
-          approvingCredential: PIN,
-        })
-      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
-      expect(mocks.voidItem).not.toHaveBeenCalled();
-    }
-  );
+  it('fails closed without an active session staff profile', async () => {
+    mocks.staffFindMany.mockResolvedValue([]);
+    await expect(
+      caller().voidItem({
+        ...POST_PREP_VOID,
+        approvingStaffProfileId: 'mgr_1',
+        approvingCredential: PIN,
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.voidItem).not.toHaveBeenCalled();
+  });
+
+  it("acts as a multi-branch employee's profile at the order branch", async () => {
+    mocks.staffFindMany.mockResolvedValue([
+      { id: 'staff_elsewhere', primaryBranchId: 'branch_2', jobRoles: [] },
+      { id: 'staff_here', primaryBranchId: 'branch_9', jobRoles: [{ jobRoleId: 'server' }] },
+    ]);
+    await caller().voidItem({
+      ...POST_PREP_VOID,
+      approvingStaffProfileId: 'mgr_1',
+      approvingCredential: PIN,
+    });
+    expect(mocks.staffFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { userId: 'user_gm', organizationId: 'org_1', status: 'ACTIVE' },
+        orderBy: { id: 'asc' },
+      })
+    );
+    expect(mocks.voidItem).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({
+        actor: expect.objectContaining({ staffProfileId: 'staff_here' }),
+      })
+    );
+  });
+
+  it('accepts a maker-checker actor envelope without a client-supplied staff id', async () => {
+    await caller().cancel({
+      orderId: 'o1',
+      reason: 'Walkout',
+      approvingStaffProfileId: 'mgr_1',
+      approvingCredential: PIN,
+      actor: { deviceId: 'dev_1', idempotencyKey: 'key_1' },
+    });
+    expect(mocks.cancelOrder).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({
+        actor: { staffProfileId: 'staff_1', deviceId: 'dev_1', idempotencyKey: 'key_1' },
+      })
+    );
+  });
 
   it('returns NOT_FOUND for an order outside the tenant before checking credentials', async () => {
     mocks.orderFindUnique.mockResolvedValue(null);

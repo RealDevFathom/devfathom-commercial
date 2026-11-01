@@ -99,6 +99,10 @@ const ACTOR = z.object({
   idempotencyKey: ID,
 });
 
+/** Maker-checker envelope: the acting staff comes from the session, so the
+ * legacy `staffProfileId` is optional (accepted for older clients, never used). */
+const APPROVED_ACTOR = ACTOR.extend({ staffProfileId: ID.optional() });
+
 function toActor(actor: z.infer<typeof ACTOR>): CommandActor {
   return {
     staffProfileId: actor.staffProfileId,
@@ -119,7 +123,7 @@ type ApproverInput = {
   orderId: string;
   approvingStaffProfileId?: string | null;
   approvingCredential?: z.infer<typeof APPROVING_CREDENTIAL> | null;
-  actor: z.infer<typeof ACTOR>;
+  actor: z.infer<typeof APPROVED_ACTOR>;
 };
 
 /**
@@ -138,7 +142,16 @@ async function withApprovedOrderCommand<T>(
   input: ApproverInput,
   work: (args: { actor: CommandActor; approvingStaffProfileId: string | null }) => Promise<T>
 ): Promise<{ result: T; approvalMode: ApprovalMode | null }> {
-  const actingStaffProfileId = await requireSessionStaffProfileId(ctx);
+  const order = await ctx.db.restaurantOrder.findUnique({
+    where: { id: input.orderId },
+    select: { branchId: true },
+  });
+  // Resolved against the order's branch, so a multi-branch employee acts as their
+  // profile for that branch. A missing order on the unapproved path is reported
+  // by the command itself.
+  const actingStaffProfileId = await requireSessionStaffProfileId(ctx, {
+    branchId: order?.branchId,
+  });
   const actor: CommandActor = {
     staffProfileId: actingStaffProfileId,
     deviceId: input.actor.deviceId,
@@ -162,10 +175,6 @@ async function withApprovedOrderCommand<T>(
     });
   }
   const credential = input.approvingCredential;
-  const order = await ctx.db.restaurantOrder.findUnique({
-    where: { id: input.orderId },
-    select: { branchId: true },
-  });
   if (!order) throw new TRPCError({ code: 'NOT_FOUND', message: 'Order not found.' });
 
   return withBackOfficeApprovalScope(
@@ -532,7 +541,7 @@ export const restaurantOrdersRouter = router({
           wastageDisposition: DISPOSITION.optional(),
           approvingStaffProfileId: ID.nullish(),
           approvingCredential: APPROVING_CREDENTIAL.nullish(),
-          actor: ACTOR,
+          actor: APPROVED_ACTOR,
         })
         .strict()
     )
@@ -569,7 +578,7 @@ export const restaurantOrdersRouter = router({
           wastageDisposition: DISPOSITION.optional(),
           approvingStaffProfileId: ID.nullish(),
           approvingCredential: APPROVING_CREDENTIAL.nullish(),
-          actor: ACTOR,
+          actor: APPROVED_ACTOR,
         })
         .strict()
     )
