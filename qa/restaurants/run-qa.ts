@@ -15,10 +15,6 @@ const EVIDENCE = '/workspace/qa/restaurants/evidence';
 const OWNER_EMAIL = 'qa-karahi-owner@example.com';
 const OWNER_PASSWORD = 'QaRestaurant!Owner2026';
 const ESSENTIALS_EMAIL = 'qa-essentials-owner@example.com';
-const CASHIER_EMAIL = 'qa-karahi-cashier@example.com';
-const KITCHEN_EMAIL = 'qa-karahi-kitchen@example.com';
-const SERVER_EMAIL = 'qa-karahi-server@example.com';
-const STAFF_PASSWORD = 'QaRestaurant!Staff2026';
 
 type Status = 'pass' | 'fail' | 'blocked';
 type Result = {
@@ -116,7 +112,7 @@ async function axe(page: Page, id: string, name: string) {
       .filter((item) => item.impact === 'critical' || item.impact === 'serious')
       .map((item) => ({
         id: item.id,
-        impact: item.impact,
+        impact: item.impact ?? null,
         help: item.help,
         nodes: item.nodes.length,
       }));
@@ -146,7 +142,6 @@ async function platformLogin(page: Page) {
   await page.locator('#platform-password').fill(process.env.PLATFORM_ADMIN_PASSWORD!);
   await page.getByRole('button', { name: 'Continue to control desk' }).click();
   const setup = page.getByRole('button', { name: 'Set up authenticator' });
-  const desk = page.getByRole('heading', { name: /control desk|organizations|platform/i });
   await Promise.race([
     setup.waitFor({ state: 'visible', timeout: 20000 }),
     page.waitForURL(/\/platform(?!\/login)/, { timeout: 20000 }),
@@ -331,7 +326,7 @@ async function main() {
       stillOnForm ? 'Empty submit stayed on the onboarding form.' : `Navigated to ${page.url()}`
     );
 
-    const created = await fillRestaurantForm(page, {
+    await fillRestaurantForm(page, {
       displayName: 'QA Karahi House',
       legalName: 'QA Karahi House (Pvt) Ltd',
       slug: 'qa-karahi-house',
@@ -627,13 +622,18 @@ async function main() {
     }
     writeFileSync(`${EVIDENCE}/route-notes.txt`, routeNotes.join('\n'));
 
-    const nav = await bodyText(owner);
     await owner.goto(`${TENANT}/dashboard`, { waitUntil: 'domcontentloaded' });
     const navText = await bodyText(owner);
     await shot(owner, 'nav-dashboard');
-    const pharmacyLinks = ['Onboarding', 'Counter', 'Regulatory'].filter((label) =>
-      new RegExp(`\\b${label}\\b`).test(navText)
-    );
+    const pharmacyLinks = (
+      [
+        ['Onboarding', /\bOnboarding\b/],
+        ['Counter', /\bCounter\b/],
+        ['Regulatory', /\bRegulatory\b/],
+      ] as const
+    )
+      .filter(([, pattern]) => pattern.test(navText))
+      .map(([label]) => label);
     record(
       'TNT-02',
       pharmacyLinks.length ? 'fail' : 'pass',

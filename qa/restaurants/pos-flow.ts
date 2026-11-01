@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { chromium, type Page } from '@playwright/test';
 

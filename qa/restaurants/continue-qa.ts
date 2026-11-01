@@ -2,12 +2,12 @@
  * Restaurant journey on the tenant slug hosts. Does not modify product code.
  * Writes qa/restaurants/evidence/continue-results.json and screenshots.
  */
-import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes } from 'node:crypto';
+import { createDecipheriv, createHash, createHmac } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 
 import AxeBuilder from '@axe-core/playwright';
-import { chromium, type Browser, type BrowserContext, type Page } from '@playwright/test';
+import { chromium, type BrowserContext, type Page } from '@playwright/test';
 
 const HOUSE = 'http://qa-karahi-house.localhost:3000';
 const ESSENTIALS = 'http://qa-karahi-essentials.localhost:3000';
@@ -84,7 +84,9 @@ function encryptionKey(): Buffer {
 function decryptSecret(value: string): string {
   const [version, iv, tag, ciphertext] = value.split('.');
   if (version !== 'v1' || !iv || !tag || !ciphertext) throw new Error('bad secret');
-  const decipher = createDecipheriv('aes-256-gcm', encryptionKey(), Buffer.from(iv, 'base64url'));
+  const decipher = createDecipheriv('aes-256-gcm', encryptionKey(), Buffer.from(iv, 'base64url'), {
+    authTagLength: 16,
+  });
   decipher.setAuthTag(Buffer.from(tag, 'base64url'));
   return Buffer.concat([
     decipher.update(Buffer.from(ciphertext, 'base64url')),
