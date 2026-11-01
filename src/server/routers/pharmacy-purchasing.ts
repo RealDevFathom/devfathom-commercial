@@ -374,6 +374,8 @@ async function supplierFollowUpScope(ctx: TRPCContext, branch: string) {
  *   `pharmacy:orders`) holds none of it.
  * - `APPROVAL`: approving and sending a purchase order. Manager and Owner
  *   templates hold it; so does the solo owner (tenant admin without a role).
+ * - `PROCUREMENT_AND_APPROVAL`: authorizing or withdrawing a supplier, which
+ *   is procurement work that also needs the approver capability.
  * - `PROCUREMENT_AND_FINANCE`: PUR-06 returns, debit notes and supplier credit,
  *   which move stock out and book money.
  * - `FINANCIAL_FOLLOW_UP`: the supplier-credit follow-up reads, which the
@@ -387,6 +389,9 @@ const purchasing = denyByDefaultProcedure;
 const PROCUREMENT = { capabilities: ['pharmacy:procurement'] } as const satisfies ProcedureMeta;
 const APPROVAL = {
   capabilities: ['pharmacy:procurement-approve'],
+} as const satisfies ProcedureMeta;
+const PROCUREMENT_AND_APPROVAL = {
+  capabilities: ['pharmacy:procurement', 'pharmacy:procurement-approve'],
 } as const satisfies ProcedureMeta;
 const PROCUREMENT_AND_FINANCE = {
   capabilities: ['pharmacy:procurement', 'reports:financial'],
@@ -505,8 +510,13 @@ const purchasingRouter = router({
       });
     }),
 
+  /**
+   * PUR-01: authorizing (or withdrawing) trade with a supplier is an approval,
+   * like approving a purchase order: it needs the approver capability on top of
+   * procurement. Manager and Owner templates hold it; so does the solo owner.
+   */
   setSupplierAuthorization: purchasing
-    .meta(PROCUREMENT)
+    .meta(PROCUREMENT_AND_APPROVAL)
     .input(z.object({ supplierId: z.string().min(1), authorized: z.boolean() }).strict())
     .mutation(async ({ ctx, input }) => {
       if (!(await ctx.db.pharmacySupplier.findFirst({ where: { id: input.supplierId } })))

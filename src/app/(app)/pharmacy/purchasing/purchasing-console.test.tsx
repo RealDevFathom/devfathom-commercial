@@ -292,10 +292,8 @@ describe('tenancy and licensing (UX rule 7)', () => {
       contextStub(['pharmacy-procurement'], ['pharmacy:procurement'])
     );
 
-    const suppliers = render(
-      await SuppliersPage({ searchParams: params({ supplier: 'sup-ok' }) })
-    );
-    for (const action of ['Add supplier', 'File licence', 'Withdraw authorization']) {
+    const suppliers = render(await SuppliersPage({ searchParams: params({ supplier: 'sup-ok' }) }));
+    for (const action of ['Add supplier', 'File licence']) {
       expect(screen.queryAllByRole('button', { name: action }).length, action).toBeGreaterThan(0);
     }
     suppliers.unmount();
@@ -730,6 +728,53 @@ describe('segregation of duties (PUR-02)', () => {
       expect(screen.queryByRole('button', { name: 'Send to supplier' })).toBeNull();
     }
   );
+});
+
+describe('supplier authorization needs the approval permission (PUR-01, PR J)', () => {
+  it('explains instead of offering authorize or withdraw to a buyer without it', async () => {
+    mocks.createTRPCContext.mockResolvedValue(
+      contextStub(['pharmacy-procurement'], ['pharmacy:procurement'])
+    );
+
+    render(await SuppliersPage({ searchParams: params({ supplier: 'sup-ok' }) }));
+
+    expect(
+      screen.getByText(
+        /Authorizing a supplier, or withdrawing it, needs the purchase-order approval/
+      )
+    ).toBeDefined();
+    expect(screen.queryByRole('button', { name: 'Withdraw authorization' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Authorize this supplier' })).toBeNull();
+    // Filing and verifying licence evidence stays procurement work.
+    expect(screen.queryAllByRole('button', { name: 'File licence' }).length).toBeGreaterThan(0);
+  });
+
+  it('offers the control to a member who also holds the approval permission', async () => {
+    render(await SuppliersPage({ searchParams: params({ supplier: 'sup-ok' }) }));
+
+    expect(screen.getByRole('button', { name: 'Withdraw authorization' })).toBeDefined();
+    expect(screen.queryByText(/Authorizing a supplier, or withdrawing it/)).toBeNull();
+  });
+
+  it('offers it to the legacy owner (tenant admin without a role)', async () => {
+    mocks.createTRPCContext.mockResolvedValue({
+      ...contextStub(),
+      session: { ...actor.session, user: { ...actor.session.user, role: 'ADMIN' } },
+      db: {
+        user: {
+          findUnique: vi.fn().mockResolvedValue({
+            role: 'ADMIN',
+            organizationRole: null,
+            permissionOverrides: [],
+          }),
+        },
+      },
+    });
+
+    render(await SuppliersPage({ searchParams: params({ supplier: 'sup-ok' }) }));
+
+    expect(screen.getByRole('button', { name: 'Withdraw authorization' })).toBeDefined();
+  });
 });
 
 function findAction(node: ReactNode, name: string): (form: FormData) => Promise<string> {

@@ -5,6 +5,7 @@ import { PurchasingOutcomeScope, PurchasingOutcomes } from '../_components/actio
 
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
+import { can, subjectFromSession } from '@/lib/abac';
 import { hasModule } from '@/lib/entitlements';
 import { actorCanProcure } from '@/lib/pharmacy/procurement-access';
 import type { SupplierSummary } from '@/lib/pharmacy/purchasing-console';
@@ -82,6 +83,15 @@ export default async function PharmacySuppliersPage({
   if (!(await actorCanProcure(ctx.db, ctx.session.user.id))) {
     return <AccessState heading={HEADING} description={DESCRIPTION} moduleEnabled />;
   }
+  // PR J (#979): authorizing a supplier needs the approver capability as well,
+  // as approving a purchase order does. Offer the control only to the people the
+  // server will let through: Manager, Owner, and the solo owner.
+  const canAuthorize = await can(
+    subjectFromSession(ctx.session.user),
+    'pharmacy:procurement-approve',
+    undefined,
+    { db: ctx.db, source: 'TRPC', ip: ctx.requestMeta?.ip ?? null }
+  );
 
   const caller = await purchasingCaller();
   if (!caller) {
@@ -314,6 +324,7 @@ export default async function PharmacySuppliersPage({
           <div className="min-w-0 space-y-6">
             {selected ? (
               <SupplierDetail
+                canAuthorize={canAuthorize}
                 currentUserId={ctx.session.user.id}
                 notice={notice}
                 onRecordLicence={recordLicence}
@@ -391,6 +402,7 @@ export default async function PharmacySuppliersPage({
 function SupplierDetail({
   supplier,
   notice,
+  canAuthorize,
   currentUserId,
   onRecordLicence,
   onSetAuthorization,
@@ -398,6 +410,7 @@ function SupplierDetail({
 }: {
   supplier: SupplierSummary;
   notice: ReturnType<typeof noticeFrom>;
+  canAuthorize: boolean;
   currentUserId: string;
   onRecordLicence: (form: FormData) => Promise<string>;
   onSetAuthorization: (form: FormData) => Promise<string>;
@@ -438,20 +451,31 @@ function SupplierDetail({
           </p>
           {/* UX rule 15: the control is one action and it is never greyed out
               while the operator is clearly acting on it. */}
-          <PurchasingActionForm
-            operation={{
-              resource: `supplier:${supplier.id}`,
-              action: supplier.authorized ? 'withdraw' : 'authorize',
-            }}
-            action={onSetAuthorization}
-            className="mt-3"
-          >
-            <input name="supplierId" type="hidden" value={supplier.id} />
-            <input name="authorized" type="hidden" value={supplier.authorized ? 'false' : 'true'} />
-            <SubmitButton variant={supplier.authorized ? 'destructive' : 'primary'}>
-              {supplier.authorized ? 'Withdraw authorization' : 'Authorize this supplier'}
-            </SubmitButton>
-          </PurchasingActionForm>
+          {!canAuthorize ? (
+            <p className="mt-3 text-sm text-text-muted">
+              Authorizing a supplier, or withdrawing it, needs the purchase-order approval
+              permission, which a Manager or the Owner holds. Ask one of them to decide.
+            </p>
+          ) : (
+            <PurchasingActionForm
+              operation={{
+                resource: `supplier:${supplier.id}`,
+                action: supplier.authorized ? 'withdraw' : 'authorize',
+              }}
+              action={onSetAuthorization}
+              className="mt-3"
+            >
+              <input name="supplierId" type="hidden" value={supplier.id} />
+              <input
+                name="authorized"
+                type="hidden"
+                value={supplier.authorized ? 'false' : 'true'}
+              />
+              <SubmitButton variant={supplier.authorized ? 'destructive' : 'primary'}>
+                {supplier.authorized ? 'Withdraw authorization' : 'Authorize this supplier'}
+              </SubmitButton>
+            </PurchasingActionForm>
+          )}
         </div>
       </SectionCard>
 

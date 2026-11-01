@@ -405,6 +405,7 @@ type ProcedureName = keyof typeof CALLS;
 
 const PROCUREMENT = ['pharmacy:procurement'];
 const APPROVAL = ['pharmacy:procurement-approve'];
+const PROCUREMENT_AND_APPROVAL = ['pharmacy:procurement', 'pharmacy:procurement-approve'];
 const PROCUREMENT_AND_FINANCE = ['pharmacy:procurement', 'reports:financial'];
 const FINANCIAL = ['reports:financial'];
 
@@ -413,7 +414,7 @@ const EXPECTED_CAPABILITIES: Record<ProcedureName, string[]> = {
   createSupplier: PROCUREMENT,
   recordSupplierLicence: PROCUREMENT,
   verifySupplierLicence: PROCUREMENT,
-  setSupplierAuthorization: PROCUREMENT,
+  setSupplierAuthorization: PROCUREMENT_AND_APPROVAL,
   createRequisition: PROCUREMENT,
   submitRequisition: PROCUREMENT,
   recordQuote: PROCUREMENT,
