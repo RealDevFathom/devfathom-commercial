@@ -14,7 +14,7 @@ const other = `${org}_other`;
 const restaurant = `${org}_restaurant`;
 const id = (key: string) => `${org}_${key}`;
 const migration = readFileSync(
-  'prisma/migrations/20261101000000_pharmacy_owner_operator_operational_capabilities/migration.sql',
+  'prisma/migrations/20261101172600_pharmacy_owner_operator_operational_capabilities/migration.sql',
   'utf8'
 );
 // The six grants the Owner / Operator template carried before #975.
