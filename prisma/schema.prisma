@@ -14408,6 +14408,9 @@ model GrowthSettings {
   waApiUrl              String?
   waApiKeyEnc           String?
   lastMetricsRunAt      DateTime?
+  lastPlanRunAt         DateTime?
+  customDates           Json     @default("[]")
+  maxDiscountPct        Int?
   churnThreshold        Int      @default(60)
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt

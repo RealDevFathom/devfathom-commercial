@@ -4,10 +4,26 @@ import vercel from '../../../../../vercel.json';
 
 const mocks = vi.hoisted(() => ({
   withPlatformDb: vi.fn(),
+  withTenantDb: vi.fn(),
   isGrowthEnabled: vi.fn(),
   runCustomerMetrics: vi.fn(),
+  runWeeklyPlanner: vi.fn(),
+  plannerAvailable: vi.fn(),
+  advanceCampaigns: vi.fn(),
+  dispatchCampaignMessages: vi.fn(),
 }));
-vi.mock('@/lib/tenancy/scoped-db', () => ({ withPlatformDb: mocks.withPlatformDb }));
+vi.mock('@/lib/growth/planner', () => ({
+  runWeeklyPlanner: mocks.runWeeklyPlanner,
+  plannerAvailable: mocks.plannerAvailable,
+}));
+vi.mock('@/lib/growth/campaigns', () => ({
+  advanceCampaigns: mocks.advanceCampaigns,
+  dispatchCampaignMessages: mocks.dispatchCampaignMessages,
+}));
+vi.mock('@/lib/tenancy/scoped-db', () => ({
+  withPlatformDb: mocks.withPlatformDb,
+  withTenantDb: mocks.withTenantDb,
+}));
 vi.mock('@/lib/growth/metrics', () => ({ runCustomerMetrics: mocks.runCustomerMetrics }));
 vi.mock('@/lib/growth', () => ({ isGrowthEnabled: mocks.isGrowthEnabled }));
 
@@ -23,6 +39,8 @@ describe.each([
   beforeEach(() => {
     vi.clearAllMocks();
     vi.stubEnv('CRON_SECRET', secret);
+    mocks.plannerAvailable.mockReturnValue(true);
+    mocks.withTenantDb.mockImplementation((_id, run) => run({}));
     vi.spyOn(console, 'info').mockImplementation(() => {});
     vi.spyOn(console, 'error').mockImplementation(() => {});
     mocks.runCustomerMetrics.mockResolvedValue(true);
@@ -82,6 +100,76 @@ describe.each([
     expect(console.info).toHaveBeenCalledExactlyOnceWith(
       '[growth] tick organizationId=org_enabled'
     );
+  });
+
+  it('runs the planner only in enabled tenant scope and still advances sends on planner failure', async () => {
+    mocks.runWeeklyPlanner.mockRejectedValueOnce(new Error('Provider unavailable'));
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const response = await handler(
+      new Request('http://localhost/api/growth/tick', {
+        method,
+        headers: { authorization: `Bearer ${secret}` },
+      })
+    );
+    expect(response.status).toBe(200);
+    expect(mocks.runWeeklyPlanner).toHaveBeenCalledExactlyOnceWith({}, 'org_enabled');
+    expect(mocks.advanceCampaigns).toHaveBeenCalledExactlyOnceWith({}, 'org_enabled');
+    expect(mocks.dispatchCampaignMessages).toHaveBeenCalledExactlyOnceWith('org_enabled');
+    expect(error).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['advance', 'dispatch'])('continues to the next org after %s fails', async (stage) => {
+    findMany.mockResolvedValue([{ id: 'org_enabled' }, { id: 'org_second' }]);
+    mocks.isGrowthEnabled.mockResolvedValue(true);
+    const failure = new Error('private recipient details');
+    (stage === 'advance'
+      ? mocks.advanceCampaigns
+      : mocks.dispatchCampaignMessages
+    ).mockRejectedValueOnce(failure);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const response = await handler(
+      new Request('http://localhost/api/growth/tick', {
+        method,
+        headers: { authorization: `Bearer ${secret}` },
+      })
+    );
+    expect(response.status).toBe(200);
+    expect(mocks.advanceCampaigns).toHaveBeenCalledWith({}, 'org_second');
+    expect(mocks.dispatchCampaignMessages).toHaveBeenCalledWith('org_second');
+    expect(error).toHaveBeenCalledExactlyOnceWith(
+      '[growth.dispatch] failed',
+      'org_enabled',
+      'Error'
+    );
+  });
+
+  it('still plans and advances sends when customer metrics fail', async () => {
+    mocks.runCustomerMetrics.mockRejectedValueOnce(new Error('metrics failed'));
+    const response = await handler(
+      new Request('http://localhost/api/growth/tick', {
+        method,
+        headers: { authorization: `Bearer ${secret}` },
+      })
+    );
+    expect(response.status).toBe(200);
+    expect(mocks.runWeeklyPlanner).toHaveBeenCalledExactlyOnceWith({}, 'org_enabled');
+    expect(mocks.advanceCampaigns).toHaveBeenCalledExactlyOnceWith({}, 'org_enabled');
+    expect(mocks.dispatchCampaignMessages).toHaveBeenCalledExactlyOnceWith('org_enabled');
+    expect(console.info).not.toHaveBeenCalled();
+  });
+
+  it('skips planning and sends when the growth flag check fails', async () => {
+    mocks.isGrowthEnabled.mockRejectedValueOnce(new Error('flag lookup failed'));
+    const response = await handler(
+      new Request('http://localhost/api/growth/tick', {
+        method,
+        headers: { authorization: `Bearer ${secret}` },
+      })
+    );
+    expect(response.status).toBe(200);
+    expect(mocks.runWeeklyPlanner).not.toHaveBeenCalled();
+    expect(mocks.advanceCampaigns).not.toHaveBeenCalled();
+    expect(mocks.dispatchCampaignMessages).not.toHaveBeenCalled();
   });
 
   it.each(['isGrowthEnabled', 'runCustomerMetrics'] as const)(

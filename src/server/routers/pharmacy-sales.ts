@@ -1,3 +1,4 @@
+import { redeemCode } from '@/lib/growth/codes';
 import { hasModule } from '@/lib/entitlements';
 import {
   executeSandboxPayment,
@@ -418,6 +419,24 @@ export const pharmacySalesRouter = router({
       } catch (error) {
         fail(error);
       }
+    }),
+  redeemCode: protectedProcedure
+    .input(
+      z
+        .object({ branchId, saleId: z.string().min(1), code: z.string().trim().min(1).max(32) })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const organizationId = ctx.session!.user.organizationId;
+      if (
+        !organizationId ||
+        organizationId !== ctx.entitlements.organizationId ||
+        !hasModule(ctx.entitlements, 'growth_ai')
+      )
+        throw new TRPCError({ code: 'FORBIDDEN' });
+      await khataScope(ctx, input.branchId);
+      annotateAudit(ctx, { skipInput: true });
+      return ctx.db.$transaction((db) => redeemCode(txDb(db), organizationId, input));
     }),
   redeemPoints: protectedProcedure
     .input(
