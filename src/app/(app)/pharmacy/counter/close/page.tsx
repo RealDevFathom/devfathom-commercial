@@ -24,5 +24,5 @@ export default async function PharmacyDayClosePage() {
       </SectionCard>
     );
   }
-  return <PharmacyDayCloseConsole />;
+  return <PharmacyDayCloseConsole closeGranted />;
 }

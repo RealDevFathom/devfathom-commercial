@@ -269,6 +269,7 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
   it('renders named, focusable destinations with Chat disabled', () => {
     const onNavigate = renderNavigation();
     for (const [label, href] of destinations) {
+      // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp -- fixed nav labels in a test
       const link = screen.getByRole('link', { name: new RegExp(`${label}$`) });
       expect(link).toHaveAttribute('href', href);
       expect(link.tabIndex).toBe(0);
@@ -284,6 +285,7 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
     'hides disabled %s without hiding other licensed destinations',
     (label, href, module) => {
       renderNavigation({ granted: [...pharmacyModules.filter((key) => key !== module), 'chat'] });
+      // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp -- fixed nav labels in a test
       expect(screen.queryByRole('link', { name: new RegExp(`${label}$`) })).not.toBeInTheDocument();
       const hrefs = screen.getAllByRole('link').map((link) => link.getAttribute('href'));
       expect(hrefs).not.toContain(href);
@@ -297,6 +299,7 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
   it('keeps operational links for non-admins while finance and setup stay admin-only', () => {
     renderNavigation({ role: 'MEMBER' });
     for (const label of ['Inventory', 'Purchasing', 'Reports & Insights']) {
+      // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp -- fixed nav labels in a test
       expect(screen.getByRole('link', { name: new RegExp(`${label}$`) })).toBeInTheDocument();
     }
     for (const label of [
@@ -306,6 +309,7 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
       'Regulatory profile',
       'Branch assignments',
     ]) {
+      // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp -- fixed nav labels in a test
       expect(screen.queryByRole('link', { name: new RegExp(`${label}$`) })).not.toBeInTheDocument();
     }
   });
@@ -392,6 +396,7 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
     ['/pharmacy/inventory', 'Inventory'],
   ])('marks only the longest matching destination current at %s', (pathname, label) => {
     renderNavigation({ pathname });
+    // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp -- fixed nav labels in a test
     expect(screen.getByRole('link', { name: new RegExp(`${label}$`) })).toHaveAttribute(
       'aria-current',
       'page'
@@ -473,6 +478,7 @@ describe.each(['mobile', 'desktop'] as const)('%s Hospitality navigation', (surf
       entries.map(([, href]) => href)
     );
     for (const [label, href] of entries) {
+      // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp -- fixed nav labels in a test
       const link = screen.getByRole('link', { name: new RegExp(`${label}$`) });
       expect(link).toHaveAttribute('href', href);
       expect(link.tabIndex).toBe(0);

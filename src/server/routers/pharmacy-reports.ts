@@ -424,13 +424,13 @@ export const pharmacyReportsRouter = router({
   branches: auditedProtectedProcedure.query(async ({ ctx }) => {
     const user = ctx.session!.user;
     const organizationId = ctx.entitlements.organizationId;
+    // The grant is always evaluated (and so recorded) before the ADMIN fallback.
     const organizationWide =
-      user.role === 'ADMIN' ||
       (await can(subjectFromSession(user), 'reports:operational', undefined, {
         db: ctx.db,
         source: 'TRPC',
         ip: ctx.requestMeta.ip,
-      }));
+      })) || user.role === 'ADMIN';
     if (organizationWide && hasModule(ctx.entitlements, 'pharmacy-reports'))
       return { ...(await scope(ctx)), scope: 'organization' as const };
     const assignments = await ctx.db.pharmacyBranchAssignment.findMany({

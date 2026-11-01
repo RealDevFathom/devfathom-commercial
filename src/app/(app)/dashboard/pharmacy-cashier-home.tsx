@@ -85,7 +85,7 @@ export function PharmacyCashierHome({
           <ul className="divide-y divide-border-subtle">
             {shifts.map((shift) => (
               <li key={shift.id} className="flex flex-wrap items-baseline gap-x-4 gap-y-1 py-3">
-                <span className="mr-auto text-sm font-medium text-text-strong">
+                <span className="me-auto text-sm font-medium text-text-strong">
                   {shift.branchLabel}
                 </span>
                 <span className="font-mono text-xs text-text-muted">

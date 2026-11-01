@@ -200,6 +200,14 @@ describe('day-close console', () => {
     ).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Close and lock day' })).not.toBeInTheDocument();
   });
+  it('opens for a non-administrator the page verified as holding pharmacy:close', () => {
+    mocks.role = 'MEMBER';
+    render(<PharmacyDayCloseConsole closeGranted />);
+    expect(
+      screen.queryByText('Only a manager or owner can close the day.')
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Close and lock day' })).toBeInTheDocument();
+  });
   it('shows loading and retryable errors', () => {
     mocks.loading = true;
     const view = render(<PharmacyDayCloseConsole />);

@@ -11,6 +11,7 @@ const source = (path: string) => readFileSync(join(process.cwd(), path), 'utf8')
 
 function lastBlock(selector: string): string {
   const escaped = selector.replace(/[[\]'.]/g, '\\$&');
+  // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp -- fixed token names in a test
   const pattern = new RegExp(`(^|\\n)${escaped} \\{([^}]*)\\}`, 'g');
   const blocks = [...css.matchAll(pattern)].map((match) => match[2]!);
   expect(blocks.length).toBeGreaterThan(0);
@@ -18,6 +19,7 @@ function lastBlock(selector: string): string {
 }
 
 function token(block: string, name: string): string {
+  // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp -- fixed token names in a test
   const value = block.match(new RegExp(`--${name}:\\s*(#[0-9a-fA-F]{6})`))?.[1];
   expect(value, `--${name}`).toBeDefined();
   return value!;

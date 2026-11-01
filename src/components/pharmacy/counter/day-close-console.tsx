@@ -46,14 +46,21 @@ export function cashMinor(value: string): number | null {
 /** What anyone without day-close access sees, on the page and in the console. */
 export const PHARMACY_DAY_CLOSE_DENIED = 'Only a manager or owner can close the day.';
 
-export function PharmacyDayCloseConsole() {
+/**
+ * `closeGranted` is the server page's verdict from `readPharmacyStaffAccess`
+ * (ADMIN or `pharmacy:close`, the same rule as `requireCloseAccess`), so a
+ * non-admin holder of `pharmacy:close` is not refused here after the page let
+ * them in. Every day-close procedure still enforces the rule itself.
+ */
+export function PharmacyDayCloseConsole({ closeGranted = false }: { closeGranted?: boolean } = {}) {
   const { data: session, status } = useSession();
   const entitlements = useEntitlements();
   const user = session?.user;
   if (
     status !== 'authenticated' ||
+    !user ||
     !evaluateSessionUser(user).ok ||
-    user?.role !== 'ADMIN' ||
+    (user.role !== 'ADMIN' && !closeGranted) ||
     user.organizationId !== entitlements.organizationId ||
     !isModuleGranted('pharmacy-counter', entitlements.enabledModules)
   ) {
