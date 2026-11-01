@@ -17,6 +17,7 @@ export const intendedPharmacyGrants = {
     'pharmacy:counter',
     'pharmacy:close',
     'pharmacy:manage',
+    'pharmacy:procurement-approve',
   ],
   pharmacist: ['pharmacy:dispense', 'pharmacy:catalogue-review', 'pharmacy:close'],
   manager: [

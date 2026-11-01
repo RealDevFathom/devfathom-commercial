@@ -48,6 +48,7 @@ describe('opt-in pharmacy Owner / Operator access', () => {
     'pharmacy:counter',
     'pharmacy:close',
     'pharmacy:manage',
+    'pharmacy:procurement-approve',
   ] as const satisfies readonly Action[];
   const proprietor = { ...employee, role: 'ADMIN' };
   const permissionsFor = (key: string): Permission[] =>
@@ -300,7 +301,7 @@ describe('custom ABAC decisions', () => {
   describe('purchase-order approval (pharmacy:procurement-approve)', () => {
     const approve = 'pharmacy:procurement-approve' as const;
 
-    it.each(['manager', 'owner'])('is held by the %s template', async (key) => {
+    it.each(['manager', 'owner', 'owner-operator'])('is held by the %s template', async (key) => {
       await expect(
         can(employee, approve, undefined, {
           db: authorizationDb({ rolePermissions: pharmacyPermissionsFor(key) }),

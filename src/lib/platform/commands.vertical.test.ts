@@ -479,6 +479,7 @@ describe('organization.create vertical + package compatibility', () => {
             'pharmacy:counter',
             'pharmacy:close',
             'pharmacy:manage',
+            'pharmacy:procurement-approve',
           ].map((capability) => ({ organizationId: 'org_new', capability, effect: 'ALLOW' })),
         },
       }),

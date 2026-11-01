@@ -796,6 +796,9 @@ export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
       'pharmacy:counter',
       'pharmacy:close',
       'pharmacy:manage',
+      // PUR-02: the proprietor approves and sends purchase orders and authorizes
+      // suppliers; self-approval stays refused outside the solo-owner exception.
+      'pharmacy:procurement-approve',
     ],
   },
   {
