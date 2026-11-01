@@ -15433,6 +15433,42 @@ model RateLimitBucket {
   @@map("rate_limit_buckets")
 }
 
+/// Global, effective-dated catalog used to price AI usage. This is deliberately
+/// not tenant scoped: every tenant uses the same audited price catalog.
+model AiModelPrice {
+  id                String   @id
+  provider          String
+  model             String
+  inputUsdPerMtok   Decimal  @map("input_usd_per_mtok") @db.Decimal(18, 6)
+  outputUsdPerMtok  Decimal  @map("output_usd_per_mtok") @db.Decimal(18, 6)
+  effectiveFrom     DateTime @map("effective_from")
+
+  @@unique([provider, model, effectiveFrom])
+  @@index([provider, model, effectiveFrom])
+  @@map("ai_model_prices")
+}
+
+/// Tenant ledger. A request id is unique within its tenant so provider retries
+/// cannot charge the same request twice.
+model AiUsage {
+  id             String   @id @default(cuid())
+  organizationId String   @map("organization_id") @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  requestId      String   @map("request_id")
+  provider       String
+  model          String
+  inputTokens    Int?     @map("input_tokens")
+  outputTokens   Int?     @map("output_tokens")
+  costUsd        Decimal  @map("cost_usd") @db.Decimal(18, 6)
+  status         String   @default("RESERVED")
+  expiresAt      DateTime @map("expires_at")
+  occurredAt     DateTime @map("occurred_at") @default(now())
+  completedAt    DateTime? @map("completed_at")
+
+  @@unique([organizationId, requestId])
+  @@index([organizationId, provider, occurredAt])
+  @@map("ai_usages")
+}
+
 /// Work committed with a tenant mutation and delivered after that transaction.
 /// SMTP and outbound HTTP must not run on the request's pooled connection.
 model OutboundEffect {

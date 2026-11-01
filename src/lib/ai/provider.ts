@@ -1,9 +1,12 @@
+import { createAmazonBedrock } from '@ai-sdk/amazon-bedrock';
+import { createAnthropic } from '@ai-sdk/anthropic';
 import { createAzure } from '@ai-sdk/azure';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createVertex } from '@ai-sdk/google-vertex';
 import { createGroq } from '@ai-sdk/groq';
 import { DefaultAzureCredential, getBearerTokenProvider } from '@azure/identity';
 import type { LanguageModel } from 'ai';
+import type { RoutedAIProvider } from './model-defaults';
 
 type Env = Record<string, string | undefined>;
 export type AIProviderName = 'azure' | 'groq' | 'google' | 'vertex';
@@ -48,12 +51,12 @@ export type AIConfig =
 
 export type AIModelSelection = {
   model: LanguageModel;
-  provider: AIProviderName;
+  provider: AIProviderName | RoutedAIProvider;
   modelId: string;
   providerOptions?: Record<string, Record<string, boolean>>;
 };
 
-function required(env: Env, name: string, provider: AIProviderName): string {
+function required(env: Env, name: string, provider: AIProviderName | RoutedAIProvider): string {
   const value = env[name]?.trim();
   if (!value) throw new Error(`[ai:${provider}] ${name} is required.`);
   return value;
@@ -131,4 +134,30 @@ export function createAIModel(env: Env = process.env): AIModelSelection {
       return { model: vertex(config.model), provider: config.provider, modelId: config.model };
     }
   }
+}
+
+/** Create the concrete model selected by the persisted tenant-budget router. */
+export function createRoutedAIModel(
+  selection: { provider: RoutedAIProvider; model: string },
+  env: Env = process.env
+): AIModelSelection {
+  if (selection.provider === 'anthropic') {
+    return {
+      model: createAnthropic({ apiKey: required(env, 'ANTHROPIC_API_KEY', 'anthropic') })(
+        selection.model
+      ),
+      provider: 'anthropic',
+      modelId: selection.model,
+    };
+  }
+  return {
+    model: createAmazonBedrock({
+      region: required(env, 'AWS_REGION', 'bedrock'),
+      accessKeyId: env.AWS_ACCESS_KEY_ID,
+      secretAccessKey: env.AWS_SECRET_ACCESS_KEY,
+      sessionToken: env.AWS_SESSION_TOKEN,
+    })(selection.model),
+    provider: 'bedrock',
+    modelId: selection.model,
+  };
 }
