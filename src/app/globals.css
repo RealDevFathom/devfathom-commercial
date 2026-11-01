@@ -1674,12 +1674,9 @@
   }
   .studio-auth-hero {
     display: flex;
-    position: sticky;
-    inset-block-start: 0;
-    block-size: 100dvh;
+    min-block-size: 100dvh;
     flex-direction: column;
     padding: 48px 40px;
-    overflow: auto;
   }
   .studio-auth-main {
     padding: 64px 48px;
