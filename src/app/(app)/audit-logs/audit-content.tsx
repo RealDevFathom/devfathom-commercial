@@ -110,9 +110,13 @@ const EMPTY_FILTERS = {
   assistantOnly: '',
 };
 
-export function AuditContent() {
+export function AuditContent({
+  initialFilters = {},
+}: {
+  initialFilters?: Partial<Pick<typeof EMPTY_FILTERS, 'actorId' | 'search'>>;
+}) {
   const utils = trpc.useUtils();
-  const [filters, setFilters] = useState({ ...EMPTY_FILTERS });
+  const [filters, setFilters] = useState({ ...EMPTY_FILTERS, ...initialFilters });
   const [selected, setSelected] = useState<AuditEntry | null>(null);
 
   const deferredSearch = useDeferredValue(filters.search);
@@ -329,10 +333,14 @@ export function AuditContent() {
 
             <select
               value={filters.actorId}
+              aria-label="Actor"
               onChange={(e) => set('actorId', e.target.value)}
               className={selectClass()}
             >
               <option value="">All actors</option>
+              {filters.actorId && !filterOpts?.actors.some((a) => a.id === filters.actorId) ? (
+                <option value={filters.actorId}>{filters.actorId}</option>
+              ) : null}
               {filterOpts?.actors.map((a) => (
                 <option key={a.id} value={a.id}>
                   {a.name ?? a.id} ({a.count})

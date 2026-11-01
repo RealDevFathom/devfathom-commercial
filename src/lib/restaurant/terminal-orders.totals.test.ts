@@ -12,7 +12,11 @@ const D = (value: string) => new Prisma.Decimal(value);
 
 function dbFor(
   channel: 'DINE_IN' | 'TAKEAWAY',
-  options: { serviceChargeRate?: string; billedServiceCharges?: string[] } = {}
+  options: {
+    serviceChargeRate?: string;
+    billedServiceCharges?: string[];
+    includeChainedRemakes?: boolean;
+  } = {}
 ) {
   const tax = {
     findMany: vi.fn(async () => [
@@ -111,6 +115,46 @@ function dbFor(
               },
             ],
           },
+          ...(options.includeChainedRemakes
+            ? [
+                {
+                  id: 'coffee-remake-1',
+                  course: 1,
+                  seatNumber: null,
+                  productId: 'product-1',
+                  variantId: null,
+                  name: 'Coffee remake',
+                  unitPrice: D('40.00'),
+                  quantity: 1,
+                  taxAmount: D('0'),
+                  serviceChargeAmount: D('0'),
+                  status: 'SENT',
+                  remakeOfItemId: 'coffee',
+                  voidedPostPrep: false,
+                  wastageDisposition: null,
+                  voidReason: null,
+                  modifiers: [],
+                },
+                {
+                  id: 'coffee-remake-2',
+                  course: 1,
+                  seatNumber: null,
+                  productId: 'product-1',
+                  variantId: null,
+                  name: 'Coffee second remake',
+                  unitPrice: D('400.00'),
+                  quantity: 1,
+                  taxAmount: D('0'),
+                  serviceChargeAmount: D('0'),
+                  status: 'SENT',
+                  remakeOfItemId: 'coffee-remake-1',
+                  voidedPostPrep: false,
+                  wastageDisposition: null,
+                  voidReason: null,
+                  modifiers: [],
+                },
+              ]
+            : []),
         ],
         orderTables: [],
         kitchenTickets: [],
@@ -136,6 +180,7 @@ describe('order totals ignore stored tax and service', () => {
     expect(detail?.items[0]?.taxAmount).toBe(D('99.00').toString());
     expect(detail?.totals.tax).toBe('0.23');
     expect(detail?.totals.serviceCharge).toBe('0.45');
+    expect(detail).toMatchObject({ deliveryStatus: null, settled: false });
     const due = D(detail!.totals.subtotal)
       .plus(detail!.totals.tax)
       .plus(detail!.totals.serviceCharge)
@@ -178,4 +223,33 @@ describe('order totals ignore stored tax and service', () => {
 
     expect(detail?.totals.serviceCharge).toBe('10');
   });
+
+  it.each([
+    { state: 'before bill cut', bills: [] as string[], service: '0.45' },
+    { state: 'after bill cut', bills: ['0.45'], service: '0.45' },
+  ])(
+    'excludes chained remakes from totals $state while retaining their history',
+    async ({ bills, service }) => {
+      const detail = await getOrderForBranch(
+        dbFor('DINE_IN', {
+          billedServiceCharges: bills,
+          includeChainedRemakes: true,
+        }) as unknown as ScopedDb,
+        'order-1',
+        'branch-1'
+      );
+
+      expect(detail?.items.map(({ id, remakeOfItemId }) => ({ id, remakeOfItemId }))).toEqual([
+        { id: 'coffee', remakeOfItemId: null },
+        { id: 'coffee-remake-1', remakeOfItemId: 'coffee' },
+        { id: 'coffee-remake-2', remakeOfItemId: 'coffee-remake-1' },
+      ]);
+      expect(detail?.totals).toEqual({
+        subtotal: '4.5',
+        tax: '0.23',
+        serviceCharge: service,
+        deliveryFee: '0',
+      });
+    }
+  );
 });

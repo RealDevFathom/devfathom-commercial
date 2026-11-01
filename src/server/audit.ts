@@ -111,6 +111,7 @@ function isSensitiveKey(key: string): boolean {
   // denied or invalid requests). Match the identifier exactly, not all grants.
   // The raw tRPC input is captured before validation and authorization, so a
   // rejected request must still never persist a PIN: redact it here, centrally.
+  // Match PIN keys on a word boundary so unrelated keys such as shippingAddress remain useful.
   return (
     k === 'previousgrantid' || isPinKey(key) || SENSITIVE_SUBSTRINGS.some((s) => k.includes(s))
   );

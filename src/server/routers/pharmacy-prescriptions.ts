@@ -24,6 +24,7 @@ import {
   RxOcrError,
 } from '@/lib/pharmacy/rx-ocr';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import type { TRPCContext } from '../trpc';
 import {
   auditedProtectedProcedure,
   capabilityProcedure,
@@ -34,6 +35,24 @@ import {
 
 const purpose = z.enum(['DISPENSING', 'REMINDERS', 'LOYALTY', 'MARKETING']);
 const channel = z.enum(['IN_PERSON', 'PHONE', 'SMS', 'WHATSAPP', 'EMAIL']);
+
+async function requireCounterPatientAccess(
+  ctx: Pick<TRPCContext, 'db' | 'requestMeta'> & {
+    session: NonNullable<TRPCContext['session']>;
+  }
+) {
+  const subject = subjectFromSession(ctx.session.user);
+  const options = { db: ctx.db, source: 'TRPC' as const, ip: ctx.requestMeta.ip };
+  if (
+    !(await can(subject, 'pharmacy:counter', undefined, options)) &&
+    !(await can(subject, 'pharmacy:dispense', undefined, options))
+  ) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission to access counter patients.',
+    });
+  }
+}
 
 // Suppress sensitive payload auditing before authentication/input validation,
 // including denied uploads. Keep the existing audited guards and ABAC engine.
@@ -48,7 +67,7 @@ const fileProcedure = publicProcedure
     const options = { db: ctx.db, source: 'TRPC' as const, ip: ctx.requestMeta.ip };
     if (
       !hasModule(ctx.entitlements, 'pharmacy-dispensing') ||
-      !(await can(subject, 'pharmacy:dispense', undefined, options))
+      !(await can(subject, 'pharmacy:prescriptions', undefined, options))
     ) {
       throw new TRPCError({
         code: 'FORBIDDEN',
@@ -107,6 +126,16 @@ export const pharmacyPrescriptionsRouter = router({
       if (input?.branchId && !selectedBranch)
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Pharmacy branch not found.' });
 
+      // Prescription access is narrower than dispensing (tenant admins may
+      // capture without an exact dispense grant). Report whether the caller can
+      // also record fills / refill reminders so the console hides actions that
+      // the `pharmacy:dispense` gate would refuse.
+      const canDispense = await can(
+        subjectFromSession(ctx.session.user),
+        'pharmacy:dispense',
+        undefined,
+        { db: ctx.db, source: 'TRPC', ip: ctx.requestMeta.ip }
+      );
       const [patients, prescribers, medicines, prescriptions, reminderCaptures] = await Promise.all(
         [
           ctx.db.pharmacyPatient.findMany({ orderBy: { displayName: 'asc' } }),
@@ -142,6 +171,7 @@ export const pharmacyPrescriptionsRouter = router({
       return {
         branches,
         selectedBranchId: selectedBranch?.id ?? null,
+        canDispense,
         patients: patients.map(maskedPatient),
         prescribers,
         medicines,
@@ -182,6 +212,7 @@ export const pharmacyPrescriptionsRouter = router({
           channel,
           version: z.number().int().positive().optional(),
           granted: z.boolean(),
+          source: z.enum(['COUNTER_TABLET', 'QR']).default('COUNTER_TABLET'),
           supersedesId: z.string().optional(),
         })
         .strict()
@@ -192,7 +223,9 @@ export const pharmacyPrescriptionsRouter = router({
           db as typeof ctx.db,
           ctx.entitlements.organizationId,
           ctx.session.user.id,
-          input
+          // Source is client-labelled, so an authenticated staff session always
+          // stays attributable as the capturing staff member, QR included.
+          { ...input, staffId: ctx.session.user.id }
         )
       )
     ),
@@ -260,8 +293,8 @@ export const pharmacyPrescriptionsRouter = router({
     .input(
       z
         .object({
-          patientId: z.string().min(1),
-          prescriberId: z.string().min(1),
+          patientId: z.string().min(1).max(200),
+          prescriberId: z.string().min(1).max(200),
           sourceKind: z.enum(['PAPER_IMAGE', 'WHATSAPP_PHOTO']),
           sourceFileRef: prescriptionFileRefSchema,
           custodyState: z
@@ -275,14 +308,15 @@ export const pharmacyPrescriptionsRouter = router({
               z
                 .object({
                   lineNumber: z.number().int().positive(),
-                  medicineId: z.string().min(1),
-                  presentationId: z.string().min(1),
+                  medicineId: z.string().min(1).max(200),
+                  presentationId: z.string().min(1).max(200),
                   authorizedCanonicalUnits: z.number().int().positive(),
-                  directions: z.string().trim().min(1),
+                  directions: z.string().trim().min(1).max(2_000),
                 })
                 .strict()
             )
-            .min(1),
+            .min(1)
+            .max(30),
         })
         .strict()
     )
@@ -403,9 +437,29 @@ export const pharmacyPrescriptionsRouter = router({
         })
         .strict()
     )
-    .mutation(({ ctx, input }) =>
-      ctx.db.prescriptionFill.create({ data: { ...input, dispensedByUserId: ctx.session.user.id } })
-    ),
+    .mutation(async ({ ctx, input }) => {
+      const line = await ctx.db.prescriptionLine.findFirst({
+        where: {
+          id: input.prescriptionLineId,
+          organizationId: ctx.entitlements.organizationId,
+        },
+        select: { medicine: { select: { controlled: true } } },
+      });
+      if (!line) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Prescription line not found.' });
+      }
+      // Controlled dispensing must use the counter flow, which atomically allocates stock and
+      // records both the witnessed fill and controlled-drug register entry.
+      if (line.medicine.controlled) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Controlled medicines must be dispensed through the witnessed counter flow.',
+        });
+      }
+      return ctx.db.prescriptionFill.create({
+        data: { ...input, dispensedByUserId: ctx.session.user.id },
+      });
+    }),
 
   captureRefillReminder: capabilityProcedure('pharmacy:dispense')
     .input(
@@ -453,6 +507,7 @@ export const pharmacyPrescriptionsRouter = router({
   counterPatients: protectedProcedure
     .input(z.object({ query: z.string().trim().min(2).max(120) }).strict())
     .query(async ({ ctx, input }) => {
+      await requireCounterPatientAccess(ctx);
       try {
         return {
           patients: await searchCounterPatients(
@@ -479,6 +534,7 @@ export const pharmacyPrescriptionsRouter = router({
   counterPatientPanel: auditedProtectedProcedure
     .input(z.object({ patientId: z.string().min(1) }).strict())
     .query(async ({ ctx, input }) => {
+      await requireCounterPatientAccess(ctx);
       try {
         const panel = await readCounterPatientPanel(
           ctx.db,

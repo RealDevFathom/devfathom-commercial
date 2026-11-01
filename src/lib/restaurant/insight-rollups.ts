@@ -62,7 +62,12 @@ export type ReconciledFinancials = {
 export function computeReconciledFinancials(input: {
   bills: readonly RawBill[];
   tenders: readonly { tipAmount: Prisma.Decimal }[];
-  refunds: readonly { amount: Prisma.Decimal; deliveryFeeRefundAmount: Prisma.Decimal }[];
+  refunds: readonly {
+    amount: Prisma.Decimal;
+    taxRefundAmount: Prisma.Decimal;
+    serviceChargeRefundAmount: Prisma.Decimal;
+    deliveryFeeRefundAmount: Prisma.Decimal;
+  }[];
   drawers: readonly RawDrawer[];
 }): ReconciledFinancials {
   const settled = input.bills.filter((bill) => bill.status === 'SETTLED');
@@ -71,14 +76,30 @@ export function computeReconciledFinancials(input: {
   const discountTotal = sum(settled.map((bill) => bill.discountTotal));
   const cashExpected = sum(input.drawers.map((drawer) => foldExpectedCash(drawer.movements)));
   const cashCounted = sum(input.drawers.map((drawer) => drawer.countedCash ?? ZERO));
-  const refundTotal = sum(input.refunds.map((refund) => refund.amount));
+  const refundedTaxTotal = sum(input.refunds.map((refund) => refund.taxRefundAmount));
+  const refundedServiceChargeTotal = sum(
+    input.refunds.map((refund) => refund.serviceChargeRefundAmount)
+  );
+  const deliveryFeeRefunds = sum(input.refunds.map((refund) => refund.deliveryFeeRefundAmount));
+  const refundTotal = sub(sum(input.refunds.map((refund) => refund.amount)), deliveryFeeRefunds);
+  const refundedSales = sum(
+    input.refunds.map((refund) =>
+      sub(
+        sub(sub(refund.amount, refund.taxRefundAmount), refund.serviceChargeRefundAmount),
+        refund.deliveryFeeRefundAmount
+      )
+    )
+  );
   return {
     grossSales,
-    netSales: sub(sub(sub(grossSales, compTotal), discountTotal), refundTotal),
+    netSales: sub(sub(sub(grossSales, compTotal), discountTotal), refundedSales),
     deliveryFeeSales: sum(settled.map((bill) => bill.deliveryFeeTotal)),
-    deliveryFeeRefunds: sum(input.refunds.map((refund) => refund.deliveryFeeRefundAmount)),
-    taxTotal: sum(settled.map((bill) => bill.taxTotal)),
-    serviceChargeTotal: sum(settled.map((bill) => bill.serviceChargeTotal)),
+    deliveryFeeRefunds,
+    taxTotal: sub(sum(settled.map((bill) => bill.taxTotal)), refundedTaxTotal),
+    serviceChargeTotal: sub(
+      sum(settled.map((bill) => bill.serviceChargeTotal)),
+      refundedServiceChargeTotal
+    ),
     tipTotal: sum(input.tenders.map((tender) => tender.tipAmount)),
     compTotal,
     discountTotal,
@@ -227,14 +248,28 @@ function resolveCloseTip(closes: readonly CloseTip[]): CloseTip | null {
   return closes.filter((close) => !superseded.has(close.id)).at(-1) ?? null;
 }
 
-function assertReconciles(close: CloseTip, raw: ReconciledFinancials): void {
-  const mismatch = (Object.keys(raw) as Array<keyof ReconciledFinancials>).find(
-    (key) =>
-      !close[key].equals(raw[key]) &&
-      // Closes cut before WHA-1621 Q1 persisted netSales without the refund deduction;
-      // they are append-only, so accept that legacy formula rather than refuse to project.
-      !(key === 'netSales' && close.netSales.equals(add(raw.netSales, raw.refundTotal)))
-  );
+function assertReconciles(
+  close: CloseTip,
+  raw: ReconciledFinancials,
+  historical: ReconciledFinancials
+): void {
+  const keys = Object.keys(raw) as Array<keyof ReconciledFinancials>;
+  const salesBeforeRefunds = sub(sub(raw.grossSales, raw.compTotal), raw.discountTotal);
+  // Immutable closes may use the pre-#405 refund formula. Validate a complete
+  // snapshot under either formula, never a mixture of historical/current fields.
+  // Pre-WHA-1621 Q1 closes also omitted the net-sales refund deduction.
+  if (
+    [raw, historical].some((candidate) =>
+      keys.every(
+        (key) =>
+          close[key].equals(candidate[key]) ||
+          (key === 'netSales' && close.netSales.equals(salesBeforeRefunds))
+      )
+    )
+  ) {
+    return;
+  }
+  const mismatch = keys.find((key) => !close[key].equals(raw[key]));
   if (mismatch) {
     throw new RollupError(
       `Daily close reconciliation failed for ${mismatch}: close=${close[mismatch].toString()} raw=${raw[mismatch].toString()}.`,
@@ -310,7 +345,12 @@ export async function rollupDay(db: ScopedDb, input: RollupDayInput) {
     });
     const refunds = await tx.restaurantRefund.findMany({
       where: { businessDate, bill: { branchId: input.branchId } },
-      select: { amount: true, deliveryFeeRefundAmount: true },
+      select: {
+        amount: true,
+        taxRefundAmount: true,
+        serviceChargeRefundAmount: true,
+        deliveryFeeRefundAmount: true,
+      },
     });
     const drawers = await tx.restaurantDrawerSession.findMany({
       where: { branchId: input.branchId, businessDate },
@@ -322,7 +362,18 @@ export async function rollupDay(db: ScopedDb, input: RollupDayInput) {
       refunds,
       drawers: drawers as RawDrawer[],
     });
-    assertReconciles(close, raw);
+    const settledBills = bills.filter((bill) => bill.status === 'SETTLED');
+    const historicalRefundTotal = sum(refunds.map((refund) => refund.amount));
+    assertReconciles(close, raw, {
+      ...raw,
+      netSales: sub(
+        sub(sub(raw.grossSales, raw.compTotal), raw.discountTotal),
+        historicalRefundTotal
+      ),
+      taxTotal: sum(settledBills.map((bill) => bill.taxTotal)),
+      serviceChargeTotal: sum(settledBills.map((bill) => bill.serviceChargeTotal)),
+      refundTotal: historicalRefundTotal,
+    });
 
     const existing = await tx.insightDailyRollup.findFirst({
       where: { branchId: input.branchId, businessDate },
@@ -345,7 +396,7 @@ export async function rollupDay(db: ScopedDb, input: RollupDayInput) {
       select: {
         coverCount: true,
         items: {
-          where: { status: { not: 'VOIDED' } },
+          where: { status: { not: 'VOIDED' }, remakeOfItemId: null },
           select: {
             productId: true,
             unitPrice: true,
@@ -459,7 +510,7 @@ export async function rollupDay(db: ScopedDb, input: RollupDayInput) {
         deliveryFeeSales: close.deliveryFeeSales,
         deliveryFeeRefunds: close.deliveryFeeRefunds,
         compTotal: close.compTotal,
-        refundTotal: close.refundTotal,
+        refundTotal: raw.refundTotal,
         voidTotal: close.voidTotal,
         drawerVariance: close.cashVariance,
         loyaltyLiability: ZERO,
@@ -475,7 +526,7 @@ export async function rollupDay(db: ScopedDb, input: RollupDayInput) {
         deliveryFeeSales: close.deliveryFeeSales,
         deliveryFeeRefunds: close.deliveryFeeRefunds,
         compTotal: close.compTotal,
-        refundTotal: close.refundTotal,
+        refundTotal: raw.refundTotal,
         voidTotal: close.voidTotal,
         drawerVariance: close.cashVariance,
         loyaltyLiability: ZERO,

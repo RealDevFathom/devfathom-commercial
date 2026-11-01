@@ -37,7 +37,7 @@
  * organizationId — so a wider-visibility role cannot reach the asserted rows and
  * the suite is valid on a superuser TEST_DATABASE_URL too.
  */
-import { randomBytes } from 'node:crypto';
+import { createHmac, randomBytes } from 'node:crypto';
 
 import { PrismaPg } from '@prisma/adapter-pg';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
@@ -83,6 +83,8 @@ const BRANCH_ID = `wha1209_branch_${suffix}`;
 const LIVE_BRANCH_ID = `wha1209_live_branch_${suffix}`;
 const LOCATION_ID = `wha1209_loc_${suffix}`;
 const JOB_ID = `wha1209_job_${suffix}`;
+const CUSTOMER_ID = `wa_consent_customer_${suffix}`;
+const CONSENT_CHANGED_AT = new Date('2026-10-22T09:10:11.000Z');
 const PURGED_PROFILE_ID = `wha1220_profile_${suffix}`;
 const LIVE_PROFILE_ID = `wha1220_live_profile_${suffix}`;
 const HOTEL_PURGED_ORG = `hotel_purge_${suffix}`;
@@ -245,6 +247,20 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
     await withPlatformDb(async (db) => {
       await seedTenant(db, PURGED_ORG, 'PURGING');
       await seedTenant(db, LIVE_ORG, 'ACTIVE');
+      const patient = await db.pharmacyPatient.create({
+        data: { organizationId: PURGED_ORG, displayName: 'Private patient name' },
+      });
+      await db.pharmacyCustomer.create({
+        data: {
+          id: CUSTOMER_ID,
+          organizationId: PURGED_ORG,
+          patientId: patient.id,
+          displayName: 'Private customer name',
+          phoneLast4: '1234',
+          whatsappOptIn: false,
+          whatsappOptInChangedAt: CONSENT_CHANGED_AT,
+        },
+      });
 
       // The mutually-referencing pair: a branch that names a default stock
       // location which in turn belongs to that branch.
@@ -331,7 +347,9 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
                 (SELECT count(*) FROM pharmacy_onboarding_events WHERE "organizationId" = $1) AS events,
                 (SELECT count(*) FROM pharmacy_onboarding_states WHERE "organizationId" = $1) AS states,
                 (SELECT count(*) FROM camera_evidence WHERE "organizationId" = $1) AS evidence,
-                (SELECT count(*) FROM cameras WHERE "organizationId" = $1) AS cameras`,
+                (SELECT count(*) FROM cameras WHERE "organizationId" = $1) AS cameras,
+                (SELECT count(*) FROM pharmacy_customers WHERE "organizationId" = $1) AS customers,
+                (SELECT count(*) FROM pharmacy_patients WHERE "organizationId" = $1) AS patients`,
         PURGED_ORG
       )
     );
@@ -347,7 +365,33 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
       states: none,
       evidence: none,
       cameras: none,
+      customers: none,
+      patients: none,
     });
+
+    const organizationFingerprint = createHmac(
+      'sha256',
+      process.env.PLATFORM_ENCRYPTION_KEY!.trim()
+    )
+      .update(`whatsapp-consent:organization:${PURGED_ORG}`)
+      .digest('hex');
+    const archived = await withPlatformDb((db) =>
+      db.pharmacyWhatsAppConsentArchive.findMany({ where: { organizationFingerprint } })
+    );
+    expect(archived).toHaveLength(1);
+    expect(archived[0]).toMatchObject({ optedIn: false, consentChangedAt: CONSENT_CHANGED_AT });
+    expect(JSON.stringify(archived)).not.toMatch(/Private|wa_consent_customer_/);
+    expect(Object.keys(archived[0]!).sort()).toEqual(
+      [
+        'id',
+        'organizationFingerprint',
+        'customerFingerprint',
+        'optedIn',
+        'consentChangedAt',
+        'archivedAt',
+        'expiresAt',
+      ].sort()
+    );
 
     const [live] = await withPlatformDb((db) =>
       db.$queryRawUnsafe<Array<Record<string, bigint>>>(

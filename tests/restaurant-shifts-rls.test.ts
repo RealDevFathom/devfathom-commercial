@@ -173,6 +173,43 @@ describeIfDatabase('restaurant_shifts isolation probes (real PostgreSQL)', () =>
     await client.end();
   });
 
+  it('keeps raw missing break ends while enforcing one effectively open break', async () => {
+    await client!.query('SAVEPOINT repaired_break');
+    try {
+      const insertOpen = (id: string) =>
+        client!.query(
+          `INSERT INTO "restaurant_shift_breaks"
+         ("id", "organizationId", "shiftId", "closedByAdjustment", "updatedAt")
+         VALUES ($1, $2, $3, true, CURRENT_TIMESTAMP)`,
+          [id, ids.orgA, ids.rowA]
+        );
+      // Supplying the derived flag cannot bypass the unique open-break guard.
+      await expectDatabaseError('23505', () => insertOpen(`next_${suffix}`));
+      await client!.query(
+        `INSERT INTO "restaurant_time_adjustments"
+         ("id", "organizationId", "shiftId", "breakId", "kind", "originalAt",
+          "correctedAt", "reason", "adjustedByUserId")
+         VALUES ($1, $2, $3, $4, 'BREAK_END', NULL, CURRENT_TIMESTAMP, 'Reader offline', 'manager')`,
+        [`repair_${suffix}`, ids.orgA, ids.rowA, ids.breakA]
+      );
+      const raw = await client!.query(
+        `SELECT "endedAt", "closedByAdjustment" FROM "restaurant_shift_breaks" WHERE "id" = $1`,
+        [ids.breakA]
+      );
+      expect(raw.rows).toEqual([{ endedAt: null, closedByAdjustment: true }]);
+      await insertOpen(`next_${suffix}`);
+      await expectDatabaseError('23505', () => insertOpen(`third_${suffix}`));
+      const rewrite = await client!.query(
+        `UPDATE "restaurant_time_adjustments" SET "reason" = 'rewrite' WHERE "id" = $1`,
+        [`repair_${suffix}`]
+      );
+      expect(rewrite.rowCount).toBe(0);
+    } finally {
+      await client!.query('ROLLBACK TO SAVEPOINT repaired_break');
+      await client!.query('RELEASE SAVEPOINT repaired_break');
+    }
+  });
+
   it('enables and FORCES row-level security on the shift table', async () => {
     const rls = await client!.query<{ enabled: boolean; forced: boolean }>(
       `SELECT relrowsecurity AS enabled, relforcerowsecurity AS forced

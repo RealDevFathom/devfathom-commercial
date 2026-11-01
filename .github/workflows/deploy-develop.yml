@@ -1,0 +1,117 @@
+name: Deploy develop
+
+on:
+  workflow_run:
+    workflows: ['QA gate']
+    types: [completed]
+    branches: [develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+  id-token: write
+
+concurrency:
+  group: deploy-develop
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: >-
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.conclusion == 'success') ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/develop')
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment: develop
+    env:
+      DEPLOY_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+    steps:
+      - name: Verify exact develop commit and both required QA jobs
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: |
+            const sha = process.env.DEPLOY_SHA;
+            const repo = context.repo;
+            const {data: branch} = await github.rest.repos.getBranch({...repo, branch: 'develop'});
+            if (branch.commit.sha !== sha) throw new Error('Refusing stale develop commit');
+            const {data: workflow} = await github.rest.actions.getWorkflow({...repo, workflow_id: 'qa.yml'});
+            const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+              ...repo, workflow_id: workflow.id, branch: 'develop', head_sha: sha,
+              event: 'push', status: 'completed', per_page: 100,
+            });
+            const required = ['WHA-1125 automated gate', 'WHA-1132 browser gate'];
+            let passed = false;
+            for (const run of runs) {
+              if (run.workflow_id !== workflow.id || run.path !== '.github/workflows/qa.yml' ||
+                  run.event !== 'push' || run.head_sha !== sha || run.head_branch !== 'develop' ||
+                  run.head_repository?.full_name !== `${repo.owner}/${repo.repo}` ||
+                  run.conclusion !== 'success') continue;
+              if (context.eventName === 'workflow_run' && run.id !== context.payload.workflow_run.id) continue;
+              const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
+                ...repo, run_id: run.id, filter: 'latest', per_page: 100,
+              });
+              if (required.every(name => jobs.some(job => job.name === name &&
+                  job.head_sha === sha && job.status === 'completed' && job.conclusion === 'success'))) {
+                passed = true;
+                break;
+              }
+            }
+            if (!passed) throw new Error('Exact develop SHA lacks successful push QA and both required jobs');
+
+      - name: Check out the gated commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ env.DEPLOY_SHA }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.2
+
+      - name: Install, build and package standalone release
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+          NEXT_PUBLIC_APP_URL: https://develop.devfathom.com
+          # Compile-only local URL; no server credentials are needed for a build.
+          DATABASE_URL: postgresql://build:build@127.0.0.1:5432/build
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$DEPLOY_SHA"
+          bun install --frozen-lockfile
+          bunx prisma generate
+          # Ephemeral compile-only auth value; the service supplies its own at runtime.
+          AUTH_SECRET=$(openssl rand -hex 32)
+          export AUTH_SECRET
+          bunx next build
+          scripts/deploy/package-develop.sh . "$RUNNER_TEMP/$DEPLOY_SHA.tar.gz"
+
+      - name: Authenticate with develop OIDC role
+        uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708 # v5
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+          role-session-name: develop-${{ github.run_id }}
+
+      - name: Recheck develop head before upload
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: |
+            const {data} = await github.rest.repos.getBranch({...context.repo, branch: 'develop'});
+            if (data.commit.sha !== process.env.DEPLOY_SHA) throw new Error('Develop advanced during build');
+
+      - name: Upload artifact and await SSM deployment
+        env:
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          DEVELOP_ARTIFACT_BUCKET: ${{ secrets.DEVELOP_ARTIFACT_BUCKET }}
+          DEVELOP_INSTANCE_ID: ${{ secrets.DEVELOP_INSTANCE_ID }}
+        run: |
+          set -euo pipefail
+          aws s3 cp "$RUNNER_TEMP/$DEPLOY_SHA.tar.gz" \
+            "s3://$DEVELOP_ARTIFACT_BUCKET/develop/$DEPLOY_SHA.tar.gz" --only-show-errors
+          scripts/deploy/send-develop.sh

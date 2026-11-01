@@ -34,6 +34,9 @@ export type TerminalRequestOptions = {
 
 export type TerminalRequest = <T>(path: string, options?: TerminalRequestOptions) => Promise<T>;
 
+// Restore the comp control only when the public endpoint supports it after MVP.
+const COMPLIMENTARY_ITEMS_AVAILABLE = false;
+
 type CheckoutSummary = {
   orderId: string;
   settled: boolean;
@@ -42,6 +45,13 @@ type CheckoutSummary = {
   accountedTotal: string;
   deliveryFeeTotal: string | null;
   unbilledItemIds: string[];
+  unbilledItems: {
+    id: string;
+    name: string;
+    quantity: number;
+    seatNumber: number | null;
+    modifiers: string[];
+  }[];
   bills: {
     id: string;
     status: string;
@@ -287,6 +297,19 @@ function billTone(status: string): StatusTone {
   if (status === 'OPEN') return 'warning';
   if (status === 'VOID') return 'danger';
   return 'neutral';
+}
+
+// A Map (not an object literal) so inherited keys such as `constructor` never resolve,
+// and unknown kinds fall back to fixed copy instead of exposing the raw server value.
+const splitKindLabels = new Map<string, string>([
+  ['NONE', 'Whole order'],
+  ['BY_ITEM', 'By item'],
+  ['BY_SEAT', 'By seat'],
+  ['FRACTIONAL', 'Fractional'],
+]);
+
+function billTitle(splitKind: string) {
+  return splitKindLabels.get(splitKind) ?? 'Bill details';
 }
 
 const blockerLabels: Record<Exclude<CheckoutSummary['blocker'], null>, string> = {
@@ -905,7 +928,7 @@ export function CheckoutPanel({
                     {busy ? 'Creating bill…' : 'Cut single bill'}
                   </Button>
                   <SplitBillDialog
-                    itemIds={summary.unbilledItemIds}
+                    items={summary.unbilledItems}
                     disabled={busy}
                     onSplit={cut}
                   />
@@ -928,7 +951,7 @@ export function CheckoutPanel({
                 title={
                   bill.receiptNumber !== null
                     ? `Receipt ${bill.receiptNumber}`
-                    : bill.splitKind.replaceAll('_', ' ')
+                    : billTitle(bill.splitKind)
                 }
                 actions={<StatusPill status={bill.status} tone={billTone(bill.status)} />}
               >
@@ -962,15 +985,17 @@ export function CheckoutPanel({
                 </dl>
                 {bill.status === 'OPEN' ? (
                   <>
-                    <CompControl
-                      billId={bill.id}
-                      lines={bill.lines ?? []}
-                      request={request}
-                      operators={operators}
-                      actingOperatorId={actingOperatorId}
-                      disabled={busy || tenderPending}
-                      onComped={loadSummary}
-                    />
+                    {COMPLIMENTARY_ITEMS_AVAILABLE ? (
+                      <CompControl
+                        billId={bill.id}
+                        lines={bill.lines ?? []}
+                        request={request}
+                        operators={operators}
+                        actingOperatorId={actingOperatorId}
+                        disabled={busy || tenderPending}
+                        onComped={loadSummary}
+                      />
+                    ) : null}
                     <TenderPad
                       billId={bill.id}
                       amountDue={bill.remainingDue}

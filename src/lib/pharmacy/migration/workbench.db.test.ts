@@ -27,7 +27,14 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { excelCsvProfiler } from './excel-csv-profiler';
+import { margBatchStockProfiler, parseMargBatchStockText } from './marg-batch-stock-profiler';
 import { profileTable } from './profiler';
+import {
+  decodeTallyXmlBytes,
+  flattenTallyXml,
+  tallyXmlProfiler,
+  unmappedTallyRequiredFields,
+} from './tally-xml-profiler';
 import { parseDelimitedText } from './source-values';
 
 const TEST_DATABASE_URL = process.env.M8_TEST_RUNTIME_DATABASE_URL ?? process.env.TEST_DATABASE_URL;
@@ -460,5 +467,88 @@ describeIfDatabase('PH-MIG workbench — cross-tenant isolation', () => {
     );
     expect(stillOpen.status).toBe('OPEN');
     expect(stillOpen.signedOffByUserId).toBeNull();
+  });
+});
+
+describeIfDatabase('PH-MIG workbench — #721 Tally XML and Marg Batch Stock presets', () => {
+  it('records a TALLY_XML source and persists the sample with zero exceptions', async () => {
+    const bytes = readFileSync(join(FIXTURE_DIR, 'tally-masters-sample.xml'));
+    const flattened = flattenTallyXml(decodeTallyXmlBytes(bytes));
+    const result = profileTable(tallyXmlProfiler, flattened.table);
+    expect(unmappedTallyRequiredFields(result.columnMap)).toEqual([]);
+
+    const { source, persisted, batch, rows } = await inOrgA(async (db) => {
+      const recorded = await deps.workbench.recordSource(db, {
+        kind: 'TALLY_XML',
+        fileName: 'tally-masters-sample.xml',
+        bytes,
+      });
+      const saved = await deps.workbench.persistProfile(db, {
+        sourceId: recorded.id,
+        label: 'tally sample',
+        profiler: tallyXmlProfiler,
+        result,
+      });
+      return {
+        source: recorded,
+        persisted: saved,
+        batch: await db.pharmacyMigrationBatch.findUniqueOrThrow({ where: { id: saved.batchId } }),
+        rows: await db.pharmacyMigrationRow.findMany({
+          where: { batchId: saved.batchId },
+          orderBy: { rowNumber: 'asc' },
+        }),
+      };
+    });
+
+    expect(source.kind).toBe('TALLY_XML');
+    expect(persisted.rowCount).toBe(6);
+    expect(persisted.exceptionCount).toBe(0);
+    expect(batch.profilerVersion).toBe(tallyXmlProfiler.version);
+    expect(rows[0]).toMatchObject({
+      batchNumber: 'B2411',
+      mrpMinor: BigInt(2500),
+      costMinor: BigInt(2125),
+      quantityCanonical: BigInt(100),
+    });
+    expect(rows[5]).toMatchObject({
+      customerName: 'Al-Shifa Clinic',
+      balanceMinor: BigInt(275000),
+    });
+  });
+
+  it('records a MARG_EXCEL source and persists the synthetic batch stock file', async () => {
+    const bytes = readFileSync(join(FIXTURE_DIR, 'marg-batch-stock-synthetic.csv'));
+    const result = profileTable(
+      margBatchStockProfiler,
+      parseMargBatchStockText(bytes.toString('utf8')).table
+    );
+
+    const { source, persisted, rows } = await inOrgA(async (db) => {
+      const recorded = await deps.workbench.recordSource(db, {
+        kind: 'MARG_EXCEL',
+        fileName: 'marg-batch-stock-synthetic.csv',
+        bytes,
+      });
+      const saved = await deps.workbench.persistProfile(db, {
+        sourceId: recorded.id,
+        label: 'marg synthetic',
+        profiler: margBatchStockProfiler,
+        result,
+      });
+      return {
+        source: recorded,
+        persisted: saved,
+        rows: await db.pharmacyMigrationRow.findMany({
+          where: { batchId: saved.batchId },
+          orderBy: { rowNumber: 'asc' },
+        }),
+      };
+    });
+
+    expect(source.kind).toBe('MARG_EXCEL');
+    expect(persisted.rowCount).toBe(4);
+    expect(persisted.exceptionCount).toBe(0);
+    expect(rows.map((row) => row.batchNumber)).toEqual(['B2411', 'B2502', 'AG-77', 'BR-9012']);
+    expect((rows[0]!.rawPayload as Record<string, string>)['Item Code']).toBe('M001');
   });
 });
