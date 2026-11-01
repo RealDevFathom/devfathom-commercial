@@ -2,7 +2,7 @@
 
 import { tenderTotalsSchema } from '@/lib/pharmacy/manual-payments';
 
-import { useMemo, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 import { useSession } from 'next-auth/react';
 import { useEntitlements } from '@/components/entitlements-provider';
 import { evaluateSessionUser } from '@/lib/auth/session-state';
@@ -17,6 +17,28 @@ import { formatMinor, type CounterReceiptLocale } from '@/lib/pharmacy/counter-r
 import { printCounterBrowserZReport } from '@/lib/pharmacy/counter-browser-print';
 import { counterErrorMessage } from '@/lib/pharmacy/counter-messages';
 import { workspaceTimezone, workspaceToday } from '@/lib/timezone';
+import {
+  closeBlockingReasons,
+  dayLockStatus,
+  drawerStateLabel,
+  hasCashVariance,
+  isQuietDay,
+  paymentSummary,
+  paymentTypeLabel,
+} from './day-close-status';
+
+/**
+ * What locking means, and who can act on a locked day. Matches the server: once
+ * a close is recorded every sale, refund and drawer change for that date is
+ * refused (requirePharmacyDayOpen), and a superseding re-close needs a written
+ * reason and the same day-close access as this screen (requireCloseAccess).
+ */
+export const LOCK_CONSEQUENCE_COPY =
+  'Locking cannot be undone. Once locked, no new sales, refunds or drawer changes can be recorded for this business date.';
+export const RECLOSE_ACCESS_COPY =
+  'Only workspace administrators, such as the owner, and staff whose role grants day-close permission can issue a corrected Z-report for a locked day, and it needs a written reason. A corrected report does not reopen the day for sales.';
+export const REFRESH_PREVIEW_COPY =
+  "Refresh preview re-reads this day's sales and drawer movements. It does not save or change anything, but it clears the counts typed here.";
 
 /**
  * "Opened 09:12 by Ayesha Karim", or just the time when the opener is no longer a
@@ -153,6 +175,7 @@ function DayCloseForm({
   const [confirmed, setConfirmed] = useState(false);
   const [locale, setLocale] = useState<CounterReceiptLocale>('en');
   const [printMessage, setPrintMessage] = useState('');
+  const ids = useId();
   if (preview.isLoading)
     return (
       <SectionCard>
@@ -182,22 +205,29 @@ function DayCloseForm({
       0
     );
   const variance = counted - expected;
-  const hasVariance = data.drawers.some(
-    (d) =>
-      (d.status === 'OPEN' ? cashMinor(counts[d.id] ?? '') : d.countedMinor) !== d.expectedMinor
-  );
+  const countFor = (i: number) => cashMinor(counts[data.drawers[i].id] ?? '');
+  const hasVariance = hasCashVariance(data.drawers, countFor);
+  const blockers = closeBlockingReasons({ drawers: data.drawers, countFor, note, confirmed });
   const busy = close.isPending || preview.isFetching;
+  const dayStatus = dayLockStatus(Boolean(report));
+  const returnsMinor = report?.refundTotalMinor ?? data.totals.refundTotalMinor ?? 0;
+  const summary = paymentSummary(tenderTotals, returnsMinor);
+  const quietDay = isQuietDay({
+    grossSalesMinor: report?.grossSalesMinor ?? data.totals.grossSalesMinor ?? 0,
+    refundTotalMinor: returnsMinor,
+    cashExpectedMinor: expected,
+    tenderTotals,
+  });
+  const blockersId = `${ids}-blockers`;
+  const lockHelpId = `${ids}-lock-help`;
+  const noteHelpId = `${ids}-note-help`;
+  const refreshHelpId = `${ids}-refresh-help`;
   return (
     <div className="space-y-6">
       <SectionCard
         title="Cash reconciliation"
         titleLevel={2}
-        actions={
-          <StatusPill
-            status={report ? 'Day closed' : 'Open day'}
-            tone={report ? 'success' : 'neutral'}
-          />
-        }
+        actions={<StatusPill status={dayStatus.label} tone={dayStatus.tone} />}
       >
         <dl className="grid gap-4 sm:grid-cols-3">
           {[
@@ -215,19 +245,47 @@ function DayCloseForm({
             </div>
           ))}
         </dl>
-        <div className="mt-4 space-y-2" aria-label="Tender totals">
-          {tenderTotals.map((row) => (
-            <p key={row.type} className="text-sm text-text-body">
-              <span className="font-medium">{row.type}</span> · Received {formatMinor(row.amountMinor)}
-              {' '}· Refunds {formatMinor(row.refundMinor)} · Net {formatMinor(row.netMinor)} PKR
+        <section className="mt-6 space-y-3" aria-labelledby={`${ids}-payments`}>
+          <h3 id={`${ids}-payments`} className="text-sm font-medium text-text-strong">
+            Payment types
+          </h3>
+          <dl className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            {summary.map((row) => (
+              <div key={row.label}>
+                <dt className="text-sm text-text-muted">
+                  {row.label} · {currency}
+                </dt>
+                <dd className="font-mono text-lg tabular-nums" data-testid={row.label}>
+                  {formatMinor(row.amountMinor)}
+                </dd>
+              </div>
+            ))}
+          </dl>
+          {tenderTotals.length > 0 && (
+            <ul className="space-y-1" aria-label="Payment type totals">
+              {tenderTotals.map((row) => (
+                <li key={row.type} className="text-sm text-text-body">
+                  <span className="font-medium">{paymentTypeLabel(row.type)}</span> · Received{' '}
+                  {currency} {formatMinor(row.amountMinor)} · Refunds {currency}{' '}
+                  {formatMinor(row.refundMinor)} · Net {currency} {formatMinor(row.netMinor)}
+                </li>
+              ))}
+            </ul>
+          )}
+          {quietDay && (
+            <p className="text-sm text-text-muted">
+              Every total reads 0.00 because no completed sales, refunds or drawer cash movements
+              are recorded for this business day yet.
             </p>
-          ))}
-        </div>
+          )}
+        </section>
         {report ? (
           <div className="mt-4 space-y-3">
             <p role="status">
-              Day closed. New tenders and drawer changes for this business date are blocked.
+              Day locked. New sales, payments and drawer changes for this business date are
+              blocked.
             </p>
+            <p className="text-sm text-text-muted">{RECLOSE_ACCESS_COPY}</p>
             <p>
               {report.supersedesCloseId || report.sequence > 1 ? 'Reopen reason' : 'Variance note'}:{' '}
               {report.reason || 'No variance recorded.'}
@@ -271,7 +329,7 @@ function DayCloseForm({
             className="mt-6 space-y-5"
             onSubmit={(e) => {
               e.preventDefault();
-              if (!valid || !confirmed || busy || (hasVariance && !note.trim())) return;
+              if (busy || blockers.length > 0) return;
               close.mutate({
                 ...input,
                 sourceHash: data.totals.sourceHash,
@@ -291,7 +349,7 @@ function DayCloseForm({
                 <p className="text-sm">
                   {/* Named by who opened it and when; the device id names nothing to a cashier. */}
                   Drawer {i + 1} · {drawerOpenedLabel(d, data.timezone)} ·{' '}
-                  {d.status === 'OPEN' ? 'Open' : 'Closed'}
+                  {drawerStateLabel(d.status)}
                 </p>
                 <p className="text-sm">
                   Expected: {currency} {formatMinor(d.expectedMinor)}
@@ -324,17 +382,26 @@ function DayCloseForm({
               </div>
             ))}
             <label className="grid gap-2">
-              Variance note
+              <span>
+                Variance note
+                {hasVariance && (
+                  <span className="ml-2 text-sm font-medium text-destructive">(required)</span>
+                )}
+              </span>
               <Input
                 className="min-h-11"
                 maxLength={1000}
                 value={note}
                 disabled={busy}
                 required={hasVariance}
+                aria-required={hasVariance}
+                aria-describedby={noteHelpId}
                 onChange={(e) => setNote(e.target.value)}
               />
-              <span className="text-sm text-text-muted">
-                Required when any drawer count differs from expected cash.
+              <span id={noteHelpId} className="text-sm text-text-muted">
+                {hasVariance
+                  ? 'Required: counted cash differs from expected cash. Explain the difference.'
+                  : 'Only needed when a drawer count differs from expected cash.'}
               </span>
             </label>
             <label className="flex items-start gap-3">
@@ -345,14 +412,19 @@ function DayCloseForm({
                 disabled={busy}
                 onChange={(e) => setConfirmed(e.target.checked)}
               />
-              I have counted every drawer. Close and lock this day against new tenders.
+              I have counted every drawer. Close and lock this day against new sales and payments.
             </label>
+            <div id={lockHelpId} className="space-y-1 text-sm text-text-muted">
+              <p>{LOCK_CONSEQUENCE_COPY}</p>
+              <p>{RECLOSE_ACCESS_COPY}</p>
+            </div>
             {close.error && <p role="alert">{counterErrorMessage(close.error)}</p>}
             <div className="flex flex-wrap gap-3">
               <Button
                 className="min-h-11"
                 type="submit"
-                disabled={busy || !valid || !confirmed || (hasVariance && !note.trim())}
+                disabled={busy || blockers.length > 0}
+                aria-describedby={`${blockers.length ? `${blockersId} ` : ''}${lockHelpId}`}
               >
                 {close.isPending ? 'Closing day…' : 'Close and lock day'}
               </Button>
@@ -361,6 +433,7 @@ function DayCloseForm({
                 type="button"
                 variant="outline"
                 disabled={busy}
+                aria-describedby={refreshHelpId}
                 onClick={() => {
                   setCounts({});
                   setConfirmed(false);
@@ -371,6 +444,21 @@ function DayCloseForm({
                 Refresh preview
               </Button>
             </div>
+            {blockers.length > 0 && (
+              <div id={blockersId} className="text-sm">
+                <p className="font-medium text-text-strong">
+                  Close and lock day is not available yet:
+                </p>
+                <ul className="mt-1 list-disc space-y-1 pl-5 text-text-body">
+                  {blockers.map((reason) => (
+                    <li key={reason}>{reason}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            <p id={refreshHelpId} className="text-sm text-text-muted">
+              {REFRESH_PREVIEW_COPY}
+            </p>
           </form>
         )}
       </SectionCard>

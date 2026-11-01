@@ -120,6 +120,9 @@ export function SettingsContent() {
       {/* Password */}
       <PasswordSection />
 
+      {/* Sessions: the cross-device sign-out, kept apart from the password form. */}
+      <SessionsSection />
+
       {/* Two-factor authentication (IMP-AUTH-02) */}
       <TwoFactorSection />
 
@@ -661,11 +664,6 @@ function PasswordSection() {
     onError: (err) => setError(err.message),
   });
 
-  // IMP-AUTH-03: revoke every other session, then sign this device out too.
-  const signOutEverywhere = trpc.team.signOutEverywhere.useMutation({
-    onSuccess: () => void signOutEverything(),
-  });
-
   const [current, setCurrent] = useState('');
   const [newPw, setNewPw] = useState('');
   const [confirm, setConfirm] = useState('');
@@ -775,25 +773,93 @@ function PasswordSection() {
             Change Password
           </button>
         </div>
+      </CardContent>
+    </Card>
+  );
+}
 
-        {/* IMP-AUTH-03: cross-device session kill switch. */}
-        <div className="flex items-center justify-between border-t border-border/60 pt-4">
+/* ============================================================
+   Sessions (IMP-AUTH-03): the cross-device session kill switch, in its own
+   card so it is never mistaken for part of the password form.
+   ============================================================ */
+export function SessionsSection() {
+  // Revoke every other session, then sign this device out too.
+  const signOutEverywhere = trpc.team.signOutEverywhere.useMutation({
+    onSuccess: () => void signOutEverything(),
+  });
+  const [confirming, setConfirming] = useState(false);
+
+  return (
+    <Card className="border-border/60" role="region" aria-labelledby="settings-sessions-title">
+      <CardHeader className="pb-3">
+        <CardTitle
+          id="settings-sessions-title"
+          className="text-[15px] font-semibold flex items-center gap-2 text-foreground"
+        >
+          <div className="flex h-6 w-6 items-center justify-center rounded-md bg-muted">
+            <LogOut className="h-3.5 w-3.5 text-text-muted" />
+          </div>
+          Sessions
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <p className="text-xs font-medium text-foreground">Sign out everywhere</p>
             <p className="text-[11px] text-muted-foreground">
-              Revoke all sessions on every device. Use this if you suspect your account is
-              compromised.
+              Revoke all sessions on every device, including this one. Use this if you suspect
+              your account is compromised.
             </p>
           </div>
-          <button
-            onClick={() => signOutEverywhere.mutate()}
+          <Button
+            variant="destructive"
+            className="shrink-0"
+            onClick={() => setConfirming(true)}
             disabled={signOutEverywhere.isPending}
-            className="shrink-0 rounded-xl border border-border px-3.5 py-2 text-xs font-semibold text-foreground transition-colors hover:bg-red-500/10 hover:text-red-500 disabled:opacity-50"
           >
             {signOutEverywhere.isPending ? 'Signing out…' : 'Sign out everywhere'}
-          </button>
+          </Button>
         </div>
       </CardContent>
+      <Dialog
+        open={confirming}
+        onOpenChange={(open) => {
+          if (signOutEverywhere.isPending) return;
+          setConfirming(open);
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Sign out of every device?</DialogTitle>
+            <DialogDescription>
+              Every session on every device ends, including this one. You will need to sign in
+              again.
+            </DialogDescription>
+          </DialogHeader>
+          {signOutEverywhere.error && (
+            <p role="alert" className="text-xs text-destructive">
+              {signOutEverywhere.error.message}
+            </p>
+          )}
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setConfirming(false)}
+              disabled={signOutEverywhere.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => signOutEverywhere.mutate()}
+              disabled={signOutEverywhere.isPending}
+            >
+              {signOutEverywhere.isPending && <Loader2 className="animate-spin" />}
+              {signOutEverywhere.isPending ? 'Signing out…' : 'Sign out everywhere'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }
@@ -802,7 +868,7 @@ function PasswordSection() {
    Recent sign-ins (IMP-AUTH-03 — visibility half)
    Surfaces the caller's own successful LOGIN rows from the audit trail.
    Auth is stateless JWT, so individual sessions can't be enumerated or
-   revoked one-by-one — "Sign out everywhere" (Password section) is the only
+   revoked one-by-one — "Sign out everywhere" (Sessions section) is the only
    kill switch. This card is the matching visibility view.
    ============================================================ */
 
@@ -855,7 +921,7 @@ function RecentSignInsSection() {
         <p className="text-xs text-muted-foreground mt-1">
           Your latest successful sign-ins. Individual sessions can&apos;t be listed or revoked
           one-by-one — use <span className="font-medium text-foreground">Sign out everywhere</span>{' '}
-          in the Password section to revoke them all.
+          in the Sessions section to revoke them all.
         </p>
       </CardHeader>
       <CardContent>

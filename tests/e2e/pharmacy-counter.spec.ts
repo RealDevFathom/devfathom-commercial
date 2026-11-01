@@ -857,7 +857,9 @@ test('day close — open sell count lock and print Z-report', async ({ page, con
   await page.getByRole('checkbox').press('Space');
   await pressControl(page.getByRole('button', { name: 'Close and lock day' }));
   await expect(
-    page.getByText('Day closed. New tenders and drawer changes for this business date are blocked.')
+    page.getByText(
+      'Day locked. New sales, payments and drawer changes for this business date are blocked.'
+    )
   ).toBeVisible();
   await page.reload();
   await expect(page.getByText('Variance note: One rupee short at nightly count')).toBeVisible();
