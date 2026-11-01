@@ -5,6 +5,7 @@ import { SectionCard } from '@/components/ui/section-card';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
 import { pharmacyReportsRouter } from '@/server/routers/pharmacy-reports';
 import { createTRPCContext } from '@/server/trpc';
+import { formatReportPeriod } from '../report-format';
 
 export const metadata: Metadata = { title: 'Branch comparison · Pharmacy reports' };
 
@@ -25,7 +26,7 @@ export default async function BranchComparisonPage({
   } catch (error) {
     errorMessage =
       error instanceof TRPCError && ['FORBIDDEN', 'UNAUTHORIZED'].includes(error.code)
-        ? 'Owner access and financial-report permission are required.'
+        ? 'Only an owner with finance access can compare branches.'
         : error instanceof TRPCError && error.code === 'BAD_REQUEST'
           ? 'Check that the report dates are valid, then try again.'
           : 'The comparison could not be loaded. Try again or contact support if the problem continues.';
@@ -49,10 +50,10 @@ export default async function BranchComparisonPage({
       ) : (
         <SectionCard title="Branch performance" titleLevel={2}>
           <p className="mb-4 text-sm text-text-muted">
-            {from} to {to}, inclusive. Money uses minor-unit values shown to two decimal places; the
-            organization currency is not asserted. Expiry at risk is available stock expiring in 30
-            days and is not realized loss. Lost demand is an <strong>Estimate</strong>:{' '}
-            {comparison.estimateMethod} Excludes {comparison.estimateExclusions.join(' and ')}.
+            {formatReportPeriod(from, to)}. Expiry at risk is sellable stock that expires in the
+            next 30 days; it is not a loss yet. Lost demand is an <strong>estimate</strong> from
+            unmet requests staff recorded at the counter with a value; requests without a value and
+            searches that were not recorded are left out.
           </p>
           <div
             role="region"

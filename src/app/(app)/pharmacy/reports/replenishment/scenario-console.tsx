@@ -22,6 +22,7 @@ import type {
   PharmacyReplenishmentReportInput,
 } from '@/lib/pharmacy/replenishment-report';
 import { trpc } from '@/lib/trpc';
+import { formatReportDateTime, formatReportWindow } from '../report-format';
 
 type Props = {
   organizationId: string;
@@ -30,6 +31,8 @@ type Props = {
   initialBranchId: string;
   invalidInitialBranch: boolean;
   today: string;
+  /** Workspace IANA zone for displayed times; UTC when missing. */
+  timeZone?: string | null;
 };
 type Medicine = { id: string; productName: string };
 type State = 'idle' | 'loading' | 'ready' | 'error' | 'denied' | 'stale';
@@ -65,6 +68,10 @@ const denied = (error: unknown) => {
   return code === 'FORBIDDEN' || code === 'UNAUTHORIZED';
 };
 const units = (value: number | null | undefined) => (value == null ? 'Unknown' : value);
+const plainStatus = (value: string) => {
+  const words = value.replaceAll('_', ' ').toLowerCase();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+};
 
 export function ScenarioConsole(props: Props) {
   // A server refresh that changes authority must discard all previous tenant/scope state.
@@ -89,6 +96,7 @@ function ScenarioWorkspace({
   initialBranchId,
   invalidInitialBranch,
   today,
+  timeZone,
 }: Props) {
   const utils = trpc.useUtils();
   const reportVersion = useRef(0);
@@ -233,7 +241,7 @@ function ScenarioWorkspace({
           return new Date(ms).toISOString();
         } catch {
           invalid[key] =
-            'Use an ISO instant with timezone, for example 2026-09-16T12:00:00Z, or leave blank for unknown.';
+            'Enter a date and time that includes a time zone, or leave blank if unknown.';
           return null;
         }
       };
@@ -474,7 +482,7 @@ function ScenarioWorkspace({
         <SectionCard title="Manual planning assumptions" titleLevel={2}>
           {!canPlan ? (
             <>
-              <StatusPill status="REDACTED" tone="neutral" />
+              <StatusPill status="Hidden" tone="neutral" />
               <p className="mt-3 text-sm text-text-muted">
                 Operational evidence is available. Planning requires financial report access;
                 monetary results are withheld.
@@ -495,10 +503,10 @@ function ScenarioWorkspace({
                 Include a user-supplied scenario
               </label>
               <p className="mt-2 text-sm text-text-muted">
-                USER_SUPPLIED_ASSUMPTIONS: enter a constant daily demand and hypothetical order
-                terms. Current policy means the order quantity you enter, not on-hand stock. These
-                inputs are not observed demand or a forecast guarantee. Sales and margin goals and
-                prices are configurable assumptions, never recorded facts.
+                Your own assumptions: enter a steady daily demand and the order terms you want to
+                compare. Current policy means the order quantity you enter, not stock on hand.
+                These numbers, goals and prices are what-ifs, not recorded sales or a guaranteed
+                forecast.
               </p>
               {manual && (
                 <div className="mt-4 space-y-4">
@@ -513,8 +521,18 @@ function ScenarioWorkspace({
                     {numericFields.map(([key, label, optional, min]) =>
                       field(key, label + (optional ? ' (optional)' : ''), 'number', optional, min)
                     )}
-                    {field('arrivalAt', 'Assumed arrival (ISO instant, optional)', 'text', true)}
-                    {field('expiresAt', 'Assumed expiry (ISO instant, optional)', 'text', true)}
+                    {field(
+                      'arrivalAt',
+                      'Assumed arrival (date, time and time zone, optional)',
+                      'text',
+                      true
+                    )}
+                    {field(
+                      'expiresAt',
+                      'Assumed expiry (date, time and time zone, optional)',
+                      'text',
+                      true
+                    )}
                   </div>
                 </div>
               )}
@@ -532,10 +550,10 @@ function ScenarioWorkspace({
           disabled={!branchId || !medicineId || state === 'loading'}
         >
           {state === 'loading'
-            ? 'Reading replenishment report…'
+            ? 'Loading report…'
             : state === 'error' || state === 'denied'
-              ? 'Retry replenishment report'
-              : 'Read replenishment report'}
+              ? 'Try again'
+              : 'Show report'}
         </Button>
       </form>
       <SectionCard title="Report status" titleLevel={2} aria-busy={state === 'loading'}>
@@ -543,23 +561,23 @@ function ScenarioWorkspace({
           role={state === 'error' || state === 'denied' ? 'alert' : 'status'}
           className="text-sm text-text-muted"
         >
-          {state === 'idle' && 'Select a branch and medicine, review dates, then read the report.'}
+          {state === 'idle' &&
+            'Choose a branch and medicine, check the dates, then show the report.'}
           {state === 'stale' &&
-            'Inputs changed. Previous results are hidden; read again for the active scope and assumptions.'}
-          {state === 'loading' &&
-            'Reading authorized evidence. Editing inputs discards this pending result.'}
+            'Inputs changed. Show the report again to see results for the new inputs.'}
+          {state === 'loading' && 'Loading the report. Changing inputs cancels it.'}
           {state === 'error' &&
-            'Replenishment evidence could not load for these inputs. Check dates and assumptions, then retry. No data was changed.'}
+            'The report could not load for these inputs. Check the dates and assumptions, then try again. No data was changed.'}
           {state === 'denied' &&
-            'Report access denied or session expired. Ask your workspace administrator to check access, then retry.'}
-          {state === 'ready' &&
-            'Report read completed. Review source timestamps and missing prerequisites below.'}
+            "You don't have access to this report, or your session has ended. Ask the pharmacy owner to check your access, then try again."}
+          {state === 'ready' && 'Report ready. Check the notes at the bottom for anything missing.'}
         </p>
       </SectionCard>
       {report && (
         <ReportEvidence
           report={report}
           financial={financial}
+          timeZone={timeZone}
           branchName={branches.find((branch) => branch.id === branchId)?.name ?? branchId}
           medicineName={
             medicines.find((medicine) => medicine.id === medicineId)?.productName ?? medicineId
@@ -575,9 +593,11 @@ function ReportEvidence({
   financial,
   branchName,
   medicineName,
+  timeZone,
 }: {
   report: PharmacyReplenishmentReport;
   financial: boolean;
+  timeZone?: string | null;
   branchName: string;
   medicineName: string;
 }) {
@@ -593,12 +613,13 @@ function ReportEvidence({
           {branchName} · {medicineName}
         </p>
         <p className="mt-2 break-words text-sm text-text-muted">
-          As of report read: {report.readAt}. History: {demand.period.startDate} to{' '}
-          {demand.period.endDateExclusive} (exclusive).
-        </p>
-        <p className="mt-2 break-words text-sm text-text-muted">
-          Demand provenance: {demand.provenance.kind} · {demand.provenance.reference}. Read at:{' '}
-          {demand.provenance.readAt}. Sources: {demand.provenance.sources.join(', ')}.
+          History{' '}
+          {formatReportWindow(
+            `${demand.period.startDate}T00:00:00.000Z`,
+            `${demand.period.endDateExclusive}T00:00:00.000Z`
+          )}
+          , from recorded sales and customer requests. Report loaded{' '}
+          {formatReportDateTime(report.readAt, timeZone)}.
         </p>
         <div className="mt-5 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
           <Stat
@@ -656,11 +677,10 @@ function ReportEvidence({
         </details>
       </SectionCard>
       <SectionCard title="Supply coverage" titleLevel={2}>
-        <StatusPill status={`${supplyCoverage.status} stock completeness`} tone="warning" />
+        <StatusPill status={`Stock data: ${plainStatus(supplyCoverage.status)}`} tone="warning" />
         <p className="mt-3 text-sm text-text-muted">{supplyCoverage.reason}</p>
         <p className="mt-2 break-words text-sm text-text-muted">
-          Supply provenance: {supply.inventorySource.kind} · {supply.inventorySource.reference}. As
-          of: {supply.inventorySource.asOf}.
+          Stock as of {formatReportDateTime(supply.inventorySource.asOf, timeZone)}.
         </p>
         <p className="mt-3 text-sm text-text-body">
           Recorded eligible lots: {supplyCoverage.recordedEligibleLots}; excluded stock records:{' '}
@@ -680,8 +700,8 @@ function ReportEvidence({
       </SectionCard>
       <SectionCard title="Forecast and backtest" titleLevel={2}>
         <div className="flex flex-wrap gap-3">
-          <StatusPill status={`Forecast: ${report.forecast.status}`} tone="warning" />
-          <StatusPill status={`Backtest: ${report.backtest.status}`} tone="warning" />
+          <StatusPill status={`Forecast: ${plainStatus(report.forecast.status)}`} tone="warning" />
+          <StatusPill status={`Backtest: ${plainStatus(report.backtest.status)}`} tone="warning" />
         </div>
         {!report.forecast.result && (
           <p className="mt-3 text-sm text-text-muted">
@@ -692,9 +712,12 @@ function ReportEvidence({
         {report.forecast.result && (
           <>
             <p className="mt-3 text-sm text-text-muted">
-              {report.forecast.result.label} · {report.forecast.result.source.kind}. Period:{' '}
-              {report.forecast.result.period.startDate} to{' '}
-              {report.forecast.result.period.endDateExclusive} (exclusive).
+              {report.forecast.result.label}. Period{' '}
+              {formatReportWindow(
+                `${report.forecast.result.period.startDate}T00:00:00.000Z`,
+                `${report.forecast.result.period.endDateExclusive}T00:00:00.000Z`
+              )}
+              .
             </p>
             <Table>
               <TableHeader>
@@ -733,12 +756,16 @@ function ReportEvidence({
       </SectionCard>
       <SectionCard title="Planning result" titleLevel={2}>
         <StatusPill
-          status={!financial || !report.permissions.financial ? 'REDACTED' : report.planning.status}
+          status={
+            !financial || !report.permissions.financial
+              ? 'Hidden'
+              : plainStatus(report.planning.status)
+          }
           tone="neutral"
         />
         <p className="mt-3 text-sm text-text-muted">
-          Basis: {report.planning.basis}. Read-only comparison; no order, reservation or approval is
-          created.
+          Based on your own assumptions. This only compares options; no order, reservation or
+          approval is created.
         </p>
         {(!financial || !report.permissions.financial || report.planning.status === 'REDACTED') && (
           <p className="mt-2 text-sm text-text-muted">
@@ -762,8 +789,12 @@ function ReportEvidence({
           <>
             <p className="mt-3 text-sm text-text-body">
               {decision.label} · Assumed daily demand: {report.planning.dailyDemandUnits} units.
-              Period: {decision.demand.period.startDate} to{' '}
-              {decision.demand.period.endDateExclusive} (exclusive).
+              Period{' '}
+              {formatReportWindow(
+                `${decision.demand.period.startDate}T00:00:00.000Z`,
+                `${decision.demand.period.endDateExclusive}T00:00:00.000Z`
+              )}
+              .
             </p>
             <p className="mt-2 text-sm text-text-muted">
               Currency: {decision.money.currency} (user supplied). {decision.money.definition}{' '}
@@ -779,7 +810,7 @@ function ReportEvidence({
                   <h3 className="font-semibold text-text-strong">
                     {scenario.policy.replaceAll('_', ' ')}
                   </h3>
-                  <StatusPill status={scenario.order.status} tone="neutral" />
+                  <StatusPill status={plainStatus(scenario.order.status)} tone="neutral" />
                   <dl className="space-y-2 text-sm text-text-body">
                     <div>
                       <dt>Requested order units</dt>

@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const actor = vi.hoisted(() => ({ role: 'ADMIN' }));
 const signalStaff = vi.hoisted(() => ({ userId: 'cashier_1' as string | undefined }));
+const access = vi.hoisted(() => ({ denied: false }));
 
 const commandCentre = vi.fn(async () => ({
   freshness: { status: 'CURRENT', asOf: '2026-09-04T10:00:00Z', source: 'ledger' },
@@ -109,28 +110,31 @@ vi.mock('@/server/routers/pharmacy-reports', () => ({
       updateDigestSetting: async () => ({}),
       packAuthenticationFlags: async () => [],
       acknowledgePackAuthenticationFlag: async () => ({}),
-      catalog: async () => ({
-        permissions: { operational: true, financial: true, owner: true },
-        reports: [
-          {
-            key: 'sales-margin',
-            label: 'Sales and margin',
-            metrics: ['salesMinor'],
-            filters: ['branch', 'date', 'supplier', 'ingredient', 'batch'],
-          },
-        ],
-        metrics: [
-          {
-            key: 'salesMinor',
-            label: "Today's sales",
-            definition: 'Completed sales.',
-            source: 'pharmacy_sales',
-            scope: 'selected branches',
-            permission: 'reports:financial',
-            drillThrough: '/pharmacy/reports?section=sales',
-          },
-        ],
-      }),
+      catalog: async () => {
+        if (access.denied) throw new Error('FORBIDDEN');
+        return {
+          permissions: { operational: true, financial: true, owner: true },
+          reports: [
+            {
+              key: 'sales-margin',
+              label: 'Sales and margin',
+              metrics: ['salesMinor'],
+              filters: ['branch', 'date', 'supplier', 'ingredient', 'batch'],
+            },
+          ],
+          metrics: [
+            {
+              key: 'salesMinor',
+              label: "Today's sales",
+              definition: 'Completed sales.',
+              source: 'pharmacy_sales',
+              scope: 'selected branches',
+              permission: 'reports:financial',
+              drillThrough: '/pharmacy/reports?section=sales',
+            },
+          ],
+        };
+      },
     }),
   },
 }));
@@ -141,6 +145,7 @@ describe('pharmacy report catalog filters', () => {
   beforeEach(() => {
     actor.role = 'ADMIN';
     signalStaff.userId = 'cashier_1';
+    access.denied = false;
   });
 
   it('carries all supported filters and exposes the metric contract', async () => {
@@ -156,13 +161,28 @@ describe('pharmacy report catalog filters', () => {
         }),
       })
     );
-    expect(screen.getByLabelText('Supplier ID')).toHaveValue('sup1');
-    expect(screen.getByLabelText('Ingredient ID')).toHaveValue('ing1');
-    expect(screen.getByLabelText('Batch ID')).toHaveValue('lot1');
+    expect(screen.getByLabelText('Supplier')).toHaveValue('sup1');
+    expect(screen.getByLabelText('Ingredient')).toHaveValue('ing1');
+    expect(screen.getByLabelText('Batch')).toHaveValue('lot1');
     expect(commandCentre).toHaveBeenCalledWith(
       expect.objectContaining({ supplierId: 'sup1', ingredientId: 'ing1', batchId: 'lot1' })
     );
-    expect(screen.getByText('Source:').parentElement).toHaveTextContent('pharmacy_sales');
+    expect(screen.getByText('Scope:').parentElement).toHaveTextContent('Selected branches');
+    expect(screen.getByText('Completed sales, after line discounts.')).toBeVisible();
+    expect(screen.getByText(/1 report ·/)).toBeVisible();
+    const text = document.body.textContent ?? '';
+    for (const jargon of [
+      'pharmacy_sales',
+      'reports:financial',
+      'metric contracts',
+      'ledger-derived',
+      'RPT-0',
+      'AI-0',
+      'SAFE-0',
+      'Supplier ID',
+    ])
+      expect(text).not.toContain(jargon);
+    expect(text).not.toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:/);
     expect(screen.getByRole('heading', { name: 'Daily owner digest' })).toBeVisible();
     expect(screen.getByRole('heading', { name: 'Anomaly review signals' })).toBeVisible();
     expect(screen.getByRole('link', { name: 'Open related audit trail' })).toHaveAttribute(
@@ -184,6 +204,17 @@ describe('pharmacy report catalog filters', () => {
         'No digests captured yet. Turn on a branch digest; history appears after its scheduled time.'
       )
     ).toBeVisible();
+  });
+
+  it('tells people without report access who to ask, in plain words', async () => {
+    access.denied = true;
+    render(await PharmacyReportsPage({ searchParams: Promise.resolve({}) }));
+    expect(
+      screen.getByText(
+        "You don't have access to reports. Ask the pharmacy owner to give you access."
+      )
+    ).toBeVisible();
+    expect(document.body.textContent).not.toContain('permission or license');
   });
 
   it('explains audit access to non-admin report viewers without offering an inaccessible link', async () => {

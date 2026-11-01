@@ -5,6 +5,13 @@ import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
 import type { pharmacyReportsRouter } from '@/server/routers/pharmacy-reports';
+import {
+  coverageLabel,
+  formatReportAge,
+  formatReportDateTime,
+  formatReportPeriod,
+  formatReportWindow,
+} from './report-format';
 
 type Reader = ReturnType<typeof pharmacyReportsRouter.createCaller>['dailyWorkPack'];
 type WorkPack = Awaited<ReturnType<Reader>>;
@@ -13,6 +20,8 @@ export type DailyWorkPackProps = {
   filters: Omit<Parameters<Reader>[0], 'asOf'>;
   branches: { id: string; name: string }[];
   refreshFields: Record<string, string>;
+  /** Workspace IANA zone for displayed times; UTC when missing. */
+  timeZone?: string | null;
 };
 
 const sourceAnchor = (id: string) => `work-pack-source-${id}`;
@@ -23,6 +32,20 @@ const fieldLabel = (key: string) =>
     .replace(/^./, (letter) => letter.toUpperCase());
 const linkClass =
   'inline-flex min-h-11 items-center break-all text-sm underline focus-visible:outline-2 focus-visible:outline-ring';
+const plainWords = (value: string) => {
+  const words = value.replace(/[_-]/g, ' ').toLowerCase();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+};
+type EvidenceKind =
+  WorkPack['groups'][number]['tasks'][number]['evidence'][number]['reference']['kind'];
+const referenceNames: Record<EvidenceKind, string> = {
+  'stock-kind': 'Stock alert type',
+  'stock-signal': 'Stock alert',
+  anomaly: 'Flagged activity',
+  lot: 'Batch',
+  'debit-note': 'Debit note',
+  return: 'Supplier return',
+};
 const sourceNames: Record<WorkPack['sources'][number]['kind'], string> = {
   'stock-dashboard': 'Stock dashboard',
   'stock-digest': 'Your stock digest',
@@ -48,7 +71,7 @@ export function DailyWorkPackLoading() {
   return (
     <SectionCard id="daily-work-pack" title="Daily work pack" titleLevel={2} aria-busy="true">
       <p role="status" className="mb-4 text-sm text-text-muted">
-        Reading permitted work-pack sources. Other reports remain available.
+        Loading the daily work pack. Other reports are still available.
       </p>
       <Button variant="outline" className="min-h-11" disabled>
         Refresh daily work pack
@@ -63,6 +86,7 @@ export async function DailyWorkPack({
   filters,
   branches,
   refreshFields,
+  timeZone,
 }: DailyWorkPackProps) {
   let pack: WorkPack | null = null;
   try {
@@ -75,8 +99,8 @@ export async function DailyWorkPack({
     return (
       <SectionCard id="daily-work-pack" title="Daily work pack" titleLevel={2}>
         <p role="alert" className="mb-4 text-sm text-text-muted">
-          Daily work pack could not load. Source data or report access may be unavailable. Retry
-          this read, or ask your workspace administrator to check access. No data was changed.
+          The daily work pack could not load. Try again, or ask the pharmacy owner to check your
+          access. No data was changed.
         </p>
         <Refresh fields={refreshFields} retry />
       </SectionCard>
@@ -87,34 +111,27 @@ export async function DailyWorkPack({
   return (
     <SectionCard
       id="daily-work-pack"
-      eyebrow="Read-only preparation"
+      eyebrow="Things to check"
       title="Daily work pack"
       titleLevel={2}
     >
       <div className="mb-4 flex flex-wrap items-center gap-3">
-        <StatusPill status={`${pack.completeness.status} coverage`} tone="warning" />
+        <StatusPill status={coverageLabel(pack.completeness.status)} tone="warning" />
         <Refresh fields={refreshFields} />
       </div>
       <div className="space-y-2 text-sm text-text-muted">
         <p>
-          Requested period: {pack.period.from} to {pack.period.to}. Branch scope:{' '}
-          {pack.scope.branchIds.map(branchName).join(', ')}.
-        </p>
-        <p className="break-words">
-          As of: {pack.asOf}. Read at: {pack.readAt}.
-        </p>
-        <p>
-          Each source keeps its own time basis below. Supplier, ingredient and batch filters do not
-          apply to this pack. Current records are not a historical snapshot.
+          {formatReportPeriod(pack.period.from, pack.period.to)} ·{' '}
+          {pack.scope.branchIds.map(branchName).join(', ')} · Updated{' '}
+          {formatReportDateTime(pack.readAt, timeZone)}
         </p>
         <p>{pack.completeness.definition}</p>
         <p>
-          Refresh rereads existing evidence; it does not refresh domain signals or create drafts. No
-          money or time saved is calculated. Amounts use pharmacy integer minor units, displayed to
-          two decimal places. Source currency is unknown; — means unavailable, not zero.
+          Refreshing reloads this list; it does not change any data. Supplier, ingredient and batch
+          filters do not apply here. A dash (—) means no data, not zero.
         </p>
         {!pack.permissions.financial ? (
-          <p>Operational evidence only. Financial sources were not queried for your role.</p>
+          <p>Stock items only. Money-related checks need finance access.</p>
         ) : null}
       </div>
       {tasks.length ? (
@@ -133,7 +150,7 @@ export async function DailyWorkPack({
               </div>
               <details className="mt-2">
                 <summary className="min-h-11 cursor-pointer py-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring">
-                  Evidence and missing inputs
+                  Details
                 </summary>
                 <ul className="space-y-4 text-sm text-text-body">
                   {task.evidence.map((evidence) => (
@@ -142,15 +159,18 @@ export async function DailyWorkPack({
                       className="min-w-0 space-y-2 border-l border-border-subtle pl-4"
                     >
                       <p className="break-all">
-                        {evidence.reference.kind}: {evidence.reference.id}
+                        {referenceNames[evidence.reference.kind]}:{' '}
+                        {evidence.reference.kind === 'stock-kind'
+                          ? plainWords(evidence.reference.id)
+                          : evidence.reference.id}
                       </p>
-                      <StatusPill status={evidence.state} tone="neutral" />
+                      <StatusPill status={plainWords(evidence.state)} tone="neutral" />
                       <div>
                         <a
                           href={`#${encodeURIComponent(sourceAnchor(evidence.sourceId))}`}
                           className={linkClass}
                         >
-                          Source:{' '}
+                          From:{' '}
                           {
                             sourceNames[
                               pack.sources.find((source) => source.id === evidence.sourceId)!.kind
@@ -177,12 +197,29 @@ export async function DailyWorkPack({
                           </div>
                         ))}
                       </dl>
-                      <p className="break-words text-text-muted">
-                        Observed: {evidence.observedAt ?? 'Unavailable'}. Computed:{' '}
-                        {evidence.computedAt ?? 'Unavailable'}. Source freshness seconds:{' '}
-                        {evidence.freshnessSeconds ?? 'Unavailable'}. Source due/expiry time:{' '}
-                        {evidence.dueAt ?? 'Unavailable'}.
-                      </p>
+                      {evidence.observedAt ||
+                      evidence.computedAt ||
+                      evidence.freshnessSeconds !== null ||
+                      evidence.dueAt ? (
+                        <p className="break-words text-text-muted">
+                          {[
+                            evidence.observedAt
+                              ? `Seen ${formatReportDateTime(evidence.observedAt, timeZone)}.`
+                              : null,
+                            evidence.computedAt
+                              ? `Checked ${formatReportDateTime(evidence.computedAt, timeZone)}.`
+                              : null,
+                            evidence.freshnessSeconds !== null
+                              ? `Data was ${formatReportAge(evidence.freshnessSeconds)} old when checked.`
+                              : null,
+                            evidence.dueAt
+                              ? `Due or expires ${formatReportDateTime(evidence.dueAt, timeZone)}.`
+                              : null,
+                          ]
+                            .filter(Boolean)
+                            .join(' ')}
+                        </p>
+                      ) : null}
                       {evidence.missingInputs.map((reason) => (
                         <p key={reason} className="text-text-muted">
                           {reason}
@@ -202,11 +239,10 @@ export async function DailyWorkPack({
         </ol>
       ) : (
         <p role="status" className="mt-5 text-sm text-text-muted">
-          No review evidence returned from available sources. This is not an all-clear result; check
-          source coverage and unavailable inputs below.
+          Nothing to review. This only covers what has been recorded so far; see the notes below.
         </p>
       )}
-      <h3 className="mt-6 font-semibold text-text-strong">Source coverage and freshness</h3>
+      <h3 className="mt-6 font-semibold text-text-strong">What this list is based on</h3>
       <ul className="mt-3 divide-y divide-border-subtle">
         {pack.sources.map((source) => (
           <li
@@ -220,28 +256,18 @@ export async function DailyWorkPack({
                 {sourceNames[source.kind]} · {branchName(source.scope.branchId)}
               </span>
               <StatusPill
-                status={source.status}
+                status={source.status === 'unavailable' ? 'Could not load' : 'Loaded'}
                 tone={source.status === 'unavailable' ? 'danger' : 'neutral'}
               />
-              <StatusPill status={`${source.coverage} coverage`} tone="warning" />
+              <StatusPill status={coverageLabel(source.coverage)} tone="warning" />
             </div>
             <p className="text-text-muted">{source.timeBasis}</p>
-            <p className="text-text-muted">
-              Returned rows: {source.returnedRows ?? 'Unavailable'}. Row limit:{' '}
-              {source.rowLimit ?? 'Not established'}.{' '}
-              {source.limitReached ? 'Source cap reached; records may be omitted.' : ''}
-            </p>
             <p className="break-words text-text-muted">
-              Window:{' '}
+              {source.returnedRows !== null ? `Records found: ${source.returnedRows}. ` : ''}
               {source.window
-                ? `${source.window.from} to ${source.window.toExclusive} (exclusive end)`
-                : 'Not period-bounded'}
-              . Evaluated as of: {source.evaluatedAsOf ?? 'Unavailable'}. Read at: {source.readAt}.{' '}
-              Freshness:{' '}
-              {source.freshness === 'persisted-unverified'
-                ? 'Persisted; freshness unverified'
-                : 'Live inputs; not historical'}
-              .
+                ? `Covers ${formatReportWindow(source.window.from, source.window.toExclusive, timeZone)}. `
+                : ''}
+              Checked {formatReportDateTime(source.readAt, timeZone)}.
             </p>
             {Array.from(
               new Set([

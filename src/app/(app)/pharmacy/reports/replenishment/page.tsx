@@ -40,6 +40,7 @@ export default async function ReplenishmentPage({
       initialBranchId: invalidBranch ? '' : branchId,
       invalidInitialBranch: invalidBranch,
       today: new Date().toISOString().slice(0, 10),
+      timeZone: ctx.organization?.timezone ?? null,
     };
   } catch {
     // Contain read/access failures without exposing source error text.
@@ -49,7 +50,7 @@ export default async function ReplenishmentPage({
       <PageHeader
         eyebrow="Pharmacy reports"
         heading="Replenishment"
-        description="Inspect recorded consumption and supply, then compare explicit planning assumptions."
+        description="See what has sold and what is in stock, then compare how much to reorder."
       />
       <Link
         href="/pharmacy/reports"
@@ -62,12 +63,12 @@ export default async function ReplenishmentPage({
       ) : (
         <SectionCard title="Replenishment reports unavailable" titleLevel={2}>
           <p role="alert" className="text-sm text-text-muted">
-            Report access, your session or source data is unavailable. Retry, or ask your workspace
-            administrator to check Pharmacy Reports access.
+            This report could not load. Try again, or ask the pharmacy owner to check your access to
+            reports.
           </p>
           <form action="/pharmacy/reports/replenishment" method="get" className="mt-4">
             <Button type="submit" variant="outline" className="min-h-11">
-              Retry report access
+              Try again
             </Button>
           </form>
         </SectionCard>

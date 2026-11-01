@@ -49,7 +49,7 @@ describe('repeat purchasing page', () => {
       asOf: query.asOf,
       branchId: 'b1',
     });
-    expect(screen.getByLabelText('As-of cutoff (ISO UTC)')).toHaveValue(query.asOf);
+    expect(screen.getByLabelText('Report cutoff (UTC date and time)')).toHaveValue(query.asOf);
     expect(screen.getByRole('button', { name: 'Apply cohort window' })).toHaveAttribute(
       'type',
       'submit'
@@ -96,7 +96,7 @@ describe('repeat purchasing page', () => {
     expect(html).not.toContain(message);
     expect(screen.getByLabelText('Enrollment from (UTC)')).toHaveValue(query.from);
     expect(screen.getByLabelText('Enrollment through (UTC)')).toHaveValue(query.to);
-    expect(screen.getByLabelText('As-of cutoff (ISO UTC)')).toHaveValue(query.asOf);
+    expect(screen.getByLabelText('Report cutoff (UTC date and time)')).toHaveValue(query.asOf);
     expect(screen.getByLabelText('Selected authorized branches')).toHaveValue(query.branch);
     expect(screen.getByRole('option', { name: 'Main' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Apply cohort window' })).toBeEnabled();
