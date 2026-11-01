@@ -114,6 +114,7 @@ export async function processDueWhatsAppRefillReminders(
       FROM "pharmacy_refill_reminder_captures" capture
       JOIN "pharmacy_prescription_fills" fill
         ON fill."organizationId" = capture."organizationId" AND fill."id" = capture."prescriptionFillId"
+        AND fill."reversedAt" IS NULL
       JOIN "pharmacy_prescription_lines" line
         ON line."organizationId" = fill."organizationId" AND line."id" = fill."prescriptionLineId"
       WHERE capture."channel" = 'WHATSAPP'

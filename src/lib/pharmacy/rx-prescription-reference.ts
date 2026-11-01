@@ -31,6 +31,25 @@ export class PharmacyRxReferenceError extends Error {
   }
 }
 
+/**
+ * #410: reversed fills (from voided sales) no longer consume quantity or a repeat, but their
+ * sequence numbers are immutable audit ordinals and are never reused. The database trigger
+ * enforces the same arithmetic.
+ */
+export function activeFillUsage(
+  fills: ReadonlyArray<{ quantityCanonicalUnits: number; reversedAt?: Date | null }>
+): { filled: number; events: number } {
+  const active = fills.filter((fill) => fill.reversedAt == null);
+  return {
+    filled: active.reduce((sum, fill) => sum + fill.quantityCanonicalUnits, 0),
+    events: active.length,
+  };
+}
+
+export function nextFillSequence(fills: ReadonlyArray<{ fillSequence: number }>): number {
+  return fills.reduce((maximum, fill) => Math.max(maximum, fill.fillSequence), 0) + 1;
+}
+
 export type PrescriptionReference = { prescriptionLineId: string; patientId: string };
 
 /**
@@ -75,7 +94,7 @@ export async function resolvePrescriptionReference(
       prescription: {
         select: { patientId: true, validFrom: true, validUntil: true, authorizedRepeats: true },
       },
-      fills: { select: { quantityCanonicalUnits: true } },
+      fills: { select: { quantityCanonicalUnits: true, fillSequence: true, reversedAt: true } },
     },
   });
   if (!line) throw new PharmacyRxReferenceError('PRESCRIPTION_NOT_FOUND');
@@ -91,12 +110,12 @@ export async function resolvePrescriptionReference(
     throw new PharmacyRxReferenceError('PRESCRIPTION_PATIENT_MISMATCH');
   if (line.prescription.validFrom > now || line.prescription.validUntil <= now)
     throw new PharmacyRxReferenceError('PRESCRIPTION_NOT_IN_DATE');
-  const filled = line.fills.reduce((sum, fill) => sum + fill.quantityCanonicalUnits, 0);
+  const { filled, events } = activeFillUsage(line.fills);
   if (
     !Number.isSafeInteger(input.units) ||
     input.units <= 0 ||
     filled + input.units > line.authorizedCanonicalUnits ||
-    line.fills.length > line.prescription.authorizedRepeats
+    events > line.prescription.authorizedRepeats
   )
     throw new PharmacyRxReferenceError('PRESCRIPTION_EXHAUSTED');
   return { prescriptionLineId: line.id, patientId: line.prescription.patientId };
@@ -182,7 +201,7 @@ export async function recordCompletedPrescriptionReference(
       prescription: {
         select: { patientId: true, validFrom: true, validUntil: true, authorizedRepeats: true },
       },
-      fills: { select: { quantityCanonicalUnits: true } },
+      fills: { select: { quantityCanonicalUnits: true, fillSequence: true, reversedAt: true } },
     },
   });
   if (!line) throw new PharmacyRxReferenceError('PRESCRIPTION_NOT_FOUND');
@@ -199,22 +218,47 @@ export async function recordCompletedPrescriptionReference(
     throw new PharmacyRxReferenceError('PRESCRIPTION_PATIENT_MISMATCH');
   if (line.prescription.validFrom > now || line.prescription.validUntil <= now)
     throw new PharmacyRxReferenceError('PRESCRIPTION_NOT_IN_DATE');
-  const filled = line.fills.reduce((sum, fill) => sum + fill.quantityCanonicalUnits, 0);
+  const { filled, events } = activeFillUsage(line.fills);
   if (
     !Number.isSafeInteger(input.canonicalUnits) ||
     input.canonicalUnits <= 0 ||
     filled + input.canonicalUnits > line.authorizedCanonicalUnits ||
-    line.fills.length > line.prescription.authorizedRepeats
+    events > line.prescription.authorizedRepeats
   )
     throw new PharmacyRxReferenceError('PRESCRIPTION_EXHAUSTED');
   await db.prescriptionFill.create({
     data: {
       organizationId: scope.organizationId,
       prescriptionLineId: input.prescriptionLineId,
-      fillSequence: line.fills.length + 1,
+      saleLineId: input.id,
+      fillSequence: nextFillSequence(line.fills),
       quantityCanonicalUnits: input.canonicalUnits,
       dispensedByUserId: scope.actorId,
       idempotencyKey,
     },
   });
+}
+
+/**
+ * #410: a fill bound to a line of a voided sale releases its prescription quantity and repeat.
+ * The fill row stays (append-only audit); only reversedAt/reversedByUserId are set, once, and
+ * the database trigger refuses the update unless the sale is VOID with a matching VOIDED event.
+ * Returns and refunds of completed sales do not release authorisation: that medicine was handed
+ * over, so the dispensing event stands.
+ */
+export async function reverseSaleFills(
+  db: ScopedDb,
+  scope: { organizationId: string; branchId: string; actorId: string },
+  saleId: string
+): Promise<number> {
+  return db.$executeRaw(Prisma.sql`
+    UPDATE pharmacy_prescription_fills fill
+       SET "reversedAt" = now(), "reversedByUserId" = ${scope.actorId}
+      FROM pharmacy_sale_lines line
+     WHERE line."organizationId" = ${scope.organizationId}
+       AND line."branchId" = ${scope.branchId}
+       AND line."saleId" = ${saleId}
+       AND fill."organizationId" = line."organizationId"
+       AND fill."saleLineId" = line.id
+       AND fill."reversedAt" IS NULL`);
 }

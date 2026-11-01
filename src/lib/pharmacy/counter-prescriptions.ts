@@ -144,7 +144,8 @@ export async function readCounterPatientPanel(
               authorizedCanonicalUnits: true,
               medicine: { select: { productName: true } },
               presentation: { select: { presentation: true } },
-              fills: { select: { quantityCanonicalUnits: true } },
+              // #410: fills of voided sales are reversed and no longer consume the line.
+              fills: { where: { reversedAt: null }, select: { quantityCanonicalUnits: true } },
               pharmacistReviewItems: {
                 select: {
                   decisions: {

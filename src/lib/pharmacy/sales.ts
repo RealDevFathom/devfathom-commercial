@@ -23,7 +23,7 @@ import { appendControlledRestorations } from './controlled-register';
 import { allocateForSale, allocateReservedForSale, reverseMovements } from './stock-ledger';
 import type { LedgerScope, ReservedSaleAllocation } from './stock-ledger';
 import { postSaleReturnEntry, postUnidentifiedSaleReturnEntry } from './finance-postings';
-import { reverseSaleFills } from './rx-sale-gate';
+import { reverseSaleFills } from './rx-prescription-reference';
 
 /**
  * Re-exported from `./medicine`, where MED-08 pricing now lives so the counter
@@ -420,7 +420,6 @@ export async function changeSaleStatus(
   } as const;
   const [from, to, kind] = transitions[action];
   if (sale.status !== from) throw new PharmacySaleError('INVALID_STATE');
-  if (action === 'complete') await assertRxSaleLinesReady(db, scope.organizationId, sale);
   const witness =
     action === 'void' && sale.lines.some((line) => line.medicine.controlled)
       ? await authorizeControlledRestoration(db, scope, controlledWitness)
@@ -472,10 +471,13 @@ export async function changeSaleStatus(
         restoreSellable: true,
       })),
     });
-    await reverseSaleFills(db, scope.organizationId, saleId, scope.actorId);
   }
 
   await event(db, scope, saleId, kind, reason);
+  // Release prescription authorisation held by fills bound to this voided sale's lines. Runs
+  // after the VOIDED event: the database trigger only accepts a reversal for a VOID sale whose
+  // VOIDED event names the same actor.
+  if (action === 'void') await reverseSaleFills(db, scope, saleId);
   return saleInScope(db, scope, saleId);
 }
 

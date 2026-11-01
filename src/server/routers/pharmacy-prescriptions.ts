@@ -17,15 +17,14 @@ import {
 } from '@/lib/pharmacy/counter-prescriptions';
 import { auditPatientRead, maskedPatient } from '@/lib/pharmacy/patient-prescriptions';
 import { captureRefillReminder, RefillSupportError } from '@/lib/pharmacy/refill-support';
-import { assertPrescriptionSaleLineReady, PharmacyDispensingError } from '@/lib/pharmacy/dispensing';
 import {
   configuredRxOcrAdapterName,
   proposeRxPrefill,
   resolveRxOcrAdapter,
   RxOcrError,
 } from '@/lib/pharmacy/rx-ocr';
-import { dispenseRxSaleLine } from '@/lib/pharmacy/rx-sale-gate';
-import { txDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import type { TRPCContext } from '../trpc';
 import {
   auditedProtectedProcedure,
   capabilityProcedure,
@@ -185,7 +184,10 @@ export const pharmacyPrescriptionsRouter = router({
             remainingAuthorizedUnits: Math.max(
               0,
               line.authorizedCanonicalUnits * (prescription.authorizedRepeats + 1) -
-                line.fills.reduce((total, fill) => total + fill.quantityCanonicalUnits, 0)
+                line.fills
+                  // #410: a reversed fill (voided sale) no longer consumes authorisation.
+                  .filter((fill) => fill.reversedAt == null)
+                  .reduce((total, fill) => total + fill.quantityCanonicalUnits, 0)
             ),
           })),
         })),
@@ -424,24 +426,43 @@ export const pharmacyPrescriptionsRouter = router({
       return patient;
     }),
 
+  // Recording a fill is a dispensing act: require the exact-grant-only
+  // pharmacy:dispense capability through central ABAC (DENY wins).
   fill: capabilityProcedure('pharmacy:dispense')
     .input(
       z
         .object({
-          branchId: z.string().min(1),
-          saleLineId: z.string().min(1),
+          id: z.string().min(1),
           prescriptionLineId: z.string().min(1),
+          fillSequence: z.number().int().positive(),
+          quantityCanonicalUnits: z.number().int().positive(),
           idempotencyKey: z.string().trim().min(1).max(200),
         })
         .strict()
     )
-    .mutation(({ ctx, input }) =>
-      ctx.db.$transaction((tx) => dispenseRxSaleLine(txDb(tx), {
-        ...input,
-        organizationId: ctx.entitlements.organizationId,
-        actorId: ctx.session!.user.id,
-      }))
-    ),
+    .mutation(async ({ ctx, input }) => {
+      const line = await ctx.db.prescriptionLine.findFirst({
+        where: {
+          id: input.prescriptionLineId,
+          organizationId: ctx.entitlements.organizationId,
+        },
+        select: { medicine: { select: { controlled: true } } },
+      });
+      if (!line) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Prescription line not found.' });
+      }
+      // Controlled dispensing must use the counter flow, which atomically allocates stock and
+      // records both the witnessed fill and controlled-drug register entry.
+      if (line.medicine.controlled) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Controlled medicines must be dispensed through the witnessed counter flow.',
+        });
+      }
+      return ctx.db.prescriptionFill.create({
+        data: { ...input, dispensedByUserId: ctx.session.user.id },
+      });
+    }),
 
   captureRefillReminder: capabilityProcedure('pharmacy:dispense')
     .input(

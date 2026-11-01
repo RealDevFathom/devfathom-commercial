@@ -6,7 +6,8 @@ import type { LedgerScope } from './stock-ledger';
 import { postSaleLineEntry } from './finance-postings';
 import { assertSaleBatchesSellable } from './sale-batch-safety';
 import { PharmacyReceiptIdentityError, validateReceiptIdentity } from './receipt-identity';
-import { assertRxSaleLinesReady } from './rx-sale-gate';
+import { assertRxSaleAllowed } from './rx-sale-gate';
+import { recordCompletedPrescriptionReference } from './rx-prescription-reference';
 
 export const completionSaleInclude = {
   lines: {
@@ -28,7 +29,15 @@ export async function completePaidPharmacySale(
   /** F2: a leased offline receipt number the caller already consumed in this transaction. */
   leasedReceiptNumber: number | null = null
 ) {
-  await assertRxSaleLinesReady(db, scope.organizationId, sale);
+  // #518: every completion path re-checks who may sell Rx/restricted non-controlled lines.
+  await assertRxSaleAllowed(
+    db,
+    scope,
+    sale.lines.map((line) => line.medicine)
+  );
+  // #633: re-check every batch under lock before a receipt number is drawn. The receipt
+  // snapshot below records these checked facts, not the ones loaded with the sale.
+  const checkedBatches = await assertSaleBatchesSellable(db, scope, sale.id);
   let receiptNumber = leasedReceiptNumber;
   if (receiptNumber === null) {
     // Reserved (leased) numbers never return to this online sequence.
