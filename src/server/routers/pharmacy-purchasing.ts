@@ -85,6 +85,7 @@ import {
   assertProcurementBranch,
   isSoloOwner,
   procurementActor,
+  reachableProcurementBranchIds,
 } from '../pharmacy-procurement-scope';
 
 /**
@@ -1723,12 +1724,23 @@ const purchasingRouter = router({
    * with their PUR-01 eligibility, and the users who may approve a PUR-05
    * bypass. UX rules 1 and 16: resolved server-side, this organization only.
    */
-  workspace: purchasing.meta(PROCUREMENT).query(({ ctx }) =>
-    purchasingWorkspace(ctx.db, {
+  /**
+   * The pickers. `branches` is every active branch of the organization;
+   * `reachableBranchIds` names the ones the caller may act at (assigned, or
+   * tenant administrator), so a branch-owned board never offers a branch whose
+   * reads `assertProcurementBranch` would refuse.
+   */
+  workspace: purchasing.meta(PROCUREMENT).query(async ({ ctx }) => {
+    const workspace = await purchasingWorkspace(ctx.db, {
       organizationId: tenantScope(ctx).organizationId,
       actorId: ctx.session.user.id,
-    })
-  ),
+    });
+    const reachableBranchIds = await reachableProcurementBranchIds(
+      ctx,
+      workspace.branches.map((branch) => branch.id)
+    );
+    return { ...workspace, reachableBranchIds };
+  }),
 
   /** PUR-01 — suppliers with licence evidence and the current trade decision. */
   suppliers: purchasing

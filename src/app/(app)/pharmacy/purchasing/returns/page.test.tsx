@@ -106,6 +106,41 @@ it('loads the queue from the existing authorized branch reads', async () => {
   expect(screen.getByRole('heading', { name: 'Supplier-credit follow-up' })).toBeVisible();
   expect(screen.getByText('No open issued debit notes in validated loaded records.')).toBeVisible();
 });
+it('says the operator is not assigned to a branch instead of failing to load (PR J)', async () => {
+  reads.workspace.mockResolvedValue({
+    branches: [{ id: 'branch', name: 'Branch', city: 'Karachi', code: 'B' }],
+    reachableBranchIds: [],
+    suppliers: [],
+    medicines: [],
+    approvers: [],
+  });
+  render(await ReturnsPage({ searchParams: Promise.resolve({}) }));
+  expect(
+    screen.getByRole('heading', { name: 'Returns & claims needs a branch assignment' })
+  ).toBeVisible();
+  expect(screen.queryByText('This surface could not load')).toBeNull();
+  expect(reads.purchaseReturns).not.toHaveBeenCalled();
+  expect(reads.returnableLots).not.toHaveBeenCalled();
+  expect(reads.supplierCredits).not.toHaveBeenCalled();
+});
+it('opens the only assigned branch and never reads an unassigned one (PR J)', async () => {
+  reads.workspace.mockResolvedValue({
+    branches: [
+      { id: 'branch', name: 'Branch', city: 'Karachi', code: 'B' },
+      { id: 'other', name: 'Other', city: 'Lahore', code: 'O' },
+    ],
+    reachableBranchIds: ['branch'],
+    suppliers: [],
+    medicines: [],
+    approvers: [],
+  });
+  render(await ReturnsPage({ searchParams: Promise.resolve({ branch: 'other' }) }));
+  expect(reads.purchaseReturns).toHaveBeenCalledExactlyOnceWith({ branchId: 'branch' });
+  expect(reads.returnableLots).toHaveBeenCalledExactlyOnceWith({ branchId: 'branch' });
+  expect(reads.supplierCredits).toHaveBeenCalledExactlyOnceWith({ branchId: 'branch' });
+  expect(screen.getByText(/the only branch you are assigned to/)).toBeVisible();
+  expect(screen.queryByText('This surface could not load')).toBeNull();
+});
 it('retains the descriptive route loading state', () => {
   render(<Loading />);
   expect(screen.getByRole('status', { name: 'Loading Returns & claims' })).toBeVisible();

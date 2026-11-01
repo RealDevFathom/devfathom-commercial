@@ -18,6 +18,7 @@ import {
   ChooseBranchState,
   NoBranchState,
   resolveBranch,
+  UnassignedBranchState,
 } from '../_components/branch-scope';
 import {
   AccessState,
@@ -124,7 +125,7 @@ export default async function PharmacyReturnsPage({
     );
   }
 
-  let workspace: PurchasingWorkspace;
+  let workspace: PurchasingWorkspace & { reachableBranchIds?: readonly string[] };
   try {
     workspace = await caller.workspace();
   } catch {
@@ -135,7 +136,23 @@ export default async function PharmacyReturnsPage({
     );
   }
 
-  const scope = resolveBranch(workspace.branches, param(query, 'branch'));
+  // PR J (#979): every return, debit-note and credit read is refused outside the
+  // caller's branch assignment, so only those branches are offered. Before this,
+  // an unassigned operator was handed the only active branch and the whole
+  // board failed with "This surface could not load".
+  const reachable = workspace.reachableBranchIds;
+  const branches = reachable
+    ? workspace.branches.filter((branch) => reachable.includes(branch.id))
+    : workspace.branches;
+  if (workspace.branches.length > 0 && branches.length === 0) {
+    return (
+      <Frame notice={notice}>
+        <UnassignedBranchState surface="Returns & claims" />
+      </Frame>
+    );
+  }
+  const scope = resolveBranch(branches, param(query, 'branch'));
+  const assignedOnly = branches.length < workspace.branches.length;
   if (scope.kind === 'none') {
     return (
       <Frame notice={notice}>
@@ -163,7 +180,7 @@ export default async function PharmacyReturnsPage({
     ]);
   } catch {
     return (
-      <Frame branch={scope} notice={notice}>
+      <Frame assignedOnly={assignedOnly} branch={scope} notice={notice}>
         <LoadFailure
           detail="Returns for this branch could not be read. This read failure does not confirm or undo earlier changes. Check their outcomes before retrying."
           retryHref={`${ROUTE}?branch=${encodeURIComponent(branchId)}`}
@@ -373,7 +390,7 @@ export default async function PharmacyReturnsPage({
   }
 
   return (
-    <Frame branch={scope} notice={notice}>
+    <Frame assignedOnly={assignedOnly} branch={scope} notice={notice}>
       <div className="grid gap-6 sm:grid-cols-4">
         <Stat label="Expected credit" value={money(expectedMinor)} sub="Frozen at issue" />
         <Stat label="Received credit" value={money(receivedMinor)} sub="Allocated from suppliers" />
@@ -721,10 +738,13 @@ export default async function PharmacyReturnsPage({
 // ---------------------------------------------------------------------------
 
 function Frame({
+  assignedOnly = false,
   branch,
   notice,
   children,
 }: {
+  /** The workspace has more active branches than the operator is assigned to. */
+  assignedOnly?: boolean;
   branch?: ReturnType<typeof resolveBranch>;
   notice: Notice | null;
   children: React.ReactNode;
@@ -738,7 +758,11 @@ function Frame({
           <p className="text-sm text-text-muted">
             Returning from{' '}
             <span className="font-medium text-text-strong">{branch.branch.name}</span>
-            {branch.implicit ? ' — the only active branch in this workspace.' : '.'}
+            {branch.implicit
+              ? assignedOnly
+                ? ' — the only branch you are assigned to.'
+                : ' — the only active branch in this workspace.'
+              : '.'}
           </p>
           <BranchPicker branches={branch.branches} route={ROUTE} selected={branch.branch.id} />
         </div>

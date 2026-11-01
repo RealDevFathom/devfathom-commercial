@@ -109,3 +109,25 @@ export async function isSoloOwner(ctx: TRPCContext, db: ScopedDb = ctx.db): Prom
     actorOrganizationId: ctx.session?.user?.organizationId,
   });
 }
+
+/**
+ * Of `branchIds`, the ones the caller may act at: every one for a tenant
+ * administrator, otherwise those the session user holds an active assignment
+ * to. A branch-owned surface offers only these, so its reads are not refused
+ * by `assertProcurementBranch` after the branch has been picked.
+ */
+export async function reachableProcurementBranchIds(
+  ctx: TRPCContext,
+  branchIds: readonly string[],
+  db: ScopedDb = ctx.db
+): Promise<string[]> {
+  const { organizationId, actorId } = procurementActor(ctx);
+  if (branchIds.length === 0) return [];
+  if (isTenantAdministrator(ctx, organizationId)) return [...branchIds];
+  const assignments = await db.pharmacyBranchAssignment.findMany({
+    where: { organizationId, userId: actorId, active: true, branchId: { in: [...branchIds] } },
+    select: { branchId: true },
+  });
+  const assigned = new Set(assignments.map((row) => row.branchId));
+  return branchIds.filter((id) => assigned.has(id));
+}
