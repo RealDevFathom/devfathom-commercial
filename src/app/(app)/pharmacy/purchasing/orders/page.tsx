@@ -62,7 +62,7 @@ export const metadata: Metadata = { title: 'Requisitions & orders · Pharmacy pu
 const ROUTE = `${PURCHASING_ROUTE}/orders`;
 const HEADING = 'Requisitions & orders';
 const DESCRIPTION =
-  'Demand becomes a requisition, quotes are compared and explained, and an approved order is sent to a supplier that is still licensed at the moment it leaves.';
+  'List what you need, compare supplier quotes, and send an approved order. An order can only go to a supplier whose licence is still valid when it is sent.';
 
 /** Five slots is enough for a hand-written order and needs no client script. */
 const LINE_SLOTS = [0, 1, 2, 3, 4] as const;
@@ -421,7 +421,7 @@ export default async function PharmacyOrdersPage({
             : 'Order rejected and returned to draft. The decision is on the record.';
       } else if (action === 'send') {
         await outcome.write(actionCaller.sendPurchaseOrder)({ purchaseOrderId });
-        message = 'Order sent. Receive against it on the goods-in bench.';
+        message = 'Order sent. Check it in under Goods in when it arrives.';
       } else {
         throw new PurchasingValidationError('Unknown action.');
       }
@@ -474,19 +474,19 @@ export default async function PharmacyOrdersPage({
           sub="Needs a second person"
         />
         <Stat
-          label="Orderable suppliers"
+          label="Suppliers you can order from"
           value={`${orderable.length} of ${workspace.suppliers.length}`}
-          sub="Authorized and licensed"
+          sub={
+            orderable.length < workspace.suppliers.length
+              ? 'The others are not yet authorized to trade or have no valid licence on file'
+              : 'Authorized to trade, with a valid licence'
+          }
         />
       </div>
 
       {/* ─── PUR-02 requisitions ──────────────────────────────────────────── */}
       <div className="grid min-w-0 gap-6 xl:grid-cols-[minmax(0,5fr)_minmax(0,11fr)] xl:items-start">
-        <SectionCard
-          eyebrow="PUR-02"
-          title={`Requisitions (${requisitions.length})`}
-          titleLevel={2}
-        >
+        <SectionCard title={`Requisitions (${requisitions.length})`} titleLevel={2}>
           {requisitions.length === 0 ? (
             <EmptyState
               title="No requisitions yet"
@@ -539,7 +539,7 @@ export default async function PharmacyOrdersPage({
             </SectionCard>
           )}
 
-          <SectionCard eyebrow="PUR-02" title="Draft a requisition" titleLevel={2}>
+          <SectionCard title="Draft a requisition" titleLevel={2}>
             {medicinesWithPacks.length === 0 ? (
               <EmptyState
                 title="No medicine has a pack conversion yet"
@@ -590,11 +590,11 @@ export default async function PharmacyOrdersPage({
 
       {/* ─── PUR-02/03 purchase orders ────────────────────────────────────── */}
       <div className="grid min-w-0 gap-6 xl:grid-cols-[minmax(0,5fr)_minmax(0,11fr)] xl:items-start">
-        <SectionCard eyebrow="PUR-02" title={`Purchase orders (${orders.length})`} titleLevel={2}>
+        <SectionCard title={`Purchase orders (${orders.length})`} titleLevel={2}>
           {orders.length === 0 ? (
             <EmptyState
               title="No purchase orders yet"
-              detail="Raise one from a quote above so the order carries the terms that were compared, or draft an ad-hoc order below."
+              detail="Raise one from a quote above so the order carries the terms that were compared, or draft an order without quotes below."
             />
           ) : (
             <ul className="space-y-2">
@@ -641,14 +641,14 @@ export default async function PharmacyOrdersPage({
             </SectionCard>
           )}
 
-          <SectionCard eyebrow="PUR-02/03" title="Draft an ad-hoc order" titleLevel={2}>
+          <SectionCard title="Draft an order without quotes" titleLevel={2}>
             {orderable.length === 0 ? (
               <EmptyState
                 title="No supplier can be ordered from"
                 detail={
                   workspace.suppliers.length === 0
-                    ? 'There are no suppliers yet. Add one and file a verified licence before raising an order.'
-                    : 'Every supplier is either unauthorized or without an unexpired verified licence. PUR-01 refuses an order to any of them.'
+                    ? 'There are no suppliers yet. Add one, authorize it and record a checked licence before raising an order.'
+                    : 'None of your suppliers can be ordered from yet. Each one needs to be authorized to trade and have a checked, in-date licence on file.'
                 }
                 steps={[
                   {
@@ -672,7 +672,7 @@ export default async function PharmacyOrdersPage({
                 <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                   <TextField label="Reference" name="reference" notice={notice} required />
                   <SelectField
-                    emptyHint="No orderable supplier — authorize one and file a licence first."
+                    emptyHint="No supplier can be ordered from yet. Authorize one and record its licence first."
                     label="Supplier"
                     name="supplierId"
                     notice={notice}
@@ -760,7 +760,6 @@ function RequisitionDetailPanel({
   return (
     <>
       <SectionCard
-        eyebrow="PUR-02"
         title={requisition.reference}
         titleLevel={2}
         actions={<StatusPill status={requisition.status} />}
@@ -800,10 +799,10 @@ function RequisitionDetailPanel({
         ) : null}
       </SectionCard>
 
-      <SectionCard eyebrow="PUR-02" title="Quote comparison — ranked and explained" titleLevel={2}>
+      <SectionCard title="Compare quotes" titleLevel={2}>
         <p className="text-sm text-text-muted">
-          Ranked by effective cost per forecast sellable unit, then lead time, then shelf life. It
-          never awards: every position states its reasons and you decide.
+          Ranked by cost per unit you can sell, then delivery time, then shelf life. It does not
+          choose for you: each quote shows why it ranks where it does, and you decide.
         </p>
         {comparisons.every((comparison) => comparison.ranking.length === 0) ? (
           <EmptyState
@@ -924,7 +923,7 @@ function RequisitionDetailPanel({
         ) : null}
       </SectionCard>
 
-      <SectionCard eyebrow="PUR-02" title="Record a quote" titleLevel={2}>
+      <SectionCard title="Record a quote" titleLevel={2}>
         <PurchasingActionForm
           operation={{ resource: `requisition:${requisition.id}`, action: 'record-quote' }}
           action={onRecordQuote}
@@ -942,7 +941,7 @@ function RequisitionDetailPanel({
                 label: supplier.name,
               }))}
               required
-              hint="A quote can be recorded from any supplier; only an orderable one can be awarded."
+              hint="You can record a quote from any supplier, but you can only order from one that is authorized and licensed."
             />
             <TextField label="Quote reference" name="quoteReference" notice={notice} />
             <TextField label="Quoted on" name="quotedAt" notice={notice} type="date" required />
@@ -1088,7 +1087,6 @@ function OrderDetailPanel({
 
   return (
     <SectionCard
-      eyebrow="PUR-02/03"
       title={order.reference}
       titleLevel={2}
       actions={<StatusPill status={order.status} />}
@@ -1238,8 +1236,8 @@ function OrderDetailPanel({
         {order.status === 'SUBMITTED' ? (
           selfApproval ? (
             <p className="text-sm text-text-muted">
-              You raised this order, so you cannot approve it. That is the PUR-02 segregation of
-              duties rule — ask a second person to decide.
+              You raised this order, so you cannot approve it. Someone else must approve or reject
+              it.
             </p>
           ) : (
             <PurchasingActionForm

@@ -7,7 +7,7 @@ const linkClass =
 const money = (value: number) =>
   `PKR ${(value / 100).toLocaleString('en-PK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const date = (value: number) =>
-  new Date(value).toISOString().replace('T', ' ').replace('.000Z', ' UTC');
+  `${new Intl.DateTimeFormat('en-PK', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'UTC' }).format(value)} UTC`;
 
 export function FollowUpQueue({
   queue,
@@ -21,37 +21,33 @@ export function FollowUpQueue({
   return (
     <SectionCard title="Supplier-credit follow-up" titleLevel={2}>
       <p className="text-sm text-text-muted">
-        As of {date(Date.parse(queue.asOf))}. Age measures time since issue, not a contractual
-        overdue deadline. Read-only priorities; reload for current records.
+        As of {date(Date.parse(queue.asOf))}. Age is days since the debit note was issued, not days
+        overdue. Reload the page to update.
       </p>
       <p className="mt-2 text-sm text-text-muted">
-        Outstanding claims, allocated credit and recorded-but-unallocated credit are separate.
-        Matching credit may appear beside several claims; it is not reserved and must not be added
-        across them. None proves cash recovered or sales revenue.
+        Amounts still owed, credit already allocated and credit received but not yet allocated are
+        shown separately. The same credit can appear next to more than one claim, so do not add it
+        up across claims. None of this is cash received or sales.
       </p>
       {queue.coverage === 'partial' ? (
         <p role="status" className="mt-3 text-sm text-warning">
-          Partial results: capped source data. Older claims or matching credits may be missing;
-          these are not branch totals.
+          Partial list. Some older claims or credits may be missing, so these are not branch totals.
         </p>
       ) : null}
       {queue.excluded > 0 ? (
         <p role="status" className="mt-3 text-sm text-warning">
-          {queue.excluded} records excluded because scope or financial data could not be validated.
-          Review source records before reconciliation.
+          {queue.excluded} records excluded because their branch or amounts could not be checked.
+          Review them before settling credit.
         </p>
       ) : null}
       <div className="mt-5 grid gap-6 lg:grid-cols-2">
         <div className="min-w-0">
-          <h3 className="font-medium text-text-strong">Open issued debit notes · oldest first</h3>
+          <h3 className="font-medium text-text-strong">Debit notes still owed · oldest first</h3>
           <p className="text-xs text-text-muted">
-            Showing {Math.min(LIMIT, queue.claims.length)} of {queue.claims.length} qualifying
-            loaded notes.
+            Showing {Math.min(LIMIT, queue.claims.length)} of {queue.claims.length} debit notes.
           </p>
           {queue.claims.length === 0 ? (
-            <p className="mt-3 text-sm text-text-muted">
-              No open issued debit notes in validated loaded records.
-            </p>
+            <p className="mt-3 text-sm text-text-muted">No debit notes are waiting for credit.</p>
           ) : (
             <ol className="mt-3 divide-y divide-border-subtle">
               {queue.claims.slice(0, LIMIT).map((claim) => (
@@ -61,15 +57,15 @@ export function FollowUpQueue({
                   </a>
                   <p className="text-sm text-text-body">
                     {claim.ageDays === null
-                      ? 'Issue age unknown'
-                      : `${claim.ageDays} full days since issue`}{' '}
+                      ? 'Issue date unknown'
+                      : `${claim.ageDays} days since issued`}{' '}
                     · {money(claim.outstandingMinor)} outstanding · {money(claim.allocatedMinor)}{' '}
                     allocated
                   </p>
                   {claim.credits.length ? (
                     <>
                       <p className="mt-2 text-sm text-text-body">
-                        Review same-supplier credit for reconciliation:
+                        Unallocated credit from this supplier to check:
                       </p>
                       <ul>
                         {claim.credits.slice(0, LIMIT).map((credit) => (
@@ -84,16 +80,15 @@ export function FollowUpQueue({
                         ))}
                         {claim.credits.length > LIMIT ? (
                           <li className="text-xs text-text-muted">
-                            Showing {LIMIT} of {claim.credits.length} matching loaded credits. See
-                            supplier credit below.
+                            Showing {LIMIT} of {claim.credits.length} credits. See Supplier credit
+                            below.
                           </li>
                         ) : null}
                       </ul>
                     </>
                   ) : (
                     <p className="mt-2 text-sm text-text-muted">
-                      No matching unallocated credit in validated loaded records. Review the claim
-                      with supplier records.
+                      No unallocated credit from this supplier yet. Follow up with the supplier.
                     </p>
                   )}
                 </li>
@@ -103,15 +98,14 @@ export function FollowUpQueue({
         </div>
         <div className="min-w-0">
           <h3 className="font-medium text-text-strong">
-            Submitted, undispatched returns · open deadlines first
+            Returns waiting to be sent · open deadlines first
           </h3>
           <p className="text-xs text-text-muted">
-            Showing {Math.min(LIMIT, queue.dispatch.length)} of {queue.dispatch.length} qualifying
-            loaded returns.
+            Showing {Math.min(LIMIT, queue.dispatch.length)} of {queue.dispatch.length} returns.
           </p>
           {queue.dispatch.length === 0 ? (
             <p className="mt-3 text-sm text-text-muted">
-              No submitted, undispatched returns in loaded records.
+              No submitted returns are waiting to be sent.
             </p>
           ) : (
             <ol className="mt-3 divide-y divide-border-subtle">
@@ -124,12 +118,12 @@ export function FollowUpQueue({
                     {row.state === 'closed'
                       ? 'Deadline passed — do not dispatch.'
                       : row.state === 'unknown'
-                        ? 'Deadline unknown — verify recorded windows before dispatch.'
-                        : 'Review before the recorded deadline; dispatch eligibility is checked on the return.'}
+                        ? 'Deadline unknown — check the return window dates before sending.'
+                        : 'Send it before the deadline. The return checks this again when you dispatch it.'}
                   </p>
                   {row.deadline !== null ? (
                     <p className="text-xs text-text-muted">
-                      Earliest recorded deadline: {date(row.deadline)}
+                      Earliest deadline: {date(row.deadline)}
                     </p>
                   ) : null}
                 </li>

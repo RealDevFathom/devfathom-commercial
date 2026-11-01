@@ -258,7 +258,7 @@ export function LicenceBadge({ supplier }: { supplier: SupplierPickerOption }) {
       <StatusPill
         status="Orderable"
         tone={days != null && days <= 30 ? 'warning' : 'success'}
-        label={days != null && days <= 30 ? `Licence expires in ${days}d` : 'Orderable'}
+        label={days != null && days <= 30 ? `Licence expires in ${days}d` : 'Can order'}
       />
     );
   }

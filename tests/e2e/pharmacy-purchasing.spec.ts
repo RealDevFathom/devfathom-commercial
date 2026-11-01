@@ -95,7 +95,7 @@ test('PO → receive → exception → resolve → stock visible', async ({ page
     .getByLabel('Purchase order')
     .first()
     .selectOption({ label: `${purchaseOrderReference} — ${FIXTURE.supplier.name} (1 lines)` });
-  await page.getByRole('button', { name: 'Find line' }).first().click();
+  await page.getByRole('button', { name: 'Find item' }).first().click();
 
   const capture = page
     .getByRole('group', { name: new RegExp(FIXTURE.medicine.productName) })
@@ -137,10 +137,10 @@ test('PO → receive → exception → resolve → stock visible', async ({ page
   const posted = page.getByRole('status').filter({ hasText: 'Receipt posted' }).first();
   await expect(posted).toBeVisible({ timeout: 20_000 });
   // PUR-04: the shortage is announced at the moment it is raised.
-  await expect(posted).toContainText('match exception');
+  await expect(posted).toContainText('delivery mismatch');
 
   // ── 5. the exception is in the queue, quantified, and stays there ────────
-  const queue = page.getByRole('heading', { level: 2, name: /Match exceptions — open/ }).first();
+  const queue = page.getByRole('heading', { level: 2, name: /Delivery mismatches — open/ }).first();
   await expect(queue).toBeVisible();
   const exception = page
     .getByRole('listitem')
@@ -156,24 +156,24 @@ test('PO → receive → exception → resolve → stock visible', async ({ page
     .fill('Supplier confirmed a short ship; balance cancelled.');
   await exception.getByRole('button', { name: 'Resolve' }).click();
 
-  const resolved = page.getByRole('status').filter({ hasText: 'Exception resolved' }).first();
+  const resolved = page.getByRole('status').filter({ hasText: 'Mismatch resolved' }).first();
   // A Server Function that redirects re-renders the whole surface, which is
   // slower than an assertion default on a route being hit for the first time.
   await expect(resolved).toBeVisible({ timeout: 20_000 });
   await expect(resolved).toContainText('quantities it recorded are unchanged');
   await expect(
-    page.getByRole('heading', { level: 2, name: /Match exceptions — open \(0\)/ }).first()
+    page.getByRole('heading', { level: 2, name: /Delivery mismatches — open \(0\)/ }).first()
   ).toBeVisible();
 
   // ── 7. the stock is visible, read back from the batch ledger ────────────
   await expect(
     page.getByRole('heading', { level: 2, name: receiptReference }).first()
   ).toBeVisible();
-  await expect(shellText(page, 'Stock produced')).toBeVisible();
+  await expect(shellText(page, 'Stock added')).toBeVisible();
   await expect(
     shellText(
       page,
-      new RegExp(`${FIXTURE.medicine.productName}.*batch ${batchNumber}.*batch ledger`)
+      new RegExp(`${FIXTURE.medicine.productName}.*batch ${batchNumber}.*now in stock`)
     )
   ).toBeVisible();
   // The accepted units landed on the shelf, at the pack conversion the picker stated.
@@ -185,7 +185,7 @@ test('the resolved exception is kept with the note that closed it', async ({ pag
   await page.getByRole('link', { name: 'Show resolved' }).first().click();
 
   await expect(
-    page.getByRole('heading', { level: 2, name: /Match exceptions — resolved/ }).first()
+    page.getByRole('heading', { level: 2, name: /Delivery mismatches — resolved/ }).first()
   ).toBeVisible();
   await expect(
     shellText(page, 'Supplier confirmed a short ship; balance cancelled.')

@@ -77,7 +77,7 @@ export const metadata: Metadata = { title: 'Goods in · Pharmacy purchasing' };
 const ROUTE = `${PURCHASING_ROUTE}/receiving`;
 const HEADING = 'Goods in';
 const DESCRIPTION =
-  'The receiving bench. Capture batch, expiry, printed MRP, pack level, quantity, bonus and cost against a purchase order or a direct purchase, then post it into the batch ledger.';
+  'Check in deliveries against a purchase order, or record a purchase made without one. Enter the batch, expiry, printed price and quantity, then add the stock.';
 
 const DIRECT_SLOTS = [0, 1, 2] as const;
 
@@ -124,7 +124,7 @@ export default async function PharmacyReceivingPage({
   } catch {
     return (
       <Frame notice={notice}>
-        <LoadFailure detail="The receiving bench could not load its pickers." retryHref={ROUTE} />
+        <LoadFailure detail="Goods in could not load its lists." retryHref={ROUTE} />
       </Frame>
     );
   }
@@ -325,7 +325,7 @@ export default async function PharmacyReceivingPage({
       next = destination(
         ROUTE,
         {
-          message: `Direct purchase ${receipt.reference} drafted with a recorded bypass. Post it to move the stock.`,
+          message: `Direct purchase ${receipt.reference} drafted, with the reason there was no order recorded. Post it to add the stock.`,
           kind: 'success',
         },
         { branch, receipt: receipt.id }
@@ -376,7 +376,7 @@ export default async function PharmacyReceivingPage({
           message:
             raised === 0
               ? 'Receipt posted. The accepted units are in stock and saleable.'
-              : `Receipt posted with ${raised} match exception${raised === 1 ? '' : 's'}. They stay open until somebody resolves them.`,
+              : `Receipt posted with ${raised} delivery mismatch${raised === 1 ? '' : 'es'}. They stay open until someone resolves them.`,
           kind: 'success',
         },
         { branch, receipt: goodsReceiptId }
@@ -409,8 +409,7 @@ export default async function PharmacyReceivingPage({
       next = destination(
         ROUTE,
         {
-          message:
-            'Receipt reversed with linked compensating movements. Nothing posted was edited or deleted.',
+          message: 'Receipt reversed. The original entries are kept, and new entries undo them.',
           kind: 'success',
         },
         { branch, receipt: goodsReceiptId }
@@ -443,7 +442,7 @@ export default async function PharmacyReceivingPage({
       next = destination(
         ROUTE,
         {
-          message: 'Exception resolved. The quantities it recorded are unchanged.',
+          message: 'Mismatch resolved. The quantities it recorded are unchanged.',
           kind: 'success',
         },
         { branch, receipt: optionalField(form, 'goodsReceiptId') }
@@ -451,7 +450,7 @@ export default async function PharmacyReceivingPage({
     } catch (error) {
       next = destination(
         ROUTE,
-        { ...outcome.failure(error, 'Could not resolve the exception.'), kind: 'error' },
+        { ...outcome.failure(error, 'Could not resolve the mismatch.'), kind: 'error' },
         { branch, receipt: optionalField(form, 'goodsReceiptId') }
       );
     }
@@ -476,18 +475,18 @@ export default async function PharmacyReceivingPage({
             defaultValue={scanTerm ?? ''}
             id="scan"
             name="scan"
-            placeholder="Scan a 2D or linear code, or type a product name"
+            placeholder="Scan a barcode or type a product name"
           />
         </label>
-        <SubmitButton variant="secondary">Find line</SubmitButton>
+        <SubmitButton variant="secondary">Find item</SubmitButton>
       </form>
       {scan ? <ScanNotice scan={scan} onThisOrder={scanOnOrder(scan, selectedOrder)} /> : null}
 
       <div className="grid gap-6 sm:grid-cols-4">
         <Stat
-          label="Open exceptions"
+          label="Open mismatches"
           value={openExceptionCount ?? '—'}
-          sub="Visible until resolved"
+          sub="Stay here until resolved"
         />
         <Stat label="Orders to receive" value={receivable.length} sub="Sent or part-received" />
         <Stat
@@ -500,8 +499,7 @@ export default async function PharmacyReceivingPage({
 
       {/* ── PUR-04 review queue ────────────────────────────────────────────── */}
       <SectionCard
-        eyebrow="PUR-04"
-        title={`Match exceptions — ${exceptionStatus === 'OPEN' ? 'open' : 'resolved'} (${exceptions.length})`}
+        title={`Delivery mismatches — ${exceptionStatus === 'OPEN' ? 'open' : 'resolved'} (${exceptions.length})`}
         titleLevel={2}
         actions={
           <a
@@ -518,13 +516,13 @@ export default async function PharmacyReceivingPage({
           <EmptyState
             title={
               exceptionStatus === 'OPEN'
-                ? 'No open exceptions at this branch'
+                ? 'No open mismatches at this branch'
                 : 'Nothing has been resolved yet'
             }
             detail={
               exceptionStatus === 'OPEN'
-                ? 'A shortage, overage, damage, price conflict or pack conflict is raised when a receipt posts, and stays here until somebody records who closed it and why.'
-                : 'Resolved exceptions are kept with the note that closed them. None have been closed at this branch.'
+                ? 'When a delivery is short, over, damaged, or its price or pack does not match the order, it shows here until someone records how it was settled.'
+                : 'Resolved mismatches keep the note that settled them. None have been resolved at this branch yet.'
             }
           />
         ) : (
@@ -588,15 +586,15 @@ export default async function PharmacyReceivingPage({
         )}
       </SectionCard>
 
-      <SectionCard eyebrow="Input-tax hygiene" title="Purchase bill reconciliation" titleLevel={2}>
+      <SectionCard eyebrow="Tax" title="Supplier tax numbers on purchase bills" titleLevel={2}>
         <div className="grid gap-3 sm:grid-cols-3">
-          <Stat label="Bills needing tax identity" value={inputTaxReport.flaggedBillCount} />
-          <Stat label="Posted input tax" value={money(inputTaxReport.claimedInputTaxMinor)} />
-          <Stat label="Claim on flagged bills" value={money(inputTaxReport.flaggedClaimMinor)} />
+          <Stat label="Bills missing NTN or STRN" value={inputTaxReport.flaggedBillCount} />
+          <Stat label="Input tax claimed" value={money(inputTaxReport.claimedInputTaxMinor)} />
+          <Stat label="Claimed on those bills" value={money(inputTaxReport.flaggedClaimMinor)} />
         </div>
         <p className="mt-3 text-sm text-text-muted">
-          Input tax is calculated from posted, creditable invoice lines. Confirm the claim with your
-          tax adviser; this report is a reconciliation aid, not a tax filing.
+          Input tax is worked out from posted invoice lines where the tax can be claimed back. Check
+          the claim with your tax adviser. This is a checklist, not a tax filing.
         </p>
         {inputTaxReport.rows.some((row) => row.flagged) ? (
           <ul className="mt-3 divide-y divide-border-subtle rounded-[var(--radius-sm)] border border-warning/40">
@@ -619,7 +617,7 @@ export default async function PharmacyReceivingPage({
       </SectionCard>
 
       {/* ── PUR-02 capture against a purchase order ────────────────────────── */}
-      <SectionCard eyebrow="PUR-02" title="Receive against a purchase order" titleLevel={2}>
+      <SectionCard title="Receive against a purchase order" titleLevel={2}>
         {receivable.length === 0 ? (
           <EmptyState
             title="No order is out with a supplier"
@@ -687,13 +685,13 @@ export default async function PharmacyReceivingPage({
                     label="Distributor NTN"
                     name="distributorNtn"
                     notice={notice}
-                    hint="As printed on this purchase bill. Missing values are flagged in reconciliation."
+                    hint="As printed on this purchase bill. Bills without it are listed in the tax check above."
                   />
                   <TextField
                     label="Distributor STRN"
                     name="distributorStrn"
                     notice={notice}
-                    hint="As printed on this purchase bill. Missing values are flagged in reconciliation."
+                    hint="As printed on this purchase bill. Bills without it are listed in the tax check above."
                   />
                   <TextField
                     className="lg:col-span-2"
@@ -764,7 +762,7 @@ export default async function PharmacyReceivingPage({
               </PurchasingActionForm>
             ) : (
               <p className="mt-4 text-sm text-text-muted">
-                Choose an order above to open its lines for capture. Nothing is loaded until you do.
+                Choose an order above to enter what arrived. Nothing is loaded until you do.
               </p>
             )}
           </>
@@ -772,7 +770,7 @@ export default async function PharmacyReceivingPage({
       </SectionCard>
 
       {/* ── PUR-05 direct purchase ─────────────────────────────────────────── */}
-      <SectionCard eyebrow="PUR-05" title="Direct purchase — no purchase order" titleLevel={2}>
+      <SectionCard title="Direct purchase — no purchase order" titleLevel={2}>
         <p className="text-sm text-text-muted">
           A phone, WhatsApp or cash-and-carry invoice. Every validation and every posting is the
           same as receiving against an order — the only difference is that a bypass reason and a
@@ -804,7 +802,7 @@ export default async function PharmacyReceivingPage({
                 required
               />
               <SelectField
-                emptyHint="No orderable supplier. Authorize one and file a verified licence first."
+                emptyHint="No supplier can be ordered from yet. Authorize one and record its licence first."
                 label="Supplier"
                 name="supplierId"
                 notice={notice}
@@ -923,11 +921,11 @@ export default async function PharmacyReceivingPage({
 
       {/* ── receipts, side by side with the selected one ───────────────────── */}
       <div className="grid min-w-0 gap-6 xl:grid-cols-[minmax(0,5fr)_minmax(0,11fr)] xl:items-start">
-        <SectionCard eyebrow="PUR-02/04" title={`Receipts (${receipts.length})`} titleLevel={2}>
+        <SectionCard title={`Receipts (${receipts.length})`} titleLevel={2}>
           {receipts.length === 0 ? (
             <EmptyState
               title="Nothing has been received at this branch"
-              detail="File a receipt against a sent order, or record a direct purchase. Both appear here with their posting state."
+              detail="File a receipt against a sent order, or record a direct purchase. Both appear here, showing whether they are in stock yet."
             />
           ) : (
             <ul className="space-y-2">
@@ -953,7 +951,7 @@ export default async function PharmacyReceivingPage({
                     </span>
                     <span className="flex shrink-0 items-center gap-2">
                       {receipt.exceptions.some((row) => row.status === 'OPEN') ? (
-                        <StatusPill status="Exceptions" tone="warning" />
+                        <StatusPill status="Mismatches" tone="warning" />
                       ) : null}
                       <StatusPill status={receipt.status} />
                     </span>
@@ -978,7 +976,7 @@ export default async function PharmacyReceivingPage({
           <SectionCard title="No receipt selected" titleLevel={2}>
             <EmptyState
               title="Pick a receipt to post or inspect it"
-              detail="Its captured lines, the exceptions it raised and the batch lots it produced open here, beside the list."
+              detail="Its lines, any mismatches and the stock it added open here, beside the list."
             />
           </SectionCard>
         )}
@@ -1071,7 +1069,7 @@ function CaptureFieldset({
           label="Batch number"
           name={`batchNumber:${keyPrefix}`}
           notice={notice}
-          hint="Leave blank if this line did not arrive. A 2D scan fills this in."
+          hint="Leave blank if this line did not arrive. Scanning a 2D barcode fills this in."
         />
         <TextField
           defaultValue={prefill?.printedExpiry}
@@ -1250,7 +1248,6 @@ function ReceiptDetail({
 }) {
   return (
     <SectionCard
-      eyebrow="PUR-02/04/05"
       title={receipt.reference}
       titleLevel={2}
       actions={<StatusPill status={receipt.status} />}
@@ -1272,7 +1269,7 @@ function ReceiptDetail({
             <span className="font-medium">Direct purchase.</span> {receipt.bypassReason}
           </p>
           <p className="mt-1 text-xs text-text-muted">
-            Bypass approved {dateTime(receipt.bypassApprovedAt)}. Recorded permanently.
+            Direct purchase approved on {dateTime(receipt.bypassApprovedAt)}. Recorded permanently.
           </p>
         </div>
       ) : null}
@@ -1308,9 +1305,7 @@ function ReceiptDetail({
 
       {receipt.exceptions.length > 0 ? (
         <div className="mt-4">
-          <h4 className="text-sm font-medium text-text-strong">
-            Exceptions raised by this receipt
-          </h4>
+          <h4 className="text-sm font-medium text-text-strong">Mismatches found on this receipt</h4>
           <ul className="mt-2 space-y-1">
             {receipt.exceptions.map((exception) => (
               <li className="text-xs text-text-muted" key={exception.id}>
@@ -1323,10 +1318,10 @@ function ReceiptDetail({
 
       {receipt.status === 'POSTED' ? (
         <div className="mt-4">
-          <h4 className="text-sm font-medium text-text-strong">Stock produced</h4>
+          <h4 className="text-sm font-medium text-text-strong">Stock added</h4>
           {lots.length === 0 ? (
             <p className="mt-1 text-sm text-text-muted">
-              This receipt posted no lot, which means every line was rejected in full.
+              No stock was added, because every line was rejected in full.
             </p>
           ) : (
             <ul className="mt-2 space-y-1">
@@ -1335,7 +1330,7 @@ function ReceiptDetail({
                   className="text-xs text-text-muted"
                   key={`${lot.lineNumber}-${lot.batchNumber}`}
                 >
-                  {lot.medicine.productName} · batch {lot.batchNumber} · in the batch ledger
+                  {lot.medicine.productName} · batch {lot.batchNumber} · now in stock
                 </li>
               ))}
             </ul>
@@ -1381,8 +1376,8 @@ function ReceiptDetail({
             ) : null}
             <SubmitButton>Post into stock</SubmitButton>
             <p className="mt-2 text-sm text-text-muted">
-              Posting creates the batch lot, both dispositions and any match exception in one
-              transaction: all of it commits, or none of it does.
+              Posting adds the accepted stock, moves any rejected units to quarantine and records
+              any mismatches together. If any part fails, nothing is saved.
             </p>
           </PurchasingActionForm>
         ) : receipt.status === 'POSTED' ? (
@@ -1402,8 +1397,9 @@ function ReceiptDetail({
             />
             <SubmitButton variant="destructive">Reverse posting</SubmitButton>
             <p className="w-full text-sm text-text-muted">
-              A reversal writes linked compensating movements. If the stock has already moved on,
-              the ledger refuses rather than driving a balance negative.
+              Reversing adds new entries that undo this receipt; nothing is deleted. If some of this
+              stock has already been sold or moved, the reversal is refused so stock never goes
+              below zero.
             </p>
           </PurchasingActionForm>
         ) : (
@@ -1551,14 +1547,14 @@ function ScanNotice({ scan, onThisOrder }: { scan: ScanResolution; onThisOrder: 
     return (
       <p className="mt-3 text-xs text-text-muted" role="alert">
         This code could not be read ({scan.reason}). Enter the product, batch and expiry by hand.
-        Older packs without a 2D code stay receivable.
+        Packs without a 2D barcode can still be received.
       </p>
     );
   }
   if (scan.kind === 'barcode') {
     return (
       <p className="mt-3 text-xs text-text-muted" role="status">
-        Linear code matched {scan.label}. It has no batch or expiry, so enter those by hand.
+        Barcode matched {scan.label}. It has no batch or expiry, so enter those by hand.
       </p>
     );
   }

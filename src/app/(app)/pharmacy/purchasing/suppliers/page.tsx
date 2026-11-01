@@ -49,7 +49,7 @@ export const metadata: Metadata = { title: 'Suppliers · Pharmacy purchasing' };
 const ROUTE = `${PURCHASING_ROUTE}/suppliers`;
 const HEADING = 'Suppliers';
 const DESCRIPTION =
-  'Licensed distributors, their licence evidence, terms and credit. A supplier is orderable only while it is authorized and holds an unexpired verified licence.';
+  'The distributors you buy from, with their licences, payment terms and credit. You can order from a supplier only after you authorize it and record a valid licence.';
 
 /**
  * PUR-01 — the supplier register.
@@ -214,7 +214,6 @@ export default async function PharmacySuppliersPage({
       ) : (
         <div className="grid min-w-0 gap-6 xl:grid-cols-[minmax(0,7fr)_minmax(0,9fr)] xl:items-start">
           <SectionCard
-            eyebrow="PUR-01"
             title={`Register (${suppliers.length})`}
             titleLevel={2}
             actions={
@@ -289,14 +288,14 @@ export default async function PharmacySuppliersPage({
                   title="Pick a supplier to see its licences"
                   detail={
                     suppliers.length === 0
-                      ? 'Add a supplier first — its licence evidence, terms and trade authorization all live on its detail panel.'
-                      : 'Choose a row on the left. Its licence evidence, terms, credit limit and authorization control open here, beside the list.'
+                      ? 'Add a supplier first. Its licences, terms and authorization all appear here once you select it.'
+                      : 'Choose a supplier on the left to see its licences, terms, credit limit and authorization.'
                   }
                 />
               </SectionCard>
             )}
 
-            <SectionCard eyebrow="PUR-01" title="Add a supplier" titleLevel={2}>
+            <SectionCard title="Add a supplier" titleLevel={2}>
               <PurchasingActionForm
                 operation={{ resource: 'supplier:new', action: 'create' }}
                 action={createSupplier}
@@ -339,8 +338,8 @@ export default async function PharmacySuppliersPage({
                 </div>
               </PurchasingActionForm>
               <p className="mt-3 text-sm text-text-muted">
-                A new supplier starts unauthorized and unlicensed, so it cannot be ordered from
-                until both are recorded. That is the PUR-01 gate, not a missing step.
+                A new supplier is not authorized and has no licence on file yet. You can order from
+                it once you authorize it and record a valid licence.
               </p>
             </SectionCard>
           </div>
@@ -365,7 +364,6 @@ function SupplierDetail({
   return (
     <>
       <SectionCard
-        eyebrow="PUR-01"
         title={supplier.name}
         titleLevel={2}
         actions={<LicenceBadge supplier={supplier} />}
@@ -391,8 +389,8 @@ function SupplierDetail({
             {supplier.eligibility.orderable
               ? 'This supplier can be ordered from and received from right now.'
               : supplier.eligibility.reason === 'NOT_AUTHORIZED'
-                ? 'Trade with this supplier is not authorized. Orders, sends and receipts are refused until it is.'
-                : 'No unexpired verified licence is on file, so orders, sends and receipts are refused. Authorization alone is not enough.'}
+                ? 'This supplier is not authorized to trade with. You cannot order from it or receive its deliveries until you authorize it.'
+                : 'There is no checked, in-date licence on file, so you cannot order from it or receive its deliveries. Authorizing the supplier is not enough on its own.'}
           </p>
           {/* UX rule 15: the control is one action and it is never greyed out
               while the operator is clearly acting on it. */}
@@ -413,11 +411,7 @@ function SupplierDetail({
         </div>
       </SectionCard>
 
-      <SectionCard
-        eyebrow="PUR-01"
-        title={`Licence evidence (${supplier.licences.length})`}
-        titleLevel={2}
-      >
+      <SectionCard title={`Licences (${supplier.licences.length})`} titleLevel={2}>
         {supplier.licences.length === 0 ? (
           <EmptyState
             title="No licence on file"
@@ -541,8 +535,8 @@ function SupplierDetail({
             <SubmitButton>File licence</SubmitButton>
           </div>
           <Derived
-            label="Gate"
-            value="Only a verified, unexpired licence makes a supplier orderable."
+            label="Why it matters"
+            value="You can only order from a supplier whose licence is checked and still valid."
           />
         </PurchasingActionForm>
       </SectionCard>

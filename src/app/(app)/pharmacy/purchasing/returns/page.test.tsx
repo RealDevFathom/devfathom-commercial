@@ -69,7 +69,7 @@ it('loads the queue from the existing authorized branch reads', async () => {
   expect(reads.purchaseReturns).toHaveBeenCalledExactlyOnceWith({ branchId: 'branch' });
   expect(reads.supplierCredits).toHaveBeenCalledExactlyOnceWith({ branchId: 'branch' });
   expect(screen.getByRole('heading', { name: 'Supplier-credit follow-up' })).toBeVisible();
-  expect(screen.getByText('No open issued debit notes in validated loaded records.')).toBeVisible();
+  expect(screen.getByText('No debit notes are waiting for credit.')).toBeVisible();
 });
 it('retains the descriptive route loading state', () => {
   render(<Loading />);
