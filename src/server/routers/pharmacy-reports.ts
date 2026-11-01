@@ -417,7 +417,38 @@ export const pharmacyReportsRouter = router({
         })),
       };
     }),
-  branches: reports.query(({ ctx }) => scope(ctx)),
+  // The branch list never errors for a signed-in member: report holders and
+  // organization administrators see every active branch; everyone else (for
+  // example a cashier) sees only the active branches assigned to them, which may
+  // be none. Report reads stay behind `reports:operational` below.
+  branches: auditedProtectedProcedure.query(async ({ ctx }) => {
+    const user = ctx.session!.user;
+    const organizationId = ctx.entitlements.organizationId;
+    const organizationWide =
+      user.role === 'ADMIN' ||
+      (await can(subjectFromSession(user), 'reports:operational', undefined, {
+        db: ctx.db,
+        source: 'TRPC',
+        ip: ctx.requestMeta.ip,
+      }));
+    if (organizationWide && hasModule(ctx.entitlements, 'pharmacy-reports'))
+      return { ...(await scope(ctx)), scope: 'organization' as const };
+    const assignments = await ctx.db.pharmacyBranchAssignment.findMany({
+      where: {
+        organizationId,
+        userId: user.id,
+        active: true,
+        branch: { organizationId, active: true },
+      },
+      orderBy: { branch: { name: 'asc' } },
+      select: { branch: { select: { id: true, name: true } } },
+    });
+    return {
+      branches: assignments.map((row) => row.branch),
+      organizationId,
+      scope: 'assigned' as const,
+    };
+  }),
   replenishment: reports.input(pharmacyReplenishmentReportInput).query(async ({ ctx, input }) => {
     // Existing capability middleware denies before report reads; scope enforces licensing.
     const available = await scope(ctx);

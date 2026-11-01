@@ -30,6 +30,18 @@ vi.mock('@/components/preferences-provider', () => ({
   usePreferences: () => ({ icons: 'numeric' }),
 }));
 vi.mock('@/components/entitlements-provider', () => ({ useEntitlements: () => h.entitlements }));
+// The member's pharmacy staff access; unknown (no filtering) unless a case sets it.
+const pharmacyStaffAccessQuery = vi.hoisted(() => ({
+  data: undefined as
+    | undefined
+    | {
+        commandCentre: boolean;
+        dayClose: boolean;
+        reports: boolean;
+        inventoryControl: boolean;
+        inventoryImport: boolean;
+      },
+}));
 vi.mock('@/lib/trpc', () => ({
   trpc: {
     hotelProperty: {
@@ -45,6 +57,9 @@ vi.mock('@/lib/trpc', () => ({
     },
     pharmacySafety: {
       access: { useQuery: () => ({ data: { allowed: false } }) },
+    },
+    pharmacyBranchAssignments: {
+      myAccess: { useQuery: () => ({ data: pharmacyStaffAccessQuery.data }) },
     },
   },
 }));

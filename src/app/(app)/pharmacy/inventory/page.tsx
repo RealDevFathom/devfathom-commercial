@@ -22,6 +22,8 @@ import { hasModule } from '@/lib/entitlements';
 import { evaluateSessionUser } from '@/lib/auth/session-state';
 import { DEMO_UNAVAILABLE_MESSAGE, isDemoProcedureBlocked } from '@/lib/demo/isolation';
 import { pharmacyActionErrorMessage } from '@/lib/pharmacy/action-error-message';
+import { pharmacyBranchLabel } from '@/lib/pharmacy/branch-label';
+import { readPharmacyStaffAccess } from '@/lib/pharmacy/staff-access';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { pharmacyInventoryRouter } from '@/server/routers/pharmacy-inventory';
 import { createTRPCContext } from '@/server/trpc';
@@ -155,6 +157,10 @@ export default async function PharmacyInventoryPage({
     );
   }
 
+  // Admin actions (opening-stock import, new locations, write-offs) are offered
+  // only to members whose server procedures would accept them: import is
+  // admin-only, locations and write-offs need `pharmacy:inventory`.
+  const staffAccess = await readPharmacyStaffAccess(ctx.session.user, ctx.db);
   const caller = pharmacyInventoryRouter.createCaller(ctx);
   const [
     organizationLocations,
@@ -415,20 +421,22 @@ export default async function PharmacyInventoryPage({
         heading="Inventory"
         description="FEFO lots, controlled stock movements, chain operations, and the ranked work queue."
         actions={
-          <>
-            <Link
-              href="/pharmacy/inventory/import"
-              className={buttonVariants({ variant: 'secondary' })}
-            >
-              Import opening stock
-            </Link>
-            <Link
-              href="/pharmacy/inventory/imports"
-              className={buttonVariants({ variant: 'secondary' })}
-            >
-              Imported stock / Awaiting verification
-            </Link>
-          </>
+          staffAccess.inventoryImport ? (
+            <>
+              <Link
+                href="/pharmacy/inventory/import"
+                className={buttonVariants({ variant: 'secondary' })}
+              >
+                Import opening stock
+              </Link>
+              <Link
+                href="/pharmacy/inventory/imports"
+                className={buttonVariants({ variant: 'secondary' })}
+              >
+                Imported stock / Awaiting verification
+              </Link>
+            </>
+          ) : undefined
         }
       />
       {query.notice ? (
@@ -446,7 +454,7 @@ export default async function PharmacyInventoryPage({
             <select className={inputClass} defaultValue={branch.id} name="branch">
               {branches.map((item) => (
                 <option key={item.id} value={item.id}>
-                  {item.name} · {item.city}
+                  {pharmacyBranchLabel(item)}
                 </option>
               ))}
             </select>
@@ -605,44 +613,46 @@ export default async function PharmacyInventoryPage({
               </div>
             ))}
           </div>
-          <form action={perform} className="mt-5 grid gap-3 sm:grid-cols-2">
-            <input name="action" type="hidden" value="create-location" />
-            <input name="branchId" type="hidden" value={branch.id} />
-            <label className="text-sm">
-              Name
-              <Input className="mt-1" name="name" required />
-            </label>
-            <label className="text-sm">
-              Code
-              <Input className="mt-1" name="code" required />
-            </label>
-            <label className="text-sm">
-              Storage type
-              <select className={inputClass} name="kind">
-                {['STORE', 'RACK_BIN', 'FRIDGE', 'SAFE', 'QUARANTINE', 'TRANSIT', 'RETURNS'].map(
-                  (kind) => (
-                    <option key={kind} value={kind}>
-                      {label(kind)}
-                    </option>
-                  )
-                )}
-              </select>
-            </label>
-            <label className="flex min-h-11 items-center gap-2 self-end text-sm">
-              <input name="coldChain" type="checkbox" /> Validated cold-chain zone
-            </label>
-            <label className="text-sm">
-              Minimum °C
-              <Input className="mt-1" name="minimumTemperatureC" step="0.1" type="number" />
-            </label>
-            <label className="text-sm">
-              Maximum °C
-              <Input className="mt-1" name="maximumTemperatureC" step="0.1" type="number" />
-            </label>
-            <Button className="sm:col-span-2" type="submit">
-              Create location
-            </Button>
-          </form>
+          {staffAccess.inventoryControl ? (
+            <form action={perform} className="mt-5 grid gap-3 sm:grid-cols-2">
+              <input name="action" type="hidden" value="create-location" />
+              <input name="branchId" type="hidden" value={branch.id} />
+              <label className="text-sm">
+                Name
+                <Input className="mt-1" name="name" required />
+              </label>
+              <label className="text-sm">
+                Code
+                <Input className="mt-1" name="code" required />
+              </label>
+              <label className="text-sm">
+                Storage type
+                <select className={inputClass} name="kind">
+                  {['STORE', 'RACK_BIN', 'FRIDGE', 'SAFE', 'QUARANTINE', 'TRANSIT', 'RETURNS'].map(
+                    (kind) => (
+                      <option key={kind} value={kind}>
+                        {label(kind)}
+                      </option>
+                    )
+                  )}
+                </select>
+              </label>
+              <label className="flex min-h-11 items-center gap-2 self-end text-sm">
+                <input name="coldChain" type="checkbox" /> Validated cold-chain zone
+              </label>
+              <label className="text-sm">
+                Minimum °C
+                <Input className="mt-1" name="minimumTemperatureC" step="0.1" type="number" />
+              </label>
+              <label className="text-sm">
+                Maximum °C
+                <Input className="mt-1" name="maximumTemperatureC" step="0.1" type="number" />
+              </label>
+              <Button className="sm:col-span-2" type="submit">
+                Create location
+              </Button>
+            </form>
+          ) : null}
           <div className="mt-6 border-t border-border-subtle pt-5">
             <h3 className="font-medium text-text-strong">Manual temperature log</h3>
             {coldChainLocations.length > 0 ? (
@@ -787,7 +797,9 @@ export default async function PharmacyInventoryPage({
       </div>
 
       <SectionCard title="Adjustments and write-off custody" eyebrow="INV-06">
-        {writeOffPositions.length && users.length ? (
+        {!staffAccess.inventoryControl ? (
+          <Empty>Write-offs are recorded by a member with inventory control.</Empty>
+        ) : writeOffPositions.length && users.length ? (
           <form action={perform} className="grid gap-3 md:grid-cols-3">
             <input name="action" type="hidden" value="write-off" />
             <input name="branchId" type="hidden" value={branch.id} />

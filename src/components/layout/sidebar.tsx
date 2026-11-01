@@ -64,6 +64,7 @@ import type { TenantBrand } from '@/lib/tenant-brand';
 import { isModuleGranted, moduleForPath, verticalForModuleKey } from '@/lib/module-catalog';
 import type { EntitlementView } from '@/lib/module-catalog';
 import type { Action } from '@/lib/abac/policies';
+import type { PharmacyStaffAccess } from '@/lib/pharmacy/staff-access';
 
 type NavGroup = 'Workspace' | 'Restaurant' | 'Pharmacy' | 'Hospitality' | 'Firm';
 
@@ -89,6 +90,12 @@ interface NavItem {
   hotelCapabilities?: readonly HotelCapability[];
   /** Shown only when the signed-in user holds one of these capabilities. */
   pharmacyCapabilities?: readonly string[];
+  /**
+   * Pharmacy staff entries a member without this access must not be offered
+   * (e.g. Day close and Reports for a cashier). Applied once the member's access
+   * is known; the page and its procedures enforce the same check server-side.
+   */
+  pharmacyStaffAccess?: keyof PharmacyStaffAccess;
 }
 
 // Grouped to match the Studio WORKSPACE / RESTAURANT / FIRM rail. Order defines the
@@ -316,6 +323,7 @@ export const navigation: NavItem[] = [
     icon: Monitor,
     group: 'Pharmacy',
     module: 'pharmacy-counter',
+    pharmacyStaffAccess: 'dayClose',
   },
   {
     label: 'Counter',
@@ -348,6 +356,7 @@ export const navigation: NavItem[] = [
     href: '/pharmacy/reports',
     icon: BarChart3,
     group: 'Pharmacy',
+    pharmacyStaffAccess: 'reports',
   },
   {
     label: 'Cameras',
@@ -536,7 +545,8 @@ export function visibleNavigation(
   entitlements: Pick<EntitlementView, 'enabledModules' | 'vertical'>,
   role?: string,
   hotelCapabilities: readonly HotelCapability[] = NO_HOTEL_CAPABILITIES,
-  pharmacyCapabilities: readonly string[] = []
+  pharmacyCapabilities: readonly string[] = [],
+  pharmacyStaffAccess: PharmacyStaffAccess | null = null
 ) {
   const isAdmin = role === 'ADMIN';
   const isHr = role === 'HR';
@@ -557,6 +567,12 @@ export function visibleNavigation(
       if (
         item.pharmacyCapabilities?.length &&
         !item.pharmacyCapabilities.some((capability) => pharmacyCapabilities.includes(capability))
+      )
+        return false;
+      if (
+        item.pharmacyStaffAccess &&
+        pharmacyStaffAccess &&
+        !pharmacyStaffAccess[item.pharmacyStaffAccess]
       )
         return false;
       if (item.hrAccess) return isAdmin || isHr;
@@ -615,11 +631,20 @@ function useVisibleNavigation() {
     staleTime: 30_000,
   });
   const pharmacyCapabilities = safetyAccess.data?.allowed ? ['pharmacy:safety'] : [];
+  const staffAccess = trpc.pharmacyBranchAssignments.myAccess.useQuery(undefined, {
+    enabled:
+      entitlements.vertical === 'PHARMACY' &&
+      Boolean(session?.user.id) &&
+      session?.user.organizationId === entitlements.organizationId,
+    retry: false,
+    staleTime: 30_000,
+  });
   const filteredNav = visibleNavigation(
     entitlements,
     session?.user?.role,
     hotelCapabilities,
-    pharmacyCapabilities
+    pharmacyCapabilities,
+    staffAccess.data ?? null
   );
 
   const indexByHref = new Map(filteredNav.map((item, i) => [item.href, i + 1]));

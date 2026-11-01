@@ -5,6 +5,7 @@ import { createSSRHelpers } from '@/lib/trpc-server';
 import { DashboardContent } from './dashboard-content';
 import { RestaurantDashboardContent } from './restaurant-dashboard-content';
 import { PharmacyDashboardContent } from './pharmacy-dashboard-content';
+import { PharmacyCashierHome, type PharmacyCashierShift } from './pharmacy-cashier-home';
 import { HotelDashboardContent } from './hotel-dashboard-content';
 import { FirstRunChecklist } from '@/components/onboarding/first-run-checklist';
 import { loadSetupChecklist } from '@/lib/onboarding/setup-evaluator';
@@ -12,6 +13,9 @@ import { loadHotelLanding } from '@/lib/hotel/landing';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { can, subjectFromSession } from '@/lib/abac';
 import { hotelPropertyRouter } from '@/server/routers/hotel-property';
+import { isModuleGranted } from '@/lib/module-catalog';
+import { pharmacyBranchLabel } from '@/lib/pharmacy/branch-label';
+import { readPharmacyStaffAccess } from '@/lib/pharmacy/staff-access';
 
 export const metadata: Metadata = {
   title: 'Dashboard',
@@ -48,6 +52,39 @@ export default async function DashboardPage({
             ? loadSetupChecklist(db, organizationId, firstRunVertical)
             : null
         )
+      : null;
+
+  // The owner command centre is for Owner / Admin / Manager (and report
+  // holders). Anyone else — a cashier — gets their own home: the Counter and
+  // the drawer they opened. Decided here, server-side, from the same
+  // capability checks the report procedures enforce, so a cashier never asks
+  // the command centre for data it would refuse.
+  const cashierShifts: PharmacyCashierShift[] | null =
+    pharmacy && organizationId && user
+      ? await withTenantDb(organizationId, async (db) => {
+          if ((await readPharmacyStaffAccess(user, db)).commandCentre) return null;
+          const drawers = await db.pharmacyDrawerSession.findMany({
+            where: { organizationId, openedByActorId: user.id, status: 'OPEN' },
+            orderBy: { openedAt: 'desc' },
+            take: 5,
+            select: { id: true, branchId: true, openedAt: true, openingFloatMinor: true },
+          });
+          const branches = drawers.length
+            ? await db.pharmacyBranch.findMany({
+                where: { organizationId, id: { in: drawers.map((drawer) => drawer.branchId) } },
+                select: { id: true, name: true, city: true },
+              })
+            : [];
+          const labels = new Map(
+            branches.map((branch) => [branch.id, pharmacyBranchLabel(branch)])
+          );
+          return drawers.map((drawer) => ({
+            id: drawer.id,
+            branchLabel: labels.get(drawer.branchId) ?? 'Branch',
+            openedAt: drawer.openedAt,
+            openingFloatMinor: drawer.openingFloatMinor,
+          }));
+        })
       : null;
 
   // Prefetch above-the-fold data on the server so it arrives hydrated. The
@@ -88,6 +125,13 @@ export default async function DashboardPage({
           landing={hotelLanding}
           organizationName={ssr.organization?.displayName ?? 'Your properties'}
           isAdmin={ssr.session?.user?.role === 'ADMIN'}
+        />
+      ) : pharmacy && cashierShifts ? (
+        <PharmacyCashierHome
+          counterAvailable={isModuleGranted('pharmacy-counter', ssr.entitlements.enabledModules)}
+          shifts={cashierShifts}
+          timeZone={ssr.organization?.timezone}
+          currency={ssr.organization?.currency}
         />
       ) : pharmacy ? (
         <PharmacyDashboardContent role={ssr.session?.user?.role} />

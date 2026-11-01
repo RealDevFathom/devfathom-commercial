@@ -25,6 +25,17 @@ vi.mock('@/server/trpc', () => ({
     session: { user: actor },
   })),
 }));
+// The page's up-front reports gate; a case sets `reportsAccess.allowed` to deny.
+const reportsAccess = vi.hoisted(() => ({ allowed: true }));
+vi.mock('@/lib/pharmacy/staff-access', () => ({
+  readPharmacyStaffAccess: vi.fn(async () => ({
+    commandCentre: reportsAccess.allowed,
+    dayClose: reportsAccess.allowed,
+    reports: reportsAccess.allowed,
+    inventoryControl: reportsAccess.allowed,
+    inventoryImport: reportsAccess.allowed,
+  })),
+}));
 vi.mock('@/server/routers/pharmacy-sales', () => ({
   pharmacySalesRouter: {
     createCaller: () => ({
@@ -137,9 +148,29 @@ vi.mock('@/server/routers/pharmacy-reports', () => ({
 
 import PharmacyReportsPage from './page';
 
+describe('pharmacy reports access gate', () => {
+  beforeEach(() => {
+    commandCentre.mockClear();
+  });
+
+  it('shows a cashier the locked state at once, without reading any report', async () => {
+    actor.role = 'EMPLOYEE';
+    reportsAccess.allowed = false;
+    try {
+      render(await PharmacyReportsPage({ searchParams: Promise.resolve({}) }));
+      expect(screen.getByText('Reports unavailable')).toBeInTheDocument();
+      expect(commandCentre).not.toHaveBeenCalled();
+    } finally {
+      reportsAccess.allowed = true;
+      actor.role = 'ADMIN';
+    }
+  });
+});
+
 describe('pharmacy report catalog filters', () => {
   beforeEach(() => {
     actor.role = 'ADMIN';
+    reportsAccess.allowed = true;
     signalStaff.userId = 'cashier_1';
   });
 

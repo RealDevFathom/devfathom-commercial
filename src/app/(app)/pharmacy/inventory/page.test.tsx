@@ -24,6 +24,18 @@ vi.mock('./break-pack-form', () => ({
     return null;
   },
 }));
+// The member's inventory admin access; full unless a case narrows it.
+const fullAccess = {
+  commandCentre: true,
+  dayClose: true,
+  reports: true,
+  inventoryControl: true,
+  inventoryImport: true,
+};
+const staffAccess = vi.hoisted(() => ({ current: null as null | Record<string, boolean> }));
+vi.mock('@/lib/pharmacy/staff-access', () => ({
+  readPharmacyStaffAccess: vi.fn(async () => staffAccess.current),
+}));
 // Async server-component verification belongs to the migrated DB/browser lane.
 vi.mock('@/components/camera/cold-chain-camera-section', () => ({
   ColdChainCameraSection: () => null,
@@ -97,6 +109,7 @@ beforeEach(() => {
   mocks.actor.mockResolvedValue(ctx);
   mocks.context.mockResolvedValue(ctx);
   mocks.module.mockReturnValue(true);
+  staffAccess.current = { ...fullAccess };
   mocks.caller.mockReturnValue({
     nearExpiryBoard: nearExpiry,
     temperatureZoneStatuses: vi.fn().mockResolvedValue([]),
@@ -287,5 +300,45 @@ describe('Inventory pack-action integration', () => {
     expect(screen.getByText('Inventory module unavailable')).toBeVisible();
     expect(mocks.form).not.toHaveBeenCalled();
     expect(lots).not.toHaveBeenCalled();
+  });
+});
+
+describe('Inventory admin actions by role', () => {
+  beforeEach(() => {
+    ctx.db.user.findMany.mockResolvedValue([
+      { id: 'witness', name: 'Witness', title: 'Pharmacist' },
+    ]);
+  });
+
+  it('hides import, create location and write-off from a cashier', async () => {
+    staffAccess.current = {
+      commandCentre: false,
+      dayClose: false,
+      reports: false,
+      inventoryControl: false,
+      inventoryImport: false,
+    };
+    await show();
+    expect(screen.queryByRole('link', { name: 'Import opening stock' })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('link', { name: 'Imported stock / Awaiting verification' })
+    ).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Create location' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Record write-off' })).not.toBeInTheDocument();
+    expect(
+      screen.getByText('Write-offs are recorded by a member with inventory control.')
+    ).toBeInTheDocument();
+  });
+
+  it('keeps every admin action for an owner', async () => {
+    await show();
+    expect(screen.getByRole('link', { name: 'Import opening stock' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Create location' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Record write-off' })).toBeInTheDocument();
+  });
+
+  it('names the branch by name and city, the same label the counter uses', async () => {
+    await show();
+    expect(screen.getByRole('option', { name: 'Main · Karachi' })).toBeInTheDocument();
   });
 });

@@ -25,6 +25,7 @@ import { hasModule } from '@/lib/entitlements';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { pharmacyInventoryRouter } from '@/server/routers/pharmacy-inventory';
 import { createTRPCContext } from '@/server/trpc';
+import { pharmacyBranchLabel } from '@/lib/pharmacy/branch-label';
 
 export const metadata: Metadata = { title: 'Stock transfers' };
 
@@ -224,7 +225,7 @@ export default async function PharmacyTransfersPage({
             <select className={selectClass} defaultValue={branch.id} name="branch">
               {branches.map((item) => (
                 <option key={item.id} value={item.id}>
-                  {item.name} · {item.city}
+                  {pharmacyBranchLabel(item)}
                 </option>
               ))}
             </select>

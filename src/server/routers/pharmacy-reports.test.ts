@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fetchRequestHandler } from '@trpc/server/adapters/fetch';
 
 const mocks = vi.hoisted(() => ({
@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   repeatRead: vi.fn().mockResolvedValue({ horizons: [] }),
   can: vi.fn<typeof import('@/lib/abac').can>(async () => false),
   branchFindMany: vi.fn(),
+  assignmentFindMany: vi.fn(),
   settingUpsert: vi.fn(),
   userFindUnique: vi.fn(),
   branchFindFirst: vi.fn(),
@@ -84,6 +85,7 @@ function context(role = 'ADMIN') {
       $queryRaw: mocks.raw,
       $transaction: mocks.transaction,
       pharmacyBranch: { findMany: mocks.branchFindMany, findFirst: mocks.branchFindFirst },
+      pharmacyBranchAssignment: { findMany: mocks.assignmentFindMany },
       pharmacyPharmacovigilanceReport: {
         findFirst: mocks.reportFindFirst,
         findMany: mocks.reportFindMany,
@@ -253,6 +255,82 @@ describe('pharmacy administrator report bootstrap (#434)', () => {
     expect(mocks.can.mock.calls.filter((call) => call[1] === 'reports:operational')).toHaveLength(
       3
     );
+  });
+});
+
+describe('pharmacy branch list scope by role (QA: cashier dashboard)', () => {
+  const allBranches = [
+    { id: 'branch_1', name: 'Main' },
+    { id: 'branch_2', name: 'Second' },
+  ];
+  beforeEach(() => {
+    vi.mocked(hasModule).mockReturnValue(true);
+    mocks.branchFindMany.mockResolvedValue(allBranches);
+    mocks.assignmentFindMany.mockResolvedValue([{ branch: { id: 'branch_2', name: 'Second' } }]);
+  });
+  afterEach(() => {
+    mocks.can.mockImplementation(async () => false);
+  });
+
+  it('gives an owner (ADMIN with reports grants) every active branch', async () => {
+    mocks.can.mockResolvedValue(true);
+    await expect(caller('ADMIN').branches()).resolves.toEqual({
+      organizationId: 'org_1',
+      branches: allBranches,
+      scope: 'organization',
+    });
+    expect(mocks.assignmentFindMany).not.toHaveBeenCalled();
+  });
+
+  it('gives an organization admin without a reports grant every active branch', async () => {
+    mocks.can.mockResolvedValue(false);
+    await expect(caller('ADMIN').branches()).resolves.toMatchObject({
+      branches: allBranches,
+      scope: 'organization',
+    });
+  });
+
+  it('gives a manager without a reports grant only their assigned branches', async () => {
+    mocks.can.mockImplementation(async (_subject, action) => action === 'pharmacy:manage');
+    await expect(caller('EMPLOYEE').branches()).resolves.toEqual({
+      organizationId: 'org_1',
+      branches: [{ id: 'branch_2', name: 'Second' }],
+      scope: 'assigned',
+    });
+    expect(mocks.branchFindMany).not.toHaveBeenCalled();
+  });
+
+  it('never errors for a cashier: assigned branches, scoped to the tenant and the user', async () => {
+    mocks.can.mockImplementation(async (_subject, action) => action === 'pharmacy:counter');
+    await expect(caller('EMPLOYEE').branches()).resolves.toMatchObject({
+      branches: [{ id: 'branch_2', name: 'Second' }],
+      scope: 'assigned',
+    });
+    expect(mocks.assignmentFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          organizationId: 'org_1',
+          userId: 'user_admin',
+          active: true,
+          branch: { organizationId: 'org_1', active: true },
+        },
+      })
+    );
+  });
+
+  it('returns an empty list, not an error, for a cashier with no assignment', async () => {
+    mocks.can.mockResolvedValue(false);
+    mocks.assignmentFindMany.mockResolvedValue([]);
+    await expect(caller('EMPLOYEE').branches()).resolves.toEqual({
+      organizationId: 'org_1',
+      branches: [],
+      scope: 'assigned',
+    });
+  });
+
+  it('still refuses a cashier the report reads themselves', async () => {
+    mocks.can.mockResolvedValue(false);
+    await expect(caller('EMPLOYEE').catalog()).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
 });
 

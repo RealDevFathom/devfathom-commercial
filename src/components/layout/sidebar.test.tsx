@@ -50,6 +50,18 @@ vi.mock('motion/react', () => ({
     ),
   },
 }));
+// The member's pharmacy staff access; unknown (no filtering) unless a case sets it.
+const pharmacyStaffAccessQuery = vi.hoisted(() => ({
+  data: undefined as
+    | undefined
+    | {
+        commandCentre: boolean;
+        dayClose: boolean;
+        reports: boolean;
+        inventoryControl: boolean;
+        inventoryImport: boolean;
+      },
+}));
 vi.mock('@/lib/trpc', () => ({
   trpc: {
     hotelProperty: {
@@ -66,6 +78,9 @@ vi.mock('@/lib/trpc', () => ({
     },
     pharmacySafety: {
       access: { useQuery: () => ({ data: { allowed: false } }) },
+    },
+    pharmacyBranchAssignments: {
+      myAccess: { useQuery: () => ({ data: pharmacyStaffAccessQuery.data }) },
     },
   },
 }));
@@ -292,6 +307,44 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
       'Branch assignments',
     ]) {
       expect(screen.queryByRole('link', { name: new RegExp(`${label}$`) })).not.toBeInTheDocument();
+    }
+  });
+
+  it('hides Day close and Reports from a cashier while keeping Counter and Inventory', () => {
+    pharmacyStaffAccessQuery.data = {
+      commandCentre: false,
+      dayClose: false,
+      reports: false,
+      inventoryControl: false,
+      inventoryImport: false,
+    };
+    try {
+      renderNavigation({ role: 'EMPLOYEE' });
+      const hrefs = screen.getAllByRole('link').map((link) => link.getAttribute('href'));
+      expect(hrefs).toEqual(expect.arrayContaining(['/pharmacy/counter', '/pharmacy/inventory']));
+      expect(hrefs).not.toContain('/pharmacy/counter/close');
+      expect(hrefs).not.toContain('/pharmacy/reports');
+    } finally {
+      pharmacyStaffAccessQuery.data = undefined;
+    }
+  });
+
+  it('keeps Day close and Reports for a manager or owner holding the access', () => {
+    pharmacyStaffAccessQuery.data = {
+      commandCentre: true,
+      dayClose: true,
+      reports: true,
+      inventoryControl: true,
+      inventoryImport: true,
+    };
+    try {
+      renderNavigation();
+      const hrefs = screen.getAllByRole('link').map((link) => link.getAttribute('href'));
+      expect(hrefs).toEqual(
+        expect.arrayContaining(['/pharmacy/counter/close', '/pharmacy/reports'])
+      );
+    } finally {
+      pharmacyStaffAccessQuery.data = undefined;
     }
   });
 
