@@ -831,13 +831,10 @@ export const pharmacySalesRouter = router({
             message: 'Khata fields require Khata tender.',
           });
         const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
-        return await ctx.db.$transaction(async (tx) => {
-          const db = txDb(tx);
-          await assertStoredPharmacyMayOperate(db, scope.organizationId, scope.branchId, {
-            name: 'pharmacy.sale.tender',
-          });
-          return applyPharmacyTender(db, scope, ledgerTender(input));
-        });
+        // applyPharmacyTender enforces the persisted regulatory gate in this transaction.
+        return await ctx.db.$transaction((tx) =>
+          applyPharmacyTender(txDb(tx), scope, ledgerTender(input))
+        );
       }
       const scope = await khataScope(ctx, input.branchId, 'write');
       if (!input.familyAccountId) throw new FamilyKhataError('ACCOUNT_NOT_FOUND');
@@ -851,6 +848,7 @@ export const pharmacySalesRouter = router({
         }));
       return await ctx.db.$transaction(async (tx) => {
         const db = txDb(tx);
+        // Fail before any Khata limit work; applyPharmacyTender re-checks under the same locks.
         await assertStoredPharmacyMayOperate(db, scope.organizationId, scope.branchId, {
           name: 'pharmacy.sale.tender',
         });
@@ -981,14 +979,10 @@ export const pharmacySalesRouter = router({
     .input(z.object({ branchId, quotation: z.boolean().default(false) }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
-        return await ctx.db.$transaction(async (tx) => {
-          const db = txDb(tx);
-          const scope = await scopeFor(ctx, input.branchId);
-          await assertStoredPharmacyMayOperate(db, scope.organizationId, scope.branchId, {
-            name: 'pharmacy.sale.create',
-          });
-          return createSale(db, scope, input.quotation);
-        });
+        // createSale enforces the persisted regulatory gate in this transaction.
+        return await ctx.db.$transaction(async (tx) =>
+          createSale(txDb(tx), await scopeFor(ctx, input.branchId), input.quotation)
+        );
       } catch (error) {
         fail(error);
       }

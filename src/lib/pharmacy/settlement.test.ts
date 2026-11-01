@@ -16,6 +16,11 @@ vi.mock('./finance-postings', async () => ({
   postTenderEntry: postings.postTenderEntry,
   postSaleLineEntry: postings.postSaleLineEntry,
 }));
+// The persisted regulatory gate has its own suite (regulatory.test.ts).
+vi.mock('./regulatory', async () => ({
+  ...(await vi.importActual<typeof import('./regulatory')>('./regulatory')),
+  assertStoredPharmacyMayOperate: vi.fn(async () => undefined),
+}));
 
 import { Prisma } from '@/generated/prisma/client';
 

@@ -7,6 +7,10 @@ vi.mock('./finance-postings', () => ({ postSaleLineEntry: vi.fn(), postTenderEnt
 vi.mock('./counter-evidence', () => ({ requestCounterEvidence: vi.fn() }));
 // #633: the batch re-check has its own PostgreSQL suite (sale-batch-safety.db.test.ts).
 vi.mock('./sale-batch-safety', () => ({ assertSaleBatchesSellable: vi.fn(async () => new Map()) }));
+vi.mock('./regulatory', async (original) => ({
+  ...(await original<typeof import('./regulatory')>()),
+  assertStoredPharmacyMayOperate: vi.fn(async () => undefined),
+}));
 
 const scope = { organizationId: 'org-a', branchId: 'branch-a', actorId: 'actor-a' };
 const input = {

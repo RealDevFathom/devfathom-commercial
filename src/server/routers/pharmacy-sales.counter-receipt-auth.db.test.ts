@@ -34,6 +34,8 @@ const ids = {
   cashier: `user_rcpt_c_${suffix}`,
   unassigned: `user_rcpt_u_${suffix}`,
   admin: `user_rcpt_admin_${suffix}`,
+  counterAdmin: `user_rcpt_cadmin_${suffix}`,
+  roleCounterAdmin: `role_rcpt_ca_${suffix}`,
   outsider: `user_rcpt_x_${suffix}`,
   legacy: `user_rcpt_legacy_${suffix}`,
   inactive: `user_rcpt_off_${suffix}`,
@@ -158,6 +160,8 @@ beforeAll(async () => {
       { id: ids.roleDispense, key: `dispense-${suffix}`, capability: 'pharmacy:dispense' },
       { id: ids.roleReceipt, key: `receipt-${suffix}`, capability: 'pharmacy:receipt' },
       { id: ids.roleCashier, key: `cashier-${suffix}`, capability: 'pharmacy.counter' },
+      // Tendering needs the canonical counter capability, not only dispense.
+      { id: ids.roleCounterAdmin, key: `counter-admin-${suffix}`, capability: 'pharmacy:counter' },
     ]) {
       await tx.organizationRole.create({
         data: {
@@ -174,6 +178,12 @@ beforeAll(async () => {
       { id: ids.cashier, roleId: ids.roleCashier, name: 'Cashier' },
       { id: ids.unassigned, roleId: ids.roleDispense, name: 'Unassigned' },
       { id: ids.admin, roleId: ids.roleDispense, name: 'Admin', role: 'ADMIN' as const },
+      {
+        id: ids.counterAdmin,
+        roleId: ids.roleCounterAdmin,
+        name: 'Counter admin',
+        role: 'ADMIN' as const,
+      },
     ];
     for (const person of people) {
       await tx.user.create({
@@ -259,7 +269,7 @@ const receiptUser = { id: ids.receiptClerk, role: 'EMPLOYEE' as const, organizat
 
 describeIfDatabase('counter receipt authorization against Postgres', () => {
   it('rolls back create and tender denials while preserving their regulatory audits', async () => {
-    const admin = { id: ids.admin, role: 'ADMIN' as const, organizationId: ids.orgA };
+    const admin = { id: ids.counterAdmin, role: 'ADMIN' as const, organizationId: ids.orgA };
     const before = await withTenantDb(ids.orgA, (tx) =>
       Promise.all([tx.pharmacySale.count(), tx.pharmacyTender.count()])
     );
@@ -287,6 +297,21 @@ describeIfDatabase('counter receipt authorization against Postgres', () => {
         })
       )
     ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'PROFILE_MISSING' });
+
+    // GRACE is an operating lifecycle state: the lifecycle check passes and the
+    // branch profile decides (still missing here).
+    await withPlatformDb((tx) =>
+      tx.organization.update({ where: { id: ids.orgA }, data: { status: 'GRACE' } })
+    );
+    try {
+      await expect(
+        act(ids.orgA, admin, (api) => api.create({ branchId: ids.branchA, quotation: false }))
+      ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'PROFILE_MISSING' });
+    } finally {
+      await withPlatformDb((tx) =>
+        tx.organization.update({ where: { id: ids.orgA }, data: { status: 'ACTIVE' } })
+      );
+    }
 
     const { flushAuditWritesForTest } = await import('@/server/audit');
     await flushAuditWritesForTest();

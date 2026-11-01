@@ -256,18 +256,18 @@ describe('counter receipt authorization', () => {
           idempotencyKey: 'regulated-operation',
         }),
     ],
-  ])('refuses to %s a sale when the regulatory gate denies the branch', async (_name, run) => {
+  ])('maps a shared %s regulatory denial to FORBIDDEN', async (name, run) => {
     const f = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }], 'ADMIN');
-    vi.mocked(assertStoredPharmacyMayOperate).mockRejectedValue(
-      new BranchOperationDeniedError('PROFILE_MISSING')
-    );
+    // The gate now lives inside createSale/applyPharmacyTender so every caller shares it.
+    const denied = new BranchOperationDeniedError('PROFILE_MISSING');
+    if (name === 'create') vi.mocked(createSale).mockRejectedValueOnce(denied);
+    else vi.mocked(applyPharmacyTender).mockRejectedValueOnce(denied);
 
     await expect(run(f.caller())).rejects.toMatchObject({
       code: 'FORBIDDEN',
       message: 'PROFILE_MISSING',
     });
-    expect(createSale).not.toHaveBeenCalled();
-    expect(applyPharmacyTender).not.toHaveBeenCalled();
+    expect(f.db.$transaction).toHaveBeenCalled();
   });
 
   it('supplies the regulatory identity effective at completion to browser receipt callers', async () => {

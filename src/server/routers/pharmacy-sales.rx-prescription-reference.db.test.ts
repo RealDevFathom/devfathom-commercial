@@ -9,7 +9,10 @@
 import { randomBytes } from 'node:crypto';
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { pharmacyRegulatoryFixture } from '@/lib/test-support/pharmacy-regulatory';
+import {
+  pharmacyRegulatoryFixture,
+  retirePharmacyRegulatoryRules,
+} from '@/lib/test-support/pharmacy-regulatory';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (databaseUrl) process.env.DATABASE_URL = databaseUrl;
@@ -29,6 +32,7 @@ const ids = {
   cashier: `user_r518rx_cashier_${suffix}`,
   pharmacist: `user_r518rx_pharm_${suffix}`,
 };
+const rulesId = pharmacyRegulatoryFixture(ids.branch).rules.id;
 const DAY = 24 * 60 * 60 * 1000;
 const key = () => randomBytes(8).toString('hex');
 const refused = (message: string, code = 'BAD_REQUEST') => ({ code, message });
@@ -425,6 +429,9 @@ beforeAll(async () => {
 }, 120_000);
 
 afterAll(async () => {
+  // Synthetic TEST-* rule sets are global; close them so later suites (onboarding)
+  // never list them as published jurisdictions.
+  if (databaseUrl) await retirePharmacyRegulatoryRules(withPlatformDb, [rulesId]);
   await disconnect?.();
 });
 

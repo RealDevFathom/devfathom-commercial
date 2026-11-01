@@ -22,9 +22,13 @@
  */
 import { randomBytes } from 'node:crypto';
 
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import {
+  retirePharmacyRegulatoryRules,
+  seedPharmacyRegulatoryProfile,
+} from '@/lib/test-support/pharmacy-regulatory';
 
 const TEST_DATABASE_URL = process.env.M8_TEST_RUNTIME_DATABASE_URL ?? process.env.TEST_DATABASE_URL;
 if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
@@ -61,6 +65,7 @@ const EXPIRY_LATER = new Date('2027-09-01T00:00:00.000Z');
 
 type Deps = {
   withTenantDb: (typeof import('@/lib/tenancy/scoped-db'))['withTenantDb'];
+  withPlatformDb: (typeof import('@/lib/tenancy/scoped-db'))['withPlatformDb'];
   postings: typeof import('./finance-postings');
   reports: typeof import('./finance-reports');
   receipts: typeof import('./goods-receipt');
@@ -69,6 +74,8 @@ type Deps = {
   sales: typeof import('./sales');
 };
 let deps: Deps;
+/** Branches whose sale-gate regulatory profile is seeded, mapped to the rule-set id. */
+const regulatedBranches = new Map<string, string>();
 
 function inOrg<T>(organizationId: string, work: (db: ScopedDb) => Promise<T>): Promise<T> {
   return deps.withTenantDb(organizationId, work);
@@ -113,6 +120,21 @@ async function ensureBranch(db: ScopedDb, organizationId: string, branchId: stri
  * as a tenant would build it so RLS and every trigger apply to the fixture too.
  */
 async function fixture(organizationId: string, branchId: string, label: string): Promise<Fixture> {
+  const created = await buildFixture(organizationId, branchId, label);
+  // createSale runs the persisted regulatory gate, which needs the branch's profile.
+  if (!regulatedBranches.has(branchId))
+    regulatedBranches.set(
+      branchId,
+      await seedPharmacyRegulatoryProfile(
+        deps.withPlatformDb,
+        (work) => inOrg(organizationId, work),
+        branchId
+      )
+    );
+  return created;
+}
+
+async function buildFixture(organizationId: string, branchId: string, label: string) {
   return inOrg(organizationId, async (db) => {
     await ensureBranch(db, organizationId, branchId);
     const medicine = await db.medicine.create({
@@ -398,6 +420,7 @@ beforeAll(async () => {
     ]);
   deps = {
     withTenantDb: scopedDb.withTenantDb,
+    withPlatformDb: scopedDb.withPlatformDb,
     postings,
     reports,
     receipts,
@@ -433,6 +456,11 @@ beforeAll(async () => {
     });
   });
 }, 120_000);
+
+afterAll(async () => {
+  if (TEST_DATABASE_URL)
+    await retirePharmacyRegulatoryRules(deps.withPlatformDb, [...regulatedBranches.values()]);
+});
 
 // ── FIN-01 — one balanced entry per event kind ──────────────────────────────
 

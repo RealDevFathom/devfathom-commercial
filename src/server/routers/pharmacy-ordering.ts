@@ -18,6 +18,7 @@ import {
   recordDeliveryCommand,
   PharmacyDeliveryError,
 } from '@/lib/pharmacy/customer-delivery';
+import { BranchOperationDeniedError } from '@/lib/pharmacy/regulatory';
 import type { LedgerScope } from '@/lib/pharmacy/stock-ledger';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
@@ -46,6 +47,8 @@ async function isStaff(ctx: TRPCContext) {
 }
 
 function fail(error: unknown): never {
+  if (error instanceof BranchOperationDeniedError)
+    throw new TRPCError({ code: 'FORBIDDEN', message: error.reason });
   if (error instanceof PharmacyDeliveryError)
     throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
   if (error instanceof PharmacyCustomerOrderError) {

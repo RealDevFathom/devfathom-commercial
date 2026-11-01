@@ -522,7 +522,15 @@ describe('Khata router trust and recovery boundary', () => {
       expect(applyPharmacyTender).not.toHaveBeenCalled();
       expect(f.db.pharmacyKhataEvent.create).not.toHaveBeenCalled();
       expect(f.db.pharmacyKhataLimitDecision.create).not.toHaveBeenCalled();
-      expect(f.db.$queryRaw).not.toHaveBeenCalled();
+      // Only the gate's share locks ran; the sale row was never locked for a charge.
+      const statements = f.db.$queryRaw.mock.calls.map(([sql]) =>
+        Array.isArray(sql) ? sql.join('?') : String((sql as { sql?: string }).sql)
+      );
+      expect(statements.length).toBeGreaterThan(0);
+      for (const statement of statements) {
+        expect(statement).toContain('FOR SHARE');
+        expect(statement).not.toContain('pharmacy_sales');
+      }
     }
   );
 
