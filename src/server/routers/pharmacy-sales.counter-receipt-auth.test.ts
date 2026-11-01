@@ -35,10 +35,13 @@ vi.mock('@/lib/pharmacy/sales', async (original) => ({
   readReturnHistory: vi.fn(async () => [{ id: 'return-1' }]),
   createSale: vi.fn(),
   addSaleLine: vi.fn(),
+  changeSaleStatus: vi.fn(),
+  returnSaleLine: vi.fn(async () => ({ returnId: 'return-a' })),
 }));
 vi.mock('@/lib/pharmacy/settlement', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/settlement')>()),
   applyPharmacyTender: vi.fn(async () => ({ tenderId: 'tender-1' })),
+  refundPharmacyTender: vi.fn(async () => ({ refundId: 'refund-a' })),
 }));
 vi.mock('@/lib/pharmacy/dispensing-label-source', () => ({
   readDispensingLabelSources: vi.fn(async () => []),
@@ -66,8 +69,14 @@ vi.mock('@/lib/pharmacy/receipt-print', () => ({
 import { hasModule } from '@/lib/entitlements';
 import { readCounterCart, readCounterReceipt } from '@/lib/pharmacy/counter';
 import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-source';
-import { addSaleLine, createSale, readReturnHistory } from '@/lib/pharmacy/sales';
-import { applyPharmacyTender } from '@/lib/pharmacy/settlement';
+import {
+  addSaleLine,
+  changeSaleStatus,
+  createSale,
+  readReturnHistory,
+  returnSaleLine,
+} from '@/lib/pharmacy/sales';
+import { applyPharmacyTender, refundPharmacyTender } from '@/lib/pharmacy/settlement';
 import {
   buildPharmacyReceiptEscPosJob,
   readPharmacyReceiptFormat,
@@ -126,6 +135,9 @@ function fixture(permissions: Permission[], role: 'EMPLOYEE' | 'ADMIN' = 'EMPLOY
         },
       ]),
     },
+    pharmacyTender: {
+      findFirst: vi.fn(async () => ({ type: 'CASH' })),
+    },
     medicine: { findFirst: vi.fn(async () => ({ controlled: false })) },
     organization: { findUnique: vi.fn(async () => ({ currency: 'PKR' })) },
     $transaction: vi.fn(),
@@ -177,6 +189,39 @@ beforeEach(() => {
 });
 
 type Caller = ReturnType<ReturnType<typeof fixture>['caller']>;
+
+const reversalPaths = [
+  {
+    name: 'refund',
+    run: (caller: Caller) =>
+      caller.refundTender({
+        branchId: 'branch-a',
+        originalTenderId: 'tender-a',
+        deviceId: 'device-a',
+        businessDate: new Date('2026-10-01T00:00:00.000Z'),
+        amountMinor: 100,
+        reason: 'Customer request',
+        idempotencyKey: 'refund-a',
+      }),
+    operation: refundPharmacyTender,
+    result: { refundId: 'refund-a' },
+  },
+  {
+    name: 'sale-line return',
+    run: (caller: Caller) =>
+      caller.returnLine({
+        branchId: 'branch-a',
+        saleLineId: 'line-a',
+        canonicalUnits: 1,
+        disposition: 'QUARANTINE',
+        reason: 'Customer request',
+        integrityDecision: 'Seal intact',
+        idempotencyKey: 'return-a',
+      }),
+    operation: returnSaleLine,
+    result: { returnId: 'return-a' },
+  },
+] as const;
 
 const paths: {
   name: string;
@@ -297,6 +342,115 @@ describe('counter receipt authorization', () => {
     expect(createSale).not.toHaveBeenCalled();
     expect(addSaleLine).not.toHaveBeenCalled();
     expect(f.db.$transaction).not.toHaveBeenCalled();
+  });
+
+  it.each(['role', 'user'] as const)(
+    'denies a sale transition when a %s rule explicitly denies receipt access, even for an administrator',
+    async (source) => {
+      const denied = [{ capability: 'pharmacy:receipt', effect: 'DENY' as const }];
+      const f = fixture(source === 'role' ? denied : dispense, 'ADMIN');
+      assign(f, ['branch-a']);
+      if (source === 'user') {
+        f.db.user.findUnique.mockResolvedValue({
+          status: 'ACTIVE',
+          organizationId: 'org-a',
+          organizationRole: { permissions: dispense },
+          permissionOverrides: denied,
+        });
+      }
+      await expect(
+        f.caller().transition({ branchId: 'branch-a', saleId: 'sale-a', action: 'hold' })
+      ).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'You do not have permission for this action.',
+      });
+      expect(changeSaleStatus).not.toHaveBeenCalled();
+      expect(f.db.$transaction).not.toHaveBeenCalled();
+    }
+  );
+
+  it('gates a sale transition for an employee without counter capability', async () => {
+    const f = fixture([]);
+    assign(f, ['branch-a']);
+    await expect(
+      f.caller().transition({ branchId: 'branch-a', saleId: 'sale-a', action: 'hold' })
+    ).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission for this action.',
+    });
+    expect(changeSaleStatus).not.toHaveBeenCalled();
+    expect(f.db.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('lets an assigned dispenser transition a sale after the access check', async () => {
+    const f = fixture(dispense);
+    assign(f, ['branch-a']);
+    vi.mocked(changeSaleStatus).mockResolvedValue({ status: 'HELD' } as never);
+    await expect(
+      f.caller().transition({ branchId: 'branch-a', saleId: 'sale-a', action: 'hold' })
+    ).resolves.toMatchObject({ status: 'HELD' });
+    expect(changeSaleStatus).toHaveBeenCalledWith(
+      f.db,
+      { organizationId: 'org-a', branchId: 'branch-a', actorId: 'user-a' },
+      'sale-a',
+      'hold',
+      undefined,
+      undefined,
+      undefined
+    );
+  });
+
+  it.each(
+    reversalPaths.flatMap((path) => (['role', 'user'] as const).map((source) => ({ path, source })))
+  )(
+    'denies a $path.name when a $source rule explicitly denies receipt access, even for an administrator',
+    async ({ path, source }) => {
+      const denied = [{ capability: 'pharmacy:receipt', effect: 'DENY' as const }];
+      const f = fixture(source === 'role' ? denied : dispense, 'ADMIN');
+      assign(f, ['branch-a']);
+      if (source === 'user') {
+        f.db.user.findUnique.mockResolvedValue({
+          status: 'ACTIVE',
+          organizationId: 'org-a',
+          organizationRole: { permissions: dispense },
+          permissionOverrides: denied,
+        });
+      }
+
+      await expect(path.run(f.caller())).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'You do not have permission for this action.',
+      });
+      expect(path.operation).not.toHaveBeenCalled();
+      expect(f.db.$transaction).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(reversalPaths)(
+    'gates a $name for an employee without counter capability',
+    async (path) => {
+      const f = fixture([]);
+      assign(f, ['branch-a']);
+
+      await expect(path.run(f.caller())).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'You do not have permission for this action.',
+      });
+      expect(path.operation).not.toHaveBeenCalled();
+      expect(f.db.$transaction).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(reversalPaths)('lets an assigned dispenser perform a $name', async (path) => {
+    const f = fixture(dispense);
+    assign(f, ['branch-a']);
+
+    await expect(path.run(f.caller())).resolves.toMatchObject(path.result);
+    expect(path.operation).toHaveBeenCalledWith(
+      f.db,
+      { organizationId: 'org-a', branchId: 'branch-a', actorId: 'user-a' },
+      expect.objectContaining({ branchId: 'branch-a' })
+    );
   });
 
   it.each(paths)('$name allows an assigned dispenser on their own branch', async (path) => {
