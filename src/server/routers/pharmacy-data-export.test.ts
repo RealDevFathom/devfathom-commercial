@@ -195,6 +195,49 @@ describe('pharmacy owner data export router', () => {
     }));
   });
 
+  it('profiles multi-lot stock-lots.csv into one reviewable batch without duplicate exceptions', async () => {
+    const f = fixture();
+    const shared = {
+      product: 'Panadol 500mg', pack: 10, expiry: '2027-06-30', cost: '1.50', mrp: '25.00',
+      branch_code: 'MAIN', batch_state: 'ACTIVE', medicine_code: 'med-1',
+    };
+    const csv = exportRowsToCsv(PHARMACY_EXPORT_FILES.stockLots, [
+      { ...shared, code: 'lot-1:A:AVAILABLE', batch: 'B1', quantity: 40, lot_code: 'lot-1', location_code: 'A', disposition: 'AVAILABLE' },
+      { ...shared, code: 'lot-1:B:AVAILABLE', batch: 'B1', quantity: 20, lot_code: 'lot-1', location_code: 'B', disposition: 'AVAILABLE' },
+      { ...shared, code: 'lot-2:A:AVAILABLE', batch: 'B2', quantity: 30, lot_code: 'lot-2', location_code: 'A', disposition: 'AVAILABLE' },
+    ]);
+    await expect(f.caller.importStockLots({ csv })).resolves.toMatchObject({
+      sourceId: 'mig-source-1', batchId: 'mig-batch-1', rowCount: 3, exceptionCount: 0,
+    });
+    expect(f.db.pharmacyMigrationBatch.create).toHaveBeenCalledWith({ data: expect.objectContaining({
+      profilerVersion: 'devfathom-stock-lots/1',
+    }) });
+    const persisted = (f.db.pharmacyMigrationRow.createMany.mock.calls[0] as unknown as [
+      { data: Array<{ sourceKey: string; rawPayload: Record<string, string> }> },
+    ])[0].data;
+    expect(persisted.map((row) => [row.sourceKey, row.rawPayload.lot_code, row.rawPayload.location_code]))
+      .toEqual([
+        ['lot-1:A:AVAILABLE', 'lot-1', 'A'],
+        ['lot-1:B:AVAILABLE', 'lot-1', 'B'],
+        ['lot-2:A:AVAILABLE', 'lot-2', 'A'],
+      ]);
+    expect(f.db.pharmacyMigrationException.createMany).not.toHaveBeenCalled();
+    // Profiling only: no medicine or stock is written.
+    expect(f.db.medicine.create).not.toHaveBeenCalled();
+    expect(audit.annotateAudit).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      action: 'pharmacy.dataExport.stockLotsProfiled', targetId: 'mig-batch-1',
+    }));
+  });
+
+  it('refuses a sheet that is not stock-lots.csv on the stock path before writing anything', async () => {
+    const f = fixture();
+    await expect(f.caller.importStockLots({ csv: 'product,batch\nPanadol,B1' }))
+      .rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(f.db.pharmacyMigrationSource.create).not.toHaveBeenCalled();
+    const employee = fixture({ role: 'EMPLOYEE' });
+    await expect(employee.caller.importStockLots({ csv: '' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+
   it('rejects a stock sheet on the catalogue path before writing anything', async () => {
     const f = fixture();
     await expect(f.caller.importCatalogue({ csv: 'product,batch\nPanadol,B1' }))

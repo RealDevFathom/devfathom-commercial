@@ -10,7 +10,11 @@ import {
 import { verifyOwnerExportPin } from '@/lib/pharmacy/data-export-pin';
 import { annotateAudit } from '@/server/audit';
 import { PharmacyCatalogueImportError } from '@/lib/pharmacy/data-export-catalogue';
-import { importCatalogueSource } from '@/lib/pharmacy/migration/workbench';
+import {
+  importCatalogueSource,
+  importStockLotsSource,
+  PharmacyStockLotsImportError,
+} from '@/lib/pharmacy/migration/workbench';
 
 import { adminProcedure, assertModuleLicensed, router, type TRPCContext } from '../trpc';
 
@@ -145,6 +149,42 @@ export const pharmacyDataExportRouter = router({
         return result;
       } catch (error) {
         if (error instanceof PharmacyCatalogueImportError) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
+        }
+        throw error;
+      }
+    }),
+
+  /**
+   * Profile stock-lots.csv into a migration batch for MIG-02 exception review.
+   * Lot, location and disposition stay part of each row's identity, so multi-lot
+   * stock does not raise duplicate-product exceptions. No stock is posted.
+   */
+  importStockLots: adminProcedure
+    .input(z.object({ csv: z.string().max(5_000_000) }).strict())
+    .mutation(async ({ ctx, input }) => {
+      ownerOrganizationId(ctx);
+      try {
+        const result = await importStockLotsSource(ctx.db, {
+          fileName: 'stock-lots.csv',
+          csv: input.csv,
+        });
+        annotateAudit(ctx, {
+          category: 'pharmacy',
+          operation: 'CREATE',
+          action: 'pharmacy.dataExport.stockLotsProfiled',
+          description: 'Owner profiled stock-lots.csv into a migration batch for exception review.',
+          targetType: 'PharmacyMigrationBatch',
+          targetId: result.batchId,
+          metadata: {
+            sourceId: result.sourceId,
+            rowCount: result.rowCount,
+            exceptionCount: result.exceptionCount,
+          },
+        });
+        return result;
+      } catch (error) {
+        if (error instanceof PharmacyStockLotsImportError) {
           throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
         }
         throw error;

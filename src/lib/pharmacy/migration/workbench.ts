@@ -28,8 +28,10 @@ import {
   PharmacyCatalogueImportError,
 } from '../data-export-catalogue';
 import { devfathomCatalogueProfiler } from './devfathom-catalogue-profiler';
+import { devfathomStockLotsProfiler } from './devfathom-stock-lots-profiler';
 import {
   profileTable,
+  UnrecognisedSourceError,
   type ExceptionBucket,
   type MigrationSourceKind,
   type ProfileResult,
@@ -262,7 +264,7 @@ export type CatalogueSourceImport = {
  * one that raises any BLOCKING exception, writes nothing at all.
  *
  * Stock is never created here: batch, expiry and MRP arrive with
- * `stock-lots.csv`, which goes through the ordinary Excel/CSV profiler and its
+ * `stock-lots.csv`, which goes through `importStockLotsSource` and the ordinary
  * MIG-02 exception review.
  */
 export async function importCatalogueSource(
@@ -313,6 +315,67 @@ export async function importCatalogueSource(
       batchId: persisted.batchId,
       exceptionCount: persisted.exceptionCount,
       ...imported,
+    };
+  });
+}
+
+export type StockLotsSourceImport = {
+  sourceId: string;
+  batchId: string;
+  rowCount: number;
+  exceptionCount: number;
+  buckets: Partial<Record<ExceptionBucket, number>>;
+};
+
+/** Refused before any evidence is written: not an unmodified stock-lots.csv export. */
+export class PharmacyStockLotsImportError extends Error {
+  constructor() {
+    super('Supply an unmodified stock-lots.csv export from DevFathom.');
+  }
+}
+
+/**
+ * #716 — profile a DevFathom owner-export `stock-lots.csv` through the wizard.
+ *
+ * One transaction: the file is registered as read-only source evidence and
+ * profiled by the stock-lots adapter into a new batch, one migration row per CSV
+ * row. The row's raw payload keeps the exported lot, location and disposition,
+ * and the adapter keys duplicate detection on them, so ordinary multi-lot stock
+ * does not raise `DUPLICATE_PRODUCT`. Every MIG-02 stock check (batch, expiry,
+ * MRP, pack, quantity) still applies, and the batch waits in exception review:
+ * no stock is posted here.
+ */
+export async function importStockLotsSource(
+  db: ScopedDb,
+  input: { fileName: string; csv: string }
+): Promise<StockLotsSourceImport> {
+  let profile: ProfileResult;
+  try {
+    profile = profileTable(devfathomStockLotsProfiler, parseDelimitedText(input.csv));
+  } catch (error) {
+    if (error instanceof UnrecognisedSourceError) throw new PharmacyStockLotsImportError();
+    throw error;
+  }
+  return db.$transaction(async (transaction) => {
+    // See `importCatalogueSource`: the scoped client's nested transaction.
+    const tx = transaction as unknown as ScopedDb;
+    const source = await recordSource(tx, {
+      kind: devfathomStockLotsProfiler.kind,
+      fileName: input.fileName,
+      bytes: input.csv,
+    });
+    const persisted = await persistProfile(tx, {
+      sourceId: source.id,
+      label: `DevFathom stock lots import: ${input.fileName}`,
+      profiler: devfathomStockLotsProfiler,
+      result: profile,
+    });
+    return {
+      sourceId: source.id,
+      batchId: persisted.batchId,
+      rowCount: persisted.rowCount,
+      exceptionCount: persisted.exceptionCount,
+      buckets: persisted.buckets,
     };
   });
 }
