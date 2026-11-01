@@ -28,7 +28,7 @@ import {
   REFERENCE_BATCH_MAX_ROWS,
   type ConnectorRights,
 } from '@/lib/pharmacy/reference-connectors';
-import { splitPackTotal } from '@/lib/pharmacy/pack-conversion';
+import { isEffective, splitPackTotal } from '@/lib/pharmacy/pack-conversion';
 import { annotateAudit } from '../audit';
 import {
   adminProcedure,
@@ -235,10 +235,11 @@ const reviewDecisionInput = z.discriminatedUnion('action', [
 type BarcodeDb = Pick<Prisma.TransactionClient, 'medicineBarcode'>;
 
 /**
- * Puts a scan code on one pack size. Codes are unique per tenant, so an
- * existing row is reused rather than inserted twice: a code this medicine holds
- * without a pack (older publications) moves onto the pack; a code already on
- * another pack, or on another medicine, conflicts instead of being remapped.
+ * Puts a scan code on one pack size. Codes are unique per tenant and barcode
+ * rows are append-only (the `pharmacy_barcodes_append_only` trigger rejects
+ * UPDATE and DELETE), so a code is only ever inserted: one already on this pack
+ * is reused, and one held anywhere else (another pack, an older unpacked
+ * publication, or another medicine) conflicts instead of being moved.
  */
 async function attachPackBarcode(
   db: BarcodeDb,
@@ -281,19 +282,12 @@ async function attachPackBarcode(
     }
   }
   if (existing.packLevelId === input.packLevelId) return existing;
-  if (existing.presentation.medicineId !== input.medicineId || existing.packLevelId !== null)
-    throw new TRPCError({
-      code: 'CONFLICT',
-      message: 'This barcode is already assigned to another pack. Remove it there first.',
-    });
-  return db.medicineBarcode.update({
-    where: { id: existing.id },
-    data: {
-      presentationId: input.presentationId,
-      packLevelId: input.packLevelId,
-      type: input.type,
-      code: input.code,
-    },
+  throw new TRPCError({
+    code: 'CONFLICT',
+    message:
+      existing.presentation.medicineId === input.medicineId && existing.packLevelId === null
+        ? 'This barcode is already recorded for an earlier presentation of this medicine and barcodes cannot be moved. Remove it from the reviewed values, or import opening stock by pack ID.'
+        : 'This barcode is already assigned to another pack. Barcodes cannot be moved; use the code printed on this pack.',
   });
 }
 
@@ -838,17 +832,26 @@ export const pharmacyMedicineRouter = router({
             code: 'CONFLICT',
             message: 'This pack changed while you were editing. Reload and try again.',
           });
-        const pack = await tx.packLevel.create({
-          data: {
-            presentationId: parent.presentationId,
-            parentPackLevelId: parent.id,
-            versionGroupId: input.versionGroupId,
-            version: 1,
-            level: input.level,
-            unitsPerParent: split.innerUnitsPerParent,
-            effectiveFrom: parent.effectiveFrom,
-          },
-        });
+        const pack = await tx.packLevel
+          .create({
+            data: {
+              presentationId: parent.presentationId,
+              parentPackLevelId: parent.id,
+              versionGroupId: input.versionGroupId,
+              version: 1,
+              level: input.level,
+              unitsPerParent: split.innerUnitsPerParent,
+              effectiveFrom: parent.effectiveFrom,
+            },
+          })
+          .catch((error: unknown) => {
+            if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002')
+              throw new TRPCError({
+                code: 'CONFLICT',
+                message: 'This pack was already submitted. Reload and check the pack list.',
+              });
+            throw error;
+          });
         annotateAudit(ctx, {
           targetType: 'PackLevel',
           targetId: parent.id,
@@ -951,8 +954,9 @@ export const pharmacyMedicineRouter = router({
     ),
 
   /**
-   * Attach a barcode to a pack size, or replace the one it carries, so stock
-   * can be imported and received by scanning the pack.
+   * Attach a barcode to a pack size that has none, so stock can be imported and
+   * received by scanning the pack. Barcode rows are append-only, so a pack's
+   * code cannot be edited, replaced or moved here.
    */
   setPackBarcode: adminProcedure
     .input(
@@ -971,12 +975,26 @@ export const pharmacyMedicineRouter = router({
           include: { presentation: { select: { medicineId: true } }, barcodes: true },
         });
         if (!pack) throw new TRPCError({ code: 'NOT_FOUND', message: 'Pack size not found.' });
+        if (!isEffective(pack, new Date()))
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'This pack is not in effect. Attach the barcode to its current version.',
+          });
         const normalizedCode = normalizeMedicineText(input.code);
+        const before = pack.barcodes.map((item) => item.code);
         const current = pack.barcodes.find((item) => item.normalizedCode === normalizedCode);
-        if (current)
-          return tx.medicineBarcode.update({
-            where: { id: current.id },
-            data: { code: input.code, type: input.type },
+        if (current) {
+          annotateAudit(ctx, {
+            targetType: 'PackLevel',
+            targetId: pack.id,
+            changes: { barcode: { before, after: before } },
+          });
+          return current;
+        }
+        if (pack.barcodes.length > 0)
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: `This pack already carries barcode ${before.join(', ')}. Pack barcodes are permanent and cannot be replaced.`,
           });
         const attached = await attachPackBarcode(tx, {
           medicineId: pack.presentation.medicineId,
@@ -985,19 +1003,10 @@ export const pharmacyMedicineRouter = router({
           type: input.type,
           code: input.code,
         });
-        // Editing replaces the pack's previous code; scans of the old code stop
-        // resolving to this pack. The audit trail records the change.
-        const replaced = pack.barcodes.filter((item) => item.id !== attached.id);
-        if (replaced.length)
-          await tx.medicineBarcode.deleteMany({
-            where: { id: { in: replaced.map((item) => item.id) }, packLevelId: pack.id },
-          });
         annotateAudit(ctx, {
           targetType: 'PackLevel',
           targetId: pack.id,
-          changes: {
-            barcode: { before: replaced.map((item) => item.code), after: attached.code },
-          },
+          changes: { barcode: { before, after: [attached.code] } },
         });
         return attached;
       })

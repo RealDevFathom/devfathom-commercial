@@ -261,16 +261,13 @@ describe('medicine pack setup', () => {
     expect(mocks.invalidateMedicine).toHaveBeenCalledWith({ id: 'medicine-secret' });
   });
 
-  it('edits an existing pack barcode and keeps the entry after a conflict', () => {
-    publishedPack([{ code: '1111' }]);
+  it('keeps the entry after an attach conflict', () => {
+    publishedPack([]);
     const view = render(<MedicinePackSetup />);
     fill();
-    expect(screen.getByText('Barcode: 1111')).toBeVisible();
     const input = screen.getByLabelText('Barcode for 1 BOX = 10 units');
-    expect(input).toHaveValue('1111');
-    expect(screen.getByRole('button', { name: 'Update barcode' })).toBeDisabled();
     fireEvent.change(input, { target: { value: '2222' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Update barcode' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Attach barcode' }));
     expect(mocks.barcodeMutation.mutate).toHaveBeenCalledExactlyOnceWith({
       packLevelId: 'default-pack',
       code: '2222',
@@ -282,6 +279,16 @@ describe('medicine pack setup', () => {
     view.rerender(<MedicinePackSetup />);
     expect(screen.getByRole('alert')).toHaveTextContent('already assigned to another pack');
     expect(screen.getByLabelText('Barcode for 1 BOX = 10 units')).toHaveValue('2222');
+  });
+
+  it('shows every existing pack barcode read-only, since barcodes are append-only', () => {
+    publishedPack([{ code: '1111' }, { code: '3333' }]);
+    render(<MedicinePackSetup />);
+    fill();
+    expect(screen.getByText('Barcodes: 1111, 3333')).toBeVisible();
+    expect(screen.getByText(/permanent once attached/)).toBeVisible();
+    expect(screen.queryByLabelText('Barcode for 1 BOX = 10 units')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /barcode/i })).not.toBeInTheDocument();
   });
 
   function packRow(
@@ -314,20 +321,24 @@ describe('medicine pack setup', () => {
     });
   }
 
-  it('shows each pack ID next to its editable barcode', () => {
-    withPacks([{ ...packRow('pack_box_1', 'BOX', 100), barcodes: [{ code: '1111' }] }]);
+  it('shows each pack ID next to its barcode', () => {
+    withPacks([
+      { ...packRow('pack_box_1', 'BOX', 100), barcodes: [{ code: '1111' }] },
+      packRow('pack_strip_1', 'STRIP', 10),
+    ]);
     render(<MedicinePackSetup />);
     choosePresentation();
     expect(screen.getByText('pack_box_1')).toBeVisible();
+    expect(screen.getByText('pack_strip_1')).toBeVisible();
     expect(screen.getByText('Barcode: 1111')).toBeVisible();
-    expect(screen.getByLabelText('Barcode for 1 BOX = 100 units')).toHaveValue('1111');
+    expect(screen.getByLabelText('Barcode for 1 STRIP = 10 units')).toHaveValue('');
   });
 
   it('places a pack inside an outer pack and works out the per-level count from the totals', async () => {
     withPacks([packRow('default-pack', 'BOX', 100)]);
     render(<MedicinePackSetup />);
     choosePresentation();
-    fireEvent.change(screen.getByLabelText('Outer pack'), { target: { value: 'default-pack' } });
+    fireEvent.change(screen.getByLabelText(/^Outer pack/), { target: { value: 'default-pack' } });
     expect(screen.queryByLabelText(/Effective from/)).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Pack type'), { target: { value: 'STRIP' } });
     fireEvent.change(screen.getByLabelText(/Individual units per pack/), {
@@ -353,7 +364,7 @@ describe('medicine pack setup', () => {
     withPacks([packRow('default-pack', 'BOX', 100)]);
     render(<MedicinePackSetup />);
     choosePresentation();
-    fireEvent.change(screen.getByLabelText('Outer pack'), { target: { value: 'default-pack' } });
+    fireEvent.change(screen.getByLabelText(/^Outer pack/), { target: { value: 'default-pack' } });
     fireEvent.change(screen.getByLabelText('Pack type'), { target: { value: 'STRIP' } });
     fireEvent.change(screen.getByLabelText(/Individual units per pack/), {
       target: { value: '30' },
@@ -368,17 +379,17 @@ describe('medicine pack setup', () => {
     render(<MedicinePackSetup />);
     choosePresentation();
     const options = Array.from(
-      (screen.getByLabelText('Outer pack') as HTMLSelectElement).options
+      (screen.getByLabelText(/^Outer pack/) as HTMLSelectElement).options
     ).map((option) => option.value);
     expect(options).toEqual(['', 'strip']);
     expect(screen.getByText('1 BOX = 10 STRIPs = 100 units')).toBeVisible();
   });
 
-  it('creates flat packs as before and warns when their totals do not divide evenly', () => {
+  it('creates independent side-by-side packs as before without a divisibility warning', () => {
     withPacks([packRow('box', 'BOX', 100), packRow('strip', 'STRIP', 30)]);
     render(<MedicinePackSetup />);
     fill();
-    expect(screen.getByRole('alert')).toHaveTextContent('do not divide evenly');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Create pack' }));
     expect(mocks.mutation.mutate).toHaveBeenCalledExactlyOnceWith({
       presentationId: 'presentation-secret',

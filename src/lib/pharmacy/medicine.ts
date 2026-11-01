@@ -56,6 +56,9 @@ export function parseDefaultPackSize(
     if (factors.length !== integers.length) return null;
     units = factors.reduce((total, factor) => total * Number(factor), 1);
   } else if (integers.length === 1) {
+    // "10 strips" or "Box of 10 blisters" counts packs whose own contents are
+    // unknown, not individual units, so it is refused rather than undercounted.
+    if (/\d+\s*(?:strip|blister|box|boxe|carton|pack|packet)s?\b/.test(rest)) return null;
     units = Number(integers[0]);
   } else if (integers.length === 0 && measured) {
     units = 1;
@@ -63,13 +66,17 @@ export function parseDefaultPackSize(
     return null;
   }
   if (!Number.isSafeInteger(units) || units <= 0 || units > MAX_PACK_UNITS) return null;
+  // A chain such as "Blister 10 x 10" multiplies several packs together, so
+  // the outer pack is a box of strips rather than a single strip.
+  const nested =
+    (chain?.[0].match(/\d+/g) ?? []).filter((factor) => Number(factor) > 1).length > 1;
   const level =
     units === 1
       ? 'UNIT'
-      : /\b(?:strip|blister)s?\b/.test(text)
-        ? 'STRIP'
-        : /\bcartons?\b/.test(text)
-          ? 'CARTON'
+      : /\bcartons?\b/.test(text)
+        ? 'CARTON'
+        : !nested && /\b(?:strip|blister)s?\b/.test(text)
+          ? 'STRIP'
           : 'BOX';
   return { level, unitsPerParent: units };
 }

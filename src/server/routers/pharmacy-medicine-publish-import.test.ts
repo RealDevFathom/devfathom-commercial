@@ -5,7 +5,8 @@
  * importer then matches exactly one pack by that barcode.
  *
  * In-memory delegates stand in for one tenant's rows, so the router and the
- * importer read the same records without a database.
+ * importer read the same records without a database. Barcode UPDATE and DELETE
+ * throw, as the `pharmacy_barcodes_append_only` trigger does in Postgres.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -195,17 +196,12 @@ function makeStore(values: Record<string, string>) {
         barcodes.push(row);
         return row;
       }),
-      update: vi.fn(
-        async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) =>
-          Object.assign(barcodes.find((item) => item.id === where.id)!, data)
-      ),
-      deleteMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) => {
-        const before = barcodes.length;
-        for (const id of where.id.in) {
-          const index = barcodes.findIndex((item) => item.id === id);
-          if (index >= 0) barcodes.splice(index, 1);
-        }
-        return { count: before - barcodes.length };
+      // pharmacy_barcodes_append_only (migration 20260902130000) rejects these.
+      update: vi.fn(async () => {
+        throw new Error('pharmacy_medicine_barcodes is append-only');
+      }),
+      deleteMany: vi.fn(async () => {
+        throw new Error('pharmacy_medicine_barcodes is append-only');
       }),
     },
   };
@@ -364,7 +360,7 @@ describe('publish, then import opening stock by barcode', () => {
     expect(preview.canCommit).toBe(true);
   });
 
-  it('moves this medicine’s own unpacked barcode onto the pack instead of inserting a duplicate', async () => {
+  it('refuses to move this medicine’s own unpacked barcode, since barcode rows are append-only', async () => {
     const store = makeStore(reviewed);
     store.rows.presentations.push({ id: 'old_presentation', medicineId: 'medicine_amoxil' });
     store.rows.barcodes.push({
@@ -376,13 +372,14 @@ describe('publish, then import opening stock by barcode', () => {
       code: BARCODE,
       normalizedCode: BARCODE,
     });
-    await caller(store).publishAssertions({
-      assertionIds: Object.keys(reviewed).map((field) => `assertion_${field}`),
-    });
-    const pack = store.rows.packLevels[0]!;
+    await expect(
+      caller(store).publishAssertions({
+        assertionIds: Object.keys(reviewed).map((field) => `assertion_${field}`),
+      })
+    ).rejects.toMatchObject({ code: 'CONFLICT', message: /cannot be moved/ });
     expect(store.rows.created.barcodes).toBe(0);
     expect(store.rows.barcodes).toEqual([
-      expect.objectContaining({ id: 'legacy_barcode', packLevelId: pack.id }),
+      expect.objectContaining({ id: 'legacy_barcode', packLevelId: null }),
     ]);
   });
 
@@ -449,12 +446,43 @@ describe('setPackBarcode', () => {
     );
   });
 
-  it('replaces the pack’s previous barcode when edited', async () => {
+  it('refuses to replace a pack’s barcode, keeping the append-only row', async () => {
     const { store, pack } = await publishedWithout(BARCODE);
-    await caller(store).setPackBarcode({ packLevelId: pack.id, code: '5012345678900' });
+    await expect(
+      caller(store).setPackBarcode({ packLevelId: pack.id, code: '5012345678900' })
+    ).rejects.toMatchObject({ code: 'CONFLICT', message: /cannot be replaced/ });
     expect(store.rows.barcodes).toEqual([
-      expect.objectContaining({ code: '5012345678900', packLevelId: pack.id }),
+      expect.objectContaining({ code: BARCODE, packLevelId: pack.id }),
     ]);
+  });
+
+  it('returns the existing row without writing when the same code is submitted again', async () => {
+    const { store, pack } = await publishedWithout(BARCODE);
+    const row = await caller(store).setPackBarcode({ packLevelId: pack.id, code: BARCODE });
+    expect(row).toMatchObject({ code: BARCODE, packLevelId: pack.id });
+    expect(store.medicineBarcode.update).not.toHaveBeenCalled();
+    expect(store.medicineBarcode.deleteMany).not.toHaveBeenCalled();
+    expect(guards.annotateAudit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        targetId: pack.id,
+        changes: { barcode: { before: [BARCODE], after: [BARCODE] } },
+      })
+    );
+  });
+
+  it('refuses packs that are superseded or not yet in effect', async () => {
+    const { store, pack } = await publishedWithout();
+    pack.effectiveTo = new Date('2020-01-01');
+    await expect(
+      caller(store).setPackBarcode({ packLevelId: pack.id, code: '5012345678900' })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: /not in effect/ });
+    pack.effectiveTo = null;
+    pack.effectiveFrom = new Date('2099-01-01');
+    await expect(
+      caller(store).setPackBarcode({ packLevelId: pack.id, code: '5012345678900' })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: /not in effect/ });
+    expect(store.rows.barcodes).toHaveLength(0);
   });
 
   it('refuses a barcode already on another medicine and leaves both rows intact', async () => {
@@ -627,17 +655,20 @@ describe('pack chains built after publication, then imported', () => {
     });
   });
 
-  it('refuses flat packs whose totals do not divide evenly', async () => {
+  it('imports independent side-by-side packs on their own totals even when they do not divide', async () => {
     const { store, box } = await publishedBox();
-    await caller(store).createPackLevel({
+    const other = await caller(store).createPackLevel({
       presentationId: box.presentationId as string,
-      versionGroupId: 'strip-group',
-      level: 'STRIP',
+      versionGroupId: 'box-30-group',
+      level: 'BOX',
       unitsPerParent: 30,
       effectiveFrom: new Date('2020-01-01'),
     });
-    const line = await unitsFor(store, BARCODE);
-    expect(line.unitsPerPack).toBeNull();
-    expect(line.errors).toEqual([expect.stringMatching(/do not divide evenly/)]);
+    expect(await unitsFor(store, BARCODE)).toMatchObject({
+      packLevelId: box.id, unitsPerPack: 100, errors: [],
+    });
+    expect(await unitsFor(store, other.id)).toMatchObject({
+      packLevelId: other.id, unitsPerPack: 30, errors: [],
+    });
   });
 });

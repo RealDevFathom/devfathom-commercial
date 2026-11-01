@@ -29,6 +29,8 @@ describe('pharmacy medicine invariants', () => {
     ['100 ml bottle', 'UNIT', 1],
     ['60ml', 'UNIT', 1],
     ['1 tablet', 'UNIT', 1],
+    ['Blister 10 x 10', 'BOX', 100],
+    ['1 x 10 strip', 'STRIP', 10],
   ])('structures the default pack for %s', (pack, level, unitsPerParent) => {
     expect(parseDefaultPackSize(pack)).toEqual({ level, unitsPerParent });
   });
@@ -37,6 +39,10 @@ describe('pharmacy medicine invariants', () => {
     '',
     'Bottle',
     'Box of 3 strips of 10',
+    '10 strips',
+    'Box of 10 strips',
+    '10 blisters',
+    'Carton of 12 boxes',
     '0 tablets',
     '2.5 tablets',
     '99999999999 tablets',
