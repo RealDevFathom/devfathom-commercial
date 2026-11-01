@@ -57,16 +57,18 @@ import {
 } from '@/lib/pharmacy/category-growth-report';
 
 const reports = capabilityProcedure('reports:operational');
-const safety = capabilityProcedure('pharmacy:safety');
-// Product decision (#479): clinical dispensing staff may FILE adverse-reaction and
-// medication-error reports, but review, readiness, submission and export stay with
-// exact `pharmacy:safety` holders. Both actions are exact-grant-only in can().
-const PV_FILING_ACTIONS = ['pharmacy:safety', 'pharmacy:dispense'] as const;
+// Product decision (#479): pharmacovigilance is a clinical record, so filing, review,
+// readiness, submission and export are open to holders of either exact clinical grant:
+// `pharmacy:safety` (owner/safety officer) or `pharmacy:dispense` (pharmacist). Both are
+// exact-grant-only in can(), so `*`/`pharmacy:*` never reach them, and neither grant is
+// widened here: separation of duties (dispense, safety, catalogue-review) is unchanged.
+// Self-review stays blocked by the maker/checker rule in the transition below.
+const PV_CLINICAL_ACTIONS = ['pharmacy:safety', 'pharmacy:dispense'] as const;
 
-async function requirePvFiling(ctx: TRPCContext) {
+async function requirePvClinical(ctx: TRPCContext) {
   const subject = subjectFromSession(ctx.session!.user);
   const env = { db: ctx.db, source: 'TRPC' as const, ip: ctx.requestMeta.ip };
-  for (const action of PV_FILING_ACTIONS) {
+  for (const action of PV_CLINICAL_ACTIONS) {
     if (await can(subject, action, undefined, env)) return;
   }
   throw new TRPCError({
@@ -74,6 +76,11 @@ async function requirePvFiling(ctx: TRPCContext) {
     message: 'You do not have permission for this action.',
   });
 }
+// Capability is checked before any input-dependent or tenant data access.
+const pvClinical = auditedProtectedProcedure.use(async ({ ctx, next }) => {
+  await requirePvClinical(ctx);
+  return next();
+});
 const widget = z
   .object({
     key: z.enum(PHARMACY_WIDGET_KEYS),
@@ -260,7 +267,7 @@ export const pharmacyReportsRouter = router({
       }
       return readPharmacyMarketingReport(ctx.db, ctx.entitlements.organizationId, scoped);
     }),
-  createPharmacovigilanceReport: auditedProtectedProcedure
+  createPharmacovigilanceReport: pvClinical
     .input(
       z
         .object({
@@ -280,7 +287,6 @@ export const pharmacyReportsRouter = router({
         })
     )
     .mutation(async ({ ctx, input }) => {
-      await requirePvFiling(ctx);
       const organizationId = await requirePvBranch(ctx, input.branchId);
       if (input.inventoryLotId) {
         const lot = await ctx.db.pharmacyInventoryLot.findFirst({
@@ -307,7 +313,7 @@ export const pharmacyReportsRouter = router({
         data: { ...input, organizationId, createdByUserId: ctx.session.user.id },
       });
     }),
-  transitionPharmacovigilanceReport: safety
+  transitionPharmacovigilanceReport: pvClinical
     .input(
       z
         .object({
@@ -439,7 +445,7 @@ export const pharmacyReportsRouter = router({
         return updated;
       });
     }),
-  recordPharmacovigilanceSubmission: safety
+  recordPharmacovigilanceSubmission: pvClinical
     .input(
       z
         .object({
@@ -508,7 +514,7 @@ export const pharmacyReportsRouter = router({
         });
       return updated;
     }),
-  exportPharmacovigilanceDrap: safety
+  exportPharmacovigilanceDrap: pvClinical
     .input(
       z
         .object({ branchId: z.string().min(1), from: z.date(), to: z.date() })

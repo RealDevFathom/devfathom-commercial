@@ -483,16 +483,87 @@ describe('RX-08 pharmacovigilance state boundaries', () => {
     expect(mocks.reportCreate).not.toHaveBeenCalled();
   });
 
-  it('lets an assigned pharmacist with only pharmacy:dispense file but not review a report', async () => {
+  it('lets an assigned pharmacist with only pharmacy:dispense file, review, submit and export', async () => {
     mocks.can.mockImplementation(async (_subject, action) => action === 'pharmacy:dispense');
     mocks.branchFindFirst.mockResolvedValue({ id: 'branch_1' });
     mocks.reportCreate.mockResolvedValue({ id: 'pv_1' });
 
-    await expect(
-      caller('EMPLOYEE').createPharmacovigilanceReport({ ...filing })
-    ).resolves.toEqual({ id: 'pv_1' });
+    await expect(caller('EMPLOYEE').createPharmacovigilanceReport({ ...filing })).resolves.toEqual({
+      id: 'pv_1',
+    });
     expect(mocks.reportCreate).toHaveBeenCalledOnce();
 
+    mocks.reportFindFirst.mockResolvedValue({
+      id: 'pv_1',
+      state: 'DRAFT',
+      externalSubmissionState: 'NOT_SUBMITTED',
+      createdByUserId: 'other',
+    });
+    mocks.reportUpdateManyAndReturn.mockResolvedValue([{ id: 'pv_1', state: 'UNDER_REVIEW' }]);
+    await expect(
+      caller('EMPLOYEE').transitionPharmacovigilanceReport({
+        id: 'pv_1',
+        branchId: 'branch_1',
+        state: 'UNDER_REVIEW',
+      })
+    ).resolves.toEqual({ id: 'pv_1', state: 'UNDER_REVIEW' });
+
+    mocks.reportFindFirst.mockResolvedValue({
+      id: 'pv_1',
+      state: 'READY',
+      externalSubmissionState: 'NOT_SUBMITTED',
+      externalReference: null,
+      externalFailureReason: null,
+      createdByUserId: 'other',
+    });
+    mocks.reportUpdateManyAndReturn.mockResolvedValue([{ id: 'pv_1' }]);
+    await expect(
+      caller('EMPLOYEE').recordPharmacovigilanceSubmission({
+        id: 'pv_1',
+        branchId: 'branch_1',
+        state: 'PENDING',
+      })
+    ).resolves.toEqual({ id: 'pv_1' });
+
+    mocks.reportFindMany.mockResolvedValue([]);
+    await expect(
+      caller('EMPLOYEE').exportPharmacovigilanceDrap({
+        branchId: 'branch_1',
+        from: new Date('2026-09-01'),
+        to: new Date('2026-09-30'),
+      })
+    ).resolves.toMatchObject({ format: 'DRAP_PHARMACOVIGILANCE_V1', reports: [] });
+  });
+
+  it('still blocks a pharmacist from marking their own report READY in a staffed pharmacy', async () => {
+    mocks.can.mockImplementation(async (_subject, action) => action === 'pharmacy:dispense');
+    mocks.branchFindFirst.mockResolvedValue({ id: 'branch_1' });
+    mocks.reportFindFirst.mockResolvedValue({
+      id: 'pv_1',
+      state: 'UNDER_REVIEW',
+      externalSubmissionState: 'NOT_SUBMITTED',
+      createdByUserId: 'user_admin',
+    });
+    mocks.userFindFirst.mockResolvedValue({
+      role: 'EMPLOYEE',
+      organizationRole: { key: 'pharmacist' },
+    });
+    mocks.userCount.mockResolvedValue(2);
+
+    await expect(
+      caller('EMPLOYEE').transitionPharmacovigilanceReport({
+        id: 'pv_1',
+        branchId: 'branch_1',
+        state: 'READY',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.reportUpdateManyAndReturn).not.toHaveBeenCalled();
+  });
+
+  it('denies PV review and export to a catalogue-review-only or counter-only user', async () => {
+    mocks.can.mockImplementation(async (_subject, action) =>
+      ['pharmacy:catalogue-review', 'pharmacy:counter', 'pharmacy:*'].includes(action)
+    );
     await expect(
       caller('EMPLOYEE').transitionPharmacovigilanceReport({
         id: 'pv_1',
@@ -500,8 +571,16 @@ describe('RX-08 pharmacovigilance state boundaries', () => {
         state: 'UNDER_REVIEW',
       })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      caller('EMPLOYEE').exportPharmacovigilanceDrap({
+        branchId: 'branch_1',
+        from: new Date('2026-09-01'),
+        to: new Date('2026-09-30'),
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.assignmentFindMany).not.toHaveBeenCalled();
     expect(mocks.reportFindFirst).not.toHaveBeenCalled();
-    expect(mocks.reportUpdateManyAndReturn).not.toHaveBeenCalled();
+    expect(mocks.reportFindMany).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -532,25 +611,31 @@ describe('RX-08 pharmacovigilance state boundaries', () => {
           to: new Date('2026-09-30'),
         }),
     ],
-  ])('requires pharmacy:safety before tenant data access for %s', async (_procedure, invoke) => {
-    mocks.can.mockResolvedValue(false);
+  ])(
+    'requires pharmacy:safety or pharmacy:dispense before tenant data access for %s',
+    async (_procedure, invoke) => {
+      mocks.can.mockResolvedValue(false);
 
-    await expect(invoke()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await expect(invoke()).rejects.toMatchObject({ code: 'FORBIDDEN' });
 
-    expect(mocks.can).toHaveBeenCalledTimes(1);
-    expect(mocks.can).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'user_admin' }),
-      'pharmacy:safety',
-      undefined,
-      expect.objectContaining({ source: 'TRPC' })
-    );
-    expect(mocks.assignmentFindMany).not.toHaveBeenCalled();
-    expect(mocks.branchFindFirst).not.toHaveBeenCalled();
-    expect(mocks.reportFindFirst).not.toHaveBeenCalled();
-    expect(mocks.reportFindMany).not.toHaveBeenCalled();
-    expect(mocks.reportCreate).not.toHaveBeenCalled();
-    expect(mocks.reportUpdate).not.toHaveBeenCalled();
-  });
+      expect(mocks.can.mock.calls.map((call) => call[1])).toEqual([
+        'pharmacy:safety',
+        'pharmacy:dispense',
+      ]);
+      expect(mocks.can).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'user_admin' }),
+        'pharmacy:safety',
+        undefined,
+        expect.objectContaining({ source: 'TRPC' })
+      );
+      expect(mocks.assignmentFindMany).not.toHaveBeenCalled();
+      expect(mocks.branchFindFirst).not.toHaveBeenCalled();
+      expect(mocks.reportFindFirst).not.toHaveBeenCalled();
+      expect(mocks.reportFindMany).not.toHaveBeenCalled();
+      expect(mocks.reportCreate).not.toHaveBeenCalled();
+      expect(mocks.reportUpdate).not.toHaveBeenCalled();
+    }
+  );
 
   it('completing internal review does not mark the report externally submitted', async () => {
     mocks.reportFindFirst.mockResolvedValue({

@@ -257,6 +257,98 @@ suite('PV security persistence and compatibility', () => {
     }
   );
 
+  it('lets an assigned pharmacist on the shipped template review, submit and export a report, but not self-approve', async () => {
+    await fixture(async ({ db, owner, branch, api }) => {
+      const template = PHARMACY_ROLE_TEMPLATES.find((role) => role.key === 'pharmacist')!;
+      // The shipped pharmacist template: no pharmacy:safety, no wildcard.
+      expect(template.capabilities).not.toContain('pharmacy:safety');
+      const role = await db.organizationRole.create({
+        data: {
+          key: template.key,
+          name: template.name,
+          isSystem: true,
+          permissions: {
+            create: template.capabilities.map((capability) => ({
+              capability,
+              effect: 'ALLOW' as const,
+            })),
+          },
+        },
+      });
+      const pharmacist = await db.user.create({
+        data: {
+          name: 'Pharmacist',
+          email: `${owner}_pharmacist@example.test`,
+          department: 'LEADERSHIP',
+          title: 'Pharmacist',
+          organizationRoleId: role.id,
+        },
+      });
+      await db.pharmacyBranchAssignment.create({
+        data: { branchId: branch, userId: pharmacist.id },
+      });
+      const asPharmacist = api(pharmacist.id, 'EMPLOYEE');
+
+      // Review of someone else's report.
+      const report = await reviewable(db, branch, owner);
+      await asPharmacist.transitionPharmacovigilanceReport({
+        id: report.id,
+        branchId: branch,
+        state: 'READY',
+      });
+      expect(
+        await db.pharmacyPharmacovigilanceReport.findUniqueOrThrow({ where: { id: report.id } })
+      ).toMatchObject({ state: 'READY', reviewedByUserId: pharmacist.id });
+      await asPharmacist.recordPharmacovigilanceSubmission({
+        id: report.id,
+        branchId: branch,
+        state: 'SUBMITTED',
+        externalReference: 'DRAP-REF-1',
+      });
+      const dates = { from: new Date('2020-01-01'), to: new Date('2099-01-01') };
+      const exported = await asPharmacist.exportPharmacovigilanceDrap({
+        branchId: branch,
+        ...dates,
+      });
+      expect(exported.reports.map((row) => row.id)).toEqual([report.id]);
+      expect(exported.reports[0]).toMatchObject({ externalSubmissionState: 'SUBMITTED' });
+
+      // Maker/checker still holds: the pharmacist's own report needs a second reviewer.
+      const own = await asPharmacist.createPharmacovigilanceReport({
+        branchId: branch,
+        kind: 'MEDICATION_ERROR',
+        occurredAt: new Date(),
+        assertedDescription: 'Wrong strength picked, caught at counter.',
+      });
+      await asPharmacist.transitionPharmacovigilanceReport({
+        id: own.id,
+        branchId: branch,
+        state: 'UNDER_REVIEW',
+      });
+      await expect(
+        asPharmacist.transitionPharmacovigilanceReport({
+          id: own.id,
+          branchId: branch,
+          state: 'READY',
+        })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+
+      // Branch scope still applies to the pharmacist.
+      const sibling = await db.pharmacyBranch.create({
+        data: {
+          code: 'SIBLING',
+          name: 'Sibling',
+          addressLine: 'Test',
+          city: 'Lahore',
+          provinceCode: 'PB',
+        },
+      });
+      await expect(
+        asPharmacist.exportPharmacovigilanceDrap({ branchId: sibling.id, ...dates })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    });
+  });
+
   it('requires PIN for solo readiness and commits a matching audit without changing external submission state', async () => {
     await fixture(async ({ db, owner, branch, api }) => {
       const report = await reviewable(db, branch, owner);
