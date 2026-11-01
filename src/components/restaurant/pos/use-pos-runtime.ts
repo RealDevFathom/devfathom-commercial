@@ -1131,6 +1131,7 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
           id: operator.staffProfileId,
           displayName: operator.displayName,
           role: operator.role,
+          canSelfApprove: operator.canSelfApprove,
         })),
       onClose: ({ settled }) => {
         setCheckoutOrderId(null);
