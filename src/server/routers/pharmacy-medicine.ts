@@ -28,7 +28,11 @@ import {
   proposedBoolean,
   runManualReferenceConnector,
 } from '@/lib/pharmacy/reference-connector-automation';
-import { MANUAL_FILE_RIGHTS, type ConnectorRights } from '@/lib/pharmacy/reference-connectors';
+import {
+  MANUAL_FILE_RIGHTS,
+  REFERENCE_BATCH_MAX_ROWS,
+  type ConnectorRights,
+} from '@/lib/pharmacy/reference-connectors';
 import {
   adminProcedure,
   auditedProtectedProcedure,
@@ -370,7 +374,7 @@ export const pharmacyMedicineRouter = router({
                 .strict()
             )
             .min(1)
-            .max(500),
+            .max(REFERENCE_BATCH_MAX_ROWS),
         })
         .strict()
     )

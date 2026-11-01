@@ -167,3 +167,49 @@ export function formulaSafeCell(value: unknown): string {
   const text = value === null || value === undefined ? '' : String(value);
   return /^[=+\-@]/.test(text) ? `'${text}` : text;
 }
+
+/** Rows accepted by one `runReferenceConnectorNow` request. Shared with the server schema. */
+export const REFERENCE_BATCH_MAX_ROWS = 500;
+/** Rows accepted from one uploaded reference file before it is split into batches. */
+export const REFERENCE_FILE_MAX_ROWS = 20_000;
+
+export interface ReferenceUploadChunk {
+  batchId: string;
+  part: number;
+  rows: NormalizedMedicineReferenceRow[];
+}
+
+export function referenceFileRowLimitMessage(rowCount: number): string | null {
+  return rowCount > REFERENCE_FILE_MAX_ROWS
+    ? `This file has ${rowCount.toLocaleString('en-US')} rows. A reference file is limited to ${REFERENCE_FILE_MAX_ROWS.toLocaleString('en-US')} rows; split it into smaller files and upload each one.`
+    : null;
+}
+
+/**
+ * Splits rows normalized from one file into server-sized batches. A single-batch file keeps its
+ * batch ID; larger files get `<fileBatchId>-pNN` per part. Row source keys are left untouched so
+ * a retried part produces the same server input digest and replays as a no-op.
+ */
+export function chunkReferenceRows(
+  fileBatchId: string,
+  rows: ReadonlyArray<NormalizedMedicineReferenceRow>,
+  size: number = REFERENCE_BATCH_MAX_ROWS
+): ReferenceUploadChunk[] {
+  const limitMessage = referenceFileRowLimitMessage(rows.length);
+  if (limitMessage) throw new Error(limitMessage);
+  const total = Math.ceil(rows.length / size);
+  const digits = Math.max(2, String(total).length);
+  return Array.from({ length: total }, (_, index) => {
+    const batchId =
+      total === 1 ? fileBatchId : `${fileBatchId}-p${String(index + 1).padStart(digits, '0')}`;
+    return {
+      batchId,
+      part: index + 1,
+      rows: rows.slice(index * size, (index + 1) * size).map((row) => ({
+        ...row,
+        batchId,
+        assertions: row.assertions.map((assertion) => ({ ...assertion, batchId })),
+      })),
+    };
+  });
+}
