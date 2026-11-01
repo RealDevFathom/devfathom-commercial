@@ -1,6 +1,7 @@
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 
+import { capabilityMatches } from '@/lib/abac/capabilities';
 import {
   listPharmacyDataExports,
   PharmacyDataExportError,
@@ -16,13 +17,12 @@ import {
   PharmacyStockLotsImportError,
 } from '@/lib/pharmacy/migration/workbench';
 
-import { adminProcedure, assertModuleLicensed, router, type TRPCContext } from '../trpc';
+import { auditedProtectedProcedure, assertModuleLicensed, router, type TRPCContext } from '../trpc';
 
 /**
- * #716 — owner "Download my data". Every procedure is `adminProcedure`: the
- * ABAC `admin:access` capability (the pharmacy owner role), audited for reads
- * as well as mutations, and gated on the pharmacy module. A support session
- * acting inside the tenant is refused: the export is the owner's own action.
+ * #716 — owner "Download my data". Every procedure checks live tenant ownership,
+ * audits reads as well as mutations, and requires the pharmacy module. Support
+ * sessions are refused: the export is the owner's own action.
  *
  * The Pharmacy Core entitlement is also asserted inside every procedure, so a
  * server-side caller built from this router alone (the download route, the
@@ -75,7 +75,9 @@ async function requireOwnerPin(
   throw new TRPCError(PIN_REFUSAL[result]);
 }
 
-function ownerOrganizationId(ctx: TRPCContext): { organizationId: string; actorId: string } {
+async function ownerOrganizationId(
+  ctx: TRPCContext
+): Promise<{ organizationId: string; actorId: string }> {
   const organizationId = ctx.entitlements?.organizationId;
   const user = ctx.session?.user;
   if (!organizationId || !user?.id) throw new TRPCError({ code: 'UNAUTHORIZED' });
@@ -87,14 +89,63 @@ function ownerOrganizationId(ctx: TRPCContext): { organizationId: string; actorI
   ) {
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Data export is for pharmacy workspaces.' });
   }
-  if (user.role !== 'ADMIN') {
-    throw new TRPCError({ code: 'FORBIDDEN', message: 'Owner access is required.' });
-  }
-  if (user.isSupportSession) {
+  if (user.isSupportSession || ctx.support) {
     throw new TRPCError({
       code: 'FORBIDDEN',
       message: 'Only the workspace owner can export the workspace data.',
     });
+  }
+  // Re-read ownership on every operation so a still-valid session cannot retain revoked authority.
+  const owner = await ctx.db.user.findFirst({
+    where: { id: user.id, organizationId, status: 'ACTIVE' },
+    select: {
+      id: true,
+      organizationId: true,
+      status: true,
+      role: true,
+      organizationRole: {
+        select: {
+          organizationId: true,
+          key: true,
+          isSystem: true,
+          permissions: {
+            where: { organizationId },
+            select: { organizationId: true, capability: true, effect: true },
+          },
+        },
+      },
+      permissionOverrides: {
+        where: { organizationId, OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] },
+        select: { organizationId: true, capability: true, effect: true },
+      },
+    },
+  });
+  if (
+    !owner ||
+    owner.id !== user.id ||
+    owner.organizationId !== organizationId ||
+    owner.status !== 'ACTIVE' ||
+    (owner.organizationRole && owner.organizationRole.organizationId !== organizationId)
+  ) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Owner access is required.' });
+  }
+  const role = owner.organizationRole;
+  const rules = [...(role?.permissions ?? []), ...owner.permissionOverrides].filter(
+    (rule) => rule.organizationId === organizationId
+  );
+  // Owner identity never overrides administration or pharmacy-management DENYs.
+  const denied = rules.some(
+    (rule) =>
+      rule.effect === 'DENY' &&
+      ['admin:access', 'pharmacy:manage'].some((action) =>
+        capabilityMatches(rule.capability, action, 'DENY')
+      )
+  );
+  const isOwner =
+    (role?.isSystem && role.key === 'owner') ||
+    (owner.role === 'ADMIN' && rules.some((rule) => rule.capability === '*' && rule.effect === 'ALLOW'));
+  if (denied || !isOwner) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Owner access is required.' });
   }
   return { organizationId, actorId: user.id };
 }
@@ -127,10 +178,10 @@ function fail(error: unknown): never {
 }
 
 export const pharmacyDataExportRouter = router({
-  importCatalogue: adminProcedure
+  importCatalogue: auditedProtectedProcedure
     .input(z.object({ csv: z.string().max(5_000_000) }).strict())
     .mutation(async ({ ctx, input }) => {
-      const { organizationId } = ownerOrganizationId(ctx);
+      const { organizationId } = await ownerOrganizationId(ctx);
       try {
         // Through the migration wizard: source evidence + profiled batch + drafts, atomically.
         const result = await importCatalogueSource(ctx.db, {
@@ -160,10 +211,10 @@ export const pharmacyDataExportRouter = router({
    * Lot, location and disposition stay part of each row's identity, so multi-lot
    * stock does not raise duplicate-product exceptions. No stock is posted.
    */
-  importStockLots: adminProcedure
+  importStockLots: auditedProtectedProcedure
     .input(z.object({ csv: z.string().max(5_000_000) }).strict())
     .mutation(async ({ ctx, input }) => {
-      ownerOrganizationId(ctx);
+      await ownerOrganizationId(ctx);
       try {
         const result = await importStockLotsSource(ctx.db, {
           fileName: 'stock-lots.csv',
@@ -191,15 +242,15 @@ export const pharmacyDataExportRouter = router({
       }
     }),
 
-  list: adminProcedure.query(async ({ ctx }) => {
-    const { organizationId } = ownerOrganizationId(ctx);
+  list: auditedProtectedProcedure.query(async ({ ctx }) => {
+    const { organizationId } = await ownerOrganizationId(ctx);
     return listPharmacyDataExports(ctx.db, organizationId);
   }),
 
-  request: adminProcedure
+  request: auditedProtectedProcedure
     .input(z.object({ from: day, to: day, pin }).strict())
     .mutation(async ({ ctx, input }) => {
-      const owner = ownerOrganizationId(ctx);
+      const owner = await ownerOrganizationId(ctx);
       const { organizationId, actorId } = owner;
       await requireOwnerPin(ctx, owner, { pin: input.pin, action: 'requested' });
       try {
@@ -227,13 +278,13 @@ export const pharmacyDataExportRouter = router({
 
   /**
    * Server-side only: the download route calls this through `createCaller` and
-   * streams the bytes. Audited by `adminProcedure`; the bytes are never written
-   * to the audit row. A mutation because it needs the PIN and counts the download.
+   * streams the bytes without writing them to the audit row. A mutation because
+   * it needs the PIN and counts the download.
    */
-  download: adminProcedure
+  download: auditedProtectedProcedure
     .input(z.object({ id: exportId, pin }).strict())
     .mutation(async ({ ctx, input }) => {
-      const owner = ownerOrganizationId(ctx);
+      const owner = await ownerOrganizationId(ctx);
       const { organizationId } = owner;
       await requireOwnerPin(ctx, owner, { pin: input.pin, action: 'downloaded', exportId: input.id });
       try {

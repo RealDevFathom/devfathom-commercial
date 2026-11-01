@@ -16,13 +16,6 @@ vi.mock('@/server/audit', async () => {
     },
   };
 });
-// The ABAC engine is exercised elsewhere; here `admin:access` is the owner role.
-vi.mock('@/lib/abac', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/lib/abac')>()),
-  can: vi.fn(async (subject: { role: string }, action: string) =>
-    action === 'admin:access' ? subject.role === 'ADMIN' : false
-  ),
-}));
 const storage = vi.hoisted(() => ({
   getUpload: vi.fn(async () => Buffer.from('PK-archive')),
   putUpload: vi.fn(),
@@ -43,6 +36,25 @@ import { exportRowsToCsv, PHARMACY_EXPORT_FILES } from '@/lib/pharmacy/data-expo
 const NOW = new Date('2026-10-31T07:00:00.000Z');
 
 type Row = Record<string, unknown>;
+type Permission = {
+  organizationId: string;
+  capability: string;
+  effect: 'ALLOW' | 'DENY';
+  expiresAt?: Date | null;
+};
+type LiveUser = {
+  id: string;
+  organizationId: string;
+  role: string;
+  status: string;
+  organizationRole: {
+    organizationId: string;
+    key: string;
+    isSystem: boolean;
+    permissions: Permission[];
+  } | null;
+  permissionOverrides: Permission[];
+};
 
 function fixture(
   options: {
@@ -55,11 +67,32 @@ function fixture(
   } = {}
 ) {
   const rows: Row[] = options.rows ?? [];
+  const currentUser: LiveUser = {
+    id: 'owner-1',
+    organizationId: 'org-a',
+    role: options.role ?? 'ADMIN',
+    status: 'ACTIVE',
+    organizationRole: {
+      organizationId: 'org-a',
+      key: 'admin',
+      isSystem: true,
+      permissions: [{ organizationId: 'org-a', capability: '*', effect: 'ALLOW' }],
+    },
+    permissionOverrides: [],
+  };
   const credential =
     options.credential === undefined
       ? { id: 'cred-1', credentialHash: 'hash', failedAttempts: 0, lockedUntil: null }
       : options.credential;
   const database = {
+    user: {
+      findFirst: vi.fn(async (): Promise<LiveUser | null> => ({
+        ...currentUser,
+        permissionOverrides: currentUser.permissionOverrides.filter(
+          (rule) => !rule.expiresAt || rule.expiresAt > new Date()
+        ),
+      })),
+    },
     restaurantOperatorCredential: {
       findFirst: vi.fn(async () => credential),
       update: vi.fn(async () => ({})),
@@ -130,6 +163,7 @@ function fixture(
   };
   return {
     db,
+    currentUser,
     context,
     caller: pharmacyDataExportRouter.createCaller(context as unknown as TRPCContext),
   };
@@ -159,12 +193,174 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(NOW);
   audit.annotateAudit.mockClear();
+  audit.recordTrpcAudit.mockClear();
   storage.getUpload.mockClear();
 });
 
 describe('pharmacy owner data export router', () => {
-  it('imports catalogue-only rows as audited drafts in the owner session tenant', async () => {
+  async function expectAllProceduresForbidden(f: ReturnType<typeof fixture>) {
+    for (const invoke of [
+      () => f.caller.list(),
+      () => f.caller.request({ from: '2026-01-01', to: '2026-10-30', pin: PIN }),
+      () => f.caller.download({ id: 'exp-1', pin: PIN }),
+      () => f.caller.importCatalogue({ csv: '' }),
+      () => f.caller.importStockLots({ csv: '' }),
+    ]) {
+      await expect(invoke()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    }
+    expect(f.db.restaurantOperatorCredential.findFirst).not.toHaveBeenCalled();
+    expect(f.db.pharmacyDataExport.findMany).not.toHaveBeenCalled();
+    expect(f.db.pharmacyDataExport.findFirst).not.toHaveBeenCalled();
+    expect(f.db.pharmacyDataExport.create).not.toHaveBeenCalled();
+    expect(f.db.pharmacyMigrationSource.create).not.toHaveBeenCalled();
+    expect(storage.getUpload).not.toHaveBeenCalled();
+  }
+
+  it('allows the live system owner even when the session and database base roles are EMPLOYEE', async () => {
+    const f = fixture({ role: 'EMPLOYEE', rows: [readyRow()] });
+    f.currentUser.organizationRole = {
+      organizationId: 'org-a', key: 'owner', isSystem: true, permissions: [],
+    };
+    await expect(f.caller.list()).resolves.toHaveLength(1);
+    await expect(f.caller.request({ from: '2026-01-01', to: '2026-10-30', pin: PIN }))
+      .resolves.toMatchObject({ created: true });
+    await expect(f.caller.download({ id: 'exp-1', pin: PIN }))
+      .resolves.toMatchObject({ data: Buffer.from('PK-archive') });
+    expect(f.db.user.findFirst).toHaveBeenCalledTimes(3);
+    expect(f.db.user.findFirst).toHaveBeenCalledWith({
+      where: { id: 'owner-1', organizationId: 'org-a', status: 'ACTIVE' },
+      select: expect.objectContaining({
+        organizationRole: { select: expect.objectContaining({
+          organizationId: true, key: true, isSystem: true,
+          permissions: {
+            where: { organizationId: 'org-a' },
+            select: { organizationId: true, capability: true, effect: true },
+          },
+        }) },
+        permissionOverrides: {
+          where: { organizationId: 'org-a', OR: [{ expiresAt: null }, { expiresAt: { gt: NOW } }] },
+          select: { organizationId: true, capability: true, effect: true },
+        },
+      }),
+    });
+  });
+
+  it('uses the live ADMIN and wildcard override even when the session role is stale', async () => {
+    const f = fixture({ role: 'EMPLOYEE' });
+    f.currentUser.role = 'ADMIN';
+    f.currentUser.organizationRole = null;
+    f.currentUser.permissionOverrides = [{
+      organizationId: 'org-a', capability: '*', effect: 'ALLOW',
+      expiresAt: new Date(NOW.getTime() + 60_000),
+    }];
+    await expect(f.caller.request({ from: '2026-01-01', to: '2026-10-30', pin: PIN }))
+      .resolves.toMatchObject({ created: true });
+  });
+
+  it.each([
+    'ordinary admin', 'missing user', 'inactive owner', 'different actor', 'other tenant user',
+    'fake owner role', 'other tenant owner role', 'other tenant role grant',
+    'other tenant override', 'owner-operator employee', 'expired wildcard override',
+  ])('refuses %s before any export, import, or PIN access', async (scenario) => {
+    const f = fixture({ rows: [readyRow()] });
+    const role = f.currentUser.organizationRole!;
+    switch (scenario) {
+      case 'ordinary admin':
+        role.permissions = [{ organizationId: 'org-a', capability: 'admin:access', effect: 'ALLOW' }];
+        break;
+      case 'missing user': f.db.user.findFirst.mockResolvedValue(null); break;
+      case 'inactive owner': f.currentUser.status = 'INACTIVE'; break;
+      case 'different actor': f.currentUser.id = 'other-user'; break;
+      case 'other tenant user': f.currentUser.organizationId = 'org-b'; break;
+      case 'fake owner role':
+        Object.assign(role, { key: 'owner', isSystem: false, permissions: [] });
+        break;
+      case 'other tenant owner role':
+        Object.assign(role, { key: 'owner', organizationId: 'org-b', permissions: [] });
+        break;
+      case 'other tenant role grant': role.permissions[0]!.organizationId = 'org-b'; break;
+      case 'other tenant override':
+        role.permissions = [];
+        f.currentUser.permissionOverrides = [{ organizationId: 'org-b', capability: '*', effect: 'ALLOW' }];
+        break;
+      case 'owner-operator employee':
+        f.currentUser.role = 'EMPLOYEE';
+        role.key = 'owner-operator';
+        break;
+      case 'expired wildcard override':
+        role.permissions = [];
+        f.currentUser.permissionOverrides = [{ organizationId: 'org-a', capability: '*', effect: 'ALLOW', expiresAt: NOW }];
+        break;
+    }
+    await expectAllProceduresForbidden(f);
+    expect(audit.recordTrpcAudit).toHaveBeenCalledTimes(5);
+    expect(audit.recordTrpcAudit.mock.calls.every(([entry]) => entry.outcome === 'FAILURE')).toBe(true);
+  });
+
+  it.each(['*', 'admin:*', 'admin:access', 'pharmacy:*', 'pharmacy:manage'])(
+    'applies %s DENY before both ownership allowances', async (capability) => {
+      for (const key of ['owner', 'admin']) {
+        for (const source of ['role', 'override']) {
+          const f = fixture({ rows: [readyRow()] });
+          f.currentUser.organizationRole!.key = key;
+          const rules = source === 'role'
+            ? f.currentUser.organizationRole!.permissions
+            : f.currentUser.permissionOverrides;
+          rules.push({ organizationId: 'org-a', capability, effect: 'DENY' });
+          await expectAllProceduresForbidden(f);
+        }
+      }
+    }
+  );
+
+  it('does not apply expired, foreign-tenant, or unrelated DENYs', async () => {
     const f = fixture();
+    f.currentUser.permissionOverrides = [
+      { organizationId: 'org-a', capability: '*', effect: 'DENY', expiresAt: NOW },
+      { organizationId: 'org-b', capability: '*', effect: 'DENY' },
+      { organizationId: 'org-a', capability: 'hotel:*', effect: 'DENY' },
+    ];
+    await expect(f.caller.list()).resolves.toEqual([]);
+  });
+
+  it.each(['system role', 'wildcard grant', 'ADMIN status'])(
+    'rechecks %s revocation on the same caller without a session refresh', async (authority) => {
+      const f = fixture();
+      const role = f.currentUser.organizationRole!;
+      if (authority === 'system role') {
+        role.key = 'owner';
+        role.permissions = [];
+      }
+      await expect(f.caller.list()).resolves.toEqual([]);
+      if (authority === 'system role') role.key = 'manager';
+      if (authority === 'wildcard grant') role.permissions = [];
+      if (authority === 'ADMIN status') f.currentUser.role = 'EMPLOYEE';
+      f.db.pharmacyDataExport.findMany.mockClear();
+      await expectAllProceduresForbidden(f);
+      expect(f.db.user.findFirst).toHaveBeenCalledTimes(6);
+      expect(f.context.session.user.role).toBe('ADMIN');
+    }
+  );
+
+  it('rejects a cross-tenant session before looking up ownership', async () => {
+    const f = fixture();
+    f.context.session.user.organizationId = 'org-b';
+    await expectAllProceduresForbidden(f);
+    expect(f.db.user.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('fails closed if the live ownership lookup fails', async () => {
+    const f = fixture();
+    f.db.user.findFirst.mockRejectedValue(new Error('database unavailable'));
+    await expect(f.caller.request({ from: '2026-01-01', to: '2026-10-30', pin: PIN }))
+      .rejects.toMatchObject({ code: 'INTERNAL_SERVER_ERROR' });
+    expect(f.db.pharmacyDataExport.create).not.toHaveBeenCalled();
+    expect(f.db.restaurantOperatorCredential.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('imports catalogue-only rows as audited drafts in the owner session tenant', async () => {
+    const f = fixture({ role: 'EMPLOYEE' });
+    Object.assign(f.currentUser.organizationRole!, { key: 'owner', permissions: [] });
     const csv = exportRowsToCsv(PHARMACY_EXPORT_FILES.medicines, [{
       code: 'foreign-id', medicine_code: 'foreign-id', product: 'Catalogue medicine',
       product_family: 'PHARMACEUTICAL', rx: true, otc: false, restricted: false,
@@ -196,7 +392,8 @@ describe('pharmacy owner data export router', () => {
   });
 
   it('profiles multi-lot stock-lots.csv into one reviewable batch without duplicate exceptions', async () => {
-    const f = fixture();
+    const f = fixture({ role: 'EMPLOYEE' });
+    Object.assign(f.currentUser.organizationRole!, { key: 'owner', permissions: [] });
     const shared = {
       product: 'Panadol 500mg', pack: 10, expiry: '2027-06-30', cost: '1.50', mrp: '25.00',
       branch_code: 'MAIN', batch_state: 'ACTIVE', medicine_code: 'med-1',
@@ -258,14 +455,11 @@ describe('pharmacy owner data export router', () => {
     expect(storage.getUpload).not.toHaveBeenCalled();
   });
 
-  it('refuses a platform support session acting as the owner', async () => {
-    const f = fixture({ support: true, rows: [readyRow()] });
-    await expect(f.caller.importCatalogue({ csv: '' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    await expect(f.caller.request({ from: '2026-01-01', to: '2026-10-30', pin: PIN })).rejects.toMatchObject(
-      { code: 'FORBIDDEN' }
-    );
-    await expect(f.caller.download({ id: 'exp-1', pin: PIN })).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    expect(storage.getUpload).not.toHaveBeenCalled();
+  it.each(['session', 'context'])('refuses support impersonation identified by the %s', async (source) => {
+    const f = fixture({ support: source === 'session', rows: [readyRow()] });
+    if (source === 'context') Object.assign(f.context, { support: { supportSessionId: 'sup-1' } });
+    await expectAllProceduresForbidden(f);
+    expect(f.db.user.findFirst).not.toHaveBeenCalled();
   });
 
   it('refuses a workspace that is not a pharmacy', async () => {

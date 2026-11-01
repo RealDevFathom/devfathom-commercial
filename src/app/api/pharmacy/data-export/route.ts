@@ -43,7 +43,7 @@ export function GET() {
 
 /**
  * #716 — download one owner data export archive. Authorization is the router's
- * (`adminProcedure` + Pharmacy Core entitlement + owner checks + PIN re-entry +
+ * (live tenant ownership + Pharmacy Core entitlement + PIN re-entry +
  * 24-hour expiry, all audited); this route only accepts a same-origin JSON body
  * and turns the bytes into an attachment response that is never cached.
  */
