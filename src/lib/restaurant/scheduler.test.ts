@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -17,6 +17,7 @@ import {
   recoverStaleJobs,
   releaseClaim,
   type ClaimedJob,
+  type SettleOptions,
 } from '@/lib/restaurant/scheduler';
 
 // A minimal in-memory ScopedDb that mirrors the exact Prisma operations the
@@ -72,7 +73,12 @@ function createFakeDb(seed: Row[] = []) {
   const jobs = new Map<string, Row>();
   const executions: Row[] = [];
   let seq = 0;
-  for (const row of seed) jobs.set(row.id as string, { ...row });
+  for (const row of seed) {
+    jobs.set(row.id as string, {
+      ...(row.status === 'RUNNING' ? { claimToken: 'claim-current' } : {}),
+      ...row,
+    });
+  }
 
   const restaurantJob = {
     findFirst: async ({ where }: { where: Row }) => {
@@ -172,6 +178,58 @@ function createFakeDb(seed: Row[] = []) {
 
 const T0 = new Date('2026-08-20T12:00:00.000Z');
 
+describe.each(['complete', 'fail', 'releaseClaim'] as const)('%s ownership validation', (operation) => {
+  it.each([
+    { workerId: undefined },
+    { workerId: null },
+    { workerId: 42 },
+    { workerId: '' },
+    { workerId: ' ' },
+    { attempt: undefined },
+    { attempt: null },
+    { attempt: 0 },
+    { attempt: 1.5 },
+    { claimToken: undefined },
+    { claimToken: null },
+    { claimToken: 42 },
+    { claimToken: '' },
+    { claimToken: ' ' },
+  ])('rejects malformed ownership %j before accessing the job', async (invalid) => {
+    const original = {
+      id: 'j1',
+      status: 'RUNNING',
+      attempts: 1,
+      maxAttempts: 5,
+      claimedAt: T0,
+      claimedBy: 'worker-a',
+      claimToken: 'claim-current',
+    };
+    const { db, jobs, executions } = createFakeDb([original]);
+    const find = vi.spyOn(db.restaurantJob, 'findUnique');
+    const update = vi.spyOn(db.restaurantJob, 'updateMany');
+    // Model incomplete or malformed ownership received at a runtime boundary.
+    const opts = {
+      workerId: 'worker-a',
+      attempt: 1,
+      claimToken: 'claim-current',
+      ...invalid,
+    } as unknown as SettleOptions;
+
+    const settlement =
+      operation === 'complete'
+        ? complete(db, 'j1', opts)
+        : operation === 'fail'
+          ? fail(db, 'j1', new Error('boom'), opts)
+          : releaseClaim(db, 'j1', opts);
+
+    await expect(settlement).rejects.toMatchObject({ reason: 'INVALID' });
+    expect(find).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+    expect(jobs.get('j1')).toEqual(original);
+    expect(executions).toHaveLength(0);
+  });
+});
+
 describe('scheduler backoff', () => {
   it('is exponential from the base delay and capped', () => {
     expect(backoffMs(1)).toBe(RETRY_BASE_MS);
@@ -223,8 +281,18 @@ describe('enqueue', () => {
 describe('complete', () => {
   it('rejects a missing or non-running job', async () => {
     const { db } = createFakeDb([{ id: 'j1', status: 'QUEUED', attempts: 0, maxAttempts: 5 }]);
-    await expect(complete(db, 'missing')).rejects.toMatchObject({ reason: 'JOB_NOT_FOUND' });
-    await expect(complete(db, 'j1')).rejects.toMatchObject({ reason: 'INVALID_STATE' });
+    await expect(
+      complete(db, 'missing', {
+        workerId: 'worker-a',
+        attempt: 1,
+        claimToken: 'claim-current',
+      })
+    ).rejects.toMatchObject({ reason: 'JOB_NOT_FOUND' });
+    await expect(
+      complete(db, 'j1', { workerId: 'worker-a', attempt: 1, claimToken: 'claim-current' })
+    ).rejects.toMatchObject({
+      reason: 'INVALID_STATE',
+    });
   });
 
   it('marks a running job SUCCEEDED and appends one execution', async () => {
@@ -238,7 +306,12 @@ describe('complete', () => {
         claimedBy: 'worker-a',
       },
     ]);
-    await complete(db, 'j1', { now: new Date(T0.getTime() + 5_000) });
+    await complete(db, 'j1', {
+      workerId: 'worker-a',
+      attempt: 1,
+      claimToken: 'claim-current',
+      now: new Date(T0.getTime() + 5_000),
+    });
     expect(jobs.get('j1')!.status).toBe('SUCCEEDED');
     expect(executions).toHaveLength(1);
     expect(executions[0]).toMatchObject({
@@ -264,7 +337,12 @@ describe('fail', () => {
         claimedBy: 'worker-a',
       },
     ]);
-    const outcome = await fail(db, 'j1', new Error('boom'), { now: T0 });
+    const outcome = await fail(db, 'j1', new Error('boom'), {
+      workerId: 'worker-a',
+      attempt: 1,
+      claimToken: 'claim-current',
+      now: T0,
+    });
     expect(outcome).toBe('retried');
     const job = jobs.get('j1')!;
     expect(job.status).toBe('QUEUED');
@@ -287,7 +365,12 @@ describe('fail', () => {
         claimedBy: 'worker-a',
       },
     ]);
-    const outcome = await fail(db, 'j1', new Error('boom'), { now: T0 });
+    const outcome = await fail(db, 'j1', new Error('boom'), {
+      workerId: 'worker-a',
+      attempt: 3,
+      claimToken: 'claim-current',
+      now: T0,
+    });
     expect(outcome).toBe('dead');
     expect(jobs.get('j1')!.status).toBe('DEAD');
     expect(executions).toHaveLength(1);
@@ -304,15 +387,73 @@ describe('fail', () => {
         claimedBy: 'worker-a',
       },
     ]);
-    const outcome = await fail(db, 'j1', new Error('bad payload'), { now: T0, permanent: true });
+    const outcome = await fail(db, 'j1', new Error('bad payload'), {
+      workerId: 'worker-a',
+      attempt: 1,
+      claimToken: 'claim-current',
+      now: T0,
+      permanent: true,
+    });
     expect(outcome).toBe('failed');
     expect(jobs.get('j1')!.status).toBe('FAILED');
   });
 
   it('refuses to settle a job that is not RUNNING', async () => {
     const { db } = createFakeDb([{ id: 'j1', status: 'QUEUED', attempts: 0, maxAttempts: 5 }]);
-    await expect(fail(db, 'j1', new Error('x'))).rejects.toMatchObject({ reason: 'INVALID_STATE' });
+    await expect(
+      fail(db, 'j1', new Error('x'), {
+        workerId: 'worker-a',
+        attempt: 1,
+        claimToken: 'claim-current',
+      })
+    ).rejects.toMatchObject({ reason: 'INVALID_STATE' });
   });
+
+  it.each([
+    ['complete', 'worker-b', 2, 'claim-stale'],
+    ['complete', 'worker-b', 1, 'claim-current'],
+    ['complete', 'worker-a', 2, 'claim-current'],
+    ['fail', 'worker-b', 2, 'claim-stale'],
+    ['fail', 'worker-b', 1, 'claim-current'],
+    ['fail', 'worker-a', 2, 'claim-current'],
+  ] as const)(
+    'rejects a stale claim attempting to %s with worker %s at attempt %i and token %s',
+    async (operation, workerId, attempt, claimToken) => {
+      const { db, jobs, executions } = createFakeDb([
+        {
+          id: 'j1',
+          status: 'RUNNING',
+          attempts: 2,
+          maxAttempts: 5,
+          claimedAt: new Date(T0.getTime() + DEFAULT_LEASE_MS),
+          claimedBy: 'worker-b',
+        },
+      ]);
+
+      const settlement =
+        operation === 'complete'
+          ? complete(db, 'j1', {
+              workerId,
+              attempt,
+              claimToken,
+              now: T0,
+            })
+          : fail(db, 'j1', new Error('late failure'), {
+              workerId,
+              attempt,
+              claimToken,
+              now: T0,
+            });
+
+      await expect(settlement).rejects.toMatchObject({ reason: 'INVALID_STATE' });
+      expect(jobs.get('j1')).toMatchObject({
+        status: 'RUNNING',
+        attempts: 2,
+        claimedBy: 'worker-b',
+      });
+      expect(executions).toHaveLength(0);
+    }
+  );
 });
 
 describe('recoverStaleJobs', () => {
@@ -325,8 +466,16 @@ describe('recoverStaleJobs', () => {
     ]);
     const recovered = await recoverStaleJobs(db, { now: T0 });
     expect(recovered).toBe(1);
-    expect(jobs.get('stale')!.status).toBe('QUEUED');
-    expect(jobs.get('fresh')!.status).toBe('RUNNING');
+    expect(jobs.get('stale')).toMatchObject({
+      status: 'QUEUED',
+      claimedAt: null,
+      claimedBy: null,
+      claimToken: null,
+    });
+    expect(jobs.get('fresh')).toMatchObject({
+      status: 'RUNNING',
+      claimToken: 'claim-current',
+    });
   });
 
   it('recovers only the requested job type', async () => {
@@ -385,11 +534,108 @@ describe('releaseClaim', () => {
     const { db, jobs } = createFakeDb([
       { id: 'j1', status: 'RUNNING', attempts: 1, maxAttempts: 5, claimedAt: T0, claimedBy: 'w' },
     ]);
-    await releaseClaim(db, 'j1', { now: T0 });
+    await releaseClaim(db, 'j1', {
+      workerId: 'w',
+      attempt: 1,
+      claimToken: 'claim-current',
+      now: T0,
+    });
     const job = jobs.get('j1')!;
     expect(job.status).toBe('QUEUED');
     expect(job.attempts).toBe(0);
     expect(job.claimedBy).toBeNull();
+    expect(job.claimToken).toBeNull();
+  });
+
+  it.each(['complete', 'fail'] as const)(
+    'rejects a released claim after the same worker reclaims and tries to %s',
+    async (operation) => {
+      const due = new Date(T0.getTime() - 1_000);
+      const { db, jobs, executions } = createFakeDb([
+        {
+          id: 'j1',
+          type: 'test',
+          status: 'QUEUED',
+          attempts: 0,
+          maxAttempts: 5,
+          nextAttemptAt: due,
+          createdAt: due,
+          payload: {},
+        },
+      ]);
+      const staleClaim = await claimNextDue(db, { workerId: 'worker-a', now: T0 });
+      await releaseClaim(db, 'j1', {
+        workerId: staleClaim!.claimedBy,
+        attempt: staleClaim!.attempts,
+        claimToken: staleClaim!.claimToken,
+        now: T0,
+      });
+      const currentClaim = await claimNextDue(db, { workerId: 'worker-a', now: T0 });
+
+      expect(staleClaim?.attempts).toBe(currentClaim?.attempts);
+      expect(staleClaim?.claimToken).not.toBe(currentClaim?.claimToken);
+      await releaseClaim(db, 'j1', {
+        workerId: staleClaim!.claimedBy,
+        attempt: staleClaim!.attempts,
+        claimToken: staleClaim!.claimToken,
+        now: T0,
+      });
+      const settlement =
+        operation === 'complete'
+          ? complete(db, 'j1', {
+              workerId: 'worker-a',
+              attempt: staleClaim!.attempts,
+              claimToken: staleClaim!.claimToken,
+            })
+          : fail(db, 'j1', new Error('stale failure'), {
+              workerId: 'worker-a',
+              attempt: staleClaim!.attempts,
+              claimToken: staleClaim!.claimToken,
+            });
+
+      await expect(settlement).rejects.toMatchObject({ reason: 'INVALID_STATE' });
+      expect(jobs.get('j1')).toMatchObject({
+        status: 'RUNNING',
+        attempts: currentClaim!.attempts,
+        claimedBy: 'worker-a',
+        claimToken: currentClaim!.claimToken,
+      });
+      expect(executions).toHaveLength(0);
+    }
+  );
+
+  it("does not release a newer worker's claim with stale ownership", async () => {
+    const due = new Date(T0.getTime() - DEFAULT_LEASE_MS - 1_000);
+    const { db, jobs } = createFakeDb([
+      {
+        id: 'j1',
+        type: 'test',
+        status: 'QUEUED',
+        attempts: 0,
+        maxAttempts: 5,
+        nextAttemptAt: due,
+        createdAt: due,
+        payload: {},
+      },
+    ]);
+    const staleClaim = await claimNextDue(db, { workerId: 'worker-a', now: due });
+    await recoverStaleJobs(db, { now: T0 });
+    const currentClaim = await claimNextDue(db, { workerId: 'worker-b', now: T0 });
+
+    await releaseClaim(db, 'j1', {
+      workerId: staleClaim!.claimedBy,
+      attempt: staleClaim!.attempts,
+      claimToken: staleClaim!.claimToken,
+      now: T0,
+    });
+
+    expect(currentClaim!.claimToken).not.toBe(staleClaim!.claimToken);
+    expect(jobs.get('j1')).toMatchObject({
+      status: 'RUNNING',
+      attempts: currentClaim!.attempts,
+      claimedBy: currentClaim!.claimedBy,
+      claimToken: currentClaim!.claimToken,
+    });
   });
 });
 
@@ -422,8 +668,12 @@ describe('claimNextDue', () => {
     const claimed = await claimNextDue(db, { workerId: 'w1', now: T0 });
     expect(claimed?.id).toBe('early');
     expect(claimed?.attempts).toBe(1);
+    expect(claimed?.claimToken).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+    );
     expect(jobs.get('early')!.status).toBe('RUNNING');
     expect(jobs.get('early')!.claimedBy).toBe('w1');
+    expect(jobs.get('early')!.claimToken).toBe(claimed?.claimToken);
   });
 
   it('returns null when nothing is due and rejects a blank workerId', async () => {
@@ -556,6 +806,20 @@ describe('drainDueJobs (single worker)', () => {
     expect(executions.filter((execution) => execution.outcome === 'SUCCEEDED')).toHaveLength(3);
   });
 
+  it('settles jobs with the canonical claimed owner when the worker ID is padded', async () => {
+    const { db, jobs } = seededQueue();
+    const result = await drainDueJobs({
+      runScoped: runScoped(db),
+      workerId: ' w1 ',
+      clock: () => T0,
+      maxJobs: 1,
+      handler: async () => undefined,
+    });
+
+    expect(result.succeeded).toBe(1);
+    expect(jobs.get('a')).toMatchObject({ status: 'SUCCEEDED', claimedBy: 'w1' });
+  });
+
   it('settles a throwing handler through the retry path', async () => {
     const { db, executions } = seededQueue();
     const result = await drainDueJobs({
@@ -571,6 +835,22 @@ describe('drainDueJobs (single worker)', () => {
     expect(result.retried).toBe(3);
     expect(result.succeeded).toBe(0);
     expect(executions.every((execution) => execution.outcome === 'FAILED')).toBe(true);
+  });
+
+  it('retries with the canonical claimed owner when the worker ID is padded', async () => {
+    const { db, jobs } = seededQueue();
+    const result = await drainDueJobs({
+      runScoped: runScoped(db),
+      workerId: ' w1 ',
+      clock: () => T0,
+      maxJobs: 1,
+      handler: async () => {
+        throw new Error('handler exploded');
+      },
+    });
+
+    expect(result.retried).toBe(1);
+    expect(jobs.get('a')).toMatchObject({ status: 'QUEUED', claimedBy: null });
   });
 
   it('stops claiming when the abort signal is already set', async () => {

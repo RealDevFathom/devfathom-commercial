@@ -1,5 +1,6 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { toast } from 'sonner';
 
 import type { EntitlementView } from '@/lib/module-catalog';
 
@@ -10,7 +11,13 @@ const mocks = vi.hoisted(() => ({
   createZone: vi.fn(),
   createAddress: vi.fn(),
   mutate: vi.fn(),
+  reactivateZone: vi.fn(),
+  setDefaultAddress: vi.fn(),
   invalidate: vi.fn(),
+  zones: [] as Array<Record<string, unknown>>,
+  addresses: [] as Array<Record<string, unknown>>,
+  pendingProcedure: '',
+  mutationOptions: {} as Record<string, { onSuccess: () => void }>,
 }));
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
@@ -61,13 +68,13 @@ vi.mock('@/lib/trpc', () => ({
         listZones: {
           useQuery: (input: unknown, options: { enabled: boolean }) => {
             mocks.zoneCalls.push({ input, enabled: options.enabled });
-            return { data: [], error: null, isLoading: false, refetch: vi.fn() };
+            return { data: mocks.zones, error: null, isLoading: false, refetch: vi.fn() };
           },
         },
         listAddresses: {
           useQuery: (input: unknown, options: { enabled: boolean }) => {
             mocks.addressCalls.push({ input, enabled: options.enabled });
-            return { data: [], error: null, isLoading: false, refetch: vi.fn() };
+            return { data: mocks.addresses, error: null, isLoading: false, refetch: vi.fn() };
           },
         },
       },
@@ -76,15 +83,22 @@ vi.mock('@/lib/trpc', () => ({
           procedure in target
             ? target[procedure as keyof typeof target]
             : {
-                useMutation: () => ({
-                  mutate:
-                    procedure === 'createZone'
-                      ? mocks.createZone
-                      : procedure === 'createAddress'
-                        ? mocks.createAddress
-                        : mocks.mutate,
-                  isPending: false,
-                }),
+                useMutation: (options: { onSuccess: () => void }) => {
+                  mocks.mutationOptions[procedure] = options;
+                  return {
+                    mutate:
+                      procedure === 'createZone'
+                        ? mocks.createZone
+                        : procedure === 'createAddress'
+                          ? mocks.createAddress
+                          : procedure === 'reactivateZone'
+                            ? mocks.reactivateZone
+                            : procedure === 'setDefaultAddress'
+                              ? mocks.setDefaultAddress
+                              : mocks.mutate,
+                    isPending: mocks.pendingProcedure === procedure,
+                  };
+                },
               },
       }
     ),
@@ -120,6 +134,10 @@ describe('DeliveryConsole', () => {
     mocks.zoneCalls.length = 0;
     mocks.addressCalls.length = 0;
     mocks.customerCalls.length = 0;
+    mocks.zones.length = 0;
+    mocks.addresses.length = 0;
+    mocks.pendingProcedure = '';
+    mocks.mutationOptions = {};
   });
 
   it('gates reads and uses friendly selectors instead of raw identifiers', () => {
@@ -205,5 +223,117 @@ describe('DeliveryConsole', () => {
       })
     );
     expect(window.location.href).not.toContain('Canal');
+  });
+
+  it('reactivates an inactive delivery zone after confirmation', () => {
+    mocks.zones.push({
+      id: 'zone_1',
+      name: 'Central',
+      fixedFee: '3.50',
+      minimumSubtotal: '20.00',
+      promisedMinutes: 35,
+      sortOrder: 0,
+      areaPostalLabel: null,
+      active: false,
+    });
+    renderConsole();
+    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch_1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Reactivate' }));
+    const dialog = screen.getByRole('dialog', { name: 'Confirm reactivation' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Reactivate' }));
+
+    expect(mocks.reactivateZone).toHaveBeenCalledWith({ branchId: 'branch_1', zoneId: 'zone_1' });
+  });
+
+  it('makes a non-default address default without resubmitting PII', () => {
+    mocks.addresses.push({
+      id: 'address_1',
+      label: 'Home',
+      recipientName: 'Ayesha Khan',
+      normalizedPhone: '+923001234567',
+      addressLine1: '42 Canal Road',
+      addressLine2: null,
+      locality: 'Lahore',
+      administrativeArea: null,
+      postalCode: null,
+      countryCode: 'PK',
+      latitude: null,
+      longitude: null,
+      isDefault: false,
+    });
+    renderConsole();
+    fireEvent.change(screen.getByLabelText('Customer'), { target: { value: 'customer_1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Make default' }));
+
+    expect(mocks.setDefaultAddress).toHaveBeenCalledWith({
+      customerId: 'customer_1',
+      addressId: 'address_1',
+    });
+  });
+
+  it.each([
+    ['Edit', 'Edit saved address'],
+    ['Add address', 'Add saved address'],
+  ])('preserves unsaved %s input when a delayed Make default request succeeds', (action, title) => {
+    mocks.addresses.push({
+      id: 'address_1',
+      label: 'Home',
+      recipientName: 'Ayesha Khan',
+      normalizedPhone: '+923001234567',
+      addressLine1: '42 Canal Road',
+      locality: 'Lahore',
+      countryCode: 'PK',
+      isDefault: false,
+    });
+    const view = renderConsole();
+    fireEvent.change(screen.getByLabelText('Customer'), { target: { value: 'customer_1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Make default' }));
+    const completeRequest = mocks.mutationOptions.setDefaultAddress.onSuccess;
+    mocks.pendingProcedure = 'setDefaultAddress';
+    view.rerender(
+      <EntitlementsProvider value={entitlements(true)}>
+        <DeliveryConsole />
+      </EntitlementsProvider>
+    );
+    expect(screen.getByRole('button', { name: 'Make default' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: action }));
+    const dialog = screen.getByRole('dialog', { name: title });
+    fireEvent.change(within(dialog).getByLabelText('Address label'), {
+      target: { value: 'Unsaved office name' },
+    });
+
+    act(() => {
+      mocks.pendingProcedure = '';
+      completeRequest();
+    });
+
+    expect(screen.getByRole('dialog', { name: title })).toBeVisible();
+    expect(within(dialog).getByLabelText('Address label')).toHaveValue('Unsaved office name');
+    expect(mocks.invalidate).toHaveBeenCalled();
+    expect(toast.success).toHaveBeenCalledWith('Default address updated.');
+  });
+
+  it('does not offer an uncheck transition while editing the current default address', () => {
+    mocks.addresses.push({
+      id: 'address_1',
+      label: 'Home',
+      recipientName: 'Ayesha Khan',
+      normalizedPhone: '+923001234567',
+      addressLine1: '42 Canal Road',
+      addressLine2: null,
+      locality: 'Lahore',
+      administrativeArea: null,
+      postalCode: null,
+      countryCode: 'PK',
+      latitude: null,
+      longitude: null,
+      isDefault: true,
+    });
+    renderConsole();
+    fireEvent.change(screen.getByLabelText('Customer'), { target: { value: 'customer_1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+
+    expect(screen.getByRole('checkbox', { name: 'Use as default address' })).toBeDisabled();
+    expect(screen.getByText(/use Make default on another saved address/i)).toBeInTheDocument();
   });
 });

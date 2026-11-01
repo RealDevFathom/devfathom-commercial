@@ -26,6 +26,8 @@ describe('RX-07 bilingual medication card', () => {
     expect(english).toHaveAttribute('dir', 'ltr');
     expect(urdu).toHaveAttribute('dir', 'rtl');
     expect(urdu).toHaveAttribute('lang', 'ur');
+    expect(urdu.parentElement).toHaveClass('md:border-s', 'md:ps-6');
+    expect(urdu.parentElement).not.toHaveClass('md:border-l', 'md:pl-6');
     for (const value of [
       'Metformin',
       '500 mg',

@@ -2027,7 +2027,12 @@ export default async function OrganizationDetailPage({
                   submitLabel="Schedule purge"
                   confirm="Schedule this organization for purge? This begins the retention countdown."
                   fields={[
-                    { name: 'id', label: 'Organization', type: 'hidden', defaultValue: organization.id },
+                    {
+                      name: 'id',
+                      label: 'Organization',
+                      type: 'hidden',
+                      defaultValue: organization.id,
+                    },
                     { name: 'status', label: 'Status', type: 'hidden', defaultValue: 'PURGING' },
                   ]}
                 />

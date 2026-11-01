@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   licensed: vi.fn(),
   entitlements: vi.fn(),
   actor: vi.fn(),
+  permissions: vi.fn(),
   branchMatch: vi.fn(),
   growthHistory: vi.fn(),
   growthReview: vi.fn(),
@@ -61,7 +62,7 @@ vi.mock('@/lib/ai/growth-recommendations', async () => ({
 import { pharmacyMarketingRouter } from './pharmacy-marketing';
 function caller(role = 'ADMIN') {
   const transactionDb = {
-    user: { findFirst: mocks.actor },
+    user: { findFirst: mocks.actor, findUnique: mocks.permissions },
     $queryRaw: mocks.branchMatch,
     organization: { findUnique: mocks.organization },
     pharmacyBranch: { findFirst: mocks.branch },
@@ -89,6 +90,10 @@ beforeEach(() => {
     enabledModules: ['pharmacy-crm'],
   });
   mocks.actor.mockResolvedValue({ id: 'owner-a' });
+  mocks.permissions.mockResolvedValue({
+    organizationRole: { permissions: [{ capability: '*', effect: 'ALLOW' }] },
+    permissionOverrides: [],
+  });
   mocks.branchMatch.mockResolvedValue([{ allowed: true }]);
   mocks.growthHistory.mockResolvedValue({ insights: [], reviews: [] });
   mocks.organization.mockResolvedValue({
@@ -176,10 +181,13 @@ describe('marketing workflow authorization', () => {
     });
     expect(mocks.assist).not.toHaveBeenCalled();
   });
-  it('strips branch context from the allowed AI input', async () => {
+  it('passes server-authorized tenant attribution separately from the allowed AI input', async () => {
     mocks.settings.mockResolvedValue({ askFathomEnabled: true });
     await caller().assist({ ...input, occasion: 'WELCOME', tone: 'FRIENDLY' });
-    expect(mocks.assist).toHaveBeenCalledWith({ occasion: 'WELCOME', tone: 'FRIENDLY' });
+    expect(mocks.assist).toHaveBeenCalledWith(
+      { occasion: 'WELCOME', tone: 'FRIENDLY' },
+      { organizationId: 'org-a', branchId: 'branch-a' }
+    );
   });
 });
 
@@ -190,6 +198,43 @@ describe('growth current authorization', () => {
     recommendation: 0,
     decision: 'REJECT' as const,
   };
+  it.each(['reports:financial', 'reports:operational'])(
+    'honors an explicit %s DENY for generation, saved snapshots and review',
+    async (capability) => {
+      for (const source of ['role', 'override']) {
+        const deny = { capability, effect: 'DENY' };
+        mocks.permissions.mockResolvedValue({
+          organizationRole: {
+            permissions: [
+              { capability: '*', effect: 'ALLOW' },
+              ...(source === 'role' ? [deny] : []),
+            ],
+          },
+          permissionOverrides: source === 'override' ? [deny] : [],
+        });
+        await expect(
+          caller().generateGrowth({
+            ...input,
+            from: new Date('2026-09-01'),
+            cutoff: new Date('2026-10-01'),
+          })
+        ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        await expect(caller().growthHistory(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        await expect(caller().reviewGrowth(review)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      }
+      expect(mocks.settings).not.toHaveBeenCalled();
+      expect(mocks.growthBuild).not.toHaveBeenCalled();
+      expect(mocks.growthGenerate).not.toHaveBeenCalled();
+      expect(mocks.growthSave).not.toHaveBeenCalled();
+      expect(mocks.growthHistory).not.toHaveBeenCalled();
+      expect(mocks.growthReview).not.toHaveBeenCalled();
+    }
+  );
+  it('requires report grants even for an ADMIN without explicit DENY rules', async () => {
+    mocks.permissions.mockResolvedValue({ organizationRole: null, permissionOverrides: [] });
+    await expect(caller().growthHistory(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.growthHistory).not.toHaveBeenCalled();
+  });
   it.each(['branch', 'actor', 'licence', 'lifecycle'] as const)(
     'denies current %s revocation before review writes',
     async (kind) => {
@@ -211,6 +256,8 @@ describe('growth current authorization', () => {
     const transactionDb = mocks.entitlements.mock.calls[0][1];
     expect(transactionDb).not.toHaveProperty('$transaction');
     expect(mocks.growthHistory.mock.calls[0][0]).toBe(transactionDb);
+    expect(transactionDb.user.findUnique).toBe(mocks.permissions);
+    expect(mocks.permissions).toHaveBeenCalledTimes(2);
     expect(mocks.actor).toHaveBeenCalledWith({
       where: { id: 'owner-a', organizationId: 'org-a', role: 'ADMIN', status: 'ACTIVE' },
       select: { id: true },
@@ -221,7 +268,7 @@ describe('growth current authorization', () => {
     );
     expect(mocks.growthHistory).toHaveBeenCalledTimes(1);
   });
-  it.each(['branch', 'actor', 'licence', 'lifecycle'] as const)(
+  it.each(['branch', 'actor', 'licence', 'lifecycle', 'reports:financial', 'reports:operational'] as const)(
     'rejects %s revocation during model latency',
     async (kind) => {
       mocks.settings.mockResolvedValue({ askFathomEnabled: true });
@@ -230,6 +277,11 @@ describe('growth current authorization', () => {
         if (kind === 'branch') mocks.branchMatch.mockResolvedValue([{ allowed: false }]);
         if (kind === 'actor') mocks.actor.mockResolvedValue(null);
         if (kind === 'licence') mocks.licensed.mockReturnValue(false);
+        if (kind === 'reports:financial' || kind === 'reports:operational')
+          mocks.permissions.mockResolvedValue({
+            organizationRole: { permissions: [{ capability: '*', effect: 'ALLOW' }] },
+            permissionOverrides: [{ capability: kind, effect: 'DENY' }],
+          });
         if (kind === 'lifecycle')
           mocks.organization.mockResolvedValue({
             id: 'org-a',

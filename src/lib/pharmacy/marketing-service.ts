@@ -2,7 +2,7 @@ import 'server-only';
 
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { workspaceTimezone } from '@/lib/timezone';
+import { workspaceTimezone, workspaceToday } from '@/lib/timezone';
 import { z } from 'zod';
 import { lockCustomerConsent } from './consent-writer';
 
@@ -208,9 +208,25 @@ export async function marketingConsent(
 ) {
   const customer = await db.pharmacyCustomer.findFirst({
     where: { organizationId: scope.organizationId, id: customerId },
-    select: { id: true, active: true, patientId: true, whatsappOptIn: true },
+    select: {
+      id: true,
+      active: true,
+      patientId: true,
+      whatsappOptIn: true,
+      patient: { select: { dateOfBirth: true } },
+    },
   });
   if (!customer?.active) return 'INACTIVE';
+  const birth = customer.patient.dateOfBirth;
+  if (birth) {
+    // Age turns over on the workspace's calendar day (PKT), not UTC's.
+    const [year, month, day] = workspaceToday(scope.timezone, now).split('-').map(Number);
+    const birthdayPending =
+      month - 1 < birth.getUTCMonth() ||
+      (month - 1 === birth.getUTCMonth() && day < birth.getUTCDate());
+    const age = year - birth.getUTCFullYear() - (birthdayPending ? 1 : 0);
+    if (age < 18) return 'UNDER_18';
+  }
   if (customer.whatsappOptIn === false) return 'OPTED_OUT';
   if (customer.whatsappOptIn !== true) return 'NO_CONSENT';
   const consent = await db.patientConsent.findFirst({

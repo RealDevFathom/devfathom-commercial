@@ -23,7 +23,7 @@ const date = new Date('2026-09-05T10:00:00Z');
 let tenancy: typeof import('@/lib/tenancy/scoped-db');
 let orderNumber = 0;
 
-async function bill() {
+async function bill(options: { fractionalWithoutLines?: boolean } = {}) {
   return tenancy.withTenantDb(orgA, async (db) => {
     const order = await db.restaurantOrder.create({
       data: {
@@ -64,19 +64,24 @@ async function bill() {
         discountTotal: '0.50',
         roundingAdjustment: '0.05',
         grandTotal: '25.55',
-        lines: {
-          create: {
-            orderItemId: item.id,
-            name: 'Meal',
-            quantity: 2,
-            unitPrice: '12',
-            lineSubtotal: '24',
-            compAmount: '4',
-            taxAmount: '2',
-            serviceChargeAmount: '1',
-            lineTotal: '20',
-          },
-        },
+        splitKind: options.fractionalWithoutLines ? 'FRACTIONAL' : 'NONE',
+        fractionNumerator: options.fractionalWithoutLines ? 1 : null,
+        fractionDenominator: options.fractionalWithoutLines ? 3 : null,
+        lines: options.fractionalWithoutLines
+          ? undefined
+          : {
+              create: {
+                orderItemId: item.id,
+                name: 'Meal',
+                quantity: 2,
+                unitPrice: '12',
+                lineSubtotal: '24',
+                compAmount: '4',
+                taxAmount: '2',
+                serviceChargeAmount: '1',
+                lineTotal: '20',
+              },
+            },
         tenders: {
           create: {
             type: 'CASH',
@@ -204,6 +209,28 @@ describe.skipIf(!database)('receipt caller snapshots with enforcing RLS', () => 
         text: expect.stringContaining('Next receipt header'),
       },
     });
+  });
+
+  it('loads a settled line-less fractional split from storage into the printer contract', async () => {
+    const fractional = await bill({ fractionalWithoutLines: true });
+    const persistedLineCount = await tenancy.withTenantDb(orgA, (db) =>
+      db.restaurantBillLine.count({ where: { billId: fractional.id } })
+    );
+    expect(persistedLineCount).toBe(0);
+
+    const result = await tenancy.withTenantDb(orgA, (db) =>
+      dispatchReceipt(args(db, fractional.id))
+    );
+    if (result instanceof Response || !result.latestJob) throw new Error('Expected queued receipt');
+    expect(result).toMatchObject({ outcome: 'QUEUED', replayed: false });
+    const jobId = result.latestJob.id;
+
+    const stored = await tenancy.withTenantDb(orgA, (db) =>
+      db.restaurantPrintJob.findUniqueOrThrow({ where: { id: jobId } })
+    );
+    const facts = PrintDocumentSchema.parse(stored.document).receiptSnapshot!.facts;
+    expect(facts.lines).toEqual(['Fractional share 1/3: 25.55']);
+    expect(facts.totals).toContain('Split FRACTIONAL 1/3');
   });
 
   it('denies foreign tenant and sibling branch dispatch before enqueue', async () => {
