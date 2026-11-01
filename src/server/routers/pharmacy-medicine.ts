@@ -33,6 +33,15 @@ import {
   protectedProcedure,
   router,
 } from '../trpc';
+import type { AuditDetail } from '../audit';
+import {
+  assertCanProposeCatalogueChange,
+  assertCatalogueReviewer,
+  canProposeCatalogueChange,
+  catalogueReviewAuthority,
+  catalogueReviewModeFor,
+  type CatalogueDb,
+} from '@/lib/pharmacy/catalogue-review';
 
 const family = z.enum(['PHARMACEUTICAL', 'BIOLOGICAL', 'DEVICE', 'ALTERNATIVE', 'FRONT_SHOP']);
 const boundedId = z.string().min(1).max(200);
@@ -242,6 +251,339 @@ function domainError(error: unknown): never {
   }
   throw error;
 }
+
+/*
+ * Catalogue review. Each catalogue edit below is validated (tenant references,
+ * saleability) when it is proposed, stored as a PENDING PharmacyCatalogueChange,
+ * and written to the catalogue only by `decideCatalogueChange` APPROVE, which
+ * validates it again inside the decision transaction.
+ */
+const ingredientInput = z.object({ name: z.string().trim().min(1).max(200) }).strict();
+
+const medicineInput = z
+  .object({
+    productName: z.string().trim().min(1).max(300),
+    brandName: z.string().trim().max(300).optional(),
+    manufacturer: z.string().trim().max(300).optional(),
+    marketingAuthorizationHolder: z.string().trim().max(300).optional(),
+    drapRegistrationNumber: z.string().trim().max(100).optional(),
+    drapRegistrationStatus: z.string().trim().max(100).optional(),
+    drapRegisteredAt: z.date().optional(),
+    productFamily: family,
+    rx: z.boolean().optional(),
+    otc: z.boolean().optional(),
+    restricted: z.boolean().optional(),
+    controlled: z.boolean().optional(),
+    highAlert: z.boolean().optional(),
+    lasa: z.boolean().optional(),
+    coldChain: z.boolean().optional(),
+    presentation: z
+      .object({
+        dosageForm: z.string().max(100).optional(),
+        route: z.string().max(100).optional(),
+        presentation: z.string().min(1).max(300),
+      })
+      .optional(),
+    strengths: z
+      .array(
+        z
+          .object({
+            ingredientId: z.string().min(1).max(200),
+            value: z.number().positive(),
+            unit: z.string().trim().min(1).max(50),
+          })
+          .strict()
+      )
+      .max(20)
+      .default([]),
+    provenance: z.array(provenance).max(20).default([]),
+    saleable: z.boolean().default(false),
+  })
+  .strict();
+
+const packLevelInput = z
+  .object({
+    presentationId: z.string().min(1),
+    parentPackLevelId: z.string().min(1).optional(),
+    versionGroupId: z.string().min(1),
+    level: z.enum(['CARTON', 'BOX', 'STRIP', 'UNIT']),
+    unitsPerParent: z.number().int().positive(),
+    effectiveFrom: z.date(),
+  })
+  .strict();
+
+const packRevisionInput = z
+  .object({
+    id: z.string().min(1),
+    unitsPerParent: z.number().int().positive(),
+    effectiveFrom: z.date(),
+  })
+  .strict();
+
+const printedMrpInput = z
+  .object({
+    packLevelId: z.string().min(1),
+    batchReference: z.string().min(1).max(200),
+    printedMrpMinor: z.number().int().nonnegative(),
+    roundingIncrementMinor: z.number().int().positive().default(1),
+  })
+  .strict();
+
+const barcodeInput = z
+  .object({
+    presentationId: z.string().min(1),
+    packLevelId: z.string().min(1).optional(),
+    type: z.enum(['GTIN', 'MANUFACTURER', 'INTERNAL']),
+    code: z.string().trim().min(1).max(200),
+  })
+  .strict();
+
+const aliasInput = z
+  .object({
+    medicineId: z.string().min(1),
+    type: z.enum(['BRAND', 'GENERIC', 'URDU', 'TRANSLITERATION', 'LEGACY_CODE']),
+    value: z.string().trim().min(1).max(300),
+  })
+  .strict();
+
+type CatalogueChangeKind =
+  | 'INGREDIENT'
+  | 'MEDICINE'
+  | 'PACK_LEVEL'
+  | 'PACK_REVISION'
+  | 'PRINTED_MRP'
+  | 'BARCODE'
+  | 'ALIAS';
+
+function outsideWorkspace(message: string): never {
+  throw new TRPCError({ code: 'FORBIDDEN', message });
+}
+
+function isoDate(date: Date) {
+  return date.toISOString().slice(0, 10);
+}
+
+async function checkMedicine(db: CatalogueDb, input: z.infer<typeof medicineInput>) {
+  try {
+    if (input.saleable)
+      assertSaleable({
+        productFamily: input.productFamily,
+        hasPresentation: Boolean(input.presentation),
+        hasStrength: input.strengths.length > 0,
+        hasRegistration: Boolean(input.drapRegistrationNumber),
+        provenanceFields: new Set(
+          input.provenance
+            .filter((p) => p.status === 'ACCEPTED' || p.status === 'CORRECTED')
+            .map((p) => p.field)
+        ),
+      });
+    for (const component of input.strengths) {
+      if (!(await db.ingredient.findFirst({ where: { id: component.ingredientId } }))) {
+        throw new PharmacyMedicineError('CROSS_TENANT_REFERENCE');
+      }
+    }
+  } catch (error) {
+    domainError(error);
+  }
+  return `New medicine: ${input.productName}${input.brandName ? ` (${input.brandName})` : ''}`;
+}
+
+async function checkPackLevel(db: CatalogueDb, input: z.infer<typeof packLevelInput>) {
+  const presentation = await db.presentation.findFirst({ where: { id: input.presentationId } });
+  if (!presentation) outsideWorkspace('Presentation is outside this workspace.');
+  if (
+    input.parentPackLevelId &&
+    !(await db.packLevel.findFirst({
+      where: { id: input.parentPackLevelId, presentationId: input.presentationId },
+    }))
+  )
+    outsideWorkspace('Parent pack is outside this presentation.');
+  return `New ${input.level} pack of ${input.unitsPerParent} units for ${presentation.presentation}, from ${isoDate(input.effectiveFrom)}`;
+}
+
+async function checkPackRevision(db: CatalogueDb, input: z.infer<typeof packRevisionInput>) {
+  const current = await db.packLevel.findFirst({ where: { id: input.id } });
+  if (!current) throw new TRPCError({ code: 'NOT_FOUND', message: 'Pack level not found.' });
+  return {
+    current,
+    summary: `Revise ${current.level} pack from ${current.unitsPerParent} to ${input.unitsPerParent} units, from ${isoDate(input.effectiveFrom)}`,
+  };
+}
+
+async function checkPrintedMrp(db: CatalogueDb, input: z.infer<typeof printedMrpInput>) {
+  if (!(await db.packLevel.findFirst({ where: { id: input.packLevelId } })))
+    outsideWorkspace('Pack level is outside this workspace.');
+  return `Printed MRP ${input.printedMrpMinor} (minor units) for batch ${input.batchReference}`;
+}
+
+async function checkBarcode(db: CatalogueDb, input: z.infer<typeof barcodeInput>) {
+  if (!(await db.presentation.findFirst({ where: { id: input.presentationId } })))
+    outsideWorkspace('Presentation is outside this workspace.');
+  if (
+    input.packLevelId &&
+    !(await db.packLevel.findFirst({
+      where: { id: input.packLevelId, presentationId: input.presentationId },
+    }))
+  )
+    outsideWorkspace('Pack is outside this presentation.');
+  return `${input.type} barcode ${input.code}`;
+}
+
+async function checkAlias(db: CatalogueDb, input: z.infer<typeof aliasInput>) {
+  if (!(await db.medicine.findFirst({ where: { id: input.medicineId } })))
+    outsideWorkspace('Medicine is outside this workspace.');
+  return `${input.type} alias: ${input.value}`;
+}
+
+/** Restores the Date fields a JSON payload stores as ISO strings. */
+function reviveStoredDates(payload: unknown): unknown {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return payload;
+  const revived: Record<string, unknown> = { ...(payload as Record<string, unknown>) };
+  for (const field of ['drapRegisteredAt', 'effectiveFrom']) {
+    if (typeof revived[field] === 'string') revived[field] = new Date(revived[field] as string);
+  }
+  if (Array.isArray(revived.provenance)) {
+    revived.provenance = revived.provenance.map((item: unknown) => {
+      if (!item || typeof item !== 'object') return item;
+      const { retrievedAt } = item as { retrievedAt?: unknown };
+      return typeof retrievedAt === 'string'
+        ? { ...item, retrievedAt: new Date(retrievedAt) }
+        : item;
+    });
+  }
+  return revived;
+}
+
+/**
+ * Writes one approved change to the catalogue, re-validating it first, and
+ * returns the id of the record it created.
+ */
+async function publishCatalogueChange(
+  db: CatalogueDb,
+  kind: CatalogueChangeKind,
+  payload: unknown
+): Promise<string> {
+  const stored = reviveStoredDates(payload);
+  switch (kind) {
+    case 'INGREDIENT': {
+      const input = ingredientInput.parse(stored);
+      return (await db.ingredient.create({ data: input })).id;
+    }
+    case 'MEDICINE': {
+      const input = medicineInput.parse(stored);
+      await checkMedicine(db, input);
+      const { presentation, strengths, provenance: assertions, ...medicine } = input;
+      const created = await db.medicine.create({
+        data: {
+          ...medicine,
+          presentations: presentation ? { create: presentation } : undefined,
+          strengths: { create: strengths },
+          provenance: {
+            create: assertions.map((item) => ({
+              ...item,
+              assertedValue: item.assertedValue ?? undefined,
+            })),
+          },
+        },
+      });
+      return created.id;
+    }
+    case 'PACK_LEVEL': {
+      const input = packLevelInput.parse(stored);
+      await checkPackLevel(db, input);
+      return (await db.packLevel.create({ data: { ...input, version: 1 } })).id;
+    }
+    case 'PACK_REVISION': {
+      const input = packRevisionInput.parse(stored);
+      const { current } = await checkPackRevision(db, input);
+      await db.packLevel.update({
+        where: { id: current.id },
+        data: { effectiveTo: input.effectiveFrom },
+      });
+      const revised = await db.packLevel.create({
+        data: {
+          presentationId: current.presentationId,
+          parentPackLevelId: current.parentPackLevelId,
+          versionGroupId: current.versionGroupId,
+          version: current.version + 1,
+          level: current.level,
+          unitsPerParent: input.unitsPerParent,
+          effectiveFrom: input.effectiveFrom,
+          supersedesPackLevelId: current.id,
+        },
+      });
+      return revised.id;
+    }
+    case 'PRINTED_MRP': {
+      const input = printedMrpInput.parse(stored);
+      await checkPrintedMrp(db, input);
+      return (await db.medicinePackMrp.create({ data: input })).id;
+    }
+    case 'BARCODE': {
+      const input = barcodeInput.parse(stored);
+      await checkBarcode(db, input);
+      const barcode = await db.medicineBarcode.create({
+        data: { ...input, normalizedCode: normalizeMedicineText(input.code) },
+      });
+      return barcode.id;
+    }
+    case 'ALIAS': {
+      const input = aliasInput.parse(stored);
+      await checkAlias(db, input);
+      const alias = await db.medicineAlias.create({
+        data: { ...input, normalizedValue: normalizeMedicineText(input.value) },
+      });
+      return alias.id;
+    }
+  }
+}
+
+function recordCatalogueAudit(ctx: { audit?: { detail: AuditDetail } }, detail: AuditDetail) {
+  if (!ctx.audit) return;
+  const metadata = { ...(ctx.audit.detail.metadata ?? {}), ...(detail.metadata ?? {}) };
+  Object.assign(ctx.audit.detail, detail, { metadata });
+}
+
+/** Stores a validated edit as a PENDING review item; nothing reaches the catalogue. */
+async function proposeCatalogueChange(
+  ctx: {
+    db: CatalogueDb;
+    session: { user: { id: string } };
+    audit?: { detail: AuditDetail };
+  },
+  kind: CatalogueChangeKind,
+  input: object,
+  summary: string
+) {
+  const change = await ctx.db.pharmacyCatalogueChange.create({
+    data: {
+      kind,
+      // JSON keeps Dates as ISO strings; publishCatalogueChange revives them.
+      payload: JSON.parse(JSON.stringify(input)) as Prisma.InputJsonObject,
+      summary: summary.slice(0, 500),
+      proposedBy: ctx.session.user.id,
+    },
+  });
+  recordCatalogueAudit(ctx, {
+    action: 'pharmacy.catalogue-change.propose',
+    targetType: 'PharmacyCatalogueChange',
+    targetId: change.id,
+    description: `Proposed catalogue change for review: ${change.summary}`,
+    metadata: {
+      catalogueChangeId: change.id,
+      kind,
+      status: 'PENDING',
+      proposedBy: change.proposedBy,
+    },
+  });
+  return change;
+}
+
+/** Catalogue edits need the catalogue-edit capability (or its stored equivalents). */
+const catalogueEditProcedure = protectedProcedure.use(async ({ ctx, next }) => {
+  await assertCanProposeCatalogueChange(ctx.db, ctx.session.user, { ip: ctx.requestMeta.ip });
+  return next();
+});
 
 export const pharmacyMedicineRouter = router({
   priceNotices: capabilityProcedure('pharmacy:safety').query(({ ctx }) =>
@@ -573,91 +915,17 @@ export const pharmacyMedicineRouter = router({
     })
   ),
 
-  createIngredient: protectedProcedure
-    .input(z.object({ name: z.string().trim().min(1).max(200) }).strict())
-    .mutation(({ ctx, input }) => ctx.db.ingredient.create({ data: input })),
+  createIngredient: catalogueEditProcedure
+    .input(ingredientInput)
+    .mutation(({ ctx, input }) =>
+      proposeCatalogueChange(ctx, 'INGREDIENT', input, `New ingredient: ${input.name}`)
+    ),
 
-  createMedicine: protectedProcedure
-    .input(
-      z
-        .object({
-          productName: z.string().trim().min(1).max(300),
-          brandName: z.string().trim().max(300).optional(),
-          manufacturer: z.string().trim().max(300).optional(),
-          marketingAuthorizationHolder: z.string().trim().max(300).optional(),
-          drapRegistrationNumber: z.string().trim().max(100).optional(),
-          drapRegistrationStatus: z.string().trim().max(100).optional(),
-          drapRegisteredAt: z.date().optional(),
-          productFamily: family,
-          rx: z.boolean().optional(),
-          otc: z.boolean().optional(),
-          restricted: z.boolean().optional(),
-          controlled: z.boolean().optional(),
-          highAlert: z.boolean().optional(),
-          lasa: z.boolean().optional(),
-          coldChain: z.boolean().optional(),
-          presentation: z
-            .object({
-              dosageForm: z.string().max(100).optional(),
-              route: z.string().max(100).optional(),
-              presentation: z.string().min(1).max(300),
-            })
-            .optional(),
-          strengths: z
-            .array(
-              z
-                .object({
-                  ingredientId: z.string().min(1).max(200),
-                  value: z.number().positive(),
-                  unit: z.string().trim().min(1).max(50),
-                })
-                .strict()
-            )
-            .max(20)
-            .default([]),
-          provenance: z.array(provenance).max(20).default([]),
-          saleable: z.boolean().default(false),
-        })
-        .strict()
-    )
-    .mutation(async ({ ctx, input }) => {
-      try {
-        if (input.saleable)
-          assertSaleable({
-            productFamily: input.productFamily,
-            hasPresentation: Boolean(input.presentation),
-            hasStrength: input.strengths.length > 0,
-            hasRegistration: Boolean(input.drapRegistrationNumber),
-            provenanceFields: new Set(
-              input.provenance
-                .filter((p) => p.status === 'ACCEPTED' || p.status === 'CORRECTED')
-                .map((p) => p.field)
-            ),
-          });
-        for (const component of input.strengths) {
-          if (!(await ctx.db.ingredient.findFirst({ where: { id: component.ingredientId } }))) {
-            throw new PharmacyMedicineError('CROSS_TENANT_REFERENCE');
-          }
-        }
-        const { presentation, strengths, provenance: assertions, ...medicine } = input;
-        return await ctx.db.medicine.create({
-          data: {
-            ...medicine,
-            presentations: presentation ? { create: presentation } : undefined,
-            strengths: { create: strengths },
-            provenance: {
-              create: assertions.map((item) => ({
-                ...item,
-                assertedValue: item.assertedValue ?? undefined,
-              })),
-            },
-          },
-          include: { strengths: true, presentations: true, provenance: true },
-        });
-      } catch (error) {
-        domainError(error);
-      }
-    }),
+  createMedicine: catalogueEditProcedure
+    .input(medicineInput)
+    .mutation(async ({ ctx, input }) =>
+      proposeCatalogueChange(ctx, 'MEDICINE', input, await checkMedicine(ctx.db, input))
+    ),
 
   get: auditedProtectedProcedure
     .input(z.object({ id: z.string().min(1) }).strict())
@@ -674,90 +942,28 @@ export const pharmacyMedicineRouter = router({
       return medicine;
     }),
 
-  createPackLevel: protectedProcedure
-    .input(
-      z
-        .object({
-          presentationId: z.string().min(1),
-          parentPackLevelId: z.string().min(1).optional(),
-          versionGroupId: z.string().min(1),
-          level: z.enum(['CARTON', 'BOX', 'STRIP', 'UNIT']),
-          unitsPerParent: z.number().int().positive(),
-          effectiveFrom: z.date(),
-        })
-        .strict()
-    )
-    .mutation(async ({ ctx, input }) => {
-      if (!(await ctx.db.presentation.findFirst({ where: { id: input.presentationId } })))
-        throw new TRPCError({
-          code: 'FORBIDDEN',
-          message: 'Presentation is outside this workspace.',
-        });
-      if (
-        input.parentPackLevelId &&
-        !(await ctx.db.packLevel.findFirst({
-          where: { id: input.parentPackLevelId, presentationId: input.presentationId },
-        }))
-      )
-        throw new TRPCError({
-          code: 'FORBIDDEN',
-          message: 'Parent pack is outside this presentation.',
-        });
-      return ctx.db.packLevel.create({ data: { ...input, version: 1 } });
-    }),
-
-  revisePackLevel: protectedProcedure
-    .input(
-      z
-        .object({
-          id: z.string().min(1),
-          unitsPerParent: z.number().int().positive(),
-          effectiveFrom: z.date(),
-        })
-        .strict()
-    )
+  createPackLevel: catalogueEditProcedure
+    .input(packLevelInput)
     .mutation(async ({ ctx, input }) =>
-      ctx.db.$transaction(async (tx) => {
-        const current = await tx.packLevel.findFirst({ where: { id: input.id } });
-        if (!current) throw new TRPCError({ code: 'NOT_FOUND', message: 'Pack level not found.' });
-        await tx.packLevel.update({
-          where: { id: current.id },
-          data: { effectiveTo: input.effectiveFrom },
-        });
-        return tx.packLevel.create({
-          data: {
-            presentationId: current.presentationId,
-            parentPackLevelId: current.parentPackLevelId,
-            versionGroupId: current.versionGroupId,
-            version: current.version + 1,
-            level: current.level,
-            unitsPerParent: input.unitsPerParent,
-            effectiveFrom: input.effectiveFrom,
-            supersedesPackLevelId: current.id,
-          },
-        });
-      })
+      proposeCatalogueChange(ctx, 'PACK_LEVEL', input, await checkPackLevel(ctx.db, input))
     ),
 
-  recordPrintedMrp: protectedProcedure
-    .input(
-      z
-        .object({
-          packLevelId: z.string().min(1),
-          batchReference: z.string().min(1).max(200),
-          printedMrpMinor: z.number().int().nonnegative(),
-          roundingIncrementMinor: z.number().int().positive().default(1),
-        })
-        .strict()
-    )
-    .mutation(async ({ ctx, input }) => {
-      if (!(await ctx.db.packLevel.findFirst({ where: { id: input.packLevelId } })))
-        throw new TRPCError({
-          code: 'FORBIDDEN',
-          message: 'Pack level is outside this workspace.',
-        });
-      return ctx.db.medicinePackMrp.create({ data: input });
-    }),
+  revisePackLevel: catalogueEditProcedure
+    .input(packRevisionInput)
+    .mutation(async ({ ctx, input }) =>
+      proposeCatalogueChange(
+        ctx,
+        'PACK_REVISION',
+        input,
+        (await checkPackRevision(ctx.db, input)).summary
+      )
+    ),
+
+  recordPrintedMrp: catalogueEditProcedure
+    .input(printedMrpInput)
+    .mutation(async ({ ctx, input }) =>
+      proposeCatalogueChange(ctx, 'PRINTED_MRP', input, await checkPrintedMrp(ctx.db, input))
+    ),
 
   deriveLooseUnitPrice: auditedProtectedProcedure
     .input(
@@ -775,38 +981,152 @@ export const pharmacyMedicineRouter = router({
       });
     }),
 
-  addBarcode: protectedProcedure
-    .input(
-      z
-        .object({
-          presentationId: z.string().min(1),
-          packLevelId: z.string().min(1).optional(),
-          type: z.enum(['GTIN', 'MANUFACTURER', 'INTERNAL']),
-          code: z.string().trim().min(1).max(200),
-        })
-        .strict()
-    )
+  addBarcode: catalogueEditProcedure
+    .input(barcodeInput)
     .mutation(async ({ ctx, input }) =>
-      ctx.db.medicineBarcode.create({
-        data: { ...input, normalizedCode: normalizeMedicineText(input.code) },
-      })
+      proposeCatalogueChange(ctx, 'BARCODE', input, await checkBarcode(ctx.db, input))
     ),
 
-  addAlias: protectedProcedure
+  addAlias: catalogueEditProcedure
+    .input(aliasInput)
+    .mutation(async ({ ctx, input }) =>
+      proposeCatalogueChange(ctx, 'ALIAS', input, await checkAlias(ctx.db, input))
+    ),
+
+  /** The catalogue review queue, for catalogue editors and reviewers. */
+  catalogueChanges: protectedProcedure
+    .input(
+      z
+        .object({ status: z.enum(['PENDING', 'APPROVED', 'REJECTED']).default('PENDING') })
+        .strict()
+        .default({ status: 'PENDING' })
+    )
+    .query(async ({ ctx, input }) => {
+      const actor = ctx.session.user;
+      const options = { ip: ctx.requestMeta.ip };
+      const editor = await canProposeCatalogueChange(ctx.db, actor, options);
+      const authority = await catalogueReviewAuthority(ctx.db, actor, options);
+      if (!editor && !authority.reviewer && !authority.soloOwner)
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Viewing catalogue changes needs catalogue edit or review permission.',
+        });
+      const changes = await ctx.db.pharmacyCatalogueChange.findMany({
+        where: { status: input.status },
+        orderBy: { proposedAt: input.status === 'PENDING' ? 'asc' : 'desc' },
+        take: 250,
+      });
+      return {
+        viewer: { id: actor.id, ...authority },
+        changes: changes.map((change) => ({
+          ...change,
+          canDecide:
+            change.status === 'PENDING' &&
+            (change.proposedBy === actor.id
+              ? authority.soloOwner
+              : authority.reviewer || authority.soloOwner),
+        })),
+      };
+    }),
+
+  /**
+   * Approve (publish) or reject one pending catalogue change. Approval needs a
+   * different user with pharmacy:catalogue-review; a solo owner may decide
+   * their own change. The proposer and reviewer are kept on the change and in
+   * the audit log.
+   */
+  decideCatalogueChange: protectedProcedure
     .input(
       z
         .object({
-          medicineId: z.string().min(1),
-          type: z.enum(['BRAND', 'GENERIC', 'URDU', 'TRANSLITERATION', 'LEGACY_CODE']),
-          value: z.string().trim().min(1).max(300),
+          changeId: boundedId,
+          decision: z.enum(['APPROVE', 'REJECT']),
+          note: z.string().trim().min(1).max(500).optional(),
         })
         .strict()
     )
-    .mutation(async ({ ctx, input }) =>
-      ctx.db.medicineAlias.create({
-        data: { ...input, normalizedValue: normalizeMedicineText(input.value) },
-      })
-    ),
+    .mutation(async ({ ctx, input }) => {
+      const actor = ctx.session.user;
+      const options = { ip: ctx.requestMeta.ip };
+      const authority = await assertCatalogueReviewer(ctx.db, actor, options);
+      const decided = await ctx.db.$transaction(async (tx) => {
+        const change = await tx.pharmacyCatalogueChange.findFirst({
+          where: { id: input.changeId },
+        });
+        if (!change)
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Catalogue change not found.' });
+        if (change.status !== 'PENDING')
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: 'This catalogue change has already been reviewed.',
+          });
+        const reviewMode = catalogueReviewModeFor(authority, actor.id, change.proposedBy);
+        const status = input.decision === 'APPROVE' ? 'APPROVED' : 'REJECTED';
+        let publishedRecordId: string | null = null;
+        if (input.decision === 'APPROVE') {
+          try {
+            publishedRecordId = await publishCatalogueChange(tx, change.kind, change.payload);
+          } catch (error) {
+            if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002')
+              throw new TRPCError({
+                code: 'CONFLICT',
+                message: 'The catalogue already holds this entry. Reject this change instead.',
+              });
+            if (error instanceof z.ZodError)
+              throw new TRPCError({
+                code: 'BAD_REQUEST',
+                message: 'This catalogue change can no longer be published. Reject it instead.',
+              });
+            throw error;
+          }
+        }
+        const reviewedAt = new Date();
+        const claimed = await tx.pharmacyCatalogueChange.updateMany({
+          where: { id: change.id, status: 'PENDING' },
+          data: {
+            status,
+            reviewedBy: actor.id,
+            reviewedAt,
+            reviewMode,
+            reviewNote: input.note ?? null,
+            publishedRecordId,
+          },
+        });
+        if (claimed.count !== 1)
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: 'This catalogue change has already been reviewed.',
+          });
+        return {
+          ...change,
+          status,
+          reviewedBy: actor.id,
+          reviewedAt,
+          reviewMode,
+          reviewNote: input.note ?? null,
+          publishedRecordId,
+        };
+      });
+      recordCatalogueAudit(ctx, {
+        action:
+          decided.status === 'APPROVED'
+            ? 'pharmacy.catalogue-change.approve'
+            : 'pharmacy.catalogue-change.reject',
+        targetType: 'PharmacyCatalogueChange',
+        targetId: decided.id,
+        description: `${decided.status === 'APPROVED' ? 'Approved and published' : 'Rejected'} catalogue change: ${decided.summary}`,
+        metadata: {
+          catalogueChangeId: decided.id,
+          kind: decided.kind,
+          status: decided.status,
+          proposedBy: decided.proposedBy,
+          reviewedBy: decided.reviewedBy,
+          reviewMode: decided.reviewMode,
+          publishedRecordId: decided.publishedRecordId,
+        },
+      });
+      return decided;
+    }),
 
   resolveScan: auditedProtectedProcedure
     .input(z.object({ code: z.string().trim().min(1).max(200) }).strict())

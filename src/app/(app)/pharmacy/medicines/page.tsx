@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { StagedMedicineCatalogue } from '@/components/pharmacy/staged-medicine-catalogue';
 
+import { CatalogueChangeReview } from '@/components/pharmacy/catalogue-change-review';
 import { MedicineReferenceWorkbench } from '@/components/pharmacy/medicine-reference-workbench';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
@@ -41,6 +42,7 @@ export default async function MedicineReferencePage({
         </summary>
         <MedicineReferenceWorkbench health={medicineConnectorHealth()} />
       </details>
+      <CatalogueChangeReview />
     </main>
   );
 }

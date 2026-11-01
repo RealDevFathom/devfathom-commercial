@@ -42,6 +42,7 @@ function makeDb() {
     presentation: model(),
     packLevel: model(),
     medicinePackMrp: model(),
+    pharmacyCatalogueChange: model(),
   };
   return Object.assign(db, {
     $transaction: vi.fn(async (fn: (tx: typeof db) => unknown) => fn(db)),
@@ -136,10 +137,12 @@ describe('pharmacy medicine tenant and entitlement boundaries', () => {
         })),
         provenance: Array.from({ length: 20 }, () => assertion),
       })
-    ).resolves.toMatchObject({ id: 'new' });
+    ).resolves.toMatchObject({ id: 'new', kind: 'MEDICINE' });
 
     expect(db.ingredient.findFirst).toHaveBeenCalledTimes(20);
-    expect(db.medicine.create).toHaveBeenCalledOnce();
+    // The medicine is proposed for catalogue review, not created.
+    expect(db.pharmacyCatalogueChange.create).toHaveBeenCalledOnce();
+    expect(db.medicine.create).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -179,13 +182,17 @@ describe('pharmacy medicine tenant and entitlement boundaries', () => {
       })
     ).resolves.toMatchObject({ id: 'new' });
 
-    expect(db.medicine.create).toHaveBeenCalledWith(
+    expect(db.pharmacyCatalogueChange.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
-          provenance: { create: [expect.objectContaining({ assertedValue: value })] },
+          kind: 'MEDICINE',
+          payload: expect.objectContaining({
+            provenance: [expect.objectContaining({ assertedValue: value })],
+          }),
         }),
       })
     );
+    expect(db.medicine.create).not.toHaveBeenCalled();
   });
 
   it.each([
