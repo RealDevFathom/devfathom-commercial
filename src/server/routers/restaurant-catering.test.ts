@@ -372,14 +372,18 @@ describe('restaurant catering lifecycle', () => {
     { portions: '1', unitPrice: '1.999' },
     { portions: '1.2345', unitPrice: '1.99' },
   ])('rejects line decimals beyond their durable database scale', async (decimals) => {
-    await expect(
-      caller().addLine({
-        orderId: 'order_1',
-        recipeId: 'recipe_1',
-        description: 'Precision test',
-        ...decimals,
-      })
-    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    const request = caller().addLine({
+      orderId: 'order_1',
+      recipeId: 'recipe_1',
+      description: 'Precision test',
+      ...decimals,
+    });
+    await expect(request).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(request).rejects.toThrow(
+      decimals.unitPrice
+        ? 'Catering money must have no more than 2 decimal places.'
+        : 'Catering portions must have no more than 3 decimal places.'
+    );
     expect(db.restaurantCateringOrderLine.create).not.toHaveBeenCalled();
   });
 

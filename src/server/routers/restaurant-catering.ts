@@ -11,8 +11,12 @@ import { annotateAudit } from '../audit';
 import { capabilityProcedure, router } from '../trpc';
 
 const id = z.string().trim().min(1).max(200);
-const cateringMoneyInput = z.string().regex(/^\d+(?:\.\d{1,2})?$/);
-const cateringPortionsInput = z.string().regex(/^\d+(?:\.\d{1,3})?$/);
+const cateringMoneyInput = z
+  .string()
+  .regex(/^\d+(?:\.\d{1,2})?$/, 'Catering money must have no more than 2 decimal places.');
+const cateringPortionsInput = z
+  .string()
+  .regex(/^\d+(?:\.\d{1,3})?$/, 'Catering portions must have no more than 3 decimal places.');
 const status = z.enum([
   'DRAFT',
   'QUOTED',
