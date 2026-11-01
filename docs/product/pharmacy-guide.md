@@ -210,17 +210,17 @@ Every staff member has a **role**. A role is a ready-made set of permissions. Th
 
 On top of that, there are ready-made **pharmacy roles** that owners can pick:
 
-| Pharmacy role    | What it includes                                                                       |
-| ---------------- | -------------------------------------------------------------------------------------- |
-| Owner            | All everyday pharmacy permissions and reports, but **not** the three protected jobs    |
-| Owner / Operator | Optional, given on purpose: reports, customer orders, and **all three protected jobs** |
-| Pharmacist       | Dispensing, catalogue review and daily close                                           |
-| Manager          | Pharmacy management, customer orders and buying from suppliers                         |
-| Cashier          | The counter and customer orders                                                        |
-| Procurement      | Buying from suppliers                                                                  |
-| Inventory        | Stock                                                                                  |
-| Finance          | Financial reports                                                                      |
-| Auditor          | Operational reports                                                                    |
+| Pharmacy role    | What it includes                                                                                         |
+| ---------------- | -------------------------------------------------------------------------------------------------------- |
+| Owner            | All everyday pharmacy permissions and reports, but **not** the three protected jobs                      |
+| Owner / Operator | Optional, given on purpose: all everyday pharmacy permissions, reports, and **all three protected jobs** |
+| Pharmacist       | Dispensing, catalogue review and daily close                                                             |
+| Manager          | Pharmacy management, customer orders and buying from suppliers                                           |
+| Cashier          | The counter and customer orders                                                                          |
+| Procurement      | Buying from suppliers                                                                                    |
+| Inventory        | Stock                                                                                                    |
+| Finance          | Financial reports                                                                                        |
+| Auditor          | Operational reports                                                                                      |
 
 These ready-made roles are still provisional and may change.
 
