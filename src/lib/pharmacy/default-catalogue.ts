@@ -54,7 +54,10 @@ import {
  * for pharmacist review; the catalogue never invents a controlled flag. The
  * hold is enforced at publication: such a medicine cannot become saleable until
  * a reviewed `controlled` decision is published with it. Tenants may read and
- * insert provenance but never update or delete it (RLS), so the flag sticks.
+ * insert provenance but never update or delete it (RLS), so the flag sticks,
+ * and every insert must agree with the catalogue item and version it names
+ * (`pharmacy_validate_catalogue_provenance`). A pharmacist completes a copy in
+ * the reference review workbench (see `default-catalogue-review.ts`).
  *
  * NO DUPLICATES OF WHAT A PHARMACY ALREADY HAS. A catalogue item that is a
  * likely duplicate of a medicine the tenant entered by hand (manual entry, the

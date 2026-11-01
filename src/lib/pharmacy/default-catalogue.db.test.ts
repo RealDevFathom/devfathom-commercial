@@ -320,7 +320,9 @@ describeIfDatabase('platform default medicine catalogue', { timeout: 60_000 }, (
     }));
     expect(seenFromA).toEqual({ medicines: 0, bProvenance: 0 });
 
-    // RLS refuses a provenance row written into another tenant.
+    // RLS refuses a provenance row written into another tenant. The row names
+    // a real item of the version with its own flag, so the provenance check
+    // trigger passes it and the refusal is the policy's.
     await expect(
       inOrg(ORG_A, (db) =>
         db.medicineCatalogueProvenance.create({
@@ -330,12 +332,13 @@ describeIfDatabase('platform default medicine catalogue', { timeout: 60_000 }, (
             catalogueKey: KEY,
             catalogueVersion: 1,
             catalogueVersionId: versionOneId,
-            sourceKey: 'catalog-cross-tenant',
+            sourceKey: FIXTURE_ROWS[0]!.sourceKey,
+            controlledCandidate: FIXTURE_ROWS[0]!.controlledCandidate,
             contentDigest: 'x',
           },
         })
       )
-    ).rejects.toThrow();
+    ).rejects.toThrow(/row-level security/i);
   });
 
   it('never overwrites a tenant edit; a new version only adds and reports diffs', async () => {
