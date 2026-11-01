@@ -73,7 +73,7 @@ export default async function PharmacyExpiryBoardPage({
   const moduleEnabled = ctx ? hasModule(ctx.entitlements, 'pharmacy-inventory') : false;
   const header = (
     <PageHeader
-      eyebrow="Pharmacy operations · INV-09"
+      eyebrow="Pharmacy operations"
       heading="Expiry board"
       description="Act on stock before it becomes dead stock: mark it down, send it back, or pull it from sale."
     />
@@ -106,7 +106,8 @@ export default async function PharmacyExpiryBoardPage({
         {header}
         <SectionCard title="Create an active branch first">
           <p className="text-sm text-text-muted">
-            The expiry board is branch-scoped. Finish pharmacy onboarding to create a branch.
+            The expiry board is kept per branch, and this workspace has no active branch yet.
+            Finish pharmacy onboarding to create your first branch.
           </p>
         </SectionCard>
       </main>
@@ -177,7 +178,7 @@ export default async function PharmacyExpiryBoardPage({
         });
         text = result.replayed
           ? 'That quarantine was already recorded — nothing moved twice.'
-          : `Quarantined ${result.held.quantityUnits} units — the ledger now holds them out of sale.`;
+          : `Quarantined ${result.held.quantityUnits} units. They are now held out of sale.`;
       } else throw new Error('Choose a supported expiry action.');
       destination = url(params, { text, kind: 'success' });
     } catch (error) {
@@ -201,7 +202,7 @@ export default async function PharmacyExpiryBoardPage({
           {query.notice}
         </div>
       ) : null}
-      <SectionCard className="print:hidden" eyebrow="Branch-scoped" title="Board filters">
+      <SectionCard className="print:hidden" title="Board filters">
         <form className="flex flex-wrap items-end gap-3" method="get">
           {view === 'print' ? <input name="view" type="hidden" value="print" /> : null}
           <label className="min-w-64 flex-1 text-sm text-text-body">

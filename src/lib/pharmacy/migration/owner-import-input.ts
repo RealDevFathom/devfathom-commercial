@@ -8,9 +8,9 @@ export const IMPORT_FIELDS = [
   ['batch', 'Manufacturing batch', true],
   ['expiry', 'Expiry (YYYY-MM or YYYY-MM-DD)', true],
   ['mrp', 'Printed MRP per pack (PKR)', true],
-  ['cost', 'Cost per base unit (PKR)', true],
-  ['expected', 'Exported base units', true],
-  ['counted', 'Physically counted base units', true],
+  ['cost', 'Cost per single unit, e.g. one tablet (PKR)', true],
+  ['expected', 'Single units in your old system', true],
+  ['counted', 'Single units counted on the shelf', true],
   ['varianceNote', 'Variance explanation', false],
 ] as const;
 export type ImportField = (typeof IMPORT_FIELDS)[number][0];
@@ -39,16 +39,16 @@ export const ownerImportInput = ownerUploadInput.extend({
 }).strict();
 export type OwnerImportInput = z.infer<typeof ownerImportInput>;
 
-export const OPENING_TEMPLATE = 'Source reference,Pack barcode or pack ID,Manufacturing batch,Expiry,MRP,Cost,Exported base units,Physically counted base units,Variance explanation\n';
+export const OPENING_TEMPLATE = 'Source reference,Pack barcode or pack ID,Manufacturing batch,Expiry,MRP,Cost,Single units in old system,Single units counted on shelf,Variance explanation\n';
 
 export function suggestImportMapping(headers: readonly string[]): ImportMapping {
   const synonyms: Record<ImportField, string[]> = {
     sourceRef: ['sourcereference', 'sourceref', 'id', 'code'],
     pack: ['packbarcodeorpackid', 'barcode', 'packid', 'packlevelid'],
     batch: ['manufacturingbatch', 'batch', 'batchnumber', 'batchno'],
-    expiry: ['expiry', 'expirydate'], mrp: ['mrp', 'printedmrp'], cost: ['cost', 'unitcost'],
-    expected: ['exportedbaseunits', 'expected', 'exported', 'qty'],
-    counted: ['physicallycountedbaseunits', 'counted', 'physicalcount'],
+    expiry: ['expiry', 'expirydate'], mrp: ['mrp', 'printedmrp'], cost: ['cost', 'unitcost', 'costpersingleunit', 'costpersingleunitpkr'],
+    expected: ['singleunitsinoldsystem', 'singleunitsinyouroldsystem', 'exportedbaseunits', 'expected', 'exported', 'qty'],
+    counted: ['singleunitscountedonshelf', 'singleunitscountedontheshelf', 'physicallycountedbaseunits', 'counted', 'physicalcount'],
     varianceNote: ['varianceexplanation', 'variancenote'],
   };
   const mapping: ImportMapping = {};

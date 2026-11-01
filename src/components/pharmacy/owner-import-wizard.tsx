@@ -43,7 +43,7 @@ export function OwnerImportWizard() {
     setSource(null); setSheet(null); setMapping({}); clearPreview();
     if (!file) return;
     if (!/\.(csv|xlsx)$/i.test(file.name) || file.size === 0 || file.size > IMPORT_MAX_BYTES) {
-      setError('Choose a nonempty CSV or XLSX file up to 1 MiB.'); return;
+      setError('Choose a CSV or XLSX file that is not empty and is 1 MB or smaller.'); return;
     }
     setReading(true);
     try {
@@ -60,31 +60,37 @@ export function OwnerImportWizard() {
   return (
     <main className="min-w-0 space-y-6">
       <PageHeader eyebrow="Pharmacy inventory · Owner setup" heading="Import opening stock"
-        description="Upload your handover, map its columns, and review the physical opening position before posting."
+        description="Upload the stock list from your old system, match its columns, and check the counts before saving."
         actions={<Link href="/pharmacy/inventory" className={buttonVariants({ variant: 'secondary' })}>Back to Inventory</Link>} />
       {options.isPending ? <SectionCard title="Loading import access" titleLevel={2}><p role="status">Loading your branches and stock locations…</p></SectionCard> :
         options.error ? <SectionCard title={denied ? 'Owner access required' : 'Could not load import setup'} titleLevel={2}>
           <p role="alert" className="text-sm text-text-muted">{denied ? 'A workspace administrator with Pharmacy Inventory enabled must import opening stock.' : 'Your setup could not be loaded. Try again.'}</p>
           {!denied && <Button variant="secondary" className="mt-4" onClick={() => void options.refetch()}>Retry setup</Button>}
-        </SectionCard> : receipt ? <SectionCard title="Opening stock committed" titleLevel={2}>
+        </SectionCard> : receipt ? <SectionCard title="Opening stock saved" titleLevel={2}>
           <div role="status" className="space-y-3 text-sm text-text-body">
-            <StatusPill status="success" label={receipt.replayed ? 'Already committed · receipt recovered' : 'Committed'} />
-            <p>{receipt.totalUnits} base units posted · Opening valuation {money(receipt.totalValueMinor)}.</p>
+            <StatusPill status="success" label={receipt.replayed ? 'Already saved · receipt recovered' : 'Saved'} />
+            <p>{receipt.totalUnits} single units added (e.g. tablets) · Opening stock value {money(receipt.totalValueMinor)}.</p>
             <p className="break-all font-mono text-xs">Session: {receipt.sessionId}</p>
-            <p>The counted quantities are now in inventory. Variance explanations were recorded with each row; independent sign-off of this opening session is not yet available in this screen.</p>
+            <p>Your counted quantities are now in inventory. The reason you gave for each count difference was saved with its row. A second-person sign-off for this import is not available on this screen yet.</p>
           </div>
           <Link href="/pharmacy/inventory" className={buttonVariants({ className: 'mt-5' })}>View inventory</Link>
         </SectionCard> : !options.data?.branches.length || !options.data.locations.length ?
           <SectionCard title="Set up a branch and stock location first" titleLevel={2}>
-            <p className="text-sm text-text-muted">Opening stock needs an active branch and an active stock location. Complete these in Pharmacy setup and Inventory, then return here.</p>
+            <p className="text-sm text-text-muted">No active branch or stock location yet. Create a branch in Pharmacy setup and a stock location in Inventory, then come back to import.</p>
             <Link href="/pharmacy" className={buttonVariants({ variant: 'secondary', className: 'mt-4' })}>Pharmacy setup</Link>
           </SectionCard> : <>
           <nav aria-label="Import progress"><ol className="flex flex-wrap gap-3 text-sm text-text-muted">
-            {['Upload', 'Map columns', 'Review and commit'].map((step, index) => <li key={step} aria-current={index === (preview ? 2 : sheet ? 1 : 0) ? 'step' : undefined} className={index === (preview ? 2 : sheet ? 1 : 0) ? 'font-semibold text-text-strong' : ''}>{index + 1}. {step}</li>)}
+            {['Upload', 'Match columns', 'Review and save'].map((step, index) => <li key={step} aria-current={index === (preview ? 2 : sheet ? 1 : 0) ? 'step' : undefined} className={index === (preview ? 2 : sheet ? 1 : 0) ? 'font-semibold text-text-strong' : ''}>{index + 1}. {step}</li>)}
           </ol></nav>
           {error && <div role="alert" id="import-error" className="rounded-sm border border-destructive p-4 text-sm text-destructive">{error}</div>}
-          <SectionCard title="1. Upload the opening count" titleLevel={2}>
-            <p className="mb-4 text-sm text-text-muted">Complete opening imports before sales or receiving begin. Publish your medicines and configure their packs first. Counts and costs use individual base units; printed MRP is per selected pack. Physical counts are entered separately from the old system’s quantities. Large handovers may use several files with distinct medicine/batch/pack rows.</p>
+          <SectionCard title="1. Upload your stock list" titleLevel={2}>
+            <ul className="mb-4 list-disc space-y-1 pl-5 text-sm text-text-muted">
+              <li>Import before you start selling or receiving deliveries.</li>
+              <li>Add your medicines and their pack sizes first.</li>
+              <li>Enter quantities and costs in single units, e.g. tablets. Enter MRP per pack.</li>
+              <li>The file has two quantity columns: what your old system shows, and what you counted on the shelf.</li>
+              <li>A long list can be split across several files. Put each medicine, batch and pack in only one file.</li>
+            </ul>
             <div className="mb-5 flex flex-wrap gap-3">
               <a href={`data:text/csv;charset=utf-8,${encodeURIComponent(OPENING_TEMPLATE)}`} download="pharmacy-opening-stock.csv" className={buttonVariants({ variant: 'secondary' })}>Download CSV template</a>
               <Link href="/pharmacy/medicines" className={buttonVariants({ variant: 'ghost' })}>Medicine catalogue and packs</Link>
@@ -108,11 +114,11 @@ export function OwnerImportWizard() {
                 }} />
               </label>
             </div>
-            <p id="upload-help" className="mt-3 text-sm text-text-muted">Up to 1 MiB, {IMPORT_MAX_ROWS} stock rows and 40 columns. XLSX: one populated worksheet with plain values. Preserve barcode leading zeroes using text cells. CSV: UTF-8, comma separated.</p>
-            {busy && <p role="status" className="mt-3 text-sm text-text-muted">{commit.isPending ? 'Posting stock and valuation…' : dryRun.isPending ? 'Checking the dry-run diff…' : 'Reading and checking your upload…'}</p>}
+            <p id="upload-help" className="mt-3 text-sm text-text-muted">Up to 1 MB, {IMPORT_MAX_ROWS} stock rows and 40 columns. Excel (XLSX): use one sheet with plain values, and format barcodes as text so leading zeros are kept. CSV: save as UTF-8 with commas.</p>
+            {busy && <p role="status" className="mt-3 text-sm text-text-muted">{commit.isPending ? 'Saving opening stock…' : dryRun.isPending ? 'Preparing your preview…' : 'Reading and checking your file…'}</p>}
           </SectionCard>
-          {sheet && source && <SectionCard title="2. Map your columns" titleLevel={2}>
-            <p className="mb-5 break-words text-sm text-text-muted">{source.fileName} · {sheet.rowCount} stock rows. Review every suggested mapping. Unmapped extra columns do not affect stock.</p>
+          {sheet && source && <SectionCard title="2. Match your columns" titleLevel={2}>
+            <p className="mb-5 break-words text-sm text-text-muted">{source.fileName} · {sheet.rowCount} stock rows. Check each suggested match. Columns you leave unmatched are ignored.</p>
             <div className="grid min-w-0 gap-4 md:grid-cols-2 xl:grid-cols-3">
               {IMPORT_FIELDS.map(([field, label, required]) => <label key={field} className="min-w-0 space-y-2 text-sm text-text-body"><span id={`import-label-${field}`}>{label}{required ? ' *' : ' (optional)'}</span>
                 <select aria-labelledby={`import-label-${field}`} className={control} value={mapping[field] ?? ''} disabled={busy} onChange={(event) => { setMapping({ ...mapping, [field]: event.target.value === '' ? undefined : Number(event.target.value) }); clearPreview(); }}>
@@ -121,45 +127,45 @@ export function OwnerImportWizard() {
                 {mapping[field] !== undefined && <span className="block break-words text-xs text-text-muted">Sample: {sheet.sample[0]?.[mapping[field]!] || '(empty)'}</span>}
               </label>)}
             </div>
-            <p className="mt-4 text-sm text-text-muted">* Required. Use plain numbers without currency symbols or thousands separators. PKR amounts allow up to two decimal places. Exported and counted units must be whole numbers, including an explicit 0. Explain every count difference.</p>
+            <p className="mt-4 text-sm text-text-muted">* Required. Use plain numbers with no currency symbol or commas. PKR amounts can have up to two decimal places. Quantities must be whole numbers; write 0 rather than leaving a cell blank. Give a reason wherever your count differs from your old system.</p>
             <Button className="mt-5 min-h-11" disabled={busy || !branchId || !stockLocationId || IMPORT_FIELDS.some(([field, , required]) => required && mapping[field] === undefined)} onClick={async () => {
               clearPreview();
               try { setPreview(await dryRun.mutateAsync({ ...source, branchId, stockLocationId, mapping })); }
-              catch (failure) { setError(failure instanceof Error ? failure.message : 'Dry run failed. Your stock has not changed.'); }
-            }}>Run dry-run diff</Button>
+              catch (failure) { setError(failure instanceof Error ? failure.message : 'The preview could not be prepared. Your stock has not changed.'); }
+            }}>Preview changes</Button>
           </SectionCard>}
-          {preview && source && <SectionCard title="3. Review the opening-stock diff" titleLevel={2}>
+          {preview && source && <SectionCard title="3. Review and save" titleLevel={2}>
             <div role="status" className="mb-4 space-y-2 text-sm text-text-body">
-              <StatusPill status={preview.canCommit ? 'success' : 'blocked'} label={preview.canCommit ? 'Ready for review' : 'Commit blocked'} />
-              <p>{preview.lines.length} rows · {preview.totalUnits} counted base units · {money(preview.totalValueMinor)} opening valuation.</p>
-              <p>No inventory has changed during this dry run. Each valid row adds its physical count as a new opening lot. The export is comparison evidence. Previously imported lots cannot be imported again.</p>
+              <StatusPill status={preview.canCommit ? 'success' : 'blocked'} label={preview.canCommit ? 'Ready to save' : 'Fix errors before saving'} />
+              <p>{preview.lines.length} rows · {preview.totalUnits} counted single units · {money(preview.totalValueMinor)} opening stock value.</p>
+              <p>Nothing has been saved yet. Each valid row adds the quantity you counted as a new batch. Your old system’s quantity is shown only for comparison. A batch that was already imported cannot be imported again.</p>
             </div>
             {preview.blockers.length > 0 && <ul className="mb-4 list-disc space-y-2 pl-5 text-sm text-destructive">{preview.blockers.map((blocker) => <li key={blocker}>{blocker}</li>)}</ul>}
-            <Table><caption className="sr-only">Opening stock rows, count differences, and blocking validation errors</caption>
+            <Table><caption className="sr-only">Opening stock rows, count differences, and errors to fix</caption>
               <TableHeader><TableRow>
-                <TableHead>Row / source</TableHead><TableHead>Medicine / pack / batch</TableHead><TableHead>Expiry</TableHead><TableHead numeric>Current</TableHead><TableHead numeric>Exported</TableHead><TableHead numeric>Counted / added</TableHead><TableHead numeric>Proposed total</TableHead><TableHead numeric>Variance</TableHead><TableHead>Validation</TableHead>
+                <TableHead>Row / source</TableHead><TableHead>Medicine / pack / batch</TableHead><TableHead>Expiry</TableHead><TableHead numeric>In stock now</TableHead><TableHead numeric>Old system</TableHead><TableHead numeric>Counted / added</TableHead><TableHead numeric>New total</TableHead><TableHead numeric>Difference</TableHead><TableHead>Check</TableHead>
               </TableRow></TableHeader>
               <TableBody>{preview.lines.map((line) => <TableRow key={line.rowNumber}>
                 <TableCell className="max-w-48 whitespace-normal break-words">{line.rowNumber} · {line.sourceRef || 'Missing reference'}</TableCell>
-                <TableCell className="min-w-48 max-w-72 whitespace-normal break-words">{line.medicineName || 'Unmatched medicine'}<br />{line.packReference} · {line.batchNumber}<br />{line.unitsPerPack === null ? 'Unknown conversion' : `${line.unitsPerPack} base units per pack`}</TableCell>
+                <TableCell className="min-w-48 max-w-72 whitespace-normal break-words">{line.medicineName || 'Unmatched medicine'}<br />{line.packReference} · {line.batchNumber}<br />{line.unitsPerPack === null ? 'Unknown conversion' : `${line.unitsPerPack} single units per pack`}</TableCell>
                 <TableCell>{line.expiryDate ? new Date(line.expiryDate).toISOString().slice(0, line.expiryPrecision === 'MONTH' ? 7 : 10) : 'Missing'}</TableCell>
                 <TableCell numeric>{line.currentUnits}</TableCell><TableCell numeric>{line.expectedUnits ?? 'Invalid'}</TableCell><TableCell numeric>{line.countedUnits ?? 'Invalid'}</TableCell><TableCell numeric>{line.proposedUnits ?? 'Unknown'}</TableCell><TableCell numeric>{line.varianceUnits ?? 'Unknown'}</TableCell>
                 <TableCell className="min-w-64 max-w-96 whitespace-normal">
-                  {line.errors.length ? <ul className="list-disc space-y-1 pl-4 text-destructive">{line.errors.map((message) => <li key={message}>{message}</li>)}</ul> : <><StatusPill status="success" label="Ready" /><p className="mt-2 text-xs">MRP {money(String(line.printedMrpMinor))} per pack · Cost {money(String(line.unitCostMinor))} per base unit</p></>}
-                  {line.varianceNote && <p className="mt-2 break-words text-xs text-text-muted">Variance note: {line.varianceNote}</p>}
+                  {line.errors.length ? <ul className="list-disc space-y-1 pl-4 text-destructive">{line.errors.map((message) => <li key={message}>{message}</li>)}</ul> : <><StatusPill status="success" label="Ready" /><p className="mt-2 text-xs">MRP {money(String(line.printedMrpMinor))} per pack · Cost {money(String(line.unitCostMinor))} per single unit</p></>}
+                  {line.varianceNote && <p className="mt-2 break-words text-xs text-text-muted">Reason for difference: {line.varianceNote}</p>}
                 </TableCell>
               </TableRow>)}</TableBody>
             </Table>
             <label className="mt-5 flex min-h-11 items-start gap-3 text-sm text-text-body">
               <input type="checkbox" className="mt-1 size-5 shrink-0 accent-primary focus-visible:outline-2 focus-visible:outline-ring" checked={confirmed} disabled={busy || !preview.canCommit} onChange={(event) => setConfirmed(event.target.checked)} />
-              <span>I verified the physical counts, unit costs, printed pack MRPs, pack conversions, batches, expiry dates and destination. Commit all rows as opening stock and record their valuation.</span>
+              <span>I checked the counted quantities, unit costs, pack MRPs, units per pack, batches, expiry dates and stock location. Save all rows as opening stock with their value.</span>
             </label>
             <Button className="mt-4 min-h-11" disabled={busy || !preview.canCommit || !confirmed} onClick={async () => {
               setError('');
               try { setReceipt(await commit.mutateAsync({ ...source, branchId, stockLocationId, mapping, previewHash: preview.previewHash, confirmed: true })); }
-              catch (failure) { setError(failure instanceof Error ? failure.message : 'Commit failed. Retry to recover its receipt safely.'); }
-            }}>{commit.isPending ? 'Committing opening stock…' : 'Commit opening stock'}</Button>
-            <p className="mt-3 text-sm text-text-muted">This posts the entire reviewed file once. A retry recovers the same receipt. Every count difference must carry a variance explanation; independent sign-off is not performed by this import.</p>
+              catch (failure) { setError(failure instanceof Error ? failure.message : 'Saving failed. Try again; your stock will not be added twice.'); }
+            }}>{commit.isPending ? 'Saving opening stock…' : 'Save opening stock'}</Button>
+            <p className="mt-3 text-sm text-text-muted">The whole file is saved once. If you try again, nothing is added twice. Every count difference needs a reason. This import does not ask a second person to sign off.</p>
           </SectionCard>}
         </>}
     </main>

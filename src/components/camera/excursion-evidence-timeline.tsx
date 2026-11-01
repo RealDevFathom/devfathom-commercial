@@ -22,7 +22,7 @@ export function ExcursionEvidenceTimeline({
   zoneNames: ReadonlyMap<string, string>;
 }) {
   if (entries.length === 0) {
-    return <p className="text-sm text-text-muted">No excursion has requested a camera still.</p>;
+    return <p className="text-sm text-text-muted">No out-of-range temperature readings with camera snapshots yet.</p>;
   }
   return (
     <ol aria-label="Excursion evidence" className="space-y-3">

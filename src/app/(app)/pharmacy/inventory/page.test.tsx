@@ -119,7 +119,7 @@ describe('Quarantine resolution forms', () => {
       ]);
       await show();
       const form = screen.getByRole('button', { name: 'Record write-off' }).closest('form')!;
-      expect(within(form).getByRole('combobox', { name: 'Lot' })).toHaveValue(
+      expect(within(form).getByRole('combobox', { name: 'Batch' })).toHaveValue(
         `${lot.id}:${location.id}:${disposition}`
       );
       fireEvent.change(within(form).getByLabelText('Units'), { target: { value: '10' } });
@@ -258,7 +258,7 @@ describe('Inventory pack-action integration', () => {
     ]);
     await show();
     expect(mocks.form).not.toHaveBeenCalled();
-    expect(screen.getByText(/No available lots yet/)).toBeVisible();
+    expect(screen.getByText(/No batches in stock yet/)).toBeVisible();
   });
 
   it('keeps an unreceived lot disabled', async () => {

@@ -103,7 +103,7 @@ export default async function PharmacyInventoryPage({
         <PageHeader
           eyebrow="Pharmacy operations"
           heading="Inventory"
-          description="Lots, counts, transfers, recalls, and ranked stock actions."
+          description="Batches by expiry, stock counts, transfers, recalls and stock alerts."
         />
         <SectionCard title={moduleEnabled ? 'Permission required' : 'Inventory module unavailable'}>
           <p className="text-sm text-text-muted">
@@ -137,12 +137,12 @@ export default async function PharmacyInventoryPage({
         <PageHeader
           eyebrow="Pharmacy operations"
           heading="Inventory"
-          description="Lots, counts, transfers, recalls, and ranked stock actions."
+          description="Batches by expiry, stock counts, transfers, recalls and stock alerts."
         />
         <SectionCard title="Create an active branch first">
           <p className="text-sm text-text-muted">
-            Inventory is branch-scoped. Finish pharmacy onboarding to create the first branch and
-            its default stock location.
+            Inventory is kept per branch, and this workspace has no active branch yet. Finish
+            pharmacy onboarding to create your first branch and its stock location.
           </p>
           <Link
             className={buttonVariants({ className: 'mt-4', variant: 'secondary' })}
@@ -411,9 +411,9 @@ export default async function PharmacyInventoryPage({
   return (
     <main className="min-w-0 space-y-6">
       <PageHeader
-        eyebrow="Pharmacy operations · INV-01—09 / PUR-07"
+        eyebrow="Pharmacy operations"
         heading="Inventory"
-        description="FEFO lots, controlled stock movements, chain operations, and the ranked work queue."
+        description="Batches by expiry, stock counts, write-offs, transfers between branches and the stock alerts to act on first."
         actions={
           <>
             <Link
@@ -426,7 +426,7 @@ export default async function PharmacyInventoryPage({
               href="/pharmacy/inventory/imports"
               className={buttonVariants({ variant: 'secondary' })}
             >
-              Imported stock / Awaiting verification
+              Check imported stock
             </Link>
           </>
         }
@@ -439,7 +439,7 @@ export default async function PharmacyInventoryPage({
           {query.notice}
         </div>
       ) : null}
-      <SectionCard title="Working branch" eyebrow="Organization-scoped">
+      <SectionCard title="Working branch">
         <form className="flex flex-wrap items-end gap-3" method="get">
           <label className="min-w-64 flex-1 text-sm text-text-body">
             Branch
@@ -457,24 +457,25 @@ export default async function PharmacyInventoryPage({
         </form>
       </SectionCard>
       <section aria-label="Inventory summary" className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <Stat label="Available units" value={totalUnits.toLocaleString()} sub="Ledger projection" />
+        <Stat label="Available units" value={totalUnits.toLocaleString()} sub="On hand now" />
         <Stat
           label="Held units"
           value={heldUnits.toLocaleString()}
-          sub="Quarantine, damage, transit"
+          sub="Quarantine, damage, in transit"
         />
         <Stat
           label="Counts awaiting approval"
           value={counts.filter((c) => c.status === 'AWAITING_COAUTH').length}
-          sub="Distinct co-author required"
+          sub="Needs a second person to approve"
         />
-        <Stat label="Open stock actions" value={signals.length} sub="Ranked by due time" />
+        <Stat label="Open stock actions" value={signals.length} sub="Most urgent first" />
       </section>
 
-      <SectionCard title="Lots and FEFO board" eyebrow="INV-01—04">
+      <SectionCard title="Batches by expiry" eyebrow="Earliest expiry sells first">
         {available.length === 0 ? (
           <Empty>
-            No available lots yet. Set up a medicine and its pack, then receive a supplier delivery.
+            No batches in stock yet. Set up a medicine and its pack, then receive a supplier
+            delivery to see its batches here.
             <span className="mt-3 flex flex-wrap gap-3">
               <Link href="/pharmacy/medicines" className={buttonVariants({ variant: 'outline' })}>
                 Set up medicines and packs
@@ -483,7 +484,7 @@ export default async function PharmacyInventoryPage({
                 href="/pharmacy/purchasing/receiving"
                 className={buttonVariants({ variant: 'outline' })}
               >
-                Receive opening stock
+                Receive a delivery
               </Link>
               <Link href="/pharmacy" className={buttonVariants({ variant: 'ghost' })}>
                 Pharmacy setup
@@ -500,12 +501,12 @@ export default async function PharmacyInventoryPage({
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>FEFO</TableHead>
+                  <TableHead>Sell order</TableHead>
                   <TableHead>Medicine / batch</TableHead>
                   <TableHead>Expiry</TableHead>
                   <TableHead>Location</TableHead>
-                  <TableHead>Disposition</TableHead>
-                  <TableHead className="text-right">Physical arrangement</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead className="text-right">On hand</TableHead>
                   <TableHead className="text-right">Pack action</TableHead>
                 </TableRow>
               </TableHeader>
@@ -572,7 +573,7 @@ export default async function PharmacyInventoryPage({
       </SectionCard>
 
       <div className="grid gap-6 xl:grid-cols-2">
-        <SectionCard title="Locations" eyebrow="INV-05">
+        <SectionCard title="Locations">
           {outOfRangeLogs.length > 0 ? (
             <div
               className="mb-4 rounded-[var(--radius-sm)] border border-destructive bg-destructive-background p-3 text-sm text-destructive-foreground"
@@ -676,7 +677,10 @@ export default async function PharmacyInventoryPage({
                 </Button>
               </form>
             ) : (
-              <Empty>Create a validated cold-chain zone before recording temperatures.</Empty>
+              <Empty>
+                No fridge or cold-chain location yet. Create a location with “Validated cold-chain
+                zone” ticked to record its temperatures here.
+              </Empty>
             )}
             <div className="mt-4 space-y-2">
               {temperatureLogs.map((log) => (
@@ -709,13 +713,13 @@ export default async function PharmacyInventoryPage({
             </div>
           </div>
         </SectionCard>
-        <SectionCard title="Physical count" eyebrow="INV-06 · frozen snapshot">
+        <SectionCard title="Physical count">
           {available.length && locations.length ? (
             <form action={perform} className="grid gap-3 sm:grid-cols-2">
               <input name="action" type="hidden" value="create-count" />
               <input name="branchId" type="hidden" value={branch.id} />
               <label className="text-sm sm:col-span-2">
-                Lot and location
+                Batch and location
                 <select className={inputClass} name="position">
                   {available.map(({ lot, balance }) => (
                     <option
@@ -729,7 +733,7 @@ export default async function PharmacyInventoryPage({
                 </select>
               </label>
               <label className="text-sm">
-                Variance threshold
+                Allowed difference (units)
                 <Input
                   className="mt-1"
                   defaultValue="0"
@@ -748,11 +752,25 @@ export default async function PharmacyInventoryPage({
                 <Input className="mt-1" min="0" name="loose" required type="number" />
               </label>
               <Button className="sm:col-span-2" type="submit">
-                Freeze count scope
+                Start count
               </Button>
             </form>
           ) : (
-            <Empty>Receive stock and create a location before starting a count.</Empty>
+            <Empty>
+              {locations.length === 0
+                ? 'No stock locations yet. Create a location, then receive stock into it to start a count.'
+                : `No stock to count yet in your ${locations.length} location${locations.length === 1 ? '' : 's'} (${locations.map((item) => item.name).join(', ')}). Receive stock into a location, then start a count here.`}
+              {locations.length > 0 ? (
+                <span className="mt-3 flex flex-wrap gap-3">
+                  <Link
+                    href="/pharmacy/purchasing/receiving"
+                    className={buttonVariants({ variant: 'outline' })}
+                  >
+                    Receive a delivery
+                  </Link>
+                </span>
+              ) : null}
+            </Empty>
           )}
           <div className="mt-5 space-y-2">
             {counts.map((count) => (
@@ -763,7 +781,8 @@ export default async function PharmacyInventoryPage({
                 <div>
                   <StatusPill status={label(count.status)} tone={tone(count.status)} />
                   <p className="mt-1 text-xs text-text-muted">
-                    {count.lines.length} frozen line · {when(count.createdAt)} · variance{' '}
+                    {count.lines.length} counted line{count.lines.length === 1 ? '' : 's'} ·{' '}
+                    {when(count.createdAt)} · difference{' '}
                     {count.lines.reduce((sum, line) => sum + Math.abs(line.varianceUnits ?? 0), 0)}{' '}
                     units
                   </p>
@@ -775,7 +794,7 @@ export default async function PharmacyInventoryPage({
                     <input name="countId" type="hidden" value={count.id} />
                     <Submit>
                       {count.status === 'AWAITING_COAUTH'
-                        ? 'Co-authorize variance'
+                        ? 'Approve difference (second person)'
                         : 'Approve count'}
                     </Submit>
                   </form>
@@ -786,13 +805,13 @@ export default async function PharmacyInventoryPage({
         </SectionCard>
       </div>
 
-      <SectionCard title="Adjustments and write-off custody" eyebrow="INV-06">
+      <SectionCard title="Write-offs and held stock">
         {writeOffPositions.length && users.length ? (
           <form action={perform} className="grid gap-3 md:grid-cols-3">
             <input name="action" type="hidden" value="write-off" />
             <input name="branchId" type="hidden" value={branch.id} />
             <label className="text-sm md:col-span-2">
-              Lot
+              Batch
               <select className={inputClass} name="position">
                 {writeOffPositions.map(({ lot, balance }) => (
                   <option
@@ -810,7 +829,7 @@ export default async function PharmacyInventoryPage({
               <Input className="mt-1" min="1" name="units" required type="number" />
             </label>
             <label className="text-sm">
-              Co-authorizing witness
+              Witness (a second person)
               <select className={inputClass} name="witnessId">
                 {users.map((user) => (
                   <option key={user.id} value={user.id}>
@@ -838,8 +857,9 @@ export default async function PharmacyInventoryPage({
           </form>
         ) : (
           <Empty>
-            A write-off needs available or quarantined stock and a different active organization
-            member as witness.
+            {writeOffPositions.length
+              ? 'A write-off needs a second team member as witness. Invite a colleague, then record the write-off here.'
+              : 'No stock to write off yet. Stock you receive or hold in quarantine can be written off here, with a second team member as witness.'}
           </Empty>
         )}
         {releasableQuarantined.length ? (
@@ -872,16 +892,13 @@ export default async function PharmacyInventoryPage({
               Release manual hold
             </Button>
             <p className="text-xs text-text-muted md:col-span-3">
-              Regulatory recall units remain reserved for the safety-authorized recall reversal.
+              Units held for a regulatory recall stay held until the recall is reversed.
             </p>
           </form>
         ) : null}
       </SectionCard>
 
-      <SectionCard
-        title="Inter-branch transfers"
-        eyebrow="INV-07 · allocate → approve → dispatch → receive"
-      >
+      <SectionCard title="Transfers between branches" eyebrow="Allocate, approve, send, receive">
         {available.length && destinationLocations.length ? (
           <form action={perform} className="grid gap-3 md:grid-cols-3">
             <input name="action" type="hidden" value="allocate-transfer" />
@@ -920,8 +937,9 @@ export default async function PharmacyInventoryPage({
           </form>
         ) : (
           <Empty>
-            Transfers need available stock and a second active branch. Add the branch and its
-            receiving location in onboarding.
+            {destinationLocations.length
+              ? 'No stock to send yet. Receive stock at this branch, then allocate a transfer here.'
+              : 'Transfers need a second branch with its own stock location. Add the branch and its location in onboarding.'}
           </Empty>
         )}
         <div className="mt-5 space-y-2">
@@ -980,7 +998,7 @@ export default async function PharmacyInventoryPage({
       </SectionCard>
 
       <div className="grid gap-6 xl:grid-cols-2">
-        <SectionCard title="Recalls and quarantine" eyebrow="INV-08">
+        <SectionCard title="Recalls and quarantine">
           {lots.length ? (
             <form action={perform} className="grid gap-3 sm:grid-cols-2">
               <input name="action" type="hidden" value="create-recall" />
@@ -1008,7 +1026,7 @@ export default async function PharmacyInventoryPage({
               </Button>
             </form>
           ) : (
-            <Empty>A received manufacturing batch is required before a recall can be issued.</Empty>
+            <Empty>No batches received yet. Receive stock first; then you can recall a batch here.</Empty>
           )}
           <div className="mt-5 space-y-2">
             {recalls.map((recall) => {
@@ -1055,7 +1073,6 @@ export default async function PharmacyInventoryPage({
         </SectionCard>
         <SectionCard
           title="Near-expiry and return windows"
-          eyebrow="INV-09"
           actions={
             <Link
               className={buttonVariants({ size: 'sm', variant: 'secondary' })}
@@ -1089,10 +1106,10 @@ export default async function PharmacyInventoryPage({
         </SectionCard>
       </div>
 
-      <SectionCard title="Stock action centre" eyebrow="PUR-07 · ranked by due time">
+      <SectionCard title="Stock action centre" eyebrow="Most urgent first">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <p className="text-sm text-text-muted">
-            Signals explain their evidence window and never create an order or movement.
+            Each alert shows the data behind it. Alerts never order or move stock on their own.
           </p>
           <form action={perform}>
             <input name="action" type="hidden" value="refresh-signals" />
@@ -1102,8 +1119,8 @@ export default async function PharmacyInventoryPage({
         </div>
         {signals.length === 0 ? (
           <Empty>
-            No actionable stock signals. Refresh after receiving stock, approving safety levels, or
-            recording demand.
+            No stock alerts right now. Select Refresh signals after you receive stock, set safety
+            stock levels or record sales.
           </Empty>
         ) : (
           <div className="space-y-3">

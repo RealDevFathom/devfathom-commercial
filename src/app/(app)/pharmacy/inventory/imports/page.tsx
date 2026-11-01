@@ -31,9 +31,9 @@ export default async function ImportedStockPage({
   return (
     <main className="min-w-0 space-y-6">
       <PageHeader
-        eyebrow="Pharmacy inventory · Awaiting verification"
-        heading="Imported stock"
-        description="Original medicine stock references retained from completed imports."
+        eyebrow="Pharmacy inventory"
+        heading="Check imported stock"
+        description="Stock lines brought in from your old system, kept as they were so you can check them."
         actions={
           <Link href="/pharmacy/inventory" className={buttonVariants({ variant: 'secondary' })}>
             Back to Inventory
@@ -51,9 +51,9 @@ export default async function ImportedStockPage({
         <>
           <SectionCard title="Awaiting verification" titleLevel={2}>
             <p className="text-sm text-text-body">
-              These quantities are imported references pending batch, expiry, and physical count
-              verification. They are not available-to-sell balances. Pack meanings and conversions
-              also need verification; no quantities here are multiplied or rounded into units.
+              These quantities come straight from your old system and cannot be sold yet. Check
+              each line’s batch, expiry date and shelf count, and what its pack size means. The
+              numbers are shown exactly as imported, without converting packs into units.
             </p>
             <section aria-label="Imported row totals" className="mt-5 grid gap-5 sm:grid-cols-2">
               <Stat
@@ -64,16 +64,16 @@ export default async function ImportedStockPage({
               <Stat
                 label="Rows with reported stock"
                 value={data.reportedStockRows.toLocaleString('en-US')}
-                sub="Original QTY is a valid positive decimal; all imports"
+                sub="Lines whose original quantity is above zero"
               />
             </section>
             <p className="mt-4 text-sm text-text-muted">
-              Totals count source rows, not distinct medicines or verified sellable units. Search
-              filters the list below. Posted stock balances remain on Inventory. Blank or invalid
-              source counts appear as Unknown; valid decimals keep their original precision.
+              These totals count imported lines, not medicines or units you can sell. Your
+              sellable stock is on the Inventory page. A blank or unreadable quantity shows as
+              Unknown.
             </p>
           </SectionCard>
-          <SectionCard title="Imported medicine references" titleLevel={2}>
+          <SectionCard title="Imported medicine lines" titleLevel={2}>
             <form action={ROUTE} method="get" className="mb-5 flex flex-wrap items-end gap-3">
               <label
                 className="min-w-0 flex-1 basis-64 text-sm text-text-body"
@@ -107,7 +107,7 @@ export default async function ImportedStockPage({
                 className="rounded-[var(--radius-sm)] bg-surface-sunken p-5 text-sm text-text-muted"
               >
                 {data.importedRows === 0
-                  ? 'No completed medicine imports are visible in this workspace.'
+                  ? 'No imported stock lines yet. Lines appear here once a stock list from your old system has been imported.'
                   : 'No imported medicine names match this search. Clear the search or try another name.'}
               </p>
             ) : (

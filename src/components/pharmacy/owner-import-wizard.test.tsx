@@ -31,9 +31,9 @@ async function uploadAndPreview() {
   const file = new File(['A\n1'], 'stock.csv', { type: 'text/csv' });
   Object.defineProperty(file, 'arrayBuffer', { value: async () => new TextEncoder().encode('A\n1').buffer });
   fireEvent.change(screen.getByLabelText('CSV or XLSX file'), { target: { files: [file] } });
-  await screen.findByRole('button', { name: 'Run dry-run diff' });
-  fireEvent.click(screen.getByRole('button', { name: 'Run dry-run diff' }));
-  await screen.findByRole('button', { name: 'Commit opening stock' });
+  await screen.findByRole('button', { name: 'Preview changes' });
+  fireEvent.click(screen.getByRole('button', { name: 'Preview changes' }));
+  await screen.findByRole('button', { name: 'Save opening stock' });
 }
 
 describe('owner importer wizard', () => {
@@ -41,20 +41,20 @@ describe('owner importer wizard', () => {
     render(<OwnerImportWizard />);
     await uploadAndPreview();
     expect(screen.getByText(/Test medicine/)).toBeVisible();
-    expect(screen.getByRole('button', { name: 'Commit opening stock' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Save opening stock' })).toBeDisabled();
     expect(mocks.commit.mutateAsync).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('checkbox'));
-    fireEvent.click(screen.getByRole('button', { name: 'Commit opening stock' }));
-    await screen.findByText('Opening stock committed');
+    fireEvent.click(screen.getByRole('button', { name: 'Save opening stock' }));
+    await screen.findByText('Opening stock saved');
     expect(mocks.commit.mutateAsync).toHaveBeenCalledWith(expect.objectContaining({ branchId: 'branch', stockLocationId: 'location', confirmed: true, previewHash: 'a'.repeat(64), mapping }));
-    expect(screen.getByText(/10 base units posted/)).toBeVisible();
+    expect(screen.getByText(/10 single units added/)).toBeVisible();
   });
   it('invalidates the dry run and confirmation after a mapping edit', async () => {
     render(<OwnerImportWizard />);
     await uploadAndPreview();
     fireEvent.click(screen.getByRole('checkbox'));
-    fireEvent.change(screen.getByLabelText('Cost per base unit (PKR) *'), { target: { value: '4' } });
-    expect(screen.queryByRole('button', { name: 'Commit opening stock' })).toBeNull();
+    fireEvent.change(screen.getByLabelText('Cost per single unit, e.g. one tablet (PKR) *'), { target: { value: '4' } });
+    expect(screen.queryByRole('button', { name: 'Save opening stock' })).toBeNull();
     expect(mocks.commit.mutateAsync).not.toHaveBeenCalled();
   });
   it('keeps the file and mapping after a dry-run error', async () => {
@@ -65,9 +65,9 @@ describe('owner importer wizard', () => {
     const file = new File(['A\n1'], 'stock.csv');
     Object.defineProperty(file, 'arrayBuffer', { value: async () => new TextEncoder().encode('A\n1').buffer });
     fireEvent.change(screen.getByLabelText('CSV or XLSX file'), { target: { files: [file] } });
-    fireEvent.click(await screen.findByRole('button', { name: 'Run dry-run diff' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Preview changes' }));
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('different column'));
-    expect(screen.getByLabelText('Cost per base unit (PKR) *')).toHaveValue('5');
+    expect(screen.getByLabelText('Cost per single unit, e.g. one tablet (PKR) *')).toHaveValue('5');
     expect(screen.getByText(/stock.csv · 1 stock rows/)).toBeVisible();
   });
   it('shows permission denial without upload controls', () => {

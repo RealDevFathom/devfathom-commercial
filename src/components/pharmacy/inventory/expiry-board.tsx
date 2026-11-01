@@ -156,7 +156,7 @@ function Totals({
           key={bucket.days}
           label={`${bucket.days}-day PKR at risk`}
           value={money(bucket.valueAtRiskMinor)}
-          sub="Cumulative units × landed cost"
+          sub="Units expiring in this window × what you paid per unit"
         />
       ))}
       <Stat label="Units at risk" value={units.toLocaleString('en-PK')} sub="Still saleable" />
@@ -191,7 +191,9 @@ function PrintableList(props: ExpiryBoardProps) {
         titleLevel={2}
       >
         {props.rows.length === 0 ? (
-          <p className="text-sm text-text-muted">Nothing expires in this window.</p>
+          <p className="text-sm text-text-muted">
+            No stock expires in this window. Go back to the board to choose a longer window.
+          </p>
         ) : (
           <Table aria-label="Near-expiry list">
             <TableHeader>
@@ -479,18 +481,19 @@ export function ExpiryBoard(props: ExpiryBoardProps) {
             Printable / shareable list
           </Link>
         }
-        eyebrow={`INV-09 · expiring within ${props.withinDays} days, plus expired stock still on the shelf`}
+        eyebrow={`Expiring within ${props.withinDays} days, plus expired stock still on the shelf`}
         title="Expiry board"
         titleLevel={2}
       >
         <p className="mb-4 text-sm text-text-muted">
-          Mark-downs and supplier returns are drafts: neither changes a price nor reserves stock
-          until a person advances them. Quarantine is a real ledger movement that takes the units
-          out of sale.
+          Mark-downs and supplier returns start as drafts: they do not change a price or set stock
+          aside until someone takes the next step. Quarantine takes the units out of sale straight
+          away.
         </p>
         {props.rows.length === 0 ? (
           <p className="rounded-[var(--radius-sm)] bg-surface-sunken p-5 text-sm text-text-muted">
-            Nothing saleable expires within {props.withinDays} days at this branch.
+            No stock at this branch expires within {props.withinDays} days. Choose a longer
+            window above to look further ahead.
           </p>
         ) : (
           <div className="space-y-3">

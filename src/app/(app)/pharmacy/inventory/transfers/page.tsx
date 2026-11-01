@@ -30,7 +30,7 @@ export const metadata: Metadata = { title: 'Stock transfers' };
 
 const route = '/pharmacy/inventory/transfers';
 const header = {
-  eyebrow: 'Pharmacy operations · INV-07',
+  eyebrow: 'Pharmacy operations',
   heading: 'Stock transfers',
   description:
     'Allocate, approve, dispatch and receive stock between branches, with a printed slip.',
@@ -217,7 +217,7 @@ export default async function PharmacyTransfersPage({
           {query.notice}
         </div>
       ) : null}
-      <SectionCard eyebrow="Organization-scoped" title="Working branch">
+      <SectionCard title="Working branch">
         <form className="flex flex-wrap items-end gap-3" method="get">
           <label className="min-w-64 flex-1 text-sm text-text-body">
             Branch
@@ -258,7 +258,7 @@ export default async function PharmacyTransfersPage({
         />
       </section>
 
-      <SectionCard eyebrow="Allocate → approve → dispatch" title="Send stock">
+      <SectionCard eyebrow="Allocate, approve, send" title="Send stock">
         {stock.length && destinations.length ? (
           <TransferAllocateForm
             action={perform}
@@ -270,12 +270,12 @@ export default async function PharmacyTransfersPage({
           <Empty>
             {destinations.length
               ? 'This branch has no available stock to send. Receive stock first.'
-              : 'Transfers need a second active branch with a receiving location. Add it in onboarding.'}
+              : 'Transfers need a second branch with its own stock location. Add the branch and its location in onboarding.'}
           </Empty>
         )}
       </SectionCard>
 
-      <SectionCard eyebrow="Receive with variance" title="Inbound transfers">
+      <SectionCard eyebrow="Receive and note any shortfall" title="Inbound transfers">
         {inbound.length ? (
           <div className="space-y-3">
             {inbound.map((transfer) => (
@@ -290,11 +290,11 @@ export default async function PharmacyTransfersPage({
             ))}
           </div>
         ) : (
-          <Empty>No transfers are addressed to {branch.name} yet.</Empty>
+          <Empty>No transfers are on their way to {branch.name}. Stock sent here from another branch will appear for receiving.</Empty>
         )}
       </SectionCard>
 
-      <SectionCard eyebrow="Outbound" title="Outbound transfers">
+      <SectionCard title="Outbound transfers">
         {outbound.length ? (
           <div className="space-y-3">
             {outbound.map((transfer) => (

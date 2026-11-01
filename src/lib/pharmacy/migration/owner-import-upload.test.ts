@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { Workbook } from 'exceljs';
 vi.mock('server-only', () => ({}));
 import { excelShowsDay, parseOwnerUpload } from './owner-import-upload';
-import { IMPORT_MAX_BYTES, IMPORT_MAX_ROWS, suggestImportMapping } from './owner-import-input';
+import { IMPORT_MAX_BYTES, IMPORT_MAX_ROWS, OPENING_TEMPLATE, suggestImportMapping } from './owner-import-input';
 
 describe('owner CSV/XLSX upload boundary', () => {
   it('preserves leading zeroes and quoted commas, quotes and line breaks', async () => {
@@ -59,5 +59,12 @@ describe('owner CSV/XLSX upload boundary', () => {
     ['yyyy-mm-dd', true], ['dd/mm/yyyy', true], ['[$-409]d-mmm-yy', true], [undefined, true], ['General', true],
   ])('keeps month precision for XLSX date formats without a day: %s', (format, showsDay) => {
     expect(excelShowsDay(format)).toBe(showsDay);
+  });
+
+  it('maps every column of the plain-language template and the older base-unit headers', () => {
+    const headers = OPENING_TEMPLATE.trim().split(',');
+    expect(headers.join(',')).not.toMatch(/base unit/i);
+    expect(suggestImportMapping(headers)).toEqual({ sourceRef: 0, pack: 1, batch: 2, expiry: 3, mrp: 4, cost: 5, expected: 6, counted: 7, varianceNote: 8 });
+    expect(suggestImportMapping(['Exported base units', 'Physically counted base units'])).toEqual({ expected: 0, counted: 1 });
   });
 });

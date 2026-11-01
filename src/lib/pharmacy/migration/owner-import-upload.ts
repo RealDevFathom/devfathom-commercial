@@ -93,7 +93,7 @@ export function excelShowsDay(numFmt: string | undefined | null): boolean {
 }
 
 export async function parseOwnerUpload(fileName: string, bytes: Buffer): Promise<SourceTable> {
-  if (!bytes.length || bytes.length > IMPORT_MAX_BYTES) throw new OwnerImportError('Upload a nonempty CSV or XLSX file up to 1 MiB.');
+  if (!bytes.length || bytes.length > IMPORT_MAX_BYTES) throw new OwnerImportError('Choose a CSV or Excel (.xlsx) file that is not empty and is no larger than 1 MB.');
   let records: string[][];
   if (/\.csv$/i.test(fileName)) {
     let text: string;
