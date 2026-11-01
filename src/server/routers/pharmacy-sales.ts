@@ -253,6 +253,30 @@ function fail(error: unknown): never {
   throw error;
 }
 
+const DAY_CLOSE_DATABASE_ERROR =
+  'The day could not be closed safely. Refresh the preview and try again. If it still fails, ask a supervisor.';
+
+/** Keep database policy and append-only implementation details off the counter screen. */
+export function failDayClose(error: unknown): never {
+  if (error instanceof TRPCError) throw error;
+  const databaseError = error as {
+    message?: unknown;
+    code?: unknown;
+    meta?: { code?: unknown; message?: unknown };
+  };
+  const details = [databaseError.message, databaseError.meta?.message]
+    .filter((value): value is string => typeof value === 'string')
+    .join(' ');
+  if (
+    databaseError.code === 'P2010' ||
+    databaseError.meta?.code === '55000' ||
+    /append-only|pharmacy_reject_money_mutation/i.test(details)
+  ) {
+    throw new TRPCError({ code: 'CONFLICT', message: DAY_CLOSE_DATABASE_ERROR });
+  }
+  fail(error);
+}
+
 async function loadCounterReceipt(ctx: TRPCContext, scope: LedgerScope, saleId: string) {
   const [branch, organization] = await Promise.all([
     ctx.db.pharmacyBranch.findFirst({
@@ -533,9 +557,13 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       requireCloseAccess(ctx);
-      return ctx.db.$transaction(async (tx) =>
-        closePharmacyDay(txDb(tx), await scopeFor(ctx, input.branchId), input)
-      );
+      try {
+        return await ctx.db.$transaction(async (tx) =>
+          closePharmacyDay(txDb(tx), await scopeFor(ctx, input.branchId), input)
+        );
+      } catch (error) {
+        failDayClose(error);
+      }
     }),
   customerSnapshot: protectedProcedure
     .input(
@@ -692,9 +720,13 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       requireCloseAccess(ctx);
-      return ctx.db.$transaction(async (tx) =>
-        cutPharmacyDailyClose(txDb(tx), await scopeFor(ctx, input.branchId), input)
-      );
+      try {
+        return await ctx.db.$transaction(async (tx) =>
+          cutPharmacyDailyClose(txDb(tx), await scopeFor(ctx, input.branchId), input)
+        );
+      } catch (error) {
+        failDayClose(error);
+      }
     }),
   tenderOutcome: protectedProcedure.input(tenderInput).query(async ({ ctx, input }) => {
     const scope =
