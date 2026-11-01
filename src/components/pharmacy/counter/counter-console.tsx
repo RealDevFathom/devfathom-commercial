@@ -79,6 +79,7 @@ import {
 } from '@/lib/pharmacy/counter-browser-print';
 import { workspaceToday } from '@/lib/timezone';
 import { trpc } from '@/lib/trpc';
+import { formatDisplayDateTime } from '@/lib/display-time';
 
 type Notice = {
   tone: 'success' | 'warning' | 'danger' | 'neutral';
@@ -1175,7 +1176,7 @@ function ScopedPharmacyCounterConsole({
         pre.textContent = [
           'Family Khata statement',
           statement.account.displayName,
-          `As of ${statement.generatedAt.toISOString()}`,
+          `As of ${formatDisplayDateTime(statement.generatedAt)}`,
           `Balance PKR ${(statement.account.balanceMinor / 100).toFixed(2)}`,
           `Limit PKR ${(statement.account.creditLimitMinor / 100).toFixed(2)}`,
           statement.truncated
@@ -1183,7 +1184,7 @@ function ScopedPharmacyCounterConsole({
             : 'All ledger entries shown.',
           ...statement.entries.map(
             (row) =>
-              `${row.occurredAt.toISOString()}  ${row.kind}  PKR ${(row.amountMinor / 100).toFixed(2)}`
+              `${formatDisplayDateTime(row.occurredAt)}  ${row.kind}  PKR ${(row.amountMinor / 100).toFixed(2)}`
           ),
         ].join('\n');
         popup.document.body.replaceChildren(pre);

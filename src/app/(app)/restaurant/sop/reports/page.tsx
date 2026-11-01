@@ -45,7 +45,7 @@ function State({ kind }: { kind: 'disabled' | 'permission' | 'error' }) {
     disabled: ['SOP reports unavailable', 'Enable the Restaurant SOP module to view reporting.'],
     permission: [
       'Permission denied',
-      'The reports:operational permission and branch access are required.',
+      'Your role does not include operational reports for this branch. Ask an administrator for access.',
     ],
     error: [
       'SOP report could not load',

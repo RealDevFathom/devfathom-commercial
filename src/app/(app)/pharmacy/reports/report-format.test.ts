@@ -19,13 +19,13 @@ describe('report date formatting', () => {
       '01-Nov-2026, 7:59 pm'
     );
     expect(plain(formatReportDateTime(new Date('2026-11-01T14:59:01.182Z'), 'UTC'))).toBe(
-      '01-Nov-2026, 2:59 pm'
+      '01-Nov-2026, 2:59 pm UTC'
     );
   });
 
   it('falls back to UTC for a missing or unknown zone and never prints an ISO string', () => {
     const text = formatReportDateTime('2026-11-01T14:59:01.182Z', 'Not/AZone');
-    expect(plain(text)).toBe('01-Nov-2026, 2:59 pm');
+    expect(plain(text)).toBe('01-Nov-2026, 2:59 pm UTC');
     expect(text).not.toMatch(/\d{4}-\d{2}-\d{2}T/);
   });
 
@@ -53,7 +53,7 @@ describe('report date formatting', () => {
   it('reads part-day windows as date-and-time instants', () => {
     expect(
       plain(formatReportWindow('2026-10-02T14:59:01.160Z', '2026-11-01T14:59:01.160Z', 'UTC'))
-    ).toBe('02-Oct-2026, 2:59 pm to 01-Nov-2026, 2:59 pm');
+    ).toBe('02-Oct-2026, 2:59 pm UTC to 01-Nov-2026, 2:59 pm UTC');
   });
 });
 

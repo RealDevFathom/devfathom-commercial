@@ -40,6 +40,7 @@ import { projectProfitAndLoss } from '@/lib/pharmacy/financial-statements';
 import ProfitAndLossPage from './page';
 import Loading from './loading';
 import { FinancialStatements } from '@/app/(app)/pharmacy/finance/financial-statements';
+import { formatDisplayDateTime } from '@/lib/display-time';
 const input = { branchId: 'branch_1', from: '2026-09-01T00:00:00Z', to: '2026-09-03T00:00:00Z' };
 const total = (accountCode: string, debit: bigint, credit: bigint, currency = 'PKR') => ({
   accountCode,
@@ -256,14 +257,13 @@ it('serves the isolated route with reports-only licensing, UTC filters, subtotal
     '30.00',
     'NET PROFIT',
     '20.00',
-    'finance_journal_lines',
-    'completeness and cost coverage',
-    'unknown',
-    '2026-09-01T00:00:00.000Z',
-    '2026-09-03T00:00:00.000Z',
+    'Built from posted journal entries only',
+    formatDisplayDateTime('2026-09-01T00:00:00.000Z', 'UTC'),
+    formatDisplayDateTime('2026-09-03T00:00:00.000Z', 'UTC'),
   ]) {
     expect(html).toContain(text);
   }
+  expect(html).not.toContain('finance_journal_lines');
   expect(mocks.raw).toHaveBeenCalledTimes(2);
   expect(mocks.journal).toHaveBeenCalledWith(expect.objectContaining({ take: 25, skip: 0 }));
   expect(mocks.audit).toHaveBeenCalledWith(

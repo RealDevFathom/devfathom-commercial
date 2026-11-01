@@ -52,7 +52,8 @@ function fieldErrors(query: Query): Partial<Record<FieldName, string>> {
     if (name === 'branchId' || name === 'entryId') {
       if (!idField.safeParse(raw).success) errors[name] = 'Use at most 128 characters.';
     } else if (!instantField.safeParse(raw).success) {
-      errors[name] = 'Use an RFC3339 instant with an offset, for example 2026-08-01T00:00:00Z.';
+      errors[name] =
+        'Enter a date and time with its time zone, for example 2026-08-01T00:00:00Z for midnight UTC.';
     }
   }
   if (!errors.from && !errors.to) {
@@ -108,7 +109,7 @@ export default async function JournalEntryLookupPage({
   const message: Partial<Record<ViewState['status'], string>> = {
     INITIAL: 'Enter an exact posted journal ID, active branch, and UTC window.',
     INVALID:
-      'Provide each field once. Use nonempty IDs and RFC3339 instants in a window of no more than 92 days.',
+      'Fill in each field once. IDs cannot be blank, dates need a time zone, and the range can be at most 92 days.',
     DENIED: 'You do not have access to this financial report scope.',
     FAILURE: 'The journal lookup is unavailable. Retry; no stale details are shown.',
     NOT_FOUND: 'No journal entry was found in this exact branch and window.',

@@ -12,6 +12,7 @@ import { counterErrorMessage } from '@/lib/pharmacy/counter-messages';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
 import { buildCounterBrowserReceipt } from '@/lib/pharmacy/counter-browser-print';
 import { findReceiptDisabledReason } from './counter-display';
+import { formatDisplayDateTime } from '@/lib/display-time';
 
 const attemptSchema = z.discriminatedUnion('kind', [
   z.object({
@@ -337,7 +338,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
         data.returns
           .map(
             (row) =>
-              `${row.createdAt.toISOString()} ${row.reason}\n${row.lines.map((item) => `${data.lines.find((l) => l.id === item.saleLineId)?.name ?? 'Item'}: ${item.canonicalUnits} units · ${item.integrityDecision}`).join('\n')}`
+              `${formatDisplayDateTime(row.createdAt)} ${row.reason}\n${row.lines.map((item) => `${data.lines.find((l) => l.id === item.saleLineId)?.name ?? 'Item'}: ${item.canonicalUnits} units · ${item.integrityDecision}`).join('\n')}`
           )
           .join('\n') +
         '\n' +

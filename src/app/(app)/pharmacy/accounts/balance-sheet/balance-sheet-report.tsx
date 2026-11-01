@@ -13,6 +13,7 @@ import {
 } from '@/components/ui/table';
 import { classifyBalanceSheet } from '@/lib/pharmacy/accounts/balance-sheet';
 import type { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
+import { formatDisplayDateTime } from '@/lib/display-time';
 
 const money = (minor: string) => {
   const value = BigInt(minor);
@@ -77,7 +78,7 @@ export async function BalanceSheetReport({
           </Button>
         </form>
         <p className="mt-4 text-sm text-text-muted">
-          Posted journal balances before {to.toISOString()}, grouped by recorded currency. The
+          Posted journal balances before {formatDisplayDateTime(to)}, grouped by recorded currency. The
           one-day reader window still includes every earlier posting in each closing balance; it is
           not a selected-window earnings calculation.
         </p>
@@ -162,9 +163,9 @@ export async function BalanceSheetReport({
             </p>
           )}
           <p className="mt-4 text-xs text-text-muted">
-            Source: {result.source}; {result.coverage.basis}. Coverage and completeness remain{' '}
-            {result.coverage.completeness}. Before unrecorded tax; not statutory or audited.
-            Retrieved {result.freshness.retrievedAt.toISOString()}.
+            Built from posted journal entries only; {result.coverage.basis}. Anything not yet
+            posted is not included. Before unrecorded tax; not statutory or audited. Checked{' '}
+            {formatDisplayDateTime(result.freshness.retrievedAt)}.
           </p>
         </SectionCard>
       ))}

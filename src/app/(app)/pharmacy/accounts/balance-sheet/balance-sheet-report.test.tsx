@@ -48,7 +48,8 @@ describe('BalanceSheetReport', () => {
     expect(html).toContain('Equation reconciled');
     expect(html).toContain('CASH');
     expect(html).toContain('100.00');
-    expect(html).toContain('finance_journal_lines');
+    expect(html).toContain('Built from posted journal entries only');
+    expect(html).not.toContain('finance_journal_lines');
   });
 
   it('renders no protected balances when the capability-checked reader denies access', async () => {

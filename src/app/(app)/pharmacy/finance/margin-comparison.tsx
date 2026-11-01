@@ -11,6 +11,7 @@ import {
 } from '@/components/ui/table';
 import type { grossMarginComparison } from '@/lib/pharmacy/finance-reports';
 import type { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
+import { formatDisplayDateTime } from '@/lib/display-time';
 
 type Comparison = Awaited<ReturnType<typeof grossMarginComparison>>;
 const money = (minor: number) =>
@@ -46,9 +47,9 @@ export function MarginComparisonLedger({ report }: { report: Comparison }) {
   return (
     <div className="min-w-0 space-y-3">
       <p className="break-words text-sm text-text-muted">
-        Previous: {report.periods.previous.from.toISOString()} to{' '}
-        {report.periods.previous.to.toISOString()}. Current:{' '}
-        {report.periods.current.from.toISOString()} to {report.periods.current.to.toISOString()}.{' '}
+        Previous: {formatDisplayDateTime(report.periods.previous.from)} to{' '}
+        {formatDisplayDateTime(report.periods.previous.to)}. Current:{' '}
+        {formatDisplayDateTime(report.periods.current.from)} to {formatDisplayDateTime(report.periods.current.to)}.{' '}
         UTC; start inclusive, end exclusive. Same branch, equal elapsed duration.
       </p>
       {!report.previous.hasEntries || !report.current.hasEntries ? (

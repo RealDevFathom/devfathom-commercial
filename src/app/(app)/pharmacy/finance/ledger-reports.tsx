@@ -14,6 +14,7 @@ import {
 } from '@/components/ui/table';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
 import type { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
+import { formatDisplayDateTime } from '@/lib/display-time';
 
 type Caller = Pick<
   ReturnType<typeof pharmacyFinanceRouter.createCaller>,
@@ -55,8 +56,8 @@ function Metadata({ report }: { report: Report }) {
     <div className="space-y-2 break-words text-sm text-text-muted">
       <p>
         {'at' in report.period
-          ? `Through ${report.period.at.toISOString()} (inclusive).`
-          : `${report.period.from.toISOString()} to ${report.period.to.toISOString()} (start inclusive, end exclusive).`}{' '}
+          ? `Through ${formatDisplayDateTime(report.period.at)} (inclusive).`
+          : `${formatDisplayDateTime(report.period.from)} to ${formatDisplayDateTime(report.period.to)} (start inclusive, end exclusive).`}{' '}
         Timezone: {report.timezone}. Branch: {report.scope.branchId}.
       </p>
       <p>
@@ -65,12 +66,14 @@ function Metadata({ report }: { report: Report }) {
       </p>
       <p>{report.definition}</p>
       <p>
-        Source: {report.source}. Coverage: posted entries only; completeness{' '}
-        {report.coverage.completeness}. Refunds included only when posted as reversals.
+        Built from posted journal entries only; anything not yet posted is missing. Refunds are
+        included only when posted as reversals.
       </p>
       <p>
-        Retrieved: {report.freshness.retrievedAt.toISOString()}. Latest posting:{' '}
-        {report.freshness.latestPostingAt ?? 'unknown'}.
+        Checked: {formatDisplayDateTime(report.freshness.retrievedAt)}. Latest posting:{' '}
+        {report.freshness.latestPostingAt
+          ? formatDisplayDateTime(report.freshness.latestPostingAt)
+          : 'none yet'}.
       </p>
       <StatusPill status="warning" label={`Cost coverage: ${report.coverage.costCoverage}`} />
       <p>

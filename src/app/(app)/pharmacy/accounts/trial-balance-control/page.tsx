@@ -13,6 +13,7 @@ import {
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
 import { createTRPCContext } from '@/server/trpc';
+import { formatDisplayDateTime } from '@/lib/display-time';
 
 export const metadata: Metadata = { title: 'Trial-balance control · Pharmacy accounts' };
 
@@ -143,9 +144,9 @@ function Results({ state }: { state: Extract<State, { kind: 'loaded' }> }) {
   return (
     <SectionCard title={status} titleLevel={2}>
       <p className="text-sm text-text-muted">
-        Branch {state.scope.branchId}. Posted branch journal lines only; coverage and completeness
-        remain unknown. UTC window [{state.from.toISOString()}, {state.to.toISOString()}). Source:
-        finance_journal_lines. Retrieved {state.retrievedAt.toISOString()}.
+        Posted journal lines for this branch only, from {formatDisplayDateTime(state.from, 'UTC')}{' '}
+        up to {formatDisplayDateTime(state.to, 'UTC')} (UTC). This covers only what has been
+        posted so far. Checked {formatDisplayDateTime(state.retrievedAt)}.
       </p>
       <p className="mt-2 text-sm text-text-muted">
         A nonzero control may be legitimate for an interbranch scope. Zero is not evidence of

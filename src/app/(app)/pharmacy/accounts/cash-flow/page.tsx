@@ -11,6 +11,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { loadCashFlowProjection } from '@/lib/pharmacy/accounts/cash-flow';
 import { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
 import { createTRPCContext } from '@/server/trpc';
+import { formatDisplayDateTime } from '@/lib/display-time';
 
 export const metadata: Metadata = { title: 'Classified cash-flow projection' };
 
@@ -111,7 +112,7 @@ export default async function CashFlowPage({
       <PageHeader
         eyebrow="Pharmacy accounts"
         heading="Classified cash-flow projection"
-        description="A conservative posted-ledger projection with transfer netting and visible unclassified evidence."
+        description="Cash in and out from posted entries, with transfers between your own accounts netted off and anything unclassified shown separately."
       />
       <SectionCard title="Scope and UTC period">
         <form className="flex flex-wrap items-end gap-3">
@@ -155,7 +156,7 @@ export default async function CashFlowPage({
           <SectionCard title="Opening-to-closing reconciliation">
             <p className="text-sm text-text-muted">
               Recorded currency minor-unit totals from every scoped posted cash/bank line. Retrieved{' '}
-              {projection.metadata.retrievedAt.toISOString()}. Completeness: unknown —{' '}
+              {formatDisplayDateTime(projection.metadata.retrievedAt)}. Completeness: unknown —{' '}
               {projection.metadata.completenessReason} Discrepancy is canonical CASH plus BANK
               account closing from the financial statements, read in the same snapshot, minus the
               projected closing.
@@ -224,7 +225,7 @@ export default async function CashFlowPage({
             {evidencePage.map((entry) => (
               <details className="mt-3 rounded-sm border border-border-default p-3" key={entry.id}>
                 <summary className="min-h-11 cursor-pointer">
-                  {entry.occurredAt.toISOString()} · {entry.classification} · {entry.currency}{' '}
+                  {formatDisplayDateTime(entry.occurredAt)} · {entry.classification} · {entry.currency}{' '}
                   {money(entry.netMinor)} · {entry.description}
                 </summary>
                 <p className="break-all text-xs text-text-muted">

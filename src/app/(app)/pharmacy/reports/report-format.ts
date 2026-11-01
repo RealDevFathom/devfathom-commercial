@@ -1,4 +1,4 @@
-import { workspaceTimezone } from '@/lib/timezone';
+import { formatDisplayDateTime } from '@/lib/display-time';
 
 const DAY_MS = 86_400_000;
 
@@ -19,13 +19,7 @@ export function formatReportDateTime(
   value: string | Date | null | undefined,
   timeZone?: string | null
 ): string {
-  const date = toDate(value);
-  if (!date) return 'Not available';
-  return new Intl.DateTimeFormat('en-PK', {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-    timeZone: workspaceTimezone(timeZone),
-  }).format(date);
+  return formatDisplayDateTime(value, timeZone);
 }
 
 /** A business date (`YYYY-MM-DD`) or a UTC-midnight instant as a readable calendar date. */
