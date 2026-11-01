@@ -358,6 +358,11 @@ function ScopedPharmacyCounterConsole({
     staleTime: 60_000,
   });
   const branches = useMemo(() => branchesQuery.data?.branches ?? [], [branchesQuery.data]);
+  // Managers and owners keep the counter's internal codes, batch map and keymap
+  // presets; a cashier sees only what is needed to sell. Display only: the server
+  // still checks every action.
+  const counterManager = branchesQuery.data?.counterManager === true;
+  const internalCode = (code: string) => (counterManager ? code : undefined);
   // Every drawer, tender and loyalty write is stamped with the workspace's day.
   const workspaceZone = branchesQuery.data?.timezone;
   const todayBusinessDate = useCallback(() => businessDate(workspaceZone), [workspaceZone]);
@@ -484,7 +489,7 @@ function ScopedPharmacyCounterConsole({
     { enabled: Boolean(branchId && saleId), staleTime: 30_000 }
   );
 
-  // POS-07: one OPEN drawer per counter device. The header offers "Open drawer"
+  // POS-07: one OPEN drawer per counter device. The header offers "Open cash drawer"
   // only once the server has said this device has none; while one is open it
   // shows the drawer instead, so a second open is never offered.
   const deviceId = useCounterDeviceId();
@@ -815,9 +820,18 @@ function ScopedPharmacyCounterConsole({
 
   // ── Actions ───────────────────────────────────────────────────────────────
 
-  const focusSearch = useCallback(() => {
-    searchRef.current?.focus();
-    searchRef.current?.select();
+  /**
+   * Return focus to the scan field. With `expected`, its text is selected only
+   * when the field still holds that text: anything typed or scanned while an
+   * action was in flight is kept, never selected and overwritten by the next key.
+   */
+  const focusSearch = useCallback((expected?: string) => {
+    const field = searchRef.current;
+    if (!field) return;
+    const typedSince = expected !== undefined && field.value !== expected;
+    if (typedSince && document.activeElement === field) return;
+    field.focus();
+    if (!typedSince) field.select();
   }, []);
 
   const runSearch = useCallback(
@@ -902,6 +916,9 @@ function ScopedPharmacyCounterConsole({
       }
       setPending('addToCart');
       setNotice(null);
+      // The scan field stays live while this add runs; remember what it held so
+      // the next scan, typed meanwhile, survives the clear below.
+      const submittedText = searchRef.current?.value ?? '';
       try {
         const activeSaleId = await ensureSale();
         // Creating a bill can outlive this scan or the mounted counter.
@@ -981,8 +998,8 @@ function ScopedPharmacyCounterConsole({
           tone: 'success',
           message: `${units} × ${row.displayName} added${overrideLotId ? ' with a recorded batch override' : ''}.`,
         });
-        setQuery('');
-        focusSearch();
+        setQuery((current) => (current === submittedText ? '' : current));
+        focusSearch(submittedText);
       } catch (error) {
         const message = messageFrom(error);
         setNotice({
@@ -1076,6 +1093,7 @@ function ScopedPharmacyCounterConsole({
       if (!target || busy) return;
       setPending(action);
       setNotice(null);
+      const typedBefore = searchRef.current?.value ?? '';
       try {
         await transition.mutateAsync({
           branchId,
@@ -1096,7 +1114,7 @@ function ScopedPharmacyCounterConsole({
         }
         await refreshCart();
         setNotice({ tone: 'success', message: `Bill ${action === 'void' ? 'voided' : action}.` });
-        focusSearch();
+        focusSearch(typedBefore);
       } catch (error) {
         setNotice({ tone: 'danger', message: messageFrom(error) });
       } finally {
@@ -1427,6 +1445,7 @@ function ScopedPharmacyCounterConsole({
     }
     setPending('captureDemand');
     setNotice(null);
+    const typedBefore = searchRef.current?.value ?? '';
     try {
       await captureDemand.mutateAsync({
         branchId,
@@ -1452,7 +1471,7 @@ function ScopedPharmacyCounterConsole({
         tone: 'success',
         message: `Captured ${capturedUnits} canonical units of unfulfilled demand for ${requested}.`,
       });
-      focusSearch();
+      focusSearch(typedBefore);
     } catch (error) {
       setNotice({ tone: 'danger', message: messageFrom(error) });
     } finally {
@@ -1839,7 +1858,7 @@ function ScopedPharmacyCounterConsole({
                   });
               }}
             >
-              Open drawer
+              Open cash drawer
             </Button>
           )}
         </div>
@@ -1884,7 +1903,7 @@ function ScopedPharmacyCounterConsole({
 
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-2 overflow-hidden p-2 md:grid-cols-[minmax(0,1fr)_minmax(18rem,22rem)]">
         <div className="min-h-0 space-y-2 overflow-y-auto md:col-start-1">
-          <SectionCard compact eyebrow="POS-02" title="Scan and search">
+          <SectionCard compact eyebrow={internalCode('POS-02')} title="Scan and search">
             <div className="space-y-2">
               <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
                 <div className="space-y-1.5">
@@ -1896,8 +1915,10 @@ function ScopedPharmacyCounterConsole({
                     data-counter-scan=""
                     autoFocus
                     autoComplete="off"
+                    // Controlled, and never disabled: a disabled field drops keys and
+                    // loses focus mid-scan. Only the search request is debounced; each
+                    // action still refuses to run while the counter is busy.
                     value={query}
-                    disabled={busy}
                     placeholder="Brand, generic, ingredient, strength, form, barcode, alias"
                     aria-describedby="counter-search-help"
                     onChange={(event) => {
@@ -1986,7 +2007,11 @@ function ScopedPharmacyCounterConsole({
           </SectionCard>
 
           {substituteInput ? (
-            <SectionCard compact eyebrow="AI-05 · RX-04" title="Exact substitute suggestions">
+            <SectionCard
+              compact
+              eyebrow={internalCode('AI-05 · RX-04')}
+              title="Exact substitute suggestions"
+            >
               <CounterSubstituteProposals
                 proposals={substitutesQuery.data ?? []}
                 state={
@@ -2031,7 +2056,7 @@ function ScopedPharmacyCounterConsole({
 
           <SectionCard
             compact
-            eyebrow="POS-03"
+            eyebrow={internalCode('POS-03')}
             title="Sale unit and quantity"
             actions={
               <Button
@@ -2112,9 +2137,10 @@ function ScopedPharmacyCounterConsole({
             )}
           </SectionCard>
 
-          <SectionCard compact eyebrow="POS-01" title="Workflow map">
+          <SectionCard compact eyebrow={internalCode('POS-01')} title="Workflow map">
             <CounterKeymapLegend
               keymap={keymap}
+              canChoosePreset={counterManager}
               saving={saveKeymap.isPending}
               disabled={busy}
               onPresetChange={(preset: CounterKeymapPresetKey) =>
@@ -2128,8 +2154,8 @@ function ScopedPharmacyCounterConsole({
           <SectionCard
             compact
             className="min-h-0 flex-1 overflow-y-auto"
-            eyebrow="POS-03"
-            title="Cart and FEFO allocation"
+            eyebrow={internalCode('POS-03')}
+            title={counterManager ? 'Cart and FEFO allocation' : 'Cart'}
             actions={
               <div className="flex flex-wrap gap-2">
                 <Button
@@ -2166,10 +2192,11 @@ function ScopedPharmacyCounterConsole({
               }
               error={cartQuery.error ? messageFrom(cartQuery.error) : null}
               onRetry={() => void refreshTenderBill()}
+              showAllocation={counterManager}
             />
           </SectionCard>
 
-          <SectionCard compact className="shrink-0" eyebrow="POS-05" title="Tender">
+          <SectionCard compact className="shrink-0" eyebrow={internalCode('POS-05')} title="Tender">
             <div className="mb-4 space-y-1">
               <Label htmlFor="counter-auto-print" className="flex min-h-11 items-center gap-3">
                 <input
@@ -2246,7 +2273,7 @@ function ScopedPharmacyCounterConsole({
           <SectionCard
             compact
             className="min-h-0 max-h-24 shrink overflow-y-auto"
-            eyebrow="POS-08"
+            eyebrow={internalCode('POS-08')}
             title="Receipt"
           >
             <CounterReceiptView
@@ -2291,7 +2318,7 @@ function ScopedPharmacyCounterConsole({
         <div className="min-h-0 space-y-2 overflow-y-auto md:col-start-1">
           <SectionCard
             compact
-            eyebrow="CRM-L01"
+            eyebrow={internalCode('CRM-L01')}
             title="Customer loyalty and khata"
             actions={
               <Button
@@ -2395,7 +2422,7 @@ function ScopedPharmacyCounterConsole({
           </SectionCard>
           <SectionCard
             compact
-            eyebrow="POS-09"
+            eyebrow={internalCode('POS-09')}
             title="Prescription and patient"
             actions={
               <kbd className="rounded-[3px] border border-border-subtle bg-surface-sunken px-1.5 py-0.5 font-mono text-xs text-text-strong">

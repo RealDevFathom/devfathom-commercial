@@ -100,7 +100,7 @@ test('pharmacy-only navigation exposes pharmacy destinations and excludes Restau
  * raw `DRAWER_NOT_OPEN` symbol must never reach the counter.
  */
 async function openDrawer(page: Page) {
-  await pressControl(page.getByRole('button', { name: 'Open drawer' }));
+  await pressControl(page.getByRole('button', { name: 'Open cash drawer' }));
   await expect(
     page.getByRole('status').filter({ hasText: /Cash drawer opened for this counter/i })
   ).toBeVisible();
@@ -888,7 +888,7 @@ test('day close — open sell count lock and print Z-report', async ({ page, con
   await expect(popup.locator('body')).toContainText('One rupee short at nightly count');
   await popup.close();
   await page.goto('/pharmacy/counter');
-  await pressControl(page.getByRole('button', { name: 'Open drawer' }));
+  await pressControl(page.getByRole('button', { name: 'Open cash drawer' }));
   await expect(
     page.getByRole('alert').filter({ hasText: /This business day is closed/ })
   ).toBeVisible();

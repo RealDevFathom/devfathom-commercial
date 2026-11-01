@@ -1130,23 +1130,23 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
     openingFloatMinor: 0,
   };
 
-  it('never offers "Open drawer" while this device already has one open', () => {
+  it('never offers "Open cash drawer" while this device already has one open', () => {
     mocks.queries.drawerStatus = query({ openDrawer });
     render(<PharmacyCounterConsole initialBranchId="branch-a" />);
-    expect(screen.queryByRole('button', { name: 'Open drawer' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Open cash drawer' })).not.toBeInTheDocument();
     expect(screen.getByText('Drawer open')).toBeInTheDocument();
   });
 
   it('withholds the button until the drawer status is known', () => {
     mocks.queries.drawerStatus = { ...query(), isSuccess: false, isLoading: true };
     render(<PharmacyCounterConsole initialBranchId="branch-a" />);
-    expect(screen.getByRole('button', { name: 'Open drawer' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Open cash drawer' })).toBeDisabled();
   });
 
   it('opens the drawer for this device once, then refreshes the status', async () => {
     mocks.mutations.openDrawer!.mockResolvedValue(openDrawer);
     render(<PharmacyCounterConsole initialBranchId="branch-a" />);
-    const button = screen.getByRole('button', { name: 'Open drawer' });
+    const button = screen.getByRole('button', { name: 'Open cash drawer' });
     expect(button).toBeEnabled();
     fireEvent.click(button);
     await screen.findByText('Cash drawer opened for this counter.');
@@ -1181,7 +1181,7 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
       mocks.mutations.openDrawer!.mockResolvedValue(openDrawer);
       try {
         render(<PharmacyCounterConsole initialBranchId="branch-a" />);
-        fireEvent.click(screen.getByRole('button', { name: 'Open drawer' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Open cash drawer' }));
         await screen.findByText('Cash drawer opened for this counter.');
         expect(mocks.mutations.openDrawer).toHaveBeenCalledWith(
           expect.objectContaining({ businessDate: new Date(`${day}T00:00:00.000Z`) })
@@ -1196,7 +1196,7 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
   it('words a conflicting open for the operator instead of leaking the server failure', async () => {
     mocks.mutations.openDrawer!.mockRejectedValue(refused('CONFLICT', 'OPEN_DRAWER'));
     render(<PharmacyCounterConsole initialBranchId="branch-a" />);
-    fireEvent.click(screen.getByRole('button', { name: 'Open drawer' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open cash drawer' }));
     expect(
       await screen.findByText(
         'A drawer is already open on this counter. Close it before opening another.'
@@ -1323,7 +1323,7 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
     }
     if (mode === 'busy') {
       mocks.mutations.openDrawer!.mockImplementationOnce(() => new Promise(() => {}));
-      fireEvent.click(screen.getByRole('button', { name: 'Open drawer' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Open cash drawer' }));
       await waitFor(() => expect(mocks.mutations.openDrawer).toHaveBeenCalled());
       await act(async () => resolveSearch!({ rows: [row] }));
     }
@@ -1765,5 +1765,110 @@ describe('PharmacyCounterConsole module boundaries', () => {
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     expect(mocks.queryOptions).toHaveBeenCalledWith('controlledPharmacists', { enabled: true });
     expect(screen.getByTestId('controlled-authorization')).toBeTruthy();
+  });
+});
+
+describe('PharmacyCounterConsole cashier view', () => {
+  it('hides internal codes and the FEFO title from a cashier', () => {
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(screen.getByText('Scan and search')).toBeInTheDocument();
+    expect(screen.queryByText('POS-02')).not.toBeInTheDocument();
+    expect(screen.queryByText('CRM-L01')).not.toBeInTheDocument();
+    expect(screen.queryByText('Cart and FEFO allocation')).not.toBeInTheDocument();
+    expect(screen.getByText('Cart')).toBeInTheDocument();
+  });
+
+  it('keeps internal codes and the FEFO title for a manager or owner', () => {
+    mocks.queries.counterBranches = query({
+      branches: [{ id: 'branch-a', name: 'Synthetic branch' }],
+      counterManager: true,
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(screen.getByText('POS-02')).toBeInTheDocument();
+    expect(screen.getByText('CRM-L01')).toBeInTheDocument();
+    expect(screen.getByText('Cart and FEFO allocation')).toBeInTheDocument();
+  });
+});
+
+describe('PharmacyCounterConsole scan field under fast typing', () => {
+  function typeFast(field: HTMLElement, text: string, from = '') {
+    // A keyboard-wedge scanner: one change per character, a few ms apart.
+    let typed = from;
+    for (const key of text) {
+      typed += key;
+      fireEvent.change(field, { target: { value: typed } });
+    }
+  }
+
+  it('keeps every key and searches once, for the full text, after the debounce', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+      const search = screen.getByLabelText('Scan or search');
+      const searched = () =>
+        mocks.queryOptions.mock.calls.filter(
+          ([name, options]) =>
+            name === 'counterSearch' && (options as { enabled?: boolean } | undefined)?.enabled
+        );
+      let typed = '';
+      for (const key of 'zzzz') {
+        typed += key;
+        fireEvent.change(search, { target: { value: typed } });
+        act(() => vi.advanceTimersByTime(20));
+      }
+      expect(search).toHaveValue('zzzz');
+      expect(search).toBeEnabled();
+      expect(searched()).toHaveLength(0);
+      act(() => vi.advanceTimersByTime(300));
+      expect(searched().length).toBeGreaterThan(0);
+      expect(search).toHaveValue('zzzz');
+      expect(mocks.searchProps.mock.lastCall![0].query).toBe('zzzz');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stays enabled while the counter is busy, so keys typed meanwhile are not dropped', async () => {
+    mocks.mutations.openDrawer!.mockImplementationOnce(() => new Promise(() => {}));
+    render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Open cash drawer' }));
+    await waitFor(() => expect(mocks.mutations.openDrawer).toHaveBeenCalled());
+    const search = screen.getByLabelText('Scan or search');
+    expect(search).toBeEnabled();
+    typeFast(search, 'zzzz');
+    expect(search).toHaveValue('zzzz');
+  });
+
+  it('keeps the next scan typed while the previous add is still committing', async () => {
+    mocks.queries.counterSearch = query({ rows: [barcodeRow()], truncated: false });
+    let resolveAdd!: (value: unknown) => void;
+    mocks.mutations.addLine!.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveAdd = resolve;
+        })
+    );
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const search = screen.getByLabelText('Scan or search');
+    typeFast(search, '123456');
+    fireEvent.keyDown(search, { key: 'Enter' });
+    await waitFor(() => expect(mocks.mutations.addLine).toHaveBeenCalledTimes(1));
+    expect(search).toBeEnabled();
+    typeFast(search, '654321');
+    expect(search).toHaveValue('654321');
+    await act(async () => resolveAdd({}));
+    await screen.findByText('1 × Paracetamol added.');
+    expect(search).toHaveValue('654321');
+  });
+
+  it('still clears the field after an add when nothing new was typed', async () => {
+    mocks.queries.counterSearch = query({ rows: [barcodeRow()], truncated: false });
+    mocks.mutations.addLine!.mockResolvedValue({});
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const search = screen.getByLabelText('Scan or search');
+    typeFast(search, '123456');
+    fireEvent.keyDown(search, { key: 'Enter' });
+    await screen.findByText('1 × Paracetamol added.');
+    expect(search).toHaveValue('');
   });
 });

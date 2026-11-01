@@ -87,6 +87,26 @@ describe('CounterCartPanel FEFO chips', () => {
     expect(second).not.toHaveTextContent('Near expiry');
   });
 
+  it('hides the batch map from a cashier but keeps override and near-expiry warnings', () => {
+    render(
+      <CounterCartPanel
+        cart={cart([inDays(30), inDays(400)])}
+        state="ready"
+        onRetry={vi.fn()}
+        showAllocation={false}
+        now={NOW}
+      />
+    );
+    expect(
+      screen.queryByRole('list', { name: 'FEFO allocation for Synthetic tablet' })
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText('Batch B-0')).not.toBeInTheDocument();
+    expect(screen.queryByText('STORE-1')).not.toBeInTheDocument();
+    expect(screen.queryByText('FEFO')).not.toBeInTheDocument();
+    expect(screen.getByText('Near expiry · 30 d')).toBeInTheDocument();
+    expect(screen.getByText('Batch override')).toBeInTheDocument();
+  });
+
   it('keeps controlled, prescription, high-alert, and cold-chain badges outside the truncated line', () => {
     const value = cart([inDays(400)]);
     value.lines[0] = {
