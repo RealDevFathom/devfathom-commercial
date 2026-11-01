@@ -17,6 +17,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
+import { deleteTestOrganizations } from '../../../tests/delete-test-organizations';
+
 import { parseSeedCsv, serializeSeedCsv } from './default-catalogue-seed';
 
 const RUNTIME_DATABASE_URL =
@@ -131,26 +133,10 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (!RUNTIME_DATABASE_URL || !OWNER_DATABASE_URL) return;
-  await ownerQuery(
-    'DELETE FROM pharmacy_medicine_catalogue_provenance WHERE "organizationId" = ANY($1)',
-    [ORGS]
-  );
-  await ownerQuery('DELETE FROM audit_logs WHERE "organizationId" = ANY($1)', [ORGS]);
-  await ownerQuery('DELETE FROM pharmacy_presentations WHERE "organizationId" = ANY($1)', [ORGS]);
-  await ownerQuery(
-    'DELETE FROM pharmacy_medicine_strength_components WHERE "organizationId" = ANY($1)',
-    [ORGS]
-  );
-  await ownerQuery('DELETE FROM pharmacy_ingredients WHERE "organizationId" = ANY($1)', [ORGS]);
-  await ownerQuery('DELETE FROM pharmacy_medicines WHERE "organizationId" = ANY($1)', [ORGS]);
-  await ownerQuery(
-    `DELETE FROM platform_medicine_catalogue_items WHERE "versionId" IN
-       (SELECT id FROM platform_medicine_catalogue_versions WHERE key = ANY($1))`,
-    [KEYS]
-  );
-  await ownerQuery('DELETE FROM platform_medicine_catalogue_versions WHERE key = ANY($1)', [KEYS]);
-  await ownerQuery('DELETE FROM platform_jobs WHERE "organizationId" = ANY($1)', [ORGS]);
-  await ownerQuery('DELETE FROM organizations WHERE id = ANY($1)', [ORGS]);
+  // Every row this run wrote for its own organizations and catalogue keys —
+  // medicines, presentations, provenance, audit rows, platform jobs — and
+  // nothing else.
+  await deleteTestOrganizations(OWNER_DATABASE_URL, { organizationIds: ORGS, catalogueKeys: KEYS });
 });
 
 describeIfDatabase('platform default medicine catalogue', { timeout: 60_000 }, () => {

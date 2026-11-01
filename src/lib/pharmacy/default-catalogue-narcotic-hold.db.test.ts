@@ -10,15 +10,19 @@
  * (`recordReviewDecision` + `publishAssertions`). Non-narcotic links and a
  * medicine whose controlled decision was already published are never held.
  *
- * Skipped unless TEST_DATABASE_URL is set (a NOSUPERUSER NOBYPASSRLS role).
- * Every id is unique to the run, as in the other pharmacy sale tests.
+ * Skipped unless TEST_DATABASE_URL (a NOSUPERUSER NOBYPASSRLS role) and
+ * PHARMACY_TEST_OWNER_DATABASE_URL (the table owner, for cleanup) are set.
+ * Every id is unique to the run, and afterAll deletes every row the run wrote
+ * for its own organization and catalogue key.
  */
 import { randomBytes, randomUUID } from 'node:crypto';
 
-import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { TRPCContext } from '@/server/trpc';
+
+import { deleteTestOrganizations } from '../../../tests/delete-test-organizations';
 
 import { serializeSeedCsv, type DefaultCatalogueSeedRow } from './default-catalogue-seed';
 
@@ -35,8 +39,9 @@ vi.mock('@/server/audit', () => ({
 }));
 
 const url = process.env.TEST_DATABASE_URL;
+const ownerUrl = process.env.PHARMACY_TEST_OWNER_DATABASE_URL;
 if (url) process.env.DATABASE_URL = url;
-const suite = url ? describe : describe.skip;
+const suite = url && ownerUrl ? describe : describe.skip;
 
 const suffix = randomBytes(6).toString('hex');
 const KEY = `pharmacy-default-hold-test-${suffix}`;
@@ -260,7 +265,7 @@ function medicineState(medicineId: string) {
 }
 
 beforeAll(async () => {
-  if (!url) return;
+  if (!url || !ownerUrl) return;
   const scoped = await import('@/lib/tenancy/scoped-db');
   deps = {
     withTenantDb: scoped.withTenantDb,
@@ -309,6 +314,11 @@ beforeAll(async () => {
   });
   const loaded = await deps.catalogue.loadDefaultCatalogue({ text: SEED, version: 1, key: KEY });
   versionId = loaded.versionId;
+});
+
+afterAll(async () => {
+  if (!url || !ownerUrl) return;
+  await deleteTestOrganizations(ownerUrl, { organizationIds: [ORG], catalogueKeys: [KEY] });
 });
 
 suite('default catalogue: hand-entered medicine linked to NARCOTICS', { timeout: 90_000 }, () => {
