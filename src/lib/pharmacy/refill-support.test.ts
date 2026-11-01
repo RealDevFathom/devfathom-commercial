@@ -14,7 +14,14 @@ const dispensedAt = new Date('2026-09-01T09:00:00.000Z');
 const scope = { organizationId: 'org_rx', branchId: 'branch_main', actorId: 'pharmacist_1' };
 
 function mockDb(
-  options: { consent?: boolean; rx?: boolean; signed?: boolean; reviewedInBranch?: boolean } = {}
+  options: {
+    consent?: boolean;
+    revokedAt?: Date;
+    recordedAt?: Date;
+    rx?: boolean;
+    signed?: boolean;
+    reviewedInBranch?: boolean;
+  } = {}
 ) {
   const create = vi.fn(async ({ data }) => ({ id: 'reminder_1', status: 'CAPTURED', ...data }));
   return {
@@ -42,6 +49,8 @@ function mockDb(
         id: 'consent_2',
         version: 2,
         granted: options.consent ?? true,
+        revokedAt: options.revokedAt ?? null,
+        recordedAt: options.recordedAt ?? new Date('2026-09-01'),
       }),
     },
     pharmacyPharmacistReviewDecision: {
@@ -168,6 +177,22 @@ describe('RX-07 capture-only reminder gate', () => {
     );
     expect(db.pharmacyRefillReminderCapture.create).not.toHaveBeenCalled();
   });
+
+  it.each([{ revokedAt: new Date('2026-09-02') }, { recordedAt: new Date('2999-01-01') }])(
+    'NEGATIVE: refuses a granted consent with invalid current evidence %o',
+    async (options) => {
+      const db = mockDb(options);
+      await expect(
+        captureRefillReminder(db as never, scope, {
+          fillId: 'fill_1',
+          channel: 'WHATSAPP',
+          directionsUrdu: 'روزانہ',
+          idempotencyKey: 'refill-fill-1',
+        })
+      ).rejects.toMatchObject({ reason: 'REMINDER_CONSENT_REQUIRED' });
+      expect(db.pharmacyRefillReminderCapture.create).not.toHaveBeenCalled();
+    }
+  );
 
   it('NEGATIVE: refuses capture when reminder consent is absent or revoked', async () => {
     const db = mockDb({ consent: false });

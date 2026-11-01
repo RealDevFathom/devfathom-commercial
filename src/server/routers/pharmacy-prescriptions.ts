@@ -2,6 +2,13 @@ import { writePatientConsent } from '@/lib/pharmacy/consent-writer';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { can, subjectFromSession } from '@/lib/abac';
+import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
+import {
+  captureRefillReminderForReview,
+  listRefillReminderReviews,
+  reviewRefillReminder,
+  RefillReminderReviewError,
+} from '@/lib/pharmacy/refill-reminder-review';
 import { hasModule } from '@/lib/entitlements';
 import {
   loadPrescriptionFile,
@@ -23,7 +30,6 @@ import {
   resolveRxOcrAdapter,
   RxOcrError,
 } from '@/lib/pharmacy/rx-ocr';
-import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
   auditedProtectedProcedure,
   capabilityProcedure,
@@ -88,6 +94,25 @@ async function readableSourceFile(
     throw new TRPCError({ code: 'NOT_FOUND', message: 'Prescription image unavailable.' });
   }
   return file;
+}
+
+async function mapRefillReviewErrors<T>(run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    if (error instanceof RefillReminderReviewError) {
+      const code = error.reason.endsWith('NOT_FOUND')
+        ? 'NOT_FOUND'
+        : error.reason === 'REFILL_CAPTURE_CONFLICT' ||
+            error.reason === 'REFILL_REVIEW_ALREADY_DECIDED'
+          ? 'CONFLICT'
+          : 'PRECONDITION_FAILED';
+      throw new TRPCError({ code, message: error.reason });
+    }
+    if (error instanceof RefillSupportError)
+      throw new TRPCError({ code: 'PRECONDITION_FAILED', message: error.reason });
+    throw error;
+  }
 }
 
 export const pharmacyPrescriptionsRouter = router({
@@ -406,6 +431,81 @@ export const pharmacyPrescriptionsRouter = router({
     )
     .mutation(({ ctx, input }) =>
       ctx.db.prescriptionFill.create({ data: { ...input, dispensedByUserId: ctx.session.user.id } })
+    ),
+
+  refillReminderReviews: capabilityProcedure('pharmacy:dispense')
+    .input(z.object({ branchId: z.string().trim().min(1).max(128) }).strict())
+    .query(({ ctx, input }) =>
+      mapRefillReviewErrors(() =>
+        withTenantDb(
+          ctx.entitlements.organizationId,
+          (db) =>
+            listRefillReminderReviews(db, {
+              organizationId: ctx.entitlements.organizationId,
+              branchId: input.branchId,
+            }),
+          { userId: ctx.session.user.id }
+        )
+      )
+    ),
+
+  captureRefillReminderForReview: capabilityProcedure('pharmacy:dispense')
+    .input(
+      z
+        .object({
+          fillId: z.string().trim().min(1).max(128),
+          branchId: z.string().trim().min(1).max(128),
+          directionsUrdu: z.string().trim().min(1).max(500),
+          idempotencyKey: z.string().trim().min(12).max(160),
+        })
+        .strict()
+    )
+    .mutation(({ ctx, input }) =>
+      mapRefillReviewErrors(() =>
+        withTenantDb(
+          ctx.entitlements.organizationId,
+          (db) =>
+            captureRefillReminderForReview(
+              db,
+              {
+                organizationId: ctx.entitlements.organizationId,
+                branchId: input.branchId,
+                actorId: ctx.session.user.id,
+              },
+              input
+            ),
+          { userId: ctx.session.user.id }
+        )
+      )
+    ),
+
+  reviewRefillReminder: capabilityProcedure('pharmacy:dispense')
+    .input(
+      z
+        .object({
+          captureId: z.string().trim().min(1).max(128),
+          branchId: z.string().trim().min(1).max(128),
+          decision: z.enum(['APPROVED', 'SKIPPED']),
+        })
+        .strict()
+    )
+    .mutation(({ ctx, input }) =>
+      mapRefillReviewErrors(() =>
+        withTenantDb(
+          ctx.entitlements.organizationId,
+          (db) =>
+            reviewRefillReminder(
+              db,
+              {
+                organizationId: ctx.entitlements.organizationId,
+                branchId: input.branchId,
+                actorId: ctx.session.user.id,
+              },
+              input
+            ),
+          { userId: ctx.session.user.id }
+        )
+      )
     ),
 
   captureRefillReminder: capabilityProcedure('pharmacy:dispense')

@@ -8,6 +8,16 @@ const DAY_MS = 86_400_000;
 const REMINDER_LEAD_DAYS = 3;
 
 export type RefillScope = { organizationId: string; branchId: string; actorId: string };
+export type RefillCaptureDb = Pick<
+  ScopedDb,
+  | 'pharmacyBranch'
+  | 'prescriptionFill'
+  | 'patientConsent'
+  | 'pharmacyPharmacistReviewDecision'
+  | 'pharmacySaleLine'
+  | 'pharmacyRefillReminderCapture'
+>;
+
 export type ReminderChannel = 'PHONE' | 'SMS' | 'WHATSAPP' | 'EMAIL';
 
 export class RefillSupportError extends Error {
@@ -115,7 +125,7 @@ function strengthLabel(
  * into the patient-context capture row (RX-01, RX-03, invariant 21).
  */
 export async function captureRefillReminder(
-  db: ScopedDb,
+  db: RefillCaptureDb,
   scope: RefillScope,
   input: {
     fillId: string;
@@ -156,7 +166,8 @@ export async function captureRefillReminder(
     },
     orderBy: { version: 'desc' },
   });
-  if (!consent?.granted) throw new RefillSupportError('REMINDER_CONSENT_REQUIRED');
+  if (!consent?.granted || consent.revokedAt || consent.recordedAt > new Date())
+    throw new RefillSupportError('REMINDER_CONSENT_REQUIRED');
 
   const pharmacistDecision = fill.line.medicine.rx
     ? await db.pharmacyPharmacistReviewDecision.findFirst({

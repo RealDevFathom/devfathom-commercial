@@ -4,6 +4,15 @@ import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { WhatsAppProviderError, type WhatsAppSendResult } from './provider';
 
+// PENDING alone is ambiguous (including legacy claims and crashed senders).
+// Only a fresh, unattempted reservation carries this marker. Consume it in a
+// committed compare-and-set BEFORE calling the provider; never expire/reset it.
+const SEND_RESERVED = 'SEND_RESERVED';
+const UNKNOWN_PROVIDER_OUTCOME = 'UNKNOWN_PROVIDER_OUTCOME';
+const DEFINITIVE_FAILURE_REASONS = ['NOT_CONFIGURED', 'TEMPLATE_NOT_CONFIGURED', 'SEND_FAILED'];
+
+type SendOutcome = 'SENT' | 'PREPARED' | 'UNKNOWN' | 'FAILED' | 'DUPLICATE';
+
 export type MessageLogKind =
   | 'REFILL_REMINDER'
   | 'ORDER_REQUEST'
@@ -40,7 +49,7 @@ type MessageLogClaim = MessageLogEntry & {
 /** Reuse the caller's transaction when a claim must commit with its effect. */
 export async function claimMessageLogInTransaction(db: ScopedDb, entry: MessageLogClaim) {
   const created = await db.pharmacyMessageLog.createManyAndReturn({
-    data: [entry],
+    data: [entry.direction === 'OUTBOUND' ? { ...entry, error: SEND_RESERVED } : entry],
     skipDuplicates: true,
     select: { id: true },
   });
@@ -57,34 +66,64 @@ export async function updateMessageLog(
   data: {
     status?: 'PENDING' | 'SENT' | 'FAILED' | 'IGNORED';
     providerMessageId?: string;
-    error?: string;
+    error?: string | null;
     customerId?: string;
     orderId?: string;
     branchId?: string;
   }
 ) {
-  await withTenantDb(organizationId, (db) => db.pharmacyMessageLog.update({ where: { id }, data }));
+  // Do not hydrate unrelated, unmigrated inherited growth/campaign fields.
+  await withTenantDb(organizationId, (db) =>
+    db.pharmacyMessageLog.update({ where: { id }, data, select: { id: true } })
+  );
 }
 
 /**
- * At-most-once outbound send: the dedupe key is claimed before the provider is
- * called, so a crash between claim and send never produces a duplicate message.
+ * Reserve a new outbound key. Retries of existing reservations must use the
+ * same sendClaimedMessage authority gate as the original sender.
  */
 export async function sendAndLog(
   entry: MessageLogEntry,
   send: () => Promise<WhatsAppSendResult>
-): Promise<'SENT' | 'PREPARED' | 'UNKNOWN' | 'FAILED' | 'DUPLICATE'> {
+): Promise<SendOutcome> {
   const logId = await claimMessageLog({ ...entry, direction: 'OUTBOUND', status: 'PENDING' });
   if (!logId) return 'DUPLICATE';
   return sendClaimedMessage(entry, logId, send);
 }
 
-/** Reservation has already committed with its eligibility checks. */
+/**
+ * Reservation has already committed with its eligibility checks. The atomic
+ * transition below is shared by the original sender and every retry, scoped to
+ * the exact tenant/outbound/key/id. It commits before any external side effect.
+ *
+ * A zero-row result is NOT permission to send: SENT, mock preparation, unknown
+ * outcomes (even PENDING with no error), and another in-flight sender all fail
+ * closed. Only an unattempted reservation or a recorded definitive rejection
+ * may acquire authority. No lock is held across a provider call, and a crash or
+ * post-acceptance log failure leaves the durable unknown state non-retryable.
+ */
 export async function sendClaimedMessage(
   entry: MessageLogEntry,
   logId: string,
   send: () => Promise<WhatsAppSendResult>
-): Promise<'SENT' | 'PREPARED' | 'UNKNOWN' | 'FAILED'> {
+): Promise<SendOutcome> {
+  const authority = await withTenantDb(entry.organizationId, (db) =>
+    db.pharmacyMessageLog.updateMany({
+      where: {
+        id: logId,
+        organizationId: entry.organizationId,
+        direction: 'OUTBOUND',
+        dedupeKey: entry.dedupeKey,
+        OR: [
+          { status: 'PENDING', error: SEND_RESERVED },
+          { status: 'FAILED', error: { in: DEFINITIVE_FAILURE_REASONS } },
+        ],
+      },
+      data: { status: 'PENDING', error: UNKNOWN_PROVIDER_OUTCOME },
+    })
+  );
+  if (authority.count !== 1) return 'DUPLICATE';
+
   let result: WhatsAppSendResult;
   try {
     result = await send();
@@ -93,7 +132,7 @@ export async function sendClaimedMessage(
     await updateMessageLog(entry.organizationId, logId, {
       status: definitive ? 'FAILED' : 'PENDING',
       // Never persist arbitrary transport errors: they can contain message/recipient data.
-      error: definitive ? error.reason : 'UNKNOWN_PROVIDER_OUTCOME',
+      error: definitive ? error.reason : UNKNOWN_PROVIDER_OUTCOME,
     });
     return definitive ? 'FAILED' : 'UNKNOWN';
   }
@@ -111,8 +150,8 @@ export async function sendClaimedMessage(
     ...(outcome === 'PREPARED'
       ? { error: 'MOCK_PREPARED' }
       : outcome === 'UNKNOWN'
-        ? { error: 'UNKNOWN_PROVIDER_OUTCOME' }
-        : {}),
+        ? { error: UNKNOWN_PROVIDER_OUTCOME }
+        : { error: null }),
   });
   return outcome;
 }

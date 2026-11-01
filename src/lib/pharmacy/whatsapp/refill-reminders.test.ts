@@ -1,3 +1,4 @@
+import { applySendAuthorityUpdate } from '../../../../tests/support/whatsapp-message-log-store';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 type LogRow = { id: string; organizationId: string; dedupeKey: string; [key: string]: unknown };
@@ -7,6 +8,7 @@ const store = vi.hoisted(() => ({
   customers: [] as Array<Record<string, unknown>>,
   consents: [] as Array<Record<string, unknown>>,
   logs: [] as LogRow[],
+  reviewStatus: null as string | null,
 }));
 
 vi.mock('@/lib/entitlements', () => ({
@@ -18,7 +20,13 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
     // The real query also excludes captures that already have a log row; the
     // fake returns every capture so the dedupe-key claim is what is exercised.
     $queryRaw: async (query: { sql: string }) =>
-      query.sql.includes('FOR UPDATE') ? [{ id: 'patient-1' }] : store.captures,
+      query.sql.includes('SELECT "status" FROM "pharmacy_refill_reminder_reviews"')
+        ? store.reviewStatus
+          ? [{ status: store.reviewStatus }]
+          : []
+        : query.sql.includes('FOR UPDATE')
+          ? [{ id: 'patient-1' }]
+          : store.captures,
     organization: {
       findUnique: async () => ({
         vertical: 'PHARMACY',
@@ -36,6 +44,8 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
         store.consents.find((consent) => consent.patientId === where.patientId) ?? null,
     },
     pharmacyMessageLog: {
+      updateMany: async (args: Parameters<typeof applySendAuthorityUpdate>[1]) =>
+        applySendAuthorityUpdate(store.logs, args),
       count: async () => store.logs.length,
       createManyAndReturn: async ({ data }: { data: Array<Omit<LogRow, 'id'>> }) => {
         const row = data[0]!;
@@ -104,6 +114,7 @@ beforeEach(() => {
   store.customers = [];
   store.consents = [];
   store.logs = [];
+  store.reviewStatus = null;
 });
 
 describe('planRefillReminder', () => {
@@ -192,6 +203,32 @@ describe('processDueWhatsAppRefillReminders', () => {
 
     expect(result).toMatchObject({ scanned: 1, sent: 0, skippedNoConsent: 1 });
     expect(provider.calls).toEqual([]);
+    expect(store.logs).toEqual([]);
+  });
+
+  it.each(['DRAFT', 'SKIPPED'])(
+    'holds %s full-flow captures even if selected by a stale worker',
+    async (status) => {
+      const provider = new MockWhatsAppProvider(config);
+      store.captures = [capture('capture-1')];
+      store.customers = [customer('patient-1', true)];
+      store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+      store.reviewStatus = status;
+      expect(await processDueWhatsAppRefillReminders({ now: NOW, config, provider })).toMatchObject(
+        { heldForReview: 1, prepared: 0 }
+      );
+      expect(store.logs).toEqual([]);
+      expect(provider.calls).toEqual([]);
+    }
+  );
+
+  it('never runs a live provider injected with mock configuration', async () => {
+    store.captures = [capture('capture-1')];
+    const provider = { name: 'meta', sendTemplate: vi.fn() };
+    expect(
+      await processDueWhatsAppRefillReminders({ now: NOW, config, provider: provider as never })
+    ).toMatchObject({ scanned: 0, prepared: 0 });
+    expect(provider.sendTemplate).not.toHaveBeenCalled();
     expect(store.logs).toEqual([]);
   });
 

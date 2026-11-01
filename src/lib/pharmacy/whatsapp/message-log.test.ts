@@ -1,10 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ claim: vi.fn(), update: vi.fn() }));
+const mocks = vi.hoisted(() => ({ claim: vi.fn(), authority: vi.fn(), update: vi.fn() }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({
   withTenantDb: (_organizationId: string, fn: (db: unknown) => unknown) =>
     fn({
-      pharmacyMessageLog: { createManyAndReturn: mocks.claim, update: mocks.update },
+      pharmacyMessageLog: {
+        createManyAndReturn: mocks.claim,
+        updateMany: mocks.authority,
+        update: mocks.update,
+      },
     }),
 }));
 import { sendAndLog } from './message-log';
@@ -14,6 +18,7 @@ const entry = { organizationId: 'org-a', kind: 'REFILL_REMINDER' as const, dedup
 beforeEach(() => {
   vi.resetAllMocks();
   mocks.claim.mockResolvedValue([{ id: 'log-a' }]);
+  mocks.authority.mockResolvedValue({ count: 1 });
   mocks.update.mockResolvedValue({});
 });
 
@@ -27,6 +32,7 @@ describe('outbound evidence and safe replay', () => {
     ).toBe('PREPARED');
     expect(mocks.update).toHaveBeenCalledWith({
       where: { id: 'log-a' },
+      select: { id: true },
       data: {
         status: 'IGNORED',
         providerMessageId: 'mock-1',
@@ -43,9 +49,11 @@ describe('outbound evidence and safe replay', () => {
     ).toBe('SENT');
     expect(mocks.update).toHaveBeenCalledWith({
       where: { id: 'log-a' },
+      select: { id: true },
       data: {
         status: 'SENT',
         providerMessageId: 'real-1',
+        error: null,
       },
     });
   });
@@ -57,6 +65,7 @@ describe('outbound evidence and safe replay', () => {
     ).toBe('UNKNOWN');
     expect(mocks.update).toHaveBeenCalledWith({
       where: { id: 'log-a' },
+      select: { id: true },
       data: {
         status: 'PENDING',
         error: 'UNKNOWN_PROVIDER_OUTCOME',
@@ -71,6 +80,7 @@ describe('outbound evidence and safe replay', () => {
     ).toBe('FAILED');
     expect(mocks.update).toHaveBeenCalledWith({
       where: { id: 'log-a' },
+      select: { id: true },
       data: {
         status: 'FAILED',
         error: 'NOT_CONFIGURED',

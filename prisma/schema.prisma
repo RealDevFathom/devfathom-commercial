@@ -2762,6 +2762,7 @@ enum MeetingSessionSource {
 // ============================================
 
 model User {
+  refillReminderReviews PharmacyRefillReminderReview[] @relation("RefillReminderReviewer")
   id                 String     @id @default(cuid())
   organizationId     String     @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   organizationRoleId String?
@@ -12321,12 +12322,33 @@ model PharmacyRefillReminderCapture {
   consentEvent         PatientConsent                    @relation(fields: [organizationId, consentEventId], references: [organizationId, id], onDelete: Restrict)
   pharmacistDecision   PharmacyPharmacistReviewDecision? @relation(fields: [organizationId, pharmacistDecisionId], references: [organizationId, id], onDelete: Restrict)
 
+  review               PharmacyRefillReminderReview?
+
   @@unique([organizationId, id])
+  @@unique([organizationId, branchId, id], map: "pharmacy_refill_capture_org_branch_id_key")
   @@unique([organizationId, prescriptionFillId])
   @@unique([organizationId, idempotencyKey])
   @@index([organizationId, branchId, reminderAt])
   @@index([organizationId, patientId, capturedAt])
   @@map("pharmacy_refill_reminder_captures")
+}
+
+/// G9 review metadata only. The clinical capture remains append-only; the
+/// existing WhatsApp message log/dispatcher remains the sole delivery authority.
+model PharmacyRefillReminderReview {
+  organizationId  String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId        String
+  captureId       String
+  status          String @default("DRAFT")
+  decidedByUserId String?
+  decidedAt       DateTime?
+  capture         PharmacyRefillReminderCapture @relation(fields: [organizationId, branchId, captureId], references: [organizationId, branchId, id], onDelete: Restrict, map: "pharmacy_refill_review_capture_fkey")
+  reviewer        User? @relation("RefillReminderReviewer", fields: [organizationId, decidedByUserId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_refill_review_actor_fkey")
+
+  @@id([organizationId, captureId])
+  @@unique([organizationId, branchId, captureId], map: "pharmacy_refill_review_org_branch_capture_key")
+  @@index([organizationId, branchId, status], map: "pharmacy_refill_review_branch_status_idx")
+  @@map("pharmacy_refill_reminder_reviews")
 }
 
 enum PharmacyReviewDecisionKind {
