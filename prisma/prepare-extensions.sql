@@ -1,3 +1,8 @@
+-- pg_trgm's function identities are referenced as regprocedure values below.
+-- Install it in a separate statement so PostgreSQL can resolve those identities
+-- when it plans the hardening block on a brand-new database.
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
 -- Records hardening steps that could not be applied on this cluster. A managed
 -- PostgreSQL service installs trusted extensions under an internal superuser
 -- (Azure Database for PostgreSQL uses "azuresu") that no customer role may

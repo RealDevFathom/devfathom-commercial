@@ -253,6 +253,30 @@ function fail(error: unknown): never {
   throw error;
 }
 
+const DAY_CLOSE_DATABASE_ERROR =
+  'The day could not be closed safely. Refresh the preview and try again. If it still fails, ask a supervisor.';
+
+/** Keep database policy and append-only implementation details off the counter screen. */
+export function failDayClose(error: unknown): never {
+  if (error instanceof TRPCError) throw error;
+  const databaseError = error as {
+    message?: unknown;
+    code?: unknown;
+    meta?: { code?: unknown; message?: unknown };
+  };
+  const details = [databaseError.message, databaseError.meta?.message]
+    .filter((value): value is string => typeof value === 'string')
+    .join(' ');
+  if (
+    databaseError.code === 'P2010' ||
+    databaseError.meta?.code === '55000' ||
+    /append-only|pharmacy_reject_money_mutation/i.test(details)
+  ) {
+    throw new TRPCError({ code: 'CONFLICT', message: DAY_CLOSE_DATABASE_ERROR });
+  }
+  fail(error);
+}
+
 async function loadCounterReceipt(ctx: TRPCContext, scope: LedgerScope, saleId: string) {
   const [branch, organization] = await Promise.all([
     ctx.db.pharmacyBranch.findFirst({
@@ -346,13 +370,26 @@ async function requireCounterReceiptAccess(ctx: TRPCContext, branch: string): Pr
 
   const overrides = member.permissionOverrides;
   const roleRules = member.organizationRole?.permissions ?? [];
+  const explicitlyDenied = RECEIPT_READ_CAPABILITIES.some(
+    (action) =>
+      capabilityDecision(overrides, action) === 'DENY' ||
+      capabilityDecision(roleRules, action) === 'DENY'
+  );
+  if (explicitlyDenied) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission for this action.',
+    });
+  }
   const capable = RECEIPT_READ_CAPABILITIES.some((action) => {
     const override = capabilityDecision(overrides, action);
-    if (override === 'DENY') return false;
     if (override === 'ALLOW') return true;
     return capabilityDecision(roleRules, action) === 'ALLOW';
   });
-  if (!capable) {
+  // A same-organization session administrator may proceed only after both
+  // user and role rules have been checked for an explicit receipt denial.
+  const orgAdmin = user.role === 'ADMIN' && user.organizationId === scope.organizationId;
+  if (!orgAdmin && !capable) {
     throw new TRPCError({
       code: 'FORBIDDEN',
       message: 'You do not have permission for this action.',
@@ -381,7 +418,6 @@ async function requireCounterReceiptAccess(ctx: TRPCContext, branch: string): Pr
 
   // Session role only. An organization-role key is not an administrator grant.
   // An assigned admin still reaches every other active branch of this organization.
-  const orgAdmin = user.role === 'ADMIN' && user.organizationId === scope.organizationId;
   if (orgAdmin) {
     annotateAudit(ctx, {
       targetType: 'PharmacyBranch',
@@ -521,9 +557,13 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       requireCloseAccess(ctx);
-      return ctx.db.$transaction(async (tx) =>
-        closePharmacyDay(txDb(tx), await scopeFor(ctx, input.branchId), input)
-      );
+      try {
+        return await ctx.db.$transaction(async (tx) =>
+          closePharmacyDay(txDb(tx), await scopeFor(ctx, input.branchId), input)
+        );
+      } catch (error) {
+        failDayClose(error);
+      }
     }),
   customerSnapshot: protectedProcedure
     .input(
@@ -680,9 +720,13 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       requireCloseAccess(ctx);
-      return ctx.db.$transaction(async (tx) =>
-        cutPharmacyDailyClose(txDb(tx), await scopeFor(ctx, input.branchId), input)
-      );
+      try {
+        return await ctx.db.$transaction(async (tx) =>
+          cutPharmacyDailyClose(txDb(tx), await scopeFor(ctx, input.branchId), input)
+        );
+      } catch (error) {
+        failDayClose(error);
+      }
     }),
   tenderOutcome: protectedProcedure.input(tenderInput).query(async ({ ctx, input }) => {
     const scope =
@@ -829,11 +873,10 @@ export const pharmacySalesRouter = router({
     }),
   create: protectedProcedure
     .input(z.object({ branchId, quotation: z.boolean().default(false) }).strict())
-    .mutation(async ({ ctx, input }) =>
-      ctx.db.$transaction(async (tx) =>
-        createSale(txDb(tx), await scopeFor(ctx, input.branchId), input.quotation)
-      )
-    ),
+    .mutation(async ({ ctx, input }) => {
+      const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+      return ctx.db.$transaction(async (tx) => createSale(txDb(tx), scope, input.quotation));
+    }),
   addLine: protectedProcedure
     .input(
       z
@@ -909,9 +952,9 @@ export const pharmacySalesRouter = router({
         });
       }
       try {
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
         const outcome = await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
-          const scope = await scopeFor(ctx, input.branchId);
           const medicine = await db.medicine.findFirst({
             where: { id: input.medicineId, organizationId: scope.organizationId },
           });
