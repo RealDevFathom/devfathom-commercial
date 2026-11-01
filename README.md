@@ -2,130 +2,239 @@
 
 <img src="./public/favicon.svg" width="76" height="76" alt="DevFathom" />
 
-# DevFathom Hub
+# DevFathom
 
 **Depth in everything we build.**
 
-The company operating hub for **DevFathom** and customer agencies. Projects,
-finance, clients, people, real-time collaboration, and organization
-administration in one calm workspace, backed by a separate seller control
-plane.
+A multi-tenant point-of-sale and AI growth platform for businesses in Pakistan,
+with dedicated verticals for **pharmacies**, **restaurants** and **hotels**, plus
+a shared company workspace and a seller control plane.
 
 </div>
 
 ---
 
-## Overview
+## What DevFathom is
 
-DevFathom Hub brings the tools the team uses every day into a single, fast,
-consistent surface:
+DevFathom runs many customer organizations (tenants) on one PostgreSQL database,
+isolated with forced row-level security. Each organization enables the modules
+and verticals it is licensed for. Around the vertical apps sits a general
+workspace (projects, clients, finance, notes, meetings, chat, HR) and a
+platform control desk used by DevFathom operators to onboard and run tenants.
 
-- **Dashboard** — a live pulse of what's happening across the workspace
-- **Projects & Kanban** — boards, tasks, comments, and a Trello importer
-- **Clients** — relationships, contacts, and engagement history
-- **Finance** — invoices, transactions, and P&L reporting (admin)
-- **Notes** — a rich Tiptap editor with mentions, tables, and links
-- **Meetings** — scheduling with recurring occurrences
-- **Chat** — real-time messaging over WebSockets
-- **Team, HR & Insights** — people, leave, and analytics
-- **REST API + API docs** — programmatic access for scripts and AI agents
-- **Organization administration** — people, roles, modules, domains, identity,
-  SCIM, email, and brand
-- **Platform control desk** — CRM, contracts, manual onboarding, licenses,
-  shared/dedicated deployments, jobs, operators, support, and audit
+## Verticals
+
+### 💊 Pharmacy — `src/app/(app)/pharmacy`
+
+- **Counter (POS)** — dispensing, drawer sessions, daily close, refunds, khata
+  (customer credit) with limits, FEFO batch selection, fiscal documents and
+  receipt numbering, offline command queue
+- **Prescriptions & pharmacist queue** — patients, prescribers, Rx-gated sales,
+  pharmacist review decisions, emergency-Rx follow-ups
+- **Controlled register & regulatory** — controlled-drug register, custody
+  records, recalls and quarantine, pharmacovigilance reports, DRAP data ingest
+- **Medicines, substitution & pricing** — medicine catalog, pack prices, price
+  change proposals, reference connectors
+- **Inventory** — lots, counts, inter-branch transfers, receiving exceptions
+- **Purchasing** — purchase orders with approvals, goods receipts, purchase
+  returns, debit notes, central purchasing across branches
+- **Finance** — bookkeeping, accounting periods, bank reconciliation
+- **Customer orders, quotes, family accounts and loyalty**
+- **Marketing** — segments, templates, campaigns with attribution, refill
+  reminders, owner digests
+- **Cameras** — branch camera gateways and evidence
+- **Onboarding & migration** — opening stock/ledger, data migration batches,
+  parallel-run comparison and cutover
+- **Reports** and multi-branch assignment
+
+Fiscal documents and receipt numbering are local operational records: no licensed
+FBR integrator is connected yet; sandbox results do not establish fiscal compliance.
+Card/wallet payments require a certified adapter; keep sandbox admission off in
+production. Refill reminders and owner digests must keep WhatsApp sending in mock
+mode until the owner approves the sender and templates. The owner-digest WhatsApp
+channel is currently a non-sending provider seam. See the [fiscal adapter](./src/lib/pharmacy/fiscal.ts),
+[payment admission guard](./src/lib/pharmacy/payment-sandbox-admission.ts) and
+[WhatsApp provider](./src/lib/pharmacy/whatsapp/provider.ts) for these boundaries.
+
+### 🍽️ Restaurant — `src/app/(app)/restaurant`, `src/app/(terminal)`
+
+- **POS and KDS terminals** — `/pos` and `/kds` terminal routes, registered
+  devices, operator credentials, terminal sessions
+- **Orders, bills & payments** — dine-in / takeaway orders, kitchen tickets,
+  station routing, split bills, tenders, refunds, service charge policies
+- **Floor** — floors, tables, server sections
+- **Catalog & menus** — products, variants, modifiers, combos, allergens,
+  price lists, branch menu publication and availability windows,
+  **AI menu import**
+- **Inventory & recipes** — ingredients, recipe versions, stock locations,
+  batches, counts, transfers, low-stock rules
+- **Purchasing** — suppliers, purchase orders, receipts, discrepancies
+- **Money & tax** — drawer sessions, daily close, versioned tax profiles and
+  rules with per-transaction snapshots
+- **Delivery & catering** — delivery zones, customer addresses, catering quotes,
+  approvals, capacity and deliveries
+- **Promotions & loyalty** — versioned promotion rules with caps and audit
+- **Staff & shifts** — job roles, capabilities, shifts, breaks, swaps
+- **SOPs** — templates, assignments, evidence, verification and escalation
+- **Notifications, integrations & webhooks**, printers and a local print bridge
+- **Cameras**, **reports**, **insights** and **growth** recommendations
+
+Restaurant card tenders are operator-confirmed mock/adapter-only flows, not proof
+of live gateway authorization. Printing supports browser output and a local ESC/POS
+bridge running on the till PC. Physical hardware has not been validated, and cash
+drawer kick is not implemented. See [printing operations](./docs/product/modules/printing.md).
+
+### 🏨 Hotel — `src/app/(app)/hotel` _(in progress)_
+
+Currently setup/configuration only, under **Hotel settings**:
+
+- **Property** profile and staff property assignments
+- **Rooms** — room types, rooms, beds, room blocks and room status events
+- **Meal plans**, **extras**
+- **Function spaces** and space bookings
+- **Guest journey** templates
+
+Front-desk operations (reservations, check-in/out, folios) are not built yet.
+
+## Platform features
+
+- **Multi-tenant isolation** — one database, forced organization RLS; the app
+  role must be `NOSUPERUSER NOBYPASSRLS` and production refuses a role that
+  bypasses RLS. Verify with `bun run test:rls`. Branch/property scoping on top
+  for multi-branch tenants.
+- **Auth** — NextAuth v5, TOTP two-factor, SAML/OIDC SSO, SCIM provisioning,
+  invitations and password policy.
+- **Organization admin** — people, roles, modules, domains, identity, email
+  and brand.
+- **Platform control desk** (`/platform`) — organizations, CRM, commercial
+  contracts and licenses, catalog, deployments, jobs, operators, support,
+  health and audit, with its own MFA.
+- **AI** — "Ask Fathom" assistant with tools, AI menu import, and growth
+  recommendations. Providers are Groq, Google and Google Vertex. Azure OpenAI remains a
+  deprecated compatibility adapter and must not be used for new deployments.
+- **Cameras** — gateway-based cameras with encrypted credentials and
+  short-lived stream grants (pharmacy and restaurant).
+- **Workspace** — dashboard, projects/Kanban (Trello import), clients, finance,
+  notes, meetings, real-time chat (Ably), HR, reviews, REST API + API docs.
 
 ## Tech stack
 
-| Area          | Choice                                              |
-| ------------- | --------------------------------------------------- |
-| Framework     | Next.js 16 (App Router) · React 19                  |
-| Styling       | Tailwind CSS v4 · shadcn/ui on `@base-ui/react`     |
-| Motion        | GSAP + `@gsap/react` · Motion (Framer Motion)       |
-| Type-safe API | tRPC v11 · TanStack Query                           |
-| Data          | Prisma 7 · PostgreSQL                               |
-| Auth          | NextAuth v5                                         |
-| Realtime      | Ably when configured; graceful no-realtime fallback |
-| Runtime / PM  | [Bun](https://bun.sh)                               |
+| Area         | Choice                                              |
+| ------------ | --------------------------------------------------- |
+| Framework    | Next.js 16 (App Router) · React 19                  |
+| API          | tRPC v11 · TanStack Query                           |
+| Data         | Prisma 7 · PostgreSQL (RLS)                         |
+| Auth         | NextAuth v5 · TOTP · SAML/OIDC · SCIM               |
+| Styling      | Tailwind CSS v4 · shadcn/ui on `@base-ui/react`     |
+| AI           | Vercel AI SDK                                       |
+| Realtime     | Ably chat · self-hosted LiveKit meetings (optional) |
+| Runtime / PM | Bun **1.4.2**                                       |
+| Tests        | Vitest · Playwright                                 |
 
-## Getting started
+## Local setup
 
-This project uses **Bun** as its package manager and runtime.
+Requires Bun 1.4.2 and PostgreSQL. Full details: [docs/LOCAL_SETUP.md](./docs/LOCAL_SETUP.md).
 
-```bash
-bun install                      # install dependencies
-bun run db:generate              # generate the Prisma client
-bun prisma/prepare-extensions.ts # harden trusted extensions (required before migrate)
-bunx prisma migrate deploy       # uses MIGRATION_DATABASE_URL when set
-bun run db:seed                  # same migration URL; the app role is RLS-bound
-bun run dev                      # start Next.js
-```
+1. Copy `.env.example` to `.env.local` and fill in values. Minimum:
+   `DATABASE_URL` (RLS-bound app role), `MIGRATION_DATABASE_URL`,
+   `EXTENSION_ADMIN_DATABASE_URL`, `AUTH_SECRET`, `AUTH_URL`,
+   `NEXT_PUBLIC_APP_URL`, `PLATFORM_BASE_DOMAIN`, `PLATFORM_ENCRYPTION_KEY`,
+   `CAMERA_CREDENTIAL_KEY`. AI, email, storage and realtime keys are optional.
+   Set `EXTENSION_ADMIN_DATABASE_URL` to the extension-owner/admin connection used
+   by `prisma/prepare-extensions.ts`: an extension object owner, a superuser, or
+   a role with explicit SET privilege on every extension object owner.
+   Never commit `.env` or `.env.local`.
 
-`DATABASE_URL` is the application role and must be `NOSUPERUSER` `NOBYPASSRLS`.
-`MIGRATION_DATABASE_URL` is used by Prisma migrations when it is set. Production
-startup refuses a database role that bypasses row-level security. The local
-setup guide has the role statements.
+   Before seeding, set `SEED_PASSWORD` (or `ADMIN_PASSWORD` as its fallback) for
+   seeded tenant users. If `ADMIN_EMAIL` is set, as in the template,
+   `ADMIN_PASSWORD` is also required for the separate workspace administrator.
+   For control-desk access, set both `PLATFORM_ADMIN_EMAIL` and
+   `PLATFORM_ADMIN_PASSWORD` before seeding; this creates or updates the platform
+   administrator, including its password on each seed run. Leaving both unset
+   skips that bootstrap; setting only one fails.
 
-`bun prisma/prepare-extensions.ts` must run before `prisma migrate deploy`: it revokes
-`PUBLIC EXECUTE` on the trusted `btree_gist` / `pg_trgm` functions as the extension administrator,
-and the migration gate fails closed on a fresh database if it was skipped. It reads
-`EXTENSION_ADMIN_DATABASE_URL` — see **[the local setup guide](./docs/LOCAL_SETUP.md)**.
-
-For local multi-host development, open
-`http://devfathom.localhost:3000` for the tenant workspace and
-`http://admin.localhost:3000/platform` for the seller control desk.
-
-### Useful scripts
+2. Install and prepare the database:
 
 ```bash
-bun run dev        # Next.js development server
-bun run build      # prisma generate && next build
-bun run typecheck  # TypeScript
-bun run lint       # ESLint
-bun run test       # Vitest
-bun run test:rls   # PostgreSQL isolation verification (test DB only)
-bun run platform:jobs -- --max-jobs=25
-bun run format     # prettier --write
-bun run db:studio  # Prisma Studio
+bun install
+bun run db:generate
+bun prisma/prepare-extensions.ts   # required before migrations
+bunx prisma migrate deploy
+bun run db:seed
+bun run dev
 ```
 
-## Administration platform
+`db:push` is intentionally disabled — use migrations. Before starting the app,
+grant its runtime role access to migrated tables and sequences as shown in
+[local setup](./docs/LOCAL_SETUP.md#3-install-and-initialize).
 
-The product uses one PostgreSQL database with forced organization RLS. Customer
-agencies are activated manually; shared deployment is the default and
-enterprise customers may use dedicated Azure environments when contracted. Start with
-**[the local setup guide](./docs/LOCAL_SETUP.md)** and
-**[the administration handbook](./docs/admin-platform/README.md)**, then copy
-**[`.env.example`](./.env.example)** for configuration names.
+For AI, set `AI_PROVIDER=groq`, `google` or `vertex`, a provider-specific `AI_MODEL`
+(no runtime default), and the corresponding credentials in `.env.example`.
+For durable uploads, use `STORAGE_ADAPTER=s3` with `S3_UPLOADS_BUCKET` and
+`AWS_REGION`; credentials come from the runtime role. Unset/`disabled` disables
+uploads; `local` is permitted only in development/test. The legacy `azure` adapter
+and both `AZURE_STORAGE_*` variables are deprecated (Azure), not for new deployments.
+These selection rules are implemented in [storage.ts](./src/lib/storage.ts).
+For optional self-hosted meetings, configure `NEXT_PUBLIC_LIVEKIT_URL`
+(for example `wss://livekit.example.com`) and server-only `LIVEKIT_API_KEY` and
+`LIVEKIT_API_SECRET`. The public URL is fixed at build time.
 
-## Brand
+Open `http://devfathom.localhost:3000` for the tenant workspace and
+`http://admin.localhost:3000/platform` for the control desk.
 
-DevFathom has a documented visual identity — palette, logo usage, typography,
-and motion principles. See **[BRAND.md](./BRAND.md)**, or open the live
-**`/brand`** page (publicly viewable).
-
-Brand assets live in `public/` and are regenerated from a single master SVG:
+## Testing
 
 ```bash
-bun run scripts/gen-brand-icons.ts   # rebuilds favicons, app icons & logo SVGs
+bun run typecheck
+bun run lint
+bun run format:check
+bun run test          # Vitest unit + DB tests
+bun run test:rls      # tenant isolation (test DB only)
+bun run test:e2e      # Playwright
+bun run test:e2e:pharmacy-counter
+bun run test:e2e:restaurant-integrated
 ```
 
-## Project structure
+Database tests need dedicated, migrated, disposable test databases; do not use
+an application database. `test:rls` requires `TEST_DATABASE_URL` and never falls
+back to `DATABASE_URL`. Use a local database with a role able to create and grant
+roles for that verifier. Vitest DB suites have their own URL and role
+requirements; some skip when these are missing, so a unit-test pass alone does
+not establish database coverage.
+
+Test/e2e variables (`TEST_DATABASE_URL`, `*_TEST_*_DATABASE_URL`, `PLAYWRIGHT_*`,
+`*_E2E_*`) are documented in [local setup](./docs/LOCAL_SETUP.md); the environment
+template intentionally does not enumerate all suite-specific settings.
+
+**Zero-skip rule:** a PR must not add or leave skipped tests (`.skip`, `.todo`,
+conditional skips). Fix or delete the test instead.
+
+## Branch flow
 
 ```
-src/
-  app/                 # App Router routes
-    (app)/             # authenticated workspace (dashboard, projects, …)
-    brand/             # public brand showcase (/brand)
-    login/             # animated sign-in
-    platform/          # seller control desk
-    api/               # tRPC, REST, platform, SCIM, SSO, support
-  components/
-    brand/             # logo / DevFathom mark
-    layout/            # app shell, sidebar, topbar
-    motion/            # Reveal, Stagger, CountUp, Magnetic, PageTransition
-    ui/                # shadcn primitives
-  lib/                 # auth, db, trpc, motion tokens
-  server/              # tRPC routers
-prisma/                # schema, seed, migrations
-docs/admin-platform/   # architecture, API, status, runbooks, release evidence
+feature branch → develop → staging → main
 ```
+
+- All work branches from `develop` and opens PRs into `develop`.
+- `staging` and `main` are promoted only with the owner's approval.
+
+## Contributing
+
+- Open PRs into `develop` only, one concern per PR, linked to its issue.
+- Every PR needs a **QA PASS and a Security PASS on its latest commit**, plus
+  green CI, before merge.
+- CI on GitHub Actions runs once the **`ci-ready`** label is added.
+- **No force-push.** No secrets in code, PRs, issues or chat.
+
+## Security
+
+Report vulnerabilities **privately** through
+[GitHub private vulnerability reporting](https://github.com/RealDevFathom/devfathom-commercial/security/advisories/new)
+— see [SECURITY.md](./SECURITY.md) for reporting guidance.
+Do not open public issues for security problems.
+
+## More docs
+
+[Brand](./BRAND.md) · [Admin platform](./docs/admin-platform/README.md) ·
+[Pharmacy](./docs/pharmacy) · [Restaurant](./docs/restaurant) ·
+[Product documentation](./docs/product) · [Technical overview](./docs/technical-overview.md)

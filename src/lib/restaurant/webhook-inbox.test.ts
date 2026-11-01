@@ -105,6 +105,7 @@ function claimedJob(payload: unknown): ClaimedJob {
     attempts: 1,
     maxAttempts: 5,
     claimedBy: 'worker-a',
+    claimToken: 'webhook-test-claim',
     startedAt: new Date(),
   };
 }

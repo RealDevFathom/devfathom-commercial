@@ -1,5 +1,6 @@
 import { browserUuid } from '@/lib/browser-uuid';
 import { GrowthPanel } from './growth-panel';
+import { BasketPanel } from './basket-panel';
 import Link from 'next/link';
 import { TRPCError } from '@trpc/server';
 import { Button } from '@/components/ui/button';
@@ -33,7 +34,24 @@ async function loadWorkspace(params: Record<string, string | string[] | undefine
   } catch {
     growthUnavailable = true;
   }
-  return { branches, branchId, history, review, delivery, growth, growthUnavailable };
+  let baskets = null;
+  let basketsUnavailable = false;
+  try {
+    baskets = await caller.basketHistory({ branchId });
+  } catch {
+    basketsUnavailable = true;
+  }
+  return {
+    branches,
+    branchId,
+    history,
+    review,
+    delivery,
+    growth,
+    growthUnavailable,
+    baskets,
+    basketsUnavailable,
+  };
 }
 
 export default async function PharmacyMarketingPage({
@@ -92,7 +110,17 @@ export default async function PharmacyMarketingPage({
         </SectionCard>
       </main>
     );
-  const { branches, branchId, history, review, delivery, growth, growthUnavailable } = workspace;
+  const {
+    branches,
+    branchId,
+    history,
+    review,
+    delivery,
+    growth,
+    growthUnavailable,
+    baskets,
+    basketsUnavailable,
+  } = workspace;
   return (
     <main key={branchId} className="min-w-0 space-y-6">
       {heading}
@@ -150,6 +178,7 @@ export default async function PharmacyMarketingPage({
         unavailable={growthUnavailable}
         templates={history.templates}
       />
+      <BasketPanel branchId={branchId} history={baskets} unavailable={basketsUnavailable} />
       {review && (
         <SectionCard
           key={review.campaign.id}
@@ -316,7 +345,12 @@ export default async function PharmacyMarketingPage({
             No campaigns yet. Approve a template, then save your first draft below.
           </p>
         ) : (
-          <div className="relative overflow-x-auto">
+          <div
+            role="region"
+            aria-label="Marketing campaigns"
+            tabIndex={0}
+            className="relative overflow-x-auto focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+          >
             <table className="w-full text-left text-sm">
               <thead className="font-mono text-xs uppercase text-text-muted">
                 <tr>

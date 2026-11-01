@@ -92,12 +92,12 @@ function fixture(raw: unknown = input) {
       ),
       findFirst: vi.fn(async () => ({ id: 'branch-1' })),
     }),
-    // Tender requires counter receipt access: dispense capability plus a branch assignment.
+    // Tender requires canonical counter access plus a branch assignment.
     user: only({
       findUnique: vi.fn(async () => ({
         status: 'ACTIVE',
         organizationId: 'org-1',
-        organizationRole: { permissions: [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }] },
+        organizationRole: { permissions: [{ capability: 'pharmacy:counter', effect: 'ALLOW' }] },
         permissionOverrides: [],
       })),
     }),
@@ -119,7 +119,7 @@ function fixture(raw: unknown = input) {
       expires: 'later',
       user: { id: 'actor-1', role: 'EMPLOYEE', status: 'ACTIVE', organizationId: 'org-1' },
     },
-    organization: { id: 'org-1' },
+    organization: { id: 'org-1', vertical: 'PHARMACY' },
     support: null,
     requestMeta: { ip: null, userAgent: null },
     audit: { detail: {} },
@@ -309,7 +309,10 @@ describe('pharmacySales.tenderOutcome', () => {
     const raw = { ...input, type: 'CREDIT' as const, cashReceivedMinor: undefined };
     const f = fixture(raw);
     expect(await f.caller().tenderOutcome(raw)).toMatchObject({ status: 'ACCEPTED' });
-    await expect(f.caller().tender(raw)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(f.caller().tender(raw)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'ACCOUNT_NOT_FOUND',
+    });
     expect(f.execute).not.toHaveBeenCalled();
     expect(f.transaction).not.toHaveBeenCalled();
     expect(recordTrpcAudit).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'FAILURE' }));

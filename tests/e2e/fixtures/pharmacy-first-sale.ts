@@ -1,18 +1,17 @@
+import { resolvePharmacyE2eDatabaseUrl } from '../../../scripts/pharmacy-e2e-environment';
+import { platformAuthentication } from './platform-control-plane';
 /**
- * Fresh-tenant acceptance journey. Every domain write goes through rendered UI.
- * Run only with the dedicated time-to-first-sale config against an explicitly
- * authorized, isolated SHARED staging candidate. No seed/SQL/request helpers.
- *
- * PHARMACY_FIRST_SALE_INPUT is an operator-owned JSON file matching JourneyInput.
- * References below must describe real staging evidence, not invented approvals.
- * The environment must already have a compatible Pharmacy package (including
- * HR/procurement), confirmed jurisdiction rules, uploads, invite acceptance and
- * a configured SHARED deployment host. This test cannot manufacture those.
+ * Fresh-tenant acceptance journey; business setup and the sale use rendered UI.
+ * Staging uses operator-owned, real evidence in PHARMACY_FIRST_SALE_INPUT.
+ * The counter lane prepares explicitly synthetic DISPOSABLE_E2E inputs instead,
+ * admitted only with PHARMACY_E2E=1 and a disposable loopback database/origins.
+ * Synthetic jurisdiction/evidence and the MFA fixture are never staging attestations.
  */
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
-import { expect, type Browser, type Locator, type Page } from '@playwright/test';
+import AxeBuilder from '@axe-core/playwright';
+import { expect, type Browser, type Locator, type Page, type TestInfo } from '@playwright/test';
 
 const attestedSteps = [
   'Organization type',
@@ -24,7 +23,7 @@ const attestedSteps = [
 ] as const;
 
 type JourneyInput = {
-  environment: 'ISOLATED_SHARED_STAGING';
+  environment: 'ISOLATED_SHARED_STAGING' | 'DISPOSABLE_E2E';
   authorizationRef: string;
   sourceSha: string;
   deployedSha: string;
@@ -74,7 +73,31 @@ function requiredEnvironment(name: string) {
   return value;
 }
 
-function stagingOrigin(name: string) {
+function stagingOrigin(name: string, disposable = false) {
+  if (disposable) {
+    const database = new URL(resolvePharmacyE2eDatabaseUrl());
+    if (!['127.0.0.1', 'localhost', '[::1]'].includes(database.hostname))
+      throw new Error('Synthetic journey requires loopback PostgreSQL.');
+    const local = new URL(
+      requiredEnvironment(
+        name === 'PLAYWRIGHT_BASE_URL'
+          ? 'PHARMACY_FIRST_SALE_PLATFORM_ORIGIN'
+          : 'PHARMACY_FIRST_SALE_TENANT_ORIGIN'
+      )
+    );
+    if (
+      local.protocol !== 'http:' ||
+      !['admin.localhost', 'www.localhost'].includes(local.hostname) ||
+      !local.port ||
+      local.username ||
+      local.password ||
+      local.pathname !== '/' ||
+      local.search ||
+      local.hash
+    )
+      throw new Error('Disposable journey requires explicit loopback origins.');
+    return local.origin;
+  }
   const url = new URL(requiredEnvironment(name));
   if (
     url.protocol !== 'https:' ||
@@ -157,7 +180,11 @@ function input(): JourneyInput {
       Object.values(node).every(nonempty)
     );
   }
-  if (!nonempty(value) || value.environment !== 'ISOLATED_SHARED_STAGING')
+  if (value.environment === 'DISPOSABLE_E2E') resolvePharmacyE2eDatabaseUrl();
+  if (
+    !nonempty(value) ||
+    !['ISOLATED_SHARED_STAGING', 'DISPOSABLE_E2E'].includes(value.environment)
+  )
     throw new Error('Provide complete, authorized staging journey inputs.');
   if (!/^[a-f0-9]{40}$/.test(value.sourceSha) || value.sourceSha !== value.deployedSha)
     throw new Error(
@@ -216,11 +243,13 @@ export async function freshPharmacyFirstSale(
   page: Page,
   browser: Browser,
   metric: { clicks: number },
-  fourXx: string[]
+  fourXx: string[],
+  testInfo: TestInfo
 ) {
   const data = input();
-  const platformOrigin = stagingOrigin('PLAYWRIGHT_BASE_URL');
-  const tenantOrigin = stagingOrigin('PLAYWRIGHT_SHARED_BASE_URL');
+  const disposable = data.environment === 'DISPOSABLE_E2E';
+  const platformOrigin = stagingOrigin('PLAYWRIGHT_BASE_URL', disposable);
+  const tenantOrigin = stagingOrigin('PLAYWRIGHT_SHARED_BASE_URL', disposable);
   if (platformOrigin === tenantOrigin)
     throw new Error('Configure separate control and SHARED tenant origins.');
   const platformEmail = requiredEnvironment('PLAYWRIGHT_PLATFORM_ADMIN_EMAIL');
@@ -239,10 +268,12 @@ export async function freshPharmacyFirstSale(
   const orderReference = `PO-${suffix}`;
   const click = async (target: Locator) => {
     metric.clicks += 1;
+    await expect(target).toBeVisible();
+    await expect(target).toBeEnabled();
     await target.click();
   };
   const setup = async (actor: Page) => {
-    await click(actor.getByRole('link', { name: 'Onboarding', exact: true }));
+    await click(actor.getByRole('link', { name: /Onboarding$/ }));
     await expect(actor).toHaveURL(new URL('/pharmacy', tenantOrigin).href);
     await expect(actor.locator('[data-slot="readiness-checklist"]')).toBeVisible();
     await noRawIdEntry(actor);
@@ -277,7 +308,12 @@ export async function freshPharmacyFirstSale(
   observe(colleague);
   try {
     await platform.goto(new URL('/platform/login', platformOrigin).href);
-    await fill(platform, { email: platformEmail, password: platformPassword });
+    await fill(
+      platform,
+      disposable
+        ? await platformAuthentication({ email: platformEmail, password: platformPassword })
+        : { email: platformEmail, password: platformPassword }
+    );
     await click(platform.getByRole('button', { name: 'Continue to control desk' }));
     await expect(platform).not.toHaveURL(/\/platform\/login/);
     await platform.goto(new URL('/platform/organizations/new', platformOrigin).href);
@@ -308,8 +344,35 @@ export async function freshPharmacyFirstSale(
       platform.locator('[data-slot="page-header"]').getByText('ONBOARDING', { exact: true })
     ).toBeVisible();
 
+    // Wildcard ownership deliberately cannot confirm regulated reference changes.
+    // Grant this one review capability explicitly through the audited platform UI.
+    const reviewGrant = formFor(platform, 'Set override');
+    await choose(reviewGrant.locator('[name="userId"]'), ownerEmail);
+    await fill(reviewGrant, {
+      capability: 'pharmacy:catalogue-review',
+      reason: data.authorizationRef,
+      expiresAt: new Date(Date.now() + 86400000).toISOString().slice(0, 16),
+    });
+    await choose(reviewGrant.locator('[name="effect"]'), 'ALLOW');
+    const ownerUpdated = platform.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname === '/api/platform/control' &&
+        response.request().method() === 'POST'
+    );
+    await click(reviewGrant.getByRole('button', { name: 'Set override', exact: true }));
+    expect((await ownerUpdated).status()).toBe(200);
+
     await page.goto(new URL('/login', tenantOrigin).href);
     await fill(page, { email: ownerEmail, password: ownerPassword });
+    await click(page.getByRole('button', { name: 'Sign in', exact: true }));
+    await expect(page).toHaveURL(/\/change-password(?:\?|$)/);
+    const rotatedOwnerPassword = `FirstSale1!${randomUUID()}`;
+    await page.getByLabel('Current password', { exact: true }).fill(ownerPassword);
+    await page.getByLabel('New password', { exact: true }).fill(rotatedOwnerPassword);
+    await page.getByLabel('Confirm new password', { exact: true }).fill(rotatedOwnerPassword);
+    await click(page.getByRole('button', { name: 'Change password', exact: true }));
+    await expect(page).toHaveURL(/\/login(?:\?|$)/);
+    await fill(page, { email: ownerEmail, password: rotatedOwnerPassword });
     await click(page.getByRole('button', { name: 'Sign in', exact: true }));
     await expect(page).not.toHaveURL(/\/login/);
     await setup(page);
@@ -345,8 +408,17 @@ export async function freshPharmacyFirstSale(
       qualifiedPersonValidTo: data.regulatory.qualifiedPersonValidTo,
       qualifiedPersonCoverageRosterRef: data.regulatory.qualifiedPersonCoverageRosterRef,
     });
+    const upload = page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname === '/api/upload' && response.request().method() === 'POST'
+    );
     await page.locator('#licenceEvidence').setInputFiles(licenceEvidencePath);
+    expect((await upload).status(), 'Licence evidence upload must succeed').toBe(200);
     await expect(page.getByText('Licence evidence attached', { exact: false })).toBeVisible();
+    const evidenceUrl = await page.locator('input[name="licenceEvidenceFileRef"]').inputValue();
+    const storedEvidence = await page.request.get(new URL(evidenceUrl, page.url()).href);
+    expect(storedEvidence.status()).toBe(200);
+    expect(await storedEvidence.body()).toEqual(readFileSync(licenceEvidencePath));
     for (const schedule of permittedScheduleLabels)
       await page.getByRole('checkbox', { name: schedule, exact: true }).check();
     await click(page.getByRole('button', { name: 'Save this version', exact: true }));
@@ -357,6 +429,8 @@ export async function freshPharmacyFirstSale(
     ).toBeVisible();
 
     await follow(page, 'Medicine catalog readiness', 'Set up medicines and packs');
+    await click(page.locator('summary').filter({ hasText: 'Medicine reference connectors' }));
+    await expect(page.getByLabel('CSV or Excel workbook')).toBeVisible();
     const headers =
       'productName,brandName,manufacturer,drapRegistrationNumber,strength,dosageForm,pack,barcode,alias,rx,restricted,controlled,rowSourceKey';
     const values = [
@@ -381,17 +455,68 @@ export async function freshPharmacyFirstSale(
     });
     await click(page.getByRole('button', { name: 'Preview normalized rows', exact: true }));
     await click(page.getByRole('button', { name: 'Run 1 rows now', exact: true }));
+    const proposal = page
+      .locator('[data-slot="section-card"]')
+      .filter({ has: page.getByRole('heading', { name: 'Connector proposals', exact: true }) })
+      .getByRole('article')
+      .filter({ has: page.getByRole('heading', { name: medicineName, exact: true }) });
+    await expect(proposal).toBeVisible();
+    for (const width of [375, 768, 1024, 1440]) {
+      await page.setViewportSize({ width, height: 1000 });
+      for (const theme of ['light', 'dark']) {
+        await page.evaluate((value) => {
+          localStorage.setItem('theme', value);
+          window.dispatchEvent(new Event('storage'));
+        }, theme);
+        await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
+        for (const reducedMotion of ['no-preference', 'reduce'] as const) {
+          await page.emulateMedia({ reducedMotion });
+          await proposal.scrollIntoViewIfNeeded();
+          expect(
+            await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)
+          ).toBe(true);
+          expect(
+            await proposal.evaluate((element) => element.scrollWidth <= element.clientWidth)
+          ).toBe(true);
+          await page.screenshot({
+            path: testInfo.outputPath(`reference-proposal-${width}-${theme}-${reducedMotion}.png`),
+            fullPage: true,
+          });
+        }
+      }
+    }
+    const confirmation = proposal.getByRole('button', {
+      name: 'Confirm reference proposal',
+      exact: true,
+    });
+    await confirmation.focus();
+    await page.keyboard.press('Tab');
+    expect(await page.evaluate(() => document.activeElement?.matches(':focus-visible'))).toBe(true);
+    expect(
+      (
+        await new AxeBuilder({ page })
+          .include('[aria-label="Connector proposals"]')
+          .withTags(['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa'])
+          .analyze()
+      ).violations
+    ).toEqual([]);
+    await click(confirmation);
+    await expect(proposal).toHaveCount(0);
     const candidate = page
       .locator('article')
       .filter({ has: page.getByRole('heading', { name: medicineName, exact: true }) });
-    await click(candidate.getByRole('button', { name: 'accept', exact: true }));
+    // Confirmation records the ACCEPT review; it must not be applied twice.
+    await expect(candidate.getByRole('button', { name: 'accept', exact: true })).toBeDisabled();
+    await expect(
+      candidate.getByRole('button', { name: 'Publish assertions', exact: true })
+    ).toBeEnabled();
     await click(candidate.getByRole('button', { name: 'Publish assertions', exact: true }));
     await expect(candidate).toHaveCount(0);
     await page.getByLabel('Medicine name', { exact: true }).fill(medicineName);
     await click(page.getByRole('button', { name: 'Find medicine', exact: true }));
-    await choose(page.getByLabel('Medicine', { exact: true }), medicineName);
-    await choose(page.getByLabel('Presentation', { exact: true }), '10 tablets');
-    await choose(page.getByLabel('Pack type', { exact: true }), 'Strip');
+    await choose(page.getByRole('combobox', { name: 'Medicine', exact: true }), medicineName);
+    await choose(page.getByRole('combobox', { name: 'Presentation', exact: true }), '10 tablets');
+    await choose(page.getByRole('combobox', { name: 'Pack type', exact: true }), 'Strip');
     await page.getByLabel(/^Individual units per pack/).fill('10');
     await page.getByLabel(/^Effective from/).fill(today);
     await click(page.getByRole('button', { name: 'Create pack', exact: true }));
@@ -405,6 +530,10 @@ export async function freshPharmacyFirstSale(
     const supplier = formFor(page, 'Add supplier');
     await fill(supplier, { name: data.supplier.name, legalName: data.supplier.legalName });
     await click(supplier.getByRole('button', { name: 'Add supplier', exact: true }));
+    await click(page.getByRole('link').filter({ hasText: data.supplier.name }));
+    await expect(
+      page.getByRole('heading', { name: data.supplier.name, exact: true })
+    ).toBeVisible();
     await click(page.getByRole('button', { name: 'Authorize this supplier', exact: true }));
     const licence = formFor(page, 'File licence');
     await fill(licence, {
@@ -448,25 +577,57 @@ export async function freshPharmacyFirstSale(
     await colleague.locator('#phone').fill(data.colleaguePhone);
     await click(colleague.getByRole('button', { name: 'Create account', exact: true }));
     await expect(colleague).not.toHaveURL(/\/invite\//);
+    // A system administrator still needs an explicit procurement grant.
+    await platform.goto(organizationUrl);
+    const colleagueGrant = formFor(platform, 'Set override');
+    await choose(colleagueGrant.locator('[name="userId"]'), colleagueEmail);
+    await fill(colleagueGrant, {
+      capability: 'pharmacy:procurement',
+      reason: data.authorizationRef,
+      expiresAt: new Date(Date.now() + 86400000).toISOString().slice(0, 16),
+    });
+    await choose(colleagueGrant.locator('[name="effect"]'), 'ALLOW');
+    const colleagueUpdated = platform.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname === '/api/platform/control' &&
+        response.request().method() === 'POST'
+    );
+    await click(colleagueGrant.getByRole('button', { name: 'Set override', exact: true }));
+    expect((await colleagueUpdated).status()).toBe(200);
+    // Shared hosts require workspace-aware sign-in after accepting the account.
+    if (new URL(colleague.url()).pathname === '/login') {
+      await fill(colleague, { email: colleagueEmail, password: colleaguePassword });
+      await click(colleague.getByRole('button', { name: 'Sign in', exact: true }));
+      await expect(colleague).not.toHaveURL(/\/login/);
+    }
     await setup(colleague);
     await click(page.getByRole('button', { name: 'Done', exact: true }));
     await setup(page);
 
     await follow(page, 'Opening stock readiness', 'Receive opening stock');
-    await click(page.getByRole('link', { name: 'Requisitions & orders', exact: true }));
+    await click(
+      page
+        .getByRole('navigation', { name: 'Purchasing surfaces' })
+        .getByRole('link', { name: /^Requisitions & orders/ })
+    );
     const order = formFor(page, 'Draft order');
     await fill(order, { reference: orderReference, 'orderedPacks-0': '2', 'listPrice-0': '20.00' });
     await choose(order.locator('[name="supplierId"]'), data.supplier.name);
     await choose(order.locator('[name="branchId"]'), branchName);
     await choose(order.locator('[name="orderMedicineId-0"]'), medicineName);
     await click(order.getByRole('button', { name: 'Draft order', exact: true }));
+    await click(page.getByRole('link', { name: 'View saved record', exact: true }));
     await click(page.getByRole('button', { name: 'Submit for approval', exact: true }));
     await expect(
       page.getByText('You raised this order, so you cannot approve it.', { exact: false })
     ).toBeVisible();
     await expect(page.getByRole('button', { name: 'Approve', exact: true })).toHaveCount(0);
     await follow(colleague, 'Opening stock readiness', 'Receive opening stock');
-    await click(colleague.getByRole('link', { name: 'Requisitions & orders', exact: true }));
+    await click(
+      colleague
+        .getByRole('navigation', { name: 'Purchasing surfaces' })
+        .getByRole('link', { name: /^Requisitions & orders/ })
+    );
     await click(colleague.getByRole('link').filter({ hasText: orderReference }));
     await colleague.getByLabel('Decision note', { exact: true }).fill(data.receipt.approvalNote);
     await click(colleague.getByRole('button', { name: 'Approve', exact: true }));
@@ -477,8 +638,11 @@ export async function freshPharmacyFirstSale(
 
     await setup(page);
     await follow(page, 'Opening stock readiness', 'Receive opening stock');
-    await choose(page.getByLabel('Purchase order', { exact: true }), orderReference);
-    await click(page.getByRole('button', { name: 'Find line', exact: true }));
+    await choose(
+      page.getByRole('combobox', { name: 'Purchase order', exact: true }),
+      orderReference
+    );
+    await click(page.getByRole('button', { name: 'Open order', exact: true }));
     const receipt = formFor(page, 'File receipt (draft)');
     await fill(receipt, {
       reference: `GR-${suffix}`,
@@ -489,15 +653,19 @@ export async function freshPharmacyFirstSale(
     await receipt.getByLabel('Printed expiry', { exact: true }).fill(expiry);
     await receipt.getByLabel('Printed MRP (PKR)', { exact: true }).fill('25.00');
     await receipt.getByLabel('Packs received', { exact: true }).fill('2');
-    await choose(receipt.getByLabel('Receive into', { exact: true }), 'Opening stock store');
+    await choose(
+      receipt.getByRole('combobox', { name: 'Receive into', exact: true }),
+      'Opening stock store'
+    );
     await click(receipt.getByRole('button', { name: 'File receipt (draft)', exact: true }));
+    await click(page.getByRole('link', { name: 'View saved record', exact: true }));
     await click(page.getByRole('button', { name: 'Post into stock', exact: true }));
     await setup(page);
     await expect(
       row(page, 'Opening stock readiness').getByText('Done', { exact: true })
     ).toBeVisible();
 
-    // These are supplied real staging evidence references, never fabricated ticks.
+    // Staging supplies authorized evidence; the isolated CI lane labels its synthetic references.
     for (const step of attestedSteps) {
       const gate = row(page, step);
       await click(gate.getByRole('button', { name: 'Confirm this step', exact: true }));
@@ -518,7 +686,7 @@ export async function freshPharmacyFirstSale(
     await expect(platform.getByText('Unmet activation gates', { exact: true })).toHaveCount(0);
     const lifecycle = formFor(platform, 'Apply lifecycle change');
     await choose(lifecycle.getByLabel('Move to', { exact: true }), 'ACTIVE');
-    await lifecycle.getByLabel('Operator reason', { exact: true }).fill(data.authorizationRef);
+    await lifecycle.locator('[name="reason"]').fill(data.authorizationRef);
     await click(lifecycle.getByRole('button', { name: 'Apply lifecycle change', exact: true }));
     await expect(
       platform.locator('[data-slot="page-header"]').getByText('ACTIVE', { exact: true })
@@ -534,8 +702,9 @@ export async function freshPharmacyFirstSale(
         .getByRole('button')
         .filter({ hasText: medicineName })
     );
-    await page.keyboard.press('F4');
+    await page.keyboard.press('F3');
     await page.keyboard.press('F6');
+    await expect(page.getByRole('list', { name: 'Cart lines' })).toContainText(medicineName);
     await page.keyboard.press('F9');
     const amount = page.getByLabel('Amount', { exact: true });
     await expect(amount).toBeEnabled();

@@ -1,60 +1,59 @@
 # DevFathom documentation
 
-This directory is the source-backed documentation index for DevFathom Commercial. It describes the current web product, the seller-operated control plane, and the Azure operating model. It does not authorize deployment, commercial promises, or capability claims that are not evidenced in the repository.
-
-## Status vocabulary
-
-Use one status on every capability claim:
-
-- **IMPLEMENTED** — present in the current repository and covered by a cited verification or source path.
-- **IN PROGRESS** — an identified implementation workstream is active, but has not yet cleared merge, verification, and deployment gates.
-- **PARTIAL** — some code or design exists, but a production dependency, integration, or release gate remains.
-- **PLANNED** — an accepted design or ADR exists; implementation is not complete.
-- **BLOCKED** — work cannot proceed until a named external decision, credential, environment, or owner action exists.
-- **FUTURE** — intentionally outside the current web scope or roadmap horizon.
-
-“Complete” in an older document is not sufficient evidence for a production claim; the current status ledger wins when documents disagree.
+This is the starting point for all DevFathom documentation. Find the row that describes you and start with the link next to it.
 
 ## Start here
 
-| Audience | Document | Purpose |
-| --- | --- | --- |
-| Everyone | [Technical overview](technical-overview.md) | Product boundaries, architecture, tenancy, and operating model |
-| Developers | [Local setup](LOCAL_SETUP.md) | Local environment and verification |
-| Operators | [Azure deployment](azure-deployment.md) | Staging, production gate, backups, and rollback |
-| Platform team | [Admin platform handbook](admin-platform/README.md) | Control-plane architecture and runbooks |
-| Product and sales | [Product and commercial pack](product-pack.md) | ICP, positioning, feature status, packaging, and customer lifecycle |
-| Product and engineering | [POS & terminal module PRD](product/modules/pos-terminal.md) | Evidence-linked register, terminal, checkout, and branch-boundary scope |
-| Partners and customers | [Pitch-deck source](pitch-deck.md) | Evidence-safe slide narratives and speaker notes |
-| Release owners | [Living status ledger](status-ledger.md) | Evidence, blockers, owners, and next gates |
-| Documentation owners | [Documentation QA](qa.md) | Link, stale-reference, and consistency checks |
+| You are…                                     | Start with                                  | Then read                                                                                        |
+| -------------------------------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| A pharmacy owner or manager                  | [Product overview](product/overview.md)     | [Pharmacy guide](product/pharmacy-guide.md)                                                      |
+| A pharmacist or counter staff member         | [Pharmacy guide](product/pharmacy-guide.md) | [Glossary](product/glossary.md)                                                                  |
+| In sales, or running a pilot with a customer | [Product overview](product/overview.md)     | [Pharmacy guide](product/pharmacy-guide.md)                                                      |
+| An agency owner, manager or staff member     | [Agency guide](product/agency-guide.md)     | [Agency glossary](product/agency-glossary.md)                                                    |
+| New to the words we use                      | [Glossary](product/glossary.md)             |                                                                                                  |
+| An engineer or coding agent                  | Coming soon: developer onboarding guide     | For now, use [LOCAL_SETUP.md](LOCAL_SETUP.md) and [technical-overview.md](technical-overview.md) |
 
-## Agency guides
+## What is in this folder today
 
-- [Agency guide](product/agency-guide.md): plain-language guide for agency owners, managers and staff
-- [Agency glossary](product/agency-glossary.md)
+- **[product/overview.md](product/overview.md)**: what DevFathom is and what it does, in plain words.
+- **[product/pharmacy-guide.md](product/pharmacy-guide.md)**: a feature-by-feature guide for pharmacy owners and counter staff, including who is allowed to do what.
+- **[product/glossary.md](product/glossary.md)**: short meanings of the words you will see in the app and in these guides.
+- **[product/agency-guide.md](product/agency-guide.md)**: a plain-language guide for agency owners, managers and staff.
+- **[product/agency-glossary.md](product/agency-glossary.md)**: short meanings of the agency words used in the app and in the agency guide.
 
-## Module PRDs
+## Coming next
 
-- [Kitchen Display System (KDS)](product/modules/kds.md) — station queue, ticket lifecycle, actions, permissions, and acceptance criteria
+These guides are planned but not written yet:
 
-## Technical reference
+- **Restaurant guide**: for restaurant owners, managers and cashiers. Older restaurant notes already live in `product/` and will be brought together into this guide.
+- **Developer guides**: setup, how the system is built, roles and permissions, testing, and how to contribute.
+- **Deploy, operations and security guides**: for the technical team and security reviewers.
 
-- [Tenant/RLS architecture](admin-platform/architecture-tenancy.md)
-- [Identity and access](admin-platform/identity-access.md)
-- [Platform control desk](admin-platform/control-plane.md)
-- [Platform API inventory](admin-platform/api.md)
-- [Data model](admin-platform/data-model.md)
-- [Entitlements](admin-platform/entitlements.md)
-- [Lifecycle and migration](admin-platform/lifecycle.md)
-- [Operations and jobs](admin-platform/operations.md)
-- [Runbooks](admin-platform/runbooks.md)
-- [Testing and release evidence](admin-platform/testing-release.md)
-- [Security threat model](admin-platform/security-threat-model.md)
-- [Meetings scope](meetings/000-product-scope.md), [join flow](meetings/004-join-flow.md), and [self-hosted meetings ADR](admin-platform/adr/005-self-hosted-meetings.md)
+Hotel features are **not** covered by these docs. They are not part of the current product.
 
-## Working rules
+## Older documents
 
-Documentation changes should cite repository paths and line ranges where practical, distinguish current code from decisions, avoid secret values and customer data, and preserve the web-only boundary. Azure is the deployment platform; no Vercel deployment instructions belong in current operating guidance. Mobile apps are future work; responsive mobile web is part of the current web surface where implemented.
+Some older files in this folder (for example `azure-deployment.md`) describe a previous Azure setup. **DEPRECATED: never deploy to Azure.** Azure has been shut down; deployments go to AWS. These files are kept for reference only until a decision is made about them. Do not follow them for new work.
 
-Last reconciled: 2026-08-08.
+## Rules for people writing these docs
+
+- **Never put usernames, passwords or other login details in any doc.**
+- Use the status vocabulary from the [living status ledger](status-ledger.md) (for example,
+  **IMPLEMENTED**, **IN PROGRESS**, **PARTIAL**, **PLANNED**, **BLOCKED** and **FUTURE**) when making
+  feature-status claims. "Complete" in an older document is not enough evidence; if another document
+  disagrees, the current status ledger wins until the documents are reconciled.
+- Take screenshots only from the demo pharmacy and the demo admin account on the test system, never from a real customer's account.
+- If you are not sure something is true, write `TODO(confirm)` next to it rather than guessing.
+- Content about DRAP rules and the controlled-drugs register stays marked **DRAFT – pending legal review** until a pharmacist or legal reviewer has checked it.
+- TODO(confirm): which languages the customer guides should also be written in (for example Urdu or Roman Urdu).
+
+## Existing technical and product references
+
+These documents already existed before this guide set and are still useful:
+
+- [Technical overview](technical-overview.md) and [Local setup](LOCAL_SETUP.md)
+- [Admin platform handbook](admin-platform/README.md), including [tenancy/RLS](admin-platform/architecture-tenancy.md), [identity and access](admin-platform/identity-access.md), [data model](admin-platform/data-model.md), [entitlements](admin-platform/entitlements.md), [runbooks](admin-platform/runbooks.md) and the [security threat model](admin-platform/security-threat-model.md)
+- [Product and commercial pack](product-pack.md), [pitch-deck source](pitch-deck.md) and the [living status ledger](status-ledger.md)
+- Module PRDs: [POS & terminal](product/modules/pos-terminal.md), [Kitchen Display System](product/modules/kds.md)
+- [Documentation QA](qa.md)
+- [Azure deployment](azure-deployment.md): **DEPRECATED – never deploy to Azure.**

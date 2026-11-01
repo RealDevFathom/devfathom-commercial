@@ -32,11 +32,14 @@ vi.mock('@/lib/pharmacy/counter', async (original) => ({
 }));
 vi.mock('@/lib/pharmacy/sales', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/sales')>()),
+  changeSaleStatus: vi.fn(async () => ({ sale: { id: 'sale-a', status: 'HELD' } })),
   readReturnHistory: vi.fn(async () => [{ id: 'return-1' }]),
+  returnSaleLine: vi.fn(async () => ({ returnLineId: 'return-line-1' })),
 }));
 vi.mock('@/lib/pharmacy/settlement', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/settlement')>()),
   applyPharmacyTender: vi.fn(async () => ({ tenderId: 'tender-1' })),
+  refundPharmacyTender: vi.fn(async () => ({ refundId: 'refund-1' })),
 }));
 vi.mock('@/lib/pharmacy/dispensing-label-source', () => ({
   readDispensingLabelSources: vi.fn(async () => []),
@@ -64,11 +67,12 @@ vi.mock('@/lib/pharmacy/receipt-print', () => ({
 import { hasModule } from '@/lib/entitlements';
 import { readCounterCart, readCounterReceipt } from '@/lib/pharmacy/counter';
 import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-source';
-import { readReturnHistory } from '@/lib/pharmacy/sales';
-import { applyPharmacyTender } from '@/lib/pharmacy/settlement';
+import { changeSaleStatus, readReturnHistory, returnSaleLine } from '@/lib/pharmacy/sales';
+import { applyPharmacyTender, refundPharmacyTender } from '@/lib/pharmacy/settlement';
 import {
   buildPharmacyReceiptEscPosJob,
   readPharmacyReceiptFormat,
+  readPharmacyReceiptTaxIdentity,
   savePharmacyReceiptFormat,
 } from '@/lib/pharmacy/receipt-print';
 import { router, type TRPCContext } from '../trpc';
@@ -80,14 +84,19 @@ type Permission = { capability: string; effect: 'ALLOW' | 'DENY' };
 
 const dispense: Permission[] = [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }];
 
-function fixture(permissions: Permission[], role: 'EMPLOYEE' | 'ADMIN' = 'EMPLOYEE') {
+function fixture(
+  permissions: Permission[],
+  role: 'EMPLOYEE' | 'ADMIN' = 'EMPLOYEE',
+  overrides: Permission[] = []
+) {
   const db = {
+    $queryRaw: vi.fn(async () => []),
     user: {
       findUnique: vi.fn(async () => ({
         status: 'ACTIVE',
         organizationId: 'org-a',
         organizationRole: { permissions },
-        permissionOverrides: [] as Permission[],
+        permissionOverrides: overrides,
       })),
     },
     pharmacyBranch: {
@@ -158,7 +167,12 @@ function assign(f: ReturnType<typeof fixture>, branchIds: string[]) {
   );
 }
 
-const reads = () => [readCounterReceipt, readPharmacyReceiptFormat, readDispensingLabelSources];
+const reads = () => [
+  readCounterReceipt,
+  readPharmacyReceiptFormat,
+  readPharmacyReceiptTaxIdentity,
+  readDispensingLabelSources,
+];
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -171,6 +185,7 @@ beforeEach(() => {
     layout: { paperWidth: 32 },
     revision: 1,
   } as never);
+  vi.mocked(readPharmacyReceiptTaxIdentity).mockResolvedValue({ ntn: null, strn: null });
 });
 
 type Caller = ReturnType<ReturnType<typeof fixture>['caller']>;
@@ -211,6 +226,60 @@ const paths: {
 ];
 
 describe('counter receipt authorization', () => {
+  it('supplies the regulatory identity effective at completion to browser receipt callers', async () => {
+    const f = fixture(dispense);
+    assign(f, ['branch-a']);
+    vi.mocked(readPharmacyReceiptTaxIdentity).mockResolvedValue({
+      ntn: 'HISTORICAL-NTN',
+      strn: 'HISTORICAL-STRN',
+    });
+
+    await expect(
+      f.caller().counterReceipt({ branchId: 'branch-a', saleId: 'sale-a' })
+    ).resolves.toMatchObject({
+      taxIdentity: { ntn: 'HISTORICAL-NTN', strn: 'HISTORICAL-STRN' },
+    });
+    expect(readPharmacyReceiptTaxIdentity).toHaveBeenCalledWith(
+      f.db,
+      expect.objectContaining({ organizationId: 'org-a', branchId: 'branch-a' }),
+      new Date('2026-10-01T00:00:00.000Z')
+    );
+  });
+
+  it('supplies the completion-time regulatory identity to browser receipts', async () => {
+    const f = fixture(dispense);
+    assign(f, ['branch-a']);
+    vi.mocked(readPharmacyReceiptTaxIdentity).mockResolvedValue({
+      ntn: 'NTN-HISTORICAL',
+      strn: 'STRN-HISTORICAL',
+    });
+
+    await expect(
+      f.caller().counterReceipt({ branchId: 'branch-a', saleId: 'sale-a' })
+    ).resolves.toMatchObject({
+      taxIdentity: { ntn: 'NTN-HISTORICAL', strn: 'STRN-HISTORICAL' },
+    });
+    expect(readPharmacyReceiptTaxIdentity).toHaveBeenCalledWith(
+      f.db,
+      { organizationId: 'org-a', branchId: 'branch-a', actorId: 'user-a' },
+      new Date('2026-10-01T00:00:00.000Z')
+    );
+  });
+
+  it('does not fall back to the current regulatory identity for an unsettled receipt', async () => {
+    const f = fixture(dispense);
+    assign(f, ['branch-a']);
+    vi.mocked(readCounterReceipt).mockResolvedValue({
+      receiptNumber: null,
+      completedAt: null,
+    } as never);
+
+    await expect(
+      f.caller().counterReceipt({ branchId: 'branch-a', saleId: 'sale-a' })
+    ).resolves.toMatchObject({ taxIdentity: { ntn: null, strn: null } });
+    expect(readPharmacyReceiptTaxIdentity).not.toHaveBeenCalled();
+  });
+
   it('rejects status-only completion before opening a transaction', async () => {
     const f = fixture(dispense);
     assign(f, ['branch-a']);
@@ -223,6 +292,42 @@ describe('counter receipt authorization', () => {
       })
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(f.db.$transaction).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      source: 'role',
+      permissions: [{ capability: 'pharmacy:counter', effect: 'DENY' as const }],
+      overrides: [{ capability: '*', effect: 'ALLOW' as const }],
+    },
+    {
+      source: 'user',
+      permissions: [{ capability: '*', effect: 'ALLOW' as const }],
+      overrides: [{ capability: 'pharmacy:counter', effect: 'DENY' as const }],
+    },
+  ])('blocks transition when an admin has an explicit $source DENY', async (rules) => {
+    const f = fixture(rules.permissions, 'ADMIN', rules.overrides);
+
+    await expect(
+      f.caller().transition({ branchId: 'branch-a', saleId: 'sale-a', action: 'hold' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(changeSaleStatus).not.toHaveBeenCalled();
+  });
+
+  it('keeps the all-capability admin transition shortcut without a branch assignment', async () => {
+    const f = fixture([{ capability: '*', effect: 'ALLOW' }], 'ADMIN');
+
+    await expect(
+      f.caller().transition({ branchId: 'branch-a', saleId: 'sale-a', action: 'hold' })
+    ).resolves.toMatchObject({ sale: { id: 'sale-a', status: 'HELD' } });
+    expect(changeSaleStatus).toHaveBeenCalledWith(
+      f.db,
+      expect.objectContaining({ organizationId: 'org-a', branchId: 'branch-a' }),
+      'sale-a',
+      'hold',
+      undefined,
+      undefined
+    );
   });
 
   it.each(paths)('$name allows an assigned dispenser on their own branch', async (path) => {
@@ -289,6 +394,7 @@ describe('counter receipt authorization', () => {
   it('lets an assigned cashier use the receipt, the cart, return history, and cash tender', async () => {
     const f = fixture([
       { capability: 'pharmacy.counter', effect: 'ALLOW' },
+      { capability: 'pharmacy:counter', effect: 'ALLOW' },
       { capability: 'pharmacy:orders', effect: 'ALLOW' },
     ]);
     assign(f, ['branch-a']);
@@ -350,6 +456,60 @@ describe('counter receipt authorization', () => {
     expect(applyPharmacyTender).toHaveBeenCalledTimes(2);
   });
 
+  it('does not let a user ALLOW override a role DENY when tendering', async () => {
+    const f = fixture([{ capability: 'pharmacy:counter', effect: 'DENY' }], 'EMPLOYEE', [
+      { capability: 'pharmacy:counter', effect: 'ALLOW' },
+    ]);
+    assign(f, ['branch-a']);
+
+    await expect(
+      f.caller().tender({
+        branchId: 'branch-a',
+        saleId: 'sale-a',
+        deviceId: 'device-a',
+        businessDate: new Date('2026-10-01T00:00:00.000Z'),
+        type: 'CASH',
+        amountMinor: 100,
+        idempotencyKey: 'role-deny',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(applyPharmacyTender).not.toHaveBeenCalled();
+  });
+
+  it('lets a role DENY on pharmacy:receipt beat a user ALLOW on pharmacy:counter for reads and tender', async () => {
+    const f = fixture([{ capability: 'pharmacy:receipt', effect: 'DENY' }], 'EMPLOYEE', [
+      { capability: 'pharmacy:counter', effect: 'ALLOW' },
+    ]);
+    assign(f, ['branch-a']);
+    await expect(
+      f.caller().counterCart({ branchId: 'branch-a', saleId: 'sale-a' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      f.caller().tender({
+        branchId: 'branch-a',
+        saleId: 'sale-a',
+        deviceId: 'device-a',
+        businessDate: new Date('2026-10-01T00:00:00.000Z'),
+        type: 'CASH',
+        amountMinor: 100,
+        idempotencyKey: 'cross-alias-deny',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(readCounterCart).not.toHaveBeenCalled();
+    expect(applyPharmacyTender).not.toHaveBeenCalled();
+  });
+
+  it('lets a user DENY on pharmacy:counter beat a role ALLOW on pharmacy:receipt', async () => {
+    const f = fixture([{ capability: 'pharmacy:receipt', effect: 'ALLOW' }], 'EMPLOYEE', [
+      { capability: 'pharmacy:counter', effect: 'DENY' },
+    ]);
+    assign(f, ['branch-a']);
+    await expect(
+      f.caller().counterCart({ branchId: 'branch-a', saleId: 'sale-a' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(readCounterCart).not.toHaveBeenCalled();
+  });
+
   it('denies counter reads and cash tender when the cashier is not assigned', async () => {
     const f = fixture([{ capability: 'pharmacy.counter', effect: 'ALLOW' }]);
     await expect(
@@ -375,9 +535,102 @@ describe('counter receipt authorization', () => {
     expect(f.db.$transaction).not.toHaveBeenCalled();
   });
 
-  it('keeps Khata tender off the branch-assignment guard', async () => {
-    const f = fixture(dispense);
-    f.db.$transaction.mockRejectedValue(new Error('khata-reached'));
+  it.each([
+    {
+      name: 'refundTender',
+      run: (caller: Caller) =>
+        caller.refundTender({
+          branchId: 'branch-a',
+          originalTenderId: 'tender-1',
+          deviceId: 'device-a',
+          businessDate: new Date('2026-10-01T00:00:00.000Z'),
+          amountMinor: 100,
+          reason: 'Returned medicine',
+          idempotencyKey: 'refund-1',
+        }),
+      write: refundPharmacyTender,
+    },
+    {
+      name: 'returnLine',
+      run: (caller: Caller) =>
+        caller.returnLine({
+          branchId: 'branch-a',
+          saleLineId: 'line-1',
+          canonicalUnits: 1,
+          reason: 'Returned medicine',
+          integrityDecision: 'Sealed pack',
+          idempotencyKey: 'return-1',
+        }),
+      write: returnSaleLine,
+    },
+  ])('$name requires counter capability and assignment before writing (#578)', async (path) => {
+    const noCapability = fixture([]);
+    assign(noCapability, ['branch-a']);
+    await expect(path.run(noCapability.caller())).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission for this action.',
+    });
+    expect(noCapability.db.$transaction).not.toHaveBeenCalled();
+
+    const unassigned = fixture(dispense);
+    await expect(path.run(unassigned.caller())).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Branch is outside your scope.',
+    });
+    expect(unassigned.db.$transaction).not.toHaveBeenCalled();
+    expect(path.write).not.toHaveBeenCalled();
+  });
+
+  it.each(['*', 'pharmacy:*', 'pharmacy:counter'])(
+    'allows Khata tender with %s on the assigned branch',
+    async (capability) => {
+      const f = fixture([{ capability, effect: 'ALLOW' }]);
+      assign(f, ['branch-a']);
+      f.db.$transaction.mockRejectedValue(new Error('khata-reached'));
+      await expect(
+        f.caller().tender({
+          branchId: 'branch-a',
+          saleId: 'sale-a',
+          deviceId: 'device-a',
+          businessDate: new Date('2026-10-01T00:00:00.000Z'),
+          type: 'KHATA',
+          amountMinor: 100,
+          familyAccountId: 'family-1',
+          idempotencyKey: 'khata-1',
+        })
+      ).rejects.toThrow('khata-reached');
+      expect(f.db.pharmacyBranchAssignment.findMany).toHaveBeenCalled();
+      expect(applyPharmacyTender).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['pharmacy:dispense', 'reports:financial'])(
+    'denies Khata tender with %s access alone',
+    async (capability) => {
+      const f = fixture([{ capability, effect: 'ALLOW' }]);
+      await expect(
+        f.caller().tender({
+          branchId: 'branch-a',
+          saleId: 'sale-a',
+          deviceId: 'device-a',
+          businessDate: new Date('2026-10-01T00:00:00.000Z'),
+          type: 'KHATA',
+          amountMinor: 100,
+          familyAccountId: 'family-1',
+          idempotencyKey: 'khata-denied',
+        })
+      ).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'Pharmacy counter permission required.',
+      });
+      expect(f.db.$transaction).not.toHaveBeenCalled();
+      expect(f.db.pharmacyBranchAssignment.findMany).not.toHaveBeenCalled();
+      expect(applyPharmacyTender).not.toHaveBeenCalled();
+    }
+  );
+
+  it('denies Khata tender when the cashier has no branch assignment', async () => {
+    const f = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }]);
     await expect(
       f.caller().tender({
         branchId: 'branch-a',
@@ -389,8 +642,37 @@ describe('counter receipt authorization', () => {
         familyAccountId: 'family-1',
         idempotencyKey: 'khata-1',
       })
-    ).rejects.toThrow('khata-reached');
-    expect(f.db.pharmacyBranchAssignment.findMany).not.toHaveBeenCalled();
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+    expect(f.db.pharmacyBranchAssignment.findMany).toHaveBeenCalled();
+    expect(f.db.$transaction).not.toHaveBeenCalled();
+    expect(applyPharmacyTender).not.toHaveBeenCalled();
+  });
+
+  it('denies Khata tender with clinical dispense access alone', async () => {
+    const f = fixture(dispense);
+    await expect(
+      f.caller().tender({
+        branchId: 'branch-a',
+        saleId: 'sale-a',
+        deviceId: 'device-a',
+        businessDate: new Date('2026-10-01T00:00:00.000Z'),
+        type: 'KHATA',
+        amountMinor: 100,
+        familyAccountId: 'family-1',
+        idempotencyKey: 'khata-clinical-only',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(f.db.$transaction).not.toHaveBeenCalled();
+    expect(applyPharmacyTender).not.toHaveBeenCalled();
+  });
+
+  it('denies finance-only Khata account reads without a branch assignment', async () => {
+    const f = fixture([{ capability: 'reports:financial', effect: 'ALLOW' }]);
+    await expect(
+      f.caller().khataAccounts({ branchId: 'branch-a', saleId: 'sale-a' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+    expect(f.db.pharmacyBranchAssignment.findMany).toHaveBeenCalled();
+    expect(f.db.$transaction).not.toHaveBeenCalled();
     expect(applyPharmacyTender).not.toHaveBeenCalled();
   });
 
@@ -418,6 +700,43 @@ describe('counter receipt authorization', () => {
       await expect(
         f.caller().counterReceipt({ branchId: 'branch-a', saleId: 'sale-a' })
       ).resolves.toMatchObject({ receiptNumber: 7 });
+    }
+  });
+
+  it('lets a DENY on any counter capability alias override an ALLOW on another', async () => {
+    const denied = fixture([
+      { capability: 'pharmacy:counter', effect: 'ALLOW' },
+      { capability: 'pharmacy.receipt', effect: 'DENY' },
+    ]);
+    assign(denied, ['branch-a']);
+
+    await expect(
+      denied.caller().tender({
+        branchId: 'branch-a',
+        saleId: 'sale-a',
+        deviceId: 'device-a',
+        businessDate: new Date('2026-10-01T00:00:00.000Z'),
+        type: 'CASH',
+        amountMinor: 100,
+        idempotencyKey: 'alias-deny',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(applyPharmacyTender).not.toHaveBeenCalled();
+  });
+
+  it('does not treat wildcard, prefix, legacy, or receipt grants as dispense grants', async () => {
+    for (const capability of ['*', 'pharmacy:*', 'pharmacy.dispense', 'pharmacy:receipt']) {
+      const f = fixture([{ capability, effect: 'ALLOW' }]);
+      await expect(
+        f.caller().redeemPoints({
+          branchId: 'branch-a',
+          saleId: 'sale-a',
+          points: 1,
+          deviceId: 'device-a',
+          businessDate: new Date('2026-10-01T00:00:00.000Z'),
+          idempotencyKey: `redeem-${capability}`,
+        })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     }
   });
 

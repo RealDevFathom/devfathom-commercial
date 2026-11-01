@@ -921,6 +921,7 @@
    Fog surround · paper workspace · ink structure · coral signal
    ============================================================ */
 :root {
+  --surface-fog: #e8e8e5;
   --surface-page: #f6f6f3;
   --surface-card: #ffffff;
   --surface-sunken: #f1f1ee;
@@ -942,6 +943,8 @@
   --accent-brand: #bd3f2a;
   --accent-brand-hover: #a5361f;
   --accent-quiet: #fff0ec;
+  --selection-background: #ffb4a8;
+  --selection-foreground: #111110;
 
   --background: var(--surface-page);
   --foreground: var(--text-strong);
@@ -995,6 +998,7 @@
 }
 
 [data-theme='dark'] {
+  --surface-fog: #111110;
   --surface-page: #1c1c1a;
   --surface-card: #242422;
   --surface-sunken: #181817;
@@ -1012,6 +1016,8 @@
   --accent-brand: #ff745d;
   --accent-brand-hover: #ff8b78;
   --accent-quiet: #48231d;
+  --selection-background: #71362d;
+  --selection-foreground: #f7f7f4;
   --background: var(--surface-page);
   --foreground: var(--text-strong);
   --card: var(--surface-card);
@@ -1040,19 +1046,19 @@
 @layer base {
   body {
     font-family: var(--font-sans);
-    background: #e8e8e5;
+    background: var(--surface-fog);
     color: var(--foreground);
   }
 
   ::selection {
-    background: #ffb4a8;
-    color: #111110;
+    background: var(--selection-background);
+    color: var(--selection-foreground);
   }
 }
 
 @layer components {
   .studio-viewport {
-    background: #e8e8e5;
+    background: var(--surface-fog);
   }
 
   .studio-shell {
@@ -1586,4 +1592,128 @@
 
 .platform-workspace .bg-brass-100 {
   background-color: var(--accent-quiet);
+}
+
+/* Authentication uses the Studio split recipe and the existing semantic themes. */
+.studio-auth {
+  min-block-size: 100dvh;
+  background: var(--surface-page);
+  color: var(--text-strong);
+}
+.studio-auth-hero {
+  display: none;
+  color: var(--text-on-accent);
+}
+.studio-auth-main {
+  display: flex;
+  min-inline-size: 0;
+  min-block-size: 100dvh;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 24px;
+}
+.studio-auth-link {
+  display: inline-flex;
+  min-block-size: 44px;
+  align-items: center;
+  font-weight: 600;
+  border-radius: var(--radius-xs);
+}
+.studio-auth a:hover {
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+.studio-auth :is(a, button, input, select):focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 4px;
+}
+.studio-auth input:not([type='checkbox']),
+.studio-auth select {
+  min-block-size: 48px;
+  inline-size: 100%;
+  min-inline-size: 0;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: var(--surface-card);
+  color: var(--text-strong);
+  padding-inline: 16px;
+  font-size: 14px;
+}
+/* Keep reveal space in both masked and revealed states, independent of input type. */
+.studio-auth input[data-password-reveal] {
+  padding-inline-end: 3rem;
+}
+.studio-auth input[type='file'] {
+  padding-block: 12px;
+}
+.studio-auth input[type='checkbox'] {
+  inline-size: 20px;
+  block-size: 20px;
+  accent-color: var(--accent-brand);
+}
+.studio-auth fieldset {
+  min-inline-size: 0;
+}
+.studio-auth label {
+  font-size: 13px;
+  font-weight: 600;
+}
+.studio-auth legend {
+  margin-block-end: 24px;
+  font-weight: 600;
+}
+.studio-auth [data-slot='button'] {
+  min-block-size: 48px;
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+}
+@media (min-width: 1024px) {
+  .studio-auth {
+    display: grid;
+    grid-template-columns: minmax(0, 1.08fr) minmax(0, 0.92fr);
+  }
+  .studio-auth-hero {
+    display: flex;
+    position: sticky;
+    inset-block-start: 0;
+    block-size: 100dvh;
+    flex-direction: column;
+    padding: 48px 40px;
+    overflow: auto;
+  }
+  .studio-auth-main {
+    padding: 64px 48px;
+  }
+  .studio-auth-register {
+    grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  }
+  .studio-auth-register .studio-auth-main {
+    align-items: start;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .studio-auth *,
+  .studio-auth *::before,
+  .studio-auth *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/*
+ * Keyboard focus is a product-wide accessibility guarantee. Keep this rule
+ * unlayered and after component styles so bespoke controls cannot accidentally
+ * erase the indicator with an `outline-none` utility. Components may add a
+ * ring or change their border as well, but the outline remains the dependable
+ * fallback on tenant, restaurant, terminal, and platform surfaces.
+ */
+:focus-visible {
+  outline: 3px solid var(--ring);
+  outline-offset: 3px;
+}
+
+@media (forced-colors: active) {
+  :focus-visible {
+    outline-color: Highlight;
+  }
 }

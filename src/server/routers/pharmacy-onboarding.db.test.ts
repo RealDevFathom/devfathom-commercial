@@ -240,6 +240,48 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
     });
   });
 
+  it('refuses literal PLACEHOLDER licence text when the platform override is not active', async () => {
+    await withTenantDb(organizationId, async (db) => {
+      await expect(
+        caller(db).saveRegulatoryProfile({ ...profile, licenceNumber: 'PLACEHOLDER' })
+      ).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+        message: 'PLACEHOLDER text is reserved for the active platform placeholder rule set.',
+      });
+    });
+  });
+
+  it('accepts and persists a licence that expires today', async () => {
+    const todayInKarachi = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Karachi',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    })
+      .formatToParts(new Date())
+      .reduce<Record<string, string>>((parts, part) => {
+        parts[part.type] = part.value;
+        return parts;
+      }, {});
+    const expiryDate = `${todayInKarachi.year}-${todayInKarachi.month}-${todayInKarachi.day}`;
+
+    await withTenantDb(organizationId, async (db) => {
+      const saved = await caller(db).saveRegulatoryProfile({
+        ...profile,
+        branchId: secondBranchId,
+        licenceValidTo: expiryDate,
+      });
+      expect(saved.version).toBe(1);
+
+      const listed = await caller(db).regulatory({ branchId: secondBranchId });
+      expect(listed.versions).toHaveLength(1);
+      expect(listed.versions[0]).toMatchObject({
+        version: 1,
+        licenceValidTo: new Date(`${expiryDate}T00:00:00.000Z`),
+      });
+    });
+  });
+
   it('saves version 1 and leaves the licences step outstanding while the rules are provisional', async () => {
     await withTenantDb(organizationId, async (db) => {
       const saved = await caller(db).saveRegulatoryProfile(profile);

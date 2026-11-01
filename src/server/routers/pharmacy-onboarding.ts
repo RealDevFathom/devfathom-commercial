@@ -40,8 +40,29 @@ import {
   ruleSetOptions,
   type RegulatoryProfileInput,
 } from '@/lib/pharmacy/regulatory-profile-form';
-import { assertBranchMayOperate, BranchOperationDeniedError } from '@/lib/pharmacy/regulatory';
-import { adminProcedure, router, type TRPCContext } from '../trpc';
+import { evaluateBranchRegulatoryStatus } from '@/lib/pharmacy/regulatory';
+import {
+  FBR_TIER1_CHECK_ACTION,
+  FBR_TIER1_CHECK_TARGET_TYPE,
+  FBR_TIER1_CRITERIA,
+  FBR_TIER1_DISCLAIMER,
+  FBR_TIER1_MAX_RUPEES,
+  evaluateFbrTier1,
+  fbrTier1RecheckDueAt,
+  isFbrTier1RecheckDue,
+  parseStoredFbrTier1Answers,
+  type FbrTier1Answers,
+} from '@/lib/pharmacy/fbr-tier1';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { recordAudit } from '../audit';
+import { adminProcedure, assertModuleLicensed, router, type TRPCContext } from '../trpc';
+
+// Server-rendered pages also use this router's standalone caller. Its paths
+// lack the pharmacyOnboarding prefix used by the general module middleware.
+const fbrTier1Procedure = adminProcedure.use(({ ctx, next }) => {
+  assertModuleLicensed(ctx, 'pharmacy-core');
+  return next();
+});
 
 /** The gates an operator may attest to; the rest are answered from data. */
 const ATTESTABLE_GATES = PHARMACY_ONBOARDING_STEPS.filter((step) => !step.evidenceBacked).map(
@@ -57,6 +78,68 @@ const gateInput = z.enum(
 
 function badRequest(field: string, message: string): TRPCError {
   return new TRPCError({ code: 'BAD_REQUEST', message, cause: fieldError(field, message) });
+}
+
+const fbrTier1Choice = z.enum(['YES', 'NO', 'UNSURE'], {
+  message: 'Choose Yes, No or Not sure.',
+});
+const fbrTier1Rupees = z
+  .number({ message: 'Enter an amount in whole rupees, or leave it blank if you do not know.' })
+  .int('Enter an amount in whole rupees.')
+  .min(0, 'An amount cannot be negative.')
+  .max(FBR_TIER1_MAX_RUPEES, 'That amount is too large — check it and try again.')
+  .nullable();
+
+/** #709 — the FBR Tier-1 self-check answers. The result is never accepted from the client. */
+const fbrTier1Input = z
+  .object({
+    chainOutlet: fbrTier1Choice,
+    airConditionedMallOrPlaza: fbrTier1Choice,
+    electricityBillRupees12Months: fbrTier1Rupees,
+    bulkImportWholesaleAndRetail: fbrTier1Choice,
+    bankCardPos: fbrTier1Choice,
+    otherNotifiedCategory: fbrTier1Choice,
+    annualTurnoverRupees: fbrTier1Rupees,
+  })
+  .strict();
+
+/**
+ * The latest stored self-check for this organization, re-read from its audit
+ * row. The row keeps the verdict exactly as it was given; this view re-derives
+ * it from the stored answers so the criteria and citations shown are the ones
+ * the verdict rests on. A malformed row reads as "never asked", never as a
+ * verdict. The re-check date is derived from when the answers were given.
+ */
+async function readFbrTier1Status(ctx: TRPCContext, now = new Date()) {
+  const organizationId = ctx.entitlements.organizationId;
+  const latest = await ctx.db.auditLog.findFirst({
+    where: {
+      organizationId,
+      action: FBR_TIER1_CHECK_ACTION,
+      targetType: FBR_TIER1_CHECK_TARGET_TYPE,
+      outcome: 'SUCCESS',
+    },
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    select: { id: true, createdAt: true, input: true, actorName: true },
+  });
+  const answers = latest ? parseStoredFbrTier1Answers(latest.input) : null;
+  const assessment =
+    latest && answers
+      ? {
+          id: latest.id,
+          assessedAt: latest.createdAt,
+          assessedBy: latest.actorName,
+          answers,
+          evaluation: evaluateFbrTier1(answers),
+          recheckDueAt: fbrTier1RecheckDueAt(latest.createdAt),
+        }
+      : null;
+  return {
+    criteria: FBR_TIER1_CRITERIA,
+    disclaimer: FBR_TIER1_DISCLAIMER,
+    latest: assessment,
+    recheckDue: isFbrTier1RecheckDue(assessment?.assessedAt ?? null, now),
+  };
 }
 
 function midnightUtc(isoDate: string): Date {
@@ -146,6 +229,7 @@ async function readOverview(ctx: TRPCContext) {
 async function jurisdictionsInForce(ctx: TRPCContext, at: Date) {
   const ruleSets = await ctx.db.jurisdictionRuleSet.findMany({
     where: {
+      isPlaceholder: false,
       effectiveFrom: { lte: at },
       OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
     },
@@ -266,6 +350,71 @@ export const pharmacyOnboardingRouter = router({
       return readOverview(ctx);
     }),
 
+  /** #709 — the latest FBR Tier-1 self-check, and whether it is due again. */
+  fbrTier1Status: fbrTier1Procedure.query(({ ctx }) => readFbrTier1Status(ctx)),
+
+  /**
+   * #709 — record an FBR Tier-1 self-check. The verdict is computed here from
+   * the answers; the answers, the verdict, the criteria outcomes and their
+   * sources are stored together in one audit row, inside a transaction so a
+   * failed write fails the request rather than claiming a check that was not
+   * kept.
+   */
+  recordFbrTier1Check: fbrTier1Procedure.input(fbrTier1Input).mutation(async ({ ctx, input }) => {
+    const organizationId = ctx.entitlements.organizationId;
+    const user = ctx.session.user;
+    const answers: FbrTier1Answers = {
+      chainOutlet: input.chainOutlet,
+      airConditionedMallOrPlaza: input.airConditionedMallOrPlaza,
+      electricityBillRupees12Months: input.electricityBillRupees12Months,
+      bulkImportWholesaleAndRetail: input.bulkImportWholesaleAndRetail,
+      bankCardPos: input.bankCardPos,
+      otherNotifiedCategory: input.otherNotifiedCategory,
+      annualTurnoverRupees: input.annualTurnoverRupees,
+    };
+    const evaluation = evaluateFbrTier1(answers);
+    await ctx.db.$transaction(async (tx) => {
+      await recordAudit(
+        {
+          organizationId,
+          actorType: 'USER',
+          actorId: user.id,
+          actorName: user.name ?? null,
+          actorEmail: user.email ?? null,
+          actorRole: user.role ?? null,
+          source: 'TRPC',
+          category: 'PHARMACY',
+          operation: 'CREATE',
+          action: FBR_TIER1_CHECK_ACTION,
+          description: `FBR Tier-1 self-check: ${evaluation.headline}`,
+          targetType: FBR_TIER1_CHECK_TARGET_TYPE,
+          targetId: organizationId,
+          targetLabel: evaluation.headline,
+          input: answers,
+          result: {
+            result: evaluation.result,
+            headline: evaluation.headline,
+            criteria: evaluation.criteria,
+          },
+          metadata: {
+            rulesVersion: evaluation.rulesVersion,
+            disclaimer: evaluation.disclaimer,
+            ...(user.isSupportSession
+              ? {
+                  supportSessionId: user.supportSessionId ?? null,
+                  platformUserId: user.platformUserId ?? null,
+                  actingAsTenantUserId: user.id,
+                }
+              : {}),
+          },
+          path: 'pharmacyOnboarding.recordFbrTier1Check',
+        },
+        tx as unknown as ScopedDb
+      );
+    });
+    return readFbrTier1Status(ctx);
+  }),
+
   /**
    * The regulatory profile page: this organization's branches, the jurisdictions
    * whose rules are published, and the selected branch's effective-dated
@@ -321,6 +470,7 @@ export const pharmacyOnboardingRouter = router({
               retentionPolicy: true,
               premises: true,
               createdAt: true,
+              isPlaceholder: true,
               jurisdictionRuleSet: {
                 select: {
                   licenceCategories: true,
@@ -340,34 +490,23 @@ export const pharmacyOnboardingRouter = router({
           const effective =
             version.effectiveFrom <= now &&
             (version.effectiveTo === null || version.effectiveTo > now);
-          let inForce = effective;
-          if (effective) {
-            try {
-              assertBranchMayOperate(
-                {
-                  ...version,
-                  permittedSchedules: Array.isArray(version.permittedSchedules)
-                    ? version.permittedSchedules.filter(
-                        (schedule): schedule is string => typeof schedule === 'string'
-                      )
-                    : [],
-                  ruleSet: jurisdictionRuleSet,
-                  auditDenied: () => undefined,
-                },
-                { name: 'REGULATORY_PROFILE_VIEW', at: now, requiresQualifiedPerson: true }
-              );
-            } catch (error) {
-              if (!(error instanceof BranchOperationDeniedError)) throw error;
-              inForce = false;
-            }
-          }
+          const status = evaluateBranchRegulatoryStatus(
+            {
+              ...version,
+              permittedSchedules: Array.isArray(version.permittedSchedules)
+                ? version.permittedSchedules.filter(
+                    (schedule): schedule is string => typeof schedule === 'string'
+                  )
+                : [],
+              ruleSet: jurisdictionRuleSet,
+            },
+            effective,
+            now
+          );
           return {
             ...version,
             provinceName: provinceName(version.provinceCode),
-            effective,
-            inForce,
-            licenceExpired: effective && now >= version.licenceValidTo,
-            qualifiedPersonCoverageExpired: effective && now >= version.qualifiedPersonValidTo,
+            ...status,
           };
         }),
       };
@@ -394,6 +533,37 @@ export const pharmacyOnboardingRouter = router({
       });
       if (!branch) {
         throw badRequest('branchId', 'Choose one of this workspace’s active branches.');
+      }
+
+      const activePlaceholder = await ctx.db.branchRegulatoryProfile.findFirst({
+        where: {
+          organizationId,
+          branchId: branch.id,
+          isPlaceholder: true,
+          effectiveTo: null,
+        },
+        select: { id: true },
+      });
+      if (!activePlaceholder) {
+        const placeholderField = [
+          'premisesAddressLine',
+          'premisesCity',
+          'premisesStorageDescription',
+          'licenceCategory',
+          'licenceNumber',
+          'licenceEvidenceFileRef',
+          'qualifiedPersonRegistration',
+          'qualifiedPersonCoverageRosterRef',
+          'ntn',
+          'strn',
+          'fiscalStatus',
+        ].find((field) => /\bPLACEHOLDER\b/i.test(String(input[field as keyof typeof input])));
+        if (placeholderField) {
+          throw badRequest(
+            placeholderField,
+            'PLACEHOLDER text is reserved for the active platform placeholder rule set.'
+          );
+        }
       }
 
       const jurisdictions = await jurisdictionsInForce(ctx, effectiveFrom);

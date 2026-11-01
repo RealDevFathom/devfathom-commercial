@@ -29,6 +29,7 @@ function packet(input: PrepareClosePacketInput): RestaurantClosePacket {
           allBillsResolved: true,
           allDrawersClosed: true,
           openBillCount: 0,
+          unresolvedOrderCount: 0,
           openDrawerCount: 0,
         },
         currency: 'PKR',
@@ -205,6 +206,49 @@ describe('CloseReadinessPanel', () => {
       '/restaurant/money'
     );
     expect(screen.getAllByRole('link')).toHaveLength(1);
+  });
+
+  it('shows the active-order close blocker even when no bills remain open', async () => {
+    mocks.fetch.mockImplementation(async (input: PrepareClosePacketInput) => {
+      const value = packet(input);
+      value.status = 'BLOCKED';
+      value.financial.status = 'BLOCKED';
+      value.financial.data!.closeGuards.allBillsResolved = false;
+      value.financial.data!.closeGuards.unresolvedOrderCount = 2;
+      value.financial.blockers = [
+        {
+          code: 'ACTIVE_ORDERS',
+          message: '2 active orders prevent the existing daily close. Resolve them before closing.',
+          source: 'src/lib/restaurant/daily-close.ts#assertReadyToClose',
+          responsibleRole: 'SHIFT_MANAGER',
+          recordIds: [],
+          allowedExistingRoutes: [
+            {
+              href: '/restaurant/orders',
+              procedure: 'restaurantOrders.listOrders',
+              capability: 'orders:read',
+              module: 'restaurant-pos',
+            },
+          ],
+        },
+      ];
+      return value;
+    });
+    render(<Harness />);
+    prepare();
+    await prepared();
+
+    expect(screen.getByText('Blocked at observation')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        '2 active orders prevent the existing daily close. Resolve them before closing.'
+      )
+    ).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Review orders' })).toHaveAttribute(
+      'href',
+      '/restaurant/orders'
+    );
+    expect(screen.queryByText('Checks passed at observation')).not.toBeInTheDocument();
   });
 
   it('keeps missing counts unavailable while preserving other returned financial evidence', async () => {

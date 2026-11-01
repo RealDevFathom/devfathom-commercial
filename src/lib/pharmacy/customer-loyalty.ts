@@ -1,9 +1,11 @@
 import 'server-only';
 
+import { assertSaleBatchesSellable } from './sale-batch-safety';
 import { completePaidPharmacySale, completionSaleInclude } from './sale-completion';
 import { postTenderEntry } from './finance-postings';
 import { requestCounterEvidence } from './counter-evidence';
 import { lockCustomerConsent } from './consent-writer';
+import { assertRxSaleAllowed } from './rx-sale-gate';
 
 import { Prisma } from '@/generated/prisma/client';
 import { pointsForNetPaid, redemptionFor } from '@/lib/commerce/loyalty-arithmetic';
@@ -16,6 +18,7 @@ export class PharmacyLoyaltyError extends Error {
     readonly reason:
       | 'LOYALTY_CONSENT_REQUIRED'
       | 'CUSTOMER_NOT_FOUND'
+      | 'PRESCRIPTION_PATIENT_MISMATCH'
       | 'SALE_NOT_OPEN'
       | 'SALE_NOT_LINKED'
       | 'INSUFFICIENT_POINTS'
@@ -38,6 +41,9 @@ export async function linkCustomerToSale(
   });
   if (!consent?.granted || consent.revokedAt)
     throw new PharmacyLoyaltyError('LOYALTY_CONSENT_REQUIRED');
+  await db.$queryRaw(
+    Prisma.sql`SELECT id FROM pharmacy_sales WHERE id=${input.saleId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`
+  );
   const sale = await db.pharmacySale.findFirst({
     where: {
       id: input.saleId,
@@ -47,6 +53,17 @@ export async function linkCustomerToSale(
     },
   });
   if (!sale) throw new PharmacyLoyaltyError('SALE_NOT_OPEN');
+  const referencedLine = await db.pharmacySaleLine.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      saleId: sale.id,
+      prescriptionLineId: { not: null },
+      prescriptionPatientId: { not: input.patientId },
+    },
+    select: { id: true },
+  });
+  if (referencedLine) throw new PharmacyLoyaltyError('PRESCRIPTION_PATIENT_MISMATCH');
   const customer = await db.pharmacyCustomer.upsert({
     where: {
       organizationId_patientId: {
@@ -150,6 +167,15 @@ export async function redeemSalePoints(
   });
   if (!sale) throw new PharmacyLoyaltyError('SALE_NOT_OPEN');
   if (!sale.customerId) throw new PharmacyLoyaltyError('SALE_NOT_LINKED');
+  // A points redemption is still payment. Apply the same line-aware Rx gate as every
+  // other tender, while leaving OTC loyalty redemption available to counter staff.
+  await assertRxSaleAllowed(
+    db,
+    scope,
+    sale.lines.map((line) => line.medicine)
+  );
+  // #633: a points tender is a tender: refuse it while any batch on the bill is unsafe.
+  await assertSaleBatchesSellable(db, scope, sale.id);
   await lockCustomerConsent(db, scope.organizationId, sale.customerId);
   const customer = await db.pharmacyCustomer.findFirst({
     where: { id: sale.customerId, organizationId: scope.organizationId, active: true },
@@ -176,7 +202,7 @@ export async function redeemSalePoints(
     _sum: { points: true },
   });
   const totalMinor = sale.lines.reduce(
-    (sum, line) => sum + line.quantity * line.unitPriceMinor - line.discountMinor,
+    (sum, line) => sum + line.grossMinor - line.discountMinor,
     0
   );
   const outstandingMinor =
@@ -321,7 +347,7 @@ export async function readCustomerSnapshot(
         id: true,
         receiptNumber: true,
         completedAt: true,
-        lines: { select: { quantity: true, unitPriceMinor: true, discountMinor: true } },
+        lines: { select: { grossMinor: true, discountMinor: true } },
         tenders: {
           select: { type: true, amountMinor: true, refunds: { select: { amountMinor: true } } },
         },
@@ -370,10 +396,7 @@ export async function readCustomerSnapshot(
       saleId: sale.id,
       receiptNumber: sale.receiptNumber,
       completedAt: sale.completedAt,
-      totalMinor: sale.lines.reduce(
-        (sum, line) => sum + line.quantity * line.unitPriceMinor - line.discountMinor,
-        0
-      ),
+      totalMinor: sale.lines.reduce((sum, line) => sum + line.grossMinor - line.discountMinor, 0),
     })),
   };
 }
@@ -418,7 +441,7 @@ export async function readLoyaltyHistory(
   await assertLoyaltyHistoryBranch(db, scope);
   const customer = await db.pharmacyCustomer.findFirst({
     where: { id: customerId, organizationId: scope.organizationId, active: true },
-    select: { id: true, displayName: true, phoneLast4: true },
+    select: { id: true, displayName: true, phoneLast4: true, preferredLanguage: true },
   });
   if (!customer) throw new PharmacyLoyaltyError('CUSTOMER_NOT_FOUND');
   const where = { organizationId: scope.organizationId, branchId: scope.branchId, customerId };

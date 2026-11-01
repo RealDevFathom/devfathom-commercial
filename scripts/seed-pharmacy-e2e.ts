@@ -34,6 +34,8 @@ import { PHARMACY_E2E } from '../tests/e2e/pharmacy-counter-fixture.js';
 import { resolvePharmacyE2eDatabaseUrl } from './pharmacy-e2e-environment.js';
 
 const PHARMACY_E2E_ADMIN_CAPABILITIES = [
+  // #518: POS-09 adds a prescription-only line, which now needs the exact dispense grant.
+  'pharmacy:dispense',
   'pharmacy:counter',
   'pharmacy:manage',
   'pharmacy:procurement',
@@ -62,6 +64,8 @@ const RECEIVED_AT = new Date('2026-08-01T00:00:00.000Z');
 const EXPIRES_AT = new Date('2028-06-30T00:00:00.000Z');
 
 const MODULES = [
+  'hr',
+  'pharmacy-procurement',
   'pharmacy-core',
   'pharmacy-counter',
   'pharmacy-inventory',
@@ -216,8 +220,9 @@ async function seedWorkspace(email: string, passwordHash: string) {
     // The administrator role gets explicit, non-sensitive grants only (never `*`). The counter's
     // receipt guard asks the organization role for a capability before it honours a session
     // ADMIN, so without pharmacy:counter the admin the spec signs in as cannot read the bill it
-    // is selling. pharmacy:dispense, pharmacy:safety and pharmacy:catalogue-review are
-    // deliberately absent: the counter spec exercises none of them.
+    // is selling. pharmacy:dispense is granted because POS-09 adds a prescription-only line,
+    // which #518 restricts to the exact grant; pharmacy:safety and pharmacy:catalogue-review are
+    // deliberately absent: the counter spec exercises neither.
     for (const capability of PHARMACY_E2E_ADMIN_CAPABILITIES) {
       await tx.organizationRolePermission.upsert({
         where: {
@@ -445,8 +450,12 @@ async function seedCashier(passwordHash: string) {
         updatedAt: FIXED_AT,
       },
     });
+    // Repair workspaces created by the seed before the counter capability was canonicalized.
+    await tx.organizationRolePermission.deleteMany({
+      where: { organizationRoleId: role.id, capability: 'pharmacy.counter' },
+    });
     // Canonical grants, as #163's migration leaves real cashiers and the Cashier template gives
-    // new ones. A legacy pharmacy.counter grant is inert to can().
+    // new ones.
     for (const [id, capability] of [
       [PHARMACY_E2E.cashierCounterPermissionId, 'pharmacy:counter'],
       [PHARMACY_E2E.cashierOrdersPermissionId, 'pharmacy:orders'],

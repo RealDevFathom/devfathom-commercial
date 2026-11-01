@@ -6,6 +6,8 @@ import {
   COUNTER_UNKNOWN_ERROR_MESSAGE,
   counterErrorMessage,
 } from './counter-messages';
+import { PharmacyLoyaltyError } from './customer-loyalty';
+import { PharmacySaleBatchError } from './sale-batch-safety';
 import { PharmacySettlementError } from './settlement';
 
 /**
@@ -22,12 +24,14 @@ describe('counterErrorMessage', () => {
     );
   });
 
+  /** #453: linking a customer requires loyalty consent, not dispensing consent. */
   it('names loyalty consent without referring to dispensing', () => {
-    const message = counterErrorMessage(new Error('LOYALTY_CONSENT_REQUIRED'));
+    const message = counterErrorMessage(new PharmacyLoyaltyError('LOYALTY_CONSENT_REQUIRED'));
     expect(message).toBe(
       'Loyalty consent is required before linking this customer or redeeming loyalty points.'
     );
     expect(message).not.toContain('dispensing');
+    expect(message).not.toBe(COUNTER_ERROR_MESSAGES.CONSENT_REQUIRED);
   });
 
   it('never returns a raw reason code for an unmapped failure', () => {
@@ -73,6 +77,23 @@ describe('counterErrorMessage', () => {
       const error = new PharmacySettlementError(reason);
       expect(COUNTER_ERROR_MESSAGES[reason], `${reason} has no operator sentence`).toBeTruthy();
       expect(counterErrorMessage(error)).not.toBe(COUNTER_UNKNOWN_ERROR_MESSAGE);
+    }
+  });
+
+  /** #633: a batch that became unsafe after add-to-cart refuses the payment mid-bill. */
+  it('has a sentence for every reason PharmacySaleBatchError can raise', () => {
+    const reasons = [
+      ['SALE_BATCH_RECALLED', 'RECALLED', 'recalled'],
+      ['SALE_BATCH_QUARANTINED', 'QUARANTINED', 'quarantined'],
+      ['SALE_BATCH_EXPIRED', 'EXPIRED', 'expired'],
+      ['SALE_BATCH_BLOCKED', 'UNAUTHORIZED', 'no longer be sold'],
+    ] as const;
+    for (const [reason, blockReason, words] of reasons) {
+      const message = counterErrorMessage(
+        new PharmacySaleBatchError(reason, blockReason, 'line-1', 'lot-1')
+      );
+      expect(message, `${reason} has no operator sentence`).toContain(words);
+      expect(message).toContain('Void the bill');
     }
   });
 

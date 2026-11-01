@@ -132,6 +132,87 @@ describe('opt-in pharmacy Owner / Operator access', () => {
     ).resolves.toBe(false);
   });
 
+  it('limits the admin fallback to prescription capture and preserves dispense DENYs', async () => {
+    await expect(
+      can(proprietor, 'pharmacy:prescriptions', undefined, { db: authorizationDb({}) })
+    ).resolves.toBe(true);
+    await expect(
+      can(employee, 'pharmacy:prescriptions', undefined, { db: authorizationDb({}) })
+    ).resolves.toBe(false);
+    await expect(
+      can(employee, 'pharmacy:prescriptions', undefined, {
+        db: authorizationDb({
+          rolePermissions: [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }],
+        }),
+      })
+    ).resolves.toBe(true);
+    await expect(
+      can(proprietor, 'pharmacy:prescriptions', undefined, {
+        db: authorizationDb({
+          overrides: [{ capability: 'pharmacy:dispense', effect: 'DENY' }],
+        }),
+      })
+    ).resolves.toBe(false);
+  });
+
+  it.each(['*', 'pharmacy:*'])(
+    'does not let a %s grant bypass the prescription admin or exact-grant requirement',
+    async (capability) => {
+      for (const permissions of [
+        { rolePermissions: [{ capability, effect: 'ALLOW' as const }] },
+        { overrides: [{ capability, effect: 'ALLOW' as const }] },
+      ]) {
+        const db = authorizationDb(permissions);
+        await expect(can(employee, 'pharmacy:prescriptions', undefined, { db })).resolves.toBe(
+          false
+        );
+        await expect(can(proprietor, 'pharmacy:prescriptions', undefined, { db })).resolves.toBe(
+          true
+        );
+      }
+    }
+  );
+
+  it.each(['cashier', 'pharmacist', 'owner-operator'])(
+    'evaluates the %s template through the central prescription policy',
+    async (key) => {
+      await expect(
+        can(employee, 'pharmacy:prescriptions', undefined, {
+          db: authorizationDb({ rolePermissions: permissionsFor(key) }),
+        })
+      ).resolves.toBe(key !== 'cashier');
+    }
+  );
+
+  it('allows an exact prescription grant without granting dispensing', async () => {
+    const db = authorizationDb({
+      rolePermissions: [{ capability: 'pharmacy:prescriptions', effect: 'ALLOW' }],
+    });
+    await expect(can(employee, 'pharmacy:prescriptions', undefined, { db })).resolves.toBe(true);
+    await expect(can(employee, 'pharmacy:dispense', undefined, { db })).resolves.toBe(false);
+  });
+
+  it.each(['pharmacy:prescriptions', 'pharmacy:dispense', 'pharmacy:*', '*'])(
+    'lets a %s DENY veto prescription grants and the admin fallback',
+    async (capability) => {
+      const grants: Permission[] = [
+        { capability: 'pharmacy:prescriptions', effect: 'ALLOW' },
+        { capability: 'pharmacy:dispense', effect: 'ALLOW' },
+      ];
+      for (const permissions of [
+        { rolePermissions: grants, overrides: [{ capability, effect: 'DENY' as const }] },
+        { rolePermissions: [{ capability, effect: 'DENY' as const }], overrides: grants },
+      ]) {
+        const db = authorizationDb(permissions);
+        for (const subject of [employee, proprietor]) {
+          await expect(can(subject, 'pharmacy:prescriptions', undefined, { db })).resolves.toBe(
+            false
+          );
+        }
+      }
+    }
+  );
+
   it('does not grant unrelated capabilities through wildcard or platform authority', async () => {
     const db = authorizationDb({ rolePermissions: permissionsFor('owner-operator') });
     expect(proprietor.role).toBe('ADMIN');
@@ -145,21 +226,49 @@ describe('opt-in pharmacy Owner / Operator access', () => {
 });
 
 describe('custom ABAC decisions', () => {
-  it('preserves procurement access for managers and tenant admins without a role', async () => {
-    const managerPermissions = roleTemplatesForVertical('PHARMACY')
-      .find((role) => role.key === 'manager')!
+  const pharmacyPermissionsFor = (roleKey: string): Permission[] =>
+    roleTemplatesForVertical('PHARMACY')
+      .find((role) => role.key === roleKey)!
       .capabilities.map((capability) => ({ capability, effect: 'ALLOW' as const }));
 
+  it('preserves procurement access for the Manager template (#375)', async () => {
     await expect(
       can(employee, 'pharmacy:procurement', undefined, {
-        db: authorizationDb({ rolePermissions: managerPermissions }),
+        db: authorizationDb({ rolePermissions: pharmacyPermissionsFor('manager') }),
       })
     ).resolves.toBe(true);
+  });
+
+  it('preserves procurement access for a tenant admin without a role (#375)', async () => {
     await expect(
       can({ ...employee, role: 'ADMIN' }, 'pharmacy:procurement', undefined, {
         db: authorizationDb({}),
       })
     ).resolves.toBe(true);
+  });
+
+  it('does not give the Pharmacist template procurement access by default (#375)', async () => {
+    await expect(
+      can(employee, 'pharmacy:procurement', undefined, {
+        db: authorizationDb({ rolePermissions: pharmacyPermissionsFor('pharmacist') }),
+      })
+    ).resolves.toBe(false);
+  });
+
+  it('does not let tenant admin authority bypass an assigned Pharmacist role (#375)', async () => {
+    await expect(
+      can({ ...employee, role: 'ADMIN' }, 'pharmacy:procurement', undefined, {
+        db: authorizationDb({ rolePermissions: pharmacyPermissionsFor('pharmacist') }),
+      })
+    ).resolves.toBe(false);
+  });
+
+  it('does not let tenant admin authority bypass an assigned custom role (#375)', async () => {
+    await expect(
+      can({ ...employee, role: 'ADMIN' }, 'pharmacy:procurement', undefined, {
+        db: authorizationDb({ rolePermissions: [] }),
+      })
+    ).resolves.toBe(false);
   });
 
   it('lets an explicit deny revoke tenant admin procurement access', async () => {
@@ -193,6 +302,24 @@ describe('custom ABAC decisions', () => {
     await expect(
       can({ ...employee, role: 'ADMIN' }, 'finance:read', undefined, { db })
     ).resolves.toBe(false);
+  });
+
+  it('gives a role deny precedence over a user allow', async () => {
+    const db = authorizationDb({
+      overrides: [{ capability: 'finance:read', effect: 'ALLOW' }],
+      rolePermissions: [{ capability: 'finance:*', effect: 'DENY' }],
+    });
+
+    await expect(can(employee, 'finance:read', undefined, { db })).resolves.toBe(false);
+  });
+
+  it('gives a role deny precedence over a user-level allow', async () => {
+    const db = authorizationDb({
+      overrides: [{ capability: 'pharmacy:counter', effect: 'ALLOW' }],
+      rolePermissions: [{ capability: 'pharmacy:counter', effect: 'DENY' }],
+    });
+
+    await expect(can(employee, 'pharmacy:counter', undefined, { db })).resolves.toBe(false);
   });
 
   it('falls back to built-in policy only when no custom rule matches', async () => {
@@ -242,9 +369,10 @@ describe('custom ABAC decisions', () => {
       'pharmacy:safety',
       'pharmacy:catalogue-review',
       'pharmacy:orders',
+      'pharmacy:counter',
     ] as const satisfies readonly Action[];
 
-    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(45);
+    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(46);
     for (const action of actions) {
       expect(ALL_ACTIONS).toContain(action);
       expect(POLICIES[action]).toHaveLength(0);
