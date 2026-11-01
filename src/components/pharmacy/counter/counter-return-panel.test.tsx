@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   },
   history: {} as Record<string, unknown>,
   lookup: {} as Record<string, unknown>,
+  pharmacists: {} as Record<string, unknown>,
 }));
 vi.mock('@/lib/trpc', () => ({
   trpc: {
@@ -21,6 +22,9 @@ vi.mock('@/lib/trpc', () => ({
       counterReceipt: { useQuery: () => ({}) },
       returnLine: { useMutation: () => ({ mutateAsync: mocks.returnLine }) },
       refundTender: { useMutation: () => ({ mutateAsync: mocks.refund }) },
+    },
+    pharmacySafety: {
+      controlledPharmacists: { useQuery: () => mocks.pharmacists },
     },
   },
 }));
@@ -42,6 +46,7 @@ beforeEach(() => {
   mocks.refetch.mockResolvedValue({});
   mocks.returnLine.mockResolvedValue({});
   mocks.refund.mockResolvedValue({});
+  mocks.pharmacists = { data: [{ id: 'staff-w', name: 'Witness Pharmacist' }] };
   mocks.lookup = {
     isSuccess: true,
     data: [
@@ -249,3 +254,125 @@ it.each(['SOLO', 'STAFFED'])(
     expect(localStorage.getItem('pharmacy-return:o:a:b') ?? '').not.toContain('4729');
   }
 );
+describe('controlled medicine returns', () => {
+  const key = 'pharmacy-return:o:a:b';
+  function controlledHistory() {
+    const history = mocks.history as { data: { lines: Array<Record<string, unknown>> } };
+    history.data.lines[0].controlled = true;
+  }
+  function fillControlledReturn() {
+    chooseReceipt();
+    fireEvent.change(screen.getByLabelText('Sold line'), { target: { value: 'line' } });
+    fireEvent.change(screen.getByLabelText('Quarantine location'), { target: { value: 'q' } });
+    fireEvent.change(screen.getByLabelText('Inspection and integrity decision'), {
+      target: { value: 'sealed' },
+    });
+    fireEvent.click(screen.getByLabelText(/I confirm the quantity/));
+  }
+
+  it('does not ask for a witness on a non-controlled line', () => {
+    render(<ReturnForm {...props} />);
+    chooseReceipt();
+    fireEvent.change(screen.getByLabelText('Sold line'), { target: { value: 'line' } });
+    expect(screen.queryByLabelText('Witness PIN')).toBeNull();
+  });
+
+  it('requires a fresh witness PIN and sends it without persisting it', async () => {
+    controlledHistory();
+    const setItem = vi.spyOn(Storage.prototype, 'setItem');
+    render(<ReturnForm {...props} />);
+    fillControlledReturn();
+    const submit = screen.getByRole('button', { name: 'Record return' });
+    expect(submit).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Witnessing pharmacist'), {
+      target: { value: 'staff-w' },
+    });
+    fireEvent.change(screen.getByLabelText('Witness PIN'), { target: { value: '12' } });
+    expect(submit).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Witness PIN'), { target: { value: '4826' } });
+    expect(submit).toBeEnabled();
+    fireEvent.click(submit);
+    await waitFor(() =>
+      expect(mocks.returnLine).toHaveBeenCalledWith(
+        expect.objectContaining({
+          saleLineId: 'line',
+          controlledWitness: { staffProfileId: 'staff-w', pin: '4826' },
+        })
+      )
+    );
+    await screen.findByText(/Return recorded/);
+    for (const [, value] of setItem.mock.calls) {
+      expect(value).not.toContain('4826');
+      expect(value).not.toContain('controlledWitness');
+    }
+    expect(screen.getByLabelText('Witness PIN')).toHaveValue('');
+  });
+
+  it('reports a blocked controlled return as a failure, not success', async () => {
+    controlledHistory();
+    mocks.returnLine.mockResolvedValueOnce({
+      blocked: 'A different pharmacist must enter a fresh witness PIN.',
+    });
+    render(<ReturnForm {...props} />);
+    fillControlledReturn();
+    fireEvent.change(screen.getByLabelText('Witnessing pharmacist'), {
+      target: { value: 'staff-w' },
+    });
+    fireEvent.change(screen.getByLabelText('Witness PIN'), { target: { value: '0000' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Record return' }));
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'Return not recorded. A different pharmacist must enter a fresh witness PIN.'
+      )
+    );
+    expect(screen.queryByText(/Return recorded/)).toBeNull();
+    expect(mocks.refetch).not.toHaveBeenCalled();
+    expect(localStorage.getItem(key)).toBeNull();
+    expect(screen.queryByRole('button', { name: /Retry saved/ })).toBeNull();
+    expect(screen.getByLabelText('Witness PIN')).toHaveValue('');
+  });
+
+  it('keeps a saved controlled return for reconciliation when its retry is blocked', async () => {
+    controlledHistory();
+    const saved = {
+      kind: 'return',
+      saleId: 'sale',
+      input: {
+        branchId: 'b',
+        saleLineId: 'line',
+        canonicalUnits: 1,
+        disposition: 'QUARANTINE',
+        quarantineLocationId: 'q',
+        reason: 'WRONG_ITEM',
+        integrityDecision: 'sealed',
+        idempotencyKey: 'saved-key',
+      },
+    };
+    localStorage.setItem(key, JSON.stringify(saved));
+    mocks.returnLine.mockResolvedValueOnce({
+      blocked: 'A different pharmacist must enter a fresh witness PIN.',
+    });
+    render(<ReturnForm {...props} />);
+    const retry = screen.getByRole('button', { name: 'Retry saved return' });
+    expect(retry).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Owner PIN'), { target: { value: '4729' } });
+    fireEvent.change(screen.getByLabelText('Witnessing pharmacist'), {
+      target: { value: 'staff-w' },
+    });
+    fireEvent.change(screen.getByLabelText('Witness PIN'), { target: { value: '1111' } });
+    fireEvent.click(retry);
+    await waitFor(() =>
+      expect(mocks.returnLine).toHaveBeenCalledWith({
+        ...saved.input,
+        approvalPin: '4729',
+        checkerId: undefined,
+        controlledWitness: { staffProfileId: 'staff-w', pin: '1111' },
+      })
+    );
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent('retry the saved return')
+    );
+    expect(JSON.parse(localStorage.getItem(key)!)).toEqual(saved);
+    expect(screen.getByRole('button', { name: 'Retry saved return' })).toBeDisabled();
+  });
+});

@@ -63,17 +63,24 @@ async function customDecision(
     !ACTIVE_STATUSES.has(user.status)
   )
     return { decision: false, subject };
+  // Prescription capture is narrower than dispensing. Existing pharmacist
+  // grants remain authoritative for it, including DENYs, without granting
+  // tenant administrators the wider dispensing capability.
+  const matchingActions =
+    action === 'pharmacy:prescriptions' ? [action, 'pharmacy:dispense'] : [action];
   const matchingRules = [
     ...user.permissionOverrides,
     ...(user.organizationRole?.permissions ?? []),
   ].filter((rule) =>
-    capabilityMatches(
-      (action === 'pharmacy:receipt' || action === 'pharmacy:counter') &&
-        rule.capability === action.replace(':', '.')
-        ? action
-        : rule.capability,
-      action,
-      rule.effect === 'DENY' ? 'DENY' : 'ALLOW'
+    matchingActions.some((candidate) =>
+      capabilityMatches(
+        (candidate === 'pharmacy:receipt' || candidate === 'pharmacy:counter') &&
+          rule.capability === candidate.replace(':', '.')
+          ? candidate
+          : rule.capability,
+        candidate,
+        rule.effect === 'DENY' ? 'DENY' : 'ALLOW'
+      )
     )
   );
   if (matchingRules.some((rule) => rule.effect === 'DENY')) return { decision: false, subject };
@@ -124,7 +131,7 @@ export async function can(
     }
     if (decision === true) return true;
   } catch (err) {
-    console.error('[abac] permission evaluation threw:', { action, error: err });
+    console.error('[abac] custom permission lookup for "%s" threw:', action, err);
     return false;
   }
   for (const policy of POLICIES[action] ?? []) {
@@ -132,7 +139,7 @@ export async function can(
       if (await policy({ subject, resource, env, db })) return true;
     } catch (err) {
       // A policy that throws denies (fail-closed) but never crashes the request.
-      console.error('[abac] policy threw:', { action, error: err });
+      console.error('[abac] policy for "%s" threw:', action, err);
     }
   }
   return false;

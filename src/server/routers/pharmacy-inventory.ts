@@ -35,6 +35,7 @@ import {
   nearExpiryBoard,
   OpenRecallConflictError,
   quarantinePart,
+  releaseQuarantinedPart,
   recallTrace,
   receiveTransferLine,
   reserveSupplierClaim,
@@ -53,6 +54,11 @@ import {
 import type { LedgerScope } from '@/lib/pharmacy/stock-ledger';
 import { PharmacyStockSignalError } from '@/lib/pharmacy/stock-signals';
 import { PharmacySupplierReturnError } from '@/lib/pharmacy/supplier-returns';
+import {
+  expiryRiskBuckets,
+  maySuggestExpiryMarkdown,
+  supplierReturnDates,
+} from '@/lib/pharmacy/expiry-growth';
 import { createPurchaseReturn } from '@/lib/pharmacy/supplier-returns-operations';
 import {
   acknowledgeSignal,
@@ -244,7 +250,23 @@ async function lockExpiringLot(db: ScopedDb, scope: LedgerScope, inventoryLotId:
   const lot = await db.pharmacyInventoryLot.findFirst({
     where: { id: inventoryLotId, organizationId: scope.organizationId, branchId: scope.branchId },
     include: {
-      batch: { select: { batchNumber: true, expiresAt: true, state: true, medicineId: true } },
+      batch: {
+        select: {
+          batchNumber: true,
+          expiresAt: true,
+          state: true,
+          medicineId: true,
+          medicine: {
+            select: {
+              rx: true,
+              otc: true,
+              restricted: true,
+              controlled: true,
+              productFamily: true,
+            },
+          },
+        },
+      },
     },
   });
   if (!lot) throw new TRPCError({ code: 'FORBIDDEN', message: 'Lot is outside this branch.' });
@@ -1059,6 +1081,7 @@ export const pharmacyInventoryRouter = router({
           reason: z.string().trim().min(1).max(500),
           evidenceRef: z.string().trim().min(1).max(500),
           idempotencyKey: z.string().trim().min(1).max(200),
+          disposition: z.enum(['AVAILABLE', 'QUARANTINE']).optional(),
         })
         .strict()
     )
@@ -1079,7 +1102,7 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  quarantinePart: inventoryControl
+  quarantinePart: regulatory
     .input(
       z
         .object({
@@ -1097,6 +1120,29 @@ export const pharmacyInventoryRouter = router({
       try {
         return await ctx.db.$transaction(async (tx) =>
           quarantinePart(txDb(tx), await scopeFor(ctx, input.branchId), input)
+        );
+      } catch (error) {
+        domainError(error);
+      }
+    }),
+
+  releaseQuarantinedPart: inventoryControl
+    .input(
+      z
+        .object({
+          branchId,
+          inventoryLotId: z.string().min(1),
+          stockLocationId: z.string().min(1),
+          units: z.number().int().positive(),
+          reason: z.string().trim().min(1).max(500),
+          idempotencyKeyPrefix: z.string().trim().min(1).max(160),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await ctx.db.$transaction(async (tx) =>
+          releaseQuarantinedPart(txDb(tx), await scopeFor(ctx, input.branchId), input)
         );
       } catch (error) {
         domainError(error);
@@ -1245,10 +1291,9 @@ export const pharmacyInventoryRouter = router({
     .input(z.object({ branchId, recallNoticeId: z.string().min(1) }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
-        return await acknowledgeRecall(
-          ctx.db,
-          await scopeFor(ctx, input.branchId),
-          input.recallNoticeId
+        const scope = await scopeFor(ctx, input.branchId);
+        return await ctx.db.$transaction(async (tx) =>
+          acknowledgeRecall(txDb(tx), scope, input.recallNoticeId)
         );
       } catch (error) {
         domainError(error);
@@ -1560,7 +1605,9 @@ export const pharmacyInventoryRouter = router({
       await assertBranch(ctx.db, scope);
       const at = new Date();
       const { withinDays } = input;
-      const horizon = new Date(at.getTime() + withinDays * DAY_MS);
+      // Always read through 90 days so the headline recovery ledger can show
+      // the same cumulative 30/60/90 comparison regardless of the list filter.
+      const horizon = new Date(at.getTime() + Math.max(withinDays, 90) * DAY_MS);
       const tenant = { organizationId: scope.organizationId, branchId: scope.branchId };
 
       const [balances, suppliers] = await Promise.all([
@@ -1587,7 +1634,17 @@ export const pharmacyInventoryRouter = router({
                     batchNumber: true,
                     expiresAt: true,
                     state: true,
-                    medicine: { select: { productName: true, brandName: true } },
+                    medicine: {
+                      select: {
+                        productName: true,
+                        brandName: true,
+                        rx: true,
+                        otc: true,
+                        restricted: true,
+                        controlled: true,
+                        productFamily: true,
+                      },
+                    },
                   },
                 },
                 receiptLines: {
@@ -1602,7 +1659,15 @@ export const pharmacyInventoryRouter = router({
         ctx.db.pharmacySupplier.findMany({
           where: { organizationId: scope.organizationId, active: true },
           orderBy: { name: 'asc' },
-          select: { id: true, name: true },
+          select: {
+            id: true,
+            name: true,
+            relationships: {
+              where: { branchId: scope.branchId, active: true },
+              select: { expiryReturnWindowDays: true },
+              take: 1,
+            },
+          },
         }),
       ]);
       const lotIds = [...new Set(balances.map((row) => row.inventoryLotId))];
@@ -1678,12 +1743,33 @@ export const pharmacyInventoryRouter = router({
       const supplierByName = new Map(
         suppliers.map((supplier) => [supplier.name.trim().toLowerCase(), supplier.id])
       );
+      const relationshipBySupplier = new Map(
+        suppliers.map((supplier) => [
+          supplier.id,
+          supplier.relationships[0]?.expiryReturnWindowDays ?? null,
+        ])
+      );
 
+      const riskBuckets = expiryRiskBuckets(
+        balances.map((row) => ({
+          daysLeft: Math.ceil((row.lot.batch.expiresAt.getTime() - at.getTime()) / DAY_MS),
+          valueAtRiskMinor: row.onHandUnits * row.lot.unitCostMinor,
+        }))
+      );
       const rows = balances
         .map((row) => {
           const { lot } = row;
           const expiresAt = lot.batch.expiresAt;
           const receiptSupplier = lot.receiptLines[0]?.goodsReceipt.supplierId ?? null;
+          const suggestedSupplierId =
+            receiptSupplier && supplierIds.has(receiptSupplier)
+              ? receiptSupplier
+              : (supplierByName.get(lot.supplierName.trim().toLowerCase()) ?? null);
+          const returnDates = supplierReturnDates(
+            expiresAt,
+            suggestedSupplierId ? (relationshipBySupplier.get(suggestedSupplierId) ?? null) : null
+          );
+          const markdownEligible = maySuggestExpiryMarkdown(lot.batch.medicine);
           return {
             key: `${row.inventoryLotId}:${row.stockLocationId}`,
             inventoryLotId: row.inventoryLotId,
@@ -1703,22 +1789,23 @@ export const pharmacyInventoryRouter = router({
             printedMrpMinor: lot.printedMrpMinor,
             valueAtRiskMinor: row.onHandUnits * lot.unitCostMinor,
             supplierName: lot.supplierName,
-            suggestedSupplierId:
-              receiptSupplier && supplierIds.has(receiptSupplier)
-                ? receiptSupplier
-                : (supplierByName.get(lot.supplierName.trim().toLowerCase()) ?? null),
+            suggestedSupplierId,
+            markdownEligible,
+            returnWindowOpensAt: returnDates?.opensAt ?? null,
+            returnDeadlineAt: returnDates?.deadlineAt ?? null,
             markdown:
               markdownByPosition.get(`${row.inventoryLotId}:${row.stockLocationId}`) ?? null,
             returnDraft: returnByLot.get(row.inventoryLotId) ?? null,
           };
         })
+        .filter((row) => row.expired || row.daysLeft <= withinDays)
         .sort(
           (left, right) =>
             left.expiresAt.getTime() - right.expiresAt.getTime() ||
             right.valueAtRiskMinor - left.valueAtRiskMinor ||
             left.key.localeCompare(right.key)
         );
-      return { generatedAt: at, withinDays, rows, suppliers };
+      return { generatedAt: at, withinDays, riskBuckets, rows, suppliers };
     }),
 
   /**
@@ -1751,6 +1838,12 @@ export const pharmacyInventoryRouter = router({
             });
           }
           if (lot.batch.state !== 'ACTIVE') throw new PharmacyInventoryError('BLOCKED_STOCK');
+          if (!maySuggestExpiryMarkdown(lot.batch.medicine)) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'Mark-down suggestions are limited to OTC and non-drug stock.',
+            });
+          }
           assertOnBoard(lot.batch.expiresAt, at);
           const onHandUnits = await availableAt(
             tx,

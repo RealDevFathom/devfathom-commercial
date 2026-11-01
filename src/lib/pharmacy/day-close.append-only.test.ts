@@ -39,6 +39,7 @@ function fixture() {
     pharmacyDrawerSession: { findMany: vi.fn().mockResolvedValue(drawers) },
     pharmacySale: { findMany: vi.fn().mockResolvedValue([]) },
     pharmacyRefund: { findMany: vi.fn().mockResolvedValue([]) },
+    pharmacyTender: { findMany: vi.fn().mockResolvedValue([]) },
     organization: { findUnique: vi.fn().mockResolvedValue({ timezone: 'Asia/Karachi' }) },
     user: { findMany: vi.fn().mockResolvedValue([{ id: 'owner', name: 'Owner' }]) },
   };

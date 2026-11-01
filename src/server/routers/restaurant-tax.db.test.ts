@@ -68,7 +68,7 @@ function caller(db: ScopedDb) {
 const input = {
   branchId,
   profileId: 'PK-ICT-RESTAURANT',
-  effectiveFrom: '2031-07-01T00:00:00.000Z',
+  effectiveFrom: '2031-07-01',
   accountantConfirmation: true,
   approvalReference: 'Concurrent activation test',
   eligibilityConfirmations: ['ictNoInputTaxCreditOrAdjustment', 'ictNoRefund'],
@@ -128,6 +128,7 @@ describeIfDatabase('restaurant tax activation replay against PostgreSQL', () => 
       )
     );
     expect(new Set(results.map((result) => result.id)).size).toBe(1);
+    expect(results[0].effectiveFrom).toEqual(new Date('2031-06-30T19:00:00.000Z'));
     await withTenantDb(organizationId, async (db) => {
       expect(await db.restaurantTaxProfileVersion.count({ where: { branchId } })).toBe(1);
       expect(

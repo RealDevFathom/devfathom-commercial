@@ -26,6 +26,7 @@ import {
 import {
   buildCounterReceiptPreview,
   counterLinePresentation,
+  counterLinePricing,
 } from '@/lib/pharmacy/counter-receipt-presentation';
 
 export type CounterReceiptSettlement =
@@ -508,8 +509,7 @@ export function CounterReceiptView({
                   </span>
                 </div>
                 <p className="text-text-muted">
-                  {line.quantity} {strings.saleUnit[line.saleUnit]} ×{' '}
-                  {formatMinor(line.unitPriceMinor)}
+                  {counterLinePricing(line, locale)}
                 </p>
                 {counterLinePresentation(line, locale).allocations.map((allocation, index) => (
                   <p

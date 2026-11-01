@@ -12,6 +12,9 @@ const unbilled = {
   accountedTotal: '0.00',
   deliveryFeeTotal: '4.00',
   unbilledItemIds: ['item-1'],
+  unbilledItems: [
+    { id: 'item-1', name: 'Lunch special', quantity: 1, seatNumber: null, modifiers: [] },
+  ],
   bills: [],
 };
 
@@ -20,6 +23,7 @@ const billed = {
   blocker: 'BILLS_OPEN',
   accountedTotal: '24.00',
   unbilledItemIds: [],
+  unbilledItems: [],
   bills: [
     {
       id: 'bill-1',
@@ -45,6 +49,43 @@ const billed = {
 };
 
 describe('CheckoutPanel', () => {
+  it.each([
+    ['NONE', 'Whole order'],
+    ['BY_ITEM', 'By item'],
+    ['BY_SEAT', 'By seat'],
+    ['FRACTIONAL', 'Fractional'],
+  ])('uses the customer-facing label for the %s split kind', async (splitKind, label) => {
+    const request: TerminalRequest = async <T,>() =>
+      ({ ...billed, bills: [{ ...billed.bills[0], splitKind }] }) as T;
+    render(<CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />);
+
+    expect(await screen.findByText(label)).toBeVisible();
+    expect(screen.getByText('Bill 1')).toBeVisible();
+    expect(screen.queryByText(splitKind)).not.toBeInTheDocument();
+  });
+
+  it.each(['UNRECOGNIZED', 'constructor'])(
+    'does not expose the unexpected split kind %s',
+    async (splitKind) => {
+      const request: TerminalRequest = async <T,>() =>
+        ({ ...billed, bills: [{ ...billed.bills[0], splitKind }] }) as T;
+      render(<CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />);
+
+      expect(await screen.findByText('Bill details')).toBeVisible();
+      expect(screen.getByText('Bill 1')).toBeVisible();
+      expect(screen.queryByText(splitKind)).not.toBeInTheDocument();
+    }
+  );
+
+  it('prefers the receipt number over the split kind label', async () => {
+    const request: TerminalRequest = async <T,>() =>
+      ({ ...billed, bills: [{ ...billed.bills[0], receiptNumber: 100 }] }) as T;
+    render(<CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />);
+
+    expect(await screen.findByText('Receipt 100')).toBeVisible();
+    expect(screen.queryByText('Whole order')).not.toBeInTheDocument();
+  });
+
   it("labels an unsplit bill as 'Whole order' instead of exposing the NONE sentinel", async () => {
     const request: TerminalRequest = async <T,>() => billed as T;
     render(<CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />);
@@ -155,7 +196,7 @@ describe('CheckoutPanel', () => {
     expect(calls[2]?.path).toContain('/api/restaurant/checkout/summary?orderId=order-1');
   });
 
-  it('submits a comp with distinct manager approval without retaining the PIN in its intent', async () => {
+  it('hides comp for MVP even with an open bill and a distinct approving manager', async () => {
     const calls: { path: string; options?: TerminalRequestOptions }[] = [];
     const request: TerminalRequest = async <T,>(path: string, options?: TerminalRequestOptions) => {
       calls.push({ path, options });
@@ -172,34 +213,11 @@ describe('CheckoutPanel', () => {
       />
     );
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Comp item' }));
-    fireEvent.change(screen.getByLabelText('Bill item'), { target: { value: 'line-1' } });
-    fireEvent.change(screen.getByLabelText('Comp reason'), {
-      target: { value: ' Guest recovery ' },
-    });
-    fireEvent.change(screen.getByLabelText('Approving manager'), {
-      target: { value: 'manager-1' },
-    });
-    fireEvent.change(screen.getByLabelText('Manager PIN'), { target: { value: '5678' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Confirm comp' }));
-
-    await waitFor(() =>
-      expect(calls).toContainEqual({
-        path: '/api/restaurant/checkout/comp',
-        options: {
-          method: 'POST',
-          body: {
-            billId: 'bill-1',
-            billLineId: 'line-1',
-            reason: 'Guest recovery',
-            approving: { staffProfileId: 'manager-1', type: 'PIN', secret: '5678' },
-          },
-          intent:
-            'checkout-comp:{"billId":"bill-1","billLineId":"line-1","reason":"Guest recovery","approvingStaffProfileId":"manager-1"}',
-        },
-      })
-    );
-    expect(calls.find((call) => call.options?.intent)?.options?.intent).not.toContain('5678');
+    expect(await screen.findByRole('button', { name: 'Apply tender' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'Comp item' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Comp reason')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Manager PIN')).not.toBeInTheDocument();
+    expect(calls.some(({ path }) => path === '/api/restaurant/checkout/comp')).toBe(false);
   });
 
   it('does not offer comp when no distinct approving manager is available', async () => {
@@ -215,7 +233,18 @@ describe('CheckoutPanel', () => {
       />
     );
 
-    expect(await screen.findByRole('button', { name: 'Comp item' })).toBeDisabled();
+    expect(await screen.findByText('Bill total')).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Comp item' })).not.toBeInTheDocument();
+  });
+
+  it('still displays historical comp totals while the comp action is unavailable', async () => {
+    const request: TerminalRequest = async <T,>() =>
+      ({ ...billed, bills: [{ ...billed.bills[0], compTotal: '8.00' }] }) as T;
+    render(<CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />);
+
+    expect(await screen.findByText('Comp total')).toBeVisible();
+    expect(screen.getByText('Comp total').nextElementSibling).toHaveTextContent('8.00');
+    expect(screen.queryByRole('button', { name: 'Comp item' })).not.toBeInTheDocument();
   });
 
   it('renders permission denial with a retry action', async () => {

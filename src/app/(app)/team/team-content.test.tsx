@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({
   role: 'ADMIN',
+  vertical: 'RESTAURANT' as 'RESTAURANT' | 'PHARMACY',
   modules: ['admin'] as string[],
   directory: vi.fn(() => ({ data: [], isLoading: false })),
   departments: {
@@ -22,7 +23,7 @@ vi.mock('next-auth/react', () => ({
   useSession: () => ({ data: { user: { role: state.role } } }),
 }));
 vi.mock('@/components/entitlements-provider', () => ({
-  useEntitlements: () => ({ enabledModules: state.modules }),
+  useEntitlements: () => ({ enabledModules: state.modules, vertical: state.vertical }),
 }));
 vi.mock('@/lib/trpc', () => ({
   trpc: {
@@ -41,6 +42,7 @@ import { AddMemberModal, TeamContent } from './team-content';
 
 beforeEach(() => {
   vi.clearAllMocks();
+  state.vertical = 'RESTAURANT';
   state.departments.data = [
     { key: 'COUNTER', name: 'Counter', active: true },
     { key: 'OLD', name: 'Old department', active: false },
@@ -56,13 +58,13 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 function fill() {
-  fireEvent.change(screen.getByPlaceholderText('John Doe'), {
+  fireEvent.change(screen.getByPlaceholderText('Ali Raza'), {
     target: { value: 'Second operator' },
   });
-  fireEvent.change(screen.getByPlaceholderText('john@company.com'), {
+  fireEvent.change(screen.getByPlaceholderText('ali@restaurant.pk'), {
     target: { value: 'second@e2e.invalid' },
   });
-  fireEvent.change(screen.getByPlaceholderText('Full Stack Developer'), {
+  fireEvent.change(screen.getByPlaceholderText('Shift Manager'), {
     target: { value: 'Counter operator' },
   });
 }
@@ -119,8 +121,8 @@ describe('tenant department invitation', () => {
       view.rerender(<AddMemberModal onClose={vi.fn()} />);
       fireEvent.click(screen.getByRole('button', { name: 'Send Invite' }));
       expect(state.invite.mutate).not.toHaveBeenCalled();
-      expect(screen.getByPlaceholderText('John Doe')).toHaveValue('Second operator');
-      expect(screen.getByPlaceholderText('john@company.com')).toHaveValue('second@e2e.invalid');
+      expect(screen.getByPlaceholderText('Ali Raza')).toHaveValue('Second operator');
+      expect(screen.getByPlaceholderText('ali@restaurant.pk')).toHaveValue('second@e2e.invalid');
       if (kind === 'error') {
         fireEvent.click(screen.getByRole('button', { name: 'Retry departments' }));
         expect(state.departments.refetch).toHaveBeenCalledOnce();
@@ -137,7 +139,43 @@ describe('tenant department invitation', () => {
     act(() => state.invite.mutate.mock.calls[0][1].onError({ message: 'Forbidden' }));
     expect(screen.getByText('Forbidden')).toBeVisible();
     expect(screen.getByLabelText('Department')).toHaveValue('COUNTER');
-    expect(screen.getByPlaceholderText('John Doe')).toHaveValue('Second operator');
+    expect(screen.getByPlaceholderText('Ali Raza')).toHaveValue('Second operator');
+  });
+});
+
+describe('vertical-aware invitation copy', () => {
+  it('shows pharmacy copy and the pharmacy role catalog to a pharmacy owner', () => {
+    state.vertical = 'PHARMACY';
+    state.roles.data = [
+      { id: 'role_owner', key: 'owner-operator', name: 'Owner / Operator' },
+      { id: 'role_pharmacist', key: 'pharmacist', name: 'Pharmacist' },
+    ];
+    const { container } = render(<AddMemberModal onClose={vi.fn()} />);
+    const roleSelect = screen.getByLabelText('Pharmacy staff role');
+    expect(roleSelect).toHaveAttribute('id', 'invite-role-template');
+    expect(screen.getByRole('option', { name: 'Owner / Operator' })).toHaveValue('role_owner');
+    expect(screen.getByRole('option', { name: 'Pharmacist' })).toHaveValue('role_pharmacist');
+    expect(screen.getByRole('option', { name: 'No pharmacy role' })).toHaveValue('');
+    expect(screen.getByPlaceholderText('Pharmacist')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('+92 300 1234567')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Staff' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Manager' })).toBeInTheDocument();
+    expect(container.textContent).not.toMatch(/restaurant/i);
+    const placeholders = Array.from(container.querySelectorAll('[placeholder]')).map((el) =>
+      el.getAttribute('placeholder')
+    );
+    expect(placeholders.join(' ')).not.toMatch(/restaurant|555-01|Full Stack Developer/i);
+  });
+
+  it('keeps restaurant copy for a restaurant tenant', () => {
+    render(<AddMemberModal onClose={vi.fn()} />);
+    expect(screen.getByLabelText('Restaurant staff role')).toHaveAttribute(
+      'id',
+      'invite-role-template'
+    );
+    expect(screen.getByPlaceholderText('Shift Manager')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('+92 300 1234567')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Employee' })).toBeInTheDocument();
   });
 });
 

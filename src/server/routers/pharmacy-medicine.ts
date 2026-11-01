@@ -21,7 +21,11 @@ import {
   proposedBoolean,
   runManualReferenceConnector,
 } from '@/lib/pharmacy/reference-connector-automation';
-import { MANUAL_FILE_RIGHTS, type ConnectorRights } from '@/lib/pharmacy/reference-connectors';
+import {
+  MANUAL_FILE_RIGHTS,
+  REFERENCE_BATCH_MAX_ROWS,
+  type ConnectorRights,
+} from '@/lib/pharmacy/reference-connectors';
 import {
   adminProcedure,
   auditedProtectedProcedure,
@@ -31,6 +35,72 @@ import {
 } from '../trpc';
 
 const family = z.enum(['PHARMACEUTICAL', 'BIOLOGICAL', 'DEVICE', 'ALTERNATIVE', 'FRONT_SHOP']);
+const boundedId = z.string().min(1).max(200);
+
+type BoundedJsonValue = string | number | boolean | null | BoundedJsonValue[] | BoundedJsonObject;
+type BoundedJsonObject = { [key: string]: BoundedJsonValue };
+
+const jsonScalar = z.union([z.string().max(2_000), z.number(), z.boolean(), z.null()]);
+
+const MAX_ASSERTED_VALUE_NODES = 1_000;
+const MAX_ASSERTED_VALUE_CHARACTERS = 20_000;
+
+const assertedValueBudget = z.unknown().superRefine((value, ctx) => {
+  const pending: unknown[] = [value];
+  let nodes = 0;
+  let characters = 0;
+
+  while (pending.length > 0) {
+    const current = pending.pop();
+    nodes += 1;
+
+    if (nodes > MAX_ASSERTED_VALUE_NODES) {
+      ctx.addIssue({ code: 'custom', message: 'Must contain at most 1000 values' });
+      return z.NEVER;
+    }
+
+    if (typeof current === 'string') characters += current.length;
+    else if (Array.isArray(current)) {
+      if (current.length > 20) {
+        ctx.addIssue({ code: 'custom', message: 'Must contain at most 20 items' });
+        return z.NEVER;
+      }
+      for (const child of current) pending.push(child);
+    } else if (current !== null && typeof current === 'object') {
+      const entries = Object.entries(current);
+      if (entries.length > 20) {
+        ctx.addIssue({ code: 'custom', message: 'Must contain at most 20 properties' });
+        return z.NEVER;
+      }
+      for (const [key, child] of entries) {
+        characters += key.length;
+        pending.push(child);
+      }
+    }
+
+    if (characters > MAX_ASSERTED_VALUE_CHARACTERS) {
+      ctx.addIssue({ code: 'custom', message: 'Must contain at most 20000 characters' });
+      return z.NEVER;
+    }
+  }
+});
+
+function boundedJsonValue(depth: number): z.ZodType<BoundedJsonValue> {
+  if (depth === 0) return jsonScalar;
+
+  const child = boundedJsonValue(depth - 1);
+  return z.union([
+    jsonScalar,
+    z.array(child).max(20),
+    z
+      .record(z.string().min(1).max(100), child)
+      .refine((value) => Object.keys(value).length <= 20, 'Must contain at most 20 properties'),
+  ]);
+}
+
+// Check aggregate complexity before the recursive shape schema walks the full value.
+const assertedValue = assertedValueBudget.pipe(boundedJsonValue(4));
+
 const provenance = z
   .object({
     field: z.string().min(1).max(100),
@@ -40,7 +110,7 @@ const provenance = z
     confidence: z.number().min(0).max(1).optional(),
     reviewer: z.string().max(200).optional(),
     status: z.enum(['UNREVIEWED', 'ACCEPTED', 'CORRECTED', 'REJECTED']),
-    assertedValue: z.unknown().optional(),
+    assertedValue: assertedValue.optional(),
   })
   .strict();
 
@@ -112,7 +182,7 @@ const connectorProposalPayload = z
 
 const assertionIdsPayload = z
   .object({
-    assertionIds: z.array(z.string().min(1)).min(1).max(20),
+    assertionIds: z.array(boundedId).min(1).max(20),
   })
   .strict();
 
@@ -130,7 +200,7 @@ const reviewDecisionInput = z.discriminatedUnion('action', [
     .object({
       duplicateKey: z.string().min(1).max(700),
       action: z.enum(['ACCEPT', 'REJECT', 'DEFER']),
-      medicineIds: z.array(z.string().min(1)).min(1).max(50),
+      medicineIds: z.array(boundedId).min(1).max(50),
       payload: assertionIdsPayload,
     })
     .strict(),
@@ -138,14 +208,14 @@ const reviewDecisionInput = z.discriminatedUnion('action', [
     .object({
       duplicateKey: z.string().min(1).max(700),
       action: z.literal('CORRECT'),
-      medicineIds: z.array(z.string().min(1)).min(1).max(50),
+      medicineIds: z.array(boundedId).min(1).max(50),
       payload: assertionIdsPayload
         .extend({
           corrections: z
             .array(
               z
                 .object({
-                  assertionId: z.string().min(1),
+                  assertionId: boundedId,
                   value: z.string().trim().min(1).max(1_000),
                 })
                 .strict()
@@ -302,7 +372,7 @@ export const pharmacyMedicineRouter = router({
                 .strict()
             )
             .min(1)
-            .max(500),
+            .max(REFERENCE_BATCH_MAX_ROWS),
         })
         .strict()
     )
@@ -542,14 +612,15 @@ export const pharmacyMedicineRouter = router({
             .array(
               z
                 .object({
-                  ingredientId: z.string().min(1),
+                  ingredientId: z.string().min(1).max(200),
                   value: z.number().positive(),
                   unit: z.string().trim().min(1).max(50),
                 })
                 .strict()
             )
+            .max(20)
             .default([]),
-          provenance: z.array(provenance).default([]),
+          provenance: z.array(provenance).max(20).default([]),
           saleable: z.boolean().default(false),
         })
         .strict()
@@ -961,7 +1032,7 @@ export const pharmacyMedicineRouter = router({
   ),
 
   publishAssertions: adminProcedure
-    .input(z.object({ assertionIds: z.array(z.string().min(1)).min(1) }).strict())
+    .input(assertionIdsPayload)
     .mutation(async ({ ctx, input }) =>
       ctx.db.$transaction(async (tx) => {
         const assertionIds = [...new Set(input.assertionIds)];

@@ -1,7 +1,11 @@
 import { performance } from 'node:perf_hooks';
 
 type Options = { orders: number; concurrency: number; timeoutMs: number };
-type Headers = { authorization: string; 'x-terminal-session': string };
+type Headers = {
+  authorization: string;
+  'x-terminal-session': string;
+  'x-pos-composer-proof': string;
+};
 type CommandResult = { replayed: boolean };
 type OrderResult = {
   orderId: string;
@@ -97,16 +101,24 @@ async function establishTerminal(
     201
   );
   const headers = { authorization, 'x-terminal-session': established.sessionToken };
-  await requestJson(baseUrl, '/api/restaurant/terminal/unlock', signal, {
-    method: 'POST',
-    headers: { ...headers, 'content-type': 'application/json' },
-    body: JSON.stringify({
-      staffProfileId: FIXTURE.operatorId,
-      type: 'PIN',
-      secret: FIXTURE.operatorPin,
-    }),
-  });
-  return headers;
+  const unlocked = await requestJson<{ composerProof: string }>(
+    baseUrl,
+    '/api/restaurant/terminal/unlock',
+    signal,
+    {
+      method: 'POST',
+      headers: { ...headers, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        staffProfileId: FIXTURE.operatorId,
+        type: 'PIN',
+        secret: FIXTURE.operatorPin,
+      }),
+    }
+  );
+  if (typeof unlocked.composerProof !== 'string') {
+    throw new Error('/api/restaurant/terminal/unlock returned no composer proof.');
+  }
+  return { ...headers, 'x-pos-composer-proof': unlocked.composerProof };
 }
 
 async function command<T extends CommandResult>(

@@ -279,6 +279,112 @@ beforeAll(async () => {
   });
 }, 120_000);
 
+describeIfDatabase('Owner opening importer — transactional stock and valuation', () => {
+  async function handover(label: string) {
+    const fixture = await scenario(`owner-${label}`);
+    await inOrg(fixture.organizationId, (db) => db.medicine.update({
+      where: { id: fixture.medicineId }, data: { saleable: true },
+    }));
+    const { previewOwnerImport, commitOwnerImport } = await import('./owner-import');
+    const input = {
+      fileName: 'owner-opening.csv', branchId: fixture.branchId, stockLocationId: fixture.locationId,
+      mapping: { sourceRef: 0, pack: 1, batch: 2, expiry: 3, mrp: 4, cost: 5, expected: 6, counted: 7, varianceNote: 8 },
+      content: Buffer.from(`Source,Pack,Batch,Expiry,MRP,Cost,Exported,Counted,Note\nOWNER-${label},${fixture.packLevelId},B-${label},2099-06,25.00,1.25,12,10,Two damaged units excluded`).toString('base64'),
+    };
+    const preview = await inOrg(fixture.organizationId, (db) => previewOwnerImport(db, scopeOf(fixture), input));
+    expect(preview.canCommit).toBe(true);
+    return { fixture, input: { ...input, previewHash: preview.previewHash }, preview, commitOwnerImport, previewOwnerImport };
+  }
+
+  it('keeps dry run read-only, posts the physical count and balanced valuation, and recovers a retry', async () => {
+    const { fixture, input, preview, commitOwnerImport } = await handover('commit');
+    await inOrg(fixture.organizationId, async (db) => {
+      expect(await db.pharmacyOpeningSession.count({ where: { organizationId: fixture.organizationId, branchId: fixture.branchId } })).toBe(0);
+      expect(await db.pharmacyStockMovement.count({ where: { organizationId: fixture.organizationId, branchId: fixture.branchId } })).toBe(0);
+    });
+    const receipt = await inOrg(fixture.organizationId, (db) => commitOwnerImport(db, scopeOf(fixture), input));
+    expect(receipt).toMatchObject({ replayed: false, totalUnits: 10, totalValueMinor: '1250' });
+    const replay = await inOrg(fixture.organizationId, (db) => commitOwnerImport(db, scopeOf(fixture), { ...input, fileName: 'renamed.csv' }));
+    expect(replay).toMatchObject({ replayed: true, sessionId: receipt.sessionId, totalUnits: 10 });
+    await inOrg(fixture.organizationId, async (db) => {
+      const line = await db.pharmacyOpeningStockLine.findFirstOrThrow({ where: { organizationId: fixture.organizationId, sessionId: receipt.sessionId } });
+      expect(line).toMatchObject({ expectedUnits: 12, countedUnits: 10, varianceUnits: -2, varianceNote: 'Two damaged units excluded', status: 'POSTED' });
+      const session = await db.pharmacyOpeningSession.findFirstOrThrow({ where: { organizationId: fixture.organizationId, id: receipt.sessionId } });
+      expect(session).toMatchObject({ status: 'POSTED', signedOffBy: null, createdByActorId: ACTOR });
+      const movements = await db.pharmacyStockMovement.findMany({ where: { organizationId: fixture.organizationId, branchId: fixture.branchId } });
+      expect(movements).toHaveLength(1);
+      expect(movements[0]).toMatchObject({ kind: 'OPENING', quantityUnits: 10, actorId: ACTOR });
+      const balance = await db.pharmacyStockBalance.findFirstOrThrow({ where: { organizationId: fixture.organizationId, branchId: fixture.branchId, stockLocationId: fixture.locationId } });
+      expect(balance.onHandUnits).toBe(10);
+      const entries = await db.financeJournalEntry.findMany({ where: { organizationId: fixture.organizationId, branchId: fixture.branchId, sourceKind: 'PHARMACY_OPENING_STOCK' }, include: { lines: true } });
+      expect(entries).toHaveLength(1);
+      expect(entries[0]!.lines).toEqual(expect.arrayContaining([
+        expect.objectContaining({ accountCode: 'INVENTORY', side: 'DEBIT', amountMinor: 1250 }),
+        expect.objectContaining({ accountCode: 'OPENING_BALANCE_EQUITY', side: 'CREDIT', amountMinor: 1250 }),
+      ]));
+      expect(await db.pharmacyMigrationSource.count({ where: { organizationId: fixture.organizationId, contentHash: preview.sourceHash } })).toBe(1);
+    });
+    await inOrg(ORG_B, async (db) => {
+      expect(await db.pharmacyOpeningSession.findFirst({ where: { id: receipt.sessionId } })).toBeNull();
+      expect(await db.pharmacyOpeningTotal.findFirst({ where: { sessionId: receipt.sessionId } })).toBeNull();
+    });
+  });
+
+  it('serializes simultaneous commits into one opening and one replay', async () => {
+    const { fixture, input, commitOwnerImport } = await handover('concurrent');
+    const receipts = await Promise.all([1, 2].map(() => inOrg(fixture.organizationId, (db) => commitOwnerImport(db, scopeOf(fixture), input))));
+    expect(receipts.filter((receipt) => !receipt.replayed)).toHaveLength(1);
+    expect(new Set(receipts.map((receipt) => receipt.sessionId)).size).toBe(1);
+  });
+
+  it('allows another opening file for a distinct batch but blocks reimporting the same physical lot', async () => {
+    const { fixture, input, previewOwnerImport, commitOwnerImport } = await handover('parts');
+    await inOrg(fixture.organizationId, (db) => commitOwnerImport(db, scopeOf(fixture), input));
+    const original = Buffer.from(input.content, 'base64').toString();
+    const duplicate = { ...input, content: Buffer.from(original.replace('OWNER-parts', 'CHANGED-SOURCE-REF')).toString('base64') };
+    const blocked = await inOrg(fixture.organizationId, (db) => previewOwnerImport(db, scopeOf(fixture), duplicate));
+    expect(blocked.canCommit).toBe(false);
+    expect(blocked.lines[0]!.errors.join(' ')).toContain('cannot be imported twice');
+    const next = { ...input, content: Buffer.from(original.replace('B-parts', 'B-parts-next')).toString('base64') };
+    const preview = await inOrg(fixture.organizationId, (db) => previewOwnerImport(db, scopeOf(fixture), next));
+    expect(preview.canCommit).toBe(true);
+    expect(await inOrg(fixture.organizationId, (db) => commitOwnerImport(db, scopeOf(fixture), { ...next, previewHash: preview.previewHash }))).toMatchObject({ totalUnits: 10, replayed: false });
+  });
+
+  it('rolls back the session, source evidence, lots, movements and totals when valuation fails', async () => {
+    const { fixture, input, preview, commitOwnerImport } = await handover('rollback');
+    await expect(inOrg(fixture.organizationId, async (db) => {
+      const failing = new Proxy(db, {
+        get(target, key, receiver) {
+          if (key === 'financeJournalLine') return { create: async () => { throw new Error('Injected valuation failure'); } };
+          return Reflect.get(target, key, receiver);
+        },
+      });
+      return commitOwnerImport(failing, scopeOf(fixture), input);
+    })).rejects.toThrow('Injected valuation failure');
+    await inOrg(fixture.organizationId, async (db) => {
+      expect(await db.pharmacyOpeningSession.count({ where: { organizationId: fixture.organizationId, branchId: fixture.branchId } })).toBe(0);
+      expect(await db.pharmacyOpeningTotal.count({ where: { organizationId: fixture.organizationId, branchId: fixture.branchId } })).toBe(0);
+      expect(await db.pharmacyInventoryLot.count({ where: { organizationId: fixture.organizationId, branchId: fixture.branchId } })).toBe(0);
+      expect(await db.pharmacyStockMovement.count({ where: { organizationId: fixture.organizationId, branchId: fixture.branchId } })).toBe(0);
+      expect(await db.financeJournalEntry.count({ where: { organizationId: fixture.organizationId, branchId: fixture.branchId } })).toBe(0);
+      expect(await db.pharmacyMigrationSource.count({ where: { organizationId: fixture.organizationId, contentHash: preview.sourceHash } })).toBe(0);
+    });
+    expect(await inOrg(fixture.organizationId, (db) => commitOwnerImport(db, scopeOf(fixture), input))).toMatchObject({ replayed: false });
+  });
+
+  it('rejects a sibling branch location and a foreign tenant pack without creating stock', async () => {
+    const { fixture, input, previewOwnerImport } = await handover('scope');
+    const sibling = await scenario('owner-sibling');
+    const foreign = await scenario('owner-foreign', ORG_B);
+    await expect(inOrg(fixture.organizationId, (db) => previewOwnerImport(db, scopeOf(fixture), { ...input, stockLocationId: sibling.locationId }))).rejects.toThrow('active branch');
+    const changed = { ...input, content: Buffer.from(Buffer.from(input.content, 'base64').toString().replace(fixture.packLevelId, foreign.packLevelId)).toString('base64') };
+    const preview = await inOrg(fixture.organizationId, (db) => previewOwnerImport(db, scopeOf(fixture), changed));
+    expect(preview.canCommit).toBe(false);
+    expect(preview.lines[0]!.medicineName).toBeNull();
+  });
+});
+
 describeIfDatabase('MIG-03 — opening stock is never defaulted', () => {
   it('keeps a missing batch, expiry, MRP, cost, location or source ref as an exception', async () => {
     const fixture = await scenario('gaps');

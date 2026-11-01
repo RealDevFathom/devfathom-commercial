@@ -23,6 +23,7 @@ const h = vi.hoisted(() => ({
   queryOptions: vi.fn(),
   queryInput: vi.fn(),
 }));
+const MENU_IMPORT = '/restaurant/menu-import';
 vi.mock('next-auth/react', () => ({ useSession: () => ({ data: h.session }) }));
 vi.mock('next/navigation', () => ({ usePathname: () => '/hotel/settings/property' }));
 vi.mock('@/components/preferences-provider', () => ({
@@ -70,7 +71,7 @@ const priorHrefs = [
   '/restaurant/orders',
   '/restaurant/catering',
   '/restaurant/money',
-  '/restaurant/menu-import',
+  MENU_IMPORT,
   '/restaurant/inventory',
   '/restaurant/purchasing',
   '/restaurant/sop',
@@ -179,18 +180,21 @@ describe('Hotel navigation composition', () => {
       visibleNavigation({ vertical: 'RESTAURANT', enabledModules: ['pharmacy-core'] }, 'ADMIN')
     ).not.toContainEqual(entry);
   });
-  it('retains every accepted link and adds exactly the six hospitality routes', () => {
+  it('retains Menu import and every accepted link alongside the six hospitality routes', () => {
     expect(priorHrefs).toHaveLength(60);
+    expect(navigation).toHaveLength(66);
     expect(navigation).toHaveLength(priorHrefs.length + hospitalityHrefs.length);
     const hrefs = navigation.map((n) => n.href);
+    expect(new Set(hrefs).size).toBe(66);
+    expect(new Set(hrefs)).toEqual(new Set([...priorHrefs, ...hospitalityHrefs]));
     expect(hrefs).toEqual(expect.arrayContaining(priorHrefs));
-    expect(navigation.find((n) => n.href === '/restaurant/menu-import')).toMatchObject({
+    expect(navigation.find((n) => n.href === MENU_IMPORT)).toMatchObject({
       group: 'Restaurant',
       module: 'restaurant-menu',
     });
     expect(
       visibleNavigation(everyHotelModule, 'ADMIN', EVERY_RAIL_CAPABILITY).map((n) => n.href)
-    ).not.toContain('/restaurant/menu-import');
+    ).not.toContain(MENU_IMPORT);
     expect(navigation.filter((n) => n.group === 'Hospitality').map((n) => n.href)).toEqual(
       hospitalityHrefs
     );
@@ -199,6 +203,26 @@ describe('Hotel navigation composition', () => {
     for (const href of [ROOMS, MEAL_PLANS, SPACES, GUEST_MESSAGES])
       expect(moduleForPath(href)).toBe('hotel-core');
     expect(moduleForPath('/hotel/future')).toBeNull();
+  });
+  it('keeps restaurant menu import hidden from fully entitled hospitality administrators', () => {
+    const visibleHrefs = visibleNavigation(
+      {
+        ...everyHotelModule,
+        enabledModules: [...everyHotelModule.enabledModules, 'restaurant-menu'],
+      },
+      'ADMIN',
+      EVERY_RAIL_CAPABILITY
+    ).map((item) => item.href);
+
+    expect(visibleHrefs).not.toContain(MENU_IMPORT);
+  });
+  it('keeps restaurant menu import visible to entitled restaurant administrators', () => {
+    const visibleHrefs = visibleNavigation(
+      { vertical: 'RESTAURANT', enabledModules: ['restaurant-menu'] },
+      'ADMIN'
+    ).map((item) => item.href);
+
+    expect(visibleHrefs.filter((href) => href === MENU_IMPORT)).toHaveLength(1);
   });
   it('licenses each entry on its module and opens it on the capability its page checks', () => {
     const entry = (href: string) => navigation.find((n) => n.href === href)!;

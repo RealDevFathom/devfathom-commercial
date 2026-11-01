@@ -229,6 +229,7 @@ export const PROCEDURE_MODULES: Record<string, string> = {
   // PH-INV (INV-01..04): the batch/lot stock ledger is licensed as Pharmacy
   // Inventory, separately from the mandatory medicine identity in Core.
   pharmacyInventory: 'pharmacy-inventory',
+  pharmacyOwnerImport: 'pharmacy-inventory',
   pharmacyPrescriptions: 'pharmacy-dispensing',
   pharmacyDispensing: 'pharmacy-dispensing',
   pharmacySafety: 'pharmacy-safety',
@@ -279,6 +280,17 @@ export const ACCOUNT_PROCEDURES: ReadonlySet<string> = new Set([
   'team.updateNotificationPrefs',
 ]);
 
+const PROCEDURE_MODULE_ALTERNATIVES: Readonly<Record<string, readonly string[]>> = {
+  'pharmacyPrescriptions.counterPatients': ['pharmacy-dispensing'],
+  'pharmacyPrescriptions.counterPatientPanel': ['pharmacy-dispensing'],
+};
+
+export function alternativeModulesForProcedure(path: string): readonly string[] {
+  return Object.hasOwn(PROCEDURE_MODULE_ALTERNATIVES, path)
+    ? PROCEDURE_MODULE_ALTERNATIVES[path]
+    : [];
+}
+
 export function moduleForProcedure(path: string): string | null {
   // Inviting workspace users is baseline administration in every vertical.
   if (path === 'team.inviteMember') return 'admin';
@@ -288,6 +300,7 @@ export function moduleForProcedure(path: string): string | null {
   ) {
     return null;
   }
+  if (Object.hasOwn(PROCEDURE_MODULE_ALTERNATIVES, path)) return 'pharmacy-counter';
   if (
     /^pharmacyFinance\.(perpetualValuation|grossMargin|leakageReport|marginComparison|financialStatements)$/.test(
       path
@@ -295,7 +308,8 @@ export function moduleForProcedure(path: string): string | null {
   ) {
     return 'pharmacy-reports';
   }
-  return PROCEDURE_MODULES[path.split('.')[0] ?? ''] ?? null;
+  const namespace = path.split('.')[0] ?? '';
+  return Object.hasOwn(PROCEDURE_MODULES, namespace) ? PROCEDURE_MODULES[namespace] : null;
 }
 
 export function moduleForApiScope(scope: string): string | null {
@@ -371,6 +385,7 @@ export const ROUTE_MODULES: ReadonlyArray<readonly [string, string]> = [
   // separately and a catch-all would gate them all on `pharmacy-core`.
   ['/pharmacy/purchasing', 'pharmacy-procurement'],
   ['/pharmacy/inventory', 'pharmacy-inventory'],
+  ['/pharmacy/accounts/balance-sheet', 'pharmacy-reports'],
   ['/pharmacy/finance', 'pharmacy-finance'],
   ['/pharmacy/reports', 'pharmacy-reports'],
   ['/pharmacy/medicines', 'pharmacy-core'],

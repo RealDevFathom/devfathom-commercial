@@ -16,6 +16,7 @@ describe('ReceiptView', () => {
         receiptNumber: 1042,
         settledAt: '2026-08-19T12:00:00.000Z',
         splitKind: 'NONE',
+        loyaltyWallet: { balance: 640, platforms: ['APPLE', 'GOOGLE'] },
         lines: [
           {
             id: 'line-1',
@@ -68,5 +69,38 @@ describe('ReceiptView', () => {
     expect(within(discountRow!).getByText('0.50')).toBeVisible();
     expect(screen.getAllByText('4.00')).toHaveLength(2);
     expect(screen.getAllByText('24.00').length).toBeGreaterThan(0);
+    expect(screen.getByText('Loyalty wallet')).toBeVisible();
+    expect(screen.getByText('640 points · Apple Wallet + Google Wallet')).toBeVisible();
+  });
+
+  it('does not advertise a wallet when the settled order has none', async () => {
+    const request: TerminalRequest = async <T,>() =>
+      ({
+        billId: 'bill-2',
+        orderNumber: 43,
+        channel: 'TAKEAWAY',
+        branchName: 'Central',
+        businessDate: '2026-08-19',
+        receiptNumber: 1043,
+        settledAt: '2026-08-19T12:05:00.000Z',
+        splitKind: 'NONE',
+        loyaltyWallet: null,
+        lines: [],
+        tenders: [],
+        totals: {
+          subtotal: '0.00',
+          taxTotal: '0.00',
+          serviceChargeTotal: '0.00',
+          deliveryFeeTotal: '0.00',
+          compTotal: '0.00',
+          roundingAdjustment: '0.00',
+          grandTotal: '0.00',
+        },
+      }) as T;
+
+    render(<ReceiptView billId="bill-2" request={request} />);
+
+    expect(await screen.findByLabelText('Receipt 1043')).toBeVisible();
+    expect(screen.queryByText('Loyalty wallet')).not.toBeInTheDocument();
   });
 });
