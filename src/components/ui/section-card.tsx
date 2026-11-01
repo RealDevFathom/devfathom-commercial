@@ -9,7 +9,12 @@ interface SectionCardProps extends Omit<React.ComponentProps<'div'>, 'title'> {
   eyebrowAccent?: boolean;
   /** Optional Oxanium section title. */
   title?: React.ReactNode;
-  /** Semantic heading level for the title; defaults to 3 for nested cards. */
+  /**
+   * Semantic heading level for the title. Defaults to 2: a SectionCard sits
+   * directly under the page `<h1>` (PageHeader), so h2 keeps the outline
+   * contiguous and avoids an axe `heading-order` skip. Pass 3 for a card
+   * genuinely nested below an existing h2.
+   */
   titleLevel?: 2 | 3;
   /** Optional right-aligned actions slot in the header row. */
   actions?: React.ReactNode;
@@ -25,7 +30,7 @@ function SectionCard({
   eyebrow,
   eyebrowAccent = false,
   title,
-  titleLevel = 3,
+  titleLevel = 2,
   actions,
   compact = false,
   className,

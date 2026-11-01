@@ -178,6 +178,16 @@ beforeEach(async () => {
 });
 
 describe('tenant login rate limiting', () => {
+  it('rejects a correct password when the returned account belongs to another host organization', async () => {
+    useUser(tenantUser({ organizationId: 'org_other' }));
+    expect(await attempt(PASSWORD)).toBeNull();
+    expect(mocks.findFirstUser).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { email: EMAIL, organizationId: organization.id },
+      })
+    );
+    expect(mocks.updateUser).not.toHaveBeenCalled();
+  });
   it('clears both failure budgets once a sign-in is fully verified', async () => {
     // One unit short of the account limit, then a success that must reset it.
     for (let i = 0; i < ACCOUNT_LIMIT - 1; i += 1) {

@@ -54,7 +54,7 @@ export type PlatformCatalogSync = {
  *
  * - modules upsert with `update: {}`, so `active`, `sortOrder` and any
  *   name/category edit an operator made in SuperAdmin survive a deployment;
- * - existing pharmacy/restaurant packages still at the legacy default of one
+ * - existing vertical packages still at the legacy default of one
  *   seat receive the catalog seat default; customized seat values survive;
  * - an existing package otherwise stays unchanged — its module links are
  *   the live entitlements of every organization on it, so adding one here
@@ -167,7 +167,7 @@ export async function syncPlatformCatalog(
   let linksCreated = 0;
   for (const definition of packages) {
     if (existingPackageKeys.has(definition.key)) {
-      if (definition.vertical === 'PHARMACY' || definition.vertical === 'RESTAURANT') {
+      if (packageDefaultSeats(definition) !== undefined) {
         // Guard the write itself so a concurrent admin seat edit also survives.
         await tx.platformPackage.updateMany({
           where: { key: definition.key, defaultSeats: 1 },

@@ -18,7 +18,7 @@ vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/entitlements', () => ({
-  hasModule: vi.fn(() => true),
+  hasModule: vi.fn((_entitlements: unknown, key: string) => key === 'admin'),
   resolveOrganizationEntitlements: vi.fn(async () => ({ enabledModules: [] })),
 }));
 vi.mock('@/server/audit', () => ({
@@ -40,7 +40,7 @@ vi.mock('@/lib/abac', async () => {
 });
 
 import { teamRouter } from './team';
-import type { TRPCContext } from '../trpc';
+import { router, type TRPCContext } from '../trpc';
 
 const db = {
   user: { findFirst: mocks.findFirst, create: mocks.create, update: mocks.update },
@@ -53,10 +53,10 @@ const db = {
     }),
 };
 
-function caller() {
-  return teamRouter.createCaller({
+function caller(activeSeats = 1) {
+  return router({ team: teamRouter }).createCaller({
     db,
-    entitlements: { enabledModules: [], activeSeats: 1, seatLimit: 50 },
+    entitlements: { enabledModules: [], modules: [], activeSeats, seatLimit: 50 },
     session: {
       expires: 'later',
       user: { id: 'user_admin', role: 'ADMIN', department: 'LEADERSHIP', status: 'ACTIVE' },
@@ -65,7 +65,7 @@ function caller() {
     support: null,
     requestMeta: { ip: null, userAgent: null },
     audit: { detail: {} },
-  } as unknown as TRPCContext);
+  } as unknown as TRPCContext).team;
 }
 
 const invite = {
@@ -111,6 +111,20 @@ describe('team.inviteMember duplicate guard', () => {
         data: expect.objectContaining({ email: 'new.person@company.com' }),
       })
     );
+  });
+
+  it('retains the administrator capability check without HR', async () => {
+    mocks.can.mockResolvedValue(false);
+    await expect(caller().inviteMember({ ...invite, email: 'cashier@example.com' }))
+      .rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.create).not.toHaveBeenCalled();
+  });
+
+  it('retains seat limits without HR', async () => {
+    mocks.findFirst.mockResolvedValue(null);
+    await expect(caller(50).inviteMember({ ...invite, email: 'cashier@example.com' }))
+      .rejects.toMatchObject({ code: 'FORBIDDEN', message: expect.stringContaining('Seat limit reached') });
+    expect(mocks.create).not.toHaveBeenCalled();
   });
 
   it('rejects a department outside the tenant catalog', async () => {

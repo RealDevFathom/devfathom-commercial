@@ -196,6 +196,19 @@ describe('substitute proposals', () => {
     expect(findSubstituteProposals).not.toHaveBeenCalled();
   });
 
+  it('lets a same-organization admin without a counter grant list proposals unless denied', async () => {
+    await expect(
+      caller({ id: 'branch-1' }, { role: 'ADMIN', capability: 'pharmacy:orders' }).substituteProposals(
+        input
+      )
+    ).resolves.toEqual([]);
+    vi.mocked(findSubstituteProposals).mockClear();
+    await expect(
+      caller({ id: 'branch-1' }, { role: 'ADMIN', denyDispense: true }).substituteProposals(input)
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(findSubstituteProposals).not.toHaveBeenCalled();
+  });
+
   it('rejects a price override without a reason', async () => {
     await expect(
       caller({ id: 'branch-1' }).overrideSubstitutePrice({ ...input, reason: '  ' })

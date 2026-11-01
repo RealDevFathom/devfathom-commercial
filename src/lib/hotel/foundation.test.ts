@@ -23,7 +23,8 @@ import {
 const priorCatalogDigests = {
   AGENCY: '54e0ca2cb112bd14c7bde79c1aba7ceeb7875fc51c5a0e5dd05c0db326440769',
   RESTAURANT: '8a4ca4af40ecbb1ab00e9211b2d6c234853e27956847561e5f24802c6e704eb9',
-  PHARMACY: 'c0cd87fc9f91dcbe2d62350ce63bf4384a4c1d5c07a8d42a68220700744eddbe',
+  // QA-130: canonical capability names and explicit Owner report grants.
+  PHARMACY: '7a327ac26f5268b8ec8dfbc7fd9faefc7e32637135e103a719a90189b3c2e44a',
 };
 
 const property = {
@@ -41,7 +42,7 @@ const property = {
 };
 
 describe('hotel catalog foundation', () => {
-  // These digests were captured from the accepted preimage's public catalog values.
+  // These digests pin accepted public catalog values, including the QA-130 grant migration.
   it.each(['AGENCY', 'RESTAURANT', 'PHARMACY'] as const)(
     'preserves every existing %s catalog value',
     (v) => {

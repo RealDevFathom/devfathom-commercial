@@ -14406,6 +14406,7 @@ model PharmacyMessageLog {
   kind              String
   status            String
   dedupeKey         String
+  customerDayKey    String?
   phoneLast4        String?
   templateName      String?
   providerMessageId String?
@@ -14421,6 +14422,7 @@ model PharmacyMessageLog {
   customer     PharmacyCustomer? @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict)
 
   @@unique([organizationId, dedupeKey], map: "pharmacy_message_logs_dedupe_key")
+  @@unique([organizationId, customerDayKey], map: "pharmacy_message_logs_customer_day_key")
   @@index([organizationId, customerId, createdAt(sort: Desc)], map: "pharmacy_message_logs_customer_idx")
   @@index([organizationId, kind, status], map: "pharmacy_message_logs_kind_status_idx")
   @@map("pharmacy_message_logs")

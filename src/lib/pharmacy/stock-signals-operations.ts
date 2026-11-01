@@ -1,3 +1,4 @@
+import { capabilityMatches } from '@/lib/abac/capabilities';
 /**
  * PUR-07 — the database half of the stock action centre: reading exact ledger
  * facts, persisting the deduplicated signals `stock-signals.evaluateStockSignals`
@@ -697,9 +698,8 @@ async function authorizeDraftIntent(
   // These are the native PHARMACY_ROLE_TEMPLATES grants, not Restaurant actions.
   // Preserve the established override-before-role, deny-before-allow precedence.
   const capability =
-    input.kind === 'DRAFT_TRANSFER' ? 'pharmacy.inventory' : 'pharmacy.procurement';
-  const matches = (rule: { capability: string }) =>
-    [capability, 'pharmacy.*', '*'].includes(rule.capability);
+    input.kind === 'DRAFT_TRANSFER' ? 'pharmacy:inventory' : 'pharmacy:procurement';
+  const matches = (rule: { capability: string }) => capabilityMatches(rule.capability, capability);
   const overrides = user.permissionOverrides.filter(matches);
   const rules = overrides.length
     ? overrides

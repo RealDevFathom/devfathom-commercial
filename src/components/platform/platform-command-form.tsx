@@ -44,6 +44,7 @@ export type CommandField = {
   step?: number;
   disabled?: boolean;
   filterBy?: string;
+  defaultFrom?: { field: string; values: Record<string, number> };
   format?: 'time24';
   options?: Array<{ label: string; value: string; filterValue?: string }>;
 };
@@ -381,7 +382,7 @@ export function PlatformCommandForm({
                   defaultValue={
                     field.defaultValue !== null && typeof field.defaultValue === 'object'
                       ? JSON.stringify(field.defaultValue, null, 2)
-                      : String(field.defaultValue ?? '')
+                      : String(field.defaultFrom?.values[selectValues[field.defaultFrom.field] ?? ''] ?? field.defaultValue ?? '')
                   }
                   placeholder={field.placeholder}
                   rows={field.type === 'json' ? 6 : 3}
@@ -434,6 +435,7 @@ export function PlatformCommandForm({
                 </span>
               ) : (
                 <input
+                  key={field.defaultFrom ? selectValues[field.defaultFrom.field] : field.name}
                   id={fieldId}
                   name={field.name}
                   type={field.type ?? 'text'}
@@ -443,11 +445,11 @@ export function PlatformCommandForm({
                   defaultValue={
                     typeof field.defaultValue === 'boolean'
                       ? undefined
-                      : String(field.defaultValue ?? '')
+                      : String(field.defaultFrom?.values[selectValues[field.defaultFrom.field] ?? ''] ?? field.defaultValue ?? '')
                   }
                   placeholder={field.format === 'time24' ? 'HH:MM' : field.placeholder}
                   min={field.min}
-                  max={field.max}
+                  max={field.defaultFrom?.values[selectValues[field.defaultFrom.field] ?? ''] ?? field.max}
                   step={field.step}
                   inputMode={field.format === 'time24' ? 'numeric' : undefined}
                   maxLength={field.format === 'time24' ? 5 : undefined}
