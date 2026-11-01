@@ -24,8 +24,10 @@ import {
 } from '@/lib/pharmacy/dashboard';
 import {
   PHARMACY_METRIC_CONTRACT,
+  MAX_PHARMACY_REPORT_DAYS,
   pharmacyReportCatalog,
   readPharmacyOwnerCommandCentre,
+  validatePharmacyReportFilters,
 } from '@/lib/pharmacy/reports';
 import { nextDigestDueAt, WhatsAppChannel } from '@/lib/pharmacy/owner-digest';
 import {
@@ -39,7 +41,12 @@ import {
   acknowledgePackAuthenticationFlag,
   readPackAuthenticationFlags,
 } from '@/lib/pharmacy/pack-authentication-operations';
+import { readPharmacyBranchComparison } from '@/lib/pharmacy/branch-comparison';
 import { auditedProtectedProcedure, capabilityProcedure, router, type TRPCContext } from '../trpc';
+import {
+  PHARMACY_GROWTH_CATEGORIES,
+  readPharmacyCategoryGrowthReport,
+} from '@/lib/pharmacy/category-growth-report';
 
 const reports = capabilityProcedure('reports:operational');
 const widget = z
@@ -171,6 +178,44 @@ async function requireOwnerBranch(ctx: TRPCContext, branchId: string) {
 }
 
 export const pharmacyReportsRouter = router({
+  categoryGrowth: reports
+    .input(
+      filters
+        .pick({ branchId: true, from: true, to: true })
+        .extend({
+          configuration: z
+            .array(
+              z
+                .object({
+                  category: z.enum(PHARMACY_GROWTH_CATEGORIES),
+                  displaySpaceSquareMetres: z.number().positive().nullable(),
+                  targetSalesSharePercent: z.number().min(0).max(100).nullable(),
+                })
+                .strict()
+            )
+            .max(PHARMACY_GROWTH_CATEGORIES.length),
+        })
+        .strict()
+    )
+    .query(async ({ ctx, input }) => {
+      const scoped = await ownerFilters(ctx, input);
+      let period: ReturnType<typeof validatePharmacyReportFilters>;
+      try {
+        period = validatePharmacyReportFilters(scoped);
+      } catch (error) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: error instanceof Error ? error.message : 'Invalid category growth report dates.',
+        });
+      }
+      return readPharmacyCategoryGrowthReport(ctx.db, ctx.entitlements.organizationId, {
+        branchIds: scoped.branchIds,
+        from: input.from,
+        // Public report filters are inclusive; the evidence reader uses an exclusive cutoff.
+        to: period.to.toISOString().slice(0, 10),
+        configuration: input.configuration,
+      });
+    }),
   marketing: reports
     .input(filters.pick({ branchId: true, from: true, to: true }))
     .query(async ({ ctx, input }) => {
@@ -457,11 +502,44 @@ export const pharmacyReportsRouter = router({
     metrics: PHARMACY_METRIC_CONTRACT,
     permissions: {
       operational: true,
+      owner: ctx.session!.user.role === 'ADMIN',
       financial: await can(subjectFromSession(ctx.session!.user), 'reports:financial', undefined, {
         db: ctx.db,
       }),
     },
   })),
+  branchComparison: reports
+    .input(
+      z
+        .object({ from: z.iso.date(), to: z.iso.date() })
+        .strict()
+        .refine((input) => input.from <= input.to, {
+          message: 'The report start date must not be after the end date.',
+        })
+        .refine(
+          (input) =>
+            (Date.parse(input.to) - Date.parse(input.from)) / 86_400_000 + 1 <=
+            MAX_PHARMACY_REPORT_DAYS,
+          {
+            message: `Interactive pharmacy reports are limited to ${MAX_PHARMACY_REPORT_DAYS} days.`,
+          }
+        )
+    )
+    .query(async ({ ctx, input }) => {
+      await requireFinancialReports(ctx);
+      if (ctx.session!.user.role !== 'ADMIN')
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Owner access is required.' });
+      const available = await scope(ctx);
+      // The RSC tenant facade otherwise gives each statement its own transaction, losing
+      // the transaction-local branch context before the khata ledger is read.
+      return ctx.db.$transaction((tx) =>
+        readPharmacyBranchComparison(tx as typeof ctx.db, {
+          branches: available.branches,
+          from: input.from,
+          to: input.to,
+        })
+      );
+    }),
   repeatPurchasing: reports
     .input(
       filters

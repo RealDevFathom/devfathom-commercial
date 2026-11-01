@@ -8,6 +8,13 @@ const mocks = vi.hoisted(() => ({
   activate: vi.fn(),
   publishCustom: vi.fn(),
   invalidate: vi.fn(),
+  activeProfiles: [] as {
+    id: string;
+    branch: { name: string; timezone: string };
+    effectiveFrom: Date;
+    approvalReference: string;
+    rules: { paymentCategory: string; rate: string }[];
+  }[],
   publicationOptions: {
     onSuccess: () => {},
     onError: (error: Error) => {
@@ -29,7 +36,7 @@ vi.mock('@/lib/trpc', () => ({
           data: {
             branches: [{ id: 'branch_1', name: 'Karachi' }],
             profiles: PAKISTAN_TAX_PROFILE_CATALOG,
-            activeProfiles: [],
+            activeProfiles: mocks.activeProfiles,
           },
           isLoading: false,
           error: null,
@@ -53,7 +60,10 @@ vi.mock('@/lib/trpc', () => ({
 import { RestaurantTaxConsole } from './restaurant-tax-console';
 
 describe('restaurant tax configuration UI', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.activeProfiles.length = 0;
+  });
   afterEach(() => vi.unstubAllGlobals());
 
   it('renders on HTTP LAN and retains a failed command key through rerender and retry', () => {
@@ -123,7 +133,7 @@ describe('restaurant tax configuration UI', () => {
     expect(mocks.activate).toHaveBeenCalledWith({
       branchId: 'branch_1',
       profileId: 'PK-ICT-RESTAURANT',
-      effectiveFrom: '2026-07-01T00:00:00.000Z',
+      effectiveFrom: '2026-07-01',
       approvalReference: 'Memo 42',
       accountantConfirmation: true,
       eligibilityConfirmations: ['ictNoInputTaxCreditOrAdjustment', 'ictNoRefund'],
@@ -143,6 +153,24 @@ describe('restaurant tax configuration UI', () => {
       replaceOpenProfile: true,
       idempotencyKey: expect.any(String),
     });
+  });
+
+  it.each([
+    ['Asia/Karachi', '2026-06-30T19:00:00.000Z'],
+    ['Pacific/Kiritimati', '2026-06-30T10:00:00.000Z'],
+    ['America/New_York', '2026-07-01T04:00:00.000Z'],
+  ])('displays the published calendar date in the branch timezone %s', (timezone, instant) => {
+    mocks.activeProfiles.push({
+      id: 'published_1',
+      branch: { name: 'Published branch', timezone },
+      effectiveFrom: new Date(instant),
+      approvalReference: 'Memo 42',
+      rules: [{ paymentCategory: 'CASH', rate: '0.15' }],
+    });
+
+    render(<RestaurantTaxConsole />);
+
+    expect(screen.getByText('Effective 01-Jul-2026 · Memo 42')).toBeInTheDocument();
   });
 
   it('offers all five Pakistan jurisdictions and clearly labels custom evidence', () => {

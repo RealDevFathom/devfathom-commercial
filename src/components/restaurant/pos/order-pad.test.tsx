@@ -3,7 +3,9 @@ import { StrictMode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { OrderPad } from './order-pad';
+import type { OrderDetail } from './order-ticket-panel';
 import { PosOfflineRuntime } from '@/lib/restaurant/pos-offline-runtime';
+import * as posStore from '@/lib/restaurant/pos-client-store';
 import { reviveCommercialTerms } from '@/lib/restaurant/commercial-terms';
 import { quoteDraftCheckTotal } from '@/lib/restaurant/draft-check-total';
 
@@ -118,10 +120,11 @@ function transport({
   customerSearchGates = [],
   deliveryZoneGates = [],
   checkoutSettled = false,
+  closeError,
 }: {
   failedOpenAttempts?: number;
   openErrors?: { status: number; error: string }[];
-  detailResponse?: typeof detail;
+  detailResponse?: OrderDetail;
   detailGate?: Promise<void>;
   failedAddAttempts?: number;
   refreshGate?: Promise<void>;
@@ -138,9 +141,11 @@ function transport({
   customerSearchGates?: Promise<void>[];
   deliveryZoneGates?: Promise<void>[];
   checkoutSettled?: boolean;
+  closeError?: { status: number; error: string };
 } = {}) {
   let openAttempts = 0;
   let addAttempts = 0;
+  let closeAttempts = 0;
   let openOrderReads = 0;
   let closed = false;
   let billCut = false;
@@ -190,6 +195,7 @@ function transport({
     }
     if (path.endsWith('/terminal/unlock')) {
       return json({
+        composerProof: 'signed-proof-staff-1',
         session: { id: 'session-1', state: 'UNLOCKED', activeStaffProfileId: 'staff-1' },
       });
     }
@@ -198,8 +204,12 @@ function transport({
     }
     if (path.endsWith('/terminal/switch')) {
       return json({
+        composerProof: 'signed-proof-staff-2',
         session: { id: 'session-1', state: 'UNLOCKED', activeStaffProfileId: 'staff-2' },
       });
+    }
+    if (path.endsWith('/terminal/renew-composer-proof')) {
+      return json({ composerProof: 'renewed-proof-staff-1' });
     }
     if (path.endsWith('/orders/delivery/zones')) {
       await deliveryZoneGates[deliveryZoneAttempts++];
@@ -268,6 +278,10 @@ function transport({
       return json({ itemId: 'item-1' }, 201);
     }
     if (path.endsWith('/orders/close')) {
+      closeAttempts += 1;
+      if (closeError && closeAttempts === 1) {
+        return json({ error: closeError.error }, closeError.status);
+      }
       closed = true;
       return json({ orderId: 'order-1', status: 'PAYMENT_PENDING' });
     }
@@ -279,6 +293,9 @@ function transport({
         derivedOrderTotal: '24.00',
         accountedTotal: billCut ? '24.00' : '0.00',
         unbilledItemIds: billCut ? [] : ['item-1'],
+        unbilledItems: billCut
+          ? []
+          : [{ id: 'item-1', name: 'Lunch special', quantity: 1, seatNumber: null, modifiers: [] }],
         bills: billCut
           ? [
               {
@@ -795,6 +812,71 @@ describe('OrderPad transport', () => {
     expect(fetch).toHaveBeenCalledTimes(callsBeforeTap);
   });
 
+  it.each(['PAYMENT_PENDING', 'SERVED'])(
+    'finalizes a paid and delivered %s delivery order without reopening checkout',
+    async (status) => {
+      const fetch = transport({
+        detailResponse: {
+          ...detail,
+          channel: 'DELIVERY',
+          status,
+          deliveryStatus: 'DELIVERED',
+          settled: true,
+        },
+      });
+      await unlock(fetch);
+      fireEvent.click(screen.getByRole('button', { name: 'Open order' }));
+      await screen.findByText('Order 42');
+
+      const closeOrder = screen.getByRole('button', { name: 'Close order' });
+      fireEvent.click(closeOrder);
+      fireEvent.click(closeOrder);
+
+      await waitFor(() =>
+        expect(
+          fetch.mock.calls.filter(([input]) => String(input).endsWith('/orders/close'))
+        ).toHaveLength(1)
+      );
+      expect(
+        fetch.mock.calls.filter(([input]) => String(input).includes('/checkout/'))
+      ).toHaveLength(0);
+      expect(screen.queryByRole('heading', { name: 'Collect payment' })).not.toBeInTheDocument();
+      expect(await screen.findByRole('heading', { name: 'No active order' })).toBeVisible();
+    }
+  );
+
+  it('keeps a delivered delivery order active when finalization fails', async () => {
+    const fetch = transport({
+      detailResponse: {
+        ...detail,
+        channel: 'DELIVERY',
+        status: 'PAYMENT_PENDING',
+        deliveryStatus: 'DELIVERED',
+        settled: true,
+      },
+      closeError: { status: 409, error: 'Order settlement changed.' },
+    });
+    await unlock(fetch);
+    fireEvent.click(screen.getByRole('button', { name: 'Open order' }));
+    await screen.findByText('Order 42');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close order' }));
+
+    expect(await screen.findByText('Order settlement changed.')).toBeVisible();
+    expect(screen.getByText('Order 42')).toBeVisible();
+    const retryClose = screen.getByRole('button', { name: 'Close order' });
+    expect(retryClose).toBeEnabled();
+    expect(screen.queryByRole('heading', { name: 'No active order' })).not.toBeInTheDocument();
+
+    fireEvent.click(retryClose);
+    await waitFor(() =>
+      expect(
+        fetch.mock.calls.filter(([input]) => String(input).endsWith('/orders/close'))
+      ).toHaveLength(2)
+    );
+    expect(await screen.findByRole('heading', { name: 'No active order' })).toBeVisible();
+  });
+
   it('keeps an unsettled check active when checkout closes', async () => {
     const fetch = transport({ detailResponse: { ...detail, status: 'PAYMENT_PENDING' } });
     await unlock(fetch);
@@ -830,6 +912,48 @@ describe('OrderPad transport', () => {
     expect(screen.getByText(/Checkout, tenders, refunds, drawers/)).toBeVisible();
   });
 
+  it('offers discard without replay for legacy drafts whose composer cannot be verified', async () => {
+    const driver = posStore.createMemoryDriver();
+    const local = new PosOfflineRuntime(
+      {
+        organizationId: 'organization-1',
+        branchId: 'branch-1',
+        deviceId: 'device-1',
+      },
+      driver
+    );
+    await local.enqueue({
+      deviceId: 'device-1',
+      composerStaffProfileId: 'staff-1',
+      composerProof: 'original-proof',
+      catalogVersion: 'version-draft-DINE_IN',
+      clientOriginAt: '2026-08-31T00:00:00Z',
+      open: { channel: 'DINE_IN', publicationId: 'draft-DINE_IN' },
+      lines: [{ menuItemId: 'menu-item-1', quantity: 1, quotedUnitPrice: '4.00' }],
+    });
+    Reflect.deleteProperty(local.snapshot().queue!.drafts[0], 'composerProof');
+    await posStore.writePosState(driver, local.snapshot());
+    vi.spyOn(posStore, 'createMemoryDriver').mockReturnValue(driver);
+    const fetch = transport();
+    await unlock(fetch);
+
+    expect(await screen.findByText(/This saved order has no verified composer/)).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Send deliberately' })).toBeDisabled();
+    expect(fetch.mock.calls.some(([path]) => String(path).endsWith('/orders/open'))).toBe(false);
+    expect(fetch.mock.calls.some(([path]) => String(path).endsWith('/renew-composer-proof'))).toBe(
+      false
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Discard queued order' }));
+    await waitFor(() =>
+      expect(
+        screen.queryByText(/This saved order has no verified composer/)
+      ).not.toBeInTheDocument()
+    );
+    const reloaded = new PosOfflineRuntime(local.scope, driver);
+    await reloaded.hydrate();
+    expect(reloaded.snapshot().queue!.drafts).toEqual([]);
+  });
+
   it('requires reauthentication after replay pauses and resumes the preserved queue on unlock', async () => {
     let connected = false;
     vi.spyOn(window.navigator, 'onLine', 'get').mockImplementation(() => connected);
@@ -854,6 +978,19 @@ describe('OrderPad transport', () => {
         fetch.mock.calls.filter(([input]) => String(input).endsWith('/orders/open'))
       ).toHaveLength(2)
     );
+    const renewals = fetch.mock.calls.filter(([path]) =>
+      String(path).endsWith('/renew-composer-proof')
+    );
+    expect(renewals.length).toBeGreaterThan(0);
+    expect(JSON.parse(String(renewals[0][1]!.body))).toEqual({
+      originalProof: 'signed-proof-staff-1',
+    });
+    expect(new Headers(renewals[0][1]!.headers).get('X-Terminal-Session')).toBe('session-token');
+    for (const [, init] of fetch.mock.calls.filter(([path]) =>
+      String(path).endsWith('/orders/open')
+    )) {
+      expect(new Headers(init!.headers).get('X-POS-Composer-Proof')).toBe('renewed-proof-staff-1');
+    }
   });
 
   it('fails closed when IndexedDB hydration is unrecoverable', async () => {
@@ -1163,7 +1300,7 @@ describe('OrderPad transport', () => {
     ]);
   });
 
-  it('keeps the open-order form uncapped and prices modifiers into the draft total', async () => {
+  it('labels the modifier-priced draft total as an estimated cash total', async () => {
     await unlock(transport());
     const card = screen
       .getByRole('heading', { name: 'Open order' })
@@ -1182,7 +1319,7 @@ describe('OrderPad transport', () => {
       lines: [{ id: 'coffee', unitPrice: '4.00', quantity: 1, modifierDeltas: ['0.50'] }],
     });
     expect(priced).toBe('5.18');
-    expect(screen.getByText('Cash total')).toBeVisible();
+    expect(screen.getByText('Estimated cash total')).toBeVisible();
     expect(await screen.findByText(priced)).toBeVisible();
   });
 

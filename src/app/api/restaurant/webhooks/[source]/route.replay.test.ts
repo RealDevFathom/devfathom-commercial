@@ -1,5 +1,6 @@
 import { createHmac } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
 
 vi.mock('server-only', () => ({}));
 
@@ -19,10 +20,6 @@ vi.mock('@/lib/tenancy/host', () => ({
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: mocks.createTenantDb }));
 vi.mock('@/lib/restaurant/webhook-inbox', () => {
-  // Vitest hoists this factory before ESM imports; require keeps the schema
-  // constructor available in both the Node and Bun test runners.
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { z } = require('zod') as typeof import('zod');
   return {
     recordInboundWebhook: mocks.recordInboundWebhook,
     webhookEnvelopeSchema: z

@@ -9,9 +9,14 @@ import { Loader2, Check, X } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { passwordRules, passwordMeetsPolicy } from '@/lib/password-policy';
 import { cn } from '@/lib/utils';
+import { inviteCopyForVertical } from '@/lib/team/invite-copy';
 
 const inputClass =
-  'flex h-11 w-full rounded-sm border border-border-default bg-surface-sunken px-4 text-sm text-text-strong placeholder:text-text-faint transition-colors focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/30';
+  'flex h-12 w-full rounded-[var(--radius-sm)] border border-border-default bg-surface-card px-4 text-sm text-text-strong placeholder:text-text-faint transition-colors focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/30';
+
+// The invitation payload carries no vertical, so the anonymous accept page uses
+// the neutral workspace copy.
+const inviteCopy = inviteCopyForVertical(null);
 
 function titleCase(value: string): string {
   return value.charAt(0) + value.slice(1).toLowerCase();
@@ -56,7 +61,7 @@ export function AcceptInviteForm({ token }: { token: string }) {
         </p>
         <a
           href="/login"
-          className="inline-flex h-11 w-full items-center justify-center rounded-sm bg-primary text-sm font-semibold text-primary-foreground transition-all hover:bg-primary-hover active:scale-[0.98]"
+          className="inline-flex h-12 w-full items-center justify-center rounded-[var(--radius-sm)] bg-primary text-sm font-semibold text-primary-foreground transition-all hover:bg-primary-hover active:scale-[0.98]"
         >
           Go to sign in
         </a>
@@ -135,7 +140,7 @@ export function AcceptInviteForm({ token }: { token: string }) {
       </div>
 
       {/* Read-only summary */}
-      <dl className="mb-6 grid grid-cols-1 gap-x-4 gap-y-4 rounded-md border border-border-subtle bg-surface-sunken p-4 sm:grid-cols-2">
+      <dl className="mb-6 grid grid-cols-1 gap-x-4 gap-y-4 rounded-[var(--radius-md)] border border-border-subtle bg-surface-sunken p-4 sm:grid-cols-2">
         <div>
           <dt className="font-mono text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
             Full Name
@@ -174,7 +179,7 @@ export function AcceptInviteForm({ token }: { token: string }) {
         <div
           id="account-error"
           role="alert"
-          className="mb-5 rounded-sm border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+          className="mb-5 rounded-[var(--radius-sm)] border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
         >
           {error}
         </div>
@@ -267,7 +272,7 @@ export function AcceptInviteForm({ token }: { token: string }) {
             type="tel"
             inputMode="tel"
             required
-            placeholder="+1 (786) 555-0100"
+            placeholder={inviteCopy.phonePlaceholder}
             autoComplete="tel"
             value={phone}
             onChange={(e) => setPhone(e.target.value)}
@@ -314,7 +319,7 @@ export function AcceptInviteForm({ token }: { token: string }) {
               {skills.map((s) => (
                 <span
                   key={s}
-                  className="inline-flex items-center gap-1 rounded-xs border border-border-subtle bg-secondary px-2.5 py-1 text-xs font-medium text-secondary-foreground"
+                  className="inline-flex items-center gap-1 rounded-[var(--radius-xs)] border border-border-subtle bg-secondary px-2.5 py-1 text-xs font-medium text-secondary-foreground"
                 >
                   {s}
                   <button
@@ -334,7 +339,7 @@ export function AcceptInviteForm({ token }: { token: string }) {
         <Button
           type="submit"
           disabled={!canSubmit}
-          className="group flex h-11 w-full items-center justify-center rounded-sm bg-primary text-sm font-semibold text-primary-foreground transition-all hover:bg-primary-hover active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50"
+          className="group flex h-12 w-full items-center justify-center rounded-[var(--radius-sm)] bg-primary text-sm font-semibold text-primary-foreground transition-all hover:bg-primary-hover active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50"
         >
           {accept.isPending ? (
             <>

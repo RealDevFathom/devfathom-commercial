@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { canAccessProject } from '@/lib/authz';
 
 const mocks = vi.hoisted(() => {
   const taskComment = {
@@ -54,6 +55,33 @@ describe('POST /api/v1/tasks/:id/comments', () => {
       where: { id: 'other-task-comment', taskId: 'task-1' },
       select: { id: true },
     });
+    expect(mocks.taskComment.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects an empty parent ID instead of writing it without validation', async () => {
+    mocks.taskComment.findFirst.mockResolvedValue(null);
+
+    const response = await postComment({ content: 'Reply', parentId: '' });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: 'Parent comment not found on this task',
+    });
+    expect(mocks.taskComment.findFirst).toHaveBeenCalledWith({
+      where: { id: '', taskId: 'task-1' },
+      select: { id: true },
+    });
+    expect(mocks.taskComment.create).not.toHaveBeenCalled();
+  });
+
+  it('does not look up the parent before authorizing access to the URL task', async () => {
+    vi.mocked(canAccessProject).mockResolvedValueOnce(false);
+
+    const response = await postComment({ content: 'Reply', parentId: 'other-task-comment' });
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({ error: 'Forbidden' });
+    expect(mocks.taskComment.findFirst).not.toHaveBeenCalled();
     expect(mocks.taskComment.create).not.toHaveBeenCalled();
   });
 

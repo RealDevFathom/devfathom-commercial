@@ -173,6 +173,32 @@ describe('TopNavigation vertical visibility', () => {
   });
 });
 
+describe.each(['ltr', 'rtl'])('%s mobile drawer placement', (dir) => {
+  it('anchors the visible sidebar and its inner border to the workspace direction', () => {
+    render(
+      <div dir={dir}>
+        <EntitlementsProvider
+          value={{
+            organizationId: 'org-1',
+            vertical: 'PHARMACY',
+            seatLimit: 10,
+            activeSeats: 1,
+            enabledModules: ['pharmacy-core'],
+            modules: [],
+            limits: {},
+          }}
+        >
+          <Sidebar collapsible={false} />
+        </EntitlementsProvider>
+      </div>
+    );
+
+    const sidebar = screen.getByRole('navigation', { name: 'Main navigation' });
+    expect(sidebar).toHaveClass('fixed', 'start-0', 'border-e');
+    expect(sidebar).not.toHaveClass('left-0', 'right-0', 'border-l', 'border-r');
+  });
+});
+
 describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface) => {
   const pharmacyModules = [
     'pharmacy-core',

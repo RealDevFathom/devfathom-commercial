@@ -337,10 +337,32 @@ describeIfDatabase('tax core real-PostgreSQL RLS and immutability', () => {
 
   it('has forced RLS on every tax table', async () => {
     await client.query('RESET ROLE');
-    const result = await client.query(
-      `SELECT count(*)::int AS count FROM pg_class WHERE relkind='r' AND relname LIKE 'restaurant_tax_%' AND relrowsecurity AND relforcerowsecurity`
+    const taxCoreTables = [
+      'restaurant_tax_official_sources',
+      'restaurant_tax_profile_versions',
+      'restaurant_tax_rate_bucket_snapshots',
+      'restaurant_tax_refund_allocations',
+      'restaurant_tax_rule_versions',
+      'restaurant_tax_tender_allocation_snapshots',
+      'restaurant_tax_transaction_snapshots',
+    ];
+    const result = await client.query<{
+      relname: string;
+      relrowsecurity: boolean;
+      relforcerowsecurity: boolean;
+    }>(
+      `SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class
+       WHERE relkind='r' AND relname = ANY($1::text[])
+       ORDER BY relname`,
+      [taxCoreTables]
     );
-    expect(result.rows[0].count).toBe(7);
+    expect(result.rows).toEqual(
+      taxCoreTables.map((relname) => ({
+        relname,
+        relrowsecurity: true,
+        relforcerowsecurity: true,
+      }))
+    );
     expect(
       (
         await client.query(

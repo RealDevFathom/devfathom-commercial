@@ -12,6 +12,12 @@ import {
   type CounterReceiptLine,
 } from './counter-receipt';
 import { PrintDocumentSchema } from '@/lib/restaurant/printing/contract';
+import { DEFAULT_RECEIPT_LAYOUT } from '@/lib/receipts/configuration';
+import {
+  buildCounterReceiptPreview,
+  exactReceiptPriceBreakdown,
+} from './counter-receipt-presentation';
+import { buildPharmacyReceiptPrintDocument } from './receipt-print';
 
 function receiptLine(overrides: Partial<CounterReceiptLine> = {}): CounterReceiptLine {
   return {
@@ -66,11 +72,62 @@ describe('formatMinor', () => {
   });
 });
 
+describe('mixed-lot receipt arithmetic', () => {
+  const mixedLotLine = receiptLine({
+    quantity: 3,
+    canonicalUnits: 3,
+    unitPriceMinor: 100,
+    discountMinor: 0,
+    lineTotalMinor: 301,
+    allocations: [
+      {
+        allocationId: 'cheap',
+        inventoryLotId: 'cheap',
+        batchNumber: null,
+        expiresAt: null,
+        canonicalUnits: 2,
+        grossMinor: 200,
+      },
+      {
+        allocationId: 'dear',
+        inventoryLotId: 'dear',
+        batchNumber: null,
+        expiresAt: null,
+        canonicalUnits: 1,
+        grossMinor: 101,
+      },
+    ],
+  });
+
+  it('presents an exact unit-price allocation in the browser receipt', () => {
+    expect(exactReceiptPriceBreakdown(3, 301)).toBe('3 · 3.01');
+    const preview = buildCounterReceiptPreview(receipt({ lines: [mixedLotLine] }), 'en', 80);
+    expect(preview).toContain('2 × 1.00 + 1 × 1.01');
+    expect(preview).not.toContain('3 STRIP × 1.00');
+  });
+
+  it('prints the same exact allocation on the ESC/POS receipt', () => {
+    const document = buildPharmacyReceiptPrintDocument(receipt({ lines: [mixedLotLine] }), 'en', {
+      layout: DEFAULT_RECEIPT_LAYOUT,
+      taxIdentity: { ntn: null, strn: null },
+      reprint: false,
+    });
+    expect(document.receiptSnapshot?.facts.lines[0]).toContain('2 x 1.00 + 1 x 1.01');
+    expect(document.receiptSnapshot?.facts.lines[0]).not.toContain('3 STRIP x 1.00');
+  });
+});
+
 describe('counterReceiptTotals', () => {
   it('prints cash received as tendered while keeping change separate', () => {
     const lines = [
-      receiptLine({ unitPriceMinor: 2_500, quantity: 2, discountMinor: 0 }),
-      receiptLine({ saleLineId: 'line-2', unitPriceMinor: 1_000, quantity: 3, discountMinor: 200 }),
+      receiptLine({ unitPriceMinor: 2_500, quantity: 2, discountMinor: 0, lineTotalMinor: 5_000 }),
+      receiptLine({
+        saleLineId: 'line-2',
+        unitPriceMinor: 1_000,
+        quantity: 3,
+        discountMinor: 200,
+        lineTotalMinor: 2_800,
+      }),
     ];
     const totals = counterReceiptTotals({
       lines,
@@ -91,9 +148,7 @@ describe('counterReceiptTotals', () => {
     (cashReceivedMinor) => {
       const totals = counterReceiptTotals({
         lines: [],
-        tenders: [
-          { type: 'CASH', amountMinor: 4_800, cashReceivedMinor, changeGivenMinor: null },
-        ],
+        tenders: [{ type: 'CASH', amountMinor: 4_800, cashReceivedMinor, changeGivenMinor: null }],
       });
 
       expect(totals.tenderedMinor).toBe(4_800);
