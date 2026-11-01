@@ -800,7 +800,10 @@ export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
     key: 'pharmacist',
     name: 'Pharmacist',
     isSystem: true,
-    capabilities: ['pharmacy:dispense', 'pharmacy:catalogue-review', 'pharmacy:close'],
+    // Day close is a manager-or-owner action, so the template does not grant
+    // `pharmacy:close`. Counter selling (Open drawer, Tender, Take payment) rides on
+    // `pharmacy:dispense` and is unchanged.
+    capabilities: ['pharmacy:dispense', 'pharmacy:catalogue-review'],
   },
   {
     key: 'manager',

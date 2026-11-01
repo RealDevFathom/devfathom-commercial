@@ -3,8 +3,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // Closing the day and opening, moving or closing a drawer are manager-or-owner
 // actions, enforced on the server. A cashier cannot open, move or close their own
 // drawer or close the day; a manager and an owner can, and so can a solo owner
-// (tenant ADMIN with no organization role). The Pharmacist template's existing
-// `pharmacy:close` access is kept.
+// (tenant ADMIN with no organization role). The Pharmacist template no longer
+// carries `pharmacy:close`, so a pharmacist cannot close the day, but keeps its
+// counter selling rights, including opening a drawer.
 const mocks = vi.hoisted(() => ({
   openDrawer: vi.fn(),
   movement: vi.fn(),
@@ -43,6 +44,7 @@ vi.mock('@/lib/pharmacy/day-close', async () => ({
   readPharmacyClose: mocks.closePreview,
 }));
 
+import { PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
 import { router, type TRPCContext } from '../trpc';
 import { pharmacySalesRouter } from './pharmacy-sales';
 
@@ -81,11 +83,10 @@ const ownerOperator: Persona = {
   },
 };
 const soloOwner: Persona = { role: 'ADMIN', organizationRole: null };
+const pharmacistTemplate = PHARMACY_ROLE_TEMPLATES.find((role) => role.key === 'pharmacist')!;
 const pharmacist: Persona = {
   role: 'EMPLOYEE',
-  organizationRole: {
-    permissions: allow('pharmacy:dispense', 'pharmacy:catalogue-review', 'pharmacy:close'),
-  },
+  organizationRole: { permissions: allow(...pharmacistTemplate.capabilities) },
 };
 
 const BRANCH = 'branch-1';
@@ -245,8 +246,48 @@ describe('pharmacy drawer and close: manager-or-owner gate', () => {
     });
   });
 
-  it.each(calls)('%s keeps the Pharmacist template day-close access', async (_name, run, domain) => {
-    await expect(run(caller(pharmacist))).resolves.toBeDefined();
-    expect(domain()).toHaveBeenCalledTimes(1);
+});
+
+describe('Pharmacist template: no day close, counter selling kept', () => {
+  it('has no pharmacy:close but keeps the dispense grant its counter rights ride on', () => {
+    expect(pharmacistTemplate.capabilities).not.toContain('pharmacy:close');
+    expect(pharmacistTemplate.capabilities).toEqual(
+      expect.arrayContaining(['pharmacy:dispense', 'pharmacy:catalogue-review'])
+    );
+  });
+
+  it.each(closeCalls)('%s refuses a pharmacist', async (_name, run, domain) => {
+    await expect(run(caller(pharmacist))).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Day-close permission is required to reconcile and close a day.',
+    });
+    expect(domain()).not.toHaveBeenCalled();
+    expect(db.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('closeDay refuses a pharmacist even as a tenant ADMIN bounded by the role', async () => {
+    await expect(closeCalls[0][1](caller({ ...pharmacist, role: 'ADMIN' }))).rejects.toMatchObject(
+      { code: 'FORBIDDEN' }
+    );
+    expect(mocks.closeDay).not.toHaveBeenCalled();
+  });
+
+  it('lets a pharmacist open a drawer (counter selling right)', async () => {
+    await expect(drawerCalls[0][1](caller(pharmacist))).resolves.toBeDefined();
+    expect(mocks.openDrawer).toHaveBeenCalledTimes(1);
+  });
+
+  it('still refuses a cashier opening a drawer', async () => {
+    await expect(drawerCalls[0][1](caller(cashier))).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.openDrawer).not.toHaveBeenCalled();
+  });
+
+  it('refuses a pharmacist whose dispense grant is DENIED from opening a drawer', async () => {
+    await expect(
+      drawerCalls[0][1](
+        caller({ ...pharmacist, overrides: [{ capability: 'pharmacy:dispense', effect: 'DENY' }] })
+      )
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.openDrawer).not.toHaveBeenCalled();
   });
 });

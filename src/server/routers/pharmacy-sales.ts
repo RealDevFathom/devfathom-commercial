@@ -15,7 +15,7 @@ import {
 } from '@/lib/pharmacy/payment-sandbox';
 import { paymentSandboxAdmitted } from '@/lib/pharmacy/payment-sandbox-admission';
 import { readCounterEvidence, readDailyCloseEvidence } from '@/lib/pharmacy/counter-evidence';
-import { can, subjectFromSession } from '@/lib/abac';
+import { can, subjectFromSession, type Action } from '@/lib/abac';
 import { hasPharmacyManagerAccess } from '@/lib/pharmacy/manager-access';
 import { capabilityMatches } from '@/lib/abac/capabilities';
 import {
@@ -492,15 +492,19 @@ const closeDate = z
     'Choose a date without a time.'
   );
 // Closing the day and opening, moving or closing a drawer are manager-or-owner
-// actions: a cashier cannot reconcile or close their own drawer. `pharmacy:close`
-// (the Pharmacist template) keeps its existing day-close access. A tenant ADMIN
-// with no organization role (a solo owner) keeps full access; an ADMIN with an
-// assigned role is bounded by it.
-async function requireManagerOrOwner(ctx: TRPCContext, message: string) {
+// actions: a cashier cannot reconcile or close their own drawer. An explicit
+// `pharmacy:close` grant is also accepted; no seeded template other than
+// Owner / Operator carries it. A tenant ADMIN with no organization role (a solo
+// owner) keeps full access; an ADMIN with an assigned role is bounded by it.
+async function requireManagerOrOwner(
+  ctx: TRPCContext,
+  message: string,
+  alsoAccepted: readonly Action[] = []
+) {
   const allowed = await hasPharmacyManagerAccess(
     ctx.db,
     ctx.session?.user,
-    ['pharmacy:close'],
+    ['pharmacy:close', ...alsoAccepted],
     ctx.requestMeta.ip
   );
   if (!allowed) throw new TRPCError({ code: 'FORBIDDEN', message });
@@ -509,11 +513,15 @@ async function requireManagerOrOwner(ctx: TRPCContext, message: string) {
 const requireCloseAccess = (ctx: TRPCContext) =>
   requireManagerOrOwner(ctx, 'Day-close permission is required to reconcile and close a day.');
 
-const requireDrawerAccess = (ctx: TRPCContext) =>
-  requireManagerOrOwner(
-    ctx,
-    'Manager or owner permission is required to open, move or close a drawer.'
-  );
+const DRAWER_MESSAGE = 'Manager or owner permission is required to open, move or close a drawer.';
+
+const requireDrawerAccess = (ctx: TRPCContext) => requireManagerOrOwner(ctx, DRAWER_MESSAGE);
+
+// Opening a drawer is part of the Pharmacist template's counter selling rights
+// (Open drawer, Tender, Take payment), so `pharmacy:dispense` may open one. Moving
+// cash and closing a drawer stay manager-or-owner.
+const requireOpenDrawerAccess = (ctx: TRPCContext) =>
+  requireManagerOrOwner(ctx, DRAWER_MESSAGE, ['pharmacy:dispense']);
 
 export const pharmacySalesRouter = router({
   manualPaymentSettings: protectedProcedure.input(z.object({ branchId })).query(async ({ ctx, input }) => {
@@ -744,7 +752,7 @@ export const pharmacySalesRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      await requireDrawerAccess(ctx);
+      await requireOpenDrawerAccess(ctx);
       try {
         return await ctx.db.$transaction(async (tx) =>
           openPharmacyDrawer(txDb(tx), await scopeFor(ctx, input.branchId), input)
