@@ -11,6 +11,11 @@ phases:
     commands:
       - set -euo pipefail
       - '[[ "${IMAGE_TAG:-}" =~ ^[0-9a-f]{40}$ ]] || { echo "IMAGE_TAG must be the 40-character source commit sha"; exit 1; }'
+      # Optional environment suffix (for example production). The repository's tags are
+      # immutable, so an image of the same commit built with another NEXT_PUBLIC_APP_URL
+      # is pushed as <sha>-<suffix>. Unset keeps the plain <sha> tag.
+      - '[[ -z "${IMAGE_TAG_SUFFIX:-}" || "${IMAGE_TAG_SUFFIX}" =~ ^[a-z0-9]{1,20}$ ]] || { echo "IMAGE_TAG_SUFFIX must be 1-20 lowercase letters or digits"; exit 1; }'
+      - PUSH_TAG="${IMAGE_TAG}${IMAGE_TAG_SUFFIX:+-${IMAGE_TAG_SUFFIX}}"
       - REGISTRY="${ECR_REPOSITORY_URI%%/*}"
       # <account>.dkr.ecr.<region>.amazonaws.com: the registry may be in another region than the build.
       - REGISTRY_REGION="$(cut -d. -f4 <<<"$REGISTRY")"
@@ -24,9 +29,9 @@ phases:
       # NEXT_PUBLIC_APP_URL is inlined at build time; pass it per start-build (staging:
       # --environment-variables-override name=NEXT_PUBLIC_APP_URL,value=https://staging.devfathom.com).
       - docker build --progress=plain --build-arg "NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL:-}" -t "devfathom-base:${IMAGE_TAG}" .
-      - docker build --progress=plain --build-arg "BASE_IMAGE=devfathom-base:${IMAGE_TAG}" -t "${ECR_REPOSITORY_URI}:${IMAGE_TAG}" -f infra/aws/Dockerfile.rds-ca infra/aws
+      - docker build --progress=plain --build-arg "BASE_IMAGE=devfathom-base:${IMAGE_TAG}" -t "${ECR_REPOSITORY_URI}:${PUSH_TAG}" -f infra/aws/Dockerfile.rds-ca infra/aws
   post_build:
     on-failure: ABORT
     commands:
-      - docker push "${ECR_REPOSITORY_URI}:${IMAGE_TAG}"
-      - aws ecr describe-images --region "$REGISTRY_REGION" --repository-name "${ECR_REPOSITORY_URI##*/}" --image-ids "imageTag=${IMAGE_TAG}" --query 'imageDetails[0].imageDigest' --output text
+      - docker push "${ECR_REPOSITORY_URI}:${PUSH_TAG}"
+      - aws ecr describe-images --region "$REGISTRY_REGION" --repository-name "${ECR_REPOSITORY_URI##*/}" --image-ids "imageTag=${PUSH_TAG}" --query 'imageDetails[0].imageDigest' --output text

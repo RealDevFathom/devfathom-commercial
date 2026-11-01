@@ -40,6 +40,21 @@ beforeEach(() => window.localStorage.clear());
 afterEach(() => vi.restoreAllMocks());
 
 describe('original tender attempt storage', () => {
+  it('retains exact manual evidence for outcome recovery after reload', () => {
+    const attempt = original();
+    attempt.input.type = 'RAAST';
+    delete attempt.input.cashReceivedMinor;
+    attempt.input.providerRef = '001234';
+    attempt.input.payerName = 'Ayesha';
+    attempt.draft.cashReceived = '';
+    persistTenderAttempt(attempt);
+    expect(readTenderAttempt(attempt.scope)).toEqual({ status: 'pending', attempt });
+    clearTenderAttempt(attempt);
+    attempt.input.referenceSkipped = true;
+    delete attempt.input.providerRef;
+    persistTenderAttempt(attempt);
+    expect(readTenderAttempt(attempt.scope)).toEqual({ status: 'pending', attempt });
+  });
   it('uses the final actual router tender input and outcome contract', () => {
     expectTypeOf<TenderAttemptInput>().toEqualTypeOf<
       inferRouterInputs<AppRouter>['pharmacySales']['tender']

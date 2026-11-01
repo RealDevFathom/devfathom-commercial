@@ -59,7 +59,8 @@ describe('badge policy floor', () => {
   });
 });
 
-describe('hash / verify', () => {
+// Each round trip performs three real production-cost bcrypt operations.
+describe('hash / verify', { timeout: 20_000 }, () => {
   it('round-trips a PIN and rejects the wrong PIN', async () => {
     const hash = await hashOperatorCredential('PIN', '4821');
     expect(hash).not.toContain('4821');
