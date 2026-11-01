@@ -174,6 +174,36 @@ export default async function PharmacySuppliersPage({
     return next;
   }
 
+  async function verifyLicence(form: FormData) {
+    'use server';
+    const supplierId = field(form, 'supplierId');
+    const outcome = purchasingOutcome();
+    let next: string;
+    try {
+      const actionCaller = await purchasingCaller();
+      if (!actionCaller) throw new PurchasingValidationError(NO_ACTOR);
+      await outcome.write(actionCaller.verifySupplierLicence)({
+        licenceId: field(form, 'licenceId'),
+      });
+      revalidatePath(ROUTE);
+      next = destination(
+        ROUTE,
+        {
+          message: 'Licence verified. The unverified filing is kept as evidence.',
+          kind: 'success',
+        },
+        { supplier: supplierId }
+      );
+    } catch (error) {
+      next = destination(
+        ROUTE,
+        { ...outcome.failure(error, 'Could not verify the licence.'), kind: 'error' },
+        { supplier: supplierId }
+      );
+    }
+    return next;
+  }
+
   async function setAuthorization(form: FormData) {
     'use server';
     const supplierId = field(form, 'supplierId');
@@ -284,9 +314,11 @@ export default async function PharmacySuppliersPage({
           <div className="min-w-0 space-y-6">
             {selected ? (
               <SupplierDetail
+                currentUserId={ctx.session.user.id}
                 notice={notice}
                 onRecordLicence={recordLicence}
                 onSetAuthorization={setAuthorization}
+                onVerifyLicence={verifyLicence}
                 supplier={selected}
               />
             ) : (
@@ -359,13 +391,17 @@ export default async function PharmacySuppliersPage({
 function SupplierDetail({
   supplier,
   notice,
+  currentUserId,
   onRecordLicence,
   onSetAuthorization,
+  onVerifyLicence,
 }: {
   supplier: SupplierSummary;
   notice: ReturnType<typeof noticeFrom>;
+  currentUserId: string;
   onRecordLicence: (form: FormData) => Promise<string>;
   onSetAuthorization: (form: FormData) => Promise<string>;
+  onVerifyLicence: (form: FormData) => Promise<string>;
 }) {
   const supersedable = supplier.licences.filter((licence) => !licence.superseded);
   return (
@@ -472,6 +508,25 @@ function SupplierDetail({
                     Evidence: {licence.evidenceUri}
                   </p>
                 ) : null}
+                {/* PUR-01: verification is a second person's act. The server
+                    refuses the filer; this only says so before they try. */}
+                {!licence.verified && !licence.superseded ? (
+                  licence.recordedByUserId === currentUserId ? (
+                    <p className="mt-2 text-xs text-text-muted">
+                      You filed this licence. A colleague with purchasing access verifies it.
+                    </p>
+                  ) : (
+                    <PurchasingActionForm
+                      operation={{ resource: `licence:${licence.id}`, action: 'verify' }}
+                      action={onVerifyLicence}
+                      className="mt-2"
+                    >
+                      <input name="supplierId" type="hidden" value={supplier.id} />
+                      <input name="licenceId" type="hidden" value={licence.id} />
+                      <SubmitButton variant="secondary">Verify licence</SubmitButton>
+                    </PurchasingActionForm>
+                  )
+                ) : null}
               </li>
             ))}
           </ul>
@@ -543,6 +598,10 @@ function SupplierDetail({
               </label>
             )}
           </Field>
+          <p className="text-xs text-text-muted sm:col-span-2">
+            Whoever files a licence cannot also verify it: a colleague verifies it from the list
+            above. Only the sole owner of a one-person workspace may tick this box.
+          </p>
           <div className="flex items-end">
             <SubmitButton>File licence</SubmitButton>
           </div>

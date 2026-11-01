@@ -9,6 +9,7 @@ import { PurchasingOutcomeScope, PurchasingOutcomes } from '../_components/actio
 import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
 import { StatusPill } from '@/components/ui/status-pill';
+import { can, subjectFromSession } from '@/lib/abac';
 import { hasModule } from '@/lib/entitlements';
 import { actorCanProcure } from '@/lib/pharmacy/procurement-access';
 import type { PurchaseReturnDetail, PurchasingWorkspace } from '@/lib/pharmacy/purchasing-console';
@@ -96,6 +97,25 @@ export default async function PharmacyReturnsPage({
   // to a counter-only role exactly as Goods-in is.
   if (!(await actorCanProcure(ctx.db, ctx.session.user.id))) {
     return <AccessState heading={HEADING} description={DESCRIPTION} moduleEnabled />;
+  }
+  // PR J (#979): returns move stock out and debit notes and credits book money,
+  // so the server needs `reports:financial` as well. Check it here too rather
+  // than render a board whose reads and actions would all be refused.
+  if (
+    !(await can(subjectFromSession(ctx.session.user), 'reports:financial', undefined, {
+      db: ctx.db,
+      source: 'TRPC',
+      ip: ctx.requestMeta?.ip ?? null,
+    }))
+  ) {
+    return (
+      <AccessState
+        heading={HEADING}
+        description={DESCRIPTION}
+        moduleEnabled
+        requirement="Supplier returns, debit notes and supplier credit need both the procurement capability and financial report access. Ask a workspace administrator to add financial report access to your role."
+      />
+    );
   }
   const caller = await purchasingCaller();
   if (!caller) {

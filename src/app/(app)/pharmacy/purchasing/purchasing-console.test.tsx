@@ -46,7 +46,10 @@ const actor = {
   support: null,
 };
 
-function contextStub(enabledModules = ['pharmacy-procurement']) {
+function contextStub(
+  enabledModules = ['pharmacy-procurement'],
+  grants: readonly string[] = ['pharmacy.procurement', 'pharmacy:procurement-approve']
+) {
   return {
     session: actor.session,
     organization: actor.organization,
@@ -55,7 +58,7 @@ function contextStub(enabledModules = ['pharmacy-procurement']) {
       user: {
         findUnique: vi.fn().mockResolvedValue({
           organizationRole: {
-            permissions: [{ capability: 'pharmacy.procurement', effect: 'ALLOW' }],
+            permissions: grants.map((capability) => ({ capability, effect: 'ALLOW' })),
           },
           permissionOverrides: [],
         }),
@@ -85,6 +88,7 @@ const licensedSupplier = {
     expiresAt: new Date('2027-01-01T00:00:00.000Z'),
     evidenceUri: null,
     verified: true,
+    recordedByUserId: null,
     superseded: false,
     daysToExpiry: 300,
   },
@@ -652,6 +656,51 @@ describe('segregation of duties (PUR-02)', () => {
     expect(screen.getByText(/You raised this order, so you cannot approve it/)).toBeDefined();
     expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
   });
+
+  it.each(['SUBMITTED', 'APPROVED'] as const)(
+    'offers no approve or send action on a %s order to a buyer without the approval permission (PR J)',
+    async (status) => {
+      mocks.createTRPCContext.mockResolvedValue(
+        contextStub(['pharmacy-procurement'], ['pharmacy:procurement'])
+      );
+      mocks.createCaller.mockReturnValue(
+        callerStub({
+          purchaseOrders: vi.fn().mockResolvedValue([
+            {
+              id: 'po-1',
+              reference: 'PO-1',
+              status,
+              supplier: { id: 'sup-ok', name: 'Karachi Distributors' },
+              branch: null,
+              branchId: null,
+              supplierId: 'sup-ok',
+              requisition: null,
+              lines: [],
+              approvals: [],
+              goodsReceipts: [],
+              createdByUserId: 'user-9',
+            },
+          ]),
+          landedCost: vi.fn().mockResolvedValue({
+            payableMinor: 0,
+            landedCostMinor: 0,
+            taxMinor: 0,
+            chargesMinor: 0,
+            canonicalUnits: 0,
+            netCostMinor: 0,
+            lines: [],
+          }),
+        })
+      );
+
+      render(await OrdersPage({ searchParams: params({ po: 'po-1' }) }));
+
+      expect(screen.getByText(/needs the purchase-order approval permission/)).toBeDefined();
+      expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Reject' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Send to supplier' })).toBeNull();
+    }
+  );
 });
 
 function findAction(node: ReactNode, name: string): (form: FormData) => Promise<string> {

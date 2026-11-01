@@ -40,7 +40,11 @@ function contextStub(enabledModules = ['pharmacy-procurement']) {
       user: {
         findUnique: vi.fn().mockResolvedValue({
           organizationRole: {
-            permissions: [{ capability: 'pharmacy.procurement', effect: 'ALLOW' }],
+            permissions: [
+              { capability: 'pharmacy.procurement', effect: 'ALLOW' },
+              // PR J: approving and sending is its own permission (Manager, Owner).
+              { capability: 'pharmacy:procurement-approve', effect: 'ALLOW' },
+            ],
           },
           permissionOverrides: [],
         }),
@@ -70,6 +74,7 @@ const licensedSupplier = {
     expiresAt: new Date('2027-01-01T00:00:00.000Z'),
     evidenceUri: null,
     verified: true,
+    recordedByUserId: null,
     superseded: false,
     daysToExpiry: 300,
   },

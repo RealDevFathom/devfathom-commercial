@@ -40,7 +40,10 @@ beforeEach(() => {
     db: { user: { findUnique: findUser } },
   });
   findUser.mockResolvedValue(
-    procurementUser([{ capability: 'pharmacy:procurement', effect: 'ALLOW' }])
+    procurementUser([
+      { capability: 'pharmacy:procurement', effect: 'ALLOW' },
+      { capability: 'reports:financial', effect: 'ALLOW' },
+    ])
   );
   mocks.module.mockReturnValue(true);
   mocks.caller.mockReturnValue(reads);
@@ -76,6 +79,15 @@ it('closes returns to a counter-only role without procurement (#979)', async () 
   expect(mocks.caller).not.toHaveBeenCalled();
   expect(reads.purchaseReturns).not.toHaveBeenCalled();
   expect(screen.queryByRole('heading', { name: 'Supplier-credit follow-up' })).toBeNull();
+});
+it('closes returns to a procurement role without financial access (PR J)', async () => {
+  findUser.mockResolvedValue(
+    procurementUser([{ capability: 'pharmacy:procurement', effect: 'ALLOW' }])
+  );
+  render(await ReturnsPage({ searchParams: params() }));
+  expect(screen.getByRole('heading', { name: 'You do not have purchasing access' })).toBeVisible();
+  expect(mocks.caller).not.toHaveBeenCalled();
+  expect(reads.purchaseReturns).not.toHaveBeenCalled();
 });
 it('does not render priorities after branch read denial', async () => {
   reads.purchaseReturns.mockRejectedValue(new Error('FORBIDDEN'));
