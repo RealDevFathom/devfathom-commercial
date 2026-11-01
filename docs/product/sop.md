@@ -24,12 +24,22 @@ Restaurants need versioned operating-procedure templates, branch-timezone schedu
 - Managers verify or reject; missed/late occurrences can be waived only with co-authorization. See `src/lib/restaurant/sop-verification.test.ts`.
 - **Who is recorded.** Every SOP action (start, complete step, attach evidence,
   submit, verify, reject, waive, acknowledge, and role-pool claim) is recorded
-  against the signed-in user's own staff profile. That means exactly one ACTIVE
-  staff profile in the workspace. Staff can no longer pick "who did it": any
-  actor or uploader id the client sends is ignored. A user with no active staff
-  profile, or with more than one, is refused. See
-  `authenticated SOP identity boundary` in
+  against the signed-in user's own ACTIVE staff profile in the workspace. Staff
+  can no longer pick "who did it": any actor or uploader id the client sends is
+  ignored. A user with active profiles at several branches acts as their profile
+  for the occurrence's branch: the profile whose primary branch it is, then one
+  holding an active job role there, then their oldest profile. This is the same
+  choice the branch board uses for visibility. A user with no active staff
+  profile is refused. See `authenticated SOP identity boundary` in
   `src/server/routers/restaurant-sop-execution.test.ts`.
+- **Behaviour change for organization-wide supervisors.** A user who holds
+  `restaurant:configure` or `sop:verify` but has no active staff profile can
+  still view every occurrence. They can no longer start, complete, submit,
+  verify, reject, waive or acknowledge SOP work, or void/cancel orders, until
+  they are given an active staff profile. Previously such a user could record
+  work against a staff profile they chose. That was the impersonation gap this
+  change closes. Link the supervisor's user to a staff profile in Staff
+  settings before rollout.
 - **Waiver approval.** The approving manager signs in for the waiver with their
   own PIN or badge, which the server checks. Failed attempts count towards a
   durable lockout that survives the refused request. The approver must also hold
@@ -41,6 +51,10 @@ Restaurants need versioned operating-procedure templates, branch-timezone schedu
   accepted). The co-authorization record is stamped
   `[Owner PIN reauthentication]`. See `sole-owner self-approval` in
   `src/server/routers/restaurant-sop-execution.test.ts`.
+- **Known limitation: approver PIN lockout.** The approver lockout counter is
+  shared with terminal sign-in. A user who can waive SOPs or cancel orders can
+  therefore lock a named manager's PIN with repeated wrong guesses. The
+  back-office path has no separate request rate limit yet.
 
 ## Data model
 

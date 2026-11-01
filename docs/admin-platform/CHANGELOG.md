@@ -17,6 +17,18 @@
   active staff member, who must be an owner: they may approve their own request
   by re-entering their PIN, and the co-authorization record is stamped
   `[Owner PIN reauthentication]`.
+- **Behaviour change: an active staff profile is now required to act.** SOP
+  commands and back-office order voids/cancellations are recorded only as the
+  signed-in user's own staff profile. A user with profiles at several branches
+  acts as their profile for the record's branch. Organization-wide supervisors
+  (`restaurant:configure` / `sop:verify`) with no active staff profile can still
+  read SOP boards, but they can no longer record SOP work or void/cancel orders.
+  Link them to a staff profile before rollout. The orders console no longer asks
+  for an "acting staff member". When an approver is named, it asks for that
+  approver's PIN or badge.
+- **Known limitation.** Approver PIN failures share the terminal sign-in lockout
+  counter, so repeated wrong guesses on the back-office path can lock a
+  manager's PIN. There is no separate rate limit on that path yet.
 
 ## 2026-08-02
 

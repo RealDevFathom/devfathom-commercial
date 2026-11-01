@@ -880,7 +880,10 @@ function SopBoardView(props: SopBoardViewProps) {
                           />
                         </label>
                         <p className="text-xs text-text-muted sm:col-span-2">
-                          Co-authorization requires two different active staff profiles.
+                          Co-authorization requires a different approving staff member,
+                          who confirms with their own PIN or badge. If you are the only active
+                          staff member and an owner, you may approve your own waive by
+                          re-entering your PIN.
                         </p>
                         <label className="text-sm text-text-body sm:col-span-2">
                           Waiver reason
@@ -1143,7 +1146,7 @@ export default async function SopPage({ searchParams }: { searchParams: SearchPa
           if (!approvingStaffProfileId) {
             throw new TRPCError({
               code: 'BAD_REQUEST',
-              message: 'Select two different active staff profiles for co-authorization.',
+              message: 'Select the approving staff member for co-authorization.',
             });
           }
           await caller.waive({
