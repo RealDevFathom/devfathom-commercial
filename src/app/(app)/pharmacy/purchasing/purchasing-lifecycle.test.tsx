@@ -44,6 +44,9 @@ function contextStub(enabledModules = ['pharmacy-procurement']) {
               { capability: 'pharmacy.procurement', effect: 'ALLOW' },
               // PR J: approving and sending is its own permission (Manager, Owner).
               { capability: 'pharmacy:procurement-approve', effect: 'ALLOW' },
+              // PR J: the returns board books debit notes and credits, so it
+              // needs financial report access as well (Manager + Finance).
+              { capability: 'reports:financial', effect: 'ALLOW' },
             ],
           },
           permissionOverrides: [],

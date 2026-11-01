@@ -412,10 +412,13 @@ describe('supplier-credit Reports preparation', () => {
     const creditsRead = vi
       .fn()
       .mockResolvedValue([{ ...credit(), receivedAt: new Date('2026-08-01T00:00:00Z') }]);
+    const assignmentRead = vi.fn().mockResolvedValue({ id: 'assignment-1' });
     const caller = pharmacyPurchasingRouter.createCaller({
       ...context(),
       db: {
         pharmacyBranch: { findFirst: vi.fn().mockResolvedValue({ id: scope.branchId }) },
+        // #979: the caller must hold an active assignment to the branch it reads.
+        pharmacyBranchAssignment: { findFirst: assignmentRead },
         pharmacyPurchaseReturn: { findMany: returnsRead },
         pharmacySupplierCredit: { findMany: creditsRead },
       },
@@ -437,6 +440,11 @@ describe('supplier-credit Reports preparation', () => {
     );
     expect(creditsRead).toHaveBeenCalledWith(
       expect.objectContaining({ where: { ...scope, receivedAt: undefined }, take: 51 })
+    );
+    expect(assignmentRead).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { ...scope, userId: 'user-1', active: true },
+      })
     );
     expect(screen.getByText('DEBIT-ORIGINAL')).toBeVisible();
     expect(screen.getByText('PKR 75.01')).toBeVisible();
