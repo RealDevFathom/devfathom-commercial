@@ -800,10 +800,11 @@ export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
     key: 'pharmacist',
     name: 'Pharmacist',
     isSystem: true,
-    // Day close is a manager-or-owner action, so the template does not grant
-    // `pharmacy:close`. Counter selling (Open drawer, Tender, Take payment) rides on
-    // `pharmacy:dispense` and is unchanged.
-    capabilities: ['pharmacy:dispense', 'pharmacy:catalogue-review'],
+    // A pharmacist sells at the counter (Tender, Take payment), so the template
+    // grants `pharmacy:counter`; opening a drawer rides on `pharmacy:dispense`. Day
+    // close is a manager-or-owner action, so the template does not grant
+    // `pharmacy:close`. Refunds keep their existing approval rules.
+    capabilities: ['pharmacy:dispense', 'pharmacy:catalogue-review', 'pharmacy:counter'],
   },
   {
     key: 'manager',

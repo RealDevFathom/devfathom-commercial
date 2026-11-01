@@ -3,9 +3,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // Closing the day and opening, moving or closing a drawer are manager-or-owner
 // actions, enforced on the server. A cashier cannot open, move or close their own
 // drawer or close the day; a manager and an owner can, and so can a solo owner
-// (tenant ADMIN with no organization role). The Pharmacist template no longer
-// carries `pharmacy:close`, so a pharmacist cannot close the day, but keeps its
-// counter selling rights, including opening a drawer.
+// (tenant ADMIN with no organization role). The Pharmacist template carries
+// `pharmacy:counter` but not `pharmacy:close`, so a pharmacist can sell, take
+// payment and open a drawer, but cannot close the day.
 const mocks = vi.hoisted(() => ({
   openDrawer: vi.fn(),
   movement: vi.fn(),
@@ -13,6 +13,8 @@ const mocks = vi.hoisted(() => ({
   dailyClose: vi.fn(),
   closeDay: vi.fn(),
   closePreview: vi.fn(),
+  applyTender: vi.fn(),
+  createSale: vi.fn(),
 }));
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
@@ -35,6 +37,11 @@ vi.mock('@/lib/pharmacy/settlement', async () => ({
   recordPharmacyCashMovement: mocks.movement,
   closePharmacyDrawer: mocks.closeDrawer,
   cutPharmacyDailyClose: mocks.dailyClose,
+  applyPharmacyTender: mocks.applyTender,
+}));
+vi.mock('@/lib/pharmacy/sales', async () => ({
+  ...(await vi.importActual<typeof import('@/lib/pharmacy/sales')>('@/lib/pharmacy/sales')),
+  createSale: mocks.createSale,
 }));
 vi.mock('@/lib/pharmacy/day-close', async () => ({
   ...(await vi.importActual<typeof import('@/lib/pharmacy/day-close')>(
@@ -93,12 +100,15 @@ const BRANCH = 'branch-1';
 const businessDate = new Date('2026-10-20T00:00:00.000Z');
 let db: {
   $transaction: ReturnType<typeof vi.fn>;
-  pharmacyBranch: { findMany: ReturnType<typeof vi.fn> };
+  pharmacyBranch: { findMany: ReturnType<typeof vi.fn>; findFirst: ReturnType<typeof vi.fn> };
+  pharmacyBranchAssignment: { findMany: ReturnType<typeof vi.fn> };
   user: { findUnique: ReturnType<typeof vi.fn> };
 };
 
 function caller(persona: Persona): Caller {
   db.user.findUnique.mockResolvedValue({
+    status: 'ACTIVE',
+    organizationId: 'org-1',
     organizationRole: persona.organizationRole,
     permissionOverrides: persona.overrides ?? [],
   });
@@ -178,7 +188,9 @@ beforeEach(() => {
       findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
         where.id.in.map((id) => ({ id }))
       ),
+      findFirst: vi.fn(async () => ({ id: BRANCH })),
     },
+    pharmacyBranchAssignment: { findMany: vi.fn(async () => [{ branchId: BRANCH }]) },
     user: { findUnique: vi.fn() },
   };
   mocks.openDrawer.mockResolvedValue({ id: 'drawer-1', status: 'OPEN' });
@@ -187,7 +199,21 @@ beforeEach(() => {
   mocks.dailyClose.mockResolvedValue({ id: 'close-1' });
   mocks.closeDay.mockResolvedValue({ id: 'close-1' });
   mocks.closePreview.mockResolvedValue({ sourceHash: 'a'.repeat(64) });
+  mocks.applyTender.mockResolvedValue({ tenderId: 'tender-1', status: 'ACCEPTED' });
+  mocks.createSale.mockResolvedValue({ id: 'sale-1' });
 });
+
+const takePayment = (c: Caller) =>
+  c.tender({
+    branchId: BRANCH,
+    saleId: 'sale-1',
+    deviceId: 'counter-device',
+    businessDate,
+    type: 'CASH',
+    amountMinor: 500,
+    cashReceivedMinor: 500,
+    idempotencyKey: 'tender-key-1',
+  });
 
 describe('pharmacy drawer and close: manager-or-owner gate', () => {
   it.each(calls)('%s refuses a cashier before touching the branch', async (_name, run, domain) => {
@@ -248,12 +274,52 @@ describe('pharmacy drawer and close: manager-or-owner gate', () => {
 
 });
 
-describe('Pharmacist template: no day close, counter selling kept', () => {
-  it('has no pharmacy:close but keeps the dispense grant its counter rights ride on', () => {
+describe('Pharmacist template: counter selling, no day close', () => {
+  it('has pharmacy:counter and not pharmacy:close', () => {
+    expect(pharmacistTemplate.capabilities).toContain('pharmacy:counter');
     expect(pharmacistTemplate.capabilities).not.toContain('pharmacy:close');
     expect(pharmacistTemplate.capabilities).toEqual(
       expect.arrayContaining(['pharmacy:dispense', 'pharmacy:catalogue-review'])
     );
+  });
+
+  it('lets a pharmacist start a sale', async () => {
+    await expect(
+      caller(pharmacist).create({ branchId: BRANCH, quotation: false })
+    ).resolves.toEqual({ id: 'sale-1' });
+    expect(mocks.createSale).toHaveBeenCalledTimes(1);
+  });
+
+  it('lets a pharmacist take payment', async () => {
+    await expect(takePayment(caller(pharmacist))).resolves.toMatchObject({ tenderId: 'tender-1' });
+    expect(mocks.applyTender).toHaveBeenCalledTimes(1);
+    expect(mocks.applyTender.mock.calls[0][1]).toEqual({
+      organizationId: 'org-1',
+      branchId: BRANCH,
+      actorId: 'actor-1',
+    });
+  });
+
+  it('refuses payment from a pharmacist whose counter grant is DENIED', async () => {
+    await expect(
+      takePayment(
+        caller({ ...pharmacist, overrides: [{ capability: 'pharmacy:counter', effect: 'DENY' }] })
+      )
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.applyTender).not.toHaveBeenCalled();
+  });
+
+  it('lets a pharmacist open a drawer, take payment, then refuses closeDay', async () => {
+    const c = caller(pharmacist);
+    await expect(drawerCalls[0][1](c)).resolves.toBeDefined();
+    await expect(takePayment(c)).resolves.toBeDefined();
+    await expect(closeCalls[0][1](c)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Day-close permission is required to reconcile and close a day.',
+    });
+    expect(mocks.openDrawer).toHaveBeenCalledTimes(1);
+    expect(mocks.applyTender).toHaveBeenCalledTimes(1);
+    expect(mocks.closeDay).not.toHaveBeenCalled();
   });
 
   it.each(closeCalls)('%s refuses a pharmacist', async (_name, run, domain) => {
@@ -276,6 +342,14 @@ describe('Pharmacist template: no day close, counter selling kept', () => {
     await expect(drawerCalls[0][1](caller(pharmacist))).resolves.toBeDefined();
     expect(mocks.openDrawer).toHaveBeenCalledTimes(1);
   });
+
+  it.each(drawerCalls.slice(1))(
+    '%s still refuses a pharmacist (manager or owner only)',
+    async (_name, run, domain) => {
+      await expect(run(caller(pharmacist))).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(domain()).not.toHaveBeenCalled();
+    }
+  );
 
   it('still refuses a cashier opening a drawer', async () => {
     await expect(drawerCalls[0][1](caller(cashier))).rejects.toMatchObject({ code: 'FORBIDDEN' });
