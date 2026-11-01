@@ -21,6 +21,7 @@ const BLOCKED_MUTATIONS = new Set([
   'organizationAdmin.removeRole',
   'organizationAdmin.resetMemberPassword',
   'organizationAdmin.retryDomain',
+  'organizationAdmin.setMemberGoodsInAccess',
   'organizationAdmin.revokeScimToken',
   'organizationAdmin.updateEmail',
   'organizationAdmin.updateMember',

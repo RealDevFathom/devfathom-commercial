@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   userFindFirst: vi.fn(),
+  userFindUnique: vi.fn(),
+  branchAssignmentFindMany: vi.fn(),
   overrideUpsert: vi.fn(),
   overrideDeleteMany: vi.fn(),
   annotateAudit: vi.fn(),
@@ -34,7 +36,8 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { organizationAdminRouter } from './organization-admin';
 
 const db = {
-  user: { findFirst: mocks.userFindFirst },
+  user: { findFirst: mocks.userFindFirst, findUnique: mocks.userFindUnique },
+  pharmacyBranchAssignment: { findMany: mocks.branchAssignmentFindMany },
   userPermissionOverride: {
     upsert: mocks.overrideUpsert,
     deleteMany: mocks.overrideDeleteMany,
@@ -67,6 +70,13 @@ describe('organization member Goods-in access', () => {
     vi.clearAllMocks();
     mocks.overrideUpsert.mockReset();
     mocks.userFindFirst.mockResolvedValue({ id: 'member_a', email: 'member@example.test' });
+    // The granting administrator: tenant ADMIN without a role, organization-wide scope.
+    mocks.userFindUnique.mockResolvedValue({
+      role: 'ADMIN',
+      organizationRole: null,
+      permissionOverrides: [],
+    });
+    mocks.branchAssignmentFindMany.mockResolvedValue([]);
   });
 
   it('persists a canonical procurement denial and reports the audited state', async () => {
@@ -96,8 +106,14 @@ describe('organization member Goods-in access', () => {
       expect.anything(),
       expect.objectContaining({
         targetId: 'member_a',
-        description: 'Removed Goods-in access',
-        metadata: { capability: 'pharmacy:procurement', granted: false },
+        description: 'Removed Goods-in access for member@example.test',
+        metadata: {
+          capability: 'pharmacy:procurement',
+          granted: false,
+          grantedByUserId: 'admin_a',
+          targetUserId: 'member_a',
+          branchScope: 'organization',
+        },
       })
     );
   });
@@ -128,8 +144,16 @@ describe('organization member Goods-in access', () => {
     expect(mocks.annotateAudit).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
-        description: 'Granted Goods-in access',
-        metadata: { capability: 'pharmacy:procurement', granted: true },
+        targetType: 'User',
+        targetId: 'member_a',
+        description: 'Granted Goods-in access for member@example.test',
+        metadata: {
+          capability: 'pharmacy:procurement',
+          granted: true,
+          grantedByUserId: 'admin_a',
+          targetUserId: 'member_a',
+          branchScope: 'organization',
+        },
       })
     );
   });
@@ -283,4 +307,129 @@ describe('organization member Goods-in access', () => {
       expect(mocks.annotateAudit).not.toHaveBeenCalled();
     }
   );
+
+  it('checks the granting administrator procurement permission before granting', async () => {
+    mocks.userFindUnique.mockResolvedValue({
+      role: 'ADMIN',
+      organizationRole: null,
+      permissionOverrides: [{ capability: 'pharmacy:procurement', effect: 'DENY' }],
+    });
+
+    await expect(
+      caller().setMemberGoodsInAccess({ id: 'member_a', granted: true })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+
+    expect(mocks.userFindUnique).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'admin_a' } })
+    );
+    expect(mocks.overrideUpsert).not.toHaveBeenCalled();
+    expect(mocks.annotateAudit).not.toHaveBeenCalled();
+  });
+
+  it('refuses a grant from an administrator whose role lacks procurement', async () => {
+    mocks.userFindUnique.mockResolvedValue({
+      role: 'ADMIN',
+      organizationRole: { permissions: [{ capability: 'reports:operational', effect: 'ALLOW' }] },
+      permissionOverrides: [],
+    });
+
+    await expect(
+      caller().setMemberGoodsInAccess({ id: 'member_a', granted: true })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.overrideUpsert).not.toHaveBeenCalled();
+  });
+
+  it('still lets an administrator without procurement revoke access', async () => {
+    mocks.userFindUnique.mockResolvedValue({
+      role: 'ADMIN',
+      organizationRole: null,
+      permissionOverrides: [{ capability: 'pharmacy:procurement', effect: 'DENY' }],
+    });
+
+    await expect(
+      caller().setMemberGoodsInAccess({ id: 'member_a', granted: false })
+    ).resolves.toEqual({ granted: false });
+    expect(mocks.overrideUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({ update: expect.objectContaining({ effect: 'DENY' }) })
+    );
+  });
+
+  it.each([true, false])(
+    'refuses a branch-scoped administrator changing a member of another branch (granted %s)',
+    async (granted) => {
+      mocks.branchAssignmentFindMany.mockImplementation(async ({ where }) =>
+        where.userId === 'admin_a' ? [{ branchId: 'branch_a' }] : [{ branchId: 'branch_b' }]
+      );
+
+      await expect(
+        caller().setMemberGoodsInAccess({ id: 'member_a', granted })
+      ).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'Member is outside your branch scope.',
+      });
+
+      expect(mocks.branchAssignmentFindMany).toHaveBeenCalledWith({
+        where: {
+          organizationId: 'org_a',
+          userId: 'admin_a',
+          active: true,
+          branch: { active: true },
+        },
+        select: { branchId: true },
+      });
+      expect(mocks.branchAssignmentFindMany).toHaveBeenCalledWith({
+        where: {
+          organizationId: 'org_a',
+          userId: 'member_a',
+          active: true,
+          branch: { active: true },
+        },
+        select: { branchId: true },
+      });
+      expect(mocks.overrideUpsert).not.toHaveBeenCalled();
+      expect(mocks.annotateAudit).not.toHaveBeenCalled();
+    }
+  );
+
+  it('refuses a branch-scoped administrator changing an unassigned member', async () => {
+    mocks.branchAssignmentFindMany.mockImplementation(async ({ where }) =>
+      where.userId === 'admin_a' ? [{ branchId: 'branch_a' }] : []
+    );
+
+    await expect(
+      caller().setMemberGoodsInAccess({ id: 'member_a', granted: true })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.overrideUpsert).not.toHaveBeenCalled();
+  });
+
+  it('lets a branch-scoped administrator grant a member of a shared branch and audits who granted whom', async () => {
+    mocks.branchAssignmentFindMany.mockImplementation(async ({ where }) =>
+      where.userId === 'admin_a'
+        ? [{ branchId: 'branch_a' }, { branchId: 'branch_c' }]
+        : [{ branchId: 'branch_a' }, { branchId: 'branch_b' }]
+    );
+
+    await expect(
+      caller().setMemberGoodsInAccess({ id: 'member_a', granted: true })
+    ).resolves.toEqual({ granted: true });
+
+    expect(mocks.overrideUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({ userId: 'member_a', createdById: 'admin_a' }),
+      })
+    );
+    expect(mocks.annotateAudit).toHaveBeenCalledWith(expect.anything(), {
+      targetType: 'User',
+      targetId: 'member_a',
+      targetLabel: 'member@example.test',
+      description: 'Granted Goods-in access for member@example.test',
+      metadata: {
+        capability: 'pharmacy:procurement',
+        granted: true,
+        grantedByUserId: 'admin_a',
+        targetUserId: 'member_a',
+        branchScope: ['branch_a'],
+      },
+    });
+  });
 });

@@ -171,3 +171,27 @@ describe('organization overview assigned package', () => {
     expect(result.organization.users[0].goodsInAccess).toBe(granted);
   });
 });
+
+describe('organizationAdmin.overview Goods-in admin fallback', () => {
+  it.each([
+    { name: 'admin without a role', role: 'ADMIN', overrides: [], granted: true },
+    {
+      name: 'admin without a role but with a denial',
+      role: 'ADMIN',
+      overrides: [{ capability: 'pharmacy:procurement', effect: 'DENY' }],
+      granted: false,
+    },
+    { name: 'employee without a role', role: 'EMPLOYEE', overrides: [], granted: false },
+  ])('matches receiving authorization for $name', async ({ role, overrides, granted }) => {
+    mocks.organization.mockResolvedValue({
+      id: 'org_a',
+      packageId: null,
+      emailSettings: null,
+      roles: [],
+      users: [{ id: 'member_a', role, organizationRoleId: null, permissionOverrides: overrides }],
+    });
+
+    const result = await caller().overview();
+    expect(result.organization.users[0].goodsInAccess).toBe(granted);
+  });
+});
