@@ -511,7 +511,8 @@ describe('CateringConsole', () => {
     mount();
     select();
     change('Vehicle', 'Keep delivery');
-    change('Product or recipe', 'recipe:recipe_1');
+    expect(screen.queryByRole('option', { name: 'Lunch box' })).not.toBeInTheDocument();
+    change('Recipe', 'recipe_1');
     change('Description', 'Buffet');
     change('Portions', '3.125');
     change('Unit price', '9007199254740993.12');
@@ -521,7 +522,6 @@ describe('CateringConsole', () => {
       expect(mocks.addLine).toHaveBeenCalledWith(
         {
           orderId: 'order_a',
-          productId: null,
           recipeId: 'recipe_1',
           description: 'Buffet',
           portions: '3.125',
@@ -583,7 +583,7 @@ describe('CateringConsole', () => {
       for (const amount of ['9007199254740993.1234', '170.1234', '999.8766'])
         expect(screen.getByText(`${label} ${amount}`)).toBeInTheDocument();
       expect(screen.getByText(`Transport · ${label} 30.1234`)).toBeInTheDocument();
-      expect(screen.getByLabelText('Product or recipe')).toHaveTextContent(
+      expect(screen.getByLabelText('Recipe')).toHaveTextContent(
         `${label} 4.1234/portion`
       );
       expect(

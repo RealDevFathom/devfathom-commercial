@@ -84,6 +84,7 @@ function fixture() {
     }[],
     refunds: [] as { amount: Prisma.Decimal; deliveryFeeRefundAmount: Prisma.Decimal }[],
     unbilled: [] as { id: string }[],
+    unresolvedOrderCount: 0,
   };
   const write = vi.fn(() => {
     throw new Error('Domain write forbidden');
@@ -119,7 +120,11 @@ function fixture() {
     restaurantDailyClose: { findMany: vi.fn(async () => state.closes) },
     insightDailyRollup: { findMany: vi.fn().mockResolvedValue([]) },
     restaurantOrder: {
-      count: vi.fn(async () => state.unbilled.length),
+      count: vi.fn(async (args: Prisma.RestaurantOrderCountArgs) =>
+        typeof args.where?.status === 'object' && args.where.status.in
+          ? state.unresolvedOrderCount
+          : state.unbilled.length
+      ),
       findMany: vi.fn(async () => state.unbilled.slice(0, 100)),
     },
     $transaction: write,
@@ -189,6 +194,41 @@ describe('read-only close preparation', () => {
       },
     ]);
   });
+
+  it.each([true, false])(
+    'blocks financial readiness for active orders with only settled bills (order route permitted: %s)',
+    async (allowOrders) => {
+      const f = fixture();
+      f.state.bills.push(bill());
+      f.state.unresolvedOrderCount = 2;
+      const packet = await f.prepare(input, {
+        ...access,
+        operational: false,
+        allowedRoutes: allowOrders ? ['orders'] : ['bills'],
+      });
+
+      expect(packet.financial.data?.closeGuards).toMatchObject({
+        allBillsResolved: false,
+        openBillCount: 0,
+        unresolvedOrderCount: 2,
+      });
+      expect(packet.financial.status).toBe('BLOCKED');
+      expect(packet.status).toBe('BLOCKED');
+      expect(packet.financial.blockers).toEqual([
+        expect.objectContaining({
+          code: 'ACTIVE_ORDERS',
+          message: '2 active orders prevent the existing daily close. Resolve them before closing.',
+          source: 'src/lib/restaurant/daily-close.ts#assertReadyToClose',
+          responsibleRole: 'SHIFT_MANAGER',
+          recordIds: [],
+          allowedExistingRoutes: allowOrders
+            ? [expect.objectContaining({ procedure: 'restaurantOrders.listOrders' })]
+            : [],
+        }),
+      ]);
+      expect(f.write).not.toHaveBeenCalled();
+    }
+  );
 
   it('preserves null cash counts instead of the preview legacy zero', async () => {
     const f = fixture();
@@ -292,11 +332,17 @@ describe('read-only close preparation', () => {
     expect(packet.unattendedCloseReady).toBe(false);
   });
 
-  it('does not read operational records for a financial-only consumer', async () => {
+  it('reads only the aggregate close guard without operational records for a financial-only consumer', async () => {
     const f = fixture();
     const packet = await f.prepare(input, { ...access, operational: false });
     expect(packet.operational.data).toBeNull();
-    expect(f.db.restaurantOrder.count).not.toHaveBeenCalled();
+    expect(f.db.restaurantOrder.count).toHaveBeenCalledExactlyOnceWith({
+      where: {
+        branchId: input.branchId,
+        businessDate: date,
+        status: { in: ['OPEN', 'SENT', 'IN_PREPARATION', 'READY', 'SERVED', 'PAYMENT_PENDING'] },
+      },
+    });
     expect(f.db.restaurantOrder.findMany).not.toHaveBeenCalled();
     expect(packet.status).toBe('UNKNOWN');
   });
@@ -341,7 +387,9 @@ describe('read-only close preparation', () => {
 
   it('distinguishes unavailable operational reads from an observed zero', async () => {
     const f = fixture();
-    f.db.restaurantOrder.count.mockRejectedValueOnce(new Error('private database details'));
+    f.db.restaurantOrder.count
+      .mockResolvedValueOnce(0) // Financial close guard succeeds before operational evidence.
+      .mockRejectedValueOnce(new Error('private database details'));
     const packet = await f.prepare();
     expect(packet.operational).toMatchObject({
       status: 'UNKNOWN',
@@ -350,6 +398,20 @@ describe('read-only close preparation', () => {
     });
     expect(JSON.stringify(packet)).not.toContain('private database details');
     expect(packet.financial.status).toBe('READY');
+  });
+
+  it('withholds financial readiness when the active-order close guard is unavailable', async () => {
+    const f = fixture();
+    f.db.restaurantOrder.count.mockRejectedValueOnce(new Error('private database details'));
+    const packet = await f.prepare();
+
+    expect(packet.financial).toMatchObject({
+      status: 'UNKNOWN',
+      data: null,
+      missingEvidence: [{ code: 'FINANCIAL_SOURCE_UNAVAILABLE' }],
+    });
+    expect(packet.operational.data?.unbilledOrders.count).toBe(0);
+    expect(JSON.stringify(packet)).not.toContain('private database details');
   });
 
   it('distinguishes unavailable financial reads and missing currency from zero money', async () => {

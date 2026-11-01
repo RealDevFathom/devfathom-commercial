@@ -189,10 +189,93 @@ describe('restaurant inventory cost review contract', () => {
       expect(() => validateGrowthOutput(output, input)).toThrow('hypothesis');
     }
   );
-  it('keeps inventory action unavailable to pharmacy', () => {
+  it('keeps catering action unavailable to pharmacy', () => {
     expect(() =>
-      prepareGrowthInput({ ...facts, actions: [{ ref: 'a1', kind: 'INVENTORY_COST_REVIEW' }] })
+      prepareGrowthInput({ ...facts, actions: [{ ref: 'a1', kind: 'CATERING_REVIEW' }] })
     ).toThrow('pharmacy action');
+  });
+});
+
+describe('pharmacy loyalty and inventory-cost review contract', () => {
+  const pharmacy = (metric: GrowthInput['facts'][number]['metric'], kind: string) =>
+    prepareGrowthInput({
+      ...facts,
+      facts: [...facts.facts, { ...facts.facts[0], ref: 'e2', metric }],
+      actions: [...facts.actions, { ref: 'a2', kind }],
+    });
+  const rec = (hypothesis: string, evidenceRefs = ['e2']) => ({
+    recommendations: [
+      { evidenceRefs, actionRef: 'a2', hypothesis, limitations: ['OBSERVATIONAL'] },
+    ],
+  });
+  it('accepts loyalty review grounded in a loyalty cohort', () => {
+    const input = pharmacy('loyalty_eligible_count', 'LOYALTY_REVIEW');
+    const out = validateGrowthOutput(rec('REVIEW_RETENTION'), input);
+    const card = presentGrowthRecommendation(input, out.recommendations[0]);
+    expect(card.kind).toBe('LOYALTY_REVIEW');
+    expect(card.action).toContain('No recipient selection, points or message changes');
+    expect(card.hypothesis).toContain('loyalty');
+  });
+  it('rejects loyalty review without loyalty evidence', () => {
+    const input = pharmacy('loyalty_eligible_count', 'LOYALTY_REVIEW');
+    expect(() => validateGrowthOutput(rec('REVIEW_RETENTION', ['e1']), input)).toThrow(
+      'Loyalty review requires loyalty cohort evidence'
+    );
+    expect(() => validateGrowthOutput(rec('REVIEW_RETAIL'), input)).toThrow('hypothesis');
+  });
+  it.each(['wastage_minor', 'inventory_value_minor'] as const)(
+    'accepts pharmacy inventory review grounded in %s',
+    (metric) => {
+      const input = pharmacy(metric, 'INVENTORY_COST_REVIEW');
+      const out = validateGrowthOutput(rec('REVIEW_INVENTORY_COST'), input);
+      const card = presentGrowthRecommendation(input, out.recommendations[0]);
+      expect(card.action).toContain('no automatic stock or price changes');
+      expect(card.action).not.toContain('recipe');
+      expect(card.hypothesis).not.toContain('recipe');
+    }
+  );
+  it('rejects pharmacy inventory review grounded only in recipe cost or receipts', () => {
+    const input = pharmacy('recipe_cost_coverage_count', 'INVENTORY_COST_REVIEW');
+    expect(() => validateGrowthOutput(rec('REVIEW_INVENTORY_COST'), input)).toThrow(
+      'write-off or valuation'
+    );
+    expect(() => validateGrowthOutput(rec('REVIEW_INVENTORY_COST', ['e1']), input)).toThrow(
+      'requires inventory'
+    );
+  });
+  it('rejects duplicate pharmacy action kinds', () => {
+    expect(() =>
+      prepareGrowthInput({
+        ...facts,
+        actions: [
+          { ref: 'a1', kind: 'LOYALTY_REVIEW' },
+          { ref: 'a2', kind: 'LOYALTY_REVIEW' },
+        ],
+      })
+    ).toThrow('Duplicate pharmacy action');
+  });
+  it('treats loyalty output without loyalty evidence as invalid, never repaired', async () => {
+    const input = pharmacy('loyalty_eligible_count', 'LOYALTY_REVIEW');
+    mocks.generate.mockResolvedValueOnce({
+      finishReason: 'stop',
+      output: rec('REVIEW_RETENTION', ['e1']),
+    });
+    expect(await generateGrowthRecommendations(input)).toMatchObject({
+      status: 'INVALID',
+      failureCode: 'OUTPUT',
+      output: null,
+    });
+    expect(mocks.generate).toHaveBeenCalledTimes(1);
+  });
+  it('sends pharmacy action constraints without recipe-cost wording', async () => {
+    mocks.generate.mockResolvedValueOnce({ finishReason: 'stop', output: rec('REVIEW_RETENTION') });
+    const r = await generateGrowthRecommendations(
+      pharmacy('loyalty_eligible_count', 'LOYALTY_REVIEW')
+    );
+    expect(r.status).toBe('READY');
+    const prompt = JSON.parse(mocks.generate.mock.calls[0][0].prompt);
+    expect(prompt.constraints.INVENTORY_COST_REVIEW).not.toContain('recipe');
+    expect(prompt.constraints.LOYALTY_REVIEW).toContain('server-owned');
   });
 });
 

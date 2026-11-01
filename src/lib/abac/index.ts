@@ -64,17 +64,24 @@ async function customDecision(
     !ACTIVE_STATUSES.has(user.status)
   )
     return { decision: false, subject, hasOrganizationRole };
+  // Prescription capture is narrower than dispensing. Existing pharmacist
+  // grants remain authoritative for it, including DENYs, without granting
+  // tenant administrators the wider dispensing capability.
+  const matchingActions =
+    action === 'pharmacy:prescriptions' ? [action, 'pharmacy:dispense'] : [action];
   const matchingRules = [
     ...user.permissionOverrides,
     ...(user.organizationRole?.permissions ?? []),
   ].filter((rule) =>
-    capabilityMatches(
-      (action === 'pharmacy:receipt' || action === 'pharmacy:counter') &&
-        rule.capability === action.replace(':', '.')
-        ? action
-        : rule.capability,
-      action,
-      rule.effect === 'DENY' ? 'DENY' : 'ALLOW'
+    matchingActions.some((candidate) =>
+      capabilityMatches(
+        (candidate === 'pharmacy:receipt' || candidate === 'pharmacy:counter') &&
+          rule.capability === candidate.replace(':', '.')
+          ? candidate
+          : rule.capability,
+        candidate,
+        rule.effect === 'DENY' ? 'DENY' : 'ALLOW'
+      )
     )
   );
   if (matchingRules.some((rule) => rule.effect === 'DENY'))

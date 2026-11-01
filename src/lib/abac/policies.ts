@@ -79,6 +79,7 @@ export const ALL_ACTIONS = [
   'pharmacy:procurement',
   'pharmacy:inventory',
   'pharmacy:dispense', // RX-03/04: pharmacist decisions and substitution evidence
+  'pharmacy:prescriptions', // prescription workspace/files: pharmacist or tenant administrator
   'pharmacy:safety', // RX-05: controlled register and incident approval
   'pharmacy:catalogue-review', // MED-06: confirm or reject regulated connector proposals
   'pharmacy:orders', // MKT-03/05: staff acceptance and fulfilment of customer proposals
@@ -269,6 +270,11 @@ export const POLICIES: Record<Action, Policy[]> = {
   // insufficient, and wildcard ALLOW rules cannot opt a user in. Wildcard DENY
   // rules are still resolved by `can()` before this default-deny policy.
   'pharmacy:dispense': [],
+  // Prescription capture is also an administrative records workflow. Unlike
+  // dispensing, tenant administrators may enter it without receiving the
+  // broader pharmacist capability. The ABAC engine aliases dispense rules to
+  // this action so an explicit dispense DENY still vetoes this fallback.
+  'pharmacy:prescriptions': [isAdmin],
   'pharmacy:safety': [],
   'pharmacy:catalogue-review': [],
   'pharmacy:orders': [],

@@ -28,6 +28,7 @@ import {
   MAX_PHARMACY_REPORT_DAYS,
   pharmacyReportCatalog,
   readPharmacyOwnerCommandCentre,
+  validatePharmacyReportFilters,
 } from '@/lib/pharmacy/reports';
 import { nextDigestDueAt, WhatsAppChannel } from '@/lib/pharmacy/owner-digest';
 import {
@@ -44,6 +45,10 @@ import {
 import { readPharmacyBranchComparison } from '@/lib/pharmacy/branch-comparison';
 import { capabilityProcedure, router, type TRPCContext } from '../trpc';
 import { assignedRegisterBranchIds } from '@/lib/pharmacy/controlled-register';
+import {
+  PHARMACY_GROWTH_CATEGORIES,
+  readPharmacyCategoryGrowthReport,
+} from '@/lib/pharmacy/category-growth-report';
 import { annotateAudit } from '@/server/audit';
 
 const safety = capabilityProcedure('pharmacy:safety');
@@ -186,6 +191,44 @@ async function requireOwnerBranch(ctx: TRPCContext, branchId: string) {
 }
 
 export const pharmacyReportsRouter = router({
+  categoryGrowth: reports
+    .input(
+      filters
+        .pick({ branchId: true, from: true, to: true })
+        .extend({
+          configuration: z
+            .array(
+              z
+                .object({
+                  category: z.enum(PHARMACY_GROWTH_CATEGORIES),
+                  displaySpaceSquareMetres: z.number().positive().nullable(),
+                  targetSalesSharePercent: z.number().min(0).max(100).nullable(),
+                })
+                .strict()
+            )
+            .max(PHARMACY_GROWTH_CATEGORIES.length),
+        })
+        .strict()
+    )
+    .query(async ({ ctx, input }) => {
+      const scoped = await ownerFilters(ctx, input);
+      let period: ReturnType<typeof validatePharmacyReportFilters>;
+      try {
+        period = validatePharmacyReportFilters(scoped);
+      } catch (error) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: error instanceof Error ? error.message : 'Invalid category growth report dates.',
+        });
+      }
+      return readPharmacyCategoryGrowthReport(ctx.db, ctx.entitlements.organizationId, {
+        branchIds: scoped.branchIds,
+        from: input.from,
+        // Public report filters are inclusive; the evidence reader uses an exclusive cutoff.
+        to: period.to.toISOString().slice(0, 10),
+        configuration: input.configuration,
+      });
+    }),
   marketing: reports
     .input(filters.pick({ branchId: true, from: true, to: true }))
     .query(async ({ ctx, input }) => {

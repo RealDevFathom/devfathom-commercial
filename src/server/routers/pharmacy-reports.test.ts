@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fetchRequestHandler } from '@trpc/server/adapters/fetch';
 
 const mocks = vi.hoisted(() => ({
+  raw: vi.fn().mockResolvedValue([]),
   repeatRead: vi.fn().mockResolvedValue({ horizons: [] }),
   can: vi.fn<typeof import('@/lib/abac').can>(async () => false),
   branchFindMany: vi.fn(),
@@ -94,6 +95,7 @@ import { pharmacyReportsRouter } from './pharmacy-reports';
 function context(role = 'ADMIN') {
   return {
     db: {
+      $queryRaw: mocks.raw,
       $transaction: (fn: (db: unknown) => unknown) => mocks.transaction(fn, role),
       user: {
         findUnique: vi.fn().mockResolvedValue({
@@ -1082,4 +1084,48 @@ describe('PV approval evidence', () => {
     expect(mocks.reportUpdateManyAndReturn).not.toHaveBeenCalled();
     expect(JSON.stringify(mocks.auditCreate.mock.calls)).not.toContain('123456');
   });
+});
+
+describe('category growth report input boundaries', () => {
+  const input = { from: '2026-02-01', to: '2026-02-01', configuration: [] };
+  beforeEach(() => {
+    mocks.can.mockResolvedValue(true);
+    vi.mocked(hasModule).mockReturnValue(true);
+    mocks.branchFindMany.mockResolvedValue([{ id: 'branch_1', name: 'Main' }]);
+    mocks.raw.mockResolvedValue([]);
+  });
+
+  it.each([
+    { from: '2026-02-30', to: '2026-03-04' },
+    { to: '2026-02-30' },
+    { to: '2026-13-01' },
+    { from: '2026-02-02' },
+    { to: '2026-05-02' }, // 91 inclusive days.
+    { from: '2000-01-01', to: '2026-10-08' },
+  ])('rejects invalid public dates with BAD_REQUEST before SQL: %j', async (overrides) => {
+    await expect(caller().categoryGrowth({ ...input, ...overrides })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(mocks.raw).not.toHaveBeenCalled();
+  });
+
+  it('rejects more than 100 authorized branches before SQL', async () => {
+    mocks.branchFindMany.mockResolvedValue(
+      Array.from({ length: 101 }, (_, i) => ({ id: `b${i}`, name: `Branch ${i}` }))
+    );
+    await expect(caller().categoryGrowth(input)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mocks.raw).not.toHaveBeenCalled();
+  });
+
+  it.each(['2026-02-01', '2026-05-01'])(
+    'accepts an inclusive range ending %s and converts the cutoff once',
+    async (to) => {
+      await caller().categoryGrowth({ ...input, to });
+      const query = mocks.raw.mock.calls[0][0];
+      expect(query.values.slice(-2)).toEqual([
+        new Date('2026-02-01T00:00:00.000Z'),
+        new Date(new Date(`${to}T00:00:00.000Z`).getTime() + 86_400_000),
+      ]);
+    }
+  );
 });

@@ -20,6 +20,7 @@ import { emailSchema } from '@/lib/email-address';
 import { assertInOrganization, workspaceId } from '../org-refs';
 import { passwordSchema } from '@/lib/password-policy';
 import { generateInviteToken } from '@/lib/invite-token';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 // IMP-AUTH-04: per-category × per-channel notification opt-outs. Sparse —
 // anything unset means "opted in" (notify() defaults to ON). Keys mirror
@@ -44,8 +45,64 @@ const notificationPrefsSchema = z
 // "LEADERSHIP" → "Leadership", "ADMIN" → "Admin". Acronym roles stay upper-case.
 const titleCase = (s: string) => (s === 'HR' ? 'HR' : s.charAt(0) + s.slice(1).toLowerCase());
 
+// #424: the organization row lock serializes admin-roster changes across
+// requests, but a batched tRPC request runs every mutation concurrently inside
+// ONE shared transaction (nested `$transaction` reuses it). Postgres row locks
+// are re-entrant for their owning transaction, so sibling mutations in a batch
+// would all pass the lock and could each count the same admins before either
+// write lands. Chain the full lock -> check -> write section per transaction
+// handle so siblings in one batch run it one at a time.
+const adminRosterQueues = new WeakMap<object, Promise<unknown>>();
+
+function withAdminRosterLock<T>(
+  db: ScopedDb,
+  organizationId: string,
+  lock: boolean,
+  run: (tx: Prisma.TransactionClient) => Promise<T>
+): Promise<T> {
+  const operation = () =>
+    db.$transaction(async (tx) => {
+      if (lock) {
+        await tx.$queryRaw`SELECT "id" FROM "organizations" WHERE "id" = ${organizationId} FOR UPDATE`;
+      }
+      return run(tx);
+    });
+  const prior = adminRosterQueues.get(db) ?? Promise.resolve();
+  const result = prior.then(operation, operation);
+  adminRosterQueues.set(
+    db,
+    result.then(
+      () => undefined,
+      () => undefined
+    )
+  );
+  return result;
+}
+
 // How long an invitation link stays valid.
 const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const OCCUPIED_SEAT_STATUSES = ['ACTIVE', 'ON_LEAVE', 'INVITED'] as const;
+
+// HTTP batch mutations share a transaction. PostgreSQL row locks do not
+// serialize callers inside that same transaction, so queue the entire invite
+// operation as well as locking the organization against other transactions.
+const inviteQueues = new WeakMap<Prisma.TransactionClient, Promise<void>>();
+
+async function serializeInvite<T>(tx: Prisma.TransactionClient, run: () => Promise<T>): Promise<T> {
+  const previous = inviteQueues.get(tx) ?? Promise.resolve();
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  inviteQueues.set(tx, pending);
+  await previous;
+  try {
+    return await run();
+  } finally {
+    release();
+    if (inviteQueues.get(tx) === pending) inviteQueues.delete(tx);
+  }
+}
 
 // IMP-HR-01: the leave types we track balances for (mirrors the LeaveType enum).
 const LEAVE_TYPES = ['VACATION', 'SICK', 'REMOTE'] as const;
@@ -174,21 +231,6 @@ export const teamRouter = router({
       if (input.organizationRoleId && !organizationRole) {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invalid role template.' });
       }
-      const existing = await ctx.db.user.findFirst({
-        where: { email },
-        select: { id: true, status: true },
-      });
-      // Only a still-pending invite may be re-sent; an active/real account blocks.
-      if (existing && existing.status !== 'INVITED') {
-        throw new TRPCError({ code: 'CONFLICT', message: 'A user with this email already exists' });
-      }
-      if (!existing && ctx.entitlements.activeSeats >= ctx.entitlements.seatLimit) {
-        throw new TRPCError({
-          code: 'FORBIDDEN',
-          message: `Seat limit reached (${ctx.entitlements.activeSeats}/${ctx.entitlements.seatLimit}). Increase the organization license before inviting another member.`,
-        });
-      }
-
       const { token, tokenHash } = generateInviteToken();
       const expiresAt = new Date(Date.now() + INVITE_TTL_MS);
       const profile = {
@@ -202,32 +244,62 @@ export const teamRouter = router({
         skills: input.skills,
       };
 
-      const user = await ctx.db.$transaction(async (tx) => {
-        // Upsert the user (re-invite refreshes the seeded details), then replace
-        // any prior invitation with a fresh single-use token.
-        const u = existing
-          ? await tx.user.update({
-              where: { id: existing.id },
-              data: { ...profile, password: null, status: 'INVITED' },
-            })
-          : await tx.user.create({
-              data: { ...profile, email, password: null, status: 'INVITED' },
+      const user = await ctx.db.$transaction((tx) =>
+        serializeInvite(tx, async () => {
+          const organizationId = workspaceId(ctx);
+          // Serialize all seat-consuming writes for this organization. The count
+          // must happen after taking the lock so a concurrent invite that just
+          // committed is included before this transaction decides to create.
+          await tx.$queryRaw`SELECT "id" FROM "organizations" WHERE "id" = ${organizationId} FOR UPDATE`;
+          const existing = await tx.user.findFirst({
+            where: { email },
+            select: { id: true, status: true },
+          });
+          // Only a still-pending invite may be re-sent; an active/real account blocks.
+          if (existing && existing.status !== 'INVITED') {
+            throw new TRPCError({
+              code: 'CONFLICT',
+              message: 'A user with this email already exists',
             });
+          }
+          if (!existing) {
+            const occupiedSeats = await tx.user.count({
+              where: { status: { in: [...OCCUPIED_SEAT_STATUSES] } },
+            });
+            if (occupiedSeats >= ctx.entitlements.seatLimit) {
+              throw new TRPCError({
+                code: 'FORBIDDEN',
+                message: `Seat limit reached (${occupiedSeats}/${ctx.entitlements.seatLimit}). Increase the organization license before inviting another member.`,
+              });
+            }
+          }
 
-        await tx.invitation.upsert({
-          where: { userId: u.id },
-          create: {
-            userId: u.id,
-            email,
-            tokenHash,
-            invitedById: ctx.session.user.id,
-            expiresAt,
-          },
-          update: { tokenHash, expiresAt, acceptedAt: null, invitedById: ctx.session.user.id },
-        });
+          // Upsert the user (re-invite refreshes the seeded details), then replace
+          // any prior invitation with a fresh single-use token.
+          const u = existing
+            ? await tx.user.update({
+                where: { id: existing.id },
+                data: { ...profile, password: null, status: 'INVITED' },
+              })
+            : await tx.user.create({
+                data: { ...profile, email, password: null, status: 'INVITED' },
+              });
 
-        return u;
-      });
+          await tx.invitation.upsert({
+            where: { userId: u.id },
+            create: {
+              userId: u.id,
+              email,
+              tokenHash,
+              invitedById: ctx.session.user.id,
+              expiresAt,
+            },
+            update: { tokenHash, expiresAt, acceptedAt: null, invitedById: ctx.session.user.id },
+          });
+
+          return u;
+        })
+      );
 
       const inviteUrl = `${appUrl()}/invite/${token}`;
 
@@ -508,8 +580,9 @@ export const teamRouter = router({
       // (a) decide your OWN leave, or (b) re-decide anything not still PENDING —
       // mirroring the resignation:review flow. The coarse leave:approve capability
       // alone carried no owner/state conditions.
-      const existing = await ctx.db.leaveRequest.findUnique({
-        where: { id: input.id },
+      const organizationId = ctx.entitlements.organizationId;
+      const existing = await ctx.db.leaveRequest.findFirst({
+        where: { id: input.id, organizationId },
         select: { userId: true, status: true },
       });
       if (!existing) throw new TRPCError({ code: 'NOT_FOUND', message: 'Leave request not found' });
@@ -521,14 +594,27 @@ export const teamRouter = router({
       }
       if (existing.status !== 'PENDING') {
         throw new TRPCError({
-          code: 'BAD_REQUEST',
+          // A contender may first observe the row only after the winning
+          // decision commits. Report the same conflict as a lost CAS rather
+          // than making the result depend on request scheduling.
+          code: 'CONFLICT',
           message: 'This leave request has already been decided.',
         });
       }
 
-      const leave = await ctx.db.leaveRequest.update({
-        where: { id: input.id },
-        data: { status: input.status, approvedById: ctx.session.user.id },
+      const leave = await ctx.db.$transaction(async (tx) => {
+        const transitioned = await tx.leaveRequest.updateMany({
+          where: { id: input.id, organizationId, status: 'PENDING' },
+          data: { status: input.status, approvedById: ctx.session.user.id },
+        });
+        if (transitioned.count === 0) {
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: 'This leave request has already been decided.',
+          });
+        }
+
+        return tx.leaveRequest.findFirstOrThrow({ where: { id: input.id, organizationId } });
       });
 
       // Let the requester know the decision.
@@ -840,53 +926,64 @@ export const teamRouter = router({
         'skills',
         'status',
       ] as const;
-      const before = await ctx.db.user.findUnique({
-        where: { id },
-        select: Object.fromEntries(auditFields.map((f) => [f, true])) as Record<
-          (typeof auditFields)[number],
-          true
-        >,
-      });
-
-      // AUTHZ-02: never strand the workspace without an admin. Block demoting or
-      // deactivating the LAST active admin (mirrors the layOffMember guard) — the
-      // sole remaining admin could otherwise lock everyone out by editing self.
       const demoting = input.role !== undefined && input.role !== 'ADMIN';
       const deactivating = input.status !== undefined && input.status !== 'ACTIVE';
-      if ((before as { role?: string } | null)?.role === 'ADMIN' && (demoting || deactivating)) {
-        const otherActiveAdmins = await ctx.db.user.count({
-          where: { id: { not: id }, role: 'ADMIN', status: 'ACTIVE' },
-        });
-        if (otherActiveAdmins === 0) {
-          throw new TRPCError({
-            code: 'BAD_REQUEST',
-            message: 'Cannot demote or deactivate the last active admin.',
+      const organizationId = workspaceId(ctx);
+      // Coordinate promotions/reactivations as well as removals. Read the
+      // target only after locking so a stale role/status cannot skip the guard.
+      const rosterChange = input.role !== undefined || input.status !== undefined;
+      const { before, updated } = await withAdminRosterLock(
+        ctx.db,
+        organizationId,
+        rosterChange,
+        async (tx) => {
+          const before = await tx.user.findUnique({
+            where: { id },
+            select: Object.fromEntries(auditFields.map((f) => [f, true])) as Record<
+              (typeof auditFields)[number],
+              true
+            >,
           });
+          if (
+            before?.role === 'ADMIN' &&
+            before.status === 'ACTIVE' &&
+            (demoting || deactivating)
+          ) {
+            const activeAdmins = await tx.user.count({
+              where: { organizationId, role: 'ADMIN', status: 'ACTIVE' },
+            });
+            if (activeAdmins <= 1) {
+              throw new TRPCError({
+                code: 'BAD_REQUEST',
+                message: 'Cannot demote or deactivate the last active admin.',
+              });
+            }
+          }
+          // Return only the member profile needed by callers. Prisma returns every
+          // scalar column when `select` is omitted, which would expose credential
+          // and session fields (including the bcrypt password hash) over tRPC.
+          const updated = await tx.user.update({
+            where: { id },
+            data,
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              role: true,
+              department: true,
+              title: true,
+              avatar: true,
+              phone: true,
+              bio: true,
+              skills: true,
+              startDate: true,
+              status: true,
+              lastActiveAt: true,
+            },
+          });
+          return { before, updated };
         }
-      }
-
-      // Return only the member profile needed by callers. Prisma returns every
-      // scalar column when `select` is omitted, which would expose credential
-      // and session fields (including the bcrypt password hash) over tRPC.
-      const updated = await ctx.db.user.update({
-        where: { id },
-        data,
-        select: {
-          id: true,
-          name: true,
-          email: true,
-          role: true,
-          department: true,
-          title: true,
-          avatar: true,
-          phone: true,
-          bio: true,
-          skills: true,
-          startDate: true,
-          status: true,
-          lastActiveAt: true,
-        },
-      });
+      );
       annotateAudit(ctx, {
         targetType: 'User',
         targetId: id,
@@ -943,51 +1040,57 @@ export const teamRouter = router({
       if (input.id === ctx.session.user.id) {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'You cannot lay off yourself' });
       }
-      const before = await ctx.db.user.findUnique({
-        where: { id: input.id },
-        select: { status: true, name: true, email: true, role: true },
-      });
-      if (!before) {
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'Member not found' });
-      }
-      // ABAC: admins may lay off anyone; HR may lay off non-admins only. The
-      // coarse hrProcedure gate already required ADMIN/HR; this resource-level
-      // check enforces the "HR can't terminate an admin" attribute condition.
-      const subject = subjectFromSession(ctx.session.user);
-      if (
-        !(await can(
-          subject,
-          'team:layoff',
-          { type: 'User', targetRole: before.role },
-          { source: 'TRPC', db: ctx.db }
-        ))
-      ) {
-        throw new TRPCError({
-          code: 'FORBIDDEN',
-          message: 'You do not have permission to lay off this member.',
-        });
-      }
-      // Never strand the workspace without an admin: if the target is the last
-      // active ADMIN, block the lay-off.
-      if (before.role === 'ADMIN') {
-        const otherActiveAdmins = await ctx.db.user.count({
-          where: { id: { not: input.id }, role: 'ADMIN', status: 'ACTIVE' },
-        });
-        if (otherActiveAdmins === 0) {
-          throw new TRPCError({
-            code: 'BAD_REQUEST',
-            message: 'You cannot lay off the last active admin',
-          });
-        }
-      }
       const reason = input.reason.trim();
       // AUTH-01: revoke the laid-off member's live sessions immediately (the
       // status flip already blocks new auth; bumping tokenVersion cuts off any
       // already-issued JWT on its next revalidation rather than at token expiry).
-      const updated = await ctx.db.user.update({
-        where: { id: input.id },
-        data: { status: 'INACTIVE', tokenVersion: { increment: 1 } },
-      });
+      const organizationId = workspaceId(ctx);
+      const { before, updated } = await withAdminRosterLock(
+        ctx.db,
+        organizationId,
+        true,
+        async (tx) => {
+          const before = await tx.user.findUnique({
+            where: { id: input.id },
+            select: { status: true, name: true, email: true, role: true },
+          });
+          if (!before) {
+            throw new TRPCError({ code: 'NOT_FOUND', message: 'Member not found' });
+          }
+          // Check the current role under the same lock as role changes: HR may
+          // lay off non-admins only, including after a concurrent promotion.
+          const subject = subjectFromSession(ctx.session.user);
+          if (
+            !(await can(
+              subject,
+              'team:layoff',
+              { type: 'User', targetRole: before.role },
+              { source: 'TRPC', db: tx }
+            ))
+          ) {
+            throw new TRPCError({
+              code: 'FORBIDDEN',
+              message: 'You do not have permission to lay off this member.',
+            });
+          }
+          if (before.role === 'ADMIN' && before.status === 'ACTIVE') {
+            const activeAdmins = await tx.user.count({
+              where: { organizationId, role: 'ADMIN', status: 'ACTIVE' },
+            });
+            if (activeAdmins <= 1) {
+              throw new TRPCError({
+                code: 'BAD_REQUEST',
+                message: 'You cannot lay off the last active admin',
+              });
+            }
+          }
+          const updated = await tx.user.update({
+            where: { id: input.id },
+            data: { status: 'INACTIVE', tokenVersion: { increment: 1 } },
+          });
+          return { before, updated };
+        }
+      );
       annotateAudit(ctx, {
         targetType: 'User',
         targetId: input.id,

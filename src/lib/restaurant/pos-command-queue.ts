@@ -100,7 +100,12 @@ export type PosQueuedCommand =
 export type PosDraftStatus = 'QUEUED' | 'REPLAYING' | 'NEEDS_REVIEW' | 'QUARANTINED' | 'COMPLETED';
 
 export type PosDraftReviewReason =
-  'CATALOG_CONFLICT' | 'PRICE_CHANGED' | 'ITEM_UNAVAILABLE' | 'CHANNEL_CLOSED' | 'REJECTED';
+  | 'CATALOG_CONFLICT'
+  | 'PRICE_CHANGED'
+  | 'ITEM_UNAVAILABLE'
+  | 'CHANNEL_CLOSED'
+  | 'COMPOSER_UNVERIFIED'
+  | 'REJECTED';
 
 export type PosDraftReview = {
   reason: PosDraftReviewReason;
@@ -113,6 +118,10 @@ export type PosQueuedDraft = {
   draftId: string;
   /** The device that composed it. Replay is refused on any other device. */
   deviceId: string;
+  /** The staff profile that composed it. Replay is refused for another operator. */
+  composerStaffProfileId: string;
+  /** Server-signed binding of composer, tenant, branch, device, and terminal session. */
+  composerProof: string;
   /** Per-device monotonic FIFO position. Never derived from a clock. */
   sequence: number;
   /** Client-origin UTC instant, metadata only. */
@@ -156,6 +165,8 @@ export function countQueuedCommands(snapshot: PosQueueSnapshot): number {
 
 export type PosDraftInput = {
   deviceId: string;
+  composerStaffProfileId: string;
+  composerProof: string;
   catalogVersion: string;
   /** Client-origin UTC instant, metadata only. */
   clientOriginAt: string;
@@ -247,6 +258,8 @@ export function enqueueDraft(
   const draft: PosQueuedDraft = {
     draftId: newId(),
     deviceId: input.deviceId,
+    composerStaffProfileId: input.composerStaffProfileId,
+    composerProof: input.composerProof,
     sequence: snapshot.nextSequence,
     clientOriginAt: input.clientOriginAt,
     catalogVersion: input.catalogVersion,
@@ -274,7 +287,13 @@ export type NextReplay =
   | { status: 'IDLE' }
   | { status: 'PAUSED'; reason: 'REAUTH' }
   | { status: 'STOPPED'; reason: 'DEVICE_REVOKED' }
-  | { status: 'REFUSED'; reason: 'DEVICE_MISMATCH' };
+  | { status: 'REFUSED'; reason: 'DEVICE_MISMATCH' }
+  | {
+      status: 'REFUSED';
+      reason: 'OPERATOR_MISMATCH';
+      /** Composers whose drafts wait for their own sign-in; null = legacy, no composer. */
+      composerStaffProfileIds: Array<string | null>;
+    };
 
 const REPLAYABLE: readonly PosDraftStatus[] = ['QUEUED', 'REPLAYING'];
 
@@ -293,7 +312,11 @@ export function firstUnacknowledged(draft: PosQueuedDraft): PosQueuedCommand | n
  * `deviceId` is the device replay is being attempted on: a mismatch refuses, so
  * queued work is never rebound to a replacement device (M9 §3.5).
  */
-export function nextReplayCommand(snapshot: PosQueueSnapshot, deviceId: string): NextReplay {
+export function nextReplayCommand(
+  snapshot: PosQueueSnapshot,
+  deviceId: string,
+  staffProfileId: string
+): NextReplay {
   if (deviceId !== snapshot.deviceId) return { status: 'REFUSED', reason: 'DEVICE_MISMATCH' };
   if (snapshot.replay === 'STOPPED_REVOKED') {
     return { status: 'STOPPED', reason: 'DEVICE_REVOKED' };
@@ -304,11 +327,57 @@ export function nextReplayCommand(snapshot: PosQueueSnapshot, deviceId: string):
     .filter((draft) => REPLAYABLE.includes(draft.status) && draft.deviceId === deviceId)
     .sort((a, b) => a.sequence - b.sequence);
 
+  const waitingComposers = new Set<string | null>();
   for (const draft of candidates) {
+    // Another operator's draft is set aside, not adopted and not blocking: replaying
+    // it as the current operator would recreate the attribution flaw, while holding
+    // the current operator's own later drafts behind it strands them at a handover.
+    // Persisted legacy drafts have no composer and are likewise never adoptable.
+    if (draft.composerStaffProfileId !== staffProfileId) {
+      waitingComposers.add(draft.composerStaffProfileId ?? null);
+      continue;
+    }
     const command = firstUnacknowledged(draft);
     if (command) return { status: 'READY', draft, command };
   }
+  if (waitingComposers.size > 0) {
+    return {
+      status: 'REFUSED',
+      reason: 'OPERATOR_MISMATCH',
+      composerStaffProfileIds: [...waitingComposers],
+    };
+  }
   return { status: 'IDLE' };
+}
+
+const COMPOSER_PROOF_RENEWAL_MARGIN_MS = 5 * 60 * 1000;
+
+/**
+ * Whether a queued composer proof must be renewed before replay: it is bound to
+ * another terminal session, expires within the margin, or cannot be read. This
+ * reads the unsigned claims only to avoid needless renewal round-trips; the
+ * server still verifies the signature on every command.
+ */
+export function composerProofNeedsRenewal(
+  proof: string,
+  sessionId: string,
+  nowMs: number
+): boolean {
+  try {
+    const payload = proof.split('.')[1];
+    if (!payload) return true;
+    const claims = JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/'))) as {
+      sessionId?: unknown;
+      expiresAt?: unknown;
+    };
+    return (
+      claims.sessionId !== sessionId ||
+      typeof claims.expiresAt !== 'number' ||
+      claims.expiresAt - COMPOSER_PROOF_RENEWAL_MARGIN_MS <= nowMs
+    );
+  } catch {
+    return true;
+  }
 }
 
 // ── Request construction (reuses the M4 routes; no bulk API) ─────────────────
@@ -316,7 +385,7 @@ export function nextReplayCommand(snapshot: PosQueueSnapshot, deviceId: string):
 export type PosReplayRequest = {
   path: string;
   method: 'POST';
-  headers: { 'Idempotency-Key': string };
+  headers: { 'Idempotency-Key': string; 'X-POS-Composer-Proof': string };
   body: Record<string, unknown>;
 };
 
@@ -341,7 +410,10 @@ export function buildReplayRequest(
   draft: PosQueuedDraft,
   command: PosQueuedCommand
 ): BuildReplayRequestResult {
-  const headers = { 'Idempotency-Key': command.idempotencyKey } as const;
+  const headers = {
+    'Idempotency-Key': command.idempotencyKey,
+    'X-POS-Composer-Proof': draft.composerProof,
+  } as const;
 
   if (command.kind === 'OPEN_ORDER') {
     return {
@@ -649,6 +721,12 @@ export function resolveReviewedDraft(
   if (decision === 'DISCARD') {
     return { ...snapshot, drafts: snapshot.drafts.filter((d) => d.draftId !== draftId) };
   }
+  // A review cannot establish authorship for work saved before composer proofs.
+  if (
+    snapshot.drafts.find((draft) => draft.draftId === draftId)?.review?.reason ===
+    'COMPOSER_UNVERIFIED'
+  )
+    return snapshot;
   return mapDraft(snapshot, draftId, (draft) => ({
     ...draft,
     status: 'QUEUED',

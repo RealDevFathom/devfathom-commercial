@@ -36,13 +36,15 @@ async function open(request: TerminalRequest = mockRequest(async () => ({ tender
 }
 
 describe('RefundPanel', () => {
-  it('uses human labels, excludes self-approval, validates over-refunds, and previews explicitly', async () => {
+  it('defaults both balances, uses human labels, excludes self-approval, validates over-refunds, and previews explicitly', async () => {
     await open();
     expect(screen.queryByText('tender-hidden')).not.toBeInTheDocument();
     expect(screen.queryByRole('option', { name: /Amina/ })).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Settled receipt'), {
       target: { value: tender.tenderId },
     });
+    expect(screen.getByLabelText('Refund amount')).toHaveValue('20.00');
+    expect(screen.getByLabelText('Tip refund')).toHaveValue('2.00');
     fireEvent.change(screen.getByLabelText('Refund amount'), { target: { value: '20.01' } });
     fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Guest complaint' } });
     fireEvent.change(screen.getByLabelText('Approving manager'), { target: { value: 'manager' } });
@@ -53,6 +55,72 @@ describe('RefundPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Review refund' }));
     expect(screen.getByRole('heading', { name: 'Confirm destructive refund' })).toBeVisible();
     expect(screen.getByRole('button', { name: 'Confirm refund' })).toBeVisible();
+  });
+
+  it('allows a tip-only refund when the principal is exhausted', async () => {
+    const tipOnly = { ...tender, refundedAmount: '24.00', remainingAmount: '0.00' };
+    const request = mockRequest(async (_path, options) =>
+      options?.method === 'POST'
+        ? {
+            amount: '0.00',
+            tipRefundAmount: '2.00',
+            businessDate: '2026-08-30',
+            paymentStatus: 'REFUNDED',
+            taxRefundAmount: '0.00',
+            serviceChargeRefundAmount: '0.00',
+            replayed: false,
+          }
+        : { tenders: [tipOnly] }
+    );
+    await open(request);
+    fireEvent.change(screen.getByLabelText('Settled receipt'), {
+      target: { value: tipOnly.tenderId },
+    });
+    expect(screen.getByLabelText('Refund amount')).toHaveValue('0.00');
+    expect(screen.getByLabelText('Tip refund')).toHaveValue('2.00');
+    fireEvent.change(screen.getByLabelText('Reason'), {
+      target: { value: 'Return remaining tip' },
+    });
+    fireEvent.change(screen.getByLabelText('Approving manager'), { target: { value: 'manager' } });
+    fireEvent.change(screen.getByLabelText('Manager PIN'), { target: { value: '1234' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Review refund' }));
+    expect(screen.getByRole('heading', { name: 'Confirm destructive refund' })).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm refund' }));
+    await screen.findByText('refund recorded');
+    const submission = vi
+      .mocked(request)
+      .mock.calls.find(([, options]) => options?.method === 'POST');
+    expect(submission?.[1]?.body).toEqual({
+      originalTenderId: tipOnly.tenderId,
+      amount: '0.00',
+      tipRefundAmount: '2.00',
+      reason: 'Return remaining tip',
+      approving: { staffProfileId: 'manager', type: 'PIN', secret: '1234' },
+    });
+  });
+
+  it('rejects a refund when both principal and tip are zero', async () => {
+    const request = await open();
+    fireEvent.change(screen.getByLabelText('Settled receipt'), {
+      target: { value: tender.tenderId },
+    });
+    fireEvent.change(screen.getByLabelText('Refund amount'), { target: { value: '0.00' } });
+    fireEvent.change(screen.getByLabelText('Tip refund'), { target: { value: '0.00' } });
+    fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'No value selected' } });
+    fireEvent.change(screen.getByLabelText('Approving manager'), { target: { value: 'manager' } });
+    fireEvent.change(screen.getByLabelText('Manager PIN'), { target: { value: '1234' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Review refund' }));
+
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Enter a principal or tip amount to refund.'
+    );
+    expect(
+      screen.queryByRole('heading', { name: 'Confirm destructive refund' })
+    ).not.toBeInTheDocument();
+    expect(vi.mocked(request).mock.calls.some(([, options]) => options?.method === 'POST')).toBe(
+      false
+    );
   });
 
   it('submits one terminal refund and renders the durable server-authored tax receipt', async () => {
@@ -141,6 +209,7 @@ describe('RefundPanel', () => {
     expect(submission?.[1]?.body).toEqual({
       originalTenderId: tender.tenderId,
       amount: '20.00',
+      tipRefundAmount: '2.00',
       reason: 'Demo walkthrough',
       approving: { staffProfileId: 'manager', type: 'DEMO' },
     });

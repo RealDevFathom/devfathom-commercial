@@ -1,4 +1,4 @@
-import { cleanup, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -7,7 +7,11 @@ const mocks = vi.hoisted(() => ({
   caller: vi.fn(),
   module: vi.fn(),
   form: vi.fn(),
+  writeOff: vi.fn(),
+  release: vi.fn(),
+  redirect: vi.fn(),
 }));
+vi.mock('next/navigation', () => ({ redirect: mocks.redirect }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: mocks.actor }));
 vi.mock('@/server/trpc', () => ({ createTRPCContext: mocks.context }));
 vi.mock('@/lib/entitlements', () => ({ hasModule: mocks.module }));
@@ -102,9 +106,115 @@ beforeEach(() => {
   mocks.caller.mockReturnValue({
     nearExpiryBoard: nearExpiry,
     temperatureZoneStatuses: vi.fn().mockResolvedValue([]),
+    writeOff: mocks.writeOff,
+    releaseQuarantinedPart: mocks.release,
   });
+  mocks.writeOff.mockResolvedValue({});
+  mocks.release.mockResolvedValue({});
   nearExpiry.mockResolvedValue([]);
   lots.mockResolvedValue([lot]);
+});
+
+describe('Quarantine resolution forms', () => {
+  it.each(['AVAILABLE', 'QUARANTINE'])(
+    'submits the selected %s position with write-off custody evidence',
+    async (disposition) => {
+      lots.mockResolvedValue([{ ...lot, balances: [{ ...available, disposition }] }]);
+      ctx.db.user.findMany.mockResolvedValue([
+        { id: 'witness', name: 'Witness', title: 'Pharmacist' },
+      ]);
+      await show();
+      const form = screen.getByRole('button', { name: 'Record write-off' }).closest('form')!;
+      expect(within(form).getByRole('combobox', { name: 'Lot' })).toHaveValue(
+        `${lot.id}:${location.id}:${disposition}`
+      );
+      fireEvent.change(within(form).getByLabelText('Units'), { target: { value: '10' } });
+      fireEvent.change(within(form).getByLabelText('Evidence reference'), {
+        target: { value: 'certificate-1' },
+      });
+      fireEvent.change(within(form).getByLabelText('Reason'), {
+        target: { value: 'Damaged stock' },
+      });
+      fireEvent.submit(form);
+      await waitFor(() =>
+        expect(mocks.writeOff).toHaveBeenCalledExactlyOnceWith({
+          branchId: branch.id,
+          inventoryLotId: lot.id,
+          stockLocationId: location.id,
+          disposition,
+          units: 10,
+          witnessId: 'witness',
+          reason: 'Damaged stock',
+          evidenceRef: 'certificate-1',
+          idempotencyKey: expect.stringMatching(/^ui-writeoff:/),
+        })
+      );
+      await waitFor(() => expect(mocks.redirect).toHaveBeenCalled());
+    }
+  );
+
+  it('submits a manual hold release even when no available stock remains', async () => {
+    lots.mockResolvedValue([{ ...lot, balances: [{ ...available, disposition: 'QUARANTINE' }] }]);
+    await show();
+    const form = screen.getByRole('button', { name: 'Release manual hold' }).closest('form')!;
+    fireEvent.change(within(form).getByLabelText('Units'), { target: { value: '10' } });
+    fireEvent.change(within(form).getByLabelText('Clearance reason'), {
+      target: { value: 'Inspection passed' },
+    });
+    fireEvent.submit(form);
+    await waitFor(() =>
+      expect(mocks.release).toHaveBeenCalledExactlyOnceWith({
+        branchId: branch.id,
+        inventoryLotId: lot.id,
+        stockLocationId: location.id,
+        units: 10,
+        reason: 'Inspection passed',
+        idempotencyKeyPrefix: expect.stringMatching(/^ui-quarantine-release:/),
+      })
+    );
+    await waitFor(() => expect(mocks.redirect).toHaveBeenCalled());
+  });
+
+  it.each(['RECALLED', 'QUARANTINED'])('hides manual release for a %s batch', async (state) => {
+    lots.mockResolvedValue([
+      {
+        ...lot,
+        batch: { ...lot.batch, state },
+        balances: [{ ...available, disposition: 'QUARANTINE' }],
+      },
+    ]);
+    await show();
+    expect(screen.queryByRole('button', { name: 'Release manual hold' })).not.toBeInTheDocument();
+  });
+
+  it('keeps available and quarantine options distinct at the same location', async () => {
+    lots.mockResolvedValue([
+      {
+        ...lot,
+        balances: [available, { ...available, disposition: 'QUARANTINE' }],
+      },
+    ]);
+    ctx.db.user.findMany.mockResolvedValue([
+      { id: 'witness', name: 'Witness', title: 'Pharmacist' },
+    ]);
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await show();
+      const form = screen.getByRole('button', { name: 'Record write-off' }).closest('form')!;
+      expect(
+        within(form)
+          .getAllByRole('option')
+          .map((option) => (option as HTMLOptionElement).value)
+      ).toEqual([
+        `${lot.id}:${location.id}:AVAILABLE`,
+        `${lot.id}:${location.id}:QUARANTINE`,
+        'witness',
+      ]);
+      expect(errors.mock.calls.flat().join(' ')).not.toMatch(/same key/);
+    } finally {
+      errors.mockRestore();
+    }
+  });
 });
 afterEach(cleanup);
 

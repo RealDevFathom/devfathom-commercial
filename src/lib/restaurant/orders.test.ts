@@ -61,6 +61,7 @@ type Deps = {
   enrollDevice: (typeof import('@/lib/restaurant/devices'))['enrollDevice'];
   orders: typeof import('@/lib/restaurant/orders');
   bills: typeof import('@/lib/restaurant/bills');
+  close: typeof import('@/lib/restaurant/daily-close');
   stateMachine: typeof import('@/lib/restaurant/order-state-machine');
   coAuth: typeof import('@/lib/restaurant/co-authorization');
   deliveryDispatch: typeof import('@/lib/restaurant/terminal-delivery-dispatch');
@@ -127,12 +128,13 @@ async function settleOrderFully(db: ScopedDb, orderId: string): Promise<void> {
 
 beforeAll(async () => {
   if (!TEST_DATABASE_URL) return;
-  const [scopedDb, devices, orders, bills, stateMachine, coAuth, deliveryDispatch] =
+  const [scopedDb, devices, orders, bills, close, stateMachine, coAuth, deliveryDispatch] =
     await Promise.all([
       import('@/lib/tenancy/scoped-db'),
       import('@/lib/restaurant/devices'),
       import('@/lib/restaurant/orders'),
       import('@/lib/restaurant/bills'),
+      import('@/lib/restaurant/daily-close'),
       import('@/lib/restaurant/order-state-machine'),
       import('@/lib/restaurant/co-authorization'),
       import('@/lib/restaurant/terminal-delivery-dispatch'),
@@ -144,6 +146,7 @@ beforeAll(async () => {
     enrollDevice: devices.enrollDevice,
     orders,
     bills,
+    close,
     stateMachine,
     coAuth,
     deliveryDispatch,
@@ -406,6 +409,54 @@ describeIfDatabase('orders command layer (real DB)', () => {
     const numbers = opens.map((o) => o.orderNumber);
     expect(new Set(numbers).size).toBe(5); // unique
     expect(numbers.every((n) => Number.isInteger(n) && n >= 1)).toBe(true); // monotone ints
+  });
+
+  it('rejects opening an order after its business day has closed', async () => {
+    const now = new Date('2026-08-30T18:00:00.000Z');
+    const db = deps.createTenantDb(orgId);
+    await deps.close.cutClose(db, {
+      branchId: ids.branch,
+      businessDate: '2026-08-30',
+      actor: actor(),
+    });
+
+    await expect(
+      deps.orders.openOrder(db, {
+        organizationId: orgId,
+        entitlementLimits: { 'pos.orders.monthly': 1000000 },
+        branchId: ids.branch,
+        channel: 'TAKEAWAY',
+        actor: actor(),
+        now,
+      })
+    ).rejects.toMatchObject({ reason: 'DAY_CLOSED' });
+  });
+
+  it('serializes a concurrent order open against daily close', async () => {
+    const now = new Date('2026-08-31T18:00:00.000Z');
+    const db = deps.createTenantDb(orgId);
+    const outcomes = await Promise.allSettled([
+      deps.close.cutClose(db, {
+        branchId: ids.branch,
+        businessDate: '2026-08-31',
+        actor: actor(),
+      }),
+      deps.orders.openOrder(db, {
+        organizationId: orgId,
+        entitlementLimits: { 'pos.orders.monthly': 1000000 },
+        branchId: ids.branch,
+        channel: 'TAKEAWAY',
+        actor: actor(),
+        now,
+      }),
+    ]);
+
+    expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1);
+    expect(outcomes.filter((outcome) => outcome.status === 'rejected')).toHaveLength(1);
+    const rejected = outcomes.find((outcome) => outcome.status === 'rejected');
+    expect(rejected).toMatchObject({
+      reason: expect.objectContaining({ reason: expect.stringMatching(/DAY_CLOSED|ACTIVE_ORDERS/) }),
+    });
   });
 
   it('snapshots name + price at add time and never rewrites them on later catalog edits (C4)', async () => {

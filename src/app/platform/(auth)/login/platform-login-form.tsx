@@ -22,6 +22,13 @@ export function PlatformLoginForm({ initialEnrollment = false }: { initialEnroll
   const [code, setCode] = useState('');
   const [recoveryCodes, setRecoveryCodes] = useState<string[]>([]);
 
+  // Editing an implicated field dismisses the sign-in error it is described by.
+  function clearSignInError() {
+    if (!invalidFields) return;
+    setInvalidFields(null);
+    setError('');
+  }
+
   async function enroll(action: 'begin' | 'confirm') {
     setPending(true);
     setError('');
@@ -213,7 +220,7 @@ export function PlatformLoginForm({ initialEnrollment = false }: { initialEnroll
           maxLength={254}
           aria-invalid={Boolean(invalidFields) || undefined}
           aria-describedby={invalidFields ? signInErrorId : undefined}
-          onChange={() => setInvalidFields(null)}
+          onChange={clearSignInError}
           className={inputClass}
           placeholder="operator@devfathom.com"
         />
@@ -234,7 +241,7 @@ export function PlatformLoginForm({ initialEnrollment = false }: { initialEnroll
             maxLength={256}
             aria-invalid={Boolean(invalidFields) || undefined}
             aria-describedby={invalidFields ? signInErrorId : undefined}
-            onChange={() => setInvalidFields(null)}
+            onChange={clearSignInError}
             className={`${inputClass} pr-10`}
             placeholder="Enter your password"
           />
@@ -270,7 +277,7 @@ export function PlatformLoginForm({ initialEnrollment = false }: { initialEnroll
           maxLength={32}
           aria-invalid={invalidFields === 'all' || undefined}
           aria-describedby={invalidFields === 'all' ? signInErrorId : undefined}
-          onChange={() => setInvalidFields(null)}
+          onChange={clearSignInError}
           className={`${inputClass} font-mono tracking-[0.16em]`}
           placeholder="6-digit or recovery code"
         />

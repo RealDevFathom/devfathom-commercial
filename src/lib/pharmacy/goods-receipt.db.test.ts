@@ -114,7 +114,8 @@ async function fixture(
   organizationId: string,
   branchId: string,
   label: string,
-  orderBonusPacks = 2
+  orderBonusPacks = 2,
+  organizationWide = false
 ): Promise<Fixture> {
   return inOrg(organizationId, async (db) => {
     await ensureBranch(db, organizationId, branchId);
@@ -180,7 +181,7 @@ async function fixture(
     const order = await db.pharmacyPurchaseOrder.create({
       data: {
         organizationId,
-        branchId,
+        branchId: organizationWide ? null : branchId,
         reference: `PO-${tag(label)}`,
         supplierId: supplier.id,
         createdByUserId: 'user_buyer',
@@ -681,6 +682,151 @@ describeIfDatabase('PUR-02 — posting a receipt into the batch ledger', () => {
     // PUR-02: the order is now being received against.
     expect(result.order.status).toBe('RECEIVING');
     expect(result.posted.exceptions).toEqual([]);
+  });
+
+  it('drafts and posts branch receipts against SENT and RECEIVING organization-wide orders', async () => {
+    const f = await fixture(ORG_A, BRANCH_A, 'org-wide', 2, true);
+    const result = await inOrg(ORG_A, async (db) => {
+      const balances = [];
+      for (const delivery of ['first', 'second']) {
+        const order = await deps.receipts.lockReceivablePurchaseOrder(db, scopeOf(f), {
+          purchaseOrderId: f.purchaseOrderId,
+          supplierId: f.supplierId,
+        });
+        expect(order.branchId).toBeNull();
+        expect(order.status).toBe(delivery === 'first' ? 'SENT' : 'RECEIVING');
+        const receipt = await draftReceipt(db, f, `org-wide-${delivery}`, {
+          line: { receivedPacks: 5, bonusPacks: 0 },
+        });
+        const posted = await deps.receipts.postGoodsReceipt(db, scopeOf(f), {
+          goodsReceiptId: receipt.id,
+          at: RECEIVED_AT,
+        });
+        expect(receipt.branchId).toBe(BRANCH_A);
+        balances.push(await balancesFor(db, ORG_A, posted.lines[0]!.inventoryLotId));
+      }
+      return {
+        balances,
+        order: await db.pharmacyPurchaseOrder.findFirstOrThrow({
+          where: { id: f.purchaseOrderId },
+        }),
+      };
+    });
+
+    expect(result.balances).toEqual([{ AVAILABLE: 50 }, { AVAILABLE: 50 }]);
+    expect(result.order).toMatchObject({ branchId: null, status: 'RECEIVING' });
+  });
+
+  it('serializes posting against cancellation of the linked order', async () => {
+    const f = await fixture(ORG_A, BRANCH_A, 'post-cancel-race');
+    const drafted = await inOrg(ORG_A, (db) => draftReceipt(db, f, 'post-cancel-race'));
+
+    let releaseOrderLock!: () => void;
+    const holdOrderLock = new Promise<void>((resolve) => {
+      releaseOrderLock = resolve;
+    });
+    let orderLocked!: () => void;
+    const hasOrderLock = new Promise<void>((resolve) => {
+      orderLocked = resolve;
+    });
+
+    const posting = inOrg(ORG_A, async (db) => {
+      let lockQueries = 0;
+      const pausedDb = new Proxy(db, {
+        get(target, property, receiver) {
+          const value = Reflect.get(target, property, receiver);
+          if (property !== '$queryRaw' || typeof value !== 'function') return value;
+          return async (...args: unknown[]) => {
+            const rows = await Reflect.apply(value, target, args);
+            lockQueries += 1;
+            if (lockQueries === 2) {
+              orderLocked();
+              await holdOrderLock;
+            }
+            return rows;
+          };
+        },
+      }) as ScopedDb;
+      return deps.receipts.postGoodsReceipt(pausedDb, scopeOf(f), {
+        goodsReceiptId: drafted.id,
+        at: RECEIVED_AT,
+      });
+    });
+
+    await hasOrderLock;
+    let cancellationSettled = false;
+    const cancellation = inOrg(ORG_A, (db) =>
+      db.pharmacyPurchaseOrder
+        .update({ where: { id: f.purchaseOrderId }, data: { status: 'CANCELLED' } })
+        .finally(() => {
+          cancellationSettled = true;
+        })
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(cancellationSettled).toBe(false);
+
+    releaseOrderLock();
+    await posting;
+    await expect(cancellation).rejects.toThrow();
+
+    const result = await inOrg(ORG_A, async (db) => ({
+      order: await db.pharmacyPurchaseOrder.findFirstOrThrow({
+        where: { id: f.purchaseOrderId },
+      }),
+      receipt: await db.pharmacyGoodsReceipt.findFirstOrThrow({ where: { id: drafted.id } }),
+      movements: await db.pharmacyStockMovement.count({
+        where: { organizationId: ORG_A, branchId: BRANCH_A, kind: 'RECEIPT' },
+      }),
+    }));
+    expect(result.order.status).toBe('RECEIVING');
+    expect(result.receipt.status).toBe('POSTED');
+    expect(result.movements).toBeGreaterThan(0);
+  });
+
+  it('refuses receipt creation when cancellation wins across two concurrent transactions', async () => {
+    const f = await fixture(ORG_A, BRANCH_A, 'draft-cancel-race');
+
+    let releaseCancellation!: () => void;
+    const holdCancellation = new Promise<void>((resolve) => {
+      releaseCancellation = resolve;
+    });
+    let orderCancelled!: () => void;
+    const hasCancelledOrder = new Promise<void>((resolve) => {
+      orderCancelled = resolve;
+    });
+
+    const cancellation = inOrg(ORG_A, async (db) => {
+      await db.pharmacyPurchaseOrder.update({
+        where: { id: f.purchaseOrderId },
+        data: { status: 'CANCELLED' },
+      });
+      orderCancelled();
+      await holdCancellation;
+    });
+
+    await hasCancelledOrder;
+    let draftingSettled = false;
+    const drafting = inOrg(ORG_A, async (db) => {
+      await deps.receipts.lockReceivablePurchaseOrder(db, scopeOf(f), {
+        purchaseOrderId: f.purchaseOrderId,
+        supplierId: f.supplierId,
+      });
+      return draftReceipt(db, f, 'draft-cancel-race');
+    }).finally(() => {
+      draftingSettled = true;
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(draftingSettled).toBe(false);
+
+    releaseCancellation();
+    await cancellation;
+    await expect(drafting).rejects.toThrow('INVALID_TRANSITION');
+
+    const receiptCount = await inOrg(ORG_A, (db) =>
+      db.pharmacyGoodsReceipt.count({ where: { purchaseOrderId: f.purchaseOrderId } })
+    );
+    expect(receiptCount).toBe(0);
   });
 
   it('joins a second delivery of the same batch number to the one batch', async () => {

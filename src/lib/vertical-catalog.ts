@@ -718,8 +718,10 @@ export type RoleTemplate = {
   isSystem: boolean;
   /** Capabilities granted by default. `['*']` = full administration, matching the
    * bootstrap admin role, except that wildcards (`*`, `pharmacy:*`) never grant
-   * pharmacy:dispense, pharmacy:safety or pharmacy:catalogue-review: those must be
-   * granted exactly (separation of duties). A wildcard DENY still revokes them.
+   * pharmacy:dispense, pharmacy:prescriptions, pharmacy:safety or
+   * pharmacy:catalogue-review: those must be granted exactly (separation of duties).
+   * A pharmacy:dispense grant also covers pharmacy:prescriptions. A wildcard DENY
+   * still revokes them.
    * All entries are provisional (Phase 0 / D10). */
   capabilities: readonly string[];
 };
@@ -732,6 +734,7 @@ export const AGENCY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
 export const PHARMACY_CAPABILITIES: readonly string[] = [
   'pharmacy:*',
   'pharmacy:dispense',
+  'pharmacy:prescriptions',
   'pharmacy:catalogue-review',
   'pharmacy:manage',
   'pharmacy:counter',
@@ -752,6 +755,7 @@ export const PHARMACY_CHECKED_CAPABILITIES = [
   'pharmacy:procurement',
   'pharmacy:inventory',
   'pharmacy:dispense',
+  'pharmacy:prescriptions',
   'pharmacy:safety',
   'pharmacy:catalogue-review',
   'pharmacy:orders',
@@ -778,6 +782,10 @@ export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
     // for business/cashier guards that require literal ADMIN; EMPLOYEE plus this
     // template is not equivalent. Provisioning does not assign it to existing owners.
     // These grants neither verify clinical qualifications nor permit self-review/signing.
+    // #975: a proprietor runs the whole shop, so the template also grants the
+    // operational actions (Goods-in, stock, counter, day close, management). Every
+    // grant stays exact (no wildcard), so the separation-of-duties caps remain
+    // explicit and individually revocable by DENY.
     key: 'owner-operator',
     name: 'Owner / Operator',
     isSystem: true,
@@ -788,6 +796,11 @@ export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
       'pharmacy:dispense',
       'pharmacy:catalogue-review',
       'pharmacy:safety',
+      'pharmacy:procurement',
+      'pharmacy:inventory',
+      'pharmacy:counter',
+      'pharmacy:close',
+      'pharmacy:manage',
     ],
   },
   {

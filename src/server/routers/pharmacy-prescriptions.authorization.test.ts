@@ -94,7 +94,11 @@ describe('prescription read boundary', () => {
     for (const query of Object.values(f.reads)) expect(query).not.toHaveBeenCalled();
     expect(mocks.can).toHaveBeenCalledWith(
       expect.anything(),
-      path.startsWith('counter') ? 'pharmacy:counter' : 'pharmacy:dispense',
+      path.startsWith('counter')
+        ? 'pharmacy:counter'
+        : path === 'workspace'
+          ? 'pharmacy:prescriptions'
+          : 'pharmacy:dispense',
       undefined,
       expect.anything()
     );
