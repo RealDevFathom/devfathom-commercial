@@ -1,7 +1,6 @@
 import { SEGREGATION_OF_DUTIES_POLICY } from './purchasing';
 import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
-import { actorCanProcure, actorIsPharmacyOwner } from './procurement-access';
-import { assignedRegisterBranchIds } from './controlled-register';
+import { actorCanProcure, actorIsPharmacyOwner, procurementBranchIds } from './procurement-access';
 import {
   clearLockout,
   isLockedOut,
@@ -74,7 +73,7 @@ async function verifyApprover(
     return { blocked: APPROVAL_BLOCKED } as const;
   if (
     branchId &&
-    !(await assignedRegisterBranchIds(db, organizationId, approverId)).includes(branchId)
+    !(await procurementBranchIds(db, organizationId, approverId)).includes(branchId)
   )
     return { blocked: APPROVAL_BLOCKED } as const;
   // The approval PIN is the approver's shared operator credential. Guesses typed

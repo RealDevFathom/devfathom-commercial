@@ -261,7 +261,9 @@ async function newLink() {
       const { can } = await import('@/lib/abac');
       const { ALL_ACTIONS } = await import('@/lib/abac/policies');
       const { assignedRegisterBranchIds } = await import('./controlled-register');
-      const { actorCanProcure, actorCanReadPurchasing } = await import('./procurement-access');
+      const { actorCanProcure, actorCanReadPurchasing, procurementBranchIds } = await import(
+        './procurement-access'
+      );
       const { assertProcurementBranch } = await import('@/server/pharmacy-procurement-access');
       await inOrg(async (db) => {
         // No explicit assignment is needed, including branches created after the owner.
@@ -317,9 +319,11 @@ async function newLink() {
           );
           expect(await actorCanProcure(db, id('owner'))).toBe(true);
           expect(await actorCanReadPurchasing(db, id('owner'))).toBe(true);
-          expect(await assignedRegisterBranchIds(db, org, id('owner'))).toEqual(
+          expect(await procurementBranchIds(db, org, id('owner'))).toEqual(
             expect.arrayContaining([id('branch'), id('other')])
           );
+          // Purchasing scope never widens the controlled register (patient CNIC).
+          expect(await assignedRegisterBranchIds(db, org, id('owner'))).toEqual([]);
           await expect(assertProcurementBranch(context(db), id('branch'))).resolves.toMatchObject({
             branchId: id('branch'),
           });
@@ -719,6 +723,55 @@ async function newLink() {
       await inOrg((db) =>
         db.user.update({ where: { id: id('adminOverride') }, data: { status: 'INACTIVE' } })
       );
+    });
+
+    it('does not treat an EMPLOYEE owner-operator as a solo owner or org-wide buyer', async () => {
+      const { assignedRegisterBranchIds } = await import('./controlled-register');
+      const { actorIsPharmacyOwner, procurementBranchIds } = await import('./procurement-access');
+      const solo = async (db: ScopedDb) => {
+        await db.$queryRaw`SELECT set_config('app.pharmacy_purchase_pin_verified_user_id', ${id('owner')}, true)`;
+        const [decision] = await db.$queryRaw<
+          { allowed: boolean }[]
+        >`SELECT pharmacy_solo_purchase_owner(${org}, ${id('owner')}, ${id('branch')}) AS allowed`;
+        return decision.allowed;
+      };
+      await inOrg(async (db) => {
+        expect(await solo(db)).toBe(true);
+        await db.organizationRole.create({
+          data: {
+            id: id('ownerOperator'),
+            organizationId: org,
+            key: 'owner-operator',
+            name: 'Owner / Operator',
+            isSystem: true,
+            permissions: {
+              create: [
+                { organizationId: org, capability: 'pharmacy:safety', effect: 'ALLOW' },
+                { organizationId: org, capability: 'pharmacy:procurement', effect: 'ALLOW' },
+              ],
+            },
+          },
+        });
+        await db.user.update({
+          where: { id: id('owner') },
+          data: { role: 'EMPLOYEE', organizationRoleId: id('ownerOperator') },
+        });
+        try {
+          expect(await solo(db)).toBe(false);
+          expect(await actorIsPharmacyOwner(db, org, id('owner'))).toBe(false);
+          // Branch scope is assignments only: no implicit every-branch access to
+          // purchasing or the controlled register (patient CNIC).
+          expect((await procurementBranchIds(db, org, id('owner'))).sort()).toEqual(
+            (await assignedRegisterBranchIds(db, org, id('owner'))).sort()
+          );
+        } finally {
+          await db.user.update({
+            where: { id: id('owner') },
+            data: { role: 'ADMIN', organizationRoleId: id('role') },
+          });
+          await db.organizationRole.delete({ where: { id: id('ownerOperator') } });
+        }
+      });
     });
 
     it('preserves a valid solo approval through sending, posting, and later staffing changes', async () => {

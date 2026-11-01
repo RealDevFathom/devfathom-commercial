@@ -5,7 +5,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 const mocks = vi.hoisted(() => ({ withTenantDb: vi.fn() }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ withTenantDb: mocks.withTenantDb }));
-import { verifyPurchaseApprover } from './purchase-approval';
+import { soloOwnerApprovalAllowed, verifyPurchaseApprover } from './purchase-approval';
 
 const hash = hashSync('1234', 4);
 let state: { failedAttempts: number; lockedUntil: Date | null };
@@ -61,5 +61,38 @@ describe('purchase PIN transaction boundary', () => {
     expect(businessDb.$queryRaw).toHaveBeenCalledExactlyOnceWith(expect.any(Array), 'buyer');
     expect(credentialDb.$queryRaw).toHaveBeenCalledTimes(1);
     expect(state).toEqual({ failedAttempts: 0, lockedUntil: null });
+  });
+});
+
+describe('solo-owner self-approval eligibility', () => {
+  function soloDb(role: 'ADMIN' | 'EMPLOYEE', key: string) {
+    return {
+      user: {
+        findUnique: vi.fn().mockResolvedValue({
+          status: 'ACTIVE',
+          role,
+          organizationRole: {
+            key,
+            isSystem: true,
+            permissions: [{ capability: '*', effect: 'ALLOW' }],
+          },
+          permissionOverrides: [{ capability: 'pharmacy:procurement', effect: 'ALLOW' }],
+        }),
+        // Nobody else is active at the branch.
+        count: vi.fn().mockResolvedValue(0),
+      },
+    } as unknown as ScopedDb;
+  }
+
+  it('refuses an EMPLOYEE holding the owner-operator template even when alone', async () => {
+    await expect(
+      soloOwnerApprovalAllowed(soloDb('EMPLOYEE', 'owner-operator'), 'org', 'user', 'branch')
+    ).resolves.toBe(false);
+  });
+
+  it('still allows a real tenant owner who is alone at the branch', async () => {
+    await expect(
+      soloOwnerApprovalAllowed(soloDb('EMPLOYEE', 'owner'), 'org', 'user', 'branch')
+    ).resolves.toBe(true);
   });
 });

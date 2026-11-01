@@ -1,6 +1,9 @@
 import { TRPCError } from '@trpc/server';
-import { actorCanProcure, actorCanReadPurchasing } from '@/lib/pharmacy/procurement-access';
-import { assignedRegisterBranchIds } from '@/lib/pharmacy/controlled-register';
+import {
+  actorCanProcure,
+  actorCanReadPurchasing,
+  procurementBranchIds,
+} from '@/lib/pharmacy/procurement-access';
 import type { TRPCContext } from './trpc';
 
 export async function assertProcurement(ctx: TRPCContext) {
@@ -17,7 +20,7 @@ export async function assertProcurementBranch(ctx: TRPCContext, branchId: string
   const organizationId = ctx.entitlements?.organizationId;
   const actorId = ctx.session?.user?.id;
   if (!organizationId || !actorId) throw new TRPCError({ code: 'UNAUTHORIZED' });
-  const assigned = await assignedRegisterBranchIds(ctx.db, organizationId, actorId);
+  const assigned = await procurementBranchIds(ctx.db, organizationId, actorId);
   if (
     !assigned.includes(branchId) ||
     !(await ctx.db.pharmacyBranch.findFirst({

@@ -31,6 +31,7 @@ export function procurementCapabilityGranted(input: {
 }
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { assignedRegisterBranchIds } from './controlled-register';
 
 export async function actorCanProcure(db: ScopedDb, userId: string, now = new Date()) {
   const user = await db.user.findUnique({
@@ -85,7 +86,8 @@ export function procurementGrantedForUser(user: {
   });
 }
 
-/** A real installed Owner, or an ADMIN explicitly granted all capabilities. */
+/** A real installed Owner, or an ADMIN explicitly granted all capabilities.
+ * The `owner-operator` template alone does not make someone an owner. */
 export async function actorIsPharmacyOwner(db: ScopedDb, organizationId: string, userId: string) {
   const user = await db.user.findUnique({
     where: { id: userId, organizationId, status: 'ACTIVE' },
@@ -106,15 +108,30 @@ export async function actorIsPharmacyOwner(db: ScopedDb, organizationId: string,
     )
   )
     return false;
-  if (hasAllCapabilityAccess(user)) return true;
-  const role = user.organizationRole;
-  return Boolean(
-    (role?.isSystem && ['owner', 'owner-operator'].includes(role.key)) ||
-    (user.role === 'ADMIN' &&
-      [...(role?.permissions ?? []), ...user.permissionOverrides].some(
-        (rule) => rule.capability === '*' && rule.effect === 'ALLOW'
-      ))
-  );
+  // Owner status is exactly the live all-capability identity. The
+  // `owner-operator` template never confers it on its own (see vertical-catalog).
+  return hasAllCapabilityAccess(user);
+}
+
+/**
+ * Branches the actor may run procurement for: every active branch for a tenant
+ * owner, otherwise only their active branch assignments. Kept separate from the
+ * controlled register so owner purchasing scope never widens register access.
+ */
+export async function procurementBranchIds(
+  db: ScopedDb,
+  organizationId: string,
+  userId: string
+): Promise<string[]> {
+  if (await actorIsPharmacyOwner(db, organizationId, userId)) {
+    return (
+      await db.pharmacyBranch.findMany({
+        where: { organizationId, active: true },
+        select: { id: true },
+      })
+    ).map((branch) => branch.id);
+  }
+  return assignedRegisterBranchIds(db, organizationId, userId);
 }
 
 /** Read-only goods-in access never authorizes a purchasing mutation. */

@@ -16,6 +16,7 @@ import { can, subjectFromSession } from '@/lib/abac';
 import {
   actorCanSelectPurchaseWitness,
   actorIsPharmacyOwner,
+  procurementBranchIds,
 } from '@/lib/pharmacy/procurement-access';
 import { hasModule } from '@/lib/entitlements';
 import {
@@ -26,10 +27,7 @@ import {
   reverseGoodsReceipt,
   verifyControlledPurchaseWitness,
 } from '@/lib/pharmacy/goods-receipt';
-import {
-  assignedRegisterBranchIds,
-  listControlledPinWitnesses,
-} from '@/lib/pharmacy/controlled-register';
+import { listControlledPinWitnesses } from '@/lib/pharmacy/controlled-register';
 import { PharmacyInventoryError } from '@/lib/pharmacy/inventory';
 import {
   allocateCentralReceipt,
@@ -324,7 +322,7 @@ function tenantScope(ctx: TRPCContext): { organizationId: string } {
 async function purchasingOrderScope(ctx: TRPCContext) {
   const { organizationId } = tenantScope(ctx);
   const userId = ctx.session!.user.id;
-  const assigned = await assignedRegisterBranchIds(ctx.db, organizationId, userId);
+  const assigned = await procurementBranchIds(ctx.db, organizationId, userId);
   const central = await ctx.db.pharmacyCentralPurchasingAccess.findMany({
     where: { organizationId, userId },
     select: { branchId: true },

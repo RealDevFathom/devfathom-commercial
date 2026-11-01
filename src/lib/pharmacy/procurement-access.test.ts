@@ -8,8 +8,10 @@ import {
   actorCanProcure,
   actorCanReadPurchasing,
   actorIsPharmacyOwner,
+  procurementBranchIds,
   procurementCapabilityGranted,
 } from './procurement-access';
+import { hasAllCapabilityAccess } from '@/lib/abac/owner-access';
 
 describe('procurementCapabilityGranted', () => {
   it('allows the procurement capability and refuses a cashier', () => {
@@ -153,5 +155,71 @@ describe('Goods-in procurement access (#375)', () => {
         }),
       })
     );
+  });
+});
+
+describe('owner-operator template is not tenant ownership', () => {
+  function operatorDb(input: {
+    role: 'ADMIN' | 'EMPLOYEE';
+    key: string;
+    permissions: { capability: string; effect: string }[];
+    overrides?: { capability: string; effect: string }[];
+  }) {
+    return {
+      user: {
+        findUnique: vi.fn().mockResolvedValue({
+          status: 'ACTIVE',
+          role: input.role,
+          organizationRole: { key: input.key, isSystem: true, permissions: input.permissions },
+          permissionOverrides: input.overrides ?? [],
+        }),
+        count: vi.fn().mockResolvedValue(0),
+      },
+      pharmacyBranch: {
+        findMany: vi.fn().mockResolvedValue([{ id: 'branch_a' }, { id: 'branch_b' }]),
+      },
+      pharmacyBranchAssignment: {
+        findMany: vi.fn().mockResolvedValue([{ branchId: 'branch_a' }]),
+      },
+    } as unknown as ScopedDb;
+  }
+
+  it.each([
+    {
+      label: 'template grants only',
+      permissions: [{ capability: 'pharmacy:safety', effect: 'ALLOW' }],
+    },
+    { label: 'wildcard role grant', permissions: [{ capability: '*', effect: 'ALLOW' }] },
+  ])('an EMPLOYEE owner-operator ($label) is not an owner', async ({ permissions }) => {
+    const db = operatorDb({
+      role: 'EMPLOYEE',
+      key: 'owner-operator',
+      permissions,
+      overrides: [{ capability: 'pharmacy:procurement', effect: 'ALLOW' }],
+    });
+    expect(
+      hasAllCapabilityAccess({
+        status: 'ACTIVE',
+        role: 'EMPLOYEE',
+        organizationRole: { key: 'owner-operator', isSystem: true, permissions },
+        permissionOverrides: [],
+      })
+    ).toBe(false);
+    await expect(actorIsPharmacyOwner(db, 'org', 'user')).resolves.toBe(false);
+    // Branch scope comes from assignments only, never every active branch.
+    await expect(procurementBranchIds(db, 'org', 'user')).resolves.toEqual(['branch_a']);
+  });
+
+  it('keeps the system owner organization-wide for purchasing scope', async () => {
+    const db = operatorDb({
+      role: 'EMPLOYEE',
+      key: 'owner',
+      permissions: [{ capability: '*', effect: 'ALLOW' }],
+    });
+    await expect(actorIsPharmacyOwner(db, 'org', 'user')).resolves.toBe(true);
+    await expect(procurementBranchIds(db, 'org', 'user')).resolves.toEqual([
+      'branch_a',
+      'branch_b',
+    ]);
   });
 });
