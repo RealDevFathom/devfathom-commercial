@@ -150,7 +150,30 @@ describe('#607 sale-unit MRP contract', () => {
     }
   );
 
-  it.each([0, -1, 1.5, 21, Number.MAX_SAFE_INTEGER + 1])(
+  it.each([
+    // Aggregating canonical units across source packs is valid (#68 P2).
+    { canonicalUnitsPerSaleUnit: 40, roundingIncrementMinor: 5, expected: 2_006, ceiling: 2_006 },
+    { canonicalUnitsPerSaleUnit: 21, roundingIncrementMinor: 5, expected: 1_050, ceiling: 1_053 },
+    { canonicalUnitsPerSaleUnit: 30, roundingIncrementMinor: 1, expected: 1_504, ceiling: 1_504 },
+  ])(
+    'prices a sale unit larger than one source pack: %j',
+    ({ expected, ceiling, ...input }) => {
+      const price = priceFromLot({ printedMrpMinor: 1_003, canonicalUnitsInPack: 20, ...input });
+      expect(price).toEqual({ unitPriceMinor: expected, proRataCeilingMinor: ceiling });
+    }
+  );
+
+  it('rejects a sale-unit price beyond the safe integer range', () => {
+    expect(() =>
+      priceFromLot({
+        printedMrpMinor: Number.MAX_SAFE_INTEGER,
+        canonicalUnitsInPack: 1,
+        canonicalUnitsPerSaleUnit: 2,
+      })
+    ).toThrow('INVALID_PRICE');
+  });
+
+  it.each([0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])(
     'rejects invalid sale-unit conversion %s',
     (canonicalUnitsPerSaleUnit) => {
       expect(() =>

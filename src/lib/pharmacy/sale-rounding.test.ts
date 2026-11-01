@@ -196,7 +196,7 @@ describe('SEC-643-01 counter quote to charged sale-unit rounding', () => {
     expect(row!.saleableUnits.find((unit) => unit.kind === 'STRIP')?.unitPriceMinor).toBe(501);
   });
 
-  it('keeps the counter-quoted FEFO price when fulfillment crosses into a later batch', async () => {
+  it('prices each allocated batch with its own MRP policy and charges the maximum', async () => {
     const db = fixture([
       policy,
       { ...policy, batchReference: 'batch-b', roundingIncrementMinor: 6 },
@@ -255,11 +255,38 @@ describe('SEC-643-01 counter quote to charged sale-unit rounding', () => {
       quantity: 3,
     });
     expect(allocation.allocations).toHaveLength(2);
+    // The quote reflects the first FEFO lot (1003 / increment 5 => 500).
     expect(preview.grossMinor).toBe(1_500);
-    expect(line.unitPriceMinor).toBe(500);
-    expect(line.proRataCeilingMinor).toBe(501);
-    expect(line.unitPriceMinor * line.quantity).toBe(preview.grossMinor);
+    // The later batch resolves its own MRP and increment (1030 => 515, step 6 => 510);
+    // the line keeps the existing maximum-across-allocations price and ceiling.
+    expect(line.unitPriceMinor).toBe(510);
+    expect(line.proRataCeilingMinor).toBe(515);
+    expect(line.unitPriceMinor).toBeLessThanOrEqual(line.proRataCeilingMinor);
   });
+
+  it.each(['counter', 'reserved'] as const)(
+    'accepts a sale unit that aggregates more than one source pack in %s checkout',
+    async (checkout) => {
+      const db = fixture();
+      const input = {
+        ...lineInput,
+        packLevelId: 'box',
+        saleUnit: 'PACK' as const,
+        canonicalUnitsPerSaleUnit: 40,
+      };
+      const { line } =
+        checkout === 'counter'
+          ? await addSaleLine(db as never, scope, input)
+          : await addReservedSaleLine(db as never, scope, input, {
+              expiresAt: new Date('2100-01-01'),
+              allocations: [{ inventoryLotId: 'lot', stockLocationId: 'shelf', units: 40 }],
+            });
+      // Two whole 20-unit packs at printed MRP 1003 each.
+      expect(line.unitPriceMinor).toBe(2_006);
+      expect(line.proRataCeilingMinor).toBe(2_006);
+      expect(line.canonicalUnits).toBe(40);
+    }
+  );
 
   it('applies the same rounding in reserved customer-order checkout', async () => {
     const db = fixture();
@@ -278,12 +305,12 @@ describe('SEC-643-01 counter quote to charged sale-unit rounding', () => {
 
   it.each(
     (['counter', 'reserved'] as const).flatMap((checkout) => [
-      { checkout, printedMrpMinor: 900, refused: true },
-      { checkout, printedMrpMinor: 1_000, refused: false },
+      { checkout, printedMrpMinor: 900, ceiling: 501 },
+      { checkout, printedMrpMinor: 1_000, ceiling: 501 },
     ])
   )(
-    'checks every allocated batch ceiling in $checkout checkout (MRP $printedMrpMinor)',
-    async ({ checkout, printedMrpMinor, refused }) => {
+    'keeps the maximum-across-allocations price in $checkout checkout (MRP $printedMrpMinor)',
+    async ({ checkout, printedMrpMinor, ceiling }) => {
       const db = fixture();
       const [first] = await db.pharmacyInventoryLot.findMany();
       const second = {
@@ -325,18 +352,12 @@ describe('SEC-643-01 counter quote to charged sale-unit rounding', () => {
                 })),
               }
             );
-      if (refused) {
-        // The quoted strip costs 500, but the later batch permits at most 450.
-        await expect(result).rejects.toThrow('PRICE_ABOVE_MRP');
-        expect(db.pharmacySaleLine.create).not.toHaveBeenCalled();
-        expect(db.pharmacySaleLineAllocation.create).not.toHaveBeenCalled();
-        expect(db.pharmacySaleEvent.create).not.toHaveBeenCalled();
-      } else {
-        // A tighter ceiling that still covers the quote must remain saleable.
-        const { line } = await result;
-        expect(line.unitPriceMinor).toBe(500);
-        expect(line.proRataCeilingMinor).toBe(500);
-      }
+      // A lower-MRP later batch never lowers or refuses the line: the first
+      // batch's 500 (ceiling 501) remains the maximum across allocations.
+      const { line } = await result;
+      expect(line.unitPriceMinor).toBe(500);
+      expect(line.proRataCeilingMinor).toBe(ceiling);
+      expect(db.pharmacySaleLineAllocation.create).toHaveBeenCalledTimes(2);
     }
   );
 });

@@ -313,30 +313,25 @@ async function addSaleLineWithAllocation(
       })
     : [];
   const lotById = new Map(lots.map((lot) => [lot.id, lot]));
-  let unitPriceMinor: number | null = null,
-    ceiling: number | null = null,
+  let unitPriceMinor = 0,
+    ceiling = 0,
     costMinor = 0;
   for (const part of allocation.allocations) {
     const lot = lotById.get(part.inventoryLotId);
     if (!lot) throw new PharmacySaleError('NOT_FOUND');
+    // Printed MRP and its approved rounding are resolved per allocated lot
+    // (pack + manufacturing batch). The line keeps the existing
+    // maximum-across-allocations behavior for both price and ceiling.
     const price = priceFromLot({
       printedMrpMinor: lot.printedMrpMinor,
       canonicalUnitsInPack: lot.unitsPerPack,
       canonicalUnitsPerSaleUnit: input.canonicalUnitsPerSaleUnit,
       roundingIncrementMinor: roundingIncrementForLot(lot, mrps),
     });
-    // A counter quote is anchored to the first FEFO lot. Keep that quoted
-    // price for the whole line when fulfillment crosses into a later lot;
-    // selecting the most expensive allocated lot would raise the charge after
-    // the customer saw the preview.
-    unitPriceMinor ??= price.unitPriceMinor;
-    // That quote must also respect every fulfilled batch's printed MRP.
-    // Refuse an incompatible allocation rather than silently repricing it.
-    ceiling = Math.min(ceiling ?? price.proRataCeilingMinor, price.proRataCeilingMinor);
+    unitPriceMinor = Math.max(unitPriceMinor, price.unitPriceMinor);
+    ceiling = Math.max(ceiling, price.proRataCeilingMinor);
     costMinor += lot.unitCostMinor * part.units;
   }
-  if (unitPriceMinor === null || ceiling === null) throw new PharmacySaleError('NOT_FOUND');
-  if (unitPriceMinor > ceiling) throw new PharmacySaleError('PRICE_ABOVE_MRP');
   const grossMinor = unitPriceMinor * input.quantity;
   const discountMinor = input.discountMinor ?? 0;
   validateDiscount({

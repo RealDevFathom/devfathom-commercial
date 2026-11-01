@@ -127,21 +127,28 @@ export function priceFromLot(input: {
     canonicalUnitsInPack: input.canonicalUnitsInPack,
     roundingIncrementMinor,
   });
+  // A sale unit may aggregate canonical units across more than one source pack
+  // (allocation draws canonical units, not packs), so it is not capped at the
+  // source pack size. Only a non-positive or non-integer conversion is invalid.
   if (
     !Number.isSafeInteger(input.canonicalUnitsPerSaleUnit) ||
-    input.canonicalUnitsPerSaleUnit <= 0 ||
-    input.canonicalUnitsPerSaleUnit > input.canonicalUnitsInPack
+    input.canonicalUnitsPerSaleUnit <= 0
   ) {
     throw new PharmacyMedicineError('INVALID_PRICE');
   }
 
-  const proRataCeilingMinor = Number(
+  const proRataCeiling =
     (BigInt(input.printedMrpMinor) * BigInt(input.canonicalUnitsPerSaleUnit)) /
-      BigInt(input.canonicalUnitsInPack)
-  );
+    BigInt(input.canonicalUnitsInPack);
+  if (proRataCeiling > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new PharmacyMedicineError('INVALID_PRICE');
+  }
+  const proRataCeilingMinor = Number(proRataCeiling);
+  // Whole packs (one or several) are charged exactly at their printed MRP;
+  // only a partial-pack remainder is rounded down to the approved increment.
   const unitPriceMinor =
-    input.canonicalUnitsPerSaleUnit === input.canonicalUnitsInPack
-      ? input.printedMrpMinor
+    input.canonicalUnitsPerSaleUnit % input.canonicalUnitsInPack === 0
+      ? proRataCeilingMinor
       : Math.floor(proRataCeilingMinor / roundingIncrementMinor) * roundingIncrementMinor;
   return {
     unitPriceMinor,

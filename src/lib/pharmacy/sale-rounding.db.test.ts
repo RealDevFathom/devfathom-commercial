@@ -283,7 +283,14 @@ describeDatabase('SEC-643-01 persisted quote/charge parity on PostgreSQL', () =>
     30_000
   );
 
-  async function checkSplitLotCheckout(laterMrpMinor: number) {
+  /**
+   * Decision Q3-A: MRP and its rounding are resolved per allocated lot, and the
+   * line keeps the existing maximum-across-allocations price and ceiling.
+   */
+  async function checkSplitLotCheckout(
+    laterMrpMinor: number,
+    expected: { unitPriceMinor: number; ceilingMinor: number }
+  ) {
     const { medicine, lot: firstLot } = await catalog(`split-lot-${laterMrpMinor}`, 5, true, 20);
     const secondLot = await tenant(async (db) => {
       const batch = await db.pharmacyManufacturingBatch.create({
@@ -319,6 +326,16 @@ describeDatabase('SEC-643-01 persisted quote/charge parity on PostgreSQL', () =>
         idempotencyKey: randomUUID(),
         receivedAt: new Date('2026-01-02'),
       });
+      // Open one pack so the later lot can supply loose units: allocation for a
+      // 10-unit strip from a 20-unit pack otherwise stops at INVALID_ARRANGEMENT
+      // before line pricing is ever reached.
+      await ledger.breakPack(db, scope, {
+        inventoryLotId: received.lot.id,
+        stockLocationId,
+        requiredLooseUnits: 20,
+        idempotencyKey: randomUUID(),
+        at,
+      });
       return received.lot;
     });
     const { rows } = await tenant((db) =>
@@ -349,32 +366,6 @@ describeDatabase('SEC-643-01 persisted quote/charge parity on PostgreSQL', () =>
           idempotencyKey: randomUUID(),
         })
       );
-    if (laterMrpMinor === 900) {
-      const stockState = () =>
-        tenant(async (db) => ({
-          balances: await db.pharmacyStockBalance.findMany({
-            where: { inventoryLotId: { in: [firstLot.id, secondLot.id] } },
-            orderBy: { inventoryLotId: 'asc' },
-          }),
-          movements: await db.pharmacyStockMovement.count({
-            where: { inventoryLotId: { in: [firstLot.id, secondLot.id] } },
-          }),
-        }));
-      const before = await stockState();
-      await expect(addLine()).rejects.toThrow('PRICE_ABOVE_MRP');
-      expect(await stockState()).toEqual(before);
-      expect(await tenant((db) => db.pharmacySaleLine.count({ where: { saleId: sale.id } }))).toBe(
-        0
-      );
-      expect(
-        await tenant((db) =>
-          db.pharmacySaleEvent.count({
-            where: { saleId: sale.id, kind: 'LINE_ADDED' },
-          })
-        )
-      ).toBe(0);
-      return;
-    }
     const { line } = await addLine();
     const stored = await tenant((db) =>
       db.pharmacySaleLine.findFirstOrThrow({
@@ -386,14 +377,17 @@ describeDatabase('SEC-643-01 persisted quote/charge parity on PostgreSQL', () =>
     expect(new Set(stored.allocations.map((part) => part.inventoryLotId))).toEqual(
       new Set([firstLot.id, secondLot.id])
     );
-    expect(stored.unitPriceMinor * stored.quantity).toBe(preview.grossMinor);
+    expect(stored.unitPriceMinor).toBe(expected.unitPriceMinor);
+    expect(stored.proRataCeilingMinor).toBe(expected.ceilingMinor);
+    expect(stored.unitPriceMinor).toBeLessThanOrEqual(stored.proRataCeilingMinor);
+    const chargedMinor = stored.unitPriceMinor * stored.quantity;
     await tenant((db) =>
       settlement.applyPharmacyTender(db, scope, {
         saleId: sale.id,
         deviceId: randomUUID(),
         businessDate: new Date('2026-10-24'),
         type: 'BANK_TRANSFER',
-        amountMinor: preview.grossMinor,
+        amountMinor: chargedMinor,
         idempotencyKey: randomUUID(),
       })
     );
@@ -403,19 +397,21 @@ describeDatabase('SEC-643-01 persisted quote/charge parity on PostgreSQL', () =>
         currency: 'PKR',
       })
     );
-    expect(receipt.totals.netMinor).toBe(preview.grossMinor);
-    expect(receipt.totals.tenderedMinor).toBe(preview.grossMinor);
+    expect(receipt.totals.netMinor).toBe(chargedMinor);
+    expect(receipt.totals.tenderedMinor).toBe(chargedMinor);
   }
 
   it(
-    'keeps preview, persisted line, receipt and tender equal across differently priced lots',
-    () => checkSplitLotCheckout(1_030),
+    'charges the higher per-lot price when a later batch has a higher MRP',
+    // Later lot: 1030 * 10 / 20 = 515 ceiling, rounded to its own increment 6 => 510.
+    () => checkSplitLotCheckout(1_030, { unitPriceMinor: 510, ceilingMinor: 515 }),
     30_000
   );
 
   it(
-    'rolls back stock allocation when the quoted price exceeds a later batch MRP',
-    () => checkSplitLotCheckout(900),
+    'keeps the earlier lot price when a later batch has a lower MRP',
+    // Later lot: 900 * 10 / 20 = 450; the earlier lot's 500 (ceiling 501) remains the maximum.
+    () => checkSplitLotCheckout(900, { unitPriceMinor: 500, ceilingMinor: 501 }),
     30_000
   );
 });
