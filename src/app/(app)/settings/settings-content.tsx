@@ -48,7 +48,8 @@ import { trpc } from '@/lib/trpc';
 import { PrintRoutingSection } from '@/components/restaurant/print-routing-section';
 export { PrintRoutingSection };
 import { useEntitlements } from '@/components/entitlements-provider';
-import type { EntitlementView } from '@/lib/module-catalog';
+import { isModuleGranted, moduleForProcedure, type EntitlementView } from '@/lib/module-catalog';
+import { useAccountRole } from '@/components/use-account-role';
 import type { inferRouterOutputs } from '@trpc/server';
 import type { AppRouter } from '@/server/routers/_app';
 import { cn } from '@/lib/utils';
@@ -57,7 +58,6 @@ import {
   type Density,
   type TypeScale,
   type Accent,
-  type Layout,
   type Icons,
 } from '@/components/preferences-provider';
 import { passwordRules, passwordMeetsPolicy } from '@/lib/password-policy';
@@ -144,44 +144,71 @@ export function SettingsContent() {
       <ReceiptDesignerLink />
 
       {/* Account info */}
-      <Card className="border-border/60">
-        <CardHeader className="pb-3">
-          <CardTitle className="text-[15px] font-semibold text-foreground">Account</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
-            <div>
-              <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-1">
-                Email
-              </p>
-              <p className="text-foreground font-mono text-xs">{session?.user?.email}</p>
-            </div>
-            <div>
-              <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-1">
-                Role
-              </p>
-              <p className="text-foreground">{session?.user?.role}</p>
-            </div>
-            <div>
-              <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-1">
-                Department
-              </p>
-              <p className="text-foreground">{session?.user?.department}</p>
-            </div>
-            <div>
-              <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-1">
-                Title
-              </p>
-              <p className="text-foreground">{session?.user?.title}</p>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+      <AccountSection />
 
-      {/* Leave the company */}
-      <ResignationSection />
+      {/* Leave the company (HR self-service; never in pharmacy) */}
+      <GatedResignationSection />
     </div>
   );
+}
+
+/** Account facts in the tenant's vocabulary: never a raw ADMIN / EMPLOYEE enum. */
+export function AccountSection() {
+  const { data: session } = useSession();
+  const account = useAccountRole();
+
+  return (
+    <Card className="border-border/60">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-[15px] font-semibold text-foreground">Account</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <dl className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
+          <div>
+            <dt className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-1">
+              Email
+            </dt>
+            <dd className="text-foreground font-mono text-xs">{session?.user?.email}</dd>
+          </div>
+          <div>
+            <dt className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-1">
+              Role
+            </dt>
+            <dd className="text-foreground">{account.role}</dd>
+          </div>
+          {account.department ? (
+            <div>
+              <dt className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-1">
+                Department
+              </dt>
+              <dd className="text-foreground">{account.department}</dd>
+            </div>
+          ) : null}
+          <div>
+            <dt className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-1">
+              Title
+            </dt>
+            <dd className="text-foreground">{session?.user?.title}</dd>
+          </div>
+        </dl>
+      </CardContent>
+    </Card>
+  );
+}
+
+/** Resignations live under the HR module (the server gates them the same way). */
+const RESIGNATIONS_MODULE = moduleForProcedure('resignations.mine');
+
+/**
+ * Resignation is HR self-service. A pharmacy has no HR desk to review it, and a
+ * workspace without the HR module would only be refused by the server, so the
+ * card renders only where the request can actually be filed.
+ */
+export function GatedResignationSection() {
+  const { vertical, enabledModules } = useEntitlements();
+  if (vertical === 'PHARMACY') return null;
+  if (RESIGNATIONS_MODULE && !isModuleGranted(RESIGNATIONS_MODULE, enabledModules)) return null;
+  return <ResignationSection />;
 }
 
 // The receipt designer edits restaurant branch layouts; fail closed for every other vertical.
@@ -271,9 +298,9 @@ function PreferenceRow({
   );
 }
 
-function AppearanceSection() {
+export function AppearanceSection() {
   const { theme, setTheme } = useTheme();
-  const { density, type, accent, layout, icons, setPreference } = usePreferences();
+  const { density, type, accent, icons, setPreference } = usePreferences();
   // Best-effort, non-blocking mirror to the user record so prefs follow the
   // account. localStorage (via PreferencesProvider) is the source of truth, so
   // we deliberately neither await nor surface errors from this write.
@@ -353,23 +380,10 @@ function AppearanceSection() {
           />
         </PreferenceRow>
 
-        <PreferenceRow
-          label="Navigation layout"
-          description="A left side rail or a top navigation bar."
-        >
-          <SegmentedControl<Layout>
-            aria-label="Navigation layout"
-            value={layout}
-            options={[
-              { value: 'rail', label: 'Side rail' },
-              { value: 'top', label: 'Top nav' },
-            ]}
-            onChange={(v) => {
-              setPreference('layout', v);
-              persist.mutate({ layout: v });
-            }}
-          />
-        </PreferenceRow>
+        {/* The workspace shell always uses the top navigation bar on desktop
+            (the side rail is the mobile drawer only), so there is no layout
+            choice to offer here: a switch that changes nothing would misstate
+            the real layout. */}
 
         <PreferenceRow label="Nav icons" description="Numbered indices or architectural icons.">
           <SegmentedControl<Icons>
@@ -840,7 +854,7 @@ function parseUserAgent(ua: string | null): string {
   return ua.length > 48 ? `${ua.slice(0, 48)}…` : ua;
 }
 
-function RecentSignInsSection() {
+export function RecentSignInsSection() {
   const { data: signIns, isLoading } = trpc.team.mySignIns.useQuery();
 
   return (
@@ -874,9 +888,11 @@ function RecentSignInsSection() {
                   <p className="truncate text-sm font-medium text-foreground">
                     {parseUserAgent(s.userAgent)}
                   </p>
-                  <p className="text-[11px] font-mono text-muted-foreground">
-                    {s.ip ?? 'Unknown IP'}
-                  </p>
+                  {/* The address is only recorded behind a trusted proxy; without
+                      one there is nothing true to show, so the line is omitted. */}
+                  {s.ip ? (
+                    <p className="text-[11px] font-mono text-muted-foreground">{s.ip}</p>
+                  ) : null}
                 </div>
                 <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground/80">
                   {formatDeliveryTime(s.createdAt)}
@@ -898,11 +914,13 @@ function RecentSignInsSection() {
    Notification preferences (IMP-AUTH-04)
    Per-category × per-channel opt-outs. Honored by notify().
    ============================================================ */
-const NOTIFICATION_SETTINGS: ReadonlyArray<{
+type NotificationSetting = {
   key: NotificationCategory;
   label: string;
   desc: string;
-}> = [
+};
+
+const NOTIFICATION_SETTINGS: ReadonlyArray<NotificationSetting> = [
   { key: 'task', label: 'Tasks', desc: 'Task assignments and updates' },
   { key: 'mention', label: 'Mentions', desc: 'When someone @mentions you in chat' },
   { key: 'meeting', label: 'Meetings', desc: 'Meeting invites' },
@@ -914,8 +932,24 @@ const NOTIFICATION_SETTINGS: ReadonlyArray<{
   { key: 'note', label: 'Notes', desc: 'When a note is shared with you' },
 ];
 
-function NotificationsSection() {
+/** A pharmacy is notified about its own operations, not agency or HR events. */
+const PHARMACY_NOTIFICATION_SETTINGS: ReadonlyArray<NotificationSetting> = [
+  { key: 'stock', label: 'Stock', desc: 'Low stock and reorder alerts' },
+  { key: 'expiry', label: 'Expiry', desc: 'Batches nearing or past expiry' },
+  { key: 'approval', label: 'Approvals', desc: 'Purchase orders and actions awaiting approval' },
+  { key: 'refund', label: 'Refunds', desc: 'Customer returns and refunds' },
+];
+
+export function notificationSettingsForVertical(
+  vertical: EntitlementView['vertical']
+): ReadonlyArray<NotificationSetting> {
+  return vertical === 'PHARMACY' ? PHARMACY_NOTIFICATION_SETTINGS : NOTIFICATION_SETTINGS;
+}
+
+export function NotificationsSection() {
   const utils = trpc.useUtils();
+  const { vertical } = useEntitlements();
+  const settings = notificationSettingsForVertical(vertical);
   const { data: prefs, isLoading } = trpc.team.getNotificationPrefs.useQuery();
 
   const update = trpc.team.updateNotificationPrefs.useMutation({
@@ -940,9 +974,13 @@ function NotificationsSection() {
 
   const toggle = (cat: NotificationCategory, ch: NotificationChannel, value: boolean) => {
     // Build a full explicit matrix from current state, then flip one cell, so
-    // the persisted blob is self-contained and unambiguous.
-    const next = {} as Record<NotificationCategory, { inApp: boolean; email: boolean }>;
-    for (const s of NOTIFICATION_SETTINGS) {
+    // the persisted blob is self-contained and unambiguous. Categories this
+    // vertical does not list keep whatever was stored for them.
+    const next = { ...(prefs ?? {}) } as Record<
+      NotificationCategory,
+      { inApp: boolean; email: boolean }
+    >;
+    for (const s of settings) {
       next[s.key] = { inApp: isOn(s.key, 'inApp'), email: isOn(s.key, 'email') };
     }
     next[cat][ch] = value;
@@ -979,7 +1017,7 @@ function NotificationsSection() {
                 Email
               </span>
             </div>
-            {NOTIFICATION_SETTINGS.map((s) => (
+            {settings.map((s) => (
               <div key={s.key} className="flex items-center gap-4 py-3">
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium text-foreground">{s.label}</p>
@@ -2195,7 +2233,7 @@ function ResignationSection() {
         {canResign ? (
           <div className="flex items-center justify-between gap-4">
             <p className="text-sm text-muted-foreground">
-              Considering moving on? You can formally resign here.
+              To end your employment, submit a formal resignation for HR review.
             </p>
             <Button variant="destructive" size="sm" onClick={() => setShowResign(true)}>
               <LogOut className="h-3.5 w-3.5" />

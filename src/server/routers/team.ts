@@ -39,6 +39,10 @@ const notificationPrefsSchema = z
     client: channelPrefsSchema.optional(),
     resignation: channelPrefsSchema.optional(),
     note: channelPrefsSchema.optional(),
+    stock: channelPrefsSchema.optional(),
+    expiry: channelPrefsSchema.optional(),
+    approval: channelPrefsSchema.optional(),
+    refund: channelPrefsSchema.optional(),
   })
   .strict();
 
@@ -379,6 +383,9 @@ export const teamRouter = router({
         startDate: true,
         status: true,
         lastActiveAt: true,
+        // The assigned organization role, so the member's own header and
+        // account card can name the role they actually hold.
+        organizationRole: { select: { key: true, name: true } },
         projectMembers: {
           ...(workScope.projects === 'ALL'
             ? {}
