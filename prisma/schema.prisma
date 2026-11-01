@@ -499,6 +499,8 @@ model Medicine {
   priceChangeProposals         PharmacyPriceChangeProposal[]
   connectorProposals           PharmacyReferenceConnectorProposal[]
   customerOrderLines           PharmacyCustomerOrderLine[]
+  // Set only on a medicine materialised from the platform default catalogue.
+  catalogueProvenance          MedicineCatalogueProvenance?
 
   @@unique([organizationId, id], map: "pharmacy_medicines_org_id_key")
   @@index([organizationId, productName])
@@ -613,6 +615,79 @@ model MedicineProvenance {
 
   @@index([organizationId, medicineId, field])
   @@map("pharmacy_medicine_provenance")
+}
+
+/// Platform default medicine catalogue: shared, immutable reference data owned
+/// by the platform. It has no organizationId — every tenant may read it, only
+/// the platform loader writes it (see the migration's policies). Nothing sells
+/// from it directly: a pharmacy gets its own `Medicine` copies, recorded by
+/// `MedicineCatalogueProvenance`, so every tenant FK and RLS policy downstream
+/// (presentations, sale lines, purchase orders, batches) stays as it is.
+model PlatformMedicineCatalogueVersion {
+  id          String                          @id @default(cuid())
+  key         String
+  version     Int
+  /// sha256 of the uncompressed seed CSV the version was loaded from.
+  digest      String
+  rowCount    Int
+  /// Set once every row is loaded. Only a published version is ever applied.
+  publishedAt DateTime?
+  createdAt   DateTime                        @default(now())
+  items       PlatformMedicineCatalogueItem[]
+  applied     MedicineCatalogueProvenance[]
+
+  @@unique([key, version], map: "platform_medicine_catalogue_versions_key_version_key")
+  @@unique([key, digest], map: "platform_medicine_catalogue_versions_key_digest_key")
+  @@map("platform_medicine_catalogue_versions")
+}
+
+model PlatformMedicineCatalogueItem {
+  id                  String                           @id @default(cuid())
+  versionId           String
+  sourceKey           String
+  productName         String
+  brandName           String?
+  manufacturer        String?
+  strength            String?
+  dosageForm          String?
+  productFamily       PharmacyProductFamily
+  /// The source filed the item under NARCOTICS. A review flag, never a
+  /// `controlled` classification: the materialised medicine stays unsaleable
+  /// until a pharmacist decides.
+  controlledCandidate Boolean                          @default(false)
+  createdAt           DateTime                         @default(now())
+  version             PlatformMedicineCatalogueVersion @relation(fields: [versionId], references: [id], onDelete: Restrict)
+
+  @@unique([versionId, sourceKey], map: "platform_medicine_catalogue_items_version_source_key")
+  @@map("platform_medicine_catalogue_items")
+}
+
+/// Where a tenant medicine came from when the platform default catalogue
+/// created it: source `platform-default`, the catalogue version, and the item's
+/// source key. Unique per (organization, catalogue, source key), which is what
+/// makes applying a catalogue — or a later version of it — idempotent: an item
+/// the tenant already holds is never created again and its medicine is never
+/// overwritten. `contentDigest` is the item as it was copied, so a later version
+/// that changed it is reported as a diff rather than applied.
+model MedicineCatalogueProvenance {
+  id                  String                           @id @default(cuid())
+  organizationId      String                           @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  medicineId          String
+  source              String                           @default("platform-default")
+  catalogueKey        String
+  catalogueVersion    Int
+  catalogueVersionId  String
+  sourceKey           String
+  contentDigest       String
+  controlledCandidate Boolean                          @default(false)
+  createdAt           DateTime                         @default(now())
+  medicine            Medicine                         @relation(fields: [organizationId, medicineId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_medicine_catalogue_provenance_medicine_fkey")
+  catalogue           PlatformMedicineCatalogueVersion @relation(fields: [catalogueVersionId], references: [id], onDelete: Restrict, map: "pharmacy_medicine_catalogue_provenance_version_fkey")
+
+  @@unique([organizationId, catalogueKey, sourceKey], map: "pharmacy_medicine_catalogue_provenance_org_source_key")
+  @@unique([organizationId, medicineId], map: "pharmacy_medicine_catalogue_provenance_org_medicine_key")
+  @@index([organizationId, controlledCandidate], map: "pharmacy_medicine_catalogue_provenance_org_controlled_idx")
+  @@map("pharmacy_medicine_catalogue_provenance")
 }
 
 model MedicineBarcode {
@@ -2715,8 +2790,9 @@ enum PlatformJobType {
   PURGE_DATA
   SUSPEND
   RESUME
-  PHARMACY_CAMERA_SNAPSHOT_V1  @map("pharmacy.camera.snapshot.v1")
-  CAMERA_EVIDENCE_RETENTION_V1 @map("camera.evidence.retention.v1")
+  PHARMACY_CAMERA_SNAPSHOT_V1   @map("pharmacy.camera.snapshot.v1")
+  CAMERA_EVIDENCE_RETENTION_V1  @map("camera.evidence.retention.v1")
+  PHARMACY_DEFAULT_CATALOGUE_V1 @map("pharmacy.default-catalogue.v1")
 }
 
 enum PlatformJobStatus {

@@ -16,6 +16,7 @@ import {
   runCameraEvidenceRetentionJob,
   runCounterEvidenceSnapshotJob,
 } from '@/lib/pharmacy/counter-evidence';
+import { runDefaultCatalogueJob } from '@/lib/pharmacy/default-catalogue';
 import {
   archiveWhatsAppConsentBeforeTenantPurge,
   deleteExpiredWhatsAppConsentArchives,
@@ -746,11 +747,15 @@ async function setDeploymentAvailability(
 }
 
 async function executeJob(job: PlatformJob): Promise<JobResult> {
+  const type = job.type;
+  // The default medicine catalogue commits one tenant batch at a time so a
+  // large apply is resumable; it must not run inside one platform transaction.
+  if (type === 'PHARMACY_DEFAULT_CATALOGUE_V1') return runDefaultCatalogueJob(job);
   return withPlatformDb(
     async (db) => {
       const payload = objectPayload(job.payload);
       const handlers: Record<
-        PlatformJobType,
+        Exclude<PlatformJobType, 'PHARMACY_DEFAULT_CATALOGUE_V1'>,
         (database: PrismaClient, item: PlatformJob, data: JobPayload) => Promise<JobResult>
       > = {
         PROVISION_SHARED: sharedProvision,
@@ -766,7 +771,7 @@ async function executeJob(job: PlatformJob): Promise<JobResult> {
         CAMERA_EVIDENCE_RETENTION_V1: (database, item) =>
           runCameraEvidenceRetentionJob(database, item),
       };
-      return handlers[job.type](db, job, payload);
+      return handlers[type](db, job, payload);
     },
     {
       timeout:

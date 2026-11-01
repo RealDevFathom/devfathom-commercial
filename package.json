@@ -37,6 +37,8 @@
     "assistant:diag": "tsx scripts/assistant-diag.ts",
     "email:smoke": "tsx scripts/email-smoke.ts",
     "platform:jobs": "tsx --tsconfig scripts/tsconfig.json scripts/process-platform-jobs.ts",
+    "pharmacy:catalogue:load": "tsx --tsconfig scripts/tsconfig.json scripts/pharmacy/load-default-catalogue.ts",
+    "pharmacy:catalogue:backfill": "tsx --tsconfig scripts/tsconfig.json scripts/pharmacy/backfill-default-catalogue.ts",
     "restaurant:jobs": "tsx --tsconfig scripts/tsconfig.json scripts/run-restaurant-jobs.ts",
     "restaurant:print-bridge": "tsx --tsconfig scripts/tsconfig.json scripts/print-bridge.ts"
   },

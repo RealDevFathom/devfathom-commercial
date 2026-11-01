@@ -44,6 +44,7 @@ import {
 } from '@/lib/pharmacy/regulatory';
 import { PAKISTAN_PROVINCES } from '@/lib/pharmacy/regulatory-profile-form';
 import { isDedicatedProvisioningConfigured } from '@/lib/platform/provisioning-config';
+import { enqueueDefaultCatalogueForNewPharmacy } from '@/lib/pharmacy/default-catalogue';
 import { evaluatePharmacyReadiness } from '@/lib/pharmacy/onboarding';
 import { evaluateHotelReadiness } from '@/lib/hotel/onboarding-checklist';
 import { defaultJourneyTemplateSeeds } from '@/lib/hotel/journey-templates';
@@ -1136,6 +1137,14 @@ async function bootstrapOrganization(
         city: input.firstBranchCity!,
         provinceCode: input.firstBranchProvinceCode!,
       },
+    });
+    // The platform default medicine catalogue is queued, never applied here:
+    // copying ~19k medicines must not hold this transaction open, and a
+    // catalogue failure must not roll the organization back. The job records
+    // its own status and is retried from the console like any platform job.
+    await enqueueDefaultCatalogueForNewPharmacy(db, {
+      organizationId: organization.id,
+      requestedById: actor?.id ?? null,
     });
   }
   // §9 Step 6 — instantiate the vertical's role templates from the catalog.
@@ -3958,6 +3967,7 @@ async function runCommand(
             'PURGE_DATA',
             'SUSPEND',
             'RESUME',
+            'PHARMACY_DEFAULT_CATALOGUE_V1',
           ]),
           scheduledAt: optionalDate.optional(),
           maxAttempts: z.coerce.number().int().min(1).max(10).default(3),

@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { Plus } from 'lucide-react';
 import {
   PlatformCommandButton,
@@ -31,6 +32,14 @@ export default async function JobsPage() {
         eyebrow="Operations / durable work"
         title="Job control"
         description="Provisioning, domains, branding, identity sync, exports, suspension, and data lifecycle tasks with retry state and operator attribution."
+        action={
+          <Link
+            href="/platform/jobs/pharmacy-catalogue"
+            className="text-sm underline focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            Pharmacy default catalogue
+          </Link>
+        }
       />
       <div className="mt-7 grid gap-7 xl:grid-cols-[1fr_380px]">
         <section className="overflow-x-auto border border-border-default bg-surface-card">
@@ -131,6 +140,7 @@ export default async function JobsPage() {
                       'PURGE_DATA',
                       'SUSPEND',
                       'RESUME',
+                      'PHARMACY_DEFAULT_CATALOGUE_V1',
                     ].map((value) => ({ label: value.replaceAll('_', ' '), value })),
                   },
                   { name: 'scheduledAt', label: 'Schedule', type: 'datetime-local' },
