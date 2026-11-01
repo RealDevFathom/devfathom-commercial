@@ -112,6 +112,20 @@ describe('pharmacySales.closeAnomalyCheck', () => {
     expect(staff.db.pharmacyDailyClose.findFirst).not.toHaveBeenCalled();
   });
 
+  it('refuses a non-owner delegated admin access and financial reports', async () => {
+    vi.mocked(can).mockImplementation(async () => true);
+    try {
+      const staff = fixture('EMPLOYEE');
+      await expect(
+        staff.caller.closeAnomalyCheck({ branchId: BRANCH, businessDate })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(staff.db.pharmacyDailyClose.findFirst).not.toHaveBeenCalled();
+      expect(staff.db.pharmacySaleEvent.findMany).not.toHaveBeenCalled();
+    } finally {
+      vi.mocked(can).mockImplementation(async (subject) => subject.role === 'ADMIN');
+    }
+  });
+
   it('refuses an owner denied financial reports before reading any close evidence', async () => {
     vi.mocked(can).mockImplementation(
       async (subject, action) => subject.role === 'ADMIN' && action !== 'reports:financial'

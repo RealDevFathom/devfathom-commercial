@@ -623,6 +623,10 @@ export const pharmacySalesRouter = router({
   closeAnomalyCheck: adminProcedure
     .input(z.object({ branchId, businessDate: closeDate }).strict())
     .query(async ({ ctx, input }) => {
+      // `adminProcedure` only checks the grantable `admin:access` capability; this
+      // check is owner-only, so a delegated EMPLOYEE is refused before any read.
+      if (ctx.session?.user.role !== 'ADMIN')
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Owner access required.' });
       // Refund/void analytics and staff findings are financial reporting: an owner
       // explicitly denied `reports:financial` is refused before any evidence read,
       // as the anomaly report and the Ask Fathom tool already do.

@@ -95,6 +95,12 @@ describe('Ask Fathom cash-close anomaly check (#728)', () => {
         },
       ],
     });
+    const url = new URL(String(result.drillThrough), 'https://test.invalid');
+    expect(url.pathname).toBe('/pharmacy/counter/close');
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      branch: 'branch_1',
+      date: '2026-10-30',
+    });
     expect(String(result.instruction)).toContain('not proof of theft or misconduct');
     expect(String(result.instruction)).toContain('Do not offer to post, reopen');
   });

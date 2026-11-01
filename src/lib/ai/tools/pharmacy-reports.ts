@@ -664,7 +664,11 @@ function cashCloseCheckTool(h: AssistantHelpers) {
               ? 'Read from the latest recorded Z report and the day ledger.'
               : 'The day is still open; figures are a live preview and may change.',
           },
-          drillThrough: '/pharmacy/counter/close',
+          // Open the close console on this exact branch and business day, not today/first branch.
+          drillThrough: `/pharmacy/counter/close?${new URLSearchParams({
+            branch: branchId,
+            date: parsed.data.businessDate,
+          })}`,
           instruction:
             'Narrate only these findings and numbers, keeping severity, policy version and the open/closed status. Findings are review prompts, not proof of theft or misconduct; never name a cause or accuse a person. Do not offer to post, reopen, adjust or message anyone.',
         };

@@ -2,6 +2,7 @@ import { fireEvent, render, screen, cleanup } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   role: 'ADMIN',
+  branches: [{ id: 'b', name: 'Main' }],
   loading: false,
   error: null as Error | null,
   close: null as Record<string, unknown> | null,
@@ -40,7 +41,7 @@ vi.mock('@/lib/trpc', () => ({
     pharmacySales: {
       counterBranches: {
         useQuery: () => ({
-          data: { branches: [{ id: 'b', name: 'Main' }], timezone: mocks.zone },
+          data: { branches: mocks.branches, timezone: mocks.zone },
           isSuccess: true,
         }),
       },
@@ -96,6 +97,7 @@ afterEach(() => {
 beforeEach(() => {
   mocks.zone = WORKSPACE_ZONE;
   mocks.role = 'ADMIN';
+  mocks.branches = [{ id: 'b', name: 'Main' }];
   mocks.loading = false;
   mocks.error = null;
   mocks.close = null;
@@ -256,5 +258,23 @@ describe('day-close console', () => {
     expect(screen.getByText(/Nothing is posted, reopened or sent/)).toBeInTheDocument();
     // Read-only: the panel offers no action beyond the existing close controls.
     expect(screen.queryByRole('button', { name: /acknowledge|resolve|reopen/i })).toBeNull();
+  });
+  it('opens on the deep-linked branch and business day instead of today and the first branch', () => {
+    mocks.branches = [
+      { id: 'b', name: 'Main' },
+      { id: 'b2', name: 'Second' },
+    ];
+    render(<PharmacyDayCloseConsole initial={{ branch: 'b2', date: '2026-09-20' }} />);
+    expect(screen.getByLabelText('Branch')).toHaveValue('b2');
+    expect(screen.getByLabelText('Business date')).toHaveValue('2026-09-20');
+    expect(mocks.previewInput).toHaveBeenLastCalledWith({
+      branchId: 'b2',
+      businessDate: new Date('2026-09-20T00:00:00.000Z'),
+    });
+  });
+  it('falls back to defaults for an unknown branch or malformed day in the link', () => {
+    render(<PharmacyDayCloseConsole initial={{ branch: 'foreign', date: 'yesterday' }} />);
+    expect(screen.getByLabelText('Branch')).toHaveValue('b');
+    expect(screen.getByLabelText('Business date')).toHaveValue(workspaceToday(WORKSPACE_ZONE));
   });
 });
