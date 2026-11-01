@@ -1,7 +1,29 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
-vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
+vi.mock('@/lib/pharmacy/whatsapp/provider', async (original) => ({
+  ...(await original<typeof import('@/lib/pharmacy/whatsapp/provider')>()),
+  createWhatsAppProvider: vi.fn(),
+}));
+vi.mock('@/lib/pharmacy/whatsapp/message-log', () => ({
+  sendAndLog: vi.fn(async (_entry: unknown, send: () => Promise<unknown>) => {
+    await send();
+    return 'PREPARED';
+  }),
+}));
+vi.mock('@/lib/pharmacy/whatsapp/hosted-receipt-store', async (original) => ({
+  ...(await original<typeof import('@/lib/pharmacy/whatsapp/hosted-receipt-store')>()),
+  authorizeHostedReceiptRecord: vi.fn(),
+  tenantHostedReceiptRecipientOptedOut: vi.fn(async () => false),
+  persistHostedReceipt: vi.fn(async () => 'hosted-1'),
+  hostedReceiptRecipientOptedOut: vi.fn(async () => false),
+  revokeHostedReceipts: vi.fn(async () => ({ count: 2 })),
+}));
+vi.mock('@/lib/rate-limit', async (original) => ({
+  ...(await original<typeof import('@/lib/rate-limit')>()),
+  rateLimit: vi.fn(async () => ({ ok: true, retryAfter: 0, remaining: 1 })),
+}));
+vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(), withTenantDb: vi.fn() }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/entitlements', () => ({
   hasModule: vi.fn(() => true),
@@ -65,6 +87,18 @@ vi.mock('@/lib/pharmacy/receipt-print', () => ({
 }));
 
 import { hasModule } from '@/lib/entitlements';
+import { createWhatsAppProvider } from '@/lib/pharmacy/whatsapp/provider';
+import {
+  authorizeHostedReceiptRecord,
+  hostedReceiptRecipientOptedOut,
+  persistHostedReceipt,
+  revokeHostedReceipts,
+} from '@/lib/pharmacy/whatsapp/hosted-receipt-store';
+import { sendAndLog } from '@/lib/pharmacy/whatsapp/message-log';
+import { rateLimit } from '@/lib/rate-limit';
+import { withTenantDb } from '@/lib/tenancy/scoped-db';
+import { deliverHostedReceipt } from '@/lib/pharmacy/whatsapp/hosted-receipt-delivery';
+import { readHostedReceipt } from '@/lib/pharmacy/whatsapp/hosted-receipt';
 import { readCounterCart, readCounterReceipt } from '@/lib/pharmacy/counter';
 import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-source';
 import { changeSaleStatus, readReturnHistory, returnSaleLine } from '@/lib/pharmacy/sales';
@@ -83,6 +117,230 @@ const app = router({ pharmacySales: pharmacySalesRouter });
 type Permission = { capability: string; effect: 'ALLOW' | 'DENY' };
 
 const dispense: Permission[] = [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }];
+
+describe('hosted receipt delivery safety', () => {
+  const secret = 'test-hosted-receipt-secret-at-least-32-characters';
+  const sendText = vi.fn(async (_input: { to: string; body: string }) => ({
+    providerMessageId: 'mock-1',
+    acceptedByProvider: false,
+  }));
+  const request = {
+    branchId: 'branch-a',
+    saleId: 'sale-a',
+    phone: '+923001234567',
+    consent: 'CUSTOMER_REQUEST' as const,
+  };
+  const medicine = {
+    productName: 'Aspirin',
+    brandName: 'Disprin',
+    productFamily: 'PHARMACEUTICAL' as const,
+    aliases: [{ value: 'Acetylsalicylic' }],
+    strengths: [{ ingredient: { name: 'Salicylate' } }],
+  };
+
+  afterEach(() => vi.unstubAllEnvs());
+
+  function ready() {
+    vi.stubEnv('PHARMACY_HOSTED_RECEIPT_SECRET', secret);
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://pharmacy.example.test');
+    sendText.mockClear();
+    vi.mocked(createWhatsAppProvider).mockReturnValue({ sendText } as never);
+    vi.mocked(readCounterReceipt).mockResolvedValue({
+      receiptNumber: 7,
+      completedAt: new Date().toISOString(),
+      branchName: 'Gulberg',
+      currency: 'PKR',
+      totals: { netMinor: 1000 },
+      tenders: [{ type: 'CASH' }],
+      lines: [{ saleLineId: 'line-1' }],
+    } as never);
+    const f = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }]);
+    assign(f, ['branch-a']);
+    f.db.medicine.findMany.mockResolvedValue([medicine]);
+    vi.mocked(withTenantDb).mockImplementation(async (_organizationId, run) => run(f.db as never));
+    vi.mocked(authorizeHostedReceiptRecord).mockImplementation(async (token, key) => ({
+      id: 'hosted-1', receipt: readHostedReceipt(token, key),
+    }));
+    return f;
+  }
+
+  it.each([
+    { rx: true, prescriptionLineId: null },
+    { rx: false, prescriptionLineId: 'prescription-line-1' },
+    { rx: false, prescriptionLineId: null },
+  ])('protects the sold medicine and retains linked-prescription protection: %j', async (line) => {
+    const f = ready();
+    f.db.pharmacySaleLine.findFirst.mockImplementation(async (args) => {
+      expect(args.where).toMatchObject({
+        organizationId: 'org-a',
+        branchId: 'branch-a',
+        saleId: 'sale-a',
+        OR: [{ medicine: { rx: true } }, { prescriptionLineId: { not: null } }],
+      });
+      return line.rx || line.prescriptionLineId ? { id: 'line-1' } : null;
+    });
+    await expect(f.caller().sendHostedReceipt(request)).resolves.toMatchObject({
+      outcome: 'QUEUED',
+    });
+    const protectedReceipt = line.rx || Boolean(line.prescriptionLineId);
+    const token = vi.mocked(persistHostedReceipt).mock.calls[0][1];
+    expect(readHostedReceipt(token, secret).rx).toBe(protectedReceipt);
+    expect(sendText).not.toHaveBeenCalled();
+    await deliverHostedReceipt(f.db.outboundEffect.create.mock.calls[0][0].data.payload, 'org-a');
+    expect(sendText).toHaveBeenCalledTimes(protectedReceipt ? 2 : 1);
+    if (protectedReceipt) expect(sendText.mock.calls[1][0].body).toContain('verification code');
+  });
+
+  it.each(['Aspirin', 'Disprin', 'Acetylsalicylic', 'Salicylate', 'Pharmaceutical'])(
+    'rejects catalog term %s in editable utility fields before persistence or sending',
+    async (term) => {
+      const f = ready();
+      f.db.pharmacySaleLine.findFirst.mockResolvedValue(null);
+      vi.mocked(readCounterReceipt).mockResolvedValue({
+        receiptNumber: 7,
+        completedAt: new Date().toISOString(),
+        branchName: term,
+        currency: 'PKR',
+        totals: { netMinor: 1000 },
+        tenders: [{ type: 'CASH' }],
+        lines: [{ saleLineId: 'line-1' }],
+      } as never);
+      await expect(f.caller().sendHostedReceipt(request)).rejects.toThrow('medicine information');
+      expect(f.db.medicine.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { organizationId: 'org-a' },
+        })
+      );
+      expect(persistHostedReceipt).not.toHaveBeenCalled();
+      expect(sendText).not.toHaveBeenCalled();
+    }
+  );
+
+  it('never lints the random link token or fixed template words', async () => {
+    const f = ready();
+    f.db.pharmacySaleLine.findFirst.mockResolvedValue(null);
+    // "cure" is inside the fixed "Secure receipt" label; short terms such as
+    // "ORS" or "Zinc" can appear inside the random base64url link token.
+    f.db.medicine.findMany.mockResolvedValue([
+      { ...medicine, productName: 'ORS', brandName: 'Zinc', aliases: [{ value: 'cure' }] },
+    ]);
+    await expect(f.caller().sendHostedReceipt(request)).resolves.toMatchObject({
+      outcome: 'QUEUED',
+    });
+    expect(sendText).not.toHaveBeenCalled();
+    await deliverHostedReceipt(f.db.outboundEffect.create.mock.calls[0][0].data.payload, 'org-a');
+    expect(sendText.mock.calls[0][0].body).toContain('Secure receipt: https://');
+  });
+
+  it('rejects Aspirin in a branch name when the sale contains only Zinc', async () => {
+    const f = ready();
+    f.db.pharmacySaleLine.findFirst.mockResolvedValue(null);
+    f.db.medicine.findMany.mockImplementation(async (args) =>
+      'saleLines' in args.where ? [{ ...medicine, productName: 'Zinc', brandName: null, aliases: [], strengths: [] }] : [medicine]
+    );
+    vi.mocked(readCounterReceipt).mockResolvedValue({
+      receiptNumber: 7,
+      completedAt: new Date().toISOString(),
+      branchName: 'Aspirin Gulberg',
+      currency: 'PKR',
+      totals: { netMinor: 1000 },
+      tenders: [{ type: 'CASH' }],
+      lines: [{ medicineName: 'Zinc' }],
+    } as never);
+    await expect(f.caller().sendHostedReceipt(request)).rejects.toThrow('medicine information');
+    expect(persistHostedReceipt).not.toHaveBeenCalled();
+    expect(f.db.outboundEffect.create).not.toHaveBeenCalled();
+  });
+
+  it.each(['returned', 'refunded', 'voided'])(
+    'refuses a %s sale even when its receipt number and completion time remain',
+    async () => {
+      const f = ready();
+      f.db.pharmacySale.findFirst.mockResolvedValue(null);
+      await expect(f.caller().sendHostedReceipt(request)).rejects.toMatchObject({ code: 'CONFLICT' });
+      expect(f.db.pharmacySale.findFirst).toHaveBeenCalledWith({
+        where: {
+          organizationId: 'org-a', branchId: 'branch-a', id: 'sale-a',
+          status: 'COMPLETED', returns: { none: {} }, refunds: { none: {} },
+        },
+        select: { customerId: true },
+      });
+      expect(persistHostedReceipt).not.toHaveBeenCalled();
+      expect(f.db.outboundEffect.create).not.toHaveBeenCalled();
+      expect(sendText).not.toHaveBeenCalled();
+    }
+  );
+
+  it('refuses a number that opted out of WhatsApp before persisting or sending', async () => {
+    const f = ready();
+    f.db.pharmacySaleLine.findFirst.mockResolvedValue(null);
+    f.db.pharmacySale.findFirst.mockResolvedValue({ customerId: 'customer-1' });
+    vi.mocked(persistHostedReceipt).mockClear();
+    vi.mocked(hostedReceiptRecipientOptedOut).mockResolvedValueOnce(true);
+    await expect(f.caller().sendHostedReceipt(request)).rejects.toThrow('opted out');
+    expect(hostedReceiptRecipientOptedOut).toHaveBeenCalledWith(
+      f.db,
+      'org-a',
+      '923001234567',
+      'customer-1'
+    );
+    expect(persistHostedReceipt).not.toHaveBeenCalled();
+    expect(sendText).not.toHaveBeenCalled();
+  });
+
+  it('rate-limits repeated sends to one number', async () => {
+    const f = ready();
+    vi.mocked(persistHostedReceipt).mockClear();
+    vi.mocked(rateLimit).mockResolvedValueOnce({ ok: false, retryAfter: 60, remaining: 0 });
+    await expect(f.caller().sendHostedReceipt(request)).rejects.toThrow('Too many receipt links');
+    expect(rateLimit).toHaveBeenCalledWith(
+      'pharmacy-hosted-receipt:phone:org-a:923001234567',
+      3,
+      3_600_000
+    );
+    expect(persistHostedReceipt).not.toHaveBeenCalled();
+    expect(sendText).not.toHaveBeenCalled();
+  });
+
+  it('records the provider message id and marks delivery only on provider acceptance', async () => {
+    const f = ready();
+    f.db.pharmacySaleLine.findFirst.mockResolvedValue(null);
+    vi.mocked(sendAndLog).mockImplementationOnce(async (_entry, send) => {
+      await send();
+      return 'SENT';
+    });
+    f.db.pharmacyMessageLog.findFirst.mockResolvedValueOnce({ status: 'SENT', providerMessageId: 'mock-1' });
+    await f.caller().sendHostedReceipt(request);
+    expect(f.db.pharmacyHostedReceipt.updateMany).not.toHaveBeenCalled();
+    await deliverHostedReceipt(f.db.outboundEffect.create.mock.calls[0][0].data.payload, 'org-a');
+    expect(f.db.pharmacyHostedReceipt.updateMany).toHaveBeenCalledWith({
+      where: { organizationId: 'org-a', id: 'hosted-1' },
+      data: { providerMessageId: 'mock-1', deliveredAt: expect.any(Date) },
+    });
+    f.db.pharmacyHostedReceipt.updateMany.mockClear();
+    await f.caller().sendHostedReceipt(request);
+    await deliverHostedReceipt(f.db.outboundEffect.create.mock.calls[1][0].data.payload, 'org-a');
+    expect(f.db.pharmacyHostedReceipt.updateMany).toHaveBeenCalledWith({
+      where: { organizationId: 'org-a', id: 'hosted-1' },
+      data: { providerMessageId: 'mock-1' },
+    });
+  });
+
+  it('lets counter staff revoke every live link for a sale in their branch', async () => {
+    const f = ready();
+    await expect(
+      f.caller().revokeHostedReceipts({ branchId: 'branch-a', saleId: 'sale-a' })
+    ).resolves.toEqual({ revoked: 2 });
+    expect(revokeHostedReceipts).toHaveBeenCalledWith(
+      f.db,
+      'org-a',
+      'sale-a',
+      'user-a',
+      expect.any(Date),
+      'branch-a'
+    );
+  });
+});
 
 function fixture(
   permissions: Permission[],
@@ -124,6 +382,9 @@ function fixture(
       findMany: vi.fn(async () => [] as { branchId: string }[]),
     },
     pharmacySale: {
+      findFirst: vi.fn(async (): Promise<{ customerId: string | null } | null> => ({
+        customerId: null,
+      })),
       findMany: vi.fn(async () => [
         {
           id: 'sale-a',
@@ -132,6 +393,17 @@ function fixture(
           businessDate: new Date('2026-10-01T00:00:00.000Z'),
         },
       ]),
+    },
+    pharmacySaleLine: { findFirst: vi.fn() },
+    medicine: { findMany: vi.fn() },
+    pharmacyHostedReceipt: { updateMany: vi.fn(async () => ({ count: 1 })) },
+    pharmacyMessageLog: {
+      findFirst: vi.fn(async (): Promise<{ status: string; providerMessageId: string }> => ({
+        status: 'IGNORED', providerMessageId: 'mock-1',
+      })),
+    },
+    outboundEffect: {
+      create: vi.fn(async (_args: { data: { payload: { ciphertext: string } } }) => ({ id: 'effect-1' })),
     },
     organization: { findUnique: vi.fn(async () => ({ currency: 'PKR' })) },
     $transaction: vi.fn(),

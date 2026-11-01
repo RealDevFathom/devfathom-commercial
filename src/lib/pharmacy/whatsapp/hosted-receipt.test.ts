@@ -1,0 +1,137 @@
+import { describe, expect, it } from 'vitest';
+import {
+  buildReceiptMessage,
+  createReceiptOtpCode,
+  createReceiptOtpProofFromCode,
+  createReceiptOtpProof,
+  hasValidReceiptOtp,
+  issueHostedReceipt,
+  lintReceiptMessage,
+  readHostedReceipt,
+  receiptPhoneMatches,
+} from './hosted-receipt';
+const secret = 'a-production-length-secret-that-is-not-real';
+const now = new Date('2026-10-29T00:00:00.000Z');
+const input = {
+  consent: 'CUSTOMER_REQUEST' as const,
+  consentedAt: now.toISOString(),
+  organizationId: 'org-1',
+  branchId: 'branch-1',
+  saleId: 'sale-1',
+  actorId: 'owner-1',
+  version: 1 as const,
+  branch: 'Gulberg',
+  receiptNumber: 'R-42',
+  total: 'PKR 1,250.00',
+  paymentMethod: 'Card',
+  expiryDays: 30,
+  rx: false,
+};
+describe('neutral hosted pharmacy receipt', () => {
+  it.each([4, 8, 12, 13, 14, 15])('rejects a truncated %i-byte authentication tag', (length) => {
+    const { token } = issueHostedReceipt({ ...input, now }, secret);
+    const parts = token.split('.');
+    parts[2] = Buffer.from(parts[2], 'base64url').subarray(0, length).toString('base64url');
+    expect(() => readHostedReceipt(parts.join('.'), secret, now)).toThrow('Invalid receipt link.');
+  });
+  it('creates an opaque authenticated token with bounded expiry', () => {
+    const issued = issueHostedReceipt({ ...input, now }, secret);
+    expect(issued.token).not.toContain('R-42');
+    expect(readHostedReceipt(issued.token, secret, new Date('2026-11-27'))).toMatchObject({
+      receiptNumber: 'R-42',
+      rx: false,
+    });
+    expect(() =>
+      readHostedReceipt(issued.token, secret, new Date('2026-11-29T00:00:00.001Z'))
+    ).toThrow('expired');
+    expect(() => issueHostedReceipt({ ...input, expiryDays: 29 }, secret)).toThrow('30 and 90');
+    expect(() => readHostedReceipt(`${issued.token}x`, secret, now)).toThrow('Invalid');
+  });
+  it('requires a recent phone-bound OTP proof for Rx receipts', () => {
+    const { token } = issueHostedReceipt(
+      { ...input, rx: true, phone: '+92 300 1234567', now },
+      secret
+    );
+    expect(hasValidReceiptOtp(token, undefined, secret, now)).toBe(false);
+    expect(() => createReceiptOtpProof(token, '+92 311 0000000', secret, now)).toThrow(
+      'does not match'
+    );
+    const proof = createReceiptOtpProof(token, '+92 300 1234567', secret, now);
+    expect(hasValidReceiptOtp(token, proof, secret, new Date(now.getTime() + 14 * 60_000))).toBe(
+      true
+    );
+    expect(hasValidReceiptOtp(token, proof, secret, new Date(now.getTime() + 16 * 60_000))).toBe(
+      false
+    );
+    const code = createReceiptOtpCode(token, secret, now);
+    expect(code).toMatch(/^\d{6}$/);
+    expect(
+      hasValidReceiptOtp(
+        token,
+        createReceiptOtpProofFromCode(token, code, secret, now),
+        secret,
+        now
+      )
+    ).toBe(true);
+    expect(() => createReceiptOtpProofFromCode(token, '00000x', secret, now)).toThrow('invalid');
+  });
+  it('builds only the five neutral utility fields and lints catalog terms', () => {
+    const text = buildReceiptMessage({ ...input, link: 'https://example.test/r/token' });
+    expect(text).toBe(
+      'Receipt from Gulberg\nReceipt: R-42\nTotal: PKR 1,250.00\nMethod: Card\nSecure receipt: https://example.test/r/token'
+    );
+    expect(() => lintReceiptMessage(`${text}\nAspirin`, ['Aspirin'])).toThrow(
+      'medicine information'
+    );
+  });
+  it('lints only the editable fields, never the link token or fixed labels', () => {
+    const link = 'https://example.test/r/pharmacy/xORSzincABC.def-Iron_9';
+    expect(() =>
+      buildReceiptMessage({ ...input, link }, ['ORS', 'Zinc', 'Iron', 'cure', 'Method'])
+    ).not.toThrow();
+    for (const field of ['branch', 'receiptNumber', 'total', 'paymentMethod'] as const)
+      expect(() => buildReceiptMessage({ ...input, [field]: 'Zinc 50', link }, ['zinc'])).toThrow(
+        'medicine information'
+      );
+    expect(() =>
+      buildReceiptMessage({ ...input, branch: 'Gulberg\nAspirin', link }, ['Aspirin'])
+    ).toThrow('medicine information');
+    expect(() => buildReceiptMessage({ ...input, branch: 'A\nB', link })).toThrow(
+      'approved utility format'
+    );
+  });
+  it('matches a customer-entered number against the Rx phone binding', () => {
+    const { receipt } = issueHostedReceipt(
+      { ...input, rx: true, phone: '923001234567', now },
+      secret
+    );
+    expect(receiptPhoneMatches(receipt, '923001234567', secret)).toBe(true);
+    expect(receiptPhoneMatches(receipt, '923110000000', secret)).toBe(false);
+    expect(
+      receiptPhoneMatches(
+        issueHostedReceipt({ ...input, now }, secret).receipt,
+        '923001234567',
+        secret
+      )
+    ).toBe(false);
+  });
+  it('carries optional FBR evidence only in the protected hosted receipt', () => {
+    const issued = issueHostedReceipt(
+      { ...input, now, fbrInvoiceNumber: 'FBR-9', fbrQrUrl: 'https://fbr.example/qr/9' },
+      secret
+    );
+    expect(readHostedReceipt(issued.token, secret, now)).toMatchObject({
+      fbrInvoiceNumber: 'FBR-9',
+      fbrQrUrl: 'https://fbr.example/qr/9',
+    });
+  });
+  it('rejects malformed timestamps and oversized bearer tokens', () => {
+    expect(() => readHostedReceipt('x'.repeat(16_385), secret, now)).toThrow('Invalid');
+    expect(() => issueHostedReceipt({ ...input, consentedAt: 'not-a-date', now }, secret)).toThrow(
+      'consent time'
+    );
+    expect(() =>
+      issueHostedReceipt({ ...input, consent: undefined as never, now }, secret)
+    ).toThrow('consent');
+  });
+});

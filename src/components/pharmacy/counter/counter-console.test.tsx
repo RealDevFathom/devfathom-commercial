@@ -127,6 +127,8 @@ vi.mock('@/lib/trpc', () => {
         'redeemPoints',
         'authenticatePack',
         'substituteProposals',
+        'sendHostedReceipt',
+        'revokeHostedReceipts',
       ]),
       pharmacyPrescriptions: router(['counterPatients', 'counterPatientPanel']),
       pharmacySafety: router(['controlledPharmacists']),

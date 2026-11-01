@@ -194,6 +194,7 @@ model BranchRegulatoryProfile {
 /// the branch is a scope *inside* that boundary, never a substitute for it.
 model PharmacyBranch {
   whatsappMessageLogs    PharmacyMessageLog[]
+  hostedReceipts         PharmacyHostedReceipt[]
   aiUsages               AIUsage[]
   receiptLayout          Json?
   receiptLayoutRevision  Int                  @default(0)
@@ -1117,11 +1118,45 @@ model PharmacySale {
   loyaltyEntries            PharmacyLoyaltyPointsEntry[]
   customerOrder             PharmacyCustomerOrder?
   visibilityAnchor          PharmacyBranch               @relation("PharmacySaleVisibilityAnchor", fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_sales_visibility_fkey")
+  hostedReceipts            PharmacyHostedReceipt[]
 
   @@unique([organizationId, id])
   @@unique([organizationId, branchId, id])
   @@index([organizationId, branchId, status, createdAt])
   @@map("pharmacy_sales")
+}
+
+/// Revocable, tenant-scoped authorization record for a WhatsApp hosted receipt.
+/// The bearer token is never stored; only its SHA-256 digest is retained.
+model PharmacyHostedReceipt {
+  id                String    @id @default(cuid())
+  organizationId    String    @default(dbgenerated("current_setting('app.current_organization_id'::text, true)"))
+  branchId          String
+  saleId            String
+  actorId           String
+  tokenDigest       String
+  version           Int       @default(1)
+  consent           String
+  consentedAt       DateTime  @db.Timestamp(3)
+  issuedAt          DateTime  @default(now()) @db.Timestamp(3)
+  expiresAt         DateTime  @db.Timestamp(3)
+  deliveredAt       DateTime? @db.Timestamp(3)
+  providerMessageId String?
+  revokedAt         DateTime? @db.Timestamp(3)
+  revokedByActorId  String?
+  lastAccessedAt    DateTime? @db.Timestamp(3)
+  accessCount       Int       @default(0)
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade, map: "pharmacy_hosted_receipts_organization_fkey")
+  branch       PharmacyBranch @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_hosted_receipts_branch_fkey")
+  sale         PharmacySale   @relation(fields: [organizationId, branchId, saleId], references: [organizationId, branchId, id], onDelete: Restrict, map: "pharmacy_hosted_receipts_sale_fkey")
+  actor        User           @relation("PharmacyHostedReceiptActor", fields: [organizationId, actorId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_hosted_receipts_actor_fkey")
+  revokedBy    User?          @relation("PharmacyHostedReceiptRevoker", fields: [organizationId, revokedByActorId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_hosted_receipts_revoker_fkey")
+
+  @@unique([organizationId, tokenDigest], map: "pharmacy_hosted_receipts_org_digest_key")
+  @@index([organizationId, saleId, issuedAt(sort: Desc)], map: "pharmacy_hosted_receipts_sale_idx")
+  @@index([organizationId, expiresAt, revokedAt], map: "pharmacy_hosted_receipts_expiry_idx")
+  @@map("pharmacy_hosted_receipts")
 }
 
 /// CRM-L01 retail identity. Clinical identity remains in PharmacyPatient and is
@@ -2897,6 +2932,8 @@ model User {
   pharmacyOrderEvents         PharmacyCustomerOrderEvent[]   @relation("PharmacyOrderEventActor")
 
   pharmacyDeliveryEvidence PharmacyOrderDeliveryEvidence[] @relation("PharmacyDeliveryEvidenceActor")
+  pharmacyHostedReceiptsIssued  PharmacyHostedReceipt[] @relation("PharmacyHostedReceiptActor")
+  pharmacyHostedReceiptsRevoked PharmacyHostedReceipt[] @relation("PharmacyHostedReceiptRevoker")
 
   hotelPropertyAssignments HotelPropertyAssignment[]
   pharmacyBranchAssignments PharmacyBranchAssignment[]
@@ -4882,6 +4919,7 @@ enum RestaurantActivationAcknowledgementKind {
 model Organization {
   pharmacyMigrationSources PharmacyMigrationSource[]
   pharmacyMessageLogs      PharmacyMessageLog[]
+  pharmacyHostedReceipts   PharmacyHostedReceipt[]
   id                       String                     @id @default(cuid())
   slug                     String                     @unique
   legalName                String

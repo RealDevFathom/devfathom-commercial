@@ -107,6 +107,19 @@ describe('platform host routing', () => {
 });
 
 describe('public paths', () => {
+  it.each(['iv.cipher.tag-with-hyphens_', 'iv.cipher.tag_ending', 'iv.cipher.abc123'])(
+    'allows bearer receipt %s and its view without an employee session',
+    async (token) => {
+      for (const suffix of ['', '/view']) {
+        const response = await proxy(tenantRequest(`/r/pharmacy/${token}${suffix}`));
+        expect(response.headers.get('location')).toBeNull();
+        expect(response.headers.get('x-middleware-next')).toBe('1');
+        expect(response.headers.get('cache-control')).toBe('private, no-store');
+        expect(response.headers.get('referrer-policy')).toBe('no-referrer');
+        expect(response.headers.get('x-robots-tag')).toContain('noindex');
+      }
+    }
+  );
   it('stays public for an entry and every path beneath it', async () => {
     for (const path of [
       '/login',
@@ -143,6 +156,8 @@ describe('public paths', () => {
       '/branding',
       '/walletx',
       '/wallets/join',
+      '/r/pharmacy-admin',
+      '/r/other/token',
     ]) {
       const response = await proxy(tenantRequest(path));
       expect(response.status, path).toBe(307);

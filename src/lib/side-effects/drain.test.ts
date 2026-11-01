@@ -4,11 +4,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   sendEmail: vi.fn(),
   deliver: vi.fn(),
+  deliverHostedReceipt: vi.fn(),
 }));
 
 vi.mock('@/lib/email', () => ({ sendEmail: mocks.sendEmail }));
 vi.mock('@/lib/webhooks/safe-url', () => ({
   deliverWebhookRequest: mocks.deliver,
+}));
+vi.mock('@/lib/pharmacy/whatsapp/hosted-receipt-delivery', () => ({
+  deliverHostedReceipt: mocks.deliverHostedReceipt,
 }));
 
 import {
@@ -59,6 +63,17 @@ describe('outbound effect delivery', () => {
     expect(mocks.sendEmail).toHaveBeenCalledWith(
       expect.objectContaining({ to: { email: 'normal@example.test', name: 'Normal' } })
     );
+  });
+
+  it('dispatches a hosted receipt with the outbox owner and sanitizes worker errors', async () => {
+    const row = { id: 'effect_receipt', kind: 'pharmacy-hosted-receipt', payload: { ciphertext: 'encrypted' } };
+    mocks.deliverHostedReceipt.mockResolvedValueOnce(undefined);
+    await expect(runEffect(row, undefined, 'org-a')).resolves.toEqual({ ok: true, error: null });
+    expect(mocks.deliverHostedReceipt).toHaveBeenCalledWith(row.payload, 'org-a');
+    mocks.deliverHostedReceipt.mockRejectedValueOnce(new Error('private token or phone'));
+    await expect(runEffect(row, undefined, 'org-a')).resolves.toEqual({ ok: false, error: 'Delivery failed' });
+    await expect(runEffect(row)).resolves.toEqual({ ok: false, error: 'Delivery failed' });
+    expect(mocks.deliverHostedReceipt).toHaveBeenCalledTimes(2);
   });
 
   it('records a sanitized webhook failure and does not keep the socket error', async () => {
