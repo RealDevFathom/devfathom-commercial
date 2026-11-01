@@ -162,3 +162,90 @@ export function ruleSetOptions(field: unknown): {
   // choices that cannot be acted on.
   return { values, provisional: rule.provisional !== false };
 }
+
+/**
+ * #977 — the province a branch's profile must be recorded under, when the
+ * branch states one. A branch created on the platform carries a known province
+ * code, and a profile under any other province would never let it operate, so
+ * the form locks to it. A legacy branch whose province is blank or not a known
+ * code keeps the old choice of every published province.
+ */
+export function lockedBranchProvince(branchProvinceCode: string | null | undefined): string | null {
+  const code = branchProvinceCode?.trim() ?? '';
+  return Object.hasOwn(PAKISTAN_PROVINCES, code) ? code : null;
+}
+
+/** The sentence shown when the branch's own province has no published rules. */
+export function rulesNotPublishedMessage(provinceCode: string): string {
+  return `${provinceName(provinceCode)} rules not published yet`;
+}
+
+/**
+ * Which provinces the form offers for a branch, given the published
+ * jurisdictions. When the branch's province is locked, only that province is
+ * offered — and if it has no published rules the form says so instead of
+ * offering another province's rules.
+ */
+export function provinceChoicesForBranch<J extends { provinceCode: string }>(
+  branchProvinceCode: string | null | undefined,
+  jurisdictions: readonly J[]
+): {
+  locked: boolean;
+  provinceCode: string;
+  options: readonly J[];
+  unpublished: string | null;
+} {
+  const locked = lockedBranchProvince(branchProvinceCode);
+  if (!locked) {
+    return {
+      locked: false,
+      provinceCode: jurisdictions[0]?.provinceCode ?? '',
+      options: jurisdictions,
+      unpublished: null,
+    };
+  }
+  const options = jurisdictions.filter((candidate) => candidate.provinceCode === locked);
+  return {
+    locked: true,
+    provinceCode: locked,
+    options,
+    unpublished: options.length === 0 ? rulesNotPublishedMessage(locked) : null,
+  };
+}
+
+export type RegulatoryVersionState = 'IN_FORCE' | 'NOT_IN_FORCE' | 'SCHEDULED' | 'SUPERSEDED';
+
+/**
+ * #977 — the honest label for one stored version. Only a version whose period
+ * has ended is "superseded"; the version that currently applies but cannot
+ * operate (provisional rules, expired licence) is "not in force", and one that
+ * starts later is "scheduled".
+ */
+export function regulatoryVersionState(
+  version: { effectiveFrom: Date; effectiveTo: Date | null; effective: boolean; inForce: boolean },
+  at: Date
+): RegulatoryVersionState {
+  if (version.inForce) return 'IN_FORCE';
+  if (version.effective) return 'NOT_IN_FORCE';
+  if (version.effectiveFrom > at) return 'SCHEDULED';
+  return 'SUPERSEDED';
+}
+
+/**
+ * #977 — the platform placeholder rule set a branch is placed on. One per
+ * province, so a Sindh branch is not filed under a Punjab rule set. A branch
+ * with no known province keeps the original Punjab placeholder, whose id and
+ * code are unchanged so existing placeholder profiles keep resolving.
+ */
+export function placeholderRuleSetIdentity(branchProvinceCode: string | null | undefined): {
+  id: string;
+  code: string;
+  provinceCode: string;
+} {
+  const provinceCode = lockedBranchProvince(branchProvinceCode) ?? 'PK-PB';
+  return {
+    id: `${provinceCode.toLowerCase().replace(/-/g, '_')}_placeholder_v1`,
+    code: `${provinceCode}-PLACEHOLDER`,
+    provinceCode,
+  };
+}

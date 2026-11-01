@@ -187,6 +187,51 @@ describe('pharmacy placeholder commands', () => {
     });
   });
 
+  it('applies a province-matched placeholder rule set to a Sindh branch (#977)', async () => {
+    state.organization = { id: 'org_1', vertical: 'PHARMACY', status: 'ONBOARDING' };
+    db.pharmacyBranch.findMany.mockResolvedValueOnce([
+      { id: 'branch_sd', provinceCode: 'PK-SD', active: true },
+      { id: 'branch_pb', provinceCode: 'PK-PB', active: true },
+    ]);
+    // Neither branch has a placeholder or an earlier profile: two lookups each.
+    for (let call = 0; call < 4; call += 1) {
+      db.branchRegulatoryProfile.findFirst.mockResolvedValueOnce(null);
+    }
+
+    await execute('organization.pharmacy.placeholder.apply', {
+      organizationId: 'org_1',
+      reason,
+      authenticationCode: '123456',
+    });
+
+    const rules = db.jurisdictionRuleSet.upsert.mock.calls.map((call: any) => call[0].create);
+    expect(rules).toEqual([
+      expect.objectContaining({
+        id: 'pk_sd_placeholder_v1',
+        code: 'PK-SD-PLACEHOLDER',
+        isPlaceholder: true,
+      }),
+      expect.objectContaining({
+        id: 'pk_pb_placeholder_v1',
+        code: 'PK-PB-PLACEHOLDER',
+        isPlaceholder: true,
+      }),
+    ]);
+    const profiles = db.branchRegulatoryProfile.create.mock.calls.map((call: any) => call[0].data);
+    expect(profiles).toEqual([
+      expect.objectContaining({
+        branchId: 'branch_sd',
+        provinceCode: 'PK-SD',
+        jurisdictionRuleSetId: 'pk_sd_placeholder_v1',
+      }),
+      expect.objectContaining({
+        branchId: 'branch_pb',
+        provinceCode: 'PK-PB',
+        jurisdictionRuleSetId: 'pk_pb_placeholder_v1',
+      }),
+    ]);
+  });
+
   it('locks append-only, closes placeholder profiles, and returns an active org to onboarding', async () => {
     state.organization = { id: 'org_1', vertical: 'PHARMACY', status: 'ACTIVE' };
     state.placeholderActive = true;

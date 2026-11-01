@@ -361,8 +361,10 @@ test('a fresh pharmacy fills its regulatory profile, watches the steps flip, and
   await expect(page.getByLabel('Which branch is this profile for?')).toHaveValue(branchId);
   await expect(page.getByRole('option', { name: /Clifton Chemist/ })).toBeAttached();
 
-  // Punjab's rules are provisional and say so; Sindh's are confirmed.
-  await expect(page.getByRole('option', { name: 'Punjab (rules provisional)' })).toBeAttached();
+  // #977 — the branch is in Sindh, so the province is locked to Sindh and
+  // Punjab's provisional rules are never offered to it.
+  await expect(page.getByLabel('Province')).toHaveValue('PK-SD');
+  await expect(page.getByRole('option', { name: /Punjab/ })).toHaveCount(0);
   await page.getByLabel('Province').selectOption('PK-SD');
   await expect(page.getByLabel('Licence category')).toContainText('RETAIL');
 

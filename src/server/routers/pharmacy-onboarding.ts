@@ -35,8 +35,11 @@ import {
 } from '@/lib/pharmacy/onboarding-checklist';
 import {
   fieldError,
+  lockedBranchProvince,
   provinceName,
   regulatoryProfileInput,
+  regulatoryVersionState,
+  rulesNotPublishedMessage,
   ruleSetOptions,
   type RegulatoryProfileInput,
 } from '@/lib/pharmacy/regulatory-profile-form';
@@ -507,6 +510,7 @@ export const pharmacyOnboardingRouter = router({
             ...version,
             provinceName: provinceName(version.provinceCode),
             ...status,
+            state: regulatoryVersionState({ ...version, ...status }, now),
           };
         }),
       };
@@ -529,10 +533,19 @@ export const pharmacyOnboardingRouter = router({
 
       const branch = await ctx.db.pharmacyBranch.findFirst({
         where: { organizationId, id: input.branchId, active: true },
-        select: { id: true },
+        select: { id: true, provinceCode: true },
       });
       if (!branch) {
         throw badRequest('branchId', 'Choose one of this workspace’s active branches.');
+      }
+      // #977 — a branch that states its province is profiled under that
+      // province only. Another province's rules would never let it operate.
+      const branchProvince = lockedBranchProvince(branch.provinceCode);
+      if (branchProvince && input.provinceCode !== branchProvince) {
+        throw badRequest(
+          'provinceCode',
+          `This branch is in ${provinceName(branchProvince)}. Record its profile under ${provinceName(branchProvince)}, not another province.`
+        );
       }
 
       const activePlaceholder = await ctx.db.branchRegulatoryProfile.findFirst({
@@ -573,7 +586,9 @@ export const pharmacyOnboardingRouter = router({
       if (!jurisdiction) {
         throw badRequest(
           'provinceCode',
-          'No jurisdiction rules are published for that province on the date you chose. Pick a province that appears in the list.'
+          branchProvince
+            ? `${rulesNotPublishedMessage(branchProvince)} for the date you chose, so this branch's profile cannot be recorded yet. Your DevFathom account manager can tell you when they are.`
+            : 'No jurisdiction rules are published for that province on the date you chose. Pick a province that appears in the list.'
         );
       }
       if (

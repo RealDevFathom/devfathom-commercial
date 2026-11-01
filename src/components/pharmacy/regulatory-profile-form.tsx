@@ -33,6 +33,9 @@ import { Textarea } from '@/components/ui/textarea';
 import {
   FISCAL_STATUSES,
   PROVISIONAL_LICENCE_CATEGORY,
+  provinceChoicesForBranch,
+  provinceName,
+  type RegulatoryVersionState,
 } from '@/lib/pharmacy/regulatory-profile-form';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
@@ -46,6 +49,17 @@ const labelClass =
   'block font-mono text-[0.6875rem] font-semibold uppercase tracking-wide text-text-muted';
 const controlClass =
   'mt-1 min-h-11 w-full rounded-md border border-input bg-surface-raised px-2.5 text-sm text-text-body focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none';
+
+/** #977 — every stored version's label, so an open version is never "superseded". */
+const VERSION_STATE_PILL: Record<
+  RegulatoryVersionState,
+  { status: string; tone: 'success' | 'warning' | 'neutral' }
+> = {
+  IN_FORCE: { status: 'In force', tone: 'success' },
+  NOT_IN_FORCE: { status: 'Not in force', tone: 'warning' },
+  SCHEDULED: { status: 'Scheduled', tone: 'neutral' },
+  SUPERSEDED: { status: 'Superseded', tone: 'neutral' },
+};
 
 const dayFormat = new Intl.DateTimeFormat('en', { dateStyle: 'medium' });
 const day = (value: Date | string) => dayFormat.format(new Date(value));
@@ -90,7 +104,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [evidenceRef, setEvidenceRef] = useState('');
-  const [provinceCode, setProvinceCode] = useState<string>(
+  const [chosenProvinceCode, setProvinceCode] = useState<string>(
     initial.jurisdictions[0]?.provinceCode ?? ''
   );
   const formRef = useRef<HTMLFormElement>(null);
@@ -144,7 +158,16 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
     refresh(nextBranchId);
   };
 
-  const jurisdiction: Jurisdiction | undefined = data.jurisdictions.find(
+  // #977 — a branch with a stated province is locked to it; only a legacy
+  // branch with no known province still chooses among the published ones.
+  const selectedBranch = data.branches.find((branch) => branch.id === branchId);
+  const provinceChoice = provinceChoicesForBranch(selectedBranch?.provinceCode, data.jurisdictions);
+  const provinceCode = provinceChoice.locked
+    ? provinceChoice.provinceCode
+    : provinceChoice.options.some((option) => option.provinceCode === chosenProvinceCode)
+      ? chosenProvinceCode
+      : provinceChoice.provinceCode;
+  const jurisdiction: Jurisdiction | undefined = provinceChoice.options.find(
     (candidate) => candidate.provinceCode === provinceCode
   );
   const categories = jurisdiction?.licenceCategories ?? [];
@@ -276,6 +299,9 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
               : null}
             {current.qualifiedPersonCoverageExpired
               ? ` Qualified-person cover expired on ${day(current.qualifiedPersonValidTo)}.`
+              : null}
+            {provinceChoice.locked && current.provinceCode !== provinceChoice.provinceCode
+              ? ` It was recorded under ${current.provinceName}, but this branch is in ${provinceName(provinceChoice.provinceCode)}.`
               : null}{' '}
             Dispensing and activation are refused until a valid version is recorded.
           </p>
@@ -313,6 +339,16 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
             {saved}
           </p>
         ) : null}
+        {provinceChoice.unpublished ? (
+          <p
+            className="mb-4 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-text-body"
+            role="status"
+          >
+            {provinceChoice.unpublished}. This branch is in that province, so its profile can only
+            be recorded once those rules are published. Your DevFathom account manager can tell you
+            when they are.
+          </p>
+        ) : null}
         <form className="space-y-6" noValidate onSubmit={submit} ref={formRef}>
           <fieldset className="grid gap-4 sm:grid-cols-2">
             <legend className="mb-2 font-display text-base font-semibold text-text-strong">
@@ -339,9 +375,13 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
               error={errors.provinceCode}
               htmlFor="provinceCode"
               hint={
-                jurisdiction?.provisional
-                  ? 'These rules are still provisional, so this branch cannot operate on them yet.'
-                  : 'Only provinces with published rules appear here.'
+                provinceChoice.unpublished
+                  ? `${provinceChoice.unpublished}.`
+                  : jurisdiction?.provisional
+                    ? 'These rules are still provisional, so this branch cannot operate on them yet.'
+                    : provinceChoice.locked
+                      ? 'Set by the branch. Only this province’s rules can apply to it.'
+                      : 'Only provinces with published rules appear here.'
               }
               label="Province"
             >
@@ -354,10 +394,12 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
                 onChange={(event) => setProvinceCode(event.target.value)}
                 value={provinceCode}
               >
-                {data.jurisdictions.length === 0 ? (
+                {provinceChoice.unpublished ? (
+                  <option value={provinceChoice.provinceCode}>{provinceChoice.unpublished}</option>
+                ) : provinceChoice.options.length === 0 ? (
                   <option value="">No published jurisdictions</option>
                 ) : null}
-                {data.jurisdictions.map((option) => (
+                {provinceChoice.options.map((option) => (
                   <option key={option.provinceCode} value={option.provinceCode}>
                     {option.provinceName}
                     {option.provisional ? ' (rules provisional)' : ''}
@@ -716,7 +758,10 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
           </fieldset>
 
           <div className="flex flex-wrap items-center gap-3">
-            <Button disabled={save.isPending || uploading} type="submit">
+            <Button
+              disabled={save.isPending || uploading || Boolean(provinceChoice.unpublished)}
+              type="submit"
+            >
               {save.isPending ? 'Saving…' : 'Save this version'}
             </Button>
             <Link
@@ -782,10 +827,7 @@ function VersionHistory({ versions }: { versions: readonly Version[] }) {
                     </span>
                   </td>
                   <td className="py-2">
-                    <StatusPill
-                      status={version.inForce ? 'In force' : 'Superseded'}
-                      tone={version.inForce ? 'success' : 'neutral'}
-                    />
+                    <StatusPill {...VERSION_STATE_PILL[version.state]} />
                   </td>
                 </tr>
               ))}

@@ -48,6 +48,7 @@ const otherOrganizationId = `ph1198_other_${suffix}`;
 const branchId = `ph1198_branch_${suffix}`;
 const secondBranchId = `ph1198_branch2_${suffix}`;
 const otherBranchId = `ph1198_otherbranch_${suffix}`;
+const lockedBranchId = `ph1198_lockedbranch_${suffix}`;
 const userId = `ph1198_user_${suffix}`;
 const owner = new pg.Client({ connectionString: ownerUrl });
 
@@ -301,6 +302,9 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
         inForce: false,
         provinceName: 'Punjab',
         licenceNumber: 'LIC-4471',
+        // #977 — the open version that cannot operate is "not in force", never
+        // "superseded".
+        state: 'NOT_IN_FORCE',
       });
       expect(listed.versions[0]?.effectiveTo).toBeNull();
     });
@@ -323,6 +327,11 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
       expect(listed.versions.filter((version) => version.inForce)).toHaveLength(0);
       expect(listed.versions[1]?.licenceNumber).toBe('LIC-4471');
       expect(listed.versions[1]?.effectiveTo).not.toBeNull();
+      // #977 — only the version whose period has ended is superseded.
+      expect(listed.versions.map((version) => version.state)).toEqual([
+        'NOT_IN_FORCE',
+        'SUPERSEDED',
+      ]);
     });
   });
 
@@ -446,5 +455,50 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
       expect(result.branches.map((branch) => branch.id)).toEqual([otherBranchId]);
       expect(result.versions).toEqual([]);
     });
+  });
+
+  it('locks a branch to its own province and names unpublished rules', async () => {
+    // #977 — added last so the branch-list assertions above are unaffected.
+    // Gilgit-Baltistan is a known province no rule set is published for.
+    await owner.query(
+      `INSERT INTO pharmacy_branches (id,"organizationId",code,name,"addressLine",city,"provinceCode","updatedAt")
+       VALUES ($1,$2,$1,'Gilgit','1 Airport Road','Gilgit','PK-GB',now())`,
+      [lockedBranchId, organizationId]
+    );
+    await withTenantDb(organizationId, async (db) => {
+      const listed = await caller(db).regulatory({ branchId: lockedBranchId });
+      expect(listed.branches.find((branch) => branch.id === lockedBranchId)).toMatchObject({
+        provinceCode: 'PK-GB',
+      });
+
+      // Another province's published rules are refused, on the province field.
+      await expect(
+        caller(db).saveRegulatoryProfile({
+          ...profile,
+          branchId: lockedBranchId,
+          provinceCode: 'PK-PB',
+        })
+      ).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+        message: expect.stringContaining('This branch is in Gilgit-Baltistan'),
+      });
+
+      // Its own province has no rules yet, and the refusal says so plainly.
+      await expect(
+        caller(db).saveRegulatoryProfile({
+          ...profile,
+          branchId: lockedBranchId,
+          provinceCode: 'PK-GB',
+        })
+      ).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+        message: expect.stringContaining('Gilgit-Baltistan rules not published yet'),
+      });
+    });
+    const written = await owner.query(
+      `SELECT 1 FROM pharmacy_branch_regulatory_profiles WHERE "branchId" = $1`,
+      [lockedBranchId]
+    );
+    expect(written.rowCount).toBe(0);
   });
 });

@@ -4,8 +4,13 @@ import { formatValidationError } from '@/lib/validation-error';
 import {
   FISCAL_STATUSES,
   fieldError,
+  lockedBranchProvince,
+  placeholderRuleSetIdentity,
+  provinceChoicesForBranch,
   provinceName,
   regulatoryProfileInput,
+  regulatoryVersionState,
+  rulesNotPublishedMessage,
   ruleSetOptions,
 } from './regulatory-profile-form';
 
@@ -132,5 +137,105 @@ describe('branch regulatory profile input', () => {
       expect(status.label).not.toBe(status.value);
       expect(status.label).toMatch(/[a-z]/);
     }
+  });
+});
+
+describe('#977 branch province lock', () => {
+  const punjab = { provinceCode: 'PK-PB', provinceName: 'Punjab' };
+  const sindh = { provinceCode: 'PK-SD', provinceName: 'Sindh' };
+
+  it('locks only a known province code, and leaves legacy branches unlocked', () => {
+    expect(lockedBranchProvince('PK-SD')).toBe('PK-SD');
+    expect(lockedBranchProvince(' PK-SD ')).toBe('PK-SD');
+    expect(lockedBranchProvince('PB')).toBeNull();
+    expect(lockedBranchProvince('')).toBeNull();
+    expect(lockedBranchProvince(null)).toBeNull();
+    expect(lockedBranchProvince(undefined)).toBeNull();
+  });
+
+  it('never offers Punjab to a Sindh branch, and says Sindh rules are unpublished', () => {
+    expect(provinceChoicesForBranch('PK-SD', [punjab])).toEqual({
+      locked: true,
+      provinceCode: 'PK-SD',
+      options: [],
+      unpublished: 'Sindh rules not published yet',
+    });
+    expect(rulesNotPublishedMessage('PK-SD')).toBe('Sindh rules not published yet');
+  });
+
+  it("offers only the branch's own province once its rules are published", () => {
+    expect(provinceChoicesForBranch('PK-SD', [punjab, sindh])).toEqual({
+      locked: true,
+      provinceCode: 'PK-SD',
+      options: [sindh],
+      unpublished: null,
+    });
+  });
+
+  it('keeps every published province on offer for a branch without a known province', () => {
+    expect(provinceChoicesForBranch('', [punjab, sindh])).toEqual({
+      locked: false,
+      provinceCode: 'PK-PB',
+      options: [punjab, sindh],
+      unpublished: null,
+    });
+    expect(provinceChoicesForBranch('PB', []).provinceCode).toBe('');
+  });
+});
+
+describe('#977 version status label', () => {
+  const at = new Date('2026-11-01T00:00:00.000Z');
+  const base = {
+    effectiveFrom: new Date('2026-09-02T00:00:00.000Z'),
+    effectiveTo: null as Date | null,
+    effective: true,
+    inForce: false,
+  };
+
+  it('calls an open version that cannot operate "not in force", never "superseded"', () => {
+    expect(regulatoryVersionState(base, at)).toBe('NOT_IN_FORCE');
+  });
+
+  it('calls an operating version in force', () => {
+    expect(regulatoryVersionState({ ...base, inForce: true }, at)).toBe('IN_FORCE');
+  });
+
+  it('calls only an ended version superseded, and a future one scheduled', () => {
+    expect(
+      regulatoryVersionState(
+        { ...base, effective: false, effectiveTo: new Date('2026-10-01T00:00:00.000Z') },
+        at
+      )
+    ).toBe('SUPERSEDED');
+    expect(
+      regulatoryVersionState(
+        { ...base, effective: false, effectiveFrom: new Date('2026-12-01T00:00:00.000Z') },
+        at
+      )
+    ).toBe('SCHEDULED');
+  });
+});
+
+describe('#977 placeholder rule set per province', () => {
+  it('keeps the original Punjab placeholder identity', () => {
+    expect(placeholderRuleSetIdentity('PK-PB')).toEqual({
+      id: 'pk_pb_placeholder_v1',
+      code: 'PK-PB-PLACEHOLDER',
+      provinceCode: 'PK-PB',
+    });
+  });
+
+  it("files a Sindh branch under a Sindh placeholder, not Punjab's", () => {
+    expect(placeholderRuleSetIdentity('PK-SD')).toEqual({
+      id: 'pk_sd_placeholder_v1',
+      code: 'PK-SD-PLACEHOLDER',
+      provinceCode: 'PK-SD',
+    });
+    expect(placeholderRuleSetIdentity('PK-ICT').id).toBe('pk_ict_placeholder_v1');
+  });
+
+  it('falls back to the Punjab placeholder for a branch without a known province', () => {
+    expect(placeholderRuleSetIdentity('').id).toBe('pk_pb_placeholder_v1');
+    expect(placeholderRuleSetIdentity('PB').id).toBe('pk_pb_placeholder_v1');
   });
 });
