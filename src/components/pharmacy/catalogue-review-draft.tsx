@@ -4,6 +4,7 @@ import { useId, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 
 /**
  * Start the review of a default-catalogue medicine from the workbench: the
@@ -108,9 +109,9 @@ export function CatalogueReviewDraft({
         <label className="block" htmlFor={id}>
           {label}
         </label>
-        <input
+        <Input
           id={id}
-          className={inputClass}
+          className="mt-1 min-h-11"
           name={field}
           value={values[field]}
           aria-invalid={invalid || undefined}

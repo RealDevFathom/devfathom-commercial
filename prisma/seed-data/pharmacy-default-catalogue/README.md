@@ -113,6 +113,11 @@ result and its audit rows report `controlledCandidates`, `linkedControlledCandid
 `saleable = false` — the catalogue carries no DRAP registration, which the saleable gate requires —
 so a pharmacist completes an item before it can be bought or sold.
 
+**Before `--apply` on live pharmacies:** a hold can stop a pharmacy selling stock it already holds,
+and the NARCOTICS POS bucket also contains creams, syrups and supplements. Have the dry run's
+`wouldHoldFromSale` list approved for each tenant (by that pharmacy's responsible pharmacist)
+before running `--apply`, and run `--apply` only for tenants whose list was approved.
+
 ### Completing an item (the pharmacist's path)
 
 Unsaleable copies and held NARCOTICS links are listed in the tenant's reference review workbench

@@ -11,6 +11,7 @@ import { MedicinePackSetup } from './medicine-pack-setup';
 
 import { Button } from '@/components/ui/button';
 import { FilterChips } from '@/components/ui/filter-chips';
+import { Input } from '@/components/ui/input';
 import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
 import { StatusPill } from '@/components/ui/status-pill';
@@ -702,8 +703,8 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
             >
               <label className="block min-w-0 flex-1 text-xs font-medium text-text-body">
                 Search by name or source key
-                <input
-                  className="mt-1 min-h-11 w-full rounded-sm border border-border-default bg-surface-raised px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                <Input
+                  className="mt-1 min-h-11"
                   type="search"
                   value={search}
                   maxLength={200}
