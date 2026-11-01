@@ -71,7 +71,9 @@ export const regulatoryProfileInput = z
     branchId: required('Choose the branch this profile belongs to.', 128),
     effectiveFrom: isoDate('Choose the date this profile takes effect, as YYYY-MM-DD.'),
     provinceCode: required('Choose the province this branch operates in.', 16),
-    premisesAddressLine: required('Enter the street address of the premises.', 256),
+    // Matches the branch address limit (300), since the premises address must
+    // equal the branch address it belongs to (#660).
+    premisesAddressLine: required('Enter the street address of the premises.', 300),
     premisesCity: required('Enter the city of the premises.', 120),
     premisesStorageDescription: required(
       'Describe how medicines are stored at these premises.',

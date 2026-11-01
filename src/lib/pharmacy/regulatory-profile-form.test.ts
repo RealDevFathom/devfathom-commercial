@@ -42,6 +42,16 @@ function fieldsOf(input: unknown) {
 }
 
 describe('branch regulatory profile input', () => {
+  it('accepts a premises address as long as a branch address (300) and no longer', () => {
+    // #660 — the premises address must equal the branch address, so the two
+    // limits must agree or a long branch address could never be recorded.
+    expect(
+      regulatoryProfileInput.safeParse({ ...valid, premisesAddressLine: 'a'.repeat(300) }).success
+    ).toBe(true);
+    const fields = fieldsOf({ ...valid, premisesAddressLine: 'a'.repeat(301) });
+    expect(fields.premisesAddressLine?.[0]).toBe('This value is too long — shorten it.');
+  });
+
   it('accepts a complete profile and trims what the operator typed', () => {
     const parsed = regulatoryProfileInput.parse({
       ...valid,

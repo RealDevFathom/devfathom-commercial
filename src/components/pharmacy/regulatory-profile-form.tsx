@@ -261,6 +261,16 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
             ))}
           </select>
         </Field>
+        {inForce?.premisesCompletionDue ? (
+          <p
+            className="mt-4 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-text-body"
+            role="status"
+          >
+            Finish this profile: the version in force is a platform placeholder that does not record
+            your premises address and city. It still counts toward activation for now — record a
+            version with your real licence and premises below to complete it.
+          </p>
+        ) : null}
         {inForce ? (
           <p className="mt-4 text-sm text-text-muted">
             Version {inForce.version} is in force from {day(inForce.effectiveFrom)}: licence{' '}

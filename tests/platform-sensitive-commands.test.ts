@@ -260,6 +260,98 @@ describe('pharmacy placeholder commands', () => {
     expect(db.branchRegulatoryProfile.create.mock.calls[0]![0].data.version).toBe(8);
   });
 
+  it('upgrades a grandfathered placeholder to a dated, branch-bound successor', async () => {
+    state.organization = { id: 'org_1', vertical: 'PHARMACY', status: 'ACTIVE' };
+    const legacy = {
+      id: 'legacy_placeholder',
+      version: 3,
+      effectiveFrom: new Date('2026-01-01T00:00:00.000Z'),
+      effectiveTo: null,
+      isPlaceholder: true,
+      jurisdictionRuleSetId: 'pk_pb_placeholder_v1',
+      premises: { label: 'PLACEHOLDER – not a real licence' },
+    };
+    state.latestProfile = legacy;
+    db.pharmacyBranch.findMany.mockResolvedValueOnce([
+      {
+        id: 'branch_1',
+        provinceCode: 'PB',
+        active: true,
+        addressLine: '12 Mall Road',
+        city: 'Lahore',
+      } as any,
+    ]);
+    db.branchRegulatoryProfile.findFirst.mockImplementation(async ({ where }: any) =>
+      where?.isPlaceholder ? legacy : state.latestProfile
+    );
+
+    try {
+      await execute('organization.pharmacy.placeholder.apply', {
+        organizationId: 'org_1',
+        reason,
+        authenticationCode: '123456',
+      });
+    } finally {
+      db.branchRegulatoryProfile.findFirst.mockReset();
+      db.branchRegulatoryProfile.findFirst.mockImplementation(async ({ where }: any) => {
+        if (where?.isPlaceholder) {
+          return state.placeholderActive ? { id: 'placeholder_profile', effectiveTo: null } : null;
+        }
+        return state.latestProfile;
+      });
+    }
+
+    // Append-only: the legacy row is closed, never rewritten or deleted.
+    expect(db.branchRegulatoryProfile.deleteMany).not.toHaveBeenCalled();
+    expect(db.branchRegulatoryProfile.update).toHaveBeenCalledExactlyOnceWith({
+      where: { id: 'legacy_placeholder' },
+      data: { effectiveTo: expect.any(Date) },
+    });
+    const successor = db.branchRegulatoryProfile.create.mock.calls[0]![0].data;
+    expect(successor).toMatchObject({
+      version: 4,
+      isPlaceholder: true,
+      jurisdictionRuleSetId: 'pk_pb_placeholder_v1',
+      provinceCode: 'PB',
+      premises: { addressLine: '12 Mall Road', city: 'Lahore' },
+    });
+    expect(successor.effectiveFrom.getTime()).toBe(
+      db.branchRegulatoryProfile.update.mock.calls[0]![0].data.effectiveTo.getTime()
+    );
+    // The organization is not knocked out of ACTIVE by the upgrade.
+    expect(db.organization.update).not.toHaveBeenCalled();
+    expect(state.lifecycleEvents).toEqual([
+      expect.objectContaining({
+        actorId: 'actor_1',
+        metadata: expect.objectContaining({
+          operation: 'PREMISES_BINDING_UPGRADE',
+          supersededProfileIds: ['legacy_placeholder'],
+        }),
+      }),
+    ]);
+    expect(state.audits.at(-1)).toMatchObject({
+      after: {
+        placeholder: true,
+        premisesBindingUpgrade: { supersededProfileIds: ['legacy_placeholder'] },
+      },
+    });
+  });
+
+  it('leaves a current, branch-bound placeholder alone when re-applied', async () => {
+    state.organization = { id: 'org_1', vertical: 'PHARMACY', status: 'ONBOARDING' };
+    state.placeholderActive = true;
+
+    await execute('organization.pharmacy.placeholder.apply', {
+      organizationId: 'org_1',
+      reason,
+      authenticationCode: '123456',
+    });
+
+    expect(db.branchRegulatoryProfile.create).not.toHaveBeenCalled();
+    expect(db.branchRegulatoryProfile.update).not.toHaveBeenCalled();
+    expect(state.lifecycleEvents).toEqual([]);
+  });
+
   it.each(['AGENCY', 'RESTAURANT'])(
     'rejects a %s organization without changing it',
     async (vertical) => {

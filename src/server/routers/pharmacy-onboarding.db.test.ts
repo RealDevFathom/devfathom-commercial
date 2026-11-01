@@ -340,6 +340,8 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
         inForce: false,
         provinceName: 'Punjab',
         licenceNumber: 'LIC-4471',
+        // Only a grandfathered placeholder in force asks for completion.
+        premisesCompletionDue: false,
       });
       expect(listed.versions[0]?.effectiveTo).toBeNull();
     });

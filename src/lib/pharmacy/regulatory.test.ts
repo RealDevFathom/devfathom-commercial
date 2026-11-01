@@ -5,6 +5,8 @@ import {
   assertStoredBranchMayOperate,
   BranchOperationDeniedError,
   evaluateBranchRegulatoryStatus,
+  isLegacyPlaceholderProfile,
+  regulatoryProfileBindingDenial,
   type BranchRegulatoryState,
 } from './regulatory';
 
@@ -221,6 +223,82 @@ describe('assertStoredBranchMayOperate', () => {
   });
 });
 
+describe('grandfathered pk_pb_placeholder_v1 profiles', () => {
+  const legacyPlaceholder = (overrides: Record<string, unknown> = {}) => ({
+    ...validState(),
+    isPlaceholder: true,
+    jurisdictionRuleSetId: 'pk_pb_placeholder_v1',
+    provinceCode: 'PB',
+    premises: { label: 'PLACEHOLDER – not a real licence' },
+    branch: { active: true, provinceCode: 'PB', addressLine: '12 Mall Road', city: 'Lahore' },
+    jurisdictionRuleSet: validState().ruleSet,
+    ...overrides,
+  });
+  const dbFor = (profile: unknown) =>
+    ({ branchRegulatoryProfile: { findFirst: vi.fn(async () => profile) } }) as never;
+  const activate = { name: 'ACTIVATE', at };
+
+  it('keeps a pre-binding placeholder ready to activate', async () => {
+    await expect(
+      assertStoredBranchMayOperate(dbFor(legacyPlaceholder()), 'org-a', 'branch-a', activate)
+    ).resolves.toBeUndefined();
+    expect(isLegacyPlaceholderProfile(legacyPlaceholder())).toBe(true);
+  });
+
+  it('still refuses a grandfathered placeholder off-branch or off-province', async () => {
+    await expect(
+      assertStoredBranchMayOperate(
+        dbFor(legacyPlaceholder({ branch: { ...legacyPlaceholder().branch, active: false } })),
+        'org-a',
+        'branch-a',
+        activate
+      )
+    ).rejects.toThrowError(new BranchOperationDeniedError('BRANCH_INACTIVE'));
+    await expect(
+      assertStoredBranchMayOperate(
+        dbFor(legacyPlaceholder({ provinceCode: 'SD' })),
+        'org-a',
+        'branch-a',
+        activate
+      )
+    ).rejects.toThrowError(new BranchOperationDeniedError('PROFILE_PREMISES_MISMATCH'));
+  });
+
+  it.each([
+    ['a tenant-recorded profile', { isPlaceholder: false }],
+    ['another rule set', { jurisdictionRuleSetId: 'pk_pb_v2' }],
+    ['a placeholder that already records an address', { premises: { addressLine: '9 Elsewhere' } }],
+  ])('does not grandfather %s with incomplete premises', async (_case, overrides) => {
+    const profile = legacyPlaceholder(overrides);
+    expect(isLegacyPlaceholderProfile(profile)).toBe(false);
+    await expect(
+      assertStoredBranchMayOperate(dbFor(profile), 'org-a', 'branch-a', activate)
+    ).rejects.toThrowError(new BranchOperationDeniedError('PROFILE_PREMISES_MISMATCH'));
+  });
+});
+
+describe('regulatoryProfileBindingDenial', () => {
+  const site = { active: true, provinceCode: 'PB', addressLine: '12 Mall Road', city: 'Lahore' };
+
+  it('is shared by guard and status: bound, inactive, and mismatched profiles', () => {
+    const bound = {
+      provinceCode: 'PK-PB',
+      premises: { addressLine: '12 mall road', city: 'Lahore' },
+    };
+    expect(regulatoryProfileBindingDenial(bound, site)).toBeNull();
+    expect(regulatoryProfileBindingDenial(bound, { ...site, active: false })).toBe(
+      'BRANCH_INACTIVE'
+    );
+    expect(
+      regulatoryProfileBindingDenial({ ...bound, premises: { addressLine: '', city: '' } }, {
+        ...site,
+        addressLine: '',
+        city: '',
+      })
+    ).toBe('PROFILE_PREMISES_MISMATCH');
+  });
+});
+
 describe('evaluateBranchRegulatoryStatus', () => {
   it('stops reporting in force at the exact licence-expiry instant', () => {
     const state = validState();
@@ -233,6 +311,35 @@ describe('evaluateBranchRegulatoryStatus', () => {
     expect(
       evaluateBranchRegulatoryStatus(profile, true, new Date('2026-10-21T00:00:00.000Z'))
     ).toMatchObject({ effective: true, inForce: false, licenceExpired: true });
+  });
+
+  it('agrees with the stored guard on province and premises binding', () => {
+    const { auditDenied: _auditDenied, ...profile } = validState();
+    const site = { active: true, provinceCode: 'PB', addressLine: '12 Mall Road', city: 'Lahore' };
+    const bound = {
+      provinceCode: 'PK-PB',
+      premises: { addressLine: '12 Mall Road', city: 'Lahore' },
+    };
+
+    expect(
+      evaluateBranchRegulatoryStatus(profile, true, at, { profile: bound, site })
+    ).toMatchObject({ effective: true, inForce: true });
+    for (const mismatched of [
+      { ...bound, provinceCode: 'PK-SD' },
+      { ...bound, premises: { addressLine: '99 Other Road', city: 'Lahore' } },
+      { ...bound, premises: { addressLine: '12 Mall Road', city: 'Karachi' } },
+      { ...bound, premises: { label: 'missing premises' } },
+    ]) {
+      expect(
+        evaluateBranchRegulatoryStatus(profile, true, at, { profile: mismatched, site })
+      ).toMatchObject({ effective: true, inForce: false });
+    }
+    expect(
+      evaluateBranchRegulatoryStatus(profile, true, at, {
+        profile: bound,
+        site: { ...site, active: false },
+      })
+    ).toMatchObject({ inForce: false });
   });
 
   it('does not call a historical, ineffective version in force', () => {

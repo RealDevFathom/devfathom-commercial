@@ -40,7 +40,12 @@ import {
   ruleSetOptions,
   type RegulatoryProfileInput,
 } from '@/lib/pharmacy/regulatory-profile-form';
-import { evaluateBranchRegulatoryStatus } from '@/lib/pharmacy/regulatory';
+import {
+  evaluateBranchRegulatoryStatus,
+  isLegacyPlaceholderProfile,
+  normalizeRegulatoryPremises,
+  normalizeRegulatoryProvince,
+} from '@/lib/pharmacy/regulatory';
 import {
   FBR_TIER1_CHECK_ACTION,
   FBR_TIER1_CHECK_TARGET_TYPE,
@@ -471,6 +476,7 @@ export const pharmacyOnboardingRouter = router({
               premises: true,
               createdAt: true,
               isPlaceholder: true,
+              jurisdictionRuleSetId: true,
               jurisdictionRuleSet: {
                 select: {
                   licenceCategories: true,
@@ -501,12 +507,17 @@ export const pharmacyOnboardingRouter = router({
               ruleSet: jurisdictionRuleSet,
             },
             effective,
-            now
+            now,
+            // Listed branches are all active (see the query above).
+            selected ? { profile: version, site: { ...selected, active: true } } : undefined
           );
           return {
             ...version,
             provinceName: provinceName(version.provinceCode),
             ...status,
+            // #660 — a grandfathered placeholder still counts toward activation,
+            // but the pharmacy is reminded to record its real premises.
+            premisesCompletionDue: status.inForce && isLegacyPlaceholderProfile(version),
           };
         }),
       };
@@ -535,9 +546,8 @@ export const pharmacyOnboardingRouter = router({
         throw badRequest('branchId', 'Choose one of this workspace’s active branches.');
       }
 
-      const normalizeProvince = (value: string) => value.trim().toUpperCase().replace(/^PK-/, '');
-      const normalizePremises = (value: string) =>
-        value.trim().replace(/\s+/g, ' ').toLocaleLowerCase('en');
+      const normalizeProvince = normalizeRegulatoryProvince;
+      const normalizePremises = normalizeRegulatoryPremises;
       if (normalizeProvince(input.provinceCode) !== normalizeProvince(branch.provinceCode)) {
         throw badRequest('provinceCode', 'The regulatory province must match the selected branch.');
       }

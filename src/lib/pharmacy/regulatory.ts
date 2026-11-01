@@ -50,6 +50,89 @@ export type BranchRegulatoryStatus = {
   qualifiedPersonCoverageExpired: boolean;
 };
 
+/** The platform placeholder rule set a SuperAdmin applies before real licences exist. */
+export const PLACEHOLDER_RULE_SET_ID = 'pk_pb_placeholder_v1';
+
+/** The branch a profile describes, as the binding check needs it. */
+export type RegulatoryProfileBranchSite = {
+  active: boolean;
+  provinceCode: string;
+  addressLine: string;
+  city: string;
+};
+
+/** The parts of a stored profile that bind it to its branch. */
+export type RegulatoryProfileBindingFields = {
+  provinceCode: string;
+  premises: unknown;
+  isPlaceholder?: boolean | null;
+  jurisdictionRuleSetId?: string | null;
+};
+
+export function normalizeRegulatoryProvince(value: string): string {
+  return value.trim().toUpperCase().replace(/^PK-/, '');
+}
+
+export function normalizeRegulatoryPremises(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  return value.trim().replace(/\s+/g, ' ').toLocaleLowerCase('en');
+}
+
+function premisesFields(premises: unknown): { addressLine?: unknown; city?: unknown } {
+  return premises && typeof premises === 'object' && !Array.isArray(premises)
+    ? (premises as { addressLine?: unknown; city?: unknown })
+    : {};
+}
+
+/**
+ * Grandfathered placeholder (#660). Placeholder profiles issued on the
+ * `pk_pb_placeholder_v1` rule set before premises binding existed recorded only
+ * `{ label }` as their premises. Those rows are append-only, so they keep the
+ * ready-to-activate status they were authorized with until the placeholder is
+ * re-applied, which closes them and appends an effective-dated, audited
+ * successor bound to the branch address. Only the premises check is waived; the
+ * province — copied from the branch when the placeholder was issued — still
+ * has to match, and an inactive branch is still refused.
+ */
+export function isLegacyPlaceholderProfile(profile: RegulatoryProfileBindingFields): boolean {
+  if (profile.isPlaceholder !== true || profile.jurisdictionRuleSetId !== PLACEHOLDER_RULE_SET_ID) {
+    return false;
+  }
+  const premises = premisesFields(profile.premises);
+  return premises.addressLine === undefined && premises.city === undefined;
+}
+
+/**
+ * The single binding rule shared by the operation guard, the readiness gate and
+ * the read-side status: a profile only speaks for an active branch whose
+ * province, address and city it names. Returns the denial, or null when bound.
+ */
+export function regulatoryProfileBindingDenial(
+  profile: RegulatoryProfileBindingFields,
+  branch: RegulatoryProfileBranchSite
+): Extract<BranchOperationDenialReason, 'BRANCH_INACTIVE' | 'PROFILE_PREMISES_MISMATCH'> | null {
+  if (!branch.active) return 'BRANCH_INACTIVE';
+  if (
+    normalizeRegulatoryProvince(profile.provinceCode) !==
+    normalizeRegulatoryProvince(branch.provinceCode)
+  ) {
+    return 'PROFILE_PREMISES_MISMATCH';
+  }
+  if (isLegacyPlaceholderProfile(profile)) return null;
+  const premises = premisesFields(profile.premises);
+  const address = normalizeRegulatoryPremises(premises.addressLine);
+  const city = normalizeRegulatoryPremises(premises.city);
+  if (
+    !address ||
+    !city ||
+    address !== normalizeRegulatoryPremises(branch.addressLine) ||
+    city !== normalizeRegulatoryPremises(branch.city)
+  ) {
+    return 'PROFILE_PREMISES_MISMATCH';
+  }
+  return null;
+}
+
 type RuleField = { provisional?: boolean; values?: unknown };
 
 function ruleField(value: unknown): RuleField {
@@ -126,10 +209,15 @@ export function assertBranchMayOperate(
 export function evaluateBranchRegulatoryStatus(
   branch: Omit<BranchRegulatoryState, 'auditDenied'>,
   effective: boolean,
-  at: Date
+  at: Date,
+  binding?: { profile: RegulatoryProfileBindingFields; site: RegulatoryProfileBranchSite }
 ): BranchRegulatoryStatus {
-  let inForce = effective;
-  if (effective) {
+  // The same branch binding the stored guard applies, so a profile that names
+  // another province or premises is never shown "in force" while activation and
+  // readiness refuse it.
+  const bound = !binding || regulatoryProfileBindingDenial(binding.profile, binding.site) === null;
+  let inForce = effective && bound;
+  if (inForce) {
     try {
       assertBranchMayOperate(
         { ...branch, auditDenied: () => undefined },
@@ -187,22 +275,10 @@ export async function assertStoredBranchMayOperate(
     throw new BranchOperationDeniedError('PROFILE_MISSING');
   }
 
-  if (!profile.branch.active) {
-    auditDenied('BRANCH_INACTIVE', action);
-    throw new BranchOperationDeniedError('BRANCH_INACTIVE');
-  }
-
-  const premises = profile.premises as { addressLine?: unknown; city?: unknown } | null;
-  const normalizeProvince = (value: string) => value.trim().toUpperCase().replace(/^PK-/, '');
-  const normalizePremises = (value: unknown) =>
-    typeof value === 'string' ? value.trim().replace(/\s+/g, ' ').toLocaleLowerCase('en') : '';
-  if (
-    normalizeProvince(profile.provinceCode) !== normalizeProvince(profile.branch.provinceCode) ||
-    normalizePremises(premises?.addressLine) !== normalizePremises(profile.branch.addressLine) ||
-    normalizePremises(premises?.city) !== normalizePremises(profile.branch.city)
-  ) {
-    auditDenied('PROFILE_PREMISES_MISMATCH', action);
-    throw new BranchOperationDeniedError('PROFILE_PREMISES_MISMATCH');
+  const bindingDenial = regulatoryProfileBindingDenial(profile, profile.branch);
+  if (bindingDenial) {
+    auditDenied(bindingDenial, action);
+    throw new BranchOperationDeniedError(bindingDenial);
   }
 
   assertBranchMayOperate(
