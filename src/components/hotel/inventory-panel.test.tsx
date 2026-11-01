@@ -423,10 +423,13 @@ describe('HotelInventoryPanel', () => {
     expect(
       screen.queryByRole('form', { name: 'Change status of room 101' })
     ).not.toBeInTheDocument();
-    // The refresh disables the row actions; focus returns once it settles.
+    // The refresh re-enables the action before the effect restores focus.
+    // Wait for both outcomes so the DOM update alone cannot finish the wait.
     expect(trigger).toBeDisabled();
-    await waitFor(() => expect(trigger).toBeEnabled());
-    expect(trigger).toHaveFocus();
+    await waitFor(() => {
+      expect(trigger).toBeEnabled();
+      expect(trigger).toHaveFocus();
+    });
   });
 
   it('changes one bed of a dorm room through the bed procedure, with that bed’s own status', () => {
