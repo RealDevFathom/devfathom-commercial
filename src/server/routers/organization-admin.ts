@@ -3,6 +3,7 @@ import { TRPCError } from '@trpc/server';
 import { hash } from 'bcryptjs';
 import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
+import { can, subjectFromSession } from '@/lib/abac';
 import { readAskFathomSettings } from '@/lib/ai/ask-fathom-settings';
 import { passwordSchema } from '@/lib/password-policy';
 import { organizationRolePermissionsSchema } from '@/lib/organization-role';
@@ -72,6 +73,23 @@ function organizationId(ctx: { session: { user: { organizationId?: string } } })
   if (!id) throw new TRPCError({ code: 'NOT_FOUND', message: 'Workspace not found.' });
   return id;
 }
+
+// Member assignments, role templates, provisioning credentials, and password
+// resets can all grant access. Keep the admin gate and honor a role DENY before
+// the caller can alter its policy or assume a less restricted member's identity.
+const roleAdminProcedure = adminProcedure.use(async ({ ctx, next }) => {
+  const allowed = await can(subjectFromSession(ctx.session.user), 'team:setRole', undefined, {
+    source: 'TRPC',
+    db: ctx.db,
+  });
+  if (!allowed) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission for this action.',
+    });
+  }
+  return next();
+});
 
 export const organizationAdminRouter = router({
   askFathomSettings: protectedProcedure.input(z.void()).query(async ({ ctx }) => {
@@ -389,7 +407,7 @@ export const organizationAdminRouter = router({
       return { ...saved, encryptedApiKey: Boolean(saved.encryptedApiKey) };
     }),
 
-  upsertRole: adminProcedure
+  upsertRole: roleAdminProcedure
     .input(
       z.object({
         id: z.string().optional(),
@@ -450,7 +468,7 @@ export const organizationAdminRouter = router({
       return role;
     }),
 
-  removeRole: adminProcedure
+  removeRole: roleAdminProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const id = organizationId(ctx);
@@ -478,11 +496,13 @@ export const organizationAdminRouter = router({
       return { success: true };
     }),
 
-  updateMember: adminProcedure
+  updateMember: roleAdminProcedure
     .input(
       z.object({
         id: z.string(),
-        role: z.enum(['ADMIN', 'HR', 'EMPLOYEE']),
+        // Optional: the editor omits an unchanged base role. The procedure still
+        // requires `team:setRole` for every member edit.
+        role: z.enum(['ADMIN', 'HR', 'EMPLOYEE']).optional(),
         status: z.enum(['ACTIVE', 'INACTIVE', 'ON_LEAVE', 'INVITED']),
         organizationRoleId: z.string().nullable(),
         title: z.string().trim().min(1).max(150),
@@ -502,6 +522,7 @@ export const organizationAdminRouter = router({
       });
       if (!department) throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invalid department.' });
       const activating = !occupiesSeat(before.status) && occupiesSeat(input.status);
+      const nextRole = input.role ?? before.role;
       if (input.organizationRoleId) {
         const role = await ctx.db.organizationRole.findFirst({
           where: { id: input.organizationRoleId, organizationId: id },
@@ -516,7 +537,7 @@ export const organizationAdminRouter = router({
         const removesActiveAdmin =
           before.role === 'ADMIN' &&
           before.status === 'ACTIVE' &&
-          (input.role !== 'ADMIN' || input.status !== 'ACTIVE');
+          (nextRole !== 'ADMIN' || input.status !== 'ACTIVE');
 
         // Serialize every transition that can remove an active admin. Reading the
         // count before taking this lock would let two concurrent demotions both
@@ -538,13 +559,13 @@ export const organizationAdminRouter = router({
         return tx.user.update({
           where: { id: input.id },
           data: {
-            role: input.role,
+            role: nextRole,
             status: input.status,
             organizationRoleId: input.organizationRoleId,
             title: input.title,
             department: input.department,
             tokenVersion:
-              before.role !== input.role || before.status !== input.status
+              before.role !== nextRole || before.status !== input.status
                 ? { increment: 1 }
                 : undefined,
           },
@@ -560,7 +581,7 @@ export const organizationAdminRouter = router({
       return saved;
     }),
 
-  createMember: adminProcedure
+  createMember: roleAdminProcedure
     .input(
       z.object({
         name: z.string().trim().min(1).max(150),
@@ -664,7 +685,7 @@ export const organizationAdminRouter = router({
       return created;
     }),
 
-  resetMemberPassword: adminProcedure
+  resetMemberPassword: roleAdminProcedure
     .input(z.object({ id: z.string(), password: passwordSchema.min(12).max(256) }))
     .mutation(async ({ ctx, input }) => {
       const id = organizationId(ctx);
@@ -754,7 +775,7 @@ export const organizationAdminRouter = router({
       return { jobId: job.id };
     }),
 
-  createScimToken: adminProcedure
+  createScimToken: roleAdminProcedure
     .input(
       z.object({
         name: z.string().trim().min(2).max(150),
@@ -789,7 +810,7 @@ export const organizationAdminRouter = router({
       return { ...saved, tokenHash: undefined, token };
     }),
 
-  revokeScimToken: adminProcedure
+  revokeScimToken: roleAdminProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const id = organizationId(ctx);

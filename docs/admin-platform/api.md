@@ -66,6 +66,21 @@ The organization administration router exposes:
 | `addDomain` / `retryDomain`           | add DNS proof and queue verification                                              |
 | `createScimToken` / `revokeScimToken` | rotate directory credentials                                                      |
 
+`upsertRole`, `removeRole`, `createMember`, `updateMember`, `resetMemberPassword`,
+`createScimToken`, and `revokeScimToken` require both `admin:access` and
+`team:setRole`. Password resets can transfer another member's access, including
+permissions granted by a custom role. SCIM credential management can delegate
+role assignment to a directory provider and also requires the identity module
+when creating a token.
+
+Every team-member edit requires `team:setRole`, including profile-only and
+status-only edits. This covers `organizationAdmin.updateMember`,
+`team.inviteMember`, `team.adminUpdateMember`, `team.adminResetPassword`, and
+the matching assistant tools (`inviteMember`, `updateMember`, `setMemberStatus`,
+`resetMemberPassword`). The member editors send `role` only when it changed;
+when `organizationAdmin.updateMember` receives no `role`, the stored base role
+is kept.
+
 All existing product routers remain available through the same tenant context.
 
 ## REST v1

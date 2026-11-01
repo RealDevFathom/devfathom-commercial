@@ -1,0 +1,14 @@
+title = "DevFathom secret scanning"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Synthetic password and no-op crypto mock in role authorization tests, including PR history"
+condition = "AND"
+paths = ['''^src/server/routers/organization-admin\.roles\.test\.ts$''']
+regexTarget = "line"
+regexes = [
+  '''^\s*password: 'Temporary-123456',\s*$''',
+  '''^vi\.mock\('@/lib/secret-crypto', \(\) => \(\{ encryptSecret: vi\.fn\(\) \}\)\);$''',
+]

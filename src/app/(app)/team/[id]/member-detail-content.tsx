@@ -844,7 +844,9 @@ function EditMemberForm({
                 name: editName.trim() || undefined,
                 title: editTitle.trim() || undefined,
                 department: editDept,
-                role: editRole as 'ADMIN' | 'HR' | 'EMPLOYEE',
+                ...(editRole !== member.role
+                  ? { role: editRole as 'ADMIN' | 'HR' | 'EMPLOYEE' }
+                  : {}),
                 phone: editPhone || null,
                 bio: editBio || null,
                 skills: editSkills,

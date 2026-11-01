@@ -597,10 +597,12 @@ export function OrganizationAdminContent() {
                     event.preventDefault();
                     const form = event.currentTarget;
                     const values = new FormData(form);
+                    const baseRole = formValue(values, 'role') as 'ADMIN' | 'HR' | 'EMPLOYEE';
                     member.mutate(
                       {
                         id: user.id,
-                        role: formValue(values, 'role') as 'ADMIN' | 'HR' | 'EMPLOYEE',
+                        // Send the base role only when it changed.
+                        ...(baseRole !== user.role ? { role: baseRole } : {}),
                         status: formValue(values, 'status') as
                           | 'ACTIVE'
                           | 'INACTIVE'
