@@ -597,6 +597,24 @@ export async function closeRecall(
     ORDER BY mb.id
     FOR UPDATE OF mb
   `);
+  // The batch lock only stops NEW lots (their FK takes KEY SHARE on the batch).
+  // Stock can also reappear on an EXISTING lot — a count adjustment, transfer
+  // or return posting a movement against a zero-balance lot. Every movement and
+  // balance row references its lot by FK, which takes KEY SHARE on the lot; FOR
+  // UPDATE conflicts with that. Locking every affected lot therefore waits for
+  // any in-flight stock posting to commit (so the query below sees it) and
+  // blocks new postings until this closure commits.
+  await db.$queryRaw(Prisma.sql`
+    SELECT l.id
+    FROM "pharmacy_inventory_lots" l
+    JOIN "pharmacy_manufacturing_batches" mb
+      ON mb.id = l."manufacturingBatchId" AND mb."organizationId" = l."organizationId"
+    WHERE l."organizationId" = ${scope.organizationId}
+      AND (${notice.batchId}::text IS NULL OR mb.id = ${notice.batchId})
+      AND (${notice.medicineId}::text IS NULL OR mb."medicineId" = ${notice.medicineId})
+    ORDER BY l.id
+    FOR UPDATE OF l
+  `);
   const acknowledgements = await db.pharmacyRecallAcknowledgement.findMany({
     where: { organizationId: scope.organizationId, recallNoticeId: notice.id },
     select: { branchId: true },
@@ -651,22 +669,32 @@ export async function reserveSupplierClaim(
   // balance row of the lot (the same rows sale allocation and purchase returns
   // lock) FOR UPDATE in key (stockLocationId) order, exactly like purchase returns, then measure availability from the locked rows.
   // The caller must keep this lock and the check/create below in one transaction.
-  const locked = await db.$queryRaw<Array<{ onHandUnits: number; state: string }>>(Prisma.sql`
-    SELECT b."onHandUnits", mb.state::text
-    FROM "pharmacy_stock_balances" b
-    JOIN "pharmacy_inventory_lots" l
-      ON l.id = b."inventoryLotId" AND l."organizationId" = b."organizationId"
+  //
+  // Batch state is read FOR SHARE in its own statement, before the balance
+  // lock: a state read joined into the balance FOR UPDATE would come from the
+  // statement snapshot and stay stale after a lock wait. FOR SHARE waits for an
+  // in-flight recall/quarantine (which updates the batch row) and blocks a new
+  // one until this claim commits, so the ACTIVE check holds through the create.
+  const [batch] = await db.$queryRaw<Array<{ state: string }>>(Prisma.sql`
+    SELECT mb.state::text
+    FROM "pharmacy_inventory_lots" l
     JOIN "pharmacy_manufacturing_batches" mb
       ON mb.id = l."manufacturingBatchId" AND mb."organizationId" = l."organizationId"
-    WHERE b."organizationId" = ${scope.organizationId}
-      AND b."branchId" = ${scope.branchId}
-      AND b."inventoryLotId" = ${input.inventoryLotId}
-      AND b."disposition" = 'AVAILABLE'
-    ORDER BY b."stockLocationId" ASC
-    FOR UPDATE OF b
+    WHERE l."organizationId" = ${scope.organizationId}
+      AND l."branchId" = ${scope.branchId}
+      AND l.id = ${input.inventoryLotId}
+    FOR SHARE OF mb
   `);
-  if (locked.some((row) => row.state !== 'ACTIVE'))
-    throw new PharmacyInventoryError('BLOCKED_STOCK');
+  if (batch && batch.state !== 'ACTIVE') throw new PharmacyInventoryError('BLOCKED_STOCK');
+  const locked = await db.$queryRaw<Array<{ onHandUnits: number }>>(Prisma.sql`
+    SELECT "onHandUnits" FROM "pharmacy_stock_balances"
+    WHERE "organizationId" = ${scope.organizationId}
+      AND "branchId" = ${scope.branchId}
+      AND "inventoryLotId" = ${input.inventoryLotId}
+      AND "disposition" = 'AVAILABLE'
+    ORDER BY "stockLocationId" ASC
+    FOR UPDATE
+  `);
   const onHand = locked.reduce((total, row) => total + Number(row.onHandUnits), 0);
   const already = await db.pharmacySupplierClaim.aggregate({
     where: {

@@ -237,15 +237,18 @@ export type ReceiveLotInput = {
  * visible, counted and unsellable rather than absent from the books.
  */
 export async function receiveLot(db: ScopedDb, scope: LedgerScope, input: ReceiveLotInput) {
-  // Recall closure locks the same batch rows before deciding which branches
-  // must acknowledge. Taking this lock before inspecting state prevents a new
-  // receipt from appearing between that decision and batch reactivation.
+  // Recall closure locks the same batch rows FOR UPDATE before deciding which
+  // branches must acknowledge. A SHARE lock here conflicts with that (and with
+  // a recall/quarantine updating the batch state), so the ACTIVE check below
+  // holds until this receipt commits. It deliberately does NOT conflict with
+  // other receipts: an exclusive batch lock taken before the lot insert's
+  // pack-level update let concurrent receipts on one pack deadlock (40P01).
   const lockedBatch = await db.$queryRaw<Array<{ state: string }>>(Prisma.sql`
     SELECT mb.state::text
     FROM "pharmacy_manufacturing_batches" mb
     WHERE mb.id = ${input.manufacturingBatchId}
       AND mb."organizationId" = ${scope.organizationId}
-    FOR UPDATE OF mb
+    FOR SHARE OF mb
   `);
   if (!lockedBatch.length) throw new PharmacyInventoryError('CROSS_TENANT_REFERENCE');
   if (lockedBatch[0]!.state !== 'ACTIVE') throw new PharmacyInventoryError('BLOCKED_STOCK');
