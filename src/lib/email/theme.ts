@@ -52,45 +52,46 @@ export const layout = {
   hairline: palette.paper200,
 } as const;
 
-// Safe fallback when the configured URL is missing or not a usable web URL.
 const DEFAULT_APP_URL = 'https://dev-fathom-hub.vercel.app';
 
-// The app's public base URL, used to build deep links and load the logo.
-export function appUrl(): string {
-  const configuredUrl = (
-    process.env.NEXT_PUBLIC_APP_URL ??
-    process.env.NEXTAUTH_URL ??
-    process.env.AUTH_URL ??
-    DEFAULT_APP_URL
-  ).replace(/\/$/, '');
+function isDevelopmentHost(hostname: string): boolean {
+  return (
+    hostname === 'localhost' ||
+    hostname.endsWith('.localhost') ||
+    hostname === '127.0.0.1' ||
+    hostname === '[::1]' ||
+    hostname === 'lvh.me' ||
+    hostname.endsWith('.lvh.me')
+  );
+}
 
-  // Fail closed: only parseable http(s) URLs are honoured. Anything else — an
-  // unparseable value or a non-web scheme (javascript:, data:, file:, ftp:,
-  // mailto:, protocol-relative //host, …) — falls back to the safe default so
-  // we never embed a dangerous scheme in an email link.
-  let parsed: URL;
+function normalizeAppUrl(value: string): string {
   try {
-    parsed = new URL(configuredUrl);
+    const url = new URL(value);
+
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return DEFAULT_APP_URL;
+
+    // Local development commonly uses plain HTTP. lvh.me and its subdomains
+    // resolve to loopback, so they receive the same treatment as localhost and
+    // the IPv4/IPv6 loopback addresses.
+    if (url.protocol === 'http:' && !isDevelopmentHost(url.hostname)) {
+      url.protocol = 'https:';
+    }
+
+    return url.toString().replace(/\/$/, '');
   } catch {
     return DEFAULT_APP_URL;
   }
+}
 
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    return DEFAULT_APP_URL;
-  }
-
-  if (parsed.protocol === 'https:') return configuredUrl;
-
-  const hostname = parsed.hostname.toLowerCase();
-  const isDevelopmentHost =
-    hostname === 'localhost' || hostname === 'lvh.me' || hostname.endsWith('.localhost');
-
-  if (isDevelopmentHost) return configuredUrl;
-
-  // URL.protocol is already case-normalized. Serialize the parsed URL so mixed
-  // case or ignored whitespace in the original scheme cannot bypass HTTPS.
-  parsed.protocol = 'https:';
-  return parsed.toString().replace(/\/$/, '');
+// The app's public base URL, used to build deep links and load the logo.
+export function appUrl(): string {
+  return normalizeAppUrl(
+    process.env.NEXT_PUBLIC_APP_URL ??
+      process.env.NEXTAUTH_URL ??
+      process.env.AUTH_URL ??
+      DEFAULT_APP_URL
+  );
 }
 
 // Hosted logo mark (the chevron on an Abyss tile). Overridable via env so it can

@@ -42,6 +42,22 @@ export type CatalogSnapshot = {
     sortOrder: number;
     variants: Array<{ id: string; productId: string; name: string; sortOrder: number }>;
     modifierGroups: Array<{ id: string; modifierGroupId: string; sortOrder: number }>;
+    comboComponentGroups: Array<{
+      id: string;
+      comboProductId: string;
+      name: string;
+      minChoose: number;
+      maxChoose: number | null;
+      sortOrder: number;
+      options: Array<{
+        id: string;
+        componentGroupId: string;
+        productId: string;
+        variantId: string | null;
+        priceDelta: string;
+        sortOrder: number;
+      }>;
+    }>;
     allergens: Array<{ id: string; allergenId: string }>;
   }>;
   modifierGroups: Array<{
@@ -96,6 +112,7 @@ export type CatalogSnapshot = {
         quantity: string;
         unitId: string;
         sortOrder: number;
+        approvedSubstitutes: Array<{ id: string; substituteIngredientId: string }>;
       }>;
     }>;
   }>;
@@ -113,6 +130,8 @@ type Ingredient = CatalogSnapshot['ingredients'][number];
 type Recipe = CatalogSnapshot['recipes'][number];
 type RecipeVersion = Recipe['versions'][number];
 type RecipeLine = RecipeVersion['lines'][number];
+type ComboGroup = Product['comboComponentGroups'][number];
+type ComboOption = ComboGroup['options'][number];
 
 type Editor =
   | { kind: 'category'; item?: Category }
@@ -126,6 +145,8 @@ type Editor =
   | { kind: 'ingredient'; item?: Ingredient }
   | { kind: 'recipe'; productId: string }
   | { kind: 'recipeVersion'; recipeId: string; item?: RecipeVersion }
+  | { kind: 'comboGroup'; comboProductId: string; item?: ComboGroup }
+  | { kind: 'comboOption'; componentGroupId: string; productId?: string; item?: ComboOption }
   | {
       kind: 'recipeLine';
       recipeId: string;
@@ -210,6 +231,8 @@ function editorTitle(editor: Editor) {
     recipe: 'recipe',
     recipeVersion: 'recipe version',
     recipeLine: 'recipe line',
+    comboGroup: 'combo group',
+    comboOption: 'combo option',
   };
   return `${editing ? 'Edit' : 'Add'} ${names[editor.kind]}`;
 }
@@ -309,6 +332,24 @@ export function RestaurantCatalogConsole({
   const detachModifierGroup = trpc.restaurantCatalog.detachModifierGroup.useMutation(
     options('Modifier group detached.', false)
   );
+  const createComboGroup = trpc.restaurantCatalog.createComboGroup.useMutation(
+    options('Combo group created.')
+  );
+  const updateComboGroup = trpc.restaurantCatalog.updateComboGroup.useMutation(
+    options('Combo group updated.')
+  );
+  const deleteComboGroup = trpc.restaurantCatalog.deleteComboGroup.useMutation(
+    options('Combo group deleted.', false)
+  );
+  const createComboOption = trpc.restaurantCatalog.createComboOption.useMutation(
+    options('Combo option created.')
+  );
+  const updateComboOption = trpc.restaurantCatalog.updateComboOption.useMutation(
+    options('Combo option updated.')
+  );
+  const deleteComboOption = trpc.restaurantCatalog.deleteComboOption.useMutation(
+    options('Combo option deleted.', false)
+  );
   const createAllergen = trpc.restaurantCatalog.createAllergen.useMutation(
     options('Allergen created.')
   );
@@ -364,6 +405,12 @@ export function RestaurantCatalogConsole({
   const deleteRecipeLine = trpc.restaurantCatalog.deleteRecipeLine.useMutation(
     options('Recipe line deleted.', false)
   );
+  const addRecipeLineSubstitute = trpc.restaurantCatalog.addRecipeLineSubstitute.useMutation(
+    options('Approved substitute attached.', false)
+  );
+  const removeRecipeLineSubstitute = trpc.restaurantCatalog.removeRecipeLineSubstitute.useMutation(
+    options('Approved substitute removed.', false)
+  );
 
   const busy =
     isRefreshing ||
@@ -385,6 +432,12 @@ export function RestaurantCatalogConsole({
       deleteModifierOption,
       attachModifierGroup,
       detachModifierGroup,
+      createComboGroup,
+      updateComboGroup,
+      deleteComboGroup,
+      createComboOption,
+      updateComboOption,
+      deleteComboOption,
       createAllergen,
       updateAllergen,
       deleteAllergen,
@@ -406,6 +459,8 @@ export function RestaurantCatalogConsole({
       createRecipeLine,
       updateRecipeLine,
       deleteRecipeLine,
+      addRecipeLineSubstitute,
+      removeRecipeLineSubstitute,
     ].some((mutation) => mutation.isPending);
 
   const categoriesById = useMemo(
@@ -483,7 +538,33 @@ export function RestaurantCatalogConsole({
           sortOrder: formInt(data, 'sortOrder'),
         };
         if (editor.item) updateProduct.mutate({ id: editor.item.id, ...payload });
-        else createProduct.mutate(payload);
+        else createProduct.mutate({ ...payload, type: formText(data, 'type') as 'ITEM' | 'COMBO' });
+        break;
+      }
+      case 'comboGroup': {
+        const payload = {
+          name: formText(data, 'name'),
+          minChoose: formInt(data, 'minChoose'),
+          maxChoose: nullableInt(data, 'maxChoose'),
+          sortOrder: formInt(data, 'sortOrder'),
+        };
+        if (editor.item) updateComboGroup.mutate({ id: editor.item.id, ...payload });
+        else createComboGroup.mutate({ comboProductId: editor.comboProductId, ...payload });
+        break;
+      }
+      case 'comboOption': {
+        const payload = {
+          priceDelta: formText(data, 'priceDelta') || '0',
+          sortOrder: formInt(data, 'sortOrder'),
+        };
+        if (editor.item) updateComboOption.mutate({ id: editor.item.id, ...payload });
+        else
+          createComboOption.mutate({
+            componentGroupId: editor.componentGroupId,
+            productId: formText(data, 'productId'),
+            variantId: formText(data, 'variantId') || null,
+            ...payload,
+          });
         break;
       }
       case 'variant': {
@@ -1028,6 +1109,174 @@ export function RestaurantCatalogConsole({
                       </div>
                     </div>
                   </div>
+                  {selectedProduct.type === 'COMBO' ? (
+                    <div className="mt-6 space-y-3 border-t border-border-subtle pt-5">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <h4 className="font-display font-semibold text-text-strong">
+                            Combo choices
+                          </h4>
+                          <p className="text-sm text-text-muted">
+                            Configure required choices and their component products.
+                          </p>
+                          <p className="text-sm text-text-muted">
+                            Combos cannot be added to menus or ordered until the order flow
+                            supports combo selections.
+                          </p>
+                        </div>
+                        {canWrite ? (
+                          <Button
+                            size="sm"
+                            disabled={busy}
+                            onClick={() =>
+                              openEditor({
+                                kind: 'comboGroup',
+                                comboProductId: selectedProduct.id,
+                              })
+                            }
+                          >
+                            Add choice group
+                          </Button>
+                        ) : null}
+                      </div>
+                      {selectedProduct.comboComponentGroups.length ? (
+                        <div className="grid gap-3 lg:grid-cols-2">
+                          {selectedProduct.comboComponentGroups.map((group) => (
+                            <div
+                              key={group.id}
+                              className="rounded-md border border-border-subtle bg-surface-raised p-4"
+                            >
+                              <div className="flex items-start justify-between gap-3">
+                                <div>
+                                  <p className="font-medium text-text-strong">{group.name}</p>
+                                  <p className="text-xs text-text-muted">
+                                    Choose {group.minChoose}–{group.maxChoose ?? 'any'} · Order{' '}
+                                    {group.sortOrder}
+                                  </p>
+                                </div>
+                                {canWrite ? (
+                                  <div className="flex gap-1">
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      disabled={busy}
+                                      onClick={() =>
+                                        openEditor({
+                                          kind: 'comboGroup',
+                                          comboProductId: selectedProduct.id,
+                                          item: group,
+                                        })
+                                      }
+                                    >
+                                      Edit
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="destructive"
+                                      disabled={busy}
+                                      onClick={() =>
+                                        ask({
+                                          title: `Delete ${group.name}?`,
+                                          description:
+                                            'Its component options will also be removed.',
+                                          label: 'Delete group',
+                                          destructive: true,
+                                          run: () => deleteComboGroup.mutate({ id: group.id }),
+                                        })
+                                      }
+                                    >
+                                      Delete
+                                    </Button>
+                                  </div>
+                                ) : null}
+                              </div>
+                              <div className="mt-3 space-y-2">
+                                {group.options.map((option) => {
+                                  const component = productsById.get(option.productId);
+                                  const variant = component?.variants.find(
+                                    (item) => item.id === option.variantId
+                                  );
+                                  return (
+                                    <div
+                                      key={option.id}
+                                      className="flex items-center justify-between gap-3 rounded-sm bg-surface-sunken p-3 text-sm"
+                                    >
+                                      <span className="text-text-strong">
+                                        {component?.name ?? 'Unknown product'}
+                                        {variant ? ` · ${variant.name}` : ''}
+                                        <span className="ml-2 font-mono text-xs text-text-muted">
+                                          {option.priceDelta}
+                                        </span>
+                                      </span>
+                                      {canWrite ? (
+                                        <div className="flex gap-1">
+                                          <Button
+                                            size="sm"
+                                            variant="ghost"
+                                            disabled={busy}
+                                            onClick={() =>
+                                              openEditor({
+                                                kind: 'comboOption',
+                                                componentGroupId: group.id,
+                                                item: option,
+                                              })
+                                            }
+                                          >
+                                            Edit
+                                          </Button>
+                                          <Button
+                                            size="sm"
+                                            variant="ghost"
+                                            disabled={busy}
+                                            onClick={() =>
+                                              ask({
+                                                title: `Remove ${component?.name ?? 'component option'}?`,
+                                                description:
+                                                  'This component option and its price delta will be removed from the choice group.',
+                                                label: 'Remove option',
+                                                destructive: true,
+                                                run: () =>
+                                                  deleteComboOption.mutate({ id: option.id }),
+                                              })
+                                            }
+                                          >
+                                            Remove
+                                          </Button>
+                                        </div>
+                                      ) : null}
+                                    </div>
+                                  );
+                                })}
+                                {group.options.length === 0 ? (
+                                  <p className="text-sm text-text-muted">No component options.</p>
+                                ) : null}
+                              </div>
+                              {canWrite ? (
+                                <Button
+                                  className="mt-3"
+                                  size="sm"
+                                  variant="secondary"
+                                  disabled={busy || snapshot.products.length < 2}
+                                  onClick={() =>
+                                    openEditor({
+                                      kind: 'comboOption',
+                                      componentGroupId: group.id,
+                                    })
+                                  }
+                                >
+                                  Add component option
+                                </Button>
+                              ) : null}
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-sm text-text-muted">
+                          No combo choice groups configured.
+                        </p>
+                      )}
+                    </div>
+                  ) : null}
                 </SectionCard>
               ) : null}
             </TabsContent>
@@ -1844,19 +2093,20 @@ export function RestaurantCatalogConsole({
                           Calculating recipe cost…
                         </p>
                       ) : recipeCost.isError ? (
-                        <div
-                          className="mt-2 flex flex-wrap items-center justify-between gap-3"
-                          role="alert"
-                        >
-                          <p className="text-sm text-destructive">
-                            Recipe cost could not be calculated.
+                        <div className="mt-2 space-y-2" role="alert">
+                          <p className="text-sm font-medium text-destructive">
+                            {recipeCost.error.message}
+                          </p>
+                          <p className="text-sm text-text-muted">
+                            Review Ingredients and Units / Conversions in this Catalog, add the
+                            named exact directed conversion or cost input, then recalculate.
                           </p>
                           <Button
                             size="sm"
                             variant="outline"
                             onClick={() => void recipeCost.refetch()}
                           >
-                            Try again
+                            Recalculate
                           </Button>
                         </div>
                       ) : recipeCost.data ? (
@@ -2024,13 +2274,108 @@ export function RestaurantCatalogConsole({
                                   {version.lines.map((line) => (
                                     <TableRow key={line.id}>
                                       <TableCell className="text-text-strong">
-                                        {line.ingredientId
-                                          ? (ingredientsById.get(line.ingredientId)?.name ??
-                                            'Unknown ingredient')
-                                          : line.subRecipeId
-                                            ? (recipesById.get(line.subRecipeId)?.name ??
-                                              'Unknown recipe')
-                                            : 'Unknown'}
+                                        <span className="block">
+                                          {line.ingredientId
+                                            ? (ingredientsById.get(line.ingredientId)?.name ??
+                                              'Unknown ingredient')
+                                            : line.subRecipeId
+                                              ? (recipesById.get(line.subRecipeId)?.name ??
+                                                'Unknown recipe')
+                                              : 'Unknown'}
+                                        </span>
+                                        {line.ingredientId ? (
+                                          <div className="mt-2 space-y-2">
+                                            <div className="flex flex-wrap gap-1">
+                                              {line.approvedSubstitutes.map((substitute) => (
+                                                <span
+                                                  key={substitute.id}
+                                                  className="inline-flex items-center gap-1 rounded-sm bg-surface-sunken px-2 py-1 text-xs text-text-muted"
+                                                >
+                                                  {ingredientsById.get(
+                                                    substitute.substituteIngredientId
+                                                  )?.name ?? 'Unknown substitute'}
+                                                  {canWrite && version.status === 'DRAFT' ? (
+                                                    <button
+                                                      type="button"
+                                                      aria-label={`Remove ${ingredientsById.get(substitute.substituteIngredientId)?.name ?? 'approved substitute'}`}
+                                                      className="rounded-sm px-1 hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                                      disabled={busy}
+                                                      onClick={() =>
+                                                        removeRecipeLineSubstitute.mutate({
+                                                          id: substitute.id,
+                                                        })
+                                                      }
+                                                    >
+                                                      ×
+                                                    </button>
+                                                  ) : null}
+                                                </span>
+                                              ))}
+                                              {line.approvedSubstitutes.length === 0 ? (
+                                                <span className="text-xs text-text-muted">
+                                                  No approved substitutes
+                                                </span>
+                                              ) : null}
+                                            </div>
+                                            {canWrite && version.status === 'DRAFT' ? (
+                                              <form
+                                                className="flex max-w-sm gap-2"
+                                                onSubmit={(event) => {
+                                                  event.preventDefault();
+                                                  const substituteIngredientId = formText(
+                                                    new FormData(event.currentTarget),
+                                                    'substituteIngredientId'
+                                                  );
+                                                  if (substituteIngredientId) {
+                                                    addRecipeLineSubstitute.mutate({
+                                                      recipeLineId: line.id,
+                                                      substituteIngredientId,
+                                                    });
+                                                  }
+                                                }}
+                                              >
+                                                <select
+                                                  aria-label="Approved substitute ingredient"
+                                                  name="substituteIngredientId"
+                                                  required
+                                                  defaultValue=""
+                                                  className={selectClass}
+                                                  disabled={busy}
+                                                >
+                                                  <option value="" disabled>
+                                                    Add substitute
+                                                  </option>
+                                                  {snapshot.ingredients
+                                                    .filter(
+                                                      (ingredient) =>
+                                                        ingredient.id !== line.ingredientId &&
+                                                        !line.approvedSubstitutes.some(
+                                                          (substitute) =>
+                                                            substitute.substituteIngredientId ===
+                                                            ingredient.id
+                                                        )
+                                                    )
+                                                    .map((ingredient) => (
+                                                      <option
+                                                        key={ingredient.id}
+                                                        value={ingredient.id}
+                                                      >
+                                                        {ingredient.name}
+                                                      </option>
+                                                    ))}
+                                                </select>
+                                                <Button
+                                                  type="submit"
+                                                  size="sm"
+                                                  variant="secondary"
+                                                  disabled={busy}
+                                                >
+                                                  Attach
+                                                </Button>
+                                              </form>
+                                            ) : null}
+                                          </div>
+                                        ) : null}
                                       </TableCell>
                                       <TableCell numeric>{line.quantity}</TableCell>
                                       <TableCell className="text-text-muted">
@@ -2192,6 +2537,14 @@ export function RestaurantCatalogConsole({
                         defaultValue={editor.item?.description ?? ''}
                       />
                     </Field>
+                    {!editor.item ? (
+                      <Field label="Product type">
+                        <select name="type" defaultValue="ITEM" className={selectClass}>
+                          <option value="ITEM">Item</option>
+                          <option value="COMBO">Combo</option>
+                        </select>
+                      </Field>
+                    ) : null}
                     <div className="grid gap-4 sm:grid-cols-2">
                       <Field label="Category">
                         <select
@@ -2206,6 +2559,116 @@ export function RestaurantCatalogConsole({
                             </option>
                           ))}
                         </select>
+                      </Field>
+                      <Field label="Sort order">
+                        <Input
+                          name="sortOrder"
+                          type="number"
+                          defaultValue={editor.item?.sortOrder ?? 0}
+                          className="h-11"
+                        />
+                      </Field>
+                    </div>
+                  </>
+                ) : null}
+
+                {editor.kind === 'comboGroup' ? (
+                  <>
+                    <Field label="Choice group name">
+                      <Input
+                        name="name"
+                        required
+                        maxLength={200}
+                        defaultValue={editor.item?.name}
+                        className="h-11"
+                      />
+                    </Field>
+                    <div className="grid gap-4 sm:grid-cols-3">
+                      <Field label="Minimum choices">
+                        <Input
+                          name="minChoose"
+                          type="number"
+                          min={0}
+                          required
+                          defaultValue={editor.item?.minChoose ?? 1}
+                          className="h-11"
+                        />
+                      </Field>
+                      <Field label="Maximum choices">
+                        <Input
+                          name="maxChoose"
+                          type="number"
+                          min={0}
+                          placeholder="Unbounded"
+                          defaultValue={editor.item?.maxChoose ?? ''}
+                          className="h-11"
+                        />
+                      </Field>
+                      <Field label="Sort order">
+                        <Input
+                          name="sortOrder"
+                          type="number"
+                          defaultValue={editor.item?.sortOrder ?? 0}
+                          className="h-11"
+                        />
+                      </Field>
+                    </div>
+                  </>
+                ) : null}
+
+                {editor.kind === 'comboOption' ? (
+                  <>
+                    {editor.item ? (
+                      <p className="rounded-md bg-surface-sunken p-3 text-sm text-text-muted">
+                        The component product cannot change after creation. Remove this option and
+                        add another to replace it.
+                      </p>
+                    ) : (
+                      <>
+                        <Field label="Component product">
+                          <select
+                            name="productId"
+                            required
+                            value={editor.productId ?? ''}
+                            className={selectClass}
+                            onChange={(event) =>
+                              setEditor({ ...editor, productId: event.target.value })
+                            }
+                          >
+                            <option value="" disabled>
+                              Select product
+                            </option>
+                            {snapshot?.products
+                              .filter((product) => product.id !== selectedProduct?.id)
+                              .map((product) => (
+                                <option key={product.id} value={product.id}>
+                                  {product.name}
+                                </option>
+                              ))}
+                          </select>
+                        </Field>
+                        <Field label="Variant (optional)">
+                          <select name="variantId" defaultValue="" className={selectClass}>
+                            <option value="">All variants</option>
+                            {productsById.get(editor.productId ?? '')?.variants.map((variant) => (
+                              <option key={variant.id} value={variant.id}>
+                                {variant.name}
+                              </option>
+                            ))}
+                          </select>
+                        </Field>
+                      </>
+                    )}
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <Field label="Price delta">
+                        <Input
+                          name="priceDelta"
+                          type="number"
+                          step="0.01"
+                          required
+                          defaultValue={editor.item?.priceDelta ?? '0'}
+                          className="h-11"
+                        />
                       </Field>
                       <Field label="Sort order">
                         <Input

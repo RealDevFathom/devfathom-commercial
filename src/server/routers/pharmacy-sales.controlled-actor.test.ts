@@ -45,12 +45,35 @@ const line = {
   },
 };
 
-function callerFor(permissions: Array<{ capability: string; effect: 'ALLOW' | 'DENY' }>) {
+type Permission = { capability: string; effect: 'ALLOW' | 'DENY' };
+
+function callerFor(permissions: Permission[], permissionOverrides: Permission[] = []) {
   const credential = vi.fn();
   const register = vi.fn();
+  const lock = vi.fn();
   const db = {
     $transaction: async (callback: (tx: unknown) => unknown) => callback(db),
+    $queryRaw: lock,
     pharmacyBranch: { findMany: async () => [{ id: 'branch-1' }] },
+    branchRegulatoryProfile: {
+      findFirst: async () => ({
+        branchId: 'branch-1',
+        licenceCategory: 'PHARMACY',
+        licenceValidFrom: new Date('2020-01-01T00:00:00.000Z'),
+        licenceValidTo: new Date('2100-01-01T00:00:00.000Z'),
+        licenceEvidenceFileRef: 'evidence://pharmacy-licence',
+        permittedSchedules: ['*'],
+        qualifiedPersonRegistration: 'QP-1',
+        qualifiedPersonValidFrom: new Date('2020-01-01T00:00:00.000Z'),
+        qualifiedPersonValidTo: new Date('2100-01-01T00:00:00.000Z'),
+        qualifiedPersonCoverageRosterRef: 'roster-1',
+        jurisdictionRuleSet: {
+          licenceCategories: { provisional: false, values: ['PHARMACY'] },
+          permittedSchedules: { provisional: false, values: ['*'] },
+          pharmacistCoverageRule: { provisional: false },
+        },
+      }),
+    },
     medicine: {
       findFirst: async () => ({ id: 'medicine-1', controlled: true, manufacturer: 'Maker' }),
     },
@@ -58,7 +81,7 @@ function callerFor(permissions: Array<{ capability: string; effect: 'ALLOW' | 'D
       findUnique: async () => ({
         status: 'ACTIVE',
         organizationRole: { permissions },
-        permissionOverrides: [],
+        permissionOverrides,
       }),
     },
     restaurantOperatorCredential: { findFirst: credential },
@@ -76,7 +99,7 @@ function callerFor(permissions: Array<{ capability: string; effect: 'ALLOW' | 'D
     requestMeta: { ip: null, userAgent: null },
     audit: { detail: {} },
   } as unknown as TRPCContext;
-  return { credential, register, caller: app.createCaller(context).pharmacySales };
+  return { credential, register, lock, caller: app.createCaller(context).pharmacySales };
 }
 
 beforeEach(() => {
@@ -85,36 +108,102 @@ beforeEach(() => {
 
 describe('pharmacySales.addLine controlled actor', () => {
   it('denies a cashier before the witness PIN and writes no register row', async () => {
-    const { caller, credential, register } = callerFor([
+    const { caller, credential, register, lock } = callerFor([
       { capability: 'pharmacy:counter', effect: 'ALLOW' },
       { capability: 'pharmacy:orders', effect: 'ALLOW' },
     ]);
-    await expect(caller.addLine(line)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(caller.addLine(line)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission to dispense a controlled medicine.',
+    });
+    expect(credential).not.toHaveBeenCalled();
+    expect(addSaleLine).not.toHaveBeenCalled();
+    expect(register).not.toHaveBeenCalled();
+    expect(lock).not.toHaveBeenCalled();
+  });
+
+  it('honors an explicit ABAC deny even when the role grants dispense', async () => {
+    const { caller, credential, register } = callerFor(
+      [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }],
+      [{ capability: 'pharmacy:dispense', effect: 'DENY' }]
+    );
+    await expect(caller.addLine(line)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission to dispense a controlled medicine.',
+    });
     expect(credential).not.toHaveBeenCalled();
     expect(addSaleLine).not.toHaveBeenCalled();
     expect(register).not.toHaveBeenCalled();
   });
 
-  it('honors an explicit ABAC deny even when the role grants dispense', async () => {
+  it.each(['pharmacy:dispense', 'pharmacy:*', '*'])(
+    'honors a role DENY for %s even when an override grants dispense',
+    async (capability) => {
+      const { caller, credential, register, lock } = callerFor(
+        [{ capability, effect: 'DENY' }],
+        [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }]
+      );
+      await expect(caller.addLine(line)).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'You do not have permission to dispense a controlled medicine.',
+      });
+      expect(lock).not.toHaveBeenCalled();
+      expect(credential).not.toHaveBeenCalled();
+      expect(addSaleLine).not.toHaveBeenCalled();
+      expect(register).not.toHaveBeenCalled();
+    }
+  );
+
+  it('does not treat the legacy dotted capability as a dispense grant', async () => {
     const { caller, credential, register } = callerFor([
-      { capability: 'pharmacy:dispense', effect: 'ALLOW' },
-      { capability: 'pharmacy:dispense', effect: 'DENY' },
+      { capability: 'pharmacy.dispense', effect: 'ALLOW' },
     ]);
-    await expect(caller.addLine(line)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(caller.addLine(line)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission to dispense a controlled medicine.',
+    });
     expect(credential).not.toHaveBeenCalled();
+    expect(addSaleLine).not.toHaveBeenCalled();
     expect(register).not.toHaveBeenCalled();
   });
 
-  it('lets a pharmacist past the actor check', async () => {
-    const { caller, credential } = callerFor([
+  it('accepts the canonical exact dispense capability at the actor check', async () => {
+    const { caller, credential, register } = callerFor([
       { capability: 'pharmacy:dispense', effect: 'ALLOW' },
     ]);
     const { controlledAuthorization, ...plain } = line;
     void controlledAuthorization;
-    await expect(caller.addLine(plain)).resolves.toMatchObject({
-      blocked: expect.stringMatching(/pharmacist PIN/),
+    await expect(caller.addLine(plain)).resolves.toEqual({
+      blocked:
+        'Controlled medicine requires the patient address, an independent pharmacist PIN, and either a valid prescription or an emergency supply with the prescriber name.',
     });
     expect(credential).not.toHaveBeenCalled();
     expect(addSaleLine).not.toHaveBeenCalled();
+    expect(register).not.toHaveBeenCalled();
+  });
+
+  it('checks the independent witness after accepting an authorized actor', async () => {
+    const { caller, credential, register, lock } = callerFor([
+      { capability: 'pharmacy:dispense', effect: 'ALLOW' },
+    ]);
+    credential.mockResolvedValue(null);
+
+    await expect(caller.addLine(line)).resolves.toEqual({
+      blocked:
+        'Controlled medicine requires the patient address, an independent pharmacist PIN, and either a valid prescription or an emergency supply with the prescriber name.',
+    });
+    expect(lock).toHaveBeenCalledTimes(1);
+    expect(credential).toHaveBeenCalledExactlyOnceWith({
+      where: {
+        organizationId: 'org-1',
+        staffProfileId: 'witness-staff',
+        type: 'PIN',
+        revokedAt: null,
+        deviceId: null,
+      },
+      include: { staffProfile: { include: { user: true } } },
+    });
+    expect(addSaleLine).not.toHaveBeenCalled();
+    expect(register).not.toHaveBeenCalled();
   });
 });

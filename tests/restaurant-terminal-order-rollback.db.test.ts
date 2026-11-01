@@ -16,6 +16,7 @@ import { ensurePlatformModule, seedDepartments } from '@/lib/test-support/depart
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
 process.env.PLATFORM_ENCRYPTION_KEY ??= randomBytes(32).toString('base64');
+process.env.AUTH_SECRET ??= randomBytes(32).toString('base64');
 
 const describeIfDatabase = TEST_DATABASE_URL ? describe : describe.skip;
 const suffix = randomBytes(6).toString('hex');
@@ -72,6 +73,7 @@ const ids = {
   deviceId: '',
   deviceSecret: '',
   session: '',
+  composerProof: '',
 };
 
 async function call(
@@ -84,6 +86,7 @@ async function call(
   };
   const session = opts.session ?? ids.session;
   if (session) headers['x-terminal-session'] = session;
+  if (ids.composerProof) headers['x-pos-composer-proof'] = ids.composerProof;
   if (opts.key) headers['idempotency-key'] = opts.key;
 
   const response = await route.POST!(
@@ -427,6 +430,8 @@ beforeAll(async () => {
     body: { staffProfileId: ids.operator, type: 'PIN', secret: PIN },
   });
   expect(unlocked.status).toBe(200);
+  expect(unlocked.json.composerProof).toEqual(expect.any(String));
+  ids.composerProof = unlocked.json.composerProof as string;
 });
 
 describeIfDatabase('WHA-143 terminal order routes roll back before HTTP mapping', () => {

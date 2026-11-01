@@ -24,6 +24,7 @@ type Rule = {
   stationId: string;
   productId: string | null;
   categoryId: string | null;
+  course: number | null;
   priority: number;
   active: boolean;
 };
@@ -61,6 +62,7 @@ function makeTx(stations: Station[], rules: Rule[]) {
             stationId: r.stationId,
             productId: r.productId,
             categoryId: r.categoryId,
+            course: r.course,
             priority: r.priority,
           })),
     },
@@ -96,6 +98,7 @@ function makeTx(stations: Station[], rules: Rule[]) {
 const fired = (over: Partial<FiredItem> & Pick<FiredItem, 'orderItemId'>): FiredItem => ({
   productId: 'prod_default',
   categoryId: null,
+  course: 1,
   quantity: 1,
   ...over,
 });
@@ -165,7 +168,16 @@ describe('generateKitchenTickets', () => {
         { id: 'grill', isDefault: true, active: true },
         { id: 'bar', isDefault: false, active: true },
       ],
-      [{ stationId: 'bar', productId: 'mojito', categoryId: null, priority: 0, active: true }]
+      [
+        {
+          stationId: 'bar',
+          productId: 'mojito',
+          categoryId: null,
+          course: null,
+          priority: 0,
+          active: true,
+        },
+      ]
     );
     const result = await generateKitchenTickets(tx, {
       orderId: 'o1',

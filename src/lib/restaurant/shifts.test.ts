@@ -37,6 +37,8 @@ type Row = {
   status: 'SCHEDULED' | 'CANCELLED';
   cancelledAt: Date | null;
   cancelReason: string | null;
+  clockedInAt: Date | null;
+  clockedOutAt: Date | null;
   version: number;
   createdAt: Date;
   updatedAt: Date;
@@ -54,6 +56,7 @@ const staff = new Map<
 >();
 let shifts: Row[] = [];
 let sequence = 0;
+let beforeShiftUpdateMany: (() => void) | undefined;
 
 function matchesDate(value: Date, comparator: Comparator): boolean {
   const time = value.getTime();
@@ -67,12 +70,22 @@ function matchesDate(value: Date, comparator: Comparator): boolean {
 function matches(row: Row, where: Record<string, unknown>): boolean {
   for (const [field, condition] of Object.entries(where)) {
     if (condition === undefined) continue;
+    if (field === 'OR') {
+      if (!(condition as Record<string, unknown>[]).some((clause) => matches(row, clause))) {
+        return false;
+      }
+      continue;
+    }
     if (field === 'id' && typeof condition === 'object' && condition !== null) {
       if (row.id === (condition as { not: string }).not) return false;
       continue;
     }
     if (field === 'startAt' || field === 'endAt' || field === 'businessDate') {
       if (!matchesDate(row[field], condition as Comparator)) return false;
+      continue;
+    }
+    if (typeof condition === 'object' && condition !== null && 'not' in condition) {
+      if (row[field as keyof Row] === (condition as { not: unknown }).not) return false;
       continue;
     }
     if (
@@ -140,6 +153,8 @@ const db = {
         status: 'SCHEDULED',
         cancelledAt: null,
         cancelReason: null,
+        clockedInAt: null,
+        clockedOutAt: null,
         version: 1,
         createdAt: new Date('2026-08-01T00:00:00Z'),
         updatedAt: new Date('2026-08-01T00:00:00Z'),
@@ -161,6 +176,7 @@ const db = {
       where: Record<string, unknown>;
       data: Record<string, unknown>;
     }) => {
+      beforeShiftUpdateMany?.();
       const found = shifts.filter((row) => matches(row, where));
       for (const row of found) {
         const version = data.version as { increment: number } | undefined;
@@ -189,6 +205,7 @@ beforeEach(() => {
   staff.clear();
   shifts = [];
   sequence = 0;
+  beforeShiftUpdateMany = undefined;
   branches.set(BRANCH, {
     id: BRANCH,
     timezone: 'UTC',
@@ -470,6 +487,105 @@ describe('cancelShift', () => {
       cancelReason: 'Storm closure',
     });
     expect(shifts).toHaveLength(1);
+  });
+
+  it('rejects cancellation while the employee has active attendance', async () => {
+    const shift = await createShift(db, {
+      branchId: BRANCH,
+      staffProfileId: STAFF,
+      startAt: START,
+      endAt: END,
+    });
+    await db.restaurantShift.update({
+      where: { id: shift.id },
+      data: { clockedInAt: new Date('2026-08-20T09:05:00Z') },
+    });
+
+    await expect(cancelShift(db, shift.id, { now: NOON })).rejects.toMatchObject({
+      message: 'This shift cannot be cancelled while the employee is clocked in.',
+      reason: 'ACTIVE_ATTENDANCE',
+    });
+    expect(shifts[0]).toMatchObject({ status: 'SCHEDULED', cancelledAt: null, version: 1 });
+  });
+
+  it('allows cancellation after the employee has clocked out', async () => {
+    const shift = await createShift(db, {
+      branchId: BRANCH,
+      staffProfileId: STAFF,
+      startAt: START,
+      endAt: END,
+    });
+    await db.restaurantShift.update({
+      where: { id: shift.id },
+      data: {
+        clockedInAt: new Date('2026-08-20T09:05:00Z'),
+        clockedOutAt: new Date('2026-08-20T11:05:00Z'),
+      },
+    });
+
+    await expect(cancelShift(db, shift.id, { now: NOON })).resolves.toMatchObject({
+      status: 'CANCELLED',
+      cancelledAt: NOON,
+    });
+  });
+
+  it.each([
+    ['without CAS', undefined],
+    ['with CAS', { organizationId: 'org_1', expectedVersion: 1 }],
+  ] as const)('atomically rejects a clock-in racing with cancellation %s', async (_label, cas) => {
+    const shift = await createShift(db, {
+      branchId: BRANCH,
+      staffProfileId: STAFF,
+      startAt: START,
+      endAt: END,
+    });
+    const clockedInAt = new Date('2026-08-20T09:05:00Z');
+
+    // Simulate clock-in committing after cancellation's initial read but before
+    // its conditional write is evaluated by PostgreSQL.
+    beforeShiftUpdateMany = () => {
+      shifts[0]!.clockedInAt = clockedInAt;
+      beforeShiftUpdateMany = undefined;
+    };
+
+    await expect(cancelShift(db, shift.id, { now: NOON }, cas)).rejects.toMatchObject({
+      reason: 'ACTIVE_ATTENDANCE',
+    });
+    expect(shifts[0]).toMatchObject({
+      status: 'SCHEDULED',
+      cancelledAt: null,
+      clockedInAt,
+      clockedOutAt: null,
+      version: 1,
+    });
+  });
+
+  it('does not overwrite a cancellation that commits after the initial read', async () => {
+    const shift = await createShift(db, {
+      branchId: BRANCH,
+      staffProfileId: STAFF,
+      startAt: START,
+      endAt: END,
+    });
+    const firstCancelledAt = new Date('2026-08-20T11:55:00Z');
+
+    beforeShiftUpdateMany = () => {
+      Object.assign(shifts[0]!, {
+        status: 'CANCELLED',
+        cancelledAt: firstCancelledAt,
+        cancelReason: 'Manager cancellation',
+      });
+      beforeShiftUpdateMany = undefined;
+    };
+
+    await expect(
+      cancelShift(db, shift.id, { now: NOON, reason: 'Stale cancellation' })
+    ).rejects.toMatchObject({ reason: 'ALREADY_CANCELLED' });
+    expect(shifts[0]).toMatchObject({
+      status: 'CANCELLED',
+      cancelledAt: firstCancelledAt,
+      cancelReason: 'Manager cancellation',
+    });
   });
 
   it('refuses a second cancellation and an unknown shift', async () => {

@@ -95,6 +95,7 @@ test('real menu image is extracted, reviewed, and imported as priced drafts', as
 
   const fileInput = page.getByLabel('Menu file');
   await expect(fileInput).toHaveCount(1, { timeout: 15_000 });
+  await expect(fileInput).toBeEnabled();
   await fileInput.setInputFiles(menuImage);
   await expect(page.getByRole('region', { name: 'Menu imports' })).toContainText(
     'final-service-menu.png'
@@ -186,7 +187,12 @@ test('POS preserves an offline order and denies connected-only submission until 
     await page.getByLabel(new RegExp(fixture.modifier.name)).check();
     await page.getByRole('button', { name: 'Add to order' }).click();
     await expect(page.getByText(`1 × ${fixture.menuItem.name}`)).toBeVisible();
-    await expect(page.getByText(fixture.modifier.name, { exact: true })).toBeVisible();
+    await expect(
+      page
+        .locator('[data-slot="section-card"]')
+        .filter({ has: page.getByRole('heading', { name: 'Composed order', exact: true }) })
+        .getByText(fixture.modifier.name, { exact: true })
+    ).toBeVisible();
     await page.getByRole('button', { name: 'Open order' }).click();
     await expect(page.getByText('Queued 2', { exact: true })).toBeVisible();
     await expect(page.getByText('Order saved to the queue.')).toBeVisible();

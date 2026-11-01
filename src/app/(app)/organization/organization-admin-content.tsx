@@ -480,7 +480,7 @@ export function OrganizationAdminContent() {
 
       <Card
         title="People and access"
-        description={`${entitlements.activeSeats} of ${entitlements.seatLimit} licensed seats ${entitlements.activeSeats === 1 ? 'is' : 'are'} currently occupied.`}
+        description={`${entitlements.activeSeats} of ${entitlements.seatLimit} licensed ${entitlements.seatLimit === 1 ? 'seat' : 'seats'} ${entitlements.activeSeats === 1 ? 'is' : 'are'} currently occupied.`}
       >
         <form
           className="mb-5 grid gap-3 rounded-xl bg-muted/35 p-4 sm:grid-cols-2 lg:grid-cols-3"
@@ -591,25 +591,39 @@ export function OrganizationAdminContent() {
               </summary>
               <div className="grid gap-5 rounded-xl bg-muted/35 p-4 lg:grid-cols-2">
                 <form
+                  key={`${user.role}:${user.status}:${user.department}:${user.organizationRoleId ?? ''}:${user.title}`}
                   className="grid gap-3 sm:grid-cols-2"
                   onSubmit={(event) => {
                     event.preventDefault();
-                    const values = new FormData(event.currentTarget);
-                    member.mutate({
-                      id: user.id,
-                      role: formValue(values, 'role') as 'ADMIN' | 'HR' | 'EMPLOYEE',
-                      status: formValue(values, 'status') as
-                        'ACTIVE' | 'INACTIVE' | 'ON_LEAVE' | 'INVITED',
-                      organizationRoleId: formValue(values, 'organizationRoleId') || null,
-                      title: formValue(values, 'title'),
-                      department: formValue(values, 'department') as
-                        | 'LEADERSHIP'
-                        | 'ENGINEERING'
-                        | 'PRODUCT'
-                        | 'QUALITY'
-                        | 'MARKETING'
-                        | 'DESIGN',
-                    });
+                    const form = event.currentTarget;
+                    const values = new FormData(form);
+                    member.mutate(
+                      {
+                        id: user.id,
+                        role: formValue(values, 'role') as 'ADMIN' | 'HR' | 'EMPLOYEE',
+                        status: formValue(values, 'status') as
+                          | 'ACTIVE'
+                          | 'INACTIVE'
+                          | 'ON_LEAVE'
+                          | 'INVITED',
+                        organizationRoleId: formValue(values, 'organizationRoleId') || null,
+                        title: formValue(values, 'title'),
+                        department: formValue(values, 'department') as
+                          | 'LEADERSHIP'
+                          | 'ENGINEERING'
+                          | 'PRODUCT'
+                          | 'QUALITY'
+                          | 'MARKETING'
+                          | 'DESIGN',
+                      },
+                      {
+                        // Access fields are intentionally uncontrolled so native form reset
+                        // semantics remain available. A refused update must put them back to
+                        // the last server-confirmed values instead of displaying an unsaved
+                        // Goods-in (or other role) grant as if it succeeded.
+                        onError: () => form.reset(),
+                      }
+                    );
                   }}
                 >
                   {[

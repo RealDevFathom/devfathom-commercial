@@ -46,6 +46,18 @@ const attemptSchema = z.discriminatedUnion('kind', [
   }),
 ]);
 type Attempt = z.infer<typeof attemptSchema>;
+/** Transient witness credential. Never persisted with the saved attempt. */
+type ControlledWitness = { staffProfileId: string; pin: string };
+const witnessPinPattern = /^\d{4,8}$/;
+
+export function isBlockedResult(result: unknown): result is { blocked: string } {
+  return (
+    typeof result === 'object' &&
+    result !== null &&
+    'blocked' in result &&
+    typeof (result as { blocked: unknown }).blocked === 'string'
+  );
+}
 type Props = {
   branchId: string;
   organizationId: string;
@@ -129,6 +141,8 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
   const [manual, setManual] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
   const [attempt, setAttempt] = useState<Attempt | null>(recovery.attempt);
+  const [witnessStaffId, setWitnessStaffId] = useState('');
+  const [witnessPin, setWitnessPin] = useState('');
   const [busy, setBusy] = useState(false);
   const latch = useRef(false);
   const [message, setMessage] = useState(
@@ -157,6 +171,18 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
   const maximumUnits =
     selectedLot?.returnableUnits ?? (line ? line.canonicalUnits - line.returnedUnits : 0);
   const tender = data?.tenders.find((row) => row.id === tenderId);
+  // A saved return keeps its own line; a fresh one uses the selected line.
+  const witnessLineId = attempt?.kind === 'return' ? attempt.input.saleLineId : lineId;
+  const witnessRequired = !!data?.lines.find((row) => row.id === witnessLineId)?.controlled;
+  const pharmacists = trpc.pharmacySafety.controlledPharmacists.useQuery(undefined, {
+    enabled: ready && online && witnessRequired,
+    retry: false,
+  });
+  const witnessReady = !witnessRequired || (!!witnessStaffId && witnessPinPattern.test(witnessPin));
+  const witness: ControlledWitness | undefined =
+    witnessRequired && witnessReady
+      ? { staffProfileId: witnessStaffId, pin: witnessPin }
+      : undefined;
   const manualRequired = tender?.type === 'CARD' || tender?.type === 'WALLET';
   const amountMinor = /^\d+(\.\d{1,2})?$/.test(amount) ? Math.round(Number(amount) * 100) : 0;
   const available = Math.min(
@@ -166,18 +192,42 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
   const locked = busy || !!attempt || !ready || !online;
   const stale = history.isFetching || history.isError;
 
-  async function execute(next: Attempt) {
+  async function execute(next: Attempt, controlledWitness?: ControlledWitness) {
     if (latch.current || !online || !ready) return;
     latch.current = true;
+    const retry = !!attempt;
     setBusy(true);
     setError('');
     setMessage('');
+    // A witness PIN is single-use: clear it whatever the outcome.
+    setWitnessPin('');
     try {
       // Write before sending; an ambiguous network outcome can only replay this exact request.
+      // The witness PIN is deliberately excluded from persistent storage.
       localStorage.setItem(storageKey, JSON.stringify(next));
       setAttempt(next);
-      if (next.kind === 'return') await returnLine.mutateAsync(next.input);
-      else
+      if (next.kind === 'return') {
+        const result = await returnLine.mutateAsync(
+          controlledWitness ? { ...next.input, controlledWitness } : next.input
+        );
+        if (isBlockedResult(result)) {
+          // The server refused before any stock change. A fresh attempt is definitely not
+          // recorded; a retried attempt keeps its saved reference so an earlier ambiguous
+          // outcome can still be reconciled with the same idempotency key.
+          if (!retry) {
+            try {
+              localStorage.removeItem(storageKey);
+              setAttempt(null);
+            } catch {
+              /* Keep recovery locked. */
+            }
+          }
+          setError(
+            `Return not recorded. ${result.blocked}${retry ? ' Enter a fresh witness PIN and retry the saved return.' : ''}`
+          );
+          return;
+        }
+      } else
         await refund.mutateAsync({
           ...next.input,
           businessDate: new Date(next.input.businessDate),
@@ -211,6 +261,63 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
       setBusy(false);
     }
   }
+
+  const witnessFields = (
+    <section
+      aria-label="Controlled medicine return witness"
+      className="space-y-3 rounded-md border border-border-subtle p-3"
+    >
+      <p className="text-sm text-text-muted">
+        Controlled medicine. A different pharmacist must witness this return with a fresh PIN. The
+        PIN is never saved on this device.
+      </p>
+      <Label htmlFor="return-witness">Witnessing pharmacist</Label>
+      <select
+        id="return-witness"
+        className={selectClass}
+        disabled={busy || !online || !ready || pharmacists.isLoading || pharmacists.isError}
+        value={witnessStaffId}
+        onChange={(event) => {
+          setWitnessStaffId(event.target.value);
+          setWitnessPin('');
+        }}
+      >
+        <option value="">Select pharmacist</option>
+        {pharmacists.data?.map((staff) => (
+          <option key={staff.id} value={staff.id}>
+            {staff.name}
+          </option>
+        ))}
+      </select>
+      {pharmacists.isLoading ? (
+        <p role="status">Loading pharmacists…</p>
+      ) : pharmacists.isError ? (
+        <p role="alert">
+          {counterErrorMessage(pharmacists.error)}{' '}
+          <Button variant="outline" onClick={() => void pharmacists.refetch()}>
+            Reload pharmacists
+          </Button>
+        </p>
+      ) : pharmacists.data && pharmacists.data.length === 0 ? (
+        <p role="status">
+          No independent pharmacist with an active staff PIN is available. Ask your administrator
+          to configure one.
+        </p>
+      ) : null}
+      <Label htmlFor="return-witness-pin">Witness PIN</Label>
+      <Input
+        id="return-witness-pin"
+        type="password"
+        inputMode="numeric"
+        autoComplete="off"
+        maxLength={8}
+        className="h-11"
+        disabled={busy || !online || !ready || !witnessStaffId}
+        value={witnessPin}
+        onChange={(event) => setWitnessPin(event.target.value.replace(/\D/g, ''))}
+      />
+    </section>
+  );
 
   function print() {
     try {
@@ -260,12 +367,19 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
       {attempt && (
         <Button
           className="h-11"
-          disabled={busy || !online || !ready}
-          onClick={() => void execute(attempt)}
+          onClick={() => void execute(attempt, witness)}
+          disabled={
+            busy ||
+            !online ||
+            !ready ||
+            // A saved return waits for its line details so a controlled line gets a witness.
+            (attempt.kind === 'return' && (!data || !witnessReady))
+          }
         >
           Retry saved {attempt.kind}
         </Button>
       )}
+      {attempt?.kind === 'return' && witnessRequired && witnessFields}
       <form
         className="flex flex-wrap items-end gap-2"
         onSubmit={(event) => {
@@ -358,6 +472,8 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
               value={lineId}
               onChange={(event) => {
                 setLineId(event.target.value);
+                setWitnessStaffId('');
+                setWitnessPin('');
                 setLotId('');
                 setDisposition('QUARANTINE');
                 setConfirmed(false);
@@ -491,6 +607,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
               Restock only inspected medicine with acceptable storage and intact packaging. Expired
               or recalled lots are refused by the server.
             </p>
+            {!attempt && witnessRequired && witnessFields}
             <label className="flex min-h-11 items-center gap-2">
               <input
                 type="checkbox"
@@ -510,24 +627,28 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
                 Number(units) < 1 ||
                 Number(units) > maximumUnits ||
                 (disposition === 'RESTOCK' && !selectedLot?.restockAllowed) ||
-                (disposition === 'QUARANTINE' && !location)
+                (disposition === 'QUARANTINE' && !location) ||
+                !witnessReady
               }
               onClick={() =>
-                void execute({
-                  kind: 'return',
-                  saleId,
-                  input: {
-                    branchId,
-                    saleLineId: lineId,
-                    lotId: lotId || undefined,
-                    canonicalUnits: Number(units),
-                    disposition,
-                    quarantineLocationId: disposition === 'QUARANTINE' ? location : undefined,
-                    reason,
-                    integrityDecision: integrity,
-                    idempotencyKey: browserUuid(),
+                void execute(
+                  {
+                    kind: 'return',
+                    saleId,
+                    input: {
+                      branchId,
+                      saleLineId: lineId,
+                      lotId: lotId || undefined,
+                      canonicalUnits: Number(units),
+                      disposition,
+                      quarantineLocationId: disposition === 'QUARANTINE' ? location : undefined,
+                      reason,
+                      integrityDecision: integrity,
+                      idempotencyKey: browserUuid(),
+                    },
                   },
-                })
+                  witness
+                )
               }
             >
               Record return

@@ -193,6 +193,8 @@ export async function publishQuote(
   if (!order) throw new TRPCError({ code: 'NOT_FOUND' });
   if (!['DRAFT', 'QUOTED'].includes(order.status)) fail('Only editable orders can publish quotes.');
   if (!order.quotedTotal || order.lines.length === 0) fail('Quote total and menu are required.');
+  if (order.lines.some((line) => !line.recipeId))
+    fail('A recipe is required for every quoted line.');
   const state = await bookingState(tx, org, orderId);
   const existing = await tx.$queryRaw<Quote[]>(
     Prisma.sql`SELECT id,revision,snapshot,"contentHash" FROM restaurant_catering_quote_revisions WHERE "organizationId"=${org} AND "orderId"=${orderId} AND revision=${state.revision}`
@@ -222,27 +224,29 @@ export async function publishQuote(
   };
   const grouped = new Map<string, FrozenRequirement>();
   for (const line of order.lines) {
+    // Keep this local guard in addition to the preflight check above so
+    // recipeId is narrowed before it is passed to Prisma.
+    if (!line.recipeId) fail('A recipe is required for every quoted line.');
     // Pin the root before costing: the helper's quantities and denominators must
     // describe that same version even if another transaction activates a recipe.
-    const version = line.recipeId
-      ? resolveActiveVersion(
-          await tx.restaurantRecipeVersion.findMany({
-            where: { organizationId: org, recipeId: line.recipeId },
-            select: { id: true, status: true },
-          })
-        )
-      : null;
-    if (line.recipeId && !version) fail('Recipe has no active version.');
-    const cost = version
-      ? await computeRecipeCostInDb(tx, { organizationId: org, recipeVersionId: version.id })
-      : null;
-    if (cost && (!cost.portionCount || cost.portionCount <= 0))
+    const version = resolveActiveVersion(
+      await tx.restaurantRecipeVersion.findMany({
+        where: { organizationId: org, recipeId: line.recipeId },
+        select: { id: true, status: true },
+      })
+    );
+    if (!version) fail('Recipe has no active version.');
+    const cost = await computeRecipeCostInDb(tx, {
+      organizationId: org,
+      recipeVersionId: version.id,
+    });
+    if (!cost.portionCount || cost.portionCount <= 0)
       fail('Portion scaling requires a positive portion count.');
-    const scale = cost ? line.portions.dividedBy(cost.portionCount!) : new Prisma.Decimal(0);
+    const scale = line.portions.dividedBy(cost.portionCount);
     const requirements: FrozenRequirement[] = [];
-    if (!cost || !cost.lines.length || !line.portions.isPositive())
+    if (!cost.lines.length || !line.portions.isPositive())
       snapshot.missing.push(`line:${line.id}`);
-    for (const leaf of cost?.lines ?? []) {
+    for (const leaf of cost.lines) {
       const unitCost = leaf.source === 'MISSING' ? null : leaf.unitCost.toString();
       const row: FrozenRequirement = {
         ingredientId: leaf.ingredientId,
