@@ -36,6 +36,9 @@ const storedSchema = z
         idempotencyKey: z.string().trim().min(1).max(160),
         familyAccountId: id.optional(),
         ownerOverride: z.boolean().optional(),
+        providerRef: z.string().regex(/^\d{4,6}$/).optional(),
+        payerName: z.string().trim().min(1).max(100).optional(),
+        referenceSkipped: z.boolean().optional(),
         overrideReason: z.string().trim().min(1).max(500).optional(),
         approvalId: z.string().uuid().optional(),
       })
@@ -97,7 +100,8 @@ function decode(raw: string, scope: TenderAttemptScope): TenderAttempt {
     (input.type === 'KHATA' && !input.familyAccountId) ||
     ((input.familyAccountId !== undefined ||
       input.ownerOverride !== undefined ||
-      input.overrideReason !== undefined) &&
+      input.overrideReason !== undefined ||
+      input.approvalId !== undefined) &&
       !['KHATA', 'CREDIT'].includes(input.type)) ||
     !sameScope(stored.scope, scope) ||
     input.branchId !== scope.branchId ||

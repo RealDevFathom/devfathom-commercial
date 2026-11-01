@@ -12,10 +12,6 @@ vi.mock('@/server/audit', async (original) => ({
   isAuditExcludedPath: vi.fn(() => false),
   recordTrpcAudit: vi.fn(),
 }));
-vi.mock('@/lib/abac', () => ({
-  can: vi.fn(async () => true),
-  subjectFromSession: (user: unknown) => user,
-}));
 vi.mock('bcryptjs', () => ({ compare: vi.fn(async (value: string) => value === 'correct') }));
 vi.mock('@/lib/pharmacy/settlement', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/settlement')>()),
@@ -29,6 +25,7 @@ import {
   refundPharmacyTender,
 } from '@/lib/pharmacy/settlement';
 import { can, subjectFromSession } from '@/lib/abac';
+import { clearRateLimit } from '@/lib/rate-limit';
 import * as abac from '@/lib/abac';
 import { router, type TRPCContext } from '../trpc';
 import { pharmacySalesRouter } from './pharmacy-sales';
@@ -59,11 +56,28 @@ function fixture(
     },
     permissionOverrides: [...overrides] as { capability: string; effect: string }[],
   };
+  const approver = {
+    id: 'owner-a',
+    email: 'owner@example.test',
+    password: 'hash',
+    status: 'ACTIVE',
+    role: 'ADMIN',
+    twoFactorEnabledAt: null as Date | null,
+    twoFactorSecret: null as string | null,
+    organizationRole: { key: 'owner', isSystem: true } as { key: string; isSystem: boolean } | null,
+  };
   const db = {
     $queryRaw: vi.fn().mockResolvedValue([]),
     $executeRaw: vi.fn().mockResolvedValue(1),
     $transaction: vi.fn(),
-    user: { findUnique: vi.fn(async () => member) },
+    user: {
+      findUnique: vi.fn(async () => member),
+      findFirst: vi.fn(async (): Promise<Record<string, unknown> | null> => ({ ...approver })),
+    },
+    twoFactorRecoveryCode: {
+      findFirst: vi.fn().mockResolvedValue(null),
+      updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+    },
     pharmacyBranchAssignment: {
       findMany: vi.fn(async () => [{ branchId: 'branch-a' }]),
     },
@@ -74,10 +88,7 @@ function fixture(
       ),
     },
     pharmacyTender: { findFirst: vi.fn().mockResolvedValue({ type: 'CREDIT' }) },
-    user: { findUnique: vi.fn().mockResolvedValue({
-      password: 'hash', status: 'ACTIVE', twoFactorEnabledAt: null, twoFactorSecret: null,
-    }) },
-    pharmacySale: { findFirst: vi.fn().mockResolvedValue({ customerId: 'customer-a', createdByUserId: 'cashier-a' }) },
+    pharmacySale: { findFirst: vi.fn().mockResolvedValue({ customerId: 'customer-a' }) },
     pharmacyFamilyAccount: {
       findMany: vi.fn().mockResolvedValue([
         {
@@ -96,9 +107,6 @@ function fixture(
       create: vi.fn().mockResolvedValue({}),
     },
     pharmacyKhataLimitDecision: { create: vi.fn().mockResolvedValue({}) },
-    user: {
-      findFirst: vi.fn().mockResolvedValue({ organizationRole: { key: 'owner' } }),
-    },
   };
   db.$transaction.mockImplementation(async (callback) => callback(db));
   const user = {
@@ -120,13 +128,21 @@ function fixture(
   return {
     db,
     member,
+    approver,
     user,
     context,
     caller: () => app.createCaller(context as unknown as TRPCContext).pharmacySales,
   };
 }
-beforeEach(() => {
+beforeEach(async () => {
   vi.clearAllMocks();
+  for (const key of [
+    'login:acct:owner@example.test',
+    'login:acct:manager@example.test',
+    'login:acct:ghost@example.test',
+    'khata-approval:actor:org-a:owner-a',
+  ])
+    await clearRateLimit(key);
   vi.mocked(readPharmacyTenderOutcome).mockResolvedValue({
     status: 'NOT_FOUND',
     replayUnsafe: true,
@@ -641,54 +657,173 @@ describe('Khata router trust and recovery boundary', () => {
       }),
     });
   });
+  it('does not let a finance-only operator create or refund Khata tenders', async () => {
+    const f = fixture();
+    f.member.organizationRole.permissions = [{ capability: 'reports:financial', effect: 'ALLOW' }];
+    const refund = {
+      branchId: 'branch-a',
+      originalTenderId: 'tender-a',
+      deviceId: 'device-a',
+      businessDate: input.businessDate,
+      amountMinor: 50,
+      reason: 'Return',
+      idempotencyKey: 'refund-a',
+    };
+
+    await expect(f.caller().tender(input)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Pharmacy counter permission required.',
+    });
+    await expect(f.caller().refundTender(refund)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission for this action.',
+    });
+    expect(applyPharmacyTender).not.toHaveBeenCalled();
+    expect(refundPharmacyTender).not.toHaveBeenCalled();
+    expect(f.db.pharmacyKhataEvent.create).not.toHaveBeenCalled();
+  });
+  const approvalId = '11111111-1111-4111-8111-111111111111';
+  const approval = {
+    branchId: 'branch-a',
+    saleId: 'sale-a',
+    familyAccountId: 'family-a',
+    amountMinor: 101,
+    reason: 'Exception',
+    password: 'correct',
+  };
+  function routeRaw(
+    f: ReturnType<typeof fixture>,
+    evidence: Record<string, unknown> | null,
+    approverRow: Record<string, unknown> | null
+  ) {
+    f.db.$queryRaw.mockImplementation(async (query: { sql?: string; strings?: string[] }) => {
+      const text = query?.sql ?? query?.strings?.join('?') ?? '';
+      if (text.includes('FROM pharmacy_khata_override_approvals')) return evidence ? [evidence] : [];
+      if (text.includes('FROM users u')) return approverRow ? [approverRow] : [];
+      return [];
+    });
+  }
+  const evidence = () => ({
+    id: approvalId,
+    approverId: 'owner-a',
+    reason: 'Exception',
+    createdAt: new Date(),
+  });
+  const approverRow = { id: 'owner-a', status: 'ACTIVE', role: 'EMPLOYEE', roleKey: 'owner', isSystem: true };
   it('rejects a direct override even when the general session authentication is recent', async () => {
     const f = fixture();
-    await expect(f.caller().tender({ ...input, amountMinor: 101, ownerOverride: true,
-      overrideReason: 'Exception' })).rejects.toMatchObject({ message: 'OWNER_ACTION_REQUIRED' });
+    await expect(
+      f.caller().tender({ ...input, amountMinor: 101, ownerOverride: true, overrideReason: 'Exception' })
+    ).rejects.toMatchObject({ message: 'OWNER_ACTION_REQUIRED' });
     expect(f.db.pharmacyFamilyAccount.update).not.toHaveBeenCalled();
   });
-  it('requires the canonical capability before issuing operation-bound evidence', async () => {
+  it('issues single-use, operation-bound evidence for the reauthenticated session approver', async () => {
     const f = fixture();
-    vi.mocked(can).mockResolvedValue(false);
-    await expect(f.caller().authorizeKhataOverride({ branchId: 'branch-a', saleId: 'sale-a',
-      familyAccountId: 'family-a', amountMinor: 101, reason: 'Exception', password: 'correct' }))
-      .rejects.toMatchObject({ message: 'OWNER_ACTION_REQUIRED' });
-    expect(f.db.$executeRaw).not.toHaveBeenCalled();
-  });
-  it('does not issue approval evidence without password reauthentication', async () => {
-    const f = fixture();
-    await expect(f.caller().authorizeKhataOverride({ branchId: 'branch-a', saleId: 'sale-a',
-      familyAccountId: 'family-a', amountMinor: 101, reason: 'Exception', password: 'wrong' }))
-      .rejects.toMatchObject({ message: 'OWNER_ACTION_REQUIRED' });
-    expect(f.db.$executeRaw).not.toHaveBeenCalled();
-  });
-  it('binds approval to the exact operation and consumes it once', async () => {
-    const f = fixture();
-    const approvalId = '11111111-1111-4111-8111-111111111111';
-    const evidence = { id: approvalId, approverId: 'owner-a', reason: 'Exception', createdAt: new Date() };
-    const approver = { id: 'owner-a', status: 'ACTIVE', organizationId: 'org-a', roleKey: 'owner', isSystem: true };
-    f.db.$queryRaw
-      .mockResolvedValueOnce([]).mockResolvedValueOnce([]).mockResolvedValueOnce([])
-      .mockResolvedValueOnce([evidence]).mockResolvedValueOnce([approver]);
-    await f.caller().tender({ ...input, amountMinor: 101, ownerOverride: true,
-      overrideReason: 'Exception', approvalId });
+    const result = await f.caller().authorizeKhataOverride(approval);
+    expect(result.approvalId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(f.db.user.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { organizationId: 'org-a', id: 'owner-a' } })
+    );
     expect(f.db.$executeRaw).toHaveBeenCalledOnce();
-
-    f.db.$queryRaw.mockReset().mockResolvedValue([]);
-    await expect(f.caller().tender({ ...input, amountMinor: 102, ownerOverride: true,
-      overrideReason: 'Exception', approvalId, idempotencyKey: 'key-b' }))
-      .rejects.toMatchObject({ message: 'OWNER_ACTION_REQUIRED' });
+    const insert = f.db.$executeRaw.mock.calls[0]![0] as { values: unknown[] };
+    expect(insert.values).toEqual([
+      result.approvalId, 'org-a', 'branch-a', 'owner-a', 'sale-a', 'family-a', 101, 'Exception',
+    ]);
+    // Password, code and reason never enter the audit input.
+    expect(f.context.audit.detail).toMatchObject({ skipInput: true });
   });
-  it('observes capability revocation inside the tender transaction', async () => {
+  it('lets a second-person manager approve the cashier tender', async () => {
     const f = fixture();
-    const approvalId = '22222222-2222-4222-8222-222222222222';
-    f.db.$queryRaw.mockReset()
-      .mockResolvedValueOnce([]).mockResolvedValueOnce([]).mockResolvedValueOnce([])
-      .mockResolvedValueOnce([{ id: approvalId, approverId: 'owner-a', reason: 'Exception', createdAt: new Date() }])
-      .mockResolvedValueOnce([{ id: 'owner-a', status: 'ACTIVE', organizationId: 'org-a', roleKey: 'owner', isSystem: true }]);
-    vi.mocked(can).mockResolvedValueOnce(true).mockResolvedValueOnce(false);
-    await expect(f.caller().tender({ ...input, amountMinor: 101, ownerOverride: true,
-      overrideReason: 'Exception', approvalId })).rejects.toMatchObject({ message: 'OWNER_ACTION_REQUIRED' });
+    f.db.user.findFirst.mockResolvedValue({
+      ...f.approver,
+      id: 'manager-b',
+      email: 'manager@example.test',
+      role: 'EMPLOYEE',
+      organizationRole: { key: 'manager', isSystem: true },
+    });
+    await f.caller().authorizeKhataOverride({ ...approval, approverEmail: 'Manager@Example.test' });
+    expect(f.db.user.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { organizationId: 'org-a', email: 'manager@example.test' } })
+    );
+    const insert = f.db.$executeRaw.mock.calls[0]![0] as { values: unknown[] };
+    expect(insert.values[3]).toBe('manager-b');
+  });
+  it.each([
+    ['a wrong password', { password: 'wrong' }, {}],
+    ['a cashier role', {}, { role: 'EMPLOYEE', organizationRole: { key: 'cashier', isSystem: true } }],
+    ['a custom role named manager', {}, { role: 'EMPLOYEE', organizationRole: { key: 'manager', isSystem: false } }],
+    ['a deactivated approver', {}, { status: 'INACTIVE' }],
+    ['a missing authentication code', {}, { twoFactorEnabledAt: new Date(), twoFactorSecret: 'secret' }],
+    ['an unknown approver', { approverEmail: 'ghost@example.test' }, null],
+  ])('refuses %s with one indistinct error and no evidence', async (_label, change, row) => {
+    const f = fixture();
+    f.db.user.findFirst.mockResolvedValue(row === null ? null : { ...f.approver, ...row });
+    await expect(
+      f.caller().authorizeKhataOverride({ ...approval, ...change })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'OWNER_ACTION_REQUIRED' });
+    expect(f.db.$executeRaw).not.toHaveBeenCalled();
+  });
+  it('requires counter write access before checking any secret', async () => {
+    const f = fixture([{ capability: 'reports:financial', effect: 'ALLOW' }]);
+    await expect(f.caller().authorizeKhataOverride(approval)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(f.db.user.findFirst).not.toHaveBeenCalled();
+    expect(f.db.$executeRaw).not.toHaveBeenCalled();
+  });
+  it('throttles password and code guessing on the shared login account budget', async () => {
+    const f = fixture();
+    for (let attempt = 0; attempt < 10; attempt += 1)
+      await expect(
+        f.caller().authorizeKhataOverride({ ...approval, password: 'wrong' })
+      ).rejects.toMatchObject({ message: 'OWNER_ACTION_REQUIRED' });
+    await expect(f.caller().authorizeKhataOverride(approval)).rejects.toMatchObject({
+      code: 'TOO_MANY_REQUESTS',
+    });
+    expect(f.db.$executeRaw).not.toHaveBeenCalled();
+  });
+  it('consumes bound evidence once when the tender uses it', async () => {
+    const f = fixture();
+    routeRaw(f, evidence(), approverRow);
+    await f.caller().tender({
+      ...input,
+      amountMinor: 101,
+      ownerOverride: true,
+      overrideReason: 'Exception',
+      approvalId,
+    });
+    expect(f.db.$executeRaw).toHaveBeenCalledOnce();
+    expect(f.db.pharmacyKhataLimitDecision.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        ownerActorId: 'owner-a',
+        reasons: expect.objectContaining({ approvalId, overrideReason: 'Exception' }),
+      }),
+    });
+
+    routeRaw(f, null, approverRow);
+    await expect(
+      f.caller().tender({
+        ...input,
+        amountMinor: 102,
+        ownerOverride: true,
+        overrideReason: 'Exception',
+        approvalId,
+        idempotencyKey: 'key-b',
+      })
+    ).rejects.toMatchObject({ message: 'OWNER_ACTION_REQUIRED' });
+  });
+  it('observes approver role revocation inside the tender transaction', async () => {
+    const f = fixture();
+    routeRaw(f, evidence(), { ...approverRow, roleKey: 'cashier' });
+    await expect(
+      f.caller().tender({
+        ...input,
+        amountMinor: 101,
+        ownerOverride: true,
+        overrideReason: 'Exception',
+        approvalId,
+      })
+    ).rejects.toMatchObject({ message: 'OWNER_ACTION_REQUIRED' });
     expect(f.db.$executeRaw).not.toHaveBeenCalled();
   });
   it.each(['passwordAuthenticatedAt', 'organizationId', 'ownerAuthorizedByUserId'])(

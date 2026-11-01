@@ -1,7 +1,6 @@
 import 'server-only';
 
 import { Prisma } from '@/generated/prisma/client';
-import { can, type Subject } from '@/lib/abac';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { auditPatientRead } from './patient-prescriptions';
@@ -213,27 +212,48 @@ export async function settleFamilyKhata(
   };
 }
 
-export async function applyKhataLimitDecision(
+/** Tenant role keys (system templates only) that may approve an over-limit Khata charge. */
+export const KHATA_OVERRIDE_APPROVER_ROLE_KEYS = ['owner', 'owner-operator', 'manager'] as const;
+
+/** True when a member row may approve a Khata limit override (owner/manager or tenant ADMIN). */
+export function isKhataOverrideApprover(row: {
+  status: string | null;
+  role?: string | null;
+  roleKey?: string | null;
+  isSystem?: boolean | null;
+}) {
+  if (row.status !== 'ACTIVE') return false;
+  if (row.role === 'ADMIN') return true;
+  return (
+    row.isSystem === true &&
+    (KHATA_OVERRIDE_APPROVER_ROLE_KEYS as readonly string[]).includes(row.roleKey ?? '')
+  );
+}
+
+type KhataLimitDecisionInput = {
+  familyAccountId: string;
+  suggestion: KhataHealthSuggestion;
+  // Trusted server evidence only: never populate this from a client timestamp.
+  ownerAuthorized: boolean;
+  ownerAuthorizedByUserId?: string;
+  ownerReauthenticatedAt?: Date;
+  overrideReason?: string;
+  overrideLimitMinor?: number;
+};
+
+async function writeKhataLimitDecision(
   db: ScopedDb,
   scope: FamilyKhataScope,
-  input: {
-    familyAccountId: string;
-    suggestion: KhataHealthSuggestion;
-    // Trusted server evidence only: never populate this from a client timestamp.
-    ownerAuthorized: boolean;
-    ownerAuthorizedByUserId?: string;
-    ownerReauthenticatedAt?: Date;
-    overrideReason?: string;
-    overrideLimitMinor?: number;
-  }
+  input: KhataLimitDecisionInput,
+  approvalId?: string
 ) {
   const authorizedAt = new Date();
   const reauthenticatedAt = input.ownerReauthenticatedAt?.getTime();
-  const overrideReason = input.overrideReason.trim();
+  const overrideReason = input.overrideReason?.trim();
   if (
     !input.ownerAuthorized ||
     !input.ownerAuthorizedByUserId ||
-    !input.overrideReason?.trim() ||
+    (input.overrideReason !== undefined && !overrideReason) ||
     reauthenticatedAt === undefined ||
     !Number.isFinite(reauthenticatedAt) ||
     reauthenticatedAt > authorizedAt.getTime() ||
@@ -270,12 +290,28 @@ export async function applyKhataLimitDecision(
         ownerAuthorizedByUserId: input.ownerAuthorizedByUserId,
         ownerReauthenticatedAt: input.ownerReauthenticatedAt!.toISOString(),
         ownerAuthorizedAt: authorizedAt.toISOString(),
-        overrideReason: input.overrideReason.trim(),
+        ...(overrideReason ? { overrideReason } : {}),
+        // Links the durable decision to the single-use approval evidence row.
+        ...(approvalId ? { approvalId, recordedByUserId: scope.actorId } : {}),
       },
       ownerActorId: input.ownerAuthorizedByUserId,
     },
   });
   return { account, decision };
+}
+
+/**
+ * Direct owner path: the authorizing owner must be the acting session. A second-person
+ * approval only enters through `authorizeKhataCharge`, which verifies stored evidence.
+ */
+export async function applyKhataLimitDecision(
+  db: ScopedDb,
+  scope: FamilyKhataScope,
+  input: KhataLimitDecisionInput
+) {
+  if (!input.ownerAuthorized || input.ownerAuthorizedByUserId !== scope.actorId)
+    throw new FamilyKhataError('OWNER_ACTION_REQUIRED');
+  return writeKhataLimitDecision(db, scope, input);
 }
 
 /** Entire append-only family ledger, never the counter's ten-sale preview. */
@@ -360,7 +396,7 @@ export async function authorizeKhataCharge(
   db: ScopedDb,
   scope: FamilyKhataScope,
   input: { saleId: string; familyAccountId: string; amountMinor: number; ownerOverride?: boolean; overrideReason?: string },
-  approval: { approvalId?: string; subject?: Subject }
+  approval: { approvalId?: string }
 ) {
   await db.$queryRaw(
     Prisma.sql`SELECT id FROM pharmacy_family_accounts WHERE id=${input.familyAccountId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`
@@ -379,36 +415,39 @@ export async function authorizeKhataCharge(
     throw new FamilyKhataError('INVALID_AMOUNT');
   if (projected > account.creditLimitMinor) {
     if (!input.ownerOverride) throw new FamilyKhataError('CREDIT_LIMIT_EXCEEDED');
-    const approvals = approval.approvalId
-      ? await db.$queryRaw<Array<{ id: string; approverId: string; reason: string; createdAt: Date }>>(Prisma.sql`
+    const overrideReason = input.overrideReason?.trim();
+    const approvals =
+      approval.approvalId && overrideReason
+        ? await db.$queryRaw<
+            Array<{ id: string; approverId: string; reason: string; createdAt: Date }>
+          >(Prisma.sql`
           SELECT id, "approverId", reason, "createdAt" FROM pharmacy_khata_override_approvals
           WHERE id=${approval.approvalId} AND "organizationId"=${scope.organizationId}
             AND "branchId"=${scope.branchId} AND "saleId"=${input.saleId}
             AND "familyAccountId"=${input.familyAccountId} AND "amountMinor"=${input.amountMinor}
-            AND reason=${input.overrideReason ?? ''}
+            AND btrim(reason)=${overrideReason}
             AND "consumedAt" IS NULL AND "expiresAt" >= NOW() FOR UPDATE`)
-      : [];
+        : [];
     const evidence = approvals[0];
     const reason = evidence?.reason.trim();
-    const sale = await db.pharmacySale.findFirst({
-      where: { id: input.saleId, organizationId: scope.organizationId, branchId: scope.branchId },
-      select: { createdByUserId: true },
-    });
-    if (!sale || !evidence || evidence.approverId === sale.createdByUserId || !reason)
-      throw new FamilyKhataError('OWNER_ACTION_REQUIRED');
-    const approvers = await db.$queryRaw<Array<{ id: string; status: string; organizationId: string; roleKey: string; isSystem: boolean }>>(Prisma.sql`
-      SELECT u.id, u.status, u."organizationId", r.key AS "roleKey", r."isSystem"
-      FROM users u JOIN organization_roles r ON r.id = u."organizationRoleId" AND r."organizationId" = u."organizationId"
-      WHERE u.id=${evidence.approverId} AND u."organizationId"=${scope.organizationId} FOR SHARE OF u, r`);
+    if (!evidence || !reason) throw new FamilyKhataError('OWNER_ACTION_REQUIRED');
+    // Re-check the approver inside the tender transaction: a role change or deactivation
+    // after the approval was issued must still refuse the override.
+    const approvers = await db.$queryRaw<
+      Array<{ id: string; status: string; role: string | null; roleKey: string | null; isSystem: boolean | null }>
+    >(Prisma.sql`
+      SELECT u.id, u.status::text AS status, u.role::text AS role, r.key AS "roleKey", r."isSystem"
+      FROM users u LEFT JOIN organization_roles r
+        ON r.id = u."organizationRoleId" AND r."organizationId" = u."organizationId"
+      WHERE u.id=${evidence.approverId} AND u."organizationId"=${scope.organizationId}
+      FOR SHARE OF u`);
     const approver = approvers[0];
-    if (!approver || approver.status !== 'ACTIVE' || !approver.isSystem ||
-        (approver.roleKey !== 'owner' && approver.roleKey !== 'manager') ||
-        approval.subject?.id !== evidence.approverId ||
-        !(await can(approval.subject, 'admin:access', undefined, { db, source: 'TRPC' })))
+    if (!approver || !isKhataOverrideApprover(approver))
       throw new FamilyKhataError('OWNER_ACTION_REQUIRED');
     const consumed = await db.$executeRaw(Prisma.sql`
       UPDATE pharmacy_khata_override_approvals SET "consumedAt"=NOW()
-      WHERE id=${evidence.id} AND "consumedAt" IS NULL`);
+      WHERE id=${evidence.id} AND "organizationId"=${scope.organizationId}
+        AND "branchId"=${scope.branchId} AND "consumedAt" IS NULL`);
     if (consumed !== 1) throw new FamilyKhataError('OWNER_ACTION_REQUIRED');
     const now = new Date();
     const windowStart = new Date(now.getTime() - 180 * DAY_MS);
@@ -431,20 +470,25 @@ export async function authorizeKhataCharge(
         settlesChargeId: true,
       },
     });
-    await applyKhataLimitDecision(db, scope, {
-      familyAccountId: account.id,
-      suggestion: calculateKhataHealthSuggestion(
-        history,
-        account.creditLimitMinor,
-        windowStart,
-        now
-      ),
-      ownerAuthorized: true,
-      ownerAuthorizedByUserId: evidence.approverId,
-      overrideReason: reason,
-      ownerReauthenticatedAt: evidence.createdAt,
-      overrideLimitMinor: projected,
-    });
+    await writeKhataLimitDecision(
+      db,
+      scope,
+      {
+        familyAccountId: account.id,
+        suggestion: calculateKhataHealthSuggestion(
+          history,
+          account.creditLimitMinor,
+          windowStart,
+          now
+        ),
+        ownerAuthorized: true,
+        ownerAuthorizedByUserId: evidence.approverId,
+        overrideReason: reason,
+        ownerReauthenticatedAt: evidence.createdAt,
+        overrideLimitMinor: projected,
+      },
+      evidence.id
+    );
   }
   return account;
 }

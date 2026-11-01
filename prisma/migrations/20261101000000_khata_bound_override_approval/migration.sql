@@ -21,8 +21,15 @@ CREATE TABLE "pharmacy_khata_override_approvals" (
   CONSTRAINT "pharmacy_khata_override_approvals_approver_fkey" FOREIGN KEY ("organizationId", "approverId")
     REFERENCES "users"("organizationId", "id") ON DELETE RESTRICT
 );
-CREATE INDEX "pharmacy_khata_override_approvals_organizationId_branchId_id_idx"
+-- Explicit names stay under PostgreSQL's 63-byte identifier limit and match schema.prisma.
+CREATE INDEX "pharmacy_khata_override_approvals_org_branch_id_idx"
   ON "pharmacy_khata_override_approvals"("organizationId", "branchId", "id");
+CREATE INDEX "pharmacy_khata_override_approvals_sale_idx"
+  ON "pharmacy_khata_override_approvals"("organizationId", "branchId", "saleId");
+CREATE INDEX "pharmacy_khata_override_approvals_account_idx"
+  ON "pharmacy_khata_override_approvals"("organizationId", "branchId", "familyAccountId");
+CREATE INDEX "pharmacy_khata_override_approvals_approver_idx"
+  ON "pharmacy_khata_override_approvals"("organizationId", "approverId");
 
 CREATE FUNCTION pharmacy_khata_override_approvals_immutable() RETURNS trigger
 LANGUAGE plpgsql AS $$

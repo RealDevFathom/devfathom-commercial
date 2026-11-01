@@ -1108,10 +1108,23 @@ function ScopedPharmacyCounterConsole({
     return utils.client.pharmacySales.khataAccounts.query({ branchId, saleId });
   }, [branchId, saleId, utils]);
   const reauthenticateOwner = useCallback(
-    async (password: string, totp: string, approval: { familyAccountId: string; amountMinor: number; reason: string }) => {
+    async (
+      password: string,
+      totp: string,
+      approval: {
+        familyAccountId: string;
+        amountMinor: number;
+        reason: string;
+        approverEmail?: string;
+      }
+    ) => {
       if (!saleId) throw new Error('Open a bill');
       const result = await utils.client.pharmacySales.authorizeKhataOverride.mutate({
-        branchId, saleId, ...approval, password, totp: totp || undefined,
+        branchId,
+        saleId,
+        ...approval,
+        password,
+        ...(totp ? { totp } : {}),
       });
       return result.approvalId;
     },
@@ -1167,6 +1180,9 @@ function ScopedPharmacyCounterConsole({
         cashReceivedMinor?: number;
         familyAccountId?: string;
         ownerOverride?: boolean;
+        providerRef?: string;
+        payerName?: string;
+        referenceSkipped?: boolean;
         overrideReason?: string;
         approvalId?: string;
       },
@@ -1213,7 +1229,14 @@ function ScopedPharmacyCounterConsole({
             ? `counter-tender:${saleId}:${input.type}:${browserUuid()}`
             : `counter-tender:${saleId}:${input.type}:${input.amountMinor}`,
           ...(input.familyAccountId
-            ? { familyAccountId: input.familyAccountId, ownerOverride: input.ownerOverride, overrideReason: input.overrideReason, approvalId: input.approvalId }
+            ? {
+                familyAccountId: input.familyAccountId,
+                ownerOverride: input.ownerOverride,
+                ...(input.overrideReason !== undefined
+                  ? { overrideReason: input.overrideReason }
+                  : {}),
+                ...(input.approvalId !== undefined ? { approvalId: input.approvalId } : {}),
+              }
             : {}),
           ...(input.providerRef !== undefined ? { providerRef: input.providerRef } : {}),
           ...(input.payerName !== undefined ? { payerName: input.payerName } : {}),

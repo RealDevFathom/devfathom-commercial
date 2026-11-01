@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 const sql = readFileSync(
-  'prisma/migrations/20261022220000_khata_bound_override_approval/migration.sql',
+  'prisma/migrations/20261101000000_khata_bound_override_approval/migration.sql',
   'utf8'
 );
 
@@ -20,6 +20,14 @@ describe('Khata override approval evidence migration', () => {
     expect(sql).toContain('NEW."consumedAt" IS NOT DISTINCT FROM OLD."consumedAt"');
     expect(sql).toContain('ROW(NEW."id", NEW."organizationId", NEW."branchId", NEW."approverId", NEW."saleId"');
     expect(sql).toContain('BEFORE UPDATE OR DELETE');
+  });
+
+  it('keeps every quoted identifier within the PostgreSQL 63-byte limit', () => {
+    const identifiers = [...sql.matchAll(/"([^"]+)"/g)].map(([, name]) => name!);
+    expect(identifiers.filter((name) => Buffer.byteLength(name) > 63)).toEqual([]);
+    expect(sql).toContain('"pharmacy_khata_override_approvals_sale_idx"');
+    expect(sql).toContain('"pharmacy_khata_override_approvals_account_idx"');
+    expect(sql).toContain('"pharmacy_khata_override_approvals_approver_idx"');
   });
 
   it('forces tenant and branch row-level isolation', () => {

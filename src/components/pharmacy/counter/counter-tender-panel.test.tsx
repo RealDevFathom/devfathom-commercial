@@ -273,7 +273,7 @@ describe('family Khata tender', () => {
     await screen.findByText(/Ledger balance/);
     expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
     fireEvent.click(screen.getByLabelText('Owner or manager: authorize limit increase'));
-    fireEvent.change(screen.getByLabelText('Approver password (current account)'), {
+    fireEvent.change(screen.getByLabelText('Approver password'), {
       target: { value: 'test-only-password' },
     });
     fireEvent.change(screen.getByLabelText('Reason for limit increase'), {
@@ -290,6 +290,37 @@ describe('family Khata tender', () => {
       { amount: '', cashReceived: '' }
     );
   });
+  it('lets a second-person owner or manager approve the cashier tender', async () => {
+    const reauthenticateOwner = vi.fn().mockResolvedValue('33333333-3333-4333-8333-333333333333');
+    const { props } = setup({
+      loadKhataAccounts: vi.fn().mockResolvedValue([account]),
+      reauthenticateOwner,
+    });
+    fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'KHATA' } });
+    await screen.findByText(/Ledger balance/);
+    fireEvent.click(screen.getByLabelText('Owner or manager: authorize limit increase'));
+    fireEvent.change(screen.getByLabelText(/Approver email/), {
+      target: { value: ' manager@example.test ' },
+    });
+    fireEvent.change(screen.getByLabelText('Approver password'), {
+      target: { value: 'manager-only-password' },
+    });
+    fireEvent.change(screen.getByLabelText('Reason for limit increase'), {
+      target: { value: 'Regular customer' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
+    await screen.findByText('Payment recorded.');
+    expect(reauthenticateOwner).toHaveBeenCalledWith('manager-only-password', '', {
+      familyAccountId: 'family-a',
+      amountMinor: 25000,
+      reason: 'Regular customer',
+      approverEmail: 'manager@example.test',
+    });
+    expect(props.onTender).toHaveBeenCalledWith(
+      expect.objectContaining({ approvalId: '33333333-3333-4333-8333-333333333333' }),
+      { amount: '', cashReceived: '' }
+    );
+  });
   it('does not dispatch when reauthentication fails', async () => {
     const { props } = setup({
       loadKhataAccounts: vi.fn().mockResolvedValue([account]),
@@ -298,14 +329,14 @@ describe('family Khata tender', () => {
     fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'KHATA' } });
     await screen.findByText(/Ledger balance/);
     fireEvent.click(screen.getByLabelText('Owner or manager: authorize limit increase'));
-    fireEvent.change(screen.getByLabelText('Approver password (current account)'), {
+    fireEvent.change(screen.getByLabelText('Approver password'), {
       target: { value: 'wrong' },
     });
     fireEvent.change(screen.getByLabelText('Reason for limit increase'), { target: { value: 'Exception' } });
     fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
     await screen.findByText(/Approver re-authentication failed/);
     expect(props.onTender).not.toHaveBeenCalled();
-    expect(screen.getByLabelText('Approver password (current account)')).toHaveValue('');
+    expect(screen.getByLabelText('Approver password')).toHaveValue('');
   });
   it('allows an exact-limit charge and requests only the selected statement', async () => {
     const printKhataStatement = vi.fn().mockResolvedValue(undefined);

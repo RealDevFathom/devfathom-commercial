@@ -45,7 +45,12 @@ export type CounterTenderPanelProps = {
   manualSettingsError?: boolean;
   onReloadManualSettings?: () => void;
   loadKhataAccounts?: () => Promise<KhataAccount[]>;
-  reauthenticateOwner?: (password: string, totp: string, approval: { familyAccountId: string; amountMinor: number; reason: string }) => Promise<string>;
+  /** Issues single-use approval evidence; `approverEmail` lets a second person approve. */
+  reauthenticateOwner?: (
+    password: string,
+    totp: string,
+    approval: { familyAccountId: string; amountMinor: number; reason: string; approverEmail?: string }
+  ) => Promise<string>;
   printKhataStatement?: (familyAccountId: string) => Promise<void>;
   /** Only a known, current bill has a balance; zero alone is not settlement. */
   balanceMinor: number | null;
@@ -66,6 +71,9 @@ export type CounterTenderPanelProps = {
       cashReceivedMinor?: number;
       familyAccountId?: string;
       ownerOverride?: boolean;
+      providerRef?: string;
+      payerName?: string;
+      referenceSkipped?: boolean;
       overrideReason?: string;
       approvalId?: string;
     },
@@ -125,6 +133,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
     const [khataError, setKhataError] = useState('');
     const [ownerOverride, setOwnerOverride] = useState(false);
     const [overrideReason, setOverrideReason] = useState('');
+    const [approverEmail, setApproverEmail] = useState('');
     const [password, setPassword] = useState('');
     const [totp, setTotp] = useState('');
     const [statementPending, setStatementPending] = useState(false);
@@ -221,7 +230,12 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
         let approvalId: string | undefined;
         if (isKhata && overLimit) {
           try {
-            approvalId = await reauthenticateOwner!(password, totp, { familyAccountId: accountId, amountMinor, reason: overrideReason.trim() });
+            approvalId = await reauthenticateOwner!(password, totp, {
+              familyAccountId: accountId,
+              amountMinor,
+              reason: overrideReason.trim(),
+              ...(approverEmail.trim() ? { approverEmail: approverEmail.trim() } : {}),
+            });
           } catch {
             setOutcome({
               status: 'rejected',
@@ -446,6 +460,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                 setAccountId(event.target.value);
                 setOwnerOverride(false);
                 setOverrideReason('');
+                setApproverEmail('');
               }}
             >
               <option value="">Choose family account</option>
@@ -483,7 +498,20 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                 </Label>
                 {ownerOverride ? (
                   <>
-                    <Label htmlFor="khata-password">Approver password (current account)</Label>
+                    <Label htmlFor="khata-approver-email">
+                      Approver email (leave blank if you are the approver)
+                    </Label>
+                    <Input
+                      id="khata-approver-email"
+                      type="email"
+                      autoComplete="off"
+                      value={approverEmail}
+                      disabled={!editable}
+                      maxLength={254}
+                      onChange={(event) => setApproverEmail(event.target.value)}
+                      className="h-9"
+                    />
+                    <Label htmlFor="khata-password">Approver password</Label>
                     <Input
                       id="khata-password"
                       type="password"
@@ -493,8 +521,6 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                       onChange={(event) => setPassword(event.target.value)}
                       className="h-9"
                     />
-                    <Label htmlFor="khata-override-reason">Reason for limit increase</Label>
-                    <Input id="khata-override-reason" value={overrideReason} disabled={!editable} maxLength={500} onChange={(event) => setOverrideReason(event.target.value)} />
                     <Label htmlFor="khata-totp">Authentication or recovery code (if enabled)</Label>
                     <Input
                       id="khata-totp"

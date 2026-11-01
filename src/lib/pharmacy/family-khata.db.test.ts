@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
@@ -131,6 +131,26 @@ async function fixture(
     };
   });
 }
+async function issueApproval(db: ScopedDb, scope: Fixture, amountMinor: number, ageMs = 0) {
+  const id = randomUUID();
+  await db.$executeRawUnsafe(
+    `INSERT INTO pharmacy_khata_override_approvals
+       (id, "organizationId", "branchId", "approverId", "saleId", "familyAccountId", "amountMinor",
+        reason, "createdAt", "expiresAt")
+     VALUES ($1, $2, $3, $4, $5, $6, $7, 'Approved exception',
+       NOW() - ($8::int * INTERVAL '1 millisecond'),
+       NOW() - ($8::int * INTERVAL '1 millisecond') + INTERVAL '5 minutes')`,
+    id,
+    scope.organizationId,
+    scope.branchId,
+    scope.approverId,
+    scope.saleId,
+    scope.familyAccountId,
+    amountMinor,
+    ageMs
+  );
+  return id;
+}
 function inScope<T>(scope: Fixture, run: (db: ScopedDb) => Promise<T>) {
   return tenant(scope.organizationId, async (db) => {
     await db.$queryRawUnsafe(
@@ -186,12 +206,12 @@ suite('family Khata restricted PostgreSQL', () => {
   });
   it('rejects stale override and rolls back the limit and audit together', async () => {
     await expect(
-      inScope(a, (db) =>
+      inScope(a, async (db) =>
         khata.authorizeKhataCharge(
           db,
           a,
-          { ...a, amountMinor: 401, ownerOverride: true },
-          { approverId: a.approverId, reason: 'Approved exception', reauthenticatedAt: Date.now() - 301000 }
+          { ...a, amountMinor: 401, ownerOverride: true, overrideReason: 'Approved exception' },
+          { approvalId: await issueApproval(db, a, 401, 301_000) }
         )
       )
     ).rejects.toMatchObject({ reason: 'OWNER_ACTION_REQUIRED' });
@@ -228,21 +248,37 @@ suite('family Khata restricted PostgreSQL', () => {
     expect(await inScope(a, (db) => khata.readKhataBalance(db, a, a.familyAccountId))).toBe(900);
   });
   it('audits a fresh owner override and preserves append-only history', async () => {
-    await inScope(a, (db) =>
-      khata.authorizeKhataCharge(
-        db,
-        a,
-        { ...a, amountMinor: 200, ownerOverride: true },
-        { approverId: a.approverId, reason: 'Approved exception', reauthenticatedAt: Date.now() }
+    const approvalId = await inScope(a, (db) => issueApproval(db, a, 200));
+    const override = { ...a, amountMinor: 200, ownerOverride: true, overrideReason: 'Approved exception' };
+    await inScope(a, (db) => khata.authorizeKhataCharge(db, a, override, { approvalId }));
+    // Single-use: the evidence is consumed and its consumption cannot be undone.
+    const [evidence] = await inScope(a, (db) =>
+      db.$queryRawUnsafe<Array<{ consumedAt: Date | null }>>(
+        'SELECT "consumedAt" FROM pharmacy_khata_override_approvals WHERE id=$1',
+        approvalId
       )
     );
+    expect(evidence?.consumedAt).toBeInstanceOf(Date);
+    await expect(
+      inScope(a, (db) =>
+        db.$executeRawUnsafe(
+          'UPDATE pharmacy_khata_override_approvals SET "consumedAt"=NULL WHERE id=$1',
+          approvalId
+        )
+      )
+    ).rejects.toThrow();
+    await expect(
+      inScope(a, (db) =>
+        db.$executeRawUnsafe('DELETE FROM pharmacy_khata_override_approvals WHERE id=$1', approvalId)
+      )
+    ).rejects.toThrow();
     const decision = await inScope(a, (db) =>
       db.pharmacyKhataLimitDecision.findFirst({ where: { familyAccountId: a.familyAccountId } })
     );
     expect(decision).toMatchObject({
       appliedLimitMinor: 1100,
       ownerActorId: a.approverId,
-      reasons: expect.objectContaining({ ownerAuthorizedByUserId: a.approverId }),
+      reasons: expect.objectContaining({ ownerAuthorizedByUserId: a.approverId, approvalId }),
     });
     await expect(
       inScope(a, (db) =>
