@@ -21,7 +21,7 @@ vi.mock('@/lib/breadcrumb-store', () => ({
 }));
 
 import { navigation as menu } from './sidebar';
-import { TopbarBreadcrumbs } from './topbar-breadcrumbs';
+import { humanizeSegment, TopbarBreadcrumbs } from './topbar-breadcrumbs';
 
 describe('TopbarBreadcrumbs hydration', () => {
   afterEach(() => {
@@ -67,7 +67,7 @@ describe('TopbarBreadcrumbs hydration', () => {
     for (const [pathname, label] of [
       ['/dashboard', 'Dashboard'],
       ['/restaurant/inventory', 'Inventory'],
-      ['/restaurant/sop', 'Sop'],
+      ['/restaurant/sop', 'SOP board'],
       ['/restaurant/menus', 'Menus'],
       ['/restaurant/tax', 'Tax'],
     ]) {
@@ -106,5 +106,48 @@ describe('TopbarBreadcrumbs hydration', () => {
       );
     }
     await act(async () => root.unmount());
+  });
+
+  it('names a page by its menu label rather than its raw slug', async () => {
+    const container = document.createElement('nav');
+    container.innerHTML = renderToString(<TopbarBreadcrumbs />);
+    document.body.appendChild(container);
+    let root: ReturnType<typeof hydrateRoot>;
+    await act(async () => {
+      root = hydrateRoot(container, <TopbarBreadcrumbs />);
+    });
+    navigation.pathname = '/pharmacy/pharmacist-queue';
+    await act(async () => root.render(<TopbarBreadcrumbs />));
+    expect(container.querySelector('[aria-current="page"]')).toHaveTextContent(
+      'Pharmacist queue'
+    );
+    // The section root keeps its section name, not the menu label of its landing page.
+    expect(container).toHaveTextContent(/^Pharmacy/);
+    expect(container.textContent).not.toMatch(/Pharmacist-queue/);
+    await act(async () => root.unmount());
+  });
+
+  it('humanizes a slug no menu item names', async () => {
+    const container = document.createElement('nav');
+    container.innerHTML = renderToString(<TopbarBreadcrumbs />);
+    document.body.appendChild(container);
+    let root: ReturnType<typeof hydrateRoot>;
+    await act(async () => {
+      root = hydrateRoot(container, <TopbarBreadcrumbs />);
+    });
+    navigation.pathname = '/pharmacy/reports/branch-comparison';
+    await act(async () => root.render(<TopbarBreadcrumbs />));
+    expect(container.querySelector('[aria-current="page"]')).toHaveTextContent(
+      'Branch comparison'
+    );
+    await act(async () => root.unmount());
+  });
+});
+
+describe('humanizeSegment', () => {
+  it('turns a hyphenated slug into sentence-case words', () => {
+    expect(humanizeSegment('branch-comparison')).toBe('Branch comparison');
+    expect(humanizeSegment('pharmacist-queue')).toBe('Pharmacist queue');
+    expect(humanizeSegment('sop')).toBe('Sop');
   });
 });

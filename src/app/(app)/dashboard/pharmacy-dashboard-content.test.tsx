@@ -106,9 +106,34 @@ describe('PharmacyDashboardContent states', () => {
   it('fails financial widgets closed while keeping operational widgets usable', () => {
     render(<PharmacyDashboardContent role="ADMIN" />);
     expect(screen.getAllByText('Restricted').length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/reports:financial is required/i).length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText(/Your role does not include financial figures/i).length
+    ).toBeGreaterThan(0);
     expect(screen.getByRole('heading', { name: 'Stock actions' })).toBeVisible();
     expect(screen.queryByText('PKR 0')).not.toBeInTheDocument();
+  });
+
+  it('speaks plain owner language instead of permission keys, table names or raw timestamps', () => {
+    state.command = query({
+      freshness: { asOf: '2026-09-04T10:00:00Z', source: 'transactional pharmacy ledgers' },
+      permissions: { operational: true, financial: true },
+      metrics: { openStockSignals: 3, recommendedOrders: null },
+    });
+    state.catalog = query({
+      metrics: CATALOG_METRICS.map((metric) => ({ ...metric, source: 'pharmacy_stock_items' })),
+      reports: [],
+      permissions: { operational: true, financial: true },
+    });
+    const { container } = render(<PharmacyDashboardContent role="ADMIN" />);
+    const text = container.textContent ?? '';
+    expect(text).not.toMatch(/reports:(financial|operational)/i);
+    expect(text).not.toMatch(/pharmacy_[a-z]+/);
+    expect(text).not.toContain('transactional pharmacy ledgers');
+    expect(text).not.toContain('Not available in this release');
+    expect(text).not.toContain('2026-09-04T10:00:00Z');
+    expect(screen.getByText(/^Updated /)).toBeInTheDocument();
+    expect(screen.getAllByText('Operations').length).toBeGreaterThan(0);
+    expect(screen.getByText('Not tracked yet')).toBeInTheDocument();
   });
 
   it('shows loading, not a financial restriction, while the command query is still pending', () => {
@@ -118,7 +143,9 @@ describe('PharmacyDashboardContent states', () => {
     state.command = query(undefined, { isLoading: false });
     render(<PharmacyDashboardContent role="ADMIN" />);
     expect(screen.queryByText('Restricted')).not.toBeInTheDocument();
-    expect(screen.queryByText(/reports:financial is required/i)).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/Your role does not include financial figures/i)
+    ).not.toBeInTheDocument();
     expect(screen.getAllByRole('status', { name: /^Loading /i }).length).toBeGreaterThan(0);
   });
 

@@ -8,7 +8,7 @@ const mocks = vi.hoisted(() => ({
     error: null as { message: string } | null,
     refetch: vi.fn(),
   },
-  candidates: { data: [], refetch: vi.fn() },
+  candidates: { data: [] as unknown[], refetch: vi.fn() },
   confirm: vi.fn(),
   publish: vi.fn(),
   pending: false,
@@ -39,10 +39,14 @@ vi.mock('@/lib/trpc', () => ({
     },
   },
 }));
-import { MedicineReferenceWorkbench } from './medicine-reference-workbench';
+import {
+  MedicineReferenceWorkbench,
+  referenceCandidateSaleState,
+} from './medicine-reference-workbench';
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.candidates.data = [];
   mocks.proposals.data = [];
   mocks.proposals.isPending = false;
   mocks.proposals.error = null;
@@ -191,4 +195,33 @@ it('rejects a file above 20,000 rows before any upload', async () => {
     screen.queryByRole('button', { name: 'Preview normalized rows' })
   ).not.toBeInTheDocument();
   expect(mocks.runNow).not.toHaveBeenCalled();
+});
+
+it('says publishing is what puts a reviewed medicine on sale', () => {
+  expect(
+    referenceCandidateSaleState({ saleable: false, unreviewedCount: 2, publishableCount: 0 })
+  ).toMatchObject({ pill: 'Needs review', line: expect.stringMatching(/publish/) });
+  expect(
+    referenceCandidateSaleState({ saleable: false, unreviewedCount: 0, publishableCount: 1 })
+  ).toMatchObject({ pill: 'Ready to publish', line: 'Reviewed — publish to put it on sale.' });
+  expect(
+    referenceCandidateSaleState({ saleable: true, unreviewedCount: 0, publishableCount: 0 })
+  ).toMatchObject({ pill: 'On sale', tone: 'success' });
+});
+
+it('renders a reviewed candidate as ready to publish rather than a fixed non-saleable line', () => {
+  mocks.candidates.data = [
+    {
+      id: 'med-1',
+      productName: 'Synthetic Paracetamol',
+      saleable: false,
+      provenance: [
+        { id: 'a1', status: 'ACCEPTED', field: 'productName', assertedValue: { value: 'X' } },
+      ],
+    },
+  ];
+  render(<MedicineReferenceWorkbench health={[]} />);
+  expect(screen.getByText(/Reviewed — publish to put it on sale\./)).toBeVisible();
+  expect(screen.getByText('Ready to publish')).toBeVisible();
+  expect(screen.queryByText(/Non-saleable/)).not.toBeInTheDocument();
 });

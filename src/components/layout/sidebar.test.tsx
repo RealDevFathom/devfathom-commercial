@@ -137,6 +137,18 @@ describe('TopNavigation vertical visibility', () => {
     expect(restaurantLinks('MEMBER')).not.toContain('/restaurant/delivery');
   });
 
+  it('keeps the active tab label inside and above its own pill', () => {
+    links('AGENCY');
+    const active = document.querySelector('a[aria-current="page"]') as HTMLElement;
+    expect(active).toHaveTextContent('Dashboard');
+    const pills = document.querySelectorAll('[data-active-pill]');
+    // One pill, owned by the active link, so it can never travel over another tab's label.
+    expect(pills).toHaveLength(1);
+    expect(active).toContainElement(pills[0] as HTMLElement);
+    expect(pills[0]).toHaveClass('-z-10');
+    expect(active).toHaveClass('isolate');
+  });
+
   it('uses accessible body text for inactive navigation numbers', () => {
     links('AGENCY');
     expect(screen.getByText('02')).toHaveClass('text-text-body');

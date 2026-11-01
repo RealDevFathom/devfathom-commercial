@@ -178,7 +178,7 @@ export function PharmacyOnboardingConsole({ initial }: { initial: Overview }) {
   return (
     <div className="min-w-0 space-y-6">
       <SectionCard
-        eyebrow="PLAT-03 · Activation"
+        eyebrow="Activation"
         title="Activation status"
         titleLevel={2}
         actions={
@@ -212,7 +212,9 @@ export function PharmacyOnboardingConsole({ initial }: { initial: Overview }) {
                     className="text-primary underline underline-offset-4 hover:text-accent-brand"
                     href={`#readiness-step-${item.step}`}
                   >
-                    Go to this step
+                    {item.attestable
+                      ? `Confirm step ${item.step} in the checklist below`
+                      : `See step ${item.step} in the checklist below`}
                   </a>
                 )}
               </li>
@@ -235,7 +237,7 @@ export function PharmacyOnboardingConsole({ initial }: { initial: Overview }) {
       <ReadinessChecklist
         actions={actions}
         description="Twelve steps take a pharmacy from a new workspace to its first legal sale. Each one says what it needs and where to do it."
-        eyebrow="PLAT-03 · Onboarding"
+        eyebrow="Setup checklist"
         rows={rows}
         title="Your setup steps"
       />
