@@ -1,7 +1,13 @@
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
-import { assertInOrganization } from '../org-refs';
-import { publicProcedure, protectedProcedure, router, type TRPCContext } from '../trpc';
+import { assertProcurementBranch } from '../pharmacy-procurement-scope';
+import {
+  denyByDefaultProcedure,
+  publicProcedure,
+  router,
+  type ProcedureMeta,
+  type TRPCContext,
+} from '../trpc';
 import {
   SupplierLinkError,
   getSupplierActionPage,
@@ -29,10 +35,17 @@ const genericLinkError = () =>
     code: 'NOT_FOUND',
     message: 'This supplier link is invalid, expired, or revoked.',
   });
+/**
+ * PR J (#979): issuing, revoking and acting on supplier links is procurement
+ * work. Every staff procedure is deny-by-default with `pharmacy:procurement`,
+ * and the branch must be an active branch the caller is assigned to (or the
+ * caller is the tenant administrator), not merely a branch of the tenant.
+ */
+const staff = denyByDefaultProcedure;
+const PROCUREMENT = { capabilities: ['pharmacy:procurement'] } as const satisfies ProcedureMeta;
+
 async function assertBranch(ctx: TRPCContext, branchId: string) {
-  const organizationId = ctx.entitlements.organizationId;
-  if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
-  await assertInOrganization(ctx.db.pharmacyBranch, organizationId, [branchId], { active: true });
+  await assertProcurementBranch(ctx, branchId);
 }
 
 function mapError(error: unknown): never {
@@ -71,7 +84,8 @@ export const pharmacySupplierLinksRouter = router({
         mapError(error);
       }
     }),
-  createRelationship: protectedProcedure
+  createRelationship: staff
+    .meta(PROCUREMENT)
     .input(z.object({ branchId: id, supplierId: id }).strict())
     .mutation(async ({ ctx, input }) => {
       await assertBranch(ctx, input.branchId);
@@ -79,7 +93,8 @@ export const pharmacySupplierLinksRouter = router({
         data: { ...input, organizationId: ctx.entitlements.organizationId },
       });
     }),
-  issue: protectedProcedure
+  issue: staff
+    .meta(PROCUREMENT)
     .input(
       z
         .object({ branchId: id, relationshipId: id, purchaseOrderId: id, expiresAt: z.date() })
@@ -99,13 +114,25 @@ export const pharmacySupplierLinksRouter = router({
         mapError(error);
       }
     }),
-  revoke: protectedProcedure.input(z.object({ linkId: id }).strict()).mutation(({ ctx, input }) =>
-    ctx.db.pharmacySupplierActionLink.update({
-      where: { id: input.linkId },
-      data: { revokedAt: new Date() },
-    })
-  ),
-  recordManual: protectedProcedure
+  revoke: staff
+    .meta(PROCUREMENT)
+    .input(z.object({ linkId: id }).strict())
+    .mutation(async ({ ctx, input }) => {
+      // The link's own branch is the boundary: a caller may revoke only links
+      // issued at a branch they are assigned to.
+      const link = await ctx.db.pharmacySupplierActionLink.findFirst({
+        where: { id: input.linkId, organizationId: ctx.entitlements.organizationId },
+        select: { id: true, branchId: true },
+      });
+      if (!link) throw genericLinkError();
+      await assertBranch(ctx, link.branchId);
+      return ctx.db.pharmacySupplierActionLink.update({
+        where: { id: link.id },
+        data: { revokedAt: new Date() },
+      });
+    }),
+  recordManual: staff
+    .meta(PROCUREMENT)
     .input(
       z
         .object({
@@ -127,7 +154,8 @@ export const pharmacySupplierLinksRouter = router({
         mapError(error);
       }
     }),
-  approveProposal: protectedProcedure
+  approveProposal: staff
+    .meta(PROCUREMENT)
     .input(
       z
         .object({
