@@ -22,12 +22,22 @@ import { createHash } from 'node:crypto';
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-import type {
-  ExceptionBucket,
-  MigrationSourceKind,
-  ProfileResult,
-  SourceProfiler,
+import {
+  importPharmacyExportCatalogue,
+  parsePharmacyExportCatalogue,
+  PharmacyCatalogueImportError,
+} from '../data-export-catalogue';
+import { devfathomCatalogueProfiler } from './devfathom-catalogue-profiler';
+import { devfathomStockLotsProfiler } from './devfathom-stock-lots-profiler';
+import {
+  profileTable,
+  UnrecognisedSourceError,
+  type ExceptionBucket,
+  type MigrationSourceKind,
+  type ProfileResult,
+  type SourceProfiler,
 } from './profiler';
+import { parseDelimitedText } from './source-values';
 
 /** SHA-256 of the handed-over bytes, lowercase hex. The source's identity. */
 export function hashSourceBytes(bytes: Uint8Array | string): string {
@@ -232,4 +242,140 @@ export async function openExceptionCounts(
   const counts: Partial<Record<ExceptionBucket, number>> = {};
   for (const group of grouped) counts[group.bucket] = group._count._all;
   return counts;
+}
+
+export type CatalogueSourceImport = {
+  sourceId: string;
+  batchId: string;
+  exceptionCount: number;
+  rows: number;
+  medicines: number;
+  presentations: number;
+  packs: number;
+};
+
+/**
+ * #716 — re-import a DevFathom owner-export `medicines.csv` through the wizard.
+ *
+ * One transaction: the file is registered as read-only source evidence, profiled
+ * by the catalogue-only adapter and persisted as a batch (one migration row per
+ * CSV row, keeping each exported row code as its source key), and then loaded as
+ * new, non-saleable catalogue drafts. A file the adapter does not recognise, or
+ * one that raises any BLOCKING exception, writes nothing at all.
+ *
+ * Stock is never created here: batch, expiry and MRP arrive with
+ * `stock-lots.csv`, which goes through `importStockLotsSource` and the ordinary
+ * MIG-02 exception review.
+ */
+export async function importCatalogueSource(
+  db: ScopedDb,
+  input: {
+    organizationId: string;
+    fileName: string;
+    csv: string;
+    now?: Date;
+    /** Only the local database-operator command uses this; never supplied by HTTP input. */
+    source?: 'local-file';
+  }
+): Promise<CatalogueSourceImport> {
+  const now = input.now ?? new Date();
+  const options = input.source ? { source: input.source } : {};
+  // Validate size, headers and identities before any evidence is written.
+  parsePharmacyExportCatalogue(input.csv, options);
+  const profile = profileTable(devfathomCatalogueProfiler, parseDelimitedText(input.csv));
+  if (profile.exceptions.some((exception) => exception.severity === 'BLOCKING')) {
+    throw new PharmacyCatalogueImportError();
+  }
+  return db.$transaction(async (transaction) => {
+    // `db` is always a tenant-scoped client (`withTenantDb`), whose nested
+    // `$transaction` hands back the same scoped proxy — model delegates and a
+    // re-entrant `$transaction` included. Prisma types the callback argument as
+    // the narrower transaction client, so restore the application-facing type.
+    const tx = transaction as unknown as ScopedDb;
+    const source = await recordSource(tx, {
+      kind: devfathomCatalogueProfiler.kind,
+      fileName: input.fileName,
+      bytes: input.csv,
+    });
+    const persisted = await persistProfile(tx, {
+      sourceId: source.id,
+      label: `DevFathom catalogue import: ${input.fileName}`,
+      profiler: devfathomCatalogueProfiler,
+      result: profile,
+    });
+    const imported = await importPharmacyExportCatalogue(
+      tx,
+      input.organizationId,
+      input.csv,
+      now,
+      options
+    );
+    return {
+      sourceId: source.id,
+      batchId: persisted.batchId,
+      exceptionCount: persisted.exceptionCount,
+      ...imported,
+    };
+  });
+}
+
+export type StockLotsSourceImport = {
+  sourceId: string;
+  batchId: string;
+  rowCount: number;
+  exceptionCount: number;
+  buckets: Partial<Record<ExceptionBucket, number>>;
+};
+
+/** Refused before any evidence is written: not an unmodified stock-lots.csv export. */
+export class PharmacyStockLotsImportError extends Error {
+  constructor() {
+    super('Supply an unmodified stock-lots.csv export from DevFathom.');
+  }
+}
+
+/**
+ * #716 — profile a DevFathom owner-export `stock-lots.csv` through the wizard.
+ *
+ * One transaction: the file is registered as read-only source evidence and
+ * profiled by the stock-lots adapter into a new batch, one migration row per CSV
+ * row. The row's raw payload keeps the exported lot, location and disposition,
+ * and the adapter keys duplicate detection on them, so ordinary multi-lot stock
+ * does not raise `DUPLICATE_PRODUCT`. Every MIG-02 stock check (batch, expiry,
+ * MRP, pack, quantity) still applies, and the batch waits in exception review:
+ * no stock is posted here.
+ */
+export async function importStockLotsSource(
+  db: ScopedDb,
+  input: { fileName: string; csv: string }
+): Promise<StockLotsSourceImport> {
+  let profile: ProfileResult;
+  try {
+    profile = profileTable(devfathomStockLotsProfiler, parseDelimitedText(input.csv));
+  } catch (error) {
+    if (error instanceof UnrecognisedSourceError) throw new PharmacyStockLotsImportError();
+    throw error;
+  }
+  return db.$transaction(async (transaction) => {
+    // See `importCatalogueSource`: the scoped client's nested transaction.
+    const tx = transaction as unknown as ScopedDb;
+    const source = await recordSource(tx, {
+      kind: devfathomStockLotsProfiler.kind,
+      fileName: input.fileName,
+      bytes: input.csv,
+    });
+    const persisted = await persistProfile(tx, {
+      sourceId: source.id,
+      label: `DevFathom stock lots import: ${input.fileName}`,
+      profiler: devfathomStockLotsProfiler,
+      result: profile,
+    });
+    return {
+      sourceId: source.id,
+      batchId: persisted.batchId,
+      rowCount: persisted.rowCount,
+      exceptionCount: persisted.exceptionCount,
+      buckets: persisted.buckets,
+    };
+  });
 }

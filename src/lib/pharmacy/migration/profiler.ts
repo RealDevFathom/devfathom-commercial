@@ -89,6 +89,15 @@ export interface SourceProfiler {
   /** `null` when this table is not the format the adapter recognises. */
   resolveColumns(table: SourceTable): ColumnMap | null;
   /**
+   * The source declares medicine identity only and never creates stock (for
+   * example a DevFathom `medicines.csv` export). Batch, expiry and MRP belong to
+   * received lots, so the MISSING_BATCH / MISSING_EXPIRY / MISSING_MRP buckets
+   * do not apply: nothing is defaulted because no lot is created at all. Product
+   * duplicates are judged by barcode only, because a catalogue legitimately
+   * carries one name across several manufacturers or presentations.
+   */
+  readonly catalogueOnly?: boolean;
+  /**
    * Optional. For a format that legitimately lists one product once per batch
    * (Tally batch allocations, Marg Batch Stock), returns the part of a row's
    * identity BEYOND its product natural key, so two batches of one product are
@@ -303,7 +312,7 @@ function deriveExceptions(
   table: SourceTable,
   columnMap: ColumnMap,
   context: ProfileContext,
-  profiler?: Pick<SourceProfiler, 'duplicateDiscriminator'>
+  profiler?: Pick<SourceProfiler, 'duplicateDiscriminator' | 'catalogueOnly'>
 ): ProfiledException[] {
   const exceptions: ProfiledException[] = [];
   const raise = (rowIndex: number | null, bucket: ExceptionBucket, detail: string) => {
@@ -316,7 +325,7 @@ function deriveExceptions(
     const cells = table.rows[index] ?? [];
     const where = `source key ${row.sourceKey}`;
 
-    if (row.targetModelKey === MIGRATION_TARGET_KEYS.PRODUCT) {
+    if (row.targetModelKey === MIGRATION_TARGET_KEYS.PRODUCT && profiler?.catalogueOnly !== true) {
       if (!row.batchNumber) {
         raise(index, 'MISSING_BATCH', `No batch number for ${where}; it cannot be inferred.`);
       }
@@ -338,7 +347,9 @@ function deriveExceptions(
             : `No MRP for ${where}; it cannot be inferred.`
         );
       }
+    }
 
+    if (row.targetModelKey === MIGRATION_TARGET_KEYS.PRODUCT) {
       const packRaw = rawOf(columnMap, cells, 'pack');
       if (packRaw && row.packFactor === null) {
         raise(index, 'UNIT_AMBIGUOUS', `Pack "${packRaw}" for ${where} names no countable unit.`);
@@ -352,7 +363,7 @@ function deriveExceptions(
         );
       }
 
-      if (row.targetNaturalKey) {
+      if (row.targetNaturalKey && (profiler?.catalogueOnly !== true || row.barcode)) {
         const discriminator = profiler?.duplicateDiscriminator?.(row);
         const identity =
           discriminator === undefined

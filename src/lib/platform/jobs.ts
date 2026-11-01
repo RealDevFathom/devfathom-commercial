@@ -17,6 +17,11 @@ import {
   runCounterEvidenceSnapshotJob,
 } from '@/lib/pharmacy/counter-evidence';
 import {
+  expirePharmacyDataExports,
+  relayPharmacyDataExportJobs,
+  runPharmacyDataExportJob,
+} from '@/lib/pharmacy/data-export';
+import {
   archiveWhatsAppConsentBeforeTenantPurge,
   deleteExpiredWhatsAppConsentArchives,
 } from '@/lib/pharmacy/whatsapp/consent-archive';
@@ -765,16 +770,24 @@ async function executeJob(job: PlatformJob): Promise<JobResult> {
         PHARMACY_CAMERA_SNAPSHOT_V1: runCounterEvidenceSnapshotJob,
         CAMERA_EVIDENCE_RETENTION_V1: (database, item) =>
           runCameraEvidenceRetentionJob(database, item),
+        PHARMACY_DATA_EXPORT_V1: (database, item, data) =>
+          runPharmacyDataExportJob(database, item, data),
       };
       return handlers[job.type](db, job, payload);
     },
     {
+      // All collection reads must reconcile against one database snapshot.
+      ...(job.type === 'PHARMACY_DATA_EXPORT_V1'
+        ? { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead }
+        : {}),
       timeout:
-        job.type === 'EXPORT_DATA' ||
-        job.type === 'PURGE_DATA' ||
-        job.type === 'CAMERA_EVIDENCE_RETENTION_V1'
-          ? 120_000
-          : 30_000,
+        job.type === 'PHARMACY_DATA_EXPORT_V1'
+          ? 300_000
+          : job.type === 'EXPORT_DATA' ||
+              job.type === 'PURGE_DATA' ||
+              job.type === 'CAMERA_EVIDENCE_RETENTION_V1'
+            ? 120_000
+            : 30_000,
     }
   );
 }
@@ -877,6 +890,17 @@ async function enqueueCameraEvidenceJobs(now: Date): Promise<void> {
   });
 }
 
+/**
+ * #716: relay owner data-export requests into keyed jobs and drop archives
+ * whose 24-hour download link has lapsed. Both are repeat-safe.
+ */
+async function enqueuePharmacyDataExportJobs(now: Date): Promise<void> {
+  await withPlatformDb(async (db) => {
+    await relayPharmacyDataExportJobs(db);
+    await expirePharmacyDataExports(db, now);
+  });
+}
+
 export type ProcessJobsResult = {
   recovered: number;
   claimed: number;
@@ -888,7 +912,9 @@ export type ProcessJobsResult = {
 export async function processPlatformJobs(maxJobs = 10): Promise<ProcessJobsResult> {
   const limit = Math.max(1, Math.min(100, Math.floor(maxJobs)));
   await withPlatformDb((db) => deleteExpiredWhatsAppConsentArchives(db));
-  await enqueueCameraEvidenceJobs(new Date());
+  const now = new Date();
+  await enqueueCameraEvidenceJobs(now);
+  await enqueuePharmacyDataExportJobs(now);
   const result: ProcessJobsResult = {
     recovered: await recoverStaleJobs(),
     claimed: 0,

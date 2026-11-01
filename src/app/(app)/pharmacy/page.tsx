@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import Link from 'next/link';
 
 import { PharmacyOnboardingConsole } from '@/components/pharmacy/onboarding-console';
 import { FbrTier1Summary } from '@/components/pharmacy/fbr-tier1-summary';
@@ -54,6 +55,20 @@ export default async function PharmacyOnboardingPage() {
       />
       <PharmacyOnboardingConsole initial={overview} />
       {fbrTier1 ? <FbrTier1Summary status={fbrTier1} /> : null}
+      {ctx.session?.user?.role === 'ADMIN' ? (
+        <SectionCard title="Your data" titleLevel={2}>
+          <p className="text-sm text-text-body">
+            Download a complete copy of your pharmacy&apos;s data as CSV files you can open anywhere
+            or import back into DevFathom.{' '}
+            <Link
+              className="font-semibold text-text-strong underline underline-offset-4 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+              href="/pharmacy/settings/data-export"
+            >
+              Download my data
+            </Link>
+          </p>
+        </SectionCard>
+      ) : null}
     </main>
   );
 }
