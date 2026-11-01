@@ -1,6 +1,6 @@
 import 'server-only';
 
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { withPlatformDb, withTenantDb } from '@/lib/tenancy/scoped-db';
@@ -38,6 +38,11 @@ export function mintEnrollmentLink(origin: string): {
     tokenHash: hashEnrollmentToken(token),
     url: new URL(`/wallet/join/${token}`, origin).toString(),
   };
+}
+
+/** Six-digit email OTP drawn uniformly (no modulo bias) from 000000–999999. */
+export function generateEnrollmentOtp(): string {
+  return String(randomInt(0, 1_000_000)).padStart(6, '0');
 }
 
 function hashOtp(otp: string, salt = randomBytes(16).toString('hex')): string {
@@ -103,7 +108,7 @@ export async function startEnrollment(input: {
   const link = await resolveEnrollmentLink(input.organizationId, input.token);
   if (!link) return null;
   const email = normalizeCustomerIdentifier({ kind: 'EMAIL', value: input.email });
-  const otp = String(randomBytes(4).readUInt32BE() % 1_000_000).padStart(6, '0');
+  const otp = generateEnrollmentOtp();
   const attempt = await withTenantDb(input.organizationId, (db) =>
     db.walletEnrollmentAttempt.create({
       data: {
