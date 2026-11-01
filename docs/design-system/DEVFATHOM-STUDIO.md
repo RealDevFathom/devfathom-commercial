@@ -174,6 +174,9 @@ cycle. `src/app/font-tokens.test.ts` guards both rules.
 - The top bar is 76px high.
 - Primary desktop navigation sits directly below the top bar and uses the same horizontal,
   rounded, active-pill grammar in tenant and platform modes.
+- When the entries do not fit one row, the desktop rail wraps onto further rows rather than
+  scrolling sideways, and each navigation group starts after a hairline divider. No entry may
+  sit hidden past the edge of the rail.
 - The canvas scrolls inside the shell; the browser page itself should not develop horizontal
   overflow.
 - Let operational pages use the available canvas. Do not force a narrow marketing-page max width
@@ -239,6 +242,9 @@ pill geometry for statuses and compact controls.
 - Pair empty tables with a useful next action or explanation.
 
 #### Navigation
+
+Secondary tab rows that must stay on one line (for example a module's sub-tabs on a phone) use
+`src/components/ui/scroll-rail.tsx`, which shows an arrow on any edge that hides more items.
 
 Active state must be unambiguous through fill/position and text, not color alone. Desktop active
 items use a smooth shared pill; mobile items use the grouped drawer grammar. Preserve keyboard
