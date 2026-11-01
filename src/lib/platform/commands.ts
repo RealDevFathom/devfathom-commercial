@@ -638,8 +638,16 @@ async function syncContractEntitlements(
   }
 ) {
   if (!['ACTIVE', 'GRACE', 'RENEWAL_DUE'].includes(input.status)) return;
+  // A contract only enables the modules it lists, and only while they remain in
+  // the active catalog. Modules it omits keep their package or override state.
+  const activeModules = input.moduleIds.length
+    ? await db.platformModule.findMany({
+        where: { active: true, id: { in: input.moduleIds } },
+        select: { id: true },
+      })
+    : [];
   const expiresAt = input.graceUntil ?? input.endDate;
-  for (const moduleId of input.moduleIds) {
+  for (const { id: moduleId } of activeModules) {
     await db.organizationModule.upsert({
       where: {
         organizationId_moduleId: {

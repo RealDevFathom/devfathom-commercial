@@ -92,8 +92,8 @@ describe('contract seat entitlements', () => {
 describe('commercial contract entitlement synchronization', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('creates overrides only for modules included in the contract', async () => {
-    await executePlatformCommand(
+  const createContract = (moduleIds: string[]) =>
+    executePlatformCommand(
       actor,
       'commercial.contract.create',
       {
@@ -101,11 +101,20 @@ describe('commercial contract entitlement synchronization', () => {
         number: 'CON-304',
         title: 'Package-safe contract',
         status: 'ACTIVE',
-        moduleIds: ['mod_contract'],
+        moduleIds,
       },
       request
     );
 
+  it('creates overrides only for active modules included in the contract', async () => {
+    db.platformModule.findMany.mockResolvedValueOnce([{ id: 'mod_contract' }] as never);
+
+    await createContract(['mod_contract', 'mod_inactive']);
+
+    expect(db.platformModule.findMany).toHaveBeenCalledWith({
+      where: { active: true, id: { in: ['mod_contract', 'mod_inactive'] } },
+      select: { id: true },
+    });
     expect(db.organizationModule.upsert).toHaveBeenCalledTimes(1);
     expect(db.organizationModule.upsert).toHaveBeenCalledWith({
       where: {
@@ -129,5 +138,21 @@ describe('commercial contract entitlement synchronization', () => {
         changedById: 'operator_1',
       },
     });
+  });
+
+  it('never enables a module that is no longer in the active catalog', async () => {
+    db.platformModule.findMany.mockResolvedValueOnce([] as never);
+
+    await createContract(['mod_inactive']);
+
+    expect(db.organizationModule.upsert).not.toHaveBeenCalled();
+  });
+
+  it('does not disable modules the contract omits', async () => {
+    await createContract([]);
+
+    expect(db.platformModule.findMany).not.toHaveBeenCalled();
+    expect(db.organizationModule.upsert).not.toHaveBeenCalled();
+    expect(db.organizationModule.updateMany).not.toHaveBeenCalled();
   });
 });
