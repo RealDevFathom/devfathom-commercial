@@ -5,7 +5,7 @@ import { QueueActions } from './queue-actions';
 describe('QueueActions', () => {
   it('prevents the requesting cashier from approving their own line', () => {
     render(<QueueActions canApprove={false} onAction={vi.fn()} />);
-    expect(screen.getByRole('note').textContent).toMatch(/cannot approve or sign/i);
+    expect(screen.getByRole('note').textContent).toMatch(/another pharmacist must approve it/i);
     expect(screen.queryByRole('button', { name: 'Verify' })).toBeNull();
   });
 
@@ -26,5 +26,14 @@ describe('QueueActions', () => {
     expect(confirm).toBeDisabled();
     for (const checkbox of screen.getAllByRole('checkbox')) fireEvent.click(checkbox);
     expect(confirm).toBeEnabled();
+  });
+
+  it('labels the release decision in plain words', () => {
+    const onAction = vi.fn();
+    render(<QueueActions canApprove onAction={onAction} />);
+    expect(screen.queryByRole('button', { name: /sign/i })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Approve and release' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm approve and release' }));
+    expect(onAction).toHaveBeenCalledWith('SIGN', undefined);
   });
 });

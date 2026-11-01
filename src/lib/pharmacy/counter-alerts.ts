@@ -140,7 +140,7 @@ function alertsForLine(line: CounterAlertLine, context: CounterAlertContext): Co
       code: `STOCK_${reason}`,
       message: `${name}: ${BLOCK_MESSAGES[reason]}`,
       saleLineRef: line.ref,
-      remedy: 'Choose another batch, or capture the shortfall as unfulfilled demand.',
+      remedy: 'Choose another batch, or record the missing quantity as unmet demand.',
     });
   }
 

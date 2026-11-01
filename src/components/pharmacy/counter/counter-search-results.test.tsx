@@ -102,4 +102,53 @@ describe('CounterSearchResults safety flags', () => {
       expect(badge.closest('[data-slot="status-pill"]')?.className).not.toContain('truncate');
     }
   });
+
+  it('shows Out of stock instead of an empty batch and expiry, with no match-reason tag', () => {
+    render(
+      <CounterSearchResults
+        rows={[
+          {
+            ...row,
+            batchNumber: null,
+            nearestSafeExpiry: null,
+            onHandUnits: 0,
+            restriction: { ...row.restriction, controlled: false, highAlert: false },
+            storage: { ...row.storage, coldChain: false, locationKind: null, locationCode: null },
+          },
+        ]}
+        state="ready"
+        query="para"
+        activeMedicineId={null}
+        onSelect={vi.fn()}
+        onCaptureDemand={vi.fn()}
+        onRetry={vi.fn()}
+      />
+    );
+    const stock = screen.getByText(/Out of stock/);
+    expect(stock.textContent).toBe(
+      'Tablet presentation that is long enough to truncate · Tablet · Out of stock'
+    );
+    expect(stock).not.toHaveTextContent('Batch');
+    expect(stock).not.toHaveTextContent('Exp');
+    expect(stock).not.toHaveTextContent('0 units');
+    expect(stock).not.toHaveTextContent('Not sellable');
+    expect(stock).not.toHaveTextContent('Name');
+  });
+
+  it('offers to record a missing medicine as unmet demand', () => {
+    const onCaptureDemand = vi.fn();
+    render(
+      <CounterSearchResults
+        rows={[]}
+        state="ready"
+        query="zzz"
+        activeMedicineId={null}
+        onSelect={vi.fn()}
+        onCaptureDemand={onCaptureDemand}
+        onRetry={vi.fn()}
+      />
+    );
+    screen.getByRole('button', { name: 'Record as unmet demand' }).click();
+    expect(onCaptureDemand).toHaveBeenCalledOnce();
+  });
 });

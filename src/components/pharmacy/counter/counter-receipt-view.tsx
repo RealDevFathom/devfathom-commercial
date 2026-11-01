@@ -263,7 +263,7 @@ export function CounterReceiptView({
       try {
         printCounterBrowserReceipt(receipt, locale, format, false, settlement.printReservation);
         printStatus = 'dialog-requested';
-        message = 'Browser print dialog requested. Physical printing is not confirmed.';
+        message = 'Print window opened. Check that the receipt actually printed.';
       } catch (error) {
         printStatus = 'manual-required';
         message =
@@ -282,7 +282,7 @@ export function CounterReceiptView({
   }, [receipt, state, printing, settlement, locale, format, onSettlementPresented]);
 
   if (state === 'idle') {
-    return <p className="text-sm text-text-muted">Settle the bill to render its receipt.</p>;
+    return <p className="text-sm text-text-muted">The receipt appears here once the bill is paid.</p>;
   }
 
   if (state === 'loading') {

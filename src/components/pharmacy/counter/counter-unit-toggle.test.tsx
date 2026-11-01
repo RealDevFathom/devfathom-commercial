@@ -45,7 +45,7 @@ function renderToggle(overrides: Partial<React.ComponentProps<typeof CounterUnit
   return props;
 }
 
-describe('CounterUnitToggle (POS-03)', () => {
+describe('CounterUnitToggle', () => {
   it('renders one radio per sale unit the lot actually supports', () => {
     renderToggle();
     const radios = screen.getAllByRole('radio');
@@ -61,7 +61,7 @@ describe('CounterUnitToggle (POS-03)', () => {
     expect(screen.getByRole('radio', { name: /Strip/ }).getAttribute('aria-checked')).toBe('false');
   });
 
-  it('shows the canonical units each sale unit contains', () => {
+  it('shows the base units each sale unit contains', () => {
     renderToggle();
     expect(screen.getByRole('radio', { name: /Pack/ }).textContent).toContain('100 units');
     expect(screen.getByRole('radio', { name: /Strip/ }).textContent).toContain('10 units');
@@ -105,7 +105,7 @@ describe('CounterUnitToggle (POS-03)', () => {
 
   it('previews the exact quantity and price for the staged line', () => {
     renderToggle({ selected: 'STRIP', quantity: 3, preview: previewFor('STRIP', 3) });
-    // 3 strips × 10 = 30 canonical units at 25.00 per strip = 75.00.
+    // 3 strips × 10 = 30 base units at 25.00 per strip = 75.00.
     expect(screen.getByText('30')).toBeTruthy();
     expect(screen.getByText('75.00')).toBeTruthy();
   });
@@ -121,7 +121,7 @@ describe('CounterUnitToggle (POS-03)', () => {
     renderToggle({ selected: 'PACK', quantity: 2, preview: previewFor('PACK', 2, 150) });
     const alert = screen.getByRole('alert');
     expect(alert.textContent).toContain('Short by 50 units');
-    expect(alert.textContent).toContain('150 safe units');
+    expect(alert.textContent).toContain('Only 150 units are in stock');
     expect(screen.getByLabelText('Quantity').getAttribute('aria-invalid')).toBe('true');
   });
 
@@ -158,9 +158,26 @@ describe('CounterUnitToggle (POS-03)', () => {
     expect((screen.getByLabelText('Quantity') as HTMLInputElement).disabled).toBe(true);
   });
 
-  it('explains itself when the lot has no priceable sale unit', () => {
-    renderToggle({ options: [], selected: null, preview: null });
+  it('tells the cashier there is no stock when nothing is on hand', () => {
+    renderToggle({ options: [], selected: null, preview: null, onHandUnits: 0 });
     expect(screen.queryAllByRole('radio')).toHaveLength(0);
-    expect(screen.getByRole('status').textContent).toContain('No sale unit is available');
+    const status = screen.getByRole('status').textContent;
+    expect(status).toContain('No stock to sell. Ask your manager to receive stock');
+    expect(status).toContain('unmet demand');
+    expect(status).not.toMatch(/pack hierarchy|canonical/i);
+  });
+
+  it('explains a pack-size mismatch when stock exists but cannot be priced', () => {
+    renderToggle({ options: [], selected: null, preview: null, onHandUnits: 40 });
+    const status = screen.getByRole('status').textContent;
+    expect(status).toContain('cannot be sold yet');
+    expect(status).toContain('pack sizes');
+    expect(status).not.toMatch(/pack hierarchy|canonical/i);
+  });
+
+  it('labels the preview total in plain words', () => {
+    renderToggle();
+    expect(screen.getByText('Total units')).toBeTruthy();
+    expect(screen.queryByText(/canonical/i)).toBeNull();
   });
 });

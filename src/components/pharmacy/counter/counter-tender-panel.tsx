@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { StatusPill } from '@/components/ui/status-pill';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
+import { tenderDisabledReason } from './counter-display';
 import type { TenderDraft } from './tender-attempt-storage';
 import { isManualTender, manualTenderCaptureSchema, type ManualPaymentSettings } from '@/lib/pharmacy/manual-payments';
 
@@ -211,6 +212,28 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
         (Boolean(account) &&
           !khataLoading &&
           (!overLimit || (ownerOverride && Boolean(password) && Boolean(reauthenticateOwner)))));
+    const disabledReason = submittable
+      ? null
+      : tenderDisabledReason({
+          state,
+          balanceMinor: balanceKnown ? balanceMinor : null,
+          disabled,
+          takingPayment,
+          unknownOutcome: unknown,
+          blocked,
+          amountValid,
+          cashProblem: cashShort || cashInvalid,
+          manual,
+          manualLoading: manualSettingsLoading,
+          manualReady: !manualSettingsError && Boolean(merchant),
+          manualDetailsValid:
+            capture?.success === true && (!referenceSkipped || merchant?.allowReferenceSkip === true),
+          khata: isKhata,
+          khataLoading,
+          khataAccountChosen: Boolean(account),
+          khataOverLimitUnapproved:
+            overLimit && !(ownerOverride && Boolean(password) && Boolean(reauthenticateOwner)),
+        });
 
     async function submitTender() {
       if (!submittable || amountMinor === null || submissionRef.current) return;
@@ -303,7 +326,9 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
             <span className="inline-block min-w-24 text-right font-mono text-sm tabular-nums text-text-strong">
               {balanceKnown && (state === 'ready' || state === 'settled') && !unknown
                 ? formatMinor(balanceMinor)
-                : 'Unavailable'}
+                : state === 'idle'
+                  ? 'No bill yet'
+                  : '—'}
             </span>
           </p>
           {state === 'settled' && balanceMinor === 0 && !unknown && !takingPayment ? (
@@ -325,7 +350,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
               ? 'Checking payment outcome… No payment is being sent.'
               : (displayedOutcome?.message ??
                 (state === 'idle'
-                  ? 'Open a bill before taking payment.'
+                  ? 'Add an item to the bill before taking payment.'
                   : state === 'loading'
                     ? 'Checking the bill balance…'
                     : state === 'stale'
@@ -575,11 +600,17 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           type="button"
           className="h-11 w-full"
           disabled={!submittable}
-          aria-describedby="tender-status tender-error"
+          title={disabledReason ?? undefined}
+          aria-describedby={`tender-status tender-error${disabledReason ? ' tender-disabled-reason' : ''}`}
           onClick={() => void submitTender()}
         >
           {takingPayment ? 'Taking payment…' : 'Take payment'}
         </Button>
+        {disabledReason ? (
+          <p id="tender-disabled-reason" className="text-xs text-text-muted">
+            {disabledReason}
+          </p>
+        ) : null}
       </div>
     );
   }
