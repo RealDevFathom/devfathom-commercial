@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 const sql = readFileSync(
-  'prisma/migrations/20261101000000_khata_bound_override_approval/migration.sql',
+  'prisma/migrations/20261101170600_khata_bound_override_approval/migration.sql',
   'utf8'
 );
 
