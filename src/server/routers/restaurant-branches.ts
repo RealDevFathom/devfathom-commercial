@@ -1,5 +1,3 @@
-import { assignOwnersToBranch } from '@/lib/restaurant/owner-branch-assignments';
-import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { Prisma } from '@/generated/prisma/client';
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
@@ -127,7 +125,7 @@ export const restaurantBranchesRouter = router({
             message: 'A branch with this name or code already exists.',
           });
         }
-        const created = await tx.restaurantBranch.create({
+        return tx.restaurantBranch.create({
           data: {
             ...input,
             code: input.code,
@@ -136,8 +134,6 @@ export const restaurantBranchesRouter = router({
             isDefault: count === 0,
           },
         });
-        await assignOwnersToBranch(tx as unknown as ScopedDb, organization, created.id);
-        return created;
       });
       annotateAudit(ctx, {
         targetType: 'RestaurantBranch',
@@ -284,14 +280,10 @@ export const restaurantBranchesRouter = router({
             });
           }
         }
-        const updated = await tx.restaurantBranch.update({
+        return tx.restaurantBranch.update({
           where: { id: current.id },
           data: { active: input.active, ...(makeDefault ? { isDefault: true } : {}) },
         });
-        if (input.active && !current.active) {
-          await assignOwnersToBranch(tx as unknown as ScopedDb, organization, current.id);
-        }
-        return updated;
       });
       annotateAudit(ctx, {
         targetType: 'RestaurantBranch',

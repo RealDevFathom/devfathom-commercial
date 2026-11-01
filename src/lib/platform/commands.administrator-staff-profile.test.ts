@@ -479,10 +479,9 @@ describe('restaurant administrator staff profile at the platform entry points', 
 
     await executePlatformCommand(actor, 'organization.transition', activatePayload, request);
 
-    expect(branchAssignments).toEqual([
-      { organizationId: 'org_new', branchId: 'branch_default', userId: 'user_admin' },
-      { organizationId: 'org_new', branchId: 'branch_second', userId: 'user_admin' },
-    ]);
+    // Activation persists no branch assignments: owner reach is derived at
+    // decision time so it cannot outlive a later revocation of ownership.
+    expect(branchAssignments).toEqual([]);
     expect(stations).toEqual([
       { branchId: 'branch_default', name: 'Kitchen', isDefault: true },
       { branchId: 'branch_second', name: 'Kitchen', isDefault: true },

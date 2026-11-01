@@ -186,7 +186,7 @@ describeIfDatabase('provisionRestaurantOrganization against PostgreSQL', () => {
     expect(mine).toEqual({
       restaurant_job_roles: RESTAURANT_JOB_ROLE_TEMPLATES.length,
       restaurant_staff_profiles: 1,
-      restaurant_staff_job_roles: 2,
+      restaurant_staff_job_roles: 1,
       restaurant_kitchen_stations: 2,
     });
   });
@@ -209,13 +209,9 @@ describeIfDatabase('provisionRestaurantOrganization against PostgreSQL', () => {
       return { holdings, resolution };
     });
 
-    expect(owned.holdings).toEqual(
-      expect.arrayContaining([
-        { branchId: ids.branchDefault, jobRole: { key: 'owner' } },
-        { branchId: ids.branchSecond, jobRole: { key: 'owner' } },
-      ])
-    );
-    expect(owned.holdings).toHaveLength(2);
+    // One holding at the primary branch; owner reach to other branches is derived
+    // at decision time, never persisted as generated per-branch rows.
+    expect(owned.holdings).toEqual([{ branchId: ids.branchDefault, jobRole: { key: 'owner' } }]);
     // The owner's follow-up in full: every capability is INHERITED FROM ROLE,
     // and the direct-exception layer is empty.
     const ownerTemplate = RESTAURANT_JOB_ROLE_TEMPLATES.find((role) => role.key === 'owner')!;
@@ -247,7 +243,7 @@ describeIfDatabase('provisionRestaurantOrganization against PostgreSQL', () => {
       stations: await tx.restaurantKitchenStation.count(),
     }));
 
-    expect(before.assignments).toBe(2);
+    expect(before.assignments).toBe(0);
     const second = await provisionAsPlatform();
 
     expect(second.jobRolesCreated).toEqual([]);
@@ -286,7 +282,7 @@ describeIfDatabase('provisionRestaurantOrganization against PostgreSQL', () => {
     const holdings = await deps.withTenantDb(orgId, (tx) =>
       tx.restaurantStaffJobRole.count({ where: { staffProfileId: profileId } })
     );
-    expect(holdings).toBe(2);
+    expect(holdings).toBe(1);
   });
 
   it('skips the grant when the owner role has been deactivated', async () => {
@@ -308,22 +304,20 @@ describeIfDatabase('provisionRestaurantOrganization against PostgreSQL', () => {
       tx.restaurantJobRole.updateMany({ where: { key: 'owner' }, data: { active: true } })
     );
   });
-  it('keeps every owner capability on all branches, preserves DENY, and assigns new branches idempotently', async () => {
+  it('keeps every owner capability on all branches, preserves DENY, and persists nothing for new branches', async () => {
     await provisionAsPlatform();
     const { operatorHasCapability } = await import('./checkout-routes');
     const { hasStaffBranchAccess } = await import('./branch-access');
-    const { assignOwnersToBranch } = await import('./owner-branch-assignments');
     await deps.withTenantDb(orgId, async (tx) => {
       const profile = await tx.restaurantStaffProfile.findFirstOrThrow({
         where: { userId: ids.admin },
       });
-      // An owner is organization-wide even if the local holding/assignment is missing.
-      await tx.restaurantStaffJobRole.deleteMany({
-        where: { staffProfileId: profile.id, branchId: ids.branchSecond },
-      });
-      await tx.restaurantBranchAssignment.deleteMany({
-        where: { userId: ids.admin, branchId: ids.branchSecond },
-      });
+      // An owner is organization-wide without a local holding or assignment.
+      expect(
+        await tx.restaurantStaffJobRole.count({
+          where: { staffProfileId: profile.id, branchId: ids.branchSecond },
+        })
+      ).toBe(0);
       for (const capability of RESTAURANT_CAPABILITIES) {
         expect(
           await operatorHasCapability(tx, profile.id, capability, new Date(), ids.branchSecond),
@@ -344,23 +338,17 @@ describeIfDatabase('provisionRestaurantOrganization against PostgreSQL', () => {
         await deps.jobRoles.resolveStaffCapabilities(tx, profile.id, 'foreign_branch')
       ).toEqual(new Set());
       const branch = await tx.restaurantBranch.create({ data: { name: 'New owner branch' } });
-      await assignOwnersToBranch(tx, orgId, branch.id);
-      await assignOwnersToBranch(tx, orgId, branch.id);
+      expect(await hasStaffBranchAccess(tx, profile.id, branch.id)).toBe(true);
       expect(
         await tx.restaurantBranchAssignment.count({
           where: { branchId: branch.id, userId: ids.admin },
         })
-      ).toBe(1);
+      ).toBe(0);
       expect(
         await tx.restaurantStaffJobRole.count({
           where: { branchId: branch.id, staffProfileId: profile.id },
         })
-      ).toBe(1);
-      expect(
-        await tx.restaurantStaffJobRoleAudit.count({
-          where: { branchId: branch.id, staffProfileId: profile.id, change: 'GRANTED' },
-        })
-      ).toBe(1);
+      ).toBe(0);
       await tx.restaurantBranch.update({ where: { id: branch.id }, data: { active: false } });
       expect(await hasStaffBranchAccess(tx, profile.id, branch.id)).toBe(false);
     });
@@ -472,17 +460,16 @@ describeIfDatabase('provisionRestaurantOrganization against PostgreSQL', () => {
         })
       ).toBe(0);
       for (const userId of [user.id, ids.admin]) {
-        // Web role access stays dynamic; explicitly provisioned floor owners
-        // continue to receive durable holdings and branch assignments.
-        const expectedHoldings = userId === ids.admin ? 1 : 0;
+        // Web-role and floor-owner reach both stay dynamic: branch creation
+        // persists no holdings or assignments that could outlive revocation.
         expect(
           await tx.restaurantBranchAssignment.count({ where: { branchId: created.id, userId } })
-        ).toBe(expectedHoldings);
+        ).toBe(0);
         expect(
           await tx.restaurantStaffJobRole.count({
             where: { branchId: created.id, staffProfile: { userId }, jobRole: { key: 'owner' } },
           })
-        ).toBe(expectedHoldings);
+        ).toBe(0);
       }
       for (const branchId of [created.id, dormant.id]) {
         expect(await hasStaffBranchAccess(tx, profile.id, branchId)).toBe(true);

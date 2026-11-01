@@ -149,26 +149,22 @@ export async function provisionRestaurantOrganization(
         displayName: administrator.name,
         email: administrator.email,
       });
-      let roleProfileGranted = false;
-      for (const branch of branches) {
-        await tx.restaurantBranchAssignment.upsert({
-          where: { branchId_userId: { branchId: branch.id, userId: administrator.id } },
-          create: {
-            organizationId: input.organizationId,
-            branchId: branch.id,
-            userId: administrator.id,
-          },
-          update: {},
-        });
-        if (ownerRole?.active) {
-          const grant = await grantJobRole(tx, {
-            staffProfileId: profile.staffProfileId,
-            jobRoleId: ownerRole.id,
-            branchId: branch.id,
-          });
-          roleProfileGranted ||= grant.changed;
-        }
-      }
+      // Job-role holdings are per branch, and the administrator's is the branch
+      // their profile points at. An owner holding already reaches every active
+      // branch at decision time (`resolveStaffCapabilityDecision`,
+      // `staffBranchMembership`), so no per-branch holding or branch assignment
+      // is persisted here: generated rows would outlive revocation of ownership.
+      // A branch-less organization gets the profile and no holding.
+      const roleProfileGranted =
+        ownerRole?.active && profile.primaryBranchId
+          ? (
+              await grantJobRole(tx, {
+                staffProfileId: profile.staffProfileId,
+                jobRoleId: ownerRole.id,
+                branchId: profile.primaryBranchId,
+              })
+            ).changed
+          : false;
       administrators.push({ ...profile, userId: administrator.id, roleProfileGranted });
     }
 
