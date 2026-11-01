@@ -14,10 +14,21 @@ vi.mock('@/lib/platform/commands', () => ({
 }));
 vi.mock('@/lib/platform/security', () => ({
   assertPlatformMutationOrigin: mocks.assertPlatformMutationOrigin,
-  PlatformSecurityError: class PlatformSecurityError extends Error {},
+  ActivationPreflightError: class ActivationPreflightError extends Error {},
+  PlatformSecurityError: class PlatformSecurityError extends Error {
+    status = 403;
+  },
 }));
 
 import { POST } from './route';
+import { PlatformSecurityError } from '@/lib/platform/security';
+
+function request() {
+  return new Request('https://admin.test/api/platform/control', {
+    method: 'POST',
+    body: JSON.stringify({ action: 'organization.create', payload: {} }),
+  });
+}
 
 describe('POST /api/platform/control validation contract', () => {
   beforeEach(() => {
@@ -25,7 +36,7 @@ describe('POST /api/platform/control validation contract', () => {
     mocks.requirePlatformSession.mockResolvedValue({ id: 'operator_1' });
   });
 
-  it('keeps zod details and adds path-addressable field errors with human messages', async () => {
+  it('returns friendly field errors without serializing Zod internals', async () => {
     const schema = z.object({
       businessDayCutoff: z
         .string()
@@ -33,23 +44,23 @@ describe('POST /api/platform/control validation contract', () => {
     });
     mocks.executePlatformCommand.mockImplementation(() => schema.parse({ businessDayCutoff: '4' }));
 
-    const response = await POST(
-      new Request('https://admin.test/api/platform/control', {
-        method: 'POST',
-        body: JSON.stringify({ action: 'organization.create', payload: {} }),
-      })
-    );
+    const response = await POST(request());
     const body = await response.json();
 
     expect(response.status).toBe(400);
-    expect(body.error).toBe('The command payload is invalid.');
-    expect(body.details[0]).toMatchObject({
-      code: 'invalid_format',
-      path: ['businessDayCutoff'],
-      message: 'Use 24-hour time, e.g. 09:30',
+    expect(body).toEqual({
+      error: 'Business Day Cutoff: Use 24-hour time, e.g. 09:30',
+      fieldErrors: { businessDayCutoff: 'Use 24-hour time, e.g. 09:30' },
     });
-    expect(body.fieldErrors).toEqual({
-      businessDayCutoff: 'Use 24-hour time, e.g. 09:30',
-    });
+    expect(JSON.stringify(body)).not.toMatch(/"(?:details|issues|code|origin|inclusive)":/);
+  });
+
+  it('preserves platform security messages', async () => {
+    mocks.executePlatformCommand.mockRejectedValue(
+      new PlatformSecurityError('This action is not permitted.', 403)
+    );
+    const response = await POST(request());
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({ error: 'This action is not permitted.' });
   });
 });
