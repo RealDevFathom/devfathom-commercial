@@ -171,10 +171,7 @@ test('PO → receive → exception → resolve → stock visible', async ({ page
   ).toBeVisible();
   await expect(shellText(page, 'Stock added')).toBeVisible();
   await expect(
-    shellText(
-      page,
-      new RegExp(`${FIXTURE.medicine.productName}.*batch ${batchNumber}.*now in stock`)
-    )
+    shellText(page, `${FIXTURE.medicine.productName} · batch ${batchNumber} · now in stock`)
   ).toBeVisible();
   // The accepted units landed on the shelf, at the pack conversion the picker stated.
   await expect(shellText(page, `Accepted 70 units into ${FIXTURE.shelf.name}`)).toBeVisible();

@@ -11,6 +11,7 @@ import { SectionCard } from '@/components/ui/section-card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Stat } from '@/components/ui/stat';
 import { StatusPill } from '@/components/ui/status-pill';
+import { formatDisplayDateTime } from '@/lib/display-time';
 import { isModuleGranted } from '@/lib/module-catalog';
 import {
   PHARMACY_WIDGET_REGISTRY,
@@ -49,12 +50,6 @@ const restrictedCopy = (permission: string) =>
   permission === 'reports:financial'
     ? RESTRICTED_COPY
     : 'Your role does not include these figures, so they are hidden here. Ask an administrator if you need them.';
-
-// Plain date and time for the "last updated" line, e.g. "1 Nov 2026, 7:56 PM".
-const formatUpdatedAt = (iso: string) =>
-  new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(
-    new Date(iso)
-  );
 
 // Only reached when the metric catalog has not delivered a label for a key.
 // Reads the camelCase metric key as words rather than the raw, unspaced key the
@@ -278,7 +273,7 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
         </label>
         <p className="mt-3 text-xs text-text-muted">
           {command.data
-            ? `Updated ${formatUpdatedAt(command.data.freshness.asOf)}`
+            ? `Updated ${formatDisplayDateTime(command.data.freshness.asOf)}`
             : branches.error
               ? 'Branches could not be loaded.'
               : branches.data?.branches.length === 0

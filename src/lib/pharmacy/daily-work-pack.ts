@@ -275,10 +275,15 @@ export async function readPharmacyDailyWorkPack(
         await run(source);
         if (source.rowLimit !== null) {
           source.limitReached = (source.returnedRows ?? 0) >= source.rowLimit;
-          // Below the cap, coverage stays 'unknown'; the saved-alerts caveat already says so.
           if (source.limitReached) {
             source.missingInputs.push('Only the first 200 records were read; some may be missing.');
             source.coverage = 'partial';
+          } else {
+            // The reader stops at 200 records before it filters to this scope, so a shorter
+            // filtered list can still be incomplete; coverage stays 'unknown'.
+            source.missingInputs.push(
+              'Some records may be missing, because only the first 200 are read before filtering.'
+            );
           }
         }
         if (source.returnedRows === 0)

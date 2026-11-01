@@ -558,7 +558,7 @@ it('keeps Returns success and sibling credit draft when Submit becomes Dispatch'
   );
   expect(
     screen.getByText(
-      '1 records excluded because scope or financial data could not be validated. Review source records before reconciliation.'
+      '1 records excluded because their branch or amounts could not be checked. Review them before settling credit.'
     )
   ).toHaveAttribute('role', 'status');
   expect(draft).toHaveValue('Unsaved credit');

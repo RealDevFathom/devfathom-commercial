@@ -903,7 +903,7 @@ export default async function PharmacyReportsPage({
                 >
                   <h3 className="font-medium text-text-strong">{report.label}</h3>
                   <p className="mt-2 text-sm text-text-muted">
-                    {report.metrics.length} {report.metrics.length === 1 ? 'report' : 'reports'} ·
+                    {report.metrics.length} reports ·
                     filter by {report.filters.join(', ')}
                   </p>
                   <div className="mt-4 space-y-3">

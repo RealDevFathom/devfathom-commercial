@@ -208,7 +208,12 @@ describe('daily Pharmacy work pack source composition', () => {
       rowLimit: 200,
       evaluatedAsOf: null,
       window: { from: '2026-09-01T00:00:00.000Z', toExclusive: '2026-09-11T00:00:00.000Z' },
+      limitReached: false,
     });
+    // Below the cap the filtered list can still be incomplete, so the caveat stays.
+    expect(pack.sources.find((source) => source.kind === 'anomalies')!.missingInputs).toContain(
+      'Some records may be missing, because only the first 200 are read before filtering.'
+    );
   });
 
   it('surfaces the 200 cap and preserves safe source money, negative variance and unknown currency', async () => {

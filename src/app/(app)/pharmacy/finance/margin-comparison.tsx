@@ -50,7 +50,8 @@ export function MarginComparisonLedger({ report }: { report: Comparison }) {
         Previous: {formatDisplayDateTime(report.periods.previous.from)} to{' '}
         {formatDisplayDateTime(report.periods.previous.to)}. Current:{' '}
         {formatDisplayDateTime(report.periods.current.from)} to {formatDisplayDateTime(report.periods.current.to)}.{' '}
-        UTC; start inclusive, end exclusive. Same branch, equal elapsed duration.
+        Each period includes its start time and stops just before its end time. Same branch,
+        equal elapsed duration.
       </p>
       {!report.previous.hasEntries || !report.current.hasEntries ? (
         <p role="status" className="text-sm text-text-muted">

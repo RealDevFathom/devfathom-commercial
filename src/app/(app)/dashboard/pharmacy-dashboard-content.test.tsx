@@ -1,5 +1,6 @@
 import { render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { formatDisplayDateTime } from '@/lib/display-time';
 
 const query = (data: unknown, overrides: Record<string, unknown> = {}) => ({
   data,
@@ -131,9 +132,11 @@ describe('PharmacyDashboardContent states', () => {
     expect(text).not.toContain('transactional pharmacy ledgers');
     expect(text).not.toContain('Not available in this release');
     expect(text).not.toContain('2026-09-04T10:00:00Z');
-    expect(screen.getByText(/^Updated /)).toBeInTheDocument();
+    expect(screen.getByText(/^Updated /).textContent).toBe(
+      `Updated ${formatDisplayDateTime('2026-09-04T10:00:00Z')}`
+    );
     expect(screen.getAllByText('Operations').length).toBeGreaterThan(0);
-    expect(screen.getByText('Not tracked yet')).toBeInTheDocument();
+    expect(screen.getAllByText('Not tracked yet').length).toBeGreaterThan(0);
   });
 
   it('shows loading, not a financial restriction, while the command query is still pending', () => {
