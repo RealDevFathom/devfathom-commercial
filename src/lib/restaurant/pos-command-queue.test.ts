@@ -660,6 +660,7 @@ describe('replay requests reuse the M4 command contract', () => {
     const addItem = built(draft, 1);
 
     expect(addItem.body).not.toHaveProperty('quotedUnitPrice');
+    expect(addItem.body).not.toHaveProperty('quotedModifiers');
     expect(addItem.body).toEqual({ orderId: 'order-1', menuItemId: 'mi-1', quantity: 2 });
     expect(addItemBody.safeParse({ ...addItem.body, quotedUnitPrice: '450.00' }).success).toBe(
       false
@@ -712,6 +713,51 @@ describe('review before a stale submission (criterion 5)', () => {
     expect(reviewAgainstCatalog(draft, catalog({ channelOpen: false }))?.reason).toBe(
       'CHANNEL_CLOSED'
     );
+  });
+
+  it('flags a selected modifier that was repriced, removed, or lacks a legacy quote', () => {
+    const line = {
+      menuItemId: 'mi-1',
+      quantity: 1,
+      modifierOptionIds: ['extra-cheese'],
+      quotedUnitPrice: '450.00',
+      quotedModifiers: [{ optionId: 'extra-cheese', priceDelta: '50.00' }],
+    };
+    const draft = seeded([draftInput({ lines: [line] })]).drafts[0];
+    const current = catalog({
+      sections: [
+        {
+          ...catalog().sections[0],
+          items: [
+            {
+              ...catalog().sections[0].items[0],
+              modifierGroups: [
+                {
+                  id: 'extras',
+                  name: 'Extras',
+                  minSelect: 0,
+                  maxSelect: null,
+                  options: [{ id: 'extra-cheese', name: 'Cheese', priceDelta: '50.00' }],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(reviewAgainstCatalog(draft, current)).toBeNull();
+    const repriced = structuredClone(current);
+    repriced.sections[0].items[0].modifierGroups![0].options[0].priceDelta = '75.00';
+    expect(reviewAgainstCatalog(draft, repriced)?.reason).toBe('MODIFIER_CHANGED');
+    const removed = structuredClone(current);
+    removed.sections[0].items[0].modifierGroups![0].options = [];
+    expect(reviewAgainstCatalog(draft, removed)?.reason).toBe('MODIFIER_CHANGED');
+
+    const legacyDraft = seeded([
+      draftInput({ lines: [{ ...line, quotedModifiers: undefined }] }),
+    ]).drafts[0];
+    expect(reviewAgainstCatalog(legacyDraft, current)?.reason).toBe('MODIFIER_CHANGED');
   });
 
   it('does not re-price lines the server already accepted', () => {
