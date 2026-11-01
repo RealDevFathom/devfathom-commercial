@@ -119,7 +119,7 @@ async function transaction<T>(org: string, fn: (db: ScopedDb, client: PoolClient
       await client.query(
         await readFile(
           new URL(
-            '../../../prisma/migrations/20261101000000_customer_portal_review_guards/migration.sql',
+            '../../../prisma/migrations/20261101170400_customer_portal_review_guards/migration.sql',
             import.meta.url
           ),
           'utf8'
