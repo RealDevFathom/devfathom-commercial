@@ -547,6 +547,61 @@ describe('C4 Decimal serialization', () => {
   });
 });
 
+describe('recipe measurement validation', () => {
+  it('rejects nonpositive conversion factors at the API boundary', async () => {
+    await expect(
+      caller().upsertConversion({ fromUnitId: 'A', toUnitId: 'B', factor: '0' })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect((db.restaurantUnitConversion as Delegate).upsert).not.toHaveBeenCalled();
+  });
+
+  it.each(['1.0000001', '1000000000000', '1e1', '1'.repeat(100)])(
+    'rejects conversion factors outside Decimal(18,6): %s',
+    async (factor) => {
+      await expect(
+        caller().upsertConversion({ fromUnitId: 'A', toUnitId: 'B', factor })
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      expect((db.restaurantUnitConversion as Delegate).upsert).not.toHaveBeenCalled();
+    }
+  );
+
+  it('accepts leading zeroes that do not consume Decimal precision', async () => {
+    (db.restaurantUnit as Delegate).findUnique.mockImplementation(
+      async ({ where }: { where: { id: string } }) => ({ id: where.id })
+    );
+    await expect(
+      caller().upsertConversion({
+        fromUnitId: 'A',
+        toUnitId: 'B',
+        factor: `${'0'.repeat(30)}1`,
+      })
+    ).resolves.toBeDefined();
+  });
+
+  it('rejects negative reference costs at the API boundary', async () => {
+    await expect(
+      caller().createIngredient({ name: 'Flour', baseUnitId: 'u1', referenceCost: '-0.01' })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect((db.restaurantIngredient as Delegate).create).not.toHaveBeenCalled();
+  });
+
+  it('rejects nonpositive yields and BOM quantities at the API boundary', async () => {
+    await expect(
+      caller().createRecipeVersion({ recipeId: 'r1', yieldQuantity: '0' })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(
+      caller().createRecipeLine({
+        recipeVersionId: 'v1',
+        ingredientId: 'i1',
+        quantity: '-1',
+        unitId: 'u1',
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect((db.restaurantRecipeVersion as Delegate).create).not.toHaveBeenCalled();
+    expect((db.restaurantRecipeLine as Delegate).create).not.toHaveBeenCalled();
+  });
+});
+
 // ── Version immutability through the router ───────────────────────────────────
 
 describe('updateRecipeVersion — immutability guard at router boundary', () => {

@@ -528,111 +528,113 @@ export const notesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const userId = ctx.session.user.id;
-
-      const existing = await ctx.db.note.findUnique({
-        where: { id: input.id },
-        include: { shares: true, mentions: true },
-      });
-      if (!existing) throw new TRPCError({ code: 'NOT_FOUND' });
-      if (!canEdit(existing, userId)) throw new TRPCError({ code: 'FORBIDDEN' });
-
-      // NOTE-01: visibility and project/client re-attach are the AUTHOR's
-      // prerogative (mirrors author-only `setShares`). A SHARED-EDIT grantee or a
-      // TEAM-note editor may change title/content only — otherwise they could flip
-      // a SHARED note to TEAM (company-wide) or PRIVATE (lock the author's other
-      // collaborators out). Enforced only when the value actually changes, so a
-      // collaborator's ordinary content save (which may echo the current
-      // visibility) is never rejected.
-      const isAuthorOrAdmin = existing.authorId === userId || ctx.session.user.role === 'ADMIN';
-      const changesVisibility =
-        input.visibility !== undefined && input.visibility !== existing.visibility;
-      const changesProject =
-        input.projectId !== undefined && input.projectId !== existing.projectId;
-      const changesClient = input.clientId !== undefined && input.clientId !== existing.clientId;
-      if ((changesVisibility || changesProject || changesClient) && !isAuthorOrAdmin) {
-        throw new TRPCError({
-          code: 'FORBIDDEN',
-          message: 'Only the note author can change its visibility or linked project/client.',
-        });
-      }
       const orgId = workspaceId(ctx);
       await assertInOrganization(ctx.db.project, orgId, [input.projectId]);
       await assertInOrganization(ctx.db.client, orgId, [input.clientId]);
 
-      const data: Prisma.NoteUpdateInput = {};
-      if (input.title !== undefined) data.title = input.title;
-      if (input.visibility !== undefined) data.visibility = input.visibility;
-      if (input.projectId !== undefined) {
-        data.project = input.projectId
-          ? { connect: { id: input.projectId } }
-          : { disconnect: true };
-      }
-      if (input.clientId !== undefined) {
-        data.client = input.clientId ? { connect: { id: input.clientId } } : { disconnect: true };
-      }
-
-      let linkedIds: string[] | null = null;
-      if (input.contentJson !== undefined) {
-        data.contentJson = input.contentJson as Prisma.InputJsonValue;
-        data.contentText = extractPlainText(input.contentJson);
-        linkedIds = extractLinkedNoteIds(input.contentJson);
-      }
-
-      // IMP-NOTE-02: re-derive the @mention set on every save — recomputed even
-      // when only visibility changes, so flipping SHARED→PRIVATE correctly drops
-      // mentions of people who can no longer see the note. Uses the new content
-      // when provided, otherwise the existing stored text/json. Shares are not
-      // editable here (that's `setShares`), so we use the current share list.
-      const team = await ctx.db.user.findMany({
-        select: { id: true, name: true, email: true },
-      });
-      const effectiveText =
-        input.contentJson !== undefined
-          ? extractPlainText(input.contentJson)
-          : existing.contentText;
-      const effectiveJson =
-        input.contentJson !== undefined ? input.contentJson : existing.contentJson;
-      const effectiveVisibility = input.visibility ?? existing.visibility;
-      const targets = computeMentionTargets({
-        contentText: effectiveText,
-        contentJson: effectiveJson,
-        visibility: effectiveVisibility,
-        authorId: existing.authorId,
-        shareUserIds: existing.shares.map((s) => s.userId),
-        team,
-      });
-      const targetSet = new Set(targets);
-      const existingMentionIds = existing.mentions.map((m) => m.userId);
-      const existingSet = new Set(existingMentionIds);
-      const toAdd = targets.filter((id) => !existingSet.has(id));
-      const toRemove = existingMentionIds.filter((id) => !targetSet.has(id));
-
-      // IMP-NOTE-01: decide whether this save changes the note's actual content,
-      // so we only snapshot real edits — a pure visibility/project/client save (or
-      // a no-op re-save of identical content) doesn't create history noise.
-      const titleChanged = input.title !== undefined && input.title !== existing.title;
-      const contentChanged =
-        input.contentJson !== undefined &&
-        JSON.stringify(input.contentJson) !== JSON.stringify(existing.contentJson);
-      const shouldSnapshot = titleChanged || contentChanged;
-
       // Apply update + resync backlinks + mentions atomically
-      const updated = await ctx.db.$transaction(async (tx) => {
+      const { note: updated, toAdd } = await ctx.db.$transaction(async (tx) => {
+        // Serialize the full read/snapshot/write sequence for this note. Without
+        // this lock, two editors can both snapshot the same old value and one of
+        // their edits is then absent from both the live note and its history.
+        // NO KEY UPDATE also permits the KEY SHARE locks taken by backlink
+        // foreign keys, so concurrent saves of mutually linked notes cannot deadlock.
+        const lockedRows = await tx.$queryRaw<Array<{ id: string }>>`
+          SELECT "id" FROM "notes"
+          WHERE "id" = ${input.id} AND "organizationId" = ${orgId}
+          FOR NO KEY UPDATE
+        `;
+        if (lockedRows.length === 0) throw new TRPCError({ code: 'NOT_FOUND' });
+
+        const existing = await tx.note.findFirst({
+          where: { id: input.id, organizationId: orgId },
+          include: { shares: true, mentions: true },
+        });
+        if (!existing) throw new TRPCError({ code: 'NOT_FOUND' });
+        if (!canEdit(existing, userId)) throw new TRPCError({ code: 'FORBIDDEN' });
+
+        const isAuthorOrAdmin = existing.authorId === userId || ctx.session.user.role === 'ADMIN';
+        const changesVisibility =
+          input.visibility !== undefined && input.visibility !== existing.visibility;
+        const changesProject =
+          input.projectId !== undefined && input.projectId !== existing.projectId;
+        const changesClient = input.clientId !== undefined && input.clientId !== existing.clientId;
+        if ((changesVisibility || changesProject || changesClient) && !isAuthorOrAdmin) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'Only the note author can change its visibility or linked project/client.',
+          });
+        }
+
+        const data: Prisma.NoteUpdateInput = {};
+        if (input.title !== undefined) data.title = input.title;
+        if (input.visibility !== undefined) data.visibility = input.visibility;
+        if (input.projectId !== undefined) {
+          data.project = input.projectId
+            ? { connect: { id: input.projectId } }
+            : { disconnect: true };
+        }
+        if (input.clientId !== undefined) {
+          data.client = input.clientId ? { connect: { id: input.clientId } } : { disconnect: true };
+        }
+
+        let linkedIds: string[] | null = null;
+        if (input.contentJson !== undefined) {
+          data.contentJson = input.contentJson as Prisma.InputJsonValue;
+          data.contentText = extractPlainText(input.contentJson);
+          linkedIds = extractLinkedNoteIds(input.contentJson);
+        }
+
+        const team = await tx.user.findMany({
+          where: { organizationId: orgId },
+          select: { id: true, name: true, email: true },
+        });
+        const effectiveText =
+          input.contentJson !== undefined
+            ? extractPlainText(input.contentJson)
+            : existing.contentText;
+        const effectiveJson =
+          input.contentJson !== undefined ? input.contentJson : existing.contentJson;
+        const targets = computeMentionTargets({
+          contentText: effectiveText,
+          contentJson: effectiveJson,
+          visibility: input.visibility ?? existing.visibility,
+          authorId: existing.authorId,
+          shareUserIds: existing.shares.map((share) => share.userId),
+          team,
+        });
+        const targetSet = new Set(targets);
+        const existingMentionIds = existing.mentions.map((mention) => mention.userId);
+        const existingSet = new Set(existingMentionIds);
+        const toAdd = targets.filter((id) => !existingSet.has(id));
+        const toRemove = existingMentionIds.filter((id) => !targetSet.has(id));
+
+        const titleChanged = input.title !== undefined && input.title !== existing.title;
+        const contentChanged =
+          input.contentJson !== undefined &&
+          JSON.stringify(input.contentJson) !== JSON.stringify(existing.contentJson);
+
         // IMP-NOTE-01: snapshot the CURRENT content BEFORE it's overwritten, so
         // this edit is diffable and restorable. Runs in the same transaction as
         // the update, then prunes to the most recent REVISION_RETENTION.
-        if (shouldSnapshot) {
+        if (titleChanged || contentChanged) {
           await snapshotAndPrune(tx, existing, userId);
         }
 
-        const note = await tx.note.update({ where: { id: input.id }, data });
+        const note = await tx.note.update({
+          where: { id: input.id, organizationId: orgId },
+          data,
+        });
 
         if (linkedIds !== null) {
           await tx.noteLink.deleteMany({ where: { fromNoteId: note.id } });
           if (linkedIds.length > 0) {
             // Filter out self-links and any IDs that don't exist
             const validIds = await tx.note.findMany({
-              where: { id: { in: linkedIds.filter((id) => id !== note.id) } },
+              where: {
+                id: { in: linkedIds.filter((id) => id !== note.id) },
+                organizationId: orgId,
+              },
               select: { id: true },
             });
             if (validIds.length > 0) {
@@ -655,7 +657,7 @@ export const notesRouter = router({
             skipDuplicates: true,
           });
         }
-        return note;
+        return { note, toAdd };
       });
 
       // Notify only the newly added mentions (fire-and-forget, post-commit).

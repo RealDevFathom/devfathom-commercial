@@ -43,6 +43,13 @@ export type BranchRegulatoryState = {
   auditDenied: (reason: BranchOperationDenialReason, action: BranchOperationAction) => void;
 };
 
+export type BranchRegulatoryStatus = {
+  effective: boolean;
+  inForce: boolean;
+  licenceExpired: boolean;
+  qualifiedPersonCoverageExpired: boolean;
+};
+
 type RuleField = { provisional?: boolean; values?: unknown };
 
 function ruleField(value: unknown): RuleField {
@@ -108,6 +115,38 @@ export function assertBranchMayOperate(
   ) {
     deny('SCHEDULE_NOT_PERMITTED');
   }
+}
+
+/**
+ * Read-side status for a regulatory profile, evaluated by the same fail-closed
+ * primitive used by dispensing and activation. This prevents a profile from
+ * being presented as "in force" after the operation gate has started refusing
+ * it, including at the exact instant a licence or coverage period ends.
+ */
+export function evaluateBranchRegulatoryStatus(
+  branch: Omit<BranchRegulatoryState, 'auditDenied'>,
+  effective: boolean,
+  at: Date
+): BranchRegulatoryStatus {
+  let inForce = effective;
+  if (effective) {
+    try {
+      assertBranchMayOperate(
+        { ...branch, auditDenied: () => undefined },
+        { name: 'REGULATORY_PROFILE_VIEW', at, requiresQualifiedPerson: true }
+      );
+    } catch (error) {
+      if (!(error instanceof BranchOperationDeniedError)) throw error;
+      inForce = false;
+    }
+  }
+
+  return {
+    effective,
+    inForce,
+    licenceExpired: effective && at >= branch.licenceValidTo,
+    qualifiedPersonCoverageExpired: effective && at >= branch.qualifiedPersonValidTo,
+  };
 }
 
 export async function assertStoredBranchMayOperate(

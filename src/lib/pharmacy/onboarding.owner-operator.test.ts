@@ -7,6 +7,9 @@ vi.mock('./regulatory', () => ({
   BranchOperationDeniedError: class extends Error {},
 }));
 
+import { capabilityMatches, EXACT_GRANT_ONLY_ACTIONS } from '@/lib/abac/capabilities';
+import { roleTemplatesForVertical } from '@/lib/vertical-catalog';
+
 import { evaluatePharmacyReadiness, PHARMACY_ONBOARDING_STEPS } from './onboarding';
 
 const standardRoleKeys = [
@@ -96,5 +99,45 @@ describe('optional pharmacy Owner / Operator readiness', () => {
     expect(incomplete.ready).toBe(false);
     expect(incomplete.blocking).toEqual(['OWNER_AND_ROLE_TEMPLATES']);
     expect(countRoles).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('Owner / Operator template grants (#975)', () => {
+  const ownerOperator = roleTemplatesForVertical('PHARMACY').find(
+    (role) => role.key === 'owner-operator'
+  )!;
+  const allows = (action: string) =>
+    ownerOperator.capabilities.some((grant) => capabilityMatches(grant, action));
+
+  it.each([
+    'pharmacy:procurement',
+    'pharmacy:inventory',
+    'pharmacy:counter',
+    'pharmacy:close',
+    'pharmacy:manage',
+  ])('lets the proprietor run %s without another role', (action) => {
+    expect(ownerOperator.capabilities).toContain(action);
+    expect(allows(action)).toBe(true);
+  });
+
+  it('keeps every separation-of-duties grant exact rather than wildcard', () => {
+    expect(ownerOperator.capabilities.some((grant) => grant.includes('*'))).toBe(false);
+    for (const action of ['pharmacy:dispense', 'pharmacy:catalogue-review', 'pharmacy:safety']) {
+      expect(EXACT_GRANT_ONLY_ACTIONS.has(action)).toBe(true);
+      expect(ownerOperator.capabilities).toContain(action);
+    }
+  });
+
+  it('keeps the original six grants', () => {
+    expect(ownerOperator.capabilities).toEqual(
+      expect.arrayContaining([
+        'reports:operational',
+        'reports:financial',
+        'pharmacy:orders',
+        'pharmacy:dispense',
+        'pharmacy:catalogue-review',
+        'pharmacy:safety',
+      ])
+    );
   });
 });

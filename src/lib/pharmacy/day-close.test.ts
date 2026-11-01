@@ -43,12 +43,23 @@ function fixture() {
         ]),
     },
     pharmacyRefund: { findMany: vi.fn().mockResolvedValue([]) },
+    pharmacyTender: { findMany: vi.fn().mockResolvedValue([]) },
     // The workspace's zone, which the close screen formats every time in.
     organization: { findUnique: vi.fn().mockResolvedValue({ timezone: 'America/Chicago' }) },
   };
   return { db, scoped: db as unknown as ScopedDb };
 }
 describe('day close boundaries', () => {
+  it('changes the preview hash when a manual partial tender arrives on an open bill', async () => {
+    const { db, scoped } = fixture();
+    const before = await readPharmacyClose(scoped, scope, date);
+    db.pharmacyTender.findMany.mockResolvedValue([{ id: 'manual-1', type: 'RAAST', amountMinor: 100 }]);
+    const after = await readPharmacyClose(scoped, scope, date);
+    expect(after.totals.sourceHash).not.toBe(before.totals.sourceHash);
+    expect(after.tenderTotals).toEqual([{ type: 'RAAST', amountMinor: 100, refundMinor: 0, netMinor: 100 }]);
+    await expect(closePharmacyDay(scoped, scope, { businessDate: date, sourceHash: before.totals.sourceHash,
+      counts: [{ drawerSessionId: 'drawer', countedCashMinor: 12500 }], varianceNote: '' })).rejects.toMatchObject({ code: 'CONFLICT' });
+  });
   it('computes expected cash including float and sales within the tenant/branch/date', async () => {
     const { db, scoped } = fixture();
     const p = await readPharmacyClose(scoped, scope, date);

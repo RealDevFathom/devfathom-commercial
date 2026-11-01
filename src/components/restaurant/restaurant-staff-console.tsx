@@ -41,6 +41,7 @@ type Credential = RouterOutputs['restaurantStaff']['listCredentials'][number];
 type UiError = { message: string; data?: { code?: string } | null };
 
 const statuses: StaffStatus[] = ['ACTIVE', 'SUSPENDED', 'ARCHIVED'];
+const linkByEmailValue = '__link_by_email__';
 const labelClass =
   'block font-mono text-[0.6875rem] font-semibold uppercase tracking-wide text-text-muted';
 const selectClass =
@@ -84,6 +85,7 @@ export function RestaurantStaffConsole() {
   const [branchFilter, setBranchFilter] = useState('');
   const [staffFormOpen, setStaffFormOpen] = useState(false);
   const [editingStaff, setEditingStaff] = useState<StaffProfile | null>(null);
+  const [linkByEmail, setLinkByEmail] = useState(false);
   const [selectedStaff, setSelectedStaff] = useState<StaffProfile | null>(null);
   // SOP-1: the job-role multi-select target (separate from the credentials dialog).
   const [jobRolesStaff, setJobRolesStaff] = useState<StaffProfile | null>(null);
@@ -190,6 +192,7 @@ export function RestaurantStaffConsole() {
 
   const openCreate = () => {
     setEditingStaff(null);
+    setLinkByEmail(false);
     createStaff.reset();
     updateStaff.reset();
     setStaffFormOpen(true);
@@ -197,6 +200,7 @@ export function RestaurantStaffConsole() {
 
   const openEdit = (staff: StaffProfile) => {
     setEditingStaff(staff);
+    setLinkByEmail(false);
     createStaff.reset();
     updateStaff.reset();
     setStaffFormOpen(true);
@@ -208,7 +212,9 @@ export function RestaurantStaffConsole() {
     const payload = {
       displayName: formText(data, 'displayName'),
       email: formText(data, 'email') || null,
-      userId: formText(data, 'userId') || null,
+      ...(formText(data, 'userId') === linkByEmailValue
+        ? { userEmail: formText(data, 'userEmail') }
+        : { userId: formText(data, 'userId') || null }),
       primaryBranchId: formText(data, 'primaryBranchId') || null,
       status: formText(data, 'status') as StaffStatus,
     };
@@ -451,7 +457,7 @@ export function RestaurantStaffConsole() {
           if (!staffFormPending) setStaffFormOpen(open);
         }}
       >
-        <DialogContent className="sm:max-w-xl">
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-xl">
           <DialogHeader>
             <DialogTitle>{editingStaff ? 'Edit staff member' : 'Add staff member'}</DialogTitle>
             <DialogDescription>
@@ -492,6 +498,7 @@ export function RestaurantStaffConsole() {
                   id="staff-organization-user"
                   name="userId"
                   defaultValue={editingStaff?.userId ?? ''}
+                  onChange={(event) => setLinkByEmail(event.target.value === linkByEmailValue)}
                   className={selectClass}
                   disabled={eligibleUsersQuery.isLoading || Boolean(eligibleUsersQuery.error)}
                   aria-describedby="staff-user-help"
@@ -505,6 +512,7 @@ export function RestaurantStaffConsole() {
                           : 'User directory unavailable'
                         : 'No linked organization user'}
                   </option>
+                  <option value={linkByEmailValue}>Link an unlisted user by email…</option>
                   {(eligibleUsersQuery.data ?? []).map((user) => {
                     const linkedProfile = user.restaurantStaffProfiles[0];
                     const isCurrent = user.id === editingStaff?.userId;
@@ -531,9 +539,29 @@ export function RestaurantStaffConsole() {
                       user.status !== 'ACTIVE' ||
                       (user.restaurantStaffProfiles.length > 0 && user.id !== editingStaff?.userId)
                   )
-                    ? 'No active, unlinked organization users are available.'
+                    ? 'No selectable users are listed. Link an unlisted user by exact email.'
                     : 'Unavailable users remain visible for context but cannot be selected.'}
                 </span>
+                {linkByEmail && (
+                  <div className="space-y-1.5">
+                    <label htmlFor="staff-account-email" className={labelClass}>
+                      Organization account email
+                    </label>
+                    <Input
+                      id="staff-account-email"
+                      name="userEmail"
+                      type="email"
+                      required
+                      maxLength={320}
+                      className="h-11"
+                      aria-describedby="staff-account-email-help"
+                    />
+                    <span id="staff-account-email-help" className="block text-xs text-text-muted">
+                      Enter the full email of an active, unlinked organization account. The link is
+                      checked when you save.
+                    </span>
+                  </div>
+                )}
               </div>
               <div className="space-y-1.5">
                 <label htmlFor="staff-primary-branch" className={labelClass}>

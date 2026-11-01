@@ -22,6 +22,8 @@ const M7_COLUMNS = {
     'idempotencyKey',
     'createdAt',
     'updatedAt',
+    // ALTER TABLE appends the claim token after the existing columns.
+    'claimToken',
   ],
   restaurant_job_executions: [
     'id',
