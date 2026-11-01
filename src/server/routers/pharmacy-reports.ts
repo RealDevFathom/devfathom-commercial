@@ -522,8 +522,8 @@ export const pharmacyReportsRouter = router({
         .refine((v) => v.to >= v.from, { message: 'Invalid date range.' })
     )
     .query(async ({ ctx, input }) => {
-      const organizationId = await requirePvBranch(ctx, input.branchId);
       ctx.audit.detail = { category: 'PHARMACY_SAFETY', action: 'drap_export', skipInput: true };
+      const organizationId = await requirePvBranch(ctx, input.branchId);
       const reports = await ctx.db.pharmacyPharmacovigilanceReport.findMany({
         where: {
           organizationId,

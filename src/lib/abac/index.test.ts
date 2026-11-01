@@ -43,6 +43,11 @@ describe('opt-in pharmacy Owner / Operator access', () => {
     'pharmacy:dispense',
     'pharmacy:catalogue-review',
     'pharmacy:safety',
+    'pharmacy:procurement',
+    'pharmacy:inventory',
+    'pharmacy:counter',
+    'pharmacy:close',
+    'pharmacy:manage',
   ] as const satisfies readonly Action[];
   const proprietor = { ...employee, role: 'ADMIN' };
   const permissionsFor = (key: string): Permission[] =>
@@ -212,6 +217,17 @@ describe('opt-in pharmacy Owner / Operator access', () => {
       }
     }
   );
+
+  it.each([
+    'pharmacy:procurement',
+    'pharmacy:inventory',
+    'pharmacy:counter',
+    'pharmacy:close',
+    'pharmacy:manage',
+  ] as const)('grants operational %s via the template (#975)', async (action) => {
+    const db = authorizationDb({ rolePermissions: permissionsFor('owner-operator') });
+    await expect(can(employee, action, undefined, { db })).resolves.toBe(true);
+  });
 
   it('does not grant unrelated capabilities through wildcard or platform authority', async () => {
     const db = authorizationDb({ rolePermissions: permissionsFor('owner-operator') });
