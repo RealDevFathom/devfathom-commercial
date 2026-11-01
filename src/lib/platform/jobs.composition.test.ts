@@ -17,6 +17,9 @@ const m = vi.hoisted(() => ({
   snapshot: vi.fn(),
   retention: vi.fn(),
   dataExport: vi.fn(),
+  consent: vi.fn(),
+  archiveCreate: vi.fn(),
+  archiveDelete: vi.fn(),
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ withPlatformDb: m.scope }));
 vi.mock('@/lib/pharmacy/counter-evidence', () => ({
@@ -43,6 +46,8 @@ const db = {
   organizationLifecycleEvent: { create: m.lifecycle },
   organizationDeployment: { updateMany: m.deployment },
   platformSupportSession: { updateMany: m.support },
+  pharmacyCustomer: { findMany: m.consent },
+  pharmacyWhatsAppConsentArchive: { createMany: m.archiveCreate, deleteMany: m.archiveDelete },
 };
 const now = new Date('2026-10-12T01:15:00.000Z');
 function job(type: string, extra = {}) {
@@ -85,8 +90,14 @@ beforeEach(() => {
   m.organization.mockResolvedValue({ status: 'PURGING', purgeScheduledAt: new Date('2026-10-01') });
   m.execute.mockResolvedValue(1);
   m.deployment.mockResolvedValue({ count: 1 });
+  m.consent.mockResolvedValue([]);
+  m.archiveCreate.mockResolvedValue({ count: 0 });
+  m.archiveDelete.mockResolvedValue({ count: 0 });
 });
-afterEach(() => vi.useRealTimers());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllEnvs();
+});
 
 describe('composed platform worker boundaries', () => {
   it('starts export collection in a repeatable snapshot at the outer transaction boundary', async () => {
@@ -97,6 +108,15 @@ describe('composed platform worker boundaries', () => {
     expect(m.scope).toHaveBeenCalledWith(expect.any(Function), {
       timeout: 300_000, isolationLevel: 'RepeatableRead',
     });
+  });
+
+  it('expires consent evidence on an idle worker run without an archive key', async () => {
+    vi.stubEnv('PLATFORM_ENCRYPTION_KEY', '');
+    await expect(processPlatformJobs()).resolves.toMatchObject({ claimed: 0 });
+    expect(m.archiveDelete).toHaveBeenCalledExactlyOnceWith({
+      where: { expiresAt: { lte: now } },
+    });
+    expect(m.archiveCreate).not.toHaveBeenCalled();
   });
 
   it('propagates enqueue failure before stale recovery or any claim', async () => {
@@ -211,6 +231,7 @@ describe('composed platform worker boundaries', () => {
     expect(m.update).toHaveBeenCalledTimes(1);
   });
   it('preserves support history, platform audit/lifecycle and the organization shell while deleting business data', async () => {
+    vi.stubEnv('PLATFORM_ENCRYPTION_KEY', '');
     queue(job('PURGE_DATA'), [
       { tableName: 'platform_support_sessions', parentTable: 'organizations', nullableColumns: [] },
       { tableName: 'organizations', parentTable: null, nullableColumns: [] },
@@ -233,6 +254,33 @@ describe('composed platform worker boundaries', () => {
         metadata: { jobId: 'job-1', deletedRows: { users: 1 } },
       }),
     });
+    expect(m.consent).toHaveBeenCalledWith({
+      where: {
+        organizationId: 'tenant-a',
+        whatsappOptIn: { not: null },
+        whatsappOptInChangedAt: { not: null },
+      },
+      select: { id: true, whatsappOptIn: true, whatsappOptInChangedAt: true },
+    });
+  });
+  it('does not destroy tenant data when consent evidence cannot be archived', async () => {
+    vi.stubEnv('PLATFORM_ENCRYPTION_KEY', 'archive-test-key');
+    queue(job('PURGE_DATA', { attempts: 3 }), [
+      { tableName: 'pharmacy_customers', parentTable: 'organizations', nullableColumns: [] },
+    ]);
+    m.consent.mockResolvedValue([
+      { id: 'customer-a', whatsappOptIn: true, whatsappOptInChangedAt: now },
+    ]);
+    m.archiveCreate.mockRejectedValue(new Error('consent archive unavailable'));
+    await expect(processPlatformJobs(1)).resolves.toMatchObject({ failed: 1, succeeded: 0 });
+    expect(m.execute).not.toHaveBeenCalled();
+    expect(m.organizationUpdate).not.toHaveBeenCalled();
+    expect(m.lifecycle).not.toHaveBeenCalled();
+    expect(m.update).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ error: 'consent archive unavailable' }),
+      })
+    );
   });
   it('propagates a business-data deletion failure and never marks the organization purged', async () => {
     queue(job('PURGE_DATA', { attempts: 3 }), [
@@ -242,6 +290,11 @@ describe('composed platform worker boundaries', () => {
     await expect(processPlatformJobs(1)).resolves.toMatchObject({ failed: 1, succeeded: 0 });
     expect(m.organizationUpdate).not.toHaveBeenCalled();
     expect(m.lifecycle).not.toHaveBeenCalled();
+    expect(m.update).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ error: 'business-data deletion failed' }),
+      })
+    );
   });
   it.each(['ACTIVE', 'future', 'cycle'])(
     'retains purge prerequisite/cycle failure: %s',

@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({ transaction: vi.fn(), scope: vi.fn(), query: vi.fn() }));
 vi.mock('@/lib/db', () => ({ db: { $transaction: mocks.transaction } }));
+import { trackTransactionWork } from '@/lib/side-effects/scope';
 import { createTenantDb, withTenantDb, withPlatformDb } from './scoped-db';
 beforeEach(() => {
   vi.resetAllMocks();
@@ -87,5 +88,56 @@ describe('tenant transaction isolation options', () => {
       withTenantDb("bad'org", async () => true, { isolationLevel: 'ReadCommitted' })
     ).rejects.toThrow('Invalid organization');
     expect(mocks.transaction).not.toHaveBeenCalled();
+  });
+
+  it('waits for transaction-local work before completing a successful transaction', async () => {
+    let finishWork!: () => void;
+    const work = new Promise<void>((resolve) => {
+      finishWork = resolve;
+    });
+    let callbackFinished = false;
+
+    const result = withTenantDb('org', async () => {
+      trackTransactionWork(work);
+      return 'committed';
+    }).then((value) => {
+      callbackFinished = true;
+      return value;
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(callbackFinished).toBe(false);
+
+    finishWork();
+    await expect(result).resolves.toBe('committed');
+  });
+
+  it('settles transaction-local work before rethrowing a callback failure', async () => {
+    let finishWork!: () => void;
+    const work = new Promise<void>((resolve) => {
+      finishWork = resolve;
+    });
+    let markCallbackStarted!: () => void;
+    const callbackStarted = new Promise<void>((resolve) => {
+      markCallbackStarted = resolve;
+    });
+    let rejected = false;
+
+    const result = withTenantDb('org', async () => {
+      trackTransactionWork(work);
+      markCallbackStarted();
+      throw new Error('rolled back');
+    }).catch((error: unknown) => {
+      rejected = true;
+      throw error;
+    });
+
+    await callbackStarted;
+    await Promise.resolve();
+    expect(rejected).toBe(false);
+
+    finishWork();
+    await expect(result).rejects.toThrow('rolled back');
   });
 });

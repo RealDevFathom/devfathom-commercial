@@ -261,6 +261,63 @@ describe('Restaurant staff credential UI', () => {
     ).toBeDisabled();
     expect(within(dialog).queryByText(/linked user id/i)).not.toBeInTheDocument();
   });
+
+  it.each(['create', 'edit'] as const)(
+    'can %s with an unlisted account using its exact email',
+    (operation) => {
+      const users = mocks.eligibleUsers;
+      // The real branch-scoped directory has no selectable unlinked accounts.
+      mocks.eligibleUsers = users.filter((user) => user.restaurantStaffProfiles.length > 0);
+      try {
+        render(
+          <EntitlementsProvider value={entitlements}>
+            <RestaurantStaffConsole />
+          </EntitlementsProvider>
+        );
+        fireEvent.click(
+          screen.getByRole('button', {
+            name: operation === 'create' ? 'Add staff member' : 'Edit',
+          })
+        );
+        const dialog = screen.getByRole('dialog');
+        const selector = within(dialog).getByLabelText('Organization user');
+        const emailOption = within(selector).getByRole('option', { name: /Link an unlisted user/ });
+        expect(emailOption).toBeEnabled();
+        fireEvent.change(selector, { target: { value: (emailOption as HTMLOptionElement).value } });
+        fireEvent.change(within(dialog).getByLabelText('Organization account email'), {
+          target: { value: 'unlisted@example.com' },
+        });
+        fireEvent.change(within(dialog).getByLabelText('Display name'), {
+          target: { value: 'New colleague' },
+        });
+        fireEvent.change(within(dialog).getByLabelText('Primary branch'), {
+          target: { value: 'branch_1' },
+        });
+        fireEvent.submit(within(dialog).getByLabelText('Display name').closest('form')!);
+        expect(mocks.noopMutate).toHaveBeenCalledWith(
+          expect.objectContaining({
+            ...(operation === 'edit' ? { id: 'staff_1' } : {}),
+            displayName: 'New colleague',
+            primaryBranchId: 'branch_1',
+            userEmail: 'unlisted@example.com',
+          })
+        );
+        expect(mocks.noopMutate.mock.calls[0][0]).not.toHaveProperty('userId');
+
+        fireEvent.change(selector, { target: { value: '' } });
+        expect(
+          within(dialog).queryByLabelText('Organization account email')
+        ).not.toBeInTheDocument();
+        fireEvent.submit(within(dialog).getByLabelText('Display name').closest('form')!);
+        expect(mocks.noopMutate).toHaveBeenLastCalledWith(
+          expect.objectContaining({ userId: null })
+        );
+        expect(mocks.noopMutate.mock.lastCall?.[0]).not.toHaveProperty('userEmail');
+      } finally {
+        mocks.eligibleUsers = users;
+      }
+    }
+  );
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.issueOptions = undefined;

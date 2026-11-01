@@ -251,7 +251,13 @@ export function createNotificationWebhookJobHandler(
     const payload = notificationWebhookJobPayloadSchema.parse(job.payload);
     if (await isDemoTenant(tx)) return;
     const config = await tx.restaurantNotificationWebhook.findFirst();
-    if (!config?.enabled) return;
+    // A claimed delivery must never be settled as successful unless an endpoint
+    // actually accepted it. Throwing keeps disabled/deleted work on the
+    // scheduler's retry/dead-letter path, where an operator can recover it after
+    // configuring and enabling an endpoint again.
+    if (!config?.enabled) {
+      throw new Error('Webhook delivery is paused because the endpoint is disabled or missing.');
+    }
 
     const notification = payload.synthetic
       ? {

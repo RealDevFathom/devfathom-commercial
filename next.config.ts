@@ -30,6 +30,9 @@ const nextConfig: NextConfig = {
     formats: ['image/avif', 'image/webp'],
   },
   experimental: {
+    // Coupled to Dockerfile's per-process NODE_OPTIONS heap ceiling. Raising this
+    // multiplies concurrently available heaps and must be evaluated against the
+    // image builder's total memory before changing the worker count.
     cpus: 1,
     optimizePackageImports: ['@base-ui/react', 'cmdk'],
   },

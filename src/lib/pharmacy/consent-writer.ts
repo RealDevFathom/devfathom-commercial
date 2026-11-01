@@ -4,6 +4,7 @@ import {
   Prisma,
   type PatientConsentChannel,
   type PatientConsentPurpose,
+  type PatientConsentSource,
 } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
@@ -45,6 +46,8 @@ export async function writePatientConsent(
     purpose: PatientConsentPurpose;
     channel: PatientConsentChannel;
     granted: boolean;
+    source?: PatientConsentSource;
+    staffId?: string;
   },
   now = new Date()
 ) {
@@ -69,6 +72,9 @@ export async function writePatientConsent(
       version: (previous?.version ?? 0) + 1,
       supersedesId: previous?.id ?? null,
       recordedByUserId: actorId,
+      source: input.source ?? 'COUNTER_TABLET',
+      staffId:
+        input.staffId ?? (input.source === 'QR' || input.source === 'REPLY' ? null : actorId),
       recordedAt: now,
       revokedAt: input.granted ? null : now,
     },

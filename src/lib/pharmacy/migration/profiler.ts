@@ -23,7 +23,7 @@ import {
   type SourceTable,
 } from './source-values';
 
-export type MigrationSourceKind = 'ABUZAR' | 'EXCEL_CSV';
+export type MigrationSourceKind = 'ABUZAR' | 'EXCEL_CSV' | 'TALLY_XML' | 'MARG_EXCEL';
 
 export type ExceptionBucket =
   | 'MISSING_BATCH'
@@ -97,6 +97,15 @@ export interface SourceProfiler {
    * carries one name across several manufacturers or presentations.
    */
   readonly catalogueOnly?: boolean;
+  /**
+   * Optional. For a format that legitimately lists one product once per batch
+   * (Tally batch allocations, Marg Batch Stock), returns the part of a row's
+   * identity BEYOND its product natural key, so two batches of one product are
+   * not reported as DUPLICATE_PRODUCT. Two rows with the same natural key AND
+   * the same discriminator are still duplicates. Absent means the natural key
+   * alone decides, which is the original behaviour for every existing adapter.
+   */
+  duplicateDiscriminator?(row: ProfiledRow): string;
 }
 
 export type ProfiledRow = {
@@ -168,13 +177,7 @@ export function profileTable(
   if (!columnMap) throw new UnrecognisedSourceError(profiler.kind);
 
   const rows = table.rows.map((cells, index) => buildRow(table, columnMap, cells, index));
-  const exceptions = deriveExceptions(
-    rows,
-    table,
-    columnMap,
-    context,
-    profiler.catalogueOnly === true
-  );
+  const exceptions = deriveExceptions(rows, table, columnMap, context, profiler);
 
   return { columnMap, rows, exceptions };
 }
@@ -309,7 +312,7 @@ function deriveExceptions(
   table: SourceTable,
   columnMap: ColumnMap,
   context: ProfileContext,
-  catalogueOnly: boolean
+  profiler?: Pick<SourceProfiler, 'duplicateDiscriminator' | 'catalogueOnly'>
 ): ProfiledException[] {
   const exceptions: ProfiledException[] = [];
   const raise = (rowIndex: number | null, bucket: ExceptionBucket, detail: string) => {
@@ -322,7 +325,7 @@ function deriveExceptions(
     const cells = table.rows[index] ?? [];
     const where = `source key ${row.sourceKey}`;
 
-    if (row.targetModelKey === MIGRATION_TARGET_KEYS.PRODUCT && !catalogueOnly) {
+    if (row.targetModelKey === MIGRATION_TARGET_KEYS.PRODUCT && profiler?.catalogueOnly !== true) {
       if (!row.batchNumber) {
         raise(index, 'MISSING_BATCH', `No batch number for ${where}; it cannot be inferred.`);
       }
@@ -360,8 +363,13 @@ function deriveExceptions(
         );
       }
 
-      if (row.targetNaturalKey && (!catalogueOnly || row.barcode)) {
-        const previous = seenProductKeys.get(row.targetNaturalKey);
+      if (row.targetNaturalKey && (profiler?.catalogueOnly !== true || row.barcode)) {
+        const discriminator = profiler?.duplicateDiscriminator?.(row);
+        const identity =
+          discriminator === undefined
+            ? row.targetNaturalKey
+            : `${row.targetNaturalKey}\u0000${discriminator}`;
+        const previous = seenProductKeys.get(identity);
         if (previous) {
           raise(
             index,
@@ -369,7 +377,7 @@ function deriveExceptions(
             `${where} resolves to the same product as source key ${previous.sourceKey} (${row.targetNaturalKey}).`
           );
         } else {
-          seenProductKeys.set(row.targetNaturalKey, row);
+          seenProductKeys.set(identity, row);
         }
       }
     }

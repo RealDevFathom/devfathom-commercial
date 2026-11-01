@@ -1,5 +1,6 @@
 import 'server-only';
 
+import { Prisma } from '@/generated/prisma/client';
 import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { WhatsAppProviderError, type WhatsAppSendResult } from './provider';
@@ -87,12 +88,55 @@ export async function sendClaimedMessage(
   logId: string,
   send: () => Promise<WhatsAppSendResult>
 ): Promise<'SENT' | 'PREPARED' | 'UNKNOWN' | 'FAILED'> {
+  // A reminder's reservation and provider call are deliberately separated by a
+  // commit. Consent can change in that gap, so never rely solely on the customer
+  // loaded while claiming the row. Consent acknowledgements are excluded: a
+  // STOP acknowledgement must still be sent after recording the opt-out.
+  if (entry.kind === 'REFILL_REMINDER' || entry.kind === 'KHATA_REMINDER') {
+    return withTenantDb(entry.organizationId, async (db) => {
+      // STOP updates this row under the same FOR UPDATE lock. If STOP commits
+      // first this statement sees the new flag and returns no row; if this lock
+      // wins, STOP cannot commit until provider submission has finished.
+      const eligible = entry.customerId
+        ? await db.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+            SELECT id FROM pharmacy_customers
+            WHERE "organizationId" = ${entry.organizationId}
+              AND id = ${entry.customerId}
+              AND active = true
+              AND "whatsappOptIn" = true
+            FOR UPDATE
+          `)
+        : [];
+      if (eligible.length === 0) {
+        await db.pharmacyMessageLog.update({
+          where: { id: logId },
+          data: { status: 'IGNORED', error: 'OPTED_OUT_BEFORE_SEND' },
+        });
+        return 'PREPARED';
+      }
+      return sendAndRecord(db, logId, send);
+    });
+  }
+
+  return sendAndRecord(null, logId, send, entry.organizationId);
+}
+
+async function sendAndRecord(
+  db: ScopedDb | null,
+  logId: string,
+  send: () => Promise<WhatsAppSendResult>,
+  organizationId?: string
+): Promise<'SENT' | 'PREPARED' | 'UNKNOWN' | 'FAILED'> {
+  const update = (data: Parameters<typeof updateMessageLog>[2]) =>
+    db
+      ? db.pharmacyMessageLog.update({ where: { id: logId }, data }).then(() => undefined)
+      : updateMessageLog(organizationId!, logId, data);
   let result: WhatsAppSendResult;
   try {
     result = await send();
   } catch (error) {
     const definitive = error instanceof WhatsAppProviderError && error.definitive;
-    await updateMessageLog(entry.organizationId, logId, {
+    await update({
       status: definitive ? 'FAILED' : 'PENDING',
       // Never persist arbitrary transport errors: they can contain message/recipient data.
       error: definitive ? error.reason : 'UNKNOWN_PROVIDER_OUTCOME',
@@ -107,7 +151,7 @@ export async function sendClaimedMessage(
         : 'UNKNOWN';
   // Keep the provider call outside persistence error handling. A failed log
   // update after provider acceptance must not overwrite the claim as FAILED.
-  await updateMessageLog(entry.organizationId, logId, {
+  await update({
     status: outcome === 'SENT' ? 'SENT' : outcome === 'PREPARED' ? 'IGNORED' : 'PENDING',
     providerMessageId: result.providerMessageId,
     ...(outcome === 'PREPARED'
