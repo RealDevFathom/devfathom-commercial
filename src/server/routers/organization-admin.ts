@@ -1,4 +1,7 @@
-import { revokePasswordResetCredentials } from '@/lib/auth/password-reset';
+import {
+  PENDING_INVITATION_RESET_MESSAGE,
+  revokePasswordResetCredentials,
+} from '@/lib/auth/password-reset';
 import { createHash, randomBytes } from 'node:crypto';
 import { TRPCError } from '@trpc/server';
 import { hash } from 'bcryptjs';
@@ -670,9 +673,15 @@ export const organizationAdminRouter = router({
       const id = organizationId(ctx);
       const user = await ctx.db.user.findFirst({
         where: { id: input.id, organizationId: id },
-        select: { id: true, email: true },
+        select: { id: true, email: true, status: true },
       });
       if (!user) throw new TRPCError({ code: 'NOT_FOUND', message: 'Member not found.' });
+      if (user.status === 'INVITED') {
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message: PENDING_INVITATION_RESET_MESSAGE,
+        });
+      }
       await ctx.db.$transaction(async (tx) => {
         await tx.user.update({
           where: { id: user.id },

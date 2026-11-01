@@ -1,4 +1,7 @@
-import { revokePasswordResetCredentials } from '@/lib/auth/password-reset';
+import {
+  PENDING_INVITATION_RESET_MESSAGE,
+  revokePasswordResetCredentials,
+} from '@/lib/auth/password-reset';
 import { z } from 'zod';
 import { hash, compare } from 'bcryptjs';
 import { TRPCError } from '@trpc/server';
@@ -885,6 +888,17 @@ export const teamRouter = router({
       const hashed = await hash(input.newPassword, 12);
       // AUTH-01: an admin reset must also revoke the member's existing sessions.
       const user = await ctx.db.$transaction(async (tx) => {
+        const target = await tx.user.findFirst({
+          where: { id: input.id, organizationId: ctx.session.user.organizationId },
+          select: { status: true },
+        });
+        if (!target) throw new TRPCError({ code: 'NOT_FOUND', message: 'Member not found.' });
+        if (target.status === 'INVITED') {
+          throw new TRPCError({
+            code: 'PRECONDITION_FAILED',
+            message: PENDING_INVITATION_RESET_MESSAGE,
+          });
+        }
         const user = await tx.user.update({
           where: { id: input.id },
           data: {

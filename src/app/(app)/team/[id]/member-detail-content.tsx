@@ -665,6 +665,11 @@ function ResetPasswordForm({
             Reset
           </button>
         </div>
+        {resetPassword.error && (
+          <p role="alert" className="mt-2 text-xs text-destructive">
+            {resetPassword.error.message}
+          </p>
+        )}
       </CardContent>
     </Card>
   );

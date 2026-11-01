@@ -169,6 +169,23 @@ describe('organization member creation', () => {
     );
   });
 
+  it('refuses a manual reset for an invited member before touching credentials', async () => {
+    mocks.userFindFirst.mockResolvedValue({
+      id: 'member_a',
+      email: 'member@example.test',
+      status: 'INVITED',
+    });
+    await expect(
+      caller().resetMemberPassword({ id: 'member_a', password: input.password })
+    ).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    // The pending invitation stays usable: nothing is updated, expired or revoked.
+    expect(mocks.userUpdate).not.toHaveBeenCalled();
+    expect(mocks.invitationUpdateMany).not.toHaveBeenCalled();
+    expect(mocks.resetUpdateMany).not.toHaveBeenCalled();
+    expect(mocks.apiTokenDeleteMany).not.toHaveBeenCalled();
+    expect(mocks.annotateAudit).not.toHaveBeenCalled();
+  });
+
   it.each(['aaaaaaaaaaaa', 'AAAAAAAAAAAA', 'PasswordOnly'])(
     'rejects weak staff passwords: %s',
     async (password) => {

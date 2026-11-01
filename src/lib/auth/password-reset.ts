@@ -26,6 +26,12 @@ export async function revokePasswordResetCredentials(
   });
 }
 
+// A manual (admin-set) password cannot sign in an INVITED member, and the reset
+// revokes their pending invitation. Refuse it before any credential changes so
+// the member keeps a working onboarding path (re-send the invitation instead).
+export const PENDING_INVITATION_RESET_MESSAGE =
+  'This member has not accepted their invitation yet. Re-send the invitation instead of setting a password.';
+
 type ResetRecipient = { id: string; organizationId: string; name: string; email: string };
 
 async function issuePasswordResetToken(db: PrismaClient, user: ResetRecipient): Promise<string> {
