@@ -116,26 +116,26 @@
     "zustand": "^5.0.12"
   },
   "devDependencies": {
-    "@axe-core/playwright": "^4.13.0",
-    "@playwright/test": "1.64.0",
+    "@axe-core/playwright": "^4.14.0",
+    "@playwright/test": "1.64.1",
     "@tailwindcss/postcss": "^4",
-    "@testing-library/jest-dom": "7.0.0",
-    "@testing-library/react": "16.3.2",
+    "@testing-library/jest-dom": "7.0.1",
+    "@testing-library/react": "16.3.3",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^22",
     "@types/pg": "^8.20.0",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
-    "@vitest/coverage-v8": "5.0.2",
+    "@vitest/coverage-v8": "5.0.5",
     "eslint": "^9",
-    "shadcn": "^4.2.0",
-    "eslint-config-next": "16.4.2",
-    "jsdom": "30.0.0",
-    "prettier": "^3.8.2",
+    "shadcn": "^4.22.0",
+    "eslint-config-next": "16.4.3",
+    "jsdom": "30.1.3",
+    "prettier": "^3.9.10",
     "tailwindcss": "^4",
-    "tsx": "^4.21.0",
+    "tsx": "^4.23.15",
     "typescript": "^5",
-    "vitest": "5.0.2"
+    "vitest": "5.0.5"
   },
   "trustedDependencies": [
     "unrs-resolver"
