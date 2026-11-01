@@ -1133,7 +1133,7 @@ async function bootstrapOrganization(
   // gate working, and pre-seeding a profile here would be exactly the "seed data
   // fakes readiness" move PLAT-03 exists to refuse.
   if (input.vertical === 'PHARMACY') {
-    await db.pharmacyBranch.create({
+    const mainBranch = await db.pharmacyBranch.create({
       data: {
         organizationId: organization.id,
         // The same stable code the restaurant path uses; the operator-facing
@@ -1143,6 +1143,17 @@ async function bootstrapOrganization(
         addressLine: input.firstBranchAddress!,
         city: input.firstBranchCity!,
         provinceCode: input.firstBranchProvinceCode!,
+      },
+    });
+    // #479 — branch-scoped pharmacy work (pharmacovigilance filing and review
+    // included) requires an active assignment. Assign the bootstrap
+    // administrator to MAIN, as the restaurant path does, so a solo pharmacy
+    // is not refused on its own first branch.
+    await db.pharmacyBranchAssignment.create({
+      data: {
+        organizationId: organization.id,
+        branchId: mainBranch.id,
+        userId: admin.id,
       },
     });
   }
