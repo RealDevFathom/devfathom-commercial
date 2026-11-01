@@ -42,16 +42,7 @@ const storedSchema = z
         overrideReason: z.string().trim().min(1).max(500).optional(),
         approvalId: z.string().uuid().optional(),
       })
-      .strict()
-      .superRefine((input, ctx) => {
-        if (input.ownerOverride === true && input.overrideReason === undefined) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: ['overrideReason'],
-            message: 'An override reason is required.',
-          });
-        }
-      }),
+      .strict(),
     draft: z.object({ amount: amountText, cashReceived: amountText }).strict(),
   })
   .strict();
@@ -134,7 +125,11 @@ export function readTenderAttempt(scope: TenderAttemptScope): TenderAttemptRead 
 
 export function persistTenderAttempt(attempt: TenderAttempt): void {
   const raw = JSON.stringify(attempt);
-  decode(raw, attempt.scope); // Strict allowlist rejects extra/private fields before writing.
+  const decoded = decode(raw, attempt.scope); // Strict allowlist rejects extra/private fields before writing.
+  // New attempts must carry the override reason. Reads stay lenient so a record saved
+  // before reasons were required still restores for outcome recovery instead of blocking.
+  if (decoded.input.ownerOverride === true && decoded.input.overrideReason === undefined)
+    throw new Error(TENDER_STORAGE_MESSAGE);
   const key = tenderAttemptStorageKey(attempt.scope);
   if (window.localStorage.getItem(key) !== null) throw new Error(TENDER_STORAGE_MESSAGE);
   window.localStorage.setItem(key, raw);

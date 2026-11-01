@@ -311,3 +311,20 @@ it('round-trips Khata recovery without storing authentication credentials', () =
   ).toThrow();
   expect(window.localStorage.length).toBe(0);
 });
+
+it('restores a pre-deploy Khata override record without a reason but never writes a new one', () => {
+  const attempt = original();
+  attempt.input = {
+    ...attempt.input,
+    type: 'KHATA',
+    familyAccountId: 'family-a',
+    ownerOverride: true,
+  };
+  delete attempt.input.cashReceivedMinor;
+  attempt.draft.cashReceived = '';
+  expect(() => persistTenderAttempt(attempt)).toThrow();
+  expect(window.localStorage.length).toBe(0);
+  // A record saved by the previous release stays recoverable instead of blocking the counter.
+  window.localStorage.setItem(tenderAttemptStorageKey(attempt.scope), JSON.stringify(attempt));
+  expect(readTenderAttempt(attempt.scope)).toEqual({ status: 'pending', attempt });
+});

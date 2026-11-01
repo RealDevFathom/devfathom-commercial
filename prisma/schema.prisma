@@ -1268,6 +1268,8 @@ model PharmacyKhataOverrideApproval {
   saleId          String
   familyAccountId String
   amountMinor     Int
+  /// Final credit limit the approver authorized (balance at approval + amount).
+  approvedLimitMinor Int
   reason          String
   createdAt       DateTime  @default(now())
   expiresAt       DateTime

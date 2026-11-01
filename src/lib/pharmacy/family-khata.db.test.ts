@@ -75,6 +75,10 @@ async function fixture(
       },
     });
     await db.$queryRawUnsafe("SELECT set_config('app.current_branch_id', $1, true)", branch.id);
+    // Owner/manager approvers must be assigned to the branch whose charge they approve.
+    await db.pharmacyBranchAssignment.create({
+      data: { organizationId, branchId: branch.id, userId: approver.id },
+    });
     const patient = await db.pharmacyPatient.create({
       data: { organizationId, displayName: 'Private clinical name' },
     });
@@ -133,11 +137,14 @@ async function fixture(
 }
 async function issueApproval(db: ScopedDb, scope: Fixture, amountMinor: number, ageMs = 0) {
   const id = randomUUID();
+  // Mirrors the endpoint: the approved final limit is the balance at approval + amount.
+  const approvedLimitMinor =
+    (await khata.readKhataBalance(db, scope, scope.familyAccountId)) + amountMinor;
   await db.$executeRawUnsafe(
     `INSERT INTO pharmacy_khata_override_approvals
        (id, "organizationId", "branchId", "approverId", "saleId", "familyAccountId", "amountMinor",
-        reason, "createdAt", "expiresAt")
-     VALUES ($1, $2, $3, $4, $5, $6, $7, 'Approved exception',
+        "approvedLimitMinor", reason, "createdAt", "expiresAt")
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $9, 'Approved exception',
        NOW() - ($8::int * INTERVAL '1 millisecond'),
        NOW() - ($8::int * INTERVAL '1 millisecond') + INTERVAL '5 minutes')`,
     id,
@@ -147,7 +154,8 @@ async function issueApproval(db: ScopedDb, scope: Fixture, amountMinor: number, 
     scope.saleId,
     scope.familyAccountId,
     amountMinor,
-    ageMs
+    ageMs,
+    approvedLimitMinor
   );
   return id;
 }

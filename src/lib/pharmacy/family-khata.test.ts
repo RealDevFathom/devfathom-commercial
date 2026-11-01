@@ -303,6 +303,9 @@ describe('counter Khata ledger gate', () => {
           approverId: 'manager_1',
           reason: 'Approved exception',
           createdAt: new Date(),
+          // Balance 500 + amount 600: the final limit the approver authorized.
+          approvedLimitMinor: 1100,
+          dbNow: new Date(),
           ...evidence,
         },
       ])
@@ -313,6 +316,7 @@ describe('counter Khata ledger gate', () => {
           role: 'EMPLOYEE',
           roleKey: 'manager',
           isSystem: true,
+          branchAssigned: true,
           ...approver,
         },
       ])
@@ -474,6 +478,27 @@ describe('counter Khata ledger gate', () => {
     await authorizeKhataCharge(db as never, scope, overInput, { approvalId });
     expect(db.pharmacyFamilyAccount.update).toHaveBeenCalledOnce();
   });
+  it('refuses evidence when a later charge would raise the limit past the approved figure', async () => {
+    const db = fixture();
+    withApproval(db, {}, { approvedLimitMinor: 1099 });
+    await expect(
+      authorizeKhataCharge(db as never, scope, overInput, { approvalId })
+    ).rejects.toMatchObject({ reason: 'OWNER_ACTION_REQUIRED' });
+    expect(db.$executeRaw).not.toHaveBeenCalled();
+    expect(db.pharmacyFamilyAccount.update).not.toHaveBeenCalled();
+  });
+  it('judges evidence freshness on the database clock, not the app clock', async () => {
+    const db = fixture();
+    // Database clock runs 10 minutes ahead of the app server; the approval is 1 minute old.
+    const dbNow = new Date(Date.now() + 10 * 60_000);
+    withApproval(db, {}, { createdAt: new Date(dbNow.getTime() - 60_000), dbNow });
+    await authorizeKhataCharge(db as never, scope, overInput, { approvalId });
+    expect(db.pharmacyKhataLimitDecision.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        reasons: expect.objectContaining({ ownerAuthorizedAt: dbNow.toISOString() }),
+      }),
+    });
+  });
   it('allows the owner who rang up the sale to approve their own over-limit charge', async () => {
     const db = fixture();
     withApproval(db, { id: scope.actorId, roleKey: 'owner' }, { approverId: scope.actorId });
@@ -488,6 +513,7 @@ describe('counter Khata ledger gate', () => {
     ['no role', { roleKey: null, isSystem: null }],
     ['deactivated', { status: 'INACTIVE', roleKey: 'owner' }],
     ['deactivated ADMIN', { status: 'INACTIVE', role: 'ADMIN' }],
+    ['no assignment to the charge branch', { roleKey: 'manager', branchAssigned: false }],
   ])('refuses an approver with %s on the in-transaction read', async (_label, approver) => {
     const db = fixture();
     withApproval(db, approver);

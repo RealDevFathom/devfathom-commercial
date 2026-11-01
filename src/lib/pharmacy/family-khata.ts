@@ -215,16 +215,22 @@ export async function settleFamilyKhata(
 /** Tenant role keys (system templates only) that may approve an over-limit Khata charge. */
 export const KHATA_OVERRIDE_APPROVER_ROLE_KEYS = ['owner', 'owner-operator', 'manager'] as const;
 
-/** True when a member row may approve a Khata limit override (owner/manager or tenant ADMIN). */
+/**
+ * True when a member row may approve a Khata limit override at the charge's branch.
+ * Tenant ADMINs reach every branch (the same exemption the counter applies to cashiers);
+ * an owner/manager system role must also hold an active assignment to that branch.
+ */
 export function isKhataOverrideApprover(row: {
   status: string | null;
   role?: string | null;
   roleKey?: string | null;
   isSystem?: boolean | null;
+  branchAssigned?: boolean | null;
 }) {
   if (row.status !== 'ACTIVE') return false;
   if (row.role === 'ADMIN') return true;
   return (
+    row.branchAssigned === true &&
     row.isSystem === true &&
     (KHATA_OVERRIDE_APPROVER_ROLE_KEYS as readonly string[]).includes(row.roleKey ?? '')
   );
@@ -245,9 +251,11 @@ async function writeKhataLimitDecision(
   db: ScopedDb,
   scope: FamilyKhataScope,
   input: KhataLimitDecisionInput,
-  approvalId?: string
+  approvalId?: string,
+  /** Database clock for DB-stamped evidence, so app/DB clock skew cannot refuse it. */
+  dbNow?: Date
 ) {
-  const authorizedAt = new Date();
+  const authorizedAt = dbNow ?? new Date();
   const reauthenticatedAt = input.ownerReauthenticatedAt?.getTime();
   const overrideReason = input.overrideReason?.trim();
   if (
@@ -419,9 +427,18 @@ export async function authorizeKhataCharge(
     const approvals =
       approval.approvalId && overrideReason
         ? await db.$queryRaw<
-            Array<{ id: string; approverId: string; reason: string; createdAt: Date }>
+            Array<{
+              id: string;
+              approverId: string;
+              reason: string;
+              createdAt: Date;
+              approvedLimitMinor: number;
+              dbNow: Date;
+            }>
           >(Prisma.sql`
-          SELECT id, "approverId", reason, "createdAt" FROM pharmacy_khata_override_approvals
+          SELECT id, "approverId", reason, "createdAt", "approvedLimitMinor",
+            CURRENT_TIMESTAMP::timestamp(3) AS "dbNow"
+          FROM pharmacy_khata_override_approvals
           WHERE id=${approval.approvalId} AND "organizationId"=${scope.organizationId}
             AND "branchId"=${scope.branchId} AND "saleId"=${input.saleId}
             AND "familyAccountId"=${input.familyAccountId} AND "amountMinor"=${input.amountMinor}
@@ -431,12 +448,29 @@ export async function authorizeKhataCharge(
     const evidence = approvals[0];
     const reason = evidence?.reason.trim();
     if (!evidence || !reason) throw new FamilyKhataError('OWNER_ACTION_REQUIRED');
-    // Re-check the approver inside the tender transaction: a role change or deactivation
-    // after the approval was issued must still refuse the override.
+    // The approver authorized a final limit, not an open-ended amount: a charge that landed
+    // after approval must not push the account past the figure they saw.
+    if (!Number.isSafeInteger(evidence.approvedLimitMinor) || projected > evidence.approvedLimitMinor)
+      throw new FamilyKhataError('OWNER_ACTION_REQUIRED');
+    // Re-check the approver inside the tender transaction: a role change, deactivation or
+    // branch unassignment after the approval was issued must still refuse the override.
     const approvers = await db.$queryRaw<
-      Array<{ id: string; status: string; role: string | null; roleKey: string | null; isSystem: boolean | null }>
+      Array<{
+        id: string;
+        status: string;
+        role: string | null;
+        roleKey: string | null;
+        isSystem: boolean | null;
+        branchAssigned: boolean | null;
+      }>
     >(Prisma.sql`
-      SELECT u.id, u.status::text AS status, u.role::text AS role, r.key AS "roleKey", r."isSystem"
+      SELECT u.id, u.status::text AS status, u.role::text AS role, r.key AS "roleKey", r."isSystem",
+        EXISTS (
+          SELECT 1 FROM pharmacy_branch_assignments a
+          JOIN pharmacy_branches b ON b.id = a."branchId" AND b."organizationId" = a."organizationId"
+          WHERE a."organizationId" = u."organizationId" AND a."userId" = u.id
+            AND a."branchId" = ${scope.branchId} AND a.active AND b.active
+        ) AS "branchAssigned"
       FROM users u LEFT JOIN organization_roles r
         ON r.id = u."organizationRoleId" AND r."organizationId" = u."organizationId"
       WHERE u.id=${evidence.approverId} AND u."organizationId"=${scope.organizationId}
@@ -487,7 +521,8 @@ export async function authorizeKhataCharge(
         ownerReauthenticatedAt: evidence.createdAt,
         overrideLimitMinor: projected,
       },
-      evidence.id
+      evidence.id,
+      evidence.dbNow instanceof Date ? evidence.dbNow : undefined
     );
   }
   return account;

@@ -22,6 +22,13 @@ describe('Khata override approval evidence migration', () => {
     expect(sql).toContain('BEFORE UPDATE OR DELETE');
   });
 
+  it('binds evidence to the final limit the approver authorized and freezes it', () => {
+    expect(sql).toContain('"approvedLimitMinor" INTEGER NOT NULL');
+    expect(sql).toContain('"approvedLimitMinor" >= 0');
+    expect(sql).toContain('NEW."amountMinor", NEW."approvedLimitMinor"');
+    expect(sql).toContain('OLD."amountMinor", OLD."approvedLimitMinor"');
+  });
+
   it('keeps every quoted identifier within the PostgreSQL 63-byte limit', () => {
     const identifiers = [...sql.matchAll(/"([^"]+)"/g)].map(([, name]) => name!);
     expect(identifiers.filter((name) => Buffer.byteLength(name) > 63)).toEqual([]);
