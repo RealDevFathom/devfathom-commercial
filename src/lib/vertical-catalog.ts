@@ -740,6 +740,7 @@ export const PHARMACY_CAPABILITIES: readonly string[] = [
   'pharmacy:counter',
   'pharmacy:close',
   'pharmacy:procurement',
+  'pharmacy:procurement-approve',
   'pharmacy:inventory',
   'pharmacy:orders',
   'reports:operational',
@@ -753,6 +754,7 @@ export const PHARMACY_CHECKED_CAPABILITIES = [
   'pharmacy:close',
   'pharmacy:manage',
   'pharmacy:procurement',
+  'pharmacy:procurement-approve',
   'pharmacy:inventory',
   'pharmacy:dispense',
   'pharmacy:prescriptions',
@@ -799,7 +801,13 @@ export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
     isSystem: true,
     // Managers retain the purchasing and Goods-in access that predates the
     // explicit pharmacy capability model (#375).
-    capabilities: ['pharmacy:manage', 'pharmacy:orders', 'pharmacy:procurement'],
+    capabilities: [
+      'pharmacy:manage',
+      'pharmacy:orders',
+      'pharmacy:procurement',
+      // PUR-02: managers approve and send purchase orders others raised.
+      'pharmacy:procurement-approve',
+    ],
   },
   {
     key: 'cashier',

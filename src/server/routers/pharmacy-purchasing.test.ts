@@ -15,6 +15,7 @@ vi.mock('@/lib/entitlements', () => ({
   resolveOrganizationEntitlements: vi.fn(async () => ({ enabledModules: [] })),
 }));
 vi.mock('@/server/audit', () => ({
+  annotateAudit: vi.fn(),
   ipFromHeaders: vi.fn(() => null),
   isAuditExcludedPath: vi.fn(() => true),
   recordTrpcAudit: vi.fn(),
@@ -61,6 +62,7 @@ function makeDb() {
     pharmacyDebitNote: model(),
     pharmacySupplierCredit: model(),
     pharmacyBranch: model(),
+    pharmacyBranchAssignment: model(),
     user: model(),
     medicineBarcode: model(),
   };
@@ -83,7 +85,10 @@ function caller(userId = 'user_a', enabledModules = ['pharmacy-procurement']) {
       modules: [],
       limits: {},
     },
-    session: { expires: 'later', user: { id: userId, role: 'ADMIN', status: 'ACTIVE' } },
+    session: {
+      expires: 'later',
+      user: { id: userId, role: 'ADMIN', status: 'ACTIVE', organizationId: 'org_a' },
+    },
     organization: null,
     support: null,
     requestMeta: { ip: null, userAgent: null },
@@ -117,6 +122,8 @@ beforeEach(() => {
   db = makeDb();
   mocks.can.mockReset().mockResolvedValue(true);
   db.pharmacyBranch.findFirst.mockResolvedValue({ id: 'branch_a' });
+  // #979, PR J: the caller is assigned to the branch it names.
+  db.pharmacyBranchAssignment.findFirst.mockResolvedValue({ id: 'assignment_a' });
   mocks.hasModule.mockImplementation((view, key) => view.enabledModules.includes(key));
 });
 
@@ -1498,11 +1505,8 @@ describe('#979 supplier, requisition and order writes need the procurement capab
         }),
     ],
     ['submitPurchaseOrder', () => caller().submitPurchaseOrder({ purchaseOrderId: 'po_a' })],
-    [
-      'approvePurchaseOrder',
-      () => caller().approvePurchaseOrder({ purchaseOrderId: 'po_a', decision: 'APPROVED' }),
-    ],
-    ['sendPurchaseOrder', () => caller().sendPurchaseOrder({ purchaseOrderId: 'po_a' })],
+    // approvePurchaseOrder and sendPurchaseOrder need `pharmacy:procurement-approve`
+    // since PR J; see pharmacy-purchasing.authz.test.ts.
   ] as const;
 
   it.each(gated)('refuses %s to a cashier before any read or write', async (_name, call) => {

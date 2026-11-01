@@ -73,6 +73,9 @@ export const ALL_ACTIONS = [
   'pharmacy:close',
   'pharmacy:manage',
   'pharmacy:procurement',
+  // PUR-02: approve and send a purchase order. Separate from raising one, so the
+  // approver is a manager or owner and never just whoever can create orders.
+  'pharmacy:procurement-approve',
   'pharmacy:inventory',
   'pharmacy:dispense', // RX-03/04: pharmacist decisions and substitution evidence
   'pharmacy:prescriptions', // prescription workspace/files: pharmacist or tenant administrator
@@ -240,6 +243,11 @@ export const POLICIES: Record<Action, Policy[]> = {
   // explicit (#375). `can()` prevents an assigned role with no matching grant
   // from falling through to this policy, and resolves a custom DENY first.
   'pharmacy:procurement': [isAdmin],
+  // Purchase-order approval follows the same rule: the Manager template grants
+  // it explicitly, `pharmacy:*` (Owner) covers it, and a tenant administrator
+  // without an organization role (the solo owner) holds it directly. `can()`
+  // keeps an assigned role without the grant from falling through to this policy.
+  'pharmacy:procurement-approve': [isAdmin],
   'pharmacy:inventory': [],
   // Dispensing is an exact-grant-only action: tenant administration alone is
   // insufficient, and wildcard ALLOW rules cannot opt a user in. Wildcard DENY

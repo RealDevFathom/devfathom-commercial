@@ -11808,6 +11808,9 @@ model PharmacySupplierLicence {
   evidenceUri      String?
   verifiedAt       DateTime?
   verifiedByUserId String?
+  /// Who filed this licence (PUR-01, #979). A verifying filing is refused when
+  /// the verifier filed the licence it verifies. Null on earlier filings.
+  recordedByUserId String?
   supersedesId     String?
   createdAt        DateTime  @default(now())
 

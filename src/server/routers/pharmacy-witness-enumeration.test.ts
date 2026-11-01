@@ -7,6 +7,7 @@ vi.mock('@/lib/entitlements', () => ({
   resolveOrganizationEntitlements: vi.fn(),
 }));
 vi.mock('@/server/audit', () => ({
+  annotateAudit: vi.fn(),
   ipFromHeaders: () => null,
   isAuditExcludedPath: () => false,
   recordTrpcAudit: vi.fn(),
@@ -19,11 +20,20 @@ function fixture(capability: string) {
   const db = {
     user: {
       findUnique: vi.fn().mockResolvedValue({
-        organizationRole: { permissions: [{ capability, effect: 'ALLOW' }] },
+        organizationRole: {
+          // PR J: the purchasing lookup sits behind the Goods-in procurement
+          // permission and the branch assignment; the witness rule is unchanged.
+          permissions: [
+            { capability, effect: 'ALLOW' },
+            { capability: 'pharmacy:procurement', effect: 'ALLOW' },
+          ],
+        },
         permissionOverrides: [],
       }),
     },
     restaurantStaffProfile: { findMany: vi.fn().mockResolvedValue([]) },
+    pharmacyBranch: { findFirst: vi.fn().mockResolvedValue({ id: 'branch' }) },
+    pharmacyBranchAssignment: { findFirst: vi.fn().mockResolvedValue({ id: 'assignment' }) },
     pharmacyGoodsReceipt: {
       findFirst: vi.fn().mockResolvedValue({ qualifiedPersonUserId: 'qualified-person' }),
     },

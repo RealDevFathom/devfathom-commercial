@@ -50,6 +50,8 @@ export type SupplierLicenceView = {
   expiresAt: Date;
   evidenceUri: string | null;
   verified: boolean;
+  /** Who filed it (PUR-01); null for filings made before the filer was recorded. */
+  recordedByUserId: string | null;
   superseded: boolean;
   /** Negative once the licence has lapsed, so the console can say by how long. */
   daysToExpiry: number;
@@ -106,6 +108,7 @@ type LicenceRow = {
   expiresAt: Date;
   evidenceUri: string | null;
   verifiedAt: Date | null;
+  recordedByUserId: string | null;
   supersedesId: string | null;
 };
 
@@ -127,6 +130,7 @@ function licenceViews(rows: readonly LicenceRow[], at: Date): SupplierLicenceVie
       expiresAt: row.expiresAt,
       evidenceUri: row.evidenceUri,
       verified: row.verifiedAt !== null,
+      recordedByUserId: row.recordedByUserId,
       superseded: superseded.has(row.id),
       daysToExpiry: daysBetween(at, row.expiresAt),
     }))
