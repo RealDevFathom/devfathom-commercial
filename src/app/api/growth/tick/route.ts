@@ -1,6 +1,7 @@
 import { timingSafeEqual } from 'node:crypto';
 import { NextResponse } from 'next/server';
 
+import { runCustomerMetrics } from '@/lib/growth/metrics';
 import { plannerAvailable, runWeeklyPlanner } from '@/lib/growth/planner';
 import { isGrowthEnabled } from '@/lib/growth';
 import { advanceCampaigns, dispatchCampaignMessages } from '@/lib/growth/campaigns';
@@ -23,29 +24,38 @@ export async function POST(request: Request) {
     db.organization.findMany({ where: { status: 'ACTIVE' }, select: { id: true } })
   );
   for (const organization of organizations) {
-    if (await isGrowthEnabled(organization.id)) {
-      console.info(`[growth] tick organizationId=${organization.id}`);
-      if (plannerAvailable()) {
-        try {
-          await withTenantDb(organization.id, (db) => runWeeklyPlanner(db, organization.id));
-        } catch (error) {
-          console.error(
-            '[growth.planner] failed',
-            organization.id,
-            error instanceof Error ? error.name : 'UnknownError'
-          );
-        }
+    let enabled = false;
+    try {
+      enabled = await isGrowthEnabled(organization.id);
+      if (enabled) {
+        await runCustomerMetrics(organization.id);
+        console.info(`[growth] tick organizationId=${organization.id}`);
       }
+    } catch (error) {
+      console.error(`[growth] tick failed organizationId=${organization.id}`, error);
+    }
+    if (!enabled) continue;
+    // A metrics failure must not block planning or advancing already-approved sends.
+    if (plannerAvailable()) {
       try {
-        await withTenantDb(organization.id, (db) => advanceCampaigns(db, organization.id));
-        await dispatchCampaignMessages(organization.id);
+        await withTenantDb(organization.id, (db) => runWeeklyPlanner(db, organization.id));
       } catch (error) {
         console.error(
-          '[growth.dispatch] failed',
+          '[growth.planner] failed',
           organization.id,
           error instanceof Error ? error.name : 'UnknownError'
         );
       }
+    }
+    try {
+      await withTenantDb(organization.id, (db) => advanceCampaigns(db, organization.id));
+      await dispatchCampaignMessages(organization.id);
+    } catch (error) {
+      console.error(
+        '[growth.dispatch] failed',
+        organization.id,
+        error instanceof Error ? error.name : 'UnknownError'
+      );
     }
   }
   return NextResponse.json({ ok: true });

@@ -14377,7 +14377,7 @@ model CustomerMetrics {
   organizationId  String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   lastPurchaseAt  DateTime?
   orders90d       Int       @default(0)
-  spend90dMinor   Int       @default(0)
+  spend90dMinor   BigInt    @default(0)
   medianGapDays   Int?
   churnScore      Int       @default(0)
   churnBand       String    @default("low")
@@ -14407,6 +14407,7 @@ model GrowthSettings {
   waInstanceName        String?
   waApiUrl              String?
   waApiKeyEnc           String?
+  lastMetricsRunAt      DateTime?
   lastPlanRunAt         DateTime?
   customDates           Json     @default("[]")
   maxDiscountPct        Int?
