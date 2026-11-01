@@ -145,6 +145,25 @@ Open:
 
 Stop the server with `Ctrl+C`. Start it again with `bun run dev`.
 
+### First platform sign-in requires authenticator (MFA) enrollment
+
+The first platform sign-in always enrolls an authenticator, regardless of
+`PLATFORM_MFA_ENFORCE`. At [http://admin.localhost:3000/platform/login](http://admin.localhost:3000/platform/login):
+
+1. Sign in with `PLATFORM_ADMIN_EMAIL` and `PLATFORM_ADMIN_PASSWORD`. Because no
+   authenticator is enrolled yet, the form switches to **Set up authenticator**
+   instead of going straight to `/platform`.
+2. Click **Set up authenticator**. The page shows a **setup key** (a TOTP
+   secret). Add it to any authenticator app (1Password, Google Authenticator,
+   Authy, …) as a manually-entered key.
+3. Enter the **six-digit code** the app generates and click **Verify
+   authenticator**.
+4. Save the one-time **recovery codes** shown after verification, then continue.
+   You land on `/platform`.
+
+On later sign-ins the same login form asks only for a current six-digit code
+from the enrolled authenticator.
+
 ## 5. Verify the setup
 
 ```bash

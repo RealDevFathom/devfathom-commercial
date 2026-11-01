@@ -3,7 +3,11 @@ import { redirect } from 'next/navigation';
 import { signInRedirectPath, workspaceRedirectForPasswordChange } from '@/lib/auth/session-state';
 import { AppShell } from '@/components/layout/app-shell';
 import { TenantSessionBoundary } from '@/components/tenant-session-boundary';
-import { resolveTenantActor, resolveTenantSessionDenial } from '@/lib/tenancy/tenant-actor';
+import {
+  resolveTenantActor,
+  resolveTenantSessionDenial,
+  resolveTenantMismatchLoginPath,
+} from '@/lib/tenancy/tenant-actor';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { resolveOrganizationEntitlements } from '@/lib/entitlements';
 import { assertWorkspaceIdentity } from '@/lib/tenant-brand';
@@ -31,6 +35,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // accurate remedy instead of "contact an administrator" for a dead session.
   const actor = await resolveTenantActor();
   if (!actor?.session.user?.id) {
+    const correctHostLogin = await resolveTenantMismatchLoginPath();
+    if (correctHostLogin) redirect(correctHostLogin);
     const denial = await resolveTenantSessionDenial();
     redirect(denial ? signInRedirectPath(denial) : '/login');
   }

@@ -37,7 +37,7 @@ export default async function NewOrganizationPage({
 }: {
   searchParams: Promise<{ opportunityId?: string; vertical?: string }>;
 }) {
-  await requirePlatformRead('/platform/organizations');
+  const actor = await requirePlatformRead('/platform/organizations');
   const query = await searchParams;
   const dedicatedProvisioningConfigured = isDedicatedProvisioningConfigured();
   const vertical = chosenVertical(query.vertical);
@@ -270,6 +270,12 @@ export default async function NewOrganizationPage({
                 type: 'number',
                 required: true,
                 defaultValue: packages[0]?.defaultSeats ?? 5,
+                disabled: actor.role !== 'SUPER_ADMIN',
+                help: 'Only a platform super admin can override seats, up to the package limit.',
+                defaultFrom: {
+                  field: 'packageId',
+                  values: Object.fromEntries(packages.map((item) => [item.id, item.defaultSeats])),
+                },
                 min: 1,
                 max: 100000,
               },

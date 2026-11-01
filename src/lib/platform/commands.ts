@@ -619,32 +619,26 @@ async function syncContractEntitlements(
   }
 ) {
   if (!['ACTIVE', 'GRACE', 'RENEWAL_DUE'].includes(input.status)) return;
-  const catalogModules = await db.platformModule.findMany({
-    where: { active: true },
-    select: { id: true },
-  });
-  const included = new Set(input.moduleIds);
   const expiresAt = input.graceUntil ?? input.endDate;
-  for (const catalogModule of catalogModules) {
-    const enabled = included.has(catalogModule.id);
+  for (const moduleId of input.moduleIds) {
     await db.organizationModule.upsert({
       where: {
         organizationId_moduleId: {
           organizationId: input.organizationId,
-          moduleId: catalogModule.id,
+          moduleId,
         },
       },
       update: {
-        status: enabled ? 'ENABLED' : 'DISABLED',
-        expiresAt: enabled ? expiresAt : null,
+        status: 'ENABLED',
+        expiresAt,
         reason: `Contract ${input.number}`,
         changedById: actor.id,
       },
       create: {
         organizationId: input.organizationId,
-        moduleId: catalogModule.id,
-        status: enabled ? 'ENABLED' : 'DISABLED',
-        expiresAt: enabled ? expiresAt : null,
+        moduleId,
+        status: 'ENABLED',
+        expiresAt,
         reason: `Contract ${input.number}`,
         changedById: actor.id,
       },
@@ -668,8 +662,8 @@ const organizationInput = z
     timezone: z.string().trim().min(1).max(100).default('UTC'),
     locale: z.string().trim().min(2).max(20).default('en'),
     currency: currency.default('USD'),
-    // Legacy callers may omit seats; the selected package supplies the baseline.
-    seatLimit: z.coerce.number().int().min(1).max(100_000).optional(),
+    // Only a platform super admin may use this untrusted override.
+    seatLimit: z.unknown().optional(),
     gracePeriodDays: z.coerce.number().int().min(0).max(365).default(0),
     dataResidency: optionalText.optional(),
     primaryContactName: requiredText,
@@ -881,8 +875,11 @@ async function bootstrapOrganization(
       400
     );
   }
+  const seatLimit =
+    actor?.role === 'SUPER_ADMIN' && input.seatLimit !== undefined
+      ? z.coerce.number().int().min(1).max(packageRecord.defaultSeats).parse(input.seatLimit)
+      : packageRecord.defaultSeats;
   const password = demo ? null : await hash(input.adminPassword, 12);
-  const bootstrapSeatLimit = input.seatLimit ?? packageRecord.defaultSeats;
   const organization = await createOrganizationRecord(db, {
     ...(demo ? { id: demo.identity.organizationId, isDemo: true } : {}),
     slug: input.slug,
@@ -895,7 +892,7 @@ async function bootstrapOrganization(
     timezone: input.timezone,
     locale: input.locale,
     currency: input.currency,
-    seatLimit: bootstrapSeatLimit,
+    seatLimit,
     gracePeriodDays: input.gracePeriodDays,
     dataResidency: input.dataResidency,
     primaryContactName: input.primaryContactName,
@@ -959,7 +956,7 @@ async function bootstrapOrganization(
   if (existingAdmin) {
     throw new PlatformSecurityError('A user with this email already exists.', 409);
   }
-  await lockOrganizationSeat(db, organization.id, bootstrapSeatLimit);
+  await lockOrganizationSeat(db, organization.id, seatLimit);
   const admin = await db.user.create({
     data: {
       ...(demo ? { id: demo.identity.managerUserId } : {}),
@@ -968,6 +965,7 @@ async function bootstrapOrganization(
       name: input.adminName,
       email: input.adminEmail,
       password,
+      mustChangePassword: !demo,
       role: 'ADMIN',
       department: adminDepartmentKeyForVertical(input.vertical),
       title: 'Organization administrator',
@@ -975,7 +973,7 @@ async function bootstrapOrganization(
     },
   });
   if (demo) {
-    await lockOrganizationSeat(db, organization.id, bootstrapSeatLimit);
+    await lockOrganizationSeat(db, organization.id, seatLimit);
     await db.user.create({
       data: {
         id: demoRestaurantApproverUserId(demo.identity.seatNumber),
@@ -1348,7 +1346,6 @@ export async function bootstrapDemoRestaurantOrganizationInTransaction(
         timezone: 'Asia/Karachi',
         locale: 'en-PK',
         currency: 'PKR',
-        seatLimit: 1,
         gracePeriodDays: 0,
         dataResidency: null,
         primaryContactName: identity.displayName,

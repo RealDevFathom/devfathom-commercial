@@ -105,14 +105,14 @@ describe('organization.create admin email', () => {
     }
   );
 
-  it('stores the canonical form for a new administrator', async () => {
+  it('canonicalizes the administrator email and requires a password change', async () => {
     mocks.userFindFirst.mockResolvedValue(null);
 
     await executePlatformCommand(actor, 'organization.create', payload('Admin@Acme.COM'), request);
 
     expect(mocks.userCreate).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ email: 'admin@acme.com' }),
+        data: expect.objectContaining({ email: 'admin@acme.com', mustChangePassword: true }),
       })
     );
   });
@@ -351,6 +351,32 @@ describe('organization.create package seat fallback', () => {
     vi.clearAllMocks();
     mocks.userFindFirst.mockResolvedValue(null);
     mocks.userCreate.mockResolvedValue({ id: 'user_new' });
+  });
+
+  it.each([1, 25, 100000, 0, -1, 'invalid'])('ignores a submitted seat limit of %j', async (seatLimit) => {
+    await executePlatformCommand(
+      { id: 'op_sales', role: 'SALES' } as never,
+      'organization.create',
+      { ...payload('admin@acme.com'), seatLimit },
+      request
+    );
+    expect(platformDb.organization.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ seatLimit: 42 }) })
+    );
+  });
+
+  it.each([1, 25, 42])('accepts a super admin override of %j', async (seatLimit) => {
+    await executePlatformCommand(actor, 'organization.create',
+      { ...payload('admin@acme.com'), seatLimit }, request);
+    expect(platformDb.organization.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ seatLimit }) })
+    );
+  });
+
+  it.each([0, -1, 43, 100000, 'invalid', 1.5])('rejects a super admin override of %j', async (seatLimit) => {
+    await expect(executePlatformCommand(actor, 'organization.create',
+      { ...payload('admin@acme.com'), seatLimit }, request)).rejects.toThrow();
+    expect(platformDb.organization.create).not.toHaveBeenCalled();
   });
 
   it('inherits package default seats when a legacy payload omits seatLimit', async () => {

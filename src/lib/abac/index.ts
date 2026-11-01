@@ -10,6 +10,7 @@
  *   if (!(await can(subject, 'resignation:review', { type: 'Resignation', ... })))
  *     throw new TRPCError({ code: 'FORBIDDEN' });
  */
+import { capabilityMatches } from './capabilities';
 import type { AuthzDb } from '@/lib/authz';
 import { POLICIES, type Action } from './policies';
 import type { Environment, ResourceAttributes, Subject } from './types';
@@ -24,14 +25,6 @@ export type CanOptions = {
   ip?: string | null;
   db?: AuthzDb;
 };
-
-function capabilityMatches(rule: string, action: string): boolean {
-  // Legacy pharmacy grants use a dot; normalize them at the decision point.
-  if (action.startsWith('pharmacy:')) rule = rule.replace(/^pharmacy\./, 'pharmacy:');
-  if (rule === '*' || rule === action) return true;
-  if (!rule.endsWith(':*')) return false;
-  return action.startsWith(rule.slice(0, -1));
-}
 
 async function customDecision(
   db: AuthzDb,

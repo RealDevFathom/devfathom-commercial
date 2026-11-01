@@ -489,8 +489,11 @@ describe('restaurant corrected-close backbone', () => {
         },
       });
       expect(db.restaurantDrawerSession.findMany).toHaveBeenCalledWith({
+        take: 500,
+        orderBy: { id: 'asc' },
         where: { branchId: { in: ['b1'] }, businessDate: { gte: date, lte: date } },
         select: {
+          id: true,
           branchId: true,
           businessDate: true,
           createdAt: true,

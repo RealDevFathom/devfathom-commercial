@@ -144,3 +144,10 @@ describe('actor-facing tenant URLs', () => {
     );
   });
 });
+
+it('preserves query parameters in the signed-out login callback', async () => {
+  const response = await proxy(tenantRequest('/pharmacy/counter?lane=1&filter=a%2Bb'));
+  const target = new URL(response.headers.get('location')!);
+  expect(target.pathname).toBe('/login');
+  expect(target.searchParams.get('callbackUrl')).toBe('/pharmacy/counter?lane=1&filter=a%2Bb');
+});

@@ -1,3 +1,8 @@
+-- pg_trgm's function identities are referenced as regprocedure values below.
+-- Install it in a separate statement so PostgreSQL can resolve those identities
+-- when it plans the hardening block on a brand-new database.
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
 -- Records hardening steps that could not be applied on this cluster. A managed
 -- PostgreSQL service installs trusted extensions under an internal superuser
 -- (Azure Database for PostgreSQL uses "azuresu") that no customer role may
@@ -162,6 +167,28 @@ BEGIN
          ORDER BY procedure.oid
       LOOP
         EXECUTE format('REVOKE EXECUTE ON FUNCTION %s FROM PUBLIC', member.identity);
+
+        -- The application uses only these pg_trgm search entry points. Grant
+        -- them while acting as the extension object owner; the later migration
+        -- verifies this ACL and fails loudly if preparation was skipped.
+        IF target_extension = 'pg_trgm'
+           AND member.identity = ANY (ARRAY[
+             'public.similarity(text,text)'::regprocedure,
+             'public.similarity_op(text,text)'::regprocedure,
+             'public.word_similarity(text,text)'::regprocedure,
+             'public.word_similarity_op(text,text)'::regprocedure,
+             'public.word_similarity_commutator_op(text,text)'::regprocedure,
+             'public.strict_word_similarity(text,text)'::regprocedure,
+             'public.strict_word_similarity_op(text,text)'::regprocedure,
+             'public.strict_word_similarity_commutator_op(text,text)'::regprocedure
+           ])
+           AND EXISTS (
+             SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'devfathom_app'
+           ) THEN
+          EXECUTE format(
+            'GRANT EXECUTE ON FUNCTION %s TO devfathom_app', member.identity
+          );
+        END IF;
       END LOOP;
 
       EXECUTE format('SET LOCAL ROLE %I', configured_role);

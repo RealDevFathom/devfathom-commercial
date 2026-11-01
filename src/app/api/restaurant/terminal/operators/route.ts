@@ -37,7 +37,13 @@ export const GET = withTerminalAuth(async (ctx) => {
         staffProfileId: operator.id,
         displayName: operator.displayName,
         role: operator.user?.organizationRole?.name ?? operator.user?.title ?? 'Staff',
-        canApprove: await operatorHasCapability(ctx.db, operator.id, 'coauth:approve', now),
+        canApprove: await operatorHasCapability(
+          ctx.db,
+          operator.id,
+          'coauth:approve',
+          now,
+          ctx.device.branchId
+        ),
       }))
     ),
   });

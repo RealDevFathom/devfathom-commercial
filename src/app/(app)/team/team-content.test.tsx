@@ -2,6 +2,9 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({
+  role: 'ADMIN',
+  modules: ['admin'] as string[],
+  directory: vi.fn(() => ({ data: [], isLoading: false })),
   departments: {
     data: [] as Array<{ key: string; name: string; active: boolean }>,
     isFetching: false,
@@ -10,14 +13,23 @@ const state = vi.hoisted(() => ({
   },
   invite: { mutate: vi.fn(), isPending: false },
 }));
+vi.mock('next-auth/react', () => ({
+  useSession: () => ({ data: { user: { role: state.role } } }),
+}));
+vi.mock('@/components/entitlements-provider', () => ({
+  useEntitlements: () => ({ enabledModules: state.modules }),
+}));
 vi.mock('@/lib/trpc', () => ({
   trpc: {
     useUtils: () => ({ team: { getAll: { invalidate: vi.fn() } } }),
     organizationAdmin: { departments: { useQuery: () => state.departments } },
-    team: { inviteMember: { useMutation: () => state.invite } },
+    team: {
+      getAll: { useQuery: state.directory },
+      inviteMember: { useMutation: () => state.invite },
+    },
   },
 }));
-import { AddMemberModal } from './team-content';
+import { AddMemberModal, TeamContent } from './team-content';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -93,5 +105,20 @@ describe('tenant department invitation', () => {
     expect(screen.getByText('Forbidden')).toBeVisible();
     expect(screen.getByLabelText('Department')).toHaveValue('COUNTER');
     expect(screen.getByPlaceholderText('John Doe')).toHaveValue('Second operator');
+  });
+});
+
+describe('baseline workspace invitations', () => {
+  it('shows Add Member without HR and opens the invitation form without fetching HR data', () => {
+    render(<TeamContent />);
+    fireEvent.click(screen.getByRole('button', { name: 'Add Member' }));
+    expect(screen.getByText('Add Team Member')).toBeVisible();
+    expect(state.directory).toHaveBeenCalledWith(undefined, { enabled: false });
+  });
+  it('keeps invitations unavailable to employees', () => {
+    state.role = 'EMPLOYEE';
+    render(<TeamContent />);
+    expect(screen.queryByRole('button', { name: 'Add Member' })).toBeNull();
+    state.role = 'ADMIN';
   });
 });

@@ -25,6 +25,11 @@ import {
 } from './vertical-catalog';
 
 describe('module catalog routing', () => {
+  it('uses the invitation entitlement for Team while retaining HR on details and stats', () => {
+    expect(moduleForPath('/team')).toBe(moduleForProcedure('team.inviteMember'));
+    expect(moduleForPath('/team/member-1')).toBe('hr');
+    expect(moduleForPath('/team/stats')).toBe('hr');
+  });
   it.each([
     ['projects.list', 'projects'],
     ['trelloImport.preview', 'projects'],
@@ -119,7 +124,7 @@ describe('module catalog routing', () => {
 
   it('matches exact pages and descendants without matching lookalike prefixes', () => {
     expect(moduleForPath('/restaurant/growth')).toBe('restaurant-core');
-    expect(moduleForPath('/team')).toBe('hr');
+    expect(moduleForPath('/team')).toBe('admin');
     expect(moduleForPath('/team/stats')).toBe('hr');
     expect(moduleForPath('/projects/project_123')).toBe('projects');
     expect(moduleForPath('/project-settings')).toBeNull();

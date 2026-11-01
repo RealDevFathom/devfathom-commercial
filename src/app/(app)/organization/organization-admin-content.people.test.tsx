@@ -109,6 +109,19 @@ beforeEach(() => {
 
 afterEach(cleanup);
 
+it.each([
+  [0, '0 of 10 licensed seats are currently occupied.'],
+  [1, '1 of 10 licensed seats is currently occupied.'],
+  [3, '3 of 10 licensed seats are currently occupied.'],
+])('uses correct seat-occupancy agreement for %i occupied seats', (count, description) => {
+  const data = overviewData.current as { entitlements: { activeSeats: number } };
+  data.entitlements.activeSeats = count;
+  render(<OrganizationAdminContent />);
+
+  const people = screen.getByRole('heading', { name: 'People and access' }).closest('section')!;
+  expect(within(people).getByText(description)).toBeInTheDocument();
+});
+
 describe('organization people and access — staff onboarding', () => {
   it('offers an add-staff form with the organization pharmacy departments', () => {
     render(<OrganizationAdminContent />);
@@ -167,4 +180,22 @@ describe('organization people and access — staff onboarding', () => {
     const options = [...memberDepartment.querySelectorAll('option')].map((o) => o.textContent);
     expect(options).toEqual(['Counter', 'Dispensary', 'Store']);
   });
+});
+
+it('limits the license ledger to workspace modules and explicit grants', () => {
+  const data = overviewData.current as { entitlements: { modules: unknown[] } };
+  data.entitlements.modules = [
+    { key: 'pharmacy-inventory', name: 'Pharmacy Inventory', source: 'PACKAGE', enabled: true },
+    { key: 'pharmacy-crm', name: 'Pharmacy CRM', source: 'NONE', enabled: false },
+    { key: 'restaurant-core', name: 'Restaurant Core', source: 'NONE', enabled: false },
+    { key: 'hr', name: 'HR', source: 'NONE', enabled: false },
+    { key: 'notes', name: 'Notes', source: 'OVERRIDE', enabled: true },
+  ];
+  render(<OrganizationAdminContent />);
+  const ledger = screen.getByRole('heading', { name: 'License and modules' }).closest('section')!;
+  expect(within(ledger).getByText('Pharmacy Inventory')).toBeInTheDocument();
+  expect(within(ledger).getByText('Pharmacy CRM')).toBeInTheDocument();
+  expect(within(ledger).getByText('Notes')).toBeInTheDocument();
+  expect(within(ledger).queryByText('Restaurant Core')).not.toBeInTheDocument();
+  expect(within(ledger).queryByText('HR')).not.toBeInTheDocument();
 });
