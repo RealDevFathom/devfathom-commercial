@@ -1,0 +1,45 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  DevFathom tenant custom domain (for example sehatcart.devfathom.com) whose DNS
+  lives outside Route 53 (Cloudflare). Issues a dedicated public ACM certificate
+  validated by DNS and attaches it to the existing HTTPS listener as an extra
+  SNI certificate. The environment stack and its default certificate are not
+  touched. The listener already forwards every host to the app, so no listener
+  rule is needed; the app maps the host to the organization through a VERIFIED
+  OrganizationDomain row.
+
+  Stack creation waits on certificate validation: while it is in progress, the
+  validation CNAME is in the stack events (StatusReason of Certificate) and in
+  `aws acm describe-certificate ... DomainValidationOptions[0].ResourceRecord`.
+  Publish that CNAME (DNS-only) in Cloudflare and the stack completes.
+
+Parameters:
+  CustomDomainName:
+    Type: String
+    AllowedPattern: '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$'
+    Description: Exact tenant host, for example sehatcart.devfathom.com.
+  HttpsListenerArn:
+    Type: String
+    AllowedPattern: '^arn:aws:elasticloadbalancing:.+:listener/app/.+$'
+    Description: ARN of the environment stack's HTTPS (443) listener.
+
+Resources:
+  Certificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Ref CustomDomainName
+      ValidationMethod: DNS
+      Tags:
+        - Key: Name
+          Value: !Ref CustomDomainName
+
+  ListenerCertificate:
+    Type: AWS::ElasticLoadBalancingV2::ListenerCertificate
+    Properties:
+      ListenerArn: !Ref HttpsListenerArn
+      Certificates:
+        - CertificateArn: !Ref Certificate
+
+Outputs:
+  CertificateArn:
+    Value: !Ref Certificate

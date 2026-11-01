@@ -83,6 +83,15 @@ beforeEach(() => {
           permissions: [],
           _count: { users: 0 },
         },
+        {
+          id: 'role_goods_in',
+          key: 'goods-in',
+          name: 'Goods-in',
+          description: 'Receive pharmacy deliveries',
+          isSystem: false,
+          permissions: [{ capability: 'pharmacy.procurement', effect: 'ALLOW' }],
+          _count: { users: 0 },
+        },
       ],
       users: [
         {
@@ -110,6 +119,21 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('organization people and access — staff onboarding', () => {
+  it('uses singular seat copy when the license limit is one', () => {
+    const data = overviewData.current as { entitlements: { seatLimit: number } };
+    data.entitlements.seatLimit = 1;
+
+    render(<OrganizationAdminContent />);
+
+    expect(screen.getByText('1 of 1 licensed seat is currently occupied.')).toBeInTheDocument();
+  });
+
+  it('keeps plural seat copy when the license limit is greater than one', () => {
+    render(<OrganizationAdminContent />);
+
+    expect(screen.getByText('1 of 10 licensed seats is currently occupied.')).toBeInTheDocument();
+  });
+
   it('offers an add-staff form with the organization pharmacy departments', () => {
     render(<OrganizationAdminContent />);
 
@@ -171,12 +195,15 @@ describe('organization people and access — staff onboarding', () => {
   it('omits an unchanged system role when updating member access', () => {
     render(<OrganizationAdminContent />);
 
-    const form = screen.getByRole('button', { name: 'Update access', hidden: true }).closest('form')!;
+    const form = screen
+      .getByRole('button', { name: 'Update access', hidden: true })
+      .closest('form')!;
     fireEvent.submit(form);
 
     const update = mutationFor('updateMember').mutate;
     expect(update).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'owner_1', status: 'ACTIVE', department: 'COUNTER' })
+      expect.objectContaining({ id: 'owner_1', status: 'ACTIVE', department: 'COUNTER' }),
+      expect.anything()
     );
     expect(update.mock.calls[0]![0]).not.toHaveProperty('role');
   });
@@ -184,13 +211,46 @@ describe('organization people and access — staff onboarding', () => {
   it('sends a changed system role for server authorization', () => {
     render(<OrganizationAdminContent />);
 
-    const form = screen.getByRole('button', { name: 'Update access', hidden: true }).closest('form')!;
+    const form = screen
+      .getByRole('button', { name: 'Update access', hidden: true })
+      .closest('form')!;
     fireEvent.change(form.querySelector('select[name="role"]')!, { target: { value: 'HR' } });
     fireEvent.submit(form);
 
     expect(mutationFor('updateMember').mutate).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'owner_1', role: 'HR' })
+      expect.objectContaining({ id: 'owner_1', role: 'HR' }),
+      expect.anything()
     );
+  });
+
+  it('restores server-confirmed access when a Goods-in grant is refused', () => {
+    render(<OrganizationAdminContent />);
+
+    const access = screen.getByLabelText('Custom role');
+    fireEvent.change(access, { target: { value: 'role_goods_in' } });
+    fireEvent.submit(access.closest('form')!);
+
+    expect(mutationFor('updateMember').mutate).toHaveBeenCalledWith(
+      expect.objectContaining({ organizationRoleId: 'role_goods_in' }),
+      expect.objectContaining({ onError: expect.any(Function) })
+    );
+    mutationFor('updateMember').mutate.mock.calls[0]![1].onError();
+
+    expect(access).toHaveValue('');
+  });
+
+  it('removes a displayed Goods-in grant when refreshed access no longer allows it', () => {
+    const data = overviewData.current as {
+      organization: { users: Array<{ organizationRoleId: string | null }> };
+    };
+    data.organization.users[0]!.organizationRoleId = 'role_goods_in';
+    const view = render(<OrganizationAdminContent />);
+    expect(screen.getByLabelText('Custom role')).toHaveValue('role_goods_in');
+
+    data.organization.users[0]!.organizationRoleId = null;
+    view.rerender(<OrganizationAdminContent />);
+
+    expect(screen.getByLabelText('Custom role')).toHaveValue('');
   });
 
   it('shows the complete password policy when adding or resetting a staff password', () => {

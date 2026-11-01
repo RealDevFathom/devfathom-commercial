@@ -6,6 +6,7 @@ import { Prisma } from '@/generated/prisma/client';
 import { can, subjectFromSession } from '@/lib/abac';
 import { readAskFathomSettings } from '@/lib/ai/ask-fathom-settings';
 import { passwordSchema } from '@/lib/password-policy';
+import { organizationRolePermissionsSchema } from '@/lib/organization-role';
 import { encryptSecret } from '@/lib/secret-crypto';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 import { ianaTimezone } from '@/lib/timezone';
@@ -421,42 +422,42 @@ export const organizationAdminRouter = router({
           ),
         name: z.string().trim().min(2).max(150),
         description: z.string().trim().max(500).nullable(),
-        permissions: z
-          .array(
-            z.object({
-              capability: z.string().trim().min(1).max(150),
-              effect: z.enum(['ALLOW', 'DENY']),
-            })
-          )
-          .max(250),
+        permissions: organizationRolePermissionsSchema,
       })
     )
     .mutation(async ({ ctx, input }) => {
       const id = organizationId(ctx);
       const { id: roleId, permissions, ...values } = input;
-      const existing = roleId
-        ? await ctx.db.organizationRole.findFirst({
-            where: { id: roleId, organizationId: id },
-          })
-        : null;
-      if (existing?.isSystem) {
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'System roles cannot be modified.' });
-      }
-      const role = roleId
-        ? await ctx.db.organizationRole.update({ where: { id: roleId }, data: values })
-        : await ctx.db.organizationRole.create({ data: { organizationId: id, ...values } });
-      await ctx.db.organizationRolePermission.deleteMany({
-        where: { organizationRoleId: role.id },
-      });
-      if (permissions.length) {
-        await ctx.db.organizationRolePermission.createMany({
-          data: permissions.map((permission) => ({
-            organizationId: id,
-            organizationRoleId: role.id,
-            ...permission,
-          })),
+      const role = await ctx.db.$transaction(async (tx) => {
+        // Serialize role replacements for this tenant so concurrent edits cannot
+        // interleave their delete/insert sequences.
+        await tx.$queryRaw`SELECT "id" FROM "organizations" WHERE "id" = ${id} FOR UPDATE`;
+        const existing = roleId
+          ? await tx.organizationRole.findFirst({ where: { id: roleId, organizationId: id } })
+          : null;
+        if (roleId && !existing) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Role not found.' });
+        }
+        if (existing?.isSystem) {
+          throw new TRPCError({ code: 'FORBIDDEN', message: 'System roles cannot be modified.' });
+        }
+        const saved = roleId
+          ? await tx.organizationRole.update({ where: { id: roleId }, data: values })
+          : await tx.organizationRole.create({ data: { organizationId: id, ...values } });
+        await tx.organizationRolePermission.deleteMany({
+          where: { organizationRoleId: saved.id },
         });
-      }
+        if (permissions.length) {
+          await tx.organizationRolePermission.createMany({
+            data: permissions.map((permission) => ({
+              organizationId: id,
+              organizationRoleId: saved.id,
+              ...permission,
+            })),
+          });
+        }
+        return saved;
+      });
       annotateAudit(ctx, {
         targetType: 'OrganizationRole',
         targetId: role.id,

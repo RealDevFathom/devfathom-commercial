@@ -5,7 +5,8 @@ import { createHash } from 'node:crypto';
 import { Prisma, type RestaurantTenderType } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-import { businessDateToUtcDate } from './business-date';
+import { businessDateToUtcDate, resolveBusinessDate } from './business-date';
+import { DailyCloseError } from './daily-close-errors';
 import {
   beginMoneyIdempotent,
   foldExpectedCash,
@@ -17,6 +18,10 @@ import {
 } from './drawer-sessions';
 import { sub, sum, ZERO } from './money';
 import { enqueueInsightRollup } from './insight-rollups';
+import { lockMoneyDay } from './money-day';
+
+export { assertMoneyDayOpen } from './money-day';
+export { DailyCloseError, type DailyCloseErrorReason } from './daily-close-errors';
 
 /**
  * M5-L3 / C9 / §11.3 — the IMMUTABLE daily close.
@@ -55,27 +60,6 @@ import { enqueueInsightRollup } from './insight-rollups';
  * Every value is Prisma.Decimal (C2). Money never touches a float; equality is
  * exact Decimal string equality.
  */
-
-export type DailyCloseErrorReason =
-  | 'UNSETTLED_BILL'
-  | 'OPEN_DRAWER'
-  | 'CLOSE_EXISTS'
-  | 'NOTHING_TO_CORRECT'
-  | 'NOT_TIP'
-  | 'CO_AUTH_REQUIRED'
-  | 'REASON_REQUIRED'
-  | 'CLOSE_NOT_FOUND'
-  | 'INVALID';
-
-export class DailyCloseError extends Error {
-  constructor(
-    message: string,
-    readonly reason: DailyCloseErrorReason
-  ) {
-    super(message);
-    this.name = 'DailyCloseError';
-  }
-}
 
 type BillStatus = 'OPEN' | 'SETTLED' | 'VOID';
 type TenderType = 'CASH' | 'CARD' | 'OTHER';
@@ -240,6 +224,7 @@ export function resolveChainTip<T extends CloseChainNode>(closes: readonly T[]):
 
 type LoadedInputs = AggregateInputs & {
   openBillCount: number;
+  unresolvedOrderCount: number;
   openDrawerCount: number;
 };
 
@@ -261,6 +246,13 @@ async function loadCloseInputs(
       compTotal: true,
       discountTotal: true,
       grandTotal: true,
+    },
+  });
+  const unresolvedOrderCount = await db.restaurantOrder.count({
+    where: {
+      branchId,
+      businessDate,
+      status: { in: ['OPEN', 'SENT', 'IN_PREPARATION', 'READY', 'SERVED', 'PAYMENT_PENDING'] },
     },
   });
   const tenders = await db.restaurantTender.findMany({
@@ -295,6 +287,7 @@ async function loadCloseInputs(
       countedCash: d.countedCash,
     })),
     openBillCount: bills.filter((b) => b.status === 'OPEN').length,
+    unresolvedOrderCount,
     openDrawerCount: drawers.filter((d) => d.status === 'OPEN').length,
   };
 }
@@ -310,6 +303,7 @@ export type ClosePreview = CloseAggregate & {
     allBillsResolved: boolean;
     allDrawersClosed: boolean;
     openBillCount: number;
+    unresolvedOrderCount: number;
     openDrawerCount: number;
   };
   /** The current chain-tip close for the date, if one has already been cut. */
@@ -335,9 +329,10 @@ export async function closePreview(db: ScopedDb, input: ClosePreviewInput): Prom
     businessDate,
     ...aggregate,
     readiness: {
-      allBillsResolved: loaded.openBillCount === 0,
+      allBillsResolved: loaded.openBillCount === 0 && loaded.unresolvedOrderCount === 0,
       allDrawersClosed: loaded.openDrawerCount === 0,
       openBillCount: loaded.openBillCount,
+      unresolvedOrderCount: loaded.unresolvedOrderCount,
       openDrawerCount: loaded.openDrawerCount,
     },
     existingCloseId: resolveChainTip(existing)?.id ?? null,
@@ -401,13 +396,19 @@ async function persistClose(
   return close.id;
 }
 
-/** Guard: a close can only be cut/corrected when every bill for the date is
- * SETTLED or VOID and every drawer session for the date is CLOSED (C9). */
+/** Guard: a close can only be cut/corrected when every bill and billable order
+ * for the date is resolved and every drawer session is CLOSED (C9). */
 function assertReadyToClose(loaded: LoadedInputs): void {
   if (loaded.openBillCount > 0) {
     throw new DailyCloseError(
       'The business day has unsettled bills; settle or void every bill before closing.',
       'UNSETTLED_BILL'
+    );
+  }
+  if (loaded.unresolvedOrderCount > 0) {
+    throw new DailyCloseError(
+      'The business day has active orders; resolve them before closing.',
+      'ACTIVE_ORDERS'
     );
   }
   if (loaded.openDrawerCount > 0) {
@@ -435,15 +436,43 @@ export type CutCloseResult = {
  * the date (a correction supersedes an existing close instead). Snapshot + tender
  * children are written in ONE transaction; idempotent (`cash:close`).
  */
-export async function cutClose(db: ScopedDb, input: CutCloseInput): Promise<CutCloseResult> {
+export async function cutClose(
+  db: ScopedDb,
+  input: CutCloseInput,
+  now?: Date
+): Promise<CutCloseResult> {
   const businessDate = businessDateToUtcDate(input.businessDate);
   return runMoneyTransaction(db, async (tx) => {
-    await lockDailyClose(tx, input.branchId, input.businessDate);
+    await lockMoneyDay(tx, input.branchId, input.businessDate);
     const canonical = canonicalClosePayload({
       version: 1,
       branchId: input.branchId,
       businessDate: input.businessDate,
     });
+    // A completed close must stay replayable even if the cutoff/timezone (or DST)
+    // later makes its date resolve as "future". An existing key is validated by
+    // beginMoneyIdempotent (same command + payload hash + completed) or rejected;
+    // only brand-new closes are subject to the future-date guard below.
+    const priorKey = await tx.restaurantMoneyIdempotencyKey.findUnique({
+      where: { deviceId_key: { deviceId: input.actor.deviceId, key: input.actor.idempotencyKey } },
+      select: { commandType: true },
+    });
+    if (priorKey) {
+      const prior = await beginMoneyIdempotent(tx, input.actor, 'cash.day_close', canonical);
+      if (prior.replay) return decodeFrozenCloseResult(prior.resultPayload);
+    }
+    const branch = await tx.restaurantBranch.findUnique({
+      where: { id: input.branchId },
+      select: { timezone: true, businessDayCutoff: true },
+    });
+    if (!branch) throw new DailyCloseError('The branch does not exist.', 'INVALID');
+    // Sample the server clock after lock acquisition: waiting can cross the cutoff.
+    if (
+      input.businessDate >
+      resolveBusinessDate(now ?? new Date(), branch.timezone, branch.businessDayCutoff)
+    ) {
+      throw new DailyCloseError('A future business day cannot be closed.', 'INVALID');
+    }
     const idem = await beginMoneyIdempotent(tx, input.actor, 'cash.day_close', canonical);
     if (idem.replay) return decodeFrozenCloseResult(idem.resultPayload);
 
@@ -520,7 +549,7 @@ export async function correctClose(
   }
 
   return runMoneyTransaction(db, async (tx) => {
-    await lockDailyClose(tx, input.branchId, input.businessDate);
+    await lockMoneyDay(tx, input.branchId, input.businessDate);
     const canonical = canonicalClosePayload({
       version: 1,
       branchId: input.branchId,
@@ -650,38 +679,6 @@ function decodeFrozenCorrectCloseResult(
     throw new DailyCloseError('The stored daily-close replay result is invalid.', 'INVALID');
   }
   return { ...result, supersedesCloseId: String(payload.supersedesCloseId) };
-}
-
-/** Serialize a close chain at the organization + branch + business-date grain.
- * The transaction-scoped advisory lock releases automatically on commit/rollback. */
-async function lockDailyClose(tx: ScopedDb, branchId: string, businessDate: string): Promise<void> {
-  const branch = await tx.restaurantBranch.findUnique({
-    where: { id: branchId },
-    select: { organizationId: true },
-  });
-  if (!branch) throw new DailyCloseError('The branch does not exist.', 'INVALID');
-  const key = `${branch.organizationId}:${branchId}:${businessDate}`;
-  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`;
-}
-
-/** Money writers hold the same lock as cut/correct until their transaction ends.
- * ponytail: branch-day serialization; use shared writer locks if throughput requires it. */
-export async function assertMoneyDayOpen(
-  tx: ScopedDb,
-  branchId: string,
-  businessDate: Date
-): Promise<void> {
-  await lockDailyClose(tx, branchId, businessDate.toISOString().slice(0, 10));
-  const close = await tx.restaurantDailyClose.findFirst({
-    where: { branchId, businessDate },
-    select: { id: true },
-  });
-  if (close) {
-    throw new DailyCloseError(
-      'This business day is closed; no money can be posted.',
-      'CLOSE_EXISTS'
-    );
-  }
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────

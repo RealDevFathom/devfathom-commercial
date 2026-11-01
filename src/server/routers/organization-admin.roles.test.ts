@@ -32,7 +32,10 @@ const db = {
   },
   organizationRolePermission: { deleteMany: vi.fn(), createMany: vi.fn() },
   organizationScimToken: { findFirst: vi.fn(), create: vi.fn(), update: vi.fn() },
-  $transaction: vi.fn(async (run: (tx: unknown) => Promise<unknown>) => run(db)),
+  $queryRaw: vi.fn(),
+  $transaction: vi.fn(
+    async (run: (tx: unknown) => Promise<unknown>): Promise<unknown> => run(db)
+  ),
 };
 
 function caller(enabledModules = ['identity']) {

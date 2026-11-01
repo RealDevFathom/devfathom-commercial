@@ -96,12 +96,13 @@ function account(id = 'family-1') {
   };
 }
 
-function customer(whatsappOptIn: boolean | null) {
+function customer(whatsappOptIn: boolean | null, preferredLanguage: 'en' | 'ur' = 'en') {
   return {
     id: 'customer-1',
     patientId: 'patient-1',
     active: true,
     whatsappOptIn,
+    preferredLanguage,
     patient: { phone: '0300-1234567' },
   };
 }
@@ -187,6 +188,7 @@ describe('processDueWhatsAppKhataReminders', () => {
         to: '923001234567',
         template: 'khataReminder',
         templateName: 'khata_due_v1',
+        language: 'en',
         parameters: ['Khan household', '500.00'],
       },
     ]);
@@ -244,6 +246,211 @@ describe('processDueWhatsAppKhataReminders', () => {
     });
     expect(result).toMatchObject({ configured: false, scanned: 0 });
     expect(provider.calls).toEqual([]);
+    expect(result.configurationErrors).toContain('KHATA_TEMPLATES_NOT_CONFIGURED');
+  });
+
+  it('reports configured false when Meta credentials are absent', async () => {
+    const metaConfig = readWhatsAppConfig({
+      PHARMACY_WHATSAPP_PROVIDER: 'meta',
+      PHARMACY_WHATSAPP_ORGANIZATION_ID: 'org_a',
+      PHARMACY_WHATSAPP_PHONE_NUMBER_ID: 'owner-number',
+      PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER_EN: 'khata_due_en',
+    });
+    const result = await processDueWhatsAppKhataReminders({ now: NOW, config: metaConfig });
+    expect(result).toMatchObject({ configured: false, scanned: 0 });
+    expect(result.configurationErrors).toContain('ACCESS_TOKEN_NOT_CONFIGURED');
+  });
+
+  it('uses the persisted Urdu preference and its explicitly configured parameter order', async () => {
+    const urduConfig = readWhatsAppConfig({
+      PHARMACY_WHATSAPP_ORGANIZATION_ID: 'org_a',
+      PHARMACY_WHATSAPP_PHONE_NUMBER_ID: 'sandbox-owner',
+      PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER_EN: 'khata_due_en',
+      PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER_UR: 'khata_due_ur',
+      PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER_UR_PARAMETERS: 'balance,name',
+    });
+    store.accounts = [account()];
+    store.customers = [customer(true, 'ur')];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    const provider = new MockWhatsAppProvider(urduConfig);
+
+    const result = await processDueWhatsAppKhataReminders({
+      now: NOW,
+      config: urduConfig,
+      provider,
+    });
+
+    expect(result).toMatchObject({ configured: true, prepared: 1, skippedConfiguration: 0 });
+    expect(provider.calls[0]).toMatchObject({
+      templateName: 'khata_due_ur',
+      language: 'ur',
+      parameters: ['500.00', 'Khan household'],
+    });
+  });
+
+  it('accepts an Urdu-only template with an explicit parameter contract', async () => {
+    const urduConfig = readWhatsAppConfig({
+      PHARMACY_WHATSAPP_ORGANIZATION_ID: 'org_a',
+      PHARMACY_WHATSAPP_PHONE_NUMBER_ID: 'sandbox-owner',
+      PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER_UR: 'khata_due_ur',
+      PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER_UR_PARAMETERS: 'name,balance',
+    });
+    store.accounts = [account()];
+    store.customers = [customer(true, 'ur')];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    const provider = new MockWhatsAppProvider(urduConfig);
+
+    const result = await processDueWhatsAppKhataReminders({
+      now: NOW,
+      config: urduConfig,
+      provider,
+    });
+
+    expect(result).toMatchObject({ configured: true, scanned: 1, prepared: 1 });
+    expect(provider.calls[0]).toMatchObject({
+      templateName: 'khata_due_ur',
+      language: 'ur',
+      parameters: ['Khan household', '500.00'],
+    });
+  });
+
+  it('fails closed for Urdu when its approved template or parameter contract is absent', async () => {
+    store.accounts = [account()];
+    store.customers = [customer(true, 'ur')];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    const provider = new MockWhatsAppProvider(config);
+
+    const result = await processDueWhatsAppKhataReminders({ now: NOW, config, provider });
+
+    expect(result).toMatchObject({ configured: true, scanned: 1, skippedConfiguration: 1 });
+    expect(result.configurationErrors).toContain('KHATA_TEMPLATE_UR_NOT_CONFIGURED');
+    expect(provider.calls).toEqual([]);
+    expect(store.logs).toEqual([]);
+  });
+
+  it('fails closed before scanning when no template has a valid parameter contract', async () => {
+    const invalidConfig = readWhatsAppConfig({
+      PHARMACY_WHATSAPP_ORGANIZATION_ID: 'org_a',
+      PHARMACY_WHATSAPP_PHONE_NUMBER_ID: 'sandbox-owner',
+      PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER_EN: 'khata_due_en',
+      PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER_EN_PARAMETERS: 'name,amount',
+    });
+    store.accounts = [account()];
+    store.customers = [customer(true)];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    const provider = new MockWhatsAppProvider(invalidConfig);
+
+    const result = await processDueWhatsAppKhataReminders({
+      now: NOW,
+      config: invalidConfig,
+      provider,
+    });
+
+    expect(result).toMatchObject({ configured: false, scanned: 0, skippedConfiguration: 0 });
+    expect(result.configurationErrors).toContain('KHATA_TEMPLATES_NOT_CONFIGURED');
+    expect(provider.calls).toEqual([]);
+    expect(store.logs).toEqual([]);
+  });
+
+  it('allows a fully configured Meta job to use its injected adapter and records acceptance', async () => {
+    const metaConfig = readWhatsAppConfig({
+      PHARMACY_WHATSAPP_PROVIDER: 'meta',
+      PHARMACY_WHATSAPP_LIVE_SEND: 'approved',
+      PHARMACY_WHATSAPP_ACCESS_TOKEN: 'test-token',
+      PHARMACY_WHATSAPP_ORGANIZATION_ID: 'org_a',
+      PHARMACY_WHATSAPP_PHONE_NUMBER_ID: 'owner-number',
+      PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER_EN: 'khata_due_en',
+    });
+    store.accounts = [account()];
+    store.customers = [customer(true)];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    const sendTemplate = vi.fn().mockResolvedValue({
+      providerMessageId: 'wamid.accepted',
+      acceptedByProvider: true,
+    });
+    const provider = {
+      name: 'meta' as const,
+      sendTemplate,
+      sendText: vi.fn(),
+      verifyWebhook: vi.fn(),
+      parseInbound: vi.fn(),
+    };
+
+    const first = await processDueWhatsAppKhataReminders({
+      now: NOW,
+      config: metaConfig,
+      provider,
+    });
+    const retry = await processDueWhatsAppKhataReminders({
+      now: NOW,
+      config: metaConfig,
+      provider,
+    });
+
+    expect(first).toMatchObject({ configured: true, sent: 1 });
+    expect(retry).toMatchObject({ duplicate: 1, sent: 0 });
+    expect(sendTemplate).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports configured false for Meta without explicit owner live-send approval', async () => {
+    const metaConfig = readWhatsAppConfig({
+      PHARMACY_WHATSAPP_PROVIDER: 'meta',
+      PHARMACY_WHATSAPP_ACCESS_TOKEN: 'test-token',
+      PHARMACY_WHATSAPP_ORGANIZATION_ID: 'org_a',
+      PHARMACY_WHATSAPP_PHONE_NUMBER_ID: 'owner-number',
+      PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER_EN: 'khata_due_en',
+    });
+    store.accounts = [account()];
+    store.customers = [customer(true)];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    const sendTemplate = vi.fn();
+
+    const result = await processDueWhatsAppKhataReminders({
+      now: NOW,
+      config: metaConfig,
+      provider: {
+        name: 'meta',
+        sendTemplate,
+        sendText: vi.fn(),
+        verifyWebhook: vi.fn(),
+        parseInbound: vi.fn(),
+      },
+    });
+
+    expect(result).toMatchObject({ configured: false, scanned: 0 });
+    expect(result.configurationErrors).toContain('LIVE_SEND_NOT_APPROVED');
+    expect(sendTemplate).not.toHaveBeenCalled();
+    expect(store.logs).toEqual([]);
+  });
+
+  it('counts an unsupported stored language as a configuration skip, not missing consent', async () => {
+    store.accounts = [account()];
+    store.customers = [{ ...customer(true), preferredLanguage: 'fr' }];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    const provider = new MockWhatsAppProvider(config);
+
+    const result = await processDueWhatsAppKhataReminders({ now: NOW, config, provider });
+
+    expect(result).toMatchObject({ skippedConfiguration: 1, skippedNoConsent: 0, prepared: 0 });
+    expect(result.configurationErrors).toContain('KHATA_LANGUAGE_UNSUPPORTED');
+    expect(provider.calls).toEqual([]);
+    expect(store.logs).toEqual([]);
+  });
+
+  it('preserves quiet hours without claiming or sending', async () => {
+    store.timezone = 'Asia/Karachi';
+    store.accounts = [account()];
+    store.customers = [customer(true)];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    const provider = new MockWhatsAppProvider(config);
+    const result = await processDueWhatsAppKhataReminders({
+      now: new Date('2026-10-21T20:00:00Z'),
+      config,
+      provider,
+    });
+    expect(result).toMatchObject({ skippedNoConsent: 1, prepared: 0 });
+    expect(provider.calls).toEqual([]);
+    expect(store.logs).toEqual([]);
   });
 });
 
