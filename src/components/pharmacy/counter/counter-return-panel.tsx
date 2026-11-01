@@ -122,6 +122,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
     try {
       const saved = localStorage.getItem(storageKey);
       const attempt = saved ? attemptSchema.parse(JSON.parse(saved)) : null;
+      if (attempt && attempt.input.branchId !== branchId) throw new Error('Branch mismatch');
       return { attempt, error: '' };
     } catch {
       return {
@@ -140,8 +141,6 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
   const [number, setNumber] = useState('');
   const [searched, setSearched] = useState<{ value: number | null } | null>(null);
   const [saleId, setSaleId] = useState(recovery.attempt?.saleId ?? '');
-  // The matched receipt may belong to another of the cashier's assigned branches.
-  const [saleBranchId, setSaleBranchId] = useState(recovery.attempt?.input.branchId ?? branchId);
   const [lineId, setLineId] = useState('');
   const [lotId, setLotId] = useState('');
   const [units, setUnits] = useState('1');
@@ -171,11 +170,11 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
   // A reference with no receipt sequence (for example QA-0000) cannot match any receipt.
   const unparsed = !!searched && searched.value === null;
   const history = trpc.pharmacySales.returnHistory.useQuery(
-    { branchId: saleBranchId, saleId },
+    { branchId, saleId },
     { enabled: ready && online && !!saleId, retry: false }
   );
   const receipt = trpc.pharmacySales.counterReceipt.useQuery(
-    { branchId: saleBranchId, saleId },
+    { branchId, saleId },
     { enabled: ready && online && !!saleId, retry: false }
   );
   const returnLine = trpc.pharmacySales.returnLine.useMutation();
@@ -457,7 +456,6 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
               disabled={locked}
               aria-pressed={row.id === saleId}
               onClick={() => {
-                setSaleBranchId(row.branchId);
                 setSaleId(row.id);
                 setLineId('');
                 setTenderId('');
@@ -466,7 +464,6 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
             >
               Receipt {row.receiptNumber} · {row.businessDate?.toISOString().slice(0, 10)} ·{' '}
               {row.receiptDeviceId}
-              {row.branchName ? ` · ${row.branchName}` : ''}
             </Button>
           ))}
         </div>
@@ -658,7 +655,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
                     kind: 'return',
                     saleId,
                     input: {
-                      branchId: saleBranchId,
+                      branchId,
                       saleLineId: lineId,
                       lotId: lotId || undefined,
                       canonicalUnits: Number(units),
@@ -737,7 +734,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
                   kind: 'refund',
                   saleId,
                   input: {
-                    branchId: saleBranchId,
+                    branchId,
                     originalTenderId: tenderId,
                     amountMinor,
                     deviceId: deviceId(),

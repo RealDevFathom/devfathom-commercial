@@ -43,14 +43,7 @@ beforeEach(() => {
   mocks.lookup = {
     isSuccess: true,
     data: [
-      {
-        id: 'sale',
-        branchId: 'b',
-        branchName: null,
-        receiptNumber: 12,
-        businessDate: new Date('2026-09-29'),
-        receiptDeviceId: 'd',
-      },
+      { id: 'sale', receiptNumber: 12, businessDate: new Date('2026-09-29'), receiptDeviceId: 'd' },
     ],
   };
   mocks.history = {
@@ -119,22 +112,8 @@ describe('counter returns', () => {
     expect(parseReceiptNumber('QA-')).toBeNull();
     expect(parseReceiptNumber('12;DROP')).toBeNull();
   });
-  it('records a return against the branch that holds the chosen receipt', async () => {
-    mocks.lookup = {
-      isSuccess: true,
-      data: [
-        {
-          id: 'sale',
-          branchId: 'b2',
-          branchName: 'North',
-          receiptNumber: 12,
-          businessDate: new Date('2026-09-29'),
-          receiptDeviceId: 'd',
-        },
-      ],
-    };
+  it('books the return and the refund to the active branch', async () => {
     render(<ReturnForm {...props} />);
-    expect(screen.getByRole('button', { name: /Receipt 12 .* North/ })).toBeVisible();
     chooseReceipt();
     fireEvent.change(screen.getByLabelText('Sold line'), { target: { value: 'line' } });
     fireEvent.change(screen.getByLabelText('Quarantine location'), { target: { value: 'q' } });
@@ -144,7 +123,17 @@ describe('counter returns', () => {
     fireEvent.click(screen.getByLabelText(/I confirm the quantity/));
     fireEvent.click(screen.getByRole('button', { name: 'Record return' }));
     await waitFor(() =>
-      expect(mocks.returnLine).toHaveBeenCalledWith(expect.objectContaining({ branchId: 'b2' }))
+      expect(mocks.returnLine).toHaveBeenCalledWith(expect.objectContaining({ branchId: 'b' }))
+    );
+  });
+  it('sends the cash refund to the active branch drawer', async () => {
+    render(<ReturnForm {...props} />);
+    chooseReceipt();
+    fireEvent.change(screen.getByLabelText('Original tender'), { target: { value: 'cash' } });
+    fireEvent.change(screen.getByLabelText('Refund amount (PKR)'), { target: { value: '2.00' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm refund' }));
+    await waitFor(() =>
+      expect(mocks.refund).toHaveBeenCalledWith(expect.objectContaining({ branchId: 'b' }))
     );
   });
   it('explains lookup permission errors and offers retry', () => {
@@ -229,6 +218,23 @@ describe('counter returns', () => {
       expect(mocks.refund.mock.calls[1][0]).toEqual(first);
     }
   );
+  it('fails closed when saved recovery belongs to another branch', async () => {
+    mocks.refund.mockRejectedValueOnce(new Error('Disconnected'));
+    const view = render(<ReturnForm {...props} />);
+    chooseReceipt();
+    fireEvent.change(screen.getByLabelText('Original tender'), { target: { value: 'cash' } });
+    fireEvent.change(screen.getByLabelText('Refund amount (PKR)'), { target: { value: '2.00' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm refund' }));
+    await screen.findByRole('button', { name: 'Retry saved refund' });
+    const key = 'pharmacy-return:o:a:b';
+    const saved = JSON.parse(localStorage.getItem(key)!);
+    saved.input.branchId = 'b2';
+    localStorage.setItem(key, JSON.stringify(saved));
+    view.unmount();
+    render(<ReturnForm {...props} />);
+    expect(screen.getByRole('alert')).toHaveTextContent('recovery is unavailable');
+    expect(screen.queryByRole('button', { name: 'Retry saved refund' })).not.toBeInTheDocument();
+  });
   it('fails closed when saved recovery is corrupt', () => {
     localStorage.setItem('pharmacy-return:o:a:b', 'broken');
     render(<ReturnForm {...props} />);

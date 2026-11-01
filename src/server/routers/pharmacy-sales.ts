@@ -1423,43 +1423,26 @@ export const pharmacySalesRouter = router({
     .input(z.object({ branchId, receiptNumber: z.number().int().positive() }).strict())
     .query(async ({ ctx, input }) => {
       const { scope, assigned, orgAdmin } = await counterReceiptGrant(ctx, input.branchId);
-      // Search only the caller's own assigned branches, the active branch first. A receipt
-      // held by any other branch reads exactly like a missing one: the same empty result.
-      const find = (branchIds: string[]) =>
-        // Receipt sequences are per device/date: never pick an arbitrary matching sale.
-        ctx.db.pharmacySale.findMany({
-          where: {
-            organizationId: scope.organizationId,
-            branchId: { in: branchIds },
-            receiptNumber: input.receiptNumber,
-            status: 'COMPLETED',
-          },
-          select: {
-            id: true,
-            branchId: true,
-            receiptNumber: true,
-            receiptDeviceId: true,
-            businessDate: true,
-          },
-          orderBy: { completedAt: 'desc' },
-          take: 50,
-        });
-      if (assigned.has(scope.branchId) || orgAdmin) {
-        if (!assigned.has(scope.branchId))
-          annotateOrgAdminReceiptAccess(ctx, scope.branchId, assigned);
-        const active = await find([scope.branchId]);
-        if (active.length > 0) return active.map((row) => ({ ...row, branchName: null }));
+      // Search the active branch only: a return must be booked where the item, the cashier,
+      // the device and the open drawer are. A caller with no grant on the active branch gets
+      // the same empty result as a missing receipt, so lookup never confirms another
+      // branch's receipts.
+      if (!assigned.has(scope.branchId)) {
+        if (!orgAdmin) return [];
+        annotateOrgAdminReceiptAccess(ctx, scope.branchId, assigned);
       }
-      const others = [...assigned].filter((id) => id !== scope.branchId);
-      if (others.length === 0) return [];
-      const rows = await find(others);
-      if (rows.length === 0) return [];
-      const branches = await ctx.db.pharmacyBranch.findMany({
-        where: { organizationId: scope.organizationId, id: { in: others } },
-        select: { id: true, name: true },
+      // Receipt sequences are per device/date: never pick an arbitrary matching sale.
+      return ctx.db.pharmacySale.findMany({
+        where: {
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          receiptNumber: input.receiptNumber,
+          status: 'COMPLETED',
+        },
+        select: { id: true, receiptNumber: true, receiptDeviceId: true, businessDate: true },
+        orderBy: { completedAt: 'desc' },
+        take: 50,
       });
-      const names = new Map(branches.map((branch) => [branch.id, branch.name]));
-      return rows.map((row) => ({ ...row, branchName: names.get(row.branchId) ?? null }));
     }),
   returnHistory: protectedProcedure
     .input(z.object({ branchId, saleId: z.string().min(1) }).strict())

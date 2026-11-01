@@ -345,7 +345,7 @@ describe('counter receipt authorization', () => {
     );
   });
 
-  // Receipt lookup never refuses a branch: it searches the caller's own branches instead.
+  // Receipt lookup never refuses an unassigned branch: it answers "not found" without reading.
   const branchBound = paths.filter((path) => path.name !== 'lookupReceiptByNumber');
 
   it.each(branchBound)('$name denies another branch before the receipt is read', async (path) => {
@@ -841,15 +841,17 @@ describe('counter receipt authorization', () => {
   describe('receipt lookup scope', () => {
     const sales = [
       { id: 'sale-a', branchId: 'branch-a', receiptNumber: 7 },
+      { id: 'sale-a2', branchId: 'branch-a', receiptNumber: 8 },
       { id: 'sale-b', branchId: 'branch-b', receiptNumber: 8 },
+      { id: 'sale-b9', branchId: 'branch-b', receiptNumber: 9 },
     ];
-    type LookupArgs = { where: { branchId: { in: string[] }; receiptNumber: number } };
-    function lookupFixture(assigned: string[]) {
-      const f = fixture(dispense);
+    type LookupArgs = { where: { branchId: string; receiptNumber: number } };
+    function lookupFixture(assigned: string[], role?: 'ADMIN') {
+      const f = fixture(dispense, role);
       assign(f, assigned);
       const find = async ({ where }: LookupArgs) =>
         sales
-          .filter((sale) => where.branchId.in.includes(sale.branchId))
+          .filter((sale) => sale.branchId === where.branchId)
           .filter((sale) => sale.receiptNumber === where.receiptNumber)
           .map((sale) => ({
             ...sale,
@@ -861,31 +863,33 @@ describe('counter receipt authorization', () => {
     }
     type LookupCall = [LookupArgs];
     const searchedBranches = (f: ReturnType<typeof fixture>) =>
-      (f.db.pharmacySale.findMany.mock.calls as unknown as LookupCall[]).flatMap(
-        ([args]) => args.where.branchId.in
+      (f.db.pharmacySale.findMany.mock.calls as unknown as LookupCall[]).map(
+        ([args]) => args.where.branchId
       );
 
     it('finds a receipt in the cashier own active branch', async () => {
       const f = lookupFixture(['branch-a']);
       await expect(
         f.caller().lookupReceiptByNumber({ branchId: 'branch-a', receiptNumber: 7 })
-      ).resolves.toEqual([expect.objectContaining({ id: 'sale-a', branchId: 'branch-a' })]);
+      ).resolves.toEqual([expect.objectContaining({ id: 'sale-a' })]);
       expect(searchedBranches(f)).toEqual(['branch-a']);
     });
 
-    it('finds a receipt in another assigned branch after the active branch', async () => {
+    it('searches only the active branch, even when other branches are assigned', async () => {
+      // A return is booked where the item, device and drawer are, so another branch's
+      // receipt is never offered from this counter.
       const f = lookupFixture(['branch-a', 'branch-b']);
       await expect(
         f.caller().lookupReceiptByNumber({ branchId: 'branch-a', receiptNumber: 8 })
-      ).resolves.toEqual([expect.objectContaining({ id: 'sale-b', branchId: 'branch-b' })]);
-      expect(searchedBranches(f)).toEqual(['branch-a', 'branch-b']);
+      ).resolves.toEqual([expect.objectContaining({ id: 'sale-a2' })]);
+      expect(searchedBranches(f)).toEqual(['branch-a']);
     });
 
     it('answers "not found" for a receipt held by another branch', async () => {
       const f = lookupFixture(['branch-a']);
       const api = f.caller();
       const branchId = 'branch-a';
-      const foreign = await api.lookupReceiptByNumber({ branchId, receiptNumber: 8 });
+      const foreign = await api.lookupReceiptByNumber({ branchId, receiptNumber: 9 });
       const missing = await api.lookupReceiptByNumber({ branchId, receiptNumber: 99999 });
       expect(foreign).toEqual([]);
       expect(foreign).toEqual(missing);
@@ -897,13 +901,21 @@ describe('counter receipt authorization', () => {
       await expect(
         f.caller().lookupReceiptByNumber({ branchId: 'branch-b', receiptNumber: 8 })
       ).resolves.toEqual([]);
-      expect(searchedBranches(f)).toEqual(['branch-a']);
+      expect(f.db.pharmacySale.findMany).not.toHaveBeenCalled();
 
       const none = lookupFixture([]);
       await expect(
         none.caller().lookupReceiptByNumber({ branchId: 'branch-a', receiptNumber: 7 })
       ).resolves.toEqual([]);
       expect(none.db.pharmacySale.findMany).not.toHaveBeenCalled();
+    });
+
+    it('lets an unassigned session admin search the active branch and records why', async () => {
+      const f = lookupFixture([], 'ADMIN');
+      await expect(
+        f.caller().lookupReceiptByNumber({ branchId: 'branch-a', receiptNumber: 7 })
+      ).resolves.toEqual([expect.objectContaining({ id: 'sale-a' })]);
+      expect(searchedBranches(f)).toEqual(['branch-a']);
     });
   });
 
