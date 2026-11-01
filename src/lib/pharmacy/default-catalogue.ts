@@ -22,6 +22,7 @@ import {
   CATALOGUE_NAME_KEY_SQL_PATTERN,
   catalogueNameKeys,
   findHandEnteredMatches,
+  linkedControlledCandidate,
   type HandEnteredMedicine,
 } from './default-catalogue-match';
 
@@ -60,9 +61,11 @@ import {
  * name, strength and dosage form, and manufacturer when both name one; see
  * `default-catalogue-match.ts` — is never copied. The existing medicine is
  * linked to the item through a provenance row (`linkedExisting`) and none of
- * its fields are written. A second item matching an already-linked medicine is
- * skipped. The backfill dry run lists every such pair with the reason it
- * matched. Every batch that creates or links medicines writes one tenant audit
+ * its fields are written. A link to a NARCOTICS item carries the same
+ * `controlledCandidate` review flag on its provenance row as a copy would, so
+ * the pharmacist reviews the hand-entered medicine too. A second item matching
+ * an already-linked medicine is skipped. The backfill dry run lists every such
+ * pair with the reason it matched. Every batch that creates or links medicines writes one tenant audit
  * row naming the job, requesting operator or backfill actor, and counts.
  *
  * IDEMPOTENT AND RESUMABLE. The provenance row is unique per (organization,
@@ -316,7 +319,11 @@ type CatalogueBatchPlan = {
   changed: string[];
 };
 
-type CandidateMedicine = HandEnteredMedicine & { linkedSourceKey: string | null };
+type CandidateMedicine = HandEnteredMedicine & {
+  linkedSourceKey: string | null;
+  /** The NARCOTICS review flag the medicine already carries, if any. */
+  controlledCandidate: boolean;
+};
 
 /**
  * Tenant medicines a catalogue item may be a hand-entered duplicate of: no
@@ -355,7 +362,7 @@ async function handEnteredCandidates(
       manufacturer: true,
       strengths: { select: { value: true, unit: true } },
       presentations: { select: { dosageForm: true } },
-      catalogueProvenance: { select: { sourceKey: true } },
+      catalogueProvenance: { select: { sourceKey: true, controlledCandidate: true } },
     },
     orderBy: { id: 'asc' },
   });
@@ -367,6 +374,7 @@ async function handEnteredCandidates(
     strengths: medicine.strengths,
     dosageForms: medicine.presentations.map((presentation) => presentation.dosageForm),
     linkedSourceKey: medicine.catalogueProvenance?.sourceKey ?? null,
+    controlledCandidate: medicine.catalogueProvenance?.controlledCandidate ?? false,
   }));
 }
 
@@ -448,7 +456,14 @@ async function planCatalogueBatch(
     };
     if (open) {
       claimed.set(open.medicine.id, item.sourceKey);
-      plan.linked.push({ ...item, digest, medicineId: open.medicine.id });
+      // A NARCOTICS item flags the hand-entered medicine for pharmacist review
+      // through the link's provenance row, as it would a copy.
+      plan.linked.push({
+        ...item,
+        digest,
+        medicineId: open.medicine.id,
+        controlledCandidate: linkedControlledCandidate(item, open.medicine),
+      });
     } else {
       duplicate.linkedSourceKey = claimed.get(chosen.medicine.id);
     }

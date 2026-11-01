@@ -7,6 +7,7 @@ import {
   catalogueStrengthKey,
   findHandEnteredMatches,
   handEnteredMatchReason,
+  linkedControlledCandidate,
   type CatalogueMatchItem,
   type HandEnteredMedicine,
 } from './default-catalogue-match';
@@ -101,5 +102,30 @@ describe('hand-entered duplicate matching', () => {
       medicine({ id: 'med_a' }),
     ]);
     expect(matches.map((match) => match.medicine.id)).toEqual(['med_a', 'med_b']);
+  });
+});
+
+describe('NARCOTICS review flag on a linked hand-entered medicine', () => {
+  it('flags a medicine linked to a NARCOTICS item', () => {
+    expect(
+      linkedControlledCandidate({ controlledCandidate: true }, { controlledCandidate: false })
+    ).toBe(true);
+    expect(linkedControlledCandidate({ controlledCandidate: true }, {})).toBe(true);
+  });
+
+  it('does not flag a medicine linked to a non-narcotic item', () => {
+    expect(
+      linkedControlledCandidate({ controlledCandidate: false }, { controlledCandidate: false })
+    ).toBe(false);
+    expect(linkedControlledCandidate({ controlledCandidate: false }, {})).toBe(false);
+  });
+
+  it('keeps an already-flagged medicine flagged', () => {
+    expect(
+      linkedControlledCandidate({ controlledCandidate: false }, { controlledCandidate: true })
+    ).toBe(true);
+    expect(
+      linkedControlledCandidate({ controlledCandidate: true }, { controlledCandidate: true })
+    ).toBe(true);
   });
 });

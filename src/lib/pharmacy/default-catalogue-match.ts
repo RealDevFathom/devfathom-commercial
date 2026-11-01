@@ -25,6 +25,9 @@
  *    agree; when either side has none it is not compared.
  *
  * Every match carries a human-readable reason naming each rule it passed.
+ *
+ * A linked medicine inherits the item's NARCOTICS review flag
+ * ({@link linkedControlledCandidate}), exactly as a catalogue copy does.
  */
 
 export type CatalogueMatchItem = {
@@ -173,4 +176,18 @@ export function findHandEnteredMatches<M extends HandEnteredMedicine>(
 /** The distinct, non-empty name keys the database prefilter looks a batch up by. */
 export function catalogueNameKeys(items: readonly CatalogueMatchItem[]): string[] {
   return [...new Set(items.flatMap((item) => names(item).map((entry) => entry.key)))];
+}
+
+/**
+ * The NARCOTICS review flag (`controlledCandidate`) the provenance row linking a
+ * hand-entered medicine to `item` carries — the same flag a catalogue copy
+ * carries, which holds the medicine for a pharmacist's reviewed `controlled`
+ * decision before it can be published saleable. Set when the item was filed
+ * under NARCOTICS; a medicine already flagged stays flagged.
+ */
+export function linkedControlledCandidate(
+  item: { controlledCandidate: boolean },
+  medicine: { controlledCandidate?: boolean | null }
+): boolean {
+  return item.controlledCandidate || medicine.controlledCandidate === true;
 }
