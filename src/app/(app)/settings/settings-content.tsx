@@ -96,6 +96,12 @@ function disabledModuleMessage(module: EntitlementModule, key: 'api' | 'webhooks
     : 'Webhooks are currently unavailable for this organization. Contact your administrator for assistance.';
 }
 
+/** Print routing configures restaurant KOT/KDS/receipt printers; other verticals never see it. */
+export function RestaurantPrintRoutingSection() {
+  const { vertical } = useEntitlements();
+  return vertical === 'RESTAURANT' ? <PrintRoutingSection /> : null;
+}
+
 export function SettingsContent() {
   const { data: session } = useSession();
   const isAdmin = session?.user?.role === 'ADMIN';
@@ -132,8 +138,8 @@ export function SettingsContent() {
       {/* Outbound webhooks (admin only, IMP-REST-03) */}
       {isAdmin && <WebhooksSection />}
 
-      {/* Branch routing for authenticated print bridges. */}
-      {isAdmin && <PrintRoutingSection />}
+      {/* Branch routing for authenticated print bridges (restaurant vertical only). */}
+      {isAdmin && <RestaurantPrintRoutingSection />}
 
       <Link
         href="/settings/receipts"
