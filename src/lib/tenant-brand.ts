@@ -58,12 +58,31 @@ function contrastColor(hex: string): string {
   return (red * 299 + green * 587 + blue * 114) / 1000 > 145 ? '#111110' : '#FFFCF6';
 }
 
+/**
+ * The hover fill for a tenant primary: the brand moved 16% toward its own
+ * foreground, so a hovered primary button visibly changes in both themes. Using
+ * the brand itself as the hover colour left the button inert on hover.
+ */
+function hoverColor(hex: string): string {
+  const base = hex.replace('#', '');
+  const toward = contrastColor(hex).replace('#', '');
+  const channel = (value: string, offset: number) =>
+    Number.parseInt(value.slice(offset, offset + 2), 16);
+  return `#${[0, 2, 4]
+    .map((offset) =>
+      Math.round(channel(base, offset) * 0.84 + channel(toward, offset) * 0.16)
+        .toString(16)
+        .padStart(2, '0')
+    )
+    .join('')}`;
+}
+
 export function tenantBrandTokens(brand: TenantBrand): Record<string, string> {
   return {
     ...(brand.primaryColor
       ? {
           '--primary': brand.primaryColor,
-          '--primary-hover': brand.primaryColor,
+          '--primary-hover': hoverColor(brand.primaryColor),
           '--primary-foreground': contrastColor(brand.primaryColor),
           '--sidebar': brand.primaryColor,
           '--sidebar-foreground': contrastColor(brand.primaryColor),
