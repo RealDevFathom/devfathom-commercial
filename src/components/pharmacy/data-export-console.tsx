@@ -65,23 +65,49 @@ export function DataExportPanel({
   pending,
   notice,
   today,
+  downloading = null,
   onRequest,
+  onDownload,
 }: {
   exports: readonly DataExportItem[];
   pending: boolean;
   notice: string | null;
   today: string;
-  onRequest: (input: { from: string; to: string }) => void;
+  /** The export id whose archive is being fetched, if any. */
+  downloading?: string | null;
+  onRequest: (input: { from: string; to: string; pin: string }) => void;
+  onDownload: (input: { id: string; pin: string }) => void;
 }) {
   const [from, setFrom] = useState(daysBefore(today, 365));
   const [to, setTo] = useState(today);
+  const [pin, setPin] = useState('');
+  const [pinMissing, setPinMissing] = useState(false);
   const invalid = !from || !to || from > to || to > today;
   const preparing = exports.some((item) => item.status === 'QUEUED');
+
+  // The PIN is re-entered for every request and every download, never kept.
+  function takePin(): string | null {
+    if (!pin) {
+      setPinMissing(true);
+      return null;
+    }
+    const entered = pin;
+    setPin('');
+    setPinMissing(false);
+    return entered;
+  }
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (invalid || pending) return;
-    onRequest({ from, to });
+    const entered = takePin();
+    if (entered) onRequest({ from, to, pin: entered });
+  }
+
+  function download(id: string) {
+    if (downloading) return;
+    const entered = takePin();
+    if (entered) onDownload({ id, pin: entered });
   }
 
   return (
@@ -118,6 +144,28 @@ export function DataExportPanel({
             ? 'Choose a start date on or before the end date, ending today or earlier.'
             : 'The range applies to sales; medicines, stock, customers, suppliers, purchases and the controlled register are always exported in full. Up to 366 days per export.'}
         </p>
+        <div className="sm:col-span-2 sm:max-w-xs">
+          <Label htmlFor="pharmacy-export-pin">Your PIN</Label>
+          <input
+            className={controlClass}
+            id="pharmacy-export-pin"
+            type="password"
+            inputMode="numeric"
+            autoComplete="off"
+            value={pin}
+            aria-invalid={pinMissing}
+            aria-describedby="pharmacy-export-pin-help"
+            onChange={(event) => {
+              setPin(event.target.value);
+              if (event.target.value) setPinMissing(false);
+            }}
+          />
+          <p className="mt-1 text-sm text-text-muted" id="pharmacy-export-pin-help">
+            {pinMissing
+              ? 'Enter your PIN to continue.'
+              : 'The export contains patient records, so your PIN is needed to request and to download it.'}
+          </p>
+        </div>
         <div className="sm:col-span-2">
           <Button className="min-h-11" type="submit" disabled={invalid || pending || preparing}>
             {pending ? 'Requesting…' : preparing ? 'Export being prepared' : 'Download my data'}
@@ -181,13 +229,15 @@ export function DataExportPanel({
                     <td className="px-2 py-3 text-right">
                       {item.downloadable ? (
                         <span className="inline-flex flex-col items-end gap-1">
-                          <a
-                            className="inline-flex min-h-11 items-center rounded-[var(--radius-sm)] border border-border-default px-3 font-semibold text-text-strong hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-                            href={`/api/pharmacy/data-export?id=${encodeURIComponent(item.id)}`}
-                            download
+                          <Button
+                            className="min-h-11"
+                            type="button"
+                            variant="outline"
+                            disabled={downloading !== null}
+                            onClick={() => download(item.id)}
                           >
-                            Download ZIP
-                          </a>
+                            {downloading === item.id ? 'Downloading…' : 'Download ZIP'}
+                          </Button>
                           {item.expiresAt ? (
                             <span className="text-xs text-text-muted">
                               Until {formatKarachiDateTime(new Date(item.expiresAt))}
@@ -209,8 +259,35 @@ export function DataExportPanel({
   );
 }
 
+/**
+ * POST the PIN with the export id (never in a URL) and save the attachment.
+ * Returns the server's refusal text, or null once the file has been saved.
+ */
+export async function downloadExportArchive(input: { id: string; pin: string }): Promise<string | null> {
+  const response = await fetch('/api/pharmacy/data-export', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+    credentials: 'same-origin',
+    cache: 'no-store',
+  });
+  if (!response.ok) return (await response.text()) || 'Export unavailable.';
+  const disposition = response.headers.get('Content-Disposition') ?? '';
+  const fileName = /filename="([^"]+)"/.exec(disposition)?.[1] ?? 'devfathom-pharmacy-export.zip';
+  const url = URL.createObjectURL(await response.blob());
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = fileName;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  return null;
+}
+
 export function DataExportConsole({ initial }: { initial: DataExportItem[] }) {
   const [notice, setNotice] = useState<string | null>(null);
+  const [downloading, setDownloading] = useState<string | null>(null);
   const [today] = useState(() => karachiToday(new Date()));
   const list = trpc.pharmacyDataExport.list.useQuery(undefined, {
     initialData: initial,
@@ -234,7 +311,21 @@ export function DataExportConsole({ initial }: { initial: DataExportItem[] }) {
       notice={notice}
       pending={request.isPending}
       today={today}
+      downloading={downloading}
       onRequest={(input) => request.mutate(input)}
+      onDownload={(input) => {
+        setDownloading(input.id);
+        setNotice(null);
+        void downloadExportArchive(input)
+          .then((refusal) => {
+            if (refusal) setNotice(refusal);
+          })
+          .catch(() => setNotice('Export unavailable. Try again shortly.'))
+          .finally(async () => {
+            setDownloading(null);
+            await list.refetch();
+          });
+      }}
     />
   );
 }

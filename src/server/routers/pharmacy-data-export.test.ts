@@ -29,6 +29,12 @@ const storage = vi.hoisted(() => ({
   deleteUpload: vi.fn(),
 }));
 vi.mock('@/lib/storage', () => storage);
+// bcrypt is exercised by the credential module's own tests; here PIN 2468 is right.
+vi.mock('@/lib/restaurant/operator-credentials', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/restaurant/operator-credentials')>()),
+  verifyOperatorCredential: vi.fn(async (_type: string, pin: string) => pin === '2468'),
+}));
+const PIN = '2468';
 
 import type { TRPCContext } from '../trpc';
 import { pharmacyDataExportRouter } from './pharmacy-data-export';
@@ -44,10 +50,20 @@ function fixture(
     support?: boolean;
     vertical?: string;
     rows?: Row[];
+    modules?: string[];
+    credential?: Row | null;
   } = {}
 ) {
   const rows: Row[] = options.rows ?? [];
+  const credential =
+    options.credential === undefined
+      ? { id: 'cred-1', credentialHash: 'hash', failedAttempts: 0, lockedUntil: null }
+      : options.credential;
   const database = {
+    restaurantOperatorCredential: {
+      findFirst: vi.fn(async () => credential),
+      update: vi.fn(async () => ({})),
+    },
     $queryRaw: vi.fn(async () => []),
     medicine: { create: vi.fn(async () => ({ id: 'imported-medicine' })) },
     // The migration wizard's source evidence and profiled batch for a catalogue import.
@@ -91,7 +107,11 @@ function fixture(
   });
   const context = {
     db,
-    entitlements: { organizationId: 'org-a', enabledModules: ['pharmacy-core'], modules: [] },
+    entitlements: {
+      organizationId: 'org-a',
+      enabledModules: options.modules ?? ['pharmacy-core'],
+      modules: [],
+    },
     session: {
       expires: 'later',
       user: {
@@ -187,10 +207,10 @@ describe('pharmacy owner data export router', () => {
     const f = fixture({ role, rows: [readyRow()] });
     await expect(f.caller.list()).rejects.toMatchObject({ code: 'FORBIDDEN' });
     await expect(f.caller.importCatalogue({ csv: '' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    await expect(f.caller.request({ from: '2026-01-01', to: '2026-10-30' })).rejects.toMatchObject(
+    await expect(f.caller.request({ from: '2026-01-01', to: '2026-10-30', pin: PIN })).rejects.toMatchObject(
       { code: 'FORBIDDEN' }
     );
-    await expect(f.caller.download({ id: 'exp-1' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(f.caller.download({ id: 'exp-1', pin: PIN })).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(f.db.pharmacyDataExport.create).not.toHaveBeenCalled();
     expect(storage.getUpload).not.toHaveBeenCalled();
   });
@@ -198,10 +218,10 @@ describe('pharmacy owner data export router', () => {
   it('refuses a platform support session acting as the owner', async () => {
     const f = fixture({ support: true, rows: [readyRow()] });
     await expect(f.caller.importCatalogue({ csv: '' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    await expect(f.caller.request({ from: '2026-01-01', to: '2026-10-30' })).rejects.toMatchObject(
+    await expect(f.caller.request({ from: '2026-01-01', to: '2026-10-30', pin: PIN })).rejects.toMatchObject(
       { code: 'FORBIDDEN' }
     );
-    await expect(f.caller.download({ id: 'exp-1' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(f.caller.download({ id: 'exp-1', pin: PIN })).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(storage.getUpload).not.toHaveBeenCalled();
   });
 
@@ -212,7 +232,7 @@ describe('pharmacy owner data export router', () => {
 
   it('queues an owner request in the session organization and annotates the audit', async () => {
     const f = fixture();
-    const result = await f.caller.request({ from: '2026-01-01', to: '2026-10-30' });
+    const result = await f.caller.request({ from: '2026-01-01', to: '2026-10-30', pin: PIN });
     expect(result.created).toBe(true);
     expect(result.export).toMatchObject({ id: 'exp-new', status: 'QUEUED', downloadable: false });
     expect(f.db.pharmacyDataExport.create).toHaveBeenCalledWith(
@@ -237,13 +257,13 @@ describe('pharmacy owner data export router', () => {
 
   it('rejects a range longer than 366 days or ending in the future', async () => {
     const f = fixture();
-    await expect(f.caller.request({ from: '2025-01-01', to: '2026-10-30' })).rejects.toMatchObject(
+    await expect(f.caller.request({ from: '2025-01-01', to: '2026-10-30', pin: PIN })).rejects.toMatchObject(
       { code: 'BAD_REQUEST' }
     );
-    await expect(f.caller.request({ from: '2026-10-01', to: '2026-11-02' })).rejects.toMatchObject(
+    await expect(f.caller.request({ from: '2026-10-01', to: '2026-11-02', pin: PIN })).rejects.toMatchObject(
       { code: 'BAD_REQUEST' }
     );
-    await expect(f.caller.request({ from: '2026-10-10', to: '2026-10-01' })).rejects.toMatchObject(
+    await expect(f.caller.request({ from: '2026-10-10', to: '2026-10-01', pin: PIN })).rejects.toMatchObject(
       { code: 'BAD_REQUEST' }
     );
     expect(f.db.pharmacyDataExport.create).not.toHaveBeenCalled();
@@ -251,7 +271,7 @@ describe('pharmacy owner data export router', () => {
 
   it('downloads a ready archive, counts the download and audits it without the bytes', async () => {
     const f = fixture({ rows: [readyRow()] });
-    const archive = await f.caller.download({ id: 'exp-1' });
+    const archive = await f.caller.download({ id: 'exp-1', pin: PIN });
     expect(archive.data.toString()).toBe('PK-archive');
     expect(archive.fileName).toBe('devfathom-pharmacy-export-2026-10-31-exp-1.zip');
     expect(storage.getUpload).toHaveBeenCalledWith('org-a/pharmacy-data-exports', 'exp-1.zip');
@@ -268,7 +288,7 @@ describe('pharmacy owner data export router', () => {
     const f = fixture({
       rows: [readyRow({ expiresAt: new Date('2026-10-31T06:59:59.000Z') })],
     });
-    await expect(f.caller.download({ id: 'exp-1' })).rejects.toMatchObject({
+    await expect(f.caller.download({ id: 'exp-1', pin: PIN })).rejects.toMatchObject({
       code: 'NOT_FOUND',
       message: 'This download link has expired. Request a new export.',
     });
@@ -277,11 +297,108 @@ describe('pharmacy owner data export router', () => {
 
   it('cannot reach another organization’s export', async () => {
     const f = fixture({ rows: [] });
-    await expect(f.caller.download({ id: 'exp-other' })).rejects.toMatchObject({
+    await expect(f.caller.download({ id: 'exp-other', pin: PIN })).rejects.toMatchObject({
       code: 'NOT_FOUND',
     });
     expect(f.db.pharmacyDataExport.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: 'exp-other', organizationId: 'org-a' } })
     );
+  });
+  it('refuses every procedure once the Pharmacy Core entitlement is gone, even on a standalone caller', async () => {
+    // The download route and settings page call this router directly, so the
+    // procedure path is `download` / `list`, not `pharmacyDataExport.*`.
+    const f = fixture({ modules: [], rows: [readyRow()] });
+    await expect(f.caller.list()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(f.caller.download({ id: 'exp-1', pin: PIN })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    await expect(
+      f.caller.request({ from: '2026-01-01', to: '2026-10-30', pin: PIN })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(f.caller.importCatalogue({ csv: '' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(storage.getUpload).not.toHaveBeenCalled();
+    expect(f.db.pharmacyDataExport.findMany).not.toHaveBeenCalled();
+    expect(f.db.pharmacyDataExport.create).not.toHaveBeenCalled();
+  });
+
+  it('requires the owner PIN to request an export and records a wrong one durably', async () => {
+    const f = fixture();
+    await expect(
+      f.caller.request({ from: '2026-01-01', to: '2026-10-30', pin: '0000' })
+    ).rejects.toMatchObject({ code: 'UNAUTHORIZED', message: 'That PIN is not correct.' });
+    expect(f.db.pharmacyDataExport.create).not.toHaveBeenCalled();
+    // The PIN check runs in its own transaction, so the strike survives the refusal.
+    expect(f.db.$transaction).toHaveBeenCalled();
+    expect(f.db.restaurantOperatorCredential.update).toHaveBeenCalledWith({
+      where: { id: 'cred-1' },
+      data: { failedAttempts: 1, lockedUntil: null },
+    });
+    // Only the owner's own active, device-independent PIN in this tenant counts.
+    expect(f.db.restaurantOperatorCredential.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          organizationId: 'org-a',
+          type: 'PIN',
+          revokedAt: null,
+          deviceId: null,
+          staffProfile: { organizationId: 'org-a', userId: 'owner-1', status: 'ACTIVE' },
+        }),
+      })
+    );
+    expect(audit.annotateAudit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'pharmacy.dataExport.pinRefused',
+        metadata: { reason: 'REJECTED', step: 'requested' },
+      })
+    );
+    expect(JSON.stringify(audit.annotateAudit.mock.calls)).not.toContain('0000');
+  });
+
+  it('requires the owner PIN to download and reads no bytes without it', async () => {
+    const f = fixture({ rows: [readyRow()] });
+    await expect(f.caller.download({ id: 'exp-1', pin: '1111' })).rejects.toMatchObject({
+      code: 'UNAUTHORIZED',
+    });
+    expect(storage.getUpload).not.toHaveBeenCalled();
+    expect(f.db.pharmacyDataExport.update).not.toHaveBeenCalled();
+    expect(audit.annotateAudit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'pharmacy.dataExport.pinRefused',
+        targetId: 'exp-1',
+        metadata: { reason: 'REJECTED', step: 'downloaded' },
+      })
+    );
+  });
+
+  it('refuses an owner with no PIN and a locked PIN without verifying it', async () => {
+    const none = fixture({ credential: null });
+    await expect(
+      none.caller.request({ from: '2026-01-01', to: '2026-10-30', pin: PIN })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: expect.stringContaining('Set up your staff PIN') });
+    const locked = fixture({
+      rows: [readyRow()],
+      credential: {
+        id: 'cred-1',
+        credentialHash: 'hash',
+        failedAttempts: 0,
+        lockedUntil: new Date(NOW.getTime() + 60_000),
+      },
+    });
+    await expect(locked.caller.download({ id: 'exp-1', pin: PIN })).rejects.toMatchObject({
+      code: 'TOO_MANY_REQUESTS',
+    });
+    expect(locked.db.restaurantOperatorCredential.update).not.toHaveBeenCalled();
+    expect(storage.getUpload).not.toHaveBeenCalled();
+  });
+
+  it('clears the PIN strikes after a correct owner PIN', async () => {
+    const f = fixture();
+    await f.caller.request({ from: '2026-01-01', to: '2026-10-30', pin: PIN });
+    expect(f.db.restaurantOperatorCredential.update).toHaveBeenCalledWith({
+      where: { id: 'cred-1' },
+      data: { failedAttempts: 0, lockedUntil: null },
+    });
   });
 });

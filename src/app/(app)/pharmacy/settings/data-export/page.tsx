@@ -3,7 +3,7 @@ import type { Metadata } from 'next';
 import { DataExportConsole } from '@/components/pharmacy/data-export-console';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
-import { pharmacyDataExportRouter } from '@/server/routers/pharmacy-data-export';
+import { appRouter } from '@/server/routers/_app';
 import { createTRPCContext } from '@/server/trpc';
 
 export const metadata: Metadata = { title: 'Download my data' };
@@ -15,7 +15,8 @@ export const metadata: Metadata = { title: 'Download my data' };
  */
 export default async function PharmacyDataExportPage() {
   const ctx = await createTRPCContext();
-  const caller = pharmacyDataExportRouter.createCaller(ctx);
+  // Through the app router so the module middleware sees `pharmacyDataExport.list`.
+  const caller = appRouter.createCaller(ctx).pharmacyDataExport;
   let initial: Awaited<ReturnType<typeof caller.list>>;
   try {
     initial = await caller.list();
@@ -49,6 +50,10 @@ export default async function PharmacyDataExportPage() {
       <SectionCard title="How it works" titleLevel={2}>
         <ul className="list-disc space-y-1 pl-5 text-sm text-text-body">
           <li>The archive is prepared in the background, usually within a few minutes.</li>
+          <li>
+            Because the files include patient and khata records, you re-enter your PIN to request
+            an export and again to download it.
+          </li>
           <li>Its download link works for 24 hours, then the file is deleted.</li>
           <li>
             Every request and download is recorded in the audit log. Spreadsheet formulas in text

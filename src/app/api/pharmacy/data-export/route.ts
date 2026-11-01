@@ -1,8 +1,10 @@
 import { TRPCError } from '@trpc/server';
+import { z } from 'zod';
 import { responseForPasswordChange } from '@/lib/auth/session-state';
+import { publicRequestOrigin } from '@/lib/http-origin';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { createTRPCContext } from '@/server/trpc';
-import { pharmacyDataExportRouter } from '@/server/routers/pharmacy-data-export';
+import { appRouter } from '@/server/routers/_app';
 
 export const runtime = 'nodejs';
 
@@ -14,13 +16,44 @@ const STATUS: Record<string, number> = {
   TOO_MANY_REQUESTS: 429,
 };
 
+const NO_STORE = { 'Cache-Control': 'private, no-store', 'Content-Type': 'text/plain; charset=utf-8' };
+
+const body = z.object({ id: z.string(), pin: z.string() }).strict();
+
+function sameOrigin(request: Request): boolean {
+  const origin = request.headers.get('origin');
+  if (!origin) return false;
+  try {
+    return new URL(origin).origin.toLowerCase() === publicRequestOrigin(request).toLowerCase();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The PIN never travels in a URL (it would reach access logs and history), so a
+ * plain link cannot download an export any more; the console posts the PIN.
+ */
+export function GET() {
+  return new Response('Re-enter your PIN on the Download my data page to download this export.', {
+    status: 405,
+    headers: { ...NO_STORE, Allow: 'POST' },
+  });
+}
+
 /**
  * #716 — download one owner data export archive. Authorization is the router's
- * (`adminProcedure` + owner checks + 24-hour expiry); this route only turns
- * the bytes into an attachment response that is never cached.
+ * (`adminProcedure` + Pharmacy Core entitlement + owner checks + PIN re-entry +
+ * 24-hour expiry, all audited); this route only accepts a same-origin JSON body
+ * and turns the bytes into an attachment response that is never cached.
  */
-export async function GET(request: Request) {
+export async function POST(request: Request) {
   try {
+    if (!sameOrigin(request)) {
+      return new Response('The request origin is not allowed.', { status: 403, headers: NO_STORE });
+    }
+    const parsed = body.safeParse(await request.json().catch(() => null));
+    if (!parsed.success) return new Response('Export unavailable.', { status: 400, headers: NO_STORE });
     const actor = await resolveTenantActor({ request });
     if (!actor?.session.user?.id) return new Response('Unauthorized', { status: 401 });
     const context = await createTRPCContext({
@@ -29,8 +62,9 @@ export async function GET(request: Request) {
       organization: actor.organization,
       support: actor.support,
     });
-    const id = new URL(request.url).searchParams.get('id') ?? '';
-    const archive = await pharmacyDataExportRouter.createCaller(context).download({ id });
+    const archive = await appRouter
+      .createCaller(context)
+      .pharmacyDataExport.download(parsed.data);
     const fileName = archive.fileName.replace(/[^A-Za-z0-9._-]/g, '_');
     return new Response(new Uint8Array(archive.data), {
       headers: {
@@ -52,9 +86,6 @@ export async function GET(request: Request) {
         : error instanceof TRPCError
           ? error.message
           : 'Export unavailable.';
-    return new Response(message, {
-      status,
-      headers: { 'Cache-Control': 'private, no-store', 'Content-Type': 'text/plain; charset=utf-8' },
-    });
+    return new Response(message, { status, headers: NO_STORE });
   }
 }
