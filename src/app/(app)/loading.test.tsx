@@ -14,7 +14,7 @@ describe('AppLoading', () => {
   it('stops its animation for people who ask for reduced motion', () => {
     const { container } = render(<AppLoading />);
     for (const element of container.querySelectorAll('[class*="animate-"]')) {
-      expect(element.className).toContain('motion-reduce:animate-none');
+      expect(element.getAttribute('class')).toContain('motion-reduce:animate-none');
     }
   });
 });
