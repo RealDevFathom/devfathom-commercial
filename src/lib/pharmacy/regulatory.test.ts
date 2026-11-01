@@ -4,6 +4,7 @@ import {
   assertStoredBranchMayOperate,
   BranchOperationDeniedError,
   pendingLegalReviewAllowed,
+  ruleSetPendingLegalReview,
   type BranchRegulatoryState,
 } from './regulatory';
 
@@ -204,4 +205,53 @@ it.each([
   expect(() =>
     assertBranchMayOperate(state, { name: 'DISPENSE', at: new Date(instant) })
   ).not.toThrow();
+});
+
+describe('ruleSetPendingLegalReview (Punjab-only production gate)', () => {
+  const confirmed = { values: ['RETAIL'], provisional: false };
+  const pending = { ...confirmed, pendingLegalReview: true };
+
+  it('flags Sindh v2 rules explicitly marked pending legal review', () => {
+    expect(
+      ruleSetPendingLegalReview({
+        code: 'PK-SD',
+        licenceCategories: pending,
+        permittedSchedules: pending,
+        pharmacistCoverageRule: pending,
+      })
+    ).toBe(true);
+  });
+
+  it('treats legacy Sindh v1 rules without the flag as pending', () => {
+    expect(
+      ruleSetPendingLegalReview({
+        code: 'PK-SD',
+        licenceCategories: confirmed,
+        permittedSchedules: confirmed,
+        pharmacistCoverageRule: confirmed,
+      })
+    ).toBe(true);
+  });
+
+  it('does not flag Punjab rules without the flag', () => {
+    expect(
+      ruleSetPendingLegalReview({
+        code: 'PK-PB',
+        licenceCategories: confirmed,
+        permittedSchedules: confirmed,
+        pharmacistCoverageRule: confirmed,
+      })
+    ).toBe(false);
+  });
+
+  it('flags any province once a relevant field is marked pending', () => {
+    expect(
+      ruleSetPendingLegalReview({
+        code: 'PK-PB',
+        licenceCategories: confirmed,
+        permittedSchedules: pending,
+        pharmacistCoverageRule: confirmed,
+      })
+    ).toBe(true);
+  });
 });

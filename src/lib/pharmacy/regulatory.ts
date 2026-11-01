@@ -61,6 +61,29 @@ function ruleField(value: unknown): RuleField {
   return value && typeof value === 'object' ? (value as RuleField) : {};
 }
 
+/**
+ * Whether a rule set is still awaiting legal sign-off. PK-SD rows written before
+ * the explicit flag existed (v1) count as pending, so Sindh stays behind the
+ * production gate until counsel publishes a confirmed version.
+ */
+export function ruleSetPendingLegalReview(ruleSet: {
+  code?: string;
+  licenceCategories: unknown;
+  permittedSchedules: unknown;
+  pharmacistCoverageRule: unknown;
+}): boolean {
+  const fields = [
+    ruleSet.licenceCategories,
+    ruleSet.permittedSchedules,
+    ruleSet.pharmacistCoverageRule,
+  ];
+  return (
+    fields.some((field) => ruleField(field).pendingLegalReview === true) ||
+    (ruleSet.code === 'PK-SD' &&
+      fields.some((field) => ruleField(field).pendingLegalReview === undefined))
+  );
+}
+
 function stringValues(value: unknown): readonly string[] {
   const values = ruleField(value).values;
   return Array.isArray(values) && values.every((item) => typeof item === 'string') ? values : [];
@@ -88,12 +111,7 @@ export function assertBranchMayOperate(
   if (relevantRules.some((field) => ruleField(field).provisional !== false)) {
     deny('RULE_SET_UNCONFIRMED');
   }
-  if (
-    (relevantRules.some((field) => ruleField(field).pendingLegalReview === true) ||
-      (branch.ruleSet.code === 'PK-SD' &&
-        relevantRules.some((field) => ruleField(field).pendingLegalReview === undefined))) &&
-    !pendingLegalReviewAllowed()
-  ) {
+  if (ruleSetPendingLegalReview(branch.ruleSet) && !pendingLegalReviewAllowed()) {
     deny('RULE_SET_PENDING_LEGAL_REVIEW');
   }
 

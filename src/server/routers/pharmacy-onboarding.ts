@@ -1,6 +1,8 @@
 import {
   assertStoredBranchMayOperate,
   BranchOperationDeniedError,
+  pendingLegalReviewAllowed,
+  ruleSetPendingLegalReview,
 } from '@/lib/pharmacy/regulatory';
 /**
  * PLAT-02 / PLAT-03 tenant surfaces — the twelve-step onboarding checklist, the
@@ -149,38 +151,33 @@ async function jurisdictionsInForce(ctx: TRPCContext, at: Date) {
   // recently effective version of each code first.
   const byCode = new Map<string, (typeof ruleSets)[number]>();
   for (const ruleSet of ruleSets) if (!byCode.has(ruleSet.code)) byCode.set(ruleSet.code, ruleSet);
-  return [...byCode.values()].map((ruleSet) => {
-    const categories = ruleSetOptions(ruleSet.licenceCategories);
-    const schedules = ruleSetOptions(ruleSet.permittedSchedules);
-    return {
-      id: ruleSet.id,
-      provinceCode: ruleSet.code,
-      provinceName: provinceName(ruleSet.code),
-      version: ruleSet.version,
-      effectiveFrom: ruleSet.effectiveFrom,
-      licenceCategories: categories.values,
-      permittedSchedules: schedules.values,
-      // Provisional anywhere is provisional everywhere: the regulatory guard
-      // refuses the branch if *any* of the three fields it reads is unconfirmed,
-      // so the surface must report the same thing rather than a rosier subset.
-      pendingLegalReview: [
-        ruleSet.licenceCategories,
-        ruleSet.permittedSchedules,
-        ruleSet.pharmacistCoverageRule,
-      ].some((field) =>
-        Boolean(
-          field &&
-          typeof field === 'object' &&
-          'pendingLegalReview' in field &&
-          field.pendingLegalReview
-        )
-      ),
-      provisional:
-        categories.provisional ||
-        schedules.provisional ||
-        ruleSetOptions(ruleSet.pharmacistCoverageRule).provisional,
-    };
-  });
+  // Rules awaiting legal sign-off (PK-SD today) are neither offered nor
+  // accepted where the regulatory guard would refuse them: production serves
+  // only confirmed provinces, while staging/pilot keep exercising Sindh.
+  const offerPendingLegalReview = pendingLegalReviewAllowed();
+  return [...byCode.values()]
+    .filter((ruleSet) => offerPendingLegalReview || !ruleSetPendingLegalReview(ruleSet))
+    .map((ruleSet) => {
+      const categories = ruleSetOptions(ruleSet.licenceCategories);
+      const schedules = ruleSetOptions(ruleSet.permittedSchedules);
+      return {
+        id: ruleSet.id,
+        provinceCode: ruleSet.code,
+        provinceName: provinceName(ruleSet.code),
+        version: ruleSet.version,
+        effectiveFrom: ruleSet.effectiveFrom,
+        licenceCategories: categories.values,
+        permittedSchedules: schedules.values,
+        // Provisional anywhere is provisional everywhere: the regulatory guard
+        // refuses the branch if *any* of the three fields it reads is unconfirmed,
+        // so the surface must report the same thing rather than a rosier subset.
+        pendingLegalReview: ruleSetPendingLegalReview(ruleSet),
+        provisional:
+          categories.provisional ||
+          schedules.provisional ||
+          ruleSetOptions(ruleSet.pharmacistCoverageRule).provisional,
+      };
+    });
 }
 
 export const pharmacyOnboardingRouter = router({

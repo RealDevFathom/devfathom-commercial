@@ -206,6 +206,33 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
     });
   });
 
+  it('hides and refuses Sindh rules pending legal review in production (Punjab only)', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('APP_ENV', 'production');
+    try {
+      await withTenantDb(organizationId, async (db) => {
+        const result = await caller(db).regulatory();
+        expect(result.jurisdictions.some((option) => option.provinceCode === 'PK-SD')).toBe(false);
+        expect(result.jurisdictions.some((option) => option.provinceCode === 'PK-PB')).toBe(true);
+        await expect(
+          caller(db).saveRegulatoryProfile({
+            ...profile,
+            branchId: sindhBranchId,
+            effectiveFrom: day(0),
+            provinceCode: 'PK-SD',
+            licenceCategory: 'RETAIL',
+            permittedSchedules: ['G'],
+          })
+        ).rejects.toMatchObject({
+          code: 'BAD_REQUEST',
+          message: expect.stringContaining('No jurisdiction rules are published'),
+        });
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('never falls back to another branch when an unknown one is requested', async () => {
     await withTenantDb(organizationId, async (db) => {
       // A branch id from another tenant resolves to nothing, and the page opens
