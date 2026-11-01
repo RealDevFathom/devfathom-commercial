@@ -1,10 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import {
-  createPrismaFolioLedgerStore,
-  createProductionFolioLedgerService,
-  type FolioSqlClient,
-} from './folio-ledger-store';
+import { createFolioLedgerService } from './folio-ledger';
+import { createPrismaFolioLedgerStore, type FolioSqlClient } from './folio-ledger-store';
 
 const scope = { organizationId: 'org-1', branchId: 'branch-1' };
 
@@ -39,11 +36,35 @@ describe('Prisma folio ledger store', () => {
     }
   });
 
-  it('denies a principal without hotel:folio before an elevated DB read', async () => {
+  it('writes to the single hotel_folio_entries ledger and reverses with a positive copy', async () => {
+    const queries: string[] = [];
+    const db: FolioSqlClient = {
+      $queryRaw: vi.fn(async (query) => {
+        queries.push(sqlText(query));
+        return [{}];
+      }),
+    };
+    const store = createPrismaFolioLedgerStore(db, 'actor-1');
+    await store.insert(scope, {
+      folioId: 'folio-1', catalogItemId: 'extra-1', quantity: 1,
+      unitMinor: 100, netMinor: 100, taxMinor: 10, grossMinor: 110,
+    });
+    await store.reverse(scope, 'entry-1', 'Correction');
+
+    expect(queries.join('\n')).not.toContain('hotel_folio_postings');
+    expect(queries[0]).toContain("f.status = 'OPEN'");
+    expect(queries[1]).toContain('e."grossMinor"');
+    expect(queries[1]).not.toContain('-e."grossMinor"');
+    expect(queries[1]).toContain('e."reversesEntryId" IS NULL');
+  });
+
+  it('denies an unauthorized caller before any DB read', async () => {
     const queryRaw = vi.fn(async () => []);
-    const service = createProductionFolioLedgerService(
-      { $queryRaw: queryRaw },
-      { id: 'actor-1', capabilities: new Set(['hotel:front-desk']) }
+    const service = createFolioLedgerService(
+      createPrismaFolioLedgerStore({ $queryRaw: queryRaw }, 'actor-1'),
+      async () => {
+        throw new Error('Missing capability: hotel:folio');
+      }
     );
 
     await expect(service.get(scope, 'folio-1')).rejects.toThrow('hotel:folio');

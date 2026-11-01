@@ -1,7 +1,10 @@
 import 'server-only';
 
-const BPS_DENOMINATOR = 10_000n;
-const MAX_MONEY_MINOR = 9_223_372_036_854_775_807n;
+// BigInt() calls rather than `n` literals: the project targets ES2017.
+const ZERO = BigInt(0);
+const TWO = BigInt(2);
+const BPS_DENOMINATOR = BigInt(10_000);
+export const MAX_MONEY_MINOR = BigInt('9223372036854775807');
 
 export type RateScope = {
   organizationId: string;
@@ -29,7 +32,7 @@ function dateOnly(value: Date): string {
 }
 
 function checkedMoney(value: bigint): bigint {
-  if (value < 0n || value > MAX_MONEY_MINOR) throw new RangeError('Money amount overflow.');
+  if (value < ZERO || value > MAX_MONEY_MINOR) throw new RangeError('Money amount overflow.');
   return value;
 }
 
@@ -39,7 +42,7 @@ export function taxMinorRoundHalfUp(netMinor: bigint, basisPoints: number): bigi
     throw new RangeError('Invalid tax basis points.');
   }
   checkedMoney(netMinor);
-  return checkedMoney((netMinor * BigInt(basisPoints) + BPS_DENOMINATOR / 2n) / BPS_DENOMINATOR);
+  return checkedMoney((netMinor * BigInt(basisPoints) + BPS_DENOMINATOR / TWO) / BPS_DENOMINATOR);
 }
 
 /**
@@ -68,8 +71,8 @@ export async function quoteStay(
   const expectedNights = Math.round((Date.parse(departureDay) - Date.parse(arrivalDay)) / 86_400_000);
   if (rows.length !== expectedNights) throw new RangeError('The rate plan does not price every night.');
 
-  let netMinor = 0n;
-  let taxMinor = 0n;
+  let netMinor = ZERO;
+  let taxMinor = ZERO;
   const nights: NightQuote[] = rows.map((row) => {
     const net = checkedMoney(row.netMinor);
     const tax = taxMinorRoundHalfUp(net, row.taxBasisPoints);

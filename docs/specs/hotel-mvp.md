@@ -8,6 +8,18 @@ status, folios and charges, payment settlement, night audit, and one determinist
 banquets, loyalty, housekeeping task assignment, maintenance work orders, accounting/GL export,
 multi-currency, fiscal-device integration, and multi-property central reservations
 
+> **Implemented so far (migration `20261101000000_hotel_mvp_reservations_folio`).** Guests;
+> rate plans with immutable terms and effective-dated, immutable `BigInt` prices (the only pricing
+> model — quotes and bookings both use it); locked, idempotent reservation create with
+> server-side pricing and an availability re-check (HOLD consumes inventory); one append-only folio
+> ledger (`hotel_folio_entries`, positive reversal copies) plus append-only payments; housekeeping
+> state and tasks. Routers: `hotelReservations`, `hotelRates.ratePlans`, `hotelFolios`,
+> `hotelHousekeeping`. Every table uses the standard organization RLS policy with explicit
+> `(organizationId, branchId)` predicates. **Not yet built:** confirm/cancel/update, room
+> assignment, check-in/out and the front-desk board, payment capture, night audit, the
+> inventory status board and availability calendar, and the UI. The sections below remain the
+> target contract for those lanes.
+
 ## 1. Outcome and repository baseline
 
 The MVP must let a receptionist take a direct reservation, assign a room, check the guest in,

@@ -1,19 +1,26 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TRPCError } from '@trpc/server';
 
-const mocks = vi.hoisted(() => ({ scope: vi.fn(), capability: vi.fn() }));
+const mocks = vi.hoisted(() => ({ scope: vi.fn(), capabilities: [] as string[] }));
 vi.mock('server-only', () => ({}));
 vi.mock('@/server/hotel-property-scope', async (original) => ({
   ...(await original<typeof import('@/server/hotel-property-scope')>()),
   requireHotelPropertyScope: mocks.scope,
+}));
+vi.mock('@/server/audit', async (original) => ({
+  ...(await original<typeof import('@/server/audit')>()),
+  annotateAudit: vi.fn(),
 }));
 vi.mock('../trpc', async () => {
   const { initTRPC } = await import('@trpc/server');
   const t = initTRPC.context<Record<string, unknown>>().create();
   return {
     router: t.router,
+    protectedProcedure: t.procedure,
+    adminProcedure: t.procedure,
     capabilityProcedure: (capability: string) => {
-      mocks.capability(capability);
+      // Recorded at module load, so it is a list rather than a clearable mock.
+      mocks.capabilities.push(capability);
       return t.procedure;
     },
   };
@@ -39,7 +46,7 @@ beforeEach(() => {
 
 describe('hotel housekeeping router isolation', () => {
   it('gates reads and writes with hotel:housekeeping', () => {
-    expect(mocks.capability).toHaveBeenCalledWith('hotel:housekeeping');
+    expect(new Set(mocks.capabilities)).toEqual(new Set(['hotel:housekeeping']));
   });
 
   it('denies a cross-tenant read before executing SQL', async () => {
@@ -56,5 +63,14 @@ describe('hotel housekeeping router isolation', () => {
       'other-tenant-branch',
       'hotel:housekeeping'
     );
+  });
+
+  it('maps a coded domain error to a client error instead of a 500', async () => {
+    db.$transaction.mockRejectedValue(new Error('INVALID_HOUSEKEEPING_TRANSITION'));
+    await expect(
+      hotelHousekeepingRouter
+        .createCaller(context() as never)
+        .setStatus({ branchId: 'branch_1', roomId: 'room_1', status: 'INSPECTED' })
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
   });
 });

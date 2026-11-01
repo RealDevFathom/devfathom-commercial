@@ -1,47 +1,104 @@
 import { TRPCError } from '@trpc/server';
-import { canonicalRequestHash, quoteStayFromConfiguration, type RatePlan } from '@/lib/hotel/reservations';
+
+import {
+  canBook,
+  rejectClientMoney,
+  reservationRequestHash,
+  type AvailabilityFacts,
+  type ReservationCreateRequest,
+} from '@/lib/hotel/reservations';
+import type { PricedStay, StayPriceRequest } from './hotel-rate-quote';
 
 export type HotelWriteScope = { organizationId: string; branchId: string };
-export type ScopedWhere = HotelWriteScope & { id: string; version?: number };
+
+export const RESERVATION_CREATE_OPERATION = 'reservation.create';
+
+export type ReservationCreated = {
+  id: string;
+  confirmationNumber: string;
+  status: 'HOLD';
+  folioId: string;
+  folioNumber: string;
+};
+
+export type StoredReplay = { requestHash: string; response: unknown };
+
+/**
+ * The persistence port. Every method takes both tenant keys. The caller must
+ * run the whole command inside one transaction that holds the property lock
+ * (`withLockedProperty`), which is what makes "check availability, then
+ * insert" and "look up the key, then record it" atomic per property.
+ */
 export interface HotelReservationStore {
-  lockProperty(scope: HotelWriteScope): Promise<void>;
-  findRatePlan(scope: HotelWriteScope, ratePlanId: string): Promise<RatePlan | null>;
-  findReplay(scope: HotelWriteScope, operation: string, key: string): Promise<{ requestHash: string; response: unknown } | null>;
-  createReservation(scope: HotelWriteScope, data: Record<string, unknown>, request: { operation: string; key: string; requestHash: string }): Promise<unknown>;
-  updateReservation(where: ScopedWhere, data: Record<string, unknown>): Promise<number>;
-  appendReservationEvent(scope: HotelWriteScope, data: Record<string, unknown>): Promise<void>;
-  appendReversal(scope: HotelWriteScope, data: { originalId: string; reason: string; amountMinor: number }): Promise<void>;
+  findReplay(scope: HotelWriteScope, operation: string, key: string): Promise<StoredReplay | null>;
+  priceStay(scope: HotelWriteScope, request: StayPriceRequest): Promise<PricedStay | null>;
+  availability(scope: HotelWriteScope, arrivalDate: string, departureDate: string): Promise<AvailabilityFacts>;
+  insertReservation(
+    scope: HotelWriteScope,
+    actorId: string,
+    input: ReservationCreateRequest,
+    priced: PricedStay
+  ): Promise<ReservationCreated>;
+  saveReplay(
+    scope: HotelWriteScope,
+    operation: string,
+    key: string,
+    requestHash: string,
+    result: ReservationCreated
+  ): Promise<void>;
 }
 
-export async function createReservation(store: HotelReservationStore, scope: HotelWriteScope, actorId: string, input: { idempotencyKey: string; roomTypeId: string; ratePlanId: string; arrivalDate: string; departureDate: string; [key: string]: unknown }) {
-  await store.lockProperty(scope);
-  const requestHash = canonicalRequestHash(input);
-  const replay = await store.findReplay(scope, 'reservation.create', input.idempotencyKey);
-  if (replay) {
-    if (replay.requestHash !== requestHash) throw new TRPCError({ code: 'CONFLICT', message: 'That idempotency key was used for a different request.' });
-    return replay.response;
+/**
+ * Create a HOLD reservation with its stay unit and open folio.
+ *
+ * - The idempotency key is bound to the canonical request hash: an exact
+ *   replay returns the stored result without writing, and reuse of the key for
+ *   a different request is a CONFLICT without writing.
+ * - Money comes only from the server-side rate plan prices.
+ * - Availability is re-derived under the property lock; no night may be sold
+ *   beyond supply.
+ */
+export async function createReservation(
+  store: HotelReservationStore,
+  scope: HotelWriteScope,
+  actorId: string,
+  input: ReservationCreateRequest
+): Promise<ReservationCreated> {
+  rejectClientMoney(input as unknown as Record<string, unknown>);
+  if (input.branchId !== scope.branchId) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'That reservation belongs to another property.' });
   }
-  const plan = await store.findRatePlan(scope, input.ratePlanId);
-  if (!plan) throw new TRPCError({ code: 'NOT_FOUND', message: 'Rate plan is unavailable.' });
-  const quote = quoteStayFromConfiguration(plan, { ...scope, roomTypeId: input.roomTypeId, arrivalDate: input.arrivalDate, departureDate: input.departureDate });
-  return store.createReservation(scope, { ...input, ...quote, actorId }, { operation: 'reservation.create', key: input.idempotencyKey, requestHash });
-}
+  const requestHash = reservationRequestHash(input);
+  const replay = await store.findReplay(scope, RESERVATION_CREATE_OPERATION, input.idempotencyKey);
+  if (replay) {
+    if (replay.requestHash !== requestHash) {
+      throw new TRPCError({
+        code: 'CONFLICT',
+        message: 'That idempotency key was already used for a different reservation.',
+      });
+    }
+    return replay.response as ReservationCreated;
+  }
 
-/** No generic update/delete exists for snapshots, postings, or settlements. */
-export async function reverseRecordedMoney(store: HotelReservationStore, scope: HotelWriteScope, input: { originalId: string; reason: string; amountMinor: number }) {
-  if (!input.reason.trim() || input.amountMinor <= 0) throw new TRPCError({ code: 'BAD_REQUEST', message: 'A positive reversal and reason are required.' });
-  await store.lockProperty(scope);
-  await store.appendReversal(scope, input);
-}
+  const priced = await store.priceStay(scope, {
+    roomTypeId: input.roomTypeId,
+    ratePlanId: input.ratePlanId,
+    arrivalDate: input.arrivalDate,
+    departureDate: input.departureDate,
+  });
+  if (!priced) {
+    throw new TRPCError({ code: 'NOT_FOUND', message: 'That rate plan is not available for this room type.' });
+  }
 
-export async function assignRoom(store: HotelReservationStore & { findAssignableRoom(scope: HotelWriteScope, roomId: string, stayUnitId: string): Promise<boolean>; appendAssignment(scope: HotelWriteScope, data: Record<string, unknown>): Promise<unknown> }, scope: HotelWriteScope, input: { roomId: string; stayUnitId: string; startDate: string; endDate: string; actorId: string }) {
-  await store.lockProperty(scope);
-  if (!(await store.findAssignableRoom(scope, input.roomId, input.stayUnitId))) throw new TRPCError({ code: 'CONFLICT', message: 'That room is unavailable or does not match the booked inventory.' });
-  return store.appendAssignment(scope, input);
-}
+  const facts = await store.availability(scope, input.arrivalDate, input.departureDate);
+  if (!canBook(facts, input.roomTypeId, input.arrivalDate, input.departureDate)) {
+    throw new TRPCError({
+      code: 'CONFLICT',
+      message: 'No room of that type is available for every night of the stay.',
+    });
+  }
 
-export async function releaseAssignment(store: HotelReservationStore & { releaseAssignment(where: ScopedWhere, data: { releasedAt: Date; releaseReason: string }): Promise<number> }, scope: HotelWriteScope, input: { id: string; version?: number; reason: string }) {
-  await store.lockProperty(scope);
-  const count = await store.releaseAssignment({ ...scope, id: input.id, version: input.version }, { releasedAt: new Date(), releaseReason: input.reason });
-  if (count !== 1) throw new TRPCError({ code: 'CONFLICT', message: 'That assignment changed or is outside this property.' });
+  const created = await store.insertReservation(scope, actorId, input, priced);
+  await store.saveReplay(scope, RESERVATION_CREATE_OPERATION, input.idempotencyKey, requestHash, created);
+  return created;
 }

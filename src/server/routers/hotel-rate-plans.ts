@@ -1,104 +1,197 @@
+import { randomUUID } from 'node:crypto';
+
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 
 import { Prisma } from '@/generated/prisma/client';
-import { quoteStay } from '@/lib/hotel/rates';
-import { currentProperty } from '@/server/hotel-property-context';
+import { recordHotelAudit } from '@/lib/hotel/audit';
+import { MAX_MONEY_MINOR } from '@/lib/hotel/rates';
+import { hotelDate, MAX_STAY_NIGHTS, stayDates } from '@/lib/hotel/reservations';
+import { currentProperty, hasSqlState, withLockedProperty } from '@/server/hotel-property-context';
+import { priceStay } from '@/server/hotel-rate-quote';
 import { capabilityProcedure, router } from '../trpc';
 
-// These are intentionally separate grants. The casts bridge the legacy Action
-// catalogue until its generated union learns the two finer-grained keys; ABAC
-// still receives (and default-denies) the exact runtime capability strings.
-const read = capabilityProcedure('hotel:rates:read' as 'hotel:rates');
-const manage = capabilityProcedure('hotel:rates:manage' as 'hotel:rates');
-const selection = z.object({ branchId: z.string().trim().min(1).max(128) }).strict();
-const ids = selection.extend({
-  roomTypeId: z.string().trim().min(1).max(128),
-  ratePlanId: z.string().trim().min(1).max(128),
-});
-const quoteInput = ids.extend({ arrival: z.coerce.date(), departure: z.coerce.date() }).strict();
-const createInput = selection.extend({
-  roomTypeId: z.string().trim().min(1).max(128),
-  code: z.string().trim().min(1).max(40),
-  name: z.string().trim().min(1).max(160),
-  currency: z.string().regex(/^[A-Z]{3}$/),
-  taxBasisPoints: z.number().int().min(0).max(100_000),
-}).strict();
-const priceInput = ids.extend({
-  validFrom: z.coerce.date(),
-  validTo: z.coerce.date(),
-  netMinor: z.bigint().nonnegative().max(9_223_372_036_854_775_807n),
-}).strict();
+/**
+ * Rate plans gate on `hotel:rates`, the registered capability the rest of
+ * `hotelRates.*` uses, and every procedure re-resolves the property with it.
+ */
+const rates = capabilityProcedure('hotel:rates');
+const RATES = 'hotel:rates' as const;
 
-type PriceRow = { stayDate: Date; netMinor: bigint; taxBasisPoints: number };
+const selection = z.object({ branchId: z.string().trim().min(1).max(128) }).strict();
+const id = z.string().trim().min(1).max(191);
+
+/** Strict: a quote takes configuration only; a client-supplied price is refused. */
+export const ratePlanQuoteInput = selection
+  .extend({ roomTypeId: id, ratePlanId: id, arrivalDate: hotelDate, departureDate: hotelDate })
+  .strict()
+  .superRefine((value, context) => {
+    if (!hotelDate.safeParse(value.arrivalDate).success || !hotelDate.safeParse(value.departureDate).success) {
+      return;
+    }
+    if (value.departureDate <= value.arrivalDate) {
+      context.addIssue({ code: 'custom', path: ['departureDate'], message: 'Departure must follow arrival.' });
+    } else if (stayDates(value.arrivalDate, value.departureDate).length > MAX_STAY_NIGHTS) {
+      context.addIssue({
+        code: 'custom',
+        path: ['departureDate'],
+        message: `Quote at most ${MAX_STAY_NIGHTS} nights.`,
+      });
+    }
+  });
+
+export const ratePlanCreateInput = selection
+  .extend({
+    roomTypeId: id,
+    code: z
+      .string()
+      .trim()
+      .min(1)
+      .max(40)
+      .transform((value) => value.toUpperCase()),
+    name: z.string().trim().min(1).max(160),
+    currency: z.string().regex(/^[A-Z]{3}$/),
+    taxBasisPoints: z.number().int().min(0).max(100_000),
+  })
+  .strict();
+
+export const ratePlanPriceInput = selection
+  .extend({
+    roomTypeId: id,
+    ratePlanId: id,
+    validFrom: hotelDate,
+    validTo: hotelDate,
+    netMinor: z
+      .bigint()
+      .refine((value) => value >= BigInt(0) && value <= MAX_MONEY_MINOR, 'Enter a valid price.'),
+  })
+  .strict()
+  .refine((value) => value.validFrom <= value.validTo, {
+    path: ['validTo'],
+    message: 'The price must end on or after it starts.',
+  });
+
+function actorId(ctx: { session: { user?: { id?: string } } | null }): string {
+  const value = ctx.session?.user?.id;
+  if (!value) throw new TRPCError({ code: 'UNAUTHORIZED' });
+  return value;
+}
 
 export const hotelRatePlansRouter = router({
-  list: read.input(selection).query(async ({ ctx, input }) => {
-    const property = await currentProperty(ctx, input.branchId, 'hotel:rates');
-    return ctx.db.$queryRaw(Prisma.sql`
+  list: rates.input(selection).query(async ({ ctx, input }) => {
+    const property = await currentProperty(ctx, input.branchId, RATES);
+    return ctx.db.$queryRaw<
+      {
+        id: string;
+        roomTypeId: string;
+        code: string;
+        name: string;
+        currency: string;
+        taxBasisPoints: number;
+        active: boolean;
+      }[]
+    >(Prisma.sql`
       SELECT id, "roomTypeId", code, name, currency, "taxBasisPoints", active
       FROM hotel_rate_plans
-      WHERE "organizationId"=${ctx.entitlements.organizationId}
-        AND "branchId"=${property.branchId}
+      WHERE "organizationId" = ${ctx.entitlements.organizationId}
+        AND "branchId" = ${property.branchId}
       ORDER BY code`);
   }),
 
-  quote: read.input(quoteInput).query(async ({ ctx, input }) => {
-    const property = await currentProperty(ctx, input.branchId, 'hotel:rates');
-    return quoteStay(
-      {
-        organizationId: ctx.entitlements.organizationId,
-        branchId: property.branchId,
-        loadPrices: (scope) => ctx.db.$queryRaw<PriceRow[]>(Prisma.sql`
-          SELECT day::date AS "stayDate", p."netMinor", rp."taxBasisPoints"
-          FROM generate_series(${scope.arrival}::date, ${scope.departure}::date - 1, interval '1 day') day
-          JOIN LATERAL (SELECT candidate."netMinor", candidate."ratePlanId"
-            FROM hotel_rate_plan_prices candidate
-            WHERE candidate."organizationId"=${scope.organizationId}
-              AND candidate."branchId"=${scope.branchId} AND candidate."roomTypeId"=${scope.roomTypeId}
-              AND candidate."ratePlanId"=${scope.ratePlanId}
-              AND candidate.published=true
-              AND day::date BETWEEN candidate."validFrom" AND candidate."validTo"
-            ORDER BY candidate."createdAt" DESC LIMIT 1) p ON true
-          JOIN hotel_rate_plans rp ON rp."organizationId"=${scope.organizationId}
-            AND rp."branchId"=${scope.branchId} AND rp.id=p."ratePlanId" AND rp.active=true
-          ORDER BY day`),
+  /** Same pricing path a booking snapshots: published prices plus the plan's tax. */
+  quote: rates.input(ratePlanQuoteInput).query(async ({ ctx, input }) => {
+    const property = await currentProperty(ctx, input.branchId, RATES);
+    const scope = { organizationId: ctx.entitlements.organizationId, branchId: property.branchId };
+    const priced = await priceStay(ctx.db, scope, input).catch((error: unknown) => {
+      if (error instanceof RangeError) throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
+      throw error;
+    });
+    if (!priced) throw new TRPCError({ code: 'NOT_FOUND', message: 'Rate plan not found.' });
+    return priced;
+  }),
+
+  create: rates.input(ratePlanCreateInput).mutation(({ ctx, input }) => {
+    const actor = actorId(ctx);
+    return withLockedProperty(
+      ctx,
+      input.branchId,
+      async (tx, property) => {
+        const planId = randomUUID();
+        let written: number;
+        try {
+          written = await tx.db.$executeRaw(Prisma.sql`
+            INSERT INTO hotel_rate_plans
+              (id, "organizationId", "branchId", "roomTypeId", code, name, currency, "taxBasisPoints", "createdById")
+            SELECT ${planId}, rt."organizationId", rt."branchId", rt.id, ${input.code}, ${input.name},
+              ${input.currency}, ${input.taxBasisPoints}, ${actor}
+            FROM hotel_room_types rt
+            WHERE rt."organizationId" = ${tx.entitlements.organizationId}
+              AND rt."branchId" = ${property.branchId}
+              AND rt.id = ${input.roomTypeId}
+              AND rt.active = true`);
+        } catch (error) {
+          if (hasSqlState(error, '23505')) {
+            throw new TRPCError({ code: 'CONFLICT', message: 'A rate plan with that code already exists.' });
+          }
+          throw error;
+        }
+        if (written !== 1) throw new TRPCError({ code: 'NOT_FOUND', message: 'Room type not found.' });
+        recordHotelAudit(ctx, {
+          entity: { type: 'HotelRatePlan', id: planId, label: input.code },
+          action: 'hotel.ratePlan.create',
+          operation: 'CREATE',
+          after: {
+            roomTypeId: input.roomTypeId,
+            code: input.code,
+            name: input.name,
+            currency: input.currency,
+            taxBasisPoints: input.taxBasisPoints,
+          },
+          metadata: { branchId: property.branchId },
+        });
+        return { id: planId };
       },
-      input.roomTypeId,
-      input.ratePlanId,
-      input.arrival,
-      input.departure
+      RATES
     );
   }),
 
-  create: manage.input(createInput).mutation(async ({ ctx, input }) => {
-    const property = await currentProperty(ctx, input.branchId, 'hotel:rates');
-    const id = crypto.randomUUID();
-    const written = await ctx.db.$executeRaw(Prisma.sql`
-      INSERT INTO hotel_rate_plans
-        (id,"organizationId","branchId","roomTypeId",code,name,currency,"taxBasisPoints","taxConfig","validFrom","nightlyRateMinor")
-      SELECT ${id},${ctx.entitlements.organizationId},${property.branchId},rt.id,${input.code},${input.name},${input.currency},${input.taxBasisPoints},'{}'::jsonb,CURRENT_DATE,0
-      FROM hotel_room_types rt
-      WHERE rt."organizationId"=${ctx.entitlements.organizationId} AND rt."branchId"=${property.branchId} AND rt.id=${input.roomTypeId}`);
-    if (written !== 1)
-      throw new TRPCError({ code: 'NOT_FOUND', message: 'Room type not found.' });
-    return { id };
-  }),
-
-  publishPrice: manage.input(priceInput).mutation(async ({ ctx, input }) => {
-    const property = await currentProperty(ctx, input.branchId, 'hotel:rates');
-    if (input.validFrom > input.validTo)
-      throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invalid price range.' });
-    const id = crypto.randomUUID();
-    const written = await ctx.db.$executeRaw(Prisma.sql`
-      INSERT INTO hotel_rate_plan_prices
-        (id,"organizationId","branchId","roomTypeId","ratePlanId","validFrom","validTo","netMinor",published)
-      SELECT ${id},${ctx.entitlements.organizationId},${property.branchId},rp."roomTypeId",rp.id,
-        ${input.validFrom}::date,${input.validTo}::date,${input.netMinor},true
-      FROM hotel_rate_plans rp
-      WHERE rp."organizationId"=${ctx.entitlements.organizationId} AND rp."branchId"=${property.branchId}
-        AND rp.id=${input.ratePlanId} AND rp."roomTypeId"=${input.roomTypeId}`);
-    if (written !== 1) throw new TRPCError({ code: 'NOT_FOUND', message: 'Rate plan not found.' });
-    return { id };
+  /** Prices are append-only versions; the latest published row covering a night wins. */
+  publishPrice: rates.input(ratePlanPriceInput).mutation(({ ctx, input }) => {
+    const actor = actorId(ctx);
+    return withLockedProperty(
+      ctx,
+      input.branchId,
+      async (tx, property) => {
+        const priceId = randomUUID();
+        const written = await tx.db.$executeRaw(Prisma.sql`
+          INSERT INTO hotel_rate_plan_prices
+            (id, "organizationId", "branchId", "roomTypeId", "ratePlanId", "validFrom", "validTo",
+             "netMinor", published, "createdById")
+          SELECT ${priceId}, rp."organizationId", rp."branchId", rp."roomTypeId", rp.id,
+            ${input.validFrom}::date, ${input.validTo}::date, ${input.netMinor}, true, ${actor}
+          FROM hotel_rate_plans rp
+          WHERE rp."organizationId" = ${tx.entitlements.organizationId}
+            AND rp."branchId" = ${property.branchId}
+            AND rp.id = ${input.ratePlanId}
+            AND rp."roomTypeId" = ${input.roomTypeId}
+            AND rp.active = true`);
+        if (written !== 1) throw new TRPCError({ code: 'NOT_FOUND', message: 'Rate plan not found.' });
+        recordHotelAudit(ctx, {
+          entity: { type: 'HotelRatePlanPrice', id: priceId, label: input.ratePlanId },
+          action: 'hotel.ratePlan.publishPrice',
+          operation: 'CREATE',
+          after: {
+            ratePlanId: input.ratePlanId,
+            roomTypeId: input.roomTypeId,
+            validFrom: input.validFrom,
+            validTo: input.validTo,
+            netMinor: input.netMinor.toString(),
+          },
+          metadata: { branchId: property.branchId },
+        });
+        return { id: priceId };
+      },
+      RATES
+    );
   }),
 });

@@ -245,6 +245,13 @@ export const PROCEDURE_MODULES: Record<string, string> = {
   // configuration every hospitality tenant holds, so they gate on the mandatory
   // Hotel Core module; the per-procedure capability is `hotel:rates`.
   hotelRates: 'hotel-core',
+  // Hotel MVP: reservations and their availability are the Reservations module;
+  // the folio ledger is Folio and Billing. Housekeeping is part of operating
+  // any property, so it rides on the mandatory Hotel Core (capability
+  // `hotel:housekeeping`).
+  hotelReservations: 'hotel-reservations',
+  hotelFolios: 'hotel-folio',
+  hotelHousekeeping: 'hotel-core',
 };
 
 /**

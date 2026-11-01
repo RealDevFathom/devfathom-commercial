@@ -60,22 +60,17 @@ export function isRoomSellable(status: HousekeepingStatus): boolean {
 }
 
 export type HousekeepingDb = Pick<Prisma.TransactionClient, '$queryRaw' | '$executeRaw'>;
+/**
+ * Both tenant keys travel with every statement: the tables' RLS is keyed on the
+ * organization (set by the tenant DB handle), and the property is enforced by
+ * the explicit `branchId` predicate after `requireHotelPropertyScope`.
+ */
 export type HousekeepingScope = { organizationId: string; branchId: string; actorId: string };
-
-async function applyHousekeepingScope(
-  db: HousekeepingDb,
-  scope: Omit<HousekeepingScope, 'actorId'>
-) {
-  await db.$queryRaw(
-    Prisma.sql`SELECT set_config('app.current_organization_id', ${scope.organizationId}, true), set_config('app.current_hotel_property_id', ${scope.branchId}, true)`
-  );
-}
 
 export async function listHousekeeping(
   db: HousekeepingDb,
   scope: Omit<HousekeepingScope, 'actorId'>
 ) {
-  await applyHousekeepingScope(db, scope);
   const rooms = await db.$queryRaw(Prisma.sql`
     SELECT r.id AS "roomId", r.number, COALESCE(h.status, 'DIRTY') AS status, h."changedAt"
     FROM hotel_rooms r LEFT JOIN hotel_room_housekeeping h
@@ -95,7 +90,6 @@ export async function setHousekeepingStatus(
   roomId: string,
   status: HousekeepingStatus
 ) {
-  await applyHousekeepingScope(db, scope);
   const current = await db.$queryRaw<{ status: HousekeepingStatus }[]>(Prisma.sql`
     SELECT COALESCE(h.status, 'DIRTY') AS status FROM hotel_rooms r
     LEFT JOIN hotel_room_housekeeping h ON h."organizationId"=r."organizationId" AND h."branchId"=r."branchId" AND h."roomId"=r.id
@@ -116,7 +110,6 @@ export async function createHousekeepingTask(
   scope: HousekeepingScope,
   input: z.infer<typeof housekeepingTaskCreateInput>
 ) {
-  await applyHousekeepingScope(db, scope);
   const id = randomUUID();
   const rows = await db.$queryRaw(Prisma.sql`
     INSERT INTO hotel_housekeeping_tasks (id,"organizationId","branchId","roomId",title,notes,"assignedToId","createdById")
@@ -133,7 +126,6 @@ export async function updateHousekeepingTask(
   taskId: string,
   status: HousekeepingTaskStatus
 ) {
-  await applyHousekeepingScope(db, scope);
   const found = await db.$queryRaw<{ status: HousekeepingTaskStatus }[]>(
     Prisma.sql`SELECT status FROM hotel_housekeeping_tasks WHERE "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} AND id=${taskId} FOR UPDATE`
   );

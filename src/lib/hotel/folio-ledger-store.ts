@@ -1,21 +1,21 @@
 import { randomUUID } from 'node:crypto';
 
 import { Prisma } from '@/generated/prisma/client';
-import { HOTEL_FOLIO_CAPABILITY } from './folio-security';
-import {
-  createFolioLedgerService,
-  type CatalogPrice,
-  type FolioLedgerStore,
-  type FolioScope,
-} from './folio-ledger';
+import type { CatalogPrice, FolioLedgerStore } from './folio-ledger';
 
 export type FolioLedgerRow = Readonly<Record<string, unknown>>;
 
-/** The deliberately small surface also accepts an elevated Prisma handle. */
+/** The deliberately small surface the ledger needs from a Prisma client or transaction. */
 export interface FolioSqlClient {
   $queryRaw<T = unknown>(query: Prisma.Sql): Promise<T>;
 }
 
+/**
+ * The single folio ledger (`hotel_folio_entries`). Every statement carries both
+ * tenant keys, so the store stays property-safe even on an elevated handle.
+ * Amounts are server-derived snapshots; a reversal is a positive copy naming
+ * the original (the database refuses anything else and a second reversal).
+ */
 export function createPrismaFolioLedgerStore(
   db: FolioSqlClient,
   actorId: string
@@ -23,7 +23,8 @@ export function createPrismaFolioLedgerStore(
   return {
     async read(scope, folioId) {
       const rows = await db.$queryRaw<FolioLedgerRow[]>(Prisma.sql`
-        SELECT * FROM hotel_folios
+        SELECT id, "reservationId", "folioNumber", status::text AS status, currency, version, "createdAt"
+        FROM hotel_folios
         WHERE id = ${folioId}
           AND "organizationId" = ${scope.organizationId}
           AND "branchId" = ${scope.branchId}
@@ -32,7 +33,10 @@ export function createPrismaFolioLedgerStore(
     },
     readEntries(scope, folioId) {
       return db.$queryRaw<FolioLedgerRow[]>(Prisma.sql`
-        SELECT * FROM hotel_folio_entries
+        SELECT id, kind::text AS kind, "catalogItemId", "serviceDate", description, quantity,
+          "unitMinor", "netMinor", "taxMinor", "grossMinor", currency, "reversesEntryId", reason,
+          "createdById", "createdAt"
+        FROM hotel_folio_entries
         WHERE "folioId" = ${folioId}
           AND "organizationId" = ${scope.organizationId}
           AND "branchId" = ${scope.branchId}
@@ -51,50 +55,51 @@ export function createPrismaFolioLedgerStore(
       return rows[0] ?? null;
     },
     async insert(scope, posting) {
+      // Catalog prices are in the property's currency, so an extra can only be
+      // posted to an open folio held in that currency.
       const rows = await db.$queryRaw<FolioLedgerRow[]>(Prisma.sql`
         INSERT INTO hotel_folio_entries
-          (id, "organizationId", "branchId", "folioId", "catalogItemId", quantity,
-           "unitMinor", "netMinor", "taxMinor", "grossMinor", "createdBy")
-        SELECT ${randomUUID()}, f."organizationId", f."branchId", f.id, e.id,
-          ${posting.quantity}, ${posting.unitMinor}, ${posting.netMinor},
-          ${posting.taxMinor}, ${posting.grossMinor}, ${actorId}
+          (id, "organizationId", "branchId", "folioId", kind, "catalogItemId", description, quantity,
+           "unitMinor", "netMinor", "taxMinor", "grossMinor", currency, "createdById")
+        SELECT ${randomUUID()}, f."organizationId", f."branchId", f.id, 'EXTRA'::"HotelFolioEntryKind",
+          e.id, e.name, ${posting.quantity}, ${BigInt(posting.unitMinor)}, ${BigInt(posting.netMinor)},
+          ${BigInt(posting.taxMinor)}, ${BigInt(posting.grossMinor)}, f.currency, ${actorId}
         FROM hotel_folios f
+        JOIN hotel_properties p
+          ON p."organizationId" = f."organizationId"
+         AND p."branchId" = f."branchId"
+         AND p.currency = f.currency
         JOIN hotel_extras e
           ON e.id = ${posting.catalogItemId}
          AND e."organizationId" = ${scope.organizationId}
          AND e."branchId" = ${scope.branchId}
+         AND e.active = true
         WHERE f.id = ${posting.folioId}
           AND f."organizationId" = ${scope.organizationId}
           AND f."branchId" = ${scope.branchId}
-        RETURNING hotel_folio_entries.*`);
+          AND f.status = 'OPEN'
+        RETURNING id, kind::text AS kind, "catalogItemId", description, quantity, "unitMinor",
+          "netMinor", "taxMinor", "grossMinor", currency, "createdAt"`);
       if (!rows[0]) throw new Error('Folio or catalog item is unavailable for this property.');
       return rows[0];
     },
     async reverse(scope, entryId, reason) {
       const rows = await db.$queryRaw<FolioLedgerRow[]>(Prisma.sql`
-        SELECT reverse_hotel_folio_entry(
-          ${randomUUID()}, ${scope.organizationId}, ${scope.branchId}, id, ${reason}, ${actorId}
-        ) AS entry
-        FROM hotel_folio_entries
-        WHERE id = ${entryId}
-          AND "organizationId" = ${scope.organizationId}
-          AND "branchId" = ${scope.branchId}`);
+        INSERT INTO hotel_folio_entries
+          (id, "organizationId", "branchId", "folioId", kind, "catalogItemId", "serviceDate",
+           description, quantity, "unitMinor", "netMinor", "taxMinor", "grossMinor", currency,
+           "reversesEntryId", reason, "createdById")
+        SELECT ${randomUUID()}, e."organizationId", e."branchId", e."folioId", e.kind, e."catalogItemId",
+          e."serviceDate", e.description, e.quantity, e."unitMinor", e."netMinor", e."taxMinor",
+          e."grossMinor", e.currency, e.id, ${reason}, ${actorId}
+        FROM hotel_folio_entries e
+        WHERE e.id = ${entryId}
+          AND e."organizationId" = ${scope.organizationId}
+          AND e."branchId" = ${scope.branchId}
+          AND e."reversesEntryId" IS NULL
+        RETURNING id, kind::text AS kind, "reversesEntryId", reason, "grossMinor", currency, "createdAt"`);
       if (!rows[0]) throw new Error('Folio entry is unavailable for this property.');
       return rows[0];
     },
   };
-}
-
-export type FolioPrincipal = Readonly<{
-  id: string;
-  capabilities: ReadonlySet<string>;
-}>;
-
-/** Production composition: authorization is not a caller-supplied callback. */
-export function createProductionFolioLedgerService(db: FolioSqlClient, principal: FolioPrincipal) {
-  const requireFolio = async (_scope: FolioScope) => {
-    if (!principal.capabilities.has(HOTEL_FOLIO_CAPABILITY))
-      throw new Error(`Missing capability: ${HOTEL_FOLIO_CAPABILITY}`);
-  };
-  return createFolioLedgerService(createPrismaFolioLedgerStore(db, principal.id), requireFolio);
 }
