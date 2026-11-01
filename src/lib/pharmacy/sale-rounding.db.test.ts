@@ -284,12 +284,13 @@ describeDatabase('SEC-643-01 persisted quote/charge parity on PostgreSQL', () =>
   );
 
   /**
-   * Decision Q3-A: MRP and its rounding are resolved per allocated lot, and the
-   * line keeps the existing maximum-across-allocations price and ceiling.
+   * Decision Q3-A: MRP and its rounding are resolved per allocated lot, and each
+   * allocation is charged at its own lot price (20 units from the first lot,
+   * 10 from the later one). The ceiling stays the highest allocated lot ceiling.
    */
   async function checkSplitLotCheckout(
     laterMrpMinor: number,
-    expected: { unitPriceMinor: number; ceilingMinor: number }
+    expected: { grossMinor: number; unitPriceMinor: number; ceilingMinor: number }
   ) {
     const { medicine, lot: firstLot } = await catalog(`split-lot-${laterMrpMinor}`, 5, true, 20);
     const secondLot = await tenant(async (db) => {
@@ -377,10 +378,11 @@ describeDatabase('SEC-643-01 persisted quote/charge parity on PostgreSQL', () =>
     expect(new Set(stored.allocations.map((part) => part.inventoryLotId))).toEqual(
       new Set([firstLot.id, secondLot.id])
     );
+    expect(stored.grossMinor).toBe(expected.grossMinor);
     expect(stored.unitPriceMinor).toBe(expected.unitPriceMinor);
     expect(stored.proRataCeilingMinor).toBe(expected.ceilingMinor);
     expect(stored.unitPriceMinor).toBeLessThanOrEqual(stored.proRataCeilingMinor);
-    const chargedMinor = stored.unitPriceMinor * stored.quantity;
+    const chargedMinor = expected.grossMinor;
     await tenant((db) =>
       settlement.applyPharmacyTender(db, scope, {
         saleId: sale.id,
@@ -402,16 +404,19 @@ describeDatabase('SEC-643-01 persisted quote/charge parity on PostgreSQL', () =>
   }
 
   it(
-    'charges the higher per-lot price when a later batch has a higher MRP',
-    // Later lot: 1030 * 10 / 20 = 515 ceiling, rounded to its own increment 6 => 510.
-    () => checkSplitLotCheckout(1_030, { unitPriceMinor: 510, ceilingMinor: 515 }),
+    'charges later-batch units at their own higher MRP price',
+    // Later lot: 1030 * 10 / 20 = 515 ceiling, its own increment 6 => 510/strip.
+    // 20 units at 500 + 10 units at 510 => 1510 for three strips.
+    () =>
+      checkSplitLotCheckout(1_030, { grossMinor: 1_510, unitPriceMinor: 503, ceilingMinor: 515 }),
     30_000
   );
 
   it(
-    'keeps the earlier lot price when a later batch has a lower MRP',
-    // Later lot: 900 * 10 / 20 = 450; the earlier lot's 500 (ceiling 501) remains the maximum.
-    () => checkSplitLotCheckout(900, { unitPriceMinor: 500, ceilingMinor: 501 }),
+    'never bills lower-MRP later-batch units at the earlier batch price',
+    // Later lot: 900 * 10 / 20 = 450/strip. 20 units at 500 + 10 units at 450 => 1450.
+    () =>
+      checkSplitLotCheckout(900, { grossMinor: 1_450, unitPriceMinor: 483, ceilingMinor: 501 }),
     30_000
   );
 });

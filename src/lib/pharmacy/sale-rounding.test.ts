@@ -196,7 +196,7 @@ describe('SEC-643-01 counter quote to charged sale-unit rounding', () => {
     expect(row!.saleableUnits.find((unit) => unit.kind === 'STRIP')?.unitPriceMinor).toBe(501);
   });
 
-  it('prices each allocated batch with its own MRP policy and charges the maximum', async () => {
+  it('prices each allocated batch with its own MRP and rounding policy', async () => {
     const db = fixture([
       policy,
       { ...policy, batchReference: 'batch-b', roundingIncrementMinor: 6 },
@@ -257,11 +257,16 @@ describe('SEC-643-01 counter quote to charged sale-unit rounding', () => {
     expect(allocation.allocations).toHaveLength(2);
     // The quote reflects the first FEFO lot (1003 / increment 5 => 500).
     expect(preview.grossMinor).toBe(1_500);
-    // The later batch resolves its own MRP and increment (1030 => 515, step 6 => 510);
-    // the line keeps the existing maximum-across-allocations price and ceiling.
-    expect(line.unitPriceMinor).toBe(510);
+    // The later batch resolves its own MRP and increment (1030 => 515, step 6 => 510).
+    // Each allocation is charged at its own lot price: 10 units at 500/strip plus
+    // 20 units at 510/strip = 1520; the ceiling stays the highest lot ceiling.
+    expect(line.grossMinor).toBe(1_520);
+    expect(line.unitPriceMinor).toBe(506);
     expect(line.proRataCeilingMinor).toBe(515);
-    expect(line.unitPriceMinor).toBeLessThanOrEqual(line.proRataCeilingMinor);
+    const allocationGross = db.pharmacySaleLineAllocation.create.mock.calls.map(
+      ([arg]) => arg.data.grossMinor
+    );
+    expect(allocationGross).toEqual([500, 1_020]);
   });
 
   it.each(['counter', 'reserved'] as const)(
@@ -305,12 +310,12 @@ describe('SEC-643-01 counter quote to charged sale-unit rounding', () => {
 
   it.each(
     (['counter', 'reserved'] as const).flatMap((checkout) => [
-      { checkout, printedMrpMinor: 900, ceiling: 501 },
-      { checkout, printedMrpMinor: 1_000, ceiling: 501 },
+      { checkout, printedMrpMinor: 900, gross: 950, unitPrice: 475 },
+      { checkout, printedMrpMinor: 1_000, gross: 1_000, unitPrice: 500 },
     ])
   )(
-    'keeps the maximum-across-allocations price in $checkout checkout (MRP $printedMrpMinor)',
-    async ({ checkout, printedMrpMinor, ceiling }) => {
+    'charges each allocated batch at its own MRP in $checkout checkout (MRP $printedMrpMinor)',
+    async ({ checkout, printedMrpMinor, gross, unitPrice }) => {
       const db = fixture();
       const [first] = await db.pharmacyInventoryLot.findMany();
       const second = {
@@ -352,11 +357,12 @@ describe('SEC-643-01 counter quote to charged sale-unit rounding', () => {
                 })),
               }
             );
-      // A lower-MRP later batch never lowers or refuses the line: the first
-      // batch's 500 (ceiling 501) remains the maximum across allocations.
+      // Lower-MRP units are never billed at the earlier batch's higher price:
+      // 10 units at 500/strip plus 10 units at the later batch's own price.
       const { line } = await result;
-      expect(line.unitPriceMinor).toBe(500);
-      expect(line.proRataCeilingMinor).toBe(ceiling);
+      expect(line.grossMinor).toBe(gross);
+      expect(line.unitPriceMinor).toBe(unitPrice);
+      expect(line.proRataCeilingMinor).toBe(501);
       expect(db.pharmacySaleLineAllocation.create).toHaveBeenCalledTimes(2);
     }
   );

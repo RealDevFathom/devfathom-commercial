@@ -75,7 +75,7 @@ import { POST } from './route';
 
 const rawSecret = `rdk_${'a'.repeat(43)}`;
 
-function request() {
+function request(cookie?: string) {
   const form = new FormData();
   form.set('name', 'Kitchen screen');
   form.set('branchId', 'branch_1');
@@ -84,7 +84,11 @@ function request() {
   form.set('confirmation', 'confirmed');
   return new Request('https://tenant.test/api/restaurant/devices/browser-enroll', {
     method: 'POST',
-    headers: { origin: 'https://tenant.test', 'user-agent': 'route-test' },
+    headers: {
+      origin: 'https://tenant.test',
+      'user-agent': 'route-test',
+      ...(cookie ? { cookie } : {}),
+    },
     body: form,
   });
 }
@@ -234,5 +238,38 @@ describe('POST browser enrollment', () => {
     expect(localAuthDeletion).toContain('Max-Age=0');
     expect(localAuthDeletion).not.toContain('Secure');
     expect(secureAuthDeletion).toContain('Secure');
+  });
+
+  it('expires every Auth.js session cookie chunk supplied by the enrolling browser', async () => {
+    const response = await POST(
+      request(
+        'authjs.session-token.0=local-first; authjs.session-token.1=local-second; ' +
+          '__Secure-authjs.session-token.0=secure-first; ' +
+          '__Secure-authjs.session-token.12=secure-last; authjs.session-token.1=duplicate; ' +
+          'authjs.session-token.invalid=preserved; authjs.session-token.2; ' +
+          'unrelated-cookie=preserved'
+      )
+    );
+    const cookies = response.headers.getSetCookie();
+
+    for (const name of [
+      'authjs.session-token.0',
+      'authjs.session-token.1',
+      '__Secure-authjs.session-token.0',
+      '__Secure-authjs.session-token.12',
+    ]) {
+      const deletion = cookies.find((cookie) => cookie.startsWith(`${name}=`));
+      expect(deletion).toContain('Max-Age=0');
+      expect(deletion).toContain('Expires=Thu, 01 Jan 1970 00:00:00 GMT');
+      expect(deletion?.includes('Secure')).toBe(name.startsWith('__Secure-'));
+    }
+    expect(
+      cookies.filter((cookie) => cookie.startsWith('authjs.session-token.1='))
+    ).toHaveLength(1);
+    expect(
+      cookies.some((cookie) => cookie.startsWith('authjs.session-token.invalid='))
+    ).toBe(false);
+    expect(cookies.some((cookie) => cookie.startsWith('authjs.session-token.2='))).toBe(false);
+    expect(cookies.some((cookie) => cookie.startsWith('unrelated-cookie='))).toBe(false);
   });
 });

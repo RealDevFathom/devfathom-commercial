@@ -23,7 +23,7 @@ const joined: NormalizedMeetingEvent = {
   providerType: 'participant_joined',
   roomName: 'mtg_random',
   participantId: 'PA-1',
-  participantIdentity: 'grant-1',
+  participantIdentity: 'usr:user-1',
   occurredAt: new Date('2026-08-28T04:00:00Z'),
   payload: { safe: true },
 };
@@ -63,11 +63,81 @@ describe('provider event ingestion', () => {
     await expect(recordAndApplyProviderEvent(occurrence, joined)).resolves.toBe('processed');
     expect(mocks.withTenantDb).toHaveBeenCalledWith('org-1', expect.any(Function));
     expect(createMany).toHaveBeenCalledWith(expect.objectContaining({ skipDuplicates: true }));
+    expect(findFirst).toHaveBeenCalledWith({
+      where: { occurrenceId: 'occ-1', userId: 'user-1' },
+      select: { id: true, userId: true },
+    });
     expect(executeRaw).toHaveBeenCalledTimes(1);
+    expect(executeRaw.mock.calls[0][0].values.slice(3, 5)).toEqual(['grant-1', 'user-1']);
     expect(update).toHaveBeenCalledWith(
       expect.objectContaining({ data: { processedAt: expect.any(Date) } })
     );
   });
+
+  it('attributes a namespaced member without an occurrence participant grant', async () => {
+    findFirst.mockResolvedValue(null);
+
+    await recordAndApplyProviderEvent(occurrence, joined);
+
+    expect(findFirst).toHaveBeenCalledWith({
+      where: { occurrenceId: 'occ-1', userId: 'user-1' },
+      select: { id: true, userId: true },
+    });
+    expect(executeRaw.mock.calls[0][0].values.slice(3, 5)).toEqual([null, 'user-1']);
+  });
+
+  it('resolves a namespaced guest identity to its occurrence participant', async () => {
+    findFirst.mockResolvedValue({ id: 'guest-grant-1', userId: null });
+
+    await recordAndApplyProviderEvent(occurrence, {
+      ...joined,
+      participantIdentity: 'gst:guest-grant-1',
+    });
+
+    expect(findFirst).toHaveBeenCalledWith({
+      where: { occurrenceId: 'occ-1', id: 'guest-grant-1' },
+      select: { id: true, userId: true },
+    });
+    expect(executeRaw.mock.calls[0][0].values.slice(3, 5)).toEqual(['guest-grant-1', null]);
+  });
+
+  it('preserves colons within the namespaced identity value', async () => {
+    await recordAndApplyProviderEvent(occurrence, {
+      ...joined,
+      participantIdentity: 'gst:guest:grant-1',
+    });
+
+    expect(findFirst).toHaveBeenCalledWith({
+      where: { occurrenceId: 'occ-1', id: 'guest:grant-1' },
+      select: { id: true, userId: true },
+    });
+  });
+
+  it('continues to resolve legacy unprefixed participant identities', async () => {
+    await recordAndApplyProviderEvent(occurrence, {
+      ...joined,
+      participantIdentity: 'grant-1',
+    });
+
+    expect(findFirst).toHaveBeenCalledWith({
+      where: {
+        occurrenceId: 'occ-1',
+        OR: [{ id: 'grant-1' }, { userId: 'grant-1' }],
+      },
+      select: { id: true, userId: true },
+    });
+  });
+
+  it.each(['unknown:grant-1', 'usr:', 'gst:'])(
+    'leaves an invalid namespaced identity (%s) unattributed',
+    async (participantIdentity) => {
+      await recordAndApplyProviderEvent(occurrence, { ...joined, participantIdentity });
+
+      expect(findFirst).not.toHaveBeenCalled();
+      expect(executeRaw).toHaveBeenCalledTimes(1);
+      expect(executeRaw.mock.calls[0][0].values.slice(3, 5)).toEqual([null, null]);
+    }
+  );
 
   it('makes a replay a no-op before any attendance or processed-state write', async () => {
     createMany.mockResolvedValue({ count: 0 });
@@ -85,8 +155,29 @@ describe('provider event ingestion', () => {
       providerType: 'participant_left',
     });
     const statement = executeRaw.mock.calls[0][0];
-    expect(statement.strings.join('')).toContain('ON CONFLICT');
-    expect(statement.strings.join('')).toContain('GREATEST');
+    const sql = statement.strings.join('');
+    expect(sql).toContain('ON CONFLICT');
+    expect(sql).toContain('GREATEST');
+    expect(sql).toContain(
+      '"occurrenceParticipantId" = COALESCE("meeting_participant_sessions"."occurrenceParticipantId", EXCLUDED."occurrenceParticipantId")'
+    );
+    expect(sql).toContain(
+      '"userId" = COALESCE("meeting_participant_sessions"."userId", EXCLUDED."userId")'
+    );
+  });
+
+  it('backfills participant attribution when a join follows an earlier leave', async () => {
+    await recordAndApplyProviderEvent(occurrence, joined);
+
+    const statement = executeRaw.mock.calls[0][0];
+    const sql = statement.strings.join('');
+    expect(sql).toContain('ON CONFLICT');
+    expect(sql).toContain(
+      '"occurrenceParticipantId" = COALESCE("meeting_participant_sessions"."occurrenceParticipantId", EXCLUDED."occurrenceParticipantId")'
+    );
+    expect(sql).toContain(
+      '"userId" = COALESCE("meeting_participant_sessions"."userId", EXCLUDED."userId")'
+    );
   });
 
   it('rolls back instead of marking an event processed when applying its effect fails', async () => {

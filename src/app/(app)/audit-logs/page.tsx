@@ -7,10 +7,19 @@ export const metadata: Metadata = {
   title: 'Audit Log',
 };
 
-export default async function AuditLogPage() {
+export default async function AuditLogPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const session = (await resolveTenantActor())?.session;
   if (session?.user?.role !== 'ADMIN') {
     redirect('/dashboard');
   }
-  return <AuditContent />;
+  const query = await searchParams;
+  const initialFilters = {
+    actorId: typeof query.actorId === 'string' ? query.actorId : '',
+    search: typeof query.search === 'string' ? query.search : '',
+  };
+  return <AuditContent key={JSON.stringify(initialFilters)} initialFilters={initialFilters} />;
 }

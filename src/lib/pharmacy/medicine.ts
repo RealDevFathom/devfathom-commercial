@@ -119,9 +119,9 @@ export function priceFromLot(input: {
   roundingIncrementMinor?: number;
 }): { unitPriceMinor: number; proRataCeilingMinor: number } {
   const roundingIncrementMinor = input.roundingIncrementMinor ?? 1;
-  // Keep the shared validation here, but do not multiply its already-rounded
-  // loose-unit result: rounding before scaling makes a complete pack cheaper
-  // than its printed MRP whenever the MRP is not divisible by the pack size.
+  // Reuse the loose-price validation, then calculate the pro-rata amount for
+  // this sale unit directly. Multiplying an already-floored loose price loses
+  // the pack's remainder (for example, 1000 / 3 * 3 used to charge 999).
   deriveLooseUnitPrice({
     printedMrpMinor: input.printedMrpMinor,
     canonicalUnitsInPack: input.canonicalUnitsInPack,
