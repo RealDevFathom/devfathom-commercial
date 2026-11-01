@@ -1048,7 +1048,6 @@ const purchasingRouter = router({
             await lockReceivablePurchaseOrder(db, scope, {
               purchaseOrderId: input.purchaseOrderId,
               supplierId: input.supplierId,
->>>>>>> origin/develop
             });
           }
           // PUR-01: an unauthorized or licence-expired supplier cannot be
