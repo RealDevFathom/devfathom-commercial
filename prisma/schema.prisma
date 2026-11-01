@@ -1102,8 +1102,6 @@ model PharmacySale {
   receiptDeviceId           String?
   businessDate              DateTime?                    @db.Date
   customerId                String?
-  /// Campaign/referral code redeemed on this sale (WP-G1).
-  discountCode              String?
   createdAt                 DateTime                     @default(now())
   updatedAt                 DateTime                     @updatedAt
   originalSale              PharmacySale?                @relation("PharmacySaleOriginal", fields: [organizationId, branchId, originalSaleId], references: [organizationId, branchId, id], onDelete: Restrict)
@@ -1118,7 +1116,8 @@ model PharmacySale {
   customer                  PharmacyCustomer?            @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict)
   loyaltyEntries            PharmacyLoyaltyPointsEntry[]
   customerOrder             PharmacyCustomerOrder?
-  campaignRecipients        CampaignRecipient[]
+  /// The campaign code redeemed on this sale; at most one (unique saleId).
+  campaignRecipient         CampaignRecipient?
   visibilityAnchor          PharmacyBranch               @relation("PharmacySaleVisibilityAnchor", fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_sales_visibility_fkey")
 
   @@unique([organizationId, id])
@@ -1152,10 +1151,6 @@ model PharmacyCustomer {
   whatsappOptIn          Boolean?
   whatsappOptInChangedAt DateTime?                    @db.Timestamp(3)
   preferredLanguage      String                       @default("en") @db.VarChar(2)
-  /// Normalised WhatsApp number for the growth channel. Never implies consent.
-  whatsappE164           String?
-  whatsappOptInAt        DateTime?
-  whatsappOptOutAt       DateTime?
   metrics                CustomerMetrics?
   campaignRecipients     CampaignRecipient[]
 
@@ -1163,7 +1158,6 @@ model PharmacyCustomer {
   @@unique([organizationId, patientId])
   @@unique([organizationId, userId])
   @@index([organizationId, displayName])
-  @@index([organizationId, whatsappE164])
   @@map("pharmacy_customers")
 }
 
@@ -2910,6 +2904,8 @@ model User {
 
   hotelPropertyAssignments HotelPropertyAssignment[]
   pharmacyBranchAssignments PharmacyBranchAssignment[]
+  growthCampaignsCreated    Campaign[]                 @relation("GrowthCampaignCreatedBy")
+  growthCampaignsApproved   Campaign[]                 @relation("GrowthCampaignApprovedBy")
 
   @@unique([organizationId, id])
   @@unique([organizationId, email])
@@ -14513,10 +14509,10 @@ model PharmacyMessageLog {
   orderId           String?
   dueDate           String?
   error             String?
-  body              String?
+  /// Growth campaign this message belongs to (WP-G1). Delivery ids stay in
+  /// `providerMessageId`; no message body or full phone number is stored.
   campaignId        String?
   recipientId       String?
-  waMessageId       String?
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
@@ -14527,7 +14523,6 @@ model PharmacyMessageLog {
   recipient    CampaignRecipient? @relation(fields: [organizationId, recipientId], references: [organizationId, id], onDelete: Restrict)
 
   @@unique([organizationId, dedupeKey], map: "pharmacy_message_logs_dedupe_key")
-  @@unique([organizationId, direction, waMessageId], map: "pharmacy_message_logs_wa_message_id_key")
   @@unique([organizationId, customerDayKey], map: "pharmacy_message_logs_customer_day_key")
   @@index([organizationId, customerId, createdAt(sort: Desc)], map: "pharmacy_message_logs_customer_idx")
   @@index([organizationId, kind, status], map: "pharmacy_message_logs_kind_status_idx")
@@ -14601,30 +14596,36 @@ model GrowthSettings {
 
 /// A campaign proposed (by AI or a human), approved, scheduled and sent. The AI
 /// only ever writes `proposed` rows; the server enforces caps regardless.
+/// `origin` is `ai` (no creator) or `staff` (createdByUserId required), and
+/// `approved`/`sending`/`sent` require approvedAt (approvedByUserId NULL = policy
+/// auto-approval); both rules are DB CHECKs.
 model Campaign {
-  id             String    @id @default(cuid())
-  organizationId String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  kind           String
-  status         String    @default("proposed")
-  name           String
-  rationale      String?
-  segment        Json
-  sendAt         DateTime
-  discountType   String?
-  discountValue  Int?
-  codeExpiresAt  DateTime?
-  budgetCapMinor Int
-  spentMinor     Int       @default(0)
-  templateId     String
-  estimatedReach Int       @default(0)
-  createdBy      String
-  approvedBy     String?
-  approvedAt     DateTime?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  id               String    @id @default(cuid())
+  organizationId   String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  kind             String
+  status           String    @default("proposed")
+  name             String
+  rationale        String?
+  segment          Json
+  sendAt           DateTime
+  discountType     String?
+  discountValue    Int?
+  codeExpiresAt    DateTime?
+  budgetCapMinor   Int
+  spentMinor       Int       @default(0)
+  templateId       String
+  estimatedReach   Int       @default(0)
+  origin           String
+  createdByUserId  String?
+  approvedByUserId String?
+  approvedAt       DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
-  organization Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  template     MessageTemplate     @relation(fields: [organizationId, templateId], references: [organizationId, id], onDelete: Restrict)
+  organization Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy    User?                @relation("GrowthCampaignCreatedBy", fields: [organizationId, createdByUserId], references: [organizationId, id], onDelete: Restrict)
+  approvedBy   User?                @relation("GrowthCampaignApprovedBy", fields: [organizationId, approvedByUserId], references: [organizationId, id], onDelete: Restrict)
+  template     MessageTemplate      @relation(fields: [organizationId, templateId], references: [organizationId, id], onDelete: Restrict)
   recipients   CampaignRecipient[]
   messages     PharmacyMessageLog[]
 
@@ -14635,6 +14636,8 @@ model Campaign {
 
 /// One recipient of a campaign, with its per-customer discount code and the sale
 /// that redeemed it. Redemption always scopes a code to the authenticated tenant.
+/// Sending must check consent through `PatientConsent` / `whatsappOptIn`; this
+/// model stores no consent or contact data of its own.
 model CampaignRecipient {
   id             String    @id @default(cuid())
   organizationId String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
@@ -14656,6 +14659,7 @@ model CampaignRecipient {
 
   @@unique([organizationId, id])
   @@unique([organizationId, code])
+  @@unique([organizationId, saleId])
   @@unique([organizationId, campaignId, customerId])
   @@index([organizationId, status, campaignId])
   @@map("campaign_recipients")

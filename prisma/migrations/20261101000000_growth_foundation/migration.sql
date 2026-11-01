@@ -2,20 +2,25 @@
 --
 -- Additive, one migration. It introduces the five growth tables
 -- (customer_metrics, growth_settings, campaigns, campaign_recipients,
--- message_templates) and extends three existing pharmacy tables. It rewrites no
--- existing rows. Two structural rules match the rest of the platform:
+-- message_templates) and links pharmacy_message_logs to them. It rewrites no
+-- existing rows. Three structural rules match the rest of the platform:
 --
 --  1. **No row can reference another tenant's row.** Every growth table carries
 --     `organizationId` (defaulted from the RLS session setting) and joins its
 --     parents by composite `(organizationId, …)` foreign keys into the unique
 --     keys those parents already publish. Row-level security is the second wall;
 --     a foreign key that cannot span tenants is the first.
---  2. **Consent is never changed by a migration.** `whatsappOptIn` keeps its
---     nullable tri-state (NULL = never asked, false = declined, true = opted
---     in) that marketing-service, the consent archive and
---     `whatsappOptInChangedAt` depend on. `whatsappE164` starts empty: clinical
---     contact data stays in pharmacy_patients and is not copied across tenants
---     by a privileged backfill; the application fills it under tenant scope.
+--  2. **No second consent or contact store.** Campaign eligibility is decided
+--     by the existing consent sources only: `PatientConsent` (#774: purpose,
+--     channel, version, revocation, source) and the pharmacy customer's
+--     `whatsappOptIn` / `whatsappOptInChangedAt` with its consent archive.
+--     This migration adds no opt-in/opt-out timestamps, no plaintext phone
+--     number and no stored message body; the sender resolves the number from
+--     the existing customer/patient record at send time, the message log keeps
+--     only `phoneLast4`, and provider ids stay in `providerMessageId`.
+--  3. **Redemption integrity is enforced by the database.** A sale redeems at
+--     most one recipient code, a recipient is redeemed iff it names its sale,
+--     and campaign/recipient vocabularies and discount bounds are CHECKed.
 
 -- Keep the schema change, constraints and policies atomic.
 BEGIN;
@@ -24,21 +29,13 @@ BEGIN;
 -- Existing tables: additive, nullable columns only.
 -- ---------------------------------------------------------------------------
 
--- A redeemed campaign/referral code is recorded on the sale it discounted.
-ALTER TABLE "pharmacy_sales" ADD COLUMN "discountCode" TEXT;
-
--- Growth channel columns on the retail customer.
-ALTER TABLE "pharmacy_customers"
-  ADD COLUMN "whatsappE164" TEXT,
-  ADD COLUMN "whatsappOptInAt" TIMESTAMP(3),
-  ADD COLUMN "whatsappOptOutAt" TIMESTAMP(3);
-
--- Campaign messaging reuses the existing pharmacy message log.
+-- Campaign messaging reuses the existing pharmacy message log (and its
+-- `providerMessageId`, `phoneLast4` and retention rules). A redeemed code is
+-- linked to its sale through campaign_recipients."saleId", not a free-text
+-- column on pharmacy_sales.
 ALTER TABLE "pharmacy_message_logs"
-  ADD COLUMN "body" TEXT,
   ADD COLUMN "campaignId" TEXT,
-  ADD COLUMN "recipientId" TEXT,
-  ADD COLUMN "waMessageId" TEXT;
+  ADD COLUMN "recipientId" TEXT;
 
 -- ---------------------------------------------------------------------------
 -- New growth tables.
@@ -121,8 +118,9 @@ CREATE TABLE "campaigns" (
     "spentMinor" INTEGER NOT NULL DEFAULT 0,
     "templateId" TEXT NOT NULL,
     "estimatedReach" INTEGER NOT NULL DEFAULT 0,
-    "createdBy" TEXT NOT NULL,
-    "approvedBy" TEXT,
+    "origin" TEXT NOT NULL,
+    "createdByUserId" TEXT,
+    "approvedByUserId" TEXT,
     "approvedAt" TIMESTAMP(3),
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
@@ -134,7 +132,27 @@ CREATE TABLE "campaigns" (
     CONSTRAINT "campaigns_reach_check" CHECK ("estimatedReach" >= 0),
     CONSTRAINT "campaigns_discount_check" CHECK (
       ("discountType" IS NULL AND "discountValue" IS NULL) OR
-      ("discountType" IS NOT NULL AND "discountValue" IS NOT NULL AND "discountValue" > 0)
+      ("discountType" = 'percent' AND "discountValue" BETWEEN 1 AND 100) OR
+      ("discountType" = 'fixed' AND "discountValue" > 0)
+    ),
+    CONSTRAINT "campaigns_kind_check" CHECK (
+      "kind" IN ('holiday', 'slow_day', 'birthday', 'refill', 'winback', 'random',
+                 'manual', 'review', 'referral')
+    ),
+    CONSTRAINT "campaigns_status_check" CHECK (
+      "status" IN ('proposed', 'approved', 'sending', 'sent', 'cancelled')
+    ),
+    -- A staff-created campaign names its creator; an AI proposal names none.
+    CONSTRAINT "campaigns_origin_check" CHECK (
+      ("origin" = 'staff' AND "createdByUserId" IS NOT NULL) OR
+      ("origin" = 'ai' AND "createdByUserId" IS NULL)
+    ),
+    -- A campaign cannot be approved/sending/sent without an approval time; a
+    -- named approver always carries one. NULL approver + approvedAt is the
+    -- auto-approval policy (growth_settings."autoApproveUnderMinor").
+    CONSTRAINT "campaigns_approval_check" CHECK (
+      ("approvedByUserId" IS NULL OR "approvedAt" IS NOT NULL) AND
+      ("status" NOT IN ('approved', 'sending', 'sent') OR "approvedAt" IS NOT NULL)
     )
 );
 
@@ -153,7 +171,16 @@ CREATE TABLE "campaign_recipients" (
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
-    CONSTRAINT "campaign_recipients_pkey" PRIMARY KEY ("id")
+    CONSTRAINT "campaign_recipients_pkey" PRIMARY KEY ("id"),
+    CONSTRAINT "campaign_recipients_status_check" CHECK (
+      "status" IN ('queued', 'skipped', 'sent', 'failed', 'redeemed')
+    ),
+    -- Redeemed iff a code was redeemed on a named sale at a recorded time.
+    CONSTRAINT "campaign_recipients_redemption_check" CHECK (
+      ("status" = 'redeemed' AND "redeemedAt" IS NOT NULL AND "saleId" IS NOT NULL
+        AND "code" IS NOT NULL) OR
+      ("status" <> 'redeemed' AND "redeemedAt" IS NULL AND "saleId" IS NULL)
+    )
 );
 
 -- CreateTable
@@ -192,6 +219,9 @@ CREATE UNIQUE INDEX "campaigns_organizationId_id_key" ON "campaigns"("organizati
 -- uniqueness side channel; redemption must use the authenticated tenant plus code.
 CREATE UNIQUE INDEX "campaign_recipients_organizationId_code_key" ON "campaign_recipients"("organizationId", "code");
 
+-- A sale redeems at most one campaign code.
+CREATE UNIQUE INDEX "campaign_recipients_organizationId_saleId_key" ON "campaign_recipients"("organizationId", "saleId");
+
 -- CreateIndex
 CREATE INDEX "campaign_recipients_organizationId_status_campaignId_idx" ON "campaign_recipients"("organizationId", "status", "campaignId");
 
@@ -207,11 +237,8 @@ CREATE UNIQUE INDEX "message_templates_organizationId_id_key" ON "message_templa
 -- CreateIndex
 CREATE UNIQUE INDEX "message_templates_organizationId_key_language_key" ON "message_templates"("organizationId", "key", "language");
 
--- CreateIndex
-CREATE INDEX "pharmacy_customers_organizationId_whatsappE164_idx" ON "pharmacy_customers"("organizationId", "whatsappE164");
-
--- CreateIndex
-CREATE UNIQUE INDEX "pharmacy_message_logs_wa_message_id_key" ON "pharmacy_message_logs"("organizationId", "direction", "waMessageId");
+-- No index is built on an existing table, so this migration takes no
+-- long write lock on pharmacy_customers or pharmacy_message_logs.
 
 -- ---------------------------------------------------------------------------
 -- Composite tenant foreign keys.
@@ -231,6 +258,12 @@ ALTER TABLE "growth_settings" ADD CONSTRAINT "growth_settings_organizationId_fke
 
 -- AddForeignKey
 ALTER TABLE "campaigns" ADD CONSTRAINT "campaigns_organizationId_fkey" FOREIGN KEY ("organizationId") REFERENCES "organizations"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "campaigns" ADD CONSTRAINT "campaigns_organizationId_createdByUserId_fkey" FOREIGN KEY ("organizationId", "createdByUserId") REFERENCES "users"("organizationId", "id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "campaigns" ADD CONSTRAINT "campaigns_organizationId_approvedByUserId_fkey" FOREIGN KEY ("organizationId", "approvedByUserId") REFERENCES "users"("organizationId", "id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "campaigns" ADD CONSTRAINT "campaigns_organizationId_templateId_fkey" FOREIGN KEY ("organizationId", "templateId") REFERENCES "message_templates"("organizationId", "id") ON DELETE RESTRICT ON UPDATE CASCADE;

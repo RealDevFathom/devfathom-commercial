@@ -28,6 +28,10 @@ describe.skipIf(!url)('growth foundation migration under FORCE RLS', () => {
         SELECT set_config('app.is_platform_admin', 'false', false);
         SELECT set_config('app.current_organization_id', '', false);
         CREATE TABLE organizations (id TEXT PRIMARY KEY);
+        CREATE TABLE users (
+          id TEXT PRIMARY KEY, "organizationId" TEXT NOT NULL,
+          UNIQUE ("organizationId", id)
+        );
         CREATE TABLE pharmacy_patients (
           id TEXT PRIMARY KEY, "organizationId" TEXT NOT NULL, phone TEXT
         );
@@ -44,6 +48,8 @@ describe.skipIf(!url)('growth foundation migration under FORCE RLS', () => {
           id TEXT PRIMARY KEY, "organizationId" TEXT NOT NULL, direction TEXT
         );
         INSERT INTO organizations VALUES ('a'), ('b');
+        INSERT INTO users VALUES ('ua', 'a'), ('ub', 'b');
+        INSERT INTO pharmacy_sales VALUES ('sa', 'a'), ('sa2', 'a');
         INSERT INTO pharmacy_patients VALUES
           ('pa', 'a', '0300-1234567'), ('pb', 'b', '0311 7654321');
         INSERT INTO pharmacy_customers VALUES
@@ -85,15 +91,26 @@ describe.skipIf(!url)('growth foundation migration under FORCE RLS', () => {
       await client.query('BEGIN');
       await client.query("SELECT set_config('app.is_platform_admin', 'true', true)");
       const customers = await client.query(`
-        SELECT id, "whatsappOptIn", "whatsappE164"
-        FROM pharmacy_customers ORDER BY id
+        SELECT id, "whatsappOptIn" FROM pharmacy_customers ORDER BY id
       `);
       expect(customers.rows).toEqual([
-        { id: 'ca', whatsappOptIn: null, whatsappE164: null },
-        { id: 'cb', whatsappOptIn: null, whatsappE164: null },
-        { id: 'consented', whatsappOptIn: true, whatsappE164: null },
-        { id: 'unlinked', whatsappOptIn: false, whatsappE164: null },
+        { id: 'ca', whatsappOptIn: null },
+        { id: 'cb', whatsappOptIn: null },
+        { id: 'consented', whatsappOptIn: true },
+        { id: 'unlinked', whatsappOptIn: false },
       ]);
+      // No second consent/contact store, no message body, no duplicate provider id.
+      const added = await client.query(
+        `SELECT table_name, column_name FROM information_schema.columns
+         WHERE table_schema = $1 AND (
+           (table_name = 'pharmacy_customers' AND column_name IN
+             ('whatsappE164', 'whatsappOptInAt', 'whatsappOptOutAt')) OR
+           (table_name = 'pharmacy_message_logs' AND column_name IN ('body', 'waMessageId')) OR
+           (table_name = 'pharmacy_sales' AND column_name = 'discountCode')
+         )`,
+        [schema]
+      );
+      expect(added.rows).toEqual([]);
       const column = await client.query(
         `
         SELECT is_nullable FROM information_schema.columns
@@ -122,14 +139,27 @@ describe.skipIf(!url)('growth foundation migration under FORCE RLS', () => {
              'customer_metrics_nonnegative_check', 'customer_metrics_churn_check',
              'growth_settings_money_check', 'growth_settings_limits_check',
              'campaigns_money_check', 'campaigns_reach_check', 'campaigns_discount_check',
+             'campaigns_kind_check', 'campaigns_status_check', 'campaigns_origin_check',
+             'campaigns_approval_check', 'campaign_recipients_status_check',
+             'campaign_recipients_redemption_check',
+             'campaigns_organizationId_createdByUserId_fkey',
+             'campaigns_organizationId_approvedByUserId_fkey',
              'growth_settings_wa_api_key_enc_check'
            ) ORDER BY conname`,
         [schema]
       );
       expect(constraints.rows.map((row) => row.conname)).toEqual([
+        'campaign_recipients_redemption_check',
+        'campaign_recipients_status_check',
+        'campaigns_approval_check',
         'campaigns_discount_check',
+        'campaigns_kind_check',
         'campaigns_money_check',
+        'campaigns_organizationId_approvedByUserId_fkey',
+        'campaigns_organizationId_createdByUserId_fkey',
+        'campaigns_origin_check',
         'campaigns_reach_check',
+        'campaigns_status_check',
         'customer_metrics_churn_check',
         'customer_metrics_nonnegative_check',
         'growth_settings_limits_check',
@@ -156,6 +186,76 @@ describe.skipIf(!url)('growth foundation migration under FORCE RLS', () => {
         [schema]
       );
       expect(codeIndex.rows[0].indexdef).toContain('("organizationId", code)');
+
+      // Campaign and redemption integrity is enforced by the database.
+      const rejects = async (statement: string, constraint: RegExp) => {
+        await client.query('SAVEPOINT growth_reject');
+        await expect(client.query(statement)).rejects.toThrow(constraint);
+        await client.query('ROLLBACK TO SAVEPOINT growth_reject');
+      };
+      await client.query(
+        `INSERT INTO message_templates (id, "organizationId", key, body, "updatedAt")
+         VALUES ('ta', 'a', 'winback', 'Hi {{name}}', now())`
+      );
+      const campaign = (values: string) =>
+        `INSERT INTO campaigns (id, "organizationId", kind, status, name, segment, "sendAt",
+           "discountType", "discountValue", "budgetCapMinor", "templateId", origin,
+           "createdByUserId", "approvedByUserId", "approvedAt", "updatedAt")
+         VALUES (${values}, now())`;
+      await rejects(
+        campaign(`'x', 'a', 'winback', 'proposed', 'n', '{}', now(), 'percent', 101, 0, 'ta', 'ai', NULL, NULL, NULL`),
+        /campaigns_discount_check/
+      );
+      await rejects(
+        campaign(`'x', 'a', 'spam', 'proposed', 'n', '{}', now(), NULL, NULL, 0, 'ta', 'ai', NULL, NULL, NULL`),
+        /campaigns_kind_check/
+      );
+      await rejects(
+        campaign(`'x', 'a', 'winback', 'bogus', 'n', '{}', now(), NULL, NULL, 0, 'ta', 'ai', NULL, NULL, NULL`),
+        /campaigns_status_check/
+      );
+      await rejects(
+        campaign(`'x', 'a', 'winback', 'proposed', 'n', '{}', now(), NULL, NULL, 0, 'ta', 'staff', NULL, NULL, NULL`),
+        /campaigns_origin_check/
+      );
+      await rejects(
+        campaign(`'x', 'a', 'winback', 'sent', 'n', '{}', now(), NULL, NULL, 0, 'ta', 'ai', NULL, NULL, NULL`),
+        /campaigns_approval_check/
+      );
+      await rejects(
+        campaign(`'x', 'a', 'winback', 'proposed', 'n', '{}', now(), NULL, NULL, 0, 'ta', 'ai', NULL, 'ua', NULL`),
+        /campaigns_approval_check/
+      );
+      // Another tenant's user cannot create or approve this tenant's campaign.
+      await rejects(
+        campaign(`'x', 'a', 'winback', 'proposed', 'n', '{}', now(), NULL, NULL, 0, 'ta', 'staff', 'ub', NULL, NULL`),
+        /campaigns_organizationId_createdByUserId_fkey/
+      );
+      await client.query(
+        campaign(`'ka', 'a', 'winback', 'approved', 'n', '{}', now(), 'percent', 10, 0, 'ta', 'staff', 'ua', 'ua', now()`)
+      );
+      const recipient = (values: string) =>
+        `INSERT INTO campaign_recipients (id, "organizationId", "campaignId", "customerId",
+           code, status, "redeemedAt", "saleId", "updatedAt")
+         VALUES (${values}, now())`;
+      await rejects(
+        recipient(`'rx', 'a', 'ka', 'ca', 'C1', 'redeemed', now(), NULL`),
+        /campaign_recipients_redemption_check/
+      );
+      await rejects(
+        recipient(`'rx', 'a', 'ka', 'ca', 'C1', 'sent', NULL, 'sa'`),
+        /campaign_recipients_redemption_check/
+      );
+      await rejects(
+        recipient(`'rx', 'a', 'ka', 'ca', 'C1', 'unknown', NULL, NULL`),
+        /campaign_recipients_status_check/
+      );
+      await client.query(recipient(`'r1', 'a', 'ka', 'ca', 'C1', 'redeemed', now(), 'sa'`));
+      // One sale redeems at most one code.
+      await rejects(
+        recipient(`'r2', 'a', 'ka', 'consented', 'C2', 'redeemed', now(), 'sa'`),
+        /campaign_recipients_organizationId_saleId_key/
+      );
     } finally {
       await client.query('ROLLBACK');
       await client.query('RESET search_path');
