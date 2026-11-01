@@ -37,6 +37,7 @@ const ids = {
   floor: `floor_${suffix}`,
   tableA: `table_a_${suffix}`,
   tableB: `table_b_${suffix}`,
+  tableC: `table_c_${suffix}`,
   category: `cat_${suffix}`,
   product: `prod_${suffix}`,
   modGroup: `mgrp_${suffix}`,
@@ -60,6 +61,7 @@ type Deps = {
   enrollDevice: (typeof import('@/lib/restaurant/devices'))['enrollDevice'];
   orders: typeof import('@/lib/restaurant/orders');
   bills: typeof import('@/lib/restaurant/bills');
+  close: typeof import('@/lib/restaurant/daily-close');
   stateMachine: typeof import('@/lib/restaurant/order-state-machine');
   coAuth: typeof import('@/lib/restaurant/co-authorization');
   deliveryDispatch: typeof import('@/lib/restaurant/terminal-delivery-dispatch');
@@ -126,12 +128,13 @@ async function settleOrderFully(db: ScopedDb, orderId: string): Promise<void> {
 
 beforeAll(async () => {
   if (!TEST_DATABASE_URL) return;
-  const [scopedDb, devices, orders, bills, stateMachine, coAuth, deliveryDispatch] =
+  const [scopedDb, devices, orders, bills, close, stateMachine, coAuth, deliveryDispatch] =
     await Promise.all([
       import('@/lib/tenancy/scoped-db'),
       import('@/lib/restaurant/devices'),
       import('@/lib/restaurant/orders'),
       import('@/lib/restaurant/bills'),
+      import('@/lib/restaurant/daily-close'),
       import('@/lib/restaurant/order-state-machine'),
       import('@/lib/restaurant/co-authorization'),
       import('@/lib/restaurant/terminal-delivery-dispatch'),
@@ -143,6 +146,7 @@ beforeAll(async () => {
     enrollDevice: devices.enrollDevice,
     orders,
     bills,
+    close,
     stateMachine,
     coAuth,
     deliveryDispatch,
@@ -204,6 +208,9 @@ beforeAll(async () => {
     });
     await tx.restaurantTable.create({
       data: { id: ids.tableB, floorId: ids.floor, code: 'A2', capacity: 2 },
+    });
+    await tx.restaurantTable.create({
+      data: { id: ids.tableC, floorId: ids.floor, code: 'A3', capacity: 2 },
     });
 
     await tx.restaurantCategory.create({ data: { id: ids.category, name: 'Mains' } });
@@ -402,6 +409,54 @@ describeIfDatabase('orders command layer (real DB)', () => {
     const numbers = opens.map((o) => o.orderNumber);
     expect(new Set(numbers).size).toBe(5); // unique
     expect(numbers.every((n) => Number.isInteger(n) && n >= 1)).toBe(true); // monotone ints
+  });
+
+  it('rejects opening an order after its business day has closed', async () => {
+    const now = new Date('2026-08-30T18:00:00.000Z');
+    const db = deps.createTenantDb(orgId);
+    await deps.close.cutClose(db, {
+      branchId: ids.branch,
+      businessDate: '2026-08-30',
+      actor: actor(),
+    });
+
+    await expect(
+      deps.orders.openOrder(db, {
+        organizationId: orgId,
+        entitlementLimits: { 'pos.orders.monthly': 1000000 },
+        branchId: ids.branch,
+        channel: 'TAKEAWAY',
+        actor: actor(),
+        now,
+      })
+    ).rejects.toMatchObject({ reason: 'DAY_CLOSED' });
+  });
+
+  it('serializes a concurrent order open against daily close', async () => {
+    const now = new Date('2026-08-31T18:00:00.000Z');
+    const db = deps.createTenantDb(orgId);
+    const outcomes = await Promise.allSettled([
+      deps.close.cutClose(db, {
+        branchId: ids.branch,
+        businessDate: '2026-08-31',
+        actor: actor(),
+      }),
+      deps.orders.openOrder(db, {
+        organizationId: orgId,
+        entitlementLimits: { 'pos.orders.monthly': 1000000 },
+        branchId: ids.branch,
+        channel: 'TAKEAWAY',
+        actor: actor(),
+        now,
+      }),
+    ]);
+
+    expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1);
+    expect(outcomes.filter((outcome) => outcome.status === 'rejected')).toHaveLength(1);
+    const rejected = outcomes.find((outcome) => outcome.status === 'rejected');
+    expect(rejected).toMatchObject({
+      reason: expect.objectContaining({ reason: expect.stringMatching(/DAY_CLOSED|ACTIVE_ORDERS/) }),
+    });
   });
 
   it('snapshots name + price at add time and never rewrites them on later catalog edits (C4)', async () => {
@@ -752,12 +807,40 @@ describeIfDatabase('orders command layer (real DB)', () => {
     expect(events.length).toBeGreaterThanOrEqual(5);
   });
 
-  it('blocks an item void after bill cut so the payable snapshot cannot retain a voided line', async () => {
+  it('blocks an item void after bill cut so its line and service stay consistent', async () => {
     const { orderId, itemId, db } = await openWithItem();
-    await deps.orders.addItem(db, {
+    const second = await deps.orders.addItem(db, {
       orderId,
       menuItemId: ids.menuItem,
       actor: actor(),
+    });
+    const policy = await read((tx) =>
+      tx.restaurantServiceChargePolicyVersion.create({
+        data: {
+          branchId: ids.branch,
+          rate: '0.100000',
+          effectiveFrom: new Date('2026-08-18T00:00:00.000Z'),
+          effectiveTo: AT,
+          acknowledgedAt: AT,
+          acknowledgementRef: 'issue-366',
+          idempotencyKey: `bill_void_service_${suffix}`,
+          payloadHash: `bill-void-service-${suffix}`,
+        },
+      })
+    );
+    await read(async (tx) => {
+      await tx.restaurantOrderItem.update({
+        where: { id: itemId },
+        data: { unitPrice: '40.00' },
+      });
+      await tx.restaurantOrderItem.update({
+        where: { id: second.itemId },
+        data: { unitPrice: '60.00' },
+      });
+      await tx.restaurantOrder.update({
+        where: { id: orderId },
+        data: { serviceChargePolicyVersionId: policy.id },
+      });
     });
     const cut = await deps.bills.cutBills(db, {
       orderId,
@@ -782,14 +865,25 @@ describeIfDatabase('orders command layer (real DB)', () => {
       }),
       bill: await tx.restaurantBill.findUniqueOrThrow({
         where: { id: cut.billIds[0]! },
-        select: { status: true, subtotal: true, grandTotal: true, lines: true },
+        select: {
+          status: true,
+          subtotal: true,
+          serviceChargeTotal: true,
+          grandTotal: true,
+          lines: { orderBy: { lineSubtotal: 'asc' } },
+        },
       }),
     }));
     expect(snapshot.item.status).not.toBe('VOIDED');
     expect(snapshot.bill).toMatchObject({ status: 'OPEN' });
     expect(snapshot.bill.lines).toHaveLength(2);
-    expect(snapshot.bill.subtotal.toString()).toBe('25');
-    expect(snapshot.bill.grandTotal.toString()).toBe('25');
+    expect(snapshot.bill.lines.map((line) => line.lineSubtotal.toFixed(2))).toEqual([
+      '40.00',
+      '60.00',
+    ]);
+    expect(snapshot.bill.subtotal.toFixed(2)).toBe('100.00');
+    expect(snapshot.bill.serviceChargeTotal.toFixed(2)).toBe('10.00');
+    expect(snapshot.bill.grandTotal.toFixed(2)).toBe('110.00');
   });
 
   it('cancels an order with a compensating void of every in-flight item (cancel-compensation)', async () => {
@@ -816,6 +910,42 @@ describeIfDatabase('orders command layer (real DB)', () => {
     expect(order?.orderTables).toEqual([{ active: false, unlinkedAt: order?.cancelledAt }]);
     // No item may remain QUEUED/FIRING/PREPARED on a cancelled order.
     expect(order?.items.every((i) => i.status === 'VOIDED')).toBe(true);
+  });
+
+  it('serializes concurrent moves so one source link cannot produce two active destinations', async () => {
+    const { orderId, db } = await openWithItem({ tableIds: [ids.tableA] });
+
+    const results = await Promise.allSettled([
+      deps.orders.moveTable(db, {
+        orderId,
+        fromTableId: ids.tableA,
+        toTableId: ids.tableB,
+        actor: actor(),
+      }),
+      deps.orders.moveTable(db, {
+        orderId,
+        fromTableId: ids.tableA,
+        toTableId: ids.tableC,
+        actor: actor(),
+      }),
+    ]);
+
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    const rejected = results.find((result) => result.status === 'rejected');
+    expect(rejected).toMatchObject({
+      status: 'rejected',
+      reason: { reason: 'TABLE_LINK_NOT_FOUND' },
+    });
+
+    const activeLinks = await read((tx) =>
+      tx.restaurantOrderTable.findMany({
+        where: { orderId, active: true },
+        select: { tableId: true, linkReason: true },
+      })
+    );
+    expect(activeLinks).toHaveLength(1);
+    expect(activeLinks[0]).toMatchObject({ linkReason: 'MOVE' });
+    expect([ids.tableB, ids.tableC]).toContain(activeLinks[0]?.tableId);
   });
 
   it('requires co-authorization to cancel an order with prepared items', async () => {

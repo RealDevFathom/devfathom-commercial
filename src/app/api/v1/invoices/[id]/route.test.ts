@@ -84,13 +84,13 @@ describe('PATCH /api/v1/invoices/:id invoice status', () => {
     expect(mocks.logActivity).toHaveBeenCalledOnce();
   });
 
-  it.each(['OVERDUE', 'CANCELLED'])('clears sentAt for SENT to %s', async (status) => {
+  it.each(['OVERDUE', 'CANCELLED'])('preserves sentAt for SENT to %s', async (status) => {
     const { authCtx, response } = await patch(status, 'SENT');
 
     expect(response.status).toBe(200);
     expect(authCtx.db.invoice.updateMany).toHaveBeenCalledWith({
       where: { id: invoice.id, status: 'SENT' },
-      data: { status, sentAt: null },
+      data: { status },
     });
   });
 

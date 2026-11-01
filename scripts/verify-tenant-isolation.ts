@@ -1488,9 +1488,9 @@ async function main() {
       `INSERT INTO "pharmacy_sale_lines" (
         "id", "organizationId", "branchId", "saleId", "medicineId", "presentationId", "packLevelId",
         "saleUnit", "quantity", "canonicalUnitsPerSaleUnit", "canonicalUnits",
-        "unitPriceMinor", "proRataCeilingMinor", "unitCostMinor", "idempotencyKey"
-      ) VALUES ($1, 'org_devfathom', $2, $3, $4, $5, $6, 'PACK', 10, 1, 10, 100, 100, 50, $7),
-               ($8, $9, $10, $11, $12, $13, $14, 'PACK', 10, 1, 10, 100, 100, 50, $15)`,
+        "unitPriceMinor", "grossMinor", "proRataCeilingMinor", "unitCostMinor", "idempotencyKey"
+      ) VALUES ($1, 'org_devfathom', $2, $3, $4, $5, $6, 'PACK', 10, 1, 10, 100, 1000, 100, 50, $7),
+               ($8, $9, $10, $11, $12, $13, $14, 'PACK', 10, 1, 10, 100, 1000, 100, 50, $15)`,
       [
         saleLineA,
         pharmacyBranchA,

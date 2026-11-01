@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 
 import { PharmacyOnboardingConsole } from '@/components/pharmacy/onboarding-console';
+import { FbrTier1Summary } from '@/components/pharmacy/fbr-tier1-summary';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { pharmacyOnboardingRouter } from '@/server/routers/pharmacy-onboarding';
@@ -40,6 +41,10 @@ export default async function PharmacyOnboardingPage() {
     );
   }
 
+  // #709 — the Tier-1 self-check prompt is additive: if it cannot be read,
+  // the rest of the page still renders.
+  const fbrTier1 = await caller.fbrTier1Status().catch(() => null);
+
   return (
     <main className="min-w-0 space-y-6">
       <PageHeader
@@ -48,6 +53,7 @@ export default async function PharmacyOnboardingPage() {
         description="The twelve steps between a new pharmacy workspace and its first legal sale. Each step says what it needs and where to do it."
       />
       <PharmacyOnboardingConsole initial={overview} />
+      {fbrTier1 ? <FbrTier1Summary status={fbrTier1} /> : null}
     </main>
   );
 }

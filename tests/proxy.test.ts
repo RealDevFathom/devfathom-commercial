@@ -67,6 +67,26 @@ describe('platform proxy authorization', () => {
     expect(mocks.getPlatformSession).toHaveBeenCalledWith(request);
   });
 
+  it('keeps the authenticated redirect fixed when the login URL has a callback', async () => {
+    const request = platformRequest('/platform/login?callbackUrl=https://attacker.invalid');
+    const response = await proxy(request);
+
+    expect(response.status).toBe(307);
+    expect(response.headers.get('location')).toBe('http://admin.localhost:4319/platform');
+    expect(mocks.getPlatformSession).toHaveBeenCalledWith(request);
+  });
+
+  it('renders login after the server verifier rejects a missing session', async () => {
+    mocks.getPlatformSession.mockResolvedValueOnce(null);
+    const request = platformRequest('/platform/login', { cookie: '' });
+    const response = await proxy(request);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('x-middleware-next')).toBe('1');
+    expect(response.headers.get('location')).toBeNull();
+    expect(mocks.getPlatformSession).toHaveBeenCalledWith(request);
+  });
+
   it.each([
     ['forged', 'forged-platform-session-token-that-is-long-enough'],
     ['expired', 'expired-platform-session-token-that-is-long-enough'],
@@ -82,4 +102,52 @@ describe('platform proxy authorization', () => {
     expect(response.headers.get('location')).toBeNull();
     expect(mocks.getPlatformSession).toHaveBeenCalledWith(request);
   });
+});
+
+describe('private upload paths', () => {
+  const paths = [
+    '/uploads',
+    '/uploads/',
+    '/uploads/org-a/file.png',
+    '/private-uploads',
+    '/private-uploads/org-a/file.pdf',
+    '/%75ploads/file.png',
+    '/%70rivate%2duploads/file.pdf',
+    '/uploads%2ffile.png',
+    '/private-uploads%5cfile.pdf',
+    '/%2575ploads%252ffile.png',
+    '/%2570rivate-uploads/file.pdf',
+    '/safe%2f..%2fuploads/file.png',
+    '/safe%255c..%255cprivate-uploads/file.pdf',
+    '/%2fuploads/file.png',
+    '/UPLOADS/file.png',
+    '/uploads/%broken.png',
+    '/%75ploads%2ffile%ZZ.png',
+  ];
+  it.each(paths)('returns 404 for %s on every host and session', async (path) => {
+    for (const host of ['tenant.localhost', 'admin.localhost']) {
+      for (const cookie of ['', 'authjs.session-token=tenant; df_platform_session=operator']) {
+        for (const method of ['GET', 'HEAD', 'POST']) {
+          const response = await proxy(
+            new Request(`http://${host}${path}`, {
+              method,
+              headers: { host, cookie },
+            })
+          );
+          expect(response.status).toBe(404);
+          expect(response.headers.get('location')).toBeNull();
+          expect(response.headers.get('x-middleware-next')).toBeNull();
+          expect(await response.text()).toBe('');
+        }
+      }
+    }
+  });
+
+  it.each(['/api/files/file.png', '/brand/logo.png', '/uploads-guide.png'])(
+    'preserves authorized API routing and unrelated public assets: %s',
+    async (path) => {
+      const response = await proxy(new Request(`http://tenant.localhost${path}`));
+      expect(response.headers.get('x-middleware-next')).toBe('1');
+    }
+  );
 });

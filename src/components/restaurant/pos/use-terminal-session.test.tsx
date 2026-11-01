@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { FormEvent } from 'react';
-import { useTerminalSession } from './use-terminal-session';
+import { request, useTerminalSession } from './use-terminal-session';
 
 const operators = [
   { staffProfileId: 'staff-1', displayName: 'Amina', role: 'Manager', canApprove: true },
@@ -53,6 +53,76 @@ afterEach(() => {
 });
 
 describe('Shared enrolled terminal transport', () => {
+  it('automatically renews an expired online command proof and preserves the retry key and body', async () => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(response({ error: 'Missing or invalid POS composer proof.' }, 403))
+      .mockResolvedValueOnce(response({ composerProof: 'renewed-proof' }))
+      .mockResolvedValueOnce(response({ orderId: 'order-1' }, 201));
+    vi.stubGlobal('fetch', fetch);
+    const init = {
+      method: 'POST',
+      headers: {
+        'X-Terminal-Session': 'session-token',
+        'X-POS-Composer-Proof': 'expired-proof',
+        'Idempotency-Key': 'stable-open-key',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ channel: 'TAKEAWAY' }),
+    };
+    await expect(request('/api/restaurant/orders/open', init)).resolves.toEqual({
+      orderId: 'order-1',
+    });
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(fetch.mock.calls[1][0]).toBe('/api/restaurant/terminal/renew-composer-proof');
+    expect(JSON.parse(String(fetch.mock.calls[1][1]!.body))).toEqual({
+      originalProof: 'expired-proof',
+    });
+    const retry = fetch.mock.calls[2][1]!;
+    expect(retry.body).toBe(init.body);
+    expect(new Headers(retry.headers).get('Idempotency-Key')).toBe('stable-open-key');
+    expect(new Headers(retry.headers).get('X-POS-Composer-Proof')).toBe('renewed-proof');
+    expect(new Headers(retry.headers).get('X-Terminal-Session')).toBe('session-token');
+    expect(retry.credentials).toBe('include');
+  });
+
+  it.each(['renewal rejected', 'retry rejected', 'unrelated denial'])(
+    'does not loop or bypass a denial when %s',
+    async (failure) => {
+      const fetch = vi
+        .fn<typeof globalThis.fetch>()
+        .mockResolvedValueOnce(
+          response(
+            {
+              error:
+                failure === 'unrelated denial'
+                  ? 'This operator lacks permission.'
+                  : 'Missing or invalid POS composer proof.',
+            },
+            403
+          )
+        );
+      if (failure === 'renewal rejected')
+        fetch.mockResolvedValueOnce(response({ error: 'Wrong operator.' }, 403));
+      if (failure === 'retry rejected') {
+        fetch.mockResolvedValueOnce(response({ composerProof: 'new-proof' }));
+        fetch.mockResolvedValueOnce(
+          response({ error: 'Missing or invalid POS composer proof.' }, 403)
+        );
+      }
+      vi.stubGlobal('fetch', fetch);
+      await expect(
+        request('/api/restaurant/orders/open', {
+          method: 'POST',
+          headers: { 'X-Terminal-Session': 'session-token', 'X-POS-Composer-Proof': 'old-proof' },
+          body: '{}',
+        })
+      ).rejects.toMatchObject({ status: 403 });
+      expect(fetch).toHaveBeenCalledTimes(
+        failure === 'renewal rejected' ? 2 : failure === 'retry rejected' ? 3 : 1
+      );
+    }
+  );
   it('establishes and unlocks with cookies; only the session header reaches money commands', async () => {
     const fetch = transport();
     vi.stubGlobal('fetch', fetch);

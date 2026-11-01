@@ -11,6 +11,7 @@ import {
   type JournalLineInput,
 } from '@/lib/finance/journal';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { Prisma } from '@/generated/prisma/client';
 
 export type BookkeepingScope = { organizationId: string; branchId: string; actorId: string };
 
@@ -283,6 +284,14 @@ export async function reconcileBankLine(
   input: { statementLineId: string; transactionId: string; amountMinor: number }
 ) {
   positiveMinor(input.amountMinor);
+  // Share the statement-line lock with POS settlement matching so neither
+  // target can consume the same remaining statement amount concurrently.
+  await db.$queryRaw(Prisma.sql`SELECT id FROM pharmacy_bank_statement_lines
+    WHERE id=${input.statementLineId} AND "organizationId"=${scope.organizationId}
+      AND "branchId"=${scope.branchId} FOR UPDATE`);
+  await db.$queryRaw(Prisma.sql`SELECT id FROM pharmacy_bookkeeping_transactions
+    WHERE id=${input.transactionId} AND "organizationId"=${scope.organizationId}
+      AND "branchId"=${scope.branchId} FOR UPDATE`);
   const [line, transaction] = await Promise.all([
     db.pharmacyBankStatementLine.findFirst({
       where: {
@@ -328,6 +337,48 @@ export async function reconcileBankLine(
       data: { status: 'MATCHED' },
     });
   }
+  return match;
+}
+
+/** Match already-posted POS receipts; matching creates no new journal entry. */
+export async function reconcileSettlementBankLine(
+  db: ScopedDb, scope: BookkeepingScope,
+  input: { statementLineId: string; settlementBatchId: string; amountMinor: number }
+) {
+  positiveMinor(input.amountMinor);
+  await db.$queryRaw(Prisma.sql`SELECT id FROM pharmacy_bank_statement_lines
+    WHERE id=${input.statementLineId} AND "organizationId"=${scope.organizationId}
+      AND "branchId"=${scope.branchId} FOR UPDATE`);
+  await db.$queryRaw(Prisma.sql`SELECT id FROM pharmacy_settlement_batches
+    WHERE id=${input.settlementBatchId} AND "organizationId"=${scope.organizationId}
+      AND "branchId"=${scope.branchId} FOR UPDATE`);
+  const [line, batch] = await Promise.all([
+    db.pharmacyBankStatementLine.findFirst({
+      where: { organizationId: scope.organizationId, branchId: scope.branchId, id: input.statementLineId },
+      include: { matches: { where: { reversedAt: null } } },
+    }),
+    db.pharmacySettlementBatch.findFirst({
+      where: { organizationId: scope.organizationId, branchId: scope.branchId, id: input.settlementBatchId },
+      include: { bankMatches: { where: { reversedAt: null } } },
+    }),
+  ]);
+  if (!line || !batch) throw new PharmacyBookkeepingError('NOT_FOUND');
+  const lineMatched = line.matches.reduce((sum, match) => sum + match.amountMinor, 0);
+  const batchMatched = batch.bankMatches.reduce((sum, match) => sum + match.amountMinor, 0);
+  if (line.amountMinor <= 0 || lineMatched + input.amountMinor > line.amountMinor ||
+      batchMatched + input.amountMinor > batch.expectedMinor)
+    throw new PharmacyBookkeepingError('RECONCILIATION_MISMATCH');
+  const match = await db.pharmacyBankReconciliation.create({ data: {
+    organizationId: scope.organizationId, statementLineId: line.id,
+    settlementBatchId: batch.id, amountMinor: input.amountMinor, matchedByUserId: scope.actorId,
+  } });
+  if (lineMatched + input.amountMinor === line.amountMinor)
+    await db.pharmacyBankStatementLine.update({ where: { id: line.id }, data: { status: 'MATCHED' } });
+  const settledMinor = batchMatched + input.amountMinor;
+  await db.pharmacySettlementBatch.update({ where: { id: batch.id }, data: {
+    settledMinor, settledAt: settledMinor === batch.expectedMinor ? new Date() : null,
+    bankReference: line.statementRef,
+  } });
   return match;
 }
 
