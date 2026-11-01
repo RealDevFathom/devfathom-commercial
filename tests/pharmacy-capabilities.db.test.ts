@@ -34,7 +34,9 @@ const administratorReportsMigration = readFileSync(
 const ownerPvSafetyMigration = readFileSync(
   'prisma/migrations/20261101120000_pharmacy_owner_pv_safety/migration.sql',
   'utf8'
-);
+)
+  .replace(/^BEGIN;$/m, '')
+  .replace(/^COMMIT;$/m, '');
 const expiry = new Date('2035-01-02T00:00:00.000Z');
 const expired = new Date('2020-01-02T00:00:00.000Z');
 const legacy: Record<string, string[]> = {
