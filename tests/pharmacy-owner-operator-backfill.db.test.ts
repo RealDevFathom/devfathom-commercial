@@ -16,7 +16,9 @@ const id = (key: string) => `${org}_${key}`;
 const migration = readFileSync(
   'prisma/migrations/20261101172600_pharmacy_owner_operator_operational_capabilities/migration.sql',
   'utf8'
-);
+)
+  .replace(/^BEGIN;$/m, '')
+  .replace(/^COMMIT;$/m, '');
 // The six grants the Owner / Operator template carried before #975.
 const previousTemplate = [
   'reports:operational',
