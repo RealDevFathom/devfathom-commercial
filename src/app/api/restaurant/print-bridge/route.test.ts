@@ -46,7 +46,14 @@ function makeDb() {
     $queryRaw: vi.fn().mockResolvedValue([{ id: 'branch-b', active: true }]),
     restaurantBranch: {
       findUnique: vi.fn().mockResolvedValue({ id: 'branch-b' }),
-      findMany: vi.fn().mockResolvedValue([]),
+      findMany: vi.fn(
+        async (args?: {
+          where?: { id?: { in?: string[] } };
+        }): Promise<Array<{ id: string; name?: string; kitchenStations?: unknown[] }>> => {
+          const ids = args?.where?.id?.in;
+          return ids ? ids.map((id) => ({ id })) : [];
+        }
+      ),
     },
     restaurantStaffProfile: { findFirst: vi.fn().mockResolvedValue(null) },
     restaurantBranchAssignment: { findFirst: vi.fn().mockResolvedValue(null) },

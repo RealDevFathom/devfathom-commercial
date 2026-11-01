@@ -5,6 +5,8 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { Prisma } from '@/generated/prisma/client';
+
 const mocks = vi.hoisted(() => ({ userFindFirst: vi.fn(), userCreate: vi.fn() }));
 
 vi.mock('server-only', () => ({}));
@@ -101,14 +103,14 @@ describe('organization.create admin email', () => {
     }
   );
 
-  it('stores the canonical form for a new administrator', async () => {
+  it('canonicalizes the administrator email and requires a password change', async () => {
     mocks.userFindFirst.mockResolvedValue(null);
 
     await executePlatformCommand(actor, 'organization.create', payload('Admin@Acme.COM'), request);
 
     expect(mocks.userCreate).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ email: 'admin@acme.com' }),
+        data: expect.objectContaining({ email: 'admin@acme.com', mustChangePassword: true }),
       })
     );
   });
@@ -143,11 +145,236 @@ describe('organization.create dedicated provisioning preflight', () => {
   });
 });
 
+describe('organization.create duplicate slug', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.userFindFirst.mockResolvedValue(null);
+    mocks.userCreate.mockResolvedValue({ id: 'user_new' });
+  });
+
+  it('maps a slug unique violation to a conflict and does not continue onboarding', async () => {
+    platformDb.organization.create.mockRejectedValueOnce(
+      new Prisma.PrismaClientKnownRequestError('Unique constraint failed on the fields: (`slug`)', {
+        code: 'P2002',
+        clientVersion: 'test',
+        meta: { modelName: 'Organization', target: ['slug'] },
+      })
+    );
+
+    const error = await executePlatformCommand(
+      actor,
+      'organization.create',
+      payload('admin@acme.com'),
+      request
+    ).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(PlatformSecurityError);
+    expect(error).toMatchObject({
+      status: 409,
+      message: 'That organization slug is already taken.',
+    });
+    expect(platformDb.organizationRole.create).not.toHaveBeenCalled();
+    expect(mocks.userCreate).not.toHaveBeenCalled();
+  });
+
+  it('leaves a non-slug unique violation as an internal error', async () => {
+    platformDb.organization.create.mockRejectedValueOnce(
+      new Prisma.PrismaClientKnownRequestError('Unique constraint failed on the fields: (`id`)', {
+        code: 'P2002',
+        clientVersion: 'test',
+        meta: { modelName: 'Organization', target: ['id'] },
+      })
+    );
+
+    const error = await executePlatformCommand(
+      actor,
+      'organization.create',
+      payload('admin@acme.com'),
+      request
+    ).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(Prisma.PrismaClientKnownRequestError);
+    expect(error).toMatchObject({ code: 'P2002' });
+    expect(error).not.toBeInstanceOf(PlatformSecurityError);
+  });
+
+  it('maps the Prisma driver-adapter slug constraint to a conflict', async () => {
+    platformDb.organization.create.mockRejectedValueOnce(
+      new Prisma.PrismaClientKnownRequestError(
+        'Unique constraint failed on the constraint: `organizations_slug_key`',
+        {
+          code: 'P2002',
+          clientVersion: '7.9.1',
+          meta: {
+            modelName: 'Organization',
+            driverAdapterError: {
+              cause: {
+                originalCode: '23505',
+                originalMessage:
+                  'duplicate key value violates unique constraint "organizations_slug_key"',
+                kind: 'UniqueConstraintViolation',
+                constraint: { index: 'organizations_slug_key' },
+                table: 'organizations',
+              },
+            },
+          },
+        }
+      )
+    );
+
+    const error = await executePlatformCommand(
+      actor,
+      'organization.create',
+      payload('admin@acme.com'),
+      request
+    ).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(PlatformSecurityError);
+    expect(error).toMatchObject({
+      status: 409,
+      message: 'That organization slug is already taken.',
+    });
+    expect(platformDb.organizationRole.create).not.toHaveBeenCalled();
+    expect(mocks.userCreate).not.toHaveBeenCalled();
+  });
+
+  it('maps a pg adapter unique violation that omitted the constraint', async () => {
+    platformDb.organization.create.mockRejectedValueOnce(
+      new Prisma.PrismaClientKnownRequestError(
+        'Unique constraint failed on the (not available)',
+        {
+          code: 'P2002',
+          clientVersion: '7.9.1',
+          meta: {
+            modelName: 'Organization',
+            driverAdapterError: {
+              name: 'DriverAdapterError',
+              cause: {
+                originalCode: '23505',
+                originalMessage:
+                  'duplicate key value violates unique constraint "organizations_slug_key"',
+                kind: 'UniqueConstraintViolation',
+              },
+            },
+          },
+        }
+      )
+    );
+
+    const error = await executePlatformCommand(
+      actor,
+      'organization.create',
+      payload('admin@acme.com'),
+      request
+    ).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(PlatformSecurityError);
+    expect(error).toMatchObject({
+      status: 409,
+      message: 'That organization slug is already taken.',
+    });
+    expect(platformDb.organizationRole.create).not.toHaveBeenCalled();
+    expect(mocks.userCreate).not.toHaveBeenCalled();
+  });
+
+  it('rethrows a unique violation for a different constraint named only in the cause', async () => {
+    platformDb.organization.create.mockRejectedValueOnce(
+      new Prisma.PrismaClientKnownRequestError('Unique constraint failed on the (not available)', {
+        code: 'P2002',
+        clientVersion: '7.9.1',
+        meta: {
+          modelName: 'Organization',
+          driverAdapterError: {
+            cause: {
+              originalCode: '23505',
+              originalMessage: 'duplicate key value violates unique constraint "organizations_pkey"',
+              kind: 'UniqueConstraintViolation',
+            },
+          },
+        },
+      })
+    );
+
+    const error = await executePlatformCommand(
+      actor,
+      'organization.create',
+      payload('admin@acme.com'),
+      request
+    ).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(Prisma.PrismaClientKnownRequestError);
+    expect(error).toMatchObject({ code: 'P2002' });
+    expect(error).not.toBeInstanceOf(PlatformSecurityError);
+  });
+
+  it('does not treat a slug mentioned only in the error message as a slug conflict', async () => {
+    platformDb.organization.create.mockRejectedValueOnce(
+      new Prisma.PrismaClientKnownRequestError(
+        'Unique constraint failed on the constraint: `organizations_slug_key`',
+        {
+          code: 'P2002',
+          clientVersion: '7.9.1',
+          meta: {
+            modelName: 'Organization',
+            driverAdapterError: {
+              cause: {
+                originalCode: '23505',
+                originalMessage:
+                  'duplicate key value violates unique constraint "organizations_slug_key"',
+                kind: 'UniqueConstraintViolation',
+                constraint: { index: 'organizations_pkey' },
+                table: 'organizations',
+              },
+            },
+          },
+        }
+      )
+    );
+
+    const error = await executePlatformCommand(
+      actor,
+      'organization.create',
+      payload('admin@acme.com'),
+      request
+    ).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(Prisma.PrismaClientKnownRequestError);
+    expect(error).toMatchObject({ code: 'P2002' });
+    expect(error).not.toBeInstanceOf(PlatformSecurityError);
+  });
+});
+
 describe('organization.create package seat fallback', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.userFindFirst.mockResolvedValue(null);
     mocks.userCreate.mockResolvedValue({ id: 'user_new' });
+  });
+
+  it.each([1, 25, 100000, 0, -1, 'invalid'])('ignores a submitted seat limit of %j', async (seatLimit) => {
+    await executePlatformCommand(
+      { id: 'op_sales', role: 'SALES' } as never,
+      'organization.create',
+      { ...payload('admin@acme.com'), seatLimit },
+      request
+    );
+    expect(platformDb.organization.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ seatLimit: 42 }) })
+    );
+  });
+
+  it.each([1, 25, 42])('accepts a super admin override of %j', async (seatLimit) => {
+    await executePlatformCommand(actor, 'organization.create',
+      { ...payload('admin@acme.com'), seatLimit }, request);
+    expect(platformDb.organization.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ seatLimit }) })
+    );
+  });
+
+  it.each([0, -1, 43, 100000, 'invalid', 1.5])('rejects a super admin override of %j', async (seatLimit) => {
+    await expect(executePlatformCommand(actor, 'organization.create',
+      { ...payload('admin@acme.com'), seatLimit }, request)).rejects.toThrow();
+    expect(platformDb.organization.create).not.toHaveBeenCalled();
   });
 
   it('inherits package default seats when a legacy payload omits seatLimit', async () => {

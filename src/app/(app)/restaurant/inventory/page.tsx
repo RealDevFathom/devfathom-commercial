@@ -1,3 +1,4 @@
+import { browserUuid } from '@/lib/browser-uuid';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
@@ -37,7 +38,7 @@ function message(error: unknown, fallback: string) {
 function destination(notice: string, kind: 'success' | 'error', selected?: string, fresh = false) {
   const params = new URLSearchParams({ notice, kind });
   if (selected) params.set('selected', selected);
-  if (fresh) params.set('fresh', crypto.randomUUID());
+  if (fresh) params.set('fresh', browserUuid());
   return `${route}?${params}`;
 }
 

@@ -103,17 +103,16 @@ export async function POST(request: Request) {
   // discovery. `login:acct` is keyed on the email and is therefore global across
   // organizations — that is deliberate here, since discovery is global too, but
   // it does mean a user in one organization can rate-limit a same-address user in
-  // another. Documented in the threat model; a distributed limiter (Upstash) is
-  // required in production, otherwise these counters are per process.
+  // another. The counter is shared across instances.
   //
   // A correct password here is deliberately NOT a refund: the second factor is
   // proven only at workspace selection, so both budgets are cleared by the
   // `login-intent` provider in src/lib/auth.ts once that succeeds (WHA-1570).
-  const ipGate = rateLimit(`login:ip:${ip ?? 'unknown'}`, 30, 5 * 60_000);
-  const accountGate = rateLimit(`login:acct:${parsed.email}`, 10, 5 * 60_000);
+  const ipGate = await rateLimit(`login:ip:${ip ?? 'unknown'}`, 30, 5 * 60_000);
+  const accountGate = await rateLimit(`login:acct:${parsed.email}`, 10, 5 * 60_000);
   // Minting intents is limited separately so a valid credential cannot be used to
   // fill the intent table.
-  const intentGate = rateLimit(`login:intent:${ip ?? 'unknown'}`, 20, 5 * 60_000);
+  const intentGate = await rateLimit(`login:intent:${ip ?? 'unknown'}`, 20, 5 * 60_000);
   const blocked = [ipGate, accountGate, intentGate].filter((gate) => !gate.ok);
   if (blocked.length > 0) {
     // The BODY stays byte-identical to the 401 — a limiter must not become an

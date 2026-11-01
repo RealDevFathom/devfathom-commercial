@@ -1,6 +1,7 @@
 import { TRPCError } from '@trpc/server';
 
 import { can, subjectFromSession } from '@/lib/abac';
+import { assertInOrganization } from '@/server/org-refs';
 import type { TRPCContext } from '@/server/trpc';
 
 /**
@@ -8,9 +9,9 @@ import type { TRPCContext } from '@/server/trpc';
  *
  * A branch is in scope when the active web user is linked to an ACTIVE staff
  * profile whose primary branch matches, has an explicit branch assignment, or
- * holds the organization-wide `restaurant:configure` capability. Tenant RLS
- * remains authoritative for every lookup, and no caller supplies an
- * organization id.
+ * holds the organization-wide `restaurant:configure` capability. The branch row
+ * must also exist, be active, and belong to the session organization. No caller
+ * supplies an organization id.
  */
 export async function requireRestaurantBranchScope(
   ctx: TRPCContext,
@@ -29,22 +30,21 @@ export async function requireRestaurantBranchScope(
       select: { id: true },
     }),
   ]);
-  if (primaryBranch || assignment) return;
-
-  const configuresAllBranches = await can(
-    subjectFromSession(user),
-    'restaurant:configure',
-    undefined,
-    {
+  const configuresAllBranches =
+    Boolean(primaryBranch || assignment) ||
+    (await can(subjectFromSession(user), 'restaurant:configure', undefined, {
       db: ctx.db,
       source: 'TRPC',
       ip: ctx.requestMeta.ip,
-    }
-  );
+    }));
   if (!configuresAllBranches) {
     throw new TRPCError({
       code: 'FORBIDDEN',
       message: 'You are not authorized for this restaurant branch.',
     });
   }
+
+  const organizationId = ctx.entitlements?.organizationId ?? user.organizationId;
+  if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+  await assertInOrganization(ctx.db.restaurantBranch, organizationId, [branchId], { active: true });
 }

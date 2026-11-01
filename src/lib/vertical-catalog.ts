@@ -722,28 +722,39 @@ export const AGENCY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
 ];
 
 export const PHARMACY_CAPABILITIES: readonly string[] = [
-  'pharmacy.*',
-  'pharmacy.dispense',
+  'pharmacy:*',
+  'pharmacy:dispense',
   'pharmacy:catalogue-review',
-  'pharmacy.manage',
-  'pharmacy.counter',
-  'pharmacy.procurement',
-  'pharmacy.inventory',
-  'pharmacy.finance',
-  'pharmacy.audit',
+  'pharmacy:manage',
+  'pharmacy:counter',
+  'pharmacy:procurement',
+  'pharmacy:inventory',
   'pharmacy:orders',
   'reports:operational',
   'reports:financial',
-  'pharmacy:dispense',
   'pharmacy:safety',
 ];
+
+/** Canonical actions checked by pharmacy workflows, including shared report gates. */
+export const PHARMACY_CHECKED_CAPABILITIES = [
+  'pharmacy:counter',
+  'pharmacy:manage',
+  'pharmacy:procurement',
+  'pharmacy:inventory',
+  'pharmacy:dispense',
+  'pharmacy:safety',
+  'pharmacy:catalogue-review',
+  'pharmacy:orders',
+  'reports:operational',
+  'reports:financial',
+] as const;
 
 export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
   {
     key: 'owner',
     name: 'Owner',
     isSystem: true,
-    capabilities: ['pharmacy.*', 'pharmacy:orders'],
+    capabilities: ['pharmacy:*', 'reports:operational', 'reports:financial'],
   },
   {
     // Optional, explicitly assigned proprietor role. Pair with tenant UserRole.ADMIN
@@ -766,29 +777,29 @@ export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
     key: 'pharmacist',
     name: 'Pharmacist',
     isSystem: true,
-    capabilities: ['pharmacy.dispense', 'pharmacy:catalogue-review'],
+    capabilities: ['pharmacy:dispense', 'pharmacy:catalogue-review'],
   },
   {
     key: 'manager',
     name: 'Manager',
     isSystem: true,
-    capabilities: ['pharmacy.manage', 'pharmacy:orders'],
+    capabilities: ['pharmacy:manage', 'pharmacy:orders'],
   },
   {
     key: 'cashier',
     name: 'Cashier',
     isSystem: true,
-    capabilities: ['pharmacy.counter', 'pharmacy:orders'],
+    capabilities: ['pharmacy:counter', 'pharmacy:orders'],
   },
   {
     key: 'procurement',
     name: 'Procurement',
     isSystem: true,
-    capabilities: ['pharmacy.procurement'],
+    capabilities: ['pharmacy:procurement'],
   },
-  { key: 'inventory', name: 'Inventory', isSystem: true, capabilities: ['pharmacy.inventory'] },
-  { key: 'finance', name: 'Finance', isSystem: true, capabilities: ['pharmacy.finance'] },
-  { key: 'auditor', name: 'Auditor', isSystem: true, capabilities: ['pharmacy.audit'] },
+  { key: 'inventory', name: 'Inventory', isSystem: true, capabilities: ['pharmacy:inventory'] },
+  { key: 'finance', name: 'Finance', isSystem: true, capabilities: ['reports:financial'] },
+  { key: 'auditor', name: 'Auditor', isSystem: true, capabilities: ['reports:operational'] },
 ];
 
 /**
@@ -1592,6 +1603,26 @@ export function packagesForVertical(vertical: OrganizationVertical): readonly Pa
 
 export function packageByKey(key: string): PackageDefinition | undefined {
   return [...RESTAURANT_PACKAGES, ...PHARMACY_PACKAGES, ...HOSPITALITY_PACKAGES].find((pkg) => pkg.key === key);
+}
+
+/** The §7 limit key that caps a vertical's licensed users. The `defaultSeats`
+ * a package offers at onboarding is this ceiling, so a Pharmacy Chain offers
+ * 2500 seats rather than the schema's single-seat default. */
+const SEAT_LIMIT_METRIC_BY_VERTICAL: Partial<Record<OrganizationVertical, string>> = {
+  RESTAURANT: 'restaurant.operators.max',
+  PHARMACY: 'pharmacy.users.max',
+  HOSPITALITY: 'hotel.users.max',
+};
+
+/**
+ * The default licensed-seat ceiling a package is offered with: its vertical's
+ * active-user limit. Returns `undefined` for a vertical whose seats are not
+ * catalog-modeled here (Agency), so a caller can fall back to the column
+ * default rather than pin a wrong number.
+ */
+export function packageDefaultSeats(pkg: PackageDefinition): number | undefined {
+  const metric = SEAT_LIMIT_METRIC_BY_VERTICAL[pkg.vertical];
+  return metric ? pkg.defaultLimits[metric] : undefined;
 }
 
 export function roleTemplatesForVertical(vertical: OrganizationVertical): readonly RoleTemplate[] {

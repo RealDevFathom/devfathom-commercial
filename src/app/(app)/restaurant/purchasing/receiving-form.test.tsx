@@ -98,7 +98,8 @@ describe('ReceivingForm recovery', () => {
     const bad = container.querySelector('[name="receivedQuantity:a"]');
     expect(bad).toHaveAttribute('aria-invalid', 'true');
     expect(bad).toHaveAccessibleDescription('Enter a positive quantity.');
-    expect(screen.getByRole('alert')).toHaveFocus();
+    // The alert is focused from an effect after it is in the document.
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveFocus());
     expect(mocks.replace).not.toHaveBeenCalled();
   });
 

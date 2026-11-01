@@ -16,6 +16,7 @@ import {
 } from '@/lib/restaurant/staff-branch-authorization';
 import { TERMINAL_DEVICE_COOKIE } from '@/lib/restaurant/terminal-auth';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
+import { responseForPasswordChange } from '@/lib/auth/session-state';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { ipFromHeaders, recordAudit } from '@/server/audit';
 
@@ -44,7 +45,14 @@ export async function POST(request: Request) {
     return reject('Enrollment request origin was not accepted.', 403);
   }
 
-  const actor = await resolveTenantActor({ request });
+  let actor;
+  try {
+    actor = await resolveTenantActor({ request });
+  } catch (error) {
+    const passwordChange = responseForPasswordChange(error);
+    if (passwordChange) return passwordChange;
+    throw error;
+  }
   if (!actor?.session.user || !evaluateSessionUser(actor.session.user).ok) {
     return reject('A current administrator session is required.', 401);
   }
@@ -68,7 +76,8 @@ export async function POST(request: Request) {
     const authorization = await resolveCapabilityBranchAuthorization(
       db,
       actor.session.user,
-      'devices:manage'
+      'devices:manage',
+      { organizationId: actor.organization.id }
     );
     assertAuthorizedBranch(authorization, input.branchId);
     const branch = await db.restaurantBranch.findUnique({ where: { id: input.branchId } });

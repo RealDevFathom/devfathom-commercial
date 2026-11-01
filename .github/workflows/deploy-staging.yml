@@ -33,10 +33,11 @@ jobs:
           --health-timeout 5s
           --health-retries 20
     env:
-      # Explicitly disposable databases and CI-only credentials. Migrations and
-      # fixture setup use the owner URL; application behavior uses the separate
-      # NOSUPERUSER/NOBYPASSRLS runtime role below.
-      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/devfathom_ci_test
+      # Explicitly disposable databases and CI-only credentials. The app, including
+      # production-mode `next start`, uses the NOSUPERUSER/NOBYPASSRLS runtime role.
+      # Migrations, extensions, and seed use MIGRATION_DATABASE_URL.
+      DATABASE_URL: postgresql://devfathom_ci_runtime:ci-runtime-only@127.0.0.1:5432/devfathom_ci_test
+      MIGRATION_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/devfathom_ci_test
       SHADOW_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/devfathom_ci_shadow_test
       EXTENSION_ADMIN_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/devfathom_ci_test
       OWNER_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/devfathom_ci_test
@@ -109,7 +110,7 @@ jobs:
           SQL
           bunx tsx prisma/prepare-extensions.ts
           bunx prisma migrate deploy
-          bunx prisma db seed
+          DATABASE_URL="$MIGRATION_DATABASE_URL" bunx prisma db seed
       - name: Create restricted database test role
         run: |
           set -euo pipefail
@@ -129,7 +130,6 @@ jobs:
             echo "Runtime database role is not restricted: $role_attributes" >&2
             exit 1
           fi
-          echo "DATABASE_URL=$TEST_DATABASE_URL" >> "$GITHUB_ENV"
       - name: Required database tests (zero skipped or pending)
         run: |
           set -euo pipefail
@@ -164,6 +164,10 @@ jobs:
           TEST_DATABASE_URL: ${{ env.OWNER_DATABASE_URL }}
       - run: bun run build
       - name: Playwright end-to-end
+        env:
+          # No edge proxy in CI. One hop is the socket address Next places in
+          # X-Forwarded-For, which production startup now requires.
+          TRUSTED_PROXY_HOPS: '1'
         run: |
           set -euo pipefail
           bunx playwright install --with-deps chromium

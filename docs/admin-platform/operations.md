@@ -11,18 +11,20 @@ Web/API runs on Next.js Node.js in an Azure Container App. PostgreSQL is the dur
 
 The route requires `CRON_SECRET`. An Azure scheduler/recurring trigger is a production gate; do not claim five-minute processing until that trigger exists and is verified. The worker claims jobs with `FOR UPDATE SKIP LOCKED`, recovers 15-minute stale leases, increments attempts, and uses exponential backoff capped at 30 minutes.
 
+`POST /api/cron/outbound-effects` drains every organization's pending outbox so a retry does not wait for that organization's next enqueue. Send `Authorization: Bearer <CRON_SECRET>`. The comparison is constant-time, and a missing or mismatched secret returns 401. Retries start at 30 seconds. Staging calls this route every minute from an EventBridge Scheduler, and `CRON_SECRET` is kept in Secrets Manager. That wiring will be added in the infra/aws pull request #110. A claim left in `PROCESSING` returns to the queue after 5 minutes. Dead-lettered email rows drop the recipient email, name, and HTML. Delivered and dead-lettered rows are deleted after 7 days.
+
 ## Job types
 
-| Type                  | Behavior                                                 | Required external configuration                |
-| --------------------- | -------------------------------------------------------- | ---------------------------------------------- |
-| `PROVISION_SHARED`    | records/updates shared deployment state                  | Azure environment and approved base domain    |
-| `PROVISION_DEDICATED` | records a contracted dedicated deployment and polls      | approved Azure resources and rollout           |
-| `CONFIGURE_DOMAIN`    | verifies TXT and attaches domain to the deployment       | DNS and Azure ingress                          |
-| `APPLY_BRAND`         | records deterministic brand version in deployment health | none                                           |
-| `SYNC_IDENTITY`       | validates OIDC discovery or SAML configuration           | reachable IdP metadata                         |
-| `EXPORT_DATA`         | writes private JSON snapshot                             | `BLOB_READ_WRITE_TOKEN`                        |
-| `PURGE_DATA`          | retention-gated tenant-row deletion                      | approved lifecycle state/time                  |
-| `SUSPEND` / `RESUME`  | deployment availability and support revocation           | none                                           |
+| Type                  | Behavior                                                 | Required external configuration            |
+| --------------------- | -------------------------------------------------------- | ------------------------------------------ |
+| `PROVISION_SHARED`    | records/updates shared deployment state                  | Azure environment and approved base domain |
+| `PROVISION_DEDICATED` | records a contracted dedicated deployment and polls      | approved Azure resources and rollout       |
+| `CONFIGURE_DOMAIN`    | verifies TXT and attaches domain to the deployment       | DNS and Azure ingress                      |
+| `APPLY_BRAND`         | records deterministic brand version in deployment health | none                                       |
+| `SYNC_IDENTITY`       | validates OIDC discovery or SAML configuration           | reachable IdP metadata                     |
+| `EXPORT_DATA`         | writes private JSON snapshot                             | `BLOB_READ_WRITE_TOKEN`                    |
+| `PURGE_DATA`          | retention-gated tenant-row deletion                      | approved lifecycle state/time              |
+| `SUSPEND` / `RESUME`  | deployment availability and support revocation           | none                                       |
 
 Jobs are idempotency-keyed where commands can be retried. Operators can inspect payload/result/error, retry failed jobs, or cancel queued/running work.
 
@@ -52,14 +54,15 @@ Use `.env.example` as the machine-copyable template.
 
 | Variable                           | Sensitive | Purpose                                                                                 |
 | ---------------------------------- | --------- | --------------------------------------------------------------------------------------- |
-| `DATABASE_URL`                     | yes       | PostgreSQL application connection                                                       |
+| `DATABASE_URL`                     | yes       | PostgreSQL application connection. Production requires `NOSUPERUSER` and `NOBYPASSRLS`. |
+| `MIGRATION_DATABASE_URL`           | yes       | Migrations, extensions, and seed. The running server does not use this URL.             |
 | `AUTH_SECRET`                      | yes       | Auth.js JWT encryption/signing secret                                                   |
 | `AUTH_URL` / `NEXT_PUBLIC_APP_URL` | no        | canonical application URL — set to the SHARED host so reset and invite links land there |
 | `PLATFORM_BASE_DOMAIN`             | no        | base domain; admin host is `admin.<value>`                                              |
 | `SHARED_APP_HOSTS`                 | no        | optional comma-separated shared hosts that follow no reserved-label rule                |
 | `PLATFORM_ENCRYPTION_KEY`          | yes       | encrypt SSO/email/MFA/support secrets                                                   |
 | `CAMERA_CREDENTIAL_KEY`            | yes       | encrypt Restaurant camera credentials; must be a base64-encoded 32-byte key             |
-| `CRON_SECRET`                      | yes       | job worker bearer credential                                                            |
+| `CRON_SECRET`                      | yes       | bearer for the job worker and `POST /api/cron/outbound-effects`                         |
 | `DEFAULT_ORGANIZATION_ID`          | no        | local/default-host tenant — see the warning below                                       |
 
 > **`DEFAULT_ORGANIZATION_ID` is dangerous once a shared host exists.** It is a

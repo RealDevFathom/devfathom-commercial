@@ -7,7 +7,9 @@ import {
   postGoodsReceipt,
   resolveReceivingException,
   reverseGoodsReceipt,
+  verifyControlledPurchaseWitness,
 } from '@/lib/pharmacy/goods-receipt';
+import { listControlledPinWitnesses } from '@/lib/pharmacy/controlled-register';
 import { PharmacyInventoryError } from '@/lib/pharmacy/inventory';
 import {
   allocateCentralReceipt,
@@ -45,6 +47,16 @@ import {
   SEGREGATION_OF_DUTIES_POLICY,
   type QuoteCandidate,
 } from '@/lib/pharmacy/purchasing';
+import {
+  GS1_WARNING_CODES,
+  gtinCheckDigit,
+  nearExpiryWarning,
+  packIsExpired,
+  parseGs1DataMatrix,
+  type Gs1WarningCode,
+} from '@/lib/pharmacy/gs1-datamatrix';
+import { normalizeMedicineText } from '@/lib/pharmacy/medicine';
+import { actorCanProcure } from '@/lib/pharmacy/procurement-access';
 import {
   assertDirectPurchaseAuthorized,
   PharmacyReceivingError,
@@ -152,7 +164,115 @@ function domainError(error: unknown): never {
       message: error.reason,
     });
   }
+  if (serialUniqueViolation(error)) {
+    throw new TRPCError({ code: 'CONFLICT', message: 'DUPLICATE_SERIAL' });
+  }
   throw error;
+}
+
+function constraintTarget(error: unknown): string {
+  const target = (error as { meta?: { target?: unknown } } | null)?.meta?.target;
+  if (Array.isArray(target)) return target.join(' ');
+  return typeof target === 'string' ? target : '';
+}
+
+/** A GTIN/serial collision is a conflict the operator can act on. Other unique failures stay untouched. */
+function serialUniqueViolation(error: unknown): boolean {
+  if ((error as { code?: unknown } | null)?.code !== 'P2002') return false;
+  const message = error instanceof Error ? error.message : '';
+  return /serial|gtin/i.test(`${constraintTarget(error)} ${message}`);
+}
+
+async function assertProcurement(ctx: TRPCContext) {
+  const actorId = ctx.session?.user?.id;
+  if (!actorId || !(await actorCanProcure(ctx.db, actorId))) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission for this action.',
+    });
+  }
+}
+
+type ReceiptIdentityInput = {
+  medicineId: string;
+  batchNumber: string;
+  printedExpiry: Date;
+  expiryPrecision: 'DAY' | 'MONTH';
+  gtin?: string;
+  serialNumber?: string;
+  gs1Warnings?: readonly Gs1WarningCode[];
+  gs1Payload?: string;
+  invoiceCorrection?: boolean;
+  acceptedCanonicalUnits: number;
+  receivedAt: Date;
+};
+
+/**
+ * The scan is evidence. Re-parse it here and store those fields. An invoice
+ * correction may replace batch and expiry; GTIN and serial stay on the scan.
+ */
+async function resolveReceiptLineIdentity(
+  db: ScopedDb,
+  organizationId: string,
+  line: ReceiptIdentityInput
+) {
+  let batchNumber = line.batchNumber;
+  let printedExpiry = line.printedExpiry;
+  let expiryPrecision = line.expiryPrecision;
+  let gtin = line.gtin ?? null;
+  let serialNumber = line.serialNumber ?? null;
+  let warnings: Gs1WarningCode[] = [...(line.gs1Warnings ?? [])];
+
+  if (line.gs1Payload) {
+    const parsed = parseGs1DataMatrix(line.gs1Payload, line.receivedAt);
+    if (parsed.kind !== 'parsed') throw new PharmacyReceivingError('GS1_INVALID');
+    gtin = parsed.fields.gtin;
+    serialNumber = parsed.fields.serial;
+    warnings = parsed.fields.warnings.map((warning) => warning.code);
+    if (!line.invoiceCorrection) {
+      if (parsed.fields.batch) batchNumber = parsed.fields.batch;
+      if (parsed.fields.expiryDate) {
+        printedExpiry = new Date(`${parsed.fields.expiryDate}T00:00:00.000Z`);
+        expiryPrecision = parsed.fields.expiry?.endsWith('00') ? 'MONTH' : 'DAY';
+      }
+    }
+  } else if (gtin && gtinCheckDigit(gtin.slice(0, 13)) !== Number(gtin[13])) {
+    throw new PharmacyReceivingError('GS1_INVALID');
+  }
+
+  if (gtin) {
+    const codes = [gtin, gtin.startsWith('0') ? gtin.slice(1) : null].filter(
+      (code): code is string => Boolean(code)
+    );
+    const barcode = await db.medicineBarcode.findFirst({
+      where: {
+        organizationId,
+        normalizedCode: { in: codes.map((code) => normalizeMedicineText(code)) },
+      },
+      select: { presentation: { select: { medicineId: true } } },
+    });
+    if (!barcode || barcode.presentation.medicineId !== line.medicineId) {
+      throw new PharmacyReceivingError('GTIN_MEDICINE_MISMATCH');
+    }
+  }
+
+  if (line.acceptedCanonicalUnits > 0 && packIsExpired(printedExpiry, line.receivedAt)) {
+    throw new PharmacyReceivingError('EXPIRED_PACK');
+  }
+
+  const near = nearExpiryWarning(printedExpiry.toISOString().slice(0, 10), line.receivedAt);
+  warnings = warnings.filter((code) => code !== 'NEAR_EXPIRY');
+  if (near && line.acceptedCanonicalUnits > 0) warnings.push(near.code);
+
+  return {
+    batchNumber,
+    printedExpiry,
+    expiryPrecision,
+    gtin,
+    serialNumber,
+    serialKey: serialNumber ? serialNumber.toUpperCase() : null,
+    gs1Warnings: warnings,
+  };
 }
 
 /**
@@ -201,7 +321,7 @@ function tenantScope(ctx: TRPCContext): { organizationId: string } {
 function assertOrderableSupplier(
   supplier: {
     authorized: boolean;
-    licences: { expiresAt: Date; verifiedAt: Date | null }[];
+    licences: { id: string; expiresAt: Date; verifiedAt: Date | null; supersedesId: string | null }[];
   } | null,
   at: Date
 ) {
@@ -211,6 +331,7 @@ function assertOrderableSupplier(
     licences: supplier.licences.map((licence) => ({
       expiresAt: licence.expiresAt,
       verified: licence.verifiedAt !== null,
+      superseded: supplier.licences.some((candidate) => candidate.supersedesId === licence.id),
     })),
     at,
   });
@@ -471,6 +592,9 @@ const purchasingRouter = router({
           supplierLicences: line.quote.supplier.licences.map((licence) => ({
             expiresAt: licence.expiresAt,
             verified: licence.verifiedAt !== null,
+            superseded: line.quote.supplier.licences.some(
+              (candidate) => candidate.supersedesId === licence.id
+            ),
           })),
           validUntil: line.quote.validUntil,
           pricePerPackMinor: line.pricePerPackMinor,
@@ -774,6 +898,7 @@ const purchasingRouter = router({
             .strict()
             .optional(),
           note: z.string().trim().max(2000).optional(),
+          qualifiedPersonUserId: z.string().trim().min(1).optional(),
           lines: z
             .array(
               z
@@ -796,6 +921,14 @@ const purchasingRouter = router({
                   taxCreditable: z.boolean().default(false),
                   stockLocationId: z.string().min(1),
                   quarantineLocationId: z.string().min(1).optional(),
+                  gtin: z
+                    .string()
+                    .regex(/^\d{14}$/)
+                    .optional(),
+                  serialNumber: z.string().trim().min(1).max(20).optional(),
+                  gs1Payload: z.string().trim().min(1).max(400).optional(),
+                  invoiceCorrection: z.boolean().optional(),
+                  gs1Warnings: z.array(z.enum(GS1_WARNING_CODES)).max(6).optional(),
                 })
                 .strict()
                 // PUR-04: rejected goods need somewhere that is not the shelf,
@@ -811,6 +944,13 @@ const purchasingRouter = router({
                     path: ['rejectedCanonicalUnits'],
                   }
                 )
+                .refine(
+                  (line) => !line.serialNumber || Boolean(line.gtin) || Boolean(line.gs1Payload),
+                  {
+                    message: 'A serial needs the GTIN it was scanned with.',
+                    path: ['serialNumber'],
+                  }
+                )
             )
             .min(1),
         })
@@ -822,6 +962,7 @@ const purchasingRouter = router({
         })
     )
     .mutation(async ({ ctx, input }) => {
+      await assertProcurement(ctx);
       const scope = receivingScope(ctx, input.branchId);
       try {
         // PUR-01: an unauthorized or licence-expired supplier cannot be
@@ -861,6 +1002,7 @@ const purchasingRouter = router({
           : new Set<string>();
 
         const lines = [];
+        const seenSerials = new Set<string>();
         for (const [index, line] of input.lines.entries()) {
           if (
             !(await ctx.db.medicine.findFirst({ where: { id: line.medicineId, saleable: true } }))
@@ -880,6 +1022,33 @@ const purchasingRouter = router({
             canonicalUnitsPerPack: line.canonicalUnitsPerPack,
             rejectedCanonicalUnits: line.rejectedCanonicalUnits,
           });
+          const identity = await resolveReceiptLineIdentity(ctx.db, scope.organizationId, {
+            medicineId: line.medicineId,
+            batchNumber: line.batchNumber,
+            printedExpiry: line.printedExpiry,
+            expiryPrecision: line.expiryPrecision,
+            gtin: line.gtin,
+            serialNumber: line.serialNumber,
+            gs1Warnings: line.gs1Warnings,
+            gs1Payload: line.gs1Payload,
+            invoiceCorrection: line.invoiceCorrection,
+            acceptedCanonicalUnits: quantities.acceptedCanonicalUnits,
+            receivedAt: input.receivedAt,
+          });
+          if (identity.gtin && identity.serialKey) {
+            const token = `${identity.gtin}:${identity.serialKey}`;
+            if (seenSerials.has(token)) throw new PharmacyReceivingError('DUPLICATE_SERIAL');
+            seenSerials.add(token);
+            const prior = await ctx.db.pharmacyGoodsReceiptLine.findFirst({
+              where: {
+                organizationId: scope.organizationId,
+                gtin: identity.gtin,
+                serialKey: identity.serialKey,
+              },
+              select: { id: true },
+            });
+            if (prior) throw new PharmacyReceivingError('DUPLICATE_SERIAL');
+          }
           // The tenant and branch are not repeated here: they travel in the
           // composite key of the receipt this line is nested under, so Prisma
           // supplies them and a payload could never disagree with the header.
@@ -888,9 +1057,9 @@ const purchasingRouter = router({
             purchaseOrderLineId: line.purchaseOrderLineId ?? null,
             medicineId: line.medicineId,
             packLevelId: line.packLevelId,
-            batchNumber: line.batchNumber,
-            printedExpiry: line.printedExpiry,
-            expiryPrecision: line.expiryPrecision,
+            batchNumber: identity.batchNumber,
+            printedExpiry: identity.printedExpiry,
+            expiryPrecision: identity.expiryPrecision,
             printedMrpMinor: line.printedMrpMinor,
             canonicalUnitsPerPack: line.canonicalUnitsPerPack,
             receivedPacks: line.receivedPacks,
@@ -917,6 +1086,10 @@ const purchasingRouter = router({
             }),
             stockLocationId: line.stockLocationId,
             quarantineLocationId: line.quarantineLocationId ?? null,
+            gtin: identity.gtin,
+            serialNumber: identity.serialNumber,
+            serialKey: identity.serialKey,
+            gs1Warnings: identity.gs1Warnings,
           });
         }
 
@@ -937,6 +1110,7 @@ const purchasingRouter = router({
             bypassApprovedByUserId: input.directPurchase?.approvedByUserId ?? null,
             bypassApprovedAt: input.directPurchase ? new Date() : null,
             note: input.note,
+            qualifiedPersonUserId: input.qualifiedPersonUserId ?? null,
             lines: { create: lines },
           },
           include: { lines: { orderBy: { lineNumber: 'asc' } } },
@@ -954,20 +1128,61 @@ const purchasingRouter = router({
    * status and the order's move to RECEIVING commit together or not at all.
    */
   postGoodsReceipt: protectedProcedure
-    .input(z.object({ branchId, goodsReceiptId: z.string().min(1) }).strict())
+    .input(
+      z
+        .object({
+          branchId,
+          goodsReceiptId: z.string().min(1),
+          staffProfileId: z.string().trim().min(1).optional(),
+          pin: z
+            .string()
+            .regex(/^\d{4,8}$/)
+            .optional(),
+        })
+        .strict()
+    )
     .mutation(async ({ ctx, input }) => {
+      await assertProcurement(ctx);
       const scope = receivingScope(ctx, input.branchId);
+      // Lockout counters commit even when the PIN is refused. Stock posting is
+      // a second transaction, so a refused PIN never leaves a half-posted receipt.
+      const attempt = await ctx.db.$transaction((tx) =>
+        verifyControlledPurchaseWitness(txDb(tx), scope, {
+          goodsReceiptId: input.goodsReceiptId,
+          staffProfileId: input.staffProfileId,
+          pin: input.pin,
+        })
+      );
+      if ('blocked' in attempt) return attempt;
       try {
         return await ctx.db.$transaction((tx) =>
           postGoodsReceipt(txDb(tx), scope, {
             goodsReceiptId: input.goodsReceiptId,
             at: new Date(),
+            staffProfileId: input.staffProfileId,
+            pin: input.pin,
           })
         );
       } catch (error) {
         domainError(error);
       }
     }),
+
+  /** Qualified people who can enter a PIN when a controlled receipt is posted. */
+  controlledWitnesses: protectedProcedure.query(async ({ ctx }) => {
+    const actorId = ctx.session?.user?.id;
+    if (!actorId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+    const actor = subjectFromSession(ctx.session!.user);
+    if (
+      !(await can(actor, 'pharmacy:safety', undefined, { db: ctx.db })) &&
+      !(await can(actor, 'pharmacy:dispense', undefined, { db: ctx.db }))
+    ) {
+      throw new TRPCError({ code: 'FORBIDDEN' });
+    }
+    const organizationId = ctx.entitlements?.organizationId;
+    if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+    return listControlledPinWitnesses(ctx.db, organizationId, actorId);
+  }),
 
   /**
    * PUR-04: undo a posting with linked compensating movements. Nothing that was
@@ -1318,7 +1533,7 @@ const purchasingRouter = router({
    * product name, to the medicine the carton in the operator's hand contains.
    */
   resolveScan: protectedProcedure
-    .input(z.object({ term: z.string().trim().min(1).max(200) }).strict())
+    .input(z.object({ term: z.string().trim().min(1).max(512) }).strict())
     .query(({ ctx, input }) => resolveScan(ctx.db, tenantScope(ctx), input.term)),
 
   /** SAFE-05: audited, advisory pack authentication at the goods-in bench. */

@@ -20,9 +20,9 @@ import {
   buildCoAuthorizationRecord,
 } from '@/lib/restaurant/co-authorization';
 import { authenticateOperator } from '@/lib/restaurant/terminal-auth';
-import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { assertInOrganization } from '../org-refs';
 import { annotateAudit } from '../audit';
-import { adminProcedure, router } from '../trpc';
+import { adminProcedure, router, type TRPCContext } from '../trpc';
 
 const strict = <T extends z.ZodRawShape>(shape: T) => z.object(shape).strict();
 const branchId = z.string().min(1);
@@ -42,10 +42,10 @@ function requireCameraGateway() {
   return cameraGatewayRuntime.adapter;
 }
 
-async function requireBranch(db: ScopedDb, id: string) {
-  const branch = await db.restaurantBranch.findFirst({ where: { id }, select: { id: true } });
-  if (!branch) throw new TRPCError({ code: 'NOT_FOUND', message: 'Branch not found.' });
-  return branch;
+async function requireBranch(ctx: TRPCContext, id: string) {
+  const organizationId = ctx.entitlements.organizationId ?? ctx.session?.user.organizationId;
+  if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+  await assertInOrganization(ctx.db.restaurantBranch, organizationId, [id], { active: true });
 }
 
 export const restaurantCamerasRouter = router({
@@ -93,7 +93,7 @@ export const restaurantCamerasRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       entitled(ctx);
-      await requireBranch(ctx.db, input.branchId);
+      await requireBranch(ctx, input.branchId);
       const result = await enrollCameraGateway(ctx.db, {
         ...input,
         organizationId: ctx.session.user.organizationId,
@@ -182,7 +182,7 @@ export const restaurantCamerasRouter = router({
     }),
   getRetentionState: adminProcedure.input(strict({ branchId })).query(async ({ ctx, input }) => {
     entitled(ctx);
-    await requireBranch(ctx.db, input.branchId);
+    await requireBranch(ctx, input.branchId);
     const gateway = await ctx.db.restaurantCameraGateway.findFirst({
       where: { branchId: input.branchId, status: 'ACTIVE' },
       select: { retentionDays: true },
@@ -194,7 +194,7 @@ export const restaurantCamerasRouter = router({
     .input(strict({ branchId, days: z.number().int().min(1).max(90) }))
     .mutation(async ({ ctx, input }) => {
       entitled(ctx);
-      await requireBranch(ctx.db, input.branchId);
+      await requireBranch(ctx, input.branchId);
       await ctx.db.restaurantCameraGateway.updateMany({
         where: { branchId: input.branchId, status: 'ACTIVE' },
         data: { retentionDays: input.days },
@@ -322,7 +322,7 @@ export const restaurantCamerasRouter = router({
     .mutation(async ({ ctx, input }) => {
       entitled(ctx);
       annotateAudit(ctx, { skipInput: true });
-      await requireBranch(ctx.db, input.branchId);
+      await requireBranch(ctx, input.branchId);
       const gateway = await ctx.db.restaurantCameraGateway.findFirst({
         where: { id: input.gatewayId, branchId: input.branchId, status: 'ACTIVE' },
         select: { id: true },

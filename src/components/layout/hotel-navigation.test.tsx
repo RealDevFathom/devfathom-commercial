@@ -42,6 +42,9 @@ vi.mock('@/lib/trpc', () => ({
         },
       },
     },
+    pharmacySafety: {
+      access: { useQuery: () => ({ data: { allowed: false } }) },
+    },
   },
 }));
 vi.mock('motion/react', () => ({
@@ -103,6 +106,7 @@ const priorHrefs = [
   '/pharmacy/substitution',
   '/pharmacy/controlled-register',
   '/pharmacy/regulatory',
+  '/pharmacy/settings/branches',
   '/reviews',
   '/team/stats',
   '/hr',
@@ -156,8 +160,8 @@ beforeEach(() => {
 afterEach(cleanup);
 describe('Hotel navigation composition', () => {
   it('retains every accepted link and adds exactly the six hospitality routes', () => {
-    expect(priorHrefs).toHaveLength(56);
-    expect(navigation).toHaveLength(62);
+    expect(priorHrefs).toHaveLength(57);
+    expect(navigation).toHaveLength(63);
     const hrefs = navigation.map((n) => n.href);
     expect(hrefs).toEqual(expect.arrayContaining(priorHrefs));
     expect(navigation.filter((n) => n.group === 'Hospitality').map((n) => n.href)).toEqual(

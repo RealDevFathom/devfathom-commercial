@@ -1,5 +1,6 @@
 'use client';
 import { useRef, useState } from 'react';
+import { browserUuid } from '@/lib/browser-uuid';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -64,7 +65,7 @@ export function PaymentSandboxPanel({
             setNotice('Restore the original operation details before retrying or reconciling.');
             return;
           }
-          operation.current ??= { key: crypto.randomUUID(), fingerprint };
+          operation.current ??= { key: browserUuid(), fingerprint };
           setStarted(true);
           setResolved(false);
           try {

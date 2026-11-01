@@ -31,7 +31,7 @@ export default async function PlatformLoginPage() {
           </div>
 
           <div className="max-w-xl">
-            <p className="mb-6 font-mono text-[10px] font-semibold uppercase tracking-[0.2em] text-sidebar-primary">
+            <p className="mb-6 font-mono text-[10px] font-semibold uppercase tracking-[0.2em] text-text-on-accent">
               The platform desk
             </p>
             <h1 className="font-display text-[clamp(3rem,5vw,5.5rem)] leading-[0.91] font-semibold tracking-[-0.065em] text-white">

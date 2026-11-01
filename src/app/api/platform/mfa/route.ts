@@ -65,7 +65,7 @@ export async function POST(request: Request) {
     if (actor.enrollmentOnly && !['begin', 'confirm'].includes(input.action)) {
       throw new PlatformSecurityError('Complete MFA enrollment first.', 403);
     }
-    if (!rateLimit(`platform-mfa:${actor.id}`, 12, 15 * 60_000).ok) {
+    if (!(await rateLimit(`platform-mfa:${actor.id}`, 12, 15 * 60_000)).ok) {
       throw new PlatformSecurityError('Too many MFA attempts. Try again later.', 429);
     }
     const result = await withPlatformDb(async (db) => {

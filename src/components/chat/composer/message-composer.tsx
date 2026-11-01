@@ -7,6 +7,7 @@ import { Link } from '@tiptap/extension-link';
 import { useSession } from 'next-auth/react';
 import { Paperclip, Send, X, Loader2, FileText, Mic } from 'lucide-react';
 import { toast } from 'sonner';
+import { browserUuid } from '@/lib/browser-uuid';
 import { trpc } from '@/lib/trpc';
 import { useChatTyping } from '@/lib/ably';
 import { uploadAttachment } from '@/lib/chat/upload-client';
@@ -78,7 +79,7 @@ export function MessageComposer({
     // Optimistic: render the message INSTANTLY, then reconcile with the server
     // response. This hides the DB round-trip latency so sending feels instant.
     onMutate: async (vars) => {
-      const tempId = `optimistic-${crypto.randomUUID()}`;
+      const tempId = `optimistic-${browserUuid()}`;
       const optimistic: ChatMessage = {
         id: tempId,
         channelId: vars.channelId,

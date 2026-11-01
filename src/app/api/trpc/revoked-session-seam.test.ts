@@ -220,3 +220,35 @@ describe('a usable session is unaffected', () => {
     expect(mocks.admitAnonymousRequest).not.toHaveBeenCalled();
   });
 });
+
+describe('a temporary password on an API route', () => {
+  it('returns 403 PASSWORD_CHANGE_REQUIRED and still allows the password change', async () => {
+    mocks.auth.mockResolvedValue({
+      expires: 'later',
+      user: {
+        id: 'user_temp',
+        organizationId: 'org_acme',
+        role: 'EMPLOYEE',
+        status: 'ACTIVE',
+        mustChangePassword: true,
+      },
+    });
+
+    const blocked = await GET(new Request(url('clients.getAll')));
+    expect(blocked.status).toBe(403);
+    await expect(blocked.json()).resolves.toEqual({
+      code: 'PASSWORD_CHANGE_REQUIRED',
+      error: 'PASSWORD_CHANGE_REQUIRED',
+    });
+    expect(mocks.fetchRequestHandler).not.toHaveBeenCalled();
+
+    mocks.requireOrganizationForRequest.mockResolvedValue({
+      id: 'org_acme',
+      slug: 'acme',
+      status: 'ACTIVE',
+    });
+    const allowed = await POST(new Request(url('team.changePassword'), { method: 'POST' }));
+    expect(allowed.status).toBe(200);
+    expect(servedBy()).toBe('real');
+  });
+});

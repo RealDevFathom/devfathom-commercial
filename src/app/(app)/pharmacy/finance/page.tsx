@@ -1,3 +1,4 @@
+import { browserUuid } from '@/lib/browser-uuid';
 import { FinancialStatements } from './financial-statements';
 import { Suspense } from 'react';
 import { MarginComparisonSection } from './margin-comparison';
@@ -152,7 +153,7 @@ export default async function PharmacyFinancePage({
           kind,
           amountMinor: moneyMinor(data, 'amount'),
           occurredAt: new Date(`${field(data, 'occurredAt')}T12:00:00Z`),
-          idempotencyKey: crypto.randomUUID(),
+          idempotencyKey: browserUuid(),
           counterpartyName: field(data, 'counterpartyName') || undefined,
           memo: field(data, 'memo') || undefined,
           bankReference: field(data, 'bankReference') || undefined,
@@ -171,7 +172,7 @@ export default async function PharmacyFinancePage({
           transactionId: field(data, 'transactionId'),
           reason: field(data, 'reason'),
           at: new Date(),
-          idempotencyKey: crypto.randomUUID(),
+          idempotencyKey: browserUuid(),
         });
         redirect(
           destination(branchId, 'Reversal posted. The original entry remains in the audit trail.')
@@ -239,7 +240,7 @@ export default async function PharmacyFinancePage({
             ? new Date(`${field(data, 'effectiveTo')}T00:00:00Z`)
             : undefined,
           approvalReference: field(data, 'approvalReference'),
-          idempotencyKey: crypto.randomUUID(),
+          idempotencyKey: browserUuid(),
           rules: [
             { productClass: 'MEDICINE', pctHsCode: field(data, 'medicineHs'), ...common },
             { productClass: 'FRONT_SHOP', pctHsCode: field(data, 'frontShopHs'), ...common },

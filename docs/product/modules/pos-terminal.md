@@ -101,3 +101,24 @@ A durable simulated print bridge is **IMPLEMENTED**: branch/station routes selec
   branch/kind/station selection, automatic terminal establishment, listing, rotation, and
   co-authorized revocation. Manual secret display remains a recovery/rotation surface, not the
   ordinary operator launch sequence.
+
+## Terminal webhook security rollout (SEC-006)
+
+Switch **all senders BEFORE deployment** to the following contract. Otherwise live
+payment webhooks will receive **401** and payments will not be applied.
+
+- Send `x-webhook-timestamp` as Unix seconds for each delivery.
+- Send `x-webhook-signature` as the hex HMAC-SHA256 using
+  `RESTAURANT_TERMINAL_WEBHOOK_SECRET` over the exact signing string
+  `ts.source.rawBody`: timestamp header value, a dot, source path segment, a dot,
+  and the unchanged raw request body. An optional `sha256=` prefix is accepted.
+- Keep sender and receiver clocks NTP synced. The timestamp must be within
+  +/-5 minutes (300 seconds) of the receiver clock, including the boundaries.
+- Keep `externalEventId` stable across retries; refresh the delivery timestamp and
+  signature when retrying. Duplicate event IDs do not apply another tender.
+
+Before deploying, configure the shared secret on senders and receiver, verify
+every sender uses the new header and signing string, and confirm clock sync.
+Missing/invalid timestamps, signatures, or timestamps outside the window return
+401. Failed deliveries are recorded for audit; only VERIFIED inbox rows may
+process payments, and all other verification states are discarded.

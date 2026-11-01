@@ -21,6 +21,7 @@ import {
 } from '@/lib/tenancy/host';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import type { SupportIdentity } from '@/lib/tenancy/support-session';
+import { responseForPasswordChange } from '@/lib/auth/session-state';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { anonymousToken, classifyAnonymousRequest } from '@/lib/auth/anonymous-access';
 import { organizationForAnonymousToken } from '@/lib/auth/anonymous-tenant';
@@ -366,7 +367,7 @@ async function handleAnonymous(req: Request): Promise<Response> {
 
   // Throttle BEFORE any database work, so neither the platform-scope token
   // lookup nor the tenant transaction can be driven by an unauthenticated flood.
-  const admitted = admitAnonymousRequest({ kind: routing.kind, token, ip: clientIp(req) });
+  const admitted = await admitAnonymousRequest({ kind: routing.kind, token, ip: clientIp(req) });
   if (!admitted.ok) {
     return Response.json(
       { error: 'Too many requests. Please try again later.' },
@@ -405,6 +406,8 @@ async function handler(req: Request) {
       support: actor.support,
     });
   } catch (error) {
+    const passwordChange = responseForPasswordChange(error);
+    if (passwordChange) return passwordChange;
     if (error instanceof TenantHostError) {
       return Response.json({ error: error.message }, { status: error.status });
     }

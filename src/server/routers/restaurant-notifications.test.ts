@@ -57,6 +57,11 @@ import type { TRPCContext } from '../trpc';
 import { restaurantNotificationsRouter } from './restaurant-notifications';
 
 const db = {
+  restaurantBranch: {
+    findMany: vi.fn(async ({ where }: { where?: { id?: { in?: string[] } } }) =>
+      (where?.id?.in ?? []).map((id) => ({ id }))
+    ),
+  },
   restaurantStaffProfile: { findFirst: mocks.staffFindFirst },
   restaurantNotification: {
     findMany: mocks.notificationFindMany,
@@ -88,6 +93,7 @@ function caller() {
   return restaurantNotificationsRouter.createCaller({
     db,
     entitlements: {
+      organizationId: 'org_1',
       enabledModules: ['restaurant-core'],
       activeSeats: 1,
       seatLimit: 50,
@@ -266,6 +272,21 @@ describe('signed webhook administration', () => {
     const status = await caller().webhookStatus({});
     expect(status.config).toMatchObject({ signingSecretConfigured: true });
     expect(JSON.stringify(status)).not.toContain('ciphertext-only');
+  });
+
+  it('rejects a non-HTTPS endpoint as a 400 with an actionable message', async () => {
+    await expect(
+      caller().configureWebhook({
+        endpointUrl: 'http://example.com/hook',
+        enabled: true,
+        signingSecret: 'a-signing-secret-with-at-least-32-characters',
+      })
+    ).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'Webhook endpoint must use HTTPS.',
+    });
+    expect(mocks.webhookCreate).not.toHaveBeenCalled();
+    expect(mocks.webhookUpdate).not.toHaveBeenCalled();
   });
 
   it('queues an allowlisted synthetic test and retries dead jobs without resetting attempts', async () => {

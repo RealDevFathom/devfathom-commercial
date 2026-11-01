@@ -59,7 +59,15 @@ export const POST = withTerminalAuth(async (ctx, request) => {
       now
     );
     if (!approver.ok) return approver.response;
-    if (!(await operatorHasCapability(ctx.db, approver.staffProfileId, 'coauth:approve', now))) {
+    if (
+      !(await operatorHasCapability(
+        ctx.db,
+        approver.staffProfileId,
+        'coauth:approve',
+        now,
+        ctx.device.branchId
+      ))
+    ) {
       return NextResponse.json(
         { error: 'The approving manager lacks the "coauth:approve" capability.' },
         { status: 403 }

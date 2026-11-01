@@ -64,6 +64,9 @@ vi.mock('@/lib/trpc', () => ({
         },
       },
     },
+    pharmacySafety: {
+      access: { useQuery: () => ({ data: { allowed: false } }) },
+    },
   },
 }));
 vi.mock('@/components/preferences-provider', () => ({
@@ -255,7 +258,13 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
     for (const label of ['Inventory', 'Purchasing', 'Reports & Insights']) {
       expect(screen.getByRole('link', { name: new RegExp(`${label}$`) })).toBeInTheDocument();
     }
-    for (const label of ['Finance', 'Onboarding', 'Medicine catalog', 'Regulatory profile']) {
+    for (const label of [
+      'Finance',
+      'Onboarding',
+      'Medicine catalog',
+      'Regulatory profile',
+      'Branch assignments',
+    ]) {
       expect(screen.queryByRole('link', { name: new RegExp(`${label}$`) })).not.toBeInTheDocument();
     }
   });

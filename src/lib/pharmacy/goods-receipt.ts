@@ -24,6 +24,14 @@
  * in its place.
  */
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { can } from '@/lib/abac';
+import { appendControlledPurchaseEntries } from './controlled-register';
+import {
+  clearLockout,
+  isLockedOut,
+  registerFailedAttempt,
+  verifyOperatorCredential,
+} from '@/lib/restaurant/operator-credentials';
 
 import { PharmacyInventoryError } from './inventory';
 import {
@@ -34,6 +42,7 @@ import {
   type MatchException,
   type OrderedTerms,
 } from './receiving';
+import { nearExpiryWarning, packIsExpired } from './gs1-datamatrix';
 import { expiryInstant, receiveLot, reverseMovements } from './stock-ledger';
 import type { LedgerScope } from './stock-ledger';
 
@@ -66,10 +75,86 @@ export type PostGoodsReceiptResult = {
  *
  * Must run inside the caller's transaction.
  */
+const WITNESS_BLOCKED = 'A different qualified person must enter their PIN.';
+
+/**
+ * PIN witness for a controlled purchase. A receipt with no controlled line
+ * returns `{ pharmacistId: null }`. A failed PIN updates the lockout counter
+ * and returns `{ blocked }` so the caller can commit that counter without
+ * posting stock.
+ */
+export async function verifyControlledPurchaseWitness(
+  db: ScopedDb,
+  scope: ReceivingScope,
+  input: { goodsReceiptId: string; staffProfileId?: string; pin?: string }
+): Promise<{ blocked: string } | { pharmacistId: string | null }> {
+  const receipt = await db.pharmacyGoodsReceipt.findFirst({
+    where: { id: input.goodsReceiptId, organizationId: scope.organizationId },
+    select: {
+      branchId: true,
+      qualifiedPersonUserId: true,
+      lines: { select: { medicineId: true, acceptedCanonicalUnits: true } },
+    },
+  });
+  if (!receipt || receipt.branchId !== scope.branchId) return { pharmacistId: null };
+  const controlled = await db.medicine.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      id: { in: receipt.lines.map((line) => line.medicineId) },
+      controlled: true,
+    },
+    select: { id: true },
+  });
+  const controlledIds = new Set(controlled.map((medicine) => medicine.id));
+  const needsRegister = receipt.lines.some(
+    (line) => controlledIds.has(line.medicineId) && line.acceptedCanonicalUnits > 0
+  );
+  if (!needsRegister) return { pharmacistId: null };
+  if (!input.staffProfileId || !input.pin || !receipt.qualifiedPersonUserId) {
+    return { blocked: WITNESS_BLOCKED };
+  }
+  await db.$queryRaw`SELECT id FROM restaurant_operator_credentials WHERE "organizationId"=${scope.organizationId} AND "staffProfileId"=${input.staffProfileId} AND type='PIN' AND "revokedAt" IS NULL AND "deviceId" IS NULL FOR UPDATE`;
+  const credential = await db.restaurantOperatorCredential.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      staffProfileId: input.staffProfileId,
+      type: 'PIN',
+      revokedAt: null,
+      deviceId: null,
+    },
+    include: { staffProfile: { include: { user: true } } },
+  });
+  const pharmacist = credential?.staffProfile.user;
+  const now = new Date();
+  const eligible =
+    credential &&
+    credential.staffProfile.status === 'ACTIVE' &&
+    pharmacist &&
+    pharmacist.id === receipt.qualifiedPersonUserId &&
+    pharmacist.organizationId === scope.organizationId &&
+    pharmacist.status === 'ACTIVE' &&
+    pharmacist.id !== scope.actorId &&
+    !isLockedOut(credential, now) &&
+    (await can(pharmacist, 'pharmacy:dispense', undefined, { db, now }));
+  if (!eligible || !credential || !pharmacist) return { blocked: WITNESS_BLOCKED };
+  if (!(await verifyOperatorCredential('PIN', input.pin, credential.credentialHash))) {
+    await db.restaurantOperatorCredential.update({
+      where: { id: credential.id },
+      data: registerFailedAttempt(credential, now),
+    });
+    return { blocked: WITNESS_BLOCKED };
+  }
+  await db.restaurantOperatorCredential.update({
+    where: { id: credential.id },
+    data: clearLockout(),
+  });
+  return { pharmacistId: pharmacist.id };
+}
+
 export async function postGoodsReceipt(
   db: ScopedDb,
   scope: ReceivingScope,
-  input: { goodsReceiptId: string; at: Date }
+  input: { goodsReceiptId: string; at: Date; staffProfileId?: string; pin?: string }
 ): Promise<PostGoodsReceiptResult> {
   const receipt = await db.pharmacyGoodsReceipt.findFirst({
     where: { id: input.goodsReceiptId, organizationId: scope.organizationId },
@@ -85,6 +170,24 @@ export async function postGoodsReceipt(
   assertGoodsReceiptTransition(receipt.status, 'POSTED');
   if (receipt.lines.length === 0) throw new PharmacyReceivingError('INVALID_QUANTITY');
 
+  const controlledMedicines = await db.medicine.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      id: { in: receipt.lines.map((line) => line.medicineId) },
+      controlled: true,
+    },
+    select: { id: true, manufacturer: true },
+  });
+  const controlledIds = new Set(controlledMedicines.map((medicine) => medicine.id));
+  const needsRegister = receipt.lines.some(
+    (line) => controlledIds.has(line.medicineId) && line.acceptedCanonicalUnits > 0
+  );
+  const witness = await verifyControlledPurchaseWitness(db, scope, input);
+  if ('blocked' in witness) throw new PharmacyReceivingError('CONTROLLED_WITNESS_REQUIRED');
+  if (needsRegister && !witness.pharmacistId) {
+    throw new PharmacyReceivingError('CONTROLLED_WITNESS_REQUIRED');
+  }
+
   // Fail closed on the whole receipt before a single lot exists: a receipt that
   // posted three good lines and then refused the fourth would leave stock on
   // the shelf for a delivery the operator never finished accepting.
@@ -94,6 +197,9 @@ export async function postGoodsReceipt(
       (!line.ocrRegulatedConfirmedAt || !line.ocrRegulatedConfirmedById)
     ) {
       throw new PharmacyReceivingError('OCR_CONFIRMATION_REQUIRED');
+    }
+    if (line.acceptedCanonicalUnits > 0 && packIsExpired(line.printedExpiry, input.at)) {
+      throw new PharmacyReceivingError('EXPIRED_PACK');
     }
     assertSaleableOnReceipt({
       batchNumber: line.batchNumber,
@@ -107,6 +213,9 @@ export async function postGoodsReceipt(
         licences: receipt.supplier.licences.map((licence) => ({
           expiresAt: licence.expiresAt,
           verified: licence.verifiedAt !== null,
+          superseded: receipt.supplier.licences.some(
+            (candidate) => candidate.supersedesId === licence.id
+          ),
         })),
       },
       at: input.at,
@@ -152,9 +261,16 @@ export async function postGoodsReceipt(
           : undefined,
     });
 
+    const expiryDate = line.printedExpiry.toISOString().slice(0, 10);
+    const near = line.acceptedCanonicalUnits > 0 ? nearExpiryWarning(expiryDate, input.at) : null;
     await db.pharmacyGoodsReceiptLine.update({
       where: { id: line.id },
-      data: { inventoryLotId: posted.lot.id },
+      data: {
+        inventoryLotId: posted.lot.id,
+        ...(near && !line.gs1Warnings.includes(near.code)
+          ? { gs1Warnings: [...line.gs1Warnings, near.code] }
+          : {}),
+      },
     });
     lines.push({
       goodsReceiptLineId: line.id,
@@ -190,6 +306,33 @@ export async function postGoodsReceipt(
       });
       exceptions.push({ id: created.id, kind: exception.kind, detail: exception.detail });
     }
+  }
+
+  if (needsRegister && witness.pharmacistId) {
+    const purchaseLines = [];
+    for (const posted of lines) {
+      const source = receipt.lines.find((line) => line.id === posted.goodsReceiptLineId);
+      const medicine = controlledMedicines.find((item) => item.id === source?.medicineId);
+      if (!source || !medicine || source.acceptedCanonicalUnits <= 0) continue;
+      if (!posted.acceptedMovementId) throw new PharmacyReceivingError('INVALID_QUANTITY');
+      purchaseLines.push({
+        medicineId: medicine.id,
+        manufacturer: medicine.manufacturer,
+        inventoryLotId: posted.inventoryLotId,
+        stockMovementId: posted.acceptedMovementId,
+        batchNumber: source.batchNumber,
+        quantityCanonicalUnits: source.acceptedCanonicalUnits,
+        counterpartyName: receipt.supplier.name,
+      });
+    }
+    await appendControlledPurchaseEntries(db, {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      recordedByUserId: scope.actorId,
+      witnessedByUserId: witness.pharmacistId,
+      signatureRef: `pin:${witness.pharmacistId}`,
+      lines: purchaseLines,
+    });
   }
 
   await db.pharmacyGoodsReceipt.update({

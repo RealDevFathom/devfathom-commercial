@@ -149,11 +149,11 @@ function auditReasons(): string[] {
     .filter((reason): reason is string => typeof reason === 'string');
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.clearAllMocks();
   // The limiter is real and module-scoped: reset only the two keys under test.
-  clearRateLimit(IP_KEY);
-  clearRateLimit(ACCOUNT_KEY);
+  await clearRateLimit(IP_KEY);
+  await clearRateLimit(ACCOUNT_KEY);
 
   mocks.compare.mockImplementation(async (plain: string) => plain === PASSWORD);
   mocks.verifyTotp.mockReturnValue(false);
@@ -178,6 +178,16 @@ beforeEach(() => {
 });
 
 describe('tenant login rate limiting', () => {
+  it('rejects a correct password when the returned account belongs to another host organization', async () => {
+    useUser(tenantUser({ organizationId: 'org_other' }));
+    expect(await attempt(PASSWORD)).toBeNull();
+    expect(mocks.findFirstUser).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { email: EMAIL, organizationId: organization.id },
+      })
+    );
+    expect(mocks.updateUser).not.toHaveBeenCalled();
+  });
   it('clears both failure budgets once a sign-in is fully verified', async () => {
     // One unit short of the account limit, then a success that must reset it.
     for (let i = 0; i < ACCOUNT_LIMIT - 1; i += 1) {

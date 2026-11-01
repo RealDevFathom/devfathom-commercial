@@ -2,13 +2,21 @@ import { Prisma, PrismaClient } from '../src/generated/prisma/client.js';
 import { PrismaPg } from '@prisma/adapter-pg';
 import pg from 'pg';
 import { hash } from 'bcryptjs';
-import 'dotenv/config';
+import { config } from 'dotenv';
+
+config({ path: '.env' });
+config({ path: '.env.local', override: true });
 
 import { defaultDepartmentRowsForVertical } from '../src/lib/vertical-catalog.js';
 import { AGENCY_SUITE_MODULES, syncPlatformCatalog } from './catalog-sync.js';
 import { upsertPlatformAdmin } from './platform-admin.js';
+import { upsertStagingAdmin } from './staging-admin.js';
 
-const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+// Seed writes through row-level security as a platform admin. Use the migration
+// role when it is set so the application role can stay NOSUPERUSER NOBYPASSRLS.
+const pool = new pg.Pool({
+  connectionString: process.env.MIGRATION_DATABASE_URL?.trim() || process.env.DATABASE_URL,
+});
 const adapter = new PrismaPg(pool);
 const prisma = new PrismaClient({ adapter });
 
@@ -1621,6 +1629,13 @@ async function main() {
       // nothing else. A rotated PLATFORM_ADMIN_PASSWORD has to land on every
       // deployment, not only the one that creates the administrator.
       await upsertPlatformAdmin(tx);
+      // The staging workspace administrator (ADMIN_EMAIL / ADMIN_PASSWORD) is
+      // not one of the demo @company.com users. Create it on every deploy,
+      // including the early return inside seedTenantData.
+      await upsertStagingAdmin(tx, {
+        organizationId: organization.id,
+        organizationRoleId: adminRole.id,
+      });
 
       await seedTenantData(tx);
       await tx.user.updateMany({

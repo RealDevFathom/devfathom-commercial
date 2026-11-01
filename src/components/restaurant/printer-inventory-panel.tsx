@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react';
 import type { inferRouterOutputs } from '@trpc/server';
+import { browserUuid } from '@/lib/browser-uuid';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -402,7 +403,7 @@ export function PrinterInventoryPanel({
       ownedRename?.printerId === printer.id && ownedRename.branchId === branchId
         ? ownedRename
         : {
-            commandId: crypto.randomUUID(),
+            commandId: browserUuid(),
             ownerKey,
             branchId,
             branchName: branches.find((branch) => branch.id === branchId)!.name,

@@ -89,22 +89,22 @@ async function seedWorkforce(
   if (manager.id === approver.id || manager.userId === approver.userId) {
     throw new Error('Demo restaurant manager and approver must be distinct linked users.');
   }
-  if (
-    !(await operatorHasCapability(
-      db,
-      approver.id,
-      'coauth:approve',
-      instant(seed.generatedAt, 'seed')
-    ))
-  ) {
-    throw new Error('Demo restaurant approver organization role must grant coauth:approve.');
-  }
-
   const firstBranch = seed.branches[0];
   if (!firstBranch) throw new Error('Restaurant demo seed requires at least one branch.');
   const primaryBranchId = requiredId(catalog.branch, firstBranch.id, 'branch');
   await updateStaffProfile(db, manager.id, { primaryBranchId });
   await updateStaffProfile(db, approver.id, { primaryBranchId });
+  if (
+    !(await operatorHasCapability(
+      db,
+      approver.id,
+      'coauth:approve',
+      instant(seed.generatedAt, 'seed'),
+      primaryBranchId
+    ))
+  ) {
+    throw new Error('Demo restaurant approver organization role must grant coauth:approve.');
+  }
 
   const existingRole = await db.restaurantJobRole.findUnique({
     where: {

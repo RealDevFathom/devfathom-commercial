@@ -233,12 +233,13 @@ export async function requireOrderTakingCapability(
   requireCustomerRead = false
 ): Promise<NextResponse | null> {
   const now = new Date();
-  if (!(await operatorHasCapability(ctx.db, staffProfileId, 'orders:take', now))) {
+  const branchId = ctx.device.branchId;
+  if (!(await operatorHasCapability(ctx.db, staffProfileId, 'orders:take', now, branchId))) {
     return json({ error: 'This operator lacks the "orders:take" capability.' }, 403);
   }
   if (
     requireCustomerRead &&
-    !(await operatorHasCapability(ctx.db, staffProfileId, 'customers:read', now))
+    !(await operatorHasCapability(ctx.db, staffProfileId, 'customers:read', now, branchId))
   ) {
     return json({ error: 'This operator lacks the "customers:read" capability.' }, 403);
   }

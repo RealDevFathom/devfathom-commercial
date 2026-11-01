@@ -4,6 +4,7 @@ import { router, adminProcedure } from '../trpc';
 import { logActivity } from '../activity';
 import { emitEvent } from '@/lib/webhooks';
 import { TRPCError } from '@trpc/server';
+import { assertInOrganization, workspaceId } from '../org-refs';
 import { sendEmail, templates, appUrl } from '@/lib/email';
 import {
   fromCurrencyGroups,
@@ -120,6 +121,9 @@ export const financeRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      const orgId = workspaceId(ctx);
+      await assertInOrganization(ctx.db.client, orgId, [input.clientId]);
+      await assertInOrganization(ctx.db.project, orgId, [input.projectId]);
       return ctx.db.transaction.create({
         data: {
           ...input,
@@ -159,6 +163,9 @@ export const financeRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const { id, ...data } = input;
+      const orgId = workspaceId(ctx);
+      await assertInOrganization(ctx.db.client, orgId, [data.clientId]);
+      await assertInOrganization(ctx.db.project, orgId, [data.projectId]);
       return ctx.db.transaction.update({ where: { id }, data });
     }),
 
@@ -237,6 +244,9 @@ export const financeRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      const orgId = workspaceId(ctx);
+      await assertInOrganization(ctx.db.client, orgId, [input.clientId]);
+      await assertInOrganization(ctx.db.project, orgId, [input.projectId]);
       // FIN-01: never trust client-sent money. Derive every line `amount`, the
       // `subtotal` and the `total` from quantity × rate (+ tax) on the server, so
       // a request claiming subtotal/total = 0 (or a negative) cannot corrupt the

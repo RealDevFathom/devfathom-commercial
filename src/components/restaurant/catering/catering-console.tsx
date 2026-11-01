@@ -5,6 +5,7 @@ import type { inferRouterOutputs } from '@trpc/server';
 import { Printer, Plus } from 'lucide-react';
 import { toast } from 'sonner';
 
+import { browserUuid } from '@/lib/browser-uuid';
 import { useEntitlements } from '@/components/entitlements-provider';
 import { RestaurantBranchSelect } from '@/components/restaurant/restaurant-branch-select';
 import { Button } from '@/components/ui/button';
@@ -767,7 +768,7 @@ export function CateringConsole({ currency }: { currency: string | null }) {
                           setTransitionTarget({
                             order,
                             to: nextStatus[order.status]!,
-                            idempotencyKey: crypto.randomUUID(),
+                            idempotencyKey: browserUuid(),
                           });
                         }}
                       >
@@ -784,7 +785,7 @@ export function CateringConsole({ currency }: { currency: string | null }) {
                           setTransitionTarget({
                             order,
                             to: 'CANCELLED',
-                            idempotencyKey: crypto.randomUUID(),
+                            idempotencyKey: browserUuid(),
                           });
                         }}
                       >

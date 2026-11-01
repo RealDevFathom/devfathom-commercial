@@ -51,7 +51,11 @@ function model(): Delegate {
   return {
     findFirst: vi.fn().mockResolvedValue(null),
     findUnique: vi.fn().mockResolvedValue(null),
-    findMany: vi.fn().mockResolvedValue([]),
+    findMany: vi
+      .fn()
+      .mockImplementation(async ({ where }: { where?: { id?: { in?: string[] } } } = {}) =>
+        (where?.id?.in ?? []).map((id) => ({ id }))
+      ),
     count: vi.fn().mockResolvedValue(0),
     create: vi.fn().mockImplementation(async ({ data }: { data: Record<string, unknown> }) => ({
       id: 'generated_id',
@@ -76,6 +80,7 @@ function model(): Delegate {
 
 function makeDb() {
   const db: Record<string, Delegate | unknown> = {
+    $queryRaw: vi.fn().mockResolvedValue([{ organizationId: 'org_1' }]),
     restaurantBrand: model(),
     restaurantCategory: model(),
     restaurantProduct: model(),
@@ -168,7 +173,7 @@ describe('recipe picker reads', () => {
         id: true,
         name: true,
         versions: {
-          where: { status: 'ACTIVE' },
+          where: { organizationId: 'org_1', status: 'ACTIVE' },
           select: { id: true, portionCount: true },
           take: 1,
         },
@@ -583,5 +588,58 @@ describe('activateRecipeVersion', () => {
     });
     const result = await caller().activateRecipeVersion({ recipeId: 'r1', versionId: 'v1' });
     expect(result?.status).toBe('ACTIVE');
+  });
+});
+
+describe('catalog tenant boundaries (#142)', () => {
+  it('uses trusted organization scope for getProduct and listProducts, ignoring client organizationId', async () => {
+    const products = db.restaurantProduct as Delegate;
+    products.findUnique.mockImplementation(async ({ where }) =>
+      where.id === 'house_product' && where.organizationId === 'house'
+        ? { id: 'house_product', organizationId: 'house' }
+        : null
+    );
+    products.findMany.mockImplementation(async ({ where }) =>
+      where.organizationId === 'org_1'
+        ? [{ id: 'essentials_product', organizationId: 'org_1' }]
+        : []
+    );
+    await expect(caller().getProduct({ id: 'house_product' })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
+    expect(products.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'house_product', organizationId: 'org_1' },
+      })
+    );
+    await expect(caller().listProducts({ organizationId: 'house' } as never)).resolves.toEqual([
+      { id: 'essentials_product', organizationId: 'org_1' },
+    ]);
+    expect(products.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { organizationId: 'org_1' },
+      })
+    );
+  });
+
+  it.each([
+    ['categoryId', 'restaurantCategory', 'createProduct', { name: 'Product' }],
+    ['productId', 'restaurantProduct', 'createVariant', { name: 'Variant' }],
+    ['modifierGroupId', 'restaurantModifierGroup', 'createModifierOption', { name: 'Option' }],
+    ['baseUnitId', 'restaurantUnit', 'createIngredient', { name: 'Ingredient' }],
+  ] as const)('rejects a foreign %s before writing', async (key, model, procedure, input) => {
+    const delegate = db[model] as Delegate;
+    delegate.findMany.mockResolvedValue([]);
+    await expect(
+      (caller()[procedure] as (input: unknown) => Promise<unknown>)({ ...input, [key]: 'house_id' })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(delegate.findMany).toHaveBeenCalledWith({
+      where: { organizationId: 'org_1', id: { in: ['house_id'] } },
+      select: { id: true },
+    });
+    expect((db.restaurantProduct as Delegate).create).not.toHaveBeenCalled();
+    expect((db.restaurantProductVariant as Delegate).create).not.toHaveBeenCalled();
+    expect((db.restaurantModifierOption as Delegate).create).not.toHaveBeenCalled();
+    expect((db.restaurantIngredient as Delegate).create).not.toHaveBeenCalled();
   });
 });

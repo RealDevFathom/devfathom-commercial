@@ -37,11 +37,20 @@ const formatMetric = (key: string, value: number | null) =>
       ? `PKR ${(value / 100).toLocaleString(undefined, { maximumFractionDigits: 0 })}`
       : value.toLocaleString();
 
+// Only reached when the metric catalog has not delivered a label for a key.
+// Reads the camelCase metric key as words rather than the raw, unspaced key the
+// `.eyebrow` style would otherwise shout back (e.g. OPENSTOCKSIGNALS).
+const humanizeMetricKey = (key: string) =>
+  key
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/^./, (character) => character.toUpperCase());
+
 function WidgetState({
   item,
   query,
   contracts,
   branchCount,
+  metricsReady,
 }: {
   item: (typeof PHARMACY_WIDGET_REGISTRY)[number];
   query: CommandQuery;
@@ -53,8 +62,15 @@ function WidgetState({
     drillThrough: string | null;
   }>;
   branchCount: number;
+  metricsReady: boolean;
 }) {
-  if (query.isLoading)
+  // A command query that is still fetching — or disabled while its branches
+  // load — has no data and no error yet. That is a loading state, not a
+  // permission denial, so the skeleton must win over the RESTRICTED fallbacks
+  // below. A metric widget also waits for the catalog so it never prints raw
+  // keys before the labels arrive.
+  const pending = query.isLoading || (!query.data && !query.error);
+  if (pending || (item.key !== 'branches' && !metricsReady))
     return (
       <div aria-label={`Loading ${item.label}`} role="status" className="space-y-3">
         <Skeleton className="h-8 w-32" />
@@ -106,7 +122,7 @@ function WidgetState({
       {rows.map(({ contract, value }, index) => (
         <Stat
           key={item.metrics[index]}
-          label={contract?.label ?? item.metrics[index]}
+          label={contract?.label ?? humanizeMetricKey(item.metrics[index]!)}
           value={formatMetric(item.metrics[index]!, value)}
           sub={
             value == null
@@ -204,7 +220,11 @@ export function PharmacyDashboardContent({ role }: { role: string | null | undef
         <p className="mt-3 font-mono text-xs text-text-muted">
           {command.data
             ? `As of ${new Date(command.data.freshness.asOf).toLocaleString()} · ${command.data.freshness.source}`
-            : 'Waiting for a reportable branch.'}
+            : branches.error
+              ? 'Branches could not be loaded.'
+              : branches.data?.branches.length === 0
+                ? 'Waiting for a reportable branch.'
+                : 'Loading today’s figures…'}
         </p>
       </SectionCard>
       {editing ? (
@@ -285,14 +305,25 @@ export function PharmacyDashboardContent({ role }: { role: string | null | undef
       ) : null}
       {branches.error ? (
         <SectionCard title="Command centre unavailable">
-          <WidgetState
-            item={PHARMACY_WIDGET_REGISTRY[0]}
-            query={command}
-            contracts={[]}
-            branchCount={0}
-          />
+          <div role="alert" className="space-y-3">
+            <StatusPill status="Unavailable" tone="warning" />
+            <p className="text-sm text-text-body">
+              The command centre could not load its branches. Other dashboard tools remain
+              available.
+            </p>
+            <Button variant="outline" onClick={() => void branches.refetch()}>
+              Retry
+            </Button>
+          </div>
         </SectionCard>
-      ) : branches.data?.branches.length === 0 ? (
+      ) : !branches.data ? (
+        <SectionCard title="Loading command centre">
+          <div role="status" aria-label="Loading command centre" className="space-y-3">
+            <Skeleton className="h-8 w-40" />
+            <Skeleton className="h-4 w-full" />
+          </div>
+        </SectionCard>
+      ) : branches.data.branches.length === 0 ? (
         <SectionCard title="No reportable branches">
           <p className="text-sm text-text-body">
             Activate a pharmacy branch before using the command centre.
@@ -336,6 +367,7 @@ export function PharmacyDashboardContent({ role }: { role: string | null | undef
                       query={command}
                       contracts={catalog.data?.metrics ?? []}
                       branchCount={branches.data?.branches.length ?? 0}
+                      metricsReady={Boolean(catalog.data) || Boolean(catalog.error)}
                     />
                   </SectionCard>
                 </section>

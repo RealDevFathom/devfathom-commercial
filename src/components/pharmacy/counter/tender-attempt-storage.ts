@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from '@/lib/zod-csp';
 import type { inferRouterInputs } from '@trpc/server';
 import type { AppRouter } from '@/server/routers/_app';
 

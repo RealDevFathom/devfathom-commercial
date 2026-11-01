@@ -86,6 +86,24 @@ function fixture(raw: unknown = input) {
   const execute = vi.fn().mockResolvedValue(0);
   const transaction = vi.fn(async (callback) => callback(db));
   const db = only({
+    pharmacyBranch: only({
+      findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
+        where.id.in.map((id) => ({ id }))
+      ),
+      findFirst: vi.fn(async () => ({ id: 'branch-1' })),
+    }),
+    // Tender requires counter receipt access: dispense capability plus a branch assignment.
+    user: only({
+      findUnique: vi.fn(async () => ({
+        status: 'ACTIVE',
+        organizationId: 'org-1',
+        organizationRole: { permissions: [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }] },
+        permissionOverrides: [],
+      })),
+    }),
+    pharmacyBranchAssignment: only({
+      findMany: vi.fn(async () => [{ branchId: 'branch-1' }]),
+    }),
     pharmacySale: only({ findFirst: saleRead }),
     pharmacyMoneyIdempotencyKey: only({ findUnique: keyRead }),
     pharmacyTender: only({ findFirst: tenderRead }),

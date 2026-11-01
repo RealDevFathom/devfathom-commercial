@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   can: vi.fn<(subject: unknown, action: unknown) => Promise<boolean>>(() => Promise.resolve(true)),
   annotateAudit: vi.fn(),
   branchFindUnique: vi.fn(),
+  branchFindMany: vi.fn(),
   menuFindMany: vi.fn(),
   menuFindUnique: vi.fn(),
   itemFindUnique: vi.fn(),
@@ -59,7 +60,7 @@ import type { TRPCContext } from '../trpc';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 const db = {
-  restaurantBranch: { findUnique: mocks.branchFindUnique },
+  restaurantBranch: { findUnique: mocks.branchFindUnique, findMany: mocks.branchFindMany },
   restaurantMenu: { findMany: mocks.menuFindMany, findUnique: mocks.menuFindUnique },
   restaurantMenuItem: { findUnique: mocks.itemFindUnique },
   restaurantPriceList: {
@@ -87,6 +88,7 @@ function caller() {
   return restaurantMenusRouter.createCaller({
     db,
     entitlements: {
+      organizationId: 'org_1',
       enabledModules: ['restaurant-menu'],
       activeSeats: 1,
       seatLimit: 50,
@@ -107,10 +109,19 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.can.mockResolvedValue(true);
   mocks.branchFindUnique.mockResolvedValue({ id: 'branch_1' });
-  mocks.menuFindMany.mockResolvedValue([]);
+  mocks.branchFindMany.mockImplementation(
+    async ({ where }: { where?: { id?: { in?: string[] } } } = {}) =>
+      (where?.id?.in ?? []).map((id) => ({ id }))
+  );
+  mocks.menuFindMany.mockImplementation(async (args?: { where?: { id?: { in?: string[] } } }) =>
+    args?.where?.id?.in ? args.where.id.in.map((id) => ({ id })) : []
+  );
   mocks.menuFindUnique.mockResolvedValue({ id: 'menu_1' });
   mocks.itemFindUnique.mockResolvedValue({ id: 'item_1', section: { menuId: 'menu_1' } });
-  mocks.priceListFindMany.mockResolvedValue([]);
+  mocks.priceListFindMany.mockImplementation(
+    async (args?: { where?: { id?: { in?: string[] } } }) =>
+      args?.where?.id?.in ? args.where.id.in.map((id) => ({ id })) : []
+  );
   mocks.priceListFindFirst.mockResolvedValue(null);
   mocks.priceListFindUnique.mockResolvedValue({ id: 'pl_1' });
   mocks.pubFindMany.mockResolvedValue([]);
@@ -231,18 +242,25 @@ describe('console read models (menu:read)', () => {
 
 describe('createPublication — cross-org reference validation (C1/C2)', () => {
   it('rejects a publication naming a branch outside the organization', async () => {
-    mocks.branchFindUnique.mockResolvedValue(null); // RLS makes a foreign branch invisible
+    mocks.branchFindMany.mockResolvedValueOnce([]);
     await expect(
       caller().createPublication({ branchId: 'other_org_branch', menuId: 'menu_1' })
-    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    ).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'That record is not in this workspace.',
+    });
     expect(mocks.pubCreate).not.toHaveBeenCalled();
   });
 
   it('rejects a publication naming a menu outside the organization', async () => {
-    mocks.menuFindUnique.mockResolvedValue(null);
+    mocks.menuFindMany.mockResolvedValueOnce([]);
     await expect(
       caller().createPublication({ branchId: 'branch_1', menuId: 'other_org_menu' })
-    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    ).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'That record is not in this workspace.',
+    });
+    expect(mocks.pubCreate).not.toHaveBeenCalled();
   });
 
   it('creates a DRAFT publication for an in-scope branch + menu', async () => {

@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { browserUuid } from '@/lib/browser-uuid';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { Button } from '@/components/ui/button';
@@ -52,7 +53,7 @@ export function GrowthReviewPanel({
       expectedHash: current.hash,
       expectedVersion: current.version,
       expectedRevision: current.reviews.find((r) => r.recommendation === index)?.revision ?? 0,
-      requestId: crypto.randomUUID(),
+      requestId: browserUuid(),
       decision,
       settings: {
         priority:

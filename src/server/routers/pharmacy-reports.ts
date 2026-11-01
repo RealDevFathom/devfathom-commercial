@@ -1,5 +1,8 @@
 import { readRepeatPurchasing, validateRepeatFilters } from '@/lib/pharmacy/repeat-purchasing';
-import { readPharmacyMarketingReport, validateMarketingReportFilters } from '@/lib/pharmacy/marketing-report';
+import {
+  readPharmacyMarketingReport,
+  validateMarketingReportFilters,
+} from '@/lib/pharmacy/marketing-report';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import {
@@ -92,7 +95,9 @@ const transitions: Record<z.infer<typeof pvState>, readonly z.infer<typeof pvSta
 
 async function requirePvBranch(ctx: TRPCContext, branchId: string) {
   const organizationId = ctx.entitlements.organizationId;
-  const branch = await ctx.db.pharmacyBranch.findFirst({ where: { id: branchId, organizationId } });
+  const branch = await ctx.db.pharmacyBranch.findFirst({
+    where: { id: branchId, organizationId, active: true },
+  });
   if (!branch) throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
   return organizationId;
 }

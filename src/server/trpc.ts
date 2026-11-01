@@ -3,7 +3,12 @@ import type { Session } from 'next-auth';
 import type { Prisma } from '@/generated/prisma/client';
 import superjson from 'superjson';
 import { can, subjectFromSession, type Action } from '@/lib/abac';
-import { evaluateSessionUser, type SessionUserState } from '@/lib/auth/session-state';
+import {
+  evaluateSessionUser,
+  TEMPORARY_PASSWORD_MESSAGE,
+  temporaryPasswordBlocks,
+  type SessionUserState,
+} from '@/lib/auth/session-state';
 import { createTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { TenantOrganization } from '@/lib/tenancy/host';
 import type { SupportIdentity } from '@/lib/tenancy/support-session';
@@ -94,13 +99,15 @@ const t = initTRPC.context<TRPCContext>().create({
     // and all). The gate governs `data.validation` and the FORMATTED message, not
     // the pass-through. Pre-existing behaviour, out of scope for this change.
     const validation = error.code === 'BAD_REQUEST' ? formatValidationError(error.cause) : null;
+    // Never publish the server stack. tRPC attaches `data.stack` outside
+    // production, which leaks file paths and bundle chunk names onto ordinary
+    // client errors (e.g. an intentional 403). Drop it for every error code.
+    const data = { ...shape.data, validation: validation?.fields ?? null };
+    delete data.stack;
     return {
       ...shape,
       message: validation?.message ?? shape.message,
-      data: {
-        ...shape.data,
-        validation: validation?.fields ?? null,
-      },
+      data,
     };
   },
 });
@@ -129,6 +136,14 @@ function assertSessionUsable(user: SessionUserState) {
     code: verdict.kind === 'session-ended' ? 'UNAUTHORIZED' : 'FORBIDDEN',
     message: verdict.message,
   });
+}
+
+function assertTemporaryPasswordChanged(
+  user: { mustChangePassword?: boolean | null },
+  path: string
+) {
+  if (!temporaryPasswordBlocks(user, path)) return;
+  throw new TRPCError({ code: 'FORBIDDEN', message: TEMPORARY_PASSWORD_MESSAGE });
 }
 
 /**
@@ -196,6 +211,7 @@ const requireActiveUser = t.middleware(async ({ ctx, next, path, type }) => {
     });
   }
   assertSessionUsable(ctx.session.user);
+  assertTemporaryPasswordChanged(ctx.session.user, path);
   assertDemoProcedureAllowed(ctx, path, type);
   return next({ ctx: { ...ctx, session: ctx.session } });
 });
@@ -238,6 +254,7 @@ function requireCapability(action: Action) {
       });
     }
     assertSessionUsable(ctx.session.user);
+    assertTemporaryPasswordChanged(ctx.session.user, path);
     assertDemoProcedureAllowed(ctx, path, type);
     const subject = subjectFromSession(ctx.session.user);
     const allowed = await can(subject, action, undefined, {

@@ -234,11 +234,31 @@ model PharmacyBranch {
   visibilityPharmacyTaxProfileVersion      PharmacyTaxProfileVersion[]       @relation("PharmacyTaxProfileVersionVisibilityAnchor")
   visibilityUnfulfilledDemandEvent         UnfulfilledDemandEvent[]          @relation("UnfulfilledDemandEventVisibilityAnchor")
   visibilityPharmacyRestockInterest        PharmacyRestockInterest[]         @relation("PharmacyRestockInterestVisibilityAnchor")
+  branchAssignments                        PharmacyBranchAssignment[]
 
   @@unique([organizationId, id], map: "pharmacy_branches_org_id_key")
   @@unique([organizationId, code], map: "pharmacy_branches_org_code_key")
   @@index([organizationId, active], map: "pharmacy_branches_org_active_idx")
   @@map("pharmacy_branches")
+}
+
+/// Active assignment of a tenant user to one pharmacy branch. Receipt reads use
+/// this table, never restaurant staff profiles. An empty set is not a grant.
+model PharmacyBranchAssignment {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  userId         String
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  branch PharmacyBranch @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Cascade)
+  user   User           @relation(fields: [organizationId, userId], references: [organizationId, id], onDelete: Cascade)
+
+  @@unique([organizationId, branchId, userId], map: "pharmacy_branch_assignments_org_branch_user_key")
+  @@index([organizationId, userId, active])
+  @@map("pharmacy_branch_assignments")
 }
 
 /// INV-10 — the deliberately narrow doorway into the chain purchasing view.
@@ -468,6 +488,7 @@ model Medicine {
   safetyStocks                 PharmacySafetyStock[]
   stockSignals                 PharmacyStockSignal[]
   pharmacovigilanceReports     PharmacyPharmacovigilanceReport[]
+  controlledRegisterEntries    PharmacyControlledRegisterEntry[]
   priceChangeProposals         PharmacyPriceChangeProposal[]
   connectorProposals           PharmacyReferenceConnectorProposal[]
   customerOrderLines           PharmacyCustomerOrderLine[]
@@ -2768,6 +2789,8 @@ model User {
   // "Sign out everywhere" bumps it too. passwordChangedAt is kept for display/audit.
   tokenVersion       Int        @default(0)
   passwordChangedAt  DateTime?
+  /// Set when an administrator chooses the password. Cleared when the member sets their own.
+  mustChangePassword Boolean    @default(false)
   // IMP-DASH-02: per-user dashboard widget layout/visibility prefs (JSON blob).
   preferences        Json?
   // IMP-AUTH-04: per-type/channel notification opt-outs, honored by notify().
@@ -2848,6 +2871,7 @@ model User {
   pharmacyDeliveryEvidence PharmacyOrderDeliveryEvidence[] @relation("PharmacyDeliveryEvidenceActor")
 
   hotelPropertyAssignments HotelPropertyAssignment[]
+  pharmacyBranchAssignments PharmacyBranchAssignment[]
 
   @@unique([organizationId, id])
   @@unique([organizationId, email])
@@ -7485,6 +7509,7 @@ model RestaurantDrawerSession {
   @@index([businessDate])
   @@index([status])
   @@map("restaurant_drawer_sessions")
+  @@index([organizationId, branchId, businessDate, id], map: "qa144_drawer_report_idx")
 }
 
 /// M5/C3/C8: the APPEND-ONLY drawer ledger. Every cash event writes exactly one
@@ -7572,6 +7597,7 @@ model RestaurantDailyClose {
   @@index([businessDate])
   @@index([supersedesCloseId])
   @@map("restaurant_daily_closes")
+  @@index([organizationId, branchId, businessDate, createdAt, id], map: "qa144_close_report_idx")
 }
 
 /// M5/C3/C9: the APPEND-ONLY per-tender-type child of a daily close (amount,
@@ -8639,6 +8665,7 @@ model RestaurantSopOccurrence {
   // The pool query: unclaimed ROLE-target occurrences for one role at one branch.
   @@index([poolJobRoleId, branchId, claimedByStaffProfileId])
   @@map("restaurant_sop_occurrences")
+  @@index([organizationId, branchId, businessDate], map: "qa144_sop_report_idx")
 }
 
 /// M7/§11.5: per-step completion state of an occurrence, referencing the pinned
@@ -12120,6 +12147,7 @@ model PharmacyPatient {
   displayName               String
   cnic                      String?
   phone                     String?
+  address                   String?
   dateOfBirth               DateTime?                         @db.Date
   createdAt                 DateTime                          @default(now())
   updatedAt                 DateTime                          @updatedAt
@@ -12379,34 +12407,67 @@ model PharmacySubstitutionRecord {
   @@map("pharmacy_substitution_records")
 }
 
-/// RX-05: append-only controlled-drug register, reconciled to a linked SALE movement.
+enum PharmacyControlledRegisterKind {
+  SALE
+  PURCHASE
+  CORRECTION
+}
+
+/// RX-05: append-only controlled-drug register. Sales, purchases and corrections
+/// are new rows. Nothing in the row is edited or deleted.
 model PharmacyControlledRegisterEntry {
-  id                     String                     @id @default(cuid())
-  organizationId         String                     @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  id                     String                          @id @default(cuid())
+  organizationId         String                          @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   branchId               String
   serial                 Int
-  prescriptionId         String
-  prescriptionLineId     String
-  patientId              String
-  prescriberId           String
+  entryKind              PharmacyControlledRegisterKind  @default(SALE)
+  prescriptionId         String?
+  prescriptionLineId     String?
+  patientId              String?
+  prescriberId           String?
+  /// Snapshots so a later edit of the prescriber record does not rewrite history.
+  prescriberName         String?
+  prescriberRegNo        String?
+  patientAddress         String?
+  medicineId             String?
+  manufacturer           String?
   inventoryLotId         String
-  stockMovementId        String
+  stockMovementId        String?
   batchNumber            String
   quantityCanonicalUnits Int
+  /// Signed change in the sellable balance. Sales store the units removed,
+  /// purchases store the units accepted, and a correction stores the
+  /// server-derived difference from the original quantity.
+  balanceDelta           Int                             @default(0)
   runningBalance         Int
   recordedByUserId       String
   witnessedByUserId      String
-  createdAt              DateTime                   @default(now())
-  prescription           Prescription               @relation(fields: [organizationId, prescriptionId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_controlled_register_prescription_fkey")
-  line                   PrescriptionLine           @relation(fields: [organizationId, prescriptionLineId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_controlled_register_line_fkey")
-  patient                PharmacyPatient            @relation(fields: [organizationId, patientId], references: [organizationId, id], onDelete: Restrict)
-  prescriber             PharmacyPrescriber         @relation(fields: [organizationId, prescriberId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_controlled_register_prescriber_fkey")
+  signatureRef           String?
+  rxSerialWritten        Boolean                         @default(false)
+  emergency              Boolean                         @default(false)
+  counterpartyName       String?
+  correctionReason       String?
+  correctsEntryId        String?
+  /// Stock-backed void/return; null identifies a manual quantity correction.
+  restorationMovementId  String?
+  refEntryId             String?
+  createdAt              DateTime                        @default(now())
+  prescription           Prescription?                   @relation(fields: [organizationId, prescriptionId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_controlled_register_prescription_fkey")
+  line                   PrescriptionLine?               @relation(fields: [organizationId, prescriptionLineId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_controlled_register_line_fkey")
+  patient                PharmacyPatient?                @relation(fields: [organizationId, patientId], references: [organizationId, id], onDelete: Restrict)
+  prescriber             PharmacyPrescriber?             @relation(fields: [organizationId, prescriberId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_controlled_register_prescriber_fkey")
+  medicine               Medicine?                       @relation(fields: [organizationId, medicineId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_controlled_register_medicine_fkey")
+  correctsEntry          PharmacyControlledRegisterEntry?  @relation("RegisterCorrection", fields: [organizationId, correctsEntryId], references: [organizationId, id], onDelete: Restrict)
+  corrections            PharmacyControlledRegisterEntry[] @relation("RegisterCorrection")
+  refEntry               PharmacyControlledRegisterEntry?  @relation("RegisterRepeat", fields: [organizationId, refEntryId], references: [organizationId, id], onDelete: Restrict)
+  repeats                PharmacyControlledRegisterEntry[] @relation("RegisterRepeat")
   incidents              PharmacyRegisterIncident[]
 
   @@unique([organizationId, id])
   @@unique([organizationId, branchId, serial])
   @@unique([organizationId, stockMovementId])
-  @@index([organizationId, branchId, inventoryLotId, createdAt])
+  @@index([organizationId, branchId, inventoryLotId, createdAt], map: "pharmacy_controlled_register_lot_idx")
+  @@index([organizationId, branchId, entryKind, serial], map: "pharmacy_controlled_register_kind_idx")
   @@map("pharmacy_controlled_register_entries")
 }
 
@@ -12441,6 +12502,27 @@ model PharmacyRegisterIncidentApproval {
   @@map("pharmacy_register_incident_approvals")
 }
 
+/// One row per emergency controlled supply that has no prescription yet.
+/// The counter refuses another no-prescription supply of the same medicine
+/// while this follow-up is open.
+model PharmacyEmergencyRxFollowUp {
+  id                     String   @id @default(cuid())
+  organizationId         String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId               String
+  patientId              String
+  medicineId             String
+  saleLineId             String
+  quantityCanonicalUnits Int
+  recordedByUserId       String
+  witnessedByUserId      String
+  status                 String   @default("OPEN")
+  createdAt              DateTime @default(now())
+
+  @@unique([organizationId, saleLineId])
+  @@index([organizationId, patientId, medicineId, createdAt])
+  @@map("pharmacy_emergency_rx_follow_ups")
+}
+
 /// PUR-02 receiving / PUR-05 — the document that turns an order or a supplier
 /// invoice into stock. It holds no quantity of its own: posting it writes an
 /// inventory lot and RECEIPT movements into the PH-INV ledger, which stays the
@@ -12470,6 +12552,8 @@ model PharmacyGoodsReceipt {
   reversedByUserId       String?
   reversalReason         String?
   note                   String?
+  /// Signs a controlled-medicine purchase in the register. Not the receiver.
+  qualifiedPersonUserId  String?
   /// AI-03: document-level OCR proposals and their source boxes.
   ocrDraftEvidence       Json?
   createdAt              DateTime                   @default(now())
@@ -12533,6 +12617,13 @@ model PharmacyGoodsReceiptLine {
   /// A human, never OCR confidence, confirms the regulated facts before posting.
   ocrRegulatedConfirmedAt   DateTime?
   ocrRegulatedConfirmedById String?
+  /// DRAP 2D stock-in. Null when the pack was typed by hand.
+  gtin                      String?
+  /// Case-preserved serial from AI 21.
+  serialNumber              String?
+  /// Uppercase serial. Duplicate stock-in is rejected per organization and GTIN.
+  serialKey                 String?
+  gs1Warnings               String[]                @default([])
   createdAt                 DateTime                @default(now())
 
   goodsReceipt       PharmacyGoodsReceipt         @relation(fields: [organizationId, branchId, goodsReceiptId], references: [organizationId, branchId, id], onDelete: Restrict, map: "pharmacy_grl_receipt_fkey")
@@ -12550,6 +12641,7 @@ model PharmacyGoodsReceiptLine {
   @@index([organizationId, goodsReceiptId], map: "pharmacy_grl_org_receipt_idx")
   @@index([organizationId, purchaseOrderLineId], map: "pharmacy_grl_org_order_line_idx")
   @@index([organizationId, medicineId], map: "pharmacy_grl_org_medicine_idx")
+  @@index([organizationId, gtin, serialKey], map: "pharmacy_grl_org_gtin_serial_idx")
   @@map("pharmacy_goods_receipt_lines")
 }
 
@@ -14314,6 +14406,7 @@ model PharmacyMessageLog {
   kind              String
   status            String
   dedupeKey         String
+  customerDayKey    String?
   phoneLast4        String?
   templateName      String?
   providerMessageId String?
@@ -14329,6 +14422,7 @@ model PharmacyMessageLog {
   customer     PharmacyCustomer? @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict)
 
   @@unique([organizationId, dedupeKey], map: "pharmacy_message_logs_dedupe_key")
+  @@unique([organizationId, customerDayKey], map: "pharmacy_message_logs_customer_day_key")
   @@index([organizationId, customerId, createdAt(sort: Desc)], map: "pharmacy_message_logs_customer_idx")
   @@index([organizationId, kind, status], map: "pharmacy_message_logs_kind_status_idx")
   @@map("pharmacy_message_logs")
@@ -15222,4 +15316,35 @@ model PharmacyPackPrice {
   @@unique([organizationId, proposalId])
   @@index([organizationId, packLevelId, effectiveFrom])
   @@map("pharmacy_pack_prices")
+}
+
+/// Cross-instance fixed-window counters. Not tenant data and not under RLS:
+/// a limit is taken before a tenant scope exists. Startup still refuses a
+/// SUPERUSER or BYPASSRLS application role.
+model RateLimitBucket {
+  key     String   @id
+  count   Int
+  resetAt DateTime
+
+  @@index([resetAt])
+  @@map("rate_limit_buckets")
+}
+
+/// Work committed with a tenant mutation and delivered after that transaction.
+/// SMTP and outbound HTTP must not run on the request's pooled connection.
+model OutboundEffect {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  kind           String
+  payload        Json
+  status         String   @default("PENDING")
+  attempts       Int      @default(0)
+  lastError      String?
+  availableAt    DateTime @default(now())
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([organizationId, status, createdAt])
+  @@index([status, availableAt])
+  @@map("outbound_effects")
 }

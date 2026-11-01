@@ -46,6 +46,11 @@ const input = {
 function fixture(returnedUnits: number, priorRefunds: number[] = []) {
   let payloadHash = '';
   const db = {
+    pharmacyBranch: {
+      findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
+        where.id.in.map((id) => ({ id }))
+      ),
+    },
     $executeRaw: vi.fn(async (query: { values: unknown[] }) => {
       payloadHash = String(query.values[5]);
       return 1;

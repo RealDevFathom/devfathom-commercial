@@ -55,6 +55,11 @@ function fixture() {
   const lotRead = vi.fn();
   const db = {
     $transaction: transaction,
+    pharmacyBranch: {
+      findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
+        where.id.in.map((id) => ({ id }))
+      ),
+    },
     pharmacyInventoryLot: { findMany: lotRead },
     // Integrated tip: addLine first reads the medicine to route controlled lines; these are not.
     medicine: { findFirst: vi.fn(async () => null) },

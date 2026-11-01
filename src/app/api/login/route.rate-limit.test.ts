@@ -202,12 +202,12 @@ async function expectWrongPassword() {
   expect(await response.json()).toEqual(UNIFORM_FAILURE);
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.clearAllMocks();
   process.env.PLATFORM_BASE_DOMAIN = 'devfathom.com';
   mocks.intents.clear();
   // The limiter is real and module-scoped: reset only the keys this flow uses.
-  for (const key of [IP_KEY, ACCOUNT_KEY, INTENT_KEY, SELECT_KEY]) clearRateLimit(key);
+  for (const key of [IP_KEY, ACCOUNT_KEY, INTENT_KEY, SELECT_KEY]) await clearRateLimit(key);
 
   mocks.resolveSharedLogin.mockImplementation(async (input: { password: string }) =>
     input.password === PASSWORD
@@ -261,7 +261,7 @@ describe('shared-host login rate limiting', () => {
     // it the way failures there would. An uncleared ip bucket then trips on the
     // 2nd sign-in, and an uncleared account bucket on the 11th.
     for (let i = 0; i < IP_LIMIT - 1; i += 1) {
-      expect(rateLimit(IP_KEY, IP_LIMIT, WINDOW_MS).ok).toBe(true);
+      expect((await rateLimit(IP_KEY, IP_LIMIT, WINDOW_MS)).ok).toBe(true);
     }
 
     for (let i = 0; i < ACCOUNT_LIMIT + 5; i += 1) await signIn();

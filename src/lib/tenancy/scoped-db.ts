@@ -2,6 +2,7 @@ import 'server-only';
 
 import type { Prisma, PrismaClient } from '@/generated/prisma/client';
 import { db } from '@/lib/db';
+import { bindSideEffects, type SideEffectScope } from '@/lib/side-effects/scope';
 
 /**
  * The application only consumes Prisma model/query methods through this type.
@@ -89,27 +90,58 @@ export async function withTenantDb<T>(
     timeout?: number;
     userId?: string;
     isolationLevel?: Prisma.TransactionIsolationLevel;
+    /** The outbox drainer calls this so delivery does not enqueue itself. */
+    skipDrain?: boolean;
   } = {}
 ): Promise<T> {
   assertOrganizationId(organizationId);
 
-  return db.$transaction(
-    async (tx) => {
-      await tx.$queryRawUnsafe(
-        `SELECT set_config('app.current_organization_id', $1, true),
-                set_config('app.current_user_id', $2, true),
-                set_config('app.is_platform_admin', 'false', true)`,
-        organizationId,
-        options.userId ?? ''
-      );
-      return run(exposeNestedTransaction(tx));
-    },
-    {
-      maxWait: options.maxWait ?? 10_000,
-      timeout: options.timeout ?? 30_000,
-      ...(options.isolationLevel ? { isolationLevel: options.isolationLevel } : {}),
+  const execute = (scope?: SideEffectScope) =>
+    db.$transaction(
+      async (tx) => {
+        await tx.$queryRawUnsafe(
+          `SELECT set_config('app.current_organization_id', $1, true),
+                  set_config('app.current_user_id', $2, true),
+                  set_config('app.is_platform_admin', 'false', true)`,
+          organizationId,
+          options.userId ?? ''
+        );
+        const scoped = exposeNestedTransaction(tx);
+        try {
+          const value = await run(scoped);
+          if (scope) await scope.flush();
+          return value;
+        } catch (error) {
+          if (scope) await scope.settle();
+          throw error;
+        }
+      },
+      {
+        maxWait: options.maxWait ?? 10_000,
+        timeout: options.timeout ?? 30_000,
+        ...(options.isolationLevel ? { isolationLevel: options.isolationLevel } : {}),
+      }
+    );
+
+  if (options.skipDrain) return execute();
+
+  return bindSideEffects(async (scope) => {
+    let result: T;
+    try {
+      result = await execute(scope);
+    } finally {
+      // Failure audits also run after rollback; never compete with the owning
+      // transaction for a pool connection or locks held on its actor row.
+      for (const work of scope.afterTransaction) work();
     }
-  );
+    if (scope.enqueued) {
+      const { drainOrganization } = await import('@/lib/side-effects/drain');
+      await drainOrganization(organizationId).catch((error) => {
+        console.error('[side-effects] drain failed', error instanceof Error ? error.name : 'error');
+      });
+    }
+    return result;
+  });
 }
 
 export async function withPlatformDb<T>(

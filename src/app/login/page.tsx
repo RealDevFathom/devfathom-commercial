@@ -1,4 +1,6 @@
 import type { Metadata } from 'next';
+import { redirect } from 'next/navigation';
+import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { Logo } from '@/components/brand/logo';
 import { LoginForm } from './login-form';
 import { LoginHero } from './login-hero';
@@ -36,6 +38,10 @@ type LoginPageProps = {
 };
 
 export default async function LoginPage(props: LoginPageProps) {
+  // Use the workspace guard so expired sessions and host mismatches can sign in.
+  const actor = await resolveTenantActor();
+  if (actor?.session.user?.id) redirect('/dashboard');
+
   const searchParams = await props.searchParams;
   const reason = searchParams.reason;
   const notice = typeof reason === 'string' ? SIGN_OUT_NOTICES[reason] : undefined;

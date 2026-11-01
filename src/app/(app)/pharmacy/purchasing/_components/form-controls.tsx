@@ -85,13 +85,14 @@ export function TextField(props: {
   label: React.ReactNode;
   notice: Notice | null;
   hint?: React.ReactNode;
-  type?: 'text' | 'date' | 'number';
+  type?: 'text' | 'date' | 'number' | 'password';
   defaultValue?: string | number;
   placeholder?: string;
   required?: boolean;
   min?: number;
   step?: string;
   inputMode?: 'numeric' | 'decimal' | 'text';
+  autoComplete?: string;
   className?: string;
 }) {
   const { label, notice, hint, className, ...input } = props;

@@ -13,9 +13,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => {
   const hasModule = vi.fn<(view: { enabledModules: string[] }, key: string) => boolean>();
   hasModule.mockReturnValue(true);
-  return { hasModule };
+  const can = vi.fn().mockResolvedValue(true);
+  return { can, hasModule };
 });
 vi.mock('server-only', () => ({}));
+vi.mock('@/lib/abac', () => ({
+  can: mocks.can,
+  subjectFromSession: (user: unknown) => user,
+}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/entitlements', () => ({
@@ -69,6 +74,11 @@ function makeDb() {
     pharmacyInterbranchTransfer: model(),
     pharmacyPurchaseReturn: model(),
     pharmacyPurchaseReturnLine: model(),
+    pharmacyBranch: {
+      findMany: vi.fn(async ({ where }: { where: { id?: { in: string[] } } }) =>
+        (where.id?.in ?? []).map((id) => ({ id }))
+      ),
+    },
   };
   return Object.assign(db, {
     $transaction: vi.fn(async (fn: (tx: typeof db) => unknown) => fn(db)),
@@ -104,6 +114,7 @@ function caller(overrides: { enabledModules?: string[]; userId?: string | null }
 
 beforeEach(() => {
   db = makeDb();
+  mocks.can.mockReset().mockResolvedValue(true);
   mocks.hasModule.mockImplementation((view, key) => view.enabledModules.includes(key));
 });
 
@@ -184,6 +195,38 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
     expect(db.pharmacyManufacturingBatch.update).not.toHaveBeenCalled();
   });
 
+  it('requires the pharmacy safety capability before changing a batch state', async () => {
+    mocks.can.mockResolvedValue(false);
+
+    await expect(
+      caller().setBatchState({
+        manufacturingBatchId: 'batch_1',
+        state: 'QUARANTINED',
+        reason: 'Temperature excursion',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.can).toHaveBeenCalledWith(
+      expect.anything(),
+      'pharmacy:safety',
+      undefined,
+      expect.anything()
+    );
+    expect(db.pharmacyManufacturingBatch.findFirst).not.toHaveBeenCalled();
+    expect(db.pharmacyManufacturingBatch.update).not.toHaveBeenCalled();
+  });
+
+  it('cannot reactivate a recalled or quarantined batch outside the reviewed reversal flow', async () => {
+    db.pharmacyManufacturingBatch.findFirst.mockResolvedValue({
+      id: 'batch_1',
+      state: 'RECALLED',
+    });
+
+    await expect(
+      caller().setBatchState({ manufacturingBatchId: 'batch_1', state: 'ACTIVE' } as never)
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(db.pharmacyManufacturingBatch.update).not.toHaveBeenCalled();
+  });
+
   it('refuses a transfer whose source and destination are the same location', async () => {
     await expect(
       caller().transfer({
@@ -196,6 +239,22 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
       })
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a branch that is not an active branch in the session organization', async () => {
+    db.pharmacyBranch.findMany.mockResolvedValueOnce([]);
+    await expect(
+      caller().createLocation({
+        branchId: 'branch_other',
+        code: 'MAIN',
+        name: 'Main store',
+        kind: 'STORE',
+      })
+    ).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'That record is not in this workspace.',
+    });
+    expect(db.pharmacyStockLocation.create).not.toHaveBeenCalled();
   });
 
   it('refuses every mutation when there is no tenant actor to attribute it to', async () => {

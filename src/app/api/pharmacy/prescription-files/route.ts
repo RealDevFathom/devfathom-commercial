@@ -1,4 +1,5 @@
 import { TRPCError } from '@trpc/server';
+import { responseForPasswordChange } from '@/lib/auth/session-state';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { createTRPCContext } from '@/server/trpc';
 import { pharmacyPrescriptionsRouter } from '@/server/routers/pharmacy-prescriptions';
@@ -29,6 +30,8 @@ export async function GET(request: Request) {
       },
     });
   } catch (error) {
+    const passwordChange = responseForPasswordChange(error);
+    if (passwordChange) return passwordChange;
     const status =
       error instanceof TRPCError
         ? ((

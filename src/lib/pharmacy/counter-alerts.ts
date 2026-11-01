@@ -80,6 +80,13 @@ export type CounterAlertLine = {
     expiresAt: Date;
     remainingAuthorizedUnits: number;
   } | null;
+  /**
+   * True when a pharmacist-witnessed emergency no-prescription supply was
+   * recorded for this line (a PharmacyEmergencyRxFollowUp exists). Only
+   * controlled lines honour it; the follow-up stays open until a prescription
+   * is captured.
+   */
+  emergencySupply?: boolean;
   requestedCanonicalUnits: number;
   /** Earliest safe expiry backing this line, for the near-expiry notice. */
   nearestSafeExpiry: Date | null;
@@ -125,7 +132,16 @@ function alertsForLine(line: CounterAlertLine, context: CounterAlertContext): Co
   const needsPrescription = medicine.rx || medicine.controlled || medicine.restricted;
   if (needsPrescription) {
     const prescription = line.prescription;
-    if (!prescription) {
+    if (!prescription && medicine.controlled && line.emergencySupply) {
+      push(alerts, {
+        key: `rx-emergency:${line.ref}`,
+        severity: 'CLINICAL_ADVICE',
+        code: 'CONTROLLED_EMERGENCY_SUPPLY',
+        message: `${name} was supplied as an emergency without a prescription. The prescription follow-up stays open.`,
+        saleLineRef: line.ref,
+        remedy: "Capture the prescriber's prescription to close the emergency follow-up.",
+      });
+    } else if (!prescription) {
       push(alerts, {
         key: `rx-missing:${medicine.medicineId}`,
         severity: 'SAFETY_BLOCK',

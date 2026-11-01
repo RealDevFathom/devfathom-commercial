@@ -11,6 +11,7 @@ import {
   assertColumnAccess,
   assertTaskAccess,
 } from '../authz';
+import { assertInOrganization, workspaceId } from '../org-refs';
 
 // Format a task due date for emails, e.g. "Fri, Jun 20 · 5:00 PM".
 function formatDue(date: Date): string {
@@ -84,6 +85,9 @@ export const projectsRouter = router({
 
       // Always include creator as a member
       const allMemberIds = [...new Set([ctx.session.user.id, ...memberIds])];
+      const orgId = workspaceId(ctx);
+      await assertInOrganization(ctx.db.user, orgId, allMemberIds);
+      await assertInOrganization(ctx.db.client, orgId, [projectData.clientId]);
 
       const project = await ctx.db.project.create({
         data: {
@@ -206,6 +210,7 @@ export const projectsRouter = router({
           message: 'Only the project lead or an admin can add members.',
         });
       }
+      await assertInOrganization(ctx.db.user, workspaceId(ctx), [input.userId]);
 
       // Idempotent — if already a member, just update the role
       const membership = await ctx.db.projectMember.upsert({
@@ -474,6 +479,7 @@ export const projectsRouter = router({
         }
       }
 
+      await assertInOrganization(ctx.db.user, workspaceId(ctx), input.userIds);
       // Also verify all userIds are actual project members — can't assign
       // someone to a column if they aren't on the project.
       if (input.userIds.length > 0) {
@@ -544,6 +550,7 @@ export const projectsRouter = router({
           select: { board: { select: { projectId: true } } },
         });
         const uniqueAssignees = [...new Set(input.assigneeIds)];
+        await assertInOrganization(ctx.db.user, workspaceId(ctx), uniqueAssignees);
         const memberCount = await ctx.db.projectMember.count({
           where: { projectId: col!.board.projectId, userId: { in: uniqueAssignees } },
         });
@@ -1400,6 +1407,7 @@ export const projectsRouter = router({
     .mutation(async ({ ctx, input }) => {
       await assertTaskAccess(ctx, input.taskId);
       const uniqueAssignees = [...new Set(input.assigneeIds)];
+      await assertInOrganization(ctx.db.user, workspaceId(ctx), uniqueAssignees);
 
       // PROJ-05: assignees must be members of this task's project (and exist).
       if (uniqueAssignees.length > 0) {

@@ -72,7 +72,11 @@ function makeDb() {
     restaurantSopTemplateVersion: model(),
     restaurantSopTemplateStep: model(),
     restaurantSopAssignment: model(),
-    restaurantBranch: model(),
+    restaurantBranch: Object.assign(model(), {
+      findMany: vi.fn(async (args?: { where?: { id?: { in?: string[] } } }) =>
+        (args?.where?.id?.in ?? []).map((id) => ({ id }))
+      ),
+    }),
     // SOP-1: createAssignment now resolves an assignee target before persisting.
     restaurantJobRole: model(),
     restaurantStaffProfile: model(),
@@ -128,6 +132,7 @@ function caller(limits: Record<string, number> = { 'sop.templates.max': 25 }) {
   return restaurantSopRouter.createCaller({
     db: db as never,
     entitlements: {
+      organizationId: 'org_1',
       enabledModules: ['restaurant-sop'],
       activeSeats: 1,
       seatLimit: 50,

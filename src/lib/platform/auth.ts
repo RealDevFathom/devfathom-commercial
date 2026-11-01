@@ -84,7 +84,7 @@ export async function createPlatformSession(
   const email = emailInput.trim().toLowerCase();
   const ip = clientIp(request);
   const rateLimitKey = `platform-login:${ip}:${email}`;
-  const gate = rateLimit(rateLimitKey, 8, 15 * 60_000);
+  const gate = await rateLimit(rateLimitKey, 8, 15 * 60_000);
   if (!gate.ok) {
     throw new PlatformSecurityError('Too many sign-in attempts. Try again later.', 429);
   }
@@ -149,7 +149,7 @@ export async function createPlatformSession(
 
   // Successful authentication must not consume the failure budget. Otherwise
   // normal serial control-plane workflows lock out the same authorized user.
-  clearRateLimit(rateLimitKey);
+  await clearRateLimit(rateLimitKey);
 
   const token = (enrollmentOnly ? ENROLLMENT_PREFIX : '') + randomBytes(32).toString('base64url');
   const expiresAt = new Date(

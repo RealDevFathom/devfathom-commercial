@@ -440,7 +440,7 @@ export type CounterOperation = 'establish' | 'snapshot' | 'replay' | 'lease' | '
 export function pharmacyCounterRoute(operation: CounterOperation) {
   return async (request: Request): Promise<Response> => {
     try {
-      if (!rateLimit(`pharmacy-counter:${clientIp(request)}`, 120, 60_000).ok)
+      if (!(await rateLimit(`pharmacy-counter:${clientIp(request)}`, 120, 60_000)).ok)
         throw new CounterTransportError('rate_limited', 429);
       const origin = request.headers.get('origin');
       if (origin && origin !== new URL(request.url).origin)

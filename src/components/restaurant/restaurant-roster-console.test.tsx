@@ -195,7 +195,7 @@ describe('Restaurant roster console', () => {
 
   it('asks for a branch before claiming the roster is empty', () => {
     renderConsole();
-    expect(screen.getByRole('heading', { level: 3, name: 'Choose a branch' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 2, name: 'Choose a branch' })).toBeInTheDocument();
     expect(screen.getByText('No branch selected.')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Schedule shift' })).not.toBeInTheDocument();
   });
@@ -204,9 +204,9 @@ describe('Restaurant roster console', () => {
     mocks.roster.isLoading = true;
     renderConsole();
     chooseBranch();
-    expect(screen.getByRole('heading', { level: 3, name: 'Loading roster…' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 2, name: 'Loading roster…' })).toBeInTheDocument();
     expect(
-      screen.queryByRole('heading', { level: 3, name: '0 scheduled shifts' })
+      screen.queryByRole('heading', { level: 2, name: '0 scheduled shifts' })
     ).not.toBeInTheDocument();
   });
 
@@ -280,7 +280,7 @@ describe('Restaurant roster console', () => {
     expect(screen.getByRole('button', { name: 'Cancel shift' })).toBeDisabled();
     // A cancelled shift is not counted as scheduled.
     expect(
-      screen.getByRole('heading', { level: 3, name: '0 scheduled shifts' })
+      screen.getByRole('heading', { level: 2, name: '0 scheduled shifts' })
     ).toBeInTheDocument();
   });
 

@@ -1,4 +1,7 @@
-import { demoSeatFromOrganizationId, isCanonicalDemoOrganization } from '@/lib/tenancy/demo-identity';
+import {
+  demoSeatFromOrganizationId,
+  isCanonicalDemoOrganization,
+} from '@/lib/tenancy/demo-identity';
 import NextAuth, { CredentialsSignin } from 'next-auth';
 import Credentials from 'next-auth/providers/credentials';
 import { compare } from 'bcryptjs';
@@ -22,11 +25,7 @@ import { emailSchema } from '@/lib/email-address';
 import { requestHost } from '@/lib/tenancy/host';
 import { isSharedHost } from '@/lib/tenancy/host-routing';
 import { getDemoSeatCount, isDemoEnabled } from '@/lib/demo/config';
-import {
-  DEMO_PERSONAS,
-  demoPersonaForUser,
-  demoPersonaUserRole,
-} from '@/lib/demo/personas';
+import { DEMO_PERSONAS, demoPersonaForUser, demoPersonaUserRole } from '@/lib/demo/personas';
 
 // Fail fast in production if the session-signing secret is missing, so the app
 // can never run with unsigned/insecure sessions. (Dev lets NextAuth handle it.)
@@ -183,8 +182,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         // force a password nor burn CPU on prefix-matching bcrypt compares.
         const ipRateLimitKey = `login:ip:${ip ?? 'unknown'}`;
         const accountRateLimitKey = `login:acct:${email}`;
-        const ipGate = rateLimit(ipRateLimitKey, 30, 5 * 60_000);
-        const acctGate = rateLimit(accountRateLimitKey, 10, 5 * 60_000);
+        const ipGate = await rateLimit(ipRateLimitKey, 30, 5 * 60_000);
+        const acctGate = await rateLimit(accountRateLimitKey, 10, 5 * 60_000);
         if (!ipGate.ok || !acctGate.ok) {
           recordAuthAudit({
             type: 'LOGIN_FAILED',
@@ -223,7 +222,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
         return withTenantDb(organization.id, async (tenantDb) => {
           const user = await tenantDb.user.findFirst({
-            where: { email },
+            where: { email, organizationId: organization.id },
             select: {
               id: true,
               organizationId: true,
@@ -236,6 +235,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
               avatar: true,
               status: true,
               tokenVersion: true,
+              mustChangePassword: true,
               twoFactorEnabledAt: true,
               twoFactorSecret: true,
             },
@@ -249,7 +249,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           // cases an attacker who doesn't know the password could probe. Crucially,
           // a WRONG password against a deactivated account also lands here, so the
           // "suspended" signal below can never be used to enumerate accounts.
-          if (!user || !isValid) {
+          if (!user || user.organizationId !== organization.id || !isValid) {
             // The client sees a uniform null, but the admin-only audit log records
             // the precise reason (it never leaks back to the would-be attacker).
             const reason = !user ? 'No such account' : 'Incorrect password';
@@ -340,8 +340,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           // TOTP codes. Every failing path above returns or throws before this
           // line, so a failure still consumes its unit, the limits are unchanged
           // and a throttled response stays byte-identical to a wrong password.
-          clearRateLimit(ipRateLimitKey);
-          clearRateLimit(accountRateLimitKey);
+          await clearRateLimit(ipRateLimitKey);
+          await clearRateLimit(accountRateLimitKey);
 
           // Update last active
           await tenantDb.user.update({
@@ -373,6 +373,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             image: user.avatar,
             status: user.status,
             tokenVersion: user.tokenVersion,
+            mustChangePassword: user.mustChangePassword === true,
             // Issued only after this route verifies password and any second factor.
             passwordAuthenticatedAt: Date.now(),
           };
@@ -410,7 +411,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
         // D18: selection is rate limited independently of the credential check,
         // so a valid intent cannot be used to grind organization ids.
-        const selectionGate = rateLimit(`login:select:${ip ?? 'unknown'}`, 30, 5 * 60_000);
+        const selectionGate = await rateLimit(`login:select:${ip ?? 'unknown'}`, 30, 5 * 60_000);
         if (!selectionGate.ok) return null;
 
         const rawIntent = parseCookie(request.headers.get('cookie'), LOGIN_INTENT_COOKIE);
@@ -433,7 +434,9 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
         const organization = await resolveOrganizationById(organizationId);
         if (!organization || !isTenantLifecycleAccessible(organization.status)) return null;
-        const demoSeat = organization.isDemo ? demoSeatFromOrganizationId(organization.id, getDemoSeatCount()) : null;
+        const demoSeat = organization.isDemo
+          ? demoSeatFromOrganizationId(organization.id, getDemoSeatCount())
+          : null;
         const demoPersona = demoSeat
           ? demoPersonaForUser(demoSeat, { id: candidate.userId, email: intent.email })
           : null;
@@ -463,6 +466,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
               avatar: true,
               status: true,
               tokenVersion: true,
+              mustChangePassword: true,
               password: true,
               organizationRole: { select: { key: true } },
               twoFactorEnabledAt: true,
@@ -531,8 +535,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           // password, and refunding it there would let whoever holds the password
           // mint intents without limit and grind second-factor codes through them.
           // `intent.email` is the same normalized address /api/login keyed on.
-          clearRateLimit(`login:ip:${ip ?? 'unknown'}`);
-          clearRateLimit(`login:acct:${intent.email}`);
+          await clearRateLimit(`login:ip:${ip ?? 'unknown'}`);
+          await clearRateLimit(`login:acct:${intent.email}`);
 
           await tenantDb.user.update({
             where: { id: user.id },
@@ -564,6 +568,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             image: user.avatar,
             status: user.status,
             tokenVersion: user.tokenVersion,
+            mustChangePassword: user.mustChangePassword === true,
             passwordAuthenticatedAt: passwordIntent?.createdAt.getTime(),
             demoAccessExpiresAt: organization.isDemo ? candidate.demoAccessExpiresAt : undefined,
           };
@@ -649,6 +654,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         token.status = ((user as Record<string, unknown>).status as string) ?? 'ACTIVE';
         // AUTH-01: snapshot the session-revocation counter at sign-in.
         token.tokenVersion = ((user as Record<string, unknown>).tokenVersion as number) ?? 0;
+        token.mustChangePassword = (user as Record<string, unknown>).mustChangePassword === true;
         token.demoAccessExpiresAt =
           liveDemoAccessExpiry((user as Record<string, unknown>).demoAccessExpiresAt) ?? undefined;
         // #16: session validity is its own claim. `status` now only ever holds a
@@ -697,6 +703,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
                 department: true,
                 title: true,
                 tokenVersion: true,
+                mustChangePassword: true,
                 organization: { select: { slug: true, status: true, isDemo: true } },
               },
             })
@@ -719,6 +726,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             token.sessionInvalidReason = 'REVOKED';
           } else {
             token.role = fresh.role;
+            token.mustChangePassword = fresh.mustChangePassword === true;
             token.status = fresh.status;
             token.department = fresh.department;
             token.title = fresh.title;
@@ -753,6 +761,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         session.user.department = token.department as string;
         session.user.title = token.title as string;
         session.user.status = token.status as string;
+        session.user.mustChangePassword = token.mustChangePassword === true;
         // #16: every consumer of the session must be able to see that the
         // session itself was invalidated, independently of account status.
         session.user.sessionRevoked = Boolean(token.sessionRevoked);
@@ -795,7 +804,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     // Shorter lifetime bounds how long a stolen token is useful; combined with
     // the per-request revalidation above, effective revocation is ~1 minute.
     maxAge: 60 * 60 * 8, // 8 hours
-    updateAge: 60 * 60, // rotate the session cookie at most hourly
+    updateAge: 60 * 60, // Database sessions only; Auth.js refreshes JWT cookies on every read.
   },
   secret: process.env.AUTH_SECRET,
 });

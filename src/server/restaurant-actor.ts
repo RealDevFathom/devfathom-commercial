@@ -1,6 +1,7 @@
 import { TRPCError } from '@trpc/server';
 
 import { can, subjectFromSession } from '@/lib/abac';
+import { assertInOrganization } from '@/server/org-refs';
 import type { TRPCContext } from '@/server/trpc';
 
 const ACTOR_DENIED = new TRPCError({
@@ -30,16 +31,23 @@ export async function resolveRestaurantActor(ctx: TRPCContext, branchIds: string
   const authorizedBranchIds = new Set(assigned.map(({ branchId }) => branchId));
   if (actor.primaryBranchId) authorizedBranchIds.add(actor.primaryBranchId);
 
-  if (requiredBranchIds.every((branchId) => authorizedBranchIds.has(branchId))) {
-    return { staffProfileId: actor.id };
+  const assignedToEveryBranch = requiredBranchIds.every((branchId) =>
+    authorizedBranchIds.has(branchId)
+  );
+  if (!assignedToEveryBranch) {
+    const configuresAllBranches = await can(
+      subjectFromSession(user),
+      'restaurant:configure',
+      undefined,
+      { db: ctx.db, source: 'TRPC', ip: ctx.requestMeta.ip }
+    );
+    if (!configuresAllBranches) throw ACTOR_DENIED;
   }
 
-  const configuresAllBranches = await can(
-    subjectFromSession(user),
-    'restaurant:configure',
-    undefined,
-    { db: ctx.db, source: 'TRPC', ip: ctx.requestMeta.ip }
-  );
-  if (!configuresAllBranches) throw ACTOR_DENIED;
+  const organizationId = ctx.entitlements?.organizationId ?? user.organizationId;
+  if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+  await assertInOrganization(ctx.db.restaurantBranch, organizationId, requiredBranchIds, {
+    active: true,
+  });
   return { staffProfileId: actor.id };
 }

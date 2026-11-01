@@ -5,6 +5,7 @@ import type { Prisma } from '@/generated/prisma/client';
 import type { Action } from '@/lib/abac';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { orderChannelSchema } from '@/lib/restaurant/order-channels';
+import { assertInOrganization } from '../org-refs';
 import { router, capabilityProcedure } from '../trpc';
 import { annotateAudit } from '../audit';
 import {
@@ -580,26 +581,17 @@ export const restaurantMenusRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      // Validate every referenced row is an in-scope canonical/branch row. RLS
-      // scopes each lookup to the caller's org, so a cross-org branch/menu/list id
-      // simply resolves to null here — a publication can never bind another org's
-      // branch or menu (C1/C2).
-      const branch = await ctx.db.restaurantBranch.findUnique({
-        where: { id: input.branchId },
-        select: { id: true },
+      // Client branch, menu, and price-list ids are checked against the session
+      // organization. A foreign key does not apply row level security, and an
+      // inactive branch cannot receive a publication.
+      const organizationId = ctx.entitlements.organizationId;
+      if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+      await assertInOrganization(ctx.db.restaurantBranch, organizationId, [input.branchId], {
+        active: true,
       });
-      if (!branch) publicationError('BRANCH_NOT_FOUND', 'The branch does not exist.');
-      const menu = await ctx.db.restaurantMenu.findUnique({
-        where: { id: input.menuId },
-        select: { id: true },
-      });
-      if (!menu) publicationError('MENU_NOT_FOUND', 'The menu does not exist.');
+      await assertInOrganization(ctx.db.restaurantMenu, organizationId, [input.menuId]);
       if (input.priceListId) {
-        const list = await ctx.db.restaurantPriceList.findUnique({
-          where: { id: input.priceListId },
-          select: { id: true },
-        });
-        if (!list) publicationError('PRICE_LIST_NOT_FOUND', 'The price list does not exist.');
+        await assertInOrganization(ctx.db.restaurantPriceList, organizationId, [input.priceListId]);
       }
 
       const publication = await ctx.db.restaurantBranchMenuPublication.create({

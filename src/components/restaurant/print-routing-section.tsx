@@ -6,6 +6,7 @@ import { Loader2, Printer } from 'lucide-react';
 import { toast } from 'sonner';
 import type { inferRouterOutputs } from '@trpc/server';
 import type { AppRouter } from '@/server/routers/_app';
+import { browserUuid } from '@/lib/browser-uuid';
 import { trpc } from '@/lib/trpc';
 import { useEntitlements } from '@/components/entitlements-provider';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -389,7 +390,7 @@ function PrintRoutingEditor({ ownerKey }: { ownerKey: string }) {
       let attempt = attempts.current.get(destination);
       if (!attempt) {
         attempt = {
-          key: `receipt-test:${crypto.randomUUID()}`,
+          key: `receipt-test:${browserUuid()}`,
           createdAt: new Date().toISOString(),
         };
         attempts.current.set(destination, attempt);

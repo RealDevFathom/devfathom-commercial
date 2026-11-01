@@ -1,5 +1,6 @@
 import { hasModule, resolveOrganizationEntitlements } from '@/lib/entitlements';
 import { cameraGatewayRuntime } from '@/lib/restaurant/camera-gateway-runtime';
+import { responseForPasswordChange } from '@/lib/auth/session-state';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { CameraTransportError, rewriteCameraManifest } from '@/lib/restaurant/cameras/mediamtx';
@@ -9,7 +10,14 @@ function response(message: string, status: number) {
 }
 
 export async function GET(request: Request, context: { params: Promise<{ cameraId: string }> }) {
-  const actor = await resolveTenantActor({ request });
+  let actor;
+  try {
+    actor = await resolveTenantActor({ request });
+  } catch (error) {
+    const passwordChange = responseForPasswordChange(error);
+    if (passwordChange) return passwordChange;
+    throw error;
+  }
   if (!actor?.session.user?.id) return response('Unauthorized', 401);
   if (actor.organization.isDemo) return response('Not available in demo.', 403);
   const organizationId = actor.organization.id;

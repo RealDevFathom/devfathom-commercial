@@ -6,7 +6,11 @@ import { resolveDemoDirectoryScope } from './directory-access';
 import { demoPersonaEmail, demoPersonaUserId, type DemoPersona } from './personas';
 function context(persona: DemoPersona) {
   return {
-    db: { restaurantStaffProfile: { findMany: mocks.profiles } },
+    db: {
+      restaurantStaffProfile: { findMany: mocks.profiles },
+      restaurantBranch: { findMany: vi.fn(async () => [{ id: 'primary_branch' }]) },
+    },
+    entitlements: { organizationId: 'org_demo_restaurant_seat_1' },
     organization: {
       id: 'org_demo_restaurant_seat_1',
       slug: 'demo-restaurant-seat-1',

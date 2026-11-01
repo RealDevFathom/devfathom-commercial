@@ -42,7 +42,7 @@ export const POST = withTerminalAuth(async (ctx, request) => {
   }
   const { staffProfileId, type, secret } = parsed.data;
 
-  const burst = rateLimit(`terminal:cred:${ctx.device.id}:${staffProfileId}`, 10, 60_000);
+  const burst = await rateLimit(`terminal:cred:${ctx.device.id}:${staffProfileId}`, 10, 60_000);
   if (!burst.ok) {
     return NextResponse.json(
       { error: 'Too many attempts' },

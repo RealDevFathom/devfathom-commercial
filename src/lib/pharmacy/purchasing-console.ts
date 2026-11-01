@@ -20,6 +20,8 @@
  */
 
 import { z } from 'zod';
+import { can, subjectFromSession } from '@/lib/abac';
+import { parseGs1DataMatrix, type Gs1Warning } from './gs1-datamatrix';
 import { normalizeMedicineText } from './medicine';
 import { packConversions, type PackLevelNode } from './pack-conversion';
 import { assertSupplierEligible, PharmacyPurchasingError } from './purchasing';
@@ -77,7 +79,7 @@ export function daysBetween(from: Date, to: Date): number {
 
 function eligibility(
   supplier: { authorized: boolean },
-  licences: readonly { expiresAt: Date; verified: boolean }[],
+  licences: readonly { expiresAt: Date; verified: boolean; superseded: boolean }[],
   at: Date
 ): SupplierEligibility {
   try {
@@ -147,15 +149,15 @@ function summarizeSupplier(
   at: Date
 ): SupplierSummary {
   const licences = licenceViews(supplier.licences, at);
-  // `assertSupplierEligible` counts every verified, unexpired filing, including
-  // a superseded one; mirroring that here rather than pre-filtering keeps the
-  // badge and the refusal the same decision.
   const evidence = licences.map((licence) => ({
     expiresAt: licence.expiresAt,
     verified: licence.verified,
+    superseded: licence.superseded,
   }));
   const governing =
-    licences.find((licence) => licence.verified && licence.daysToExpiry >= 0) ??
+    licences.find(
+      (licence) => licence.verified && !licence.superseded && licence.daysToExpiry >= 0
+    ) ??
     licences[0] ??
     null;
   return {
@@ -323,15 +325,33 @@ export async function purchasingWorkspace(
         ...(scope.actorId ? { id: { not: scope.actorId } } : {}),
       },
       orderBy: [{ name: 'asc' }, { id: 'asc' }],
-      select: { id: true, name: true, email: true },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        organizationRole: {
+          select: { permissions: { select: { capability: true, effect: true } } },
+        },
+        permissionOverrides: {
+          where: { OR: [{ expiresAt: null }, { expiresAt: { gt: at } }] },
+          select: { capability: true, effect: true },
+        },
+      },
     }),
   ]);
 
+  const eligibleApprovers = [];
+  for (const user of approvers) {
+    if (await can(subjectFromSession(user), 'pharmacy:dispense', undefined, { db, now: at })) {
+      eligibleApprovers.push(user);
+    }
+  }
   return {
     branches,
     stockLocations,
     suppliers,
-    approvers,
+    approvers: eligibleApprovers
+      .map(({ id, name, email }) => ({ id, name, email })),
     medicines: medicines.map((medicine) => ({
       id: medicine.id,
       productName: medicine.productName,
@@ -463,7 +483,7 @@ export async function listGoodsReceipts(db: ScopedDb, scope: BranchScope) {
       lines: {
         orderBy: { lineNumber: 'asc' },
         include: {
-          medicine: { select: { id: true, productName: true } },
+          medicine: { select: { id: true, productName: true, controlled: true } },
           packLevel: { select: { id: true, level: true } },
           stockLocation: { select: { id: true, name: true } },
           quarantineLocation: { select: { id: true, name: true } },
@@ -781,8 +801,35 @@ export async function listReturnableLots(db: ScopedDb, scope: BranchScope) {
  */
 export type ScanResolution =
   | { kind: 'barcode'; medicineId: string; packLevelId: string | null; label: string }
+  | {
+      kind: 'gs1';
+      medicineId: string | null;
+      packLevelId: string | null;
+      label: string;
+      gtin: string;
+      batch: string | null;
+      expiryDate: string | null;
+      rawExpiry: string | null;
+      serial: string | null;
+      warnings: readonly Gs1Warning[];
+    }
   | { kind: 'medicine'; medicineId: string; packLevelId: null; label: string }
+  | { kind: 'manual'; label: string; reason: string }
   | { kind: 'unresolved'; label: string };
+
+async function barcodeForCodes(db: ScopedDb, scope: OrganizationScope, codes: string[]) {
+  return db.medicineBarcode.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      normalizedCode: { in: codes.map((code) => normalizeMedicineText(code)) },
+      presentation: { medicine: { saleable: true } },
+    },
+    select: {
+      packLevelId: true,
+      presentation: { select: { medicineId: true, medicine: { select: { productName: true } } } },
+    },
+  });
+}
 
 export async function resolveScan(
   db: ScopedDb,
@@ -791,6 +838,27 @@ export async function resolveScan(
 ): Promise<ScanResolution> {
   const term = raw.trim();
   if (!term) return { kind: 'unresolved', label: '' };
+
+  const parsed = parseGs1DataMatrix(term);
+  if (parsed.kind === 'invalid') return { kind: 'manual', label: term, reason: parsed.reason };
+  if (parsed.kind === 'parsed') {
+    const codes = [parsed.fields.gtin, parsed.fields.gtin13].filter((code): code is string =>
+      Boolean(code)
+    );
+    const linked = await barcodeForCodes(db, scope, codes);
+    return {
+      kind: 'gs1',
+      medicineId: linked?.presentation.medicineId ?? null,
+      packLevelId: linked?.packLevelId ?? null,
+      label: linked?.presentation.medicine.productName ?? parsed.fields.gtin,
+      gtin: parsed.fields.gtin,
+      batch: parsed.fields.batch,
+      expiryDate: parsed.fields.expiryDate,
+      rawExpiry: parsed.fields.expiry,
+      serial: parsed.fields.serial,
+      warnings: parsed.fields.warnings,
+    };
+  }
 
   const barcode = await db.medicineBarcode.findFirst({
     where: {

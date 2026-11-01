@@ -1,3 +1,4 @@
+import { browserUuid } from '@/lib/browser-uuid';
 import Link from 'next/link';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
@@ -358,7 +359,7 @@ export default async function PurchasingPage({
         previous.status === 'uncertain'
           ? previous.idempotencyKey
           : status === 'rejected'
-            ? crypto.randomUUID()
+            ? browserUuid()
             : idempotencyKey,
       message: notice,
       retryAllowed,
@@ -886,7 +887,7 @@ export default async function PurchasingPage({
                     status: 'idle',
                     message: '',
                     errors: {},
-                    idempotencyKey: crypto.randomUUID(),
+                    idempotencyKey: browserUuid(),
                     values: Object.fromEntries([
                       ['reference', ''],
                       ...loaded.selectedOrder.lines.flatMap((line) => [

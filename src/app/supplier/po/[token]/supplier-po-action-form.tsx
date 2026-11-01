@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { browserUuid } from '@/lib/browser-uuid';
 import { trpc } from '@/lib/trpc';
 import { Button } from '@/components/ui/button';
 import { SectionCard } from '@/components/ui/section-card';
@@ -36,7 +37,7 @@ export function SupplierPoActionForm({ token }: { token: string }) {
   ) => {
     setMessage('');
     submit.mutate(
-      { token, kind, payload, idempotencyKey: crypto.randomUUID() },
+      { token, kind, payload, idempotencyKey: browserUuid() },
       {
         onSuccess: () =>
           setMessage('Response recorded as supplier evidence. The pharmacy will review it.'),
@@ -169,7 +170,7 @@ export function SupplierPoActionForm({ token }: { token: string }) {
             upload.mutate(
               {
                 token,
-                idempotencyKey: crypto.randomUUID(),
+                idempotencyKey: browserUuid(),
                 fileName: file.name,
                 declaredMimeType: file.type as 'application/pdf' | 'image/png' | 'image/jpeg',
                 contentBase64: btoa(binary),

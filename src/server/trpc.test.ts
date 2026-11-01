@@ -304,6 +304,28 @@ describe('central demo procedure isolation', () => {
   });
 });
 
+describe('temporary password gate', () => {
+  const passwordProbe = router({
+    team: router({
+      changePassword: protectedProcedure.mutation(() => 'changed'),
+      updateProfile: protectedProcedure.mutation(() => 'profile'),
+    }),
+    adminWrite: adminProcedure.mutation(() => 'admin'),
+  });
+
+  it('allows only the password change until the temporary password is replaced', async () => {
+    const caller = passwordProbe.createCaller(
+      contextFor({ ...ADMIN, status: 'ACTIVE', mustChangePassword: true })
+    );
+    await expect(caller.team.changePassword()).resolves.toBe('changed');
+    await expect(caller.team.updateProfile()).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Change your temporary password before continuing.',
+    });
+    await expect(caller.adminWrite()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+});
+
 describe('camera renewal audit redaction before resolver suppression (F3-R1)', () => {
   beforeEach(async () => {
     vi.clearAllMocks();

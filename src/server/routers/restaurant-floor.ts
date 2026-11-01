@@ -1,7 +1,8 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 
-import { router, capabilityProcedure } from '../trpc';
+import { assertInOrganization } from '../org-refs';
+import { router, capabilityProcedure, type TRPCContext } from '../trpc';
 import { annotateAudit } from '../audit';
 import { businessDateToUtcDate } from '@/lib/restaurant/business-date';
 import {
@@ -84,6 +85,12 @@ function mapDomainError(err: unknown): never {
 const readProcedure = capabilityProcedure('orders:read');
 const manageProcedure = capabilityProcedure('floor:manage');
 
+async function assertActiveBranch(ctx: TRPCContext, branchId: string) {
+  const organizationId = ctx.entitlements.organizationId ?? ctx.session?.user.organizationId;
+  if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+  await assertInOrganization(ctx.db.restaurantBranch, organizationId, [branchId], { active: true });
+}
+
 export const restaurantFloorRouter = router({
   // ── Floors & tables ────────────────────────────────────────────────────────
   listFloors: readProcedure
@@ -104,6 +111,7 @@ export const restaurantFloorRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
+        await assertActiveBranch(ctx, input.branchId);
         const floor = await createFloor(ctx.db, input);
         annotateAudit(ctx, {
           targetType: 'RestaurantFloor',
@@ -255,6 +263,7 @@ export const restaurantFloorRouter = router({
     .input(z.object({ branchId: z.string(), name: z.string().min(1).max(120) }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
+        await assertActiveBranch(ctx, input.branchId);
         const section = await createSection(ctx.db, input);
         annotateAudit(ctx, {
           targetType: 'RestaurantServerSection',
@@ -411,6 +420,7 @@ export const restaurantFloorRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
+        await assertActiveBranch(ctx, input.branchId);
         const station = await createStation(ctx.db, input);
         annotateAudit(ctx, {
           targetType: 'RestaurantKitchenStation',

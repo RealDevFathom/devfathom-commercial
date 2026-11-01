@@ -17,6 +17,7 @@ import { appUrl, templates, sendEmail } from '@/lib/email';
 import { notify } from '@/lib/notifications';
 import type { NotificationPrefs } from '@/lib/notifications';
 import { emailSchema } from '@/lib/email-address';
+import { assertInOrganization, workspaceId } from '../org-refs';
 import { passwordSchema } from '@/lib/password-policy';
 import { generateInviteToken } from '@/lib/invite-token';
 
@@ -496,6 +497,7 @@ export const teamRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      await assertInOrganization(ctx.db.user, workspaceId(ctx), [input.userId]);
       return ctx.db.leaveBalance.upsert({
         where: {
           userId_year_type: { userId: input.userId, year: input.year, type: input.type },
@@ -657,7 +659,12 @@ export const teamRouter = router({
       // password change.)
       await ctx.db.user.update({
         where: { id: ctx.session.user.id },
-        data: { password: hashed, passwordChangedAt: new Date(), tokenVersion: { increment: 1 } },
+        data: {
+          password: hashed,
+          passwordChangedAt: new Date(),
+          mustChangePassword: false,
+          tokenVersion: { increment: 1 },
+        },
       });
       return { success: true };
     }),
@@ -810,7 +817,12 @@ export const teamRouter = router({
       // AUTH-01: an admin reset must also revoke the member's existing sessions.
       const user = await ctx.db.user.update({
         where: { id: input.id },
-        data: { password: hashed, passwordChangedAt: new Date(), tokenVersion: { increment: 1 } },
+        data: {
+          password: hashed,
+          passwordChangedAt: null,
+          mustChangePassword: true,
+          tokenVersion: { increment: 1 },
+        },
         select: { name: true },
       });
       // The new password is redacted by the audit layer; record only that a
@@ -933,6 +945,7 @@ export const teamRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      await assertInOrganization(ctx.db.user, workspaceId(ctx), [input.userId]);
       return ctx.db.performanceNote.create({
         data: {
           userId: input.userId,

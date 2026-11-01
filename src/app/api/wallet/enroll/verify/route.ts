@@ -20,8 +20,8 @@ export async function POST(request: Request) {
   const context = await enrollmentContext(request);
   const parsed = inputSchema.safeParse(await request.json().catch(() => null));
   if (!context || !parsed.success) return Response.json(INVALID, { status: 400 });
-  const broadGate = admitWalletEnrollment({ ip: context.ip, token: parsed.data.token });
-  const attemptGate = admitWalletOtpAttempt(parsed.data.attemptId);
+  const broadGate = await admitWalletEnrollment({ ip: context.ip, token: parsed.data.token });
+  const attemptGate = await admitWalletOtpAttempt(parsed.data.attemptId);
   const blocked = !broadGate.ok ? broadGate : !attemptGate.ok ? attemptGate : null;
   if (blocked) return limited(blocked.retryAfter);
   const result = await verifyEnrollment({

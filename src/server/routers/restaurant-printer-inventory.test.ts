@@ -64,7 +64,7 @@ import {
 const context = {
   db: { restaurantBranch: { findFirst: h.branch }, restaurantPrinter: { findMany: h.list } },
   session: { user: { id: 'admin' } },
-  entitlements: { limits: { 'pos.registeredDevices.max': 2 } },
+  entitlements: { organizationId: 'org_1', limits: { 'pos.registeredDevices.max': 2 } },
 };
 const caller = () => restaurantDevicesRouter.createCaller(context as never);
 const printer = { name: 'Kitchen', address: 'tcp://localhost:9100', paperWidthMm: 80 as const };
@@ -91,7 +91,9 @@ beforeEach(() => {
 });
 it('lists only the authorized branch with explicit public printer and bridge selection', async () => {
   await caller().listPrinters({ branchId: 'branch' });
-  expect(h.resolve).toHaveBeenCalledWith(context.db, context.session.user, 'devices:manage');
+  expect(h.resolve).toHaveBeenCalledWith(context.db, context.session.user, 'devices:manage', {
+    organizationId: 'org_1',
+  });
   expect(h.assertBranch).toHaveBeenCalledWith({ branchIds: ['branch'] }, 'branch');
   expect(h.list).toHaveBeenCalledWith({
     where: { branchId: 'branch' },
@@ -260,7 +262,9 @@ it.each([true, false])(
       changed,
     });
     expect(h.retire).toHaveBeenCalledWith(context.db, retirement);
-    expect(h.resolve).toHaveBeenCalledWith(context.db, context.session.user, 'devices:manage');
+    expect(h.resolve).toHaveBeenCalledWith(context.db, context.session.user, 'devices:manage', {
+      organizationId: 'org_1',
+    });
     expect(h.assertBranch.mock.invocationCallOrder[0]).toBeLessThan(
       h.retire.mock.invocationCallOrder[0]
     );

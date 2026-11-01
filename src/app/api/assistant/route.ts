@@ -1,17 +1,25 @@
 import {
   streamText,
   validateUIMessages,
-  isToolUIPart,
-  getToolName,
   convertToModelMessages,
   stepCountIs,
   type UIMessage,
 } from 'ai';
+import {
+  ASSISTANT_LIMITS,
+  assistantRateKeys,
+  contentLengthTooLarge,
+  hasUnavailableApprovedTool,
+  messagesTooLarge,
+  utf8Bytes,
+} from '@/lib/ai/assistant-request';
 import { assistantVertical } from '@/lib/ai/context';
+import { rateLimit } from '@/lib/rate-limit';
 import { readAskFathomSettings } from '@/lib/ai/ask-fathom-settings';
 import { createAIModel, readAIAvailability } from '@/lib/ai/provider';
 import { assistantToolChoice, buildAssistantTools } from '@/lib/ai/tools';
 import { assistantSystemPrompt } from '@/lib/ai/prompt';
+import { responseForPasswordChange } from '@/lib/auth/session-state';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { createTenantDb } from '@/lib/tenancy/scoped-db';
 import { resolveOrganizationEntitlements } from '@/lib/entitlements';
@@ -43,7 +51,9 @@ const UNAVAILABLE = 'Ask Fathom is currently unavailable. No cached answer was u
 export async function POST(req: Request) {
   try {
     return await respond(req);
-  } catch {
+  } catch (error) {
+    const passwordChange = responseForPasswordChange(error);
+    if (passwordChange) return passwordChange;
     console.error('ASSISTANT_REQUEST_FAILED');
     return Response.json({ error: UNAVAILABLE }, { status: 503 });
   }
@@ -56,6 +66,30 @@ async function respond(req: Request) {
   }
   const session = actor.session;
   const organization = actor.organization;
+  const [userKey, orgKey] = assistantRateKeys(session.user.id, organization.id);
+  const [userGate, orgGate] = await Promise.all([
+    rateLimit(userKey, ASSISTANT_LIMITS.userPerMinute, 60_000),
+    rateLimit(orgKey, ASSISTANT_LIMITS.orgPerMinute, 60_000),
+  ]);
+  if (!userGate.ok || !orgGate.ok) {
+    const retryAfter = Math.max(userGate.retryAfter, orgGate.retryAfter, 1);
+    return Response.json(
+      { error: 'Too many assistant requests.' },
+      { status: 429, headers: { 'Retry-After': String(retryAfter) } }
+    );
+  }
+  if (contentLengthTooLarge(req.headers.get('content-length'))) {
+    return Response.json({ error: 'Assistant request is too large.' }, { status: 413 });
+  }
+  let rawBody: string;
+  try {
+    rawBody = await req.text();
+  } catch {
+    return Response.json({ error: 'Invalid assistant messages.' }, { status: 400 });
+  }
+  if (utf8Bytes(rawBody) > ASSISTANT_LIMITS.bodyBytes) {
+    return Response.json({ error: 'Assistant request is too large.' }, { status: 413 });
+  }
   const tenantDb = createTenantDb(organization.id);
   // Every POST (including approval continuations) rechecks current company chat policy.
   // Requests already past this gate are not cancelled when an administrator disables chat.
@@ -72,7 +106,7 @@ async function respond(req: Request) {
 
   let messages: UIMessage[];
   try {
-    const body = await req.json();
+    const body = JSON.parse(rawBody) as { messages?: unknown };
     messages = await validateUIMessages({ messages: body?.messages });
     if (
       !messages.length ||
@@ -86,6 +120,9 @@ async function respond(req: Request) {
       throw new Error('Invalid messages');
   } catch {
     return Response.json({ error: 'Invalid assistant messages.' }, { status: 400 });
+  }
+  if (messagesTooLarge(messages)) {
+    return Response.json({ error: 'Assistant request is too large.' }, { status: 413 });
   }
   if (organization.isDemo) {
     return Response.json({ error: 'Not available in demo.' }, { status: 403 });
@@ -130,16 +167,7 @@ async function respond(req: Request) {
   const hint = recentUserText(messages);
   const tools = buildAssistantTools(ctx, isApprovalContinuation ? {} : { hint });
   // Client approval history cannot resurrect a disabled or wrong-vertical tool.
-  if (
-    messages.some((message) =>
-      message.parts.some(
-        (part) =>
-          isToolUIPart(part) &&
-          part.state === 'approval-responded' &&
-          !Object.hasOwn(tools, getToolName(part))
-      )
-    )
-  ) {
+  if (hasUnavailableApprovedTool(messages, new Set(Object.keys(tools)))) {
     return Response.json({ error: 'This action is no longer available.' }, { status: 403 });
   }
   let modelMessages;

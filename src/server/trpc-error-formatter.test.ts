@@ -56,7 +56,13 @@ async function call(path: string, input?: unknown) {
     createContext: () => ({}) as never,
   });
   const body = (await response.json()) as {
-    error: { json: { message: string; code: number; data: { code: string; validation: unknown } } };
+    error: {
+      json: {
+        message: string;
+        code: number;
+        data: { code: string; validation: unknown; stack?: unknown };
+      };
+    };
   };
   return body.error.json;
 }
@@ -83,5 +89,16 @@ describe('trpc errorFormatter', () => {
     expect(error.data.code).toBe('INTERNAL_SERVER_ERROR');
     expect(error.data.validation).toBeNull();
     expect(error.message).toBe(untouched.error?.message);
+  });
+
+  it('never publishes the server stack on any error', async () => {
+    // tRPC attaches `data.stack` outside production; the formatter must drop it
+    // so file paths and bundle chunk names never reach the client. An internal
+    // error is the case that carries a stack by default.
+    const internal = await call('internal');
+    expect(internal.data.stack).toBeUndefined();
+
+    const validated = await call('validated', { key: 'NOPE' });
+    expect(validated.data.stack).toBeUndefined();
   });
 });
