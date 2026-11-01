@@ -1,3 +1,5 @@
+import { lockGrowth } from '@/lib/growth/codes';
+import { releaseCampaignSpend } from '@/lib/growth/spend';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -367,6 +369,7 @@ export async function changeSaleStatus(
   action: 'hold' | 'resume' | 'convertQuotation' | 'complete' | 'void',
   reason?: string
 ) {
+  if (action === 'void') await lockGrowth(db, scope.organizationId);
   const sale = await saleInScope(db, scope, saleId);
   const transitions = {
     hold: ['OPEN', 'HELD', 'HELD'],
@@ -389,6 +392,17 @@ export async function changeSaleStatus(
   if (claimed.count !== 1) throw new PharmacySaleError('INVALID_STATE');
 
   if (action === 'void') {
+    if (sale.discountCode) {
+      const lines = await db.pharmacySaleLine.findMany({
+        where: { organizationId: scope.organizationId, saleId },
+      });
+      await releaseCampaignSpend(
+        db,
+        scope.organizationId,
+        saleId,
+        lines.reduce((sum, line) => sum + line.discountMinor, 0)
+      );
+    }
     const allocations = await db.pharmacySaleLineAllocation.findMany({
       where: {
         organizationId: scope.organizationId,
@@ -559,6 +573,7 @@ export async function returnSaleLine(
     idempotencyKey: string;
   }
 ) {
+  await lockGrowth(db, scope.organizationId);
   // Serialize the operation key across lines, then quantity checks for this sold line.
   await db.$queryRaw(
     Prisma.sql`SELECT 1 AS locked FROM pg_advisory_xact_lock(hashtextextended(${scope.organizationId + ':return:' + input.idempotencyKey}, 0))`
@@ -665,6 +680,12 @@ export async function returnSaleLine(
       }));
     if (!location) throw new PharmacySaleError('CROSS_BRANCH_REFERENCE');
     quarantineLocationId = location.id;
+  }
+  if (line.sale.discountCode) {
+    const released =
+      Math.floor((line.discountMinor * (returned + input.canonicalUnits)) / line.canonicalUnits) -
+      Math.floor((line.discountMinor * returned) / line.canonicalUnits);
+    await releaseCampaignSpend(db, scope.organizationId, line.saleId, released);
   }
   const saleReturn = await db.pharmacySaleReturn.create({
     data: {

@@ -59,9 +59,13 @@ type CapturePlanInput = {
 
 export type CaptureExclusionReason = 'OPTED_OUT' | 'NO_CONSENT' | 'FREQUENCY_CAP';
 
-export function buildCapturePlan(input: CapturePlanInput) {
-  if (forbiddenClinicalKey.test(input.template.body))
+export function assertNonClinicalMarketingBody(body: string) {
+  if (forbiddenClinicalKey.test(body))
     throw new Error('Clinical and medicine data cannot appear in marketing messages.');
+}
+
+export function buildCapturePlan(input: CapturePlanInput) {
+  assertNonClinicalMarketingBody(input.template.body);
   if (!input.template.approved) throw new Error('Select an approved template before scheduling.');
   if (!input.ownerApproval.approved) throw new Error('Owner approval is required before capture.');
   if (input.promotesRegulatedItem && !input.regulatoryApproval.d10Approved)

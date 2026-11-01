@@ -6,15 +6,26 @@ const mocks = vi.hoisted(() => ({
   withPlatformDb: vi.fn(),
   isGrowthEnabled: vi.fn(),
   runCustomerMetrics: vi.fn(),
+  withTenantDb: vi.fn(),
+  advanceCampaigns: vi.fn(),
+  dispatchCampaignMessages: vi.fn(),
 }));
-vi.mock('@/lib/tenancy/scoped-db', () => ({ withPlatformDb: mocks.withPlatformDb }));
+vi.mock('@/lib/tenancy/scoped-db', () => ({
+  withPlatformDb: mocks.withPlatformDb,
+  withTenantDb: mocks.withTenantDb,
+}));
 vi.mock('@/lib/growth/metrics', () => ({ runCustomerMetrics: mocks.runCustomerMetrics }));
+vi.mock('@/lib/growth/campaigns', () => ({
+  advanceCampaigns: mocks.advanceCampaigns,
+  dispatchCampaignMessages: mocks.dispatchCampaignMessages,
+}));
 vi.mock('@/lib/growth', () => ({ isGrowthEnabled: mocks.isGrowthEnabled }));
 
 import { GET, POST } from './route';
 
 const secret = 'growth-unit-test-secret';
 const findMany = vi.fn();
+const tenantDb = { tenant: true };
 
 describe.each([
   ['GET', GET],
@@ -26,6 +37,9 @@ describe.each([
     vi.spyOn(console, 'info').mockImplementation(() => {});
     vi.spyOn(console, 'error').mockImplementation(() => {});
     mocks.runCustomerMetrics.mockResolvedValue(true);
+    mocks.withTenantDb.mockImplementation((_organizationId, run) => run(tenantDb));
+    mocks.advanceCampaigns.mockResolvedValue(undefined);
+    mocks.dispatchCampaignMessages.mockResolvedValue(undefined);
     mocks.withPlatformDb.mockImplementation((run) => run({ organization: { findMany } }));
     findMany.mockResolvedValue([{ id: 'org_enabled' }, { id: 'org_disabled' }]);
     mocks.isGrowthEnabled.mockImplementation(async (id) => id === 'org_enabled');
@@ -79,12 +93,26 @@ describe.each([
     });
     expect(mocks.isGrowthEnabled.mock.calls).toEqual([['org_enabled'], ['org_disabled']]);
     expect(mocks.runCustomerMetrics).toHaveBeenCalledExactlyOnceWith('org_enabled');
+    expect(mocks.withTenantDb).toHaveBeenCalledExactlyOnceWith(
+      'org_enabled',
+      expect.any(Function)
+    );
+    expect(mocks.advanceCampaigns).toHaveBeenCalledExactlyOnceWith(tenantDb, 'org_enabled');
+    expect(mocks.dispatchCampaignMessages).toHaveBeenCalledExactlyOnceWith('org_enabled');
+    expect(mocks.runCustomerMetrics.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.advanceCampaigns.mock.invocationCallOrder[0]
+    );
     expect(console.info).toHaveBeenCalledExactlyOnceWith(
       '[growth] tick organizationId=org_enabled'
     );
   });
 
-  it.each(['isGrowthEnabled', 'runCustomerMetrics'] as const)(
+  it.each([
+    'isGrowthEnabled',
+    'runCustomerMetrics',
+    'advanceCampaigns',
+    'dispatchCampaignMessages',
+  ] as const)(
     'continues to the next organization when %s fails',
     async (operation) => {
       findMany.mockResolvedValue([{ id: 'org_failing' }, { id: 'org_healthy' }]);
@@ -100,6 +128,7 @@ describe.each([
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual({ ok: true });
       expect(mocks.runCustomerMetrics).toHaveBeenCalledWith('org_healthy');
+      expect(mocks.dispatchCampaignMessages).toHaveBeenCalledWith('org_healthy');
       expect(console.error).toHaveBeenCalledExactlyOnceWith(
         '[growth] tick failed organizationId=org_failing',
         error

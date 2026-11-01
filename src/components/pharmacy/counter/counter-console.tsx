@@ -264,6 +264,9 @@ function ScopedPharmacyCounterConsole({
   accountEmail: string;
 }) {
   const utils = trpc.useUtils();
+  const growthEnabled = isModuleGranted('growth_ai', useEntitlements().enabledModules);
+  const [campaignCode, setCampaignCode] = useState('');
+  const redeemCampaignCode = trpc.pharmacySales.redeemCode.useMutation();
 
   const [selectedBranchId, setSelectedBranchId] = useState(initialBranchId);
   const [query, setQuery] = useState('');
@@ -1257,6 +1260,25 @@ function ScopedPharmacyCounterConsole({
     }
   }, [branchId, busy, customerQuery, redeemLoyalty, redeemPoints, refreshCart, saleId]);
 
+  const applyCampaignCode = useCallback(async () => {
+    if (!saleId || !campaignCode.trim() || busy) return;
+    setPending('redeem');
+    try {
+      const result = await redeemCampaignCode.mutateAsync({ branchId, saleId, code: campaignCode });
+      setCustomerId(result.customerId);
+      await refreshCart();
+      setCampaignCode('');
+      setNotice({
+        tone: 'success',
+        message: `Campaign discount ${formatMinor(result.discountMinor)} applied.`,
+      });
+    } catch (error) {
+      setNotice({ tone: 'warning', message: messageFrom(error) });
+    } finally {
+      setPending(null);
+    }
+  }, [branchId, busy, campaignCode, redeemCampaignCode, refreshCart, saleId]);
+
   const captureShortfall = useCallback(async () => {
     if (busy || !branchAuthorized) return;
     const requested = activeRow?.displayName ?? query.trim();
@@ -2094,6 +2116,31 @@ function ScopedPharmacyCounterConsole({
               </Button>
             }
           >
+            {growthEnabled && (
+              <div className="mb-4 space-y-2">
+                <Label htmlFor="counter-campaign-code">Campaign code</Label>
+                <div className="flex flex-wrap gap-2">
+                  <Input
+                    id="counter-campaign-code"
+                    value={campaignCode}
+                    onChange={(event) => setCampaignCode(event.target.value)}
+                    disabled={busy || !saleId}
+                    maxLength={32}
+                    className="h-11 min-w-0 flex-1"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-11"
+                    disabled={busy || !saleId || !campaignCode.trim()}
+                    onClick={() => void applyCampaignCode()}
+                  >
+                    {pending === 'redeem' ? 'Applying…' : 'Apply code'}
+                  </Button>
+                </div>
+                <p className="text-sm text-text-muted">Valid on non-medicine products only.</p>
+              </div>
+            )}
             {customerQuery.data ? (
               <div className="space-y-4 text-sm text-text-body">
                 <div>

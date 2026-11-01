@@ -25,7 +25,8 @@ function fixture() {
     id: 'line',
     saleId: 'sale',
     canonicalUnits: 10,
-    sale: { status: 'COMPLETED' },
+    sale: { status: 'COMPLETED', discountCode: null as string | null },
+    discountMinor: 101,
     allocations: [
       { id: 'a1', inventoryLotId: 'lot1', stockLocationId: 'shelf1', canonicalUnits: 4 },
       { id: 'a2', inventoryLotId: 'lot2', stockLocationId: 'shelf2', canonicalUnits: 6 },
@@ -35,6 +36,12 @@ function fixture() {
   };
   const db = {
     $queryRaw: vi.fn().mockResolvedValue([]),
+    campaignRecipient: {
+      findFirst: vi
+        .fn()
+        .mockResolvedValue({ campaignId: 'campaign', campaign: { status: 'exhausted' } }),
+    },
+    campaign: { update: vi.fn().mockResolvedValue({}) },
     pharmacySaleLine: { findFirst: vi.fn().mockResolvedValue(line) },
     pharmacySaleEvent: {
       findFirst: vi.fn().mockResolvedValue(null),
@@ -65,6 +72,25 @@ function fixture() {
   return { db, line };
 }
 describe('counter return boundaries', () => {
+  it.each([true, false])(
+    'releases the proportional campaign budget for named/unidentified returns (%s), once',
+    async (identified) => {
+      const { db, line } = fixture();
+      line.sale.discountCode = 'CODE';
+      await returnSaleLine(db as never, scope, {
+        ...input,
+        lotId: identified ? input.lotId : undefined,
+      });
+      expect(db.campaign.update).toHaveBeenCalledWith({
+        where: { organizationId: 'o', id: 'campaign' },
+        data: { spentMinor: { decrement: 60 }, status: 'sent' },
+      });
+      const payload = db.pharmacySaleEvent.create.mock.calls[0][0].data.payload;
+      db.pharmacySaleEvent.findFirst.mockResolvedValue({ payload });
+      if (identified) await returnSaleLine(db as never, scope, input);
+      expect(db.campaign.update).toHaveBeenCalledTimes(1);
+    }
+  );
   it('restocks only the explicitly named second lot, never the first allocation', async () => {
     const { db } = fixture();
     await returnSaleLine(db as never, scope, input);
