@@ -716,6 +716,89 @@ describe('the solo owner can do all of their purchasing', () => {
   });
 });
 
+// ── quotes and receiving exceptions (no menu link, reached through the API) ─
+
+const API_ONLY: ProcedureName[] = [
+  'recordQuote',
+  'compareQuotes',
+  'resolveReceivingException',
+  'receivingExceptions',
+  'receivingExceptionQueue',
+];
+
+describe('quotes and receiving exceptions are checked on the server, not by the menu (#979)', () => {
+  beforeEach(() => {
+    m('pharmacyRequisition').findFirst.mockResolvedValue({
+      id: 'req_a',
+      branchId: 'branch_a',
+      lines: [{ id: 'reqline_a' }],
+    });
+    m('pharmacyRequisitionLine').findFirst.mockResolvedValue({
+      id: 'reqline_a',
+      quantityPacks: 1,
+      requisition: { branchId: 'branch_a' },
+    });
+    m('pharmacyReceivingException').findFirst.mockResolvedValue({
+      id: 'exc_a',
+      organizationId: 'org_a',
+      branchId: 'branch_a',
+      status: 'OPEN',
+    });
+  });
+
+  it.each(API_ONLY)('%s → FORBIDDEN for the cashier, with nothing read or written', async (name) => {
+    for (const cashier of ['cashier_a', 'cashier_b']) {
+      await expect(CALLS[name](caller(cashier))).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: PERMISSION,
+      });
+    }
+    expect(touchedBusinessTables()).toEqual([]);
+    expect(db.$transaction).not.toHaveBeenCalled();
+  });
+
+  describe('the solo owner', () => {
+    beforeEach(() => {
+      activeMembers('owner');
+      assignments({});
+    });
+
+    it('records a quote against their requisition', async () => {
+      await expect(CALLS.recordQuote(caller('owner'))).resolves.toMatchObject({
+        requisitionId: 'req_a',
+        supplierId: 'supplier_a',
+      });
+      expect(m('pharmacyQuote').create).toHaveBeenCalledTimes(1);
+    });
+
+    it('compares the quotes for a requisition line', async () => {
+      await expect(CALLS.compareQuotes(caller('owner'))).resolves.toMatchObject({
+        requisitionLineId: 'reqline_a',
+        requiredPacks: 1,
+        ranking: expect.any(Array),
+      });
+    });
+
+    it('lists receiving exceptions and the exception queue', async () => {
+      await expect(CALLS.receivingExceptions(caller('owner'))).resolves.toEqual([]);
+      await expect(CALLS.receivingExceptionQueue(caller('owner'))).resolves.toEqual([]);
+    });
+
+    it('resolves a receiving exception in their own name', async () => {
+      await expect(CALLS.resolveReceivingException(caller('owner'))).resolves.toMatchObject({
+        status: 'RESOLVED',
+        resolvedByUserId: 'owner',
+        resolutionNote: 'Checked',
+      });
+    });
+  });
+
+  it.each(API_ONLY)('%s is allowed for a procurement member at their branch', async (name) => {
+    const outcome = await settle(CALLS[name](caller('buyer')));
+    expect(isAuthorizationRefusal(outcome), String(outcome)).toBe(false);
+  });
+});
+
 // ── approval ──────────────────────────────────────────────────────────────
 
 describe('approving and sending a purchase order needs the approver capability', () => {

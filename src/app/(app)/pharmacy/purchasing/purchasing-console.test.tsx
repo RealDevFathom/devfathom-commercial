@@ -272,10 +272,39 @@ describe('tenancy and licensing (UX rule 7)', () => {
       expect(
         screen.getByRole('heading', { name: 'You do not have purchasing access' })
       ).toBeDefined();
-      expect(screen.queryByRole('button', { name: /Add supplier|Create requisition/i })).toBeNull();
+      // QA reach (#979): none of the procurement writes is offered to a cashier.
+      for (const action of [
+        'Add supplier',
+        'File licence',
+        'Withdraw authorization',
+        'Authorize this supplier',
+        'Draft requisition',
+        'Draft order',
+      ]) {
+        expect(screen.queryByRole('button', { name: action }), action).toBeNull();
+      }
       expect(mocks.createCaller).not.toHaveBeenCalled();
     }
   );
+
+  it('still offers those actions to a member who holds pharmacy:procurement (#979)', async () => {
+    mocks.createTRPCContext.mockResolvedValue(
+      contextStub(['pharmacy-procurement'], ['pharmacy:procurement'])
+    );
+
+    const suppliers = render(
+      await SuppliersPage({ searchParams: params({ supplier: 'sup-ok' }) })
+    );
+    for (const action of ['Add supplier', 'File licence', 'Withdraw authorization']) {
+      expect(screen.queryAllByRole('button', { name: action }).length, action).toBeGreaterThan(0);
+    }
+    suppliers.unmount();
+
+    render(await OrdersPage({ searchParams: params() }));
+    for (const action of ['Draft requisition', 'Draft order']) {
+      expect(screen.queryAllByRole('button', { name: action }).length, action).toBeGreaterThan(0);
+    }
+  });
 
   it('says "no purchasing access" — a different sentence — when the session has no user', async () => {
     mocks.createTRPCContext.mockResolvedValue({ ...contextStub(), session: null });
