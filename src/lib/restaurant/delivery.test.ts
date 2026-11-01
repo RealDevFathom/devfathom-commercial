@@ -12,6 +12,7 @@ import {
   createDeliveryZone,
   normalizeDeliveryPhone,
   quoteDeliveryZone,
+  reactivateDeliveryZone,
   transitionDeliveryFulfillment,
 } from './delivery';
 
@@ -99,6 +100,22 @@ describe('delivery domain validation', () => {
     ).resolves.toMatchObject({ fixedFee: '250.00', promisedMinutes: 45 });
     expect(findFirst).toHaveBeenCalledWith({
       where: { id: 'zone-1', organizationId: 'org-1', branchId: 'branch-1', active: true },
+    });
+  });
+
+  it('reactivates a zone only within its tenant and branch', async () => {
+    const updateMany = vi.fn().mockResolvedValue({ count: 1 });
+    const db = { restaurantDeliveryZone: { updateMany } } as never;
+
+    await reactivateDeliveryZone(db, {
+      organizationId: 'org-1',
+      branchId: 'branch-1',
+      zoneId: 'zone-1',
+    });
+
+    expect(updateMany).toHaveBeenCalledWith({
+      where: { id: 'zone-1', organizationId: 'org-1', branchId: 'branch-1' },
+      data: { active: true },
     });
   });
 });

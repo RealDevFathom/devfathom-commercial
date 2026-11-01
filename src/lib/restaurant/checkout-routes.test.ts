@@ -9,6 +9,8 @@ import {
   getOrderSettlementForBranch,
   moneyErrorResponse,
 } from './checkout-routes';
+import { OrderCommandError } from './orders';
+import { DailyCloseError } from './daily-close-errors';
 import { quoteOpenBillSettlement } from './tenders';
 
 vi.mock('./bills', async (importOriginal) => ({
@@ -29,6 +31,58 @@ vi.mock('./tenders', async (importOriginal) => ({
 const decimal = (value: string) => new Prisma.Decimal(value);
 
 describe('checkout money serialization', () => {
+  it('includes human-readable context for unbilled order items', async () => {
+    vi.mocked(evaluateOrderSettlement).mockResolvedValue({
+      orderId: 'order-1',
+      settled: false,
+      blocker: 'NO_BILLS',
+      derivedOrderTotal: decimal('20'),
+      accountedTotal: decimal('0'),
+      unbilledItemIds: ['item-2', 'item-1'],
+      bills: [],
+    });
+    const db = {
+      restaurantOrder: {
+        findFirst: vi.fn().mockResolvedValue({ id: 'order-1', deliveryFulfillment: null }),
+      },
+      restaurantOrderItem: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'item-1',
+            name: 'Burger',
+            quantity: 1,
+            seatNumber: 3,
+            modifiers: [{ name: 'No onions' }],
+          },
+          {
+            id: 'item-2',
+            name: 'Soup',
+            quantity: 2,
+            seatNumber: null,
+            modifiers: [],
+          },
+        ]),
+      },
+    } as unknown as ScopedDb;
+
+    const summary = await getOrderSettlementForBranch(db, 'order-1', 'branch-1');
+
+    expect(db.restaurantOrderItem.findMany).toHaveBeenCalledWith({
+      where: { id: { in: ['item-2', 'item-1'] }, orderId: 'order-1' },
+      select: {
+        id: true,
+        name: true,
+        quantity: true,
+        seatNumber: true,
+        modifiers: { select: { name: true }, orderBy: { createdAt: 'asc' } },
+      },
+    });
+    expect(summary?.unbilledItems).toEqual([
+      { id: 'item-2', name: 'Soup', quantity: 2, seatNumber: null, modifiers: [] },
+      { id: 'item-1', name: 'Burger', quantity: 1, seatNumber: 3, modifiers: ['No onions'] },
+    ]);
+  });
+
   it.each([
     ['0', '0.00'],
     ['3', '3.00'],
@@ -105,7 +159,21 @@ describe('checkout money serialization', () => {
           receiptNumber: 1,
           settledAt: new Date('2026-09-01T01:00:00.000Z'),
           branch: { name: 'Branch', timezone: 'UTC' },
-          order: { orderNumber: 'ORDER-1', channel: 'DELIVERY' },
+          order: {
+            orderNumber: 'ORDER-1',
+            channel: 'DELIVERY',
+            customer: {
+              loyaltyAccount: {
+                id: 'loyalty-1',
+                active: true,
+                walletPasses: [
+                  { platform: 'APPLE' },
+                  { platform: 'APPLE' },
+                  { platform: 'GOOGLE' },
+                ],
+              },
+            },
+          },
           lines: [
             {
               id: 'line-1',
@@ -129,10 +197,22 @@ describe('checkout money serialization', () => {
           ],
         }),
       },
+      loyaltyPointsEntry: {
+        aggregate: vi.fn().mockResolvedValue({ _sum: { points: 640 } }),
+      },
     } as unknown as ScopedDb;
     const receipt = await buildReceiptForBranch(receiptDb, 'bill-1', 'branch-1');
 
+    expect(receiptDb.loyaltyPointsEntry.aggregate).toHaveBeenCalledWith({
+      where: {
+        accountId: 'loyalty-1',
+        occurredAt: { lte: new Date('2026-09-01T01:00:00.000Z') },
+      },
+      _sum: { points: true },
+    });
+
     expect(receipt).toMatchObject({
+      loyaltyWallet: { balance: 640, platforms: ['APPLE', 'GOOGLE'] },
       lines: [
         {
           unitPrice: expected,
@@ -262,5 +342,34 @@ describe('tax configuration checkout refusal (#148)', () => {
     expect(response.status).toBe(409);
     expect((await response.json()).error).not.toContain('private-rule-id');
     expect(moneyErrorResponse(new Error('database failure'))).toBeNull();
+  });
+});
+
+describe('order command error responses', () => {
+  it('reports a closed business day as a conflict', async () => {
+    const response = moneyErrorResponse(
+      new OrderCommandError('This business day is closed; no order can be opened.', 'DAY_CLOSED')
+    )!;
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: 'This business day is closed; no order can be opened.',
+    });
+  });
+});
+
+describe('daily close error responses', () => {
+  it('reports active orders as a conflict', async () => {
+    const response = moneyErrorResponse(
+      new DailyCloseError(
+        'The business day has active orders; resolve them before closing.',
+        'ACTIVE_ORDERS'
+      )
+    )!;
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: 'The business day has active orders; resolve them before closing.',
+    });
   });
 });

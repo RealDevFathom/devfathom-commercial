@@ -1,5 +1,8 @@
 import { render, screen, within } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const actor = vi.hoisted(() => ({ role: 'ADMIN' }));
+const signalStaff = vi.hoisted(() => ({ userId: 'cashier_1' as string | undefined }));
 
 const commandCentre = vi.fn(async () => ({
   freshness: { status: 'CURRENT', asOf: '2026-09-04T10:00:00Z', source: 'ledger' },
@@ -19,6 +22,7 @@ vi.mock('@/server/trpc', () => ({
   createTRPCContext: vi.fn(async () => ({
     organization: { id: 'org-a', currency: 'PKR' },
     entitlements: { organizationId: 'org-a' },
+    session: { user: actor },
   })),
 }));
 vi.mock('@/server/routers/pharmacy-sales', () => ({
@@ -66,7 +70,7 @@ vi.mock('@/server/routers/pharmacy-reports', () => ({
           kind: 'CASH_VARIANCE',
           status: 'OPEN',
           severity: 'REVIEW',
-          scope: { branchId: 'b1' },
+          scope: { branchId: 'b1', userId: signalStaff.userId },
           exactNumbers: { expectedMinor: 10_000, countedMinor: 8_000, varianceMinor: -2_000 },
           explanation:
             'The close count differs from expected cash. Review the close evidence; no posting is created by this signal.',
@@ -120,7 +124,7 @@ vi.mock('@/server/routers/pharmacy-reports', () => ({
       packAuthenticationFlags: async () => [],
       acknowledgePackAuthenticationFlag: async () => ({}),
       catalog: async () => ({
-        permissions: { operational: true, financial: true },
+        permissions: { operational: true, financial: true, owner: true },
         reports: [
           {
             key: 'sales-margin',
@@ -148,6 +152,11 @@ vi.mock('@/server/routers/pharmacy-reports', () => ({
 import PharmacyReportsPage from './page';
 
 describe('pharmacy report catalog filters', () => {
+  beforeEach(() => {
+    actor.role = 'ADMIN';
+    signalStaff.userId = 'cashier_1';
+  });
+
   it('carries all supported filters and exposes the metric contract', async () => {
     render(
       await PharmacyReportsPage({
@@ -170,6 +179,10 @@ describe('pharmacy report catalog filters', () => {
     expect(screen.getByText('Source:').parentElement).toHaveTextContent('pharmacy_sales');
     expect(screen.getByRole('heading', { name: 'Daily owner digest' })).toBeVisible();
     expect(screen.getByRole('heading', { name: 'Anomaly review signals' })).toBeVisible();
+    expect(screen.getByRole('link', { name: 'Open related audit trail' })).toHaveAttribute(
+      'href',
+      '/audit-logs?actorId=cashier_1'
+    );
     expect(
       screen.getByRole('heading', { name: 'Expiry and supplier-return advisor' })
     ).toBeVisible();
@@ -187,6 +200,26 @@ describe('pharmacy report catalog filters', () => {
     ).toBeVisible();
   });
 
+  it('explains audit access to non-admin report viewers without offering an inaccessible link', async () => {
+    actor.role = 'MANAGER';
+    render(await PharmacyReportsPage({ searchParams: Promise.resolve({ branch: 'b1' }) }));
+    expect(screen.getByRole('heading', { name: 'Anomaly review signals' })).toBeVisible();
+    expect(screen.getByText('Staff drill-down · cashier_1')).toBeVisible();
+    expect(screen.getByText('Related audit trail requires an administrator.')).toBeVisible();
+    expect(
+      screen.queryByRole('link', { name: 'Open related audit trail' })
+    ).not.toBeInTheDocument();
+  });
+
+  it('links signals without staff attribution to the supported audit search filter', async () => {
+    signalStaff.userId = undefined;
+    render(await PharmacyReportsPage({ searchParams: Promise.resolve({ branch: 'b1' }) }));
+    expect(screen.getByRole('link', { name: 'Open related audit trail' })).toHaveAttribute(
+      'href',
+      '/audit-logs?search=anomaly_1'
+    );
+  });
+
   it('offers the sub-reports as header actions styled like every other Studio control', async () => {
     render(await PharmacyReportsPage({ searchParams: Promise.resolve({ branch: 'b1' }) }));
     const header = document.querySelector('[data-slot="page-header"]')!;
@@ -198,6 +231,7 @@ describe('pharmacy report catalog filters', () => {
       'Replenishment',
       'Repeat purchasing',
       'Supplier-credit follow-up',
+      'Compare branches',
     ]);
     expect(links[0]).toHaveAttribute('href', '/pharmacy/reports/replenishment?branch=b1');
     expect(links[1]).toHaveAttribute('href', '/pharmacy/reports/repeat-purchasing?branch=b1');

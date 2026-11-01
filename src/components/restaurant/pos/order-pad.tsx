@@ -219,7 +219,9 @@ export function OrderPad({ demo = false }: { demo?: boolean }) {
                     <Button
                       type="button"
                       variant="outline"
-                      disabled={!pos.online || pos.busy}
+                      disabled={
+                        !pos.online || pos.busy || draft.review?.reason === 'COMPOSER_UNVERIFIED'
+                      }
                       onClick={workspace.sendReviewedOrder(draft)}
                     >
                       Send deliberately
@@ -466,7 +468,7 @@ export function OrderPad({ demo = false }: { demo?: boolean }) {
               actions={
                 <span className="flex min-w-24 flex-col items-end text-right">
                   <span className="font-mono text-[10px] uppercase tracking-wide text-text-muted">
-                    Cash total
+                    Estimated cash total
                   </span>
                   <span className="font-mono text-sm tabular-nums text-text-strong">
                     {draftCheckTotal(pos)}

@@ -22,6 +22,9 @@ import type { SaleUnitKind } from './counter-pricing';
 
 export type CounterReceiptLocale = 'en' | 'ur';
 
+/** Regulatory identity in force when this receipt's sale completed. */
+export type PharmacyReceiptTaxIdentity = { ntn: string | null; strn: string | null };
+
 export type CounterReceiptLine = {
   saleLineId: string;
   /** Absent only for older callers; receipt reads always set this explicitly. */
@@ -33,6 +36,7 @@ export type CounterReceiptLine = {
     batchNumber: string | null;
     expiresAt: string | null;
     canonicalUnits: number;
+    grossMinor?: number | null;
   }[];
   medicineName: string;
   /** Rendered strength, for example `500 mg`. Null for an unstrengthed item. */
@@ -53,11 +57,15 @@ export type CounterReceiptTender = {
   tenderId: string;
   type: string;
   amountMinor: number;
+  /** Cash handed over before change; absent on legacy/non-cash receipt models. */
+  cashReceivedMinor?: number | null;
   changeGivenMinor: number | null;
 };
 
 export type CounterReceipt = {
   dispensingLabelSources?: DispensingLabelSource[];
+  /** Supplied by settled receipt reads; optional only for legacy in-memory callers. */
+  taxIdentity?: PharmacyReceiptTaxIdentity;
   saleId: string;
   /** Null until a tender settles the bill; never minted by a render. */
   receiptNumber: number | null;
@@ -287,15 +295,23 @@ export function buildCounterReceiptDocument(
  * the sale lines do not add up to (POS-08 acceptance).
  */
 export function counterReceiptTotals(input: {
-  lines: readonly Pick<CounterReceiptLine, 'unitPriceMinor' | 'quantity' | 'discountMinor'>[];
-  tenders: readonly Pick<CounterReceiptTender, 'amountMinor' | 'changeGivenMinor'>[];
+  lines: readonly Pick<CounterReceiptLine, 'lineTotalMinor' | 'discountMinor'>[];
+  tenders: readonly Pick<
+    CounterReceiptTender,
+    'type' | 'amountMinor' | 'cashReceivedMinor' | 'changeGivenMinor'
+  >[];
 }): CounterReceipt['totals'] {
   const grossMinor = input.lines.reduce(
-    (total, line) => total + line.unitPriceMinor * line.quantity,
+    (total, line) => total + line.lineTotalMinor + line.discountMinor,
     0
   );
   const discountMinor = input.lines.reduce((total, line) => total + line.discountMinor, 0);
-  const tenderedMinor = input.tenders.reduce((total, tender) => total + tender.amountMinor, 0);
+  const tenderedMinor = input.tenders.reduce(
+    (total, tender) =>
+      total +
+      (tender.type === 'CASH' ? (tender.cashReceivedMinor ?? tender.amountMinor) : tender.amountMinor),
+    0
+  );
   const changeMinor = input.tenders.reduce(
     (total, tender) => total + (tender.changeGivenMinor ?? 0),
     0

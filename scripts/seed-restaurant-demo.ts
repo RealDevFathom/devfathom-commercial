@@ -1277,6 +1277,12 @@ async function seedBranchAndFloor(tx: Tx): Promise<void> {
 
 async function seedPeople(tx: Tx): Promise<void> {
   const passwordHash = hashSync(DEMO_PASSWORD, DEMO_SALT);
+  const kitchenRole = await tx.organizationRole.findUniqueOrThrow({
+    where: {
+      organizationId_key: { organizationId: BASE.organizationId, key: 'kitchen' },
+    },
+    select: { id: true },
+  });
 
   // Workspace owner: an ADMIN login for the console tour, on the manager role
   // the base fixture already granted `*` to.
@@ -1349,12 +1355,24 @@ async function seedPeople(tx: Tx): Promise<void> {
   }
 
   for (const member of STAFF) {
+    const organizationRoleId =
+      member.key === 'kashif'
+        ? kitchenRole.id
+        : member.manager
+          ? BASE.managerRoleId
+          : BASE.operatorRoleId;
     await tx.user.upsert({
       where: { id: id.user(member.key) },
-      update: { password: passwordHash, name: member.name, title: member.title, updatedAt: AT },
+      update: {
+        organizationRoleId,
+        password: passwordHash,
+        name: member.name,
+        title: member.title,
+        updatedAt: AT,
+      },
       create: {
         id: id.user(member.key),
-        organizationRoleId: member.manager ? BASE.managerRoleId : BASE.operatorRoleId,
+        organizationRoleId,
         name: member.name,
         email: member.email,
         password: passwordHash,

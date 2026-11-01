@@ -405,6 +405,14 @@ export default async function PharmacyReportsPage({
                 Supplier-credit follow-up
               </Link>
             ) : null}
+            {catalog.permissions.owner ? (
+              <Link
+                href={`/pharmacy/reports/branch-comparison?${new URLSearchParams({ from, to })}`}
+                className={buttonVariants({ variant: 'outline', size: 'lg' })}
+              >
+                Compare branches
+              </Link>
+            ) : null}
           </nav>
         }
       />
@@ -751,6 +759,25 @@ export default async function PharmacyReportsPage({
                             {new Date(signal.sourceObservedAt).toLocaleString()} · policy{' '}
                             {signal.policyVersion}
                           </p>
+                          <div className="mt-3 flex flex-wrap gap-3 text-xs">
+                            {scope.userId ? (
+                              <span className="font-mono text-text-body">
+                                Staff drill-down · {scope.userId}
+                              </span>
+                            ) : null}
+                            {ctx.session?.user?.role === 'ADMIN' ? (
+                              <Link
+                                className="font-semibold text-accent-brand underline-offset-4 hover:underline"
+                                href={`/audit-logs?${new URLSearchParams(scope.userId ? { actorId: scope.userId } : { search: signal.id })}`}
+                              >
+                                Open related audit trail
+                              </Link>
+                            ) : (
+                              <span className="text-text-muted">
+                                Related audit trail requires an administrator.
+                              </span>
+                            )}
+                          </div>
                           {signal.estimateMethod ? (
                             <dl className="mt-3 grid gap-1 text-xs leading-5 text-text-muted">
                               <div>

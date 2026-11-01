@@ -93,7 +93,12 @@ describeIfDatabase('WHA-79 M7 scheduler concurrency battery (real DB)', () => {
         );
         if (!job) break;
         await withTenantDb(orgId, (tx) =>
-          scheduler.complete(tx, job.id, { workerId, now: new Date() })
+          scheduler.complete(tx, job.id, {
+            workerId,
+            attempt: job.attempts,
+            claimToken: job.claimToken,
+            now: new Date(),
+          })
         );
         processed += 1;
       }
@@ -160,6 +165,8 @@ describeIfDatabase('WHA-79 M7 scheduler concurrency battery (real DB)', () => {
       const outcome = await withTenantDb(orgId, (tx) =>
         scheduler.fail(tx, claimed.id, new Error('always fails'), {
           workerId: `dead_w_${suffix}`,
+          attempt: claimed.attempts,
+          claimToken: claimed.claimToken,
           now: clock(),
         })
       );
