@@ -95,12 +95,28 @@ const SENSITIVE_SUBSTRINGS = [
   'cookie',
 ];
 
+/**
+ * A PIN is a short numeric secret, so it is redacted wherever it is named:
+ * `pin`, `PIN`, `ownerPin`, `manager_pin`, `pinCode`. Matching whole words keeps
+ * `isPinned`, `mapping` and `shipping` intact, and a trailing `Id` word is a
+ * record reference (`ownerApprovalPinCredentialId`), not the secret itself.
+ */
+function namesPin(key: string): boolean {
+  const words = key
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .split(/[\s_.-]+/)
+    .map((word) => word.toLowerCase());
+  return (words.includes('pin') || words.includes('pincode')) && words.at(-1) !== 'id';
+}
+
 function isSensitiveKey(key: string): boolean {
   const k = key.toLowerCase();
   // Camera renewal input can be audited before its resolver runs (including
   // denied or invalid requests). Match the identifier exactly, not all grants.
   // PIN approval can be refused by authentication before resolver-level skipInput runs.
-  return k === 'pin' || k === 'previousgrantid' || SENSITIVE_SUBSTRINGS.some((s) => k.includes(s));
+  return (
+    namesPin(key) || k === 'previousgrantid' || SENSITIVE_SUBSTRINGS.some((s) => k.includes(s))
+  );
 }
 
 const MAX_STRING = 20_000;

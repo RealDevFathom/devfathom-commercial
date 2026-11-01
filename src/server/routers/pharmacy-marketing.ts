@@ -38,6 +38,7 @@ import {
   MarketingWorkflowError,
   previewMarketingCampaign,
   reviewMarketingCampaign,
+  type CredentialTransaction,
   type MarketingScope,
 } from '@/lib/pharmacy/marketing-service';
 import { draftMarketingCopy, marketingAssistanceInput } from '@/lib/pharmacy/marketing-assistance';
@@ -137,6 +138,24 @@ function sandboxTransaction(ctx: TRPCContext, branchId: string): MarketingTransa
       },
       { userId: userId }
     );
+}
+
+/**
+ * The request transaction rolls back when the approval refuses, so owner-PIN
+ * verification runs in its own tenant transaction: a failed attempt stays counted
+ * and repeated wrong PINs reach the credential lockout. It touches only the
+ * credential row, which the request transaction never locks.
+ */
+function credentialTransaction(ctx: TRPCContext): CredentialTransaction {
+  const userId = ctx.session?.user.id;
+  if (!userId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+  return (run) =>
+    withTenantDb(ctx.entitlements.organizationId, run, {
+      userId,
+      skipDrain: true,
+      maxWait: 5_000,
+      timeout: 10_000,
+    });
 }
 
 // Growth mutations re-resolve current entitlements and actor, including after provider latency.
@@ -240,7 +259,14 @@ export const pharmacyMarketingRouter = router({
     .input(marketingApprovalInput)
     .mutation(async ({ ctx, input }) => {
       const result = await execute(ctx, input.branchId, (db, scope) =>
-        approveMarketingCampaign(db, scope, input.campaignId, new Date(), input.pin)
+        approveMarketingCampaign(
+          db,
+          scope,
+          input.campaignId,
+          new Date(),
+          input.pin,
+          credentialTransaction(ctx)
+        )
       );
       ctx.audit.detail = {
         action: 'pharmacy_marketing_approval',
@@ -248,7 +274,7 @@ export const pharmacyMarketingRouter = router({
         targetId: input.campaignId,
         skipInput: true,
       };
-      // Refuse outside the transaction so failed PIN attempts remain committed.
+      // Refusing rolls back the request transaction; the PIN counter already committed.
       if ('blocked' in result)
         throw new TRPCError({ code: 'FORBIDDEN', message: result.blocked });
       return result;

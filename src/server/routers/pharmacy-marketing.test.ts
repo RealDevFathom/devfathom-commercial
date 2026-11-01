@@ -18,8 +18,12 @@ const mocks = vi.hoisted(() => ({
   assist: vi.fn(),
   capture: vi.fn(),
   approve: vi.fn(),
+  withTenantDb: vi.fn(),
 }));
-vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
+vi.mock('@/lib/tenancy/scoped-db', () => ({
+  createTenantDb: vi.fn(),
+  withTenantDb: mocks.withTenantDb,
+}));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/entitlements', () => ({
   hasModule: mocks.licensed,
@@ -179,7 +183,8 @@ describe('marketing workflow authorization', () => {
       expect.objectContaining({ actorId: 'owner-a' }),
       'campaign-a',
       expect.any(Date),
-      '4821'
+      '4821',
+      expect.any(Function)
     );
     expect(audit.detail).toMatchObject({
       action: 'pharmacy_marketing_approval',
@@ -188,7 +193,7 @@ describe('marketing workflow authorization', () => {
     });
     expect(JSON.stringify(audit.detail)).not.toContain('4821');
   });
-  it('rejects a refused PIN after the transaction commits its lockout counter', async () => {
+  it('rejects a refused PIN as FORBIDDEN with the campaign audit target', async () => {
     const api = caller();
     let committed = false;
     mocks.transaction.mockImplementation(async (fn) => {
@@ -204,6 +209,45 @@ describe('marketing workflow authorization', () => {
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(committed).toBe(true);
     expect(audit.detail).toMatchObject({ targetId: 'campaign-a', skipInput: true });
+  });
+  it('keeps failed PIN attempts committed when the request transaction rolls back', async () => {
+    const api = caller();
+    const credentialWrites: unknown[] = [];
+    const committedWrites: unknown[] = [];
+    // The request transaction discards its writes when the procedure refuses.
+    mocks.transaction.mockImplementation(async (fn) => {
+      const requestWrites: unknown[] = [];
+      try {
+        return await fn({ requestWrites });
+      } finally {
+        requestWrites.length = 0;
+      }
+    });
+    // An independent tenant transaction commits as soon as its callback resolves.
+    mocks.withTenantDb.mockImplementation(async (_organizationId, run) => {
+      const result = await run({ credentialWrites });
+      committedWrites.push(...credentialWrites);
+      return result;
+    });
+    mocks.approve.mockImplementation(
+      async (_db, _scope, _campaignId, _now, _pin, credentialTransaction) => {
+        await credentialTransaction(async (db: { credentialWrites: unknown[] }) =>
+          db.credentialWrites.push({ failedAttempts: 1 })
+        );
+        return { blocked: 'Enter your owner PIN to approve monetary vouchers.' };
+      }
+    );
+    await expect(
+      api.approve({ ...input, campaignId: 'campaign-a', pin: '4822' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.withTenantDb).toHaveBeenCalledWith('org-a', expect.any(Function), {
+      userId: 'owner-a',
+      skipDrain: true,
+      maxWait: 5_000,
+      timeout: 10_000,
+    });
+    expect(committedWrites).toEqual([{ failedAttempts: 1 }]);
+    expect(JSON.stringify(audit.detail)).not.toContain('4822');
   });
   it('redacts a malformed PIN before input validation refuses it', async () => {
     await expect(

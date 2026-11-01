@@ -185,12 +185,60 @@ export async function reviewMarketingCampaign(
   };
 }
 
+/**
+ * Runs owner-PIN verification in a transaction that commits on its own. The tRPC
+ * request transaction rolls back when a refusal is raised, so a failed-attempt
+ * counter written there would vanish and the lockout could never trip.
+ */
+export type CredentialTransaction = <T>(run: (db: ScopedDb) => Promise<T>) => Promise<T>;
+
+/** Verify the acting owner's own PIN; returns the credential id, or null on refusal. */
+export async function verifyOwnerApprovalPin(
+  db: ScopedDb,
+  scope: MarketingScope,
+  pin: string,
+  now: Date
+): Promise<string | null> {
+  // Self-approval is allowed, but another person's PIN cannot authenticate this owner.
+  // NO KEY UPDATE serializes attempts without waiting on the key-share lock an approved
+  // campaign's foreign key holds in a still-open request transaction.
+  await db.$queryRaw`SELECT c.id FROM restaurant_operator_credentials c JOIN restaurant_staff_profiles s ON s.id=c."staffProfileId" AND s."organizationId"=c."organizationId" WHERE c."organizationId"=${scope.organizationId} AND s."userId"=${scope.actorId} AND c.type='PIN' AND c."revokedAt" IS NULL AND c."deviceId" IS NULL FOR NO KEY UPDATE OF c`;
+  const credential = await db.restaurantOperatorCredential.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      type: 'PIN',
+      revokedAt: null,
+      deviceId: null,
+      staffProfile: {
+        organizationId: scope.organizationId,
+        status: 'ACTIVE',
+        userId: scope.actorId,
+        user: { organizationId: scope.organizationId, status: 'ACTIVE', role: 'ADMIN' },
+      },
+    },
+  });
+  if (!credential || isLockedOut(credential, now)) return null;
+  if (!(await verifyOperatorCredential('PIN', pin, credential.credentialHash))) {
+    await db.restaurantOperatorCredential.update({
+      where: { id: credential.id },
+      data: registerFailedAttempt(credential, now),
+    });
+    return null;
+  }
+  await db.restaurantOperatorCredential.update({
+    where: { id: credential.id },
+    data: clearLockout(),
+  });
+  return credential.id;
+}
+
 export async function approveMarketingCampaign(
   db: ScopedDb,
   scope: MarketingScope,
   campaignId: string,
   now = new Date(),
-  pin?: string
+  pin?: string,
+  credentialTransaction: CredentialTransaction = (run) => run(db)
 ) {
   await db.$queryRaw`SELECT id FROM pharmacy_campaigns WHERE "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} AND id=${campaignId} FOR UPDATE`;
   const { campaign } = await reviewMarketingCampaign(db, scope, campaignId);
@@ -203,36 +251,11 @@ export async function approveMarketingCampaign(
   if (campaign.voucherEnabled) {
     const blocked = { blocked: 'Enter your owner PIN to approve monetary vouchers.' };
     if (!pin || !/^\d{4,8}$/.test(pin)) return blocked;
-    // Self-approval is allowed, but another person's PIN cannot authenticate this owner.
-    await db.$queryRaw`SELECT c.id FROM restaurant_operator_credentials c JOIN restaurant_staff_profiles s ON s.id=c."staffProfileId" AND s."organizationId"=c."organizationId" WHERE c."organizationId"=${scope.organizationId} AND s."userId"=${scope.actorId} AND c.type='PIN' AND c."revokedAt" IS NULL AND c."deviceId" IS NULL FOR UPDATE OF c`;
-    const credential = await db.restaurantOperatorCredential.findFirst({
-      where: {
-        organizationId: scope.organizationId,
-        type: 'PIN',
-        revokedAt: null,
-        deviceId: null,
-        staffProfile: {
-          organizationId: scope.organizationId,
-          status: 'ACTIVE',
-          userId: scope.actorId,
-          user: { organizationId: scope.organizationId, status: 'ACTIVE', role: 'ADMIN' },
-        },
-      },
-    });
-    if (!credential || isLockedOut(credential, now)) return blocked;
-    if (!(await verifyOperatorCredential('PIN', pin, credential.credentialHash))) {
-      await db.restaurantOperatorCredential.update({
-        where: { id: credential.id },
-        data: registerFailedAttempt(credential, now),
-      });
-      // Return a refusal so the transaction commits the durable lockout counter.
-      return blocked;
-    }
-    await db.restaurantOperatorCredential.update({
-      where: { id: credential.id },
-      data: clearLockout(),
-    });
-    ownerApprovalPinCredentialId = credential.id;
+    // The failed-attempt counter commits independently of this approval transaction.
+    ownerApprovalPinCredentialId = await credentialTransaction((credentialDb) =>
+      verifyOwnerApprovalPin(credentialDb, scope, pin, now)
+    );
+    if (!ownerApprovalPinCredentialId) return blocked;
   }
   const result = await db.pharmacyCampaign.updateMany({
     where: { ...whereScope(scope), id: campaignId, status: 'DRAFT' },

@@ -231,6 +231,75 @@ describe('persisted capture workflow', () => {
     expect(await approveMarketingCampaign(db, scope, row.id, now, '4821')).toHaveProperty('blocked');
     expect(verifyOperatorCredential).not.toHaveBeenCalled();
   });
+  function credentialStore() {
+    const stored = { failedAttempts: 0, lockedUntil: null as Date | null };
+    const credentialMock = {
+      $queryRaw: vi.fn(async (..._args: unknown[]) => [{ id: 'owner-pin-a' }]),
+      restaurantOperatorCredential: {
+        findFirst: vi.fn(async () => ({
+          id: 'owner-pin-a',
+          credentialHash: 'stored-hash',
+          ...stored,
+        })),
+        update: vi.fn(async ({ data }: { where: { id: string }; data: typeof stored }) =>
+          Object.assign(stored, data)
+        ),
+      },
+    };
+    const independent = vi.fn(<T>(run: (inner: ScopedDb) => Promise<T>) =>
+      run(credentialMock as unknown as ScopedDb)
+    );
+    return { stored, credentialMock, independent };
+  }
+  it('commits failed PIN attempts in the independent credential transaction, not the approval', async () => {
+    row.status = 'DRAFT';
+    row.voucherEnabled = true;
+    vi.mocked(verifyOperatorCredential).mockResolvedValue(false);
+    const { credentialMock, independent } = credentialStore();
+    expect(
+      await approveMarketingCampaign(db, scope, row.id, now, '4822', independent)
+    ).toHaveProperty('blocked');
+    expect(independent).toHaveBeenCalledTimes(1);
+    expect(credentialMock.restaurantOperatorCredential.update).toHaveBeenCalledWith({
+      where: { id: 'owner-pin-a' },
+      data: { failedAttempts: 1, lockedUntil: null },
+    });
+    expect(String(credentialMock.$queryRaw.mock.calls[0]?.[0])).toContain('FOR NO KEY UPDATE OF c');
+    // The request transaction may roll back with the refusal; it owns no counter write.
+    expect(mock.restaurantOperatorCredential.findFirst).not.toHaveBeenCalled();
+    expect(mock.restaurantOperatorCredential.update).not.toHaveBeenCalled();
+    expect(mock.pharmacyCampaign.updateMany).not.toHaveBeenCalled();
+    expect(row.status).toBe('DRAFT');
+  });
+  it('locks the owner PIN on the fifth independently committed failure', async () => {
+    row.status = 'DRAFT';
+    row.voucherEnabled = true;
+    vi.mocked(verifyOperatorCredential).mockResolvedValue(false);
+    const { stored, independent } = credentialStore();
+    for (let attempt = 0; attempt < 5; attempt++)
+      expect(
+        await approveMarketingCampaign(db, scope, row.id, now, '4822', independent)
+      ).toHaveProperty('blocked');
+    expect(stored.lockedUntil?.getTime()).toBeGreaterThan(now.getTime());
+    vi.mocked(verifyOperatorCredential).mockClear();
+    vi.mocked(verifyOperatorCredential).mockResolvedValue(true);
+    expect(
+      await approveMarketingCampaign(db, scope, row.id, now, '4821', independent)
+    ).toHaveProperty('blocked');
+    expect(verifyOperatorCredential).not.toHaveBeenCalled();
+    expect(row.status).toBe('DRAFT');
+  });
+  it('records approval evidence after a correct PIN verified in the independent transaction', async () => {
+    row.status = 'DRAFT';
+    row.voucherEnabled = true;
+    const { stored, independent } = credentialStore();
+    stored.failedAttempts = 3;
+    expect(await approveMarketingCampaign(db, scope, row.id, now, '4821', independent)).toEqual({
+      status: 'APPROVED',
+    });
+    expect(stored).toEqual({ failedAttempts: 0, lockedUntil: null });
+    expect(row.ownerApprovalPinCredentialId).toBe('owner-pin-a');
+  });
   it('allows owner self-approval only with their active tenant PIN and records the evidence', async () => {
     row.status = 'DRAFT';
     row.voucherEnabled = true;

@@ -412,4 +412,34 @@ describe('camera renewal audit redaction before resolver suppression (F3-R1)', (
     });
     expect(value.previousGrantId).toBe('synthetic');
   });
+
+  it('redacts every PIN-named key centrally while keeping lookalike keys and PIN references', async () => {
+    const { toAuditJson } = await vi.importActual<typeof import('./audit')>('./audit');
+    const value = {
+      pin: '4821',
+      PIN: '4821',
+      ownerPin: '4821',
+      manager_pin: '4821',
+      pinCode: '4821',
+      nested: [{ approvalPIN: '4821', approval: { newPin: '4821', note: 'kept' } }],
+      isPinned: true,
+      mapping: 'kept',
+      shipping: 'kept',
+      ownerApprovalPinCredentialId: 'credential-a',
+    };
+    const redacted = toAuditJson(value);
+    expect(redacted).toEqual({
+      pin: '[REDACTED]',
+      PIN: '[REDACTED]',
+      ownerPin: '[REDACTED]',
+      manager_pin: '[REDACTED]',
+      pinCode: '[REDACTED]',
+      nested: [{ approvalPIN: '[REDACTED]', approval: { newPin: '[REDACTED]', note: 'kept' } }],
+      isPinned: true,
+      mapping: 'kept',
+      shipping: 'kept',
+      ownerApprovalPinCredentialId: 'credential-a',
+    });
+    expect(JSON.stringify(redacted)).not.toContain('4821');
+  });
 });

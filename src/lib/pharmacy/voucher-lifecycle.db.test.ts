@@ -287,6 +287,71 @@ describeIfDatabase('voucher reservation lifecycle and evidence', () => {
       )
     ).toEqual({ status: 'APPROVED' });
   });
+  it('keeps failed PIN counters and the lockout when the request transaction rolls back', async () => {
+    const f = await fixture();
+    const resetCredential = () =>
+      tenant((db) =>
+        db.restaurantOperatorCredential.update({
+          where: { id: ownerPinCredentialId },
+          data: { failedAttempts: 0, lockedUntil: null },
+        })
+      );
+    await resetCredential();
+    await tenant((db) =>
+      db.pharmacyCampaign.update({
+        where: { id: f.campaignId },
+        data: {
+          status: 'DRAFT',
+          ownerApprovalPinCredentialId: null,
+          ownerApprovedAt: null,
+          ownerApprovedByUserId: null,
+        },
+      })
+    );
+    // Same shape as the router: PIN checks commit on their own tenant transaction.
+    const independent = <T>(run: (db: ScopedDb) => Promise<T>) =>
+      withTenantDb(organizationId, run, { userId: scope.actorId, skipDrain: true });
+    // The HTTP transport rolls the request transaction back when the procedure refuses.
+    const refusedRequest = (pin: string) =>
+      tenant(async (db) => {
+        const result = await approveMarketingCampaign(
+          db,
+          { ...scope, timezone: 'UTC' },
+          f.campaignId,
+          new Date(),
+          pin,
+          independent
+        );
+        if ('blocked' in result) throw new Error('REFUSED');
+        return result;
+      });
+    const counters = () =>
+      tenant((db) =>
+        db.restaurantOperatorCredential.findUniqueOrThrow({
+          where: { id: ownerPinCredentialId },
+          select: { failedAttempts: true, lockedUntil: true },
+        })
+      );
+    try {
+      await expect(refusedRequest('4822')).rejects.toThrow('REFUSED');
+      expect(await counters()).toEqual({ failedAttempts: 1, lockedUntil: null });
+      for (let attempt = 1; attempt < 5; attempt++)
+        await expect(refusedRequest('4822')).rejects.toThrow('REFUSED');
+      expect((await counters()).lockedUntil?.getTime()).toBeGreaterThan(Date.now());
+      // Locked: even the correct PIN is refused and the campaign stays a draft.
+      await expect(refusedRequest('4821')).rejects.toThrow('REFUSED');
+      expect(
+        await tenant((db) =>
+          db.pharmacyCampaign.findFirstOrThrow({
+            where: { id: f.campaignId },
+            select: { status: true, ownerApprovalPinCredentialId: true },
+          })
+        )
+      ).toEqual({ status: 'DRAFT', ownerApprovalPinCredentialId: null });
+    } finally {
+      await resetCredential();
+    }
+  });
   it('requires persisted owner PIN evidence before funding an otherwise approved voucher', async () => {
     const f = await fixture();
     const campaign = await tenant((db) =>
