@@ -9,8 +9,16 @@ const ACTOR_DENIED = new TRPCError({
   message: 'Your account is not linked to an active staff profile authorized for this branch.',
 });
 
-/** Resolve an authenticated web user to one eligible in-tenant restaurant actor. */
-export async function resolveRestaurantActor(ctx: TRPCContext, branchIds: string[]) {
+/**
+ * Resolve an authenticated web user to one eligible in-tenant restaurant actor.
+ * Inactive branches may be allowed for history and terminal lifecycle transitions;
+ * operational writes require active branches by default.
+ */
+export async function resolveRestaurantActor(
+  ctx: TRPCContext,
+  branchIds: string[],
+  options: { allowInactiveBranches?: boolean } = {}
+) {
   const user = ctx.session?.user;
   if (!user) throw new TRPCError({ code: 'UNAUTHORIZED' });
 
@@ -61,7 +69,58 @@ export async function resolveRestaurantActor(ctx: TRPCContext, branchIds: string
   const organizationId = ctx.entitlements?.organizationId ?? user.organizationId;
   if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
   await assertInOrganization(ctx.db.restaurantBranch, organizationId, requiredBranchIds, {
-    active: true,
+    active: options.allowInactiveBranches ? undefined : true,
   });
   return { staffProfileId: actor.id };
+}
+
+/** Derive the active branches an inventory reader may query. */
+export async function resolveRestaurantReadBranchIds(ctx: TRPCContext): Promise<string[]> {
+  const user = ctx.session?.user;
+  if (!user) throw new TRPCError({ code: 'UNAUTHORIZED' });
+
+  const actors = await ctx.db.restaurantStaffProfile.findMany({
+    where: { userId: user.id, status: 'ACTIVE' },
+    select: { id: true, primaryBranchId: true },
+    orderBy: { id: 'asc' },
+    take: 2,
+  });
+  if (actors.length !== 1) throw ACTOR_DENIED;
+
+  const organizationId = ctx.entitlements?.organizationId ?? user.organizationId;
+  if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+
+  const configuresAllBranches = await can(
+    subjectFromSession(user),
+    'restaurant:configure',
+    undefined,
+    {
+      db: ctx.db,
+      source: 'TRPC',
+      ip: ctx.requestMeta.ip,
+    }
+  );
+  const assigned = configuresAllBranches
+    ? []
+    : await ctx.db.restaurantBranchAssignment.findMany({
+        where: { userId: user.id },
+        select: { branchId: true },
+      });
+  const candidateIds = configuresAllBranches
+    ? undefined
+    : ([
+        ...new Set(
+          [actors[0]!.primaryBranchId, ...assigned.map(({ branchId }) => branchId)].filter(Boolean)
+        ),
+      ] as string[]);
+  const branches = await ctx.db.restaurantBranch.findMany({
+    where: {
+      organizationId,
+      active: true,
+      ...(candidateIds ? { id: { in: candidateIds } } : {}),
+    },
+    select: { id: true },
+  });
+  if (branches.length === 0) throw ACTOR_DENIED;
+  return branches.map(({ id }) => id);
 }

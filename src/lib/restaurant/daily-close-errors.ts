@@ -1,5 +1,6 @@
 export type DailyCloseErrorReason =
   | 'UNSETTLED_BILL'
+  | 'ACTIVE_ORDERS'
   | 'OPEN_DRAWER'
   | 'CLOSE_EXISTS'
   | 'NOTHING_TO_CORRECT'

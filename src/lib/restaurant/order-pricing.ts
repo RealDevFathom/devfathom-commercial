@@ -47,7 +47,9 @@ export type OrderPricingErrorReason =
   | 'ITEM_UNAVAILABLE'
   | 'ITEM_NOT_PRICED'
   | 'MODIFIER_NOT_FOUND'
-  | 'MODIFIER_NOT_ATTACHED';
+  | 'MODIFIER_NOT_ATTACHED'
+  | 'MODIFIER_DUPLICATE'
+  | 'MODIFIER_SELECTION_COUNT';
 
 export class OrderPricingError extends Error {
   constructor(
@@ -102,7 +104,7 @@ type PublicationRow = {
   menuId: string;
   priceListId: string | null;
   channels: OrderChannel[];
-  branch: { timezone: string };
+  branch: { id: string; timezone: string };
 };
 
 /** Load a publication scoped to the caller's org (RLS), or throw NOT_FOUND. */
@@ -114,7 +116,7 @@ async function loadPublication(db: ScopedDb, publicationId: string): Promise<Pub
       menuId: true,
       priceListId: true,
       channels: true,
-      branch: { select: { timezone: true } },
+      branch: { select: { id: true, timezone: true } },
     },
   });
   if (!publication) {
@@ -128,13 +130,20 @@ async function loadPublication(db: ScopedDb, publicationId: string): Promise<Pub
 
 /**
  * Resolve the publication + price-list-version references to stamp on an order at
- * open (C4). Validates the publication exists and publishes the order's channel.
+ * open (C4). Validates the publication belongs to the requested branch before
+ * checking whether it publishes the order's channel.
  */
 export async function resolveOrderPricingRefs(
   db: ScopedDb,
-  input: { publicationId: string; channel: OrderChannel; at: Date }
+  input: { publicationId: string; branchId: string; channel: OrderChannel; at: Date }
 ): Promise<ResolvedOrderPricingRefs> {
   const publication = await loadPublication(db, input.publicationId);
+  if (publication.branch.id !== input.branchId) {
+    throw new OrderPricingError(
+      'The order references a menu publication that does not exist at this branch.',
+      'PUBLICATION_NOT_FOUND'
+    );
+  }
   if (!channelPublished(publication.channels, input.channel)) {
     throw new OrderPricingError(
       `The menu publication is not offered on the ${input.channel} channel.`,
@@ -300,28 +309,42 @@ export async function resolveItemSnapshot(
 /**
  * Snapshot the selected modifier options for a product. Each option must exist in
  * scope AND belong to a modifier group attached to the product (a POS may not
- * attach an arbitrary option to an item). Preserves the caller's selection order.
+ * attach an arbitrary option to an item). The selection must contain unique
+ * options and satisfy every attached group's min/max bounds. Preserves the
+ * caller's selection order.
  */
 export async function resolveModifierSnapshots(
   db: ScopedDb,
   productId: string,
   modifierOptionIds: readonly string[]
 ): Promise<ResolvedModifierSnapshot[]> {
-  if (modifierOptionIds.length === 0) return [];
+  if (new Set(modifierOptionIds).size !== modifierOptionIds.length) {
+    throw new OrderPricingError(
+      'A modifier option cannot be selected more than once.',
+      'MODIFIER_DUPLICATE'
+    );
+  }
 
-  const options = await db.restaurantModifierOption.findMany({
-    where: { id: { in: [...modifierOptionIds] } },
-    select: { id: true, name: true, priceDelta: true, modifierGroupId: true },
-  });
+  const options =
+    modifierOptionIds.length === 0
+      ? []
+      : await db.restaurantModifierOption.findMany({
+          where: { id: { in: [...modifierOptionIds] } },
+          select: { id: true, name: true, priceDelta: true, modifierGroupId: true },
+        });
   const byId = new Map(options.map((o) => [o.id, o]));
 
   const attachments = await db.restaurantProductModifierGroup.findMany({
     where: { productId },
-    select: { modifierGroupId: true },
+    select: {
+      modifierGroupId: true,
+      modifierGroup: { select: { name: true, minSelect: true, maxSelect: true } },
+    },
   });
-  const attachedGroups = new Set(attachments.map((a) => a.modifierGroupId));
+  const attachedGroups = new Map(attachments.map((a) => [a.modifierGroupId, a.modifierGroup]));
+  const selectionsByGroup = new Map<string, number>();
 
-  return modifierOptionIds.map((optionId) => {
+  const snapshots = modifierOptionIds.map((optionId) => {
     const option = byId.get(optionId);
     if (!option) {
       throw new OrderPricingError(
@@ -335,6 +358,23 @@ export async function resolveModifierSnapshots(
         'MODIFIER_NOT_ATTACHED'
       );
     }
+    selectionsByGroup.set(
+      option.modifierGroupId,
+      (selectionsByGroup.get(option.modifierGroupId) ?? 0) + 1
+    );
     return { modifierOptionId: option.id, name: option.name, priceDelta: option.priceDelta };
   });
+
+  for (const [groupId, group] of attachedGroups) {
+    const selected = selectionsByGroup.get(groupId) ?? 0;
+    if (selected < group.minSelect || (group.maxSelect != null && selected > group.maxSelect)) {
+      const maximum = group.maxSelect == null ? 'any number of' : `at most ${group.maxSelect}`;
+      throw new OrderPricingError(
+        `Modifier group ${group.name} requires at least ${group.minSelect} and ${maximum} selections; received ${selected}.`,
+        'MODIFIER_SELECTION_COUNT'
+      );
+    }
+  }
+
+  return snapshots;
 }

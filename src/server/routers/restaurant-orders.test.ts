@@ -840,6 +840,18 @@ describe('mutation wiring', () => {
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
   });
 
+  it('maps opening an order on a closed day to CONFLICT', async () => {
+    mocks.openOrder.mockRejectedValueOnce(
+      new OrderCommandError('This business day is closed; no order can be opened.', 'DAY_CLOSED')
+    );
+    await expect(
+      caller().open({ branchId: 'b1', channel: 'DINE_IN', actor: ACTOR })
+    ).rejects.toMatchObject({
+      code: 'CONFLICT',
+      message: 'This business day is closed; no order can be opened.',
+    });
+  });
+
   it('maps a terminal-state conflict to CONFLICT', async () => {
     mocks.closeOrder.mockRejectedValue(new OrderCommandError('already closed', 'ORDER_TERMINAL'));
     await expect(caller().close({ orderId: 'o1', actor: ACTOR })).rejects.toMatchObject({

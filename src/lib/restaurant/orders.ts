@@ -9,6 +9,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { evaluateOrderSettlement } from './bills';
 import { businessDateToUtcDate, resolveBusinessDate } from './business-date';
 import { buildCoAuthorizationRecord } from './co-authorization';
+import { assertMoneyDayOpen } from './money-day';
 import { postOrderRecipeConsumption } from './inventory';
 import {
   enqueueKitchenTicketPrintJobs,
@@ -85,6 +86,7 @@ export type OrderCommandErrorReason =
   | 'CHANNEL_UNAVAILABLE'
   | 'CHANNEL_TABLE'
   | 'BILL_ALREADY_CUT'
+  | 'DAY_CLOSED'
   | 'NOT_CLOSABLE'
   | 'NOT_SETTLED'
   | 'LIMIT_REACHED'
@@ -505,6 +507,9 @@ export async function openOrder(db: ScopedDb, input: OpenOrderInput): Promise<Op
     const businessDate = businessDateToUtcDate(
       resolveBusinessDate(at, branch.timezone, branch.businessDayCutoff)
     );
+    await assertMoneyDayOpen(tx, branch.id, businessDate, () =>
+      new OrderCommandError('This business day is closed; no order can be opened.', 'DAY_CLOSED')
+    );
     await enforceMonthlyOrderLimit(tx, input, businessDate);
     const orderNumber = await allocateOrderNumber(tx, { branchId: branch.id, businessDate });
 
@@ -525,6 +530,7 @@ export async function openOrder(db: ScopedDb, input: OpenOrderInput): Promise<Op
     if (input.publicationId) {
       const refs = await resolveOrderPricingRefs(tx, {
         publicationId: input.publicationId,
+        branchId: branch.id,
         channel: input.channel,
         at,
       });
@@ -864,6 +870,7 @@ async function fireItems(
     orderItemId: i.id,
     productId: i.productId,
     categoryId: i.product.categoryId,
+    course: i.course,
     quantity: i.quantity,
   }));
   const tickets = await generateKitchenTickets(tx, {

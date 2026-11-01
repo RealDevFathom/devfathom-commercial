@@ -8,12 +8,9 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
+import { allowedInvoiceStatuses, type InvoiceStatusValue } from '@/lib/finance/invoice-status';
 import { invoiceTotalLabel, type InvoiceTotal } from '@/lib/finance/invoice-display';
 import { format } from 'date-fns';
-
-type InvoiceStatus = 'DRAFT' | 'SENT' | 'PAID' | 'OVERDUE' | 'CANCELLED';
-
-const INVOICE_STATUSES: InvoiceStatus[] = ['DRAFT', 'SENT', 'PAID', 'OVERDUE', 'CANCELLED'];
 
 const statusConfig: Record<string, { bg: string; label: string }> = {
   DRAFT: { bg: 'bg-muted text-muted-foreground', label: 'Draft' },
@@ -26,7 +23,7 @@ const statusConfig: Record<string, { bg: string; label: string }> = {
 type InvoiceRowData = InvoiceTotal & {
   id: string;
   invoiceNumber: string;
-  status: string;
+  status: InvoiceStatusValue;
   dueDate: Date | string;
   client: { name: string };
   project: { name: string } | null;
@@ -58,7 +55,7 @@ export function InvoicesTab() {
   });
 
   const handleUpdateStatus = useCallback(
-    (id: string, status: InvoiceStatus) => mutateStatus({ id, status }),
+    (id: string, status: InvoiceStatusValue) => mutateStatus({ id, status }),
     [mutateStatus]
   );
 
@@ -172,7 +169,7 @@ const InvoiceRow = memo(function InvoiceRow({
   onUpdateStatus,
 }: {
   inv: InvoiceRowData;
-  onUpdateStatus: (id: string, status: InvoiceStatus) => void;
+  onUpdateStatus: (id: string, status: InvoiceStatusValue) => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
@@ -185,11 +182,8 @@ const InvoiceRow = memo(function InvoiceRow({
   const openMenu = useCallback(() => {
     const rect = btnRef.current?.getBoundingClientRect();
     if (!rect) return;
-    const MENU_HEIGHT = 160; // ~5 status rows
-    const below = rect.bottom + 4;
-    const openUp = below + MENU_HEIGHT > window.innerHeight;
     setMenuPos({
-      top: openUp ? rect.top - MENU_HEIGHT - 4 : below,
+      top: rect.bottom + 4,
       left: rect.left + rect.width / 2,
     });
     setMenuOpen(true);
@@ -242,10 +236,18 @@ const InvoiceRow = memo(function InvoiceRow({
             <>
               <div className="fixed inset-0 z-[60]" onClick={() => setMenuOpen(false)} />
               <div
+                ref={(menu) => {
+                  const rect = btnRef.current?.getBoundingClientRect();
+                  if (!menu || !rect) return;
+                  // Measure the rendered choices before paint; each status has a different height.
+                  const height = menu.getBoundingClientRect().height;
+                  const below = rect.bottom + 4;
+                  menu.style.top = `${below + height > window.innerHeight ? rect.top - height - 4 : below}px`;
+                }}
                 className="fixed z-[61] w-32 -translate-x-1/2 rounded-xl border border-border bg-card py-1 shadow-xl shadow-black/10"
                 style={{ top: menuPos.top, left: menuPos.left }}
               >
-                {INVOICE_STATUSES.map((s) => (
+                {allowedInvoiceStatuses(inv.status).map((s) => (
                   <button
                     key={s}
                     onClick={() => {

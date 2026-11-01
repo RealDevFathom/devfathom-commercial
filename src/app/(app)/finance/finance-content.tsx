@@ -27,6 +27,7 @@ import { Stat } from '@/components/ui/stat';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
+import { financeCsvCell } from './finance-csv';
 import { format } from 'date-fns';
 import { moneyListLabel, baseEquivalentLabel, moneyLabel } from '@/lib/finance/currency';
 import { InvoicesTab } from './invoices-tab';
@@ -218,7 +219,6 @@ function TransactionsTab({
 
   // IMP-FIN-06: export the currently-filtered transactions to CSV.
   const exportCsv = useCallback(() => {
-    const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
     const header = [
       'Date',
       'Type',
@@ -239,7 +239,7 @@ function TransactionsTab({
       t.project?.name ?? '',
       t.client?.name ?? '',
     ]);
-    const csv = [header, ...rows].map((r) => r.map(esc).join(',')).join('\r\n');
+    const csv = [header, ...rows].map((r) => r.map(financeCsvCell).join(',')).join('\r\n');
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
     const a = document.createElement('a');
     a.href = url;

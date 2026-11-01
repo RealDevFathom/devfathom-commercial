@@ -5,8 +5,9 @@ const mocks = vi.hoisted(() => ({
   capabilities: new Set<string>(),
   ctx: {
     state: 'UNLOCKED',
-    session: { activeStaffProfileId: 'staff-cashier' },
-    device: { id: 'device-1', branchId: 'branch-1' },
+    organizationId: 'org-1',
+    session: { id: 'session-1', activeStaffProfileId: 'staff-cashier' },
+    device: { id: 'device-1', branchId: 'branch-1', kind: 'POS' },
     db: { restaurantOrder: { findFirst: vi.fn() } },
   },
 }));
@@ -26,6 +27,7 @@ vi.mock('./terminal-auth', () => ({
 }));
 
 import { terminalCommandRoute } from './terminal-orders';
+import { mintPosComposerProof } from './pos-composer-proof';
 
 const schema = z
   .object({
@@ -34,10 +36,23 @@ const schema = z
   })
   .strict();
 
-function request(channel: 'DINE_IN' | 'TAKEAWAY' | 'DELIVERY') {
+function request(
+  channel: 'DINE_IN' | 'TAKEAWAY' | 'DELIVERY',
+  proof = mintPosComposerProof({
+    organizationId: 'org-1',
+    branchId: 'branch-1',
+    deviceId: 'device-1',
+    sessionId: 'session-1',
+    staffProfileId: 'staff-cashier',
+  })
+) {
   return new Request('https://tenant.test/api/restaurant/orders/open', {
     method: 'POST',
-    headers: { 'Idempotency-Key': 'open-1', 'Content-Type': 'application/json' },
+    headers: {
+      'Idempotency-Key': 'open-1',
+      'Content-Type': 'application/json',
+      ...(proof ? { 'X-POS-Composer-Proof': proof } : {}),
+    },
     body: JSON.stringify({
       channel,
       ...(channel === 'DELIVERY' ? { customerId: 'customer-1' } : {}),
@@ -46,7 +61,9 @@ function request(channel: 'DINE_IN' | 'TAKEAWAY' | 'DELIVERY') {
 }
 
 beforeEach(() => {
+  vi.stubEnv('AUTH_SECRET', 'terminal-order-test-secret');
   mocks.capabilities.clear();
+  mocks.ctx.device.kind = 'POS';
 });
 
 describe('terminal order capability boundary', () => {
@@ -88,5 +105,51 @@ describe('terminal order capability boundary', () => {
       error: 'This operator lacks the "customers:read" capability.',
     });
     expect(run).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['missing', ''],
+    ['invalid', 'not-a-signed-proof'],
+    [
+      'wrong operator',
+      () =>
+        mintPosComposerProof({
+          organizationId: 'org-1',
+          branchId: 'branch-1',
+          deviceId: 'device-1',
+          sessionId: 'session-1',
+          staffProfileId: 'staff-manager',
+        }),
+    ],
+  ])('rejects a %s composer proof before capability checks', async (_label, proofValue) => {
+    mocks.capabilities.add('orders:take');
+    const run = vi.fn();
+    const route = terminalCommandRoute(schema, run, 201);
+    const proof = typeof proofValue === 'function' ? proofValue() : proofValue;
+
+    const response = await route(request('DINE_IN', proof));
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: 'Missing or invalid POS composer proof.',
+    });
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it('allows an attributed online KDS command without a POS offline-composer proof', async () => {
+    mocks.ctx.device.kind = 'KDS';
+    mocks.capabilities.add('orders:take');
+    const run = vi.fn().mockResolvedValue({ ticketId: 'ticket-1' });
+    const route = terminalCommandRoute(schema, run, 200, { composerProof: 'POS_ONLY' });
+
+    const response = await route(request('DINE_IN', ''));
+
+    expect(response.status).toBe(200);
+    expect(run).toHaveBeenCalledOnce();
+    expect(run).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actor: expect.objectContaining({ staffProfileId: 'staff-cashier' }),
+      })
+    );
   });
 });

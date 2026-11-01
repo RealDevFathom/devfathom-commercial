@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises';
 import { expect, test } from '@playwright/test';
 import pg from 'pg';
 import { assertDisposableDatabaseRoles, signInAs } from './fixtures/restaurant-actor-accessibility';
@@ -19,6 +20,23 @@ test.beforeAll(async () => {
        ON CONFLICT (id) DO NOTHING`,
       [branchId]
     );
+    const licensed = await db.query(
+      `INSERT INTO organization_modules (id,"organizationId","moduleId",status,"startsAt","createdAt","updatedAt")
+       SELECT 'module_pharmacy_evidence_e2e','org_chai_chowk',id,'ENABLED',now(),now(),now()
+       FROM platform_modules WHERE key='pharmacy-reports'
+       ON CONFLICT ("organizationId","moduleId") DO UPDATE SET status='ENABLED',"expiresAt"=NULL`
+    );
+    expect(licensed.rowCount).toBe(1);
+    for (const capability of ['reports:operational', 'reports:financial']) {
+      const granted = await db.query(
+        `INSERT INTO user_permission_overrides (id,"organizationId","userId",capability,effect,reason,"updatedAt")
+         SELECT $1,"organizationId",id,$2,'ALLOW','Journal export browser fixture',now()
+         FROM users WHERE "organizationId"='org_chai_chowk' AND email=$3
+         ON CONFLICT ("userId",capability) DO UPDATE SET effect='ALLOW',"expiresAt"=NULL`,
+        [`pharmacy_evidence_${capability}`, capability, process.env.RESTAURANT_ACTOR_ADMIN_EMAIL]
+      );
+      expect(granted.rowCount).toBe(1);
+    }
   } finally {
     await db.end();
   }
@@ -79,4 +97,45 @@ test('fresh organization posts, locks, reopens, and versions pharmacy tax withou
     { type: 'slowest-interaction', description: `Post transaction: ${postMs}ms` },
     { type: 'end-to-end-duration', description: `${Date.now() - started}ms` }
   );
+});
+
+test('discovers journal evidence from finance, submits the window, and downloads the CSV', async ({
+  page,
+}) => {
+  const origin = await signInAs(page, 'restaurantAdmin');
+  await page.goto(
+    new URL(
+      `/pharmacy/finance?${new URLSearchParams({
+        branch: branchId,
+        ledgerFrom: '2026-09-01',
+        ledgerTo: '2026-10-01',
+        journalPage: '1',
+      })}`,
+      origin
+    ).href
+  );
+  await page.getByRole('link', { name: 'Export this journal page as evidence' }).click();
+  await expect(
+    page.getByRole('heading', { name: 'Journal evidence export', exact: true })
+  ).toBeVisible();
+  await expect(page.getByRole('combobox', { name: 'Branch', exact: true })).toHaveValue(branchId);
+  await expect(page.getByLabel('From (UTC)', { exact: true })).toHaveValue('2026-09-01');
+  await expect(page.getByLabel('Page', { exact: true })).toHaveValue('1');
+
+  await page.getByLabel('From (UTC)', { exact: true }).fill('2026-09-02');
+  await page.getByRole('button', { name: 'Read authorized page' }).click();
+  await expect(page).toHaveURL(/from=2026-09-02/);
+  await expect(
+    page.getByText('Coverage unknown beyond posted journal evidence', { exact: false })
+  ).toBeVisible();
+  const downloadPromise = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Export this page (CSV)', exact: true }).click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toBe('pharmacy-journal-evidence-page-1.csv');
+  expect(await download.failure()).toBeNull();
+  const csv = await readFile((await download.path())!, 'utf8');
+  expect(csv).toContain('"coverage-unknown"');
+  expect(csv).toContain('"2026-09-02T00:00:00.000Z","2026-10-01T00:00:00.000Z"');
+  expect(csv).toContain('"125000"');
+  expect(csv).toContain('"PKR"');
 });

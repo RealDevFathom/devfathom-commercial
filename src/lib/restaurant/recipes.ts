@@ -50,8 +50,36 @@ function requireName(value: string, label = 'name'): string {
   return trimmed;
 }
 
-function decimal(value: string): Prisma.Decimal {
-  return new Prisma.Decimal(value);
+function decimalInDomain(
+  value: string,
+  label: string,
+  domain: 'positive' | 'nonnegative',
+  precision: number,
+  scale: number
+): Prisma.Decimal {
+  // Keep a defensive input bound without rejecting representable values that
+  // happen to include leading zeroes (which do not consume database precision).
+  if (value.length > 256 || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(value)) {
+    throw new RecipeError(`${label} must be a valid decimal.`, 'INVALID');
+  }
+  let parsed: Prisma.Decimal;
+  try {
+    parsed = new Prisma.Decimal(value);
+  } catch {
+    throw new RecipeError(`${label} must be a valid decimal.`, 'INVALID');
+  }
+  const valid =
+    parsed.isFinite() &&
+    parsed.decimalPlaces() <= scale &&
+    parsed.abs().lessThan(new Prisma.Decimal(10).pow(precision - scale)) &&
+    (domain === 'positive' ? parsed.greaterThan(0) : parsed.greaterThanOrEqualTo(0));
+  if (!valid) {
+    throw new RecipeError(
+      `${label} must be ${domain === 'positive' ? 'positive' : 'nonnegative'}.`,
+      'INVALID'
+    );
+  }
+  return parsed;
 }
 
 function localizedWrite(
@@ -124,6 +152,7 @@ export async function upsertConversion(
   factor: string
 ) {
   const organizationId = await catalogOrganizationId(db);
+  const parsedFactor = decimalInDomain(factor, 'Unit conversion factor', 'positive', 18, 6);
   await requireUnit(db, fromUnitId);
   await requireUnit(db, toUnitId);
   if (fromUnitId === toUnitId) {
@@ -132,8 +161,8 @@ export async function upsertConversion(
   await assertNoConversionCycle(db, fromUnitId, toUnitId);
   return db.restaurantUnitConversion.upsert({
     where: { organizationId, fromUnitId_toUnitId: { fromUnitId, toUnitId } },
-    create: { organizationId, fromUnitId, toUnitId, factor: decimal(factor) },
-    update: { factor: decimal(factor) },
+    create: { organizationId, fromUnitId, toUnitId, factor: parsedFactor },
+    update: { factor: parsedFactor },
   });
 }
 
@@ -238,7 +267,10 @@ export async function createIngredient(db: ScopedDb, input: CreateIngredientInpu
       name,
       nameLocalized: localizedWrite(input.nameLocalized),
       baseUnitId: input.baseUnitId,
-      referenceCost: input.referenceCost != null ? decimal(input.referenceCost) : null,
+      referenceCost:
+        input.referenceCost != null
+          ? decimalInDomain(input.referenceCost, 'Reference cost', 'nonnegative', 12, 4)
+          : null,
     },
   });
 }
@@ -261,7 +293,10 @@ export async function updateIngredient(db: ScopedDb, id: string, patch: UpdateIn
     data.baseUnitId = patch.baseUnitId;
   }
   if (patch.referenceCost !== undefined) {
-    data.referenceCost = patch.referenceCost != null ? decimal(patch.referenceCost) : null;
+    data.referenceCost =
+      patch.referenceCost != null
+        ? decimalInDomain(patch.referenceCost, 'Reference cost', 'nonnegative', 12, 4)
+        : null;
   }
   return db.restaurantIngredient.update({ where: { organizationId, id }, data });
 }
@@ -358,6 +393,10 @@ export type CreateRecipeVersionInput = {
 /** Fork a new DRAFT version for the recipe. Always creates; never edits ACTIVE/SUPERSEDED. */
 export async function createRecipeVersion(db: ScopedDb, input: CreateRecipeVersionInput) {
   const organizationId = await catalogOrganizationId(db);
+  const yieldQuantity =
+    input.yieldQuantity != null
+      ? decimalInDomain(input.yieldQuantity, 'Recipe yield quantity', 'positive', 12, 3)
+      : null;
   await requireRecipe(db, input.recipeId);
   if (input.yieldUnitId) await requireUnit(db, input.yieldUnitId);
   const existingVersions = await db.restaurantRecipeVersion.findMany({
@@ -371,7 +410,7 @@ export async function createRecipeVersion(db: ScopedDb, input: CreateRecipeVersi
       recipeId: input.recipeId,
       versionNumber,
       status: 'DRAFT',
-      yieldQuantity: input.yieldQuantity != null ? decimal(input.yieldQuantity) : null,
+      yieldQuantity,
       yieldUnitId: input.yieldUnitId ?? null,
       portionCount: input.portionCount ?? null,
       notes: input.notes ?? null,
@@ -403,7 +442,10 @@ export async function updateRecipeVersion(
     }
     const data: Prisma.RestaurantRecipeVersionUncheckedUpdateInput = {};
     if (patch.yieldQuantity !== undefined) {
-      data.yieldQuantity = patch.yieldQuantity != null ? decimal(patch.yieldQuantity) : null;
+      data.yieldQuantity =
+        patch.yieldQuantity != null
+          ? decimalInDomain(patch.yieldQuantity, 'Recipe yield quantity', 'positive', 12, 3)
+          : null;
     }
     if (patch.yieldUnitId !== undefined) data.yieldUnitId = patch.yieldUnitId;
     if (patch.portionCount !== undefined) data.portionCount = patch.portionCount;
@@ -496,6 +538,7 @@ export type CreateRecipeLineInput =
  */
 export async function createRecipeLine(db: ScopedDb, input: CreateRecipeLineInput) {
   const organizationId = await catalogOrganizationId(db);
+  const quantity = decimalInDomain(input.quantity, 'Recipe line quantity', 'positive', 12, 4);
   if ((!input.ingredientId && !input.subRecipeId) || (input.ingredientId && input.subRecipeId)) {
     throw new RecipeError('Exactly one of ingredientId or subRecipeId must be set.', 'INVALID');
   }
@@ -526,7 +569,7 @@ export async function createRecipeLine(db: ScopedDb, input: CreateRecipeLineInpu
         recipeVersionId: input.recipeVersionId,
         ingredientId,
         subRecipeId,
-        quantity: decimal(input.quantity),
+        quantity,
         unitId: input.unitId,
         sortOrder: input.sortOrder ?? 0,
       },
@@ -552,7 +595,9 @@ export async function updateRecipeLine(db: ScopedDb, id: string, patch: UpdateRe
     await lockMutableRecipeVersion(scopedTx, organizationId, line.recipeVersionId);
     if (patch.unitId) await requireUnit(scopedTx, patch.unitId);
     const data: Prisma.RestaurantRecipeLineUncheckedUpdateInput = {};
-    if (patch.quantity !== undefined) data.quantity = decimal(patch.quantity);
+    if (patch.quantity !== undefined) {
+      data.quantity = decimalInDomain(patch.quantity, 'Recipe line quantity', 'positive', 12, 4);
+    }
     if (patch.unitId !== undefined) data.unitId = patch.unitId;
     if (patch.sortOrder !== undefined) data.sortOrder = patch.sortOrder;
     return tx.restaurantRecipeLine.update({ where: { organizationId, id }, data });

@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { ProfitAndLossReport } from '../accounts/profit-loss/report';
 import { TRPCError } from '@trpc/server';
 import { SectionCard } from '@/components/ui/section-card';
 import { Button } from '@/components/ui/button';
@@ -78,6 +79,7 @@ export async function FinancialStatements({
         {result.definition} Amounts shown in the recorded currency. Retrieved{' '}
         {result.freshness.retrievedAt.toISOString()}.
       </p>
+      <ProfitAndLossReport statements={result.profitAndLoss} />
       <h3 className="mt-6 font-semibold">Receivables, payables and cash at cutoff</h3>
       <p className="mt-2 text-sm text-text-muted">
         Recorded ledger balances only. Goods received accrual is shown separately from invoiced
@@ -177,6 +179,17 @@ export async function FinancialStatements({
         </p>
       )}
       <h3 className="mt-6 font-semibold">Journal · {result.journalCount} entries in window</h3>
+      <Link
+        className="mt-3 inline-flex min-h-11 items-center underline focus-visible:outline-2 focus-visible:outline-ring"
+        href={`/pharmacy/accounts/journal-evidence-export?${new URLSearchParams({
+          branch: branchId,
+          from: start,
+          to: end,
+          page: String(result.page),
+        })}`}
+      >
+        Export this journal page as evidence
+      </Link>
       {result.journal.map((e) => (
         <details key={e.id} className="mt-3 rounded-sm border border-border p-3">
           <summary className="min-h-11 cursor-pointer break-words focus-visible:outline-2 focus-visible:outline-ring">
