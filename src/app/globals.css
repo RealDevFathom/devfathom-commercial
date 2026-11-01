@@ -1673,7 +1673,12 @@
     grid-template-columns: minmax(0, 1.08fr) minmax(0, 0.92fr);
   }
   .studio-auth-hero {
+    /* Pinned beside long forms, but never clipped: the hero grows with its
+       content and sticky release at the grid row's end exposes its bottom. */
     display: flex;
+    position: sticky;
+    inset-block-start: 0;
+    align-self: start;
     min-block-size: 100dvh;
     flex-direction: column;
     padding: 48px 40px;
