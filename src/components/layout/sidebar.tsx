@@ -90,8 +90,9 @@ interface NavItem {
   /** Shown only when the signed-in user holds one of these capabilities. */
   pharmacyCapabilities?: readonly string[];
   /**
-   * Shown to non-administrators only while this module is granted. Without it
-   * the page has nothing for them, so the entry would be a dead end (#979).
+   * In a pharmacy workspace, shown to non-administrators only while this module
+   * is granted. Without it the page has nothing for them there, so the entry
+   * would be a dead end (#979). Other products are unchanged.
    */
   memberModule?: string;
 }
@@ -575,7 +576,7 @@ export function visibleNavigation(
         return false;
       if (item.hrAccess) return isAdmin || isHr;
       if (item.adminOnly) return isAdmin;
-      if (item.memberModule && !isAdmin)
+      if (item.memberModule && !isAdmin && entitlements.vertical === 'PHARMACY')
         return isModuleGranted(item.memberModule, entitlements.enabledModules);
       return true;
     })

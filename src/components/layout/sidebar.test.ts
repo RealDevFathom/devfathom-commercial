@@ -283,6 +283,14 @@ describe('pharmacy navigation', () => {
       expect(hrefs('EMPLOYEE')).not.toContain('/team');
       expect(hrefs('EMPLOYEE', [], withHr)).toContain('/team');
     });
+
+    it('leaves Team as it was for members of other products', () => {
+      for (const vertical of ['AGENCY', 'RESTAURANT'] as const) {
+        expect(
+          visibleNavigation({ vertical, enabledModules: [] }, 'EMPLOYEE').map((item) => item.href)
+        ).toContain('/team');
+      }
+    });
   });
 
   it('shows pharmacy routes to a Pharmacy admin with core and counter modules', () => {

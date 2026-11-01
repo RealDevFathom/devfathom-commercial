@@ -8,6 +8,7 @@ import { StatusPill } from '@/components/ui/status-pill';
 import { can, subjectFromSession } from '@/lib/abac';
 import { hasModule } from '@/lib/entitlements';
 import { actorCanProcure } from '@/lib/pharmacy/procurement-access';
+import { isSoloPharmacyOwner } from '@/lib/pharmacy/solo-owner';
 import type { SupplierSummary } from '@/lib/pharmacy/purchasing-console';
 import {
   AccessState,
@@ -86,12 +87,21 @@ export default async function PharmacySuppliersPage({
   // PR J (#979): authorizing a supplier needs the approver capability as well,
   // as approving a purchase order does. Offer the control only to the people the
   // server will let through: Manager, Owner, and the solo owner.
-  const canAuthorize = await can(
-    subjectFromSession(ctx.session.user),
-    'pharmacy:procurement-approve',
-    undefined,
-    { db: ctx.db, source: 'TRPC', ip: ctx.requestMeta?.ip ?? null }
-  );
+  // The solo owner may verify a licence they filed: there is nobody else to.
+  const sessionUser = ctx.session.user;
+  const [canAuthorize, soloOwner] = await Promise.all([
+    can(subjectFromSession(sessionUser), 'pharmacy:procurement-approve', undefined, {
+      db: ctx.db,
+      source: 'TRPC',
+      ip: ctx.requestMeta?.ip ?? null,
+    }),
+    isSoloPharmacyOwner(ctx.db, {
+      organizationId: ctx.entitlements.organizationId,
+      actorId: sessionUser.id,
+      role: sessionUser.role,
+      actorOrganizationId: sessionUser.organizationId,
+    }),
+  ]);
 
   const caller = await purchasingCaller();
   if (!caller) {
@@ -326,6 +336,7 @@ export default async function PharmacySuppliersPage({
               <SupplierDetail
                 canAuthorize={canAuthorize}
                 currentUserId={ctx.session.user.id}
+                soloOwner={soloOwner}
                 notice={notice}
                 onRecordLicence={recordLicence}
                 onSetAuthorization={setAuthorization}
@@ -404,6 +415,7 @@ function SupplierDetail({
   notice,
   canAuthorize,
   currentUserId,
+  soloOwner,
   onRecordLicence,
   onSetAuthorization,
   onVerifyLicence,
@@ -412,6 +424,8 @@ function SupplierDetail({
   notice: ReturnType<typeof noticeFrom>;
   canAuthorize: boolean;
   currentUserId: string;
+  /** The workspace's only active member, who may verify their own filing. */
+  soloOwner: boolean;
   onRecordLicence: (form: FormData) => Promise<string>;
   onSetAuthorization: (form: FormData) => Promise<string>;
   onVerifyLicence: (form: FormData) => Promise<string>;
@@ -533,11 +547,19 @@ function SupplierDetail({
                   </p>
                 ) : null}
                 {/* PUR-01: verification is a second person's act. The server
-                    refuses the filer; this only says so before they try. */}
+                    refuses the filer, and a filing whose filer was never
+                    recorded, except for the solo owner; this only says so
+                    before they try. */}
                 {!licence.verified && !licence.superseded ? (
-                  licence.recordedByUserId === currentUserId ? (
+                  !soloOwner && licence.recordedByUserId === currentUserId ? (
                     <p className="mt-2 text-xs text-text-muted">
                       You filed this licence. A colleague with purchasing access verifies it.
+                    </p>
+                  ) : !soloOwner && licence.recordedByUserId === null ? (
+                    <p className="mt-2 text-xs text-text-muted">
+                      This licence was filed before DevFathom recorded who filed it, so nobody can
+                      confirm it was checked by a second person. File it again as a correction of
+                      this filing, and a colleague verifies the new filing.
                     </p>
                   ) : (
                     <PurchasingActionForm

@@ -49,7 +49,12 @@ const actor = {
 
 function contextStub(
   enabledModules = ['pharmacy-procurement'],
-  grants: readonly string[] = ['pharmacy.procurement', 'pharmacy:procurement-approve']
+  // PR J: the returns board also needs financial report access (Manager + Finance).
+  grants: readonly string[] = [
+    'pharmacy.procurement',
+    'pharmacy:procurement-approve',
+    'reports:financial',
+  ]
 ) {
   return {
     session: actor.session,
@@ -796,6 +801,8 @@ describe('supplier authorization needs the approval permission (PUR-01, PR J)', 
             organizationRole: null,
             permissionOverrides: [],
           }),
+          // Active members, as the solo-owner rule reads them: not alone here.
+          findMany: vi.fn().mockResolvedValue([{ id: 'user-1' }, { id: 'user-2' }]),
         },
       },
     });
@@ -803,6 +810,67 @@ describe('supplier authorization needs the approval permission (PUR-01, PR J)', 
     render(await SuppliersPage({ searchParams: params({ supplier: 'sup-ok' }) }));
 
     expect(screen.getByRole('button', { name: 'Withdraw authorization' })).toBeDefined();
+  });
+});
+
+describe('licence verification controls match the server (PUR-01, PR J)', () => {
+  const unverified = (id: string, recordedByUserId: string | null) => ({
+    ...licensedSupplier.governingLicence,
+    id,
+    licenceNumber: id,
+    verified: false,
+    recordedByUserId,
+  });
+  function withLicences(...licences: ReturnType<typeof unverified>[]) {
+    mocks.createCaller.mockReturnValue(
+      callerStub({ suppliers: vi.fn().mockResolvedValue([{ ...licensedSupplier, licences }]) })
+    );
+  }
+  function asAdmin(members: string[]) {
+    mocks.createTRPCContext.mockResolvedValue({
+      ...contextStub(),
+      session: { ...actor.session, user: { ...actor.session.user, role: 'ADMIN' } },
+      db: {
+        user: {
+          findUnique: vi.fn().mockResolvedValue({
+            role: 'ADMIN',
+            organizationRole: null,
+            permissionOverrides: [],
+          }),
+          findMany: vi.fn().mockResolvedValue(members.map((id) => ({ id }))),
+        },
+      },
+    });
+  }
+
+  it("offers Verify only on a colleague's filing, and explains the filer's own and unrecorded ones", async () => {
+    withLicences(unverified('lic-mine', 'user-1'), unverified('lic-legacy', null));
+    render(await SuppliersPage({ searchParams: params({ supplier: 'sup-ok' }) }));
+    expect(screen.queryByRole('button', { name: 'Verify licence' })).toBeNull();
+    expect(screen.getByText(/You filed this licence/)).toBeDefined();
+    expect(screen.getByText(/filed before DevFathom recorded who filed it/)).toBeDefined();
+  });
+
+  it("offers Verify on a colleague's filing", async () => {
+    withLicences(unverified('lic-colleague', 'user-2'));
+    render(await SuppliersPage({ searchParams: params({ supplier: 'sup-ok' }) }));
+    expect(screen.getAllByRole('button', { name: 'Verify licence' })).toHaveLength(1);
+  });
+
+  it('offers the solo owner Verify on their own and unrecorded filings', async () => {
+    asAdmin(['user-1']);
+    withLicences(unverified('lic-mine', 'user-1'), unverified('lic-legacy', null));
+    render(await SuppliersPage({ searchParams: params({ supplier: 'sup-ok' }) }));
+    expect(screen.getAllByRole('button', { name: 'Verify licence' })).toHaveLength(2);
+    expect(screen.queryByText(/A colleague with purchasing access verifies it/)).toBeNull();
+  });
+
+  it('does not treat an administrator with colleagues as the solo owner', async () => {
+    asAdmin(['user-1', 'user-2']);
+    withLicences(unverified('lic-mine', 'user-1'));
+    render(await SuppliersPage({ searchParams: params({ supplier: 'sup-ok' }) }));
+    expect(screen.queryByRole('button', { name: 'Verify licence' })).toBeNull();
+    expect(screen.getByText(/You filed this licence/)).toBeDefined();
   });
 });
 
