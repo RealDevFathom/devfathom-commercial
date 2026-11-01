@@ -17,6 +17,10 @@ export type Receipt = {
   receiptNumber: number | null;
   settledAt: string;
   splitKind: string;
+  loyaltyWallet: {
+    balance: number;
+    platforms: ('APPLE' | 'GOOGLE')[];
+  } | null;
   printing?: ReceiptPrinting;
   lines: {
     id: string;
@@ -167,6 +171,20 @@ export function ReceiptView({ billId, request }: ReceiptViewProps) {
           </div>
         ))}
       </dl>
+
+      {receipt.loyaltyWallet ? (
+        <div className="rounded-lg bg-surface-sunken p-3 text-sm">
+          <p className="font-mono text-xs tracking-wide text-text-muted uppercase">
+            Loyalty wallet
+          </p>
+          <p className="mt-1 text-text-strong">
+            {receipt.loyaltyWallet.balance.toLocaleString()} points ·{' '}
+            {receipt.loyaltyWallet.platforms
+              .map((platform) => (platform === 'APPLE' ? 'Apple Wallet' : 'Google Wallet'))
+              .join(' + ')}
+          </p>
+        </div>
+      ) : null}
 
       <div className="space-y-2">
         <p className="font-mono text-xs tracking-wide text-text-muted uppercase">Tenders</p>

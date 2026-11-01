@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getPlatformSession } from '@/lib/platform/auth';
+import { contentSecurityPolicy } from '@/lib/security/content-security-policy';
 import {
   canReadPlatformRoute,
   platformReadHrefForPathname,
@@ -69,6 +70,11 @@ export async function proxy(request: Request) {
   const hostWithPort = forwardedHost?.split(',')[0]?.trim().toLowerCase() ?? '';
   const host = hostWithPort.replace(/:\d+$/, '').replace(/\.$/, '');
   const requestHeaders = new Headers(request.headers);
+  const nonce = btoa(crypto.randomUUID());
+  const csp = contentSecurityPolicy(nonce);
+  // Next reads the request policy and copies its nonce to generated scripts.
+  requestHeaders.set('Content-Security-Policy', csp);
+  requestHeaders.set('x-nonce', nonce);
   // Host classification ignores ports, but downstream login redirects need the
   // original authority to keep local tenant navigation on the same dev server.
   requestHeaders.set(TENANT_HOST_HEADER, hostWithPort);
@@ -78,6 +84,7 @@ export async function proxy(request: Request) {
   );
   const next = () => {
     const response = NextResponse.next({ request: { headers: requestHeaders } });
+    response.headers.set('Content-Security-Policy', csp);
     if (pathname === '/demo' || pathname.startsWith('/demo/')) {
       response.headers.set('X-Robots-Tag', 'noindex, nofollow');
     }
@@ -104,7 +111,9 @@ export async function proxy(request: Request) {
       return NextResponse.redirect(new URL('/dashboard', request.url));
     }
     if (pathname === '/platform/login') {
-      if (!hasPlatformSession) return next();
+      // The verifier is the source of truth here, rather than the presence of
+      // a cookie. This also keeps the successful destination server-owned and
+      // fixed instead of accepting a client-controlled callback.
       const identity = await getPlatformSession(request);
       return identity ? NextResponse.redirect(new URL('/platform', request.url)) : next();
     }

@@ -78,6 +78,21 @@ Parameters:
     Type: Number
     Default: 20
     MinValue: 20
+  DbMultiAz:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: >-
+      Run a Multi-AZ standby for the database. Off by default (single-AZ, the
+      low-cost choice); a standby roughly doubles the database cost.
+  DbBackupRetentionDays:
+    Type: Number
+    Default: 7
+    MinValue: 1
+    MaxValue: 35
+    Description: >-
+      Automated backup retention in production, in days. Staging always keeps
+      1 day.
   HostedZoneId:
     Type: String
     Default: ''
@@ -130,6 +145,8 @@ Conditions:
   HasZone: !Not [!Equals [!Ref HostedZoneId, '']]
   HasCertificate: !Not [!Equals [!Ref CertificateArn, '']]
   IsProduction: !Equals [!Ref EnvironmentName, production]
+  IsStaging: !Equals [!Ref EnvironmentName, staging]
+  DbMultiAzEnabled: !Equals [!Ref DbMultiAz, 'true']
   JobsEnabled: !And
     - !Equals [!Ref EnableJobsSchedule, 'true']
     - !Condition HasCertificate
@@ -392,8 +409,10 @@ Resources:
   # Initialization-only credentials, passed to the migration task only when it
   # seeds (staging) or bootstraps (production): sign-in passwords for the seeded
   # users and the first workspace and platform administrators.
+  # The seed password exists in staging only: production never seeds demo users.
   SeedPasswordSecret:
     Type: AWS::SecretsManager::Secret
+    Condition: IsStaging
     Properties:
       Name: !Sub devfathom/${EnvironmentName}/seed-password
       GenerateSecretString:
@@ -495,8 +514,8 @@ Resources:
       VPCSecurityGroups:
         - !Ref DatabaseSecurityGroup
       PubliclyAccessible: false
-      MultiAZ: !If [IsProduction, true, false]
-      BackupRetentionPeriod: !If [IsProduction, 14, 1]
+      MultiAZ: !If [DbMultiAzEnabled, true, false]
+      BackupRetentionPeriod: !If [IsProduction, !Ref DbBackupRetentionDays, 1]
       PreferredBackupWindow: '21:00-22:00'
       PreferredMaintenanceWindow: 'sun:22:30-sun:23:30'
       AutoMinorVersionUpgrade: true
@@ -605,7 +624,7 @@ Resources:
                   - !Ref PlatformEncryptionKeySecret
                   - !Ref CameraCredentialKeySecret
                   - !Ref CronSecret
-                  - !Ref SeedPasswordSecret
+                  - !If [IsStaging, !Ref SeedPasswordSecret, !Ref AWS::NoValue]
                   - !Ref AdminPasswordSecret
                   - !Ref PlatformAdminPasswordSecret
                   - !If [MigrationSeeds, !Ref DemoAccessCodeSecret, !Ref AWS::NoValue]
@@ -1119,4 +1138,5 @@ Outputs:
   PlatformAdminPasswordSecretName:
     Value: !Sub devfathom/${EnvironmentName}/platform-admin-password
   SeedPasswordSecretName:
+    Condition: IsStaging
     Value: !Sub devfathom/${EnvironmentName}/seed-password

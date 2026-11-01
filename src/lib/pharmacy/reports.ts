@@ -82,6 +82,15 @@ export const PHARMACY_METRIC_CONTRACT: readonly PharmacyMetricContract[] = [
     'reports:operational',
   ],
   [
+    'lostDemandEvents',
+    'Recorded lost-demand events',
+    'Unfulfilled-demand events captured at the counter in the selected period. This is recorded demand only; missing capture is unknown, not zero, and no revenue value is estimated.',
+    'pharmacy_unfulfilled_demand_events',
+    'selected branches and event creation dates',
+    '/pharmacy/reports?section=demand',
+    'reports:operational',
+  ],
+  [
     'recommendedOrders',
     'Recommended orders',
     'Open stock signals with a linked requisition action.',
@@ -304,6 +313,7 @@ async function readKhataAgingMinor(db: ScopedDb, branchIds: readonly string[]): 
 
 export async function readPharmacyOwnerCommandCentre(db: ScopedDb, filters: PharmacyReportFilters) {
   const parsed = validatePharmacyReportFilters(filters);
+  const at = new Date();
   const branches = Prisma.join(filters.branchIds);
   // Same signed journal query as Finance: no rounded sale-unit cost arithmetic.
   const marginQuery = grossMarginQuery(
@@ -313,13 +323,16 @@ export async function readPharmacyOwnerCommandCentre(db: ScopedDb, filters: Phar
     },
     { from: parsed.from, to: parsed.to, by: 'branch' }
   );
-  const [money, stock, expiry, recalls, claims, receiving, coverage, safety, fiscal] =
+  const [money, stock, lostDemand, expiry, recalls, claims, receiving, coverage, safety, fiscal] =
     await Promise.all([
       db.$queryRaw<MoneyCounts[]>(
-        Prisma.sql`SELECT COALESCE((SELECT SUM(l."quantity" * l."unitPriceMinor" - l."discountMinor") FROM "pharmacy_sale_lines" l JOIN "pharmacy_sales" s ON s."organizationId"=l."organizationId" AND s."branchId"=l."branchId" AND s."id"=l."saleId" WHERE l."branchId" IN (${branches}) AND s."status"='COMPLETED' AND s."businessDate">=${parsed.from} AND s."businessDate"<${parsed.to}),0)::int AS "salesMinor", (SELECT SUM("grossMarginMinor")::int FROM (${marginQuery}) journal_margin) AS "marginMinor", COALESCE((SELECT SUM(t."amountMinor") FROM "pharmacy_tenders" t WHERE t."branchId" IN (${branches}) AND t."type"='CASH' AND t."businessDate">=${parsed.from} AND t."businessDate"<${parsed.to}),0)::int AS "cashMinor", COALESCE((SELECT SUM(r."amountMinor") FROM "pharmacy_refunds" r WHERE r."branchId" IN (${branches}) AND r."businessDate">=${parsed.from} AND r."businessDate"<${parsed.to}),0)::int AS "refundsMinor", COALESCE((SELECT SUM(c."cashVarianceMinor") FROM "pharmacy_daily_closes" c WHERE c."branchId" IN (${branches}) AND c."businessDate">=${parsed.from} AND c."businessDate"<${parsed.to} AND c."isFinal"=true AND NOT EXISTS (SELECT 1 FROM "pharmacy_daily_closes" newer WHERE newer."organizationId"=c."organizationId" AND newer."branchId"=c."branchId" AND newer."businessDate"=c."businessDate" AND newer."sequence">c."sequence")),0)::int AS "cashVarianceMinor"`
+        Prisma.sql`SELECT COALESCE((SELECT SUM(l."grossMinor" - l."discountMinor") FROM "pharmacy_sale_lines" l JOIN "pharmacy_sales" s ON s."organizationId"=l."organizationId" AND s."branchId"=l."branchId" AND s."id"=l."saleId" WHERE l."branchId" IN (${branches}) AND s."status"='COMPLETED' AND s."businessDate">=${parsed.from} AND s."businessDate"<${parsed.to}),0)::int AS "salesMinor", (SELECT SUM("grossMarginMinor")::int FROM (${marginQuery}) journal_margin) AS "marginMinor", COALESCE((SELECT SUM(t."amountMinor") FROM "pharmacy_tenders" t WHERE t."branchId" IN (${branches}) AND t."type"='CASH' AND t."businessDate">=${parsed.from} AND t."businessDate"<${parsed.to}),0)::int AS "cashMinor", COALESCE((SELECT SUM(r."amountMinor") FROM "pharmacy_refunds" r WHERE r."branchId" IN (${branches}) AND r."businessDate">=${parsed.from} AND r."businessDate"<${parsed.to}),0)::int AS "refundsMinor", COALESCE((SELECT SUM(c."cashVarianceMinor") FROM "pharmacy_daily_closes" c WHERE c."branchId" IN (${branches}) AND c."businessDate">=${parsed.from} AND c."businessDate"<${parsed.to} AND c."isFinal"=true AND NOT EXISTS (SELECT 1 FROM "pharmacy_daily_closes" newer WHERE newer."organizationId"=c."organizationId" AND newer."branchId"=c."branchId" AND newer."businessDate"=c."businessDate" AND newer."sequence">c."sequence")),0)::int AS "cashVarianceMinor"`
       ),
       db.$queryRaw<Array<{ open: number; recommended: number }>>(
         Prisma.sql`SELECT COUNT(*)::int AS "open", COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM "pharmacy_stock_signal_actions" a WHERE a."organizationId"=s."organizationId" AND a."branchId"=s."branchId" AND a."signalId"=s."id" AND a."kind"='DRAFT_REQUISITION' AND a."requisitionId" IS NOT NULL))::int AS "recommended" FROM "pharmacy_stock_signals" s WHERE s."branchId" IN (${branches}) AND s."status" IN ('OPEN','ACKNOWLEDGED','SNOOZED')`
+      ),
+      db.$queryRaw<Array<{ value: number }>>(
+        Prisma.sql`SELECT COUNT(*)::int AS value FROM "pharmacy_unfulfilled_demand_events" WHERE "organizationId"=current_setting('app.current_organization_id',true) AND "branchId" IN (${branches}) AND "createdAt">=${parsed.from} AND "createdAt"<${parsed.to}`
       ),
       db.$queryRaw<
         Array<{ d30: number; d60: number; d90: number; d180: number; quarantine: number }>
@@ -336,8 +349,10 @@ export async function readPharmacyOwnerCommandCentre(db: ScopedDb, filters: Phar
       db.branchRegulatoryProfile.count({
         where: {
           branchId: { in: filters.branchIds },
-          effectiveFrom: { lte: new Date() },
-          OR: [{ effectiveTo: null }, { effectiveTo: { gt: new Date() } }],
+          effectiveFrom: { lte: at },
+          OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
+          qualifiedPersonValidFrom: { lte: at },
+          qualifiedPersonValidTo: { gt: at },
         },
       }),
       db.$queryRaw<Array<{ value: number }>>(
@@ -364,12 +379,13 @@ export async function readPharmacyOwnerCommandCentre(db: ScopedDb, filters: Phar
     },
     freshness: {
       status: 'CURRENT' as const,
-      asOf: new Date().toISOString(),
+      asOf: at.toISOString(),
       source: 'transactional pharmacy ledgers',
     },
     metrics: {
       ...m,
       openStockSignals: s.open,
+      lostDemandEvents: lostDemand[0]?.value ?? 0,
       recommendedOrders: s.recommended,
       expiryValueMinor30: e.d30,
       expiryValueMinor60: e.d60,

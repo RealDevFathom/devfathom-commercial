@@ -36,6 +36,8 @@ describe('AI-04 invariant 29 operation boundary', () => {
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
       .mockResolvedValueOnce([]);
     const created = {
       id: 'signal_1',

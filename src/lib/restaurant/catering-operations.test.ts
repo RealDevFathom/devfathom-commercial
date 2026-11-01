@@ -214,6 +214,26 @@ describe('frozen quote and costing', () => {
       recipeVersionId: 'version-original',
     });
   });
+  it('rejects a legacy product-only line even when replaying a quote revision', async () => {
+    const f = fixture();
+    const line = f.order.lines[0]! as {
+      productId: string | null;
+      recipeId: string | null;
+    };
+    line.productId = 'product';
+    line.recipeId = null;
+
+    await expect(publishQuote(f.tx, 'org', 'order', 'PKR', 'staff')).rejects.toThrow(
+      'A recipe is required for every quoted line.'
+    );
+    // Publishing must lock the order before reading its lines, but reject
+    // product-only lines before reading booking state or an existing quote.
+    expect(f.db.$queryRaw).toHaveBeenCalledExactlyOnceWith(
+      Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${'order'},0))`
+    );
+    expect(mocks.cost).not.toHaveBeenCalled();
+    expect(f.db.$executeRaw).not.toHaveBeenCalled();
+  });
   it('labels absent costs missing without manufacturing zero profit inputs', () => {
     const f = fixture();
     f.quote.snapshot.missing = ['rice'];
