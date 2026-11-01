@@ -106,13 +106,12 @@ export async function POST(request: Request) {
     const purpose = String(form.get('evidencePurpose') ?? '').trim();
     const occurrenceId = String(form.get('occurrenceId') ?? '').trim();
     const occurrenceStepId = String(form.get('occurrenceStepId') ?? '').trim();
-    const uploaderStaffProfileId = String(form.get('uploaderStaffProfileId') ?? '').trim();
     const { baseType, bytes, extension } = await readEvidenceFile(file);
     if (purpose !== 'photo' && purpose !== 'signature') {
       throw new Error('Choose whether this file is photo or signature proof.');
     }
-    if (!occurrenceId || !occurrenceStepId || !uploaderStaffProfileId) {
-      throw new Error('Occurrence, checklist step, and uploader are required.');
+    if (!occurrenceId || !occurrenceStepId) {
+      throw new Error('Occurrence and checklist step are required.');
     }
 
     stage = 'context';
@@ -125,6 +124,20 @@ export async function POST(request: Request) {
       source: 'TRPC',
     });
     if (!allowed) throw new Error('You do not have permission to capture SOP proof.');
+    const uploaderProfiles = await ctx.db.restaurantStaffProfile.findMany({
+      where: {
+        organizationId,
+        userId: ctx.session.user.id,
+        status: 'ACTIVE',
+      },
+      select: { id: true },
+      orderBy: { id: 'asc' },
+      take: 2,
+    });
+    if (uploaderProfiles.length !== 1) {
+      throw new Error('Your account must be linked to exactly one active staff profile.');
+    }
+    const uploaderStaffProfileId = uploaderProfiles[0]!.id;
 
     const hash = crypto.createHash('sha256').update(bytes).digest('hex');
     storedFilename = `sop-${crypto.randomUUID()}.${extension}`;
