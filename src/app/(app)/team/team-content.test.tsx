@@ -5,7 +5,24 @@ const state = vi.hoisted(() => ({
   role: 'ADMIN',
   vertical: 'RESTAURANT' as 'RESTAURANT' | 'PHARMACY',
   modules: ['admin'] as string[],
+  activeSeats: 5,
   directory: vi.fn(() => ({ data: [], isLoading: false })),
+  overview: vi.fn(() => ({
+    data: {
+      organization: {
+        users: [
+          { id: 'u_owner', name: 'QA Owner', title: 'Owner', status: 'ACTIVE' },
+          { id: 'u_mgr', name: 'QA Manager', title: 'Procurement approver', status: 'ACTIVE' },
+          { id: 'u_cash', name: 'QA Cashier', title: 'Cashier', status: 'INVITED' },
+          { id: 'u_leave', name: 'On Leave Pharmacist', title: 'Pharmacist', status: 'ON_LEAVE' },
+          { id: 'u_rx', name: 'Second Pharmacist', title: 'Pharmacist', status: 'ACTIVE' },
+          { id: 'u_gone', name: 'Former Staff', title: 'Cashier', status: 'INACTIVE' },
+        ],
+      },
+    },
+    isLoading: false,
+    isError: false,
+  })),
   departments: {
     data: [] as Array<{ key: string; name: string; active: boolean }>,
     isFetching: false,
@@ -23,7 +40,11 @@ vi.mock('next-auth/react', () => ({
   useSession: () => ({ data: { user: { role: state.role } } }),
 }));
 vi.mock('@/components/entitlements-provider', () => ({
-  useEntitlements: () => ({ enabledModules: state.modules, vertical: state.vertical }),
+  useEntitlements: () => ({
+    enabledModules: state.modules,
+    vertical: state.vertical,
+    activeSeats: state.activeSeats,
+  }),
 }));
 vi.mock('@/lib/trpc', () => ({
   trpc: {
@@ -31,6 +52,7 @@ vi.mock('@/lib/trpc', () => ({
     organizationAdmin: {
       departments: { useQuery: () => state.departments },
       roles: { useQuery: () => state.roles },
+      overview: { useQuery: state.overview },
     },
     team: {
       getAll: { useQuery: state.directory },
@@ -42,6 +64,9 @@ import { AddMemberModal, TeamContent } from './team-content';
 
 beforeEach(() => {
   vi.clearAllMocks();
+  state.role = 'ADMIN';
+  state.modules = ['admin'];
+  state.activeSeats = 5;
   state.vertical = 'RESTAURANT';
   state.departments.data = [
     { key: 'COUNTER', name: 'Counter', active: true },
@@ -180,16 +205,97 @@ describe('vertical-aware invitation copy', () => {
 });
 
 describe('baseline workspace invitations', () => {
-  it('shows Add Member without HR and opens the invitation form without fetching HR data', () => {
+  it('shows Add Member to an administrator when the HR module is on', () => {
+    state.modules = ['admin', 'hr'];
     render(<TeamContent />);
     fireEvent.click(screen.getByRole('button', { name: 'Add Member' }));
     expect(screen.getByText('Add Team Member')).toBeVisible();
-    expect(state.directory).toHaveBeenCalledWith(undefined, { enabled: false });
+    expect(state.directory).toHaveBeenCalledWith(undefined, { enabled: true });
   });
   it('keeps invitations unavailable to employees', () => {
+    state.modules = ['admin', 'hr'];
     state.role = 'EMPLOYEE';
     render(<TeamContent />);
     expect(screen.queryByRole('button', { name: 'Add Member' })).toBeNull();
-    state.role = 'ADMIN';
+  });
+  it('keeps invitations unavailable to HR staff, who cannot invite', () => {
+    state.modules = ['admin', 'hr'];
+    state.role = 'HR';
+    render(<TeamContent />);
+    expect(screen.queryByRole('button', { name: 'Add Member' })).toBeNull();
+  });
+});
+
+describe('team page without the HR module (QA batch 3-5)', () => {
+  it('shows the occupied-seat count Organization shows, not zero', () => {
+    render(<TeamContent />);
+    expect(screen.getByText('5 team members in this workspace.')).toBeInTheDocument();
+    expect(screen.queryByText(/0 team members/)).toBeNull();
+    expect(state.directory).toHaveBeenCalledWith(undefined, { enabled: false });
+  });
+
+  it('hides Add Member, the search toolbar and the "Invite here" dead end', () => {
+    render(<TeamContent />);
+    expect(screen.queryByRole('button', { name: 'Add Member' })).toBeNull();
+    expect(screen.queryByPlaceholderText('Search by name or role...')).toBeNull();
+    expect(screen.queryByText(/invite workspace members here/i)).toBeNull();
+    expect(screen.queryByText(/requires the HR module/)).toBeNull();
+  });
+
+  it('lists the members occupying seats for the owner and links to Organization', () => {
+    state.vertical = 'PHARMACY';
+    render(<TeamContent />);
+    expect(state.overview).toHaveBeenCalledWith(undefined, { enabled: true, retry: false });
+    const list = screen.getByRole('list', { name: 'Workspace members' });
+    expect(list.querySelectorAll('li')).toHaveLength(5);
+    expect(screen.getByText('QA Manager')).toBeInTheDocument();
+    expect(screen.getByText('QA Cashier')).toBeInTheDocument();
+    expect(screen.queryByText('Former Staff')).toBeNull();
+    expect(screen.getByRole('link', { name: 'Organization' })).toHaveAttribute(
+      'href',
+      '/organization'
+    );
+    expect(screen.getByText(/ask your platform operator/)).toBeInTheDocument();
+  });
+
+  it('keeps the email invite reachable for the owner from the notice', () => {
+    state.vertical = 'PHARMACY';
+    render(<TeamContent />);
+    expect(screen.queryByRole('button', { name: 'Add Member' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Invite a colleague' }));
+    expect(screen.getByText('Add Team Member')).toBeVisible();
+  });
+
+  it('explains plainly to non-administrators without loading the member list', () => {
+    state.vertical = 'PHARMACY';
+    state.role = 'EMPLOYEE';
+    render(<TeamContent />);
+    expect(screen.getByText('Staff profiles are not part of your plan')).toBeInTheDocument();
+    expect(screen.getByText(/ask the workspace owner or an administrator/)).toBeInTheDocument();
+    expect(screen.getByText('5 team members in this workspace.')).toBeInTheDocument();
+    expect(state.overview).toHaveBeenCalledWith(undefined, { enabled: false, retry: false });
+    expect(screen.queryByRole('list', { name: 'Workspace members' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Organization' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Add Member' })).toBeNull();
+  });
+
+  it('uses a singular label for a one-person workspace', () => {
+    state.activeSeats = 1;
+    render(<TeamContent />);
+    expect(screen.getByText('1 team member in this workspace.')).toBeInTheDocument();
+  });
+});
+
+describe('team page eyebrow', () => {
+  it('reads Pharmacy for a pharmacy organization instead of FIRM', () => {
+    state.vertical = 'PHARMACY';
+    render(<TeamContent />);
+    expect(screen.getByText('Pharmacy')).toBeInTheDocument();
+    expect(screen.queryByText('FIRM')).toBeNull();
+  });
+
+  it('keeps FIRM for other verticals', () => {
+    render(<TeamContent />);
+    expect(screen.getByText('FIRM')).toBeInTheDocument();
   });
 });

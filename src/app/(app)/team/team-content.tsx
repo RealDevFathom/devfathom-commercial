@@ -19,6 +19,8 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { PageHeader } from '@/components/ui/page-header';
 import { Skeleton } from '@/components/ui/skeleton';
+import { SectionCard } from '@/components/ui/section-card';
+import { StatusPill } from '@/components/ui/status-pill';
 import { useEntitlements } from '@/components/entitlements-provider';
 import { isModuleGranted, moduleForProcedure } from '@/lib/module-catalog';
 import { inviteCopyForVertical } from '@/lib/team/invite-copy';
@@ -46,13 +48,27 @@ const statusDot: Record<string, string> = {
   INVITED: 'bg-sky-500',
 };
 
+/** Statuses that occupy a licensed seat (mirrors the Organization seat count). */
+const SEAT_STATUSES: ReadonlySet<string> = new Set(['ACTIVE', 'ON_LEAVE', 'INVITED']);
+
+function memberCountLabel(count: number): string {
+  return `${count} team ${count === 1 ? 'member' : 'members'}`;
+}
+
 export function TeamContent() {
   const { data: session } = useSession();
   const entitlements = useEntitlements();
   const canReadDirectory = isModuleGranted('hr', entitlements.enabledModules);
-  const isAdmin =
+  // Managing workspace members is baseline administration: only administrators
+  // with the Administration module may open the people list or invite.
+  const canManageMembers =
     session?.user?.role === 'ADMIN' &&
     isModuleGranted(moduleForProcedure('team.inviteMember')!, entitlements.enabledModules);
+  // The header Add Member action sits beside the staff directory, which needs
+  // the HR module. Without HR the same invite is offered inside the notice that
+  // explains why no profiles are listed.
+  const isAdmin = canManageMembers && canReadDirectory;
+  const eyebrow = entitlements.vertical === 'PHARMACY' ? 'Pharmacy' : 'FIRM';
   const [search, setSearch] = useState('');
   const [deptFilter, setDeptFilter] = useState('ALL');
   const [showAddMember, setShowAddMember] = useState(false);
@@ -82,9 +98,13 @@ export function TeamContent() {
   return (
     <div className="space-y-6">
       <PageHeader
-        eyebrow="FIRM"
+        eyebrow={eyebrow}
         heading="Team"
-        description={`${team?.length ?? 0} team members across ${departments.length} departments.`}
+        description={
+          canReadDirectory
+            ? `${memberCountLabel(team?.length ?? 0)} across ${departments.length} departments.`
+            : `${memberCountLabel(entitlements.activeSeats)} in this workspace.`
+        }
         actions={
           isAdmin ? (
             <Button size="lg" onClick={() => setShowAddMember(true)}>
@@ -95,51 +115,54 @@ export function TeamContent() {
       />
 
       {/* Toolbar */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
-        <div className="relative flex-1 w-full sm:max-w-xs">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <input
-            type="text"
-            placeholder="Search by name or role..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="flex h-10 w-full rounded-xl border border-border bg-card pl-9 pr-4 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-          />
-        </div>
-        <div className="flex items-center gap-1.5 flex-wrap">
-          <button
-            onClick={() => setDeptFilter('ALL')}
-            className={cn(
-              'rounded-lg px-3 py-1.5 text-xs font-medium transition-colors',
-              deptFilter === 'ALL'
-                ? 'bg-foreground text-background'
-                : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
-            )}
-          >
-            All
-          </button>
-          {departments.map((d) => (
+      {canReadDirectory ? (
+        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
+          <div className="relative flex-1 w-full sm:max-w-xs">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <input
+              type="text"
+              placeholder="Search by name or role..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="flex h-10 w-full rounded-xl border border-border bg-card pl-9 pr-4 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+            />
+          </div>
+          <div className="flex items-center gap-1.5 flex-wrap">
             <button
-              key={d}
-              onClick={() => setDeptFilter(d)}
+              onClick={() => setDeptFilter('ALL')}
               className={cn(
                 'rounded-lg px-3 py-1.5 text-xs font-medium transition-colors',
-                deptFilter === d
+                deptFilter === 'ALL'
                   ? 'bg-foreground text-background'
                   : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
               )}
             >
-              {d.charAt(0) + d.slice(1).toLowerCase()}
+              All
             </button>
-          ))}
+            {departments.map((d) => (
+              <button
+                key={d}
+                onClick={() => setDeptFilter(d)}
+                className={cn(
+                  'rounded-lg px-3 py-1.5 text-xs font-medium transition-colors',
+                  deptFilter === d
+                    ? 'bg-foreground text-background'
+                    : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
+                )}
+              >
+                {d.charAt(0) + d.slice(1).toLowerCase()}
+              </button>
+            ))}
+          </div>
         </div>
-      </div>
+      ) : null}
 
       {/* Team grid */}
       {!canReadDirectory ? (
-        <p className="text-sm text-text-muted">
-          Invite workspace members here. The team directory requires the HR module.
-        </p>
+        <StaffProfilesOffNotice
+          canManageMembers={canManageMembers}
+          onInvite={() => setShowAddMember(true)}
+        />
       ) : isLoading ? (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {Array.from({ length: 8 }).map((_, i) => (
@@ -174,6 +197,99 @@ export function TeamContent() {
       {showAddMember && <AddMemberModal onClose={() => setShowAddMember(false)} />}
     </div>
   );
+}
+
+/**
+ * Shown when the workspace's plan does not include staff profiles (the HR
+ * module). Explains it in plain words and points to the next step instead of
+ * an empty directory. Administrators also see who occupies the workspace's
+ * seats, read from the Organization people list they already manage.
+ */
+function StaffProfilesOffNotice({
+  canManageMembers,
+  onInvite,
+}: {
+  canManageMembers: boolean;
+  onInvite: () => void;
+}) {
+  const people = trpc.organizationAdmin.overview.useQuery(undefined, {
+    enabled: canManageMembers,
+    retry: false,
+  });
+  const members = (people.data?.organization.users ?? []).filter((user) =>
+    SEAT_STATUSES.has(user.status)
+  );
+
+  return (
+    <SectionCard
+      title="Staff profiles are not part of your plan"
+      actions={
+        canManageMembers ? (
+          <Button size="lg" onClick={onInvite}>
+            <Plus className="h-4 w-4" /> Invite a colleague
+          </Button>
+        ) : undefined
+      }
+    >
+      <div className="space-y-3 text-sm text-text-muted">
+        <p>
+          Staff profiles add departments, skills, contact details and time off for each person.
+          Your plan does not include them yet, so this page shows how many people are in the
+          workspace but not their profiles.
+        </p>
+        {canManageMembers ? (
+          <p>
+            Use Invite a colleague to send someone a sign-in link. To change a person&apos;s
+            access, open{' '}
+            <Link
+              href="/organization"
+              className="font-medium text-primary underline-offset-4 hover:underline"
+            >
+              Organization
+            </Link>{' '}
+            and use People and access. To turn on staff profiles, ask your platform operator to
+            add the HR module to your plan.
+          </p>
+        ) : (
+          <p>
+            If you need someone added or a profile changed, ask the workspace owner or an
+            administrator.
+          </p>
+        )}
+      </div>
+      {canManageMembers ? (
+        people.isLoading ? (
+          <div className="mt-4 space-y-2" aria-label="Loading members">
+            <Skeleton className="h-10 w-full" />
+            <Skeleton className="h-10 w-full" />
+          </div>
+        ) : people.isError ? (
+          <p className="mt-4 text-sm text-text-muted" role="alert">
+            The member list could not be loaded. It is still available on the Organization page.
+          </p>
+        ) : members.length ? (
+          <ul
+            className="mt-4 divide-y divide-border/60 border-t border-border/60"
+            aria-label="Workspace members"
+          >
+            {members.map((user) => (
+              <li key={user.id} className="flex items-center justify-between gap-4 py-3">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold text-foreground">{user.name}</p>
+                  <p className="truncate text-xs text-muted-foreground">{user.title}</p>
+                </div>
+                <StatusPill status={user.status} label={statusLabel(user.status)} />
+              </li>
+            ))}
+          </ul>
+        ) : null
+      ) : null}
+    </SectionCard>
+  );
+}
+
+function statusLabel(status: string): string {
+  return status === 'ON_LEAVE' ? 'On leave' : status.charAt(0) + status.slice(1).toLowerCase();
 }
 
 const TeamMemberCard = memo(function TeamMemberCard({ member }: { member: TeamMember }) {

@@ -553,7 +553,13 @@ export async function freshPharmacyFirstSale(
 
     await follow(page, 'Opening stock readiness', 'Receive opening stock');
     await click(page.getByRole('link', { name: 'Invite a colleague', exact: true }));
-    await click(page.getByRole('button', { name: 'Add Member', exact: true }));
+    // With the HR module the invite is the header Add Member action; without it
+    // the Team page offers the same invite inside its staff-profiles notice.
+    await click(
+      page
+        .getByRole('button', { name: 'Add Member', exact: true })
+        .or(page.getByRole('button', { name: 'Invite a colleague', exact: true }))
+    );
     await page.getByPlaceholder('Ali Raza', { exact: true }).fill('Test second approver');
     await page.getByPlaceholder('ali@pharmacy.pk', { exact: true }).fill(colleagueEmail);
     await page.getByPlaceholder('Pharmacist', { exact: true }).fill('Purchasing reviewer');
