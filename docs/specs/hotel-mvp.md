@@ -8,8 +8,8 @@ status, folios and charges, payment settlement, night audit, and one determinist
 banquets, loyalty, housekeeping task assignment, maintenance work orders, accounting/GL export,
 multi-currency, fiscal-device integration, and multi-property central reservations
 
-> **Implemented so far (migrations `20261101000000_hotel_mvp_reservations_folio` and
-> `20261101000100_hotel_mvp_review_fixes`).** Guests;
+> **Implemented so far (migrations `20261101170800_hotel_mvp_reservations_folio` and
+> `20261101170801_hotel_mvp_review_fixes`).** Guests;
 > rate plans with immutable terms, the property's currency and at most 100% tax, and
 > effective-dated, immutable `BigInt` prices (the only pricing model — quotes and bookings both
 > use it; a booked price is marked used); locked, idempotent reservation create with

@@ -10,11 +10,11 @@ import { describe, expect, it } from 'vitest';
  */
 const root = process.cwd();
 const sql = readFileSync(
-  join(root, 'prisma/migrations/20261101000000_hotel_mvp_reservations_folio/migration.sql'),
+  join(root, 'prisma/migrations/20261101170800_hotel_mvp_reservations_folio/migration.sql'),
   'utf8'
 );
 const fixes = readFileSync(
-  join(root, 'prisma/migrations/20261101000100_hotel_mvp_review_fixes/migration.sql'),
+  join(root, 'prisma/migrations/20261101170801_hotel_mvp_review_fixes/migration.sql'),
   'utf8'
 );
 const schema = readFileSync(join(root, 'prisma/schema.prisma'), 'utf8');

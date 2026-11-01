@@ -15469,7 +15469,7 @@ model OutboundEffect {
 
 // ============================================
 // HOSPITALITY — Hotel MVP reservations, folio and housekeeping
-// (migration 20261101000000_hotel_mvp_reservations_folio)
+// (migration 20261101170800_hotel_mvp_reservations_folio)
 // ============================================
 //
 // Every table below is RLS-forced on the organization (the standard hotel
