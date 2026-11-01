@@ -241,6 +241,7 @@ describe('tenancy and licensing (UX rule 7)', () => {
     ['overview', () => OverviewPage({ searchParams: params() })],
     ['suppliers', () => SuppliersPage({ searchParams: params() })],
     ['orders', () => OrdersPage({ searchParams: params() })],
+    ['returns', () => ReturnsPage({ searchParams: params() })],
   ] as const)(
     'closes %s to a cashier who lacks the procurement capability (#979)',
     async (_surface, page) => {

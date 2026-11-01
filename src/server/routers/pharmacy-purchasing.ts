@@ -378,6 +378,12 @@ async function supplierFollowUpScope(ctx: TRPCContext, branch: string) {
  * cannot create or authorize suppliers or raise and approve orders (#979).
  */
 const procurementProcedure = capabilityProcedure('pharmacy:procurement');
+// The same capability also closes the PUR-04 exception queue, the PUR-06
+// returns/debit-note/credit writes, and the supplier, licence, PO-price and
+// receiving reads the purchasing surfaces render, so a counter-only role cannot
+// reach them through the API either. Financial follow-up reads
+// (`purchaseReturns`, `supplierCredits`) keep their `reports:financial` gate;
+// `controlledWitnesses` and `authenticatePack` stay safety-scoped.
 
 const purchasingRouter = router({
   // ----- PUR-01 licensed suppliers -----
@@ -587,7 +593,7 @@ const purchasingRouter = router({
    * PUR-02: a ranked and explained comparison for one requisition line. It never
    * awards — the caller gets a list with reasons and decides.
    */
-  compareQuotes: auditedProtectedProcedure
+  compareQuotes: procurementProcedure
     .input(z.object({ requisitionLineId: z.string().min(1), at: z.date().optional() }).strict())
     .query(async ({ ctx, input }) => {
       try {
@@ -896,7 +902,7 @@ const purchasingRouter = router({
     }),
 
   /** PUR-03: the stored order, costed. Bonus packs only ever divide the money over more units. */
-  landedCost: auditedProtectedProcedure
+  landedCost: procurementProcedure
     .input(z.object({ purchaseOrderId: z.string().min(1) }).strict())
     .query(async ({ ctx, input }) => {
       try {
@@ -1329,7 +1335,7 @@ const purchasingRouter = router({
     }),
 
   /** PUR-04: the queue that stays visible until somebody resolves it. */
-  receivingExceptions: auditedProtectedProcedure
+  receivingExceptions: procurementProcedure
     .input(
       z
         .object({
@@ -1349,7 +1355,7 @@ const purchasingRouter = router({
     }),
 
   /** PUR-04: close one, with the actor from the session and a mandatory note. */
-  resolveReceivingException: protectedProcedure
+  resolveReceivingException: procurementProcedure
     .input(
       z
         .object({
@@ -1377,7 +1383,7 @@ const purchasingRouter = router({
    * Open a DRAFT return or expiry claim. Reserves nothing: the INV-09 hold is
    * taken at submission, so a draft never removes stock from sale.
    */
-  createPurchaseReturn: protectedProcedure
+  createPurchaseReturn: procurementProcedure
     .input(
       z
         .object({
@@ -1421,7 +1427,7 @@ const purchasingRouter = router({
     }),
 
   /** Take the INV-09 reservation. From here the quantity cannot be sold. */
-  submitPurchaseReturn: auditedProtectedProcedure
+  submitPurchaseReturn: procurementProcedure
     .input(z.object({ branchId, purchaseReturnId: z.string().min(1) }).strict())
     .mutation(async ({ ctx, input }) => {
       const scope = receivingScope(ctx, input.branchId);
@@ -1438,7 +1444,7 @@ const purchasingRouter = router({
     }),
 
   /** Post the RETURN_TO_SUPPLIER movements and release the reservation. */
-  dispatchPurchaseReturn: auditedProtectedProcedure
+  dispatchPurchaseReturn: procurementProcedure
     .input(
       z
         .object({
@@ -1463,7 +1469,7 @@ const purchasingRouter = router({
       }
     }),
 
-  issueDebitNote: auditedProtectedProcedure
+  issueDebitNote: procurementProcedure
     .input(
       z
         .object({
@@ -1486,7 +1492,7 @@ const purchasingRouter = router({
       }
     }),
 
-  recordSupplierCredit: auditedProtectedProcedure
+  recordSupplierCredit: procurementProcedure
     .input(
       z
         .object({
@@ -1512,7 +1518,7 @@ const purchasingRouter = router({
       }
     }),
 
-  allocateSupplierCredit: auditedProtectedProcedure
+  allocateSupplierCredit: procurementProcedure
     .input(
       z
         .object({
@@ -1540,7 +1546,7 @@ const purchasingRouter = router({
     }),
 
   /** PUR-06 acceptance: expected and received credit, side by side. */
-  debitNotePositions: protectedProcedure
+  debitNotePositions: procurementProcedure
     .input(z.object({ branchId, supplierId: z.string().min(1).optional() }).strict())
     .query(({ ctx, input }) => {
       const scope = receivingScope(ctx, input.branchId);
@@ -1566,7 +1572,7 @@ const purchasingRouter = router({
    * with their PUR-01 eligibility, and the users who may approve a PUR-05
    * bypass. UX rules 1 and 16: resolved server-side, this organization only.
    */
-  workspace: protectedProcedure.query(({ ctx }) =>
+  workspace: procurementProcedure.query(({ ctx }) =>
     purchasingWorkspace(ctx.db, {
       organizationId: tenantScope(ctx).organizationId,
       actorId: ctx.session.user.id,
@@ -1574,7 +1580,7 @@ const purchasingRouter = router({
   ),
 
   /** PUR-01 — suppliers with licence evidence and the current trade decision. */
-  suppliers: protectedProcedure
+  suppliers: procurementProcedure
     .input(
       z
         .object({ includeInactive: z.boolean().default(false) })
@@ -1586,10 +1592,10 @@ const purchasingRouter = router({
     ),
 
   /** PUR-02 — requisitions with their lines, quotes and resulting orders. */
-  requisitions: protectedProcedure.query(({ ctx }) => listRequisitions(ctx.db, tenantScope(ctx))),
+  requisitions: procurementProcedure.query(({ ctx }) => listRequisitions(ctx.db, tenantScope(ctx))),
 
   /** PUR-02/PUR-03 — orders with lines, approval history and posted receipts. */
-  purchaseOrders: protectedProcedure.query(({ ctx }) =>
+  purchaseOrders: procurementProcedure.query(({ ctx }) =>
     listPurchaseOrders(ctx.db, tenantScope(ctx))
   ),
 
@@ -1598,7 +1604,7 @@ const purchasingRouter = router({
    * POSTED receipts only. The receiving bench pre-fills the outstanding balance
    * from this, so it never asks the operator to work out what is still owed.
    */
-  receivedAgainstOrder: protectedProcedure
+  receivedAgainstOrder: procurementProcedure
     .input(z.object({ purchaseOrderId: z.string().min(1) }).strict())
     .query(async ({ ctx, input }) =>
       Object.fromEntries(
@@ -1607,12 +1613,12 @@ const purchasingRouter = router({
     ),
 
   /** PUR-02 receiving / PUR-05 — the receipts filed at one branch. */
-  goodsReceipts: protectedProcedure
+  goodsReceipts: procurementProcedure
     .input(z.object({ branchId }).strict())
     .query(({ ctx, input }) => listGoodsReceipts(ctx.db, receivingScope(ctx, input.branchId))),
 
   /** PUR-04 — the review queue, joined to the medicine and receipt it concerns. */
-  receivingExceptionQueue: protectedProcedure
+  receivingExceptionQueue: procurementProcedure
     .input(z.object({ branchId, status: z.enum(['OPEN', 'RESOLVED']).default('OPEN') }).strict())
     .query(({ ctx, input }) =>
       listReceivingExceptionQueue(ctx.db, receivingScope(ctx, input.branchId), {
@@ -1624,7 +1630,7 @@ const purchasingRouter = router({
    * PUR-02 acceptance — the stock a posted receipt produced, read back from the
    * PH-INV ledger rather than from the receipt document.
    */
-  lotsFromReceipt: protectedProcedure
+  lotsFromReceipt: procurementProcedure
     .input(z.object({ branchId, goodsReceiptId: z.string().min(1) }).strict())
     .query(({ ctx, input }) =>
       lotsFromReceipt(ctx.db, receivingScope(ctx, input.branchId), input.goodsReceiptId)
@@ -1638,7 +1644,7 @@ const purchasingRouter = router({
     ),
 
   /** PUR-06 — the available lots a return may be raised against. */
-  returnableLots: protectedProcedure
+  returnableLots: procurementProcedure
     .input(z.object({ branchId }).strict())
     .query(({ ctx, input }) => listReturnableLots(ctx.db, receivingScope(ctx, input.branchId))),
 
@@ -1646,7 +1652,7 @@ const purchasingRouter = router({
    * PUR-02 receiving — resolve a scanned barcode, or a typed fragment of a
    * product name, to the medicine the carton in the operator's hand contains.
    */
-  resolveScan: protectedProcedure
+  resolveScan: procurementProcedure
     .input(z.object({ term: z.string().trim().min(1).max(512) }).strict())
     .query(({ ctx, input }) => resolveScan(ctx.db, tenantScope(ctx), input.term)),
 

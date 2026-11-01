@@ -1550,3 +1550,122 @@ describe('#979 supplier, requisition and order writes need the procurement capab
     expect(db.pharmacySupplier.create).toHaveBeenCalledOnce();
   });
 });
+
+describe('#979 returns, credits, exceptions and purchasing reads need the procurement capability', () => {
+  const gated = [
+    [
+      'createPurchaseReturn',
+      () =>
+        caller().createPurchaseReturn({
+          branchId: 'branch_a',
+          supplierId: 'supplier_a',
+          kind: 'PURCHASE_RETURN',
+          reference: 'RET-1',
+          lines: [
+            {
+              inventoryLotId: 'lot_a',
+              stockLocationId: 'loc_a',
+              quantityUnits: 1,
+              reason: 'Damaged',
+              returnWindowEndsAt: FUTURE,
+              expectedCreditMinor: 100,
+            },
+          ],
+        }),
+    ],
+    [
+      'submitPurchaseReturn',
+      () => caller().submitPurchaseReturn({ branchId: 'branch_a', purchaseReturnId: 'ret_a' }),
+    ],
+    [
+      'dispatchPurchaseReturn',
+      () =>
+        caller().dispatchPurchaseReturn({
+          branchId: 'branch_a',
+          purchaseReturnId: 'ret_a',
+          idempotencyKey: 'dispatch-1',
+        }),
+    ],
+    [
+      'issueDebitNote',
+      () =>
+        caller().issueDebitNote({
+          branchId: 'branch_a',
+          purchaseReturnId: 'ret_a',
+          reference: 'DN-1',
+        }),
+    ],
+    [
+      'recordSupplierCredit',
+      () =>
+        caller().recordSupplierCredit({
+          branchId: 'branch_a',
+          supplierId: 'supplier_a',
+          reference: 'CR-1',
+          amountMinor: 100,
+          receivedAt: PAST,
+        }),
+    ],
+    [
+      'allocateSupplierCredit',
+      () =>
+        caller().allocateSupplierCredit({
+          branchId: 'branch_a',
+          supplierCreditId: 'credit_a',
+          debitNoteId: 'dn_a',
+          amountMinor: 100,
+        }),
+    ],
+    [
+      'resolveReceivingException',
+      () =>
+        caller().resolveReceivingException({
+          branchId: 'branch_a',
+          receivingExceptionId: 'exc_a',
+          resolutionNote: 'Checked',
+        }),
+    ],
+    ['receivingExceptions', () => caller().receivingExceptions({ branchId: 'branch_a' })],
+    ['debitNotePositions', () => caller().debitNotePositions({ branchId: 'branch_a' })],
+    ['workspace', () => caller().workspace()],
+    ['suppliers', () => caller().suppliers()],
+    ['requisitions', () => caller().requisitions()],
+    ['purchaseOrders', () => caller().purchaseOrders()],
+    ['goodsReceipts', () => caller().goodsReceipts({ branchId: 'branch_a' })],
+    ['returnableLots', () => caller().returnableLots({ branchId: 'branch_a' })],
+    ['resolveScan', () => caller().resolveScan({ term: 'paracetamol' })],
+  ] as const;
+
+  it.each(gated)('refuses %s to a cashier before any read or write', async (_name, call) => {
+    mocks.can.mockImplementation(
+      async (_subject: unknown, action: string) => action !== 'pharmacy:procurement'
+    );
+
+    await expect(call()).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission for this action.',
+    });
+    expect(mocks.can).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user_a' }),
+      'pharmacy:procurement',
+      undefined,
+      expect.objectContaining({ db, source: 'TRPC' })
+    );
+    for (const delegate of [
+      db.pharmacySupplier,
+      db.pharmacyRequisition,
+      db.pharmacyPurchaseOrder,
+      db.pharmacyGoodsReceipt,
+      db.pharmacyReceivingException,
+      db.pharmacyPurchaseReturn,
+      db.pharmacyDebitNote,
+      db.pharmacySupplierCredit,
+    ]) {
+      expect(delegate.findFirst).not.toHaveBeenCalled();
+      expect(delegate.findMany).not.toHaveBeenCalled();
+      expect(delegate.create).not.toHaveBeenCalled();
+      expect(delegate.update).not.toHaveBeenCalled();
+    }
+    expect(db.$transaction).not.toHaveBeenCalled();
+  });
+});

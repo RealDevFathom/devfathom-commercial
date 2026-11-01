@@ -638,7 +638,9 @@ function useVisibleNavigation() {
     isModuleGranted('pharmacy-core', entitlements.enabledModules);
   const railAccess = trpc.pharmacyAccess.navigation.useQuery(undefined, {
     enabled: pharmacyRail,
-    retry: false,
+    // A transient failure must not leave the rail without entries the member
+    // holds; only an authorization refusal is final.
+    retry: (failures, error) => failures < 2 && error.data?.code !== 'FORBIDDEN',
     staleTime: 30_000,
   });
   // A cached answer for another signed-in identity cannot expose an entry.
