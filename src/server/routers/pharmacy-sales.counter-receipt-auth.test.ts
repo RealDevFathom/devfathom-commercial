@@ -849,7 +849,73 @@ describe('counter receipt authorization', () => {
       reprint: true,
       copyNumber: 2,
     });
-    expect(f.db.$executeRaw).toHaveBeenCalledTimes(1);
+    // Browser allocation binding + thermal dispatch audit.
+    expect(f.db.$executeRaw).toHaveBeenCalledTimes(2);
+  });
+
+  it('binds each browser allocation to the requesting operator and locale', async () => {
+    const f = fixture(dispense, 'ADMIN');
+    const input = { branchId: 'branch-a', saleId: 'sale-a', locale: 'ur' as const };
+
+    await expect(f.caller().counterReceiptBrowserPrint(input)).resolves.toEqual({
+      copyNumber: 1,
+      reprint: false,
+    });
+    const binding = vi.mocked(f.db.$executeRaw).mock.calls[0]![0] as unknown as {
+      sql: string;
+      values: unknown[];
+    };
+    expect(binding.sql).toContain('"pharmacy_receipt_print_allocations"');
+    expect(binding.values).toEqual(
+      expect.arrayContaining(['org-a', 'branch-a', 'sale-a', 1, 'user-a', 'ur'])
+    );
+  });
+
+  it('records a browser dispatch only against the caller\'s own allocation', async () => {
+    const f = fixture(dispense, 'ADMIN');
+    const input = { branchId: 'branch-a', saleId: 'sale-a', locale: 'en' as const, copyNumber: 1 };
+
+    await expect(f.caller().counterReceiptBrowserPrintDispatched(input)).resolves.toEqual({
+      recorded: true,
+    });
+    const insert = vi.mocked(f.db.$executeRaw).mock.calls[0]![0] as unknown as {
+      sql: string;
+      values: unknown[];
+    };
+    expect(insert.sql).toContain('FROM "pharmacy_receipt_print_allocations"');
+    expect(insert.sql).toContain('"actorId" =');
+    expect(insert.sql).toContain('"locale" =');
+    expect(insert.values).toEqual(expect.arrayContaining(['user-a', 'en', 1]));
+  });
+
+  it('treats a repeated confirmation of a recorded allocation as idempotent success', async () => {
+    const f = fixture(dispense, 'ADMIN');
+    vi.mocked(f.db.$executeRaw).mockResolvedValueOnce(0);
+    vi.mocked(f.db.$queryRaw).mockResolvedValueOnce([{ recorded: true }] as never);
+
+    await expect(
+      f.caller().counterReceiptBrowserPrintDispatched({
+        branchId: 'branch-a',
+        saleId: 'sale-a',
+        locale: 'en',
+        copyNumber: 1,
+      })
+    ).resolves.toEqual({ recorded: true });
+  });
+
+  it('rejects confirming an allocation that belongs to another operator or locale', async () => {
+    const f = fixture(dispense, 'ADMIN');
+    vi.mocked(f.db.$executeRaw).mockResolvedValueOnce(0);
+    vi.mocked(f.db.$queryRaw).mockResolvedValueOnce([] as never);
+
+    await expect(
+      f.caller().counterReceiptBrowserPrintDispatched({
+        branchId: 'branch-a',
+        saleId: 'sale-a',
+        locale: 'en',
+        copyNumber: 1,
+      })
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
   });
 
   it('does not consume the original copy when thermal validation falls back inside a tenant transaction', async () => {

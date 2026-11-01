@@ -1963,6 +1963,15 @@ export const pharmacySalesRouter = router({
             RETURNING "copyCount"
           `);
           if (!state) throw new Error('Receipt print copy allocation failed.');
+          // Bind the copy to this operator and locale; only this allocation's
+          // owner can later confirm its dialog handoff.
+          await tx.$executeRaw(Prisma.sql`
+            INSERT INTO "pharmacy_receipt_print_allocations"
+              ("id", "organizationId", "branchId", "saleId", "copyNumber", "actorId", "locale")
+            VALUES
+              (${randomUUID()}, ${scope.organizationId}, ${scope.branchId}, ${input.saleId},
+               ${state.copyCount}, ${ctx.session.user.id}, ${input.locale})
+          `);
           return { copyNumber: state.copyCount, reprint: state.copyCount > 1 };
         });
       } catch (error) {
@@ -1976,7 +1985,12 @@ export const pharmacySalesRouter = router({
       }
     }),
 
-  /** Append the audit event only after the browser accepted the print-dialog request. */
+  /**
+   * Append the audit event only after the browser accepted the print-dialog
+   * request. The event must match an allocation made by the same operator in
+   * the same locale, and repeating a confirmation that is already recorded is
+   * an idempotent success so clients can safely retry after a lost response.
+   */
   counterReceiptBrowserPrintDispatched: auditedProtectedProcedure
     .input(
       z
@@ -1990,26 +2004,47 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+      const actorId = ctx.session.user.id;
       try {
         const inserted = await ctx.db.$executeRaw(Prisma.sql`
           INSERT INTO "pharmacy_receipt_print_dispatches"
             ("id", "organizationId", "branchId", "saleId", "copyNumber", "actorId", "locale")
-          SELECT ${randomUUID()}, ${scope.organizationId}, ${scope.branchId}, ${input.saleId},
-                 ${input.copyNumber}, ${ctx.session.user.id}, ${input.locale}
-          FROM "pharmacy_receipt_print_states"
+          SELECT ${randomUUID()}, "organizationId", "branchId", "saleId",
+                 "copyNumber", "actorId", "locale"
+          FROM "pharmacy_receipt_print_allocations"
           WHERE "organizationId" = ${scope.organizationId}
             AND "branchId" = ${scope.branchId}
             AND "saleId" = ${input.saleId}
-            AND "copyCount" >= ${input.copyNumber}
+            AND "copyNumber" = ${input.copyNumber}
+            AND "actorId" = ${actorId}
+            AND "locale" = ${input.locale}
           ON CONFLICT ("organizationId", "branchId", "saleId", "copyNumber") DO NOTHING
         `);
-        if (inserted !== 1) {
-          throw new TRPCError({
-            code: 'CONFLICT',
-            message: 'This print allocation is invalid or was already recorded.',
-          });
-        }
-        return { recorded: true as const };
+        if (inserted === 1) return { recorded: true as const };
+        // Retry of an already-recorded confirmation by the allocation's owner.
+        const [existing] = await ctx.db.$queryRaw<{ recorded: boolean }[]>(Prisma.sql`
+          SELECT TRUE AS "recorded"
+          FROM "pharmacy_receipt_print_dispatches" d
+          JOIN "pharmacy_receipt_print_allocations" a
+            ON a."organizationId" = d."organizationId"
+           AND a."branchId" = d."branchId"
+           AND a."saleId" = d."saleId"
+           AND a."copyNumber" = d."copyNumber"
+           AND a."actorId" = d."actorId"
+           AND a."locale" = d."locale"
+          WHERE d."organizationId" = ${scope.organizationId}
+            AND d."branchId" = ${scope.branchId}
+            AND d."saleId" = ${input.saleId}
+            AND d."copyNumber" = ${input.copyNumber}
+            AND d."actorId" = ${actorId}
+            AND d."locale" = ${input.locale}
+          LIMIT 1
+        `);
+        if (existing?.recorded) return { recorded: true as const };
+        throw new TRPCError({
+          code: 'CONFLICT',
+          message: 'This print allocation is invalid or belongs to another operator.',
+        });
       } catch (error) {
         fail(error);
       }

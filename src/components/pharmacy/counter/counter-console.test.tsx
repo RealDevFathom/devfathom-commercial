@@ -136,6 +136,15 @@ vi.mock('@/lib/trpc', () => {
   };
 });
 
+const browserPrint = vi.hoisted(() => ({
+  print: vi.fn(),
+  cancel: vi.fn(),
+}));
+vi.mock('@/lib/pharmacy/counter-browser-print', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/pharmacy/counter-browser-print')>()),
+  printCounterBrowserReceipt: browserPrint.print,
+  reserveCounterBrowserPrint: () => ({ cancel: browserPrint.cancel }),
+}));
 vi.mock('./counter-receipt-view', () => ({
   CounterReceiptView: (props: unknown) => {
     mocks.receiptProps(props);
@@ -1771,5 +1780,63 @@ describe('PharmacyCounterConsole module boundaries', () => {
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     expect(mocks.queryOptions).toHaveBeenCalledWith('controlledPharmacists', { enabled: true });
     expect(screen.getByTestId('controlled-authorization')).toBeTruthy();
+  });
+});
+
+describe('PharmacyCounterConsole browser print audit', () => {
+  function renderSettledReceipt() {
+    mocks.queries.counterCart!.data = cart({
+      status: 'COMPLETED',
+      receiptNumber: 42,
+      totals: { grossMinor: 25000, discountMinor: 0, netMinor: 25000, tenderedMinor: 25000 },
+    });
+    mocks.queries.counterReceipt!.data = { saleId: 'sale-a', receiptNumber: 42 };
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const props = mocks.receiptProps.mock.calls.at(-1)![0] as {
+      onPrint: () => Promise<boolean>;
+    };
+    return props.onPrint;
+  }
+
+  it('keeps a successful dialog handoff when audit recording fails and retries it idempotently', async () => {
+    browserPrint.print.mockReset();
+    browserPrint.cancel.mockReset();
+    mocks.mutations
+      .counterReceiptBrowserPrint!.mockResolvedValueOnce({ copyNumber: 1, reprint: false })
+      .mockResolvedValueOnce({ copyNumber: 2, reprint: true });
+    mocks.mutations
+      .counterReceiptBrowserPrintDispatched!.mockRejectedValueOnce(new Error('network down'))
+      .mockResolvedValue({ recorded: true });
+
+    let onPrint = renderSettledReceipt();
+    let printed: boolean | undefined;
+    await act(async () => {
+      printed = await onPrint();
+    });
+
+    // The dialog opened, so the print is reported as successful, not failed.
+    expect(printed).toBe(true);
+    expect(browserPrint.print).toHaveBeenCalledTimes(1);
+    expect(browserPrint.cancel).not.toHaveBeenCalled();
+    expect(screen.queryByText('network down')).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(mocks.mutations.counterReceiptBrowserPrintDispatched).toHaveBeenCalledTimes(1)
+    );
+
+    // The pending event is retried for the same copy rather than re-allocated.
+    onPrint = (mocks.receiptProps.mock.calls.at(-1)![0] as { onPrint: () => Promise<boolean> })
+      .onPrint;
+    await act(async () => {
+      await onPrint();
+    });
+    await waitFor(() =>
+      expect(mocks.mutations.counterReceiptBrowserPrintDispatched).toHaveBeenCalledTimes(3)
+    );
+    const recorded = mocks.mutations.counterReceiptBrowserPrintDispatched!.mock.calls.map(
+      ([input]) => (input as { copyNumber: number }).copyNumber
+    );
+    expect(recorded.filter((copy) => copy === 1)).toHaveLength(2);
+    expect(recorded.filter((copy) => copy === 2)).toHaveLength(1);
+    expect(mocks.mutations.counterReceiptBrowserPrint).toHaveBeenCalledTimes(2);
   });
 });

@@ -425,6 +425,76 @@ describeIfDatabase('counter receipt authorization against Postgres', () => {
     expect(dispatches.map(({ copyNumber }) => copyNumber)).toEqual([1, 2]);
   });
 
+  it('binds browser dispatch confirmation to the allocating operator and locale', async () => {
+    const admin = { id: ids.admin, role: 'ADMIN' as const, organizationId: ids.orgA };
+    const allocation = await act(ids.orgA, dispenser, (api) =>
+      api.counterReceiptBrowserPrint({
+        branchId: ids.branchA,
+        saleId: ids.browserSale,
+        locale: 'en',
+      })
+    );
+    const confirm = (
+      user: typeof dispenser | typeof admin,
+      locale: 'en' | 'ur' = 'en'
+    ) =>
+      act(ids.orgA, user, (api) =>
+        api.counterReceiptBrowserPrintDispatched({
+          branchId: ids.branchA,
+          saleId: ids.browserSale,
+          locale,
+          copyNumber: allocation.copyNumber,
+        })
+      );
+
+    // Another authorized operator cannot claim this allocation first.
+    await expect(confirm(admin)).rejects.toMatchObject({ code: 'CONFLICT' });
+    // The owner cannot rewrite the locale of their own allocation.
+    await expect(confirm(dispenser, 'ur')).rejects.toMatchObject({ code: 'CONFLICT' });
+    await expect(confirm(dispenser)).resolves.toEqual({ recorded: true });
+    // A retry after a lost response is an idempotent success, not a second event.
+    await expect(confirm(dispenser)).resolves.toEqual({ recorded: true });
+    // Once recorded, another operator still cannot claim it.
+    await expect(confirm(admin)).rejects.toMatchObject({ code: 'CONFLICT' });
+
+    const [allocations, dispatches] = await withTenantDb(ids.orgA, (tx) =>
+      Promise.all([
+        tx.pharmacyReceiptPrintAllocation.findMany({
+          where: {
+            branchId: ids.branchA,
+            saleId: ids.browserSale,
+            copyNumber: allocation.copyNumber,
+          },
+        }),
+        tx.pharmacyReceiptPrintDispatch.findMany({
+          where: {
+            branchId: ids.branchA,
+            saleId: ids.browserSale,
+            copyNumber: allocation.copyNumber,
+          },
+        }),
+      ])
+    );
+    expect(allocations).toEqual([
+      expect.objectContaining({ actorId: ids.dispenser, locale: 'en' }),
+    ]);
+    expect(dispatches).toEqual([
+      expect.objectContaining({ actorId: ids.dispenser, locale: 'en' }),
+    ]);
+
+    await expect(
+      withTenantDb(ids.orgA, (tx) =>
+        tx.$executeRawUnsafe(
+          'UPDATE "pharmacy_receipt_print_allocations" SET "actorId" = $4 WHERE "organizationId" = $1 AND "branchId" = $2 AND "saleId" = $3',
+          ids.orgA,
+          ids.branchA,
+          ids.browserSale,
+          ids.admin
+        )
+      )
+    ).rejects.toThrow(/append-only/);
+  });
+
   it('rejects update and delete of append-only dispatch audit rows', async () => {
     await expect(
       withTenantDb(ids.orgA, (tx) =>

@@ -267,6 +267,24 @@ export function PharmacyCounterConsole(props: ConsoleProps = {}) {
   );
 }
 
+type CounterBrowserPrintAudit = {
+  branchId: string;
+  saleId: string;
+  locale: CounterReceiptLocale;
+  copyNumber: number;
+};
+
+const PRINT_AUDIT_RETRY_MS = 2_000;
+const PRINT_AUDIT_MAX_RETRIES = 5;
+
+/** Transport/server faults are retried; authorization or binding rejections are final. */
+function isRetryablePrintAuditError(error: unknown): boolean {
+  const code = (error as { data?: { code?: string } } | null)?.data?.code;
+  return !['CONFLICT', 'FORBIDDEN', 'UNAUTHORIZED', 'BAD_REQUEST', 'NOT_FOUND'].includes(
+    code ?? ''
+  );
+}
+
 /**
  * PH-POS counter — POS-01, POS-02, POS-08 and POS-09 in one keyboard-first
  * surface.
@@ -1515,6 +1533,47 @@ function ScopedPharmacyCounterConsole({
     substitutesQuery.data,
   ]);
 
+  // Dispatch audit events whose print dialog already opened but whose server
+  // record has not been confirmed. The server treats a repeated confirmation of
+  // the same allocation as success, so retries are safe and never allocate a copy.
+  const pendingPrintAudits = useRef<CounterBrowserPrintAudit[]>([]);
+  const printAuditRetry = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flushPrintAudits = useCallback(
+    async (attempt = 0): Promise<void> => {
+      if (printAuditRetry.current) {
+        clearTimeout(printAuditRetry.current);
+        printAuditRetry.current = null;
+      }
+      const queued = [...pendingPrintAudits.current];
+      for (const event of queued) {
+        try {
+          await recordBrowserPrint.mutateAsync(event);
+          pendingPrintAudits.current = pendingPrintAudits.current.filter((item) => item !== event);
+        } catch (error) {
+          // A definitive rejection (not this caller's allocation) cannot succeed later.
+          if (!isRetryablePrintAuditError(error)) {
+            pendingPrintAudits.current = pendingPrintAudits.current.filter(
+              (item) => item !== event
+            );
+          }
+        }
+      }
+      if (pendingPrintAudits.current.length > 0 && attempt < PRINT_AUDIT_MAX_RETRIES) {
+        printAuditRetry.current = setTimeout(
+          () => void flushPrintAudits(attempt + 1),
+          PRINT_AUDIT_RETRY_MS * 2 ** attempt
+        );
+      }
+    },
+    [recordBrowserPrint]
+  );
+  useEffect(
+    () => () => {
+      if (printAuditRetry.current) clearTimeout(printAuditRetry.current);
+    },
+    []
+  );
+
   const printReceipt = useCallback(
     async (existingReservation?: CounterBrowserPrintReservation) => {
       const reservation = existingReservation ?? reserveCounterBrowserPrint();
@@ -1535,8 +1594,9 @@ function ScopedPharmacyCounterConsole({
         discardReceiptIntent();
         setReceiptSettlement(null);
       }
+      let allocation: { copyNumber: number; reprint: boolean };
       try {
-        const allocation = await allocateBrowserPrint.mutateAsync({
+        allocation = await allocateBrowserPrint.mutateAsync({
           branchId,
           saleId: receipt.saleId,
           locale: receiptLocale,
@@ -1548,24 +1608,27 @@ function ScopedPharmacyCounterConsole({
           allocation.reprint,
           reservation
         );
-        await recordBrowserPrint.mutateAsync({
-          branchId,
-          saleId: receipt.saleId,
-          locale: receiptLocale,
-          copyNumber: allocation.copyNumber,
-        });
-        setReceiptReprint(allocation.reprint);
-        setNotice({
-          tone: 'success',
-          message:
-            'Browser print dialog requested. Select the matching paper size and OS printer. Physical printing is not confirmed.',
-        });
-        return true;
       } catch (error) {
         reservation.cancel();
         setNotice({ tone: 'danger', message: messageFrom(error) });
         return false;
       }
+      // The dialog handoff succeeded. Audit recording is retried in the
+      // background and never turns a successful handoff into a print failure.
+      setReceiptReprint(allocation.reprint);
+      setNotice({
+        tone: 'success',
+        message:
+          'Browser print dialog requested. Select the matching paper size and OS printer. Physical printing is not confirmed.',
+      });
+      pendingPrintAudits.current.push({
+        branchId,
+        saleId: receipt.saleId,
+        locale: receiptLocale,
+        copyNumber: allocation.copyNumber,
+      });
+      void flushPrintAudits();
+      return true;
     },
     [
       billState,
@@ -1577,7 +1640,7 @@ function ScopedPharmacyCounterConsole({
       receiptQuery.isError,
       receiptQuery.isFetching,
       allocateBrowserPrint,
-      recordBrowserPrint,
+      flushPrintAudits,
       branchId,
       saleId,
     ]
