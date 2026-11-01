@@ -237,7 +237,7 @@ test('bill 1 — barcode scan, strip unit, cash tender and a bilingual receipt',
   await expect(urduReceipt).toContainText('بیچ');
   await expect(urduReceipt).toContainText(otc.batchNumber);
   await expect(urduReceipt).toContainText('۳۰/۰۶/۲۰۲۸');
-  await expect(urduReceipt).toContainText('۲ پتّا');
+  await expect(urduReceipt).toContainText('پتّا: ۲');
 });
 
 test('bill 2 — name search and a loose unit on a medicine with no strip level', async ({

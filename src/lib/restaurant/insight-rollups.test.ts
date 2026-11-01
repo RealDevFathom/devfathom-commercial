@@ -22,7 +22,7 @@ import {
 const D = (value: string) => new Prisma.Decimal(value);
 
 describe('pure rollup calculations', () => {
-  it('reconciles close-facing totals exactly with Decimal, including discounts', () => {
+  it('reconciles refund-aware close totals including delivery fee, tax, and service components', () => {
     const total = computeReconciledFinancials({
       bills: [
         {
@@ -47,19 +47,63 @@ describe('pure rollup calculations', () => {
         },
       ],
       tenders: [{ tipAmount: D('6.00') }],
-      refunds: [{ amount: D('2.50'), deliveryFeeRefundAmount: D('1.25') }],
+      refunds: [
+        {
+          amount: D('2.50'),
+          taxRefundAmount: D('0.50'),
+          serviceChargeRefundAmount: D('0.25'),
+          deliveryFeeRefundAmount: D('1.25'),
+        },
+        {
+          amount: D('3.00'),
+          taxRefundAmount: D('0.40'),
+          serviceChargeRefundAmount: D('0.30'),
+          deliveryFeeRefundAmount: D('0.80'),
+        },
+      ],
       drawers: [],
     });
     expect(total.grossSales.toString()).toBe('100');
     expect(total.deliveryFeeSales.toString()).toBe('12');
-    expect(total.deliveryFeeRefunds.toString()).toBe('1.25');
+    expect(total.deliveryFeeRefunds.toString()).toBe('2.05');
     expect(total.discountTotal.toString()).toBe('5');
-    expect(total.netSales.toString()).toBe('82.5');
-    expect(total.taxTotal.toString()).toBe('7');
-    expect(total.serviceChargeTotal.toString()).toBe('3');
+    expect(total.netSales.toString()).toBe('83');
+    expect(total.taxTotal.toString()).toBe('6.1');
+    expect(total.serviceChargeTotal.toString()).toBe('2.45');
     expect(total.tipTotal.toString()).toBe('6');
-    expect(total.refundTotal.toString()).toBe('2.5');
+    expect(total.refundTotal.toString()).toBe('3.45');
     expect(total.voidTotal.toString()).toBe('9.99');
+  });
+
+  it('reports a delivery-fee-only refund without reducing net sales or refundTotal', () => {
+    const total = computeReconciledFinancials({
+      bills: [
+        {
+          status: 'SETTLED',
+          subtotal: D('100.00'),
+          deliveryFeeTotal: D('12.00'),
+          taxTotal: D('7.00'),
+          serviceChargeTotal: D('3.00'),
+          compTotal: D('0'),
+          discountTotal: D('0'),
+          grandTotal: D('122.00'),
+        },
+      ],
+      tenders: [],
+      refunds: [
+        {
+          amount: D('12.00'),
+          taxRefundAmount: D('0'),
+          serviceChargeRefundAmount: D('0'),
+          deliveryFeeRefundAmount: D('12.00'),
+        },
+      ],
+      drawers: [],
+    });
+
+    expect(total.netSales.toString()).toBe('100');
+    expect(total.refundTotal.toString()).toBe('0');
+    expect(total.deliveryFeeRefunds.toString()).toBe('12');
   });
 
   it('projects deterministic product item mix from snapshot prices and non-voided inputs', () => {
@@ -98,7 +142,12 @@ describe('pure rollup calculations', () => {
   });
 });
 
-function rollupDb(input?: { correction?: boolean; mismatch?: boolean; legacyNet?: boolean }) {
+function rollupDb(input?: {
+  correction?: boolean;
+  mismatch?: boolean;
+  legacyNet?: boolean;
+  historicalRefunds?: boolean;
+}) {
   const close = {
     id: 'close_1',
     createdAt: new Date('2026-08-21T02:00:00.000Z'),
@@ -106,13 +155,13 @@ function rollupDb(input?: { correction?: boolean; mismatch?: boolean; legacyNet?
     grossSales: D(input?.mismatch ? '11' : '10'),
     deliveryFeeSales: D('2'),
     deliveryFeeRefunds: D('1'),
-    netSales: D(input?.legacyNet ? '7' : '4'),
-    taxTotal: D('0'),
-    serviceChargeTotal: D('0'),
+    netSales: D(input?.legacyNet ? '7' : input?.historicalRefunds ? '4' : '5.75'),
+    taxTotal: D(input?.historicalRefunds ? '0.5' : '0'),
+    serviceChargeTotal: D(input?.historicalRefunds ? '0.25' : '0'),
     tipTotal: D('0'),
     compTotal: D('2'),
     discountTotal: D('1'),
-    refundTotal: D('3'),
+    refundTotal: D(input?.historicalRefunds ? '3' : '2'),
     voidTotal: D('4'),
     cashExpected: D('0'),
     cashCounted: D('0'),
@@ -134,8 +183,8 @@ function rollupDb(input?: { correction?: boolean; mismatch?: boolean; legacyNet?
           status: 'SETTLED',
           subtotal: D('10'),
           deliveryFeeTotal: D('2'),
-          taxTotal: D('0'),
-          serviceChargeTotal: D('0'),
+          taxTotal: D('0.5'),
+          serviceChargeTotal: D('0.25'),
           compTotal: D('2'),
           discountTotal: D('1'),
           grandTotal: D('7'),
@@ -154,7 +203,14 @@ function rollupDb(input?: { correction?: boolean; mismatch?: boolean; legacyNet?
     },
     restaurantTender: { findMany: vi.fn(async () => []) },
     restaurantRefund: {
-      findMany: vi.fn(async () => [{ amount: D('3'), deliveryFeeRefundAmount: D('1') }]),
+      findMany: vi.fn(async () => [
+        {
+          amount: D('3'),
+          taxRefundAmount: D('0.5'),
+          serviceChargeRefundAmount: D('0.25'),
+          deliveryFeeRefundAmount: D('1'),
+        },
+      ]),
     },
     restaurantDrawerSession: { findMany: vi.fn(async () => []) },
     insightDailyRollup: {
@@ -220,7 +276,7 @@ describe('rollupDay handler idempotency and correction', () => {
     );
   });
 
-  it('no-ops when current close source was already projected', async () => {
+  it('accepts refund-aware close totals before replaying the current projection', async () => {
     const db = rollupDb();
     const result = await rollupDay(db as unknown as ScopedDb, {
       branchId: 'branch_1',
@@ -259,7 +315,7 @@ describe('rollupDay handler idempotency and correction', () => {
   });
 
   it.each([1, 2])(
-    'excludes an original item\'s %i non-voided remake(s) from item-mix sales',
+    "excludes an original item's %i non-voided remake(s) from item-mix sales",
     async (remakeCount) => {
       const db = rollupDb();
       const purchasedItem = {
@@ -478,13 +534,62 @@ describe('rollupDay handler idempotency and correction', () => {
       });
       expect(db.insightDailyRollup.upsert).toHaveBeenCalledWith(
         expect.objectContaining({
-          create: expect.objectContaining({ netSales: D('4') }),
-          update: expect.objectContaining({ netSales: D('4') }),
+          create: expect.objectContaining({ netSales: D('5.75') }),
+          update: expect.objectContaining({ netSales: D('5.75') }),
         })
       );
       expect((await db.restaurantDailyClose.findMany())[0].netSales.toString()).toBe(
-        legacyNet ? '7' : '4'
+        legacyNet ? '7' : '5.75'
       );
+    }
+  );
+
+  it.each([
+    { force: false, legacyNet: false },
+    { force: true, legacyNet: false },
+    { force: false, legacyNet: true },
+    { force: true, legacyNet: true },
+  ])('normalizes historical refund closes with %j', async ({ force, legacyNet }) => {
+    const db = rollupDb({ historicalRefunds: true, legacyNet });
+    const closeBefore = { ...(await db.restaurantDailyClose.findMany())[0] };
+    db.insightDailyRollup.findFirst.mockResolvedValue({
+      id: 'rollup_1',
+      sourceDailyCloseId: 'close_1',
+      projectionVersion: 3,
+    });
+
+    const result = await rollupDay(db as unknown as ScopedDb, {
+      branchId: 'branch_1',
+      businessDate: '2026-08-20',
+      force,
+    });
+
+    expect(result.replayed).toBe(false);
+    expect(db.insightDailyRollup.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({ netSales: D('5.75'), refundTotal: D('2') }),
+        update: expect.objectContaining({ netSales: D('5.75'), refundTotal: D('2') }),
+      })
+    );
+    expect((await db.restaurantDailyClose.findMany())[0]).toEqual(closeBefore);
+  });
+
+  it.each(['netSales', 'taxTotal', 'serviceChargeTotal', 'refundTotal'] as const)(
+    'rejects a historical refund close with only %s using the current formula',
+    async (field) => {
+      const db = rollupDb({ historicalRefunds: true });
+      const current = rollupDb();
+      const historicalClose = (await db.restaurantDailyClose.findMany())[0];
+      historicalClose[field] = (await current.restaurantDailyClose.findMany())[0][field];
+
+      await expect(
+        rollupDay(db as unknown as ScopedDb, {
+          branchId: 'branch_1',
+          businessDate: '2026-08-20',
+          force: true,
+        })
+      ).rejects.toMatchObject({ reason: 'RECONCILIATION_FAILED' });
+      expect(db.insightDailyRollup.upsert).not.toHaveBeenCalled();
     }
   );
 

@@ -435,6 +435,18 @@ describe('readPharmacyTenderOutcome', () => {
     return { db, input, sale, prior, tender, saleRead, keyRead, tenderRead };
   }
 
+  it('#710 recovers the exact manual tender and rejects altered capture evidence', async () => {
+    const f = fixture({ ...original, type: 'RAAST', cashReceivedMinor: undefined,
+      providerRef: '001234', payerName: 'Ayesha' });
+    const recorded = { ...f.tender, provider: 'MANUAL_MERCHANT', providerRef: '001234', payerName: 'Ayesha', referenceSkipped: false };
+    f.tenderRead.mockResolvedValue(recorded);
+    expect(await readPharmacyTenderOutcome(f.db as never, scope, f.input)).toMatchObject({ status: 'ACCEPTED' });
+    for (const change of [{ providerRef: '1234' }, { payerName: 'Other payer' }, { referenceSkipped: true }]) {
+      f.tenderRead.mockResolvedValue({ ...recorded, ...change });
+      expect(await readPharmacyTenderOutcome(f.db as never, scope, f.input)).toEqual({ status: 'UNKNOWN', replayUnsafe: true });
+    }
+  });
+
   it.each([partial, full])('returns the stored operation result: %j', async (result) => {
     const f = fixture();
     f.keyRead.mockResolvedValue({ ...f.prior, resultPayload: result });

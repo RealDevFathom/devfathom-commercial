@@ -162,7 +162,7 @@ it('formats Urdu receipt amounts with Urdu digits', () => {
   render(<CounterReceiptView {...input} />);
   const region = within(screen.getByRole('region', { name: 'رسید ۱۲' }));
   expect(region.getByText(/تاریخ: ۰۵\/۰۹\/۲۰۲۶/)).toBeTruthy();
-  expect(region.getByText(/۱ یونٹ/)).toBeTruthy();
+  expect(region.getByText('یونٹ: ۱ × ۱٫۰۰')).toBeTruthy();
   expect(region.getAllByText('۱٫۰۰').length).toBeGreaterThan(0);
   expect(region.queryByText('1.00')).toBeNull();
   expect(region.getByText('CASH').parentElement).toHaveTextContent('CASH۱٫۰۰');
@@ -338,4 +338,55 @@ it.each([
 it.each([undefined, null, []])('renders no evidence section for %j', (evidence) => {
   render(<CounterReceiptView {...props({ evidence })} />);
   expect(screen.queryByRole('region', { name: 'Camera evidence' })).toBeNull();
+});
+
+it.each(['en', 'ur'] as const)('shows exact mixed-lot pricing in the live %s receipt', (locale) => {
+  const input = props({ locale });
+  const line = input.receipt!.lines[0]!;
+  input.receipt!.lines = [
+    {
+      ...line,
+      quantity: 3,
+      canonicalUnits: 3,
+      unitPriceMinor: 100,
+      lineTotalMinor: 301,
+      allocations: [
+        {
+          allocationId: 'a',
+          inventoryLotId: 'a',
+          batchNumber: null,
+          expiresAt: null,
+          canonicalUnits: 2,
+          grossMinor: 200,
+        },
+        {
+          allocationId: 'b',
+          inventoryLotId: 'b',
+          batchNumber: null,
+          expiresAt: null,
+          canonicalUnits: 1,
+          grossMinor: 101,
+        },
+      ],
+    },
+  ];
+  render(<CounterReceiptView {...input} />);
+  const item = screen.getAllByRole('listitem')[0]!;
+  expect(item).toHaveTextContent('2 × 1.00 + 1 × 1.01');
+  expect(item).toHaveTextContent('3.01');
+  expect(item).not.toHaveTextContent('3 unit × 1.00');
+});
+
+it('states quantity and gross when historical per-lot pricing is unavailable', () => {
+  const input = props();
+  input.receipt!.lines[0] = {
+    ...input.receipt!.lines[0]!,
+    quantity: 3,
+    canonicalUnits: 3,
+    unitPriceMinor: 100,
+    lineTotalMinor: 301,
+  };
+  render(<CounterReceiptView {...input} />);
+  expect(screen.getAllByRole('listitem')[0]).toHaveTextContent('Qty: 3 unit · Gross: 3.01');
+  expect(screen.getAllByRole('listitem')[0]).not.toHaveTextContent('3 unit × 1.00');
 });

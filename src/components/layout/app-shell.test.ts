@@ -2,10 +2,13 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { createElement, type ComponentProps, type ComponentType } from 'react';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { compile } from 'tailwindcss';
+
+const mocks = vi.hoisted(() => ({ pathname: vi.fn(() => '/dashboard') }));
 
 vi.mock('next/dynamic', () => ({ default: () => () => null }));
-vi.mock('next/navigation', () => ({ usePathname: () => '/dashboard' }));
+vi.mock('next/navigation', () => ({ usePathname: mocks.pathname }));
 vi.mock('next-auth/react', () => ({ useSession: () => ({ data: null }) }));
 vi.mock('@/components/entitlements-provider', () => ({
   useEntitlements: () => ({ vertical: 'RESTAURANT', enabledModules: ['restaurant-core'] }),
@@ -36,6 +39,10 @@ vi.mock('@/components/restaurant/administrator-staff-profile-callout', () => ({
 import { AppShell, isPathModuleEnabled } from './app-shell';
 
 describe('AppShell module guard', () => {
+  beforeEach(() => {
+    mocks.pathname.mockReturnValue('/dashboard');
+  });
+
   it('keeps the responsive dashboard brand link explicitly named', () => {
     const topbar = readFileSync(
       path.join(process.cwd(), 'src/components/layout/topbar.tsx'),
@@ -82,14 +89,66 @@ describe('AppShell module guard', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'Open menu' }));
-    expect(screen.getByRole('dialog', { name: 'Mobile navigation' })).toBeInTheDocument();
+    const drawer = screen.getByRole('dialog', { name: 'Mobile navigation' });
+    expect(drawer).toBeInTheDocument();
+    expect(drawer).toHaveClass('start-0');
+    expect(drawer).not.toHaveClass('left-0');
 
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(screen.queryByRole('dialog', { name: 'Mobile navigation' })).not.toBeInTheDocument();
   });
 
+  it.each(['/dashboard', '/pharmacy/counter'])(
+    'makes the skip link the first shell element and targets the main landmark on %s',
+    async (pathname) => {
+      mocks.pathname.mockReturnValue(pathname);
+      const TestAppShell = AppShell as ComponentType<{
+        brand: Parameters<typeof AppShell>[0]['brand'];
+        children?: React.ReactNode;
+      }>;
+      const { container } = render(
+        createElement(
+          TestAppShell,
+          {
+            brand: {
+              organizationId: 'org_test',
+              displayName: 'Test workspace',
+              logoUrl: null,
+              markUrl: null,
+              faviconUrl: null,
+              primaryColor: null,
+              accentColor: null,
+            },
+          },
+          createElement('p', null, 'Workspace content')
+        )
+      );
+
+      const viewport = container.firstElementChild;
+      const skipLink = screen.getByRole('link', { name: 'Skip to content' });
+      const main = screen.getByRole('main');
+      expect(viewport?.firstElementChild).toBe(skipLink);
+      expect(skipLink).toHaveAttribute('href', '#main-content');
+      expect(main).toHaveAttribute('id', 'main-content');
+      expect(main).toHaveAttribute('tabindex', '-1');
+
+      const stylesheet = document.createElement('style');
+      const compiler = await compile('@tailwind utilities;');
+      stylesheet.textContent = compiler.build([...skipLink.classList]);
+      document.head.append(stylesheet);
+      try {
+        skipLink.focus();
+        expect(skipLink).toHaveFocus();
+        expect(getComputedStyle(skipLink).clipPath).toBe('none');
+        expect(getComputedStyle(skipLink).position).toBe('fixed');
+      } finally {
+        stylesheet.remove();
+      }
+    }
+  );
+
   it('clearly warns when the pharmacy licence is a placeholder', () => {
-    const shellProps: ComponentProps<typeof AppShell> = {
+    const props: ComponentProps<typeof AppShell> = {
       brand: {
         organizationId: 'org_test',
         displayName: 'Test pharmacy',
@@ -100,9 +159,9 @@ describe('AppShell module guard', () => {
         accentColor: null,
       },
       pharmacyPlaceholder: true,
-      children: null,
+      children: createElement('p', null, 'Dashboard'),
     };
-    render(createElement(AppShell, shellProps, createElement('p', null, 'Dashboard')));
+    render(createElement(AppShell, props));
 
     expect(screen.getByRole('alert')).toHaveTextContent(
       'Licence details are PLACEHOLDER – not a real licence'

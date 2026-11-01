@@ -1561,6 +1561,122 @@ describeIfDatabase('idempotency (real DB)', () => {
   });
 });
 
+describeIfDatabase('frozen service-charge settlement (real DB)', () => {
+  it('settles with the charge frozen at bill cut after a new policy becomes effective', async () => {
+    const transition = new Date('2026-08-20T00:00:00.000Z');
+    const settlementAt = new Date('2026-08-20T18:00:00.000Z');
+    const [openingPolicy, settlementPolicy] = await read(async (tx) => {
+      const first = await tx.restaurantServiceChargePolicyVersion.create({
+        data: {
+          branchId: ids.branch,
+          rate: '0.100000',
+          effectiveFrom: new Date('2026-08-01T00:00:00.000Z'),
+          effectiveTo: transition,
+          acknowledgedAt: AT,
+          acknowledgementRef: 'ISSUE_535_RATE_A',
+          idempotencyKey: `issue_535_a_${suffix}`,
+          payloadHash: `issue-535-a-${suffix}`,
+        },
+      });
+      const second = await tx.restaurantServiceChargePolicyVersion.create({
+        data: {
+          branchId: ids.branch,
+          rate: '0.200000',
+          effectiveFrom: transition,
+          acknowledgedAt: transition,
+          acknowledgementRef: 'ISSUE_535_RATE_B',
+          idempotencyKey: `issue_535_b_${suffix}`,
+          payloadHash: `issue-535-b-${suffix}`,
+        },
+      });
+      return [first, second];
+    });
+
+    const { billId, grandTotal } = await openBill(1);
+    expect(grandTotal).toBe('13.75');
+    const frozen = await read((tx) =>
+      tx.restaurantBill.findUniqueOrThrow({
+        where: { id: billId },
+        select: {
+          serviceChargePolicyVersionId: true,
+          serviceChargeRate: true,
+          serviceChargeBasis: true,
+          serviceChargeTotal: true,
+        },
+      })
+    );
+    expect(frozen.serviceChargePolicyVersionId).toBe(openingPolicy.id);
+    expect(frozen.serviceChargeRate?.toFixed(6)).toBe('0.100000');
+    expect(frozen.serviceChargeBasis.toFixed(2)).toBe('12.50');
+    expect(frozen.serviceChargeTotal.toFixed(2)).toBe('1.25');
+
+    const activePolicy = await read((tx) =>
+      tx.restaurantServiceChargePolicyVersion.findFirstOrThrow({
+        where: {
+          branchId: ids.branch,
+          effectiveFrom: { lte: settlementAt },
+          OR: [{ effectiveTo: null }, { effectiveTo: { gt: settlementAt } }],
+        },
+        orderBy: [{ effectiveFrom: 'desc' }, { id: 'asc' }],
+      })
+    );
+    expect(activePolicy.id).toBe(settlementPolicy.id);
+    expect(activePolicy.rate.toFixed(6)).toBe('0.200000');
+
+    const quote = await read((tx) =>
+      deps.tenders.quoteOpenBillSettlement(tx, billId, settlementAt)
+    );
+    expect(quote?.serviceChargePayable.toFixed(2)).toBe('1.25');
+    expect(quote?.grandTotal.toFixed(2)).toBe('13.75');
+    expect(quote?.remainingDue.toFixed(2)).toBe('13.75');
+
+    const result = await deps.tenders.applyTender(deps.createTenantDb(orgId), {
+      billId,
+      tender: { type: 'OTHER', amount: grandTotal },
+      actor: actor(),
+      now: settlementAt,
+    });
+
+    expect(result.settled).toBe(true);
+    expect(result.remainingDue.toFixed(2)).toBe('0.00');
+    const settled = await read(async (tx) => ({
+      bill: await tx.restaurantBill.findUniqueOrThrow({
+        where: { id: billId },
+        select: {
+          subtotal: true,
+          compTotal: true,
+          discountTotal: true,
+          serviceChargeTotal: true,
+          deliveryFeeTotal: true,
+          taxTotal: true,
+          roundingAdjustment: true,
+          grandTotal: true,
+        },
+      }),
+      tender: await tx.restaurantTender.findUniqueOrThrow({
+        where: { id: result.tenderId },
+        select: { amount: true },
+      }),
+    }));
+    expect(settled.bill.serviceChargeTotal.toFixed(2)).toBe('1.25');
+    expect(settled.bill.grandTotal.toFixed(2)).toBe('13.75');
+
+    // Reconcile the persisted settlement as exact debit/credit evidence. Keeping the
+    // residual in Decimal space catches cent-level drift that total-only assertions hide.
+    const debitTotal = settled.tender.amount;
+    const creditTotal = settled.bill.subtotal
+      .minus(settled.bill.compTotal)
+      .minus(settled.bill.discountTotal)
+      .plus(settled.bill.serviceChargeTotal)
+      .plus(settled.bill.deliveryFeeTotal)
+      .plus(settled.bill.taxTotal)
+      .plus(settled.bill.roundingAdjustment);
+    expect(debitTotal.toFixed(2)).toBe('13.75');
+    expect(creditTotal.toFixed(2)).toBe('13.75');
+    expect(debitTotal.minus(creditTotal).toFixed(2)).toBe('0.00');
+  });
+});
+
 const d = (value: string): Prisma.Decimal => new Prisma.Decimal(value);
 
 // A pure, DB-free classification of a tender's applied amount against the bill's
