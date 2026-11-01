@@ -720,9 +720,12 @@ describe('counter receipt authorization', () => {
     expect(applyPharmacyTender).not.toHaveBeenCalled();
   });
 
-  it('does not treat wildcard, prefix, legacy, or receipt grants as dispense grants', async () => {
-    for (const capability of ['*', 'pharmacy:*', 'pharmacy.dispense', 'pharmacy:receipt']) {
+  it('does not let legacy or receipt-only grants redeem loyalty points', async () => {
+    // OTC redemption is a counter action; the domain separately enforces the line-aware
+    // Rx gate. Grants that confer neither counter nor dispensing access stay refused.
+    for (const capability of ['pharmacy.dispense', 'pharmacy:receipt']) {
       const f = fixture([{ capability, effect: 'ALLOW' }]);
+      assign(f, ['branch-a']);
       await expect(
         f.caller().redeemPoints({
           branchId: 'branch-a',

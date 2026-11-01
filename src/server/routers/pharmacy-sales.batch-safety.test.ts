@@ -29,7 +29,7 @@ import { pharmacySalesRouter } from './pharmacy-sales';
 const app = router({ pharmacySales: pharmacySalesRouter });
 const BRANCH = 'branch-1';
 
-function caller(granted = true) {
+function caller(granted = true, capability = 'pharmacy:dispense') {
   const db = {
     $transaction: vi.fn(async (callback: (tx: unknown) => unknown): Promise<unknown> =>
       callback(db)
@@ -47,7 +47,7 @@ function caller(granted = true) {
         status: 'ACTIVE',
         organizationId: 'org-1',
         organizationRole: {
-          permissions: [{ capability: 'pharmacy:dispense', effect: granted ? 'ALLOW' : 'DENY' }],
+          permissions: [{ capability, effect: granted ? 'ALLOW' : 'DENY' }],
         },
         permissionOverrides: [],
       })),
@@ -82,6 +82,21 @@ describe('#633 batch refusal at tender', () => {
       })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(loyalty.redeemSalePoints).not.toHaveBeenCalled();
+  });
+
+  it('lets a counter-only cashier reach the line-aware domain gate for OTC redemption', async () => {
+    loyalty.redeemSalePoints.mockResolvedValueOnce({ points: 200, amountMinor: 2000 } as never);
+    await expect(
+      caller(true, 'pharmacy:counter').redeemPoints({
+        branchId: BRANCH,
+        saleId: 'sale-1',
+        points: 200,
+        deviceId: 'device-1',
+        businessDate: new Date('2026-10-22T00:00:00.000Z'),
+        idempotencyKey: 'redeem-cashier',
+      })
+    ).resolves.toMatchObject({ points: 200 });
+    expect(loyalty.redeemSalePoints).toHaveBeenCalledTimes(1);
   });
 
   it.each([

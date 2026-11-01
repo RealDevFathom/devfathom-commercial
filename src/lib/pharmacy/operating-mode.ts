@@ -54,14 +54,14 @@ export async function enforceOperatingMode(
     if (!actor)
       throw new TRPCError({ code: 'FORBIDDEN', message: 'Active checker membership required.' });
     const role = actor.organizationRole?.key;
+    // Owner/manager approvals require the management grant held by both default
+    // templates, so an explicit denial (e.g. `pharmacy:*` DENY) revokes checker status.
     const capability =
       input.kind === 'RX'
         ? 'pharmacy:dispense'
         : input.kind === 'PURCHASE'
           ? 'pharmacy:procurement'
-          : input.kind === 'ADJUSTMENT'
-            ? 'pharmacy:inventory'
-            : 'pharmacy:counter';
+          : 'pharmacy:manage';
     const capabilityAllowed = await can(
       { id: checkerId, role: 'EMPLOYEE', organizationId: scope.organizationId },
       capability,

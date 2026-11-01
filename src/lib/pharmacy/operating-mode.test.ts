@@ -85,11 +85,11 @@ it('fails closed when an Rx pharmacist has an explicit capability denial', async
   ).rejects.toMatchObject({ code: 'FORBIDDEN' });
 });
 it.each([
-  ['OVERRIDE', 'pharmacy:counter'],
-  ['REFUND', 'pharmacy:counter'],
-  ['RETURN', 'pharmacy:counter'],
-  ['DISCOUNT', 'pharmacy:counter'],
-  ['ADJUSTMENT', 'pharmacy:inventory'],
+  ['OVERRIDE', 'pharmacy:manage'],
+  ['REFUND', 'pharmacy:manage'],
+  ['RETURN', 'pharmacy:manage'],
+  ['DISCOUNT', 'pharmacy:manage'],
+  ['ADJUSTMENT', 'pharmacy:manage'],
 ] as const)(
   'fails closed when a manager has an explicit %s capability denial',
   async (kind, capability) => {
@@ -110,6 +110,25 @@ it.each([
     );
   }
 );
+it('uses a capability granted by the default manager template', async () => {
+  const { PHARMACY_ROLE_TEMPLATES } = await vi.importActual<typeof import('@/lib/vertical-catalog')>(
+    '@/lib/vertical-catalog'
+  );
+  const manager = PHARMACY_ROLE_TEMPLATES.find((role) => role.key === 'manager');
+  expect(manager?.capabilities).toContain('pharmacy:manage');
+  await enforceOperatingMode(fixture('STAFFED', 'manager') as never, scope, {
+    kind: 'REFUND',
+    makerIds: ['maker'],
+    targetType: 'Document',
+    targetId: 'document',
+  });
+  expect(mocks.can).toHaveBeenCalledWith(
+    expect.anything(),
+    'pharmacy:manage',
+    undefined,
+    expect.anything()
+  );
+});
 it('requires the independent checker to have access to the affected branch', async () => {
   mocks.branch.mockRejectedValueOnce(new Error('outside branch'));
   await expect(

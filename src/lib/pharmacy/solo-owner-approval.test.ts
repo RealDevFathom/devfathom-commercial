@@ -174,3 +174,20 @@ describe('solo owner PIN authorization', () => {
     }
   );
 });
+describe('inventory count variance threshold', () => {
+  it('approves a below-threshold OPEN count without independent co-authorization', async () => {
+    const db = fixture(false);
+    db.pharmacyInventoryCount.findFirst.mockResolvedValueOnce({
+      id: 'count',
+      status: 'OPEN',
+      createdById: 'owner',
+      lines: [],
+    });
+    await expect(approveCount(db as never, scope, 'count', 'key')).resolves.toMatchObject({
+      status: 'APPROVED',
+      approvedById: 'owner',
+    });
+    expect(db.organization.findFirstOrThrow).not.toHaveBeenCalled();
+    expect(db.auditLog.create).not.toHaveBeenCalled();
+  });
+});
