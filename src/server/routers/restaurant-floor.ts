@@ -95,7 +95,9 @@ type FloorCapability = 'orders:read' | 'floor:manage';
  * an ACTIVE linked staff profile holding a job role or direct capability grant at
  * the branch is in scope when its effective capabilities there (DENYs applied)
  * include the procedure's capability. This matches the branch picker, which lists
- * branches from the same job-role/direct-grant links.
+ * branches from the same job-role/direct-grant links. An explicit DENY of the
+ * capability at the branch is enforced before the shared-scope fallback, so a
+ * primary or assigned branch link never overrides it.
  */
 async function assertActiveBranch(
   ctx: TRPCContext,
@@ -125,6 +127,24 @@ async function assertActiveBranch(
       active: true,
     });
     return;
+  }
+  // An explicit per-person DENY at this branch is authoritative: it must not be
+  // bypassed by the primary-branch / branch-assignment / organization-wide
+  // fallback below, which only proves the branch link, not the capability.
+  const explicitDeny = await ctx.db.restaurantStaffCapabilityGrant.findFirst({
+    where: {
+      branchId,
+      capability,
+      effect: 'DENY',
+      staffProfile: { userId: user.id, status: 'ACTIVE' },
+    },
+    select: { id: true },
+  });
+  if (explicitDeny) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'You are not authorized for this restaurant branch.',
+    });
   }
   await requireRestaurantBranchScope(ctx, branchId);
 }
