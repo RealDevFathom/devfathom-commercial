@@ -181,6 +181,52 @@ describe('counter return boundaries', () => {
       })
     );
   });
+  it.each([true, false])('flags controlled sold lines (controlled=%s)', async (controlled) => {
+    const sale = {
+      id: 'sale',
+      receiptNumber: 1,
+      receiptDeviceId: 'd',
+      businessDate: new Date('2026-10-01'),
+      lines: [
+        {
+          id: 'line',
+          medicine: { productName: 'Medicine', controlled },
+          saleUnit: 'STRIP',
+          quantity: 1,
+          unitPriceMinor: 1000,
+          discountMinor: 0,
+          canonicalUnitsPerSaleUnit: 10,
+          canonicalUnits: 10,
+          returnLines: [],
+          unidentifiedReturnHolds: [],
+          allocations: [],
+        },
+      ],
+      tenders: [],
+      returns: [],
+    };
+    const findFirst = vi.fn().mockResolvedValue(sale);
+    const history = await readReturnHistory(
+      {
+        pharmacySale: { findFirst },
+        pharmacyStockLocation: { findMany: vi.fn().mockResolvedValue([]) },
+      } as never,
+      scope,
+      'sale'
+    );
+    expect(history.lines[0].controlled).toBe(controlled);
+    expect(findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        include: expect.objectContaining({
+          lines: expect.objectContaining({
+            include: expect.objectContaining({
+              medicine: { select: { productName: true, controlled: true } },
+            }),
+          }),
+        }),
+      })
+    );
+  });
 });
 
 describe('verified physical lot boundaries', () => {

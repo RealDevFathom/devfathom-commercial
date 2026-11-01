@@ -193,15 +193,21 @@ describe('physical count workflow', () => {
   it('uses named selectors and has no raw-ID text input', async () => {
     const { page } = await pageWithCount('DRAFT');
     render(page);
-    expect(screen.getByRole('option', { name: 'Main Kitchen' })).toBeDefined();
-    expect(screen.getByRole('option', { name: 'Basmati Rice (Super Kernel)' })).toBeDefined();
+    const createForm = screen.getByRole('button', { name: 'Create count' }).closest('form')!;
+    const lineForm = screen.getByRole('button', { name: 'Add count line' }).closest('form')!;
+    expect(within(createForm).getByRole('option', { name: 'Main Kitchen' })).toBeDefined();
+    expect(
+      within(lineForm).getByRole('option', { name: 'Basmati Rice (Super Kernel)' })
+    ).toBeDefined();
     expect(screen.queryByRole('textbox', { name: /location|stock item|count id/i })).toBeNull();
   });
   it('renders exactly one add-line form for the selected count', async () => {
     const { page } = await pageWithCount('DRAFT');
     const { container } = render(page);
-    const addLineForms = Array.from(container.querySelectorAll('form')).filter((form) =>
-      form.querySelector('select[name="stockItemId"]')
+    const addLineForms = Array.from(container.querySelectorAll('form')).filter(
+      (form) =>
+        form.querySelector('select[name="stockItemId"]') &&
+        form.querySelector('input[name="stockCountId"]')
     );
     expect(addLineForms).toHaveLength(1);
     expect(addLineForms[0].querySelector('input[name="stockCountId"]')).toHaveValue('count-1');

@@ -48,6 +48,18 @@ const attemptSchema = z.discriminatedUnion('kind', [
   }),
 ]);
 type Attempt = z.infer<typeof attemptSchema>;
+/** Transient witness credential. Never persisted with the saved attempt. */
+type ControlledWitness = { staffProfileId: string; pin: string };
+const witnessPinPattern = /^\d{4,8}$/;
+
+export function isBlockedResult(result: unknown): result is { blocked: string } {
+  return (
+    typeof result === 'object' &&
+    result !== null &&
+    'blocked' in result &&
+    typeof (result as { blocked: unknown }).blocked === 'string'
+  );
+}
 type Props = {
   branchId: string;
   organizationId: string;
@@ -126,13 +138,17 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
   const [disposition, setDisposition] = useState<'RESTOCK' | 'QUARANTINE'>('QUARANTINE');
   const [location, setLocation] = useState('');
   const [integrity, setIntegrity] = useState('');
-  const [witnessId, setWitnessId] = useState('');
-  const [witnessPin, setWitnessPin] = useState('');
   const [tenderId, setTenderId] = useState('');
   const [amount, setAmount] = useState('');
   const [manual, setManual] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
   const [attempt, setAttempt] = useState<Attempt | null>(recovery.attempt);
+  const [witnessStaffId, setWitnessStaffId] = useState('');
+  const [witnessPin, setWitnessPin] = useState('');
+  // A saved return first replays its exact request without a credential, so a return that
+  // already committed reconciles even when no witness is available. Only a server refusal,
+  // meaning a new controlled mutation is still needed, asks for a fresh witness.
+  const [recoveryWitnessNeeded, setRecoveryWitnessNeeded] = useState(false);
   const [busy, setBusy] = useState(false);
   const latch = useRef(false);
   const [message, setMessage] = useState(
@@ -157,24 +173,22 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
   const refund = trpc.pharmacySales.refundTender.useMutation();
   const data = history.data;
   const line = data?.lines.find((row) => row.id === lineId);
-  const attemptRequiresControlledWitness =
-    attempt?.kind === 'return' &&
-    (attempt.requiresControlledWitness ||
-      !!data?.lines.find((row) => row.id === attempt.input.saleLineId)?.controlled);
-  const witnesses = trpc.pharmacySales.controlledReturnWitnesses.useQuery(
-    { branchId },
-    {
-      enabled:
-        ready &&
-        online &&
-        (!!line?.controlled || attemptRequiresControlledWitness),
-      retry: false,
-    }
-  );
   const selectedLot = line?.lots.find((row) => row.lotId === lotId);
   const maximumUnits =
     selectedLot?.returnableUnits ?? (line ? line.canonicalUnits - line.returnedUnits : 0);
   const tender = data?.tenders.find((row) => row.id === tenderId);
+  const witnessRequired =
+    attempt?.kind === 'return' ? recoveryWitnessNeeded : !attempt && !!line?.controlled;
+  // Branch-scoped directory: requires receipt access to this branch and dispense capability.
+  const pharmacists = trpc.pharmacySales.controlledReturnWitnesses.useQuery(
+    { branchId },
+    { enabled: ready && online && witnessRequired, retry: false }
+  );
+  const witnessReady = !witnessRequired || (!!witnessStaffId && witnessPinPattern.test(witnessPin));
+  const witness: ControlledWitness | undefined =
+    witnessRequired && witnessReady
+      ? { staffProfileId: witnessStaffId, pin: witnessPin }
+      : undefined;
   const manualRequired = tender?.type === 'CARD' || tender?.type === 'WALLET';
   const amountMinor = /^\d+(\.\d{1,2})?$/.test(amount) ? Math.round(Number(amount) * 100) : 0;
   const available = Math.min(
@@ -184,32 +198,43 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
   const locked = busy || !!attempt || !ready || !online;
   const stale = history.isFetching || history.isError;
 
-  async function execute(
-    next: Attempt,
-    controlledWitness?: { staffProfileId: string; pin: string },
-    recovering = false
-  ) {
+  async function execute(next: Attempt, controlledWitness?: ControlledWitness) {
     if (latch.current || !online || !ready) return;
     latch.current = true;
+    const retry = !!attempt;
     setBusy(true);
     setError('');
     setMessage('');
+    // A witness PIN is single-use: clear it whatever the outcome.
     setWitnessPin('');
     let mutationSucceeded = false;
     try {
       // Write before sending; an ambiguous network outcome can only replay this exact request.
+      // The witness PIN is deliberately excluded from persistent storage.
       localStorage.setItem(storageKey, JSON.stringify(next));
       setAttempt(next);
       if (next.kind === 'return') {
-        const result = await returnLine.mutateAsync({ ...next.input, controlledWitness });
-        if (result && 'blocked' in result) {
-          // A new request rejected before committing is safe to discard. During recovery the
-          // outcome is still unknown, so retain its idempotency key for another reconciliation.
-          if (!recovering) {
-            localStorage.removeItem(storageKey);
-            setAttempt(null);
+        const result = await returnLine.mutateAsync(
+          controlledWitness ? { ...next.input, controlledWitness } : next.input
+        );
+        if (isBlockedResult(result)) {
+          // The server refused before any stock change. A fresh attempt is definitely not
+          // recorded; a retried attempt keeps its saved reference so an earlier ambiguous
+          // outcome can still be reconciled with the same idempotency key.
+          if (!retry) {
+            try {
+              localStorage.removeItem(storageKey);
+              setAttempt(null);
+            } catch {
+              /* Keep recovery locked. */
+            }
+          } else {
+            // The saved operation did not commit; recording it now needs a fresh witness.
+            setRecoveryWitnessNeeded(true);
           }
-          setError(result.blocked);
+          setError(
+            `Return not recorded. ${result.blocked}${retry ? ' Enter a fresh witness PIN and retry the saved return.' : ''}`
+          );
           return;
         }
       } else
@@ -221,6 +246,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
       await history.refetch({ throwOnError: true });
       localStorage.removeItem(storageKey);
       setAttempt(null);
+      setRecoveryWitnessNeeded(false);
       setConfirmed(false);
       setUnits('1');
       setAmount('');
@@ -234,7 +260,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
       // A rejected retry or failed history refresh says nothing about the original commit.
       // Only a definitively rejected first mutation may release its operation key.
       if (
-        !recovering &&
+        !retry &&
         !mutationSucceeded &&
         ['BAD_REQUEST', 'FORBIDDEN', 'NOT_FOUND', 'UNAUTHORIZED'].includes(code ?? '')
       ) {
@@ -254,6 +280,68 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
       setBusy(false);
     }
   }
+
+  const witnessFields = (
+    <section
+      aria-label="Controlled medicine return witness"
+      className="space-y-3 rounded-md border border-border-subtle p-3"
+    >
+      <p className="text-sm text-text-muted">
+        Controlled medicine. A different pharmacist must witness this return with a fresh PIN. The
+        PIN is never saved on this device.
+      </p>
+      <Label htmlFor="return-witness">Witnessing pharmacist</Label>
+      <select
+        id="return-witness"
+        className={selectClass}
+        disabled={busy || !online || !ready || pharmacists.isLoading || pharmacists.isError}
+        value={witnessStaffId}
+        onChange={(event) => {
+          setWitnessStaffId(event.target.value);
+          setWitnessPin('');
+        }}
+      >
+        <option value="">Select pharmacist</option>
+        {pharmacists.data?.map((staff) => (
+          <option key={staff.id} value={staff.id}>
+            {staff.name}
+          </option>
+        ))}
+      </select>
+      {pharmacists.isLoading ? (
+        <p role="status">Loading pharmacists…</p>
+      ) : pharmacists.isError ? (
+        <p role="alert">
+          {counterErrorMessage(pharmacists.error)}{' '}
+          <Button
+            type="button"
+            variant="outline"
+            disabled={pharmacists.isFetching}
+            onClick={() => void pharmacists.refetch()}
+          >
+            Retry witness lookup
+          </Button>
+        </p>
+      ) : pharmacists.data && pharmacists.data.length === 0 ? (
+        <p role="status">
+          No independent pharmacist with an active staff PIN is available. Ask your administrator
+          to configure one.
+        </p>
+      ) : null}
+      <Label htmlFor="return-witness-pin">Witness PIN</Label>
+      <Input
+        id="return-witness-pin"
+        type="password"
+        inputMode="numeric"
+        autoComplete="off"
+        maxLength={8}
+        className="h-11"
+        disabled={busy || !online || !ready || !witnessStaffId}
+        value={witnessPin}
+        onChange={(event) => setWitnessPin(event.target.value.replace(/\D/g, ''))}
+      />
+    </section>
+  );
 
   function print() {
     try {
@@ -301,78 +389,22 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
       )}
       {message && <p role="status">{message}</p>}
       {attempt && (
-        <div className="space-y-3 rounded-md border border-border-subtle p-3">
-          {attemptRequiresControlledWitness && (
-            <>
-              <p className="text-sm font-medium text-text-strong">
-                Re-enter a witness credential to reconcile this controlled return.
-              </p>
-              <Label htmlFor="recovery-return-witness">Witness pharmacist</Label>
-              <select
-                id="recovery-return-witness"
-                className={selectClass}
-                value={witnessId}
-                onChange={(event) => {
-                  setWitnessId(event.target.value);
-                  setWitnessPin('');
-                }}
-              >
-                <option value="">Choose a different pharmacist</option>
-                {witnesses.data?.map((witness) => (
-                  <option key={witness.id} value={witness.id}>
-                    {witness.name}
-                  </option>
-                ))}
-              </select>
-              {witnesses.isError && (
-                <div className="space-y-2">
-                  <p role="alert">{counterErrorMessage(witnesses.error)}</p>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    disabled={witnesses.isFetching}
-                    onClick={() => void witnesses.refetch()}
-                  >
-                    Retry witness lookup
-                  </Button>
-                </div>
-              )}
-              <Label htmlFor="recovery-return-witness-pin">Witness PIN</Label>
-              <Input
-                id="recovery-return-witness-pin"
-                className="h-11"
-                type="password"
-                inputMode="numeric"
-                autoComplete="off"
-                value={witnessPin}
-                onChange={(event) => setWitnessPin(event.target.value)}
-              />
-            </>
-          )}
-          <Button
-            className="h-11"
-            disabled={
-              busy ||
-              !online ||
-              !ready ||
-              (attempt.kind === 'return' &&
-                attemptRequiresControlledWitness &&
-                (!witnessId || !/^\d{4,8}$/.test(witnessPin) || witnesses.isError))
-            }
-            onClick={() =>
-              void execute(
-                attempt,
-                attemptRequiresControlledWitness
-                  ? { staffProfileId: witnessId, pin: witnessPin }
-                  : undefined,
-                true
-              )
-            }
-          >
-            Retry saved {attempt.kind}
-          </Button>
-        </div>
+        <Button
+          className="h-11"
+          onClick={() => void execute(attempt, witness)}
+          disabled={
+            busy ||
+            !online ||
+            !ready ||
+            // Reconciliation is tried without a credential first; a witness is required only
+            // after the server reports the saved return still needs a new controlled mutation.
+            (attempt.kind === 'return' && !witnessReady)
+          }
+        >
+          Retry saved {attempt.kind}
+        </Button>
       )}
+      {attempt?.kind === 'return' && witnessRequired && witnessFields}
       <form
         className="flex flex-wrap items-end gap-2"
         onSubmit={(event) => {
@@ -465,10 +497,10 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
               value={lineId}
               onChange={(event) => {
                 setLineId(event.target.value);
+                setWitnessStaffId('');
+                setWitnessPin('');
                 setLotId('');
                 setDisposition('QUARANTINE');
-                setWitnessId('');
-                setWitnessPin('');
                 setConfirmed(false);
               }}
             >
@@ -600,50 +632,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
               Restock only inspected medicine with acceptable storage and intact packaging. Expired
               or recalled lots are refused by the server.
             </p>
-            {!attempt && line?.controlled && (
-              <div className="space-y-3 rounded-md border border-border-subtle p-3">
-                <p className="text-sm font-medium text-text-strong">
-                  Controlled medicine witness required
-                </p>
-                <Label htmlFor="return-witness">Witness pharmacist</Label>
-                <select
-                  id="return-witness"
-                  className={selectClass}
-                  value={witnessId}
-                  onChange={(event) => {
-                    setWitnessId(event.target.value);
-                    setWitnessPin('');
-                    setConfirmed(false);
-                  }}
-                >
-                  <option value="">Choose a different pharmacist</option>
-                  {witnesses.data?.map((witness) => (
-                    <option key={witness.id} value={witness.id}>
-                      {witness.name}
-                    </option>
-                  ))}
-                </select>
-                {witnesses.isError && (
-                  <p role="alert">{counterErrorMessage(witnesses.error)}</p>
-                )}
-                {witnesses.isSuccess && witnesses.data.length === 0 && (
-                  <p role="alert">No other active pharmacist with a PIN can witness this return.</p>
-                )}
-                <Label htmlFor="return-witness-pin">Witness PIN</Label>
-                <Input
-                  id="return-witness-pin"
-                  className="h-11"
-                  type="password"
-                  inputMode="numeric"
-                  autoComplete="off"
-                  value={witnessPin}
-                  onChange={(event) => {
-                    setWitnessPin(event.target.value);
-                    setConfirmed(false);
-                  }}
-                />
-              </div>
-            )}
+            {!attempt && witnessRequired && witnessFields}
             <label className="flex min-h-11 items-center gap-2">
               <input
                 type="checkbox"
@@ -664,8 +653,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
                 Number(units) > maximumUnits ||
                 (disposition === 'RESTOCK' && !selectedLot?.restockAllowed) ||
                 (disposition === 'QUARANTINE' && !location) ||
-                (!!line?.controlled &&
-                  (!witnessId || !/^\d{4,8}$/.test(witnessPin) || witnesses.isError))
+                !witnessReady
               }
               onClick={() =>
                 void execute(
@@ -685,9 +673,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
                       idempotencyKey: browserUuid(),
                     },
                   },
-                  line?.controlled
-                    ? { staffProfileId: witnessId, pin: witnessPin }
-                    : undefined
+                  witness
                 )
               }
             >

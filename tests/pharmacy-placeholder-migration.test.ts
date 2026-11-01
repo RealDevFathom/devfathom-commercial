@@ -39,7 +39,9 @@ describe('#631 placeholder migration contract', () => {
       if (m.includes('pharmacy_reject_regulatory_rewrite')) {
         expect(m).toContain("current_setting('app.purging_organization_id'");
         expect(m).toContain("AND current_setting('app.is_platform_admin', true) = 'true'");
-        expect(m).toContain('NOT EXISTS (SELECT 1 FROM "organizations" WHERE "id" = OLD."organizationId")');
+        expect(m).toContain(
+          'NOT EXISTS (SELECT 1 FROM "organizations" WHERE "id" = OLD."organizationId")'
+        );
       }
     }
   });

@@ -17,6 +17,7 @@ import { Prisma } from '@/generated/prisma/client';
 import { matchScore, type AssistantHelpers, type ToolSet } from '@/lib/ai/context';
 import { appUrl, templates, sendEmail } from '@/lib/email';
 import { normalizeEmail } from '@/lib/email-address';
+import { assertSeatAvailable, resolveOrganizationEntitlements } from '@/lib/entitlements';
 import { generateInviteToken } from '@/lib/invite-token';
 import { passwordMeetsPolicy } from '@/lib/password-policy';
 
@@ -782,6 +783,19 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
         });
         if (existing && existing.status !== 'INVITED') {
           return { error: 'A user with this email already exists.' };
+        }
+        // A pending invite already occupies a seat, so refreshing it is safe.
+        // A new invite must use the same effective entitlement snapshot as the
+        // by-hand team router before it creates another seat-occupying user.
+        if (!existing) {
+          const entitlements = await resolveOrganizationEntitlements(ctx.organizationId, h.db);
+          try {
+            assertSeatAvailable(entitlements);
+          } catch (error) {
+            return {
+              error: error instanceof Error ? error.message : 'Seat limit reached.',
+            };
+          }
         }
 
         const { token, tokenHash } = generateInviteToken();

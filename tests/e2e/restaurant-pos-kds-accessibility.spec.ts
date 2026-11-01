@@ -9,7 +9,8 @@ import {
   restaurantE2eCredentials as fixture,
 } from './restaurant-fixture';
 
-const OUTPUT = path.join('test-results', 'visual-qa', 'm9');
+const OUTPUT =
+  process.env.RESTAURANT_QA_EVIDENCE_DIR ?? path.join('test-results', 'visual-qa', 'm9');
 const VIEWPORTS = [
   { name: '375-portrait', width: 375, height: 812 },
   { name: '768-tablet', width: 768, height: 1024 },
@@ -428,16 +429,21 @@ for (const surface of ['pos', 'kds'] as const) {
       await expect(page.getByText('Charred cauliflower')).toBeVisible();
     }
 
-    await page.emulateMedia({ reducedMotion: 'reduce' });
-    for (const theme of THEMES) {
-      for (const viewport of VIEWPORTS) {
-        await setTheme(page, theme);
-        await page.setViewportSize(viewport);
-        await assertLayoutAndTargets(page);
-        await page.screenshot({
-          path: path.join(OUTPUT, `${surface}-${theme}-${viewport.name}-reduced-motion.png`),
-          fullPage: true,
-        });
+    for (const reducedMotion of ['no-preference', 'reduce'] as const) {
+      await page.emulateMedia({ reducedMotion });
+      for (const theme of THEMES) {
+        for (const viewport of VIEWPORTS) {
+          await setTheme(page, theme);
+          await page.setViewportSize(viewport);
+          await assertLayoutAndTargets(page);
+          await page.screenshot({
+            path: path.join(
+              OUTPUT,
+              `${surface}-${theme}-${viewport.name}-${reducedMotion === 'reduce' ? 'reduced-motion' : 'normal-motion'}.png`
+            ),
+            fullPage: true,
+          });
+        }
       }
     }
     await assertAxe(page);

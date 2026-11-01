@@ -22,6 +22,7 @@ export function mapShiftError(err: unknown): never {
     const code =
       err.reason === 'OVERLAP' ||
       err.reason === 'VERSION_CONFLICT' ||
+      err.reason === 'ACTIVE_ATTENDANCE' ||
       err.reason === 'ALREADY_CANCELLED'
         ? 'CONFLICT'
         : err.reason === 'SHIFT_NOT_FOUND' ||
@@ -55,7 +56,8 @@ export function mapWorkforceError(err: unknown): never {
   if (hasSqlState(err, '23P01')) {
     throw new TRPCError({
       code: 'CONFLICT',
-      message: 'Approving this swap would create an overlapping shift for the replacement operator.',
+      message:
+        'Approving this swap would create an overlapping shift for the replacement operator.',
     });
   }
   throw err;

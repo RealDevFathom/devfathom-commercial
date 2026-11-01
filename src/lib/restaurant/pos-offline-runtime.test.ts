@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import { createMemoryDriver } from './pos-client-store';
+import { createMemoryDriver, writePosState } from './pos-client-store';
 import { PosOfflineRuntime } from './pos-offline-runtime';
 
 const scope = { organizationId: 'org-1', branchId: 'branch-1', deviceId: 'device-1' };
 const input = {
   deviceId: scope.deviceId,
+  composerStaffProfileId: 'staff-1',
+  composerProof: 'signed-composer-proof',
   catalogVersion: 'catalog-1',
   clientOriginAt: '2026-08-31T00:00:00.000Z',
   open: { channel: 'TAKEAWAY' as const, publicationId: 'publication-1' },
@@ -19,13 +21,136 @@ const input = {
 };
 
 describe('PosOfflineRuntime', () => {
+  it.each(['composerStaffProfileId', 'composerProof'])(
+    'quarantines legacy drafts missing %s without blocking signed work',
+    async (field) => {
+      const driver = createMemoryDriver();
+      const first = new PosOfflineRuntime(scope, driver);
+      await first.enqueue(input);
+      await first.enqueue(input);
+      const legacy = first.snapshot().queue!.drafts[0];
+      Reflect.deleteProperty(legacy, field);
+      await writePosState(driver, first.snapshot());
+
+      const reloaded = new PosOfflineRuntime(scope, driver);
+      expect(await reloaded.hydrate()).toBe('ready');
+      expect(reloaded.snapshot().queue!.drafts[0]).toMatchObject({
+        draftId: legacy.draftId,
+        status: 'QUARANTINED',
+        review: { reason: 'COMPOSER_UNVERIFIED' },
+        commands: legacy.commands,
+      });
+      await reloaded.resolveReview(legacy.draftId, 'REPLAY');
+      expect(reloaded.snapshot().queue!.drafts[0].status).toBe('QUARANTINED');
+      let sent = 0;
+      await reloaded.replay('staff-1', async (request) => {
+        expect(request.headers['X-POS-Composer-Proof']).toBe(input.composerProof);
+        sent++;
+        return { status: 201, serverRef: 'server-ref' };
+      });
+      expect(sent).toBe(2); // Only the signed draft's open/add commands.
+      expect(reloaded.snapshot().queue!.drafts[1].status).toBe('COMPLETED');
+      await reloaded.resolveReview(legacy.draftId, 'DISCARD');
+      const again = new PosOfflineRuntime(scope, driver);
+      await again.hydrate();
+      expect(again.snapshot().queue!.drafts.map((draft) => draft.draftId)).not.toContain(
+        legacy.draftId
+      );
+    }
+  );
+  it('replays a persisted draft only as the operator who composed it', async () => {
+    const runtime = new PosOfflineRuntime(scope, createMemoryDriver());
+    await runtime.enqueue(input);
+    const send = async () => ({ status: 201, serverRef: 'server-ref' });
+
+    expect(await runtime.replay('staff-2', send)).toEqual({
+      state: 'REFUSED',
+      discarded: null,
+      waitingComposers: ['staff-1'],
+    });
+    expect(runtime.snapshot().queue?.drafts[0]?.status).toBe('QUEUED');
+
+    expect((await runtime.replay('staff-1', send)).state).toBe('IDLE');
+    expect(runtime.snapshot().queue?.drafts[0]?.status).toBe('COMPLETED');
+  });
+
+  it('renews a queued proof only for the reauthenticated composing operator', async () => {
+    const runtime = new PosOfflineRuntime(scope, createMemoryDriver());
+    await runtime.enqueue(input);
+
+    await runtime.renewComposerProof('staff-2', async () => 'wrong-operator-proof');
+    expect(runtime.snapshot().queue?.drafts[0]?.composerProof).toBe('signed-composer-proof');
+
+    await runtime.renewComposerProof('staff-1', async () => 'renewed-proof');
+    await runtime.replay('staff-1', async (request) => {
+      expect(request.headers['X-POS-Composer-Proof']).toBe('renewed-proof');
+      return { status: 201, serverRef: 'server-ref' };
+    });
+  });
+
+  it('does not call renewal for proofs that are still valid', async () => {
+    const runtime = new PosOfflineRuntime(scope, createMemoryDriver());
+    await runtime.enqueue(input);
+    let renewals = 0;
+
+    await runtime.renewComposerProof(
+      'staff-1',
+      async () => {
+        renewals++;
+        return 'renewed-proof';
+      },
+      () => false
+    );
+    expect(renewals).toBe(0);
+    expect(runtime.snapshot().queue?.drafts[0]?.composerProof).toBe('signed-composer-proof');
+  });
+
+  it("replays the current operator's later draft while an earlier draft waits for its composer", async () => {
+    const runtime = new PosOfflineRuntime(scope, createMemoryDriver());
+    await runtime.enqueue(input);
+    await runtime.enqueue({
+      ...input,
+      composerStaffProfileId: 'staff-2',
+      composerProof: 'proof-b',
+    });
+    const sentProofs: string[] = [];
+
+    expect(
+      await runtime.replay('staff-2', async (request) => {
+        sentProofs.push(request.headers['X-POS-Composer-Proof']);
+        return { status: 201, serverRef: 'server-ref' };
+      })
+    ).toEqual({ state: 'REFUSED', discarded: null, waitingComposers: ['staff-1'] });
+    expect(new Set(sentProofs)).toEqual(new Set(['proof-b']));
+    expect(runtime.snapshot().queue?.drafts.map((draft) => draft.status)).toEqual([
+      'QUEUED',
+      'COMPLETED',
+    ]);
+  });
+
+  it('cannot renew after tampering the unsigned composer id', async () => {
+    const runtime = new PosOfflineRuntime(scope, createMemoryDriver());
+    await runtime.enqueue(input);
+    const draft = runtime.snapshot().queue?.drafts[0];
+    if (!draft) throw new Error('Expected queued draft');
+    draft.composerStaffProfileId = 'staff-2';
+
+    await runtime.renewComposerProof('staff-2', async (originalProof) => {
+      expect(originalProof).toBe('signed-composer-proof');
+      return null; // The server rejects A's signed proof while B is active.
+    });
+
+    expect(draft.composerProof).toBe('signed-composer-proof');
+    expect((await runtime.replay('staff-2', async () => ({ status: 403 }))).state).toBe('PAUSED');
+  });
+
   it('hydrates an atomically persisted draft and resumes at the first unacknowledged command', async () => {
     const driver = createMemoryDriver();
     const first = new PosOfflineRuntime(scope, driver);
     await first.enqueue(input);
 
     const calls: string[] = [];
-    await first.replay(async (request) => {
+    await first.replay('staff-1', async (request) => {
       calls.push(request.path);
       if (calls.length === 1) return { status: 201, serverRef: 'order-1' };
       return { status: 0 };
@@ -33,7 +158,7 @@ describe('PosOfflineRuntime', () => {
 
     const reloaded = new PosOfflineRuntime(scope, driver);
     expect(await reloaded.hydrate()).toBe('ready');
-    await reloaded.replay(async (request) => {
+    await reloaded.replay('staff-1', async (request) => {
       calls.push(request.path);
       expect(request.body).toMatchObject({ orderId: 'order-1' });
       return { status: 201, serverRef: 'item-1' };
@@ -50,11 +175,11 @@ describe('PosOfflineRuntime', () => {
     const runtime = new PosOfflineRuntime(scope, createMemoryDriver());
     await runtime.enqueue(input);
     const keys: string[] = [];
-    await runtime.replay(async (request) => {
+    await runtime.replay('staff-1', async (request) => {
       keys.push(request.headers['Idempotency-Key']);
       return { status: 0 };
     });
-    await runtime.replay(async (request) => {
+    await runtime.replay('staff-1', async (request) => {
       keys.push(request.headers['Idempotency-Key']);
       return { status: 401, serverMessage: 'Terminal session is no longer valid.' };
     });
@@ -85,8 +210,8 @@ describe('PosOfflineRuntime', () => {
       return { status: 201, serverRef: 'item-1' };
     };
 
-    const onlineReplay = runtime.replay(send);
-    const duplicateOnlineReplay = runtime.replay(send);
+    const onlineReplay = runtime.replay('staff-1', send);
+    const duplicateOnlineReplay = runtime.replay('staff-1', send);
     expect(duplicateOnlineReplay).toBe(onlineReplay);
     await started;
     expect(calls).toEqual(['/api/restaurant/orders/open']);
@@ -100,7 +225,7 @@ describe('PosOfflineRuntime', () => {
     const driver = createMemoryDriver();
     const runtime = new PosOfflineRuntime(scope, driver);
     await runtime.enqueue(input);
-    const result = await runtime.replay(async () => ({
+    const result = await runtime.replay('staff-1', async () => ({
       status: 403,
       serverMessage: 'This device has been revoked.',
     }));

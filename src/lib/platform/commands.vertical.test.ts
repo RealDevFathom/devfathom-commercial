@@ -284,6 +284,7 @@ describe('organization.create vertical + package compatibility', () => {
     mocks.pkgFindUnique.mockResolvedValue({
       id: 'pkg_1',
       active: true,
+      defaultSeats: 25,
       vertical: 'AGENCY',
       moduleLinks: [],
     });
@@ -303,6 +304,7 @@ describe('organization.create vertical + package compatibility', () => {
     mocks.pkgFindUnique.mockResolvedValue({
       id: 'pkg_r',
       active: true,
+      defaultSeats: 25,
       vertical: 'RESTAURANT',
       moduleLinks: [{ moduleId: 'restaurant-core', enabled: true }],
     });
@@ -346,6 +348,7 @@ describe('organization.create vertical + package compatibility', () => {
     mocks.pkgFindUnique.mockResolvedValue({
       id: 'pkg_1',
       active: true,
+      defaultSeats: 25,
       vertical: 'AGENCY',
       moduleLinks: [],
     });
@@ -379,6 +382,7 @@ describe('organization.create vertical + package compatibility', () => {
     mocks.pkgFindUnique.mockResolvedValue({
       id: 'pkg_r',
       active: true,
+      defaultSeats: 25,
       vertical: 'RESTAURANT',
       moduleLinks: [{ moduleId: 'restaurant-core', enabled: true }],
     });
@@ -418,6 +422,7 @@ describe('organization.create vertical + package compatibility', () => {
     mocks.pkgFindUnique.mockResolvedValue({
       id: 'pkg_p',
       active: true,
+      defaultSeats: 25,
       vertical: 'PHARMACY',
       moduleLinks: [{ moduleId: 'pharmacy-core', enabled: true }],
     });
@@ -469,6 +474,11 @@ describe('organization.create vertical + package compatibility', () => {
             'pharmacy:dispense',
             'pharmacy:catalogue-review',
             'pharmacy:safety',
+            'pharmacy:procurement',
+            'pharmacy:inventory',
+            'pharmacy:counter',
+            'pharmacy:close',
+            'pharmacy:manage',
           ].map((capability) => ({ organizationId: 'org_new', capability, effect: 'ALLOW' })),
         },
       }),
@@ -484,6 +494,7 @@ describe('organization.create vertical + package compatibility', () => {
     mocks.pkgFindUnique.mockResolvedValue({
       id: 'pkg_p',
       active: true,
+      defaultSeats: 25,
       vertical: 'PHARMACY',
       moduleLinks: [],
     });
@@ -514,6 +525,7 @@ describe('organization.create vertical + package compatibility', () => {
     mocks.pkgFindUnique.mockResolvedValue({
       id: 'pkg_p',
       active: true,
+      defaultSeats: 25,
       vertical: 'PHARMACY',
       moduleLinks: [],
     });
@@ -535,6 +547,7 @@ describe('organization.create vertical + package compatibility', () => {
     mocks.pkgFindUnique.mockResolvedValue({
       id: 'pkg_1',
       active: true,
+      defaultSeats: 25,
       vertical: 'AGENCY',
       moduleLinks: [],
     });
@@ -553,6 +566,7 @@ describe('organization.create vertical + package compatibility', () => {
     mocks.pkgFindUnique.mockResolvedValue({
       id: 'pkg_a',
       active: true,
+      defaultSeats: 25,
       vertical: 'AGENCY',
       moduleLinks: [],
     });
@@ -572,6 +586,7 @@ describe('organization.create vertical + package compatibility', () => {
     mocks.pkgFindUnique.mockResolvedValue({
       id: 'pkg_r',
       active: true,
+      defaultSeats: 25,
       vertical: 'RESTAURANT',
       moduleLinks: [],
     });
@@ -1113,6 +1128,7 @@ const VALID_PROFILE = {
   licenceCategory: 'PHARMACY',
   licenceValidFrom: new Date('2026-01-01'),
   licenceValidTo: new Date('2027-01-01'),
+  licenceEvidenceFileRef: 'evidence://pharmacy-licence',
   permittedSchedules: ['RX'],
   qualifiedPersonRegistration: 'QP-1',
   qualifiedPersonValidFrom: new Date('2026-01-01'),
