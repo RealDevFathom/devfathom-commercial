@@ -240,6 +240,9 @@ describe('completeStep', () => {
   it('requires a non-blank note when the published step requires one', async () => {
     db.restaurantSopOccurrence.findUnique.mockResolvedValue({
       id: OCC_ID,
+      assignedStaffProfileId: 'staff_1',
+      poolJobRoleId: null,
+      claimedByStaffProfileId: null,
       status: 'IN_PROGRESS',
     });
     db.restaurantSopOccurrenceStep.findUnique.mockResolvedValue({
@@ -254,6 +257,7 @@ describe('completeStep', () => {
       completeStep(db as unknown as ScopedDb, {
         occurrenceId: OCC_ID,
         templateStepId: TMPL_STEP_ID,
+        actorStaffProfileId: 'staff_1',
         note: '   ',
       })
     ).rejects.toMatchObject({ reason: 'PROOF_REQUIRED' });
@@ -723,6 +727,9 @@ describe('submitOccurrence', () => {
   it('refuses submission while any checklist step is incomplete', async () => {
     db.restaurantSopOccurrence.findUnique.mockResolvedValue({
       id: OCC_ID,
+      assignedStaffProfileId: 'staff_1',
+      poolJobRoleId: null,
+      claimedByStaffProfileId: null,
       status: 'IN_PROGRESS',
       windowEndsAt: WINDOW_FUTURE,
       steps: [
@@ -736,7 +743,10 @@ describe('submitOccurrence', () => {
     });
 
     await expect(
-      submitOccurrence(db as unknown as ScopedDb, { occurrenceId: OCC_ID })
+      submitOccurrence(db as unknown as ScopedDb, {
+        occurrenceId: OCC_ID,
+        actorStaffProfileId: 'staff_1',
+      })
     ).rejects.toMatchObject({ reason: 'PROOF_REQUIRED' });
     expect(db.restaurantSopOccurrence.update).not.toHaveBeenCalled();
   });
@@ -744,6 +754,9 @@ describe('submitOccurrence', () => {
   it('revalidates published note and evidence requirements at submission', async () => {
     db.restaurantSopOccurrence.findUnique.mockResolvedValue({
       id: OCC_ID,
+      assignedStaffProfileId: 'staff_1',
+      poolJobRoleId: null,
+      claimedByStaffProfileId: null,
       status: 'IN_PROGRESS',
       windowEndsAt: WINDOW_FUTURE,
       steps: [
@@ -757,7 +770,10 @@ describe('submitOccurrence', () => {
     });
 
     await expect(
-      submitOccurrence(db as unknown as ScopedDb, { occurrenceId: OCC_ID })
+      submitOccurrence(db as unknown as ScopedDb, {
+        occurrenceId: OCC_ID,
+        actorStaffProfileId: 'staff_1',
+      })
     ).rejects.toMatchObject({ reason: 'PROOF_REQUIRED' });
     expect(db.restaurantSopOccurrence.update).not.toHaveBeenCalled();
   });
