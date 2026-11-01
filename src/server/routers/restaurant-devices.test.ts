@@ -256,8 +256,11 @@ beforeAll(async () => {
     const approverRole = await tx.restaurantJobRole.create({
       data: { key: `device-approver-${suffix}`, name: 'Device approver', active: true },
     });
-    await tx.restaurantJobRoleCapability.create({
-      data: { jobRoleId: managerRole.id, capability: 'devices:manage' },
+    await tx.restaurantJobRoleCapability.createMany({
+      data: [
+        { jobRoleId: managerRole.id, capability: 'devices:manage' },
+        { jobRoleId: managerRole.id, capability: 'devices:revoke' },
+      ],
     });
     await tx.restaurantJobRoleCapability.create({
       data: { jobRoleId: approverRole.id, capability: 'coauth:approve' },
@@ -639,6 +642,57 @@ describeIfDatabase('restaurantDevices router (real DB)', () => {
         reason: 'again',
       })
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+  });
+
+  it('rejects an actor who can manage devices but is explicitly denied devices:revoke', async () => {
+    const api = caller();
+    const { device } = await api.initiateEnrollment({ branchId, name: 'POS-revoke-denied' });
+
+    await deps.withTenantDb(orgId, (tx) =>
+      tx.restaurantStaffCapabilityGrant.create({
+        data: {
+          staffProfileId: actingStaffId,
+          branchId,
+          capability: 'devices:revoke',
+          effect: 'DENY',
+        },
+      })
+    );
+
+    try {
+      await expect(
+        api.revoke({
+          deviceId: device.id,
+          approvingStaffProfileId: approvingStaffId,
+          approvingType: 'PIN',
+          approvingSecret: APPROVING_PIN,
+          reason: 'must not bypass dedicated capability',
+        })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+
+      await expect(
+        deps.withTenantDb(orgId, (tx) =>
+          tx.restaurantRegisteredDevice.findUnique({ where: { id: device.id } })
+        )
+      ).resolves.toMatchObject({ status: 'ACTIVE' });
+      await expect(
+        deps.withTenantDb(orgId, (tx) =>
+          tx.restaurantCoAuthorization.count({ where: { targetId: device.id } })
+        )
+      ).resolves.toBe(0);
+    } finally {
+      await deps.withTenantDb(orgId, (tx) =>
+        tx.restaurantStaffCapabilityGrant.delete({
+          where: {
+            staffProfileId_branchId_capability: {
+              staffProfileId: actingStaffId,
+              branchId,
+              capability: 'devices:revoke',
+            },
+          },
+        })
+      );
+    }
   });
 
   it('ignores a forged acting profile and records the authenticated session actor', async () => {
