@@ -30,11 +30,8 @@ describe('assistant tool routing', () => {
     const employee = buildAssistantTools(ctx, { hint: 'I want to take leave next Monday' });
     expect(employee).toHaveProperty('requestLeave');
     expect(employee.requestLeave.needsApproval).toBe(true);
-    expect(assistantToolChoice('show my leave balance', employee)).toBe('auto');
-    expect(assistantToolChoice('I want to take leave next Monday', employee)).toEqual({
-      type: 'tool',
-      toolName: 'requestLeave',
-    });
+    // requestLeave stays offered for the leave hint, but the model chooses it.
+    expect(assistantToolChoice()).toBe('auto');
     expect(buildAssistantTools(ctx, { hint: 'show revenue and profit' })).toEqual({});
     expect(buildAssistantTools(adminCtx, { hint: 'show revenue and profit' })).toHaveProperty(
       'getFinanceSummary'
@@ -84,13 +81,12 @@ describe('assistant tool routing', () => {
     }
   );
 
-  it('removes disabled modules from core, full continuation and forced tool choice', () => {
+  it('removes disabled modules from core and full continuation', () => {
     for (const vertical of ['AGENCY', 'RESTAURANT', 'PHARMACY'] as const) {
       const scope = { ...adminCtx, vertical, enabledModules: [] };
       expect(buildAssistantTools(scope)).toEqual({});
       expect(buildAssistantTools(scope, { hint: 'tasks staff chat pharmacy leave' })).toEqual({});
     }
-    expect(assistantToolChoice('I want to take leave', {})).toBe('auto');
     expect(buildAssistantTools({ ...adminCtx, enabledModules: ['hr'] })).not.toHaveProperty(
       'getTeamMember'
     );

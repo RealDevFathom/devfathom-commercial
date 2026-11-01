@@ -194,7 +194,7 @@ async function respond(req: Request) {
     // about (a core read set + the matched domain), not all ~96 every request.
     // The hint is the recent user text. See buildAssistantTools / tools.ts.
     tools,
-    toolChoice: isApprovalContinuation ? 'auto' : assistantToolChoice(hint, tools),
+    toolChoice: assistantToolChoice(),
     // Operator actions chain resolve → act → confirm; 6 steps covers that while
     // capping the worst-case number of (token-heavy) model round-trips per turn.
     stopWhen: stepCountIs(6),
