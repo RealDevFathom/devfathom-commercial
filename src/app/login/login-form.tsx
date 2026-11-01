@@ -9,9 +9,15 @@ import { useHydrated } from './use-hydrated';
 import { PasswordInput } from '@/components/ui/password-input';
 import { Button } from '@/components/ui/button';
 import type { LoginVertical } from './vertical';
+import {
+  describedBy,
+  FieldError,
+  requiredFieldErrors,
+  type RequiredFieldErrors,
+} from './required-fields';
 
 const inputClass =
-  'flex h-12 w-full rounded-[var(--radius-sm)] border border-border-default bg-card px-4 text-sm text-foreground placeholder:text-text-faint transition-colors focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20';
+  'flex h-12 w-full rounded-[var(--radius-sm)] border border-border-default bg-card px-4 text-sm text-foreground placeholder:text-text-faint transition-colors focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 aria-[invalid=true]:border-destructive';
 
 export function LoginForm({
   connections,
@@ -30,6 +36,9 @@ export function LoginForm({
   initialError?: LoginErrorKey;
 }) {
   const errorId = useId();
+  const emailMessageId = useId();
+  const passwordMessageId = useId();
+  const [fieldErrors, setFieldErrors] = useState<RequiredFieldErrors>({});
   const router = useRouter();
   const hydrated = useHydrated();
   const [showPassword, setShowPassword] = useState(false);
@@ -64,14 +73,23 @@ export function LoginForm({
 
   const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    setError('');
-    setInvalidFields(null);
-    setIsSubmitting(true);
-
     const formData = new FormData(event.currentTarget);
     const email = String(formData.get('email') ?? '');
     const password = String(formData.get('password') ?? '');
     const totp = String(formData.get('totp') ?? '');
+
+    // An empty field is named inline and nothing is sent.
+    const missing = requiredFieldErrors(email, password);
+    setFieldErrors(missing);
+    if (missing.email || missing.password) {
+      if (missing.email) emailRef.current?.focus();
+      else event.currentTarget.querySelector<HTMLInputElement>('#password')?.focus();
+      return;
+    }
+
+    setError('');
+    setInvalidFields(null);
+    setIsSubmitting(true);
 
     // This chunk is required after authentication, but not to render the login
     // form. Fetch it in parallel with the credentials request so the dashboard
@@ -133,15 +151,19 @@ export function LoginForm({
 
   return (
     <>
-      {error && (
-        <div
-          id={errorId}
-          role="alert"
-          className="mb-5 rounded-[var(--radius-sm)] border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
-        >
-          {error}
-        </div>
-      )}
+      {/* The banner's one-line height is always reserved, so a failed sign-in
+          does not push the form down. */}
+      <div className="mb-5 min-h-[2.875rem]">
+        {error && (
+          <div
+            id={errorId}
+            role="alert"
+            className="rounded-[var(--radius-sm)] border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+          >
+            {error}
+          </div>
+        )}
+      </div>
 
       {connections.length ? (
         <div className="mb-6 space-y-2">
@@ -174,11 +196,14 @@ export function LoginForm({
           method="post"
           action="/login/submit"
           onSubmit={onSubmit}
+          // Once hydrated, empty fields get the inline messages below instead
+          // of the browser's own bubble; the no-JavaScript path keeps `required`.
+          noValidate={hydrated}
           data-hydrated={hydrated ? 'true' : undefined}
           className="space-y-5"
         >
           <input type="hidden" name="callbackUrl" value={callbackUrl} />
-          <div className="space-y-2">
+          <div className="relative space-y-2">
             <label htmlFor="email" className="block text-sm font-semibold text-foreground">
               Email
             </label>
@@ -191,10 +216,24 @@ export function LoginForm({
               autoFocus
               name="email"
               required
-              aria-invalid={invalidFields === 'credentials' || undefined}
-              aria-describedby={invalidFields === 'credentials' ? errorId : undefined}
-              onChange={() => clearError('credentials')}
+              aria-invalid={
+                Boolean(fieldErrors.email) || invalidFields === 'credentials' || undefined
+              }
+              aria-describedby={describedBy(
+                fieldErrors.email && emailMessageId,
+                invalidFields === 'credentials' && errorId
+              )}
+              onChange={() => {
+                setFieldErrors((current) => ({ ...current, email: undefined }));
+                clearError('credentials');
+              }}
               className={inputClass}
+            />
+            {/* Sits in the gap below the field, so it never moves the form. */}
+            <FieldError
+              id={emailMessageId}
+              message={fieldErrors.email}
+              className="absolute start-0 top-full mt-0.5"
             />
           </div>
 
@@ -212,15 +251,25 @@ export function LoginForm({
               autoComplete="current-password"
               name="password"
               required
-              aria-invalid={invalidFields === 'credentials' || undefined}
-              aria-describedby={invalidFields === 'credentials' ? errorId : undefined}
-              onChange={() => clearError('credentials')}
+              aria-invalid={
+                Boolean(fieldErrors.password) || invalidFields === 'credentials' || undefined
+              }
+              aria-describedby={describedBy(
+                fieldErrors.password && passwordMessageId,
+                invalidFields === 'credentials' && errorId
+              )}
+              onChange={() => {
+                setFieldErrors((current) => ({ ...current, password: undefined }));
+                clearError('credentials');
+              }}
               className={inputClass}
             />
-            <div className="text-end">
+            {/* Shares the existing "Forgot password?" row, so it never moves the form. */}
+            <div className="flex items-start justify-between gap-3">
+              <FieldError id={passwordMessageId} message={fieldErrors.password} className="pt-1" />
               <a
                 href="/forgot-password"
-                className="studio-auth-link text-xs font-semibold text-text-muted underline-offset-4 transition-colors hover:text-primary hover:underline"
+                className="studio-auth-link ms-auto text-xs font-semibold text-text-muted underline-offset-4 transition-colors hover:text-primary hover:underline"
               >
                 Forgot password?
               </a>

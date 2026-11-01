@@ -9,6 +9,12 @@ import { useHydrated } from './use-hydrated';
 import { PasswordInput } from '@/components/ui/password-input';
 import { Button } from '@/components/ui/button';
 import { verticalCopy, workspaceEyebrow, type LoginVertical } from './vertical';
+import {
+  describedBy,
+  FieldError,
+  requiredFieldErrors,
+  type RequiredFieldErrors,
+} from './required-fields';
 
 type Organization = {
   id: string;
@@ -73,6 +79,9 @@ export function SharedLoginForm({
   const router = useRouter();
   const hydrated = useHydrated();
   const errorId = useId();
+  const emailMessageId = useId();
+  const passwordMessageId = useId();
+  const [fieldErrors, setFieldErrors] = useState<RequiredFieldErrors>({});
   const [stage, setStage] = useState<Stage>('credentials');
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [showPassword, setShowPassword] = useState(false);
@@ -132,12 +141,22 @@ export function SharedLoginForm({
 
   const onSubmitCredentials = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    setError('');
-    setIsSubmitting(true);
-
     const formData = new FormData(event.currentTarget);
     const email = String(formData.get('email') ?? '');
     const password = String(formData.get('password') ?? '');
+
+    // An empty field is named inline and nothing is sent.
+    const missing = requiredFieldErrors(email, password);
+    setFieldErrors(missing);
+    if (missing.email || missing.password) {
+      event.currentTarget
+        .querySelector<HTMLInputElement>(missing.email ? '#email' : '#password')
+        ?.focus();
+      return;
+    }
+
+    setError('');
+    setIsSubmitting(true);
 
     appProvidersReady.current = import('@/components/app-providers');
 
@@ -245,18 +264,23 @@ export function SharedLoginForm({
     return (
       <>
         {header}
-        {alert}
+        {/* The banner's one-line height is always reserved, so a failed sign-in
+            does not push the form down. */}
+        <div className="mb-5 min-h-[2.875rem] [&>[role=alert]]:mb-0">{alert}</div>
         {/* WHA-1623: `action` is the no-JavaScript path. Once hydrated,
             onSubmitCredentials prevents it and the two-step flow runs unchanged. */}
         <form
           method="post"
           action="/login/submit"
           onSubmit={onSubmitCredentials}
+          // Once hydrated, empty fields get the inline messages below instead
+          // of the browser's own bubble; the no-JavaScript path keeps `required`.
+          noValidate={hydrated}
           data-hydrated={hydrated ? 'true' : undefined}
           className="space-y-5"
         >
           <input type="hidden" name="callbackUrl" value={callbackUrl} />
-          <div className="space-y-2">
+          <div className="relative space-y-2">
             <label htmlFor="email" className="block text-sm font-semibold text-foreground">
               Email
             </label>
@@ -268,9 +292,16 @@ export function SharedLoginForm({
               autoFocus
               name="email"
               required
-              aria-invalid={Boolean(error)}
-              aria-describedby={error ? errorId : undefined}
+              aria-invalid={Boolean(error) || Boolean(fieldErrors.email)}
+              aria-describedby={describedBy(fieldErrors.email && emailMessageId, error && errorId)}
+              onChange={() => setFieldErrors((current) => ({ ...current, email: undefined }))}
               className={inputClass}
+            />
+            {/* Sits in the gap below the field, so it never moves the form. */}
+            <FieldError
+              id={emailMessageId}
+              message={fieldErrors.email}
+              className="absolute start-0 top-full mt-0.5"
             />
           </div>
 
@@ -288,14 +319,20 @@ export function SharedLoginForm({
               autoComplete="current-password"
               name="password"
               required
-              aria-invalid={Boolean(error)}
-              aria-describedby={error ? errorId : undefined}
+              aria-invalid={Boolean(error) || Boolean(fieldErrors.password)}
+              aria-describedby={describedBy(
+                fieldErrors.password && passwordMessageId,
+                error && errorId
+              )}
+              onChange={() => setFieldErrors((current) => ({ ...current, password: undefined }))}
               className={inputClass}
             />
-            <div className="text-end">
+            {/* Shares the existing "Forgot password?" row, so it never moves the form. */}
+            <div className="flex items-start justify-between gap-3">
+              <FieldError id={passwordMessageId} message={fieldErrors.password} className="pt-1" />
               <a
                 href="/forgot-password"
-                className="studio-auth-link rounded-[var(--radius-sm)] text-xs font-semibold text-text-muted underline-offset-4 transition-colors hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                className="studio-auth-link ms-auto rounded-[var(--radius-sm)] text-xs font-semibold text-text-muted underline-offset-4 transition-colors hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
               >
                 Forgot password?
               </a>
