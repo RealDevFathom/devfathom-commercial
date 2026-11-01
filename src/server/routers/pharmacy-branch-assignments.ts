@@ -1,3 +1,4 @@
+import { isPharmacyOwner } from '@/lib/pharmacy/owner';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 
@@ -185,6 +186,13 @@ export const pharmacyBranchAssignmentsRouter = router({
         select: { id: true, branchId: true, userId: true },
       });
       if (!row) throw new TRPCError({ code: 'NOT_FOUND', message: 'Assignment was not found.' });
+      if (await isPharmacyOwner(ctx.db, organizationId, row.userId)) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Owners are automatically assigned to every pharmacy branch.',
+        });
+      }
+
       await ctx.db.pharmacyBranchAssignment.update({
         where: { id: row.id },
         data: { active: false },

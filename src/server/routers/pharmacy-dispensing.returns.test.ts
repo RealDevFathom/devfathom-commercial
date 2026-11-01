@@ -22,6 +22,9 @@ function fixture(allow = true, capabilities: readonly string[] = ['pharmacy:disp
   const db = {
     user: {
       findUnique: vi.fn().mockResolvedValue({
+        role: 'EMPLOYEE',
+        status: 'ACTIVE',
+        organizationId: 'org_a',
         organizationRole: {
           permissions: capabilities.map((capability) => ({
             capability,

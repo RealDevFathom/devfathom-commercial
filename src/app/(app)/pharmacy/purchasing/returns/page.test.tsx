@@ -31,6 +31,21 @@ beforeEach(() => {
   mocks.context.mockResolvedValue({
     session: { user: { id: 'user' } },
     entitlements: { organizationId: 'org' },
+    db: {
+      user: {
+        findUnique: vi
+          .fn()
+          .mockResolvedValue({
+            status: 'ACTIVE',
+            role: 'EMPLOYEE',
+            organizationId: 'org',
+            permissionOverrides: [],
+            organizationRole: {
+              permissions: [{ capability: 'pharmacy:procurement', effect: 'ALLOW' }],
+            },
+          }),
+      },
+    },
   });
   mocks.module.mockReturnValue(true);
   mocks.caller.mockReturnValue(reads);
@@ -38,6 +53,14 @@ beforeEach(() => {
     branches: [{ id: 'branch', name: 'Branch', stockLocations: [] }],
     suppliers: [],
     medicines: [],
+    directPurchaseApprovers: [
+      {
+        id: 'user-2',
+        name: 'Bilal',
+        email: 'bilal@example.test',
+        branchIds: ['branch-1', 'branch-a'],
+      },
+    ],
     approvers: [],
   });
   reads.purchaseReturns.mockResolvedValue([]);

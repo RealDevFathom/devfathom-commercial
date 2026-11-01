@@ -1,3 +1,4 @@
+import { authorizeSoloApproval, pinProfileBelongsToActor } from '@/lib/pharmacy/solo-approval';
 import { can, subjectFromSession } from '@/lib/abac';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
@@ -52,18 +53,20 @@ export const pharmacySafetyRouter = router({
       }),
     };
   }),
-  controlledPharmacists: protectedProcedure.query(async ({ ctx }) => {
-    const actor = subjectFromSession(ctx.session!.user);
-    if (
-      !(await can(actor, 'pharmacy:safety', undefined, { db: ctx.db })) &&
-      !(await can(actor, 'pharmacy:dispense', undefined, { db: ctx.db }))
-    ) {
-      throw new TRPCError({ code: 'FORBIDDEN' });
-    }
-    const organizationId = ctx.entitlements?.organizationId;
-    if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
-    return listControlledPinWitnesses(ctx.db, organizationId, actor.id);
-  }),
+  controlledPharmacists: protectedProcedure
+    .input(z.object({ branchId: z.string().min(1) }).optional())
+    .query(async ({ ctx, input }) => {
+      const actor = subjectFromSession(ctx.session!.user);
+      if (
+        !(await can(actor, 'pharmacy:safety', undefined, { db: ctx.db })) &&
+        !(await can(actor, 'pharmacy:dispense', undefined, { db: ctx.db }))
+      ) {
+        throw new TRPCError({ code: 'FORBIDDEN' });
+      }
+      const organizationId = ctx.entitlements?.organizationId;
+      if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+      return listControlledPinWitnesses(ctx.db, organizationId, actor.id, input?.branchId);
+    }),
   branches: safety.query(async ({ ctx }) => {
     const organizationId = ctx.entitlements?.organizationId;
     const userId = ctx.session?.user?.id;
@@ -150,7 +153,15 @@ export const pharmacySafetyRouter = router({
       try {
         return await ctx.db.$transaction(async (tx) => {
           const db = tx as ScopedDb;
-          await db.$queryRaw`SELECT id FROM restaurant_operator_credentials WHERE "organizationId"=${organizationId} AND "staffProfileId"=${input.staffProfileId} AND type='PIN' AND "revokedAt" IS NULL AND "deviceId" IS NULL FOR UPDATE`;
+
+          const solo = await pinProfileBelongsToActor(
+            db,
+            { organizationId, actorId },
+            input.staffProfileId
+          );
+          if (!solo) {
+            await db.$queryRaw`SELECT id FROM restaurant_operator_credentials WHERE "organizationId"=${organizationId} AND "staffProfileId"=${input.staffProfileId} AND type='PIN' AND "revokedAt" IS NULL AND "deviceId" IS NULL FOR UPDATE`;
+          }
           const credential = await db.restaurantOperatorCredential.findFirst({
             where: {
               organizationId,
@@ -169,23 +180,37 @@ export const pharmacySafetyRouter = router({
             pharmacist &&
             pharmacist.organizationId === organizationId &&
             pharmacist.status === 'ACTIVE' &&
-            pharmacist.id !== actorId &&
             !isLockedOut(credential, now) &&
             (await can(pharmacist, 'pharmacy:dispense', undefined, { db, now }));
           if (!eligible || !credential || !pharmacist) {
             return { blocked: 'A different qualified person must enter their PIN.' };
           }
-          if (!(await verifyOperatorCredential('PIN', input.pin, credential.credentialHash))) {
+          if (
+            solo &&
+            !(await authorizeSoloApproval(
+              db,
+              { organizationId, branchId: input.branchId, actorId },
+              { type: 'ControlledCorrection', id: input.correctsEntryId },
+              input.pin
+            ))
+          ) {
+            return { blocked: 'A different qualified person must enter their PIN.' };
+          }
+          if (
+            !solo &&
+            !(await verifyOperatorCredential('PIN', input.pin, credential.credentialHash))
+          ) {
             await db.restaurantOperatorCredential.update({
               where: { id: credential.id },
               data: registerFailedAttempt(credential, now),
             });
             return { blocked: 'A different qualified person must enter their PIN.' };
           }
-          await db.restaurantOperatorCredential.update({
-            where: { id: credential.id },
-            data: clearLockout(),
-          });
+          if (!solo)
+            await db.restaurantOperatorCredential.update({
+              where: { id: credential.id },
+              data: clearLockout(),
+            });
           return appendControlledCorrection(db, {
             organizationId,
             branchId: input.branchId,
@@ -194,7 +219,9 @@ export const pharmacySafetyRouter = router({
             quantityCanonicalUnits: input.quantityCanonicalUnits,
             recordedByUserId: actorId,
             witnessedByUserId: pharmacist.id,
-            signatureRef: `pin:${pharmacist.id}`,
+            signatureRef: solo
+              ? `solo-correction:${input.correctsEntryId}`
+              : `pin:${pharmacist.id}`,
           });
         });
       } catch (error) {

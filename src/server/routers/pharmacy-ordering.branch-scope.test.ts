@@ -70,6 +70,9 @@ beforeEach(() => {
     // The capability check: this staff member holds `pharmacy:orders`.
     user: {
       findUnique: vi.fn().mockResolvedValue({
+        role: 'EMPLOYEE',
+        status: 'ACTIVE',
+        organizationId: 'org-1',
         organizationRole: null,
         permissionOverrides: [{ capability: 'pharmacy:orders', effect: 'ALLOW' }],
       }),

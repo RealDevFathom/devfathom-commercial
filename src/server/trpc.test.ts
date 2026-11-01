@@ -41,6 +41,7 @@ vi.mock('@/lib/entitlements', () => ({
   resolveOrganizationEntitlements: vi.fn(async () => ({ enabledModules: [] })),
 }));
 vi.mock('@/server/audit', () => ({
+  annotateAudit: vi.fn(),
   ipFromHeaders: vi.fn(() => null),
   isAuditExcludedPath: vi.fn(() => false),
   recordTrpcAudit: mocks.recordTrpcAudit,
@@ -52,15 +53,19 @@ vi.mock('@/lib/abac', async () => {
 
 import {
   adminProcedure,
+  auditedProtectedProcedure,
   capabilityProcedure,
   createTRPCContext,
   entitlementIndependentAdminProcedure,
   entitlementIndependentHistoryProcedure,
   hrProcedure,
   protectedProcedure,
+  publicProcedure,
   router,
 } from './trpc';
 import type { TRPCContext } from './trpc';
+import { apiTokensRouter } from './routers/api-tokens';
+import { meetingsRouter } from './routers/meetings';
 
 describe('createTRPCContext request actor resolution', () => {
   beforeEach(() => {
@@ -83,6 +88,35 @@ describe('createTRPCContext request actor resolution', () => {
       organization: { id: 'org-1' },
     });
     expect(mocks.resolveTenantActor).toHaveBeenCalledWith({ request });
+  });
+
+  it('uses the effective support actor over an ambient explicit tenant session', async () => {
+    const normal = {
+      expires: 'later',
+      user: { id: 'normal_admin', organizationId: 'org-1' },
+    } as never;
+    const effective = {
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      user: { id: 'support_admin', organizationId: 'org-1', isSupportSession: true },
+    };
+    mocks.resolveTenantActor.mockResolvedValueOnce({
+      session: effective,
+      organization: { id: 'org-1' },
+      support: { supportSessionId: 'support-1' },
+    });
+    await expect(createTRPCContext({ session: normal })).resolves.toMatchObject({
+      session: effective,
+      support: { supportSessionId: 'support-1' },
+    });
+  });
+
+  it('does not revive an explicit session when actor resolution rejects its support cookie', async () => {
+    mocks.resolveTenantActor.mockResolvedValueOnce(null);
+    await expect(
+      createTRPCContext({
+        session: { user: { id: 'normal_admin', organizationId: 'org-1' } } as never,
+      })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
   });
 
   it('keeps the workspace guard and its internal error classification', async () => {
@@ -112,6 +146,11 @@ function contextFor(user: SessionUser | null, isDemo = false): TRPCContext {
 
 // One representative read and one representative write per procedure builder.
 const probe = router({
+  publicRead: publicProcedure.query(() => 'ok'),
+  auditedRead: auditedProtectedProcedure.query(() => 'ok'),
+  auditedWrite: auditedProtectedProcedure.input(z.object({}).optional()).mutation(() => 'ok'),
+  publicWrite: publicProcedure.mutation(() => 'should not run'),
+  email: router({ getMessage: protectedProcedure.query(() => 'should not run') }),
   protectedRead: protectedProcedure.query(() => 'ok'),
   protectedWrite: protectedProcedure.input(z.object({}).optional()).mutation(() => 'ok'),
   adminRead: adminProcedure.query(() => 'ok'),
@@ -411,5 +450,186 @@ describe('camera renewal audit redaction before resolver suppression (F3-R1)', (
       password: '[REDACTED]',
     });
     expect(value.previousGrantId).toBe('synthetic');
+  });
+});
+
+describe('support inspection scope', () => {
+  function supportContext(): TRPCContext {
+    const ctx = contextFor({
+      ...ADMIN,
+      organizationId: 'org_one',
+      status: 'ACTIVE',
+      isSupportSession: true,
+    });
+    ctx.session!.expires = new Date(Date.now() + 60_000).toISOString();
+    ctx.support = {
+      supportSessionId: 'support_one',
+      organizationId: 'org_one',
+      platformUserId: 'operator_one',
+      tenantUserId: ADMIN.id,
+      tenantUserRole: 'ADMIN',
+      reason: 'Investigate access',
+      expiresAt: new Date(Date.now() + 60_000),
+    };
+    return ctx;
+  }
+
+  it.each(CALLS)('enforces scope for %s', async (label, call) => {
+    const result = call(probe.createCaller(supportContext()));
+    if (label.endsWith('write')) await expect(result).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    else await expect(result).resolves.toBe('ok');
+  });
+
+  it('blocks durable API-token issuance before touching the database', async () => {
+    const ctx = supportContext();
+    const create = vi.fn();
+    ctx.db = { apiToken: { create } } as unknown as TRPCContext['db'];
+    await expect(
+      apiTokensRouter.createCaller(ctx).create({ name: 'escape', scopes: ['*'] })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('preserves ordinary administrator API-token creation', async () => {
+    const ctx = contextFor({ ...ADMIN, organizationId: 'org_one', status: 'ACTIVE' });
+    const create = vi.fn(async ({ data }) => ({
+      ...data,
+      id: 'new_token',
+      user: { id: ADMIN.id },
+    }));
+    ctx.db = { apiToken: { create } } as unknown as TRPCContext['db'];
+    const result = await apiTokensRouter
+      .createCaller(ctx)
+      .create({ name: 'normal admin', scopes: ['tasks:read'] });
+    expect(result.token).toMatch(/^df_/);
+    expect(create).toHaveBeenCalledOnce();
+    expect(result.expiresAt).toBeNull();
+  });
+
+  it('blocks occurrence materialization before the actual meetings resolver touches the database', async () => {
+    const ctx = supportContext();
+    const access = vi.fn(() => {
+      throw new Error('Meeting database must not be touched');
+    });
+    ctx.db = new Proxy({}, { get: access }) as TRPCContext['db'];
+    const caller = router({ meetings: meetingsRouter }).createCaller(ctx);
+    await expect(
+      caller.meetings.getOccurrences({ meetingId: 'meeting_one' })
+    ).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Support access is read-only.',
+    });
+    expect(access).not.toHaveBeenCalled();
+  });
+
+  it('refuses queries that persist external provider data', async () => {
+    await expect(probe.createCaller(supportContext()).email.getMessage()).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+  });
+
+  it('also blocks public mutations before their resolver executes', async () => {
+    await expect(probe.createCaller(supportContext()).publicWrite()).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+  });
+
+  it.each(['support', 'session', 'missing', 'mismatched'] as const)(
+    'fails closed for %s authority',
+    async (kind) => {
+      const ctx = supportContext();
+      if (kind === 'support') ctx.support!.expiresAt = new Date(Date.now() - 1);
+      if (kind === 'session') ctx.session!.expires = new Date(Date.now() - 1).toISOString();
+      if (kind === 'missing') {
+        ctx.support = null;
+        ctx.session!.expires = '';
+      }
+      if (kind === 'mismatched') ctx.support!.organizationId = 'another_org';
+      await expect(probe.createCaller(ctx).adminRead()).rejects.toMatchObject({
+        code: 'UNAUTHORIZED',
+      });
+    }
+  );
+
+  it('checks expiry again for a caller retained beyond the support deadline', async () => {
+    vi.useFakeTimers();
+    try {
+      const caller = probe.createCaller(supportContext());
+      await expect(caller.adminRead()).resolves.toBe('ok');
+      vi.advanceTimersByTime(60_001);
+      await expect(caller.adminRead()).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('support read scope and request-time expiry', () => {
+  it.each(CALLS)('%s enforces read scope with either identity signal', async (name, call) => {
+    for (const metadataOnly of [false, true]) {
+      const ctx = contextFor({ ...ADMIN, status: 'ACTIVE', isSupportSession: !metadataOnly });
+      ctx.session!.expires = new Date(Date.now() + 60000).toISOString();
+      if (metadataOnly)
+        ctx.support = { expiresAt: new Date(Date.now() + 60000) } as NonNullable<
+          TRPCContext['support']
+        >;
+      const result = call(probe.createCaller(ctx));
+      if (name.includes('write'))
+        await expect(result).rejects.toMatchObject({
+          code: 'FORBIDDEN',
+          message: 'Support access is read-only.',
+        });
+      else await expect(result).resolves.toBe('ok');
+    }
+  });
+  it.each(CALLS)(
+    '%s refuses support after expiry even on a previously resolved context',
+    async (_name, call) => {
+      const ctx = contextFor({ ...ADMIN, status: 'ACTIVE', isSupportSession: true });
+      ctx.session!.expires = new Date(Date.now() - 1).toISOString();
+      await expect(call(probe.createCaller(ctx))).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
+    }
+  );
+});
+
+describe('support access cannot inherit tenant ADMIN write authority', () => {
+  it.each([
+    ...CALLS,
+    ['public read', (c: ReturnType<typeof probe.createCaller>) => c.publicRead()] as const,
+    ['public write', (c: ReturnType<typeof probe.createCaller>) => c.publicWrite()] as const,
+    ['audited read', (c: ReturnType<typeof probe.createCaller>) => c.auditedRead()] as const,
+    ['audited write', (c: ReturnType<typeof probe.createCaller>) => c.auditedWrite({})] as const,
+  ])('allows only live support queries: %s', async (label, call) => {
+    const ctx = contextFor({ ...ADMIN, status: 'ACTIVE', isSupportSession: true });
+    ctx.session!.expires = new Date(Date.now() + 60_000).toISOString();
+    const result = call(probe.createCaller(ctx));
+    if (label.includes('write')) {
+      await expect(result).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'Support access is read-only.',
+      });
+    } else {
+      await expect(result).resolves.toBe('ok');
+    }
+  });
+
+  it.each(CALLS)('rejects expired support access: %s', async (_label, call) => {
+    const ctx = contextFor({ ...ADMIN, status: 'ACTIVE', isSupportSession: true });
+    ctx.session!.expires = new Date(Date.now() - 1).toISOString();
+    await expect(call(probe.createCaller(ctx))).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
+  });
+
+  it('restricts a support identity even when the session flag is omitted', async () => {
+    const ctx = contextFor({ ...ADMIN, status: 'ACTIVE' });
+    ctx.session!.expires = new Date(Date.now() + 60_000).toISOString();
+    ctx.support = { expiresAt: new Date(Date.now() + 60_000) } as TRPCContext['support'];
+    await expect(probe.createCaller(ctx).adminWrite({})).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    await expect(probe.createCaller(ctx).adminRead()).resolves.toBe('ok');
+    ctx.support!.expiresAt = new Date(Date.now() - 1);
+    await expect(probe.createCaller(ctx).adminRead()).rejects.toMatchObject({
+      code: 'UNAUTHORIZED',
+    });
   });
 });

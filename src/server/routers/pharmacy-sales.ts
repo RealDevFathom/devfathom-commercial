@@ -1,3 +1,10 @@
+import { isPharmacyOwner } from '@/lib/pharmacy/owner';
+import { assertBranchAssignment } from '@/lib/pharmacy/branch-assignment';
+import {
+  verifySoloOwnerPin,
+  recordSoloApproval,
+  pinProfileBelongsToActor,
+} from '@/lib/pharmacy/solo-approval';
 import { ControlledRestorationDenied } from '@/lib/pharmacy/controlled-restoration-authorization';
 import { assertRxSaleAllowed, PharmacyRxSaleDenied } from '@/lib/pharmacy/rx-sale-gate';
 import {
@@ -159,12 +166,16 @@ const demandReason = z.enum([
 ]);
 const txDb = (tx: unknown) => tx as ScopedDb;
 
-async function scopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
+async function tenantBranchScope(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
   const organizationId = ctx.entitlements?.organizationId;
   const actorId = ctx.session?.user?.id;
   if (!organizationId || !actorId) throw new TRPCError({ code: 'UNAUTHORIZED' });
   await assertInOrganization(ctx.db.pharmacyBranch, organizationId, [branch], { active: true });
   return { organizationId, branchId: branch, actorId };
+}
+
+async function scopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
+  return assertBranchAssignment(ctx.db, await tenantBranchScope(ctx, branch));
 }
 
 async function khataScope(ctx: TRPCContext, branch: string, access: 'read' | 'write') {
@@ -199,7 +210,12 @@ async function khataScope(ctx: TRPCContext, branch: string, access: 'read' | 'wr
   // Finance reads and counter money operations share the active member/branch boundary.
   return requireCounterReceiptAccess(ctx, branch, false, (rules) => {
     const decision = counterCapabilityDecision(rules, KHATA_CAPABILITIES);
-    return decision === 'ALLOW' || (decision !== 'DENY' && financialReadAccess);
+    // Khata money operations require a canonical counter grant; legacy receipt
+    // aliases still participate in DENY precedence and other counter workflows.
+    const canonicalCounterGrant = rules.some(
+      (rule) => rule.effect === 'ALLOW' && capabilityMatches(rule.capability, 'pharmacy:counter')
+    );
+    return decision !== 'DENY' && (canonicalCounterGrant || financialReadAccess);
   });
 }
 
@@ -362,7 +378,7 @@ function counterCapabilityDecision(
 /**
  * Dispense, receipt, or counter capability, then an active pharmacy branch
  * assignment in the session organization. Restaurant staff profiles are not
- * consulted. An empty assignment denies a non-admin. A session `ADMIN` of this
+ * consulted. An empty assignment denies a nonowner. A live system owner of this
  * organization may use every active branch, including when they also have an
  * explicit assignment elsewhere. That exception is recorded on the audit.
  */
@@ -384,7 +400,17 @@ async function requireCounterReceiptAccess(
   requireCanonicalCounter = false,
   authorizeMember?: (rules: { capability: string; effect: string }[]) => boolean
 ): Promise<LedgerScope> {
-  const scope = await branchScopeOrForbidden(ctx, branch);
+  const organizationId = ctx.entitlements?.organizationId;
+  const actorId = ctx.session?.user.id;
+  if (!organizationId || !actorId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+  let scope: LedgerScope;
+  try {
+    scope = await tenantBranchScope(ctx, branch);
+  } catch (error) {
+    if (error instanceof TRPCError && error.code === 'BAD_REQUEST')
+      throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+    throw error;
+  }
   const user = ctx.session!.user;
   if (!user.organizationId || user.organizationId !== scope.organizationId) {
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
@@ -404,9 +430,10 @@ async function requireCounterReceiptAccess(
     where: { id: user.id },
     select: {
       status: true,
+      role: true,
       organizationId: true,
       organizationRole: {
-        select: { permissions: { select: { capability: true, effect: true } } },
+        select: { key: true, permissions: { select: { capability: true, effect: true } } },
       },
       permissionOverrides: {
         where: { OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] },
@@ -429,10 +456,19 @@ async function requireCounterReceiptAccess(
   // can accidentally outrun an explicit DENY on another alias.
   // Combine user overrides and role rules into ONE family decision so any
   // explicit DENY (user or role, on any alias) beats any ALLOW.
+  const owner =
+    member.status === 'ACTIVE' && (await isPharmacyOwner(ctx.db, scope.organizationId, user.id));
   const rules = [...overrides, ...roleRules];
+  const liveSubject = { ...member, id: user.id };
+  // A caller-supplied family decision (khata, refund) replaces the default
+  // counter/dispense/receipt check; any explicit DENY in the family still wins.
   const capable = authorizeMember
     ? authorizeMember(rules)
-    : counterCapabilityDecision(rules) === 'ALLOW';
+    : counterCapabilityDecision(rules) !== 'DENY' &&
+      ((await can(liveSubject, 'pharmacy:counter', undefined, { db: ctx.db })) ||
+        (!requireCanonicalCounter &&
+          ((await can(liveSubject, 'pharmacy:dispense', undefined, { db: ctx.db })) ||
+            (await can(liveSubject, 'pharmacy:receipt', undefined, { db: ctx.db })))));
   if (!capable) {
     throw new TRPCError({
       code: 'FORBIDDEN',
@@ -440,6 +476,7 @@ async function requireCounterReceiptAccess(
     });
   }
 
+  await branchScopeOrForbidden(ctx, branch);
   const available = await ctx.db.pharmacyBranch.findFirst({
     where: { id: branch, organizationId: scope.organizationId, active: true },
     select: { id: true },
@@ -460,9 +497,8 @@ async function requireCounterReceiptAccess(
   const assigned = new Set(rows.map((row) => row.branchId));
   if (assigned.has(branch)) return scope;
 
-  // Session role only. An organization-role key is not an administrator grant.
-  // An assigned admin still reaches every other active branch of this organization.
-  const orgAdmin = user.role === 'ADMIN' && user.organizationId === scope.organizationId;
+  // Only current tenant authority grants automatic access to all active branches.
+  const orgAdmin = owner;
   if (orgAdmin) {
     annotateAudit(ctx, {
       targetType: 'PharmacyBranch',
@@ -1118,7 +1154,14 @@ export const pharmacySalesRouter = router({
           } as const;
           if (!authorization) return blocked;
           // Serialize credential attempts; returning a denial commits durable lockout counters.
-          await db.$queryRaw`SELECT id FROM restaurant_operator_credentials WHERE "organizationId"=${scope.organizationId} AND "staffProfileId"=${authorization.staffProfileId} AND type='PIN' AND "revokedAt" IS NULL AND "deviceId" IS NULL FOR UPDATE`;
+
+          const solo = await pinProfileBelongsToActor(db, scope, authorization.staffProfileId);
+          if (solo && !(await verifySoloOwnerPin(db, scope, authorization.pin))) {
+            return blocked;
+          }
+          if (!solo) {
+            await db.$queryRaw`SELECT id FROM restaurant_operator_credentials WHERE "organizationId"=${scope.organizationId} AND "staffProfileId"=${authorization.staffProfileId} AND type='PIN' AND "revokedAt" IS NULL AND "deviceId" IS NULL FOR UPDATE`;
+          }
           const credential = await db.restaurantOperatorCredential.findFirst({
             where: {
               organizationId: scope.organizationId,
@@ -1137,12 +1180,12 @@ export const pharmacySalesRouter = router({
             !pharmacist ||
             pharmacist.organizationId !== scope.organizationId ||
             pharmacist.status !== 'ACTIVE' ||
-            pharmacist.id === scope.actorId ||
             isLockedOut(credential, now)
           )
             return blocked;
           if (!(await can(pharmacist, 'pharmacy:dispense', undefined, { db, now }))) return blocked;
           if (
+            !solo &&
             !(await verifyOperatorCredential('PIN', authorization.pin, credential.credentialHash))
           ) {
             await db.restaurantOperatorCredential.update({
@@ -1151,10 +1194,11 @@ export const pharmacySalesRouter = router({
             });
             return blocked;
           }
-          await db.restaurantOperatorCredential.update({
-            where: { id: credential.id },
-            data: clearLockout(),
-          });
+          if (!solo)
+            await db.restaurantOperatorCredential.update({
+              where: { id: credential.id },
+              data: clearLockout(),
+            });
           const refEntry = await earlierRegisterEntry(db, scope, authorization.refSerial);
           if (authorization.refSerial && !refEntry) {
             return { blocked: 'That earlier register serial is not on this branch.' };
@@ -1206,6 +1250,8 @@ export const pharmacySalesRouter = router({
               return { blocked: 'Patient dispensing consent is required.' };
             }
             await db.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${scope.organizationId + ':' + scope.branchId},0))`;
+            if (solo)
+              await recordSoloApproval(db, scope, { type: 'ControlledSale', id: input.saleId });
             const result = await addSaleLine(db, scope, input);
             await appendControlledSaleEntries(db, {
               organizationId: scope.organizationId,
@@ -1225,7 +1271,7 @@ export const pharmacySalesRouter = router({
               refEntryId: refEntry?.id ?? null,
               recordedByUserId: scope.actorId,
               witnessedByUserId: pharmacist.id,
-              signatureRef: `pin:${pharmacist.id}`,
+              signatureRef: solo ? `solo-sale:${input.saleId}` : `pin:${pharmacist.id}`,
             });
             await db.pharmacyEmergencyRxFollowUp.create({
               data: {
@@ -1297,6 +1343,8 @@ export const pharmacySalesRouter = router({
           });
           if (!consent?.granted || consent.revokedAt)
             return { blocked: 'Patient dispensing consent is required.' };
+          if (solo)
+            await recordSoloApproval(db, scope, { type: 'ControlledSale', id: input.saleId });
           const result = await addSaleLine(db, scope, input);
           await db.prescriptionFill.create({
             data: {
@@ -1343,7 +1391,7 @@ export const pharmacySalesRouter = router({
             refEntryId: refEntry?.id ?? null,
             recordedByUserId: scope.actorId,
             witnessedByUserId: pharmacist.id,
-            signatureRef: decision.id,
+            signatureRef: solo ? `solo-sale:${input.saleId}` : decision.id,
           });
           return result;
         });

@@ -1,0 +1,758 @@
+// @vitest-environment node
+import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { assertDisposableRlsDatabase } from '../../../tests/disposable-rls-database';
+import { runMigrationSql } from '../../../tests/split-sql-statements';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import type { TRPCContext } from '../trpc';
+
+const url = process.env.TEST_DATABASE_URL;
+if (url) {
+  assertDisposableRlsDatabase(url);
+  process.env.DATABASE_URL = url;
+}
+vi.mock('@/server/audit', async () => ({
+  ...(await vi.importActual('@/server/audit')),
+  recordTrpcAudit: vi.fn(),
+}));
+const suite = url ? describe : describe.skip;
+const suffix = randomUUID();
+const org = `owner-auth-${suffix}`;
+const owner = `owner-${suffix}`;
+const second = `second-${suffix}`;
+let tenant: typeof import('@/lib/tenancy/scoped-db').withTenantDb;
+let platform: typeof import('@/lib/tenancy/scoped-db').withPlatformDb;
+let prescriptions: typeof import('./pharmacy-prescriptions').pharmacyPrescriptionsRouter;
+let dispensing: typeof import('./pharmacy-dispensing').pharmacyDispensingRouter;
+let can: typeof import('@/lib/abac').can;
+let patientId: string, branchId: string, reviewId: string, credentialId: string;
+const pin = '582961';
+function context(db: ScopedDb, actorId = owner, role = 'ADMIN'): TRPCContext {
+  return {
+    db,
+    session: { user: { id: actorId, role, status: 'ACTIVE', organizationId: org } },
+    entitlements: { organizationId: org, enabledModules: ['pharmacy-dispensing', 'pharmacy-core'] },
+    organization: { id: org, vertical: 'PHARMACY' },
+    requestMeta: { ip: null, userAgent: null },
+    audit: { detail: {} },
+    support: null,
+  } as unknown as TRPCContext;
+}
+beforeAll(async () => {
+  if (!url) return;
+  const scoped = await import('@/lib/tenancy/scoped-db');
+  tenant = scoped.withTenantDb;
+  platform = scoped.withPlatformDb;
+  prescriptions = (await import('./pharmacy-prescriptions')).pharmacyPrescriptionsRouter;
+  dispensing = (await import('./pharmacy-dispensing')).pharmacyDispensingRouter;
+  can = (await import('@/lib/abac')).can;
+  const { seedDepartments } = await import('@/lib/test-support/departments');
+  const { hashOperatorCredential } = await import('@/lib/restaurant/operator-credentials');
+  const hash = await hashOperatorCredential('PIN', pin);
+  await platform(async (db) => {
+    const [role] = await db.$queryRaw<
+      { rolsuper: boolean; rolbypassrls: boolean }[]
+    >`SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname=current_user`;
+    expect(role).toEqual({ rolsuper: false, rolbypassrls: false });
+    await db.organization.create({
+      data: {
+        id: org,
+        slug: org,
+        legalName: 'Owner security test',
+        displayName: 'Owner security test',
+        vertical: 'PHARMACY',
+        status: 'ACTIVE',
+        deploymentMode: 'SHARED',
+      },
+    });
+  });
+  await tenant(
+    org,
+    async (db) => {
+      await seedDepartments(db, [org], ['LEADERSHIP']);
+      const branch = await db.pharmacyBranch.create({
+        data: { code: 'A', name: 'A', addressLine: 'Test', city: 'Test', provinceCode: 'PB' },
+      });
+      branchId = branch.id;
+      // Model an existing owner with old incomplete grants, then apply the backfill.
+      const role = await db.organizationRole.create({
+        data: {
+          key: 'owner',
+          name: 'Owner',
+          isSystem: true,
+          permissions: { create: { capability: 'pharmacy:*', effect: 'ALLOW' } },
+        },
+      });
+      await db.user.create({
+        data: {
+          id: owner,
+          name: 'Owner',
+          email: `${owner}@example.test`,
+          title: 'Owner',
+          department: 'LEADERSHIP',
+          role: 'ADMIN',
+          organizationRoleId: role.id,
+        },
+      });
+      const backfill = readFileSync(
+        'prisma/migrations/20261029105000_pharmacy_owner_authorization/migration.sql',
+        'utf8'
+      ).split('-- All lifecycle entry points:')[0];
+      await runMigrationSql(db, backfill.replace(/^BEGIN;|COMMIT;/gm, ''));
+      const profile = await db.restaurantStaffProfile.create({
+        data: { userId: owner, displayName: 'Owner', status: 'ACTIVE' },
+      });
+      const credential = await db.restaurantOperatorCredential.create({
+        data: { staffProfileId: profile.id, type: 'PIN', credentialHash: hash },
+      });
+      credentialId = credential.id;
+      const patient = await db.pharmacyPatient.create({
+        data: { displayName: 'Security patient' },
+      });
+      patientId = patient.id;
+      const prescriber = await db.pharmacyPrescriber.create({
+        data: { name: 'Prescriber', registrationNumber: `test-${suffix}` },
+      });
+      const medicine = await db.medicine.create({
+        data: {
+          productName: `Security medicine ${suffix}`,
+          productFamily: 'PHARMACEUTICAL',
+          rx: true,
+          presentations: { create: { presentation: 'Tablet' } },
+        },
+        include: { presentations: true },
+      });
+      const presentationId = medicine.presentations[0].id;
+      const pack = await db.packLevel.create({
+        data: {
+          presentationId,
+          versionGroupId: `pack-${suffix}`,
+          version: 1,
+          level: 'STRIP',
+          unitsPerParent: 10,
+          effectiveFrom: new Date('2026-01-01'),
+        },
+      });
+      const rx = await db.prescription.create({
+        data: {
+          patientId,
+          prescriberId: prescriber.id,
+          sourceKind: 'PAPER_IMAGE',
+          sourceFileRef: 'test:owner-security',
+          capturedByUserId: owner,
+          validFrom: new Date('2026-01-01'),
+          validUntil: new Date('2029-01-01'),
+          lines: {
+            create: {
+              medicineId: medicine.id,
+              presentationId,
+              lineNumber: 1,
+              directions: 'Once daily',
+              authorizedCanonicalUnits: 10,
+            },
+          },
+        },
+        include: { lines: true },
+      });
+      const sale = await db.pharmacySale.create({
+        data: { branchId, createdByUserId: owner, businessDate: new Date() },
+      });
+      const line = await db.pharmacySaleLine.create({
+        data: {
+          branchId,
+          saleId: sale.id,
+          medicineId: medicine.id,
+          presentationId,
+          packLevelId: pack.id,
+          saleUnit: 'PACK',
+          quantity: 1,
+          canonicalUnitsPerSaleUnit: 10,
+          canonicalUnits: 10,
+          unitPriceMinor: 100,
+          proRataCeilingMinor: 100,
+          unitCostMinor: 50,
+          idempotencyKey: `line-${suffix}`,
+          prescriptionLineId: rx.lines[0].id,
+          prescriptionPatientId: patientId,
+        },
+      });
+      const review = await db.pharmacyPharmacistReviewItem.create({
+        data: { prescriptionLineId: rx.lines[0].id, saleLineId: line.id, requestedByUserId: owner },
+      });
+      reviewId = review.id;
+    },
+    { timeout: 60_000 }
+  );
+}, 60_000);
+
+suite('owner provisioning, branch access and PIN maker/checker in Postgres', () => {
+  it('keeps both review queries branch scoped with 40,000 historical sale lines', async () => {
+    await tenant(
+      org,
+      async (db) => {
+        const template = await db.pharmacySaleLine.findFirstOrThrow({ where: { branchId } });
+        const data = { ...template, id: undefined };
+        // Real rows and the real Prisma adapter reproduce P2029 in the old IN query.
+        const inserted = await db.$executeRaw`
+        INSERT INTO pharmacy_sale_lines
+        SELECT (jsonb_populate_record(NULL::pharmacy_sale_lines,
+          to_jsonb(template) || jsonb_build_object(
+            'id', ${`volume-${suffix}-`} || n,
+            'idempotencyKey', ${`volume-${suffix}-`} || n
+          ))).*
+        FROM pharmacy_sale_lines template CROSS JOIN generate_series(1, 40000) n
+        WHERE template.id = ${template.id} AND template."organizationId" = ${org}
+      `;
+        expect(inserted).toBe(40_000);
+        const sibling = await db.pharmacyBranch.create({
+          data: {
+            code: 'VOLUME',
+            name: 'Volume sibling',
+            addressLine: 'Test',
+            city: 'Test',
+            provinceCode: 'PB',
+          },
+        });
+        const sale = await db.pharmacySale.create({
+          data: { branchId: sibling.id, createdByUserId: owner, businessDate: new Date() },
+        });
+        const siblingLine = await db.pharmacySaleLine.create({
+          data: {
+            ...data,
+            branchId: sibling.id,
+            saleId: sale.id,
+            idempotencyKey: `sibling-${suffix}`,
+          },
+        });
+        await db.pharmacyPharmacistReviewItem.create({
+          data: {
+            prescriptionLineId: data.prescriptionLineId!,
+            saleLineId: siblingLine.id,
+            requestedByUserId: owner,
+          },
+        });
+        // A staff reader can only see A, even though another tenant branch has reviews.
+        const reader = `volume-reader-${suffix}`;
+        const role = await db.organizationRole.create({
+          data: {
+            key: 'volume-reader',
+            name: 'Reader',
+            permissions: { create: { capability: 'pharmacy:dispense' } },
+          },
+        });
+        await db.user.create({
+          data: {
+            id: reader,
+            name: 'Reader',
+            email: `${reader}@example.test`,
+            title: 'Reader',
+            department: 'LEADERSHIP',
+            organizationRoleId: role.id,
+          },
+        });
+        await db.pharmacyBranchAssignment.create({ data: { userId: reader, branchId } });
+        const caller = dispensing.createCaller(context(db, reader, 'EMPLOYEE'));
+        expect((await caller.reviewQueue()).items.map((item) => item.id)).toEqual([reviewId]);
+        expect((await caller.substitutionWorkspace()).lines.map((item) => item.id)).toEqual([
+          reviewId,
+        ]);
+        await db.pharmacyBranchAssignment.updateMany({
+          where: { userId: reader },
+          data: { active: false },
+        });
+        await expect(caller.reviewQueue()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        await expect(caller.substitutionWorkspace()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        // Leave subsequent solo-owner tests with the original active membership.
+        await db.user.update({ where: { id: reader }, data: { status: 'INACTIVE' } });
+        await db.pharmacyBranch.update({ where: { id: sibling.id }, data: { active: false } });
+      },
+      { timeout: 120_000 }
+    );
+  }, 120_000);
+
+  it('honors exact, wildcard and role DENYs for freshly reauthenticated PIN resets', async () => {
+    const { pharmacyPinRouter } = await import('./pharmacy-pin');
+    for (const capability of ['pharmacy:pin-reset', 'pharmacy:*', '*']) {
+      await tenant(org, async (db) => {
+        const ctx = context(db);
+        ctx.session!.user.passwordAuthenticatedAt = Date.now();
+        const before = await db.restaurantOperatorCredential.count();
+        const audits = await db.auditLog.count({ where: { action: 'PHARMACY:PIN_RESET' } });
+        const deny = await db.userPermissionOverride.create({
+          data: { userId: owner, capability, effect: 'DENY', reason: 'PIN reset denied' },
+        });
+        await expect(
+          pharmacyPinRouter.createCaller(ctx).reset({ branchId, userId: owner, pin })
+        ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        expect(await db.restaurantOperatorCredential.count()).toBe(before);
+        expect(
+          await db.restaurantOperatorCredential.findUniqueOrThrow({ where: { id: credentialId } })
+        ).toMatchObject({ revokedAt: null });
+        expect(await db.auditLog.count({ where: { action: 'PHARMACY:PIN_RESET' } })).toBe(audits);
+        await db.userPermissionOverride.delete({ where: { id: deny.id } });
+      });
+    }
+    await tenant(org, async (db) => {
+      const member = await db.user.findUniqueOrThrow({ where: { id: owner } });
+      const deny = await db.organizationRolePermission.create({
+        data: {
+          organizationRoleId: member.organizationRoleId!,
+          capability: 'pharmacy:pin-reset',
+          effect: 'DENY',
+        },
+      });
+      const ctx = context(db);
+      ctx.session!.user.passwordAuthenticatedAt = Date.now();
+      await expect(
+        pharmacyPinRouter.createCaller(ctx).reset({ branchId, userId: owner, pin })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await db.organizationRolePermission.delete({ where: { id: deny.id } });
+    });
+  });
+
+  it('allows masked counter reads for an assigned cashier without clinical permission', async () => {
+    await tenant(org, async (db) => {
+      const cashier = `cashier-${suffix}`;
+      const role = await db.organizationRole.create({
+        data: {
+          key: 'cashier',
+          name: 'Cashier',
+          permissions: {
+            create: [
+              { capability: 'pharmacy:counter', effect: 'ALLOW' },
+              { capability: 'pharmacy:orders', effect: 'ALLOW' },
+              { capability: 'pharmacy:dispense', effect: 'DENY' },
+            ],
+          },
+        },
+      });
+      await db.user.create({
+        data: {
+          id: cashier,
+          name: 'Cashier',
+          email: `${cashier}@example.test`,
+          title: 'Cashier',
+          department: 'LEADERSHIP',
+          organizationRoleId: role.id,
+        },
+      });
+      await db.pharmacyBranchAssignment.create({ data: { userId: cashier, branchId } });
+      await db.pharmacyPatient.update({
+        where: { id: patientId },
+        data: { phone: '03001234567', cnic: '1234512345671' },
+      });
+      const caller = prescriptions.createCaller(context(db, cashier, 'EMPLOYEE'));
+      const search = () => caller.counterPatients({ branchId, query: 'Security' });
+      const panel = () => caller.counterPatientPanel({ branchId, patientId });
+      expect((await search()).patients).toEqual([
+        expect.objectContaining({ patientId, displayName: 'Security patient' }),
+      ]);
+      const result = await panel();
+      expect(result.phone).not.toBe('03001234567');
+      expect(result.cnic).not.toBe('1234512345671');
+      expect(result.patientId).toBe(patientId);
+      await expect(caller.readPatient({ branchId, patientId })).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+      });
+      await expect(
+        caller.counterPatientPanel({ branchId: 'outside-scope', patientId })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      for (const capability of ['pharmacy:counter', 'pharmacy:orders']) {
+        const deny = await db.userPermissionOverride.create({
+          data: { userId: cashier, capability, effect: 'DENY', reason: 'Counter access revoked' },
+        });
+        await expect(search()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        await expect(panel()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        await db.userPermissionOverride.delete({ where: { id: deny.id } });
+      }
+      await db.pharmacyBranchAssignment.updateMany({
+        where: { userId: cashier },
+        data: { active: false },
+      });
+      await expect(search()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await expect(panel()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await db.user.update({ where: { id: cashier }, data: { status: 'INACTIVE' } });
+    });
+  });
+
+  it('backfills every capability and autoassigns existing and newly created branches', async () => {
+    await tenant(org, async (db) => {
+      const { ALL_ACTIONS } = await import('@/lib/abac/policies');
+      for (const action of ALL_ACTIONS)
+        expect(
+          await can(
+            { id: owner, role: 'ADMIN', status: 'ACTIVE', department: null },
+            action,
+            { type: 'Resignation', userId: 'other', status: 'PENDING' },
+            { db }
+          )
+        ).toBe(true);
+      expect(
+        await db.pharmacyBranchAssignment.count({
+          where: { userId: owner, branchId, active: true },
+        })
+      ).toBe(1);
+      const branch = await db.pharmacyBranch.create({
+        data: { code: 'B', name: 'B', addressLine: 'Test', city: 'Test', provinceCode: 'PB' },
+      });
+      expect(
+        await db.pharmacyBranchAssignment.count({
+          where: { userId: owner, branchId: branch.id, active: true },
+        })
+      ).toBe(1);
+      await expect(
+        prescriptions.createCaller(context(db)).workspace({ branchId: branch.id })
+      ).resolves.toMatchObject({ selectedBranchId: branch.id });
+    });
+  });
+  it('repairs existing inactive manual owner conflicts idempotently', async () => {
+    await tenant(org, async (db) => {
+      const assignment = await db.pharmacyBranchAssignment.findFirstOrThrow({
+        where: { userId: owner, branchId },
+      });
+      await db.pharmacyBranchAssignment.update({
+        where: { id: assignment.id },
+        data: { active: false, ownerManaged: false },
+      });
+      const correction = readFileSync(
+        'prisma/migrations/20261029107000_pharmacy_owner_assignment_conflicts/migration.sql',
+        'utf8'
+      ).replace(/^BEGIN;|COMMIT;/gm, '');
+      await runMigrationSql(db, correction.slice(correction.indexOf('DO $$ DECLARE')));
+      await runMigrationSql(db, correction.slice(correction.indexOf('DO $$ DECLARE')));
+      expect(
+        await db.pharmacyBranchAssignment.findUnique({ where: { id: assignment.id } })
+      ).toMatchObject({ active: true, ownerManaged: true });
+    });
+  });
+
+  it('keeps exact and wildcard DENYs stronger than owner grants', async () => {
+    await tenant(org, async (db) => {
+      const deny = await db.userPermissionOverride.create({
+        data: {
+          userId: owner,
+          capability: 'pharmacy:*',
+          effect: 'DENY',
+          reason: 'Regression test',
+        },
+      });
+      expect(
+        await can(
+          { id: owner, role: 'ADMIN', status: 'ACTIVE', department: null },
+          'pharmacy:dispense',
+          undefined,
+          { db }
+        )
+      ).toBe(false);
+      await expect(
+        prescriptions.createCaller(context(db)).readPatient({ branchId, patientId })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await db.userPermissionOverride.delete({ where: { id: deny.id } });
+    });
+  });
+  it('denies missing/wrong PIN, persists failure count, and records no decision or success audit', async () => {
+    for (const entered of [undefined, '0000'])
+      await tenant(org, async (db) => {
+        await expect(
+          dispensing
+            .createCaller(context(db))
+            .decideReview({ reviewItemId: reviewId, kind: 'SIGN', pin: entered })
+        ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        expect(
+          await db.pharmacyPharmacistReviewDecision.count({ where: { reviewItemId: reviewId } })
+        ).toBe(0);
+        expect(
+          await db.auditLog.count({
+            where: { action: 'PHARMACY:SOLO_OWNER_PIN', targetId: reviewId },
+          })
+        ).toBe(0);
+      });
+    await tenant(org, async (db) =>
+      expect(
+        (await db.restaurantOperatorCredential.findUniqueOrThrow({ where: { id: credentialId } }))
+          .failedAttempts
+      ).toBe(1)
+    );
+  });
+  it('allows solo owner PIN signing with a durable audit and refuses direct SQL self approval', async () => {
+    await expect(
+      tenant(org, (db) =>
+        db.pharmacyPharmacistReviewDecision.create({
+          data: { reviewItemId: reviewId, kind: 'VERIFY', actorUserId: owner },
+        })
+      )
+    ).rejects.toThrow();
+    await tenant(org, async (db) => {
+      await expect(
+        dispensing
+          .createCaller(context(db))
+          .decideReview({ reviewItemId: reviewId, kind: 'SIGN', pin })
+      ).resolves.toMatchObject({ actorUserId: owner, kind: 'SIGN' });
+      const audit = await db.auditLog.findFirstOrThrow({
+        where: { action: 'PHARMACY:SOLO_OWNER_PIN', targetId: reviewId },
+      });
+      expect(audit.metadata).toMatchObject({
+        policy: 'PHARMACY:SOLO_OWNER_PIN',
+        reauthentication: 'PIN',
+      });
+      expect(JSON.stringify(audit)).not.toContain(pin);
+    });
+    // Yesterday's (or the previous transaction's) proof cannot authorize another decision.
+    await expect(
+      tenant(org, (db) =>
+        db.pharmacyPharmacistReviewDecision.create({
+          data: { reviewItemId: reviewId, kind: 'VERIFY', actorUserId: owner },
+        })
+      )
+    ).rejects.toThrow();
+  });
+  it('applies PIN maker/checker to purchase orders while preserving database constraints', async () => {
+    const purchasing = (await import('./pharmacy-purchasing')).pharmacyPurchasingRouter;
+    let orderId = '';
+    await tenant(org, async (db) => {
+      const supplier = await db.pharmacySupplier.create({
+        data: {
+          name: 'Security supplier',
+          authorized: true,
+          licences: {
+            create: {
+              licenceType: 'SALE',
+              licenceNumber: 'test',
+              verifiedAt: new Date(),
+              verifiedByUserId: owner,
+              issuingAuthority: 'Test',
+              issuedAt: new Date('2026-01-01'),
+              expiresAt: new Date('2029-01-01'),
+            },
+          },
+        },
+      });
+      const order = await db.pharmacyPurchaseOrder.create({
+        data: {
+          branchId,
+          reference: 'PIN-TEST',
+          supplierId: supplier.id,
+          createdByUserId: owner,
+          status: 'SUBMITTED',
+        },
+      });
+      orderId = order.id;
+      await expect(
+        purchasing
+          .createCaller(context(db))
+          .approvePurchaseOrder({ purchaseOrderId: order.id, decision: 'APPROVED' })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'SELF_APPROVAL' });
+      await expect(
+        purchasing
+          .createCaller(context(db))
+          .approvePurchaseOrder({ purchaseOrderId: order.id, decision: 'APPROVED', pin })
+      ).resolves.toMatchObject({ status: 'APPROVED', approvedByUserId: owner });
+      expect(
+        await db.auditLog.count({
+          where: { targetId: order.id, action: 'PHARMACY:SOLO_OWNER_PIN' },
+        })
+      ).toBe(1);
+    });
+    await expect(
+      tenant(org, (db) =>
+        db.pharmacyPurchaseOrder.update({
+          where: { id: orderId },
+          data: { approvedAt: new Date() },
+        })
+      )
+    ).rejects.toThrow();
+  });
+  it('offers the solo owner as a controlled witness and reauthenticates restoration with audit', async () => {
+    const { listControlledPinWitnesses } = await import('@/lib/pharmacy/controlled-register');
+    const { authorizeControlledRestoration } =
+      await import('@/lib/pharmacy/controlled-restoration-authorization');
+    await tenant(org, async (db) => {
+      const profile = await db.restaurantStaffProfile.findFirstOrThrow({
+        where: { userId: owner },
+      });
+      expect(await listControlledPinWitnesses(db, org, owner, branchId)).toContainEqual({
+        id: profile.id,
+        name: 'Owner',
+      });
+      const result = await authorizeControlledRestoration(
+        db,
+        { organizationId: org, branchId, actorId: owner },
+        { staffProfileId: profile.id, pin }
+      );
+      expect(result.witnessedByUserId).toBe(owner);
+      const audit = await db.auditLog.findFirstOrThrow({
+        where: {
+          targetId: result.signatureRef.slice('solo-restoration:'.length),
+          action: 'PHARMACY:SOLO_OWNER_PIN',
+        },
+      });
+      expect(audit.metadata).toMatchObject({ policy: 'PHARMACY:SOLO_OWNER_PIN', branchId });
+      const [proof] = await db.$queryRaw<
+        { allowed: boolean }[]
+      >`SELECT pharmacy_has_solo_audit(${org}, ${branchId}, ${owner}, 'ControlledRestoration', (SELECT "targetId" FROM audit_logs WHERE id=current_setting('app.pharmacy_solo_audit_id', true))) AS allowed`;
+      expect(proof.allowed).toBe(true);
+    });
+    await tenant(org, async (db) => {
+      const [proof] = await db.$queryRaw<
+        { allowed: boolean }[]
+      >`SELECT pharmacy_has_solo_audit(${org}, ${branchId}, ${owner}, 'ControlledRestoration', (SELECT "targetId" FROM audit_logs WHERE id=current_setting('app.pharmacy_solo_audit_id', true))) AS allowed`;
+      expect(proof.allowed).toBe(false);
+    });
+  });
+  it('does not commit successful solo PIN evidence when correction eligibility is denied', async () => {
+    const safety = (await import('./pharmacy-safety')).pharmacySafetyRouter;
+    await tenant(org, async (db) => {
+      const profile = await db.restaurantStaffProfile.findFirstOrThrow({
+        where: { userId: owner },
+      });
+      const deny = await db.userPermissionOverride.create({
+        data: {
+          userId: owner,
+          capability: 'pharmacy:dispense',
+          effect: 'DENY',
+          reason: 'Clinical access revoked',
+        },
+      });
+      const ctx = context(db);
+      ctx.entitlements.enabledModules.push('pharmacy-safety');
+      const target = `denied-correction-${suffix}`;
+      await expect(
+        safety.createCaller(ctx).recordCorrection({
+          branchId,
+          correctsEntryId: target,
+          correctionReason: 'Correct quantity',
+          quantityCanonicalUnits: 1,
+          staffProfileId: profile.id,
+          pin,
+        })
+      ).resolves.toEqual({ blocked: 'A different qualified person must enter their PIN.' });
+      expect(
+        await db.auditLog.count({ where: { action: 'PHARMACY:SOLO_OWNER_PIN', targetId: target } })
+      ).toBe(0);
+      expect(
+        await db.pharmacyControlledRegisterEntry.count({ where: { correctsEntryId: target } })
+      ).toBe(0);
+      await db.userPermissionOverride.delete({ where: { id: deny.id } });
+    });
+  });
+
+  it('requires another approver when a second active staff member exists', async () => {
+    await tenant(org, async (db) => {
+      const pharmacist = await db.organizationRole.create({
+        data: {
+          key: 'pharmacist',
+          name: 'Pharmacist',
+          permissions: { create: { capability: 'pharmacy:dispense' } },
+        },
+      });
+      await db.user.create({
+        data: {
+          id: second,
+          name: 'Second',
+          email: `${second}@example.test`,
+          title: 'Pharmacist',
+          department: 'LEADERSHIP',
+          organizationRoleId: pharmacist.id,
+        },
+      });
+      await db.pharmacyBranchAssignment.create({ data: { userId: second, branchId } });
+      const branchB = await db.pharmacyBranch.findFirstOrThrow({ where: { code: 'B' } });
+      await expect(
+        prescriptions
+          .createCaller(context(db, second, 'EMPLOYEE'))
+          .readPatient({ branchId: branchB.id, patientId })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await expect(
+        prescriptions.createCaller(context(db, second, 'EMPLOYEE')).workspace()
+      ).resolves.toMatchObject({ branches: [{ id: branchId, name: 'A' }] });
+      await expect(
+        dispensing
+          .createCaller(context(db))
+          .decideReview({ reviewItemId: reviewId, kind: 'SIGN', pin })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await expect(
+        dispensing
+          .createCaller(context(db, second, 'EMPLOYEE'))
+          .decideReview({ reviewItemId: reviewId, kind: 'SIGN' })
+      ).resolves.toMatchObject({ actorUserId: second });
+    });
+  });
+  it('allows a solo branch while counting unassigned staff and all owners conservatively', async () => {
+    const { soloOwnerEligible } = await import('@/lib/pharmacy/solo-approval');
+    const isSoloPharmacyOwner = (
+      db: ScopedDb,
+      organizationId: string,
+      actorId: string,
+      branchId?: string
+    ) => soloOwnerEligible(db, { organizationId, actorId, branchId });
+    await tenant(org, async (db) => {
+      const branchB = await db.pharmacyBranch.findFirstOrThrow({ where: { code: 'B' } });
+      await db.pharmacyBranchAssignment.deleteMany({ where: { userId: second } });
+      expect(await isSoloPharmacyOwner(db, org, owner, branchId)).toBe(false);
+      await db.pharmacyBranchAssignment.create({ data: { userId: second, branchId: branchB.id } });
+      expect(await isSoloPharmacyOwner(db, org, owner)).toBe(false);
+      expect(await isSoloPharmacyOwner(db, org, owner, branchId)).toBe(false);
+      expect(await isSoloPharmacyOwner(db, org, owner, branchB.id)).toBe(false);
+      await expect(
+        dispensing
+          .createCaller(context(db))
+          .decideReview({ reviewItemId: reviewId, kind: 'VERIFY', pin })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      const queue = await dispensing.createCaller(context(db)).reviewQueue();
+      expect(queue.soloReviewItemIds).not.toContain(reviewId);
+      const before = await db.pharmacyPharmacistReviewDecision.count({
+        where: { reviewItemId: reviewId },
+      });
+      await expect(
+        dispensing.createCaller(context(db, second, 'EMPLOYEE')).decideReview({
+          reviewItemId: reviewId,
+          kind: 'VERIFY',
+        })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(
+        await db.pharmacyPharmacistReviewDecision.count({ where: { reviewItemId: reviewId } })
+      ).toBe(before);
+      expect(
+        await db.auditLog.count({ where: { actorId: second, action: 'PHARMACY:SOLO_OWNER_PIN' } })
+      ).toBe(0);
+      // An inactive manually assigned branch must not block promotion to owner.
+      await db.pharmacyBranchAssignment.create({
+        data: { userId: second, branchId, active: false, ownerManaged: false },
+      });
+      const ownerRole = await db.organizationRole.findFirstOrThrow({
+        where: { key: 'owner', isSystem: true },
+      });
+      await db.user.update({
+        where: { id: second },
+        data: { role: 'ADMIN', organizationRoleId: ownerRole.id },
+      });
+      expect(await isSoloPharmacyOwner(db, org, owner, branchId)).toBe(false);
+      // Becoming an owner also autoassigns every branch and cannot create a solo exception.
+      expect(
+        await db.pharmacyBranchAssignment.count({
+          where: { userId: second, branchId, active: true },
+        })
+      ).toBe(1);
+      expect(
+        await db.pharmacyBranchAssignment.findFirst({ where: { userId: second, branchId } })
+      ).toMatchObject({ active: true, ownerManaged: true });
+      const pharmacistRole = await db.organizationRole.findFirstOrThrow({
+        where: { key: 'pharmacist' },
+      });
+      await db.user.update({
+        where: { id: second },
+        data: { role: 'EMPLOYEE', organizationRoleId: pharmacistRole.id },
+      });
+      expect(
+        await db.pharmacyBranchAssignment.findFirst({ where: { userId: second, branchId } })
+      ).toMatchObject({ active: false, ownerManaged: true });
+      // Pre-existing active manual access remains after demotion.
+      expect(
+        await db.pharmacyBranchAssignment.findFirst({
+          where: { userId: second, branchId: branchB.id },
+        })
+      ).toMatchObject({ active: true, ownerManaged: false });
+    });
+  });
+});

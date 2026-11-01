@@ -212,6 +212,9 @@ describe('demo persona ABAC least privilege', () => {
     const db = {
       user: {
         findUnique: vi.fn().mockResolvedValue({
+          organizationId: seed.identity.organizationId,
+          role: 'EMPLOYEE',
+          status: 'ACTIVE',
           organizationRole: {
             permissions: template.capabilities.map((capability) => ({
               capability,

@@ -54,7 +54,11 @@ function callerFor(permissions: Permission[], permissionOverrides: Permission[] 
   const db = {
     $transaction: async (callback: (tx: unknown) => unknown) => callback(db),
     $queryRaw: lock,
-    pharmacyBranch: { findMany: async () => [{ id: 'branch-1' }] },
+    pharmacyBranchAssignment: { findMany: vi.fn(async () => [{ branchId: 'branch-1' }]) },
+    pharmacyBranch: {
+      findFirst: vi.fn(async () => ({ id: 'branch-1' })),
+      findMany: async () => [{ id: 'branch-1' }],
+    },
     branchRegulatoryProfile: {
       findFirst: async () => ({
         branchId: 'branch-1',
@@ -80,6 +84,7 @@ function callerFor(permissions: Permission[], permissionOverrides: Permission[] 
     user: {
       findUnique: async () => ({
         status: 'ACTIVE',
+        organizationId: 'org-1',
         organizationRole: { permissions },
         permissionOverrides,
       }),
@@ -192,7 +197,9 @@ describe('pharmacySales.addLine controlled actor', () => {
       blocked:
         'Controlled medicine requires the patient address, an independent pharmacist PIN, and either a valid prescription or an emergency supply with the prescriber name.',
     });
-    expect(lock).toHaveBeenCalledTimes(1);
+    // One read resolves whether the witness profile is the actor's own (solo owner PIN);
+    // the second serializes the independent witness credential row.
+    expect(lock).toHaveBeenCalledTimes(2);
     expect(credential).toHaveBeenCalledExactlyOnceWith({
       where: {
         organizationId: 'org-1',

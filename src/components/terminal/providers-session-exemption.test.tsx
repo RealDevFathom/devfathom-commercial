@@ -5,6 +5,19 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 const navigation = vi.hoisted(() => ({ pathname: '/terminal', push: vi.fn() }));
 const actor = vi.hoisted(() => ({ resolve: vi.fn() }));
 
+vi.mock('next/headers', () => ({ headers: async () => new Headers({ host: 'test.localhost' }) }));
+vi.mock('@/lib/tenancy/host', () => ({
+  TENANT_HOST_HEADER: 'x-tenant-host',
+  resolveOrganizationByHost: async () => ({ id: 'org_terminal', status: 'ACTIVE' }),
+  isTenantLifecycleAccessible: (status: string) => status === 'ACTIVE',
+}));
+vi.mock('@/lib/tenancy/scoped-db', () => ({
+  withTenantDb: async (_org: string, fn: (db: unknown) => unknown) => fn({}),
+}));
+vi.mock('@/lib/entitlements', () => ({
+  resolveOrganizationEntitlements: async () => ({ enabledModules: ['restaurant-pos'] }),
+  hasModule: (view: { enabledModules: string[] }, key: string) => view.enabledModules.includes(key),
+}));
 vi.mock('next/navigation', () => ({
   usePathname: () => navigation.pathname,
   useRouter: () => ({ push: navigation.push }),

@@ -21,7 +21,9 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
+// The worker drains the global queue; isolate it from other suites' jobs.
+const TEST_DATABASE_URL =
+  process.env.PHARMACY_COUNTER_EVIDENCE_TEST_DATABASE_URL ?? process.env.TEST_DATABASE_URL;
 if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
 // Resolved when the camera runtime module is evaluated, in the dynamic imports.
 process.env.CAMERA_GATEWAY_MODE = 'simulated';
@@ -60,10 +62,9 @@ beforeAll(async () => {
   vi.stubEnv('AZURE_STORAGE_ACCOUNT_NAME', '');
   // Integrated tip: storage fails closed unless an adapter is named explicitly.
   vi.stubEnv('STORAGE_ADAPTER', 'local');
-  // storage.ts fixes its local root from cwd at import: point it at scratch.
-  const cwd = vi.spyOn(process, 'cwd').mockReturnValue(directory);
+  // The local adapter resolves its configured root for each operation.
+  vi.stubEnv('LOCAL_UPLOADS_DIR', join(directory, 'private-uploads'));
   storage = await import('@/lib/storage');
-  cwd.mockRestore();
 
   ({ withTenantDb, withPlatformDb } = await import('@/lib/tenancy/scoped-db'));
   ({ processPlatformJobs } = await import('@/lib/platform/jobs'));

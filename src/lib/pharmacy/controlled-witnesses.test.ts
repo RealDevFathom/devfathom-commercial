@@ -16,7 +16,15 @@ describe('controlled witness tenant scope', () => {
       },
     ]);
     const result = await listControlledPinWitnesses(
-      { restaurantStaffProfile: { findMany } } as never,
+      {
+        $queryRaw: vi.fn().mockResolvedValue([{ allowed: false }]),
+        restaurantStaffProfile: { findMany },
+        user: {
+          findUnique: vi
+            .fn()
+            .mockResolvedValue({ status: 'ACTIVE', role: 'EMPLOYEE', organizationId: 'org' }),
+        },
+      } as never,
       'org',
       'actor'
     );
@@ -32,3 +40,40 @@ describe('controlled witness tenant scope', () => {
     );
   });
 });
+
+it.each([true, false])(
+  'keeps the named self-witness bound to solo-owner eligibility (%s)',
+  async (solo) => {
+    const findMany = vi
+      .fn()
+      .mockResolvedValue([
+        {
+          id: 'profile',
+          displayName: 'Owner',
+          user: { id: 'owner', organizationId: 'org', status: 'ACTIVE' },
+        },
+      ]);
+    const db = {
+      $queryRaw: vi.fn().mockResolvedValue([{ allowed: solo }]),
+      restaurantStaffProfile: { findMany },
+    };
+    const witnesses = await listControlledPinWitnesses(
+      db as never,
+      'org',
+      'owner',
+      'branch',
+      'owner'
+    );
+    if (solo) {
+      expect(witnesses).toEqual([{ id: 'profile', name: 'Owner' }]);
+      expect(findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ organizationId: 'org', userId: 'owner' }),
+        })
+      );
+    } else {
+      expect(witnesses).toEqual([]);
+      expect(findMany).not.toHaveBeenCalled();
+    }
+  }
+);

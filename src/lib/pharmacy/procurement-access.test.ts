@@ -40,7 +40,7 @@ describe('procurementCapabilityGranted', () => {
     ).toBe(false);
   });
 
-  it('lets a role DENY win over a user ALLOW, as in ABAC', () => {
+  it('does not let an override ALLOW bypass a role DENY', () => {
     expect(
       procurementCapabilityGranted({
         overrides: [{ capability: 'pharmacy:procurement', effect: 'ALLOW' }],
@@ -48,6 +48,15 @@ describe('procurementCapabilityGranted', () => {
       })
     ).toBe(false);
   });
+});
+
+it('never lets an override ALLOW outrun a role DENY on either procurement alias', () => {
+  expect(
+    procurementCapabilityGranted({
+      overrides: [{ capability: 'pharmacy:procurement', effect: 'ALLOW' }],
+      role: [{ capability: 'pharmacy.procurement', effect: 'DENY' }],
+    })
+  ).toBe(false);
 });
 
 describe('Goods-in procurement access (#375)', () => {
@@ -60,6 +69,8 @@ describe('Goods-in procurement access (#375)', () => {
             user: {
               findUnique: vi.fn().mockResolvedValue({
                 role,
+                status: 'ACTIVE',
+                organizationId: 'org',
                 organizationRole: template
                   ? {
                       permissions: template.capabilities.map((capability) => ({
@@ -92,6 +103,8 @@ describe('Goods-in procurement access (#375)', () => {
     const now = new Date('2026-10-30T00:00:00Z');
     const findUnique = vi.fn().mockResolvedValue({
       role: 'ADMIN',
+      status: 'ACTIVE',
+      organizationId: 'org',
       organizationRole: null,
       permissionOverrides: [],
     });
@@ -99,7 +112,7 @@ describe('Goods-in procurement access (#375)', () => {
     expect(await actorCanProcure(db, 'actor', now)).toBe(true);
     expect(findUnique).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { id: 'actor' },
+        where: { id: 'actor', status: 'ACTIVE' },
         select: expect.objectContaining({
           permissionOverrides: {
             where: { OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] },

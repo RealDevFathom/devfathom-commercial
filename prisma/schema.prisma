@@ -249,14 +249,17 @@ model PharmacyBranch {
   @@map("pharmacy_branches")
 }
 
-/// Active assignment of a tenant user to one pharmacy branch. Receipt reads use
-/// this table, never restaurant staff profiles. An empty set is not a grant.
+/// Active assignment of a tenant user to one pharmacy branch. Branch-scoped pharmacy
+/// actions use this table, never restaurant staff profiles. Owner assignments are
+/// materialized by lifecycle triggers; an empty set grants nothing to other staff.
 model PharmacyBranchAssignment {
   id             String   @id @default(cuid())
   organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   branchId       String
   userId         String
   active         Boolean  @default(true)
+  /// SQL lifecycle marker for assignments inherited from proprietor access.
+  ownerManaged   Boolean  @default(false)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -1491,6 +1494,8 @@ model PharmacySaleLine {
   allocations               PharmacySaleLineAllocation[]
   returnLines               PharmacySaleReturnLine[]
   unidentifiedReturnHolds   PharmacyUnidentifiedReturnHold[]
+
+  pharmacistReviewItem PharmacyPharmacistReviewItem?
 
   @@unique([organizationId, id])
   @@unique([organizationId, branchId, id])
@@ -12441,6 +12446,7 @@ model PharmacyPharmacistReviewItem {
   requestedByUserId  String
   requestedAt        DateTime                           @default(now())
   line               PrescriptionLine                   @relation(fields: [organizationId, prescriptionLineId], references: [organizationId, id], onDelete: Restrict)
+  saleLine           PharmacySaleLine @relation(fields: [organizationId, saleLineId], references: [organizationId, id], onDelete: Restrict)
   decisions          PharmacyPharmacistReviewDecision[]
 
   @@unique([organizationId, id])

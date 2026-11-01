@@ -47,17 +47,17 @@ function fixture(returnedUnits: number, priorRefunds: number[] = []) {
   let payloadHash = '';
   const db = {
     user: {
-      findUnique: vi.fn().mockResolvedValue({
+      findUnique: vi.fn(async () => ({
+        id: 'actor-1',
+        role: 'EMPLOYEE',
         status: 'ACTIVE',
         organizationId: 'org-1',
-        organizationRole: {
-          permissions: [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }],
-        },
+        organizationRole: { permissions: [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }] },
         permissionOverrides: [],
-      }),
+      })),
     },
     pharmacyBranch: {
-      findFirst: vi.fn().mockResolvedValue({ id: 'branch-1' }),
+      findFirst: vi.fn(async () => ({ id: 'branch-1' })),
       findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
         where.id.in.map((id) => ({ id }))
       ),

@@ -21,7 +21,7 @@ const ORG_A = `org_wha1191_a_${suffix}`;
 // suite silently conflicts with the rows the first one left behind.
 const BRANCH_A = `branch_a_${suffix}`;
 
-const ACTOR = 'user_pharmacist';
+const ACTOR = `user_pharmacist_${suffix}`;
 
 const NOW = new Date('2026-09-02T09:00:00.000Z');
 const LATER = new Date('2027-10-01T00:00:00.000Z');
@@ -216,6 +216,23 @@ beforeAll(async () => {
       [ORG_A]
     )
   );
+  await scopedDb.withTenantDb(ORG_A, async (db) => {
+    await db.organizationDepartment.create({ data: { key: 'PHARMACY', name: 'PHARMACY' } });
+    const role = await db.organizationRole.create({
+      data: { key: 'owner', name: 'Owner', isSystem: true },
+    });
+    await db.user.create({
+      data: {
+        id: ACTOR,
+        email: `${ACTOR}@example.invalid`,
+        name: 'Offline actor',
+        department: 'PHARMACY',
+        title: 'Owner',
+        role: 'ADMIN',
+        organizationRoleId: role.id,
+      },
+    });
+  });
 }, 180_000);
 
 // Mock only the web identity/entitlement boundary; transactions, signatures,

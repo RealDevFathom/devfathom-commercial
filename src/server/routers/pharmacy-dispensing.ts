@@ -1,8 +1,23 @@
+import { requirePharmacyReadBranch } from '../pharmacy-branch-access';
+import { authorizeSoloApproval, soloOwnerEligible } from '@/lib/pharmacy/solo-approval';
 import { z } from 'zod';
-import { capabilityProcedure, router } from '../trpc';
+import { capabilityProcedure, router, type TRPCContext } from '../trpc';
 import { TRPCError } from '@trpc/server';
 
 const dispense = capabilityProcedure('pharmacy:dispense');
+
+async function reviewScope(ctx: TRPCContext) {
+  const { branches } = await requirePharmacyReadBranch(ctx);
+  // Keep historical sale-line IDs in the database: expanding them into an IN
+  // list can exceed PostgreSQL's bind parameter limit on busy branches.
+  return {
+    organizationId: ctx.entitlements!.organizationId,
+    saleLine: {
+      organizationId: ctx.entitlements!.organizationId,
+      branchId: { in: branches.map((branch) => branch.id) },
+    },
+  };
+}
 
 export const pharmacyDispensingRouter = router({
   // Separate, repeatable OTC-capable work queue. These holdings remain quarantined;
@@ -29,9 +44,10 @@ export const pharmacyDispensingRouter = router({
         },
       });
     }),
-  reviewQueue: dispense.query(async ({ ctx }) => ({
-    currentUserId: ctx.session!.user.id,
-    items: await ctx.db.pharmacyPharmacistReviewItem.findMany({
+  reviewQueue: dispense.query(async ({ ctx }) => {
+    const where = await reviewScope(ctx);
+    const items = await ctx.db.pharmacyPharmacistReviewItem.findMany({
+      where,
       orderBy: { requestedAt: 'asc' },
       include: {
         line: {
@@ -43,10 +59,28 @@ export const pharmacyDispensingRouter = router({
         },
         decisions: { orderBy: { createdAt: 'asc' } },
       },
-    }),
-  })),
+    });
+    const soloReviewItemIds: string[] = [];
+    for (const item of items) {
+      if (item.requestedByUserId !== ctx.session!.user.id) continue;
+      const line = await ctx.db.pharmacySaleLine.findFirst({
+        where: { id: item.saleLineId },
+        select: { branchId: true },
+      });
+      if (
+        await soloOwnerEligible(ctx.db, {
+          organizationId: ctx.entitlements.organizationId,
+          branchId: line?.branchId,
+          actorId: ctx.session!.user.id,
+        })
+      )
+        soloReviewItemIds.push(item.id);
+    }
+    return { currentUserId: ctx.session!.user.id, items, soloReviewItemIds };
+  }),
   substitutionWorkspace: dispense.query(async ({ ctx }) => ({
     lines: await ctx.db.pharmacyPharmacistReviewItem.findMany({
+      where: await reviewScope(ctx),
       orderBy: { requestedAt: 'desc' },
       include: {
         line: {
@@ -75,16 +109,55 @@ export const pharmacyDispensingRouter = router({
           reviewItemId: z.string().min(1),
           kind: z.enum(['VERIFY', 'CLARIFY', 'REFUSE', 'OVERRIDE', 'COUNSEL', 'SIGN']),
           reason: z.string().trim().min(1).optional(),
+          pin: z
+            .string()
+            .regex(/^\d{4,8}$/)
+            .optional(),
         })
         .strict()
     )
-    .mutation(({ ctx, input }) =>
-      ctx.db.pharmacyPharmacistReviewDecision.create({
-        data: {
-          ...input,
-          actorUserId: ctx.session!.user.id,
-          signedAt: input.kind === 'SIGN' ? new Date() : undefined,
-        },
+    .mutation(async ({ ctx, input }) =>
+      ctx.db.$transaction(async (db) => {
+        const item = await db.pharmacyPharmacistReviewItem.findFirst({
+          where: { id: input.reviewItemId },
+        });
+        if (!item) throw new TRPCError({ code: 'NOT_FOUND' });
+        const line = await db.pharmacySaleLine.findFirst({
+          where: { id: item.saleLineId },
+          select: { branchId: true },
+        });
+        if (!line) throw new TRPCError({ code: 'NOT_FOUND' });
+        await requirePharmacyReadBranch({ ...ctx, db: db as typeof ctx.db }, line.branchId);
+        if (
+          item.requestedByUserId === ctx.session!.user.id &&
+          !(await authorizeSoloApproval(
+            db as typeof ctx.db,
+            {
+              organizationId: ctx.entitlements.organizationId,
+              branchId: line?.branchId ?? null,
+              actorId: ctx.session!.user.id,
+            },
+            { type: 'PharmacyReviewItem', id: item.id },
+            input.pin
+          ))
+        ) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'A second pharmacist or a solo owner PIN is required.',
+          });
+        }
+        const decision = {
+          reviewItemId: input.reviewItemId,
+          kind: input.kind,
+          reason: input.reason,
+        };
+        return db.pharmacyPharmacistReviewDecision.create({
+          data: {
+            ...decision,
+            actorUserId: ctx.session!.user.id,
+            signedAt: input.kind === 'SIGN' ? new Date() : undefined,
+          },
+        });
       })
     ),
   recordSubstitution: dispense

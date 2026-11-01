@@ -11,7 +11,7 @@ const mocks = vi.hoisted(() => ({
     findMany: vi.fn(),
   },
   platformAuditLog: { create: vi.fn() },
-  platformUser: { findMany: vi.fn() },
+  platformUser: { findMany: vi.fn(), findUnique: vi.fn() },
   notification: { createMany: vi.fn() },
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({
@@ -59,6 +59,7 @@ const session = () => ({
 
 beforeEach(() => {
   vi.resetAllMocks();
+  mocks.platformUser.findUnique.mockResolvedValue({ active: true });
   mocks.organization.findUnique.mockResolvedValue({
     id: 'org_one',
     slug: 'one',
@@ -207,3 +208,13 @@ describe('support-session hardening', () => {
       expect(query.select).not.toHaveProperty(secret);
   });
 });
+
+it.each([NaN, Infinity, -Infinity])(
+  'rejects non-finite support duration %s',
+  async (durationMinutes) => {
+    await expect(createSupportSession({ ...input, durationMinutes })).rejects.toMatchObject({
+      status: 400,
+    });
+    expect(mocks.platformSupportSession.create).not.toHaveBeenCalled();
+  }
+);

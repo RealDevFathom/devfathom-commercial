@@ -114,6 +114,7 @@ async function fixture(
   organizationId: string,
   branchId: string,
   label: string,
+  orderBonusPacks = 2,
   organizationWide = false
 ): Promise<Fixture> {
   return inOrg(organizationId, async (db) => {
@@ -190,10 +191,10 @@ async function fixture(
             medicineId: medicine.id,
             packLevelId: packLevel.id,
             orderedPacks: 10,
-            bonusPacks: 2,
+            bonusPacks: orderBonusPacks,
             canonicalUnitsPerPack: 10,
             orderedCanonicalUnits: 100,
-            bonusCanonicalUnits: 20,
+            bonusCanonicalUnits: orderBonusPacks * 10,
             listPricePerPackMinor: 10_000,
           },
         },
@@ -427,6 +428,214 @@ describeIfDatabase('PH-PUR receiving — row level security', () => {
 // ── PUR-02 — receiving into the batch ledger ────────────────────────────────
 
 describeIfDatabase('PUR-02 — posting a receipt into the batch ledger', () => {
+  it('counts both branches of a shared order without disclosing hidden receipts or posting overage', async () => {
+    const { listPurchaseOrders, receivedAgainstOrder } = await import('./purchasing-console');
+    const { withPlatformDb } = await import('@/lib/tenancy/scoped-db');
+    await withPlatformDb((db) =>
+      db.organization.create({
+        data: {
+          id: ORG_A,
+          slug: `shared-order-${suffix}`,
+          legalName: 'Shared order pharmacy',
+          displayName: 'Shared order pharmacy',
+          status: 'ACTIVE',
+          vertical: 'PHARMACY',
+        },
+      })
+    );
+    const f = await fixture(ORG_A, BRANCH_A, 'shared-order');
+    const b = await fixture(ORG_A, BRANCH_B, 'shared-branch');
+    const buyerId = tag('restricted-buyer');
+    const receiptIds = await inOrg(ORG_A, async (db) => {
+      await db.organizationDepartment.create({ data: { key: 'Pharmacy', name: 'Pharmacy' } });
+      await db.user.create({
+        data: {
+          id: buyerId,
+          organizationId: ORG_A,
+          email: `${buyerId}@example.test`,
+          name: 'Restricted buyer',
+          department: 'Pharmacy',
+          title: 'Buyer',
+          role: 'EMPLOYEE',
+          status: 'ACTIVE',
+        },
+      });
+      await db.userPermissionOverride.create({
+        data: {
+          userId: buyerId,
+          capability: 'pharmacy:procurement',
+          effect: 'ALLOW',
+          reason: 'Shared order regression',
+        },
+      });
+      await db.pharmacyBranchAssignment.create({
+        data: {
+          organizationId: ORG_A,
+          branchId: BRANCH_A,
+          userId: buyerId,
+        },
+      });
+      const order = await db.pharmacyPurchaseOrder.create({
+        data: {
+          organizationId: ORG_A,
+          reference: tag('shared-po'),
+          branchId: null,
+          supplierId: f.supplierId,
+          createdByUserId: buyerId,
+          lines: {
+            create: {
+              lineNumber: 1,
+              medicineId: f.medicineId,
+              packLevelId: f.packLevelId,
+              orderedPacks: 3,
+              bonusPacks: 0,
+              canonicalUnitsPerPack: 10,
+              orderedCanonicalUnits: 30,
+              bonusCanonicalUnits: 0,
+              listPricePerPackMinor: 10000,
+            },
+          },
+        },
+        include: { lines: true },
+      });
+      for (const status of ['SUBMITTED', 'APPROVED', 'SENT'] as const) {
+        await db.pharmacyPurchaseOrder.update({
+          where: { id: order.id },
+          data: {
+            status,
+            ...(status === 'APPROVED'
+              ? { approvedByUserId: APPROVER, approvedAt: RECEIVED_AT }
+              : {}),
+          },
+        });
+      }
+      f.purchaseOrderId = order.id;
+      f.purchaseOrderLineId = order.lines[0]!.id;
+      const a = await draftReceipt(db, f, 'shared-a', {
+        line: { receivedPacks: 1, bonusPacks: 0 },
+      });
+      const other = await draftReceipt(
+        db,
+        { ...f, branchId: BRANCH_B, storeId: b.storeId, quarantineId: b.quarantineId },
+        'shared-b',
+        { line: { receivedPacks: 2, bonusPacks: 0 } }
+      );
+      await deps.receipts.postGoodsReceipt(db, scopeOf(f), {
+        goodsReceiptId: a.id,
+        at: RECEIVED_AT,
+      });
+      await deps.receipts.postGoodsReceipt(
+        db,
+        { ...scopeOf(f), branchId: BRANCH_B },
+        { goodsReceiptId: other.id, at: RECEIVED_AT }
+      );
+      return { a: a.id, b: other.id, hiddenReference: other.reference };
+    });
+    await inOrg(ORG_A, async (db) => {
+      const scope = { organizationId: ORG_A, actorId: buyerId };
+      const orders = await listPurchaseOrders(db, scope);
+      const order = orders.find((row) => row.id === f.purchaseOrderId)!;
+      expect(order.goodsReceipts.map((row) => row.id)).toEqual([receiptIds.a]);
+      expect(JSON.stringify(order)).not.toContain(receiptIds.b);
+      expect(JSON.stringify(order)).not.toContain(receiptIds.hiddenReference);
+      const totals = await receivedAgainstOrder(db, scope, f.purchaseOrderId);
+      expect(totals.get(f.purchaseOrderLineId)).toEqual({
+        receivedUnits: 30,
+        acceptedUnits: 30,
+        rejectedUnits: 0,
+      });
+      expect(
+        order.lines[0]!.orderedCanonicalUnits - totals.get(f.purchaseOrderLineId)!.receivedUnits
+      ).toBe(0);
+    });
+    const excess = await inOrg(ORG_A, (db) =>
+      draftReceipt(db, f, 'shared-excess', { line: { receivedPacks: 1, bonusPacks: 0 } })
+    );
+    await expect(
+      inOrg(ORG_A, (db) =>
+        deps.receipts.postGoodsReceipt(
+          db,
+          { ...scopeOf(f), actorId: buyerId },
+          { goodsReceiptId: excess.id, at: RECEIVED_AT }
+        )
+      )
+    ).rejects.toMatchObject({ reason: 'INVALID_QUANTITY' });
+    await inOrg(ORG_A, async (db) => {
+      expect(
+        (await db.pharmacyGoodsReceipt.findFirstOrThrow({ where: { id: excess.id } })).status
+      ).toBe('DRAFT');
+      expect(
+        await db.pharmacyInventoryLot.count({
+          where: { supplierInvoiceRef: `${excess.supplierInvoiceRef}#1` },
+        })
+      ).toBe(0);
+    });
+  });
+
+  it('accepts replacement stock for rejected units while retaining delivered totals and the acceptance cap', async () => {
+    const f = await fixture(ORG_A, BRANCH_A, 'replacement', 0);
+    const first = await inOrg(ORG_A, async (db) => {
+      const drafted = await draftReceipt(db, f, 'rejected-delivery', {
+        line: { bonusPacks: 0, rejectedCanonicalUnits: 30 },
+      });
+      return deps.receipts.postGoodsReceipt(db, scopeOf(f), {
+        goodsReceiptId: drafted.id,
+        at: RECEIVED_AT,
+      });
+    });
+    const replacement = await inOrg(ORG_A, async (db) => {
+      const drafted = await draftReceipt(db, f, 'replacement-delivery', {
+        line: { receivedPacks: 3, bonusPacks: 0 },
+      });
+      return deps.receipts.postGoodsReceipt(db, scopeOf(f), {
+        goodsReceiptId: drafted.id,
+        at: RECEIVED_AT,
+      });
+    });
+
+    await inOrg(ORG_A, async (db) => {
+      expect(await balancesFor(db, ORG_A, first.lines[0]!.inventoryLotId)).toEqual({
+        AVAILABLE: 70,
+        QUARANTINE: 30,
+      });
+      expect(await balancesFor(db, ORG_A, replacement.lines[0]!.inventoryLotId)).toEqual({
+        AVAILABLE: 30,
+      });
+      // Replacements fulfill the order, but all 130 delivered units still
+      // participate in discrepancy reporting, including the rejected 30.
+      expect(
+        await db.pharmacyReceivingException.findMany({
+          where: { goodsReceiptId: replacement.goodsReceiptId },
+          select: { kind: true, expectedUnits: true, observedUnits: true },
+        })
+      ).toEqual([{ kind: 'OVERAGE', expectedUnits: 100, observedUnits: 130 }]);
+    });
+
+    const excess = await inOrg(ORG_A, (db) =>
+      draftReceipt(db, f, 'replacement-excess', {
+        line: { receivedPacks: 1, bonusPacks: 0 },
+      })
+    );
+    await expect(
+      inOrg(ORG_A, (db) =>
+        deps.receipts.postGoodsReceipt(db, scopeOf(f), {
+          goodsReceiptId: excess.id,
+          at: RECEIVED_AT,
+        })
+      )
+    ).rejects.toMatchObject({ reason: 'INVALID_QUANTITY' });
+    await inOrg(ORG_A, async (db) => {
+      expect(
+        (await db.pharmacyGoodsReceipt.findFirstOrThrow({ where: { id: excess.id } })).status
+      ).toBe('DRAFT');
+      expect(
+        await db.pharmacyInventoryLot.count({
+          where: { supplierInvoiceRef: `${excess.supplierInvoiceRef}#1` },
+        })
+      ).toBe(0);
+    });
+  });
+
   it('creates the lot and the RECEIPT movement, and on-hand projects from them', async () => {
     const f = await fixture(ORG_A, BRANCH_A, 'post');
     const result = await inOrg(ORG_A, async (db) => {
@@ -476,7 +685,7 @@ describeIfDatabase('PUR-02 — posting a receipt into the batch ledger', () => {
   });
 
   it('drafts and posts branch receipts against SENT and RECEIVING organization-wide orders', async () => {
-    const f = await fixture(ORG_A, BRANCH_A, 'org-wide', true);
+    const f = await fixture(ORG_A, BRANCH_A, 'org-wide', 2, true);
     const result = await inOrg(ORG_A, async (db) => {
       const balances = [];
       for (const delivery of ['first', 'second']) {
@@ -877,6 +1086,52 @@ describeIfDatabase('PUR-02 — posting a receipt into the batch ledger', () => {
 // ── PUR-04 — rejected goods, exceptions, reversal ───────────────────────────
 
 describeIfDatabase('PUR-04 — rejected goods never enter available stock', () => {
+  it('records 110 delivered against 100 ordered with 100 accepted and 10 rejected', async () => {
+    const f = await fixture(ORG_A, BRANCH_A, 'rejected-overage', 0);
+    const result = await inOrg(ORG_A, async (db) => {
+      const drafted = await draftReceipt(db, f, 'rejected-overage', {
+        line: { receivedPacks: 11, bonusPacks: 0, rejectedCanonicalUnits: 10 },
+      });
+      const posted = await deps.receipts.postGoodsReceipt(db, scopeOf(f), {
+        goodsReceiptId: drafted.id,
+        at: RECEIVED_AT,
+      });
+      return {
+        postedLine: posted.lines[0],
+        balances: await balancesFor(db, ORG_A, posted.lines[0]!.inventoryLotId),
+        exceptions: await deps.receipts.listReceivingExceptions(db, f, {
+          goodsReceiptId: drafted.id,
+        }),
+        receipt: await db.pharmacyGoodsReceipt.findUnique({ where: { id: drafted.id } }),
+      };
+    });
+    expect(result.receipt?.status).toBe('POSTED');
+    expect(result.postedLine).toEqual(
+      expect.objectContaining({
+        acceptedMovementId: expect.any(String),
+        quarantineMovementId: expect.any(String),
+      })
+    );
+    expect(result.balances).toEqual({ AVAILABLE: 100, QUARANTINE: 10 });
+    expect(result.exceptions).toHaveLength(2);
+    expect(result.exceptions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'OVERAGE',
+          status: 'OPEN',
+          expectedUnits: 100,
+          observedUnits: 110,
+        }),
+        expect.objectContaining({
+          kind: 'DAMAGE',
+          status: 'OPEN',
+          expectedUnits: 110,
+          observedUnits: 10,
+        }),
+      ])
+    );
+  });
+
   it('posts rejected units to QUARANTINE and only the rest to AVAILABLE', async () => {
     const f = await fixture(ORG_A, BRANCH_A, 'reject');
     const result = await inOrg(ORG_A, async (db) => {

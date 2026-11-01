@@ -9,6 +9,8 @@
  * Adding a capability later = add an action + its policy here. Granting it to a
  * new role = widen the predicate. No call sites change.
  */
+import { isPharmacyOwner } from '@/lib/pharmacy/owner';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { Policy } from './types';
 
 // Statuses that count as an active member of the company (may use the app).
@@ -70,8 +72,10 @@ export const ALL_ACTIONS = [
   'restaurant:configure', // restaurant M8: loyalty configuration and consolidated access — org-role driven
   'menu:import', // R-lane WHA-194: OCR menu import — upload, review queue, confirmed catalog import
   'pharmacy:counter',
+  'pharmacy:receipt',
   'pharmacy:close',
   'pharmacy:manage',
+  'pharmacy:pin-reset',
   'pharmacy:procurement',
   'pharmacy:inventory',
   'pharmacy:dispense', // RX-03/04: pharmacist decisions and substitution evidence
@@ -112,6 +116,20 @@ const isHrOrAdmin: Policy = ({ subject }) => subject.role === 'ADMIN' || subject
 // upstream is wrong — not that the member is fine.
 const isActiveMember: Policy = ({ subject }) =>
   Boolean(subject.status) && ACTIVE_STATUSES.has(subject.status!);
+
+/** Mandatory resource constraints, including when a custom grant allows access. */
+export const RESOURCE_POLICIES: Partial<Record<Action, Policy[]>> = {
+  'team:layoff': [
+    ({ subject, resource }) => !(subject.role === 'HR' && resource?.targetRole === 'ADMIN'),
+  ],
+  'resignation:review': [
+    ({ subject, resource }) =>
+      resource?.status === 'PENDING' &&
+      typeof resource.userId === 'string' &&
+      resource.userId !== subject.id &&
+      !(subject.role === 'HR' && resource.targetRole === 'ADMIN'),
+  ],
+};
 
 export const POLICIES: Record<Action, Policy[]> = {
   // ── Coarse role gates (back the tRPC procedures) ──────────────────────────
@@ -233,12 +251,19 @@ export const POLICIES: Record<Action, Policy[]> = {
   // grants it explicitly (or holds `*`, e.g. the restaurant Owner template).
   'menu:import': [],
   'pharmacy:counter': [],
+  'pharmacy:receipt': [],
   'pharmacy:close': [],
   'pharmacy:manage': [],
-  // Tenant administrators without an assigned organization role retain the
-  // purchasing and Goods-in access they had before pharmacy capabilities became
-  // explicit (#375). `can()` prevents an assigned role with no matching grant
-  // from falling through to this policy, and resolves a custom DENY first.
+  // Preserve administrator/owner recovery through the evaluator so matching
+  // DENYs are resolved before these legacy identity grants.
+  'pharmacy:pin-reset': [
+    isAdmin,
+    ({ subject, db }) =>
+      !!subject.organizationId &&
+      isPharmacyOwner(db as ScopedDb, subject.organizationId, subject.id),
+  ],
+  // Legacy administrators without an assigned organization role retain purchasing
+  // access. `can()` enforces assigned-role grants and resolves custom DENYs first.
   'pharmacy:procurement': [isAdmin],
   'pharmacy:inventory': [],
   // Dispensing is an exact-grant-only action: tenant administration alone is

@@ -111,6 +111,7 @@ function record() {
 }
 
 const platformDb = {
+  $queryRaw: vi.fn(async () => [{ id: 'user_admin', name: 'Owner' }]),
   $queryRawUnsafe: mocks.organizationExists,
   platformPackage: {
     findUnique: mocks.pkgFindUnique,
@@ -156,6 +157,7 @@ const platformDb = {
   pharmacyBranch: { create: mocks.pharmacyBranchCreate },
   restaurantBranchAssignment: { create: mocks.assignmentCreate },
   restaurantStaffProfile: {
+    findMany: vi.fn(async () => []),
     findFirst: mocks.staffFindFirst,
     create: mocks.staffCreate,
     findUnique: mocks.staffFindUnique,

@@ -1,3 +1,5 @@
+import { isPharmacyOwner } from './owner';
+import { soloOwnerEligible } from './solo-approval';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { can } from '@/lib/abac';
@@ -471,8 +473,36 @@ export async function assignedRegisterBranchIds(
   organizationId: string,
   userId: string
 ) {
+  const admin = await db.user.findUnique({
+    where: { id: userId, organizationId, status: 'ACTIVE' },
+    select: {
+      id: true,
+      role: true,
+      status: true,
+      organizationId: true,
+      organizationRole: { select: { key: true } },
+    },
+  });
+  if (
+    admin?.status === 'ACTIVE' &&
+    admin.organizationId === organizationId &&
+    (admin.role === 'ADMIN' || (await isPharmacyOwner(db, organizationId, userId)))
+  ) {
+    return (
+      await db.pharmacyBranch.findMany({
+        where: { organizationId, active: true },
+        select: { id: true },
+      })
+    ).map((branch) => branch.id);
+  }
+  if (
+    !admin ||
+    (admin.status && admin.status !== 'ACTIVE') ||
+    (admin.organizationId && admin.organizationId !== organizationId)
+  )
+    return [];
   const rows = await db.pharmacyBranchAssignment.findMany({
-    where: { organizationId, userId, active: true },
+    where: { organizationId, userId, active: true, branch: { active: true } },
     select: { branchId: true },
   });
   return rows.map((row) => row.branchId);
@@ -483,14 +513,21 @@ export async function listControlledPinWitnesses(
   db: ScopedDb,
   organizationId: string,
   actorId: string,
+  branchId?: string,
   qualifiedPersonUserId?: string
 ) {
+  const solo = await soloOwnerEligible(db, { organizationId, actorId, branchId });
+  if (qualifiedPersonUserId === actorId && !solo) return [];
   const staff = await db.restaurantStaffProfile.findMany({
     where: {
       organizationId,
       user: { organizationId, status: 'ACTIVE' },
       status: 'ACTIVE',
-      userId: qualifiedPersonUserId ?? { not: actorId },
+      ...(qualifiedPersonUserId
+        ? { userId: qualifiedPersonUserId }
+        : solo
+          ? {}
+          : { userId: { not: actorId } }),
       credentials: { some: { type: 'PIN', revokedAt: null, deviceId: null } },
     },
     include: {

@@ -1,3 +1,4 @@
+import { authorizeSoloApproval, pinProfileBelongsToActor } from './solo-approval';
 import { randomUUID } from 'node:crypto';
 import { can } from '@/lib/abac';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -35,6 +36,20 @@ export async function authorizeControlledRestoration(
     throw new ControlledRestorationDenied(true);
   }
   if (!input) throw new ControlledRestorationDenied();
+
+  if (await pinProfileBelongsToActor(db, scope, input.staffProfileId)) {
+    const signature = randomUUID();
+    if (
+      !(await authorizeSoloApproval(
+        db,
+        scope,
+        { type: 'ControlledRestoration', id: signature },
+        input.pin
+      ))
+    )
+      throw new ControlledRestorationDenied();
+    return { witnessedByUserId: scope.actorId, signatureRef: `solo-restoration:${signature}` };
+  }
   await db.$queryRaw`SELECT id FROM restaurant_operator_credentials WHERE "organizationId"=${scope.organizationId} AND "staffProfileId"=${input.staffProfileId} AND type='PIN' AND "revokedAt" IS NULL AND "deviceId" IS NULL FOR UPDATE`;
   const credential = await db.restaurantOperatorCredential.findFirst({
     where: {

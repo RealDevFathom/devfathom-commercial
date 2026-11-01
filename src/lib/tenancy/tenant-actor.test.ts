@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   auth: vi.fn(),
+  ablyRest: vi.fn(),
   getSupportSession: vi.fn(),
   requireOrganizationForRequest: vi.fn(),
   isSharedHost: vi.fn(() => false),
@@ -10,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   withTenantDb: vi.fn(),
 }));
 
+vi.mock('ably', () => ({ Rest: mocks.ablyRest }));
 vi.mock('server-only', () => ({}));
 vi.mock('next/headers', () => ({ headers: vi.fn() }));
 vi.mock('@/lib/auth', () => ({ auth: mocks.auth }));
@@ -191,6 +193,46 @@ describe('resolveTenantActor', () => {
     ).resolves.toBeNull();
   });
 
+  it.each([
+    ['/api/files/example.txt', 'GET'],
+    ['/api/trpc/team.getAll', 'POST'],
+  ])('preserves support read transport %s %s', async (path, method) => {
+    mocks.getSupportSession.mockResolvedValue({
+      organizationId: 'org_other',
+      tenantUserId: 'user_support',
+      expiresAt: new Date(Date.now() + 60000),
+    });
+    mocks.requireOrganizationForRequest.mockResolvedValue({ id: 'org_other' });
+    mocks.withTenantDb.mockImplementation(async (_id, run) =>
+      run({
+        user: { findUnique: async () => ({ id: 'user_support', role: 'ADMIN', status: 'ACTIVE' }) },
+      })
+    );
+    await expect(
+      resolveTenantActor({
+        request: new Request(`http://devfathom.localhost${path}`, { method }),
+        session,
+      })
+    ).resolves.toMatchObject({ session: { user: { id: 'user_support', isSupportSession: true } } });
+  });
+
+  it.each([
+    ['/api/upload', 'POST'],
+    ['/api/assistant', 'POST'],
+    ['/api/restaurant/devices/browser-enroll', 'POST'],
+    ['/api/ably-token', 'GET'],
+    ['/api/ably-token/', 'GET'],
+  ])('blocks support route bypass %s %s before tenant access', async (path, method) => {
+    mocks.getSupportSession.mockResolvedValue({ expiresAt: new Date(Date.now() + 60000) });
+    await expect(
+      resolveTenantActor({
+        request: new Request(`http://devfathom.localhost${path}`, { method }),
+        session,
+      })
+    ).resolves.toBeNull();
+    expect(mocks.withTenantDb).not.toHaveBeenCalled();
+  });
+
   // D14: `df_support_session` is domain-wide and outranks the tenant JWT, so an
   // operator with a live support session who opened the shared host would have
   // been handed an impersonated actor for a workspace they never opened.
@@ -275,4 +317,174 @@ describe('wrong-host session login destination', () => {
     await expect(resolveTenantMismatchLoginPath()).resolves.toBeNull();
     expect(mocks.resolveOrganizationById).not.toHaveBeenCalled();
   });
+});
+
+describe('support HTTP authority', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.isSharedHost.mockReturnValue(false);
+    mocks.getSupportSession.mockResolvedValue({
+      organizationId: 'org_support',
+      tenantUserId: 'admin_support',
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+    mocks.requireOrganizationForRequest.mockResolvedValue({ id: 'org_support' });
+    mocks.withTenantDb.mockResolvedValue({ id: 'admin_support', role: 'ADMIN', status: 'ACTIVE' });
+  });
+
+  it.each([
+    ['POST', '/api/upload'],
+    ['POST', '/api/assistant'],
+    ['POST', '/api/restaurant/devices/browser-enroll'],
+    ['GET', '/api/ably-token'],
+    ['POST', '/meet/public/admit'],
+    ['GET', '/api/future-token-issuer'],
+    ['DELETE', '/api/files/proof.png'],
+  ])('refuses %s %s before loading the impersonated administrator', async (method, path) => {
+    await expect(
+      resolveTenantActor({
+        request: new Request('https://tenant.test' + path, { method }),
+        session,
+      })
+    ).resolves.toBeNull();
+    expect(mocks.withTenantDb).not.toHaveBeenCalled();
+    expect(mocks.auth).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    '/api/files/proof.png',
+    '/api/pharmacy/prescription-files?id=file',
+    '/api/trpc/team.getAll',
+  ])('allows reviewed read %s', async (path) => {
+    await expect(
+      resolveTenantActor({ request: new Request('https://tenant.test' + path) })
+    ).resolves.toMatchObject({ session: { user: { isSupportSession: true } } });
+  });
+
+  it('never issues Ably publish/presence credentials through a GET read', async () => {
+    const { GET } = await import('@/app/api/ably-token/route');
+    const response = await GET(new Request('https://tenant.test/api/ably-token'));
+    expect(response.status).toBe(401);
+    expect(mocks.ablyRest).not.toHaveBeenCalled();
+  });
+
+  it('refuses an expired grant without falling back to the tenant session', async () => {
+    mocks.getSupportSession.mockResolvedValue({ expiresAt: new Date(Date.now() - 1) });
+    await expect(
+      resolveTenantActor({
+        request: new Request('https://tenant.test/api/trpc/team.getAll'),
+        session,
+      })
+    ).resolves.toBeNull();
+    expect(mocks.withTenantDb).not.toHaveBeenCalled();
+  });
+
+  it('refuses a synthetic support session without a live support identity', async () => {
+    mocks.getSupportSession.mockResolvedValue(null);
+    await expect(
+      resolveTenantActor({
+        request: request(),
+        session: sessionFor({ status: 'ACTIVE', isSupportSession: true }),
+      })
+    ).resolves.toBeNull();
+  });
+});
+
+describe('support actor route-handler boundary', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.isSharedHost.mockReturnValue(false);
+    mocks.requireOrganizationForRequest.mockResolvedValue({
+      id: 'org_other',
+      slug: 'other',
+      status: 'ACTIVE',
+    });
+    mocks.withTenantDb.mockResolvedValue({ id: 'admin_support', role: 'ADMIN', status: 'ACTIVE' });
+    mocks.getSupportSession.mockResolvedValue({
+      organizationId: 'org_other',
+      tenantUserId: 'admin_support',
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+  });
+
+  it.each([
+    ['POST', '/api/upload'],
+    ['POST', '/api/assistant'],
+    ['POST', '/api/restaurant/devices/browser-enroll'],
+    ['POST', '/api/restaurant/print-bridge'],
+    ['PUT', '/api/restaurant/receipt-layout'],
+    ['POST', '/api/restaurant/sop/evidence'],
+    ['POST', '/api/pharmacy/print'],
+    ['GET', '/api/ably-token'],
+  ])('refuses support %s %s before granting an actor', async (method, path) => {
+    await expect(
+      resolveTenantActor({
+        request: new Request(`http://other.localhost${path}`, { method }),
+        session,
+      })
+    ).resolves.toBeNull();
+    expect(mocks.withTenantDb).not.toHaveBeenCalled();
+  });
+
+  it.each(['GET', 'POST'])('keeps tRPC %s subject to the procedure guard', async (method) => {
+    const actor = await resolveTenantActor({
+      request: new Request('http://other.localhost/api/trpc/apiTokens.create', { method }),
+      session,
+    });
+    expect(actor?.session.user).toMatchObject({ id: 'admin_support', isSupportSession: true });
+    expect(actor?.session.expires).toBe(
+      mocks.getSupportSession.mock.results[0] &&
+        (await mocks.getSupportSession.mock.results[0].value).expiresAt.toISOString()
+    );
+  });
+
+  it('allows tenant reads and does not substitute an ambient admin', async () => {
+    const actor = await resolveTenantActor({
+      request: new Request('http://other.localhost/api/files/document'),
+      session,
+    });
+    expect(actor?.session.user.id).toBe('admin_support');
+  });
+
+  it.each(['ACTIVE', 'ON_LEAVE'])('preserves normal %s admin HTTP writes', async (status) => {
+    mocks.getSupportSession.mockResolvedValue(null);
+    const actor = await resolveTenantActor({
+      request: new Request('http://other.localhost/api/upload', { method: 'POST' }),
+      session: sessionFor({ status }),
+    });
+    expect(actor?.session.user.id).toBe('user_1');
+  });
+
+  it('never falls back to an ambient admin for an expired or revoked support cookie', async () => {
+    mocks.getSupportSession.mockResolvedValue(null);
+    await expect(
+      resolveTenantActor({
+        request: new Request('http://other.localhost/api/upload', {
+          method: 'POST',
+          headers: { cookie: 'df_support_session=expired-support' },
+        }),
+        session,
+      })
+    ).resolves.toBeNull();
+  });
+
+  it('does not revive an ambient admin in server-component contexts after support expires', async () => {
+    mocks.getSupportSession.mockResolvedValue(null);
+    vi.mocked(headers).mockResolvedValue(
+      new Headers({
+        host: 'other.localhost',
+        cookie: 'df_support_session=expired-support',
+      }) as never
+    );
+    await expect(resolveTenantActor({ session })).resolves.toBeNull();
+    expect(mocks.withTenantDb).not.toHaveBeenCalled();
+  });
+
+  it.each(['INACTIVE', 'INVITED'])(
+    'rejects a target changed to %s during resolution',
+    async (status) => {
+      mocks.withTenantDb.mockResolvedValue({ id: 'admin_support', role: 'ADMIN', status });
+      await expect(resolveTenantActor({ request: request(), session })).resolves.toBeNull();
+    }
+  );
 });

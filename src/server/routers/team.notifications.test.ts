@@ -36,6 +36,7 @@ vi.mock('@/lib/abac', async () => {
 
 import { router, type TRPCContext } from '../trpc';
 import { teamRouter } from './team';
+import { verticalForModuleKey } from '@/lib/module-catalog';
 
 const USER_ID = 'restaurant_user';
 const notificationProbe = router({ team: teamRouter });
@@ -51,7 +52,7 @@ function caller() {
       },
     },
     entitlements: {
-      vertical: 'RESTAURANT',
+      vertical: verticalForModuleKey('restaurant-core'),
       enabledModules: ['restaurant-core'],
       modules: [{ key: 'hr', name: 'HR', enabled: false }],
     },
@@ -65,7 +66,7 @@ function caller() {
         status: 'ACTIVE',
       },
     },
-    organization: { id: 'restaurant_org', vertical: 'RESTAURANT' },
+    organization: { id: 'restaurant_org', vertical: verticalForModuleKey('restaurant-core') },
     support: null,
     requestMeta: { ip: null, userAgent: null },
     audit: { detail: {} },
@@ -85,11 +86,7 @@ describe('team shell notifications without HR entitlement', () => {
     const notificationProcedureNames = Object.keys(teamRouter._def.procedures).filter(
       (name) => name.includes('Notification') && !name.endsWith('NotificationPrefs')
     );
-    const exceptionNames = [
-      'getNotifications',
-      'markNotificationRead',
-      'markAllNotificationsRead',
-    ];
+    const exceptionNames = ['getNotifications', 'markNotificationRead', 'markAllNotificationsRead'];
 
     expect(notificationProcedureNames.sort()).toEqual(exceptionNames.sort());
   });

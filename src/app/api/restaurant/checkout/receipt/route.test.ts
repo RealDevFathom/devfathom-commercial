@@ -136,7 +136,7 @@ beforeEach(() => {
       restaurantStaffProfile: {
         findUnique: async () => ({
           status: 'ACTIVE',
-          primaryBranchId: 'branch-1',
+          primaryBranchId: mocks.ctx.device.branchId,
           jobRoles: [],
           directCapabilityGrants: [],
           user: {

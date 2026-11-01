@@ -99,8 +99,14 @@ function isSensitiveKey(key: string): boolean {
   const k = key.toLowerCase();
   // Camera renewal input can be audited before its resolver runs (including
   // denied or invalid requests). Match the identifier exactly, not all grants.
-  // Match PIN exactly so unrelated keys such as shippingAddress remain useful.
-  return k === 'pin' || k === 'previousgrantid' || SENSITIVE_SUBSTRINGS.some((s) => k.includes(s));
+  // Match PIN exactly so unrelated keys such as shippingAddress remain useful;
+  // PIN-suffixed fields (approvalPin, pinCode) are always secrets.
+  return (
+    k.endsWith('pin') ||
+    k === 'pincode' ||
+    k === 'previousgrantid' ||
+    SENSITIVE_SUBSTRINGS.some((s) => k.includes(s))
+  );
 }
 
 const MAX_STRING = 20_000;

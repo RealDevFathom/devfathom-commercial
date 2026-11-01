@@ -156,6 +156,23 @@ describeIfDatabase('pharmacy drawer and close procedures, against PostgreSQL', (
     await createBranch(ORG, ACTIVE);
     await createBranch(ORG, RETIRED);
     await createBranch(OTHER_ORG, FOREIGN);
+    await withTenantDb(ORG, async (db) => {
+      await db.organizationDepartment.create({ data: { key: 'PHARMACY', name: 'PHARMACY' } });
+      const role = await db.organizationRole.create({
+        data: { key: 'owner', name: 'Owner', isSystem: true },
+      });
+      await db.user.create({
+        data: {
+          id: ACTOR,
+          email: `${ACTOR}@example.invalid`,
+          name: 'Drawer actor',
+          department: 'PHARMACY',
+          title: 'Owner',
+          role: 'ADMIN',
+          organizationRoleId: role.id,
+        },
+      });
+    });
     // A drawer opened while the branch traded, then the branch was deactivated.
     const drawer = await asAdmin((c) =>
       c.openDrawer({ branchId: RETIRED, deviceId: DEVICE, businessDate, openingFloatMinor: 500 })

@@ -1,3 +1,4 @@
+import { SoloApprovalPin } from '@/components/pharmacy/solo-approval-pin';
 import { Button } from '@/components/ui/button';
 import { StatusPill } from '@/components/ui/status-pill';
 import {
@@ -125,7 +126,7 @@ export function TransferCard({
           <PackingSlipPrintButton slip={packingSlipFor(transfer)} />
         ) : null}
         {outbound && transfer.status === 'ALLOCATED' ? (
-          ownAllocation ? (
+          ownAllocation && !witnesses.some((witness) => witness.id === currentUserId) ? (
             <p className="text-xs text-text-muted">
               Waiting for a colleague to approve — you allocated this transfer.
             </p>
@@ -134,6 +135,7 @@ export function TransferCard({
               <input name="action" type="hidden" value="approve" />
               <input name="branchId" type="hidden" value={branchId} />
               <input name="transferId" type="hidden" value={transfer.id} />
+              {ownAllocation ? <SoloApprovalPin required /> : null}
               <Button size="sm" type="submit">
                 Approve {reference}
               </Button>

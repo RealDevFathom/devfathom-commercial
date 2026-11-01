@@ -573,11 +573,11 @@ export const pharmacyMedicineRouter = router({
     })
   ),
 
-  createIngredient: protectedProcedure
+  createIngredient: capabilityProcedure('pharmacy:catalogue-review')
     .input(z.object({ name: z.string().trim().min(1).max(200) }).strict())
     .mutation(({ ctx, input }) => ctx.db.ingredient.create({ data: input })),
 
-  createMedicine: protectedProcedure
+  createMedicine: capabilityProcedure('pharmacy:catalogue-review')
     .input(
       z
         .object({
@@ -674,7 +674,7 @@ export const pharmacyMedicineRouter = router({
       return medicine;
     }),
 
-  createPackLevel: protectedProcedure
+  createPackLevel: capabilityProcedure('pharmacy:catalogue-review')
     .input(
       z
         .object({
@@ -706,7 +706,7 @@ export const pharmacyMedicineRouter = router({
       return ctx.db.packLevel.create({ data: { ...input, version: 1 } });
     }),
 
-  revisePackLevel: protectedProcedure
+  revisePackLevel: capabilityProcedure('pharmacy:catalogue-review')
     .input(
       z
         .object({

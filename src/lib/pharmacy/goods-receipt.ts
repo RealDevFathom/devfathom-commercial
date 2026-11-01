@@ -1,3 +1,8 @@
+import {
+  authorizeSoloApproval,
+  pinProfileBelongsToActor,
+  verifySoloOwnerPin,
+} from './solo-approval';
 /**
  * PH-PUR — PRD §6.3 PUR-02 (receiving), PUR-04 (three-way match exceptions and
  * reversal) and PUR-05 (direct purchase). The database half of receiving.
@@ -86,13 +91,15 @@ const WITNESS_BLOCKED = 'A different qualified person must enter their PIN.';
  * PIN witness for a controlled purchase. A receipt with no controlled line
  * returns `{ pharmacistId: null }`. A failed PIN updates the lockout counter
  * and returns `{ blocked }` so the caller can commit that counter without
- * posting stock.
+ * posting stock. The router precheck verifies credentials only; approval
+ * evidence is written in posting mode inside the stock transaction.
  */
 export async function verifyControlledPurchaseWitness(
   db: ScopedDb,
   scope: ReceivingScope,
-  input: { goodsReceiptId: string; staffProfileId?: string; pin?: string }
-): Promise<{ blocked: string } | { pharmacistId: string | null }> {
+  input: { goodsReceiptId: string; staffProfileId?: string; pin?: string },
+  mode: 'precheck' | 'posting' = 'posting'
+): Promise<{ blocked: string } | { pharmacistId: string | null; signatureRef?: string }> {
   const receipt = await db.pharmacyGoodsReceipt.findFirst({
     where: { id: input.goodsReceiptId, organizationId: scope.organizationId },
     select: {
@@ -117,6 +124,27 @@ export async function verifyControlledPurchaseWitness(
   if (!needsRegister) return { pharmacistId: null };
   if (!input.staffProfileId || !input.pin || !receipt.qualifiedPersonUserId) {
     return { blocked: WITNESS_BLOCKED };
+  }
+
+  if (
+    receipt.qualifiedPersonUserId === scope.actorId &&
+    (await pinProfileBelongsToActor(db, scope, input.staffProfileId))
+  ) {
+    if (
+      !(await can({ id: scope.actorId, role: 'EMPLOYEE' }, 'pharmacy:dispense', undefined, {
+        db,
+      })) ||
+      !(await (mode === 'precheck'
+        ? verifySoloOwnerPin(db, scope, input.pin)
+        : authorizeSoloApproval(
+            db,
+            scope,
+            { type: 'ControlledPurchase', id: input.goodsReceiptId },
+            input.pin
+          )))
+    )
+      return { blocked: WITNESS_BLOCKED };
+    return { pharmacistId: scope.actorId, signatureRef: `solo-purchase:${input.goodsReceiptId}` };
   }
   await db.$queryRaw`SELECT id FROM restaurant_operator_credentials WHERE "organizationId"=${scope.organizationId} AND "staffProfileId"=${input.staffProfileId} AND type='PIN' AND "revokedAt" IS NULL AND "deviceId" IS NULL FOR UPDATE`;
   const credential = await db.restaurantOperatorCredential.findFirst({
@@ -280,6 +308,38 @@ export async function postGoodsReceipt(
     });
   }
 
+  // Serialize receipts for a shared order before reading its full received
+  // balance. Otherwise two branches could both consume the same remainder.
+  if (receipt.purchaseOrderId) {
+    await db.$queryRaw`SELECT id FROM pharmacy_purchase_orders
+      WHERE id = ${receipt.purchaseOrderId} AND "organizationId" = ${scope.organizationId}
+      FOR UPDATE`;
+  }
+  // Only accepted stock consumes the remainder; rejected surplus still posts
+  // to quarantine and produces receiving exceptions.
+  const acceptedByOrderLine = new Map<string, number>();
+  for (const line of receipt.lines) {
+    if (!line.purchaseOrderLineId) continue;
+    const accepted =
+      (acceptedByOrderLine.get(line.purchaseOrderLineId) ?? 0) + line.acceptedCanonicalUnits;
+    acceptedByOrderLine.set(line.purchaseOrderLineId, accepted);
+  }
+  for (const [orderLineId, accepted] of acceptedByOrderLine) {
+    const ordered = await orderedTermsFor(db, scope, orderLineId, receipt.id);
+    if (
+      ordered &&
+      accepted >
+        Math.max(
+          0,
+          ordered.orderedCanonicalUnits +
+            ordered.bonusCanonicalUnits -
+            ordered.previouslyAcceptedUnits
+        )
+    ) {
+      throw new PharmacyReceivingError('INVALID_QUANTITY');
+    }
+  }
+
   const lines: PostGoodsReceiptResult['lines'][number][] = [];
   const exceptions: PostGoodsReceiptResult['exceptions'][number][] = [];
 
@@ -388,7 +448,7 @@ export async function postGoodsReceipt(
       branchId: scope.branchId,
       recordedByUserId: scope.actorId,
       witnessedByUserId: witness.pharmacistId,
-      signatureRef: `pin:${witness.pharmacistId}`,
+      signatureRef: witness.signatureRef ?? `pin:${witness.pharmacistId}`,
       lines: purchaseLines,
     });
   }
@@ -467,16 +527,16 @@ async function resolveManufacturingBatch(
 }
 
 /**
- * The order leg of the three-way match, with the quantity already booked
- * against this order line by *other* posted receipts — so partial deliveries
- * accumulate instead of each one reporting the full shortage again.
+ * The order leg of the three-way match, with delivered units for discrepancy
+ * reporting and accepted units for the fulfillment limit. Only *other* posted
+ * receipts count, so rejected goods leave room for replacement stock.
  */
 async function orderedTermsFor(
   db: ScopedDb,
   scope: ReceivingScope,
   purchaseOrderLineId: string | null,
   currentReceiptId: string
-): Promise<OrderedTerms | null> {
+): Promise<(OrderedTerms & { previouslyAcceptedUnits: number }) | null> {
   if (!purchaseOrderLineId) return null;
   const orderLine = await db.pharmacyPurchaseOrderLine.findFirst({
     where: { id: purchaseOrderLineId, organizationId: scope.organizationId },
@@ -488,9 +548,13 @@ async function orderedTermsFor(
       organizationId: scope.organizationId,
       purchaseOrderLineId,
       goodsReceiptId: { not: currentReceiptId },
-      goodsReceipt: { status: 'POSTED' },
+      goodsReceipt: { organizationId: scope.organizationId, status: 'POSTED' },
     },
-    select: { receivedCanonicalUnits: true, bonusCanonicalUnits: true },
+    select: {
+      receivedCanonicalUnits: true,
+      bonusCanonicalUnits: true,
+      acceptedCanonicalUnits: true,
+    },
   });
 
   return {
@@ -498,6 +562,7 @@ async function orderedTermsFor(
     orderedCanonicalUnits: orderLine.orderedCanonicalUnits,
     bonusCanonicalUnits: orderLine.bonusCanonicalUnits,
     listPricePerPackMinor: orderLine.listPricePerPackMinor,
+    previouslyAcceptedUnits: earlier.reduce((total, line) => total + line.acceptedCanonicalUnits, 0),
     previouslyReceivedUnits: earlier.reduce(
       (total, line) => total + line.receivedCanonicalUnits + line.bonusCanonicalUnits,
       0

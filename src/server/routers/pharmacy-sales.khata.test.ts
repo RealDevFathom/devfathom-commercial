@@ -44,12 +44,19 @@ type Permission = { capability: string; effect: 'ALLOW' | 'DENY' };
 function fixture(
   permissions: Permission[] = [{ capability: 'pharmacy:counter', effect: 'ALLOW' }],
   role: 'ADMIN' | 'EMPLOYEE' = 'ADMIN',
-  overrides: Permission[] = []
+  overrides: Permission[] = [],
+  owner = false
 ) {
   const member = {
+    id: 'owner-a',
+    role: owner ? 'ADMIN' : 'EMPLOYEE',
     status: 'ACTIVE',
     organizationId: 'org-a',
+    organization: { vertical: 'PHARMACY' },
     organizationRole: {
+      organizationId: 'org-a',
+      key: owner ? 'owner' : 'cashier',
+      isSystem: true,
       permissions: [...permissions] as { capability: string; effect: string }[],
     },
     permissionOverrides: [...overrides] as { capability: string; effect: string }[],
@@ -57,7 +64,10 @@ function fixture(
   const db = {
     $queryRaw: vi.fn().mockResolvedValue([]),
     $transaction: vi.fn(),
-    user: { findUnique: vi.fn(async () => member) },
+    user: {
+      findUnique: vi.fn(async () => member),
+      count: vi.fn().mockResolvedValue(2),
+    },
     pharmacyBranchAssignment: {
       findMany: vi.fn(async () => [{ branchId: 'branch-a' }]),
     },
@@ -408,9 +418,9 @@ describe.each(khataPaths)('Khata $name authorization', ({ run }) => {
   });
 
   it.each([{ assignments: [] }, { assignments: [{ branchId: 'branch-b' }] }])(
-    'preserves and audits tenant-admin access with assignments $assignments',
+    'preserves and audits system-owner access with assignments $assignments',
     async ({ assignments }) => {
-      const f = fixture();
+      const f = fixture(undefined, 'ADMIN', [], true);
       f.db.pharmacyBranchAssignment.findMany.mockResolvedValue(assignments);
       await expect(run(f.caller(), 'branch-a')).resolves.toBeDefined();
       expect(f.context.audit.detail).toMatchObject({
@@ -439,7 +449,9 @@ describe.each(
     async (source) => {
       const f = fixture();
       f.user.role = 'EMPLOYEE';
-      f.member.organizationRole.permissions = [{ capability: 'reports:financial', effect: 'ALLOW' }];
+      f.member.organizationRole.permissions = [
+        { capability: 'reports:financial', effect: 'ALLOW' },
+      ];
       const denial = { capability: 'pharmacy:dispense', effect: 'DENY' };
       if (source === 'user') f.member.permissionOverrides = [denial];
       else f.member.organizationRole.permissions.push(denial);
@@ -655,7 +667,7 @@ describe('Khata router trust and recovery boundary', () => {
     expect(f.db.pharmacyKhataEvent.create).not.toHaveBeenCalled();
   });
   it('hands only the fresh server-session claim to the audited owner gate', async () => {
-    const f = fixture();
+    const f = fixture(undefined, 'ADMIN', [], true);
     await f.caller().tender({ ...input, amountMinor: 101, ownerOverride: true });
     expect(f.db.pharmacyKhataLimitDecision.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
@@ -677,13 +689,14 @@ describe('Khata router trust and recovery boundary', () => {
     }
   );
   it('rejects stale owner evidence and non-owner override', async () => {
-    const f = fixture();
+    const f = fixture(undefined, 'ADMIN', [], true);
     f.user.passwordAuthenticatedAt -= 301000;
     await expect(
       f.caller().tender({ ...input, amountMinor: 101, ownerOverride: true })
     ).rejects.toMatchObject({ message: 'OWNER_ACTION_REQUIRED' });
     f.user.passwordAuthenticatedAt = Date.now();
     f.user.role = 'EMPLOYEE';
+    f.member.organizationRole.key = 'cashier';
     await expect(
       f.caller().tender({ ...input, amountMinor: 101, ownerOverride: true })
     ).rejects.toMatchObject({ message: 'OWNER_ACTION_REQUIRED' });
@@ -781,4 +794,32 @@ describe('Khata router trust and recovery boundary', () => {
       }),
     });
   });
+});
+
+it.each(['CASH', 'CARD', 'KHATA'] as const)(
+  'denies %s outcome reads for an unassigned nonowner before tender evidence is read',
+  async (type) => {
+    const f = fixture();
+    f.db.pharmacyBranchAssignment.findMany.mockResolvedValue([]);
+    await expect(
+      f.caller().tenderOutcome({
+        ...input,
+        type,
+        ...(type === 'KHATA' ? {} : { familyAccountId: undefined }),
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(readPharmacyTenderOutcome).not.toHaveBeenCalled();
+  }
+);
+
+it('denies Khata account reads and payments for a nonowner assigned only to another branch', async () => {
+  const f = fixture();
+  f.db.pharmacyBranchAssignment.findMany.mockResolvedValue([{ branchId: 'sibling-branch' }]);
+  await expect(
+    f.caller().khataAccounts({ branchId: 'branch-a', saleId: 'sale-a' })
+  ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  await expect(f.caller().tender(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  expect(applyPharmacyTender).not.toHaveBeenCalled();
+  expect(f.db.pharmacyFamilyAccount.findMany).not.toHaveBeenCalled();
+  expect(f.db.$transaction).not.toHaveBeenCalled();
 });

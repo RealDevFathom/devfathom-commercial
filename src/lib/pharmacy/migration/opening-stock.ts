@@ -1,3 +1,5 @@
+import { authorizeSoloApproval } from '../solo-approval';
+import { can } from '@/lib/abac';
 import 'server-only';
 
 /**
@@ -613,12 +615,36 @@ function abs(value: bigint): bigint {
  *
  * Sign-off is refused, not warned about, while anything material is unexplained
  * or any exception is still open. Co-authored like INV-06's count approval: the
- * pharmacist who opened the session cannot also be the one who signs it off.
+ * pharmacist who opened the session needs either another signer or fresh
+ * audited solo-owner PIN proof.
  */
-export async function signOffOpeningSession(db: ScopedDb, scope: LedgerScope, sessionId: string) {
+export async function signOffOpeningSession(
+  db: ScopedDb,
+  scope: LedgerScope,
+  sessionId: string,
+  pin?: string
+) {
   const session = await requireSession(db, scope, sessionId, ['POSTED']);
   if (session.createdByActorId === scope.actorId) {
-    throw new PharmacyOpeningError('COAUTH_REQUIRED');
+    // Opening sessions have no maker/checker posting trigger: hold the same
+    // exclusive tenant roster lock while checking PIN proof and writing sign-off.
+    await db.$queryRaw`SELECT pharmacy_lock_solo_roster(${scope.organizationId})::text`;
+    if (
+      !(await can(
+        { id: scope.actorId, role: 'EMPLOYEE', organizationId: scope.organizationId },
+        'pharmacy:inventory',
+        undefined,
+        { db }
+      )) ||
+      !(await authorizeSoloApproval(
+        db,
+        scope,
+        { type: 'PharmacyOpeningSession', id: session.id },
+        pin
+      ))
+    ) {
+      throw new PharmacyOpeningError('COAUTH_REQUIRED');
+    }
   }
 
   const report = await openingVarianceReport(db, scope, sessionId);
