@@ -6,14 +6,14 @@ import pg from 'pg';
 import { describe, expect, it } from 'vitest';
 
 const sql = readFileSync(
-  resolve('prisma/migrations/20261021110000_growth_foundation/migration.sql'),
+  resolve('prisma/migrations/20261101000000_growth_foundation/migration.sql'),
   'utf8'
 );
 // A disposable database with CREATE SCHEMA permission, using a restricted role.
 const url = process.env.TEST_DATABASE_URL;
 
 describe.skipIf(!url)('growth foundation migration under FORCE RLS', () => {
-  it('backfills both tenants before enforcing NOT NULL without granting consent', async () => {
+  it('adds growth tables without rewriting tenant rows or consent state', async () => {
     const client = new pg.Client({ connectionString: url });
     await client.connect();
     const schema = `growth_migration_${randomUUID().replaceAll('-', '')}`;
@@ -70,15 +70,12 @@ describe.skipIf(!url)('growth foundation migration under FORCE RLS', () => {
         .replace(/--[^\n]*/g, '')
         .split(';')
         .filter((s) => s.trim());
-      const backfilledCounts: number[] = [];
       for (const statement of statements) {
         const result = await client.query(statement);
-        if (result.command === 'UPDATE') {
-          expect(result.rowCount).toBeGreaterThan(0);
-          backfilledCounts.push(result.rowCount!);
-        }
+        // No data rewrite: consent and contact data are never changed here.
+        expect(['UPDATE', 'INSERT', 'DELETE']).not.toContain(result.command);
       }
-      expect(backfilledCounts).toEqual([2, 2]);
+      expect(sql).not.toMatch(/is_platform_admin',\s*'true'/);
       const context = await client.query(
         "SELECT current_setting('app.is_platform_admin', true) AS admin"
       );
@@ -92,8 +89,8 @@ describe.skipIf(!url)('growth foundation migration under FORCE RLS', () => {
         FROM pharmacy_customers ORDER BY id
       `);
       expect(customers.rows).toEqual([
-        { id: 'ca', whatsappOptIn: false, whatsappE164: '+923001234567' },
-        { id: 'cb', whatsappOptIn: false, whatsappE164: '+923117654321' },
+        { id: 'ca', whatsappOptIn: null, whatsappE164: null },
+        { id: 'cb', whatsappOptIn: null, whatsappE164: null },
         { id: 'consented', whatsappOptIn: true, whatsappE164: null },
         { id: 'unlinked', whatsappOptIn: false, whatsappE164: null },
       ]);
@@ -105,7 +102,7 @@ describe.skipIf(!url)('growth foundation migration under FORCE RLS', () => {
       `,
         [schema]
       );
-      expect(column.rows[0].is_nullable).toBe('NO');
+      expect(column.rows[0].is_nullable).toBe('YES');
       const metrics = await client.query(
         `SELECT column_name, data_type FROM information_schema.columns
          WHERE table_schema = $1 AND
@@ -124,7 +121,8 @@ describe.skipIf(!url)('growth foundation migration under FORCE RLS', () => {
            AND conname IN (
              'customer_metrics_nonnegative_check', 'customer_metrics_churn_check',
              'growth_settings_money_check', 'growth_settings_limits_check',
-             'campaigns_money_check', 'campaigns_reach_check', 'campaigns_discount_check'
+             'campaigns_money_check', 'campaigns_reach_check', 'campaigns_discount_check',
+             'growth_settings_wa_api_key_enc_check'
            ) ORDER BY conname`,
         [schema]
       );
@@ -136,7 +134,22 @@ describe.skipIf(!url)('growth foundation migration under FORCE RLS', () => {
         'customer_metrics_nonnegative_check',
         'growth_settings_limits_check',
         'growth_settings_money_check',
+        'growth_settings_wa_api_key_enc_check',
       ]);
+      // A plaintext WhatsApp API key is rejected; only a secret-crypto v1 envelope fits.
+      await client.query("SELECT set_config('app.current_organization_id', 'a', true)");
+      await client.query('SAVEPOINT plaintext_key');
+      await expect(
+        client.query(
+          `INSERT INTO growth_settings ("organizationId", "waApiKeyEnc", "updatedAt")
+           VALUES ('a', 'plain-api-key', now())`
+        )
+      ).rejects.toThrow(/growth_settings_wa_api_key_enc_check/);
+      await client.query('ROLLBACK TO SAVEPOINT plaintext_key');
+      await client.query(
+        `INSERT INTO growth_settings ("organizationId", "waApiKeyEnc", "updatedAt")
+         VALUES ('a', 'v1.aXY.dGFn.Y2lwaGVy', now())`
+      );
       const codeIndex = await client.query(
         `SELECT indexdef FROM pg_indexes
          WHERE schemaname = $1 AND indexname = 'campaign_recipients_organizationId_code_key'`,

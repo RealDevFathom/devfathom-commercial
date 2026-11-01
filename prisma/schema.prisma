@@ -1102,6 +1102,8 @@ model PharmacySale {
   receiptDeviceId           String?
   businessDate              DateTime?                    @db.Date
   customerId                String?
+  /// Campaign/referral code redeemed on this sale (WP-G1).
+  discountCode              String?
   createdAt                 DateTime                     @default(now())
   updatedAt                 DateTime                     @updatedAt
   originalSale              PharmacySale?                @relation("PharmacySaleOriginal", fields: [organizationId, branchId, originalSaleId], references: [organizationId, branchId, id], onDelete: Restrict)
@@ -1116,6 +1118,7 @@ model PharmacySale {
   customer                  PharmacyCustomer?            @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict)
   loyaltyEntries            PharmacyLoyaltyPointsEntry[]
   customerOrder             PharmacyCustomerOrder?
+  campaignRecipients        CampaignRecipient[]
   visibilityAnchor          PharmacyBranch               @relation("PharmacySaleVisibilityAnchor", fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_sales_visibility_fkey")
 
   @@unique([organizationId, id])
@@ -1149,11 +1152,18 @@ model PharmacyCustomer {
   whatsappOptIn          Boolean?
   whatsappOptInChangedAt DateTime?                    @db.Timestamp(3)
   preferredLanguage      String                       @default("en") @db.VarChar(2)
+  /// Normalised WhatsApp number for the growth channel. Never implies consent.
+  whatsappE164           String?
+  whatsappOptInAt        DateTime?
+  whatsappOptOutAt       DateTime?
+  metrics                CustomerMetrics?
+  campaignRecipients     CampaignRecipient[]
 
   @@unique([organizationId, id])
   @@unique([organizationId, patientId])
   @@unique([organizationId, userId])
   @@index([organizationId, displayName])
+  @@index([organizationId, whatsappE164])
   @@map("pharmacy_customers")
 }
 
@@ -4947,6 +4957,9 @@ model Organization {
   visibilityPharmacyMoneyIdempotencyKey     PharmacyMoneyIdempotencyKey[]         @relation("PharmacyMoneyIdempotencyKeyVisibilityAnchor")
   visibilityRestaurantTaxOfficialSource     RestaurantTaxOfficialSource[]         @relation("RestaurantTaxOfficialSourceVisibilityAnchor")
   visibilityPharmacyCounterKeymapPreference PharmacyCounterKeymapPreference[]     @relation("PharmacyCounterKeymapPreferenceVisibilityAnchor")
+  growthSettings                            GrowthSettings?
+  growthCampaigns                           Campaign[]
+  growthMessageTemplates                    MessageTemplate[]
 
   @@index([status])
   @@index([deploymentMode])
@@ -14500,14 +14513,21 @@ model PharmacyMessageLog {
   orderId           String?
   dueDate           String?
   error             String?
+  body              String?
+  campaignId        String?
+  recipientId       String?
+  waMessageId       String?
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
-  organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  branch       PharmacyBranch?   @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
-  customer     PharmacyCustomer? @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict)
+  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branch       PharmacyBranch?    @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
+  customer     PharmacyCustomer?  @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict)
+  campaign     Campaign?          @relation(fields: [organizationId, campaignId], references: [organizationId, id], onDelete: Restrict)
+  recipient    CampaignRecipient? @relation(fields: [organizationId, recipientId], references: [organizationId, id], onDelete: Restrict)
 
   @@unique([organizationId, dedupeKey], map: "pharmacy_message_logs_dedupe_key")
+  @@unique([organizationId, direction, waMessageId], map: "pharmacy_message_logs_wa_message_id_key")
   @@unique([organizationId, customerDayKey], map: "pharmacy_message_logs_customer_day_key")
   @@index([organizationId, customerId, createdAt(sort: Desc)], map: "pharmacy_message_logs_customer_idx")
   @@index([organizationId, kind, status], map: "pharmacy_message_logs_kind_status_idx")
@@ -14525,6 +14545,11 @@ model PharmacyWhatsAppConsentArchive {
   consentChangedAt            DateTime @db.Timestamp(3)
   archivedAt                  DateTime @default(now()) @db.Timestamp(3)
   expiresAt                   DateTime @db.Timestamp(3)
+
+  @@unique([organizationFingerprint, customerFingerprint, consentChangedAt], map: "pharmacy_wa_consent_archive_event_key")
+  @@index([expiresAt], map: "pharmacy_wa_consent_archive_expiry_idx")
+  @@map("pharmacy_whatsapp_consent_archives")
+}
 
 /// Per-customer recency/frequency snapshot the metrics job (WP-G2) rebuilds.
 /// One row per retail customer; the 1:1 is pinned by @@unique on the tenant key.
@@ -14562,6 +14587,7 @@ model GrowthSettings {
   minSecondsBetweenMsgs Int      @default(4)
   waInstanceName        String?
   waApiUrl              String?
+  /// `encryptSecret` (src/lib/secret-crypto.ts) envelope only; a DB CHECK rejects plaintext.
   waApiKeyEnc           String?
   lastMetricsRunAt      DateTime?
   churnThreshold        Int      @default(60)

@@ -2,26 +2,26 @@
 --
 -- Additive, one migration. It introduces the five growth tables
 -- (customer_metrics, growth_settings, campaigns, campaign_recipients,
--- message_templates), extends three existing pharmacy tables, and backfills
--- consent-safe data. Two structural rules match the rest of the platform:
+-- message_templates) and extends three existing pharmacy tables. It rewrites no
+-- existing rows. Two structural rules match the rest of the platform:
 --
 --  1. **No row can reference another tenant's row.** Every growth table carries
 --     `organizationId` (defaulted from the RLS session setting) and joins its
 --     parents by composite `(organizationId, …)` foreign keys into the unique
 --     keys those parents already publish. Row-level security is the second wall;
 --     a foreign key that cannot span tenants is the first.
---  2. **Consent is never granted by a migration.** `whatsappOptIn` becomes a
---     strict boolean defaulting to false; existing nulls collapse to false (no
---     consent). `whatsappE164` is backfilled only from a linked patient's full
---     Pakistani mobile number, never from `phoneLast4`, and the opt-in flag is
---     left untouched by that backfill.
+--  2. **Consent is never changed by a migration.** `whatsappOptIn` keeps its
+--     nullable tri-state (NULL = never asked, false = declined, true = opted
+--     in) that marketing-service, the consent archive and
+--     `whatsappOptInChangedAt` depend on. `whatsappE164` starts empty: clinical
+--     contact data stays in pharmacy_patients and is not copied across tenants
+--     by a privileged backfill; the application fills it under tenant scope.
 
--- Keep the schema change, privileged backfills, constraints and policies atomic.
--- The LOCAL platform-admin setting below is discarded by this transaction.
+-- Keep the schema change, constraints and policies atomic.
 BEGIN;
 
 -- ---------------------------------------------------------------------------
--- Existing tables: additive columns and the consent-safe opt-in tightening.
+-- Existing tables: additive, nullable columns only.
 -- ---------------------------------------------------------------------------
 
 -- A redeemed campaign/referral code is recorded on the sale it discounted.
@@ -32,29 +32,6 @@ ALTER TABLE "pharmacy_customers"
   ADD COLUMN "whatsappE164" TEXT,
   ADD COLUMN "whatsappOptInAt" TIMESTAMP(3),
   ADD COLUMN "whatsappOptOutAt" TIMESTAMP(3);
-
--- Collapse the old nullable opt-in to a strict boolean. A null meant "never
--- asked"; for the growth channel that is "not allowed", so it becomes false —
--- never a silent grant — before the column is made NOT NULL.
--- Both customer backfills must see every tenant under FORCE RLS. Keep the
--- platform-admin context local to the migration transaction.
-SELECT set_config('app.is_platform_admin', 'true', true);
-UPDATE "pharmacy_customers" SET "whatsappOptIn" = false WHERE "whatsappOptIn" IS NULL;
-ALTER TABLE "pharmacy_customers"
-  ALTER COLUMN "whatsappOptIn" SET DEFAULT false,
-  ALTER COLUMN "whatsappOptIn" SET NOT NULL;
-
--- Backfill the normalised WhatsApp number from the linked patient's phone, and
--- only where it is a full Pakistani mobile (03XXXXXXXXX → +923XXXXXXXXX). Digits
--- are extracted first so stored spaces or dashes do not block a valid number;
--- phoneLast4 is never consulted and consent is never implied.
-UPDATE "pharmacy_customers" AS c
-SET "whatsappE164" = '+92' || substring(regexp_replace(p."phone", '\D', '', 'g') FROM 2)
-FROM "pharmacy_patients" AS p
-WHERE p."organizationId" = c."organizationId"
-  AND p."id" = c."patientId"
-  AND p."phone" IS NOT NULL
-  AND regexp_replace(p."phone", '\D', '', 'g') ~ '^03[0-9]{9}$';
 
 -- Campaign messaging reuses the existing pharmacy message log.
 ALTER TABLE "pharmacy_message_logs"
@@ -118,6 +95,12 @@ CREATE TABLE "growth_settings" (
       "quietHoursStart" BETWEEN 0 AND 23 AND "quietHoursEnd" BETWEEN 0 AND 23 AND
       "maxMsgsPerDay" > 0 AND "minSecondsBetweenMsgs" >= 0 AND
       "churnThreshold" BETWEEN 0 AND 100
+    ),
+    -- Only an encryptSecret() v1 envelope (src/lib/secret-crypto.ts) may be
+    -- stored, so a plaintext WhatsApp API key is rejected by the database.
+    CONSTRAINT "growth_settings_wa_api_key_enc_check" CHECK (
+      "waApiKeyEnc" IS NULL OR
+      "waApiKeyEnc" ~ '^v1[.][A-Za-z0-9_-]+[.][A-Za-z0-9_-]+[.][A-Za-z0-9_-]+$'
     )
 );
 
