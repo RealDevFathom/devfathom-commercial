@@ -61,7 +61,7 @@ export async function GET(request: Request, ctx: { params: Promise<{ name: strin
   // for denials so a member cannot confirm that a guessed file reference exists.
   const licenceEvidence = await withTenantDb(organization.id, (db) =>
     db.branchRegulatoryProfile.findFirst({
-      where: { licenceEvidenceFileRef: fileRef },
+      where: { organizationId: organization.id, licenceEvidenceFileRef: fileRef },
       select: { id: true },
     })
   );

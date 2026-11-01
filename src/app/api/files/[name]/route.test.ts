@@ -111,7 +111,7 @@ describe('private attachment delivery', () => {
     expect(response.status).toBe(404);
     expect(await response.text()).toBe('Not found');
     expect(db.branchRegulatoryProfile.findFirst).toHaveBeenCalledWith({
-      where: { licenceEvidenceFileRef: '/api/files/licence.pdf' },
+      where: { organizationId: 'org_a', licenceEvidenceFileRef: '/api/files/licence.pdf' },
       select: { id: true },
     });
     expect(mocks.tenantDb).toHaveBeenCalledWith('org_a', expect.any(Function));
