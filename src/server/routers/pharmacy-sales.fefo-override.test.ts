@@ -1,7 +1,20 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
-vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
+// #482: manager PINs are verified in an independent tenant transaction. The mock records
+// whether a write happened inside it, i.e. outside the (rollback-prone) request transaction.
+const independentTx = vi.hoisted(() => ({ db: null as unknown, active: false }));
+vi.mock('@/lib/tenancy/scoped-db', () => ({
+  createTenantDb: vi.fn(),
+  withTenantDb: vi.fn(async (_organizationId: string, run: (db: unknown) => unknown) => {
+    independentTx.active = true;
+    try {
+      return await run(independentTx.db);
+    } finally {
+      independentTx.active = false;
+    }
+  }),
+}));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/entitlements', () => ({
   hasModule: vi.fn(() => true),
@@ -32,7 +45,9 @@ import { PharmacyInventoryError } from '@/lib/pharmacy/inventory';
 import { verifyOperatorCredential } from '@/lib/restaurant/operator-credentials';
 import { addSaleLine } from '@/lib/pharmacy/sales';
 import { onHand } from '@/lib/pharmacy/stock-ledger';
-import { recordTrpcAudit } from '@/server/audit';
+import { recordTrpcAudit, toAuditJson } from '@/server/audit';
+import { withTenantDb } from '@/lib/tenancy/scoped-db';
+import { MAX_FAILED_ATTEMPTS } from '@/lib/restaurant/operator-credentials';
 import { router, type TRPCContext } from '../trpc';
 import { pharmacySalesRouter } from './pharmacy-sales';
 
@@ -53,6 +68,7 @@ const override = {
   inventoryLotId: 'lot-later',
   reason: 'Customer travelling; wants longer dating',
 };
+const managerApproval = { staffProfileId: 'manager-profile', pin: '1234' };
 
 function fixture() {
   const transaction = vi.fn(async (callback: (tx: unknown) => unknown) => callback(db));
@@ -90,7 +106,7 @@ function fixture() {
           user: { id: 'manager-1', status: 'ACTIVE', organizationId: 'org-1' },
         },
       })),
-      update: vi.fn(),
+      update: vi.fn((_args: unknown) => ({ independent: independentTx.active })),
     },
     $queryRaw: vi.fn(),
     // Integrated tip: addLine first reads the medicine to route controlled lines; these are not.
@@ -108,6 +124,7 @@ function fixture() {
     requestMeta: { ip: null, userAgent: null },
     audit: { detail: {} },
   } as unknown as TRPCContext;
+  independentTx.db = db;
   return { context, db, transaction, lotRead, caller: app.createCaller(context).pharmacySales };
 }
 
@@ -120,6 +137,7 @@ function lastAudit() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(verifyOperatorCredential).mockResolvedValue(true);
 });
 
 describe('pharmacySales.addLine batch override (PH-A4)', () => {
@@ -130,12 +148,13 @@ describe('pharmacySales.addLine batch override (PH-A4)', () => {
       allocation: { overrideId: 'override-1', recommendedLotId: 'lot-fefo' },
     } as never);
 
-    await f.caller.addLine({ ...line, override });
+    await f.caller.addLine({ ...line, override, managerApproval });
 
     expect(addSaleLine).toHaveBeenCalledOnce();
     const [, scope, input] = vi.mocked(addSaleLine).mock.calls[0]!;
     expect(scope).toEqual({ organizationId: 'org-1', branchId: 'branch-1', actorId: 'actor-1' });
-    expect(input.override).toEqual({ ...override, approvalPolicy: 'PHARMACY_SAFETY' });
+    expect(input.override).toEqual({ ...override, approvalPolicy: 'PHARMACY_MANAGER_PIN' });
+    expect(input).not.toHaveProperty('managerApproval');
 
     const audit = lastAudit();
     expect(audit.outcome).toBe('SUCCESS');
@@ -153,7 +172,13 @@ describe('pharmacySales.addLine batch override (PH-A4)', () => {
         overrideId: 'override-1',
         saleLineId: 'line-1',
         reason: override.reason,
-        approvalPolicy: 'PHARMACY_SAFETY',
+        approvalPolicy: 'PHARMACY_MANAGER_PIN',
+        managerApproval: {
+          kinds: ['FEFO_OVERRIDE'],
+          outcome: 'APPROVED',
+          approverStaffProfileId: 'manager-profile',
+          approvedByUserId: 'manager-1',
+        },
       },
     });
   });
@@ -217,7 +242,7 @@ describe('pharmacySales.addLine batch override (PH-A4)', () => {
       const f = fixture();
       vi.mocked(addSaleLine).mockRejectedValue(new PharmacyInventoryError(reason));
 
-      await expect(f.caller.addLine({ ...line, override })).rejects.toMatchObject({
+      await expect(f.caller.addLine({ ...line, override, managerApproval })).rejects.toMatchObject({
         code,
         message: reason,
       });
@@ -234,7 +259,7 @@ describe('pharmacySales.addLine batch override (PH-A4)', () => {
   it('keeps a blocked override lot a FORBIDDEN refusal', async () => {
     const f = fixture();
     vi.mocked(addSaleLine).mockRejectedValue(new PharmacyInventoryError('BLOCKED_STOCK'));
-    await expect(f.caller.addLine({ ...line, override })).rejects.toMatchObject({
+    await expect(f.caller.addLine({ ...line, override, managerApproval })).rejects.toMatchObject({
       code: 'FORBIDDEN',
     });
   });
@@ -246,15 +271,36 @@ describe('pharmacySales.addLine batch override (PH-A4)', () => {
       permissionOverrides: [],
     });
 
-    await expect(f.caller.addLine({ ...line, override })).rejects.toMatchObject({
+    await expect(f.caller.addLine({ ...line, override, managerApproval })).rejects.toMatchObject({
       code: 'FORBIDDEN',
     });
     expect(addSaleLine).not.toHaveBeenCalled();
   });
 });
 
-describe('pharmacySales.addLine discount approval (#482)', () => {
-  const discountAuthorization = { staffProfileId: 'manager-profile', pin: '1234' };
+describe('pharmacySales.addLine manager PIN approval (#482)', () => {
+  const refusal = 'An active owner or manager must approve this with their PIN.';
+
+  type CredentialRow = {
+    id: string;
+    credentialHash: string;
+    failedAttempts: number;
+    lockedUntil: Date | null;
+    staffProfile: { status: string; user: { id: string; status: string; organizationId: string } };
+  };
+  function credentialRow(overrides: Partial<CredentialRow> = {}): CredentialRow {
+    return {
+      id: 'credential-1',
+      credentialHash: 'hash',
+      failedAttempts: 0,
+      lockedUntil: null,
+      staffProfile: {
+        status: 'ACTIVE',
+        user: { id: 'manager-1', status: 'ACTIVE', organizationId: 'org-1' },
+      },
+      ...overrides,
+    };
+  }
 
   it('rejects a caller-supplied manager id before stock is touched', async () => {
     const f = fixture();
@@ -278,37 +324,80 @@ describe('pharmacySales.addLine discount approval (#482)', () => {
     expect(addSaleLine).not.toHaveBeenCalled();
   });
 
-  it('blocks a positive discount without PIN authorization', async () => {
+  it('refuses a positive discount without a PIN and audits the refusal as a FAILURE', async () => {
     const f = fixture();
 
-    await expect(f.caller.addLine({ ...line, discountMinor: 1 })).resolves.toEqual({
-      blocked: 'An active manager must approve this discount with their PIN.',
+    await expect(f.caller.addLine({ ...line, discountMinor: 1 })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: refusal,
     });
 
     expect(f.db.restaurantOperatorCredential.findFirst).not.toHaveBeenCalled();
+    expect(f.transaction).not.toHaveBeenCalled();
     expect(addSaleLine).not.toHaveBeenCalled();
+    const audit = lastAudit();
+    expect(audit.outcome).toBe('FAILURE');
+    expect(audit.detail).toMatchObject({
+      skipInput: true,
+      action: 'discount_approval',
+      targetType: 'PharmacySale',
+      targetId: 'sale-1',
+      metadata: {
+        discountMinor: 1,
+        managerApproval: {
+          kinds: ['DISCOUNT'],
+          outcome: 'REJECTED',
+          reason: 'MISSING',
+          approverStaffProfileId: null,
+        },
+      },
+    });
+  });
+
+  it('refuses a FEFO override without a manager PIN', async () => {
+    const f = fixture();
+
+    await expect(f.caller.addLine({ ...line, override })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+
+    expect(addSaleLine).not.toHaveBeenCalled();
+    const audit = lastAudit();
+    expect(audit.outcome).toBe('FAILURE');
+    expect(audit.detail).toMatchObject({
+      action: 'fefo_override',
+      metadata: {
+        selectedLotId: 'lot-later',
+        managerApproval: { kinds: ['FEFO_OVERRIDE'], outcome: 'REJECTED', reason: 'MISSING' },
+      },
+    });
   });
 
   it('persists the manager authenticated by PIN under the server-owned policy', async () => {
     const f = fixture();
+    f.db.restaurantOperatorCredential.findFirst.mockResolvedValue(
+      credentialRow({ failedAttempts: 2 })
+    );
     vi.mocked(addSaleLine).mockResolvedValue({ line: { id: 'line-1' }, allocation: {} } as never);
 
-    await f.caller.addLine({
-      ...line,
-      discountMinor: 1,
-      discountAuthorization,
-    });
+    await f.caller.addLine({ ...line, discountMinor: 1, managerApproval });
 
     const input = vi.mocked(addSaleLine).mock.calls[0]![2];
     expect(input).toMatchObject({
       discountMinor: 1,
       approvedByUserId: 'manager-1',
-      approvalPolicy: 'PHARMACY_MANAGER',
+      approvalPolicy: 'PHARMACY_MANAGER_PIN',
     });
-    expect(input).not.toHaveProperty('discountAuthorization');
+    expect(input).not.toHaveProperty('managerApproval');
     expect(f.db.restaurantOperatorCredential.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: expect.objectContaining({ staffProfileId: 'manager-profile' }),
+        where: expect.objectContaining({
+          organizationId: 'org-1',
+          staffProfileId: 'manager-profile',
+          type: 'PIN',
+          revokedAt: null,
+          deviceId: null,
+        }),
       })
     );
     expect(verifyOperatorCredential).toHaveBeenCalledWith('PIN', '1234', 'hash');
@@ -316,9 +405,21 @@ describe('pharmacySales.addLine discount approval (#482)', () => {
       where: { id: 'credential-1', organizationId: 'org-1' },
       data: { failedAttempts: 0, lockedUntil: null },
     });
+    const audit = lastAudit();
+    expect(audit.outcome).toBe('SUCCESS');
+    expect(audit.detail).toMatchObject({
+      action: 'discount_approval',
+      metadata: {
+        managerApproval: {
+          kinds: ['DISCOUNT'],
+          outcome: 'APPROVED',
+          approvedByUserId: 'manager-1',
+        },
+      },
+    });
   });
 
-  it('rejects a real manager who did not authenticate the approval', async () => {
+  it('commits a failed attempt outside the request transaction and audits it as a FAILURE', async () => {
     const f = fixture();
     vi.mocked(verifyOperatorCredential).mockResolvedValueOnce(false);
 
@@ -326,16 +427,118 @@ describe('pharmacySales.addLine discount approval (#482)', () => {
       f.caller.addLine({
         ...line,
         discountMinor: 1,
-        discountAuthorization: { staffProfileId: 'manager-profile', pin: '9999' },
+        managerApproval: { staffProfileId: 'manager-profile', pin: '9999' },
       })
-    ).resolves.toEqual({
-      blocked: 'An active manager must approve this discount with their PIN.',
-    });
-    expect(f.db.restaurantOperatorCredential.update).toHaveBeenCalledWith({
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: refusal });
+
+    expect(withTenantDb).toHaveBeenCalledWith(
+      'org-1',
+      expect.any(Function),
+      expect.objectContaining({ skipDrain: true, userId: 'actor-1' })
+    );
+    expect(f.db.restaurantOperatorCredential.update).toHaveBeenCalledExactlyOnceWith({
       where: { id: 'credential-1', organizationId: 'org-1' },
       data: { failedAttempts: 1, lockedUntil: null },
     });
+    // The counter write ran in the independent transaction, so a rollback of the request
+    // (e.g. a deliberately failing call batched alongside) cannot discard it.
+    expect(f.db.restaurantOperatorCredential.update.mock.results[0]!.value).toEqual({
+      independent: true,
+    });
+    expect(f.transaction).not.toHaveBeenCalled();
     expect(addSaleLine).not.toHaveBeenCalled();
+    const audit = lastAudit();
+    expect(audit.outcome).toBe('FAILURE');
+    expect(audit.detail).toMatchObject({
+      skipInput: true,
+      metadata: {
+        managerApproval: {
+          outcome: 'REJECTED',
+          reason: 'INVALID_PIN',
+          approverStaffProfileId: 'manager-profile',
+        },
+      },
+    });
+  });
+
+  it('never writes a PIN into the audit row', async () => {
+    const f = fixture();
+    vi.mocked(verifyOperatorCredential).mockResolvedValueOnce(false);
+
+    await expect(
+      f.caller.addLine({
+        ...line,
+        override,
+        discountMinor: 1,
+        managerApproval: { staffProfileId: 'manager-profile', pin: '864209' },
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+
+    const audit = lastAudit();
+    // The middleware stores '[skipped]' for input when skipInput is set; detail goes through
+    // the central redaction in toAuditJson. Neither may carry the PIN.
+    expect(audit.detail?.skipInput).toBe(true);
+    const stored = JSON.stringify({
+      detail: toAuditJson(audit.detail),
+      error: String(audit.error),
+    });
+    expect(stored).not.toContain('864209');
+    // The central redaction also covers a PIN that reached the raw input.
+    expect(JSON.stringify(toAuditJson(audit.input))).not.toContain('864209');
+  });
+
+  it('locks the credential durably on the fifth wrong PIN and stops verifying', async () => {
+    const f = fixture();
+    let state = { failedAttempts: 0, lockedUntil: null as Date | null };
+    f.db.restaurantOperatorCredential.findFirst.mockImplementation(async () =>
+      credentialRow({ ...state })
+    );
+    f.db.restaurantOperatorCredential.update.mockImplementation(((args: {
+      data: typeof state;
+    }) => {
+      state = { ...args.data };
+      return { independent: independentTx.active };
+    }) as never);
+    vi.mocked(verifyOperatorCredential).mockResolvedValue(false);
+    const attempt = (pin: string) =>
+      f.caller.addLine({
+        ...line,
+        discountMinor: 1,
+        managerApproval: { staffProfileId: 'manager-profile', pin },
+      });
+
+    for (let i = 1; i < MAX_FAILED_ATTEMPTS; i += 1) {
+      await expect(attempt(`100${i}`)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(state.failedAttempts).toBe(i);
+    }
+    await expect(attempt('1005')).rejects.toMatchObject({ code: 'TOO_MANY_REQUESTS' });
+    expect(state.lockedUntil).toBeInstanceOf(Date);
+    expect(verifyOperatorCredential).toHaveBeenCalledTimes(MAX_FAILED_ATTEMPTS);
+
+    // Even the right PIN is not checked while the lock holds.
+    vi.mocked(verifyOperatorCredential).mockResolvedValue(true);
+    await expect(attempt('1234')).rejects.toMatchObject({ code: 'TOO_MANY_REQUESTS' });
+    expect(verifyOperatorCredential).toHaveBeenCalledTimes(MAX_FAILED_ATTEMPTS);
+    expect(addSaleLine).not.toHaveBeenCalled();
+    expect(
+      f.db.restaurantOperatorCredential.update.mock.results.every(
+        (result) => (result.value as { independent: boolean }).independent
+      )
+    ).toBe(true);
+  });
+
+  it('serializes concurrent attempts on the credential row before reading its counters', async () => {
+    const f = fixture();
+    vi.mocked(verifyOperatorCredential).mockResolvedValueOnce(false);
+
+    await expect(
+      f.caller.addLine({ ...line, discountMinor: 1, managerApproval })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+
+    const lock = f.db.$queryRaw.mock.invocationCallOrder[0]!;
+    const read = f.db.restaurantOperatorCredential.findFirst.mock.invocationCallOrder[0]!;
+    expect(lock).toBeLessThan(read);
+    expect(String(f.db.$queryRaw.mock.calls[0]![0])).toContain('FOR UPDATE');
   });
 
   it('rejects an approver without an active assignment to this branch', async () => {
@@ -343,14 +546,9 @@ describe('pharmacySales.addLine discount approval (#482)', () => {
     f.db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null as never);
 
     await expect(
-      f.caller.addLine({
-        ...line,
-        discountMinor: 1,
-        discountAuthorization,
-      })
-    ).resolves.toEqual({
-      blocked: 'An active manager must approve this discount with their PIN.',
-    });
+      f.caller.addLine({ ...line, discountMinor: 1, managerApproval })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(verifyOperatorCredential).not.toHaveBeenCalled();
     expect(addSaleLine).not.toHaveBeenCalled();
   });
 
@@ -366,17 +564,13 @@ describe('pharmacySales.addLine discount approval (#482)', () => {
     ],
   ])('rejects %s as the independent approver', async (_label, user) => {
     const f = fixture();
-    f.db.restaurantOperatorCredential.findFirst.mockResolvedValue({
-      id: 'credential-1',
-      credentialHash: 'hash',
-      failedAttempts: 0,
-      lockedUntil: null,
-      staffProfile: { status: 'ACTIVE', user },
-    });
+    f.db.restaurantOperatorCredential.findFirst.mockResolvedValue(
+      credentialRow({ staffProfile: { status: 'ACTIVE', user } })
+    );
 
     await expect(
-      f.caller.addLine({ ...line, discountMinor: 1, discountAuthorization })
-    ).resolves.toHaveProperty('blocked');
+      f.caller.addLine({ ...line, discountMinor: 1, managerApproval })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(verifyOperatorCredential).not.toHaveBeenCalled();
     expect(addSaleLine).not.toHaveBeenCalled();
   });
@@ -384,19 +578,17 @@ describe('pharmacySales.addLine discount approval (#482)', () => {
   it('lets a solo all-capability owner approve with their own PIN and retains the audit fields', async () => {
     const f = fixture();
     f.db.user.count.mockResolvedValue(1);
-    f.db.restaurantOperatorCredential.findFirst.mockResolvedValue({
-      id: 'credential-1',
-      credentialHash: 'hash',
-      failedAttempts: 0,
-      lockedUntil: null,
-      staffProfile: {
-        status: 'ACTIVE',
-        user: { id: 'actor-1', status: 'ACTIVE', organizationId: 'org-1' },
-      },
-    });
+    f.db.restaurantOperatorCredential.findFirst.mockResolvedValue(
+      credentialRow({
+        staffProfile: {
+          status: 'ACTIVE',
+          user: { id: 'actor-1', status: 'ACTIVE', organizationId: 'org-1' },
+        },
+      })
+    );
     vi.mocked(addSaleLine).mockResolvedValue({ line: { id: 'line-1' } } as never);
 
-    await f.caller.addLine({ ...line, discountMinor: 1, discountAuthorization });
+    await f.caller.addLine({ ...line, discountMinor: 1, managerApproval });
 
     expect(verifyOperatorCredential).toHaveBeenCalledWith('PIN', '1234', 'hash');
     expect(addSaleLine).toHaveBeenCalledWith(
@@ -404,46 +596,62 @@ describe('pharmacySales.addLine discount approval (#482)', () => {
       expect.objectContaining({ organizationId: 'org-1', branchId: 'branch-1' }),
       expect.objectContaining({
         approvedByUserId: 'actor-1',
-        approvalPolicy: 'PHARMACY_MANAGER',
+        approvalPolicy: 'PHARMACY_MANAGER_PIN',
       })
     );
-    expect(f.db.restaurantOperatorCredential.update).toHaveBeenCalledWith({
-      where: { id: 'credential-1', organizationId: 'org-1' },
-      data: { failedAttempts: 0, lockedUntil: null },
-    });
   });
 
   it('rejects an inactive staff profile', async () => {
     const f = fixture();
-    const credential = await f.db.restaurantOperatorCredential.findFirst();
-    f.db.restaurantOperatorCredential.findFirst.mockResolvedValue({
-      ...credential,
-      staffProfile: { ...credential.staffProfile, status: 'INACTIVE' },
-    });
+    f.db.restaurantOperatorCredential.findFirst.mockResolvedValue(
+      credentialRow({
+        staffProfile: {
+          status: 'INACTIVE',
+          user: { id: 'manager-1', status: 'ACTIVE', organizationId: 'org-1' },
+        },
+      })
+    );
 
     await expect(
-      f.caller.addLine({ ...line, discountMinor: 1, discountAuthorization })
-    ).resolves.toHaveProperty('blocked');
+      f.caller.addLine({ ...line, discountMinor: 1, managerApproval })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(verifyOperatorCredential).not.toHaveBeenCalled();
     expect(addSaleLine).not.toHaveBeenCalled();
   });
 
-  it('rejects a locked credential', async () => {
+  it('rejects a locked credential without comparing the PIN', async () => {
     const f = fixture();
-    const credential = await f.db.restaurantOperatorCredential.findFirst();
-    f.db.restaurantOperatorCredential.findFirst.mockResolvedValue({
-      ...credential,
-      lockedUntil: new Date('2999-01-01T00:00:00Z'),
-    });
+    f.db.restaurantOperatorCredential.findFirst.mockResolvedValue(
+      credentialRow({ lockedUntil: new Date('2999-01-01T00:00:00Z') })
+    );
 
     await expect(
-      f.caller.addLine({ ...line, discountMinor: 1, discountAuthorization })
-    ).resolves.toHaveProperty('blocked');
+      f.caller.addLine({ ...line, discountMinor: 1, managerApproval })
+    ).rejects.toMatchObject({ code: 'TOO_MANY_REQUESTS' });
     expect(verifyOperatorCredential).not.toHaveBeenCalled();
     expect(addSaleLine).not.toHaveBeenCalled();
+    expect(lastAudit().detail).toMatchObject({
+      metadata: { managerApproval: { outcome: 'REJECTED', reason: 'LOCKED' } },
+    });
   });
 
   it('rejects an approver without pharmacy management permission', async () => {
+    const f = fixture();
+    f.db.user.findUnique.mockResolvedValue({
+      organizationRole: {
+        permissions: [{ capability: 'pharmacy:safety', effect: 'ALLOW' }],
+      },
+      permissionOverrides: [],
+    });
+
+    await expect(
+      f.caller.addLine({ ...line, discountMinor: 1, managerApproval })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(verifyOperatorCredential).not.toHaveBeenCalled();
+    expect(addSaleLine).not.toHaveBeenCalled();
+  });
+
+  it('does not spend a manager PIN attempt when the operator may not override', async () => {
     const f = fixture();
     f.db.user.findUnique.mockResolvedValue({
       organizationRole: { permissions: [] },
@@ -451,10 +659,43 @@ describe('pharmacySales.addLine discount approval (#482)', () => {
     });
 
     await expect(
-      f.caller.addLine({ ...line, discountMinor: 1, discountAuthorization })
-    ).resolves.toHaveProperty('blocked');
-    expect(verifyOperatorCredential).not.toHaveBeenCalled();
-    expect(addSaleLine).not.toHaveBeenCalled();
+      f.caller.addLine({ ...line, override, managerApproval })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(withTenantDb).not.toHaveBeenCalled();
+    expect(f.db.restaurantOperatorCredential.findFirst).not.toHaveBeenCalled();
+  });
+});
+
+describe('pharmacySales.counterApprovers (#482)', () => {
+  it('lists branch-assigned managers with a stored PIN, never credentials', async () => {
+    const f = fixture();
+    const findMany = vi.fn(async () => [
+      {
+        id: 'manager-profile',
+        displayName: 'Manager',
+        user: { id: 'manager-1', status: 'ACTIVE', organizationId: 'org-1' },
+      },
+      {
+        id: 'operator-profile',
+        displayName: 'Operator',
+        user: { id: 'actor-1', status: 'ACTIVE', organizationId: 'org-1' },
+      },
+    ]);
+    (f.db as unknown as { restaurantStaffProfile: unknown }).restaurantStaffProfile = {
+      findMany,
+    };
+
+    await expect(f.caller.counterApprovers({ branchId: 'branch-1' })).resolves.toEqual([
+      { id: 'manager-profile', name: 'Manager' },
+    ]);
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          organizationId: 'org-1',
+          credentials: { some: { type: 'PIN', revokedAt: null, deviceId: null } },
+        }),
+      })
+    );
   });
 });
 

@@ -522,6 +522,10 @@ function ScopedPharmacyCounterConsole({
     { branchId, medicineId: activeRow?.medicineId ?? '' },
     { enabled: Boolean(branchId && activeRow) && lotOverride !== null }
   );
+  const approversQuery = trpc.pharmacySales.counterApprovers.useQuery(
+    { branchId },
+    { enabled: Boolean(branchId) && lotOverride?.inventoryLotId != null }
+  );
   const customerQuery = trpc.pharmacySales.customerSnapshot.useQuery(
     { branchId, customerId: customerId ?? '' },
     { enabled: Boolean(branchId && customerId) }
@@ -895,6 +899,17 @@ function ScopedPharmacyCounterConsole({
         setNotice({ tone: 'warning', message: 'Enter a reason before selling a non-FEFO batch.' });
         return;
       }
+      if (
+        overrideLotId &&
+        (!batchOverride?.approverStaffProfileId ||
+          !/^\d{4,8}$/.test(batchOverride.approverPin ?? ''))
+      ) {
+        setNotice({
+          tone: 'warning',
+          message: 'An owner or manager must approve a non-FEFO batch with their PIN.',
+        });
+        return;
+      }
       setPending('addToCart');
       setNotice(null);
       try {
@@ -959,6 +974,10 @@ function ScopedPharmacyCounterConsole({
                   inventoryLotId: overrideLotId,
                   reason: batchOverride.reason.trim(),
                 },
+                managerApproval: {
+                  staffProfileId: batchOverride.approverStaffProfileId ?? '',
+                  pin: batchOverride.approverPin ?? '',
+                },
               }
             : {}),
         });
@@ -988,6 +1007,9 @@ function ScopedPharmacyCounterConsole({
         });
       } finally {
         setControlledAuth((value) => ({ ...value, pin: '' }));
+        // A manager PIN is single-use on this device: it is never kept for a retry.
+        if (batchOverride)
+          setLotOverride((value) => (value ? { ...value, approverPin: '' } : value));
         setPending(null);
       }
     },
@@ -2097,6 +2119,14 @@ function ScopedPharmacyCounterConsole({
                   disabled={busy}
                   onChange={setLotOverride}
                   onRetry={() => void lotOptionsQuery.refetch()}
+                  approvers={approversQuery.data ?? []}
+                  approversState={
+                    approversQuery.isError
+                      ? 'error'
+                      : approversQuery.isSuccess
+                        ? 'ready'
+                        : 'loading'
+                  }
                 />
               </div>
             ) : (

@@ -113,6 +113,7 @@ vi.mock('@/lib/trpc', () => {
         'counterCart',
         'counterReceipt',
         'counterLotOptions',
+        'counterApprovers',
         'counterEvidence',
         'customerSnapshot',
         'drawerStatus',
@@ -309,6 +310,7 @@ beforeEach(() => {
     'counterCart',
     'counterReceipt',
     'counterLotOptions',
+    'counterApprovers',
     'counterEvidence',
     'customerSnapshot',
     'substituteProposals',
@@ -1501,6 +1503,61 @@ describe('PharmacyCounterConsole barcode safety', () => {
       expect(screen.queryByLabelText('Override reason')).not.toBeInTheDocument();
     }
   );
+
+  describe('batch override manager approval (#482)', () => {
+    beforeEach(() => {
+      mocks.queries.counterLotOptions = query([
+        {
+          inventoryLotId: 'lot-a',
+          batchNumber: 'B-1',
+          expiresAt: '2028-01-01',
+          sellableUnits: 10,
+          blockedBy: null,
+        },
+        {
+          inventoryLotId: 'lot-b',
+          batchNumber: 'B-2',
+          expiresAt: '2028-06-01',
+          sellableUnits: 10,
+          blockedBy: null,
+        },
+      ]);
+      mocks.queries.counterApprovers = query([{ id: 'manager-profile', name: 'Manager' }]);
+    });
+
+    function chooseOverride() {
+      render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      act(() => mocks.searchProps.mock.lastCall![0].onSelect(barcodeRow()));
+      fireEvent.click(screen.getByRole('button', { name: 'Sell a different batch' }));
+      fireEvent.click(screen.getByRole('radio', { name: /Batch B-2/ }));
+      fireEvent.change(screen.getByLabelText('Override reason'), {
+        target: { value: 'Patient request' },
+      });
+    }
+
+    it('refuses to send an override without an owner/manager PIN', async () => {
+      chooseOverride();
+      fireEvent.click(screen.getByRole('button', { name: /Add to cart/ }));
+      await screen.findByText('An owner or manager must approve a non-FEFO batch with their PIN.');
+      expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+    });
+
+    it('sends the manager approval with the override and clears the PIN afterwards', async () => {
+      mocks.mutations.addLine!.mockRejectedValueOnce(new Error('Wrong PIN'));
+      chooseOverride();
+      fireEvent.change(screen.getByLabelText('Approving manager'), {
+        target: { value: 'manager-profile' },
+      });
+      fireEvent.change(screen.getByLabelText('Manager PIN'), { target: { value: '1234' } });
+      fireEvent.click(screen.getByRole('button', { name: /Add to cart/ }));
+      await waitFor(() => expect(mocks.mutations.addLine).toHaveBeenCalledOnce());
+      expect(mocks.mutations.addLine!.mock.calls[0]![0]).toMatchObject({
+        override: { inventoryLotId: 'lot-b', reason: 'Patient request' },
+        managerApproval: { staffProfileId: 'manager-profile', pin: '1234' },
+      });
+      await waitFor(() => expect(screen.getByLabelText('Manager PIN')).toHaveValue(''));
+    });
+  });
 
   it.each(['edit', 'branch', 'unmount'])('discards a pending scan after %s', async (change) => {
     let resolveSearch!: (value: unknown) => void;

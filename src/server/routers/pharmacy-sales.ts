@@ -114,6 +114,12 @@ import {
   refundPharmacyTender,
 } from '@/lib/pharmacy/settlement';
 
+import {
+  DISCOUNT_APPROVAL_POLICY,
+  FEFO_OVERRIDE_APPROVAL_POLICY,
+  listManagerApprovers,
+  verifyManagerApprovalDurably,
+} from '@/lib/pharmacy/manager-approval';
 import { assertInOrganization } from '../org-refs';
 import {
   adminProcedure,
@@ -125,8 +131,6 @@ import {
 import type { TRPCContext } from '../trpc';
 
 const branchId = z.string().trim().min(1).max(128);
-const DISCOUNT_APPROVAL_POLICY = 'PHARMACY_MANAGER' as const;
-const FEFO_OVERRIDE_APPROVAL_POLICY = 'PHARMACY_SAFETY' as const;
 // Preserve field order and parsing: settlement hashes JSON.stringify(parsed input).
 const tenderInput = z
   .object({
@@ -167,73 +171,6 @@ async function scopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> 
   if (!organizationId || !actorId) throw new TRPCError({ code: 'UNAUTHORIZED' });
   await assertInOrganization(ctx.db.pharmacyBranch, organizationId, [branch], { active: true });
   return { organizationId, branchId: branch, actorId };
-}
-
-async function authorizedSaleLineApprover(
-  db: ScopedDb,
-  scope: LedgerScope,
-  authorization: { staffProfileId: string; pin: string } | undefined,
-  needsDiscountApproval: boolean
-) {
-  if (!needsDiscountApproval) return null;
-  if (!authorization) return null;
-  await db.$queryRaw`SELECT id FROM restaurant_operator_credentials WHERE "organizationId"=${scope.organizationId} AND "staffProfileId"=${authorization.staffProfileId} AND type='PIN' AND "revokedAt" IS NULL AND "deviceId" IS NULL FOR UPDATE`;
-  const credential = await db.restaurantOperatorCredential.findFirst({
-    where: {
-      organizationId: scope.organizationId,
-      staffProfileId: authorization.staffProfileId,
-      type: 'PIN',
-      revokedAt: null,
-      deviceId: null,
-    },
-    include: { staffProfile: { include: { user: true } } },
-  });
-  const approver = credential?.staffProfile.user;
-  const now = new Date();
-  if (
-    !credential ||
-    credential.staffProfile.status !== 'ACTIVE' ||
-    !approver ||
-    approver.organizationId !== scope.organizationId ||
-    approver.status !== 'ACTIVE' ||
-    isLockedOut(credential, now)
-  )
-    return null;
-  // A second approver is required whenever one exists. A tenant whose only active member is the
-  // operator must not lose the owner's all-capability workflow, though: their own manager PIN is
-  // still independently verified and the resulting approver id/policy are persisted on the line.
-  if (
-    approver.id === scope.actorId &&
-    (await db.user.count({
-      where: { organizationId: scope.organizationId, status: 'ACTIVE' },
-    })) !== 1
-  )
-    return null;
-  const assignment = await db.pharmacyBranchAssignment.findFirst({
-    where: {
-      organizationId: scope.organizationId,
-      branchId: scope.branchId,
-      userId: approver.id,
-      active: true,
-    },
-  });
-  if (
-    !assignment ||
-    !(await can(approver, 'pharmacy:manage', undefined, { db, source: 'TRPC', now }))
-  )
-    return null;
-  if (!(await verifyOperatorCredential('PIN', authorization.pin, credential.credentialHash))) {
-    await db.restaurantOperatorCredential.update({
-      where: { id: credential.id, organizationId: scope.organizationId },
-      data: registerFailedAttempt(credential, now),
-    });
-    return null;
-  }
-  await db.restaurantOperatorCredential.update({
-    where: { id: credential.id, organizationId: scope.organizationId },
-    data: clearLockout(),
-  });
-  return approver.id;
 }
 
 async function khataScope(ctx: TRPCContext, branch: string, access: 'read' | 'write') {
@@ -1086,7 +1023,9 @@ export const pharmacySalesRouter = router({
           canonicalUnitsPerSaleUnit: z.number().int().positive(),
           discountKind: z.enum(['DISCOUNT', 'PROMOTION', 'COMPLIMENTARY']).optional(),
           discountMinor: z.number().int().nonnegative().optional(),
-          discountAuthorization: z
+          // #482: an owner/manager PIN approving a discount or FEFO override. The approver
+          // is resolved server-side from the stored PIN credential, never taken from input.
+          managerApproval: z
             .object({
               staffProfileId: z.string().trim().min(1).max(128),
               pin: z.string().regex(/^\d{4,8}$/),
@@ -1127,41 +1066,74 @@ export const pharmacySalesRouter = router({
           },
         });
       }
+      const needsDiscountApproval = (input.discountMinor ?? 0) > 0;
+      // Checked before any manager PIN attempt is spent on an operator who may not override.
+      if (
+        input.override &&
+        !(await can(subjectFromSession(ctx.session!.user), 'pharmacy:safety', undefined, {
+          db: ctx.db,
+          source: 'TRPC',
+        }))
+      ) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Pharmacy safety permission is required for a FEFO override.',
+        });
+      }
+      let approverId: string | undefined;
+      if (needsDiscountApproval || input.override) {
+        const approvalScope = await scopeFor(ctx, input.branchId);
+        // Verified (and its lockout counters committed) in an independent transaction, so a
+        // refusal can be thrown — and audited as a FAILURE — without rolling back the attempt.
+        const approval = await verifyManagerApprovalDurably(approvalScope, input.managerApproval);
+        const approvalKinds = [
+          ...(needsDiscountApproval ? ['DISCOUNT'] : []),
+          ...(input.override ? ['FEFO_OVERRIDE'] : []),
+        ];
+        // Non-secret approval context only; the PIN never enters audit detail.
+        annotateAudit(ctx, {
+          ...(input.override
+            ? {}
+            : {
+                category: 'PHARMACY',
+                action: 'discount_approval',
+                targetType: 'PharmacySale',
+                targetId: input.saleId,
+                description: 'Counter discount needing owner/manager PIN approval.',
+              }),
+          metadata: {
+            branchId: input.branchId,
+            medicineId: input.medicineId,
+            ...(needsDiscountApproval ? { discountMinor: input.discountMinor } : {}),
+            managerApproval: {
+              kinds: approvalKinds,
+              outcome: approval.ok ? 'APPROVED' : 'REJECTED',
+              ...(approval.ok ? {} : { reason: approval.reason }),
+              approverStaffProfileId: approval.approverStaffProfileId,
+              ...(approval.ok ? { approvedByUserId: approval.approverUserId } : {}),
+            },
+          },
+        });
+        if (!approval.ok) {
+          throw new TRPCError({
+            code: approval.reason === 'LOCKED' ? 'TOO_MANY_REQUESTS' : 'FORBIDDEN',
+            message:
+              approval.reason === 'LOCKED'
+                ? 'This manager PIN is locked after too many attempts. Try again later.'
+                : 'An active owner or manager must approve this with their PIN.',
+          });
+        }
+        approverId = approval.approverUserId;
+      }
       try {
         const outcome = await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
           const scope = await scopeFor(ctx, input.branchId);
-          const needsDiscountApproval = (input.discountMinor ?? 0) > 0;
-          const approverId = await authorizedSaleLineApprover(
-            db,
-            scope,
-            input.discountAuthorization,
-            needsDiscountApproval
-          );
-          if (needsDiscountApproval && !approverId) {
-            // Return a refusal so a failed PIN attempt commits its durable lockout update.
-            return {
-              blocked: 'An active manager must approve this discount with their PIN.',
-            };
-          }
-          if (
-            input.override &&
-            !(await can(subjectFromSession(ctx.session!.user), 'pharmacy:safety', undefined, {
-              db,
-              source: 'TRPC',
-            }))
-          ) {
-            throw new TRPCError({
-              code: 'FORBIDDEN',
-              message: 'Pharmacy safety permission is required for a FEFO override.',
-            });
-          }
-          const { discountAuthorization: _discountAuthorization, ...lineInputWithoutSecret } =
-            input;
-          void _discountAuthorization;
+          const { managerApproval: _managerApproval, ...lineInputWithoutSecret } = input;
+          void _managerApproval;
           const approvedInput = {
             ...lineInputWithoutSecret,
-            approvedByUserId: approverId ?? undefined,
+            approvedByUserId: needsDiscountApproval ? approverId : undefined,
             approvalPolicy: needsDiscountApproval ? DISCOUNT_APPROVAL_POLICY : undefined,
             override: input.override
               ? { ...input.override, approvalPolicy: FEFO_OVERRIDE_APPROVAL_POLICY }
@@ -1879,6 +1851,15 @@ export const pharmacySalesRouter = router({
    * Read-only. Lots that cannot be sold stay listed with the reason, so the
    * operator sees why a batch on the shelf is refused rather than missing.
    */
+  /**
+   * #482 — owners/managers who may approve a counter discount or FEFO override at this
+   * branch with their stored PIN. Only ids and display names; credentials never leave.
+   */
+  counterApprovers: protectedProcedure
+    .input(z.object({ branchId }).strict())
+    .query(async ({ ctx, input }) =>
+      listManagerApprovers(ctx.db, await scopeFor(ctx, input.branchId))
+    ),
   counterLotOptions: protectedProcedure
     .input(z.object({ branchId, medicineId: z.string().min(1) }).strict())
     .query(async ({ ctx, input }) => {
