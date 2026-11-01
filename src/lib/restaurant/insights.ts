@@ -59,6 +59,7 @@ const DAILY_SELECT = {
   sourceDailyClose: {
     select: {
       grossSales: true,
+      netSales: true,
       compTotal: true,
       discountTotal: true,
       refundTotal: true,
