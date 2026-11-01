@@ -8,17 +8,23 @@ status, folios and charges, payment settlement, night audit, and one determinist
 banquets, loyalty, housekeeping task assignment, maintenance work orders, accounting/GL export,
 multi-currency, fiscal-device integration, and multi-property central reservations
 
-> **Implemented so far (migration `20261101000000_hotel_mvp_reservations_folio`).** Guests;
-> rate plans with immutable terms and effective-dated, immutable `BigInt` prices (the only pricing
-> model — quotes and bookings both use it); locked, idempotent reservation create with
+> **Implemented so far (migrations `20261101000000_hotel_mvp_reservations_folio` and
+> `20261101000100_hotel_mvp_review_fixes`).** Guests;
+> rate plans with immutable terms, the property's currency and at most 100% tax, and
+> effective-dated, immutable `BigInt` prices (the only pricing model — quotes and bookings both
+> use it; a booked price is marked used); locked, idempotent reservation create with
 > server-side pricing and an availability re-check (HOLD consumes inventory); one append-only folio
-> ledger (`hotel_folio_entries`, positive reversal copies) plus append-only payments; housekeeping
-> state and tasks. Routers: `hotelReservations`, `hotelRates.ratePlans`, `hotelFolios`,
-> `hotelHousekeeping`. Every table uses the standard organization RLS policy with explicit
-> `(organizationId, branchId)` predicates. **Not yet built:** confirm/cancel/update, room
-> assignment, check-in/out and the front-desk board, payment capture, night audit, the
-> inventory status board and availability calendar, and the UI. The sections below remain the
-> target contract for those lanes.
+> ledger (`hotel_folio_entries`, positive reversal copies, open-folio and folio-currency guards,
+> idempotent `postExtra`) plus append-only payments (folio currency, refunds capped at the
+> original); housekeeping tasks, with clean/dirty/inspected set on `hotel_rooms.status` through
+> the PROP-03 matrix (no parallel housekeeping status). `getWithFolio` requires both
+> `hotel:reservations` and `hotel:folio`. Routers: `hotelReservations`, `hotelRates.ratePlans`,
+> `hotelFolios`, `hotelHousekeeping`. Every table uses the standard organization RLS policy with
+> explicit `(organizationId, branchId)` predicates; DB acceptance lives in
+> `src/server/hotel-mvp.db.test.ts` and `scripts/verify-tenant-isolation.ts`. **Not yet built:**
+> confirm/cancel/update, room assignment, check-in/out and the front-desk board, room-night
+> folio posting, payment capture, night audit, the inventory status board and availability
+> calendar, and the UI. The sections below remain the target contract for those lanes.
 
 ## 1. Outcome and repository baseline
 

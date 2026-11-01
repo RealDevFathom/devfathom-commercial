@@ -45,7 +45,16 @@ export function createPrismaFolioLedgerStore(
     async catalogPrice(scope, catalogItemId) {
       const rows = await db.$queryRaw<CatalogPrice[]>(Prisma.sql`
         SELECT "priceMinor" AS "unitMinor",
-          COALESCE(("postingRule"->>'taxBasisPoints')::integer, 0) AS "taxBasisPoints"
+          -- An absent rate is no tax; anything but a plain whole number is
+          -- reported as -1 so the service refuses it as an invalid rate
+          -- instead of the cast failing the statement.
+          CASE
+            WHEN "postingRule"->'taxBasisPoints' IS NULL THEN 0
+            WHEN jsonb_typeof("postingRule"->'taxBasisPoints') = 'number'
+              AND ("postingRule"->>'taxBasisPoints') ~ '^[0-9]{1,9}$'
+              THEN ("postingRule"->>'taxBasisPoints')::integer
+            ELSE -1
+          END AS "taxBasisPoints"
         FROM hotel_extras
         WHERE id = ${catalogItemId}
           AND "organizationId" = ${scope.organizationId}
@@ -84,6 +93,7 @@ export function createPrismaFolioLedgerStore(
       return rows[0];
     },
     async reverse(scope, entryId, reason) {
+      // Only an open folio's balance may move: a closed folio is settled.
       const rows = await db.$queryRaw<FolioLedgerRow[]>(Prisma.sql`
         INSERT INTO hotel_folio_entries
           (id, "organizationId", "branchId", "folioId", kind, "catalogItemId", "serviceDate",
@@ -93,12 +103,17 @@ export function createPrismaFolioLedgerStore(
           e."serviceDate", e.description, e.quantity, e."unitMinor", e."netMinor", e."taxMinor",
           e."grossMinor", e.currency, e.id, ${reason}, ${actorId}
         FROM hotel_folio_entries e
+        JOIN hotel_folios f
+          ON f."organizationId" = e."organizationId"
+         AND f."branchId" = e."branchId"
+         AND f.id = e."folioId"
         WHERE e.id = ${entryId}
           AND e."organizationId" = ${scope.organizationId}
           AND e."branchId" = ${scope.branchId}
           AND e."reversesEntryId" IS NULL
+          AND f.status = 'OPEN'
         RETURNING id, kind::text AS kind, "reversesEntryId", reason, "grossMinor", currency, "createdAt"`);
-      if (!rows[0]) throw new Error('Folio entry is unavailable for this property.');
+      if (!rows[0]) throw new Error('Folio entry is unavailable on an open folio of this property.');
       return rows[0];
     },
   };

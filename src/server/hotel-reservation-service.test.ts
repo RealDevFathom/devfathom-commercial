@@ -29,6 +29,7 @@ const priced = {
   netMinor: BigInt(10_000),
   taxMinor: BigInt(1_600),
   totalMinor: BigInt(11_600),
+  priceIds: ['price-1'],
 };
 const created = {
   id: 'r',

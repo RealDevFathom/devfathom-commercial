@@ -46,6 +46,11 @@ describe('hotel rate plan inputs', () => {
     expect(ratePlanCreateInput.parse(plan).code).toBe('BAR');
     expect(ratePlanCreateInput.safeParse({ ...plan, nightlyRateMinor: 0 }).success).toBe(false);
     expect(ratePlanCreateInput.safeParse({ ...plan, taxBasisPoints: 100_001 }).success).toBe(false);
+    // 100% is the ceiling, the same as a catalog extra's rate.
+    expect(ratePlanCreateInput.safeParse({ ...plan, taxBasisPoints: 10_000 }).success).toBe(true);
+    expect(ratePlanCreateInput.safeParse({ ...plan, taxBasisPoints: 10_001 }).success).toBe(false);
+    // The currency defaults to the property's; it is never free-form multi-currency.
+    expect(ratePlanCreateInput.safeParse({ ...plan, currency: undefined }).success).toBe(true);
   });
 
   it('accepts a non-negative bigint price over an ordered range', () => {

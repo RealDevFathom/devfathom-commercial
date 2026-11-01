@@ -23,7 +23,6 @@ import {
 import { capabilityProcedure, router } from '../trpc';
 
 const reservations = capabilityProcedure('hotel:reservations');
-const folios = capabilityProcedure('hotel:folio');
 
 const scopedId = hotelPropertySelectionInput.extend({ id: z.string().trim().min(1).max(191) }).strict();
 
@@ -94,8 +93,14 @@ export const hotelReservationsRouter = router({
     return readReservationProjection(createPrismaFolioReadStore(ctx.db), scope, input.id);
   }),
 
-  /** The folio grant is issued only after `hotel:folio` is verified for this property. */
-  getWithFolio: folios.input(scopedId).query(async ({ ctx, input }) => {
+  /**
+   * The projection carries guest identity and stay dates, so it is gated on
+   * `hotel:reservations` like every other guest read; the folio grant is then
+   * issued only after `hotel:folio` is also verified for this property. A role
+   * with folio access alone (e.g. housekeeping supervision) gets neither.
+   */
+  getWithFolio: reservations.input(scopedId).query(async ({ ctx, input }) => {
+    await currentProperty(ctx, input.branchId, 'hotel:reservations');
     const property = await currentProperty(ctx, input.branchId, 'hotel:folio');
     const scope = { organizationId: ctx.entitlements.organizationId, branchId: property.branchId };
     return readReservationProjection(

@@ -5,6 +5,11 @@ const ZERO = BigInt(0);
 const TWO = BigInt(2);
 const BPS_DENOMINATOR = BigInt(10_000);
 export const MAX_MONEY_MINOR = BigInt('9223372036854775807');
+/**
+ * The highest tax rate a plan may carry: 100%. The same ceiling as a catalog
+ * extra's rate and the database CHECK on `hotel_rate_plans`.
+ */
+export const MAX_TAX_BASIS_POINTS = 10_000;
 
 export type RateScope = {
   organizationId: string;
@@ -38,7 +43,7 @@ function checkedMoney(value: bigint): bigint {
 
 /** Integer basis-point tax, rounded half up to the nearest minor unit. */
 export function taxMinorRoundHalfUp(netMinor: bigint, basisPoints: number): bigint {
-  if (!Number.isSafeInteger(basisPoints) || basisPoints < 0 || basisPoints > 100_000) {
+  if (!Number.isSafeInteger(basisPoints) || basisPoints < 0 || basisPoints > MAX_TAX_BASIS_POINTS) {
     throw new RangeError('Invalid tax basis points.');
   }
   checkedMoney(netMinor);

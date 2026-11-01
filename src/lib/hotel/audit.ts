@@ -73,7 +73,6 @@ export const HOTEL_AUDIT_ENTITY_TYPES = [
   'HotelFolio',
   'HotelFolioEntry',
   'HotelFolioPayment',
-  'HotelRoomHousekeeping',
   'HotelHousekeepingTask',
 ] as const;
 

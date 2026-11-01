@@ -13,6 +13,10 @@ const sql = readFileSync(
   join(root, 'prisma/migrations/20261101000000_hotel_mvp_reservations_folio/migration.sql'),
   'utf8'
 );
+const fixes = readFileSync(
+  join(root, 'prisma/migrations/20261101000100_hotel_mvp_review_fixes/migration.sql'),
+  'utf8'
+);
 const schema = readFileSync(join(root, 'prisma/schema.prisma'), 'utf8');
 
 const TABLES = [
@@ -26,7 +30,6 @@ const TABLES = [
   'hotel_folio_entries',
   'hotel_folio_payments',
   'hotel_operation_idempotency_keys',
-  'hotel_room_housekeeping',
   'hotel_housekeeping_tasks',
 ];
 
@@ -73,7 +76,6 @@ describe('hotel MVP migration', () => {
       'hotel_folio_payments_folio_fkey',
       'hotel_folio_payments_refunds_fkey',
       'hotel_rate_plan_prices_rate_plan_fkey',
-      'hotel_room_housekeeping_room_fkey',
       'hotel_housekeeping_tasks_room_fkey',
     ]) {
       expect(sql).toContain(`"${constraint}"`);
@@ -89,5 +91,29 @@ describe('hotel MVP migration', () => {
     expect(sql).toContain('hotel_rate_plan_terms_immutable');
     expect(sql).toContain('NEW."taxBasisPoints" IS DISTINCT FROM OLD."taxBasisPoints"');
     expect(sql).toContain('hotel_rate_price_immutable');
+  });
+
+  it('keeps one room status: the parallel housekeeping table is dropped, not mapped', () => {
+    expect(fixes).toContain('DROP TABLE "hotel_room_housekeeping";');
+    expect(fixes).toContain('DROP TYPE "HotelHousekeepingStatus";');
+    expect(schema).not.toContain('@@map("hotel_room_housekeeping")');
+    expect(schema).not.toContain('enum HotelHousekeepingStatus');
+  });
+
+  it('caps rate plan tax at 100% and pins a plan to its property currency', () => {
+    expect(fixes).toContain('CHECK ("taxBasisPoints" BETWEEN 0 AND 10000)');
+    expect(fixes).toContain('BEFORE INSERT ON "hotel_rate_plans"');
+    expect(fixes).toContain('p."currency" = NEW."currency"');
+  });
+
+  it('guards folio entries (open folio, folio currency) and refunds (same folio, capped, locked)', () => {
+    expect(fixes).toContain('BEFORE INSERT ON "hotel_folio_entries"');
+    expect(fixes).toContain(`folio."status" <> 'OPEN'`);
+    expect(fixes).toContain('folio."currency" <> NEW."currency"');
+    expect(fixes).toContain('BEFORE INSERT ON "hotel_folio_payments"');
+    expect(fixes).toContain('refunded + NEW."amountMinor" > original."amountMinor"');
+    expect(fixes).toMatch(/"refundsPaymentId"\s*FOR UPDATE;/);
+    expect(schema).toContain('map: "hotel_folio_payments_refunds_idx"');
+    expect(fixes).not.toContain('IF NOT EXISTS');
   });
 });

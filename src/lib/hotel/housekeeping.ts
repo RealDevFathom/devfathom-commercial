@@ -3,7 +3,31 @@ import { randomUUID } from 'node:crypto';
 import { Prisma } from '@/generated/prisma/client';
 import { z } from 'zod';
 
-export const HOUSEKEEPING_STATUSES = ['CLEAN', 'DIRTY', 'INSPECTED', 'OUT_OF_ORDER'] as const;
+import {
+  HOTEL_ROOM_STATUSES,
+  HOUSEKEEPING_ROOM_STATUSES,
+  HotelInventoryError,
+  applyInventoryActor,
+  planRoomStatusChange,
+  setInventoryStatus,
+  type HotelInventoryStatus,
+  type HotelRoomStatusValue,
+  type InventoryDb,
+} from './inventory';
+
+/**
+ * HK-02. A room's clean/dirty state is the room's own `hotel_rooms.status`
+ * (spec §4.3): there is no second housekeeping status that could disagree with
+ * it. Housekeeping sets only its subset of the PROP-03 matrix — clean, dirty,
+ * inspected — through `setInventoryStatus`, so the transition matrix, the
+ * stay-owned `OCCUPIED` rule and the trigger-written, attributed status ledger
+ * all apply exactly as they do on the inventory board.
+ */
+export const HOUSEKEEPING_STATUSES = [
+  'VACANT_CLEAN',
+  'VACANT_DIRTY',
+  'INSPECTED',
+] as const satisfies readonly HotelRoomStatusValue[];
 export type HousekeepingStatus = (typeof HOUSEKEEPING_STATUSES)[number];
 export const HOUSEKEEPING_TASK_STATUSES = [
   'OPEN',
@@ -13,6 +37,11 @@ export const HOUSEKEEPING_TASK_STATUSES = [
 ] as const;
 export type HousekeepingTaskStatus = (typeof HOUSEKEEPING_TASK_STATUSES)[number];
 
+/** The most tasks one board read returns: open work first, newest first. */
+export const HOUSEKEEPING_TASK_LIST_LIMIT = 200;
+
+const DEFAULT_STATUS_REASON = 'Housekeeping board';
+
 export const housekeepingBranchInput = z
   .object({ branchId: z.string().trim().min(1).max(128) })
   .strict();
@@ -20,6 +49,9 @@ export const housekeepingStatusInput = housekeepingBranchInput
   .extend({
     roomId: z.string().trim().min(1).max(191),
     status: z.enum(HOUSEKEEPING_STATUSES),
+    /** The status the operator was looking at; omitted, the current status is used. */
+    expectedStatus: z.enum(HOTEL_ROOM_STATUSES).optional(),
+    reason: z.string().trim().min(1).max(500).optional(),
   })
   .strict();
 export const housekeepingTaskCreateInput = housekeepingBranchInput
@@ -37,12 +69,6 @@ export const housekeepingTaskUpdateInput = housekeepingBranchInput
   })
   .strict();
 
-const TRANSITIONS: Record<HousekeepingStatus, readonly HousekeepingStatus[]> = {
-  DIRTY: ['CLEAN', 'OUT_OF_ORDER'],
-  CLEAN: ['DIRTY', 'INSPECTED', 'OUT_OF_ORDER'],
-  INSPECTED: ['DIRTY', 'OUT_OF_ORDER'],
-  OUT_OF_ORDER: ['DIRTY'],
-};
 const TASK_TRANSITIONS: Record<HousekeepingTaskStatus, readonly HousekeepingTaskStatus[]> = {
   OPEN: ['IN_PROGRESS', 'CANCELLED'],
   IN_PROGRESS: ['OPEN', 'COMPLETED', 'CANCELLED'],
@@ -50,13 +76,20 @@ const TASK_TRANSITIONS: Record<HousekeepingTaskStatus, readonly HousekeepingTask
   CANCELLED: [],
 };
 
-export function canTransitionHousekeeping(from: HousekeepingStatus, to: HousekeepingStatus) {
-  return TRANSITIONS[from].includes(to);
+/** May housekeeping move a room from `from` to `to`? The PROP-03 matrix, narrowed to its subset. */
+export function canTransitionHousekeeping(from: HotelRoomStatusValue, to: HotelRoomStatusValue) {
+  return planRoomStatusChange({
+    from,
+    to,
+    actorId: 'housekeeping',
+    reason: DEFAULT_STATUS_REASON,
+    allowed: HOUSEKEEPING_ROOM_STATUSES,
+  }).ok;
 }
 
-/** Availability can compose this with reservation and inventory checks. */
-export function isRoomSellable(status: HousekeepingStatus): boolean {
-  return status !== 'OUT_OF_ORDER';
+/** Availability can compose this with reservation and block checks. */
+export function isRoomSellable(status: HotelRoomStatusValue): boolean {
+  return status !== 'OUT_OF_ORDER' && status !== 'OUT_OF_SERVICE';
 }
 
 export type HousekeepingDb = Pick<Prisma.TransactionClient, '$queryRaw' | '$executeRaw'>;
@@ -72,37 +105,66 @@ export async function listHousekeeping(
   scope: Omit<HousekeepingScope, 'actorId'>
 ) {
   const rooms = await db.$queryRaw(Prisma.sql`
-    SELECT r.id AS "roomId", r.number, COALESCE(h.status, 'DIRTY') AS status, h."changedAt"
-    FROM hotel_rooms r LEFT JOIN hotel_room_housekeeping h
-      ON h."organizationId" = r."organizationId" AND h."branchId" = r."branchId" AND h."roomId" = r.id
+    SELECT r.id AS "roomId", r.number, r.status::text AS status, r."statusChangedAt" AS "changedAt"
+    FROM hotel_rooms r
     WHERE r."organizationId" = ${scope.organizationId} AND r."branchId" = ${scope.branchId} AND r.active = true
     ORDER BY r.number`);
   const tasks = await db.$queryRaw(Prisma.sql`
     SELECT * FROM hotel_housekeeping_tasks
     WHERE "organizationId" = ${scope.organizationId} AND "branchId" = ${scope.branchId}
-    ORDER BY "createdAt" DESC`);
+    ORDER BY CASE WHEN status IN ('OPEN', 'IN_PROGRESS') THEN 0 ELSE 1 END, "createdAt" DESC, id
+    LIMIT ${HOUSEKEEPING_TASK_LIST_LIMIT}`);
   return { rooms, tasks };
 }
 
+/**
+ * Set a room's housekeeping status on `hotel_rooms.status`. Must run on the
+ * transaction client of a property-locked write. The actor and the reason are
+ * handed to the status trigger, which writes the attributed ledger line.
+ */
 export async function setHousekeepingStatus(
-  db: HousekeepingDb,
+  db: InventoryDb,
   scope: HousekeepingScope,
   roomId: string,
-  status: HousekeepingStatus
+  status: HousekeepingStatus,
+  options: { expectedStatus?: HotelRoomStatusValue; reason?: string } = {}
 ) {
-  const current = await db.$queryRaw<{ status: HousekeepingStatus }[]>(Prisma.sql`
-    SELECT COALESCE(h.status, 'DIRTY') AS status FROM hotel_rooms r
-    LEFT JOIN hotel_room_housekeeping h ON h."organizationId"=r."organizationId" AND h."branchId"=r."branchId" AND h."roomId"=r.id
-    WHERE r."organizationId"=${scope.organizationId} AND r."branchId"=${scope.branchId} AND r.id=${roomId} AND r.active=true FOR UPDATE OF r`);
-  if (!current[0]) throw new Error('ROOM_NOT_FOUND');
-  if (!canTransitionHousekeeping(current[0].status, status))
-    throw new Error('INVALID_HOUSEKEEPING_TRANSITION');
-  await db.$executeRaw(Prisma.sql`
-    INSERT INTO hotel_room_housekeeping (id,"organizationId","branchId","roomId",status,"changedById")
-    VALUES (${randomUUID()},${scope.organizationId},${scope.branchId},${roomId},${status}::"HotelHousekeepingStatus",${scope.actorId})
-    ON CONFLICT ("organizationId","branchId","roomId") DO UPDATE SET status=EXCLUDED.status,"changedById"=EXCLUDED."changedById","changedAt"=now(),"updatedAt"=now()
-    WHERE hotel_room_housekeeping."organizationId"=${scope.organizationId} AND hotel_room_housekeeping."branchId"=${scope.branchId}`);
-  return { roomId, status };
+  const reason = options.reason?.trim() || DEFAULT_STATUS_REASON;
+  let expectedStatus = options.expectedStatus;
+  if (!expectedStatus) {
+    const current = await db.$queryRaw<{ status: HotelRoomStatusValue }[]>(Prisma.sql`
+      SELECT r.status::text AS status FROM hotel_rooms r
+      WHERE r."organizationId" = ${scope.organizationId} AND r."branchId" = ${scope.branchId}
+        AND r.id = ${roomId} AND r.active = true
+      FOR UPDATE OF r`);
+    if (!current[0]) throw new Error('ROOM_NOT_FOUND');
+    expectedStatus = current[0].status;
+  }
+  // Decided before any write: an OCCUPIED room belongs to the stay lane, and
+  // anything outside housekeeping's subset is a property administrator's call.
+  const plan = planRoomStatusChange({
+    from: expectedStatus,
+    to: status,
+    actorId: scope.actorId,
+    reason,
+    allowed: HOUSEKEEPING_ROOM_STATUSES,
+  });
+  if (!plan.ok) {
+    throw new HotelInventoryError(
+      plan.code === 'NOT_PERMITTED' ? 'FORBIDDEN' : 'BAD_REQUEST',
+      plan.message,
+      'status'
+    );
+  }
+  await applyInventoryActor(db, scope, reason);
+  return setInventoryStatus(
+    db,
+    scope,
+    'room',
+    // Not OCCUPIED: the plan above refuses a stay-owned source.
+    { id: roomId, expectedStatus: expectedStatus as HotelInventoryStatus, status, reason },
+    HOUSEKEEPING_ROOM_STATUSES
+  );
 }
 
 export async function createHousekeepingTask(
@@ -110,6 +172,17 @@ export async function createHousekeepingTask(
   scope: HousekeepingScope,
   input: z.infer<typeof housekeepingTaskCreateInput>
 ) {
+  if (input.assignedToId) {
+    // An assignee is an active member of this organization; the id is never
+    // stored on the caller's word alone.
+    const assignee = await db.$queryRaw<{ id: string }[]>(Prisma.sql`
+      SELECT u.id FROM users u
+      WHERE u."organizationId" = ${scope.organizationId}
+        AND u.id = ${input.assignedToId}
+        AND u.status IN ('ACTIVE', 'ON_LEAVE')
+      LIMIT 1`);
+    if (!assignee[0]) throw new Error('ASSIGNEE_NOT_FOUND');
+  }
   const id = randomUUID();
   const rows = await db.$queryRaw(Prisma.sql`
     INSERT INTO hotel_housekeeping_tasks (id,"organizationId","branchId","roomId",title,notes,"assignedToId","createdById")

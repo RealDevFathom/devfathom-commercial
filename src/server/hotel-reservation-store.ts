@@ -218,6 +218,19 @@ export function createPrismaReservationStore(db: ReservationDb): HotelReservatio
           ${priced.currency})
         RETURNING id`);
 
+      // A price a booking has snapshotted is "used": the immutability trigger
+      // then refuses to change or delete it even if it is ever unpublished.
+      if (priced.priceIds.length > 0) {
+        await db.$queryRaw(Prisma.sql`
+          UPDATE hotel_rate_plan_prices
+          SET "usedAt" = CURRENT_TIMESTAMP
+          WHERE "organizationId" = ${scope.organizationId}
+            AND "branchId" = ${scope.branchId}
+            AND id IN (${Prisma.join(priced.priceIds)})
+            AND "usedAt" IS NULL
+          RETURNING id`);
+      }
+
       return { id: reservationId, confirmationNumber: confirmation, status: 'HOLD', folioId, folioNumber };
     },
 

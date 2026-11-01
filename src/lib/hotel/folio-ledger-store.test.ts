@@ -9,14 +9,20 @@ function sqlText(query: unknown): string {
   return (query as { strings: readonly string[] }).strings.join('?');
 }
 
+/** A `$queryRaw` stand-in that records each statement's SQL text and returns one row. */
+function recordingQuery(queries: string[]): FolioSqlClient['$queryRaw'] {
+  const run = vi.fn(async (query: unknown) => {
+    queries.push(sqlText(query));
+    return [{}];
+  });
+  return run as unknown as FolioSqlClient['$queryRaw'];
+}
+
 describe('Prisma folio ledger store', () => {
   it('puts organizationId and branchId predicates in every SQL operation', async () => {
     const queries: string[] = [];
     const db: FolioSqlClient = {
-      $queryRaw: vi.fn(async (query) => {
-        queries.push(sqlText(query));
-        return [{}];
-      }),
+      $queryRaw: recordingQuery(queries),
     };
     const store = createPrismaFolioLedgerStore(db, 'actor-1');
 
@@ -39,10 +45,7 @@ describe('Prisma folio ledger store', () => {
   it('writes to the single hotel_folio_entries ledger and reverses with a positive copy', async () => {
     const queries: string[] = [];
     const db: FolioSqlClient = {
-      $queryRaw: vi.fn(async (query) => {
-        queries.push(sqlText(query));
-        return [{}];
-      }),
+      $queryRaw: recordingQuery(queries),
     };
     const store = createPrismaFolioLedgerStore(db, 'actor-1');
     await store.insert(scope, {
@@ -56,12 +59,17 @@ describe('Prisma folio ledger store', () => {
     expect(queries[1]).toContain('e."grossMinor"');
     expect(queries[1]).not.toContain('-e."grossMinor"');
     expect(queries[1]).toContain('e."reversesEntryId" IS NULL');
+    // A closed folio is settled: a correction may only land on an open one.
+    expect(queries[1]).toContain("f.status = 'OPEN'");
   });
 
   it('denies an unauthorized caller before any DB read', async () => {
     const queryRaw = vi.fn(async () => []);
     const service = createFolioLedgerService(
-      createPrismaFolioLedgerStore({ $queryRaw: queryRaw }, 'actor-1'),
+      createPrismaFolioLedgerStore(
+        { $queryRaw: queryRaw as unknown as FolioSqlClient['$queryRaw'] },
+        'actor-1'
+      ),
       async () => {
         throw new Error('Missing capability: hotel:folio');
       }

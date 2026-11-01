@@ -1,11 +1,18 @@
 import { z } from 'zod';
 
+/**
+ * The most units one posting may carry. Far above any real extra, and far below
+ * the INTEGER `quantity` column, so an oversized request is a validation error
+ * rather than a database overflow.
+ */
+export const MAX_POSTING_QUANTITY = 10_000;
+
 /** Money is deliberately absent: the server prices every posting. */
 export const folioPostingInput = z
   .object({
     folioId: z.string().min(1),
     catalogItemId: z.string().min(1),
-    quantity: z.number().int().positive(),
+    quantity: z.number().int().positive().max(MAX_POSTING_QUANTITY),
     reason: z.string().trim().min(1).max(500).optional(),
   })
   .strict();

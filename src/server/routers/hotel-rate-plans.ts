@@ -5,7 +5,7 @@ import { z } from 'zod';
 
 import { Prisma } from '@/generated/prisma/client';
 import { recordHotelAudit } from '@/lib/hotel/audit';
-import { MAX_MONEY_MINOR } from '@/lib/hotel/rates';
+import { MAX_MONEY_MINOR, MAX_TAX_BASIS_POINTS } from '@/lib/hotel/rates';
 import { hotelDate, MAX_STAY_NIGHTS, stayDates } from '@/lib/hotel/reservations';
 import { currentProperty, hasSqlState, withLockedProperty } from '@/server/hotel-property-context';
 import { priceStay } from '@/server/hotel-rate-quote';
@@ -50,8 +50,15 @@ export const ratePlanCreateInput = selection
       .max(40)
       .transform((value) => value.toUpperCase()),
     name: z.string().trim().min(1).max(160),
-    currency: z.string().regex(/^[A-Z]{3}$/),
-    taxBasisPoints: z.number().int().min(0).max(100_000),
+    /**
+     * Optional: a plan is always priced in its property's currency (folios,
+     * extras and the ledger are single-currency). A different code is refused.
+     */
+    currency: z
+      .string()
+      .regex(/^[A-Z]{3}$/)
+      .optional(),
+    taxBasisPoints: z.number().int().min(0).max(MAX_TAX_BASIS_POINTS),
   })
   .strict();
 
@@ -116,6 +123,13 @@ export const hotelRatePlansRouter = router({
       ctx,
       input.branchId,
       async (tx, property) => {
+        if (input.currency && input.currency !== property.currency) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: `Rate plans are priced in this property's currency (${property.currency}).`,
+          });
+        }
+        const currency = property.currency;
         const planId = randomUUID();
         let written: number;
         try {
@@ -123,7 +137,7 @@ export const hotelRatePlansRouter = router({
             INSERT INTO hotel_rate_plans
               (id, "organizationId", "branchId", "roomTypeId", code, name, currency, "taxBasisPoints", "createdById")
             SELECT ${planId}, rt."organizationId", rt."branchId", rt.id, ${input.code}, ${input.name},
-              ${input.currency}, ${input.taxBasisPoints}, ${actor}
+              ${currency}, ${input.taxBasisPoints}, ${actor}
             FROM hotel_room_types rt
             WHERE rt."organizationId" = ${tx.entitlements.organizationId}
               AND rt."branchId" = ${property.branchId}
@@ -144,7 +158,7 @@ export const hotelRatePlansRouter = router({
             roomTypeId: input.roomTypeId,
             code: input.code,
             name: input.name,
-            currency: input.currency,
+            currency,
             taxBasisPoints: input.taxBasisPoints,
           },
           metadata: { branchId: property.branchId },

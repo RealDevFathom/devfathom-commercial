@@ -27,17 +27,19 @@ export type PricedStay = {
   netMinor: bigint;
   taxMinor: bigint;
   totalMinor: bigint;
+  /** The published price rows that priced the stay; a booking marks them used. */
+  priceIds: string[];
 };
 
-type PriceRow = { stayDate: Date; netMinor: bigint; taxBasisPoints: number };
+type PriceRow = { stayDate: Date; netMinor: bigint; taxBasisPoints: number; priceId: string };
 type PlanRow = { id: string; currency: string; taxBasisPoints: number };
 
 const dateOnly = (value: Date) => value.toISOString().slice(0, 10);
 
-function priceLoader(db: RateQuoteDb): RateScope['loadPrices'] {
+function priceLoader(db: RateQuoteDb): (input: Parameters<RateScope['loadPrices']>[0]) => Promise<PriceRow[]> {
   return (scope) =>
     db.$queryRaw<PriceRow[]>(Prisma.sql`
-      SELECT night.day AS "stayDate", p."netMinor", rp."taxBasisPoints"
+      SELECT night.day AS "stayDate", p."netMinor", rp."taxBasisPoints", p.id AS "priceId"
       FROM (
         SELECT generate_series(
           ${dateOnly(scope.arrival)}::date,
@@ -46,7 +48,7 @@ function priceLoader(db: RateQuoteDb): RateScope['loadPrices'] {
         )::date AS day
       ) night
       JOIN LATERAL (
-        SELECT candidate."netMinor", candidate."ratePlanId"
+        SELECT candidate.id, candidate."netMinor", candidate."ratePlanId"
         FROM hotel_rate_plan_prices candidate
         WHERE candidate."organizationId" = ${scope.organizationId}
           AND candidate."branchId" = ${scope.branchId}
@@ -90,8 +92,17 @@ export async function priceStay(
     ${lock}`);
   const plan = plans[0];
   if (!plan) return null;
+  const load = priceLoader(db);
+  let loaded: PriceRow[] = [];
   const quote = await quoteStay(
-    { organizationId: scope.organizationId, branchId: scope.branchId, loadPrices: priceLoader(db) },
+    {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      loadPrices: async (input) => {
+        loaded = await load(input);
+        return loaded;
+      },
+    },
     request.roomTypeId,
     request.ratePlanId,
     new Date(`${request.arrivalDate}T00:00:00Z`),
@@ -103,5 +114,6 @@ export async function priceStay(
     currency: plan.currency,
     taxBasisPoints: plan.taxBasisPoints,
     ...quote,
+    priceIds: [...new Set(loaded.map((row) => row.priceId))],
   };
 }

@@ -73,4 +73,42 @@ describe('hotel housekeeping router isolation', () => {
         .setStatus({ branchId: 'branch_1', roomId: 'room_1', status: 'INSPECTED' })
     ).rejects.toMatchObject({ code: 'CONFLICT' });
   });
+
+  it('re-checks property scope inside the locked write transaction, before any write', async () => {
+    const order: string[] = [];
+    const tx = {
+      $queryRaw: vi.fn(async () => {
+        order.push('query');
+        return [];
+      }),
+      $executeRaw: vi.fn(),
+      hotelProperty: { findFirst: vi.fn() },
+      hotelRoom: { findFirst: vi.fn(), updateMany: vi.fn() },
+    };
+    db.$transaction.mockImplementation(async (run: (client: typeof tx) => unknown) => {
+      order.push('transaction');
+      return run(tx);
+    });
+    mocks.scope.mockImplementation(async () => {
+      order.push('scope');
+      throw new TRPCError({ code: 'FORBIDDEN' });
+    });
+    for (const call of [
+      (caller: ReturnType<typeof hotelHousekeepingRouter.createCaller>) =>
+        caller.setStatus({ branchId: 'branch_1', roomId: 'room_1', status: 'VACANT_CLEAN' }),
+      (caller: ReturnType<typeof hotelHousekeepingRouter.createCaller>) =>
+        caller.createTask({ branchId: 'branch_1', roomId: 'room_1', title: 'Turn down' }),
+      (caller: ReturnType<typeof hotelHousekeepingRouter.createCaller>) =>
+        caller.updateTask({ branchId: 'branch_1', taskId: 'task_1', status: 'COMPLETED' }),
+    ]) {
+      order.length = 0;
+      await expect(call(hotelHousekeepingRouter.createCaller(context() as never))).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+      });
+      // Transaction, then the property lock, then the scope check — and nothing after it.
+      expect(order).toEqual(['transaction', 'query', 'scope']);
+    }
+    expect(tx.$executeRaw).not.toHaveBeenCalled();
+    expect(tx.hotelRoom.updateMany).not.toHaveBeenCalled();
+  });
 });

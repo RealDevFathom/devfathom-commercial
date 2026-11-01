@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
-import { MAX_MONEY_MINOR, quoteStay, taxMinorRoundHalfUp, type RateScope } from './rates';
+import {
+  MAX_MONEY_MINOR,
+  MAX_TAX_BASIS_POINTS,
+  quoteStay,
+  taxMinorRoundHalfUp,
+  type RateScope,
+} from './rates';
 
 const scope = (rows: Awaited<ReturnType<RateScope['loadPrices']>>) => ({
   organizationId: 'org-a',
@@ -14,7 +20,14 @@ describe('hotel rates', () => {
   });
 
   it('rejects overflow', () => {
-    expect(() => taxMinorRoundHalfUp(MAX_MONEY_MINOR, 100_000)).toThrow('overflow');
+    expect(() => taxMinorRoundHalfUp(MAX_MONEY_MINOR + BigInt(1), 100)).toThrow('overflow');
+    // At the 100% ceiling the tax equals the net; the sum is what overflows.
+    expect(taxMinorRoundHalfUp(MAX_MONEY_MINOR, MAX_TAX_BASIS_POINTS)).toBe(MAX_MONEY_MINOR);
+  });
+
+  it('caps the tax rate at 100%, the same ceiling as catalog extras', () => {
+    expect(() => taxMinorRoundHalfUp(BigInt(100), MAX_TAX_BASIS_POINTS + 1)).toThrow('Invalid tax');
+    expect(() => taxMinorRoundHalfUp(BigInt(100), 100_000)).toThrow('Invalid tax');
   });
 
   it('passes both tenant dimensions to the server-side loader', async () => {

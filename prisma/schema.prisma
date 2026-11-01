@@ -14642,7 +14642,6 @@ model HotelProperty {
   folioEntries         HotelFolioEntry[]
   folioPayments        HotelFolioPayment[]
   idempotencyKeys      HotelOperationIdempotencyKey[]
-  roomHousekeeping     HotelRoomHousekeeping[]
   housekeepingTasks    HotelHousekeepingTask[]
 
   @@unique([organizationId, branchId], map: "hotel_properties_org_branch_key")
@@ -14897,7 +14896,6 @@ model HotelRoom {
   bedsByKind     HotelBed[]             @relation("HotelBedRoomKind")
   statusEvents   HotelRoomStatusEvent[]
   blocks         HotelRoomBlock[]
-  housekeeping      HotelRoomHousekeeping?
   housekeepingTasks HotelHousekeepingTask[]
 
   @@unique([organizationId, branchId, id], map: "hotel_rooms_scope_key")
@@ -15512,13 +15510,6 @@ enum HotelPaymentDirection {
   REFUND
 }
 
-enum HotelHousekeepingStatus {
-  CLEAN
-  DIRTY
-  INSPECTED
-  OUT_OF_ORDER
-}
-
 enum HotelHousekeepingTaskStatus {
   OPEN
   IN_PROGRESS
@@ -15561,7 +15552,8 @@ model HotelConfirmationSequence {
 }
 
 /// RATE-01. A plan's terms (room type, code, currency, tax) are immutable by
-/// trigger; prices are effective-dated `HotelRatePlanPrice` rows.
+/// trigger; prices are effective-dated `HotelRatePlanPrice` rows. The currency
+/// is the property's (insert trigger) and tax is at most 10,000 bp (CHECK).
 model HotelRatePlan {
   id             String   @id @default(cuid())
   organizationId String
@@ -15750,6 +15742,7 @@ model HotelFolioPayment {
 
   @@unique([organizationId, branchId, id], map: "hotel_folio_payments_scope_key")
   @@index([organizationId, branchId, folioId], map: "hotel_folio_payments_folio_idx")
+  @@index([organizationId, branchId, refundsPaymentId], map: "hotel_folio_payments_refunds_idx")
   @@map("hotel_folio_payments")
 }
 
@@ -15770,27 +15763,6 @@ model HotelOperationIdempotencyKey {
 
   @@unique([organizationId, branchId, scope, key], map: "hotel_operation_idempotency_keys_key")
   @@map("hotel_operation_idempotency_keys")
-}
-
-/// HK-02. A room's cleaning state.
-model HotelRoomHousekeeping {
-  id             String                  @id @default(cuid())
-  organizationId String
-  branchId       String
-  roomId         String
-  status         HotelHousekeepingStatus @default(DIRTY)
-  changedById    String
-  changedAt      DateTime                @default(now())
-  createdAt      DateTime                @default(now())
-  updatedAt      DateTime                @default(now()) @updatedAt
-
-  property HotelProperty @relation(fields: [organizationId, branchId], references: [organizationId, branchId], onDelete: Restrict, onUpdate: Cascade, map: "hotel_room_housekeeping_property_fkey")
-  room     HotelRoom     @relation(fields: [organizationId, branchId, roomId], references: [organizationId, branchId, id], onDelete: Cascade, onUpdate: Cascade, map: "hotel_room_housekeeping_room_fkey")
-
-  @@unique([organizationId, branchId, id], map: "hotel_room_housekeeping_scope_key")
-  @@unique([organizationId, branchId, roomId], map: "hotel_room_housekeeping_room_key")
-  @@index([organizationId, branchId, status], map: "hotel_room_housekeeping_branch_status_idx")
-  @@map("hotel_room_housekeeping")
 }
 
 /// HK-02. The housekeeping work queue.

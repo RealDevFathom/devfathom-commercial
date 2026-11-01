@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createFolioLedgerService, derivePostingMoney, type FolioLedgerStore } from './folio-ledger';
+import {
+  createFolioLedgerService,
+  derivePostingMoney,
+  folioPostingInput,
+  MAX_POSTING_QUANTITY,
+  type FolioLedgerStore,
+} from './folio-ledger';
 
 const scope = { organizationId: 'org-1', branchId: 'property-1' };
 
@@ -33,6 +39,15 @@ describe('folio ledger boundary', () => {
   it('uses integer minor units and rejects unsafe totals', () => {
     expect(derivePostingMoney({ unitMinor: 101, taxBasisPoints: 750 }, 1)).toEqual({ unitMinor: 101, netMinor: 101, taxMinor: 8, grossMinor: 109 });
     expect(() => derivePostingMoney({ unitMinor: Number.MAX_SAFE_INTEGER, taxBasisPoints: 0 }, 2)).toThrow('too large');
+  });
+
+  it('bounds quantity below the INTEGER column and refuses a malformed catalog tax rate', async () => {
+    const posting = { folioId: 'f', catalogItemId: 'c' };
+    expect(folioPostingInput.safeParse({ ...posting, quantity: MAX_POSTING_QUANTITY }).success).toBe(true);
+    expect(folioPostingInput.safeParse({ ...posting, quantity: MAX_POSTING_QUANTITY + 1 }).success).toBe(false);
+    expect(folioPostingInput.safeParse({ ...posting, quantity: 2 ** 31 }).success).toBe(false);
+    // The store reports a non-integer `postingRule.taxBasisPoints` as -1.
+    expect(() => derivePostingMoney({ unitMinor: 100, taxBasisPoints: -1 }, 1)).toThrow('Invalid tax rate');
   });
 
   it('rounds tax half up exactly at and around a half minor unit', () => {
