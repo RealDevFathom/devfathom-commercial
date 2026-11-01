@@ -18,6 +18,10 @@ const mocks = vi.hoisted(() => {
 });
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
+vi.mock('@/lib/pharmacy/solo-approval', async (original) => ({
+  ...(await original<typeof import('@/lib/pharmacy/solo-approval')>()),
+  verifyPharmacyUserPin: vi.fn(async (_scope, pin) => pin === '4729'),
+}));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/entitlements', () => ({
   hasModule: mocks.hasModule,
@@ -51,8 +55,14 @@ function model() {
 
 function makeDb() {
   const db = {
+    organization: { findFirstOrThrow: vi.fn(async () => ({ pharmacyOperatingMode: 'STAFFED' })) },
+    auditLog: { create: vi.fn() },
+    pharmacyBranchAssignment: { findMany: vi.fn(async () => [{ branchId: 'branch_a' }]) },
     user: {
       findUnique: vi.fn().mockResolvedValue({
+        role: 'EMPLOYEE',
+        status: 'ACTIVE',
+        organizationId: 'org_a',
         organizationRole: { permissions: [] },
         permissionOverrides: [],
       }),
@@ -142,6 +152,9 @@ const deny = (capability: string): Rule => ({ capability, effect: 'DENY' });
 /** What `can()` reads: the member's role rules and their own overrides. */
 function grant(role: Rule[], overrides: Rule[] = []) {
   db.user.findUnique.mockResolvedValue({
+    role: 'EMPLOYEE',
+    status: 'ACTIVE',
+    organizationId: 'org_a',
     organizationRole: { permissions: role },
     permissionOverrides: overrides,
   });
@@ -162,9 +175,11 @@ beforeEach(() => {
 describe('pharmacy write-off accounting', () => {
   it('posts the write-off journal in the same transaction as the stock movement', async () => {
     grant([allow('pharmacy:inventory')]);
-    db.user.findFirst.mockResolvedValue({ id: 'user_b' });
+    db.user.findFirst.mockResolvedValue({
+      id: 'user_b',
+      organizationRole: { key: 'manager', isSystem: true },
+    });
     const occurredAt = new Date('2026-10-29T00:02:07.000Z');
-    db.user.findFirst.mockResolvedValue({ id: 'user_b' });
     db.pharmacyInventoryLot.findFirst.mockResolvedValue({
       id: 'lot_1',
       unitsPerPack: 10,
@@ -185,6 +200,7 @@ describe('pharmacy write-off accounting', () => {
       stockLocationId: 'location_1',
       units: 10,
       witnessId: 'user_b',
+      pin: '4729',
       reason: 'Expired stock destroyed',
       evidenceRef: 'DEST-1',
       idempotencyKey: 'writeoff-1',
@@ -427,6 +443,9 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
 
   it('refuses to block a batch without a reason (INV-03 evidence)', async () => {
     db.user.findUnique.mockResolvedValue({
+      role: 'EMPLOYEE',
+      status: 'ACTIVE',
+      organizationId: 'org_a',
       organizationRole: {
         permissions: [{ capability: 'pharmacy:safety', effect: 'ALLOW' }],
       },
@@ -472,7 +491,10 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
 
   it('accepts an active same-tenant witness assigned to the write-off branch', async () => {
     grant([allow('pharmacy:inventory')]);
-    db.user.findFirst.mockResolvedValue({ id: 'witness_a' });
+    db.user.findFirst.mockResolvedValue({
+      id: 'witness_a',
+      organizationRole: { key: 'manager', isSystem: true },
+    });
     db.pharmacyInventoryLot.findFirst.mockResolvedValue({ id: 'lot_1', unitsPerPack: 1 });
     db.pharmacyStockBalance.findFirst.mockResolvedValue({
       onHandUnits: 5,
@@ -486,6 +508,7 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
       stockLocationId: 'location_1',
       units: 1,
       witnessId: 'witness_a',
+      pin: '4729',
       reason: 'Damaged package',
       evidenceRef: 'PHOTO-1',
       idempotencyKey: 'write-off-1',
@@ -644,6 +667,9 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
 
   it('allows an exact pharmacy:safety grant to acknowledge a recall', async () => {
     db.user.findUnique.mockResolvedValue({
+      role: 'EMPLOYEE',
+      status: 'ACTIVE',
+      organizationId: 'org_a',
       organizationRole: {
         permissions: [{ capability: 'pharmacy:safety', effect: 'ALLOW' }],
       },

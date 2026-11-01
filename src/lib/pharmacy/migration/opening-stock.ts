@@ -1,3 +1,5 @@
+import { enforceOperatingMode } from '../operating-mode';
+import { can } from '@/lib/abac';
 import 'server-only';
 
 /**
@@ -613,11 +615,34 @@ function abs(value: bigint): bigint {
  *
  * Sign-off is refused, not warned about, while anything material is unexplained
  * or any exception is still open. Co-authored like INV-06's count approval: the
- * pharmacist who opened the session cannot also be the one who signs it off.
+ * pharmacist who opened the session needs either another signer or fresh
+ * audited solo-owner PIN proof.
  */
-export async function signOffOpeningSession(db: ScopedDb, scope: LedgerScope, sessionId: string) {
+export async function signOffOpeningSession(
+  db: ScopedDb,
+  scope: LedgerScope,
+  sessionId: string,
+  pin?: string
+) {
   const session = await requireSession(db, scope, sessionId, ['POSTED']);
-  if (session.createdByActorId === scope.actorId) {
+  if (
+    !(await can(
+      { id: scope.actorId, role: 'EMPLOYEE', organizationId: scope.organizationId },
+      'pharmacy:inventory',
+      undefined,
+      { db }
+    ))
+  )
+    throw new PharmacyOpeningError('COAUTH_REQUIRED');
+  try {
+    await enforceOperatingMode(db, scope, {
+      kind: 'ADJUSTMENT',
+      makerIds: [session.createdByActorId],
+      targetType: 'PharmacyOpeningSession',
+      targetId: session.id,
+      pin,
+    });
+  } catch {
     throw new PharmacyOpeningError('COAUTH_REQUIRED');
   }
 

@@ -227,7 +227,7 @@ export function AppShell({
             role="dialog"
             aria-modal="true"
             aria-label="Mobile navigation"
-            className="fixed inset-y-0 start-0 z-50 lg:hidden"
+            className="fixed inset-y-0 start-0 z-50 w-[min(20rem,88vw)] lg:hidden"
           >
             <Sidebar
               brand={brand}

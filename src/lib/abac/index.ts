@@ -10,9 +10,10 @@
  *   if (!(await can(subject, 'resignation:review', { type: 'Resignation', ... })))
  *     throw new TRPCError({ code: 'FORBIDDEN' });
  */
-import { capabilityMatches } from './capabilities';
+import { isPharmacyOwner } from '@/lib/pharmacy/owner';
+import { capabilityMatches, EXACT_GRANT_ONLY_ACTIONS } from './capabilities';
 import type { AuthzDb } from '@/lib/authz';
-import { POLICIES, type Action } from './policies';
+import { ACTIVE_STATUSES, POLICIES, RESOURCE_POLICIES, type Action } from './policies';
 import type { Environment, ResourceAttributes, Subject } from './types';
 
 export type { Action } from './policies';
@@ -30,13 +31,21 @@ async function customDecision(
   db: AuthzDb,
   userId: string,
   action: string,
-  now: Date
-): Promise<{ decision: boolean | null; hasOrganizationRole: boolean }> {
+  now: Date,
+  organizationId?: string
+): Promise<{ decision: boolean | null; subject: Subject }> {
   const user = await db.user.findUnique({
-    where: { id: userId },
+    where: { id: userId, ...(organizationId ? { organizationId } : {}) },
     select: {
+      organizationId: true,
+      role: true,
+      status: true,
       organizationRole: {
-        select: { permissions: { select: { capability: true, effect: true } } },
+        select: {
+          key: true,
+          organizationId: true,
+          permissions: { select: { capability: true, effect: true } },
+        },
       },
       permissionOverrides: {
         where: { OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] },
@@ -44,7 +53,16 @@ async function customDecision(
       },
     },
   });
-  if (!user) return { decision: false, hasOrganizationRole: false };
+  const subject: Subject = { id: userId, role: user?.role ?? 'EMPLOYEE', status: user?.status };
+  if (
+    !user ||
+    (organizationId !== undefined && user.organizationId !== organizationId) ||
+    (user.organizationRole &&
+      user.organizationRole.organizationId !== undefined &&
+      user.organizationRole.organizationId !== user.organizationId) ||
+    !ACTIVE_STATUSES.has(user.status)
+  )
+    return { decision: false, subject };
   // Prescription capture is narrower than dispensing. Existing pharmacist
   // grants remain authoritative for it, including DENYs, without granting
   // tenant administrators the wider dispensing capability.
@@ -55,17 +73,33 @@ async function customDecision(
     ...(user.organizationRole?.permissions ?? []),
   ].filter((rule) =>
     matchingActions.some((candidate) =>
-      capabilityMatches(rule.capability, candidate, rule.effect === 'DENY' ? 'DENY' : 'ALLOW')
+      capabilityMatches(
+        (candidate === 'pharmacy:receipt' || candidate === 'pharmacy:counter') &&
+          rule.capability === candidate.replace(':', '.')
+          ? candidate
+          : rule.capability,
+        candidate,
+        rule.effect === 'DENY' ? 'DENY' : 'ALLOW'
+      )
     )
   );
-  const hasOrganizationRole = user.organizationRole !== null;
-  if (matchingRules.some((rule) => rule.effect === 'DENY')) {
-    return { decision: false, hasOrganizationRole };
-  }
-  if (matchingRules.some((rule) => rule.effect === 'ALLOW')) {
-    return { decision: true, hasOrganizationRole };
-  }
-  return { decision: null, hasOrganizationRole };
+  if (matchingRules.some((rule) => rule.effect === 'DENY')) return { decision: false, subject };
+  if (matchingRules.some((rule) => rule.effect === 'ALLOW')) return { decision: true, subject };
+  // Only a proven sole active proprietor inherits all capabilities. This is an
+  // entitlement, never an exemption from resource checks or PIN/audit approval.
+  if (
+    !EXACT_GRANT_ONLY_ACTIONS.has(action) &&
+    user.status === 'ACTIVE' &&
+    user.organizationRole?.key === 'owner' &&
+    (await db.user.count({ where: { organizationId: user.organizationId, status: 'ACTIVE' } })) ===
+      1 &&
+    (await isPharmacyOwner(db as never, user.organizationId, userId))
+  )
+    return { decision: true, subject };
+  // An assigned role bounds procurement even for tenant administrators (#375).
+  if (action === 'pharmacy:procurement' && user.organizationRole)
+    return { decision: false, subject };
+  return { decision: null, subject };
 }
 
 /** True iff some policy registered for `action` allows the subject + resource. */
@@ -85,14 +119,17 @@ export async function can(
     console.error(`[abac] no tenant-scoped database supplied for "${action}"`);
     return false;
   }
+  let decision: boolean | null;
   try {
-    const { decision, hasOrganizationRole } = await customDecision(db, subject.id, action, env.now);
-    if (decision !== null) return decision;
-    // Procurement's tenant-admin fallback exists only for legacy users who do
-    // not yet have an organization role. Once a role is assigned, its
-    // capabilities are the boundary: an omitted procurement grant must not
-    // fall through to the coarse ADMIN policy.
-    if (action === 'pharmacy:procurement' && hasOrganizationRole) return false;
+    const current = await customDecision(db, subject.id, action, env.now, subject.organizationId);
+    decision = current.decision;
+    subject = { ...subject, ...current.subject };
+    if (decision === false) return false;
+    // Resource restrictions apply equally to explicit grants and solo owners.
+    for (const policy of RESOURCE_POLICIES[action] ?? []) {
+      if (!(await policy({ subject, resource, env, db }))) return false;
+    }
+    if (decision === true) return true;
   } catch (err) {
     console.error('[abac] custom permission lookup for "%s" threw:', action, err);
     return false;
@@ -114,11 +151,17 @@ export function subjectFromSession(user: {
   role?: string | null;
   department?: string | null;
   status?: string | null;
+  organizationId?: string;
 }): Subject {
   return {
     id: user.id,
+    organizationId: user.organizationId,
     role: user.role ?? 'EMPLOYEE',
     department: user.department ?? null,
     status: user.status ?? null,
   };
+}
+
+export async function isPvOwner(db: AuthzDb, userId: string, organizationId: string) {
+  return isPharmacyOwner(db as never, organizationId, userId);
 }

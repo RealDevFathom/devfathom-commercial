@@ -46,18 +46,25 @@ const input = {
 function fixture(returnedUnits: number, priorRefunds: number[] = []) {
   let payloadHash = '';
   const db = {
+    organization: { findFirstOrThrow: vi.fn(async () => ({ pharmacyOperatingMode: 'STAFFED' })) },
+    auditLog: { create: vi.fn(async () => ({ id: 'approval-audit' })) },
     user: {
-      findUnique: vi.fn().mockResolvedValue({
+      findFirst: vi.fn(async () => ({ organizationRole: { key: 'manager', isSystem: true } })),
+      findUnique: vi.fn(async () => ({
+        id: 'actor-1',
+        role: 'EMPLOYEE',
         status: 'ACTIVE',
         organizationId: 'org-1',
         organizationRole: {
-          permissions: [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }],
+          key: 'manager',
+          organizationId: 'org-1',
+          permissions: [{ capability: 'pharmacy:counter', effect: 'ALLOW' }],
         },
         permissionOverrides: [],
-      }),
+      })),
     },
     pharmacyBranch: {
-      findFirst: vi.fn().mockResolvedValue({ id: 'branch-1' }),
+      findFirst: vi.fn(async () => ({ id: 'branch-1' })),
       findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
         where.id.in.map((id) => ({ id }))
       ),
@@ -81,7 +88,7 @@ function fixture(returnedUnits: number, priorRefunds: number[] = []) {
         type: 'CASH',
         amountMinor: 1000,
         refunds: [],
-        sale: { customerId: null },
+        sale: { customerId: null, createdByUserId: 'cashier-maker' },
       }),
     },
     pharmacySale: {

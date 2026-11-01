@@ -5,6 +5,7 @@
  * Real router, persisted roles and overrides, PostgreSQL as a NOSUPERUSER NOBYPASSRLS role.
  * Skipped unless TEST_DATABASE_URL is set.
  */
+import { seedRxChecker, RX_CHECKER_PIN } from '../../../tests/pharmacy-rx-checker-fixture';
 import { randomBytes } from 'node:crypto';
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -21,6 +22,7 @@ vi.mock('@/server/audit', async () => {
 
 const suffix = randomBytes(6).toString('hex');
 const ids = {
+  checker: `checker_${suffix}`,
   org: `org_r518_${suffix}`,
   branch: `br_r518_${suffix}`,
   cashier: `user_r518_cashier_${suffix}`,
@@ -105,6 +107,7 @@ const rxLine = (saleId: string, quantity = 1) => ({
   quantity,
   canonicalUnitsPerSaleUnit: 10,
   idempotencyKey: key(),
+  prescriptionApproval: { checkerId: ids.checker, pin: RX_CHECKER_PIN },
 });
 
 /** A sale holding one Rx line the pharmacist added, optionally linked to the loyalty customer. */
@@ -165,11 +168,18 @@ async function expectRefusedEverywhere(
   tenderRefusal: { code: string; message?: string } = DENIED
 ) {
   await expect(
-    act(userId, async (api) => api.addLine(rxLine((await api.create({ branchId: ids.branch })).id)))
+    act(userId, async (api) => {
+      const line = rxLine((await api.create({ branchId: ids.branch })).id);
+      // A cashier needs the independently authenticated checker. Keep the
+      // explicit-DENY cases supplied with a valid checker to prove DENY wins.
+      if (userId !== ids.cashier) return api.addLine(line);
+      return api.addLine({ ...line, prescriptionApproval: undefined });
+    })
   ).rejects.toMatchObject(DENIED);
   const tendered = await pharmacistSale();
   await expect(payInCash(userId, tendered)).rejects.toMatchObject(tenderRefusal);
   const redeemed = await pharmacistSale({ customer: true });
+  // Redemption has an exact dispense capability guard before the sale-level gate.
   await expect(payInPoints(userId, redeemed)).rejects.toMatchObject(DENIED);
   for (const sale of [tendered, redeemed])
     expect(await cart(sale.saleId)).toMatchObject({ status: 'OPEN', totals: { tenderedMinor: 0 } });
@@ -211,6 +221,7 @@ beforeAll(async () => {
         provinceCode: 'PB',
       },
     });
+    await seedRxChecker(tx, ids.branch, ids.checker);
     // Persisted roles: the Cashier template's grants, a pharmacist with the exact grant, and the
     // two explicit-DENY combinations.
     const users: Array<{
@@ -369,6 +380,117 @@ afterAll(async () => {
 });
 
 describeIfDatabase('Rx/restricted sale gate with persisted roles (#518 launch fix)', () => {
+  it('lets a cashier add and settle an Rx line with an independent pharmacist PIN', async () => {
+    const sale = await act(ids.cashier, async (api, db) => {
+      const created = await api.create({ branchId: ids.branch });
+      const added = await api.addLine(rxLine(created.id));
+      const approval = await db.auditLog.findFirstOrThrow({
+        where: { action: 'PHARMACY:RX_LINE_APPROVED', targetId: added.line.id },
+      });
+      expect(approval.actorId).toBe(ids.checker);
+      expect(approval.metadata).toMatchObject({ requestedById: ids.cashier, saleId: created.id });
+      expect(JSON.stringify(approval)).not.toContain(RX_CHECKER_PIN);
+      const bill = await api.counterCart({ branchId: ids.branch, saleId: created.id });
+      return { saleId: created.id, netMinor: bill.totals.netMinor };
+    });
+    await expect(payInCash(ids.cashier, sale)).resolves.toMatchObject({ settled: true });
+    expect(await cart(sale.saleId)).toMatchObject({ status: 'COMPLETED' });
+  });
+
+  it.each(['missing PIN', 'wrong PIN', 'denied checker', 'unassigned checker', 'inactive checker'])(
+    'refuses a cashier Rx approval with %s and leaves no line or evidence',
+    async (failure) => {
+      const sale = await act(ids.cashier, (api) => api.create({ branchId: ids.branch }));
+      await expect(
+        act(ids.cashier, async (api, db) => {
+          if (failure === 'denied checker')
+            await db.userPermissionOverride.create({
+              data: {
+                userId: ids.checker,
+                capability: 'pharmacy:dispense',
+                effect: 'DENY',
+                reason: 'Regression',
+              },
+            });
+          if (failure === 'unassigned checker')
+            await db.pharmacyBranchAssignment.updateMany({
+              where: { userId: ids.checker },
+              data: { active: false },
+            });
+          if (failure === 'inactive checker')
+            await db.user.update({ where: { id: ids.checker }, data: { status: 'INACTIVE' } });
+          const line = rxLine(sale.id);
+          return api.addLine({
+            ...line,
+            prescriptionApproval: {
+              checkerId: ids.checker,
+              ...(failure === 'missing PIN'
+                ? {}
+                : { pin: failure === 'wrong PIN' ? '000000' : RX_CHECKER_PIN }),
+            },
+          });
+        })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await act(ids.cashier, async (_api, db) => {
+        expect(await db.pharmacySaleLine.count({ where: { saleId: sale.id } })).toBe(0);
+        expect(
+          await db.auditLog.count({
+            where: {
+              action: 'PHARMACY:RX_LINE_APPROVED',
+              metadata: { path: ['saleId'], equals: sale.id },
+            },
+          })
+        ).toBe(0);
+      });
+    }
+  );
+
+  it.each(['permission', 'assignment', 'status'])(
+    'rechecks pharmacist %s before charging the cashier’s approved cart',
+    async (change) => {
+      const sale = await act(ids.cashier, async (api) => {
+        const created = await api.create({ branchId: ids.branch });
+        await api.addLine(rxLine(created.id));
+        const bill = await api.counterCart({ branchId: ids.branch, saleId: created.id });
+        return { saleId: created.id, netMinor: bill.totals.netMinor };
+      });
+      await expect(
+        act(ids.cashier, async (api, db) => {
+          if (change === 'permission')
+            await db.userPermissionOverride.create({
+              data: {
+                userId: ids.checker,
+                capability: 'pharmacy:dispense',
+                effect: 'DENY',
+                reason: 'Revoked after approval',
+              },
+            });
+          if (change === 'assignment')
+            await db.pharmacyBranchAssignment.updateMany({
+              where: { userId: ids.checker },
+              data: { active: false },
+            });
+          if (change === 'status')
+            await db.user.update({ where: { id: ids.checker }, data: { status: 'INACTIVE' } });
+          return api.tender({
+            branchId: ids.branch,
+            saleId: sale.saleId,
+            deviceId: deviceFor(ids.cashier),
+            businessDate,
+            type: 'CASH',
+            amountMinor: sale.netMinor,
+            cashReceivedMinor: sale.netMinor,
+            idempotencyKey: key(),
+          });
+        })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(await cart(sale.saleId)).toMatchObject({
+        status: 'OPEN',
+        totals: { tenderedMinor: 0 },
+      });
+    }
+  );
+
   it('refuses a cashier at addLine, tender and completion', async () => {
     await expectRefusedEverywhere(ids.cashier);
   });

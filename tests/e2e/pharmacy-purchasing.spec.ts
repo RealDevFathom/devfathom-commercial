@@ -1,3 +1,4 @@
+import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -67,6 +68,92 @@ function shellText(page: Page, text: string | RegExp) {
   return page.getByText(text).first();
 }
 
+test('pharmacy PIN enrollment is discoverable, accessible and works without Restaurant Core', async ({
+  page,
+}, testInfo) => {
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  page.on('console', (message) => {
+    if (message.type() === 'error') errors.push(message.text());
+  });
+  await page.route('**/api/trpc/pharmacyPin.status*', async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    await route.continue();
+  });
+  await page.route('**/api/trpc/pharmacyPin.enroll*', async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    await route.continue();
+  });
+  await page.goto('/pharmacy/purchasing/receiving');
+  await page.getByRole('link', { name: 'Approval PIN', exact: true }).last().click();
+  await expect(page.getByRole('heading', { name: 'Approval PIN', exact: true })).toBeVisible();
+  await expect(page.getByText('Loading your PIN enrollment…', { exact: true })).toBeVisible();
+  const pin = page.getByLabel('New pharmacy PIN', { exact: true });
+  await expect(pin).toBeVisible();
+  await expect(pin).toHaveAttribute('type', 'password');
+  for (const width of [375, 768, 1024, 1440]) {
+    for (const theme of ['light', 'dark'] as const) {
+      for (const reducedMotion of ['no-preference', 'reduce'] as const) {
+        await page.setViewportSize({ width, height: 900 });
+        await page.emulateMedia({ colorScheme: theme, reducedMotion });
+        await page.evaluate(
+          (value) => document.documentElement.setAttribute('data-theme', value),
+          theme
+        );
+        expect(
+          await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)
+        ).toBe(true);
+        await pin.focus();
+        await expect(pin).toBeFocused();
+        await page.keyboard.press('Tab');
+        await expect(page.getByLabel('Confirm pharmacy PIN', { exact: true })).toBeFocused();
+        await page.screenshot({
+          path: testInfo.outputPath(`pin-${width}-${theme}-${reducedMotion}.png`),
+          fullPage: true,
+        });
+        if (width === 375 && theme === 'light' && reducedMotion === 'no-preference') {
+          await page.getByRole('button', { name: 'Open menu' }).click();
+          await expect(page.getByRole('dialog', { name: 'Mobile navigation' })).toBeVisible();
+          await page.screenshot({
+            path: testInfo.outputPath('pin-mobile-navigation.png'),
+            fullPage: true,
+          });
+          await page.keyboard.press('Escape');
+          await expect(page.getByRole('dialog', { name: 'Mobile navigation' })).toHaveCount(0);
+        }
+      }
+    }
+  }
+  const accessibility = await new AxeBuilder({ page })
+    .include('[data-slot="section-card"]')
+    .analyze();
+  expect(accessibility.violations).toEqual([]);
+  await page.getByLabel('Account password', { exact: true }).fill(FIXTURE.receiver.password);
+  await pin.fill('482916');
+  await page.getByLabel('Confirm pharmacy PIN', { exact: true }).fill('482917');
+  await page.getByRole('button', { name: 'Enroll pharmacy PIN' }).click();
+  await expect(page.locator('#pin-error')).toHaveText('The PINs must match.');
+  await expect(pin).toHaveValue('482916');
+  await page.getByLabel('Confirm pharmacy PIN', { exact: true }).fill('482916');
+  await page.getByRole('button', { name: 'Enroll pharmacy PIN' }).click();
+  await expect(page.getByRole('button', { name: 'Saving…' })).toBeDisabled();
+  await expect(
+    page.getByRole('status').filter({ hasText: 'Your pharmacy approval PIN has been saved.' })
+  ).toBeVisible();
+  await expect(pin).toHaveValue('');
+  await page.reload();
+  await expect(page.getByLabel('Current pharmacy PIN', { exact: true })).toBeVisible();
+  await page.getByLabel('Current pharmacy PIN', { exact: true }).fill('482916');
+  await pin.fill('583917');
+  await page.getByLabel('Confirm pharmacy PIN', { exact: true }).fill('583917');
+  await page.getByRole('button', { name: 'Rotate pharmacy PIN' }).click();
+  await expect(
+    page.getByRole('status').filter({ hasText: 'Your pharmacy approval PIN has been saved.' })
+  ).toBeVisible();
+  await expect(page.getByLabel('Current pharmacy PIN', { exact: true })).toHaveValue('');
+  expect(errors).toEqual([]);
+});
+
 test('the overview reports a workspace that is ready to receive', async ({ page }) => {
   await page.goto(ROUTE);
 
@@ -95,7 +182,7 @@ test('PO → receive → exception → resolve → stock visible', async ({ page
     .getByLabel('Purchase order')
     .first()
     .selectOption({ label: `${purchaseOrderReference} — ${FIXTURE.supplier.name} (1 lines)` });
-  await page.getByRole('button', { name: 'Find line' }).first().click();
+  await page.getByRole('button', { name: 'Open order', exact: true }).click();
 
   const capture = page
     .getByRole('group', { name: new RegExp(FIXTURE.medicine.productName) })
@@ -128,8 +215,9 @@ test('PO → receive → exception → resolve → stock visible', async ({ page
   const filed = page.getByRole('status').filter({ hasText: 'drafted' }).first();
   await expect(filed).toBeVisible({ timeout: 20_000 });
   await expect(filed).toContainText('Nothing is in stock until you post it');
+  await page.getByRole('link', { name: 'View saved record', exact: true }).click();
 
-  // ── 4. the draft is selected and posts into the ledger ──────────────────
+  // ── 4. open the saved draft and post it into the ledger ──────────────────
   const receiptPanel = page.getByRole('heading', { level: 2, name: receiptReference }).first();
   await expect(receiptPanel).toBeVisible();
   await page.getByRole('button', { name: 'Post into stock' }).first().click();
@@ -138,6 +226,7 @@ test('PO → receive → exception → resolve → stock visible', async ({ page
   await expect(posted).toBeVisible({ timeout: 20_000 });
   // PUR-04: the shortage is announced at the moment it is raised.
   await expect(posted).toContainText('match exception');
+  await page.getByRole('link', { name: 'View saved record', exact: true }).click();
 
   // ── 5. the exception is in the queue, quantified, and stays there ────────
   const queue = page.getByRole('heading', { level: 2, name: /Match exceptions — open/ }).first();
@@ -161,6 +250,7 @@ test('PO → receive → exception → resolve → stock visible', async ({ page
   // slower than an assertion default on a route being hit for the first time.
   await expect(resolved).toBeVisible({ timeout: 20_000 });
   await expect(resolved).toContainText('quantities it recorded are unchanged');
+  await page.getByRole('link', { name: 'View saved record', exact: true }).click();
   await expect(
     page.getByRole('heading', { level: 2, name: /Match exceptions — open \(0\)/ }).first()
   ).toBeVisible();
@@ -209,6 +299,7 @@ test('PUR-01 offers an unauthorized supplier as an explained, unselectable optio
   const added = page.getByRole('status').filter({ hasText: 'added' }).first();
   await expect(added).toBeVisible({ timeout: 20_000 });
   await expect(added).toContainText('Record a verified licence before ordering from it');
+  await page.getByRole('link', { name: 'View saved record', exact: true }).click();
   await expect(shellText(page, 'Trade with this supplier is not authorized')).toBeVisible();
 
   await page.goto(`${ROUTE}/orders`);
@@ -223,6 +314,10 @@ test('PUR-01 offers an unauthorized supplier as an explained, unselectable optio
 test('PUR-05 never offers the receiver as their own bypass approver', async ({ page }) => {
   await page.goto(`${ROUTE}/receiving`);
 
+  const checkerPin = page.getByLabel('Approver PIN', { exact: true });
+  await expect(checkerPin).toBeVisible();
+  await expect(checkerPin).toHaveAttribute('type', 'password');
+  await expect(checkerPin).toHaveAttribute('required', '');
   const approver = page.getByLabel('Approved by').first();
   await expect(approver).toBeVisible();
   await expect(
@@ -231,7 +326,12 @@ test('PUR-05 never offers the receiver as their own bypass approver', async ({ p
   await expect(
     approver.getByRole('option', { name: new RegExp(FIXTURE.receiver.email) })
   ).toHaveCount(0);
-  await expect(shellText(page, 'You cannot approve your own bypass')).toBeVisible();
+  await expect(
+    shellText(
+      page,
+      'A second approver is required unless you are the sole active owner and enter your PIN.'
+    )
+  ).toBeVisible();
 });
 
 test('a validation failure names its field, focuses it, and keeps the rest valid', async ({
@@ -261,8 +361,8 @@ test('a validation failure names its field, focuses it, and keeps the rest valid
 
   const expires = page.getByLabel('Expires on').first();
   await expect(expires).toHaveAttribute('aria-invalid', 'true');
-  await expect(page.locator('#field-expiresAt-error').first()).toContainText(
-    'Expires at: A licence must expire after it was issued.'
+  await expect(expires).toHaveAccessibleDescription(
+    /Expires at: A licence must expire after it was issued\./
   );
   await expect(expires).toBeFocused();
   // One failure does not paint the whole form red.

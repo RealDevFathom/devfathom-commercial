@@ -52,7 +52,7 @@ const webhook = {
   updatedAt: new Date('2026-08-01T00:00:00Z'),
 };
 
-function context() {
+function context(supportSession = false) {
   const db = {
     apiToken: {
       findMany: vi.fn(async () => [token]),
@@ -97,8 +97,14 @@ function context() {
       limits: {},
     },
     session: {
-      expires: 'later',
-      user: { id: 'user_1', role: 'ADMIN', department: 'LEADERSHIP', status: 'ACTIVE' },
+      expires: new Date(Date.now() + 60000).toISOString(),
+      user: {
+        id: 'user_1',
+        role: 'ADMIN',
+        department: 'LEADERSHIP',
+        status: 'ACTIVE',
+        isSupportSession: supportSession,
+      },
     },
     organization: null,
     support: null,
@@ -155,5 +161,22 @@ describe('entitlement-independent inspection and cleanup routes', () => {
     expect(db.apiToken.create).not.toHaveBeenCalled();
     expect(db.webhook.create).not.toHaveBeenCalled();
     expect(db.webhook.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('support impersonation token boundary', () => {
+  it('allows inspection but rejects token creation and revocation with only the session marker', async () => {
+    const { caller, db } = context(true);
+    await expect(caller.apiTokens.list()).resolves.toEqual([token]);
+    await expect(caller.apiTokens.create({ name: 'escape', scopes: ['*'] })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Support access is read-only.',
+    });
+    await expect(caller.apiTokens.revoke({ id: token.id })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(db.apiToken.create).not.toHaveBeenCalled();
+    expect(db.apiToken.delete).not.toHaveBeenCalled();
+    expect(mocks.generateApiToken).not.toHaveBeenCalled();
   });
 });

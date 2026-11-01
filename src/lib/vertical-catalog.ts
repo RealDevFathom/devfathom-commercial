@@ -768,7 +768,14 @@ export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
     key: 'owner',
     name: 'Owner',
     isSystem: true,
-    capabilities: ['pharmacy:*', 'reports:operational', 'reports:financial'],
+    capabilities: [
+      'pharmacy:*',
+      'reports:operational',
+      'reports:financial',
+      'pharmacy:dispense',
+      'pharmacy:safety',
+      'pharmacy:catalogue-review',
+    ],
   },
   {
     // Optional, explicitly assigned proprietor role. Pair with tenant UserRole.ADMIN
@@ -806,9 +813,13 @@ export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
     key: 'manager',
     name: 'Manager',
     isSystem: true,
-    // Managers retain the purchasing and Goods-in access that predates the
-    // explicit pharmacy capability model (#375).
-    capabilities: ['pharmacy:manage', 'pharmacy:orders', 'pharmacy:procurement'],
+    capabilities: [
+      'pharmacy:manage',
+      'pharmacy:orders',
+      'pharmacy:procurement',
+      'pharmacy:counter',
+      'pharmacy:inventory',
+    ],
   },
   {
     key: 'cashier',

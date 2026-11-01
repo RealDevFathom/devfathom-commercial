@@ -54,7 +54,13 @@ function callerFor(permissions: Permission[], permissionOverrides: Permission[] 
   const db = {
     $transaction: async (callback: (tx: unknown) => unknown) => callback(db),
     $queryRaw: lock,
-    pharmacyBranch: { findMany: async () => [{ id: 'branch-1' }] },
+    // SOLO approvals hold the organization row, so the controlled path locks it first.
+    organization: { findFirst: async () => ({ pharmacyOperatingMode: 'SOLO' }) },
+    pharmacyBranchAssignment: { findMany: vi.fn(async () => [{ branchId: 'branch-1' }]) },
+    pharmacyBranch: {
+      findFirst: vi.fn(async () => ({ id: 'branch-1' })),
+      findMany: async () => [{ id: 'branch-1' }],
+    },
     branchRegulatoryProfile: {
       findFirst: async () => ({
         branchId: 'branch-1',
@@ -80,6 +86,7 @@ function callerFor(permissions: Permission[], permissionOverrides: Permission[] 
     user: {
       findUnique: async () => ({
         status: 'ACTIVE',
+        organizationId: 'org-1',
         organizationRole: { permissions },
         permissionOverrides,
       }),
@@ -112,9 +119,31 @@ describe('pharmacySales.addLine controlled actor', () => {
       { capability: 'pharmacy:counter', effect: 'ALLOW' },
       { capability: 'pharmacy:orders', effect: 'ALLOW' },
     ]);
-    await expect(caller.addLine(line)).rejects.toMatchObject({
-      code: 'FORBIDDEN',
-      message: 'You do not have permission to dispense a controlled medicine.',
+    await expect(caller.addLine(line)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(credential).not.toHaveBeenCalled();
+    expect(addSaleLine).not.toHaveBeenCalled();
+    expect(register).not.toHaveBeenCalled();
+    expect(lock).not.toHaveBeenCalled();
+  });
+
+  it('honors an explicit ABAC deny even when the role grants dispense', async () => {
+    const { caller, credential, register } = callerFor([
+      { capability: 'pharmacy:dispense', effect: 'ALLOW' },
+      { capability: 'pharmacy:dispense', effect: 'DENY' },
+    ]);
+    await expect(caller.addLine(line)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(credential).not.toHaveBeenCalled();
+    expect(register).not.toHaveBeenCalled();
+  });
+
+  it('lets a pharmacist past the actor check', async () => {
+    const { caller, credential, register, lock } = callerFor([
+      { capability: 'pharmacy:dispense', effect: 'ALLOW' },
+    ]);
+    const plain = { ...line };
+    delete (plain as Partial<typeof line>).controlledAuthorization;
+    await expect(caller.addLine(plain)).resolves.toMatchObject({
+      blocked: expect.stringMatching(/pharmacist PIN/),
     });
     expect(credential).not.toHaveBeenCalled();
     expect(addSaleLine).not.toHaveBeenCalled();
@@ -192,7 +221,10 @@ describe('pharmacySales.addLine controlled actor', () => {
       blocked:
         'Controlled medicine requires the patient address, an independent pharmacist PIN, and either a valid prescription or an emergency supply with the prescriber name.',
     });
-    expect(lock).toHaveBeenCalledTimes(1);
+    // Organization lock, profile identity read, then credential lock.
+    expect(lock).toHaveBeenCalledTimes(3);
+    expect((lock.mock.calls[0]![0] as TemplateStringsArray).join('')).toContain('FROM organizations');
+    expect((lock.mock.calls[2]![0] as TemplateStringsArray).join('')).toContain('FROM restaurant_operator_credentials');
     expect(credential).toHaveBeenCalledExactlyOnceWith({
       where: {
         organizationId: 'org-1',

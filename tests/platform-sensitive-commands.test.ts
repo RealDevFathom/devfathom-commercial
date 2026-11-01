@@ -24,6 +24,7 @@ const db = {
     create: vi.fn(async ({ data }: any) => ({ id: 'new_1', ...data })),
   },
   platformSession: { updateMany: vi.fn() },
+  platformSupportSession: { updateMany: vi.fn() },
   user: { update: vi.fn(async () => ({ id: 'user_1', organizationId: 'org_1' })) },
   organization: {
     findUnique: vi.fn(async () => state.organization),
@@ -415,6 +416,12 @@ describe('operator safety', () => {
     await execute('operator.upsert', payload);
     expect(db.platformUser.update).toHaveBeenCalledOnce();
     expect(db.platformSession.updateMany).toHaveBeenCalledOnce();
+    expect(db.platformSupportSession.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { platformUserId: 'target_1', status: 'ACTIVE' },
+        data: { status: 'REVOKED', endedAt: expect.any(Date) },
+      })
+    );
   });
   it.each([{ role: 'SUPPORT' }, { role: 'SUPER_ADMIN', active: false }])(
     'rejects self reduction even with another admin %j',

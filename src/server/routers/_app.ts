@@ -1,3 +1,4 @@
+import { pharmacyPinRouter } from './pharmacy-pin';
 import { pharmacyCamerasRouter } from './pharmacy-cameras';
 import { pharmacyMarketingRouter } from './pharmacy-marketing';
 import { router } from '../trpc';
@@ -69,6 +70,7 @@ import { pharmacyFinanceRouter } from './pharmacy-finance';
 import { pharmacyOnboardingRouter } from './pharmacy-onboarding';
 import { pharmacyOrderingRouter } from './pharmacy-ordering';
 import { pharmacySupplierLinksRouter } from './pharmacy-supplier-links';
+import { pharmacyOperatingModeRouter } from './pharmacy-operating-mode';
 
 export const appRouter = router({
   hotelProperty: hotelPropertyRouter,
@@ -133,6 +135,7 @@ export const appRouter = router({
   pharmacyDispensing: pharmacyDispensingRouter,
   pharmacySafety: pharmacySafetyRouter,
   pharmacySales: pharmacySalesRouter,
+  pharmacyPin: pharmacyPinRouter,
   pharmacyBranchAssignments: pharmacyBranchAssignmentsRouter,
   pharmacyReports: pharmacyReportsRouter,
   pharmacyCameras: pharmacyCamerasRouter,
@@ -141,6 +144,7 @@ export const appRouter = router({
   pharmacyOnboarding: pharmacyOnboardingRouter,
   pharmacyOrdering: pharmacyOrderingRouter,
   pharmacySupplierLinks: pharmacySupplierLinksRouter,
+  pharmacyOperatingMode: pharmacyOperatingModeRouter,
 });
 
 export type AppRouter = typeof appRouter;

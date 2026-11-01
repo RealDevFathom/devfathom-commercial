@@ -71,6 +71,7 @@ const priorHrefs = [
   '/restaurant/orders',
   '/restaurant/catering',
   '/restaurant/money',
+  MENU_IMPORT,
   '/restaurant/inventory',
   '/restaurant/purchasing',
   '/restaurant/sop',
@@ -86,7 +87,6 @@ const priorHrefs = [
   '/restaurant/integrations/cameras',
   '/restaurant/catalog',
   '/restaurant/menus',
-  MENU_IMPORT,
   '/restaurant/promotions',
   '/restaurant/notifications',
   '/restaurant/loyalty',
@@ -109,6 +109,8 @@ const priorHrefs = [
   '/pharmacy/controlled-register',
   '/pharmacy/regulatory',
   '/pharmacy/settings/branches',
+  '/pharmacy/settings/pin',
+  '/pharmacy/settings/operating-mode',
   '/reviews',
   '/team/stats',
   '/hr',
@@ -161,12 +163,29 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 describe('Hotel navigation composition', () => {
+  it('makes pharmacy operating mode discoverable through the licensed shared navigation', () => {
+    const entry = visibleNavigation(
+      { vertical: 'PHARMACY', enabledModules: ['pharmacy-core'] },
+      'ADMIN'
+    ).find((item) => item.href === '/pharmacy/settings/operating-mode');
+    expect(entry).toMatchObject({
+      label: 'Operating mode',
+      group: 'Pharmacy',
+      module: 'pharmacy-core',
+    });
+    expect(
+      visibleNavigation({ vertical: 'PHARMACY', enabledModules: [] }, 'ADMIN')
+    ).not.toContainEqual(entry);
+    expect(
+      visibleNavigation({ vertical: 'RESTAURANT', enabledModules: ['pharmacy-core'] }, 'ADMIN')
+    ).not.toContainEqual(entry);
+  });
   it('retains Menu import and every accepted link alongside the six hospitality routes', () => {
-    expect(priorHrefs).toHaveLength(58);
-    expect(navigation).toHaveLength(64);
+    expect(priorHrefs).toHaveLength(60);
+    expect(navigation).toHaveLength(66);
     expect(navigation).toHaveLength(priorHrefs.length + hospitalityHrefs.length);
     const hrefs = navigation.map((n) => n.href);
-    expect(new Set(hrefs).size).toBe(64);
+    expect(new Set(hrefs).size).toBe(66);
     expect(new Set(hrefs)).toEqual(new Set([...priorHrefs, ...hospitalityHrefs]));
     expect(hrefs).toEqual(expect.arrayContaining(priorHrefs));
     expect(navigation.find((n) => n.href === MENU_IMPORT)).toMatchObject({

@@ -1,3 +1,5 @@
+import { SoloApprovalPin } from '@/components/pharmacy/solo-approval-pin';
+import { soloOwnerEligible } from '@/lib/pharmacy/solo-approval';
 import { browserUuid } from '@/lib/browser-uuid';
 import type { Metadata } from 'next';
 import Link from 'next/link';
@@ -22,6 +24,7 @@ import { hasModule } from '@/lib/entitlements';
 import { evaluateSessionUser } from '@/lib/auth/session-state';
 import { DEMO_UNAVAILABLE_MESSAGE, isDemoProcedureBlocked } from '@/lib/demo/isolation';
 import { pharmacyActionErrorMessage } from '@/lib/pharmacy/action-error-message';
+import { PHARMACY_COUNT_MAX_VARIANCE_THRESHOLD_UNITS } from '@/lib/pharmacy/inventory-operations';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { pharmacyInventoryRouter } from '@/server/routers/pharmacy-inventory';
 import { createTRPCContext } from '@/server/trpc';
@@ -156,6 +159,11 @@ export default async function PharmacyInventoryPage({
   }
 
   const caller = pharmacyInventoryRouter.createCaller(ctx);
+  const solo = await soloOwnerEligible(ctx.db, {
+    organizationId,
+    branchId: branch.id,
+    actorId: ctx.session.user.id,
+  });
   const [
     organizationLocations,
     lots,
@@ -211,7 +219,11 @@ export default async function PharmacyInventoryPage({
       },
     }),
     ctx.db.user.findMany({
-      where: { organizationId, status: 'ACTIVE', id: { not: ctx.session.user.id } },
+      where: {
+        organizationId,
+        status: 'ACTIVE',
+        ...(solo ? {} : { id: { not: ctx.session.user.id } }),
+      },
       orderBy: { name: 'asc' },
       select: { id: true, name: true, title: true },
     }),
@@ -304,6 +316,7 @@ export default async function PharmacyInventoryPage({
           branchId,
           countId: field(data, 'countId'),
           idempotencyKeyPrefix: `ui-count:${field(data, 'countId')}`,
+          pin: field(data, 'pin') || undefined,
         });
       else if (action === 'write-off')
         await actionCaller.writeOff({
@@ -312,6 +325,7 @@ export default async function PharmacyInventoryPage({
           stockLocationId: field(data, 'position').split(':')[1]!,
           units: number(data, 'units'),
           witnessId: field(data, 'witnessId'),
+          pin: field(data, 'pin') || undefined,
           reason: field(data, 'reason'),
           evidenceRef: field(data, 'evidenceRef'),
           idempotencyKey: `ui-writeoff:${browserUuid()}`,
@@ -340,7 +354,11 @@ export default async function PharmacyInventoryPage({
           ],
         });
       else if (action === 'approve-transfer')
-        await actionCaller.approveTransfer({ branchId, transferId: field(data, 'transferId') });
+        await actionCaller.approveTransfer({
+          branchId,
+          transferId: field(data, 'transferId'),
+          pin: field(data, 'pin') || undefined,
+        });
       else if (action === 'dispatch-transfer')
         await actionCaller.dispatchTransfer({
           branchId,
@@ -733,11 +751,16 @@ export default async function PharmacyInventoryPage({
                 <Input
                   className="mt-1"
                   defaultValue="0"
+                  max={PHARMACY_COUNT_MAX_VARIANCE_THRESHOLD_UNITS}
                   min="0"
                   name="threshold"
                   required
                   type="number"
                 />
+                <span className="mt-1 block text-xs text-text-muted">
+                  Variances above {PHARMACY_COUNT_MAX_VARIANCE_THRESHOLD_UNITS} units always need
+                  co-authorization.
+                </span>
               </label>
               <label className="text-sm">
                 Counted sealed packs
@@ -773,6 +796,7 @@ export default async function PharmacyInventoryPage({
                     <input name="action" type="hidden" value="approve-count" />
                     <input name="branchId" type="hidden" value={branch.id} />
                     <input name="countId" type="hidden" value={count.id} />
+                    {solo ? <SoloApprovalPin required /> : null}
                     <Submit>
                       {count.status === 'AWAITING_COAUTH'
                         ? 'Co-authorize variance'
@@ -819,6 +843,23 @@ export default async function PharmacyInventoryPage({
                 ))}
               </select>
             </label>
+            {solo ? (
+              <SoloApprovalPin />
+            ) : (
+              <label className="text-sm">
+                Witness PIN
+                <Input
+                  name="pin"
+                  type="password"
+                  inputMode="numeric"
+                  autoComplete="off"
+                  pattern="[0-9]{4,8}"
+                  maxLength={8}
+                  required
+                  className="mt-1"
+                />
+              </label>
+            )}
             <label className="text-sm">
               Evidence reference
               <Input
@@ -945,6 +986,7 @@ export default async function PharmacyInventoryPage({
                 {transfer.status === 'ALLOCATED' ? (
                   <form action={perform}>
                     <input name="action" type="hidden" value="approve-transfer" />
+                    {solo ? <SoloApprovalPin required /> : null}
                     <input name="branchId" type="hidden" value={branch.id} />
                     <input name="transferId" type="hidden" value={transfer.id} />
                     <Submit>Approve</Submit>

@@ -1,6 +1,5 @@
 import { createHmac } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { z } from 'zod';
 
 vi.mock('server-only', () => ({}));
 
@@ -19,7 +18,8 @@ vi.mock('@/lib/tenancy/host', () => ({
   resolveExplicitOrganizationByHost: mocks.resolveOrganization,
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: mocks.createTenantDb }));
-vi.mock('@/lib/restaurant/webhook-inbox', () => {
+vi.mock('@/lib/restaurant/webhook-inbox', async () => {
+  const { z } = await import('zod');
   return {
     recordInboundWebhook: mocks.recordInboundWebhook,
     webhookEnvelopeSchema: z

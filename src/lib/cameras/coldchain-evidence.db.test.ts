@@ -23,7 +23,9 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { PrismaClient } from '@/generated/prisma/client';
 
-const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
+// The platform worker drains all tenants; use an exclusive queue fixture.
+const TEST_DATABASE_URL =
+  process.env.PHARMACY_COLDCHAIN_EVIDENCE_TEST_DATABASE_URL ?? process.env.TEST_DATABASE_URL;
 if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
 process.env.CAMERA_GATEWAY_MODE = 'simulated';
 

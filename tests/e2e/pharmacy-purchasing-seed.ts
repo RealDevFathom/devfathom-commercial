@@ -84,13 +84,14 @@ async function main() {
       await tx.$executeRawUnsafe(`SELECT set_config('app.is_platform_admin', 'true', true)`);
       const organization = await tx.organization.upsert({
         where: { slug: FIXTURE.organizationSlug },
-        update: { vertical: 'PHARMACY', status: 'ACTIVE' },
+        update: { vertical: 'PHARMACY', status: 'ACTIVE', pharmacyOperatingMode: 'STAFFED' },
         create: {
           slug: FIXTURE.organizationSlug,
           legalName: `${FIXTURE.organizationName} (Pvt) Ltd`,
           displayName: FIXTURE.organizationName,
           vertical: 'PHARMACY',
           status: 'ACTIVE',
+          pharmacyOperatingMode: 'STAFFED',
           timezone: 'Asia/Karachi',
           currency: 'PKR',
           seatLimit: 10,
@@ -146,12 +147,36 @@ async function main() {
         skipDuplicates: true,
       });
 
+      const managerRole = await tx.organizationRole.upsert({
+        where: { organizationId_key: { organizationId, key: 'manager' } },
+        update: {},
+        create: { organizationId, key: 'manager', name: 'Procurement manager', isSystem: true },
+      });
+      await tx.organizationRolePermission.upsert({
+        where: {
+          organizationRoleId_capability: {
+            organizationRoleId: managerRole.id,
+            capability: 'pharmacy:procurement',
+          },
+        },
+        update: { effect: 'ALLOW' },
+        create: {
+          organizationId,
+          organizationRoleId: managerRole.id,
+          capability: 'pharmacy:procurement',
+          effect: 'ALLOW',
+        },
+      });
       const passwordHash = await bcrypt.hash(FIXTURE.receiver.password, 10);
       const [receiver, approver] = await Promise.all(
         [FIXTURE.receiver, FIXTURE.approver].map((person, index) =>
           tx.user.upsert({
             where: { organizationId_email: { organizationId, email: person.email } },
-            update: { status: 'ACTIVE', password: passwordHash },
+            update: {
+              status: 'ACTIVE',
+              password: passwordHash,
+              ...(index === 1 ? { organizationRoleId: managerRole.id } : {}),
+            },
             create: {
               organizationId,
               email: person.email,
@@ -159,8 +184,7 @@ async function main() {
               password: passwordHash,
               department: 'pharmacy',
               title: index === 0 ? 'Receiving pharmacist' : 'Branch manager',
-              // The receiver is an ADMIN so the whole console is reachable; the
-              // approver only has to be somebody else for PUR-02 to be satisfied.
+              // Both people receive explicit procurement grants and branch scope below.
               role: index === 0 ? 'ADMIN' : 'EMPLOYEE',
               status: 'ACTIVE',
             },
@@ -168,6 +192,18 @@ async function main() {
           })
         )
       );
+
+      // The browser acceptance enrolls through the real pharmacy UI on every
+      // seed run. Retain past credential/audit history but revoke its old PIN.
+      await tx.restaurantOperatorCredential.updateMany({
+        where: {
+          organizationId,
+          type: 'PIN',
+          revokedAt: null,
+          staffProfile: { userId: receiver.id },
+        },
+        data: { revokedAt: new Date() },
+      });
 
       const branch = await tx.pharmacyBranch.upsert({
         where: { organizationId_code: { organizationId, code: FIXTURE.branch.code } },
@@ -183,6 +219,33 @@ async function main() {
         },
         select: { id: true },
       });
+
+      // Procurement is an exact grant, and branch scope is persisted even for
+      // administrators. Seed the same authorization an owner assigns in Studio.
+      for (const person of [receiver!, approver!]) {
+        await tx.userPermissionOverride.upsert({
+          where: { userId_capability: { userId: person.id, capability: 'pharmacy.procurement' } },
+          create: {
+            organizationId,
+            userId: person.id,
+            capability: 'pharmacy.procurement',
+            effect: 'ALLOW',
+            reason: 'Purchasing acceptance operator',
+          },
+          update: { effect: 'ALLOW', expiresAt: null },
+        });
+        await tx.pharmacyBranchAssignment.upsert({
+          where: {
+            organizationId_branchId_userId: {
+              organizationId,
+              branchId: branch.id,
+              userId: person.id,
+            },
+          },
+          update: { active: true },
+          create: { organizationId, branchId: branch.id, userId: person.id },
+        });
+      }
 
       const [shelf, quarantine] = await Promise.all(
         [

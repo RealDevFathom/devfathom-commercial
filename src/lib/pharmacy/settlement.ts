@@ -14,7 +14,7 @@ import { postTenderEntry, postTenderRefundEntry } from './finance-postings';
 import { firstCloseIsFinal } from './migration/first-close';
 import { assertSaleBatchesSellable } from './sale-batch-safety';
 import { completePaidPharmacySale, completionSaleInclude } from './sale-completion';
-import { assertRxSaleAllowed } from './rx-sale-gate';
+import { assertRxSaleLinesAllowed } from './rx-sale-gate';
 import type { LedgerScope } from './stock-ledger';
 import { paymentSandboxAdmitted } from './payment-sandbox-admission';
 import { authenticatePharmacyCommand, validateLeasedReceiptReplay } from './sales';
@@ -246,7 +246,7 @@ async function bindIdempotency(
 /** Shared transaction lock: closing cannot race a new tender or drawer write. */
 export async function lockPharmacyDay(db: ScopedDb, scope: LedgerScope, date: Date) {
   await db.$queryRaw(
-    Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`${scope.organizationId}:${scope.branchId}:${date.toISOString().slice(0, 10)}`}))`
+    Prisma.sql`SELECT 1 AS locked FROM pg_advisory_xact_lock(hashtext(${`${scope.organizationId}:${scope.branchId}:${date.toISOString().slice(0, 10)}`}))`
   );
 }
 
@@ -319,11 +319,7 @@ export async function applyPharmacyTender(
   });
   if (!sale || sale.status !== 'OPEN') throw new PharmacySettlementError('SALE_NOT_OPEN');
   // #518: a line added earlier cannot be paid for by someone who may not sell it.
-  await assertRxSaleAllowed(
-    db,
-    scope,
-    sale.lines.map((line) => line.medicine)
-  );
+  await assertRxSaleLinesAllowed(db, scope, sale);
   // #633: before any lease, provider charge, tender or posting. A batch recalled,
   // quarantined or expired since add-to-cart refuses the payment.
   await assertSaleBatchesSellable(db, scope, sale.id);
@@ -865,7 +861,7 @@ export async function cutPharmacyDailyClose(
   }
 ) {
   await db.$queryRaw(
-    Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`${scope.organizationId}:${scope.branchId}:${input.businessDate.toISOString().slice(0, 10)}`}))`
+    Prisma.sql`SELECT 1 AS locked FROM pg_advisory_xact_lock(hashtext(${`${scope.organizationId}:${scope.branchId}:${input.businessDate.toISOString().slice(0, 10)}`}))`
   );
   const openDrawers = await db.pharmacyDrawerSession.count({
     where: {

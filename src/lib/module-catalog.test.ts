@@ -513,3 +513,11 @@ describe('SOP depth denial messages', () => {
     expect(message).toMatch(/sop\.evidenceRetentionDays of at least 365 \(granted 90\)/);
   });
 });
+
+describe('pharmacy operating mode licence', () => {
+  it('licenses the operating-mode router and settings page on Pharmacy Core', () => {
+    expect(moduleForProcedure('pharmacyOperatingMode.get')).toBe('pharmacy-core');
+    expect(moduleForProcedure('pharmacyOperatingMode.set')).toBe('pharmacy-core');
+    expect(moduleForPath('/pharmacy/settings/operating-mode')).toBe('pharmacy-core');
+  });
+});

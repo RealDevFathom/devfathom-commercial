@@ -50,7 +50,10 @@ const BRANCH_B = `branch_b_${suffix}`;
 const BRANCH_A_TWO = `branch_a_two_${suffix}`;
 const BRANCH_A_THREE = `branch_a_three_${suffix}`;
 const BRANCH_GUC = `branch_guc_${suffix}`;
-const ACTOR = 'user_pharmacist';
+const ACTOR = `user_pharmacist_${suffix}`;
+const CHECKERS = ['user_second_pharmacist', 'transfer_approver', 'approver_a', 'approver_b'].map(
+  (id) => `${id}_${suffix}`
+);
 
 /** Fixed instants, so no case depends on the wall clock. */
 const NOW = new Date('2026-09-02T09:00:00.000Z');
@@ -121,6 +124,11 @@ async function scenario(
     // PLAT-04: a branch-owned row now references the branch aggregate, so the
     // fixture has to create the branch before anything scoped to it.
     await ensureBranch(db, organizationId, branchId);
+    if (organizationId === ORG_A)
+      await db.pharmacyBranchAssignment.createMany({
+        data: [ACTOR, ...CHECKERS].map((userId) => ({ organizationId, branchId, userId })),
+        skipDuplicates: true,
+      });
     const medicine = await db.medicine.create({
       data: {
         organizationId,
@@ -312,6 +320,40 @@ beforeAll(async () => {
   ]);
   deps = { withTenantDb: scopedDb.withTenantDb, ledger, operations, drap };
   await roleGuard.assertRlsEnforcingRole(scopedDb.withPlatformDb);
+  await scopedDb.withPlatformDb(async (db) => {
+    await db.organization.createMany({
+      data: [ORG_A, ORG_B].map((id) => ({
+        id,
+        slug: id,
+        legalName: id,
+        displayName: id,
+        vertical: 'PHARMACY' as const,
+        status: 'ACTIVE' as const,
+        deploymentMode: 'SHARED' as const,
+        pharmacyOperatingMode: 'STAFFED' as const,
+      })),
+    });
+  });
+  await inOrg(ORG_A, async (db) => {
+    await db.organizationDepartment.create({ data: { key: 'PHARMACY', name: 'Pharmacy' } });
+    const role = await db.organizationRole.create({
+      data: { key: 'manager', name: 'Manager', isSystem: true },
+    });
+    await db.organizationRolePermission.create({
+      data: { organizationRoleId: role.id, capability: 'pharmacy:inventory', effect: 'ALLOW' },
+    });
+    await db.user.createMany({
+      data: [ACTOR, ...CHECKERS].map((id) => ({
+        id,
+        name: id,
+        email: `${id}@test.invalid`,
+        department: 'PHARMACY',
+        title: 'Inventory manager',
+        organizationRoleId: role.id,
+        status: 'ACTIVE' as const,
+      })),
+    });
+  });
 }, 120_000);
 
 // ── INV-01 — the append-only ledger and its projection ──────────────────────
@@ -482,7 +524,7 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
     const result = await inOrg(ORG_A, async (db) => {
       const approved = await deps.operations.approveCount(
         db,
-        { ...scopeOf(fixture), actorId: 'user_second_pharmacist' },
+        { ...scopeOf(fixture), actorId: CHECKERS[0]! },
         count.id,
         tag('coauth')
       );
@@ -1024,7 +1066,7 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
       });
       await deps.operations.approveTransfer(
         db,
-        { ...scopeOf(fixture), actorId: 'transfer_approver' },
+        { ...scopeOf(fixture), actorId: CHECKERS[1]! },
         transfer.id
       );
       await deps.operations.dispatchTransfer(db, scopeOf(fixture), transfer.id, tag('dispatch'));
@@ -1100,7 +1142,7 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
         });
         await deps.operations.approveTransfer(
           db,
-          { ...scopeOf(fixture), actorId: `approver_${label}` },
+          { ...scopeOf(fixture), actorId: `approver_${label}_${suffix}` },
           transfer.id
         );
         return transfer.id;

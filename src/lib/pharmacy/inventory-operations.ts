@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+import { enforceOperatingMode } from './operating-mode';
 /** PH-INV INV-06/07/08(manual)/09 workflows layered on the append-only ledger. */
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -182,6 +184,28 @@ async function removalArrangement(
   return { sealedPacks: sealedUnits / unitsPerPack, looseUnits };
 }
 
+/**
+ * Server-owned ceiling on the per-count variance threshold. The count creator
+ * may ask for a stricter (lower) threshold, but never a looser one: any line
+ * whose absolute variance exceeds this many units always needs maker/checker
+ * (or the audited SOLO owner PIN) before the adjustment posts, whatever the
+ * client sent.
+ */
+export const PHARMACY_COUNT_MAX_VARIANCE_THRESHOLD_UNITS = 10;
+
+/** The threshold that actually governs a count: the request, capped by server policy. */
+export function effectiveCountVarianceThreshold(requested: number) {
+  return Math.min(requested, PHARMACY_COUNT_MAX_VARIANCE_THRESHOLD_UNITS);
+}
+
+function countNeedsCoauth(
+  lines: ReadonlyArray<{ varianceUnits: number | null }>,
+  varianceThreshold: number
+) {
+  const threshold = effectiveCountVarianceThreshold(varianceThreshold);
+  return lines.some((line) => Math.abs(line.varianceUnits ?? 0) > threshold);
+}
+
 export async function createCount(
   db: ScopedDb,
   scope: LedgerScope,
@@ -197,11 +221,14 @@ export async function createCount(
 ) {
   if (!Number.isSafeInteger(input.varianceThreshold) || input.varianceThreshold < 0)
     throw new PharmacyInventoryError('INVALID_UNITS');
+  // Persist the effective (server-capped) threshold so reports and the approval
+  // gate both see the policy that governed this count, not the client's ask.
+  const varianceThreshold = effectiveCountVarianceThreshold(input.varianceThreshold);
   const count = await db.pharmacyInventoryCount.create({
     data: {
       organizationId: scope.organizationId,
       branchId: scope.branchId,
-      varianceThreshold: input.varianceThreshold,
+      varianceThreshold,
       createdById: scope.actorId,
     },
   });
@@ -250,7 +277,7 @@ export async function createCount(
     });
   }
   const lines = await db.pharmacyInventoryCountLine.findMany({ where: { countId: count.id } });
-  const coauth = lines.some((line) => Math.abs(line.varianceUnits ?? 0) > input.varianceThreshold);
+  const coauth = countNeedsCoauth(lines, varianceThreshold);
   return db.pharmacyInventoryCount.update({
     where: { id: count.id },
     data: { status: coauth ? 'AWAITING_COAUTH' : 'OPEN' },
@@ -262,7 +289,8 @@ export async function approveCount(
   db: ScopedDb,
   scope: LedgerScope,
   countId: string,
-  idempotencyKeyPrefix: string
+  idempotencyKeyPrefix: string,
+  pin?: string
 ) {
   // Approval reads the lifecycle state and posts its variance as one critical
   // section. Idempotency keys only deduplicate a replay that uses the same
@@ -285,8 +313,28 @@ export async function approveCount(
   });
   if (!count) throw new PharmacyInventoryError('CROSS_BRANCH_REFERENCE');
   if (count.status === 'APPROVED') throw new PharmacyInventoryError('INVALID_STATE');
-  if (count.status === 'AWAITING_COAUTH' && count.createdById === scope.actorId)
-    throw new PharmacyInventoryError('COAUTH_REQUIRED');
+  // Counts within the variance threshold remain an ordinary OPEN count. A count
+  // promoted to AWAITING_COAUTH needs maker/checker (or the SOLO owner's PIN)
+  // before it can be approved. The variance is re-checked here against the
+  // server-capped threshold too, so an OPEN count recorded with a loose
+  // client-chosen threshold (including rows written before the cap) cannot
+  // post an above-policy adjustment without co-authorization.
+  if (
+    count.status === 'AWAITING_COAUTH' ||
+    countNeedsCoauth(count.lines, count.varianceThreshold)
+  ) {
+    try {
+      await enforceOperatingMode(db, scope, {
+        kind: 'ADJUSTMENT',
+        makerIds: [count.createdById],
+        targetType: 'PharmacyInventoryCount',
+        targetId: count.id,
+        pin,
+      });
+    } catch {
+      throw new PharmacyInventoryError('COAUTH_REQUIRED');
+    }
+  }
   for (const [index, line] of count.lines.entries()) {
     const variance = line.varianceUnits ?? 0;
     if (!variance) continue;
@@ -321,6 +369,7 @@ export async function writeOff(
     stockLocationId: string;
     units: number;
     witnessId: string;
+    pin?: string;
     reason: string;
     evidenceRef: string;
     idempotencyKey: string;
@@ -328,23 +377,35 @@ export async function writeOff(
   }
 ) {
   assertPositive(input.units);
-  if (input.witnessId === scope.actorId) throw new PharmacyInventoryError('COAUTH_REQUIRED');
-  const witness = await db.user.findFirst({
-    where: {
-      id: input.witnessId,
-      organizationId: scope.organizationId,
-      status: 'ACTIVE',
-      pharmacyBranchAssignments: {
-        some: {
-          organizationId: scope.organizationId,
-          branchId: scope.branchId,
-          active: true,
+  // Independent witnesses keep the live branch-membership boundary (#378).
+  // A self-witness can proceed only through the audited SOLO approval below.
+  if (input.witnessId !== scope.actorId) {
+    const witness = await db.user.findFirst({
+      where: {
+        id: input.witnessId,
+        organizationId: scope.organizationId,
+        status: 'ACTIVE',
+        pharmacyBranchAssignments: {
+          some: { organizationId: scope.organizationId, branchId: scope.branchId, active: true },
         },
       },
-    },
-    select: { id: true },
-  });
-  if (!witness) throw new PharmacyInventoryError('COAUTH_REQUIRED');
+      select: { id: true },
+    });
+    if (!witness) throw new PharmacyInventoryError('COAUTH_REQUIRED');
+  }
+  const custodyId = randomUUID();
+  try {
+    await enforceOperatingMode(db, scope, {
+      kind: 'ADJUSTMENT',
+      makerIds: [scope.actorId],
+      checkerId: input.witnessId,
+      targetType: 'PharmacyCustodyRecord',
+      targetId: custodyId,
+      pin: input.pin,
+    });
+  } catch {
+    throw new PharmacyInventoryError('COAUTH_REQUIRED');
+  }
   const lot = await db.pharmacyInventoryLot.findFirst({
     where: {
       id: input.inventoryLotId,
@@ -380,6 +441,7 @@ export async function writeOff(
   });
   const custody = await db.pharmacyCustodyRecord.create({
     data: {
+      id: custodyId,
       organizationId: scope.organizationId,
       branchId: scope.branchId,
       movementId: movement.id,
@@ -572,13 +634,28 @@ export async function allocateTransfer(
   });
 }
 
-export async function approveTransfer(db: ScopedDb, scope: LedgerScope, transferId: string) {
+export async function approveTransfer(
+  db: ScopedDb,
+  scope: LedgerScope,
+  transferId: string,
+  pin?: string
+) {
   const transfer = await db.pharmacyInterbranchTransfer.findFirst({
     where: { id: transferId, organizationId: scope.organizationId, fromBranchId: scope.branchId },
   });
   if (!transfer) throw new PharmacyInventoryError('CROSS_BRANCH_REFERENCE');
-  if (transfer.status !== 'ALLOCATED' || transfer.allocatedById === scope.actorId)
+  if (transfer.status !== 'ALLOCATED') throw new PharmacyInventoryError('COAUTH_REQUIRED');
+  try {
+    await enforceOperatingMode(db, scope, {
+      kind: 'ADJUSTMENT',
+      makerIds: [transfer.allocatedById],
+      targetType: 'PharmacyTransfer',
+      targetId: transfer.id,
+      pin,
+    });
+  } catch {
     throw new PharmacyInventoryError('COAUTH_REQUIRED');
+  }
   return db.pharmacyInterbranchTransfer.update({
     where: { id: transfer.id },
     data: { status: 'APPROVED', approvedById: scope.actorId },

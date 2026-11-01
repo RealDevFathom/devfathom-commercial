@@ -111,6 +111,7 @@ function record() {
 }
 
 const platformDb = {
+  $queryRaw: vi.fn(async () => [{ id: 'user_admin', name: 'Owner' }]),
   $queryRawUnsafe: mocks.organizationExists,
   platformPackage: {
     findUnique: mocks.pkgFindUnique,
@@ -156,6 +157,7 @@ const platformDb = {
   pharmacyBranch: { create: mocks.pharmacyBranchCreate },
   restaurantBranchAssignment: { create: mocks.assignmentCreate },
   restaurantStaffProfile: {
+    findMany: vi.fn(async () => []),
     findFirst: mocks.staffFindFirst,
     create: mocks.staffCreate,
     findUnique: mocks.staffFindUnique,
@@ -314,6 +316,8 @@ describe('organization.create vertical + package compatibility', () => {
     expect(mocks.orgCreate).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ vertical: 'RESTAURANT' }) })
     );
+    // The pharmacy operating mode is only stamped on pharmacy tenants.
+    expect(mocks.orgCreate.mock.calls[0][0].data).not.toHaveProperty('pharmacyOperatingMode');
     // One default branch on the org timezone, conservative name.
     expect(mocks.branchCreate).toHaveBeenCalledTimes(1);
     expect(mocks.branchCreate).toHaveBeenCalledWith(
@@ -430,7 +434,9 @@ describe('organization.create vertical + package compatibility', () => {
     await run('organization.create', pharmacyCreatePayload());
 
     expect(mocks.orgCreate).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ vertical: 'PHARMACY' }) })
+      expect.objectContaining({
+        data: expect.objectContaining({ vertical: 'PHARMACY', pharmacyOperatingMode: 'SOLO' }),
+      })
     );
     // The pharmacy branch aggregate, not the restaurant one: the regulatory
     // profile PLAT-02 writes has a composite FK onto `pharmacy_branches`.

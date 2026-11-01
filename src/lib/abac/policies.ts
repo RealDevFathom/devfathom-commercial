@@ -70,6 +70,7 @@ export const ALL_ACTIONS = [
   'restaurant:configure', // restaurant M8: loyalty configuration and consolidated access — org-role driven
   'menu:import', // R-lane WHA-194: OCR menu import — upload, review queue, confirmed catalog import
   'pharmacy:counter',
+  'pharmacy:receipt',
   'pharmacy:close',
   'pharmacy:manage',
   'pharmacy:procurement',
@@ -112,6 +113,20 @@ const isHrOrAdmin: Policy = ({ subject }) => subject.role === 'ADMIN' || subject
 // upstream is wrong — not that the member is fine.
 const isActiveMember: Policy = ({ subject }) =>
   Boolean(subject.status) && ACTIVE_STATUSES.has(subject.status!);
+
+/** Mandatory resource constraints, including when a custom grant allows access. */
+export const RESOURCE_POLICIES: Partial<Record<Action, Policy[]>> = {
+  'team:layoff': [
+    ({ subject, resource }) => !(subject.role === 'HR' && resource?.targetRole === 'ADMIN'),
+  ],
+  'resignation:review': [
+    ({ subject, resource }) =>
+      resource?.status === 'PENDING' &&
+      typeof resource.userId === 'string' &&
+      resource.userId !== subject.id &&
+      !(subject.role === 'HR' && resource.targetRole === 'ADMIN'),
+  ],
+};
 
 export const POLICIES: Record<Action, Policy[]> = {
   // ── Coarse role gates (back the tRPC procedures) ──────────────────────────
@@ -233,6 +248,7 @@ export const POLICIES: Record<Action, Policy[]> = {
   // grants it explicitly (or holds `*`, e.g. the restaurant Owner template).
   'menu:import': [],
   'pharmacy:counter': [],
+  'pharmacy:receipt': [],
   'pharmacy:close': [],
   'pharmacy:manage': [],
   // Tenant administrators without an assigned organization role retain the

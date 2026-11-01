@@ -1,3 +1,9 @@
+import { assertBranchAssignment } from '@/lib/pharmacy/branch-assignment';
+import {
+  authorizeSoloApproval,
+  pinProfileBelongsToActor,
+  verifySoloOwnerPin,
+} from './solo-approval';
 /**
  * PH-PUR — PRD §6.3 PUR-02 (receiving), PUR-04 (three-way match exceptions and
  * reversal) and PUR-05 (direct purchase). The database half of receiving.
@@ -86,13 +92,15 @@ const WITNESS_BLOCKED = 'A different qualified person must enter their PIN.';
  * PIN witness for a controlled purchase. A receipt with no controlled line
  * returns `{ pharmacistId: null }`. A failed PIN updates the lockout counter
  * and returns `{ blocked }` so the caller can commit that counter without
- * posting stock.
+ * posting stock. The router precheck verifies credentials only; approval
+ * evidence is written in posting mode inside the stock transaction.
  */
 export async function verifyControlledPurchaseWitness(
   db: ScopedDb,
   scope: ReceivingScope,
-  input: { goodsReceiptId: string; staffProfileId?: string; pin?: string }
-): Promise<{ blocked: string } | { pharmacistId: string | null }> {
+  input: { goodsReceiptId: string; staffProfileId?: string; pin?: string },
+  mode: 'precheck' | 'posting' = 'posting'
+): Promise<{ blocked: string } | { pharmacistId: string | null; signatureRef?: string }> {
   const receipt = await db.pharmacyGoodsReceipt.findFirst({
     where: { id: input.goodsReceiptId, organizationId: scope.organizationId },
     select: {
@@ -118,6 +126,27 @@ export async function verifyControlledPurchaseWitness(
   if (!input.staffProfileId || !input.pin || !receipt.qualifiedPersonUserId) {
     return { blocked: WITNESS_BLOCKED };
   }
+
+  if (
+    receipt.qualifiedPersonUserId === scope.actorId &&
+    (await pinProfileBelongsToActor(db, scope, input.staffProfileId))
+  ) {
+    if (
+      !(await can({ id: scope.actorId, role: 'EMPLOYEE' }, 'pharmacy:dispense', undefined, {
+        db,
+      })) ||
+      !(await (mode === 'precheck'
+        ? verifySoloOwnerPin(db, scope, input.pin)
+        : authorizeSoloApproval(
+            db,
+            scope,
+            { type: 'ControlledPurchase', id: input.goodsReceiptId },
+            input.pin
+          )))
+    )
+      return { blocked: WITNESS_BLOCKED };
+    return { pharmacistId: scope.actorId, signatureRef: `solo-purchase:${input.goodsReceiptId}` };
+  }
   await db.$queryRaw`SELECT id FROM restaurant_operator_credentials WHERE "organizationId"=${scope.organizationId} AND "staffProfileId"=${input.staffProfileId} AND type='PIN' AND "revokedAt" IS NULL AND "deviceId" IS NULL FOR UPDATE`;
   const credential = await db.restaurantOperatorCredential.findFirst({
     where: {
@@ -142,6 +171,7 @@ export async function verifyControlledPurchaseWitness(
     !isLockedOut(credential, now) &&
     (await can(pharmacist, 'pharmacy:dispense', undefined, { db, now }));
   if (!eligible || !credential || !pharmacist) return { blocked: WITNESS_BLOCKED };
+  await assertBranchAssignment(db, { ...scope, actorId: pharmacist.id });
   if (!(await verifyOperatorCredential('PIN', input.pin, credential.credentialHash))) {
     await db.restaurantOperatorCredential.update({
       where: { id: credential.id },
@@ -388,7 +418,7 @@ export async function postGoodsReceipt(
       branchId: scope.branchId,
       recordedByUserId: scope.actorId,
       witnessedByUserId: witness.pharmacistId,
-      signatureRef: `pin:${witness.pharmacistId}`,
+      signatureRef: witness.signatureRef ?? `pin:${witness.pharmacistId}`,
       lines: purchaseLines,
     });
   }

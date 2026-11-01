@@ -1,3 +1,5 @@
+import { actorCanProcure } from '@/lib/pharmacy/procurement-access';
+import { SoloApprovalPin } from '@/components/pharmacy/solo-approval-pin';
 import { FollowUpQueue } from './follow-up-queue';
 import { supplierCreditFollowUp } from '@/lib/pharmacy/supplier-credit-follow-up';
 import type { Metadata } from 'next';
@@ -98,6 +100,7 @@ export default async function PharmacyReturnsPage({
     );
   }
 
+  const canManage = await actorCanProcure(ctx.db, ctx.session.user.id);
   let workspace: PurchasingWorkspace;
   try {
     workspace = await caller.workspace();
@@ -132,7 +135,7 @@ export default async function PharmacyReturnsPage({
   try {
     [returns, lots, credits] = await Promise.all([
       caller.purchaseReturns({ branchId }),
-      caller.returnableLots({ branchId }),
+      canManage ? caller.returnableLots({ branchId }) : Promise.resolve([]),
       caller.supplierCredits({ branchId }),
     ]);
   } catch {
@@ -329,6 +332,7 @@ export default async function PharmacyReturnsPage({
         supplierCreditId: field(form, 'supplierCreditId'),
         debitNoteId: field(form, 'debitNoteId'),
         amountMinor: moneyFieldMinor(form, 'amountMinor', 'Amount'),
+        pin: optionalField(form, 'pin'),
       });
       revalidatePath(ROUTE);
       next = destination(
@@ -348,6 +352,12 @@ export default async function PharmacyReturnsPage({
 
   return (
     <Frame branch={scope} notice={notice}>
+      {!canManage ? (
+        <p className="text-sm text-text-muted">
+          Read-only financial access. Procurement permission is required to change returns or
+          supplier credit.
+        </p>
+      ) : null}
       <div className="grid gap-6 sm:grid-cols-4">
         <Stat label="Expected credit" value={money(expectedMinor)} sub="Frozen at issue" />
         <Stat label="Received credit" value={money(receivedMinor)} sub="Allocated from suppliers" />
@@ -454,6 +464,7 @@ export default async function PharmacyReturnsPage({
         <div className="min-w-0 space-y-6">
           {selected ? (
             <ReturnDetail
+              canManage={canManage}
               branchId={branchId}
               credits={credits}
               notice={notice}
@@ -470,151 +481,155 @@ export default async function PharmacyReturnsPage({
             </SectionCard>
           )}
 
-          <SectionCard eyebrow="PUR-06" title="Raise a return or expiry claim" titleLevel={2}>
-            {lots.length === 0 ? (
-              <EmptyState
-                title="No available stock to return"
-                detail="A return is raised against a lot that is on hand and available at this branch. Nothing here qualifies — quarantined and already-claimed quantities are deliberately not offered."
-                steps={[
-                  { label: 'Open the goods-in bench', href: `${PURCHASING_ROUTE}/receiving` },
-                ]}
-              />
-            ) : (
-              <PurchasingActionForm
-                operation={{ resource: `return:new:${branchId}`, action: 'create' }}
-                action={createReturn}
-                className="space-y-4"
-              >
-                <input name="branchId" type="hidden" value={branchId} />
-                <div className="grid gap-4 sm:grid-cols-3">
-                  <TextField label="Reference" name="reference" notice={notice} required />
-                  <SelectField
-                    emptyHint="No suppliers yet — add one on the supplier page."
-                    label="Supplier"
-                    name="supplierId"
-                    notice={notice}
-                    options={workspace.suppliers.map((supplier) => ({
-                      value: supplier.id,
-                      label: supplier.name,
-                    }))}
-                    required
-                  />
-                  <SelectField
-                    defaultValue="PURCHASE_RETURN"
-                    emptyHint="—"
-                    label="Kind"
-                    name="kind"
-                    notice={notice}
-                    options={[
-                      { value: 'PURCHASE_RETURN', label: 'Purchase return' },
-                      { value: 'EXPIRY_CLAIM', label: 'Expiry claim' },
-                    ]}
-                  />
-                </div>
-                <fieldset className="space-y-3">
-                  <legend className="text-sm font-medium text-text-body">
-                    Lots — leave a slot empty to skip it
-                  </legend>
-                  {RETURN_SLOTS.map((slot) => (
-                    <div
-                      className="grid gap-3 rounded-[var(--radius-sm)] border border-border-subtle p-3 sm:grid-cols-2 lg:grid-cols-5"
-                      key={slot}
-                    >
-                      <SelectField
-                        className="lg:col-span-2"
-                        emptyHint="No available lot at this branch."
-                        label={`Line ${slot + 1} — lot`}
-                        name={`lot-${slot}`}
-                        notice={notice}
-                        options={lots.map((balance) => ({
-                          value: `${balance.lot.id}|${balance.location.id}`,
-                          label: `${balance.lot.batch.medicine.productName} · batch ${balance.lot.batch.batchNumber} · expires ${dateOnly(balance.lot.batch.expiresAt)} · ${balance.onHandUnits} available in ${balance.location.name}`,
-                        }))}
-                        placeholder="Skip this line"
-                      />
-                      <TextField
-                        inputMode="numeric"
-                        label="Units"
-                        min={1}
-                        name={`quantityUnits-${slot}`}
-                        notice={notice}
-                        type="number"
-                      />
-                      <TextField
-                        label="Return window ends"
-                        name={`returnWindowEndsAt-${slot}`}
-                        notice={notice}
-                        type="date"
-                        hint="The supplier's deadline."
-                      />
-                      <TextField
-                        inputMode="decimal"
-                        label="Expected credit (PKR)"
-                        name={`expectedCredit-${slot}`}
-                        notice={notice}
-                      />
-                      <TextField
-                        className="lg:col-span-5"
-                        label="Reason"
-                        name={`reason-${slot}`}
-                        notice={notice}
-                      />
-                    </div>
-                  ))}
-                </fieldset>
-                <TextAreaField label="Note" name="note" notice={notice} />
-                <SubmitButton>Draft return</SubmitButton>
-                <Derived
-                  label="Hold"
-                  value="A draft reserves nothing. The stock stays saleable until the return is submitted."
+          {canManage ? (
+            <SectionCard eyebrow="PUR-06" title="Raise a return or expiry claim" titleLevel={2}>
+              {lots.length === 0 ? (
+                <EmptyState
+                  title="No available stock to return"
+                  detail="A return is raised against a lot that is on hand and available at this branch. Nothing here qualifies — quarantined and already-claimed quantities are deliberately not offered."
+                  steps={[
+                    { label: 'Open the goods-in bench', href: `${PURCHASING_ROUTE}/receiving` },
+                  ]}
                 />
-              </PurchasingActionForm>
-            )}
-          </SectionCard>
+              ) : (
+                <PurchasingActionForm
+                  operation={{ resource: `return:new:${branchId}`, action: 'create' }}
+                  action={createReturn}
+                  className="space-y-4"
+                >
+                  <input name="branchId" type="hidden" value={branchId} />
+                  <div className="grid gap-4 sm:grid-cols-3">
+                    <TextField label="Reference" name="reference" notice={notice} required />
+                    <SelectField
+                      emptyHint="No suppliers yet — add one on the supplier page."
+                      label="Supplier"
+                      name="supplierId"
+                      notice={notice}
+                      options={workspace.suppliers.map((supplier) => ({
+                        value: supplier.id,
+                        label: supplier.name,
+                      }))}
+                      required
+                    />
+                    <SelectField
+                      defaultValue="PURCHASE_RETURN"
+                      emptyHint="—"
+                      label="Kind"
+                      name="kind"
+                      notice={notice}
+                      options={[
+                        { value: 'PURCHASE_RETURN', label: 'Purchase return' },
+                        { value: 'EXPIRY_CLAIM', label: 'Expiry claim' },
+                      ]}
+                    />
+                  </div>
+                  <fieldset className="space-y-3">
+                    <legend className="text-sm font-medium text-text-body">
+                      Lots — leave a slot empty to skip it
+                    </legend>
+                    {RETURN_SLOTS.map((slot) => (
+                      <div
+                        className="grid gap-3 rounded-[var(--radius-sm)] border border-border-subtle p-3 sm:grid-cols-2 lg:grid-cols-5"
+                        key={slot}
+                      >
+                        <SelectField
+                          className="lg:col-span-2"
+                          emptyHint="No available lot at this branch."
+                          label={`Line ${slot + 1} — lot`}
+                          name={`lot-${slot}`}
+                          notice={notice}
+                          options={lots.map((balance) => ({
+                            value: `${balance.lot.id}|${balance.location.id}`,
+                            label: `${balance.lot.batch.medicine.productName} · batch ${balance.lot.batch.batchNumber} · expires ${dateOnly(balance.lot.batch.expiresAt)} · ${balance.onHandUnits} available in ${balance.location.name}`,
+                          }))}
+                          placeholder="Skip this line"
+                        />
+                        <TextField
+                          inputMode="numeric"
+                          label="Units"
+                          min={1}
+                          name={`quantityUnits-${slot}`}
+                          notice={notice}
+                          type="number"
+                        />
+                        <TextField
+                          label="Return window ends"
+                          name={`returnWindowEndsAt-${slot}`}
+                          notice={notice}
+                          type="date"
+                          hint="The supplier's deadline."
+                        />
+                        <TextField
+                          inputMode="decimal"
+                          label="Expected credit (PKR)"
+                          name={`expectedCredit-${slot}`}
+                          notice={notice}
+                        />
+                        <TextField
+                          className="lg:col-span-5"
+                          label="Reason"
+                          name={`reason-${slot}`}
+                          notice={notice}
+                        />
+                      </div>
+                    ))}
+                  </fieldset>
+                  <TextAreaField label="Note" name="note" notice={notice} />
+                  <SubmitButton>Draft return</SubmitButton>
+                  <Derived
+                    label="Hold"
+                    value="A draft reserves nothing. The stock stays saleable until the return is submitted."
+                  />
+                </PurchasingActionForm>
+              )}
+            </SectionCard>
+          ) : null}
 
           <SectionCard eyebrow="PUR-06" title="Supplier credit" titleLevel={2}>
-            <PurchasingActionForm
-              operation={{ resource: `credit:new:${branchId}`, action: 'record' }}
-              action={recordCredit}
-              className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4"
-            >
-              <input name="branchId" type="hidden" value={branchId} />
-              <SelectField
-                emptyHint="No suppliers yet."
-                label="Supplier"
-                name="supplierId"
-                notice={notice}
-                options={workspace.suppliers.map((supplier) => ({
-                  value: supplier.id,
-                  label: supplier.name,
-                }))}
-                required
-              />
-              <TextField
-                label="Credit note reference"
-                name="creditReference"
-                notice={notice}
-                required
-              />
-              <TextField
-                inputMode="decimal"
-                label="Amount (PKR)"
-                name="amount"
-                notice={notice}
-                required
-              />
-              <TextField
-                defaultValue={today()}
-                label="Received on"
-                name="receivedAt"
-                notice={notice}
-                required
-                type="date"
-              />
-              <div className="sm:col-span-2 lg:col-span-4">
-                <SubmitButton>Record credit</SubmitButton>
-              </div>
-            </PurchasingActionForm>
+            {canManage ? (
+              <PurchasingActionForm
+                operation={{ resource: `credit:new:${branchId}`, action: 'record' }}
+                action={recordCredit}
+                className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4"
+              >
+                <input name="branchId" type="hidden" value={branchId} />
+                <SelectField
+                  emptyHint="No suppliers yet."
+                  label="Supplier"
+                  name="supplierId"
+                  notice={notice}
+                  options={workspace.suppliers.map((supplier) => ({
+                    value: supplier.id,
+                    label: supplier.name,
+                  }))}
+                  required
+                />
+                <TextField
+                  label="Credit note reference"
+                  name="creditReference"
+                  notice={notice}
+                  required
+                />
+                <TextField
+                  inputMode="decimal"
+                  label="Amount (PKR)"
+                  name="amount"
+                  notice={notice}
+                  required
+                />
+                <TextField
+                  defaultValue={today()}
+                  label="Received on"
+                  name="receivedAt"
+                  notice={notice}
+                  required
+                  type="date"
+                />
+                <div className="sm:col-span-2 lg:col-span-4">
+                  <SubmitButton>Record credit</SubmitButton>
+                </div>
+              </PurchasingActionForm>
+            ) : null}
 
             {credits.length > 0 ? (
               <ul className="mt-5 space-y-2">
@@ -642,13 +657,14 @@ export default async function PharmacyReturnsPage({
                         Received {dateOnly(credit.receivedAt)} · {money(allocated)} allocated ·{' '}
                         {money(unallocated)} unallocated
                       </p>
-                      {unallocated > 0 && openDebitNotes.length > 0 ? (
+                      {canManage && unallocated > 0 && openDebitNotes.length > 0 ? (
                         <PurchasingActionForm
                           operation={{ resource: `credit:${credit.id}`, action: 'allocate' }}
                           financialOperation="supplier-credit-allocation"
                           action={allocateCredit}
                           className="mt-3 flex flex-wrap items-end gap-3"
                         >
+                          <SoloApprovalPin />
                           <input name="branchId" type="hidden" value={branchId} />
                           <input name="supplierCreditId" type="hidden" value={credit.id} />
                           <SelectField
@@ -725,6 +741,7 @@ function Frame({
 }
 
 function ReturnDetail({
+  canManage,
   purchaseReturn,
   credits,
   branchId,
@@ -732,6 +749,7 @@ function ReturnDetail({
   onAdvance,
   onAllocate,
 }: {
+  canManage: boolean;
   purchaseReturn: PurchaseReturnDetail;
   credits: {
     id: string;
@@ -827,13 +845,14 @@ function ReturnDetail({
                     ? ` · over-credited by ${money(Math.abs(note.position.varianceMinor))}`
                     : ''}
                 </p>
-                {note.position.outstandingMinor > 0 && spendable.length > 0 ? (
+                {canManage && note.position.outstandingMinor > 0 && spendable.length > 0 ? (
                   <PurchasingActionForm
                     operation={{ resource: `debit-note:${note.id}`, action: 'allocate' }}
                     financialOperation="supplier-credit-allocation"
                     action={onAllocate}
                     className="mt-3 flex flex-wrap items-end gap-3"
                   >
+                    <SoloApprovalPin />
                     <input name="branchId" type="hidden" value={branchId} />
                     <input name="debitNoteId" type="hidden" value={note.id} />
                     <input name="purchaseReturnId" type="hidden" value={purchaseReturn.id} />
@@ -865,59 +884,61 @@ function ReturnDetail({
         </div>
       ) : null}
 
-      <div className="mt-5 flex flex-wrap items-end gap-3 border-t border-border-subtle pt-5">
-        {purchaseReturn.status === 'DRAFT' ? (
-          <PurchasingActionForm
-            operation={{ resource: `return:${purchaseReturn.id}`, action: 'submit' }}
-            action={onAdvance}
-          >
-            <input name="branchId" type="hidden" value={branchId} />
-            <input name="purchaseReturnId" type="hidden" value={purchaseReturn.id} />
-            <input name="action" type="hidden" value="submit" />
-            <SubmitButton>Submit and reserve the stock</SubmitButton>
-          </PurchasingActionForm>
-        ) : null}
-
-        {purchaseReturn.status === 'SUBMITTED' ? (
-          blockedByWindow ? (
-            <p className="text-sm text-destructive" role="alert">
-              At least one line&rsquo;s return window has closed, so this return can no longer be
-              dispatched for credit. Cancel it and settle with the supplier directly, or raise a new
-              return for the lines whose windows are still open.
-            </p>
-          ) : (
+      {canManage ? (
+        <div className="mt-5 flex flex-wrap items-end gap-3 border-t border-border-subtle pt-5">
+          {purchaseReturn.status === 'DRAFT' ? (
             <PurchasingActionForm
-              operation={{ resource: `return:${purchaseReturn.id}`, action: 'dispatch' }}
+              operation={{ resource: `return:${purchaseReturn.id}`, action: 'submit' }}
               action={onAdvance}
             >
               <input name="branchId" type="hidden" value={branchId} />
               <input name="purchaseReturnId" type="hidden" value={purchaseReturn.id} />
-              <input name="action" type="hidden" value="dispatch" />
-              <SubmitButton>Dispatch to supplier</SubmitButton>
+              <input name="action" type="hidden" value="submit" />
+              <SubmitButton>Submit and reserve the stock</SubmitButton>
             </PurchasingActionForm>
-          )
-        ) : null}
+          ) : null}
 
-        {purchaseReturn.status === 'DISPATCHED' && purchaseReturn.debitNotes.length === 0 ? (
-          <PurchasingActionForm
-            operation={{ resource: `return:${purchaseReturn.id}`, action: 'debit' }}
-            action={onAdvance}
-            className="flex flex-wrap items-end gap-3"
-          >
-            <input name="branchId" type="hidden" value={branchId} />
-            <input name="purchaseReturnId" type="hidden" value={purchaseReturn.id} />
-            <input name="action" type="hidden" value="debit" />
-            <TextField
-              className="min-w-56"
-              label="Debit note reference"
-              name="debitReference"
-              notice={notice}
-              required
-            />
-            <SubmitButton>Issue debit note</SubmitButton>
-          </PurchasingActionForm>
-        ) : null}
-      </div>
+          {purchaseReturn.status === 'SUBMITTED' ? (
+            blockedByWindow ? (
+              <p className="text-sm text-destructive" role="alert">
+                At least one line&rsquo;s return window has closed, so this return can no longer be
+                dispatched for credit. Cancel it and settle with the supplier directly, or raise a
+                new return for the lines whose windows are still open.
+              </p>
+            ) : (
+              <PurchasingActionForm
+                operation={{ resource: `return:${purchaseReturn.id}`, action: 'dispatch' }}
+                action={onAdvance}
+              >
+                <input name="branchId" type="hidden" value={branchId} />
+                <input name="purchaseReturnId" type="hidden" value={purchaseReturn.id} />
+                <input name="action" type="hidden" value="dispatch" />
+                <SubmitButton>Dispatch to supplier</SubmitButton>
+              </PurchasingActionForm>
+            )
+          ) : null}
+
+          {purchaseReturn.status === 'DISPATCHED' && purchaseReturn.debitNotes.length === 0 ? (
+            <PurchasingActionForm
+              operation={{ resource: `return:${purchaseReturn.id}`, action: 'debit' }}
+              action={onAdvance}
+              className="flex flex-wrap items-end gap-3"
+            >
+              <input name="branchId" type="hidden" value={branchId} />
+              <input name="purchaseReturnId" type="hidden" value={purchaseReturn.id} />
+              <input name="action" type="hidden" value="debit" />
+              <TextField
+                className="min-w-56"
+                label="Debit note reference"
+                name="debitReference"
+                notice={notice}
+                required
+              />
+              <SubmitButton>Issue debit note</SubmitButton>
+            </PurchasingActionForm>
+          ) : null}
+        </div>
+      ) : null}
     </SectionCard>
   );
 }

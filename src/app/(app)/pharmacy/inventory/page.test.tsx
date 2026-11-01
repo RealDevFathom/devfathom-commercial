@@ -72,6 +72,7 @@ function makeContext() {
     organization: { id: 'org', isDemo: false },
     entitlements: {},
     db: {
+      $queryRaw: vi.fn().mockResolvedValue([{ allowed: false }]),
       pharmacyBranch: { findMany: vi.fn().mockResolvedValue([branch]) },
       pharmacyStockLocation: { findMany: vi.fn().mockResolvedValue([location]) },
       pharmacyInventoryLot: { findMany: lots },
@@ -79,7 +80,12 @@ function makeContext() {
       pharmacyInterbranchTransfer: { findMany: vi.fn().mockResolvedValue([]) },
       pharmacyRecallNotice: { findMany: vi.fn().mockResolvedValue([]) },
       pharmacyStockSignal: { findMany: vi.fn().mockResolvedValue([]) },
-      user: { findMany: vi.fn().mockResolvedValue([]) },
+      user: {
+        findMany: vi.fn().mockResolvedValue([]),
+        findUnique: vi
+          .fn()
+          .mockResolvedValue({ status: 'ACTIVE', role: 'EMPLOYEE', organizationId: 'org' }),
+      },
       pharmacyTemperatureLog: { findMany: vi.fn().mockResolvedValue([]) },
     },
   };
@@ -213,6 +219,46 @@ describe('Quarantine resolution forms', () => {
 afterEach(cleanup);
 
 describe('Inventory pack-action integration', () => {
+  it.each([
+    ['OPEN', 'user', true, true],
+    ['AWAITING_COAUTH', 'user', true, true],
+    ['AWAITING_COAUTH', 'other', true, true],
+    ['AWAITING_COAUTH', 'user', false, false],
+  ] as const)(
+    'requires a count PIN for every SOLO approval (%s, %s, solo=%s)',
+    async (status, createdById, solo, requiresPin) => {
+      ctx.db.$queryRaw.mockResolvedValue([{ allowed: solo }]);
+      ctx.db.user.findUnique.mockResolvedValue({
+        status: 'ACTIVE',
+        role: solo ? 'ADMIN' : 'EMPLOYEE',
+        organizationId: 'org',
+      });
+      ctx.db.pharmacyInventoryCount.findMany.mockResolvedValue([
+        {
+          id: 'count',
+          status,
+          createdById,
+          createdAt: new Date(),
+          lines: [{ varianceUnits: 0 }],
+        },
+      ] as never);
+      await show();
+      const button = screen.getByRole('button', {
+        name: status === 'AWAITING_COAUTH' ? 'Co-authorize variance' : 'Approve count',
+      });
+      const form = button.closest('form')!;
+      const pin = within(form).queryByLabelText('Owner PIN');
+      if (requiresPin) {
+        expect(pin).toBeRequired();
+        expect(pin).toHaveAttribute('type', 'password');
+        expect(form.checkValidity()).toBe(false);
+      } else {
+        expect(pin).not.toBeInTheDocument();
+        expect(form.checkValidity()).toBe(true);
+      }
+    }
+  );
+
   it('passes exact lot/location balances and preserves FEFO query and available totals', async () => {
     await show();
     expect(mocks.form.mock.calls[0][0]).toEqual({

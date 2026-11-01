@@ -284,14 +284,12 @@ describeIfDatabase('restaurant service-charge v1 database contract', () => {
         [ids.policyA]
       )
     );
-    // The table is FORCE ROW LEVEL SECURITY with SELECT/INSERT/UPDATE policies
-    // and deliberately NO delete policy, so for the unprivileged roles this
-    // suite runs as (docs/LOCAL_SETUP.md: neither SUPERUSER nor BYPASSRLS) a
-    // DELETE matches zero rows. The immutability trigger is BEFORE ... FOR EACH
-    // ROW, so it never fires and P0001 is unreachable here: RLS refuses the row
-    // first. Asserting the row count is what proves the deletion was refused;
-    // expecting the trigger's error would only pass on an RLS-bypassing role,
-    // which would no longer be testing the deployed configuration.
+    // Check the deployed DELETE policy as the restricted runtime role, even
+    // when the fixture connection is a local superuser used for migration QA.
+    const { role } = (
+      await runtime!.query<{ role: string }>('SELECT quote_ident(current_user) AS role')
+    ).rows[0]!;
+    await owner!.query(`SET LOCAL ROLE ${role}`);
     expect(
       (
         await owner!.query(

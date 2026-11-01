@@ -26,6 +26,12 @@ const managerProcurementMigration = readFileSync(
   'prisma/migrations/20261022100000_pharmacy_manager_procurement/migration.sql',
   'utf8'
 );
+const managerApprovalMigration = readFileSync(
+  'prisma/migrations/20261101180300_pharmacy_manager_approvals/migration.sql',
+  'utf8'
+)
+  .replace(/^BEGIN;$/m, '')
+  .replace(/^COMMIT;$/m, '');
 const administratorReportsMigration = readFileSync(
   'prisma/migrations/20261029000258_pharmacy_administrator_reports/migration.sql',
   'utf8'
@@ -158,6 +164,12 @@ const legacy: Record<string, string[]> = {
     );
     await client.query(migration);
     await client.query(managerProcurementMigration);
+    await client.query(managerApprovalMigration);
+    await client.query(
+      readFileSync('prisma/migrations/20261029100000_pharmacy_owner_identity/migration.sql', 'utf8')
+        .split('-- A solo exception')[0]
+        .replace(/^BEGIN;$/m, '')
+    );
     await client.query(administratorReportsMigration);
   }, 60_000);
   afterAll(async () => {
@@ -173,7 +185,18 @@ const legacy: Record<string, string[]> = {
       );
       // Owner's redundant explicit order grant remains harmless and is not removed.
       const expected = [
-        ...template.capabilities,
+        // This test executes the historical canonicalization migration. Owner
+        // elevation is separately covered by pharmacy-owner-authorization.db.test.ts.
+        ...(template.key === 'owner'
+          ? [
+              'pharmacy:*',
+              'reports:operational',
+              'reports:financial',
+              'pharmacy:dispense',
+              'pharmacy:safety',
+              'pharmacy:catalogue-review',
+            ]
+          : template.capabilities),
         ...(template.key === 'owner' ? ['pharmacy:orders'] : []),
       ].sort();
       expect(rows.rows.map((r) => r.capability)).toEqual(expected);
@@ -213,6 +236,9 @@ const legacy: Record<string, string[]> = {
     );
     expect(ownerOther.rows).toEqual([
       { capability: 'pharmacy:*', effect: 'ALLOW' },
+      { capability: 'pharmacy:catalogue-review', effect: 'ALLOW' },
+      { capability: 'pharmacy:dispense', effect: 'ALLOW' },
+      { capability: 'pharmacy:safety', effect: 'ALLOW' },
       { capability: 'reports:financial', effect: 'DENY' },
       { capability: 'reports:operational', effect: 'ALLOW' },
     ]);
@@ -266,6 +292,7 @@ const legacy: Record<string, string[]> = {
     await client.query('DROP TABLE pharmacy_capability_aliases');
     await client.query(migration);
     await client.query(managerProcurementMigration);
+    await client.query(managerApprovalMigration);
     await client.query(administratorReportsMigration);
     expect(
       (
@@ -283,6 +310,57 @@ const legacy: Record<string, string[]> = {
         )
       ).rows
     ).toEqual(rolesBefore.rows);
+  });
+
+  it('adds manager approvals only to pharmacy system roles and preserves DENYs', async () => {
+    await client.query('SAVEPOINT manager_approvals');
+    try {
+      const agency = id('agency');
+      await client.query(
+        `INSERT INTO organizations (id,slug,"legalName","displayName",vertical,"updatedAt")
+        VALUES ($1,$1,$1,$1,'AGENCY',now())`,
+        [agency]
+      );
+      for (const [organizationId, isSystem, key] of [
+        [other, true, 'existing_manager'],
+        [third, false, 'custom_manager'],
+        [agency, true, 'agency_manager'],
+      ] as const) {
+        await client.query(
+          `INSERT INTO organization_roles (id,"organizationId",key,name,"isSystem","updatedAt")
+          VALUES ($1,$2,'manager','Manager',$3,now())`,
+          [id(key), organizationId, isSystem]
+        );
+      }
+      await client.query(
+        `INSERT INTO organization_role_permissions (id,"organizationId","organizationRoleId",capability,effect)
+        VALUES ($1,$2,$3,'pharmacy:counter','DENY')`,
+        [id('manager_deny'), other, id('existing_manager')]
+      );
+      await client.query(managerApprovalMigration);
+      await client.query(managerApprovalMigration);
+      const result = await client.query(
+        `SELECT capability,effect FROM organization_role_permissions
+        WHERE "organizationRoleId"=$1 ORDER BY capability`,
+        [id('existing_manager')]
+      );
+      expect(result.rows).toEqual([
+        { capability: 'pharmacy:counter', effect: 'DENY' },
+        { capability: 'pharmacy:inventory', effect: 'ALLOW' },
+      ]);
+      for (const key of ['custom_manager', 'agency_manager']) {
+        expect(
+          (
+            await client.query(
+              `SELECT id FROM organization_role_permissions WHERE "organizationRoleId"=$1`,
+              [id(key)]
+            )
+          ).rows
+        ).toEqual([]);
+      }
+    } finally {
+      await client.query('ROLLBACK TO SAVEPOINT manager_approvals');
+    }
   });
 
   it('enforces tenant RLS and authorizes migrated grants without coarse ADMIN authority', async () => {
@@ -307,7 +385,10 @@ const legacy: Record<string, string[]> = {
             [where.id]
           );
           return {
-            organizationRole: { permissions: permissions.rows },
+            status: 'ACTIVE',
+            role: 'EMPLOYEE',
+            organizationId: org,
+            organizationRole: { organizationId: org, permissions: permissions.rows },
             permissionOverrides: overrides.rows,
           };
         },

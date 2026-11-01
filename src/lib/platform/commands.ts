@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { ensurePharmacyStaffProfile } from '@/lib/pharmacy/pin-enrollment';
+
 import { hash } from 'bcryptjs';
 import { createHash, randomBytes } from 'node:crypto';
 import { z } from 'zod';
@@ -983,6 +985,9 @@ async function bootstrapOrganization(
     legalName: input.legalName,
     displayName: input.displayName,
     vertical: input.vertical,
+    // A new pharmacy starts with its bootstrap owner as the only member, so it is
+    // provisioned SOLO; the owner switches to STAFFED (PIN-protected) when hiring.
+    ...(input.vertical === 'PHARMACY' ? { pharmacyOperatingMode: 'SOLO' as const } : {}),
     status: 'ONBOARDING',
     deploymentMode: input.deploymentMode,
     packageId: input.packageId,
@@ -1125,6 +1130,9 @@ async function bootstrapOrganization(
   // gate working, and pre-seeding a profile here would be exactly the "seed data
   // fakes readiness" move PLAT-03 exists to refuse.
   if (input.vertical === 'PHARMACY') {
+    // Provision the identity link now; the owner chooses their own PIN through
+    // /pharmacy/settings/pin after signing in, without Restaurant Core.
+    await ensurePharmacyStaffProfile(db, organization.id, admin.id);
     await db.pharmacyBranch.create({
       data: {
         organizationId: organization.id,
@@ -1171,6 +1179,14 @@ async function bootstrapOrganization(
         },
       });
       if (input.vertical === 'HOSPITALITY') hospitalityRoleIds.set(template.key, role.id);
+      // Pharmacy branch authority and clinical grants require the persisted
+      // system owner identity, including for the named bootstrap administrator.
+      if (input.vertical === 'PHARMACY' && template.key === 'owner') {
+        await db.user.update({
+          where: { id: admin.id },
+          data: { organizationRoleId: role.id },
+        });
+      }
     }
   }
   // The named administrator gets one explicit assignment to this new property.
@@ -4097,6 +4113,10 @@ async function runCommand(
         await db.platformSession.updateMany({
           where: { platformUserId: saved.id, revokedAt: null },
           data: { revokedAt: new Date() },
+        });
+        await db.platformSupportSession.updateMany({
+          where: { platformUserId: saved.id, status: 'ACTIVE' },
+          data: { status: 'REVOKED', endedAt: new Date() },
         });
       }
       const safe = omit(saved, 'passwordHash', 'encryptedTotpSecret');

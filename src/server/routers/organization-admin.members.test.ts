@@ -68,14 +68,19 @@ const db: MemberDb = {
   $transaction: (fn) => fn(db),
 };
 
-function caller(organizationId = 'org_a', entitlements = { activeSeats: 1, seatLimit: 10 }) {
+function caller(
+  organizationId = 'org_a',
+  entitlements = { activeSeats: 1, seatLimit: 10 },
+  support = false
+) {
   return organizationAdminRouter.createCaller({
     db,
     entitlements: { enabledModules: [], ...entitlements },
     session: {
-      expires: 'later',
+      expires: new Date(Date.now() + 60_000).toISOString(),
       user: {
         id: 'admin_a',
+        isSupportSession: support,
         organizationId,
         role: 'ADMIN',
         department: 'COUNTER',
@@ -83,7 +88,9 @@ function caller(organizationId = 'org_a', entitlements = { activeSeats: 1, seatL
       },
     },
     organization: null,
-    support: null,
+    support: support
+      ? { organizationId, tenantUserId: 'admin_a', expiresAt: new Date(Date.now() + 60_000) }
+      : null,
     requestMeta: { ip: null, userAgent: null },
     audit: { detail: {} },
   } as unknown as TRPCContext);
@@ -236,6 +243,7 @@ describe('organization member creation', () => {
       select: { id: true },
     });
     expect(mocks.assignmentCreateMany).toHaveBeenCalledWith({
+      skipDuplicates: true,
       data: [
         { organizationId: 'org_a', branchId: 'branch_clifton', userId: 'user_new', active: true },
         { organizationId: 'org_a', branchId: 'branch_dha', userId: 'user_new', active: true },
@@ -355,7 +363,7 @@ describe('organization member last-admin guard', () => {
           db: concurrentDb,
           entitlements: { enabledModules: [], activeSeats: 2, seatLimit: 10 },
           session: {
-            expires: 'later',
+            expires: new Date(Date.now() + 60_000).toISOString(),
             user: {
               id: 'admin_a',
               organizationId: 'org_a',
@@ -378,5 +386,53 @@ describe('organization member last-admin guard', () => {
 
     expect(results.map((result) => result.status).sort()).toEqual(['fulfilled', 'rejected']);
     expect(activeAdmins).toBe(1);
+  });
+});
+
+describe('support cannot establish durable administrator access', () => {
+  beforeEach(() => vi.clearAllMocks());
+  it('blocks creating an administrator with a known password', async () => {
+    await expect(
+      caller('org_a', undefined, true).createMember({ ...input, role: 'ADMIN' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.userCreate).not.toHaveBeenCalled();
+    expect(mocks.queryRaw).not.toHaveBeenCalled();
+  });
+  it('blocks elevating another member', async () => {
+    await expect(
+      caller('org_a', undefined, true).updateMember({ ...updateInput, role: 'ADMIN' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.userUpdate).not.toHaveBeenCalled();
+  });
+  it('blocks resetting an administrator password', async () => {
+    await expect(
+      caller('org_a', undefined, true).resetMemberPassword({
+        id: 'admin_b',
+        password: input.password,
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.userUpdate).not.toHaveBeenCalled();
+  });
+});
+
+describe('support impersonation member boundary', () => {
+  it('cannot create members or elevate existing members through a direct server caller', async () => {
+    const support = caller('org_a', { activeSeats: 1, seatLimit: 10 }, true);
+    await expect(support.createMember(input)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Support access is read-only.',
+    });
+    await expect(
+      support.updateMember({
+        id: 'employee',
+        role: 'ADMIN',
+        status: 'ACTIVE',
+        organizationRoleId: null,
+        title: 'Admin',
+        department: 'COUNTER',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.userCreate).not.toHaveBeenCalled();
+    expect(mocks.userUpdate).not.toHaveBeenCalled();
   });
 });

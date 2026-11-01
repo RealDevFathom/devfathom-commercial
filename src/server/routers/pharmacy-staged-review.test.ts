@@ -28,7 +28,16 @@ function makeDb() {
   };
   return {
     user: {
-      findUnique: vi.fn().mockResolvedValue({ organizationRole: null, permissionOverrides: [] }),
+      count: vi.fn().mockResolvedValue(2),
+      findUnique: vi
+        .fn()
+        .mockResolvedValue({
+          role: 'ADMIN',
+          status: 'ACTIVE',
+          organizationId: 'org_a',
+          organizationRole: null,
+          permissionOverrides: [],
+        }),
     },
     pharmacyBranch: {
       findFirst: vi.fn().mockResolvedValue({ id: 'branch_a' }),
@@ -63,6 +72,13 @@ function caller(
     revoked?: boolean;
   } = {}
 ) {
+  db.user.findUnique.mockResolvedValue({
+    role: options.role ?? 'ADMIN',
+    status: options.status ?? 'ACTIVE',
+    organizationId: 'org_a',
+    organizationRole: null,
+    permissionOverrides: [],
+  });
   return pharmacyStagedReviewRouter.createCaller({
     db,
     entitlements: {

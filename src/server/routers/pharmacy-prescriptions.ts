@@ -1,3 +1,4 @@
+import { requirePharmacyReadBranch } from '../pharmacy-branch-access';
 import { writePatientConsent } from '@/lib/pharmacy/consent-writer';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
@@ -56,26 +57,62 @@ async function requireCounterPatientAccess(
 
 // Suppress sensitive payload auditing before authentication/input validation,
 // including denied uploads. Keep the existing audited guards and ABAC engine.
-const fileProcedure = publicProcedure
+const patientReadProcedure = publicProcedure
   .use(({ ctx, next }) => {
     ctx.audit.detail.skipInput = true;
     return next();
   })
-  .concat(auditedProtectedProcedure)
-  .use(async ({ ctx, next }) => {
-    const subject = subjectFromSession(ctx.session.user);
-    const options = { db: ctx.db, source: 'TRPC' as const, ip: ctx.requestMeta.ip };
-    if (
-      !hasModule(ctx.entitlements, 'pharmacy-dispensing') ||
-      !(await can(subject, 'pharmacy:prescriptions', undefined, options))
-    ) {
-      throw new TRPCError({
-        code: 'FORBIDDEN',
-        message: 'Prescription file access is not permitted.',
-      });
-    }
-    return next();
-  });
+  .concat(auditedProtectedProcedure);
+
+// Prescription capture is narrower than dispensing: tenant administrators may
+// enter it, while an explicit dispense DENY still vetoes it via ABAC aliasing.
+const fileProcedure = patientReadProcedure.use(async ({ ctx, next }) => {
+  const subject = subjectFromSession(ctx.session.user);
+  const options = { db: ctx.db, source: 'TRPC' as const, ip: ctx.requestMeta.ip };
+  if (
+    !hasModule(ctx.entitlements, 'pharmacy-dispensing') ||
+    !(await can(subject, 'pharmacy:prescriptions', undefined, options))
+  ) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'Prescription file access is not permitted.',
+    });
+  }
+  return next();
+});
+
+// Reading or exporting a full patient file stays a clinical (dispense) action.
+const patientFileProcedure = patientReadProcedure.use(async ({ ctx, next }) => {
+  const subject = subjectFromSession(ctx.session.user);
+  const options = { db: ctx.db, source: 'TRPC' as const, ip: ctx.requestMeta.ip };
+  if (
+    !hasModule(ctx.entitlements, 'pharmacy-dispensing') ||
+    !(await can(subject, 'pharmacy:dispense', undefined, options))
+  ) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'Prescription file access is not permitted.',
+    });
+  }
+  return next();
+});
+
+// Masked counter reads use the cashier permissions, not clinical file access.
+// A counter grant or a dispense grant suffices; the procedure is licensed on
+// pharmacy-counter or pharmacy-dispensing, and each resolver also binds the branch.
+const counterPatientProcedure = patientReadProcedure.use(async ({ ctx, next }) => {
+  const subject = subjectFromSession(ctx.session.user);
+  const options = { db: ctx.db, source: 'TRPC' as const, ip: ctx.requestMeta.ip };
+  if (
+    (!hasModule(ctx.entitlements, 'pharmacy-counter') &&
+      !hasModule(ctx.entitlements, 'pharmacy-dispensing')) ||
+    (!(await can(subject, 'pharmacy:counter', undefined, options)) &&
+      !(await can(subject, 'pharmacy:dispense', undefined, options)))
+  ) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Counter patient access is not permitted.' });
+  }
+  return next();
+});
 
 /**
  * Load a stored Rx image the caller may see. Before capture only the uploader
@@ -115,16 +152,10 @@ export const pharmacyPrescriptionsRouter = router({
         .optional()
     )
     .query(async ({ ctx, input }) => {
-      const branches = await ctx.db.pharmacyBranch.findMany({
-        where: { active: true },
-        orderBy: { name: 'asc' },
-        select: { id: true, name: true },
-      });
-      const selectedBranch = input?.branchId
-        ? branches.find((branch) => branch.id === input.branchId)
-        : branches[0];
-      if (input?.branchId && !selectedBranch)
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'Pharmacy branch not found.' });
+      const { branches, branch: selectedBranch } = await requirePharmacyReadBranch(
+        ctx,
+        input?.branchId
+      );
 
       // Prescription access is narrower than dispensing (tenant admins may
       // capture without an exact dispense grant). Report whether the caller can
@@ -155,7 +186,10 @@ export const pharmacyPrescriptionsRouter = router({
                 include: {
                   medicine: true,
                   presentation: true,
-                  fills: { include: { reminderCapture: true }, orderBy: { dispensedAt: 'desc' } },
+                  fills: {
+                    include: { reminderCapture: { where: { branchId: selectedBranch.id } } },
+                    orderBy: { dispensedAt: 'desc' },
+                  },
                 },
               },
             },
@@ -390,11 +424,12 @@ export const pharmacyPrescriptionsRouter = router({
       });
     }),
 
-  readPatient: auditedProtectedProcedure
-    .input(z.object({ patientId: z.string().min(1) }).strict())
+  readPatient: patientFileProcedure
+    .input(z.object({ patientId: z.string().min(1), branchId: z.string().trim().min(1) }).strict())
     .query(async ({ ctx, input }) => {
+      await requirePharmacyReadBranch(ctx, input.branchId);
       const patient = await ctx.db.pharmacyPatient.findFirstOrThrow({
-        where: { id: input.patientId },
+        where: { id: input.patientId, organizationId: ctx.entitlements.organizationId },
       });
       auditPatientRead({
         organizationId: ctx.entitlements.organizationId,
@@ -404,11 +439,12 @@ export const pharmacyPrescriptionsRouter = router({
       return maskedPatient(patient);
     }),
 
-  exportPatient: auditedProtectedProcedure
-    .input(z.object({ patientId: z.string().min(1) }).strict())
+  exportPatient: patientFileProcedure
+    .input(z.object({ patientId: z.string().min(1), branchId: z.string().trim().min(1) }).strict())
     .query(async ({ ctx, input }) => {
+      await requirePharmacyReadBranch(ctx, input.branchId);
       const patient = await ctx.db.pharmacyPatient.findFirstOrThrow({
-        where: { id: input.patientId },
+        where: { id: input.patientId, organizationId: ctx.entitlements.organizationId },
         include: {
           consents: true,
           prescriptions: { include: { lines: { include: { fills: true } } } },
@@ -504,10 +540,15 @@ export const pharmacyPrescriptionsRouter = router({
   // ── POS-09: the prescription panel beside the cart ────────────────────────
 
   /** Patients a counter can attach without navigating away from the bill. */
-  counterPatients: protectedProcedure
-    .input(z.object({ query: z.string().trim().min(2).max(120) }).strict())
+  counterPatients: counterPatientProcedure
+    .input(
+      z
+        .object({ query: z.string().trim().min(2).max(120), branchId: z.string().trim().min(1) })
+        .strict()
+    )
     .query(async ({ ctx, input }) => {
       await requireCounterPatientAccess(ctx);
+      await requirePharmacyReadBranch(ctx, input.branchId);
       try {
         return {
           patients: await searchCounterPatients(
@@ -531,10 +572,11 @@ export const pharmacyPrescriptionsRouter = router({
    * this on the same audited path as `readPatient` — a counter-side read of a
    * patient is still a protected read (RX-01), not an exemption.
    */
-  counterPatientPanel: auditedProtectedProcedure
-    .input(z.object({ patientId: z.string().min(1) }).strict())
+  counterPatientPanel: counterPatientProcedure
+    .input(z.object({ patientId: z.string().min(1), branchId: z.string().trim().min(1) }).strict())
     .query(async ({ ctx, input }) => {
       await requireCounterPatientAccess(ctx);
+      await requirePharmacyReadBranch(ctx, input.branchId);
       try {
         const panel = await readCounterPatientPanel(
           ctx.db,

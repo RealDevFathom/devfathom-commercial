@@ -47,6 +47,8 @@ function fixture(
   overrides: Permission[] = []
 ) {
   const member = {
+    // ABAC reads the stored role; only admin:access and procurement have role policies.
+    role: 'ADMIN',
     status: 'ACTIVE',
     organizationId: 'org-a',
     organizationRole: {
@@ -55,9 +57,14 @@ function fixture(
     permissionOverrides: [...overrides] as { capability: string; effect: string }[],
   };
   const db = {
+    organization: { findFirstOrThrow: vi.fn(async () => ({ pharmacyOperatingMode: 'STAFFED' })) },
+    auditLog: { create: vi.fn(async () => ({ id: 'approval-audit' })) },
     $queryRaw: vi.fn().mockResolvedValue([]),
     $transaction: vi.fn(),
-    user: { findUnique: vi.fn(async () => member) },
+    user: {
+      findUnique: vi.fn(async () => member),
+      findFirst: vi.fn(async () => ({ organizationRole: { key: 'manager', isSystem: true } })),
+    },
     pharmacyBranchAssignment: {
       findMany: vi.fn(async () => [{ branchId: 'branch-a' }]),
     },
@@ -67,7 +74,11 @@ function fixture(
         where.id.in.map((id) => ({ id }))
       ),
     },
-    pharmacyTender: { findFirst: vi.fn().mockResolvedValue({ type: 'CREDIT' }) },
+    pharmacyTender: {
+      findFirst: vi
+        .fn()
+        .mockResolvedValue({ type: 'CREDIT', sale: { createdByUserId: 'cashier-maker' } }),
+    },
     pharmacySale: { findFirst: vi.fn().mockResolvedValue({ customerId: 'customer-a' }) },
     pharmacyFamilyAccount: {
       findMany: vi.fn().mockResolvedValue([
@@ -408,9 +419,16 @@ describe.each(khataPaths)('Khata $name authorization', ({ run }) => {
   });
 
   it.each([{ assignments: [] }, { assignments: [{ branchId: 'branch-b' }] }])(
-    'preserves and audits tenant-admin access with assignments $assignments',
+    'preserves and audits system-owner access with assignments $assignments',
     async ({ assignments }) => {
       const f = fixture();
+      // Only a live system owner of this pharmacy reaches unassigned branches.
+      Object.assign(f.member, { organization: { vertical: 'PHARMACY' } });
+      Object.assign(f.member.organizationRole, {
+        organizationId: 'org-a',
+        key: 'owner',
+        isSystem: true,
+      });
       f.db.pharmacyBranchAssignment.findMany.mockResolvedValue(assignments);
       await expect(run(f.caller(), 'branch-a')).resolves.toBeDefined();
       expect(f.context.audit.detail).toMatchObject({
@@ -781,4 +799,32 @@ describe('Khata router trust and recovery boundary', () => {
       }),
     });
   });
+});
+
+it.each(['CASH', 'CARD', 'KHATA'] as const)(
+  'denies %s outcome reads for an unassigned nonowner before tender evidence is read',
+  async (type) => {
+    const f = fixture();
+    f.db.pharmacyBranchAssignment.findMany.mockResolvedValue([]);
+    await expect(
+      f.caller().tenderOutcome({
+        ...input,
+        type,
+        ...(type === 'KHATA' ? {} : { familyAccountId: undefined }),
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(readPharmacyTenderOutcome).not.toHaveBeenCalled();
+  }
+);
+
+it('denies Khata account reads and payments for a nonowner assigned only to another branch', async () => {
+  const f = fixture();
+  f.db.pharmacyBranchAssignment.findMany.mockResolvedValue([{ branchId: 'sibling-branch' }]);
+  await expect(
+    f.caller().khataAccounts({ branchId: 'branch-a', saleId: 'sale-a' })
+  ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  await expect(f.caller().tender(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  expect(applyPharmacyTender).not.toHaveBeenCalled();
+  expect(f.db.pharmacyFamilyAccount.findMany).not.toHaveBeenCalled();
+  expect(f.db.$transaction).not.toHaveBeenCalled();
 });

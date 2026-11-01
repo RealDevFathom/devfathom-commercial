@@ -8,19 +8,22 @@ export type ReviewKind = 'VERIFY' | 'CLARIFY' | 'REFUSE' | 'OVERRIDE' | 'COUNSEL
 
 export function QueueActions({
   canApprove,
+  requirePin = false,
   pending = false,
   disabled = false,
   onDirtyChange,
   onAction,
 }: {
   canApprove: boolean;
+  requirePin?: boolean;
   pending?: boolean;
   disabled?: boolean;
   onDirtyChange?: (dirty: boolean) => void;
-  onAction: (kind: ReviewKind, reason?: string) => void | Promise<void>;
+  onAction: (kind: ReviewKind, reason?: string, pin?: string) => void | Promise<void>;
 }) {
   const [mode, setMode] = useState<ReviewKind | null>(null);
   const [reason, setReason] = useState('');
+  const [pin, setPin] = useState('');
   const [checks, setChecks] = useState([false, false, false]);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -36,17 +39,19 @@ export function QueueActions({
       submittingRef.current ||
       !mode ||
       (reasonRequired && !reason.trim()) ||
-      !counselReady
+      !counselReady ||
+      (requirePin && !/^\d{4,8}$/.test(pin))
     )
       return;
     submittingRef.current = true;
     setSubmitting(true);
     setError(null);
     try {
-      await onAction(
-        mode,
-        reason.trim() || (mode === 'COUNSEL' ? 'Counselling checklist completed.' : undefined)
-      );
+      const note =
+        reason.trim() || (mode === 'COUNSEL' ? 'Counselling checklist completed.' : undefined);
+      if (requirePin) await onAction(mode, note, pin);
+      else await onAction(mode, note);
+      setPin('');
       setMode(null);
       setReason('');
       setChecks([false, false, false]);
@@ -135,11 +140,36 @@ export function QueueActions({
           ))}
         </fieldset>
       ) : null}
+      {mode && requirePin ? (
+        <Field label="Owner PIN">
+          <input
+            aria-label="Owner PIN"
+            type="password"
+            inputMode="numeric"
+            autoComplete="current-password"
+            minLength={4}
+            maxLength={8}
+            pattern="[0-9]{4,8}"
+            value={pin}
+            disabled={locked}
+            onChange={(event) => setPin(event.target.value)}
+            className={fieldClass}
+          />
+          <span className="text-xs text-text-muted">
+            Reauthenticate to audit your solo-owner decision.
+          </span>
+        </Field>
+      ) : null}
       {mode ? (
         <Button
           type="button"
           size="lg"
-          disabled={locked || (reasonRequired && !reason.trim()) || !counselReady}
+          disabled={
+            locked ||
+            (reasonRequired && !reason.trim()) ||
+            !counselReady ||
+            (requirePin && !/^\d{4,8}$/.test(pin))
+          }
           onClick={() => void confirm()}
         >
           {pending || submitting ? 'Recording…' : `Confirm ${mode.toLowerCase()}`}

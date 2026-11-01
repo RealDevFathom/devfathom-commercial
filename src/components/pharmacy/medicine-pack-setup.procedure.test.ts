@@ -20,7 +20,23 @@ import { purchasingWorkspace } from '@/lib/pharmacy/purchasing-console';
 
 function caller(db: object) {
   return router({ pharmacyMedicine: pharmacyMedicineRouter }).createCaller({
-    db,
+    db: {
+      ...db,
+      user: {
+        findUnique: vi
+          .fn()
+          .mockResolvedValue({
+            id: 'admin-a',
+            organizationId: 'org-a',
+            status: 'ACTIVE',
+            role: 'ADMIN',
+            permissionOverrides: [],
+            organizationRole: {
+              permissions: [{ capability: 'pharmacy:catalogue-review', effect: 'ALLOW' }],
+            },
+          }),
+      },
+    },
     entitlements: { organizationId: 'org-a', enabledModules: ['pharmacy-core'], modules: [] },
     session: { expires: 'later', user: { id: 'admin-a', role: 'ADMIN', status: 'ACTIVE' } },
     requestMeta: { ip: null, userAgent: null },
@@ -53,7 +69,17 @@ describe('existing pack procedure to receiving options (in-memory delegates, no 
       pharmacyBranch: { findMany: vi.fn(async () => []) },
       pharmacyStockLocation: { findMany: vi.fn(async () => []) },
       pharmacySupplier: { findMany: vi.fn(async () => []) },
-      user: { findMany: vi.fn(async () => []) },
+      user: {
+        findMany: vi.fn(async () => []),
+        findUnique: vi.fn(async () => ({
+          id: 'admin-a',
+          organizationId: 'org-a',
+          role: 'ADMIN',
+          status: 'ACTIVE',
+          permissionOverrides: [],
+        })),
+      },
+      $queryRaw: vi.fn(async () => [{ allowed: true }]),
       medicine: {
         findMany: vi.fn(async () => [
           {

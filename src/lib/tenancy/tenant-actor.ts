@@ -5,6 +5,8 @@ import {
   isCanonicalDemoOrganization,
 } from '@/lib/tenancy/demo-identity';
 
+import { supportRequestAllowed } from '@/lib/tenancy/support-access';
+import { parseCookie } from '@/lib/platform/security';
 import { cache } from 'react';
 import { tenantHostUrl, normalizeHost } from '@/lib/tenancy/host-routing';
 import { headers } from 'next/headers';
@@ -133,6 +135,9 @@ async function resolveTenantActorUncached(
   // already has a tenant session, and avoids decoding a stale JWT first.
   const support = onSharedHost ? null : await getSupportSession(options.request);
   if (support) {
+    if (options.request && !supportRequestAllowed(options.request)) return null;
+    if (!Number.isFinite(support.expiresAt.getTime()) || support.expiresAt.getTime() <= Date.now())
+      return null;
     const organization = await organizationForActor(support.organizationId, options.request);
     if (!organization) return null;
     const user = await withTenantDb(organization.id, (tenantDb) =>
@@ -150,7 +155,8 @@ async function resolveTenantActorUncached(
         },
       })
     );
-    if (!user) return null;
+    if (!user || user.role !== 'ADMIN' || !['ACTIVE', 'ON_LEAVE'].includes(user.status))
+      return null;
 
     return {
       organization,
@@ -178,6 +184,14 @@ async function resolveTenantActorUncached(
     };
   }
 
+  // A rejected support cookie cannot silently regain an ambient tenant JWT's
+  // write authority after expiration, revocation, or a target demotion.
+  if (!onSharedHost) {
+    const requestHeaders = options.request?.headers ?? (await headers().catch(() => null));
+    if (parseCookie(requestHeaders?.get('cookie') ?? null, 'df_support_session') !== null)
+      return null;
+  }
+
   const session = 'session' in options ? options.session : await requestSession();
 
   if (isUsableSession(session)) {
@@ -186,7 +200,7 @@ async function resolveTenantActorUncached(
     // can forget the check, so the API is closed to a revoked token even when it
     // never loads a page. Audited support sessions keep their own validity model
     // (`getSupportSession` already enforces expiry and revocation).
-    if (!isSessionUsable(session.user)) return null;
+    if (!isSessionUsable(session.user) || session.user.isSupportSession) return null;
     if (
       session.user.mustChangePassword === true &&
       options.request &&
