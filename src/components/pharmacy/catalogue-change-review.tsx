@@ -102,7 +102,7 @@ export function CatalogueChangeReview() {
                     {change.summary}
                   </p>
                   <p className="mt-1 text-xs text-text-muted">
-                    Proposed {ownChange ? 'by you' : `by ${change.proposedBy}`} on{' '}
+                    Proposed {ownChange ? 'by you' : `by ${change.proposedByName ?? 'another user'}`} on{' '}
                     {new Date(change.proposedAt).toLocaleString()}
                   </p>
                 </div>

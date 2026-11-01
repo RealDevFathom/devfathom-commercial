@@ -64,6 +64,15 @@ const PEOPLE: Record<string, Person> = {
   },
   // A tenant administrator without an organization role (the legacy solo owner).
   admin: { id: 'admin', role: 'ADMIN', rules: null },
+  // A second legacy tenant administrator without an organization role.
+  admin2: { id: 'admin-2', role: 'ADMIN', rules: null },
+  // A legacy tenant administrator whose catalogue review was explicitly revoked.
+  deniedAdmin: {
+    id: 'denied-admin',
+    role: 'ADMIN',
+    rules: null,
+    overrides: [{ capability: 'pharmacy:catalogue-review', effect: 'DENY' }],
+  },
 };
 
 const PACK = {
@@ -476,6 +485,58 @@ describe('self-review is refused except for a solo owner', () => {
       reviewedBy: 'admin',
       reviewMode: 'SOLO_OWNER',
     });
+  });
+
+  it.each([
+    ['whose catalogue review is explicitly denied', PEOPLE.deniedAdmin],
+    ['whose assigned role is Cashier', PEOPLE.adminCashier],
+  ])('does not treat an administrator %s as a solo owner', async (_, person) => {
+    const db = makeDb([person, PEOPLE.editor]);
+    const change = await propose(db, PEOPLE.editor, 'recordPrintedMrp');
+    const api = caller(db, person).api;
+    await expect(
+      api.decideCatalogueChange({ changeId: change.id, decision: 'APPROVE' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(writes(db, 'medicinePackMrp')).toBe(0);
+    expect(db.changes[0]).toMatchObject({ status: 'PENDING' });
+  });
+
+  it('refuses an explicitly denied administrator self-approval of their own change', async () => {
+    const db = makeDb([PEOPLE.deniedAdmin]);
+    const change = await propose(db, PEOPLE.deniedAdmin, 'addBarcode');
+    await expect(
+      caller(db, PEOPLE.deniedAdmin).api.decideCatalogueChange({
+        changeId: change.id,
+        decision: 'APPROVE',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(writes(db, 'medicineBarcode')).toBe(0);
+  });
+
+  it('lets one of two legacy administrators review the other but not self-approve', async () => {
+    const db = makeDb([PEOPLE.admin, PEOPLE.admin2]);
+    const change = await propose(db, PEOPLE.admin, 'createIngredient');
+    const self = caller(db, PEOPLE.admin).api;
+    expect((await self.catalogueChanges()).viewer).toMatchObject({ soloOwner: false });
+    await expect(
+      self.decideCatalogueChange({ changeId: change.id, decision: 'APPROVE' })
+    ).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: expect.stringContaining('You proposed'),
+    });
+    expect(writes(db, 'ingredient')).toBe(0);
+    await expect(
+      caller(db, PEOPLE.admin2).api.decideCatalogueChange({
+        changeId: change.id,
+        decision: 'APPROVE',
+      })
+    ).resolves.toMatchObject({
+      status: 'APPROVED',
+      proposedBy: 'admin',
+      reviewedBy: 'admin-2',
+      reviewMode: 'SECOND_REVIEWER',
+    });
+    expect(writes(db, 'ingredient')).toBe(1);
   });
 
   it('does not treat a non-administrator as a solo owner', async () => {

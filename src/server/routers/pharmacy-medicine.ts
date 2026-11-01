@@ -1006,7 +1006,7 @@ export const pharmacyMedicineRouter = router({
       const options = { ip: ctx.requestMeta.ip };
       const editor = await canProposeCatalogueChange(ctx.db, actor, options);
       const authority = await catalogueReviewAuthority(ctx.db, actor, options);
-      if (!editor && !authority.reviewer && !authority.soloOwner)
+      if (!editor && !authority.reviewer && !authority.ownerReviewer && !authority.soloOwner)
         throw new TRPCError({
           code: 'FORBIDDEN',
           message: 'Viewing catalogue changes needs catalogue edit or review permission.',
@@ -1016,15 +1016,25 @@ export const pharmacyMedicineRouter = router({
         orderBy: { proposedAt: input.status === 'PENDING' ? 'asc' : 'desc' },
         take: 250,
       });
+      const proposerIds = [...new Set(changes.map((change) => change.proposedBy))];
+      const proposers =
+        proposerIds.length > 0
+          ? await ctx.db.user.findMany({
+              where: { id: { in: proposerIds } },
+              select: { id: true, name: true },
+            })
+          : [];
+      const proposerName = new Map(proposers.map((user) => [user.id, user.name]));
       return {
         viewer: { id: actor.id, ...authority },
         changes: changes.map((change) => ({
           ...change,
+          proposedByName: proposerName.get(change.proposedBy) ?? null,
           canDecide:
             change.status === 'PENDING' &&
             (change.proposedBy === actor.id
               ? authority.soloOwner
-              : authority.reviewer || authority.soloOwner),
+              : authority.reviewer || authority.ownerReviewer || authority.soloOwner),
         })),
       };
     }),
@@ -1048,8 +1058,10 @@ export const pharmacyMedicineRouter = router({
     .mutation(async ({ ctx, input }) => {
       const actor = ctx.session.user;
       const options = { ip: ctx.requestMeta.ip };
-      const authority = await assertCatalogueReviewer(ctx.db, actor, options);
       const decided = await ctx.db.$transaction(async (tx) => {
+        // Resolve review authority inside the decision transaction so the
+        // decision uses the permissions current when the change is claimed.
+        const authority = await assertCatalogueReviewer(tx, actor, options);
         const change = await tx.pharmacyCatalogueChange.findFirst({
           where: { id: input.changeId },
         });

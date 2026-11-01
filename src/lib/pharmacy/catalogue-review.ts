@@ -9,8 +9,10 @@ import { can, isExplicitlyDenied, subjectFromSession } from '@/lib/abac';
  * Editing the medicine catalogue (ingredients, medicines, packs, printed MRPs,
  * barcodes, aliases) only ever proposes a change. A change is written to the
  * catalogue when a different user holding `pharmacy:catalogue-review` approves
- * it. The one exception is a solo owner: a tenant administrator with no other
- * active member who could review may decide their own change.
+ * it. Where nobody holds that capability, a catalogue owner (a tenant
+ * administrator whose own rules cover the catalogue) may decide other users'
+ * changes; only a solo owner, with no other member who could ever review, may
+ * decide their own change.
  */
 
 export type CatalogueDb = Prisma.TransactionClient;
@@ -65,51 +67,79 @@ export async function assertCanProposeCatalogueChange(
 }
 
 /**
- * A solo owner is a tenant administrator for whom no other active member of the
- * workspace holds `pharmacy:catalogue-review`, so nobody else could ever review
- * their change.
+ * A catalogue owner is a tenant administrator whose own rules still cover the
+ * catalogue: no explicit DENY of `pharmacy:catalogue-review`, and either no
+ * organization role (legacy administrator) or a role granting a catalogue
+ * capability (see canProposeCatalogueChange). An ADMIN whose assigned role is,
+ * say, Cashier is therefore never a catalogue owner.
+ */
+export async function isCatalogueOwner(
+  db: CatalogueDb,
+  actor: CatalogueActor,
+  options: CheckOptions = {}
+): Promise<boolean> {
+  if (actor.role !== 'ADMIN') return false;
+  if (await isExplicitlyDenied(db, actor.id, 'pharmacy:catalogue-review', options.now))
+    return false;
+  return canProposeCatalogueChange(db, actor, options);
+}
+
+export type CatalogueReviewAuthority = {
+  /** Holds pharmacy:catalogue-review. */
+  reviewer: boolean;
+  /**
+   * A catalogue owner in a workspace where no other active member holds
+   * pharmacy:catalogue-review: may decide other users' changes.
+   */
+  ownerReviewer: boolean;
+  /**
+   * An owner reviewer with no other active member who could ever review
+   * (neither a catalogue reviewer nor another catalogue owner): may also decide
+   * their own changes.
+   */
+  soloOwner: boolean;
+};
+
+/** How `actor` may review catalogue changes. */
+export async function catalogueReviewAuthority(
+  db: CatalogueDb,
+  actor: CatalogueActor,
+  options: CheckOptions = {}
+): Promise<CatalogueReviewAuthority> {
+  const opts = { db, source: 'TRPC' as const, ip: options.ip ?? null, now: options.now };
+  const reviewer = await can(
+    subjectFromSession(actor),
+    'pharmacy:catalogue-review',
+    undefined,
+    opts
+  );
+  const none = { reviewer, ownerReviewer: false, soloOwner: false };
+  if (!(await isCatalogueOwner(db, actor, options))) return none;
+  const others = await db.user.findMany({
+    where: { id: { not: actor.id }, status: { in: ['ACTIVE', 'ON_LEAVE'] } },
+    select: { id: true, role: true, department: true, status: true },
+    take: SOLO_OWNER_MEMBER_SCAN_LIMIT + 1,
+  });
+  if (others.length > SOLO_OWNER_MEMBER_SCAN_LIMIT) return none;
+  let otherOwner = false;
+  for (const other of others) {
+    if (await can(subjectFromSession(other), 'pharmacy:catalogue-review', undefined, opts))
+      return none;
+    if (!otherOwner && (await isCatalogueOwner(db, other, options))) otherOwner = true;
+  }
+  return { reviewer, ownerReviewer: true, soloOwner: !otherOwner };
+}
+
+/**
+ * Whether `actor` is a solo owner: a catalogue owner for whom no other active
+ * member of the workspace could ever review their change.
  */
 export async function isSoloCatalogueOwner(
   db: CatalogueDb,
   actor: CatalogueActor,
   options: CheckOptions = {}
 ): Promise<boolean> {
-  if (actor.role !== 'ADMIN') return false;
-  const others = await db.user.findMany({
-    where: { id: { not: actor.id }, status: { in: ['ACTIVE', 'ON_LEAVE'] } },
-    select: { id: true, role: true, department: true, status: true },
-    take: SOLO_OWNER_MEMBER_SCAN_LIMIT + 1,
-  });
-  if (others.length > SOLO_OWNER_MEMBER_SCAN_LIMIT) return false;
-  for (const other of others) {
-    if (
-      await can(subjectFromSession(other), 'pharmacy:catalogue-review', undefined, {
-        db,
-        source: 'TRPC',
-        ip: options.ip ?? null,
-        now: options.now,
-      })
-    )
-      return false;
-  }
-  return true;
-}
-
-export type CatalogueReviewAuthority = { reviewer: boolean; soloOwner: boolean };
-
-/** Whether `actor` holds pharmacy:catalogue-review and whether they are a solo owner. */
-export async function catalogueReviewAuthority(
-  db: CatalogueDb,
-  actor: CatalogueActor,
-  options: CheckOptions = {}
-): Promise<CatalogueReviewAuthority> {
-  const reviewer = await can(subjectFromSession(actor), 'pharmacy:catalogue-review', undefined, {
-    db,
-    source: 'TRPC',
-    ip: options.ip ?? null,
-    now: options.now,
-  });
-  return { reviewer, soloOwner: await isSoloCatalogueOwner(db, actor, options) };
+  return (await catalogueReviewAuthority(db, actor, options)).soloOwner;
 }
 
 /** FORBIDDEN unless `actor` may review catalogue changes at all. */
@@ -119,7 +149,7 @@ export async function assertCatalogueReviewer(
   options: CheckOptions = {}
 ): Promise<CatalogueReviewAuthority> {
   const authority = await catalogueReviewAuthority(db, actor, options);
-  if (authority.reviewer || authority.soloOwner) return authority;
+  if (authority.reviewer || authority.ownerReviewer || authority.soloOwner) return authority;
   throw new TRPCError({
     code: 'FORBIDDEN',
     message: 'Reviewing catalogue changes needs the pharmacy:catalogue-review permission.',
@@ -128,8 +158,9 @@ export async function assertCatalogueReviewer(
 
 /**
  * How `actorId` may decide a change proposed by `proposedBy`, or FORBIDDEN.
- * - a different user with pharmacy:catalogue-review: SECOND_REVIEWER;
- * - a solo owner (including for their own change): SOLO_OWNER;
+ * - a different user with pharmacy:catalogue-review, or an owner reviewer
+ *   (catalogue owner where nobody holds catalogue review): SECOND_REVIEWER;
+ * - a solo owner deciding their own change: SOLO_OWNER;
  * - every other self-review is refused.
  */
 export function catalogueReviewModeFor(
@@ -138,8 +169,8 @@ export function catalogueReviewModeFor(
   proposedBy: string
 ): CatalogueReviewMode {
   if (proposedBy !== actorId) {
-    if (authority.reviewer) return 'SECOND_REVIEWER';
-    if (authority.soloOwner) return 'SOLO_OWNER';
+    if (authority.reviewer || authority.ownerReviewer || authority.soloOwner)
+      return 'SECOND_REVIEWER';
   } else if (authority.soloOwner) {
     return 'SOLO_OWNER';
   }
