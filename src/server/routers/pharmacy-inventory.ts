@@ -35,8 +35,10 @@ import {
   quarantinePart,
   recallTrace,
   receiveTransferLine,
+  receiveTransferWithVariance,
   reserveSupplierClaim,
   setManufacturingBatchState,
+  transferVarianceKey,
   writeOff,
 } from '@/lib/pharmacy/inventory-operations';
 import { postWriteOffEntry } from '@/lib/pharmacy/finance-postings';
@@ -290,13 +292,6 @@ const expiryPosition = {
 // reached the destination are not "still in transit" — they are lost, and a
 // loss is a WRITE_OFF with INV-06 custody, posted once per line.
 
-const RECEIVABLE_TRANSFER_STATUSES = ['DISPATCHED', 'PARTIALLY_RECEIVED', 'EXCEPTION'];
-
-/** One variance per transfer line, whatever the caller's retry key. */
-function transferVarianceKey(transferId: string, lineId: string): string {
-  return `transfer-variance:${transferId}:${lineId}`;
-}
-
 async function transferBoard(db: ScopedDb, scope: LedgerScope) {
   const transfers = await db.pharmacyInterbranchTransfer.findMany({
     where: {
@@ -409,159 +404,6 @@ async function transferBoard(db: ScopedDb, scope: LedgerScope) {
       };
     }),
   }));
-}
-
-type VarianceReceiptInput = {
-  transferId: string;
-  lines: ReadonlyArray<{ lineId: string; receivedUnits: number }>;
-  variance?: { reason: string; witnessId: string; evidenceRef: string };
-  idempotencyKeyPrefix: string;
-};
-
-/**
- * The closing receipt of a transfer. Every open line is answered with what
- * physically arrived; what did not is written off out of IN_TRANSIT at the
- * source branch, where dispatch left it. The transfer then closes RECEIVED, so
- * the line-by-line receipt path can never draw written-off units back out of
- * transit. Runs inside the caller's transaction.
- */
-async function receiveTransferWithVariance(
-  db: ScopedDb,
-  scope: LedgerScope,
-  input: VarianceReceiptInput
-) {
-  // Serialize receipts of one transfer: the outstanding balances read below
-  // must be the ones the postings land on.
-  const locked = await db.$queryRaw<Array<{ id: string }>>(
-    Prisma.sql`SELECT id FROM "pharmacy_interbranch_transfers" WHERE "organizationId"=${scope.organizationId} AND id=${input.transferId} AND "toBranchId"=${scope.branchId} FOR UPDATE`
-  );
-  const transfer = locked[0]
-    ? await db.pharmacyInterbranchTransfer.findFirst({
-        where: {
-          id: input.transferId,
-          organizationId: scope.organizationId,
-          toBranchId: scope.branchId,
-        },
-        include: { lines: true },
-      })
-    : null;
-  if (!transfer) throw new PharmacyInventoryError('CROSS_BRANCH_REFERENCE');
-  if (!RECEIVABLE_TRANSFER_STATUSES.includes(transfer.status))
-    throw new PharmacyInventoryError('INVALID_STATE');
-
-  const answered = new Map(input.lines.map((line) => [line.lineId, line.receivedUnits]));
-  if (answered.size !== input.lines.length) throw new PharmacyInventoryError('INVALID_UNITS');
-  for (const [lineId, units] of answered) {
-    const line = transfer.lines.find((one) => one.id === lineId);
-    if (!line) throw new PharmacyInventoryError('CROSS_BRANCH_REFERENCE');
-    if (
-      !Number.isSafeInteger(units) ||
-      units < 0 ||
-      units > line.quantityUnits - line.receivedUnits
-    )
-      throw new PharmacyInventoryError('INVALID_UNITS');
-  }
-  const open = transfer.lines.filter((line) => line.receivedUnits < line.quantityUnits);
-  // A closing receipt answers every open line; silence is not a count.
-  if (open.some((line) => !answered.has(line.id)))
-    throw new PharmacyInventoryError('INVALID_UNITS');
-
-  const plan = [];
-  for (const line of open) {
-    const receivedUnits = answered.get(line.id)!;
-    const outstanding = line.quantityUnits - line.receivedUnits;
-    const balances = await db.$queryRaw<
-      Array<{ onHandUnits: number; sealedPacks: number; looseUnits: number; unitsPerPack: number }>
-    >(
-      Prisma.sql`SELECT b."onHandUnits",b."sealedPacks",b."looseUnits",l."unitsPerPack" FROM "pharmacy_stock_balances" b JOIN "pharmacy_inventory_lots" l ON l.id=b."inventoryLotId" WHERE b."organizationId"=${scope.organizationId} AND b."branchId"=${transfer.fromBranchId} AND b."inventoryLotId"=${line.sourceLotId} AND b."stockLocationId"=${line.sourceStockLocationId} AND b."disposition"='IN_TRANSIT' FOR UPDATE OF b`
-    );
-    const transit = balances[0];
-    if (!transit || Number(transit.onHandUnits) < outstanding)
-      throw new PharmacyInventoryError('INSUFFICIENT_STOCK');
-    const unitsPerPack = Number(transit.unitsPerPack);
-    // The receipt leg removes a normalised arrangement; the variance takes loose
-    // units first. Both have to fit what transit physically holds, or the
-    // projection would go negative mid-transaction.
-    const receipt =
-      receivedUnits > 0
-        ? arrangementFor(receivedUnits, unitsPerPack)
-        : { sealedPacks: 0, looseUnits: 0 };
-    let sealedLeft = Number(transit.sealedPacks) - receipt.sealedPacks;
-    let looseLeft = Number(transit.looseUnits) - receipt.looseUnits;
-    const varianceUnits = outstanding - receivedUnits;
-    const varianceLoose = Math.min(Math.max(looseLeft, 0), varianceUnits);
-    const varianceSealedUnits = varianceUnits - varianceLoose;
-    sealedLeft -= varianceSealedUnits / unitsPerPack;
-    looseLeft -= varianceLoose;
-    if (varianceSealedUnits % unitsPerPack !== 0 || sealedLeft < 0 || looseLeft < 0)
-      throw new PharmacyInventoryError('INVALID_ARRANGEMENT');
-    plan.push({
-      line,
-      receivedUnits,
-      varianceUnits,
-      variance: { sealedPacks: varianceSealedUnits / unitsPerPack, looseUnits: varianceLoose },
-    });
-  }
-
-  const short = plan.some((step) => step.varianceUnits > 0);
-  if (short) {
-    const evidence = input.variance;
-    if (!evidence || evidence.witnessId === scope.actorId)
-      throw new PharmacyInventoryError('COAUTH_REQUIRED');
-    const witness = await db.user.findFirst({
-      where: { id: evidence.witnessId, organizationId: scope.organizationId, status: 'ACTIVE' },
-      select: { id: true },
-    });
-    if (!witness) throw new PharmacyInventoryError('COAUTH_REQUIRED');
-  }
-
-  const postedVariances = [];
-  for (const step of plan) {
-    if (step.receivedUnits > 0) {
-      await receiveTransferLine(db, scope, {
-        transferId: transfer.id,
-        lineId: step.line.id,
-        receivedUnits: step.receivedUnits,
-        idempotencyKeyPrefix: `${input.idempotencyKeyPrefix}:${step.line.id}`,
-      });
-    }
-    if (step.varianceUnits === 0) continue;
-    const evidence = input.variance!;
-    const movement = await db.pharmacyStockMovement.create({
-      data: {
-        organizationId: scope.organizationId,
-        branchId: transfer.fromBranchId,
-        inventoryLotId: step.line.sourceLotId,
-        stockLocationId: step.line.sourceStockLocationId,
-        kind: 'WRITE_OFF',
-        disposition: 'IN_TRANSIT',
-        quantityUnits: -step.varianceUnits,
-        sealedPackDelta: -step.variance.sealedPacks,
-        looseUnitDelta: -step.variance.looseUnits,
-        actorId: scope.actorId,
-        reason: `Transfer ${transfer.id} receipt variance: ${evidence.reason}`,
-        idempotencyKey: transferVarianceKey(transfer.id, step.line.id),
-      },
-    });
-    const custody = await db.pharmacyCustodyRecord.create({
-      data: {
-        organizationId: scope.organizationId,
-        branchId: transfer.fromBranchId,
-        movementId: movement.id,
-        actorId: scope.actorId,
-        witnessId: evidence.witnessId,
-        reason: evidence.reason,
-        evidenceRef: evidence.evidenceRef,
-      },
-    });
-    postedVariances.push({ lineId: step.line.id, units: step.varianceUnits, movement, custody });
-  }
-
-  const closed = await db.pharmacyInterbranchTransfer.update({
-    where: { id: transfer.id },
-    data: { status: 'RECEIVED', receivedAt: new Date() },
-  });
-  return { transfer: closed, variances: postedVariances };
 }
 
 export const pharmacyInventoryRouter = router({
