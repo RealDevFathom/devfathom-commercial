@@ -27,14 +27,41 @@ only covers 22d1935860b146da36f09583e4d634fec92c7fa2.
 
 Runtime visual QA is pending for reports, counter visits and transfer draft submission:
 
-| Matrix | Status |
-| --- | --- |
-| 375 / 768 / 1024 / 1440 px, bounded overflow | Not run |
-| Light / dark themes | Not run |
-| Normal / reduced motion | Not run |
-| Keyboard order, visible focus, zoom/reflow | Not run |
+| Matrix                                                     | Status                       |
+| ---------------------------------------------------------- | ---------------------------- |
+| 375 / 768 / 1024 / 1440 px, bounded overflow               | Not run                      |
+| Light / dark themes                                        | Not run                      |
+| Normal / reduced motion                                    | Not run                      |
+| Keyboard order, visible focus, zoom/reflow                 | Not run                      |
 | Loading, empty, error, disabled, success and denied states | Runtime verification pending |
-| Console / hydration / accessibility errors | Not run |
+| Console / hydration / accessibility errors                 | Not run                      |
 
 Source review confirms reuse of Studio PageHeader, SectionCard, Input, Button and semantic tokens.
 No runtime or visual pass is claimed.
+
+## Review round: draft payloads, pharmacy PIN enrolment, lint
+
+- **Draft payloads (P1).** Nested purchase-order and transfer line creation no longer passes
+  `organizationId`; Prisma derives it from the composite parent relation. The equivalent nested
+  licence, requisition-line and quote-line fixtures in `lost-demand-operations.db.test.ts` were
+  repaired the same way, and a duplicated `support` key in the caller context was removed.
+- **Pharmacy PIN enrolment (P1, decision Q2 option A).** New `pharmacyOperatorPin` router
+  (`setPin`, `status`), licensed by `pharmacy-core` (never `restaurant-core`), and the
+  `/pharmacy/settings/pin` screen. Only holders of `pharmacy:manage` (Owner, Owner / Operator,
+  Manager templates) may enrol, and only for an active owner/manager in the same organization.
+  An owner may set or reset any owner/manager PIN; a manager may set their own first PIN and must
+  prove the current PIN to change it (failed attempts commit to the durable lockout counter).
+  The PIN is stored only as the salted slow hash on the operator-credential row that
+  `verifyLostDemandPin` checks; a reset revokes the previous PIN. The plaintext PIN is never
+  returned, logged or audited: the middleware audit skips input and the in-transaction
+  `PHARMACY_OPERATOR_PIN` audit row carries identifiers only. Suspended/archived profiles are not
+  reactivated. The mutation is blocked in demo tenants, matching `restaurantStaff.issueCredential`.
+  The lost-demand workflow links to the PIN screen. No schema change was needed.
+- **Lint (P2).** `module` in `actOnLostDemandAdvice` renamed to `requiredModule`.
+- **Merge.** `origin/develop` merged; conflicts in `module-catalog.ts`, `audit.ts`,
+  `pharmacy-reports.ts` and `pharmacy-reports.test.ts` resolved keeping both sides.
+
+Runtime visual QA of `/pharmacy/settings/pin` (viewports, themes, motion, keyboard, states,
+console) is pending, like the matrix above. Source review: reuses PageHeader, SectionCard, Input,
+Label, Button, StatusPill and semantic tokens; 44px controls; visible labels, `aria-invalid`,
+`role="alert"` errors; permission-denied state rendered in the same card geometry.

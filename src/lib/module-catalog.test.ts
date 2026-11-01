@@ -42,6 +42,9 @@ describe('module catalog routing', () => {
     ['finance.summary', 'finance'],
     ['apiTokens.create', 'api'],
     ['restaurantStaff.issueCredential', 'restaurant-core'],
+    // Pharmacy approval PIN enrolment must never depend on restaurant-core.
+    ['pharmacyOperatorPin.setPin', 'pharmacy-core'],
+    ['pharmacyOperatorPin.status', 'pharmacy-core'],
     ['restaurantBranches.list', 'restaurant-core'],
     ['restaurantShifts.create', 'restaurant-core'],
     ['restaurantDevices.registerDevice', 'restaurant-core'],
@@ -173,6 +176,7 @@ describe('module catalog routing', () => {
     ['/pharmacy/purchasing/orders', 'pharmacy-procurement'],
     ['/pharmacy/purchasing/suppliers', 'pharmacy-procurement'],
     ['/pharmacy/medicines', 'pharmacy-core'],
+    ['/pharmacy/settings/pin', 'pharmacy-core'],
     ['/pharmacy/orders', 'pharmacy-counter'],
   ])('resolves Pharmacy route %s to its existing licensed module %s', (route, module) => {
     for (const vertical of ['PHARMACY', 'RESTAURANT', 'AGENCY', undefined] as const) {

@@ -77,6 +77,7 @@ describe('connected lost-demand workflow', () => {
       expect(html).toContain(value);
     expect(html).toContain('type="password"');
     expect(html).toContain('name="adviceId"');
+    expect(html).toContain('href="/pharmacy/settings/pin"');
   });
   it('renders access, empty and read failure states without exposing financial terms', () => {
     const denied = renderToStaticMarkup(

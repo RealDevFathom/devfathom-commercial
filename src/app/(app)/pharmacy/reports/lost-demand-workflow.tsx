@@ -130,7 +130,13 @@ function AdviceForm({ advice, action }: { advice: LostDemandAdvice; action: Dema
           <p className="text-sm text-text-muted">
             Requires procurement permission for PO/Ignore, inventory permission for Transfer, and
             your linked operator PIN. Drafts need separate approval; no order is sent and no stock
-            is moved.
+            is moved.{' '}
+            <Link
+              href="/pharmacy/settings/pin"
+              className="text-text-strong underline underline-offset-2 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+            >
+              Set up or reset your approval PIN
+            </Link>
           </p>
           <div className="flex flex-wrap gap-2">
             <Button

@@ -512,4 +512,83 @@ suite('lost-demand production persistence and boundaries', () => {
       await inOrg((db) => db.pharmacyPurchaseOrder.count({ where: { branchId: f.branchId } }))
     ).toBe(0);
   });
+
+  it('lets a pharmacy-only owner enrol a PIN without restaurant credentials and then act on advice', async () => {
+    const pinUserId = `user_ld_pin_${suffix}`;
+    await scoped.withPlatformDb((db) =>
+      db.$executeRawUnsafe(
+        `INSERT INTO users
+      (id,"organizationId","organizationRoleId",name,email,role,department,title,"startDate",status,"createdAt","updatedAt")
+      VALUES ($1,$2,$3,'Pin Owner',$4,'ADMIN','operations','Owner',now(),'ACTIVE',now(),now())`,
+        pinUserId,
+        organizationId,
+        roleId,
+        `${pinUserId}@example.test`
+      )
+    );
+    const pinActor = { organizationId, userId: pinUserId };
+    const enrolment = await import('./operator-pin');
+    const f = await fixture();
+    const [advice] = await inOrg((db) =>
+      operations.loadLostDemandAdvice(db, { organizationId, branchId: f.branchId })
+    );
+    // No staff profile or PIN exists yet: the action is refused.
+    await expect(
+      operations.executeLostDemandAction(pinActor, {
+        branchId: f.branchId,
+        adviceId: advice.id,
+        action: 'IGNORE',
+        pin: '1357',
+      })
+    ).rejects.toThrow('PIN_INVALID_OR_LOCKED');
+    const enrolled = await scoped.withTenantDb(
+      organizationId,
+      (db) =>
+        enrolment.enrolPharmacyOperatorPin(db, { ...pinActor, role: 'ADMIN' }, { pin: '1357' }),
+      { userId: pinUserId }
+    );
+    if (!enrolled.ok) throw new Error('Expected enrolment');
+    await inOrg(async (db) => {
+      const credential = await db.restaurantOperatorCredential.findFirstOrThrow({
+        where: { id: enrolled.credentialId },
+      });
+      expect(credential.credentialHash).not.toContain('1357');
+      const audit = await db.auditLog.findFirstOrThrow({
+        where: { targetId: enrolled.credentialId, action: 'pharmacyOperatorPin.set' },
+      });
+      expect(audit.actorId).toBe(pinUserId);
+      expect(JSON.stringify(audit)).not.toContain('1357');
+      expect(JSON.stringify(audit)).not.toContain(credential.credentialHash);
+    });
+    await expect(
+      operations.executeLostDemandAction(pinActor, {
+        branchId: f.branchId,
+        adviceId: advice.id,
+        action: 'IGNORE',
+        pin: '1357',
+      })
+    ).resolves.toEqual({ status: 'IGNORED' });
+    // A reset revokes the previous PIN.
+    const reset = await scoped.withTenantDb(
+      organizationId,
+      (db) =>
+        enrolment.enrolPharmacyOperatorPin(db, { ...pinActor, role: 'ADMIN' }, { pin: '2468' }),
+      { userId: pinUserId }
+    );
+    expect(reset).toMatchObject({ ok: true, reset: true });
+    await inOrg(async (db) => {
+      expect(
+        (
+          await db.restaurantOperatorCredential.findFirstOrThrow({
+            where: { id: enrolled.credentialId },
+          })
+        ).revokedAt
+      ).not.toBeNull();
+      expect(
+        await db.restaurantOperatorCredential.count({
+          where: { staffProfile: { userId: pinUserId }, revokedAt: null },
+        })
+      ).toBe(1);
+    });
+  });
 });
