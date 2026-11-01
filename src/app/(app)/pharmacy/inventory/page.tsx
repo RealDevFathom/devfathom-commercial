@@ -24,6 +24,7 @@ import { hasModule } from '@/lib/entitlements';
 import { evaluateSessionUser } from '@/lib/auth/session-state';
 import { DEMO_UNAVAILABLE_MESSAGE, isDemoProcedureBlocked } from '@/lib/demo/isolation';
 import { pharmacyActionErrorMessage } from '@/lib/pharmacy/action-error-message';
+import { PHARMACY_COUNT_MAX_VARIANCE_THRESHOLD_UNITS } from '@/lib/pharmacy/inventory-operations';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { pharmacyInventoryRouter } from '@/server/routers/pharmacy-inventory';
 import { createTRPCContext } from '@/server/trpc';
@@ -725,11 +726,16 @@ export default async function PharmacyInventoryPage({
                 <Input
                   className="mt-1"
                   defaultValue="0"
+                  max={PHARMACY_COUNT_MAX_VARIANCE_THRESHOLD_UNITS}
                   min="0"
                   name="threshold"
                   required
                   type="number"
                 />
+                <span className="mt-1 block text-xs text-text-muted">
+                  Variances above {PHARMACY_COUNT_MAX_VARIANCE_THRESHOLD_UNITS} units always need
+                  co-authorization.
+                </span>
               </label>
               <label className="text-sm">
                 Counted sealed packs

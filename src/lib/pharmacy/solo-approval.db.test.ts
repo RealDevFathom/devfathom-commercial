@@ -2093,6 +2093,7 @@ describe.skipIf(!process.env.DATABASE_URL)('solo approval integration (PostgreSQ
 
   it('serializes concurrent enrollment through the request-scoped database facade', async () => {
     const f = await fixture('owner');
+    const passwordHash = await hash(ACCOUNT_PASSWORD, 4);
     const user = await withTenantDb(
       f.org,
       (db) =>
@@ -2101,7 +2102,7 @@ describe.skipIf(!process.env.DATABASE_URL)('solo approval integration (PostgreSQ
             organizationId: f.org,
             name: 'New pharmacist',
             email: `${f.org}-new@example.invalid`,
-            password: await hash(ACCOUNT_PASSWORD, 4),
+            password: passwordHash,
             department: 'PHARMACY',
             title: 'Pharmacist',
             status: 'ACTIVE',

@@ -110,6 +110,28 @@ async function removalArrangement(
   return { sealedPacks: sealedUnits / unitsPerPack, looseUnits };
 }
 
+/**
+ * Server-owned ceiling on the per-count variance threshold. The count creator
+ * may ask for a stricter (lower) threshold, but never a looser one: any line
+ * whose absolute variance exceeds this many units always needs maker/checker
+ * (or the audited SOLO owner PIN) before the adjustment posts, whatever the
+ * client sent.
+ */
+export const PHARMACY_COUNT_MAX_VARIANCE_THRESHOLD_UNITS = 10;
+
+/** The threshold that actually governs a count: the request, capped by server policy. */
+export function effectiveCountVarianceThreshold(requested: number) {
+  return Math.min(requested, PHARMACY_COUNT_MAX_VARIANCE_THRESHOLD_UNITS);
+}
+
+function countNeedsCoauth(
+  lines: ReadonlyArray<{ varianceUnits: number | null }>,
+  varianceThreshold: number
+) {
+  const threshold = effectiveCountVarianceThreshold(varianceThreshold);
+  return lines.some((line) => Math.abs(line.varianceUnits ?? 0) > threshold);
+}
+
 export async function createCount(
   db: ScopedDb,
   scope: LedgerScope,
@@ -125,11 +147,14 @@ export async function createCount(
 ) {
   if (!Number.isSafeInteger(input.varianceThreshold) || input.varianceThreshold < 0)
     throw new PharmacyInventoryError('INVALID_UNITS');
+  // Persist the effective (server-capped) threshold so reports and the approval
+  // gate both see the policy that governed this count, not the client's ask.
+  const varianceThreshold = effectiveCountVarianceThreshold(input.varianceThreshold);
   const count = await db.pharmacyInventoryCount.create({
     data: {
       organizationId: scope.organizationId,
       branchId: scope.branchId,
-      varianceThreshold: input.varianceThreshold,
+      varianceThreshold,
       createdById: scope.actorId,
     },
   });
@@ -178,7 +203,7 @@ export async function createCount(
     });
   }
   const lines = await db.pharmacyInventoryCountLine.findMany({ where: { countId: count.id } });
-  const coauth = lines.some((line) => Math.abs(line.varianceUnits ?? 0) > input.varianceThreshold);
+  const coauth = countNeedsCoauth(lines, varianceThreshold);
   return db.pharmacyInventoryCount.update({
     where: { id: count.id },
     data: { status: coauth ? 'AWAITING_COAUTH' : 'OPEN' },
@@ -214,10 +239,16 @@ export async function approveCount(
   });
   if (!count) throw new PharmacyInventoryError('CROSS_BRANCH_REFERENCE');
   if (count.status === 'APPROVED') throw new PharmacyInventoryError('INVALID_STATE');
-  // Counts within the configured variance threshold remain an ordinary OPEN
-  // count. Only a count promoted to AWAITING_COAUTH needs maker/checker (or the
-  // SOLO owner's PIN) before it can be approved.
-  if (count.status === 'AWAITING_COAUTH') {
+  // Counts within the variance threshold remain an ordinary OPEN count. A count
+  // promoted to AWAITING_COAUTH needs maker/checker (or the SOLO owner's PIN)
+  // before it can be approved. The variance is re-checked here against the
+  // server-capped threshold too, so an OPEN count recorded with a loose
+  // client-chosen threshold (including rows written before the cap) cannot
+  // post an above-policy adjustment without co-authorization.
+  if (
+    count.status === 'AWAITING_COAUTH' ||
+    countNeedsCoauth(count.lines, count.varianceThreshold)
+  ) {
     try {
       await enforceOperatingMode(db, scope, {
         kind: 'ADJUSTMENT',
