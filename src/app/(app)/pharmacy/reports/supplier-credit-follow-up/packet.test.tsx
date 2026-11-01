@@ -155,6 +155,23 @@ describe('supplier draft packet evidence', () => {
     expect(screen.queryByRole('button')).toBeNull();
   });
 
+  it('links the empty state to Returns & claims for the same branch', () => {
+    render(<FollowUpPacket packet={{ ...packet(), rows: [] }} />);
+    expect(screen.getByRole('link', { name: 'Returns & claims' })).toHaveAttribute(
+      'href',
+      '/pharmacy/purchasing/returns?branch=branch-1'
+    );
+  });
+
+  it('shows people-readable times while the CSV keeps exact instants', () => {
+    render(<FollowUpPacket packet={packet()} />);
+    expect(screen.getByText(/Prepared 4 Sep 2026, 12:00 UTC/)).toBeVisible();
+    expect(screen.getByText(/Returns created 1 Sep 2026 – 3 Sep 2026/)).toBeVisible();
+    expect(screen.getByText('2 Sep 2026, 00:00 UTC')).toBeVisible();
+    expect(screen.queryByText(/2026-09-04T12:00:00.000Z/)).toBeNull();
+    expect(packetCsv(packet(), 'supplier-1')).toContain('"2026-09-04T12:00:00.000Z"');
+  });
+
   it('copies a draft, exposes pending state, and handles clipboard denial', async () => {
     let finish!: () => void;
     const writeText = vi.fn(

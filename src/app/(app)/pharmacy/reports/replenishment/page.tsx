@@ -8,6 +8,7 @@ import { SectionCard } from '@/components/ui/section-card';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { pharmacyReportsRouter } from '@/server/routers/pharmacy-reports';
 import { createTRPCContext } from '@/server/trpc';
+import { reportsBackHref } from '../report-helpers';
 import { ScenarioConsole } from './scenario-console';
 
 export const metadata: Metadata = { title: 'Replenishment · Pharmacy reports' };
@@ -52,7 +53,7 @@ export default async function ReplenishmentPage({
         description="Inspect recorded consumption and supply, then compare explicit planning assumptions."
       />
       <Link
-        href="/pharmacy/reports"
+        href={reportsBackHref({ branch: typeof query.branch === 'string' ? query.branch : null })}
         className="inline-flex min-h-11 items-center text-sm underline focus-visible:outline-2 focus-visible:outline-ring"
       >
         Back to reports

@@ -16,6 +16,16 @@ import { createTRPCContext } from '@/server/trpc';
 import { DailyWorkPack, DailyWorkPackLoading } from './daily-work-pack';
 import { MarketingSummary } from './marketing-summary';
 import { ObservedDemand } from './observed-demand';
+import { loadReportFilterOptions } from './report-filter-options';
+import {
+  expiryBoardHref,
+  formatReportPeriod,
+  formatReportTimestamp,
+  metricDrillThroughHref,
+  pickerOptions,
+  withBranch,
+  type ReportFilterOption,
+} from './report-helpers';
 
 export const metadata: Metadata = { title: 'Pharmacy reports' };
 
@@ -52,6 +62,37 @@ function reportActionRedirect(
   const copy = new URLSearchParams(query);
   copy.set(kind, state);
   return `/pharmacy/reports?${copy.toString()}`;
+}
+const selectClass =
+  'mt-1 min-h-11 w-full rounded-md border border-input bg-surface-raised px-2.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
+function NamePicker({
+  label,
+  name,
+  allLabel,
+  noun,
+  options,
+  selected,
+}: {
+  label: string;
+  name: string;
+  allLabel: string;
+  noun: string;
+  options: readonly ReportFilterOption[];
+  selected: string | undefined;
+}) {
+  return (
+    <label className="text-sm text-text-body">
+      {label}
+      <select className={selectClass} defaultValue={selected ?? ''} name={name}>
+        <option value="">{allLabel}</option>
+        {pickerOptions(options, selected, noun).map((option) => (
+          <option key={option.id} value={option.id}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
 }
 function ReportNotice({ title, detail }: { title: string; detail: string }) {
   return (
@@ -105,6 +146,10 @@ export default async function PharmacyReportsPage({
   const to = value(query.to) ?? today;
   const invalidRange = !validDate(from) || !validDate(to) || from > to;
   const branch = value(query.branch);
+  // With one branch, "all available" is that branch: show its name instead of a picker and use
+  // it wherever a single branch is required (demand, drill-throughs, sub-report links).
+  const soleBranch = branchResult.branches.length === 1 ? branchResult.branches[0] : undefined;
+  const focusBranch = branch ?? soleBranch?.id;
   const supplier = value(query.supplier);
   const ingredient = value(query.ingredient);
   const batch = value(query.batch);
@@ -119,6 +164,7 @@ export default async function PharmacyReportsPage({
     ReturnType<ReturnType<typeof pharmacySalesRouter.createCaller>['demandAggregate']>
   > | null = null;
   let demandError = false;
+  const filterOptions = await loadReportFilterOptions(ctx.db, ctx.entitlements?.organizationId);
   const reportFilters = {
     ...(branch ? { branchId: branch } : {}),
     ...(supplier ? { supplierId: supplier } : {}),
@@ -158,10 +204,14 @@ export default async function PharmacyReportsPage({
     !invalidRange &&
     ![query.branch, query.from, query.to].some(Array.isArray) &&
     (Date.parse(to) - Date.parse(from)) / 86_400_000 < 90;
-  if (demandScopeValid && branch && branchResult.branches.some((item) => item.id === branch)) {
+  if (
+    demandScopeValid &&
+    focusBranch &&
+    branchResult.branches.some((item) => item.id === focusBranch)
+  ) {
     try {
       demand = await pharmacySalesRouter.createCaller(ctx).demandAggregate({
-        branchId: branch,
+        branchId: focusBranch,
         from: new Date(`${from}T00:00:00.000Z`),
         to: new Date(new Date(`${to}T00:00:00.000Z`).getTime() + 86_400_000),
       });
@@ -277,7 +327,7 @@ export default async function PharmacyReportsPage({
     redirect(`/pharmacy/reports?${copy.toString()}`);
   }
   const metrics = result?.metrics;
-  const cards = metrics
+  const cards: [string, string | number, { href: string; label: string }?][] = metrics
     ? [
         ['Sales', money(metrics.salesMinor)],
         ['Gross margin', money(metrics.marginMinor)],
@@ -286,28 +336,41 @@ export default async function PharmacyReportsPage({
         ['Refunds', money(metrics.refundsMinor)],
         ['Open stock signals', metrics.openStockSignals],
         ['Recommended orders', metrics.recommendedOrders],
-        ['Expiry ≤30d', money(metrics.expiryValueMinor30)],
-        ['Expiry ≤90d', money(metrics.expiryValueMinor90)],
+        [
+          'Expiry ≤30d',
+          money(metrics.expiryValueMinor30),
+          { href: expiryBoardHref(30, focusBranch), label: 'Open 30-day expiry board' },
+        ],
+        [
+          'Expiry ≤90d',
+          money(metrics.expiryValueMinor90),
+          { href: expiryBoardHref(90, focusBranch), label: 'Open 90-day expiry board' },
+        ],
       ]
     : [];
+  const branchScopeName = branch
+    ? (branchResult.branches.find((item) => item.id === branch)?.name ?? 'Selected branch')
+    : soleBranch
+      ? soleBranch.name
+      : 'All available branches';
   return (
     <main className="min-w-0 space-y-6">
       <PageHeader
         eyebrow="Pharmacy operations"
         heading="Reports"
-        description="Bounded, permission-scoped command centre and report catalog. Values are ledger-derived and freshness-labelled."
+        description="Your pharmacy's sales, stock and expiry for the period you choose, with the reports behind each figure."
         actions={
           // The sub-reports are the page's secondary actions, so they sit in the
           // header's action slot as Studio controls rather than as bare links.
           <nav aria-label="Sub-reports" className="flex flex-wrap gap-2">
             <Link
-              href={`/pharmacy/reports/replenishment${branch ? `?${new URLSearchParams({ branch })}` : ''}`}
+              href={withBranch('/pharmacy/reports/replenishment', focusBranch)}
               className={buttonVariants({ variant: 'outline', size: 'lg' })}
             >
               Replenishment
             </Link>
             <Link
-              href={`/pharmacy/reports/repeat-purchasing${branch ? `?${new URLSearchParams({ branch })}` : ''}`}
+              href={withBranch('/pharmacy/reports/repeat-purchasing', focusBranch)}
               className={buttonVariants({ variant: 'outline', size: 'lg' })}
             >
               Repeat purchasing
@@ -332,35 +395,52 @@ export default async function PharmacyReportsPage({
           </nav>
         }
       />
-      <SectionCard eyebrow="RPT-01 / RPT-02" title="Report filters" titleLevel={2}>
+      <SectionCard eyebrow="Choose what to see" title="Report filters" titleLevel={2}>
         <form className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" method="get">
-          <label className="text-sm text-text-body">
-            Branch
-            <select
-              className="mt-1 min-h-11 w-full rounded-md border border-input bg-surface-raised px-2.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              defaultValue={branch ?? ''}
-              name="branch"
-            >
-              <option value="">All available</option>
-              {branchResult.branches.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="text-sm text-text-body">
-            Supplier ID
-            <Input className="mt-1 min-h-11" defaultValue={supplier} name="supplier" />
-          </label>
-          <label className="text-sm text-text-body">
-            Ingredient ID
-            <Input className="mt-1 min-h-11" defaultValue={ingredient} name="ingredient" />
-          </label>
-          <label className="text-sm text-text-body">
-            Batch ID
-            <Input className="mt-1 min-h-11" defaultValue={batch} name="batch" />
-          </label>
+          {soleBranch ? (
+            <div className="text-sm text-text-body">
+              <span>Branch</span>
+              <p className="mt-1 flex min-h-11 items-center font-medium text-text-strong">
+                {soleBranch.name}
+              </p>
+            </div>
+          ) : (
+            <label className="text-sm text-text-body">
+              Branch
+              <select className={selectClass} defaultValue={branch ?? ''} name="branch">
+                <option value="">All available</option>
+                {branchResult.branches.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          <NamePicker
+            label="Supplier"
+            name="supplier"
+            allLabel="All suppliers"
+            noun="supplier"
+            options={filterOptions.suppliers}
+            selected={supplier}
+          />
+          <NamePicker
+            label="Ingredient"
+            name="ingredient"
+            allLabel="All ingredients"
+            noun="ingredient"
+            options={filterOptions.ingredients}
+            selected={ingredient}
+          />
+          <NamePicker
+            label="Batch"
+            name="batch"
+            allLabel="All batches"
+            noun="batch"
+            options={filterOptions.batches}
+            selected={batch}
+          />
           <label className="text-sm text-text-body">
             From
             <Input
@@ -390,33 +470,6 @@ export default async function PharmacyReportsPage({
           </Button>
         </form>
       </SectionCard>
-      <MarketingSummary
-        report={marketing}
-        money={money}
-        branch={branch}
-        financial={catalog.permissions.financial}
-      />
-      <ObservedDemand
-        report={demand}
-        failed={demandError}
-        selected={!!branch}
-        financial={catalog.permissions.financial}
-      />
-      {workPackScopeValid ? (
-        <Suspense key={returnQuery.toString()} fallback={<DailyWorkPackLoading />}>
-          <DailyWorkPack
-            read={caller.dailyWorkPack}
-            filters={{ ...(branch ? { branchId: branch } : {}), from, to }}
-            branches={branchResult.branches}
-            refreshFields={Object.fromEntries(returnQuery)}
-          />
-        </Suspense>
-      ) : (
-        <ReportNotice
-          title="Daily work pack unavailable"
-          detail="Select an available branch scope and a valid, unambiguous date range. No work-pack sources were queried."
-        />
-      )}
       {invalidRange ? (
         <p id="report-date-error" role="alert" className="text-sm text-destructive">
           Enter valid dates with From on or before To. No report was loaded.
@@ -428,41 +481,24 @@ export default async function PharmacyReportsPage({
         />
       ) : result ? (
         <>
-          <div className="flex flex-wrap items-center gap-3 text-sm text-text-muted">
-            <StatusPill
-              status={result.freshness.status === 'CURRENT' ? 'Current' : result.freshness.status}
-              tone={result.freshness.status === 'CURRENT' ? 'success' : 'warning'}
-            />
-            <span>As of {new Date(result.freshness.asOf).toLocaleString()}</span>
-            <span>Source: {result.freshness.source}</span>
-          </div>
           <SectionCard
             eyebrow="Owner command centre"
             title="Selected period at a glance"
             titleLevel={2}
           >
-            <p className="mb-4 text-sm text-text-muted">
-              Report period: {from} to {to} (inclusive business dates). Branch scope:{' '}
-              {branch
-                ? (branchResult.branches.find((item) => item.id === branch)?.name ?? branch)
-                : 'All available branches'}
-              .{' '}
-              {currency
-                ? `Currency basis: current organization setting (${currency}); historical transaction currency is not verified.`
-                : 'Currency unknown: an authoritative currency for this organization is unavailable; historical transaction currency is not verified.'}{' '}
-              Amounts use the pharmacy minor-unit scale, shown to two decimal places. — means
-              unavailable, not zero. Sales, gross margin, cash, cash variance and refunds cover the
-              selected period. Stock signals, recommended orders and expiry exposure are current
-              snapshots; expiry exposure is not realized loss. Gross margin is not cash flow. Gross
-              margin uses the same exact posted journal as Finance, including returns and reversals,
-              on UTC posting dates (start inclusive, next-day end exclusive). It may differ from
-              sales grouped by business date. Missing journal evidence is unavailable; posted totals
-              do not establish complete source or cost coverage. Supplier, ingredient and batch
-              filters do not apply to these KPI totals, the daily work pack or observed demand.
-              Those panels use branch/date scope only; current snapshots use branch scope only.
+            <p className="text-sm text-text-body">
+              {formatReportPeriod(from, to)} · {branchScopeName} ·{' '}
+              {currency ? `Amounts in ${currency}` : 'Currency unknown'}
             </p>
+            <div className="mt-2 mb-4 flex flex-wrap items-center gap-3 text-sm text-text-muted">
+              <StatusPill
+                status={result.freshness.status === 'CURRENT' ? 'Current' : result.freshness.status}
+                tone={result.freshness.status === 'CURRENT' ? 'success' : 'warning'}
+              />
+              <span>Updated {formatReportTimestamp(result.freshness.asOf)}</span>
+            </div>
             <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
-              {cards.map(([label, figure]) => (
+              {cards.map(([label, figure, link]) => (
                 <Stat
                   key={label}
                   label={label}
@@ -470,13 +506,45 @@ export default async function PharmacyReportsPage({
                   className="min-w-0"
                   valueClassName="break-words"
                   sub={
-                    branch
-                      ? 'Selected branch · ledger source'
-                      : 'All available branches · ledger source'
+                    link ? (
+                      <Link
+                        className="text-sm font-medium underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        href={link.href}
+                      >
+                        {link.label}
+                      </Link>
+                    ) : (
+                      branchScopeName
+                    )
                   }
                 />
               ))}
             </div>
+            <p className="mt-4 text-sm text-text-muted">
+              Sales, margin, cash and refunds cover the selected dates. Stock, orders and expiry are
+              as of now. — means the figure is unavailable, not zero.
+            </p>
+            <details className="mt-2 text-sm">
+              <summary className="min-h-11 cursor-pointer py-3 font-medium text-text-body focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                How these figures are calculated
+              </summary>
+              <p className="text-text-muted">
+                Report period: {from} to {to} (inclusive business dates). Source:{' '}
+                {result.freshness.source}.{' '}
+                {currency
+                  ? `Currency basis: current organization setting (${currency}); historical transaction currency is not verified.`
+                  : 'Currency unknown: an authoritative currency for this organization is unavailable; historical transaction currency is not verified.'}{' '}
+                Amounts use the pharmacy minor-unit scale, shown to two decimal places. Stock
+                signals, recommended orders and expiry exposure are current snapshots; expiry
+                exposure is not realized loss. Gross margin is not cash flow. Gross margin uses the
+                same exact posted journal as Finance, including returns and reversals, on UTC
+                posting dates (start inclusive, next-day end exclusive). It may differ from sales
+                grouped by business date. Missing journal evidence is unavailable; posted totals do
+                not establish complete source or cost coverage. Supplier, ingredient and batch
+                filters do not apply to these KPI totals, the daily work pack or observed demand.
+                Those panels use branch/date scope only; current snapshots use branch scope only.
+              </p>
+            </details>
             <div className="mt-6">
               <Stat
                 label="Organization-wide safety queue"
@@ -484,10 +552,9 @@ export default async function PharmacyReportsPage({
                 sub="Current snapshot · organization-wide"
               />
               <p className="mt-2 text-sm text-text-muted">
-                The selected branch does not apply to this queue. Date, supplier, ingredient and
-                batch filters do not apply either. Unsigned pharmacist review items plus open
-                controlled-register incidents, from pharmacist review and controlled-register
-                records at read time.
+                Unsigned pharmacist reviews plus open controlled-register incidents, across the
+                whole organization right now. Branch, date, supplier, ingredient and batch filters
+                do not apply.
               </p>
             </div>
           </SectionCard>
@@ -658,9 +725,9 @@ export default async function PharmacyReportsPage({
                             ))}
                           </dl>
                           <p className="mt-3 text-xs leading-5 text-text-muted">
-                            Window {new Date(signal.dataWindowStart).toLocaleString()}–
-                            {new Date(signal.dataWindowEnd).toLocaleString()} · source observed{' '}
-                            {new Date(signal.sourceObservedAt).toLocaleString()} · policy{' '}
+                            Window {formatReportTimestamp(signal.dataWindowStart)} –{' '}
+                            {formatReportTimestamp(signal.dataWindowEnd)} · source observed{' '}
+                            {formatReportTimestamp(signal.sourceObservedAt)} · policy{' '}
                             {signal.policyVersion}
                           </p>
                           <div className="mt-3 flex flex-wrap gap-3 text-xs">
@@ -867,6 +934,42 @@ export default async function PharmacyReportsPage({
               )}
             </SectionCard>
           ) : null}
+        </>
+      ) : branchResult.branches.length === 0 ? (
+        <ReportNotice
+          title="No reportable branches"
+          detail="An active pharmacy branch is required before reports can be shown. Ask your workspace administrator to activate one."
+        />
+      ) : null}
+      <ObservedDemand
+        report={demand}
+        failed={demandError}
+        selected={!!focusBranch}
+        financial={catalog.permissions.financial}
+      />
+      <MarketingSummary
+        report={marketing}
+        money={money}
+        branch={focusBranch}
+        financial={catalog.permissions.financial}
+      />
+      {workPackScopeValid ? (
+        <Suspense key={returnQuery.toString()} fallback={<DailyWorkPackLoading />}>
+          <DailyWorkPack
+            read={caller.dailyWorkPack}
+            filters={{ ...(branch ? { branchId: branch } : {}), from, to }}
+            branches={branchResult.branches}
+            refreshFields={Object.fromEntries(returnQuery)}
+          />
+        </Suspense>
+      ) : (
+        <ReportNotice
+          title="Daily work pack unavailable"
+          detail="Select an available branch scope and a valid, unambiguous date range. No work-pack sources were queried."
+        />
+      )}
+      {result ? (
+        <>
           <SectionCard eyebrow="Report catalog" title="Available reports" titleLevel={2}>
             <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
               {catalog.reports.map((report) => (
@@ -876,12 +979,17 @@ export default async function PharmacyReportsPage({
                 >
                   <h3 className="font-medium text-text-strong">{report.label}</h3>
                   <p className="mt-2 text-sm text-text-muted">
-                    {report.metrics.length} metric contracts · filters: {report.filters.join(', ')}
+                    {report.metrics.length} measures · filter by {report.filters.join(', ')}
                   </p>
                   <div className="mt-4 space-y-3">
                     {report.metrics.map((metricKey) => {
                       const contract = catalog.metrics.find((metric) => metric.key === metricKey);
                       if (!contract) return null;
+                      const drillThrough = metricDrillThroughHref(
+                        metricKey,
+                        contract.drillThrough,
+                        focusBranch
+                      );
                       return (
                         <article
                           className="rounded-sm border border-border-subtle p-3"
@@ -895,28 +1003,33 @@ export default async function PharmacyReportsPage({
                           <p className="mt-1 text-xs leading-5 text-text-muted">
                             {contract.definition}
                           </p>
-                          <dl className="mt-2 grid gap-1 font-mono text-[11px] text-text-body">
-                            <div>
-                              <dt className="inline font-semibold">Source: </dt>
-                              <dd className="inline">{contract.source ?? 'Not available'}</dd>
-                            </div>
-                            <div>
-                              <dt className="inline font-semibold">Scope: </dt>
-                              <dd className="inline">
-                                {metricKey === 'safetyQueue'
-                                  ? 'Organization-wide at read time; selected branch does not apply'
-                                  : contract.scope}
-                              </dd>
-                            </div>
-                            <div>
-                              <dt className="inline font-semibold">Permission: </dt>
-                              <dd className="inline">{contract.permission}</dd>
-                            </div>
-                          </dl>
-                          {contract.drillThrough ? (
+                          <details className="mt-1">
+                            <summary className="cursor-pointer py-1 text-xs font-medium text-text-body focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                              Technical detail
+                            </summary>
+                            <dl className="mt-1 grid gap-1 font-mono text-[11px] text-text-body">
+                              <div>
+                                <dt className="inline font-semibold">Source: </dt>
+                                <dd className="inline">{contract.source ?? 'Not available'}</dd>
+                              </div>
+                              <div>
+                                <dt className="inline font-semibold">Scope: </dt>
+                                <dd className="inline">
+                                  {metricKey === 'safetyQueue'
+                                    ? 'Organization-wide at read time; selected branch does not apply'
+                                    : contract.scope}
+                                </dd>
+                              </div>
+                              <div>
+                                <dt className="inline font-semibold">Permission: </dt>
+                                <dd className="inline">{contract.permission}</dd>
+                              </div>
+                            </dl>
+                          </details>
+                          {drillThrough ? (
                             <Link
-                              className="mt-2 inline-flex text-sm font-medium underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                              href={contract.drillThrough}
+                              className="mt-2 inline-flex min-h-11 items-center text-sm font-medium underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                              href={drillThrough}
                             >
                               Drill through
                             </Link>
@@ -1042,11 +1155,6 @@ export default async function PharmacyReportsPage({
             </SectionCard>
           )}
         </>
-      ) : branchResult.branches.length === 0 ? (
-        <ReportNotice
-          title="No reportable branches"
-          detail="An active pharmacy branch is required before reports can be shown. Ask your workspace administrator to activate one."
-        />
       ) : null}
     </main>
   );

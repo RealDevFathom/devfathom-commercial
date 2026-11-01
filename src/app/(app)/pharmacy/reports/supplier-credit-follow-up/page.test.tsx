@@ -153,7 +153,14 @@ describe('supplier-credit Reports preparation', () => {
     expect(screen.getByText('PKR 25.00 allocated')).toBeVisible();
     expect(screen.getByText('PKR 50.01 unallocated')).toBeVisible();
     expect(screen.getByText(/works without Ask Fathom/)).toBeVisible();
-    expect(screen.getByLabelText('Branch')).toHaveValue('branch-1');
+    // One branch: its name replaces the picker and the form still submits its ID.
+    expect(screen.queryByRole('combobox', { name: 'Branch' })).toBeNull();
+    expect(screen.getByText('Main branch')).toBeVisible();
+    expect(document.querySelector('input[type="hidden"][name="branch"]')).toHaveValue('branch-1');
+    expect(screen.getByRole('link', { name: 'Back to reports' })).toHaveAttribute(
+      'href',
+      `/pharmacy/reports?${new URLSearchParams(filters)}`
+    );
     expect(screen.getByLabelText('From')).toHaveValue(filters.from);
     expect(screen.getByLabelText('To')).toHaveValue(filters.to);
     expect(screen.getByRole('button', { name: 'Prepare draft' }).closest('form')).toHaveAttribute(
@@ -226,6 +233,7 @@ describe('supplier-credit Reports preparation', () => {
     });
     await show({ from: filters.from, to: filters.to });
     expect(screen.getByText('Choose a branch to prepare its draft evidence packs.')).toBeVisible();
+    expect(screen.getByLabelText('Branch')).toHaveValue('');
     expect(mocks.purchaseReturns).not.toHaveBeenCalled();
     cleanup();
     mocks.branches.mockResolvedValue({ branches: [] });
@@ -341,7 +349,7 @@ describe('supplier-credit Reports preparation', () => {
     expect(
       screen.getAllByText('Incomplete coverage: more source records are available.')
     ).toHaveLength(2);
-    expect(screen.getAllByText(/Observed: 2026-09-12T07:00:00.000Z/)).toHaveLength(2);
+    expect(screen.getAllByText(/Observed: 12 Sep 2026, 07:00 UTC/)).toHaveLength(2);
     const next = new URL(
       screen.getByRole('link', { name: 'Next returns page' }).getAttribute('href')!,
       'https://example.test'

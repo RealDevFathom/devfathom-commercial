@@ -9,6 +9,13 @@ import { Stat } from '@/components/ui/stat';
 import { REPEAT_DEFINITION, REPEAT_LIMITS } from '@/lib/pharmacy/repeat-purchasing';
 import { pharmacyReportsRouter } from '@/server/routers/pharmacy-reports';
 import { createTRPCContext } from '@/server/trpc';
+import {
+  defaultRepeatWindow,
+  formatReportTimestamp,
+  pickerValueFromInstant,
+  reportsBackHref,
+  utcInstantFromPicker,
+} from '../report-helpers';
 
 export const metadata: Metadata = { title: 'Repeat purchasing · Pharmacy reports' };
 const percent = (n: number | null) => (n === null ? 'Unavailable' : `${n.toFixed(1)}%`);
@@ -20,12 +27,12 @@ export default async function RepeatPurchasingPage({
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const query = await searchParams;
-  const now = new Date();
-  const asOf = scalar(query.asOf) ?? now.toISOString();
-  const from =
-    scalar(query.from) ?? new Date(now.getTime() - 179 * 86_400_000).toISOString().slice(0, 10);
-  const to =
-    scalar(query.to) ?? new Date(now.getTime() - 90 * 86_400_000).toISOString().slice(0, 10);
+  // Default to the last 90 days ending today; the picker submits a UTC wall-clock cutoff.
+  const defaults = defaultRepeatWindow(new Date());
+  const requestedAsOf = scalar(query.asOf);
+  const asOf = requestedAsOf ? utcInstantFromPicker(requestedAsOf) : defaults.asOf;
+  const from = scalar(query.from) ?? defaults.from;
+  const to = scalar(query.to) ?? defaults.to;
   const branchId = scalar(query.branch);
   let branches: { id: string; name: string }[] = [];
   let result: Awaited<
@@ -42,9 +49,11 @@ export default async function RepeatPurchasingPage({
       cause instanceof TRPCError && cause.code === 'FORBIDDEN'
         ? 'Owner financial-report access, an enabled pharmacy reports module and an authorized active branch are required. Contact your workspace administrator.'
         : cause instanceof TRPCError && cause.code === 'BAD_REQUEST'
-          ? 'Check the enrollment dates (maximum 90 days) and nonfuture ISO UTC cutoff, then apply again.'
+          ? 'Check the enrollment dates (maximum 90 days, ending on or before the cutoff) and choose a cutoff that is not in the future, then apply again.'
           : 'Report unavailable. The complete report could not be generated. Retry or select a single branch using the filters; no partial rates are shown.';
   }
+  const soleBranch = branches.length === 1 ? branches[0] : undefined;
+  const showBranchName = !!soleBranch && (!branchId || branchId === soleBranch.id);
   return (
     <main className="min-w-0 space-y-6">
       <PageHeader
@@ -53,8 +62,8 @@ export default async function RepeatPurchasingPage({
         description="First-observed commercial customer cohorts in selected authorized branches."
       />
       <Link
-        className="text-sm underline focus-visible:outline-2 focus-visible:outline-ring"
-        href="/pharmacy/reports"
+        className="inline-flex min-h-11 items-center text-sm underline focus-visible:outline-2 focus-visible:outline-ring"
+        href={reportsBackHref({ branch: branchId })}
       >
         Back to reports
       </Link>
@@ -69,37 +78,48 @@ export default async function RepeatPurchasingPage({
             <Input className="mt-1 min-h-11" type="date" name="to" defaultValue={to} required />
           </label>
           <label className="text-sm text-text-body">
-            As-of cutoff (ISO UTC)
+            As-of cutoff (UTC)
             <Input
               className="mt-1 min-h-11"
               name="asOf"
-              defaultValue={asOf}
+              type="datetime-local"
+              defaultValue={pickerValueFromInstant(asOf)}
               required
               aria-describedby="repeat-window-help"
             />
           </label>
-          <label className="text-sm text-text-body">
-            Selected authorized branches
-            <select
-              name="branch"
-              defaultValue={branchId ?? ''}
-              className="mt-1 min-h-11 w-full rounded-md border border-input bg-surface-raised px-2.5 text-sm focus-visible:outline-2 focus-visible:outline-ring"
-            >
-              <option value="">All authorized active branches</option>
-              {branchId && !branches.some((b) => b.id === branchId) ? (
-                <option value={branchId}>Requested branch (scope unverified)</option>
-              ) : null}
-              {branches.map((b) => (
-                <option key={b.id} value={b.id}>
-                  {b.name}
-                </option>
-              ))}
-            </select>
-          </label>
+          {soleBranch && showBranchName ? (
+            <div className="text-sm text-text-body">
+              <span>Branch</span>
+              <p className="mt-1 flex min-h-11 items-center font-medium text-text-strong">
+                {soleBranch.name}
+              </p>
+            </div>
+          ) : (
+            <label className="text-sm text-text-body">
+              Selected authorized branches
+              <select
+                name="branch"
+                defaultValue={branchId ?? ''}
+                className="mt-1 min-h-11 w-full rounded-md border border-input bg-surface-raised px-2.5 text-sm focus-visible:outline-2 focus-visible:outline-ring"
+              >
+                <option value="">All authorized active branches</option>
+                {branchId && !branches.some((b) => b.id === branchId) ? (
+                  <option value={branchId}>Requested branch (scope unverified)</option>
+                ) : null}
+                {branches.map((b) => (
+                  <option key={b.id} value={b.id}>
+                    {b.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           <p id="repeat-window-help" className="text-sm text-text-muted md:col-span-2">
-            Up to 90 inclusive enrollment days. Cutoff stays fixed when filters change. Today is
-            included only through that instant. Item and supplier filters do not apply to person
-            cohorts.
+            Up to 90 inclusive enrollment days, ending on or before the cutoff. Customers first seen
+            recently have not had 30, 60 or 90 days to come back yet, so those rates fill in as time
+            passes. The cutoff stays fixed when filters change. Item and supplier filters do not
+            apply to person cohorts.
           </p>
           <Button type="submit" className="min-h-11">
             Apply cohort window
@@ -118,7 +138,7 @@ export default async function RepeatPurchasingPage({
           <SectionCard title="Identity coverage" titleLevel={2}>
             <p className="mb-4 text-sm text-text-muted">
               Completed original receipts in enrollment window, before purchase exclusions. Frozen
-              cutoff: {result.asOf}.
+              cutoff: {formatReportTimestamp(result.asOf)}.
             </p>
             <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
               <Stat
@@ -159,7 +179,8 @@ export default async function RepeatPurchasingPage({
               Across all selected data through cutoff: {result.missingTimestamp} completed originals
               missing completion timestamps; {result.missingReceipt} timestamped originals missing
               receipt numbers. Earliest available completion:{' '}
-              {result.earliestObservedAt ?? 'Unavailable'}. This is not a verified data-start date.
+              {formatReportTimestamp(result.earliestObservedAt)}. This is not a verified data-start
+              date.
             </p>
           </SectionCard>
         </>

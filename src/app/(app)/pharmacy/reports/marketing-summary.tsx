@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { SectionCard } from '@/components/ui/section-card';
 import { buttonVariants } from '@/components/ui/button';
 import type { readPharmacyMarketingReport } from '@/lib/pharmacy/marketing-report';
+import { formatReportPeriod, formatReportTimestamp } from './report-helpers';
 
 export function MarketingSummary({
   report,
@@ -16,6 +17,7 @@ export function MarketingSummary({
 }) {
   return (
     <SectionCard
+      eyebrow="Campaign messages"
       title="Marketing evidence"
       titleLevel={2}
       actions={
@@ -35,9 +37,9 @@ export function MarketingSummary({
       ) : (
         <div className="space-y-4 text-sm">
           <p className="text-text-muted">
-            {report.period.from}–{report.period.to} ({report.period.timezone}); evidence cutoff{' '}
-            {report.cutoff}. Branch and date filters apply. Supplier, ingredient and batch filters
-            do not scope these figures.
+            {formatReportPeriod(report.period.from, report.period.to)} ({report.period.timezone}),
+            evidence up to {formatReportTimestamp(report.cutoff)}. Branch and date filters apply.
+            Supplier, ingredient and batch filters do not scope these figures.
           </p>
           <dl className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             {(

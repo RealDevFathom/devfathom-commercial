@@ -49,7 +49,9 @@ describe('repeat purchasing page', () => {
       asOf: query.asOf,
       branchId: 'b1',
     });
-    expect(screen.getByLabelText('As-of cutoff (ISO UTC)')).toHaveValue(query.asOf);
+    // The cutoff is a native date-time picker showing the same UTC instant.
+    expect(screen.getByLabelText('As-of cutoff (UTC)')).toHaveAttribute('type', 'datetime-local');
+    expect(screen.getByLabelText('As-of cutoff (UTC)')).toHaveValue('2026-05-01T00:00');
     expect(screen.getByRole('button', { name: 'Apply cohort window' })).toHaveAttribute(
       'type',
       'submit'
@@ -71,7 +73,7 @@ describe('repeat purchasing page', () => {
       mocks.repeatPurchasing.mockRejectedValue(new TRPCError({ code }));
       render(await Page({ searchParams: Promise.resolve({}) }));
       expect(screen.getByRole('alert')).toBeInTheDocument();
-      expect(screen.getByRole('option', { name: 'Main' })).toBeInTheDocument();
+      expect(screen.getByText('Main')).toBeInTheDocument();
       expect(screen.queryByText('Identity coverage')).not.toBeInTheDocument();
     }
   );
@@ -96,13 +98,61 @@ describe('repeat purchasing page', () => {
     expect(html).not.toContain(message);
     expect(screen.getByLabelText('Enrollment from (UTC)')).toHaveValue(query.from);
     expect(screen.getByLabelText('Enrollment through (UTC)')).toHaveValue(query.to);
-    expect(screen.getByLabelText('As-of cutoff (ISO UTC)')).toHaveValue(query.asOf);
-    expect(screen.getByLabelText('Selected authorized branches')).toHaveValue(query.branch);
-    expect(screen.getByRole('option', { name: 'Main' })).toBeInTheDocument();
+    expect(screen.getByLabelText('As-of cutoff (UTC)')).toHaveValue('2026-05-01T00:00');
+    // One branch: its name is shown instead of a picker.
+    expect(screen.queryByLabelText('Selected authorized branches')).not.toBeInTheDocument();
+    expect(screen.getByText('Main')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Apply cohort window' })).toBeEnabled();
     expect(screen.queryByText('Identity coverage')).not.toBeInTheDocument();
     expect(screen.queryByText('Fully elapsed follow-up')).not.toBeInTheDocument();
     expect(screen.queryByText(/\d+(?:\.\d+)?%/)).not.toBeInTheDocument();
+  });
+  it('defaults to the last 90 days ending today with the cutoff in a date-time picker', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-01T14:59:42.123Z'));
+    try {
+      render(await Page({ searchParams: Promise.resolve({}) }));
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(mocks.repeatPurchasing).toHaveBeenCalledWith({
+      from: '2026-08-04',
+      to: '2026-11-01',
+      asOf: '2026-11-01T14:59:00.000Z',
+    });
+    expect(screen.getByLabelText('Enrollment from (UTC)')).toHaveValue('2026-08-04');
+    expect(screen.getByLabelText('Enrollment through (UTC)')).toHaveValue('2026-11-01');
+    expect(screen.getByLabelText('As-of cutoff (UTC)')).toHaveValue('2026-11-01T14:59');
+  });
+  it('reads a submitted picker cutoff as UTC', async () => {
+    render(
+      await Page({
+        searchParams: Promise.resolve({
+          asOf: '2026-05-01T10:30',
+          from: '2026-03-01',
+          to: '2026-04-30',
+        }),
+      })
+    );
+    expect(mocks.repeatPurchasing).toHaveBeenCalledWith({
+      from: '2026-03-01',
+      to: '2026-04-30',
+      asOf: '2026-05-01T10:30:00Z',
+    });
+  });
+  it('offers a branch picker only when there is more than one branch', async () => {
+    mocks.branches.mockResolvedValue({
+      branches: [
+        { id: 'b1', name: 'Main' },
+        { id: 'b2', name: 'North' },
+      ],
+    });
+    render(await Page({ searchParams: Promise.resolve({ branch: 'b2' }) }));
+    expect(screen.getByLabelText('Selected authorized branches')).toHaveValue('b2');
+    expect(screen.getByRole('link', { name: 'Back to reports' })).toHaveAttribute(
+      'href',
+      '/pharmacy/reports?branch=b2'
+    );
   });
   it('suppresses results if branch lookup fails', async () => {
     mocks.branches.mockRejectedValueOnce(new Error('Unavailable'));

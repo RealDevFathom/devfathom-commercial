@@ -1,8 +1,32 @@
-import { render, screen, within } from '@testing-library/react';
+import { cleanup, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const actor = vi.hoisted(() => ({ role: 'ADMIN' }));
 const signalStaff = vi.hoisted(() => ({ userId: 'cashier_1' as string | undefined }));
+const branchList = vi.hoisted(() => ({
+  value: [{ id: 'b1', name: 'Main' }] as { id: string; name: string }[],
+}));
+const optionDb = vi.hoisted(() => ({
+  pharmacySupplier: {
+    findMany: vi.fn(async (_args: unknown) => [
+      { id: 'sup1', name: 'Acme Distributors', active: true },
+      { id: 'sup2', name: 'Old Supplier', active: false },
+    ]),
+  },
+  ingredient: {
+    findMany: vi.fn(async (_args: unknown) => [{ id: 'ing1', name: 'Paracetamol' }]),
+  },
+  pharmacyManufacturingBatch: {
+    findMany: vi.fn(async (_args: unknown) => [
+      {
+        id: 'lot1',
+        batchNumber: 'B-1',
+        expiresAt: new Date('2027-03-31T00:00:00Z'),
+        medicine: { productName: 'Panadol 500mg' },
+      },
+    ]),
+  },
+}));
 
 const commandCentre = vi.fn(async () => ({
   freshness: { status: 'CURRENT', asOf: '2026-09-04T10:00:00Z', source: 'ledger' },
@@ -23,6 +47,7 @@ vi.mock('@/server/trpc', () => ({
     organization: { id: 'org-a', currency: 'PKR' },
     entitlements: { organizationId: 'org-a' },
     session: { user: actor },
+    db: optionDb,
   })),
 }));
 vi.mock('@/server/routers/pharmacy-sales', () => ({
@@ -47,7 +72,7 @@ vi.mock('./daily-work-pack', () => ({
 vi.mock('@/server/routers/pharmacy-reports', () => ({
   pharmacyReportsRouter: {
     createCaller: () => ({
-      branches: async () => ({ branches: [{ id: 'b1', name: 'Main' }] }),
+      branches: async () => ({ branches: branchList.value }),
       commandCentre,
       anomalySignals: async () => [
         {
@@ -118,6 +143,12 @@ vi.mock('@/server/routers/pharmacy-reports', () => ({
             metrics: ['salesMinor'],
             filters: ['branch', 'date', 'supplier', 'ingredient', 'batch'],
           },
+          {
+            key: 'inventory-expiry',
+            label: 'Inventory and expiry',
+            metrics: ['expiryValueMinor60'],
+            filters: ['branch', 'ingredient', 'batch'],
+          },
         ],
         metrics: [
           {
@@ -129,6 +160,15 @@ vi.mock('@/server/routers/pharmacy-reports', () => ({
             permission: 'reports:financial',
             drillThrough: '/pharmacy/reports?section=sales',
           },
+          {
+            key: 'expiryValueMinor60',
+            label: 'Expiry value · 60 days',
+            definition: 'On-hand units expiring within 60 days.',
+            source: 'pharmacy_stock_balances',
+            scope: 'selected branches at read time',
+            permission: 'reports:operational',
+            drillThrough: '/pharmacy/inventory',
+          },
         ],
       }),
     }),
@@ -139,8 +179,10 @@ import PharmacyReportsPage from './page';
 
 describe('pharmacy report catalog filters', () => {
   beforeEach(() => {
+    cleanup();
     actor.role = 'ADMIN';
     signalStaff.userId = 'cashier_1';
+    branchList.value = [{ id: 'b1', name: 'Main' }];
   });
 
   it('carries all supported filters and exposes the metric contract', async () => {
@@ -156,13 +198,24 @@ describe('pharmacy report catalog filters', () => {
         }),
       })
     );
-    expect(screen.getByLabelText('Supplier ID')).toHaveValue('sup1');
-    expect(screen.getByLabelText('Ingredient ID')).toHaveValue('ing1');
-    expect(screen.getByLabelText('Batch ID')).toHaveValue('lot1');
+    // Name pickers submit the same IDs the filters always accepted.
+    expect(screen.getByLabelText('Supplier')).toHaveValue('sup1');
+    expect(screen.getByLabelText('Ingredient')).toHaveValue('ing1');
+    expect(screen.getByLabelText('Batch')).toHaveValue('lot1');
+    expect(screen.getByRole('option', { name: 'Acme Distributors' })).toHaveValue('sup1');
+    expect(screen.getByRole('option', { name: 'Old Supplier (inactive)' })).toHaveValue('sup2');
+    expect(screen.getByRole('option', { name: 'Paracetamol' })).toHaveValue('ing1');
+    expect(
+      screen.getByRole('option', { name: 'Panadol 500mg · batch B-1 · expires 31 Mar 2027' })
+    ).toHaveValue('lot1');
+    expect(screen.queryByLabelText(/ID$/)).not.toBeInTheDocument();
+    expect(optionDb.pharmacySupplier.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { organizationId: 'org-a' } })
+    );
     expect(commandCentre).toHaveBeenCalledWith(
       expect.objectContaining({ supplierId: 'sup1', ingredientId: 'ing1', batchId: 'lot1' })
     );
-    expect(screen.getByText('Source:').parentElement).toHaveTextContent('pharmacy_sales');
+    expect(screen.getAllByText('Source:')[0]!.parentElement).toHaveTextContent('pharmacy_sales');
     expect(screen.getByRole('heading', { name: 'Daily owner digest' })).toBeVisible();
     expect(screen.getByRole('heading', { name: 'Anomaly review signals' })).toBeVisible();
     expect(screen.getByRole('link', { name: 'Open related audit trail' })).toHaveAttribute(
@@ -226,5 +279,80 @@ describe('pharmacy report catalog filters', () => {
       expect(link.className).toContain('border');
       expect(link.className).not.toMatch(/(^|\s)underline(\s|$)/);
     }
+  });
+
+  it('keeps a filtered ID selectable when it is not in the loaded list', async () => {
+    render(
+      await PharmacyReportsPage({
+        searchParams: Promise.resolve({ branch: 'b1', supplier: 'sup-archived' }),
+      })
+    );
+    expect(screen.getByLabelText('Supplier')).toHaveValue('sup-archived');
+    expect(
+      screen.getByRole('option', { name: 'Selected supplier (not in this list)' })
+    ).toBeInTheDocument();
+  });
+
+  it('shows the period summary before the marketing and work-pack panels', async () => {
+    render(await PharmacyReportsPage({ searchParams: Promise.resolve({ branch: 'b1' }) }));
+    const headings = screen.getAllByRole('heading', { level: 2 }).map((item) => item.textContent);
+    const summary = headings.indexOf('Selected period at a glance');
+    expect(summary).toBeGreaterThan(headings.indexOf('Report filters'));
+    expect(summary).toBeLessThan(headings.indexOf('Marketing evidence'));
+    expect(summary).toBeLessThan(headings.indexOf('Observed unmet demand'));
+  });
+
+  it('opens the expiry board filtered to the drill-through window and branch', async () => {
+    branchList.value = [
+      { id: 'b1', name: 'Main' },
+      { id: 'b2', name: 'North' },
+    ];
+    render(await PharmacyReportsPage({ searchParams: Promise.resolve({ branch: 'b2' }) }));
+    const expiryCard = screen.getByRole('heading', { name: 'Expiry value · 60 days' })
+      .parentElement as HTMLElement;
+    expect(within(expiryCard).getByRole('link', { name: 'Drill through' })).toHaveAttribute(
+      'href',
+      '/pharmacy/inventory/expiry?within=60&branch=b2'
+    );
+    expect(screen.getByRole('link', { name: 'Open 30-day expiry board' })).toHaveAttribute(
+      'href',
+      '/pharmacy/inventory/expiry?within=30&branch=b2'
+    );
+    cleanup();
+    render(await PharmacyReportsPage({ searchParams: Promise.resolve({}) }));
+    expect(screen.getByRole('link', { name: 'Open 90-day expiry board' })).toHaveAttribute(
+      'href',
+      '/pharmacy/inventory/expiry?within=90'
+    );
+  });
+
+  it('shows the only branch by name instead of a branch picker', async () => {
+    render(await PharmacyReportsPage({ searchParams: Promise.resolve({}) }));
+    expect(screen.queryByRole('combobox', { name: 'Branch' })).not.toBeInTheDocument();
+    expect(screen.getAllByText('Main').length).toBeGreaterThan(0);
+    const subReports = screen.getByRole('navigation', { name: 'Sub-reports' });
+    expect(within(subReports).getByRole('link', { name: 'Replenishment' })).toHaveAttribute(
+      'href',
+      '/pharmacy/reports/replenishment?branch=b1'
+    );
+    // The sole branch is drilled to directly.
+    expect(screen.getByRole('link', { name: 'Open 30-day expiry board' })).toHaveAttribute(
+      'href',
+      '/pharmacy/inventory/expiry?within=30&branch=b1'
+    );
+  });
+
+  it('offers the branch picker when there are several branches', async () => {
+    branchList.value = [
+      { id: 'b1', name: 'Main' },
+      { id: 'b2', name: 'North' },
+    ];
+    render(await PharmacyReportsPage({ searchParams: Promise.resolve({}) }));
+    expect(screen.getByRole('combobox', { name: 'Branch' })).toHaveValue('');
+    expect(
+      within(screen.getByRole('navigation', { name: 'Sub-reports' })).getByRole('link', {
+        name: 'Replenishment',
+      })
+    ).toHaveAttribute('href', '/pharmacy/reports/replenishment');
   });
 });

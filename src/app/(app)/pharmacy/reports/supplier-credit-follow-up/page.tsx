@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import Link from 'next/link';
 
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -15,6 +16,7 @@ import { supplierCreditFollowUp } from '@/lib/pharmacy/supplier-credit-follow-up
 import { pharmacyPurchasingRouter } from '@/server/routers/pharmacy-purchasing';
 import { pharmacyReportsRouter } from '@/server/routers/pharmacy-reports';
 import { tenantContext } from '../../purchasing/_lib/console';
+import { formatReportTimestamp, reportsBackHref } from '../report-helpers';
 import { FollowUpPacket, type FollowUpPacketData } from './packet';
 
 export const metadata: Metadata = { title: 'Supplier-credit follow-up · Pharmacy reports' };
@@ -117,7 +119,7 @@ function SourceCoveragePanel({
               </p>
               <p className="break-words text-sm text-text-muted">
                 {page.rows.length} records on this page. Page limit: {page.cap?.limit ?? 'unknown'}.
-                Observed: {observedAt ?? 'unknown'}.
+                Observed: {formatReportTimestamp(observedAt, 'unknown')}.
               </p>
               {page.truncated === true && next ? (
                 <a
@@ -312,36 +314,53 @@ export default async function SupplierCreditFollowUpPage({
     }
   }
 
+  const soleBranch = branches.length === 1 ? branches[0] : undefined;
   return (
     <main className="min-w-0 space-y-6">
       {heading}
+      <Link
+        href={reportsBackHref({ branch: requestedBranch, from, to })}
+        className="inline-flex min-h-11 items-center text-sm underline focus-visible:outline-2 focus-visible:outline-ring"
+      >
+        Back to reports
+      </Link>
       <SectionCard title="Prepare follow-up" titleLevel={2}>
         <p className="mb-4 text-sm text-text-muted" id="follow-up-period">
           Dates select return creation dates, inclusive UTC. Balances use current recorded
           allocations, not historical closing balances. Each Prepare rereads the source records.
         </p>
         <form action={ROUTE} method="get" className="flex flex-wrap items-end gap-4">
-          <div className="min-w-0 flex-1 basis-48">
-            <label htmlFor="follow-up-branch" className="mb-1 block text-sm">
-              Branch
-            </label>
-            <select
-              id="follow-up-branch"
-              name="branch"
-              defaultValue={branch?.id ?? ''}
-              required
-              aria-invalid={Boolean(requestedBranch && !branch)}
-              aria-describedby="follow-up-validation"
-              className="min-h-11 w-full rounded-sm border border-border bg-surface-card px-3 text-sm text-text-strong focus-visible:outline-2 focus-visible:outline-ring"
-            >
-              <option value="">Choose a branch</option>
-              {branches.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.name}
-                </option>
-              ))}
-            </select>
-          </div>
+          {soleBranch && (!requestedBranch || requestedBranch === soleBranch.id) ? (
+            <div className="min-w-0 flex-1 basis-48">
+              <span className="mb-1 block text-sm">Branch</span>
+              <input type="hidden" name="branch" value={soleBranch.id} />
+              <p className="flex min-h-11 items-center text-sm font-medium text-text-strong">
+                {soleBranch.name}
+              </p>
+            </div>
+          ) : (
+            <div className="min-w-0 flex-1 basis-48">
+              <label htmlFor="follow-up-branch" className="mb-1 block text-sm">
+                Branch
+              </label>
+              <select
+                id="follow-up-branch"
+                name="branch"
+                defaultValue={branch?.id ?? ''}
+                required
+                aria-invalid={Boolean(requestedBranch && !branch)}
+                aria-describedby="follow-up-validation"
+                className="min-h-11 w-full rounded-sm border border-border bg-surface-card px-3 text-sm text-text-strong focus-visible:outline-2 focus-visible:outline-ring"
+              >
+                <option value="">Choose a branch</option>
+                {branches.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
           {(['from', 'to'] as const).map((key) => (
             <div key={key} className="min-w-0 flex-1 basis-40">
               <label htmlFor={`follow-up-${key}`} className="mb-1 block text-sm">

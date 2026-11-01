@@ -22,6 +22,11 @@ import type {
   PharmacyReplenishmentReportInput,
 } from '@/lib/pharmacy/replenishment-report';
 import { trpc } from '@/lib/trpc';
+import {
+  formatReportTimestamp,
+  replenishmentBlockedReason,
+  utcInstantFromPicker,
+} from '../report-helpers';
 
 type Props = {
   organizationId: string;
@@ -100,7 +105,10 @@ function ScenarioWorkspace({
     },
     []
   );
-  const [branchId, setBranchId] = useState(initialBranchId);
+  // With a single authorized branch there is nothing to choose: scope to it straight away.
+  const [branchId, setBranchId] = useState(
+    initialBranchId || (branches.length === 1 ? branches[0]!.id : '')
+  );
   const [search, setSearch] = useState('');
   const [medicines, setMedicines] = useState<Medicine[]>([]);
   const [medicineId, setMedicineId] = useState('');
@@ -227,13 +235,13 @@ function ScenarioWorkspace({
       const instant = (key: 'arrivalAt' | 'expiresAt') => {
         if (!draft[key].trim()) return null;
         try {
-          const ms = demandInstantMs(draft[key].trim());
+          // The picker has no timezone; its label says UTC.
+          const ms = demandInstantMs(utcInstantFromPicker(draft[key]));
           if (key === 'arrivalAt' && ms < planningOrigin)
             invalid[key] = 'Arrival must be on or after the planning origin.';
           return new Date(ms).toISOString();
         } catch {
-          invalid[key] =
-            'Use an ISO instant with timezone, for example 2026-09-16T12:00:00Z, or leave blank for unknown.';
+          invalid[key] = 'Choose a valid UTC date and time, or leave blank for unknown.';
           return null;
         }
       };
@@ -332,6 +340,13 @@ function ScenarioWorkspace({
       )}
     </div>
   );
+  const blockedReason = replenishmentBlockedReason({
+    branchId,
+    medicineId,
+    medicineCount: medicines.length,
+    loading: state === 'loading',
+  });
+  const soleBranch = branches.length === 1 ? branches[0] : undefined;
   if (!branches.length)
     return (
       <SectionCard title="No reportable branches" titleLevel={2}>
@@ -349,32 +364,41 @@ function ScenarioWorkspace({
             The requested branch is unavailable. Select an authorized branch.
           </p>
         )}
-        <label className="block text-sm text-text-body">
-          Branch
-          <select
-            name="branchId"
-            form="replenishment-report-form"
-            value={branchId}
-            className={selectClass}
-            aria-invalid={Boolean(errors.branchId)}
-            aria-describedby={errors.branchId ? 'replenishment-branch-error' : undefined}
-            onChange={(event) => {
-              edited();
-              searchVersion.current++;
-              setBranchId(event.target.value);
-              setMedicineId('');
-              setMedicines([]);
-              setSearchState('idle');
-            }}
-          >
-            <option value="">Select an authorized branch</option>
-            {branches.map((branch) => (
-              <option key={branch.id} value={branch.id}>
-                {branch.name}
-              </option>
-            ))}
-          </select>
-        </label>
+        {soleBranch ? (
+          <div className="text-sm text-text-body">
+            <span>Branch</span>
+            <p className="mt-1 flex min-h-11 items-center font-medium text-text-strong">
+              {soleBranch.name}
+            </p>
+          </div>
+        ) : (
+          <label className="block text-sm text-text-body">
+            Branch
+            <select
+              name="branchId"
+              form="replenishment-report-form"
+              value={branchId}
+              className={selectClass}
+              aria-invalid={Boolean(errors.branchId)}
+              aria-describedby={errors.branchId ? 'replenishment-branch-error' : undefined}
+              onChange={(event) => {
+                edited();
+                searchVersion.current++;
+                setBranchId(event.target.value);
+                setMedicineId('');
+                setMedicines([]);
+                setSearchState('idle');
+              }}
+            >
+              <option value="">Select an authorized branch</option>
+              {branches.map((branch) => (
+                <option key={branch.id} value={branch.id}>
+                  {branch.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         {errors.branchId && (
           <p id="replenishment-branch-error" className="text-sm text-destructive">
             {errors.branchId}
@@ -389,6 +413,7 @@ function ScenarioWorkspace({
               required
               maxLength={200}
               disabled={!branchId}
+              aria-describedby={!branchId ? 'replenishment-search-help' : undefined}
               onChange={(event) => {
                 edited();
                 searchVersion.current++;
@@ -408,6 +433,11 @@ function ScenarioWorkspace({
             Search medicines
           </Button>
         </form>
+        {!branchId ? (
+          <p id="replenishment-search-help" className="mt-2 text-sm text-text-muted">
+            Select a branch above to search its medicines.
+          </p>
+        ) : null}
         <div className="mt-3 text-sm text-text-muted" role="status">
           {searchState === 'loading' && 'Searching permitted medicines…'}
           {searchState === 'ready' &&
@@ -505,7 +535,7 @@ function ScenarioWorkspace({
                   <p id="replenishment-unknown-help" className="text-sm text-text-muted">
                     Leave optional cost, budget, capacity, arrival and expiry blank when unknown. An
                     explicit 0 is a supplied assumption. Money uses integer minor units in your
-                    supplied currency. Arrival and expiry require an explicit timezone.
+                    supplied currency. Arrival and expiry are read as UTC.
                   </p>
                   <div className="grid gap-4 md:grid-cols-2">
                     {field('planningOrigin', 'Scenario origin (future UTC day)', 'date')}
@@ -513,8 +543,8 @@ function ScenarioWorkspace({
                     {numericFields.map(([key, label, optional, min]) =>
                       field(key, label + (optional ? ' (optional)' : ''), 'number', optional, min)
                     )}
-                    {field('arrivalAt', 'Assumed arrival (ISO instant, optional)', 'text', true)}
-                    {field('expiresAt', 'Assumed expiry (ISO instant, optional)', 'text', true)}
+                    {field('arrivalAt', 'Assumed arrival (UTC, optional)', 'datetime-local', true)}
+                    {field('expiresAt', 'Assumed expiry (UTC, optional)', 'datetime-local', true)}
                   </div>
                 </div>
               )}
@@ -526,17 +556,25 @@ function ScenarioWorkspace({
             Correct the marked inputs before requesting a report.
           </p>
         )}
-        <Button
-          type="submit"
-          className="min-h-11"
-          disabled={!branchId || !medicineId || state === 'loading'}
-        >
-          {state === 'loading'
-            ? 'Reading replenishment report…'
-            : state === 'error' || state === 'denied'
-              ? 'Retry replenishment report'
-              : 'Read replenishment report'}
-        </Button>
+        <div className="flex flex-wrap items-center gap-3">
+          <Button
+            type="submit"
+            className="min-h-11"
+            disabled={!branchId || !medicineId || state === 'loading'}
+            aria-describedby={blockedReason ? 'replenishment-submit-help' : undefined}
+          >
+            {state === 'loading'
+              ? 'Reading replenishment report…'
+              : state === 'error' || state === 'denied'
+                ? 'Retry replenishment report'
+                : 'Read replenishment report'}
+          </Button>
+          {blockedReason ? (
+            <p id="replenishment-submit-help" className="text-sm text-text-muted">
+              {blockedReason}
+            </p>
+          ) : null}
+        </div>
       </form>
       <SectionCard title="Report status" titleLevel={2} aria-busy={state === 'loading'}>
         <p
@@ -593,12 +631,14 @@ function ReportEvidence({
           {branchName} · {medicineName}
         </p>
         <p className="mt-2 break-words text-sm text-text-muted">
-          As of report read: {report.readAt}. History: {demand.period.startDate} to{' '}
+          As of report read: {formatReportTimestamp(report.readAt)}. History:{' '}
+          {demand.period.startDate} to{' '}
           {demand.period.endDateExclusive} (exclusive).
         </p>
         <p className="mt-2 break-words text-sm text-text-muted">
           Demand provenance: {demand.provenance.kind} · {demand.provenance.reference}. Read at:{' '}
-          {demand.provenance.readAt}. Sources: {demand.provenance.sources.join(', ')}.
+          {formatReportTimestamp(demand.provenance.readAt)}. Sources:{' '}
+          {demand.provenance.sources.join(', ')}.
         </p>
         <div className="mt-5 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
           <Stat
@@ -660,7 +700,7 @@ function ReportEvidence({
         <p className="mt-3 text-sm text-text-muted">{supplyCoverage.reason}</p>
         <p className="mt-2 break-words text-sm text-text-muted">
           Supply provenance: {supply.inventorySource.kind} · {supply.inventorySource.reference}. As
-          of: {supply.inventorySource.asOf}.
+          of: {formatReportTimestamp(supply.inventorySource.asOf)}.
         </p>
         <p className="mt-3 text-sm text-text-body">
           Recorded eligible lots: {supplyCoverage.recordedEligibleLots}; excluded stock records:{' '}
