@@ -87,8 +87,6 @@ const CORE_TOOLS = new Set([
 
 const UNSUPPORTED_TOOL_INTENT =
   /\b(?:company )?(?:logo|branding|theme)\b|\bexport\b.{0,80}\b(?:database|csv|download)\b/i;
-const SELF_LEAVE_REQUEST =
-  /\b(?:i (?:want|need|would like|plan) to )?(?:take|book|request|submit|put in for)\b.{0,40}\b(?:leave|time off|vacation|pto)\b/i;
 const FINANCE_INTENT =
   /invoic|revenue|profit|expense|transaction|p&l|pnl|budget|\bpaid\b|owe|financ|money|billing|\bbill\b|payment|cash|margin/i;
 const PHARMACY_REPORT_INTENT =
@@ -96,10 +94,11 @@ const PHARMACY_REPORT_INTENT =
 const PHARMACY_WORK_PACK_INTENT =
   /\bwork[ -]?packs?\b|\bsupplier[ -]+(?:credit[ -]+)?follow[ -]?up\b|\bfollow[ -]?up\b.{0,40}\bsupplier(?:s|[ -]+credits?)?\b|\b(?:outstanding|unmatched)[ -]+supplier[ -]+credits?\b/i;
 
-export function assistantToolChoice(hint: string, tools?: ToolSet) {
-  return SELF_LEAVE_REQUEST.test(hint) && (!tools || Object.hasOwn(tools, 'requestLeave'))
-    ? ({ type: 'tool', toolName: 'requestLeave' } as const)
-    : ('auto' as const);
+// The model always picks its own tool. Forcing a specific tool from a keyword
+// match made unrelated or mixed questions (e.g. "how do I take leave?") skip
+// the answer and jump straight into a leave approval card.
+export function assistantToolChoice() {
+  return 'auto' as const;
 }
 
 // Keyword → domain(s) whose FULL toolset (incl. writes) to load. Generous on
