@@ -41,7 +41,25 @@ vi.mock('@/lib/trpc', () => ({
   },
 }));
 
+vi.mock('../team/team-content', () => ({
+  AddMemberModal: ({ onClose, onInvited }: { onClose: () => void; onInvited?: () => void }) => (
+    <div role="dialog" aria-label="Add Team Member">
+      <button type="button" onClick={onInvited}>
+        Simulate invite sent
+      </button>
+      <button type="button" onClick={onClose}>
+        Close invite
+      </button>
+    </div>
+  ),
+}));
+
 import { OrganizationAdminContent } from './organization-admin-content';
+
+function useVertical(vertical: string) {
+  (overviewData.current as { organization: { vertical: string } }).organization.vertical =
+    vertical;
+}
 
 const PHARMACY_DEPARTMENTS = [
   { id: 'd1', key: 'COUNTER', name: 'Counter' },
@@ -134,7 +152,8 @@ describe('organization people and access — staff onboarding', () => {
     expect(screen.getByText('1 of 10 licensed seats is currently occupied.')).toBeInTheDocument();
   });
 
-  it('offers an add-staff form with the organization pharmacy departments', () => {
+  it('offers an add-staff form with the organization departments outside pharmacy', () => {
+    useVertical('AGENCY');
     render(<OrganizationAdminContent />);
 
     const form = screen.getByRole('form', { name: 'Add staff member' });
@@ -148,7 +167,8 @@ describe('organization people and access — staff onboarding', () => {
     expect(within(form).getByLabelText('Role template')).toHaveTextContent('Cashier');
   });
 
-  it('adds a cashier scoped to the pharmacy department and role template', () => {
+  it('adds a member scoped to the department, role template and branches outside pharmacy', () => {
+    useVertical('AGENCY');
     render(<OrganizationAdminContent />);
     const form = screen.getByRole('form', { name: 'Add staff member' });
 
@@ -187,7 +207,9 @@ describe('organization people and access — staff onboarding', () => {
   it('files the existing member under a pharmacy department, not an agency one', () => {
     render(<OrganizationAdminContent />);
 
-    const memberDepartment = screen.getAllByLabelText('Department')[1]!;
+    // Pharmacy staff join by invite, so the member's edit form holds the only selector.
+    const departments = screen.getAllByLabelText('Department');
+    const memberDepartment = departments[departments.length - 1]!;
     const options = [...memberDepartment.querySelectorAll('option')].map((o) => o.textContent);
     expect(options).toEqual(['Counter', 'Dispensary', 'Store']);
   });
@@ -223,6 +245,7 @@ describe('organization people and access — staff onboarding', () => {
   });
 
   it('shows the complete password policy when adding or resetting a staff password', () => {
+    useVertical('AGENCY');
     render(<OrganizationAdminContent />);
 
     expect(
@@ -233,6 +256,72 @@ describe('organization people and access — staff onboarding', () => {
     expect(
       screen.queryByText(/Minimum 12(?:-character password| characters)\./)
     ).not.toBeInTheDocument();
+  });
+});
+
+describe('organization people and access — pharmacy invites (#980)', () => {
+  it('replaces the temporary-password add-staff form with a pharmacy staff invite', () => {
+    render(<OrganizationAdminContent />);
+
+    expect(screen.queryByRole('form', { name: 'Add staff member' })).not.toBeInTheDocument();
+    const invite = screen.getByRole('group', { name: 'Invite pharmacy staff' });
+    expect(within(invite).queryByLabelText('Temporary password')).not.toBeInTheDocument();
+    expect(within(invite).getByRole('link', { name: 'pharmacy branches' })).toHaveAttribute(
+      'href',
+      '/pharmacy/settings/branches'
+    );
+    expect(mutationFor('createMember').mutate).not.toHaveBeenCalled();
+  });
+
+  it('opens the pharmacy invite dialog and closes it again', () => {
+    render(<OrganizationAdminContent />);
+
+    expect(screen.queryByRole('dialog', { name: 'Add Team Member' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Invite staff member' }));
+    expect(screen.getByRole('dialog', { name: 'Add Team Member' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Simulate invite sent' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close invite' }));
+    expect(screen.queryByRole('dialog', { name: 'Add Team Member' })).not.toBeInTheDocument();
+  });
+
+  it('labels base roles with pharmacy vocabulary while keeping the stored values', () => {
+    render(<OrganizationAdminContent />);
+
+    const role = screen.getByLabelText('System role');
+    const options = [...role.querySelectorAll('option')].map((o) => [o.value, o.textContent]);
+    expect(options).toEqual([
+      ['ADMIN', 'Admin'],
+      ['HR', 'Manager'],
+      ['EMPLOYEE', 'Staff'],
+    ]);
+    expect(role).toHaveValue('ADMIN');
+    fireEvent.submit(role.closest('form')!);
+    expect(mutationFor('updateMember').mutate).toHaveBeenCalledWith(
+      expect.objectContaining({ role: 'ADMIN' }),
+      expect.any(Object)
+    );
+  });
+
+  it('keeps the existing base role labels outside pharmacy', () => {
+    useVertical('AGENCY');
+    render(<OrganizationAdminContent />);
+
+    const roles = screen.getAllByLabelText('System role');
+    const options = [...roles[roles.length - 1]!.querySelectorAll('option')].map(
+      (o) => o.textContent
+    );
+    expect(options).toEqual(['ADMIN', 'HR', 'EMPLOYEE']);
+  });
+
+  it('still lets the admin reset a pharmacy member password', () => {
+    render(<OrganizationAdminContent />);
+
+    expect(
+      screen.getAllByText(
+        /12–256 characters, with a lowercase letter, an uppercase letter and a digit\./
+      )
+    ).toHaveLength(1);
+    expect(screen.getByRole('button', { name: 'Reset password' })).toBeInTheDocument();
   });
 });
 

@@ -59,6 +59,10 @@ export function TeamContent() {
   const { data: team, isLoading } = trpc.team.getAll.useQuery(undefined, {
     enabled: canReadDirectory,
   });
+  // A pharmacy never licenses the HR directory: its staff are invited here with a
+  // pharmacy role template and reviewed from Organization, so agency/HR copy and an
+  // always-empty member count are not shown to it.
+  const pharmacyStaff = entitlements.vertical === 'PHARMACY' && !canReadDirectory;
 
   const departments = useMemo(() => {
     if (!team) return [];
@@ -82,9 +86,13 @@ export function TeamContent() {
   return (
     <div className="space-y-6">
       <PageHeader
-        eyebrow="FIRM"
+        eyebrow={entitlements.vertical === 'PHARMACY' ? 'STAFF' : 'FIRM'}
         heading="Team"
-        description={`${team?.length ?? 0} team members across ${departments.length} departments.`}
+        description={
+          pharmacyStaff
+            ? 'Invite pharmacy staff and choose the pharmacy role that controls their access.'
+            : `${team?.length ?? 0} team members across ${departments.length} departments.`
+        }
         actions={
           isAdmin ? (
             <Button size="lg" onClick={() => setShowAddMember(true)}>
@@ -95,7 +103,12 @@ export function TeamContent() {
       />
 
       {/* Toolbar */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
+      <div
+        className={cn(
+          'flex flex-col sm:flex-row items-start sm:items-center gap-3',
+          pharmacyStaff && 'hidden'
+        )}
+      >
         <div className="relative flex-1 w-full sm:max-w-xs">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <input
@@ -136,7 +149,24 @@ export function TeamContent() {
       </div>
 
       {/* Team grid */}
-      {!canReadDirectory ? (
+      {pharmacyStaff ? (
+        <p className="text-sm text-text-muted">
+          Pharmacy staff are invited here and receive an email to set their own password.
+          {isAdmin && (
+            <>
+              {' '}
+              Review existing staff and their access in{' '}
+              <Link
+                href="/organization"
+                className="text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                Organization
+              </Link>
+              .
+            </>
+          )}
+        </p>
+      ) : !canReadDirectory ? (
         <p className="text-sm text-text-muted">
           Invite workspace members here. The team directory requires the HR module.
         </p>
@@ -251,7 +281,14 @@ const TeamMemberCard = memo(function TeamMemberCard({ member }: { member: TeamMe
   );
 });
 
-export function AddMemberModal({ onClose }: { onClose: () => void }) {
+export function AddMemberModal({
+  onClose,
+  onInvited,
+}: {
+  onClose: () => void;
+  /** Lets a host surface (e.g. Organization) refresh its own member list. */
+  onInvited?: () => void;
+}) {
   const copy = inviteCopyForVertical(useEntitlements().vertical);
   const utils = trpc.useUtils();
   const inviteMember = trpc.team.inviteMember.useMutation();
@@ -304,6 +341,7 @@ export function AddMemberModal({ onClose }: { onClose: () => void }) {
       {
         onSuccess: (data) => {
           utils.team.getAll.invalidate();
+          onInvited?.();
           setSent({ email: submittedEmail, inviteUrl: data.inviteUrl });
         },
         onError: (err) => setError(err.message),

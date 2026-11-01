@@ -193,3 +193,55 @@ describe('baseline workspace invitations', () => {
     state.role = 'ADMIN';
   });
 });
+
+describe('pharmacy staff page (#980)', () => {
+  it('drops the agency FIRM label, the empty member count and the HR module notice', () => {
+    state.vertical = 'PHARMACY';
+    state.modules = ['admin'];
+    render(<TeamContent />);
+    expect(screen.queryByText('FIRM')).toBeNull();
+    expect(screen.getByText('STAFF')).toBeInTheDocument();
+    expect(screen.queryByText(/0 team members/)).toBeNull();
+    expect(screen.queryByText(/requires the HR module/)).toBeNull();
+    expect(screen.getByRole('link', { name: 'Organization' })).toHaveAttribute(
+      'href',
+      '/organization'
+    );
+    expect(screen.getByRole('button', { name: 'Add Member' })).toBeInTheDocument();
+    expect(state.directory).toHaveBeenCalledWith(undefined, { enabled: false });
+  });
+
+  it('keeps the agency directory notice for a workspace without HR', () => {
+    state.vertical = 'RESTAURANT';
+    render(<TeamContent />);
+    expect(screen.getByText('FIRM')).toBeInTheDocument();
+    expect(screen.getByText(/requires the HR module/)).toBeInTheDocument();
+  });
+
+  it('notifies the host surface after a successful invite', () => {
+    state.vertical = 'PHARMACY';
+    state.roles.data = [{ id: 'role_pharmacist', key: 'pharmacist', name: 'Pharmacist' }];
+    const onInvited = vi.fn();
+    render(<AddMemberModal onClose={vi.fn()} onInvited={onInvited} />);
+    fireEvent.change(screen.getByPlaceholderText('Ali Raza'), { target: { value: 'Ayesha' } });
+    fireEvent.change(screen.getByPlaceholderText('ali@pharmacy.pk'), {
+      target: { value: 'ayesha@pharmacy.test' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('Pharmacist'), {
+      target: { value: 'Pharmacist' },
+    });
+    fireEvent.change(screen.getByLabelText('Department'), { target: { value: 'COUNTER' } });
+    fireEvent.change(screen.getByLabelText('Pharmacy staff role'), {
+      target: { value: 'role_pharmacist' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Send Invite' }));
+    expect(state.invite.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({ organizationRoleId: 'role_pharmacist', department: 'COUNTER' }),
+      expect.any(Object)
+    );
+    act(() =>
+      state.invite.mutate.mock.calls[0][1].onSuccess({ inviteUrl: 'https://x.test/invite/t' })
+    );
+    expect(onInvited).toHaveBeenCalledOnce();
+  });
+});

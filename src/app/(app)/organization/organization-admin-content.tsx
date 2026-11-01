@@ -1,8 +1,9 @@
 'use client';
 
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import Link from 'next/link';
 import { useSession } from 'next-auth/react';
-import { Check, Copy, KeyRound, Loader2, RefreshCw, ShieldCheck } from 'lucide-react';
+import { Check, Copy, KeyRound, Loader2, RefreshCw, ShieldCheck, UserPlus } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Switch as StudioSwitch } from '@/components/ui/switch';
@@ -12,6 +13,8 @@ import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { useAssistant } from '@/lib/assistant-store';
 import { verticalForModuleKey } from '@/lib/module-catalog';
+import { inviteCopyForVertical, type BaseRole } from '@/lib/team/invite-copy';
+import { AddMemberModal } from '../team/team-content';
 
 const inputClass =
   'h-10 w-full rounded-lg border border-border bg-background px-3 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15 aria-invalid:border-destructive aria-invalid:ring-2 aria-invalid:ring-destructive/20';
@@ -214,6 +217,7 @@ export function OrganizationAdminContent() {
   const utils = trpc.useUtils();
   const overview = trpc.organizationAdmin.overview.useQuery();
   const [revealedScimToken, setRevealedScimToken] = useState<string | null>(null);
+  const [inviteOpen, setInviteOpen] = useState(false);
   const refresh = async () => {
     await utils.organizationAdmin.overview.invalidate();
   };
@@ -293,6 +297,12 @@ export function OrganizationAdminContent() {
   }
 
   const { organization, entitlements, pharmacyBranches } = overview.data;
+  // Pharmacy staff join through an emailed invite with a pharmacy role template, never an
+  // admin-chosen temporary password; base roles use the pharmacy vocabulary.
+  const isPharmacy = organization.vertical === 'PHARMACY';
+  const baseRoleLabels = isPharmacy
+    ? inviteCopyForVertical('PHARMACY').baseRoleLabels
+    : ({ ADMIN: 'ADMIN', HR: 'HR', EMPLOYEE: 'EMPLOYEE' } satisfies Record<BaseRole, string>);
   const createRoleErrors = !role.variables?.id ? role.error?.data?.validation : null;
   const createRoleKeyError = createRoleErrors?.key?.[0];
   const createRolePermissionsError = createRoleErrors?.permissions?.[0];
@@ -482,101 +492,131 @@ export function OrganizationAdminContent() {
         title="People and access"
         description={`${entitlements.activeSeats} of ${entitlements.seatLimit} licensed ${entitlements.seatLimit === 1 ? 'seat' : 'seats'} ${entitlements.activeSeats === 1 ? 'is' : 'are'} currently occupied.`}
       >
-        <form
-          className="mb-5 grid gap-3 rounded-xl bg-muted/35 p-4 sm:grid-cols-2 lg:grid-cols-3"
-          aria-label="Add staff member"
-          onSubmit={(event) => {
-            event.preventDefault();
-            const values = new FormData(event.currentTarget);
-            const form = event.currentTarget;
-            addMember.mutate(
-              {
-                name: formValue(values, 'name'),
-                email: formValue(values, 'email'),
-                password: formValue(values, 'password'),
-                title: formValue(values, 'title'),
-                role: formValue(values, 'role') as 'ADMIN' | 'HR' | 'EMPLOYEE',
-                department: formValue(values, 'department'),
-                organizationRoleId: formValue(values, 'organizationRoleId') || null,
-                branchIds: values.getAll('branchId').map(String),
-              },
-              { onSuccess: () => form.reset() }
-            );
-          }}
-        >
-          <p className="text-sm font-semibold sm:col-span-2 lg:col-span-3">Add staff member</p>
-          <label>
-            <span className={labelClass}>Full name</span>
-            <Input name="name" required />
-          </label>
-          <label>
-            <span className={labelClass}>Email</span>
-            <Input name="email" type="email" required />
-          </label>
-          <label>
-            <span className={labelClass}>Title</span>
-            <Input name="title" placeholder="Cashier" required />
-          </label>
-          <label>
-            <span className={labelClass}>System role</span>
-            <select className={inputClass} name="role" defaultValue="EMPLOYEE">
-              {['ADMIN', 'HR', 'EMPLOYEE'].map((option) => (
-                <option key={option}>{option}</option>
-              ))}
-            </select>
-          </label>
-          <label>
-            <span className={labelClass}>Department</span>
-            <select className={inputClass} name="department" required>
-              {organization.departments.map((department) => (
-                <option key={department.key} value={department.key}>
-                  {department.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            <span className={labelClass}>Role template</span>
-            <select className={inputClass} name="organizationRoleId" defaultValue="">
-              <option value="">No custom role</option>
-              {organization.roles.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          {pharmacyBranches.length > 0 && (
-            <fieldset className="sm:col-span-2 lg:col-span-3">
-              <legend className={labelClass}>Pharmacy branches</legend>
-              <div className="flex flex-wrap gap-3">
-                {pharmacyBranches.map((branch) => (
-                  <label key={branch.id} className="flex min-h-11 items-center gap-2 text-sm">
-                    <input
-                      type="checkbox"
-                      name="branchId"
-                      value={branch.id}
-                      className="size-4 rounded border-border text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                    />
-                    {branch.name}
-                  </label>
-                ))}
-              </div>
-            </fieldset>
-          )}
-          <label className="sm:col-span-2 lg:col-span-2">
-            <span className={labelClass}>Temporary password</span>
-            <Input name="password" type="password" minLength={12} required />
-          </label>
-          <div className="flex items-end">
-            <SubmitButton pending={addMember.isPending}>Add staff</SubmitButton>
+        {isPharmacy ? (
+          <div
+            role="group"
+            aria-label="Invite pharmacy staff"
+            className="mb-5 flex flex-col gap-3 rounded-xl bg-muted/35 p-4 sm:flex-row sm:items-center sm:justify-between"
+          >
+            <div>
+              <p className="text-sm font-semibold">Invite pharmacy staff</p>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Staff receive an email invite, set their own password and get the pharmacy role you
+                choose. Once they accept, assign their branches from{' '}
+                <Link
+                  href="/pharmacy/settings/branches"
+                  className="text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  pharmacy branches
+                </Link>
+                . Each invite occupies one licensed seat ({entitlements.activeSeats}/
+                {entitlements.seatLimit} used).
+              </p>
+            </div>
+            <Button type="button" className="min-h-11 shrink-0" onClick={() => setInviteOpen(true)}>
+              <UserPlus className="h-4 w-4" /> Invite staff member
+            </Button>
           </div>
-          <p className="text-[11px] text-muted-foreground sm:col-span-2 lg:col-span-3">
-            12–256 characters, with a lowercase letter, an uppercase letter and a digit. The new
-            member occupies one licensed seat ({entitlements.activeSeats}/{entitlements.seatLimit}{' '}
-            used).
-          </p>
-        </form>
+        ) : (
+          <form
+            className="mb-5 grid gap-3 rounded-xl bg-muted/35 p-4 sm:grid-cols-2 lg:grid-cols-3"
+            aria-label="Add staff member"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const values = new FormData(event.currentTarget);
+              const form = event.currentTarget;
+              addMember.mutate(
+                {
+                  name: formValue(values, 'name'),
+                  email: formValue(values, 'email'),
+                  password: formValue(values, 'password'),
+                  title: formValue(values, 'title'),
+                  role: formValue(values, 'role') as 'ADMIN' | 'HR' | 'EMPLOYEE',
+                  department: formValue(values, 'department'),
+                  organizationRoleId: formValue(values, 'organizationRoleId') || null,
+                  branchIds: values.getAll('branchId').map(String),
+                },
+                { onSuccess: () => form.reset() }
+              );
+            }}
+          >
+            <p className="text-sm font-semibold sm:col-span-2 lg:col-span-3">Add staff member</p>
+            <label>
+              <span className={labelClass}>Full name</span>
+              <Input name="name" required />
+            </label>
+            <label>
+              <span className={labelClass}>Email</span>
+              <Input name="email" type="email" required />
+            </label>
+            <label>
+              <span className={labelClass}>Title</span>
+              <Input name="title" placeholder="Cashier" required />
+            </label>
+            <label>
+              <span className={labelClass}>System role</span>
+              <select className={inputClass} name="role" defaultValue="EMPLOYEE">
+                {['ADMIN', 'HR', 'EMPLOYEE'].map((option) => (
+                  <option key={option}>{option}</option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span className={labelClass}>Department</span>
+              <select className={inputClass} name="department" required>
+                {organization.departments.map((department) => (
+                  <option key={department.key} value={department.key}>
+                    {department.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span className={labelClass}>Role template</span>
+              <select className={inputClass} name="organizationRoleId" defaultValue="">
+                <option value="">No custom role</option>
+                {organization.roles.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {pharmacyBranches.length > 0 && (
+              <fieldset className="sm:col-span-2 lg:col-span-3">
+                <legend className={labelClass}>Pharmacy branches</legend>
+                <div className="flex flex-wrap gap-3">
+                  {pharmacyBranches.map((branch) => (
+                    <label key={branch.id} className="flex min-h-11 items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        name="branchId"
+                        value={branch.id}
+                        className="size-4 rounded border-border text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      />
+                      {branch.name}
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+            )}
+            <label className="sm:col-span-2 lg:col-span-2">
+              <span className={labelClass}>Temporary password</span>
+              <Input name="password" type="password" minLength={12} required />
+            </label>
+            <div className="flex items-end">
+              <SubmitButton pending={addMember.isPending}>Add staff</SubmitButton>
+            </div>
+            <p className="text-[11px] text-muted-foreground sm:col-span-2 lg:col-span-3">
+              12–256 characters, with a lowercase letter, an uppercase letter and a digit. The new
+              member occupies one licensed seat ({entitlements.activeSeats}/
+              {entitlements.seatLimit} used).
+            </p>
+          </form>
+        )}
+        {inviteOpen && (
+          <AddMemberModal onClose={() => setInviteOpen(false)} onInvited={() => void refresh()} />
+        )}
         <div className="divide-y divide-border/60">
           {organization.users.map((user) => (
             <details key={user.id} className="group">
@@ -643,7 +683,9 @@ export function OrganizationAdminContent() {
                         defaultValue={String(value)}
                       >
                         {(options as string[]).map((option) => (
-                          <option key={option}>{option}</option>
+                          <option key={option} value={option}>
+                            {name === 'role' ? baseRoleLabels[option as BaseRole] : option}
+                          </option>
                         ))}
                       </select>
                     </label>

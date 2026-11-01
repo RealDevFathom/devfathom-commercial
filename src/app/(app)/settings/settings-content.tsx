@@ -102,6 +102,16 @@ export function RestaurantPrintRoutingSection() {
   return vertical === 'RESTAURANT' ? <PrintRoutingSection /> : null;
 }
 
+/**
+ * Every notification category (tasks, meetings, time off, invoices, projects,
+ * clients, resignations, notes, chat mentions) belongs to a workspace module a
+ * pharmacy package never licenses, so pharmacy members do not see the matrix.
+ */
+export function WorkspaceNotificationsSection() {
+  const { vertical } = useEntitlements();
+  return vertical === 'PHARMACY' ? null : <NotificationsSection />;
+}
+
 export function SettingsContent() {
   const { data: session } = useSession();
   const isAdmin = session?.user?.role === 'ADMIN';
@@ -126,8 +136,8 @@ export function SettingsContent() {
       {/* Recent sign-ins (IMP-AUTH-03 — visibility half) */}
       <RecentSignInsSection />
 
-      {/* Notification preferences (IMP-AUTH-04) */}
-      <NotificationsSection />
+      {/* Notification preferences (IMP-AUTH-04; workspace categories, not pharmacy) */}
+      <WorkspaceNotificationsSection />
 
       {/* Appearance */}
       <AppearanceSection />
