@@ -468,6 +468,27 @@ describe('counter receipt authorization', () => {
     expect(readCounterCart).not.toHaveBeenCalled();
   });
 
+  it('requires an exact pharmacy grant and applies DENY over any receipt ALLOW', async () => {
+    for (const permissions of [
+      [{ capability: 'pharmacy:*', effect: 'ALLOW' as const }],
+      [
+        { capability: 'pharmacy:receipt', effect: 'ALLOW' as const },
+        { capability: 'pharmacy:dispense', effect: 'DENY' as const },
+      ],
+      [
+        { capability: 'pharmacy:receipt', effect: 'ALLOW' as const },
+        { capability: 'pharmacy:*', effect: 'DENY' as const },
+      ],
+    ]) {
+      const f = fixture(permissions);
+      assign(f, ['branch-a']);
+      await expect(
+        f.caller().counterReceipt({ branchId: 'branch-a', saleId: 'sale-a' })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(readCounterReceipt).not.toHaveBeenCalled();
+    }
+  });
+
   it('allows pharmacy.dispense and pharmacy:receipt when the branch is assigned', async () => {
     for (const capability of [
       'pharmacy.dispense',

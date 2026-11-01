@@ -49,6 +49,7 @@ import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
 import type { CounterCart, CounterSearchRow } from '@/lib/pharmacy/counter';
+import type { SubstituteProposal } from '@/lib/pharmacy/substitute-finder';
 import {
   counterAlertsFor,
   hasBlockingAlert,
@@ -498,6 +499,7 @@ function ScopedPharmacyCounterConsole({
   const openDrawer = trpc.pharmacySales.openDrawer.useMutation();
   const captureDemand = trpc.pharmacySales.captureDemand.useMutation();
   const declineSubstitute = trpc.pharmacySales.declineSubstitute.useMutation();
+  const recordSubstitution = trpc.pharmacyDispensing.recordSubstitution.useMutation();
   const linkCustomer = trpc.pharmacySales.linkCustomer.useMutation();
   const redeemLoyalty = trpc.pharmacySales.redeemPoints.useMutation();
   const authenticatePack = trpc.pharmacySales.authenticatePack.useMutation();
@@ -567,17 +569,17 @@ function ScopedPharmacyCounterConsole({
     requestedCanonicalUnits > 0
       ? Math.max(0, requestedCanonicalUnits - activeRow.onHandUnits)
       : 0;
+  const outOfStock = Boolean(activeRow && activeRow.onHandUnits === 0);
   const substituteInput =
     activeRow &&
-    selectedOption &&
     requestedCanonicalUnits !== null &&
-    activeRow.onHandUnits < requestedCanonicalUnits
+    requestedCanonicalUnits > 0 &&
+    (outOfStock || (selectedOption !== null && activeRow.onHandUnits < requestedCanonicalUnits))
       ? {
           branchId,
           medicineId: activeRow.medicineId,
           presentationId: activeRow.presentationId,
           quantityCanonicalUnits: requestedCanonicalUnits,
-          ...(preview ? { referencePriceMinor: preview.unitPriceMinor } : {}),
         }
       : null;
   const substitutesQuery = trpc.pharmacySales.substituteProposals.useQuery(
@@ -627,7 +629,10 @@ function ScopedPharmacyCounterConsole({
             }
           : null,
         requestedCanonicalUnits: line.canonicalUnits,
-        nearestSafeExpiry: line.allocations[0] ? new Date(line.allocations[0].expiresAt) : null,
+        nearestSafeExpiry: line.allocations.reduce<Date | null>((soonest, allocation) => {
+          const expiresAt = new Date(allocation.expiresAt);
+          return soonest === null || expiresAt.getTime() < soonest.getTime() ? expiresAt : soonest;
+        }, null),
         discountMinor: line.discountMinor,
       };
     });
@@ -1423,6 +1428,47 @@ function ScopedPharmacyCounterConsole({
     substitutesQuery.data,
   ]);
 
+  const acceptSubstitute = useCallback(
+    async (
+      proposal: SubstituteProposal,
+      evidence: { patientCommunication: string; jurisdictionRuleRef: string }
+    ) => {
+      const prescribed = patient?.prescriptions
+        .flatMap((prescription) => prescription.lines)
+        .find((entry) => entry.medicineId === activeRow?.medicineId);
+      const saleLine = cart?.lines.find((line) => line.medicineId === activeRow?.medicineId);
+      if (!activeRow || !prescribed || !saleLine || busy) {
+        setNotice({
+          tone: 'warning',
+          message:
+            'This stays a suggestion until the prescribed medicine is on the open sale. It is not added to the cart from here.',
+        });
+        return;
+      }
+      setPending('recordSubstitution');
+      try {
+        await recordSubstitution.mutateAsync({
+          prescriptionLineId: prescribed.prescriptionLineId,
+          saleLineId: saleLine.saleLineId,
+          prescribedPresentationId: activeRow.presentationId,
+          suppliedPresentationId: proposal.presentationId,
+          equivalenceBasis: proposal.equivalenceBasis,
+          patientCommunication: evidence.patientCommunication,
+          jurisdictionRuleRef: evidence.jurisdictionRuleRef,
+        });
+        setNotice({
+          tone: 'success',
+          message: 'Substitution recorded. The suggestion was not added to the sale.',
+        });
+      } catch (error) {
+        setNotice({ tone: 'danger', message: messageFrom(error) });
+      } finally {
+        setPending(null);
+      }
+    },
+    [activeRow, busy, cart?.lines, patient?.prescriptions, recordSubstitution]
+  );
+
   const printReceipt = useCallback(() => {
     const receipt = receiptQuery.data;
     if (
@@ -1908,17 +1954,11 @@ function ScopedPharmacyCounterConsole({
                       ? 'error'
                       : 'ready'
                 }
-                prescriptionOnly={activeRow?.restriction.rx ?? false}
+                outOfStock={outOfStock}
                 error={substitutesQuery.error ? messageFrom(substitutesQuery.error) : null}
                 disabled={busy}
-                onChoose={(proposal) => {
-                  setQuery(proposal.displayName);
-                  setSubmittedSearch({
-                    text: proposal.displayName,
-                    query: proposal.displayName,
-                    branchId,
-                  });
-                  setActiveRow(null);
+                onAccept={(proposal, evidence) => {
+                  void acceptSubstitute(proposal, evidence);
                 }}
                 onDecline={() => void declineVisibleSubstitutes()}
                 onRetry={() => void substitutesQuery.refetch()}

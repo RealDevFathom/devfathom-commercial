@@ -2,7 +2,9 @@ import type { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 export class PharmacySubstituteError extends Error {
-  constructor(readonly code: 'NOT_FOUND' | 'NOT_EQUIVALENT' | 'NOT_SALEABLE') {
+  constructor(
+    readonly code: 'NOT_FOUND' | 'NOT_EQUIVALENT' | 'NOT_SALEABLE' | 'OVERRIDE_REASON_REQUIRED'
+  ) {
     super(code);
     this.name = 'PharmacySubstituteError';
   }
@@ -27,6 +29,9 @@ export type SubstituteProposal = {
   strength: string;
   dosageForm: string | null;
   route: string | null;
+  controlled: boolean;
+  rx: boolean;
+  restricted: boolean;
   availableCanonicalUnits: number;
   priceMinor: number;
   priceDifferenceMinor: number;
@@ -50,22 +55,34 @@ function displayStrength(strengths: readonly { value: { toString(): string }; un
   return strengths.map((item) => `${item.value.toString()} ${item.unit}`).join(' + ');
 }
 
+function regulatoryFlags(medicine: { controlled?: boolean; rx?: boolean; restricted?: boolean }) {
+  return {
+    controlled: medicine.controlled === true,
+    rx: medicine.rx === true,
+    restricted: medicine.restricted === true,
+  };
+}
+
 /**
  * AI-05: deterministic graph traversal only. A proposal is an inventory fact,
  * not clinical advice, and never mutates a sale or prescription.
  */
 export async function findSubstituteProposals(
   db: ScopedDb,
-  scope: { organizationId: string; branchId: string },
+  scope: { organizationId: string; branchId: string; actorId?: string },
   input: {
     medicineId: string;
     presentationId: string;
     quantityCanonicalUnits: number;
-    referencePriceMinor?: number;
     at?: Date;
+    pharmacistOverride?: { reason: string };
   }
 ): Promise<SubstituteProposal[]> {
   const at = input.at ?? new Date();
+  const overrideReason = input.pharmacistOverride?.reason.trim();
+  if (input.pharmacistOverride && (!overrideReason || !scope.actorId)) {
+    throw new PharmacySubstituteError('OVERRIDE_REASON_REQUIRED');
+  }
   const requested = await db.medicine.findFirst({
     where: { id: input.medicineId, organizationId: scope.organizationId },
     include: { strengths: true, presentations: true },
@@ -74,28 +91,26 @@ export async function findSubstituteProposals(
     (presentation) => presentation.id === input.presentationId
   );
   if (!requested || !requestedPresentation) throw new PharmacySubstituteError('NOT_FOUND');
+  const requestedFlags = regulatoryFlags(requested);
+  const requireLowerPrice = !input.pharmacistOverride;
+  const ingredientIds = [...new Set(requested.strengths.map((item) => item.ingredientId))];
 
-  const historicalReference =
-    input.referencePriceMinor === undefined
-      ? await db.pharmacyInventoryLot.findFirst({
-          where: {
-            organizationId: scope.organizationId,
-            branchId: scope.branchId,
-            receivedAt: { not: null },
-            batch: { medicineId: input.medicineId },
-          },
-          select: { printedMrpMinor: true, unitsPerPack: true },
-          orderBy: { receivedAt: 'desc' },
-        })
-      : null;
-  const referencePriceMinor =
-    input.referencePriceMinor ??
-    (historicalReference
-      ? Math.floor(
-          (historicalReference.printedMrpMinor * input.quantityCanonicalUnits) /
-            historicalReference.unitsPerPack
-        )
-      : null);
+  const historicalReference = await db.pharmacyInventoryLot.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      receivedAt: { not: null },
+      batch: { medicineId: input.medicineId },
+    },
+    select: { printedMrpMinor: true, unitsPerPack: true },
+    orderBy: { receivedAt: 'desc' },
+  });
+  const referencePriceMinor = historicalReference
+    ? Math.floor(
+        (historicalReference.printedMrpMinor * input.quantityCanonicalUnits) /
+          historicalReference.unitsPerPack
+      )
+    : null;
   if (referencePriceMinor === null) return [];
 
   const lots: CandidateLot[] = await db.pharmacyInventoryLot.findMany({
@@ -107,7 +122,17 @@ export async function findSubstituteProposals(
         medicineId: { not: input.medicineId },
         state: 'ACTIVE',
         expiresAt: { gt: at },
-        medicine: { saleable: true },
+        medicine: {
+          saleable: true,
+          ...requestedFlags,
+          ...(ingredientIds.length > 0
+            ? {
+                AND: ingredientIds.map((ingredientId) => ({
+                  strengths: { some: { ingredientId } },
+                })),
+              }
+            : {}),
+        },
       },
       balances: { some: { disposition: 'AVAILABLE', onHandUnits: { gt: 0 } } },
     },
@@ -118,6 +143,7 @@ export async function findSubstituteProposals(
   const proposals = lots.flatMap((lot): SubstituteProposal[] => {
     const medicine = lot.batch.medicine;
     const presentation = lot.packLevel.presentation;
+    const flags = regulatoryFlags(medicine);
     const availableCanonicalUnits = lot.balances.reduce(
       (total, balance) => total + balance.onHandUnits,
       0
@@ -127,10 +153,13 @@ export async function findSubstituteProposals(
     );
     if (
       strengthKey(medicine.strengths) !== requestedStrength ||
+      flags.controlled !== requestedFlags.controlled ||
+      flags.rx !== requestedFlags.rx ||
+      flags.restricted !== requestedFlags.restricted ||
       normalized(presentation.dosageForm) !== normalized(requestedPresentation.dosageForm) ||
       normalized(presentation.route) !== normalized(requestedPresentation.route) ||
       availableCanonicalUnits < input.quantityCanonicalUnits ||
-      priceMinor >= referencePriceMinor
+      (requireLowerPrice && (referencePriceMinor === null || priceMinor > referencePriceMinor))
     ) {
       return [];
     }
@@ -144,13 +173,38 @@ export async function findSubstituteProposals(
         strength: displayStrength(medicine.strengths),
         dosageForm: presentation.dosageForm,
         route: presentation.route,
+        ...flags,
         availableCanonicalUnits,
         priceMinor,
-        priceDifferenceMinor: referencePriceMinor - priceMinor,
+        priceDifferenceMinor: referencePriceMinor === null ? 0 : referencePriceMinor - priceMinor,
         equivalenceBasis: 'Exact ingredient(s), strength component(s), dosage form and route',
       },
     ];
   });
+
+  if (input.pharmacistOverride) {
+    await db.auditLog.create({
+      data: {
+        organizationId: scope.organizationId,
+        actorId: scope.actorId,
+        source: 'TRPC',
+        category: 'PHARMACY',
+        operation: 'OTHER',
+        action: 'pharmacySales.overrideSubstitutePrice',
+        targetType: 'Medicine',
+        targetId: input.medicineId,
+        metadata: {
+          reason: overrideReason!,
+          branchId: scope.branchId,
+          referencePriceMinor,
+          proposals: proposals.map(({ inventoryLotId, priceMinor }) => ({
+            inventoryLotId,
+            priceMinor,
+          })),
+        },
+      },
+    });
+  }
 
   return proposals.sort(
     (left, right) =>

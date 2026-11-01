@@ -1,3 +1,4 @@
+import { authorizeSubstituteSale } from '@/lib/pharmacy/substitute-sale-authorization';
 import { ControlledRestorationDenied } from '@/lib/pharmacy/controlled-restoration-authorization';
 import { hasModule } from '@/lib/entitlements';
 import {
@@ -303,22 +304,6 @@ const RECEIPT_READ_CAPABILITIES = [
   'pharmacy.counter',
 ] as const;
 
-function capabilityCovers(rule: string, action: string): boolean {
-  if (rule === '*' || rule === action) return true;
-  if (rule.endsWith(':*') || rule.endsWith('.*')) return action.startsWith(rule.slice(0, -1));
-  return false;
-}
-
-function capabilityDecision(
-  rules: { capability: string; effect: string }[],
-  action: string
-): 'ALLOW' | 'DENY' | null {
-  const matched = rules.filter((rule) => capabilityCovers(rule.capability, action));
-  if (matched.some((rule) => rule.effect === 'DENY')) return 'DENY';
-  if (matched.some((rule) => rule.effect === 'ALLOW')) return 'ALLOW';
-  return null;
-}
-
 /**
  * Dispense, receipt, or counter capability, then an active pharmacy branch
  * assignment in the session organization. Restaurant staff profiles are not
@@ -338,14 +323,21 @@ async function branchScopeOrForbidden(ctx: TRPCContext, branch: string): Promise
   }
 }
 
-async function requireCounterReceiptAccess(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
+async function requireCounterReceiptAccess(
+  ctx: TRPCContext,
+  branch: string,
+  db: ScopedDb = ctx.db
+): Promise<LedgerScope> {
+  if (!hasModule(ctx.entitlements, 'pharmacy-counter')) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Pharmacy counter access is required.' });
+  }
   const scope = await branchScopeOrForbidden(ctx, branch);
   const user = ctx.session!.user;
   if (!user.organizationId || user.organizationId !== scope.organizationId) {
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
   }
 
-  const member = await ctx.db.user.findUnique({
+  const member = await db.user.findUnique({
     where: { id: user.id },
     select: {
       status: true,
@@ -368,24 +360,34 @@ async function requireCounterReceiptAccess(ctx: TRPCContext, branch: string): Pr
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
   }
 
-  const overrides = member.permissionOverrides;
-  const roleRules = member.organizationRole?.permissions ?? [];
-  const explicitlyDenied = RECEIPT_READ_CAPABILITIES.some(
-    (action) =>
-      capabilityDecision(overrides, action) === 'DENY' ||
-      capabilityDecision(roleRules, action) === 'DENY'
+  // Pharmacy counter capabilities are an exact-grant boundary: broad wildcards
+  // do not implicitly grant access, and any applicable denial wins globally,
+  // including for a session administrator.
+  const rules = [
+    ...member.permissionOverrides,
+    ...(member.organizationRole?.permissions ?? []),
+  ];
+  const isExactCounterCapability = (capability: string) =>
+    RECEIPT_READ_CAPABILITIES.includes(
+      capability as (typeof RECEIPT_READ_CAPABILITIES)[number]
+    );
+  const denied = rules.some(
+    (rule) =>
+      rule.effect === 'DENY' &&
+      (isExactCounterCapability(rule.capability) ||
+        rule.capability === '*' ||
+        rule.capability === 'pharmacy:*' ||
+        rule.capability === 'pharmacy.*')
   );
-  if (explicitlyDenied) {
+  if (denied) {
     throw new TRPCError({
       code: 'FORBIDDEN',
       message: 'You do not have permission for this action.',
     });
   }
-  const capable = RECEIPT_READ_CAPABILITIES.some((action) => {
-    const override = capabilityDecision(overrides, action);
-    if (override === 'ALLOW') return true;
-    return capabilityDecision(roleRules, action) === 'ALLOW';
-  });
+  const capable = rules.some(
+    (rule) => rule.effect === 'ALLOW' && isExactCounterCapability(rule.capability)
+  );
   // A same-organization session administrator may proceed only after both
   // user and role rules have been checked for an explicit receipt denial.
   const orgAdmin = user.role === 'ADMIN' && user.organizationId === scope.organizationId;
@@ -396,7 +398,7 @@ async function requireCounterReceiptAccess(ctx: TRPCContext, branch: string): Pr
     });
   }
 
-  const available = await ctx.db.pharmacyBranch.findFirst({
+  const available = await db.pharmacyBranch.findFirst({
     where: { id: branch, organizationId: scope.organizationId, active: true },
     select: { id: true },
   });
@@ -404,7 +406,7 @@ async function requireCounterReceiptAccess(ctx: TRPCContext, branch: string): Pr
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
   }
 
-  const rows = await ctx.db.pharmacyBranchAssignment.findMany({
+  const rows = await db.pharmacyBranchAssignment.findMany({
     where: {
       organizationId: scope.organizationId,
       userId: user.id,
@@ -881,6 +883,15 @@ export const pharmacySalesRouter = router({
     .input(
       z
         .object({
+          substitution: z
+            .object({
+              requestedMedicineId: z.string().min(1),
+              requestedPresentationId: z.string().min(1),
+              inventoryLotId: z.string().min(1),
+              priceOverrideReason: z.string().trim().min(1).max(1000).optional(),
+            })
+            .strict()
+            .optional(),
           controlledAuthorization: z
             .object({
               prescriptionLineId: z.string().min(1).optional(),
@@ -955,10 +966,21 @@ export const pharmacySalesRouter = router({
         const scope = await requireCounterReceiptAccess(ctx, input.branchId);
         const outcome = await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
+          const addAuthorizedLine = async () => {
+            if (input.substitution)
+              return authorizeSubstituteSale(
+                db,
+                scope,
+                input.substitution,
+                input.quantity * input.canonicalUnitsPerSaleUnit,
+                () => addSaleLine(db, scope, input)
+              );
+            return addSaleLine(db, scope, input);
+          };
           const medicine = await db.medicine.findFirst({
             where: { id: input.medicineId, organizationId: scope.organizationId },
           });
-          if (!medicine?.controlled) return addSaleLine(db, scope, input);
+          if (!medicine?.controlled) return addAuthorizedLine();
           if (
             !(await can(subjectFromSession(ctx.session!.user), 'pharmacy:dispense', undefined, {
               db,
@@ -1061,7 +1083,7 @@ export const pharmacySalesRouter = router({
               return { blocked: 'Patient dispensing consent is required.' };
             }
             await db.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${scope.organizationId + ':' + scope.branchId},0))`;
-            const result = await addSaleLine(db, scope, input);
+            const result = await addAuthorizedLine();
             await appendControlledSaleEntries(db, {
               organizationId: scope.organizationId,
               branchId: scope.branchId,
@@ -1152,7 +1174,7 @@ export const pharmacySalesRouter = router({
           });
           if (!consent?.granted || consent.revokedAt)
             return { blocked: 'Patient dispensing consent is required.' };
-          const result = await addSaleLine(db, scope, input);
+          const result = await addAuthorizedLine();
           await db.prescriptionFill.create({
             data: {
               organizationId: scope.organizationId,
@@ -1355,19 +1377,46 @@ export const pharmacySalesRouter = router({
           medicineId: z.string().min(1),
           presentationId: z.string().min(1),
           quantityCanonicalUnits: z.number().int().positive(),
+          // Accepted and discarded. The reference price is the latest received lot.
           referencePriceMinor: z.number().int().positive().optional(),
         })
         .strict()
     )
     .query(async ({ ctx, input }) => {
       try {
-        return await findSubstituteProposals(ctx.db, await scopeFor(ctx, input.branchId), input);
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+        return await findSubstituteProposals(ctx.db, scope, {
+          medicineId: input.medicineId,
+          presentationId: input.presentationId,
+          quantityCanonicalUnits: input.quantityCanonicalUnits,
+        });
       } catch (error) {
         if (error instanceof PharmacySubstituteError) {
           throw new TRPCError({ code: 'NOT_FOUND', message: error.code });
         }
         throw error;
       }
+    }),
+  overrideSubstitutePrice: auditedProtectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          medicineId: z.string().min(1),
+          presentationId: z.string().min(1),
+          quantityCanonicalUnits: z.number().int().positive(),
+          reason: z.string().trim().min(1).max(1000),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+      return findSubstituteProposals(ctx.db, scope, {
+        medicineId: input.medicineId,
+        presentationId: input.presentationId,
+        quantityCanonicalUnits: input.quantityCanonicalUnits,
+        pharmacistOverride: { reason: input.reason },
+      });
     }),
   declineSubstitute: protectedProcedure
     .input(
