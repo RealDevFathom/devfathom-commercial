@@ -16,7 +16,8 @@ import {
   transferVarianceUnits,
   type TransferAction,
 } from '@/components/pharmacy/inventory/transfers/transfer-presentation';
-import { selectClass } from '@/components/pharmacy/inventory/transfers/transfer-receive-form';
+import { BranchField, FilterForm } from '@/components/pharmacy/inventory/filter-form';
+import { openingImportHref } from '@/components/pharmacy/inventory/opening-import';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
@@ -50,11 +51,27 @@ function url(branchId: string, notice: string, kind: 'success' | 'error' = 'succ
   return `${route}?${new URLSearchParams({ branch: branchId, notice, kind })}`;
 }
 
-function Empty({ children }: { children: React.ReactNode }) {
+type NextStep = { href: string; label: string };
+
+/** An empty section that says why it is empty and links to the next useful step. */
+function Empty({ children, steps = [] }: { children: React.ReactNode; steps?: NextStep[] }) {
   return (
-    <p className="rounded-[var(--radius-sm)] bg-surface-sunken p-5 text-sm text-text-muted">
-      {children}
-    </p>
+    <div className="rounded-[var(--radius-sm)] bg-surface-sunken p-5 text-sm text-text-muted">
+      <p>{children}</p>
+      {steps.length ? (
+        <div className="mt-3 flex flex-wrap gap-3">
+          {steps.map((step) => (
+            <Link
+              className={buttonVariants({ variant: 'outline' })}
+              href={step.href}
+              key={step.href}
+            >
+              {step.label}
+            </Link>
+          ))}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -164,6 +181,16 @@ export default async function PharmacyTransfersPage({
       value: `${location.branchId}:${location.id}`,
       label: `${branchNames.get(location.branchId)} · ${location.name}`,
     }));
+  const branchesWithLocation = new Set(destinationLocations.map((location) => location.branchId));
+  const otherBranchWithoutLocation = branches.find(
+    (item) => item.id !== branch.id && !branchesWithLocation.has(item.id)
+  );
+  const inventoryHref = (branchId: string, section = '') =>
+    `/pharmacy/inventory?${new URLSearchParams({ branch: branchId })}${section}`;
+  const stockSteps: NextStep[] = [
+    { href: openingImportHref(branch.id), label: 'Import opening stock' },
+    { href: '/pharmacy/purchasing/receiving', label: 'Receive a supplier delivery' },
+  ];
   const outbound = transfers.filter((transfer) => transfer.direction === 'OUTBOUND');
   const inbound = transfers.filter((transfer) => transfer.direction === 'INBOUND');
 
@@ -218,21 +245,16 @@ export default async function PharmacyTransfersPage({
         </div>
       ) : null}
       <SectionCard eyebrow="Organization-scoped" title="Working branch">
-        <form className="flex flex-wrap items-end gap-3" method="get">
-          <label className="min-w-64 flex-1 text-sm text-text-body">
-            Branch
-            <select className={selectClass} defaultValue={branch.id} name="branch">
-              {branches.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.name} · {item.city}
-                </option>
-              ))}
-            </select>
-          </label>
-          <Button type="submit" variant="secondary">
-            Open branch
-          </Button>
-        </form>
+        {branches.length > 1 ? (
+          <FilterForm action={route} autoSubmit className="flex flex-wrap items-end gap-3">
+            <BranchField branches={branches} value={branch.id} />
+            <Button className="min-h-11" type="submit" variant="secondary">
+              Open branch
+            </Button>
+          </FilterForm>
+        ) : (
+          <BranchField branches={branches} value={branch.id} />
+        )}
       </SectionCard>
 
       <section aria-label="Transfer summary" className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -267,10 +289,25 @@ export default async function PharmacyTransfersPage({
             stock={stock}
           />
         ) : (
-          <Empty>
-            {destinations.length
-              ? 'This branch has no available stock to send. Receive stock first.'
-              : 'Transfers need a second active branch with a receiving location. Add it in onboarding.'}
+          <Empty
+            steps={
+              branches.length < 2
+                ? [{ href: '/pharmacy', label: 'Add a second branch in onboarding' }]
+                : !destinations.length
+                  ? [
+                      {
+                        href: inventoryHref(otherBranchWithoutLocation?.id ?? branch.id, '#locations'),
+                        label: `Create a location at ${otherBranchWithoutLocation?.name ?? 'the other branch'}`,
+                      },
+                    ]
+                  : stockSteps
+            }
+          >
+            {branches.length < 2
+              ? 'Transfers move stock between your branches, and you have one. Add a second branch and its stock location in onboarding.'
+              : !destinations.length
+                ? 'The other branch has no stock location to receive into yet. Create one there first.'
+                : `${branch.name} has no available stock to send yet. Import opening stock or receive a delivery first.`}
           </Empty>
         )}
       </SectionCard>
@@ -290,7 +327,10 @@ export default async function PharmacyTransfersPage({
             ))}
           </div>
         ) : (
-          <Empty>No transfers are addressed to {branch.name} yet.</Empty>
+          <Empty>
+            No transfers are on their way to {branch.name}. When another branch sends stock here,
+            it appears in this list to receive.
+          </Empty>
         )}
       </SectionCard>
 
@@ -309,7 +349,9 @@ export default async function PharmacyTransfersPage({
             ))}
           </div>
         ) : (
-          <Empty>{branch.name} has not sent any stock yet. Allocate a transfer above.</Empty>
+          <Empty>
+            {branch.name} has not sent any stock yet. Use Send stock above to start a transfer.
+          </Empty>
         )}
       </SectionCard>
     </main>

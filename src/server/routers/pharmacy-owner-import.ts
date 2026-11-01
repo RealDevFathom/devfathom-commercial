@@ -42,7 +42,7 @@ export const pharmacyOwnerImportRouter = router({
     });
     const locations = await ctx.db.pharmacyStockLocation.findMany({
       where: { organizationId, active: true, branchId: { in: branches.map((branch) => branch.id) } },
-      select: { id: true, branchId: true, name: true }, orderBy: { name: 'asc' },
+      select: { id: true, branchId: true, name: true, kind: true }, orderBy: { name: 'asc' },
     });
     return { branches, locations };
   }),

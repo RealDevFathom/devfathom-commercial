@@ -11,7 +11,10 @@ const mocks = vi.hoisted(() => ({
   release: vi.fn(),
   redirect: vi.fn(),
 }));
-vi.mock('next/navigation', () => ({ redirect: mocks.redirect }));
+vi.mock('next/navigation', () => ({
+  redirect: mocks.redirect,
+  useRouter: () => ({ replace: vi.fn(), push: vi.fn() }),
+}));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: mocks.actor }));
 vi.mock('@/server/trpc', () => ({ createTRPCContext: mocks.context }));
 vi.mock('@/lib/entitlements', () => ({ hasModule: mocks.module }));
@@ -258,7 +261,7 @@ describe('Inventory pack-action integration', () => {
     ]);
     await show();
     expect(mocks.form).not.toHaveBeenCalled();
-    expect(screen.getByText(/No available lots yet/)).toBeVisible();
+    expect(screen.getByText(/No available stock at this branch yet/)).toBeVisible();
   });
 
   it('keeps an unreceived lot disabled', async () => {
@@ -287,5 +290,97 @@ describe('Inventory pack-action integration', () => {
     expect(screen.getByText('Inventory module unavailable')).toBeVisible();
     expect(mocks.form).not.toHaveBeenCalled();
     expect(lots).not.toHaveBeenCalled();
+  });
+});
+
+describe('Inventory entry points and empty states', () => {
+  it('offers one opening-stock entry point that carries the working branch', async () => {
+    await show();
+    const imports = screen.getAllByRole('link', { name: 'Import opening stock' });
+    expect(imports).toHaveLength(1);
+    expect(imports[0]).toHaveAttribute('href', '/pharmacy/inventory/import?branch=branch-main');
+    expect(screen.queryByRole('link', { name: /Imported stock/ })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Receive opening stock' })).toBeNull();
+    expect(screen.queryByText(/FEFO/)).toBeNull();
+  });
+
+  it('anchors the Physical count section for the counts route', async () => {
+    await show();
+    const heading = screen.getByRole('heading', { name: 'Physical count' });
+    expect(heading.closest('#counts')).not.toBeNull();
+  });
+
+  it('shows the only branch as text instead of a picker', async () => {
+    await show();
+    expect(screen.queryByRole('combobox', { name: 'Branch' })).toBeNull();
+    expect(screen.getByText('Main · Karachi')).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Open branch' })).toBeNull();
+  });
+
+  it('keeps the branch picker when there are several branches', async () => {
+    ctx.db.pharmacyBranch.findMany.mockResolvedValue([
+      branch,
+      { id: 'branch-north', name: 'North', city: 'Lahore' },
+    ]);
+    await show();
+    expect(screen.getByRole('combobox', { name: 'Branch' })).toHaveValue(branch.id);
+    expect(screen.getByRole('button', { name: 'Open branch' })).toBeVisible();
+  });
+
+  it('tells an empty branch what to do next in counts, adjustments and transfers', async () => {
+    lots.mockResolvedValue([]);
+    ctx.db.pharmacyStockLocation.findMany.mockResolvedValue([]);
+    await show();
+    expect(screen.getByText(/nothing to count yet/)).toBeVisible();
+    expect(screen.getByRole('link', { name: 'Create a location' })).toHaveAttribute(
+      'href',
+      '/pharmacy/inventory?branch=branch-main#locations'
+    );
+    expect(screen.getByText(/no stock at this branch to adjust or write off/)).toBeVisible();
+    expect(screen.getByText(/you have one/)).toBeVisible();
+    expect(
+      screen.getByRole('link', { name: 'Add a second branch in onboarding' })
+    ).toHaveAttribute('href', '/pharmacy');
+    expect(
+      screen.getAllByRole('link', { name: 'Receive a supplier delivery' }).length
+    ).toBeGreaterThan(0);
+  });
+
+  it('asks for a witness when stock exists but no second team member does', async () => {
+    await show();
+    expect(screen.getByText(/witnessed by a second active team member/)).toBeVisible();
+    expect(screen.getByRole('link', { name: 'Invite a team member' })).toHaveAttribute(
+      'href',
+      '/team'
+    );
+  });
+
+  it('points to the other branch when it has no location to receive transfers', async () => {
+    ctx.db.pharmacyBranch.findMany.mockResolvedValue([
+      branch,
+      { id: 'branch-north', name: 'North', city: 'Lahore' },
+    ]);
+    await show();
+    expect(screen.getByRole('link', { name: 'Create a location at North' })).toHaveAttribute(
+      'href',
+      '/pharmacy/inventory?branch=branch-north#locations'
+    );
+  });
+
+  it('returns to the inventory page with replace after an action', async () => {
+    lots.mockResolvedValue([{ ...lot, balances: [{ ...available, disposition: 'QUARANTINE' }] }]);
+    await show();
+    const form = screen.getByRole('button', { name: 'Release manual hold' }).closest('form')!;
+    fireEvent.change(within(form).getByLabelText('Units'), { target: { value: '1' } });
+    fireEvent.change(within(form).getByLabelText('Clearance reason'), {
+      target: { value: 'Inspection passed' },
+    });
+    fireEvent.submit(form);
+    await waitFor(() =>
+      expect(mocks.redirect).toHaveBeenCalledWith(
+        expect.stringContaining('/pharmacy/inventory?'),
+        'replace'
+      )
+    );
   });
 });
