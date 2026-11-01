@@ -10,12 +10,14 @@ import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
 import { StatusPill } from '@/components/ui/status-pill';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
+import { expiryAdviceTotals, periodSummaryRows } from '@/lib/pharmacy/report-csv';
 import { pharmacyReportsRouter } from '@/server/routers/pharmacy-reports';
 import { pharmacySalesRouter } from '@/server/routers/pharmacy-sales';
 import { createTRPCContext } from '@/server/trpc';
 import { DailyWorkPack, DailyWorkPackLoading } from './daily-work-pack';
 import { MarketingSummary } from './marketing-summary';
 import { ObservedDemand } from './observed-demand';
+import { ReportExportLink } from './report-export-link';
 
 export const metadata: Metadata = { title: 'Pharmacy reports' };
 
@@ -277,19 +279,14 @@ export default async function PharmacyReportsPage({
     redirect(`/pharmacy/reports?${copy.toString()}`);
   }
   const metrics = result?.metrics;
+  // Shared with the CSV export so the file carries the same figures as these cards.
   const cards = metrics
-    ? [
-        ['Sales', money(metrics.salesMinor)],
-        ['Gross margin', money(metrics.marginMinor)],
-        ['Cash', money(metrics.cashMinor)],
-        ['Cash variance', money(metrics.cashVarianceMinor)],
-        ['Refunds', money(metrics.refundsMinor)],
-        ['Open stock signals', metrics.openStockSignals],
-        ['Recommended orders', metrics.recommendedOrders],
-        ['Expiry ≤30d', money(metrics.expiryValueMinor30)],
-        ['Expiry ≤90d', money(metrics.expiryValueMinor90)],
-      ]
+    ? periodSummaryRows(metrics, !!branch).map(
+        (row) => [row.label, row.kind === 'money' ? money(row.value) : row.value] as const
+      )
     : [];
+  const expiryTotals = expiryAdvice ? expiryAdviceTotals(expiryAdvice) : null;
+  const exportFilters = { ...(branch ? { branch } : {}), from, to };
   return (
     <main className="min-w-0 space-y-6">
       <PageHeader
@@ -440,6 +437,15 @@ export default async function PharmacyReportsPage({
             eyebrow="Owner command centre"
             title="Selected period at a glance"
             titleLevel={2}
+            actions={
+              catalog.permissions.financial ? (
+                <ReportExportLink
+                  report="period-summary"
+                  table="selected period summary"
+                  {...exportFilters}
+                />
+              ) : null
+            }
           >
             <p className="mb-4 text-sm text-text-muted">
               Report period: {from} to {to} (inclusive business dates). Branch scope:{' '}
@@ -496,6 +502,15 @@ export default async function PharmacyReportsPage({
               eyebrow="AI-02 · Advisory only"
               title="Expiry and supplier-return advisor"
               titleLevel={2}
+              actions={
+                catalog.permissions.financial && catalog.permissions.owner ? (
+                  <ReportExportLink
+                    report="expiry"
+                    table="expiry and supplier-return advisor"
+                    {...exportFilters}
+                  />
+                ) : null
+              }
             >
               <p className="max-w-3xl text-sm leading-6 text-text-muted">
                 Ranked by projected stock value left at expiry, using only each branch&apos;s recent
@@ -575,6 +590,21 @@ export default async function PharmacyReportsPage({
                   No future-expiry lots with available stock match this scope.
                 </p>
               )}
+              {expiryAdvice.length && expiryTotals ? (
+                <dl
+                  aria-label="Expiry advisor totals"
+                  className="mt-4 flex flex-wrap gap-x-5 gap-y-2 font-mono text-[11px] text-text-muted tabular-nums"
+                >
+                  <div>
+                    <dt className="inline font-semibold text-text-body">Total on hand: </dt>
+                    <dd className="inline">{expiryTotals.onHandUnits} units</dd>
+                  </div>
+                  <div>
+                    <dt className="inline font-semibold text-text-body">Total value at risk: </dt>
+                    <dd className="inline">{money(expiryTotals.valueAtRiskMinor)}</dd>
+                  </div>
+                </dl>
+              ) : null}
             </SectionCard>
           ) : (
             <SectionCard

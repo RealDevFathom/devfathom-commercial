@@ -42,4 +42,20 @@ describe('branch comparison accessibility', () => {
     expect(within(region).getByRole('table')).toBeVisible();
     expect(within(region).getByRole('columnheader', { name: 'Khata overdue' })).toBeVisible();
   });
+
+  it('shows a totals row and a CSV export for the same period', async () => {
+    render(
+      await BranchComparisonPage({
+        searchParams: Promise.resolve({ from: '2026-10-01', to: '2026-10-07' }),
+      })
+    );
+    const totals = screen.getByRole('rowheader', { name: 'Total' }).closest('tr')!;
+    expect(totals).toHaveTextContent('100.00');
+    expect(totals).toHaveTextContent('12.00 (3 events)');
+    expect(screen.getByRole('link', { name: 'Export CSV: branch comparison' })).toHaveAttribute(
+      'href',
+      '/api/pharmacy/reports/export?report=branch-comparison&from=2026-10-01&to=2026-10-07'
+    );
+  });
 });
+

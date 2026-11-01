@@ -42,6 +42,14 @@ import {
   readPackAuthenticationFlags,
 } from '@/lib/pharmacy/pack-authentication-operations';
 import { readPharmacyBranchComparison } from '@/lib/pharmacy/branch-comparison';
+import {
+  PHARMACY_REPORT_EXPORTS,
+  branchComparisonCsv,
+  expiryAdviceCsv,
+  periodSummaryCsv,
+  type ReportCsvContext,
+} from '@/lib/pharmacy/report-csv';
+import { annotateAudit } from '../audit';
 import { auditedProtectedProcedure, capabilityProcedure, router, type TRPCContext } from '../trpc';
 import {
   PHARMACY_GROWTH_CATEGORIES,
@@ -167,6 +175,28 @@ async function ownerFilters(ctx: TRPCContext, input: z.infer<typeof filters>) {
   )
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your report scope.' });
   return { ...input, branchIds };
+}
+
+const isoDate = (input: string) => {
+  const parsed = new Date(`${input}T00:00:00.000Z`);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === input;
+};
+const reportExport = z
+  .object({
+    report: z.enum(PHARMACY_REPORT_EXPORTS),
+    branchId: z.string().trim().min(1).max(128).optional(),
+    from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  })
+  .strict();
+
+/** Same currency rule as the Reports screen: the authenticated tenant's own setting only. */
+function reportCurrency(ctx: TRPCContext) {
+  const organizationCurrency =
+    ctx.organization?.id === ctx.entitlements.organizationId ? ctx.organization?.currency : null;
+  return organizationCurrency && /^[A-Z]{3}$/.test(organizationCurrency)
+    ? organizationCurrency
+    : null;
 }
 
 async function requireOwnerBranch(ctx: TRPCContext, branchId: string) {
@@ -540,6 +570,122 @@ export const pharmacyReportsRouter = router({
         })
       );
     }),
+  /**
+   * CSV of a Reports screen table for the current filters. reports:financial is enforced here,
+   * not only by the hidden button; every attempt (allowed or denied) is audited.
+   */
+  exportCsv: reports.input(reportExport).query(async ({ ctx, input }) => {
+    annotateAudit(ctx, {
+      category: 'PHARMACY',
+      operation: 'READ',
+      action: 'report_csv_export',
+      description: `Pharmacy ${input.report} report CSV export`,
+      targetType: 'PharmacyReport',
+      targetId: input.report,
+      metadata: {
+        report: input.report,
+        from: input.from,
+        to: input.to,
+        branchId: input.branchId ?? null,
+      },
+    });
+    await requireFinancialReports(ctx);
+    if (!isoDate(input.from) || !isoDate(input.to) || input.from > input.to)
+      throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invalid report period.' });
+    if (
+      (Date.parse(input.to) - Date.parse(input.from)) / 86_400_000 + 1 >
+      MAX_PHARMACY_REPORT_DAYS
+    )
+      throw new TRPCError({
+        code: 'BAD_REQUEST',
+        message: `Interactive pharmacy reports are limited to ${MAX_PHARMACY_REPORT_DAYS} days.`,
+      });
+    const available = await scope(ctx);
+    const branchScope = input.branchId
+      ? (available.branches.find((branch) => branch.id === input.branchId)?.name ?? input.branchId)
+      : 'All available branches';
+    const generatedAt = new Date();
+    const base = {
+      currency: reportCurrency(ctx),
+      from: input.from,
+      to: input.to,
+      generatedAt,
+    } satisfies Omit<ReportCsvContext, 'branchScope'>;
+    let content: string;
+    let branchIds: string[];
+    let rowCount: number | null;
+    if (input.report === 'period-summary') {
+      branchIds = input.branchId
+        ? [input.branchId]
+        : available.branches.map((branch) => branch.id);
+      if (
+        !branchIds.length ||
+        branchIds.some((id) => !available.branches.some((branch) => branch.id === id))
+      )
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'One or more branches are outside your report scope.',
+        });
+      let result: Awaited<ReturnType<typeof readPharmacyOwnerCommandCentre>>;
+      try {
+        result = await readPharmacyOwnerCommandCentre(ctx.db, {
+          ...(input.branchId ? { branchId: input.branchId } : {}),
+          from: input.from,
+          to: input.to,
+          branchIds,
+        });
+      } catch (error) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: error instanceof Error ? error.message : 'Invalid report filters.',
+        });
+      }
+      content = periodSummaryCsv(result.metrics, {
+        ...base,
+        branchScope,
+        branchSelected: !!input.branchId,
+      });
+      rowCount = null;
+    } else if (input.report === 'branch-comparison') {
+      // The comparison screen always covers every active branch; a branch filter is not shown.
+      if (input.branchId)
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Branch comparison covers all active branches.',
+        });
+      if (ctx.session!.user.role !== 'ADMIN')
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Owner access is required.' });
+      branchIds = available.branches.map((branch) => branch.id);
+      const comparison = await ctx.db.$transaction((tx) =>
+        readPharmacyBranchComparison(tx as typeof ctx.db, {
+          branches: available.branches,
+          from: input.from,
+          to: input.to,
+        })
+      );
+      content = branchComparisonCsv(comparison, { ...base, branchScope: 'All active branches' });
+      rowCount = comparison.rows.length;
+    } else {
+      const bounded = await ownerFilters(ctx, {
+        ...(input.branchId ? { branchId: input.branchId } : {}),
+        from: input.from,
+        to: input.to,
+      });
+      branchIds = bounded.branchIds;
+      const advice = await readExpiryAdvice(ctx.db, branchIds);
+      content = expiryAdviceCsv(advice, available.branches, {
+        ...base,
+        branchScope,
+      });
+      rowCount = advice.length;
+    }
+    annotateAudit(ctx, { metadata: { branchIds, rowCount } });
+    return {
+      filename: `pharmacy-${input.report}-${input.from}-to-${input.to}.csv`,
+      contentType: 'text/csv; charset=utf-8',
+      content,
+    };
+  }),
   repeatPurchasing: reports
     .input(
       filters

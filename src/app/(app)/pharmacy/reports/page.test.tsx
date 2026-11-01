@@ -2,6 +2,7 @@ import { render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const actor = vi.hoisted(() => ({ role: 'ADMIN' }));
+const financialPermission = vi.hoisted(() => ({ granted: true }));
 const signalStaff = vi.hoisted(() => ({ userId: 'cashier_1' as string | undefined }));
 
 const commandCentre = vi.fn(async () => ({
@@ -110,7 +111,7 @@ vi.mock('@/server/routers/pharmacy-reports', () => ({
       packAuthenticationFlags: async () => [],
       acknowledgePackAuthenticationFlag: async () => ({}),
       catalog: async () => ({
-        permissions: { operational: true, financial: true, owner: true },
+        permissions: { operational: true, financial: financialPermission.granted, owner: true },
         reports: [
           {
             key: 'sales-margin',
@@ -141,6 +142,7 @@ describe('pharmacy report catalog filters', () => {
   beforeEach(() => {
     actor.role = 'ADMIN';
     signalStaff.userId = 'cashier_1';
+    financialPermission.granted = true;
   });
 
   it('carries all supported filters and exposes the metric contract', async () => {
@@ -226,5 +228,34 @@ describe('pharmacy report catalog filters', () => {
       expect(link.className).toContain('border');
       expect(link.className).not.toMatch(/(^|\s)underline(\s|$)/);
     }
+  });
+
+  it('offers CSV export of the summary and expiry tables for the current filters', async () => {
+    render(
+      await PharmacyReportsPage({
+        searchParams: Promise.resolve({ branch: 'b1', from: '2026-09-01', to: '2026-09-04' }),
+      })
+    );
+    expect(
+      screen.getByRole('link', { name: 'Export CSV: selected period summary' })
+    ).toHaveAttribute(
+      'href',
+      '/api/pharmacy/reports/export?report=period-summary&branch=b1&from=2026-09-01&to=2026-09-04'
+    );
+    expect(
+      screen.getByRole('link', { name: 'Export CSV: expiry and supplier-return advisor' })
+    ).toHaveAttribute(
+      'href',
+      '/api/pharmacy/reports/export?report=expiry&branch=b1&from=2026-09-01&to=2026-09-04'
+    );
+    const totals = screen.getByLabelText('Expiry advisor totals');
+    expect(totals).toHaveTextContent('Total on hand: 90 units');
+    expect(totals).toHaveTextContent('Total value at risk: PKR 400.00');
+  });
+
+  it('hides CSV export without reports:financial', async () => {
+    financialPermission.granted = false;
+    render(await PharmacyReportsPage({ searchParams: Promise.resolve({ branch: 'b1' }) }));
+    expect(screen.queryByRole('link', { name: /Export CSV/ })).not.toBeInTheDocument();
   });
 });
