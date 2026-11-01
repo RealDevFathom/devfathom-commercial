@@ -2,7 +2,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { DEFAULT_RECEIPT_LAYOUT } from '@/lib/receipts/configuration';
 
-import { buildCounterBrowserReceipt, printCounterBrowserReceipt } from './counter-browser-print';
+import {
+  buildCounterBrowserReceipt,
+  buildCounterBrowserZReport,
+  printCounterBrowserReceipt,
+} from './counter-browser-print';
 import type { CounterReceipt, CounterReceiptLocale } from './counter-receipt';
 import {
   buildPharmacyReceiptPrintDocument,
@@ -131,6 +135,34 @@ describe('isolated Pharmacy browser receipt', () => {
   });
 
   it.each([
+    ['en', 'Expected cash: 100.00'],
+    ['ur', 'متوقع نقد: 100.00'],
+  ] as const)('renders the organization currency on a %s Z-report', (locale, expectedCash) => {
+    const html = buildCounterBrowserZReport(
+      {
+        id: 'close-1',
+        branchName: 'Main',
+        businessDate: '2026-10-22',
+        currency: 'USD',
+        sequence: 1,
+        grossSalesMinor: 10000,
+        refundTotalMinor: 0,
+        netSalesMinor: 10000,
+        cashExpectedMinor: 10000,
+        cashCountedMinor: 10000,
+        cashVarianceMinor: 0,
+        reason: null,
+        isFinal: true,
+      },
+      locale
+    );
+    const text = new DOMParser().parseFromString(html, 'text/html').body.textContent;
+    expect(text).toContain('USD');
+    expect(text).toContain(expectedCash);
+    expect(text).not.toContain('PKR');
+  });
+
+  it.each([
     ['THERMAL_58', '58mm'],
     ['THERMAL', '80mm'],
     ['A4', '190mm'],
@@ -169,6 +201,42 @@ describe('isolated Pharmacy browser receipt', () => {
     const html = buildCounterBrowserReceipt(receipt, 'ur', 'THERMAL_58');
     expect(html).toContain('lang="ur" dir="rtl"');
     expect(html).toContain('قابلِ ادائیگی');
+  });
+
+  it.each([
+    ['en', 'THERMAL_58'],
+    ['en', 'THERMAL'],
+    ['en', 'A4'],
+    ['ur', 'THERMAL_58'],
+    ['ur', 'THERMAL'],
+    ['ur', 'A4'],
+  ] as const)('prints completion-time NTN/STRN in %s %s browser output', (locale, format) => {
+    const settled = {
+      ...receipt,
+      taxIdentity: { ntn: 'HISTORICAL-NTN', strn: 'HISTORICAL-STRN' },
+    };
+    const html = buildCounterBrowserReceipt(settled, locale, format);
+    expect(html).toContain('NTN: HISTORICAL-NTN');
+    expect(html).toContain('STRN: HISTORICAL-STRN');
+  });
+
+  it('keeps browser and English ESC/POS regulatory identity in parity for one settled sale', () => {
+    const taxIdentity = { ntn: 'HISTORICAL-NTN', strn: 'HISTORICAL-STRN' };
+    const settled: CounterReceipt = { ...receipt, taxIdentity };
+    const browser = buildCounterBrowserReceipt(settled, 'en', 'A4');
+    const thermal = buildPharmacyReceiptPrintDocument(settled, 'en', {
+      layout: DEFAULT_RECEIPT_LAYOUT,
+      taxIdentity,
+      reprint: false,
+    });
+    expect(thermal.receiptSnapshot?.facts.taxLines).toEqual([
+      'NTN: HISTORICAL-NTN',
+      'STRN: HISTORICAL-STRN',
+      'Tax breakdown unavailable in receipt source',
+    ]);
+    for (const identity of thermal.receiptSnapshot!.facts.taxLines.slice(0, 2)) {
+      expect(browser).toContain(identity);
+    }
   });
 
   it.each(['THERMAL_58', 'THERMAL', 'A4'] as const)(

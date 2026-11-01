@@ -614,7 +614,11 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
               </Field>
             </div>
 
-            {workspace.data.branches.length === 0 ? (
+            {!workspace.data.canDispense ? (
+              <WorkspaceState title="Dispensing permission required">
+                Refill reminders are captured by staff with the pharmacy dispensing permission.
+              </WorkspaceState>
+            ) : workspace.data.branches.length === 0 ? (
               <WorkspaceState title="No active pharmacy branch">
                 Activate a branch before capturing refill reminders.
               </WorkspaceState>

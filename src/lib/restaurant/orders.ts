@@ -9,6 +9,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { evaluateOrderSettlement } from './bills';
 import { businessDateToUtcDate, resolveBusinessDate } from './business-date';
 import { buildCoAuthorizationRecord } from './co-authorization';
+import { assertMoneyDayOpen } from './money-day';
 import { postOrderRecipeConsumption } from './inventory';
 import {
   enqueueKitchenTicketPrintJobs,
@@ -85,6 +86,7 @@ export type OrderCommandErrorReason =
   | 'CHANNEL_UNAVAILABLE'
   | 'CHANNEL_TABLE'
   | 'BILL_ALREADY_CUT'
+  | 'DAY_CLOSED'
   | 'NOT_CLOSABLE'
   | 'NOT_SETTLED'
   | 'LIMIT_REACHED'
@@ -505,6 +507,9 @@ export async function openOrder(db: ScopedDb, input: OpenOrderInput): Promise<Op
     const businessDate = businessDateToUtcDate(
       resolveBusinessDate(at, branch.timezone, branch.businessDayCutoff)
     );
+    await assertMoneyDayOpen(tx, branch.id, businessDate, () =>
+      new OrderCommandError('This business day is closed; no order can be opened.', 'DAY_CLOSED')
+    );
     await enforceMonthlyOrderLimit(tx, input, businessDate);
     const orderNumber = await allocateOrderNumber(tx, { branchId: branch.id, businessDate });
 
@@ -525,6 +530,7 @@ export async function openOrder(db: ScopedDb, input: OpenOrderInput): Promise<Op
     if (input.publicationId) {
       const refs = await resolveOrderPricingRefs(tx, {
         publicationId: input.publicationId,
+        branchId: branch.id,
         channel: input.channel,
         at,
       });
@@ -864,6 +870,7 @@ async function fireItems(
     orderItemId: i.id,
     productId: i.productId,
     categoryId: i.product.categoryId,
+    course: i.course,
     quantity: i.quantity,
   }));
   const tickets = await generateKitchenTickets(tx, {
@@ -1118,11 +1125,13 @@ export type VoidItemInput = {
   actor: CommandActor;
 };
 
-/** Void an item. A pre-preparation void (HELD/QUEUED) needs only a reason; a
- * post-preparation void (FIRING/PREPARED/SERVED/REMAKE_REQUESTED) additionally
- * requires a co-authorization and a recorded wastage disposition — the disposition
- * is recorded but no inventory mutation exists until the inventory milestone (C6 /
- * BUILD-ASSUMPTIONS). Item + event history is preserved. */
+/** Void an item. Once a non-void bill exists, the bill must be voided and recut
+ * before any of its order items can be voided, preserving the bill snapshot and
+ * its service-charge allocation. A pre-preparation void (HELD/QUEUED) needs only
+ * a reason; a post-preparation void (FIRING/PREPARED/SERVED/REMAKE_REQUESTED)
+ * additionally requires a co-authorization and a recorded wastage disposition —
+ * the disposition is recorded but no inventory mutation exists until the inventory
+ * milestone (C6 / BUILD-ASSUMPTIONS). Item + event history is preserved. */
 export async function voidItem(db: ScopedDb, input: VoidItemInput): Promise<ItemResult> {
   return runInTransaction(db, async (tx) => {
     const idem = await beginIdempotent(tx, input.actor, 'item.void');

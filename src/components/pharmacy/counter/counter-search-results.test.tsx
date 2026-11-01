@@ -39,6 +39,46 @@ const row: CounterSearchRow = {
 };
 
 describe('CounterSearchResults safety flags', () => {
+  it('lets each medicine name determine its own text direction', () => {
+    render(
+      <CounterSearchResults
+        rows={[{ ...row, displayName: 'پیراسٹامول' }]}
+        state="ready"
+        query="پیرا"
+        activeMedicineId={null}
+        onSelect={vi.fn()}
+        onCaptureDemand={vi.fn()}
+        onRetry={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText('پیراسٹامول')).toHaveAttribute('dir', 'auto');
+  });
+
+  it.each(['ltr', 'rtl'])('isolates the strength from an Urdu name in a %s workspace', (dir) => {
+    render(
+      <div dir={dir}>
+        <CounterSearchResults
+          rows={[{ ...row, displayName: 'پیراسٹامول' }]}
+          state="ready"
+          query="پیرا"
+          activeMedicineId={null}
+          onSelect={vi.fn()}
+          onCaptureDemand={vi.fn()}
+          onRetry={vi.fn()}
+        />
+      </div>
+    );
+
+    // The number and Latin unit must keep their own order inside an RTL name.
+    const strength = screen.getByText('500 mg');
+    expect(strength.tagName).toBe('BDI');
+    expect(strength).toHaveAttribute('dir', 'auto');
+    expect(strength.parentElement).toHaveClass('ms-1');
+    expect(strength.closest('button')).toHaveClass('text-start');
+    expect(screen.getByText('250.00')).toHaveClass('text-end');
+  });
+
   it('keeps controlled, prescription, high-alert, and cold-chain badges off the truncated stock line', () => {
     render(
       <CounterSearchResults

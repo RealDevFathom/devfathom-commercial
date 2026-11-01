@@ -38,6 +38,7 @@ const mocks = vi.hoisted(() => ({
   clockInMutate: vi.fn(),
   requestSwapMutate: vi.fn(),
   reviewSwapMutate: vi.fn(),
+  correctTimeMutate: vi.fn(),
   noop: vi.fn(),
   invalidate: vi.fn(),
 }));
@@ -95,7 +96,7 @@ vi.mock('@/lib/trpc', () => ({
       requestSwap: { useMutation: () => ({ mutate: mocks.requestSwapMutate, isPending: false }) },
       reviewSwap: { useMutation: () => ({ mutate: mocks.reviewSwapMutate, isPending: false }) },
       correctTime: {
-        useMutation: () => ({ mutate: mocks.noop, isPending: false, error: null }),
+        useMutation: () => ({ mutate: mocks.correctTimeMutate, isPending: false, error: null }),
       },
     },
     restaurantStaff: {
@@ -282,6 +283,48 @@ describe('Restaurant roster console', () => {
     expect(
       screen.getByRole('heading', { level: 2, name: '0 scheduled shifts' })
     ).toBeInTheDocument();
+  });
+
+  it('allows managers to repair attendance when both source punches are missing', () => {
+    mocks.roster.data = [SHIFT];
+    renderConsole();
+    chooseBranch();
+    const action = screen.getByRole('button', { name: 'Correct time' });
+    expect(action).toBeEnabled();
+    fireEvent.click(action);
+    expect(screen.getByRole('option', { name: 'Add missing clock in' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Add missing clock out' })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Corrected time'), {
+      target: { value: '2026-08-20T09:00' },
+    });
+    fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Reader offline' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Append correction' }));
+    expect(mocks.correctTimeMutate).toHaveBeenCalledWith({
+      shiftId: 'shift_1',
+      branchId: 'branch_1',
+      kind: 'CLOCK_IN',
+      breakId: undefined,
+      correctedAt: new Date('2026-08-20T09:00:00Z'),
+      reason: 'Reader offline',
+    });
+  });
+
+  it('keeps completed late attendance visible as a warning for employees and managers', () => {
+    const late = {
+      ...SHIFT,
+      attendanceStatus: 'COMPLETE_LATE',
+      lateMinutes: 7,
+      clockedInAt: new Date('2026-08-20T09:07:00Z'),
+      clockedOutAt: new Date('2026-08-20T17:00:00Z'),
+    };
+    mocks.roster.data = [late];
+    mocks.mine.data.shifts = [late];
+    renderConsole();
+    chooseBranch();
+    for (const label of screen.getAllByText('COMPLETE LATE')) {
+      expect(label).toHaveAttribute('data-tone', 'warning');
+    }
+    expect(screen.getByText(/7 minutes after/)).toBeInTheDocument();
   });
 
   it('confirms a cancellation and forwards the reason', () => {
