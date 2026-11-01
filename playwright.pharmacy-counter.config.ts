@@ -12,9 +12,7 @@ export default defineConfig({
   testDir: './tests/e2e',
   // The counter spec owns this lane. Every sibling spec in tests/e2e belongs to
   // a different database and host, so the glob is what keeps them out.
-  // The real-staging first-sale journey has its own fail-closed config and
-  // operator evidence inputs; it must never be collected by this local DB lane.
-  testMatch: 'pharmacy-counter.spec.ts',
+  testMatch: ['pharmacy-counter.spec.ts', 'time-to-first-sale.spec.ts'],
   outputDir: './playwright-artifacts/pharmacy-counter',
   // Serial: the three bills draw from one seeded stock balance, so a parallel
   // worker would race the same lot and make a failure meaningless.

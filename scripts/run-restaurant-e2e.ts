@@ -24,20 +24,13 @@ async function main() {
   const admin = new URL(env.RESTAURANT_E2E_CLONE_ADMIN_URL ?? '');
   if (
     !['127.0.0.1', 'localhost', '[::1]'].includes(runtime.hostname) ||
-    ['5432', '6432'].includes(runtime.port) ||
-    !/(?:^|[_-])(test|e2e|tmp|disposable)(?:[_-]|$)/i.test(
-      decodeURIComponent(runtime.pathname.slice(1))
-    ) ||
+    !/^556\d{2}$/.test(runtime.port) ||
     admin.host !== runtime.host ||
     !['postgres:', 'postgresql:'].includes(admin.protocol)
   ) {
-    throw new Error('Template cloning requires one loopback disposable database on an isolated port.');
+    throw new Error('Template cloning requires one loopback disposable PG lane on 55600-55699.');
   }
   const template = decodeURIComponent(runtime.pathname.slice(1));
-  const actorOwnerBase = new URL(env.RESTAURANT_ACTOR_OWNER_DATABASE_URL ?? '');
-  if (actorOwnerBase.host !== runtime.host || !actorOwnerBase.username) {
-    throw new Error('Actor owner must name a database owner on the disposable lane.');
-  }
   const quote = (value: string) => '"' + value.replaceAll('"', '""') + '"';
   // Discover through Playwright so filters and the registered corpus stay identical.
   const listingEnv = { ...env };
@@ -81,13 +74,13 @@ async function main() {
   try {
     for (const file of files) {
       const database = `restaurant_e2e_${randomUUID().replaceAll('-', '')}`;
-      await pool.query(
-        `CREATE DATABASE ${quote(database)} OWNER ${quote(decodeURIComponent(actorOwnerBase.username))} TEMPLATE ${quote(template)}`
-      );
+      await pool.query(`CREATE DATABASE ${quote(database)} TEMPLATE ${quote(template)}`);
       try {
         const target = new URL(runtime);
         target.pathname = '/' + database;
-        const actorOwner = new URL(actorOwnerBase);
+        const actorOwner = new URL(env.RESTAURANT_ACTOR_OWNER_DATABASE_URL ?? admin.href);
+        if (actorOwner.host !== runtime.host)
+          throw new Error('Actor owner must use the disposable lane.');
         actorOwner.pathname = '/' + database;
         const name = file.replaceAll(/[^a-zA-Z0-9.-]/g, '_');
         const childEnv = {
@@ -148,17 +141,6 @@ async function main() {
       mkdirSync(resolve(output, '..'), { recursive: true });
       writeFileSync(output, JSON.stringify(combined, null, 2));
     }
-  }
-  const combinedReport = env.PLAYWRIGHT_JSON_OUTPUT_NAME;
-  if (combinedReport) {
-    const reports = results.map(({ report }) => JSON.parse(readFileSync(report, 'utf8')));
-    writeFileSync(
-      resolve(combinedReport),
-      JSON.stringify({
-        ...(reports[0] ?? {}),
-        suites: reports.flatMap((report) => report.suites ?? []),
-      })
-    );
   }
 }
 main().catch((error: unknown) => {

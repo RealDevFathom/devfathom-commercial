@@ -1,4 +1,3 @@
-import { actorIsPharmacyOwner } from './procurement-access';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { can } from '@/lib/abac';
@@ -472,14 +471,6 @@ export async function assignedRegisterBranchIds(
   organizationId: string,
   userId: string
 ) {
-  if (await actorIsPharmacyOwner(db, organizationId, userId)) {
-    return (
-      await db.pharmacyBranch.findMany({
-        where: { organizationId, active: true },
-        select: { id: true },
-      })
-    ).map((branch) => branch.id);
-  }
   const rows = await db.pharmacyBranchAssignment.findMany({
     where: { organizationId, userId, active: true },
     select: { branchId: true },

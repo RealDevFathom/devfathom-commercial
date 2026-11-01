@@ -35,14 +35,8 @@ async function customDecision(
   const user = await db.user.findUnique({
     where: { id: userId },
     select: {
-      status: true,
-      role: true,
       organizationRole: {
-        select: {
-          key: true,
-          isSystem: true,
-          permissions: { select: { capability: true, effect: true } },
-        },
+        select: { permissions: { select: { capability: true, effect: true } } },
       },
       permissionOverrides: {
         where: { OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] },
@@ -86,16 +80,7 @@ export async function can(
   }
   try {
     const { decision, hasOrganizationRole } = await customDecision(db, subject.id, action, env.now);
-    if (decision === false) return false;
-    // Capability grants cannot waive the resource restrictions below.
-    if (action === 'resignation:review' || action === 'team:layoff') {
-      return (
-        await Promise.all(
-          (POLICIES[action] ?? []).map((policy) => policy({ subject, resource, env, db }))
-        )
-      ).some(Boolean);
-    }
-    if (decision === true) return true;
+    if (decision !== null) return decision;
     // Procurement's tenant-admin fallback exists only for legacy users who do
     // not yet have an organization role. Once a role is assigned, its
     // capabilities are the boundary: an omitted procurement grant must not

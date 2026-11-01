@@ -1,4 +1,3 @@
-import { hasAllCapabilityAccess } from '@/lib/abac/owner-access';
 import { ControlledRestorationDenied } from '@/lib/pharmacy/controlled-restoration-authorization';
 import { assertRxSaleAllowed, PharmacyRxSaleDenied } from '@/lib/pharmacy/rx-sale-gate';
 import {
@@ -395,14 +394,9 @@ async function requireCounterReceiptAccess(
     where: { id: user.id },
     select: {
       status: true,
-      role: true,
       organizationId: true,
       organizationRole: {
-        select: {
-          key: true,
-          isSystem: true,
-          permissions: { select: { capability: true, effect: true } },
-        },
+        select: { permissions: { select: { capability: true, effect: true } } },
       },
       permissionOverrides: {
         where: { OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] },
@@ -424,14 +418,11 @@ async function requireCounterReceiptAccess(
   // Treat the names as one capability family. Otherwise an ALLOW on one alias
   // can accidentally outrun an explicit DENY on another alias.
   // Combine user overrides and role rules into ONE family decision so any
-  // explicit DENY (user or role, on any alias) beats all grants, including an
-  // owner's all-capability grant. Custom authorizers keep their own rule logic.
-  const owner = hasAllCapabilityAccess(member);
+  // explicit DENY (user or role, on any alias) beats any ALLOW.
   const rules = [...overrides, ...roleRules];
-  const decision = counterCapabilityDecision(rules);
   const capable = authorizeMember
     ? authorizeMember(rules)
-    : decision !== 'DENY' && (owner || decision === 'ALLOW');
+    : counterCapabilityDecision(rules) === 'ALLOW';
   if (!capable) {
     throw new TRPCError({
       code: 'FORBIDDEN',
@@ -445,15 +436,6 @@ async function requireCounterReceiptAccess(
   });
   if (!available) {
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
-  }
-
-  if (owner && member.organizationRole?.isSystem && member.organizationRole.key === 'owner') {
-    annotateAudit(ctx, {
-      targetType: 'PharmacyBranch',
-      targetId: branch,
-      metadata: { branchId: branch, reason: 'tenant-owner-receipt-access' },
-    });
-    return scope;
   }
 
   const rows = await ctx.db.pharmacyBranchAssignment.findMany({

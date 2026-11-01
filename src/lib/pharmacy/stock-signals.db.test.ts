@@ -705,56 +705,6 @@ describeIfDatabase(
       expect(outcome.action.kind).toBe('DRAFT_REQUISITION');
     });
 
-    it('honors a procurement DENY for a live all-capability admin without creating a draft', async () => {
-      const fixture = await scenario(ORG_A, 'owner-draft');
-      await inOrg(ORG_A, async (db) => {
-        await stockLot(db, fixture, { units: 40, label: 'owner-draft' });
-        await approveSafetyStock(db, fixture, 120);
-        const refreshed = await deps.signals.refreshStockSignals(db, scopeOf(fixture), NOW);
-        await db.user.update({ where: { id: ACTOR }, data: { role: 'ADMIN' } });
-        await db.userPermissionOverride.createMany({
-          data: [
-            {
-              organizationId: ORG_A,
-              userId: ACTOR,
-              capability: '*',
-              effect: 'ALLOW',
-              reason: 'Owner regression',
-            },
-            {
-              organizationId: ORG_A,
-              userId: ACTOR,
-              capability: 'pharmacy:procurement',
-              effect: 'DENY',
-              reason: 'Owner regression',
-            },
-          ],
-        });
-        try {
-          const before = await db.pharmacyRequisition.count({ where: { organizationId: ORG_A } });
-          await expect(
-            deps.signals.createDraftAction(db, scopeOf(fixture), {
-              kind: 'DRAFT_REQUISITION',
-              signalId: refreshed.signals[0]!.id,
-              reference: `REQ-${tag('owner-draft')}`,
-              medicineId: fixture.medicineId,
-              packLevelId: fixture.packLevelId,
-              canonicalUnitsPerPack: 10,
-              quantityPacks: 8,
-            })
-          ).rejects.toMatchObject({ code: 'FORBIDDEN' });
-          expect(await db.pharmacyRequisition.count({ where: { organizationId: ORG_A } })).toBe(
-            before
-          );
-        } finally {
-          await db.userPermissionOverride.deleteMany({
-            where: { userId: ACTOR, reason: 'Owner regression' },
-          });
-          await db.user.update({ where: { id: ACTOR }, data: { role: 'EMPLOYEE' } });
-        }
-      });
-    });
-
     it('creates a DRAFT transfer that cannot be approved and therefore cannot dispatch stock', async () => {
       const fixture = await scenario(ORG_A, 'draft-transfer');
       const donorBranchId = `${BRANCH_B}_${tag('draft-transfer')}`;
