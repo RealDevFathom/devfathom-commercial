@@ -48,7 +48,7 @@ describe('owner digest WhatsApp consent migration', () => {
 
 describe('owner digest WhatsApp outbox migration', () => {
   const outboxMigration = readFileSync(
-    'prisma/migrations/20261101000000_owner_digest_whatsapp_outbox/migration.sql',
+    'prisma/migrations/20261101170300_owner_digest_whatsapp_outbox/migration.sql',
     'utf8'
   );
 
