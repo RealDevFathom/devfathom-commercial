@@ -163,6 +163,7 @@ describe('processDueWhatsAppRefillReminders', () => {
         to: '923001234567',
         template: 'refillReminder',
         templateName: 'refill_due_v1',
+        language: 'en',
         parameters: ['2026-10-01'],
       },
     ]);

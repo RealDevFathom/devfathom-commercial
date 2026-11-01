@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { revalidatePath } from 'next/cache';
 import { unstable_rethrow } from 'next/navigation';
 import { TRPCError } from '@trpc/server';
 import { PageHeader } from '@/components/ui/page-header';
@@ -101,6 +102,16 @@ export default async function LoyaltyPage({
   const href = (id: string, page = 1) =>
     `/pharmacy/loyalty?${new URLSearchParams({ branchId, customerId: id, query, page: String(page) })}`;
   const branchName = branches.find((branch) => branch.id === branchId)!.name;
+  async function saveReminderLanguage(formData: FormData) {
+    'use server';
+    const caller = pharmacyLoyaltyRouter.createCaller(await createTRPCContext());
+    await caller.setReminderLanguage({
+      branchId: String(formData.get('branchId') ?? ''),
+      customerId: String(formData.get('customerId') ?? ''),
+      preferredLanguage: String(formData.get('preferredLanguage') ?? '') as 'en' | 'ur',
+    });
+    revalidatePath('/pharmacy/loyalty');
+  }
   return (
     <main className="min-w-0 space-y-6">
       {header}
@@ -160,6 +171,28 @@ export default async function LoyaltyPage({
       </SectionCard>
       {history ? (
         <SectionCard title={history.customer.displayName} titleLevel={2}>
+          <form action={saveReminderLanguage} className="mb-5 flex flex-wrap items-end gap-3">
+            <input type="hidden" name="branchId" value={branchId} />
+            <input type="hidden" name="customerId" value={customerId} />
+            <label className="grid w-full gap-2 text-sm sm:w-auto">
+              Reminder language
+              <select
+                name="preferredLanguage"
+                defaultValue={history.customer.preferredLanguage}
+                className="min-h-11 rounded-sm border border-border bg-surface-card px-3 focus-visible:outline-2 focus-visible:outline-ring"
+              >
+                <option value="en">English</option>
+                <option value="ur">Urdu</option>
+              </select>
+            </label>
+            <Button type="submit" className="min-h-11">
+              Save reminder language
+            </Button>
+          </form>
+          <p className="mb-5 text-sm text-text-muted">
+            Used for approved WhatsApp Khata reminder templates. A reminder is not sent when its
+            language template is not configured.
+          </p>
           <Stat label="Points available" value={`${history.pointsBalance} points available`} />
           <p className="mt-2 text-sm text-text-muted">
             {branchName} · {history.total} ledger entries. All-time branch balance; newest entries

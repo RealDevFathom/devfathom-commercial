@@ -147,15 +147,19 @@ export type ClaimOutcome =
   | { status: 'ALREADY_CLAIMED_BY_CALLER'; claimedByStaffProfileId: string; claimedAt: Date }
   /** Someone else got there first. */
   | { status: 'CLAIMED_BY_OTHER'; claimedByStaffProfileId: string; claimedAt: Date }
-  /** The occurrence is not a pool item, or the caller does not hold its role. */
-  | { status: 'NOT_CLAIMABLE'; reason: 'NOT_A_POOL_OCCURRENCE' | 'NOT_ELIGIBLE' | 'NOT_FOUND' };
+  /** The occurrence cannot be claimed in its current state or by this caller. */
+  | {
+      status: 'NOT_CLAIMABLE';
+      reason: 'NOT_A_POOL_OCCURRENCE' | 'NOT_ELIGIBLE' | 'NOT_FOUND' | 'INVALID_STATE';
+    };
 
 /**
  * Claim one pool occurrence for one operator.
  *
  * ATOMIC. The write is a single conditional UPDATE guarded by
- * `claimedByStaffProfileId IS NULL`. Under PostgreSQL's READ COMMITTED, a second
- * concurrent claimer blocks on the row lock, re-evaluates the predicate against
+ * `claimedByStaffProfileId IS NULL` and a SCHEDULED/REJECTED state. Under
+ * PostgreSQL's READ COMMITTED, a second concurrent claimer blocks on the row
+ * lock, re-evaluates the predicate against
  * the committed row, matches nothing, and reports zero rows affected. Exactly one
  * caller can ever observe `count === 1`. Read-then-write would race here; this
  * does not, and it needs no advisory lock or SERIALIZABLE retry loop.
@@ -179,11 +183,19 @@ export async function claimSopOccurrence(
       poolJobRoleId: true,
       claimedByStaffProfileId: true,
       claimedAt: true,
+      status: true,
     },
   });
   if (!occurrence) return { status: 'NOT_CLAIMABLE', reason: 'NOT_FOUND' };
   if (!occurrence.poolJobRoleId) {
     return { status: 'NOT_CLAIMABLE', reason: 'NOT_A_POOL_OCCURRENCE' };
+  }
+  if (
+    !occurrence.claimedByStaffProfileId &&
+    occurrence.status !== 'SCHEDULED' &&
+    occurrence.status !== 'REJECTED'
+  ) {
+    return { status: 'NOT_CLAIMABLE', reason: 'INVALID_STATE' };
   }
 
   // Eligibility is checked before the write, but it is NOT the concurrency guard —
@@ -200,7 +212,11 @@ export async function claimSopOccurrence(
 
   const claimedAt = opts.now ?? new Date();
   const { count } = await db.restaurantSopOccurrence.updateMany({
-    where: { id: occurrenceId, claimedByStaffProfileId: null },
+    where: {
+      id: occurrenceId,
+      claimedByStaffProfileId: null,
+      status: { in: ['SCHEDULED', 'REJECTED'] },
+    },
     data: { claimedByStaffProfileId: staffProfileId, claimedAt },
   });
   if (count === 1) {
@@ -209,9 +225,12 @@ export async function claimSopOccurrence(
 
   const settled = await db.restaurantSopOccurrence.findUnique({
     where: { id: occurrenceId },
-    select: { claimedByStaffProfileId: true, claimedAt: true },
+    select: { claimedByStaffProfileId: true, claimedAt: true, status: true },
   });
   if (!settled?.claimedByStaffProfileId || !settled.claimedAt) {
+    if (settled && settled.status !== 'SCHEDULED' && settled.status !== 'REJECTED') {
+      return { status: 'NOT_CLAIMABLE', reason: 'INVALID_STATE' };
+    }
     // The row lost its claim between the UPDATE and this read (an unclaim). Report
     // it as not-claimable rather than inventing a winner.
     return { status: 'NOT_CLAIMABLE', reason: 'NOT_A_POOL_OCCURRENCE' };

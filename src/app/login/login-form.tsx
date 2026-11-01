@@ -55,6 +55,13 @@ export function LoginForm({
     if (invalidFields === 'totp') totpRef.current?.focus();
   }, [invalidFields, twoFactor]);
 
+  // Editing the field an error belongs to dismisses it; editing another field does not.
+  const clearError = (field: 'credentials' | 'totp') => {
+    if (invalidFields !== field) return;
+    setInvalidFields(null);
+    setError('');
+  };
+
   const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setError('');
@@ -186,9 +193,7 @@ export function LoginForm({
               required
               aria-invalid={invalidFields === 'credentials' || undefined}
               aria-describedby={invalidFields === 'credentials' ? errorId : undefined}
-              onChange={() => {
-                if (invalidFields === 'credentials') setInvalidFields(null);
-              }}
+              onChange={() => clearError('credentials')}
               className={inputClass}
             />
           </div>
@@ -209,9 +214,7 @@ export function LoginForm({
               required
               aria-invalid={invalidFields === 'credentials' || undefined}
               aria-describedby={invalidFields === 'credentials' ? errorId : undefined}
-              onChange={() => {
-                if (invalidFields === 'credentials') setInvalidFields(null);
-              }}
+              onChange={() => clearError('credentials')}
               className={inputClass}
             />
             <div className="text-end">
@@ -241,9 +244,7 @@ export function LoginForm({
                 required
                 aria-invalid={invalidFields === 'totp' || undefined}
                 aria-describedby={invalidFields === 'totp' ? errorId : undefined}
-                onChange={() => {
-                  if (invalidFields === 'totp') setInvalidFields(null);
-                }}
+                onChange={() => clearError('totp')}
                 className={inputClass}
               />
               <p className="text-xs text-text-muted">

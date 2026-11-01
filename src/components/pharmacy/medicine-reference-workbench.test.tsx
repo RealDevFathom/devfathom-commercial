@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, act } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, act, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -14,8 +14,12 @@ const mocks = vi.hoisted(() => ({
   pending: false,
   confirmError: null as { message: string } | null,
   onConfirmed: undefined as (() => Promise<void>) | undefined,
+  runNow: vi.fn(),
+  toastError: vi.fn(),
 }));
 vi.mock('./medicine-pack-setup', () => ({ MedicinePackSetup: () => null }));
+vi.mock('@/lib/browser-uuid', () => ({ browserUuid: () => 'file-batch' }));
+vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: mocks.toastError } }));
 vi.mock('@/lib/trpc', () => ({
   trpc: {
     pharmacyMedicine: {
@@ -27,7 +31,9 @@ vi.mock('@/lib/trpc', () => ({
           return { mutate: mocks.confirm, isPending: mocks.pending, error: mocks.confirmError };
         },
       },
-      runReferenceConnectorNow: { useMutation: () => ({ mutate: vi.fn(), isPending: false }) },
+      runReferenceConnectorNow: {
+        useMutation: () => ({ mutateAsync: mocks.runNow, isPending: false }),
+      },
       recordReviewDecision: { useMutation: () => ({ mutate: vi.fn(), isPending: false }) },
       publishAssertions: { useMutation: () => ({ mutate: mocks.publish, isPending: false }) },
     },
@@ -42,6 +48,7 @@ beforeEach(() => {
   mocks.proposals.error = null;
   mocks.pending = false;
   mocks.confirmError = null;
+  mocks.runNow.mockReset();
 });
 afterEach(cleanup);
 const proposal = {
@@ -92,4 +99,96 @@ it('preserves the proposal and announces a failed confirmation', () => {
   render(<MedicineReferenceWorkbench health={[]} />);
   expect(screen.getByRole('heading', { name: 'Synthetic OTC' })).toBeVisible();
   expect(screen.getByRole('alert')).toHaveTextContent('Proposal already has a decision.');
+});
+
+function referenceCsv(count: number) {
+  const lines = ['productName,strength,dosageForm,pack'];
+  for (let index = 0; index < count; index += 1) lines.push(`Medicine ${index},500 mg,Tablet,10`);
+  return new File([lines.join('\n')], 'large.csv', { type: 'text/csv' });
+}
+const completed = {
+  status: 'COMPLETED',
+  noOp: false,
+  proposalRows: 0,
+  rowsApplied: 0,
+  rowsRejected: 0,
+  rowsSkipped: 0,
+};
+type RunInput = { batchId: string; rows: Array<{ batchId: string }> };
+const sentBatchIds = () => mocks.runNow.mock.calls.map(([input]) => (input as RunInput).batchId);
+
+async function chooseAndPreview(count: number) {
+  render(<MedicineReferenceWorkbench health={[]} />);
+  fireEvent.change(screen.getByLabelText('CSV or Excel workbook'), {
+    target: { files: [referenceCsv(count)] },
+  });
+  fireEvent.click(await screen.findByRole('button', { name: 'Preview normalized rows' }));
+  return screen.findByRole('button', { name: `Run ${count} rows now` });
+}
+
+it('uploads a 1,200-row file as three sequential parts of at most 500 rows', async () => {
+  const pending: Array<(value: typeof completed) => void> = [];
+  mocks.runNow.mockImplementation(
+    () => new Promise((resolve) => pending.push(resolve as (value: typeof completed) => void))
+  );
+  fireEvent.click(await chooseAndPreview(1_200));
+
+  for (let part = 1; part <= 3; part += 1) {
+    await waitFor(() => expect(mocks.runNow).toHaveBeenCalledTimes(part));
+    expect(screen.getByRole('status')).toHaveTextContent(`Uploading part ${part} of 3`);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    // The next part is not sent until this one resolves.
+    expect(mocks.runNow).toHaveBeenCalledTimes(part);
+    await act(async () => pending[part - 1]!(completed));
+  }
+
+  expect(await screen.findByText('All 3 parts uploaded.')).toBeVisible();
+  expect(mocks.runNow).toHaveBeenCalledTimes(3);
+  expect(sentBatchIds()).toEqual(['file-batch-p01', 'file-batch-p02', 'file-batch-p03']);
+  const inputs = mocks.runNow.mock.calls.map(([input]) => input as RunInput);
+  expect(inputs.map((input) => input.rows.length)).toEqual([500, 500, 200]);
+  for (const input of inputs) {
+    expect(input.rows.every((row) => row.batchId === input.batchId)).toBe(true);
+  }
+});
+
+it('stops at a failed part and resumes from it without resending earlier parts', async () => {
+  mocks.runNow
+    .mockResolvedValueOnce(completed)
+    .mockRejectedValueOnce(new Error('Network unavailable'));
+  fireEvent.click(await chooseAndPreview(1_200));
+
+  const resume = await screen.findByRole('button', { name: 'Resume from part 2' });
+  expect(screen.getByRole('alert')).toHaveTextContent('Part 2 of 3 failed: Network unavailable');
+  expect(sentBatchIds()).toEqual(['file-batch-p01', 'file-batch-p02']);
+
+  mocks.runNow.mockResolvedValue(completed);
+  fireEvent.click(resume);
+
+  expect(await screen.findByText('All 3 parts uploaded.')).toBeVisible();
+  expect(sentBatchIds()).toEqual([
+    'file-batch-p01',
+    'file-batch-p02',
+    'file-batch-p02',
+    'file-batch-p03',
+  ]);
+  expect(screen.queryByRole('button', { name: /Resume from part/ })).not.toBeInTheDocument();
+});
+
+it('rejects a file above 20,000 rows before any upload', async () => {
+  render(<MedicineReferenceWorkbench health={[]} />);
+  fireEvent.change(screen.getByLabelText('CSV or Excel workbook'), {
+    target: { files: [referenceCsv(20_001)] },
+  });
+  await waitFor(() =>
+    expect(mocks.toastError).toHaveBeenCalledWith(
+      expect.stringContaining('A reference file is limited to 20,000 rows')
+    )
+  );
+  expect(
+    screen.queryByRole('button', { name: 'Preview normalized rows' })
+  ).not.toBeInTheDocument();
+  expect(mocks.runNow).not.toHaveBeenCalled();
 });

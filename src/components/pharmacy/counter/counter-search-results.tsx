@@ -163,17 +163,19 @@ export function CounterSearchResults({
               disabled={disabled}
               aria-pressed={active}
               onClick={() => onSelect(row)}
-              className={`grid w-full min-w-0 grid-cols-[minmax(0,1fr)_5.5rem] gap-x-2 px-2 py-1.5 text-left focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 ${
+              className={`grid w-full min-w-0 grid-cols-[minmax(0,1fr)_5.5rem] gap-x-2 px-2 py-1.5 text-start focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 ${
                 active ? 'bg-surface-sunken' : 'hover:bg-surface-sunken'
               }`}
             >
-              <span className="min-w-0 truncate text-sm font-semibold text-text-strong">
+              <span dir="auto" className="min-w-0 truncate text-sm font-semibold text-text-strong">
                 {row.displayName}
                 {row.strength ? (
-                  <span className="ml-1 font-normal text-text-body">{row.strength}</span>
+                  <span className="ms-1 font-normal text-text-body">
+                    <bdi dir="auto">{row.strength}</bdi>
+                  </span>
                 ) : null}
               </span>
-              <span className="w-full text-right font-mono text-sm tabular-nums text-text-strong">
+              <span className="w-full text-end font-mono text-sm tabular-nums text-text-strong">
                 {row.printedMrpMinor === null ? '—' : formatMinor(row.printedMrpMinor)}
               </span>
               <span className="col-span-2 truncate text-xs text-text-muted">

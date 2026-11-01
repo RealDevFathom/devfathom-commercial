@@ -723,6 +723,7 @@ type Deps = {
   enrollDevice: (typeof import('@/lib/restaurant/devices'))['enrollDevice'];
   orders: typeof import('@/lib/restaurant/orders');
   bills: typeof import('./bills');
+  close: typeof import('./daily-close');
 };
 
 let deps: Deps;
@@ -771,11 +772,12 @@ async function openWithItems(
 
 beforeAll(async () => {
   if (!TEST_DATABASE_URL) return;
-  const [scopedDb, devices, orders, bills] = await Promise.all([
+  const [scopedDb, devices, orders, bills, close] = await Promise.all([
     import('@/lib/tenancy/scoped-db'),
     import('@/lib/restaurant/devices'),
     import('@/lib/restaurant/orders'),
     import('./bills'),
+    import('./daily-close'),
   ]);
   deps = {
     withTenantDb: scopedDb.withTenantDb,
@@ -784,6 +786,7 @@ beforeAll(async () => {
     enrollDevice: devices.enrollDevice,
     orders,
     bills,
+    close,
   };
 
   await deps.withPlatformDb((tx) =>
@@ -1093,6 +1096,108 @@ describeIfDatabase('bills command layer (real DB)', () => {
       tx.restaurantBill.count({ where: { orderId: fresh.orderId } })
     );
     expect(billCount).toBe(2); // the replay created no additional bills
+  });
+
+  it('replays a completed cut after its business day closes', async () => {
+    const businessDate = '2026-08-20';
+    const opened = await openWithItems([{}], new Date(`${businessDate}T18:00:00.000Z`));
+    const cutActor = actor();
+    const command = {
+      orderId: opened.orderId,
+      branchId: ids.branch,
+      split: { kind: 'NONE' as const },
+      actor: cutActor,
+    };
+    const first = await deps.bills.cutBills(opened.db, command);
+
+    await deps.withTenantDb(orgId, async (tx) => {
+      await deps.bills.settleBill(tx, {
+        billId: first.billIds[0]!,
+        staffProfileId: ids.operator,
+        deviceId,
+        at: new Date(`${businessDate}T19:00:00.000Z`),
+      });
+      await tx.restaurantOrder.update({
+        where: { id: opened.orderId },
+        data: { status: 'CLOSED', closedAt: new Date(`${businessDate}T19:00:00.000Z`) },
+      });
+    });
+    await deps.close.cutClose(opened.db, {
+      branchId: ids.branch,
+      businessDate,
+      actor: actor(),
+    });
+
+    await expect(deps.bills.cutBills(opened.db, command)).resolves.toEqual({
+      orderId: first.orderId,
+      billIds: first.billIds,
+      replayed: true,
+    });
+    expect(
+      await read((tx) => tx.restaurantBill.count({ where: { orderId: opened.orderId } }))
+    ).toBe(1);
+  });
+
+  it('waits for the branch-day close lock before cutting a bill', async () => {
+    const businessDate = '2026-08-21';
+    const opened = await openWithItems([{}], new Date(`${businessDate}T18:00:00.000Z`));
+
+    let releaseLock!: () => void;
+    const release = new Promise<void>((resolve) => {
+      releaseLock = resolve;
+    });
+    let reportLockHeld!: (backendPid: number) => void;
+    const lockHeld = new Promise<number>((resolve) => {
+      reportLockHeld = resolve;
+    });
+    const lockKey = `${orgId}:${ids.branch}:${businessDate}`;
+    const holder = deps.withTenantDb(
+      orgId,
+      async (tx) => {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+        const [backend] = await tx.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+        reportLockHeld(backend!.pid);
+        await release;
+      },
+      { skipDrain: true }
+    );
+    const blockerPid = await lockHeld;
+    const cut = deps.bills.cutBills(opened.db, {
+      orderId: opened.orderId,
+      branchId: ids.branch,
+      split: { kind: 'NONE' },
+      actor: actor(),
+    });
+
+    try {
+      let waiting = false;
+      for (let attempt = 0; attempt < 100 && !waiting; attempt += 1) {
+        waiting = await deps.withPlatformDb(async (tx) => {
+          const [row] = await tx.$queryRaw<Array<{ waiting: boolean }>>`
+            SELECT EXISTS (
+              SELECT 1
+              FROM pg_stat_activity
+              WHERE ${blockerPid} = ANY(pg_blocking_pids(pid))
+                AND wait_event = 'advisory'
+            ) AS waiting
+          `;
+          return row!.waiting;
+        });
+        if (!waiting) await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      expect(waiting).toBe(true);
+      expect(
+        await read((tx) => tx.restaurantBill.count({ where: { orderId: opened.orderId } }))
+      ).toBe(0);
+    } finally {
+      releaseLock();
+      await holder;
+    }
+
+    await expect(cut).resolves.toMatchObject({ orderId: opened.orderId, replayed: false });
+    expect(await read((tx) => tx.restaurantBill.count({ where: { orderId: opened.orderId } }))).toBe(
+      1
+    );
   });
 
   it('persists only the purchased line when cutting an order with a remake', async () => {

@@ -17,6 +17,7 @@ const receipt: Receipt = {
   receiptNumber: 7,
   settledAt: '2026-09-05T10:00:00Z',
   splitKind: 'NONE',
+  loyaltyWallet: null,
   lines: [
     {
       id: 'line-1',

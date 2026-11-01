@@ -1,6 +1,9 @@
 import 'server-only';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { projectProfitAndLoss } from './accounts/profit-loss';
+
+export { projectProfitAndLoss } from './accounts/profit-loss';
 
 type Scope = { organizationId: string; branchId: string };
 type AccountTotals = {
@@ -72,6 +75,7 @@ export async function financialStatements(
     page: input.page,
     journal,
     journalCount,
+    profitAndLoss: projectProfitAndLoss(totals),
     accounts: totals.map((t) => ({
       accountCode: t.accountCode,
       currency: t.currency,

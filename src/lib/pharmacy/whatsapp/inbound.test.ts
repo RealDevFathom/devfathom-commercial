@@ -5,6 +5,7 @@ type Row = Record<string, unknown> & { id: string };
 const store = vi.hoisted(() => ({
   customers: [] as Row[],
   logs: [] as Row[],
+  consents: [] as Row[],
   catalog: [] as Row[],
   placed: [] as unknown[],
   failConsent: false,
@@ -16,9 +17,17 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
   const db = {
     $queryRaw: async () => [{ id: 'patient-a', patientId: 'patient-a' }],
     pharmacyCustomer: {
-      findFirst: async () => ({ patientId: 'patient-a' }),
+      findFirst: async () => ({
+        ...store.customers[0],
+        patientId: 'patient-a',
+        patient: { dateOfBirth: null },
+      }),
       findMany: async () =>
-        store.customers.map((customer) => ({ ...customer, patient: { phone: customer.phone } })),
+        store.customers.map((customer) => ({
+          ...customer,
+          patientId: 'patient-a',
+          patient: { phone: customer.phone },
+        })),
       updateMany: async ({
         where,
         data,
@@ -48,6 +57,17 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
         return { count: Number(eligible) };
       },
     },
+    patientConsent: {
+      findFirst: async ({ where }: { where: Record<string, unknown> }) =>
+        store.consents
+          .filter((row) => Object.entries(where).every(([key, value]) => row[key] === value))
+          .sort((a, b) => Number(b.version) - Number(a.version))[0] ?? null,
+      create: async ({ data }: { data: Record<string, unknown> }) => {
+        const row = { id: `consent-${store.consents.length + 1}`, ...data } as Row;
+        store.consents.push(row);
+        return row;
+      },
+    },
     pharmacyCustomerOrder: { findFirst: async () => null },
     pharmacyBranch: { findMany: async () => [{ id: 'branch-1', name: 'Gulberg' }] },
     pharmacyMessageLog: {
@@ -69,6 +89,7 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
     withTenantDb: async (_organizationId: string, run: (tx: unknown) => unknown) => {
       const customers = store.customers.map((row) => ({ ...row }));
       const logs = store.logs.map((row) => ({ ...row }));
+      const consents = store.consents.map((row) => ({ ...row }));
       const placed = [...store.placed];
       try {
         const result = await run(db);
@@ -77,6 +98,7 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
       } catch (error) {
         store.customers = customers;
         store.logs = logs;
+        store.consents = consents;
         store.placed = placed;
         throw error;
       }
@@ -96,6 +118,8 @@ vi.mock('@/lib/pharmacy/customer-ordering', () => ({
 
 import { handleInboundWhatsAppMessage } from './inbound';
 import { MockWhatsAppProvider, readWhatsAppConfig } from './provider';
+import { marketingConsent } from '../marketing-service';
+import { withTenantDb } from '@/lib/tenancy/scoped-db';
 
 const FROM = '923001234567';
 let sequence = 0;
@@ -127,11 +151,43 @@ function knownCustomer(whatsappOptIn: boolean | null) {
 
 let provider: MockWhatsAppProvider;
 
+function recordedConsent(
+  purpose: 'MARKETING' | 'REMINDERS',
+  granted: boolean,
+  recordedAt: Date,
+  source: 'COUNTER_TABLET' | 'QR' = 'COUNTER_TABLET'
+) {
+  return {
+    id: 'existing-consent',
+    organizationId: 'org_a',
+    patientId: 'patient-a',
+    purpose,
+    channel: 'WHATSAPP',
+    version: 1,
+    granted,
+    revokedAt: granted ? null : recordedAt,
+    recordedAt,
+    source,
+  };
+}
+
+function marketingEligibility() {
+  return withTenantDb('org_a', (db) =>
+    marketingConsent(
+      db,
+      { organizationId: 'org_a', branchId: 'branch-1', actorId: 'staff-1', timezone: 'UTC' },
+      'customer-1',
+      new Date()
+    )
+  );
+}
+
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date('2026-10-06T13:00:00Z'));
   store.customers = [];
   store.logs = [];
+  store.consents = [];
   store.placed = [];
   store.catalog = [
     {
@@ -151,6 +207,106 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe('handleInboundWhatsAppMessage consent gate', () => {
+  it('START enables utility replies without granting marketing consent', async () => {
+    knownCustomer(false);
+    const utility = recordedConsent('REMINDERS', true, new Date('2026-10-06T09:00:00Z'));
+    store.consents = [utility];
+    await expect(handleInboundWhatsAppMessage('org_a', provider, message('START'))).resolves.toBe(
+      'OPTED_IN'
+    );
+    expect(store.customers[0].whatsappOptIn).toBe(true);
+    expect(store.consents).toEqual([utility]);
+    expect(await marketingEligibility()).toBe('NO_CONSENT');
+    await expect(
+      handleInboundWhatsAppMessage('org_a', provider, message('Panadol 2 packs'))
+    ).resolves.toBe('ORDER_PLACED');
+  });
+
+  it.each(['COUNTER_TABLET', 'QR'] as const)(
+    'START never supersedes a separate %s marketing refusal, regardless of delivery time',
+    async (source) => {
+      knownCustomer(false);
+      const refusal = recordedConsent('MARKETING', false, new Date('2026-10-06T11:00:00Z'), source);
+      store.consents = [refusal];
+      for (const timestamp of ['2026-10-06T10:00:00Z', '2026-10-06T12:00:00Z']) {
+        const start = { ...message('START'), receivedAt: new Date(timestamp) };
+        await expect(handleInboundWhatsAppMessage('org_a', provider, start)).resolves.toBe(
+          'OPTED_IN'
+        );
+        expect(store.consents).toEqual([refusal]);
+        expect(await marketingEligibility()).toBe('OPTED_OUT');
+      }
+    }
+  );
+
+  it.each(['COUNTER_TABLET', 'QR'] as const)(
+    'delayed STOP does not supersede newer %s marketing consent',
+    async (source) => {
+      knownCustomer(true);
+      const grant = recordedConsent('MARKETING', true, new Date('2026-10-06T11:00:00Z'), source);
+      store.consents = [grant];
+      const stop = { ...message('STOP'), receivedAt: new Date('2026-10-06T10:00:00Z') };
+      await expect(handleInboundWhatsAppMessage('org_a', provider, stop)).resolves.toBe(
+        'OPTED_OUT'
+      );
+      expect(store.customers[0].whatsappOptIn).toBe(false);
+      expect(store.consents).toEqual([grant]);
+      expect(await marketingEligibility()).toBe('OPTED_OUT');
+    }
+  );
+
+  it('STOP revokes marketing consent at an equal timestamp without changing utility consent', async () => {
+    knownCustomer(true);
+    const stop = message('STOP');
+    const grant = recordedConsent('MARKETING', true, stop.receivedAt);
+    const utility = recordedConsent('REMINDERS', true, stop.receivedAt);
+    store.consents = [grant, utility];
+    await handleInboundWhatsAppMessage('org_a', provider, stop);
+    expect(store.consents).toHaveLength(3);
+    expect(store.consents.at(-1)).toMatchObject({
+      purpose: 'MARKETING',
+      granted: false,
+      version: 2,
+      supersedesId: grant.id,
+    });
+    expect(store.consents[1]).toEqual(utility);
+  });
+
+  it('STOP revokes promotional consent across channels but keeps service consent', async () => {
+    knownCustomer(true);
+    const at = new Date('2026-10-06T09:00:00Z');
+    const sms = { ...recordedConsent('MARKETING', true, at), id: 'sms', channel: 'SMS' };
+    const email = { ...recordedConsent('MARKETING', true, at), id: 'email', channel: 'EMAIL' };
+    const loyalty = { ...recordedConsent('MARKETING', true, at), id: 'loyalty', purpose: 'LOYALTY' };
+    const reminders = { ...recordedConsent('REMINDERS', true, at), id: 'reminders', channel: 'SMS' };
+    store.consents = [sms, email, loyalty, reminders];
+    await expect(handleInboundWhatsAppMessage('org_a', provider, message('STOP'))).resolves.toBe(
+      'OPTED_OUT'
+    );
+    const written = store.consents.slice(4);
+    expect(written.map((row) => [row.purpose, row.channel, row.supersedesId ?? null])).toEqual(
+      expect.arrayContaining([
+        ['MARKETING', 'WHATSAPP', null],
+        ['MARKETING', 'SMS', 'sms'],
+        ['MARKETING', 'EMAIL', 'email'],
+        ['LOYALTY', 'WHATSAPP', 'loyalty'],
+      ])
+    );
+    expect(written).toHaveLength(4);
+    for (const row of written) expect(row).toMatchObject({ granted: false, source: 'REPLY' });
+    expect(store.consents[3]).toEqual(reminders);
+  });
+
+  it('a repeated STOP does not add another revocation version', async () => {
+    knownCustomer(true);
+    await handleInboundWhatsAppMessage('org_a', provider, message('STOP'));
+    expect(store.consents).toHaveLength(1);
+    await expect(handleInboundWhatsAppMessage('org_a', provider, message('STOP'))).resolves.toBe(
+      'OPTED_OUT'
+    );
+    expect(store.consents).toHaveLength(1);
+  });
+
   it('does not order or reply outside the 24-hour service window', async () => {
     knownCustomer(true);
     const old = { ...message('Panadol 2 packs'), receivedAt: new Date('2026-10-05T13:00:00Z') };
@@ -165,6 +321,13 @@ describe('handleInboundWhatsAppMessage consent gate', () => {
     const old = { ...message('STOP'), receivedAt: new Date('2026-10-04T13:00:00Z') };
     await expect(handleInboundWhatsAppMessage('org_a', provider, old)).resolves.toBe('OPTED_OUT');
     expect(store.customers[0].whatsappOptIn).toBe(false);
+    expect(store.consents.at(-1)).toMatchObject({
+      purpose: 'MARKETING',
+      channel: 'WHATSAPP',
+      granted: false,
+      source: 'REPLY',
+      staffId: null,
+    });
     expect(provider.calls).toEqual([]);
   });
   it('rejects future consent without consuming its claim', async () => {
@@ -337,6 +500,46 @@ describe('handleInboundWhatsAppMessage consent gate', () => {
     }
   );
 
+  it.each([false, true])(
+    'STOP revokes older promotional grants regardless of delivery order (START first: %s)',
+    async (startFirst) => {
+      knownCustomer(true);
+      const at = new Date('2026-10-06T09:00:00Z');
+      const whatsapp = { ...recordedConsent('MARKETING', true, at), id: 'wa' };
+      const sms = { ...recordedConsent('MARKETING', true, at), id: 'sms', channel: 'SMS' };
+      const email = { ...recordedConsent('MARKETING', true, at), id: 'email', channel: 'EMAIL' };
+      store.consents = [whatsapp, sms, email];
+      const stop = { ...message('STOP'), receivedAt: new Date('2026-10-06T10:00:00Z') };
+      const start = { ...message('START'), receivedAt: new Date('2026-10-06T10:01:00Z') };
+      if (startFirst) {
+        await expect(handleInboundWhatsAppMessage('org_a', provider, start)).resolves.toBe(
+          'OPTED_IN'
+        );
+        await expect(handleInboundWhatsAppMessage('org_a', provider, stop)).resolves.toBe(
+          'STALE_CONSENT'
+        );
+        expect(store.logs.at(-1)).toMatchObject({ error: 'STALE_UTILITY_CONSENT' });
+        expect(store.logs.at(-1)?.status).not.toBe('IGNORED');
+      } else {
+        await handleInboundWhatsAppMessage('org_a', provider, stop);
+        await handleInboundWhatsAppMessage('org_a', provider, start);
+      }
+      expect(store.customers[0].whatsappOptIn).toBe(true);
+      const written = store.consents.slice(3);
+      expect(written.map((row) => [row.purpose, row.channel, row.supersedesId])).toEqual(
+        expect.arrayContaining([
+          ['MARKETING', 'WHATSAPP', 'wa'],
+          ['MARKETING', 'SMS', 'sms'],
+          ['MARKETING', 'EMAIL', 'email'],
+        ])
+      );
+      expect(written).toHaveLength(3);
+      for (const row of written)
+        expect(row).toMatchObject({ granted: false, source: 'REPLY', recordedAt: stop.receivedAt });
+      expect(await marketingEligibility()).toBe('OPTED_OUT');
+    }
+  );
+
   it('does not let a replayed STOP undo a later START', async () => {
     knownCustomer(true);
     const stop = message('STOP');
@@ -345,5 +548,18 @@ describe('handleInboundWhatsAppMessage consent gate', () => {
     await expect(handleInboundWhatsAppMessage('org_a', provider, stop)).resolves.toBe('DUPLICATE');
     expect(store.customers[0].whatsappOptIn).toBe(true);
     expect(provider.calls).toHaveLength(2);
+    expect(store.consents).toHaveLength(1);
+    expect(await marketingEligibility()).toBe('OPTED_OUT');
   });
+});
+
+it('never echoes a medicine name in outbound WhatsApp confirmation text', async () => {
+  const { WHATSAPP_REPLIES } = await import('./messages');
+  const body = WHATSAPP_REPLIES.confirmation({
+    reference: 'ABC123',
+    quantity: 2,
+    branch: 'Main counter',
+  });
+  expect(body).not.toMatch(/panadol|medicine|drug|tablet|salt/i);
+  expect(body).toContain('ABC123');
 });

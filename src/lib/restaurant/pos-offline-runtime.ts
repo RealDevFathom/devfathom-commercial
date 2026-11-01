@@ -62,6 +62,26 @@ export class PosOfflineRuntime {
         ...result.state,
         queue: result.state.queue ?? createQueueSnapshot(this.scope.deviceId),
       };
+      // Schema v1 also contains pre-proof drafts. Preserve them for explicit
+      // discard, but never let unverifiable authorship block newer signed work.
+      this.state.queue = {
+        ...this.queue(),
+        drafts: this.queue().drafts.map((draft) =>
+          draft.status !== 'COMPLETED' && (!draft.composerStaffProfileId || !draft.composerProof)
+            ? {
+                ...draft,
+                status: 'QUARANTINED',
+                review: {
+                  reason: 'COMPOSER_UNVERIFIED',
+                  message:
+                    'This saved order has no verified composer. Recreate it and discard this copy.',
+                  atCommandId: null,
+                },
+              }
+            : draft
+        ),
+      };
+      await this.persist();
     }
     return 'ready';
   }
@@ -91,6 +111,40 @@ export class PosOfflineRuntime {
     await this.persist();
   }
 
+  /**
+   * Replace an expired composer proof only after the same operator has authenticated
+   * again. The server still verifies the replacement proof on every replay request.
+   */
+  async renewComposerProof(
+    staffProfileId: string,
+    renew: (originalProof: string) => Promise<string | null>,
+    needsRenewal: (proof: string) => boolean = () => true
+  ): Promise<void> {
+    const candidates = this.queue().drafts.filter(
+      (draft) =>
+        draft.status !== 'COMPLETED' &&
+        draft.review?.reason !== 'COMPOSER_UNVERIFIED' &&
+        draft.composerStaffProfileId === staffProfileId &&
+        needsRenewal(draft.composerProof)
+    );
+    for (const candidate of candidates) {
+      const composerProof = await renew(candidate.composerProof);
+      if (!composerProof) continue;
+      this.state = {
+        ...this.state,
+        queue: {
+          ...this.queue(),
+          drafts: this.queue().drafts.map((draft) =>
+            draft.draftId === candidate.draftId && draft.composerProof === candidate.composerProof
+              ? { ...draft, composerProof }
+              : draft
+          ),
+        },
+      };
+      await this.persist();
+    }
+  }
+
   async resolveReview(draftId: string, decision: 'REPLAY' | 'DISCARD'): Promise<void> {
     this.state = {
       ...this.state,
@@ -104,9 +158,12 @@ export class PosOfflineRuntime {
     await this.persist();
   }
 
-  replay(send: (request: PosReplayRequest) => Promise<PosReplayResponse>): Promise<ReplayResult> {
+  replay(
+    staffProfileId: string,
+    send: (request: PosReplayRequest) => Promise<PosReplayResponse>
+  ): Promise<ReplayResult> {
     if (this.activeReplay) return this.activeReplay;
-    const replay = this.runReplay(send);
+    const replay = this.runReplay(staffProfileId, send);
     this.activeReplay = replay;
     const clear = () => {
       if (this.activeReplay === replay) this.activeReplay = null;
@@ -116,10 +173,18 @@ export class PosOfflineRuntime {
   }
 
   private async runReplay(
+    staffProfileId: string,
     send: (request: PosReplayRequest) => Promise<PosReplayResponse>
   ): Promise<ReplayResult> {
     for (;;) {
-      const next = nextReplayCommand(this.queue(), this.scope.deviceId);
+      const next = nextReplayCommand(this.queue(), this.scope.deviceId, staffProfileId);
+      if (next.status === 'REFUSED' && next.reason === 'OPERATOR_MISMATCH') {
+        return {
+          state: 'REFUSED' as const,
+          discarded: null,
+          waitingComposers: next.composerStaffProfileIds,
+        };
+      }
       if (next.status !== 'READY') return { state: next.status, discarded: null };
       const built = buildReplayRequest(next.draft, next.command);
       if (!built.ok) return { state: 'REFUSED' as const, discarded: null };
@@ -170,4 +235,6 @@ export class PosOfflineRuntime {
 type ReplayResult = {
   state: 'IDLE' | 'PAUSED' | 'STOPPED' | 'REFUSED';
   discarded: { drafts: number; commands: number } | null;
+  /** Set when replay finished the current operator's work but other composers' drafts wait. */
+  waitingComposers?: Array<string | null>;
 };

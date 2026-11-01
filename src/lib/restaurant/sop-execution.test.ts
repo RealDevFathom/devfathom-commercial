@@ -237,6 +237,29 @@ describe('completeStep', () => {
     expect(db.restaurantSopOccurrenceStep.findUnique).not.toHaveBeenCalled();
   });
 
+  it('requires a non-blank note when the published step requires one', async () => {
+    db.restaurantSopOccurrence.findUnique.mockResolvedValue({
+      id: OCC_ID,
+      status: 'IN_PROGRESS',
+    });
+    db.restaurantSopOccurrenceStep.findUnique.mockResolvedValue({
+      id: STEP_ID,
+      completed: false,
+      completedAt: null,
+      templateStep: { requiresPhoto: false, requiresSignature: false, requiresNote: true },
+      evidence: [],
+    });
+
+    await expect(
+      completeStep(db as unknown as ScopedDb, {
+        occurrenceId: OCC_ID,
+        templateStepId: TMPL_STEP_ID,
+        note: '   ',
+      })
+    ).rejects.toMatchObject({ reason: 'PROOF_REQUIRED' });
+    expect(db.restaurantSopOccurrenceStep.update).not.toHaveBeenCalled();
+  });
+
   it('marks a step completed on an IN_PROGRESS occurrence', async () => {
     db.restaurantSopOccurrence.findUnique.mockResolvedValue({
       id: OCC_ID,
@@ -644,6 +667,7 @@ describe('submitOccurrence', () => {
       claimedByStaffProfileId: null,
       status: 'IN_PROGRESS',
       windowEndsAt: WINDOW_FUTURE,
+      steps: [],
     });
     db.restaurantSopOccurrence.update.mockResolvedValue({ id: OCC_ID, submittedAt: NOW });
 
@@ -663,6 +687,7 @@ describe('submitOccurrence', () => {
       claimedByStaffProfileId: null,
       status: 'IN_PROGRESS',
       windowEndsAt: WINDOW_PAST,
+      steps: [],
     });
     db.restaurantSopOccurrence.update.mockResolvedValue({ id: OCC_ID, submittedAt: NOW });
 
@@ -693,5 +718,47 @@ describe('submitOccurrence', () => {
         actorStaffProfileId: 'staff_1',
       })
     ).rejects.toMatchObject({ reason: 'INVALID_STATE' });
+  });
+
+  it('refuses submission while any checklist step is incomplete', async () => {
+    db.restaurantSopOccurrence.findUnique.mockResolvedValue({
+      id: OCC_ID,
+      status: 'IN_PROGRESS',
+      windowEndsAt: WINDOW_FUTURE,
+      steps: [
+        {
+          completed: false,
+          note: null,
+          templateStep: { requiresPhoto: false, requiresSignature: false, requiresNote: false },
+          evidence: [],
+        },
+      ],
+    });
+
+    await expect(
+      submitOccurrence(db as unknown as ScopedDb, { occurrenceId: OCC_ID })
+    ).rejects.toMatchObject({ reason: 'PROOF_REQUIRED' });
+    expect(db.restaurantSopOccurrence.update).not.toHaveBeenCalled();
+  });
+
+  it('revalidates published note and evidence requirements at submission', async () => {
+    db.restaurantSopOccurrence.findUnique.mockResolvedValue({
+      id: OCC_ID,
+      status: 'IN_PROGRESS',
+      windowEndsAt: WINDOW_FUTURE,
+      steps: [
+        {
+          completed: true,
+          note: 'done',
+          templateStep: { requiresPhoto: true, requiresSignature: false, requiresNote: true },
+          evidence: [],
+        },
+      ],
+    });
+
+    await expect(
+      submitOccurrence(db as unknown as ScopedDb, { occurrenceId: OCC_ID })
+    ).rejects.toMatchObject({ reason: 'PROOF_REQUIRED' });
+    expect(db.restaurantSopOccurrence.update).not.toHaveBeenCalled();
   });
 });
