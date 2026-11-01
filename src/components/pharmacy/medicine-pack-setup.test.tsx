@@ -16,6 +16,8 @@ const mocks = vi.hoisted(() => ({
   },
   mutation: { mutate: vi.fn(), reset: vi.fn(), isPending: false, error: null as unknown },
   barcodeMutation: { mutate: vi.fn(), reset: vi.fn(), isPending: false, error: null as unknown },
+  nestMutation: { mutate: vi.fn(), reset: vi.fn(), isPending: false, error: null as unknown },
+  onNested: undefined as (() => Promise<void>) | undefined,
   onBarcodeSaved: undefined as ((row: { code: string }) => Promise<void>) | undefined,
   invalidateMedicine: vi.fn(),
   onSuccess: undefined as (() => Promise<void>) | undefined,
@@ -32,6 +34,12 @@ vi.mock('@/lib/trpc', () => ({
         useMutation: (options: { onSuccess: () => Promise<void> }) => {
           mocks.onSuccess = options.onSuccess;
           return mocks.mutation;
+        },
+      },
+      addInnerPackLevel: {
+        useMutation: (options: { onSuccess: () => Promise<void> }) => {
+          mocks.onNested = options.onSuccess;
+          return mocks.nestMutation;
         },
       },
       setPackBarcode: {
@@ -68,6 +76,8 @@ beforeEach(() => {
   };
   mocks.search.error = mocks.medicine.error = mocks.mutation.error = null;
   mocks.barcodeMutation.error = null;
+  mocks.nestMutation.error = null;
+  mocks.nestMutation.isPending = false;
   mocks.search.isFetching = mocks.medicine.isFetching = mocks.mutation.isPending = false;
   mocks.barcodeMutation.isPending = false;
 });
@@ -272,5 +282,111 @@ describe('medicine pack setup', () => {
     view.rerender(<MedicinePackSetup />);
     expect(screen.getByRole('alert')).toHaveTextContent('already assigned to another pack');
     expect(screen.getByLabelText('Barcode for 1 BOX = 10 units')).toHaveValue('2222');
+  });
+
+  function packRow(
+    id: string,
+    level: string,
+    unitsPerParent: number,
+    parentPackLevelId: string | null = null
+  ) {
+    return {
+      id,
+      level,
+      unitsPerParent,
+      parentPackLevelId,
+      effectiveFrom: new Date('2020-01-01'),
+      effectiveTo: null,
+      barcodes: [] as Array<{ code: string }>,
+    };
+  }
+  function withPacks(packLevels: ReturnType<typeof packRow>[]) {
+    mocks.medicine.data = {
+      presentations: [
+        { id: 'presentation-secret', dosageForm: 'Tablet', presentation: '10 x 10', packLevels },
+      ],
+    };
+  }
+  function choosePresentation() {
+    fireEvent.change(screen.getByLabelText('Medicine'), { target: { value: 'medicine-secret' } });
+    fireEvent.change(screen.getByLabelText('Presentation'), {
+      target: { value: 'presentation-secret' },
+    });
+  }
+
+  it('shows each pack ID next to its editable barcode', () => {
+    withPacks([{ ...packRow('pack_box_1', 'BOX', 100), barcodes: [{ code: '1111' }] }]);
+    render(<MedicinePackSetup />);
+    choosePresentation();
+    expect(screen.getByText('pack_box_1')).toBeVisible();
+    expect(screen.getByText('Barcode: 1111')).toBeVisible();
+    expect(screen.getByLabelText('Barcode for 1 BOX = 100 units')).toHaveValue('1111');
+  });
+
+  it('places a pack inside an outer pack and works out the per-level count from the totals', async () => {
+    withPacks([packRow('default-pack', 'BOX', 100)]);
+    render(<MedicinePackSetup />);
+    choosePresentation();
+    fireEvent.change(screen.getByLabelText('Outer pack'), { target: { value: 'default-pack' } });
+    expect(screen.queryByLabelText(/Effective from/)).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Pack type'), { target: { value: 'STRIP' } });
+    fireEvent.change(screen.getByLabelText(/Individual units per pack/), {
+      target: { value: '10' },
+    });
+    expect(
+      screen.getByText('1 BOX will hold 10 × STRIP, each of 10 units (100 units in total).')
+    ).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Create pack' }));
+    expect(mocks.nestMutation.mutate).toHaveBeenCalledExactlyOnceWith({
+      parentPackLevelId: 'default-pack',
+      level: 'STRIP',
+      totalUnits: 10,
+      versionGroupId: expect.any(String),
+    });
+    expect(mocks.mutation.mutate).not.toHaveBeenCalled();
+    await mocks.onNested?.();
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Pack created'));
+    expect(mocks.invalidateMedicine).toHaveBeenCalledWith({ id: 'medicine-secret' });
+  });
+
+  it('refuses an inner total that does not divide the outer pack', () => {
+    withPacks([packRow('default-pack', 'BOX', 100)]);
+    render(<MedicinePackSetup />);
+    choosePresentation();
+    fireEvent.change(screen.getByLabelText('Outer pack'), { target: { value: 'default-pack' } });
+    fireEvent.change(screen.getByLabelText('Pack type'), { target: { value: 'STRIP' } });
+    fireEvent.change(screen.getByLabelText(/Individual units per pack/), {
+      target: { value: '30' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Create pack' }));
+    expect(mocks.nestMutation.mutate).not.toHaveBeenCalled();
+    expect(screen.getByRole('alert')).toHaveTextContent('not a whole number of packs of 30');
+  });
+
+  it('offers only the innermost pack of a nested chain as the outer pack', () => {
+    withPacks([packRow('box', 'BOX', 10), packRow('strip', 'STRIP', 10, 'box')]);
+    render(<MedicinePackSetup />);
+    choosePresentation();
+    const options = Array.from(
+      (screen.getByLabelText('Outer pack') as HTMLSelectElement).options
+    ).map((option) => option.value);
+    expect(options).toEqual(['', 'strip']);
+    expect(screen.getByText('1 BOX = 10 STRIPs = 100 units')).toBeVisible();
+  });
+
+  it('creates flat packs as before and warns when their totals do not divide evenly', () => {
+    withPacks([packRow('box', 'BOX', 100), packRow('strip', 'STRIP', 30)]);
+    render(<MedicinePackSetup />);
+    fill();
+    expect(screen.getByRole('alert')).toHaveTextContent('do not divide evenly');
+    fireEvent.click(screen.getByRole('button', { name: 'Create pack' }));
+    expect(mocks.mutation.mutate).toHaveBeenCalledExactlyOnceWith({
+      presentationId: 'presentation-secret',
+      level: 'STRIP',
+      unitsPerParent: 10,
+      effectiveFrom: new Date('2026-09-06T00:00:00Z'),
+      versionGroupId: expect.any(String),
+    });
+    expect(mocks.nestMutation.mutate).not.toHaveBeenCalled();
   });
 });

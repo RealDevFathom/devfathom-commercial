@@ -5,7 +5,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { LedgerScope } from '../stock-ledger';
 import { expiryInstant, normalizeExpiryBoundary } from '../stock-ledger';
 import { postOpeningStockEntry } from '../finance-postings';
-import { isEffective, type PackLevelNode } from '../pack-conversion';
+import { flatPackChain, isEffective, type PackLevelNode } from '../pack-conversion';
 import { draftLine, explainVariance, postOpeningSession } from './opening-stock';
 import { IMPORT_FIELDS, type ImportField, type OwnerImportInput } from './owner-import-input';
 import { OwnerImportError, parseOwnerUpload } from './owner-import-upload';
@@ -30,6 +30,14 @@ function conversion(levels: PackLevelNode[], packId: string, at: Date): number |
   const seen = new Set<string>();
   let units = 1;
   if (!cursor) return null;
+  // Packs entered side by side (no parent) each carry their own unit total.
+  // They are accepted as one chain only when those totals divide evenly.
+  if (active.length > 1 && active.every((level) => level.parentPackLevelId === null)) {
+    if (levels.some((child) => child.parentPackLevelId === cursor!.id)) return null;
+    if (!flatPackChain(active, at)) return null;
+    return Number.isSafeInteger(cursor.unitsPerParent) && cursor.unitsPerParent > 0 &&
+      cursor.unitsPerParent <= INT_MAX ? cursor.unitsPerParent : null;
+  }
   if (cursor.parentPackLevelId && !active.some((level) => level.id === cursor!.parentPackLevelId)) return null;
   while (cursor) {
     if (seen.has(cursor.id) || !Number.isInteger(cursor.unitsPerParent) || cursor.unitsPerParent <= 0) return null;
@@ -42,6 +50,11 @@ function conversion(levels: PackLevelNode[], packId: string, at: Date): number |
     cursor = children[0];
   }
   return units;
+}
+
+function flatTotalsConflict(levels: PackLevelNode[], at: Date): boolean {
+  const active = levels.filter((level) => isEffective(level, at));
+  return active.length > 1 && active.every((level) => level.parentPackLevelId === null) && !flatPackChain(active, at);
 }
 
 export async function previewOwnerImport(db: ScopedDb, scope: LedgerScope, input: OwnerImportInput, lockReferences = false) {
@@ -120,7 +133,8 @@ export async function previewOwnerImport(db: ScopedDb, scope: LedgerScope, input
     }
     const pack = packs.length === 1 ? packs[0]! : null;
     const unitsPerPack = pack ? conversion(pack.presentation.packLevels, pack.id, now) : null;
-    if (!pack || !pack.presentation.medicine.saleable || unitsPerPack === null) errors.push('Match exactly one published medicine pack with a valid current conversion, using its barcode or pack ID.');
+    if (pack && unitsPerPack === null && flatTotalsConflict(pack.presentation.packLevels, now)) errors.push('This medicine’s packs are counted separately and their unit totals do not divide evenly (for example BOX 100, STRIP 30). Correct the pack setup so each larger pack holds a whole number of the next smaller pack.');
+    else if (!pack || !pack.presentation.medicine.saleable || unitsPerPack === null) errors.push('Match exactly one published medicine pack with a valid current conversion, using its barcode or pack ID.');
     if (pack?.presentation.medicine.coldChain && !location.coldChain) errors.push('This medicine requires a cold-chain stock location.');
     const medicineId = pack?.presentation.medicineId ?? null;
     const lotKey = JSON.stringify([medicineId, batchNumber, pack?.id]);
