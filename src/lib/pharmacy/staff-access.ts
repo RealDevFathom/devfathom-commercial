@@ -11,6 +11,9 @@ import { can, subjectFromSession, type CanOptions } from '@/lib/abac';
  * - `reports`: `reports:operational` (the `pharmacyReports` capability gate).
  * - `inventoryControl`: `pharmacy:inventory` (create location, write-off, …).
  * - `inventoryImport`: session ADMIN (the owner-import router is admin-only).
+ * - `dispense`: `pharmacy:dispense` (pharmacist queue, substitution, Rx fill).
+ * - `prescriptions`: `pharmacy:prescriptions` (the prescription workspace; a
+ *   dispense grant covers it, and tenant administrators hold it by policy).
  */
 export type PharmacyStaffAccess = {
   commandCentre: boolean;
@@ -18,6 +21,8 @@ export type PharmacyStaffAccess = {
   reports: boolean;
   inventoryControl: boolean;
   inventoryImport: boolean;
+  dispense: boolean;
+  prescriptions: boolean;
 };
 
 export const NO_PHARMACY_STAFF_ACCESS: PharmacyStaffAccess = {
@@ -26,6 +31,8 @@ export const NO_PHARMACY_STAFF_ACCESS: PharmacyStaffAccess = {
   reports: false,
   inventoryControl: false,
   inventoryImport: false,
+  dispense: false,
+  prescriptions: false,
 };
 
 type SessionUser = Parameters<typeof subjectFromSession>[0];
@@ -38,11 +45,13 @@ export async function readPharmacyStaffAccess(
   const subject = subjectFromSession(user);
   const options = { db, source: 'TRPC' as const };
   const admin = subject.role === 'ADMIN';
-  const [reports, manage, close, inventory] = await Promise.all([
+  const [reports, manage, close, inventory, dispense, prescriptions] = await Promise.all([
     can(subject, 'reports:operational', undefined, options),
     can(subject, 'pharmacy:manage', undefined, options),
     can(subject, 'pharmacy:close', undefined, options),
     can(subject, 'pharmacy:inventory', undefined, options),
+    can(subject, 'pharmacy:dispense', undefined, options),
+    can(subject, 'pharmacy:prescriptions', undefined, options),
   ]);
   return {
     commandCentre: admin || reports || manage,
@@ -50,6 +59,8 @@ export async function readPharmacyStaffAccess(
     reports,
     inventoryControl: inventory,
     inventoryImport: admin,
+    dispense,
+    prescriptions,
   };
 }
 
@@ -61,5 +72,7 @@ export function pharmacyStaffCapabilities(access: PharmacyStaffAccess): string[]
     ...(access.reports ? ['reports:operational'] : []),
     ...(access.inventoryControl ? ['pharmacy:inventory'] : []),
     ...(access.inventoryImport ? ['pharmacy:inventory-import'] : []),
+    ...(access.dispense ? ['pharmacy:dispense'] : []),
+    ...(access.prescriptions ? ['pharmacy:prescriptions'] : []),
   ];
 }

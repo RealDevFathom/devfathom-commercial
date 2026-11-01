@@ -216,6 +216,33 @@ describe('pharmacy navigation', () => {
     ).toBe(true);
   });
 
+  it('hides Prescriptions, Pharmacist queue and Substitution without a dispense or safety capability', () => {
+    const entitled = {
+      vertical: 'PHARMACY' as const,
+      enabledModules: ['pharmacy-core', 'pharmacy-dispensing'],
+    };
+    const clinical = [
+      '/pharmacy/prescriptions',
+      '/pharmacy/pharmacist-queue',
+      '/pharmacy/substitution',
+    ];
+    const hrefs = (capabilities: string[]) =>
+      visibleNavigation(entitled, 'EMPLOYEE', [], capabilities).map((item) => item.href);
+
+    // Module alone (e.g. a cashier or manager) is not enough.
+    for (const route of clinical) expect(hrefs([])).not.toContain(route);
+    const cashier = hrefs(['pharmacy:counter', 'pharmacy:orders']);
+    for (const route of clinical) expect(cashier).not.toContain(route);
+    // A pharmacist (dispense) or a safety holder sees all three.
+    expect(hrefs(['pharmacy:dispense'])).toEqual(expect.arrayContaining(clinical));
+    expect(hrefs(['pharmacy:safety'])).toEqual(expect.arrayContaining(clinical));
+    // Prescription-records access alone opens only the prescription workspace.
+    const records = hrefs(['pharmacy:prescriptions']);
+    expect(records).toContain('/pharmacy/prescriptions');
+    expect(records).not.toContain('/pharmacy/pharmacist-queue');
+    expect(records).not.toContain('/pharmacy/substitution');
+  });
+
   it('shows pharmacy routes to a Pharmacy admin with core and counter modules', () => {
     const visible = visibleNavigation(
       {

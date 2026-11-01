@@ -388,6 +388,9 @@ export const navigation: NavItem[] = [
     icon: FileText,
     group: 'Pharmacy',
     module: 'pharmacy-dispensing',
+    // A dispensing, prescription-records or safety capability, not the module
+    // alone, opens it (the workspace checks pharmacy:prescriptions server-side).
+    pharmacyCapabilities: ['pharmacy:dispense', 'pharmacy:prescriptions', 'pharmacy:safety'],
   },
   {
     label: 'Pharmacist queue',
@@ -395,6 +398,8 @@ export const navigation: NavItem[] = [
     icon: ClipboardCheck,
     group: 'Pharmacy',
     module: 'pharmacy-dispensing',
+    // A dispensing or safety capability, not the module alone, opens it.
+    pharmacyCapabilities: ['pharmacy:dispense', 'pharmacy:safety'],
   },
   {
     label: 'Substitution',
@@ -402,6 +407,8 @@ export const navigation: NavItem[] = [
     icon: Replace,
     group: 'Pharmacy',
     module: 'pharmacy-dispensing',
+    // A dispensing or safety capability, not the module alone, opens it.
+    pharmacyCapabilities: ['pharmacy:dispense', 'pharmacy:safety'],
   },
   {
     label: 'Controlled register',
@@ -630,7 +637,6 @@ function useVisibleNavigation() {
     retry: false,
     staleTime: 30_000,
   });
-  const pharmacyCapabilities = safetyAccess.data?.allowed ? ['pharmacy:safety'] : [];
   const staffAccess = trpc.pharmacyBranchAssignments.myAccess.useQuery(undefined, {
     enabled:
       entitlements.vertical === 'PHARMACY' &&
@@ -639,6 +645,13 @@ function useVisibleNavigation() {
     retry: false,
     staleTime: 30_000,
   });
+  // Clinical entries (Prescriptions, Pharmacist queue, Substitution) need one of
+  // these; unknown access hides them rather than offering a refused page.
+  const pharmacyCapabilities = [
+    ...(safetyAccess.data?.allowed ? ['pharmacy:safety'] : []),
+    ...(staffAccess.data?.dispense ? ['pharmacy:dispense'] : []),
+    ...(staffAccess.data?.prescriptions ? ['pharmacy:prescriptions'] : []),
+  ];
   const filteredNav = visibleNavigation(
     entitlements,
     session?.user?.role,

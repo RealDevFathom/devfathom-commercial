@@ -60,6 +60,8 @@ const pharmacyStaffAccessQuery = vi.hoisted(() => ({
         reports: boolean;
         inventoryControl: boolean;
         inventoryImport: boolean;
+        dispense?: boolean;
+        prescriptions?: boolean;
       },
 }));
 vi.mock('@/lib/trpc', () => ({

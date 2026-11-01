@@ -46,6 +46,8 @@ describe('readPharmacyStaffAccess', () => {
       reports: true,
       inventoryControl: true,
       inventoryImport: true,
+      dispense: false,
+      prescriptions: false,
     });
   });
 
@@ -78,8 +80,24 @@ describe('readPharmacyStaffAccess', () => {
       reports: false,
       inventoryControl: false,
       inventoryImport: false,
+      dispense: false,
+      prescriptions: false,
     });
     expect(pharmacyStaffCapabilities(access)).toEqual([]);
+  });
+
+  it('reports dispensing and prescription access for a pharmacist', async () => {
+    grant([
+      'pharmacy:dispense',
+      'pharmacy:prescriptions',
+      'pharmacy:catalogue-review',
+      'pharmacy:close',
+    ]);
+    const access = await readPharmacyStaffAccess({ id: 'pharmacist', role: 'EMPLOYEE' }, db);
+    expect(access).toMatchObject({ dispense: true, prescriptions: true, dayClose: true });
+    expect(pharmacyStaffCapabilities(access)).toEqual(
+      expect.arrayContaining(['pharmacy:dispense', 'pharmacy:prescriptions'])
+    );
   });
 
   it('denies everything without a signed-in user', async () => {
