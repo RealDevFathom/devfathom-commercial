@@ -1060,8 +1060,6 @@ enum PharmacyCustomerOrderEventKind {
 }
 
 model PharmacySale {
-  discountCode String?
-  growthRecipients CampaignRecipient[]
   id                        String                       @id @default(cuid())
   organizationId            String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   branchId                  String
@@ -1089,6 +1087,11 @@ model PharmacySale {
   customerOrder             PharmacyCustomerOrder?
   visibilityAnchor          PharmacyBranch               @relation("PharmacySaleVisibilityAnchor", fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_sales_visibility_fkey")
 
+  // Growth G1: a redeemed campaign/referral code is recorded on the sale it
+  // discounted. Nullable because most sales carry no code.
+  discountCode              String?
+  growthRecipients          CampaignRecipient[]
+
   @@unique([organizationId, id])
   @@unique([organizationId, branchId, id])
   @@index([organizationId, branchId, status, createdAt])
@@ -1098,12 +1101,6 @@ model PharmacySale {
 /// CRM-L01 retail identity. Clinical identity remains in PharmacyPatient and is
 /// joined only server-side after a current LOYALTY consent check.
 model PharmacyCustomer {
-  whatsappE164 String?
-  whatsappOptInAt DateTime?
-  whatsappOptOutAt DateTime?
-  growthMetrics CustomerMetrics?
-  growthRecipients CampaignRecipient[]
-  @@index([organizationId, whatsappE164])
   whatsappMessages PharmacyMessageLog[]
   id               String               @id @default(cuid())
   organizationId   String               @default(dbgenerated("current_setting('app.current_organization_id', true)"))
@@ -1123,13 +1120,23 @@ model PharmacyCustomer {
   familyMemberships      PharmacyFamilyMember[]
   user                   User?                        @relation("PharmacyCustomerUser", fields: [organizationId, userId], references: [organizationId, id], onDelete: Restrict)
   orders                 PharmacyCustomerOrder[]
-  whatsappOptIn          Boolean @default(false)
+  // Existing loyalty consent audit: whatsappOptInChangedAt keeps its semantics;
+  // whatsappOptIn becomes a strict boolean (default false) so the growth channel
+  // can never read a null as "maybe allowed". Nulls backfill to false — never consent.
+  whatsappOptIn          Boolean                      @default(false)
   whatsappOptInChangedAt DateTime?                    @db.Timestamp(3)
+  // Growth G1 WhatsApp channel.
+  whatsappE164           String?
+  whatsappOptInAt        DateTime?
+  whatsappOptOutAt       DateTime?
+  growthMetrics          CustomerMetrics?
+  growthRecipients       CampaignRecipient[]
 
   @@unique([organizationId, id])
   @@unique([organizationId, patientId])
   @@unique([organizationId, userId])
   @@index([organizationId, displayName])
+  @@index([organizationId, whatsappE164])
   @@map("pharmacy_customers")
 }
 
@@ -1433,8 +1440,8 @@ model PharmacyCounterKeymapPreference {
 }
 
 model PharmacySaleLine {
-  id                        String                           @id @default(cuid())
-  organizationId            String                           @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  id                        String                       @id @default(cuid())
+  organizationId            String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   branchId                  String
   saleId                    String
   medicineId                String
@@ -1448,15 +1455,15 @@ model PharmacySaleLine {
   proRataCeilingMinor       Int
   unitCostMinor             Int
   discountKind              PharmacyDiscountKind?
-  discountMinor             Int                              @default(0)
+  discountMinor             Int                          @default(0)
   approvalPolicy            String?
   approvedByUserId          String?
   idempotencyKey            String
-  createdAt                 DateTime                         @default(now())
-  sale                      PharmacySale                     @relation(fields: [organizationId, branchId, saleId], references: [organizationId, branchId, id], onDelete: Restrict)
-  medicine                  Medicine                         @relation(fields: [medicineId], references: [id], onDelete: Restrict)
-  presentation              Presentation                     @relation(fields: [presentationId], references: [id], onDelete: Restrict)
-  packLevel                 PackLevel                        @relation(fields: [packLevelId], references: [id], onDelete: Restrict)
+  createdAt                 DateTime                     @default(now())
+  sale                      PharmacySale                 @relation(fields: [organizationId, branchId, saleId], references: [organizationId, branchId, id], onDelete: Restrict)
+  medicine                  Medicine                     @relation(fields: [medicineId], references: [id], onDelete: Restrict)
+  presentation              Presentation                 @relation(fields: [presentationId], references: [id], onDelete: Restrict)
+  packLevel                 PackLevel                    @relation(fields: [packLevelId], references: [id], onDelete: Restrict)
   allocations               PharmacySaleLineAllocation[]
   returnLines               PharmacySaleReturnLine[]
   unidentifiedReturnHolds   PharmacyUnidentifiedReturnHold[]
@@ -1505,15 +1512,15 @@ model PharmacySaleEvent {
 }
 
 model PharmacySaleReturn {
-  id                String                           @id @default(cuid())
-  organizationId    String                           @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  branchId          String
-  originalSaleId    String
-  actorId           String
-  reason            String
-  createdAt         DateTime                         @default(now())
-  originalSale      PharmacySale                     @relation("PharmacySaleReturns", fields: [organizationId, branchId, originalSaleId], references: [organizationId, branchId, id], onDelete: Restrict)
-  lines             PharmacySaleReturnLine[]
+  id             String                   @id @default(cuid())
+  organizationId String                   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  originalSaleId String
+  actorId        String
+  reason         String
+  createdAt      DateTime                 @default(now())
+  originalSale   PharmacySale             @relation("PharmacySaleReturns", fields: [organizationId, branchId, originalSaleId], references: [organizationId, branchId, id], onDelete: Restrict)
+  lines          PharmacySaleReturnLine[]
   unidentifiedHolds PharmacyUnidentifiedReturnHold[]
 
   @@unique([organizationId, id])
@@ -1810,9 +1817,9 @@ model PharmacyStockLocation {
 
   purchaseReturnLines     PharmacyPurchaseReturnLine[]
   stockSignals            PharmacyStockSignal[]
-  receiptLines            PharmacyGoodsReceiptLine[]       @relation("PharmacyReceiptStock")
-  quarantinedReceiptLines PharmacyGoodsReceiptLine[]       @relation("PharmacyReceiptQuarantine")
-  branch                  PharmacyBranch                   @relation("PharmacyBranchStockLocations", fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
+  receiptLines            PharmacyGoodsReceiptLine[]   @relation("PharmacyReceiptStock")
+  quarantinedReceiptLines PharmacyGoodsReceiptLine[]   @relation("PharmacyReceiptQuarantine")
+  branch                  PharmacyBranch               @relation("PharmacyBranchStockLocations", fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
   movements               PharmacyStockMovement[]
   balances                PharmacyStockBalance[]
   discrepancies           PharmacyStockDiscrepancy[]
@@ -2054,21 +2061,21 @@ model PharmacyDrapIngest {
 }
 
 model PharmacyPriceChangeProposal {
-  id                         String                    @id @default(cuid())
-  organizationId             String                    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  ingestId                   String
-  medicineId                 String
-  currentPriceMinor          Int
-  packLevelId                String?
+  id                 String                    @id @default(cuid())
+  organizationId     String                    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  ingestId           String
+  medicineId         String
+  currentPriceMinor  Int
+  packLevelId        String?
   previousRegulatoryMrpMinor Int?
-  notifiedPriceMinor         Int
-  effectiveDate              DateTime
-  status                     PharmacyPriceChangeStatus @default(PROPOSED)
-  confirmedById              String?
-  confirmedAt                DateTime?
-  createdAt                  DateTime                  @default(now())
-  ingest                     PharmacyDrapIngest        @relation(fields: [organizationId, ingestId], references: [organizationId, id], onDelete: Restrict)
-  medicine                   Medicine                  @relation(fields: [organizationId, medicineId], references: [organizationId, id], onDelete: Restrict)
+  notifiedPriceMinor Int
+  effectiveDate      DateTime
+  status             PharmacyPriceChangeStatus @default(PROPOSED)
+  confirmedById      String?
+  confirmedAt        DateTime?
+  createdAt          DateTime                  @default(now())
+  ingest             PharmacyDrapIngest        @relation(fields: [organizationId, ingestId], references: [organizationId, id], onDelete: Restrict)
+  medicine           Medicine                  @relation(fields: [organizationId, medicineId], references: [organizationId, id], onDelete: Restrict)
 
   @@unique([organizationId, id])
   @@unique([organizationId, ingestId, medicineId])
@@ -4832,9 +4839,6 @@ enum RestaurantActivationAcknowledgementKind {
 }
 
 model Organization {
-  growthSettings GrowthSettings?
-  growthCampaigns Campaign[]
-  growthTemplates MessageTemplate[]
   pharmacyMigrationSources PharmacyMigrationSource[]
   pharmacyMessageLogs      PharmacyMessageLog[]
   id                       String                     @id @default(cuid())
@@ -4901,6 +4905,9 @@ model Organization {
   visibilityPharmacyMoneyIdempotencyKey     PharmacyMoneyIdempotencyKey[]         @relation("PharmacyMoneyIdempotencyKeyVisibilityAnchor")
   visibilityRestaurantTaxOfficialSource     RestaurantTaxOfficialSource[]         @relation("RestaurantTaxOfficialSourceVisibilityAnchor")
   visibilityPharmacyCounterKeymapPreference PharmacyCounterKeymapPreference[]     @relation("PharmacyCounterKeymapPreferenceVisibilityAnchor")
+  growthSettings                            GrowthSettings?
+  growthCampaigns                           Campaign[]
+  growthTemplates                           MessageTemplate[]
 
   @@index([status])
   @@index([deploymentMode])
@@ -4933,7 +4940,7 @@ model RestaurantActivationAcknowledgement {
 /// the operational tables (bare RLS-guarded organizationId, no cross-org
 /// aggregation — D09); a partial unique index enforces one default branch per org.
 model RestaurantBranch {
-  printers           RestaurantPrinter[]
+  printers RestaurantPrinter[]
   cateringCapacities RestaurantCateringBranchCapacity[]
 
   id                    String   @id @default(cuid())
@@ -5017,12 +5024,13 @@ model RestaurantBranch {
   deliveryFulfillments        RestaurantDeliveryFulfillment[]
   cateringOrders              RestaurantCateringOrder[]
 
-  walletEnrollmentLinks    WalletEnrollmentLink[]
+  walletEnrollmentLinks WalletEnrollmentLink[]
   walletEnrollmentAttempts WalletEnrollmentAttempt[]
 
   @@unique([organizationId, id])
   @@index([organizationId])
   @@map("restaurant_branches")
+
 }
 
 enum RestaurantTaxVersionStatus {
@@ -5487,9 +5495,9 @@ model RestaurantOperatorCredential {
 /// `status`/`revokedAt` are re-checked in the DB on every terminal call so a
 /// revoked device cannot keep operating from a stale client cache.
 model RestaurantRegisteredDevice {
-  printers                   RestaurantPrinter[]
+  printers RestaurantPrinter[]
   printBridgeEnrollmentCodes RestaurantPrintBridgeEnrollmentCode[]
-  cateringMoneyEvidence      CateringMoneyEvidence[]
+  cateringMoneyEvidence CateringMoneyEvidence[]
 
   id               String                           @id @default(cuid())
   organizationId   String                           @default(dbgenerated("current_setting('app.current_organization_id', true)"))
@@ -6664,10 +6672,10 @@ model RestaurantPrintRoute {
   station RestaurantKitchenStation? @relation(fields: [organizationId, stationId], references: [organizationId, id], onDelete: Cascade)
 
   registeredPrinterId String?
-  registeredPrinter   RestaurantPrinter? @relation(fields: [organizationId, branchId, registeredPrinterId], references: [organizationId, branchId, id], onDelete: Restrict, onUpdate: NoAction, map: "restaurant_print_routes_registered_printer_fkey")
+  registeredPrinter RestaurantPrinter? @relation(fields: [organizationId, branchId, registeredPrinterId], references: [organizationId, branchId, id], onDelete: Restrict, onUpdate: NoAction, map: "restaurant_print_routes_registered_printer_fkey")
 
-  @@unique([organizationId, branchId, stationId, documentType])
   @@index([organizationId, branchId, registeredPrinterId], map: "restaurant_print_routes_org_branch_registered_printer_idx")
+  @@unique([organizationId, branchId, stationId, documentType])
   @@index([organizationId, branchId])
   @@map("restaurant_print_routes")
 }
@@ -6694,10 +6702,10 @@ model RestaurantPrintJob {
   branch RestaurantBranch @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
 
   registeredPrinterId String?
-  registeredPrinter   RestaurantPrinter? @relation(fields: [organizationId, branchId, registeredPrinterId], references: [organizationId, branchId, id], onDelete: Restrict, onUpdate: NoAction, map: "restaurant_print_jobs_registered_printer_fkey")
+  registeredPrinter RestaurantPrinter? @relation(fields: [organizationId, branchId, registeredPrinterId], references: [organizationId, branchId, id], onDelete: Restrict, onUpdate: NoAction, map: "restaurant_print_jobs_registered_printer_fkey")
 
-  @@unique([organizationId, branchId, idempotencyKey])
   @@index([organizationId, branchId, registeredPrinterId], map: "restaurant_print_jobs_org_branch_registered_printer_idx")
+  @@unique([organizationId, branchId, idempotencyKey])
   @@index([organizationId, status, createdAt])
   @@map("restaurant_print_jobs")
 }
@@ -9147,6 +9155,7 @@ model RestaurantCustomer {
   @@index([organizationId])
   @@index([anonymizedAt])
   @@map("restaurant_customers")
+
 }
 
 /// Direct-delivery configuration owned by one branch. The fee is authoritative
@@ -9553,10 +9562,11 @@ model LoyaltyAccount {
   walletPasses WalletPass[]
 
   @@unique([organizationId, customerId])
-  @@unique([organizationId, id])
   @@index([organizationId])
   @@index([active])
   @@map("restaurant_loyalty_accounts")
+
+  @@unique([organizationId, id])
 }
 
 /// D08: APPEND-ONLY signed whole-points ledger. EARN pins the settled bill and
@@ -10853,9 +10863,9 @@ model OrganizationRole {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  organization             Organization                 @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  permissions              OrganizationRolePermission[]
-  users                    User[]
+  organization Organization                 @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  permissions  OrganizationRolePermission[]
+  users        User[]
   hotelPropertyAssignments HotelPropertyAssignment[]
 
   @@unique([organizationId, key])
@@ -14334,13 +14344,6 @@ model PharmacyCampaignDispatchAttempt {
 }
 
 model PharmacyMessageLog {
-  waMessageId String?
-  body String?
-  campaignId String?
-  recipientId String?
-  campaign Campaign? @relation(fields: [organizationId, campaignId], references: [organizationId, id], onDelete: Restrict)
-  recipient CampaignRecipient? @relation(fields: [organizationId, recipientId], references: [organizationId, id], onDelete: Restrict)
-  @@unique([organizationId, direction, waMessageId])
   id                String   @id @default(cuid())
   organizationId    String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   branchId          String?
@@ -14360,15 +14363,159 @@ model PharmacyMessageLog {
   error             String?
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
+  // Growth G1: campaign messaging reuses this log. waMessageId is the provider's
+  // id for the growth channel; body carries the rendered text; campaignId/
+  // recipientId tie an outbound row back to the campaign it was sent for.
+  waMessageId       String?
+  body              String?
+  campaignId        String?
+  recipientId       String?
 
-  organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  branch       PharmacyBranch?   @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
-  customer     PharmacyCustomer? @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict)
+  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branch       PharmacyBranch?    @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
+  customer     PharmacyCustomer?  @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict)
+  campaign     Campaign?          @relation(fields: [organizationId, campaignId], references: [organizationId, id], onDelete: Restrict)
+  recipient    CampaignRecipient? @relation(fields: [organizationId, recipientId], references: [organizationId, id], onDelete: Restrict)
 
   @@unique([organizationId, dedupeKey], map: "pharmacy_message_logs_dedupe_key")
+  @@unique([organizationId, direction, waMessageId], map: "pharmacy_message_logs_wa_message_id_key")
   @@index([organizationId, customerId, createdAt(sort: Desc)], map: "pharmacy_message_logs_customer_idx")
   @@index([organizationId, kind, status], map: "pharmacy_message_logs_kind_status_idx")
   @@map("pharmacy_message_logs")
+}
+
+// ============================================
+// GROWTH — WP-G1 data model (ai-growth-plan.md)
+// Org-scoped campaign planner, WhatsApp channel, churn metrics. Every table is
+// tenant-isolated: organizationId defaults from the RLS session setting, every
+// foreign key is composite on (organizationId, …), and the migration enables
+// and forces row-level security with an organization isolation policy per table.
+// ============================================
+
+/// Per-customer recency/frequency snapshot the metrics job (WP-G2) rebuilds.
+/// One row per retail customer; the 1:1 is pinned by @@unique on the tenant key.
+model CustomerMetrics {
+  customerId      String    @id
+  organizationId  String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  lastPurchaseAt  DateTime?
+  orders90d       Int       @default(0)
+  spend90dMinor   BigInt    @default(0)
+  medianGapDays   Int?
+  churnScore      Int       @default(0)
+  churnBand       String    @default("low")
+  nextRefillDueAt DateTime?
+  computedAt      DateTime
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  customer PharmacyCustomer @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, customerId])
+  @@index([organizationId, churnBand])
+  @@index([organizationId, nextRefillDueAt])
+  @@map("customer_metrics")
+}
+
+/// One settings row per organization (id == organizationId). Holds budget caps,
+/// quiet hours, send limits and the encrypted WhatsApp credentials.
+model GrowthSettings {
+  organizationId        String   @id @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  monthlyBudgetMinor    Int      @default(0)
+  autoApproveUnderMinor Int      @default(0)
+  quietHoursStart       Int      @default(21)
+  quietHoursEnd         Int      @default(9)
+  maxMsgsPerDay         Int      @default(200)
+  minSecondsBetweenMsgs Int      @default(4)
+  waInstanceName        String?
+  waApiUrl              String?
+  waApiKeyEnc           String?
+  lastMetricsRunAt      DateTime?
+  churnThreshold        Int      @default(60)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("growth_settings")
+}
+
+/// A campaign proposed (by AI or a human), approved, scheduled and sent. The AI
+/// only ever writes `proposed` rows; the server enforces caps regardless.
+model Campaign {
+  id             String    @id @default(cuid())
+  organizationId String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  kind           String
+  status         String    @default("proposed")
+  name           String
+  rationale      String?
+  segment        Json
+  sendAt         DateTime
+  discountType   String?
+  discountValue  Int?
+  codeExpiresAt  DateTime?
+  budgetCapMinor Int
+  spentMinor     Int       @default(0)
+  templateId     String
+  estimatedReach Int       @default(0)
+  createdBy      String
+  approvedBy     String?
+  approvedAt     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organization Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  template     MessageTemplate     @relation(fields: [organizationId, templateId], references: [organizationId, id], onDelete: Restrict)
+  recipients   CampaignRecipient[]
+  messages     PharmacyMessageLog[]
+
+  @@unique([organizationId, id])
+  @@index([organizationId, status, sendAt])
+  @@map("campaigns")
+}
+
+/// One recipient of a campaign, with its per-customer discount code and the sale
+/// that redeemed it. Code is globally unique so POS lookup needs no tenant scope.
+model CampaignRecipient {
+  id             String    @id @default(cuid())
+  organizationId String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  campaignId     String
+  customerId     String
+  code           String?   @unique
+  status         String    @default("queued")
+  sentAt         DateTime?
+  redeemedAt     DateTime?
+  saleId         String?
+  error          String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  campaign Campaign             @relation(fields: [organizationId, campaignId], references: [organizationId, id], onDelete: Restrict)
+  customer PharmacyCustomer     @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict)
+  sale     PharmacySale?        @relation(fields: [organizationId, saleId], references: [organizationId, id], onDelete: Restrict)
+  messages PharmacyMessageLog[]
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, campaignId, customerId])
+  @@index([organizationId, status, campaignId])
+  @@map("campaign_recipients")
+}
+
+/// Org-owned message body with {{var}} placeholders, rendered server-side.
+model MessageTemplate {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  key            String
+  language       String   @default("ur-en")
+  body           String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  campaigns    Campaign[]
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, key, language])
+  @@map("message_templates")
 }
 
 model PharmacyOrderDeliveryEvidence {
@@ -14422,48 +14569,48 @@ enum HotelPropertyMode {
 model HotelProperty {
   /// The property's identity. Named `branchId` because every branch-scoped hotel
   /// table references it as its branch, and no id is generated twice.
-  branchId             String            @id @default(cuid())
-  organizationId       String            @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  name                 String
-  addressLine          String
-  city                 String
+  branchId       String            @id @default(cuid())
+  organizationId String            @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  name           String
+  addressLine    String
+  city           String
   /// IANA zone. A property dates its own business days, audits and cut-offs.
-  timezone             String
-  mode                 HotelPropertyMode @default(HOTEL)
+  timezone       String
+  mode           HotelPropertyMode @default(HOTEL)
   /// Explicit configuration only; null keeps the selected mode's defaults.
-  modeOverrides        Json?
+  modeOverrides  Json?
   /// 1–7 where the property publishes one; null while it is unrated (H-D14).
-  starCategory         Int?
+  starCategory   Int?
   /// 24-hour local times, as `HH:MM`, in this property's timezone.
-  checkInTime          String            @default("14:00")
-  checkOutTime         String            @default("12:00")
+  checkInTime    String            @default("14:00")
+  checkOutTime   String            @default("12:00")
   /// When the night audit rolls the business date (HSP-NA).
-  auditTime            String            @default("03:00")
-  currency             String            @default("PKR")
+  auditTime      String            @default("03:00")
+  currency       String            @default("PKR")
   /// The platform tax profile the property posts against. Nullable because a
   /// property is created before it is attached — and the onboarding checklist
   /// refuses go-live while it is null.
-  taxProfileId         String?
-  languages            String[]          @default(["en", "ur"])
+  taxProfileId   String?
+  languages      String[]          @default(["en", "ur"])
   /// RATE-03 overbook allowance policy. `{}` until a rates lane writes it.
-  overbookPolicy       Json              @default("{}")
+  overbookPolicy Json              @default("{}")
   /// The public booking-engine path segment. Unique per organization so two
   /// properties of one chain can never publish the same direct-booking URL.
-  bookingEngineSlug    String
+  bookingEngineSlug String
   /// UPS-04 journey template settings (quiet hours, consent, per-language copy).
-  journeySettings      Json              @default("{}")
+  journeySettings      Json @default("{}")
   /// MEAL-01 reporting allocation between room and F&B revenue. Reporting only —
   /// postings never change (metric contract §5).
-  mealAllocationPolicy Json              @default("{}")
+  mealAllocationPolicy Json @default("{}")
   /// HSP-NA business-date policy (roll rule, late-arrival handling).
-  businessDatePolicy   Json              @default("{}")
-  active               Boolean           @default(true)
+  businessDatePolicy   Json @default("{}")
+  active               Boolean @default(true)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  extras           HotelExtra[]
-  assignments      HotelPropertyAssignment[]
+  extras HotelExtra[]
+  assignments HotelPropertyAssignment[]
   roomTypes        HotelRoomType[]
   rooms            HotelRoom[]
   beds             HotelBed[]
@@ -14555,27 +14702,27 @@ enum HotelExtraRecurrence {
 /// refuses it on an item that is not `upsellable` at all, so a catalog cannot
 /// carry an offer price nothing can ever offer.
 model HotelExtra {
-  id               String               @id @default(cuid())
-  organizationId   String               @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  id             String @id @default(cuid())
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   /// The property this catalog belongs to — `hotel_properties.branchId`.
-  branchId         String
+  branchId       String
   /// The operator-visible short code, unique within the property.
-  code             String
-  name             String
+  code           String
+  name           String
   /// Urdu name, where the property publishes one (the vertical is bilingual).
-  nameUr           String?
+  nameUr         String?
   /// Shelf price in PKR minor units.
-  priceMinor       Int
+  priceMinor     Int
   /// The tax class the property's tax profile prices this charge at. A free code
   /// rather than an enum because the classes belong to the tax profile, which is
   /// per-jurisdiction and effective-dated; the catalog only names one.
-  taxClass         String
-  department       HotelDepartment
+  taxClass       String
+  department     HotelDepartment
   /// FOL-01 posting instructions (folio target, when the charge lands, whether
   /// the price includes tax). Shape owned by the folio lane; `{}` until then.
-  postingRule      Json                 @default("{}")
+  postingRule    Json    @default("{}")
   /// UPS-01: may this item be offered before arrival?
-  upsellable       Boolean              @default(false)
+  upsellable     Boolean @default(false)
   /// The offer price, when it differs from the shelf price. Requires `upsellable`.
   upsellPriceMinor Int?
   recurring        HotelExtraRecurrence @default(NONE)
@@ -14884,19 +15031,19 @@ enum HotelSpaceBookingKind {
 /// range that invariant 25's exclusion constraint arbitrates is maintained on
 /// `HotelSpaceBooking` by trigger rather than generated inline (see that model).
 model HotelFunctionSpace {
-  id              String  @id @default(cuid())
-  organizationId  String  @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  id             String @id @default(cuid())
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   /// The property this space belongs to — `hotel_properties.branchId`.
-  branchId        String
-  name            String
+  branchId       String
+  name           String
   /// Bilingual name (05: `name_ur`). Null until an operator supplies one.
-  nameUr          String?
+  nameUr         String?
   /// `[{ layout: 'Theatre', capacity: 300 }, …]`. At least one, because a space
   /// with no layout has no capacity and cannot be sold — so no column default:
   /// `[]` would fail the database CHECK anyway.
-  layouts         Json
+  layouts        Json
   /// PROP-07 pricing. Every money member is PKR minor units, never a decimal.
-  pricing         Json    @default("{}")
+  pricing        Json    @default("{}")
   /// Turnaround buffers in minutes, applied on both sides of every booking.
   setupMinutes    Int     @default(0)
   teardownMinutes Int     @default(0)
@@ -14935,21 +15082,21 @@ model HotelFunctionSpace {
 /// with the id the database generates, and only the trigger ever fills the
 /// range. Reads go through the client; `bufferedRange` is not selectable there.
 model HotelSpaceBooking {
-  id             String                @id @default(dbgenerated("(gen_random_uuid())::text"))
-  organizationId String                @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  id             String @id @default(dbgenerated("(gen_random_uuid())::text"))
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   branchId       String
   spaceId        String
   /// Absolute instants — a booking spans a property's timezone rules, so these are
   /// `timestamptz` and the exclusion constraint compares them as such.
-  startsAt       DateTime              @db.Timestamptz(3)
-  endsAt         DateTime              @db.Timestamptz(3)
-  kind           HotelSpaceBookingKind
+  startsAt DateTime              @db.Timestamptz(3)
+  endsAt   DateTime              @db.Timestamptz(3)
+  kind     HotelSpaceBookingKind
   /// What this claim is for, as the owning lane knows it (`{ eventId, … }`); a
   /// hold placed from the spaces page carries `{ label }`. Deliberately not a
   /// foreign key: H6's tables do not exist yet.
-  ref            Json                  @default("{}")
+  ref       Json    @default("{}")
   /// The platform user who made the claim. Nullable for system-made holds.
-  createdBy      String?
+  createdBy String?
 
   /// Trigger-maintained. See the model comment: never written by application code.
   bufferedRange Unsupported("tstzrange")
@@ -15041,14 +15188,14 @@ model HotelJourneyTemplate {
 
 /// One-use bridge enrollment; the hash snapshot invalidates codes after rotation.
 model RestaurantPrintBridgeEnrollmentCode {
-  id                     String    @id @default(cuid())
-  organizationId         String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  id                     String   @id @default(cuid())
+  organizationId         String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   deviceId               String
-  codeHash               String    @unique
+  codeHash               String   @unique
   issuedDeviceSecretHash String
   expiresAt              DateTime
   usedAt                 DateTime?
-  createdAt              DateTime  @default(now())
+  createdAt              DateTime @default(now())
 
   device RestaurantRegisteredDevice @relation(fields: [organizationId, deviceId], references: [organizationId, id], onDelete: Cascade, onUpdate: NoAction, map: "restaurant_print_bridge_enrollment_codes_device_fkey")
 
@@ -15056,38 +15203,36 @@ model RestaurantPrintBridgeEnrollmentCode {
   @@map("restaurant_print_bridge_enrollment_codes")
 }
 
+
 // Inventory is separate from address-valued print job/route targets.
 enum RestaurantPrinterConnectionKind {
   TCP
   DEVICE_PATH
   QUEUE
 }
-
 enum RestaurantPrinterStatus {
   ONLINE
   OFFLINE
 }
-
 model RestaurantPrinter {
-  id             String                          @id @default(cuid())
-  organizationId String                          @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  id             String @id @default(cuid())
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   branchId       String
   bridgeId       String
   name           String
   connectionKind RestaurantPrinterConnectionKind
   address        String
   paperWidthMm   Int
-  status         RestaurantPrinterStatus         @default(OFFLINE)
+  status         RestaurantPrinterStatus @default(OFFLINE)
   lastSeenAt     DateTime?
   lastError      String?
   retiredAt      DateTime?
-  createdAt      DateTime                        @default(now())
-  updatedAt      DateTime                        @updatedAt
-  branch         RestaurantBranch                @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Cascade, onUpdate: NoAction, map: "restaurant_printers_branch_fkey")
-  bridge         RestaurantRegisteredDevice      @relation(fields: [organizationId, branchId, bridgeId], references: [organizationId, branchId, id], onDelete: Cascade, onUpdate: NoAction, map: "restaurant_printers_bridge_fkey")
-  printRoutes    RestaurantPrintRoute[]
-  printJobs      RestaurantPrintJob[]
-
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  branch RestaurantBranch @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Cascade, onUpdate: NoAction, map: "restaurant_printers_branch_fkey")
+  bridge RestaurantRegisteredDevice @relation(fields: [organizationId, branchId, bridgeId], references: [organizationId, branchId, id], onDelete: Cascade, onUpdate: NoAction, map: "restaurant_printers_bridge_fkey")
+  printRoutes RestaurantPrintRoute[]
+  printJobs RestaurantPrintJob[]
   @@unique([organizationId, branchId, id])
   @@unique([organizationId, id])
   @@index([organizationId, bridgeId])
@@ -15242,125 +15387,23 @@ model WalletEnrollmentAttempt {
 /// Effective-dated regulatory and selling policy, never historical batch MRP.
 /// Tenant/pack/branch foreign keys and partial uniqueness are migration enforced.
 model PharmacyPackPrice {
-  id                 String   @id @default(cuid())
-  organizationId     String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  presentationId     String
-  packLevelId        String
-  branchId           String?
-  isOverride         Boolean  @default(false)
-  mrpMinor           Int
-  sellingPriceMinor  Int?
-  effectiveFrom      DateTime
-  source             String
-  proposalId         String?
+  id String @id @default(cuid())
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  presentationId String
+  packLevelId String
+  branchId String?
+  isOverride Boolean @default(false)
+  mrpMinor Int
+  sellingPriceMinor Int?
+  effectiveFrom DateTime
+  source String
+  proposalId String?
   reviewedOrgPriceId String?
-  createdById        String
-  createdAt          DateTime @default(now())
+  createdById String
+  createdAt DateTime @default(now())
 
   @@unique([organizationId, id])
   @@unique([organizationId, proposalId])
   @@index([organizationId, packLevelId, effectiveFrom])
   @@map("pharmacy_pack_prices")
-}
-
-model CustomerMetrics {
-  customerId String @id
-  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  lastPurchaseAt DateTime?
-  orders90d Int @default(0)
-  spend90dMinor Int @default(0)
-  medianGapDays Int?
-  churnScore Int @default(0)
-  churnBand String @default("low")
-  nextRefillDueAt DateTime?
-  computedAt DateTime
-  customer PharmacyCustomer @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict)
-  @@unique([organizationId, customerId])
-  @@index([organizationId, churnBand])
-  @@index([organizationId, nextRefillDueAt])
-  @@map("customer_metrics")
-}
-model GrowthSettings {
-  organizationId String @id
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  monthlyBudgetMinor Int @default(0)
-  autoApproveUnderMinor Int @default(0)
-  quietHoursStart Int @default(21)
-  quietHoursEnd Int @default(9)
-  maxMsgsPerDay Int @default(200)
-  minSecondsBetweenMsgs Int @default(4)
-  waInstanceName String?
-  waApiUrl String?
-  waApiKeyEnc String?
-  churnThreshold Int @default(60)
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  @@map("growth_settings")
-}
-model Campaign {
-  id String @id @default(cuid())
-  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  kind String
-  status String @default("proposed")
-  name String
-  rationale String?
-  segment Json
-  sendAt DateTime
-  discountType String?
-  discountValue Int?
-  codeExpiresAt DateTime?
-  budgetCapMinor Int
-  spentMinor Int @default(0)
-  templateId String
-  estimatedReach Int @default(0)
-  createdBy String
-  approvedBy String?
-  approvedAt DateTime?
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  template MessageTemplate @relation(fields: [organizationId, templateId], references: [organizationId, id], onDelete: Restrict)
-  recipients CampaignRecipient[]
-  messages PharmacyMessageLog[]
-  @@unique([organizationId, id])
-  @@index([organizationId, status, sendAt])
-  @@map("campaigns")
-}
-model CampaignRecipient {
-  id String @id @default(cuid())
-  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  campaignId String
-  customerId String
-  code String? @unique
-  status String @default("queued")
-  sentAt DateTime?
-  redeemedAt DateTime?
-  saleId String?
-  error String?
-  campaign Campaign @relation(fields: [organizationId, campaignId], references: [organizationId, id], onDelete: Restrict)
-  customer PharmacyCustomer @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict)
-  sale PharmacySale? @relation(fields: [organizationId, saleId], references: [organizationId, id], onDelete: Restrict)
-  messages PharmacyMessageLog[]
-  @@unique([organizationId, id])
-  @@unique([campaignId, customerId])
-  @@index([organizationId, status, campaignId])
-  @@map("campaign_recipients")
-}
-model MessageTemplate {
-  id String @id @default(cuid())
-  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  key String
-  language String @default("ur-en")
-  body String
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  campaigns Campaign[]
-  @@unique([organizationId, id])
-  @@unique([organizationId, key, language])
-  @@map("message_templates")
 }
