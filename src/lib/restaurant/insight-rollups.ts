@@ -12,7 +12,7 @@ import type { RestaurantJobHandler } from './job-handlers-core';
 
 export const INSIGHTS_ROLLUP_DAY_JOB = 'insights.rollupDay';
 export const MAX_BACKFILL_CHUNK_DAYS = 90;
-export const INSIGHT_PROJECTION_VERSION = 5;
+export const INSIGHT_PROJECTION_VERSION = 4;
 
 export type RollupErrorReason = 'CLOSE_NOT_FOUND' | 'RECONCILIATION_FAILED' | 'INVALID';
 
@@ -76,9 +76,11 @@ export function computeReconciledFinancials(input: {
   const discountTotal = sum(settled.map((bill) => bill.discountTotal));
   const cashExpected = sum(input.drawers.map((drawer) => foldExpectedCash(drawer.movements)));
   const cashCounted = sum(input.drawers.map((drawer) => drawer.countedCash ?? ZERO));
-  const deliveryFeeRefunds = sum(
-    input.refunds.map((refund) => refund.deliveryFeeRefundAmount)
+  const refundedTaxTotal = sum(input.refunds.map((refund) => refund.taxRefundAmount));
+  const refundedServiceChargeTotal = sum(
+    input.refunds.map((refund) => refund.serviceChargeRefundAmount)
   );
+  const deliveryFeeRefunds = sum(input.refunds.map((refund) => refund.deliveryFeeRefundAmount));
   const refundTotal = sub(sum(input.refunds.map((refund) => refund.amount)), deliveryFeeRefunds);
   const refundedSales = sum(
     input.refunds.map((refund) =>
@@ -93,13 +95,10 @@ export function computeReconciledFinancials(input: {
     netSales: sub(sub(sub(grossSales, compTotal), discountTotal), refundedSales),
     deliveryFeeSales: sum(settled.map((bill) => bill.deliveryFeeTotal)),
     deliveryFeeRefunds,
-    taxTotal: sub(
-      sum(settled.map((bill) => bill.taxTotal)),
-      sum(input.refunds.map((refund) => refund.taxRefundAmount))
-    ),
+    taxTotal: sub(sum(settled.map((bill) => bill.taxTotal)), refundedTaxTotal),
     serviceChargeTotal: sub(
       sum(settled.map((bill) => bill.serviceChargeTotal)),
-      sum(input.refunds.map((refund) => refund.serviceChargeRefundAmount))
+      refundedServiceChargeTotal
     ),
     tipTotal: sum(input.tenders.map((tender) => tender.tipAmount)),
     compTotal,
@@ -249,17 +248,28 @@ function resolveCloseTip(closes: readonly CloseTip[]): CloseTip | null {
   return closes.filter((close) => !superseded.has(close.id)).at(-1) ?? null;
 }
 
-function assertReconciles(close: CloseTip, raw: ReconciledFinancials): void {
-  const mismatch = (Object.keys(raw) as Array<keyof ReconciledFinancials>).find(
-    (key) =>
-      !close[key].equals(raw[key]) &&
-      // Closes cut before WHA-1621 Q1 persisted netSales without any refund deduction;
-      // they are append-only, so accept that legacy formula rather than refuse to project.
-      !(
-        key === 'netSales' &&
-        close.netSales.equals(sub(sub(raw.grossSales, raw.compTotal), raw.discountTotal))
+function assertReconciles(
+  close: CloseTip,
+  raw: ReconciledFinancials,
+  historical: ReconciledFinancials
+): void {
+  const keys = Object.keys(raw) as Array<keyof ReconciledFinancials>;
+  const salesBeforeRefunds = sub(sub(raw.grossSales, raw.compTotal), raw.discountTotal);
+  // Immutable closes may use the pre-#405 refund formula. Validate a complete
+  // snapshot under either formula, never a mixture of historical/current fields.
+  // Pre-WHA-1621 Q1 closes also omitted the net-sales refund deduction.
+  if (
+    [raw, historical].some((candidate) =>
+      keys.every(
+        (key) =>
+          close[key].equals(candidate[key]) ||
+          (key === 'netSales' && close.netSales.equals(salesBeforeRefunds))
       )
-  );
+    )
+  ) {
+    return;
+  }
+  const mismatch = keys.find((key) => !close[key].equals(raw[key]));
   if (mismatch) {
     throw new RollupError(
       `Daily close reconciliation failed for ${mismatch}: close=${close[mismatch].toString()} raw=${raw[mismatch].toString()}.`,

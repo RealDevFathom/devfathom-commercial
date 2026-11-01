@@ -67,4 +67,6 @@ docker/livekit/livekit.dev.keys.yaml
 /test-results/
 /playwright-artifacts/
 /playwright-report/
+
+# codex cloud CLI log (may contain account metadata)
 /error.log

@@ -1,12 +1,17 @@
 import type { Prisma } from '@/generated/prisma/client';
+import { sub } from './money';
+
 type CloseSalesComponents = {
-  netSales: Prisma.Decimal;
+  grossSales: Prisma.Decimal;
+  compTotal: Prisma.Decimal;
+  discountTotal: Prisma.Decimal;
+  refundTotal: Prisma.Decimal;
 };
 
-/** Return the authoritative close value. Refund totals also contain refunded tax and
- * service charge, so reconstructing net sales from refundTotal would subtract those
- * components from pre-tax sales a second time.
+/** Current reporting formula, derived from immutable close components.
+ * Historical netSales may predate refunds; never subtract from that versioned value.
+ * This read boundary leaves the recorded close and its tender/ledger totals intact.
  */
 export function reportNetSales(close: CloseSalesComponents): Prisma.Decimal {
-  return close.netSales;
+  return sub(sub(sub(close.grossSales, close.compTotal), close.discountTotal), close.refundTotal);
 }

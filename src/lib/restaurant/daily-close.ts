@@ -45,7 +45,8 @@ export { DailyCloseError, type DailyCloseErrorReason } from './daily-close-error
  *                    refund components processed on this business date
  *   - discountTotal= Σ SETTLED bill.discountTotal
  *   - netSales     = grossSales − compTotal − discountTotal − refunded
- *                    pre-tax sales principal
+ *                    pre-tax sales principal. Tax, service charge and delivery
+ *                    fee refund components are not sales principal.
  *   - tipTotal     = Σ tender.tipAmount for the date (== Σ child tipAmount)
  *   - refundTotal  = Σ (refund.amount − refund.deliveryFeeRefundAmount) for the
  *                    PROCESSING date (C7 — cross-date corrections land on the day
@@ -149,9 +150,7 @@ export function computeCloseAggregate(inputs: AggregateInputs): CloseAggregate {
 
   const tipTotal = sum(inputs.tenders.map((t) => t.tipAmount));
   const refundedTaxTotal = sum(inputs.refunds.map((r) => r.taxRefundAmount));
-  const refundedServiceChargeTotal = sum(
-    inputs.refunds.map((r) => r.serviceChargeRefundAmount)
-  );
+  const refundedServiceChargeTotal = sum(inputs.refunds.map((r) => r.serviceChargeRefundAmount));
   const deliveryFeeRefunds = sum(inputs.refunds.map((r) => r.deliveryFeeRefundAmount));
   const refundTotal = sub(sum(inputs.refunds.map((r) => r.amount)), deliveryFeeRefunds);
   const refundedSales = sum(
