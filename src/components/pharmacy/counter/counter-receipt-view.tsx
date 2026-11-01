@@ -63,7 +63,7 @@ export type CounterReceiptViewProps = {
   error?: string | null;
   onLocaleChange: (locale: CounterReceiptLocale) => void;
   onFormatChange: (format: CounterReceiptFormat) => void;
-  onPrint: () => void;
+  onPrint: (reservation?: CounterBrowserPrintReservation) => Promise<boolean>;
   onRetry: () => void;
   /** Only a newly settled, authoritatively read sale; never a historical load. */
   branchId?: string;
@@ -83,16 +83,16 @@ async function requestThermalJob(input: {
   branchId: string;
   saleId: string;
   locale: CounterReceiptLocale;
-  reprint: boolean;
 }): Promise<ThermalJob> {
-  const params = new URLSearchParams({
-    branchId: input.branchId,
-    saleId: input.saleId,
-    locale: input.locale,
-    reprint: input.reprint ? '1' : '0',
-  });
   try {
-    const response = await fetch(`/api/pharmacy/print?${params}`, {
+    const response = await fetch('/api/pharmacy/print', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        branchId: input.branchId,
+        saleId: input.saleId,
+        locale: input.locale,
+      }),
       cache: 'no-store',
       credentials: 'same-origin',
     });
@@ -257,29 +257,36 @@ export function CounterReceiptView({
     receiptRegion.current?.focus({ preventScroll: true });
     receiptRegion.current?.scrollIntoView?.({ block: 'nearest', behavior: 'instant' });
 
-    let printStatus: CounterReceiptPresentationResult['printStatus'] = 'manual';
-    let message = 'Receipt ready. Use Print receipt to open the browser print dialog.';
-    if (settlement.autoPrint) {
-      try {
-        printCounterBrowserReceipt(receipt, locale, format, false, settlement.printReservation);
-        printStatus = 'dialog-requested';
-        message = 'Browser print dialog requested. Physical printing is not confirmed.';
-      } catch (error) {
-        printStatus = 'manual-required';
-        message =
-          error instanceof Error
-            ? error.message
-            : 'The browser print dialog could not open. Retry Print receipt.';
-      }
-    } else {
+    if (!settlement.autoPrint) {
       settlement.printReservation?.cancel();
+      const result = {
+        saleId: receipt.saleId,
+        receiptNumber: settlement.receiptNumber,
+        printStatus: 'manual' as const,
+      };
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- Surface this one-shot settlement event.
+      setPresentation({
+        ...result,
+        message: 'Receipt ready. Use Print receipt to open the browser print dialog.',
+      });
+      onSettlementPresented?.(result);
+      return;
     }
-    const result = { saleId: receipt.saleId, receiptNumber: settlement.receiptNumber, printStatus };
-    // This result comes from the imperative browser print attempt, not derived props.
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- Surface the external popup result for manual recovery.
-    setPresentation({ ...result, message });
-    onSettlementPresented?.(result);
-  }, [receipt, state, printing, settlement, locale, format, onSettlementPresented]);
+    void onPrint(settlement.printReservation).then((printed) => {
+      const result = {
+        saleId: receipt.saleId,
+        receiptNumber: settlement.receiptNumber,
+        printStatus: printed ? ('dialog-requested' as const) : ('manual-required' as const),
+      };
+      setPresentation({
+        ...result,
+        message: printed
+          ? 'Browser print dialog requested. Physical printing is not confirmed.'
+          : 'The browser print dialog could not open. Retry Print receipt.',
+      });
+      onSettlementPresented?.(result);
+    });
+  }, [receipt, state, printing, settlement, locale, format, onPrint, onSettlementPresented]);
 
   if (state === 'idle') {
     return <p className="text-sm text-text-muted">Settle the bill to render its receipt.</p>;
@@ -330,7 +337,7 @@ export function CounterReceiptView({
     if (!branchId) return;
     const saleId = receipt.saleId;
     setThermal({ key: thermalKey, job: { state: 'sending' } });
-    const job = await requestThermalJob({ branchId, saleId, locale, reprint: thermalReprint });
+    const job = await requestThermalJob({ branchId, saleId, locale });
     setThermal({ key: thermalKey, job });
     if (job.state === 'ready') setThermalPrinted((prior) => new Set(prior).add(saleId));
   };
@@ -371,7 +378,7 @@ export function CounterReceiptView({
           disabled={
             printing || document === null || receipt.receiptNumber === null || !receipt.completedAt
           }
-          onClick={onPrint}
+          onClick={() => void onPrint()}
         >
           {printing ? 'Loading receipt…' : reprint ? 'Reprint receipt' : 'Print receipt'}
         </Button>
