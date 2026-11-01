@@ -29,6 +29,51 @@ export function parseSimpleMedicineStrength(input: string): { value: number; uni
   return { value, unit };
 }
 
+const PACK_MEASURE =
+  /\d+(?:[.,]\d+)?\s*(?:ml|mls|l|ltr|litre|liter|mg|mcg|µg|μg|g|gm|gms|kg|iu|%)(?![\p{L}])/giu;
+const MAX_PACK_UNITS = 2_147_483_647;
+
+/**
+ * The default receiving pack for a reviewed `pack` value: how many individual
+ * units one pack holds. Only unambiguous forms are accepted ("10 tablets",
+ * "Strip of 10", "10's", "3 x 10", "100 ml bottle" = one container); anything
+ * else returns null so a pharmacist corrects it instead of the importer
+ * inheriting a guessed multiplier.
+ */
+export function parseDefaultPackSize(
+  input: string
+): { level: 'UNIT' | 'STRIP' | 'BOX' | 'CARTON'; unitsPerParent: number } | null {
+  const text = input.trim().toLowerCase();
+  if (!text) return null;
+  const rest = text.replace(PACK_MEASURE, ' ');
+  const measured = rest !== text;
+  if (/\d[.,]\d/.test(rest)) return null;
+  const integers = rest.match(/\d+/g) ?? [];
+  let units: number;
+  const chain = rest.match(/\d+(?:\s*[x×*]\s*\d+)+/);
+  if (chain) {
+    const factors = chain[0].match(/\d+/g)!;
+    if (factors.length !== integers.length) return null;
+    units = factors.reduce((total, factor) => total * Number(factor), 1);
+  } else if (integers.length === 1) {
+    units = Number(integers[0]);
+  } else if (integers.length === 0 && measured) {
+    units = 1;
+  } else {
+    return null;
+  }
+  if (!Number.isSafeInteger(units) || units <= 0 || units > MAX_PACK_UNITS) return null;
+  const level =
+    units === 1
+      ? 'UNIT'
+      : /\b(?:strip|blister)s?\b/.test(text)
+        ? 'STRIP'
+        : /\bcartons?\b/.test(text)
+          ? 'CARTON'
+          : 'BOX';
+  return { level, unitsPerParent: units };
+}
+
 export function medicineDuplicateKey(input: {
   productName: string;
   strengths: readonly { value: number | string; unit: string }[];

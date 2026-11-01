@@ -50,9 +50,9 @@ export function MedicinePackSetup() {
   return (
     <SectionCard title="Packs for receiving" titleLevel={2}>
       <p className="mb-4 text-sm text-text-muted">
-        After publishing a medicine, define a pack and the number of individual units it contains.
-        Use the quantity printed on the pack; each pack here is counted directly in individual
-        units.
+        Publishing a medicine creates its default pack from the reviewed pack size. Find the
+        medicine to check that pack, attach or update the barcode printed on it, or add another
+        pack you receive differently. Opening stock is imported by matching this barcode.
       </p>
       <form
         className="flex flex-wrap items-end gap-3"
@@ -282,9 +282,18 @@ export function MedicinePackSetup() {
         <div className="mt-4 text-sm text-text-body">
           <p className="font-medium">Packs available now</p>
           {conversions.length ? (
-            <ul className="mt-2 space-y-1">
+            <ul className="mt-2 space-y-3">
               {conversions.map((pack) => (
-                <li key={pack.packLevelId}>{describePackConversion(pack)}</li>
+                <PackBarcodeEditor
+                  key={pack.packLevelId}
+                  packLevelId={pack.packLevelId}
+                  label={describePackConversion(pack)}
+                  barcode={
+                    presentation.packLevels.find((level) => level.id === pack.packLevelId)
+                      ?.barcodes[0]?.code ?? null
+                  }
+                  onSaved={() => utils.pharmacyMedicine.get.invalidate({ id: medicineId })}
+                />
               ))}
             </ul>
           ) : (
@@ -301,5 +310,90 @@ export function MedicinePackSetup() {
         Return to Pharmacy setup
       </Link>
     </SectionCard>
+  );
+}
+
+function PackBarcodeEditor({
+  packLevelId,
+  label,
+  barcode,
+  onSaved,
+}: {
+  packLevelId: string;
+  label: string;
+  barcode: string | null;
+  onSaved: () => Promise<void>;
+}) {
+  const [code, setCode] = useState(barcode ?? '');
+  const [message, setMessage] = useState('');
+  const save = trpc.pharmacyMedicine.setPackBarcode.useMutation({
+    onSuccess: async (row) => {
+      setCode(row.code);
+      setMessage(`Barcode ${row.code} saved on this pack.`);
+      await onSaved();
+    },
+  });
+  const denied =
+    save.error?.data?.code === 'FORBIDDEN' || save.error?.data?.code === 'UNAUTHORIZED';
+  const trimmed = code.trim();
+  const inputId = `pack-barcode-${packLevelId}`;
+
+  return (
+    <li className="space-y-2 rounded-sm border border-border-subtle p-3">
+      <p>{label}</p>
+      <p className="text-text-muted">
+        {barcode
+          ? `Barcode: ${barcode}`
+          : 'No barcode yet. Opening stock cannot be imported against this pack until one is attached.'}
+      </p>
+      <form
+        className="flex flex-wrap items-end gap-3"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (!trimmed) return;
+          setMessage('');
+          save.mutate({ packLevelId, code: trimmed });
+        }}
+      >
+        <label htmlFor={inputId} className="min-w-0 flex-1 space-y-2 text-sm text-text-body">
+          <span>Barcode for {label}</span>
+          <input
+            id={inputId}
+            className={control}
+            required
+            maxLength={200}
+            autoComplete="off"
+            inputMode="text"
+            value={code}
+            disabled={save.isPending}
+            onChange={(event) => {
+              setCode(event.target.value);
+              setMessage('');
+              save.reset();
+            }}
+          />
+        </label>
+        <Button
+          type="submit"
+          variant="outline"
+          className="min-h-11"
+          disabled={save.isPending || !trimmed || trimmed === barcode || denied}
+        >
+          {save.isPending ? 'Saving barcode…' : barcode ? 'Update barcode' : 'Attach barcode'}
+        </Button>
+      </form>
+      {save.error ? (
+        <p role="alert" className="text-sm text-destructive">
+          {denied
+            ? 'Your account cannot change pack barcodes. Ask your workspace administrator to check access.'
+            : `Barcode not saved: ${save.error.message}`}
+        </p>
+      ) : null}
+      {message ? (
+        <p role="status" className="text-sm text-text-body">
+          {message}
+        </p>
+      ) : null}
+    </li>
   );
 }

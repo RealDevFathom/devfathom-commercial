@@ -263,7 +263,6 @@ export async function freshPharmacyFirstSale(
   const branchName = `Test branch ${suffix}`;
   const medicineName = `Synthetic OTC ${suffix}`;
   const barcode = `TEST${suffix}`;
-  const today = new Date().toISOString().slice(0, 10);
   const expiry = new Date(Date.now() + 365 * 86400000).toISOString().slice(0, 10);
   const orderReference = `PO-${suffix}`;
   const click = async (target: Locator) => {
@@ -516,11 +515,10 @@ export async function freshPharmacyFirstSale(
     await click(page.getByRole('button', { name: 'Find medicine', exact: true }));
     await choose(page.getByRole('combobox', { name: 'Medicine', exact: true }), medicineName);
     await choose(page.getByRole('combobox', { name: 'Presentation', exact: true }), '10 tablets');
-    await choose(page.getByRole('combobox', { name: 'Pack type', exact: true }), 'Strip');
-    await page.getByLabel(/^Individual units per pack/).fill('10');
-    await page.getByLabel(/^Effective from/).fill(today);
-    await click(page.getByRole('button', { name: 'Create pack', exact: true }));
-    await expect(page.getByText('Pack created', { exact: false })).toBeVisible();
+    // Publication creates the default pack from the reviewed pack size and puts
+    // the reviewed barcode on it, so opening stock can be imported by barcode.
+    await expect(page.getByText('1 BOX = 10 units', { exact: true })).toBeVisible();
+    await expect(page.getByText(`Barcode: ${barcode}`, { exact: true })).toBeVisible();
     await setup(page);
     await expect(
       row(page, 'Medicine catalog readiness').getByText('Done', { exact: true })

@@ -46,6 +46,7 @@ function readinessDb(roles: Record<string, string[]>) {
     branchRegulatoryProfile: { findFirst: vi.fn(async () => ({ branchId: 'branch-1' })) },
     organizationRole: { count: countRoles },
     medicinePublicationEntry: { count: vi.fn(async () => 1) },
+    packLevel: { count: vi.fn(async () => 1) },
     pharmacyInventoryLot: { count: vi.fn(async () => 1) },
     pharmacySupplier: { count: vi.fn(async () => 1) },
   } as unknown as PrismaClient;

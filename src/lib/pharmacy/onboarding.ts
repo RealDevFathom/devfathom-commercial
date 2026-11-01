@@ -251,6 +251,7 @@ export async function evaluatePharmacyReadiness(
     branch,
     seededRoleKeys,
     publishedEntryCount,
+    barcodedPackCount,
     receivedLotCount,
     supplierCount,
   ] = await Promise.all([
@@ -292,6 +293,18 @@ export async function evaluatePharmacyReadiness(
         },
       },
     }),
+    // Opening stock is imported and received by scanning a pack, so the
+    // catalogue is ready only once a saleable medicine has an effective pack
+    // size that carries a barcode.
+    db.packLevel.count({
+      where: {
+        organizationId,
+        effectiveFrom: { lte: at },
+        OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
+        barcodes: { some: { organizationId } },
+        presentation: { medicine: { saleable: true } },
+      },
+    }),
     // INV-01 receipt: a lot exists but is only opening stock once received.
     db.pharmacyInventoryLot.count({ where: { organizationId, receivedAt: { not: null } } }),
     db.pharmacySupplier.count({ where: { organizationId, authorized: true, active: true } }),
@@ -307,7 +320,7 @@ export async function evaluatePharmacyReadiness(
     ),
     OWNER_AND_ROLE_TEMPLATES:
       requiredRoleKeys.length > 0 && seededRoleKeys >= requiredRoleKeys.length,
-    MEDICINE_CATALOG_READINESS: publishedEntryCount > 0,
+    MEDICINE_CATALOG_READINESS: publishedEntryCount > 0 && barcodedPackCount > 0,
     OPENING_STOCK_READINESS: receivedLotCount > 0,
     PARTIES_AND_BALANCES: supplierCount > 0,
   };

@@ -274,6 +274,10 @@ async function seedMinimalReadiness(organizationId: string) {
       [organizationId]
     );
     await db.query(
+      `INSERT INTO pharmacy_medicine_barcodes (id,"organizationId","presentationId","packLevelId",type,code,"normalizedCode") VALUES ('e2e_barcode',$1,'e2e_presentation','e2e_pack','GTIN','e2epack','e2epack')`,
+      [organizationId]
+    );
+    await db.query(
       `INSERT INTO pharmacy_medicine_provenance (id,"organizationId","medicineId",field,source,"sourceType","retrievedAt",status,"assertedValue",reviewer) VALUES ('e2e_assertion',$1,'e2e_medicine','productName','E2E','USER',now(),'ACCEPTED','"E2E Medicine"','e2e_platform_admin')`,
       [organizationId]
     );
