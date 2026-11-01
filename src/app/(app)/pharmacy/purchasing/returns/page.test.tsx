@@ -1,11 +1,13 @@
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { render, screen, cleanup } from '@testing-library/react';
+import { TRPCError } from '@trpc/server';
 
 const mocks = vi.hoisted(() => ({
   actor: vi.fn(),
   context: vi.fn(),
   caller: vi.fn(),
   module: vi.fn(),
+  canProcure: vi.fn(),
 }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: mocks.actor }));
 vi.mock('@/server/trpc', () => ({ createTRPCContext: mocks.context }));
@@ -13,6 +15,7 @@ vi.mock('@/lib/entitlements', () => ({ hasModule: mocks.module }));
 vi.mock('@/server/routers/pharmacy-purchasing', () => ({
   pharmacyPurchasingRouter: { createCaller: mocks.caller },
 }));
+vi.mock('@/lib/pharmacy/procurement-access', () => ({ actorCanProcure: mocks.canProcure }));
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
 vi.mock('next/navigation', () => ({ redirect: vi.fn(), useRouter: () => ({ refresh: vi.fn() }) }));
 import ReturnsPage from './page';
@@ -70,6 +73,42 @@ it('loads the queue from the existing authorized branch reads', async () => {
   expect(reads.supplierCredits).toHaveBeenCalledExactlyOnceWith({ branchId: 'branch' });
   expect(screen.getByRole('heading', { name: 'Supplier-credit follow-up' })).toBeVisible();
   expect(screen.getByText('No open issued debit notes in validated loaded records.')).toBeVisible();
+});
+const financialDenial = () =>
+  new TRPCError({ code: 'FORBIDDEN', message: 'Financial report access required.' });
+it('tells a cashier without procurement access that purchasing is not permitted', async () => {
+  reads.purchaseReturns.mockRejectedValue(financialDenial());
+  reads.supplierCredits.mockRejectedValue(financialDenial());
+  mocks.canProcure.mockResolvedValue(false);
+  render(await ReturnsPage({ searchParams: params() }));
+  expect(screen.getByRole('heading', { name: 'You do not have purchasing access' })).toBeVisible();
+  expect(screen.queryByRole('heading', { name: 'This surface could not load' })).toBeNull();
+  expect(mocks.canProcure).toHaveBeenCalledWith(undefined, 'user');
+});
+it('tells a procurement role without financial access why returns are closed', async () => {
+  reads.purchaseReturns.mockRejectedValue(financialDenial());
+  reads.supplierCredits.mockRejectedValue(financialDenial());
+  mocks.canProcure.mockResolvedValue(true);
+  render(await ReturnsPage({ searchParams: params() }));
+  expect(
+    screen.getByRole('heading', { name: 'Returns & claims need financial access' })
+  ).toBeVisible();
+  expect(screen.getByRole('status')).toHaveTextContent('financial reports capability');
+  expect(screen.queryByRole('heading', { name: 'This surface could not load' })).toBeNull();
+});
+it('treats a refused workspace read as a permission state', async () => {
+  reads.workspace.mockRejectedValue(new TRPCError({ code: 'FORBIDDEN' }));
+  render(await ReturnsPage({ searchParams: params() }));
+  expect(screen.getByRole('heading', { name: 'You do not have purchasing access' })).toBeVisible();
+  expect(reads.purchaseReturns).not.toHaveBeenCalled();
+});
+it('gives a role with access a working returns page', async () => {
+  render(await ReturnsPage({ searchParams: params() }));
+  expect(screen.getByRole('heading', { name: 'Returns & claims (0)' })).toBeVisible();
+  expect(screen.getByRole('heading', { name: 'Raise a return or expiry claim' })).toBeVisible();
+  expect(screen.queryByRole('heading', { name: 'This surface could not load' })).toBeNull();
+  expect(screen.queryByRole('heading', { name: 'You do not have purchasing access' })).toBeNull();
+  expect(mocks.canProcure).not.toHaveBeenCalled();
 });
 it('retains the descriptive route loading state', () => {
   render(<Loading />);

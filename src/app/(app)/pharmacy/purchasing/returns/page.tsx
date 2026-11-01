@@ -3,6 +3,8 @@ import { supplierCreditFollowUp } from '@/lib/pharmacy/supplier-credit-follow-up
 import type { Metadata } from 'next';
 import type * as React from 'react';
 import { revalidatePath } from 'next/cache';
+import { TRPCError } from '@trpc/server';
+import { actorCanProcure } from '@/lib/pharmacy/procurement-access';
 import { PurchasingActionForm } from '../_components/action-form';
 import { PurchasingOutcomeScope, PurchasingOutcomes } from '../_components/action-outcomes';
 
@@ -65,6 +67,12 @@ const DESCRIPTION =
 
 const RETURN_SLOTS = [0, 1, 2] as const;
 
+function isAccessDenied(error: unknown): boolean {
+  return (
+    error instanceof TRPCError && (error.code === 'FORBIDDEN' || error.code === 'UNAUTHORIZED')
+  );
+}
+
 /**
  * PUR-06 — returns, expiry claims, debit notes and supplier credit.
  *
@@ -101,7 +109,10 @@ export default async function PharmacyReturnsPage({
   let workspace: PurchasingWorkspace;
   try {
     workspace = await caller.workspace();
-  } catch {
+  } catch (error) {
+    if (isAccessDenied(error)) {
+      return <AccessState heading={HEADING} description={DESCRIPTION} moduleEnabled />;
+    }
     return (
       <Frame notice={notice}>
         <LoadFailure detail="The returns board could not load its pickers." retryHref={ROUTE} />
@@ -135,7 +146,25 @@ export default async function PharmacyReturnsPage({
       caller.returnableLots({ branchId }),
       caller.supplierCredits({ branchId }),
     ]);
-  } catch {
+  } catch (error) {
+    // Return history and supplier credit are financial reads: a refusal is a permission
+    // state, not a load failure.
+    if (isAccessDenied(error)) {
+      if (!(await actorCanProcure(ctx.db, ctx.session.user.id))) {
+        return <AccessState heading={HEADING} description={DESCRIPTION} moduleEnabled />;
+      }
+      return (
+        <Frame branch={scope} notice={notice}>
+          <SectionCard title="Returns & claims need financial access" titleLevel={2}>
+            <p className="text-sm text-text-muted" role="status">
+              Return history, debit notes and supplier credit are financial records. Your role has
+              procurement access but not the financial reports capability. Ask a workspace
+              administrator to add it to your role.
+            </p>
+          </SectionCard>
+        </Frame>
+      );
+    }
     return (
       <Frame branch={scope} notice={notice}>
         <LoadFailure
