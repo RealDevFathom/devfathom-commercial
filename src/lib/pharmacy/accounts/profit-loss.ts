@@ -95,6 +95,7 @@ export function projectProfitAndLoss(totals: AccountMovement[]) {
         }));
       return {
         currency,
+        classificationCoverage: unmappedAccounts.length === 0 ? ('mapped' as const) : ('unmapped' as const),
         rows,
         netRevenueMinor: netRevenue.toString(),
         grossProfitMinor: grossProfit.toString(),
