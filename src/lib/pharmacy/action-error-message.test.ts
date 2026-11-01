@@ -1,8 +1,13 @@
 import { readFileSync } from 'node:fs';
 
+import { TRPCError } from '@trpc/server';
 import { describe, expect, it } from 'vitest';
 
-import { pharmacyActionErrorMessage } from './action-error-message';
+import {
+  isPharmacyActionForbidden,
+  PHARMACY_INVENTORY_ACCESS_DENIED_MESSAGE,
+  pharmacyActionErrorMessage,
+} from './action-error-message';
 
 describe('pharmacyActionErrorMessage', () => {
   it.each([
@@ -71,5 +76,34 @@ describe('pharmacy server-action error disclosure regression', () => {
     expect(catchBlock).not.toMatch(/error\s*\.\s*message/);
     expect(catchBlock).not.toMatch(/String\s*\(\s*error\s*\)/);
     expect(catchBlock).not.toMatch(/`[^`]*\$\{\s*error/);
+  });
+});
+
+describe('isPharmacyActionForbidden', () => {
+  it('recognises only a tRPC FORBIDDEN rejection', () => {
+    expect(isPharmacyActionForbidden(new TRPCError({ code: 'FORBIDDEN' }))).toBe(true);
+    expect(isPharmacyActionForbidden(new TRPCError({ code: 'BAD_REQUEST' }))).toBe(false);
+    expect(isPharmacyActionForbidden(new TRPCError({ code: 'UNAUTHORIZED' }))).toBe(false);
+    expect(isPharmacyActionForbidden(new Error('FORBIDDEN'))).toBe(false);
+    expect(isPharmacyActionForbidden({ code: 'FORBIDDEN' })).toBe(false);
+    expect(isPharmacyActionForbidden(null)).toBe(false);
+  });
+
+  it('does not inspect a hostile non-tRPC thrown value', () => {
+    const failure = new Proxy(
+      {},
+      {
+        get() {
+          throw new Error('the failure value was inspected');
+        },
+      }
+    );
+    expect(isPharmacyActionForbidden(failure)).toBe(false);
+  });
+
+  it('names the missing inventory access without server detail', () => {
+    expect(PHARMACY_INVENTORY_ACCESS_DENIED_MESSAGE).toBe(
+      'You don’t have inventory access — ask an owner.'
+    );
   });
 });

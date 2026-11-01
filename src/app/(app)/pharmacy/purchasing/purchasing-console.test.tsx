@@ -423,6 +423,9 @@ describe('preconditions (UX rule 13)', () => {
 
     expect(screen.getByRole('heading', { name: '4 things still to set up' })).toBeDefined();
     expect(screen.getByRole('link', { name: 'Open pharmacy onboarding' })).toBeDefined();
+    expect(screen.getByRole('link', { name: 'Add a stock location' }).getAttribute('href')).toBe(
+      '/pharmacy/inventory'
+    );
     expect(
       screen.getByRole('link', { name: 'Open the supplier register' }).getAttribute('href')
     ).toBe('/pharmacy/purchasing/suppliers');

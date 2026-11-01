@@ -9,12 +9,15 @@ const mocks = vi.hoisted(() => ({
   form: vi.fn(),
   writeOff: vi.fn(),
   release: vi.fn(),
+  createLocation: vi.fn(),
+  can: vi.fn(),
   redirect: vi.fn(),
 }));
 vi.mock('next/navigation', () => ({ redirect: mocks.redirect }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: mocks.actor }));
 vi.mock('@/server/trpc', () => ({ createTRPCContext: mocks.context }));
 vi.mock('@/lib/entitlements', () => ({ hasModule: mocks.module }));
+vi.mock('@/lib/abac', () => ({ can: mocks.can, subjectFromSession: (user: unknown) => user }));
 vi.mock('@/server/routers/pharmacy-inventory', () => ({
   pharmacyInventoryRouter: { createCaller: mocks.caller },
 }));
@@ -71,6 +74,7 @@ function makeContext() {
     session: { user: { id: 'user', status: 'ACTIVE' } },
     organization: { id: 'org', isDemo: false },
     entitlements: {},
+    requestMeta: { ip: '203.0.113.7' },
     db: {
       pharmacyBranch: { findMany: vi.fn().mockResolvedValue([branch]) },
       pharmacyStockLocation: { findMany: vi.fn().mockResolvedValue([location]) },
@@ -102,7 +106,10 @@ beforeEach(() => {
     temperatureZoneStatuses: vi.fn().mockResolvedValue([]),
     writeOff: mocks.writeOff,
     releaseQuarantinedPart: mocks.release,
+    createLocation: mocks.createLocation,
   });
+  mocks.can.mockResolvedValue(true);
+  mocks.createLocation.mockResolvedValue({});
   mocks.writeOff.mockResolvedValue({});
   mocks.release.mockResolvedValue({});
   nearExpiry.mockResolvedValue([]);
@@ -287,5 +294,90 @@ describe('Inventory pack-action integration', () => {
     expect(screen.getByText('Inventory module unavailable')).toBeVisible();
     expect(mocks.form).not.toHaveBeenCalled();
     expect(lots).not.toHaveBeenCalled();
+  });
+});
+
+describe('Stock location creation access (issue #976)', () => {
+  function locationForm() {
+    return screen.getByRole('button', { name: 'Create location' }).closest('form')!;
+  }
+
+  function fillAndSubmit(form: HTMLFormElement) {
+    fireEvent.change(within(form).getByLabelText('Name'), { target: { value: 'Front store' } });
+    fireEvent.change(within(form).getByLabelText('Code'), { target: { value: 'FS-1' } });
+    fireEvent.submit(form);
+  }
+
+  function redirectedNotice() {
+    const destination = new URL(String(mocks.redirect.mock.calls[0]?.[0]), 'http://localhost');
+    return {
+      notice: destination.searchParams.get('notice'),
+      kind: destination.searchParams.get('kind'),
+    };
+  }
+
+  it('checks the same pharmacy:inventory capability the createLocation procedure enforces', async () => {
+    await show();
+    expect(mocks.can).toHaveBeenCalledWith(
+      ctx.session.user,
+      'pharmacy:inventory',
+      undefined,
+      expect.objectContaining({ db: ctx.db, source: 'TRPC', ip: '203.0.113.7' })
+    );
+    expect(screen.getByRole('button', { name: 'Create location' })).toBeVisible();
+  });
+
+  it('hides the Create location form for a user without inventory access', async () => {
+    mocks.can.mockResolvedValue(false);
+    await show();
+    expect(screen.queryByRole('button', { name: 'Create location' })).not.toBeInTheDocument();
+    expect(
+      screen.getByText('Creating stock locations needs inventory access — ask an owner.')
+    ).toBeVisible();
+    // Existing locations stay readable.
+    expect(screen.getAllByText('Rack').length).toBeGreaterThan(0);
+  });
+
+  it('maps a FORBIDDEN rejection to the inventory-access message', async () => {
+    const { TRPCError } = await import('@trpc/server');
+    await show();
+    const form = locationForm();
+    // Access is revoked between render and submit.
+    mocks.can.mockResolvedValue(false);
+    mocks.createLocation.mockRejectedValue(
+      new TRPCError({ code: 'FORBIDDEN', message: 'You do not have permission for this action.' })
+    );
+    fillAndSubmit(form);
+    await waitFor(() => expect(mocks.redirect).toHaveBeenCalled());
+    expect(redirectedNotice()).toEqual({
+      notice: 'You don’t have inventory access — ask an owner.',
+      kind: 'error',
+    });
+  });
+
+  it('keeps a FORBIDDEN rejection generic when the user does hold inventory access', async () => {
+    const { TRPCError } = await import('@trpc/server');
+    await show();
+    mocks.createLocation.mockRejectedValue(
+      new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside this workspace.' })
+    );
+    fillAndSubmit(locationForm());
+    await waitFor(() => expect(mocks.redirect).toHaveBeenCalled());
+    expect(redirectedNotice()).toEqual({
+      notice: 'The inventory action could not be completed. Review the fields and try again.',
+      kind: 'error',
+    });
+  });
+
+  it('keeps other failures generic and never leaks the server message', async () => {
+    await show();
+    mocks.createLocation.mockRejectedValue(new Error('unique constraint on code'));
+    fillAndSubmit(locationForm());
+    await waitFor(() => expect(mocks.redirect).toHaveBeenCalled());
+    const { notice } = redirectedNotice();
+    expect(notice).toBe(
+      'The inventory action could not be completed. Review the fields and try again.'
+    );
+    expect(String(mocks.redirect.mock.calls[0]?.[0])).not.toContain('unique constraint');
   });
 });

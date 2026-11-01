@@ -18,10 +18,15 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { can, subjectFromSession } from '@/lib/abac';
 import { hasModule } from '@/lib/entitlements';
 import { evaluateSessionUser } from '@/lib/auth/session-state';
 import { DEMO_UNAVAILABLE_MESSAGE, isDemoProcedureBlocked } from '@/lib/demo/isolation';
-import { pharmacyActionErrorMessage } from '@/lib/pharmacy/action-error-message';
+import {
+  isPharmacyActionForbidden,
+  PHARMACY_INVENTORY_ACCESS_DENIED_MESSAGE,
+  pharmacyActionErrorMessage,
+} from '@/lib/pharmacy/action-error-message';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { pharmacyInventoryRouter } from '@/server/routers/pharmacy-inventory';
 import { createTRPCContext } from '@/server/trpc';
@@ -60,6 +65,17 @@ async function tenantContext() {
     session: actor.session,
     organization: actor.organization,
     support: actor.support,
+  });
+}
+
+/** Mirrors the `pharmacy:inventory` gate on stock-location and other inventory-control procedures. */
+async function hasInventoryAccess(context: Awaited<ReturnType<typeof tenantContext>>) {
+  const user = context?.session?.user;
+  if (!context || !user) return false;
+  return can(subjectFromSession(user), 'pharmacy:inventory', undefined, {
+    db: context.db,
+    source: 'TRPC',
+    ip: context.requestMeta.ip,
   });
 }
 
@@ -156,6 +172,7 @@ export default async function PharmacyInventoryPage({
   }
 
   const caller = pharmacyInventoryRouter.createCaller(ctx);
+  const canManageInventory = await hasInventoryAccess(ctx);
   const [
     organizationLocations,
     lots,
@@ -260,8 +277,9 @@ export default async function PharmacyInventoryPage({
     'use server';
     const branchId = field(data, 'branchId');
     let destination: string;
+    let actionCtx: Awaited<ReturnType<typeof tenantContext>> = null;
     try {
-      const actionCtx = await tenantContext();
+      actionCtx = await tenantContext();
       if (!actionCtx?.session?.user)
         throw new Error('Your session expired. Sign in and try again.');
       const actionCaller = pharmacyInventoryRouter.createCaller(actionCtx);
@@ -402,8 +420,18 @@ export default async function PharmacyInventoryPage({
     } catch (error) {
       // Keep the thrown value out of the URL entirely: it can contain database, provider,
       // authorization, or validation details that are not safe to return to the browser.
+      // Only the error class and code are read. A refusal is named as missing inventory access
+      // only when the actor genuinely lacks `pharmacy:inventory`; other refusals stay generic.
       void error;
-      destination = url(branchId, pharmacyActionErrorMessage('inventory'), 'error');
+      const accessDenied =
+        isPharmacyActionForbidden(error) && !(await hasInventoryAccess(actionCtx));
+      destination = url(
+        branchId,
+        accessDenied
+          ? PHARMACY_INVENTORY_ACCESS_DENIED_MESSAGE
+          : pharmacyActionErrorMessage('inventory'),
+        'error'
+      );
     }
     redirect(destination);
   }
@@ -605,44 +633,50 @@ export default async function PharmacyInventoryPage({
               </div>
             ))}
           </div>
-          <form action={perform} className="mt-5 grid gap-3 sm:grid-cols-2">
-            <input name="action" type="hidden" value="create-location" />
-            <input name="branchId" type="hidden" value={branch.id} />
-            <label className="text-sm">
-              Name
-              <Input className="mt-1" name="name" required />
-            </label>
-            <label className="text-sm">
-              Code
-              <Input className="mt-1" name="code" required />
-            </label>
-            <label className="text-sm">
-              Storage type
-              <select className={inputClass} name="kind">
-                {['STORE', 'RACK_BIN', 'FRIDGE', 'SAFE', 'QUARANTINE', 'TRANSIT', 'RETURNS'].map(
-                  (kind) => (
-                    <option key={kind} value={kind}>
-                      {label(kind)}
-                    </option>
-                  )
-                )}
-              </select>
-            </label>
-            <label className="flex min-h-11 items-center gap-2 self-end text-sm">
-              <input name="coldChain" type="checkbox" /> Validated cold-chain zone
-            </label>
-            <label className="text-sm">
-              Minimum °C
-              <Input className="mt-1" name="minimumTemperatureC" step="0.1" type="number" />
-            </label>
-            <label className="text-sm">
-              Maximum °C
-              <Input className="mt-1" name="maximumTemperatureC" step="0.1" type="number" />
-            </label>
-            <Button className="sm:col-span-2" type="submit">
-              Create location
-            </Button>
-          </form>
+          {canManageInventory ? (
+            <form action={perform} className="mt-5 grid gap-3 sm:grid-cols-2">
+              <input name="action" type="hidden" value="create-location" />
+              <input name="branchId" type="hidden" value={branch.id} />
+              <label className="text-sm">
+                Name
+                <Input className="mt-1" name="name" required />
+              </label>
+              <label className="text-sm">
+                Code
+                <Input className="mt-1" name="code" required />
+              </label>
+              <label className="text-sm">
+                Storage type
+                <select className={inputClass} name="kind">
+                  {['STORE', 'RACK_BIN', 'FRIDGE', 'SAFE', 'QUARANTINE', 'TRANSIT', 'RETURNS'].map(
+                    (kind) => (
+                      <option key={kind} value={kind}>
+                        {label(kind)}
+                      </option>
+                    )
+                  )}
+                </select>
+              </label>
+              <label className="flex min-h-11 items-center gap-2 self-end text-sm">
+                <input name="coldChain" type="checkbox" /> Validated cold-chain zone
+              </label>
+              <label className="text-sm">
+                Minimum °C
+                <Input className="mt-1" name="minimumTemperatureC" step="0.1" type="number" />
+              </label>
+              <label className="text-sm">
+                Maximum °C
+                <Input className="mt-1" name="maximumTemperatureC" step="0.1" type="number" />
+              </label>
+              <Button className="sm:col-span-2" type="submit">
+                Create location
+              </Button>
+            </form>
+          ) : (
+            <p className="mt-5 text-sm text-text-muted">
+              Creating stock locations needs inventory access — ask an owner.
+            </p>
+          )}
           <div className="mt-6 border-t border-border-subtle pt-5">
             <h3 className="font-medium text-text-strong">Manual temperature log</h3>
             {coldChainLocations.length > 0 ? (
