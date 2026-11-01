@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { TRPCError } from '@trpc/server';
 
 const mocks = vi.hoisted(() => ({
   assertInOrganization: vi.fn(),
@@ -73,6 +74,22 @@ describe('assistant createProject organization references', () => {
     ) => Promise<unknown>;
 
     await expect(execute(input)).rejects.toThrow('foreign client');
+    expect(mocks.create).not.toHaveBeenCalled();
+  });
+
+  it('returns the tool error shape for a workspace-reference rejection', async () => {
+    mocks.assertInOrganization
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(
+        new TRPCError({ code: 'BAD_REQUEST', message: 'That record is not in this workspace.' })
+      );
+    const execute = buildProjectsTools(helpers).createProject.execute as (
+      value: typeof input
+    ) => Promise<unknown>;
+
+    await expect(execute(input)).resolves.toEqual({
+      error: 'That record is not in this workspace.',
+    });
     expect(mocks.create).not.toHaveBeenCalled();
   });
 });

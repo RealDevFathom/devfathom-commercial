@@ -17,11 +17,13 @@
  * is resolved by name only within the set the user may see, so a non-member
  * cannot even learn that a project exists.
  */
+import { TRPCError } from '@trpc/server';
 import { tool } from 'ai';
 import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
 import { matchScore, norm } from '@/lib/ai/context';
 import type { AssistantHelpers, ToolSet } from '@/lib/ai/context';
+import { lockProjectMembership } from '@/lib/projects/membership-lock';
 import { assertInOrganization } from '@/server/org-refs';
 
 export function buildProjectsTools(h: AssistantHelpers): ToolSet {
@@ -298,8 +300,16 @@ export function buildProjectsTools(h: AssistantHelpers): ToolSet {
         resolvedClient = cr.value.name;
       }
 
-      await assertInOrganization(db.user, h.ctx.organizationId, [userId]);
-      await assertInOrganization(db.client, h.ctx.organizationId, [clientId]);
+      // Defense in depth: the creator and resolved client must be in this workspace.
+      try {
+        await assertInOrganization(db.user, h.ctx.organizationId, [userId]);
+        await assertInOrganization(db.client, h.ctx.organizationId, [clientId]);
+      } catch (error) {
+        if (error instanceof TRPCError && error.code === 'BAD_REQUEST') {
+          return { error: error.message };
+        }
+        throw error;
+      }
 
       const project = await db.project.create({
         data: {
