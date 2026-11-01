@@ -8,6 +8,7 @@ import {
 } from '@/lib/pharmacy/basket-workflow';
 import { generateGrowthRecommendations } from '@/lib/ai/growth-recommendations';
 import { can, subjectFromSession } from '@/lib/abac';
+import { hasPharmacyManagerAccess } from '@/lib/pharmacy/manager-access';
 import {
   buildPharmacyGrowthInput,
   growthPeriodInput,
@@ -51,15 +52,21 @@ import { draftMarketingCopy, marketingAssistanceInput } from '@/lib/pharmacy/mar
 import { protectedProcedure, router, type TRPCContext } from '../trpc';
 
 type MarketingAccessContext = Pick<TRPCContext, 'session' | 'entitlements' | 'audit'> & {
-  db: Pick<ScopedDb, 'organization' | 'pharmacyBranch'>;
+  db: Pick<ScopedDb, 'organization' | 'pharmacyBranch' | 'user'>;
 };
 
+const MANAGER_REQUIRED = 'Manager or owner access and Pharmacy CRM are required.';
+
+// Campaign generation, review and approval are manager-or-owner actions, checked
+// here on the server for every marketing procedure (deny by default). A cashier
+// is refused; a solo owner (tenant ADMIN with no organization role) keeps access.
 async function owner(ctx: MarketingAccessContext) {
-  if (ctx.session?.user.role !== 'ADMIN' || !hasModule(ctx.entitlements, 'pharmacy-crm'))
-    throw new TRPCError({
-      code: 'FORBIDDEN',
-      message: 'Owner access and Pharmacy CRM are required.',
-    });
+  if (
+    !ctx.session?.user ||
+    !hasModule(ctx.entitlements, 'pharmacy-crm') ||
+    !(await hasPharmacyManagerAccess(ctx.db, ctx.session.user))
+  )
+    throw new TRPCError({ code: 'FORBIDDEN', message: MANAGER_REQUIRED });
   const organization = await ctx.db.organization.findUnique({
     where: { id: ctx.entitlements.organizationId },
     select: { id: true, vertical: true, status: true, timezone: true },
@@ -125,15 +132,18 @@ function sandboxTransaction(ctx: TRPCContext, branchId: string): MarketingTransa
           where: {
             organizationId: ctx.entitlements.organizationId,
             id: userId,
-            role: 'ADMIN',
             status: 'ACTIVE',
           },
-          select: { id: true },
+          select: { id: true, role: true },
         });
-        if (!actor)
+        // Re-check the current manager-or-owner grant against the stored role.
+        if (
+          !actor ||
+          !(await hasPharmacyManagerAccess(db, { ...ctx.session!.user, role: actor.role }))
+        )
           throw new TRPCError({
             code: 'FORBIDDEN',
-            message: 'Active owner access is required.',
+            message: 'Active manager or owner access is required.',
           });
         const entitlements = await resolveOrganizationEntitlements(
           ctx.entitlements.organizationId,
@@ -159,18 +169,28 @@ async function growthExecute<T>(
       where: {
         id: resolved.actorId,
         organizationId: resolved.organizationId,
-        role: 'ADMIN',
         status: 'ACTIVE',
       },
-      select: { id: true },
+      select: { id: true, role: true },
     });
     const branchMatch = await db.$queryRaw<Array<{ allowed: boolean }>>(
       Prisma.sql`SELECT (NULLIF(current_setting('app.current_branch_id',true),'') IS NULL OR current_setting('app.current_branch_id',true)=${branchId}) AS allowed`
     );
-    if (!actor || !branchMatch[0]?.allowed)
+    // Re-check the current manager-or-owner grant against the stored role, in
+    // this transaction, so a demotion during provider latency is refused.
+    if (
+      !actor ||
+      !branchMatch[0]?.allowed ||
+      !(await hasPharmacyManagerAccess(
+        db,
+        { ...ctx.session!.user, role: actor.role },
+        [],
+        ctx.requestMeta.ip
+      ))
+    )
       throw new TRPCError({
         code: 'FORBIDDEN',
-        message: 'Current owner and branch access are required.',
+        message: 'Current manager or owner and branch access are required.',
       });
     // Snapshots contain Finance evidence. Match the ledger report gates for reads,
     // generation and review, and recheck them after provider latency before saving.

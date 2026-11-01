@@ -16,6 +16,7 @@ import {
 import { paymentSandboxAdmitted } from '@/lib/pharmacy/payment-sandbox-admission';
 import { readCounterEvidence, readDailyCloseEvidence } from '@/lib/pharmacy/counter-evidence';
 import { can, subjectFromSession } from '@/lib/abac';
+import { hasPharmacyManagerAccess } from '@/lib/pharmacy/manager-access';
 import { capabilityMatches } from '@/lib/abac/capabilities';
 import {
   appendControlledSaleEntries,
@@ -490,21 +491,29 @@ const closeDate = z
       date.getUTCMilliseconds() === 0,
     'Choose a date without a time.'
   );
-async function requireCloseAccess(ctx: TRPCContext) {
-  const user = ctx.session?.user;
-  if (
-    !user ||
-    (user.role !== 'ADMIN' &&
-      !(await can(subjectFromSession(user), 'pharmacy:close', undefined, {
-        db: ctx.db,
-        source: 'TRPC',
-      })))
-  )
-    throw new TRPCError({
-      code: 'FORBIDDEN',
-      message: 'Day-close permission is required to reconcile and close a day.',
-    });
+// Closing the day and opening, moving or closing a drawer are manager-or-owner
+// actions: a cashier cannot reconcile or close their own drawer. `pharmacy:close`
+// (the Pharmacist template) keeps its existing day-close access. A tenant ADMIN
+// with no organization role (a solo owner) keeps full access; an ADMIN with an
+// assigned role is bounded by it.
+async function requireManagerOrOwner(ctx: TRPCContext, message: string) {
+  const allowed = await hasPharmacyManagerAccess(
+    ctx.db,
+    ctx.session?.user,
+    ['pharmacy:close'],
+    ctx.requestMeta.ip
+  );
+  if (!allowed) throw new TRPCError({ code: 'FORBIDDEN', message });
 }
+
+const requireCloseAccess = (ctx: TRPCContext) =>
+  requireManagerOrOwner(ctx, 'Day-close permission is required to reconcile and close a day.');
+
+const requireDrawerAccess = (ctx: TRPCContext) =>
+  requireManagerOrOwner(
+    ctx,
+    'Manager or owner permission is required to open, move or close a drawer.'
+  );
 
 export const pharmacySalesRouter = router({
   manualPaymentSettings: protectedProcedure.input(z.object({ branchId })).query(async ({ ctx, input }) => {
@@ -735,6 +744,7 @@ export const pharmacySalesRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      await requireDrawerAccess(ctx);
       try {
         return await ctx.db.$transaction(async (tx) =>
           openPharmacyDrawer(txDb(tx), await scopeFor(ctx, input.branchId), input)
@@ -756,6 +766,7 @@ export const pharmacySalesRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      await requireDrawerAccess(ctx);
       try {
         return await ctx.db.$transaction(async (tx) =>
           recordPharmacyCashMovement(txDb(tx), await scopeFor(ctx, input.branchId), input)
@@ -776,6 +787,7 @@ export const pharmacySalesRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      await requireDrawerAccess(ctx);
       try {
         return await ctx.db.$transaction(async (tx) =>
           closePharmacyDrawer(txDb(tx), await scopeFor(ctx, input.branchId), input)

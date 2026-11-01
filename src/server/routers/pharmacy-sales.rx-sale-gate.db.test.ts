@@ -29,6 +29,8 @@ const ids = {
   userDenied: `user_r518_udeny_${suffix}`,
   /** Role DENYs pharmacy:dispense; a user override ALLOWs it. */
   roleDenied: `user_r518_rdeny_${suffix}`,
+  /** The Manager template: opens each counter's drawer (a cashier cannot). */
+  manager: `user_r518_manager_${suffix}`,
 };
 const businessDate = new Date('2026-10-22T00:00:00.000Z');
 const deviceFor = (userId: string) => `device-${userId}`;
@@ -248,6 +250,14 @@ beforeAll(async () => {
         ],
         override: 'ALLOW',
       },
+      {
+        id: ids.manager,
+        role: [
+          ['pharmacy:manage', 'ALLOW'],
+          ['pharmacy:orders', 'ALLOW'],
+          ['pharmacy:procurement', 'ALLOW'],
+        ],
+      },
     ];
     for (const user of users) {
       await tx.organizationRole.create({
@@ -349,8 +359,9 @@ beforeAll(async () => {
       },
     });
   });
+  // Drawers are opened by a manager; each counter user then sells on their own device.
   for (const userId of [ids.cashier, ids.pharmacist, ids.userDenied, ids.roleDenied])
-    await act(userId, (api) =>
+    await act(ids.manager, (api) =>
       api.openDrawer({
         branchId: ids.branch,
         deviceId: deviceFor(userId),

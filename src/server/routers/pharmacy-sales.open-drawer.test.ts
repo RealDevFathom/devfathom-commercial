@@ -49,6 +49,13 @@ function fixture(
             .mockResolvedValue({ id: 'drawer-new', status: 'OPEN', deviceId: 'counter-device' }),
     },
     pharmacyDrawerMovement: { create: vi.fn().mockResolvedValue({}) },
+    // Opening a drawer is a manager-or-owner action: the actor holds the Manager template.
+    user: {
+      findUnique: vi.fn().mockResolvedValue({
+        organizationRole: { permissions: [{ capability: 'pharmacy:manage', effect: 'ALLOW' }] },
+        permissionOverrides: [],
+      }),
+    },
     $transaction: vi.fn(async (callback: (tx: unknown) => unknown): Promise<unknown> =>
       callback(db)
     ),
