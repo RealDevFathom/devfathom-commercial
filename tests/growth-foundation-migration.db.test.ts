@@ -6,7 +6,7 @@ import pg from 'pg';
 import { describe, expect, it } from 'vitest';
 
 const sql = readFileSync(
-  resolve('prisma/migrations/20261101000000_growth_foundation/migration.sql'),
+  resolve('prisma/migrations/20261101170700_growth_foundation/migration.sql'),
   'utf8'
 );
 // A disposable database with CREATE SCHEMA permission, using a restricted role.
