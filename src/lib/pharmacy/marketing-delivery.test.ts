@@ -71,7 +71,12 @@ beforeEach(() => {
       count: async () => 0,
     },
     pharmacyCustomer: {
-      findFirst: async () => ({ patientId: 'p', active: true, whatsappOptIn: !optedOut }),
+      findFirst: async () => ({
+        patientId: 'p',
+        active: true,
+        patient: { dateOfBirth: null },
+        whatsappOptIn: !optedOut,
+      }),
     },
     patientConsent: {
       findFirst: async () => ({ granted: true, revokedAt: null, recordedAt: now }),

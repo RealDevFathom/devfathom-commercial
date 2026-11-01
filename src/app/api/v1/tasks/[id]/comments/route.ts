@@ -59,7 +59,7 @@ export const POST = withApiAuth(
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
-    if (parsed.data.parentId) {
+    if (parsed.data.parentId !== undefined) {
       const parent = await authCtx.db.taskComment.findFirst({
         where: { id: parsed.data.parentId, taskId: id },
         select: { id: true },

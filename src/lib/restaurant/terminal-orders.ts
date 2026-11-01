@@ -11,6 +11,7 @@ import { readJson } from '@/lib/api-json';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { loadBranchCommercialTerms } from './branch-commercial-terms';
+import { evaluateOrderSettlement } from './bills';
 import { reviveCommercialTerms } from './commercial-terms';
 import { CoAuthorizationError, authenticateCoAuthorizationOperator } from './co-authorization';
 import { quoteDraftCheckBreakdown } from './draft-check-total';
@@ -27,6 +28,7 @@ import {
 } from './menu-availability';
 import { OrderCommandError, type CommandActor } from './orders';
 import { OrderPricingError } from './order-pricing';
+import { verifyPosComposerProof } from './pos-composer-proof';
 import { OrderInvariantError, OrderTransitionError } from './order-state-machine';
 import { pickEntry, resolveEffectiveEntries, type ResolvedPriceList } from './price-lists';
 import { withTerminalAuth, type OperatorAuthResult, type TerminalContext } from './terminal-auth';
@@ -290,7 +292,8 @@ export async function authenticateApprover(
 export function terminalCommandRoute<S extends z.ZodTypeAny>(
   schema: S,
   run: (args: { ctx: TerminalContext; data: z.infer<S>; actor: CommandActor }) => Promise<unknown>,
-  successStatus = 200
+  successStatus = 200,
+  options: { composerProof?: 'REQUIRED' | 'POS_ONLY' } = {}
 ) {
   const parseBody = async (request: Request) => {
     const parsedJson = await readJson(request);
@@ -312,6 +315,24 @@ export function terminalCommandRoute<S extends z.ZodTypeAny>(
 
       const parsed = await parseBody(request);
       if (!parsed.ok) return parsed.response;
+
+      const requiresComposerProof =
+        options.composerProof !== 'POS_ONLY' || ctx.device.kind === 'POS';
+      if (requiresComposerProof) {
+        const composerProof = request.headers.get('x-pos-composer-proof');
+        if (
+          !composerProof ||
+          !verifyPosComposerProof(composerProof, {
+            organizationId: ctx.organizationId,
+            branchId: ctx.device.branchId,
+            deviceId: ctx.device.id,
+            sessionId: ctx.session.id,
+            staffProfileId: operator.staffProfileId,
+          })
+        ) {
+          return json({ error: 'Missing or invalid POS composer proof.' }, 403);
+        }
+      }
 
       const data = parsed.data as unknown;
       const capabilityError = await requireOrderTakingCapability(
@@ -537,7 +558,7 @@ export async function getOrderForBranch(db: ScopedDb, orderId: string, branchId:
         where: { status: { not: 'VOID' } },
         select: { serviceChargeTotal: true },
       },
-      deliveryFulfillment: { select: { deliveryFeeSnapshot: true } },
+      deliveryFulfillment: { select: { deliveryFeeSnapshot: true, status: true } },
     },
   });
   if (!order) return null;
@@ -567,6 +588,9 @@ export async function getOrderForBranch(db: ScopedDb, orderId: string, branchId:
     (total, bill) => total.plus(bill.serviceChargeTotal),
     new Prisma.Decimal(0)
   );
+  const settlement = order.deliveryFulfillment
+    ? await evaluateOrderSettlement(db, order.id)
+    : null;
   return {
     id: order.id,
     branchId: order.branchId,
@@ -574,6 +598,8 @@ export async function getOrderForBranch(db: ScopedDb, orderId: string, branchId:
     businessDate: order.businessDate.toISOString().slice(0, 10),
     status: order.status,
     channel: order.channel,
+    deliveryStatus: order.deliveryFulfillment?.status ?? null,
+    settled: settlement?.settled ?? false,
     coverCount: order.coverCount,
     sectionId: order.sectionId,
     serverStaffProfileId: order.serverStaffProfileId,

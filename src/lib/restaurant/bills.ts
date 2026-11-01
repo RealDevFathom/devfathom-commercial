@@ -6,6 +6,7 @@ import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { buildAuthenticatedCoAuthorizationRecord } from './co-authorization';
+import { assertMoneyDayOpen } from './money-day';
 import { accrueLoyaltyForSettledBill, releaseLoyaltyRedemption } from './loyalty';
 import {
   add,
@@ -653,6 +654,11 @@ export async function cutBills(db: ScopedDb, input: CutBillsInput): Promise<CutB
       const billIds = await liveBillIds(tx, input.orderId, input.branchId);
       return { orderId: input.orderId, billIds, replayed: true };
     }
+
+    // A completed command is immutable historical evidence and remains replayable
+    // after close. Only a genuinely new cut shares the branch-day lock with daily
+    // close: if close wins it is rejected; if this cut wins, close sees its OPEN bill.
+    await assertMoneyDayOpen(tx, order.branchId, order.businessDate);
 
     // Serialize every cut of this order on a key that exists BEFORE any bill does.
     // Locking the bill ROWS is not enough, because the dangerous row is the one that is

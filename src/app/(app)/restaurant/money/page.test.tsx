@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   can: vi.fn(),
   createTRPCContext: vi.fn(),
+  resolveTenantActor: vi.fn(),
 }));
 
 vi.mock('@/components/restaurant/money/money-console', () => ({
@@ -23,19 +24,26 @@ vi.mock('@/lib/abac', () => ({
   can: mocks.can,
   subjectFromSession: (user: { id: string }) => ({ id: user.id }),
 }));
+vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: mocks.resolveTenantActor }));
 vi.mock('@/server/trpc', () => ({ createTRPCContext: mocks.createTRPCContext }));
 
 import RestaurantMoneyPage from './page';
 
 describe('RestaurantMoneyPage', () => {
-  const context = {
+  const actor = {
     session: { user: { id: 'user_1' } },
+    organization: { id: 'org_1', slug: 'restaurant' },
+    support: null,
+  };
+  const context = {
+    session: actor.session,
     db: { marker: 'tenant-db' },
     requestMeta: { ip: '127.0.0.1' },
   };
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.resolveTenantActor.mockResolvedValue(actor);
     mocks.createTRPCContext.mockResolvedValue(context);
     mocks.can.mockResolvedValue(true);
   });
@@ -51,6 +59,11 @@ describe('RestaurantMoneyPage', () => {
       db: context.db,
       source: 'TRPC',
       ip: '127.0.0.1',
+    });
+    expect(mocks.createTRPCContext).toHaveBeenCalledWith({
+      session: actor.session,
+      organization: actor.organization,
+      support: actor.support,
     });
   });
 
@@ -68,5 +81,15 @@ describe('RestaurantMoneyPage', () => {
     render(await RestaurantMoneyPage({ searchParams: Promise.resolve({}) }));
 
     expect(screen.getByText('Initial tab: bills; finance: false')).toBeInTheDocument();
+  });
+
+  it('fails closed without constructing a context when tenancy does not resolve', async () => {
+    mocks.resolveTenantActor.mockResolvedValue(null);
+
+    render(await RestaurantMoneyPage({ searchParams: Promise.resolve({ tab: 'payments' }) }));
+
+    expect(screen.getByText('Initial tab: payments; finance: false')).toBeInTheDocument();
+    expect(mocks.createTRPCContext).not.toHaveBeenCalled();
+    expect(mocks.can).not.toHaveBeenCalled();
   });
 });

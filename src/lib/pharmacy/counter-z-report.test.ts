@@ -4,6 +4,7 @@ const report = {
   id: 'close-1',
   branchName: '<script>private</script>',
   businessDate: '2026-09-29',
+  currency: 'USD',
   sequence: 1,
   grossSalesMinor: 2500,
   refundTotalMinor: 0,
@@ -15,9 +16,23 @@ const report = {
   isFinal: true,
 };
 describe('Z report', () => {
+  it('prints Raast, JazzCash and Easypaisa separately from cash from recorded close totals', () => {
+    const html = buildCounterBrowserZReport({ ...report, tenderTotals: [
+      { type: 'CASH', amountMinor: 500, refundMinor: 0, netMinor: 500 },
+      { type: 'RAAST', amountMinor: 1000, refundMinor: 100, netMinor: 900 },
+      { type: 'JAZZCASH', amountMinor: 2000, refundMinor: 0, netMinor: 2000 },
+      { type: 'EASYPAISA', amountMinor: 3000, refundMinor: 0, netMinor: 3000 },
+    ] }, 'en');
+    expect(html).toContain('CASH: 5.00');
+    expect(html).toContain('RAAST: 10.00');
+    expect(html).toContain('JAZZCASH: 20.00');
+    expect(html).toContain('EASYPAISA: 30.00');
+  });
   it('prints escaped recorded totals and variance, separate from a sale receipt', () => {
     const html = buildCounterBrowserZReport(report, 'en');
+    expect(html).toContain('USD');
     expect(html).toContain('Expected cash: 125.00');
+    expect(html).not.toContain('PKR');
     expect(html).toContain('Variance: -1.00');
     expect(html).not.toContain('<script>');
     expect(html).not.toContain('<img');

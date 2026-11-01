@@ -202,10 +202,15 @@ export async function POST(request: Request) {
  * half-finished login cannot be resumed by the next person at the browser.
  */
 export async function DELETE(request: Request) {
-  if (!isSharedHost(requestHost(request))) {
-    return json({ error: 'Not found.' }, { status: 404 });
+  if (isSharedHost(requestHost(request))) {
+    await discardLoginIntent(parseCookie(request.headers.get('cookie'), LOGIN_INTENT_COOKIE));
   }
-  await discardLoginIntent(parseCookie(request.headers.get('cookie'), LOGIN_INTENT_COOKIE));
+
+  // signOutEverything runs on every application host. Tenant and admin hosts
+  // cannot own a shared-host intent (the cookie is host-only), but returning a
+  // successful no-op keeps their otherwise normal sign-out from logging a 404.
+  // Do not inspect or invalidate a supplied token away from the shared host:
+  // intent state remains isolated to the host on which it was created.
   return json({ ok: true }, { headers: clearIntentCookie() });
 }
 

@@ -12,7 +12,10 @@ const mocks = vi.hoisted(() => ({
   staffFindMany: vi.fn(),
   staffFindUnique: vi.fn(),
   resolveStaffCapabilities: vi.fn(),
+  setStaffJobRoles: vi.fn(),
   setStaffAccess: vi.fn(),
+  setStaffCapabilityOverride: vi.fn(),
+  clearStaffCapabilityOverride: vi.fn(),
   staffCreate: vi.fn(),
   branchFindFirst: vi.fn(),
   branchFindMany: vi.fn(),
@@ -54,7 +57,10 @@ vi.mock('@/lib/restaurant/job-roles', async () => ({
     '@/lib/restaurant/job-roles'
   )),
   resolveStaffCapabilities: mocks.resolveStaffCapabilities,
+  setStaffJobRoles: mocks.setStaffJobRoles,
   setStaffAccess: mocks.setStaffAccess,
+  setStaffCapabilityOverride: mocks.setStaffCapabilityOverride,
+  clearStaffCapabilityOverride: mocks.clearStaffCapabilityOverride,
 }));
 
 import { restaurantStaffRouter } from './restaurant-staff';
@@ -120,6 +126,10 @@ beforeEach(() => {
   mocks.staffFindMany.mockResolvedValue([]);
   mocks.staffFindUnique.mockResolvedValue(null);
   mocks.resolveStaffCapabilities.mockResolvedValue(new Set(['staff:manage']));
+  mocks.setStaffJobRoles.mockResolvedValue({ granted: [], revoked: [] });
+  mocks.setStaffAccess.mockResolvedValue({ granted: [], revoked: [], overrides: [] });
+  mocks.setStaffCapabilityOverride.mockResolvedValue({ changed: false });
+  mocks.clearStaffCapabilityOverride.mockResolvedValue({ changed: false });
   mocks.staffFindFirst.mockResolvedValue(null);
   mocks.branchFindFirst.mockResolvedValue({ id: 'branch_default' });
   mocks.staffCreate.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => ({
@@ -172,11 +182,8 @@ describe('restaurantStaff.provisionMyProfile', () => {
       userId: 'user_admin',
       roleProfileGranted: false,
     });
-    expect(mocks.assignmentUpsert).toHaveBeenCalledWith({
-      where: { branchId_userId: { branchId: 'branch_default', userId: 'user_admin' } },
-      create: { organizationId: 'org_1', branchId: 'branch_default', userId: 'user_admin' },
-      update: {},
-    });
+    // Owner branch reach is derived; repair persists no generated assignments.
+    expect(mocks.assignmentUpsert).not.toHaveBeenCalled();
     expect(mocks.staffCreate).toHaveBeenCalledOnce();
     expect(mocks.staffCreate.mock.calls[0]![0].data).toMatchObject({
       organizationId: 'org_1',
@@ -275,7 +282,10 @@ describe('administrator repair authorization before writes', () => {
     expect(mocks.jobRoleCreate).not.toHaveBeenCalled();
     expect(mocks.stationCreate).not.toHaveBeenCalled();
     expect(mocks.annotateAudit).not.toHaveBeenCalled();
+    expect(mocks.setStaffJobRoles).not.toHaveBeenCalled();
     expect(mocks.setStaffAccess).not.toHaveBeenCalled();
+    expect(mocks.setStaffCapabilityOverride).not.toHaveBeenCalled();
+    expect(mocks.clearStaffCapabilityOverride).not.toHaveBeenCalled();
   }
   it('denies non-ADMIN with staff:manage without provisioning writes', async () => {
     await expect(caller('EMPLOYEE').provisionMyProfile()).rejects.toMatchObject({
@@ -340,6 +350,104 @@ describe('administrator repair authorization before writes', () => {
     expect(mocks.staffFindUnique).not.toHaveBeenCalled();
     expectNoWrites();
   });
+  const accessMutations: [
+    string,
+    ReturnType<typeof vi.fn>,
+    (staffProfileId: string, role?: string) => Promise<unknown>,
+  ][] = [
+    [
+      'setStaffJobRoles',
+      mocks.setStaffJobRoles,
+      (staffProfileId, role = 'EMPLOYEE') =>
+        caller(role).setStaffJobRoles({
+          branchId: 'branch_default',
+          staffProfileId,
+          jobRoleIds: ['role_with_refunds'],
+        }),
+    ],
+    [
+      'setStaffAccess',
+      mocks.setStaffAccess,
+      (staffProfileId, role = 'EMPLOYEE') =>
+        caller(role).setStaffAccess({
+          branchId: 'branch_default',
+          staffProfileId,
+          jobRoleIds: ['role_with_refunds'],
+          overrides: [{ capability: 'payments:refund', effect: 'ALLOW' }],
+        }),
+    ],
+    [
+      'setStaffCapabilityOverride',
+      mocks.setStaffCapabilityOverride,
+      (staffProfileId, role = 'EMPLOYEE') =>
+        caller(role).setStaffCapabilityOverride({
+          branchId: 'branch_default',
+          staffProfileId,
+          capability: 'payments:refund',
+          effect: 'ALLOW',
+        }),
+    ],
+    [
+      'clearStaffCapabilityOverride',
+      mocks.clearStaffCapabilityOverride,
+      (staffProfileId, role = 'EMPLOYEE') =>
+        caller(role).clearStaffCapabilityOverride({
+          branchId: 'branch_default',
+          staffProfileId,
+          capability: 'payments:refund',
+        }),
+    ],
+  ];
+  const unauthorizedAccessCases = accessMutations.flatMap(([mutation, _writer, run]) =>
+    [
+      ['another staff member', 'staff_target'],
+      ['the acting staff member', 'staff_actor'],
+    ].map(([target, staffProfileId]) => [mutation, target, staffProfileId, run] as const)
+  );
+  it.each(unauthorizedAccessCases)(
+    '%s denies a branch manager from changing access for %s',
+    async (_mutation, _target, staffProfileId, run) => {
+      mocks.can.mockImplementation(
+        async (_subject, capability) => capability !== 'restaurant:configure'
+      );
+      mocks.staffFindMany.mockResolvedValue([
+        {
+          id: 'staff_actor',
+          primaryBranchId: 'branch_default',
+          jobRoles: [{ branchId: 'branch_default' }],
+          directCapabilityGrants: [],
+        },
+      ]);
+      mocks.staffFindUnique.mockResolvedValue({ id: 'staff_actor' });
+
+      await expect(run(staffProfileId)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+
+      expect(mocks.can).toHaveBeenCalledWith(
+        expect.anything(),
+        'restaurant:configure',
+        undefined,
+        expect.objectContaining({ db, source: 'TRPC' })
+      );
+      expect(mocks.resolveStaffCapabilities).toHaveBeenCalledWith(
+        db,
+        'staff_actor',
+        'branch_default'
+      );
+      expect(mocks.staffFindUnique).not.toHaveBeenCalled();
+      expectNoWrites();
+    }
+  );
+  it.each(accessMutations)(
+    '%s allows an organization-wide administrator to change access',
+    async (_mutation, writer, run) => {
+      mocks.staffFindUnique.mockResolvedValue({ id: 'staff_target' });
+
+      await expect(run('staff_target', 'ADMIN')).resolves.toBeDefined();
+
+      expect(mocks.staffFindUnique).toHaveBeenCalledOnce();
+      expect(writer).toHaveBeenCalledOnce();
+    }
+  );
   it.each(['staff_other_tenant', 'staff_missing'])(
     'setStaffAccess denies invisible target %s on an authorized branch without writes',
     async (staffProfileId) => {

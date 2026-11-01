@@ -164,55 +164,85 @@ export const resignationsRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      const resignation = await ctx.db.resignation.findUnique({
-        where: { id: input.id },
-        include: { user: { select: { id: true, role: true, name: true, email: true } } },
-      });
-      if (!resignation) {
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'Resignation not found.' });
-      }
-
-      const allowed = await can(
-        subjectFromSession(ctx.session.user),
-        'resignation:review',
-        {
-          type: 'Resignation',
-          userId: resignation.userId,
-          status: resignation.status,
-          targetRole: resignation.user.role,
-        },
-        { source: 'TRPC', db: ctx.db }
-      );
-      if (!allowed) {
-        throw new TRPCError({
-          code: 'FORBIDDEN',
-          message: 'You do not have permission to review this resignation.',
-        });
-      }
-
       const approved = input.decision === 'APPROVED';
-      const updated = await ctx.db.resignation.update({
-        where: { id: input.id },
-        data: {
-          status: input.decision,
-          reviewedById: ctx.session.user.id,
-          reviewedAt: new Date(),
-          reviewNote: input.reviewNote ?? null,
-          lastWorkingDay: approved ? (input.lastWorkingDay ?? resignation.proposedLastDay) : null,
-        },
-      });
-
-      // IMP-HR-02: off-boarding automation. Once the approved last working day has
-      // arrived (on/before today), deactivate the account. The JWT revalidation
-      // re-reads `status` (~60s), so this also cuts the employee's active sessions
-      // without needing the AUTH-01 token-version column. (A future last day would
-      // be enforced by a scheduled job — not wired here.)
-      if (approved && updated.lastWorkingDay && updated.lastWorkingDay <= new Date()) {
-        await ctx.db.user.update({
-          where: { id: resignation.userId },
-          data: { status: 'INACTIVE' },
+      const organizationId = ctx.entitlements.organizationId;
+      const { resignation, updated } = await ctx.db.$transaction(async (tx) => {
+        // The target's role is part of the authorization decision. Lock both it
+        // and the resignation before re-reading either so a concurrent promotion
+        // cannot make that decision stale before the transition commits.
+        // NO KEY UPDATE still blocks role changes, while allowing reviewer FK
+        // key-share locks when two admins review each other's resignations.
+        await tx.$queryRaw`SELECT r.id FROM "resignations" r
+          JOIN "users" u ON u.id = r."userId" AND u."organizationId" = r."organizationId"
+          WHERE r.id = ${input.id} AND r."organizationId" = ${organizationId}
+          FOR NO KEY UPDATE OF r, u`;
+        const resignation = await tx.resignation.findFirst({
+          where: { id: input.id, organizationId },
+          include: { user: { select: { id: true, role: true, name: true, email: true } } },
         });
-      }
+        if (!resignation) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Resignation not found.' });
+        }
+        if (resignation.status !== 'PENDING') {
+          // A concurrent reviewer can acquire the lock after the winner has
+          // committed. Treat that request as a lost transition, before ABAC's
+          // pending-state rule could turn the race into a permission error.
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: 'This resignation has already been decided.',
+          });
+        }
+
+        const allowed = await can(
+          subjectFromSession(ctx.session.user),
+          'resignation:review',
+          {
+            type: 'Resignation',
+            userId: resignation.userId,
+            status: resignation.status,
+            targetRole: resignation.user.role,
+          },
+          { source: 'TRPC', db: tx }
+        );
+        if (!allowed) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'You do not have permission to review this resignation.',
+          });
+        }
+
+        const transitioned = await tx.resignation.updateMany({
+          where: { id: input.id, organizationId, status: 'PENDING' },
+          data: {
+            status: input.decision,
+            reviewedById: ctx.session.user.id,
+            reviewedAt: new Date(),
+            reviewNote: input.reviewNote ?? null,
+            lastWorkingDay: approved ? (input.lastWorkingDay ?? resignation.proposedLastDay) : null,
+          },
+        });
+        if (transitioned.count === 0) {
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: 'This resignation has already been decided.',
+          });
+        }
+
+        const decided = await tx.resignation.findFirstOrThrow({
+          where: { id: input.id, organizationId },
+        });
+
+        // IMP-HR-02: off-boarding automation. Keep deactivation atomic with the
+        // winning decision so a failed off-boarding cannot leave a partial review.
+        if (approved && decided.lastWorkingDay && decided.lastWorkingDay <= new Date()) {
+          await tx.user.update({
+            where: { organizationId_id: { organizationId, id: resignation.userId } },
+            data: { status: 'INACTIVE' },
+          });
+        }
+
+        return { resignation, updated: decided };
+      });
 
       annotateAudit(ctx, {
         targetType: 'Resignation',
