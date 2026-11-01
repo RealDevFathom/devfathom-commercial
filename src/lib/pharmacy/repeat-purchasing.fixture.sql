@@ -29,15 +29,15 @@ INSERT INTO pharmacy_sales(id,"organizationId","branchId",status,"createdByUserI
 SELECT 'old-'||i,'org_a','history','COMPLETED','synthetic',timestamp '2025-01-01'+i*interval '1 minute',i,'old',
  timestamp '2025-01-01'+i*interval '1 minute',now() FROM generate_series(1,10001) i;
 -- Three selected originals, 1,203 lines: reproduce the reviewed nested-fetch defect.
-INSERT INTO pharmacy_sale_lines(id,"organizationId","branchId","saleId","medicineId","presentationId","packLevelId","saleUnit",quantity,"canonicalUnitsPerSaleUnit","canonicalUnits","unitPriceMinor","proRataCeilingMinor","unitCostMinor","idempotencyKey","createdAt")
+INSERT INTO pharmacy_sale_lines(id,"organizationId","branchId","saleId","medicineId","presentationId","packLevelId","saleUnit",quantity,"canonicalUnitsPerSaleUnit","canonicalUnits","unitPriceMinor","grossMinor","proRataCeilingMinor","unitCostMinor","idempotencyKey","createdAt")
 SELECT s.id||'-line',s."organizationId",s."branchId",s.id,
  CASE WHEN s."organizationId"='org_a' THEN 'm' ELSE 'm_b' END,
  CASE WHEN s."organizationId"='org_a' THEN 'p' ELSE 'p_b' END,
  CASE WHEN s."organizationId"='org_a' THEN 'pack' ELSE 'pack_b' END,
- 'PACK',2402,1,2402,100,100,50,s.id||'-line',s."createdAt"
+ 'PACK',2402,1,2402,100,240200,100,50,s.id||'-line',s."createdAt"
 FROM pharmacy_sales s;
-INSERT INTO pharmacy_sale_lines(id,"organizationId","branchId","saleId","medicineId","presentationId","packLevelId","saleUnit",quantity,"canonicalUnitsPerSaleUnit","canonicalUnits","unitPriceMinor","proRataCeilingMinor","unitCostMinor","idempotencyKey","createdAt")
-SELECT 'extra-'||i,'org_a','b1','a','m','p','pack','PACK',2,1,2,100,100,50,'extra-'||i,'2026-01-01' FROM generate_series(1,1200) i;
+INSERT INTO pharmacy_sale_lines(id,"organizationId","branchId","saleId","medicineId","presentationId","packLevelId","saleUnit",quantity,"canonicalUnitsPerSaleUnit","canonicalUnits","unitPriceMinor","grossMinor","proRataCeilingMinor","unitCostMinor","idempotencyKey","createdAt")
+SELECT 'extra-'||i,'org_a','b1','a','m','p','pack','PACK',2,1,2,100,200,100,50,'extra-'||i,'2026-01-01' FROM generate_series(1,1200) i;
 INSERT INTO pharmacy_tenders(id,"organizationId","branchId","saleId",type,"amountMinor","businessDate","actorId","deviceId","createdAt")
 VALUES ('t','org_a','b1','a','CARD',480200,'2026-01-01','synthetic','synthetic','2026-01-01');
 INSERT INTO pharmacy_refunds(id,"organizationId","branchId","saleId","originalTenderId","amountMinor","businessDate",reason,"actorId","createdAt")
@@ -82,9 +82,10 @@ INSERT INTO pharmacy_sales(id,"organizationId","branchId",status,"createdByUserI
 SELECT 'repeat-'||id,'org_a','semantics','COMPLETED','synthetic',
  CASE WHEN id='same-time' THEN timestamp '2026-01-01' WHEN id='boundary-ms' THEN timestamp '2026-01-31 00:00:00.001' ELSE timestamp '2026-01-31' END,
  2,CASE WHEN id='anonymous' THEN NULL ELSE 'case-'||id END,'2026-01-01',now() FROM repeat_cases;
-INSERT INTO pharmacy_sale_lines(id,"organizationId","branchId","saleId","medicineId","presentationId","packLevelId","saleUnit",quantity,"canonicalUnitsPerSaleUnit","canonicalUnits","unitPriceMinor","proRataCeilingMinor","unitCostMinor","idempotencyKey","createdAt")
+INSERT INTO pharmacy_sale_lines(id,"organizationId","branchId","saleId","medicineId","presentationId","packLevelId","saleUnit",quantity,"canonicalUnitsPerSaleUnit","canonicalUnits","unitPriceMinor","grossMinor","proRataCeilingMinor","unitCostMinor","idempotencyKey","createdAt")
 SELECT s.id||'-line','org_a','semantics',s.id,'m','p','pack','PACK',2,1,2,
- CASE WHEN s.id='case-zero' THEN 0 ELSE 100 END,100,50,s.id||'-line',
+ CASE WHEN s.id='case-zero' THEN 0 ELSE 100 END,
+ CASE WHEN s.id='case-zero' THEN 0 ELSE 200 END,100,50,s.id||'-line',
  CASE WHEN s.id='case-late-line' THEN timestamp '2026-05-02' ELSE timestamp '2026-01-01' END
 FROM pharmacy_sales s WHERE s."branchId"='semantics';
 INSERT INTO pharmacy_tenders(id,"organizationId","branchId","saleId",type,"amountMinor","businessDate","actorId","deviceId","createdAt")

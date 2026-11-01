@@ -148,7 +148,10 @@ describeIfDatabase('pharmacy drawer and close procedures, against PostgreSQL', (
     );
     // A workspace zone other than the default, the runner's and Asia/Karachi.
     await withPlatformDb((db) =>
-      db.organization.update({ where: { id: ORG }, data: { timezone: 'America/Chicago' } })
+      db.organization.update({
+        where: { id: ORG },
+        data: { currency: 'USD', timezone: 'America/Chicago' },
+      })
     );
     await createBranch(ORG, ACTIVE);
     await createBranch(ORG, RETIRED);
@@ -296,6 +299,7 @@ describeIfDatabase('pharmacy drawer and close procedures, against PostgreSQL', (
       timezone: 'America/Chicago',
     });
     await expect(asAdmin((c) => c.counterBranches())).resolves.toMatchObject({
+      currency: 'USD',
       timezone: 'America/Chicago',
     });
     expect(await rowsFor(ACTIVE)).toEqual({ drawers: 1, movements: 3, closed: 1, closes: 0 });

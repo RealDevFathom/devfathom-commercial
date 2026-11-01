@@ -431,7 +431,10 @@ export function moneyErrorResponse(err: unknown): NextResponse | null {
     return json({ error: err.message }, 409);
   }
   if (err instanceof OrderCommandError) {
-    return json({ error: err.message }, err.reason === 'ORDER_NOT_FOUND' ? 404 : 400);
+    return json(
+      { error: err.message },
+      err.reason === 'ORDER_NOT_FOUND' ? 404 : err.reason === 'DAY_CLOSED' ? 409 : 400
+    );
   }
   if (err instanceof BillCommandError) {
     const notFound =
@@ -481,6 +484,7 @@ export function moneyErrorResponse(err: unknown): NextResponse | null {
     const notFound = err.reason === 'CLOSE_NOT_FOUND';
     const conflict =
       err.reason === 'UNSETTLED_BILL' ||
+      err.reason === 'ACTIVE_ORDERS' ||
       err.reason === 'OPEN_DRAWER' ||
       err.reason === 'CLOSE_EXISTS' ||
       err.reason === 'NOTHING_TO_CORRECT' ||
@@ -518,12 +522,12 @@ export async function requireBillInDeviceBranch(
   db: ScopedDb,
   billId: string,
   branchId: string
-): Promise<void> {
+): Promise<boolean> {
   const bill = await db.restaurantBill.findFirst({
     where: { id: billId, branchId },
     select: { id: true },
   });
-  if (!bill) throw new BillCommandError('The bill does not exist.', 'BILL_NOT_FOUND');
+  return bill !== null;
 }
 
 /**
@@ -549,11 +553,19 @@ export function moneyMutationRoute<S extends z.ZodTypeAny>(opts: {
   capability: MoneyCapability;
   run: (args: MoneyCommandArgs<S>) => Promise<unknown>;
   successStatus?: number;
+  /** Resolve bill ids within the authenticated register branch only after the
+   * capability decision, so an unauthorized operator cannot probe bill existence. */
+  obscureBillId?: (data: z.infer<S>) => string;
+  /** Restrict a money route to a physical register before any resource lookup. */
+  deviceKind?: 'POS' | 'KDS';
 }) {
   return withTerminalAuth(
     async (ctx, request) => {
       const operator = requireActingOperator(ctx);
       if (!operator.ok) return operator.response;
+      if (opts.deviceKind && ctx.device.kind !== opts.deviceKind) {
+        return forbidden(`A ${opts.deviceKind} register is required.`);
+      }
 
       const now = new Date();
       const denied = await requireCapability(
@@ -567,11 +579,18 @@ export function moneyMutationRoute<S extends z.ZodTypeAny>(opts: {
 
       const key = idempotencyKeyFromRequest(request);
       if (!key) return missingIdempotencyKey();
-
       const parsedJson = await readJson(request);
       if (!parsedJson.ok) return parsedJson.response;
       const parsed = opts.schema.safeParse(parsedJson.data);
       if (!parsed.success) return invalidBody(parsed.error.issues);
+      if (opts.obscureBillId) {
+        const visible = await requireBillInDeviceBranch(
+          ctx.db,
+          opts.obscureBillId(parsed.data),
+          ctx.device.branchId
+        );
+        if (!visible) return json({ error: 'No settled bill with that id.' }, 404);
+      }
 
       const actor = buildMoneyActor(operator.staffProfileId, ctx.device.id, key);
       const out = await opts.run({ ctx, data: parsed.data, actor, now });
@@ -596,11 +615,15 @@ export function moneyMutationRoute<S extends z.ZodTypeAny>(opts: {
 export function moneyReadRoute(opts: {
   capability: MoneyCapability;
   run: (ctx: TerminalContext, request: Request) => Promise<Response>;
+  deviceKind?: 'POS' | 'KDS';
 }) {
   return withTerminalAuth(
     async (ctx, request) => {
       const operator = requireActingOperator(ctx);
       if (!operator.ok) return operator.response;
+      if (opts.deviceKind && ctx.device.kind !== opts.deviceKind) {
+        return forbidden(`A ${opts.deviceKind} register is required.`);
+      }
 
       const now = new Date();
       const denied = await requireCapability(
@@ -644,6 +667,19 @@ export async function getOrderSettlementForBranch(
   if (!order) return null;
 
   const settlement = await evaluateOrderSettlement(db, orderId);
+  const unbilledItemRows = settlement.unbilledItemIds.length
+    ? await db.restaurantOrderItem.findMany({
+        where: { id: { in: settlement.unbilledItemIds }, orderId },
+        select: {
+          id: true,
+          name: true,
+          quantity: true,
+          seatNumber: true,
+          modifiers: { select: { name: true }, orderBy: { createdAt: 'asc' } },
+        },
+      })
+    : [];
+  const unbilledItemsById = new Map(unbilledItemRows.map((item) => [item.id, item]));
   const billLines = settlement.bills.length
     ? await db.restaurantBillLine.findMany({
         where: { billId: { in: settlement.bills.map((bill) => bill.id) } },
@@ -701,6 +737,20 @@ export async function getOrderSettlementForBranch(
       ? money(order.deliveryFulfillment.deliveryFeeSnapshot)
       : null,
     unbilledItemIds: settlement.unbilledItemIds,
+    unbilledItems: settlement.unbilledItemIds.flatMap((id) => {
+      const item = unbilledItemsById.get(id);
+      return item
+        ? [
+            {
+              id: item.id,
+              name: item.name,
+              quantity: item.quantity,
+              seatNumber: item.seatNumber,
+              modifiers: item.modifiers.map((modifier) => modifier.name),
+            },
+          ]
+        : [];
+    }),
     bills,
   };
 }
@@ -736,7 +786,26 @@ export async function buildReceiptForBranch(db: ScopedDb, billId: string, branch
       receiptNumber: true,
       settledAt: true,
       branch: { select: { name: true, timezone: true } },
-      order: { select: { orderNumber: true, channel: true } },
+      order: {
+        select: {
+          orderNumber: true,
+          channel: true,
+          customer: {
+            select: {
+              loyaltyAccount: {
+                select: {
+                  id: true,
+                  active: true,
+                  walletPasses: {
+                    where: { status: 'ACTIVE' },
+                    select: { platform: true },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
       lines: {
         orderBy: { createdAt: 'asc' },
         select: {
@@ -764,6 +833,23 @@ export async function buildReceiptForBranch(db: ScopedDb, billId: string, branch
   });
   if (!bill) return null;
 
+  const account = bill.order.customer?.loyaltyAccount;
+  const loyaltyWallet =
+    account?.active && account.walletPasses.length > 0
+      ? {
+          // A receipt is a settlement record, so later earns, redemptions, refunds,
+          // and adjustments must not rewrite the balance shown on a historical copy.
+          balance:
+            (
+              await db.loyaltyPointsEntry.aggregate({
+                where: { accountId: account.id, occurredAt: { lte: bill.settledAt! } },
+                _sum: { points: true },
+              })
+            )._sum.points ?? 0,
+          platforms: [...new Set(account.walletPasses.map(({ platform }) => platform))],
+        }
+      : null;
+
   return {
     billId: bill.id,
     orderId: bill.orderId,
@@ -775,6 +861,7 @@ export async function buildReceiptForBranch(db: ScopedDb, billId: string, branch
     receiptNumber: bill.receiptNumber,
     settledAt: bill.settledAt,
     splitKind: bill.splitKind,
+    loyaltyWallet,
     fractionNumerator: bill.fractionNumerator,
     fractionDenominator: bill.fractionDenominator,
     lines: bill.lines.map((line) => ({

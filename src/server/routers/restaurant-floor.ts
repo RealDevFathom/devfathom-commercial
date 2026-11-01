@@ -5,6 +5,7 @@ import { assertInOrganization } from '../org-refs';
 import { router, capabilityProcedure, type TRPCContext } from '../trpc';
 import { annotateAudit } from '../audit';
 import { businessDateToUtcDate } from '@/lib/restaurant/business-date';
+import { can, subjectFromSession } from '@/lib/abac';
 import {
   FloorError,
   createFloor,
@@ -92,6 +93,12 @@ async function assertActiveBranch(ctx: TRPCContext, branchId: string) {
 }
 
 export const restaurantFloorRouter = router({
+  access: readProcedure.query(async ({ ctx }) => ({
+    canManage: await can(subjectFromSession(ctx.session!.user), 'floor:manage', undefined, {
+      db: ctx.db,
+    }),
+  })),
+
   // ── Floors & tables ────────────────────────────────────────────────────────
   listFloors: readProcedure
     .input(z.object({ branchId: z.string(), includeInactive: z.boolean().optional() }).strict())
@@ -503,6 +510,7 @@ export const restaurantFloorRouter = router({
           stationId: z.string(),
           productId: z.string().nullable().optional(),
           categoryId: z.string().nullable().optional(),
+          course: z.number().int().min(1).nullable().optional(),
           priority: z.number().int().optional(),
         })
         .strict()
@@ -518,6 +526,7 @@ export const restaurantFloorRouter = router({
             stationId: rule.stationId,
             productId: rule.productId,
             categoryId: rule.categoryId,
+            course: rule.course,
             priority: rule.priority,
           },
         });

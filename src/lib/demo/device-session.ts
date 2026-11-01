@@ -7,6 +7,7 @@ import type {
 import type { Session } from 'next-auth';
 import { liveDemoAccessExpiry } from '@/lib/auth/session-state';
 import { operatorHasCapability } from '@/lib/restaurant/checkout-routes';
+import { mintPosComposerProof } from '@/lib/restaurant/pos-composer-proof';
 import {
   isDeviceSecretFormat,
   isDeviceUsable,
@@ -201,6 +202,16 @@ export async function prepareDemoDeviceSession(
     deviceSecret,
     branchId: device.branchId,
     sessionToken,
+    composerProof: mintPosComposerProof(
+      {
+        organizationId: organization.id,
+        branchId: device.branchId,
+        deviceId: device.id,
+        sessionId: session.id,
+        staffProfileId: staff.id,
+      },
+      now
+    ),
     session: {
       id: session.id,
       state: 'UNLOCKED' as const,
