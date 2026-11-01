@@ -79,21 +79,26 @@ function SearchableSelectField({
             type="button"
             disabled={field.disabled}
             data-field-name={field.name}
+            data-invalid={fieldError ? '' : undefined}
             aria-label={field.label}
-            aria-invalid={Boolean(fieldError)}
             aria-describedby={fieldError ? errorId : undefined}
             className="flex h-11 w-full items-center justify-between gap-2 rounded-lg border border-border-default bg-card px-3 text-left text-sm outline-none transition hover:bg-surface-sunken focus-visible:border-accent-brand focus-visible:ring-2 focus-visible:ring-accent-brand/15 disabled:cursor-not-allowed disabled:opacity-50"
-          />
+          >
+            <span className={cn('truncate', !selected && 'text-text-muted')}>
+              {selected?.label ?? 'Choose a timezone'}
+            </span>
+            <ChevronDown aria-hidden="true" className="size-4 shrink-0 text-text-muted" />
+          </button>
         }
-      >
-        <span className={cn('truncate', !selected && 'text-text-muted')}>
-          {selected?.label ?? 'Choose a timezone'}
-        </span>
-        <ChevronDown aria-hidden="true" className="size-4 shrink-0 text-text-muted" />
-      </PopoverTrigger>
+      />
       <PopoverContent align="start" className="w-(--anchor-width) min-w-72 p-0">
         <Command value={value}>
-          <CommandInput placeholder="Search city or IANA timezone…" autoFocus />
+          <CommandInput
+            placeholder="Search city or IANA timezone…"
+            aria-invalid={Boolean(fieldError)}
+            aria-describedby={fieldError ? errorId : undefined}
+            autoFocus
+          />
           <CommandList>
             <CommandEmpty>No matching timezone.</CommandEmpty>
             {[...groups.entries()].map(([region, regionOptions]) => (
@@ -274,8 +279,10 @@ export function PlatformCommandForm({
       setFieldErrors(clientFieldErrors);
       setError(`${Object.keys(clientFieldErrors).length} field needs attention`);
       const firstInvalid = Object.keys(clientFieldErrors)[0]!;
-      (form.querySelector(`[data-field-name="${firstInvalid}"]`) as HTMLElement | null)?.focus() ??
-        (form.elements.namedItem(firstInvalid) as HTMLElement | null)?.focus();
+      const invalidControl =
+        (form.querySelector(`[data-field-name="${firstInvalid}"]`) as HTMLElement | null) ??
+        (form.elements.namedItem(firstInvalid) as HTMLElement | null);
+      invalidControl?.focus();
       return;
     }
     if (confirm && !window.confirm(confirm)) return;
@@ -309,9 +316,10 @@ export function PlatformCommandForm({
           const count = Object.keys(visibleErrors).length;
           setError(`${count} ${count === 1 ? 'field needs' : 'fields need'} attention`);
           const firstInvalid = Object.keys(visibleErrors)[0]!;
-          (
-            form.querySelector(`[data-field-name="${firstInvalid}"]`) as HTMLElement | null
-          )?.focus() ?? (form.elements.namedItem(firstInvalid) as HTMLElement | null)?.focus();
+          const invalidControl =
+            (form.querySelector(`[data-field-name="${firstInvalid}"]`) as HTMLElement | null) ??
+            (form.elements.namedItem(firstInvalid) as HTMLElement | null);
+          invalidControl?.focus();
         } else {
           setError(body.error ?? body.details?.[0]?.message ?? 'The command failed.');
         }
@@ -382,7 +390,11 @@ export function PlatformCommandForm({
                   defaultValue={
                     field.defaultValue !== null && typeof field.defaultValue === 'object'
                       ? JSON.stringify(field.defaultValue, null, 2)
-                      : String(field.defaultFrom?.values[selectValues[field.defaultFrom.field] ?? ''] ?? field.defaultValue ?? '')
+                      : String(
+                          field.defaultFrom?.values[selectValues[field.defaultFrom.field] ?? ''] ??
+                            field.defaultValue ??
+                            ''
+                        )
                   }
                   placeholder={field.placeholder}
                   rows={field.type === 'json' ? 6 : 3}
@@ -445,11 +457,18 @@ export function PlatformCommandForm({
                   defaultValue={
                     typeof field.defaultValue === 'boolean'
                       ? undefined
-                      : String(field.defaultFrom?.values[selectValues[field.defaultFrom.field] ?? ''] ?? field.defaultValue ?? '')
+                      : String(
+                          field.defaultFrom?.values[selectValues[field.defaultFrom.field] ?? ''] ??
+                            field.defaultValue ??
+                            ''
+                        )
                   }
                   placeholder={field.format === 'time24' ? 'HH:MM' : field.placeholder}
                   min={field.min}
-                  max={field.defaultFrom?.values[selectValues[field.defaultFrom.field] ?? ''] ?? field.max}
+                  max={
+                    field.defaultFrom?.values[selectValues[field.defaultFrom.field] ?? ''] ??
+                    field.max
+                  }
                   step={field.step}
                   inputMode={field.format === 'time24' ? 'numeric' : undefined}
                   maxLength={field.format === 'time24' ? 5 : undefined}

@@ -176,7 +176,6 @@ pending OS spool behavior, lost acknowledgement/restart without duplicate output
 No physical printer, native Windows spooler, macOS queue, or browser acceptance is claimed here.
 Receipt designer/UI, shared rendering and other verticals remain their owners' separate lanes.
 
-
 ## One-use bridge enrollment
 
 In **Restaurant → Devices**, choose **Enroll print bridge**, name the host, and explicitly select
@@ -216,7 +215,6 @@ Source checks use mocked exchanges and synthetic files. Enrollment migrations, d
 authenticated browser behavior, native spoolers and physical output still require separately authorized
 runtime acceptance. This source integration does not authorize startup or deployment.
 
-
 ## Printer inventory source foundation
 
 Device-management APIs now support optional 1–20 printer entries while creating a new bridge,
@@ -241,7 +239,6 @@ Inventory loads through management authorization independently of the device dir
 
 This is source-level integration. Browser/visual, live database, concurrency, and physical-printing acceptance remain separate gates. Existing route and job targets retain their address-based meaning.
 
-
 ### Registered printer routing compatibility
 
 Print routing accepts an optional nullable `registeredPrinterId` beside the raw-address
@@ -262,7 +259,6 @@ including a prior registered job after the configuration changes to a raw-only r
 This is source-level routing support. Settings selection, inventory editing/retirement,
 telemetry writes, paper-width behavior, live database/RLS/concurrency/migration checks,
 and physical printer acceptance remain separate gates.
-
 
 ### Selecting registered printers in Settings
 
@@ -288,7 +284,6 @@ paper output. Server-side money permissions still apply.
 Visual/browser, live database/concurrency, connectivity, telemetry, printer retirement,
 paper-width behavior and physical-printer acceptance remain separate gates.
 
-
 ### Editing printer names
 
 Devices → Printer inventory can rename an existing printer within an authorized active
@@ -312,7 +307,6 @@ Address/bridge edits, retirement, observed status writes and paper-width output 
 separate work. Runtime database/concurrency, browser and physical-printer checks remain
 unrun; this source support does not establish those acceptance gates.
 
-
 ### Atomic Settings routing expectations
 
 Settings sends its saved `expectedConfig` with routing updates. The server compares the complete
@@ -334,7 +328,6 @@ The source migration already defines route-scope uniqueness with `NULLS NOT DIST
 divergent database with duplicate scopes may produce conservative refresh conflicts. Nested
 tenant transactions retain their outer isolation level. Runtime database/RLS/concurrency,
 visual behavior and physical printer output remain separate acceptance gates.
-
 
 ### Registered kitchen/bar paper-width snapshots
 
@@ -362,7 +355,6 @@ plan before enabling enriched writes. Physical printers, runtime database behavi
 future width-edit concurrency remain separate acceptance gates; no historical backfill or
 automatic physical retry is introduced.
 
-
 ### Printer soft-retirement policy
 
 The [soft-retirement policy and backend admission](../../specs/printer-soft-retirement.md)
@@ -373,7 +365,6 @@ reviewed transaction and locking contract before a retirement writer can be enab
 
 This was a policy-only checkpoint before the backend and inventory UI slices. The one-way
 retirement path is now present in source; restoration remains outside this contract.
-
 
 ### Registered admission row locking
 
@@ -388,7 +379,6 @@ All locks belong to the existing outer tenant transaction. A stale higher-isolat
 snapshot cannot silently bypass the current printer locking read. This source dependency
 does not add retirement state or enable retirement writes; database concurrency and
 reader/writer rollout remain unaccepted runtime gates.
-
 
 ### Printer retirement backend
 

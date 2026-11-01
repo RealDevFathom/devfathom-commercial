@@ -20,6 +20,7 @@ import {
   beginReplay,
   buildReplayRequest,
   classifyReplayOutcome,
+  composerProofNeedsRenewal,
   countQueuedCommands,
   createQueueSnapshot,
   discardQueuedWork,
@@ -50,6 +51,7 @@ import {
 import { addItemBody, fireBody, openOrderBody } from './terminal-orders';
 
 const DEVICE = 'device-1';
+const OPERATOR = 'staff-1';
 const scope: PosScope = { organizationId: 'org-1', branchId: 'branch-1', deviceId: DEVICE };
 
 /** Deterministic ids: `c1`, `c2`, … so assertions can name a command. */
@@ -61,6 +63,8 @@ function ids(prefix = 'c') {
 function draftInput(overrides: Partial<PosDraftInput> = {}): PosDraftInput {
   return {
     deviceId: DEVICE,
+    composerStaffProfileId: OPERATOR,
+    composerProof: 'signed-composer-proof',
     catalogVersion: 'v1:aaaa',
     clientOriginAt: '2026-08-27T10:00:00.000Z',
     open: { channel: 'DINE_IN', tableIds: ['t1'], coverCount: 2 },
@@ -190,7 +194,7 @@ describe('FIFO replay by persisted sequence, never a clock (criterion 3)', () =>
     ]);
     expect(snapshot.drafts.map((d) => d.sequence)).toEqual([1, 2, 3]);
 
-    const next = nextReplayCommand(snapshot, DEVICE);
+    const next = nextReplayCommand(snapshot, DEVICE, OPERATOR);
     expect(next.status).toBe('READY');
     if (next.status !== 'READY') return;
     expect(next.draft.sequence).toBe(1);
@@ -202,7 +206,7 @@ describe('FIFO replay by persisted sequence, never a clock (criterion 3)', () =>
     const order: string[] = [];
 
     for (let step = 0; step < 6; step += 1) {
-      const next = nextReplayCommand(snapshot, DEVICE);
+      const next = nextReplayCommand(snapshot, DEVICE, OPERATOR);
       if (next.status !== 'READY') break;
       order.push(`${next.draft.sequence}:${next.command.kind}`);
       snapshot = beginReplay(snapshot, next.draft.draftId, next.command.commandId);
@@ -223,7 +227,7 @@ describe('FIFO replay by persisted sequence, never a clock (criterion 3)', () =>
       '2:FIRE',
     ]);
     expect(snapshot.drafts.every((d) => d.status === 'COMPLETED')).toBe(true);
-    expect(nextReplayCommand(snapshot, DEVICE).status).toBe('IDLE');
+    expect(nextReplayCommand(snapshot, DEVICE, OPERATOR).status).toBe('IDLE');
   });
 
   it('resumes at the first unacknowledged command after a partial application', () => {
@@ -240,7 +244,7 @@ describe('FIFO replay by persisted sequence, never a clock (criterion 3)', () =>
     expect(snapshot.drafts[0].serverOrderId).toBe('order-1');
     expect(firstUnacknowledged(snapshot.drafts[0])?.kind).toBe('ADD_ITEM');
 
-    const next = nextReplayCommand(snapshot, DEVICE);
+    const next = nextReplayCommand(snapshot, DEVICE, OPERATOR);
     if (next.status !== 'READY') throw new Error('expected a resumable command');
     expect(next.command.kind).toBe('ADD_ITEM');
     // The item command now carries the server's order id, not a local draft id.
@@ -258,7 +262,7 @@ describe('FIFO replay by persisted sequence, never a clock (criterion 3)', () =>
     }).snapshot;
 
     expect(snapshot.drafts[0].status).toBe('QUARANTINED');
-    const next = nextReplayCommand(snapshot, DEVICE);
+    const next = nextReplayCommand(snapshot, DEVICE, OPERATOR);
     if (next.status !== 'READY') throw new Error('expected the second draft to replay');
     expect(next.draft.sequence).toBe(2);
   });
@@ -307,12 +311,13 @@ describe('the crash window: committed server-side, response lost (criterion 3)',
     snapshot = read.state.queue;
 
     // Attempt 2: same command, same key.
-    const next = nextReplayCommand(snapshot, DEVICE);
+    const next = nextReplayCommand(snapshot, DEVICE, OPERATOR);
     if (next.status !== 'READY') throw new Error('expected the open command to be replayable');
     expect(next.command.commandId).toBe(open.commandId);
     const built = buildReplayRequest(next.draft, next.command);
     if (!built.ok) throw new Error('expected a replay request');
     expect(built.request.headers['Idempotency-Key']).toBe(open.idempotencyKey);
+    expect(built.request.headers['X-POS-Composer-Proof']).toBe('signed-composer-proof');
 
     const serverRef = server.submit(built.request.headers['Idempotency-Key']);
     snapshot = applyReplayOutcome(snapshot, {
@@ -383,8 +388,90 @@ describe('the visible 50-draft ceiling and device binding (criterion 3)', () => 
     expect(foreign.ok).toBe(false);
     if (!foreign.ok) expect(foreign.reason).toBe('DEVICE_MISMATCH');
 
-    const replay = nextReplayCommand(snapshot, 'device-2');
+    const replay = nextReplayCommand(snapshot, 'device-2', OPERATOR);
     expect(replay).toEqual({ status: 'REFUSED', reason: 'DEVICE_MISMATCH' });
+  });
+
+  it('refuses to adopt a legacy persisted draft with no composing operator', () => {
+    const snapshot = seeded([draftInput()]);
+    const legacyDraft = snapshot.drafts[0] as Partial<PosQueuedDraft>;
+    delete legacyDraft.composerStaffProfileId;
+    delete legacyDraft.composerProof;
+
+    expect(nextReplayCommand(snapshot, DEVICE, OPERATOR)).toEqual({
+      status: 'REFUSED',
+      reason: 'OPERATOR_MISMATCH',
+      composerStaffProfileIds: [null],
+    });
+  });
+
+  it("sets another operator's draft aside without stranding the current operator's later work", () => {
+    const snapshot = seeded([
+      draftInput({ composerStaffProfileId: 'staff-2', composerProof: 'proof-b' }),
+      draftInput(),
+    ]);
+
+    const next = nextReplayCommand(snapshot, DEVICE, OPERATOR);
+    expect(next.status).toBe('READY');
+    if (next.status === 'READY') {
+      expect(next.draft.composerStaffProfileId).toBe(OPERATOR);
+      expect(next.draft.sequence).toBe(snapshot.drafts[1].sequence);
+    }
+
+    const done = {
+      ...snapshot,
+      drafts: snapshot.drafts.map((draft, index) =>
+        index === 1 ? { ...draft, status: 'COMPLETED' as const } : draft
+      ),
+    };
+    expect(nextReplayCommand(done, DEVICE, OPERATOR)).toEqual({
+      status: 'REFUSED',
+      reason: 'OPERATOR_MISMATCH',
+      composerStaffProfileIds: ['staff-2'],
+    });
+    expect(nextReplayCommand(done, DEVICE, 'staff-2').status).toBe('READY');
+  });
+});
+
+describe('composer proof renewal check', () => {
+  const NOW = Date.parse('2026-10-31T12:00:00.000Z');
+  const proof = (claims: Record<string, unknown>) =>
+    `v1.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.signature`;
+
+  it('skips renewal for a fresh proof bound to the current session', () => {
+    expect(
+      composerProofNeedsRenewal(
+        proof({ sessionId: 'session-1', expiresAt: NOW + 60 * 60 * 1000 }),
+        'session-1',
+        NOW
+      )
+    ).toBe(false);
+  });
+
+  it('renews expired, nearly expired, other-session, and unreadable proofs', () => {
+    expect(
+      composerProofNeedsRenewal(
+        proof({ sessionId: 'session-1', expiresAt: NOW - 1 }),
+        'session-1',
+        NOW
+      )
+    ).toBe(true);
+    expect(
+      composerProofNeedsRenewal(
+        proof({ sessionId: 'session-1', expiresAt: NOW + 60 * 1000 }),
+        'session-1',
+        NOW
+      )
+    ).toBe(true);
+    expect(
+      composerProofNeedsRenewal(
+        proof({ sessionId: 'session-0', expiresAt: NOW + 60 * 60 * 1000 }),
+        'session-1',
+        NOW
+      )
+    ).toBe(true);
+    expect(composerProofNeedsRenewal('signed-composer-proof', 'session-1', NOW)).toBe(true);
+    expect(composerProofNeedsRenewal('v1.%%%.sig', 'session-1', NOW)).toBe(true);
   });
 });
 
@@ -480,13 +567,16 @@ describe('re-auth pauses, confirmed revocation purges (criterion 4)', () => {
     }).snapshot;
 
     expect(snapshot.replay).toBe('PAUSED_REAUTH');
-    expect(nextReplayCommand(snapshot, DEVICE)).toEqual({ status: 'PAUSED', reason: 'REAUTH' });
+    expect(nextReplayCommand(snapshot, DEVICE, OPERATOR)).toEqual({
+      status: 'PAUSED',
+      reason: 'REAUTH',
+    });
     expect(pendingDrafts(snapshot)).toHaveLength(2);
     expect(countQueuedCommands(snapshot)).toBe(6);
     expect(snapshot.drafts[0].commands[0].status).toBe('PENDING');
 
     snapshot = resumeAfterReauth(snapshot);
-    expect(nextReplayCommand(snapshot, DEVICE).status).toBe('READY');
+    expect(nextReplayCommand(snapshot, DEVICE, OPERATOR).status).toBe('READY');
   });
 
   it('purges device-bound work on confirmed revocation, reports the count, and submits nothing later', () => {
@@ -506,7 +596,7 @@ describe('re-auth pauses, confirmed revocation purges (criterion 4)', () => {
     expect(result.discarded).toEqual({ drafts: 2, commands: 6 });
     expect(snapshot.drafts).toHaveLength(0);
     expect(snapshot.replay).toBe('STOPPED_REVOKED');
-    expect(nextReplayCommand(snapshot, DEVICE)).toEqual({
+    expect(nextReplayCommand(snapshot, DEVICE, OPERATOR)).toEqual({
       status: 'STOPPED',
       reason: 'DEVICE_REVOKED',
     });
@@ -662,12 +752,12 @@ describe('review before a stale submission (criterion 5)', () => {
     expect(flagged.flagged).toBe(2);
     expect(flagged.snapshot.drafts.every((d) => d.status === 'NEEDS_REVIEW')).toBe(true);
     // Nothing replays while every draft awaits review — no silent stale submit.
-    expect(nextReplayCommand(flagged.snapshot, DEVICE).status).toBe('IDLE');
+    expect(nextReplayCommand(flagged.snapshot, DEVICE, OPERATOR).status).toBe('IDLE');
 
     const restored = markDraftsForCatalogReview(flagged.snapshot, catalog({ version: 'v1:cccc' }));
     expect(restored.flagged).toBe(0);
     expect(restored.snapshot.drafts.every((d) => d.status === 'QUEUED')).toBe(true);
-    expect(nextReplayCommand(restored.snapshot, DEVICE).status).toBe('READY');
+    expect(nextReplayCommand(restored.snapshot, DEVICE, OPERATOR).status).toBe('READY');
   });
 
   it('leaves a quarantined draft alone on refresh', () => {

@@ -7,6 +7,7 @@ import { ensurePlatformModule, seedDepartments } from '@/lib/test-support/depart
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
 process.env.PLATFORM_ENCRYPTION_KEY ??= randomBytes(32).toString('base64');
+process.env.AUTH_SECRET ??= randomBytes(32).toString('base64');
 
 const describeIfDatabase = TEST_DATABASE_URL ? describe : describe.skip;
 const suffix = randomBytes(6).toString('hex');
@@ -58,6 +59,7 @@ type Deps = {
 };
 
 let deps: Deps;
+const composerProofs = new Map<string, string>();
 let posA: Device;
 let posB: Device;
 let kdsA: Device;
@@ -83,6 +85,8 @@ async function call(
   const headers: Record<string, string> = { 'content-type': 'application/json' };
   if (options.secret) headers.authorization = `Bearer ${options.secret}`;
   if (options.session) headers['x-terminal-session'] = options.session;
+  const composerProof = options.session ? composerProofs.get(options.session) : undefined;
+  if (composerProof) headers['x-pos-composer-proof'] = composerProof;
   if (options.key) headers['idempotency-key'] = options.key;
   const url = new URL('https://tenant.test/api/restaurant/acceptance');
   for (const [name, value] of Object.entries(options.query ?? {})) {
@@ -142,6 +146,8 @@ async function establishUnlock(
     body: { staffProfileId, type: 'PIN', secret: pin },
   });
   expect(unlocked.status).toBe(200);
+  expect(unlocked.json.composerProof).toEqual(expect.any(String));
+  composerProofs.set(token, unlocked.json.composerProof as string);
   return token;
 }
 
@@ -381,6 +387,7 @@ beforeAll(async () => {
             { capability: 'payments:collect', effect: 'ALLOW' },
             { capability: 'coauth:approve', effect: 'ALLOW' },
             { capability: 'orders:take', effect: 'ALLOW' },
+            { capability: 'kitchen:operate', effect: 'ALLOW' },
           ],
         },
       },
@@ -489,7 +496,12 @@ beforeAll(async () => {
         id: ids.orderRoleB,
         key: `wha49_orders_b_${suffix}`,
         name: 'WHA-49 Order Taking',
-        permissions: { create: [{ capability: 'orders:take', effect: 'ALLOW' }] },
+        permissions: {
+          create: [
+            { capability: 'orders:take', effect: 'ALLOW' },
+            { capability: 'kitchen:operate', effect: 'ALLOW' },
+          ],
+        },
       },
     });
     await tx.user.create({

@@ -72,4 +72,3 @@ export function resolveTransport(printerId: string, platform = process.platform)
   }
   return { kind: 'device', path };
 }
-

@@ -33,6 +33,8 @@ export type OrderDetail = {
   orderNumber: number;
   status: string;
   channel: string;
+  deliveryStatus?: string | null;
+  settled?: boolean;
   publicationId: string | null;
   coverCount: number | null;
   items: OrderItem[];
@@ -40,6 +42,14 @@ export type OrderDetail = {
   tables: { id: string; tableId: string; active: boolean }[];
   totals: { subtotal: string; tax: string; serviceCharge: string; deliveryFee?: string };
 };
+
+export function canCloseDeliveredOrder(
+  order: Pick<OrderDetail, 'channel' | 'deliveryStatus' | 'settled'>
+) {
+  return (
+    order.channel === 'DELIVERY' && order.deliveryStatus === 'DELIVERED' && order.settled === true
+  );
+}
 
 export type VoidItemInput = {
   itemId: string;
@@ -130,7 +140,11 @@ export function OrderTicketPanel({
       setVoidError('Select a manager and enter their 4–8 digit PIN.');
       return;
     }
-    if (postPrep && managerId.trim() === actingOperatorId) {
+    if (
+      postPrep &&
+      managerId.trim() === actingOperatorId &&
+      !operators.some((operator) => operator.id === managerId.trim() && operator.canSelfApprove)
+    ) {
       setVoidError('The acting operator cannot approve their own void.');
       return;
     }
@@ -169,6 +183,9 @@ export function OrderTicketPanel({
       !activeTables.includes(table.id) &&
       (!table.occupied || table.activeOrderIds.includes(order.id))
   );
+  const shouldCollectPayment =
+    !canCloseDeliveredOrder(order) &&
+    (order.status === 'PAYMENT_PENDING' || order.channel === 'DELIVERY');
 
   return (
     <>
@@ -195,7 +212,7 @@ export function OrderTicketPanel({
               type="button"
               onClick={onSend}
               disabled={pending}
-              className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
+              className="h-11 shadow-none hover:translate-y-0 active:translate-y-0"
             >
               Send whole order
             </Button>
@@ -213,7 +230,7 @@ export function OrderTicketPanel({
                   variant="outline"
                   onClick={() => onReprint(ticket.id)}
                   disabled={pending}
-                  className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
+                  className="h-11 shadow-none hover:translate-y-0 active:translate-y-0"
                 >
                   Reprint KOT {ticket.ticketNumber}
                 </Button>
@@ -238,18 +255,20 @@ export function OrderTicketPanel({
                         <Button
                           type="button"
                           variant="outline"
+                          size="touch"
                           onClick={() => onHold(course)}
                           disabled={pending}
-                          className="h-11 shadow-none hover:translate-y-0 active:translate-y-0"
+                          className="shadow-none hover:translate-y-0 active:translate-y-0"
                         >
                           Hold
                         </Button>
                         <Button
                           type="button"
                           variant="outline"
+                          size="touch"
                           onClick={() => onFire(course)}
                           disabled={pending}
-                          className="h-11 shadow-none hover:translate-y-0 active:translate-y-0"
+                          className="shadow-none hover:translate-y-0 active:translate-y-0"
                         >
                           Fire
                         </Button>
@@ -281,7 +300,7 @@ export function OrderTicketPanel({
                                   variant="outline"
                                   onClick={() => onServed(item.id)}
                                   disabled={pending}
-                                  className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
+                                  className="h-11 shadow-none hover:translate-y-0 active:translate-y-0"
                                 >
                                   Mark served
                                 </Button>
@@ -289,9 +308,10 @@ export function OrderTicketPanel({
                               <Button
                                 type="button"
                                 variant="destructive"
+                                size="touch"
                                 onClick={() => openVoid(item)}
                                 disabled={pending || item.status === 'VOIDED'}
-                                className="h-11 shadow-none hover:translate-y-0 active:translate-y-0"
+                                className="shadow-none hover:translate-y-0 active:translate-y-0"
                               >
                                 Void {item.name}
                               </Button>
@@ -312,7 +332,7 @@ export function OrderTicketPanel({
                                       }))
                                     }
                                     placeholder="Remake reason"
-                                    className="h-8"
+                                    className="h-11"
                                   />
                                 </div>
                                 <Button
@@ -320,7 +340,7 @@ export function OrderTicketPanel({
                                   variant="outline"
                                   disabled={pending || !remakeReasons[item.id]?.trim()}
                                   onClick={() => onRemake(item.id, remakeReasons[item.id].trim())}
-                                  className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
+                                  className="h-11 shadow-none hover:translate-y-0 active:translate-y-0"
                                 >
                                   Request remake
                                 </Button>
@@ -441,22 +461,12 @@ export function OrderTicketPanel({
             <Button
               type="button"
               data-pos-pay
-              variant={
-                order.status === 'PAYMENT_PENDING' || order.channel === 'DELIVERY'
-                  ? 'default'
-                  : 'outline'
-              }
-              onClick={
-                order.status === 'PAYMENT_PENDING' || order.channel === 'DELIVERY'
-                  ? onCollectPayment
-                  : onClose
-              }
+              variant={shouldCollectPayment ? 'default' : 'outline'}
+              onClick={shouldCollectPayment ? onCollectPayment : onClose}
               disabled={pending}
               className="h-11 shrink-0 shadow-none hover:translate-y-0 active:translate-y-0"
             >
-              {order.status === 'PAYMENT_PENDING' || order.channel === 'DELIVERY'
-                ? 'Collect payment'
-                : 'Close order'}
+              {shouldCollectPayment ? 'Collect payment' : 'Close order'}
             </Button>
           </div>
         </div>
@@ -496,7 +506,9 @@ export function OrderTicketPanel({
                     <RestaurantStaffSelect
                       id="manager-id"
                       required
-                      staff={operators.filter((operator) => operator.id !== actingOperatorId)}
+                      staff={operators.filter(
+                        (operator) => operator.id !== actingOperatorId || operator.canSelfApprove
+                      )}
                       value={managerId}
                       onChange={setManagerId}
                       label="Approving manager"

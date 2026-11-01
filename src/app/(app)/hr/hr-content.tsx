@@ -334,7 +334,7 @@ function HrOverview({ isAdmin }: { isAdmin: boolean }) {
                     <span
                       className={cn(
                         'rounded-md px-2 py-0.5 text-[10px] font-medium shrink-0',
-                        departmentColors[u.department]
+                        departmentColors[u.department] ?? 'bg-secondary text-muted-foreground'
                       )}
                     >
                       {u.department.charAt(0) + u.department.slice(1).toLowerCase()}

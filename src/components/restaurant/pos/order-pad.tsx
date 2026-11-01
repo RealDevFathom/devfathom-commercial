@@ -155,8 +155,8 @@ export function OrderPad({ demo = false }: { demo?: boolean }) {
       busy={pos.busy}
     >
       <div className="flex h-full min-h-0 flex-col">
-        <header className="flex h-10 shrink-0 items-center gap-2 border-b border-border-subtle px-2">
-          <h1 className="text-sm font-semibold leading-5 text-text-strong">Order pad</h1>
+        <header className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border-subtle p-2">
+          <h1 className="shrink-0 text-sm font-semibold leading-5 text-text-strong">Order pad</h1>
           <p className="hidden text-xs text-text-muted md:block">F2 search · Enter add · F9 pay</p>
           <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-1">
             <StatusPill {...pos.operatorStatus} />
@@ -171,13 +171,13 @@ export function OrderPad({ demo = false }: { demo?: boolean }) {
               variant="outline"
               onClick={workspace.lockTerminal}
               disabled={pos.busy}
-              className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
+              className="h-11 shadow-none hover:translate-y-0 active:translate-y-0"
             >
               {pos.pending === 'lock' ? 'Locking…' : 'Lock terminal'}
             </Button>
           </div>
         </header>
-        <div className="flex min-h-8 shrink-0 items-center px-2">
+        <div className="flex min-h-11 shrink-0 items-center px-2">
           {pos.pending ? (
             <Notice
               notice={{ tone: 'warning', message: 'Request pending. Controls are paused.' }}
@@ -219,7 +219,9 @@ export function OrderPad({ demo = false }: { demo?: boolean }) {
                     <Button
                       type="button"
                       variant="outline"
-                      disabled={!pos.online || pos.busy}
+                      disabled={
+                        !pos.online || pos.busy || draft.review?.reason === 'COMPOSER_UNVERIFIED'
+                      }
                       onClick={workspace.sendReviewedOrder(draft)}
                     >
                       Send deliberately
@@ -239,13 +241,13 @@ export function OrderPad({ demo = false }: { demo?: boolean }) {
           </SectionCard>
         ) : null}
 
-        <div className="grid min-h-0 flex-1 grid-cols-1 gap-2 overflow-hidden p-2 md:grid-cols-[minmax(0,1fr)_minmax(18rem,22rem)]">
-          <div className="flex min-h-0 min-w-0 flex-col gap-2 overflow-hidden md:col-start-2 md:row-start-1">
+        <div className="grid min-h-0 flex-1 auto-rows-max grid-cols-1 gap-2 overflow-y-auto p-2 md:auto-rows-auto md:overflow-hidden md:grid-cols-[minmax(0,1fr)_minmax(18rem,22rem)]">
+          <div className="flex min-h-0 min-w-0 flex-col gap-2 overflow-y-auto md:col-start-2 md:row-start-1">
             <SectionCard
               compact
               eyebrow="New check"
               title="Open order"
-              className="flex min-h-0 flex-1 flex-col overflow-hidden"
+              className="flex shrink-0 flex-col"
             >
               <form onSubmit={workspace.openOrder} className="flex min-h-0 flex-1 flex-col gap-2">
                 <div className="min-h-0 flex-1 space-y-2 overflow-y-auto">
@@ -450,7 +452,7 @@ export function OrderPad({ demo = false }: { demo?: boolean }) {
                         !pos.deliveryZoneId ||
                         pos.draftLines.length === 0))
                   }
-                  className="h-9 w-full shrink-0 shadow-none hover:translate-y-0 active:translate-y-0"
+                  className="h-11 w-full shrink-0 shadow-none hover:translate-y-0 active:translate-y-0"
                 >
                   {pos.pending === 'open'
                     ? 'Sending…'
@@ -466,7 +468,7 @@ export function OrderPad({ demo = false }: { demo?: boolean }) {
               actions={
                 <span className="flex min-w-24 flex-col items-end text-right">
                   <span className="font-mono text-[10px] uppercase tracking-wide text-text-muted">
-                    Cash total
+                    Estimated cash total
                   </span>
                   <span className="font-mono text-sm tabular-nums text-text-strong">
                     {draftCheckTotal(pos)}
@@ -501,7 +503,7 @@ export function OrderPad({ demo = false }: { demo?: boolean }) {
                   {pos.draftLines.map((line) => (
                     <div
                       key={line.lineId}
-                      className="flex min-h-8 items-center justify-between gap-2"
+                      className="flex min-h-11 items-center justify-between gap-2"
                     >
                       <span className="min-w-0">
                         <span className="block truncate text-sm">
@@ -516,7 +518,7 @@ export function OrderPad({ demo = false }: { demo?: boolean }) {
                           type="button"
                           variant="outline"
                           aria-label={`Decrease ${line.name}`}
-                          className="size-8 px-0 shadow-none hover:translate-y-0 active:translate-y-0"
+                          className="size-11 shrink-0 px-0 shadow-none hover:translate-y-0 active:translate-y-0"
                           disabled={pos.busy || line.quantity <= 1}
                           onClick={workspace.adjustDraftQuantity(line.lineId, -1)}
                         >
@@ -529,7 +531,7 @@ export function OrderPad({ demo = false }: { demo?: boolean }) {
                           type="button"
                           variant="outline"
                           aria-label={`Increase ${line.name}`}
-                          className="size-8 px-0 shadow-none hover:translate-y-0 active:translate-y-0"
+                          className="size-11 shrink-0 px-0 shadow-none hover:translate-y-0 active:translate-y-0"
                           disabled={pos.busy}
                           onClick={workspace.adjustDraftQuantity(line.lineId, 1)}
                         >
@@ -538,7 +540,7 @@ export function OrderPad({ demo = false }: { demo?: boolean }) {
                         <Button
                           type="button"
                           variant="outline"
-                          className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
+                          className="h-11 shadow-none hover:translate-y-0 active:translate-y-0"
                           disabled={pos.busy}
                           onClick={workspace.removeDraftLine(line)}
                         >
@@ -550,7 +552,7 @@ export function OrderPad({ demo = false }: { demo?: boolean }) {
                   <Button
                     type="button"
                     variant="destructive"
-                    className="h-8 w-full shadow-none hover:translate-y-0 active:translate-y-0"
+                    className="h-11 w-full shadow-none hover:translate-y-0 active:translate-y-0"
                     disabled={pos.busy}
                     onClick={workspace.discardDraft}
                   >
@@ -562,7 +564,7 @@ export function OrderPad({ demo = false }: { demo?: boolean }) {
 
             <SectionCard
               compact
-              className="min-h-0 shrink"
+              className="shrink-0"
               eyebrow="Resume"
               title="Open orders"
               actions={
@@ -601,12 +603,12 @@ export function OrderPad({ demo = false }: { demo?: boolean }) {
                 </div>
               )}
             </SectionCard>
-            <div className="min-h-0 flex-1">
+            <div className="min-h-96 shrink-0">
               <OrderTicketPanel {...workspace.orderTicketPanelProps} />
             </div>
           </div>
 
-          <div className="min-h-0 min-w-0 md:col-start-1 md:row-start-1">
+          <div className="min-h-128 min-w-0 md:min-h-0 md:col-start-1 md:row-start-1">
             <MenuGrid {...workspace.menuGridProps} />
           </div>
         </div>

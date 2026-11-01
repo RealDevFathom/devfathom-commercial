@@ -25,6 +25,37 @@ function enterCash() {
   fireEvent.change(screen.getByLabelText('Cash received'), { target: { value: '200.00' } });
 }
 
+describe('#710 Raast / wallet counter controls', () => {
+  it.each(['RAAST', 'JAZZCASH', 'EASYPAISA'])('shows %s merchant details and requires payer plus reference', async (type) => {
+    const onTender = vi.fn().mockResolvedValue({ status: 'accepted', message: 'Payment recorded.' });
+    setup({ onTender, manualSettings: { [type]: { destination: 'PK00MERCHANT', qrImageDataUrl: 'data:image/png;base64,aGVsbG8=', allowReferenceSkip: false } } });
+    fireEvent.change(screen.getByLabelText('Tender'), { target: { value: type } });
+    expect(screen.getByAltText(`${type} merchant QR`)).toBeVisible();
+    expect(screen.getByText('PKR 250.00')).toBeVisible();
+    expect(screen.getByText('PK00MERCHANT')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Payer’s name'), { target: { value: 'Ayesha' } });
+    fireEvent.change(screen.getByLabelText('Transaction ID (last 4–6 digits)'), { target: { value: '123' } });
+    expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Transaction ID (last 4–6 digits)'), { target: { value: '001234' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
+    await waitFor(() => expect(onTender).toHaveBeenCalledWith({ type, amountMinor: 25000, payerName: 'Ayesha', providerRef: '001234' }, { amount: '', cashReceived: '' }));
+  });
+  it('shows an explicit skip only when branch policy allows it', async () => {
+    const { props } = setup({ manualSettings: { RAAST: { destination: 'Till 123', allowReferenceSkip: true } } });
+    fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'RAAST' } });
+    fireEvent.change(screen.getByLabelText('Payer’s name'), { target: { value: 'Ayesha' } });
+    fireEvent.click(screen.getByLabelText('Skip reference under branch policy'));
+    fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
+    await waitFor(() => expect(props.onTender).toHaveBeenCalledWith({ type: 'RAAST', amountMinor: 25000, payerName: 'Ayesha', referenceSkipped: true }, expect.anything()));
+  });
+  it.each([{ manualSettingsLoading: true }, { manualSettingsError: true }, {}])('fails closed for unavailable merchant settings (%j)', (state) => {
+    setup(state);
+    fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'RAAST' } });
+    expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
+  });
+});
+
 describe('CounterTenderPanel acknowledgement', () => {
   it.each(['rejected', 'unknown'] as const)('preserves exact cash input on %s', async (status) => {
     const onTender = vi.fn().mockResolvedValue({ status, message: `Payment ${status}.` });
