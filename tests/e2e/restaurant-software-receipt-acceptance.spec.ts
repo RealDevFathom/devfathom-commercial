@@ -245,6 +245,8 @@ async function establishAsciiPosTerminal(
     },
   });
   expect(unlocked.status(), await unlocked.text()).toBe(200);
+  const { composerProof } = (await unlocked.json()) as { composerProof: string };
+  expect(typeof composerProof).toBe('string');
 
   return {
     deviceId: ASCII_RECEIPT_BRANCH.device.deviceId,
@@ -254,6 +256,7 @@ async function establishAsciiPosTerminal(
       authorization,
       'x-terminal-session': body.sessionToken,
       'x-forwarded-for': device.clientIp,
+      'x-pos-composer-proof': composerProof,
     },
   };
 }
@@ -397,7 +400,9 @@ test('publishes bridge routing and persists a routed KOT job with the fired item
     configuredBranch,
     `branch ${fixture.branchId} must be visible to the configurator`
   ).toBeDefined();
-  expect(configuredBranch!.config.routes).toEqual(expect.arrayContaining(bridgeRoutes));
+  expect(configuredBranch!.config.routes).toEqual(
+    expect.arrayContaining(bridgeRoutes.map((route) => expect.objectContaining(route)))
+  );
 
   pos = await establishPosFixture(request);
   const menuResponse = await request.get('/api/restaurant/orders/effective-menu?channel=DINE_IN', {

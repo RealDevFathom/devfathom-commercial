@@ -29,6 +29,7 @@ const foreignBranch = id('foreign_branch');
 const witness = id('witness');
 const foreignWitness = id('foreign_witness');
 const inactiveWitness = id('inactive_witness');
+const unassignedWitness = id('unassigned_witness');
 const actors = {
   allowed: id('allowed'),
   none: id('none'),
@@ -307,6 +308,7 @@ beforeAll(async () => {
     for (const [userId, organizationId, status] of [
       [witness, org, 'ACTIVE'],
       [inactiveWitness, org, 'INACTIVE'],
+      [unassignedWitness, org, 'ACTIVE'],
       [foreignWitness, otherOrg, 'ACTIVE'],
     ] as const) {
       await db.user.create({
@@ -320,6 +322,14 @@ beforeAll(async () => {
           role: 'EMPLOYEE',
           status,
         },
+      });
+    }
+    // Witnesses must hold an active assignment in the write-off branch. The
+    // unassigned witness deliberately has none; the inactive witness is
+    // assigned so its refusal proves the status check on its own.
+    for (const userId of [witness, inactiveWitness]) {
+      await db.pharmacyBranchAssignment.create({
+        data: { organizationId: org, branchId: branchA, userId, active: true },
       });
     }
   });
@@ -359,7 +369,7 @@ describeDatabase('SEC-374-01 Postgres no-effect authorization regressions', () =
     expect(await snapshot(otherOrg, input.inventoryLotId)).toEqual(before);
   });
 
-  it.each(['missing', 'self', 'inactive', 'foreign'] as const)(
+  it.each(['missing', 'self', 'inactive', 'unassigned', 'foreign'] as const)(
     'still refuses %s witness without effects after actor authorization',
     async (kind) => {
       const input = await fixture();
@@ -367,6 +377,7 @@ describeDatabase('SEC-374-01 Postgres no-effect authorization regressions', () =
         missing: id('missing_witness'),
         self: actors.allowed,
         inactive: inactiveWitness,
+        unassigned: unassignedWitness,
         foreign: foreignWitness,
       }[kind];
       const before = await snapshot(org, input.inventoryLotId);
@@ -413,6 +424,13 @@ describeDatabase('SEC-374-01 Postgres no-effect authorization regressions', () =
       after.balances.reduce((total, balance) => total + balance.onHandUnits, 0) -
         before.balances.reduce((total, balance) => total + balance.onHandUnits, 0)
     ).toBe(result.movement.quantityUnits);
+    // The authorized write-off also posts its valuation in the same transaction.
+    const entries = await admin(org, (db) =>
+      db.financeJournalEntry.findMany({
+        where: { sourceKind: 'PHARMACY_STOCK_WRITE_OFF', sourceId: result.movement.id },
+      })
+    );
+    expect(entries).toHaveLength(1);
   });
 
   it.each(['assignment', 'witness'] as const)(
@@ -551,9 +569,16 @@ describeDatabase('SEC-374-01 Postgres no-effect authorization regressions', () =
   });
 
   it('allows reciprocal witnesses to write off concurrently in different branches', async () => {
+    // Each actor writes in its own branch; each witness must also be assigned
+    // to the branch it witnesses in.
+    const reciprocalAssignments = [
+      { branchId: branchB, userId: actors.unassigned },
+      { branchId: branchA, userId: actors.unassigned },
+      { branchId: branchB, userId: actors.allowed },
+    ];
     await admin(org, (db) =>
-      db.pharmacyBranchAssignment.create({
-        data: { organizationId: org, branchId: branchB, userId: actors.unassigned, active: true },
+      db.pharmacyBranchAssignment.createMany({
+        data: reciprocalAssignments.map((row) => ({ organizationId: org, active: true, ...row })),
       })
     );
     const inputA = { ...(await fixture(branchA)), witnessId: actors.unassigned };
@@ -607,5 +632,10 @@ describeDatabase('SEC-374-01 Postgres no-effect authorization regressions', () =
         expect.objectContaining({ actorId, branchId: input.branchId, witnessId: input.witnessId }),
       ]);
     }
+    await admin(org, (db) =>
+      db.pharmacyBranchAssignment.deleteMany({
+        where: { organizationId: org, OR: reciprocalAssignments },
+      })
+    );
   }, 30_000);
 });

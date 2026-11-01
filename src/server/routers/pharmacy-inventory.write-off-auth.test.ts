@@ -4,7 +4,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Prisma } from '@/generated/prisma/client';
 
+const finance = vi.hoisted(() => ({ postWriteOffEntry: vi.fn() }));
+
 vi.mock('server-only', () => ({}));
+vi.mock('@/lib/pharmacy/finance-postings', () => ({
+  postWriteOffEntry: finance.postWriteOffEntry,
+}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/entitlements', () => ({
@@ -77,7 +82,9 @@ function makeDb() {
   db.$queryRaw.mockImplementation(
     async (query: { strings?: readonly string[]; values?: readonly unknown[] }) => {
       const sql = query.strings?.join('?') ?? '';
-      if (sql.includes('pharmacy_branch_assignments')) {
+      // Actor branch authority; the witness lookup separately requires its own
+      // branch assignment and is answered by the witness mock below.
+      if (sql.includes('FROM pharmacy_branches b')) {
         const assignment = await db.pharmacyBranchAssignment.findFirst({
           where: {
             organizationId: 'org_a',
@@ -143,6 +150,7 @@ function untouched() {
 }
 
 beforeEach(() => {
+  finance.postWriteOffEntry.mockReset();
   db = makeDb();
 });
 
@@ -228,6 +236,11 @@ describe('SEC-374-01 write-off capability and actual-branch authority', () => {
       });
       expect(db.pharmacyStockMovement.create).toHaveBeenCalledTimes(1);
       expect(db.pharmacyCustodyRecord.create).toHaveBeenCalledTimes(1);
+      expect(finance.postWriteOffEntry).toHaveBeenCalledWith(
+        db,
+        { organizationId: 'org_a', branchId: 'branch_a', actorId: 'actor_a' },
+        expect.objectContaining({ stockMovementId: 'movement_a' })
+      );
     }
   );
 
@@ -344,6 +357,13 @@ describe('SEC-374-01 write-off capability and actual-branch authority', () => {
     expect(sql.slice(1, 5).every((statement) => statement.includes('FOR UPDATE'))).toBe(true);
     expect(sql[5]).toContain('FROM users');
     expect(sql[5]).toContain('FOR UPDATE');
+    expect(sql[5]).toContain('pharmacy_branch_assignments');
+    expect(db.$queryRaw.mock.calls[5][0].values).toEqual([
+      'witness_a',
+      'org_a',
+      'org_a',
+      'branch_a',
+    ]);
     expect(db.$transaction).toHaveBeenCalledTimes(1);
   });
 });

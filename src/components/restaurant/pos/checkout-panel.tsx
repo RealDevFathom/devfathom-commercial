@@ -34,6 +34,9 @@ export type TerminalRequestOptions = {
 
 export type TerminalRequest = <T>(path: string, options?: TerminalRequestOptions) => Promise<T>;
 
+// Restore the comp control only when the public endpoint supports it after MVP.
+const COMPLIMENTARY_ITEMS_AVAILABLE = false;
+
 type CheckoutSummary = {
   orderId: string;
   settled: boolean;
@@ -42,6 +45,13 @@ type CheckoutSummary = {
   accountedTotal: string;
   deliveryFeeTotal: string | null;
   unbilledItemIds: string[];
+  unbilledItems: {
+    id: string;
+    name: string;
+    quantity: number;
+    seatNumber: number | null;
+    modifiers: string[];
+  }[];
   bills: {
     id: string;
     status: string;
@@ -99,7 +109,9 @@ function CompControl({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const eligibleLines = lines.filter((line) => Number(line.compAmount) === 0);
-  const managers = operators.filter((operator) => operator.id !== actingOperatorId);
+  const managers = operators.filter(
+    (operator) => operator.id !== actingOperatorId || operator.canSelfApprove
+  );
 
   function reset() {
     setLineId('');
@@ -114,7 +126,7 @@ function CompControl({
     const trimmedReason = reason.trim();
     if (!lineId || !trimmedReason || !managerId || !/^\d{4,8}$/.test(managerPin) || submitting) {
       setError(
-        'Select an item and a distinct manager, enter a reason, and enter the manager’s 4–8 digit PIN.'
+        'Select an item and an eligible approver, enter a reason, and enter their 4–8 digit PIN.'
       );
       return;
     }
@@ -173,7 +185,7 @@ function CompControl({
           <DialogHeader>
             <DialogTitle>Comp bill item</DialogTitle>
             <DialogDescription>
-              Select an item and record distinct manager approval. The original price remains in the
+              Select an item and verify the approving manager PIN. The original price remains in the
               audit record.
             </DialogDescription>
           </DialogHeader>
@@ -285,6 +297,19 @@ function billTone(status: string): StatusTone {
   if (status === 'OPEN') return 'warning';
   if (status === 'VOID') return 'danger';
   return 'neutral';
+}
+
+// A Map (not an object literal) so inherited keys such as `constructor` never resolve,
+// and unknown kinds fall back to fixed copy instead of exposing the raw server value.
+const splitKindLabels = new Map<string, string>([
+  ['NONE', 'Whole order'],
+  ['BY_ITEM', 'By item'],
+  ['BY_SEAT', 'By seat'],
+  ['FRACTIONAL', 'Fractional'],
+]);
+
+function billTitle(splitKind: string) {
+  return splitKindLabels.get(splitKind) ?? 'Bill details';
 }
 
 const blockerLabels: Record<Exclude<CheckoutSummary['blocker'], null>, string> = {
@@ -903,7 +928,7 @@ export function CheckoutPanel({
                     {busy ? 'Creating bill…' : 'Cut single bill'}
                   </Button>
                   <SplitBillDialog
-                    itemIds={summary.unbilledItemIds}
+                    items={summary.unbilledItems}
                     disabled={busy}
                     onSplit={cut}
                   />
@@ -926,7 +951,7 @@ export function CheckoutPanel({
                 title={
                   bill.receiptNumber !== null
                     ? `Receipt ${bill.receiptNumber}`
-                    : bill.splitKind.replaceAll('_', ' ')
+                    : billTitle(bill.splitKind)
                 }
                 actions={<StatusPill status={bill.status} tone={billTone(bill.status)} />}
               >
@@ -960,15 +985,17 @@ export function CheckoutPanel({
                 </dl>
                 {bill.status === 'OPEN' ? (
                   <>
-                    <CompControl
-                      billId={bill.id}
-                      lines={bill.lines ?? []}
-                      request={request}
-                      operators={operators}
-                      actingOperatorId={actingOperatorId}
-                      disabled={busy || tenderPending}
-                      onComped={loadSummary}
-                    />
+                    {COMPLIMENTARY_ITEMS_AVAILABLE ? (
+                      <CompControl
+                        billId={bill.id}
+                        lines={bill.lines ?? []}
+                        request={request}
+                        operators={operators}
+                        actingOperatorId={actingOperatorId}
+                        disabled={busy || tenderPending}
+                        onComped={loadSummary}
+                      />
+                    ) : null}
                     <TenderPad
                       billId={bill.id}
                       amountDue={bill.remainingDue}

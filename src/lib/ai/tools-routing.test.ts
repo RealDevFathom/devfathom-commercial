@@ -15,13 +15,13 @@ vi.mock('@/lib/abac', async (importOriginal) => ({
   can: vi.fn().mockResolvedValue(false),
 }));
 
-const ctx: AssistantContext = {
+const ctx = {
   organizationId: 'org_test',
   userId: 'user_test',
   role: 'EMPLOYEE',
   vertical: 'AGENCY',
   enabledModules: MODULE_CATALOG.map(({ key }) => key),
-};
+} satisfies AssistantContext;
 const adminCtx: AssistantContext = { ...ctx, role: 'ADMIN' };
 
 describe('assistant tool routing', () => {
@@ -55,6 +55,12 @@ describe('assistant tool routing', () => {
         'getOverview',
         'globalSearch',
         'getTeamMember',
+        'searchNotes',
+        'getNote',
+        'createNote',
+        'updateNote',
+        'deleteNote',
+        'setNoteShares',
       ])
         expect(tools).not.toHaveProperty(name);
       expect(tools).toHaveProperty('requestLeave');
@@ -90,6 +96,36 @@ describe('assistant tool routing', () => {
     );
   });
 
+  const noteToolNames = [
+    'searchNotes',
+    'getNote',
+    'createNote',
+    'updateNote',
+    'deleteNote',
+    'setNoteShares',
+  ];
+
+  it.each<[string, string, string[]]>([
+    ['full-set routing', '', noteToolNames],
+    ['client-aware Notes routing', 'find the Acme note', noteToolNames],
+    ['core-tool routing', 'show my tasks', ['searchNotes']],
+  ])('requires every Notes dependency through %s', (_route, hint, expectedNoteTools) => {
+    const noteDependencies = ['notes', 'projects', 'clients'];
+
+    for (const missingModule of noteDependencies) {
+      const tools = buildAssistantTools(
+        { ...ctx, enabledModules: ctx.enabledModules.filter((module) => module !== missingModule) },
+        { hint }
+      );
+      for (const name of noteToolNames) expect(tools).not.toHaveProperty(name);
+    }
+
+    const entitledTools = buildAssistantTools(ctx, { hint });
+    expect(Object.keys(entitledTools).filter((name) => noteToolNames.includes(name))).toEqual(
+      expectedNoteTools
+    );
+  });
+
   it('retains execute authorization on pharmacy reports', async () => {
     const tools = buildAssistantTools({
       ...ctx,
@@ -98,7 +134,7 @@ describe('assistant tool routing', () => {
     });
     const result = await tools.askPharmacyReports.execute!(
       { metricKeys: ['unsupported'] },
-      { toolCallId: 'test', messages: [] }
+      { toolCallId: 'test', messages: [], context: {} }
     );
     expect(result).toMatchObject({ kind: 'refusal' });
   });
@@ -115,7 +151,7 @@ describe('assistant tool routing', () => {
     });
     const result = await tools.askPharmacyReports.execute!(
       { metricKeys: ['unsupported'] },
-      { toolCallId: 'test', messages: [] }
+      { toolCallId: 'test', messages: [], context: {} }
     );
     expect(result).toEqual({ error: 'This action is currently unavailable. Please try again.' });
     expect(log.mock.calls).toEqual([['ASSISTANT_TOOL_EXECUTION_FAILED']]);
@@ -138,6 +174,7 @@ describe('assistant tool routing', () => {
     expect(Object.keys(tools).sort()).toEqual([
       'askPharmacyBusinessInsights',
       'askPharmacyFinanceInsights',
+      'askPharmacyOwnerQuestion',
       'askPharmacyReports',
     ]);
     expect(buildAssistantTools(adminCtx, { hint })).not.toHaveProperty(
@@ -184,7 +221,7 @@ describe('assistant tool routing', () => {
   );
 
   it('retains role and permission denials in both real report executions', async () => {
-    const options = { toolCallId: 'test', messages: [] };
+    const options = { toolCallId: 'test', messages: [], context: {} };
     const pharmacy = buildAssistantTools(
       { ...ctx, vertical: 'PHARMACY', enabledModules: ['pharmacy-reports'] },
       { hint: 'margin retention' }
@@ -239,16 +276,22 @@ describe('assistant tool routing', () => {
 });
 
 describe('composed Pharmacy selection guards', () => {
-  it.each(['ADMIN', 'EMPLOYEE'] as const)('restricts finance and explicit work-pack selection for %s', (role) => {
-    const subject: AssistantContext = {...ctx, role, vertical:'PHARMACY'};
-    for (const hint of ['', 'pharmacy', 'finance']) {
-      const tools=buildAssistantTools(subject,{hint});
-      expect(tools).not.toHaveProperty('askPharmacyWorkPacks');
-      expect('askPharmacyFinanceInsights' in tools).toBe(role==='ADMIN');
+  it.each(['ADMIN', 'EMPLOYEE'] as const)(
+    'restricts finance and explicit work-pack selection for %s',
+    (role) => {
+      const subject: AssistantContext = { ...ctx, role, vertical: 'PHARMACY' };
+      for (const hint of ['', 'pharmacy', 'finance']) {
+        const tools = buildAssistantTools(subject, { hint });
+        expect(tools).not.toHaveProperty('askPharmacyWorkPacks');
+        expect('askPharmacyFinanceInsights' in tools).toBe(role === 'ADMIN');
+        expect('askPharmacyOwnerQuestion' in tools).toBe(role === 'ADMIN');
+      }
+      for (const hint of ['work packs', 'supplier credit follow-up']) {
+        expect(buildAssistantTools(subject, { hint })).toHaveProperty('askPharmacyWorkPacks');
+      }
+      expect(
+        buildAssistantTools({ ...subject, enabledModules: [] }, { hint: 'work packs' })
+      ).not.toHaveProperty('askPharmacyWorkPacks');
     }
-    for(const hint of ['work packs','supplier credit follow-up']) {
-      expect(buildAssistantTools(subject,{hint})).toHaveProperty('askPharmacyWorkPacks');
-    }
-    expect(buildAssistantTools({...subject,enabledModules:[]},{hint:'work packs'})).not.toHaveProperty('askPharmacyWorkPacks');
-  });
+  );
 });

@@ -188,6 +188,17 @@ async function fixture(organizationId: string, branchId: string, label: string):
   });
 }
 
+async function assignWriteOffWitness(db: ScopedDb, f: Fixture) {
+  await db.pharmacyBranchAssignment.create({
+    data: {
+      organizationId: f.organizationId,
+      branchId: f.branchId,
+      userId: WITNESS,
+      active: true,
+    },
+  });
+}
+
 function scopeOf(f: Fixture, branchId?: string) {
   return { organizationId: f.organizationId, branchId: branchId ?? f.branchId, actorId: ACTOR };
 }
@@ -406,25 +417,17 @@ beforeAll(async () => {
     )
   );
   await inOrg(ORG_A, async (db) => {
-    // Fresh tenants need the composite department FK parent before a real
-    // active witness can authorize the write-off valuation/leakage scenarios.
     await db.organizationDepartment.create({
-      data: {
-        organizationId: ORG_A,
-        key: 'LEADERSHIP',
-        name: 'Synthetic leadership',
-        active: true,
-      },
+      data: { organizationId: ORG_A, key: 'pharmacy', name: 'Pharmacy' },
     });
     await db.user.create({
       data: {
         id: WITNESS,
         organizationId: ORG_A,
-        name: 'Synthetic write-off witness',
+        name: 'Write-off witness',
         email: `${WITNESS}@example.test`,
-        department: 'LEADERSHIP',
-        title: 'Inventory manager',
-        role: 'EMPLOYEE',
+        department: 'pharmacy',
+        title: 'Manager',
         status: 'ACTIVE',
       },
     });
@@ -732,6 +735,7 @@ describeIfDatabase('FIN-01 — expiry/damage write-off', () => {
   it('posts a balanced write-off at the lot cost, traceable to the movement', async () => {
     const f = await fixture(ORG_A, branch('writeoff'), 'writeoff');
     const { entry, movementId } = await inOrg(ORG_A, async (db) => {
+      await assignWriteOffWitness(db, f);
       const { lot } = await stockLot(db, f, {
         label: 'writeoff',
         units: 20,
@@ -1343,6 +1347,7 @@ describeIfDatabase('FIN-03 — perpetual valuation, margin and leakage', () => {
   it('reports discount, write-off and shrinkage as separate leakage', async () => {
     const f = await fixture(ORG_A, branch('leakage'), 'leakage');
     const rows = await inOrg(ORG_A, async (db) => {
+      await assignWriteOffWitness(db, f);
       const { lot } = await stockLot(db, f, {
         label: 'leakage',
         units: 60,

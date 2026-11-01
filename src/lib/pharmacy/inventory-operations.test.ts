@@ -1,61 +1,97 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+
 import { writeOff } from './inventory-operations';
 
-describe('inventory write-off witness', () => {
-  function database(witness: { id: string } | null) {
-    return {
-      $queryRaw: vi.fn().mockResolvedValue(witness ? [witness] : []),
-      pharmacyInventoryLot: {
-        findFirst: vi.fn().mockResolvedValue({ id: 'lot', unitsPerPack: 10 }),
-      },
-      pharmacyStockBalance: {
-        findFirst: vi.fn().mockResolvedValue({ onHandUnits: 10, looseUnits: 0 }),
-      },
-      pharmacyStockMovement: { create: vi.fn().mockResolvedValue({ id: 'movement' }) },
-      pharmacyCustodyRecord: { create: vi.fn().mockResolvedValue({ id: 'custody' }) },
-    };
-  }
+const scope = {
+  organizationId: 'org_pharmacy',
+  branchId: 'branch_main',
+  actorId: 'user_actor',
+};
 
-  const input = {
-    inventoryLotId: 'lot',
-    stockLocationId: 'location',
-    units: 10,
-    witnessId: 'witness',
-    reason: 'damaged',
-    evidenceRef: 'evidence',
-    idempotencyKey: 'write-off',
+const input = {
+  inventoryLotId: 'lot_1',
+  stockLocationId: 'location_1',
+  units: 5,
+  witnessId: 'user_witness',
+  reason: 'Damaged stock',
+  evidenceRef: 'photo-1',
+  idempotencyKey: 'write-off-1',
+};
+
+function database(witness: { id: string } | null) {
+  return {
+    $queryRaw: vi.fn().mockResolvedValue(witness ? [witness] : []),
+    pharmacyInventoryLot: {
+      findFirst: vi.fn().mockResolvedValue({ id: input.inventoryLotId, unitsPerPack: 10 }),
+    },
+    pharmacyStockBalance: {
+      findFirst: vi.fn().mockResolvedValue({ onHandUnits: 20, looseUnits: 5 }),
+    },
+    pharmacyStockMovement: {
+      create: vi.fn().mockResolvedValue({ id: 'movement_1' }),
+    },
+    pharmacyCustodyRecord: {
+      create: vi.fn().mockResolvedValue({ id: 'custody_1' }),
+    },
   };
+}
 
-  it('rejects a witness who does not satisfy the active tenant-user lookup before writing stock', async () => {
+describe('writeOff witness validation', () => {
+  it('requires a locked active tenant witness with an active assignment to the current branch', async () => {
     const db = database(null);
 
-    await expect(
-      writeOff(db as never, { organizationId: 'org', branchId: 'branch', actorId: 'actor' }, input)
-    ).rejects.toMatchObject({ reason: 'COAUTH_REQUIRED' });
+    await expect(writeOff(db as unknown as ScopedDb, scope, input)).rejects.toMatchObject({
+      reason: 'COAUTH_REQUIRED',
+    });
+
     expect(db.$queryRaw).toHaveBeenCalledOnce();
     const query = db.$queryRaw.mock.calls[0]![0];
-    expect(query.strings.join('?')).toContain("status = 'ACTIVE'");
-    expect(query.strings.join('?')).toContain('FOR UPDATE');
-    expect(query.values).toEqual(['witness', 'org']);
+    const sql = query.strings.join('?');
+    expect(sql).toContain("u.status = 'ACTIVE'");
+    expect(sql).toContain('pharmacy_branch_assignments');
+    expect(sql).toContain('a.active = true');
+    expect(sql).toContain('FOR UPDATE');
+    expect(query.values).toEqual([
+      input.witnessId,
+      scope.organizationId,
+      scope.organizationId,
+      scope.branchId,
+    ]);
     expect(db.pharmacyInventoryLot.findFirst).not.toHaveBeenCalled();
     expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
     expect(db.pharmacyCustodyRecord.create).not.toHaveBeenCalled();
   });
 
-  it('allows an active user in the tenant to witness the write-off', async () => {
-    const db = database({ id: 'witness' });
+  it('rejects self-witnessing before querying or writing stock', async () => {
+    const db = database({ id: scope.actorId });
 
     await expect(
-      writeOff(db as never, { organizationId: 'org', branchId: 'branch', actorId: 'actor' }, input)
-    ).resolves.toEqual({ movement: { id: 'movement' }, custody: { id: 'custody' } });
+      writeOff(db as unknown as ScopedDb, scope, { ...input, witnessId: scope.actorId })
+    ).rejects.toMatchObject({ reason: 'COAUTH_REQUIRED' });
+
+    expect(db.$queryRaw).not.toHaveBeenCalled();
+    expect(db.pharmacyInventoryLot.findFirst).not.toHaveBeenCalled();
+    expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
+    expect(db.pharmacyCustodyRecord.create).not.toHaveBeenCalled();
+  });
+
+  it('records the write-off when the active tenant witness is assigned to the branch', async () => {
+    const db = database({ id: input.witnessId });
+
+    await expect(writeOff(db as unknown as ScopedDb, scope, input)).resolves.toEqual({
+      movement: { id: 'movement_1' },
+      custody: { id: 'custody_1' },
+    });
+
     expect(db.pharmacyStockMovement.create).toHaveBeenCalledOnce();
     expect(db.pharmacyCustodyRecord.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
-        organizationId: 'org',
-        branchId: 'branch',
-        actorId: 'actor',
-        witnessId: 'witness',
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        actorId: scope.actorId,
+        witnessId: input.witnessId,
       }),
     });
   });
