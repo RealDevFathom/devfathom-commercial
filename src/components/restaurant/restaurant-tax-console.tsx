@@ -17,7 +17,8 @@ const labelClass =
   'block font-mono text-[0.6875rem] font-semibold uppercase tracking-wide text-text-muted';
 const selectClass =
   'h-11 w-full rounded-md border border-input bg-surface-raised px-3 text-sm text-text-strong outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50';
-const formatDate = new Intl.DateTimeFormat('en-PK', { dateStyle: 'medium' });
+const formatDate = (date: Date, timeZone: string) =>
+  new Intl.DateTimeFormat('en-PK', { dateStyle: 'medium', timeZone }).format(date);
 const paymentCategories = ['CASH', 'CARD', 'OTHER'] as const;
 type PaymentCategory = (typeof paymentCategories)[number];
 type RateErrors = Partial<Record<PaymentCategory, string>>;
@@ -140,7 +141,7 @@ export function RestaurantTaxConsole() {
     activation.mutate({
       branchId: String(data.get('branchId') ?? ''),
       profileId: selected.id,
-      effectiveFrom: new Date(`${String(data.get('effectiveFrom'))}T00:00:00.000Z`).toISOString(),
+      effectiveFrom: String(data.get('effectiveFrom') ?? ''),
       approvalReference: String(data.get('approvalReference') ?? '').trim(),
       accountantConfirmation: data.get('accountantConfirmation') === 'on',
       eligibilityConfirmations: selected.eligibilityControls
@@ -499,7 +500,8 @@ export function RestaurantTaxConsole() {
                       <StatusPill status="Published" tone="success" />
                     </div>
                     <p className="mt-2 text-sm text-text-muted">
-                      Effective {formatDate.format(new Date(profile.effectiveFrom))} ·{' '}
+                      Effective{' '}
+                      {formatDate(new Date(profile.effectiveFrom), profile.branch.timezone)} ·{' '}
                       {profile.approvalReference}
                     </p>
                     <p className="mt-1 font-mono text-xs text-text-faint">

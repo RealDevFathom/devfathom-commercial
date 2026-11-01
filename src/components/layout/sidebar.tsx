@@ -678,7 +678,7 @@ export function Sidebar({
       aria-label="Main navigation"
       data-collapsed={collapsed || undefined}
       className={cn(
-        'studio-drawer fixed left-0 top-0 z-40 flex h-dvh flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground transition-[width] duration-300 ease-out',
+        'studio-drawer fixed start-0 top-0 z-40 flex h-dvh flex-col border-e border-sidebar-border bg-sidebar text-sidebar-foreground transition-[width] duration-300 ease-out',
         collapsed ? 'w-16' : 'w-[min(20rem,88vw)]'
       )}
     >

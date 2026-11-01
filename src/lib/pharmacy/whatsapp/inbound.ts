@@ -1,5 +1,5 @@
 import 'server-only';
-import { lockCustomerConsent } from '../consent-writer';
+import { lockCustomerConsent, writePatientConsent } from '../consent-writer';
 
 import {
   listStorefrontCatalog,
@@ -25,6 +25,10 @@ import {
 } from './messages';
 import type { WhatsAppInboundMessage, WhatsAppProvider } from './provider';
 
+/** Promotional purposes a WhatsApp STOP withdraws; service purposes are kept. */
+const STOP_REVOKED_PURPOSES = ['MARKETING', 'LOYALTY'] as const;
+const CONSENT_CHANNELS = ['WHATSAPP', 'SMS', 'EMAIL', 'PHONE', 'IN_PERSON'] as const;
+
 export type InboundOutcome =
   | 'DUPLICATE'
   | 'UNKNOWN_SENDER'
@@ -39,6 +43,7 @@ export type InboundOutcome =
 type KnownCustomer = {
   id: string;
   userId: string | null;
+  patientId: string;
   active: boolean;
   whatsappOptIn: boolean | null;
 };
@@ -59,6 +64,7 @@ export async function findCustomerByWhatsApp(
     select: {
       id: true,
       userId: true,
+      patientId: true,
       active: true,
       whatsappOptIn: true,
       patient: { select: { phone: true } },
@@ -73,6 +79,7 @@ export async function findCustomerByWhatsApp(
   return {
     id: match.id,
     userId: match.userId,
+    patientId: match.patientId,
     active: match.active,
     whatsappOptIn: match.whatsappOptIn,
   };
@@ -198,10 +205,51 @@ export async function handleInboundWhatsAppMessage(
         data: { whatsappOptIn: optIn, whatsappOptInChangedAt: message.receivedAt },
       });
       staleConsent = changed.count === 0;
+      let revoked = 0;
+      // START enables utility replies only. Marketing grants require their own
+      // explicit counter/QR consent; STOP revokes promotional consent on every
+      // channel, while service purposes (dispensing, reminders) are untouched.
+      // Each purpose/channel is judged against its own history, not the utility
+      // flag: a STOP delivered after a newer START still withdraws older grants.
+      if (!optIn) {
+        for (const purpose of STOP_REVOKED_PURPOSES)
+          for (const channel of CONSENT_CHANNELS) {
+            const latest = await db.patientConsent.findFirst({
+              where: { organizationId, patientId: customer.patientId, purpose, channel },
+              orderBy: [{ version: 'desc' }, { id: 'asc' }],
+              select: { granted: true, revokedAt: true, recordedAt: true },
+            });
+            // The patient lock also serializes counter/QR writes. A delayed reply
+            // must not supersede a newer purpose-specific event; STOP wins ties.
+            if (latest && latest.recordedAt > message.receivedAt) continue;
+            // Already revoked: another version would only clutter the history.
+            if (latest && (!latest.granted || latest.revokedAt)) continue;
+            // WhatsApp marketing always gets an explicit refusal row; other
+            // channels/purposes only need one when there is a grant to revoke.
+            if (!latest && (purpose !== 'MARKETING' || channel !== 'WHATSAPP')) continue;
+            await writePatientConsent(
+              db,
+              organizationId,
+              customer.userId ?? `whatsapp:${last4}`,
+              {
+                patientId: customer.patientId,
+                purpose,
+                channel,
+                granted: false,
+                source: 'REPLY',
+              },
+              message.receivedAt
+            );
+            revoked += 1;
+          }
+      }
       if (staleConsent)
         await db.pharmacyMessageLog.update({
           where: { id: inboundId },
-          data: { status: 'IGNORED', error: 'STALE_CONSENT' },
+          data:
+            revoked > 0
+              ? { error: 'STALE_UTILITY_CONSENT' }
+              : { status: 'IGNORED', error: 'STALE_CONSENT' },
         });
     }
     return { customer, inboundId, staleConsent };
@@ -290,7 +338,6 @@ export async function handleInboundWhatsAppMessage(
     WHATSAPP_REPLIES.confirmation({
       reference: placed.orderId.slice(-6).toUpperCase(),
       quantity: parsed.quantity,
-      medicine: placed.medicine,
       branch: placed.branch.name,
     }),
     { orderId: placed.orderId, branchId: placed.branch.id }

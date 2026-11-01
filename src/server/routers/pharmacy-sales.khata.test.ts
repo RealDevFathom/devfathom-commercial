@@ -39,14 +39,20 @@ const input = {
   idempotencyKey: 'key-a',
   familyAccountId: 'family-a',
 };
-function fixture() {
+type Permission = { capability: string; effect: 'ALLOW' | 'DENY' };
+
+function fixture(
+  permissions: Permission[] = [{ capability: 'pharmacy:counter', effect: 'ALLOW' }],
+  role: 'ADMIN' | 'EMPLOYEE' = 'ADMIN',
+  overrides: Permission[] = []
+) {
   const member = {
     status: 'ACTIVE',
     organizationId: 'org-a',
     organizationRole: {
-      permissions: [{ capability: 'pharmacy:counter', effect: 'ALLOW' }],
+      permissions: [...permissions] as { capability: string; effect: string }[],
     },
-    permissionOverrides: [] as { capability: string; effect: string }[],
+    permissionOverrides: [...overrides] as { capability: string; effect: string }[],
   };
   const db = {
     $queryRaw: vi.fn().mockResolvedValue([]),
@@ -85,7 +91,7 @@ function fixture() {
   db.$transaction.mockImplementation(async (callback) => callback(db));
   const user = {
     id: 'owner-a',
-    role: 'ADMIN',
+    role,
     status: 'ACTIVE',
     organizationId: 'org-a',
     passwordAuthenticatedAt: Date.now(),
@@ -125,6 +131,152 @@ beforeEach(() => {
     originalTenderId: 'tender-a',
     amountMinor: 50,
     replayed: false,
+  });
+});
+
+describe('Khata read and write permissions (#831)', () => {
+  const finance: Permission[] = [{ capability: 'reports:financial', effect: 'ALLOW' }];
+  const refund = {
+    branchId: 'branch-a',
+    originalTenderId: 'tender-a',
+    deviceId: 'device-a',
+    businessDate: input.businessDate,
+    amountMinor: 50,
+    reason: 'Return',
+    idempotencyKey: 'refund-a',
+  };
+
+  it('allows reports-only account, statement and tender-outcome reads without posting', async () => {
+    const f = fixture(finance, 'EMPLOYEE');
+    const account = {
+      id: 'family-a',
+      displayName: 'Family',
+      creditLimitMinor: 100,
+      memberId: 'member-a',
+      balanceMinor: 0,
+    };
+    await expect(
+      f.caller().khataAccounts({ branchId: 'branch-a', saleId: 'sale-a' })
+    ).resolves.toEqual([account]);
+    await expect(
+      f.caller().khataStatement({
+        branchId: 'branch-a',
+        saleId: 'sale-a',
+        familyAccountId: 'family-a',
+      })
+    ).resolves.toEqual({ account, generatedAt: expect.any(Date), truncated: false, entries: [] });
+    await expect(f.caller().tenderOutcome(input)).resolves.toEqual({
+      status: 'NOT_FOUND',
+      replayUnsafe: true,
+    });
+    expect(applyPharmacyTender).not.toHaveBeenCalled();
+    expect(refundPharmacyTender).not.toHaveBeenCalled();
+    expect(f.db.pharmacyKhataEvent.create).not.toHaveBeenCalled();
+    expect(f.db.pharmacyKhataLimitDecision.create).not.toHaveBeenCalled();
+  });
+
+  it.each(['KHATA', 'CREDIT'] as const)(
+    'denies reports-only %s charges before writing',
+    async (type) => {
+      const f = fixture(finance, 'EMPLOYEE');
+      await expect(f.caller().tender({ ...input, type })).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'Pharmacy counter permission required.',
+      });
+      expect(f.db.$transaction).not.toHaveBeenCalled();
+      expect(applyPharmacyTender).not.toHaveBeenCalled();
+      expect(f.db.pharmacyKhataEvent.create).not.toHaveBeenCalled();
+      expect(f.db.pharmacyKhataLimitDecision.create).not.toHaveBeenCalled();
+    }
+  );
+
+  it('denies a reports-only credit refund before opening a transaction', async () => {
+    const f = fixture(finance, 'EMPLOYEE');
+    f.db.pharmacyBranchAssignment.findMany.mockResolvedValue([{ branchId: 'branch-a' }]);
+    await expect(f.caller().refundTender(refund)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(f.db.$transaction).not.toHaveBeenCalled();
+    expect(refundPharmacyTender).not.toHaveBeenCalled();
+    expect(f.db.pharmacyKhataEvent.create).not.toHaveBeenCalled();
+  });
+
+  it.each(['pharmacy:receipt', 'pharmacy:dispense'])(
+    'does not let finance plus %s authorize a credit refund',
+    async (capability) => {
+      const f = fixture([...finance, { capability, effect: 'ALLOW' }], 'EMPLOYEE');
+      f.db.pharmacyBranchAssignment.findMany.mockResolvedValue([{ branchId: 'branch-a' }]);
+      await expect(f.caller().refundTender(refund)).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'Pharmacy counter permission required.',
+      });
+      expect(f.db.pharmacyTender.findFirst).toHaveBeenCalled();
+      expect(refundPharmacyTender).not.toHaveBeenCalled();
+      expect(f.db.pharmacyKhataEvent.create).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['*', 'pharmacy:*', 'pharmacy:counter'])(
+    'preserves owner %s access to charges and credit refunds',
+    async (capability) => {
+      const f = fixture([{ capability, effect: 'ALLOW' }]);
+      await expect(f.caller().tender(input)).resolves.toMatchObject({ tenderId: 'tender-a' });
+      expect(applyPharmacyTender).toHaveBeenCalledExactlyOnceWith(
+        f.db,
+        { organizationId: 'org-a', branchId: 'branch-a', actorId: 'owner-a' },
+        { ...input, type: 'CREDIT' }
+      );
+      expect(f.db.pharmacyKhataEvent.create).toHaveBeenCalledExactlyOnceWith({
+        data: expect.objectContaining({ kind: 'CHARGE', amountMinor: 100 }),
+      });
+
+      vi.mocked(refundPharmacyTender).mockResolvedValue({
+        refundId: 'refund-a',
+        originalTenderId: 'tender-a',
+        amountMinor: 50,
+        replayed: false,
+      });
+      f.db.pharmacyKhataEvent.findFirst.mockResolvedValueOnce({
+        id: 'khata:tender-a',
+        familyAccountId: 'family-a',
+      });
+      await expect(f.caller().refundTender(refund)).resolves.toMatchObject({
+        refundId: 'refund-a',
+      });
+      expect(refundPharmacyTender).toHaveBeenCalledExactlyOnceWith(
+        f.db,
+        { organizationId: 'org-a', branchId: 'branch-a', actorId: 'owner-a' },
+        refund
+      );
+      expect(f.db.pharmacyKhataEvent.create).toHaveBeenLastCalledWith({
+        data: expect.objectContaining({ kind: 'PAYMENT', amountMinor: 50 }),
+      });
+    }
+  );
+
+  it.each(['*', 'pharmacy:*', 'pharmacy:counter'])(
+    'lets a counter DENY override owner %s and financial access for writes',
+    async (capability) => {
+      const f = fixture([...finance, { capability, effect: 'ALLOW' }], 'ADMIN', [
+        { capability: 'pharmacy:counter', effect: 'DENY' },
+      ]);
+      await expect(f.caller().tender(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await expect(f.caller().refundTender(refund)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(f.db.$transaction).not.toHaveBeenCalled();
+      expect(applyPharmacyTender).not.toHaveBeenCalled();
+      expect(refundPharmacyTender).not.toHaveBeenCalled();
+      expect(f.db.pharmacyKhataEvent.create).not.toHaveBeenCalled();
+    }
+  );
+
+  it('lets a role counter DENY beat a user counter ALLOW and financial access', async () => {
+    const f = fixture(
+      [...finance, { capability: 'pharmacy:counter', effect: 'DENY' }],
+      'EMPLOYEE',
+      [{ capability: 'pharmacy:counter', effect: 'ALLOW' }]
+    );
+    await expect(f.caller().tender(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(f.db.$transaction).not.toHaveBeenCalled();
+    expect(applyPharmacyTender).not.toHaveBeenCalled();
+    expect(f.db.pharmacyKhataEvent.create).not.toHaveBeenCalled();
   });
 });
 

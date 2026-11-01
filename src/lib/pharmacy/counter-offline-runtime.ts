@@ -64,6 +64,7 @@ import type { CachedSnapshotState, PharmacyOfflineSnapshotKind } from './offline
 import { checkEnvelope } from './offline-snapshot-envelope';
 import type { EnvelopeRejection, OfflineSnapshotEnvelope } from './offline-snapshot-envelope';
 import { applyRecallBulletin, checkSafetyLease } from './offline-safety-lease';
+import { validateManualTenderPolicy } from './manual-payments';
 import type { OfflineRecallBulletin, SafetyLeaseState } from './offline-safety-lease';
 
 /** Bump when the persisted document shape changes; an older record fails closed. */
@@ -328,6 +329,20 @@ export class PharmacyCounterRuntime {
     input: CounterCommandInput,
     matrix: Omit<CounterMatrixInputs, 'snapshots'>
   ): Promise<CounterEnqueueResult> {
+    let queuedInput = input;
+    if (input.action === 'MANUAL_OTC_SALE') {
+      // Only the verified RULES snapshot supplies policy. Never accept a
+      // caller-provided skip flag as permission to omit the reference.
+      const rules = this.payloadFor('RULES') as { manualMerchantPolicies?: unknown } | null;
+      try {
+        const manualCapture = validateManualTenderPolicy(rules?.manualMerchantPolicies, input.payload.manualCapture);
+        // Sign the normalized name the replay schema will verify, including
+        // when an operator entered surrounding whitespace.
+        queuedInput = { ...input, payload: { ...input.payload, manualCapture } };
+      }
+      catch { return { ok: false, reason: 'DENIED_OFFLINE', decision: null,
+        message: 'Check payer name, transaction reference and signed branch merchant details before queuing payment.' }; }
+    }
     const leaseState = this.safetyLeaseState();
     const leaseCheck = checkSafetyLease(leaseState, matrix.nowMs);
     if (!leaseCheck.ok && leaseCheck.reason === 'EXPIRED') {
@@ -355,7 +370,7 @@ export class PharmacyCounterRuntime {
       }
     }
     const batchId = input.bucket?.inventoryLotId ?? null;
-    const result = enqueueCounterCommand(this.queue(), input, {
+    const result = enqueueCounterCommand(this.queue(), queuedInput, {
       ...matrix,
       snapshots: this.cachedSnapshotStates(),
       safetyLeaseOk: leaseCheck.ok,

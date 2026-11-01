@@ -50,6 +50,36 @@ export function parseDelimitedText(text: string): SourceTable {
   return { headers, rows };
 }
 
+/**
+ * Parse delimited text into raw records WITHOUT treating the first line as the
+ * header and without truncating any record to the first line's width.
+ *
+ * For reports that open with a preamble (firm name, report title) above the
+ * real header row. The delimiter is the candidate that appears most often in
+ * any single line among the first `scanLines` lines, so a one-cell title line
+ * cannot force the wrong delimiter. All-blank records are omitted; cells are
+ * trimmed.
+ */
+export function parseDelimitedRecords(text: string, scanLines = 15): string[][] {
+  const withoutBom = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+  if (withoutBom.trim().length === 0) return [];
+
+  const sample = withoutBom.split(/\r?\n/, scanLines);
+  let delimiter = ',';
+  let bestCount = 0;
+  for (const candidate of CANDIDATE_DELIMITERS) {
+    const count = Math.max(0, ...sample.map((line) => countOutsideQuotes(line, candidate)));
+    if (count > bestCount) {
+      delimiter = candidate;
+      bestCount = count;
+    }
+  }
+
+  return splitRecords(withoutBom, delimiter)
+    .map((record) => record.map((cell) => cell.trim()))
+    .filter((record) => record.some((cell) => cell.length > 0));
+}
+
 function detectDelimiter(text: string): string {
   const firstLine = text.split(/\r?\n/, 1)[0] ?? '';
   let best = ',';

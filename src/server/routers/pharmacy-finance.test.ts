@@ -423,3 +423,110 @@ describe('finance comparison boundary', () => {
     expect(mocks.comparison).not.toHaveBeenCalled();
   });
 });
+
+describe('cash-flow forecast boundary', () => {
+  const forecastInput = {
+    branchId: 'branch_1',
+    asOfDate: '2026-10-29',
+    openingCashMinor: 1_000,
+    minimumCashReserveMinor: 100,
+    annualCashValueBps: 1_200,
+    salesCashEstimates: [],
+    khataCollectionEstimates: [],
+    payables: [{ id: 'bill_1', dueDate: '2026-11-08', amountMinor: 200 }],
+  };
+
+  it('checks report permissions and active tenant branch without writing to the ledger', async () => {
+    const result = await caller().cashFlowForecast(forecastInput);
+    expect(result).toMatchObject({
+      status: 'ESTIMATE',
+      windows: [
+        { days: 30, closingCashMinor: 800 },
+        { days: 60, closingCashMinor: 800 },
+        { days: 90, closingCashMinor: 800 },
+      ],
+    });
+    expect(mocks.can.mock.calls.map((call) => call[1])).toEqual([
+      'admin:access',
+      'reports:operational',
+      'reports:financial',
+    ]);
+    expect(mocks.branchFindFirst).toHaveBeenCalledWith({
+      where: { organizationId: 'org_1', id: 'branch_1', active: true },
+      select: { id: true },
+    });
+    expect(mocks.transaction).not.toHaveBeenCalled();
+  });
+
+  it.each(['admin:access', 'reports:operational', 'reports:financial'])(
+    'denies a missing %s capability',
+    async (action) => {
+      mocks.can.mockImplementation(async (_subject, requested) => requested !== action);
+      await expect(caller().cashFlowForecast(forecastInput)).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+      });
+      expect(mocks.branchFindFirst).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['EMPLOYEE', 'HR', 'MANAGER'])('denies the %s role', async (role) => {
+    await expect(caller(role).cashFlowForecast(forecastInput)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+  });
+
+  it('denies unauthenticated requests', async () => {
+    await expect(
+      caller('ADMIN', { session: null }).cashFlowForecast(forecastInput)
+    ).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
+  });
+
+  it('requires a reports license', async () => {
+    vi.mocked(hasModule).mockReturnValue(false);
+    await expect(caller().cashFlowForecast(forecastInput)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mocks.branchFindFirst).not.toHaveBeenCalled();
+  });
+
+  it('denies a mismatched organization', async () => {
+    await expect(
+      caller('ADMIN', {
+        organization: { id: 'foreign_org' } as TRPCContext['organization'],
+      }).cashFlowForecast(forecastInput)
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.branchFindFirst).not.toHaveBeenCalled();
+  });
+
+  it('denies a foreign, inactive or absent branch', async () => {
+    mocks.branchFindFirst.mockResolvedValue(null);
+    await expect(caller().cashFlowForecast(forecastInput)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+  });
+
+  it.each([
+    { dueDate: '2026-10-29' },
+    { dueDate: '2026-10-28' },
+    { earlyPayDate: '2026-10-29' },
+    { earlyPayDate: '2026-11-08' },
+    { earlyPayDate: '2026-11-09' },
+  ])('returns BAD_REQUEST for invalid payment dates %j', async (change) => {
+    await expect(
+      caller().cashFlowForecast({
+        ...forecastInput,
+        payables: [{ ...forecastInput.payables[0], ...change }],
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+  });
+
+  it('returns BAD_REQUEST when forecast totals exceed safe integer precision', async () => {
+    await expect(
+      caller().cashFlowForecast({
+        ...forecastInput,
+        openingCashMinor: Number.MAX_SAFE_INTEGER,
+        salesCashEstimates: [{ id: 'sales', date: '2026-10-30', amountMinor: 1 }],
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+  });
+});

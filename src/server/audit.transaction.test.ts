@@ -129,6 +129,38 @@ describe('transaction-bound seed audits', () => {
     expect(mocks.outsideCreate).toHaveBeenCalledOnce();
   });
 
+  it.each(['SUCCESS', 'FAILURE'] as const)(
+    'redacts witness PINs in %s audit writes without hiding unrelated fields',
+    async (outcome) => {
+      const ctx = await context({} as ScopedDb, false);
+      recordTrpcAudit({
+        ctx,
+        path: 'pharmacyPurchasing.postGoodsReceipt',
+        type: 'mutation',
+        input: {
+          goodsReceiptId: 'receipt_a',
+          pin: '1234',
+          witnesses: [{ PIN: '5678', staffProfileId: 'staff_a' }],
+          shippingAddress: 'Test address',
+        },
+        outcome,
+      });
+      await flushAuditWritesForTest();
+
+      expect(mocks.outsideCreate).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          input: {
+            goodsReceiptId: 'receipt_a',
+            pin: '[REDACTED]',
+            witnesses: [{ PIN: '[REDACTED]', staffProfileId: 'staff_a' }],
+            shippingAddress: 'Test address',
+          },
+          outcome,
+        }),
+      });
+    }
+  );
+
   it('rejects an audit transaction belonging to another context', async () => {
     const ctx = await context({} as ScopedDb);
     await expect(

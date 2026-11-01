@@ -22,6 +22,7 @@ import type { DemoSeatIdentity } from '@/lib/platform/command-types';
 import { demoApproverEmail } from '@/lib/demo/approval';
 import { demoSharedDeploymentOrigin } from '@/lib/platform/activation-gates';
 import { emailSchema } from '@/lib/email-address';
+import { organizationRolePermissionsSchema } from '@/lib/organization-role';
 import { ianaTimezone } from '@/lib/timezone';
 import { isReservedHostLabel, RESERVED_HOST_LABELS } from '@/lib/tenancy/host-routing';
 import { OrganizationVertical } from '@/generated/prisma/enums';
@@ -632,7 +633,6 @@ async function syncContractEntitlements(
     organizationId: string;
     number: string;
     status: string;
-    seatLimit: number;
     endDate: Date;
     graceUntil: Date | null;
     moduleIds: string[];
@@ -670,10 +670,6 @@ async function syncContractEntitlements(
       },
     });
   }
-  await db.organization.update({
-    where: { id: input.organizationId },
-    data: { seatLimit: input.seatLimit },
-  });
 }
 
 const organizationInput = z
@@ -872,12 +868,88 @@ async function createOrganizationRecord(
   }
 }
 
+type ClaimedConversionOpportunity = {
+  id: string;
+  accountId: string;
+  fromStage: 'DISCOVERY' | 'QUALIFIED' | 'PROPOSAL' | 'NEGOTIATION' | 'WON';
+};
+
+/**
+ * Reserve an eligible opportunity before provisioning starts. The conditional
+ * update is the concurrency guard: after PostgreSQL waits on a competing
+ * conversion, it rechecks this predicate and only one transaction can win.
+ * Locking the account row applies the same guard across distinct opportunities
+ * for one account, preventing either a replay or a race from creating two tenants.
+ * Because the reservation and provisioning share the platform transaction, a
+ * later provisioning failure restores both claims.
+ */
+async function claimOpportunityForConversion(
+  db: PrismaClient,
+  opportunityId: string
+): Promise<ClaimedConversionOpportunity> {
+  const opportunity = await db.platformOpportunity.findUnique({
+    where: { id: opportunityId },
+    select: { id: true, accountId: true, stage: true, convertedOrganizationId: true },
+  });
+  // A deal can be marked won before onboarding creates its organization.
+  const eligibleStages = ['DISCOVERY', 'QUALIFIED', 'PROPOSAL', 'NEGOTIATION', 'WON'] as const;
+  if (
+    !opportunity ||
+    opportunity.convertedOrganizationId !== null ||
+    !eligibleStages.includes(opportunity.stage as (typeof eligibleStages)[number])
+  ) {
+    throw new PlatformSecurityError('Opportunity is not eligible for conversion.', 409);
+  }
+
+  const fromStage = opportunity.stage as ClaimedConversionOpportunity['fromStage'];
+  const wonAt = new Date();
+  const claimed = await db.platformOpportunity.updateMany({
+    where: {
+      id: opportunity.id,
+      stage: fromStage,
+      convertedOrganizationId: null,
+    },
+    data: { stage: 'WON', wonAt },
+  });
+  if (claimed.count !== 1) {
+    throw new PlatformSecurityError('Opportunity is not eligible for conversion.', 409);
+  }
+  const [account] = await db.$queryRaw<Array<{ organizationId: string | null }>>(Prisma.sql`
+    SELECT "organizationId"
+    FROM "platform_accounts"
+    WHERE "id" = ${opportunity.accountId}
+    FOR UPDATE
+  `);
+  if (!account || account.organizationId !== null) {
+    throw new PlatformSecurityError('Account is already linked to an organization.', 409);
+  }
+  return { id: opportunity.id, accountId: opportunity.accountId, fromStage };
+}
+
 async function bootstrapOrganization(
   db: PrismaClient,
   actor: PlatformIdentity | null,
   input: z.infer<typeof organizationInput>,
-  demo?: DemoOrganizationBootstrap
+  demo?: DemoOrganizationBootstrap,
+  conversionOpportunity?: ClaimedConversionOpportunity
 ) {
+  // Both CRM conversion and organization onboarding can link an opportunity.
+  // Hold its row lock through provisioning and commit so retries cannot create
+  // another tenant or overwrite the original conversion and account links.
+  if (input.opportunityId) {
+    const [lockedOpportunity] = await db.$queryRaw<
+      Array<{ id: string; convertedOrganizationId: string | null }>
+    >`SELECT id, "convertedOrganizationId"
+      FROM platform_opportunities
+      WHERE id = ${input.opportunityId}
+      FOR UPDATE`;
+    if (!lockedOpportunity) {
+      throw new PlatformSecurityError('Opportunity not found.', 400);
+    }
+    if (lockedOpportunity.convertedOrganizationId) {
+      throw new PlatformSecurityError('Opportunity has already been converted.', 409);
+    }
+  }
   if (input.deploymentMode === 'DEDICATED' && !isDedicatedProvisioningConfigured()) {
     throw new PlatformSecurityError(
       'Dedicated provisioning is unavailable because Vercel provisioning is not configured for this environment. Choose Shared platform or ask a platform administrator to configure Vercel.',
@@ -1221,34 +1293,24 @@ async function bootstrapOrganization(
       ...(demo ? { createdAt: demo.now } : {}),
     },
   });
-  if (input.opportunityId && actor) {
-    const opportunity = await db.platformOpportunity.findUnique({
-      where: { id: input.opportunityId },
-      select: { id: true, accountId: true, stage: true },
+  if (conversionOpportunity && actor) {
+    await db.platformOpportunity.update({
+      where: { id: conversionOpportunity.id },
+      data: { convertedOrganizationId: organization.id },
     });
-    if (opportunity) {
-      await db.platformOpportunity.update({
-        where: { id: opportunity.id },
-        data: {
-          stage: 'WON',
-          wonAt: new Date(),
-          convertedOrganizationId: organization.id,
-        },
-      });
-      await db.platformOpportunityStageEvent.create({
-        data: {
-          opportunityId: opportunity.id,
-          fromStage: opportunity.stage,
-          toStage: 'WON',
-          changedById: actor.id,
-          reason: 'Converted into an organization',
-        },
-      });
-      await db.platformAccount.update({
-        where: { id: opportunity.accountId },
-        data: { organizationId: organization.id, status: 'CUSTOMER' },
-      });
-    }
+    await db.platformOpportunityStageEvent.create({
+      data: {
+        opportunityId: conversionOpportunity.id,
+        fromStage: conversionOpportunity.fromStage,
+        toStage: 'WON',
+        changedById: actor.id,
+        reason: 'Converted into an organization',
+      },
+    });
+    await db.platformAccount.update({
+      where: { id: conversionOpportunity.accountId },
+      data: { organizationId: organization.id, status: 'CUSTOMER' },
+    });
   }
   return organization;
 }
@@ -1773,7 +1835,10 @@ async function runCommand(
     }
     case 'organization.create': {
       const input = organizationInput.parse(payload);
-      const organization = await bootstrapOrganization(db, actor, input);
+      const opportunity = input.opportunityId
+        ? await claimOpportunityForConversion(db, input.opportunityId)
+        : undefined;
+      const organization = await bootstrapOrganization(db, actor, input, undefined, opportunity);
       return {
         targetType: 'Organization',
         targetId: organization.id,
@@ -1899,8 +1964,25 @@ async function runCommand(
         .parse(payload);
       const { id: organizationId, ...data } = input;
       let correctionReason: string | undefined;
+      // Deployment-mode decisions must use the current value at the point of
+      // the write. Without this lock, an unchanged DEDICATED request can read
+      // a stale value, race a transition to SHARED, and silently restore
+      // DEDICATED without creating its provisioning job.
+      if (data.deploymentMode !== undefined) {
+        await db.$queryRaw`SELECT id FROM organizations WHERE id = ${organizationId} FOR UPDATE`;
+      }
       const before = await db.organization.findUnique({ where: { id: organizationId } });
       if (!before) throw new PlatformSecurityError('Organization not found.', 400);
+      if (
+        data.deploymentMode === 'DEDICATED' &&
+        data.deploymentMode !== before.deploymentMode &&
+        !isDedicatedProvisioningConfigured()
+      ) {
+        throw new PlatformSecurityError(
+          'Dedicated provisioning is unavailable because Vercel provisioning is not configured for this environment. Choose Shared platform or ask a platform administrator to configure Vercel.',
+          400
+        );
+      }
       const changesVertical = data.vertical !== undefined && data.vertical !== before.vertical;
       // A vertical correction is deliberately narrower than ordinary onboarding
       // edits: it is an early correction only, before activation or any
@@ -2620,21 +2702,21 @@ async function runCommand(
             .regex(/^[a-z0-9._-]+$/),
           name: requiredText,
           description: optionalText.optional(),
-          permissions: z
-            .array(
-              z.object({
-                capability: z.string().trim().min(1).max(150),
-                effect: z.enum(['ALLOW', 'DENY']),
-              })
-            )
-            .max(250)
-            .default([]),
+          permissions: organizationRolePermissionsSchema.default([]),
         })
         .parse(payload);
       const { id: roleId, permissions, ...role } = input;
+      // The platform command already runs inside withPlatformDb's transaction.
+      // Locking the tenant row also serializes concurrent permission replacements.
+      await db.$queryRaw`SELECT "id" FROM "organizations" WHERE "id" = ${input.organizationId} FOR UPDATE`;
       const existing = roleId
-        ? await db.organizationRole.findUnique({ where: { id: roleId } })
+        ? await db.organizationRole.findFirst({
+            where: { id: roleId, organizationId: input.organizationId },
+          })
         : null;
+      if (roleId && !existing) {
+        throw new PlatformSecurityError('Organization role not found.', 400);
+      }
       if (existing?.isSystem) {
         throw new PlatformSecurityError('System roles cannot be modified.', 400);
       }
@@ -3080,7 +3162,8 @@ async function runCommand(
       if (!input.opportunityId) {
         throw new PlatformSecurityError('An opportunity is required for conversion.', 400);
       }
-      const organization = await bootstrapOrganization(db, actor, input);
+      const opportunity = await claimOpportunityForConversion(db, input.opportunityId);
+      const organization = await bootstrapOrganization(db, actor, input, undefined, opportunity);
       return {
         targetType: 'Organization',
         targetId: organization.id,
@@ -3255,7 +3338,6 @@ async function runCommand(
         organizationId: before.organizationId,
         number: before.number,
         status: input.status,
-        seatLimit: before.seatLimit,
         endDate: before.endDate,
         graceUntil: before.graceUntil,
         moduleIds: before.modules.map((module) => module.moduleId),
@@ -4135,6 +4217,13 @@ export async function executePlatformCommand(
       .regex(/^[a-z]+(?:\.[a-z]+)+$/)
       .parse(actionInput);
     assertPlatformCapability(actor, capabilityFor(action));
+    // Converting an opportunity is more than a CRM write: it provisions a
+    // tenant and creates its wildcard administrator. Keep the CRM permission
+    // for the sales-side transition, but require the organization security
+    // boundary before any provisioning work can begin.
+    if (action === 'crm.opportunity.convert') {
+      assertPlatformCapability(actor, 'organizations:security:write');
+    }
 
     return await withPlatformDb(async (db) => {
       const reason = sensitiveCommand(action)
