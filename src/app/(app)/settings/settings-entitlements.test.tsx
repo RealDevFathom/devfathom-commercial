@@ -94,7 +94,12 @@ vi.mock('@/lib/trpc', () => ({
 }));
 
 import { EntitlementsProvider } from '@/components/entitlements-provider';
-import { ApiTokensSection, PrintRoutingSection, WebhooksSection } from './settings-content';
+import {
+  ApiTokensSection,
+  PrintRoutingSection,
+  ReceiptDesignerLink,
+  WebhooksSection,
+} from './settings-content';
 
 function entitlementView(
   api: boolean,
@@ -273,6 +278,28 @@ describe('Settings entitlement presentation', () => {
       'API tokens could not be loaded. Please try again.'
     );
     expect(screen.queryByText(/PrismaClientKnownRequestError/)).not.toBeInTheDocument();
+  });
+});
+
+describe('Receipt designer link', () => {
+  const name = 'Receipt designer and layout settings';
+
+  it('links to the receipt designer for restaurant organizations', () => {
+    renderSection(<ReceiptDesignerLink />, {
+      ...entitlementView(true, true),
+      vertical: 'RESTAURANT',
+    });
+    expect(screen.getByRole('link', { name })).toHaveAttribute('href', '/settings/receipts');
+  });
+
+  it.each(['PHARMACY', 'HOSPITALITY', 'AGENCY'] as const)('hides the link for %s', (vertical) => {
+    renderSection(<ReceiptDesignerLink />, { ...entitlementView(true, true), vertical });
+    expect(screen.queryByRole('link', { name })).not.toBeInTheDocument();
+  });
+
+  it('hides the link when the vertical is unknown', () => {
+    renderSection(<ReceiptDesignerLink />, entitlementView(true, true));
+    expect(screen.queryByRole('link', { name })).not.toBeInTheDocument();
   });
 });
 

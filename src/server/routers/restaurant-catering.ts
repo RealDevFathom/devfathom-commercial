@@ -11,7 +11,8 @@ import { annotateAudit } from '../audit';
 import { capabilityProcedure, router } from '../trpc';
 
 const id = z.string().trim().min(1).max(200);
-const money = z.string().regex(/^\d+(?:\.\d{1,4})?$/);
+const cateringMoneyInput = z.string().regex(/^\d+(?:\.\d{1,2})?$/);
+const cateringPortionsInput = z.string().regex(/^\d+(?:\.\d{1,3})?$/);
 const status = z.enum([
   'DRAFT',
   'QUOTED',
@@ -159,6 +160,27 @@ async function requireOrder(
   return order;
 }
 
+async function requireLineReferences(
+  db: Pick<ScopedDb, 'restaurantRecipe' | 'restaurantProduct'>,
+  organizationId: string,
+  refs: { recipeId?: string | null; productId?: string | null }
+) {
+  if (refs.recipeId) {
+    const recipe = await db.restaurantRecipe.findFirst({
+      where: { id: refs.recipeId, organizationId },
+      select: { id: true },
+    });
+    if (!recipe) throw new TRPCError({ code: 'NOT_FOUND', message: 'Recipe not found.' });
+  }
+  if (refs.productId) {
+    const product = await db.restaurantProduct.findFirst({
+      where: { id: refs.productId, organizationId },
+      select: { id: true },
+    });
+    if (!product) throw new TRPCError({ code: 'NOT_FOUND', message: 'Product not found.' });
+  }
+}
+
 async function appendEvent(
   tx: Pick<ScopedDb, '$queryRaw' | 'restaurantCateringEvent'>,
   data: {
@@ -194,8 +216,8 @@ const editableOrder = z
     headcount: z.number().int().min(1),
     venueAddress: z.string().trim().max(500).nullable().optional(),
     deliveryAddressId: id.nullable().optional(),
-    quotedTotal: money.nullable().optional(),
-    depositAmount: money.nullable().optional(),
+    quotedTotal: cateringMoneyInput.nullable().optional(),
+    depositAmount: cateringMoneyInput.nullable().optional(),
     notes: z.string().max(10_000).nullable().optional(),
   })
   .strict();
@@ -203,23 +225,17 @@ const editableOrder = z
 const lineShape = z
   .object({
     productId: id.nullable().optional(),
-    recipeId: id.nullable().optional(),
+    recipeId: id,
     description: z.string().trim().min(1).max(500),
-    portions: money,
-    unitPrice: money,
+    portions: cateringPortionsInput,
+    unitPrice: cateringMoneyInput,
     sortOrder: z.number().int().min(0).optional(),
   })
   .strict();
-const lineFields = lineShape.refine((value) => Boolean(value.productId || value.recipeId), {
-  message: 'A productId or recipeId is required.',
-});
 const addLineInput = z
   .object({ orderId: id, ...actor })
-  .extend(lineFields.shape)
-  .strict()
-  .refine((value) => Boolean(value.productId || value.recipeId), {
-    message: 'A productId or recipeId is required.',
-  });
+  .extend(lineShape.shape)
+  .strict();
 
 const transitions: Record<z.infer<typeof status>, z.infer<typeof status> | null> = {
   DRAFT: 'QUOTED',
@@ -355,6 +371,7 @@ export const restaurantCateringRouter = router({
     const orgId = organizationId(ctx);
     const { orderId, actorStaffProfileId, portions, unitPrice, ...data } = input;
     await requireOrder(ctx.db, orgId, orderId);
+    await requireLineReferences(ctx.db, orgId, data);
     return ctx.db.$transaction(async (tx) => {
       await operations.invalidateQuote(tx as ScopedDb, orgId, orderId);
       const line = await tx.restaurantCateringOrderLine.create({
@@ -382,12 +399,14 @@ export const restaurantCateringRouter = router({
       z
         .object({ orderId: id, lineId: id, ...actor })
         .extend(lineShape.partial().shape)
+        .extend({ recipeId: id })
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
       const orgId = organizationId(ctx);
       const { orderId, lineId, actorStaffProfileId, portions, unitPrice, ...data } = input;
       await requireOrder(ctx.db, orgId, orderId);
+      await requireLineReferences(ctx.db, orgId, data);
       return ctx.db.$transaction(async (tx) => {
         await operations.invalidateQuote(tx as ScopedDb, orgId, orderId);
         const result = await tx.restaurantCateringOrderLine.updateMany({
@@ -440,7 +459,7 @@ export const restaurantCateringRouter = router({
           orderId: id,
           kind: extraCostKind,
           label: z.string().trim().min(1).max(240),
-          amount: money,
+          amount: cateringMoneyInput,
           ...actor,
         })
         .strict()

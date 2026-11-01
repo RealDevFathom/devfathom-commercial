@@ -485,18 +485,32 @@ export async function authorizeKhataCharge(
   if (projected > account.creditLimitMinor) {
     if (!input.ownerOverride) throw new FamilyKhataError('CREDIT_LIMIT_EXCEEDED');
     const now = new Date();
+    const windowStart = new Date(now.getTime() - 180 * DAY_MS);
+    // The durable override evidence must describe this account's real ledger. Keep the
+    // query aligned with the calculator's stated window rather than supplying an empty
+    // placeholder (or unrelated tenant history).
+    const history = await db.pharmacyKhataEvent.findMany({
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        familyAccountId: account.id,
+        occurredAt: { gte: windowStart, lte: now },
+      },
+      select: {
+        id: true,
+        kind: true,
+        amountMinor: true,
+        occurredAt: true,
+        dueAt: true,
+        settlesChargeId: true,
+      },
+    });
     await applyKhataLimitDecision(db, scope, {
       familyAccountId: account.id,
       suggestion: calculateKhataHealthSuggestion(
-        await db.pharmacyKhataEvent.findMany({
-          where: {
-            organizationId: scope.organizationId,
-            branchId: scope.branchId,
-            familyAccountId: account.id,
-          },
-        }),
+        history,
         account.creditLimitMinor,
-        new Date(now.getTime() - 180 * DAY_MS),
+        windowStart,
         now
       ),
       ownerAuthorized: owner.authorized,

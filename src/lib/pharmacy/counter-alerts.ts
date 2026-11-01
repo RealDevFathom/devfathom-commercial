@@ -19,6 +19,7 @@
  * operator who scrolls past repeats is an operator who stops reading.
  */
 
+import { duplicateSaltGroups, type DuplicateSaltGroup } from './duplicate-salt';
 import type { BlockReason } from './inventory';
 
 export const COUNTER_ALERT_SEVERITIES = ['SAFETY_BLOCK', 'CLINICAL_ADVICE', 'COMMERCIAL'] as const;
@@ -34,6 +35,15 @@ export type CounterAlert = {
   saleLineRef: string | null;
   /** What the operator must do. Null when the alert is purely informational. */
   remedy: string | null;
+  /**
+   * #724: present only on alerts the operator may acknowledge (never on a
+   * SAFETY_BLOCK). Acknowledging records an audit entry; it never gates sale.
+   */
+  acknowledgement?: {
+    kind: 'DUPLICATE_ACTIVE_INGREDIENT';
+    ingredientKey: string;
+    medicines: DuplicateSaltGroup['medicines'];
+  };
 };
 
 const SEVERITY_RANK: Record<CounterAlertSeverity, number> = {
@@ -65,6 +75,11 @@ export type CounterAlertMedicine = {
   highAlert: boolean;
   lasa: boolean;
   coldChain: boolean;
+  /**
+   * #724: active salts from the ingredient graph (the substitute-finder data).
+   * Optional so callers without ingredient data keep their behaviour.
+   */
+  activeIngredients?: readonly { ingredientId: string; name: string }[];
 };
 
 export type CounterAlertLine = {
@@ -249,6 +264,37 @@ function alertsForLine(line: CounterAlertLine, context: CounterAlertContext): Co
 }
 
 /**
+ * #724 Phase 1: two different medicines on one bill sharing an active salt.
+ *
+ * CLINICAL_ADVICE by design: the warning is read and acknowledged, never a
+ * block, so `hasBlockingAlert` is unaffected. Points at the first line that
+ * carries the salt.
+ */
+function duplicateSaltAlerts(lines: readonly CounterAlertLine[]): CounterAlert[] {
+  return duplicateSaltGroups(
+    lines.map((line) => ({
+      ref: line.ref,
+      medicineId: line.medicine.medicineId,
+      displayName: line.medicine.displayName,
+      activeIngredients: line.medicine.activeIngredients ?? [],
+    }))
+  ).map((group) => ({
+    // A group always holds at least two medicines (duplicateSaltGroups filters).
+    key: `duplicate-salt:${group.ingredientKey}`,
+    severity: 'CLINICAL_ADVICE',
+    code: 'DUPLICATE_ACTIVE_INGREDIENT',
+    message: `${group.medicines.map((medicine) => medicine.displayName).join(', ')} ${group.medicines.length === 2 ? 'both' : 'all'} contain ${group.ingredientName}. Check the patient is not double-dosing.`,
+    saleLineRef: group.medicines[0]?.ref ?? null,
+    remedy: 'Confirm each is intended, then acknowledge. The sale is not blocked.',
+    acknowledgement: {
+      kind: 'DUPLICATE_ACTIVE_INGREDIENT',
+      ingredientKey: group.ingredientKey,
+      medicines: group.medicines,
+    },
+  }));
+}
+
+/**
  * Every alert the cart raises, deduplicated and ordered severity-first.
  *
  * Dedup keeps the FIRST occurrence, so the retained alert still points at a
@@ -263,6 +309,9 @@ export function counterAlertsFor(
     for (const alert of alertsForLine(line, context)) {
       if (!byKey.has(alert.key)) byKey.set(alert.key, alert);
     }
+  }
+  for (const alert of duplicateSaltAlerts(lines)) {
+    if (!byKey.has(alert.key)) byKey.set(alert.key, alert);
   }
   return [...byKey.values()].sort(
     (left, right) =>

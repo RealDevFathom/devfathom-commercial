@@ -1,19 +1,27 @@
 export const PHARMACY_ANOMALY_POLICY = {
-  version: 'AI04-2026-09-04',
+  version: 'AI04-2026-10-29',
   freshnessSeconds: 3_600,
   discount: { minimumLines: 3, minimumRateBps: 1_000 },
+  staffVoid: { minimumEvents: 2, minimumRateBps: 1_000 },
   ghostReturn: { minimumUnmatchedRefunds: 2 },
   cashVariance: { minimumMinor: 100_000, minimumRateBps: 100 },
   purchasePriceDrift: { minimumComparisonReceipts: 2, minimumRateBps: 1_000 },
 } as const;
 
 export type AnomalyKind =
-  'SHRINKAGE' | 'DISCOUNT_OVERRIDE' | 'GHOST_RETURN' | 'CASH_VARIANCE' | 'PURCHASE_PRICE_DRIFT';
+  | 'SHRINKAGE'
+  | 'DISCOUNT_OVERRIDE'
+  | 'VOID_ABUSE'
+  | 'GHOST_RETURN'
+  | 'TENDER_MISMATCH'
+  | 'CASH_VARIANCE'
+  | 'PURCHASE_PRICE_DRIFT';
 
 export type AnomalyFactSet = {
   shrinkage: Array<{
     countLineId: string;
     branchId: string;
+    userId: string;
     medicineId: string;
     batchId: string;
     expectedUnits: number;
@@ -33,6 +41,14 @@ export type AnomalyFactSet = {
     occurredAt: Date;
     sourceObservedAt: Date;
   }>;
+  staffVoid: Array<{
+    branchId: string;
+    userId: string;
+    voidEvents: number;
+    completedSales: number;
+    occurredAt: Date;
+    sourceObservedAt: Date;
+  }>;
   ghostReturn: Array<{
     branchId: string;
     userId: string;
@@ -44,10 +60,22 @@ export type AnomalyFactSet = {
   cashVariance: Array<{
     closeId: string;
     branchId: string;
+    userId: string;
     businessDate: string;
     expectedMinor: number;
     countedMinor: number;
     varianceMinor: number;
+    occurredAt: Date;
+    sourceObservedAt: Date;
+  }>;
+  tenderMismatch: Array<{
+    closeId: string;
+    branchId: string;
+    userId: string;
+    businessDate: string;
+    tenderNetMinor: number;
+    closeExpectedMinor: number;
+    mismatchMinor: number;
     occurredAt: Date;
     sourceObservedAt: Date;
   }>;
@@ -154,6 +182,7 @@ export function detectPharmacyAnomalies(
             missingUnits >= Math.max(1, fact.approvedThresholdUnits) * 3 ? 'URGENT' : 'REVIEW',
           scope: {
             branchId: fact.branchId,
+            userId: fact.userId,
             medicineId: fact.medicineId,
             batchId: fact.batchId,
           },
@@ -215,6 +244,40 @@ export function detectPharmacyAnomalies(
     );
   }
 
+  for (const fact of facts.staffVoid) {
+    const voidRateBps = rateBps(fact.voidEvents, fact.voidEvents + fact.completedSales);
+    if (
+      fact.voidEvents < policy.staffVoid.minimumEvents ||
+      voidRateBps < policy.staffVoid.minimumRateBps
+    )
+      continue;
+    signals.push(
+      finalize(
+        {
+          branchId: fact.branchId,
+          kind: 'VOID_ABUSE',
+          dedupKey: `void:${fact.branchId}:${fact.userId}:${context.windowStart.toISOString()}:${context.windowEnd.toISOString()}`,
+          severity: fact.voidEvents >= policy.staffVoid.minimumEvents * 2 ? 'URGENT' : 'REVIEW',
+          scope: { branchId: fact.branchId, userId: fact.userId },
+          exactNumbers: {
+            voidEvents: fact.voidEvents,
+            completedSales: fact.completedSales,
+            voidRateBps,
+            thresholdEvents: policy.staffVoid.minimumEvents,
+            thresholdRateBps: policy.staffVoid.minimumRateBps,
+          },
+          explanation: `${fact.voidEvents} void events were recorded for this staff member (${(voidRateBps / 100).toFixed(2)}% of completed sales plus voids), meeting the configurable review thresholds. Review the sale-event audit trail; this pattern does not establish abuse.`,
+          sourceObservedAt: fact.sourceObservedAt,
+          estimateMethod: null,
+          estimateWindow: null,
+          estimateExclusions: null,
+          estimateConfidence: null,
+        },
+        context
+      )
+    );
+  }
+
   for (const fact of facts.ghostReturn) {
     if (fact.unmatchedRefunds < policy.ghostReturn.minimumUnmatchedRefunds) continue;
     signals.push(
@@ -259,7 +322,7 @@ export function detectPharmacyAnomalies(
           kind: 'CASH_VARIANCE',
           dedupKey: `cash:${fact.closeId}`,
           severity: abs(fact.varianceMinor) >= materialityMinor * 2 ? 'URGENT' : 'REVIEW',
-          scope: { branchId: fact.branchId },
+          scope: { branchId: fact.branchId, userId: fact.userId },
           exactNumbers: {
             expectedMinor: fact.expectedMinor,
             countedMinor: fact.countedMinor,
@@ -268,6 +331,40 @@ export function detectPharmacyAnomalies(
             materialityMinor,
           },
           explanation: `The ${fact.businessDate} close counted ${money(fact.countedMinor)} against ${money(fact.expectedMinor)} expected, a ${money(fact.varianceMinor)} variance (${(varianceRateBps / 100).toFixed(2)}%). Review the close evidence; no posting is created by this signal.`,
+          sourceObservedAt: fact.sourceObservedAt,
+          estimateMethod: null,
+          estimateWindow: null,
+          estimateExclusions: null,
+          estimateConfidence: null,
+        },
+        context
+      )
+    );
+  }
+
+  for (const fact of facts.tenderMismatch) {
+    const mismatchRateBps = rateBps(fact.mismatchMinor, abs(fact.closeExpectedMinor));
+    const materialityMinor = Math.max(
+      policy.cashVariance.minimumMinor,
+      Math.round((abs(fact.closeExpectedMinor) * policy.cashVariance.minimumRateBps) / 10_000)
+    );
+    if (abs(fact.mismatchMinor) < materialityMinor) continue;
+    signals.push(
+      finalize(
+        {
+          branchId: fact.branchId,
+          kind: 'TENDER_MISMATCH',
+          dedupKey: `tender:${fact.closeId}`,
+          severity: abs(fact.mismatchMinor) >= materialityMinor * 2 ? 'URGENT' : 'REVIEW',
+          scope: { branchId: fact.branchId, userId: fact.userId },
+          exactNumbers: {
+            tenderNetMinor: fact.tenderNetMinor,
+            closeExpectedMinor: fact.closeExpectedMinor,
+            mismatchMinor: fact.mismatchMinor,
+            mismatchRateBps,
+            materialityMinor,
+          },
+          explanation: `Net cash tender evidence for ${fact.businessDate} is ${money(fact.tenderNetMinor)}, while the final close expects ${money(fact.closeExpectedMinor)} after removing opening floats and paid-in/out adjustments, a ${money(fact.mismatchMinor)} mismatch. Review tender and close audit records; this signal does not change the close.`,
           sourceObservedAt: fact.sourceObservedAt,
           estimateMethod: null,
           estimateWindow: null,

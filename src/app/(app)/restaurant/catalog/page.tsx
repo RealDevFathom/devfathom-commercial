@@ -58,8 +58,30 @@ async function loadCatalog() {
             select: { id: true, productId: true, name: true, sortOrder: true },
           },
           modifierGroups: {
-            orderBy: { sortOrder: 'asc' },
+            orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
             select: { id: true, modifierGroupId: true, sortOrder: true },
+          },
+          comboComponentGroups: {
+            orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+            select: {
+              id: true,
+              comboProductId: true,
+              name: true,
+              minChoose: true,
+              maxChoose: true,
+              sortOrder: true,
+              options: {
+                orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+                select: {
+                  id: true,
+                  componentGroupId: true,
+                  productId: true,
+                  variantId: true,
+                  priceDelta: true,
+                  sortOrder: true,
+                },
+              },
+            },
           },
           allergens: { select: { id: true, allergenId: true } },
         },
@@ -135,6 +157,10 @@ async function loadCatalog() {
                   quantity: true,
                   unitId: true,
                   sortOrder: true,
+                  approvedSubstitutes: {
+                    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+                    select: { id: true, substituteIngredientId: true },
+                  },
                 },
               },
             },

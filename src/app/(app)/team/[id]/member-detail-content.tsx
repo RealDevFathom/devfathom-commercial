@@ -48,7 +48,9 @@ import {
 import { Button } from '@/components/ui/button';
 import { PageHeader } from '@/components/ui/page-header';
 import { Textarea } from '@/components/ui/textarea';
+import { useEntitlements } from '@/components/entitlements-provider';
 import { trpc } from '@/lib/trpc';
+import { inviteCopyForVertical } from '@/lib/team/invite-copy';
 import { useBreadcrumbLabel } from '@/lib/breadcrumb-store';
 import { cn } from '@/lib/utils';
 import { format } from 'date-fns';
@@ -80,15 +82,6 @@ const roleBadge: Record<string, { bg: string; label: string }> = {
   HR: { bg: 'bg-indigo-500/10 text-indigo-500', label: 'HR' },
   EMPLOYEE: { bg: 'bg-secondary text-foreground', label: 'Employee' },
 };
-
-const departmentOptions = [
-  'LEADERSHIP',
-  'ENGINEERING',
-  'PRODUCT',
-  'QUALITY',
-  'MARKETING',
-  'DESIGN',
-] as const;
 
 const projectStatusColors: Record<string, string> = {
   ACTIVE: 'text-emerald-500',
@@ -680,6 +673,8 @@ function EditMemberForm({
   onClose: () => void;
 }) {
   const utils = trpc.useUtils();
+  const copy = inviteCopyForVertical(useEntitlements().vertical);
+  const departmentQuery = trpc.organizationAdmin.departments.useQuery(undefined, { retry: false });
   const [editName, setEditName] = useState(member.name);
   const [editTitle, setEditTitle] = useState(member.title);
   const [editDept, setEditDept] = useState<string>(member.department);
@@ -688,6 +683,16 @@ function EditMemberForm({
   const [editBio, setEditBio] = useState(member.bio || '');
   const [editSkillInput, setEditSkillInput] = useState('');
   const [editSkills, setEditSkills] = useState<string[]>(member.skills);
+  // Tenant department catalog: active entries, plus the member's current
+  // department so an inactive or legacy value is still shown and kept.
+  const departmentOptions = (departmentQuery.data ?? [])
+    .filter((item) => item.active || item.key === member.department)
+    .map((item) => ({ key: item.key, name: item.name }));
+  if (!departmentOptions.some((item) => item.key === member.department))
+    departmentOptions.unshift({
+      key: member.department,
+      name: member.department.charAt(0) + member.department.slice(1).toLowerCase(),
+    });
 
   const updateMember = trpc.team.adminUpdateMember.useMutation({
     onSuccess: () => {
@@ -726,8 +731,8 @@ function EditMemberForm({
               className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
             >
               {departmentOptions.map((d) => (
-                <option key={d} value={d}>
-                  {d.charAt(0) + d.slice(1).toLowerCase()}
+                <option key={d.key} value={d.key}>
+                  {d.name}
                 </option>
               ))}
             </select>
@@ -746,7 +751,7 @@ function EditMemberForm({
                       : 'bg-card text-muted-foreground hover:text-foreground'
                   )}
                 >
-                  {r === 'EMPLOYEE' ? 'Employee' : r === 'HR' ? 'HR' : 'Admin'}
+                  {copy.baseRoleLabels[r]}
                 </button>
               ))}
             </div>
@@ -838,7 +843,7 @@ function EditMemberForm({
                 id: memberId,
                 name: editName.trim() || undefined,
                 title: editTitle.trim() || undefined,
-                department: editDept as (typeof departmentOptions)[number],
+                department: editDept,
                 role: editRole as 'ADMIN' | 'HR' | 'EMPLOYEE',
                 phone: editPhone || null,
                 bio: editBio || null,
