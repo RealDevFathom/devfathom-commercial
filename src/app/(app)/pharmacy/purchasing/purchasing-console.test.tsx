@@ -35,6 +35,7 @@ vi.mock('@/server/routers/pharmacy-purchasing', () => ({
   pharmacyPurchasingRouter: { createCaller: mocks.createCaller },
 }));
 
+import { PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
 import SuppliersPage from './suppliers/page';
 import OrdersPage from './orders/page';
 import ReceivingPage from './receiving/page';
@@ -188,6 +189,8 @@ beforeEach(() => {
 });
 
 const params = (query: Record<string, string> = {}) => Promise.resolve(query);
+const template = (key: string) =>
+  PHARMACY_ROLE_TEMPLATES.find((role) => role.key === key)!.capabilities;
 
 describe('tenancy and licensing (UX rule 7)', () => {
   it('never asks the context factory to re-resolve tenancy', async () => {
@@ -241,26 +244,60 @@ describe('tenancy and licensing (UX rule 7)', () => {
     expect(mocks.createCaller).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ['overview', () => OverviewPage({ searchParams: params() })],
-    ['suppliers', () => SuppliersPage({ searchParams: params() })],
+  /**
+   * Every member who does no procurement work (#979, PR J): the stock Cashier
+   * and Pharmacist templates, the default EMPLOYEE with no organization role, an
+   * empty Member role, and the Inventory, Auditor and Finance templates.
+   */
+  const NON_PROCUREMENT_ROLES = [
+    ['cashier', template('cashier')],
+    ['pharmacist', template('pharmacist')],
+    ['default employee', null],
+    ['empty member role', []],
+    ['inventory', template('inventory')],
+    ['auditor', template('auditor')],
+    ['finance', template('finance')],
+  ] as const;
+  const SURFACES = [
+    ['overview', () => OverviewPage({ searchParams: params({ supplier: 'sup-ok' }) })],
+    ['suppliers', () => SuppliersPage({ searchParams: params({ supplier: 'sup-ok' }) })],
     ['orders', () => OrdersPage({ searchParams: params() })],
+    ['goods-in', () => ReceivingPage({ searchParams: params() })],
     ['returns', () => ReturnsPage({ searchParams: params() })],
-  ] as const)(
-    'closes %s to a cashier who lacks the procurement capability (#979)',
-    async (_surface, page) => {
+  ] as const;
+  const PROCUREMENT_CONTROLS = [
+    'Add supplier',
+    'File licence',
+    'Verify licence',
+    'Withdraw authorization',
+    'Authorize this supplier',
+    'Draft requisition',
+    'Draft order',
+    'Submit for approval',
+    'Approve',
+    'Reject',
+    'Send to supplier',
+    'Post receipt',
+    'Raise return',
+  ];
+
+  it.each(
+    NON_PROCUREMENT_ROLES.flatMap(([role, grants]) =>
+      SURFACES.map(([surface, page]) => [role, surface, grants, page] as const)
+    )
+  )(
+    'closes %s out of %s with no procurement control and no router call (#979)',
+    async (_role, _surface, grants, page) => {
       mocks.createTRPCContext.mockResolvedValue({
         ...contextStub(),
         db: {
           user: {
             findUnique: vi.fn().mockResolvedValue({
               role: 'EMPLOYEE',
-              organizationRole: {
-                permissions: [
-                  { capability: 'pharmacy:counter', effect: 'ALLOW' },
-                  { capability: 'pharmacy:orders', effect: 'ALLOW' },
-                ],
-              },
+              organizationRole:
+                grants === null
+                  ? null
+                  : { permissions: grants.map((capability) => ({ capability, effect: 'ALLOW' })) },
               permissionOverrides: [],
             }),
           },
@@ -272,15 +309,7 @@ describe('tenancy and licensing (UX rule 7)', () => {
       expect(
         screen.getByRole('heading', { name: 'You do not have purchasing access' })
       ).toBeDefined();
-      // QA reach (#979): none of the procurement writes is offered to a cashier.
-      for (const action of [
-        'Add supplier',
-        'File licence',
-        'Withdraw authorization',
-        'Authorize this supplier',
-        'Draft requisition',
-        'Draft order',
-      ]) {
+      for (const action of PROCUREMENT_CONTROLS) {
         expect(screen.queryByRole('button', { name: action }), action).toBeNull();
       }
       expect(mocks.createCaller).not.toHaveBeenCalled();

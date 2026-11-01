@@ -319,6 +319,22 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
     }
   });
 
+  // #979, PR J: the rail answer is the ABAC-resolved capability list. No role
+  // that does no procurement work is offered the Purchasing destination.
+  it.each([
+    ['cashier', ['pharmacy:counter', 'pharmacy:orders']],
+    ['pharmacist', ['pharmacy:dispense', 'pharmacy:catalogue-review', 'pharmacy:close']],
+    ['default employee', []],
+    ['inventory', ['pharmacy:inventory']],
+    ['auditor', ['reports:operational']],
+    ['finance', ['reports:financial']],
+  ] as const)('offers the %s role no Purchasing destination (#979)', (_role, capabilities) => {
+    renderNavigation({ role: 'MEMBER', capabilities: [...capabilities] });
+    expect(screen.queryByRole('link', { name: /Purchasing$/ })).not.toBeInTheDocument();
+    const hrefs = screen.getAllByRole('link').map((link) => link.getAttribute('href') ?? '');
+    expect(hrefs.filter((href) => href.startsWith('/pharmacy/purchasing'))).toEqual([]);
+  });
+
   it('ignores a cached capability answer for another signed-in identity (#979)', () => {
     renderNavigation({ role: 'MEMBER', railUserId: 'someone-else' });
     for (const label of ['Purchasing', 'Reports & Insights']) {

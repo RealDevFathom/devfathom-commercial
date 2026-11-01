@@ -52,6 +52,15 @@ const PEOPLE: Record<string, Person> = {
   owner: { role: 'ADMIN', grants: ['*', 'pharmacy:dispense'] },
   // Legacy owner (#375): tenant ADMIN with no organization role at all.
   legacy_owner: { role: 'ADMIN', grants: null },
+  // Roles that do no procurement work (#979, PR J follow-up).
+  pharmacist: { role: 'EMPLOYEE', grants: template('pharmacist') },
+  // A member invited with the default EMPLOYEE role and no organization role.
+  employee: { role: 'EMPLOYEE', grants: null },
+  // The agency-style empty Member role.
+  member: { role: 'EMPLOYEE', grants: [] },
+  inventory_clerk: { role: 'EMPLOYEE', grants: template('inventory') },
+  auditor: { role: 'EMPLOYEE', grants: template('auditor') },
+  finance: { role: 'EMPLOYEE', grants: template('finance') },
 };
 
 function userRow(id: string) {
@@ -564,17 +573,71 @@ function ownerContext() {
   } as unknown as TRPCContext;
 }
 
-// ── the cashier ───────────────────────────────────────────────────────────
+// ── every role without procurement ────────────────────────────────────────
 
-describe('the cashier is refused on every purchasing procedure', () => {
-  it.each(PROCEDURES)('%s → FORBIDDEN before any business read or write', async (name) => {
-    await expect(CALLS[name](caller('cashier_a'))).rejects.toMatchObject({
-      code: 'FORBIDDEN',
-      message: PERMISSION,
-    });
-    expect(touchedBusinessTables()).toEqual([]);
-    expect(db.$transaction).not.toHaveBeenCalled();
+/**
+ * Every member who does no procurement work: the stock Cashier and Pharmacist
+ * templates, a member on the default EMPLOYEE role with no organization role,
+ * an empty Member role, and the Inventory, Auditor and Finance templates. None
+ * of them holds `pharmacy:procurement`.
+ */
+const NON_PROCUREMENT = [
+  'cashier_a',
+  'pharmacist',
+  'employee',
+  'member',
+  'inventory_clerk',
+  'auditor',
+  'finance',
+] as const;
+
+/**
+ * The supplier-credit follow-up reads are the Finance role's report source and
+ * need only `reports:financial`, so a role holding that permission reaches
+ * them by design; the branch boundary still applies.
+ */
+const FINANCIAL_FOLLOW_UP_READS: ProcedureName[] = ['purchaseReturns', 'supplierCredits'];
+const holdsFinancial = (who: string) => PEOPLE[who]!.grants?.includes('reports:financial') === true;
+
+const NON_PROCUREMENT_MATRIX = NON_PROCUREMENT.flatMap((who) =>
+  PROCEDURES.filter(
+    (name) => !(holdsFinancial(who) && FINANCIAL_FOLLOW_UP_READS.includes(name))
+  ).map((name) => [who, name] as const)
+);
+
+describe('every role without procurement is refused on every purchasing procedure', () => {
+  it('covers the cashier, the pharmacist and the default employee', () => {
+    for (const who of ['cashier_a', 'pharmacist', 'employee'])
+      expect(NON_PROCUREMENT_MATRIX.filter(([person]) => person === who)).toHaveLength(
+        PROCEDURES.length
+      );
   });
+
+  it.each(NON_PROCUREMENT_MATRIX)(
+    '%s: %s → FORBIDDEN before any business read or write',
+    async (who, name) => {
+      await expect(CALLS[name](caller(who))).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: PERMISSION,
+      });
+      expect(touchedBusinessTables()).toEqual([]);
+      expect(db.$transaction).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(NON_PROCUREMENT.filter(holdsFinancial))(
+    '%s reads the supplier-credit follow-up only at an assigned branch',
+    async (who) => {
+      for (const name of FINANCIAL_FOLLOW_UP_READS) {
+        await expect(CALLS[name](caller(who))).rejects.toMatchObject({
+          code: 'FORBIDDEN',
+          message: OUTSIDE_BRANCH,
+        });
+      }
+      expect(m('pharmacyPurchaseReturn').findMany).not.toHaveBeenCalled();
+      expect(m('pharmacySupplierCredit').findMany).not.toHaveBeenCalled();
+    }
+  );
 });
 
 // ── the solo owner ────────────────────────────────────────────────────────
@@ -880,6 +943,92 @@ describe('approving and sending a purchase order needs the approver capability',
       code: 'FORBIDDEN',
       message: OUTSIDE_BRANCH,
     });
+  });
+});
+
+// ── supplier authorization ────────────────────────────────────────────────
+
+describe('authorizing a supplier needs the approver capability too (PUR-01)', () => {
+  it.each([true, false])(
+    'refuses the procurement role, which files suppliers but does not authorize them (authorized: %s)',
+    async (authorized) => {
+      await expect(
+        caller('buyer').setSupplierAuthorization({ supplierId: 'supplier_a', authorized })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN', message: PERMISSION });
+      expect(m('pharmacySupplier').findFirst).not.toHaveBeenCalled();
+      expect(m('pharmacySupplier').update).not.toHaveBeenCalled();
+    }
+  );
+
+  it('lets a manager authorize and withdraw a supplier', async () => {
+    await expect(CALLS.setSupplierAuthorization(caller('manager_a'))).resolves.toMatchObject({
+      authorized: true,
+    });
+    await expect(
+      caller('manager_a').setSupplierAuthorization({ supplierId: 'supplier_a', authorized: false })
+    ).resolves.toMatchObject({ authorized: false });
+  });
+
+  it('keeps it for the provisioned owner and the legacy owner under the solo rule', async () => {
+    activeMembers('owner');
+    await expect(CALLS.setSupplierAuthorization(caller('owner'))).resolves.toMatchObject({
+      authorized: true,
+    });
+    activeMembers('legacy_owner');
+    await expect(CALLS.setSupplierAuthorization(caller('legacy_owner'))).resolves.toMatchObject({
+      authorized: true,
+    });
+  });
+
+  it('still refuses a supplier of another workspace to an approver', async () => {
+    m('pharmacySupplier').findFirst.mockResolvedValue(null);
+    await expect(CALLS.setSupplierAuthorization(caller('manager_a'))).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Supplier is outside this workspace.',
+    });
+    expect(m('pharmacySupplier').update).not.toHaveBeenCalled();
+  });
+});
+
+// ── the branches a board may offer ────────────────────────────────────────
+
+describe('workspace names the branches the caller may act at (PUR-06 board)', () => {
+  beforeEach(() => {
+    m('pharmacyBranch').findMany.mockResolvedValue([
+      { id: 'branch_a', code: 'A', name: 'A', city: 'Karachi', defaultStockLocationId: null },
+      { id: 'branch_b', code: 'B', name: 'B', city: 'Lahore', defaultStockLocationId: null },
+    ]);
+    m('pharmacyBranchAssignment').findMany.mockImplementation(
+      async ({ where }: { where: { userId: string; branchId: { in: string[] } } }) =>
+        where.userId === 'buyer'
+          ? where.branchId.in.filter((id) => id === 'branch_a').map((branchId) => ({ branchId }))
+          : []
+    );
+  });
+
+  it('lists only the assigned branches for a procurement member', async () => {
+    await expect(CALLS.workspace(caller('buyer'))).resolves.toMatchObject({
+      reachableBranchIds: ['branch_a'],
+    });
+    expect(m('pharmacyBranchAssignment').findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ organizationId: 'org_a', userId: 'buyer', active: true }),
+      })
+    );
+  });
+
+  it('lists none for a procurement member with no assignment', async () => {
+    m('pharmacyBranchAssignment').findMany.mockResolvedValue([]);
+    await expect(CALLS.workspace(caller('buyer'))).resolves.toMatchObject({
+      reachableBranchIds: [],
+    });
+  });
+
+  it('lists every active branch for a tenant administrator', async () => {
+    await expect(CALLS.workspace(caller('owner'))).resolves.toMatchObject({
+      reachableBranchIds: ['branch_a', 'branch_b'],
+    });
+    expect(m('pharmacyBranchAssignment').findMany).not.toHaveBeenCalled();
   });
 });
 
