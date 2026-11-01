@@ -493,21 +493,25 @@ const closeDate = z
   );
 // Closing the day and opening, moving or closing a drawer are manager-or-owner
 // actions: a cashier cannot reconcile or close their own drawer. An explicit
-// `pharmacy:close` grant is also accepted; no seeded template other than
-// Owner / Operator carries it. A tenant ADMIN with no organization role (a solo
+// `pharmacy:close` grant is also accepted; only the Owner / Operator template
+// carries it (migration 20261101200000 removed it from existing Pharmacist
+// roles). A tenant ADMIN with no organization role (a solo
 // owner) keeps full access; an ADMIN with an assigned role is bounded by it.
-async function requireManagerOrOwner(
-  ctx: TRPCContext,
-  message: string,
-  alsoAccepted: readonly Action[] = []
-) {
-  const allowed = await hasPharmacyManagerAccess(
+const managerOrOwnerAllowed = (ctx: TRPCContext, alsoAccepted: readonly Action[] = []) =>
+  hasPharmacyManagerAccess(
     ctx.db,
     ctx.session?.user,
     ['pharmacy:close', ...alsoAccepted],
     ctx.requestMeta.ip
   );
-  if (!allowed) throw new TRPCError({ code: 'FORBIDDEN', message });
+
+async function requireManagerOrOwner(
+  ctx: TRPCContext,
+  message: string,
+  alsoAccepted: readonly Action[] = []
+) {
+  if (!(await managerOrOwnerAllowed(ctx, alsoAccepted)))
+    throw new TRPCError({ code: 'FORBIDDEN', message });
 }
 
 const requireCloseAccess = (ctx: TRPCContext) =>
@@ -520,8 +524,9 @@ const requireDrawerAccess = (ctx: TRPCContext) => requireManagerOrOwner(ctx, DRA
 // Opening a drawer is part of the Pharmacist template's counter selling rights
 // (Open drawer, Tender, Take payment), so `pharmacy:dispense` may open one. Moving
 // cash and closing a drawer stay manager-or-owner.
+const OPEN_DRAWER_ACCEPTED: readonly Action[] = ['pharmacy:dispense'];
 const requireOpenDrawerAccess = (ctx: TRPCContext) =>
-  requireManagerOrOwner(ctx, DRAWER_MESSAGE, ['pharmacy:dispense']);
+  requireManagerOrOwner(ctx, DRAWER_MESSAGE, OPEN_DRAWER_ACCEPTED);
 
 export const pharmacySalesRouter = router({
   manualPaymentSettings: protectedProcedure.input(z.object({ branchId })).query(async ({ ctx, input }) => {
@@ -736,6 +741,9 @@ export const pharmacySalesRouter = router({
         await scopeFor(ctx, input.branchId),
         input.deviceId
       ),
+      // Lets the counter hide "Open drawer" from a user `openDrawer` would refuse
+      // (a cashier). Display only: `openDrawer` re-checks on every call.
+      canOpenDrawer: await managerOrOwnerAllowed(ctx, OPEN_DRAWER_ACCEPTED),
     })),
   // The drawer family raises typed `PharmacySettlementError`s (OPEN_DRAWER,
   // DRAWER_NOT_OPEN, DAY_CLOSED, INVALID_AMOUNT); `fail` turns them into typed

@@ -272,6 +272,29 @@ describe('pharmacy drawer and close: manager-or-owner gate', () => {
     });
   });
 
+  it('lets a solo owner whose clinical pharmacy:dispense is DENIED open a drawer', async () => {
+    await expect(
+      drawerCalls[0][1](
+        caller({ ...soloOwner, overrides: [{ capability: 'pharmacy:dispense', effect: 'DENY' }] })
+      )
+    ).resolves.toBeDefined();
+    expect(mocks.openDrawer).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(calls)(
+    '%s refuses a solo owner whose pharmacy:manage and pharmacy:close are DENIED',
+    async (name, run, domain) => {
+      const overrides: Rule[] = [
+        { capability: 'pharmacy:manage', effect: 'DENY' },
+        { capability: 'pharmacy:close', effect: 'DENY' },
+      ];
+      if (name === 'openDrawer') overrides.push({ capability: 'pharmacy:dispense', effect: 'DENY' });
+      await expect(run(caller({ ...soloOwner, overrides }))).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+      });
+      expect(domain()).not.toHaveBeenCalled();
+    }
+  );
 });
 
 describe('Pharmacist template: counter selling, no day close', () => {

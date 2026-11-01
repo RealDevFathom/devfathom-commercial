@@ -18,8 +18,8 @@ type SessionUser = {
  *   templates) or one of `alsoAccepted` through their organization role or a
  *   user override; or
  * - the user is a tenant ADMIN with no organization role (a solo owner, or a
- *   workspace that predates explicit roles) and no DENY override on those
- *   actions.
+ *   workspace that predates explicit roles) and at least one of those actions
+ *   is not denied by a DENY override.
  *
  * A tenant ADMIN who has been assigned a role (for example the Cashier template)
  * is bounded by that role. Any lookup failure denies.
@@ -52,10 +52,14 @@ export async function hasPharmacyManagerAccess(
       },
     });
     if (!record || record.organizationRole) return false;
-    return !record.permissionOverrides.some(
-      (rule) =>
-        rule.effect === 'DENY' &&
-        actions.some((action) => capabilityMatches(rule.capability, action, 'DENY'))
+    // A role-less ADMIN implicitly holds every accepted action; a DENY override
+    // removes only the action it matches, so access remains while at least one
+    // accepted action is not denied (as for a role holder with any one grant).
+    return actions.some(
+      (action) =>
+        !record.permissionOverrides.some(
+          (rule) => rule.effect === 'DENY' && capabilityMatches(rule.capability, action, 'DENY')
+        )
     );
   } catch (err) {
     console.error('[pharmacy] manager access lookup threw:', err);
