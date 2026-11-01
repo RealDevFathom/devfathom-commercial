@@ -19,6 +19,7 @@ import {
 import { sub, sum, ZERO } from './money';
 import { enqueueInsightRollup } from './insight-rollups';
 import { lockMoneyDay } from './money-day';
+import { computeRefundFinancials } from './refund-financials';
 
 export { assertMoneyDayOpen } from './money-day';
 export { DailyCloseError, type DailyCloseErrorReason } from './daily-close-errors';
@@ -149,18 +150,13 @@ export function computeCloseAggregate(inputs: AggregateInputs): CloseAggregate {
   const voidTotal = sum(voided.map((b) => b.grandTotal));
 
   const tipTotal = sum(inputs.tenders.map((t) => t.tipAmount));
-  const refundedTaxTotal = sum(inputs.refunds.map((r) => r.taxRefundAmount));
-  const refundedServiceChargeTotal = sum(inputs.refunds.map((r) => r.serviceChargeRefundAmount));
-  const deliveryFeeRefunds = sum(inputs.refunds.map((r) => r.deliveryFeeRefundAmount));
-  const refundTotal = sub(sum(inputs.refunds.map((r) => r.amount)), deliveryFeeRefunds);
-  const refundedSales = sum(
-    inputs.refunds.map((r) =>
-      sub(
-        sub(sub(r.amount, r.taxRefundAmount), r.serviceChargeRefundAmount),
-        r.deliveryFeeRefundAmount
-      )
-    )
-  );
+  const {
+    taxRefunds: refundedTaxTotal,
+    serviceChargeRefunds: refundedServiceChargeTotal,
+    deliveryFeeRefunds,
+    refundTotal,
+    refundedSales,
+  } = computeRefundFinancials(inputs.refunds);
   const netSales = sub(sub(sub(grossSales, compTotal), discountTotal), refundedSales);
   const taxTotal = sub(billedTaxTotal, refundedTaxTotal);
   const serviceChargeTotal = sub(billedServiceChargeTotal, refundedServiceChargeTotal);

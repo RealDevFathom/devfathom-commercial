@@ -9,6 +9,7 @@ import { foldExpectedCash, type FoldableMovement } from './drawer-sessions';
 import { add, multiply, roundMoney, sub, sum, ZERO } from './money';
 import { enqueue, SchedulerError } from './scheduler';
 import type { RestaurantJobHandler } from './job-handlers-core';
+import { computeRefundFinancials } from './refund-financials';
 
 export const INSIGHTS_ROLLUP_DAY_JOB = 'insights.rollupDay';
 export const MAX_BACKFILL_CHUNK_DAYS = 90;
@@ -76,20 +77,13 @@ export function computeReconciledFinancials(input: {
   const discountTotal = sum(settled.map((bill) => bill.discountTotal));
   const cashExpected = sum(input.drawers.map((drawer) => foldExpectedCash(drawer.movements)));
   const cashCounted = sum(input.drawers.map((drawer) => drawer.countedCash ?? ZERO));
-  const refundedTaxTotal = sum(input.refunds.map((refund) => refund.taxRefundAmount));
-  const refundedServiceChargeTotal = sum(
-    input.refunds.map((refund) => refund.serviceChargeRefundAmount)
-  );
-  const deliveryFeeRefunds = sum(input.refunds.map((refund) => refund.deliveryFeeRefundAmount));
-  const refundTotal = sub(sum(input.refunds.map((refund) => refund.amount)), deliveryFeeRefunds);
-  const refundedSales = sum(
-    input.refunds.map((refund) =>
-      sub(
-        sub(sub(refund.amount, refund.taxRefundAmount), refund.serviceChargeRefundAmount),
-        refund.deliveryFeeRefundAmount
-      )
-    )
-  );
+  const {
+    taxRefunds: refundedTaxTotal,
+    serviceChargeRefunds: refundedServiceChargeTotal,
+    deliveryFeeRefunds,
+    refundTotal,
+    refundedSales,
+  } = computeRefundFinancials(input.refunds);
   return {
     grossSales,
     netSales: sub(sub(sub(grossSales, compTotal), discountTotal), refundedSales),
