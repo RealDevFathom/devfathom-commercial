@@ -8,7 +8,20 @@ const mocks = vi.hoisted(() => ({
     error: null as { message: string } | null,
     refetch: vi.fn(),
   },
-  candidates: { data: [], refetch: vi.fn() },
+  candidates: {
+    data: [] as Array<{
+      id: string;
+      productName: string;
+      saleable: boolean;
+      provenance: Array<{
+        id: string;
+        status: 'UNREVIEWED' | 'ACCEPTED' | 'CORRECTED';
+        field: string;
+        assertedValue: unknown;
+      }>;
+    }>,
+    refetch: vi.fn(),
+  },
   confirm: vi.fn(),
   publish: vi.fn(),
   pending: false,
@@ -49,6 +62,7 @@ beforeEach(() => {
   mocks.pending = false;
   mocks.confirmError = null;
   mocks.runNow.mockReset();
+  mocks.candidates.data = [];
 });
 afterEach(cleanup);
 const proposal = {
@@ -100,6 +114,60 @@ it('preserves the proposal and announces a failed confirmation', () => {
   expect(screen.getByRole('heading', { name: 'Synthetic OTC' })).toBeVisible();
   expect(screen.getByRole('alert')).toHaveTextContent('Proposal already has a decision.');
 });
+
+it.each([
+  {
+    name: 'unreviewed non-saleable medicine',
+    saleable: false,
+    assertionStatus: 'UNREVIEWED' as const,
+    detail: 'Non-saleable until reviewed and completed',
+    label: 'In review',
+    tone: 'warning',
+  },
+  {
+    name: 'reviewed medicine awaiting publication',
+    saleable: false,
+    assertionStatus: 'ACCEPTED' as const,
+    detail: 'Reviewed and awaiting publication',
+    label: 'Ready to publish',
+    tone: 'info',
+  },
+  {
+    name: 'saleable medicine',
+    saleable: true,
+    assertionStatus: 'ACCEPTED' as const,
+    detail: 'Reviewed and saleable',
+    label: 'Saleable',
+    tone: 'success',
+  },
+])(
+  'derives the reference status for a $name',
+  ({ saleable, assertionStatus, detail, label, tone }) => {
+    mocks.candidates.data = [
+      {
+        id: 'medicine-1',
+        productName: 'Stateful medicine',
+        saleable,
+        provenance: [
+          {
+            id: 'assertion-1',
+            status: assertionStatus,
+            field: 'productName',
+            assertedValue: { value: 'Stateful medicine' },
+          },
+        ],
+      },
+    ];
+
+    render(<MedicineReferenceWorkbench health={[]} />);
+
+    expect(screen.getByText(`${detail} · medicine-1`)).toBeVisible();
+    expect(screen.getByText(label).closest('[data-slot="status-pill"]')).toHaveAttribute(
+      'data-tone',
+      tone
+    );
+  }
+);
 
 function referenceCsv(count: number) {
   const lines = ['productName,strength,dosageForm,pack'];
@@ -187,8 +255,6 @@ it('rejects a file above 20,000 rows before any upload', async () => {
       expect.stringContaining('A reference file is limited to 20,000 rows')
     )
   );
-  expect(
-    screen.queryByRole('button', { name: 'Preview normalized rows' })
-  ).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Preview normalized rows' })).not.toBeInTheDocument();
   expect(mocks.runNow).not.toHaveBeenCalled();
 });
