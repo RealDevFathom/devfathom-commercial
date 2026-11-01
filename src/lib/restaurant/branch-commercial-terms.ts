@@ -4,6 +4,10 @@ import type { BranchCommercialTerms } from './commercial-terms';
 
 export type { BranchCommercialTerms };
 
+export class BranchCommercialTermsError extends Error {
+  readonly code = 'SERVICE_CHARGE_POLICY_CONFLICT' as const;
+}
+
 function iso(value: Date | null): string | null {
   return value ? value.toISOString() : null;
 }
@@ -21,7 +25,7 @@ export async function loadBranchCommercialTerms(
     effectiveFrom: { lte: at },
     OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
   };
-  const [profiles, policy] = await Promise.all([
+  const [profiles, policies] = await Promise.all([
     db.restaurantTaxProfileVersion.findMany({
       where: { branchId, status: 'PUBLISHED', ...effectiveWindow },
       orderBy: [{ effectiveFrom: 'asc' }, { id: 'asc' }],
@@ -50,12 +54,21 @@ export async function loadBranchCommercialTerms(
         },
       },
     }),
-    db.restaurantServiceChargePolicyVersion.findFirst({
+    db.restaurantServiceChargePolicyVersion.findMany({
       where: { branchId, ...effectiveWindow },
       orderBy: [{ effectiveFrom: 'desc' }, { id: 'asc' }],
+      take: 2,
       select: { rate: true },
     }),
   ]);
+
+  // Publication prevents overlapping intervals, but do not silently choose one
+  // if corrupt or legacy data violates that invariant. Ambiguous commercial
+  // terms must deny pricing rather than undercharge a check.
+  if (policies.length > 1) {
+    throw new BranchCommercialTermsError('Conflicting service-charge policies are in effect.');
+  }
+  const policy = policies[0];
 
   return {
     profiles: profiles.map((profile) => ({

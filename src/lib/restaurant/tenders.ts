@@ -16,20 +16,7 @@ import {
   runMoneyTransaction,
   type MoneyActor,
 } from './drawer-sessions';
-import {
-  add,
-  compare,
-  equals,
-  formatMoney,
-  isNegative,
-  isZero,
-  money,
-  multiply,
-  roundMoney,
-  sub,
-  sum,
-  ZERO,
-} from './money';
+import { add, compare, equals, isNegative, isZero, money, sub, sum, ZERO } from './money';
 import { appendPaymentEvent, getPaymentProvider } from './payment-adapter';
 import {
   quoteTaxSettlement,
@@ -525,7 +512,10 @@ export async function quoteOpenBillSettlement(
   }
 }
 
-async function loadSettlementContext(
+/** The settlement quote a tender is validated and finalized against. Exported as
+ * a pure acceptance seam so tests can assert the service charge comes from the
+ * bill snapshot, not the current policy (a mid-bill policy change must not reprice). */
+export async function loadSettlementContext(
   tx: ScopedDb,
   bill: BillForTender,
   priorTenders: TenderRow[],
@@ -690,26 +680,13 @@ async function loadSettlementContext(
       };
     });
   });
+  // Weight prior tenders by NET merchandise consideration (after comp/discount),
+  // used only to split tax across payment categories — not the service basis.
   const merchandiseBasis = sum(
     quoteLines.map((line) =>
       line.unitPrice.plus(line.modifierTotal).minus(line.comp).minus(line.beforeTaxDiscount)
     )
   );
-  const order = await tx.restaurantOrder.findFirst({
-    where: { id: bill.orderId },
-    select: { channel: true },
-  });
-  const servicePolicy =
-    order?.channel === 'DINE_IN'
-      ? await tx.restaurantServiceChargePolicyVersion.findFirst({
-          where: { branchId: bill.branchId, ...effectiveWindow },
-          orderBy: [{ effectiveFrom: 'desc' }, { id: 'asc' }],
-          select: { rate: true },
-        })
-      : null;
-  const serviceAmount = servicePolicy
-    ? formatMoney(roundMoney(multiply(merchandiseBasis, servicePolicy.rate.toString())))
-    : '0.00';
   const taxablePriorTenders = allocateTaxableTenderPrincipals(priorTenders, merchandiseBasis);
   const taxableQuote = quoteTaxSettlement({
     lines: quoteLines,
@@ -729,7 +706,10 @@ async function loadSettlementContext(
     priorTenderWeights: taxablePriorTenders,
     acceptedPrincipal: sum(priorTenders.map((tender) => tender.amount)),
     afterTaxDiscount,
-    serviceCharge: { amount: serviceAmount, taxable: false },
+    // Settlement reuses the service charge frozen on the bill at cut time
+    // (computed once via `serviceChargeFor`). Never recompute from the current
+    // policy — a mid-bill policy change must not reprice an open bill.
+    serviceCharge: { amount: bill.serviceChargeTotal, taxable: false },
     roundingAdjustment: bill.roundingAdjustment,
   });
   const acceptedPrincipal = taxableQuote.acceptedPrincipal;

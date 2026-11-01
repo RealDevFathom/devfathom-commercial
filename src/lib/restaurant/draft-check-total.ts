@@ -1,5 +1,18 @@
-import { add, formatMoney, multiply, roundMoney, sum } from '@/lib/restaurant/money-arithmetic';
-import { quoteTaxSettlement, type TaxProfile, type TaxRule } from '@/lib/restaurant/tax-calculator';
+import { add, formatMoney, sum } from '@/lib/restaurant/money-arithmetic';
+import { serviceChargeBasis, serviceChargeFor } from '@/lib/restaurant/service-charge';
+import {
+  quoteTaxSettlement,
+  type PaymentCategory,
+  type TaxProfile,
+  type TaxRule,
+} from '@/lib/restaurant/tax-calculator';
+
+/**
+ * The tender a draft check is quoted under. The preview can only pick one rate,
+ * and it picks CASH; a CARD payment may be taxed at a different rate, so the
+ * check UI must label the quote as the cash rate (see `DraftCheckBreakdown.tenderType`).
+ */
+export const DRAFT_CHECK_TENDER_TYPE: PaymentCategory = 'CASH';
 
 export type DraftCheckLine = {
   id: string;
@@ -33,67 +46,57 @@ export type DraftCheckBreakdown = {
   tax: string;
   serviceCharge: string;
   total: string;
+  /** The tender the quote was priced under — always CASH. A CARD payment may be
+   * taxed at a different rate, so the check UI must label this as the cash rate. */
+  tenderType: PaymentCategory;
 };
+
+/** No published profile is in effect, so the check cannot be priced. */
+export class DraftCheckTaxError extends Error {
+  readonly code = 'TAX_PROFILE_UNAVAILABLE' as const;
+
+  constructor(message = 'No tax profile is in effect.') {
+    super(message);
+    this.name = 'DraftCheckTaxError';
+  }
+}
 
 /** Tax, service, and the amount due. A stored or client total is not an input. */
 export function quoteDraftCheckBreakdown(input: DraftCheckTotalInput): DraftCheckBreakdown {
+  if (!input.profiles?.length) throw new DraftCheckTaxError();
   const at = input.at ?? new Date();
-  const fallback = input.profiles ? null : zeroTax(at);
   const lines = input.lines.map((line) => ({
     id: line.id,
     unitPrice: line.unitPrice,
     quantity: line.quantity,
     modifierTotal: formatMoney(sum(line.modifierDeltas ?? [])),
   }));
-  const basis = sum(
-    lines.map((line) => multiply(add(line.unitPrice, line.modifierTotal), line.quantity))
+  const basis = serviceChargeBasis(
+    lines.map((line) => ({
+      unitCharge: add(line.unitPrice, line.modifierTotal),
+      quantity: line.quantity,
+    }))
   );
   const serviceAmount =
     input.serviceChargeRate != null
-      ? formatMoney(roundMoney(multiply(basis, input.serviceChargeRate)))
+      ? formatMoney(serviceChargeFor(basis, input.serviceChargeRate))
       : (input.serviceCharge ?? '0.00');
   const quote = quoteTaxSettlement({
     lines,
-    profiles: input.profiles ?? fallback!.profiles,
-    rules: input.rules ?? fallback!.rules,
+    profiles: input.profiles,
+    rules: input.rules ?? [],
     at,
-    proposedTenderType: 'CASH',
+    proposedTenderType: DRAFT_CHECK_TENDER_TYPE,
     serviceCharge: { amount: serviceAmount, taxable: false },
   });
   return {
     tax: formatMoney(quote.tax.toString()),
     serviceCharge: formatMoney(quote.serviceChargePayable.toString()),
     total: formatMoney(add(quote.grandTotal.toString(), input.deliveryFee ?? '0.00')),
+    tenderType: DRAFT_CHECK_TENDER_TYPE,
   };
 }
 
 export function quoteDraftCheckTotal(input: DraftCheckTotalInput): string {
   return quoteDraftCheckBreakdown(input).total;
-}
-
-function zeroTax(at: Date): { profiles: TaxProfile[]; rules: TaxRule[] } {
-  const effectiveFrom = new Date(at.getTime() - 86_400_000);
-  const effectiveTo = new Date(at.getTime() + 86_400_000);
-  const profile: TaxProfile = {
-    id: 'draft-zero-tax',
-    effectiveFrom,
-    effectiveTo,
-    status: 'PUBLISHED',
-    approvalReference: 'DRAFT-ZERO',
-    approvedAt: effectiveFrom,
-  };
-  const rules = (['CASH', 'CARD', 'OTHER'] as const).map((category): TaxRule => ({
-    id: `draft-zero-${category}`,
-    profileVersionId: profile.id,
-    paymentCategory: category,
-    priceMode: 'EXCLUSIVE',
-    rate: '0',
-    effectiveFrom,
-    effectiveTo,
-    status: 'PUBLISHED',
-    approvalReference: 'DRAFT-ZERO',
-    approvedAt: effectiveFrom,
-    sourceExpiresAt: effectiveTo,
-  }));
-  return { profiles: [profile], rules };
 }

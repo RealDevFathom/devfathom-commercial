@@ -18,6 +18,9 @@ export const GET = withTerminalAuth(async (ctx, request) => {
   if (!parsed.success) {
     return NextResponse.json({ error: 'A non-empty orderId query is required.' }, { status: 400 });
   }
+  // A missing tax profile must never make an order unreadable: getOrderForBranch
+  // returns the order with tax/service left unpriced in that case, and pricing
+  // fails closed only at tender/settle (#148) — this read does not 409.
   const order = await getOrderForBranch(ctx.db, parsed.data.orderId, ctx.device.branchId);
   if (!order) return NextResponse.json({ error: 'The order does not exist.' }, { status: 404 });
   return NextResponse.json(order);

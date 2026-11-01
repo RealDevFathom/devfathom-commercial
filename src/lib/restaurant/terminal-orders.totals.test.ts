@@ -128,9 +128,11 @@ describe('order totals ignore stored tax and service', () => {
     expect(detail?.items[0]?.taxAmount).toBe(D('99.00').toString());
     expect(detail?.totals.tax).toBe('0.23');
     expect(detail?.totals.serviceCharge).toBe('0.45');
+    // The preview is quoted under the cash rate; the UI labels that a card may differ.
+    expect(detail?.totals.tenderType).toBe('CASH');
     const due = D(detail!.totals.subtotal)
-      .plus(detail!.totals.tax)
-      .plus(detail!.totals.serviceCharge)
+      .plus(detail!.totals.tax ?? '0')
+      .plus(detail!.totals.serviceCharge ?? '0')
       .plus(detail!.totals.deliveryFee);
     expect(due.toFixed(2)).toBe('5.18');
     const merchandiseOnly = D('4.50');
@@ -146,5 +148,18 @@ describe('order totals ignore stored tax and service', () => {
     );
     expect(detail?.totals.tax).toBe('0.23');
     expect(detail?.totals.serviceCharge).toBe('0.00');
+  });
+
+  it('stays readable when no tax profile is in effect — a read never fails closed', async () => {
+    const db = dbFor('DINE_IN');
+    db.restaurantTaxProfileVersion.findMany.mockResolvedValueOnce([]);
+    const detail = await getOrderForBranch(db as unknown as ScopedDb, 'order-1', 'branch-1');
+    expect(detail).not.toBeNull();
+    // Merchandise subtotal still shows; tax/service are unpriced (null), not zero.
+    expect(detail?.totals.subtotal).toBe('4.5');
+    expect(detail?.totals.tax).toBeNull();
+    expect(detail?.totals.serviceCharge).toBeNull();
+    expect(detail?.totals.tenderType).toBeNull();
+    // Pricing fails closed only at tender/settle, not on this read.
   });
 });

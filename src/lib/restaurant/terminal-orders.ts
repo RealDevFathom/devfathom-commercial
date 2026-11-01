@@ -12,7 +12,11 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { loadBranchCommercialTerms } from './branch-commercial-terms';
 import { reviveCommercialTerms } from './commercial-terms';
 import { CoAuthorizationError } from './co-authorization';
-import { quoteDraftCheckBreakdown } from './draft-check-total';
+import {
+  DraftCheckTaxError,
+  quoteDraftCheckBreakdown,
+  type DraftCheckBreakdown,
+} from './draft-check-total';
 import { operatorHasCapability } from './checkout-routes';
 import { KitchenTicketError } from './kitchen-tickets';
 import { DELIVERY_CHANNEL_UNAVAILABLE_MESSAGE, orderChannelSchema } from './order-channels';
@@ -540,20 +544,28 @@ export async function getOrderForBranch(db: ScopedDb, orderId: string, branchId:
   const activeItems = order.items.filter((i) => i.status !== 'VOIDED');
   const at = new Date();
   const terms = reviveCommercialTerms(await loadBranchCommercialTerms(db, order.branchId, at));
-  const quoted = quoteDraftCheckBreakdown({
-    at,
-    lines: activeItems.map((item) => ({
-      id: item.id,
-      unitPrice: item.unitPrice.toString(),
-      quantity: item.quantity,
-      modifierDeltas: item.modifiers.map((modifier) => modifier.priceDelta.toString()),
-    })),
-    serviceChargeRate: order.channel === 'DINE_IN' ? (terms.serviceChargeRate ?? '0') : '0',
-    deliveryFee: (
-      order.deliveryFulfillment?.deliveryFeeSnapshot ?? new Prisma.Decimal(0)
-    ).toString(),
-    ...(terms.profiles.length > 0 ? { profiles: terms.profiles, rules: terms.rules } : {}),
-  });
+  const deliveryFee = order.deliveryFulfillment?.deliveryFeeSnapshot ?? new Prisma.Decimal(0);
+  // A read stays readable even with no tax profile in effect: price tax/service
+  // when a published profile exists, otherwise leave them unpriced (null). Pricing
+  // fails closed only at tender/settle (#148), never on this read.
+  let quoted: DraftCheckBreakdown | null = null;
+  try {
+    quoted = quoteDraftCheckBreakdown({
+      at,
+      lines: activeItems.map((item) => ({
+        id: item.id,
+        unitPrice: item.unitPrice.toString(),
+        quantity: item.quantity,
+        modifierDeltas: item.modifiers.map((modifier) => modifier.priceDelta.toString()),
+      })),
+      serviceChargeRate: order.channel === 'DINE_IN' ? (terms.serviceChargeRate ?? '0') : '0',
+      deliveryFee: deliveryFee.toString(),
+      profiles: terms.profiles,
+      rules: terms.rules,
+    });
+  } catch (error) {
+    if (!(error instanceof DraftCheckTaxError)) throw error;
+  }
   return {
     id: order.id,
     branchId: order.branchId,
@@ -603,9 +615,12 @@ export async function getOrderForBranch(db: ScopedDb, orderId: string, branchId:
     })),
     totals: {
       subtotal: money(deriveSubtotal(activeItems)),
-      tax: quoted.tax,
-      serviceCharge: quoted.serviceCharge,
-      deliveryFee: money(order.deliveryFulfillment?.deliveryFeeSnapshot ?? new Prisma.Decimal(0)),
+      // null when no tax profile is in effect — unpriced, not zero.
+      tax: quoted?.tax ?? null,
+      serviceCharge: quoted?.serviceCharge ?? null,
+      deliveryFee: money(deliveryFee),
+      // The rate the quote assumes (CASH); a CARD payment may be taxed differently.
+      tenderType: quoted?.tenderType ?? null,
     },
   };
 }
