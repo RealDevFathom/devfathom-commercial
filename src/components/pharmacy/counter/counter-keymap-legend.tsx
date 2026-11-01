@@ -68,7 +68,11 @@ export function CounterKeymapLegend({
         ) : null}
       </div>
 
-      <dl className="grid grid-cols-1 gap-x-3 gap-y-0.5 sm:grid-cols-2">
+      {/* Columns follow the card's own width, not the viewport, so labels never squeeze. */}
+      <dl
+        data-testid="counter-keymap-bindings"
+        className="grid grid-cols-[repeat(auto-fill,minmax(min(14rem,100%),1fr))] gap-x-3 gap-y-0.5"
+      >
         {COUNTER_ACTIONS.map((action) => (
           <div key={action} className="flex items-center justify-between gap-2 py-0.5">
             <dt className="min-w-0 truncate text-xs text-text-body">
