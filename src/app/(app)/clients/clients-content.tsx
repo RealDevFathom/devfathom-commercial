@@ -23,6 +23,7 @@ import { trpc } from '@/lib/trpc';
 import type { inferRouterOutputs } from '@trpc/server';
 import type { AppRouter } from '@/server/routers/_app';
 import { cn } from '@/lib/utils';
+import { moneyListLabel } from '@/lib/finance/currency';
 
 type Client = inferRouterOutputs<AppRouter>['clients']['getAll'][number];
 
@@ -65,16 +66,10 @@ export function ClientsContent() {
         eyebrow="WORKSPACE"
         heading="Clients"
         description={
-          <>
-            {clients?.length ?? 0} clients &middot; Manage relationships and contacts.
-          </>
+          <>{clients?.length ?? 0} clients &middot; Manage relationships and contacts.</>
         }
         actions={
-          <Button
-            size="lg"
-            className="h-10 px-4"
-            onClick={() => setShowCreate(true)}
-          >
+          <Button size="lg" className="h-10 px-4" onClick={() => setShowCreate(true)}>
             <Plus className="h-4 w-4" />
             Add Client
           </Button>
@@ -198,9 +193,9 @@ const ClientCard = memo(function ClientCard({
                   {client._count.invoices}
                 </span>
               )}
-              {isAdmin && client.totalRevenue > 0 && (
+              {isAdmin && client.totalRevenue.some(({ amount }) => amount > 0) && (
                 <span className="font-semibold text-emerald-500">
-                  ${client.totalRevenue.toLocaleString()}
+                  {moneyListLabel(client.totalRevenue)}
                 </span>
               )}
             </div>
@@ -326,9 +321,7 @@ function CreateClientForm({ onClose }: { onClose: () => void }) {
         </div>
 
         {/* UX-01: surface validation/mutation errors (e.g. invalid website URL). */}
-        {createClient.error && (
-          <p className="text-xs text-red-500">{createClient.error.message}</p>
-        )}
+        {createClient.error && <p className="text-xs text-red-500">{createClient.error.message}</p>}
 
         <div className="flex justify-end gap-2">
           <button

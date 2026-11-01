@@ -14,7 +14,7 @@ import type { TenantOrganization } from '@/lib/tenancy/host';
 import type { SupportIdentity } from '@/lib/tenancy/support-session';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { hasModule, resolveOrganizationEntitlements } from '@/lib/entitlements';
-import { moduleForProcedure } from '@/lib/module-catalog';
+import { alternativeModulesForProcedure, moduleForProcedure } from '@/lib/module-catalog';
 import { formatValidationError } from '@/lib/validation-error';
 import {
   type AuditDetail,
@@ -261,7 +261,15 @@ export function assertModuleLicensed(
 
 const requireLicensedModule = t.middleware(async ({ ctx, next, path }) => {
   const moduleKey = moduleForProcedure(path);
-  if (moduleKey) assertModuleLicensed(ctx, moduleKey);
+  if (
+    moduleKey &&
+    !hasModule(ctx.entitlements, moduleKey) &&
+    !alternativeModulesForProcedure(path).some((alternative) =>
+      hasModule(ctx.entitlements, alternative)
+    )
+  ) {
+    assertModuleLicensed(ctx, moduleKey);
+  }
   return next();
 });
 
@@ -290,7 +298,10 @@ function requireCapability(action: Action) {
     if (!allowed) {
       throw new TRPCError({
         code: 'FORBIDDEN',
-        message: 'You do not have permission for this action.',
+        message:
+          action === 'pharmacy:dispense'
+            ? 'Selling a prescription-only or restricted medicine needs the pharmacist dispensing permission.'
+            : 'You do not have permission for this action.',
       });
     }
     return next({ ctx: { ...ctx, session: ctx.session } });

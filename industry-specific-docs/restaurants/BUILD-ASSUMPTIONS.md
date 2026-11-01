@@ -980,7 +980,9 @@ UTC instants and `businessDate` is the branch business day (`business-date.ts`).
 requirement flags recorded not enforced.** Template steps carry `requiresPhoto/Signature/Note` flags; captured
 evidence (`restaurant_sop_evidence`) is APPEND-ONLY (content-hash + a nullable `storageRef` blob seam, non-negative
 `sizeBytes`) — L1 records the requirement flags and evidence rows but does NOT enforce completeness (an L-domain
-concern). **(4) Occurrence flow + late/missed.** `RestaurantSopOccurrenceStatus` is EXACTLY the eight §11.5 states
+concern). The M7-L4 execution lane enforces it at submit: every checklist step must be completed and each step's
+`requiresNote` (non-blank), `requiresPhoto` and `requiresSignature` flag must be satisfied before `IN_PROGRESS →
+SUBMITTED`. **(4) Occurrence flow + late/missed.** `RestaurantSopOccurrenceStatus` is EXACTLY the eight §11.5 states
 (`SCHEDULED/IN_PROGRESS/SUBMITTED/VERIFIED/REJECTED/LATE/MISSED/WAIVED`); LATE = submitted after the due window,
 MISSED = window elapsed with no submission. Transitioning overdue occurrences to LATE/MISSED is a scheduled sweep (a
 scheduler job an L-domain lane registers); L1 stores the states and the due/window instants that drive it.

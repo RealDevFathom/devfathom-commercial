@@ -4,6 +4,7 @@ import {
   bookkeepingJournalLines,
   createSettlementBatch,
   postBookkeepingTransaction,
+  reconcileSettlementBankLine,
   reverseBookkeepingTransaction,
 } from './bookkeeping';
 
@@ -141,5 +142,39 @@ describe('POS settlement batches', () => {
         include: { tenders: true },
       })
     );
+  });
+});
+
+describe('#710 POS settlement statement matching', () => {
+  const scope = { organizationId: 'org-a', branchId: 'branch-a', actorId: 'owner' };
+  function matching(amountMinor = 1000) {
+    const line = { id: 'line', amountMinor, statementRef: 'statement', matches: [{ amountMinor: 200 }] };
+    const batch = { id: 'batch', expectedMinor: 1000, bankMatches: [{ amountMinor: 200 }] };
+    const db = {
+      $queryRaw: vi.fn(),
+      pharmacyBankStatementLine: { findFirst: vi.fn().mockResolvedValue(line), update: vi.fn() },
+      pharmacySettlementBatch: { findFirst: vi.fn().mockResolvedValue(batch), update: vi.fn() },
+      pharmacyBankReconciliation: { create: vi.fn().mockResolvedValue({ id: 'match' }) },
+    };
+    return { db, scoped: db as unknown as ScopedDb };
+  }
+  it('counts active allocations, caps both sides and marks the batch settled without posting money', async () => {
+    const { db, scoped } = matching();
+    await reconcileSettlementBankLine(scoped, scope, { statementLineId: 'line', settlementBatchId: 'batch', amountMinor: 800 });
+    expect(db.pharmacyBankReconciliation.create).toHaveBeenCalledWith({ data: { organizationId: 'org-a', statementLineId: 'line', settlementBatchId: 'batch', amountMinor: 800, matchedByUserId: 'owner' } });
+    expect(db.pharmacyBankStatementLine.update).toHaveBeenCalledWith({ where: { id: 'line' }, data: { status: 'MATCHED' } });
+    expect(db.pharmacySettlementBatch.update).toHaveBeenCalledWith({ where: { id: 'batch' }, data: expect.objectContaining({ settledMinor: 1000, settledAt: expect.any(Date) }) });
+    expect(db.pharmacySettlementBatch.findFirst).toHaveBeenCalledWith({ where: { organizationId: 'org-a', branchId: 'branch-a', id: 'batch' }, include: { bankMatches: { where: { reversedAt: null } } } });
+  });
+  it.each([[1000, 801], [500, 301], [-1000, 100]])('rejects over-allocation or a debit statement (%s, %s)', async (lineAmount, amountMinor) => {
+    const { db, scoped } = matching(lineAmount);
+    await expect(reconcileSettlementBankLine(scoped, scope, { statementLineId: 'line', settlementBatchId: 'batch', amountMinor })).rejects.toMatchObject({ reason: 'RECONCILIATION_MISMATCH' });
+    expect(db.pharmacyBankReconciliation.create).not.toHaveBeenCalled();
+  });
+  it('refuses a missing or inaccessible branch target', async () => {
+    const { db, scoped } = matching();
+    db.pharmacySettlementBatch.findFirst.mockResolvedValue(null);
+    await expect(reconcileSettlementBankLine(scoped, scope, { statementLineId: 'line', settlementBatchId: 'batch', amountMinor: 100 })).rejects.toMatchObject({ reason: 'NOT_FOUND' });
+    expect(db.pharmacyBankReconciliation.create).not.toHaveBeenCalled();
   });
 });

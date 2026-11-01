@@ -119,6 +119,7 @@ export type RestaurantTerminalFixture = {
     authorization: string;
     'x-terminal-session': string;
     'x-forwarded-for': string;
+    'x-pos-composer-proof': string;
   };
 };
 
@@ -148,6 +149,8 @@ async function establishTerminal(
     },
   });
   expect(unlocked.status()).toBe(200);
+  const { composerProof } = (await unlocked.json()) as { composerProof: string };
+  expect(typeof composerProof).toBe('string');
 
   return {
     deviceId: device.deviceId,
@@ -157,6 +160,7 @@ async function establishTerminal(
       authorization,
       'x-terminal-session': body.sessionToken,
       'x-forwarded-for': device.clientIp,
+      'x-pos-composer-proof': composerProof,
     },
   };
 }

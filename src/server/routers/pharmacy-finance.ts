@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { can, subjectFromSession } from '@/lib/abac';
 import { hasModule } from '@/lib/entitlements';
 import { financialStatements } from '@/lib/pharmacy/financial-statements';
+import { forecastPharmacyCashFlow } from '@/lib/pharmacy/cash-flow-forecast';
 import {
   grossMargin,
   grossMarginComparison,
@@ -16,6 +17,7 @@ import {
   PharmacyBookkeepingError,
   postBookkeepingTransaction,
   reconcileBankLine,
+  reconcileSettlementBankLine,
   reopenAccountingPeriod,
   reverseBookkeepingTransaction,
 } from '@/lib/pharmacy/bookkeeping';
@@ -60,6 +62,29 @@ const reportPeriod = z
     },
     { message: 'Choose a valid period of at most 92 days.' }
   );
+
+const cashEstimate = z.object({
+  id,
+  date: z.iso.date(),
+  amountMinor: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+});
+const forecastPayable = z.object({
+  id,
+  dueDate: z.iso.date(),
+  amountMinor: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  earlyPayDate: z.iso.date().optional(),
+  earlyPayDiscountBps: z.number().int().min(0).max(10_000).optional(),
+});
+const cashFlowForecastInput = z.object({
+  branchId: id,
+  asOfDate: z.iso.date(),
+  openingCashMinor: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+  minimumCashReserveMinor: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+  annualCashValueBps: z.number().int().min(0).max(100_000),
+  salesCashEstimates: z.array(cashEstimate).max(366),
+  khataCollectionEstimates: z.array(cashEstimate).max(10_000),
+  payables: z.array(forecastPayable).max(10_000),
+});
 
 const ledgerReportProcedure = adminProcedure
   .input(z.object({ branchId: id }))
@@ -239,12 +264,22 @@ export const pharmacyFinanceRouter = router({
       } catch (error) { fail(error); }
     }),
 
+  cashFlowForecast: ledgerReportProcedure.input(cashFlowForecastInput).query(({ input }) => {
+    try {
+      return forecastPharmacyCashFlow(input);
+    } catch (error) {
+      if (error instanceof RangeError) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
+      }
+      throw error;
+    }
+  }),
   financialStatements: ledgerReportProcedure
     .input(reportPeriod.safeExtend({ page: z.number().int().min(1).max(10000).default(1) }))
     .query(async ({ ctx, input }) => ({
       ...ledgerMetadata(
         ctx.reportScope,
-        'Branch journal lines posted before the exclusive cutoff. Opening balances precede from; movements use [from,to). Receivables are debit balances; payables are credit balances. CASH and BANK are netted per entry, excluding internal transfers from cash inflow/outflow. Unposted activity and due-date aging remain unknown.'
+        'Branch journal lines posted before the exclusive cutoff. Opening balances precede from; movements use [from,to). Net P&L is projected only from canonical revenue, contra-revenue, and expense journal movements in that window. Receivables are debit balances; payables are credit balances. CASH and BANK are netted per entry, excluding internal transfers from cash inflow/outflow. Unposted activity and due-date aging remain unknown.'
       ),
       ...(await financialStatements(ctx.db, ctx.reportScope, {
         from: new Date(input.from),
@@ -395,7 +430,7 @@ export const pharmacyFinanceRouter = router({
           where: {
             organizationId,
             branchId: branch.id,
-            type: { in: ['CARD', 'WALLET', 'BANK_TRANSFER'] },
+            type: { in: ['CARD', 'WALLET', 'BANK_TRANSFER', 'RAAST', 'JAZZCASH', 'EASYPAISA'] },
             settlementMembers: { none: {} },
           },
           include: { sale: { select: { receiptNumber: true } } },
@@ -404,7 +439,7 @@ export const pharmacyFinanceRouter = router({
         }),
         ctx.db.pharmacySettlementBatch.findMany({
           where: { organizationId, branchId: branch.id },
-          include: { tenders: true },
+          include: { tenders: true, bankMatches: { where: { reversedAt: null } } },
           orderBy: { businessDate: 'desc' },
           take: 25,
         }),
@@ -524,12 +559,17 @@ export const pharmacyFinanceRouter = router({
 
   reconcile: bookkeepingProcedure
     .input(
-      z.object({ branchId: id, statementLineId: id, transactionId: id, amountMinor: moneyMinor })
+      z.object({ branchId: id, statementLineId: id, transactionId: id.optional(),
+        settlementBatchId: id.optional(), amountMinor: moneyMinor }).strict()
+        .refine((value) => Boolean(value.transactionId) !== Boolean(value.settlementBatchId),
+          'Choose exactly one posted transaction or POS settlement batch.')
     )
     .mutation(async ({ ctx, input }) => {
       try {
         const scoped = await scope(ctx, input.branchId);
-        return await ctx.db.$transaction((tx) => reconcileBankLine(txDb(tx), scoped, input));
+        return await ctx.db.$transaction((tx) => input.settlementBatchId
+          ? reconcileSettlementBankLine(txDb(tx), scoped, { ...input, settlementBatchId: input.settlementBatchId })
+          : reconcileBankLine(txDb(tx), scoped, { ...input, transactionId: input.transactionId! }));
       } catch (error) {
         fail(error);
       }
@@ -541,7 +581,7 @@ export const pharmacyFinanceRouter = router({
         branchId: id,
         reference: z.string().trim().min(1).max(80),
         provider: z.string().trim().min(1).max(120),
-        tenderType: z.enum(['CARD', 'WALLET', 'BANK_TRANSFER']),
+        tenderType: z.enum(['CARD', 'WALLET', 'BANK_TRANSFER', 'RAAST', 'JAZZCASH', 'EASYPAISA']),
         businessDate: at,
         tenderIds: z.array(id).min(1).max(100),
       })

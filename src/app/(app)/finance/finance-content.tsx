@@ -27,6 +27,7 @@ import { Stat } from '@/components/ui/stat';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
+import { financeCsvCell } from './finance-csv';
 import { format } from 'date-fns';
 import { moneyListLabel, baseEquivalentLabel, moneyLabel } from '@/lib/finance/currency';
 import { InvoicesTab } from './invoices-tab';
@@ -218,8 +219,16 @@ function TransactionsTab({
 
   // IMP-FIN-06: export the currently-filtered transactions to CSV.
   const exportCsv = useCallback(() => {
-    const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-    const header = ['Date', 'Type', 'Amount', 'Currency', 'Category', 'Description', 'Project', 'Client'];
+    const header = [
+      'Date',
+      'Type',
+      'Amount',
+      'Currency',
+      'Category',
+      'Description',
+      'Project',
+      'Client',
+    ];
     const rows = filtered.map((t) => [
       format(new Date(t.date), 'yyyy-MM-dd'),
       t.type,
@@ -230,7 +239,7 @@ function TransactionsTab({
       t.project?.name ?? '',
       t.client?.name ?? '',
     ]);
-    const csv = [header, ...rows].map((r) => r.map(esc).join(',')).join('\r\n');
+    const csv = [header, ...rows].map((r) => r.map(financeCsvCell).join(',')).join('\r\n');
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
     const a = document.createElement('a');
     a.href = url;
@@ -769,7 +778,10 @@ function RecurringTab() {
                   </div>
                   <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-secondary">
                     <div
-                      className={cn('h-full rounded-full', b.overBudget ? 'bg-red-500' : 'bg-primary')}
+                      className={cn(
+                        'h-full rounded-full',
+                        b.overBudget ? 'bg-red-500' : 'bg-primary'
+                      )}
                       style={{ width: `${Math.min(100, b.pct)}%` }}
                     />
                   </div>

@@ -6,6 +6,11 @@ import { MarginComparisonSection } from './margin-comparison';
 import { LedgerReportsSection } from './ledger-reports';
 import { SectionCard } from '@/components/ui/section-card';
 import { FinancialStatements } from './financial-statements';
+import { PageHeader } from '@/components/ui/page-header';
+
+vi.mock('@/components/pharmacy/counter/manual-payment-settings-panel', () => ({
+  ManualPaymentSettingsPanel: () => null,
+}));
 
 const mocks = vi.hoisted(() => ({
   financialStatements: vi.fn(),
@@ -98,6 +103,17 @@ beforeEach(() => {
     reader.mockRejectedValue({ code: 'FORBIDDEN' });
 });
 afterEach(() => vi.useRealTimers());
+
+it('links the selected finance branch to its balance sheet', async () => {
+  const tree = await PharmacyFinancePage({
+    searchParams: Promise.resolve({ branch: 'branch_2' }),
+  });
+  const header = sectionProps(tree, PageHeader);
+  const html = renderToStaticMarkup(header.actions as ReactElement);
+
+  expect(html).toContain('/pharmacy/accounts/balance-sheet?branch=branch_2');
+  expect(html).toContain('Balance sheet');
+});
 
 describe('finance parent GET filter round-trip', () => {
   const ledger = {

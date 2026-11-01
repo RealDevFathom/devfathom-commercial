@@ -9,9 +9,9 @@
  * `compLine` appends a loyalty release and THEN validates the co-authorization, and
  * `cutBills` releases + voids the old bills and THEN plans the split.
  *
- * These checks drive the ACTUAL production route handlers — `withTerminalAuth` +
- * `moneyMutationRoute`, reached through the real `/checkout/bill` and `/checkout/comp`
- * modules over real `Request` objects — never a hand-rolled `createTenantDb` caller:
+ * These checks drive `withTerminalAuth` + `moneyMutationRoute` over real `Request`
+ * objects: the production bill route and a test-only adapter for the retained comp
+ * domain. The public MVP comp endpoint is tested separately as a side-effect-free denial:
  *
  *   - a comp refused at its co-authorization leaves the loyalty release, the bill, the
  *     line, the ledger, the co-authorization table and the money idempotency key exactly
@@ -77,7 +77,13 @@ type Deps = {
   loyalty: typeof import('./loyalty');
   bills: typeof import('./bills');
   terminalAuth: typeof import('./terminal-auth');
-  routes: { bill: RouteModule; comp: RouteModule; establish: RouteModule; unlock: RouteModule };
+  routes: {
+    bill: RouteModule;
+    comp: RouteModule;
+    retainedComp: RouteModule;
+    establish: RouteModule;
+    unlock: RouteModule;
+  };
 };
 
 let deps: Deps;
@@ -260,8 +266,9 @@ beforeAll(async () => {
       import('@/app/api/restaurant/checkout/comp/route'),
       import('@/app/api/restaurant/terminal/establish/route'),
       import('@/app/api/restaurant/terminal/unlock/route'),
+      import('@/lib/test-support/retained-comp-route'),
     ]);
-  const [bill, comp, establish, unlock] = routeMods as RouteModule[];
+  const [bill, comp, establish, unlock, retainedComp] = routeMods as RouteModule[];
 
   deps = {
     withTenantDb: scopedDb.withTenantDb,
@@ -272,7 +279,13 @@ beforeAll(async () => {
     loyalty,
     bills,
     terminalAuth,
-    routes: { bill: bill!, comp: comp!, establish: establish!, unlock: unlock! },
+    routes: {
+      bill: bill!,
+      comp: comp!,
+      retainedComp: retainedComp!,
+      establish: establish!,
+      unlock: unlock!,
+    },
   };
 
   // The tenant-scoped assertions below are only meaningful under enforced row level
@@ -393,7 +406,51 @@ describeIfDatabase('WHA-136 terminal money mutations roll back before HTTP mappi
     return { ...guest, orderId, billId };
   }
 
-  describe('comp refused after a would-be loyalty release', () => {
+  describe('public MVP comp denial', () => {
+    it.each(['self approval', 'manager approval', 'invalid PIN'])(
+      'preserves a redeemed bill and all persistence with %s, including on retry',
+      async (approval) => {
+        const seeded = await seedRedeemedBill(`mvp-${approval.replaceAll(' ', '-')}`);
+        const snapshot = async () => ({
+          bill: await readBill(seeded.billId),
+          lines: await readLines(seeded.billId),
+          ledger: await ledger(seeded.accountId),
+          counts: await tenantCounts(),
+          balance: await deps.loyalty.loyaltyBalance(deps.createTenantDb(orgId), seeded.accountId),
+          attempts: await failedAttempts(ctx.approver2),
+          lastSeen: await deviceLastSeen(),
+        });
+        const before = await snapshot();
+        const key = uniqueKey('mvp-comp');
+        const body = {
+          billId: seeded.billId,
+          billLineId: before.lines[0]!.id,
+          reason: 'kitchen error',
+          approving: {
+            staffProfileId:
+              approval === 'self approval'
+                ? ctx.operator
+                : approval === 'invalid PIN'
+                  ? ctx.approver2
+                  : ctx.manager,
+            type: 'PIN',
+            secret: approval === 'invalid PIN' ? '999999' : PIN,
+          },
+        };
+
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          expect(await call(deps.routes.comp, { key, body })).toEqual({
+            status: 403,
+            json: { error: 'Complimentary items are not available in this version.' },
+          });
+          expect(await snapshot()).toEqual(before);
+          expect(await idempotencyKeyRow(key)).toBeNull();
+        }
+      }
+    );
+  });
+
+  describe('retained comp domain refused after a would-be loyalty release', () => {
     it('commits nothing — bill, line, ledger, co-authorization and idempotency key are untouched', async () => {
       const seeded = await seedRedeemedBill('comp');
       const lines = await readLines(seeded.billId);
@@ -410,7 +467,7 @@ describeIfDatabase('WHA-136 terminal money mutations roll back before HTTP mappi
       // check passes (their own PIN, and they hold `coauth:approve`), so the command runs:
       // it releases 5.00 of redemption first and only then refuses the self-approval.
       const key = uniqueKey('comp-selfapprove');
-      const refused = await call(deps.routes.comp, {
+      const refused = await call(deps.routes.retainedComp, {
         key,
         body: {
           billId: seeded.billId,
@@ -453,7 +510,7 @@ describeIfDatabase('WHA-136 terminal money mutations roll back before HTTP mappi
       const lines = await readLines(seeded.billId);
       const key = uniqueKey('comp-retry');
 
-      const refused = await call(deps.routes.comp, {
+      const refused = await call(deps.routes.retainedComp, {
         key,
         body: {
           billId: seeded.billId,
@@ -465,7 +522,7 @@ describeIfDatabase('WHA-136 terminal money mutations roll back before HTTP mappi
       expect(refused.status).toBe(400);
 
       // Same key, now with a genuine second identity.
-      const accepted = await call(deps.routes.comp, {
+      const accepted = await call(deps.routes.retainedComp, {
         key,
         body: {
           billId: seeded.billId,
@@ -497,7 +554,7 @@ describeIfDatabase('WHA-136 terminal money mutations roll back before HTTP mappi
 
       // And a third call on that key is now a genuine replay that writes nothing.
       const counts = await tenantCounts();
-      const replay = await call(deps.routes.comp, {
+      const replay = await call(deps.routes.retainedComp, {
         key,
         body: {
           billId: seeded.billId,
@@ -624,7 +681,7 @@ describeIfDatabase('WHA-136 terminal money mutations roll back before HTTP mappi
       expect(before.attempts).toBe(0);
 
       const key = uniqueKey('comp-badcred');
-      const refused = await call(deps.routes.comp, {
+      const refused = await call(deps.routes.retainedComp, {
         key,
         body: {
           billId: seeded.billId,

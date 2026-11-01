@@ -91,9 +91,7 @@ export function TimePicker({
     setCoords({
       left: r.left,
       width: r.width,
-      ...(placeAbove
-        ? { bottom: window.innerHeight - r.top + 4 }
-        : { top: r.bottom + 4 }),
+      ...(placeAbove ? { bottom: window.innerHeight - r.top + 4 } : { top: r.bottom + 4 }),
     });
   }, []);
 

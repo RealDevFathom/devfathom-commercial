@@ -112,4 +112,35 @@ describeIfDatabase('AI-04 anomaly tenant and branch RLS', () => {
       inOrg(ORG_A, (db) => db.pharmacyAnomalySignal.delete({ where: { id: signal.id } }))
     ).rejects.toThrow(/never hard-deleted/i);
   });
+
+  it('persists both new anomaly kinds without changing existing signal kinds', async () => {
+    await inOrg(ORG_A, async (db) => {
+      const original = await db.pharmacyAnomalySignal.findFirstOrThrow({
+        where: { branchId: BRANCH_A },
+      });
+      for (const kind of ['VOID_ABUSE', 'TENDER_MISMATCH'] as const) {
+        const signal = await db.pharmacyAnomalySignal.create({
+          data: {
+            branchId: BRANCH_A,
+            kind,
+            dedupKey: `${kind}:${suffix}`,
+            severity: 'REVIEW',
+            scope: { branchId: BRANCH_A, userId: 'cashier_a' },
+            policyVersion: 'AI04-2026-10-29',
+            exactNumbers: {},
+            explanation: 'Review-only enum persistence fixture.',
+            dataWindowStart: NOW,
+            dataWindowEnd: NOW,
+            sourceObservedAt: NOW,
+            freshnessSeconds: 3_600,
+            computedAt: NOW,
+          },
+        });
+        expect(signal.kind).toBe(kind);
+      }
+      expect(
+        await db.pharmacyAnomalySignal.findUniqueOrThrow({ where: { id: original.id } })
+      ).toMatchObject({ kind: 'CASH_VARIANCE' });
+    });
+  });
 });

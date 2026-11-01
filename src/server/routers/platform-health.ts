@@ -148,7 +148,9 @@ export async function readPlatformHealth(raw: z.input<typeof healthFilters> = {}
       db.camera.findMany({
         where: visible,
         select: {
-          organizationId: true, enabled: true, lastSeenAt: true,
+          organizationId: true,
+          enabled: true,
+          lastSeenAt: true,
           gateway: { select: { status: true, revokedAt: true } },
         },
       }),

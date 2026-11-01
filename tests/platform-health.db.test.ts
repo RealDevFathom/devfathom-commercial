@@ -29,7 +29,7 @@ let router: (typeof import('@/server/routers/platform-health'))['platformHealthR
 let scoped: typeof import('@/lib/tenancy/scoped-db');
 let db: (typeof import('@/lib/db'))['db'];
 
-// Keep fixtures for the disposable-lane browser proof; never target a shared DB.
+// Unit fixtures are independent of the browser lane's disposable database.
 describe.skipIf(!url)('platform health with real PostgreSQL and platform sessions', () => {
   beforeAll(async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
@@ -73,9 +73,8 @@ describe.skipIf(!url)('platform health with real PostgreSQL and platform session
             mfaRequired: role === 'SUPER_ADMIN',
             mfaEnabledAt: role === 'SUPER_ADMIN' ? now : null,
             // Synthetic enrollment state for session reads, never decrypted.
-            encryptedTotpSecret: role === 'SUPER_ADMIN'
-              ? 'SYNTHETIC_ENROLLED_SESSION_FIXTURE_NOT_DECRYPTED'
-              : null,
+            encryptedTotpSecret:
+              role === 'SUPER_ADMIN' ? 'SYNTHETIC_ENROLLED_SESSION_FIXTURE_NOT_DECRYPTED' : null,
           },
         });
         await tx.platformSession.create({

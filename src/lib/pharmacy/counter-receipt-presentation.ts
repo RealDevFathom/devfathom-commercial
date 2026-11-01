@@ -1,4 +1,5 @@
 import { DEFAULT_RECEIPT_LAYOUT } from '@/lib/receipts/configuration';
+import { tenderTotalsSchema } from './manual-payments';
 import { buildReceiptPreview } from '@/lib/receipts/preview';
 
 import {
@@ -27,6 +28,69 @@ const labels = {
     payments: 'ادائیگی کی تفصیل دستیاب نہیں',
   },
 } as const;
+
+/**
+ * Show integer-minor-unit arithmetic that exactly reconciles to the stored
+ * gross. Mixed lots can make gross / quantity non-integral, so displaying only
+ * the representative unit price would make the printed equation false.
+ */
+export function exactReceiptPriceBreakdown(
+  quantity: number,
+  grossMinor: number,
+  multiplicationSign = '×'
+): string {
+  if (!Number.isSafeInteger(quantity) || quantity <= 0 || !Number.isSafeInteger(grossMinor)) {
+    throw new Error('Receipt line pricing is invalid.');
+  }
+  if (grossMinor % quantity === 0) {
+    return `${quantity} ${multiplicationSign} ${formatMinor(grossMinor / quantity)}`;
+  }
+  // State quantity and gross directly when one integer unit price cannot
+  // represent the charge. Never invent synthetic lot prices from an average.
+  return `${quantity}${multiplicationSign === 'x' ? ' - ' : ' · '}${formatMinor(grossMinor)}`;
+}
+
+export function counterLinePricing(
+  line: CounterReceiptLine,
+  locale: CounterReceiptLocale,
+  multiplicationSign = '×'
+): string {
+  const strings = COUNTER_RECEIPT_STRINGS[locale];
+  const priced = line.allocations?.filter((row) => row.grossMinor != null) ?? [];
+  const gross = line.lineTotalMinor + line.discountMinor;
+  const scale = line.canonicalUnits / line.quantity;
+  const separator = multiplicationSign === 'x' ? ' - ' : ' · ';
+  if (
+    priced.length &&
+    priced.length === line.allocations!.length &&
+    priced.reduce((sum, row) => sum + row.grossMinor!, 0) === gross
+  ) {
+    const wholeSaleUnits = priced.every((row) => {
+      const quantity = row.canonicalUnits / scale;
+      return Number.isSafeInteger(quantity) && quantity > 0 && row.grossMinor! % quantity === 0;
+    });
+    if (wholeSaleUnits) {
+      return `${strings.saleUnit[line.saleUnit]}: ${priced
+        .map((row) =>
+          exactReceiptPriceBreakdown(
+            row.canonicalUnits / scale,
+            row.grossMinor!,
+            multiplicationSign
+          )
+        )
+        .join(' + ')}`;
+    }
+    return priced
+      .map(
+        (row) =>
+          `${labels[locale].units}: ${row.canonicalUnits}${separator}${strings.gross}: ${formatMinor(row.grossMinor!)}`
+      )
+      .join(' + ');
+  }
+  return gross === line.quantity * line.unitPriceMinor
+    ? `${strings.saleUnit[line.saleUnit]}: ${exactReceiptPriceBreakdown(line.quantity, gross, multiplicationSign)}`
+    : `${strings.quantity}: ${line.quantity} ${strings.saleUnit[line.saleUnit]}${separator}${strings.gross}: ${formatMinor(gross)}`;
+}
 
 /** Missing status on legacy callers is not evidence of issued identity. */
 export function counterLinePresentation(line: CounterReceiptLine, locale: CounterReceiptLocale) {
@@ -59,6 +123,8 @@ export function buildCounterReceiptPreview(
   ];
   if (!amounts.every(Number.isSafeInteger)) throw new Error('Receipt amounts are invalid.');
   const strings = COUNTER_RECEIPT_STRINGS[locale];
+  const ntn = receipt.taxIdentity?.ntn?.trim();
+  const strn = receipt.taxIdentity?.strn?.trim();
   return buildReceiptPreview(
     { ...DEFAULT_RECEIPT_LAYOUT, paperWidth, footerText: reprint ? strings.reprint : '' },
     {
@@ -69,13 +135,17 @@ export function buildCounterReceiptPreview(
         const presentation = counterLinePresentation(line, locale);
         return [
           presentation.identity,
-          `${line.quantity} ${strings.saleUnit[line.saleUnit]} × ${formatMinor(line.unitPriceMinor)}`,
+          counterLinePricing(line, locale),
           ...presentation.allocations,
           `${strings.lineTotal}: ${formatMinor(line.lineTotalMinor)}`,
         ].join('\n');
       }),
-      // The Pharmacy model supplies no tax breakdown. Never invent zero tax.
-      taxLines: [labels[locale].tax],
+      // Identity is historical receipt data; the model supplies no tax breakdown.
+      taxLines: [
+        ...(ntn ? [`NTN: ${ntn}`] : []),
+        ...(strn ? [`STRN: ${strn}`] : []),
+        labels[locale].tax,
+      ],
       totals: [
         receipt.currency,
         `${strings.gross}: ${formatMinor(receipt.totals.grossMinor)}`,
@@ -93,9 +163,11 @@ export function buildCounterReceiptPreview(
 
 /** Aggregate-only report: no patient, medicine, or tender identity is exported. */
 export type CounterZReport = {
+  tenderTotals?: unknown;
   id: string;
   branchName: string;
   businessDate: string;
+  currency: string;
   sequence: number;
   grossSalesMinor: number;
   refundTotalMinor: number;
@@ -150,8 +222,10 @@ export function buildCounterZReportPreview(
     report.branchName,
     `${labels[1]}: ${report.businessDate}`,
     `#${report.sequence} · ${report.id}`,
-    'PKR',
+    report.currency,
     ...amounts.map((amount, i) => `${labels[i + 2]}: ${formatMinor(amount)}`),
+    ...(report.tenderTotals == null ? [] : tenderTotalsSchema.parse(report.tenderTotals).map((row) =>
+      `${row.type}: ${formatMinor(row.amountMinor)} · ${locale === 'ur' ? 'واپسی' : 'Refunds'}: ${formatMinor(row.refundMinor)} · ${locale === 'ur' ? 'خالص' : 'Net'}: ${formatMinor(row.netMinor)}`)),
     `${labels[8]}: ${report.reason ?? '—'}`,
     report.isFinal ? 'Final' : 'Provisional — migration reconciliation pending',
   ].join('\n');

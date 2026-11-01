@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
+import type { inferRouterOutputs } from '@trpc/server';
+import type { AppRouter } from '@/server/routers/_app';
+
+type WebhookStatus = inferRouterOutputs<AppRouter>['restaurantNotifications']['webhookStatus'];
 
 const mocks = vi.hoisted(() => ({
   resolveTenantActor: vi.fn(),
@@ -69,6 +73,17 @@ describe('RestaurantNotificationsPage tenancy resolution', () => {
     expect(screen.getByRole('heading', { name: 'Notifications center' })).toBeDefined();
   });
 
+  it('keeps the page eyebrow on the contrast-checked muted token', async () => {
+    mocks.resolveTenantActor.mockResolvedValue(actor);
+    mocks.createTRPCContext.mockResolvedValue(contextStub());
+
+    render(await RestaurantNotificationsPage({ searchParams }));
+
+    const eyebrow = screen.getByText('Restaurant operations');
+    expect(eyebrow.className).toContain('eyebrow');
+    expect(eyebrow.className).not.toContain('eyebrow-accent');
+  });
+
   it('never asks the context factory to re-resolve tenancy', async () => {
     mocks.resolveTenantActor.mockResolvedValue(actor);
     mocks.createTRPCContext.mockResolvedValue(contextStub());
@@ -108,7 +123,12 @@ describe('RestaurantNotificationsPage tenancy resolution', () => {
           enabled: true,
         })),
       }),
-      webhookStatus: vi.fn().mockResolvedValue({ config: null, deliveries: [] }),
+      webhookStatus: vi.fn().mockResolvedValue({
+        config: null,
+        deliveries: [],
+        deadLetters: [],
+        deadLetterNextCursor: undefined,
+      } satisfies WebhookStatus),
     });
 
     render(await RestaurantNotificationsPage({ searchParams }));
@@ -163,10 +183,125 @@ describe('RestaurantNotificationsPage tenancy resolution', () => {
     expect(relatedLine.className).not.toContain('text-text-faint');
   });
 
-  it('exposes enabled test, redacted error, and keyboard-reachable dead-letter retry states', async () => {
+  it.each(['enabled', 'disabled', 'missing'] as const)(
+    'exposes redacted dead letters outside the recent window with an %s endpoint',
+    async (endpoint) => {
+      mocks.resolveTenantActor.mockResolvedValue(actor);
+      mocks.createTRPCContext.mockResolvedValue(contextStub());
+      mocks.can.mockResolvedValue(true);
+      mocks.createCaller.mockReturnValue({
+        list: vi.fn().mockResolvedValue({ items: [], nextCursor: null }),
+        unreadCount: vi.fn().mockResolvedValue({ count: 0 }),
+        getMatrix: vi.fn().mockResolvedValue({
+          category: 'sop.escalation',
+          branchId: null,
+          channels: ['IN_APP', 'WEBHOOK', 'EMAIL', 'SMS', 'PUSH', 'WHATSAPP'].map((channel) => ({
+            channel,
+            enabled: true,
+          })),
+        }),
+        webhookStatus: vi.fn().mockResolvedValue({
+          config:
+            endpoint === 'missing'
+              ? null
+              : {
+                  id: 'config_1',
+                  endpointUrl: 'https://hooks.example.com/sop',
+                  enabled: endpoint === 'enabled',
+                  signingSecretConfigured: true,
+                  lastSuccessAt: null,
+                  lastFailureAt: new Date(),
+                  lastFailure: 'Webhook endpoint returned HTTP 503.',
+                  updatedAt: new Date(),
+                },
+          deliveries: Array.from({ length: 20 }, (_, index) => ({
+            id: `job_recent_${index}`,
+            status: 'SUCCEEDED' as const,
+            attempts: 1,
+            nextAttemptAt: new Date(),
+            lastError: null,
+            createdAt: new Date('2026-10-22T00:00:00Z'),
+          })),
+          deadLetters: [
+            {
+              id: 'job_dead',
+              status: 'DEAD',
+              attempts: 5,
+              nextAttemptAt: new Date('2026-10-20T00:00:00Z'),
+              lastError: 'Webhook endpoint returned HTTP 503.',
+              createdAt: new Date('2026-10-20T00:00:00Z'),
+              successor: null,
+            },
+          ],
+          deadLetterNextCursor: undefined,
+        } satisfies WebhookStatus),
+      });
+
+      render(await RestaurantNotificationsPage({ searchParams }));
+
+      expect(screen.getByRole('heading', { name: 'Dead letters' })).toBeDefined();
+      expect(screen.getByText(/1 on this page requires action/)).toBeDefined();
+      expect(screen.getByText('job_dead · 5 attempts')).toBeDefined();
+      const retry = screen.getByRole('button', { name: 'Retry' });
+      const testDelivery = screen.getByRole('button', { name: 'Queue test delivery' });
+      if (endpoint === 'enabled') {
+        expect(testDelivery).toBeEnabled();
+        expect(retry).toBeEnabled();
+        expect(retry).toHaveAttribute('tabindex', '0');
+      } else {
+        expect(testDelivery).toBeDisabled();
+        expect(retry).toBeDisabled();
+      }
+      if (endpoint === 'missing') {
+        expect(screen.queryByRole('button', { name: 'Remove webhook' })).toBeNull();
+      } else {
+        const confirmation = screen.getByRole('checkbox', {
+          name: 'I understand that the endpoint and signing secret will be deleted.',
+        });
+        const removalForm = screen.getByRole('button', { name: 'Remove webhook' }).closest('form')!;
+        expect(confirmation).toBeRequired();
+        expect(removalForm.checkValidity()).toBe(false);
+        fireEvent.click(confirmation);
+        expect(removalForm.checkValidity()).toBe(true);
+      }
+      expect(screen.getAllByText('Webhook endpoint returned HTTP 503.').length).toBeGreaterThan(0);
+      expect(screen.queryByText(/signing-secret|ciphertext-only/i)).toBeNull();
+    }
+  );
+  it('keeps retried dead letters as non-actionable history, pages older rows, and describes dead-letter-only state', async () => {
     mocks.resolveTenantActor.mockResolvedValue(actor);
     mocks.createTRPCContext.mockResolvedValue(contextStub());
     mocks.can.mockResolvedValue(true);
+    const webhookStatus = vi.fn().mockResolvedValue({
+      config: {
+        id: 'config_1',
+        endpointUrl: 'https://hooks.example.com/sop',
+        enabled: true,
+        signingSecretConfigured: true,
+        lastSuccessAt: new Date(),
+        lastFailureAt: null,
+        lastFailure: null,
+        updatedAt: new Date(),
+      },
+      deliveries: [],
+      deadLetters: (
+        [
+          ['job_open', null],
+          ['job_recovered', { id: 'retry_ok', status: 'SUCCEEDED' }],
+          ['job_pending', { id: 'retry_wait', status: 'QUEUED' }],
+          ['job_failed_again', { id: 'retry_dead', status: 'DEAD' }],
+        ] as const
+      ).map(([id, successor]) => ({
+        id,
+        status: 'DEAD' as const,
+        attempts: 5,
+        nextAttemptAt: new Date('2026-10-20T00:00:00Z'),
+        lastError: null,
+        createdAt: new Date('2026-10-20T00:00:00Z'),
+        successor: successor ? { ...successor } : null,
+      })),
+      deadLetterNextCursor: 'job_failed_again',
+    } satisfies WebhookStatus);
     mocks.createCaller.mockReturnValue({
       list: vi.fn().mockResolvedValue({ items: [], nextCursor: null }),
       unreadCount: vi.fn().mockResolvedValue({ count: 0 }),
@@ -178,35 +313,30 @@ describe('RestaurantNotificationsPage tenancy resolution', () => {
           enabled: true,
         })),
       }),
-      webhookStatus: vi.fn().mockResolvedValue({
-        config: {
-          id: 'config_1',
-          endpointUrl: 'https://hooks.example.com/sop',
-          enabled: true,
-          signingSecretConfigured: true,
-          lastSuccessAt: null,
-          lastFailureAt: new Date(),
-          lastFailure: 'Webhook endpoint returned HTTP 503.',
-          updatedAt: new Date(),
-        },
-        deliveries: [
-          {
-            id: 'job_dead',
-            status: 'DEAD',
-            attempts: 5,
-            nextAttemptAt: null,
-            lastError: 'Webhook endpoint returned HTTP 503.',
-            createdAt: new Date(),
-          },
-        ],
-      }),
+      webhookStatus,
     });
 
-    render(await RestaurantNotificationsPage({ searchParams }));
+    render(
+      await RestaurantNotificationsPage({
+        searchParams: Promise.resolve({ deadLetters: 'job_prev' }),
+      })
+    );
 
-    expect(screen.getByRole('button', { name: 'Queue test delivery' })).toBeEnabled();
-    expect(screen.getByRole('button', { name: 'Retry' })).toHaveAttribute('tabindex', '0');
-    expect(screen.getAllByText('Webhook endpoint returned HTTP 503.').length).toBeGreaterThan(0);
-    expect(screen.queryByText(/signing-secret|ciphertext-only/i)).toBeNull();
+    expect(webhookStatus).toHaveBeenCalledWith({ deadLetterCursor: 'job_prev' });
+    expect(screen.getAllByRole('button', { name: 'Retry' })).toHaveLength(1);
+    expect(screen.getByText(/1 on this page requires action/)).toBeDefined();
+    expect(screen.getByText('Recovered')).toBeDefined();
+    expect(screen.getByText('Retry retry_ok delivered successfully.')).toBeDefined();
+    expect(screen.getByText('Retry in progress')).toBeDefined();
+    expect(screen.getByText('Retry failed')).toBeDefined();
+    expect(screen.getByRole('link', { name: 'Older dead letters' })).toHaveAttribute(
+      'href',
+      expect.stringContaining('deadLetters=job_failed_again')
+    );
+    expect(screen.getByRole('link', { name: 'Newest dead letters' })).toBeDefined();
+    expect(screen.queryByText('No webhook deliveries have been queued.')).toBeNull();
+    expect(
+      screen.getByText('No recent deliveries outside the dead letters above.')
+    ).toBeDefined();
   });
 });
