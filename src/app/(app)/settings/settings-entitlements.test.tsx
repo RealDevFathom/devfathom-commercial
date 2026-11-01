@@ -403,9 +403,13 @@ describe('Print routing settings', () => {
     const first = JSON.parse(posts[0][1]!.body as string);
     expect(first).toMatchObject({
       branchId: 'branch-1',
-      stationId: null,
-      document: { type: 'RECEIPT', title: 'RECEIPT PRINTER TEST' },
+      idempotencyKey: expect.stringMatching(/^receipt-test:/),
+      expectedDestination: {
+        printerId: 'queue:///Receipt',
+        registeredPrinterId: null,
+      },
     });
+    expect(first).not.toHaveProperty('document');
     expect(posts[1][1]!.body).toBe(posts[0][1]!.body);
     fireEvent.change(screen.getByLabelText('Receipts printer ID'), {
       target: { value: 'queue:///Other' },

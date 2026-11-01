@@ -87,7 +87,7 @@ function PrintRoutingEditor({ ownerKey }: { ownerKey: string }) {
   const busy = useRef(false);
   const currentBranch = useRef('');
   const readGeneration = useRef(0);
-  const attempts = useRef(new Map<string, { key: string; createdAt: string }>());
+  const attempts = useRef(new Map<string, { key: string }>());
   const [records, setRecords] = useState<Record<string, BranchState> | null>(null);
   const [branchId, setBranchId] = useState('');
   const [revision, setRevision] = useState(0);
@@ -391,7 +391,6 @@ function PrintRoutingEditor({ ownerKey }: { ownerKey: string }) {
       if (!attempt) {
         attempt = {
           key: `receipt-test:${browserUuid()}`,
-          createdAt: new Date().toISOString(),
         };
         attempts.current.set(destination, attempt);
       }
@@ -401,19 +400,10 @@ function PrintRoutingEditor({ ownerKey }: { ownerKey: string }) {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           branchId: saved.id,
-          stationId: null,
           idempotencyKey: attempt.key,
           expectedDestination: {
             printerId: route.printerId,
             registeredPrinterId: route.registeredPrinterId ?? null,
-          },
-          document: {
-            type: 'RECEIPT',
-            reference: attempt.key,
-            title: 'RECEIPT PRINTER TEST',
-            createdAt: attempt.createdAt,
-            lines: [{ quantity: 1, label: 'Setup test - not a sale or payment' }],
-            footer: 'Confirm this test at the selected printer. No financial transaction.',
           },
         }),
       });
