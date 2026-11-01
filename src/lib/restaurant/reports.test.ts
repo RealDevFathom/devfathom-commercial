@@ -1,10 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('server-only', () => ({}));
 
-const recipeMocks = vi.hoisted(() => ({ computeRecipeCost: vi.fn() }));
+const recipeMocks = vi.hoisted(() => ({
+  computeRecipeCost: vi.fn(),
+  computeRecipeCostInDb: vi.fn(),
+}));
 vi.mock('./recipe-costing', async () => ({
   ...(await vi.importActual<typeof import('./recipe-costing')>('./recipe-costing')),
   computeRecipeCost: recipeMocks.computeRecipeCost,
+  computeRecipeCostInDb: recipeMocks.computeRecipeCostInDb,
 }));
 
 import { Prisma } from '@/generated/prisma/client';
@@ -29,6 +33,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 beforeEach(() => {
   recipeMocks.computeRecipeCost.mockReset();
+  recipeMocks.computeRecipeCostInDb.mockReset();
 });
 
 describe('restaurant report range and CSV safety', () => {
@@ -215,7 +220,155 @@ describe('restaurant food-cost and dish-profitability reports', () => {
   });
 });
 
+const cateringEventDate = new Date('2026-01-10T00:00:00Z');
+
+function afterKey(id: string) {
+  return [
+    { eventDate: { gt: cateringEventDate } },
+    { eventDate: cateringEventDate, id: { gt: id } },
+  ];
+}
+
+type KeysetQuery = {
+  take: number;
+  where: { OR?: [{ eventDate: { gt: Date } }, { eventDate: Date; id: { gt: string } }] };
+};
+
+function keysetPage<T extends { id: string; eventDate: Date }>(orders: T[]) {
+  return async (query: KeysetQuery) => {
+    const after = query.where.OR;
+    const rows = after
+      ? orders.filter(
+          (order) =>
+            order.eventDate > after[0].eventDate.gt ||
+            (order.eventDate.getTime() === after[1].eventDate.getTime() &&
+              order.id > after[1].id.gt)
+        )
+      : orders;
+    return rows.slice(0, query.take);
+  };
+}
+
 describe('restaurant catering report', () => {
+  it('does not mark an exact detail-limit page as truncated', async () => {
+    const orders = Array.from({ length: 500 }, (_, index) => ({
+      id: `o${String(index + 1).padStart(3, '0')}`,
+      organizationId: 'org1',
+      eventName: `Event ${index + 1}`,
+      eventDate: new Date('2026-01-10T00:00:00Z'),
+      status: 'DRAFT',
+      quotedTotal: new Prisma.Decimal(1),
+      branch: { id: 'b1', name: 'Main' },
+      lines: [],
+      extraCosts: [],
+      delivery: null,
+    }));
+    const findMany = vi.fn(keysetPage(orders));
+    const db = { restaurantCateringOrder: { findMany } } as unknown as ScopedDb;
+
+    const report = await readCateringReport(db, boundedRange, 500);
+
+    expect(report.orders).toHaveLength(500);
+    expect(report.totals.orderCount).toBe(500);
+    expect(report.truncated).toBe(false);
+    expect(findMany).toHaveBeenCalledTimes(2);
+    expect(findMany.mock.calls[1][0]).toMatchObject({
+      where: { OR: afterKey('o500') },
+    });
+    expect(findMany.mock.calls[1][0]).not.toHaveProperty('cursor');
+  });
+
+  it('aggregates across every cursor page while retaining only the bounded detail rows', async () => {
+    const orders = Array.from({ length: 1001 }, (_, index) => ({
+      id: `o${String(index + 1).padStart(4, '0')}`,
+      organizationId: 'org1',
+      eventName: `Event ${index + 1}`,
+      eventDate: new Date('2026-01-10T00:00:00Z'),
+      status: index === 1000 ? 'DELIVERED' : 'DRAFT',
+      quotedTotal: new Prisma.Decimal(100),
+      branch: { id: 'b1', name: 'Main' },
+      lines:
+        index === 1000
+          ? [
+              {
+                recipeId: 'later-page-recipe',
+                description: 'Later page menu line',
+                portions: new Prisma.Decimal(2),
+                costPerPortionSnapshot: null,
+              },
+            ]
+          : [],
+      extraCosts: [],
+      delivery:
+        index === 1000
+          ? {
+              scheduledAt: new Date('2026-01-10T12:00:00Z'),
+              deliveredAt: new Date('2026-01-10T12:05:00Z'),
+            }
+          : null,
+    }));
+    const findMany = vi.fn(keysetPage(orders));
+    const db = {
+      restaurantCateringOrder: { findMany },
+    } as unknown as ScopedDb;
+    recipeMocks.computeRecipeCostInDb.mockResolvedValue({
+      costPerPortion: new Prisma.Decimal(3),
+      missing: [],
+    });
+
+    const report = await readCateringReport(db, boundedRange);
+
+    expect(report.orders).toHaveLength(200);
+    expect(report.orders[0]?.id).toBe('o0001');
+    expect(report.orders.at(-1)?.id).toBe('o0200');
+    expect(report.orders).not.toContainEqual(expect.objectContaining({ id: 'o1001' }));
+    expect(report.truncated).toBe(true);
+    expect(report.totals).toMatchObject({
+      orderCount: 1001,
+      revenue: '100100',
+      knownIngredientCost: '6',
+      deliveredCount: 1,
+      deliveredOnTimeCount: 0,
+      deliveredOnTimeRate: '0',
+    });
+    expect(report.byStatus).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ status: 'DRAFT', orderCount: 1000, revenue: '100000' }),
+        expect.objectContaining({ status: 'DELIVERED', orderCount: 1, revenue: '100' }),
+      ])
+    );
+    expect(findMany).toHaveBeenCalledTimes(3);
+    expect(findMany.mock.calls[0][0]).toMatchObject({
+      where: {
+        branchId: { in: boundedRange.branchIds },
+        eventDate: {
+          gte: new Date('2026-01-01T00:00:00.000Z'),
+          lte: new Date('2026-01-31T00:00:00.000Z'),
+        },
+      },
+      orderBy: [{ eventDate: 'asc' }, { id: 'asc' }],
+      take: 500,
+    });
+    expect(findMany.mock.calls[0][0].where).not.toHaveProperty('OR');
+    expect(findMany.mock.calls[1][0]).toMatchObject({
+      take: 500,
+      where: { OR: afterKey('o0500') },
+    });
+    expect(findMany.mock.calls[2][0]).toMatchObject({
+      take: 500,
+      where: { OR: afterKey('o1000') },
+    });
+    for (const [query] of findMany.mock.calls) {
+      expect(query).not.toHaveProperty('cursor');
+      expect(query).not.toHaveProperty('skip');
+    }
+    expect(recipeMocks.computeRecipeCostInDb).toHaveBeenCalledWith(db, {
+      organizationId: 'org1',
+      recipeId: 'later-page-recipe',
+    });
+    expect(recipeMocks.computeRecipeCost).not.toHaveBeenCalled();
+  });
+
   it('combines quoted revenue, recipe snapshots, extras, margins, status and delivery timing', async () => {
     const order = (
       id: string,
@@ -289,7 +442,7 @@ describe('restaurant catering report', () => {
         ]),
       },
     } as unknown as ScopedDb;
-    recipeMocks.computeRecipeCost.mockResolvedValue({
+    recipeMocks.computeRecipeCostInDb.mockResolvedValue({
       costPerPortion: new Prisma.Decimal(2),
       missing: [],
     });
@@ -589,6 +742,73 @@ describe('restaurant corrected-close backbone', () => {
     expect(exported.content).toContain('Blank cashCounted/cashVariance means unavailable');
     expect(db.restaurantDrawerSession.findMany).not.toHaveBeenCalled();
   });
+
+  it('pages drawer sessions past 500 by id cursor and counts every session once', async () => {
+    const date = new Date('2026-01-01T00:00:00Z');
+    const money = (value: number) => new Prisma.Decimal(value);
+    const zero = money(0);
+    const sessions = Array.from({ length: 501 }, (_, index) => ({
+      id: `d${String(index).padStart(4, '0')}`,
+      branchId: 'b1',
+      businessDate: date,
+      createdAt: new Date('2026-01-01T12:00:00Z'),
+      closedAt: new Date('2026-01-01T23:00:00Z'),
+      status: 'CLOSED',
+      countedCash: money(index === 500 ? 1 : 0),
+    }));
+    const findMany = vi.fn(async (args: { cursor?: { id: string }; skip?: number }) => {
+      const start = args.cursor
+        ? sessions.findIndex((session) => session.id === args.cursor!.id) + (args.skip ?? 0)
+        : 0;
+      return sessions.slice(start, start + 500);
+    });
+    const db = {
+      restaurantDrawerSession: { findMany },
+      restaurantDailyClose: {
+        findMany: vi.fn(async () => [
+          {
+            id: 'close',
+            branchId: 'b1',
+            businessDate: date,
+            supersedesCloseId: null,
+            createdAt: new Date('2026-01-02T00:00:00Z'),
+            branch: { name: 'One' },
+            tenderTotals: [],
+            grossSales: zero,
+            deliveryFeeSales: zero,
+            deliveryFeeRefunds: zero,
+            netSales: zero,
+            taxTotal: zero,
+            serviceChargeTotal: zero,
+            tipTotal: zero,
+            compTotal: zero,
+            discountTotal: zero,
+            refundTotal: zero,
+            voidTotal: zero,
+            cashExpected: money(1),
+            cashCounted: money(1),
+            cashVariance: zero,
+          },
+        ]),
+      },
+      insightDailyRollup: { findMany: vi.fn(async () => []) },
+      $queryRaw: vi.fn(async () => []),
+    } as unknown as ScopedDb;
+    const payments = await readPaymentsReport(db, {
+      branchIds: ['b1'],
+      from: '2026-01-01',
+      to: '2026-01-01',
+    });
+    expect(findMany).toHaveBeenCalledTimes(2);
+    expect(findMany.mock.calls[1][0]).toMatchObject({ cursor: { id: 'd0499' }, skip: 1 });
+    expect(payments.cashCountCoverage).toMatchObject({
+      status: 'COMPLETE',
+      drawerSessionCount: 501,
+      missingCountSessionCount: 0,
+      unverifiedCloseSessionCount: 0,
+      mismatchedCloseDayCount: 0,
+    });
+  });
 });
 
 function queryText(query: unknown): string {
@@ -697,9 +917,22 @@ describe('restaurant wastage and stock movement reports', () => {
       );
       expect(sql).toContain("ELSE 'UNAVAILABLE'");
       expect(sql).toContain(`FILTER (WHERE "valuationSource" <> 'RECORDED')`);
-      expect(sql).toContain('movement."occurredAt" >=');
-      expect(sql).toContain('movement."occurredAt" <');
+      expect(sql).toContain(`(movement."occurredAt" AT TIME ZONE 'UTC') >=`);
+      expect(sql).toContain(`(movement."occurredAt" AT TIME ZONE 'UTC') <`);
+      expect(sql).toContain('AT TIME ZONE (CASE');
+      expect(sql).toContain(`TRANSLATE(LEFT(branch."timezone", 3), '+-', '-+')`);
+      expect(sql).toContain(`ELSE branch."timezone"`);
     }
+    expect(
+      queries.some((sql) =>
+        sql.includes(`("occurredAt" AT TIME ZONE 'UTC') AT TIME ZONE "branchTimezone"`)
+      )
+    ).toBe(true);
+    expect(
+      rawQueries.every(
+        (query) => query.values.includes('2026-01-01') && query.values.includes('2026-01-31')
+      )
+    ).toBe(true);
     expect(report.byDay[0]).toMatchObject({ day: '2026-01-02', movementCount: 3 });
     expect(report.byIngredient[0].canonicalUnit).toBe('kg');
   });
@@ -916,9 +1149,11 @@ describe('restaurant wastage and stock movement reports', () => {
     expect(exported.content).toContain('REFERENCE,true');
     expect(exported.content.split('\n')).toHaveLength(5_001);
     expect(exported.truncated).toBe(true);
-    expect(queryText((db.$queryRaw as ReturnType<typeof vi.fn>).mock.calls[0]?.[0])).toContain(
-      'movement."locationId" ='
-    );
+    const sql = queryText((db.$queryRaw as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]);
+    expect(sql).toContain('movement."locationId" =');
+    expect(sql).toContain(`(movement."occurredAt" AT TIME ZONE 'UTC') >=`);
+    expect(sql).toContain(`(movement."occurredAt" AT TIME ZONE 'UTC') <`);
+    expect(sql).toContain(`("occurredAt" AT TIME ZONE 'UTC') AT TIME ZONE "branchTimezone"`);
   });
 });
 
@@ -1055,11 +1290,17 @@ describe('restaurant complete summaries with bounded details', () => {
             { status: 'DRAFT', count: 125 },
             { status: 'CLOSED', count: 125 },
           ];
-        if (text.includes('"supplierName"'))
+        if (text.includes('SUM(line."receivedQuantity"'))
           return [{ supplierName: 'Supplier', amount: new Prisma.Decimal(9000) }];
+        if (text.includes('SELECT discrepancy."id"'))
+          return discrepancies.map((item) => ({
+            id: item.id,
+            kind: item.kind,
+            receivedAt: item.purchaseReceipt.receivedAt,
+            supplierName: item.purchaseReceipt.supplier.name,
+          }));
         throw new Error(`Unexpected query: ${text}`);
       }),
-      restaurantReceivingDiscrepancy: { findMany: vi.fn(async () => discrepancies) },
     } as unknown as ScopedDb;
 
     const report = await readPurchasingReport(db, boundedRange);
@@ -1073,6 +1314,18 @@ describe('restaurant complete summaries with bounded details', () => {
       truncated: true,
     });
     expect(report.discrepancies).toHaveLength(200);
+    for (const [query] of (db.$queryRaw as ReturnType<typeof vi.fn>).mock.calls) {
+      const sql = queryText(query);
+      expect(sql).toContain('AT TIME ZONE (CASE');
+      expect(sql).toContain(`TRANSLATE(LEFT(branch."timezone", 3), '+-', '-+')`);
+      expect(sql).toContain(`ELSE branch."timezone"`);
+      expect(sql).toMatch(
+        /(?:purchase_order\."createdAt"|receipt\."receivedAt") AT TIME ZONE 'UTC'/
+      );
+      expect((query as { values: unknown[] }).values).toEqual(
+        expect.arrayContaining(['2026-01-01', '2026-01-31'])
+      );
+    }
   });
 
   it('aggregates every scheduled shift and labour fact without loading detail rows', async () => {

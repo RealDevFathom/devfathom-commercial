@@ -267,16 +267,87 @@ describe('Restaurant receipt dispatch', () => {
       },
     });
   });
-  it('carries fractional split and every saved line/tender amount without recalculation', async () => {
+  it('prints and previews a fractional bill with no persisted bill lines', async () => {
     Object.assign(receipt!, {
-      splitKind: 'FRACTION',
+      splitKind: 'FRACTIONAL',
+      fractionNumerator: 1,
+      fractionDenominator: 3,
+      lines: [],
+    });
+    const previewResponse = await GET(
+      new Request('https://tenant.test/api/restaurant/checkout/receipt?billId=bill-1')
+    );
+    expect(previewResponse.status).toBe(200);
+    const preview = await previewResponse.json();
+    expect(preview.lines).toEqual([]);
+    expect(preview.totals.grandTotal).toBe('26.05');
+    expect(preview.printing.preview).toMatchObject({
+      source: 'saved',
+      text: expect.stringContaining('Fractional share 1/3: 26.05'),
+      validation: null,
+    });
+
+    const response = await post();
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ latestJob: { status: 'PENDING' } });
+    expect(jobs).toHaveLength(1);
+    const facts = PrintDocumentSchema.parse(jobs[0].document).receiptSnapshot!.facts;
+    expect(facts.lines).toEqual(['Fractional share 1/3: 26.05']);
+    expect(facts.totals).toContain('Split FRACTIONAL 1/3');
+    expect(facts.payments).toEqual(['CASH 26.05 / Tip 1.50 / Change 3.95 / Cash received 30.00']);
+
+    const replay = await (await post()).json();
+    expect(replay).toMatchObject({ latestJob: { status: 'PENDING' }, replayed: true });
+    expect(replay.preview).toMatchObject({
+      source: 'queued',
+      text: expect.stringContaining('Fractional share 1/3: 26.05'),
+      validation: null,
+    });
+    expect(jobs).toHaveLength(1);
+
+    jobs[0].status = 'PRINTED';
+    expect((await post(copy)).status).toBe(200);
+    expect(jobs).toHaveLength(2);
+    const reprintFacts = PrintDocumentSchema.parse(jobs[1].document).receiptSnapshot!.facts;
+    expect(reprintFacts.lines).toEqual(['Fractional share 1/3: 26.05']);
+    expect(reprintFacts.totals).toContain(`Reprint: ${copy.reason}`);
+  });
+  it('preserves persisted lines on a fractional bill', async () => {
+    Object.assign(receipt!, {
+      splitKind: 'FRACTIONAL',
       fractionNumerator: 1,
       fractionDenominator: 3,
     });
+
     await post();
+
     const facts = PrintDocumentSchema.parse(jobs[0].document).receiptSnapshot!.facts;
-    expect(facts.totals).toContain('Split FRACTION 1/3');
-    expect(facts.payments).toEqual(['CASH 26.05 / Tip 1.50 / Change 3.95 / Cash received 30.00']);
+    expect(facts.lines).toEqual([
+      '2 x Meal @ 12.00\nLine subtotal 24.00 / Comp 4.00 / Line total 20.00\nLine tax 2.00 / Line service 1.00',
+    ]);
+  });
+  it('does not synthesize a receipt line for a non-fractional bill', async () => {
+    Object.assign(receipt!, { lines: [] });
+
+    const response = await post();
+
+    expect(response.status).toBe(422);
+    expect(await response.json()).toMatchObject({ code: 'INVALID_PRINT_DOCUMENT' });
+    expect(jobs).toHaveLength(0);
+  });
+  it('fails closed when an empty fractional bill has incomplete fraction metadata', async () => {
+    Object.assign(receipt!, {
+      splitKind: 'FRACTIONAL',
+      fractionNumerator: 1,
+      fractionDenominator: null,
+      lines: [],
+    });
+
+    const response = await post();
+
+    expect(response.status).toBe(422);
+    expect(await response.json()).toMatchObject({ code: 'INVALID_PRINT_DOCUMENT' });
+    expect(jobs).toHaveLength(0);
   });
   it('preserves saved tax currency, rate buckets and discount allocations', async () => {
     findBill.mockResolvedValue({

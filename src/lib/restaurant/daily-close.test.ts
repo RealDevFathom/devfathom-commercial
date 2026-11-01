@@ -622,6 +622,126 @@ describeIfDatabase('daily close (real DB)', () => {
     ).rejects.toMatchObject({ reason: 'UNSETTLED_BILL' });
   });
 
+  it('blocks a cut while orders in any active state have not had bills cut', async () => {
+    const date = '2026-09-14';
+    const activeStatuses = [
+      'OPEN',
+      'SENT',
+      'IN_PREPARATION',
+      'READY',
+      'SERVED',
+      'PAYMENT_PENDING',
+    ] as const;
+    await deps.withTenantDb(orgId, (tx) =>
+      tx.restaurantOrder.createMany({
+        data: activeStatuses.map((status) => ({
+          branchId: ids.branch,
+          orderNumber: ++orderCounter,
+          businessDate: utcDate(date),
+          status,
+          channel: 'DINE_IN',
+          staffProfileId: ids.operator,
+          deviceId: ids.seedDevice,
+        })),
+      })
+    );
+
+    const db = deps.createTenantDb(orgId);
+    const preview = await deps.close.closePreview(db, {
+      branchId: ids.branch,
+      businessDate: date,
+    });
+    expect(preview.readiness).toMatchObject({
+      allBillsResolved: false,
+      openBillCount: 0,
+      unresolvedOrderCount: activeStatuses.length,
+    });
+    await expect(
+      deps.close.cutClose(db, {
+        branchId: ids.branch,
+        businessDate: date,
+        actor: mActor(ids.seedDevice),
+      })
+    ).rejects.toMatchObject({ reason: 'ACTIVE_ORDERS' });
+  });
+
+  it('blocks a correction for legacy active orders without appending a new close', async () => {
+    const date = '2026-09-16';
+    const db = deps.createTenantDb(orgId);
+    const cut = await deps.close.cutClose(db, {
+      branchId: ids.branch,
+      businessDate: date,
+      actor: mActor(ids.seedDevice),
+    });
+    // Simulate an order left on a day closed before the active-order guard existed.
+    await read((tx) =>
+      tx.restaurantOrder.create({
+        data: {
+          branchId: ids.branch,
+          orderNumber: ++orderCounter,
+          businessDate: utcDate(date),
+          status: 'OPEN',
+          channel: 'DINE_IN',
+          staffProfileId: ids.operator,
+          deviceId: ids.seedDevice,
+        },
+      })
+    );
+
+    await expect(
+      deps.close.correctClose(db, {
+        branchId: ids.branch,
+        businessDate: date,
+        supersedesCloseId: cut.dailyCloseId,
+        reason: 'Reconcile historical close',
+        approvingStaffProfileId: ids.manager,
+        actor: mActor(ids.seedDevice),
+      })
+    ).rejects.toMatchObject({ reason: 'ACTIVE_ORDERS' });
+    expect(
+      await read((tx) =>
+        tx.restaurantDailyClose.count({
+          where: { branchId: ids.branch, businessDate: utcDate(date) },
+        })
+      )
+    ).toBe(1);
+  });
+
+  it('does not block a cut for resolved orders without bills', async () => {
+    const date = '2026-09-15';
+    await deps.withTenantDb(orgId, (tx) =>
+      tx.restaurantOrder.createMany({
+        data: (['CLOSED', 'CANCELLED'] as const).map((status) => ({
+          branchId: ids.branch,
+          orderNumber: ++orderCounter,
+          businessDate: utcDate(date),
+          status,
+          channel: 'DINE_IN',
+          staffProfileId: ids.operator,
+          deviceId: ids.seedDevice,
+        })),
+      })
+    );
+
+    const db = deps.createTenantDb(orgId);
+    const preview = await deps.close.closePreview(db, {
+      branchId: ids.branch,
+      businessDate: date,
+    });
+    expect(preview.readiness).toMatchObject({
+      allBillsResolved: true,
+      openBillCount: 0,
+      unresolvedOrderCount: 0,
+    });
+    await expect(
+      deps.close.cutClose(db, {
+        branchId: ids.branch,
+        businessDate: date,
+        actor: mActor(ids.seedDevice),
+      })
+    ).resolves.toMatchObject({ replayed: false });
+  });
+
   it('cuts an immutable close: snapshot totals + tender-type children in one txn', async () => {
     const date = '2026-09-05';
     const settled = await seedBillWithTender({

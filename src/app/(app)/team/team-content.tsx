@@ -21,6 +21,7 @@ import { PageHeader } from '@/components/ui/page-header';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useEntitlements } from '@/components/entitlements-provider';
 import { isModuleGranted, moduleForProcedure } from '@/lib/module-catalog';
+import { inviteCopyForVertical } from '@/lib/team/invite-copy';
 import { trpc } from '@/lib/trpc';
 import type { inferRouterOutputs } from '@trpc/server';
 import type { AppRouter } from '@/server/routers/_app';
@@ -251,6 +252,7 @@ const TeamMemberCard = memo(function TeamMemberCard({ member }: { member: TeamMe
 });
 
 export function AddMemberModal({ onClose }: { onClose: () => void }) {
+  const copy = inviteCopyForVertical(useEntitlements().vertical);
   const utils = trpc.useUtils();
   const inviteMember = trpc.team.inviteMember.useMutation();
   const departmentQuery = trpc.organizationAdmin.departments.useQuery(undefined, { retry: false });
@@ -387,7 +389,7 @@ export function AddMemberModal({ onClose }: { onClose: () => void }) {
                       autoFocus
                       value={name}
                       onChange={(e) => setName(e.target.value)}
-                      placeholder="John Doe"
+                      placeholder={copy.namePlaceholder}
                       className="w-full rounded-xl border border-border bg-card px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
                     />
                   </div>
@@ -399,7 +401,7 @@ export function AddMemberModal({ onClose }: { onClose: () => void }) {
                       type="email"
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
-                      placeholder="john@company.com"
+                      placeholder={copy.emailPlaceholder}
                       className="w-full rounded-xl border border-border bg-card px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
                     />
                   </div>
@@ -413,7 +415,7 @@ export function AddMemberModal({ onClose }: { onClose: () => void }) {
                     <input
                       value={title}
                       onChange={(e) => setTitle(e.target.value)}
-                      placeholder="Full Stack Developer"
+                      placeholder={copy.titlePlaceholder}
                       className="w-full rounded-xl border border-border bg-card px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
                     />
                   </div>
@@ -424,7 +426,7 @@ export function AddMemberModal({ onClose }: { onClose: () => void }) {
                     <input
                       value={phone}
                       onChange={(e) => setPhone(e.target.value)}
-                      placeholder="+1 (786) 555-0100"
+                      placeholder={copy.phonePlaceholder}
                       className="w-full rounded-xl border border-border bg-card px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
                     />
                   </div>
@@ -499,7 +501,7 @@ export function AddMemberModal({ onClose }: { onClose: () => void }) {
                               : 'bg-card text-muted-foreground hover:text-foreground'
                           )}
                         >
-                          {r === 'EMPLOYEE' ? 'Employee' : r === 'HR' ? 'HR' : 'Admin'}
+                          {copy.baseRoleLabels[r]}
                         </button>
                       ))}
                     </div>
@@ -511,7 +513,7 @@ export function AddMemberModal({ onClose }: { onClose: () => void }) {
                     htmlFor="invite-role-template"
                     className="block text-sm font-medium text-foreground mb-1.5"
                   >
-                    Restaurant staff role
+                    {copy.staffRoleLabel}
                   </label>
                   <select
                     id="invite-role-template"
@@ -520,7 +522,7 @@ export function AddMemberModal({ onClose }: { onClose: () => void }) {
                     onChange={(event) => setOrganizationRoleId(event.target.value)}
                     className="w-full rounded-xl border border-border bg-card px-3 py-2.5 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
                   >
-                    <option value="">No role template</option>
+                    <option value="">{copy.noRoleOption}</option>
                     {roleOptions.map((item) => (
                       <option key={item.id} value={item.id}>
                         {item.name}
@@ -532,7 +534,7 @@ export function AddMemberModal({ onClose }: { onClose: () => void }) {
                       ? 'Loading staff roles…'
                       : roleQuery.isError
                         ? 'Staff roles could not be loaded.'
-                        : 'Choose the workspace role that controls restaurant access.'}
+                        : copy.staffRoleHelp}
                   </p>
                 </div>
 

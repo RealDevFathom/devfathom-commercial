@@ -25,6 +25,45 @@ export async function marketingAction(
     let message: string;
     let savedCampaignId: string | undefined;
     switch (text('operation')) {
+      case 'basket-generate': {
+        const result = await caller.generateBaskets({
+          branchId,
+          from: new Date(text('from')),
+          cutoff: new Date(text('cutoff')),
+          config: {
+            minimumPairCount: Number(text('minimumPairCount')),
+            minimumSupport: Number(text('minimumSupport')),
+            minimumConfidence: Number(text('minimumConfidence')),
+            minimumLift: Number(text('minimumLift')),
+            maximumProposals: Number(text('maximumProposals')),
+          },
+        });
+        message = `${result.count} bundle proposals saved for owner review.`;
+        break;
+      }
+      case 'basket-review': {
+        if (form.get('reviewed') !== 'on')
+          return { error: true, message: 'Confirm your bundle review first.' };
+        const decision = text('decision');
+        if (decision !== 'APPROVE' && decision !== 'REJECT')
+          return { error: true, message: 'Choose a bundle decision.' };
+        const result = await caller.reviewBasket({
+          branchId,
+          insightId: text('insightId'),
+          recommendation: Number(text('recommendation')),
+          decision,
+          ...(decision === 'APPROVE'
+            ? { pinCredential: text('pin'), scheduledAt: new Date(text('scheduledAt')) }
+            : {}),
+        });
+        if ('blocked' in result && typeof result.blocked === 'string')
+          return { error: true, message: result.blocked };
+        savedCampaignId = result.campaignId ?? undefined;
+        message = result.campaignId
+          ? 'Bundle approved with PIN audit. Generic campaign draft saved for campaign review.'
+          : 'Bundle rejected. No campaign created.';
+        break;
+      }
       case 'growth-generate': {
         const result = await caller.generateGrowth({
           branchId,

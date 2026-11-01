@@ -4,6 +4,8 @@ const mocks = vi.hoisted(() => ({
   revalidate: vi.fn(),
   createDraft: vi.fn(),
   reviewGrowth: vi.fn(),
+  generateBaskets: vi.fn(),
+  reviewBasket: vi.fn(),
   approve: vi.fn(),
   sandbox: vi.fn(),
 }));
@@ -23,6 +25,63 @@ function form(values: Record<string, string>) {
 beforeEach(() => {
   vi.resetAllMocks();
   mocks.context.mockResolvedValue({});
+});
+it('passes configurable basket thresholds without accepting client evidence', async () => {
+  mocks.generateBaskets.mockResolvedValue({ id: 'analysis-a', count: 1 });
+  expect(
+    await marketingAction(
+      form({
+        operation: 'basket-generate',
+        from: '2026-10-01',
+        cutoff: '2026-10-03',
+        minimumPairCount: '2',
+        minimumSupport: '0.3',
+        minimumConfidence: '0.5',
+        minimumLift: '1',
+        maximumProposals: '3',
+        productIds: 'forged',
+      })
+    )
+  ).toMatchObject({ error: false });
+  expect(mocks.generateBaskets).toHaveBeenCalledWith({
+    branchId: 'branch-a',
+    from: new Date('2026-10-01'),
+    cutoff: new Date('2026-10-03'),
+    config: {
+      minimumPairCount: 2,
+      minimumSupport: 0.3,
+      minimumConfidence: 0.5,
+      minimumLift: 1,
+      maximumProposals: 3,
+    },
+  });
+});
+it('requires explicit bundle review and surfaces PIN refusal without navigating to a campaign', async () => {
+  expect(
+    await marketingAction(form({ operation: 'basket-review', decision: 'APPROVE' }))
+  ).toMatchObject({ error: true });
+  expect(mocks.reviewBasket).not.toHaveBeenCalled();
+  mocks.reviewBasket.mockResolvedValue({ blocked: 'Enter your current owner PIN.' });
+  const result = await marketingAction(
+    form({
+      operation: 'basket-review',
+      reviewed: 'on',
+      decision: 'APPROVE',
+      insightId: 'i1',
+      recommendation: '0',
+      pin: '1234',
+      scheduledAt: '2026-11-02T12:00:00Z',
+    })
+  );
+  expect(result).toEqual({ error: true, message: 'Enter your current owner PIN.' });
+  expect(mocks.reviewBasket).toHaveBeenCalledWith({
+    branchId: 'branch-a',
+    insightId: 'i1',
+    recommendation: 0,
+    decision: 'APPROVE',
+    pinCredential: '1234',
+    scheduledAt: new Date('2026-11-02T12:00:00Z'),
+  });
 });
 it('returns the saved manual draft for navigation with bounded retail settings', async () => {
   mocks.createDraft.mockResolvedValue({ id: 'saved-draft' });

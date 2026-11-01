@@ -4,6 +4,7 @@ import { TRPCError } from '@trpc/server';
 import { router, capabilityProcedure, protectedProcedure } from '../trpc';
 import { annotateAudit } from '../audit';
 import { StaffProfileError } from '@/lib/restaurant/staff';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { demoDirectoryPolicy } from '@/lib/demo/directory-access';
 import { resolveDemoDirectoryScope } from '@/lib/restaurant/staff-branch-authorization';
 import { provisionRestaurantOrganization } from '@/lib/restaurant/organization-provisioning';
@@ -118,6 +119,31 @@ function mapJobRoleError(err: unknown): never {
 }
 
 const staffProcedure = capabilityProcedure('staff:manage');
+
+// Resolve only an explicitly supplied account identity after branch authorization.
+// Enrollment must not require disclosing the tenant's unlinked-user directory.
+async function resolveStaffUserEmail(
+  db: ScopedDb,
+  organizationId: string,
+  email: string,
+  currentProfileId?: string
+): Promise<string> {
+  const user = await db.user.findFirst({
+    where: {
+      organizationId,
+      email: email.toLowerCase(),
+      status: 'ACTIVE',
+      restaurantStaffProfiles: currentProfileId
+        ? { every: { id: currentProfileId } }
+        : { none: {} },
+    },
+    select: { id: true },
+  });
+  if (!user) {
+    throw new StaffProfileError('The selected organization user is unavailable.', 'USER_NOT_FOUND');
+  }
+  return user.id;
+}
 
 function workspaceOrganizationId(ctx: {
   organization: { id: string } | null;
@@ -255,15 +281,45 @@ export const restaurantStaffRouter = router({
       }));
     }),
 
-  listEligibleUsers: staffProcedure.query(({ ctx }) => {
+  listEligibleUsers: staffProcedure.query(async ({ ctx }) => {
+    const organizationId = workspaceOrganizationId(ctx);
+    const authorization = await resolveStaffBranchAuthorization(
+      ctx.db,
+      ctx.session!.user,
+      ctx.entitlements.organizationId
+    );
+    const eligibleProfileWhere = authorization.organizationWide
+      ? undefined
+      : {
+          organizationId,
+          OR: [
+            { primaryBranchId: { in: authorization.branchIds } },
+            { jobRoles: { some: { branchId: { in: authorization.branchIds } } } },
+            {
+              directCapabilityGrants: {
+                some: { branchId: { in: authorization.branchIds } },
+              },
+            },
+          ],
+        };
     return ctx.db.user.findMany({
-      where: { organizationId: workspaceOrganizationId(ctx) },
+      where: {
+        organizationId,
+        ...(eligibleProfileWhere
+          ? { restaurantStaffProfiles: { some: eligibleProfileWhere } }
+          : {}),
+      },
       select: {
         id: true,
         name: true,
         email: true,
         status: true,
-        restaurantStaffProfiles: { select: { id: true, displayName: true }, take: 1 },
+        restaurantStaffProfiles: {
+          ...(eligibleProfileWhere ? { where: eligibleProfileWhere } : {}),
+          select: { id: true, displayName: true },
+          orderBy: { id: 'asc' },
+          take: 1,
+        },
       },
       orderBy: [{ name: 'asc' }, { email: 'asc' }],
     });
@@ -309,13 +365,18 @@ export const restaurantStaffRouter = router({
 
   create: staffProcedure
     .input(
-      z.object({
-        displayName: z.string().min(1).max(200),
-        email: z.string().email().max(320).nullable().optional(),
-        userId: z.string().nullable().optional(),
-        primaryBranchId: z.string().nullable().optional(),
-        status: STAFF_STATUS.optional(),
-      })
+      z
+        .object({
+          displayName: z.string().min(1).max(200),
+          email: z.string().email().max(320).nullable().optional(),
+          userId: z.string().nullable().optional(),
+          userEmail: z.string().trim().email().max(320).optional(),
+          primaryBranchId: z.string().nullable().optional(),
+          status: STAFF_STATUS.optional(),
+        })
+        .refine((input) => !input.userId || !input.userEmail, {
+          message: 'Choose a listed user or enter an account email, not both.',
+        })
     )
     .mutation(async ({ ctx, input }) => {
       try {
@@ -329,10 +390,18 @@ export const restaurantStaffRouter = router({
         } else if (input.primaryBranchId) {
           assertAuthorizedBranch(authorization, input.primaryBranchId);
         }
+        const { userEmail, ...profileInput } = input;
+        if (userEmail) {
+          profileInput.userId = await resolveStaffUserEmail(
+            ctx.db,
+            workspaceOrganizationId(ctx),
+            userEmail
+          );
+        }
         const staff = await createStaffProfileWithinCommercialLimit(
           ctx.db,
           ctx.entitlements.limits,
-          input
+          profileInput
         );
         annotateAudit(ctx, {
           targetType: 'RestaurantStaffProfile',
@@ -352,17 +421,22 @@ export const restaurantStaffRouter = router({
 
   update: staffProcedure
     .input(
-      z.object({
-        id: z.string(),
-        displayName: z.string().min(1).max(200).optional(),
-        email: z.string().email().max(320).nullable().optional(),
-        userId: z.string().nullable().optional(),
-        primaryBranchId: z.string().nullable().optional(),
-        status: STAFF_STATUS.optional(),
-      })
+      z
+        .object({
+          id: z.string(),
+          displayName: z.string().min(1).max(200).optional(),
+          email: z.string().email().max(320).nullable().optional(),
+          userId: z.string().nullable().optional(),
+          userEmail: z.string().trim().email().max(320).optional(),
+          primaryBranchId: z.string().nullable().optional(),
+          status: STAFF_STATUS.optional(),
+        })
+        .refine((input) => !input.userId || !input.userEmail, {
+          message: 'Choose a listed user or enter an account email, not both.',
+        })
     )
     .mutation(async ({ ctx, input }) => {
-      const { id, ...patch } = input;
+      const { id, userEmail, ...patch } = input;
       try {
         const authorization = await resolveStaffBranchAuthorization(
           ctx.db,
@@ -372,6 +446,14 @@ export const restaurantStaffRouter = router({
         await assertAuthorizedStaffProfile(ctx.db, authorization, id);
         if (patch.primaryBranchId !== undefined && patch.primaryBranchId !== null) {
           assertAuthorizedBranch(authorization, patch.primaryBranchId);
+        }
+        if (userEmail) {
+          patch.userId = await resolveStaffUserEmail(
+            ctx.db,
+            workspaceOrganizationId(ctx),
+            userEmail,
+            id
+          );
         }
         const staff = await updateStaffProfileWithinCommercialLimit(
           ctx.db,

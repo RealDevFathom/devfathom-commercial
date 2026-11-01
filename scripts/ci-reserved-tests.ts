@@ -1,6 +1,6 @@
 /** Run suites whose safety contracts require their own disposable loopback database. */
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
 import pg from 'pg';
@@ -44,6 +44,11 @@ function run(name: string, args: string[], env: NodeJS.ProcessEnv) {
     ],
   });
   const code = result.status ?? 1;
+  // These nested Vitest lanes are part of WHA-1125 just like commands invoked
+  // by the workflow's shell `run` helper. Retain each real lane exit code so a
+  // missing/failed report cannot be hidden behind the orchestration process.
+  if (name.startsWith('vitest-'))
+    appendFileSync(resolve(evidence, 'exit-codes.txt'), `${name}=${code}\n`);
   console.log(`${name}: ${code}`);
   return code;
 }

@@ -1,0 +1,88 @@
+{
+  "issue": 475,
+  "archive": "archive/improve/ai-growth-g2",
+  "tip": "304a4aa6",
+  "decision": "obsolete",
+  "rationale": "Do not restore or cherry-pick the archived branch. Develop has a later, tenant-scoped growth implementation with code-owned safe actions, append-only review lineage, live cutoff-bound source reads, and explicit UTC fixtures. The archived nightly snapshot job and demo-only settings seeds would duplicate those contracts and can make recommendations stale. The unrelated archived loyalty summary and receipt display additions are explicitly retired below; current wallet lookup and checkout redemption do not implement them.",
+  "commits": [
+    {
+      "sha": "304a4aa6",
+      "disposition": "superseded",
+      "evidence": ["tests/restaurant-growth-ready.db.test.ts"]
+    },
+    {
+      "sha": "f6463f25",
+      "disposition": "documentation-only",
+      "evidence": ["docs/archive-recovery/issue-475.json"]
+    },
+    {
+      "sha": "1378c79e",
+      "disposition": "superseded",
+      "evidence": ["src/lib/restaurant/growth-source.ts", "src/lib/pharmacy/growth-insights.ts"]
+    },
+    {
+      "sha": "6e152825",
+      "disposition": "merge-only",
+      "evidence": ["prisma/migrations/20261006160000_growth_insights/migration.sql"]
+    },
+    {
+      "sha": "25834be5",
+      "disposition": "documentation-only",
+      "evidence": ["docs/archive-recovery/issue-475.json"]
+    },
+    {
+      "sha": "646692de",
+      "disposition": "superseded",
+      "evidence": ["src/lib/ai/growth-recommendations.ts", "src/lib/restaurant/growth-review.ts"]
+    },
+    {
+      "sha": "dcbd97cc",
+      "disposition": "superseded",
+      "evidence": [
+        "prisma/migrations/20261006160000_growth_insights/migration.sql",
+        "prisma/schema.prisma"
+      ]
+    },
+    {
+      "sha": "67df65b5",
+      "disposition": "documentation-only",
+      "evidence": ["docs/archive-recovery/issue-475.json"]
+    },
+    {
+      "sha": "97e9d2c4",
+      "disposition": "invalid-draft",
+      "evidence": ["prisma/migrations/20261006160000_growth_insights/migration.sql"]
+    },
+    {
+      "sha": "ecfc2f76",
+      "disposition": "merge-only",
+      "evidence": ["src/lib/restaurant/terminal-wallet.test.ts"]
+    },
+    {
+      "sha": "d3e8cdad",
+      "disposition": "retired",
+      "rationale": "The archived receipt loyalty balance, wallet value, earned points, earn rate, and getLoyaltySummary helper are absent from develop and are intentionally not restored by issue #475. The archived helper reads the live points ledger and currently effective program when a receipt is requested, so later wallet activity or program changes can change wallet figures on reprints. Restoring that display requires a separate decision about settlement snapshots and reprint semantics. Existing wallet lookup, loyalty accrual, and checkout redemption remain implemented; they are not evidence of receipt display parity.",
+      "retiredBehavior": [
+        "receipt.loyalty.pointsBalance",
+        "receipt.loyalty.balancePkr",
+        "receipt.loyalty.pointsEarned",
+        "receipt.loyalty.pointsPerPkr",
+        "getLoyaltySummary"
+      ],
+      "evidence": [
+        "src/lib/restaurant/checkout-routes.ts",
+        "src/components/restaurant/pos/receipt-view.tsx",
+        "src/app/api/restaurant/checkout/receipt/receipt-dispatch.ts",
+        "src/lib/restaurant/loyalty.ts"
+      ]
+    },
+    {
+      "sha": "7b81f39e",
+      "disposition": "superseded",
+      "evidence": [
+        "src/lib/ai/growth-recommendations.ts",
+        "src/server/routers/restaurant-growth.ts"
+      ]
+    }
+  ]
+}
