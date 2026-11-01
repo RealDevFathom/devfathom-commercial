@@ -1,7 +1,11 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-import { OrderTicketPanel, type OrderDetail } from './order-ticket-panel';
+import {
+  canCloseDeliveredOrder,
+  OrderTicketPanel,
+  type OrderDetail,
+} from './order-ticket-panel';
 
 const order: OrderDetail = {
   id: 'order-1',
@@ -48,7 +52,32 @@ function handlers() {
   };
 }
 
+const ineligibleDeliveryOrders: [string, Parameters<typeof canCloseDeliveredOrder>[0]][] = [
+  ['not delivered', { channel: 'DELIVERY', deliveryStatus: 'OUT_FOR_DELIVERY', settled: true }],
+  ['not settled', { channel: 'DELIVERY', deliveryStatus: 'DELIVERED', settled: false }],
+  ['missing delivery state', { channel: 'DELIVERY', settled: true }],
+  ['missing settlement state', { channel: 'DELIVERY', deliveryStatus: 'DELIVERED' }],
+  ['not a delivery', { channel: 'TAKEAWAY', deliveryStatus: 'DELIVERED', settled: true }],
+];
+
 describe('OrderTicketPanel', () => {
+  it('closes only a settled delivery order that has been delivered', () => {
+    expect(
+      canCloseDeliveredOrder({
+        channel: 'DELIVERY',
+        deliveryStatus: 'DELIVERED',
+        settled: true,
+      })
+    ).toBe(true);
+  });
+
+  it.each(ineligibleDeliveryOrders)(
+    'does not close a delivery order when it is %s',
+    (_label, candidate) => {
+      expect(canCloseDeliveredOrder(candidate)).toBe(false);
+    }
+  );
+
   it('provides 44px touch targets for hold, fire, and void actions', () => {
     render(
       <OrderTicketPanel
@@ -245,5 +274,28 @@ describe('OrderTicketPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Collect payment' }));
     expect(actions.onCollectPayment).toHaveBeenCalledOnce();
     expect(actions.onClose).not.toHaveBeenCalled();
+  });
+
+  it('closes a delivered and paid delivery order instead of collecting payment again', () => {
+    const actions = handlers();
+    render(
+      <OrderTicketPanel
+        order={{
+          ...order,
+          channel: 'DELIVERY',
+          status: 'PAYMENT_PENDING',
+          deliveryStatus: 'DELIVERED',
+          settled: true,
+          tables: [],
+        }}
+        actingOperatorId="staff-1"
+        pending={false}
+        {...actions}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close order' }));
+    expect(actions.onClose).toHaveBeenCalledOnce();
+    expect(actions.onCollectPayment).not.toHaveBeenCalled();
   });
 });

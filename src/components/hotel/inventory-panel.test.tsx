@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { HotelInventoryPanel, type HotelInventoryView } from './inventory-panel';
 
@@ -410,7 +410,7 @@ describe('HotelInventoryPanel', () => {
     expect(block).toHaveFocus();
   });
 
-  it('returns focus to the row action after a saved status change closes the editor', () => {
+  it('returns focus to the row action after a saved status change closes the editor', async () => {
     mount();
     const trigger = screen.getByRole('button', { name: 'Status of room 101' });
     fireEvent.click(trigger);
@@ -423,7 +423,13 @@ describe('HotelInventoryPanel', () => {
     expect(
       screen.queryByRole('form', { name: 'Change status of room 101' })
     ).not.toBeInTheDocument();
-    expect(trigger).toHaveFocus();
+    // The refresh re-enables the action before the effect restores focus.
+    // Wait for both outcomes so the DOM update alone cannot finish the wait.
+    expect(trigger).toBeDisabled();
+    await waitFor(() => {
+      expect(trigger).toBeEnabled();
+      expect(trigger).toHaveFocus();
+    });
   });
 
   it('changes one bed of a dorm room through the bed procedure, with that bed’s own status', () => {

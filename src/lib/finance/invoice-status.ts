@@ -21,6 +21,11 @@ export function invoiceStatusTransitionError(
   return `Cannot change an invoice from ${prior} to ${next}.`;
 }
 
+/** Statuses that the status picker may offer without the API rejecting them. */
+export function allowedInvoiceStatuses(prior: InvoiceStatusValue): InvoiceStatusValue[] {
+  return INVOICE_STATUS_VALUES.filter((next) => !invoiceStatusTransitionError(prior, next));
+}
+
 /**
  * Fields owned by a status transition, shared by every API surface.
  *

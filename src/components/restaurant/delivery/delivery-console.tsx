@@ -27,7 +27,10 @@ type Outputs = inferRouterOutputs<AppRouter>;
 type Zone = Outputs['restaurantDelivery']['listZones'][number];
 type Address = Outputs['restaurantDelivery']['listAddresses'][number];
 type Editor = { kind: 'zone'; item?: Zone } | { kind: 'address'; item?: Address };
-type Confirmation = { kind: 'zone'; item: Zone } | { kind: 'address'; item: Address };
+type Confirmation =
+  | { kind: 'deactivate-zone'; item: Zone }
+  | { kind: 'reactivate-zone'; item: Zone }
+  | { kind: 'address'; item: Address };
 
 const inputClass =
   'min-h-11 w-full rounded-sm border border-border-default bg-surface-raised px-3 text-sm text-text-strong outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30 disabled:cursor-not-allowed disabled:opacity-50';
@@ -132,12 +135,22 @@ export function DeliveryConsole() {
   const deactivateZone = trpc.restaurantDelivery.deactivateZone.useMutation(
     options('Delivery zone deactivated.')
   );
+  const reactivateZone = trpc.restaurantDelivery.reactivateZone.useMutation(
+    options('Delivery zone reactivated.')
+  );
   const createAddress = trpc.restaurantDelivery.createAddress.useMutation(
     options('Saved address created.')
   );
   const updateAddress = trpc.restaurantDelivery.updateAddress.useMutation(
     options('Saved address updated.')
   );
+  const setDefaultAddress = trpc.restaurantDelivery.setDefaultAddress.useMutation({
+    onSuccess: () => {
+      void utils.restaurantDelivery.listAddresses.invalidate();
+      toast.success('Default address updated.');
+    },
+    onError: fail,
+  });
   const deleteAddress = trpc.restaurantDelivery.deleteAddress.useMutation(
     options('Saved address deactivated.')
   );
@@ -145,8 +158,10 @@ export function DeliveryConsole() {
     createZone,
     updateZone,
     deactivateZone,
+    reactivateZone,
     createAddress,
     updateAddress,
+    setDefaultAddress,
     deleteAddress,
   ].some((mutation) => mutation.isPending);
 
@@ -339,13 +354,26 @@ export function DeliveryConsole() {
                           >
                             Edit
                           </Button>
-                          <Button
-                            variant="destructive"
-                            disabled={!zone.active}
-                            onClick={() => setConfirmation({ kind: 'zone', item: zone })}
-                          >
-                            Deactivate
-                          </Button>
+                          {zone.active ? (
+                            <Button
+                              variant="destructive"
+                              disabled={busy}
+                              onClick={() =>
+                                setConfirmation({ kind: 'deactivate-zone', item: zone })
+                              }
+                            >
+                              Deactivate
+                            </Button>
+                          ) : (
+                            <Button
+                              disabled={busy}
+                              onClick={() =>
+                                setConfirmation({ kind: 'reactivate-zone', item: zone })
+                              }
+                            >
+                              Reactivate
+                            </Button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -406,7 +434,19 @@ export function DeliveryConsole() {
                           .join(', ')}
                       </address>
                     </div>
-                    <div className="flex gap-2">
+                    <div className="flex flex-wrap gap-2">
+                      {!address.isDefault ? (
+                        <Button
+                          variant="outline"
+                          disabled={busy}
+                          onClick={() => {
+                            setMutationError('');
+                            setDefaultAddress.mutate({ customerId, addressId: address.id });
+                          }}
+                        >
+                          Make default
+                        </Button>
+                      ) : null}
                       <Button
                         variant="outline"
                         onClick={() => setEditor({ kind: 'address', item: address })}
@@ -447,11 +487,17 @@ export function DeliveryConsole() {
       <Dialog open={confirmation != null} onOpenChange={(open) => !open && setConfirmation(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Confirm deactivation</DialogTitle>
+            <DialogTitle>
+              {confirmation?.kind === 'reactivate-zone'
+                ? 'Confirm reactivation'
+                : 'Confirm deactivation'}
+            </DialogTitle>
             <DialogDescription>
-              {confirmation?.kind === 'zone'
+              {confirmation?.kind === 'deactivate-zone'
                 ? 'This zone will stop being available for new delivery quotes.'
-                : 'This saved address will be removed from the customer profile.'}
+                : confirmation?.kind === 'reactivate-zone'
+                  ? 'This zone will become available for new delivery quotes again.'
+                  : 'This saved address will be removed from the customer profile.'}
             </DialogDescription>
           </DialogHeader>
           {mutationError ? (
@@ -462,17 +508,25 @@ export function DeliveryConsole() {
           <DialogFooter>
             <DialogClose render={<Button variant="outline" disabled={busy} />}>Cancel</DialogClose>
             <Button
-              variant="destructive"
+              variant={confirmation?.kind === 'reactivate-zone' ? 'default' : 'destructive'}
               disabled={busy}
               onClick={() => {
                 if (!confirmation) return;
                 setMutationError('');
-                if (confirmation.kind === 'zone')
+                if (confirmation.kind === 'deactivate-zone')
                   deactivateZone.mutate({ branchId, zoneId: confirmation.item.id });
+                else if (confirmation.kind === 'reactivate-zone')
+                  reactivateZone.mutate({ branchId, zoneId: confirmation.item.id });
                 else deleteAddress.mutate({ customerId, addressId: confirmation.item.id });
               }}
             >
-              {busy ? 'Deactivating…' : 'Deactivate'}
+              {busy
+                ? confirmation?.kind === 'reactivate-zone'
+                  ? 'Reactivating…'
+                  : 'Deactivating…'
+                : confirmation?.kind === 'reactivate-zone'
+                  ? 'Reactivate'
+                  : 'Deactivate'}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -700,10 +754,16 @@ function AddressForm({
             name="isDefault"
             type="checkbox"
             defaultChecked={item?.isDefault}
+            disabled={item?.isDefault}
             className="size-4 accent-primary"
           />
           Use as default address
         </label>
+        {item?.isDefault ? (
+          <p className="text-xs text-text-muted sm:col-span-2">
+            To change the default, use Make default on another saved address.
+          </p>
+        ) : null}
       </div>
       {error ? (
         <p role="alert" className="mt-4 text-sm text-destructive">

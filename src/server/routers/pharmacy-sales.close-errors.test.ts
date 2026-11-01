@@ -37,6 +37,7 @@ const openDrawer = {
 };
 /** The hash the preview computes for one open drawer expecting 500 and nothing sold. */
 const previewHash = computePharmacyClose({
+  tenders: [],
   sales: [],
   refunds: [],
   drawers: [{ id: openDrawer.id, expectedMinor: 500, countedMinor: 0 }],
@@ -72,6 +73,8 @@ function fixture() {
     pharmacyDrawerMovement: { create: vi.fn() },
     pharmacySale: { findMany: vi.fn().mockResolvedValue([]) },
     pharmacyRefund: { findMany: vi.fn().mockResolvedValue([]) },
+    // The close read and cut total the day's tenders by type (Z-report split).
+    pharmacyTender: { findMany: vi.fn().mockResolvedValue([]) },
     user: { findMany: vi.fn().mockResolvedValue([{ id: 'actor-1', name: 'Ayesha Karim' }]) },
   };
   const caller = app.createCaller({

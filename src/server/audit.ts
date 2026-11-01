@@ -99,6 +99,8 @@ function isSensitiveKey(key: string): boolean {
   const k = key.toLowerCase();
   // Camera renewal input can be audited before its resolver runs (including
   // denied or invalid requests). Match the identifier exactly, not all grants.
+  // Match PIN keys exactly or as a suffix (approvalPin) so unrelated keys such
+  // as shippingAddress remain useful.
   return (
     k === 'pin' ||
     k.endsWith('pin') ||

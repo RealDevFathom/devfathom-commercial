@@ -239,6 +239,16 @@ export async function prepareClosePacket(
             bills.slice(0, 100).map((row) => row.id)
           )
         );
+      if (preview.readiness.unresolvedOrderCount > 0)
+        blockers.push(
+          evidence(
+            'ACTIVE_ORDERS',
+            `${preview.readiness.unresolvedOrderCount} active orders prevent the existing daily close. Resolve them before closing.`,
+            'src/lib/restaurant/daily-close.ts#assertReadyToClose',
+            'SHIFT_MANAGER',
+            ['orders']
+          )
+        );
       if (preview.readiness.openDrawerCount > 0)
         blockers.push(
           evidence(

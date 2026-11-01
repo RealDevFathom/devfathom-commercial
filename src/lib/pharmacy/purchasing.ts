@@ -84,7 +84,12 @@ export function assertSupplierEligible(input: {
 // ---------------------------------------------------------------------------
 
 export type PurchaseOrderStatus =
-  'DRAFT' | 'SUBMITTED' | 'APPROVED' | 'SENT' | 'RECEIVING' | 'CANCELLED';
+  | 'DRAFT'
+  | 'SUBMITTED'
+  | 'APPROVED'
+  | 'SENT'
+  | 'RECEIVING'
+  | 'CANCELLED';
 
 /**
  * DRAFT → SUBMITTED → APPROVED → SENT → RECEIVING, with cancellation available
@@ -357,17 +362,33 @@ export type QuoteCandidate = {
   leadTimeDays: number;
   /** Shortest remaining shelf life the supplier will ship, in days. */
   minimumExpiryDays: number;
+  /**
+   * Operator-configured forecast of packs that will sell before the offered
+   * shelf life ends. `null` means none was recorded (quotes captured before the
+   * forecast existed): the comparison then assumes every pack sells, so legacy
+   * quotes keep their original ranking instead of being silently penalised.
+   */
+  forecastSellThroughPacks: number | null;
 };
 
 export type QuoteComparisonRow = {
   quoteId: string;
   supplierId: string;
   supplierName: string;
+  pricePerPackMinor: number;
   /** 1-based, best first. Non-comparable quotes rank last, in input order. */
   rank: number;
   comparable: boolean;
   /** Effective landed cost per canonical unit for one MOQ-satisfying buy. */
   effectiveUnitCostMicroMinor: number | null;
+  /** Cost divided only by stock forecast to sell before expiry. */
+  effectiveSellableUnitCostMicroMinor: number | null;
+  /** The recorded forecast, or `null` when none was recorded and all packs are assumed to sell. */
+  forecastSellThroughPacks: number | null;
+  /** Free packs the forecast does not sell before expiry. Zero when not comparable. */
+  atRiskBonusPacks: number;
+  /** Paid packs the forecast does not sell before expiry. Zero when not comparable. */
+  atRiskPaidPacks: number;
   packsForRequirement: number;
   bonusPacks: number;
   leadTimeDays: number;
@@ -386,6 +407,46 @@ function scheduleForRequirement(
   const paidPacks = Math.max(requiredPacks, candidate.moqPacks);
   if (buy <= 0 || free <= 0) return { paidPacks, bonusPacks: 0 };
   return { paidPacks, bonusPacks: Math.floor(paidPacks / buy) * free };
+}
+
+/**
+ * Cost per unit expected to remain sellable. Paid stock is consumed first, so a
+ * bonus lowers cost only to the extent the configured forecast also consumes it.
+ */
+export function effectiveCostPerSellableUnit(input: {
+  costMinor: number;
+  paidPacks: number;
+  bonusPacks: number;
+  canonicalUnitsPerPack: number;
+  forecastSellThroughPacks: number;
+}): {
+  effectiveUnitCostMicroMinor: number;
+  sellablePacks: number;
+  atRiskBonusPacks: number;
+  atRiskPaidPacks: number;
+} {
+  const { costMinor, paidPacks, bonusPacks, canonicalUnitsPerPack, forecastSellThroughPacks } =
+    input;
+  assertCount(costMinor, 'INVALID_MONEY');
+  [paidPacks, bonusPacks, forecastSellThroughPacks].forEach((value) =>
+    assertCount(value, 'INVALID_QUANTITY')
+  );
+  if (!Number.isSafeInteger(canonicalUnitsPerPack) || canonicalUnitsPerPack <= 0) {
+    throw new PharmacyPurchasingError('INVALID_QUANTITY');
+  }
+  const totalPacks = paidPacks + bonusPacks;
+  const sellablePacks = Math.min(totalPacks, forecastSellThroughPacks);
+  if (sellablePacks <= 0) throw new PharmacyPurchasingError('INVALID_QUANTITY');
+  const sellableBonusPacks = Math.max(0, sellablePacks - paidPacks);
+  return {
+    effectiveUnitCostMicroMinor: divideRoundHalfUp(
+      costMinor * MICRO,
+      sellablePacks * canonicalUnitsPerPack
+    ),
+    sellablePacks,
+    atRiskBonusPacks: bonusPacks - sellableBonusPacks,
+    atRiskPaidPacks: paidPacks - Math.min(paidPacks, sellablePacks),
+  };
 }
 
 /**
@@ -429,6 +490,12 @@ export function compareQuotes(input: {
 
     const { paidPacks, bonusPacks } = scheduleForRequirement(requiredPacks, candidate);
     let effectiveUnitCostMicroMinor: number | null = null;
+    let effectiveSellableUnitCostMicroMinor: number | null = null;
+    // A non-comparable quote is never risk-assessed, so it reports no packs at risk.
+    let atRiskBonusPacks = 0;
+    let atRiskPaidPacks = 0;
+    const forecast = candidate.forecastSellThroughPacks ?? null;
+    const forecastRecorded = forecast !== null;
     if (comparable) {
       const [line] = landedCost({
         lines: [
@@ -442,6 +509,16 @@ export function compareQuotes(input: {
         ],
       }).lines;
       effectiveUnitCostMicroMinor = line!.landedCostPerCanonicalUnitMicroMinor;
+      const riskAdjusted = effectiveCostPerSellableUnit({
+        costMinor: line!.landedCostMinor,
+        paidPacks,
+        bonusPacks,
+        canonicalUnitsPerPack: candidate.canonicalUnitsPerPack,
+        forecastSellThroughPacks: forecast ?? paidPacks + bonusPacks,
+      });
+      effectiveSellableUnitCostMicroMinor = riskAdjusted.effectiveUnitCostMicroMinor;
+      atRiskBonusPacks = riskAdjusted.atRiskBonusPacks;
+      atRiskPaidPacks = riskAdjusted.atRiskPaidPacks;
     }
 
     if (candidate.moqPacks > requiredPacks) {
@@ -451,7 +528,18 @@ export function compareQuotes(input: {
     }
     if (bonusPacks > 0) {
       reasons.push(
-        `Scheme adds ${bonusPacks} free packs, lowering the unit cost without adding revenue.`
+        !comparable
+          ? `Scheme adds ${bonusPacks} free packs.`
+          : !forecastRecorded
+            ? `Scheme adds ${bonusPacks} free packs; no sell-through forecast is recorded, so all are assumed to sell.`
+            : atRiskBonusPacks > 0
+              ? `Scheme adds ${bonusPacks} free packs; ${atRiskBonusPacks} are at expiry risk under the configured sell-through forecast.`
+              : `Scheme adds ${bonusPacks} free packs and the configured forecast sells all before expiry.`
+      );
+    }
+    if (atRiskPaidPacks > 0) {
+      reasons.push(
+        `${atRiskPaidPacks} paid packs are at expiry risk under the configured sell-through forecast.`
       );
     }
     if ((candidate.discountBps ?? 0) > 0) {
@@ -465,9 +553,14 @@ export function compareQuotes(input: {
       quoteId: candidate.quoteId,
       supplierId: candidate.supplierId,
       supplierName: candidate.supplierName,
+      pricePerPackMinor: candidate.pricePerPackMinor,
       rank: 0,
       comparable,
       effectiveUnitCostMicroMinor,
+      effectiveSellableUnitCostMicroMinor,
+      forecastSellThroughPacks: forecast,
+      atRiskBonusPacks,
+      atRiskPaidPacks,
       packsForRequirement: paidPacks,
       bonusPacks,
       leadTimeDays: candidate.leadTimeDays,
@@ -483,7 +576,7 @@ export function compareQuotes(input: {
     // returning 0 keeps them in the caller's input order.
     if (!a.comparable) return 0;
     return (
-      a.effectiveUnitCostMicroMinor! - b.effectiveUnitCostMicroMinor! ||
+      a.effectiveSellableUnitCostMicroMinor! - b.effectiveSellableUnitCostMicroMinor! ||
       a.leadTimeDays - b.leadTimeDays ||
       b.minimumExpiryDays - a.minimumExpiryDays ||
       a.quoteId.localeCompare(b.quoteId)

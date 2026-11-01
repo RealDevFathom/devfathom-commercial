@@ -26,6 +26,7 @@ import { z } from 'zod';
 import { parseGs1DataMatrix, type Gs1Warning } from './gs1-datamatrix';
 import { normalizeMedicineText } from './medicine';
 import { packConversions, type PackLevelNode } from './pack-conversion';
+import { packConversionLabel } from './pack-conversion-label';
 import { assertSupplierEligible, PharmacyPurchasingError } from './purchasing';
 import { creditPosition } from './supplier-returns';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -259,21 +260,6 @@ export type PurchasingWorkspace = {
   })[];
 };
 
-function conversionLabel(
-  level: string,
-  chain: readonly { level: string; unitsPerParent: number }[],
-  units: number
-) {
-  if (chain.length <= 1) return `1 ${level} = ${units} units`;
-  const steps: string[] = [];
-  let running = 1;
-  for (const step of chain.slice(1)) {
-    running *= chain[steps.length]!.unitsPerParent;
-    steps.push(`${running} ${step.level}${running === 1 ? '' : 's'}`);
-  }
-  return `1 ${level} = ${steps.join(' = ')} = ${units} units`;
-}
-
 /**
  * Everything the four consoles need to render a picker, in one round trip.
  *
@@ -437,7 +423,7 @@ export async function purchasingWorkspace(
           level: conversion.level,
           presentation: presentation.presentation,
           canonicalUnitsPerPack: conversion.canonicalUnitsPerPack,
-          conversionLabel: conversionLabel(
+          conversionLabel: packConversionLabel(
             conversion.level,
             conversion.chain,
             conversion.canonicalUnitsPerPack

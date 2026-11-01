@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { Prisma, type RestaurantTenderType } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-import { businessDateToUtcDate } from './business-date';
+import { businessDateToUtcDate, resolveBusinessDate } from './business-date';
 import { DailyCloseError } from './daily-close-errors';
 import {
   beginMoneyIdempotent,
@@ -224,6 +224,7 @@ export function resolveChainTip<T extends CloseChainNode>(closes: readonly T[]):
 
 type LoadedInputs = AggregateInputs & {
   openBillCount: number;
+  unresolvedOrderCount: number;
   openDrawerCount: number;
 };
 
@@ -245,6 +246,13 @@ async function loadCloseInputs(
       compTotal: true,
       discountTotal: true,
       grandTotal: true,
+    },
+  });
+  const unresolvedOrderCount = await db.restaurantOrder.count({
+    where: {
+      branchId,
+      businessDate,
+      status: { in: ['OPEN', 'SENT', 'IN_PREPARATION', 'READY', 'SERVED', 'PAYMENT_PENDING'] },
     },
   });
   const tenders = await db.restaurantTender.findMany({
@@ -279,6 +287,7 @@ async function loadCloseInputs(
       countedCash: d.countedCash,
     })),
     openBillCount: bills.filter((b) => b.status === 'OPEN').length,
+    unresolvedOrderCount,
     openDrawerCount: drawers.filter((d) => d.status === 'OPEN').length,
   };
 }
@@ -294,6 +303,7 @@ export type ClosePreview = CloseAggregate & {
     allBillsResolved: boolean;
     allDrawersClosed: boolean;
     openBillCount: number;
+    unresolvedOrderCount: number;
     openDrawerCount: number;
   };
   /** The current chain-tip close for the date, if one has already been cut. */
@@ -319,9 +329,10 @@ export async function closePreview(db: ScopedDb, input: ClosePreviewInput): Prom
     businessDate,
     ...aggregate,
     readiness: {
-      allBillsResolved: loaded.openBillCount === 0,
+      allBillsResolved: loaded.openBillCount === 0 && loaded.unresolvedOrderCount === 0,
       allDrawersClosed: loaded.openDrawerCount === 0,
       openBillCount: loaded.openBillCount,
+      unresolvedOrderCount: loaded.unresolvedOrderCount,
       openDrawerCount: loaded.openDrawerCount,
     },
     existingCloseId: resolveChainTip(existing)?.id ?? null,
@@ -385,13 +396,19 @@ async function persistClose(
   return close.id;
 }
 
-/** Guard: a close can only be cut/corrected when every bill for the date is
- * SETTLED or VOID and every drawer session for the date is CLOSED (C9). */
+/** Guard: a close can only be cut/corrected when every bill and billable order
+ * for the date is resolved and every drawer session is CLOSED (C9). */
 function assertReadyToClose(loaded: LoadedInputs): void {
   if (loaded.openBillCount > 0) {
     throw new DailyCloseError(
       'The business day has unsettled bills; settle or void every bill before closing.',
       'UNSETTLED_BILL'
+    );
+  }
+  if (loaded.unresolvedOrderCount > 0) {
+    throw new DailyCloseError(
+      'The business day has active orders; resolve them before closing.',
+      'ACTIVE_ORDERS'
     );
   }
   if (loaded.openDrawerCount > 0) {
@@ -419,7 +436,11 @@ export type CutCloseResult = {
  * the date (a correction supersedes an existing close instead). Snapshot + tender
  * children are written in ONE transaction; idempotent (`cash:close`).
  */
-export async function cutClose(db: ScopedDb, input: CutCloseInput): Promise<CutCloseResult> {
+export async function cutClose(
+  db: ScopedDb,
+  input: CutCloseInput,
+  now?: Date
+): Promise<CutCloseResult> {
   const businessDate = businessDateToUtcDate(input.businessDate);
   return runMoneyTransaction(db, async (tx) => {
     await lockMoneyDay(tx, input.branchId, input.businessDate);
@@ -428,6 +449,30 @@ export async function cutClose(db: ScopedDb, input: CutCloseInput): Promise<CutC
       branchId: input.branchId,
       businessDate: input.businessDate,
     });
+    // A completed close must stay replayable even if the cutoff/timezone (or DST)
+    // later makes its date resolve as "future". An existing key is validated by
+    // beginMoneyIdempotent (same command + payload hash + completed) or rejected;
+    // only brand-new closes are subject to the future-date guard below.
+    const priorKey = await tx.restaurantMoneyIdempotencyKey.findUnique({
+      where: { deviceId_key: { deviceId: input.actor.deviceId, key: input.actor.idempotencyKey } },
+      select: { commandType: true },
+    });
+    if (priorKey) {
+      const prior = await beginMoneyIdempotent(tx, input.actor, 'cash.day_close', canonical);
+      if (prior.replay) return decodeFrozenCloseResult(prior.resultPayload);
+    }
+    const branch = await tx.restaurantBranch.findUnique({
+      where: { id: input.branchId },
+      select: { timezone: true, businessDayCutoff: true },
+    });
+    if (!branch) throw new DailyCloseError('The branch does not exist.', 'INVALID');
+    // Sample the server clock after lock acquisition: waiting can cross the cutoff.
+    if (
+      input.businessDate >
+      resolveBusinessDate(now ?? new Date(), branch.timezone, branch.businessDayCutoff)
+    ) {
+      throw new DailyCloseError('A future business day cannot be closed.', 'INVALID');
+    }
     const idem = await beginMoneyIdempotent(tx, input.actor, 'cash.day_close', canonical);
     if (idem.replay) return decodeFrozenCloseResult(idem.resultPayload);
 

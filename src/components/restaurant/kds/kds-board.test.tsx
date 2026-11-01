@@ -441,6 +441,7 @@ describe('KdsBoard transport', () => {
     expect(new Headers(call?.[1]?.headers).get('Idempotency-Key')).toBe(
       '00000000-0000-4000-8000-000000000049'
     );
+    expect(new Headers(call?.[1]?.headers).get('X-POS-Composer-Proof')).toBeNull();
     expect(screen.getByText('KOT 2 reprint queued.')).toBeVisible();
   });
 

@@ -171,6 +171,96 @@ beforeEach(() => {
 
 const params = (query: Record<string, string> = {}) => Promise.resolve(query);
 
+it.each([undefined, 'req-other', 'req-source'])(
+  'shows a draft quote ranking from its own requisition with req=%s',
+  async (selectedRequisition) => {
+    const requisition = (id: string, medicine: string) => ({
+      id,
+      reference: id,
+      status: 'SUBMITTED',
+      createdAt: new Date('2026-10-01T00:00:00.000Z'),
+      lines: [
+        {
+          id: `${id}-line`,
+          medicine: { productName: medicine },
+          quantityPacks: 10,
+          canonicalUnitsPerPack: 10,
+          canonicalUnits: 100,
+        },
+      ],
+      quotes: [],
+      purchaseOrders: [],
+    });
+    const compareQuotes = vi.fn().mockImplementation(async ({ requisitionLineId }) => ({
+      ranking:
+        requisitionLineId === 'req-source-line'
+          ? [
+              {
+                quoteId: 'quote-source',
+                rank: 2,
+              },
+              { quoteId: 'quote-better', rank: 1 },
+            ].map((row) => ({
+              ...row,
+              supplierId: 'sup-ok',
+              supplierName: 'Karachi Distributors',
+              comparable: true,
+              pricePerPackMinor: 1000,
+              effectiveUnitCostMicroMinor: 100_000_000,
+              effectiveSellableUnitCostMicroMinor: 100_000_000,
+              forecastSellThroughPacks: 10,
+              atRiskBonusPacks: 0,
+              packsForRequirement: 10,
+              bonusPacks: 0,
+              moqPacks: 1,
+              leadTimeDays: 2,
+              minimumExpiryDays: 365,
+              reasons: ['Lead time 2 days; shortest shelf life offered 365 days.'],
+            }))
+          : [],
+    }));
+    mocks.createCaller.mockReturnValue(
+      callerStub({
+        requisitions: vi
+          .fn()
+          .mockResolvedValue([
+            requisition('req-source', 'Source medicine'),
+            requisition('req-other', 'Other medicine'),
+          ]),
+        purchaseOrders: vi.fn().mockResolvedValue([
+          {
+            id: 'po-quote',
+            reference: 'PO-QUOTE',
+            status: 'DRAFT',
+            quoteId: 'quote-source',
+            supplier: { name: 'Karachi Distributors' },
+            requisition: { id: 'req-source', reference: 'req-source' },
+            createdByUserId: 'user-9',
+            lines: [],
+            approvals: [],
+            goodsReceipts: [],
+          },
+        ]),
+        compareQuotes,
+      })
+    );
+    render(
+      await OrdersPage({
+        searchParams: params({
+          po: 'po-quote',
+          ...(selectedRequisition ? { req: selectedRequisition } : {}),
+        }),
+      })
+    );
+    expect(screen.getByText('Current distributor ranking for this draft')).toBeVisible();
+    expect(screen.getByText(/Source medicine: selected quote ranked #2 of 2/)).toBeVisible();
+    expect(screen.queryByText(/Other medicine: selected quote ranked/)).not.toBeInTheDocument();
+    expect(
+      compareQuotes.mock.calls.filter(([input]) => input.requisitionLineId === 'req-source-line')
+    ).toHaveLength(1);
+  }
+);
+
 it('review: submitted order success remains visible after refreshed status removes the submitting form', async () => {
   const order = {
     id: 'po-1',
