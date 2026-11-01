@@ -1,5 +1,13 @@
 import { Prisma } from '@/generated/prisma/client';
+import {
+  basketGenerateInput,
+  basketReviewInput,
+  generateBasketInsights,
+  listBasketInsights,
+  reviewBasketInsight,
+} from '@/lib/pharmacy/basket-workflow';
 import { generateGrowthRecommendations } from '@/lib/ai/growth-recommendations';
+import { can, subjectFromSession } from '@/lib/abac';
 import {
   buildPharmacyGrowthInput,
   growthPeriodInput,
@@ -184,6 +192,21 @@ async function growthExecute<T>(
         code: 'FORBIDDEN',
         message: 'Current owner and branch access are required.',
       });
+    // Snapshots contain Finance evidence. Match the ledger report gates for reads,
+    // generation and review, and recheck them after provider latency before saving.
+    for (const action of ['reports:operational', 'reports:financial'] as const) {
+      if (
+        !(await can(subjectFromSession(ctx.session!.user), action, undefined, {
+          db,
+          source: 'TRPC',
+          ip: ctx.requestMeta.ip,
+        }))
+      )
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Financial report permission is required.',
+        });
+    }
     try {
       return await fn(db as ScopedDb, resolved);
     } catch (error) {
@@ -200,6 +223,25 @@ async function growthExecute<T>(
 
 // Integration export for WHA-1618; root.ts is outside this issue's ownership.
 export const pharmacyMarketingRouter = router({
+  basketHistory: protectedProcedure
+    .input(marketingScopeInput)
+    .query(({ ctx, input }) => growthExecute(ctx, input.branchId, listBasketInsights)),
+  generateBaskets: protectedProcedure
+    .input(basketGenerateInput)
+    .mutation(({ ctx, input }) =>
+      growthExecute(ctx, input.branchId, (db, resolved) =>
+        generateBasketInsights(db, resolved, input)
+      )
+    ),
+  reviewBasket: protectedProcedure
+    .use(({ ctx, next }) => {
+      ctx.audit.detail = { action: 'pharmacy_bundle_review', skipInput: true };
+      return next();
+    })
+    .input(basketReviewInput)
+    .mutation(({ ctx, input }) =>
+      growthExecute(ctx, input.branchId, (db, resolved) => reviewBasketInsight(db, resolved, input))
+    ),
   growthHistory: protectedProcedure
     .input(marketingScopeInput)
     .query(({ ctx, input }) => growthExecute(ctx, input.branchId, listGrowthInsights)),
@@ -324,6 +366,9 @@ export const pharmacyMarketingRouter = router({
       const settings = await readAskFathomSettings(ctx.db, resolved.organizationId);
       if (!settings?.askFathomEnabled)
         return { available: false as const, body: null, approved: false as const };
-      return draftMarketingCopy({ occasion: input.occasion, tone: input.tone });
+      return draftMarketingCopy(
+        { occasion: input.occasion, tone: input.tone },
+        { organizationId: resolved.organizationId, branchId: resolved.branchId }
+      );
     }),
 });

@@ -8,17 +8,23 @@ const seed = readFileSync(resolve(process.cwd(), 'scripts/seed-restaurant-e2e.ts
 const runner = readFileSync(resolve(process.cwd(), 'scripts/run-restaurant-e2e.ts'), 'utf8');
 const database = readFileSync(resolve(process.cwd(), 'scripts/restaurant-e2e-database.ts'), 'utf8');
 const demoSeed = readFileSync(resolve(process.cwd(), 'scripts/seed-restaurant-demo.ts'), 'utf8');
+const verticalCatalog = readFileSync(resolve(process.cwd(), 'src/lib/vertical-catalog.ts'), 'utf8');
+const terminalUnlock = readFileSync(
+  resolve(process.cwd(), 'src/app/api/restaurant/terminal/unlock/route.ts'),
+  'utf8'
+);
 
 // Parse function boundaries so adjacent, independently owned fixtures cannot bleed
 // into a guard. Missing/renamed functions fail instead of producing empty slices.
 const seedSource = ts.createSourceFile('seed.ts', seed, ts.ScriptTarget.Latest, true);
-function seedFunction(name: string) {
-  const declaration = seedSource.statements.find(
+const demoSeedSource = ts.createSourceFile('demo-seed.ts', demoSeed, ts.ScriptTarget.Latest, true);
+function seedFunction(name: string, source = seedSource) {
+  const declaration = source.statements.find(
     (node): node is ts.FunctionDeclaration =>
       ts.isFunctionDeclaration(node) && node.name?.text === name
   );
   if (!declaration?.body) throw new Error(`Missing seed function: ${name}`);
-  return declaration.getText(seedSource);
+  return declaration.getText(source);
 }
 const firstRunRoles = seedFunction('seedFirstRunRoles');
 const restorableFixtures = seed.replace(firstRunRoles, '');
@@ -144,6 +150,22 @@ describe('Restaurant E2E seed restoration guards', () => {
       /for \(const module of RESTAURANT_MODULE_ROWS\)[\s\S]*?platformPackageModule\.upsert\([\s\S]*?update: \{ enabled: true \}/
     );
     expect(demoSeed).toContain("key: 'restaurant-pos'");
+  });
+
+  test('assigns the demo head chef to the kitchen role on create and reseed', () => {
+    const people = seedFunction('seedPeople', demoSeedSource);
+
+    expect(people).toMatch(
+      /organizationId_key:\s*\{ organizationId: BASE\.organizationId, key: 'kitchen' \}/
+    );
+    expect(people).toMatch(/member\.key === 'kashif'\s*\? kitchenRole\.id/);
+    expect(people.match(/organizationRoleId,/g)).toHaveLength(2);
+    expect(verticalCatalog).toMatch(
+      /key: 'kitchen',[\s\S]*?capabilities: \[[^\]]*'kitchen:operate'[^\]]*\]/
+    );
+    expect(terminalUnlock).toMatch(
+      /ctx\.device\.kind === 'KDS'[\s\S]*?operatorHasCapability\([\s\S]*?'kitchen:operate'/
+    );
   });
 
   test('keeps all seeded branches at the restaurant location limit', () => {

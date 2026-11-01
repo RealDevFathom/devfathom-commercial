@@ -18,7 +18,7 @@ describe('DayClosePanel', () => {
       if (path.includes('/preview')) {
         return {
           businessDate: '2026-08-19',
-          readiness: { openBillCount: 0, openDrawerCount: 0 },
+          readiness: { openBillCount: 0, unresolvedOrderCount: 0, openDrawerCount: 0 },
           existingCloseId: 'close-1',
           totals: {
             grossSales: '10.00',
@@ -71,7 +71,7 @@ describe('DayClosePanel', () => {
       if (path.endsWith('/current')) return { businessDate: '2026-09-28' } as T;
       return {
         businessDate: '2026-09-28',
-        readiness: { openBillCount: 0, openDrawerCount: 0 },
+        readiness: { openBillCount: 0, unresolvedOrderCount: 0, openDrawerCount: 0 },
         existingCloseId: 'close-1',
         totals: {
           grossSales: '28.00',
@@ -102,6 +102,58 @@ describe('DayClosePanel', () => {
     expect(value('Refunds')).toHaveTextContent('14.00');
     expect(value('Net sales')).toHaveTextContent('14.00');
   });
+
+  it.each([null, 'close-1'])(
+    'blocks active orders without bills and restores the form after resolution (existing close: %s)',
+    async (existingCloseId) => {
+      let unresolvedOrderCount = 2;
+      const request: TerminalRequest = async <T,>(path: string) => {
+        if (path.endsWith('/current')) return { businessDate: '2026-09-28' } as T;
+        return {
+          businessDate: '2026-09-28',
+          readiness: { openBillCount: 0, unresolvedOrderCount, openDrawerCount: 0 },
+          existingCloseId,
+          totals: {
+            grossSales: '0.00',
+            netSales: '0.00',
+            deliveryFeeSales: '0.00',
+            deliveryFeeRefunds: '0.00',
+            refundTotal: '0.00',
+            cashExpected: '0.00',
+            cashCounted: '0.00',
+            cashVariance: '0.00',
+          },
+        } as T;
+      };
+
+      render(<DayClosePanel request={request} operators={operators} actingOperatorId="operator-1" />);
+      fireEvent.click(screen.getByRole('button', { name: 'Close day' }));
+      const dialog = screen.getByRole('dialog', { name: 'Close business day' });
+      await waitFor(() =>
+        expect(within(dialog).getByLabelText('Business date')).toHaveValue('2026-09-28')
+      );
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Check readiness' }));
+      await within(dialog).findByText('Close blocked');
+
+      const value = (label: string) => within(dialog).getByText(label).nextElementSibling;
+      expect(value('Active orders')).toHaveTextContent('2');
+      expect(value('Open bills')).toHaveTextContent('0');
+      expect(value('Open drawers')).toHaveTextContent('0');
+      expect(within(dialog).getByText('blocked')).toBeVisible();
+      expect(
+        within(dialog).getByText('Resolve 2 active order(s), 0 open bill(s) and 0 open drawer(s).')
+      ).toBeVisible();
+      const action = existingCloseId ? 'Record correction' : 'Close business day';
+      expect(within(dialog).queryByRole('button', { name: action })).not.toBeInTheDocument();
+      expect(within(dialog).queryByLabelText('Manager PIN')).not.toBeInTheDocument();
+
+      unresolvedOrderCount = 0;
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Check readiness' }));
+      expect(await within(dialog).findByRole('button', { name: action })).toBeEnabled();
+      expect(value('Active orders')).toHaveTextContent('0');
+      expect(within(dialog).queryByText('Close blocked')).not.toBeInTheDocument();
+    }
+  );
 
   it('shows a recoverable error and preserves keyboard dismissal', async () => {
     const request = vi.fn(async () => {

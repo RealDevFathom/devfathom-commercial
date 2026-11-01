@@ -213,7 +213,7 @@ export async function redeemSalePoints(
     _sum: { points: true },
   });
   const totalMinor = sale.lines.reduce(
-    (sum, line) => sum + line.quantity * line.unitPriceMinor - line.discountMinor,
+    (sum, line) => sum + line.grossMinor - line.discountMinor,
     0
   );
   const outstandingMinor =
@@ -358,7 +358,7 @@ export async function readCustomerSnapshot(
         id: true,
         receiptNumber: true,
         completedAt: true,
-        lines: { select: { quantity: true, unitPriceMinor: true, discountMinor: true } },
+        lines: { select: { grossMinor: true, discountMinor: true } },
         tenders: {
           select: { type: true, amountMinor: true, refunds: { select: { amountMinor: true } } },
         },
@@ -407,10 +407,7 @@ export async function readCustomerSnapshot(
       saleId: sale.id,
       receiptNumber: sale.receiptNumber,
       completedAt: sale.completedAt,
-      totalMinor: sale.lines.reduce(
-        (sum, line) => sum + line.quantity * line.unitPriceMinor - line.discountMinor,
-        0
-      ),
+      totalMinor: sale.lines.reduce((sum, line) => sum + line.grossMinor - line.discountMinor, 0),
     })),
   };
 }
@@ -455,7 +452,7 @@ export async function readLoyaltyHistory(
   await assertLoyaltyHistoryBranch(db, scope);
   const customer = await db.pharmacyCustomer.findFirst({
     where: { id: customerId, organizationId: scope.organizationId, active: true },
-    select: { id: true, displayName: true, phoneLast4: true },
+    select: { id: true, displayName: true, phoneLast4: true, preferredLanguage: true },
   });
   if (!customer) throw new PharmacyLoyaltyError('CUSTOMER_NOT_FOUND');
   const where = { organizationId: scope.organizationId, branchId: scope.branchId, customerId };

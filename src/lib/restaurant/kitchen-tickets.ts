@@ -35,12 +35,13 @@ export class KitchenTicketError extends Error {
   }
 }
 
-/** One item being fired: its identity, its product/category (for routing) and the
+/** One item being fired: its identity, its product/category/course (for routing) and the
  * quantity fired to the station. */
 export type FiredItem = {
   orderItemId: string;
   productId: string;
   categoryId: string | null;
+  course: number;
   quantity: number;
 };
 
@@ -183,7 +184,7 @@ export async function generateKitchenTickets(
 
   const ruleRows = await tx.restaurantStationRoutingRule.findMany({
     where: { station: { branchId: input.branchId, active: true } },
-    select: { stationId: true, productId: true, categoryId: true, priority: true },
+    select: { stationId: true, productId: true, categoryId: true, course: true, priority: true },
   });
   const rules: StationRoutingRule[] = ruleRows.filter((r) => activeStationIds.has(r.stationId));
 
@@ -192,7 +193,7 @@ export async function generateKitchenTickets(
   const stationOrder: string[] = [];
   for (const item of input.items) {
     const resolution = resolveStation(
-      { productId: item.productId, categoryId: item.categoryId },
+      { productId: item.productId, categoryId: item.categoryId, course: item.course },
       rules,
       defaultStationId
     );

@@ -48,6 +48,7 @@ let captures: Array<Record<string, unknown>>;
 let exclusions: Array<Record<string, unknown>>;
 let optIn: boolean | null;
 let revokedAt: Date | null;
+let dateOfBirth: Date | null;
 let db: ScopedDb;
 let mock: ReturnType<typeof database>;
 function database() {
@@ -100,6 +101,7 @@ function database() {
         id: 'customer-a',
         active: true,
         patientId: 'patient-a',
+        patient: { dateOfBirth },
         whatsappOptIn: optIn,
       })),
     },
@@ -136,6 +138,7 @@ beforeEach(() => {
   exclusions = [];
   optIn = true;
   revokedAt = null;
+  dateOfBirth = null;
   mock = database();
   db = mock as unknown as ScopedDb;
 });
@@ -461,5 +464,34 @@ describe('persisted capture workflow', () => {
     );
     await expect(captureMarketingCampaign(db, scope, row.id, now)).rejects.toThrow('500-customer');
     expect(captures).toEqual([]);
+  });
+});
+
+describe('marketing age eligibility', () => {
+  it.each([
+    ['2010-03-01', '2028-02-29T12:00:00Z', 'UNDER_18'],
+    ['2010-03-01', '2028-03-01T00:00:00Z', null],
+    ['2010-02-28', '2028-02-29T12:00:00Z', null],
+    ['2008-02-29', '2026-02-28T12:00:00Z', 'UNDER_18'],
+    ['2008-02-29', '2026-03-01T00:00:00Z', null],
+    // Workspace is Asia/Karachi (UTC+5): the birthday starts at 19:00Z the day before.
+    ['2008-10-07', '2026-10-06T18:59:59Z', 'UNDER_18'],
+    ['2008-10-07', '2026-10-06T19:00:00Z', null],
+    ['2008-10-06', '2026-10-06T00:00:00Z', null],
+  ])('checks birthday %s on %s', async (birth, timestamp, expected) => {
+    dateOfBirth = new Date(birth);
+    const at = new Date(timestamp);
+    mock.patientConsent.findFirst.mockResolvedValue({
+      granted: true,
+      revokedAt: null,
+      recordedAt: at,
+    });
+    expect(await marketingConsent(db, scope, 'customer-a', at)).toBe(expected);
+  });
+
+  it('excludes a customer known to be under 18 before reading consent', async () => {
+    dateOfBirth = new Date('2010-01-01');
+    expect(await marketingConsent(db, scope, 'customer-a', now)).toBe('UNDER_18');
+    expect(mock.patientConsent.findFirst).not.toHaveBeenCalled();
   });
 });

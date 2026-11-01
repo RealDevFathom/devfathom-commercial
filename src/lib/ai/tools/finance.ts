@@ -23,6 +23,7 @@ import {
   invoiceStatusUpdate,
   PAID_STATUS_ERROR,
 } from '@/lib/finance/invoice-status';
+import { multiplyMoney, roundMoney } from '@/lib/finance/money';
 
 // Money columns are Decimal(12,2) — Postgres caps a value at 9,999,999,999.99.
 // Bound amounts here so an oversized input is a clean validation error, not a
@@ -62,7 +63,7 @@ function rollForwardDueDate(due: Date, interval: string, now: Date): Date {
   return next;
 }
 
-const round2 = (n: number) => Math.round(n * 100) / 100;
+const round2 = roundMoney;
 
 /** Display label for a money amount, e.g. "$1,200" / "Rs 50,000". */
 const moneyLabel = (amount: number, currency: string) =>
@@ -496,7 +497,7 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
         description: it.description,
         quantity: it.quantity,
         rate: it.unitPrice,
-        amount: round2(it.quantity * it.unitPrice),
+        amount: multiplyMoney(it.quantity, it.unitPrice),
       }));
       const subtotal = round2(lineItems.reduce((s, it) => s + it.amount, 0));
       const taxAmount = round2(tax ?? 0);

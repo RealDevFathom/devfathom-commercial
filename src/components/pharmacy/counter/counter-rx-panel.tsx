@@ -13,6 +13,7 @@ import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { StatusPill } from '@/components/ui/status-pill';
+import { CounterDuplicateSaltAcknowledge } from './counter-duplicate-salt-acknowledge';
 import type { CounterAlert } from '@/lib/pharmacy/counter-alerts';
 import type { CounterPatientPanel } from '@/lib/pharmacy/counter-prescriptions';
 import { formatReceiptDate } from '@/lib/pharmacy/counter-receipt';
@@ -518,6 +519,11 @@ export type CounterRxPanelProps = {
     ) => void;
   };
   alerts: readonly CounterAlert[];
+  /**
+   * #724: the bill an acknowledgeable advice alert belongs to. Without it the
+   * advice still renders; only the Acknowledge control is withheld.
+   */
+  acknowledgementScope?: { branchId: string; saleId: string } | null;
   patient: CounterPatientPanel | null;
   candidates: ReadonlyArray<{ patientId: string; displayName: string; phone: string | null }>;
   query: string;
@@ -552,6 +558,7 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
     {
       controlled,
       alerts,
+      acknowledgementScope = null,
       patient,
       candidates,
       query,
@@ -759,6 +766,20 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
                 >
                   <StatusPill status="advice" tone="info" label="Advice" />
                   <span className="ml-2">{alert.message}</span>
+                  {alert.acknowledgement && acknowledgementScope ? (
+                    <>
+                      {alert.remedy ? (
+                        <span className="mt-1 block text-xs text-text-muted">{alert.remedy}</span>
+                      ) : null}
+                      <CounterDuplicateSaltAcknowledge
+                        branchId={acknowledgementScope.branchId}
+                        saleId={acknowledgementScope.saleId}
+                        ingredientKey={alert.acknowledgement.ingredientKey}
+                        medicines={alert.acknowledgement.medicines}
+                        disabled={disabled}
+                      />
+                    </>
+                  ) : null}
                 </li>
               ))}
             </ul>

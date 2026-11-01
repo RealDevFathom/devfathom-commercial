@@ -1,22 +1,33 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Eye, EyeOff, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
 const inputClass =
   'flex h-12 w-full rounded-[3px] border border-border-default bg-card px-4 text-sm text-foreground placeholder:text-text-muted transition-colors focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20';
+const signInErrorId = 'platform-sign-in-error';
 
 export function PlatformLoginForm({ initialEnrollment = false }: { initialEnrollment?: boolean }) {
   const router = useRouter();
   const [error, setError] = useState('');
+  const [invalidFields, setInvalidFields] = useState<'credentials' | 'all' | null>(null);
   const [pending, setPending] = useState(false);
+  const emailRef = useRef<HTMLInputElement>(null);
+  const authenticationCodeRef = useRef<HTMLInputElement>(null);
   const [showPassword, setShowPassword] = useState(false);
   const [enrollment, setEnrollment] = useState(initialEnrollment);
   const [secret, setSecret] = useState('');
   const [code, setCode] = useState('');
   const [recoveryCodes, setRecoveryCodes] = useState<string[]>([]);
+
+  // Editing an implicated field dismisses the sign-in error it is described by.
+  function clearSignInError() {
+    if (!invalidFields) return;
+    setInvalidFields(null);
+    setError('');
+  }
 
   async function enroll(action: 'begin' | 'confirm') {
     setPending(true);
@@ -70,6 +81,7 @@ export function PlatformLoginForm({ initialEnrollment = false }: { initialEnroll
     event.preventDefault();
     setPending(true);
     setError('');
+    setInvalidFields(null);
     const data = new FormData(event.currentTarget);
     try {
       const response = await fetch('/api/platform/session', {
@@ -84,6 +96,10 @@ export function PlatformLoginForm({ initialEnrollment = false }: { initialEnroll
       const body = (await response.json()) as { error?: string; enrollmentRequired?: boolean };
       if (!response.ok) {
         setError(body.error ?? 'Sign in failed.');
+        const includesAuthenticationCode = body.error?.includes('authentication code') ?? false;
+        setInvalidFields(includesAuthenticationCode ? 'all' : 'credentials');
+        if (includesAuthenticationCode) authenticationCodeRef.current?.focus();
+        else emailRef.current?.focus();
         return;
       }
       if (body.enrollmentRequired) {
@@ -94,6 +110,8 @@ export function PlatformLoginForm({ initialEnrollment = false }: { initialEnroll
       router.refresh();
     } catch {
       setError('The control desk could not be reached. Check the connection and try again.');
+      setInvalidFields('credentials');
+      emailRef.current?.focus();
     } finally {
       setPending(false);
     }
@@ -178,6 +196,7 @@ export function PlatformLoginForm({ initialEnrollment = false }: { initialEnroll
     <form method="post" onSubmit={submit} className="space-y-5">
       {error ? (
         <div
+          id={signInErrorId}
           role="alert"
           className="rounded-[3px] border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
         >
@@ -190,6 +209,7 @@ export function PlatformLoginForm({ initialEnrollment = false }: { initialEnroll
           Work email
         </label>
         <input
+          ref={emailRef}
           id="platform-email"
           aria-label="Work email"
           name="email"
@@ -198,6 +218,9 @@ export function PlatformLoginForm({ initialEnrollment = false }: { initialEnroll
           autoFocus
           required
           maxLength={254}
+          aria-invalid={Boolean(invalidFields) || undefined}
+          aria-describedby={invalidFields ? signInErrorId : undefined}
+          onChange={clearSignInError}
           className={inputClass}
           placeholder="operator@devfathom.com"
         />
@@ -216,6 +239,9 @@ export function PlatformLoginForm({ initialEnrollment = false }: { initialEnroll
             required
             minLength={8}
             maxLength={256}
+            aria-invalid={Boolean(invalidFields) || undefined}
+            aria-describedby={invalidFields ? signInErrorId : undefined}
+            onChange={clearSignInError}
             className={`${inputClass} pr-10`}
             placeholder="Enter your password"
           />
@@ -242,12 +268,16 @@ export function PlatformLoginForm({ initialEnrollment = false }: { initialEnroll
           <span className="text-xs text-text-muted">If enrolled</span>
         </div>
         <input
+          ref={authenticationCodeRef}
           id="platform-auth-code"
           name="authenticationCode"
           type="text"
           inputMode="numeric"
           autoComplete="one-time-code"
           maxLength={32}
+          aria-invalid={invalidFields === 'all' || undefined}
+          aria-describedby={invalidFields === 'all' ? signInErrorId : undefined}
+          onChange={clearSignInError}
           className={`${inputClass} font-mono tracking-[0.16em]`}
           placeholder="6-digit or recovery code"
         />
