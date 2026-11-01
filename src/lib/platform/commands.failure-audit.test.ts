@@ -48,7 +48,15 @@ vi.mock('@/lib/tenancy/scoped-db', () => ({
 import { executePlatformCommand } from './commands';
 import { PlatformSecurityError } from './security';
 
-const actor = (role: 'SUPER_ADMIN' | 'AUDITOR' = 'SUPER_ADMIN') =>
+type TestPlatformRole =
+  | 'SUPER_ADMIN'
+  | 'OPERATIONS'
+  | 'SALES'
+  | 'FINANCE'
+  | 'SUPPORT'
+  | 'AUDITOR';
+
+const actor = (role: TestPlatformRole = 'SUPER_ADMIN') =>
   ({ id: 'operator_1', role }) as never;
 const request = (requestId = 'req_failure_1') =>
   new Request('https://admin.devfathom.test/api/platform/control', {
@@ -89,6 +97,72 @@ describe('platform command failure auditing', () => {
       reason: 'Platform command capability denied.',
       metadata: { outcomeCategory: 'capability_denied' },
       requestId: expect.stringMatching(/^pcorr_[a-f0-9]{32}$/),
+    });
+  });
+
+  it.each(['OPERATIONS', 'SALES', 'FINANCE', 'SUPPORT', 'AUDITOR'] as const)(
+    'denies CRM conversion to %s before organization provisioning begins',
+    async (role) => {
+      await expect(
+        executePlatformCommand(
+          actor(role),
+          'crm.opportunity.convert',
+          {
+            opportunityId: 'opp_1',
+            organization: { name: 'must-not-be-provisioned' },
+            administrator: { email: 'must-not-be-created@example.test' },
+          },
+          request()
+        )
+      ).rejects.toMatchObject({ status: 403 });
+
+      // The sole transaction records the denial; runCommand never receives the
+      // caller-controlled organization or first-administrator payload.
+      expect(state.transactionCalls).toBe(1);
+      expect(state.audits).toHaveLength(1);
+      expect(state.audits[0]).toMatchObject({
+        actorPlatformUserId: 'operator_1',
+        action: 'crm.opportunity.convert',
+        success: false,
+        reason: 'Platform command capability denied.',
+        metadata: { outcomeCategory: 'capability_denied' },
+      });
+      expect(JSON.stringify(state.audits[0])).not.toContain('must-not-be');
+    }
+  );
+
+  it('allows a super administrator past the CRM conversion capability boundary', async () => {
+    await expect(
+      executePlatformCommand(
+        actor('SUPER_ADMIN'),
+        'crm.opportunity.convert',
+        { opportunityId: 'opp_1' },
+        request()
+      )
+    ).rejects.not.toMatchObject({ status: 403 });
+
+    // The command transaction is reached before the incomplete fixture is
+    // rejected, then a second transaction records that validation failure.
+    expect(state.transactionCalls).toBe(2);
+    expect(state.audits).toHaveLength(1);
+    expect(state.audits[0]).toMatchObject({
+      action: 'crm.opportunity.convert',
+      reason: 'Platform command validation failed.',
+      metadata: { outcomeCategory: 'validation_failed' },
+    });
+  });
+
+  it('keeps ordinary CRM mutations available to sales', async () => {
+    await expect(
+      executePlatformCommand(actor('SALES'), 'crm.opportunity.create', {}, request())
+    ).rejects.not.toMatchObject({ status: 403 });
+
+    expect(state.transactionCalls).toBe(2);
+    expect(state.audits).toHaveLength(1);
+    expect(state.audits[0]).toMatchObject({
+      action: 'crm.opportunity.create',
+      reason: 'Platform command validation failed.',
+      metadata: { outcomeCategory: 'validation_failed' },
     });
   });
 
@@ -198,15 +272,14 @@ describe('platform command failure auditing', () => {
     expect(JSON.stringify(state.audits[0])).not.toContain('hunter2');
   });
 
-  it('preserves success audit semantics inside one transaction', async () => {
+  it('records an explicit successful outcome inside one transaction', async () => {
     await expect(
       executePlatformCommand(actor(), 'setting.upsert', setting(), request())
     ).resolves.toMatchObject({ id: 'setting_1' });
 
     expect(state.transactionCalls).toBe(1);
     expect(state.audits).toHaveLength(1);
-    expect(state.audits[0]).toMatchObject({ action: 'setting.upsert' });
-    expect(state.audits[0].success).toBeUndefined();
+    expect(state.audits[0]).toMatchObject({ action: 'setting.upsert', success: true });
   });
 
   it('deduplicates a replay by actor, action, category, and correlation id', async () => {

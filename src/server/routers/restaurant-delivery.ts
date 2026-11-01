@@ -9,6 +9,7 @@ import {
   deleteDeliveryAddress,
   listDeliveryAddresses,
   listDeliveryZones,
+  reactivateDeliveryZone,
   setDefaultDeliveryAddress,
   updateDeliveryAddress,
   updateDeliveryZone,
@@ -178,6 +179,21 @@ export const restaurantDeliveryRouter = router({
       annotateAudit(ctx, { targetType: 'RestaurantDeliveryZone', targetId: input.zoneId });
       try {
         await deactivateDeliveryZone(ctx.db, {
+          ...input,
+          organizationId: ctx.entitlements.organizationId,
+        });
+      } catch (error) {
+        mapDeliveryError(error);
+      }
+    }),
+
+  reactivateZone: configureProcedure
+    .input(z.object({ branchId: id, zoneId: id }).strict())
+    .mutation(async ({ ctx, input }) => {
+      await requireRestaurantBranchScope(ctx, input.branchId);
+      annotateAudit(ctx, { targetType: 'RestaurantDeliveryZone', targetId: input.zoneId });
+      try {
+        await reactivateDeliveryZone(ctx.db, {
           ...input,
           organizationId: ctx.entitlements.organizationId,
         });

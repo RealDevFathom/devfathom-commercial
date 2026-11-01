@@ -921,6 +921,7 @@
    Fog surround · paper workspace · ink structure · coral signal
    ============================================================ */
 :root {
+  --surface-fog: #e8e8e5;
   --surface-page: #f6f6f3;
   --surface-card: #ffffff;
   --surface-sunken: #f1f1ee;
@@ -942,6 +943,8 @@
   --accent-brand: #bd3f2a;
   --accent-brand-hover: #a5361f;
   --accent-quiet: #fff0ec;
+  --selection-background: #ffb4a8;
+  --selection-foreground: #111110;
 
   --background: var(--surface-page);
   --foreground: var(--text-strong);
@@ -995,6 +998,7 @@
 }
 
 [data-theme='dark'] {
+  --surface-fog: #111110;
   --surface-page: #1c1c1a;
   --surface-card: #242422;
   --surface-sunken: #181817;
@@ -1012,6 +1016,8 @@
   --accent-brand: #ff745d;
   --accent-brand-hover: #ff8b78;
   --accent-quiet: #48231d;
+  --selection-background: #71362d;
+  --selection-foreground: #f7f7f4;
   --background: var(--surface-page);
   --foreground: var(--text-strong);
   --card: var(--surface-card);
@@ -1040,19 +1046,19 @@
 @layer base {
   body {
     font-family: var(--font-sans);
-    background: #e8e8e5;
+    background: var(--surface-fog);
     color: var(--foreground);
   }
 
   ::selection {
-    background: #ffb4a8;
-    color: #111110;
+    background: var(--selection-background);
+    color: var(--selection-foreground);
   }
 }
 
 @layer components {
   .studio-viewport {
-    background: #e8e8e5;
+    background: var(--surface-fog);
   }
 
   .studio-shell {
@@ -1691,5 +1697,23 @@
   .studio-auth *::after {
     animation: none !important;
     transition: none !important;
+  }
+}
+
+/*
+ * Keyboard focus is a product-wide accessibility guarantee. Keep this rule
+ * unlayered and after component styles so bespoke controls cannot accidentally
+ * erase the indicator with an `outline-none` utility. Components may add a
+ * ring or change their border as well, but the outline remains the dependable
+ * fallback on tenant, restaurant, terminal, and platform surfaces.
+ */
+:focus-visible {
+  outline: 3px solid var(--ring);
+  outline-offset: 3px;
+}
+
+@media (forced-colors: active) {
+  :focus-visible {
+    outline-color: Highlight;
   }
 }

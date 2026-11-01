@@ -70,6 +70,8 @@ type Deps = {
   createTenantDb: (typeof import('@/lib/tenancy/scoped-db'))['createTenantDb'];
   enrollDevice: (typeof import('@/lib/restaurant/devices'))['enrollDevice'];
   drawer: typeof import('./drawer-sessions');
+  dailyClose: typeof import('./daily-close');
+  moneyDayGuard: typeof import('./money-day');
 };
 
 let deps: Deps;
@@ -85,19 +87,21 @@ function read<T>(fn: (tx: ScopedDb) => Promise<T>): Promise<T> {
   return deps.withTenantDb(orgId, fn);
 }
 
-async function newDevice(label: string): Promise<string> {
+async function newDevice(label: string, branchId = ids.branch): Promise<string> {
   return deps.withTenantDb(orgId, async (tx) => {
-    const enrolled = await deps.enrollDevice(tx, { branchId: ids.branch, name: label });
+    const enrolled = await deps.enrollDevice(tx, { branchId, name: label });
     return enrolled.device.id;
   });
 }
 
 beforeAll(async () => {
   if (!TEST_DATABASE_URL) return;
-  const [scopedDb, devices, drawer] = await Promise.all([
+  const [scopedDb, devices, drawer, dailyClose, moneyDayGuard] = await Promise.all([
     import('@/lib/tenancy/scoped-db'),
     import('@/lib/restaurant/devices'),
     import('./drawer-sessions'),
+    import('./daily-close'),
+    import('./money-day'),
   ]);
   deps = {
     withTenantDb: scopedDb.withTenantDb,
@@ -105,6 +109,8 @@ beforeAll(async () => {
     createTenantDb: scopedDb.createTenantDb,
     enrollDevice: devices.enrollDevice,
     drawer,
+    dailyClose,
+    moneyDayGuard,
   };
 
   await deps.withPlatformDb((tx) =>
@@ -166,6 +172,298 @@ describeIfDatabase('drawer session command layer (real DB)', () => {
     expect(session?.staffProfileId).toBe(ids.operator);
     expect(session?.movements).toEqual([{ kind: 'OPENING_FLOAT', amount: expect.anything() }]);
     expect(session?.movements[0].amount.toString()).toBe('150');
+  });
+
+  it('rejects drawer sessions and movements on a financially closed day', async () => {
+    const branchId = `branch_closed_${suffix}`;
+    await read((tx) =>
+      tx.restaurantBranch.create({
+        data: { id: branchId, name: 'Closed day', timezone: 'UTC', businessDayCutoff: '00:00' },
+      })
+    );
+    const deviceId = await newDevice('POS-closed-fin-day', branchId);
+    const db = deps.createTenantDb(orgId);
+    await deps.dailyClose.cutClose(db, {
+      branchId,
+      businessDate: '2026-08-19',
+      actor: actor(deviceId),
+    });
+
+    await expect(
+      deps.drawer.openDrawerSession(db, {
+        organizationId: orgId,
+        entitlementLimits: { 'pos.concurrentRegisters.max': 1000000 },
+        branchId,
+        openingFloat: '50.00',
+        actor: actor(deviceId),
+        now: AT,
+      })
+    ).rejects.toMatchObject({ reason: 'CLOSE_EXISTS' });
+    expect(
+      await read(async (tx) => ({
+        sessions: await tx.restaurantDrawerSession.count({
+          where: { branchId, businessDate: new Date('2026-08-19T00:00:00.000Z') },
+        }),
+        movements: await tx.restaurantDrawerMovement.count({
+          where: {
+            drawerSession: {
+              branchId,
+              businessDate: new Date('2026-08-19T00:00:00.000Z'),
+            },
+          },
+        }),
+      }))
+    ).toEqual({ sessions: 0, movements: 0 });
+
+    const drawerSessionId = await read(async (tx) => {
+      const session = await tx.restaurantDrawerSession.create({
+        data: {
+          branchId,
+          deviceId,
+          staffProfileId: ids.operator,
+          businessDate: new Date('2026-08-19T00:00:00.000Z'),
+          status: 'OPEN',
+          openedAt: AT,
+          openingFloat: '0.00',
+        },
+        select: { id: true },
+      });
+      return session.id;
+    });
+    await expect(
+      deps.drawer.recordDrawerAdjustment(db, {
+        drawerSessionId,
+        kind: 'PAID_IN',
+        amount: '10.00',
+        reason: 'late adjustment',
+        actor: actor(deviceId),
+      })
+    ).rejects.toMatchObject({ reason: 'CLOSE_EXISTS' });
+    expect(
+      await read((tx) => tx.restaurantDrawerMovement.count({ where: { drawerSessionId } }))
+    ).toBe(0);
+  });
+
+  it('serializes opening a drawer against closing the same business day', async () => {
+    const branchId = `branch_close_race_${suffix}`;
+    await read((tx) =>
+      tx.restaurantBranch.create({
+        data: { id: branchId, name: 'Close race', timezone: 'UTC', businessDayCutoff: '00:00' },
+      })
+    );
+    const deviceId = await newDevice('POS-close-race', branchId);
+
+    const [opening, closing] = await Promise.allSettled([
+      deps.drawer.openDrawerSession(deps.createTenantDb(orgId), {
+        organizationId: orgId,
+        entitlementLimits: { 'pos.concurrentRegisters.max': 1000000 },
+        branchId,
+        openingFloat: '25.00',
+        actor: actor(deviceId),
+        now: AT,
+      }),
+      deps.dailyClose.cutClose(deps.createTenantDb(orgId), {
+        branchId,
+        businessDate: '2026-08-19',
+        actor: actor(deviceId),
+      }),
+    ]);
+
+    expect([opening.status, closing.status].sort()).toEqual(['fulfilled', 'rejected']);
+    if (opening.status === 'rejected') {
+      expect(opening.reason).toMatchObject({ reason: 'CLOSE_EXISTS' });
+    } else {
+      expect(closing).toMatchObject({
+        status: 'rejected',
+        reason: { reason: 'OPEN_DRAWER' },
+      });
+    }
+
+    const persisted = await read(async (tx) => ({
+      openDrawers: await tx.restaurantDrawerSession.count({
+        where: { branchId, businessDate: new Date('2026-08-19T00:00:00.000Z'), status: 'OPEN' },
+      }),
+      closes: await tx.restaurantDailyClose.count({
+        where: { branchId, businessDate: new Date('2026-08-19T00:00:00.000Z') },
+      }),
+    }));
+    expect(persisted.openDrawers + persisted.closes).toBe(1);
+  });
+
+  it('serializes a manual adjustment against closing the same business day', async () => {
+    const branchId = `branch_adjust_close_race_${suffix}`;
+    await read((tx) =>
+      tx.restaurantBranch.create({
+        data: {
+          id: branchId,
+          name: 'Adjustment close race',
+          timezone: 'UTC',
+          businessDayCutoff: '00:00',
+        },
+      })
+    );
+    const deviceId = await newDevice('POS-adjust-close-race', branchId);
+    const drawerSessionId = await read(async (tx) => {
+      const session = await tx.restaurantDrawerSession.create({
+        data: {
+          branchId,
+          deviceId,
+          staffProfileId: ids.operator,
+          businessDate: new Date('2026-08-19T00:00:00.000Z'),
+          status: 'OPEN',
+          openedAt: AT,
+          openingFloat: '0.00',
+        },
+        select: { id: true },
+      });
+      return session.id;
+    });
+
+    const [adjusting, closing] = await Promise.allSettled([
+      deps.drawer.recordDrawerAdjustment(deps.createTenantDb(orgId), {
+        drawerSessionId,
+        kind: 'PAID_IN',
+        amount: '10.00',
+        reason: 'concurrent top-up',
+        actor: actor(deviceId),
+      }),
+      deps.dailyClose.cutClose(deps.createTenantDb(orgId), {
+        branchId,
+        businessDate: '2026-08-19',
+        actor: actor(deviceId),
+      }),
+    ]);
+
+    expect(adjusting.status).toBe('fulfilled');
+    expect(closing).toMatchObject({
+      status: 'rejected',
+      reason: { reason: 'OPEN_DRAWER' },
+    });
+
+    const persisted = await read(async (tx) => ({
+      movements: await tx.restaurantDrawerMovement.count({
+        where: { drawerSessionId, kind: 'PAID_IN' },
+      }),
+      closes: await tx.restaurantDailyClose.count({
+        where: { branchId, businessDate: new Date('2026-08-19T00:00:00.000Z') },
+      }),
+    }));
+    expect(persisted).toEqual({ movements: 1, closes: 0 });
+  });
+
+  it('uses the same lock order when a drawer close races a movement writer', async () => {
+    const deviceId = await newDevice('POS-drawer-close-race');
+    const db = deps.createTenantDb(orgId);
+    const opened = await deps.drawer.openDrawerSession(db, {
+      organizationId: orgId,
+      entitlementLimits: { 'pos.concurrentRegisters.max': 1000000 },
+      branchId: ids.branch,
+      openingFloat: '40.00',
+      actor: actor(deviceId),
+      now: AT,
+    });
+
+    let releaseWriter!: () => void;
+    let writerHasDayLock!: () => void;
+    let writerPid = 0;
+    const writerReady = new Promise<void>((resolve) => (writerHasDayLock = resolve));
+    const writerRelease = new Promise<void>((resolve) => (releaseWriter = resolve));
+    const writing = deps.withTenantDb(orgId, async (tx) => {
+      const [backend] = await tx.$queryRaw<
+        Array<{ pid: number }>
+      >`SELECT pg_backend_pid() AS pid`;
+      writerPid = backend.pid;
+      await deps.moneyDayGuard.assertMoneyDayOpen(tx, ids.branch, opened.businessDate);
+      writerHasDayLock();
+      await writerRelease;
+      return deps.drawer.appendMovement(tx, {
+        drawerSessionId: opened.drawerSessionId,
+        kind: 'CASH_SALE',
+        amount: '5.00',
+        staffProfileId: ids.operator,
+        deviceId,
+      });
+    });
+    await writerReady;
+
+    const closing = deps.drawer.closeDrawerSession(db, {
+      drawerSessionId: opened.drawerSessionId,
+      countedCash: '45.00',
+      actor: actor(deviceId),
+    });
+
+    // Wait until close is definitely contending for the advisory lock, then
+    // prove it has not already taken the drawer row. The former inverted order
+    // fails this NOWAIT probe because close held the row while waiting here.
+    let closeIsWaiting = false;
+    for (let attempt = 0; attempt < 100 && !closeIsWaiting; attempt += 1) {
+      const [locks] = await read((tx) =>
+        tx.$queryRaw<Array<{ count: bigint }>>`
+          SELECT count(*)::bigint AS count
+          FROM pg_locks waiting
+          JOIN pg_locks held
+            ON held.locktype = waiting.locktype
+            AND held.database IS NOT DISTINCT FROM waiting.database
+            AND held.classid IS NOT DISTINCT FROM waiting.classid
+            AND held.objid IS NOT DISTINCT FROM waiting.objid
+            AND held.objsubid IS NOT DISTINCT FROM waiting.objsubid
+          WHERE waiting.locktype = 'advisory'
+            AND NOT waiting.granted
+            AND held.granted
+            AND held.pid = ${writerPid}
+        `
+      );
+      closeIsWaiting = locks.count > BigInt(0);
+      if (!closeIsWaiting) await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    try {
+      expect(closeIsWaiting).toBe(true);
+      await read(
+        (tx) =>
+          tx.$queryRaw`SELECT id FROM restaurant_drawer_sessions WHERE id = ${opened.drawerSessionId} FOR UPDATE NOWAIT`
+      );
+    } finally {
+      releaseWriter();
+    }
+
+    const [movement, closed] = await Promise.all([writing, closing]);
+    expect(movement.movementId).toEqual(expect.any(String));
+    expect(closed.expectedCash.toString()).toBe('45');
+    expect(closed.variance.toString()).toBe('0');
+  });
+
+  it('rejects opening a drawer on a closed business day without writing money records', async () => {
+    const deviceId = await newDevice('POS-closed-day');
+    await deps.withTenantDb(orgId, (tx) =>
+      tx.restaurantDailyClose.create({
+        data: {
+          branchId: ids.branch,
+          businessDate: new Date('2026-08-18T00:00:00.000Z'),
+          cutByStaffProfileId: ids.manager,
+          deviceId,
+        },
+      })
+    );
+
+    await expect(
+      deps.drawer.openDrawerSession(deps.createTenantDb(orgId), {
+        organizationId: orgId,
+        entitlementLimits: { 'pos.concurrentRegisters.max': 1000000 },
+        branchId: ids.branch,
+        openingFloat: '100.00',
+        actor: actor(deviceId),
+        now: new Date('2026-08-18T18:00:00.000Z'),
+      })
+    ).rejects.toMatchObject({ reason: 'CLOSE_EXISTS' });
+
+    const [sessions, movements] = await read(async (tx) =>
+      Promise.all([
+        tx.restaurantDrawerSession.count({ where: { deviceId } }),
+        tx.restaurantDrawerMovement.count({ where: { deviceId } }),
+      ])
+    );
+    expect(sessions).toBe(0);
+    expect(movements).toBe(0);
   });
 
   it('rejects a second OPEN drawer on the same register', async () => {

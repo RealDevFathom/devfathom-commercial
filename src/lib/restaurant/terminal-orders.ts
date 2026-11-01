@@ -11,6 +11,7 @@ import { readJson } from '@/lib/api-json';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { loadBranchCommercialTerms } from './branch-commercial-terms';
+import { evaluateOrderSettlement } from './bills';
 import { reviveCommercialTerms } from './commercial-terms';
 import { CoAuthorizationError } from './co-authorization';
 import { quoteDraftCheckBreakdown } from './draft-check-total';
@@ -27,6 +28,7 @@ import {
 } from './menu-availability';
 import { OrderCommandError, type CommandActor } from './orders';
 import { OrderPricingError } from './order-pricing';
+import { verifyPosComposerProof } from './pos-composer-proof';
 import { OrderInvariantError, OrderTransitionError } from './order-state-machine';
 import { pickEntry, resolveEffectiveEntries, type ResolvedPriceList } from './price-lists';
 import {
@@ -295,7 +297,8 @@ export async function authenticateApprover(
 export function terminalCommandRoute<S extends z.ZodTypeAny>(
   schema: S,
   run: (args: { ctx: TerminalContext; data: z.infer<S>; actor: CommandActor }) => Promise<unknown>,
-  successStatus = 200
+  successStatus = 200,
+  options: { composerProof?: 'REQUIRED' | 'POS_ONLY' } = {}
 ) {
   const parseBody = async (request: Request) => {
     const parsedJson = await readJson(request);
@@ -317,6 +320,24 @@ export function terminalCommandRoute<S extends z.ZodTypeAny>(
 
       const parsed = await parseBody(request);
       if (!parsed.ok) return parsed.response;
+
+      const requiresComposerProof =
+        options.composerProof !== 'POS_ONLY' || ctx.device.kind === 'POS';
+      if (requiresComposerProof) {
+        const composerProof = request.headers.get('x-pos-composer-proof');
+        if (
+          !composerProof ||
+          !verifyPosComposerProof(composerProof, {
+            organizationId: ctx.organizationId,
+            branchId: ctx.device.branchId,
+            deviceId: ctx.device.id,
+            sessionId: ctx.session.id,
+            staffProfileId: operator.staffProfileId,
+          })
+        ) {
+          return json({ error: 'Missing or invalid POS composer proof.' }, 403);
+        }
+      }
 
       const data = parsed.data as unknown;
       const capabilityError = await requireOrderTakingCapability(
@@ -403,7 +424,7 @@ type PricedItem = {
   modifiers: { priceDelta: Prisma.Decimal }[];
 };
 
-/** Derived subtotal over non-voided items (there is no stored total, C3). */
+/** Derived subtotal over the supplied priced items (there is no stored total, C3). */
 function deriveSubtotal(items: readonly PricedItem[]): Prisma.Decimal {
   return items.reduce((sum, item) => {
     const modifiers = item.modifiers.reduce(
@@ -445,7 +466,9 @@ export async function listOpenOrdersForBranch(db: ScopedDb, branchId: string) {
       serverStaffProfileId: true,
       openedAt: true,
       items: {
-        where: { status: { not: 'VOIDED' } },
+        // List totals and counts describe purchased units, not kitchen remake
+        // workload. Remakes remain visible in the order-detail history below.
+        where: { status: { not: 'VOIDED' }, remakeOfItemId: null },
         select: { unitPrice: true, quantity: true, modifiers: { select: { priceDelta: true } } },
       },
       orderTables: { where: { active: true }, select: { tableId: true } },
@@ -540,17 +563,21 @@ export async function getOrderForBranch(db: ScopedDb, orderId: string, branchId:
         where: { status: { not: 'VOID' } },
         select: { serviceChargeTotal: true },
       },
-      deliveryFulfillment: { select: { deliveryFeeSnapshot: true } },
+      deliveryFulfillment: { select: { deliveryFeeSnapshot: true, status: true } },
     },
   });
   if (!order) return null;
 
-  const activeItems = order.items.filter((i) => i.status !== 'VOIDED');
+  // Remakes remain part of the operational item history, but are not a new
+  // purchase and therefore must not contribute to guest-facing totals.
+  const purchasedItems = order.items.filter(
+    (item) => item.status !== 'VOIDED' && item.remakeOfItemId === null
+  );
   const at = new Date();
   const terms = reviveCommercialTerms(await loadBranchCommercialTerms(db, order.branchId, at));
   const quoted = quoteDraftCheckBreakdown({
     at,
-    lines: activeItems.map((item) => ({
+    lines: purchasedItems.map((item) => ({
       id: item.id,
       unitPrice: item.unitPrice.toString(),
       quantity: item.quantity,
@@ -566,6 +593,9 @@ export async function getOrderForBranch(db: ScopedDb, orderId: string, branchId:
     (total, bill) => total.plus(bill.serviceChargeTotal),
     new Prisma.Decimal(0)
   );
+  const settlement = order.deliveryFulfillment
+    ? await evaluateOrderSettlement(db, order.id)
+    : null;
   return {
     id: order.id,
     branchId: order.branchId,
@@ -573,6 +603,8 @@ export async function getOrderForBranch(db: ScopedDb, orderId: string, branchId:
     businessDate: order.businessDate.toISOString().slice(0, 10),
     status: order.status,
     channel: order.channel,
+    deliveryStatus: order.deliveryFulfillment?.status ?? null,
+    settled: settlement?.settled ?? false,
     coverCount: order.coverCount,
     sectionId: order.sectionId,
     serverStaffProfileId: order.serverStaffProfileId,
@@ -614,7 +646,7 @@ export async function getOrderForBranch(db: ScopedDb, orderId: string, branchId:
       items: ticket.items,
     })),
     totals: {
-      subtotal: money(deriveSubtotal(activeItems)),
+      subtotal: money(deriveSubtotal(purchasedItems)),
       tax: quoted.tax,
       serviceCharge: order.bills.length > 0 ? money(billedServiceCharge) : quoted.serviceCharge,
       deliveryFee: money(order.deliveryFulfillment?.deliveryFeeSnapshot ?? new Prisma.Decimal(0)),

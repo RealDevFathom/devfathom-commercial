@@ -185,6 +185,25 @@ describe('capability gating', () => {
       expect.anything()
     );
   });
+
+  it('returns the central floor:manage decision to read-only clients', async () => {
+    mocks.can.mockImplementation(async (...args: unknown[]) => args[1] === 'orders:read');
+    await expect(caller().access()).resolves.toEqual({ canManage: false });
+    expect(mocks.can).toHaveBeenNthCalledWith(
+      1,
+      expect.anything(),
+      'orders:read',
+      undefined,
+      expect.anything()
+    );
+    expect(mocks.can).toHaveBeenNthCalledWith(
+      2,
+      expect.anything(),
+      'floor:manage',
+      undefined,
+      expect.anything()
+    );
+  });
 });
 
 describe('strict inputs (house style, directive 6)', () => {

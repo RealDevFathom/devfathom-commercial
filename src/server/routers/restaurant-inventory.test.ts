@@ -35,6 +35,7 @@ const mocks = vi.hoisted(() => ({
   findStockLocation: vi.fn(),
   findStockCount: vi.fn(),
   findStockTransfer: vi.fn(),
+  findLowStockRule: vi.fn(),
   findBranch: vi.fn(),
   countStockLocations: vi.fn(),
   createStockLocation: vi.fn(),
@@ -111,7 +112,7 @@ const db = {
     findUnique: mocks.findBranch,
     findFirst: mocks.findBranch,
     findMany: vi.fn(async ({ where }: { where?: { id?: { in?: string[] } } }) =>
-      (where?.id?.in ?? []).map((id) => ({ id }))
+      (where?.id?.in ?? ['branch_1']).map((id) => ({ id }))
     ),
   },
   restaurantStockLocation: {
@@ -122,6 +123,7 @@ const db = {
   },
   restaurantStockCount: { findUnique: mocks.findStockCount },
   restaurantStockTransfer: { findUnique: mocks.findStockTransfer },
+  restaurantLowStockRule: { findUnique: mocks.findLowStockRule },
   $queryRaw: mocks.queryRaw,
   $transaction: vi.fn(async (run: (tx: unknown) => unknown) => run(db)),
 } as unknown as ScopedDb;
@@ -164,6 +166,7 @@ beforeEach(() => {
     sourceLocation: { branchId: 'branch_1' },
     destinationLocation: { branchId: 'branch_1' },
   });
+  mocks.findLowStockRule.mockResolvedValue({ location: { branchId: 'branch_1' } });
   mocks.findBranch.mockResolvedValue({ id: 'branch_1', active: true });
   mocks.findStockLocation.mockImplementation(async ({ where }) => ({
     id: where.id,
@@ -285,6 +288,82 @@ describe('restaurantInventoryRouter', () => {
     await expect(caller().listStockOnHand({})).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
 
+  it('restricts every inventory reader to the staff member assigned branches', async () => {
+    mocks.can.mockResolvedValue(false);
+    mocks.findBranchAssignments.mockResolvedValue([{ branchId: 'branch_2' }]);
+    mocks.listStockOnHand.mockResolvedValue([]);
+    mocks.listStockMovements.mockResolvedValue({ items: [], nextCursor: null });
+    mocks.listStockCounts.mockResolvedValue({ items: [], nextCursor: null });
+    mocks.listStockTransfers.mockResolvedValue({ items: [], nextCursor: null });
+    mocks.evaluateLowStockRules.mockResolvedValue([]);
+    mocks.listStockBatches.mockResolvedValue({ items: [], nextCursor: null });
+
+    const api = caller();
+    mocks.can.mockResolvedValueOnce(true);
+    await api.listStockOnHand({});
+    mocks.can.mockResolvedValueOnce(true);
+    await api.listStockMovements({});
+    mocks.can.mockResolvedValueOnce(true);
+    await api.listStockCounts({});
+    mocks.can.mockResolvedValueOnce(true);
+    await api.listStockTransfers({});
+    mocks.can.mockResolvedValueOnce(true);
+    await api.evaluateLowStockRules({});
+    mocks.can.mockResolvedValueOnce(true);
+    await api.listStockBatches({});
+
+    for (const reader of [
+      mocks.listStockOnHand,
+      mocks.listStockMovements,
+      mocks.listStockCounts,
+      mocks.listStockTransfers,
+      mocks.evaluateLowStockRules,
+      mocks.listStockBatches,
+    ]) {
+      expect(reader).toHaveBeenCalledWith(
+        db,
+        expect.objectContaining({ branchIds: ['branch_1', 'branch_2'] })
+      );
+    }
+  });
+
+  it.each([
+    { name: 'missing', actors: [] },
+    {
+      name: 'ambiguous',
+      actors: [
+        { id: 'staff_1', primaryBranchId: 'branch_1' },
+        { id: 'staff_2', primaryBranchId: 'branch_2' },
+      ],
+    },
+  ])(
+    'rejects every reader for a $name staff mapping, even with configure access',
+    async ({ actors }) => {
+      mocks.findStaffProfiles.mockResolvedValue(actors);
+      const api = caller();
+      for (const read of [
+        () => api.listStockOnHand({}),
+        () => api.listStockMovements({}),
+        () => api.listStockCounts({}),
+        () => api.listStockTransfers({}),
+        () => api.evaluateLowStockRules({}),
+        () => api.listStockBatches({}),
+      ]) {
+        await expect(read()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      }
+      for (const reader of [
+        mocks.listStockOnHand,
+        mocks.listStockMovements,
+        mocks.listStockCounts,
+        mocks.listStockTransfers,
+        mocks.evaluateLowStockRules,
+        mocks.listStockBatches,
+      ]) {
+        expect(reader).not.toHaveBeenCalled();
+      }
+    }
+  );
+
   it('rejects wastage mutations when ABAC denies inventory:waste', async () => {
     mocks.can.mockResolvedValue(false);
     await expect(
@@ -311,6 +390,48 @@ describe('restaurantInventoryRouter', () => {
       caller().createStockCount({ locationId: 'loc_1', unknownField: true } as never)
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
   });
+
+  it.each(['-1', 'NaN', 'Infinity', '1e3', ' 1', '', '1\n', '1\r\n'])(
+    'rejects invalid counted quantity %j before calling the domain service',
+    async (countedQuantity) => {
+      await expect(
+        caller().addStockCountLine({
+          stockCountId: 'count_1',
+          stockItemId: 'item_1',
+          countedQuantity,
+        })
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      expect(mocks.addStockCountLine).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['0', '0.0', '-1', 'NaN', 'Infinity', '1e3', '', 'abc', '1.2.3', ' 1'])(
+    'rejects non-positive or invalid movement quantity %j before calling a domain service',
+    async (quantity) => {
+      const api = caller();
+      await expect(
+        api.addStockTransferLine({
+          stockTransferId: 'transfer_1',
+          stockItemId: 'item_1',
+          quantity,
+        })
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      await expect(
+        api.postWastage({
+          stockItemId: 'item_1',
+          locationId: 'loc_1',
+          reason: 'WASTAGE',
+          quantity,
+        })
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      await expect(
+        api.postSaleReversal({ stockItemId: 'item_1', locationId: 'loc_1', quantity })
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      expect(mocks.addStockTransferLine).not.toHaveBeenCalled();
+      expect(mocks.postWastage).not.toHaveBeenCalled();
+      expect(mocks.postSaleReversal).not.toHaveBeenCalled();
+    }
+  );
 
   // ── Stock on hand — Decimal-as-string serialization ──────────────────────────
 
@@ -503,6 +624,75 @@ describe('restaurantInventoryRouter', () => {
       })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(mocks.postWastage).not.toHaveBeenCalled();
+  });
+
+  it('denies low-stock rule mutations for a branch the actor is not assigned to', async () => {
+    mocks.findLowStockRule.mockResolvedValue({ location: { branchId: 'branch_2' } });
+
+    const attempts = [
+      () =>
+        caller().createLowStockRule({ stockItemId: 'item_1', locationId: 'loc_2', threshold: '5' }),
+      () => caller().updateLowStockRule({ id: 'rule_2', threshold: '6' }),
+      () => caller().deleteLowStockRule({ id: 'rule_2' }),
+    ];
+    for (const attempt of attempts) {
+      mocks.can.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+      await expect(attempt()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    }
+
+    expect(mocks.findStockLocation).toHaveBeenCalledWith({
+      where: { id: 'loc_2' },
+      select: { branchId: true },
+    });
+    expect(mocks.findLowStockRule).toHaveBeenCalledTimes(2);
+    expect(mocks.findLowStockRule).toHaveBeenCalledWith({
+      where: { id: 'rule_2' },
+      select: { location: { select: { branchId: true } } },
+    });
+    expect(mocks.createLowStockRule).not.toHaveBeenCalled();
+    expect(mocks.updateLowStockRule).not.toHaveBeenCalled();
+    expect(mocks.deleteLowStockRule).not.toHaveBeenCalled();
+  });
+
+  it('denies low-stock rule mutations when the user has no active staff profile', async () => {
+    mocks.findStaffProfiles.mockResolvedValue([]);
+
+    const api = caller();
+    const attempts = [
+      () => api.createLowStockRule({ stockItemId: 'item_1', locationId: 'loc_1', threshold: '5' }),
+      () => api.updateLowStockRule({ id: 'rule_1', threshold: '6' }),
+      () => api.deleteLowStockRule({ id: 'rule_1' }),
+    ];
+    for (const attempt of attempts) {
+      await expect(attempt()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    }
+
+    expect(mocks.createLowStockRule).not.toHaveBeenCalled();
+    expect(mocks.updateLowStockRule).not.toHaveBeenCalled();
+    expect(mocks.deleteLowStockRule).not.toHaveBeenCalled();
+  });
+
+  it('rejects missing low-stock locations and rules before attempting a mutation', async () => {
+    mocks.findStockLocation.mockResolvedValueOnce(null);
+    mocks.findLowStockRule.mockResolvedValue(null);
+
+    await expect(
+      caller().createLowStockRule({
+        stockItemId: 'item_1',
+        locationId: 'loc_missing',
+        threshold: '5',
+      })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    await expect(
+      caller().updateLowStockRule({ id: 'rule_missing', threshold: '6' })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    await expect(caller().deleteLowStockRule({ id: 'rule_missing' })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
+
+    expect(mocks.createLowStockRule).not.toHaveBeenCalled();
+    expect(mocks.updateLowStockRule).not.toHaveBeenCalled();
+    expect(mocks.deleteLowStockRule).not.toHaveBeenCalled();
   });
 
   it('denies line injection into unauthorized count and transfer branches before mutation', async () => {
