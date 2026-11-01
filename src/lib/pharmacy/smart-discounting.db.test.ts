@@ -275,7 +275,7 @@ describe.skipIf(!TEST_DATABASE_URL)('smart discounts under forced RLS', () => {
     tenant(async (db) => {
       const sale = await createSale(db, scope);
       const proof = approve
-        ? await verifySmartDiscountOwner(db, scope, { staffProfileId, pin: '1234' })
+        ? await verifySmartDiscountOwner(scope, { staffProfileId, pin: '1234' })
         : undefined;
       if (proof && 'blocked' in proof) throw new Error(proof.blocked);
       return addSaleLine(db, scope, {
@@ -318,15 +318,35 @@ describe.skipIf(!TEST_DATABASE_URL)('smart discounts under forced RLS', () => {
     expect(JSON.stringify(audit)).not.toMatch(/"pin"|credentialHash/);
   });
   it('commits a failed PIN attempt without a stock write', async () => {
-    const result = await tenant((db) =>
-      verifySmartDiscountOwner(db, scope, { staffProfileId, pin: '9999' })
-    );
+    const result = await verifySmartDiscountOwner(scope, { staffProfileId, pin: '9999' });
     expect(result).toHaveProperty('blocked');
     expect(
       await tenant((db) =>
         db.restaurantOperatorCredential.findFirstOrThrow({ where: { staffProfileId } })
       )
     ).toMatchObject({ failedAttempts: 1 });
+    expect(await verifySmartDiscountOwner(scope, { staffProfileId, pin: '1234' })).toHaveProperty(
+      'approval'
+    );
+  });
+  it('keeps a failed PIN attempt counted when the surrounding request rolls back', async () => {
+    // A batched sibling failure rolls back the request transaction; the guess must still count.
+    await expect(
+      tenant(async () => {
+        expect(
+          await verifySmartDiscountOwner(scope, { staffProfileId, pin: '9999' })
+        ).toHaveProperty('blocked');
+        throw new Error('sibling mutation failed');
+      })
+    ).rejects.toThrow('sibling mutation failed');
+    expect(
+      await tenant((db) =>
+        db.restaurantOperatorCredential.findFirstOrThrow({ where: { staffProfileId } })
+      )
+    ).toMatchObject({ failedAttempts: 1 });
+    expect(await verifySmartDiscountOwner(scope, { staffProfileId, pin: '1234' })).toHaveProperty(
+      'approval'
+    );
   });
   it('rotates the pharmacy owner PIN without returning a secret or changing identity', async () => {
     expect(await tenant((db) => setSmartDiscountOwnerPin(db, scope, '4567'))).toHaveProperty(
@@ -337,12 +357,12 @@ describe.skipIf(!TEST_DATABASE_URL)('smart discounts under forced RLS', () => {
     ).toHaveProperty('blocked');
     const result = await tenant((db) => setSmartDiscountOwnerPin(db, scope, '4567', '1234'));
     expect(result).toEqual({ staffProfileId });
-    expect(
-      await tenant((db) => verifySmartDiscountOwner(db, scope, { staffProfileId, pin: '1234' }))
-    ).toHaveProperty('blocked');
-    expect(
-      await tenant((db) => verifySmartDiscountOwner(db, scope, { staffProfileId, pin: '4567' }))
-    ).toHaveProperty('approval');
+    expect(await verifySmartDiscountOwner(scope, { staffProfileId, pin: '1234' })).toHaveProperty(
+      'blocked'
+    );
+    expect(await verifySmartDiscountOwner(scope, { staffProfileId, pin: '4567' })).toHaveProperty(
+      'approval'
+    );
     const audit = await tenant((db) =>
       db.auditLog.findMany({ where: { action: 'pharmacyMedicine.setSmartDiscountOwnerPin' } })
     );

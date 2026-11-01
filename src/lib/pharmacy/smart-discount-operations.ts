@@ -10,6 +10,7 @@ import {
   genericDiscountWhatsAppText,
   type SmartDiscountPolicy,
 } from './smart-discounting';
+import { priceFromLot } from './medicine';
 
 /** Resolve current ownership and branch scope inside the caller's transaction. */
 export async function assertSmartDiscountOwner(db: ScopedDb, scope: LedgerScope) {
@@ -137,11 +138,21 @@ export async function readSmartDiscountSuggestion(
     take: 1000,
   });
   const { minimumMarginBps, minimumObservations, targetDemandLiftBps } = policy;
+  // Quote against the gross checkout will charge for one whole pack (the same
+  // `priceFromLot` rounding), not the printed MRP: otherwise a rounded-down pack
+  // price minus a discount sized from MRP lands below the margin floor.
+  const { unitPriceMinor: packGrossMinor } = priceFromLot({
+    printedMrpMinor: lot.printedMrpMinor,
+    canonicalUnitsInPack: lot.unitsPerPack,
+    canonicalUnitsPerSaleUnit: lot.unitsPerPack,
+  });
+  if (packGrossMinor <= 0)
+    throw new TRPCError({ code: 'PRECONDITION_FAILED', message: 'Lot has no sale price.' });
   const suggestion = suggestSmartDiscount(
     {
       rxOnly:
         lot.batch.medicine.rx || lot.batch.medicine.restricted || lot.batch.medicine.controlled,
-      mrpMinor: lot.printedMrpMinor,
+      mrpMinor: packGrossMinor,
       unitCostMinor: lot.unitCostMinor * lot.unitsPerPack,
       observations: observations.map(({ competitorPriceMinor, observedDemandUnits }) => ({
         competitorPriceMinor,
@@ -151,12 +162,13 @@ export async function readSmartDiscountSuggestion(
     { minimumMarginBps, minimumObservations, targetDemandLiftBps }
   );
   const discountPercent = suggestion.eligible
-    ? Math.floor((suggestion.discountMinor * 100) / lot.printedMrpMinor)
+    ? Math.floor((suggestion.discountMinor * 100) / packGrossMinor)
     : 0;
   return {
     inventoryLotId: lot.id,
     packLevelId: lot.packLevelId,
     canonicalUnitsInPack: lot.unitsPerPack,
+    grossMinor: packGrossMinor,
     suggestion,
     genericWhatsAppText:
       discountPercent > 0 && discountPercent < 100

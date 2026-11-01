@@ -3,7 +3,9 @@ import {
   isSmartDiscountApproval,
   setSmartDiscountOwnerPin,
   verifySmartDiscountOwner,
+  verifySmartDiscountOwnerAttempt,
 } from './smart-discount-approval';
+import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import {
   assertSmartDiscountOwner,
   readSmartDiscountSuggestion,
@@ -12,6 +14,7 @@ import {
 } from './smart-discount-operations';
 import { validateDiscount } from './sales';
 
+vi.mock('@/lib/tenancy/scoped-db', () => ({ withTenantDb: vi.fn() }));
 vi.mock('@/lib/restaurant/operator-credentials', async (original) => ({
   ...(await original<typeof import('@/lib/restaurant/operator-credentials')>()),
   verifyOperatorCredential: vi.fn(async (_type: string, pin: string) => pin === '1234'),
@@ -139,6 +142,40 @@ describe('persisted smart discount workflow', () => {
       genericWhatsAppText: null,
     });
   });
+  it('quotes the rounded checkout gross so an applied suggestion passes the guard', async () => {
+    const db = fixture();
+    const lot = await db.pharmacyInventoryLot.findFirst();
+    // MRP 1000 over 3 units: checkout charges floor(1000/3)*3 = 999 for the pack.
+    db.pharmacyInventoryLot.findFirst.mockResolvedValue({
+      ...lot,
+      unitsPerPack: 3,
+      unitCostMinor: 253,
+    });
+    const quote = await readSmartDiscountSuggestion(db as never, scope, 'lot');
+    expect(quote).toMatchObject({
+      grossMinor: 999,
+      suggestion: {
+        eligible: true,
+        minimumAllowedPriceMinor: 949,
+        suggestedPriceMinor: 949,
+        discountMinor: 50,
+      },
+    });
+    if (!quote.suggestion.eligible) throw new Error('Expected an eligible quote');
+    const checkout = {
+      regulated: false,
+      grossMinor: 999,
+      costMinor: 253 * 3,
+      approvedByUserId: 'owner',
+      approvalPolicy: 'smart-discount-owner-pin',
+      minimumMarginBps: policy.minimumMarginBps,
+    };
+    expect(() =>
+      validateDiscount({ ...checkout, discountMinor: quote.suggestion.discountMinor })
+    ).not.toThrow();
+    // The old MRP-based quote (1000 - 949 = 51) breaches the floor at checkout.
+    expect(() => validateDiscount({ ...checkout, discountMinor: 51 })).toThrow('MARGIN_GUARDRAIL');
+  });
   it('enforces the exact margin boundary with integer arithmetic', () => {
     const input = {
       regulated: false,
@@ -155,7 +192,10 @@ describe('persisted smart discount workflow', () => {
   it('returns a denial with a persisted failed-attempt increment, never a proof', async () => {
     const db = fixture();
     expect(
-      await verifySmartDiscountOwner(db as never, scope, { staffProfileId: 'staff', pin: '9999' })
+      await verifySmartDiscountOwnerAttempt(db as never, scope, {
+        staffProfileId: 'staff',
+        pin: '9999',
+      })
     ).toHaveProperty('blocked');
     expect(db.restaurantOperatorCredential.update).toHaveBeenCalledWith({
       where: { id: 'credential' },
@@ -163,7 +203,7 @@ describe('persisted smart discount workflow', () => {
     });
   });
   it('binds a verified owner proof to this scope and rejects serialized forgeries', async () => {
-    const result = await verifySmartDiscountOwner(fixture() as never, scope, {
+    const result = await verifySmartDiscountOwnerAttempt(fixture() as never, scope, {
       staffProfileId: 'staff',
       pin: '1234',
     });
@@ -173,6 +213,44 @@ describe('persisted smart discount workflow', () => {
     expect(isSmartDiscountApproval({ ...result.approval }, scope)).toBe(false);
     expect(isSmartDiscountApproval(result.approval, { ...scope, branchId: 'sibling' })).toBe(false);
     expect(JSON.stringify(result)).not.toContain('1234');
+  });
+  it('verifies each PIN in its own committed transaction, not the request one', async () => {
+    const requestDb = fixture();
+    const attemptDb = fixture();
+    vi.mocked(withTenantDb).mockImplementation(async (_org, run) => run(attemptDb as never));
+    expect(
+      await verifySmartDiscountOwner(scope, { staffProfileId: 'staff', pin: '9999' })
+    ).toHaveProperty('blocked');
+    expect(withTenantDb).toHaveBeenCalledWith('org', expect.any(Function), {
+      userId: 'actor',
+      maxWait: 2_000,
+      timeout: 5_000,
+      skipDrain: true,
+    });
+    expect(attemptDb.restaurantOperatorCredential.update).toHaveBeenCalledWith({
+      where: { id: 'credential' },
+      data: { failedAttempts: 1, lockedUntil: null },
+    });
+    expect(requestDb.restaurantOperatorCredential.update).not.toHaveBeenCalled();
+  });
+  it('commits the current-PIN check of a PIN change outside the caller transaction', async () => {
+    const requestDb = Object.assign(fixture(), {
+      restaurantStaffProfile: {
+        findFirst: vi.fn(async () => ({ id: 'staff', status: 'ACTIVE' })),
+      },
+    });
+    const attemptDb = fixture();
+    vi.mocked(withTenantDb).mockImplementation(async (_org, run) => run(attemptDb as never));
+    expect(
+      await setSmartDiscountOwnerPin(requestDb as never, scope, '4567', '9999')
+    ).toHaveProperty('blocked');
+    expect(withTenantDb).toHaveBeenCalledOnce();
+    expect(attemptDb.restaurantOperatorCredential.update).toHaveBeenCalledWith({
+      where: { id: 'credential' },
+      data: { failedAttempts: 1, lockedUntil: null },
+    });
+    expect(requestDb.restaurantOperatorCredential.update).not.toHaveBeenCalled();
+    expect(requestDb.auditLog.create).not.toHaveBeenCalled();
   });
   it.each(['EMPLOYEE', 'INACTIVE', 'LOCKED'])(
     'rejects %s owners before PIN verification',
@@ -184,7 +262,10 @@ describe('persisted smart discount workflow', () => {
       if (state === 'LOCKED') credential.lockedUntil = new Date(Date.now() + 60_000) as never;
       db.restaurantOperatorCredential.findFirst.mockResolvedValue(credential);
       expect(
-        await verifySmartDiscountOwner(db as never, scope, { staffProfileId: 'staff', pin: '1234' })
+        await verifySmartDiscountOwnerAttempt(db as never, scope, {
+          staffProfileId: 'staff',
+          pin: '1234',
+        })
       ).toHaveProperty('blocked');
       expect(db.restaurantOperatorCredential.update).not.toHaveBeenCalled();
     }

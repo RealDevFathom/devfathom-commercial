@@ -6,7 +6,7 @@ import {
   issueOperatorCredential,
   rotateOperatorCredential,
 } from '@/lib/restaurant/credential-lifecycle';
-import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { LedgerScope } from './stock-ledger';
 import {
   clearLockout,
@@ -91,7 +91,7 @@ export async function setSmartDiscountOwnerPin(
   });
   if (existing) {
     if (!currentPin) return { blocked: 'Enter the current owner PIN before changing it.' };
-    const verified = await verifySmartDiscountOwner(db, scope, {
+    const verified = await verifySmartDiscountOwner(scope, {
       staffProfileId: staff.id,
       pin: currentPin,
     });
@@ -133,8 +133,30 @@ export function isSmartDiscountApproval(
   );
 }
 
-/** Return a denial so the caller commits failed PIN counters before raising an error. */
-export async function verifySmartDiscountOwner(
+/**
+ * Verify an owner PIN in its OWN tenant transaction, committed before this
+ * returns. The request-wide transaction is rolled back whenever any sibling in
+ * the same HTTP batch fails, so a failed-attempt increment written there could
+ * be erased by batching each guess with a deliberately invalid mutation. The
+ * lockout counter must survive whatever the request does next.
+ */
+export function verifySmartDiscountOwner(
+  scope: LedgerScope,
+  input: { staffProfileId: string; pin: string }
+): Promise<{ blocked: string } | { approval: SmartDiscountApproval }> {
+  return withTenantDb(
+    scope.organizationId,
+    (attemptDb) => verifySmartDiscountOwnerAttempt(attemptDb, scope, input),
+    { userId: scope.actorId, maxWait: 2_000, timeout: 5_000, skipDrain: true }
+  );
+}
+
+/**
+ * One PIN attempt against `db`. Returns a denial (never throws) so the attempt's
+ * counter update commits with `db`. Call through `verifySmartDiscountOwner`
+ * unless `db` is already an independent, committed-on-return transaction.
+ */
+export async function verifySmartDiscountOwnerAttempt(
   db: ScopedDb,
   scope: LedgerScope,
   input: { staffProfileId: string; pin: string }

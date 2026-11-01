@@ -992,7 +992,7 @@ export const pharmacySalesRouter = router({
           const db = txDb(tx);
           const scope = await scopeFor(ctx, input.branchId);
           const ownerProof = input.ownerAuthorization
-            ? await verifySmartDiscountOwner(db, scope, input.ownerAuthorization)
+            ? await verifySmartDiscountOwner(scope, input.ownerAuthorization)
             : undefined;
           if (ownerProof && 'blocked' in ownerProof) return ownerProof;
           const approvedInput =
