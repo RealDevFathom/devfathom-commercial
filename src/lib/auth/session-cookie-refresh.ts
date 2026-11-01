@@ -6,6 +6,7 @@ export const JWT_SESSION_UPDATE_AGE_SECONDS = 60 * 60;
 
 const UPDATE_COOKIE = 'authjs.session-updated';
 const SECURE_UPDATE_COOKIE = `__Secure-${UPDATE_COOKIE}`;
+const IGNORED_CLAIMS = new Set(['iat', 'exp', 'jti', 'lastValidatedAt']);
 const SESSION_COOKIE_PATTERN = /^(?:__Secure-)?authjs\.session-token(?:\.\d+)?=/;
 
 function signature(secret: string, cookieName: string, updatedAt: number): string {
@@ -71,11 +72,16 @@ async function hasUnchangedClaims(
       decode({ token, secret, salt: cookieName }),
     ]);
     if (!previous || !next) return false;
-    // Only Auth.js's rotation metadata is redundant. In particular, persist
-    // lastValidatedAt so the JWT callback's one-minute DB cache still works.
+    // Auth.js rotation metadata is redundant, and so is lastValidatedAt: it is
+    // only the JWT callback's DB revalidation cache timestamp, which advances
+    // every minute. Persisting it would reissue (and extend) the session cookie
+    // on nearly every read. Leaving the stored value behind only means the
+    // callback re-reads the account on the next request, so revocation and
+    // authorization changes (role, status, tokenVersion, sessionRevoked) are
+    // still detected and, because they change other claims, still persisted.
     const claims = (jwt: JWT) =>
       Object.fromEntries(
-        Object.entries(jwt).filter(([key]) => !['iat', 'exp', 'jti'].includes(key))
+        Object.entries(jwt).filter(([key]) => !IGNORED_CLAIMS.has(key))
       );
     return isDeepStrictEqual(claims(previous), claims(next));
   } catch {

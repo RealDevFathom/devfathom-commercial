@@ -317,7 +317,6 @@ describe('JWT session cookie refresh window', () => {
     { role: 'EMPLOYEE' },
     { mustChangePassword: true },
     { sessionRevoked: true, sessionInvalidReason: 'REVOKED' },
-    { lastValidatedAt: 4_001_000 },
     { permissions: { billing: false } },
   ])('persists JWT callback changes during the refresh window: %j', async (changes) => {
     const first = await handleAuthRequest(
@@ -454,5 +453,182 @@ describe('JWT session cookie refresh window', () => {
     );
 
     expect(response.headers.getSetCookie()).toContain(replacement);
+  });
+
+  it('does not reissue the cookie when only the revalidation timestamp advances', async () => {
+    const first = await handleAuthRequest(
+      sessionRequest('https://tenant.test/api/auth/session'),
+      rotatingHandler(),
+      { secret: SECRET, now: 4_000 }
+    );
+    const marker = first.headers
+      .getSetCookie()
+      .find((cookie) => cookie.startsWith('__Secure-authjs.session-updated='))!;
+    const previous = (await decode({ token: TOKEN, secret: SECRET, salt: TOKEN_NAME }))!;
+    const revalidated = await encode({
+      token: { ...previous, lastValidatedAt: 4_120_000 },
+      secret: SECRET,
+      salt: TOKEN_NAME,
+    });
+    const response = await handleAuthRequest(
+      sessionRequest('https://tenant.test/api/auth/session', {
+        headers: { cookie: marker.split(';', 1)[0]! },
+      }),
+      async () =>
+        new Response('{}', {
+          headers: {
+            'set-cookie': `${TOKEN_NAME}=${revalidated}; Path=/; Secure; HttpOnly; SameSite=Lax`,
+          },
+        }),
+      { secret: SECRET, now: 4_120 }
+    );
+
+    expect(response.headers.getSetCookie()).toEqual([]);
+  });
+});
+
+describe('JWT session cookie refresh with a revalidating JWT callback', () => {
+  // Mirrors the production JWT callback: after 60 seconds it re-reads the
+  // account, refreshes authorization claims, revokes on a tokenVersion bump and
+  // stamps lastValidatedAt. Auth.js then re-encodes the token on every read.
+  type Account = { role: string; tokenVersion: number };
+
+  function browser() {
+    const jar = new Map<string, string>();
+    jar.set(TOKEN_NAME, TOKEN);
+    return {
+      jar,
+      cookieHeader: () => [...jar].map(([name, value]) => `${name}=${value}`).join('; '),
+      store(response: Response) {
+        for (const cookie of response.headers.getSetCookie()) {
+          const pair = cookie.split(';', 1)[0]!;
+          const name = pair.slice(0, pair.indexOf('='));
+          if (/;\s*Max-Age=0(?:;|$)/i.test(cookie)) jar.delete(name);
+          else jar.set(name, pair.slice(pair.indexOf('=') + 1));
+        }
+      },
+    };
+  }
+
+  function revalidatingHandler(account: Account, nowSeconds: () => number) {
+    return async (request: Request): Promise<Response> => {
+      const raw = (request.headers.get('cookie') ?? '')
+        .split(';')
+        .map((part) => part.trim())
+        .find((part) => part.startsWith(`${TOKEN_NAME}=`))!
+        .slice(TOKEN_NAME.length + 1);
+      const token = (await decode({ token: raw, secret: SECRET, salt: TOKEN_NAME }))!;
+      const nowMs = nowSeconds() * 1000;
+      const lastValidated = typeof token.lastValidatedAt === 'number' ? token.lastValidatedAt : 0;
+      if (nowMs - lastValidated > 60_000) {
+        if (account.tokenVersion !== ((token.tokenVersion as number) ?? 0)) {
+          token.sessionRevoked = true;
+          token.sessionInvalidReason = 'REVOKED';
+        } else {
+          token.role = account.role;
+        }
+        token.lastValidatedAt = nowMs;
+      }
+      const encoded = await encode({ token, secret: SECRET, salt: TOKEN_NAME });
+      return new Response(
+        JSON.stringify({ role: token.role, sessionRevoked: Boolean(token.sessionRevoked) }),
+        {
+          headers: {
+            'set-cookie': `${TOKEN_NAME}=${encoded}; Path=/; Max-Age=28800; Secure; HttpOnly; SameSite=Lax`,
+          },
+        }
+      );
+    };
+  }
+
+  async function read(
+    client: ReturnType<typeof browser>,
+    account: Account,
+    now: number
+  ): Promise<Response> {
+    const response = await handleAuthRequest(
+      new Request('https://tenant.test/api/auth/session', {
+        headers: { cookie: client.cookieHeader() },
+      }),
+      revalidatingHandler(account, () => now),
+      { secret: SECRET, now }
+    );
+    client.store(response);
+    return response;
+  }
+
+  const sessionCookies = (response: Response) =>
+    response.headers.getSetCookie().filter((cookie) => cookie.startsWith(`${TOKEN_NAME}=`));
+
+  it('renews the session cookie only once per update window while the user is active', async () => {
+    const account = { role: 'ADMIN', tokenVersion: 0 };
+    const client = browser();
+    const start = 10_000;
+
+    expect(sessionCookies(await read(client, account, start))).toHaveLength(1);
+
+    // Active user polling every two minutes: each read revalidates against the
+    // account (lastValidatedAt is always stale) yet no cookie is reissued.
+    for (let t = start + 120; t < start + JWT_SESSION_UPDATE_AGE_SECONDS; t += 120) {
+      expect((await read(client, account, t)).headers.getSetCookie()).toEqual([]);
+    }
+
+    // The first read after the window renews the cookie once, then the new
+    // window suppresses rotation again.
+    const renewal = await read(client, account, start + JWT_SESSION_UPDATE_AGE_SECONDS);
+    expect(sessionCookies(renewal)).toHaveLength(1);
+    const next = await read(client, account, start + JWT_SESSION_UPDATE_AGE_SECONDS + 120);
+    expect(next.headers.getSetCookie()).toEqual([]);
+  });
+
+  it('does not renew the session cookie for an inactive user', async () => {
+    const account = { role: 'ADMIN', tokenVersion: 0 };
+    const client = browser();
+    const issued = await read(client, account, 10_000);
+    const cookie = sessionCookies(issued)[0]!;
+    // Renewal is driven solely by requests: without reads nothing is reissued,
+    // so the cookie keeps the Max-Age it was issued with and lapses on schedule.
+    expect(cookie).toContain('Max-Age=28800');
+    const issuedValue = cookie.split(';', 1)[0]!.slice(TOKEN_NAME.length + 1);
+    expect(client.jar.get(TOKEN_NAME)).toBe(issuedValue);
+  });
+
+  it('revokes the session within the window after a password change', async () => {
+    const account = { role: 'ADMIN', tokenVersion: 0 };
+    const client = browser();
+    await read(client, account, 20_000);
+    expect((await read(client, account, 20_120)).headers.getSetCookie()).toEqual([]);
+
+    account.tokenVersion = 1; // password change bumps tokenVersion
+    const response = await read(client, account, 20_240);
+
+    expect(sessionCookies(response)).toHaveLength(1);
+    expect(await response.json()).toMatchObject({ sessionRevoked: true });
+    const stored = (await decode({
+      token: client.jar.get(TOKEN_NAME)!,
+      secret: SECRET,
+      salt: TOKEN_NAME,
+    }))!;
+    expect(stored.sessionRevoked).toBe(true);
+    expect(stored.sessionInvalidReason).toBe('REVOKED');
+  });
+
+  it('persists a role removal within the window', async () => {
+    const account = { role: 'ADMIN', tokenVersion: 0 };
+    const client = browser();
+    await read(client, account, 30_000);
+    expect((await read(client, account, 30_120)).headers.getSetCookie()).toEqual([]);
+
+    account.role = 'EMPLOYEE';
+    const response = await read(client, account, 30_240);
+
+    expect(sessionCookies(response)).toHaveLength(1);
+    expect(await response.json()).toMatchObject({ role: 'EMPLOYEE' });
+    const stored = (await decode({
+      token: client.jar.get(TOKEN_NAME)!,
+      secret: SECRET,
+      salt: TOKEN_NAME,
+    }))!;
+    expect(stored.role).toBe('EMPLOYEE');
   });
 });
