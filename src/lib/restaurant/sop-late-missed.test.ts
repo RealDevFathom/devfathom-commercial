@@ -40,6 +40,7 @@ function makeContext(payloadOverride: Record<string, unknown> = {}): {
       attempts: 1,
       maxAttempts: 5,
       claimedBy: 'worker_1',
+      claimToken: 'sop-sweep-test-claim',
       startedAt: new Date(),
     },
   };

@@ -81,6 +81,7 @@ const existingSession = {
 const existing = { deviceSecret: 'rdk_existing', sessionToken: 'rts_existing' };
 
 beforeEach(() => {
+  vi.stubEnv('AUTH_SECRET', 'demo-device-session-test-secret');
   vi.clearAllMocks();
   mocks.lock.mockResolvedValue(0);
   mocks.organization.mockResolvedValue({
@@ -233,6 +234,7 @@ describe('demo device session recovery', () => {
       deviceSecret: 'raw-device-secret',
       branchId: 'branch_1',
       sessionToken: 'terminal-session-token',
+      composerProof: expect.any(String),
       session: { state: 'UNLOCKED', activeStaffProfileId: 'staff_1' },
       operator: { staffProfileId: 'staff_1', displayName: 'Demo Manager' },
     });

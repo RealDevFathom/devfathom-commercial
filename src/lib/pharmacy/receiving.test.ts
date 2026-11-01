@@ -12,11 +12,11 @@ import {
   assertDirectPurchaseAuthorized,
   assertGoodsReceiptTransition,
   assertSaleableOnReceipt,
-  cumulativeAllocatedChargeMinor,
   matchReceiptLine,
   PharmacyReceivingError,
   receiptLineQuantities,
   receiptLineUnitCostMinor,
+  residualAllocatedChargeMinor,
   type SaleableEvidence,
 } from './receiving';
 
@@ -272,42 +272,76 @@ describe('PUR-02/PUR-03 — canonical units and landed unit cost', () => {
   });
 });
 
-describe('cumulative PO charge allocation', () => {
+describe('residual PO charge allocation', () => {
+  const allocate = (input: {
+    activeReceivedPacks: number;
+    activeAllocatedChargeMinor: number;
+    receivedPacks: number;
+    orderLineChargeMinor?: number;
+    orderedPacks?: number;
+  }) =>
+    residualAllocatedChargeMinor({
+      orderLineChargeMinor: input.orderLineChargeMinor ?? 30_000,
+      orderedPacks: input.orderedPacks ?? 10,
+      activeReceivedPacks: input.activeReceivedPacks,
+      activeAllocatedChargeMinor: input.activeAllocatedChargeMinor,
+      receivedPacks: input.receivedPacks,
+    });
+
   it('assigns a rounding residual only once across partial receipts', () => {
-    const first = cumulativeAllocatedChargeMinor({
-      allocatedChargeMinor: 1,
+    const first = allocate({
+      orderLineChargeMinor: 1,
       orderedPacks: 2,
-      previouslyReceivedPacks: 0,
+      activeReceivedPacks: 0,
+      activeAllocatedChargeMinor: 0,
       receivedPacks: 1,
     });
-    const second = cumulativeAllocatedChargeMinor({
-      allocatedChargeMinor: 1,
+    const second = allocate({
+      orderLineChargeMinor: 1,
       orderedPacks: 2,
-      previouslyReceivedPacks: 1,
+      activeReceivedPacks: 1,
+      activeAllocatedChargeMinor: first,
       receivedPacks: 1,
     });
-    expect([first, second]).toEqual([1, 0]);
     expect(first + second).toBe(1);
   });
 
-  it('uses exact integer arithmetic and caps over-receipts', () => {
-    const charge = Number.MAX_SAFE_INTEGER;
+  it('recovers the full charge when a replacement follows a released receipt', () => {
+    // Two six-pack drafts against ten ordered packs; the first is cancelled.
+    const first = allocate({
+      activeReceivedPacks: 0,
+      activeAllocatedChargeMinor: 0,
+      receivedPacks: 6,
+    });
+    const second = allocate({
+      activeReceivedPacks: 6,
+      activeAllocatedChargeMinor: first,
+      receivedPacks: 6,
+    });
+    expect([first, second]).toEqual([18_000, 12_000]);
+    // Only the second survives; four replacement packs complete the order.
+    const replacement = allocate({
+      activeReceivedPacks: 6,
+      activeAllocatedChargeMinor: second,
+      receivedPacks: 4,
+    });
+    expect(replacement).toBe(18_000);
+    expect(second + replacement).toBe(30_000);
+  });
+
+  it('never duplicates the charge on over-receipt and uses exact integer arithmetic', () => {
     expect(
-      cumulativeAllocatedChargeMinor({
-        allocatedChargeMinor: charge,
-        orderedPacks: Number.MAX_SAFE_INTEGER,
-        previouslyReceivedPacks: Number.MAX_SAFE_INTEGER - 1,
-        receivedPacks: 1,
-      })
-    ).toBe(1);
-    expect(
-      cumulativeAllocatedChargeMinor({
-        allocatedChargeMinor: charge,
-        orderedPacks: 2,
-        previouslyReceivedPacks: 2,
-        receivedPacks: 10,
-      })
+      allocate({ activeReceivedPacks: 10, activeAllocatedChargeMinor: 30_000, receivedPacks: 5 })
     ).toBe(0);
+    expect(
+      allocate({
+        orderLineChargeMinor: Number.MAX_SAFE_INTEGER,
+        orderedPacks: Number.MAX_SAFE_INTEGER,
+        activeReceivedPacks: 0,
+        activeAllocatedChargeMinor: 0,
+        receivedPacks: Number.MAX_SAFE_INTEGER - 1,
+      })
+    ).toBe(Number.MAX_SAFE_INTEGER - 1);
   });
 });
 

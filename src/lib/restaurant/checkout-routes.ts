@@ -431,7 +431,10 @@ export function moneyErrorResponse(err: unknown): NextResponse | null {
     return json({ error: err.message }, 409);
   }
   if (err instanceof OrderCommandError) {
-    return json({ error: err.message }, err.reason === 'ORDER_NOT_FOUND' ? 404 : 400);
+    return json(
+      { error: err.message },
+      err.reason === 'ORDER_NOT_FOUND' ? 404 : err.reason === 'DAY_CLOSED' ? 409 : 400
+    );
   }
   if (err instanceof BillCommandError) {
     const notFound =
@@ -481,6 +484,7 @@ export function moneyErrorResponse(err: unknown): NextResponse | null {
     const notFound = err.reason === 'CLOSE_NOT_FOUND';
     const conflict =
       err.reason === 'UNSETTLED_BILL' ||
+      err.reason === 'ACTIVE_ORDERS' ||
       err.reason === 'OPEN_DRAWER' ||
       err.reason === 'CLOSE_EXISTS' ||
       err.reason === 'NOTHING_TO_CORRECT' ||
@@ -663,6 +667,19 @@ export async function getOrderSettlementForBranch(
   if (!order) return null;
 
   const settlement = await evaluateOrderSettlement(db, orderId);
+  const unbilledItemRows = settlement.unbilledItemIds.length
+    ? await db.restaurantOrderItem.findMany({
+        where: { id: { in: settlement.unbilledItemIds }, orderId },
+        select: {
+          id: true,
+          name: true,
+          quantity: true,
+          seatNumber: true,
+          modifiers: { select: { name: true }, orderBy: { createdAt: 'asc' } },
+        },
+      })
+    : [];
+  const unbilledItemsById = new Map(unbilledItemRows.map((item) => [item.id, item]));
   const billLines = settlement.bills.length
     ? await db.restaurantBillLine.findMany({
         where: { billId: { in: settlement.bills.map((bill) => bill.id) } },
@@ -720,6 +737,20 @@ export async function getOrderSettlementForBranch(
       ? money(order.deliveryFulfillment.deliveryFeeSnapshot)
       : null,
     unbilledItemIds: settlement.unbilledItemIds,
+    unbilledItems: settlement.unbilledItemIds.flatMap((id) => {
+      const item = unbilledItemsById.get(id);
+      return item
+        ? [
+            {
+              id: item.id,
+              name: item.name,
+              quantity: item.quantity,
+              seatNumber: item.seatNumber,
+              modifiers: item.modifiers.map((modifier) => modifier.name),
+            },
+          ]
+        : [];
+    }),
     bills,
   };
 }
@@ -755,7 +786,26 @@ export async function buildReceiptForBranch(db: ScopedDb, billId: string, branch
       receiptNumber: true,
       settledAt: true,
       branch: { select: { name: true, timezone: true } },
-      order: { select: { orderNumber: true, channel: true } },
+      order: {
+        select: {
+          orderNumber: true,
+          channel: true,
+          customer: {
+            select: {
+              loyaltyAccount: {
+                select: {
+                  id: true,
+                  active: true,
+                  walletPasses: {
+                    where: { status: 'ACTIVE' },
+                    select: { platform: true },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
       lines: {
         orderBy: { createdAt: 'asc' },
         select: {
@@ -783,6 +833,23 @@ export async function buildReceiptForBranch(db: ScopedDb, billId: string, branch
   });
   if (!bill) return null;
 
+  const account = bill.order.customer?.loyaltyAccount;
+  const loyaltyWallet =
+    account?.active && account.walletPasses.length > 0
+      ? {
+          // A receipt is a settlement record, so later earns, redemptions, refunds,
+          // and adjustments must not rewrite the balance shown on a historical copy.
+          balance:
+            (
+              await db.loyaltyPointsEntry.aggregate({
+                where: { accountId: account.id, occurredAt: { lte: bill.settledAt! } },
+                _sum: { points: true },
+              })
+            )._sum.points ?? 0,
+          platforms: [...new Set(account.walletPasses.map(({ platform }) => platform))],
+        }
+      : null;
+
   return {
     billId: bill.id,
     orderId: bill.orderId,
@@ -794,6 +861,7 @@ export async function buildReceiptForBranch(db: ScopedDb, billId: string, branch
     receiptNumber: bill.receiptNumber,
     settledAt: bill.settledAt,
     splitKind: bill.splitKind,
+    loyaltyWallet,
     fractionNumerator: bill.fractionNumerator,
     fractionDenominator: bill.fractionDenominator,
     lines: bill.lines.map((line) => ({

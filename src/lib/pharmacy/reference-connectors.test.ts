@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { formulaSafeCell, ManualFileConnector } from './reference-connectors';
+import {
+  chunkReferenceRows,
+  formulaSafeCell,
+  ManualFileConnector,
+  REFERENCE_BATCH_MAX_ROWS,
+  REFERENCE_FILE_MAX_ROWS,
+} from './reference-connectors';
 
 describe('medicine reference normalization and provenance', () => {
   it('keeps missing regulated fields explicit instead of defaulting them', async () => {
@@ -82,5 +88,65 @@ describe('medicine reference normalization and provenance', () => {
       targetMedicineId: 'medicine-1',
       blockingIssues: ['INVALID_SCHEDULE_CLASSIFICATION'],
     });
+  });
+});
+
+describe('reference file chunking', () => {
+  async function normalized(count: number) {
+    const result = await new ManualFileConnector().fetch({
+      batchId: 'file-batch',
+      fileName: 'large.csv',
+      rows: Array.from({ length: count }, (_, index) => ({
+        Product: `Medicine ${index}`,
+        Strength: '500 mg',
+      })),
+      mapping: { productName: 'Product', strength: 'Strength' },
+      retrievedAt: '2030-01-02T03:04:05.000Z',
+    });
+    return result.rows;
+  }
+
+  it('splits a file into ceil(N / 500) parts whose rows and assertions carry the part batch ID', async () => {
+    const rows = await normalized(1_201);
+    const chunks = chunkReferenceRows('file-batch', rows);
+
+    expect(REFERENCE_BATCH_MAX_ROWS).toBe(500);
+    expect(chunks).toHaveLength(Math.ceil(1_201 / REFERENCE_BATCH_MAX_ROWS));
+    expect(chunks.map((chunk) => chunk.batchId)).toEqual([
+      'file-batch-p01',
+      'file-batch-p02',
+      'file-batch-p03',
+    ]);
+    expect(new Set(chunks.map((chunk) => chunk.batchId)).size).toBe(chunks.length);
+    expect(chunks.map((chunk) => chunk.rows.length)).toEqual([500, 500, 201]);
+    for (const chunk of chunks) {
+      for (const row of chunk.rows) {
+        expect(row.batchId).toBe(chunk.batchId);
+        for (const assertion of row.assertions) expect(assertion.batchId).toBe(chunk.batchId);
+      }
+    }
+    expect(chunks.flatMap((chunk) => chunk.rows.map((row) => row.rowSourceKey))).toEqual(
+      rows.map((row) => row.rowSourceKey)
+    );
+    expect(chunks[2]?.rows.at(-1)?.rowSourceKey).toBe('row-1202');
+    expect(rows[0]?.batchId).toBe('file-batch');
+  });
+
+  it('produces identical parts on retry so replays stay idempotent', async () => {
+    const rows = await normalized(700);
+    expect(chunkReferenceRows('file-batch', rows)).toEqual(chunkReferenceRows('file-batch', rows));
+  });
+
+  it('keeps the original batch ID for a file that fits in one request', async () => {
+    const chunks = chunkReferenceRows('file-batch', await normalized(500));
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0]?.batchId).toBe('file-batch');
+  });
+
+  it('rejects a file above the 20,000-row cap before producing any part', async () => {
+    const rows = await normalized(REFERENCE_FILE_MAX_ROWS + 1);
+    expect(() => chunkReferenceRows('file-batch', rows)).toThrow(
+      'A reference file is limited to 20,000 rows'
+    );
   });
 });

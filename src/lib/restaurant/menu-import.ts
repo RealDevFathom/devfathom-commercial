@@ -82,7 +82,8 @@ export type MenuImportErrorReason =
   | 'REVIEW_INCOMPLETE'
   | 'NOTHING_TO_IMPORT'
   | 'MERGE_TARGET_NOT_FOUND'
-  | 'PRICE_REQUIRED';
+  | 'PRICE_REQUIRED'
+  | 'CURRENCY_MISMATCH';
 
 export class MenuImportError extends Error {
   constructor(
@@ -606,6 +607,9 @@ export async function reviewMenuImportLine(
       importId: true,
       extractedProductName: true,
       extractedPriceAmount: true,
+      extractedCurrency: true,
+      reviewedPriceAmount: true,
+      reviewedCurrency: true,
       import: { select: { status: true } },
     },
   });
@@ -634,6 +638,28 @@ export async function reviewMenuImportLine(
         throw new MenuImportError('The price must be a positive decimal amount.', 'INVALID');
       }
       priceAmount = new Prisma.Decimal(input.priceAmount.trim());
+    }
+  }
+
+  // An amount is confirmed in a specific currency. When this review changes the
+  // line's currency without supplying a genuinely new amount (omitted, or the
+  // same figure that was already on the line, e.g. the editor's prepopulated
+  // value), the earlier amount is a relabel, not a conversion. Drop the reviewed
+  // amount so commit falls back to the extracted figure and its currency checks,
+  // which demand a fresh conversion for a foreign price.
+  const previousCurrency = (line.reviewedCurrency ?? line.extractedCurrency)?.toUpperCase() ?? null;
+  const nextCurrency =
+    currency === undefined
+      ? previousCurrency
+      : (currency ?? line.extractedCurrency?.toUpperCase() ?? null);
+  if (nextCurrency !== previousCurrency) {
+    const previousAmount = line.reviewedPriceAmount ?? line.extractedPriceAmount;
+    const isFreshAmount =
+      priceAmount !== undefined &&
+      priceAmount !== null &&
+      (previousAmount === null || !priceAmount.equals(previousAmount));
+    if (!isFreshAmount) {
+      priceAmount = null;
     }
   }
 
@@ -828,23 +854,29 @@ type ResolvedLine = {
   price: Prisma.Decimal;
   mergeProductId: string | null;
   mergeVariantId: string | null;
-  variants: Array<{ name: string; amount: string | null }>;
+  variants: Array<{ name: string; amount: string | null; currency: string | null }>;
   sortOrder: number;
 };
 
 const VARIANT_SHAPE = z.array(
   z.object({
     name: z.string(),
-    price: z.object({ amount: z.string().nullable() }).partial().passthrough(),
+    price: z
+      .object({ amount: z.string().nullable(), currency: z.string().nullable() })
+      .partial()
+      .passthrough(),
   })
 );
 
-function resolveVariants(raw: Prisma.JsonValue): Array<{ name: string; amount: string | null }> {
+function resolveVariants(
+  raw: Prisma.JsonValue
+): Array<{ name: string; amount: string | null; currency: string | null }> {
   const parsed = VARIANT_SHAPE.safeParse(raw);
   if (!parsed.success) return [];
   return parsed.data.map((variant) => ({
     name: variant.name,
     amount: variant.price?.amount ?? null,
+    currency: variant.price?.currency ?? null,
   }));
 }
 
@@ -953,6 +985,21 @@ export async function commitMenuImport(
       );
     }
 
+    // Share-lock the organization row before reading its currency. A platform
+    // currency UPDATE conflicts with FOR SHARE, so it either completes before
+    // this read or waits until all imported prices commit. FOR SHARE (unlike
+    // FOR UPDATE) does not conflict with the FOR KEY SHARE locks taken by
+    // foreign-key inserts, so the tenant's other writes (orders, payments) are
+    // not blocked for the length of a large commit. The upload-time default
+    // remains extraction context only.
+    const [organization] = await tx.$queryRaw<Array<{ currency: string | null }>>`
+      SELECT "currency"
+      FROM "organizations"
+      WHERE "id" = ${record.organizationId}
+      FOR SHARE
+    `;
+    const tenantCurrency = organization?.currency?.toUpperCase() ?? null;
+
     const lines = await tx.restaurantMenuImportLine.findMany({
       where: { importId: record.id },
       orderBy: [{ pageId: 'asc' }, { sortOrder: 'asc' }],
@@ -964,11 +1011,13 @@ export async function commitMenuImport(
         extractedProductName: true,
         extractedDescription: true,
         extractedPriceAmount: true,
+        extractedCurrency: true,
         extractedVariants: true,
         reviewedCategoryName: true,
         reviewedProductName: true,
         reviewedDescription: true,
         reviewedPriceAmount: true,
+        reviewedCurrency: true,
         mergeProductId: true,
         mergeVariantId: true,
       },
@@ -996,6 +1045,46 @@ export async function commitMenuImport(
           'REVIEW_INCOMPLETE'
         );
       }
+      const extractedCurrency = line.extractedCurrency?.toUpperCase() ?? null;
+      const reviewedCurrency = line.reviewedCurrency?.toUpperCase() ?? null;
+      const priceCurrency = reviewedCurrency ?? extractedCurrency;
+      const extractedIsForeign = extractedCurrency !== null && extractedCurrency !== tenantCurrency;
+      // A foreign extracted price is acceptable only when the reviewer typed an
+      // amount in the organization currency; relabelling alone is not a conversion.
+      const hasReviewedConversion =
+        reviewedCurrency === tenantCurrency && line.reviewedPriceAmount !== null;
+      if (
+        !tenantCurrency ||
+        priceCurrency !== tenantCurrency ||
+        (extractedIsForeign && !hasReviewedConversion)
+      ) {
+        throw new MenuImportError(
+          'Every confirmed price must agree with the organization currency, or include an explicitly reviewed conversion.',
+          'CURRENCY_MISMATCH'
+        );
+      }
+      // Merges write only the reviewed base price to the chosen catalog target;
+      // extracted sizes are imported only when creating a new product.
+      const variants =
+        line.reviewStatus === 'MERGED' ? [] : resolveVariants(line.extractedVariants);
+      // Menus often print one currency for a whole line ("Small 500 / Large 800"),
+      // so a size price with no currency of its own inherits the line's confirmed
+      // currency (already verified equal to the organization's above). This never
+      // applies when the extracted base price was foreign: those sizes are most
+      // likely in the same foreign currency and the reviewer converted only the base.
+      const inheritedVariantCurrency = extractedIsForeign ? null : priceCurrency;
+      if (
+        variants.some(
+          (variant) =>
+            variant.amount !== null &&
+            (variant.currency?.toUpperCase() ?? inheritedVariantCurrency) !== tenantCurrency
+        )
+      ) {
+        throw new MenuImportError(
+          'Every priced variant must agree with the organization currency.',
+          'CURRENCY_MISMATCH'
+        );
+      }
       resolved.push({
         id: line.id,
         decision: line.reviewStatus === 'MERGED' ? 'MERGED' : 'ACCEPTED',
@@ -1005,7 +1094,7 @@ export async function commitMenuImport(
         price,
         mergeProductId: line.mergeProductId,
         mergeVariantId: line.mergeVariantId,
-        variants: resolveVariants(line.extractedVariants),
+        variants,
         sortOrder: line.sortOrder,
       });
     }
@@ -1286,14 +1375,41 @@ export async function purgeStaleMenuImports(
   });
 
   let deletedSources = 0;
+  let purgedDrafts = 0;
   for (const record of stale) {
-    if (record.storageObjectName) {
-      await runtime.deleteSource(record.organizationId, record.storageObjectName);
-      deletedSources += 1;
-    }
-    // An abandoned draft has no evidentiary value — it records only that
-    // somebody uploaded a file and never came back. Pages and lines cascade.
-    await db.restaurantMenuImport.delete({ where: { id: record.id } });
+    const deletedSource = await runImportTransaction(db, async (tx) => {
+      // Serialize with commit, then recheck the lifecycle state after taking the
+      // lock: the initial retention query may have raced with a reviewer.
+      await tx.$queryRaw`SELECT "id" FROM "restaurant_menu_imports" WHERE "id" = ${record.id} AND "organizationId" = ${record.organizationId} FOR UPDATE`;
+      const current = await tx.restaurantMenuImport.findUnique({
+        where: { id: record.id, organizationId: record.organizationId },
+        select: {
+          organizationId: true,
+          status: true,
+          storageObjectName: true,
+          createdAt: true,
+        },
+      });
+      if (
+        !current ||
+        current.createdAt >= cutoff ||
+        !([...OPEN_STATUSES, 'EXTRACTION_FAILED'] as string[]).includes(current.status)
+      ) {
+        return false;
+      }
+
+      if (current.storageObjectName) {
+        await runtime.deleteSource(current.organizationId, current.storageObjectName);
+      }
+      // An abandoned draft has no evidentiary value — it records only that
+      // somebody uploaded a file and never came back. Pages and lines cascade.
+      await tx.restaurantMenuImport.delete({
+        where: { id: record.id, organizationId: record.organizationId },
+      });
+      purgedDrafts += 1;
+      return Boolean(current.storageObjectName);
+    });
+    if (deletedSource) deletedSources += 1;
   }
 
   // Decided imports keep their rows but must not keep the customer's file.
@@ -1316,5 +1432,5 @@ export async function purgeStaleMenuImports(
     deletedSources += 1;
   }
 
-  return { purgedDrafts: stale.length, deletedSources };
+  return { purgedDrafts, deletedSources };
 }

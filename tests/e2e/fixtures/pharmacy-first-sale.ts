@@ -554,11 +554,9 @@ export async function freshPharmacyFirstSale(
     await follow(page, 'Opening stock readiness', 'Receive opening stock');
     await click(page.getByRole('link', { name: 'Invite a colleague', exact: true }));
     await click(page.getByRole('button', { name: 'Add Member', exact: true }));
-    await page.getByPlaceholder('John Doe', { exact: true }).fill('Test second approver');
-    await page.getByPlaceholder('john@company.com', { exact: true }).fill(colleagueEmail);
-    await page
-      .getByPlaceholder('Full Stack Developer', { exact: true })
-      .fill('Purchasing reviewer');
+    await page.getByPlaceholder('Ali Raza', { exact: true }).fill('Test second approver');
+    await page.getByPlaceholder('ali@pharmacy.pk', { exact: true }).fill(colleagueEmail);
+    await page.getByPlaceholder('Pharmacist', { exact: true }).fill('Purchasing reviewer');
     await choose(page.getByLabel('Department', { exact: true }), 'Counter');
     await click(page.getByRole('button', { name: 'Admin', exact: true }));
     await click(page.getByRole('button', { name: 'Send Invite', exact: true }));

@@ -175,6 +175,20 @@ async function cashTender(device: string): Promise<{ billId: string; tenderId: s
   return { billId, tenderId: result.tenderId };
 }
 
+/** Cash tips are stored separately from bill principal, just like card tips. The
+ * current terminal cash form does not collect one, so this updates the persisted
+ * tender to exercise refunds of historical/imported tipped cash tenders. */
+async function tippedCashTender(
+  device: string,
+  tipAmount: string
+): Promise<{ billId: string; tenderId: string }> {
+  const tender = await cashTender(device);
+  await read((tx) =>
+    tx.restaurantTender.update({ where: { id: tender.tenderId }, data: { tipAmount } })
+  );
+  return tender;
+}
+
 async function openDrawer(device: string): Promise<void> {
   await deps.drawer.openDrawerSession(deps.createTenantDb(orgId), {
     organizationId: orgId,
@@ -590,6 +604,68 @@ describeIfDatabase('card refunds (real DB)', () => {
     ).rejects.toMatchObject({ reason: 'REFUND_EXCEEDS_TENDER' });
   });
 
+  it('keeps a card partial until its tip is refunded and permits a tip-only refund', async () => {
+    const { tenderId, paymentId } = await cardTender('2.00');
+
+    const principal = await deps.refunds.refundTender(deps.createTenantDb(orgId), {
+      originalTenderId: tenderId,
+      amount: '12.50',
+      tipRefundAmount: '0.00',
+      reason: 'return principal first',
+      approvingStaffProfileId: ids.manager,
+      actor: actor(),
+      now: AT,
+    });
+    expect(principal.paymentStatus).toBe('PARTIALLY_REFUNDED');
+
+    const tip = await deps.refunds.refundTender(deps.createTenantDb(orgId), {
+      originalTenderId: tenderId,
+      amount: '0.00',
+      tipRefundAmount: '2.00',
+      reason: 'return remaining tip',
+      approvingStaffProfileId: ids.manager,
+      actor: actor(),
+      now: AT,
+    });
+    expect(tip.paymentStatus).toBe('REFUNDED');
+    const persisted = await read(async (tx) => ({
+      payment: await tx.restaurantPayment.findUnique({
+        where: { id: paymentId },
+        select: {
+          status: true,
+          events: {
+            where: { capability: 'REFUND' },
+            orderBy: { createdAt: 'asc' },
+            select: { amount: true, payload: true },
+          },
+        },
+      }),
+      refunds: await tx.restaurantRefund.findMany({
+        where: { originalTenderId: tenderId },
+        orderBy: { createdAt: 'asc' },
+        select: { amount: true, tipRefundAmount: true },
+      }),
+    }));
+    expect(persisted.payment?.status).toBe('REFUNDED');
+    expect(persisted.payment?.events.map((event) => event.amount?.toString())).toEqual([
+      '12.5',
+      '0',
+    ]);
+    expect(persisted.payment?.events.map((event) => event.payload)).toEqual([
+      expect.objectContaining({ amount: '12.5', tipAmount: '0' }),
+      expect.objectContaining({ amount: '0', tipAmount: '2' }),
+    ]);
+    expect(
+      persisted.refunds.map((refund) => ({
+        amount: refund.amount.toString(),
+        tipRefundAmount: refund.tipRefundAmount.toString(),
+      }))
+    ).toEqual([
+      { amount: '12.5', tipRefundAmount: '0' },
+      { amount: '0', tipRefundAmount: '2' },
+    ]);
+  });
+
   it('a same-day full VOID_REVERSAL voids the payment via the adapter VOID', async () => {
     const { tenderId, paymentId } = await cardTender();
     const reversal = await deps.refunds.refundTender(deps.createTenantDb(orgId), {
@@ -614,6 +690,41 @@ describeIfDatabase('card refunds (real DB)', () => {
     expect(payment?.events.map((e) => e.eventType)).toContain('VOID_APPROVED');
   });
 
+  it('allows a same-day full VOID_REVERSAL when principal and tip are both returned', async () => {
+    const { tenderId, paymentId } = await cardTender('2.00');
+
+    const reversal = await deps.refunds.refundTender(deps.createTenantDb(orgId), {
+      originalTenderId: tenderId,
+      amount: '12.50',
+      tipRefundAmount: '2.00',
+      kind: 'VOID_REVERSAL',
+      reason: 'wrong card including tip',
+      approvingStaffProfileId: ids.manager,
+      actor: actor(),
+      now: AT,
+    });
+
+    expect(reversal.paymentStatus).toBe('VOIDED');
+    const payment = await read((tx) =>
+      tx.restaurantPayment.findUniqueOrThrow({
+        where: { id: paymentId },
+        select: {
+          status: true,
+          events: {
+            where: { capability: 'VOID' },
+            select: { amount: true, payload: true },
+          },
+        },
+      })
+    );
+    expect(payment.status).toBe('VOIDED');
+    expect(payment.events).toHaveLength(1);
+    expect(payment.events[0]!.amount?.toString()).toBe('12.5');
+    expect(payment.events[0]!.payload).toEqual(
+      expect.objectContaining({ amount: '12.5', tipAmount: '2' })
+    );
+  });
+
   it('rejects a VOID_REVERSAL that is not a same-day full reversal', async () => {
     const { tenderId } = await cardTender();
     // Partial amount → cannot be a VOID_REVERSAL.
@@ -628,6 +739,30 @@ describeIfDatabase('card refunds (real DB)', () => {
         now: AT,
       })
     ).rejects.toMatchObject({ reason: 'INVALID_REVERSAL' });
+  });
+
+  it('rejects a full-principal VOID_REVERSAL that would strand a captured tip', async () => {
+    const { tenderId, paymentId } = await cardTender('2.00');
+
+    await expect(
+      deps.refunds.refundTender(deps.createTenantDb(orgId), {
+        originalTenderId: tenderId,
+        amount: '12.50',
+        tipRefundAmount: '0.00',
+        kind: 'VOID_REVERSAL',
+        reason: 'cannot leave captured tip behind',
+        approvingStaffProfileId: ids.manager,
+        actor: actor(),
+        now: AT,
+      })
+    ).rejects.toMatchObject({ reason: 'INVALID_REVERSAL' });
+
+    const state = await read(async (tx) => ({
+      refundCount: await tx.restaurantRefund.count({ where: { originalTenderId: tenderId } }),
+      payment: await tx.restaurantPayment.findUniqueOrThrow({ where: { id: paymentId } }),
+    }));
+    expect(state.refundCount).toBe(0);
+    expect(state.payment.status).toBe('CAPTURED');
   });
 
   it('posts a cross-business-date correction to the processing day, not the tender day', async () => {
@@ -673,6 +808,56 @@ describeIfDatabase('cash refunds + co-authorization (real DB)', () => {
     );
     expect(movements).toHaveLength(1);
     expect(movements[0]!.amount.toString()).toBe('12.5');
+  });
+
+  it('includes tip-only and combined tip refunds in exact-cent drawer movements', async () => {
+    const device = await newDevice('POS-cash-tip-refund');
+    await openDrawer(device);
+    const tipOnlyTender = await tippedCashTender(device, '0.03');
+
+    const tipOnlyRefundIds: string[] = [];
+    for (let cent = 0; cent < 3; cent += 1) {
+      const refund = await deps.refunds.refundTender(deps.createTenantDb(orgId), {
+        originalTenderId: tipOnlyTender.tenderId,
+        amount: '0.00',
+        tipRefundAmount: '0.01',
+        reason: 'return cash tip one cent at a time',
+        approvingStaffProfileId: ids.manager,
+        actor: actor(device),
+        now: AT,
+      });
+      tipOnlyRefundIds.push(refund.refundId);
+    }
+
+    const combinedTender = await tippedCashTender(device, '0.07');
+    const combined = await deps.refunds.refundTender(deps.createTenantDb(orgId), {
+      originalTenderId: combinedTender.tenderId,
+      amount: '12.50',
+      tipRefundAmount: '0.07',
+      reason: 'return principal and cash tip',
+      approvingStaffProfileId: ids.manager,
+      actor: actor(device),
+      now: AT,
+    });
+
+    const movements = await read((tx) =>
+      tx.restaurantDrawerMovement.findMany({
+        where: { refundId: { in: [...tipOnlyRefundIds, combined.refundId] } },
+        orderBy: { createdAt: 'asc' },
+        select: { amount: true },
+      })
+    );
+    expect(movements.map((movement) => movement.amount.toFixed(2))).toEqual([
+      '0.01',
+      '0.01',
+      '0.01',
+      '12.57',
+    ]);
+    expect(
+      movements
+        .reduce((total, movement) => total.plus(movement.amount), movements[0]!.amount.mul(0))
+        .toFixed(2)
+    ).toBe('12.60');
   });
 
   it('rejects a cash refund with no open drawer', async () => {
@@ -1129,5 +1314,55 @@ describeIfDatabase('WHA-333 per-original-tender refund evidence (restricted real
     expect(
       evidence.taxAllocations.reduce((total, row) => total + row.cents, BigInt(0))
     ).toBeGreaterThan(BigInt(0));
+  });
+
+  it('serializes concurrent tip-only refunds against the captured tip balance', async () => {
+    const { tenderId, paymentId } = await cardTender('2.00');
+    const contenders = ['tip race one', 'tip race two'].map((reason) => ({
+      reason,
+      actor: actor(),
+    }));
+    const attempts = await Promise.allSettled(
+      contenders.map((contender) =>
+        deps.refunds.refundTender(deps.createTenantDb(orgId), {
+          originalTenderId: tenderId,
+          amount: '0.00',
+          tipRefundAmount: '1.50',
+          reason: contender.reason,
+          approvingStaffProfileId: ids.manager,
+          actor: contender.actor,
+          now: AT,
+        })
+      )
+    );
+
+    expect(attempts.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    const rejected = attempts.filter((result) => result.status === 'rejected');
+    expect(rejected).toHaveLength(1);
+    expect((rejected[0] as PromiseRejectedResult).reason).toMatchObject({
+      reason: 'TIP_REFUND_EXCEEDS_TENDER',
+    });
+
+    const evidence = await read(async (tx) => ({
+      refunds: await tx.restaurantRefund.findMany({ where: { originalTenderId: tenderId } }),
+      refundEvents: await tx.restaurantPaymentEvent.count({
+        where: { paymentId, capability: 'REFUND' },
+      }),
+      payment: await tx.restaurantPayment.findUnique({
+        where: { id: paymentId },
+        select: { status: true },
+      }),
+      idempotencyKeys: await tx.restaurantMoneyIdempotencyKey.count({
+        where: {
+          key: { in: contenders.map((contender) => contender.actor.idempotencyKey) },
+        },
+      }),
+    }));
+    expect(evidence.refunds).toHaveLength(1);
+    expect(evidence.refunds[0]!.amount.toString()).toBe('0');
+    expect(evidence.refunds[0]!.tipRefundAmount.toString()).toBe('1.5');
+    expect(evidence.refundEvents).toBe(1);
+    expect(evidence.payment?.status).toBe('PARTIALLY_REFUNDED');
+    expect(evidence.idempotencyKeys).toBe(1);
   });
 });

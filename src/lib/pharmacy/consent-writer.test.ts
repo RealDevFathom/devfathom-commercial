@@ -43,6 +43,8 @@ it('assigns server versions and supersession after the shared lock', async () =>
     supersedesId: 'old',
     revokedAt: now,
     recordedAt: now,
+    source: 'COUNTER_TABLET',
+    staffId: 'actor',
   });
   expect(order).toEqual(['lock', 'latest']);
 });
@@ -67,4 +69,22 @@ it('fails closed if customer identity changes while acquiring the locks', async 
       .mockResolvedValueOnce([{ patientId: 'new-patient' }]),
   } as unknown as ScopedDb;
   await expect(lockCustomerConsent(db, 'org-a', 'customer')).rejects.toThrow('identity changed');
+});
+
+it('records self-service provenance without inventing a staff member', async () => {
+  const create = vi.fn(async ({ data }) => data);
+  const db = {
+    $queryRaw: vi.fn().mockResolvedValue([{ id: 'p' }]),
+    patientConsent: { findFirst: vi.fn().mockResolvedValue(null), create },
+  } as unknown as ScopedDb;
+  await writePatientConsent(db, 'org-a', 'customer-a', {
+    patientId: 'p',
+    purpose: 'MARKETING',
+    channel: 'WHATSAPP',
+    granted: true,
+    source: 'QR',
+  });
+  expect(create).toHaveBeenCalledWith({
+    data: expect.objectContaining({ source: 'QR', staffId: null }),
+  });
 });

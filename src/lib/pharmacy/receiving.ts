@@ -308,35 +308,49 @@ export function receiptLineUnitCostMinor(input: ReceiptLineCostInput): number {
 /**
  * Allocate the next receipt's residual share of an order-line charge.
  *
- * Computing the rounded cumulative entitlement before and after this receipt
- * makes the total invariant to receipt partitioning. BigInt is intentional:
- * two individually safe integer operands can have an unsafe product in JS.
- * Over-receipts are capped at the ordered quantity, so they cannot duplicate
- * freight or other order-level charges.
+ * The residual is computed from what active (draft or posted) receipts
+ * actually hold, not from their pack counts, so a cancelled or reversed
+ * receipt releases exactly the charge it carried and a replacement delivery
+ * recovers it. A receipt that covers every remaining ordered pack takes the
+ * whole remaining charge; otherwise it takes the proportional share of the
+ * remaining charge over the remaining packs. Active receipts can never hold
+ * more than the order-line charge, and over-receipts cannot duplicate it.
+ * BigInt is intentional: two individually safe integer operands can have an
+ * unsafe product in JS.
  */
-export function cumulativeAllocatedChargeMinor(input: {
-  allocatedChargeMinor: number;
+export function residualAllocatedChargeMinor(input: {
+  orderLineChargeMinor: number;
   orderedPacks: number;
-  previouslyReceivedPacks: number;
+  activeReceivedPacks: number;
+  activeAllocatedChargeMinor: number;
   receivedPacks: number;
 }): number {
-  const { allocatedChargeMinor, orderedPacks, previouslyReceivedPacks, receivedPacks } = input;
-  assertMoney(allocatedChargeMinor);
+  const {
+    orderLineChargeMinor,
+    orderedPacks,
+    activeReceivedPacks,
+    activeAllocatedChargeMinor,
+    receivedPacks,
+  } = input;
+  assertMoney(orderLineChargeMinor);
+  assertMoney(activeAllocatedChargeMinor);
   assertUnits(orderedPacks);
-  assertUnits(previouslyReceivedPacks);
+  assertUnits(activeReceivedPacks);
   assertUnits(receivedPacks);
   if (orderedPacks === 0) throw new PharmacyReceivingError('INVALID_QUANTITY');
 
-  const ordered = BigInt(orderedPacks);
-  const charge = BigInt(allocatedChargeMinor);
-  const previous = BigInt(previouslyReceivedPacks);
+  const remainingCharge =
+    orderLineChargeMinor > activeAllocatedChargeMinor
+      ? BigInt(orderLineChargeMinor - activeAllocatedChargeMinor)
+      : BigInt(0);
+  if (remainingCharge === BigInt(0) || receivedPacks === 0) return 0;
+  const remainingPacks = BigInt(orderedPacks) - BigInt(activeReceivedPacks);
   const received = BigInt(receivedPacks);
-  const cappedBefore = previous < ordered ? previous : ordered;
-  const after = previous + received;
-  const cappedAfter = after < ordered ? after : ordered;
-  const rounded = (packs: bigint) => (charge * packs + ordered / BigInt(2)) / ordered;
-  const residual = rounded(cappedAfter) - rounded(cappedBefore);
-  const value = Number(residual);
+  const share =
+    remainingPacks <= received
+      ? remainingCharge
+      : (remainingCharge * received + remainingPacks / BigInt(2)) / remainingPacks;
+  const value = Number(share);
   assertMoney(value);
   return value;
 }

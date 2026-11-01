@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { sortCurrencies } from '@/lib/finance/currency';
 import { TRPCError } from '@trpc/server';
 import { Prisma } from '@/generated/prisma/client';
 import { router, protectedProcedure, adminProcedure } from '../trpc';
@@ -49,12 +50,17 @@ export const clientsRouter = router({
 
     const revenueByClient = isAdmin
       ? await ctx.db.invoice.groupBy({
-          by: ['clientId'],
+          by: ['clientId', 'currency'],
           where: { status: 'PAID' },
           _sum: { total: true },
         })
       : [];
-    const revenueMap = new Map(revenueByClient.map((r) => [r.clientId, Number(r._sum.total ?? 0)]));
+    const revenueMap = new Map<string, Array<{ currency: string; amount: number }>>();
+    for (const row of revenueByClient) {
+      const totals = revenueMap.get(row.clientId) ?? [];
+      totals.push({ currency: row.currency, amount: Number(row._sum.total ?? 0) });
+      revenueMap.set(row.clientId, totals);
+    }
 
     return clients.map((c) => ({
       ...c,
@@ -62,7 +68,7 @@ export const clientsRouter = router({
         ...c._count,
         invoices: isAdmin ? c._count.invoices : 0,
       },
-      totalRevenue: isAdmin ? (revenueMap.get(c.id) ?? 0) : 0,
+      totalRevenue: isAdmin ? sortCurrencies(revenueMap.get(c.id) ?? []) : [],
     }));
   }),
 

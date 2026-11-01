@@ -16,6 +16,7 @@ const RUNTIME_DATABASE_URL =
 const OWNER_DATABASE_URL = process.env.M8_TEST_OWNER_DATABASE_URL;
 if (RUNTIME_DATABASE_URL) process.env.DATABASE_URL = RUNTIME_DATABASE_URL;
 process.env.PLATFORM_ENCRYPTION_KEY ??= randomBytes(32).toString('base64');
+process.env.AUTH_SECRET ??= randomBytes(32).toString('base64');
 
 const describeIfDatabase = RUNTIME_DATABASE_URL && OWNER_DATABASE_URL ? describe : describe.skip;
 const suffix = randomBytes(6).toString('hex');
@@ -43,6 +44,7 @@ let deps: Deps;
 let deviceId = '';
 let deviceSecret = '';
 let sessionToken = '';
+let composerProof = '';
 
 async function call(route: RouteModule, body?: unknown, idempotencyKey?: string) {
   const headers: Record<string, string> = {
@@ -50,6 +52,7 @@ async function call(route: RouteModule, body?: unknown, idempotencyKey?: string)
     'content-type': 'application/json',
   };
   if (sessionToken) headers['x-terminal-session'] = sessionToken;
+  if (composerProof) headers['x-pos-composer-proof'] = composerProof;
   if (idempotencyKey) headers['idempotency-key'] = idempotencyKey;
   const response = await route.POST(
     new Request('https://tenant.test/api/restaurant/orders/open', {
@@ -192,6 +195,8 @@ beforeAll(async () => {
     secret: denied.pin,
   });
   expect(unlocked.status).toBe(200);
+  expect(unlocked.json.composerProof).toEqual(expect.any(String));
+  composerProof = unlocked.json.composerProof as string;
 });
 
 describeIfDatabase('WHA-1047 DELIVERY capability denial (real DB)', () => {
@@ -220,6 +225,8 @@ describeIfDatabase('WHA-1047 DELIVERY capability denial (real DB)', () => {
       secret: cashier.pin,
     });
     expect(switched.status).toBe(200);
+    expect(switched.json.composerProof).toEqual(expect.any(String));
+    composerProof = switched.json.composerProof as string;
 
     const accepted = await call(deps.routes.open, body, idempotencyKey);
     expect(accepted.status).toBe(201);

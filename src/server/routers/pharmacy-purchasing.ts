@@ -1,10 +1,10 @@
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
-import type { Prisma } from '@/generated/prisma/client';
 import { can, subjectFromSession } from '@/lib/abac';
 import { hasModule } from '@/lib/entitlements';
 import {
   listReceivingExceptions,
+  lockReceivablePurchaseOrder,
   postGoodsReceipt,
   resolveReceivingException,
   reverseGoodsReceipt,
@@ -43,6 +43,7 @@ import {
   assertRequisitionTransition,
   assertSupplierEligible,
   compareQuotes,
+  effectiveCostPerSellableUnit,
   landedCost,
   PharmacyPurchasingError,
   SEGREGATION_OF_DUTIES_POLICY,
@@ -60,10 +61,10 @@ import { normalizeMedicineText } from '@/lib/pharmacy/medicine';
 import { actorCanProcure } from '@/lib/pharmacy/procurement-access';
 import {
   assertDirectPurchaseAuthorized,
-  cumulativeAllocatedChargeMinor,
   PharmacyReceivingError,
   receiptLineQuantities,
   receiptLineUnitCostMinor,
+  residualAllocatedChargeMinor,
 } from '@/lib/pharmacy/receiving';
 import { PharmacySupplierReturnError } from '@/lib/pharmacy/supplier-returns';
 import {
@@ -437,22 +438,23 @@ const purchasingRouter = router({
       z
         .object({
           reference: z.string().trim().min(1).max(100),
-          branchId: z.string().min(1).optional(),
+          branchId: z.string().min(1).max(200).optional(),
           neededBy: z.date().optional(),
           note: z.string().trim().max(2000).optional(),
           lines: z
             .array(
               z
                 .object({
-                  medicineId: z.string().min(1),
-                  packLevelId: z.string().min(1),
+                  medicineId: z.string().min(1).max(200),
+                  packLevelId: z.string().min(1).max(200),
                   quantityPacks: z.number().int().positive(),
                   canonicalUnitsPerPack: z.number().int().positive(),
                   note: z.string().trim().max(500).optional(),
                 })
                 .strict()
             )
-            .min(1),
+            .min(1)
+            .max(100),
         })
         .strict()
     )
@@ -528,6 +530,7 @@ const purchasingRouter = router({
                   moqPacks: z.number().int().positive().default(1),
                   leadTimeDays: z.number().int().nonnegative().default(0),
                   minimumExpiryDays: z.number().int().nonnegative().default(0),
+                  forecastSellThroughPacks: z.number().int().positive(),
                   canonicalUnitsPerPack: z.number().int().positive(),
                 })
                 .strict()
@@ -603,6 +606,9 @@ const purchasingRouter = router({
           moqPacks: line.moqPacks,
           leadTimeDays: line.leadTimeDays,
           minimumExpiryDays: line.minimumExpiryDays,
+          // A legacy quote has no recorded forecast; the comparison assumes it
+          // all sells and says so, rather than inventing one from the requisition.
+          forecastSellThroughPacks: line.forecastSellThroughPacks,
         }));
         return {
           requisitionLineId: requisitionLine.id,
@@ -648,6 +654,9 @@ const purchasingRouter = router({
                   rebateBps: bps.default(0),
                   taxBps: bps.default(0),
                   taxCreditable: z.boolean().default(false),
+                  forecastSellThroughPacks: z.number().int().positive().optional(),
+                  minimumExpiryDays: z.number().int().nonnegative().optional(),
+                  leadTimeDays: z.number().int().nonnegative().optional(),
                 })
                 .strict()
             )
@@ -692,6 +701,36 @@ const purchasingRouter = router({
           otherChargesMinor: input.otherChargesMinor,
         });
 
+        // The comparison assumptions retained on each line are quote facts, so
+        // they are copied from the stored quote lines and never trusted from the
+        // client. A line with no matching stored quote line carries none.
+        const quoteAssumptions = new Map<
+          string,
+          {
+            forecastSellThroughPacks: number | null;
+            minimumExpiryDays: number;
+            leadTimeDays: number;
+          }
+        >();
+        if (input.quoteId) {
+          const storedQuoteLines = await ctx.db.pharmacyQuoteLine.findMany({
+            where: {
+              quoteId: input.quoteId,
+              ...(input.requisitionId
+                ? { requisitionLine: { requisitionId: input.requisitionId } }
+                : {}),
+            },
+            include: { requisitionLine: { select: { medicineId: true } } },
+          });
+          for (const stored of storedQuoteLines) {
+            quoteAssumptions.set(stored.requisitionLine.medicineId, {
+              forecastSellThroughPacks: stored.forecastSellThroughPacks,
+              minimumExpiryDays: stored.minimumExpiryDays,
+              leadTimeDays: stored.leadTimeDays,
+            });
+          }
+        }
+
         const { lines, ...purchaseOrder } = input;
         return await ctx.db.pharmacyPurchaseOrder.create({
           data: {
@@ -700,6 +739,10 @@ const purchasingRouter = router({
             lines: {
               create: lines.map((line, index) => ({
                 ...line,
+                forecastSellThroughPacks: undefined,
+                minimumExpiryDays: undefined,
+                leadTimeDays: undefined,
+                ...quoteAssumptions.get(line.medicineId),
                 lineNumber: index + 1,
                 orderedCanonicalUnits: line.orderedPacks * line.canonicalUnitsPerPack,
                 bonusCanonicalUnits: line.bonusPacks * line.canonicalUnitsPerPack,
@@ -871,6 +914,15 @@ const purchasingRouter = router({
             ...line,
             purchaseOrderLineId: order.lines[index]!.id,
             medicineId: order.lines[index]!.medicineId,
+            ...(order.lines[index]!.forecastSellThroughPacks
+              ? effectiveCostPerSellableUnit({
+                  costMinor: line.landedCostMinor,
+                  paidPacks: order.lines[index]!.orderedPacks,
+                  bonusPacks: order.lines[index]!.bonusPacks,
+                  canonicalUnitsPerPack: order.lines[index]!.canonicalUnitsPerPack,
+                  forecastSellThroughPacks: order.lines[index]!.forecastSellThroughPacks!,
+                })
+              : {}),
           })),
         };
       } catch (error) {
@@ -978,233 +1030,223 @@ const purchasingRouter = router({
       await assertProcurement(ctx);
       const scope = receivingScope(ctx, input.branchId);
       try {
-        // PUR-01: an unauthorized or licence-expired supplier cannot be
-        // received from, checked here and again when the receipt posts.
-        assertOrderableSupplier(
-          await ctx.db.pharmacySupplier.findFirst({
-            where: { id: input.supplierId },
-            include: WITH_LICENCES,
-          }),
-          input.receivedAt
-        );
-        if (input.directPurchase) {
-          assertDirectPurchaseAuthorized({
-            bypassReason: input.directPurchase.reason,
-            bypassApprovedByUserId: input.directPurchase.approvedByUserId,
-            receivedByUserId: scope.actorId,
-          });
-        }
-        const purchaseOrder = input.purchaseOrderId
-          ? await ctx.db.pharmacyPurchaseOrder.findFirst({
-              where: {
-                id: input.purchaseOrderId,
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          // Lock the referenced order before validating any mutable data so
+          // cancellation cannot commit while the receipt is being checked. The
+          // same lock serializes landed-charge allocation across receipts.
+          const purchaseOrder = input.purchaseOrderId
+            ? await lockReceivablePurchaseOrder(db, scope, {
+                purchaseOrderId: input.purchaseOrderId,
                 supplierId: input.supplierId,
-                branchId: input.branchId,
+              })
+            : null;
+          // PUR-01: an unauthorized or licence-expired supplier cannot be
+          // received from, checked here and again when the receipt posts.
+          assertOrderableSupplier(
+            await db.pharmacySupplier.findFirst({
+              where: { id: input.supplierId },
+              include: WITH_LICENCES,
+            }),
+            input.receivedAt
+          );
+          if (input.directPurchase) {
+            assertDirectPurchaseAuthorized({
+              bypassReason: input.directPurchase.reason,
+              bypassApprovedByUserId: input.directPurchase.approvedByUserId,
+              receivedByUserId: scope.actorId,
+            });
+          }
+          const orderLines = purchaseOrder
+            ? await db.pharmacyPurchaseOrderLine.findMany({
+                where: { purchaseOrderId: purchaseOrder.id },
+                orderBy: { lineNumber: 'asc' },
+              })
+            : [];
+          const ownOrderLines = new Map(orderLines.map((line) => [line.id, line] as const));
+          // PUR-03: each order line's share of PO freight and other charges.
+          const orderLandedCosts =
+            purchaseOrder && orderLines.length > 0
+              ? landedCost({
+                  lines: orderLines.map((line) => ({
+                    orderedPacks: line.orderedPacks,
+                    bonusPacks: line.bonusPacks ?? 0,
+                    canonicalUnitsPerPack: line.canonicalUnitsPerPack,
+                    listPricePerPackMinor: line.listPricePerPackMinor,
+                    discountBps: line.discountBps ?? 0,
+                    rebateBps: line.rebateBps,
+                    taxBps: line.taxBps ?? 0,
+                    taxCreditable: line.taxCreditable ?? false,
+                  })),
+                  freightMinor: purchaseOrder.freightMinor,
+                  otherChargesMinor: purchaseOrder.otherChargesMinor,
+                }).lines
+              : [];
+          const orderLineChargeMinor = new Map(
+            orderLines.map((line, index) => [
+              line.id,
+              orderLandedCosts[index]?.allocatedChargeMinor ?? 0,
+            ])
+          );
+          // Drafts reserve the charge they were stamped with and posted
+          // receipts retain it; cancelled or reversed receipts release exactly
+          // what they held, so a replacement delivery recovers the full charge.
+          const activeAllocations = new Map<string, { packs: number; chargeMinor: number }>();
+          if (orderLines.length > 0) {
+            const priorLines = await db.pharmacyGoodsReceiptLine.findMany({
+              where: {
+                purchaseOrderLineId: { in: orderLines.map((line) => line.id) },
+                goodsReceipt: { status: { in: ['DRAFT', 'POSTED'] } },
               },
-              include: { lines: { orderBy: { lineNumber: 'asc' } } },
-            })
-          : null;
-        if (input.purchaseOrderId && !purchaseOrder) {
-          throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
-        }
-
-        const orderLines = purchaseOrder?.lines ?? [];
-        const ownOrderLines = new Map(orderLines.map((line) => [line.id, line]));
-        const orderLandedCosts = purchaseOrder
-          ? landedCost({
-              lines: orderLines.map((line) => ({
-                orderedPacks: line.orderedPacks,
-                bonusPacks: line.bonusPacks ?? 0,
-                canonicalUnitsPerPack: line.canonicalUnitsPerPack,
-                listPricePerPackMinor: line.listPricePerPackMinor,
-                discountBps: line.discountBps ?? 0,
-                rebateBps: line.rebateBps,
-                taxBps: line.taxBps ?? 0,
-                taxCreditable: line.taxCreditable ?? false,
-              })),
-              freightMinor: purchaseOrder.freightMinor,
-              otherChargesMinor: purchaseOrder.otherChargesMinor,
-            }).lines
-          : [];
-        const landedCostByOrderLine = new Map(
-          orderLines.map((line, index) => [line.id, orderLandedCosts[index]!])
-        );
-
-        const lines: Prisma.PharmacyGoodsReceiptLineUncheckedCreateWithoutGoodsReceiptInput[] = [];
-        const seenSerials = new Set<string>();
-        for (const [index, line] of input.lines.entries()) {
-          if (
-            !(await ctx.db.medicine.findFirst({ where: { id: line.medicineId, saleable: true } }))
-          )
-            throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
-          if (!(await ctx.db.packLevel.findFirst({ where: { id: line.packLevelId } })))
-            throw new PharmacyReceivingError('MISSING_PACK_CONVERSION');
-          // An ordered line borrowed from another order — or from another
-          // tenant — would make the three-way match compare the goods against
-          // something they were never ordered on.
-          if (line.purchaseOrderLineId) {
-            const orderLine = ownOrderLines.get(line.purchaseOrderLineId);
-            if (!orderLine) throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
-            // The referenced order line is the authority for item identity. Without
-            // this check, unrelated goods could inherit its price and quantity terms,
-            // pass three-way matching, and close the wrong ordered line.
-            if (
-              orderLine.medicineId !== line.medicineId ||
-              orderLine.packLevelId !== line.packLevelId
-            ) {
-              throw new PharmacyReceivingError('PURCHASE_ORDER_LINE_ITEM_MISMATCH');
+              select: {
+                purchaseOrderLineId: true,
+                receivedPacks: true,
+                allocatedChargeMinor: true,
+              },
+            });
+            for (const prior of priorLines) {
+              if (!prior.purchaseOrderLineId) continue;
+              const current = activeAllocations.get(prior.purchaseOrderLineId) ?? {
+                packs: 0,
+                chargeMinor: 0,
+              };
+              const packs = current.packs + prior.receivedPacks;
+              const chargeMinor = current.chargeMinor + prior.allocatedChargeMinor;
+              if (!Number.isSafeInteger(packs) || !Number.isSafeInteger(chargeMinor))
+                throw new PharmacyReceivingError('INVALID_QUANTITY');
+              activeAllocations.set(prior.purchaseOrderLineId, { packs, chargeMinor });
             }
           }
 
-          const orderLine = line.purchaseOrderLineId
-            ? ownOrderLines.get(line.purchaseOrderLineId)
-            : undefined;
-          const quantities = receiptLineQuantities({
-            receivedPacks: line.receivedPacks,
-            bonusPacks: line.bonusPacks,
-            canonicalUnitsPerPack: line.canonicalUnitsPerPack,
-            rejectedCanonicalUnits: line.rejectedCanonicalUnits,
-          });
-          const identity = await resolveReceiptLineIdentity(ctx.db, scope.organizationId, {
-            medicineId: line.medicineId,
-            batchNumber: line.batchNumber,
-            printedExpiry: line.printedExpiry,
-            expiryPrecision: line.expiryPrecision,
-            gtin: line.gtin,
-            serialNumber: line.serialNumber,
-            gs1Warnings: line.gs1Warnings,
-            gs1Payload: line.gs1Payload,
-            invoiceCorrection: line.invoiceCorrection,
-            acceptedCanonicalUnits: quantities.acceptedCanonicalUnits,
-            receivedAt: input.receivedAt,
-          });
-          if (identity.gtin && identity.serialKey) {
-            const token = `${identity.gtin}:${identity.serialKey}`;
-            if (seenSerials.has(token)) throw new PharmacyReceivingError('DUPLICATE_SERIAL');
-            seenSerials.add(token);
-            const prior = await ctx.db.pharmacyGoodsReceiptLine.findFirst({
-              where: {
-                organizationId: scope.organizationId,
-                gtin: identity.gtin,
-                serialKey: identity.serialKey,
-              },
-              select: { id: true },
-            });
-            if (prior) throw new PharmacyReceivingError('DUPLICATE_SERIAL');
-          }
-          // The tenant and branch are not repeated here: they travel in the
-          // composite key of the receipt this line is nested under, so Prisma
-          // supplies them and a payload could never disagree with the header.
-          lines.push({
-            lineNumber: index + 1,
-            purchaseOrderLineId: line.purchaseOrderLineId ?? null,
-            medicineId: line.medicineId,
-            packLevelId: line.packLevelId,
-            batchNumber: identity.batchNumber,
-            printedExpiry: identity.printedExpiry,
-            expiryPrecision: identity.expiryPrecision,
-            printedMrpMinor: line.printedMrpMinor,
-            canonicalUnitsPerPack: line.canonicalUnitsPerPack,
-            receivedPacks: line.receivedPacks,
-            bonusPacks: line.bonusPacks,
-            receivedCanonicalUnits: quantities.receivedCanonicalUnits,
-            bonusCanonicalUnits: quantities.bonusCanonicalUnits,
-            acceptedCanonicalUnits: quantities.acceptedCanonicalUnits,
-            rejectedCanonicalUnits: quantities.rejectedCanonicalUnits,
-            rejectionReason: line.rejectionReason ?? null,
-            invoicedPricePerPackMinor: line.invoicedPricePerPackMinor,
-            discountBps: line.discountBps,
-            taxBps: line.taxBps,
-            taxCreditable: line.taxCreditable,
-            // PUR-03: bonus units divide the same money over more units, so a
-            // scheme lowers the landed cost and never adds revenue.
-            unitCostMinor: receiptLineUnitCostMinor({
+          const lines = [];
+          const seenSerials = new Set<string>();
+          for (const [index, line] of input.lines.entries()) {
+            if (!(await db.medicine.findFirst({ where: { id: line.medicineId, saleable: true } })))
+              throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
+            if (!(await db.packLevel.findFirst({ where: { id: line.packLevelId } })))
+              throw new PharmacyReceivingError('MISSING_PACK_CONVERSION');
+            // An ordered line borrowed from another order — or from another
+            // tenant — would make the three-way match compare the goods against
+            // something they were never ordered on.
+            const orderLine = line.purchaseOrderLineId
+              ? ownOrderLines.get(line.purchaseOrderLineId)
+              : undefined;
+            if (line.purchaseOrderLineId) {
+              if (!orderLine) throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
+              // The referenced order line is the authority for item identity. Without
+              // this check, unrelated goods could inherit its price and quantity terms,
+              // pass three-way matching, and close the wrong ordered line.
+              if (
+                orderLine.medicineId !== line.medicineId ||
+                orderLine.packLevelId !== line.packLevelId
+              ) {
+                throw new PharmacyReceivingError('PURCHASE_ORDER_LINE_ITEM_MISMATCH');
+              }
+            }
+
+            const quantities = receiptLineQuantities({
               receivedPacks: line.receivedPacks,
               bonusPacks: line.bonusPacks,
               canonicalUnitsPerPack: line.canonicalUnitsPerPack,
+              rejectedCanonicalUnits: line.rejectedCanonicalUnits,
+            });
+            const identity = await resolveReceiptLineIdentity(db, scope.organizationId, {
+              medicineId: line.medicineId,
+              batchNumber: line.batchNumber,
+              printedExpiry: line.printedExpiry,
+              expiryPrecision: line.expiryPrecision,
+              gtin: line.gtin,
+              serialNumber: line.serialNumber,
+              gs1Warnings: line.gs1Warnings,
+              gs1Payload: line.gs1Payload,
+              invoiceCorrection: line.invoiceCorrection,
+              acceptedCanonicalUnits: quantities.acceptedCanonicalUnits,
+              receivedAt: input.receivedAt,
+            });
+            if (identity.gtin && identity.serialKey) {
+              const token = `${identity.gtin}:${identity.serialKey}`;
+              if (seenSerials.has(token)) throw new PharmacyReceivingError('DUPLICATE_SERIAL');
+              seenSerials.add(token);
+              const prior = await db.pharmacyGoodsReceiptLine.findFirst({
+                where: {
+                  organizationId: scope.organizationId,
+                  gtin: identity.gtin,
+                  serialKey: identity.serialKey,
+                },
+                select: { id: true },
+              });
+              if (prior) throw new PharmacyReceivingError('DUPLICATE_SERIAL');
+            }
+
+            let allocatedChargeMinor = 0;
+            if (orderLine) {
+              const active = activeAllocations.get(orderLine.id) ?? { packs: 0, chargeMinor: 0 };
+              allocatedChargeMinor = residualAllocatedChargeMinor({
+                orderLineChargeMinor: orderLineChargeMinor.get(orderLine.id) ?? 0,
+                orderedPacks: orderLine.orderedPacks,
+                activeReceivedPacks: active.packs,
+                activeAllocatedChargeMinor: active.chargeMinor,
+                receivedPacks: line.receivedPacks,
+              });
+              const packs = active.packs + line.receivedPacks;
+              if (!Number.isSafeInteger(packs)) {
+                throw new PharmacyReceivingError('INVALID_QUANTITY');
+              }
+              activeAllocations.set(orderLine.id, {
+                packs,
+                chargeMinor: active.chargeMinor + allocatedChargeMinor,
+              });
+            }
+
+            // The tenant and branch are not repeated here: they travel in the
+            // composite key of the receipt this line is nested under, so Prisma
+            // supplies them and a payload could never disagree with the header.
+            lines.push({
+              lineNumber: index + 1,
+              purchaseOrderLineId: line.purchaseOrderLineId ?? null,
+              medicineId: line.medicineId,
+              packLevelId: line.packLevelId,
+              batchNumber: identity.batchNumber,
+              printedExpiry: identity.printedExpiry,
+              expiryPrecision: identity.expiryPrecision,
+              printedMrpMinor: line.printedMrpMinor,
+              canonicalUnitsPerPack: line.canonicalUnitsPerPack,
+              receivedPacks: line.receivedPacks,
+              bonusPacks: line.bonusPacks,
+              receivedCanonicalUnits: quantities.receivedCanonicalUnits,
+              bonusCanonicalUnits: quantities.bonusCanonicalUnits,
+              acceptedCanonicalUnits: quantities.acceptedCanonicalUnits,
+              rejectedCanonicalUnits: quantities.rejectedCanonicalUnits,
+              rejectionReason: line.rejectionReason ?? null,
               invoicedPricePerPackMinor: line.invoicedPricePerPackMinor,
               discountBps: line.discountBps,
-              rebateBps: orderLine?.rebateBps ?? 0,
               taxBps: line.taxBps,
               taxCreditable: line.taxCreditable,
-              // Replaced with the cumulative residual inside the locked
-              // write transaction below, after prior receipts are known.
-              allocatedChargeMinor: 0,
-            }),
-            stockLocationId: line.stockLocationId,
-            quarantineLocationId: line.quarantineLocationId ?? null,
-            gtin: identity.gtin,
-            serialNumber: identity.serialNumber,
-            serialKey: identity.serialKey,
-            gs1Warnings: identity.gs1Warnings,
-          });
-        }
-
-        return await ctx.db.$transaction(async (tx) => {
-          // HTTP requests already run in a tenant transaction; nested
-          // isolation options cannot upgrade it. Serialize allocation on the
-          // PO itself before reading prior receipts, even at READ COMMITTED.
-          if (purchaseOrder) {
-            await tx.$queryRaw`
-              SELECT id FROM pharmacy_purchase_orders
-              WHERE id = ${purchaseOrder.id} AND "organizationId" = ${scope.organizationId}
-              FOR UPDATE
-            `;
-          }
-          const orderLineIds = [
-            ...new Set(
-              lines.flatMap((line) => (line.purchaseOrderLineId ? [line.purchaseOrderLineId] : []))
-            ),
-          ];
-          // Drafts reserve their share and posted receipts retain it. Inactive
-          // receipts release that share for a replacement delivery.
-          const priorLines = orderLineIds.length
-            ? await tx.pharmacyGoodsReceiptLine.findMany({
-                where: {
-                  purchaseOrderLineId: { in: orderLineIds },
-                  goodsReceipt: { status: { in: ['DRAFT', 'POSTED'] } },
-                },
-                select: { purchaseOrderLineId: true, receivedPacks: true },
-              })
-            : [];
-          const cumulativePacks = new Map<string, number>();
-          for (const prior of priorLines) {
-            if (!prior.purchaseOrderLineId) continue;
-            const total =
-              (cumulativePacks.get(prior.purchaseOrderLineId) ?? 0) + prior.receivedPacks;
-            if (!Number.isSafeInteger(total)) throw new PharmacyReceivingError('INVALID_QUANTITY');
-            cumulativePacks.set(prior.purchaseOrderLineId, total);
-          }
-          for (const line of lines) {
-            if (!line.purchaseOrderLineId) continue;
-            const orderLine = ownOrderLines.get(line.purchaseOrderLineId);
-            const orderLineCost = landedCostByOrderLine.get(line.purchaseOrderLineId);
-            if (!orderLine || !orderLineCost) continue;
-            const previouslyReceivedPacks = cumulativePacks.get(line.purchaseOrderLineId) ?? 0;
-            const allocatedChargeMinor = cumulativeAllocatedChargeMinor({
-              allocatedChargeMinor: orderLineCost.allocatedChargeMinor,
-              orderedPacks: orderLine.orderedPacks,
-              previouslyReceivedPacks,
-              receivedPacks: line.receivedPacks,
-            });
-            line.unitCostMinor = receiptLineUnitCostMinor({
-              receivedPacks: line.receivedPacks,
-              bonusPacks: line.bonusPacks ?? 0,
-              canonicalUnitsPerPack: line.canonicalUnitsPerPack,
-              invoicedPricePerPackMinor: line.invoicedPricePerPackMinor,
-              discountBps: line.discountBps ?? 0,
-              rebateBps: orderLine.rebateBps,
-              taxBps: line.taxBps ?? 0,
-              taxCreditable: line.taxCreditable ?? false,
               allocatedChargeMinor,
+              // PUR-03: bonus units divide the same money over more units, so a
+              // scheme lowers the landed cost and never adds revenue. PO
+              // receipts also carry the order's rebate and charge share.
+              unitCostMinor: receiptLineUnitCostMinor({
+                receivedPacks: line.receivedPacks,
+                bonusPacks: line.bonusPacks,
+                canonicalUnitsPerPack: line.canonicalUnitsPerPack,
+                invoicedPricePerPackMinor: line.invoicedPricePerPackMinor,
+                discountBps: line.discountBps,
+                rebateBps: orderLine?.rebateBps ?? 0,
+                taxBps: line.taxBps,
+                taxCreditable: line.taxCreditable,
+                allocatedChargeMinor,
+              }),
+              stockLocationId: line.stockLocationId,
+              quarantineLocationId: line.quarantineLocationId ?? null,
+              gtin: identity.gtin,
+              serialNumber: identity.serialNumber,
+              serialKey: identity.serialKey,
+              gs1Warnings: identity.gs1Warnings,
             });
-            const totalReceivedPacks = previouslyReceivedPacks + line.receivedPacks;
-            if (!Number.isSafeInteger(totalReceivedPacks))
-              throw new PharmacyReceivingError('INVALID_QUANTITY');
-            cumulativePacks.set(line.purchaseOrderLineId, totalReceivedPacks);
           }
 
-          return tx.pharmacyGoodsReceipt.create({
+          return await db.pharmacyGoodsReceipt.create({
             data: {
               organizationId: scope.organizationId,
               branchId: scope.branchId,
