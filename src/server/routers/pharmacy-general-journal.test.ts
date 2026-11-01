@@ -118,6 +118,16 @@ describe('pharmacy general journal router denial chain', () => {
       .rejects.toMatchObject({ code });
   });
 
+  it('reports a database closed-period rejection as the PERIOD_CLOSED domain reason', async () => {
+    mocks.can.mockResolvedValue(true);
+    const ctx = context();
+    ctx.db.pharmacyBranch.findFirst.mockResolvedValue({ id: 'branch-1' });
+    ctx.db.$transaction.mockRejectedValue(new Error('ERROR: PHARMACY_ACCOUNTING_PERIOD_CLOSED'));
+    const caller = pharmacyGeneralJournalRouter.createCaller(ctx as never);
+    await expect(caller.post({ branchId: 'branch-1', documentId: 'doc-1', version: 1, idempotencyKey: 'post-1' }))
+      .rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'PERIOD_CLOSED' });
+  });
+
   it('pages history by a scoped keyset cursor and searches by reference', async () => {
     mocks.can.mockResolvedValue(true);
     const ctx = context();

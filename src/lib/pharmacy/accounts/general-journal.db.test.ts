@@ -139,4 +139,71 @@ describeDatabase('pharmacy general-journal database contract', () => {
       WHERE tgrelid = 'pharmacy_general_journal_documents'::regclass AND tgname = 'pharmacy_general_journal_cancelled_guard'`);
     expect(trigger.rows[0]?.definition).toMatch(/BEFORE UPDATE/);
   });
+
+  it('enforces closed periods for voucher postings, reversals, and their ledger entries through SQL', async () => {
+    await client.query('DROP TABLE IF EXISTS pg_temp.finance_journal_lines, pg_temp.finance_journal_entries, pg_temp.pharmacy_general_journal_documents, pg_temp.pharmacy_accounting_periods');
+    await client.query(`CREATE TEMP TABLE pharmacy_accounting_periods (
+      "organizationId" text, "branchId" text, "startsAt" timestamp(3), "endsAt" timestamp(3), status "PharmacyAccountingPeriodStatus"
+    )`);
+    await client.query(`CREATE TEMP TABLE finance_journal_entries (
+      id text, "organizationId" text, "branchId" text, "sourceKind" "FinanceSourceKind", currency "Currency", "occurredAt" timestamp(3)
+    )`);
+    await client.query(`CREATE TRIGGER period_entry_test_trigger BEFORE INSERT ON finance_journal_entries
+      FOR EACH ROW EXECUTE FUNCTION pharmacy_journal_voucher_entry_period_open()`);
+    await client.query(`CREATE TEMP TABLE journal_period_test (
+      id text, status "PharmacyGeneralJournalStatus", "organizationId" text, "branchId" text, currency "Currency",
+      "occurredAt" timestamp(3), "reversedAt" timestamp(3), "reversalEntryId" text
+    )`);
+    await client.query(`CREATE TRIGGER journal_period_test_trigger BEFORE UPDATE ON journal_period_test
+      FOR EACH ROW EXECUTE FUNCTION pharmacy_general_journal_period_and_reversal_date()`);
+    await client.query(`INSERT INTO pharmacy_accounting_periods VALUES
+      ('org', 'branch', '2026-01-01', '2026-02-01', 'CLOSED'),
+      ('org', 'branch', '2026-03-01', '2026-04-01', 'REOPENED')`);
+
+    // Ledger entries for vouchers cannot be dated in a closed period; reopened periods and other sources are unaffected.
+    await expect(client.query(`INSERT INTO finance_journal_entries VALUES ('closed', 'org', 'branch', 'PHARMACY_JOURNAL_VOUCHER', 'PKR', '2026-01-15 12:00')`))
+      .rejects.toThrow(/PHARMACY_ACCOUNTING_PERIOD_CLOSED/);
+    await expect(client.query(`INSERT INTO finance_journal_entries VALUES ('unbranched', 'org', NULL, 'PHARMACY_JOURNAL_VOUCHER', 'PKR', '2026-02-15 12:00')`))
+      .rejects.toThrow(/must name a branch/);
+    await expect(client.query(`INSERT INTO finance_journal_entries VALUES
+      ('other-source', 'org', 'branch', (SELECT e FROM unnest(enum_range(NULL::"FinanceSourceKind")) e WHERE e <> 'PHARMACY_JOURNAL_VOUCHER' LIMIT 1), 'PKR', '2026-01-15 12:00'),
+      ('reopened', 'org', 'branch', 'PHARMACY_JOURNAL_VOUCHER', 'PKR', '2026-03-15 12:00'),
+      ('reversal-ok', 'org', 'branch', 'PHARMACY_JOURNAL_VOUCHER', 'PKR', '2026-02-20 12:00'),
+      ('reversal-early', 'org', 'branch', 'PHARMACY_JOURNAL_VOUCHER', 'PKR', '2026-02-05 12:00')`)).resolves.toMatchObject({ rowCount: 4 });
+
+    await client.query(`INSERT INTO journal_period_test VALUES
+      ('closed-draft', 'DRAFT', 'org', 'branch', 'PKR', '2026-01-15 12:00', NULL, NULL),
+      ('open-draft', 'DRAFT', 'org', 'branch', 'PKR', '2026-02-10 12:00', NULL, NULL),
+      ('posted', 'POSTED', 'org', 'branch', 'PKR', '2026-02-10 12:00', NULL, NULL)`);
+    await expect(client.query(`UPDATE journal_period_test SET status = 'POSTED' WHERE id = 'closed-draft'`)).rejects.toThrow(/PHARMACY_ACCOUNTING_PERIOD_CLOSED/);
+    await expect(client.query(`UPDATE journal_period_test SET status = 'POSTED' WHERE id = 'open-draft'`)).resolves.toMatchObject({ rowCount: 1 });
+
+    // Reversal dated in a closed period.
+    await expect(client.query(`UPDATE journal_period_test SET status = 'REVERSED', "reversedAt" = '2026-01-20 12:00', "reversalEntryId" = 'reversal-ok' WHERE id = 'posted'`))
+      .rejects.toThrow(/precede|PHARMACY_ACCOUNTING_PERIOD_CLOSED/);
+    // The linked ledger entry must carry the recorded reversal date, not an earlier one.
+    await expect(client.query(`UPDATE journal_period_test SET status = 'REVERSED', "reversedAt" = '2026-02-20 12:00', "reversalEntryId" = 'reversal-early' WHERE id = 'posted'`))
+      .rejects.toThrow(/recorded reversal date/);
+    await expect(client.query(`UPDATE journal_period_test SET status = 'REVERSED', "reversedAt" = '2026-02-20 12:00', "reversalEntryId" = 'reversal-ok' WHERE id = 'posted'`))
+      .resolves.toMatchObject({ rowCount: 1 });
+
+    const triggers = await client.query<{ name: string }>(`SELECT tgname AS name FROM pg_trigger WHERE tgname IN (
+      'pharmacy_general_journal_period_and_reversal_date', 'finance_journal_entries_pharmacy_voucher_period_open', 'pharmacy_accounting_periods_scope_lock')`);
+    expect(triggers.rows.map((row) => row.name).sort()).toEqual([
+      'finance_journal_entries_pharmacy_voucher_period_open', 'pharmacy_accounting_periods_scope_lock', 'pharmacy_general_journal_period_and_reversal_date',
+    ]);
+  });
+
+  it('rejects a reversal dated in a closed period even when it follows the voucher date', async () => {
+    await client.query(`CREATE TEMP TABLE journal_period_reversal_test (
+      id text, status "PharmacyGeneralJournalStatus", "organizationId" text, "branchId" text, currency "Currency",
+      "occurredAt" timestamp(3), "reversedAt" timestamp(3), "reversalEntryId" text
+    )`);
+    await client.query(`CREATE TRIGGER journal_period_reversal_test_trigger BEFORE UPDATE ON journal_period_reversal_test
+      FOR EACH ROW EXECUTE FUNCTION pharmacy_general_journal_period_and_reversal_date()`);
+    await client.query(`INSERT INTO pharmacy_accounting_periods VALUES ('org', 'branch', '2026-05-01', '2026-06-01', 'CLOSED')`);
+    await client.query(`INSERT INTO journal_period_reversal_test VALUES ('posted', 'POSTED', 'org', 'branch', 'PKR', '2026-04-10 12:00', NULL, NULL)`);
+    await expect(client.query(`UPDATE journal_period_reversal_test SET status = 'REVERSED', "reversedAt" = '2026-05-10 12:00', "reversalEntryId" = 'reversal-ok' WHERE id = 'posted'`))
+      .rejects.toThrow(/PHARMACY_ACCOUNTING_PERIOD_CLOSED/);
+  });
 });

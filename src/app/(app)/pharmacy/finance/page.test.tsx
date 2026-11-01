@@ -19,6 +19,10 @@ const mocks = vi.hoisted(() => ({
   perpetualValuation: vi.fn(),
   grossMargin: vi.fn(),
   leakageReport: vi.fn(),
+  canOpenPharmacyGeneralJournal: vi.fn(),
+}));
+vi.mock('@/server/pharmacy-general-journal-security', () => ({
+  canOpenPharmacyGeneralJournal: mocks.canOpenPharmacyGeneralJournal,
 }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({
   resolveTenantActor: vi.fn().mockResolvedValue({ session: { user: { role: 'ADMIN' } } }),
@@ -70,6 +74,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date('2026-09-12T12:00:00Z'));
   vi.clearAllMocks();
+  mocks.canOpenPharmacyGeneralJournal.mockResolvedValue(false);
   mocks.branches.mockResolvedValue([
     { id: 'branch_1', name: 'Main' },
     { id: 'branch_2', name: 'Second authorized branch' },
@@ -100,6 +105,28 @@ it('links the selected finance branch to its balance sheet', async () => {
   const html = renderToStaticMarkup(header.actions as ReactElement);
 
   expect(html).toContain('/pharmacy/accounts/balance-sheet?branch=branch_2');
+  expect(html).toContain('Balance sheet');
+});
+
+it('links authorized finance users to the general journal for the selected branch', async () => {
+  mocks.canOpenPharmacyGeneralJournal.mockResolvedValue(true);
+  const tree = await PharmacyFinancePage({
+    searchParams: Promise.resolve({ branch: 'branch_2' }),
+  });
+  const html = renderToStaticMarkup(sectionProps(tree, PageHeader).actions as ReactElement);
+
+  expect(html).toContain('/pharmacy/finance/general-journal?branch=branch_2');
+  expect(html).toContain('General journal');
+});
+
+it('hides the general journal entry when the journal capability is denied', async () => {
+  mocks.canOpenPharmacyGeneralJournal.mockResolvedValue(false);
+  const tree = await PharmacyFinancePage({
+    searchParams: Promise.resolve({ branch: 'branch_2' }),
+  });
+  const html = renderToStaticMarkup(sectionProps(tree, PageHeader).actions as ReactElement);
+
+  expect(html).not.toContain('general-journal');
   expect(html).toContain('Balance sheet');
 });
 

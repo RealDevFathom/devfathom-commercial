@@ -5,7 +5,7 @@ vi.mock('@/lib/abac', () => ({ can, subjectFromSession: () => ({}) }));
 vi.mock('@/lib/entitlements', () => ({ hasModule: () => true }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ withTenantDb }));
 
-import { authorizePharmacyGeneralJournal, authorizePharmacyGeneralJournalCollection } from './pharmacy-general-journal-security';
+import { authorizePharmacyGeneralJournal, authorizePharmacyGeneralJournalCollection, canOpenPharmacyGeneralJournal } from './pharmacy-general-journal-security';
 
 describe('pharmacy general journal admission', () => {
   const auditCreate = independentDb.auditLog.create;
@@ -50,5 +50,15 @@ describe('pharmacy general journal admission', () => {
     auditCreate.mockRejectedValue(new Error('audit unavailable'));
     await expect(authorizePharmacyGeneralJournal(context() as never, 'branch-1')).rejects.toThrow('audit unavailable');
     await expect(authorizePharmacyGeneralJournalCollection(context() as never)).rejects.toThrow('audit unavailable');
+  });
+
+  it('probes the journal capability for navigation without writing admission audits', async () => {
+    await expect(canOpenPharmacyGeneralJournal(context() as never)).resolves.toBe(true);
+    can.mockResolvedValue(false);
+    await expect(canOpenPharmacyGeneralJournal(context() as never)).resolves.toBe(false);
+    can.mockRejectedValue(new Error('policy unavailable'));
+    await expect(canOpenPharmacyGeneralJournal(context() as never)).resolves.toBe(false);
+    expect(auditCreate).not.toHaveBeenCalled();
+    expect(businessAuditCreate).not.toHaveBeenCalled();
   });
 });

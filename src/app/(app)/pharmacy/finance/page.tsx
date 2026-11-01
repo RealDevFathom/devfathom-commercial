@@ -23,6 +23,7 @@ import {
 } from '@/components/ui/table';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
+import { canOpenPharmacyGeneralJournal } from '@/server/pharmacy-general-journal-security';
 import { createTRPCContext } from '@/server/trpc';
 
 export const metadata: Metadata = { title: 'Pharmacy finance' };
@@ -130,6 +131,10 @@ export default async function PharmacyFinancePage({
       </main>
     );
   }
+
+  // Same capability gate as the journal router, so the entry only appears for
+  // actors who can actually open the voucher workflow.
+  const generalJournalAllowed = await canOpenPharmacyGeneralJournal(ctx);
 
   async function perform(data: FormData) {
     'use server';
@@ -281,12 +286,22 @@ export default async function PharmacyFinancePage({
         heading="Finance"
         description="Post and allocate money, reconcile the bank, control periods, and publish approved tax versions."
         actions={
-          <Link
-            href={`/pharmacy/accounts/balance-sheet?${new URLSearchParams({ branch: branch.id })}`}
-            className={buttonVariants({ variant: 'outline', size: 'lg' })}
-          >
-            Balance sheet
-          </Link>
+          <>
+            {generalJournalAllowed && (
+              <Link
+                href={`/pharmacy/finance/general-journal?${new URLSearchParams({ branch: branch.id })}`}
+                className={buttonVariants({ variant: 'outline', size: 'lg' })}
+              >
+                General journal
+              </Link>
+            )}
+            <Link
+              href={`/pharmacy/accounts/balance-sheet?${new URLSearchParams({ branch: branch.id })}`}
+              className={buttonVariants({ variant: 'outline', size: 'lg' })}
+            >
+              Balance sheet
+            </Link>
+          </>
         }
       />
       <Suspense fallback={<LedgerReportsLoading />}>

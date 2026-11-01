@@ -15,6 +15,11 @@ function fail(error: unknown): never {
   if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
     throw new TRPCError({ code: 'CONFLICT', message: 'A voucher with this reference or request key already exists.' });
   }
+  // A period closed concurrently is rejected by the database period guard;
+  // report it as the same domain reason instead of a raw driver error.
+  if (error instanceof Error && error.message.includes('PHARMACY_ACCOUNTING_PERIOD_CLOSED')) {
+    throw new TRPCError({ code: 'BAD_REQUEST', message: 'PERIOD_CLOSED' });
+  }
   throw error;
 }
 

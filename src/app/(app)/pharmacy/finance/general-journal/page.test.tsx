@@ -19,11 +19,12 @@ vi.mock('next/headers', () => ({
   cookies: async () => ({
     get: (name: string) => (mocks.jar.has(name) ? { name, value: mocks.jar.get(name)! } : undefined),
     set: (name: string, value: string) => { mocks.jar.set(name, value); },
-    delete: (name: string) => { mocks.jar.delete(name); },
+    delete: (name: string | { name: string }) => { mocks.jar.delete(typeof name === 'string' ? name : name.name); },
   }),
 }));
 
 import GeneralJournalPage from './page';
+import { encodeRetained } from './retry-store';
 
 const actor = {
   session: { user: { id: 'user-1' } },
@@ -251,7 +252,8 @@ describe('general journal commands', () => {
 
   it('ignores retained values without the matching one-time retry nonce', async () => {
     caller();
-    mocks.jar.set('pharmacy-general-journal-retry', JSON.stringify({ nonce: 'n-1', branchId: 'branch-1', message: 'old', action: 'create', reference: 'STALE' }));
+    encodeRetained({ nonce: 'n-1', branchId: 'branch-1', message: 'old', action: 'create', reference: 'STALE' })
+      .forEach((chunk, index) => mocks.jar.set(`pharmacy-general-journal-retry.${index}`, chunk));
     render(await GeneralJournalPage({ searchParams: Promise.resolve({ retry: 'other' }) }));
     const form = new FormData((screen.getByRole('button', { name: 'Save draft' }) as HTMLButtonElement).form!);
     expect(form.get('reference')).toBe('');
@@ -267,5 +269,104 @@ describe('general journal commands', () => {
     const older = screen.getByRole('link', { name: 'Older vouchers' }).getAttribute('href')!;
     expect(Object.fromEntries(new URL(older, 'https://tenant.test').searchParams)).toEqual({ branch: 'branch-1', ref: 'JV', before: 'doc-24' });
     expect((screen.getByLabelText('Search by reference') as HTMLInputElement).value).toBe('JV');
+  });
+
+  it('keeps evidence and business reason readable after a voucher leaves draft', async () => {
+    const api = caller();
+    api.list.mockResolvedValue([
+      { ...document, id: 'doc-posted', reference: 'JV-P', status: 'POSTED', evidence: 'invoice 42', reason: 'electricity accrual' },
+      { ...document, id: 'doc-cancelled', reference: 'JV-C', status: 'CANCELLED', evidence: 'quote 9', reason: 'duplicate entry' },
+      { ...document, id: 'doc-reversed', reference: 'JV-R', status: 'REVERSED', evidence: 'bill 3', reason: 'rent accrual' },
+    ]);
+    render(await GeneralJournalPage({ searchParams: Promise.resolve({}) }));
+    for (const text of ['invoice 42', 'electricity accrual', 'quote 9', 'duplicate entry', 'bill 3', 'rent accrual']) {
+      expect(screen.getByText(text)).toBeDefined();
+    }
+    expect(screen.getAllByText('Evidence reference')).toHaveLength(4);
+    expect(screen.getAllByText('Business reason')).toHaveLength(4);
+    expect(screen.queryByRole('button', { name: 'Save changes' })).toBeNull();
+  });
+
+  it('returns a failed command on an older voucher to the same history page and keeps the nonce while navigating', async () => {
+    const api = caller();
+    const older = Array.from({ length: 26 }, (_, index) => ({ ...document, id: `doc-${index}`, reference: `JV-${index}` }));
+    api.list.mockResolvedValue(older);
+    api.updateDraft.mockRejectedValue(new TRPCError({ code: 'CONFLICT', message: 'STALE_VERSION' }));
+    const query = { ref: 'JV', before: 'doc-cursor' };
+    const page = await GeneralJournalPage({ searchParams: Promise.resolve(query) });
+    render(page);
+    const button = screen.getAllByRole('button', { name: 'Save changes' })[3] as HTMLButtonElement;
+    const form = new FormData(button.form!);
+    form.set('action', button.value);
+    form.set('reference', 'JV-3-EDITED');
+    expect(form.get('documentId')).toBe('doc-3');
+    await expect(serverAction(page)!(form)).rejects.toThrow('NEXT_REDIRECT');
+    const url = new URL(mocks.redirect.mock.calls[0][0] as string, 'https://tenant.test');
+    expect(url.searchParams.get('ref')).toBe('JV');
+    expect(url.searchParams.get('before')).toBe('doc-cursor');
+    expect(url.searchParams.get('kind')).toBe('error');
+    const retry = url.searchParams.get('retry')!;
+    cleanup();
+    render(await GeneralJournalPage({ searchParams: Promise.resolve(Object.fromEntries(url.searchParams)) }));
+    expect(api.list).toHaveBeenLastCalledWith({ branchId: 'branch-1', limit: 26, cursor: 'doc-cursor', reference: 'JV' });
+    const edited = screen.getAllByRole('button', { name: 'Save changes' })
+      .map((item) => new FormData((item as HTMLButtonElement).form!))
+      .find((data) => data.get('documentId') === 'doc-3')!;
+    expect(edited.get('reference')).toBe('JV-3-EDITED');
+    const olderLink = new URL(screen.getByRole('link', { name: 'Older vouchers' }).getAttribute('href')!, 'https://tenant.test');
+    expect(olderLink.searchParams.get('retry')).toBe(retry);
+    const newest = new URL(screen.getByRole('link', { name: 'Show newest' }).getAttribute('href')!, 'https://tenant.test');
+    expect(newest.searchParams.get('retry')).toBe(retry);
+    const search = new FormData(screen.getByRole('search') as HTMLFormElement);
+    expect(search.get('retry')).toBe(retry);
+  });
+
+  it('retains maximum-length Urdu evidence and reason within per-cookie browser limits', async () => {
+    const api = caller();
+    api.createDraft.mockRejectedValue(new Error('response lost'));
+    const page = await GeneralJournalPage({ searchParams: Promise.resolve({}) });
+    render(page);
+    const button = screen.getByRole('button', { name: 'Save draft' }) as HTMLButtonElement;
+    const form = new FormData(button.form!);
+    const evidence = 'رسید'.repeat(125);
+    const reason = 'بجلی کا بل'.repeat(50);
+    const reference = 'حوالہ'.repeat(16);
+    expect(evidence).toHaveLength(500);
+    expect(reason).toHaveLength(500);
+    form.set('action', button.value);
+    form.set('reference', reference);
+    form.set('amount', '1250.00');
+    form.set('occurredAt', '2026-10-20');
+    form.set('evidence', evidence);
+    form.set('reason', reason);
+    await expect(serverAction(page)!(form)).rejects.toThrow('NEXT_REDIRECT');
+    const chunks = [...mocks.jar.entries()].filter(([name]) => name.startsWith('pharmacy-general-journal-retry.'));
+    expect(chunks.length).toBeGreaterThan(0);
+    for (const [name, value] of chunks) {
+      // The browser limit applies to the name, value, and attributes together.
+      expect(new TextEncoder().encode(`${name}=${encodeURIComponent(value)}`).length).toBeLessThan(3900);
+    }
+    const url = new URL(mocks.redirect.mock.calls[0][0] as string, 'https://tenant.test');
+    cleanup();
+    render(await GeneralJournalPage({ searchParams: Promise.resolve(Object.fromEntries(url.searchParams)) }));
+    const retained = new FormData((screen.getByRole('button', { name: 'Save draft' }) as HTMLButtonElement).form!);
+    expect(retained.get('evidence')).toBe(evidence);
+    expect(retained.get('reason')).toBe(reason);
+    expect(retained.get('reference')).toBe(reference);
+    expect(retained.get('idempotencyKey')).toBe(form.get('idempotencyKey'));
+  });
+
+  it('clears every retained chunk after a successful command', async () => {
+    caller();
+    mocks.jar.set('pharmacy-general-journal-retry.0', 'stale');
+    mocks.jar.set('pharmacy-general-journal-retry.1', 'stale');
+    mocks.jar.set('pharmacy-general-journal-retry', 'legacy');
+    const page = await GeneralJournalPage({ searchParams: Promise.resolve({}) });
+    render(page);
+    const button = screen.getByRole('button', { name: 'Post' }) as HTMLButtonElement;
+    const form = new FormData(button.form!);
+    form.set('action', button.value);
+    await expect(serverAction(page)!(form)).rejects.toThrow('NEXT_REDIRECT');
+    expect([...mocks.jar.keys()].filter((name) => name.startsWith('pharmacy-general-journal-retry'))).toEqual([]);
   });
 });

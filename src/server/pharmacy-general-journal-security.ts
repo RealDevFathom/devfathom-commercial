@@ -19,6 +19,21 @@ export async function authorizePharmacyGeneralJournalCapability(ctx: TRPCContext
   return { organizationId, actorId };
 }
 
+/**
+ * Navigation-only capability probe: true when the actor could open the general
+ * journal. It writes no admission audit and never throws, so a denied or
+ * failing check simply hides the entry point; every operation still runs the
+ * canonical authorization above.
+ */
+export async function canOpenPharmacyGeneralJournal(ctx: TRPCContext) {
+  try {
+    await authorizePharmacyGeneralJournalCapability(ctx);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Authorize a collection read and persist admission before returning protected data. */
 export async function authorizePharmacyGeneralJournalCollection(ctx: TRPCContext) {
   const scope = await authorizePharmacyGeneralJournalCapability(ctx);
