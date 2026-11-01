@@ -3,6 +3,10 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { Client } from 'pg';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import {
+  PHARMACY_BOOTSTRAP_ADMIN_EXACT_GRANTS,
+  PHARMACY_ROLE_TEMPLATES,
+} from '@/lib/vertical-catalog';
 import type { TRPCContext } from '../trpc';
 
 // The successful solo audit is real and transactional. Suppress only the normal
@@ -198,6 +202,60 @@ suite('PV security persistence and compatibility', () => {
       ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     });
   });
+
+  it.each([
+    [
+      'default Owner template',
+      'owner',
+      PHARMACY_ROLE_TEMPLATES.find((role) => role.key === 'owner')!.capabilities,
+    ],
+    ['bootstrap Admin role', 'admin', ['*', ...PHARMACY_BOOTSTRAP_ADMIN_EXACT_GRANTS]],
+  ])(
+    'lets a solo pharmacy on the %s file a report and move it to READY',
+    async (_label, key, capabilities) => {
+      await fixture(async ({ db, owner, branch, api }) => {
+        // Exactly what provisioning (and the #479 backfill) gives this role: no
+        // hand-added test grant beyond the shipped template.
+        const role = await db.organizationRole.create({
+          data: {
+            key,
+            name: key,
+            isSystem: true,
+            permissions: {
+              create: capabilities.map((capability) => ({ capability, effect: 'ALLOW' as const })),
+            },
+          },
+        });
+        await db.user.update({ where: { id: owner }, data: { organizationRoleId: role.id } });
+        const filed = await api(owner).createPharmacovigilanceReport({
+          branchId: branch,
+          kind: 'ADVERSE_DRUG_REACTION',
+          occurredAt: new Date(),
+          assertedDescription: 'Patient reported a rash after the first dose.',
+        });
+        expect(filed).toMatchObject({ state: 'DRAFT', createdByUserId: owner });
+        await api(owner).transitionPharmacovigilanceReport({
+          id: filed.id,
+          branchId: branch,
+          state: 'UNDER_REVIEW',
+        });
+        await api(owner).transitionPharmacovigilanceReport({
+          id: filed.id,
+          branchId: branch,
+          state: 'READY',
+          pin: '1234',
+        });
+        expect(
+          await db.pharmacyPharmacovigilanceReport.findUniqueOrThrow({ where: { id: filed.id } })
+        ).toMatchObject({ state: 'READY', reviewedByUserId: owner });
+        expect(
+          await db.auditLog.count({
+            where: { action: 'pv_solo_owner_approval', targetId: filed.id },
+          })
+        ).toBe(1);
+      });
+    }
+  );
 
   it('requires PIN for solo readiness and commits a matching audit without changing external submission state', async () => {
     await fixture(async ({ db, owner, branch, api }) => {

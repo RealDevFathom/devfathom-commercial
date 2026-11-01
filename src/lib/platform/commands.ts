@@ -31,6 +31,7 @@ import {
   isPackageCompatibleWithVertical,
   mandatoryModulesForVertical,
   modulesForVertical,
+  PHARMACY_BOOTSTRAP_ADMIN_EXACT_GRANTS,
   RESTAURANT_CAPABILITIES,
   RESTAURANT_MODULES,
   roleTemplatesForVertical,
@@ -924,6 +925,13 @@ async function bootstrapOrganization(
     primaryContactEmail: input.primaryContactEmail,
     notes: input.notes,
   });
+  // `*` never reaches the exact-grant-only pharmacy actions; a pharmacy's bootstrap
+  // admin also holds pharmacy:safety so a solo pharmacy can file and review PV (#479).
+  const adminCapabilities: readonly string[] = demo
+    ? RESTAURANT_CAPABILITIES
+    : input.vertical === 'PHARMACY'
+      ? ['*', ...PHARMACY_BOOTSTRAP_ADMIN_EXACT_GRANTS]
+      : ['*'];
   const adminRole = await db.organizationRole.create({
     data: {
       organizationId: organization.id,
@@ -932,7 +940,7 @@ async function bootstrapOrganization(
       description: 'Full organization administration',
       isSystem: true,
       permissions: {
-        create: (demo ? RESTAURANT_CAPABILITIES : ['*']).map((capability) => ({
+        create: adminCapabilities.map((capability) => ({
           organizationId: organization.id,
           capability,
           effect: 'ALLOW' as const,

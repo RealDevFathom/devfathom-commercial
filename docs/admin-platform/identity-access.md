@@ -100,7 +100,7 @@ into a tenant ledger.
 
 Baseline roles (`ADMIN`, `HR`, `EMPLOYEE`) remain supported. Organization custom roles add capability rules. User-specific overrides are final.
 
-Rules use exact capabilities or namespace wildcards such as `projects:*`. Evaluation is deny-by-default and explicit `DENY` wins over `ALLOW`. Separation of duties: `pharmacy:dispense`, `pharmacy:safety` and `pharmacy:catalogue-review` are granted only by an exact `ALLOW` rule; neither `*` nor `pharmacy:*` grants them (so the administrator `*` and the pharmacy Owner `pharmacy:*` templates do not include them), while a wildcard `DENY` still revokes them. System administrator/member roles cannot be removed or edited through product commands.
+Rules use exact capabilities or namespace wildcards such as `projects:*`. Evaluation is deny-by-default and explicit `DENY` wins over `ALLOW`. Separation of duties: `pharmacy:dispense`, `pharmacy:safety` and `pharmacy:catalogue-review` are granted only by an exact `ALLOW` rule; neither `*` nor `pharmacy:*` grants them (so the administrator `*` and the pharmacy Owner `pharmacy:*` wildcards do not reach them), while a wildcard `DENY` still revokes them. A pharmacy tenant's Owner template and bootstrap administrator role each carry one explicit `pharmacy:safety` `ALLOW` so a solo pharmacy can file and review pharmacovigilance reports; neither receives `pharmacy:dispense` or `pharmacy:catalogue-review`. System administrator/member roles cannot be removed or edited through product commands.
 
 tRPC procedures use protected/admin/capability/module middleware. REST uses user-bound API token scopes plus module checks. Files, uploads, assistant, and realtime resolve the same tenant actor.
 

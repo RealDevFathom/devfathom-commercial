@@ -478,6 +478,33 @@ describe('organization.create vertical + package compatibility', () => {
         },
       }),
     });
+    // #479: the bootstrap admin keeps `*` and gains only the exact pharmacy:safety
+    // grant the wildcard cannot reach, so a solo pharmacy can file and review PV.
+    expect(mocks.roleCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        key: 'admin',
+        permissions: {
+          create: ['*', 'pharmacy:safety'].map((capability) => ({
+            organizationId: 'org_new',
+            capability,
+            effect: 'ALLOW',
+          })),
+        },
+      }),
+    });
+    expect(mocks.roleCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        key: 'owner',
+        permissions: {
+          create: [
+            'pharmacy:*',
+            'reports:operational',
+            'reports:financial',
+            'pharmacy:safety',
+          ].map((capability) => ({ organizationId: 'org_new', capability, effect: 'ALLOW' })),
+        },
+      }),
+    });
     // No restaurant template leaked into a pharmacy tenant.
     for (const template of RESTAURANT_ROLE_TEMPLATES) {
       if (roleTemplatesForVertical('PHARMACY').some((one) => one.key === template.key)) continue;
