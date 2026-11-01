@@ -102,7 +102,14 @@ linked through a provenance row (`source = platform-default`, catalogue version,
 so a second item matching an already-linked medicine is reported as `skip` and neither created nor
 linked. Re-running is stable: a linked item counts as already held, a skipped one is reported again,
 nothing is created. A linked item flagged NARCOTICS carries the same review flag on its provenance
-row. Every copy starts
+row, and because a hand-entered medicine may already sell, the link also holds it from sale
+(`saleable = false`, the only field a link writes) unless a reviewed `controlled` decision was
+already published for it. Publishing that decision through the reference workbench — the same
+review a copy needs — releases it; until then it is listed in the workbench with the NARCOTICS
+note. Each `likelyDuplicates` entry carries `controlledCandidate` and `holdFromSale`; the dry run
+also reports `controlledCandidates` (copies plus links) and `wouldHoldFromSale`, and the apply
+result and its audit rows report `controlledCandidates`, `linkedControlledCandidates` and
+`heldFromSale`. Non-narcotic links are never held. Every copy starts
 `saleable = false` — the catalogue carries no DRAP registration, which the saleable gate requires —
 so a pharmacist completes an item before it can be bought or sold.
 

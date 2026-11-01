@@ -27,7 +27,8 @@
  * Every match carries a human-readable reason naming each rule it passed.
  *
  * A linked medicine inherits the item's NARCOTICS review flag
- * ({@link linkedControlledCandidate}), exactly as a catalogue copy does.
+ * ({@link linkedControlledCandidate}), exactly as a catalogue copy does, and is
+ * held from sale until it is reviewed ({@link linkedHoldsFromSale}).
  */
 
 export type CatalogueMatchItem = {
@@ -190,4 +191,20 @@ export function linkedControlledCandidate(
   medicine: { controlledCandidate?: boolean | null }
 ): boolean {
   return item.controlledCandidate || medicine.controlledCandidate === true;
+}
+
+/**
+ * Whether linking a hand-entered medicine holds it from sale (`saleable: false`).
+ * A catalogue copy starts unsaleable and the publication hold keeps it so until
+ * a pharmacist publishes a reviewed `controlled` decision; a hand-entered
+ * medicine may already sell, so a flagged link holds it until the same review.
+ * Never for a link without the NARCOTICS flag, a medicine that is not saleable
+ * (nothing to hold), or one whose reviewed `controlled` decision is already
+ * published (it has had that review).
+ */
+export function linkedHoldsFromSale(
+  controlledCandidate: boolean,
+  medicine: { saleable: boolean; controlledReviewed: boolean }
+): boolean {
+  return controlledCandidate && medicine.saleable && !medicine.controlledReviewed;
 }

@@ -546,17 +546,25 @@ export const pharmacyMedicineRouter = router({
     ctx.db.medicine.findMany({
       where: {
         saleable: false,
-        provenance: {
-          some: {
-            OR: [
-              { status: 'UNREVIEWED' },
-              {
-                status: { in: ['ACCEPTED', 'CORRECTED'] },
-                publicationEntries: { none: { batch: { status: 'PUBLISHED' } } },
+        OR: [
+          {
+            provenance: {
+              some: {
+                OR: [
+                  { status: 'UNREVIEWED' },
+                  {
+                    status: { in: ['ACCEPTED', 'CORRECTED'] },
+                    publicationEntries: { none: { batch: { status: 'PUBLISHED' } } },
+                  },
+                ],
               },
-            ],
+            },
           },
-        },
+          // A hand-entered medicine linked to a NARCOTICS default-catalogue
+          // item is held from sale until a reviewed controlled decision is
+          // published, so it is listed even before any reference row arrives.
+          { catalogueProvenance: { is: { linkedExisting: true, controlledCandidate: true } } },
+        ],
       },
       include: {
         provenance: { orderBy: { createdAt: 'asc' } },

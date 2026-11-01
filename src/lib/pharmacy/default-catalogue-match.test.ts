@@ -8,6 +8,7 @@ import {
   findHandEnteredMatches,
   handEnteredMatchReason,
   linkedControlledCandidate,
+  linkedHoldsFromSale,
   type CatalogueMatchItem,
   type HandEnteredMedicine,
 } from './default-catalogue-match';
@@ -127,5 +128,26 @@ describe('NARCOTICS review flag on a linked hand-entered medicine', () => {
     expect(
       linkedControlledCandidate({ controlledCandidate: true }, { controlledCandidate: true })
     ).toBe(true);
+  });
+});
+
+describe('sale hold on a linked hand-entered medicine', () => {
+  const saleable = { saleable: true, controlledReviewed: false };
+
+  it('holds a saleable, unreviewed medicine linked to a NARCOTICS item', () => {
+    expect(linkedHoldsFromSale(true, saleable)).toBe(true);
+  });
+
+  it('never holds a non-narcotic link', () => {
+    expect(linkedHoldsFromSale(false, saleable)).toBe(false);
+    expect(linkedHoldsFromSale(false, { saleable: true, controlledReviewed: true })).toBe(false);
+  });
+
+  it('leaves a medicine whose reviewed controlled decision is published', () => {
+    expect(linkedHoldsFromSale(true, { saleable: true, controlledReviewed: true })).toBe(false);
+  });
+
+  it('has nothing to hold on a medicine that is not saleable', () => {
+    expect(linkedHoldsFromSale(true, { saleable: false, controlledReviewed: false })).toBe(false);
   });
 });

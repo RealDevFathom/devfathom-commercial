@@ -14,9 +14,11 @@
  * entered by hand (manual entry, the importer wizard, a reference connector) —
  * same normalised brand/product name, strength and dosage form, and
  * manufacturer when both have one — is never copied: the dry run lists each
- * pair (`likelyDuplicates`: sourceKey, medicine id and name, reason), and
- * --apply links the existing medicine through a provenance row without
- * writing any of its fields. Every applied batch writes a tenant audit row
+ * pair (`likelyDuplicates`: sourceKey, medicine id and name, reason,
+ * NARCOTICS flag, sale hold), and --apply links the existing medicine through
+ * a provenance row without writing any of its fields — except that a link to
+ * a NARCOTICS item holds a saleable, not-yet-reviewed medicine from sale until
+ * a pharmacist publishes a reviewed controlled decision. Every applied batch writes a tenant audit row
  * naming --actor. Idempotent — running it twice creates and links nothing the
  * second time. Exits
  * non-zero if any organization failed; the others still complete.

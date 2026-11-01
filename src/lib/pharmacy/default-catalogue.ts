@@ -23,6 +23,7 @@ import {
   catalogueNameKeys,
   findHandEnteredMatches,
   linkedControlledCandidate,
+  linkedHoldsFromSale,
   type HandEnteredMedicine,
 } from './default-catalogue-match';
 
@@ -63,10 +64,16 @@ import {
  * linked to the item through a provenance row (`linkedExisting`) and none of
  * its fields are written. A link to a NARCOTICS item carries the same
  * `controlledCandidate` review flag on its provenance row as a copy would, so
- * the pharmacist reviews the hand-entered medicine too. A second item matching
- * an already-linked medicine is skipped. The backfill dry run lists every such
- * pair with the reason it matched. Every batch that creates or links medicines writes one tenant audit
- * row naming the job, requesting operator or backfill actor, and counts.
+ * the pharmacist reviews the hand-entered medicine too. A copy starts
+ * unsaleable, but a hand-entered medicine may already sell, so the link also
+ * holds it from sale (`saleable: false`, the only field a link ever writes)
+ * unless a reviewed `controlled` decision has already been published for it.
+ * Publishing that decision — the review that releases a copy — releases it.
+ * A second item matching an already-linked medicine is skipped. The backfill
+ * dry run lists every such pair with the reason it matched, its NARCOTICS flag
+ * and whether it would be held. Every batch that creates or links medicines
+ * writes one tenant audit row naming the job, requesting operator or backfill
+ * actor, and counts.
  *
  * IDEMPOTENT AND RESUMABLE. The provenance row is unique per (organization,
  * catalogue key, source key). Each batch commits on its own, under a per-tenant
@@ -260,8 +267,19 @@ export type ApplyDefaultCatalogueResult = {
   created: number;
   /** Items the tenant already held from this catalogue (created or linked); left untouched. */
   alreadyPresent: number;
-  /** Of `created`, how many were NARCOTICS-class candidates held for review. */
+  /**
+   * NARCOTICS-class candidates this run flagged for review: copies it created
+   * plus hand-entered medicines it linked (`linkedControlledCandidates`).
+   */
   controlledCandidates: number;
+  /** Of `linkedExisting`, how many were linked to a NARCOTICS item and flagged for review. */
+  linkedControlledCandidates: number;
+  /**
+   * Of `linkedControlledCandidates`, how many saleable hand-entered medicines
+   * this run held from sale until a pharmacist publishes a reviewed
+   * `controlled` decision.
+   */
+  heldFromSale: number;
   /** Items a newer version changed after the tenant got them. Reported, never applied. */
   upstreamChanged: number;
   upstreamChangedSample: string[];
@@ -291,6 +309,18 @@ export type CatalogueDuplicateMatch = {
   action: 'link' | 'skip';
   linkedSourceKey?: string;
   reason: string;
+  /**
+   * The catalogue item was filed under NARCOTICS. On a `link`, the link's
+   * provenance row carries the `controlledCandidate` review flag.
+   */
+  controlledCandidate: boolean;
+  /**
+   * The `link` holds the medicine from sale (`saleable: false`) until a
+   * pharmacist publishes a reviewed `controlled` decision: it is NARCOTICS,
+   * currently saleable, and has no published reviewed decision yet. Always
+   * false for a `skip`.
+   */
+  holdFromSale: boolean;
 };
 
 /** Who caused an apply, for the tenant audit trail. */
@@ -312,7 +342,7 @@ type CatalogueBatchPlan = {
   /** Not held, not a likely duplicate: create a medicine. */
   missing: Array<PlannedItem & { medicineId: string }>;
   /** Not held, a likely duplicate: link the existing medicine. */
-  linked: Array<PlannedItem & { medicineId: string }>;
+  linked: Array<PlannedItem & { medicineId: string; holdFromSale: boolean }>;
   /** Every likely duplicate in the batch, linked or skipped. */
   duplicates: CatalogueDuplicateMatch[];
   /** Held items a newer version changed. */
@@ -323,6 +353,9 @@ type CandidateMedicine = HandEnteredMedicine & {
   linkedSourceKey: string | null;
   /** The NARCOTICS review flag the medicine already carries, if any. */
   controlledCandidate: boolean;
+  saleable: boolean;
+  /** A reviewed `controlled` decision has been published for the medicine. */
+  controlledReviewed: boolean;
 };
 
 /**
@@ -363,6 +396,18 @@ async function handEnteredCandidates(
       strengths: { select: { value: true, unit: true } },
       presentations: { select: { dosageForm: true } },
       catalogueProvenance: { select: { sourceKey: true, controlledCandidate: true } },
+      saleable: true,
+      // The decision the publication hold demands of a NARCOTICS candidate:
+      // a reviewed `controlled` assertion in a published batch.
+      provenance: {
+        where: {
+          field: 'controlled',
+          status: { in: ['ACCEPTED', 'CORRECTED'] },
+          publicationEntries: { some: { batch: { status: 'PUBLISHED' } } },
+        },
+        select: { id: true },
+        take: 1,
+      },
     },
     orderBy: { id: 'asc' },
   });
@@ -375,6 +420,8 @@ async function handEnteredCandidates(
     dosageForms: medicine.presentations.map((presentation) => presentation.dosageForm),
     linkedSourceKey: medicine.catalogueProvenance?.sourceKey ?? null,
     controlledCandidate: medicine.catalogueProvenance?.controlledCandidate ?? false,
+    saleable: medicine.saleable,
+    controlledReviewed: medicine.provenance.length > 0,
   }));
 }
 
@@ -453,16 +500,24 @@ async function planCatalogueBatch(
       medicineName: chosen.medicine.productName,
       action: open ? 'link' : 'skip',
       reason: chosen.reason,
+      controlledCandidate: item.controlledCandidate,
+      holdFromSale: false,
     };
     if (open) {
       claimed.set(open.medicine.id, item.sourceKey);
       // A NARCOTICS item flags the hand-entered medicine for pharmacist review
-      // through the link's provenance row, as it would a copy.
+      // through the link's provenance row, as it would a copy, and holds it
+      // from sale until that review is published (a copy starts unsaleable).
+      const controlledCandidate = linkedControlledCandidate(item, open.medicine);
+      const holdFromSale = linkedHoldsFromSale(controlledCandidate, open.medicine);
+      duplicate.controlledCandidate = controlledCandidate;
+      duplicate.holdFromSale = holdFromSale;
       plan.linked.push({
         ...item,
         digest,
         medicineId: open.medicine.id,
-        controlledCandidate: linkedControlledCandidate(item, open.medicine),
+        controlledCandidate,
+        holdFromSale,
       });
     } else {
       duplicate.linkedSourceKey = claimed.get(chosen.medicine.id);
@@ -532,6 +587,8 @@ export async function applyDefaultCatalogue(
     created: 0,
     alreadyPresent: 0,
     controlledCandidates: 0,
+    linkedControlledCandidates: 0,
+    heldFromSale: 0,
     upstreamChanged: 0,
     upstreamChangedSample: [],
     matchedExisting: 0,
@@ -610,7 +667,24 @@ export async function applyDefaultCatalogue(
           });
         }
 
-        const controlledCandidates = missing.filter((item) => item.controlledCandidate).length;
+        // Hold every NARCOTICS link the plan marked from sale, in the same
+        // transaction as its provenance row. `saleable` is the only field a
+        // link writes; publishing a reviewed `controlled` decision releases it.
+        const held = linked.filter((item) => item.holdFromSale);
+        if (held.length) {
+          await db.medicine.updateMany({
+            where: {
+              organizationId,
+              id: { in: held.map((item) => item.medicineId) },
+              saleable: true,
+            },
+            data: { saleable: false },
+          });
+        }
+
+        const linkedControlled = linked.filter((item) => item.controlledCandidate);
+        const controlledCandidates =
+          missing.filter((item) => item.controlledCandidate).length + linkedControlled.length;
         const skipped = duplicates.length - linked.length;
         if (missing.length || linked.length) {
           // One tenant audit row per batch that wrote anything, in the same
@@ -626,13 +700,15 @@ export async function applyDefaultCatalogue(
               category: 'PHARMACY',
               operation: 'CREATE',
               action: `${DEFAULT_CATALOGUE_JOB}.apply`,
-              description: `Default medicine catalogue ${version.key} v${version.version}: created ${missing.length}, linked ${linked.length} hand-entered, skipped ${skipped} duplicate.`,
+              description: `Default medicine catalogue ${version.key} v${version.version}: created ${missing.length}, linked ${linked.length} hand-entered, skipped ${skipped} duplicate; ${controlledCandidates} NARCOTICS flagged for review, ${held.length} hand-entered held from sale.`,
               targetType: 'PlatformMedicineCatalogueVersion',
               targetId: version.id,
               targetLabel: `${version.key} v${version.version}`,
               result: {
                 created: missing.length,
                 controlledCandidates,
+                linkedControlledCandidates: linkedControlled.length,
+                heldFromSale: held.length,
                 linkedExisting: linked.length,
                 matchedExisting: duplicates.length,
                 alreadyPresent: items.length - missing.length - duplicates.length,
@@ -641,6 +717,8 @@ export async function applyDefaultCatalogue(
                 linked: linked.map((item) => ({
                   sourceKey: item.sourceKey,
                   medicineId: item.medicineId,
+                  controlledCandidate: item.controlledCandidate,
+                  heldFromSale: item.holdFromSale,
                 })),
               },
               metadata: {
@@ -660,7 +738,11 @@ export async function applyDefaultCatalogue(
     result.batches += 1;
     result.created += batch.missing.length;
     result.alreadyPresent += batch.items.length - batch.missing.length - batch.duplicates.length;
-    result.controlledCandidates += batch.missing.filter((item) => item.controlledCandidate).length;
+    const linkedControlled = batch.linked.filter((item) => item.controlledCandidate).length;
+    result.controlledCandidates +=
+      batch.missing.filter((item) => item.controlledCandidate).length + linkedControlled;
+    result.linkedControlledCandidates += linkedControlled;
+    result.heldFromSale += batch.linked.filter((item) => item.holdFromSale).length;
     result.upstreamChanged += batch.changed.length;
     result.upstreamChangedSample.push(
       ...batch.changed.slice(0, MAX_DIFF_SAMPLE - result.upstreamChangedSample.length)
@@ -765,9 +847,17 @@ export type BackfillDefaultCatalogueReport = {
     /** `likelyDuplicates.length`. */
     possibleExistingMatches: number;
     /**
+     * NARCOTICS-class candidates the apply would flag for review: copies it
+     * would create plus hand-entered medicines it would link.
+     */
+    controlledCandidates: number;
+    /** Hand-entered medicines the apply would link to a NARCOTICS item and hold from sale. */
+    wouldHoldFromSale: number;
+    /**
      * Every catalogue item, not yet held, that is a likely duplicate of a
-     * medicine the pharmacy entered by hand — with the existing medicine and
-     * why they matched. `link` items are linked on apply, never copied.
+     * medicine the pharmacy entered by hand — with the existing medicine, why
+     * they matched, its NARCOTICS flag and whether the link would hold the
+     * medicine from sale. `link` items are linked on apply, never copied.
      */
     likelyDuplicates: CatalogueDuplicateMatch[];
     applied?: ApplyDefaultCatalogueResult;
@@ -784,10 +874,17 @@ async function planDefaultCatalogue(
   organizationId: string,
   version: CatalogueVersionRef,
   batchSize: number
-): Promise<{ wouldCreate: number; likelyDuplicates: CatalogueDuplicateMatch[] }> {
+): Promise<{
+  wouldCreate: number;
+  controlledCandidates: number;
+  wouldHoldFromSale: number;
+  likelyDuplicates: CatalogueDuplicateMatch[];
+}> {
   const claimed = new Map<string, string>();
   const likelyDuplicates: CatalogueDuplicateMatch[] = [];
   let wouldCreate = 0;
+  let controlledCandidates = 0;
+  let wouldHoldFromSale = 0;
   let after: string | null = null;
   for (;;) {
     const cursor: string | null = after;
@@ -798,11 +895,15 @@ async function planDefaultCatalogue(
     );
     if (!plan) break;
     wouldCreate += plan.missing.length;
+    controlledCandidates += [...plan.missing, ...plan.linked].filter(
+      (item) => item.controlledCandidate
+    ).length;
+    wouldHoldFromSale += plan.linked.filter((item) => item.holdFromSale).length;
     likelyDuplicates.push(...plan.duplicates);
     if (plan.items.length < batchSize) break;
     after = plan.items[plan.items.length - 1]!.sourceKey;
   }
-  return { wouldCreate, likelyDuplicates };
+  return { wouldCreate, controlledCandidates, wouldHoldFromSale, likelyDuplicates };
 }
 
 /**
@@ -889,6 +990,8 @@ export async function backfillDefaultCatalogue(input: {
       missingBefore: Math.max(0, version.rowCount - heldBefore),
       wouldCreate: 0,
       possibleExistingMatches: 0,
+      controlledCandidates: 0,
+      wouldHoldFromSale: 0,
       likelyDuplicates: [],
     };
     try {
@@ -898,6 +1001,8 @@ export async function backfillDefaultCatalogue(input: {
         batchSizeOf(input.batchSize)
       );
       entry.wouldCreate = plan.wouldCreate;
+      entry.controlledCandidates = plan.controlledCandidates;
+      entry.wouldHoldFromSale = plan.wouldHoldFromSale;
       entry.likelyDuplicates = plan.likelyDuplicates;
       entry.possibleExistingMatches = plan.likelyDuplicates.length;
     } catch (error) {

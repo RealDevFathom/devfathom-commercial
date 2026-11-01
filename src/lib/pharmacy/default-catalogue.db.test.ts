@@ -493,6 +493,8 @@ describeIfDatabase('platform default medicine catalogue', { timeout: 60_000 }, (
         reason:
           'name "disprin300mgtab" (catalogue productName = medicine productName); ' +
           'strength 300mg; dosage form tablet; manufacturer reckitbenckiserbmc',
+        controlledCandidate: false,
+        holdFromSale: false,
       },
       {
         sourceKey: 'catalog-20',
@@ -504,6 +506,8 @@ describeIfDatabase('platform default medicine catalogue', { timeout: 60_000 }, (
           'name "bremax1mgtab" (catalogue productName = medicine productName); ' +
             "strength 1mg (in the medicine's name"
         ),
+        controlledCandidate: false,
+        holdFromSale: false,
       },
       {
         sourceKey: 'catalog-21',
@@ -515,6 +519,8 @@ describeIfDatabase('platform default medicine catalogue', { timeout: 60_000 }, (
         reason: expect.stringContaining(
           'name "bremax2mgtab" (catalogue productName = medicine brandName)'
         ),
+        controlledCandidate: false,
+        holdFromSale: false,
       },
     ];
 
@@ -531,6 +537,9 @@ describeIfDatabase('platform default medicine catalogue', { timeout: 60_000 }, (
       heldBefore: 0,
       wouldCreate: 47,
       possibleExistingMatches: 3,
+      // None of the three matched items is NARCOTICS: every flag is on a copy.
+      controlledCandidates: FIXTURE_CONTROLLED,
+      wouldHoldFromSale: 0,
     });
     expect(dryRun.organizations[0]!.likelyDuplicates).toEqual(expectedDuplicates);
     expect(await tenantCounts(ORG_C)).toMatchObject({ medicines: 3, provenance: 0 });
@@ -550,6 +559,9 @@ describeIfDatabase('platform default medicine catalogue', { timeout: 60_000 }, (
       alreadyPresent: 0,
       linkedExisting: 2,
       matchedExisting: 3,
+      controlledCandidates: FIXTURE_CONTROLLED,
+      linkedControlledCandidates: 0,
+      heldFromSale: 0,
     });
     expect(applied.organizations[0]!.applied!.matchedExistingSample).toEqual(expectedDuplicates);
 
@@ -600,6 +612,7 @@ describeIfDatabase('platform default medicine catalogue', { timeout: 60_000 }, (
         catalogueVersionId: versionOneId,
         sourceKey: 'catalog-00',
         linkedExisting: true,
+        controlledCandidate: false,
       }),
       expect.objectContaining({
         medicineId: manual.bremax.id,
@@ -607,6 +620,7 @@ describeIfDatabase('platform default medicine catalogue', { timeout: 60_000 }, (
         catalogueVersion: 1,
         sourceKey: 'catalog-20',
         linkedExisting: true,
+        controlledCandidate: false,
       }),
     ]);
     expect(after.catalog21).toBe(0);
@@ -615,13 +629,17 @@ describeIfDatabase('platform default medicine catalogue', { timeout: 60_000 }, (
     expect(after.copies).toEqual({ disprin: 1, bremax1: 1, bremax2: 0, cecon: 2 });
 
     expect(after.audits).toHaveLength(3);
-    const total = (key: 'created' | 'linkedExisting') =>
+    const total = (
+      key: 'created' | 'linkedExisting' | 'controlledCandidates' | 'heldFromSale'
+    ) =>
       after.audits.reduce(
         (sum, row) => sum + Number((row.result as Record<string, number>)[key]),
         0
       );
     expect(total('created')).toBe(47);
     expect(total('linkedExisting')).toBe(2);
+    expect(total('controlledCandidates')).toBe(FIXTURE_CONTROLLED);
+    expect(total('heldFromSale')).toBe(0);
     for (const row of after.audits) {
       expect(row).toMatchObject({
         actorType: 'SYSTEM',
@@ -641,6 +659,8 @@ describeIfDatabase('platform default medicine catalogue', { timeout: 60_000 }, (
         linkedExisting: 0,
         alreadyPresent: 49,
         matchedExisting: 1,
+        controlledCandidates: 0,
+        heldFromSale: 0,
       });
       expect(again.matchedExistingSample).toEqual([expectedDuplicates[2]]);
     }
@@ -654,6 +674,8 @@ describeIfDatabase('platform default medicine catalogue', { timeout: 60_000 }, (
       heldBefore: 49,
       wouldCreate: 0,
       possibleExistingMatches: 1,
+      controlledCandidates: 0,
+      wouldHoldFromSale: 0,
       likelyDuplicates: [expectedDuplicates[2]],
     });
     expect(await snapshot()).toEqual(after);
