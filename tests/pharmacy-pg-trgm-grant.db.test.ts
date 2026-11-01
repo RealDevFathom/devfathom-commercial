@@ -32,6 +32,26 @@ const client = new pg.Client({ connectionString: url });
     await client.end();
   });
 
+  it('skips the grant instead of failing when devfathom_app does not exist yet', async () => {
+    // Fresh installs and QA lanes run migrations before prepare-runtime-role.ts
+    // creates devfathom_app. Hide the role inside a rolled-back transaction and run
+    // the migration body without its own BEGIN/COMMIT so the rename is undone.
+    const body = sql.replace(/^\s*(BEGIN|COMMIT);\s*$/gm, '');
+    await client.query('BEGIN');
+    try {
+      await client.query('ALTER ROLE devfathom_app RENAME TO qa233_app_absent');
+      await expect(client.query(body)).resolves.toBeDefined();
+      expect(
+        (
+          await client.query(`SELECT has_function_privilege('qa233_app_absent',
+        'public.similarity(text,text)', 'EXECUTE') AS allowed`)
+        ).rows
+      ).toEqual([{ allowed: false }]);
+    } finally {
+      await client.query('ROLLBACK');
+    }
+  });
+
   it('reproduces 42501, applies twice, then searches as devfathom_app with tenant RLS', async () => {
     await client.query('SET ROLE devfathom_app');
     await expect(client.query(`SELECT 'panadol' % 'panadol'`)).rejects.toMatchObject({

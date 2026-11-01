@@ -6,6 +6,12 @@ BEGIN;
 -- A plain GRANT only warns (and changes nothing) when the migration role does
 -- not own these extension objects. Verify the result so that deployment either
 -- has the required privileges or stops with an actionable error.
+--
+-- The runtime role is created by prisma/prepare-runtime-role.ts, which runs
+-- after `prisma migrate deploy` on a fresh database and in QA lanes that use a
+-- differently named runtime role. When devfathom_app does not exist yet there
+-- is nothing to grant here: skip, and let prepare-runtime-role.ts grant these
+-- functions when it creates the role.
 DO $grant_pg_trgm$
 DECLARE
   target regprocedure;
@@ -20,6 +26,12 @@ DECLARE
     'public.strict_word_similarity_commutator_op(text,text)'::regprocedure
   ];
 BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'devfathom_app') THEN
+    RAISE NOTICE
+      'devfathom_app does not exist yet; pg_trgm EXECUTE grants are left to prisma/prepare-runtime-role.ts';
+    RETURN;
+  END IF;
+
   FOREACH target IN ARRAY targets
   LOOP
     IF NOT pg_catalog.has_function_privilege('devfathom_app', target, 'EXECUTE') THEN
