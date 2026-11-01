@@ -95,11 +95,31 @@ const SENSITIVE_SUBSTRINGS = [
   'cookie',
 ];
 
+// Staff, witness and owner PINs are reusable credentials. Match PIN as a whole word of the key
+// (pin, witnessPin, ownerPIN, staff_pin, pinCode, newPin) rather than as a substring, so
+// unrelated keys such as shippingAddress, spinner or pinnedAt remain useful in the audit trail.
+const PIN_WORDS = new Set(['pin', 'pins', 'pincode', 'passcode']);
+
+function keyWords(key: string): string[] {
+  return key
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+    .split(/[^A-Za-z0-9]+/)
+    .filter(Boolean)
+    .map((word) => word.toLowerCase());
+}
+
+export function isPinKey(key: string): boolean {
+  return keyWords(key).some((word) => PIN_WORDS.has(word));
+}
+
 function isSensitiveKey(key: string): boolean {
   const k = key.toLowerCase();
   // Camera renewal input can be audited before its resolver runs (including
   // denied or invalid requests). Match the identifier exactly, not all grants.
-  return k === 'previousgrantid' || SENSITIVE_SUBSTRINGS.some((s) => k.includes(s));
+  return (
+    k === 'previousgrantid' || isPinKey(key) || SENSITIVE_SUBSTRINGS.some((s) => k.includes(s))
+  );
 }
 
 const MAX_STRING = 20_000;
@@ -402,10 +422,10 @@ export function recordAudit(row: AuditRowInput, db?: ScopedDb): void | Promise<v
         input: (row.input ?? undefined) as never,
         changes: (row.changes ?? undefined) as never,
         result: (row.result ?? undefined) as never,
-        metadata: ({
+        metadata: {
           ...((row.metadata && typeof row.metadata === 'object' ? row.metadata : {}) as object),
           ...(placeholder ? { placeholder: true } : {}),
-        }) as never,
+        } as never,
         ip: row.ip ?? null,
         userAgent: row.userAgent ?? null,
         httpMethod: row.httpMethod ?? null,

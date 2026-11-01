@@ -17,13 +17,34 @@ vi.mock('@/lib/entitlements', () => ({
   resolveOrganizationEntitlements: async () => ({ enabledModules: [] }),
 }));
 
+import { TRPCError } from '@trpc/server';
+import { z } from 'zod';
 import { bindSideEffects } from '@/lib/side-effects/scope';
-import { flushAuditWritesForTest, recordTrpcAudit } from './audit';
+import { flushAuditWritesForTest, isPinKey, recordTrpcAudit, toAuditJson } from './audit';
 import { createTRPCContext, protectedProcedure, router, type TRPCContext } from './trpc';
 
 const organizationId = 'org_demo_restaurant_seat_1';
 const actorId = 'user_demo_restaurant_seat_1_manager';
 const probe = router({ create: protectedProcedure.mutation(() => 'created') });
+// Mirrors pharmacySales.returnLine: a transient witness credential beside the operation input.
+const witnessProbe = router({
+  returnLine: protectedProcedure
+    .input(
+      z
+        .object({
+          saleLineId: z.string(),
+          controlledWitness: z
+            .object({ staffProfileId: z.string(), pin: z.string().regex(/^\d{4,8}$/) })
+            .strict()
+            .optional(),
+        })
+        .strict()
+    )
+    .mutation(({ input }) => {
+      if (input.saleLineId === 'denied') throw new TRPCError({ code: 'FORBIDDEN' });
+      return { blocked: input.saleLineId === 'blocked' ? 'Fresh witness PIN needed.' : undefined };
+    }),
+});
 
 async function context(db: ScopedDb, transactional = true) {
   return createTRPCContext({
@@ -129,6 +150,38 @@ describe('transaction-bound seed audits', () => {
     expect(mocks.outsideCreate).toHaveBeenCalledOnce();
   });
 
+  it.each(['SUCCESS', 'FAILURE'] as const)(
+    'redacts witness PINs in %s audit writes without hiding unrelated fields',
+    async (outcome) => {
+      const ctx = await context({} as ScopedDb, false);
+      recordTrpcAudit({
+        ctx,
+        path: 'pharmacyPurchasing.postGoodsReceipt',
+        type: 'mutation',
+        input: {
+          goodsReceiptId: 'receipt_a',
+          pin: '1234',
+          witnesses: [{ PIN: '5678', staffProfileId: 'staff_a' }],
+          shippingAddress: 'Test address',
+        },
+        outcome,
+      });
+      await flushAuditWritesForTest();
+
+      expect(mocks.outsideCreate).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          input: {
+            goodsReceiptId: 'receipt_a',
+            pin: '[REDACTED]',
+            witnesses: [{ PIN: '[REDACTED]', staffProfileId: 'staff_a' }],
+            shippingAddress: 'Test address',
+          },
+          outcome,
+        }),
+      });
+    }
+  );
+
   it('rejects an audit transaction belonging to another context', async () => {
     const ctx = await context({} as ScopedDb);
     await expect(
@@ -139,5 +192,115 @@ describe('transaction-bound seed audits', () => {
         session: ctx.session,
       })
     ).rejects.toThrow('Audit transaction must match');
+  });
+});
+
+describe('central PIN redaction in audit capture', () => {
+  const pinValues = ['4826', '91827364', '0000'];
+  function expectNoPin(value: unknown) {
+    const text = JSON.stringify(value);
+    for (const pin of pinValues) expect(text).not.toContain(pin);
+  }
+
+  it.each([
+    ['committed', 'line_a', 'SUCCESS'],
+    ['blocked', 'blocked', 'SUCCESS'],
+    ['forbidden', 'denied', 'FAILURE'],
+  ] as const)(
+    'never stores the witness PIN for a %s controlled return',
+    async (_label, saleLineId, outcome) => {
+      const ctx = await context({} as ScopedDb, false);
+      const call = witnessProbe
+        .createCaller(ctx)
+        .returnLine({ saleLineId, controlledWitness: { staffProfileId: 'staff_w', pin: '4826' } });
+      if (outcome === 'FAILURE') await expect(call).rejects.toThrow();
+      else await call;
+      await flushAuditWritesForTest();
+
+      expect(mocks.outsideCreate).toHaveBeenCalledOnce();
+      const data = mocks.outsideCreate.mock.calls[0][0].data;
+      expect(data).toMatchObject({
+        outcome,
+        input: {
+          saleLineId,
+          controlledWitness: { staffProfileId: 'staff_w', pin: '[REDACTED]' },
+        },
+      });
+      expectNoPin(data);
+    }
+  );
+
+  it('redacts a PIN from input rejected by validation before the resolver runs', async () => {
+    const ctx = await context({} as ScopedDb, false);
+    await expect(
+      witnessProbe.createCaller(ctx).returnLine({
+        saleLineId: 'line_a',
+        controlledWitness: { staffProfileId: 'staff_w', pin: '91827364', extra: true },
+      } as never)
+    ).rejects.toThrow();
+    await flushAuditWritesForTest();
+
+    expect(mocks.outsideCreate).toHaveBeenCalledOnce();
+    const data = mocks.outsideCreate.mock.calls[0][0].data;
+    expect(data.outcome).toBe('FAILURE');
+    expect(data.input.controlledWitness.pin).toBe('[REDACTED]');
+    expectNoPin(data);
+  });
+
+  it('redacts PIN-bearing keys in input, changes, result and metadata', async () => {
+    const ctx = await context({} as ScopedDb, false);
+    Object.assign(ctx.audit!.detail, {
+      changes: { ownerPin: { before: '0000', after: '4826' } },
+      result: { witness: { staffPin: '4826' } },
+      metadata: { newPIN: '91827364' },
+    });
+    recordTrpcAudit({
+      ctx,
+      path: 'pharmacyOwners.setPin',
+      type: 'mutation',
+      input: { ownerPin: '0000', currentPin: '4826', pin_code: '91827364' },
+      outcome: 'SUCCESS',
+    });
+    await flushAuditWritesForTest();
+
+    const data = mocks.outsideCreate.mock.calls[0][0].data;
+    expect(data.input).toEqual({
+      ownerPin: '[REDACTED]',
+      currentPin: '[REDACTED]',
+      pin_code: '[REDACTED]',
+    });
+    expectNoPin(data);
+  });
+
+  it('matches PIN as a whole key word without hiding unrelated fields', () => {
+    for (const key of [
+      'pin',
+      'PIN',
+      'pins',
+      'witnessPin',
+      'ownerPIN',
+      'staff_pin',
+      'pinCode',
+      'pin-code',
+      'newPinHash',
+      'passcode',
+    ])
+      expect(isPinKey(key)).toBe(true);
+    for (const key of ['shippingAddress', 'spinner', 'pinnedAt', 'opinion', 'pinyin', 'mapping'])
+      expect(isPinKey(key)).toBe(false);
+
+    expect(
+      toAuditJson({
+        controlledWitness: { staffProfileId: 'staff_w', pin: '4826' },
+        approvals: [{ ownerPin: '0000', ownerId: 'owner_a' }],
+        shippingAddress: 'Main road',
+        pinnedAt: '2026-11-01',
+      })
+    ).toEqual({
+      controlledWitness: { staffProfileId: 'staff_w', pin: '[REDACTED]' },
+      approvals: [{ ownerPin: '[REDACTED]', ownerId: 'owner_a' }],
+      shippingAddress: 'Main road',
+      pinnedAt: '2026-11-01',
+    });
   });
 });
