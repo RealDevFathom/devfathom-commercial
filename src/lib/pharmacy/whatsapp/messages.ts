@@ -252,11 +252,12 @@ export const WHATSAPP_REPLIES = {
   optedIn:
     'You are now subscribed to WhatsApp messages from this pharmacy. Reply STOP at any time to opt out.\n' +
     'آپ نے واٹس ایپ پیغامات کی اجازت دے دی ہے۔ بند کرنے کے لیے STOP لکھیں۔',
-  confirmation(input: { reference: string; quantity: number; medicine: string; branch: string }) {
+  confirmation(input: { reference: string; quantity: number; branch: string }) {
     return (
-      `Order ${input.reference} received: ${input.quantity} x ${input.medicine} for collection at ${input.branch}. ` +
+      `Order ${input.reference} received: ${input.quantity} item(s) for collection at ${input.branch}. ` +
       'We will confirm when it is ready.\n' +
-      `آپ کا آرڈر ${input.reference} موصول ہو گیا ہے۔ تیار ہونے پر ہم آپ کو اطلاع دیں گے۔`
+      `آپ کا آرڈر ${input.reference} موصول ہو گیا ہے: ${input.quantity} آئٹم، ${input.branch} سے وصول کرنے کے لیے۔ ` +
+      'تیار ہونے پر ہم آپ کو اطلاع دیں گے۔'
     );
   },
 } as const;

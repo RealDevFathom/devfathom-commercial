@@ -107,8 +107,7 @@ export function TrelloImportContent() {
     };
   }, [trelloData]);
 
-  const canImport =
-    !!trelloData && (targetMode === 'existing' ? !!selectedProjectId : true);
+  const canImport = !!trelloData && (targetMode === 'existing' ? !!selectedProjectId : true);
 
   const handleImport = () => {
     if (!trelloData || !canImport) return;
@@ -288,8 +287,8 @@ export function TrelloImportContent() {
                   className="w-full rounded-xl border border-border bg-card px-4 py-2.5 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
                 />
                 <p className="mt-1.5 text-xs text-muted-foreground">
-                  A new project is created with you as its lead. Leave blank to use the board
-                  name &quot;{trelloData.name}&quot;.
+                  A new project is created with you as its lead. Leave blank to use the board name
+                  &quot;{trelloData.name}&quot;.
                 </p>
               </>
             )}

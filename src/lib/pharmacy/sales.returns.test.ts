@@ -9,12 +9,7 @@ vi.mock('./finance-postings', () => ({
   postTenderRefundEntry: vi.fn().mockResolvedValue({}),
 }));
 
-import {
-  returnedLineValue,
-  returnedSaleLineValue,
-  returnSaleLine,
-  readReturnHistory,
-} from './sales';
+import { returnedLineValue, returnSaleLine, readReturnHistory } from './sales';
 import { postUnidentifiedSaleReturnEntry } from './finance-postings';
 
 const scope = { organizationId: 'o', branchId: 'b', actorId: 'a' };
@@ -35,22 +30,8 @@ function fixture() {
     sale: { status: 'COMPLETED' },
     medicine: { controlled: false },
     allocations: [
-      {
-        id: 'a1',
-        inventoryLotId: 'lot1',
-        stockLocationId: 'shelf1',
-        canonicalUnits: 4,
-        grossMinor: 400,
-        discountMinor: 0,
-      },
-      {
-        id: 'a2',
-        inventoryLotId: 'lot2',
-        stockLocationId: 'shelf2',
-        canonicalUnits: 6,
-        grossMinor: 600,
-        discountMinor: 0,
-      },
+      { id: 'a1', inventoryLotId: 'lot1', stockLocationId: 'shelf1', canonicalUnits: 4 },
+      { id: 'a2', inventoryLotId: 'lot2', stockLocationId: 'shelf2', canonicalUnits: 6 },
     ],
     unidentifiedReturnHolds: [] as Array<{ canonicalUnits: number }>,
     returnLines: [{ inventoryLotId: 'lot1', canonicalUnits: 2 }],
@@ -87,30 +68,6 @@ function fixture() {
   return { db, line };
 }
 describe('counter return boundaries', () => {
-  it.each(Array.from({ length: 7 }, (_, used) => used))(
-    'keeps a one-unit partial refund nonnegative after %i returned units',
-    async (used) => {
-      const { db, line } = fixture();
-      line.canonicalUnits = 7;
-      line.allocations = [
-        {
-          id: 'a2',
-          inventoryLotId: 'lot2',
-          stockLocationId: 'shelf2',
-          canonicalUnits: 7,
-          grossMinor: 3,
-          discountMinor: 2,
-        },
-      ];
-      line.returnLines = used ? [{ inventoryLotId: 'lot2', canonicalUnits: used }] : [];
-      await returnSaleLine(db as never, scope, { ...input, canonicalUnits: 1 });
-      const data = db.pharmacySaleReturnLine.create.mock.calls[0]![0].data;
-      expect(data.grossMinor - data.discountMinor).toBe(used === 6 ? 1 : 0);
-      expect(data.discountMinor).toBe(
-        Math.floor((2 * (used + 1)) / 7) - Math.floor((2 * used) / 7)
-      );
-    }
-  );
   it('restocks only the explicitly named second lot, never the first allocation', async () => {
     const { db } = fixture();
     await returnSaleLine(db as never, scope, input);
@@ -181,56 +138,6 @@ describe('counter return boundaries', () => {
     const line = { quantity: 1, unitPriceMinor: 100, discountMinor: 2, canonicalUnits: 3 };
     expect([1, 2, 3].map((n) => returnedLineValue(line, n))).toEqual([32, 65, 98]);
   });
-  it('floors refund values exactly when the intermediate product exceeds safe integers', () => {
-    const line = {
-      quantity: 1,
-      unitPriceMinor: 2_147_483_647,
-      grossMinor: 2_147_483_647,
-      discountMinor: 0,
-      canonicalUnits: 2_147_483_646,
-    };
-    expect(returnedLineValue(line, 2_147_483_645)).toBe(2_147_483_645);
-    expect(
-      returnedSaleLineValue({
-        ...line,
-        returnLines: [],
-        unidentifiedReturnHolds: [{ canonicalUnits: 2_147_483_645 }],
-      })
-    ).toBe(2_147_483_645);
-  });
-  it('assigns the exact final remainder to an identified return with a large product', async () => {
-    const { db, line } = fixture();
-    line.canonicalUnits = 2_147_483_646;
-    line.allocations = [
-      {
-        id: 'a2',
-        inventoryLotId: 'lot2',
-        stockLocationId: 'shelf2',
-        canonicalUnits: 2_147_483_646,
-        grossMinor: 2_147_483_647,
-        discountMinor: 0,
-      },
-    ];
-    line.returnLines = [{ inventoryLotId: 'lot2', canonicalUnits: 2_147_483_645 }];
-    await returnSaleLine(db as never, scope, { ...input, canonicalUnits: 1 });
-    expect(db.pharmacySaleReturnLine.create.mock.calls[0]![0].data).toMatchObject({
-      grossMinor: 2,
-      discountMinor: 0,
-    });
-  });
-  it('adds exact identified value to the reserved share for unidentified holds', () => {
-    expect(
-      returnedSaleLineValue({
-        quantity: 3,
-        unitPriceMinor: 133,
-        grossMinor: 400,
-        discountMinor: 40,
-        canonicalUnits: 3,
-        returnLines: [{ canonicalUnits: 1, grossMinor: 200, discountMinor: 20 }],
-        unidentifiedReturnHolds: [{ canonicalUnits: 1 }],
-      })
-    ).toBe(270);
-  });
   it('does not disclose another branch receipt history', async () => {
     const findFirst = vi.fn().mockResolvedValue(null);
     await expect(
@@ -239,6 +146,52 @@ describe('counter return boundaries', () => {
     expect(findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({ organizationId: 'o', branchId: 'b' }),
+      })
+    );
+  });
+  it.each([true, false])('flags controlled sold lines (controlled=%s)', async (controlled) => {
+    const sale = {
+      id: 'sale',
+      receiptNumber: 1,
+      receiptDeviceId: 'd',
+      businessDate: new Date('2026-10-01'),
+      lines: [
+        {
+          id: 'line',
+          medicine: { productName: 'Medicine', controlled },
+          saleUnit: 'STRIP',
+          quantity: 1,
+          unitPriceMinor: 1000,
+          discountMinor: 0,
+          canonicalUnitsPerSaleUnit: 10,
+          canonicalUnits: 10,
+          returnLines: [],
+          unidentifiedReturnHolds: [],
+          allocations: [],
+        },
+      ],
+      tenders: [],
+      returns: [],
+    };
+    const findFirst = vi.fn().mockResolvedValue(sale);
+    const history = await readReturnHistory(
+      {
+        pharmacySale: { findFirst },
+        pharmacyStockLocation: { findMany: vi.fn().mockResolvedValue([]) },
+      } as never,
+      scope,
+      'sale'
+    );
+    expect(history.lines[0].controlled).toBe(controlled);
+    expect(findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        include: expect.objectContaining({
+          lines: expect.objectContaining({
+            include: expect.objectContaining({
+              medicine: { select: { productName: true, controlled: true } },
+            }),
+          }),
+        }),
       })
     );
   });
@@ -298,14 +251,6 @@ describe('verified physical lot boundaries', () => {
     await expect(
       returnSaleLine(db as never, scope, { ...input, canonicalUnits: 4 })
     ).rejects.toThrow('RETURN_EXCEEDS_SOLD');
-    expect(db.pharmacySaleReturn.create).not.toHaveBeenCalled();
-  });
-  it('does not let a named return displace value reserved by an unidentified hold', async () => {
-    const { db, line } = fixture();
-    line.unidentifiedReturnHolds.push({ canonicalUnits: 1 });
-    await expect(
-      returnSaleLine(db as never, scope, { ...input, canonicalUnits: 1 })
-    ).rejects.toThrow('INVALID_STATE');
     expect(db.pharmacySaleReturn.create).not.toHaveBeenCalled();
   });
   it('requires quarantine custody for legacy restock requests with no verified lot', async () => {

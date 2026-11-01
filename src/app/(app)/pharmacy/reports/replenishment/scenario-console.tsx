@@ -39,6 +39,10 @@ const numericFields = [
   ['dailyDemandUnits', 'Assumed daily demand (units)', false, 0],
   ['currentQuantityUnits', 'Current policy order (units)', false, 0],
   ['proposedQuantityUnits', 'Proposed policy order (units)', false, 0],
+  ['currentUnitPriceMinor', 'Current unit selling price (minor units)', false, 0],
+  ['proposedUnitPriceMinor', 'What-if unit selling price (minor units)', false, 0],
+  ['salesGoalMinor', 'Sales goal (minor units)', true, 0],
+  ['marginGoalMinor', 'Margin goal (minor units)', true, 0],
   ['packSize', 'Order pack size (units)', false, 1],
   ['minimumOrderUnits', 'Minimum order (units)', false, 0],
   ['unitCostMinor', 'Unit cost (integer minor units)', true, 0],
@@ -117,6 +121,10 @@ function ScenarioWorkspace({
     dailyDemandUnits: '',
     currentQuantityUnits: '',
     proposedQuantityUnits: '',
+    currentUnitPriceMinor: '',
+    proposedUnitPriceMinor: '',
+    salesGoalMinor: '',
+    marginGoalMinor: '',
     packSize: '',
     minimumOrderUnits: '',
     unitCostMinor: '',
@@ -235,6 +243,14 @@ function ScenarioWorkspace({
         currentQuantityUnits: values.currentQuantityUnits!,
         proposedQuantityUnits: values.proposedQuantityUnits!,
         currency: draft.currency,
+        goals: {
+          salesMinor: values.salesGoalMinor,
+          marginMinor: values.marginGoalMinor,
+        },
+        pricing: {
+          currentUnitPriceMinor: values.currentUnitPriceMinor!,
+          proposedUnitPriceMinor: values.proposedUnitPriceMinor!,
+        },
         orderTerms: {
           packSize: values.packSize!,
           minimumOrderUnits: values.minimumOrderUnits!,
@@ -481,7 +497,8 @@ function ScenarioWorkspace({
               <p className="mt-2 text-sm text-text-muted">
                 USER_SUPPLIED_ASSUMPTIONS: enter a constant daily demand and hypothetical order
                 terms. Current policy means the order quantity you enter, not on-hand stock. These
-                inputs are not observed demand or a forecast guarantee.
+                inputs are not observed demand or a forecast guarantee. Sales and margin goals and
+                prices are configurable assumptions, never recorded facts.
               </p>
               {manual && (
                 <div className="mt-4 space-y-4">
@@ -808,6 +825,51 @@ function ReportEvidence({
                 </article>
               ))}
             </div>
+            {report.planning.goalComparison && (
+              <div className="mt-5">
+                <h3 className="font-semibold text-text-strong">Sales and margin goal what-if</h3>
+                <p className="mt-2 text-sm text-text-muted">
+                  {report.planning.goalComparison.label.replaceAll('_', ' ')}.{' '}
+                  {report.planning.goalComparison.definition}
+                </p>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Policy</TableHead>
+                      <TableHead className="text-right">Unit price</TableHead>
+                      <TableHead className="text-right">Sales estimate</TableHead>
+                      <TableHead className="text-right">Margin estimate</TableHead>
+                      <TableHead>Goal result</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {report.planning.goalComparison.scenarios.map((estimate) => (
+                      <TableRow key={estimate.policy}>
+                        <TableCell>{estimate.policy.replaceAll('_', ' ')}</TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {decision.money.currency}{' '}
+                          {formatMinor(estimate.assumptions.unitPriceMinor)}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {estimate.salesMinor === null
+                            ? 'Unknown'
+                            : `${decision.money.currency} ${formatMinor(estimate.salesMinor)}`}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {estimate.marginMinor === null
+                            ? 'Unknown'
+                            : `${decision.money.currency} ${formatMinor(estimate.marginMinor)}`}
+                        </TableCell>
+                        <TableCell>
+                          Sales: {goalResult(estimate.goals.salesMet)}; margin:{' '}
+                          {goalResult(estimate.goals.marginMet)}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
             {[...decision.assumptions, ...decision.unknowns].map((reason, index) => (
               <p key={index} className="mt-2 text-sm text-text-muted">
                 {reason}
@@ -827,4 +889,8 @@ function ReportEvidence({
       </SectionCard>
     </div>
   );
+}
+
+function goalResult(value: boolean | null) {
+  return value === null ? 'not evaluated' : value ? 'met' : 'not met';
 }

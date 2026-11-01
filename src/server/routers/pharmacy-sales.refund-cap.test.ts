@@ -46,10 +46,24 @@ const input = {
 function fixture(returnedUnits: number, priorRefunds: number[] = []) {
   let payloadHash = '';
   const db = {
+    user: {
+      findUnique: vi.fn().mockResolvedValue({
+        status: 'ACTIVE',
+        organizationId: 'org-1',
+        organizationRole: {
+          permissions: [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }],
+        },
+        permissionOverrides: [],
+      }),
+    },
     pharmacyBranch: {
+      findFirst: vi.fn().mockResolvedValue({ id: 'branch-1' }),
       findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
         where.id.in.map((id) => ({ id }))
       ),
+    },
+    pharmacyBranchAssignment: {
+      findMany: vi.fn().mockResolvedValue([{ branchId: 'branch-1' }]),
     },
     $executeRaw: vi.fn(async (query: { values: unknown[] }) => {
       payloadHash = String(query.values[5]);
@@ -79,19 +93,10 @@ function fixture(returnedUnits: number, priorRefunds: number[] = []) {
           {
             quantity: 10,
             unitPriceMinor: 100,
-            grossMinor: 1000,
             discountMinor: 0,
             canonicalUnits: 10,
             unidentifiedReturnHolds: [] as Array<{ canonicalUnits: number }>,
-            returnLines: returnedUnits
-              ? [
-                  {
-                    canonicalUnits: returnedUnits,
-                    grossMinor: returnedUnits * 100,
-                    discountMinor: 0,
-                  },
-                ]
-              : [],
+            returnLines: returnedUnits ? [{ canonicalUnits: returnedUnits }] : [],
           },
         ],
         // Prior refunds belong to other tenders; the current cash tender is still unused.

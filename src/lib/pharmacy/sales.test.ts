@@ -1,19 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
-const { allocateForSaleMock } = vi.hoisted(() => ({
-  allocateForSaleMock: vi.fn(),
-}));
-
-vi.mock('./stock-ledger', async () => ({
-  ...(await vi.importActual<typeof import('./stock-ledger')>('./stock-ledger')),
-  allocateForSale: allocateForSaleMock,
-}));
-
 import {
   addSaleLine,
-  apportionMinor,
-  allocationWeightedPrice,
-  assertSaleUnitConversion,
   addRestockInterest,
   captureSafeRestockArrival,
   changeSaleStatus,
@@ -168,205 +156,14 @@ describe('POS sale voiding', () => {
 });
 
 describe('POS-03 lot-derived pack/strip/unit pricing', () => {
-  it('persists a two-lot FEFO line at the allocation-weighted price without rounding up', async () => {
-    allocateForSaleMock.mockResolvedValueOnce({
-      allocations: [
-        { inventoryLotId: 'lot-a', stockLocationId: 'shelf-a', units: 2 },
-        { inventoryLotId: 'lot-b', stockLocationId: 'shelf-b', units: 1 },
-      ],
-      movementIds: ['movement-a', 'movement-b'],
-    });
-    let persistedLine: Record<string, unknown> | undefined;
-    const db = {
-      pharmacySale: {
-        findFirst: async () => ({ id: 'sale-a', status: 'OPEN' }),
-        updateMany: async () => ({ count: 1 }),
-      },
-      medicine: {
-        findFirst: async () => ({
-          id: 'medicine-a',
-          rx: false,
-          restricted: false,
-          controlled: false,
-        }),
-      },
-      packLevel: {
-        findMany: async () => [
-          { id: 'unit', level: 'UNIT', parentPackLevelId: null, unitsPerParent: 1 },
-        ],
-      },
-      pharmacyInventoryLot: {
-        findMany: async () => [
-          {
-            id: 'lot-a',
-            packLevelId: 'unit',
-            unitsPerPack: 1,
-            printedMrpMinor: 100,
-            unitCostMinor: 60,
-          },
-          {
-            id: 'lot-b',
-            packLevelId: 'unit',
-            unitsPerPack: 1,
-            printedMrpMinor: 200,
-            unitCostMinor: 80,
-          },
-        ],
-      },
-      pharmacySaleLine: {
-        create: async ({ data }: { data: Record<string, unknown> }) => {
-          persistedLine = data;
-          return { id: 'line-a', ...data };
-        },
-      },
-      pharmacySaleLineAllocation: { create: async () => ({}) },
-      pharmacySaleEvent: { create: async () => ({}) },
-    };
-
-    const { line } = await addSaleLine(db as never, scope, {
-      saleId: 'sale-a',
-      medicineId: 'medicine-a',
-      presentationId: 'presentation-a',
-      packLevelId: 'unit',
-      saleUnit: 'PACK',
-      quantity: 3,
-      canonicalUnitsPerSaleUnit: 1,
-      idempotencyKey: 'line-a',
-    });
-
-    expect(persistedLine).toMatchObject({
-      canonicalUnits: 3,
-      quantity: 3,
-      unitPriceMinor: 133,
-      grossMinor: 400,
-      proRataCeilingMinor: 133,
-    });
-    expect(line.grossMinor).toBe(400);
-  });
-
-  it('weights a split line by each allocated lot instead of charging the highest MRP', () => {
-    const price = allocationWeightedPrice({
-      allocations: [
-        { canonicalUnits: 1, unitPriceMinor: 100, proRataCeilingMinor: 100 },
-        { canonicalUnits: 1, unitPriceMinor: 200, proRataCeilingMinor: 200 },
-      ],
-      canonicalUnits: 2,
-      canonicalUnitsPerSaleUnit: 1,
-    });
-
-    expect(price).toEqual({ unitPriceMinor: 150, proRataCeilingMinor: 150, grossMinor: 300 });
-  });
-
-  it('rounds an unequal allocation-weighted price down to avoid a patient overcharge', () => {
-    const price = allocationWeightedPrice({
-      allocations: [
-        { canonicalUnits: 2, unitPriceMinor: 100, proRataCeilingMinor: 100 },
-        { canonicalUnits: 1, unitPriceMinor: 200, proRataCeilingMinor: 200 },
-      ],
-      canonicalUnits: 3,
-      canonicalUnitsPerSaleUnit: 1,
-    });
-
-    expect(price).toEqual({ unitPriceMinor: 133, proRataCeilingMinor: 133, grossMinor: 400 });
-  });
-
-  it('assigns gross and discount remainders without losing a minor unit', () => {
-    expect(apportionMinor(400, [200, 200])).toEqual([200, 200]);
-    expect(apportionMinor(41, [200, 200])).toEqual([20, 21]);
-    expect(apportionMinor(2, [1, 1, 1])).toEqual([0, 1, 1]);
-    expect(apportionMinor(2, [1, 1, 0])).toEqual([1, 1, 0]);
-  });
-
-  it.each<{
-    label: string;
-    allocations: Array<{
-      canonicalUnits: number;
-      unitPriceMinor: number;
-      proRataCeilingMinor: number;
-    }>;
-    canonicalUnits: number;
-  }>([
-    { label: 'an empty allocation', allocations: [], canonicalUnits: 1 },
-    {
-      label: 'a partial allocation',
-      allocations: [{ canonicalUnits: 1, unitPriceMinor: 100, proRataCeilingMinor: 100 }],
-      canonicalUnits: 2,
-    },
-    {
-      label: 'a non-positive allocation',
-      allocations: [{ canonicalUnits: 0, unitPriceMinor: 100, proRataCeilingMinor: 100 }],
-      canonicalUnits: 1,
-    },
-    {
-      label: 'an unsafe priced total',
-      allocations: [
-        {
-          canonicalUnits: Number.MAX_SAFE_INTEGER,
-          unitPriceMinor: 2,
-          proRataCeilingMinor: 2,
-        },
-      ],
-      canonicalUnits: Number.MAX_SAFE_INTEGER,
-    },
-  ])('rejects $label', ({ allocations, canonicalUnits }) => {
-    expect(() =>
-      allocationWeightedPrice({ allocations, canonicalUnits, canonicalUnitsPerSaleUnit: 1 })
-    ).toThrow('INVALID_QUANTITY');
-  });
-
-  it('rejects a client claiming that a ten-unit pack contains one canonical unit', () => {
-    expect(() =>
-      assertSaleUnitConversion({
-        packLevels: [
-          {
-            id: 'pack',
-            level: 'BOX',
-            parentPackLevelId: null,
-            unitsPerParent: 1,
-          },
-          {
-            id: 'unit',
-            level: 'UNIT',
-            parentPackLevelId: 'pack',
-            unitsPerParent: 10,
-          },
-        ],
-        packLevelId: 'pack',
-        saleUnit: 'PACK',
-        canonicalUnitsPerSaleUnit: 1,
-        lots: [{ packLevelId: 'pack', unitsPerPack: 10 }],
+  it('charges a full pack at its exact printed MRP without compounding loose-unit floors', () => {
+    expect(
+      priceFromLot({
+        printedMrpMinor: 1_000,
+        canonicalUnitsInPack: 3,
+        canonicalUnitsPerSaleUnit: 3,
       })
-    ).toThrow('INVALID_SALE_UNIT_CONVERSION');
-  });
-
-  it.each(['PACK', 'UNIT'] as const)(
-    'accepts %s for a lot received in single units',
-    (saleUnit) => {
-      expect(() =>
-        assertSaleUnitConversion({
-          packLevels: [{ id: 'unit', level: 'UNIT', parentPackLevelId: null, unitsPerParent: 1 }],
-          packLevelId: 'unit',
-          saleUnit,
-          canonicalUnitsPerSaleUnit: 1,
-          lots: [{ packLevelId: 'unit', unitsPerPack: 1 }],
-        })
-      ).not.toThrow();
-    }
-  );
-
-  it("rejects a conversion that disagrees with the allocated lot's frozen pack size", () => {
-    expect(() =>
-      assertSaleUnitConversion({
-        packLevels: [
-          { id: 'pack', level: 'BOX', parentPackLevelId: null, unitsPerParent: 1 },
-          { id: 'unit', level: 'UNIT', parentPackLevelId: 'pack', unitsPerParent: 10 },
-        ],
-        packLevelId: 'pack',
-        saleUnit: 'PACK',
-        canonicalUnitsPerSaleUnit: 10,
-        lots: [{ packLevelId: 'pack', unitsPerPack: 20 }],
-      })
-    ).toThrow('INVALID_SALE_UNIT_CONVERSION');
+    ).toEqual({ unitPriceMinor: 1_000, proRataCeilingMinor: 1_000 });
   });
 
   it('derives a strip price from the allocated lot printed MRP', () => {
@@ -377,7 +174,7 @@ describe('POS-03 lot-derived pack/strip/unit pricing', () => {
         canonicalUnitsPerSaleUnit: 10,
         roundingIncrementMinor: 1,
       })
-    ).toEqual({ unitPriceMinor: 500, proRataCeilingMinor: 500 });
+    ).toEqual({ unitPriceMinor: 501, proRataCeilingMinor: 501 });
   });
 
   it('rounds down and never exceeds the pro-rata ceiling', () => {
@@ -389,6 +186,17 @@ describe('POS-03 lot-derived pack/strip/unit pricing', () => {
     });
     expect(price).toEqual({ unitPriceMinor: 330, proRataCeilingMinor: 333 });
     expect(price.unitPriceMinor).toBeLessThanOrEqual(price.proRataCeilingMinor);
+  });
+
+  it('rounds once at the partial sale-unit level', () => {
+    expect(
+      priceFromLot({
+        printedMrpMinor: 1_000,
+        canonicalUnitsInPack: 3,
+        canonicalUnitsPerSaleUnit: 2,
+        roundingIncrementMinor: 5,
+      })
+    ).toEqual({ unitPriceMinor: 665, proRataCeilingMinor: 666 });
   });
 });
 
@@ -589,15 +397,7 @@ describe('POS-06 linked returns', () => {
           canonicalUnits: 10,
           sale: { status: 'COMPLETED' },
           medicine: { controlled: false },
-          allocations: [
-            {
-              id: 'allocation-a',
-              inventoryLotId: 'lot-a',
-              canonicalUnits: 10,
-              grossMinor: 100,
-              discountMinor: 0,
-            },
-          ],
+          allocations: [{ id: 'allocation-a', inventoryLotId: 'lot-a', canonicalUnits: 10 }],
           unidentifiedReturnHolds: [],
           returnLines: [],
         }),

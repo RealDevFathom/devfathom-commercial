@@ -62,9 +62,7 @@ function fixture(camera: { id: string } | null) {
             discountMinor: 0,
             canonicalUnits: 10,
             unidentifiedReturnHolds: [],
-            returnLines: [
-              { canonicalUnits: 5, grossMinor: 500, discountMinor: 0 },
-            ],
+            returnLines: [{ canonicalUnits: 5 }],
           },
         ],
         refunds: [],
@@ -90,28 +88,6 @@ const run = (db: ReturnType<typeof fixture>) =>
   refundPharmacyTender(db as unknown as ScopedDb, scope, input);
 
 describe('REFUND counter evidence wiring (service-level, integrated tip)', () => {
-  it('authorizes the exact allocation value rather than a unit-prorated line value', async () => {
-    const db = fixture(null);
-    db.pharmacySale.findFirst.mockResolvedValue({
-      id: 'sale-1',
-      status: 'COMPLETED',
-      lines: [
-        {
-          quantity: 3,
-          unitPriceMinor: 133,
-          grossMinor: 400,
-          discountMinor: 40,
-          canonicalUnits: 3,
-          unidentifiedReturnHolds: [],
-          returnLines: [{ canonicalUnits: 1, grossMinor: 200, discountMinor: 20 }],
-        },
-      ],
-      refunds: [],
-    });
-    await expect(
-      refundPharmacyTender(db as unknown as ScopedDb, scope, { ...input, amountMinor: 180 })
-    ).resolves.toMatchObject({ refundId: 'refund-1' });
-  });
   it('writes the evidence outbox row on the refund client, after the refund row', async () => {
     const db = fixture({ id: 'camera-1' });
     await expect(run(db)).resolves.toMatchObject({ refundId: 'refund-1', replayed: false });

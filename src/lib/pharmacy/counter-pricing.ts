@@ -80,22 +80,6 @@ function chainFrom(packLevels: readonly PackLevelNode[], rootPackLevelId: string
   return chain;
 }
 
-/** Resolve a sale level to canonical units from the server-owned hierarchy. */
-export function canonicalUnitsForPackLevel(
-  packLevels: readonly PackLevelNode[],
-  packLevelId: string
-): number {
-  const chain = chainFrom(packLevels, packLevelId);
-  let canonicalUnits = 1;
-  for (let index = chain.length - 1; index > 0; index -= 1) {
-    assertPositiveInteger(chain[index]!.unitsPerParent);
-    canonicalUnits *= chain[index]!.unitsPerParent;
-    if (!Number.isSafeInteger(canonicalUnits))
-      throw new PharmacyMedicineError('INVALID_CONVERSION');
-  }
-  return canonicalUnits;
-}
-
 /**
  * The sale units this lot can be sold in, largest first.
  *
@@ -116,6 +100,26 @@ export function saleUnitOptions(input: {
 }): SaleUnitOption[] {
   assertPositiveInteger(input.unitsPerPack);
   const chain = chainFrom(input.packLevels, input.rootPackLevelId);
+  // The receiving setup also supports a standalone pack counted directly in
+  // canonical units. It offers only that sealed pack, with no invented strip.
+  // A leaf received within an existing hierarchy is already one canonical
+  // unit; its unitsPerParent describes its parent, not the received pack.
+  if (chain.length === 1) {
+    const pack = chain[0]!;
+    assertPositiveInteger(pack.unitsPerParent);
+    const canonicalUnits = pack.parentPackLevelId === null ? pack.unitsPerParent : 1;
+    if (canonicalUnits !== input.unitsPerPack) {
+      throw new PharmacyMedicineError('INVALID_CONVERSION');
+    }
+    return [
+      {
+        kind: 'PACK',
+        packLevelId: pack.id,
+        levelLabel: pack.level,
+        canonicalUnitsPerSaleUnit: canonicalUnits,
+      },
+    ];
+  }
 
   // Cumulative canonical units, computed from the base unit upwards.
   const canonical: number[] = new Array(chain.length).fill(1);

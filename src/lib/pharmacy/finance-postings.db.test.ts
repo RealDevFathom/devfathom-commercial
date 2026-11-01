@@ -21,7 +21,6 @@
  * assertion could be satisfied by a neighbour's lot.
  */
 import { randomBytes } from 'node:crypto';
-import { readFileSync } from 'node:fs';
 
 import { beforeAll, describe, expect, it } from 'vitest';
 
@@ -47,7 +46,7 @@ const ORG_B = `org_wha1183_b_${suffix}`;
 const branch = (label: string) => `branch_${label}_${suffix}`;
 const BRANCH_B = branch('org_b');
 const ACTOR = 'user_pharmacist';
-const WITNESS = 'user_manager';
+const WITNESS = `user_manager_${suffix}`;
 
 /** Fixed instants, so no case depends on the wall clock. */
 const RECEIVED_AT = new Date('2026-09-02T09:00:00.000Z');
@@ -86,7 +85,6 @@ type Fixture = {
   branchId: string;
   medicineId: string;
   packLevelId: string;
-  unitPackLevelId: string;
   presentationId: string;
   storeId: string;
   quarantineId: string;
@@ -139,18 +137,6 @@ async function fixture(organizationId: string, branchId: string, label: string):
         effectiveFrom: new Date('2026-01-01T00:00:00.000Z'),
       },
     });
-    const unitPackLevel = await db.packLevel.create({
-      data: {
-        organizationId,
-        presentationId,
-        versionGroupId: `unit-${tag(label)}`,
-        version: 1,
-        level: 'UNIT',
-        parentPackLevelId: packLevel.id,
-        unitsPerParent: 10,
-        effectiveFrom: new Date('2026-01-01T00:00:00.000Z'),
-      },
-    });
     const [store, quarantine] = await Promise.all([
       db.pharmacyStockLocation.create({
         data: {
@@ -194,12 +180,22 @@ async function fixture(organizationId: string, branchId: string, label: string):
       branchId,
       medicineId: medicine.id,
       packLevelId: packLevel.id,
-      unitPackLevelId: unitPackLevel.id,
       presentationId,
       storeId: store.id,
       quarantineId: quarantine.id,
       supplierId: supplier.id,
     };
+  });
+}
+
+async function assignWriteOffWitness(db: ScopedDb, f: Fixture) {
+  await db.pharmacyBranchAssignment.create({
+    data: {
+      organizationId: f.organizationId,
+      branchId: f.branchId,
+      userId: WITNESS,
+      active: true,
+    },
   });
 }
 
@@ -253,7 +249,7 @@ async function postedReceipt(
           lineNumber: 1,
           purchaseOrderLineId: null,
           medicineId: f.medicineId,
-          packLevelId: unitsPerPack === 1 ? f.unitPackLevelId : f.packLevelId,
+          packLevelId: f.packLevelId,
           batchNumber: `B-${tag(label)}`,
           printedExpiry: options.expiresAt ?? EXPIRY_LATER,
           expiryPrecision: 'DAY',
@@ -302,7 +298,6 @@ async function stockLot(
     locationId?: string;
     /** See `postedReceipt`: 1 when the scenario's sale takes part of a pack. */
     unitsPerPack?: number;
-    printedMrpMinor?: number;
   }
 ) {
   const batch = await db.pharmacyManufacturingBatch.create({
@@ -316,13 +311,13 @@ async function stockLot(
   });
   const { lot } = await deps.ledger.receiveLot(db, scopeOf(f, options.branchId), {
     manufacturingBatchId: batch.id,
-    packLevelId: options.unitsPerPack === 1 ? f.unitPackLevelId : f.packLevelId,
+    packLevelId: f.packLevelId,
     stockLocationId: options.locationId ?? f.storeId,
     unitsPerPack: options.unitsPerPack ?? 10,
     supplierName: 'Distributor Ltd',
     supplierInvoiceRef: `INV-${tag(options.label)}`,
     unitCostMinor: options.unitCostMinor,
-    printedMrpMinor: options.printedMrpMinor ?? 3_000 * (options.unitsPerPack ?? 10),
+    printedMrpMinor: 3_000 * (options.unitsPerPack ?? 10),
     receivedExpiresAt: options.expiresAt,
     receivedExpiryPrecision: 'DAY',
     quantityUnits: options.units,
@@ -348,7 +343,7 @@ async function completedSaleLine(
     saleId: sale.id,
     medicineId: f.medicineId,
     presentationId: f.presentationId,
-    packLevelId: f.unitPackLevelId,
+    packLevelId: f.packLevelId,
     saleUnit: 'UNIT',
     quantity: options.quantity,
     canonicalUnitsPerSaleUnit: 1,
@@ -421,6 +416,22 @@ beforeAll(async () => {
       [ORG_A, ORG_B]
     )
   );
+  await inOrg(ORG_A, async (db) => {
+    await db.organizationDepartment.create({
+      data: { organizationId: ORG_A, key: 'pharmacy', name: 'Pharmacy' },
+    });
+    await db.user.create({
+      data: {
+        id: WITNESS,
+        organizationId: ORG_A,
+        name: 'Write-off witness',
+        email: `${WITNESS}@example.test`,
+        department: 'pharmacy',
+        title: 'Manager',
+        status: 'ACTIVE',
+      },
+    });
+  });
 }, 120_000);
 
 // ── FIN-01 — one balanced entry per event kind ──────────────────────────────
@@ -528,210 +539,6 @@ describeIfDatabase('FIN-01 — goods receipt', () => {
 });
 
 describeIfDatabase('FIN-01 / FIN-03 — sale line', () => {
-  it('balances the exact 400-minor gross for a 2:1 split across differently priced lots', async () => {
-    const f = await fixture(ORG_A, branch('weighted-gross'), 'weighted-gross');
-    const { entry, line } = await inOrg(ORG_A, async (db) => {
-      await stockLot(db, f, {
-        label: 'weighted-cheap',
-        units: 2,
-        unitCostMinor: 60,
-        printedMrpMinor: 100,
-        expiresAt: EXPIRY_SOON,
-        unitsPerPack: 1,
-      });
-      await stockLot(db, f, {
-        label: 'weighted-dear',
-        units: 1,
-        unitCostMinor: 80,
-        printedMrpMinor: 200,
-        expiresAt: EXPIRY_LATER,
-        unitsPerPack: 1,
-      });
-      const sold = await completedSaleLine(db, f, { label: 'weighted-gross', quantity: 3 });
-      return {
-        line: sold.line,
-        entry: await deps.postings.postSaleLineEntry(db, scopeOf(f), {
-          saleLineId: sold.line.id,
-          at: SOLD_AT,
-        }),
-      };
-    });
-
-    expect(line.unitPriceMinor).toBe(133);
-    expect(line.grossMinor).toBe(400);
-    expectBalanced(entry);
-    expect(totalFor(entry, 'SALES_REVENUE', 'CREDIT')).toBe(400);
-    expect(totalFor(entry, 'SALES_CLEARING', 'DEBIT')).toBe(400);
-  });
-
-  it.each(['cheap-first', 'dear-first'] as const)(
-    'refunds each priced allocation exactly in %s order, including discount',
-    async (order) => {
-      const f = await fixture(
-        ORG_A,
-        branch(`weighted-return-${order}`),
-        `weighted-return-${order}`
-      );
-      const entries = await inOrg(ORG_A, async (db) => {
-        const cheap = await stockLot(db, f, {
-          label: `return-cheap-${order}`,
-          units: 2,
-          unitCostMinor: 60,
-          printedMrpMinor: 100,
-          expiresAt: EXPIRY_SOON,
-          unitsPerPack: 1,
-        });
-        const dear = await stockLot(db, f, {
-          label: `return-dear-${order}`,
-          units: 1,
-          unitCostMinor: 80,
-          printedMrpMinor: 200,
-          expiresAt: EXPIRY_LATER,
-          unitsPerPack: 1,
-        });
-        const sold = await completedSaleLine(db, f, {
-          label: `weighted-return-${order}`,
-          quantity: 3,
-          discountKind: 'DISCOUNT',
-          discountMinor: 40,
-        });
-        const requests =
-          order === 'cheap-first'
-            ? [
-                { lotId: cheap.lot.id, canonicalUnits: 1 },
-                { lotId: cheap.lot.id, canonicalUnits: 1 },
-                { lotId: dear.lot.id, canonicalUnits: 1 },
-              ]
-            : [
-                { lotId: dear.lot.id, canonicalUnits: 1 },
-                { lotId: cheap.lot.id, canonicalUnits: 1 },
-                { lotId: cheap.lot.id, canonicalUnits: 1 },
-              ];
-        const posted = [];
-        for (const [index, request] of requests.entries()) {
-          const returned = await deps.sales.returnSaleLine(db, scopeOf(f), {
-            saleLineId: sold.line.id,
-            ...request,
-            quarantineLocationId: f.quarantineId,
-            reason: 'Customer return',
-            integrityDecision: 'QUARANTINE',
-            idempotencyKey: `weighted-return-${order}-${index}-${tag(order)}`,
-          });
-          if (!returned.returnLine) throw new Error('Expected identified return');
-          posted.push(
-            await deps.postings.postSaleReturnEntry(db, scopeOf(f), {
-              saleReturnLineId: returned.returnLine.id,
-              at: LATER,
-            })
-          );
-        }
-        return posted;
-      });
-
-      entries.forEach(expectBalanced);
-      expect(entries.map((entry) => totalFor(entry, 'SALES_REVENUE', 'DEBIT'))).toEqual(
-        order === 'cheap-first' ? [100, 100, 200] : [200, 100, 100]
-      );
-      expect(
-        entries.reduce((sum, entry) => sum + totalFor(entry, 'SALES_DISCOUNT', 'CREDIT'), 0)
-      ).toBe(40);
-      expect(
-        entries.reduce((sum, entry) => sum + totalFor(entry, 'SALES_CLEARING', 'CREDIT'), 0)
-      ).toBe(400);
-    }
-  );
-
-  it('backfills historical partial and full identified returns without changing their journals', async () => {
-    const f = await fixture(ORG_A, branch('return-backfill'), 'return-backfill');
-    const result = await inOrg(ORG_A, async (db) => {
-      const cheap = await stockLot(db, f, {
-        label: 'backfill-cheap',
-        units: 2,
-        unitCostMinor: 60,
-        printedMrpMinor: 100,
-        expiresAt: EXPIRY_SOON,
-        unitsPerPack: 1,
-      });
-      const dear = await stockLot(db, f, {
-        label: 'backfill-dear',
-        units: 1,
-        unitCostMinor: 80,
-        printedMrpMinor: 200,
-        expiresAt: EXPIRY_LATER,
-        unitsPerPack: 1,
-      });
-      const sold = await completedSaleLine(db, f, {
-        label: 'return-backfill',
-        quantity: 3,
-        discountKind: 'DISCOUNT',
-        discountMinor: 40,
-      });
-      const requests = [cheap.lot.id, cheap.lot.id, dear.lot.id];
-      const returnLineIds: string[] = [];
-      const journals: Entry[] = [];
-      for (const [index, lotId] of requests.entries()) {
-        const returned = await deps.sales.returnSaleLine(db, scopeOf(f), {
-          saleLineId: sold.line.id,
-          lotId,
-          canonicalUnits: 1,
-          quarantineLocationId: f.quarantineId,
-          reason: 'Historical return',
-          integrityDecision: 'QUARANTINE',
-          idempotencyKey: `return-backfill-${index}-${tag('backfill')}`,
-        });
-        if (!returned.returnLine) throw new Error('Expected identified return');
-        returnLineIds.push(returned.returnLine.id);
-        journals.push(
-          (await deps.postings.postSaleReturnEntry(db, scopeOf(f), {
-            saleReturnLineId: returned.returnLine.id,
-            at: LATER,
-          }))!
-        );
-      }
-
-      // Replay on a temporary copy: operational return evidence stays append-only.
-      await db.$executeRawUnsafe(
-        `CREATE TEMP TABLE pharmacy_sale_return_lines ON COMMIT DROP AS
-        SELECT * FROM public.pharmacy_sale_return_lines WHERE "saleLineId" = $1`,
-        sold.line.id
-      );
-      await db.$executeRawUnsafe(
-        'UPDATE pg_temp.pharmacy_sale_return_lines SET "grossMinor" = 0, "discountMinor" = 0'
-      );
-      const migration = readFileSync(
-        'prisma/migrations/20261026120000_pharmacy_allocation_money/migration.sql',
-        'utf8'
-      );
-      const backfill = migration.match(
-        /-- BEGIN historical return money backfill\n([\s\S]*?)\n-- END historical return money backfill/
-      )?.[1];
-      if (!backfill) throw new Error('Historical return money backfill not found');
-      await db.$executeRawUnsafe(backfill);
-
-      const lines = await db.$queryRawUnsafe<
-        Array<{ id: string; grossMinor: number; discountMinor: number }>
-      >('SELECT * FROM pg_temp.pharmacy_sale_return_lines ORDER BY "createdAt", id');
-      return { lines, journals, partialReturnLineId: returnLineIds[0]! };
-    });
-
-    result.journals.forEach(expectBalanced);
-    expect(result.lines.map((line) => line.grossMinor).sort((a, b) => a - b)).toEqual([
-      100, 100, 200,
-    ]);
-    expect(result.lines.find((line) => line.id === result.partialReturnLineId)).toMatchObject({
-      grossMinor: 100,
-      discountMinor: 10,
-    });
-    expect(result.lines.reduce((sum, line) => sum + line.grossMinor, 0)).toBe(400);
-    expect(result.lines.reduce((sum, line) => sum + line.discountMinor, 0)).toBe(40);
-    expect(
-      result.journals.reduce(
-        (sum, journal) => sum + totalFor(journal, 'SALES_CLEARING', 'CREDIT'),
-        0
-      )
-    ).toBe(400);
-  });
-
   it('posts revenue and COGS at the EXACT allocated lot cost across two lots', async () => {
     const f = await fixture(ORG_A, branch('cogs'), 'cogs');
     const result = await inOrg(ORG_A, async (db) => {
@@ -928,6 +735,7 @@ describeIfDatabase('FIN-01 — expiry/damage write-off', () => {
   it('posts a balanced write-off at the lot cost, traceable to the movement', async () => {
     const f = await fixture(ORG_A, branch('writeoff'), 'writeoff');
     const { entry, movementId } = await inOrg(ORG_A, async (db) => {
+      await assignWriteOffWitness(db, f);
       const { lot } = await stockLot(db, f, {
         label: 'writeoff',
         units: 20,
@@ -1539,6 +1347,7 @@ describeIfDatabase('FIN-03 — perpetual valuation, margin and leakage', () => {
   it('reports discount, write-off and shrinkage as separate leakage', async () => {
     const f = await fixture(ORG_A, branch('leakage'), 'leakage');
     const rows = await inOrg(ORG_A, async (db) => {
+      await assignWriteOffWitness(db, f);
       const { lot } = await stockLot(db, f, {
         label: 'leakage',
         units: 60,

@@ -42,6 +42,7 @@ import {
   type CounterTenderBillState,
 } from './counter-tender-panel';
 import { CounterUnitToggle } from './counter-unit-toggle';
+import { CounterUpsellSuggestions } from './counter-upsell-suggestions';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -209,6 +210,26 @@ const UNKNOWN_TENDER_MESSAGE =
 
 type ConsoleProps = { initialSaleId?: string | null; initialBranchId?: string };
 
+function counterSelectionPreview(
+  row: CounterSearchRow | null,
+  option: CounterSearchRow['saleUnits'][number] | null,
+  quantity: number
+) {
+  if (!row || !option || row.printedMrpMinor === null || row.unitsPerPack === null) return null;
+  try {
+    return previewSaleLine({
+      option,
+      quantity,
+      printedMrpMinor: row.printedMrpMinor,
+      unitsPerPack: row.unitsPerPack,
+      roundingIncrementMinor: row.roundingIncrementMinor,
+      availableUnits: row.onHandUnits,
+    });
+  } catch {
+    return null;
+  }
+}
+
 export function PharmacyCounterConsole(props: ConsoleProps = {}) {
   const { data: session, status } = useSession();
   const entitlements = useEntitlements();
@@ -278,6 +299,9 @@ function ScopedPharmacyCounterConsole({
   const [submittedSearch, setSubmittedSearch] = useState({ text: '', query: '', branchId: '' });
   const submittedQuery = submittedSearch.query;
   const scannerRevision = useRef(0);
+  const scannerInFlight = useRef<{ text: string; branchId: string; revision: number } | null>(
+    null
+  );
   const [activeRow, setActiveRow] = useState<CounterSearchRow | null>(null);
   const [saleUnit, setSaleUnit] = useState<SaleUnitKind | null>(null);
   const [quantity, setQuantity] = useState(1);
@@ -325,7 +349,6 @@ function ScopedPharmacyCounterConsole({
   const outcomeInFlight = useRef(false);
 
   const searchRef = useRef<HTMLInputElement>(null);
-  const barcodeAdd = useRef<string | null>(null);
   const rxPanelRef = useRef<HTMLDivElement>(null);
   const tenderRef = useRef<HTMLDivElement>(null);
 
@@ -350,6 +373,13 @@ function ScopedPharmacyCounterConsole({
     branchesQuery.isSuccess &&
     !branchesQuery.isError &&
     branches.some((branch) => branch.id === branchId);
+
+  useEffect(
+    () => () => {
+      scannerRevision.current += 1;
+    },
+    [branchAuthorized, branchId]
+  );
 
   const discardReceiptIntent = useCallback(() => {
     receiptIntent.current?.printReservation?.cancel();
@@ -508,6 +538,9 @@ function ScopedPharmacyCounterConsole({
   const addLine = trpc.pharmacySales.addLine.useMutation();
   const transition = trpc.pharmacySales.transition.useMutation();
   const tender = trpc.pharmacySales.tender.useMutation({ retry: false });
+  const manualSettings = trpc.pharmacySales.manualPaymentSettings.useQuery(
+    { branchId }, { enabled: Boolean(branchId) }
+  );
   const openDrawer = trpc.pharmacySales.openDrawer.useMutation();
   const captureDemand = trpc.pharmacySales.captureDemand.useMutation();
   const declineSubstitute = trpc.pharmacySales.declineSubstitute.useMutation();
@@ -545,28 +578,10 @@ function ScopedPharmacyCounterConsole({
     [activeRow, saleUnit]
   );
 
-  const preview = useMemo(() => {
-    if (
-      !activeRow ||
-      !selectedOption ||
-      activeRow.printedMrpMinor === null ||
-      activeRow.unitsPerPack === null
-    ) {
-      return null;
-    }
-    try {
-      return previewSaleLine({
-        option: selectedOption,
-        quantity,
-        printedMrpMinor: activeRow.printedMrpMinor,
-        unitsPerPack: activeRow.unitsPerPack,
-        roundingIncrementMinor: activeRow.roundingIncrementMinor,
-        availableUnits: activeRow.onHandUnits,
-      });
-    } catch {
-      return null;
-    }
-  }, [activeRow, quantity, selectedOption]);
+  const preview = useMemo(
+    () => counterSelectionPreview(activeRow, selectedOption, quantity),
+    [activeRow, quantity, selectedOption]
+  );
 
   const requestedCanonicalUnits = selectedOption
     ? selectedOption.canonicalUnitsPerSaleUnit * quantity
@@ -626,6 +641,7 @@ function ScopedPharmacyCounterConsole({
           highAlert: line.highAlert,
           lasa: line.lasa,
           coldChain: line.coldChain,
+          activeIngredients: line.activeIngredients ?? [],
         },
         blocked: [],
         emergencySupply: line.emergencySupply ?? false,
@@ -804,40 +820,48 @@ function ScopedPharmacyCounterConsole({
     searchRef.current?.select();
   }, []);
 
-  const runSearch = useCallback(async () => {
-    if (!branchAuthorized) return;
-    const trimmed = query.trim();
-    if (trimmed.length < 2) {
-      setNotice({ tone: 'warning', message: 'Type at least two characters to search.' });
-      return;
-    }
-    const looksLikeGs1 = trimmed.startsWith(']d2') || trimmed.startsWith('(01)');
-    if (!looksLikeGs1) {
-      setSubmittedSearch({ text: trimmed, query: trimmed, branchId });
-      return;
-    }
-    const revision = ++scannerRevision.current;
-    setPending('authenticatePack');
-    try {
-      const verdict = await authenticatePack.mutateAsync({ branchId, payload: trimmed });
-      if (revision !== scannerRevision.current) return;
-      setSubmittedSearch({ text: trimmed, query: verdict.parsed?.gtin ?? trimmed, branchId });
-      setNotice({
-        tone:
-          verdict.status === 'VERIFIED'
-            ? 'success'
-            : verdict.status === 'BLOCKED_RECALL'
-              ? 'danger'
-              : 'warning',
-        message: verdict.explanation,
-      });
-    } catch (error) {
-      if (revision !== scannerRevision.current) return;
-      setNotice({ tone: 'danger', message: messageFrom(error) });
-    } finally {
-      setPending(null);
-    }
-  }, [authenticatePack, branchAuthorized, branchId, query]);
+  const runSearch = useCallback(
+    async (submittedQuery?: string) => {
+      if (!branchAuthorized || busy) return;
+      const trimmed = (submittedQuery ?? query).trim();
+      if (trimmed.length < 2) {
+        setNotice({ tone: 'warning', message: 'Type at least two characters to search.' });
+        return;
+      }
+      const revision = ++scannerRevision.current;
+      const looksLikeGs1 = trimmed.startsWith(']d2') || trimmed.startsWith('(01)');
+      if (!looksLikeGs1) {
+        setSubmittedSearch({ text: trimmed, query: trimmed, branchId });
+        return { query: trimmed, revision, blocked: false };
+      }
+      setPending('authenticatePack');
+      try {
+        const verdict = await authenticatePack.mutateAsync({ branchId, payload: trimmed });
+        if (revision !== scannerRevision.current) return;
+        setSubmittedSearch({ text: trimmed, query: verdict.parsed?.gtin ?? trimmed, branchId });
+        setNotice({
+          tone:
+            verdict.status === 'VERIFIED'
+              ? 'success'
+              : verdict.status === 'BLOCKED_RECALL'
+                ? 'danger'
+                : 'warning',
+          message: verdict.explanation,
+        });
+        return {
+          query: verdict.parsed?.gtin ?? trimmed,
+          revision,
+          blocked: verdict.status === 'BLOCKED_RECALL',
+        };
+      } catch (error) {
+        if (revision !== scannerRevision.current) return;
+        setNotice({ tone: 'danger', message: messageFrom(error) });
+      } finally {
+        setPending(null);
+      }
+    },
+    [authenticatePack, branchAuthorized, branchId, busy, query]
+  );
 
   const stageRow = useCallback((row: CounterSearchRow) => {
     setActiveRow(row);
@@ -853,163 +877,198 @@ function ScopedPharmacyCounterConsole({
     return created.id;
   }, [branchId, createSale, saleId, setActiveSale]);
 
-  const addToCart = useCallback(async () => {
-    if (!activeRow || !selectedOption || !preview || busy) return;
-    if (!preview.sufficient) {
-      setNotice({
-        tone: 'warning',
-        message: `Only ${preview.availableUnits} safe units are on hand. Reduce the quantity or capture the shortfall.`,
-      });
-      return;
-    }
-    const overrideLotId = lotOverride?.inventoryLotId ?? null;
-    if (overrideLotId && !lotOverride?.reason.trim()) {
-      setNotice({ tone: 'warning', message: 'Enter a reason before selling a non-FEFO batch.' });
-      return;
-    }
-    setPending('addToCart');
-    setNotice(null);
-    try {
-      const activeSaleId = await ensureSale();
-      const controlled = activeRow.restriction.controlled;
-      const addressOk = patientAddress.trim().length >= 3;
-      const prescriptionOk = controlledAuth.emergency || Boolean(controlledAuth.prescriptionLineId);
-      const emergencyOk =
-        !controlledAuth.emergency || controlledAuth.prescriberName.trim().length > 0;
-      if (
-        controlled &&
-        (!patient ||
-          !addressOk ||
-          !prescriptionOk ||
-          !emergencyOk ||
-          !controlledAuth.staffProfileId ||
-          !/^\d{4,8}$/.test(controlledAuth.pin) ||
-          !navigator.onLine)
-      ) {
+  const addToCart = useCallback(
+    async (scannedRow?: CounterSearchRow, scanRevision?: number) => {
+      const scanIsCurrent = () =>
+        scanRevision === undefined || scanRevision === scannerRevision.current;
+      if (!scanIsCurrent()) return;
+      const row = scannedRow ?? activeRow;
+      const option = scannedRow ? (scannedRow.saleUnits[0] ?? null) : selectedOption;
+      const units = scannedRow ? 1 : quantity;
+      const selectionPreview = scannedRow ? counterSelectionPreview(row, option, units) : preview;
+      const batchOverride = scannedRow ? null : lotOverride;
+      if (!row || !option || !selectionPreview || busy) return;
+      if (!selectionPreview.sufficient) {
         setNotice({
           tone: 'warning',
-          message:
-            'Controlled medicine needs the patient address, a pharmacist PIN, and a prescription or an emergency prescriber. Connect online, then complete the authorization panel.',
+          message: `Only ${selectionPreview.availableUnits} safe units are on hand. Reduce the quantity or capture the shortfall.`,
         });
-        rxPanelRef.current?.focus();
         return;
       }
-      const refSerial = Number(controlledAuth.refSerial);
-      const added = await addLine.mutateAsync({
-        controlledAuthorization:
-          controlled && patient
+      const overrideLotId = batchOverride?.inventoryLotId ?? null;
+      if (overrideLotId && !batchOverride?.reason.trim()) {
+        setNotice({ tone: 'warning', message: 'Enter a reason before selling a non-FEFO batch.' });
+        return;
+      }
+      setPending('addToCart');
+      setNotice(null);
+      try {
+        const activeSaleId = await ensureSale();
+        // Creating a bill can outlive this scan or the mounted counter.
+        if (!scanIsCurrent()) return;
+        const controlled = row.restriction.controlled;
+        const addressOk = patientAddress.trim().length >= 3;
+        const prescriptionOk =
+          controlledAuth.emergency || Boolean(controlledAuth.prescriptionLineId);
+        const emergencyOk =
+          !controlledAuth.emergency || controlledAuth.prescriberName.trim().length > 0;
+        if (
+          controlled &&
+          (!patient ||
+            !addressOk ||
+            !prescriptionOk ||
+            !emergencyOk ||
+            !controlledAuth.staffProfileId ||
+            !/^\d{4,8}$/.test(controlledAuth.pin) ||
+            !navigator.onLine)
+        ) {
+          setNotice({
+            tone: 'warning',
+            message:
+              'Controlled medicine needs the patient address, a pharmacist PIN, and a prescription or an emergency prescriber. Connect online, then complete the authorization panel.',
+          });
+          rxPanelRef.current?.focus();
+          return;
+        }
+        const refSerial = Number(controlledAuth.refSerial);
+        const added = await addLine.mutateAsync({
+          controlledAuthorization:
+            controlled && patient
+              ? {
+                  patientId: patient.patientId,
+                  patientAddress: patientAddress.trim(),
+                  staffProfileId: controlledAuth.staffProfileId,
+                  pin: controlledAuth.pin,
+                  rxSerialWritten: controlledAuth.rxSerialWritten,
+                  emergency: controlledAuth.emergency,
+                  prescriptionLineId: controlledAuth.prescriptionLineId || undefined,
+                  prescriberName: controlledAuth.prescriberName.trim() || undefined,
+                  prescriberRegNo: controlledAuth.prescriberRegNo.trim() || undefined,
+                  refSerial: Number.isInteger(refSerial) && refSerial > 0 ? refSerial : undefined,
+                }
+              : undefined,
+          branchId,
+          saleId: activeSaleId,
+          medicineId: row.medicineId,
+          presentationId: row.presentationId,
+          packLevelId: option.packLevelId,
+          saleUnit: option.kind,
+          quantity: units,
+          canonicalUnitsPerSaleUnit: option.canonicalUnitsPerSaleUnit,
+          // A stable key per (sale, medicine, unit, quantity) so a double-press of
+          // the add chord cannot post the same line twice.
+          idempotencyKey: `counter:${activeSaleId}:${row.medicineId}:${option.packLevelId}:${option.kind}:${units}${overrideLotId ? `:${overrideLotId}` : ''}`,
+          ...(overrideLotId && batchOverride
             ? {
-                patientId: patient.patientId,
-                patientAddress: patientAddress.trim(),
-                staffProfileId: controlledAuth.staffProfileId,
-                pin: controlledAuth.pin,
-                rxSerialWritten: controlledAuth.rxSerialWritten,
-                emergency: controlledAuth.emergency,
-                prescriptionLineId: controlledAuth.prescriptionLineId || undefined,
-                prescriberName: controlledAuth.prescriberName.trim() || undefined,
-                prescriberRegNo: controlledAuth.prescriberRegNo.trim() || undefined,
-                refSerial: Number.isInteger(refSerial) && refSerial > 0 ? refSerial : undefined,
+                override: {
+                  inventoryLotId: overrideLotId,
+                  reason: batchOverride.reason.trim(),
+                  approvalPolicy: COUNTER_OVERRIDE_APPROVAL_POLICY,
+                },
               }
-            : undefined,
-        branchId,
-        saleId: activeSaleId,
-        medicineId: activeRow.medicineId,
-        presentationId: activeRow.presentationId,
-        packLevelId: selectedOption.packLevelId,
-        saleUnit: selectedOption.kind,
-        quantity,
-        canonicalUnitsPerSaleUnit: selectedOption.canonicalUnitsPerSaleUnit,
-        // A stable key per (sale, medicine, unit, quantity) so a double-press of
-        // the add chord cannot post the same line twice.
-        idempotencyKey: `counter:${activeSaleId}:${activeRow.medicineId}:${selectedOption.packLevelId}:${selectedOption.kind}:${quantity}${overrideLotId ? `:${overrideLotId}` : ''}`,
-        ...(overrideLotId && lotOverride
-          ? {
-              override: {
-                inventoryLotId: overrideLotId,
-                reason: lotOverride.reason.trim(),
-                approvalPolicy: COUNTER_OVERRIDE_APPROVAL_POLICY,
-              },
-            }
-          : {}),
-      });
-      if ('blocked' in added) {
-        setNotice({ tone: 'warning', message: added.blocked });
-        return;
+            : {}),
+        });
+        if ('blocked' in added) {
+          setNotice({ tone: 'warning', message: added.blocked });
+          return;
+        }
+        await refreshCart();
+        await utils.pharmacyPrescriptions.counterPatientPanel.invalidate();
+        await utils.pharmacySafety.controlledRegister.invalidate();
+        await utils.pharmacySales.counterSearch.invalidate();
+        setLotOverride(null);
+        setNotice({
+          tone: 'success',
+          message: `${units} × ${row.displayName} added${overrideLotId ? ' with a recorded batch override' : ''}.`,
+        });
+        setQuery('');
+        focusSearch();
+      } catch (error) {
+        const message = messageFrom(error);
+        setNotice({
+          tone: 'danger',
+          message,
+          ...(message === COUNTER_ERROR_MESSAGES.INVALID_ARRANGEMENT
+            ? { inventoryBranchId: branchId }
+            : {}),
+        });
+      } finally {
+        setControlledAuth((value) => ({ ...value, pin: '' }));
+        setPending(null);
       }
-      await refreshCart();
-      await utils.pharmacyPrescriptions.counterPatientPanel.invalidate();
-      await utils.pharmacySafety.controlledRegister.invalidate();
-      await utils.pharmacySales.counterSearch.invalidate();
-      setLotOverride(null);
-      setNotice({
-        tone: 'success',
-        message: `${quantity} × ${activeRow.displayName} added${overrideLotId ? ' with a recorded batch override' : ''}.`,
-      });
-      setQuery('');
-      focusSearch();
-    } catch (error) {
-      const message = messageFrom(error);
-      setNotice({
-        tone: 'danger',
-        message,
-        ...(message === COUNTER_ERROR_MESSAGES.INVALID_ARRANGEMENT
-          ? { inventoryBranchId: branchId }
-          : {}),
-      });
-    } finally {
-      setControlledAuth((value) => ({ ...value, pin: '' }));
-      setPending(null);
-    }
-  }, [
-    activeRow,
-    addLine,
-    controlledAuth,
-    patient,
-    patientAddress,
-    branchId,
-    busy,
-    ensureSale,
-    focusSearch,
-    lotOverride,
-    preview,
-    quantity,
-    refreshCart,
-    selectedOption,
-    utils,
-  ]);
+    },
+    [
+      activeRow,
+      addLine,
+      controlledAuth,
+      patient,
+      patientAddress,
+      branchId,
+      busy,
+      ensureSale,
+      focusSearch,
+      lotOverride,
+      preview,
+      quantity,
+      refreshCart,
+      selectedOption,
+      utils,
+    ]
+  );
 
+  // Authentication belongs to this scan; other pending actions must still block its add.
+  const barcodeBusy = useRef(false);
   useEffect(() => {
-    const token = barcodeAdd.current;
-    if (!token || token !== trimmedQuery || !searchCurrent) return;
-    if (searchQuery.isFetching || searchQuery.isPlaceholderData || searchQuery.isError) return;
-    const found = searchQuery.data?.rows ?? [];
-    if (found.length !== 1) {
-      barcodeAdd.current = null;
-      return;
-    }
-    const row = found[0]!;
-    const nextUnit = row.saleUnits[0]?.kind ?? null;
-    if (!activeRow || activeRow.medicineId !== row.medicineId || saleUnit !== nextUnit) {
-      stageRow(row);
-      return;
-    }
-    barcodeAdd.current = null;
-    if (!preview?.sufficient || busy) return;
-    void addToCart();
-  }, [
-    activeRow,
-    addToCart,
-    busy,
-    preview,
-    saleUnit,
-    searchCurrent,
-    searchQuery.data,
-    searchQuery.isError,
-    searchQuery.isFetching,
-    searchQuery.isPlaceholderData,
-    stageRow,
-    trimmedQuery,
-  ]);
+    barcodeBusy.current = busy && pending !== 'authenticatePack';
+  }, [busy, pending]);
+
+  const addBarcode = useCallback(
+    async (submittedQuery?: string) => {
+      const scan = { text: (submittedQuery ?? query).trim(), branchId, revision: -1 };
+      const inFlight = scannerInFlight.current;
+      // A lock only suppresses duplicates of a scan that is still live; a branch switch or
+      // other invalidation bumps the revision so the operator's retry is not swallowed.
+      if (
+        busy ||
+        (inFlight?.text === scan.text &&
+          inFlight.branchId === scan.branchId &&
+          inFlight.revision === scannerRevision.current)
+      )
+        return;
+      scannerInFlight.current = scan;
+      let revision: number | undefined;
+      try {
+        const searching = runSearch(submittedQuery);
+        // runSearch claims its revision synchronously, before its first await.
+        scan.revision = scannerRevision.current;
+        const search = await searching;
+        if (!search || search.blocked) return;
+        revision = search.revision;
+        const result = await utils.pharmacySales.counterSearch.fetch(
+          { branchId, query: search.query },
+          { staleTime: 10_000 }
+        );
+        if (revision !== scannerRevision.current || result.rows.length !== 1 || barcodeBusy.current)
+          return;
+        const row = result.rows[0]!;
+        const restage =
+          activeRow?.medicineId !== row.medicineId || saleUnit !== (row.saleUnits[0]?.kind ?? null);
+        if (restage) stageRow(row);
+        const scanPreview = restage
+          ? counterSelectionPreview(row, row.saleUnits[0] ?? null, 1)
+          : preview;
+        if (scanPreview?.sufficient) {
+          await addToCart(restage ? row : undefined, revision);
+        }
+      } catch (error) {
+        if (revision === scannerRevision.current)
+          setNotice({ tone: 'danger', message: messageFrom(error) });
+      } finally {
+        if (scannerInFlight.current === scan) scannerInFlight.current = null;
+      }
+    },
+    [activeRow, addToCart, branchId, busy, preview, query, runSearch, saleUnit, stageRow, utils]
+  );
 
   const runTransition = useCallback(
     async (action: 'hold' | 'resume' | 'void', reason?: string) => {
@@ -1130,6 +1189,9 @@ function ScopedPharmacyCounterConsole({
         cashReceivedMinor?: number;
         familyAccountId?: string;
         ownerOverride?: boolean;
+        providerRef?: string;
+        payerName?: string;
+        referenceSkipped?: boolean;
       },
       draft: TenderDraft
     ): Promise<CounterTenderResult> => {
@@ -1170,12 +1232,15 @@ function ScopedPharmacyCounterConsole({
           ...(input.cashReceivedMinor !== undefined
             ? { cashReceivedMinor: input.cashReceivedMinor }
             : {}),
-          idempotencyKey: input.familyAccountId
+          idempotencyKey: input.familyAccountId || input.payerName !== undefined
             ? `counter-tender:${saleId}:${input.type}:${browserUuid()}`
             : `counter-tender:${saleId}:${input.type}:${input.amountMinor}`,
           ...(input.familyAccountId
             ? { familyAccountId: input.familyAccountId, ownerOverride: input.ownerOverride }
             : {}),
+          ...(input.providerRef !== undefined ? { providerRef: input.providerRef } : {}),
+          ...(input.payerName !== undefined ? { payerName: input.payerName } : {}),
+          ...(input.referenceSkipped !== undefined ? { referenceSkipped: input.referenceSkipped } : {}),
         };
         const original: TenderAttempt = { version: 1, scope: recoveryScope, input: payload, draft };
         // Persistence and read-back must succeed before any money write starts.
@@ -1796,8 +1861,8 @@ function ScopedPharmacyCounterConsole({
             }`}
           >
             <StatusPill status={notice.tone} tone={notice.tone} />
-            <div className="min-w-0 space-y-2 text-sm text-text-body">
-              <p>{notice.message}</p>
+            <div className="min-w-0 space-y-2 text-sm">
+              <p className="text-text-body">{notice.message}</p>
               {notice.inventoryBranchId ? (
                 <Link
                   href={`/pharmacy/inventory?branch=${encodeURIComponent(notice.inventoryBranchId)}`}
@@ -1845,14 +1910,13 @@ function ScopedPharmacyCounterConsole({
                     onKeyDown={(event) => {
                       if (event.key !== 'Enter') return;
                       event.preventDefault();
-                      const trimmed = query.trim();
+                      const trimmed = event.currentTarget.value.trim();
                       const barcode =
                         /^\d{6,}$/.test(trimmed) ||
                         trimmed.startsWith(']d2') ||
                         trimmed.startsWith('(01)');
                       if (barcode) {
-                        barcodeAdd.current = trimmed;
-                        void runSearch();
+                        void addBarcode(trimmed);
                         return;
                       }
                       if (activeRow) {
@@ -1949,6 +2013,21 @@ function ScopedPharmacyCounterConsole({
               />
             </SectionCard>
           ) : null}
+
+          <CounterUpsellSuggestions
+            branchId={branchId}
+            medicineIds={currentBill ? cart.lines.map((line) => line.medicineId) : []}
+            disabled={busy || !branchAuthorized}
+            onChoose={(suggestion) => {
+              setQuery(suggestion.displayName);
+              setSubmittedSearch({
+                text: suggestion.displayName,
+                query: suggestion.displayName,
+                branchId,
+              });
+              setActiveRow(null);
+            }}
+          />
 
           <SectionCard
             compact
@@ -2124,6 +2203,10 @@ function ScopedPharmacyCounterConsole({
             <CounterTenderPanel
               key={`${branchId}:${saleId ?? 'none'}:${restoredAttempt?.input.idempotencyKey ?? ''}`}
               ref={tenderRef}
+              manualSettings={manualSettings.data?.settings}
+              manualSettingsLoading={manualSettings.isLoading}
+              manualSettingsError={manualSettings.isError}
+              onReloadManualSettings={() => void manualSettings.refetch()}
               loadKhataAccounts={loadKhataAccounts}
               reauthenticateOwner={reauthenticateOwner}
               printKhataStatement={printKhataStatement}
@@ -2134,7 +2217,9 @@ function ScopedPharmacyCounterConsole({
               disabled={busy || !saleId}
               initialDraft={
                 restoredAttempt
-                  ? { ...restoredAttempt.draft, type: restoredAttempt.input.type }
+                  ? { ...restoredAttempt.draft, type: restoredAttempt.input.type,
+                    payerName: restoredAttempt.input.payerName, providerRef: restoredAttempt.input.providerRef,
+                    referenceSkipped: restoredAttempt.input.referenceSkipped }
                   : undefined
               }
               recoveryOutcome={tenderOutcome}
@@ -2351,6 +2436,7 @@ function ScopedPharmacyCounterConsole({
                     }
               }
               alerts={alerts}
+              acknowledgementScope={saleId && branchId ? { branchId, saleId } : null}
               patient={patient}
               candidates={patientsQuery.data?.patients ?? []}
               query={patientQuery}

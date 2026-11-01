@@ -5,7 +5,7 @@
  * error mapping, strict-zod rejection of unknown keys, recurrence validation
  * mapping, and the DST-correct schedule preview.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   can: vi.fn(async () => true),
@@ -287,26 +287,29 @@ describe('createAssignment — recurrence validation mapping', () => {
 });
 
 describe('updateAssignment — effective-dated successor', () => {
-  it('appends a linked successor and does not rewrite occurrence or evidence rows', async () => {
-    db.restaurantSopAssignment.findUnique.mockResolvedValue({
-      id: 'assignment_1',
-      branchId: 'b1',
-      templateId: 't1',
-      frequency: 'DAILY',
-      interval: 1,
-      daysOfWeek: [],
-      monthDay: null,
-      startDate: new Date('2026-05-01T00:00:00.000Z'),
-      endDate: null,
-      dueTimeMinutes: 600,
-      intervalEndTimeMinutes: null,
-      windowMinutes: 60,
-      graceMinutes: 15,
-      active: true,
-      assigneeTargetType: 'ROLE',
-      assigneeStaffProfileId: null,
-      assigneeJobRoleId: 'jr1',
-    });
+  const assignment = (overrides: Record<string, unknown> = {}) => ({
+    id: 'assignment_1',
+    branchId: 'b1',
+    templateId: 't1',
+    frequency: 'DAILY',
+    interval: 1,
+    daysOfWeek: [],
+    monthDay: null,
+    startDate: new Date('2026-05-01T00:00:00.000Z'),
+    endDate: null,
+    dueTimeMinutes: 600,
+    intervalEndTimeMinutes: null,
+    windowMinutes: 60,
+    graceMinutes: 15,
+    active: true,
+    assigneeTargetType: 'ROLE',
+    assigneeStaffProfileId: null,
+    assigneeJobRoleId: 'jr1',
+    ...overrides,
+  });
+
+  it('keeps the predecessor schedulable until a future successor becomes effective', async () => {
+    db.restaurantSopAssignment.findUnique.mockResolvedValue(assignment());
 
     const successor = await caller().updateAssignment({
       id: 'assignment_1',
@@ -329,9 +332,184 @@ describe('updateAssignment — effective-dated successor', () => {
     );
     expect(db.restaurantSopAssignment.update).toHaveBeenCalledWith({
       where: { id: 'assignment_1' },
-      data: { active: false, supersededAt: expect.any(Date) },
+      data: {
+        active: true,
+        endDate: new Date('2026-05-31T00:00:00.000Z'),
+        supersededAt: expect.any(Date),
+      },
     });
     expect(db.restaurantSopOccurrence.findMany).not.toHaveBeenCalled();
+  });
+
+  it('preserves an earlier predecessor end date when the successor extends the schedule', async () => {
+    db.restaurantSopAssignment.findUnique.mockResolvedValue(
+      assignment({
+        endDate: new Date('2026-05-15T00:00:00.000Z'),
+      })
+    );
+
+    await caller().updateAssignment({
+      id: 'assignment_1',
+      effectiveDate: '2026-06-01',
+      endDate: '2026-06-30',
+    });
+
+    expect(db.restaurantSopAssignment.update).toHaveBeenCalledWith({
+      where: { id: 'assignment_1' },
+      data: {
+        active: true,
+        endDate: new Date('2026-05-15T00:00:00.000Z'),
+        supersededAt: expect.any(Date),
+      },
+    });
+  });
+
+  it('clips a later predecessor end date at the successor boundary', async () => {
+    db.restaurantSopAssignment.findUnique.mockResolvedValue(
+      assignment({
+        endDate: new Date('2026-06-30T00:00:00.000Z'),
+      })
+    );
+
+    await caller().updateAssignment({ id: 'assignment_1', effectiveDate: '2026-06-01' });
+
+    expect(db.restaurantSopAssignment.update).toHaveBeenCalledWith({
+      where: { id: 'assignment_1' },
+      data: {
+        active: true,
+        endDate: new Date('2026-05-31T00:00:00.000Z'),
+        supersededAt: expect.any(Date),
+      },
+    });
+  });
+
+  it('keeps a paused assignment and its successor inactive', async () => {
+    db.restaurantSopAssignment.findUnique.mockResolvedValue(assignment({ active: false }));
+
+    await caller().updateAssignment({ id: 'assignment_1', effectiveDate: '2026-06-01' });
+
+    expect(db.restaurantSopAssignment.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ active: false }) })
+    );
+    expect(db.restaurantSopAssignment.update).toHaveBeenCalledWith({
+      where: { id: 'assignment_1' },
+      data: {
+        active: false,
+        endDate: new Date('2026-05-31T00:00:00.000Z'),
+        supersededAt: expect.any(Date),
+      },
+    });
+  });
+
+  it('deactivates a same-day predecessor without replacing its valid end date', async () => {
+    db.restaurantSopAssignment.findUnique.mockResolvedValue(
+      assignment({ endDate: new Date('2026-05-20T00:00:00.000Z') })
+    );
+
+    await caller().updateAssignment({ id: 'assignment_1', effectiveDate: '2026-05-01' });
+
+    expect(db.restaurantSopAssignment.update).toHaveBeenCalledWith({
+      where: { id: 'assignment_1' },
+      data: {
+        active: false,
+        endDate: new Date('2026-05-20T00:00:00.000Z'),
+        supersededAt: expect.any(Date),
+      },
+    });
+  });
+
+  it('keeps an open-ended same-day predecessor valid while deactivating it', async () => {
+    db.restaurantSopAssignment.findUnique.mockResolvedValue(assignment());
+
+    await caller().updateAssignment({ id: 'assignment_1', effectiveDate: '2026-05-01' });
+
+    expect(db.restaurantSopAssignment.update).toHaveBeenCalledWith({
+      where: { id: 'assignment_1' },
+      data: {
+        active: false,
+        endDate: null,
+        supersededAt: expect.any(Date),
+      },
+    });
+  });
+
+  describe('pause/resume with a pending revision', () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-05-15T12:00:00.000Z'));
+    });
+
+    afterEach(() => vi.useRealTimers());
+
+    async function revise(effectiveDate = '2026-06-01', endDate: Date | null = null) {
+      const predecessor = assignment({
+        endDate,
+        branch: { timezone: 'America/New_York', businessDayCutoff: '02:00' },
+      });
+      db.restaurantSopAssignment.findUnique.mockResolvedValue(predecessor);
+      db.restaurantSopAssignment.update.mockImplementation(async ({ data }) =>
+        Object.assign(predecessor, data)
+      );
+      const successor = await caller().updateAssignment({
+        id: predecessor.id,
+        effectiveDate,
+        endDate: null,
+      });
+      Object.assign(predecessor, { supersededBy: successor });
+      return { predecessor, successor };
+    }
+
+    it('resumes a paused predecessor before its future successor takes effect', async () => {
+      const { predecessor, successor } = await revise();
+      await caller().setAssignmentActive({ id: predecessor.id, active: false });
+      expect(predecessor.active).toBe(false);
+
+      await expect(
+        caller().setAssignmentActive({ id: predecessor.id, active: true })
+      ).resolves.toMatchObject({ active: true, endDate: new Date('2026-05-31T00:00:00Z') });
+      expect(successor).toMatchObject({ active: true, startDate: new Date('2026-06-01T00:00:00Z') });
+    });
+
+    it('allows resuming through the last business day, including after local midnight', async () => {
+      const { predecessor } = await revise();
+      await caller().setAssignmentActive({ id: predecessor.id, active: false });
+      vi.setSystemTime(new Date('2026-06-01T05:59:59.000Z'));
+      await expect(
+        caller().setAssignmentActive({ id: predecessor.id, active: true })
+      ).resolves.toMatchObject({ active: true });
+    });
+
+    it('rejects resuming at the successor business-day cutoff', async () => {
+      const { predecessor } = await revise();
+      await caller().setAssignmentActive({ id: predecessor.id, active: false });
+      vi.setSystemTime(new Date('2026-06-01T06:00:00.000Z'));
+      await expect(
+        caller().setAssignmentActive({ id: predecessor.id, active: true })
+      ).rejects.toMatchObject({ code: 'CONFLICT' });
+      expect(predecessor.active).toBe(false);
+    });
+
+    it.each([null, new Date('2026-05-20T00:00:00Z')])(
+      'rejects resuming a same-start-date predecessor with endDate %s',
+      async (endDate) => {
+        vi.setSystemTime(new Date('2026-04-15T12:00:00Z'));
+        const { predecessor } = await revise('2026-05-01', endDate);
+        await expect(
+          caller().setAssignmentActive({ id: predecessor.id, active: true })
+        ).rejects.toMatchObject({ code: 'CONFLICT' });
+        expect(predecessor.active).toBe(false);
+      }
+    );
+
+    it('rejects resuming after an earlier end date even while the successor is pending', async () => {
+      const { predecessor } = await revise('2026-06-01', new Date('2026-05-15T00:00:00Z'));
+      await caller().setAssignmentActive({ id: predecessor.id, active: false });
+      vi.setSystemTime(new Date('2026-05-16T12:00:00Z'));
+      await expect(
+        caller().setAssignmentActive({ id: predecessor.id, active: true })
+      ).rejects.toMatchObject({ code: 'CONFLICT' });
+      expect(predecessor.active).toBe(false);
+    });
   });
 });
 

@@ -13,7 +13,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => {
   const hasModule = vi.fn<(view: { enabledModules: string[] }, key: string) => boolean>();
   hasModule.mockReturnValue(true);
-  return { hasModule };
+  const postWriteOffEntry = vi.fn();
+  return { hasModule, postWriteOffEntry };
 });
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
@@ -27,6 +28,9 @@ vi.mock('@/server/audit', () => ({
   isAuditExcludedPath: vi.fn(() => true),
   recordTrpcAudit: vi.fn(),
 }));
+vi.mock('@/lib/pharmacy/finance-postings', () => ({
+  postWriteOffEntry: mocks.postWriteOffEntry,
+}));
 
 import { moduleForProcedure } from '@/lib/module-catalog';
 
@@ -36,6 +40,7 @@ import type { TRPCContext } from '../trpc';
 function model() {
   return {
     findFirst: vi.fn().mockResolvedValue(null),
+    findMany: vi.fn().mockResolvedValue([]),
     create: vi
       .fn()
       .mockImplementation(async ({ data }: { data: object }) => ({ id: 'new', ...data })),
@@ -51,6 +56,7 @@ function makeDb() {
         organizationRole: { permissions: [] },
         permissionOverrides: [],
       }),
+      findFirst: vi.fn().mockResolvedValue(null),
     },
     medicine: model(),
     packLevel: model(),
@@ -64,8 +70,15 @@ function makeDb() {
     }),
     pharmacyRecallNotice: model(),
     pharmacyInventoryLot: model(),
+    pharmacySupplier: model(),
+    pharmacySupplierClaim: model(),
     pharmacyStockMovement: model(),
+    pharmacyCustodyRecord: model(),
     pharmacyStockBalance: model(),
+    pharmacyRecallQuarantineAction: {
+      findMany: vi.fn().mockResolvedValue([]),
+    },
+    pharmacyCustodyRecord: model(),
     pharmacyAllocationOverride: model(),
     pharmacyStockDiscrepancy: model(),
     pharmacyRecallAcknowledgement: model(),
@@ -84,6 +97,7 @@ function makeDb() {
     pharmacyPurchaseReturn: model(),
     pharmacyPurchaseReturnLine: model(),
     pharmacyBranch: {
+      findFirst: vi.fn().mockResolvedValue({ id: 'branch_a' }),
       findMany: vi.fn(async ({ where }: { where: { id?: { in: string[] } } }) =>
         (where.id?.in ?? []).map((id) => ({ id }))
       ),
@@ -142,6 +156,201 @@ const CAPABILITY_REFUSAL = {
 beforeEach(() => {
   db = makeDb();
   mocks.hasModule.mockImplementation((view, key) => view.enabledModules.includes(key));
+  mocks.postWriteOffEntry.mockReset();
+});
+
+describe('pharmacy write-off accounting', () => {
+  it('posts the write-off journal in the same transaction as the stock movement', async () => {
+    grant([allow('pharmacy:inventory')]);
+    db.user.findFirst.mockResolvedValue({ id: 'user_b' });
+    const occurredAt = new Date('2026-10-29T00:02:07.000Z');
+    db.user.findFirst.mockResolvedValue({ id: 'user_b' });
+    db.pharmacyInventoryLot.findFirst.mockResolvedValue({
+      id: 'lot_1',
+      unitsPerPack: 10,
+    });
+    db.pharmacyStockBalance.findFirst.mockResolvedValue({
+      onHandUnits: 20,
+      sealedPacks: 2,
+      looseUnits: 0,
+    });
+    db.pharmacyStockMovement.create.mockResolvedValue({
+      id: 'movement_1',
+      occurredAt,
+    });
+
+    await caller().writeOff({
+      branchId: 'branch_a',
+      inventoryLotId: 'lot_1',
+      stockLocationId: 'location_1',
+      units: 10,
+      witnessId: 'user_b',
+      reason: 'Expired stock destroyed',
+      evidenceRef: 'DEST-1',
+      idempotencyKey: 'writeoff-1',
+    });
+
+    expect(db.$transaction).toHaveBeenCalledOnce();
+    expect(mocks.postWriteOffEntry).toHaveBeenCalledWith(
+      db,
+      { organizationId: 'org_a', branchId: 'branch_a', actorId: 'user_a' },
+      { stockMovementId: 'movement_1', at: occurredAt }
+    );
+  });
+});
+
+describe('PH-A5 expiry recovery integration', () => {
+  function position(id: string, expiresAt: Date, unitCostMinor = 2_500) {
+    return {
+      inventoryLotId: id,
+      stockLocationId: 'location_1',
+      onHandUnits: 10,
+      location: { name: 'Main shelf' },
+      lot: {
+        supplierName: 'Fallback name',
+        unitsPerPack: 10,
+        unitCostMinor,
+        printedMrpMinor: 5_000,
+        batch: {
+          batchNumber: 'B-1',
+          expiresAt,
+          state: 'ACTIVE',
+          medicine: {
+            productName: 'OTC medicine',
+            brandName: null,
+            rx: false,
+            otc: true,
+            restricted: false,
+            controlled: false,
+            productFamily: 'PHARMACEUTICAL',
+          },
+        },
+        receiptLines: [{ goodsReceipt: { supplierId: 'supplier_1' } }],
+      },
+    };
+  }
+
+  it('uses the active branch relationship and returns risk/calendar facts', async () => {
+    grant([allow('pharmacy:inventory')]);
+    const expiresAt = new Date(Date.now() + 45 * 86_400_000);
+    db.pharmacyStockBalance.findMany.mockResolvedValueOnce([position('lot_1', expiresAt)]);
+    db.pharmacySupplier.findMany.mockResolvedValue([
+      {
+        id: 'supplier_1',
+        name: 'Branch distributor',
+        relationships: [{ expiryReturnWindowDays: 30 }],
+      },
+    ]);
+
+    const board = await caller().expiryBoardLots({ branchId: 'branch_a', withinDays: 60 });
+
+    expect(db.pharmacySupplier.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        select: expect.objectContaining({
+          relationships: expect.objectContaining({
+            where: { branchId: 'branch_a', active: true },
+          }),
+        }),
+      })
+    );
+    expect(board.riskBuckets).toEqual([
+      { days: 30, valueAtRiskMinor: 0 },
+      { days: 60, valueAtRiskMinor: 25_000 },
+      { days: 90, valueAtRiskMinor: 25_000 },
+    ]);
+    expect(board.rows[0]).toMatchObject({
+      suggestedSupplierId: 'supplier_1',
+      markdownEligible: true,
+      returnDeadlineAt: expiresAt,
+    });
+    expect(board.rows[0]?.returnWindowOpensAt?.toISOString()).toBe(
+      new Date(expiresAt.getTime() - 30 * 86_400_000).toISOString()
+    );
+  });
+
+  it.each([30, 60, 90, 180] as const)(
+    'keeps cumulative risk independent of the %s-day list filter and excludes expired stock',
+    async (withinDays) => {
+      const now = Date.now();
+      const day = 86_400_000;
+      const positions = [
+        position('expired', new Date(now - day)),
+        position('just_expired', new Date(now - 3_600_000)),
+        position('lot_20', new Date(now + 20 * day), 12_500),
+        position('lot_45', new Date(now + 45 * day), 7_500),
+        position('lot_80', new Date(now + 80 * day), 5_000),
+        position('lot_120', new Date(now + 120 * day), 10_000),
+      ];
+      db.pharmacyStockBalance.findMany.mockResolvedValueOnce(
+        positions.filter(
+          (row) => row.lot.batch.expiresAt.getTime() <= now + Math.max(withinDays, 90) * day
+        )
+      );
+
+      const board = await caller().expiryBoardLots({ branchId: 'branch_a', withinDays });
+
+      expect(db.pharmacyStockBalance.findMany).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          where: expect.objectContaining({
+            organizationId: 'org_a',
+            branchId: 'branch_a',
+            lot: {
+              batch: {
+                expiresAt: {
+                  lte: new Date(board.generatedAt.getTime() + Math.max(withinDays, 90) * day),
+                },
+              },
+            },
+          }),
+        })
+      );
+      expect(board.riskBuckets).toEqual([
+        { days: 30, valueAtRiskMinor: 125_000 },
+        { days: 60, valueAtRiskMinor: 200_000 },
+        { days: 90, valueAtRiskMinor: 250_000 },
+      ]);
+      expect(board.rows.map((row) => row.inventoryLotId)).toEqual(
+        positions
+          .filter((row) => row.lot.batch.expiresAt.getTime() <= now + withinDays * day)
+          .map((row) => row.inventoryLotId)
+      );
+    }
+  );
+
+  it.each([
+    ['Rx', { rx: true, restricted: false, controlled: false }],
+    ['restricted', { rx: false, restricted: true, controlled: false }],
+    ['controlled', { rx: false, restricted: false, controlled: true }],
+  ])(
+    'rejects a mark-down mutation for %s medicine before recording an event',
+    async (_kind, flags) => {
+      grant([allow('pharmacy:inventory')]);
+      db.pharmacyInventoryLot.findFirst.mockResolvedValue({
+        printedMrpMinor: 5_000,
+        batch: {
+          expiresAt: new Date(Date.now() + 30 * 86_400_000),
+          state: 'ACTIVE',
+          medicineId: 'medicine_1',
+          medicine: { ...flags, otc: true, productFamily: 'PHARMACEUTICAL' },
+        },
+      });
+
+      await expect(
+        caller().draftExpiryMarkdown({
+          branchId: 'branch_a',
+          inventoryLotId: 'lot_1',
+          stockLocationId: 'location_1',
+          markdownPercent: 20,
+          reason: 'Near expiry',
+        })
+      ).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+        message: 'Mark-down suggestions are limited to OTC and non-drug stock.',
+      });
+      expect(db.pharmacyStockSignalEvent.create).not.toHaveBeenCalled();
+    }
+  );
 });
 
 describe('pharmacy inventory entitlement and tenant boundaries', () => {
@@ -199,7 +408,7 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
     );
   });
 
-  it('normalises a MONTH-precision expiry to the first instant after the month', async () => {
+  it('normalises a MONTH-precision expiry to Karachi midnight after the month', async () => {
     grant([allow('pharmacy:inventory')]);
     db.medicine.findFirst.mockResolvedValue({ id: 'medicine_1' });
     await caller().registerBatch({
@@ -211,7 +420,7 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
     });
     expect(db.pharmacyManufacturingBatch.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ expiresAt: new Date('2027-07-01T00:00:00.000Z') }),
+        data: expect.objectContaining({ expiresAt: new Date('2027-06-30T19:00:00.000Z') }),
       })
     );
   });
@@ -230,12 +439,207 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
     expect(db.pharmacyManufacturingBatch.update).not.toHaveBeenCalled();
   });
 
+  it('rejects a write-off witness who is not an active member assigned to the branch', async () => {
+    grant([allow('pharmacy:inventory')]);
+
+    await expect(
+      caller().writeOff({
+        branchId: 'branch_a',
+        inventoryLotId: 'lot_1',
+        stockLocationId: 'location_1',
+        units: 1,
+        witnessId: 'untrusted_string',
+        reason: 'Damaged package',
+        evidenceRef: 'PHOTO-1',
+        idempotencyKey: 'write-off-1',
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'COAUTH_REQUIRED' });
+
+    expect(db.user.findFirst).toHaveBeenCalledWith({
+      where: {
+        id: 'untrusted_string',
+        organizationId: 'org_a',
+        status: 'ACTIVE',
+        pharmacyBranchAssignments: {
+          some: { organizationId: 'org_a', branchId: 'branch_a', active: true },
+        },
+      },
+      select: { id: true },
+    });
+    expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
+    expect(db.pharmacyCustodyRecord.create).not.toHaveBeenCalled();
+  });
+
+  it('accepts an active same-tenant witness assigned to the write-off branch', async () => {
+    grant([allow('pharmacy:inventory')]);
+    db.user.findFirst.mockResolvedValue({ id: 'witness_a' });
+    db.pharmacyInventoryLot.findFirst.mockResolvedValue({ id: 'lot_1', unitsPerPack: 1 });
+    db.pharmacyStockBalance.findFirst.mockResolvedValue({
+      onHandUnits: 5,
+      sealedPacks: 5,
+      looseUnits: 0,
+    });
+
+    await caller().writeOff({
+      branchId: 'branch_a',
+      inventoryLotId: 'lot_1',
+      stockLocationId: 'location_1',
+      units: 1,
+      witnessId: 'witness_a',
+      reason: 'Damaged package',
+      evidenceRef: 'PHOTO-1',
+      idempotencyKey: 'write-off-1',
+    });
+
+    expect(db.pharmacyCustodyRecord.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        organizationId: 'org_a',
+        branchId: 'branch_a',
+        actorId: 'user_a',
+        witnessId: 'witness_a',
+      }),
+    });
+  });
+
   it.each([
     ['setBatchState', { manufacturingBatchId: 'batch_1', state: 'ACTIVE' }],
     ['acknowledgeRecall', { branchId: 'branch_a', recallNoticeId: 'recall_1' }],
     ['closeRecall', { recallNoticeId: 'recall_1' }],
   ] as const)('requires pharmacy:safety for %s', async (procedure, input) => {
     await expect(caller()[procedure](input as never)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+
+  it('refuses quarantine for an inventory-only caller before any stock access', async () => {
+    grant([allow('pharmacy:inventory')]);
+
+    await expect(
+      caller().quarantinePart({
+        branchId: 'branch_a',
+        inventoryLotId: 'lot_1',
+        stockLocationId: 'location_1',
+        units: 10,
+        reason: 'Suspected contamination',
+        idempotencyKeyPrefix: 'quarantine-1',
+      })
+    ).rejects.toMatchObject(CAPABILITY_REFUSAL);
+
+    expect(db.$transaction).not.toHaveBeenCalled();
+    expect(db.pharmacyBranch.findMany).not.toHaveBeenCalled();
+    expect(db.pharmacyInventoryLot.findFirst).not.toHaveBeenCalled();
+    expect(db.pharmacyStockBalance.findFirst).not.toHaveBeenCalled();
+    expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
+  });
+
+  it('runs quarantine through the real router with exact pharmacy:safety authority', async () => {
+    // The explicit inventory DENY makes this a regression test for the procedure
+    // declaration itself: changing quarantinePart back to inventoryControl must
+    // stop the call before its transaction and movement writes.
+    grant([allow('pharmacy:safety'), deny('pharmacy:inventory')]);
+    db.pharmacyInventoryLot.findFirst.mockResolvedValue({
+      id: 'lot_1',
+      unitsPerPack: 10,
+    });
+    db.pharmacyStockBalance.findFirst.mockResolvedValue({
+      onHandUnits: 20,
+      sealedPacks: 2,
+      looseUnits: 0,
+    });
+
+    await caller().quarantinePart({
+      branchId: 'branch_a',
+      inventoryLotId: 'lot_1',
+      stockLocationId: 'location_1',
+      units: 10,
+      reason: 'Suspected contamination',
+      idempotencyKeyPrefix: 'quarantine-1',
+    });
+
+    expect(db.$transaction).toHaveBeenCalledOnce();
+    expect(db.pharmacyStockMovement.create).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        data: expect.objectContaining({
+          organizationId: 'org_a',
+          branchId: 'branch_a',
+          disposition: 'AVAILABLE',
+          quantityUnits: -10,
+          idempotencyKey: 'quarantine-1:out',
+        }),
+      })
+    );
+    expect(db.pharmacyStockMovement.create).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        data: expect.objectContaining({
+          organizationId: 'org_a',
+          branchId: 'branch_a',
+          disposition: 'QUARANTINE',
+          quantityUnits: 10,
+          idempotencyKey: 'quarantine-1:in',
+        }),
+      })
+    );
+  });
+
+  it.each(['RECALLED', 'QUARANTINED'] as const)(
+    'does not let an ordinary member reactivate a %s batch',
+    async (state) => {
+      db.pharmacyManufacturingBatch.findFirst.mockResolvedValue({
+        id: 'batch_1',
+        medicineId: 'medicine_1',
+        state,
+      });
+
+      await expect(
+        caller().setBatchState({ manufacturingBatchId: 'batch_1', state: 'ACTIVE' })
+      ).rejects.toMatchObject(CAPABILITY_REFUSAL);
+
+      expect(db.pharmacyManufacturingBatch.findFirst).not.toHaveBeenCalled();
+      expect(db.pharmacyManufacturingBatch.update).not.toHaveBeenCalled();
+    }
+  );
+
+  it('does not let a safety user reactivate a batch covered by an open recall', async () => {
+    grant([allow('pharmacy:safety')]);
+    db.pharmacyManufacturingBatch.findFirst.mockResolvedValue({
+      id: 'batch_1',
+      medicineId: 'medicine_1',
+      state: 'RECALLED',
+    });
+    db.pharmacyRecallNotice.count.mockResolvedValue(1);
+
+    await expect(
+      caller().setBatchState({ manufacturingBatchId: 'batch_1', state: 'ACTIVE' })
+    ).rejects.toMatchObject({
+      code: 'CONFLICT',
+      message: 'Close the open recall before reactivating this batch.',
+    });
+
+    expect(db.pharmacyRecallNotice.count).toHaveBeenCalledWith({
+      where: {
+        organizationId: 'org_a',
+        status: 'OPEN',
+        OR: [{ batchId: 'batch_1' }, { medicineId: 'medicine_1' }],
+      },
+    });
+    expect(db.pharmacyManufacturingBatch.update).not.toHaveBeenCalled();
+  });
+
+  it('allows a safety user to reactivate a batch when no recall remains open', async () => {
+    grant([allow('pharmacy:safety')]);
+    db.pharmacyManufacturingBatch.findFirst.mockResolvedValue({
+      id: 'batch_1',
+      medicineId: 'medicine_1',
+      state: 'QUARANTINED',
+    });
+    db.pharmacyRecallNotice.count.mockResolvedValue(0);
+
+    await caller().setBatchState({ manufacturingBatchId: 'batch_1', state: 'ACTIVE' });
+
+    expect(db.pharmacyManufacturingBatch.update).toHaveBeenCalledWith({
+      where: { id: 'batch_1' },
+      data: { state: 'ACTIVE', stateReason: null, stateChangedAt: null },
+    });
   });
 
   it('allows an exact pharmacy:safety grant to acknowledge a recall', async () => {
@@ -245,9 +649,17 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
       },
       permissionOverrides: [],
     });
+    db.$queryRaw.mockResolvedValueOnce([{ id: 'recall_1' }] as never);
+    db.pharmacyRecallNotice.findFirst.mockResolvedValue({
+      id: 'recall_1',
+      batchId: 'batch_1',
+      medicineId: null,
+    });
+    db.pharmacyInventoryLot.findFirst.mockResolvedValue({ id: 'lot_1' });
 
     await caller().acknowledgeRecall({ branchId: 'branch_a', recallNoticeId: 'recall_1' });
 
+    expect(db.$transaction).toHaveBeenCalledTimes(1);
     expect(db.pharmacyRecallAcknowledgement.create).toHaveBeenCalledWith({
       data: {
         organizationId: 'org_a',
@@ -378,6 +790,10 @@ describe.each(GATED_MUTATIONS)(
 
     it('runs for the exact grant', async () => {
       grant([allow(capability)]);
+      if (procedure === 'createRecall') {
+        db.$queryRaw.mockResolvedValueOnce([]);
+        db.$queryRaw.mockResolvedValueOnce([{ id: 'batch_1', medicineId: 'medicine_1' }] as never);
+      }
       await run();
       for (const write of writes()) expect(write).toHaveBeenCalledTimes(1);
     });
@@ -395,6 +811,98 @@ describe.each(GATED_MUTATIONS)(
     });
   }
 );
+
+describe('manual quarantine resolution authorization', () => {
+  const input = {
+    branchId: 'branch_a',
+    inventoryLotId: 'lot_1',
+    stockLocationId: 'location_1',
+    units: 10,
+    reason: 'Inspection passed',
+    idempotencyKeyPrefix: 'release-1',
+  };
+
+  beforeEach(() => {
+    grant([allow('pharmacy:inventory')]);
+    db.pharmacyInventoryLot.findFirst.mockResolvedValue({ id: 'lot_1', unitsPerPack: 10 });
+    db.pharmacyStockBalance.findFirst.mockResolvedValue({
+      onHandUnits: 20,
+      sealedPacks: 2,
+      looseUnits: 0,
+    });
+  });
+
+  it('lets an inventory-only actor release a manual hold with session attribution', async () => {
+    await caller().releaseQuarantinedPart(input);
+    expect(db.pharmacyStockMovement.create).toHaveBeenCalledTimes(2);
+    expect(db.pharmacyStockMovement.create).toHaveBeenNthCalledWith(2, {
+      data: expect.objectContaining({
+        organizationId: 'org_a',
+        branchId: 'branch_a',
+        actorId: 'user_a',
+        disposition: 'AVAILABLE',
+        quantityUnits: 10,
+        reason: 'Inspection passed',
+      }),
+    });
+    expect(db.pharmacyRecallQuarantineAction.findMany).toHaveBeenCalledWith({
+      where: {
+        organizationId: 'org_a',
+        branchId: 'branch_a',
+        inventoryLotId: 'lot_1',
+        stockLocationId: 'location_1',
+        reversedAt: null,
+      },
+      select: { quantityUnits: true, heldMovementId: true },
+    });
+  });
+
+  it.each(['release', 'write-off'])(
+    'refuses regulatory stock through inventory-only %s before posting movements',
+    async (operation) => {
+      db.pharmacyRecallQuarantineAction.findMany.mockResolvedValue([
+        { quantityUnits: 20, heldMovementId: 'recall-held-1' },
+      ]);
+      const result =
+        operation === 'release'
+          ? caller().releaseQuarantinedPart(input)
+          : caller().writeOff({
+              branchId: input.branchId,
+              inventoryLotId: input.inventoryLotId,
+              stockLocationId: input.stockLocationId,
+              units: input.units,
+              reason: input.reason,
+              disposition: 'QUARANTINE',
+              witnessId: 'witness',
+              evidenceRef: 'certificate',
+              idempotencyKey: 'write-off-1',
+            });
+      await expect(result).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+        message: 'INSUFFICIENT_STOCK',
+      });
+      expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
+      expect(db.pharmacyCustodyRecord.create).not.toHaveBeenCalled();
+    }
+  );
+
+  it('still requires safety authority for the regulatory reversal', async () => {
+    await expect(
+      caller().reverseDrapRecall({ recallNoticeId: 'recall_1', reason: 'Cleared' })
+    ).rejects.toMatchObject(CAPABILITY_REFUSAL);
+    expect(db.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('rejects an out-of-tenant branch before looking up stock', async () => {
+    db.pharmacyBranch.findMany.mockResolvedValue([]);
+    await expect(caller().releaseQuarantinedPart(input)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'That record is not in this workspace.',
+    });
+    expect(db.pharmacyInventoryLot.findFirst).not.toHaveBeenCalled();
+    expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
+  });
+});
 
 describe('#355 — remaining stock mutations require pharmacy:inventory', () => {
   it.each([
@@ -434,6 +942,28 @@ describe('#355 — remaining stock mutations require pharmacy:inventory', () => 
         transferId: 'transfer_1',
         lines: [{ lineId: 'line_1', receivedUnits: 1 }],
         idempotencyKeyPrefix: 'receive-1',
+      },
+    ],
+    [
+      'quarantinePart',
+      {
+        branchId: 'branch_a',
+        inventoryLotId: 'lot_1',
+        stockLocationId: 'location_1',
+        units: 1,
+        reason: 'Manual safety hold',
+        idempotencyKeyPrefix: 'hold-1',
+      },
+    ],
+    [
+      'releaseQuarantinedPart',
+      {
+        branchId: 'branch_a',
+        inventoryLotId: 'lot_1',
+        stockLocationId: 'location_1',
+        units: 1,
+        reason: 'Inspection passed',
+        idempotencyKeyPrefix: 'release-1',
       },
     ],
   ] as const)('honours an explicit DENY for %s before handler access', async (procedure, input) => {
@@ -554,6 +1084,7 @@ describe('PUR-07 — the stock action centre transport', () => {
   });
 
   it('refuses a snooze or a dismissal with no reason (§8A invariant 29)', async () => {
+    grant([allow('pharmacy:inventory')]);
     for (const call of [
       () =>
         caller().snoozeSignal({

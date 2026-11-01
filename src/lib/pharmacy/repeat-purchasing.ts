@@ -46,7 +46,7 @@ type Line = {
   id: string;
   quantity: number;
   unitPriceMinor: number;
-  grossMinor: number;
+  grossMinor?: number;
   discountMinor: number;
   canonicalUnits: number;
   createdAt: Date;
@@ -111,7 +111,10 @@ export function summarizeRepeatPurchasing(
       continue;
     }
     const lines = distinct(sale.lines).filter((l) => l.createdAt <= asOf);
-    const gross = lines.reduce((sum, l) => sum + l.grossMinor - l.discountMinor, 0);
+    const gross = lines.reduce(
+      (sum, l) => sum + (l.grossMinor ?? l.quantity * l.unitPriceMinor) - l.discountMinor,
+      0
+    );
     const units = lines.reduce(
       (sum, l) =>
         sum +

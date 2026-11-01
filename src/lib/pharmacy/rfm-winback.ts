@@ -1,0 +1,202 @@
+/**
+ * RFM and win-back policy for pharmacy customers.
+ *
+ * Churn scores are inputs on purpose: churn detection is owned by #729. This
+ * module only turns that existing signal and commercial receipt facts into an
+ * explainable segment and a policy-safe next action.
+ */
+
+export type RfmWinBackConfig = {
+  recencyDays: readonly [number, number, number, number];
+  frequencyReceipts: readonly [number, number, number, number];
+  monetaryMinor: readonly [number, number, number, number];
+  winBackChurnScore: number;
+  clvProjectionPeriods: number;
+};
+
+export type RfmCustomerFacts = {
+  customerId: string;
+  daysSinceLastReceipt: number;
+  receiptCount: number;
+  completedSalesMinor: number;
+  observedPeriods: number;
+  /** Supplied by the churn-scoring feature (#729); it is never recomputed here. */
+  churnScore: number;
+  hasDrugPurchase: boolean;
+  refillDue: boolean;
+  reminderWhatsAppConsent: boolean;
+  marketingWhatsAppConsent: boolean;
+};
+
+export type RfmSegment = 'CHAMPION' | 'LOYAL' | 'PROMISING' | 'NEEDS_ATTENTION' | 'AT_RISK';
+
+export type RfmCustomerResult = {
+  customerId: string;
+  recencyScore: number;
+  frequencyScore: number;
+  monetaryScore: number;
+  segment: RfmSegment;
+  observedValueMinor: number;
+  estimatedClvMinor: number;
+  clvIsEstimate: true;
+  churnScore: number;
+};
+
+function requireFiniteNonNegative(value: number, field: string) {
+  if (!Number.isFinite(value) || value < 0)
+    throw new Error(`${field} must be a finite non-negative number.`);
+}
+
+function validateChurnScore(value: number, field: string) {
+  if (!Number.isFinite(value) || value < 0 || value > 1)
+    throw new Error(`${field} must be a finite number between zero and one.`);
+}
+
+function validateThresholds(values: readonly number[], field: string) {
+  if (values.length !== 4) throw new Error(`${field} must contain four thresholds.`);
+  values.forEach((value) => requireFiniteNonNegative(value, field));
+  if (values.some((value, index) => index > 0 && value <= values[index - 1]!))
+    throw new Error(`${field} thresholds must be strictly increasing.`);
+}
+
+function ascendingScore(value: number, thresholds: readonly number[]) {
+  return 1 + thresholds.filter((threshold) => value >= threshold).length;
+}
+
+function segmentFor(recency: number, frequency: number, monetary: number): RfmSegment {
+  const total = recency + frequency + monetary;
+  if (total >= 13 && recency >= 4) return 'CHAMPION';
+  if (total >= 10 && recency >= 3) return 'LOYAL';
+  if (recency >= 4) return 'PROMISING';
+  if (recency <= 2 && (frequency >= 3 || monetary >= 3)) return 'AT_RISK';
+  return 'NEEDS_ATTENTION';
+}
+
+export function computeRfmSegments(
+  customers: readonly RfmCustomerFacts[],
+  config: RfmWinBackConfig
+): RfmCustomerResult[] {
+  validateThresholds(config.recencyDays, 'recencyDays');
+  validateThresholds(config.frequencyReceipts, 'frequencyReceipts');
+  validateThresholds(config.monetaryMinor, 'monetaryMinor');
+  requireFiniteNonNegative(config.clvProjectionPeriods, 'clvProjectionPeriods');
+
+  return customers.map((customer) => {
+    requireFiniteNonNegative(customer.daysSinceLastReceipt, 'daysSinceLastReceipt');
+    requireFiniteNonNegative(customer.receiptCount, 'receiptCount');
+    requireFiniteNonNegative(customer.completedSalesMinor, 'completedSalesMinor');
+    requireFiniteNonNegative(customer.observedPeriods, 'observedPeriods');
+    validateChurnScore(customer.churnScore, 'churnScore');
+
+    // Lower recency is better. Exact configured boundaries belong to the less
+    // recent band, making boundary behaviour stable and easy to audit.
+    const recencyScore =
+      5 -
+      config.recencyDays.filter((threshold) => customer.daysSinceLastReceipt >= threshold).length;
+    const frequencyScore = ascendingScore(customer.receiptCount, config.frequencyReceipts);
+    const monetaryScore = ascendingScore(customer.completedSalesMinor, config.monetaryMinor);
+    const averagePerPeriod = customer.observedPeriods
+      ? customer.completedSalesMinor / customer.observedPeriods
+      : 0;
+
+    return {
+      customerId: customer.customerId,
+      recencyScore,
+      frequencyScore,
+      monetaryScore,
+      segment: segmentFor(recencyScore, frequencyScore, monetaryScore),
+      observedValueMinor: Math.round(customer.completedSalesMinor),
+      estimatedClvMinor: Math.round(
+        customer.completedSalesMinor + averagePerPeriod * config.clvProjectionPeriods
+      ),
+      clvIsEstimate: true,
+      churnScore: customer.churnScore,
+    };
+  });
+}
+
+export type WinBackAction =
+  | { customerId: string; kind: 'REFILL_DUE_UTILITY'; text: string; includesOffer: false }
+  | { customerId: string; kind: 'NON_DRUG_MARKETING'; text: string; includesOffer: true };
+
+/**
+ * Reviewed non-drug offer copy. The shape matches an approved
+ * `pharmacyMarketingTemplate` row so the owner-approval evidence travels with
+ * the text; unreviewed or caller-built strings are rejected.
+ */
+export type ReviewedNonDrugOffer = {
+  body: string;
+  approvedByUserId: string | null;
+  approvedAt: Date | null;
+};
+
+// Drug, salt, dosage-form, strength and medicine-category vocabulary. Copy
+// matching any of these never reaches a WhatsApp message.
+const PROHIBITED_OFFER_CONTENT = new RegExp(
+  [
+    String.raw`\b(?:prescriptions?|conditions?|allerg\w*|medicines?|medications?|medicated|meds|diagnos\w*|patients?|drugs?|rx|otc|pharmaceuticals?|salts?|generics?|dos(?:e|es|age|ing)|refills?)\b`,
+    String.raw`\b(?:tablets?|capsules?|syrups?|suspensions?|injections?|injectables?|inhalers?|ointments?|eye[- ]?drops|sachets?|suppositor\w*|lozenges?)\b`,
+    String.raw`\b(?:antibiotics?|antidepressants?|antidiabetics?|antihypertensives?|anti[- ]?inflammator\w*|painkillers?|pain[- ]?relief|analgesics?|antacids?|antihistamines?|antiseptics?|antivirals?|antifungals?|steroids?|corticosteroids?|hormon\w*|contracepti\w*|vaccines?|insulin|statins?|opioids?|narcotics?|sedatives?|laxatives?|diuretics?|vitamins?|supplements?|multivitamins?)\b`,
+    String.raw`\b(?:paracetamol|acetaminophen|panadol|ibuprofen|aspirin|diclofenac|naproxen|amoxicillin|azithromycin|ciprofloxacin|metronidazole|omeprazole|esomeprazole|metformin|amlodipine|losartan|atorvastatin|cetirizine|loratadine|salbutamol|prednisolone|codeine|tramadol)\b`,
+    String.raw`\b\d+(?:\.\d+)?\s?(?:mg|mcg|µg|g|ml|iu)\b`,
+  ].join('|'),
+  'i'
+);
+
+/** Rejects unreviewed copy and any drug, salt or medicine-category content. */
+export function validateNonDrugOffer(offer: ReviewedNonDrugOffer): string {
+  const body = typeof offer?.body === 'string' ? offer.body.trim() : '';
+  if (!body) throw new Error('A non-drug offer is required.');
+  if (!offer.approvedByUserId || !(offer.approvedAt instanceof Date))
+    throw new Error('The non-drug offer must be a reviewed, owner-approved template.');
+  if (PROHIBITED_OFFER_CONTENT.test(body))
+    throw new Error('Use generic retail copy without drug, salt or medicine content.');
+  if (!/\bSTOP\b/.test(body.toUpperCase()))
+    throw new Error('Include STOP opt-out instructions in the non-drug offer.');
+  return body;
+}
+
+const REFILL_DUE_UTILITY_TEXT =
+  'Your refill may be due soon. Reply YES if you would like the pharmacy team to contact you.';
+
+/**
+ * Produces mutually exclusive actions. Any customer with drug history is kept
+ * on the fixed utility path, even if they also bought non-drug goods or have
+ * marketing consent. Consequently no caller-controlled copy can leak a drug,
+ * salt, medicine category, or offer into their WhatsApp message. Non-drug
+ * offer copy must be an owner-approved template and pass the content policy.
+ */
+export function planRfmWinBack(
+  customers: readonly RfmCustomerFacts[],
+  config: RfmWinBackConfig,
+  nonDrugOffer: ReviewedNonDrugOffer
+): WinBackAction[] {
+  validateChurnScore(config.winBackChurnScore, 'winBackChurnScore');
+  const nonDrugOfferText = validateNonDrugOffer(nonDrugOffer);
+  return customers.flatMap((customer): WinBackAction[] => {
+    validateChurnScore(customer.churnScore, 'churnScore');
+    if (customer.churnScore < config.winBackChurnScore) return [];
+    if (customer.hasDrugPurchase) {
+      return customer.refillDue && customer.reminderWhatsAppConsent
+        ? [
+            {
+              customerId: customer.customerId,
+              kind: 'REFILL_DUE_UTILITY',
+              text: REFILL_DUE_UTILITY_TEXT,
+              includesOffer: false,
+            },
+          ]
+        : [];
+    }
+    return customer.marketingWhatsAppConsent
+      ? [
+          {
+            customerId: customer.customerId,
+            kind: 'NON_DRUG_MARKETING',
+            text: nonDrugOfferText,
+            includesOffer: true,
+          },
+        ]
+      : [];
+  });
+}

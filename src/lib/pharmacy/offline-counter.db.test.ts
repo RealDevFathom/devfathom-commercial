@@ -1165,7 +1165,6 @@ describeIfDatabase('leased receipt settlement', () => {
             stockLocationId: fixture.locationId,
             canonicalUnits: 1,
             stockMovementId: tag('movement'),
-            grossMinor: 100,
           },
         });
         return sale;

@@ -27,6 +27,7 @@ function fixture(camera: { id: string } | null) {
     },
     pharmacySale: { findMany: vi.fn().mockResolvedValue([]) },
     pharmacyRefund: { findMany: vi.fn().mockResolvedValue([]) },
+    pharmacyTender: { findMany: vi.fn().mockResolvedValue([]) },
     // No parallel run: the close is final without touching migration comparisons.
     pharmacyParallelRunWindow: { count: vi.fn().mockResolvedValue(0) },
     camera: { findFirst: vi.fn().mockResolvedValue(camera) },
