@@ -52,7 +52,9 @@ export async function readBranchChurnInputs(
       GREATEST(COALESCE(SUM(v.value) FILTER (WHERE s."completedAt" > ${windowStart}), 0), 0)::text AS monetary
     FROM pharmacy_sales s
     LEFT JOIN LATERAL (
-      SELECT COALESCE(SUM(l.quantity::bigint * l."unitPriceMinor" - l."discountMinor"), 0) AS value
+      -- grossMinor is the amount actually charged (mixed-lot lines, #636); older
+      -- rows fall back to the uniform line price, matching sale-line-money.ts.
+      SELECT COALESCE(SUM(COALESCE(l."grossMinor"::bigint, l.quantity::bigint * l."unitPriceMinor") - l."discountMinor"), 0) AS value
       FROM pharmacy_sale_lines l
       WHERE l."organizationId" = s."organizationId" AND l."branchId" = s."branchId" AND l."saleId" = s.id
     ) v ON true
@@ -123,13 +125,28 @@ export async function refreshBranchChurnScores(
   return { scored: scores.length, replay: false };
 }
 
+/** Per-branch tenant transaction ceiling. */
+export const CHURN_BRANCH_TIMEOUT_MS = 60_000;
+/**
+ * Wall-clock budget for starting branch work in one cron tick. The platform job
+ * route allows 300s; stopping new branches after this leaves room for one last
+ * branch at its full transaction timeout. Unstarted branches stay unclaimed and
+ * are picked up by the next tick.
+ */
+export const CHURN_TICK_BUDGET_MS = 180_000;
+
 /**
  * Nightly scheduler, driven by the platform job cron. Each active branch of an
  * accessible pharmacy workspace with Pharmacy CRM is scored once per local
  * business date (the first tick after local midnight). Entitlement and
  * lifecycle are re-checked inside the owning tenant transaction.
  */
-export async function processNightlyChurnScoring(now = new Date(), limit = 25) {
+export async function processNightlyChurnScoring(
+  now = new Date(),
+  limit = 25,
+  budgetMs = CHURN_TICK_BUDGET_MS
+) {
+  const deadline = Date.now() + Math.max(0, budgetMs);
   const take = Math.max(1, Math.min(100, Math.floor(limit)));
   const candidates = await withPlatformDb(async (db) => {
     const organizations = await db.organization.findMany({
@@ -137,17 +154,10 @@ export async function processNightlyChurnScoring(now = new Date(), limit = 25) {
       select: { id: true, timezone: true },
       orderBy: { id: 'asc' },
     });
-    // Skip unentitled workspaces here so they cannot starve entitled branches
-    // of the per-tick budget; the tenant transaction re-checks authoritatively.
-    const entitled: typeof organizations = [];
-    for (const org of organizations) {
-      const entitlements = await resolveOrganizationEntitlements(org.id, db, now);
-      if (hasModule(entitlements, 'pharmacy-crm')) entitled.push(org);
-    }
-    if (entitled.length === 0) return [];
-    const timezones = new Map(entitled.map((org) => [org.id, org.timezone]));
+    if (organizations.length === 0) return [];
+    const timezones = new Map(organizations.map((org) => [org.id, org.timezone]));
     const branches = await db.pharmacyBranch.findMany({
-      where: { organizationId: { in: entitled.map((org) => org.id) }, active: true },
+      where: { organizationId: { in: organizations.map((org) => org.id) }, active: true },
       select: { id: true, organizationId: true },
       orderBy: [{ organizationId: 'asc' }, { id: 'asc' }],
     });
@@ -164,21 +174,42 @@ export async function processNightlyChurnScoring(now = new Date(), limit = 25) {
       },
       select: { organizationId: true, branchId: true, businessDate: true },
     });
-    const seen = new Set(
-      done.map((run) => `${run.organizationId}\u0000${run.branchId}\u0000${run.businessDate}`)
-    );
-    return dated
-      .filter(
-        (branch) =>
-          !seen.has(`${branch.organizationId}\u0000${branch.branchId}\u0000${branch.businessDate}`)
-      )
-      .slice(0, take);
+    const key = (run: { organizationId: string; branchId: string; businessDate: string }) =>
+      `${run.organizationId}\u0000${run.branchId}\u0000${run.businessDate}`;
+    const seen = new Set(done.map(key));
+    // Entitlements are resolved only for workspaces that still have a branch
+    // due today, and only until the per-tick budget is filled, so a tick after
+    // all of today's runs are done costs no entitlement lookups. Unentitled
+    // workspaces are skipped here so they cannot starve entitled branches of
+    // the budget; the tenant transaction re-checks authoritatively.
+    const entitled = new Map<string, boolean>();
+    const due: typeof dated = [];
+    for (const branch of dated) {
+      if (due.length >= take) break;
+      if (seen.has(key(branch))) continue;
+      let allowed = entitled.get(branch.organizationId);
+      if (allowed === undefined) {
+        allowed = hasModule(
+          await resolveOrganizationEntitlements(branch.organizationId, db, now),
+          'pharmacy-crm'
+        );
+        entitled.set(branch.organizationId, allowed);
+      }
+      if (allowed) due.push(branch);
+    }
+    return due;
   });
 
   let scoredBranches = 0;
   let scoredCustomers = 0;
   let failed = 0;
-  for (const candidate of candidates) {
+  let deferred = 0;
+  for (const [index, candidate] of candidates.entries()) {
+    // Keep the cron tick inside its route duration; the rest run next tick.
+    if (Date.now() >= deadline) {
+      deferred = candidates.length - index;
+      break;
+    }
     // One branch's failure rolls back only its own transaction (claim included,
     // so the next tick retries) and never blocks other branches or cron work.
     const result = await withTenantDb(
@@ -207,7 +238,7 @@ export async function processNightlyChurnScoring(now = new Date(), limit = 25) {
         if (!hasModule(entitlements, 'pharmacy-crm')) return null;
         return refreshBranchChurnScores(db, candidate, now);
       },
-      { timeout: 60_000 }
+      { timeout: CHURN_BRANCH_TIMEOUT_MS }
     ).catch((error: unknown) => {
       failed += 1;
       console.error('[churn-scoring] branch scoring failed', {
@@ -222,5 +253,5 @@ export async function processNightlyChurnScoring(now = new Date(), limit = 25) {
       scoredCustomers += result.scored;
     }
   }
-  return { due: candidates.length, scoredBranches, scoredCustomers, failed };
+  return { due: candidates.length, scoredBranches, scoredCustomers, failed, deferred };
 }

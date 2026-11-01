@@ -5,7 +5,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { workspaceTimezone, workspaceToday } from '@/lib/timezone';
 import { z } from 'zod';
 import { lockCustomerConsent } from './consent-writer';
-import { readCustomerChurnScores } from './churn-scores';
+import { readCustomerChurnScores, usableChurnScore, type CurrentChurnScore } from './churn-scores';
 
 const id = z.string().trim().min(1).max(128);
 export const marketingScopeInput = z.object({ branchId: id }).strict();
@@ -292,14 +292,16 @@ async function evaluateCampaign(
       'Audience exceeds the 500-customer sandbox limit. Narrow the branch audience before capture.'
     );
   // #729 — nightly churn scores are read only when a rule uses them. A customer
-  // with no current score never matches a churn rule (fail closed).
+  // with no current score (none, stale, or predating their latest receipt)
+  // never matches a churn rule (fail closed).
   const churnScores = rules.all.some((r) => r.field === 'churnScore')
     ? await readCustomerChurnScores(
         db,
         scope,
-        sales.flatMap((sale) => (sale.customerId ? [sale.customerId] : []))
+        sales.flatMap((sale) => (sale.customerId ? [sale.customerId] : [])),
+        now
       )
-    : new Map<string, number>();
+    : new Map<string, CurrentChurnScore>();
   let prepared = 0;
   const exclusions: Record<string, number> = {};
   for (const sale of sales) {
@@ -307,7 +309,7 @@ async function evaluateCampaign(
     const values: Record<(typeof rules.all)[number]['field'], number | undefined> = {
       receiptCount: sale._count._all,
       daysSinceLastReceipt: Math.floor((now.getTime() - sale._max.completedAt.getTime()) / DAY),
-      churnScore: churnScores.get(sale.customerId),
+      churnScore: usableChurnScore(churnScores.get(sale.customerId), sale._max.completedAt),
     };
     if (
       !rules.all.every((r) => {

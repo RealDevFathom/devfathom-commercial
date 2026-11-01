@@ -106,6 +106,10 @@ describe('branch churn inputs', () => {
     expect(query.sql).toContain('s."branchId" = ?');
     expect(query.sql).toContain("s.status = 'COMPLETED'");
     expect(query.sql).toContain('pharmacy_sale_returns');
+    // Mixed-lot lines (#636) are valued at what was actually charged.
+    expect(query.sql).toContain(
+      'COALESCE(l."grossMinor"::bigint, l.quantity::bigint * l."unitPriceMinor")'
+    );
     expect(query.values).toEqual(expect.arrayContaining(['org-a', 'branch-a', now]));
     expect(query.sql).not.toMatch(/prescription|patient|medicine|displayName|phone/i);
   });
@@ -170,6 +174,7 @@ describe('processNightlyChurnScoring', () => {
       scoredBranches: 1,
       scoredCustomers: 2,
       failed: 0,
+      deferred: 0,
     });
     expect(mocks.withTenantDb).toHaveBeenCalledWith('org-a', expect.any(Function), {
       timeout: 60_000,
@@ -185,12 +190,50 @@ describe('processNightlyChurnScoring', () => {
     ]);
     expect(await processNightlyChurnScoring(now, 25)).toMatchObject({ due: 0, scoredBranches: 0 });
     expect(mocks.withTenantDb).not.toHaveBeenCalled();
+    // Once today's runs are done a tick resolves no entitlements at all.
+    expect(mocks.resolveOrganizationEntitlements).not.toHaveBeenCalled();
+  });
+
+  it('resolves entitlements once per workspace with due branches', async () => {
+    mocks.platformDb.organization.findMany.mockResolvedValue([
+      { id: 'org-a', timezone: 'Asia/Karachi' },
+      { id: 'org-b', timezone: 'Asia/Karachi' },
+    ]);
+    mocks.platformDb.pharmacyBranch.findMany.mockResolvedValue([
+      { id: 'branch-a', organizationId: 'org-a' },
+      { id: 'branch-a2', organizationId: 'org-a' },
+      { id: 'branch-b', organizationId: 'org-b' },
+    ]);
+    mocks.platformDb.pharmacyChurnScoringRun.findMany.mockResolvedValue([
+      { organizationId: 'org-b', branchId: 'branch-b', businessDate: '2026-11-02' },
+    ]);
+    expect(await processNightlyChurnScoring(now, 25)).toMatchObject({ due: 2 });
+    // org-a once on the platform side, then once per branch inside its tenant;
+    // org-b has nothing due so its entitlements are never resolved.
+    const orgs = mocks.resolveOrganizationEntitlements.mock.calls.map(([org]) => org);
+    expect(orgs).toEqual(['org-a', 'org-a', 'org-a']);
+    expect(mocks.withTenantDb).toHaveBeenCalledTimes(2);
+  });
+
+  it('stops starting branches once the tick budget is spent and defers the rest', async () => {
+    mocks.platformDb.pharmacyBranch.findMany.mockResolvedValue(
+      Array.from({ length: 3 }, (_, index) => ({ id: `branch-${index}`, organizationId: 'org-a' }))
+    );
+    expect(await processNightlyChurnScoring(now, 25, 0)).toEqual({
+      due: 3,
+      scoredBranches: 0,
+      scoredCustomers: 0,
+      failed: 0,
+      deferred: 3,
+    });
+    expect(mocks.withTenantDb).not.toHaveBeenCalled();
+    expect(mocks.tenantDb.pharmacyChurnScoringRun.createMany).not.toHaveBeenCalled();
   });
 
   it('does not schedule workspaces without Pharmacy CRM', async () => {
     mocks.resolveOrganizationEntitlements.mockResolvedValue({ enabledModules: [] });
     expect(await processNightlyChurnScoring(now, 25)).toMatchObject({ due: 0 });
-    expect(mocks.platformDb.pharmacyBranch.findMany).not.toHaveBeenCalled();
+    expect(mocks.resolveOrganizationEntitlements).toHaveBeenCalledTimes(1);
     expect(mocks.withTenantDb).not.toHaveBeenCalled();
   });
 
@@ -232,6 +275,7 @@ describe('processNightlyChurnScoring', () => {
       scoredBranches: 1,
       scoredCustomers: 2,
       failed: 1,
+      deferred: 0,
     });
     error.mockRestore();
   });

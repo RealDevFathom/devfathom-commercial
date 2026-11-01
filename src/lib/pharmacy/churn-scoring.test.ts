@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   CHURN_MODEL_VERSION,
+  churnScoreToUnitInterval,
   churnRiskBand,
   combineChurnScore,
   frequencyScore,
@@ -155,5 +156,19 @@ describe('RFM churn scoring v1', () => {
         'riskBand',
       ].sort()
     );
+  });
+});
+
+describe('churn score scale bridge (#729 → #750 win-back)', () => {
+  it('converts the stored 0–100 score to the 0–1 scale win-back validates', () => {
+    expect(churnScoreToUnitInterval(0)).toBe(0);
+    expect(churnScoreToUnitInterval(70)).toBe(0.7);
+    expect(churnScoreToUnitInterval(100)).toBe(1);
+  });
+
+  it('rejects values outside the stored range instead of passing them through', () => {
+    expect(() => churnScoreToUnitInterval(-1)).toThrow();
+    expect(() => churnScoreToUnitInterval(101)).toThrow();
+    expect(() => churnScoreToUnitInterval(Number.NaN)).toThrow();
   });
 });

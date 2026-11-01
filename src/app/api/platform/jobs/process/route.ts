@@ -27,7 +27,7 @@ export async function POST(request: Request) {
     // Derived marketing data: a scheduling failure must not fail the job tick.
     processNightlyChurnScoring(new Date(), maxJobs).catch((error: unknown) => {
       console.error('[churn-scoring] scheduler failed', error);
-      return { due: 0, scoredBranches: 0, scoredCustomers: 0, failed: 1 };
+      return { due: 0, scoredBranches: 0, scoredCustomers: 0, failed: 1, deferred: 0 };
     }),
   ]);
   return NextResponse.json({ ...jobs, ownerDigests, churnScoring });

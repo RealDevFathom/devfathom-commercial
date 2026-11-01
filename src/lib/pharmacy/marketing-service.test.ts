@@ -112,7 +112,8 @@ function database() {
     },
   };
 }
-let churnScores: Array<{ customerId: string; churnScore: number }> = [];
+let churnScores: Array<{ customerId: string; churnScore: number; scoredAt: Date }> = [];
+const scoredAt = new Date('2026-10-05T20:00:00Z'); // last night's run
 beforeEach(() => {
   row = campaign();
   captures = [];
@@ -324,13 +325,18 @@ describe('churn score segments (#729)', () => {
 
   it('matches customers by their current branch churn score', async () => {
     churnRule('gte', 70);
-    churnScores = [{ customerId: 'customer-a', churnScore: 82 }];
+    churnScores = [{ customerId: 'customer-a', churnScore: 82, scoredAt }];
     expect(await previewMarketingCampaign(db, scope, row.id, now)).toMatchObject({ prepared: 1 });
     expect(mock.pharmacyCustomerChurnScore.findMany).toHaveBeenCalledWith({
-      where: { organizationId: 'org-a', branchId: 'branch-a', customerId: { in: ['customer-a'] } },
-      select: { customerId: true, churnScore: true },
+      where: {
+        organizationId: 'org-a',
+        branchId: 'branch-a',
+        customerId: { in: ['customer-a'] },
+        scoredAt: { gte: new Date(now.getTime() - 48 * 3_600_000) },
+      },
+      select: { customerId: true, churnScore: true, scoredAt: true },
     });
-    churnScores = [{ customerId: 'customer-a', churnScore: 40 }];
+    churnScores = [{ customerId: 'customer-a', churnScore: 40, scoredAt }];
     expect(await previewMarketingCampaign(db, scope, row.id, now)).toMatchObject({ prepared: 0 });
   });
 
@@ -344,9 +350,23 @@ describe('churn score segments (#729)', () => {
     expect(captures).toEqual([]);
   });
 
+  it('ignores a score that predates the customer\'s latest receipt', async () => {
+    churnRule('gte', 70);
+    churnScores = [{ customerId: 'customer-a', churnScore: 90, scoredAt }];
+    mock.pharmacySale.groupBy.mockResolvedValue([
+      {
+        customerId: 'customer-a',
+        _count: { _all: 3 },
+        // Bought this morning, after last night's scoring run.
+        _max: { completedAt: new Date('2026-10-06T05:00:00Z') },
+      },
+    ]);
+    expect(await previewMarketingCampaign(db, scope, row.id, now)).toMatchObject({ prepared: 0 });
+  });
+
   it('still applies consent after a churn match', async () => {
     churnRule('gte', 70);
-    churnScores = [{ customerId: 'customer-a', churnScore: 90 }];
+    churnScores = [{ customerId: 'customer-a', churnScore: 90, scoredAt }];
     optIn = false;
     await captureMarketingCampaign(db, scope, row.id, now);
     expect(captures).toEqual([]);

@@ -242,6 +242,8 @@ model PharmacyBranch {
   visibilityUnfulfilledDemandEvent         UnfulfilledDemandEvent[]          @relation("UnfulfilledDemandEventVisibilityAnchor")
   visibilityPharmacyRestockInterest        PharmacyRestockInterest[]         @relation("PharmacyRestockInterestVisibilityAnchor")
   branchAssignments                        PharmacyBranchAssignment[]
+  churnScores                              PharmacyCustomerChurnScore[]
+  churnScoringRuns                         PharmacyChurnScoringRun[]
 
   @@unique([organizationId, id], map: "pharmacy_branches_org_id_key")
   @@unique([organizationId, code], map: "pharmacy_branches_org_code_key")
@@ -1149,6 +1151,7 @@ model PharmacyCustomer {
   whatsappOptIn          Boolean?
   whatsappOptInChangedAt DateTime?                    @db.Timestamp(3)
   preferredLanguage      String                       @default("en") @db.VarChar(2)
+  churnScores            PharmacyCustomerChurnScore[]
 
   @@unique([organizationId, id])
   @@unique([organizationId, patientId])
@@ -4947,6 +4950,8 @@ model Organization {
   visibilityPharmacyMoneyIdempotencyKey     PharmacyMoneyIdempotencyKey[]         @relation("PharmacyMoneyIdempotencyKeyVisibilityAnchor")
   visibilityRestaurantTaxOfficialSource     RestaurantTaxOfficialSource[]         @relation("RestaurantTaxOfficialSourceVisibilityAnchor")
   visibilityPharmacyCounterKeymapPreference PharmacyCounterKeymapPreference[]     @relation("PharmacyCounterKeymapPreferenceVisibilityAnchor")
+  pharmacyCustomerChurnScores               PharmacyCustomerChurnScore[]
+  pharmacyChurnScoringRuns                  PharmacyChurnScoringRun[]
 
   @@index([status])
   @@index([deploymentMode])
@@ -13905,6 +13910,10 @@ model PharmacyCustomerChurnScore {
   riskBand       String
   scoredAt       DateTime @default(now())
 
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "pharmacy_customer_churn_scores_organization_fkey")
+  branch       PharmacyBranch   @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Cascade, onUpdate: NoAction, map: "pharmacy_customer_churn_scores_branch_fkey")
+  customer     PharmacyCustomer @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Cascade, onUpdate: NoAction, map: "pharmacy_customer_churn_scores_customer_fkey")
+
   @@unique([organizationId, id])
   @@unique([organizationId, branchId, customerId], map: "pharmacy_customer_churn_scores_customer_key")
   @@index([organizationId, branchId, churnScore], map: "pharmacy_customer_churn_scores_score_idx")
@@ -13920,6 +13929,9 @@ model PharmacyChurnScoringRun {
   modelVersion    Int
   scoredCustomers Int
   createdAt       DateTime @default(now())
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "pharmacy_churn_scoring_runs_organization_fkey")
+  branch       PharmacyBranch @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Cascade, onUpdate: NoAction, map: "pharmacy_churn_scoring_runs_branch_fkey")
 
   @@unique([organizationId, id])
   @@unique([organizationId, branchId, businessDate], map: "pharmacy_churn_scoring_runs_daily_key")

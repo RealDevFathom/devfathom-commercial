@@ -17,6 +17,8 @@
 export const CHURN_MODEL_VERSION = 1;
 export const CHURN_WINDOW_DAYS = 365;
 export const MIN_MONETARY_COHORT = 5;
+/** Upper bound of the stored, segment-facing churn score (`churnScore` is 0–100). */
+export const CHURN_SCORE_MAX = 100;
 export const CHURN_RISK_BANDS = ['LOW', 'MEDIUM', 'HIGH'] as const;
 export type ChurnRiskBand = (typeof CHURN_RISK_BANDS)[number];
 
@@ -65,7 +67,7 @@ export function churnRiskBand(score: number): ChurnRiskBand {
 export function combineChurnScore(r: number, f: number, m: number): number {
   const weighted =
     WEIGHTS.recency * (5 - r) + WEIGHTS.frequency * (5 - f) + WEIGHTS.monetary * (5 - m);
-  return Math.min(100, Math.max(0, Math.round((100 * weighted) / 4)));
+  return Math.min(CHURN_SCORE_MAX, Math.max(0, Math.round((CHURN_SCORE_MAX * weighted) / 4)));
 }
 
 function monetaryScores(rows: ChurnInputRow[]): number[] {
@@ -82,6 +84,18 @@ function monetaryScores(rows: ChurnInputRow[]): number[] {
     }
     return Math.min(5, 1 + Math.floor((5 * low) / sorted.length));
   });
+}
+
+/**
+ * The stored 0–100 churn score as the 0–1 probability-style value that the
+ * win-back policy (`rfm-winback.ts`, #750) validates and compares against
+ * `winBackChurnScore`. Every consumer on the 0–1 scale must convert through
+ * this helper rather than passing stored rows straight through.
+ */
+export function churnScoreToUnitInterval(score: number): number {
+  if (!Number.isFinite(score) || score < 0 || score > CHURN_SCORE_MAX)
+    throw new Error(`churnScore must be a finite number between 0 and ${CHURN_SCORE_MAX}.`);
+  return score / CHURN_SCORE_MAX;
 }
 
 export function scoreChurnRfm(rows: ChurnInputRow[], asOf: Date): ChurnScoreRow[] {
