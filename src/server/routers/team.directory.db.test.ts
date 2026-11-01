@@ -8,8 +8,8 @@
  * this proves those filters on rows, under forced row-level security: a member
  * sees only the projects they share and the tasks they may see, HR the whole
  * project list (as for the contact details) but only the tasks HR may see, and
- * an administrator or the person everything. `team.getAll` answers a DENY on
- * `team:view` with the viewer's own row alone.
+ * an administrator or the person everything. `team.getAll` and `team.getRoster`
+ * answer a DENY on `team:view` with the viewer's own row alone.
  *
  * Requires TEST_DATABASE_URL: a disposable, migrated database reached as the
  * restricted runtime role (neither SUPERUSER nor BYPASSRLS — asserted first).
@@ -63,6 +63,7 @@ let team: (
 ) => Promise<{
   getById: (input: { id: string }) => Promise<unknown>;
   getAll: () => Promise<unknown>;
+  getRoster: () => Promise<unknown>;
 }>;
 
 /** The ids a list of `{ project: { id } }` or `{ task: { id } }` rows names, sorted. */
@@ -244,5 +245,17 @@ describeIfDatabase('team directory, against PostgreSQL', () => {
       [ADMIN, COLLEAGUE, DENIED, MEMBER, PEOPLE_OPS].sort()
     );
     expect(listed.find((row) => row.id === COLLEAGUE)).toMatchObject({ email: '' });
+  });
+
+  it('answers a DENY on team:view in getRoster with the viewer’s own row', async () => {
+    const denied = await team(DENIED, 'EMPLOYEE');
+    await expect(denied.getRoster()).resolves.toEqual([
+      expect.objectContaining({ id: DENIED, name: 'Denied', title: 'Staff' }),
+    ]);
+
+    const listed = (await (await team(MEMBER, 'EMPLOYEE')).getRoster()) as Array<{ id: string }>;
+    expect(listed.map((row) => row.id).sort()).toEqual(
+      [ADMIN, COLLEAGUE, DENIED, MEMBER, PEOPLE_OPS].sort()
+    );
   });
 });

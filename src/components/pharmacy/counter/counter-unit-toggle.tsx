@@ -120,7 +120,7 @@ export function CounterUnitToggle({
             aria-label="Decrease quantity"
             disabled={disabled || quantity <= 1}
             onClick={() => onQuantityChange(Math.max(1, quantity - 1))}
-            className="inline-flex size-8 items-center justify-center rounded-md border border-border-subtle bg-surface-card text-sm text-text-strong focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
+            className="inline-flex size-11 items-center justify-center rounded-md border border-border-subtle bg-surface-card text-sm text-text-strong focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
           >
             −
           </button>
@@ -138,14 +138,14 @@ export function CounterUnitToggle({
               const next = Number.parseInt(event.target.value, 10);
               onQuantityChange(Number.isSafeInteger(next) && next > 0 ? next : 1);
             }}
-            className="h-8 w-16 text-center tabular-nums"
+            className="h-11 w-16 text-center tabular-nums"
           />
           <button
             type="button"
             aria-label="Increase quantity"
             disabled={disabled}
             onClick={() => onQuantityChange(quantity + 1)}
-            className="inline-flex size-8 items-center justify-center rounded-md border border-border-subtle bg-surface-card text-sm text-text-strong focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
+            className="inline-flex size-11 items-center justify-center rounded-md border border-border-subtle bg-surface-card text-sm text-text-strong focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
           >
             +
           </button>

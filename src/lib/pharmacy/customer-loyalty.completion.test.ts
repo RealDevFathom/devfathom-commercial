@@ -25,6 +25,7 @@ function fixture() {
     quantity: 1,
     canonicalUnits: 1,
     unitPriceMinor: 200,
+    grossMinor: 200,
     discountMinor: 0,
     medicine: {
       rx: false,

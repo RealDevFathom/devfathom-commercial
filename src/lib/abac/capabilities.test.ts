@@ -12,6 +12,11 @@ export const intendedPharmacyGrants = {
     'pharmacy:dispense',
     'pharmacy:catalogue-review',
     'pharmacy:safety',
+    'pharmacy:procurement',
+    'pharmacy:inventory',
+    'pharmacy:counter',
+    'pharmacy:close',
+    'pharmacy:manage',
   ],
   pharmacist: ['pharmacy:dispense', 'pharmacy:catalogue-review', 'pharmacy:close'],
   manager: ['pharmacy:manage', 'pharmacy:orders', 'pharmacy:procurement'],
@@ -95,7 +100,12 @@ describe('canonical capability contract (#130)', () => {
 });
 
 describe('sensitive pharmacy actions need an exact grant', () => {
-  const sensitive = ['pharmacy:dispense', 'pharmacy:safety', 'pharmacy:catalogue-review'];
+  const sensitive = [
+    'pharmacy:dispense',
+    'pharmacy:prescriptions',
+    'pharmacy:safety',
+    'pharmacy:catalogue-review',
+  ];
 
   it('never matches them through `*` or `pharmacy:*`', () => {
     for (const action of sensitive) {

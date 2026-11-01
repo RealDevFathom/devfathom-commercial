@@ -6,6 +6,8 @@ import {
   resolvePrescriptionReference,
 } from '@/lib/pharmacy/rx-prescription-reference';
 import { hasModule } from '@/lib/entitlements';
+import { manualPaymentSettingsSchema, isManualTender, manualMerchantPolicies } from '@/lib/pharmacy/manual-payments';
+import { readManualPaymentSettings, saveManualPaymentSettings } from '@/lib/pharmacy/manual-payment-settings';
 import {
   executeSandboxPayment,
   sandboxPaymentInput,
@@ -76,6 +78,11 @@ import {
   findSubstituteProposals,
   PharmacySubstituteError,
 } from '@/lib/pharmacy/substitute-finder';
+import { findUpsellSuggestions, UPSELL_MAX_TRIGGERS } from '@/lib/pharmacy/upsell-suggestions';
+import {
+  DuplicateSaltAcknowledgementError,
+  verifyDuplicateSaltAcknowledgement,
+} from '@/lib/pharmacy/duplicate-salt-acknowledgement';
 import {
   addSaleLine,
   addRestockInterest,
@@ -124,12 +131,15 @@ const tenderInput = z
     saleId: z.string().min(1),
     deviceId: z.string().min(1),
     businessDate: z.date(),
-    type: z.enum(['CASH', 'CARD', 'BANK_TRANSFER', 'WALLET', 'CREDIT', 'KHATA']),
+    type: z.enum(['CASH', 'CARD', 'BANK_TRANSFER', 'WALLET', 'CREDIT', 'KHATA', 'RAAST', 'JAZZCASH', 'EASYPAISA']),
     amountMinor: z.number().int().positive(),
     cashReceivedMinor: z.number().int().nonnegative().optional(),
     idempotencyKey: z.string().trim().min(1).max(160),
     familyAccountId: z.string().trim().min(1).max(128).optional(),
     ownerOverride: z.boolean().optional(),
+    providerRef: z.string().regex(/^\d{4,6}$/).optional(),
+    payerName: z.string().trim().min(1).max(100).optional(),
+    referenceSkipped: z.boolean().optional(),
   })
   .strict();
 const saleUnit = z.enum(['PACK', 'STRIP', 'UNIT']);
@@ -157,7 +167,7 @@ async function scopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> 
 }
 
 async function khataScope(ctx: TRPCContext, branch: string, access: 'read' | 'write') {
-  const scope = await scopeFor(ctx, branch);
+  const scope = await branchScopeOrForbidden(ctx, branch);
   if (
     ctx.organization?.vertical !== 'PHARMACY' ||
     ctx.organization.id !== scope.organizationId ||
@@ -170,27 +180,26 @@ async function khataScope(ctx: TRPCContext, branch: string, access: 'read' | 'wr
     db: ctx.db,
     source: 'TRPC',
   });
-  const hasRequiredAccess =
-    hasCounterAccess ||
-    (access === 'read' &&
-      (await can(subject, 'reports:financial', undefined, {
-        db: ctx.db,
-        source: 'TRPC',
-      })));
-  if (!hasRequiredAccess)
+  const financialReadAccess =
+    !hasCounterAccess &&
+    access === 'read' &&
+    (await can(subject, 'reports:financial', undefined, {
+      db: ctx.db,
+      source: 'TRPC',
+    }));
+  if (!hasCounterAccess && !financialReadAccess)
     throw new TRPCError({
       code: 'FORBIDDEN',
-      message: access === 'write'
-        ? 'Pharmacy counter permission required.'
-        : 'Pharmacy counter or financial reports permission required.',
+      message:
+        access === 'write'
+          ? 'Pharmacy counter permission required.'
+          : 'Pharmacy counter or financial reports permission required.',
     });
-  const available = await ctx.db.pharmacyBranch.findFirst({
-    where: { organizationId: scope.organizationId, id: branch, active: true },
-    select: { id: true },
+  // Finance reads and counter money operations share the active member/branch boundary.
+  return requireCounterReceiptAccess(ctx, branch, false, (rules) => {
+    const decision = counterCapabilityDecision(rules, KHATA_CAPABILITIES);
+    return decision === 'ALLOW' || (decision !== 'DENY' && financialReadAccess);
   });
-  if (!available)
-    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
-  return scope;
 }
 
 async function bindKhataBranch(db: ScopedDb, scope: LedgerScope) {
@@ -343,6 +352,10 @@ const RECEIPT_READ_CAPABILITIES = [
   'pharmacy:counter',
   'pharmacy.counter',
 ] as const;
+// Clinical restrictions do not revoke independently granted Khata access.
+const KHATA_CAPABILITIES = RECEIPT_READ_CAPABILITIES.filter(
+  (action) => action !== 'pharmacy:dispense' && action !== 'pharmacy.dispense'
+);
 
 function capabilityCovers(rule: string, action: string): boolean {
   // Dispensing is regulated: only its canonical, exact ALLOW can grant it. The
@@ -354,10 +367,11 @@ function capabilityCovers(rule: string, action: string): boolean {
 }
 
 function counterCapabilityDecision(
-  rules: { capability: string; effect: string }[]
+  rules: { capability: string; effect: string }[],
+  capabilities: readonly string[] = RECEIPT_READ_CAPABILITIES
 ): 'ALLOW' | 'DENY' | null {
   const matched = rules.filter((rule) =>
-    RECEIPT_READ_CAPABILITIES.some((action) =>
+    capabilities.some((action) =>
       action === 'pharmacy:dispense' && rule.effect === 'DENY'
         ? capabilityMatches(rule.capability, action, 'DENY')
         : capabilityCovers(rule.capability, action)
@@ -390,7 +404,8 @@ async function branchScopeOrForbidden(ctx: TRPCContext, branch: string): Promise
 async function requireCounterReceiptAccess(
   ctx: TRPCContext,
   branch: string,
-  requireCanonicalCounter = false
+  requireCanonicalCounter = false,
+  authorizeMember?: (rules: { capability: string; effect: string }[]) => boolean
 ): Promise<LedgerScope> {
   const scope = await branchScopeOrForbidden(ctx, branch);
   const user = ctx.session!.user;
@@ -436,9 +451,14 @@ async function requireCounterReceiptAccess(
   // Treat the names as one capability family, combining user overrides and
   // role rules so a DENY on any alias beats every ALLOW. A same-organization
   // administrator may bypass a missing grant, but never an explicit denial.
-  const decision = counterCapabilityDecision([...overrides, ...roleRules]);
+  // A caller-supplied member check (Khata, refunds) owns its own decision.
+  const rules = [...overrides, ...roleRules];
   const orgAdmin = user.role === 'ADMIN' && user.organizationId === scope.organizationId;
-  if (decision === 'DENY' || (decision !== 'ALLOW' && !orgAdmin)) {
+  const decision = authorizeMember ? null : counterCapabilityDecision(rules);
+  const capable = authorizeMember
+    ? authorizeMember(rules)
+    : decision === 'ALLOW' || (decision !== 'DENY' && orgAdmin);
+  if (!capable) {
     throw new TRPCError({
       code: 'FORBIDDEN',
       message: 'You do not have permission for this action.',
@@ -511,6 +531,21 @@ async function requireCloseAccess(ctx: TRPCContext) {
 }
 
 export const pharmacySalesRouter = router({
+  manualPaymentSettings: protectedProcedure.input(z.object({ branchId })).query(async ({ ctx, input }) => {
+    const scope = ctx.session!.user.role === 'ADMIN'
+      ? await branchScopeOrForbidden(ctx, input.branchId)
+      : await requireCounterReceiptAccess(ctx, input.branchId, true);
+    return readManualPaymentSettings(ctx.db, scope);
+  }),
+  saveManualPaymentSettings: adminProcedure.input(z.object({
+    branchId, revision: z.number().int().nonnegative(), settings: manualPaymentSettingsSchema,
+  }).strict()).mutation(async ({ ctx, input }) => {
+    // QR and payer destinations must not be copied into request audit payloads.
+    annotateAudit(ctx, { skipInput: true, targetType: 'PharmacyBranch', targetId: input.branchId,
+      metadata: { revision: input.revision, manualMerchantPolicies: manualMerchantPolicies(input.settings) } });
+    const scope = await branchScopeOrForbidden(ctx, input.branchId);
+    return ctx.db.$transaction((tx) => saveManualPaymentSettings(txDb(tx), scope, input));
+  }),
   sandboxPayment: adminProcedure.input(sandboxPaymentInput).mutation(async ({ ctx, input }) => {
     annotateAudit(ctx, { skipInput: true });
     try {
@@ -795,13 +830,17 @@ export const pharmacySalesRouter = router({
       }
     }),
   tenderOutcome: protectedProcedure.input(tenderInput).query(async ({ ctx, input }) => {
+    if (isManualTender(input.type)) annotateAudit(ctx, { skipInput: true });
     const scope =
-      input.type === 'KHATA' || input.familyAccountId
+      input.type === 'KHATA' || input.type === 'CREDIT' || input.familyAccountId
         ? await khataScope(ctx, input.branchId, 'read')
-        : await scopeFor(ctx, input.branchId);
+        : isManualTender(input.type)
+          ? await requireCounterReceiptAccess(ctx, input.branchId, true)
+          : await scopeFor(ctx, input.branchId);
     return readPharmacyTenderOutcome(ctx.db, scope, ledgerTender(input));
   }),
   tender: protectedProcedure.input(tenderInput).mutation(async ({ ctx, input }) => {
+    if (isManualTender(input.type)) annotateAudit(ctx, { skipInput: true });
     try {
       if (input.type !== 'KHATA' && input.type !== 'CREDIT') {
         if (input.familyAccountId !== undefined || input.ownerOverride !== undefined)
@@ -884,7 +923,12 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+        let receiptAccess = false;
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId, false, (rules) => {
+          receiptAccess = counterCapabilityDecision(rules) === 'ALLOW';
+          // The stored tender selects the permission boundary after member/branch checks.
+          return receiptAccess || counterCapabilityDecision(rules, KHATA_CAPABILITIES) === 'ALLOW';
+        });
         return await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
           const tender = await db.pharmacyTender.findFirst({
@@ -895,7 +939,14 @@ export const pharmacySalesRouter = router({
             },
             select: { type: true },
           });
-          if (tender?.type !== 'CREDIT') return refundPharmacyTender(db, scope, input);
+          if (tender?.type !== 'CREDIT') {
+            if (!receiptAccess)
+              throw new TRPCError({
+                code: 'FORBIDDEN',
+                message: 'You do not have permission for this action.',
+              });
+            return refundPharmacyTender(db, scope, input);
+          }
           await khataScope(ctx, input.branchId, 'write');
           await bindKhataBranch(db, scope);
           const charge = await db.pharmacyKhataEvent.findFirst({
@@ -1138,6 +1189,9 @@ export const pharmacySalesRouter = router({
             if (!patient?.cnic?.trim() || !authorization.prescriberName) return blocked;
             const units = input.quantity * input.canonicalUnitsPerSaleUnit;
             const since = new Date(now.getTime() - EMERGENCY_NO_RX_WINDOW_MS);
+            // The limit is organization-wide, so serialize this patient/medicine eligibility
+            // check independently of the branch lock used for stock and register numbering.
+            await db.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${scope.organizationId + ':controlled-emergency:' + authorization.patientId + ':' + medicine.id},0))`;
             const recentSupplies = await db.pharmacyControlledRegisterEntry.count({
               where: {
                 organizationId: scope.organizationId,
@@ -1351,7 +1405,7 @@ export const pharmacySalesRouter = router({
           try {
             return await changeSaleStatus(
               txDb(tx),
-              await scopeFor(ctx, input.branchId),
+              await requireCounterReceiptAccess(ctx, input.branchId),
               input.saleId,
               input.action,
               input.reason,
@@ -1482,6 +1536,26 @@ export const pharmacySalesRouter = router({
         throw error;
       }
     }),
+  /**
+   * #730: rule-based complementary-item suggestions for the bill. Read-only;
+   * never suggests Rx-only, controlled, restricted or high-alert items.
+   */
+  upsellSuggestions: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          medicineIds: z.array(z.string().min(1).max(128)).min(1).max(UPSELL_MAX_TRIGGERS),
+          limit: z.number().int().min(1).max(20).optional(),
+        })
+        .strict()
+    )
+    .query(async ({ ctx, input }) =>
+      findUpsellSuggestions(ctx.db, await scopeFor(ctx, input.branchId), {
+        medicineIds: input.medicineIds,
+        limit: input.limit,
+      })
+    ),
   declineSubstitute: protectedProcedure
     .input(
       z
@@ -1512,6 +1586,54 @@ export const pharmacySalesRouter = router({
       } catch (error) {
         if (error instanceof PharmacySubstituteError) {
           throw new TRPCError({ code: 'NOT_FOUND', message: error.code });
+        }
+        throw error;
+      }
+    }),
+  /**
+   * #724: the operator read the duplicate-salt warning and chose to continue.
+   * Never blocks or mutates the sale; the audit entry IS the acknowledgement,
+   * so it carries the recomputed salt and medicines, not client-supplied text.
+   */
+  acknowledgeDuplicateSalt: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          saleId: z.string().min(1),
+          ingredientKey: z.string().trim().min(1).max(200),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+      try {
+        const acknowledgement = await verifyDuplicateSaltAcknowledgement(ctx.db, scope, input);
+        annotateAudit(ctx, {
+          category: 'PHARMACY_SAFETY',
+          action: 'duplicate_salt_acknowledged',
+          targetType: 'PharmacySale',
+          targetId: acknowledgement.saleId,
+          description: `Counter acknowledged a duplicate active ingredient (${acknowledgement.ingredientName}) on one bill.`,
+          metadata: {
+            branchId: acknowledgement.branchId,
+            ingredientKey: acknowledgement.ingredientKey,
+            ingredientName: acknowledgement.ingredientName,
+            medicineIds: acknowledgement.medicines.map((medicine) => medicine.medicineId),
+            saleLineIds: acknowledgement.medicines.map((medicine) => medicine.ref),
+          },
+        });
+        // This audit row IS the acknowledgement. The audit middleware awaits
+        // writes bound to ctx.db and propagates failures; the HTTP boundary
+        // commits this tenant transaction before sending a successful response.
+        ctx.audit.db = ctx.db;
+        return acknowledgement;
+      } catch (error) {
+        if (error instanceof DuplicateSaltAcknowledgementError) {
+          throw new TRPCError({
+            code: error.reason === 'NOT_FOUND' ? 'NOT_FOUND' : 'BAD_REQUEST',
+            message: error.reason,
+          });
         }
         throw error;
       }
@@ -1746,6 +1868,7 @@ export const pharmacySalesRouter = router({
         return {
           ...receipt,
           dispensingLabelSources,
+          // Completion-time identity keeps browser, A4, and Urdu copies aligned with ESC/POS.
           taxIdentity,
         };
       } catch (error) {

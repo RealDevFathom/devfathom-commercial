@@ -81,6 +81,43 @@ test('meetings expose only the owned scheduled meeting', async ({ page }) => {
   await expect(page.getByText('Atlas launch review E2E', { exact: true })).toBeVisible();
 });
 
+test('Notes is licensed and a created note persists', async ({ page }) => {
+  await signIn(page);
+  await expect(page.locator('a[href="/notes"]').first()).toBeVisible();
+  await page.goto('/notes');
+  await expect(page.getByRole('heading', { name: 'Notes' })).toBeVisible();
+
+  const title = `Agency acceptance note ${Date.now()}`;
+  await page.getByRole('button', { name: 'New Note' }).click();
+  await expect(page).toHaveURL(/\/notes\/[^/?]+(?:\?|$)/);
+  await page.getByRole('button', { name: 'Edit' }).click();
+  await page.getByPlaceholder('Untitled').fill(title);
+  await page.locator('.ProseMirror').fill('Persisted by the Agency A7 acceptance flow.');
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Edit' })).toBeVisible();
+  await expect(page.getByPlaceholder('Untitled')).toBeVisible();
+  await expect(page.getByPlaceholder('Untitled')).toHaveValue(title);
+
+  const notePath = new URL(page.url()).pathname;
+  await page.reload();
+  await expect(page.getByPlaceholder('Untitled')).toBeVisible();
+  await expect(page.getByPlaceholder('Untitled')).toHaveValue(title);
+  await expect(page.locator('.ProseMirror')).toContainText(
+    'Persisted by the Agency A7 acceptance flow.'
+  );
+
+  await page.goto('/notes');
+  const savedNote = page.locator(`a[href="${notePath}"]`);
+  await expect(savedNote).toContainText(title);
+  await savedNote.click();
+  await expect(page).toHaveURL((url) => url.pathname === notePath);
+  await expect(page.getByPlaceholder('Untitled')).toBeVisible();
+  await expect(page.getByPlaceholder('Untitled')).toHaveValue(title);
+  await expect(page.locator('.ProseMirror')).toContainText(
+    'Persisted by the Agency A7 acceptance flow.'
+  );
+});
+
 test('finance exposes the owned transaction and invoice surface', async ({ page }) => {
   await signIn(page);
   await page.goto('/finance');

@@ -20,6 +20,7 @@ export type Runtime = {
   state: 'LOCKED' | 'UNLOCKED';
   branchName: string;
   operator: OperatorOption | null;
+  composerProof?: string;
 };
 type OperatorOption = {
   staffProfileId: string;
@@ -31,6 +32,7 @@ type OperatorOption = {
 export type PosNotice = { tone: 'success' | 'warning' | 'danger' | 'neutral'; message: string };
 type EstablishResponse = {
   sessionToken: string;
+  composerProof?: string;
   session: {
     id: string;
     state: 'LOCKED' | 'UNLOCKED';
@@ -47,6 +49,7 @@ type EstablishResponse = {
   operator?: OperatorOption;
 };
 type SessionResponse = {
+  composerProof?: string;
   session: { id: string; state: 'LOCKED' | 'UNLOCKED'; activeStaffProfileId: string | null };
 };
 export class RequestError extends Error {
@@ -88,7 +91,22 @@ export function messageFrom(body: unknown) {
   return 'Request failed without a safe server message.';
 }
 
-export async function request<T>(path: string, init: RequestInit): Promise<T> {
+type ComposerProofRenewalListener = (originalProof: string, renewedProof: string) => void;
+const composerProofRenewalListeners = new Set<ComposerProofRenewalListener>();
+
+/** Lets a mounted terminal session adopt a proof renewed inside `request`. */
+export function onComposerProofRenewed(listener: ComposerProofRenewalListener): () => void {
+  composerProofRenewalListeners.add(listener);
+  return () => {
+    composerProofRenewalListeners.delete(listener);
+  };
+}
+
+export async function request<T>(
+  path: string,
+  init: RequestInit,
+  canRenewProof = true
+): Promise<T> {
   const response = await fetch(path, {
     ...init,
     cache: 'no-store',
@@ -96,6 +114,34 @@ export async function request<T>(path: string, init: RequestInit): Promise<T> {
     signal: AbortSignal.timeout(10_000),
   });
   const body: unknown = await response.json().catch(() => undefined);
+  const headers = new Headers(init.headers);
+  const originalProof = headers.get('X-POS-Composer-Proof');
+  if (
+    canRenewProof &&
+    response.status === 403 &&
+    messageFrom(body) === 'Missing or invalid POS composer proof.' &&
+    originalProof
+  ) {
+    // Proof validation precedes every command effect. Retry once with the same
+    // body and idempotency key after the server verifies the signed composer.
+    const renewed = await request<{ composerProof: string }>(
+      '/api/restaurant/terminal/renew-composer-proof',
+      {
+        method: 'POST',
+        headers: {
+          'X-Terminal-Session': headers.get('X-Terminal-Session') ?? '',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ originalProof }),
+      },
+      false
+    );
+    headers.set('X-POS-Composer-Proof', renewed.composerProof);
+    for (const listener of composerProofRenewalListeners) {
+      listener(originalProof, renewed.composerProof);
+    }
+    return request<T>(path, { ...init, headers }, false);
+  }
   if (!response.ok) throw new RequestError(response.status, messageFrom(body));
   if (body === undefined || (body === null && (init.method ?? 'GET').toUpperCase() !== 'GET'))
     throw new Error('Server response was unreadable. Retry the same command.');
@@ -105,6 +151,7 @@ export async function request<T>(path: string, init: RequestInit): Promise<T> {
 export function authHeaders(runtime: Runtime, json = false): HeadersInit {
   return {
     'X-Terminal-Session': runtime.sessionToken,
+    ...(runtime.composerProof ? { 'X-POS-Composer-Proof': runtime.composerProof } : {}),
     ...(json ? { 'Content-Type': 'application/json' } : {}),
   };
 }
@@ -160,6 +207,18 @@ export function useTerminalSession({
     idempotencyKeys.current.clear();
     lifecycle.current.onClear?.();
   }, [setRuntime, lifecycle]);
+  useEffect(
+    () =>
+      onComposerProofRenewed((originalProof, renewedProof) => {
+        // Adopt the renewal only for the exact runtime that held the expired proof,
+        // so later commands do not each pay the 403 + renew round-trips again.
+        const current = runtimeBoundary.current;
+        if (current?.composerProof === originalProof) {
+          setRuntime({ ...current, composerProof: renewedProof });
+        }
+      }),
+    [setRuntime]
+  );
   useEffect(() => {
     const update = () => setOnline(navigator.onLine);
     update();
@@ -318,6 +377,7 @@ export function useTerminalSession({
         state: data.session.state,
         branchName: data.device.branchName,
         operator: data.operator ?? null,
+        composerProof: data.composerProof,
       };
       if ((await lifecycle.current.onEstablish?.(established)) === false) return;
       setRuntime(established);
@@ -370,6 +430,7 @@ export function useTerminalSession({
       const unlocked: Runtime = {
         ...runtime,
         state: data.session.state,
+        composerProof: data.composerProof,
         operator:
           operators.find(
             (operator) => operator.staffProfileId === data.session.activeStaffProfileId
@@ -399,6 +460,7 @@ export function useTerminalSession({
         headers: authHeaders(runtime),
       });
       const locked: Runtime = { ...runtime, state: data.session.state, operator: null };
+      delete locked.composerProof;
       setRuntime(locked);
       setOperatorId('');
       setOperators([]);
@@ -429,6 +491,7 @@ export function useTerminalSession({
       const switched: Runtime = {
         ...runtime,
         state: data.session.state,
+        composerProof: data.composerProof,
         operator:
           operators.find(
             (operator) => operator.staffProfileId === data.session.activeStaffProfileId

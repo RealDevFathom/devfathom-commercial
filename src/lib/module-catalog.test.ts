@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   ACCOUNT_PROCEDURES,
+  alternativeModulesForProcedure,
   MODULE_CATALOG,
   PROCEDURE_MODULES,
   ROUTE_MODULES,
@@ -68,9 +69,24 @@ describe('module catalog routing', () => {
     ['restaurantDashboard.getPreferences', 'restaurant-core'],
     ['restaurantGrowth.read', 'restaurant-core'],
     ['restaurantGrowth.review', 'restaurant-core'],
+    ['pharmacyPrescriptions.counterPatients', 'pharmacy-counter'],
+    ['pharmacyPrescriptions.counterPatientPanel', 'pharmacy-counter'],
     ['unknown.list', null],
   ])('maps tRPC procedure %s to %s', (procedure, expected) => {
     expect(moduleForProcedure(procedure)).toBe(expected);
+  });
+
+  it('allows dispensing to license the counter patient prescription procedures', () => {
+    expect(alternativeModulesForProcedure('pharmacyPrescriptions.counterPatients')).toEqual([
+      'pharmacy-dispensing',
+    ]);
+    expect(alternativeModulesForProcedure('pharmacyPrescriptions.counterPatientPanel')).toEqual([
+      'pharmacy-dispensing',
+    ]);
+    expect(alternativeModulesForProcedure('pharmacyPrescriptions.workspace')).toEqual([]);
+    expect(alternativeModulesForProcedure('unknown.list')).toEqual([]);
+    expect(alternativeModulesForProcedure('toString')).toEqual([]);
+    expect(moduleForProcedure('toString')).toBeNull();
   });
 
   it('keeps the notification exception exact while the rest of team remains HR-gated', () => {
@@ -148,6 +164,7 @@ describe('module catalog routing', () => {
   it.each([
     ['/pharmacy/reports', 'pharmacy-reports'],
     ['/pharmacy/reports/repeat-purchasing', 'pharmacy-reports'],
+    ['/pharmacy/accounts/balance-sheet', 'pharmacy-reports'],
     ['/pharmacy/finance', 'pharmacy-finance'],
     ['/pharmacy/inventory', 'pharmacy-inventory'],
     ['/pharmacy/purchasing', 'pharmacy-procurement'],
@@ -184,6 +201,7 @@ describe('module catalog routing', () => {
 
   it.each([
     ['/pharmacy/reports', 'pharmacy-reports'],
+    ['/pharmacy/accounts/balance-sheet', 'pharmacy-reports'],
     ['/pharmacy/finance', 'pharmacy-finance'],
     ['/pharmacy/inventory', 'pharmacy-inventory'],
     ['/pharmacy/purchasing/returns', 'pharmacy-procurement'],

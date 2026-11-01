@@ -26,13 +26,16 @@ function fake() {
     adapter: 'FIXTURE',
     storageObjectName: 'menu.png',
     sourceDeletedAt: null,
+    createdAt: new Date('2026-01-01T00:00:00.000Z'),
     mimeType: 'image/png',
     pageCount: 1,
     defaultCurrency: null,
   };
   const table = {
     findFirst: vi.fn(async () => null),
-    findUnique: vi.fn(async () => record),
+    findUnique: vi.fn<
+      (args: { where: { id: string; organizationId?: string } }) => Promise<typeof record | null>
+    >(async () => record),
     findMany: vi.fn(async () => [record]),
     create: vi.fn(),
     delete: vi.fn(),
@@ -243,6 +246,102 @@ describe('queued availability', () => {
 });
 
 describe('retention survives failed deletion', () => {
+  it('purges an eligible import only within its snapshotted organization', async () => {
+    const { db, record, table, runtime } = fake();
+    table.findMany.mockResolvedValueOnce([record]).mockResolvedValueOnce([]);
+
+    await expect(purgeStaleMenuImports(db, { runtime })).resolves.toEqual({
+      purgedDrafts: 1,
+      deletedSources: 1,
+    });
+
+    expect(runtime.deleteSource).toHaveBeenCalledWith(
+      record.organizationId,
+      record.storageObjectName
+    );
+    expect(table.delete).toHaveBeenCalledWith({
+      where: { id: record.id, organizationId: record.organizationId },
+    });
+  });
+
+  it('rechecks a stale import under the commit lock before deleting it', async () => {
+    const { db, record, table, runtime } = fake();
+    table.findMany.mockResolvedValueOnce([record]).mockResolvedValueOnce([]);
+    table.findUnique.mockImplementation(async () => ({
+      ...record,
+      status: 'COMMITTED',
+    }));
+
+    await expect(purgeStaleMenuImports(db, { runtime })).resolves.toEqual({
+      purgedDrafts: 0,
+      deletedSources: 0,
+    });
+
+    expect(db.$queryRaw).toHaveBeenCalledOnce();
+    expect(vi.mocked(db.$queryRaw).mock.invocationCallOrder[0]).toBeLessThan(
+      table.findUnique.mock.invocationCallOrder[0]!
+    );
+    expect(table.findUnique).toHaveBeenCalledWith({
+      where: { id: record.id, organizationId: record.organizationId },
+      select: {
+        organizationId: true,
+        status: true,
+        storageObjectName: true,
+        createdAt: true,
+      },
+    });
+    expect(runtime.deleteSource).not.toHaveBeenCalled();
+    expect(table.delete).not.toHaveBeenCalled();
+  });
+
+  it('rechecks the retention cutoff under the commit lock before deleting it', async () => {
+    const { db, record, table, runtime } = fake();
+    table.findMany.mockResolvedValueOnce([record]).mockResolvedValueOnce([]);
+    table.findUnique.mockResolvedValue({
+      ...record,
+      createdAt: new Date('2026-10-26T00:00:00.000Z'),
+    });
+
+    await expect(
+      purgeStaleMenuImports(db, { runtime, now: new Date('2026-10-26T12:00:00.000Z') })
+    ).resolves.toEqual({ purgedDrafts: 0, deletedSources: 0 });
+
+    expect(runtime.deleteSource).not.toHaveBeenCalled();
+    expect(table.delete).not.toHaveBeenCalled();
+  });
+
+  it('does not cross the stale snapshot organization boundary', async () => {
+    const { db, record, table, runtime } = fake();
+    record.organizationId = 'org_snapshot';
+    table.findMany.mockResolvedValueOnce([record]).mockResolvedValueOnce([]);
+    table.findUnique.mockImplementation(async ({ where }) =>
+      where.organizationId === 'org_actual'
+        ? {
+            ...record,
+            organizationId: 'org_actual',
+          }
+        : null
+    );
+
+    await expect(purgeStaleMenuImports(db, { runtime })).resolves.toEqual({
+      purgedDrafts: 0,
+      deletedSources: 0,
+    });
+
+    expect(db.$queryRaw).toHaveBeenCalledWith(
+      expect.arrayContaining([expect.stringContaining('"organizationId" = ')]),
+      record.id,
+      record.organizationId
+    );
+    expect(table.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: record.id, organizationId: record.organizationId },
+      })
+    );
+    expect(runtime.deleteSource).not.toHaveBeenCalled();
+    expect(table.delete).not.toHaveBeenCalled();
+  });
+
   it('discard keeps the persisted source obligation on deletion failure', async () => {
     const { db, record, runtime } = fake();
     runtime.deleteSource.mockRejectedValue(new Error('storage unavailable'));
