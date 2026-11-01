@@ -135,12 +135,7 @@ export function SettingsContent() {
       {/* Branch routing for authenticated print bridges. */}
       {isAdmin && <PrintRoutingSection />}
 
-      <Link
-        href="/settings/receipts"
-        className="inline-flex min-h-11 items-center text-sm underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      >
-        Receipt designer and layout settings
-      </Link>
+      <ReceiptDesignerLink />
 
       {/* Account info */}
       <Card className="border-border/60">
@@ -180,6 +175,19 @@ export function SettingsContent() {
       {/* Leave the company */}
       <ResignationSection />
     </div>
+  );
+}
+
+// The receipt designer edits restaurant branch layouts; fail closed for every other vertical.
+export function ReceiptDesignerLink() {
+  if (useEntitlements().vertical !== 'RESTAURANT') return null;
+  return (
+    <Link
+      href="/settings/receipts"
+      className="inline-flex min-h-11 items-center text-sm underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      Receipt designer and layout settings
+    </Link>
   );
 }
 
