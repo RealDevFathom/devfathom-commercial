@@ -514,11 +514,12 @@ export type LowStockFlag = {
 /** Derive on-hand for each rule's (stockItem, location) and flag when < threshold. */
 export async function evaluateLowStockRules(
   db: ScopedDb,
-  filter: { locationId?: string; stockItemId?: string } = {}
+  filter: { locationId?: string; stockItemId?: string; branchIds?: string[] } = {}
 ): Promise<LowStockFlag[]> {
   const rules = await db.restaurantLowStockRule.findMany({
     where: {
       ...(filter.locationId ? { locationId: filter.locationId } : {}),
+      ...(filter.branchIds ? { location: { branchId: { in: filter.branchIds } } } : {}),
       ...(filter.stockItemId ? { stockItemId: filter.stockItemId } : {}),
     },
     select: { id: true, stockItemId: true, locationId: true, threshold: true },
@@ -660,13 +661,19 @@ export type StockOnHandRow = {
 /** Derived on-hand per (stockItem × location) with negative flag. */
 export async function listStockOnHand(
   db: ScopedDb,
-  filter: { locationId?: string; stockItemId?: string; branchId?: string }
+  filter: { locationId?: string; stockItemId?: string; branchId?: string; branchIds?: string[] }
 ): Promise<StockOnHandRow[]> {
   // Determine location IDs for this branch when branchId is supplied.
   let locationIds: string[] | undefined;
-  if (filter.branchId) {
+  if (filter.branchId || filter.branchIds) {
+    if (filter.branchId && filter.branchIds && !filter.branchIds.includes(filter.branchId))
+      return [];
     const locations = await db.restaurantStockLocation.findMany({
-      where: { branchId: filter.branchId, isActive: true },
+      where: {
+        branchId: filter.branchId ?? { in: filter.branchIds! },
+        isActive: true,
+        ...(filter.locationId ? { id: filter.locationId } : {}),
+      },
       select: { id: true },
     });
     locationIds = locations.map((l) => l.id);
@@ -742,6 +749,7 @@ export type ListMovementsInput = {
   to?: Date;
   cursor?: string;
   limit?: number;
+  branchIds?: string[];
 };
 
 export async function listStockMovements(db: ScopedDb, input: ListMovementsInput) {
@@ -750,6 +758,7 @@ export async function listStockMovements(db: ScopedDb, input: ListMovementsInput
     where: {
       ...(input.stockItemId ? { stockItemId: input.stockItemId } : {}),
       ...(input.locationId ? { locationId: input.locationId } : {}),
+      ...(input.branchIds ? { location: { branchId: { in: input.branchIds } } } : {}),
       ...(input.reason ? { reason: input.reason } : {}),
       ...(input.from || input.to
         ? {
@@ -788,6 +797,7 @@ export type ListCountsInput = {
   status?: 'DRAFT' | 'SUBMITTED' | 'POSTED';
   cursor?: string;
   limit?: number;
+  branchIds?: string[];
 };
 
 export async function listStockCounts(db: ScopedDb, input: ListCountsInput) {
@@ -795,6 +805,7 @@ export async function listStockCounts(db: ScopedDb, input: ListCountsInput) {
   const rows = await db.restaurantStockCount.findMany({
     where: {
       ...(input.locationId ? { locationId: input.locationId } : {}),
+      ...(input.branchIds ? { location: { branchId: { in: input.branchIds } } } : {}),
       ...(input.status ? { status: input.status } : {}),
       ...(input.cursor ? { id: { lt: input.cursor } } : {}),
     },
@@ -822,6 +833,7 @@ export type ListTransfersInput = {
   status?: 'DRAFT' | 'DISPATCHED' | 'RECEIVED' | 'CANCELLED';
   cursor?: string;
   limit?: number;
+  branchIds?: string[];
 };
 
 export async function listStockTransfers(db: ScopedDb, input: ListTransfersInput) {
@@ -831,6 +843,12 @@ export async function listStockTransfers(db: ScopedDb, input: ListTransfersInput
       ...(input.sourceLocationId ? { sourceLocationId: input.sourceLocationId } : {}),
       ...(input.destinationLocationId
         ? { destinationLocationId: input.destinationLocationId }
+        : {}),
+      ...(input.branchIds
+        ? {
+            sourceLocation: { branchId: { in: input.branchIds } },
+            destinationLocation: { branchId: { in: input.branchIds } },
+          }
         : {}),
       ...(input.status ? { status: input.status } : {}),
       ...(input.cursor ? { id: { lt: input.cursor } } : {}),
@@ -855,12 +873,18 @@ export async function listStockTransfers(db: ScopedDb, input: ListTransfersInput
 
 export async function listStockBatches(
   db: ScopedDb,
-  filter: { stockItemId?: string; cursor?: string; limit?: number }
+  filter: { stockItemId?: string; cursor?: string; limit?: number; branchIds?: string[] }
 ) {
   const limit = Math.min(filter.limit ?? 50, 200);
   const rows = await db.restaurantStockBatch.findMany({
     where: {
       ...(filter.stockItemId ? { stockItemId: filter.stockItemId } : {}),
+      // A batch can be receipt-less or received again/transferred elsewhere.
+      // Keep its metadata available wherever it has ledger history, including
+      // depleted stock, so historical inventory remains readable.
+      ...(filter.branchIds
+        ? { movements: { some: { location: { branchId: { in: filter.branchIds } } } } }
+        : {}),
       ...(filter.cursor ? { id: { lt: filter.cursor } } : {}),
     },
     orderBy: { createdAt: 'desc' },

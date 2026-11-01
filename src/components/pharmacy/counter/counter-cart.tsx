@@ -105,8 +105,8 @@ export function CounterCartPanel({
               </span>
             </div>
             <p className="truncate text-xs text-text-muted">
-              {line.presentation} · {line.saleUnit.toLowerCase()} · {line.canonicalUnits} units @{' '}
-              {formatMinor(line.unitPriceMinor)}
+              {line.presentation} · {line.saleUnit.toLowerCase()} · {line.canonicalUnits} units · Gross{' '}
+              {formatMinor(line.lineTotalMinor + line.discountMinor)}
               {line.discountMinor > 0 ? ` · less ${formatMinor(line.discountMinor)}` : ''}
             </p>
             {line.controlled ||

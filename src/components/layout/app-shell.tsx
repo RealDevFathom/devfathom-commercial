@@ -209,6 +209,12 @@ export function AppShell({
 
   return (
     <div className="studio-viewport h-dvh overflow-hidden" style={brandStyle}>
+      <a
+        href="#main-content"
+        className="sr-only top-3 left-3 z-[60] rounded-[var(--radius-xs)] bg-primary text-sm font-semibold text-primary-foreground focus:not-sr-only focus:fixed focus:px-4 focus:py-2"
+      >
+        Skip to content
+      </a>
       {/* Mobile overlay */}
       {mobileMenuOpen && (
         <>
@@ -221,7 +227,7 @@ export function AppShell({
             role="dialog"
             aria-modal="true"
             aria-label="Mobile navigation"
-            className="fixed inset-y-0 left-0 z-50 lg:hidden"
+            className="fixed inset-y-0 start-0 z-50 lg:hidden"
           >
             <Sidebar
               brand={brand}
@@ -258,6 +264,8 @@ export function AppShell({
         <AdministratorStaffProfileCallout />
         <TopNavigation />
         <main
+          id="main-content"
+          tabIndex={-1}
           data-slot="app-canvas"
           className={cn(
             'studio-canvas relative min-h-0 flex-1 scroll-pt-24',

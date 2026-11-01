@@ -10,7 +10,13 @@ type MutationOptions = {
 
 const mocks = vi.hoisted(() => ({
   session: {
-    user: { id: 'user_1', organizationId: 'org_1', name: 'Admin', role: 'ADMIN', email: 'admin@example.com' },
+    user: {
+      id: 'user_1',
+      organizationId: 'org_1',
+      name: 'Admin',
+      role: 'ADMIN',
+      email: 'admin@example.com',
+    },
   },
   printingClient: { restaurantDevices: { listPrinters: { query: vi.fn().mockResolvedValue([]) } } },
   apiList: { data: [] as unknown[], error: null as unknown },
@@ -88,7 +94,12 @@ vi.mock('@/lib/trpc', () => ({
 }));
 
 import { EntitlementsProvider } from '@/components/entitlements-provider';
-import { ApiTokensSection, PrintRoutingSection, WebhooksSection } from './settings-content';
+import {
+  ApiTokensSection,
+  PrintRoutingSection,
+  ReceiptDesignerLink,
+  WebhooksSection,
+} from './settings-content';
 
 function entitlementView(
   api: boolean,
@@ -270,6 +281,28 @@ describe('Settings entitlement presentation', () => {
   });
 });
 
+describe('Receipt designer link', () => {
+  const name = 'Receipt designer and layout settings';
+
+  it('links to the receipt designer for restaurant organizations', () => {
+    renderSection(<ReceiptDesignerLink />, {
+      ...entitlementView(true, true),
+      vertical: 'RESTAURANT',
+    });
+    expect(screen.getByRole('link', { name })).toHaveAttribute('href', '/settings/receipts');
+  });
+
+  it.each(['PHARMACY', 'HOSPITALITY', 'AGENCY'] as const)('hides the link for %s', (vertical) => {
+    renderSection(<ReceiptDesignerLink />, { ...entitlementView(true, true), vertical });
+    expect(screen.queryByRole('link', { name })).not.toBeInTheDocument();
+  });
+
+  it('hides the link when the vertical is unknown', () => {
+    renderSection(<ReceiptDesignerLink />, entitlementView(true, true));
+    expect(screen.queryByRole('link', { name })).not.toBeInTheDocument();
+  });
+});
+
 describe('Print routing settings', () => {
   it('preserves sibling station routes when editing and saving the first route', async () => {
     const routes = [
@@ -361,7 +394,11 @@ describe('Print routing settings', () => {
     fireEvent.click(button);
     expect(await screen.findByText(/Paper output is not confirmed/)).toBeVisible();
     fireEvent.click(button);
-    await waitFor(() => expect(fetchMock.mock.calls.filter(([, options]) => options?.method === 'POST')).toHaveLength(2));
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.filter(([, options]) => options?.method === 'POST')).toHaveLength(
+        2
+      )
+    );
     const posts = fetchMock.mock.calls.filter(([, options]) => options?.method === 'POST');
     const first = JSON.parse(posts[0][1]!.body as string);
     expect(first).toMatchObject({

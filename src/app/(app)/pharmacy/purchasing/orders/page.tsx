@@ -123,18 +123,30 @@ export default async function PharmacyOrdersPage({
    * PUR-02: the ranked, explained comparison for every line of the selected
    * requisition. Loaded only for the selection, because the comparison is a
    * priced calculation per line and running it for the whole register would be
-   * work nobody asked for.
+   * work nobody asked for. An arrow bound to a const (not a hoisted function
+   * declaration) so `caller` keeps its non-null narrowing from the guard above.
    */
-  let comparisons: LineComparison[] = [];
-  if (requisition) {
-    comparisons = await Promise.all(
-      requisition.lines.map(async (line) => ({
+  const comparisonsFor = async (source: RequisitionDetail | null): Promise<LineComparison[]> => {
+    if (!source) return [];
+    return Promise.all(
+      source.lines.map(async (line) => ({
         lineId: line.id,
         medicine: line.medicine.productName,
         ranking: (await caller.compareQuotes({ requisitionLineId: line.id })).ranking,
       }))
     );
-  }
+  };
+  const comparisons = await comparisonsFor(requisition);
+  // The two registers can select different requisitions. A draft's ranking
+  // must always come from its own source, including when opened by PO alone.
+  const orderRequisition =
+    order?.status === 'DRAFT' && order.quoteId
+      ? (requisitions.find((row) => row.id === order.requisition?.id) ?? null)
+      : null;
+  const orderComparisons =
+    orderRequisition && orderRequisition.id === requisition?.id
+      ? comparisons
+      : await comparisonsFor(orderRequisition);
 
   /** PUR-03: the stored order, costed, with freight allocated across its lines. */
   let landed: Awaited<ReturnType<typeof caller.landedCost>> | null = null;
@@ -231,6 +243,11 @@ export default async function PharmacyOrdersPage({
             moqPacks: optionalIntegerField(form, `moq:${lineId}`, 'Minimum order', 1),
             leadTimeDays: optionalIntegerField(form, `lead:${lineId}`, 'Lead time', 0),
             minimumExpiryDays: optionalIntegerField(form, `shelf:${lineId}`, 'Shelf life', 0),
+            forecastSellThroughPacks: integerField(
+              form,
+              `forecast:${lineId}`,
+              'Forecast sell-through'
+            ),
             canonicalUnitsPerPack: integerField(form, `unitsPerPack:${lineId}`, 'Units per pack'),
           },
         ];
@@ -609,6 +626,7 @@ export default async function PharmacyOrdersPage({
           {order ? (
             <OrderDetailPanel
               actorId={ctx.session.user.id}
+              comparisons={orderComparisons}
               landed={landed}
               notice={notice}
               onAdvance={advanceOrder}
@@ -784,8 +802,8 @@ function RequisitionDetailPanel({
 
       <SectionCard eyebrow="PUR-02" title="Quote comparison — ranked and explained" titleLevel={2}>
         <p className="text-sm text-text-muted">
-          Ranked by effective landed cost per unit, then lead time, then shelf life. It never
-          awards: every position states its reasons and you decide.
+          Ranked by effective cost per forecast sellable unit, then lead time, then shelf life. It
+          never awards: every position states its reasons and you decide.
         </p>
         {comparisons.every((comparison) => comparison.ranking.length === 0) ? (
           <EmptyState
@@ -820,7 +838,7 @@ function RequisitionDetailPanel({
                               tone={row.comparable ? 'success' : 'danger'}
                             />
                             <span className="font-mono text-sm tabular-nums text-text-strong">
-                              {microMoney(row.effectiveUnitCostMicroMinor)} / unit
+                              {microMoney(row.effectiveSellableUnitCostMicroMinor)} / sellable unit
                             </span>
                           </span>
                         </div>
@@ -829,6 +847,20 @@ function RequisitionDetailPanel({
                           {row.bonusPacks > 0 ? ` + ${row.bonusPacks} free` : ''} · MOQ{' '}
                           {row.moqPacks} · lead {row.leadTimeDays}d · shelf life{' '}
                           {row.minimumExpiryDays}d
+                        </p>
+                        <p className="mt-1 text-xs text-text-muted">
+                          Last quoted price {money(row.pricePerPackMinor)}/pack ·{' '}
+                          {row.forecastSellThroughPacks === null
+                            ? 'Forecast: not recorded (all packs assumed to sell)'
+                            : `Forecast: ${row.forecastSellThroughPacks} packs before expiry (estimate)`}
+                          {row.atRiskPaidPacks > 0
+                            ? ` · ${row.atRiskPaidPacks} paid packs at risk`
+                            : ''}
+                          {row.forecastSellThroughPacks === null
+                            ? ''
+                            : row.atRiskBonusPacks > 0
+                              ? ` · ${row.atRiskBonusPacks} bonus packs at risk`
+                              : ' · all bonus packs forecast to sell'}
                         </p>
                         <ul className="mt-2 space-y-1">
                           {row.reasons.map((reason) => (
@@ -985,6 +1017,15 @@ function RequisitionDetailPanel({
                     notice={notice}
                     type="number"
                   />
+                  <TextField
+                    inputMode="numeric"
+                    label="Forecast sell-through before expiry (packs)"
+                    min={1}
+                    name={`forecast:${line.id}`}
+                    notice={notice}
+                    type="number"
+                    hint="Required: your configurable demand estimate, not a supplier fact."
+                  />
                   <Derived label="Pack" value={`${line.canonicalUnitsPerPack} units per pack`} />
                 </div>
               </fieldset>
@@ -1002,6 +1043,7 @@ function OrderDetailPanel({
   order,
   landed,
   actorId,
+  comparisons,
   notice,
   onAdvance,
 }: {
@@ -1017,9 +1059,13 @@ function OrderDetailPanel({
       landedCostPerCanonicalUnitMicroMinor: number;
       allocatedChargeMinor: number;
       netCostMinor: number;
+      effectiveUnitCostMicroMinor?: number;
+      atRiskBonusPacks?: number;
+      atRiskPaidPacks?: number;
     }[];
   } | null;
   actorId: string;
+  comparisons: LineComparison[];
   notice: Notice | null;
   onAdvance: (form: FormData) => Promise<string>;
 }) {
@@ -1028,6 +1074,17 @@ function OrderDetailPanel({
   const selfApproval =
     order.createdByUserId === actorId || order.requisition?.requestedByUserId === actorId;
   const costByLine = new Map(landed?.lines.map((line) => [line.purchaseOrderLineId, line]) ?? []);
+  // The forecast-based cost and assumption apply to the draft being reviewed;
+  // once submitted, the order is costed and described per stocked unit.
+  const isDraft = order.status === 'DRAFT';
+  const selectedQuoteRanks = order.quoteId
+    ? comparisons.flatMap((comparison) => {
+        const row = comparison.ranking.find((candidate) => candidate.quoteId === order.quoteId);
+        return row
+          ? [{ medicine: comparison.medicine, rank: row.rank, total: comparison.ranking.length }]
+          : [];
+      })
+    : [];
 
   return (
     <SectionCard
@@ -1041,6 +1098,22 @@ function OrderDetailPanel({
         {order.requisition ? ` · from requisition ${order.requisition.reference}` : ''}
         {order.expectedDeliveryAt ? ` · expected ${dateOnly(order.expectedDeliveryAt)}` : ''}
       </p>
+
+      {order.status === 'DRAFT' && selectedQuoteRanks.length > 0 ? (
+        <div className="mt-4 rounded-[var(--radius-sm)] border border-border-subtle bg-surface-sunken p-3">
+          <p className="font-mono text-xs uppercase tracking-[0.12em] text-text-muted">
+            Current distributor ranking for this draft
+          </p>
+          <ul className="mt-2 space-y-1">
+            {selectedQuoteRanks.map((row) => (
+              <li className="text-sm text-text-body" key={row.medicine}>
+                {row.medicine}: selected quote ranked #{row.rank} of {row.total} by effective cost
+                per forecast sellable unit.
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
 
       <div className="mt-4 grid gap-6 sm:grid-cols-4">
         <Stat
@@ -1076,7 +1149,14 @@ function OrderDetailPanel({
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="font-medium text-text-strong">{line.medicine.productName}</span>
                 <span className="font-mono text-sm tabular-nums text-text-strong">
-                  {cost ? microMoney(cost.landedCostPerCanonicalUnitMicroMinor) : '—'} / unit
+                  {cost
+                    ? microMoney(
+                        (isDraft ? cost.effectiveUnitCostMicroMinor : undefined) ??
+                          cost.landedCostPerCanonicalUnitMicroMinor
+                      )
+                    : '—'}{' '}
+                  /{' '}
+                  {isDraft && cost?.effectiveUnitCostMicroMinor ? 'forecast sellable unit' : 'unit'}
                 </span>
               </div>
               <p className="mt-1 text-xs text-text-muted">
@@ -1095,6 +1175,19 @@ function OrderDetailPanel({
                   {line.bonusPacks > 0
                     ? ' · bonus packs divide the same money over more units, so the unit cost falls and no revenue is created.'
                     : ''}
+                </p>
+              ) : null}
+              {isDraft && line.forecastSellThroughPacks ? (
+                <p className="mt-1 text-xs text-text-muted">
+                  Draft comparison assumption: {line.forecastSellThroughPacks} packs forecast to
+                  sell before the {line.minimumExpiryDays ?? 'unrecorded'}-day shelf-life window
+                  (estimate) · lead {line.leadTimeDays ?? 'unrecorded'} days
+                  {cost?.atRiskPaidPacks
+                    ? ` · ${cost.atRiskPaidPacks} paid packs at expiry risk`
+                    : ''}
+                  {cost?.atRiskBonusPacks
+                    ? ` · ${cost.atRiskBonusPacks} bonus packs at expiry risk`
+                    : ' · all bonus packs forecast to sell'}
                 </p>
               ) : null}
             </li>

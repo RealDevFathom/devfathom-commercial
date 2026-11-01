@@ -23,6 +23,7 @@ import { ensurePlatformModule, seedDepartments } from '@/lib/test-support/depart
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
 process.env.PLATFORM_ENCRYPTION_KEY ??= randomBytes(32).toString('base64');
+process.env.AUTH_SECRET ??= randomBytes(32).toString('base64');
 
 const describeIfDatabase = TEST_DATABASE_URL ? describe : describe.skip;
 
@@ -49,6 +50,7 @@ type Deps = {
 };
 
 let deps: Deps;
+const composerProofs = new Map<string, string>();
 
 /** Seeded once per run. */
 const ctx = {
@@ -93,6 +95,8 @@ async function call(
   const headers: Record<string, string> = { 'content-type': 'application/json' };
   if (opts.secret) headers.authorization = `Bearer ${opts.secret}`;
   if (opts.session) headers['x-terminal-session'] = opts.session;
+  const composerProof = opts.session ? composerProofs.get(opts.session) : undefined;
+  if (composerProof) headers['x-pos-composer-proof'] = composerProof;
   if (opts.key) headers['idempotency-key'] = opts.key;
   const url = new URL('https://tenant.test/api/restaurant/probe');
   for (const [k, v] of Object.entries(opts.query ?? {})) url.searchParams.set(k, v);
@@ -138,6 +142,8 @@ async function establishUnlock(secret: string, staffProfileId = ctx.staffA): Pro
     body: { staffProfileId, type: 'PIN', secret: PIN },
   });
   expect(unlocked.status).toBe(200);
+  expect(unlocked.json.composerProof).toEqual(expect.any(String));
+  composerProofs.set(token, unlocked.json.composerProof as string);
   return token;
 }
 
@@ -311,7 +317,12 @@ beforeAll(async () => {
         id: ctx.orderRoleA,
         key: `wha44_orders_a_${suffix}`,
         name: 'WHA-44 Order Taking A',
-        permissions: { create: [{ capability: 'orders:take', effect: 'ALLOW' }] },
+        permissions: {
+          create: [
+            { capability: 'orders:take', effect: 'ALLOW' },
+            { capability: 'kitchen:operate', effect: 'ALLOW' },
+          ],
+        },
       },
     });
     for (const [id, name, email] of [
@@ -378,7 +389,12 @@ beforeAll(async () => {
         id: ctx.orderRoleB,
         key: `wha44_orders_b_${suffix}`,
         name: 'WHA-44 Order Taking B',
-        permissions: { create: [{ capability: 'orders:take', effect: 'ALLOW' }] },
+        permissions: {
+          create: [
+            { capability: 'orders:take', effect: 'ALLOW' },
+            { capability: 'kitchen:operate', effect: 'ALLOW' },
+          ],
+        },
       },
     });
     await tx.user.create({

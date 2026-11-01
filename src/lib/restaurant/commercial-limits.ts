@@ -11,7 +11,11 @@ import {
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { enrollDevice } from './devices';
 import { issuePrintBridgeEnrollmentCode } from './print-bridge-enrollment';
-import { registerPrinterInventoryInTransaction, printerRegistrationsSchema, type PrinterRegistration } from './printer-inventory';
+import {
+  registerPrinterInventoryInTransaction,
+  printerRegistrationsSchema,
+  type PrinterRegistration,
+} from './printer-inventory';
 import {
   createStaffProfile,
   setStaffProfileStatus,
@@ -177,16 +181,30 @@ export async function setStaffProfileStatusWithinCommercialLimit(
 
 /** New bridges consume the registered-device allowance, never the POS-terminal allowance. */
 export async function enrollPrintBridgeWithinCommercialLimits(
-  db: ScopedDb, limits: Readonly<Record<string, number>>, input: { branchId: string; name: string; printers?: PrinterRegistration[] }
+  db: ScopedDb,
+  limits: Readonly<Record<string, number>>,
+  input: { branchId: string; name: string; printers?: PrinterRegistration[] }
 ) {
-  const printers = input.printers === undefined ? undefined : printerRegistrationsSchema.parse(input.printers);
+  const printers =
+    input.printers === undefined ? undefined : printerRegistrationsSchema.parse(input.printers);
   const maximum = configuredLimit(limits, POS_REGISTERED_DEVICES_LIMIT);
   return db.$transaction(async (tx) => {
     await lockOrganization(tx);
     const count = await tx.restaurantRegisteredDevice.count({ where: { status: 'ACTIVE' } });
     if (count >= maximum) limitReached('registered device', maximum);
-    const { device } = await enrollDevice(transactionScopedDb(db, tx), { branchId: input.branchId, name: input.name, kind: 'PRINT_BRIDGE', stationId: null });
-    const printerCount = printers ? await registerPrinterInventoryInTransaction(tx, { branchId: input.branchId, bridgeId: device.id, printers }) : 0;
+    const { device } = await enrollDevice(transactionScopedDb(db, tx), {
+      branchId: input.branchId,
+      name: input.name,
+      kind: 'PRINT_BRIDGE',
+      stationId: null,
+    });
+    const printerCount = printers
+      ? await registerPrinterInventoryInTransaction(tx, {
+          branchId: input.branchId,
+          bridgeId: device.id,
+          printers,
+        })
+      : 0;
     // Use the actual transaction delegate, not the outer client's proxy fallback.
     const enrollment = await issuePrintBridgeEnrollmentCode(tx, device.id);
     return { device, enrollment, printerCount };

@@ -29,6 +29,7 @@ export type MenuErrorReason =
   | 'PRODUCT_NOT_FOUND'
   | 'VARIANT_NOT_FOUND'
   | 'VARIANT_MISMATCH'
+  | 'COMBO_NOT_ORDERABLE'
   | 'MENU_IN_USE';
 
 export class MenuError extends Error {
@@ -62,14 +63,29 @@ async function assertMenuInScope(db: ScopedDb, menuId: string): Promise<void> {
   }
 }
 
-/** A referenced product must exist in the caller's organization. */
+/**
+ * A referenced product must exist in the caller's organization AND be orderable.
+ *
+ * COMBO products can be authored in the catalog (choice groups, component
+ * options, price deltas), but the order flow does not yet accept component
+ * selections, price combo deltas/cardinality, or consume component stock. Until
+ * it does, a COMBO may not be placed on a menu — the only path by which a
+ * product becomes orderable — so its configuration can never be silently
+ * ignored at the till.
+ */
 async function assertProductInScope(db: ScopedDb, productId: string): Promise<void> {
   const product = await db.restaurantProduct.findUnique({
     where: { id: productId },
-    select: { id: true },
+    select: { id: true, type: true },
   });
   if (!product) {
     throw new MenuError('The referenced product does not exist.', 'PRODUCT_NOT_FOUND');
+  }
+  if (product.type === 'COMBO') {
+    throw new MenuError(
+      'Combo products cannot be added to a menu until ordering supports combo selections.',
+      'COMBO_NOT_ORDERABLE'
+    );
   }
 }
 
