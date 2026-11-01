@@ -78,7 +78,7 @@ export default async function PharmacyDefaultCataloguePage() {
           <p className="px-4 pb-4 pt-2 text-sm text-text-muted">
             No catalogue is loaded in this environment yet. New pharmacies are still created
             normally; load the seed with <code>pharmacy:catalogue:load</code>, then apply it to
-            existing pharmacies with <code>pharmacy:catalogue:backfill --apply</code>.
+            existing pharmacies with <code>pharmacy:catalogue:backfill --apply --actor &lt;email&gt;</code>.
           </p>
         )}
       </section>
@@ -90,6 +90,12 @@ export default async function PharmacyDefaultCataloguePage() {
         <h2 id="catalogue-organizations" className="px-4 pt-4 text-sm font-semibold">
           Pharmacies
         </h2>
+        {overview.organizationsTruncated ? (
+          <p className="px-4 pt-2 text-xs text-text-muted" role="status">
+            Showing the first {overview.organizations.length.toLocaleString()} pharmacies by name;
+            more exist. Use the backfill dry run for a complete report.
+          </p>
+        ) : null}
         {overview.organizations.length ? (
           <table className="mt-3 w-full min-w-[980px] text-left">
             <thead className="bg-surface-sunken/60 font-mono text-[9px] uppercase tracking-[0.12em] text-text-muted">

@@ -518,6 +518,12 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
                     <p className="mt-1 text-xs text-text-muted">
                       Non-saleable until reviewed and completed · {candidate.id}
                     </p>
+                    {candidate.catalogueProvenance?.controlledCandidate ? (
+                      <p className="mt-2 text-xs font-medium text-warning" role="status">
+                        Filed under NARCOTICS in the default catalogue. Publish a reviewed
+                        controlled decision (true or false) before it can sell.
+                      </p>
+                    ) : null}
                   </div>
                   <StatusPill status="In review" tone="warning" />
                 </div>

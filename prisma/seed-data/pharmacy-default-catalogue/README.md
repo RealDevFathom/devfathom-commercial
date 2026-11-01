@@ -43,7 +43,9 @@ Unknown categories fall back to `PHARMACEUTICAL` because it has the strictest sa
 `Category` is `NARCOTICS` (two alprazolam strengths among them). The POS bucket is not a
 regulatory schedule — it also holds creams, supplements and syrups — so it is never turned into
 `controlled = true`. A materialised candidate is created `saleable = false`, `controlled = false`,
-and its provenance row carries `controlledCandidate = true` for pharmacist review.
+and its provenance row carries `controlledCandidate = true` for pharmacist review. The hold is
+enforced: such a medicine cannot be published saleable until a reviewed `controlled` assertion
+records the pharmacist's decision, and that decision sets the medicine's `controlled` flag.
 
 ## Using it
 
@@ -52,7 +54,7 @@ Never run these against a database you have not been asked to change.
 ```bash
 bun run pharmacy:catalogue:load                 # load v1 into the platform tables (idempotent)
 bun run pharmacy:catalogue:backfill             # dry run: what each pharmacy is missing
-bun run pharmacy:catalogue:backfill --apply     # materialise into existing pharmacies
+bun run pharmacy:catalogue:backfill --apply --actor ops@example.com  # materialise into existing pharmacies
 ```
 
 Each pharmacy gets its own `Medicine` copies (plus a presentation when a strength or dosage form is

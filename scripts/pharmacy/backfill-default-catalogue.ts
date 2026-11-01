@@ -3,12 +3,17 @@
  * exist (new pharmacies get it from their provisioning job).
  *
  *   tsx --tsconfig scripts/tsconfig.json scripts/pharmacy/backfill-default-catalogue.ts \
- *     [--dry-run | --apply] [--org <organizationId>] [--version <n>] [--key pharmacy-default]
+ *     [--dry-run | --apply --actor <operator email>] [--org <organizationId>] [--version <n>]
+ *     [--key pharmacy-default]
  *
  * DRY RUN BY DEFAULT. Without --apply it only reads, and prints what each
  * pharmacy holds and is missing. With --apply each pharmacy is materialised in
  * batches of 1,000 inside its own RLS scope: medicines with zero stock, never
  * a batch or price, never overwriting a medicine the pharmacy already holds.
+ * A medicine the pharmacy already holds from another route (manual entry, the
+ * importer wizard, a reference connector) is matched by name, brand and
+ * presentation and skipped, never duplicated; the dry run reports possible
+ * matches. Every applied batch writes a tenant audit row naming --actor.
  * Idempotent — running it twice creates nothing the second time. Exits
  * non-zero if any organization failed; the others still complete.
  */
@@ -26,6 +31,10 @@ async function main() {
   if (apply && process.argv.includes('--dry-run')) {
     throw new Error('Choose one of --dry-run or --apply.');
   }
+  const actor = argument('--actor')?.trim();
+  if (apply && (!actor || actor.startsWith('--'))) {
+    throw new Error('--apply requires --actor <operator email> for the tenant audit trail.');
+  }
   const versionArgument = argument('--version');
   const version = versionArgument === undefined ? undefined : Number(versionArgument);
   if (version !== undefined && (!Number.isInteger(version) || version < 1)) {
@@ -36,6 +45,7 @@ async function main() {
     organizationId: argument('--org'),
     catalogueKey: argument('--key') ?? DEFAULT_CATALOGUE_KEY,
     version,
+    actor,
   });
   console.log(JSON.stringify(report, null, 2));
   if (!apply) console.log('Dry run: nothing was written. Re-run with --apply to materialise.');

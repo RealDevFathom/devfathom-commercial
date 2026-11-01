@@ -38,7 +38,16 @@ import {
  * — the catalogue has no DRAP registration, and `assertSaleable` requires one
  * (with provenance) before a medicine may sell. Items the source filed under
  * NARCOTICS additionally carry `controlledCandidate` on their provenance row
- * for pharmacist review; the catalogue never invents a controlled flag.
+ * for pharmacist review; the catalogue never invents a controlled flag. The
+ * hold is enforced at publication: such a medicine cannot become saleable until
+ * a reviewed `controlled` decision is published with it. Tenants may read and
+ * insert provenance but never update or delete it (RLS), so the flag sticks.
+ *
+ * NO DUPLICATES OF WHAT A PHARMACY ALREADY HAS. A medicine the tenant holds
+ * from another route (manual entry, the importer wizard, a reference
+ * connector) is matched by name, brand and presentation and skipped, reported
+ * as `matchedExisting`. Every batch that creates medicines writes one tenant
+ * audit row naming the job, requesting operator or backfill actor, and counts.
  *
  * IDEMPOTENT AND RESUMABLE. The provenance row is unique per (organization,
  * catalogue key, source key). Each batch commits on its own, under a per-tenant
@@ -54,6 +63,7 @@ export const DEFAULT_CATALOGUE_SOURCE = 'platform-default';
 export const DEFAULT_CATALOGUE_JOB = 'pharmacy.default-catalogue.v1';
 export const DEFAULT_CATALOGUE_BATCH_SIZE = 1_000;
 const MAX_DIFF_SAMPLE = 100;
+const OVERVIEW_ORGANIZATION_LIMIT = 500;
 const TERMINAL_STATUSES: OrganizationStatus[] = ['TERMINATED', 'PURGING', 'PURGED'];
 
 export type DefaultCatalogueErrorCode =
@@ -235,7 +245,100 @@ export type ApplyDefaultCatalogueResult = {
   /** Items a newer version changed after the tenant got them. Reported, never applied. */
   upstreamChanged: number;
   upstreamChangedSample: string[];
+  /**
+   * Items skipped because the tenant already holds the same medicine from
+   * another route (manual entry, the importer wizard, a reference connector).
+   * Never duplicated, never overwritten — reported for the pharmacy to reconcile.
+   */
+  matchedExisting: number;
+  matchedExistingSample: string[];
 };
+
+/** Who caused an apply, for the tenant audit trail. */
+export type DefaultCatalogueAuditContext = {
+  trigger: 'provisioning-job' | 'backfill' | 'direct';
+  /** The platform job that ran the apply, when there is one. */
+  jobId?: string | null;
+  /** The platform operator who requested the job or ran the backfill. */
+  requestedById?: string | null;
+  /** A human-readable actor (operator email or name) — required for a CLI backfill. */
+  actorName?: string | null;
+};
+
+type CatalogueBatchResult = {
+  last: string;
+  full: boolean;
+  created: number;
+  alreadyPresent: number;
+  controlledCandidates: number;
+  changed: string[];
+  matched: string[];
+};
+
+/** The comparison key for "the same medicine": case- and whitespace-insensitive. */
+export function catalogueMatchText(value: string | null | undefined): string {
+  return (value ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+type ExistingMedicineRow = {
+  id: string;
+  productName: string;
+  brandName: string | null;
+  presentations: string[];
+};
+
+/**
+ * Tenant medicines with no catalogue provenance whose product name matches one
+ * of `names` (already normalised by {@link catalogueMatchText}). Run in the
+ * tenant scope: RLS confines it to that pharmacy.
+ */
+async function existingNonCatalogueMedicines(
+  db: ScopedDb,
+  organizationId: string,
+  names: string[]
+): Promise<ExistingMedicineRow[]> {
+  if (!names.length) return [];
+  return db.$queryRaw<ExistingMedicineRow[]>`
+    SELECT m.id, m."productName", m."brandName",
+           COALESCE(array_remove(array_agg(p.presentation), NULL), ARRAY[]::text[]) AS presentations
+      FROM pharmacy_medicines m
+      LEFT JOIN pharmacy_presentations p
+        ON p."organizationId" = m."organizationId" AND p."medicineId" = m.id
+     WHERE m."organizationId" = ${organizationId}
+       AND lower(btrim(regexp_replace(m."productName", '[[:space:]]+', ' ', 'g')))
+         = ANY(${names}::text[])
+       AND NOT EXISTS (
+         SELECT 1 FROM pharmacy_medicine_catalogue_provenance c
+          WHERE c."organizationId" = m."organizationId" AND c."medicineId" = m.id
+       )
+     GROUP BY m.id`;
+}
+
+/**
+ * Whether a tenant already holds this catalogue item from another route: same
+ * product name and brand, and either the same presentation label or nothing to
+ * tell them apart (one side has no presentation). Deliberately conservative —
+ * a skipped item is reported; a duplicated medicine is a dispensing hazard.
+ */
+function matchesExistingMedicine(
+  item: {
+    productName: string;
+    brandName: string | null;
+    strength: string | null;
+    dosageForm: string | null;
+  },
+  existing: ExistingMedicineRow[]
+): boolean {
+  const name = catalogueMatchText(item.productName);
+  const brand = catalogueMatchText(item.brandName);
+  const label = catalogueMatchText(presentationLabel(item));
+  return existing.some((medicine) => {
+    if (catalogueMatchText(medicine.productName) !== name) return false;
+    if (catalogueMatchText(medicine.brandName) !== brand) return false;
+    if (!label || !medicine.presentations.length) return true;
+    return medicine.presentations.some((value) => catalogueMatchText(value) === label);
+  });
+}
 
 async function assertApplicable(organizationId: string, versionId: string) {
   return withPlatformDb(async (db) => {
@@ -281,10 +384,11 @@ async function assertApplicable(organizationId: string, versionId: string) {
 export async function applyDefaultCatalogue(
   organizationId: string,
   versionId: string,
-  options: { batchSize?: number } = {}
+  options: { batchSize?: number; audit?: DefaultCatalogueAuditContext } = {}
 ): Promise<ApplyDefaultCatalogueResult> {
   const version = await assertApplicable(organizationId, versionId);
   const batchSize = batchSizeOf(options.batchSize);
+  const audit: DefaultCatalogueAuditContext = options.audit ?? { trigger: 'direct' };
   const result: ApplyDefaultCatalogueResult = {
     organizationId,
     catalogueKey: version.key,
@@ -296,14 +400,16 @@ export async function applyDefaultCatalogue(
     controlledCandidates: 0,
     upstreamChanged: 0,
     upstreamChangedSample: [],
+    matchedExisting: 0,
+    matchedExistingSample: [],
   };
 
   let cursor: string | null = null;
   for (;;) {
     const after: string | null = cursor;
-    const batch = await withTenantDb(
+    const batch: CatalogueBatchResult | null = await withTenantDb(
       organizationId,
-      async (db) => {
+      async (db): Promise<CatalogueBatchResult | null> => {
         // Two applies for one tenant (provisioning job and a backfill, say)
         // would otherwise both see a source key as missing and race to it.
         const lockKey = `${DEFAULT_CATALOGUE_JOB}:${organizationId}`;
@@ -328,13 +434,35 @@ export async function applyDefaultCatalogue(
           ).map((row) => [row.sourceKey, row])
         );
 
+        // A medicine the pharmacy already holds from another route (manual
+        // entry, the importer wizard, a reference connector) has no catalogue
+        // provenance, so `held` cannot see it. Match it by name, brand and
+        // presentation and skip it rather than create a duplicate beside it.
+        const unheldNames = [
+          ...new Set(
+            items
+              .filter((item) => !held.has(item.sourceKey))
+              .map((item) => catalogueMatchText(item.productName))
+          ),
+        ];
+        const existingMedicines = await existingNonCatalogueMedicines(
+          db,
+          organizationId,
+          unheldNames
+        );
+
         const changed: string[] = [];
+        const matched: string[] = [];
         const missing: Array<(typeof items)[number] & { medicineId: string; digest: string }> = [];
         for (const item of items) {
           const digest = catalogueItemDigest(item);
           const existing = held.get(item.sourceKey);
           if (!existing) {
-            missing.push({ ...item, medicineId: randomUUID(), digest });
+            if (matchesExistingMedicine(item, existingMedicines)) {
+              matched.push(item.sourceKey);
+            } else {
+              missing.push({ ...item, medicineId: randomUUID(), digest });
+            }
           } else if (
             existing.catalogueVersion < version.version &&
             existing.contentDigest !== digest
@@ -384,13 +512,51 @@ export async function applyDefaultCatalogue(
           });
         }
 
+        const controlledCandidates = missing.filter((item) => item.controlledCandidate).length;
+        if (missing.length) {
+          // One tenant audit row per batch that created medicines, in the same
+          // transaction as the writes it describes. Platform operators are not
+          // tenant users, so the actor is recorded as SYSTEM with the operator
+          // and job named in metadata.
+          await db.auditLog.create({
+            data: {
+              organizationId,
+              actorType: 'SYSTEM',
+              actorName: audit.actorName ?? null,
+              source: 'SYSTEM',
+              category: 'PHARMACY',
+              operation: 'CREATE',
+              action: `${DEFAULT_CATALOGUE_JOB}.apply`,
+              description: `Default medicine catalogue ${version.key} v${version.version}: created ${missing.length}, skipped ${matched.length} already held.`,
+              targetType: 'PlatformMedicineCatalogueVersion',
+              targetId: version.id,
+              targetLabel: `${version.key} v${version.version}`,
+              result: {
+                created: missing.length,
+                controlledCandidates,
+                matchedExisting: matched.length,
+                alreadyPresent: items.length - missing.length - matched.length,
+                firstSourceKey: items[0]!.sourceKey,
+                lastSourceKey: items[items.length - 1]!.sourceKey,
+              },
+              metadata: {
+                trigger: audit.trigger,
+                jobId: audit.jobId ?? null,
+                requestedById: audit.requestedById ?? null,
+                actorName: audit.actorName ?? null,
+              },
+            },
+          });
+        }
+
         return {
           last: items[items.length - 1]!.sourceKey,
           full: items.length === batchSize,
           created: missing.length,
-          alreadyPresent: items.length - missing.length,
-          controlledCandidates: missing.filter((item) => item.controlledCandidate).length,
+          alreadyPresent: items.length - missing.length - matched.length,
+          controlledCandidates,
           changed,
+          matched,
         };
       },
       { skipDrain: true, timeout: 60_000 }
@@ -403,6 +569,10 @@ export async function applyDefaultCatalogue(
     result.upstreamChanged += batch.changed.length;
     result.upstreamChangedSample.push(
       ...batch.changed.slice(0, MAX_DIFF_SAMPLE - result.upstreamChangedSample.length)
+    );
+    result.matchedExisting += batch.matched.length;
+    result.matchedExistingSample.push(
+      ...batch.matched.slice(0, MAX_DIFF_SAMPLE - result.matchedExistingSample.length)
     );
     if (!batch.full) break;
     cursor = batch.last;
@@ -456,7 +626,8 @@ export type DefaultCatalogueJobResult =
  * organization, and the backfill applies the catalogue once it is loaded.
  */
 export async function runDefaultCatalogueJob(
-  job: Pick<PlatformJob, 'organizationId' | 'payload'>,
+  job: Pick<PlatformJob, 'organizationId' | 'payload'> &
+    Partial<Pick<PlatformJob, 'id' | 'requestedById'>>,
   options: { batchSize?: number } = {}
 ): Promise<DefaultCatalogueJobResult> {
   const organizationId = job.organizationId;
@@ -467,7 +638,14 @@ export async function runDefaultCatalogueJob(
     requestedVersionId ??
     (await withPlatformDb((db) => latestPublishedCatalogueVersion(db, catalogueKey)))?.id;
   if (!versionId) return { status: 'NO_PUBLISHED_VERSION', organizationId, catalogueKey };
-  return applyDefaultCatalogue(organizationId, versionId, options);
+  return applyDefaultCatalogue(organizationId, versionId, {
+    ...options,
+    audit: {
+      trigger: 'provisioning-job',
+      jobId: job.id ?? null,
+      requestedById: job.requestedById ?? null,
+    },
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -486,10 +664,51 @@ export type BackfillDefaultCatalogueReport = {
     status: string;
     heldBefore: number;
     missingBefore: number;
+    /**
+     * Catalogue items whose product name and brand match a medicine the
+     * pharmacy already holds from another route. An upper bound on what the
+     * apply will skip as already held (presentation is checked at apply time).
+     */
+    possibleExistingMatches: number;
     applied?: ApplyDefaultCatalogueResult;
     error?: string;
   }>;
 };
+
+/**
+ * Dry-run overlap check: how many items of the version, not yet held from the
+ * catalogue, share a product name and brand with a medicine the pharmacy
+ * already holds from another route. Read-only, in the tenant's RLS scope.
+ */
+async function countPossibleExistingMatches(
+  organizationId: string,
+  versionId: string,
+  catalogueKey: string
+): Promise<number> {
+  const rows = await withTenantDb(organizationId, (db) =>
+    db.$queryRaw<Array<{ count: bigint }>>`
+      SELECT count(DISTINCT i.id) AS count
+        FROM platform_medicine_catalogue_items i
+        JOIN pharmacy_medicines m
+          ON m."organizationId" = ${organizationId}
+         AND lower(btrim(regexp_replace(m."productName", '[[:space:]]+', ' ', 'g')))
+           = lower(btrim(regexp_replace(i."productName", '[[:space:]]+', ' ', 'g')))
+         AND lower(btrim(regexp_replace(COALESCE(m."brandName", ''), '[[:space:]]+', ' ', 'g')))
+           = lower(btrim(regexp_replace(COALESCE(i."brandName", ''), '[[:space:]]+', ' ', 'g')))
+       WHERE i."versionId" = ${versionId}
+         AND NOT EXISTS (
+           SELECT 1 FROM pharmacy_medicine_catalogue_provenance c
+            WHERE c."organizationId" = m."organizationId" AND c."medicineId" = m.id
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM pharmacy_medicine_catalogue_provenance h
+            WHERE h."organizationId" = ${organizationId}
+              AND h."catalogueKey" = ${catalogueKey}
+              AND h."sourceKey" = i."sourceKey"
+         )`
+  );
+  return Number(rows[0]?.count ?? 0);
+}
 
 /**
  * Apply a published catalogue version to every existing, non-terminal pharmacy
@@ -502,6 +721,8 @@ export async function backfillDefaultCatalogue(input: {
   catalogueKey?: string;
   version?: number;
   batchSize?: number;
+  /** Who is running the backfill (operator email or name), recorded in each tenant's audit log. */
+  actor?: string;
 }): Promise<BackfillDefaultCatalogueReport> {
   const catalogueKey = input.catalogueKey ?? DEFAULT_CATALOGUE_KEY;
   const { version, organizations, held } = await withPlatformDb(async (db) => {
@@ -569,11 +790,22 @@ export async function backfillDefaultCatalogue(input: {
       heldBefore,
       // An upper bound: items held from an older version may not be in this one.
       missingBefore: Math.max(0, version.rowCount - heldBefore),
+      possibleExistingMatches: 0,
     };
-    if (input.apply) {
+    try {
+      entry.possibleExistingMatches = await countPossibleExistingMatches(
+        organization.id,
+        version.id,
+        catalogueKey
+      );
+    } catch (error) {
+      entry.error = error instanceof Error ? error.message : String(error);
+    }
+    if (input.apply && !entry.error) {
       try {
         entry.applied = await applyDefaultCatalogue(organization.id, version.id, {
           batchSize: input.batchSize,
+          audit: { trigger: 'backfill', actorName: input.actor ?? null },
         });
       } catch (error) {
         entry.error = error instanceof Error ? error.message : String(error);
@@ -598,6 +830,8 @@ export type DefaultCatalogueOverview = {
     publishedAt: Date | null;
     createdAt: Date;
   }>;
+  /** More pharmacies exist than the console lists. */
+  organizationsTruncated: boolean;
   organizations: Array<{
     id: string;
     displayName: string;
@@ -621,7 +855,7 @@ export async function defaultCatalogueOverview(
   db: ScopedDb,
   catalogueKey = DEFAULT_CATALOGUE_KEY
 ): Promise<DefaultCatalogueOverview> {
-  const [versions, organizations] = await Promise.all([
+  const [versions, listed] = await Promise.all([
     db.platformMedicineCatalogueVersion.findMany({
       where: { key: catalogueKey },
       orderBy: { version: 'desc' },
@@ -631,9 +865,11 @@ export async function defaultCatalogueOverview(
       where: { vertical: 'PHARMACY', status: { not: 'PURGED' } },
       orderBy: { displayName: 'asc' },
       select: { id: true, displayName: true, status: true },
-      take: 500,
+      take: OVERVIEW_ORGANIZATION_LIMIT + 1,
     }),
   ]);
+  const organizationsTruncated = listed.length > OVERVIEW_ORGANIZATION_LIMIT;
+  const organizations = listed.slice(0, OVERVIEW_ORGANIZATION_LIMIT);
   const ids = organizations.map((organization) => organization.id);
   const [held, controlled, jobs] = await Promise.all([
     db.medicineCatalogueProvenance.groupBy({
@@ -646,9 +882,11 @@ export async function defaultCatalogueOverview(
       where: { catalogueKey, organizationId: { in: ids }, controlledCandidate: true },
       _count: { _all: true },
     }),
+    // The latest job per pharmacy, however many jobs each one has run.
     db.platformJob.findMany({
       where: { type: 'PHARMACY_DEFAULT_CATALOGUE_V1', organizationId: { in: ids } },
-      orderBy: { createdAt: 'desc' },
+      distinct: ['organizationId'],
+      orderBy: [{ organizationId: 'asc' }, { createdAt: 'desc' }],
       select: {
         id: true,
         organizationId: true,
@@ -659,7 +897,6 @@ export async function defaultCatalogueOverview(
         finishedAt: true,
         result: true,
       },
-      take: 2_000,
     }),
   ]);
   const heldBy = new Map(held.map((row) => [row.organizationId, row._count._all]));
@@ -671,6 +908,7 @@ export async function defaultCatalogueOverview(
     }
   }
   return {
+    organizationsTruncated,
     versions: versions.map(({ id, key, version, digest, rowCount, publishedAt, createdAt }) => ({
       id,
       key,

@@ -563,6 +563,7 @@ export const pharmacyMedicineRouter = router({
         presentations: true,
         aliases: true,
         strengths: { include: { ingredient: true } },
+        catalogueProvenance: { select: { controlledCandidate: true } },
       },
       orderBy: { createdAt: 'desc' },
       take: 250,
@@ -1098,7 +1099,23 @@ export const pharmacyMedicineRouter = router({
               code: 'BAD_REQUEST',
               message: 'Strength cannot be safely structured; correct it before publication.',
             });
-          const medicine = await tx.medicine.findUniqueOrThrow({ where: { id: medicineId } });
+          const medicine = await tx.medicine.findUniqueOrThrow({
+            where: { id: medicineId },
+            include: { catalogueProvenance: { select: { controlledCandidate: true } } },
+          });
+          // NARCOTICS-class default-catalogue items need an explicit, reviewed
+          // controlled decision before they can sell; that decision becomes
+          // the medicine's `controlled` flag.
+          const controlledCandidate = medicine.catalogueProvenance?.controlledCandidate ?? false;
+          const controlledValue = values.get('controlled')?.trim().toLowerCase();
+          const controlledDecision =
+            controlledValue === 'true' ? true : controlledValue === 'false' ? false : undefined;
+          if (controlledCandidate && controlledDecision === undefined)
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message:
+                'This medicine was flagged NARCOTICS in the default catalogue; publish a reviewed controlled decision (true or false) with it.',
+            });
           const ingredientName = values.get('alias') ?? values.get('productName')!;
           const ingredient = await tx.ingredient.upsert({
             where: {
@@ -1148,6 +1165,7 @@ export const pharmacyMedicineRouter = router({
               values.get('drapRegistrationNumber') ?? medicine.drapRegistrationNumber
             ),
             provenanceFields: new Set(selected.map((assertion) => assertion.field)),
+            controlledCandidate,
           });
           await tx.medicine.update({
             where: { id: medicineId },
@@ -1156,6 +1174,7 @@ export const pharmacyMedicineRouter = router({
               brandName: values.get('brandName'),
               manufacturer: values.get('manufacturer'),
               drapRegistrationNumber: values.get('drapRegistrationNumber'),
+              ...(controlledCandidate ? { controlled: controlledDecision } : {}),
               saleable: true,
             },
           });

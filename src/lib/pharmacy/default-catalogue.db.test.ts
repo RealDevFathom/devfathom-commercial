@@ -32,7 +32,8 @@ const KEY = `pharmacy-default-test-${suffix}`;
 const ORG_A = `org_medcat_a_${suffix}`;
 const ORG_B = `org_medcat_b_${suffix}`;
 const ORG_AGENCY = `org_medcat_agency_${suffix}`;
-const ORGS = [ORG_A, ORG_B, ORG_AGENCY];
+const ORG_C = `org_medcat_c_${suffix}`;
+const ORGS = [ORG_A, ORG_B, ORG_AGENCY, ORG_C];
 
 const FIXTURE = readFileSync(
   join(process.cwd(), 'tests/fixtures/pharmacy-default-catalogue-50.csv'),
@@ -105,7 +106,8 @@ beforeAll(async () => {
       (id, slug, "legalName", "displayName", vertical, status, "deploymentMode", "createdAt", "updatedAt")
      VALUES ($1, $2, 'Medcat A', 'Medcat A', 'PHARMACY', 'ONBOARDING', 'SHARED', now(), now()),
             ($3, $4, 'Medcat B', 'Medcat B', 'PHARMACY', 'ACTIVE', 'SHARED', now(), now()),
-            ($5, $6, 'Medcat Agency', 'Medcat Agency', 'AGENCY', 'ACTIVE', 'SHARED', now(), now())`,
+            ($5, $6, 'Medcat Agency', 'Medcat Agency', 'AGENCY', 'ACTIVE', 'SHARED', now(), now()),
+            ($7, $8, 'Medcat C', 'Medcat C', 'PHARMACY', 'ACTIVE', 'SHARED', now(), now())`,
     [
       ORG_A,
       `medcat-a-${suffix}`,
@@ -113,6 +115,8 @@ beforeAll(async () => {
       `medcat-b-${suffix}`,
       ORG_AGENCY,
       `medcat-agency-${suffix}`,
+      ORG_C,
+      `medcat-c-${suffix}`,
     ]
   );
 });
@@ -123,6 +127,7 @@ afterAll(async () => {
     'DELETE FROM pharmacy_medicine_catalogue_provenance WHERE "organizationId" = ANY($1)',
     [ORGS]
   );
+  await ownerQuery('DELETE FROM audit_logs WHERE "organizationId" = ANY($1)', [ORGS]);
   await ownerQuery('DELETE FROM pharmacy_presentations WHERE "organizationId" = ANY($1)', [ORGS]);
   await ownerQuery('DELETE FROM pharmacy_medicines WHERE "organizationId" = ANY($1)', [ORGS]);
   await ownerQuery(
@@ -383,5 +388,98 @@ describeIfDatabase('platform default medicine catalogue', { timeout: 60_000 }, (
     // And again: nothing new, the same diffs, the edit still intact.
     const again = await deps.catalogue.applyDefaultCatalogue(ORG_A, v2.versionId);
     expect(again).toMatchObject({ created: 0, alreadyPresent: 51, upstreamChanged: 2 });
+  });
+
+  it('lets a tenant read but never rewrite or drop its review flags', async () => {
+    const tampered = await inOrg(ORG_A, async (db) => ({
+      updated: (
+        await db.medicineCatalogueProvenance.updateMany({
+          where: { controlledCandidate: true },
+          data: { controlledCandidate: false },
+        })
+      ).count,
+      deleted: (await db.medicineCatalogueProvenance.deleteMany({})).count,
+    }));
+    expect(tampered).toEqual({ updated: 0, deleted: 0 });
+    expect((await tenantCounts(ORG_A)).controlledCandidates).toBe(FIXTURE_CONTROLLED);
+  });
+
+  it('skips medicines a pharmacy already holds from another route, and audits the apply', async () => {
+    // Loaded earlier by the importer wizard: same name and brand, different
+    // case and spacing, same presentation. No catalogue provenance.
+    const manual = await inOrg(ORG_C, async (db) => {
+      const medicine = await db.medicine.create({
+        data: {
+          organizationId: ORG_C,
+          productName: 'Disprin 300mg Tab',
+          brandName: 'DISPRIN  300MG TAB',
+          productFamily: 'PHARMACEUTICAL',
+        },
+      });
+      await db.presentation.create({
+        data: {
+          organizationId: ORG_C,
+          medicineId: medicine.id,
+          dosageForm: 'Tablet',
+          presentation: '300mg tablet',
+        },
+      });
+      return medicine;
+    });
+
+    const dryRun = await deps.catalogue.backfillDefaultCatalogue({
+      apply: false,
+      organizationId: ORG_C,
+      catalogueKey: KEY,
+      version: 1,
+    });
+    expect(dryRun.organizations[0]).toMatchObject({ heldBefore: 0, possibleExistingMatches: 1 });
+
+    const applied = await deps.catalogue.backfillDefaultCatalogue({
+      apply: true,
+      organizationId: ORG_C,
+      catalogueKey: KEY,
+      version: 1,
+      batchSize: 20,
+      actor: 'ops@example.com',
+    });
+    expect(applied.organizations[0]!.applied).toMatchObject({
+      created: 49,
+      alreadyPresent: 0,
+      matchedExisting: 1,
+      matchedExistingSample: ['catalog-00'],
+    });
+
+    const after = await inOrg(ORG_C, async (db) => ({
+      medicines: await db.medicine.count(),
+      disprin: await db.medicine.count({
+        where: { productName: { equals: 'DISPRIN 300MG TAB', mode: 'insensitive' } },
+      }),
+      manual: await db.medicine.findUniqueOrThrow({ where: { id: manual.id } }),
+      audits: await db.auditLog.findMany({
+        where: { action: 'pharmacy.default-catalogue.v1.apply' },
+      }),
+    }));
+    expect(after.medicines).toBe(50);
+    expect(after.disprin).toBe(1);
+    expect(after.manual.productName).toBe('Disprin 300mg Tab');
+    expect(after.audits).toHaveLength(3);
+    const audited = after.audits.reduce(
+      (sum, row) => sum + Number((row.result as { created: number }).created),
+      0
+    );
+    expect(audited).toBe(49);
+    for (const row of after.audits) {
+      expect(row).toMatchObject({
+        actorType: 'SYSTEM',
+        actorName: 'ops@example.com',
+        metadata: expect.objectContaining({ trigger: 'backfill', actorName: 'ops@example.com' }),
+      });
+    }
+
+    // A re-run still never duplicates the pharmacy's own medicine.
+    const again = await deps.catalogue.applyDefaultCatalogue(ORG_C, versionOneId);
+    expect(again).toMatchObject({ created: 0, alreadyPresent: 49, matchedExisting: 1 });
+    expect((await tenantCounts(ORG_C)).medicines).toBe(50);
   });
 });

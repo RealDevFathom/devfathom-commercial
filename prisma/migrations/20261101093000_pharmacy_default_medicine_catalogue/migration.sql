@@ -106,15 +106,25 @@ CREATE POLICY "medicine_catalogue_items_platform_insert" ON "platform_medicine_c
 CREATE POLICY "medicine_catalogue_items_platform_delete" ON "platform_medicine_catalogue_items"
   FOR DELETE USING (current_setting('app.is_platform_admin', true) = 'true');
 
--- Tenant data: the standard isolation policy.
+-- Tenant data. A tenant reads and inserts its own rows (the apply runs in the
+-- tenant's scope), but the review flag is tamper-proof: UPDATE and DELETE are
+-- platform-only, so a tenant session can never clear `controlledCandidate` or
+-- drop the provenance that carries it.
 ALTER TABLE "pharmacy_medicine_catalogue_provenance" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "pharmacy_medicine_catalogue_provenance" FORCE ROW LEVEL SECURITY;
 CREATE POLICY "tenant_isolation" ON "pharmacy_medicine_catalogue_provenance"
-  USING (
-    current_setting('app.is_platform_admin', true) = 'true'
-    OR "organizationId" = NULLIF(current_setting('app.current_organization_id', true), '')
-  )
-  WITH CHECK (
+  FOR SELECT USING (
     current_setting('app.is_platform_admin', true) = 'true'
     OR "organizationId" = NULLIF(current_setting('app.current_organization_id', true), '')
   );
+CREATE POLICY "tenant_isolation_insert" ON "pharmacy_medicine_catalogue_provenance"
+  FOR INSERT WITH CHECK (
+    current_setting('app.is_platform_admin', true) = 'true'
+    OR "organizationId" = NULLIF(current_setting('app.current_organization_id', true), '')
+  );
+CREATE POLICY "medicine_catalogue_provenance_platform_update" ON "pharmacy_medicine_catalogue_provenance"
+  FOR UPDATE
+  USING (current_setting('app.is_platform_admin', true) = 'true')
+  WITH CHECK (current_setting('app.is_platform_admin', true) = 'true');
+CREATE POLICY "medicine_catalogue_provenance_platform_delete" ON "pharmacy_medicine_catalogue_provenance"
+  FOR DELETE USING (current_setting('app.is_platform_admin', true) = 'true');
