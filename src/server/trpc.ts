@@ -1,6 +1,6 @@
 import { initTRPC, TRPCError } from '@trpc/server';
 import type { Session } from 'next-auth';
-import type { Prisma } from '@/generated/prisma/client';
+import { Prisma } from '@/generated/prisma/client';
 import superjson from 'superjson';
 import { can, subjectFromSession, type Action } from '@/lib/abac';
 import {
@@ -82,16 +82,26 @@ export const createTRPCContext = async (opts?: {
 
 export type TRPCContext = Awaited<ReturnType<typeof createTRPCContext>>;
 
-/** What a production client is told instead of an unexpected failure's own message. */
+/** What a client is told instead of an unexpected failure's own message. */
 const INTERNAL_ERROR_MESSAGE = 'Something went wrong on our side. Please try again.';
 
-/**
- * An INTERNAL_SERVER_ERROR that tRPC made out of something a procedure threw
- * that was not a TRPCError (an unmapped Prisma or driver error, a raw
- * `schema.parse()`): tRPC gives that wrapper the thrown error's own message,
- * which can name SQL, constraints and tables. A TRPCError thrown on purpose
- * carries words of its own, so it never matches, internal or not.
- */
+const PRISMA_ERROR_MESSAGES = {
+  P2025: { code: -32004, trpcCode: 'NOT_FOUND', httpStatus: 404, message: 'Record not found.' },
+  P2002: {
+    code: -32009,
+    trpcCode: 'CONFLICT',
+    httpStatus: 409,
+    message: 'A record with those details already exists.',
+  },
+  P2003: {
+    code: -32009,
+    trpcCode: 'CONFLICT',
+    httpStatus: 409,
+    message: 'This change conflicts with a related record.',
+  },
+} as const;
+
+/** Distinguish unexpected failures from deliberately worded TRPCErrors. */
 function isUnexpectedInternalError(error: TRPCError): boolean {
   const cause = error.cause;
   return (
@@ -105,33 +115,27 @@ function isUnexpectedInternalError(error: TRPCError): boolean {
 const t = initTRPC.context<TRPCContext>().create({
   transformer: superjson,
   errorFormatter({ shape, error }) {
-    // tRPC sets `cause` to a ZodError for input-validation failures (BAD_REQUEST)
-    // *and* for a raw `schema.parse()` that throws inside a procedure body
-    // (INTERNAL_SERVER_ERROR). Gate on the code so an internal failure never
-    // reaches the client wearing a field-level message, and never publishes
-    // internal schema field names in `data.validation`.
-    //
-    // The first half is narrower than it reads: tRPC has already placed the raw
-    // serialized ZodError into `shape.message` before this formatter runs, and
-    // with `validation` null we pass `shape.message` through unchanged — so,
-    // outside production, the field name still reaches the client, in raw
-    // serialized form (the errorFormatter test pins exactly that string,
-    // `"path": ["internalOnlyField"]` and all). The gate governs `data.validation`
-    // and the FORMATTED message, not the pass-through.
+    // Input validation remains friendly. Raw schema failures in a resolver are
+    // internal errors, not input validation, and must not expose field names.
     const validation = error.code === 'BAD_REQUEST' ? formatValidationError(error.cause) : null;
-    // In production an unexpected failure (that ZodError included) keeps its own
-    // message on the server, where the tRPC route's `onError` logs it, and the
-    // client is told only that something went wrong. Deliberate errors and every
-    // other code are untouched; outside production the pass-through is unchanged.
-    const withheld = process.env.NODE_ENV === 'production' && isUnexpectedInternalError(error);
-    // Never publish the server stack. tRPC attaches `data.stack` outside
-    // production, which leaks file paths and bundle chunk names onto ordinary
-    // client errors (e.g. an intentional 403). Drop it for every error code.
+    const isPrismaError = error.cause instanceof Prisma.PrismaClientKnownRequestError;
+    const prismaError = isPrismaError
+      ? PRISMA_ERROR_MESSAGES[error.cause!.code as keyof typeof PRISMA_ERROR_MESSAGES]
+      : undefined;
+    // The route's onError logger retains original diagnostics server-side.
+    const withheld = isPrismaError || isUnexpectedInternalError(error);
     const data = { ...shape.data, validation: validation?.fields ?? null };
     delete data.stack;
+    if (prismaError) {
+      data.code = prismaError.trpcCode;
+      data.httpStatus = prismaError.httpStatus;
+    }
     return {
       ...shape,
-      message: withheld ? INTERNAL_ERROR_MESSAGE : (validation?.message ?? shape.message),
+      code: prismaError?.code ?? shape.code,
+      message:
+        prismaError?.message ??
+        (withheld ? INTERNAL_ERROR_MESSAGE : (validation?.message ?? shape.message)),
       data,
     };
   },

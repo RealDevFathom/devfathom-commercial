@@ -289,6 +289,8 @@ export const clientsRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const { id, ...data } = input;
+      const client = await ctx.db.client.findUnique({ where: { id }, select: { id: true } });
+      if (!client) throw new TRPCError({ code: 'NOT_FOUND', message: 'Client not found' });
       return ctx.db.client.update({ where: { id }, data });
     }),
 
@@ -314,6 +316,11 @@ export const clientsRouter = router({
   deleteContact: adminProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
+      const contact = await ctx.db.clientContact.findUnique({
+        where: { id: input.id },
+        select: { id: true },
+      });
+      if (!contact) throw new TRPCError({ code: 'NOT_FOUND', message: 'Contact not found' });
       return ctx.db.clientContact.delete({ where: { id: input.id } });
     }),
 
@@ -413,17 +420,18 @@ export const clientsRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const { id, ...data } = input;
+      const existing = await ctx.db.contract.findUnique({
+        where: { id },
+        select: { signedAt: true },
+      });
+      if (!existing) throw new TRPCError({ code: 'NOT_FOUND', message: 'Contract not found' });
       await assertInOrganization(ctx.db.project, workspaceId(ctx), [data.projectId]);
       // IMP-CLI-05: validate a newly-set project link (null = clear, skip check).
       if (data.projectId) await assertProjectExists(ctx.db, data.projectId);
       // CON-02: stamp signedAt the first time the EDIT FORM marks a contract SIGNED
       // — the inline status dropdown (setContractStatus) already did; now both agree.
-      if (data.status === 'SIGNED' && data.signedAt === undefined) {
-        const existing = await ctx.db.contract.findUnique({
-          where: { id },
-          select: { signedAt: true },
-        });
-        if (!existing?.signedAt) data.signedAt = new Date();
+      if (data.status === 'SIGNED' && data.signedAt === undefined && !existing.signedAt) {
+        data.signedAt = new Date();
       }
       const contract = await ctx.db.contract.update({ where: { id }, data });
       logActivity(ctx.db, ctx.session.user.id, {
@@ -443,11 +451,12 @@ export const clientsRouter = router({
         where: { id: input.id },
         select: { signedAt: true },
       });
+      if (!existing) throw new TRPCError({ code: 'NOT_FOUND', message: 'Contract not found' });
       const contract = await ctx.db.contract.update({
         where: { id: input.id },
         data: {
           status: input.status,
-          ...(input.status === 'SIGNED' && !existing?.signedAt ? { signedAt: new Date() } : {}),
+          ...(input.status === 'SIGNED' && !existing.signedAt ? { signedAt: new Date() } : {}),
         },
       });
       logActivity(ctx.db, ctx.session.user.id, {
@@ -462,6 +471,11 @@ export const clientsRouter = router({
   deleteContract: adminProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
+      const existing = await ctx.db.contract.findUnique({
+        where: { id: input.id },
+        select: { id: true },
+      });
+      if (!existing) throw new TRPCError({ code: 'NOT_FOUND', message: 'Contract not found' });
       const contract = await ctx.db.contract.delete({ where: { id: input.id } });
       logActivity(ctx.db, ctx.session.user.id, {
         type: 'contract_deleted',
