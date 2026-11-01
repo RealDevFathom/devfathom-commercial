@@ -73,6 +73,7 @@ beforeAll(async () => {
             : [
                 'pharmacy:inventory',
                 'pharmacy:procurement',
+                ...(key === 'owner' || key === 'manager' ? ['pharmacy:manage'] : []),
                 ...(key === 'pharmacist' || mode === 'SOLO' ? ['pharmacy:dispense'] : []),
               ])
             await db.organizationRolePermission.create({
