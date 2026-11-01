@@ -17,6 +17,13 @@ import {
   PharmacyMedicineError,
 } from '@/lib/pharmacy/medicine';
 import {
+  CATALOGUE_REVIEW_FIELDS,
+  catalogueAwaitingReviewWhere,
+  catalogueReviewSummary,
+  draftCatalogueReview,
+  matchCatalogueMedicine,
+} from '@/lib/pharmacy/default-catalogue-review';
+import {
   configureManualReferenceConnector,
   proposedBoolean,
   runManualReferenceConnector,
@@ -457,8 +464,28 @@ export const pharmacyMedicineRouter = router({
 
         const payload = connectorProposalPayload.parse(proposal.payload);
         const values = payload.values;
-        let medicine = proposal.targetMedicineId
-          ? await tx.medicine.findFirst({ where: { id: proposal.targetMedicineId } })
+        let targetMedicineId = proposal.targetMedicineId;
+        if (!targetMedicineId) {
+          // The default catalogue may have been applied after this row was
+          // imported: confirm onto the catalogue copy it describes rather than
+          // creating a duplicate of it.
+          const match = await matchCatalogueMedicine(tx, {
+            organizationId: ctx.entitlements.organizationId,
+            rowSourceKey: proposal.rowSourceKey,
+            productName: values.productName,
+            manufacturer: values.manufacturer,
+          });
+          if (match.kind === 'ambiguous') {
+            throw new TRPCError({
+              code: 'CONFLICT',
+              message:
+                'This row matches more than one default-catalogue medicine; re-import it with targetMedicineId.',
+            });
+          }
+          if (match.kind === 'match') targetMedicineId = match.medicineId;
+        }
+        let medicine = targetMedicineId
+          ? await tx.medicine.findFirst({ where: { id: targetMedicineId } })
           : null;
         if (proposal.targetMedicineId && !medicine) {
           throw new TRPCError({ code: 'NOT_FOUND', message: 'Target medicine not found.' });
@@ -542,41 +569,156 @@ export const pharmacyMedicineRouter = router({
       })
     ),
 
-  referenceCandidates: adminProcedure.query(({ ctx }) =>
-    ctx.db.medicine.findMany({
-      where: {
-        saleable: false,
-        OR: [
-          {
-            provenance: {
-              some: {
-                OR: [
-                  { status: 'UNREVIEWED' },
-                  {
-                    status: { in: ['ACCEPTED', 'CORRECTED'] },
-                    publicationEntries: { none: { batch: { status: 'PUBLISHED' } } },
+  /**
+   * The review workbench queue. `reference` (the default) is medicines with
+   * reference assertions to review or publish, plus hand-entered medicines held
+   * because they were linked to a NARCOTICS default-catalogue item.
+   * `catalogue` lists the unsaleable medicines the default catalogue left for a
+   * pharmacist (copies and NARCOTICS links), searchable by name or source key;
+   * `controlled` narrows that to NARCOTICS-flagged ones. Every candidate is
+   * `saleable: false`; this is an admin review list, never a sale path.
+   */
+  referenceCandidates: adminProcedure
+    .input(
+      z
+        .object({
+          view: z.enum(['reference', 'catalogue', 'controlled']).default('reference'),
+          query: z.string().trim().max(200).optional(),
+        })
+        .strict()
+        .optional()
+    )
+    .query(async ({ ctx, input }) => {
+      const view = input?.view ?? 'reference';
+      const where: Prisma.MedicineWhereInput =
+        view === 'reference'
+          ? {
+              saleable: false,
+              OR: [
+                {
+                  provenance: {
+                    some: {
+                      OR: [
+                        { status: 'UNREVIEWED' },
+                        {
+                          status: { in: ['ACCEPTED', 'CORRECTED'] },
+                          publicationEntries: { none: { batch: { status: 'PUBLISHED' } } },
+                        },
+                      ],
+                    },
                   },
-                ],
-              },
+                },
+                // A hand-entered medicine linked to a NARCOTICS default-catalogue
+                // item is held from sale until a reviewed controlled decision is
+                // published, so it is listed even before any reference row arrives.
+                {
+                  catalogueProvenance: { is: { linkedExisting: true, controlledCandidate: true } },
+                },
+              ],
+            }
+          : catalogueAwaitingReviewWhere({
+              controlledOnly: view === 'controlled',
+              query: input?.query,
+            });
+      const candidates = await ctx.db.medicine.findMany({
+        where,
+        include: {
+          provenance: { orderBy: { createdAt: 'asc' } },
+          presentations: true,
+          aliases: true,
+          strengths: { include: { ingredient: true } },
+          catalogueProvenance: {
+            select: {
+              controlledCandidate: true,
+              linkedExisting: true,
+              sourceKey: true,
+              catalogueKey: true,
+              catalogueVersion: true,
+              catalogueVersionId: true,
             },
           },
-          // A hand-entered medicine linked to a NARCOTICS default-catalogue
-          // item is held from sale until a reviewed controlled decision is
-          // published, so it is listed even before any reference row arrives.
-          { catalogueProvenance: { is: { linkedExisting: true, controlledCandidate: true } } },
-        ],
-      },
-      include: {
-        provenance: { orderBy: { createdAt: 'asc' } },
-        presentations: true,
-        aliases: true,
-        strengths: { include: { ingredient: true } },
-        catalogueProvenance: { select: { controlledCandidate: true } },
-      },
-      orderBy: { createdAt: 'desc' },
-      take: 250,
-    })
+        },
+        orderBy:
+          view === 'reference' ? { createdAt: 'desc' } : [{ productName: 'asc' }, { id: 'asc' }],
+        take: view === 'reference' ? 250 : 100,
+      });
+      // The catalogue item each candidate came from, so the workbench can show
+      // what the catalogue knows (strength, dosage form) before a draft exists.
+      // Platform reference data: every tenant session may read it.
+      const keyed = candidates.flatMap((candidate) =>
+        candidate.catalogueProvenance
+          ? [
+              {
+                versionId: candidate.catalogueProvenance.catalogueVersionId,
+                sourceKey: candidate.catalogueProvenance.sourceKey,
+              },
+            ]
+          : []
+      );
+      const items = keyed.length
+        ? await ctx.db.platformMedicineCatalogueItem.findMany({
+            where: { OR: keyed },
+            select: {
+              versionId: true,
+              sourceKey: true,
+              strength: true,
+              dosageForm: true,
+              productFamily: true,
+            },
+          })
+        : [];
+      const itemKey = (versionId: string, sourceKey: string) => `${versionId}\u0000${sourceKey}`;
+      const itemFor = new Map(items.map((item) => [itemKey(item.versionId, item.sourceKey), item]));
+      return candidates.map((candidate) => {
+        const provenance = candidate.catalogueProvenance;
+        const item = provenance
+          ? itemFor.get(itemKey(provenance.catalogueVersionId, provenance.sourceKey))
+          : undefined;
+        return {
+          ...candidate,
+          catalogueItem: item
+            ? {
+                strength: item.strength,
+                dosageForm: item.dosageForm,
+                productFamily: item.productFamily,
+              }
+            : null,
+        };
+      });
+    }),
+
+  /** Workbench counts: what the default catalogue left for review and what it holds from sale. */
+  catalogueReviewSummary: adminProcedure.query(({ ctx }) =>
+    catalogueReviewSummary(ctx.db, ctx.entitlements.organizationId)
   ),
+
+  /**
+   * Start the review of a default-catalogue medicine: seed UNREVIEWED
+   * assertions from the catalogue item (or a linked medicine's own record)
+   * plus what the pharmacist entered. It stays unsaleable; the ordinary
+   * ACCEPT and `publishAssertions` complete it.
+   */
+  draftCatalogueReview: adminProcedure
+    .input(
+      z
+        .object({
+          medicineId: boundedId,
+          values: z
+            .partialRecord(z.enum(CATALOGUE_REVIEW_FIELDS), z.string().trim().max(1_000))
+            .default({}),
+        })
+        .strict()
+    )
+    .mutation(({ ctx, input }) =>
+      ctx.db.$transaction((tx) =>
+        draftCatalogueReview(tx, {
+          organizationId: ctx.entitlements.organizationId,
+          medicineId: input.medicineId,
+          actorId: ctx.session.user.id,
+          values: input.values,
+        })
+      )
+    ),
 
   createIngredient: protectedProcedure
     .input(z.object({ name: z.string().trim().min(1).max(200) }).strict())
@@ -1124,29 +1266,49 @@ export const pharmacyMedicineRouter = router({
               message:
                 'This medicine was flagged NARCOTICS in the default catalogue; publish a reviewed controlled decision (true or false) with it.',
             });
-          const ingredientName = values.get('alias') ?? values.get('productName')!;
-          const ingredient = await tx.ingredient.upsert({
-            where: {
-              organizationId_name: {
-                organizationId: medicine.organizationId,
-                name: ingredientName,
+          // A medicine may already hold the published presentation, strength,
+          // barcode or alias — the presentation a default-catalogue copy was
+          // created with, or a held hand-entered medicine's own records — so an
+          // identical one is reused rather than duplicated.
+          const dosageForm = values.get('dosageForm')!;
+          const pack = values.get('pack')!;
+          const presentation =
+            (await tx.presentation.findFirst({
+              where: { medicineId, dosageForm, presentation: pack },
+              orderBy: { createdAt: 'asc' },
+            })) ??
+            (await tx.presentation.create({
+              data: { medicineId, dosageForm, presentation: pack },
+            }));
+          const existingStrength = await tx.medicineStrengthComponent.findFirst({
+            where: { medicineId, value: parsedStrength.value, unit: parsedStrength.unit },
+          });
+          if (!existingStrength) {
+            const ingredientName = values.get('alias') ?? values.get('productName')!;
+            const ingredient = await tx.ingredient.upsert({
+              where: {
+                organizationId_name: {
+                  organizationId: medicine.organizationId,
+                  name: ingredientName,
+                },
               },
-            },
-            create: { organizationId: medicine.organizationId, name: ingredientName },
-            update: {},
-          });
-          const presentation = await tx.presentation.create({
-            data: {
-              medicineId,
-              dosageForm: values.get('dosageForm')!,
-              presentation: values.get('pack')!,
-            },
-          });
-          await tx.medicineStrengthComponent.create({
-            data: { medicineId, ingredientId: ingredient.id, ...parsedStrength },
-          });
+              create: { organizationId: medicine.organizationId, name: ingredientName },
+              update: {},
+            });
+            await tx.medicineStrengthComponent.create({
+              data: { medicineId, ingredientId: ingredient.id, ...parsedStrength },
+            });
+          }
           const barcode = values.get('barcode');
-          if (barcode)
+          if (
+            barcode &&
+            !(await tx.medicineBarcode.findFirst({
+              where: {
+                presentationId: presentation.id,
+                normalizedCode: normalizeMedicineText(barcode),
+              },
+            }))
+          )
             await tx.medicineBarcode.create({
               data: {
                 presentationId: presentation.id,
@@ -1156,7 +1318,12 @@ export const pharmacyMedicineRouter = router({
               },
             });
           const alias = values.get('alias');
-          if (alias)
+          if (
+            alias &&
+            !(await tx.medicineAlias.findFirst({
+              where: { medicineId, type: 'GENERIC', normalizedValue: normalizeMedicineText(alias) },
+            }))
+          )
             await tx.medicineAlias.create({
               data: {
                 medicineId,

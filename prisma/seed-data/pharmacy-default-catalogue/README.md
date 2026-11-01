@@ -113,6 +113,44 @@ result and its audit rows report `controlledCandidates`, `linkedControlledCandid
 `saleable = false` — the catalogue carries no DRAP registration, which the saleable gate requires —
 so a pharmacist completes an item before it can be bought or sold.
 
+### Completing an item (the pharmacist's path)
+
+Unsaleable copies and held NARCOTICS links are listed in the tenant's reference review workbench
+(`pharmacyMedicine.referenceCandidates`): the **Default catalogue** view lists them all, 100 at a
+time, searchable by product or brand name or the exact `sourceKey`; **NARCOTICS review** narrows to
+the flagged ones. A status panel (`catalogueReviewSummary`) shows how many await review, how many
+need a controlled decision, and how many of the pharmacy's own medicines are held from sale. None
+of these reach a sale path: the counter, search, purchasing and stock keep filtering on
+`saleable = true`.
+
+For an item with nothing in review, the workbench opens a short form prefilled from the catalogue
+item (or, for a held link, the pharmacy's own record): product name, strength, dosage form, pack,
+DRAP registration, an optional generic name, and — for a NARCOTICS item — the controlled decision.
+`draftCatalogueReview` turns it into UNREVIEWED assertions (catalogue values as `IMPORT` from
+`platform-default:<key>:v<version>:<sourceKey>`, pharmacist entries as `USER`), refusing a draft
+that could never publish. From there it is the ordinary review: ACCEPT (`recordReviewDecision`),
+then `publishAssertions`, whose saleable gate and NARCOTICS hold are unchanged. Publishing reuses an
+identical presentation, strength, barcode or alias the medicine already has — so a copy's
+catalogue-created presentation is completed rather than duplicated, and a released hand-entered
+medicine keeps its own records.
+
+### Reference imports never duplicate an item
+
+A reference connector or manual import row without a `targetMedicineId` first looks for the
+catalogue medicine it describes: the medicine holding the row's `rowSourceKey` as catalogue
+`sourceKey` (exact string), else the one catalogue copy with the same product name and manufacturer
+(case-insensitive, whitespace collapsed; no manufacturer matches none). A match becomes the row's
+target — for an unsaleable copy every regulated value is proposed, so it can be published — and
+more than one candidate rejects the row as `AMBIGUOUS_CATALOGUE_MATCH`. The same match runs again
+when a proposal imported before the catalogue was applied is confirmed.
+
+### Provenance is checked against the catalogue
+
+Tenants insert their own provenance rows (the apply runs in the tenant's scope), so a trigger
+(`pharmacy_validate_catalogue_provenance`) checks every insert: `catalogueKey` and
+`catalogueVersion` must equal the version `catalogueVersionId` names, the version must hold the
+`sourceKey`, and a NARCOTICS item is never recorded without `controlledCandidate`.
+
 New pharmacies queue a `pharmacy.default-catalogue.v1` platform job when they are created. Status
 and retry live under Platform → Jobs → Pharmacy default catalogue, which lists every pharmacy with
 server-side pagination (`?page=<n>&pageSize=<1-200>`, default 50, ordered by name then id, with
