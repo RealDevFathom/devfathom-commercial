@@ -150,7 +150,15 @@ export function RestaurantDevicesConsole() {
   });
 
   const actingStaff = approversQuery.data?.actingStaff ?? null;
-  const approvers = approversQuery.data?.approvers ?? [];
+  const selfApprovalAllowed = approversQuery.data?.selfApprovalAllowed ?? false;
+  // A solo branch owner may approve their own action with a fresh PIN; the
+  // server re-verifies the exception on every mutation.
+  const approvers = [
+    ...(selfApprovalAllowed && actingStaff
+      ? [{ id: actingStaff.id, displayName: `${actingStaff.displayName} (you, PIN only)` }]
+      : []),
+    ...(approversQuery.data?.approvers ?? []),
+  ];
 
   const permissionDenied = isPermissionError(devicesQuery.error);
   /**
@@ -180,6 +188,7 @@ export function RestaurantDevicesConsole() {
     const form = event.currentTarget;
     const data = new FormData(form);
     const actingStaffProfileId = deviceAction === 'revoke' ? actingStaff?.id : null;
+    const selfApproval = Boolean(actingStaff) && approvingStaffProfileId === actingStaff?.id;
     const approvingStaffProfileId = formText(data, 'approvingStaffProfileId');
     const approvingSecret = formText(data, 'approvingSecret');
     const approvingType = formText(data, 'approvingType') as 'PIN' | 'BADGE';
@@ -188,8 +197,14 @@ export function RestaurantDevicesConsole() {
     if (secretInput instanceof HTMLInputElement) secretInput.value = '';
     setCoAuthError('');
 
-    if (deviceAction === 'revoke' && actingStaffProfileId === approvingStaffProfileId) {
+    if (selfApproval && !selfApprovalAllowed) {
       setCoAuthError('Acting and approving staff must be different active people.');
+      return;
+    }
+    if (selfApproval && approvingType !== 'PIN') {
+      setCoAuthError(
+        'Approving your own action as the only branch staff member requires your PIN.'
+      );
       return;
     }
 
@@ -603,6 +618,9 @@ export function RestaurantDevicesConsole() {
               {deviceAction === 'rotate'
                 ? 'The current secret stops working immediately. A distinct active staff approver is required.'
                 : 'Revocation is immediate and requires a distinct active staff approver.'}
+              {selfApprovalAllowed
+                ? ' As the only active staff member at this branch, you may approve with your own PIN.'
+                : null}
             </DialogDescription>
           </DialogHeader>
           <form className="space-y-4" onSubmit={submitRevocation}>

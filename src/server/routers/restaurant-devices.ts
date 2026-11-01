@@ -17,6 +17,7 @@ import {
   revokeDevice,
   rotateDeviceSecret,
 } from '@/lib/restaurant/devices';
+import { staffBranchMembership } from '@/lib/restaurant/branch-access';
 import { staffHasCapability } from '@/lib/restaurant/job-roles';
 import {
   PrinterInventoryError,
@@ -47,15 +48,22 @@ import { auditedProtectedProcedure, capabilityProcedure, router } from '../trpc'
 
 const manageDevicesProcedure = capabilityProcedure('devices:manage');
 const coAuthorizationApprovalCapability = 'coauth:approve';
+/**
+ * Device revoke/rotate approvers need `coauth:approve` at the device's branch —
+ * the one approver capability the mutations check (`assertApproverCanCoAuthorize`).
+ * The approver directory applies the same predicate so it never offers someone
+ * whose valid credential would be refused.
+ */
+async function isEligibleDeviceApprover(db: ScopedDb, staffProfileId: string, branchId: string) {
+  return staffHasCapability(db, staffProfileId, branchId, coAuthorizationApprovalCapability);
+}
 
 async function assertApproverCanCoAuthorize(
   db: ScopedDb,
   staffProfileId: string,
   branchId: string
 ) {
-  if (
-    !(await staffHasCapability(db, staffProfileId, branchId, coAuthorizationApprovalCapability))
-  ) {
+  if (!(await isEligibleDeviceApprover(db, staffProfileId, branchId))) {
     throw new TRPCError({
       code: 'FORBIDDEN',
       message: 'The approving staff member lacks co-authorization approval permission.',
@@ -318,16 +326,14 @@ export const restaurantDevicesRouter = router({
       });
       if (!actingStaff) denyStaffBranchAccess();
 
+      // Same branch-membership rule the mutations and solo-owner check use, so
+      // owners and organization-wide administrators reach every branch here too.
       const candidates = await ctx.db.restaurantStaffProfile.findMany({
         where: {
           organizationId: ctx.organization?.id ?? ctx.session!.user.organizationId,
           id: { not: actingStaffProfileId },
           status: 'ACTIVE',
-          OR: [
-            { primaryBranchId: device.branchId },
-            { jobRoles: { some: { branchId: device.branchId } } },
-            { directCapabilityGrants: { some: { branchId: device.branchId } } },
-          ],
+          OR: staffBranchMembership(device.branchId),
         },
         select: { id: true, displayName: true },
         orderBy: [{ displayName: 'asc' }, { id: 'asc' }],
@@ -335,18 +341,21 @@ export const restaurantDevicesRouter = router({
       const eligibility = await Promise.all(
         candidates.map(async (profile) => ({
           profile,
-          eligible: await staffHasCapability(
-            ctx.db,
-            profile.id,
-            device.branchId,
-            coAuthorizationApprovalCapability
-          ),
+          eligible: await isEligibleDeviceApprover(ctx.db, profile.id, device.branchId),
         }))
       );
+
+      // The server-verified solo-owner exception: the only active staff member
+      // of the branch, holding an active owner role, may approve their own
+      // action with a fresh PIN. The mutations re-verify all of this.
+      const selfApprovalAllowed =
+        (await isSoloBranchOwner(ctx.db, actingStaffProfileId, device.branchId)) &&
+        (await isEligibleDeviceApprover(ctx.db, actingStaffProfileId, device.branchId));
 
       return {
         actingStaff,
         approvers: eligibility.filter(({ eligible }) => eligible).map(({ profile }) => profile),
+        selfApprovalAllowed,
       };
     }),
 
@@ -527,19 +536,6 @@ export const restaurantDevicesRouter = router({
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Invalid approving credential.' });
       }
       record = await buildAuthenticatedCoAuthorizationRecord(ctx.db, record);
-      if (
-        !(await staffHasCapability(
-          ctx.db,
-          input.approvingStaffProfileId,
-          device.branchId,
-          'devices:manage'
-        ))
-      ) {
-        throw new TRPCError({
-          code: 'FORBIDDEN',
-          message: 'The approving manager lacks device-management permission.',
-        });
-      }
 
       // The whole tRPC request runs inside one tenant transaction (the fetch
       // adapter wraps it in `withTenantDb`), so writing the evidence and then
@@ -656,19 +652,6 @@ export const restaurantDevicesRouter = router({
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Invalid approving credential.' });
       }
       record = await buildAuthenticatedCoAuthorizationRecord(ctx.db, record);
-      if (
-        !(await staffHasCapability(
-          ctx.db,
-          input.approvingStaffProfileId,
-          device.branchId,
-          'devices:manage'
-        ))
-      ) {
-        throw new TRPCError({
-          code: 'FORBIDDEN',
-          message: 'The approving manager lacks device-management permission.',
-        });
-      }
 
       try {
         const { result, coAuthorization } = await ctx.db.$transaction(async (tx) => {

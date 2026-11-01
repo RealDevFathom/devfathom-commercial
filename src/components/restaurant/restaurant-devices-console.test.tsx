@@ -33,6 +33,7 @@ const mocks = vi.hoisted(() => ({
       | {
           actingStaff: { id: string; displayName: string };
           approvers: { id: string; displayName: string }[];
+          selfApprovalAllowed?: boolean;
         }
       | undefined,
     error: null as unknown,
@@ -288,6 +289,93 @@ describe('Restaurant device security UI', () => {
     expect(confirmation).toBeChecked();
     expect(document.body.textContent).not.toContain('rdk_');
     expect(mocks.enrollmentMutate).not.toHaveBeenCalled();
+  });
+
+  it('lets a solo branch owner approve their own revocation with a PIN only', () => {
+    mocks.devices.data = [
+      {
+        id: 'device_1',
+        name: 'Solo POS',
+        branch: { id: 'branch_1', name: 'Downtown' },
+        status: 'ACTIVE',
+        health: 'HEALTHY',
+        lastSeenAt: null,
+        createdAt: new Date('2026-08-18T07:00:00Z'),
+      },
+    ];
+    mocks.approvers.data = {
+      actingStaff: { id: 'staff_1', displayName: 'Solo Owner' },
+      approvers: [],
+      selfApprovalAllowed: true,
+    };
+
+    renderConsole(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Revoke Solo POS' }));
+    expect(screen.getByText(/approve with your own PIN/)).toBeVisible();
+    expect(
+      screen.queryByText('No distinct active device manager is eligible to approve this action.')
+    ).not.toBeInTheDocument();
+    const approvingStaff = screen.getByLabelText('Approving staff');
+    expect(screen.getByRole('option', { name: 'Solo Owner (you, PIN only)' })).toBeInTheDocument();
+    fireEvent.change(approvingStaff, { target: { value: 'staff_1' } });
+    fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Lost terminal' } });
+
+    // A badge never satisfies the solo-owner exception.
+    fireEvent.change(screen.getByLabelText('Approving credential type'), {
+      target: { value: 'BADGE' },
+    });
+    fireEvent.change(screen.getByLabelText('Approving PIN or badge secret'), {
+      target: { value: 'badge-value' },
+    });
+    const confirm = screen.getByRole('button', { name: 'Confirm revocation' });
+    expect(confirm).toBeEnabled();
+    fireEvent.click(confirm);
+    expect(screen.getByRole('alert')).toHaveTextContent('requires your PIN');
+    expect(mocks.revokeMutate).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText('Approving credential type'), {
+      target: { value: 'PIN' },
+    });
+    fireEvent.change(screen.getByLabelText('Approving PIN or badge secret'), {
+      target: { value: '482913' },
+    });
+    fireEvent.click(confirm);
+    expect(mocks.revokeMutate).toHaveBeenCalledWith(
+      {
+        deviceId: 'device_1',
+        actingStaffProfileId: 'staff_1',
+        approvingStaffProfileId: 'staff_1',
+        approvingType: 'PIN',
+        approvingSecret: '482913',
+        reason: 'Lost terminal',
+      },
+      expect.objectContaining({ onSettled: expect.any(Function) })
+    );
+  });
+
+  it('still refuses self-approval when the server does not allow the solo-owner exception', () => {
+    mocks.devices.data = [
+      {
+        id: 'device_1',
+        name: 'Team POS',
+        branch: { id: 'branch_1', name: 'Downtown' },
+        status: 'ACTIVE',
+        health: 'HEALTHY',
+        lastSeenAt: null,
+        createdAt: new Date('2026-08-18T07:00:00Z'),
+      },
+    ];
+    mocks.approvers.data = {
+      actingStaff: { id: 'staff_1', displayName: 'Acting Admin' },
+      approvers: [{ id: 'staff_2', displayName: 'Shift Manager' }],
+      selfApprovalAllowed: false,
+    };
+
+    renderConsole(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Revoke Team POS' }));
+    expect(
+      screen.queryByRole('option', { name: 'Acting Admin (you, PIN only)' })
+    ).not.toBeInTheDocument();
   });
 
   it('scopes printer inventory to the verified owner and refreshes it after enrollment', () => {
