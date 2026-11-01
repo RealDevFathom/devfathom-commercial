@@ -598,6 +598,12 @@ describe('verify', () => {
 
 describe('waive', () => {
   it('maps CO_AUTH_REQUIRED → FORBIDDEN when actor equals approver', async () => {
+    // `isSoloOwner` selects the user's role and job roles; the session staff
+    // here is the only active profile but is not an owner, so self-approval fails.
+    db.restaurantStaffProfile.findMany.mockImplementation(
+      async (args: { select?: { user?: unknown } }) =>
+        args?.select?.user ? [{ id: 'staff_a', user: null, jobRoles: [] }] : [{ id: 'staff_a' }]
+    );
     db.restaurantSopOccurrence.findUnique.mockResolvedValue({
       id: OCC_ID,
       assignedStaffProfileId: 'staff_a',
@@ -617,6 +623,7 @@ describe('waive', () => {
         reason: 'test',
       })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.restaurantCoAuthorization.create).not.toHaveBeenCalled();
   });
 
   it('waives with valid co-authorization', async () => {
@@ -978,9 +985,42 @@ describe('authenticated SOP identity boundary', () => {
     expect(db.restaurantSopOccurrence.update).not.toHaveBeenCalled();
     expect(db.restaurantStaffProfile.findMany).toHaveBeenCalledWith({
       where: { userId: 'user_1', organizationId: 'org_1', status: 'ACTIVE' },
-      select: { id: true },
-      take: 2,
+      orderBy: { id: 'asc' },
+      select: {
+        id: true,
+        primaryBranchId: true,
+        jobRoles: {
+          where: { branchId: 'branch_1', jobRole: { active: true } },
+          select: { jobRoleId: true },
+        },
+      },
     });
+  });
+
+  it("acts as a multi-branch employee's profile at the occurrence branch", async () => {
+    occurrence('SCHEDULED');
+    db.restaurantStaffProfile.findMany.mockResolvedValue([
+      { id: 'staff_0_other_branch', primaryBranchId: 'branch_2', jobRoles: [] },
+      { id: 'staff_a', primaryBranchId: 'branch_1', jobRoles: [] },
+    ]);
+    db.restaurantSopOccurrence.update.mockResolvedValue({ id: OCC_ID, startedAt: new Date() });
+    await expect(caller().start({ occurrenceId: OCC_ID })).resolves.toMatchObject({
+      status: 'IN_PROGRESS',
+    });
+  });
+
+  it('records a multi-branch verifier as their profile at the occurrence branch', async () => {
+    occurrence('SUBMITTED');
+    db.restaurantStaffProfile.findMany.mockResolvedValue([
+      { id: 'staff_0_other_branch', primaryBranchId: 'branch_2', jobRoles: [] },
+      { id: 'staff_here', primaryBranchId: null, jobRoles: [{ jobRoleId: 'role_1' }] },
+    ]);
+    await caller().verify({ occurrenceId: OCC_ID });
+    expect(db.restaurantSopVerification.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ actorStaffProfileId: 'staff_here' }),
+      })
+    );
   });
 
   it.each(['completeStep', 'submit'] as const)(
@@ -1173,6 +1213,14 @@ describe('authenticated SOP identities', () => {
   it.each([{ profiles: [] }, { profiles: [{ id: 'one' }, { id: 'two' }] }])(
     'rejects absent or ambiguous session staff: %j',
     async ({ profiles }) => {
+      db.restaurantSopOccurrence.findUnique.mockResolvedValue({
+        id: OCC_ID,
+        branchId: 'branch_1',
+        status: 'SCHEDULED',
+        assignedStaffProfileId: 'victim',
+        claimedByStaffProfileId: null,
+        poolJobRoleId: null,
+      });
       db.restaurantStaffProfile.findMany.mockResolvedValue(profiles);
       await expect(
         caller().start({ occurrenceId: OCC_ID, actorStaffProfileId: 'victim' })

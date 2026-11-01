@@ -283,7 +283,22 @@ async function authorizeExecutionMutation(ctx: TRPCContext, occurrenceId: string
   if (!isOccurrenceVisible(scope, occ)) {
     throw new TRPCError({ code: 'NOT_FOUND', message: 'Occurrence not found.' });
   }
-  return requireSopActor(ctx);
+  // Same branch-specific profile choice as `executionScope`, so the profile that
+  // passed the visibility check is the one recorded as the actor.
+  return requireSopActor(ctx, occ.branchId);
+}
+
+/**
+ * The session actor for a verifier/escalation command, resolved against the
+ * occurrence's branch so a multi-branch employee acts as that branch's profile.
+ * A missing occurrence is left to the domain command, which reports NOT_FOUND.
+ */
+async function occurrenceActor(ctx: TRPCContext, occurrenceId: string): Promise<string> {
+  const occ = await ctx.db.restaurantSopOccurrence.findUnique({
+    where: { id: occurrenceId },
+    select: { branchId: true },
+  });
+  return requireSopActor(ctx, occ?.branchId);
 }
 
 // ── Read: branch board ────────────────────────────────────────────────────────
@@ -767,7 +782,7 @@ export const restaurantSopExecutionRouter = router({
       try {
         const result = await verifyOccurrence(ctx.db, {
           ...input,
-          actorStaffProfileId: await requireSopActor(ctx),
+          actorStaffProfileId: await occurrenceActor(ctx, input.occurrenceId),
         });
         annotateAudit(ctx, {
           targetType: 'RestaurantSopOccurrence',
@@ -795,7 +810,7 @@ export const restaurantSopExecutionRouter = router({
       try {
         const result = await rejectOccurrence(ctx.db, {
           ...input,
-          actorStaffProfileId: await requireSopActor(ctx),
+          actorStaffProfileId: await occurrenceActor(ctx, input.occurrenceId),
         });
         annotateAudit(ctx, {
           targetType: 'RestaurantSopOccurrence',
@@ -825,12 +840,12 @@ export const restaurantSopExecutionRouter = router({
       annotateAudit(ctx, { skipInput: true });
       assertSopDepth(ctx.entitlements, 'sop.waiver');
       try {
-        const actorStaffProfileId = await requireSopActor(ctx);
         const occurrence = await ctx.db.restaurantSopOccurrence.findUnique({
           where: { id: input.occurrenceId },
           select: { branchId: true },
         });
         if (!occurrence) throw new SopVerificationError('Occurrence not found.', 'NOT_FOUND');
+        const actorStaffProfileId = await requireSopActor(ctx, occurrence.branchId);
         // The approver proves their identity server-side (PIN/badge, durable
         // lockout) and must hold `sop:verify` at the occurrence branch. A distinct
         // approver is required unless the session actor is a sole owner who has
@@ -896,7 +911,7 @@ export const restaurantSopExecutionRouter = router({
       try {
         return await acknowledgeEscalation(ctx.db, {
           ...input,
-          actorStaffProfileId: await requireSopActor(ctx),
+          actorStaffProfileId: await occurrenceActor(ctx, input.occurrenceId),
         });
       } catch (err) {
         if (err instanceof TRPCError) throw err;

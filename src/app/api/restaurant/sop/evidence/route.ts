@@ -127,7 +127,14 @@ export async function POST(request: Request) {
     });
     if (!allowed) throw new Error('You do not have permission to capture SOP proof.');
 
-    const uploaderStaffProfileId = await requireSopActor(ctx);
+    // Resolve the uploader against the occurrence's branch so a multi-branch
+    // employee uploads as that branch's profile. An unknown occurrence is left to
+    // `attachEvidence`, which reports NOT_FOUND (and owner checks still apply).
+    const target = await ctx.db.restaurantSopOccurrence.findUnique({
+      where: { id: occurrenceId },
+      select: { branchId: true },
+    });
+    const uploaderStaffProfileId = await requireSopActor(ctx, target?.branchId);
 
     const hash = crypto.createHash('sha256').update(bytes).digest('hex');
     storedFilename = `sop-${crypto.randomUUID()}.${extension}`;

@@ -96,6 +96,7 @@ function makeDb() {
     restaurantJobRole: model(),
     restaurantStaffProfile: model(),
     restaurantSopOccurrence: {
+      findUnique: vi.fn().mockResolvedValue(null),
       findFirst: vi.fn().mockResolvedValue(null),
       findMany: vi.fn().mockResolvedValue([]),
     },

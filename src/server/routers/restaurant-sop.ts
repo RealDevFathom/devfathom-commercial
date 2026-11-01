@@ -619,7 +619,7 @@ export const restaurantSopRouter = router({
   listClaimablePool: completeProcedure
     .input(z.object({ staffProfileId: z.string().optional(), branchId: z.string() }).strict())
     .query(async ({ ctx, input }) =>
-      listClaimablePoolOccurrences(ctx.db, await requireSopActor(ctx), {
+      listClaimablePoolOccurrences(ctx.db, await requireSopActor(ctx, input.branchId), {
         branchId: input.branchId,
       })
     ),
@@ -631,7 +631,9 @@ export const restaurantSopRouter = router({
   listMySopOccurrences: completeProcedure
     .input(z.object({ staffProfileId: z.string().optional(), branchId: z.string() }).strict())
     .query(async ({ ctx, input }) =>
-      listStaffSopOccurrences(ctx.db, await requireSopActor(ctx), { branchId: input.branchId })
+      listStaffSopOccurrences(ctx.db, await requireSopActor(ctx, input.branchId), {
+        branchId: input.branchId,
+      })
     ),
 
   /**
@@ -645,7 +647,13 @@ export const restaurantSopRouter = router({
     .mutation(async ({ ctx, input }) => {
       // The claimant is the caller's session staff profile; a supplied
       // `staffProfileId` is ignored so no one can claim on another's behalf.
-      const claimant = await requireSopActor(ctx);
+      // Resolved against the occurrence's branch, so a multi-branch employee
+      // claims as their profile for that branch.
+      const target = await ctx.db.restaurantSopOccurrence.findUnique({
+        where: { id: input.occurrenceId },
+        select: { branchId: true },
+      });
+      const claimant = await requireSopActor(ctx, target?.branchId);
       const outcome = await claimSopOccurrence(ctx.db, input.occurrenceId, claimant);
       if (outcome.status === 'NOT_CLAIMABLE') {
         throw new TRPCError({
