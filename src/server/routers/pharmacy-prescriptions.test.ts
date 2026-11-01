@@ -499,12 +499,7 @@ describe('prescription capture and private delivery', () => {
     expect(mocks.can.mock.calls.map(([, requestedAction]) => requestedAction)).toEqual(
       action === 'pharmacy:counter'
         ? ['pharmacy:counter', 'pharmacy:counter']
-        : [
-            'pharmacy:counter',
-            'pharmacy:dispense',
-            'pharmacy:counter',
-            'pharmacy:dispense',
-          ]
+        : ['pharmacy:counter', 'pharmacy:dispense', 'pharmacy:counter', 'pharmacy:dispense']
     );
   });
 
@@ -858,5 +853,95 @@ describe('PH-A3 prescription OCR prefill', () => {
       message: 'The prescription could not be read. Enter the details by hand.',
     });
     expect(mocks.medicines).not.toHaveBeenCalled();
+  });
+});
+
+describe('prescriber directory entry', () => {
+  const prescriberCreate = vi.fn();
+  function directoryContext() {
+    const ctx = context();
+    const db = ctx.db as unknown as Record<string, Record<string, unknown>>;
+    db.pharmacyPrescriber = { findFirst: mocks.prescriber, create: prescriberCreate };
+    return ctx;
+  }
+  const input = {
+    name: '  Dr. Synthetic Prescriber ',
+    registrationNumber: ' PMC-0001 ',
+    phone: '',
+    facility: 'Synthetic Clinic',
+  };
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mocks.can.mockResolvedValue(true);
+    mocks.hasModule.mockReturnValue(true);
+    mocks.prescriber.mockResolvedValue(null);
+    prescriberCreate.mockImplementation(async ({ data }) => ({
+      id: 'prescriber-new',
+      name: data.name,
+      registrationNumber: data.registrationNumber,
+    }));
+  });
+
+  it('adds a trimmed prescriber scoped to the caller organization, without raw input audit', async () => {
+    const ctx = directoryContext();
+    await expect(caller(ctx).createPrescriber(input)).resolves.toEqual({
+      id: 'prescriber-new',
+      name: 'Dr. Synthetic Prescriber',
+      registrationNumber: 'PMC-0001',
+    });
+    expect(mocks.prescriber).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { organizationId: 'org-a', registrationNumber: 'PMC-0001' },
+      })
+    );
+    expect(prescriberCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: {
+          name: 'Dr. Synthetic Prescriber',
+          registrationNumber: 'PMC-0001',
+          phone: null,
+          facility: 'Synthetic Clinic',
+        },
+      })
+    );
+    expect(ctx.audit.detail.skipInput).toBe(true);
+    expect(mocks.audit).toHaveBeenCalledWith(expect.objectContaining({ ctx, outcome: 'SUCCESS' }));
+  });
+
+  it('requires the prescription capability and the dispensing module', async () => {
+    mocks.can.mockResolvedValue(false);
+    await expect(caller(directoryContext()).createPrescriber(input)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    mocks.can.mockResolvedValue(true);
+    mocks.hasModule.mockReturnValue(false);
+    await expect(caller(directoryContext()).createPrescriber(input)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(prescriberCreate).not.toHaveBeenCalled();
+  });
+
+  it('refuses a duplicate registration number, including a lost unique race', async () => {
+    mocks.prescriber.mockResolvedValueOnce({ id: 'prescriber-a' });
+    await expect(caller(directoryContext()).createPrescriber(input)).rejects.toMatchObject({
+      code: 'CONFLICT',
+    });
+    expect(prescriberCreate).not.toHaveBeenCalled();
+
+    prescriberCreate.mockRejectedValueOnce(Object.assign(new Error('unique'), { code: 'P2002' }));
+    await expect(caller(directoryContext()).createPrescriber(input)).rejects.toMatchObject({
+      code: 'CONFLICT',
+    });
+  });
+
+  it('rejects a blank name or registration number before any write', async () => {
+    await expect(
+      caller(directoryContext()).createPrescriber({ ...input, name: '   ' })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(
+      caller(directoryContext()).createPrescriber({ ...input, registrationNumber: '' })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(prescriberCreate).not.toHaveBeenCalled();
   });
 });

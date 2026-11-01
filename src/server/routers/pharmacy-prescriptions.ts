@@ -203,6 +203,47 @@ export const pharmacyPrescriptionsRouter = router({
     )
     .mutation(({ ctx, input }) => ctx.db.pharmacyPatient.create({ data: input })),
 
+  /**
+   * Add a prescriber to this organization's directory so a prescription can be
+   * captured against them. Same prescription capability and audit path as capture.
+   */
+  createPrescriber: fileProcedure
+    .input(
+      z
+        .object({
+          name: z.string().trim().min(1).max(200),
+          registrationNumber: z.string().trim().min(1).max(64),
+          phone: z.string().trim().max(32).optional(),
+          facility: z.string().trim().max(200).optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const organizationId = ctx.entitlements.organizationId;
+      const duplicateMessage = 'A prescriber with this registration number is already listed.';
+      const existing = await ctx.db.pharmacyPrescriber.findFirst({
+        where: { organizationId, registrationNumber: input.registrationNumber },
+        select: { id: true },
+      });
+      if (existing) throw new TRPCError({ code: 'CONFLICT', message: duplicateMessage });
+      try {
+        return await ctx.db.pharmacyPrescriber.create({
+          data: {
+            name: input.name,
+            registrationNumber: input.registrationNumber,
+            phone: input.phone || null,
+            facility: input.facility || null,
+          },
+          select: { id: true, name: true, registrationNumber: true },
+        });
+      } catch (error) {
+        // A concurrent insert lost the (organizationId, registrationNumber) unique race.
+        if ((error as { code?: unknown } | null)?.code === 'P2002')
+          throw new TRPCError({ code: 'CONFLICT', message: duplicateMessage, cause: error });
+        throw error;
+      }
+    }),
+
   recordConsent: protectedProcedure
     .input(
       z

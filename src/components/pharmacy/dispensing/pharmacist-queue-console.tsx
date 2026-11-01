@@ -1,11 +1,13 @@
 'use client';
 
 import { useRef, useState } from 'react';
+import Link from 'next/link';
+import { FileText, RefreshCw, ShoppingCart } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import {
   Dialog,
   DialogContent,
@@ -85,7 +87,38 @@ export function PharmacistQueueConsole() {
       ) : null}
       {queue.data?.items.length === 0 ? (
         <WorkspaceState title="Queue clear">
-          No medicine lines are waiting for pharmacist review.
+          <p>No medicine lines are waiting for pharmacist review.</p>
+          <p className="mt-2">
+            Lines arrive here when the counter sells a prescription-only medicine against a captured
+            prescription, and the sale needs a pharmacist to verify, counsel or sign before release.
+            Capture the prescription first, then add the medicine to the bill at the counter.
+          </p>
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <Link
+              href="/pharmacy/prescriptions"
+              className={buttonVariants({ variant: 'outline', size: 'touch' })}
+            >
+              <FileText aria-hidden />
+              Open prescriptions
+            </Link>
+            <Link
+              href="/pharmacy/counter"
+              className={buttonVariants({ variant: 'outline', size: 'touch' })}
+            >
+              <ShoppingCart aria-hidden />
+              Open counter
+            </Link>
+            <Button
+              type="button"
+              variant="ghost"
+              size="touch"
+              disabled={queue.isFetching}
+              onClick={() => void queue.refetch()}
+            >
+              <RefreshCw aria-hidden />
+              {queue.isFetching ? 'Refreshing…' : 'Refresh queue'}
+            </Button>
+          </div>
         </WorkspaceState>
       ) : null}
       {queue.data && active ? (
