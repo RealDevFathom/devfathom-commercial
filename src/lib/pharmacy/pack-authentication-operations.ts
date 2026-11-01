@@ -1,5 +1,6 @@
 import 'server-only';
 
+import { TRPCError } from '@trpc/server';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { normalizeMedicineText } from './medicine';
 import { parseGs1DataMatrix } from './gs1-datamatrix';
@@ -25,7 +26,10 @@ export async function authenticatePharmacyPack(
     where: { id: input.branchId, organizationId: input.organizationId, active: true },
     select: { id: true },
   });
-  if (!branch) throw new Error('Branch is outside your pharmacy scope.');
+  // The scan's refusal is the operator's to read, so it travels as a deliberate
+  // TRPCError: a plain Error reaches a production client only as "Something went wrong".
+  if (!branch)
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your pharmacy scope.' });
 
   const parsed = parseGs1DataMatrix(input.payload);
   const fields = parsed.kind === 'parsed' ? parsed.fields : null;

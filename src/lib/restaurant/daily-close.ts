@@ -36,15 +36,16 @@ import { enqueueInsightRollup } from './insight-rollups';
  *   - deliveryFeeSales = Σ SETTLED bill.deliveryFeeTotal (non-taxable v1)
  *   - deliveryFeeRefunds = Σ refund.deliveryFeeRefundAmount for processing date
  *   - compTotal    = Σ SETTLED bill.compTotal
- *   - taxTotal / serviceChargeTotal = Σ SETTLED bill.{taxTotal,serviceChargeTotal}
- *                    (structurally zero in M5)
+ *   - taxTotal / serviceChargeTotal = billed totals minus the corresponding
+ *                    refund components processed on this business date
  *   - discountTotal= Σ SETTLED bill.discountTotal
- *   - netSales     = grossSales − compTotal − discountTotal − refundTotal
- *                    (board decision WHA-1621 Q1; refunds are still reported
- *                    separately as refundTotal)
+ *   - netSales     = grossSales − compTotal − discountTotal − refunded
+ *                    pre-tax sales principal. Tax, service charge and delivery
+ *                    fee refund components are not sales principal.
  *   - tipTotal     = Σ tender.tipAmount for the date (== Σ child tipAmount)
- *   - refundTotal  = Σ refund.amount for the PROCESSING date (C7 — cross-date
- *                    corrections land on the day processed, never a prior close)
+ *   - refundTotal  = Σ (refund.amount − refund.deliveryFeeRefundAmount) for the
+ *                    PROCESSING date (C7 — cross-date corrections land on the day
+ *                    processed, never a prior close). Delivery is reported separately.
  *   - voidTotal    = Σ VOID bill.grandTotal
  *   - cash{Expected,Counted,Variance} = Σ over drawer sessions of the ledger fold
  *                    / counted / (counted − expected)
@@ -103,6 +104,8 @@ export type AggregateTender = {
 };
 export type AggregateRefund = {
   amount: Prisma.Decimal;
+  taxRefundAmount: Prisma.Decimal;
+  serviceChargeRefundAmount: Prisma.Decimal;
   deliveryFeeRefundAmount: Prisma.Decimal;
 };
 export type AggregateDrawer = {
@@ -156,15 +159,27 @@ export function computeCloseAggregate(inputs: AggregateInputs): CloseAggregate {
   const grossSales = sum(settled.map((b) => b.subtotal));
   const deliveryFeeSales = sum(settled.map((b) => b.deliveryFeeTotal));
   const compTotal = sum(settled.map((b) => b.compTotal));
-  const taxTotal = sum(settled.map((b) => b.taxTotal));
-  const serviceChargeTotal = sum(settled.map((b) => b.serviceChargeTotal));
+  const billedTaxTotal = sum(settled.map((b) => b.taxTotal));
+  const billedServiceChargeTotal = sum(settled.map((b) => b.serviceChargeTotal));
   const discountTotal = sum(settled.map((b) => b.discountTotal));
   const voidTotal = sum(voided.map((b) => b.grandTotal));
 
   const tipTotal = sum(inputs.tenders.map((t) => t.tipAmount));
-  const refundTotal = sum(inputs.refunds.map((r) => r.amount));
-  const netSales = sub(sub(sub(grossSales, compTotal), discountTotal), refundTotal);
+  const refundedTaxTotal = sum(inputs.refunds.map((r) => r.taxRefundAmount));
+  const refundedServiceChargeTotal = sum(inputs.refunds.map((r) => r.serviceChargeRefundAmount));
   const deliveryFeeRefunds = sum(inputs.refunds.map((r) => r.deliveryFeeRefundAmount));
+  const refundTotal = sub(sum(inputs.refunds.map((r) => r.amount)), deliveryFeeRefunds);
+  const refundedSales = sum(
+    inputs.refunds.map((r) =>
+      sub(
+        sub(sub(r.amount, r.taxRefundAmount), r.serviceChargeRefundAmount),
+        r.deliveryFeeRefundAmount
+      )
+    )
+  );
+  const netSales = sub(sub(sub(grossSales, compTotal), discountTotal), refundedSales);
+  const taxTotal = sub(billedTaxTotal, refundedTaxTotal);
+  const serviceChargeTotal = sub(billedServiceChargeTotal, refundedServiceChargeTotal);
 
   const cashExpected = sum(inputs.drawers.map((d) => d.expectedCash));
   const cashCounted = sum(inputs.drawers.map((d) => d.countedCash ?? ZERO));
@@ -254,7 +269,12 @@ async function loadCloseInputs(
   });
   const refunds = await db.restaurantRefund.findMany({
     where: { businessDate, bill: { branchId } },
-    select: { amount: true, deliveryFeeRefundAmount: true },
+    select: {
+      amount: true,
+      taxRefundAmount: true,
+      serviceChargeRefundAmount: true,
+      deliveryFeeRefundAmount: true,
+    },
   });
   const drawers = await db.restaurantDrawerSession.findMany({
     where: { branchId, businessDate },

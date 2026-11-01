@@ -12,7 +12,9 @@ import { accrueSalePoints, restoreRefundedLoyaltyPoints } from './customer-loyal
 import { returnedLineValue } from './sales';
 import { postTenderEntry, postTenderRefundEntry } from './finance-postings';
 import { firstCloseIsFinal } from './migration/first-close';
+import { assertSaleBatchesSellable } from './sale-batch-safety';
 import { completePaidPharmacySale, completionSaleInclude } from './sale-completion';
+import { assertRxSaleAllowed } from './rx-sale-gate';
 import type { LedgerScope } from './stock-ledger';
 import { paymentSandboxAdmitted } from './payment-sandbox-admission';
 import { authenticatePharmacyCommand, validateLeasedReceiptReplay } from './sales';
@@ -227,7 +229,7 @@ async function bindIdempotency(
 /** Shared transaction lock: closing cannot race a new tender or drawer write. */
 export async function lockPharmacyDay(db: ScopedDb, scope: LedgerScope, date: Date) {
   await db.$queryRaw(
-    Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`${scope.organizationId}:${scope.branchId}:${date.toISOString().slice(0, 10)}`}))`
+    Prisma.sql`SELECT 1 AS locked FROM pg_advisory_xact_lock(hashtext(${`${scope.organizationId}:${scope.branchId}:${date.toISOString().slice(0, 10)}`}))`
   );
 }
 
@@ -296,6 +298,15 @@ export async function applyPharmacyTender(
     include: completionSaleInclude,
   });
   if (!sale || sale.status !== 'OPEN') throw new PharmacySettlementError('SALE_NOT_OPEN');
+  // #518: a line added earlier cannot be paid for by someone who may not sell it.
+  await assertRxSaleAllowed(
+    db,
+    scope,
+    sale.lines.map((line) => line.medicine)
+  );
+  // #633: before any lease, provider charge, tender or posting. A batch recalled,
+  // quarantined or expired since add-to-cart refuses the payment.
+  await assertSaleBatchesSellable(db, scope, sale.id);
   const totalMinor = saleTotalMinor(sale.lines);
   const tenderedMinor = sale.tenders.reduce((sum, tender) => sum + tender.amountMinor, 0);
   if (input.amountMinor > totalMinor - tenderedMinor)
@@ -800,13 +811,14 @@ export async function cutPharmacyDailyClose(
   scope: LedgerScope,
   input: {
     businessDate: Date;
-    reason?: string;
     reopenReason?: string;
+    /** The operator's explanation of a counted variance; never stands in for a reopen reason. */
+    varianceNote?: string;
     controlledCountHook?: unknown;
   }
 ) {
   await db.$queryRaw(
-    Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`${scope.organizationId}:${scope.branchId}:${input.businessDate.toISOString().slice(0, 10)}`}))`
+    Prisma.sql`SELECT 1 AS locked FROM pg_advisory_xact_lock(hashtext(${`${scope.organizationId}:${scope.branchId}:${input.businessDate.toISOString().slice(0, 10)}`}))`
   );
   const openDrawers = await db.pharmacyDrawerSession.count({
     where: {
@@ -875,7 +887,9 @@ export async function cutPharmacyDailyClose(
       businessDate: input.businessDate,
       sequence: (prior?.sequence ?? 0) + 1,
       supersedesCloseId: prior?.id,
-      reason: input.reason?.trim() || input.reopenReason?.trim(),
+      // The row is append-only, so its one reason is written here: the reopen reason when given,
+      // as before, otherwise the variance note.
+      reason: input.reopenReason?.trim() ?? (input.varianceNote?.trim() || undefined),
       ...aggregate,
       isFinal,
       controlledCountHook: input.controlledCountHook as Prisma.InputJsonValue | undefined,

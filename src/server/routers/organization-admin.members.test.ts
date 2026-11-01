@@ -70,14 +70,19 @@ const db: MemberDb = {
 
 const immediateTransaction = (fn: (tx: MemberDb) => Promise<unknown>) => fn(db);
 
-function caller(organizationId = 'org_a', entitlements = { activeSeats: 1, seatLimit: 10 }) {
+function caller(
+  organizationId = 'org_a',
+  entitlements = { activeSeats: 1, seatLimit: 10 },
+  support = false
+) {
   return organizationAdminRouter.createCaller({
     db,
     entitlements: { enabledModules: [], ...entitlements },
     session: {
-      expires: 'later',
+      expires: new Date(Date.now() + 60_000).toISOString(),
       user: {
         id: 'admin_a',
+        isSupportSession: support,
         organizationId,
         role: 'ADMIN',
         department: 'COUNTER',
@@ -85,7 +90,9 @@ function caller(organizationId = 'org_a', entitlements = { activeSeats: 1, seatL
       },
     },
     organization: null,
-    support: null,
+    support: support
+      ? { organizationId, tenantUserId: 'admin_a', expiresAt: new Date(Date.now() + 60_000) }
+      : null,
     requestMeta: { ip: null, userAgent: null },
     audit: { detail: {} },
   } as unknown as TRPCContext);
@@ -102,7 +109,7 @@ const input = {
 };
 
 const updateInput = {
-  id: 'admin_a',
+  id: 'admin_b',
   role: 'EMPLOYEE' as const,
   status: 'ACTIVE' as const,
   organizationRoleId: null,
@@ -113,6 +120,7 @@ const updateInput = {
 describe('organization member updates', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    db.$transaction = immediateTransaction;
     db.$transaction = immediateTransaction;
     mocks.departmentFindFirst.mockResolvedValue({ id: 'dept_counter' });
     mocks.userFindFirst.mockResolvedValue({
@@ -130,17 +138,16 @@ describe('organization member updates', () => {
   });
 
   it('refuses to demote the last active admin through the organization admin path', async () => {
-    mocks.userCount.mockResolvedValue(0);
+    mocks.userCount.mockResolvedValue(1);
 
-    await expect(caller().updateMember(updateInput)).rejects.toMatchObject({
+    await expect(caller().updateMember({ ...updateInput, id: 'admin_a' })).rejects.toMatchObject({
       code: 'BAD_REQUEST',
       message: 'Cannot demote or deactivate the last active admin.',
     });
     expect(mocks.userCount).toHaveBeenCalledWith({
       where: {
         organizationId: 'org_a',
-        id: { not: 'admin_a' },
-        role: 'ADMIN',
+                role: 'ADMIN',
         status: 'ACTIVE',
       },
     });
@@ -148,9 +155,9 @@ describe('organization member updates', () => {
   });
 
   it('allows an admin demotion when another active admin remains', async () => {
-    mocks.userCount.mockResolvedValue(1);
+    mocks.userCount.mockResolvedValue(2);
 
-    await expect(caller().updateMember(updateInput)).resolves.toMatchObject({
+    await expect(caller().updateMember({ ...updateInput, id: 'admin_a' })).resolves.toMatchObject({
       id: 'admin_a',
       role: 'EMPLOYEE',
     });
@@ -181,8 +188,7 @@ describe('organization member updates', () => {
       status: 'ACTIVE',
     }));
     mocks.userCount.mockImplementation(
-      async ({ where }: { where: { id: { not: string } } }) =>
-        [...activeAdmins].filter((adminId) => adminId !== where.id.not).length
+      async () => activeAdmins.size
     );
     mocks.userUpdate.mockImplementation(async ({ where }: { where: { id: string } }) => {
       activeAdmins.delete(where.id);
@@ -190,7 +196,7 @@ describe('organization member updates', () => {
     });
 
     const results = await Promise.allSettled([
-      caller().updateMember(updateInput),
+      caller().updateMember({ ...updateInput, id: 'admin_a' }),
       caller().updateMember({ ...updateInput, id: 'admin_b' }),
     ]);
 
@@ -201,7 +207,7 @@ describe('organization member updates', () => {
     for (const [query] of mocks.queryRaw.mock.calls) {
       // $queryRaw is a tagged template: the first argument is the strings array.
       const sql = Array.isArray(query) ? query.join('?') : String(query?.sql ?? query);
-      expect(sql).toContain('FROM "users"');
+      expect(sql).toContain('FROM "organizations"');
       expect(sql).toContain('FOR UPDATE');
     }
   });
@@ -210,6 +216,7 @@ describe('organization member updates', () => {
 describe('organization member creation', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    db.$transaction = immediateTransaction;
     mocks.assertSeatAvailable.mockImplementation(() => {});
     mocks.departmentFindFirst.mockResolvedValue({ id: 'dept_counter' });
     mocks.roleFindFirst.mockResolvedValue({ id: 'role_cashier' });
@@ -225,12 +232,19 @@ describe('organization member creation', () => {
     });
   });
 
-  it.each(['aaaaaaaaaaaa', 'AAAAAAAAAAAA', 'PasswordOnly'])('rejects weak staff passwords: %s', async (password) => {
-    await expect(caller().createMember({ ...input, password })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
-    await expect(caller().resetMemberPassword({ id: 'member', password })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
-    expect(mocks.userCreate).not.toHaveBeenCalled();
-    expect(mocks.userFindFirst).not.toHaveBeenCalled();
-  });
+  it.each(['aaaaaaaaaaaa', 'AAAAAAAAAAAA', 'PasswordOnly'])(
+    'rejects weak staff passwords: %s',
+    async (password) => {
+      await expect(caller().createMember({ ...input, password })).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+      });
+      await expect(caller().resetMemberPassword({ id: 'member', password })).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+      });
+      expect(mocks.userCreate).not.toHaveBeenCalled();
+      expect(mocks.userFindFirst).not.toHaveBeenCalled();
+    }
+  );
 
   it('creates an ACTIVE member scoped to the caller tenant with a hashed password', async () => {
     await caller('org_a').createMember(input);
@@ -328,6 +342,7 @@ describe('organization member creation', () => {
       select: { id: true },
     });
     expect(mocks.assignmentCreateMany).toHaveBeenCalledWith({
+      skipDuplicates: true,
       data: [
         { organizationId: 'org_a', branchId: 'branch_clifton', userId: 'user_new', active: true },
         { organizationId: 'org_a', branchId: 'branch_dha', userId: 'user_new', active: true },
@@ -343,5 +358,155 @@ describe('organization member creation', () => {
     ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'Choose an active pharmacy branch.' });
     expect(mocks.userCreate).not.toHaveBeenCalled();
     expect(mocks.assignmentCreateMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('organization member last-admin guard', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    db.$transaction = immediateTransaction;
+    mocks.departmentFindFirst.mockResolvedValue({ id: 'dept_counter' });
+    mocks.userFindFirst.mockResolvedValue({
+      id: 'admin_b',
+      email: 'admin@example.test',
+      role: 'ADMIN',
+      status: 'ACTIVE',
+    });
+    mocks.userCount.mockResolvedValue(1);
+    mocks.queryRaw.mockResolvedValue([{ id: 'org_a' }]);
+    mocks.userUpdate.mockResolvedValue({ id: 'admin_b', email: 'admin@example.test' });
+  });
+
+  it('refuses to demote the last active admin under the organization row lock', async () => {
+    await expect(caller().updateMember(updateInput)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'Cannot demote or deactivate the last active admin.',
+    });
+
+    expect(mocks.queryRaw).toHaveBeenCalledOnce();
+    expect(mocks.userCount).toHaveBeenCalledWith({
+      where: { organizationId: 'org_a', role: 'ADMIN', status: 'ACTIVE' },
+    });
+    expect(mocks.queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.userCount.mock.invocationCallOrder[0]!
+    );
+    expect(mocks.userUpdate).not.toHaveBeenCalled();
+  });
+
+  it('refuses to deactivate the last active admin', async () => {
+    await expect(
+      caller().updateMember({ ...updateInput, role: 'ADMIN', status: 'INACTIVE' })
+    ).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'Cannot demote or deactivate the last active admin.',
+    });
+
+    expect(mocks.userUpdate).not.toHaveBeenCalled();
+  });
+
+  it('serializes concurrent two-admin demotions so one active admin remains', async () => {
+    let activeAdmins = 2;
+    let transactionTail = Promise.resolve();
+    const concurrentDb = {
+      ...db,
+      user: {
+        ...db.user,
+        count: vi.fn(async () => activeAdmins),
+        update: vi.fn(async ({ data }: { data: { role: string; status: string } }) => {
+          if (data.role !== 'ADMIN' || data.status !== 'ACTIVE') activeAdmins -= 1;
+          return { id: 'updated', email: 'admin@example.test' };
+        }),
+      },
+      $transaction: async (fn: (tx: MemberDb) => Promise<unknown>) => {
+        const prior = transactionTail;
+        let release!: () => void;
+        transactionTail = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        await prior;
+        try {
+          return await fn(concurrentDb as MemberDb);
+        } finally {
+          release();
+        }
+      },
+    };
+    const concurrentCaller = (memberId: string) =>
+      organizationAdminRouter
+        .createCaller({
+          db: concurrentDb,
+          entitlements: { enabledModules: [], activeSeats: 2, seatLimit: 10 },
+          session: {
+            expires: new Date(Date.now() + 60_000).toISOString(),
+            user: {
+              id: 'admin_a',
+              organizationId: 'org_a',
+              role: 'ADMIN',
+              department: 'COUNTER',
+              status: 'ACTIVE',
+            },
+          },
+          organization: null,
+          support: null,
+          requestMeta: { ip: null, userAgent: null },
+          audit: { detail: {} },
+        } as unknown as TRPCContext)
+        .updateMember({ ...updateInput, id: memberId });
+
+    const results = await Promise.allSettled([
+      concurrentCaller('admin_b'),
+      concurrentCaller('admin_c'),
+    ]);
+
+    expect(results.map((result) => result.status).sort()).toEqual(['fulfilled', 'rejected']);
+    expect(activeAdmins).toBe(1);
+  });
+});
+
+describe('support cannot establish durable administrator access', () => {
+  beforeEach(() => vi.clearAllMocks());
+  it('blocks creating an administrator with a known password', async () => {
+    await expect(
+      caller('org_a', undefined, true).createMember({ ...input, role: 'ADMIN' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.userCreate).not.toHaveBeenCalled();
+    expect(mocks.queryRaw).not.toHaveBeenCalled();
+  });
+  it('blocks elevating another member', async () => {
+    await expect(
+      caller('org_a', undefined, true).updateMember({ ...updateInput, role: 'ADMIN' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.userUpdate).not.toHaveBeenCalled();
+  });
+  it('blocks resetting an administrator password', async () => {
+    await expect(
+      caller('org_a', undefined, true).resetMemberPassword({
+        id: 'admin_b',
+        password: input.password,
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.userUpdate).not.toHaveBeenCalled();
+  });
+});
+
+describe('support impersonation member boundary', () => {
+  it('cannot create members or elevate existing members through a direct server caller', async () => {
+    const support = caller('org_a', { activeSeats: 1, seatLimit: 10 }, true);
+    await expect(support.createMember(input)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Support access is read-only.',
+    });
+    await expect(
+      support.updateMember({
+        id: 'employee',
+        role: 'ADMIN',
+        status: 'ACTIVE',
+        organizationRoleId: null,
+        title: 'Admin',
+        department: 'COUNTER',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.userCreate).not.toHaveBeenCalled();
+    expect(mocks.userUpdate).not.toHaveBeenCalled();
   });
 });

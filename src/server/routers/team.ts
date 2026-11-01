@@ -59,9 +59,32 @@ function leaveDayCount(start: Date, end: Date): number {
   return Math.max(1, Math.floor((e - s) / MS_PER_DAY) + 1);
 }
 
+/**
+ * The tasks a viewer may see: assigned to them, or on a project they belong to.
+ * The rule Ask Fathom's task and people tools apply (`taskVisibility` in
+ * src/lib/ai/context.ts); an administrator sees every task.
+ */
+function tasksVisibleTo(viewerId: string): Prisma.TaskWhereInput {
+  return {
+    OR: [
+      { assignees: { some: { userId: viewerId } } },
+      { column: { board: { project: { members: { some: { userId: viewerId } } } } } },
+    ],
+  };
+}
+
 export const teamRouter = router({
   getAll: protectedProcedure.query(async ({ ctx }) => {
+    const me = ctx.session.user.id;
+    // A custom role or override that denies `team:view` takes the directory
+    // away, as it takes a colleague's profile away in `getById`; the viewer
+    // still reads their own row there, and so here.
+    const directory = await can(subjectFromSession(ctx.session.user), 'team:view', undefined, {
+      source: 'TRPC',
+      db: ctx.db,
+    });
     const rows = await ctx.db.user.findMany({
+      ...(directory ? {} : { where: { id: me } }),
       select: {
         id: true,
         name: true,
@@ -84,7 +107,6 @@ export const teamRouter = router({
     // HR/Admin and to a person on their OWN row; everyone else sees it redacted.
     const isPrivileged = ['ADMIN', 'HR'].includes(ctx.session.user.role);
     if (isPrivileged) return rows;
-    const me = ctx.session.user.id;
     return rows.map((u) => (u.id === me ? u : { ...u, email: '', phone: null }));
   }),
 
@@ -115,6 +137,7 @@ export const teamRouter = router({
         // alex@company.com without the guard ever firing.
         email: emailSchema,
         role: z.enum(['ADMIN', 'HR', 'EMPLOYEE']).default('EMPLOYEE'),
+        organizationRoleId: z.string().trim().min(1).max(128).nullable().default(null),
         department: z
           .string()
           .trim()
@@ -134,6 +157,15 @@ export const teamRouter = router({
         select: { id: true },
       });
       if (!department) throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invalid department.' });
+      const organizationRole = input.organizationRoleId
+        ? await ctx.db.organizationRole.findFirst({
+            where: { id: input.organizationRoleId, organizationId: workspaceId(ctx) },
+            select: { id: true, name: true },
+          })
+        : null;
+      if (input.organizationRoleId && !organizationRole) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invalid role template.' });
+      }
       const existing = await ctx.db.user.findFirst({
         where: { email },
         select: { id: true, status: true },
@@ -154,6 +186,7 @@ export const teamRouter = router({
       const profile = {
         name: input.name,
         role: input.role,
+        organizationRoleId: organizationRole?.id ?? null,
         department: input.department,
         title: input.title,
         phone: input.phone ?? null,
@@ -195,7 +228,7 @@ export const teamRouter = router({
       const mail = templates.inviteMember({
         name: user.name,
         inviterName: ctx.session.user.name ?? undefined,
-        role: `${titleCase(input.role)} · ${titleCase(input.department)}`,
+        role: organizationRole?.name ?? `${titleCase(input.role)} · ${titleCase(input.department)}`,
         workspace: 'DevFathom',
         acceptUrl: inviteUrl,
         expiresLabel: 'in 7 days',
@@ -215,14 +248,42 @@ export const teamRouter = router({
     }),
 
   getById: protectedProcedure.input(z.object({ id: z.string() })).query(async ({ ctx, input }) => {
+    const viewerId = ctx.session.user.id;
     const isAdmin = ctx.session.user.role === 'ADMIN';
-    const isSelf = ctx.session.user.id === input.id;
+    const isSelf = viewerId === input.id;
+    // IMP-HR-06, as `getAll` applies it: a colleague's email and phone are for
+    // HR and Admin; everyone else reads them redacted. Your own row is yours.
+    const privileged = isSelf || ['ADMIN', 'HR'].includes(ctx.session.user.role);
+    // A colleague's work, only as far as the viewer could see it anyway: their
+    // project list to the same privileged readers (Ask Fathom's AI-03 rule),
+    // otherwise only the projects the viewer is on too; their tasks only where
+    // the viewer may see the task, unless the viewer is the person or an Admin.
+    const workScope = {
+      projects: privileged ? 'ALL' : 'SHARED',
+      tasks: isSelf || isAdmin ? 'ALL' : 'VISIBLE',
+    } as const;
     // Your own profile is account self-service (Settings) and needs no module;
     // any other member is the team directory, which the `hr` module licenses.
     // The procedure is therefore in ACCOUNT_PROCEDURES and the gate lives here.
-    if (!isSelf) assertModuleLicensed(ctx, 'hr');
+    if (!isSelf) {
+      assertModuleLicensed(ctx, 'hr');
+      // Reading a colleague is a directory read, decided by the ABAC engine like
+      // any `team:view` gate (a custom role or override can deny it).
+      const allowed = await can(
+        subjectFromSession(ctx.session.user),
+        'team:view',
+        { type: 'User', id: input.id },
+        { source: 'TRPC', db: ctx.db }
+      );
+      if (!allowed) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'You do not have permission for this action.',
+        });
+      }
+    }
 
-    return ctx.db.user.findUnique({
+    const member = await ctx.db.user.findUnique({
       where: { id: input.id },
       select: {
         id: true,
@@ -239,9 +300,13 @@ export const teamRouter = router({
         status: true,
         lastActiveAt: true,
         projectMembers: {
+          ...(workScope.projects === 'ALL'
+            ? {}
+            : { where: { project: { members: { some: { userId: viewerId } } } } }),
           include: { project: { select: { id: true, name: true, status: true, type: true } } },
         },
         assignedTasks: {
+          ...(workScope.tasks === 'ALL' ? {} : { where: { task: tasksVisibleTo(viewerId) } }),
           include: {
             task: {
               select: {
@@ -259,6 +324,9 @@ export const teamRouter = router({
           isSelf || isAdmin ? { orderBy: { createdAt: 'desc' as const }, take: 10 } : false,
       },
     });
+    if (!member) return member;
+    if (privileged) return { ...member, workScope };
+    return { ...member, email: '', phone: null, workScope };
   }),
 
   getLeaveRequests: hrProcedure

@@ -92,12 +92,12 @@ function fixture(raw: unknown = input) {
       ),
       findFirst: vi.fn(async () => ({ id: 'branch-1' })),
     }),
-    // Tender requires counter receipt access: dispense capability plus a branch assignment.
+    // Tender requires canonical counter access plus a branch assignment.
     user: only({
       findUnique: vi.fn(async () => ({
         status: 'ACTIVE',
         organizationId: 'org-1',
-        organizationRole: { permissions: [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }] },
+        organizationRole: { permissions: [{ capability: 'pharmacy:counter', effect: 'ALLOW' }] },
         permissionOverrides: [],
       })),
     }),
@@ -205,36 +205,42 @@ describe('pharmacySales.tenderOutcome', () => {
     f.noWrites();
   });
 
-  it.each([{ branchId: 'foreign-branch' }, { saleId: 'foreign-sale' }])(
-    'does not look up keys for a foreign reference: %j',
-    async (change) => {
-      const f = fixture();
-      f.saleRead.mockResolvedValue(null);
-      expect(await f.caller().tenderOutcome({ ...input, ...change })).toEqual({
-        status: 'UNKNOWN',
-        replayUnsafe: true,
-      });
-      expect(f.saleRead.mock.calls[0][0].where).toEqual({
-        id: change.saleId ?? input.saleId,
-        organizationId: 'org-1',
-        branchId: change.branchId ?? input.branchId,
-      });
-      expect(f.keyRead).not.toHaveBeenCalled();
-      f.noWrites();
-    }
-  );
+  it('refuses a foreign branch before reading sale or key evidence', async () => {
+    const f = fixture();
+    await expect(
+      f.caller().tenderOutcome({ ...input, branchId: 'foreign-branch' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(f.saleRead).not.toHaveBeenCalled();
+    expect(f.keyRead).not.toHaveBeenCalled();
+    f.noWrites();
+  });
 
-  it('uses the authenticated tenant, never the original key tenant', async () => {
+  it('does not look up keys for a foreign sale', async () => {
     const f = fixture();
     f.saleRead.mockResolvedValue(null);
-    expect(
-      await f
+    expect(await f.caller().tenderOutcome({ ...input, saleId: 'foreign-sale' })).toEqual({
+      status: 'UNKNOWN',
+      replayUnsafe: true,
+    });
+    expect(f.saleRead.mock.calls[0][0].where).toEqual({
+      id: 'foreign-sale',
+      organizationId: 'org-1',
+      branchId: input.branchId,
+    });
+    expect(f.keyRead).not.toHaveBeenCalled();
+    f.noWrites();
+  });
+
+  it('refuses a changed tenant without that tenant’s branch membership', async () => {
+    const f = fixture();
+    await expect(
+      f
         .caller({
           entitlements: { ...f.context.entitlements, organizationId: 'org-2' },
         })
         .tenderOutcome(input)
-    ).toEqual({ status: 'UNKNOWN', replayUnsafe: true });
-    expect(f.saleRead.mock.calls[0][0].where.organizationId).toBe('org-2');
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(f.saleRead).not.toHaveBeenCalled();
     expect(f.keyRead).not.toHaveBeenCalled();
     f.noWrites();
   });

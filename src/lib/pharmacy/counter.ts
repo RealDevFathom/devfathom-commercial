@@ -703,7 +703,27 @@ export async function readCounterReceipt(
     changeGivenMinor: tender.changeGivenMinor,
   }));
 
+  let loyalty: { redeemedPoints: number; remainingPoints: number } | undefined;
+  if (sale.customerId) {
+    const where = {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      customerId: sale.customerId,
+    };
+    const [redeemed, balance] = await Promise.all([
+      db.pharmacyLoyaltyPointsEntry.aggregate({
+        where: { ...where, saleId, kind: 'REDEEM' },
+        _sum: { points: true },
+      }),
+      db.pharmacyLoyaltyPointsEntry.aggregate({ where, _sum: { points: true } }),
+    ]);
+    loyalty = {
+      redeemedPoints: -(redeemed._sum.points ?? 0),
+      remainingPoints: balance._sum.points ?? 0,
+    };
+  }
   return {
+    loyalty,
     saleId: sale.id,
     receiptNumber: sale.receiptNumber,
     branchName: branch.name,

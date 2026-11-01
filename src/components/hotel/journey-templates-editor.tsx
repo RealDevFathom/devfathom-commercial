@@ -21,9 +21,10 @@
  * access on every one. Every write also names the version it was made from: a
  * save, the draft version its text was started from (a refresh never moves
  * that); an approval, the version and wording on screen and the approval it
- * retires; a retirement, the version shown. A conflict reloads the list, and a
- * draft saved again under typed text is shown beside it until the operator
- * keeps their text or takes the saved wording. Nothing on this page sends.
+ * retires; a retirement, the version shown and, for a draft, its wording. A
+ * conflict reloads the list, and a draft saved again under typed text is shown
+ * beside it until the operator keeps their text or takes the saved wording.
+ * Nothing on this page sends.
  * Approving is the last step here; the send belongs to H4.
  */
 import { useEffect, useRef, useState, type FormEvent } from 'react';
@@ -980,6 +981,11 @@ function SelectedJourneyTemplates({
                       branchId,
                       id: selected.id,
                       expectedUpdatedAt: selected.updatedAt,
+                      // A colleague's save can share a draft's time: retiring a
+                      // draft names the words on screen too.
+                      ...(selected.status === 'DRAFT'
+                        ? { expectedSubject: selected.subject, expectedBody: selected.body }
+                        : {}),
                     })
                   }
                 >

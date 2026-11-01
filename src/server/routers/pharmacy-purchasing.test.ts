@@ -4,7 +4,7 @@ import superjson from 'superjson';
 const mocks = vi.hoisted(() => {
   const hasModule = vi.fn<(view: { enabledModules: string[] }, key: string) => boolean>();
   hasModule.mockReturnValue(true);
-  return { hasModule, can: vi.fn() };
+  return { hasModule, can: vi.fn(), verifyPharmacyUserPin: vi.fn() };
 });
 vi.mock('@/lib/abac', () => ({ can: mocks.can, subjectFromSession: (user: unknown) => user }));
 vi.mock('server-only', () => ({}));
@@ -20,12 +20,19 @@ vi.mock('@/server/audit', () => ({
   recordTrpcAudit: vi.fn(),
 }));
 
+vi.mock('@/lib/pharmacy/solo-approval', async (original) => ({
+  ...(await original<typeof import('@/lib/pharmacy/solo-approval')>()),
+  verifySoloOwnerPin: vi.fn(async (_db, _scope, pin) => pin === '4729'),
+  verifyPharmacyUserPin: mocks.verifyPharmacyUserPin,
+}));
+
 import { pharmacyPurchasingRouter } from './pharmacy-purchasing';
 import type { TRPCContext } from '../trpc';
 import { moduleForProcedure } from '@/lib/module-catalog';
 
-const FUTURE = new Date('2030-01-01T00:00:00.000Z');
-const PAST = new Date('2020-01-01T00:00:00.000Z');
+const FIXTURE_NOW = Date.now();
+const FUTURE = new Date(FIXTURE_NOW + 365 * 86_400_000);
+const PAST = new Date(FIXTURE_NOW - 365 * 86_400_000);
 
 function model() {
   return {
@@ -43,6 +50,11 @@ function model() {
 
 function makeDb() {
   const db = {
+    organization: {
+      ...model(),
+      findFirstOrThrow: vi.fn(async () => ({ pharmacyOperatingMode: 'STAFFED' })),
+    },
+    auditLog: model(),
     medicine: model(),
     packLevel: model(),
     pharmacySupplier: model(),
@@ -61,10 +73,13 @@ function makeDb() {
     pharmacyDebitNote: model(),
     pharmacySupplierCredit: model(),
     pharmacyBranch: model(),
+    pharmacyStockLocation: model(),
+    pharmacyBranchAssignment: model(),
     user: model(),
     medicineBarcode: model(),
   };
   return Object.assign(db, {
+    $queryRaw: vi.fn().mockResolvedValue([]),
     $transaction: vi.fn(async (fn: (tx: typeof db) => unknown) => fn(db)),
   });
 }
@@ -95,7 +110,7 @@ function orderableSupplier() {
   db.pharmacySupplier.findFirst.mockResolvedValue({
     id: 'supplier_a',
     authorized: true,
-    licences: [{ expiresAt: FUTURE, verifiedAt: PAST }],
+    licences: [{ id: 'licence_a', supersedesId: null, expiresAt: FUTURE, verifiedAt: PAST }],
   });
 }
 
@@ -112,11 +127,370 @@ const ORDER_LINE = {
   listPricePerPackMinor: 10_000,
 };
 
+const RETURN_LINE = {
+  inventoryLotId: 'lot_a',
+  stockLocationId: 'location_a',
+  quantityUnits: 1,
+  reason: 'Damaged pack',
+  returnWindowEndsAt: FUTURE,
+  expectedCreditMinor: 100,
+};
+
 beforeEach(() => {
   db = makeDb();
   mocks.can.mockReset().mockResolvedValue(true);
+  db.user.findFirst.mockResolvedValue({ organizationRole: { key: 'manager' } });
+  db.user.findUnique.mockResolvedValue({
+    status: 'ACTIVE',
+    organizationRole: {
+      permissions: [{ capability: 'pharmacy:procurement', effect: 'ALLOW' }],
+    },
+    permissionOverrides: [],
+  });
+  db.pharmacyBranchAssignment.findMany.mockResolvedValue([{ branchId: 'branch_a' }]);
   db.pharmacyBranch.findFirst.mockResolvedValue({ id: 'branch_a' });
   mocks.hasModule.mockImplementation((view, key) => view.enabledModules.includes(key));
+});
+
+describe('procurement write authorization', () => {
+  it.each([
+    {
+      procedure: 'createSupplier',
+      act: () => caller('counter_user').createSupplier({ name: 'Unapproved supplier' }),
+    },
+    {
+      procedure: 'recordSupplierLicence',
+      act: () =>
+        caller('counter_user').recordSupplierLicence({
+          supplierId: 'supplier_a',
+          licenceType: 'wholesale',
+          licenceNumber: 'LIC-1',
+          issuingAuthority: 'Regulator',
+          issuedAt: PAST,
+          expiresAt: FUTURE,
+          verified: true,
+        }),
+    },
+    {
+      procedure: 'setSupplierAuthorization',
+      act: () =>
+        caller('counter_user').setSupplierAuthorization({
+          supplierId: 'supplier_a',
+          authorized: true,
+        }),
+    },
+    {
+      procedure: 'createRequisition',
+      act: () =>
+        caller('counter_user').createRequisition({
+          reference: 'REQ-NO-PERMISSION',
+          lines: [
+            {
+              medicineId: 'medicine_a',
+              packLevelId: 'pack_a',
+              quantityPacks: 1,
+              canonicalUnitsPerPack: 10,
+            },
+          ],
+        }),
+    },
+    {
+      procedure: 'submitRequisition',
+      act: () => caller('counter_user').submitRequisition({ requisitionId: 'req_a' }),
+    },
+    {
+      procedure: 'recordQuote',
+      act: () =>
+        caller('counter_user').recordQuote({
+          requisitionId: 'req_a',
+          supplierId: 'supplier_a',
+          quotedAt: PAST,
+          validUntil: FUTURE,
+          lines: [
+            {
+              requisitionLineId: 'req_line_a',
+              pricePerPackMinor: 100,
+              canonicalUnitsPerPack: 10,
+            },
+          ],
+        }),
+    },
+    {
+      procedure: 'createPurchaseOrder',
+      act: () =>
+        caller('counter_user').createPurchaseOrder({
+          reference: 'PO-NO-PERMISSION',
+          supplierId: 'supplier_a',
+          lines: [ORDER_LINE],
+        }),
+    },
+    {
+      procedure: 'submitPurchaseOrder',
+      act: () => caller('counter_user').submitPurchaseOrder({ purchaseOrderId: 'po_a' }),
+    },
+    {
+      procedure: 'approvePurchaseOrder',
+      act: () =>
+        caller('counter_user').approvePurchaseOrder({
+          purchaseOrderId: 'po_a',
+          decision: 'APPROVED',
+        }),
+    },
+    {
+      procedure: 'sendPurchaseOrder',
+      act: () => caller('counter_user').sendPurchaseOrder({ purchaseOrderId: 'po_a' }),
+    },
+    {
+      procedure: 'createGoodsReceipt',
+      act: () =>
+        caller('counter_user').createGoodsReceipt({
+          reference: 'GRN-1',
+          branchId: 'branch_a',
+          supplierId: 'supplier_a',
+          supplierInvoiceRef: 'INV-1',
+          supplierInvoiceDate: PAST,
+          warrantyEvidenceRef: 'evidence-1',
+          receivedAt: PAST,
+          directPurchase: { reason: 'Urgent', approvedByUserId: 'approver_a' },
+          lines: [
+            {
+              medicineId: 'medicine_a',
+              packLevelId: 'pack_a',
+              batchNumber: 'batch-a',
+              printedExpiry: FUTURE,
+              expiryPrecision: 'DAY',
+              printedMrpMinor: 100,
+              canonicalUnitsPerPack: 10,
+              receivedPacks: 1,
+              invoicedPricePerPackMinor: 80,
+              stockLocationId: 'location_a',
+            },
+          ],
+        }),
+    },
+    {
+      procedure: 'postGoodsReceipt',
+      act: () =>
+        caller('counter_user').postGoodsReceipt({
+          branchId: 'branch_a',
+          goodsReceiptId: 'receipt_a',
+        }),
+    },
+    {
+      procedure: 'reverseGoodsReceipt',
+      act: () =>
+        caller('counter_user').reverseGoodsReceipt({
+          branchId: 'branch_a',
+          goodsReceiptId: 'receipt_a',
+          reason: 'Correction',
+        }),
+    },
+    {
+      procedure: 'resolveReceivingException',
+      act: () =>
+        caller('counter_user').resolveReceivingException({
+          branchId: 'branch_a',
+          receivingExceptionId: 'exception_a',
+          resolutionNote: 'Reviewed',
+        }),
+    },
+    {
+      procedure: 'createPurchaseReturn',
+      act: () =>
+        caller('counter_user').createPurchaseReturn({
+          branchId: 'branch_a',
+          supplierId: 'supplier_a',
+          kind: 'PURCHASE_RETURN',
+          reference: 'RETURN-1',
+          lines: [RETURN_LINE],
+        }),
+    },
+    {
+      procedure: 'submitPurchaseReturn',
+      act: () =>
+        caller('counter_user').submitPurchaseReturn({
+          branchId: 'branch_a',
+          purchaseReturnId: 'return_a',
+        }),
+    },
+    {
+      procedure: 'dispatchPurchaseReturn',
+      act: () =>
+        caller('counter_user').dispatchPurchaseReturn({
+          branchId: 'branch_a',
+          purchaseReturnId: 'return_a',
+          idempotencyKey: 'dispatch-1',
+        }),
+    },
+    {
+      procedure: 'issueDebitNote',
+      act: () =>
+        caller('counter_user').issueDebitNote({
+          branchId: 'branch_a',
+          purchaseReturnId: 'return_a',
+          reference: 'DN-1',
+        }),
+    },
+    {
+      procedure: 'recordSupplierCredit',
+      act: () =>
+        caller('counter_user').recordSupplierCredit({
+          branchId: 'branch_a',
+          supplierId: 'supplier_a',
+          reference: 'CREDIT-1',
+          amountMinor: 100,
+          receivedAt: PAST,
+        }),
+    },
+    {
+      procedure: 'allocateSupplierCredit',
+      act: () =>
+        caller('counter_user').allocateSupplierCredit({
+          branchId: 'branch_a',
+          supplierCreditId: 'credit_a',
+          debitNoteId: 'debit_a',
+          amountMinor: 100,
+        }),
+    },
+    {
+      procedure: 'authenticatePack',
+      act: () => caller('counter_user').authenticatePack({ branchId: 'branch_a', payload: 'scan' }),
+    },
+    {
+      procedure: 'createCentralPurchaseOrder',
+      act: () =>
+        caller('counter_user').createCentralPurchaseOrder({
+          reference: 'CENTRAL-PO-1',
+          supplierId: 'supplier_a',
+          receivingBranchId: 'branch_a',
+          lines: [ORDER_LINE],
+        }),
+    },
+    {
+      procedure: 'allocateCentralReceipt',
+      act: () =>
+        caller('counter_user').allocateCentralReceipt({
+          goodsReceiptId: 'receipt_a',
+          allocations: [
+            {
+              goodsReceiptLineId: 'receipt_line_a',
+              destinationBranchId: 'branch_a',
+              destinationStockLocationId: 'location_a',
+              quantityUnits: 1,
+            },
+          ],
+        }),
+    },
+  ])(
+    'denies $procedure to a same-tenant member with only an unrelated capability',
+    async ({ act }) => {
+      db.user.findUnique.mockResolvedValue({
+        status: 'ACTIVE',
+        organizationRole: {
+          permissions: [{ capability: 'pharmacy:counter', effect: 'ALLOW' }],
+        },
+        permissionOverrides: [],
+      });
+
+      await expect(act()).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'You do not have permission for this action.',
+      });
+      expect(db.user.findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'counter_user', status: 'ACTIVE' } })
+      );
+      expect(db.pharmacySupplier.findFirst).not.toHaveBeenCalled();
+      expect(db.pharmacySupplier.create).not.toHaveBeenCalled();
+      expect(db.pharmacySupplier.update).not.toHaveBeenCalled();
+      expect(db.medicine.findFirst).not.toHaveBeenCalled();
+      expect(db.packLevel.findFirst).not.toHaveBeenCalled();
+      expect(db.pharmacyPurchaseOrder.findFirst).not.toHaveBeenCalled();
+      expect(db.pharmacyPurchaseOrder.create).not.toHaveBeenCalled();
+      expect(db.$transaction).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([
+    () => caller('deleted_user').createSupplier({ name: 'Unapproved supplier' }),
+    () =>
+      caller('deleted_user').setSupplierAuthorization({
+        supplierId: 'supplier_a',
+        authorized: true,
+      }),
+    () =>
+      caller('deleted_user').createPurchaseOrder({
+        reference: 'PO-DELETED-ACTOR',
+        supplierId: 'supplier_a',
+        lines: [ORDER_LINE],
+      }),
+    () =>
+      caller('deleted_user').approvePurchaseOrder({
+        purchaseOrderId: 'po_a',
+        decision: 'APPROVED',
+      }),
+  ])('fails closed when the session actor no longer exists', async (act) => {
+    db.user.findUnique.mockResolvedValue(null);
+
+    await expect(act()).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission for this action.',
+    });
+    expect(db.pharmacySupplier.findFirst).not.toHaveBeenCalled();
+    expect(db.pharmacySupplier.create).not.toHaveBeenCalled();
+    expect(db.pharmacySupplier.update).not.toHaveBeenCalled();
+    expect(db.medicine.findFirst).not.toHaveBeenCalled();
+    expect(db.packLevel.findFirst).not.toHaveBeenCalled();
+    expect(db.pharmacyPurchaseOrder.findFirst).not.toHaveBeenCalled();
+    expect(db.pharmacyPurchaseOrder.create).not.toHaveBeenCalled();
+    expect(db.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('fails closed before a database lookup when the session actor id is missing', async () => {
+    await expect(caller('').createSupplier({ name: 'Unapproved supplier' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission for this action.',
+    });
+    expect(db.user.findUnique).not.toHaveBeenCalled();
+    expect(db.pharmacySupplier.create).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    () => caller('inactive_user').createSupplier({ name: 'Unapproved supplier' }),
+    () =>
+      caller('inactive_user').setSupplierAuthorization({
+        supplierId: 'supplier_a',
+        authorized: true,
+      }),
+    () =>
+      caller('inactive_user').createPurchaseOrder({
+        reference: 'PO-INACTIVE-ACTOR',
+        supplierId: 'supplier_a',
+        lines: [ORDER_LINE],
+      }),
+    () =>
+      caller('inactive_user').approvePurchaseOrder({
+        purchaseOrderId: 'po_a',
+        decision: 'APPROVED',
+      }),
+  ])('fails closed when the session actor is no longer active', async (act) => {
+    db.user.findUnique.mockResolvedValue(null);
+
+    await expect(act()).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission for this action.',
+    });
+    expect(db.user.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'inactive_user', status: 'ACTIVE' } })
+    );
+    expect(db.pharmacySupplier.findFirst).not.toHaveBeenCalled();
+    expect(db.pharmacySupplier.create).not.toHaveBeenCalled();
+    expect(db.pharmacySupplier.update).not.toHaveBeenCalled();
+    expect(db.medicine.findFirst).not.toHaveBeenCalled();
+    expect(db.packLevel.findFirst).not.toHaveBeenCalled();
+    expect(db.pharmacyPurchaseOrder.findFirst).not.toHaveBeenCalled();
+    expect(db.pharmacyPurchaseOrder.create).not.toHaveBeenCalled();
+    expect(db.$transaction).not.toHaveBeenCalled();
+  });
 });
 
 describe.each(['purchaseReturns', 'supplierCredits'] as const)(
@@ -192,11 +566,12 @@ describe.each(['purchaseReturns', 'supplierCredits'] as const)(
       expect(source().findMany.mock.lastCall![0]).not.toHaveProperty('take');
     });
 
-    it.each(['permission', 'branch', 'module', 'actor'])(
+    it.each(['permission', 'branch', 'module', 'actor', 'inactive'])(
       'denies %s before source reads for both modes',
       async (reason) => {
         if (reason === 'permission') mocks.can.mockResolvedValue(false);
         if (reason === 'branch') db.pharmacyBranch.findFirst.mockResolvedValue(null);
+        if (reason === 'inactive') db.user.findUnique.mockResolvedValue(null);
         const reader = caller(
           reason === 'actor' ? '' : 'user_a',
           reason === 'module' ? [] : ['pharmacy-procurement']
@@ -210,6 +585,33 @@ describe.each(['purchaseReturns', 'supplierCredits'] as const)(
         if (reason !== 'branch') expect(db.pharmacyBranch.findFirst).not.toHaveBeenCalled();
       }
     );
+
+    it('preserves assigned financial-only readers without a procurement grant', async () => {
+      db.user.findUnique.mockResolvedValue({
+        status: 'ACTIVE',
+        id: 'user_a',
+        organizationRole: { permissions: [] },
+        permissionOverrides: [],
+      });
+      await expect(caller()[endpoint]({ branchId: 'branch_a' })).resolves.toEqual([]);
+      expect(source().findMany).toHaveBeenCalled();
+    });
+
+    it('rechecks deactivation and assignment removal on a reused financial caller', async () => {
+      const reader = caller();
+      await reader[endpoint]({ branchId: 'branch_a' });
+      source().findMany.mockClear();
+      db.pharmacyBranchAssignment.findMany.mockResolvedValue([]);
+      await expect(reader[endpoint]({ branchId: 'branch_a' })).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+      });
+      db.pharmacyBranchAssignment.findMany.mockResolvedValue([{ branchId: 'branch_a' }]);
+      db.user.findUnique.mockResolvedValue(null);
+      await expect(reader[endpoint]({ branchId: 'branch_a' })).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+      });
+      expect(source().findMany).not.toHaveBeenCalled();
+    });
 
     it.each([
       { organizationId: 'org_other' },
@@ -238,7 +640,7 @@ describe('PUR-01 a purchase order needs a licensed, authorized supplier', () => 
     db.pharmacySupplier.findFirst.mockResolvedValue({
       id: 'supplier_a',
       authorized: false,
-      licences: [{ expiresAt: FUTURE, verifiedAt: PAST }],
+      licences: [{ id: 'licence_a', supersedesId: null, expiresAt: FUTURE, verifiedAt: PAST }],
     });
     await expect(
       caller().createPurchaseOrder({
@@ -255,7 +657,7 @@ describe('PUR-01 a purchase order needs a licensed, authorized supplier', () => 
     db.pharmacySupplier.findFirst.mockResolvedValue({
       id: 'supplier_a',
       authorized: true,
-      licences: [{ expiresAt: PAST, verifiedAt: PAST }],
+      licences: [{ id: 'licence_a', supersedesId: null, expiresAt: PAST, verifiedAt: PAST }],
     });
     await expect(
       caller().createPurchaseOrder({
@@ -276,7 +678,7 @@ describe('PUR-01 a purchase order needs a licensed, authorized supplier', () => 
     db.pharmacySupplier.findFirst.mockResolvedValue({
       id: 'supplier_a',
       authorized: false,
-      licences: [{ expiresAt: FUTURE, verifiedAt: PAST }],
+      licences: [{ id: 'licence_a', supersedesId: null, expiresAt: FUTURE, verifiedAt: PAST }],
     });
     await expect(caller().sendPurchaseOrder({ purchaseOrderId: 'po_a' })).rejects.toMatchObject({
       code: 'FORBIDDEN',
@@ -488,7 +890,7 @@ describe('PUR-02/PUR-03 comparison and landed cost over stored rows', () => {
         id,
         name,
         authorized,
-        licences: [{ expiresAt: FUTURE, verifiedAt: PAST }],
+        licences: [{ id: 'licence_a', supersedesId: null, expiresAt: FUTURE, verifiedAt: PAST }],
       },
       validUntil: FUTURE,
     });
@@ -608,6 +1010,7 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     resolvableCatalog();
     resolvableOrder();
     db.user.findUnique.mockResolvedValue({
+      status: 'ACTIVE',
       organizationRole: {
         permissions: [{ capability: 'pharmacy.procurement', effect: 'ALLOW' }],
       },
@@ -627,6 +1030,51 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     },
     permissionOverrides: [],
   };
+
+  it('refuses to draft a receipt at an unassigned branch', async () => {
+    db.pharmacyBranchAssignment.findMany.mockResolvedValue([{ branchId: 'other_branch' }]);
+    await expect(caller().createGoodsReceipt(RECEIPT)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses an assigned receipt that references an unassigned order branch', async () => {
+    db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
+      id: 'po_a',
+      supplierId: 'supplier_a',
+      branchId: 'branch_b',
+    });
+    await expect(caller().createGoodsReceipt(RECEIPT)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+  });
+
+  it.each(['branch_a', 'branch_b', null])(
+    'preserves receipt creation for an accessible order branch %s',
+    async (orderBranch) => {
+      db.pharmacyBranchAssignment.findMany.mockResolvedValue([
+        { branchId: 'branch_a' },
+        { branchId: 'branch_b' },
+      ]);
+      db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
+        id: 'po_a',
+        supplierId: 'supplier_a',
+        branchId: orderBranch,
+      });
+      await caller().createGoodsReceipt(RECEIPT);
+      expect(db.pharmacyGoodsReceipt.create).toHaveBeenCalled();
+    }
+  );
+
+  it('refuses an existing draft referencing an unassigned order before posting or witness side effects', async () => {
+    db.pharmacyGoodsReceipt.findFirst.mockResolvedValue({
+      purchaseOrder: { branchId: 'branch_b' },
+    });
+    await expect(
+      caller().postGoodsReceipt({ branchId: 'branch_a', goodsReceiptId: 'receipt' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.$transaction).not.toHaveBeenCalled();
+    expect(db.pharmacyPurchaseOrder.update).not.toHaveBeenCalled();
+    expect(db.pharmacyGoodsReceipt.update).not.toHaveBeenCalled();
+  });
 
   it('derives canonical units and the landed unit cost instead of trusting the payload', async () => {
     await caller().createGoodsReceipt(RECEIPT);
@@ -673,9 +1121,14 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
   });
 
   it('records a direct purchase with its bypass reason and approver (PUR-05)', async () => {
+    mocks.verifyPharmacyUserPin.mockResolvedValueOnce(true);
     await caller('user_counter').createGoodsReceipt({
       ...withoutOrder(),
-      directPurchase: { reason: 'Emergency insulin.', approvedByUserId: 'user_manager' },
+      directPurchase: {
+        reason: 'Emergency insulin.',
+        approvedByUserId: 'user_manager',
+        pin: '5832',
+      },
     });
     expect(db.pharmacyGoodsReceipt.create.mock.calls[0]![0].data).toMatchObject({
       purchaseOrderId: null,
@@ -684,6 +1137,20 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
       bypassApprovedByUserId: 'user_manager',
     });
   });
+
+  it.each([undefined, '9999'])(
+    'rejects approver impersonation without a valid PIN (%s)',
+    async (pin) => {
+      mocks.verifyPharmacyUserPin.mockResolvedValueOnce(false);
+      await expect(
+        caller('user_counter').createGoodsReceipt({
+          ...withoutOrder(),
+          directPurchase: { reason: 'Emergency insulin.', approvedByUserId: 'user_manager', pin },
+        })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+    }
+  );
 
   it('refuses a bypass the receiver approved for themselves', async () => {
     await expect(
@@ -699,7 +1166,7 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     db.pharmacySupplier.findFirst.mockResolvedValue({
       id: 'supplier_a',
       authorized: true,
-      licences: [{ expiresAt: PAST, verifiedAt: PAST }],
+      licences: [{ id: 'licence_a', supersedesId: null, expiresAt: PAST, verifiedAt: PAST }],
     });
     await expect(caller().createGoodsReceipt(RECEIPT)).rejects.toMatchObject({
       code: 'FORBIDDEN',
@@ -1075,5 +1542,362 @@ describe('PUR-06 — the returns and settlement transport', () => {
         where: expect.objectContaining({ organizationId: 'org_a', branchId: 'branch_a' }),
       })
     );
+  });
+});
+
+const sensitiveReads = {
+  compareQuotes: () => caller().compareQuotes({ requisitionLineId: 'line' }),
+  landedCost: () => caller().landedCost({ purchaseOrderId: 'order' }),
+  workspace: () => caller().workspace(),
+  suppliers: () => caller().suppliers(),
+  requisitions: () => caller().requisitions(),
+  purchaseOrders: () => caller().purchaseOrders(),
+  receivedAgainstOrder: () => caller().receivedAgainstOrder({ purchaseOrderId: 'order' }),
+  goodsReceipts: () => caller().goodsReceipts({ branchId: 'branch_a' }),
+  receivingExceptions: () => caller().receivingExceptions({ branchId: 'branch_a' }),
+  receivingExceptionQueue: () => caller().receivingExceptionQueue({ branchId: 'branch_a' }),
+  lotsFromReceipt: () =>
+    caller().lotsFromReceipt({ branchId: 'branch_a', goodsReceiptId: 'receipt' }),
+  returnableLots: () => caller().returnableLots({ branchId: 'branch_a' }),
+  debitNotePositions: () => caller().debitNotePositions({ branchId: 'branch_a' }),
+  resolveScan: () => caller().resolveScan({ term: 'medicine' }),
+  centralDemand: () => caller().centralDemand({}),
+};
+describe.each(Object.keys(sensitiveReads) as (keyof typeof sensitiveReads)[])(
+  '%s sensitive read security',
+  (name) => {
+    it.each(['cashier', 'deny', 'inactive'] as const)(
+      'rejects %s before reading procurement data',
+      async (mode) => {
+        mocks.can.mockResolvedValue(false);
+        db.user.findUnique.mockResolvedValue(
+          mode === 'inactive'
+            ? null
+            : {
+                organizationRole: {
+                  permissions: [
+                    {
+                      capability: mode === 'cashier' ? 'pharmacy.counter' : 'pharmacy:*',
+                      effect: 'ALLOW',
+                    },
+                  ],
+                },
+                permissionOverrides:
+                  mode === 'deny' ? [{ capability: 'pharmacy:procurement', effect: 'DENY' }] : [],
+              }
+        );
+        await expect(sensitiveReads[name]()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        for (const [key, delegate] of Object.entries(db)) {
+          if (key === 'user' || typeof delegate === 'function') continue;
+          expect(delegate.findFirst).not.toHaveBeenCalled();
+          expect(delegate.findMany).not.toHaveBeenCalled();
+        }
+        expect(db.user.findUnique).toHaveBeenCalledWith(
+          expect.objectContaining({ where: { id: 'user_a', status: 'ACTIVE' } })
+        );
+      }
+    );
+  }
+);
+
+const branchActions = {
+  postGoodsReceipt: () =>
+    caller().postGoodsReceipt({ branchId: 'branch_a', goodsReceiptId: 'receipt' }),
+  reverseGoodsReceipt: () =>
+    caller().reverseGoodsReceipt({
+      branchId: 'branch_a',
+      goodsReceiptId: 'receipt',
+      reason: 'Incorrect invoice',
+    }),
+  resolveReceivingException: () =>
+    caller().resolveReceivingException({
+      branchId: 'branch_a',
+      receivingExceptionId: 'exception',
+      resolutionNote: 'Invoice checked',
+    }),
+  createPurchaseReturn: () =>
+    caller().createPurchaseReturn({
+      branchId: 'branch_a',
+      supplierId: 'supplier',
+      kind: 'EXPIRY_CLAIM',
+      reference: 'RET',
+      lines: [RETURN_LINE],
+    }),
+  submitPurchaseReturn: () =>
+    caller().submitPurchaseReturn({ branchId: 'branch_a', purchaseReturnId: 'return' }),
+  dispatchPurchaseReturn: () =>
+    caller().dispatchPurchaseReturn({
+      branchId: 'branch_a',
+      purchaseReturnId: 'return',
+      idempotencyKey: 'dispatch',
+    }),
+  issueDebitNote: () =>
+    caller().issueDebitNote({
+      branchId: 'branch_a',
+      purchaseReturnId: 'return',
+      reference: 'DEBIT',
+    }),
+  recordSupplierCredit: () =>
+    caller().recordSupplierCredit({
+      branchId: 'branch_a',
+      supplierId: 'supplier',
+      reference: 'CREDIT',
+      amountMinor: 100,
+      receivedAt: PAST,
+    }),
+  allocateSupplierCredit: () =>
+    caller().allocateSupplierCredit({
+      branchId: 'branch_a',
+      supplierCreditId: 'credit',
+      debitNoteId: 'debit',
+      amountMinor: 100,
+    }),
+  authenticatePack: () => caller().authenticatePack({ branchId: 'branch_a', payload: 'scan' }),
+  goodsReceipts: sensitiveReads.goodsReceipts,
+  receivingExceptions: sensitiveReads.receivingExceptions,
+  receivingExceptionQueue: sensitiveReads.receivingExceptionQueue,
+  lotsFromReceipt: sensitiveReads.lotsFromReceipt,
+  returnableLots: sensitiveReads.returnableLots,
+  debitNotePositions: sensitiveReads.debitNotePositions,
+  purchaseReturns: () => caller().purchaseReturns({ branchId: 'branch_a' }),
+  supplierCredits: () => caller().supplierCredits({ branchId: 'branch_a' }),
+};
+describe.each(Object.keys(branchActions) as (keyof typeof branchActions)[])(
+  '%s branch security',
+  (name) => {
+    it.each(['unassigned', 'inactive-or-foreign'] as const)(
+      'rejects %s branch before side effects',
+      async (mode) => {
+        if (mode === 'unassigned')
+          db.pharmacyBranchAssignment.findMany.mockResolvedValue([{ branchId: 'other_branch' }]);
+        else db.pharmacyBranch.findFirst.mockResolvedValue(null);
+        await expect(branchActions[name]()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        expect(db.$transaction).not.toHaveBeenCalled();
+        for (const delegate of Object.values(db)) {
+          if (typeof delegate !== 'function') {
+            expect(delegate.create).not.toHaveBeenCalled();
+            expect(delegate.update).not.toHaveBeenCalled();
+          }
+        }
+        expect(db.pharmacyBranchAssignment.findMany).toHaveBeenCalledWith({
+          where: { organizationId: 'org_a', userId: 'user_a', active: true },
+          select: { branchId: true },
+        });
+        if (mode !== 'unassigned')
+          expect(db.pharmacyBranch.findFirst).toHaveBeenCalledWith({
+            where: { id: 'branch_a', organizationId: 'org_a', active: true },
+            select: { id: true },
+          });
+      }
+    );
+  }
+);
+
+describe('stored procurement branch boundaries', () => {
+  beforeEach(() => {
+    db.pharmacyBranchAssignment.findMany.mockResolvedValue([{ branchId: 'branch_a' }]);
+    db.pharmacyRequisition.findFirst.mockResolvedValue({
+      id: 'req',
+      branchId: 'branch_b',
+      status: 'DRAFT',
+      lines: [],
+    });
+    db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
+      id: 'po',
+      branchId: 'branch_b',
+      status: 'SUBMITTED',
+      lines: [],
+    });
+  });
+  it.each(['submitPurchaseOrder', 'sendPurchaseOrder', 'landedCost'] as const)(
+    'refuses %s on another branch order',
+    async (name) => {
+      await expect(caller()[name]({ purchaseOrderId: 'po' })).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+      });
+      expect(db.pharmacyPurchaseOrder.update).not.toHaveBeenCalled();
+    }
+  );
+  it('refuses approval before recording an approval event', async () => {
+    await expect(
+      caller().approvePurchaseOrder({ purchaseOrderId: 'po', decision: 'APPROVED' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.pharmacyPurchaseOrderApproval.create).not.toHaveBeenCalled();
+    expect(db.pharmacyPurchaseOrder.update).not.toHaveBeenCalled();
+  });
+  it('refuses submission of another branch requisition', async () => {
+    await expect(caller().submitRequisition({ requisitionId: 'req' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(db.pharmacyRequisition.update).not.toHaveBeenCalled();
+  });
+  it('refuses quote comparison on another branch requisition', async () => {
+    db.pharmacyRequisitionLine.findFirst.mockResolvedValue({
+      id: 'line',
+      requisition: { branchId: 'branch_b' },
+    });
+    await expect(caller().compareQuotes({ requisitionLineId: 'line' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(db.pharmacyQuoteLine.findMany).not.toHaveBeenCalled();
+  });
+  it('refuses a new order naming another branch', async () => {
+    await expect(
+      caller().createPurchaseOrder({
+        branchId: 'branch_b',
+        supplierId: 'supplier',
+        reference: 'PO',
+        lines: [ORDER_LINE],
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.pharmacyPurchaseOrder.create).not.toHaveBeenCalled();
+  });
+  it('refuses a new requisition naming another branch', async () => {
+    await expect(
+      caller().createRequisition({
+        branchId: 'branch_b',
+        reference: 'REQ',
+        lines: [
+          {
+            medicineId: 'medicine',
+            packLevelId: 'pack',
+            quantityPacks: 1,
+            canonicalUnitsPerPack: 10,
+          },
+        ],
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.pharmacyRequisition.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('purchasing read scope and linked approval branches', () => {
+  it('filters requisitions at the database while preserving central demand', async () => {
+    await caller().requisitions();
+    expect(db.pharmacyRequisition.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          organizationId: 'org_a',
+          OR: [{ branchId: null }, { branchId: { in: ['branch_a'] } }],
+        },
+      })
+    );
+  });
+  it('filters orders and their linked requisition and quote branches', async () => {
+    await caller().purchaseOrders();
+    expect(db.pharmacyPurchaseOrder.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          organizationId: 'org_a',
+          AND: expect.arrayContaining([
+            expect.objectContaining({
+              OR: expect.arrayContaining([{ branchId: null }, { branchId: { in: ['branch_a'] } }]),
+            }),
+          ]),
+        }),
+      })
+    );
+  });
+  it('refuses received quantities for an order outside the assigned branches', async () => {
+    db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({ id: 'po', branchId: 'other' });
+    await expect(caller().receivedAgainstOrder({ purchaseOrderId: 'po' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(db.pharmacyGoodsReceiptLine.findMany).not.toHaveBeenCalled();
+  });
+  it.each(['requisition', 'quote'] as const)(
+    'rechecks linked %s scope before PO approval evidence',
+    async (linked) => {
+      db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
+        id: 'po',
+        branchId: 'branch_a',
+        status: 'SUBMITTED',
+        createdByUserId: 'other',
+        requisitionId: linked === 'requisition' ? 'req' : null,
+        quoteId: linked === 'quote' ? 'quote' : null,
+      });
+      db.pharmacyRequisition.findFirst.mockResolvedValue({ id: 'req', branchId: 'other_branch' });
+      db.pharmacyQuote.findFirst.mockResolvedValue({
+        id: 'quote',
+        requisitionId: 'req',
+        requisition: { branchId: 'other_branch' },
+      });
+      await expect(
+        caller().approvePurchaseOrder({ purchaseOrderId: 'po', decision: 'APPROVED' })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(db.pharmacyPurchaseOrderApproval.create).not.toHaveBeenCalled();
+      expect(db.pharmacyPurchaseOrder.update).not.toHaveBeenCalled();
+    }
+  );
+});
+
+it('keeps the branch-filtered workspace available to financial-only readers', async () => {
+  db.user.findUnique.mockResolvedValue({
+    status: 'ACTIVE',
+    organizationId: 'org_a',
+    role: 'EMPLOYEE',
+    organizationRole: { permissions: [{ capability: 'reports:financial', effect: 'ALLOW' }] },
+    permissionOverrides: [],
+  });
+  mocks.can.mockImplementation(async (_subject, action) => action === 'reports:financial');
+  await expect(caller().workspace()).resolves.toHaveProperty('branches');
+  expect(mocks.can).toHaveBeenCalledWith(
+    expect.anything(),
+    'reports:financial',
+    undefined,
+    expect.objectContaining({ db })
+  );
+  expect(db.pharmacyBranch.findMany).toHaveBeenCalledWith(
+    expect.objectContaining({ where: expect.objectContaining({ id: { in: ['branch_a'] } }) })
+  );
+});
+
+describe('supplier licence supersession', () => {
+  const licence = {
+    supplierId: 'supplier_a',
+    licenceType: 'wholesale',
+    licenceNumber: 'LIC-2',
+    issuingAuthority: 'Regulator',
+    issuedAt: PAST,
+    expiresAt: FUTURE,
+    supersedesId: 'licence_old',
+    verified: true,
+  };
+  beforeEach(() => {
+    db.pharmacySupplier.findFirst.mockResolvedValue({ id: 'supplier_a' });
+  });
+  it('rejects missing, foreign-tenant or another supplier licence evidence', async () => {
+    db.pharmacySupplierLicence.findFirst.mockResolvedValue(null);
+    await expect(caller().recordSupplierLicence(licence)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(db.pharmacySupplierLicence.findFirst).toHaveBeenCalledWith({
+      where: { id: 'licence_old', supplierId: 'supplier_a' },
+    });
+    expect(db.pharmacySupplierLicence.create).not.toHaveBeenCalled();
+  });
+  it('rejects a second replacement of an already superseded licence', async () => {
+    db.pharmacySupplierLicence.findFirst
+      .mockResolvedValueOnce({ id: 'licence_old' })
+      .mockResolvedValueOnce({ id: 'licence_new' });
+    await expect(caller().recordSupplierLicence(licence)).rejects.toMatchObject({
+      code: 'CONFLICT',
+    });
+    expect(db.pharmacySupplierLicence.create).not.toHaveBeenCalled();
+  });
+  it('appends a verified replacement linked to the original evidence', async () => {
+    db.pharmacySupplierLicence.findFirst
+      .mockResolvedValueOnce({ id: 'licence_old' })
+      .mockResolvedValueOnce(null);
+    await caller().recordSupplierLicence(licence);
+    expect(db.pharmacySupplierLicence.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        supplierId: 'supplier_a',
+        supersedesId: 'licence_old',
+        verifiedAt: expect.any(Date),
+        verifiedByUserId: 'user_a',
+      }),
+    });
+    expect(db.pharmacySupplierLicence.update).not.toHaveBeenCalled();
   });
 });

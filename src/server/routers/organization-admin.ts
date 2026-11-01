@@ -7,6 +7,7 @@ import { readAskFathomSettings } from '@/lib/ai/ask-fathom-settings';
 import { passwordSchema } from '@/lib/password-policy';
 import { encryptSecret } from '@/lib/secret-crypto';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
+import { ianaTimezone } from '@/lib/timezone';
 import { annotateAudit } from '@/server/audit';
 import { adminProcedure, protectedProcedure, router } from '@/server/trpc';
 
@@ -61,20 +62,6 @@ async function lockOrganizationSeat(
   }
 }
 
-async function lockActiveOrganizationAdmins(
-  tx: Prisma.TransactionClient,
-  organizationId: string
-): Promise<void> {
-  await tx.$queryRaw`
-    SELECT "id"
-    FROM "users"
-    WHERE "organizationId" = ${organizationId}
-      AND "role" = 'ADMIN'
-      AND "status" = 'ACTIVE'
-    FOR UPDATE
-  `;
-}
-
 function inputJson(value: unknown): Prisma.InputJsonValue {
   return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
 }
@@ -121,6 +108,15 @@ export const organizationAdminRouter = router({
     return ctx.db.organizationDepartment.findMany({
       where: { organizationId: id },
       orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+    });
+  }),
+
+  roles: adminProcedure.query(async ({ ctx }) => {
+    const id = organizationId(ctx);
+    return ctx.db.organizationRole.findMany({
+      where: { organizationId: id },
+      orderBy: { name: 'asc' },
+      select: { id: true, key: true, name: true },
     });
   }),
 
@@ -308,7 +304,9 @@ export const organizationAdminRouter = router({
     .input(
       z.object({
         displayName: z.string().trim().min(1).max(150),
-        timezone: z.string().trim().min(1).max(100),
+        // Every screen that shows a workspace time formats in this zone, and
+        // Intl throws on one it does not know: the platform's IANA check.
+        timezone: ianaTimezone,
         locale: z.string().trim().min(2).max(20),
         primaryContactName: z.string().trim().max(150).nullable(),
         primaryContactEmail: optionalEmail,
@@ -513,31 +511,28 @@ export const organizationAdminRouter = router({
       if (before.id === ctx.session.user.id && input.status === 'INACTIVE') {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'You cannot deactivate yourself.' });
       }
-      const removingActiveAdmin =
-        before.role === 'ADMIN' &&
-        before.status === 'ACTIVE' &&
-        (input.role !== 'ADMIN' || input.status !== 'ACTIVE');
       const saved = await ctx.db.$transaction(async (tx) => {
-        if (activating) await lockOrganizationSeat(tx, id, ctx.entitlements.seatLimit);
-        if (removingActiveAdmin) {
-          // Lock every active admin membership before checking the invariant. This
-          // serializes concurrent demotions, so the second transaction observes
-          // the first transaction's committed role change before it can proceed.
-          await lockActiveOrganizationAdmins(tx, id);
-          const otherActiveAdmins = await tx.user.count({
-            where: {
-              organizationId: id,
-              id: { not: before.id },
-              role: 'ADMIN',
-              status: 'ACTIVE',
-            },
+        const removesActiveAdmin =
+          before.role === 'ADMIN' &&
+          before.status === 'ACTIVE' &&
+          (input.role !== 'ADMIN' || input.status !== 'ACTIVE');
+
+        // Serialize every transition that can remove an active admin. Reading the
+        // count before taking this lock would let two concurrent demotions both
+        // observe the other admin and leave the organization with none.
+        if (removesActiveAdmin) {
+          await tx.$queryRaw`SELECT "id" FROM "organizations" WHERE "id" = ${id} FOR UPDATE`;
+          const activeAdmins = await tx.user.count({
+            where: { organizationId: id, role: 'ADMIN', status: 'ACTIVE' },
           });
-          if (otherActiveAdmins === 0) {
+          if (activeAdmins <= 1) {
             throw new TRPCError({
               code: 'BAD_REQUEST',
               message: 'Cannot demote or deactivate the last active admin.',
             });
           }
+        } else if (activating) {
+          await lockOrganizationSeat(tx, id, ctx.entitlements.seatLimit);
         }
         return tx.user.update({
           where: { id: input.id },
@@ -647,6 +642,7 @@ export const organizationAdminRouter = router({
         }
         if (branchIds.length > 0) {
           await tx.pharmacyBranchAssignment.createMany({
+            skipDuplicates: true,
             data: branchIds.map((branchId) => ({
               organizationId: id,
               branchId,

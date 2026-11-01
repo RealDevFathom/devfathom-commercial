@@ -87,4 +87,34 @@ describe('AppShell module guard', () => {
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(screen.queryByRole('dialog', { name: 'Mobile navigation' })).not.toBeInTheDocument();
   });
+
+  it('clearly warns when the pharmacy licence is a placeholder', () => {
+    const TestAppShell = AppShell as ComponentType<{
+      brand: Parameters<typeof AppShell>[0]['brand'];
+      pharmacyPlaceholder?: boolean;
+      children?: React.ReactNode;
+    }>;
+    render(
+      createElement(
+        TestAppShell,
+        {
+          brand: {
+            organizationId: 'org_test',
+            displayName: 'Test pharmacy',
+            logoUrl: null,
+            markUrl: null,
+            faviconUrl: null,
+            primaryColor: null,
+            accentColor: null,
+          },
+          pharmacyPlaceholder: true,
+        },
+        createElement('p', null, 'Dashboard')
+      )
+    );
+
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Licence details are PLACEHOLDER – not a real licence'
+    );
+  });
 });

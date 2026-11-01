@@ -1,3 +1,11 @@
+vi.mock('./points-policy', () => ({
+  readPointsPolicy: vi.fn(async () => ({
+    pointsEnabled: true,
+    earnEveryMinor: 100,
+    pointValueMinor: 100,
+    minimumRedeemPoints: 1,
+  })),
+}));
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { redeemSalePoints } from './customer-loyalty';
 import { postSaleLineEntry, postTenderEntry } from './finance-postings';
@@ -5,6 +13,8 @@ import { requestCounterEvidence } from './counter-evidence';
 
 vi.mock('./finance-postings', () => ({ postSaleLineEntry: vi.fn(), postTenderEntry: vi.fn() }));
 vi.mock('./counter-evidence', () => ({ requestCounterEvidence: vi.fn() }));
+// #633: the batch re-check has its own PostgreSQL suite (sale-batch-safety.db.test.ts).
+vi.mock('./sale-batch-safety', () => ({ assertSaleBatchesSellable: vi.fn(async () => new Map()) }));
 
 const scope = { organizationId: 'org-a', branchId: 'branch-a', actorId: 'actor-a' };
 const input = {
@@ -92,7 +102,9 @@ describe('ordinary loyalty settlement completion (held policy fixtures excluded)
   it('refuses revoked consent before tender or point writes', async () => {
     const { db } = fixture();
     db.patientConsent.findFirst.mockResolvedValue({ granted: false, revokedAt: null });
-    await expect(redeemSalePoints(db as never, scope, input)).rejects.toThrow('CONSENT_REQUIRED');
+    await expect(redeemSalePoints(db as never, scope, input)).rejects.toThrow(
+      'LOYALTY_CONSENT_REQUIRED'
+    );
     expect(db.pharmacyTender.create).not.toHaveBeenCalled();
     expect(db.pharmacyLoyaltyPointsEntry.create).not.toHaveBeenCalled();
   });

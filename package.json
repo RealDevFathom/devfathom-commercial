@@ -2,7 +2,7 @@
   "name": "company-hub",
   "version": "0.1.0",
   "private": true,
-  "packageManager": "bun@1.3.14",
+  "packageManager": "bun@1.4.2",
   "scripts": {
     "dev": "next dev",
     "build": "prisma generate && next build",
@@ -27,6 +27,7 @@
     "db:migrate": "bunx prisma migrate dev",
     "db:seed": "bunx prisma db seed",
     "demo:seed": "tsx --tsconfig=scripts/tsconfig.json prisma/seed-demo/restaurant.ts",
+    "seed:demo": "tsx --tsconfig=scripts/tsconfig.json scripts/seed-demo-pharmacies.ts",
     "db:studio": "bunx prisma studio",
     "db:reset": "bunx prisma migrate reset",
     "assistant:eval": "tsx scripts/assistant-eval.ts",
@@ -45,6 +46,7 @@
     "@ai-sdk/google-vertex": "^4",
     "@ai-sdk/groq": "^3.0.42",
     "@ai-sdk/react": "^3.0.209",
+    "@aws-sdk/client-s3": "^3.1154.0",
     "@azure/identity": "^4.13.1",
     "@azure/storage-blob": "^12.33.0",
     "@base-ui/react": "^1.3.0",
@@ -107,7 +109,7 @@
     "superjson": "^2.2.6",
     "tailwind-merge": "^3.5.0",
     "tw-animate-css": "^1.4.0",
-    "zod": "^4.3.6",
+    "zod": "^4.6.6",
     "zustand": "^5.0.12"
   },
   "devDependencies": {
@@ -121,16 +123,16 @@
     "@types/pg": "^8.20.0",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
-    "@vitest/coverage-v8": "4.1.10",
+    "@vitest/coverage-v8": "4.1.12",
     "eslint": "^9",
-    "shadcn": "^4.2.0",
+    "shadcn": "^4.23.0",
     "eslint-config-next": "16.4.2",
     "jsdom": "30.0.0",
     "prettier": "^3.8.2",
     "tailwindcss": "^4",
     "tsx": "^4.21.0",
     "typescript": "^5",
-    "vitest": "4.1.10"
+    "vitest": "4.1.12"
   },
   "trustedDependencies": [
     "unrs-resolver"
@@ -154,7 +156,7 @@
     "exceljs": {
       "uuid": "11.1.1"
     },
-    "fast-uri": "3.1.8",
+    "fast-uri": "3.1.9",
     "hono": "4.12.27",
     "http-cache-semantics": "4.3.0",
     "ip-address": "10.7.4",
@@ -173,6 +175,19 @@
       "undici": "7.30.1"
     },
     "sharp": "0.35.5",
-    "source-map-js": "1.2.2"
+    "source-map-js": "1.2.2",
+    "@vercel/cli-config": {
+      "zod": "4.6.7"
+    },
+    "qs": "6.17.1",
+    "systeminformation": "5.33.18",
+    "vite": "8.3.5",
+    "deepmerge-ts": "8.0.2",
+    "@azure/identity": {
+      "@azure/msal-node": "7.1.2"
+    }
+  },
+  "patchedDependencies": {
+    "deepmerge@4.3.1": "patches/deepmerge@4.3.1.patch"
   }
 }

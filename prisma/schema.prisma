@@ -135,6 +135,7 @@ model JurisdictionRuleSet {
   pharmacistCoverageRule    Json
   recordRetentionByClass    Json
   createdAt                 DateTime  @default(now())
+  isPlaceholder             Boolean   @default(false)
 
   regulatoryProfiles BranchRegulatoryProfile[]
 
@@ -158,8 +159,10 @@ model BranchRegulatoryProfile {
   premises                         Json
   licenceCategory                  String
   licenceNumber                    String
+  licenceIssuingAuthority          String?
   licenceValidFrom                 DateTime
   licenceValidTo                   DateTime
+  licenceExpiryLabel               String?
   licenceEvidenceFileRef           String
   permittedSchedules               String[]
   qualifiedPersonRegistration      String
@@ -171,6 +174,7 @@ model BranchRegulatoryProfile {
   fiscalStatus                     String
   retentionPolicy                  Json
   createdAt                        DateTime  @default(now())
+  isPlaceholder                    Boolean   @default(false)
 
   jurisdictionRuleSet JurisdictionRuleSet @relation(fields: [jurisdictionRuleSetId], references: [id], onDelete: Restrict)
   branch              PharmacyBranch      @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
@@ -242,14 +246,17 @@ model PharmacyBranch {
   @@map("pharmacy_branches")
 }
 
-/// Active assignment of a tenant user to one pharmacy branch. Receipt reads use
-/// this table, never restaurant staff profiles. An empty set is not a grant.
+/// Active assignment of a tenant user to one pharmacy branch. Branch-scoped pharmacy
+/// actions use this table, never restaurant staff profiles. Owner assignments are
+/// materialized by lifecycle triggers; an empty set grants nothing to other staff.
 model PharmacyBranchAssignment {
   id             String   @id @default(cuid())
   organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   branchId       String
   userId         String
   active         Boolean  @default(true)
+  /// SQL lifecycle marker for assignments inherited from proprietor access.
+  ownerManaged   Boolean  @default(false)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -993,10 +1000,242 @@ enum PharmacyTenderType {
 }
 
 enum PharmacyLoyaltyEntryKind {
+  ADJUSTMENT
   EARN_REVERSAL
   EARN
   REDEEM
   REFUND
+}
+
+enum StoredValueAccountKind {
+  CUSTOMER_LIABILITY
+  CASH_CLEARING
+  SALES_CLEARING
+}
+
+enum StoredValueEntryKind {
+  TOP_UP
+  SPEND
+  REFUND
+  EXPIRY
+  ADJUSTMENT
+}
+
+/// Vertical-neutral stored value. This is intentionally separate from restaurant
+/// Wallet passes (presentation) and pharmacy khata (a customer receivable).
+model StoredValueAccount {
+  id               String                 @id @default(cuid())
+  organizationId   String                 @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  customerId       String?
+  kind             StoredValueAccountKind
+  currency         String                 @default("PKR")
+  balanceMinor     Int                    @default(0)
+  cnicLast4        String?
+  cnicHmac         String?
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, customerId, kind])
+  @@index([organizationId, kind])
+  @@map("stored_value_accounts")
+}
+
+/// Journal header. Every mutation has one tenant-scoped idempotency key.
+model StoredValueJournal {
+  id               String               @id @default(cuid())
+  organizationId   String               @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId         String?
+  kind             StoredValueEntryKind
+  idempotencyKey   String
+  saleId           String?
+  actorId          String
+  tender           PharmacyTenderType?
+  reason           String?
+  /// Null on legacy events; no guessed currency or original funding source.
+  currency         Currency?
+  originalJournalId String?
+  original         StoredValueJournal? @relation("StoredValueRefundSource", fields: [organizationId, originalJournalId], references: [organizationId, id], onDelete: Restrict, map: "stored_value_journals_original_tenant_fk")
+  refunds          StoredValueJournal[] @relation("StoredValueRefundSource")
+  occurredAt       DateTime             @default(now())
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, idempotencyKey])
+  @@index([organizationId, originalJournalId], map: "stored_value_journals_org_original_idx")
+  @@index([organizationId, branchId, occurredAt])
+  @@map("stored_value_journals")
+}
+
+/// Signed postings in integer paisa. Each journal is constrained by PostgreSQL
+/// to sum to zero before commit, making this an append-only double-entry ledger.
+model StoredValueEntry {
+  id               String   @id @default(cuid())
+  organizationId   String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  journalId        String
+  accountId        String
+  amountMinor      Int
+  occurredAt       DateTime @default(now())
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, journalId, accountId])
+  @@index([organizationId, accountId, occurredAt, id])
+  @@map("stored_value_entries")
+}
+
+model PharmacyWalletTier {
+  id                  String   @id @default(cuid())
+  organizationId      String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  name                String
+  qualifyingTopUpMinor Int
+  discountBps         Int
+  sortOrder           Int
+  active              Boolean  @default(true)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, name])
+  @@index([organizationId, qualifyingTopUpMinor])
+  @@map("pharmacy_wallet_tiers")
+}
+
+model PharmacyWalletSettings {
+  id                    String   @id @default(cuid())
+  organizationId        String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  expiryDays            Int?
+  allowUnusedRefund     Boolean  @default(false)
+  allowBenefitStacking  Boolean  @default(false)
+  requireOtp            Boolean  @default(false)
+  cnicFailureLimit      Int      @default(5)
+  cnicLockoutMinutes    Int      @default(15)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@unique([organizationId])
+  @@unique([organizationId, id])
+  @@map("pharmacy_wallet_settings")
+}
+
+model PharmacyWalletAudit {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  actorId        String
+  action         String
+  oldValue       Json?
+  newValue       Json?
+  occurredAt     DateTime @default(now())
+
+  @@unique([organizationId, id])
+  @@index([organizationId, occurredAt])
+  @@map("pharmacy_wallet_audits")
+}
+
+model PharmacyWalletCnicFailure {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  customerId     String
+  cashierId      String
+  occurredAt     DateTime @default(now())
+
+  @@unique([organizationId, id])
+  @@index([organizationId, customerId, occurredAt])
+  @@index([organizationId, cashierId, occurredAt])
+  @@map("pharmacy_wallet_cnic_failures")
+}
+
+enum PharmacyVoucherStatus {
+  ISSUED
+  REDEEMED
+  EXPIRED
+  VOID
+}
+
+enum PharmacyVoucherScope {
+  WHOLE_BASKET
+  NON_DRUG_ONLY
+}
+
+/// One mutable tenant policy row. Every update is copied to the append-only
+/// audit table by the service before this row changes.
+model PharmacyLoyaltySettings {
+  pointsEnabled Boolean @default(false)
+  earnEveryMinor Int @default(100)
+  pointValueMinor Int @default(100)
+  minimumRedeemPoints Int @default(1)
+  id                           String               @id @default(cuid())
+  organizationId               String               @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  voucherScope                  PharmacyVoucherScope @default(WHOLE_BASKET)
+  voucherValidityDays           Int                  @default(30)
+  maxIssuedPerCustomerPerPeriod Int                  @default(5)
+  maxIssuedPerPhonePerPeriod    Int                  @default(5)
+  maxRedeemedPerCustomerPerPeriod Int                @default(5)
+  maxRedeemedPerPhonePerPeriod  Int                  @default(5)
+  abusePeriodDays               Int                  @default(30)
+  expiryOverrideGraceDays       Int                  @default(0)
+  createdAt                     DateTime              @default(now())
+  updatedAt                     DateTime              @updatedAt
+
+  @@unique([organizationId])
+  @@unique([organizationId, id])
+  @@map("pharmacy_loyalty_settings")
+}
+
+model PharmacyLoyaltySettingsAudit {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  actorId        String
+  oldValue       Json
+  newValue       Json
+  occurredAt     DateTime @default(now())
+
+  @@unique([organizationId, id])
+  @@index([organizationId, occurredAt])
+  @@map("pharmacy_loyalty_settings_audits")
+}
+
+model PharmacyVoucher {
+  id                 String                @id @default(cuid())
+  organizationId     String                @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId           String
+  code               String
+  valueMinor         Int
+  status             PharmacyVoucherStatus @default(ISSUED)
+  scope              PharmacyVoucherScope  @default(WHOLE_BASKET)
+  customerId         String?
+  phone              String?
+  issuedAt           DateTime              @default(now())
+  expiresAt          DateTime
+  minNextBasketMinor Int                   @default(0)
+  redeemedAt         DateTime?
+  redeemedSaleId     String?
+  issuedByActorId    String
+  redeemedByActorId  String?
+  createdAt          DateTime              @default(now())
+  updatedAt          DateTime              @updatedAt
+
+  @@unique([organizationId, code])
+  @@unique([organizationId, id])
+  @@unique([organizationId, redeemedSaleId])
+  @@index([organizationId, branchId, status, expiresAt])
+  @@index([organizationId, customerId, issuedAt])
+  @@index([organizationId, phone, issuedAt])
+  @@map("pharmacy_vouchers")
+}
+
+model PharmacyVoucherOverrideAudit {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  voucherId      String
+  saleId         String
+  actorId        String
+  reason         String
+  violations     Json
+  occurredAt     DateTime @default(now())
+
+  @@unique([organizationId, id])
+  @@index([organizationId, branchId, voucherId, occurredAt])
+  @@map("pharmacy_voucher_override_audits")
 }
 
 enum PharmacyDrawerSessionStatus {
@@ -1257,6 +1496,9 @@ model PharmacyLoyaltyPointsEntry {
   refundId        String?
   kind            PharmacyLoyaltyEntryKind
   points          Int
+  adjustmentReason String?
+  earnEveryMinor Int?
+  pointValueMinor Int?
   requestedPoints Int?
   netPaidMinor    Int?
   actorId         String
@@ -1464,12 +1706,15 @@ model PharmacySaleLine {
   discountMinor             Int                          @default(0)
   approvalPolicy            String?
   approvedByUserId          String?
+  prescriptionLineId        String?
+  prescriptionPatientId     String?
   idempotencyKey            String
   createdAt                 DateTime                     @default(now())
   sale                      PharmacySale                 @relation(fields: [organizationId, branchId, saleId], references: [organizationId, branchId, id], onDelete: Restrict)
   medicine                  Medicine                     @relation(fields: [medicineId], references: [id], onDelete: Restrict)
   presentation              Presentation                 @relation(fields: [presentationId], references: [id], onDelete: Restrict)
   packLevel                 PackLevel                    @relation(fields: [packLevelId], references: [id], onDelete: Restrict)
+  prescriptionLine          PrescriptionLine?            @relation(fields: [organizationId, prescriptionLineId], references: [organizationId, id], onDelete: Restrict)
   allocations               PharmacySaleLineAllocation[]
   returnLines               PharmacySaleReturnLine[]
   unidentifiedReturnHolds   PharmacyUnidentifiedReturnHold[]
@@ -2365,6 +2610,8 @@ enum FinanceAccountCode {
   BANK
   ACCOUNTS_RECEIVABLE
   LOYALTY_REDEMPTION
+  /// Liability. Funded customer wallet deposits, never earned loyalty.
+  CUSTOMER_WALLET_LIABILITY
   ACCOUNTS_PAYABLE
   CASH_OVER_SHORT
   OPENING_BALANCE_EQUITY
@@ -2376,6 +2623,7 @@ enum FinanceSourceKind {
   PHARMACY_GOODS_RECEIPT
   PHARMACY_SALE_LINE
   PHARMACY_SALE_RETURN_LINE
+  PHARMACY_UNIDENTIFIED_RETURN_HOLD
   PHARMACY_STOCK_WRITE_OFF
   PHARMACY_SUPPLIER_CLAIM
   PHARMACY_INTERBRANCH_TRANSFER_LINE
@@ -2386,6 +2634,7 @@ enum FinanceSourceKind {
   PHARMACY_OPENING_STOCK
   PHARMACY_OPENING_LEDGER
   PHARMACY_BOOKKEEPING_TRANSACTION
+  PHARMACY_STORED_VALUE_JOURNAL
 }
 
 enum PharmacyBookkeepingKind {
@@ -4832,6 +5081,11 @@ enum OrganizationVertical {
   HOSPITALITY
 }
 
+enum PharmacyOperatingMode {
+  SOLO
+  STAFFED
+}
+
 enum PlatformModuleBand {
   BASELINE
   PLATFORM
@@ -4863,6 +5117,7 @@ model Organization {
   seatLimit                Int                        @default(1)
   isDemo                   Boolean                    @default(false)
   askFathomEnabled         Boolean                    @default(true)
+  pharmacyOperatingMode    PharmacyOperatingMode      @default(STAFFED)
   lastDemoResetAt          DateTime?
   gracePeriodDays          Int                        @default(0)
   activatedAt              DateTime?
@@ -12274,6 +12529,7 @@ model PrescriptionLine {
   medicine                  Medicine                          @relation(fields: [medicineId], references: [id], onDelete: Restrict)
   presentation              Presentation                      @relation(fields: [presentationId], references: [id], onDelete: Restrict)
   fills                     PrescriptionFill[]
+  saleLines                 PharmacySaleLine[]
 
   @@unique([organizationId, id])
   @@unique([organizationId, prescriptionId, lineNumber])

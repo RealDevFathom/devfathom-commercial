@@ -61,3 +61,20 @@ assertions while its web checks continue to use the application repository.
 its additional real-pin cases require both `INITIALIZER_SOURCE_ROOT` and
 `LEGACY_INITIALIZER_SOURCE_ROOT` and otherwise report a skip explicitly. These are
 source/integrity tests only; they do not run bootstrap, migrations or providers.
+
+For the fixed-127 **source-only** regression checks in a composed checkout, run:
+
+```sh
+python3 -B scripts/test-initializer-snapshot.py
+```
+
+This runner reads revision `96969faa8e0451bb4058cf6f77d7d0405eaeb388` from the local
+Git object database, verifies all 159 records against the existing hash-pinned
+source manifest, and materializes them in a temporary directory. It supplies that
+root to the unchanged 25 `aws-context_test.py` checks, which validate the original
+control hashes, exact source bytes/modes, 127 migrations, literal import closure
+and rejection cases. Full Git history must be available (CI uses fetch-depth 0).
+Missing history or any mismatched record fails; nothing is fetched or regenerated.
+The runner deletes its temporary directory after the checks. It does not execute
+captured code, generate a client, touch a database, or admit the evolving application
+as an initializer. The explicit-root auditors retain their fail-closed behavior.

@@ -57,6 +57,7 @@ export type CounterReceiptTender = {
 };
 
 export type CounterReceipt = {
+  loyalty?: { redeemedPoints: number; remainingPoints: number };
   dispensingLabelSources?: DispensingLabelSource[];
   saleId: string;
   /** Null until a tender settles the bill; never minted by a render. */
@@ -231,6 +232,10 @@ function footerFor(
     `${strings.tendered} ${formatMinor(receipt.totals.tenderedMinor)}`,
     `${strings.change} ${formatMinor(receipt.totals.changeMinor)}`,
   ];
+  if (receipt.loyalty)
+    parts.push(
+      `Points redeemed ${receipt.loyalty.redeemedPoints}; remaining ${receipt.loyalty.remainingPoints}`
+    );
   if (receipt.receiptNumber === null) parts.push(strings.noReceiptNumber);
   if (reprint) parts.push(strings.reprint);
   const footer = parts.join(' · ');

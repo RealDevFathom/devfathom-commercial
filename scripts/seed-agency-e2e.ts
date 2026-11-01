@@ -17,6 +17,7 @@ const MODULES = [
   ['clients', 'Clients', 'Delivery', '/clients'],
   ['finance', 'Finance', 'Operations', '/finance'],
   ['meetings', 'Meetings', 'Collaboration', '/meetings'],
+  ['notes', 'Notes', 'Knowledge', '/notes'],
   ['hr', 'HR', 'People', '/hr'],
   ['reviews', 'Performance reviews', 'People', '/reviews'],
   ['api', 'API access', 'Developer', '/organization/api'],

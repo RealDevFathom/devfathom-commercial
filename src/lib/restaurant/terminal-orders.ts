@@ -1,4 +1,5 @@
 import 'server-only';
+import { recordOwnerPinReauthentication } from './owner-reauthentication';
 
 import { createHash } from 'node:crypto';
 
@@ -275,6 +276,9 @@ export async function authenticateApprover(
     }
     return { ok: false, response: json({ error: 'Invalid approving credential.' }, 401) };
   }
+  if (approving.type === 'PIN') {
+    await recordOwnerPinReauthentication(db, auth.staffProfileId, branchId);
+  }
   return { ok: true, staffProfileId: auth.staffProfileId };
 }
 
@@ -532,6 +536,10 @@ export async function getOrderForBranch(db: ScopedDb, orderId: string, branchId:
           items: { select: { orderItemId: true, quantity: true } },
         },
       },
+      bills: {
+        where: { status: { not: 'VOID' } },
+        select: { serviceChargeTotal: true },
+      },
       deliveryFulfillment: { select: { deliveryFeeSnapshot: true } },
     },
   });
@@ -554,6 +562,10 @@ export async function getOrderForBranch(db: ScopedDb, orderId: string, branchId:
     ).toString(),
     ...(terms.profiles.length > 0 ? { profiles: terms.profiles, rules: terms.rules } : {}),
   });
+  const billedServiceCharge = order.bills.reduce(
+    (total, bill) => total.plus(bill.serviceChargeTotal),
+    new Prisma.Decimal(0)
+  );
   return {
     id: order.id,
     branchId: order.branchId,
@@ -604,7 +616,7 @@ export async function getOrderForBranch(db: ScopedDb, orderId: string, branchId:
     totals: {
       subtotal: money(deriveSubtotal(activeItems)),
       tax: quoted.tax,
-      serviceCharge: quoted.serviceCharge,
+      serviceCharge: order.bills.length > 0 ? money(billedServiceCharge) : quoted.serviceCharge,
       deliveryFee: money(order.deliveryFulfillment?.deliveryFeeSnapshot ?? new Prisma.Decimal(0)),
     },
   };

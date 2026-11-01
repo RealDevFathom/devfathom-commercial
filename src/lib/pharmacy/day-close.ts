@@ -1,6 +1,8 @@
 import { TRPCError } from '@trpc/server';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { workspaceTimezone } from '@/lib/timezone';
 import type { LedgerScope } from './stock-ledger';
+import { readWalletLiability } from './wallet-reporting';
 import {
   closePharmacyDrawer,
   computePharmacyClose,
@@ -19,7 +21,7 @@ export async function readPharmacyClose(db: ScopedDb, scope: LedgerScope, busine
     select: { name: true },
   });
   if (!branch) throw new TRPCError({ code: 'NOT_FOUND', message: 'Pharmacy branch not found.' });
-  const [close, drawers, sales, refunds] = await Promise.all([
+  const [close, drawers, sales, refunds, organization, wallet] = await Promise.all([
     db.pharmacyDailyClose.findFirst({ where, orderBy: { sequence: 'desc' } }),
     db.pharmacyDrawerSession.findMany({
       where,
@@ -31,6 +33,14 @@ export async function readPharmacyClose(db: ScopedDb, scope: LedgerScope, busine
       include: { lines: true },
     }),
     db.pharmacyRefund.findMany({ where }),
+    // The workspace's zone, which the close screen shows every time in: a
+    // pharmacy branch has no zone of its own, and the viewer's browser zone is
+    // not the pharmacy's. A stored value Intl refuses is handed over as UTC.
+    db.organization.findUnique({
+      where: { id: scope.organizationId },
+      select: { timezone: true },
+    }),
+    readWalletLiability(db, scope.organizationId, scope.branchId, businessDate),
   ]);
   // Who opened each drawer, so the close screen can name the drawer by its
   // opener and time rather than by the counter's device identifier.
@@ -62,7 +72,17 @@ export async function readPharmacyClose(db: ScopedDb, scope: LedgerScope, busine
       countedMinor: d.countedMinor ?? 0,
     })),
   });
-  return { branchName: branch.name, businessDate, drawers: rows, totals, close };
+  return {
+    branchName: branch.name,
+    businessDate,
+    drawers: rows,
+    totals,
+    // Separate cash-in/liability disclosure. Neither value is fed to computePharmacyClose,
+    // so top-ups cannot inflate sale, revenue, refund, or tax totals.
+    wallet,
+    close,
+    timezone: workspaceTimezone(organization?.timezone),
+  };
 }
 
 /** One transaction closes every counted drawer and persists the immutable Z report. */
@@ -100,9 +120,10 @@ export async function closePharmacyDay(
   if (hasVariance && !input.varianceNote.trim())
     throw new TRPCError({ code: 'BAD_REQUEST', message: 'Record a variance note before closing.' });
   for (const count of input.counts) await closePharmacyDrawer(db, scope, count);
-  // Existing reason field preserves the operator explanation on the immutable row.
+  // Existing reason field preserves the operator explanation without a schema change. The close
+  // is append-only (pharmacy_daily_closes_append_only), so the note goes in with the Z report.
   return cutPharmacyDailyClose(db, scope, {
     businessDate: input.businessDate,
-    reason: input.varianceNote.trim() || undefined,
+    varianceNote: input.varianceNote,
   });
 }

@@ -1,4 +1,5 @@
-import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+import { restoreVoidedSalePoints } from './points-void';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
@@ -16,7 +17,7 @@ import {
 import { appendControlledRestorations } from './controlled-register';
 import { allocateForSale, allocateReservedForSale, reverseMovements } from './stock-ledger';
 import type { LedgerScope, ReservedSaleAllocation } from './stock-ledger';
-import { postSaleReturnEntry } from './finance-postings';
+import { postSaleReturnEntry, postUnidentifiedSaleReturnEntry } from './finance-postings';
 
 /**
  * Re-exported from `./medicine`, where MED-08 pricing now lives so the counter
@@ -370,9 +371,8 @@ export async function changeSaleStatus(
   db: ScopedDb,
   scope: LedgerScope,
   saleId: string,
-  action: 'hold' | 'resume' | 'convertQuotation' | 'complete' | 'void',
+  action: 'hold' | 'resume' | 'convertQuotation' | 'void',
   reason?: string,
-  deviceId?: string,
   controlledWitness?: ControlledRestorationPin
 ) {
   const sale = await saleInScope(db, scope, saleId);
@@ -380,7 +380,6 @@ export async function changeSaleStatus(
     hold: ['OPEN', 'HELD', 'HELD'],
     resume: ['HELD', 'OPEN', 'RESUMED'],
     convertQuotation: ['QUOTATION', 'OPEN', 'QUOTATION_CONVERTED'],
-    complete: ['OPEN', 'COMPLETED', 'COMPLETED'],
     void: ['OPEN', 'VOID', 'VOIDED'],
   } as const;
   const [from, to, kind] = transitions[action];
@@ -396,11 +395,13 @@ export async function changeSaleStatus(
       branchId: scope.branchId,
       status: from,
     },
-    data: { status: to, completedAt: action === 'complete' ? new Date() : undefined },
+    data: { status: to },
   });
   if (claimed.count !== 1) throw new PharmacySaleError('INVALID_STATE');
 
   if (action === 'void') {
+    const voided = await saleInScope(db, scope, saleId);
+    if (voided.customerId) await restoreVoidedSalePoints(db, scope, saleId);
     const allocations = await db.pharmacySaleLineAllocation.findMany({
       where: {
         organizationId: scope.organizationId,
@@ -436,31 +437,6 @@ export async function changeSaleStatus(
         restoreSellable: true,
       })),
     });
-  }
-
-  if (action === 'complete') {
-    const completed = await saleInScope(db, scope, saleId);
-    if (completed.receiptNumber == null) {
-      const receiptDeviceId = deviceId?.trim() || completed.receiptDeviceId || 'counter';
-      const rows = await db.$queryRaw<Array<{ receipt_number: number }>>(Prisma.sql`
-        INSERT INTO pharmacy_receipt_number_sequences (id, "organizationId", "branchId", "deviceId", "nextNumber", "updatedAt")
-        VALUES (${randomUUID()}, ${scope.organizationId}, ${scope.branchId}, ${receiptDeviceId}, 2, now())
-        ON CONFLICT ("organizationId", "branchId", "deviceId")
-        DO UPDATE SET "nextNumber" = pharmacy_receipt_number_sequences."nextNumber" + 1, "updatedAt" = now()
-        RETURNING "nextNumber" - 1 AS receipt_number`);
-      const receiptNumber = rows[0]?.receipt_number;
-      if (!Number.isSafeInteger(receiptNumber) || receiptNumber < 1) {
-        throw new PharmacySaleError('INVALID_STATE');
-      }
-      await db.pharmacySale.update({
-        where: { organizationId_id: { organizationId: scope.organizationId, id: saleId } },
-        data: {
-          receiptNumber,
-          receiptDeviceId,
-          businessDate: completed.businessDate ?? new Date(),
-        },
-      });
-    }
   }
 
   await event(db, scope, saleId, kind, reason);
@@ -761,6 +737,10 @@ export async function returnSaleLine(
         holdingId: holding.id,
         requestedByUserId: scope.actorId,
       },
+    });
+    await postUnidentifiedSaleReturnEntry(db, scope, {
+      holdingId: holding.id,
+      at: saleReturn.createdAt,
     });
     await event(db, scope, line.saleId, 'RETURNED', input.reason, {
       returnId: saleReturn.id,

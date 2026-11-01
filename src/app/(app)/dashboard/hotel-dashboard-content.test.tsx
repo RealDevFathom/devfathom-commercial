@@ -235,6 +235,36 @@ describe('HotelDashboardContent', () => {
     );
   });
 
+  it('suggests meal plans only where a property sells rooms', () => {
+    const venue: HotelLandingProperty = {
+      ...property,
+      branchId: 'branch_venue',
+      name: 'Fathom Lawns',
+      modeLabel: 'Venue',
+      sellsRooms: false,
+      sellsFunctionSpaces: true,
+    };
+    const view = mount({ kind: 'properties', properties: [venue] });
+    // A venue sells no stay to put a meal plan on; its function-space step stays.
+    expect(screen.queryByRole('link', { name: 'Check the meal plans you sell' })).toBeNull();
+    expect(screen.getByRole('link', { name: 'Set up the function spaces' })).toHaveAttribute(
+      'href',
+      '/hotel/settings/spaces?branchId=branch_venue'
+    );
+    view.unmount();
+
+    // Beside a hotel, the step names the property that sells rooms.
+    mount({ kind: 'properties', properties: [property, venue] });
+    expect(screen.getByRole('link', { name: 'Check the meal plans you sell' })).toHaveAttribute(
+      'href',
+      '/hotel/settings/meal-plans?branchId=branch_lahore'
+    );
+    expect(screen.getByRole('link', { name: 'Set up the function spaces' })).toHaveAttribute(
+      'href',
+      '/hotel/settings/spaces?branchId=branch_venue'
+    );
+  });
+
   it('hides the admin-only step from a non-admin member', () => {
     mount({ kind: 'properties', properties: [property] }, false);
     expect(

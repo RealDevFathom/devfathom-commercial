@@ -1,0 +1,1122 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  One DevFathom environment on AWS: network, PostgreSQL, uploads bucket,
+  generated secrets, ECS Fargate web service behind an Application Load
+  Balancer, the migration task, DNS records and the platform-jobs schedule.
+  Mirrors infra/environment.bicep (the Azure environment it replaces).
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    AllowedValues: [staging, production]
+    Default: staging
+  BaseDomain:
+    Type: String
+    Description: >-
+      PLATFORM_BASE_DOMAIN. Tenants live at <slug>.<BaseDomain> and the
+      platform console at admin.<BaseDomain>.
+    Default: staging.devfathom.com
+  TenantHost:
+    Type: String
+    Description: The workspace host used for AUTH_URL and NEXT_PUBLIC_APP_URL.
+    Default: staging.devfathom.com
+  AdminEmail:
+    Type: String
+    Default: admin@staging.devfathom.com
+  PlatformAdminEmail:
+    Type: String
+    Default: platform-admin@staging.devfathom.com
+  ImageUri:
+    Type: String
+    Default: ''
+    Description: >-
+      Application image by digest (<repo>@sha256:...). Empty creates the
+      environment with the web service scaled to zero.
+  MigrateImageUri:
+    Type: String
+    Default: ''
+    Description: >-
+      Image for the migration task only. Empty means ImageUri. A release sets
+      this to the new image first and runs the migration task, then sets
+      ImageUri to the same image and this back to empty, so no web task runs
+      new code against a schema that has not been migrated yet.
+  MigrationMode:
+    Type: String
+    Default: migrate
+    AllowedValues: [migrate, seed, bootstrap]
+    Description: >-
+      What the migration task runs after the migrations, as in
+      infra/environment.bicep. migrate: nothing. seed (staging only):
+      prisma/seed.ts, the demo data, on every release. bootstrap (production
+      only, once): prisma/bootstrap.ts, the first administrators. The
+      sign-in password secrets reach the task only in seed or bootstrap mode.
+  DesiredCount:
+    Type: Number
+    Default: 1
+    MinValue: 0
+    MaxValue: 4
+  WebCapacityProvider:
+    Type: String
+    Default: FARGATE_SPOT
+    AllowedValues: [FARGATE_SPOT, FARGATE]
+    Description: Capacity provider for the web service. FARGATE_SPOT is the low-cost default; set FARGATE to fall back to on-demand.
+  WebCpu:
+    Type: String
+    Default: '512'
+    AllowedValues: ['512', '1024', '2048']
+  WebMemory:
+    Type: String
+    Default: '1024'
+    AllowedValues: ['1024', '2048', '3072', '4096']
+  DbInstanceClass:
+    Type: String
+    Default: db.t4g.micro
+  DbEngineVersion:
+    Type: String
+    Default: '16.12'
+  DbAllocatedStorage:
+    Type: Number
+    Default: 20
+    MinValue: 20
+  HostedZoneId:
+    Type: String
+    Default: ''
+    Description: Route 53 zone for BaseDomain (dns.yaml). Empty skips DNS records.
+  CertificateArn:
+    Type: String
+    Default: ''
+    Description: >-
+      ACM certificate for BaseDomain and *.BaseDomain. Empty serves nothing:
+      port 80 answers 503 until a certificate is set, so the app is never
+      reachable over plain HTTP.
+  EmailDeliveryMode:
+    Type: String
+    Default: capture
+  AiProvider:
+    Type: String
+    Default: disabled
+  StorageAdapter:
+    Type: String
+    Default: disabled
+    AllowedValues: [disabled, s3]
+    Description: >-
+      s3 needs an image with the S3 storage adapter. disabled keeps uploads
+      unavailable (the existing behaviour without a configured store).
+  EnableJobsSchedule:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: >-
+      Call /api/platform/jobs/process every 5 minutes (vercel.json's cron).
+      Needs CertificateArn and live DNS, because it calls the public HTTPS host.
+
+Rules:
+  SeedOnlyInStaging:
+    RuleCondition: !Equals [!Ref MigrationMode, seed]
+    Assertions:
+      - Assert: !Equals [!Ref EnvironmentName, staging]
+        AssertDescription: Seeding demo data is only supported in staging.
+  BootstrapOnlyInProduction:
+    RuleCondition: !Equals [!Ref MigrationMode, bootstrap]
+    Assertions:
+      - Assert: !Equals [!Ref EnvironmentName, production]
+        AssertDescription: The one-time bootstrap is only supported in production.
+
+Conditions:
+  HasImage: !Not [!Equals [!Ref ImageUri, '']]
+  HasMigrateImage: !Not [!Equals [!Ref MigrateImageUri, '']]
+  MigrationSeeds: !Equals [!Ref MigrationMode, seed]
+  MigrationBootstraps: !Equals [!Ref MigrationMode, bootstrap]
+  HasZone: !Not [!Equals [!Ref HostedZoneId, '']]
+  HasCertificate: !Not [!Equals [!Ref CertificateArn, '']]
+  IsProduction: !Equals [!Ref EnvironmentName, production]
+  JobsEnabled: !And
+    - !Equals [!Ref EnableJobsSchedule, 'true']
+    - !Condition HasCertificate
+    - !Condition HasImage
+
+Mappings:
+  Network:
+    Cidr:
+      Vpc: 10.40.0.0/16
+      PublicA: 10.40.0.0/20
+      PublicB: 10.40.16.0/20
+      PrivateA: 10.40.128.0/20
+      PrivateB: 10.40.144.0/20
+
+Resources:
+  # ---------------------------------------------------------------- network
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !FindInMap [Network, Cidr, Vpc]
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub devfathom-${EnvironmentName}
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub devfathom-${EnvironmentName}
+
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !FindInMap [Network, Cidr, PublicA]
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: !Sub devfathom-${EnvironmentName}-public-a
+
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !FindInMap [Network, Cidr, PublicB]
+      AvailabilityZone: !Select [1, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: !Sub devfathom-${EnvironmentName}-public-b
+
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !FindInMap [Network, Cidr, PrivateA]
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: !Sub devfathom-${EnvironmentName}-private-a
+
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !FindInMap [Network, Cidr, PrivateB]
+      AvailabilityZone: !Select [1, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: !Sub devfathom-${EnvironmentName}-private-b
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub devfathom-${EnvironmentName}-public
+
+  PublicDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnetARouteTable:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetA
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnetBRouteTable:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetB
+      RouteTableId: !Ref PublicRouteTable
+
+  # The database subnets have no route to the internet at all.
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub devfathom-${EnvironmentName}-private
+
+  PrivateSubnetARouteTable:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetA
+      RouteTableId: !Ref PrivateRouteTable
+
+  PrivateSubnetBRouteTable:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetB
+      RouteTableId: !Ref PrivateRouteTable
+
+  S3GatewayEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.s3
+      VpcEndpointType: Gateway
+      RouteTableIds:
+        - !Ref PublicRouteTable
+        - !Ref PrivateRouteTable
+
+  LoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: DevFathom load balancer, public HTTP and HTTPS
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+
+  AppSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: DevFathom tasks, reachable only from the load balancer
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3000
+          ToPort: 3000
+          SourceSecurityGroupId: !Ref LoadBalancerSecurityGroup
+
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: DevFathom PostgreSQL, reachable only from the tasks
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref AppSecurityGroup
+
+  # ---------------------------------------------------------------- secrets
+  # Every value is generated by Secrets Manager and never appears in this
+  # template, its parameters or the stack events. JSON key: "value".
+  #
+  # The database passwords and the two encryption keys outlive the stack, as the
+  # database does (its final snapshot): CloudFormation deletes a secret without a
+  # recovery window, and data encrypted under a lost key (MFA, SSO and camera
+  # credentials) cannot be recovered. A new stack with the same EnvironmentName
+  # must first delete or rename the kept secrets.
+  DatabaseMasterSecret:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: !Sub devfathom/${EnvironmentName}/database-master-password
+      GenerateSecretString:
+        SecretStringTemplate: '{}'
+        GenerateStringKey: value
+        PasswordLength: 40
+        ExcludePunctuation: true
+
+  DatabaseAppSecret:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: !Sub devfathom/${EnvironmentName}/database-app-password
+      GenerateSecretString:
+        SecretStringTemplate: '{}'
+        GenerateStringKey: value
+        PasswordLength: 40
+        ExcludePunctuation: true
+
+  AuthSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub devfathom/${EnvironmentName}/auth-secret
+      GenerateSecretString:
+        SecretStringTemplate: '{}'
+        GenerateStringKey: value
+        PasswordLength: 64
+        ExcludePunctuation: true
+
+  # 32-byte keys as 64 lowercase hex characters, the format CI uses.
+  PlatformEncryptionKeySecret:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: !Sub devfathom/${EnvironmentName}/platform-encryption-key
+      GenerateSecretString:
+        SecretStringTemplate: '{}'
+        GenerateStringKey: value
+        PasswordLength: 64
+        ExcludeUppercase: true
+        ExcludePunctuation: true
+        ExcludeCharacters: ghijklmnopqrstuvwxyz
+        IncludeSpace: false
+
+  CameraCredentialKeySecret:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: !Sub devfathom/${EnvironmentName}/camera-credential-key
+      GenerateSecretString:
+        SecretStringTemplate: '{}'
+        GenerateStringKey: value
+        PasswordLength: 64
+        ExcludeUppercase: true
+        ExcludePunctuation: true
+        ExcludeCharacters: ghijklmnopqrstuvwxyz
+        IncludeSpace: false
+
+  CronSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub devfathom/${EnvironmentName}/cron-secret
+      GenerateSecretString:
+        SecretStringTemplate: '{}'
+        GenerateStringKey: value
+        PasswordLength: 48
+        ExcludePunctuation: true
+
+  # Initialization-only credentials, passed to the migration task only when it
+  # seeds (staging) or bootstraps (production): sign-in passwords for the seeded
+  # users and the first workspace and platform administrators.
+  SeedPasswordSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub devfathom/${EnvironmentName}/seed-password
+      GenerateSecretString:
+        SecretStringTemplate: '{}'
+        GenerateStringKey: value
+        PasswordLength: 24
+        ExcludePunctuation: true
+
+  # Staging only: the access code for the passwordless restaurant demo seats
+  # (/demo/restaurants). Unset means the demo entry stays disabled.
+  DemoAccessCodeSecret:
+    Type: AWS::SecretsManager::Secret
+    Condition: MigrationSeeds
+    Properties:
+      Name: !Sub devfathom/${EnvironmentName}/demo-access-code
+      GenerateSecretString:
+        SecretStringTemplate: '{}'
+        GenerateStringKey: value
+        PasswordLength: 20
+        ExcludePunctuation: true
+
+  AdminPasswordSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub devfathom/${EnvironmentName}/admin-password
+      GenerateSecretString:
+        SecretStringTemplate: '{}'
+        GenerateStringKey: value
+        PasswordLength: 24
+        ExcludePunctuation: true
+
+  PlatformAdminPasswordSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub devfathom/${EnvironmentName}/platform-admin-password
+      GenerateSecretString:
+        SecretStringTemplate: '{}'
+        GenerateStringKey: value
+        PasswordLength: 24
+        ExcludePunctuation: true
+
+  # Connection strings, assembled from the generated passwords. Passwords have
+  # no punctuation, so they need no URL encoding. `verify-full` with the RDS CA
+  # bundle baked into the image (infra/aws/Dockerfile.rds-ca) makes node-postgres
+  # verify the server; the Prisma schema engine encrypts but does not verify.
+  DatabaseAdminUrlSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub devfathom/${EnvironmentName}/database-admin-url
+      SecretString: !Sub
+        - '{"value":"postgresql://devfathomadmin:{{resolve:secretsmanager:${DatabaseMasterSecret}:SecretString:value}}@${Host}:${Port}/devfathom?sslmode=verify-full&sslrootcert=/opt/devfathom/rds-global-bundle.pem"}'
+        - Host: !GetAtt Database.Endpoint.Address
+          Port: !GetAtt Database.Endpoint.Port
+
+  DatabaseAppUrlSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub devfathom/${EnvironmentName}/database-app-url
+      SecretString: !Sub
+        - '{"value":"postgresql://devfathom_app:{{resolve:secretsmanager:${DatabaseAppSecret}:SecretString:value}}@${Host}:${Port}/devfathom?sslmode=verify-full&sslrootcert=/opt/devfathom/rds-global-bundle.pem"}'
+        - Host: !GetAtt Database.Endpoint.Address
+          Port: !GetAtt Database.Endpoint.Port
+
+  # ---------------------------------------------------------------- database
+  DatabaseSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: !Sub DevFathom ${EnvironmentName} database subnets
+      SubnetIds:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+
+  DatabaseParameterGroup:
+    Type: AWS::RDS::DBParameterGroup
+    Properties:
+      Description: !Sub DevFathom ${EnvironmentName} PostgreSQL 16
+      Family: postgres16
+      Parameters:
+        rds.force_ssl: '1'
+
+  Database:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: !Sub devfathom-${EnvironmentName}
+      Engine: postgres
+      EngineVersion: !Ref DbEngineVersion
+      DBInstanceClass: !Ref DbInstanceClass
+      AllocatedStorage: !Ref DbAllocatedStorage
+      MaxAllocatedStorage: 50
+      StorageType: gp3
+      StorageEncrypted: true
+      DBName: devfathom
+      MasterUsername: devfathomadmin
+      MasterUserPassword: !Sub '{{resolve:secretsmanager:${DatabaseMasterSecret}:SecretString:value}}'
+      DBSubnetGroupName: !Ref DatabaseSubnetGroup
+      DBParameterGroupName: !Ref DatabaseParameterGroup
+      VPCSecurityGroups:
+        - !Ref DatabaseSecurityGroup
+      PubliclyAccessible: false
+      MultiAZ: !If [IsProduction, true, false]
+      BackupRetentionPeriod: !If [IsProduction, 14, 1]
+      PreferredBackupWindow: '21:00-22:00'
+      PreferredMaintenanceWindow: 'sun:22:30-sun:23:30'
+      AutoMinorVersionUpgrade: true
+      CopyTagsToSnapshot: true
+      DeletionProtection: true
+      EnablePerformanceInsights: false
+
+  # ---------------------------------------------------------------- uploads
+  UploadsBucket:
+    Type: AWS::S3::Bucket
+    # Kept when the stack is deleted, but removed if the first create rolls
+    # back, so a failed create leaves no orphan holding the bucket name.
+    DeletionPolicy: RetainExceptOnCreate
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub devfathom-${EnvironmentName}-uploads-${AWS::AccountId}
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      # Versioning keeps an overwritten or deleted upload for 30 days, so a delete
+      # (a purge included) becomes permanent only after that window.
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-old-versions
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 30
+            ExpiredObjectDeleteMarker: true
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+
+  UploadsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref UploadsBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !GetAtt UploadsBucket.Arn
+              - !Sub '${UploadsBucket.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+
+  # ---------------------------------------------------------------- ECS
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub devfathom-${EnvironmentName}
+      CapacityProviders: [FARGATE_SPOT, FARGATE]
+      DefaultCapacityProviderStrategy:
+        - CapacityProvider: FARGATE_SPOT
+          Weight: 1
+
+  WebLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /devfathom/${EnvironmentName}/web
+      RetentionInDays: !If [IsProduction, 30, 7]
+
+  MigrateLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /devfathom/${EnvironmentName}/migrate
+      RetentionInDays: !If [IsProduction, 90, 7]
+
+  TaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: read-task-secrets
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref DatabaseAdminUrlSecret
+                  - !Ref DatabaseAppUrlSecret
+                  - !Ref AuthSecret
+                  - !Ref PlatformEncryptionKeySecret
+                  - !Ref CameraCredentialKeySecret
+                  - !Ref CronSecret
+                  - !Ref SeedPasswordSecret
+                  - !Ref AdminPasswordSecret
+                  - !Ref PlatformAdminPasswordSecret
+                  - !If [MigrationSeeds, !Ref DemoAccessCodeSecret, !Ref AWS::NoValue]
+
+  WebTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: uploads
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource: !Sub '${UploadsBucket.Arn}/*'
+              # Without it S3 answers a read of a missing key with 403 instead of
+              # 404, and the app cannot tell "gone" from "refused".
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt UploadsBucket.Arn
+
+  MigrateTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: The migration task calls no AWS API; this role grants nothing.
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+
+  WebTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub devfathom-${EnvironmentName}-web
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: !Ref WebCpu
+      Memory: !Ref WebMemory
+      RuntimePlatform:
+        CpuArchitecture: X86_64
+        OperatingSystemFamily: LINUX
+      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt WebTaskRole.Arn
+      ContainerDefinitions:
+        - Name: web
+          Image: !If [HasImage, !Ref ImageUri, 'public.ecr.aws/docker/library/busybox:stable']
+          Essential: true
+          PortMappings:
+            - ContainerPort: 3000
+              Protocol: tcp
+          StopTimeout: 30
+          Environment:
+            - Name: NODE_ENV
+              Value: production
+            - Name: AUTH_URL
+              Value: !Sub https://${TenantHost}
+            # Legacy fallback still read by email links and platform commands.
+            - Name: NEXTAUTH_URL
+              Value: !Sub https://${TenantHost}
+            - Name: AUTH_TRUST_HOST
+              Value: 'true'
+            - Name: NEXT_PUBLIC_APP_URL
+              Value: !Sub https://${TenantHost}
+            - Name: PLATFORM_BASE_DOMAIN
+              Value: !Ref BaseDomain
+            - Name: DEFAULT_ORGANIZATION_ID
+              Value: org_devfathom
+            - Name: EMAIL_DELIVERY_MODE
+              Value: !Ref EmailDeliveryMode
+            - Name: AI_PROVIDER
+              Value: !Ref AiProvider
+            - Name: STORAGE_ADAPTER
+              Value: !Ref StorageAdapter
+            - Name: S3_UPLOADS_BUCKET
+              Value: !Ref UploadsBucket
+            - Name: AWS_REGION
+              Value: !Ref AWS::Region
+            # The load balancer is the one proxy in front of the app: it appends
+            # the client's address to X-Forwarded-For, so rate limits read the
+            # last entry. Production refuses to start without this setting.
+            - Name: TRUSTED_PROXY_HOPS
+              Value: '1'
+          Secrets:
+            - Name: DATABASE_URL
+              ValueFrom: !Sub '${DatabaseAppUrlSecret}:value::'
+            - Name: AUTH_SECRET
+              ValueFrom: !Sub '${AuthSecret}:value::'
+            - Name: PLATFORM_ENCRYPTION_KEY
+              ValueFrom: !Sub '${PlatformEncryptionKeySecret}:value::'
+            - Name: CAMERA_CREDENTIAL_KEY
+              ValueFrom: !Sub '${CameraCredentialKeySecret}:value::'
+            - Name: CRON_SECRET
+              ValueFrom: !Sub '${CronSecret}:value::'
+            - !If
+              - MigrationSeeds
+              - Name: DEMO_ACCESS_CODE
+                ValueFrom: !Sub '${DemoAccessCodeSecret}:value::'
+              - !Ref AWS::NoValue
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref WebLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: web
+
+  # Run on demand (aws ecs run-task), before the web service gets a new image.
+  # The command is infra/environment.bicep's migration path, plus the seed or the
+  # bootstrap that MigrationMode selects.
+  MigrateTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub devfathom-${EnvironmentName}-migrate
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: '1024'
+      Memory: '2048'
+      RuntimePlatform:
+        CpuArchitecture: X86_64
+        OperatingSystemFamily: LINUX
+      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt MigrateTaskRole.Arn
+      ContainerDefinitions:
+        - Name: migrate
+          Image: !If
+            - HasMigrateImage
+            - !Ref MigrateImageUri
+            - !If [HasImage, !Ref ImageUri, 'public.ecr.aws/docker/library/busybox:stable']
+          Essential: true
+          Command:
+            - /bin/sh
+            - -c
+            - !Sub
+              - 'bun prisma/prepare-extensions.ts && bun prisma/prepare-runtime-role.ts && bunx prisma migrate deploy && bun prisma/sync-catalog.ts${After}'
+              - After: !If
+                  - MigrationSeeds
+                  # The guarded staging seed runs prisma/seed.ts itself, after its target checks.
+                  - ' && bun scripts/seed-staging-demo.ts'
+                  - !If [MigrationBootstraps, ' && bun prisma/bootstrap.ts', '']
+          Environment:
+            - Name: NODE_ENV
+              Value: production
+            - Name: AUTH_URL
+              Value: !Sub https://${TenantHost}
+            # Legacy fallback still read by email links and platform commands.
+            - Name: NEXTAUTH_URL
+              Value: !Sub https://${TenantHost}
+            - Name: DEFAULT_ORGANIZATION_ID
+              Value: org_devfathom
+            - Name: ADMIN_NAME
+              Value: Workspace Administrator
+            - Name: ADMIN_EMAIL
+              Value: !Ref AdminEmail
+            - Name: ADMIN_DEPARTMENT
+              Value: LEADERSHIP
+            - Name: ADMIN_TITLE
+              Value: Administrator
+            - Name: PLATFORM_ADMIN_EMAIL
+              Value: !Ref PlatformAdminEmail
+            # The staging demo seed refuses to run unless both match the database URL's target.
+            # STAGING_DB_ENDPOINT comes from the RDS resource itself; the script also requires
+            # the fixed devfathom-staging.<id>.ap-southeast-1.rds.amazonaws.com form.
+            - Name: DEPLOY_ENV
+              Value: !Ref EnvironmentName
+            - Name: STAGING_DB_ENDPOINT
+              Value: !GetAtt Database.Endpoint.Address
+          # The sign-in passwords only when seeding or bootstrapping, as in the bicep.
+          Secrets: !If
+            - MigrationSeeds
+            - - Name: DATABASE_URL
+                ValueFrom: !Sub '${DatabaseAdminUrlSecret}:value::'
+              - Name: EXTENSION_ADMIN_DATABASE_URL
+                ValueFrom: !Sub '${DatabaseAdminUrlSecret}:value::'
+              - Name: APP_DATABASE_URL
+                ValueFrom: !Sub '${DatabaseAppUrlSecret}:value::'
+              - Name: SEED_PASSWORD
+                ValueFrom: !Sub '${SeedPasswordSecret}:value::'
+              - Name: ADMIN_PASSWORD
+                ValueFrom: !Sub '${AdminPasswordSecret}:value::'
+              - Name: PLATFORM_ADMIN_PASSWORD
+                ValueFrom: !Sub '${PlatformAdminPasswordSecret}:value::'
+              - Name: DEMO_ACCESS_CODE
+                ValueFrom: !Sub '${DemoAccessCodeSecret}:value::'
+            - !If
+              - MigrationBootstraps
+              - - Name: DATABASE_URL
+                  ValueFrom: !Sub '${DatabaseAdminUrlSecret}:value::'
+                - Name: EXTENSION_ADMIN_DATABASE_URL
+                  ValueFrom: !Sub '${DatabaseAdminUrlSecret}:value::'
+                - Name: APP_DATABASE_URL
+                  ValueFrom: !Sub '${DatabaseAppUrlSecret}:value::'
+                - Name: ADMIN_PASSWORD
+                  ValueFrom: !Sub '${AdminPasswordSecret}:value::'
+                - Name: PLATFORM_ADMIN_PASSWORD
+                  ValueFrom: !Sub '${PlatformAdminPasswordSecret}:value::'
+              - - Name: DATABASE_URL
+                  ValueFrom: !Sub '${DatabaseAdminUrlSecret}:value::'
+                - Name: EXTENSION_ADMIN_DATABASE_URL
+                  ValueFrom: !Sub '${DatabaseAdminUrlSecret}:value::'
+                - Name: APP_DATABASE_URL
+                  ValueFrom: !Sub '${DatabaseAppUrlSecret}:value::'
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref MigrateLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: migrate
+
+  # ---------------------------------------------------------------- load balancer
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub devfathom-${EnvironmentName}
+      Type: application
+      Scheme: internet-facing
+      Subnets:
+        - !Ref PublicSubnetA
+        - !Ref PublicSubnetB
+      SecurityGroups:
+        - !Ref LoadBalancerSecurityGroup
+      LoadBalancerAttributes:
+        # /api/platform/jobs/process may run for up to 300 s (maxDuration).
+        - Key: idle_timeout.timeout_seconds
+          Value: '310'
+        - Key: routing.http.drop_invalid_header_fields.enabled
+          Value: 'true'
+        - Key: deletion_protection.enabled
+          Value: !If [IsProduction, 'true', 'false']
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Ref Vpc
+      TargetType: ip
+      Protocol: HTTP
+      Port: 3000
+      # Liveness, not readiness: ECS replaces the tasks this check fails, so it
+      # must not fail for a reason every task shares. /api/ready reads the
+      # database and would fail on all of them at once during a failover or
+      # maintenance; it is checked at deploy time instead (docs/deploy/aws.md).
+      HealthCheckPath: /api/live
+      HealthCheckIntervalSeconds: 15
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 4
+      Matcher:
+        HttpCode: '200'
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: '30'
+
+  HttpListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 80
+      Protocol: HTTP
+      # Never the app over plain HTTP: sign-ins would cross the internet in
+      # cleartext. Until a certificate is set, port 80 answers 503 and serves
+      # nothing (TargetGroupAttachmentRule keeps the tasks health-checked).
+      DefaultActions: !If
+        - HasCertificate
+        - - Type: redirect
+            RedirectConfig:
+              Protocol: HTTPS
+              Port: '443'
+              StatusCode: HTTP_301
+        - - Type: fixed-response
+            FixedResponseConfig:
+              StatusCode: '503'
+              ContentType: text/plain
+              MessageBody: This environment is served over HTTPS only, and its certificate is not set yet.
+
+  # A load balancer health-checks a target group only while a listener rule uses
+  # it; otherwise its targets read "unused" and nothing notices a task that stops
+  # answering. Before the HTTPS listener exists, this rule is that use. No request
+  # can match it: 192.0.2.0/24 is a documentation range that is never routed.
+  TargetGroupAttachmentRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref HttpListener
+      Priority: 1
+      Conditions:
+        - Field: source-ip
+          SourceIpConfig:
+            Values: [192.0.2.0/24]
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  HttpsListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Condition: HasCertificate
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 443
+      Protocol: HTTPS
+      SslPolicy: ELBSecurityPolicy-TLS13-1-2-2021-06
+      Certificates:
+        - CertificateArn: !Ref CertificateArn
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  WebService:
+    Type: AWS::ECS::Service
+    DependsOn: [HttpListener, TargetGroupAttachmentRule]
+    Properties:
+      ServiceName: web
+      Cluster: !Ref Cluster
+      TaskDefinition: !Ref WebTaskDefinition
+      CapacityProviderStrategy:
+        - CapacityProvider: !Ref WebCapacityProvider
+          Weight: 1
+      DesiredCount: !If [HasImage, !Ref DesiredCount, 0]
+      HealthCheckGracePeriodSeconds: 120
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 100
+        MaximumPercent: 200
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: true
+      # Tasks sit in the public subnets with public addresses for outbound
+      # traffic (no NAT gateway); AppSecurityGroup admits only the load balancer.
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets:
+            - !Ref PublicSubnetA
+            - !Ref PublicSubnetB
+          SecurityGroups:
+            - !Ref AppSecurityGroup
+      LoadBalancers:
+        - ContainerName: web
+          ContainerPort: 3000
+          TargetGroupArn: !Ref TargetGroup
+      PropagateTags: SERVICE
+
+  # ---------------------------------------------------------------- DNS
+  ApexRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: HasZone
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Ref BaseDomain
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt LoadBalancer.DNSName
+        HostedZoneId: !GetAtt LoadBalancer.CanonicalHostedZoneID
+        EvaluateTargetHealth: false
+
+  WildcardRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: HasZone
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Sub '*.${BaseDomain}'
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt LoadBalancer.DNSName
+        HostedZoneId: !GetAtt LoadBalancer.CanonicalHostedZoneID
+        EvaluateTargetHealth: false
+
+  # ---------------------------------------------------------------- jobs
+  # Replaces vercel.json's cron: POST /api/platform/jobs/process every 5 minutes
+  # with `Authorization: Bearer $CRON_SECRET`. A Lambda function makes the call
+  # because the route may run for up to 300 s.
+  JobsFunctionRole:
+    Type: AWS::IAM::Role
+    Condition: JobsEnabled
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: read-cron-secret
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref CronSecret
+
+  JobsFunction:
+    Type: AWS::Lambda::Function
+    Condition: JobsEnabled
+    Properties:
+      FunctionName: !Sub devfathom-${EnvironmentName}-platform-jobs
+      Description: Calls /api/platform/jobs/process with the cron secret.
+      Runtime: python3.12
+      Handler: index.handler
+      Timeout: 320
+      MemorySize: 128
+      Role: !GetAtt JobsFunctionRole.Arn
+      Environment:
+        Variables:
+          TARGET_URL: !Sub https://${TenantHost}/api/platform/jobs/process
+          CRON_SECRET_ARN: !Ref CronSecret
+      Code:
+        ZipFile: |
+          import json, os, urllib.request
+          import boto3
+
+          _secret = None
+
+          def handler(event, context):
+              global _secret
+              if _secret is None:
+                  raw = boto3.client('secretsmanager').get_secret_value(
+                      SecretId=os.environ['CRON_SECRET_ARN'])['SecretString']
+                  _secret = json.loads(raw)['value']
+              request = urllib.request.Request(
+                  os.environ['TARGET_URL'], data=b'{}', method='POST',
+                  headers={'Authorization': 'Bearer ' + _secret,
+                           'Content-Type': 'application/json'})
+              with urllib.request.urlopen(request, timeout=310) as response:
+                  body = response.read(4000).decode('utf-8', 'replace')
+                  print(json.dumps({'status': response.status, 'body': body[:1000]}))
+                  return {'status': response.status}
+
+  # The schedule invokes the function asynchronously, and Lambda retries a failed
+  # asynchronous call twice by default; the next run is 5 minutes away anyway.
+  JobsFunctionInvokeConfig:
+    Type: AWS::Lambda::EventInvokeConfig
+    Condition: JobsEnabled
+    Properties:
+      FunctionName: !Ref JobsFunction
+      Qualifier: $LATEST
+      MaximumRetryAttempts: 0
+      MaximumEventAgeInSeconds: 300
+
+  JobsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Condition: JobsEnabled
+    Properties:
+      LogGroupName: !Sub /aws/lambda/devfathom-${EnvironmentName}-platform-jobs
+      RetentionInDays: !If [IsProduction, 30, 7]
+
+  JobsScheduleRole:
+    Type: AWS::IAM::Role
+    Condition: JobsEnabled
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: scheduler.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: invoke-jobs-function
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !GetAtt JobsFunction.Arn
+
+  JobsSchedule:
+    Type: AWS::Scheduler::Schedule
+    Condition: JobsEnabled
+    Properties:
+      Name: !Sub devfathom-${EnvironmentName}-platform-jobs
+      ScheduleExpression: rate(5 minutes)
+      FlexibleTimeWindow:
+        Mode: 'OFF'
+      State: ENABLED
+      Target:
+        Arn: !GetAtt JobsFunction.Arn
+        RoleArn: !GetAtt JobsScheduleRole.Arn
+        RetryPolicy:
+          MaximumRetryAttempts: 0
+
+Outputs:
+  LoadBalancerDnsName:
+    Value: !GetAtt LoadBalancer.DNSName
+  ClusterName:
+    Value: !Ref Cluster
+  WebServiceName:
+    Value: !GetAtt WebService.Name
+  MigrateTaskDefinitionArn:
+    Value: !Ref MigrateTaskDefinition
+  TaskSubnetIds:
+    Value: !Join [',', [!Ref PublicSubnetA, !Ref PublicSubnetB]]
+  AppSecurityGroupId:
+    Value: !Ref AppSecurityGroup
+  UploadsBucketName:
+    Value: !Ref UploadsBucket
+  DatabaseEndpoint:
+    Value: !GetAtt Database.Endpoint.Address
+  AdminPasswordSecretName:
+    Value: !Sub devfathom/${EnvironmentName}/admin-password
+  PlatformAdminPasswordSecretName:
+    Value: !Sub devfathom/${EnvironmentName}/platform-admin-password
+  SeedPasswordSecretName:
+    Value: !Sub devfathom/${EnvironmentName}/seed-password

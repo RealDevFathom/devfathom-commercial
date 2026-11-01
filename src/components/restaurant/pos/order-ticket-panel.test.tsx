@@ -49,6 +49,22 @@ function handlers() {
 }
 
 describe('OrderTicketPanel', () => {
+  it('provides 44px touch targets for hold, fire, and void actions', () => {
+    render(
+      <OrderTicketPanel
+        order={order}
+        actingOperatorId="staff-1"
+        operators={operators}
+        pending={false}
+        {...handlers()}
+      />
+    );
+
+    expect(screen.getByRole('button', { name: 'Hold' })).toHaveClass('h-11');
+    expect(screen.getByRole('button', { name: 'Fire' })).toHaveClass('h-11');
+    expect(screen.getByRole('button', { name: 'Void Steak' })).toHaveClass('h-11');
+  });
+
   it('routes hold, fire, and whole-order send actions', () => {
     const actions = handlers();
     render(

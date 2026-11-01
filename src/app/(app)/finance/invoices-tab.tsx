@@ -8,6 +8,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
+import { moneyLabel } from '@/lib/finance/currency';
 import { format } from 'date-fns';
 
 type InvoiceStatus = 'DRAFT' | 'SENT' | 'PAID' | 'OVERDUE' | 'CANCELLED';
@@ -26,6 +27,7 @@ type InvoiceRowData = {
   id: string;
   invoiceNumber: string;
   status: string;
+  currency: string;
   total: unknown;
   dueDate: Date | string;
   client: { name: string };
@@ -221,7 +223,7 @@ const InvoiceRow = memo(function InvoiceRow({
       </div>
       <div className="col-span-1 text-right">
         <p className="text-sm font-semibold text-foreground tabular-nums">
-          ${Number(inv.total).toLocaleString()}
+          {moneyLabel(Number(inv.total), inv.currency)}
         </p>
       </div>
       <div className="col-span-2 flex justify-center">

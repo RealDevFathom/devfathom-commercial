@@ -32,8 +32,18 @@ function fixture(
   options: { openDrawer?: { id: string } | null; createError?: unknown; branch?: boolean } = {}
 ) {
   const db = {
+    user: {
+      findUnique: vi.fn(async () => ({
+        id: 'actor-1',
+        role: 'EMPLOYEE',
+        status: 'ACTIVE',
+        organizationId: 'org-1',
+      })),
+    },
+    pharmacyBranchAssignment: { findMany: vi.fn(async () => [{ branchId: 'branch-1' }]) },
     $queryRaw: vi.fn().mockResolvedValue([]),
     pharmacyBranch: {
+      findFirst: vi.fn(async () => ({ id: 'branch-1' })),
       findMany: vi.fn(
         async ({ where }: { where: { id: { in: string[] }; organizationId: string } }) =>
           options.branch === false ? [] : where.id.in.map((id) => ({ id }))

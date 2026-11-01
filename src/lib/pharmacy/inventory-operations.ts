@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+import { enforceOperatingMode } from './operating-mode';
 /** PH-INV INV-06/07/08(manual)/09 workflows layered on the append-only ledger. */
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -114,7 +116,8 @@ export async function approveCount(
   db: ScopedDb,
   scope: LedgerScope,
   countId: string,
-  idempotencyKeyPrefix: string
+  idempotencyKeyPrefix: string,
+  pin?: string
 ) {
   const count = await db.pharmacyInventoryCount.findFirst({
     where: { id: countId, organizationId: scope.organizationId, branchId: scope.branchId },
@@ -122,8 +125,19 @@ export async function approveCount(
   });
   if (!count) throw new PharmacyInventoryError('CROSS_BRANCH_REFERENCE');
   if (count.status === 'APPROVED') throw new PharmacyInventoryError('INVALID_STATE');
-  if (count.status === 'AWAITING_COAUTH' && count.createdById === scope.actorId)
-    throw new PharmacyInventoryError('COAUTH_REQUIRED');
+  if (count.status === 'AWAITING_COAUTH') {
+    try {
+      await enforceOperatingMode(db, scope, {
+        kind: 'ADJUSTMENT',
+        makerIds: [count.createdById],
+        targetType: 'PharmacyInventoryCount',
+        targetId: count.id,
+        pin,
+      });
+    } catch {
+      throw new PharmacyInventoryError('COAUTH_REQUIRED');
+    }
+  }
   for (const [index, line] of count.lines.entries()) {
     const variance = line.varianceUnits ?? 0;
     if (!variance) continue;
@@ -158,13 +172,28 @@ export async function writeOff(
     stockLocationId: string;
     units: number;
     witnessId: string;
+    pin?: string;
     reason: string;
     evidenceRef: string;
     idempotencyKey: string;
   }
 ) {
   assertPositive(input.units);
-  if (input.witnessId === scope.actorId) throw new PharmacyInventoryError('COAUTH_REQUIRED');
+  const custodyId = randomUUID();
+  let approverId: string;
+  try {
+    const approval = await enforceOperatingMode(db, scope, {
+      kind: 'ADJUSTMENT',
+      makerIds: [scope.actorId],
+      checkerId: input.witnessId,
+      targetType: 'PharmacyCustodyRecord',
+      targetId: custodyId,
+      pin: input.pin,
+    });
+    approverId = approval.actorId;
+  } catch {
+    throw new PharmacyInventoryError('COAUTH_REQUIRED');
+  }
   const lot = await db.pharmacyInventoryLot.findFirst({
     where: {
       id: input.inventoryLotId,
@@ -199,11 +228,12 @@ export async function writeOff(
   });
   const custody = await db.pharmacyCustodyRecord.create({
     data: {
+      id: custodyId,
       organizationId: scope.organizationId,
       branchId: scope.branchId,
       movementId: movement.id,
       actorId: scope.actorId,
-      witnessId: input.witnessId,
+      witnessId: approverId,
       reason: input.reason,
       evidenceRef: input.evidenceRef,
     },
@@ -329,13 +359,28 @@ export async function allocateTransfer(
   });
 }
 
-export async function approveTransfer(db: ScopedDb, scope: LedgerScope, transferId: string) {
+export async function approveTransfer(
+  db: ScopedDb,
+  scope: LedgerScope,
+  transferId: string,
+  pin?: string
+) {
   const transfer = await db.pharmacyInterbranchTransfer.findFirst({
     where: { id: transferId, organizationId: scope.organizationId, fromBranchId: scope.branchId },
   });
   if (!transfer) throw new PharmacyInventoryError('CROSS_BRANCH_REFERENCE');
-  if (transfer.status !== 'ALLOCATED' || transfer.allocatedById === scope.actorId)
+  if (transfer.status !== 'ALLOCATED') throw new PharmacyInventoryError('COAUTH_REQUIRED');
+  try {
+    await enforceOperatingMode(db, scope, {
+      kind: 'ADJUSTMENT',
+      makerIds: [transfer.allocatedById],
+      targetType: 'PharmacyTransfer',
+      targetId: transfer.id,
+      pin,
+    });
+  } catch {
     throw new PharmacyInventoryError('COAUTH_REQUIRED');
+  }
   return db.pharmacyInterbranchTransfer.update({
     where: { id: transfer.id },
     data: { status: 'APPROVED', approvedById: scope.actorId },
@@ -590,15 +635,20 @@ export async function reserveSupplierClaim(
   input: { inventoryLotId: string; reservedUnits: number; returnBy: Date }
 ) {
   assertPositive(input.reservedUnits);
-  const balance = await db.pharmacyStockBalance.aggregate({
-    where: {
-      organizationId: scope.organizationId,
-      branchId: scope.branchId,
-      inventoryLotId: input.inventoryLotId,
-      disposition: 'AVAILABLE',
-    },
-    _sum: { onHandUnits: true },
-  });
+  // Serialize against sales, transfers and purchase returns: lock EVERY AVAILABLE
+  // balance row of the lot (the same rows sale allocation and purchase returns
+  // lock) FOR UPDATE in key (stockLocationId) order, exactly like purchase returns, then measure availability from the locked rows.
+  // The caller must keep this lock and the check/create below in one transaction.
+  const locked = await db.$queryRaw<Array<{ onHandUnits: number }>>(Prisma.sql`
+    SELECT "onHandUnits" FROM "pharmacy_stock_balances"
+    WHERE "organizationId" = ${scope.organizationId}
+      AND "branchId" = ${scope.branchId}
+      AND "inventoryLotId" = ${input.inventoryLotId}
+      AND "disposition" = 'AVAILABLE'
+    ORDER BY "stockLocationId" ASC
+    FOR UPDATE
+  `);
+  const onHand = locked.reduce((total, row) => total + Number(row.onHandUnits), 0);
   const already = await db.pharmacySupplierClaim.aggregate({
     where: {
       organizationId: scope.organizationId,
@@ -608,7 +658,7 @@ export async function reserveSupplierClaim(
     },
     _sum: { reservedUnits: true },
   });
-  if ((balance._sum.onHandUnits ?? 0) - (already._sum.reservedUnits ?? 0) < input.reservedUnits)
+  if (onHand - (already._sum.reservedUnits ?? 0) < input.reservedUnits)
     throw new PharmacyInventoryError('INSUFFICIENT_STOCK');
   return db.pharmacySupplierClaim.create({
     data: {

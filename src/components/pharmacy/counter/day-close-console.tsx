@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useSession } from 'next-auth/react';
 import { useEntitlements } from '@/components/entitlements-provider';
 import { evaluateSessionUser } from '@/lib/auth/session-state';
@@ -14,15 +14,21 @@ import { StatusPill } from '@/components/ui/status-pill';
 import { formatMinor, type CounterReceiptLocale } from '@/lib/pharmacy/counter-receipt';
 import { printCounterBrowserZReport } from '@/lib/pharmacy/counter-browser-print';
 import { counterErrorMessage } from '@/lib/pharmacy/counter-messages';
+import { workspaceTimezone, workspaceToday } from '@/lib/timezone';
 
-/** "Opened 09:12 by Ayesha Karim", or just the time when the opener is no longer a member. */
-export function drawerOpenedLabel(drawer: {
-  openedAt: Date | string;
-  openedBy: string | null;
-}): string {
+/**
+ * "Opened 09:12 by Ayesha Karim", or just the time when the opener is no longer a
+ * member. The time is read in the workspace's zone, never the viewer's browser's;
+ * a stored zone the browser refuses reads as UTC rather than taking the screen down.
+ */
+export function drawerOpenedLabel(
+  drawer: { openedAt: Date | string; openedBy: string | null },
+  timeZone: string
+): string {
   const time = new Date(drawer.openedAt).toLocaleTimeString('en-GB', {
     hour: '2-digit',
     minute: '2-digit',
+    timeZone: workspaceTimezone(timeZone),
   });
   return drawer.openedBy ? `Opened ${time} by ${drawer.openedBy}` : `Opened ${time}`;
 }
@@ -61,14 +67,12 @@ export function PharmacyDayCloseConsole() {
 function DayCloseBranches() {
   const branches = trpc.pharmacySales.counterBranches.useQuery();
   const [selected, setSelected] = useState('');
-  const [date, setDate] = useState(() =>
-    new Intl.DateTimeFormat('en-CA', {
-      timeZone: 'Asia/Karachi',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-    }).format(new Date())
-  );
+  const [picked, setPicked] = useState<string | null>(null);
+  const timeZone = branches.data?.timezone;
+  // Until the operator picks a day: today in the workspace's zone, settled once
+  // the zone is known, so a page left open past midnight keeps its day.
+  const today = useMemo(() => (timeZone ? workspaceToday(timeZone) : ''), [timeZone]);
+  const date = picked ?? today;
   const branchId = selected || branches.data?.branches[0]?.id || '';
   return (
     <div className="space-y-6">
@@ -100,7 +104,7 @@ function DayCloseBranches() {
               className="min-h-11"
               type="date"
               value={date}
-              onChange={(e) => setDate(e.target.value)}
+              onChange={(e) => setPicked(e.target.value)}
             />
           </label>
         </div>
@@ -197,7 +201,10 @@ function DayCloseForm({ branchId, date }: { branchId: string; date: string }) {
             <p role="status">
               Day closed. New tenders and drawer changes for this business date are blocked.
             </p>
-            <p>Variance note: {report.reason || 'No variance recorded.'}</p>
+            <p>
+              {report.supersedesCloseId || report.sequence > 1 ? 'Reopen reason' : 'Variance note'}:{' '}
+              {report.reason || 'No variance recorded.'}
+            </p>
             {!report.isFinal && <p>Provisional report: migration reconciliation is pending.</p>}
             <label className="grid gap-2">
               Report language
@@ -256,7 +263,7 @@ function DayCloseForm({ branchId, date }: { branchId: string; date: string }) {
               <div className="grid gap-2 border-b border-border-subtle pb-4" key={d.id}>
                 <p className="text-sm">
                   {/* Named by who opened it and when; the device id names nothing to a cashier. */}
-                  Drawer {i + 1} · {drawerOpenedLabel(d)} ·{' '}
+                  Drawer {i + 1} · {drawerOpenedLabel(d, data.timezone)} ·{' '}
                   {d.status === 'OPEN' ? 'Open' : 'Closed'}
                 </p>
                 <p className="text-sm">Expected: PKR {formatMinor(d.expectedMinor)}</p>

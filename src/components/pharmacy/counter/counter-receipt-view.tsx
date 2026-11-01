@@ -573,6 +573,12 @@ export function CounterReceiptView({
           ))}
         </dl>
 
+        {receipt.loyalty && (
+          <p className="border-t border-border-subtle pt-3 text-sm tabular-nums">
+            Points redeemed {receipt.loyalty.redeemedPoints} · Remaining points{' '}
+            {receipt.loyalty.remainingPoints}
+          </p>
+        )}
         {receipt.tenders.length > 0 ? (
           <div className="space-y-1 border-t border-border-subtle pt-3">
             <p className="text-text-muted">{strings.tenders}</p>

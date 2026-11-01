@@ -1,0 +1,31 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  DevFathom TLS certificate for one environment: the base domain and every
+  tenant subdomain under it (*.base, which also covers admin.base). Validated
+  through DNS in the environment's Route 53 zone, so the stack completes only
+  after the zone is delegated from the parent domain.
+
+Parameters:
+  DomainName:
+    Type: String
+    Description: The environment's base domain.
+  HostedZoneId:
+    Type: AWS::Route53::HostedZone::Id
+    Description: Route 53 zone for DomainName (dns.yaml output).
+
+Resources:
+  Certificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Ref DomainName
+      SubjectAlternativeNames:
+        - !Sub '*.${DomainName}'
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: !Ref DomainName
+          HostedZoneId: !Ref HostedZoneId
+      KeyAlgorithm: RSA_2048
+
+Outputs:
+  CertificateArn:
+    Value: !Ref Certificate

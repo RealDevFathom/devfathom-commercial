@@ -1,0 +1,189 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  DevFathom shared build resources for one AWS region: the image repository,
+  the bucket CodeBuild reads source archives from, and the CodeBuild project
+  that builds the container image. Shared by every environment in the region.
+
+Parameters:
+  RepositoryName:
+    Type: String
+    Default: devfathom-commercial
+    Description: ECR repository for the application image.
+
+Resources:
+  ImageRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Ref RepositoryName
+      # Every pushed tag is a commit sha; a tag never moves to a new image.
+      # Tag an image deployed to production (or cut for a release) also as
+      # prod-<sha> or release-<name> so the lifecycle policy never expires it.
+      ImageTagMutability: IMMUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      EncryptionConfiguration:
+        EncryptionType: AES256
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Drop untagged images after 7 days",
+                "selection": { "tagStatus": "untagged", "countType": "sinceImagePushed", "countUnit": "days", "countNumber": 7 },
+                "action": { "type": "expire" }
+              },
+              {
+                "rulePriority": 2,
+                "description": "Protect production images: an image this rule matches can never be expired by a lower-priority rule",
+                "selection": { "tagStatus": "tagged", "tagPatternList": ["prod-*"], "countType": "imageCountMoreThan", "countNumber": 1000 },
+                "action": { "type": "expire" }
+              },
+              {
+                "rulePriority": 3,
+                "description": "Protect release images the same way (a separate rule: patterns in one list must all match)",
+                "selection": { "tagStatus": "tagged", "tagPatternList": ["release-*"], "countType": "imageCountMoreThan", "countNumber": 1000 },
+                "action": { "type": "expire" }
+              },
+              {
+                "rulePriority": 4,
+                "description": "Keep the 10 most recent other (sha-tagged staging) images",
+                "selection": { "tagStatus": "any", "countType": "imageCountMoreThan", "countNumber": 10 },
+                "action": { "type": "expire" }
+              }
+            ]
+          }
+
+  BuildSourceBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub devfathom-build-${AWS::AccountId}-${AWS::Region}
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-source-archives
+            Status: Enabled
+            ExpirationInDays: 30
+
+  BuildSourceBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref BuildSourceBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !GetAtt BuildSourceBucket.Arn
+              - !Sub '${BuildSourceBucket.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+
+  BuildLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /devfathom/codebuild/image
+      RetentionInDays: 7
+
+  BuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: image-build
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: Logs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub '${BuildLogGroup.Arn}:*'
+              - Sid: ReadSource
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                Resource: !Sub '${BuildSourceBucket.Arn}/*'
+              - Sid: RegistryLogin
+                Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: '*'
+              - Sid: PushImage
+                Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:BatchGetImage
+                  - ecr:CompleteLayerUpload
+                  - ecr:DescribeImages
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:InitiateLayerUpload
+                  - ecr:PutImage
+                  - ecr:UploadLayerPart
+                Resource: !GetAtt ImageRepository.Arn
+
+  ImageBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: devfathom-image
+      Description: Builds the DevFathom image from a source archive and pushes it to ECR.
+      ServiceRole: !GetAtt BuildRole.Arn
+      Source:
+        Type: S3
+        Location: !Sub '${BuildSourceBucket}/source/latest.zip'
+        BuildSpec: infra/aws/buildspec.yml
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Environment:
+        Type: LINUX_CONTAINER
+        # The image build runs `tsc --noEmit` with an 8 GB heap (see Dockerfile),
+        # so it needs the 15 GB compute type.
+        ComputeType: BUILD_GENERAL1_LARGE
+        Image: aws/codebuild/amazonlinux-x86_64-standard:5.0
+        PrivilegedMode: true
+        EnvironmentVariables:
+          - Name: ECR_REPOSITORY_URI
+            Value: !GetAtt ImageRepository.RepositoryUri
+      TimeoutInMinutes: 60
+      QueuedTimeoutInMinutes: 30
+      LogsConfig:
+        CloudWatchLogs:
+          Status: ENABLED
+          GroupName: !Ref BuildLogGroup
+          StreamName: build
+
+Outputs:
+  RepositoryUri:
+    Value: !GetAtt ImageRepository.RepositoryUri
+    Export:
+      Name: devfathom-shared-RepositoryUri
+  BuildSourceBucketName:
+    Value: !Ref BuildSourceBucket
+    Export:
+      Name: devfathom-shared-BuildSourceBucket
+  ImageBuildProjectName:
+    Value: !Ref ImageBuildProject

@@ -1,3 +1,4 @@
+import { supportAccessDenial, SUPPORT_EXPIRED_MESSAGE } from '@/lib/tenancy/support-access';
 import { initTRPC, TRPCError } from '@trpc/server';
 import type { Session } from 'next-auth';
 import type { Prisma } from '@/generated/prisma/client';
@@ -50,7 +51,10 @@ export const createTRPCContext = async (opts?: {
             ? { request: opts?.req }
             : { request: opts?.req, session: explicitSession }
         );
-  const session = explicitSession !== undefined ? explicitSession : (actor?.session ?? null);
+  const session =
+    opts?.organization && explicitSession !== undefined
+      ? explicitSession
+      : (actor?.session ?? null);
   const organization = opts?.organization ?? actor?.organization ?? null;
   const headers = opts?.req?.headers ?? null;
   const organizationId = organization?.id ?? session?.user?.organizationId;
@@ -82,6 +86,26 @@ export const createTRPCContext = async (opts?: {
 
 export type TRPCContext = Awaited<ReturnType<typeof createTRPCContext>>;
 
+/** What a production client is told instead of an unexpected failure's own message. */
+const INTERNAL_ERROR_MESSAGE = 'Something went wrong on our side. Please try again.';
+
+/**
+ * An INTERNAL_SERVER_ERROR that tRPC made out of something a procedure threw
+ * that was not a TRPCError (an unmapped Prisma or driver error, a raw
+ * `schema.parse()`): tRPC gives that wrapper the thrown error's own message,
+ * which can name SQL, constraints and tables. A TRPCError thrown on purpose
+ * carries words of its own, so it never matches, internal or not.
+ */
+function isUnexpectedInternalError(error: TRPCError): boolean {
+  const cause = error.cause;
+  return (
+    error.code === 'INTERNAL_SERVER_ERROR' &&
+    cause !== undefined &&
+    !(cause instanceof TRPCError) &&
+    error.message === cause.message
+  );
+}
+
 const t = initTRPC.context<TRPCContext>().create({
   transformer: superjson,
   errorFormatter({ shape, error }) {
@@ -93,12 +117,17 @@ const t = initTRPC.context<TRPCContext>().create({
     //
     // The first half is narrower than it reads: tRPC has already placed the raw
     // serialized ZodError into `shape.message` before this formatter runs, and
-    // with `validation` null we pass `shape.message` through unchanged — so the
-    // field name still reaches the client, in raw serialized form (the
-    // errorFormatter test pins exactly that string, `"path": ["internalOnlyField"]`
-    // and all). The gate governs `data.validation` and the FORMATTED message, not
-    // the pass-through. Pre-existing behaviour, out of scope for this change.
+    // with `validation` null we pass `shape.message` through unchanged — so,
+    // outside production, the field name still reaches the client, in raw
+    // serialized form (the errorFormatter test pins exactly that string,
+    // `"path": ["internalOnlyField"]` and all). The gate governs `data.validation`
+    // and the FORMATTED message, not the pass-through.
     const validation = error.code === 'BAD_REQUEST' ? formatValidationError(error.cause) : null;
+    // In production an unexpected failure (that ZodError included) keeps its own
+    // message on the server, where the tRPC route's `onError` logs it, and the
+    // client is told only that something went wrong. Deliberate errors and every
+    // other code are untouched; outside production the pass-through is unchanged.
+    const withheld = process.env.NODE_ENV === 'production' && isUnexpectedInternalError(error);
     // Never publish the server stack. tRPC attaches `data.stack` outside
     // production, which leaks file paths and bundle chunk names onto ordinary
     // client errors (e.g. an intentional 403). Drop it for every error code.
@@ -106,14 +135,25 @@ const t = initTRPC.context<TRPCContext>().create({
     delete data.stack;
     return {
       ...shape,
-      message: validation?.message ?? shape.message,
+      message: withheld ? INTERNAL_ERROR_MESSAGE : (validation?.message ?? shape.message),
       data,
     };
   },
 });
 
 export const router = t.router;
-export const publicProcedure = t.procedure;
+// Apply to public procedures too: an impersonated actor cannot use anonymous
+// credential flows (or a custom publicProcedure auth guard) to acquire writes.
+const requireSupportRead = t.middleware(async ({ ctx, next, type, path }) => {
+  const message = supportAccessDenial(ctx, type, path);
+  if (message)
+    throw new TRPCError({
+      code: message === SUPPORT_EXPIRED_MESSAGE ? 'UNAUTHORIZED' : 'FORBIDDEN',
+      message,
+    });
+  return next();
+});
+export const publicProcedure = t.procedure.use(requireSupportRead);
 
 /**
  * Reject any session that is not provably usable (#16).
@@ -265,7 +305,10 @@ function requireCapability(action: Action) {
     if (!allowed) {
       throw new TRPCError({
         code: 'FORBIDDEN',
-        message: 'You do not have permission for this action.',
+        message:
+          action === 'pharmacy:dispense'
+            ? 'Selling a prescription-only or restricted medicine needs the pharmacist dispensing permission.'
+            : 'You do not have permission for this action.',
       });
     }
     return next({ ctx: { ...ctx, session: ctx.session } });
@@ -275,18 +318,21 @@ function requireCapability(action: Action) {
 // Protected procedure — audit (outer) wraps the auth guard.
 export const protectedProcedure = t.procedure
   .use(auditMutations)
+  .use(requireSupportRead)
   .use(requireActiveUser)
   .use(requireLicensedModule);
 
 /** Authenticated, module-aware procedure for sensitive tenant reads. */
 export const auditedProtectedProcedure = t.procedure
   .use(auditAll)
+  .use(requireSupportRead)
   .use(requireActiveUser)
   .use(requireLicensedModule);
 
 /** Authenticated, audited tenant access to retained history after entitlement removal. */
 export const entitlementIndependentHistoryProcedure = t.procedure
   .use(auditAll)
+  .use(requireSupportRead)
   .use(requireActiveUser);
 
 // Admin-only procedure — now backed by the ABAC engine (policy: 'admin:access' =
@@ -294,6 +340,7 @@ export const entitlementIndependentHistoryProcedure = t.procedure
 // decision flows through the one engine. Audits mutations AND sensitive reads.
 export const adminProcedure = t.procedure
   .use(auditAll)
+  .use(requireSupportRead)
   .use(requireCapability('admin:access'))
   .use(requireLicensedModule);
 
@@ -304,11 +351,13 @@ export const adminProcedure = t.procedure
  */
 export const entitlementIndependentAdminProcedure = t.procedure
   .use(auditAll)
+  .use(requireSupportRead)
   .use(requireCapability('admin:access'));
 
 // HR console procedure — ADMIN or HR (policy: 'hr:access').
 export const hrProcedure = t.procedure
   .use(auditAll)
+  .use(requireSupportRead)
   .use(requireCapability('hr:access'))
   .use(requireLicensedModule);
 
@@ -317,5 +366,9 @@ export const hrProcedure = t.procedure
  * e.g. `capabilityProcedure('resignation:readAll')`. Audits like adminProcedure.
  */
 export function capabilityProcedure(action: Action) {
-  return t.procedure.use(auditAll).use(requireCapability(action)).use(requireLicensedModule);
+  return t.procedure
+    .use(auditAll)
+    .use(requireSupportRead)
+    .use(requireCapability(action))
+    .use(requireLicensedModule);
 }

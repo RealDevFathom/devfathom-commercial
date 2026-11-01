@@ -664,6 +664,7 @@ async function purgeData(db: PrismaClient, job: PlatformJob): Promise<JobResult>
     FROM tenant_tables tt
     JOIN pg_class child
       ON child.relname = tt.table_name AND child.relnamespace = 'public'::regnamespace
+      AND child.relkind IN ('r', 'p') -- ordinary and partitioned tables; never views
     LEFT JOIN pg_constraint constraint_row
       ON constraint_row.conrelid = child.oid AND constraint_row.contype = 'f'
     LEFT JOIN pg_class parent ON parent.oid = constraint_row.confrelid
@@ -674,7 +675,10 @@ async function purgeData(db: PrismaClient, job: PlatformJob): Promise<JobResult>
   // cascade, so tables that refuse a bare DELETE — pharmacy onboarding events —
   // have no vanished parent row to recognise it by. Transaction-local, and
   // scoped to the organization this job names.
-  await db.$queryRaw`SELECT set_config('app.purging_organization_id', ${organizationId}, true)`;
+  // Wallet and loyalty tables use tenant-only RLS, even for platform workers.
+  // Bind the same tenant for visibility and for the guarded audit deletions.
+  await db.$queryRaw`SELECT set_config('app.purging_organization_id', ${organizationId}, true),
+    set_config('app.current_organization_id', ${organizationId}, true)`;
   for (const { tableName, columns } of plan.detach) {
     await db.$executeRawUnsafe(
       `UPDATE ${quoteIdentifier(tableName)} SET ${columns

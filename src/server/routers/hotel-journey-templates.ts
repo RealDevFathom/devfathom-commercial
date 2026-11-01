@@ -22,11 +22,11 @@
  * refusals. Every write runs inside `withLockedProperty` (lock, re-check
  * access, write), is scoped by `(organizationId, branchId)` plus the version
  * the caller read, and enriches the request's audit row. That version comes
- * from the caller — its `updatedAt` and, for a draft edit or an approval, the
- * wording on its screen — because the lock serializes writers: a row read
- * under it is always current and cannot show that a colleague changed it after
- * the caller's page was drawn. Forced row-level security is the second wall
- * and never the only one.
+ * from the caller — its `updatedAt` and, for a draft edit, a draft retirement
+ * or an approval, the wording on its screen — because the lock serializes
+ * writers: a row read under it is always current and cannot show that a
+ * colleague changed it after the caller's page was drawn. Forced row-level
+ * security is the second wall and never the only one.
  *
  * Nothing here sends. `canSendJourneyMessage` is exercised as the pure hook it
  * is; the WhatsApp adapter and the send itself belong to H4.
@@ -39,6 +39,7 @@ import { hasModule } from '@/lib/entitlements';
 import { recordHotelAudit } from '@/lib/hotel/audit';
 import {
   approveJourneyTemplate,
+  assertJourneyDraftWordingNamed,
   assertJourneyTemplateAsRead,
   assertJourneyTemplateWrite,
   canSendJourneyMessage,
@@ -103,6 +104,8 @@ const ERROR_FIELDS: Record<HotelJourneyTemplateError['code'], string> = {
   INVALID_TRANSITION: 'status',
   CONCURRENT_MODIFICATION: 'status',
   APPROVER_REQUIRED: 'status',
+  // Where the draft input's refinement reports the same rule.
+  READING_INCOMPLETE: 'expectedUpdatedAt',
 };
 
 const CHANGED_MESSAGE =
@@ -404,6 +407,8 @@ export const hotelJourneyTemplatesRouter = router({
               message: `This message already has a draft (version ${latest.version}). Reload the list and open that draft to change it.`,
             });
           assertJourneyTemplateAsRead(latest, reading);
+          // Its time and its wording, whatever the input contract let through.
+          assertJourneyDraftWordingNamed(latest, reading);
           const saved = await ctx.db.hotelJourneyTemplate.updateMany({
             where: { ...where, ...journeyTemplateExpectedState(latest, reading) },
             data: { subject, body: input.body },
@@ -546,15 +551,21 @@ export const hotelJourneyTemplatesRouter = router({
 
   /**
    * Retire a version. Its approval facts stay: who approved it is history. The
-   * caller names the version it read, and one changed since is a conflict.
+   * caller names the version it read (for a draft, its wording as well, since a
+   * colleague's save can share its time), and one changed since is a conflict.
    */
   retire: journeyProcedure.input(selected(journeyTemplateRetireInput)).mutation(({ ctx, input }) =>
     journeyWrite(ctx, input.branchId, 'APPROVE', async (ctx, { property }) => {
       const template = await journeyTemplateById(ctx, property.branchId, input.id);
-      const reading: HotelJourneyTemplateReading = { updatedAt: input.expectedUpdatedAt };
+      const reading: HotelJourneyTemplateReading = {
+        updatedAt: input.expectedUpdatedAt,
+        subject: input.expectedSubject,
+        body: input.expectedBody,
+      };
       let retirement;
       try {
         assertJourneyTemplateAsRead(template, reading);
+        assertJourneyDraftWordingNamed(template, reading);
         retirement = retireJourneyTemplate(template);
       } catch (error) {
         asTrpcError(error);

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   approveJourneyTemplate,
+  assertJourneyDraftWordingNamed,
   assertJourneyTemplateAsRead,
   assertJourneyTransition,
   canSendJourneyMessage,
@@ -287,6 +288,46 @@ describe('writes against the version the caller read', () => {
     expect(
       journeyTemplateRetireInput.parse({ id: 'v2', expectedUpdatedAt: readAt.toISOString() })
     ).toEqual({ id: 'v2', expectedUpdatedAt: readAt });
+  });
+
+  it('lets a retirement name a draft’s wording, untrimmed, alongside its time', () => {
+    const retirement = {
+      id: 'v2',
+      expectedUpdatedAt: readAt.toISOString(),
+      expectedSubject: null,
+      expectedBody: '  Words as shown  ',
+    };
+    expect(journeyTemplateRetireInput.parse(retirement)).toEqual({
+      ...retirement,
+      expectedUpdatedAt: readAt,
+    });
+    expect(journeyTemplateRetireInput.safeParse({ ...retirement, expectedBody: '' }).success).toBe(
+      false
+    );
+  });
+
+  it('asks a write bound to a draft for its wording, and any other version for its time alone', () => {
+    const incomplete = expect.objectContaining({ code: 'READING_INCOMPLETE' });
+    for (const reading of [
+      { updatedAt: readAt },
+      { updatedAt: readAt, body: stored.body },
+      { updatedAt: readAt, subject: stored.subject },
+    ]) {
+      expect(() => assertJourneyDraftWordingNamed(stored, reading)).toThrow(incomplete);
+    }
+    // `null` is a reading of "no subject line", not a missing one.
+    expect(() =>
+      assertJourneyDraftWordingNamed(stored, {
+        updatedAt: readAt,
+        subject: null,
+        body: stored.body,
+      })
+    ).not.toThrow();
+    for (const status of ['APPROVED', 'RETIRED'] as const) {
+      expect(() =>
+        assertJourneyDraftWordingNamed({ ...stored, status }, { updatedAt: readAt })
+      ).not.toThrow();
+    }
   });
 
   it('lets a draft save name the version it edits only as a whole: time and wording together', () => {

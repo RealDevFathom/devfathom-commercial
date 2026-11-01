@@ -1,3 +1,4 @@
+import { TRPCError } from '@trpc/server';
 import { describe, expect, it, vi } from 'vitest';
 import { reverseRefundedEarnedPoints } from './customer-loyalty-earned-reversal';
 
@@ -100,6 +101,24 @@ describe('ordinary earned-point refund allocation', () => {
     await expect(reverseRefundedEarnedPoints(db as never, scope, 'refund-a')).rejects.toThrow(
       'accounting review'
     );
+    expect(db.pharmacyLoyaltyPointsEntry.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('an earn basis that needs accounting review', () => {
+  it.each([
+    ['no recorded net paid', { points: 9, netPaidMinor: null }],
+    ['points that do not match it', { points: 12, netPaidMinor: 950 }],
+  ])('stops the refund with %s, as a refusal the operator reads', async (_label, earn) => {
+    const db = fixture();
+    db.pharmacyLoyaltyPointsEntry.findFirst.mockResolvedValue(earn as never);
+    const refused = reverseRefundedEarnedPoints(db as never, scope, 'refund-a');
+    // A deliberate TRPCError, so a production client still reads the sentence.
+    await expect(refused).rejects.toBeInstanceOf(TRPCError);
+    await expect(refused).rejects.toMatchObject({
+      code: 'PRECONDITION_FAILED',
+      message: 'Earn basis requires accounting review.',
+    });
     expect(db.pharmacyLoyaltyPointsEntry.create).not.toHaveBeenCalled();
   });
 });

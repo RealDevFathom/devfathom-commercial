@@ -737,6 +737,70 @@ describeIfDatabase('journey templates: database rules and tenant boundaries', ()
     });
     expect(await stored()).toMatchObject({ status: 'APPROVED', body: resaved.body });
   });
+
+  it('refuses a stale retirement of a draft resaved within the same millisecond, through the router, writing nothing', async () => {
+    const message = {
+      branchId: tenantA.branchId,
+      moment: 'PRE_ARRIVAL_UPSELL',
+      channel: 'SMS',
+      language: 'EN',
+      subject: null,
+    } as const;
+    const reading = (seen: { updatedAt: Date; subject: string | null; body: string }) => ({
+      expectedUpdatedAt: seen.updatedAt,
+      expectedSubject: seen.subject,
+      expectedBody: seen.body,
+    });
+    const created = await asTenant(tenantA, async (db) =>
+      (await journeys(tenantA, db)).save({
+        ...message,
+        body: 'Dear {{guest_name}}, {{offer_name}} is on offer.',
+      })
+    );
+    // The administrator opens the board in one request…
+    const seen = await asTenant(tenantA, async (db) => {
+      const board = await (await journeys(tenantA, db)).list({ branchId: tenantA.branchId });
+      return board.templates.find((template) => template.id === created.id)!;
+    });
+    // …a colleague's save lands in the same millisecond: new words, the same stamp…
+    const sameStamp = await asTenant(tenantA, (db) =>
+      db.hotelJourneyTemplate.updateMany({
+        where: { id: seen.id, updatedAt: seen.updatedAt, body: seen.body },
+        data: { body: 'Dear {{guest_name}}, {{offer_name}} ends soon.', updatedAt: seen.updatedAt },
+      })
+    );
+    expect(sameStamp.count).toBe(1);
+    // …and retiring the draft as read names words that are no longer the stored ones.
+    await expect(
+      asTenant(tenantA, async (db) =>
+        (await journeys(tenantA, db)).retire({
+          branchId: tenantA.branchId,
+          id: seen.id,
+          ...reading(seen),
+        })
+      )
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+    const stored = () =>
+      asTenant(tenantA, (db) =>
+        db.hotelJourneyTemplate.findUniqueOrThrow({ where: { id: seen.id } })
+      );
+    const current = await stored();
+    expect(current).toMatchObject({
+      status: 'DRAFT',
+      body: 'Dear {{guest_name}}, {{offer_name}} ends soon.',
+      updatedAt: seen.updatedAt,
+    });
+    // Read again, the draft is retired at the words that stand.
+    await expect(
+      asTenant(tenantA, async (db) =>
+        (await journeys(tenantA, db)).retire({
+          branchId: tenantA.branchId,
+          id: seen.id,
+          ...reading(current),
+        })
+      )
+    ).resolves.toMatchObject({ status: 'RETIRED', body: current.body });
+  });
 });
 
 describeIfOwner('hotel_journey_templates forced row-level security', () => {

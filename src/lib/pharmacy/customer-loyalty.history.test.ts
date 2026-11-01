@@ -112,6 +112,7 @@ describe('ordinary loyalty history reads', () => {
         select: {
           id: true,
           kind: true,
+          adjustmentReason: true,
           points: true,
           occurredAt: true,
           saleId: true,

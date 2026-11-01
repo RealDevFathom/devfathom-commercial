@@ -1,3 +1,4 @@
+import { TRPCError } from '@trpc/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
@@ -155,6 +156,21 @@ beforeEach(() => {
 });
 
 describe('manual reference connector automation', () => {
+  it('refuses a disabled connector as a refusal the operator reads, writing no run', async () => {
+    fixture.raw.pharmacyReferenceConnector.upsert.mockResolvedValue({
+      ...(await fixture.raw.pharmacyReferenceConnector.upsert()),
+      enabled: false,
+    });
+    const refused = runManualReferenceConnector(fixture.db, runInput([]));
+    // A deliberate TRPCError, so a production client still reads the sentence.
+    await expect(refused).rejects.toBeInstanceOf(TRPCError);
+    await expect(refused).rejects.toMatchObject({
+      code: 'PRECONDITION_FAILED',
+      message: 'Manual reference connector is disabled.',
+    });
+    expect(fixture.raw.pharmacyReferenceConnectorRun.create).not.toHaveBeenCalled();
+  });
+
   it('rejects a bad row with reasons without writing medicine or proposal data', async () => {
     const result = await runManualReferenceConnector(
       fixture.db,

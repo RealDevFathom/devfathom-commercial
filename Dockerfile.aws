@@ -2,7 +2,7 @@
 # Current accepted source has unresolved imports; see SOURCE_HANDOFF.md.
 # Packaging option only; product approval and exact source composition remain pending.
 # Linux dependencies are installed here; host node_modules never enters context.
-FROM oven/bun:1.3.14-slim AS dependencies
+FROM oven/bun:1.4.2-slim AS dependencies
 WORKDIR /app
 # Existing deployments keep their demo default. Restricted context cannot silently
 # switch behavior: explicit production-safe selection is required for this candidate.
@@ -13,6 +13,7 @@ RUN case "$AWS_WEB_COMPOSITION" in \
       *) echo 'Unsupported AWS web composition' >&2; exit 1 ;; \
     esac
 COPY package.json bun.lock ./
+COPY patches ./patches
 RUN bun install --frozen-lockfile --ignore-scripts
 
 FROM node:22-trixie-slim AS builder
@@ -29,9 +30,13 @@ RUN node node_modules/prisma/build/index.js generate \
  && node node_modules/typescript/bin/tsc --noEmit
 ENV NEXT_BUILD_SKIP_TYPECHECK=1
 # Inert build-only placeholder; no real environment files or secrets in context.
+# NEXT_PUBLIC_* values are inlined into client bundles at build time. Pass per environment,
+# e.g. --build-arg NEXT_PUBLIC_APP_URL=https://staging.devfathom.com. Empty keeps the fallback.
+ARG NEXT_PUBLIC_APP_URL=
+ENV NEXT_PUBLIC_APP_URL=$NEXT_PUBLIC_APP_URL
 RUN AUTH_SECRET=container-build-only node node_modules/next/dist/bin/next build
 
-FROM oven/bun:1.3.14-slim AS runner
+FROM oven/bun:1.4.2-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \

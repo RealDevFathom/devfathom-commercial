@@ -3,6 +3,7 @@ import 'server-only';
 import { Prisma } from '@/generated/prisma/client';
 import { deriveRefillSchedule, RefillSupportError } from '@/lib/pharmacy/refill-support';
 import { withPlatformDb, withTenantDb } from '@/lib/tenancy/scoped-db';
+import { workspaceTimezone } from '@/lib/timezone';
 
 import { claimMessageLogInTransaction, sendClaimedMessage } from './message-log';
 import { lockPatientConsent } from '../consent-writer';
@@ -177,8 +178,9 @@ export async function processDueWhatsAppRefillReminders(
       )
         return null;
       const hour = Number(
+        // A stored zone Intl refuses reads as UTC rather than failing the run.
         new Intl.DateTimeFormat('en-GB', {
-          timeZone: organization.timezone,
+          timeZone: workspaceTimezone(organization.timezone),
           hour: '2-digit',
           hourCycle: 'h23',
         }).format(now)

@@ -56,6 +56,7 @@ export type CounterPatientPanel = {
   phone: string | null;
   /** True when a current DISPENSING consent is on file for this patient. */
   dispensingConsent: boolean;
+  loyaltyConsent?: boolean;
   address: string | null;
   prescriptions: CounterPrescription[];
 };

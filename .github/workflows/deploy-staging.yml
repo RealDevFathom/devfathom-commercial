@@ -1,8 +1,11 @@
 name: Deploy staging
 
+# Disabled automatic deploys (release/wp05-07, 22 Oct 2026): this workflow
+# deployed to the retired Azure staging on every push to main. Staging now runs
+# on AWS (ap-southeast-1) per docs AWS runbook, so merging the WP05-07 release
+# into main must not trigger an Azure deploy. Manual dispatch only until the
+# workflow is retired or pointed at AWS.
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:

@@ -1,0 +1,229 @@
+{
+  "scope": "Interactive fixture using production components and Studio CSS; RPC responses mocked; authenticated route not exercised.",
+  "results": [
+    {
+      "width": 375,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "mode": "SOLO",
+      "passed": true
+    },
+    {
+      "width": 375,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "mode": "STAFFED",
+      "passed": true
+    },
+    {
+      "width": 375,
+      "theme": "light",
+      "reducedMotion": "reduce",
+      "mode": "SOLO",
+      "passed": true
+    },
+    {
+      "width": 375,
+      "theme": "light",
+      "reducedMotion": "reduce",
+      "mode": "STAFFED",
+      "passed": true
+    },
+    {
+      "width": 375,
+      "theme": "dark",
+      "reducedMotion": "no-preference",
+      "mode": "SOLO",
+      "passed": true
+    },
+    {
+      "width": 375,
+      "theme": "dark",
+      "reducedMotion": "no-preference",
+      "mode": "STAFFED",
+      "passed": true
+    },
+    {
+      "width": 375,
+      "theme": "dark",
+      "reducedMotion": "reduce",
+      "mode": "SOLO",
+      "passed": true
+    },
+    {
+      "width": 375,
+      "theme": "dark",
+      "reducedMotion": "reduce",
+      "mode": "STAFFED",
+      "passed": true
+    },
+    {
+      "width": 768,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "mode": "SOLO",
+      "passed": true
+    },
+    {
+      "width": 768,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "mode": "STAFFED",
+      "passed": true
+    },
+    {
+      "width": 768,
+      "theme": "light",
+      "reducedMotion": "reduce",
+      "mode": "SOLO",
+      "passed": true
+    },
+    {
+      "width": 768,
+      "theme": "light",
+      "reducedMotion": "reduce",
+      "mode": "STAFFED",
+      "passed": true
+    },
+    {
+      "width": 768,
+      "theme": "dark",
+      "reducedMotion": "no-preference",
+      "mode": "SOLO",
+      "passed": true
+    },
+    {
+      "width": 768,
+      "theme": "dark",
+      "reducedMotion": "no-preference",
+      "mode": "STAFFED",
+      "passed": true
+    },
+    {
+      "width": 768,
+      "theme": "dark",
+      "reducedMotion": "reduce",
+      "mode": "SOLO",
+      "passed": true
+    },
+    {
+      "width": 768,
+      "theme": "dark",
+      "reducedMotion": "reduce",
+      "mode": "STAFFED",
+      "passed": true
+    },
+    {
+      "width": 1024,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "mode": "SOLO",
+      "passed": true
+    },
+    {
+      "width": 1024,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "mode": "STAFFED",
+      "passed": true
+    },
+    {
+      "width": 1024,
+      "theme": "light",
+      "reducedMotion": "reduce",
+      "mode": "SOLO",
+      "passed": true
+    },
+    {
+      "width": 1024,
+      "theme": "light",
+      "reducedMotion": "reduce",
+      "mode": "STAFFED",
+      "passed": true
+    },
+    {
+      "width": 1024,
+      "theme": "dark",
+      "reducedMotion": "no-preference",
+      "mode": "SOLO",
+      "passed": true
+    },
+    {
+      "width": 1024,
+      "theme": "dark",
+      "reducedMotion": "no-preference",
+      "mode": "STAFFED",
+      "passed": true
+    },
+    {
+      "width": 1024,
+      "theme": "dark",
+      "reducedMotion": "reduce",
+      "mode": "SOLO",
+      "passed": true
+    },
+    {
+      "width": 1024,
+      "theme": "dark",
+      "reducedMotion": "reduce",
+      "mode": "STAFFED",
+      "passed": true
+    },
+    {
+      "width": 1440,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "mode": "SOLO",
+      "passed": true
+    },
+    {
+      "width": 1440,
+      "theme": "light",
+      "reducedMotion": "no-preference",
+      "mode": "STAFFED",
+      "passed": true
+    },
+    {
+      "width": 1440,
+      "theme": "light",
+      "reducedMotion": "reduce",
+      "mode": "SOLO",
+      "passed": true
+    },
+    {
+      "width": 1440,
+      "theme": "light",
+      "reducedMotion": "reduce",
+      "mode": "STAFFED",
+      "passed": true
+    },
+    {
+      "width": 1440,
+      "theme": "dark",
+      "reducedMotion": "no-preference",
+      "mode": "SOLO",
+      "passed": true
+    },
+    {
+      "width": 1440,
+      "theme": "dark",
+      "reducedMotion": "no-preference",
+      "mode": "STAFFED",
+      "passed": true
+    },
+    {
+      "width": 1440,
+      "theme": "dark",
+      "reducedMotion": "reduce",
+      "mode": "SOLO",
+      "passed": true
+    },
+    {
+      "width": 1440,
+      "theme": "dark",
+      "reducedMotion": "reduce",
+      "mode": "STAFFED",
+      "passed": true
+    }
+  ]
+}

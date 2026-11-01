@@ -95,7 +95,7 @@ test('PO → receive → exception → resolve → stock visible', async ({ page
     .getByLabel('Purchase order')
     .first()
     .selectOption({ label: `${purchaseOrderReference} — ${FIXTURE.supplier.name} (1 lines)` });
-  await page.getByRole('button', { name: 'Find line' }).first().click();
+  await page.getByRole('button', { name: 'Open order', exact: true }).click();
 
   const capture = page
     .getByRole('group', { name: new RegExp(FIXTURE.medicine.productName) })
@@ -128,8 +128,9 @@ test('PO → receive → exception → resolve → stock visible', async ({ page
   const filed = page.getByRole('status').filter({ hasText: 'drafted' }).first();
   await expect(filed).toBeVisible({ timeout: 20_000 });
   await expect(filed).toContainText('Nothing is in stock until you post it');
+  await page.getByRole('link', { name: 'View saved record', exact: true }).click();
 
-  // ── 4. the draft is selected and posts into the ledger ──────────────────
+  // ── 4. open the saved draft and post it into the ledger ──────────────────
   const receiptPanel = page.getByRole('heading', { level: 2, name: receiptReference }).first();
   await expect(receiptPanel).toBeVisible();
   await page.getByRole('button', { name: 'Post into stock' }).first().click();
@@ -138,6 +139,7 @@ test('PO → receive → exception → resolve → stock visible', async ({ page
   await expect(posted).toBeVisible({ timeout: 20_000 });
   // PUR-04: the shortage is announced at the moment it is raised.
   await expect(posted).toContainText('match exception');
+  await page.getByRole('link', { name: 'View saved record', exact: true }).click();
 
   // ── 5. the exception is in the queue, quantified, and stays there ────────
   const queue = page.getByRole('heading', { level: 2, name: /Match exceptions — open/ }).first();
@@ -161,6 +163,7 @@ test('PO → receive → exception → resolve → stock visible', async ({ page
   // slower than an assertion default on a route being hit for the first time.
   await expect(resolved).toBeVisible({ timeout: 20_000 });
   await expect(resolved).toContainText('quantities it recorded are unchanged');
+  await page.getByRole('link', { name: 'View saved record', exact: true }).click();
   await expect(
     page.getByRole('heading', { level: 2, name: /Match exceptions — open \(0\)/ }).first()
   ).toBeVisible();
@@ -209,6 +212,7 @@ test('PUR-01 offers an unauthorized supplier as an explained, unselectable optio
   const added = page.getByRole('status').filter({ hasText: 'added' }).first();
   await expect(added).toBeVisible({ timeout: 20_000 });
   await expect(added).toContainText('Record a verified licence before ordering from it');
+  await page.getByRole('link', { name: 'View saved record', exact: true }).click();
   await expect(shellText(page, 'Trade with this supplier is not authorized')).toBeVisible();
 
   await page.goto(`${ROUTE}/orders`);
@@ -223,6 +227,10 @@ test('PUR-01 offers an unauthorized supplier as an explained, unselectable optio
 test('PUR-05 never offers the receiver as their own bypass approver', async ({ page }) => {
   await page.goto(`${ROUTE}/receiving`);
 
+  const checkerPin = page.getByLabel('Approver PIN', { exact: true });
+  await expect(checkerPin).toBeVisible();
+  await expect(checkerPin).toHaveAttribute('type', 'password');
+  await expect(checkerPin).toHaveAttribute('required', '');
   const approver = page.getByLabel('Approved by').first();
   await expect(approver).toBeVisible();
   await expect(
@@ -231,7 +239,12 @@ test('PUR-05 never offers the receiver as their own bypass approver', async ({ p
   await expect(
     approver.getByRole('option', { name: new RegExp(FIXTURE.receiver.email) })
   ).toHaveCount(0);
-  await expect(shellText(page, 'You cannot approve your own bypass')).toBeVisible();
+  await expect(
+    shellText(
+      page,
+      'A second approver is required unless you are the sole active owner and enter your PIN.'
+    )
+  ).toBeVisible();
 });
 
 test('a validation failure names its field, focuses it, and keeps the rest valid', async ({
@@ -261,8 +274,8 @@ test('a validation failure names its field, focuses it, and keeps the rest valid
 
   const expires = page.getByLabel('Expires on').first();
   await expect(expires).toHaveAttribute('aria-invalid', 'true');
-  await expect(page.locator('#field-expiresAt-error').first()).toContainText(
-    'Expires at: A licence must expire after it was issued.'
+  await expect(expires).toHaveAccessibleDescription(
+    /Expires at: A licence must expire after it was issued\./
   );
   await expect(expires).toBeFocused();
   // One failure does not paint the whole form red.

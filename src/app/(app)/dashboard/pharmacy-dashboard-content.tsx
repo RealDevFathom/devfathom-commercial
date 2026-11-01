@@ -4,12 +4,14 @@ import { useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { ArrowDown, ArrowUp, Eye, EyeOff, Pencil, RotateCcw, Save } from 'lucide-react';
 
-import { Button } from '@/components/ui/button';
+import { useEntitlements } from '@/components/entitlements-provider';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Stat } from '@/components/ui/stat';
 import { StatusPill } from '@/components/ui/status-pill';
+import { isModuleGranted } from '@/lib/module-catalog';
 import {
   PHARMACY_WIDGET_REGISTRY,
   pharmacyDashboardDefault,
@@ -41,9 +43,7 @@ const formatMetric = (key: string, value: number | null) =>
 // Reads the camelCase metric key as words rather than the raw, unspaced key the
 // `.eyebrow` style would otherwise shout back (e.g. OPENSTOCKSIGNALS).
 const humanizeMetricKey = (key: string) =>
-  key
-    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
-    .replace(/^./, (character) => character.toUpperCase());
+  key.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/^./, (character) => character.toUpperCase());
 
 function WidgetState({
   item,
@@ -136,6 +136,54 @@ function WidgetState({
 }
 
 export function PharmacyDashboardContent({ role }: { role: string | null | undefined }) {
+  // Every command-centre read is a Pharmacy Reports procedure, and each one refuses a workspace
+  // without that module (FORBIDDEN). Ask them nothing there, as the counter does for its module.
+  const { enabledModules } = useEntitlements();
+  return isModuleGranted('pharmacy-reports', enabledModules) ? (
+    <OwnerCommandCentre role={role} />
+  ) : (
+    <ReportsNotInPackage role={role} />
+  );
+}
+
+/** The same page frame, saying plainly why it holds no signals and what is still available. */
+function ReportsNotInPackage({ role }: { role: string | null | undefined }) {
+  return (
+    <div className="space-y-5">
+      <PageHeader
+        eyebrow="Pharmacy workspace"
+        heading="Owner command centre"
+        description="Live operational signals with visible source, freshness and permission boundaries."
+      />
+      <SectionCard
+        eyebrow="Pharmacy Reports"
+        title="Reports are not part of your package"
+        titleLevel={2}
+        actions={<StatusPill status="Not in package" tone="neutral" />}
+      >
+        <p role="status" className="max-w-2xl text-sm leading-6 text-text-body">
+          The command centre is built from Pharmacy Reports, which your organization’s package does
+          not include. No report data is requested or shown, and every other tool in your package
+          works as usual.
+        </p>
+        {role === 'ADMIN' ? (
+          <Link
+            href="/organization"
+            className={buttonVariants({ variant: 'outline', className: 'mt-4' })}
+          >
+            Review license and modules
+          </Link>
+        ) : (
+          <p className="mt-4 text-sm text-text-muted">
+            An organization administrator can add Pharmacy Reports to the package.
+          </p>
+        )}
+      </SectionCard>
+    </div>
+  );
+}
+
+function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
   const utils = trpc.useUtils();
   const branches = trpc.pharmacyReports.branches.useQuery(undefined, { retry: false });
   const catalog = trpc.pharmacyReports.catalog.useQuery(undefined, { retry: false });

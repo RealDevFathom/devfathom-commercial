@@ -424,11 +424,24 @@ describe('guest message draft editing', () => {
     );
     click('Retry refresh');
     await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Retire' })).toBeEnabled());
     click('Retire');
     expect(mocks.retire).toHaveBeenCalledExactlyOnceWith({
       branchId: 'branch',
       id: 'original',
       expectedUpdatedAt: at,
+    });
+  });
+
+  it('retires a draft naming the words on screen as well as the version', () => {
+    mount(view([row({ channel: 'WHATSAPP', subject: null })]));
+    click('Retire');
+    expect(mocks.retire).toHaveBeenCalledExactlyOnceWith({
+      branchId: 'branch',
+      id: 'original',
+      expectedUpdatedAt: at,
+      expectedSubject: null,
+      expectedBody: 'Hello {{guest_name}}, room {{room_number}}.',
     });
   });
 

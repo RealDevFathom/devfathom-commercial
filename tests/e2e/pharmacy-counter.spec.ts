@@ -38,7 +38,7 @@ async function pressControl(target: Locator) {
   await target.press('Enter');
 }
 
-async function signIn(page: Page) {
+async function signIn(page: Page, email = process.env.PHARMACY_E2E_ADMIN_EMAIL!) {
   await page.goto('/login');
   // Prove the client form is hydrated before entering credentials: a native
   // pre-hydration submit otherwise posts back to /login and loses the draft.
@@ -48,9 +48,9 @@ async function signIn(page: Page) {
       await pressControl(page.getByRole('button', { name: 'Show password' }));
     await expect(passwordControl).toHaveAttribute('type', 'text');
   }).toPass({ timeout: 15_000 });
-  const email = page.getByLabel('Email');
-  await email.focus();
-  await email.fill(process.env.PHARMACY_E2E_ADMIN_EMAIL!);
+  const emailField = page.getByLabel('Email');
+  await emailField.focus();
+  await emailField.fill(email);
   const password = page.getByRole('textbox', { name: 'Password' });
   await password.focus();
   await password.fill(process.env.PHARMACY_E2E_ADMIN_PASSWORD!);
@@ -66,8 +66,8 @@ async function signIn(page: Page) {
   await expect(page).toHaveURL(/\/(dashboard|pharmacy)/, { timeout: 30_000 });
 }
 
-async function openCounter(page: Page) {
-  await signIn(page);
+async function openCounter(page: Page, email?: string) {
+  await signIn(page, email);
   await page.goto('/pharmacy/counter');
   await expect(page.getByRole('heading', { name: 'Counter', level: 1 })).toBeVisible();
   // The module is licensed by the seed, so the shell must render the counter
@@ -129,7 +129,8 @@ async function stageFirstResult(page: Page, medicineName: string) {
 }
 
 async function setQuantity(page: Page, quantity: number) {
-  const field = page.getByLabel('Quantity');
+  // Exact: the stepper's "Decrease quantity" and "Increase quantity" buttons also carry the word.
+  const field = page.getByLabel('Quantity', { exact: true });
   await field.focus();
   await field.fill(String(quantity));
   // Blur via the keyboard so React commits the controlled value.
@@ -149,11 +150,16 @@ async function tenderCash(page: Page, amount: string) {
 
 test('bill 1 — barcode scan, strip unit, cash tender and a bilingual receipt', async ({ page }) => {
   const otc = PHARMACY_E2E.medicines.otc;
+  // The barcode scan adds one pack at the printed MRP to the bill that holds the two strips.
+  const packPrice = (otc.printedMrpMinor / 100).toFixed(2);
+  const billTotal = (Number(packPrice) + Number(PHARMACY_E2E_EXPECTED.otcTwoStripTotal)).toFixed(2);
   await openCounter(page);
   await openDrawer(page);
 
-  // POS-02: a scanned barcode resolves to exactly one presentation.
-  await search(page, otc.barcode);
+  // POS-02: the row is read from a name search. Enter on a barcode adds the medicine rather
+  // than staging it (scan-to-add, below), and the add draws the pack from the stock this row
+  // reports.
+  await search(page, otc.brandName);
   await stageFirstResult(page, otc.name);
 
   const row = page
@@ -182,6 +188,7 @@ test('bill 1 — barcode scan, strip unit, cash tender and a bilingual receipt',
   const cart = page.getByRole('list', { name: 'Cart lines' });
   await expect(cart).toContainText(otc.name, { timeout: 15_000 });
   await expect(cart).toContainText('2 ×');
+  await expect(page.getByText('Bill open · 1 line')).toBeVisible();
 
   // POS-03: the cart shows the FEFO allocation, batch and expiry included.
   const allocation = page.getByRole('list', { name: `FEFO allocation for ${otc.name}` });
@@ -191,7 +198,17 @@ test('bill 1 — barcode scan, strip unit, cash tender and a bilingual receipt',
   await expect(allocation).toContainText('FEFO');
   await expect(allocation).not.toContainText('Batch override');
 
-  await tenderCash(page, PHARMACY_E2E_EXPECTED.otcTwoStripTotal);
+  // POS-02: a scanned barcode resolves to exactly one presentation, and Enter on a barcode
+  // with a single match adds one of its first sale unit (scan-to-add, 699d5c1d; pinned by
+  // counter-console.test.tsx "adds a barcode on Enter only when the search returns that
+  // single medicine"). Nothing is added unless the scan matched exactly this medicine.
+  await search(page, otc.barcode);
+  await expect(page.getByText(`1 × ${otc.name} added.`)).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText('Bill open · 2 lines')).toBeVisible();
+  await expect(cart).toContainText(`1 × ${otc.name}`);
+  await expect(cart).toContainText(`pack · ${otc.unitsPerPack} units @ ${packPrice}`);
+
+  await tenderCash(page, billTotal);
 
   // POS-08: a settled bill renders a receipt carrying medicine, strength,
   // batch and expiry, and a receipt number the tender issued.
@@ -201,7 +218,14 @@ test('bill 1 — barcode scan, strip unit, cash tender and a bilingual receipt',
   await expect(receipt).toContainText(otc.strength);
   await expect(receipt).toContainText(otc.batchNumber);
   await expect(receipt).toContainText('2028-06-30');
-  await expect(receipt).toContainText(PHARMACY_E2E_EXPECTED.otcTwoStripTotal);
+  // The strip line's own total, matched whole: "50.00" is also inside the pack's "250.00".
+  const stripLine = receipt
+    .getByRole('listitem')
+    .filter({ hasText: `× ${PHARMACY_E2E_EXPECTED.otcStripPrice}` });
+  await expect(
+    stripLine.getByText(PHARMACY_E2E_EXPECTED.otcTwoStripTotal, { exact: true })
+  ).toBeVisible();
+  await expect(receipt).toContainText(billTotal);
 
   // POS-08: Urdu renders the same bill with Urdu field names, right-to-left.
   const localeSelect = page.getByLabel('Language');
@@ -536,7 +560,7 @@ test('Khata ledger limit, owner override, statement and loyalty regression', asy
     const makeBill = async () => {
       const scan = page.getByLabel('Scan or search');
       await scan.focus();
-      await scan.fill(PHARMACY_E2E.medicines.otc.barcode);
+      await scan.fill(PHARMACY_E2E.medicines.otc.brandName);
       await scan.press('Enter');
       await stageFirstResult(page, PHARMACY_E2E.medicines.otc.name);
       const strip = page.getByRole('radio', { name: /Strip/ });
@@ -665,93 +689,6 @@ test('Khata ledger limit, owner override, statement and loyalty regression', asy
   }
 });
 
-test('day close — open sell count lock and print Z-report', async ({ page, context }) => {
-  await openCounter(page);
-  await openDrawer(page);
-  const otc = PHARMACY_E2E.medicines.otc;
-  await search(page, otc.barcode);
-  await stageFirstResult(page, otc.name);
-  await page.keyboard.press('F4');
-  await setQuantity(page, 2);
-  await page.keyboard.press('F6');
-  await expect(page.getByRole('list', { name: 'Cart lines' })).toContainText(otc.name);
-  await tenderCash(page, PHARMACY_E2E_EXPECTED.otcTwoStripTotal);
-  await expect(page.getByRole('region', { name: /^Receipt \d+$/ })).toBeVisible();
-  await page.goto('/pharmacy/counter/close');
-  await expect(page.getByRole('heading', { name: 'Day close', exact: true })).toBeVisible();
-  const inputs = page.getByLabel(/Counted cash for drawer/);
-  await expect(inputs.first()).toBeVisible();
-  for (let i = 0; i < (await inputs.count()); i++) {
-    const field = inputs.nth(i);
-    const row = field.locator('..').locator('..');
-    const text = await row.innerText();
-    const expected = Number(text.match(/Expected: PKR ([\d,.]+)/)![1].replaceAll(',', ''));
-    await field.fill((expected - (i === 0 ? 1 : 0)).toFixed(2));
-  }
-  await expect(page.getByTestId('Variance')).toHaveText('-1.00');
-  await page.getByLabel('Variance note').fill('One rupee short at nightly count');
-  await page.getByRole('checkbox').focus();
-  await page.getByRole('checkbox').press('Space');
-  await pressControl(page.getByRole('button', { name: 'Close and lock day' }));
-  await expect(
-    page.getByText('Day closed. New tenders and drawer changes for this business date are blocked.')
-  ).toBeVisible();
-  await page.reload();
-  await expect(page.getByText('Variance note: One rupee short at nightly count')).toBeVisible();
-  for (const width of [375, 768, 1024, 1440]) {
-    await page.setViewportSize({ width, height: 900 });
-    for (const theme of ['light', 'dark']) {
-      await page.evaluate(
-        (theme) => document.documentElement.setAttribute('data-theme', theme),
-        theme
-      );
-      await page.emulateMedia({ reducedMotion: theme === 'dark' ? 'reduce' : 'no-preference' });
-      expect(
-        await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)
-      ).toBe(true);
-      await page.screenshot({
-        path: `${process.env.PAPERCLIP_RUN_SCRATCH_DIR}/day-close-${width}-${theme}.png`,
-        fullPage: true,
-      });
-    }
-  }
-  await context.addInitScript(() => {
-    window.print = () => {};
-  });
-  const popupPromise = page.waitForEvent('popup');
-  await pressControl(page.getByRole('button', { name: 'Print Z-report' }));
-  const popup = await popupPromise;
-  await expect(popup.locator('body')).toContainText('Z-report');
-  await expect(popup.locator('body')).toContainText('One rupee short at nightly count');
-  await popup.close();
-  await page.goto('/pharmacy/counter');
-  await pressControl(page.getByRole('button', { name: 'Open drawer' }));
-  await expect(
-    page.getByRole('status').filter({ hasText: /This business day is closed/ })
-  ).toBeVisible();
-  await search(page, otc.barcode);
-  await stageFirstResult(page, otc.name);
-  await page.keyboard.press('F4');
-  await setQuantity(page, 1);
-  await page.keyboard.press('F6');
-  await expect(page.getByRole('list', { name: 'Cart lines' })).toContainText(otc.name);
-  await tenderCash(page, PHARMACY_E2E_EXPECTED.otcStripPrice);
-  await expect(page.getByText(/This business day is closed/).first()).toBeVisible();
-});
-
-test('this spec drives the counter without a pointer', async () => {
-  const source = await readFile(join(process.cwd(), 'tests/e2e/pharmacy-counter.spec.ts'), 'utf8');
-  // Strip this assertion's own literals so it cannot match itself.
-  const marker = 'this spec drives the counter without a pointer';
-  const body = source.slice(0, source.indexOf(marker));
-  // Non-vacuous: the slice must actually contain the three bills it is guarding.
-  expect(body).toContain('bill 1 —');
-  expect(body).toContain('bill 3 —');
-  for (const pointerApi of ['.click(', '.dblclick(', '.hover(', '.tap(', '.dragTo(']) {
-    expect(body, `pointer API used: ${pointerApi}`).not.toContain(pointerApi);
-  }
-});
-
 test('sell → return → refund → reprint from the counter', async ({ page }) => {
   const browserErrors: string[] = [];
   page.on('pageerror', (error) => browserErrors.push(error.message));
@@ -762,7 +699,7 @@ test('sell → return → refund → reprint from the counter', async ({ page })
   await page.goto('/pharmacy/counter');
   await expect(page.getByRole('heading', { name: 'Counter', level: 1 })).toBeVisible();
   await openDrawer(page);
-  await search(page, PHARMACY_E2E.medicines.otc.barcode);
+  await search(page, PHARMACY_E2E.medicines.otc.brandName);
   await stageFirstResult(page, PHARMACY_E2E.medicines.otc.name);
   await page.keyboard.press('F4');
   await setQuantity(page, 1);
@@ -865,4 +802,115 @@ test('sell → return → refund → reprint from the counter', async ({ page })
   await page.keyboard.press('Escape');
   await expect(dialog).not.toBeVisible();
   await expect(page.getByRole('button', { name: 'Returns & refunds' })).toBeFocused();
+});
+
+test('cashier — the seeded cashier sells from the counter and gets the receipt', async ({
+  page,
+}) => {
+  // The seeded cashier holds the canonical pharmacy:counter that #163 leaves real cashiers with,
+  // so this bill fails if the counter's receipt guard stops recognising it. It runs before the
+  // day close, which refuses tenders for the rest of the business date.
+  const otc = PHARMACY_E2E.medicines.otc;
+  await openCounter(page, PHARMACY_E2E.cashierEmail);
+  await openDrawer(page);
+  await search(page, otc.brandName);
+  await stageFirstResult(page, otc.name);
+  await page.keyboard.press('F4');
+  await setQuantity(page, 1);
+  await page.keyboard.press('F6');
+  await expect(page.getByRole('list', { name: 'Cart lines' })).toContainText(otc.name, {
+    timeout: 15_000,
+  });
+  await tenderCash(page, PHARMACY_E2E_EXPECTED.otcStripPrice);
+  const receipt = page.getByRole('region', { name: /^Receipt \d+$/ });
+  await expect(receipt).toBeVisible({ timeout: 15_000 });
+  await expect(receipt).toContainText(otc.name);
+  await expect(receipt).toContainText(otc.batchNumber);
+});
+
+test('day close — open sell count lock and print Z-report', async ({ page, context }) => {
+  await openCounter(page);
+  await openDrawer(page);
+  const otc = PHARMACY_E2E.medicines.otc;
+  await search(page, otc.brandName);
+  await stageFirstResult(page, otc.name);
+  await page.keyboard.press('F4');
+  await setQuantity(page, 2);
+  await page.keyboard.press('F6');
+  await expect(page.getByRole('list', { name: 'Cart lines' })).toContainText(otc.name);
+  await tenderCash(page, PHARMACY_E2E_EXPECTED.otcTwoStripTotal);
+  await expect(page.getByRole('region', { name: /^Receipt \d+$/ })).toBeVisible();
+  await page.goto('/pharmacy/counter/close');
+  await expect(page.getByRole('heading', { name: 'Day close', exact: true })).toBeVisible();
+  const inputs = page.getByLabel(/Counted cash for drawer/);
+  await expect(inputs.first()).toBeVisible();
+  for (let i = 0; i < (await inputs.count()); i++) {
+    const field = inputs.nth(i);
+    const row = field.locator('..').locator('..');
+    const text = await row.innerText();
+    const expected = Number(text.match(/Expected: PKR ([\d,.]+)/)![1].replaceAll(',', ''));
+    await field.fill((expected - (i === 0 ? 1 : 0)).toFixed(2));
+  }
+  await expect(page.getByTestId('Variance')).toHaveText('-1.00');
+  await page.getByLabel('Variance note').fill('One rupee short at nightly count');
+  await page.getByRole('checkbox').focus();
+  await page.getByRole('checkbox').press('Space');
+  await pressControl(page.getByRole('button', { name: 'Close and lock day' }));
+  await expect(
+    page.getByText('Day closed. New tenders and drawer changes for this business date are blocked.')
+  ).toBeVisible();
+  await page.reload();
+  await expect(page.getByText('Variance note: One rupee short at nightly count')).toBeVisible();
+  for (const width of [375, 768, 1024, 1440]) {
+    await page.setViewportSize({ width, height: 900 });
+    for (const theme of ['light', 'dark']) {
+      await page.evaluate(
+        (theme) => document.documentElement.setAttribute('data-theme', theme),
+        theme
+      );
+      await page.emulateMedia({ reducedMotion: theme === 'dark' ? 'reduce' : 'no-preference' });
+      expect(
+        await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)
+      ).toBe(true);
+      await page.screenshot({
+        path: test.info().outputPath(`day-close-${width}-${theme}.png`),
+        fullPage: true,
+      });
+    }
+  }
+  await context.addInitScript(() => {
+    window.print = () => {};
+  });
+  const popupPromise = page.waitForEvent('popup');
+  await pressControl(page.getByRole('button', { name: 'Print Z-report' }));
+  const popup = await popupPromise;
+  await expect(popup.locator('body')).toContainText('Z-report');
+  await expect(popup.locator('body')).toContainText('One rupee short at nightly count');
+  await popup.close();
+  await page.goto('/pharmacy/counter');
+  await pressControl(page.getByRole('button', { name: 'Open drawer' }));
+  await expect(
+    page.getByRole('alert').filter({ hasText: /This business day is closed/ })
+  ).toBeVisible();
+  await search(page, otc.brandName);
+  await stageFirstResult(page, otc.name);
+  await page.keyboard.press('F4');
+  await setQuantity(page, 1);
+  await page.keyboard.press('F6');
+  await expect(page.getByRole('list', { name: 'Cart lines' })).toContainText(otc.name);
+  await tenderCash(page, PHARMACY_E2E_EXPECTED.otcStripPrice);
+  await expect(page.getByText(/This business day is closed/).first()).toBeVisible();
+});
+
+test('this spec drives the counter without a pointer', async () => {
+  const source = await readFile(join(process.cwd(), 'tests/e2e/pharmacy-counter.spec.ts'), 'utf8');
+  // Strip this assertion's own literals so it cannot match itself.
+  const marker = 'this spec drives the counter without a pointer';
+  const body = source.slice(0, source.indexOf(marker));
+  // Non-vacuous: the slice must actually contain the three bills it is guarding.
+  expect(body).toContain('bill 1 —');
+  expect(body).toContain('bill 3 —');
+  for (const pointerApi of ['.click(', '.dblclick(', '.hover(', '.tap(', '.dragTo(']) {
+    expect(body, `pointer API used: ${pointerApi}`).not.toContain(pointerApi);
+  }
 });

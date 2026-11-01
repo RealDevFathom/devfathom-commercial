@@ -823,6 +823,7 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
           id: operator.staffProfileId,
           displayName: operator.displayName,
           role: operator.role,
+          canSelfApprove: operator.canSelfApprove,
         }))
         .filter((operator) =>
           operators.some((source) => source.staffProfileId === operator.id && source.canApprove)
@@ -839,6 +840,7 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
           id: operator.staffProfileId,
           displayName: operator.displayName,
           role: operator.role,
+          canSelfApprove: operator.canSelfApprove,
         })),
       disabled: busy || !online,
     } satisfies ComponentProps<typeof RefundPanel>,
@@ -1014,6 +1016,7 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
         id: operator.staffProfileId,
         displayName: operator.displayName,
         role: operator.role,
+        canSelfApprove: operator.canSelfApprove,
       })),
       pending: busy || !online,
       tables: layout?.floors.flatMap((floor) =>
@@ -1057,6 +1060,15 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
       orderId: checkoutOrderId,
       request: checkoutRequest,
       connected: online,
+      actingOperatorId: runtime.operator?.staffProfileId ?? '',
+      operators: operators
+        .filter((operator) => operator.canApprove)
+        .map((operator) => ({
+          id: operator.staffProfileId,
+          displayName: operator.displayName,
+          role: operator.role,
+          canSelfApprove: operator.canSelfApprove,
+        })),
       onClose: ({ settled }) => {
         setCheckoutOrderId(null);
         if (settled) startFreshDraft();

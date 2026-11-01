@@ -1,3 +1,4 @@
+import { soloOwnerEligible } from '@/lib/pharmacy/solo-approval';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 
@@ -116,6 +117,11 @@ export default async function PharmacyTransfersPage({
   }
 
   const caller = pharmacyInventoryRouter.createCaller(ctx);
+  const solo = await soloOwnerEligible(ctx.db, {
+    organizationId,
+    branchId: branch.id,
+    actorId: currentUserId,
+  });
   const [transfers, balances, destinationLocations, witnesses] = await Promise.all([
     caller.transferBoard({ branchId: branch.id }),
     ctx.db.pharmacyStockBalance.findMany({
@@ -148,7 +154,7 @@ export default async function PharmacyTransfersPage({
       select: { id: true, name: true, branchId: true },
     }),
     ctx.db.user.findMany({
-      where: { organizationId, status: 'ACTIVE', id: { not: currentUserId } },
+      where: { organizationId, status: 'ACTIVE', ...(solo ? {} : { id: { not: currentUserId } }) },
       orderBy: { name: 'asc' },
       select: { id: true, name: true, title: true },
     }),
@@ -180,7 +186,12 @@ export default async function PharmacyTransfersPage({
       const transferId = String(data.get('transferId') ?? '').trim();
       if (action === 'allocate')
         await actionCaller.allocateTransfer(allocateInput(data, ALLOCATE_ROWS));
-      else if (action === 'approve') await actionCaller.approveTransfer({ branchId, transferId });
+      else if (action === 'approve')
+        await actionCaller.approveTransfer({
+          branchId,
+          transferId,
+          pin: String(data.get('pin') ?? '').trim() || undefined,
+        });
       else if (action === 'dispatch')
         await actionCaller.dispatchTransfer({
           branchId,

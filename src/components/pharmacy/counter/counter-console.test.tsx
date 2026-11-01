@@ -20,10 +20,12 @@ const mocks = vi.hoisted(() => ({
   queries: {} as Record<string, Query>,
   mutations: {} as Record<string, ReturnType<typeof vi.fn>>,
   refetch: vi.fn(),
+  searchFetch: vi.fn(),
   cancel: vi.fn(),
   receiptInvalidate: vi.fn(),
   mutationOptions: vi.fn(),
   receiptProps: vi.fn(),
+  queryOptions: vi.fn(),
   outcomeQuery: vi.fn(),
   khataAccounts: vi.fn(),
   khataStatement: vi.fn(),
@@ -36,7 +38,10 @@ const mocks = vi.hoisted(() => ({
       user: { id: 'account-a', organizationId: 'org-a', status: 'ACTIVE', sessionRevoked: false },
     },
   },
-  entitlements: { organizationId: 'org-a', enabledModules: ['pharmacy-counter'] },
+  entitlements: {
+    organizationId: 'org-a',
+    enabledModules: ['pharmacy-counter', 'pharmacy-safety'],
+  },
 }));
 
 vi.mock('next-auth/react', () => ({ useSession: () => mocks.session, signIn: mocks.signIn }));
@@ -50,7 +55,10 @@ vi.mock('@/lib/trpc', () => {
       names.map((name) => [
         name,
         {
-          useQuery: () => mocks.queries[name],
+          useQuery: (_input: unknown, options?: unknown) => {
+            mocks.queryOptions(name, options);
+            return mocks.queries[name];
+          },
           useMutation: (options: unknown) => {
             mocks.mutationOptions(name, options);
             return {
@@ -72,6 +80,10 @@ vi.mock('@/lib/trpc', () => {
       },
     },
     pharmacySales: {
+      counterSearch: {
+        setData: vi.fn(),
+        fetch: (...args: unknown[]) => mocks.searchFetch(...args),
+      },
       counterCart: { cancel: mocks.cancel, invalidate: vi.fn() },
       counterReceipt: { invalidate: mocks.receiptInvalidate },
       counterEvidence: { reset: vi.fn() },
@@ -91,8 +103,11 @@ vi.mock('@/lib/trpc', () => {
         'counterLotOptions',
         'counterEvidence',
         'customerSnapshot',
+        'counterCustomers',
+        'linkCounterCustomer',
         'drawerStatus',
         'create',
+        'rxApprovers',
         'addLine',
         'transition',
         'tender',
@@ -101,6 +116,8 @@ vi.mock('@/lib/trpc', () => {
         'declineSubstitute',
         'linkCustomer',
         'redeemPoints',
+        'loyaltyConsent',
+        'counterPointsPolicy',
         'authenticatePack',
         'substituteProposals',
       ]),
@@ -122,7 +139,6 @@ vi.mock('./counter-rx-panel', () => ({
     props.controlled ? <div data-testid="controlled-authorization" /> : null,
 }));
 vi.mock('./counter-keymap-legend', () => ({ CounterKeymapLegend: () => null }));
-vi.mock('./counter-search-results', () => ({ CounterSearchResults: () => null }));
 vi.mock('./counter-substitute-proposals', () => ({ CounterSubstituteProposals: () => null }));
 vi.mock('./counter-unit-toggle', () => ({ CounterUnitToggle: () => null }));
 
@@ -211,7 +227,10 @@ beforeEach(() => {
       user: { id: 'account-a', organizationId: 'org-a', status: 'ACTIVE', sessionRevoked: false },
     },
   };
-  mocks.entitlements = { organizationId: 'org-a', enabledModules: ['pharmacy-counter'] };
+  mocks.entitlements = {
+    organizationId: 'org-a',
+    enabledModules: ['pharmacy-counter', 'pharmacy-safety'],
+  };
   mocks.outcomeQuery.mockReset().mockResolvedValue({ status: 'UNKNOWN', replayUnsafe: true });
   mocks.receiptRefetch
     .mockReset()
@@ -225,12 +244,21 @@ beforeEach(() => {
     'counterLotOptions',
     'counterEvidence',
     'customerSnapshot',
+    'counterCustomers',
+    'linkCounterCustomer',
     'substituteProposals',
     'counterPatients',
     'counterPatientPanel',
     'controlledPharmacists',
+    'rxApprovers',
   ])
     mocks.queries[name] = query();
+  mocks.queries.counterPointsPolicy = query({
+    pointsEnabled: true,
+    earnEveryMinor: 100,
+    pointValueMinor: 100,
+    minimumRedeemPoints: 1,
+  });
   mocks.queries.drawerStatus = query({ openDrawer: null });
   mocks.queries.counterBranches = query({
     branches: [{ id: 'branch-a', name: 'Synthetic branch' }],
@@ -248,10 +276,13 @@ beforeEach(() => {
     'declineSubstitute',
     'linkCustomer',
     'redeemPoints',
+    'loyaltyConsent',
+    'counterPointsPolicy',
     'authenticatePack',
   ])
     mocks.mutations[name] = vi.fn();
   mocks.mutations.tender!.mockResolvedValue(accepted());
+  mocks.searchFetch.mockReset().mockImplementation(async () => mocks.queries.counterSearch?.data);
   mocks.cancel.mockResolvedValue(undefined);
   mocks.receiptInvalidate.mockResolvedValue(undefined);
   mocks.refetch.mockImplementation(async () => {
@@ -1058,6 +1089,40 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
     await waitFor(() => expect(mocks.drawerStatusInvalidate).toHaveBeenCalled());
   });
 
+  it.each([
+    // 16:30 UTC on the 21st is already the 22nd in Tokyo, still the 21st on the device.
+    ['the workspace zone', 'Asia/Tokyo', '2026-10-21T16:30:00.000Z', '2026-10-22'],
+    // A stored zone Intl refuses reads as UTC: 22:30 UTC is the 21st there, the 22nd on the device.
+    ['UTC for a stored zone Intl refuses', 'PKT', '2026-10-21T22:30:00.000Z', '2026-10-21'],
+  ])(
+    'stamps the drawer with today in %s, not the device’s day, as the day close reads it',
+    async (_label, timezone, now, day) => {
+      // The device is pinned to Karachi whatever zone the test host runs in, so
+      // the device's own day differs from the workspace's day on every host:
+      // a device-local stamp cannot pass. Node applies a runtime TZ change.
+      vi.stubEnv('TZ', 'Asia/Karachi');
+      const device = new Intl.DateTimeFormat('en-CA', { day: '2-digit' }).format(new Date(now));
+      expect(device).not.toBe(day.slice(8));
+      vi.useFakeTimers({ toFake: ['Date'], now: new Date(now) });
+      mocks.queries.counterBranches = query({
+        branches: [{ id: 'branch-a', name: 'Synthetic branch' }],
+        timezone,
+      });
+      mocks.mutations.openDrawer!.mockResolvedValue(openDrawer);
+      try {
+        render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+        fireEvent.click(screen.getByRole('button', { name: 'Open drawer' }));
+        await screen.findByText('Cash drawer opened for this counter.');
+        expect(mocks.mutations.openDrawer).toHaveBeenCalledWith(
+          expect.objectContaining({ businessDate: new Date(`${day}T00:00:00.000Z`) })
+        );
+      } finally {
+        vi.useRealTimers();
+        vi.unstubAllEnvs();
+      }
+    }
+  );
+
   it('words a conflicting open for the operator instead of leaking the server failure', async () => {
     mocks.mutations.openDrawer!.mockRejectedValue(refused('CONFLICT', 'OPEN_DRAWER'));
     render(<PharmacyCounterConsole initialBranchId="branch-a" />);
@@ -1071,7 +1136,210 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
     await waitFor(() => expect(mocks.drawerStatusInvalidate).toHaveBeenCalled());
   });
 
-  it('adds a barcode on Enter only when the search returns that single medicine', async () => {
+  it.each(['SOLO', 'STAFFED'] as const)(
+    'submits fresh %s authorization for a non-controlled Rx line',
+    async (mode) => {
+      const row = {
+        medicineId: 'med-barcode',
+        displayName: 'Paracetamol',
+        brandName: null,
+        manufacturer: null,
+        strength: '500 mg',
+        presentationId: 'presentation-a',
+        presentation: 'Tablet',
+        dosageForm: 'Tablet',
+        route: 'Oral',
+        matchedOn: 'BARCODE',
+        recommendedLotId: 'lot-a',
+        packLevelId: 'pack-a',
+        unitsPerPack: 1,
+        printedMrpMinor: 10000,
+        roundingIncrementMinor: 1,
+        batchNumber: 'B-1',
+        nearestSafeExpiry: '2028-06-30T00:00:00.000Z',
+        onHandUnits: 10,
+        saleableUnits: [],
+        saleUnits: [
+          {
+            kind: 'UNIT',
+            packLevelId: 'pack-a',
+            levelLabel: 'UNIT',
+            canonicalUnitsPerSaleUnit: 1,
+          },
+        ],
+        restriction: {
+          rx: true,
+          otc: false,
+          restricted: false,
+          controlled: false,
+          highAlert: false,
+          lasa: false,
+        },
+        storage: {
+          coldChain: false,
+          locationKind: 'STORE',
+          locationCode: 'A',
+          locationName: 'Store',
+        },
+        blocked: [],
+      };
+      mocks.queries.counterPointsPolicy = query({
+        pointsEnabled: true,
+        earnEveryMinor: 100,
+        pointValueMinor: 100,
+        minimumRedeemPoints: 1,
+      });
+      mocks.queries.rxApprovers = query({ mode, users: [{ id: 'pharmacist', name: 'Checker' }] });
+      mocks.queries.counterSearch = query({ rows: [row] });
+      mocks.mutations.addLine!.mockResolvedValue({});
+      render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      const search = screen.getByLabelText('Scan or search');
+      fireEvent.change(search, { target: { value: '123456' } });
+      fireEvent.keyDown(search, { key: 'Enter' });
+      const pin = await screen.findByLabelText(
+        mode === 'SOLO' ? 'Owner PIN' : 'Approving pharmacist PIN'
+      );
+      expect(pin).toHaveAttribute('type', 'password');
+      expect(pin).toHaveAttribute('autoComplete', 'off');
+      fireEvent.change(pin, { target: { value: '4729' } });
+      if (mode === 'STAFFED')
+        fireEvent.change(screen.getByLabelText('Approving pharmacist'), {
+          target: { value: 'pharmacist' },
+        });
+      fireEvent.click(screen.getByRole('button', { name: /Add.*cart/i }));
+      await waitFor(() =>
+        expect(mocks.mutations.addLine).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            prescriptionApproval: {
+              pin: '4729',
+              checkerId: mode === 'STAFFED' ? 'pharmacist' : undefined,
+            },
+            controlledAuthorization: undefined,
+          })
+        )
+      );
+      await waitFor(() => expect(pin).toHaveValue(''));
+    }
+  );
+
+  it.each(['SOLO', 'STAFFED'] as const)(
+    'submits fresh %s authorization for a non-FEFO batch',
+    async (mode) => {
+      const row = {
+        medicineId: 'med-barcode',
+        displayName: 'Paracetamol',
+        brandName: null,
+        manufacturer: null,
+        strength: '500 mg',
+        presentationId: 'presentation-a',
+        presentation: 'Tablet',
+        dosageForm: 'Tablet',
+        route: 'Oral',
+        matchedOn: 'BARCODE',
+        recommendedLotId: 'lot-a',
+        packLevelId: 'pack-a',
+        unitsPerPack: 1,
+        printedMrpMinor: 10000,
+        roundingIncrementMinor: 1,
+        batchNumber: 'B-1',
+        nearestSafeExpiry: '2028-06-30T00:00:00.000Z',
+        onHandUnits: 10,
+        saleableUnits: [],
+        saleUnits: [
+          {
+            kind: 'UNIT',
+            packLevelId: 'pack-a',
+            levelLabel: 'UNIT',
+            canonicalUnitsPerSaleUnit: 1,
+          },
+        ],
+        restriction: {
+          rx: false,
+          otc: false,
+          restricted: false,
+          controlled: false,
+          highAlert: false,
+          lasa: false,
+        },
+        storage: {
+          coldChain: false,
+          locationKind: 'STORE',
+          locationCode: 'A',
+          locationName: 'Store',
+        },
+        blocked: [],
+      };
+      mocks.queries.counterPointsPolicy = query({
+        pointsEnabled: true,
+        earnEveryMinor: 100,
+        pointValueMinor: 100,
+        minimumRedeemPoints: 1,
+      });
+      mocks.queries.rxApprovers = query({ mode, users: [{ id: 'pharmacist', name: 'Checker' }] });
+      mocks.queries.counterLotOptions = query([
+        {
+          inventoryLotId: 'lot-a',
+          batchNumber: 'FIRST',
+          expiresAt: '2028-06-30',
+          sellableUnits: 10,
+          blockedBy: null,
+        },
+        {
+          inventoryLotId: 'lot-b',
+          batchNumber: 'LATER',
+          expiresAt: '2029-06-30',
+          sellableUnits: 10,
+          blockedBy: null,
+        },
+      ]);
+      mocks.queries.counterSearch = query({ rows: [row] });
+      mocks.mutations.addLine!.mockResolvedValue({});
+      render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      const search = screen.getByLabelText('Scan or search');
+      fireEvent.change(search, { target: { value: 'para' } });
+      fireEvent.click(await screen.findByRole('button', { name: /Paracetamol/ }));
+      fireEvent.click(screen.getByRole('button', { name: 'Sell a different batch' }));
+      fireEvent.click(await screen.findByRole('radio', { name: /Batch LATER/ }));
+      fireEvent.change(screen.getByLabelText('Override reason'), {
+        target: { value: 'Customer requests original batch' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: /Add.*cart/i }));
+      expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+      const pin = screen.getByLabelText(mode === 'SOLO' ? 'Owner PIN' : 'Checker PIN');
+      if (mode === 'STAFFED')
+        fireEvent.change(screen.getByLabelText('Independent owner or manager'), {
+          target: { value: 'pharmacist' },
+        });
+      fireEvent.change(pin, { target: { value: '4729' } });
+      fireEvent.click(screen.getByRole('button', { name: /Add.*cart/i }));
+      await waitFor(() =>
+        expect(mocks.mutations.addLine).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            approvalPin: '4729',
+            approvedByUserId: mode === 'STAFFED' ? 'pharmacist' : undefined,
+            override: {
+              inventoryLotId: 'lot-b',
+              reason: 'Customer requests original batch',
+              approvalPolicy: 'PHARMACIST_ON_DUTY',
+            },
+          })
+        )
+      );
+      await waitFor(() => expect(pin).toHaveValue(''));
+    }
+  );
+
+  it.each([
+    'single',
+    'gs1',
+    'stockout',
+    'stale',
+    'error',
+    'busy',
+    'unmount',
+    'unmount-create',
+    'stale-create',
+  ])('handles %s barcode results without adding an unsafe or stale line', async (mode) => {
     const row = {
       medicineId: 'med-barcode',
       displayName: 'Paracetamol',
@@ -1116,18 +1384,90 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
       },
       blocked: [],
     };
+    if (mode === 'stockout') row.onHandUnits = 0;
     mocks.queries.counterSearch = query({ rows: [row] });
+    let resolveSearch: ((result: { rows: (typeof row)[] }) => void) | undefined;
+    if (mode === 'stale' || mode === 'busy' || mode === 'unmount') {
+      mocks.searchFetch.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveSearch = resolve;
+          })
+      );
+    }
+    if (mode === 'error') mocks.searchFetch.mockRejectedValueOnce(new Error('Search unavailable'));
+    if (mode === 'gs1')
+      mocks.mutations.authenticatePack!.mockResolvedValue({
+        status: 'VERIFIED',
+        parsed: { gtin: '01234567890123' },
+        explanation: 'Pack verified',
+      });
+    let resolveCreate: ((result: { id: string }) => void) | undefined;
+    const creating = mode === 'unmount-create' || mode === 'stale-create';
+    if (creating) {
+      mocks.mutations.create!.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveCreate = resolve;
+          })
+      );
+    }
     mocks.mutations.addLine!.mockResolvedValue({});
-    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const view = render(
+      <PharmacyCounterConsole
+        initialSaleId={creating ? undefined : 'sale-a'}
+        initialBranchId="branch-a"
+      />
+    );
     const search = screen.getByLabelText('Scan or search');
-    fireEvent.change(search, { target: { value: '123456' } });
+    fireEvent.change(search, {
+      target: { value: mode === 'gs1' ? '(01)01234567890123' : '123456' },
+    });
     fireEvent.keyDown(search, { key: 'Enter' });
+    await waitFor(() => expect(mocks.searchFetch).toHaveBeenCalled());
+    expect(mocks.searchFetch).toHaveBeenCalledWith(
+      { branchId: 'branch-a', query: mode === 'gs1' ? '01234567890123' : '123456' },
+      { staleTime: 10_000 }
+    );
+    if (mode === 'unmount') {
+      view.unmount();
+      await act(async () => resolveSearch!({ rows: [row] }));
+      expect(mocks.mutations.create).not.toHaveBeenCalled();
+    }
+    if (creating) {
+      await waitFor(() => expect(mocks.mutations.create).toHaveBeenCalledTimes(1));
+      if (mode === 'unmount-create') view.unmount();
+      else fireEvent.change(search, { target: { value: 'another medicine' } });
+      await act(async () => resolveCreate!({ id: 'sale-created' }));
+    }
+    if (mode === 'stale') {
+      fireEvent.change(search, { target: { value: 'another medicine' } });
+      await act(async () => resolveSearch!({ rows: [row] }));
+    }
+    if (mode === 'busy') {
+      mocks.mutations.openDrawer!.mockImplementationOnce(() => new Promise(() => {}));
+      fireEvent.click(screen.getByRole('button', { name: 'Open drawer' }));
+      await waitFor(() => expect(mocks.mutations.openDrawer).toHaveBeenCalled());
+      await act(async () => resolveSearch!({ rows: [row] }));
+    }
+    if (
+      ['stockout', 'stale', 'error', 'busy', 'unmount', 'unmount-create', 'stale-create'].includes(
+        mode
+      )
+    ) {
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+      return;
+    }
     await waitFor(() =>
       expect(mocks.mutations.addLine).toHaveBeenCalledWith(
         expect.objectContaining({ medicineId: 'med-barcode', quantity: 1 })
       )
     );
 
+    expect(mocks.mutations.addLine).toHaveBeenCalledTimes(1);
     mocks.mutations.addLine!.mockClear();
     mocks.queries.counterSearch = query({ rows: [row, { ...row, medicineId: 'med-other' }] });
     fireEvent.change(search, { target: { value: '654321' } });
@@ -1159,6 +1499,26 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
     expect(document.activeElement).not.toBe(tender);
     dialog.remove();
   });
+
+  it('runs F9 and Shift+F4 from the scan field, where focus rests for the whole bill (POS-01)', async () => {
+    mocks.mutations.transition!.mockResolvedValue({});
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const search = screen.getByLabelText('Scan or search');
+    const tender = screen.getByLabelText('Amount').closest('[tabindex="-1"]');
+
+    search.focus();
+    expect(document.activeElement).toBe(search);
+    fireEvent.keyDown(search, { key: 'F9' });
+    expect(document.activeElement).toBe(tender);
+
+    search.focus();
+    fireEvent.keyDown(search, { key: 'F4', shiftKey: true });
+    await waitFor(() =>
+      expect(mocks.mutations.transition).toHaveBeenCalledWith(
+        expect.objectContaining({ saleId: 'sale-a', action: 'void' })
+      )
+    );
+  });
 });
 
 describe('PharmacyCounterConsole controlled authorization visibility (QA-138)', () => {
@@ -1176,4 +1536,42 @@ describe('PharmacyCounterConsole controlled authorization visibility (QA-138)', 
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     expect(screen.getByTestId('controlled-authorization')).toBeTruthy();
   });
+});
+
+describe('PharmacyCounterConsole module boundaries', () => {
+  it('neither asks for approving pharmacists nor offers controlled authorization without Pharmacy Safety', () => {
+    // Pharmacy Essentials sells the counter without Pharmacy Safety: no read it would refuse.
+    mocks.entitlements.enabledModules = ['pharmacy-counter'];
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(mocks.queryOptions).toHaveBeenCalledWith('controlledPharmacists', { enabled: false });
+    expect(mocks.queryOptions).not.toHaveBeenCalledWith('controlledPharmacists', {
+      enabled: true,
+    });
+    expect(screen.queryByTestId('controlled-authorization')).toBeNull();
+  });
+
+  it('asks for approving pharmacists when Pharmacy Safety is licensed', () => {
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(mocks.queryOptions).toHaveBeenCalledWith('controlledPharmacists', { enabled: true });
+    expect(screen.getByTestId('controlled-authorization')).toBeTruthy();
+  });
+});
+
+it('links a masked loyalty customer when the clinical patient panel is forbidden', async () => {
+  mocks.queries.counterPatients = { ...query(), isError: true, error: refused('FORBIDDEN') };
+  mocks.queries.counterPatientPanel = { ...query(), isError: true, error: refused('FORBIDDEN') };
+  mocks.queries.counterCustomers = query([
+    { patientId: 'loyalty-patient', displayName: 'A… K…', phone: '••••4567', loyaltyConsent: true },
+  ]);
+  mocks.mutations.linkCounterCustomer = vi.fn().mockResolvedValue({ id: 'loyalty-customer' });
+  render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+  fireEvent.click(screen.getByRole('button', { name: 'A… K… · ••••4567' }));
+  await waitFor(() =>
+    expect(mocks.mutations.linkCounterCustomer).toHaveBeenCalledWith({
+      branchId: 'branch-a',
+      saleId: 'sale-a',
+      patientId: 'loyalty-patient',
+    })
+  );
+  expect(await screen.findByText('Loyalty customer linked to this bill.')).toBeInTheDocument();
 });

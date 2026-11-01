@@ -158,12 +158,21 @@ beforeAll(async () => {
         },
       });
     }
+    await tx.organizationRole.create({
+      data: {
+        id: `owner_${suffix}`,
+        key: 'owner',
+        name: 'Owner',
+        isSystem: true,
+        permissions: { create: { capability: 'pharmacy:dispense', effect: 'ALLOW' } },
+      },
+    });
     const people = [
       { id: ids.dispenser, roleId: ids.roleDispense, name: 'Dispenser' },
       { id: ids.receiptClerk, roleId: ids.roleReceipt, name: 'Receipt' },
       { id: ids.cashier, roleId: ids.roleCashier, name: 'Cashier' },
       { id: ids.unassigned, roleId: ids.roleDispense, name: 'Unassigned' },
-      { id: ids.admin, roleId: ids.roleDispense, name: 'Admin', role: 'ADMIN' as const },
+      { id: ids.admin, roleId: `owner_${suffix}`, name: 'Admin', role: 'ADMIN' as const },
     ];
     for (const person of people) {
       await tx.user.create({
@@ -342,11 +351,14 @@ describeIfDatabase('counter receipt authorization against Postgres', () => {
         api.lookupReceiptByNumber({ branchId: ids.branchB, receiptNumber: 7 })
       ).resolves.toEqual([expect.objectContaining({ id: ids.saleB })]);
     });
-    await withTenantDb(ids.orgA, (tx) =>
-      tx.pharmacyBranchAssignment.create({
+    // Owners are provisioned to every branch. Keep exercising the receipt
+    // admin fallback with a deliberately sparse legacy assignment set.
+    await withTenantDb(ids.orgA, async (tx) => {
+      await tx.pharmacyBranchAssignment.deleteMany({ where: { userId: ids.admin } });
+      await tx.pharmacyBranchAssignment.create({
         data: { userId: ids.admin, branchId: ids.branchA },
-      })
-    );
+      });
+    });
     await act(ids.orgA, { id: ids.admin, role: 'ADMIN', organizationId: ids.orgA }, async (api) => {
       await expect(
         api.lookupReceiptByNumber({ branchId: ids.branchB, receiptNumber: 7 })

@@ -84,6 +84,7 @@ export type OrderCommandErrorReason =
   | 'TABLE_LINK_NOT_FOUND'
   | 'CHANNEL_UNAVAILABLE'
   | 'CHANNEL_TABLE'
+  | 'BILL_ALREADY_CUT'
   | 'NOT_CLOSABLE'
   | 'NOT_SETTLED'
   | 'LIMIT_REACHED'
@@ -1083,11 +1084,26 @@ export async function voidItem(db: ScopedDb, input: VoidItemInput): Promise<Item
     if (idem.replay) return { itemId: idem.resultRef ?? input.itemId, replayed: true };
 
     const reason = requireReason(input.reason);
+    // A bill is an immutable snapshot of the active order items. Serialize with
+    // bill cutting on the parent row, then reject a void that would otherwise
+    // leave the kitchen aggregate and the amount payable disagreeing. The guest
+    // must void-and-recut the open bill before changing the item set.
+    await lockRestaurantOrder(tx, input.orderId);
     const order = await loadOrder(tx, input.orderId);
     assertMutable(order);
-
     const item = findItem(order, input.itemId);
     assertItemTransition(item.status, 'VOIDED');
+
+    const liveBill = await tx.restaurantBill.findFirst({
+      where: { orderId: order.id, status: { not: 'VOID' } },
+      select: { id: true },
+    });
+    if (liveBill) {
+      throw new OrderCommandError(
+        'An item cannot be voided after a bill is cut; void and recut the bill first.',
+        'BILL_ALREADY_CUT'
+      );
+    }
 
     const postPrep = isPostPrep(item.status);
     let voidCoAuthorizationId: string | null = null;

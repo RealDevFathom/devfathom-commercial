@@ -38,8 +38,17 @@ function fixture(role: 'ADMIN' | 'EMPLOYEE' = 'ADMIN') {
       ),
     },
     user: {
+      count: vi.fn().mockResolvedValue(2),
       findUnique: vi.fn(async () => ({
-        organizationRole: { permissions: cashierRole.permissions },
+        role,
+        status: 'ACTIVE',
+        organizationId: 'org-a',
+        organizationRole: {
+          permissions: [
+            ...cashierRole.permissions,
+            ...(role === 'ADMIN' ? [{ capability: 'admin:access', effect: 'ALLOW' }] : []),
+          ],
+        },
         permissionOverrides: [],
       })),
       findMany: vi.fn(async () => [
@@ -159,6 +168,27 @@ describe('pharmacy branch assignments', () => {
     });
   });
 
+  it('keeps automatic owner branch assignments active', async () => {
+    const f = fixture();
+    f.db.user.findUnique.mockResolvedValue({
+      role: 'ADMIN',
+      status: 'ACTIVE',
+      organizationId: 'org-a',
+      organization: { vertical: 'PHARMACY' },
+      organizationRole: {
+        organizationId: 'org-a',
+        key: 'owner',
+        isSystem: true,
+        permissions: [{ capability: 'admin:access', effect: 'ALLOW' }],
+      },
+      permissionOverrides: [],
+    } as never);
+    await expect(f.caller.unassign({ assignmentId: 'pba-1' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Owners are automatically assigned to every pharmacy branch.',
+    });
+    expect(f.db.pharmacyBranchAssignment.update).not.toHaveBeenCalled();
+  });
   it('refuses another organization, a closed branch, and a member without a pharmacy role', async () => {
     const foreign = fixture();
     foreign.context.session.user.organizationId = 'org-b';

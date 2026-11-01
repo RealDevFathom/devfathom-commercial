@@ -2,6 +2,7 @@ import 'server-only';
 
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { workspaceTimezone } from '@/lib/timezone';
 import { z } from 'zod';
 import { lockCustomerConsent } from './consent-writer';
 
@@ -185,7 +186,7 @@ export function requireCaptureWindow(
   const hours = quietHours.parse(campaign.quietHours);
   const hour = Number(
     new Intl.DateTimeFormat('en-GB', {
-      timeZone: scope.timezone,
+      timeZone: workspaceTimezone(scope.timezone),
       hour: '2-digit',
       hourCycle: 'h23',
     }).format(now)

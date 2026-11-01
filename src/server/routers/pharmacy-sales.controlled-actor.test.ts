@@ -50,14 +50,40 @@ function callerFor(permissions: Array<{ capability: string; effect: 'ALLOW' | 'D
   const register = vi.fn();
   const db = {
     $transaction: async (callback: (tx: unknown) => unknown) => callback(db),
-    pharmacyBranch: { findMany: async () => [{ id: 'branch-1' }] },
+    pharmacyBranchAssignment: { findMany: vi.fn(async () => [{ branchId: 'branch-1' }]) },
+    pharmacyBranch: {
+      findFirst: vi.fn(async () => ({ id: 'branch-1' })),
+      findMany: async () => [{ id: 'branch-1' }],
+    },
+    branchRegulatoryProfile: {
+      findFirst: async () => ({
+        branchId: 'branch-1',
+        licenceCategory: 'PHARMACY',
+        licenceValidFrom: new Date('2020-01-01T00:00:00.000Z'),
+        licenceValidTo: new Date('2100-01-01T00:00:00.000Z'),
+        licenceEvidenceFileRef: 'evidence://pharmacy-licence',
+        permittedSchedules: ['*'],
+        qualifiedPersonRegistration: 'QP-1',
+        qualifiedPersonValidFrom: new Date('2020-01-01T00:00:00.000Z'),
+        qualifiedPersonValidTo: new Date('2100-01-01T00:00:00.000Z'),
+        qualifiedPersonCoverageRosterRef: 'roster-1',
+        jurisdictionRuleSet: {
+          licenceCategories: { provisional: false, values: ['PHARMACY'] },
+          permittedSchedules: { provisional: false, values: ['*'] },
+          pharmacistCoverageRule: { provisional: false },
+        },
+      }),
+    },
     medicine: {
       findFirst: async () => ({ id: 'medicine-1', controlled: true, manufacturer: 'Maker' }),
     },
     user: {
       findUnique: async () => ({
         status: 'ACTIVE',
-        organizationRole: { permissions },
+        organizationId: 'org-1',
+        organizationRole: {
+          permissions: [{ capability: 'pharmacy:counter', effect: 'ALLOW' }, ...permissions],
+        },
         permissionOverrides: [],
       }),
     },
@@ -109,8 +135,8 @@ describe('pharmacySales.addLine controlled actor', () => {
     const { caller, credential } = callerFor([
       { capability: 'pharmacy:dispense', effect: 'ALLOW' },
     ]);
-    const { controlledAuthorization, ...plain } = line;
-    void controlledAuthorization;
+    const plain = { ...line };
+    delete (plain as Partial<typeof line>).controlledAuthorization;
     await expect(caller.addLine(plain)).resolves.toMatchObject({
       blocked: expect.stringMatching(/pharmacist PIN/),
     });

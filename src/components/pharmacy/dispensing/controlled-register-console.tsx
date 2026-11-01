@@ -29,7 +29,9 @@ export function ControlledRegisterConsole() {
     { branchId: selected },
     { enabled: Boolean(selected) }
   );
-  const pharmacists = trpc.pharmacySafety.controlledPharmacists.useQuery();
+  const pharmacists = trpc.pharmacySafety.controlledPharmacists.useQuery(
+    selected ? { branchId: selected } : undefined
+  );
   const correct = trpc.pharmacySafety.recordCorrection.useMutation({
     onSuccess: async (result) => {
       if (result && 'blocked' in result) {

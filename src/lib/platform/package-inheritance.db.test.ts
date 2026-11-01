@@ -163,6 +163,9 @@ describeIfDatabase('package-module inheritance, against PostgreSQL', () => {
     expect(enabled).toEqual(
       [
         'admin',
+        'api',
+        'identity',
+        'team',
         'dashboard',
         'notifications',
         ...(['a1', 'a2', 'a3', 'a4', 'a5', 'a6'] as ModuleName[]).map(moduleKey),
@@ -185,7 +188,16 @@ describeIfDatabase('package-module inheritance, against PostgreSQL', () => {
 
     const entitlements = await resolve(ORG_AB);
     expect([...entitlements.enabledModules].sort()).toEqual(
-      ['admin', 'dashboard', 'notifications', moduleKey('b1'), moduleKey('b2')].sort()
+      [
+        'admin',
+        'api',
+        'identity',
+        'team',
+        'dashboard',
+        'notifications',
+        moduleKey('b1'),
+        moduleKey('b2'),
+      ].sort()
     );
     for (const name of ['a1', 'a2', 'a3', 'a4', 'a5', 'a6'] as ModuleName[]) {
       expect(entitlements.enabledModules).not.toContain(moduleKey(name));

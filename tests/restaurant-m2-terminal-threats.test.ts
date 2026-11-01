@@ -43,11 +43,12 @@ const db = {
   },
   user: { findFirst: vi.fn(async () => null) },
   restaurantBranch: {
-    findUnique: vi.fn(async () => ({ id: 'branch_m2', active: true })),
+    findUnique: vi.fn(async (): Promise<Row> => ({ id: 'branch_m2', active: true })),
     // WHA-149: /terminal/establish returns the branch NAME so the POS never
     // renders a raw branch id.
     findUniqueOrThrow: vi.fn(async () => ({ id: 'branch_m2', name: 'M2 Branch' })),
   },
+  restaurantShift: { findFirst: vi.fn(async (): Promise<Row | null> => null) },
   restaurantRegisteredDevice: {
     create: async ({ data }: { data: Row }) => {
       const row = {
@@ -114,6 +115,12 @@ const db = {
       h.store.staff.push(row);
       return copy(row);
     },
+  },
+  restaurantStaffJobRole: {
+    findMany: async () => [],
+  },
+  restaurantStaffCapabilityGrant: {
+    findMany: async () => [],
   },
   restaurantOperatorCredential: {
     findMany: async ({ where }: { where: Row }) => {
@@ -281,13 +288,25 @@ async function establish(secret: string) {
   };
 }
 
-function addOperator(staffProfileId: string, deviceId: string | null = null) {
+function addOperator(
+  staffProfileId: string,
+  deviceId: string | null = null,
+  capabilities: string[] = []
+) {
   h.store.staff.push({
     id: staffProfileId,
     organizationId: ORG,
     displayName: staffProfileId,
     primaryBranchId: BRANCH,
     status: 'ACTIVE',
+    jobRoles: [],
+    directCapabilityGrants: [],
+    user: {
+      organizationRole: {
+        permissions: capabilities.map((capability) => ({ capability, effect: 'ALLOW' })),
+      },
+      permissionOverrides: [],
+    },
   });
   h.store.credentials.push({
     id: `credential_${staffProfileId}`,
@@ -309,6 +328,13 @@ async function unlock(secret: string, token: string, staffProfileId: string, pin
   );
 }
 
+async function switchOperator(secret: string, token: string, staffProfileId: string, pin: string) {
+  return call(
+    switchRoute,
+    terminalRequest(secret, token, { staffProfileId, type: 'PIN', secret: pin }, 'switch')
+  );
+}
+
 beforeAll(async () => {
   process.env.AUTH_SECRET ??= randomBytes(32).toString('base64url');
   credentialHashes = Object.fromEntries(
@@ -323,6 +349,9 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  db.restaurantBranch.findUnique.mockResolvedValue({ id: BRANCH, active: true });
+  db.restaurantShift.findFirst.mockReset();
+  db.restaurantShift.findFirst.mockResolvedValue(null);
   h.store.organizations = [{ id: ORG, status: 'ACTIVE' }];
   h.store.devices = [];
   h.store.sessions = [];
@@ -439,7 +468,145 @@ describe('durable operator lockout', () => {
   });
 });
 
+describe('KDS unlock authorization', () => {
+  it('verifies the credential before revealing whether the operator has kitchen access', async () => {
+    const { device, secret } = await enrollDevice(db as unknown as ScopedDb, {
+      branchId: BRANCH,
+      name: 'credential-first-kds',
+      kind: 'KDS',
+    });
+    const { token } = await establish(secret);
+    addOperator(ACTING, device.id);
+
+    const invalidCredential = await unlock(secret, token, ACTING, '0000');
+    expect(invalidCredential.response.status).toBe(401);
+    expect(invalidCredential.body).toEqual({ error: 'Invalid operator credential.' });
+
+    const validCredentialWithoutAccess = await unlock(secret, token, ACTING, PINS[ACTING]);
+    expect(validCredentialWithoutAccess.response.status).toBe(403);
+    expect(validCredentialWithoutAccess.body).toEqual({
+      error: 'This operator lacks the "kitchen:operate" capability.',
+    });
+  });
+
+  it('unlocks a KDS for an authenticated operator with kitchen access', async () => {
+    const { device, secret } = await enrollDevice(db as unknown as ScopedDb, {
+      branchId: BRANCH,
+      name: 'authorized-kds',
+      kind: 'KDS',
+    });
+    const { token } = await establish(secret);
+    addOperator(ACTING, device.id, ['kitchen:operate']);
+
+    expect((await unlock(secret, token, ACTING, PINS[ACTING])).response.status).toBe(200);
+  });
+
+  it('prevents a switch from bypassing KDS authorization and preserves the current operator', async () => {
+    const { device, secret } = await enrollDevice(db as unknown as ScopedDb, {
+      branchId: BRANCH,
+      name: 'authorized-kds-handoff',
+      kind: 'KDS',
+    });
+    const { token, sessionId } = await establish(secret);
+    addOperator(ACTING, device.id, ['kitchen:operate']);
+    addOperator(INCOMING, device.id);
+
+    expect((await unlock(secret, token, ACTING, PINS[ACTING])).response.status).toBe(200);
+    const auditsBeforeSwitch = h.store.auditLogs.length;
+
+    const invalidCredential = await switchOperator(secret, token, INCOMING, '0000');
+    expect(invalidCredential.response.status).toBe(401);
+    expect(invalidCredential.body).toEqual({ error: 'Invalid operator credential.' });
+
+    const unauthorized = await switchOperator(secret, token, INCOMING, PINS[INCOMING]);
+    expect(unauthorized.response.status).toBe(403);
+    expect(unauthorized.body).toEqual({
+      error: 'This operator lacks the "kitchen:operate" capability.',
+    });
+    expect(find(h.store.sessions, { id: sessionId })).toMatchObject({
+      activeStaffProfileId: ACTING,
+    });
+    expect(h.store.auditLogs).toHaveLength(auditsBeforeSwitch);
+  });
+
+  it('switches a KDS to an authenticated incoming operator with kitchen access', async () => {
+    const { device, secret } = await enrollDevice(db as unknown as ScopedDb, {
+      branchId: BRANCH,
+      name: 'authorized-kds-switch',
+      kind: 'KDS',
+    });
+    const { token, sessionId } = await establish(secret);
+    addOperator(ACTING, device.id, ['kitchen:operate']);
+    addOperator(INCOMING, device.id, ['kitchen:operate']);
+
+    expect((await unlock(secret, token, ACTING, PINS[ACTING])).response.status).toBe(200);
+    expect((await switchOperator(secret, token, INCOMING, PINS[INCOMING])).response.status).toBe(
+      200
+    );
+    expect(find(h.store.sessions, { id: sessionId })).toMatchObject({
+      activeStaffProfileId: INCOMING,
+    });
+  });
+});
+
 describe('operator attribution and secret containment', () => {
+  it.each(['cross-branch', 'off-shift', 'on-shift'] as const)(
+    'enforces the trusted device branch for a valid %s approving PIN',
+    async (scenario) => {
+      const { device, secret } = await enroll('approval-boundary');
+      const { token, sessionId } = await establish(secret);
+      addOperator(ACTING, device.id);
+      addOperator(MANAGER, device.id);
+      expect((await unlock(secret, token, ACTING, PINS[ACTING])).response.status).toBe(200);
+      if (scenario === 'cross-branch') {
+        find(h.store.staff, { id: MANAGER })!.primaryBranchId = 'foreign_branch';
+      }
+      db.restaurantBranch.findUnique.mockResolvedValue({
+        id: BRANCH,
+        active: true,
+        shiftSignInEnforced: true,
+      });
+      if (scenario === 'on-shift') {
+        db.restaurantShift.findFirst.mockResolvedValue({
+          id: 'manager_shift',
+          branchId: BRANCH,
+          staffProfileId: MANAGER,
+          startAt: new Date(Date.now() - 60_000),
+          endAt: new Date(Date.now() + 60_000),
+        });
+      }
+      const auditCount = h.store.auditLogs.length;
+      const result = await call(
+        coAuthorizeRoute,
+        terminalRequest(
+          secret,
+          token,
+          {
+            approvingStaffProfileId: MANAGER,
+            type: 'PIN',
+            secret: PINS[MANAGER],
+            capability: 'orders:void',
+            reason: 'guest complaint',
+            // Untrusted body branch must never override the registered device.
+            branchId: 'foreign_branch',
+          },
+          'co-authorize'
+        )
+      );
+      expect(result.response.status).toBe(scenario === 'on-shift' ? 201 : 401);
+      expect(h.store.coAuthorizations).toHaveLength(scenario === 'on-shift' ? 1 : 0);
+      expect(h.store.auditLogs).toHaveLength(auditCount + (scenario === 'on-shift' ? 1 : 0));
+      expect(find(h.store.sessions, { id: sessionId })!.activeStaffProfileId).toBe(ACTING);
+      if (scenario !== 'cross-branch') {
+        expect(db.restaurantShift.findFirst).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: expect.objectContaining({ branchId: BRANCH, staffProfileId: MANAGER }),
+          })
+        );
+      }
+    }
+  );
+
   it('keeps acting and approving identities separate in complete server-stamped evidence', async () => {
     // Freeze policy time without trapping bcrypt's asynchronous yield timers.
     vi.useFakeTimers({ toFake: ['Date'] });

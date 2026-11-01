@@ -20,12 +20,21 @@ const correctRole: Role = {
 
 function clientWithRoles(
   roles: Array<Role | undefined>,
-  errors: { attributes?: unknown; password?: unknown } = {}
+  errors: {
+    attributes?: unknown;
+    password?: unknown;
+    missingSimilarity?: boolean;
+    databaseName?: string;
+  } = {}
 ) {
   const queries: Array<{ sql: string; values?: unknown[] }> = [];
   const client: RuntimeRoleClient = {
     async query<Row>(sql: string, values?: unknown[]) {
       queries.push({ sql, values });
+      if (sql.includes('SELECT current_database()'))
+        return { rows: [{ name: errors.databaseName ?? 'devfathom' }] as Row[] };
+      if (sql.includes('SELECT to_regprocedure'))
+        return { rows: [{ present: !errors.missingSimilarity }] as Row[] };
       if (sql.includes('SELECT rolcanlogin'))
         return { rows: [roles.shift()].filter(Boolean) as Row[] };
       if (sql.startsWith('ALTER ROLE') && sql.includes('PASSWORD') && errors.password)
@@ -53,8 +62,11 @@ describe('runtime role preparation', () => {
     expect(queries.find(({ sql }) => sql.startsWith("SELECT format('ALTER ROLE"))?.values).toEqual([
       'secret-value',
     ]);
+    expect(queries.map(({ sql }) => sql)).toContain(
+      'GRANT EXECUTE ON FUNCTION public.similarity_op(text,text) TO devfathom_app'
+    );
     expect(queries.filter(({ sql }) => /^(GRANT|ALTER DEFAULT PRIVILEGES)/.test(sql))).toHaveLength(
-      6
+      7
     );
     expect([...output.log.mock.calls, ...output.warn.mock.calls].flat().join('\n')).not.toContain(
       'secret-value'
@@ -79,7 +91,7 @@ describe('runtime role preparation', () => {
     await prepareRuntimeRole(client, secret, output);
 
     expect(queries.filter(({ sql }) => /^(GRANT|ALTER DEFAULT PRIVILEGES)/.test(sql))).toHaveLength(
-      6
+      7
     );
     expect(output.warn).toHaveBeenCalledWith(
       'password: skipped (permission denied; final posture verified)'
@@ -119,4 +131,17 @@ describe('runtime role preparation', () => {
     await expect(prepareRuntimeRole(client, undefined, logger())).rejects.toThrow();
     expect(queries.filter(({ sql }) => /^(CREATE|ALTER) ROLE/.test(sql))).toEqual([]);
   });
+});
+
+it('prepares a fresh schema without the optional extension function, using a quoted current database', async () => {
+  const { client, queries } = clientWithRoles([correctRole, correctRole], {
+    missingSimilarity: true,
+    databaseName: 'tenant"database',
+  });
+  await prepareRuntimeRole(client, undefined, logger());
+  expect(queries.map((q) => q.sql)).toContain(
+    'GRANT CONNECT ON DATABASE "tenant""database" TO devfathom_app'
+  );
+  expect(queries.some((q) => q.sql.startsWith('GRANT EXECUTE'))).toBe(false);
+  expect(queries.some((q) => q.sql.startsWith('ALTER DEFAULT PRIVILEGES'))).toBe(true);
 });

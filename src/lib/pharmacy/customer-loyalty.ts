@@ -1,12 +1,15 @@
 import 'server-only';
 
+import { assertSaleBatchesSellable } from './sale-batch-safety';
 import { completePaidPharmacySale, completionSaleInclude } from './sale-completion';
 import { postTenderEntry } from './finance-postings';
 import { requestCounterEvidence } from './counter-evidence';
-import { lockCustomerConsent } from './consent-writer';
+import { readPointsPolicy } from './points-policy';
+import { lockCustomerConsent, lockPatientConsent } from './consent-writer';
+import { assertRxSaleAllowed } from './rx-sale-gate';
 
 import { Prisma } from '@/generated/prisma/client';
-import { pointsForNetPaid, redemptionFor } from '@/lib/commerce/loyalty-arithmetic';
+import { redemptionFor } from '@/lib/commerce/loyalty-arithmetic';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import type { LedgerScope } from './stock-ledger';
@@ -14,8 +17,10 @@ import type { LedgerScope } from './stock-ledger';
 export class PharmacyLoyaltyError extends Error {
   constructor(
     readonly reason:
-      | 'CONSENT_REQUIRED'
+      | 'LOYALTY_DISABLED'
+      | 'LOYALTY_CONSENT_REQUIRED'
       | 'CUSTOMER_NOT_FOUND'
+      | 'PRESCRIPTION_PATIENT_MISMATCH'
       | 'SALE_NOT_OPEN'
       | 'SALE_NOT_LINKED'
       | 'INSUFFICIENT_POINTS'
@@ -33,10 +38,14 @@ export async function linkCustomerToSale(
 ) {
   const consent = await db.patientConsent.findFirst({
     where: { organizationId: scope.organizationId, patientId: input.patientId, purpose: 'LOYALTY' },
-    orderBy: [{ version: 'desc' }, { recordedAt: 'desc' }],
+    orderBy: [{ recordedAt: 'desc' }, { version: 'desc' }],
     select: { granted: true, revokedAt: true },
   });
-  if (!consent?.granted || consent.revokedAt) throw new PharmacyLoyaltyError('CONSENT_REQUIRED');
+  if (!consent?.granted || consent.revokedAt)
+    throw new PharmacyLoyaltyError('LOYALTY_CONSENT_REQUIRED');
+  await db.$queryRaw(
+    Prisma.sql`SELECT id FROM pharmacy_sales WHERE id=${input.saleId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`
+  );
   const sale = await db.pharmacySale.findFirst({
     where: {
       id: input.saleId,
@@ -46,6 +55,25 @@ export async function linkCustomerToSale(
     },
   });
   if (!sale) throw new PharmacyLoyaltyError('SALE_NOT_OPEN');
+  await lockPatientConsent(db, scope.organizationId, input.patientId);
+  const currentConsent = await db.patientConsent.findFirst({
+    where: { organizationId: scope.organizationId, patientId: input.patientId, purpose: 'LOYALTY' },
+    orderBy: [{ recordedAt: 'desc' }, { version: 'desc' }],
+    select: { granted: true, revokedAt: true },
+  });
+  if (!currentConsent?.granted || currentConsent.revokedAt)
+    throw new PharmacyLoyaltyError('LOYALTY_CONSENT_REQUIRED');
+  const referencedLine = await db.pharmacySaleLine.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      saleId: sale.id,
+      prescriptionLineId: { not: null },
+      prescriptionPatientId: { not: input.patientId },
+    },
+    select: { id: true },
+  });
+  if (referencedLine) throw new PharmacyLoyaltyError('PRESCRIPTION_PATIENT_MISMATCH');
   const customer = await db.pharmacyCustomer.upsert({
     where: {
       organizationId_patientId: {
@@ -86,11 +114,29 @@ export async function accrueSalePoints(db: ScopedDb, scope: LedgerScope, saleId:
     where: { id: saleId, organizationId: scope.organizationId, branchId: scope.branchId },
     include: { tenders: true },
   });
-  if (!sale?.customerId) return null;
+  if (!sale?.customerId || sale.status !== 'COMPLETED') return null;
+  await lockCustomerConsent(db, scope.organizationId, sale.customerId);
+  const customer = await db.pharmacyCustomer.findFirst({
+    where: { organizationId: scope.organizationId, id: sale.customerId, active: true },
+    select: { patientId: true },
+  });
+  if (!customer) return null;
+  const consent = await db.patientConsent.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      patientId: customer.patientId,
+      purpose: 'LOYALTY',
+    },
+    orderBy: [{ recordedAt: 'desc' }, { version: 'desc' }],
+    select: { granted: true, revokedAt: true },
+  });
+  if (!consent?.granted || consent.revokedAt) return null;
+  const policy = await readPointsPolicy(db, scope.organizationId);
+  if (!policy.pointsEnabled) return null;
   const netPaidMinor = sale.tenders
     .filter((tender) => tender.type !== 'LOYALTY')
     .reduce((sum, tender) => sum + tender.amountMinor, 0);
-  const points = pointsForNetPaid(netPaidMinor);
+  const points = Math.floor(netPaidMinor / policy.earnEveryMinor);
   if (points === 0) return null;
   const entry = await db.pharmacyLoyaltyPointsEntry.create({
     data: {
@@ -99,6 +145,7 @@ export async function accrueSalePoints(db: ScopedDb, scope: LedgerScope, saleId:
       customerId: sale.customerId,
       saleId: sale.id,
       kind: 'EARN',
+      earnEveryMinor: policy.earnEveryMinor,
       points,
       netPaidMinor,
       actorId: scope.actorId,
@@ -149,6 +196,15 @@ export async function redeemSalePoints(
   });
   if (!sale) throw new PharmacyLoyaltyError('SALE_NOT_OPEN');
   if (!sale.customerId) throw new PharmacyLoyaltyError('SALE_NOT_LINKED');
+  // A points redemption is still payment. Apply the same line-aware Rx gate as every
+  // other tender, while leaving OTC loyalty redemption available to counter staff.
+  await assertRxSaleAllowed(
+    db,
+    scope,
+    sale.lines.map((line) => line.medicine)
+  );
+  // #633: a points tender is a tender: refuse it while any batch on the bill is unsafe.
+  await assertSaleBatchesSellable(db, scope, sale.id);
   await lockCustomerConsent(db, scope.organizationId, sale.customerId);
   const customer = await db.pharmacyCustomer.findFirst({
     where: { id: sale.customerId, organizationId: scope.organizationId, active: true },
@@ -161,10 +217,13 @@ export async function redeemSalePoints(
       patientId: customer.patientId,
       purpose: 'LOYALTY',
     },
-    orderBy: [{ version: 'desc' }, { recordedAt: 'desc' }],
+    orderBy: [{ recordedAt: 'desc' }, { version: 'desc' }],
     select: { granted: true, revokedAt: true },
   });
-  if (!consent?.granted || consent.revokedAt) throw new PharmacyLoyaltyError('CONSENT_REQUIRED');
+  if (!consent?.granted || consent.revokedAt)
+    throw new PharmacyLoyaltyError('LOYALTY_CONSENT_REQUIRED');
+  const policy = await readPointsPolicy(db, scope.organizationId);
+  if (!policy.pointsEnabled) throw new PharmacyLoyaltyError('LOYALTY_DISABLED');
   const balance = await db.pharmacyLoyaltyPointsEntry.aggregate({
     where: {
       organizationId: scope.organizationId,
@@ -185,6 +244,8 @@ export async function redeemSalePoints(
       requestedPoints: input.points,
       availablePoints: balance._sum.points ?? 0,
       outstandingMinor,
+      pointValueMinor: policy.pointValueMinor,
+      minimumPoints: policy.minimumRedeemPoints,
     });
   } catch (error) {
     throw new PharmacyLoyaltyError(
@@ -213,6 +274,7 @@ export async function redeemSalePoints(
       saleId: sale.id,
       tenderId: tender.id,
       kind: 'REDEEM',
+      pointValueMinor: policy.pointValueMinor,
       points: -redemption.points,
       requestedPoints: input.points,
       actorId: scope.actorId,
@@ -249,7 +311,7 @@ export async function restoreRefundedLoyaltyPoints(
       tenderId: input.tenderId,
       kind: 'REDEEM',
     },
-    select: { points: true },
+    select: { points: true, pointValueMinor: true },
   });
   if (!redemption) return null;
   const [refunds, restored] = await Promise.all([
@@ -272,7 +334,10 @@ export async function restoreRefundedLoyaltyPoints(
     }),
   ]);
   const redeemedPoints = -redemption.points;
-  const target = Math.min(redeemedPoints, pointsForNetPaid(refunds._sum.amountMinor ?? 0));
+  const target = Math.min(
+    redeemedPoints,
+    Math.floor((refunds._sum.amountMinor ?? 0) / (redemption.pointValueMinor ?? 100))
+  );
   const points = target - (restored._sum.points ?? 0);
   if (points <= 0) return null;
   const entry = await db.pharmacyLoyaltyPointsEntry.create({
@@ -335,6 +400,7 @@ export async function readCustomerSnapshot(
       select: {
         id: true,
         kind: true,
+        adjustmentReason: true,
         points: true,
         occurredAt: true,
         saleId: true,
@@ -434,6 +500,7 @@ export async function readLoyaltyHistory(
     select: {
       id: true,
       kind: true,
+      adjustmentReason: true,
       points: true,
       occurredAt: true,
       saleId: true,

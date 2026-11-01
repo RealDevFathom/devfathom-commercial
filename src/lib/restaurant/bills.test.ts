@@ -258,6 +258,7 @@ describe('exclusiveTaxFromSettlementSnapshots', () => {
             status: 'SETTLED',
             splitKind: 'NONE',
             grandTotal: D('1115.50'),
+            serviceChargeTotal: D('0.00'),
             deliveryFeeTotal: D('0.00'),
             compTotal: D('0.00'),
             discountTotal: D('0.00'),
@@ -294,6 +295,122 @@ describe('exclusiveTaxFromSettlementSnapshots', () => {
       }),
     ]);
     expect(totals.get('bill-1')?.toString()).toBe('1.5');
+  });
+});
+
+describe('evaluateOrderSettlement reconciliation', () => {
+  function settlementDb(input: {
+    grandTotal: string;
+    compTotal?: string;
+    serviceChargeTotal: string;
+    taxTotal?: string;
+    exclusiveTax?: string;
+    voidServiceChargeTotal?: string;
+  }): ScopedDb {
+    return {
+      restaurantOrder: {
+        findFirst: async () =>
+          withServiceCharge(
+            order([
+              { id: 'item-1', unitPrice: '40.00' },
+              { id: 'item-2', unitPrice: '60.00' },
+            ])
+          ),
+      },
+      restaurantBill: {
+        findMany: async () => [
+          {
+            id: 'bill-1',
+            status: 'SETTLED',
+            splitKind: 'NONE',
+            grandTotal: D(input.grandTotal),
+            serviceChargeTotal: D(input.serviceChargeTotal),
+            deliveryFeeTotal: D('0'),
+            compTotal: D(input.compTotal ?? '0'),
+            discountTotal: D('0'),
+            taxTotal: D(input.taxTotal ?? '0'),
+            receiptNumber: 1,
+            lines: [{ orderItemId: 'item-1' }, { orderItemId: 'item-2' }],
+            tenders: [{ amount: D(input.grandTotal) }],
+          },
+          ...(input.voidServiceChargeTotal
+            ? [
+                {
+                  id: 'bill-void',
+                  status: 'VOID',
+                  splitKind: 'NONE',
+                  grandTotal: D('0'),
+                  serviceChargeTotal: D(input.voidServiceChargeTotal),
+                  deliveryFeeTotal: D('0'),
+                  compTotal: D('0'),
+                  discountTotal: D('0'),
+                  taxTotal: D('0'),
+                  receiptNumber: null,
+                  lines: [],
+                  tenders: [],
+                },
+              ]
+            : []),
+        ],
+      },
+      restaurantTaxTransactionSnapshot: {
+        findMany: async () =>
+          input.exclusiveTax
+            ? [
+                settlementSnapshot({
+                  id: 'snapshot-1',
+                  tax: input.exclusiveTax,
+                  settledAt: '2026-08-01T12:00:00.000Z',
+                }),
+              ]
+            : [],
+      },
+    } as unknown as ScopedDb;
+  }
+
+  it('accepts a partial comp after service is removed from the comped line', async () => {
+    const settlement = await evaluateOrderSettlement(
+      settlementDb({ grandTotal: '66.00', compTotal: '40.00', serviceChargeTotal: '6.00' }),
+      'order-1'
+    );
+
+    expect(settlement.settled).toBe(true);
+    expect(settlement.blocker).toBeNull();
+    expect(settlement.accountedTotal.toString()).toBe('106');
+    expect(settlement.derivedOrderTotal.toString()).toBe('106');
+  });
+
+  it('accepts exclusive tax added on top of merchandise and service', async () => {
+    const settlement = await evaluateOrderSettlement(
+      settlementDb({
+        grandTotal: '125.00',
+        serviceChargeTotal: '10.00',
+        taxTotal: '15.00',
+        exclusiveTax: '15.00',
+      }),
+      'order-1'
+    );
+
+    expect(settlement.settled).toBe(true);
+    expect(settlement.blocker).toBeNull();
+    expect(settlement.accountedTotal.toString()).toBe('110');
+    expect(settlement.derivedOrderTotal.toString()).toBe('110');
+  });
+
+  it('does not restore service from a voided bill', async () => {
+    const settlement = await evaluateOrderSettlement(
+      settlementDb({
+        grandTotal: '66.00',
+        compTotal: '40.00',
+        serviceChargeTotal: '6.00',
+        voidServiceChargeTotal: '4.00',
+      }),
+      'order-1'
+    );
+
+    expect(settlement.settled).toBe(true);
+    expect(settlement.accountedTotal.toString()).toBe('106');
+    expect(settlement.derivedOrderTotal.toString()).toBe('106');
   });
 });
 
@@ -512,7 +629,8 @@ function read<T>(fn: (tx: ScopedDb) => Promise<T>): Promise<T> {
 /** Open a fresh order, add N items (each with a price + optional seat + modifier),
  * and return the order id + item ids. Items are HELD (a billable OPEN order). */
 async function openWithItems(
-  items: Array<{ seat?: number; modifier?: boolean }>
+  items: Array<{ seat?: number; modifier?: boolean }>,
+  now = AT
 ): Promise<{ orderId: string; itemIds: string[]; db: ScopedDb }> {
   const db = deps.createTenantDb(orgId);
   const opened = await deps.orders.openOrder(db, {
@@ -522,7 +640,7 @@ async function openWithItems(
     channel: 'DINE_IN',
     publicationId: ids.publication,
     actor: actor(),
-    now: AT,
+    now,
   });
   const itemIds: string[] = [];
   for (const spec of items) {
@@ -912,7 +1030,9 @@ describeIfDatabase('bills command layer (real DB)', () => {
           compAmount: true,
           lineTotal: true,
           compReason: true,
-          compCoAuthorization: { select: { approvingStaffProfileId: true, reason: true } },
+          compCoAuthorization: {
+            select: { approvingStaffProfileId: true, capability: true, reason: true },
+          },
         },
       })
     );
@@ -923,6 +1043,7 @@ describeIfDatabase('bills command layer (real DB)', () => {
     expect(after?.lineTotal.toString()).toBe('0');
     expect(after?.compReason).toBe('guest complaint');
     expect(after?.compCoAuthorization?.approvingStaffProfileId).toBe(ids.manager);
+    expect(after?.compCoAuthorization?.capability).toBe('orders:complimentary');
 
     // Bill totals: compTotal picks up the comp; grandTotal drops by it; the
     // settlement identity Σ(grandTotal + compTotal) ≡ order total still holds.
@@ -940,6 +1061,397 @@ describeIfDatabase('bills command layer (real DB)', () => {
         actor: actor(),
       })
     ).rejects.toMatchObject({ reason: 'ALREADY_COMPED' });
+  });
+
+  it('clears pinned service-charge evidence after the last service-bearing line is comped', async () => {
+    const { orderId, itemIds, db } = await openWithItems([{}, {}]);
+    await read((tx) =>
+      tx.restaurantServiceChargePolicyVersion.updateMany({
+        where: {
+          branchId: ids.branch,
+          effectiveFrom: { lt: new Date('2026-08-18T00:00:00.000Z') },
+          OR: [
+            { effectiveTo: null },
+            { effectiveTo: { gt: new Date('2026-08-18T00:00:00.000Z') } },
+          ],
+        },
+        data: { effectiveTo: new Date('2026-08-18T00:00:00.000Z') },
+      })
+    );
+    const policy = await read((tx) =>
+      tx.restaurantServiceChargePolicyVersion.create({
+        data: {
+          branchId: ids.branch,
+          rate: '0.100000',
+          effectiveFrom: new Date('2026-08-18T00:00:00.000Z'),
+          effectiveTo: AT,
+          acknowledgedAt: AT,
+          acknowledgementRef: 'issue-271',
+          idempotencyKey: `service_comp_${suffix}`,
+          payloadHash: `service-comp-${suffix}`,
+        },
+      })
+    );
+    await read(async (tx) => {
+      await tx.restaurantOrderItem.update({
+        where: { id: itemIds[0]! },
+        data: { unitPrice: '40.00' },
+      });
+      await tx.restaurantOrderItem.update({
+        where: { id: itemIds[1]! },
+        data: { unitPrice: '60.00' },
+      });
+      await tx.restaurantOrder.update({
+        where: { id: orderId },
+        data: { serviceChargePolicyVersionId: policy.id },
+      });
+    });
+
+    const { billIds } = await deps.bills.cutBills(db, {
+      orderId,
+      branchId: ids.branch,
+      split: { kind: 'NONE' },
+      actor: actor(),
+    });
+    const billId = billIds[0]!;
+    const lines = await read((tx) =>
+      tx.restaurantBillLine.findMany({ where: { billId }, orderBy: { lineSubtotal: 'asc' } })
+    );
+
+    await deps.bills.compLine(db, {
+      billId,
+      branchId: ids.branch,
+      billLineId: lines[0]!.id,
+      reason: 'guest complaint',
+      approvingStaffProfileId: ids.manager,
+      actor: actor(),
+    });
+    const partial = await read((tx) =>
+      tx.restaurantBill.findUniqueOrThrow({ where: { id: billId } })
+    );
+    expect({
+      service: partial.serviceChargeTotal.toFixed(2),
+      basis: partial.serviceChargeBasis.toFixed(2),
+      policy: partial.serviceChargePolicyVersionId,
+      total: partial.grandTotal.toFixed(2),
+    }).toEqual({ service: '6.00', basis: '60.00', policy: policy.id, total: '66.00' });
+
+    await deps.bills.compLine(db, {
+      billId,
+      branchId: ids.branch,
+      billLineId: lines[1]!.id,
+      reason: 'guest complaint',
+      approvingStaffProfileId: ids.manager,
+      actor: actor(),
+    });
+    const fullyComped = await read((tx) =>
+      tx.restaurantBill.findUniqueOrThrow({ where: { id: billId } })
+    );
+    expect({
+      service: fullyComped.serviceChargeTotal.toFixed(2),
+      basis: fullyComped.serviceChargeBasis.toFixed(2),
+      policy: fullyComped.serviceChargePolicyVersionId,
+      rate: fullyComped.serviceChargeRate,
+      taxTreatment: fullyComped.serviceChargeTaxTreatment,
+      total: fullyComped.grandTotal.toFixed(2),
+    }).toEqual({
+      service: '0.00',
+      basis: '0.00',
+      policy: null,
+      rate: null,
+      taxTreatment: null,
+      total: '0.00',
+    });
+  });
+
+  it('comps the last priced line when a free line remains under a pinned service charge', async () => {
+    const policyStart = new Date(AT.getTime() + 3);
+    const { orderId, itemIds, db } = await openWithItems([{}, {}], policyStart);
+    const policy = await read((tx) =>
+      tx.restaurantServiceChargePolicyVersion.create({
+        data: {
+          branchId: ids.branch,
+          rate: '0.100000',
+          effectiveFrom: policyStart,
+          effectiveTo: new Date(AT.getTime() + 4),
+          acknowledgedAt: AT,
+          acknowledgementRef: 'issue-271',
+          idempotencyKey: `service_comp_free_${suffix}`,
+          payloadHash: `service-comp-free-${suffix}`,
+        },
+      })
+    );
+    await read(async (tx) => {
+      await tx.restaurantOrderItem.update({
+        where: { id: itemIds[0]! },
+        data: { unitPrice: '0.00' },
+      });
+      await tx.restaurantOrderItem.update({
+        where: { id: itemIds[1]! },
+        data: { unitPrice: '60.00' },
+      });
+      await tx.restaurantOrder.update({
+        where: { id: orderId },
+        data: { serviceChargePolicyVersionId: policy.id },
+      });
+    });
+
+    const { billIds } = await deps.bills.cutBills(db, {
+      orderId,
+      branchId: ids.branch,
+      split: { kind: 'NONE' },
+      actor: actor(),
+    });
+    const billId = billIds[0]!;
+    const lines = await read((tx) =>
+      tx.restaurantBillLine.findMany({ where: { billId }, orderBy: { lineSubtotal: 'asc' } })
+    );
+
+    await deps.bills.compLine(db, {
+      billId,
+      branchId: ids.branch,
+      billLineId: lines[1]!.id,
+      reason: 'guest complaint',
+      approvingStaffProfileId: ids.manager,
+      actor: actor(),
+    });
+    const fullyComped = await read((tx) =>
+      tx.restaurantBill.findUniqueOrThrow({ where: { id: billId } })
+    );
+    expect({
+      service: fullyComped.serviceChargeTotal.toFixed(2),
+      basis: fullyComped.serviceChargeBasis.toFixed(2),
+      policy: fullyComped.serviceChargePolicyVersionId,
+      rate: fullyComped.serviceChargeRate,
+      taxTreatment: fullyComped.serviceChargeTaxTreatment,
+      total: fullyComped.grandTotal.toFixed(2),
+    }).toEqual({
+      service: '0.00',
+      basis: '0.00',
+      policy: null,
+      rate: null,
+      taxTreatment: null,
+      total: '0.00',
+    });
+    const remaining = await read((tx) =>
+      tx.restaurantBillLine.findUniqueOrThrow({ where: { id: lines[0]!.id } })
+    );
+    expect(remaining.lineSubtotal.toFixed(2)).toBe('0.00');
+    expect(remaining.serviceChargeAmount.toFixed(2)).toBe('0.00');
+    expect(fullyComped.compTotal.toFixed(2)).toBe('60.00');
+  });
+
+  it('removes a participating zero-allocation line from the basis and reallocates without drift', async () => {
+    // Isolate the policy from orders opened at AT by the other cases.
+    const policyStart = new Date(AT.getTime() + 1);
+    const policy = await read((tx) =>
+      tx.restaurantServiceChargePolicyVersion.create({
+        data: {
+          branchId: ids.branch,
+          rate: '0.100000',
+          effectiveFrom: policyStart,
+          effectiveTo: new Date(AT.getTime() + 2),
+          acknowledgedAt: AT,
+          acknowledgementRef: 'zero-allocation-regression',
+          idempotencyKey: `service_zero_${suffix}`,
+          payloadHash: `service-zero-${suffix}`,
+        },
+      })
+    );
+    const { orderId, itemIds, db } = await openWithItems([{}, {}], policyStart);
+    await read(async (tx) => {
+      await tx.restaurantOrderItem.update({
+        where: { id: itemIds[0]! },
+        data: { unitPrice: '0.01' },
+      });
+      await tx.restaurantOrderItem.update({
+        where: { id: itemIds[1]! },
+        data: { unitPrice: '0.09' },
+      });
+      await tx.restaurantOrder.update({
+        where: { id: orderId },
+        data: { serviceChargePolicyVersionId: policy.id },
+      });
+    });
+    const { billIds } = await deps.bills.cutBills(db, {
+      orderId,
+      branchId: ids.branch,
+      split: { kind: 'NONE' },
+      actor: actor(),
+    });
+    const billId = billIds[0]!;
+    const lines = await read((tx) =>
+      tx.restaurantBillLine.findMany({ where: { billId }, orderBy: { lineSubtotal: 'asc' } })
+    );
+    expect(lines.map((line) => line.serviceChargeAmount.toFixed(2))).toEqual(['0.00', '0.01']);
+
+    await deps.bills.compLine(db, {
+      billId,
+      branchId: ids.branch,
+      billLineId: lines[0]!.id,
+      reason: 'zero allocation regression',
+      approvingStaffProfileId: ids.manager,
+      actor: actor(),
+    });
+
+    const after = await read((tx) =>
+      tx.restaurantBill.findUniqueOrThrow({
+        where: { id: billId },
+        include: { lines: { orderBy: { lineSubtotal: 'asc' } } },
+      })
+    );
+    expect({
+      basis: after.serviceChargeBasis.toFixed(2),
+      service: after.serviceChargeTotal.toFixed(2),
+      grand: after.grandTotal.toFixed(2),
+      allocations: after.lines.map((line) => line.serviceChargeAmount.toFixed(2)),
+      lineTotals: after.lines.map((line) => line.lineTotal.toFixed(2)),
+    }).toEqual({
+      basis: '0.09',
+      service: '0.01',
+      grand: '0.10',
+      allocations: ['0.00', '0.01'],
+      lineTotals: ['0.00', '0.10'],
+    });
+    expect(
+      after.lines.reduce((total, line) => total.add(line.serviceChargeAmount), D(0)).toFixed(2)
+    ).toBe(after.serviceChargeTotal.toFixed(2));
+    expect(
+      after.lines.reduce(
+        (total, line) => (line.compAmount.isZero() ? total.add(line.lineSubtotal) : total),
+        D(0)
+      )
+    ).toEqual(after.serviceChargeBasis);
+    expect(after.lines.reduce((total, line) => total.add(line.lineTotal), D(0))).toEqual(
+      after.grandTotal
+    );
+    expect(after.subtotal.add(after.serviceChargeTotal).sub(after.compTotal)).toEqual(
+      after.grandTotal
+    );
+  });
+
+  it.each(['BY_ITEM', 'BY_SEAT'] as const)(
+    'does not increase a %s split bill when comping a free line',
+    async (kind) => {
+      const policyStart = new Date(AT.getTime() + (kind === 'BY_ITEM' ? 5 : 7));
+      const policy = await read((tx) =>
+        tx.restaurantServiceChargePolicyVersion.create({
+          data: {
+            branchId: ids.branch,
+            rate: '0.100000',
+            effectiveFrom: policyStart,
+            effectiveTo: new Date(policyStart.getTime() + 1),
+            acknowledgedAt: AT,
+            acknowledgementRef: 'split-comp-regression',
+            idempotencyKey: `split_comp_${kind}_${suffix}`,
+            payloadHash: `split-comp-${kind}-${suffix}`,
+          },
+        })
+      );
+      const { orderId, itemIds, db } = await openWithItems(
+        [{ seat: 1 }, { seat: 2 }, { seat: 2 }],
+        policyStart
+      );
+      await read(async (tx) => {
+        for (const [index, id] of itemIds.entries()) {
+          await tx.restaurantOrderItem.update({
+            where: { id },
+            data: { unitPrice: index === 2 ? '0.00' : '0.05' },
+          });
+        }
+        await tx.restaurantOrder.update({
+          where: { id: orderId },
+          data: { serviceChargePolicyVersionId: policy.id },
+        });
+      });
+      const { billIds } = await deps.bills.cutBills(db, {
+        orderId,
+        branchId: ids.branch,
+        split:
+          kind === 'BY_ITEM'
+            ? { kind, groups: [[itemIds[0]!], [itemIds[1]!, itemIds[2]!]] }
+            : { kind },
+        actor: actor(),
+      });
+      const loadBills = () =>
+        read((tx) =>
+          tx.restaurantBill.findMany({
+            where: { id: { in: billIds } },
+            orderBy: { grandTotal: 'desc' },
+            include: { lines: { orderBy: { lineSubtotal: 'asc' } } },
+          })
+        );
+      const before = await loadBills();
+      expect(before.map((bill) => bill.serviceChargeTotal.toFixed(2))).toEqual(['0.01', '0.00']);
+      expect(before.map((bill) => bill.grandTotal.toFixed(2))).toEqual(['0.06', '0.05']);
+      const second = before[1]!;
+      const freeLine = second.lines[0]!;
+      expect(freeLine.lineSubtotal.toFixed(2)).toBe('0.00');
+      const input = {
+        billId: second.id,
+        branchId: ids.branch,
+        billLineId: freeLine.id,
+        reason: 'split free-line regression',
+        approvingStaffProfileId: ids.manager,
+        actor: actor(),
+      };
+      await deps.bills.compLine(db, input);
+      const after = await loadBills();
+      expect(after.map((bill) => bill.grandTotal.toFixed(2))).toEqual(['0.06', '0.05']);
+      expect(after[0]).toEqual(before[0]);
+      expect(after[1]!.serviceChargeBasis.toFixed(2)).toBe('0.05');
+      expect(after[1]!.serviceChargeTotal.toFixed(2)).toBe('0.00');
+      expect(after[1]!.serviceChargePolicyVersionId).toBe(policy.id);
+      expect(after[1]!.lines.map((line) => line.serviceChargeAmount.toFixed(2))).toEqual([
+        '0.00',
+        '0.00',
+      ]);
+      expect(after[1]!.lines.reduce((total, line) => total.add(line.lineTotal), D(0))).toEqual(
+        after[1]!.grandTotal
+      );
+      expect((await deps.bills.compLine(db, input)).replayed).toBe(true);
+      expect(await loadBills()).toEqual(after);
+
+      await deps.bills.compLine(db, {
+        ...input,
+        billLineId: second.lines[1]!.id,
+        actor: actor(),
+      });
+      const fullyComped = (await loadBills())[1]!;
+      expect(fullyComped.grandTotal.toFixed(2)).toBe('0.00');
+      expect(fullyComped.serviceChargeBasis.toFixed(2)).toBe('0.00');
+      expect(fullyComped.serviceChargeTotal.toFixed(2)).toBe('0.00');
+      expect(fullyComped.serviceChargePolicyVersionId).toBeNull();
+    }
+  );
+
+  it('leaves the zero service-charge sentinel unchanged when comping a non-participating line', async () => {
+    const { db, orderId } = await openWithItems([{}]);
+    const { billIds } = await deps.bills.cutBills(db, {
+      orderId,
+      branchId: ids.branch,
+      split: { kind: 'NONE' },
+      actor: actor(),
+    });
+    const billId = billIds[0]!;
+    const line = await read((tx) => tx.restaurantBillLine.findFirstOrThrow({ where: { billId } }));
+    await deps.bills.compLine(db, {
+      billId,
+      branchId: ids.branch,
+      billLineId: line.id,
+      reason: 'non-participating regression',
+      approvingStaffProfileId: ids.manager,
+      actor: actor(),
+    });
+    const after = await read((tx) =>
+      tx.restaurantBill.findUniqueOrThrow({ where: { id: billId } })
+    );
+    expect({
+      basis: after.serviceChargeBasis.toFixed(2),
+      service: after.serviceChargeTotal.toFixed(2),
+      policy: after.serviceChargePolicyVersionId,
+      grand: after.grandTotal.toFixed(2),
+    }).toEqual({ basis: '0.00', service: '0.00', policy: null, grand: '0.00' });
   });
 
   it('re-split guard: blocks without recut, voids-and-recuts with co-auth, locks after tender/settle', async () => {

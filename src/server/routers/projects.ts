@@ -672,7 +672,7 @@ export const projectsRouter = router({
   deleteTask: protectedProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
-      await assertTaskAccess(ctx, input.id);
+      await assertTaskAccess(ctx, input.id, { manage: true });
       return ctx.db.task.delete({ where: { id: input.id } });
     }),
 
@@ -690,7 +690,9 @@ export const projectsRouter = router({
       await assertColumnAccess(ctx, input.targetColumnId);
       const task = await ctx.db.task.findUnique({
         where: { id: input.taskId },
-        include: { column: { select: { name: true } } },
+        include: {
+          column: { select: { name: true, board: { select: { projectId: true } } } },
+        },
       });
       if (!task) throw new TRPCError({ code: 'NOT_FOUND' });
 
@@ -698,6 +700,18 @@ export const projectsRouter = router({
       const isSameColumn = sourceColumnId === input.targetColumnId;
 
       await ctx.db.$transaction(async (tx) => {
+        // Serialise concurrent reorders: lock both columns (sorted ids, so no
+        // deadlock), then re-check the task has not moved since the access check.
+        const lockIds = [...new Set([sourceColumnId, input.targetColumnId])].sort();
+        await tx.$queryRaw`SELECT id FROM columns WHERE id = ANY(${lockIds}) ORDER BY id FOR UPDATE`;
+        const current = await tx.task.findUnique({
+          where: { id: input.taskId },
+          select: { columnId: true },
+        });
+        if (!current) throw new TRPCError({ code: 'NOT_FOUND' });
+        if (current.columnId !== sourceColumnId) {
+          throw new TRPCError({ code: 'CONFLICT', message: 'Task moved concurrently; retry' });
+        }
         // PROJ-02: rebuild a contiguous 0..n order from the actual ordered list
         // rather than trusting `order` to be gap-free. Trello-imported boards (and
         // any column that has had a task deleted) can carry gaps, which broke the
@@ -717,6 +731,12 @@ export const projectsRouter = router({
             await tx.task.update({ where: { id: sourceIds[i] }, data: { order: i } });
           }
         } else {
+          const targetColumn = await tx.column.findUnique({
+            where: { id: input.targetColumnId },
+            select: { board: { select: { projectId: true } } },
+          });
+          if (!targetColumn) throw new TRPCError({ code: 'NOT_FOUND' });
+
           // Renumber the source column with the moved task removed.
           for (let i = 0; i < sourceIds.length; i++) {
             await tx.task.update({ where: { id: sourceIds[i] }, data: { order: i } });
@@ -734,13 +754,32 @@ export const projectsRouter = router({
             where: { id: input.taskId },
             data: { columnId: input.targetColumnId },
           });
+
+          // A cross-project move must not leak the destination board through My
+          // Tasks. Keep only assignees who are members of the destination project.
+          if (task.column.board.projectId !== targetColumn.board.projectId) {
+            await tx.taskAssignee.deleteMany({
+              where: {
+                taskId: input.taskId,
+                user: {
+                  projectMembers: { none: { projectId: targetColumn.board.projectId } },
+                },
+              },
+            });
+          }
+
           for (let i = 0; i < targetIds.length; i++) {
             await tx.task.update({ where: { id: targetIds[i] }, data: { order: i } });
           }
 
           // Auto-assign the target column's default assignees (additive).
           const defaults = await tx.columnDefaultAssignee.findMany({
-            where: { columnId: input.targetColumnId },
+            where: {
+              columnId: input.targetColumnId,
+              user: {
+                projectMembers: { some: { projectId: targetColumn.board.projectId } },
+              },
+            },
             select: { userId: true },
           });
           if (defaults.length > 0) {
@@ -794,6 +833,45 @@ export const projectsRouter = router({
       }
 
       await ctx.db.$transaction(async (tx) => {
+        // Serialise against every other move: lock the destination and every
+        // current source column in sorted-id order (same protocol as moveTask), then
+        // re-check that no selected task changed column before the locks were held.
+        const before = await tx.task.findMany({
+          where: { id: { in: input.taskIds } },
+          select: { id: true, columnId: true },
+        });
+        if (before.length !== new Set(input.taskIds).size) {
+          throw new TRPCError({ code: 'NOT_FOUND' });
+        }
+        const lockIds = [
+          ...new Set([input.targetColumnId, ...before.map((row) => row.columnId)]),
+        ].sort();
+        await tx.$queryRaw`SELECT id FROM columns WHERE id = ANY(${lockIds}) ORDER BY id FOR UPDATE`;
+        const after = await tx.task.findMany({
+          where: { id: { in: input.taskIds } },
+          select: { id: true, columnId: true },
+        });
+        const beforeColumn = new Map(before.map((row) => [row.id, row.columnId]));
+        if (
+          after.length !== before.length ||
+          after.some((row) => beforeColumn.get(row.id) !== row.columnId)
+        ) {
+          throw new TRPCError({ code: 'CONFLICT', message: 'Tasks moved concurrently; retry' });
+        }
+        const targetColumn = await tx.column.findUnique({
+          where: { id: input.targetColumnId },
+          select: { board: { select: { projectId: true } } },
+        });
+        if (!targetColumn) throw new TRPCError({ code: 'NOT_FOUND' });
+
+        const movedTasks = await tx.task.findMany({
+          where: { id: { in: input.taskIds } },
+          select: { id: true, column: { select: { board: { select: { projectId: true } } } } },
+        });
+        const crossProjectTaskIds = movedTasks
+          .filter((task) => task.column.board.projectId !== targetColumn.board.projectId)
+          .map((task) => task.id);
+
         const moving = new Set(input.taskIds);
         const targetList = await tx.task.findMany({
           where: { columnId: input.targetColumnId },
@@ -813,13 +891,33 @@ export const projectsRouter = router({
             data: { columnId: input.targetColumnId },
           });
         }
+
+        // Moving a task must not preserve principals who cannot access its new
+        // project. Apply this to every cross-project task in the bulk operation
+        // before adding the destination column's (membership-filtered) defaults.
+        if (crossProjectTaskIds.length > 0) {
+          await tx.taskAssignee.deleteMany({
+            where: {
+              taskId: { in: crossProjectTaskIds },
+              user: {
+                projectMembers: { none: { projectId: targetColumn.board.projectId } },
+              },
+            },
+          });
+        }
+
         for (let i = 0; i < finalIds.length; i++) {
           await tx.task.update({ where: { id: finalIds[i] }, data: { order: i } });
         }
 
         // Auto-assign the target column's default owners (additive), mirroring moveTask.
         const defaults = await tx.columnDefaultAssignee.findMany({
-          where: { columnId: input.targetColumnId },
+          where: {
+            columnId: input.targetColumnId,
+            user: {
+              projectMembers: { some: { projectId: targetColumn.board.projectId } },
+            },
+          },
           select: { userId: true },
         });
         if (defaults.length > 0) {
@@ -841,7 +939,7 @@ export const projectsRouter = router({
     .input(z.object({ taskIds: z.array(z.string()).min(1) }))
     .mutation(async ({ ctx, input }) => {
       for (const taskId of input.taskIds) {
-        await assertTaskAccess(ctx, taskId);
+        await assertTaskAccess(ctx, taskId, { manage: true });
       }
       await ctx.db.task.deleteMany({ where: { id: { in: input.taskIds } } });
       return { success: true };

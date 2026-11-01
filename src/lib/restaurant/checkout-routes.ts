@@ -201,10 +201,15 @@ export const dayCorrectBody = z
 
 // ── Capability gate (C11) ────────────────────────────────────────────────────
 
-/** The five money capabilities a terminal route may gate on, plus the approver's
+/** The six checkout and money capabilities a terminal route may gate on, plus the approver's
  * `coauth:approve` — all pre-existing entries in `vertical-catalog.ts` (C11). */
 export type MoneyCapability =
-  'payments:collect' | 'payments:refund' | 'cash:open' | 'cash:adjust' | 'cash:close';
+  | 'orders:complimentary'
+  | 'payments:collect'
+  | 'payments:refund'
+  | 'cash:open'
+  | 'cash:adjust'
+  | 'cash:close';
 
 type CapabilityRule = { capability: string; effect: 'ALLOW' | 'DENY' };
 
@@ -250,7 +255,9 @@ export async function operatorHasCapability(
   const user = profile.user;
 
   const decide = (rules: readonly CapabilityRule[]): boolean | null => {
-    const matching = rules.filter((rule) => capabilityMatches(rule.capability, capability));
+    const matching = rules.filter((rule) =>
+      capabilityMatches(rule.capability, capability, rule.effect === 'DENY' ? 'DENY' : 'ALLOW')
+    );
     if (matching.some((rule) => rule.effect === 'DENY')) return false;
     if (matching.some((rule) => rule.effect === 'ALLOW')) return true;
     return null;
@@ -262,14 +269,14 @@ export async function operatorHasCapability(
   if (
     overrides === false ||
     role === false ||
-    [...staff.denied].some((rule) => capabilityMatches(rule, capability))
+    [...staff.denied].some((rule) => capabilityMatches(rule, capability, 'DENY'))
   )
     return false;
 
   return (
     overrides === true ||
     role === true ||
-    [...staff.effective].some((rule) => capabilityMatches(rule, capability))
+    [...staff.effective].some((rule) => capabilityMatches(rule, capability, 'ALLOW'))
   );
 }
 
@@ -511,12 +518,12 @@ export async function requireBillInDeviceBranch(
   db: ScopedDb,
   billId: string,
   branchId: string
-): Promise<void> {
+): Promise<boolean> {
   const bill = await db.restaurantBill.findFirst({
     where: { id: billId, branchId },
     select: { id: true },
   });
-  if (!bill) throw new BillCommandError('The bill does not exist.', 'BILL_NOT_FOUND');
+  return bill !== null;
 }
 
 /**
@@ -542,11 +549,19 @@ export function moneyMutationRoute<S extends z.ZodTypeAny>(opts: {
   capability: MoneyCapability;
   run: (args: MoneyCommandArgs<S>) => Promise<unknown>;
   successStatus?: number;
+  /** Resolve bill ids within the authenticated register branch only after the
+   * capability decision, so an unauthorized operator cannot probe bill existence. */
+  obscureBillId?: (data: z.infer<S>) => string;
+  /** Restrict a money route to a physical register before any resource lookup. */
+  deviceKind?: 'POS' | 'KDS';
 }) {
   return withTerminalAuth(
     async (ctx, request) => {
       const operator = requireActingOperator(ctx);
       if (!operator.ok) return operator.response;
+      if (opts.deviceKind && ctx.device.kind !== opts.deviceKind) {
+        return forbidden(`A ${opts.deviceKind} register is required.`);
+      }
 
       const now = new Date();
       const denied = await requireCapability(
@@ -560,11 +575,18 @@ export function moneyMutationRoute<S extends z.ZodTypeAny>(opts: {
 
       const key = idempotencyKeyFromRequest(request);
       if (!key) return missingIdempotencyKey();
-
       const parsedJson = await readJson(request);
       if (!parsedJson.ok) return parsedJson.response;
       const parsed = opts.schema.safeParse(parsedJson.data);
       if (!parsed.success) return invalidBody(parsed.error.issues);
+      if (opts.obscureBillId) {
+        const visible = await requireBillInDeviceBranch(
+          ctx.db,
+          opts.obscureBillId(parsed.data),
+          ctx.device.branchId
+        );
+        if (!visible) return json({ error: 'No settled bill with that id.' }, 404);
+      }
 
       const actor = buildMoneyActor(operator.staffProfileId, ctx.device.id, key);
       const out = await opts.run({ ctx, data: parsed.data, actor, now });
@@ -589,11 +611,15 @@ export function moneyMutationRoute<S extends z.ZodTypeAny>(opts: {
 export function moneyReadRoute(opts: {
   capability: MoneyCapability;
   run: (ctx: TerminalContext, request: Request) => Promise<Response>;
+  deviceKind?: 'POS' | 'KDS';
 }) {
   return withTerminalAuth(
     async (ctx, request) => {
       const operator = requireActingOperator(ctx);
       if (!operator.ok) return operator.response;
+      if (opts.deviceKind && ctx.device.kind !== opts.deviceKind) {
+        return forbidden(`A ${opts.deviceKind} register is required.`);
+      }
 
       const now = new Date();
       const denied = await requireCapability(
@@ -637,6 +663,26 @@ export async function getOrderSettlementForBranch(
   if (!order) return null;
 
   const settlement = await evaluateOrderSettlement(db, orderId);
+  const billLines = settlement.bills.length
+    ? await db.restaurantBillLine.findMany({
+        where: { billId: { in: settlement.bills.map((bill) => bill.id) } },
+        orderBy: [{ billId: 'asc' }, { createdAt: 'asc' }],
+        select: {
+          id: true,
+          billId: true,
+          name: true,
+          quantity: true,
+          lineSubtotal: true,
+          compAmount: true,
+        },
+      })
+    : [];
+  const linesByBill = new Map<string, typeof billLines>();
+  for (const line of billLines) {
+    const current = linesByBill.get(line.billId) ?? [];
+    current.push(line);
+    linesByBill.set(line.billId, current);
+  }
   const bills = await Promise.all(
     settlement.bills.map(async (b) => {
       // An OPEN bill's stored grandTotal is pre-tax and its taxTotal is 0 until a
@@ -654,6 +700,13 @@ export async function getOrderSettlementForBranch(
         deliveryFeeTotal: money(b.deliveryFeeTotal),
         compTotal: money(b.compTotal),
         receiptNumber: b.receiptNumber,
+        lines: (linesByBill.get(b.id) ?? []).map((line) => ({
+          id: line.id,
+          name: line.name,
+          quantity: line.quantity,
+          lineSubtotal: money(line.lineSubtotal),
+          compAmount: money(line.compAmount),
+        })),
       };
     })
   );
@@ -696,6 +749,7 @@ export async function buildReceiptForBranch(db: ScopedDb, billId: string, branch
       serviceChargeTotal: true,
       deliveryFeeTotal: true,
       compTotal: true,
+      discountTotal: true,
       roundingAdjustment: true,
       grandTotal: true,
       receiptNumber: true,
@@ -764,6 +818,7 @@ export async function buildReceiptForBranch(db: ScopedDb, billId: string, branch
       serviceChargeTotal: money(bill.serviceChargeTotal),
       deliveryFeeTotal: money(bill.deliveryFeeTotal),
       compTotal: money(bill.compTotal),
+      discountTotal: money(bill.discountTotal),
       roundingAdjustment: money(bill.roundingAdjustment),
       grandTotal: money(bill.grandTotal),
     },

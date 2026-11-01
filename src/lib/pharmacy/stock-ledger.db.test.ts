@@ -29,6 +29,8 @@ import { randomBytes } from 'node:crypto';
 
 import { beforeAll, describe, expect, it } from 'vitest';
 
+import { seedPharmacyChecker } from '@/lib/testing/pharmacy-approval-fixture';
+
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { PharmacyInventoryError } from './inventory';
@@ -245,6 +247,14 @@ beforeAll(async () => {
   ]);
   deps = { withTenantDb: scopedDb.withTenantDb, ledger, operations };
   await roleGuard.assertRlsEnforcingRole(scopedDb.withPlatformDb);
+  await scopedDb.withPlatformDb((db) =>
+    db.$executeRawUnsafe(
+      `INSERT INTO organizations (id, slug, "legalName", "displayName", vertical, status, "deploymentMode", "createdAt", "updatedAt")
+     SELECT id, id, id, id, 'PHARMACY', 'ACTIVE', 'SHARED', now(), now() FROM unnest($1::text[]) AS id
+     ON CONFLICT (id) DO NOTHING`,
+      [ORG_A, ORG_B]
+    )
+  );
 }, 120_000);
 
 // ── INV-01 — the append-only ledger and its projection ──────────────────────
@@ -415,7 +425,7 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
     const result = await inOrg(ORG_A, async (db) => {
       const approved = await deps.operations.approveCount(
         db,
-        { ...scopeOf(fixture), actorId: 'user_second_pharmacist' },
+        { ...scopeOf(fixture), actorId: await seedPharmacyChecker(db, ORG_A, `second_${suffix}`) },
         count.id,
         tag('coauth')
       );
@@ -459,7 +469,7 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
 
   it('dispatches into transit, records a batch receipt discrepancy, and enforces destination branch scope', async () => {
     const fixture = await scenario(ORG_A, BRANCH_A, 'transfer-workflow');
-    const destinationBranch = 'branch_transfer_destination';
+    const destinationBranch = `branch_transfer_destination_${suffix}`;
     const setup = await inOrg(ORG_A, async (db) => {
       await ensureBranch(db, ORG_A, destinationBranch);
       const destination = await db.pharmacyStockLocation.create({
@@ -489,7 +499,10 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
       });
       await deps.operations.approveTransfer(
         db,
-        { ...scopeOf(fixture), actorId: 'transfer_approver' },
+        {
+          ...scopeOf(fixture),
+          actorId: await seedPharmacyChecker(db, ORG_A, `transfer_approver_${suffix}`),
+        },
         transfer.id
       );
       await deps.operations.dispatchTransfer(db, scopeOf(fixture), transfer.id, tag('dispatch'));
@@ -536,11 +549,11 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
   it('serializes competing dispatches so the same units cannot leave twice', async () => {
     const fixture = await scenario(ORG_A, BRANCH_A, 'transfer-race');
     const ids = await inOrg(ORG_A, async (db) => {
-      await ensureBranch(db, ORG_A, 'branch_race_destination');
+      await ensureBranch(db, ORG_A, `branch_race_destination_${suffix}`);
       const destination = await db.pharmacyStockLocation.create({
         data: {
           organizationId: ORG_A,
-          branchId: 'branch_race_destination',
+          branchId: `branch_race_destination_${suffix}`,
           code: `RACE-${tag('destination')}`,
           name: 'Race destination',
           kind: 'STORE',
@@ -565,7 +578,10 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
         });
         await deps.operations.approveTransfer(
           db,
-          { ...scopeOf(fixture), actorId: `approver_${label}` },
+          {
+            ...scopeOf(fixture),
+            actorId: await seedPharmacyChecker(db, ORG_A, `approver_${label}_${suffix}`),
+          },
           transfer.id
         );
         return transfer.id;
@@ -590,7 +606,7 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
 
   it('globally recalls a batch, traces branch holdings, acknowledges, and reconciles closure', async () => {
     const a = await scenario(ORG_A, BRANCH_A, 'recall-a');
-    const otherBranch = 'branch_recall_b';
+    const otherBranch = `branch_recall_b_${suffix}`;
     const setup = await inOrg(ORG_A, async (db) => {
       await ensureBranch(db, ORG_A, otherBranch);
       const destination = await db.pharmacyStockLocation.create({
@@ -701,6 +717,99 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
       valueAtRiskMinor: 24000,
       withinSupplierReturnWindow: true,
     });
+  });
+
+  it('does not sell units a concurrent claim reserved while the sale waited (#355, claim-first)', async () => {
+    const fixture = await scenario(ORG_A, BRANCH_A, 'claim-first');
+    const lotId = await inOrg(ORG_A, async (db) => {
+      const { lot } = await stockLot(db, fixture, {
+        expiresAt: LATER,
+        units: 10,
+        label: 'claim-first',
+      });
+      return lot.id;
+    });
+    let releaseClaim: () => void = () => {};
+    const held = new Promise<void>((resolve) => {
+      releaseClaim = resolve;
+    });
+    const claim = inOrg(ORG_A, async (db) => {
+      const result = await deps.operations.reserveSupplierClaim(db, scopeOf(fixture), {
+        inventoryLotId: lotId,
+        reservedUnits: 10,
+        returnBy: LATER,
+      });
+      await held;
+      return result;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const sale = inOrg(ORG_A, (db) =>
+      deps.ledger.allocateForSale(db, scopeOf(fixture), {
+        medicineId: fixture.medicineId,
+        requiredUnits: 10,
+        at: NOW,
+        idempotencyKeyPrefix: `claim-first-${suffix}-sale`,
+      })
+    );
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    releaseClaim();
+    const [claimOutcome, saleOutcome] = await Promise.allSettled([claim, sale]);
+    expect(claimOutcome.status).toBe('fulfilled');
+    expect(saleOutcome.status).toBe('rejected');
+    const claims = await inOrg(ORG_A, (db) =>
+      db.pharmacySupplierClaim.count({ where: { inventoryLotId: lotId, status: 'RESERVED' } })
+    );
+    expect(claims).toBe(1);
+  });
+
+  it('serializes a supplier claim against a concurrent sale of the same units (#355)', async () => {
+    const fixture = await scenario(ORG_A, BRANCH_A, 'claim-race');
+    const lotId = await inOrg(ORG_A, async (db) => {
+      const { lot } = await stockLot(db, fixture, {
+        expiresAt: LATER,
+        units: 10,
+        label: 'claim-race',
+      });
+      return lot.id;
+    });
+    let releaseSale: () => void = () => {};
+    const held = new Promise<void>((resolve) => {
+      releaseSale = resolve;
+    });
+    const sale = inOrg(ORG_A, async (db) => {
+      const result = await deps.ledger.allocateForSale(db, scopeOf(fixture), {
+        medicineId: fixture.medicineId,
+        requiredUnits: 10,
+        at: NOW,
+        idempotencyKeyPrefix: `claim-race-${suffix}-sale`,
+      });
+      await held;
+      return result;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const startedClaim = Date.now();
+    const claim = inOrg(ORG_A, (db) =>
+      deps.operations.reserveSupplierClaim(db, scopeOf(fixture), {
+        inventoryLotId: lotId,
+        reservedUnits: 10,
+        returnBy: LATER,
+      })
+    );
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    releaseSale();
+    const [saleOutcome, claimOutcome] = await Promise.allSettled([sale, claim]);
+    const waitedMs = Date.now() - startedClaim;
+    expect(saleOutcome.status).toBe('fulfilled');
+    expect(claimOutcome.status).toBe('rejected');
+    // The claim was blocked on the balance-row lock the sale held, not run on a stale read.
+    expect(waitedMs).toBeGreaterThanOrEqual(200);
+    expect((claimOutcome as PromiseRejectedResult).reason).toMatchObject({
+      reason: 'INSUFFICIENT_STOCK',
+    });
+    const claims = await inOrg(ORG_A, (db) =>
+      db.pharmacySupplierClaim.count({ where: { inventoryLotId: lotId, status: 'RESERVED' } })
+    );
+    expect(claims).toBe(0);
   });
 });
 

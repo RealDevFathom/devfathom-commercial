@@ -265,6 +265,12 @@ export function matchCounterAction(
   return null;
 }
 
+/**
+ * Marks the counter's scan field. Focus rests there for the whole bill (POS-01),
+ * so F-keys stay live inside it; see `shouldHandleCounterKey`.
+ */
+export const COUNTER_SCAN_FIELD_ATTRIBUTE = 'data-counter-scan';
+
 /** A field the operator is typing in owns the keyboard. F-keys wait. */
 export function counterChordTargetIsField(target: EventTarget | null | undefined): boolean {
   if (typeof HTMLElement === 'undefined' || !(target instanceof HTMLElement)) return false;
@@ -273,15 +279,31 @@ export function counterChordTargetIsField(target: EventTarget | null | undefined
 }
 
 /**
+ * Whether `target` keeps `key` for itself. Every field does, except that the
+ * marked scan field hands its F-keys to the counter. Enter and the editing keys
+ * stay with the scan field, which handles Enter itself.
+ */
+function fieldKeepsKey(target: EventTarget | null | undefined, key: string): boolean {
+  if (!counterChordTargetIsField(target)) return false;
+  const scanField =
+    target instanceof HTMLElement && target.hasAttribute(COUNTER_SCAN_FIELD_ATTRIBUTE);
+  return !(scanField && /^F\d+$/.test(key));
+}
+
+/**
  * Whether a counter chord may run.
  *
  * Printable keys stay with the field. Named chords, including F-keys, also stay
  * with the field while focus is in an input, textarea, or select, and they stay
  * silent while a dialog is open so a void or tender step cannot be skipped.
+ *
+ * The one exception is the counter's scan field: it keeps focus for the whole
+ * bill (POS-01), so F-keys stay live inside it. A dialog still silences them.
  */
 export function shouldHandleCounterKey(event: CounterKeyEvent, dialogOpen = false): boolean {
-  const focused =
-    typeof document !== 'undefined' ? counterChordTargetIsField(document.activeElement) : false;
-  if (dialogOpen || focused || counterChordTargetIsField(event.target)) return false;
+  const active = typeof document !== 'undefined' ? document.activeElement : null;
+  if (dialogOpen || fieldKeepsKey(active, event.key) || fieldKeepsKey(event.target, event.key)) {
+    return false;
+  }
   return event.key.length > 1;
 }

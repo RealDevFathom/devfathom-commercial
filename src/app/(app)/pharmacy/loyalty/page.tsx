@@ -1,3 +1,4 @@
+import { PointsAdjustment } from '@/components/pharmacy/points-adjustment';
 import Link from 'next/link';
 import { unstable_rethrow } from 'next/navigation';
 import { TRPCError } from '@trpc/server';
@@ -13,6 +14,7 @@ export const metadata = { title: 'Loyalty points · Pharmacy' };
 const linkClass =
   'inline-flex min-h-11 items-center rounded-sm underline hover:text-text-strong focus-visible:outline-2 focus-visible:outline-ring';
 const eventLabels: Record<string, string> = {
+  ADJUSTMENT: 'Owner/admin correction',
   EARN: 'Points earned',
   REDEEM: 'Points redeemed',
   REFUND: 'Redeemed points restored',
@@ -64,6 +66,11 @@ export default async function LoyaltyPage({
       eyebrow="Pharmacy / customers"
       heading="Loyalty points"
       description="Review points balances and the receipts behind each change."
+      actions={
+        <Link className={linkClass} href="/pharmacy/settings/loyalty">
+          Loyalty settings
+        </Link>
+      }
     />
   );
   const data = await loadLoyalty(text);
@@ -202,6 +209,11 @@ export default async function LoyaltyPage({
                       </td>
                       <td className="p-3">
                         {eventLabels[e.kind] ?? e.kind}
+                        {e.adjustmentReason && (
+                          <span className="block text-xs text-text-muted">
+                            {e.adjustmentReason}
+                          </span>
+                        )}
                         {e.refundId && (
                           <span className="mt-1 block break-all text-xs text-text-muted">
                             Refund: {e.refundId}
@@ -265,6 +277,13 @@ export default async function LoyaltyPage({
               </span>
             )}
           </nav>
+          {history.entries[0] && (
+            <PointsAdjustment
+              branchId={branchId}
+              customerId={customerId}
+              saleId={history.entries[0].saleId}
+            />
+          )}
           {history.historyLimitReached && (
             <p role="status" className="mt-3 text-sm">
               This view has reached its 10,000-page limit. Older entries remain in the ledger.

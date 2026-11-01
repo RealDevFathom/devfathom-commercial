@@ -20,6 +20,7 @@ vi.mock('@/lib/breadcrumb-store', () => ({
     selector({ labels: {} }),
 }));
 
+import { navigation as menu } from './sidebar';
 import { TopbarBreadcrumbs } from './topbar-breadcrumbs';
 
 describe('TopbarBreadcrumbs hydration', () => {
@@ -76,6 +77,34 @@ describe('TopbarBreadcrumbs hydration', () => {
     }
 
     expect(recoverableErrors).toEqual([]);
+    await act(async () => root.unmount());
+  });
+
+  it('names each hospitality settings page as the hospitality menu does', async () => {
+    const pages = menu.filter((item) => item.href.startsWith('/hotel/settings/'));
+    // The six pages the menu offers today, so a renamed or added page is a decision here too.
+    expect(pages.map((item) => item.label)).toEqual([
+      'Property',
+      'Rooms',
+      'Meal plans',
+      'Function spaces',
+      'Extras',
+      'Guest messages',
+    ]);
+    const container = document.createElement('nav');
+    container.innerHTML = renderToString(<TopbarBreadcrumbs />);
+    document.body.appendChild(container);
+    let root: ReturnType<typeof hydrateRoot>;
+    await act(async () => {
+      root = hydrateRoot(container, <TopbarBreadcrumbs />);
+    });
+    for (const page of pages) {
+      navigation.pathname = page.href;
+      await act(async () => root.render(<TopbarBreadcrumbs />));
+      expect(container.querySelector('[aria-current="page"]'), page.href).toHaveTextContent(
+        page.label
+      );
+    }
     await act(async () => root.unmount());
   });
 });

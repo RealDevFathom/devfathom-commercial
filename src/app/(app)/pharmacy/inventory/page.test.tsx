@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -68,6 +68,7 @@ function makeContext() {
     organization: { id: 'org', isDemo: false },
     entitlements: {},
     db: {
+      $queryRaw: vi.fn().mockResolvedValue([{ allowed: false }]),
       pharmacyBranch: { findMany: vi.fn().mockResolvedValue([branch]) },
       pharmacyStockLocation: { findMany: vi.fn().mockResolvedValue([location]) },
       pharmacyInventoryLot: { findMany: lots },
@@ -75,7 +76,12 @@ function makeContext() {
       pharmacyInterbranchTransfer: { findMany: vi.fn().mockResolvedValue([]) },
       pharmacyRecallNotice: { findMany: vi.fn().mockResolvedValue([]) },
       pharmacyStockSignal: { findMany: vi.fn().mockResolvedValue([]) },
-      user: { findMany: vi.fn().mockResolvedValue([]) },
+      user: {
+        findMany: vi.fn().mockResolvedValue([]),
+        findUnique: vi
+          .fn()
+          .mockResolvedValue({ status: 'ACTIVE', role: 'EMPLOYEE', organizationId: 'org' }),
+      },
       pharmacyTemperatureLog: { findMany: vi.fn().mockResolvedValue([]) },
     },
   };
@@ -103,6 +109,65 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('Inventory pack-action integration', () => {
+  it.each([false, true])('requires a masked write-off approval PIN (solo=%s)', async (solo) => {
+    ctx.db.$queryRaw.mockResolvedValue([{ allowed: solo }]);
+    ctx.db.user.findMany.mockResolvedValue([
+      { id: 'witness', name: 'Witness', title: 'Manager' },
+    ] as never);
+    await show();
+    const form = screen.getByRole('button', { name: 'Record write-off' }).closest('form')!;
+    const pin = within(form).getByLabelText(solo ? 'Owner PIN' : 'Witness PIN');
+    expect(pin).toBeRequired();
+    expect(pin).toHaveAttribute('name', 'pin');
+    expect(pin).toHaveAttribute('type', 'password');
+    expect(pin).toHaveAttribute('pattern', '[0-9]{4,8}');
+    expect(within(form).getByLabelText('Co-authorizing witness')).toHaveAttribute(
+      'name',
+      'witnessId'
+    );
+    expect(form.checkValidity()).toBe(false);
+  });
+
+  it.each([
+    ['OPEN', 'user', true, true],
+    ['AWAITING_COAUTH', 'user', true, true],
+    ['AWAITING_COAUTH', 'other', true, true],
+    ['AWAITING_COAUTH', 'user', false, false],
+  ] as const)(
+    'requires a count PIN for every SOLO approval (%s, %s, solo=%s)',
+    async (status, createdById, solo, requiresPin) => {
+      ctx.db.$queryRaw.mockResolvedValue([{ allowed: solo }]);
+      ctx.db.user.findUnique.mockResolvedValue({
+        status: 'ACTIVE',
+        role: solo ? 'ADMIN' : 'EMPLOYEE',
+        organizationId: 'org',
+      });
+      ctx.db.pharmacyInventoryCount.findMany.mockResolvedValue([
+        {
+          id: 'count',
+          status,
+          createdById,
+          createdAt: new Date(),
+          lines: [{ varianceUnits: 0 }],
+        },
+      ] as never);
+      await show();
+      const button = screen.getByRole('button', {
+        name: status === 'AWAITING_COAUTH' ? 'Co-authorize variance' : 'Approve count',
+      });
+      const form = button.closest('form')!;
+      const pin = within(form).queryByLabelText('Owner PIN');
+      if (requiresPin) {
+        expect(pin).toBeRequired();
+        expect(pin).toHaveAttribute('type', 'password');
+        expect(form.checkValidity()).toBe(false);
+      } else {
+        expect(pin).not.toBeInTheDocument();
+        expect(form.checkValidity()).toBe(true);
+      }
+    }
+  );
+
   it('passes exact lot/location balances and preserves FEFO query and available totals', async () => {
     await show();
     expect(mocks.form.mock.calls[0][0]).toEqual({

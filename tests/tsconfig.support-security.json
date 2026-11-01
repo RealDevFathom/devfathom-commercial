@@ -1,0 +1,22 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "incremental": false
+  },
+  "include": [
+    "../src/lib/tenancy/support-access.ts",
+    "../src/lib/tenancy/support-access.test.ts",
+    "../src/lib/tenancy/support-session.ts",
+    "../src/lib/tenancy/tenant-actor.ts",
+    "../src/lib/tenancy/tenant-actor.test.ts",
+    "../src/server/trpc.ts",
+    "../src/server/trpc.test.ts",
+    "../src/server/routers/organization-admin.members.test.ts",
+    "../src/server/routers/entitlement-cleanup.test.ts",
+    "../tests/support-read-only.db.test.ts",
+    "../tests/support-session-hardening.test.ts",
+    "../tests/support-session-hardening.db.test.ts",
+    "../src/types/next-auth.d.ts",
+    "../next-env.d.ts"
+  ]
+}

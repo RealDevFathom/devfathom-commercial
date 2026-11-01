@@ -10,6 +10,7 @@ import {
   renderAnomalyDigest,
 } from './anomaly-signals-operations';
 import { withPlatformDb, withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
+import { workspaceTimezone } from '@/lib/timezone';
 
 const DIGEST_METRIC_KEYS = [
   'salesMinor',
@@ -150,10 +151,11 @@ export class WhatsAppChannel implements DigestChannel {
   }
 }
 
+/** The workspace's wall clock; a stored zone Intl refuses reads as UTC rather than throwing. */
 function localClock(at: Date, timezone: string) {
   const parts = Object.fromEntries(
     new Intl.DateTimeFormat('en-CA', {
-      timeZone: timezone,
+      timeZone: workspaceTimezone(timezone),
       year: 'numeric',
       month: '2-digit',
       day: '2-digit',

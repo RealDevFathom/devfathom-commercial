@@ -13,10 +13,18 @@ describe('appUrl', () => {
     ['http://acme.localhost:3100', 'http://acme.localhost:3100'],
     ['http://app.example.com', 'https://app.example.com'],
     ['https://app.example.com', 'https://app.example.com'],
+    [' HTTP://app.example.com/ ', 'https://app.example.com'],
+    ['https://app.example.com/', 'https://app.example.com'],
   ])('builds links for %s with the appropriate protocol', (configuredUrl, expectedUrl) => {
     vi.stubEnv('NEXT_PUBLIC_APP_URL', configuredUrl);
 
     expect(appUrl()).toBe(expectedUrl);
+  });
+
+  it('uses the configured server URL when the public URL is absent', () => {
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', undefined);
+    vi.stubEnv('NEXTAUTH_URL', 'https://auth.example.com/');
+    expect(appUrl()).toBe('https://auth.example.com');
   });
 
   it.each([
@@ -28,6 +36,11 @@ describe('appUrl', () => {
     ['//evil.example.com'],
     ['not a url'],
     [''],
+    ['   '],
+    ['http://'],
+    ['https://'],
+    ['http://[broken'],
+    ['ws://example.com'],
   ])('fails closed to the default for non-http(s) or unparseable value %p', (configuredUrl) => {
     vi.stubEnv('NEXT_PUBLIC_APP_URL', configuredUrl);
 

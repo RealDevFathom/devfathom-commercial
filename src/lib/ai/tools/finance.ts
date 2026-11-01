@@ -16,9 +16,13 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
-import { templates, appUrl } from '@/lib/email';
 import type { AssistantHelpers, ToolSet } from '@/lib/ai/context';
 import { fromCurrencyGroups, diffByCurrency } from '@/lib/finance/currency';
+import {
+  invoiceStatusTransitionError,
+  invoiceStatusUpdate,
+  PAID_STATUS_ERROR,
+} from '@/lib/finance/invoice-status';
 
 // Money columns are Decimal(12,2) — Postgres caps a value at 9,999,999,999.99.
 // Bound amounts here so an oversized input is a clean validation error, not a
@@ -60,22 +64,9 @@ function rollForwardDueDate(due: Date, interval: string, now: Date): Date {
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
-// Allowed invoice status transitions (FIN-06) — mirrors the tRPC mutation.
-const INVOICE_TRANSITIONS: Record<string, string[]> = {
-  DRAFT: ['SENT', 'CANCELLED'],
-  SENT: ['PAID', 'OVERDUE', 'CANCELLED', 'DRAFT'],
-  OVERDUE: ['PAID', 'CANCELLED', 'SENT'],
-  PAID: ['CANCELLED'],
-  CANCELLED: ['DRAFT'],
-};
-
 /** Display label for a money amount, e.g. "$1,200" / "Rs 50,000". */
 const moneyLabel = (amount: number, currency: string) =>
   currency === 'PKR' ? `Rs ${amount.toLocaleString()}` : `$${amount.toLocaleString()}`;
-
-/** Human-readable date, e.g. "Jun 22, 2026". */
-const dateLabel = (d: Date) =>
-  d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
 
 /**
  * Build the FINANCE tool set. Returns an EMPTY set for non-admins so the model
@@ -87,7 +78,6 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
   if (!h.isAdmin) return tools; // finance is admin-only — no tools for non-admins.
 
   const now = () => h.now();
-  const financeUrl = `${appUrl()}/finance`;
   const FINANCE_RESTRICTED = 'Finance data is restricted to administrators.';
 
   // Resolve a free-text client name to one client (or candidates to ask about).
@@ -100,15 +90,6 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
   const resolveProject = async (query: string) => {
     const projects = await db.project.findMany({ select: { id: true, name: true } });
     return h.resolveNamed(query, projects);
-  };
-
-  // Active admins other than the actor — recipients of finance notifications.
-  const adminRecipients = async (): Promise<string[]> => {
-    const admins = await db.user.findMany({
-      where: { role: 'ADMIN', status: { not: 'INACTIVE' }, id: { not: h.ctx.userId } },
-      select: { id: true },
-    });
-    return admins.map((a) => a.id);
   };
 
   // ─────────────────────────────────── READS ──────────────────────────────────
@@ -588,7 +569,7 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
 
   tools.updateInvoiceStatus = tool({
     description:
-      'Change an invoice\'s status — mark it SENT, PAID, OVERDUE, CANCELLED or back to DRAFT. Identify it by invoice number. Marking SENT/PAID stamps the sent/paid date and notifies finance. Use for "mark INV-2026-003 as paid", "send that invoice". ADMIN ONLY.',
+      "Change an invoice's status to SENT, OVERDUE, CANCELLED or back to DRAFT. Identify it by invoice number. Payments must be recorded with the payment tool; this tool cannot mark an invoice PAID. ADMIN ONLY.",
     inputSchema: z.object({
       invoiceNumber: z.string().describe('Invoice number, e.g. "INV-2026-003"'),
       status: z.enum(['DRAFT', 'SENT', 'PAID', 'OVERDUE', 'CANCELLED']),
@@ -609,6 +590,8 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
         };
       const priorStatus = matches[0].status;
 
+      if (status === 'PAID') return { error: PAID_STATUS_ERROR };
+
       // FIN-06: no-op → don't re-stamp or re-fire side-effects.
       if (priorStatus === status) {
         return {
@@ -618,25 +601,22 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
         };
       }
       // FIN-06: enforce the status state-machine.
-      if (!INVOICE_TRANSITIONS[priorStatus]?.includes(status)) {
+      const transitionError = invoiceStatusTransitionError(priorStatus, status);
+      if (transitionError) {
         return {
-          error: `Cannot change invoice ${matches[0].invoiceNumber} from ${priorStatus} to ${status}.`,
+          error: transitionError,
         };
       }
 
-      const data: Prisma.InvoiceUpdateInput = { status };
-      if (status === 'PAID') data.paidAt = now();
-      if (status === 'SENT') data.sentAt = now();
-      // Clear stamps when the invoice leaves the corresponding state.
-      if (priorStatus === 'PAID' && status !== 'PAID') data.paidAt = null;
-      if (status === 'DRAFT') {
-        data.sentAt = null;
-        data.paidAt = null;
+      const changed = await db.invoice.updateMany({
+        where: { id: matches[0].id, status: priorStatus },
+        data: invoiceStatusUpdate(priorStatus, status, now()),
+      });
+      if (changed.count !== 1) {
+        return { error: 'Invoice status changed concurrently. Refresh and try again.' };
       }
-
-      const invoice = await db.invoice.update({
+      const invoice = await db.invoice.findUniqueOrThrow({
         where: { id: matches[0].id },
-        data,
         include: { client: { select: { name: true } } },
       });
 
@@ -647,32 +627,6 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
           message: `sent invoice ${invoice.invoiceNumber} to ${invoice.client.name} (${totalLabel})`,
           entityType: 'Invoice',
           entityId: invoice.id,
-        });
-      } else if (status === 'PAID') {
-        h.activity({
-          type: 'invoice_paid',
-          message: `marked invoice ${invoice.invoiceNumber} as paid (${totalLabel})`,
-          entityType: 'Invoice',
-          entityId: invoice.id,
-        });
-      }
-
-      if (status === 'PAID') {
-        const amount = moneyLabel(Number(invoice.total), invoice.currency);
-        h.notifyUsers(await adminRecipients(), {
-          type: 'invoice_paid',
-          title: 'Payment received',
-          message: `${invoice.client.name} paid invoice ${invoice.invoiceNumber} (${amount})`,
-          entityType: 'Invoice',
-          entityId: invoice.id,
-          email: () =>
-            templates.invoicePaid({
-              invoiceNumber: invoice.invoiceNumber,
-              clientName: invoice.client.name,
-              amountLabel: amount,
-              paidDate: dateLabel(invoice.paidAt ?? now()),
-              url: financeUrl,
-            }),
         });
       }
 

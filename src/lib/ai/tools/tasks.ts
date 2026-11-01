@@ -96,7 +96,8 @@ export function buildTasksTools(h: AssistantHelpers): ToolSet {
   }): Promise<{ ok: true; task: ResolvedTask } | Fail> {
     if (args.taskId) {
       const rows = await loadTasks({ AND: [{ id: args.taskId }, h.taskVisibility()] }, 1);
-      if (rows.length === 0) return { ok: false, error: 'No task with that id that you can access.' };
+      if (rows.length === 0)
+        return { ok: false, error: 'No task with that id that you can access.' };
       return { ok: true, task: rows[0] };
     }
     const title = args.title?.trim();
@@ -356,7 +357,10 @@ export function buildTasksTools(h: AssistantHelpers): ToolSet {
           dueDate: true,
           createdAt: true,
           column: {
-            select: { name: true, board: { select: { name: true, project: { select: { name: true } } } } },
+            select: {
+              name: true,
+              board: { select: { name: true, project: { select: { name: true } } } },
+            },
           },
           createdBy: { select: { name: true } },
           assignees: { select: { user: { select: { name: true, title: true } } } },
@@ -394,8 +398,7 @@ export function buildTasksTools(h: AssistantHelpers): ToolSet {
         status,
         priority: detail.priority,
         dueDate: detail.dueDate,
-        overdue:
-          !!detail.dueDate && detail.dueDate < h.now() && !h.DONE_COLUMNS.includes(status),
+        overdue: !!detail.dueDate && detail.dueDate < h.now() && !h.DONE_COLUMNS.includes(status),
         createdBy: detail.createdBy.name,
         assignees: detail.assignees.map((a) => a.user.name),
         labels: detail.labels.map((l) => l.label.name),
@@ -424,7 +427,10 @@ export function buildTasksTools(h: AssistantHelpers): ToolSet {
     description:
       'Create a task in a project and (optionally) assign people to it. Identify the project by name (or id). The task lands in the named column (default "To Do" / the first column) and is assigned to YOU unless you name other assignees. Newly-assigned teammates are notified by email. Use for "add a task to <project>", "create a bug for <name> in <project>".',
     inputSchema: z.object({
-      projectName: z.string().nullish().describe('Project to create the task in (fuzzy name match)'),
+      projectName: z
+        .string()
+        .nullish()
+        .describe('Project to create the task in (fuzzy name match)'),
       projectId: z.string().nullish().describe('Project id, if already known'),
       title: z.string().min(1),
       description: z.string().nullish(),
@@ -437,7 +443,16 @@ export function buildTasksTools(h: AssistantHelpers): ToolSet {
         .describe('Names to assign (or "me"); defaults to you when omitted'),
     }),
     needsApproval: true,
-    execute: async ({ projectName, projectId, title, description, priority, dueDate, columnName, assignees }) => {
+    execute: async ({
+      projectName,
+      projectId,
+      title,
+      description,
+      priority,
+      dueDate,
+      columnName,
+      assignees,
+    }) => {
       const proj = await resolveProjectTarget(projectId, projectName);
       if (!proj.ok) return asFail(proj);
       // Object-level authz BEFORE touching the board, mirroring the router.
@@ -593,7 +608,9 @@ export function buildTasksTools(h: AssistantHelpers): ToolSet {
         data.dueDate = d;
       }
       if (Object.keys(data).length === 0)
-        return { error: 'Nothing to update — provide a new title, description, priority, or due date.' };
+        return {
+          error: 'Nothing to update — provide a new title, description, priority, or due date.',
+        };
 
       const updated = await h.db.task.update({
         where: { id: task.id },
@@ -608,7 +625,10 @@ export function buildTasksTools(h: AssistantHelpers): ToolSet {
         targetId: task.id,
         targetLabel: updated.title,
         changes: Object.fromEntries(
-          Object.keys(data).map((k) => [k, { before: undefined, after: (data as Record<string, unknown>)[k] }])
+          Object.keys(data).map((k) => [
+            k,
+            { before: undefined, after: (data as Record<string, unknown>)[k] },
+          ])
         ),
       });
       return {
@@ -705,20 +725,26 @@ export function buildTasksTools(h: AssistantHelpers): ToolSet {
         changes: { column: { before: task.column.name, after: target.name } },
       });
 
-      return { success: true, task: task.title, from: task.column.name, to: target.name, completed: enteringDone };
+      return {
+        success: true,
+        task: task.title,
+        from: task.column.name,
+        to: target.name,
+        completed: enteringDone,
+      };
     },
   });
 
   tools.deleteTask = tool({
     description:
-      'Permanently delete a task (and its comments, checklist, labels). Identify it by title (or id). This cannot be undone. Use for "delete the <title> task".',
+      'Permanently delete a task (and its comments, checklist, labels). Only a project LEAD or an admin may delete. Identify it by title (or id). This cannot be undone. Use for "delete the <title> task".',
     inputSchema: z.object({ ...taskRef }),
     needsApproval: true,
     execute: async ({ taskTitle, taskId }) => {
       const r = await resolveTask({ taskId, title: taskTitle });
       if (!r.ok) return asFail(r);
       const { task } = r;
-      if (!(await canWriteTask(task)))
+      if (!(await h.canManageProject(task.column.board.projectId)))
         return { error: 'You do not have access to that task’s project.' };
 
       await h.db.task.delete({ where: { id: task.id } });
@@ -740,7 +766,9 @@ export function buildTasksTools(h: AssistantHelpers): ToolSet {
       'Change who a task is assigned to. Identify the task by title (or id) and give people by name (or "me"). mode "replace" (default) sets the exact list, "add" appends, "remove" unassigns. Newly-assigned teammates get a task-assigned email. Use for "assign <task> to <name>", "add <name> to <task>", "unassign <name> from <task>".',
     inputSchema: z.object({
       ...taskRef,
-      assignees: z.array(z.string()).describe('People by name (or "me"); empty list clears in replace mode'),
+      assignees: z
+        .array(z.string())
+        .describe('People by name (or "me"); empty list clears in replace mode'),
       mode: z.enum(['replace', 'add', 'remove']).nullish().describe('Default replace'),
     }),
     needsApproval: true,
@@ -907,7 +935,10 @@ export function buildTasksTools(h: AssistantHelpers): ToolSet {
         return { error: `No checklist item matches "${itemText}" on that task.` };
       if (matches.length > 1)
         return {
-          needsClarification: `Which item — ${matches.slice(0, 8).map((m) => `"${m.text}"`).join(', ')}?`,
+          needsClarification: `Which item — ${matches
+            .slice(0, 8)
+            .map((m) => `"${m.text}"`)
+            .join(', ')}?`,
         };
 
       const item = matches[0];
@@ -931,7 +962,7 @@ export function buildTasksTools(h: AssistantHelpers): ToolSet {
 
   tools.createLabel = tool({
     description:
-      'Create a new label on a project\'s board (so it can be applied to tasks). Identify the project by name (or id). Provide a hex color (defaults to grey). Use for "make a \'Blocked\' label in <project>".',
+      "Create a new label on a project's board (so it can be applied to tasks). Identify the project by name (or id). Provide a hex color (defaults to grey). Use for \"make a 'Blocked' label in <project>\".",
     inputSchema: z.object({
       projectName: z.string().nullish().describe('Project whose board gets the label (fuzzy name)'),
       projectId: z.string().nullish(),
@@ -973,7 +1004,7 @@ export function buildTasksTools(h: AssistantHelpers): ToolSet {
       'Apply an existing board label to a task. Identify the task by title (or id) and the label by name (must already exist on the task\'s board — create it first with createLabel if needed). Use for "tag <task> as Urgent", "add the Bug label to <task>".',
     inputSchema: z.object({
       ...taskRef,
-      labelName: z.string().describe('The label name (must exist on the task\'s board)'),
+      labelName: z.string().describe("The label name (must exist on the task's board)"),
     }),
     needsApproval: true,
     execute: async ({ taskTitle, taskId, labelName }) => {

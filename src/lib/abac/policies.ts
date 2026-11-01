@@ -70,6 +70,7 @@ export const ALL_ACTIONS = [
   'restaurant:configure', // restaurant M8: loyalty configuration and consolidated access — org-role driven
   'menu:import', // R-lane WHA-194: OCR menu import — upload, review queue, confirmed catalog import
   'pharmacy:counter',
+  'pharmacy:receipt',
   'pharmacy:manage',
   'pharmacy:procurement',
   'pharmacy:inventory',
@@ -77,6 +78,9 @@ export const ALL_ACTIONS = [
   'pharmacy:safety', // RX-05: controlled register and incident approval
   'pharmacy:catalogue-review', // MED-06: confirm or reject regulated connector proposals
   'pharmacy:orders', // MKT-03/05: staff acceptance and fulfilment of customer proposals
+  'pharmacy:loyalty-manage', // owner-controlled voucher policy and exceptional redemption
+  'pharmacy:wallet-topup', // attributed counter wallet top-ups
+  'pharmacy:wallet-adjust', // manager-only stored-value corrections with a reason
   // H1-01: hospitality capabilities use explicit organization-role grants.
   // Property scope is enforced separately by the consuming procedures.
   'hotel:reservations',
@@ -110,6 +114,20 @@ const isHrOrAdmin: Policy = ({ subject }) => subject.role === 'ADMIN' || subject
 // upstream is wrong — not that the member is fine.
 const isActiveMember: Policy = ({ subject }) =>
   Boolean(subject.status) && ACTIVE_STATUSES.has(subject.status!);
+
+/** Mandatory resource constraints, including when a custom grant allows access. */
+export const RESOURCE_POLICIES: Partial<Record<Action, Policy[]>> = {
+  'team:layoff': [
+    ({ subject, resource }) => !(subject.role === 'HR' && resource?.targetRole === 'ADMIN'),
+  ],
+  'resignation:review': [
+    ({ subject, resource }) =>
+      resource?.status === 'PENDING' &&
+      typeof resource.userId === 'string' &&
+      resource.userId !== subject.id &&
+      !(subject.role === 'HR' && resource.targetRole === 'ADMIN'),
+  ],
+};
 
 export const POLICIES: Record<Action, Policy[]> = {
   // ── Coarse role gates (back the tRPC procedures) ──────────────────────────
@@ -231,13 +249,23 @@ export const POLICIES: Record<Action, Policy[]> = {
   // grants it explicitly (or holds `*`, e.g. the restaurant Owner template).
   'menu:import': [],
   'pharmacy:counter': [],
+  'pharmacy:receipt': [],
   'pharmacy:manage': [],
-  'pharmacy:procurement': [],
+  // Tenant administrators retain the operational purchasing access they had
+  // before pharmacy capabilities became explicit. A matching custom DENY is
+  // still resolved first by `can()` and therefore takes precedence.
+  'pharmacy:procurement': [isAdmin],
   'pharmacy:inventory': [],
+  // Dispensing is an exact-grant-only action: tenant administration alone is
+  // insufficient, and wildcard ALLOW rules cannot opt a user in. Wildcard DENY
+  // rules are still resolved by `can()` before this default-deny policy.
   'pharmacy:dispense': [],
   'pharmacy:safety': [],
   'pharmacy:catalogue-review': [],
   'pharmacy:orders': [],
+  'pharmacy:loyalty-manage': [],
+  'pharmacy:wallet-topup': [],
+  'pharmacy:wallet-adjust': [],
 
   // H1-01: no static agency-role policy grants hospitality capabilities.
   // Explicit capabilities and wildcards use the existing customDecision path.

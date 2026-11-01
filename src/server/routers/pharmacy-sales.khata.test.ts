@@ -42,6 +42,18 @@ const input = {
 };
 function fixture() {
   const db = {
+    organization: { findFirstOrThrow: vi.fn(async () => ({ pharmacyOperatingMode: 'STAFFED' })) },
+    auditLog: { create: vi.fn(async () => ({ id: 'approval-audit' })) },
+    user: {
+      findFirst: vi.fn(async () => ({ organizationRole: { key: 'manager' } })),
+      findUnique: vi.fn(async () => ({
+        id: 'owner-a',
+        role: 'EMPLOYEE',
+        status: 'ACTIVE',
+        organizationId: 'org-a',
+      })),
+    },
+    pharmacyBranchAssignment: { findMany: vi.fn(async () => [{ branchId: 'branch-a' }]) },
     $queryRaw: vi.fn().mockResolvedValue([]),
     $transaction: vi.fn(),
     pharmacyBranch: {
@@ -50,7 +62,11 @@ function fixture() {
         where.id.in.map((id) => ({ id }))
       ),
     },
-    pharmacyTender: { findFirst: vi.fn().mockResolvedValue({ type: 'CREDIT' }) },
+    pharmacyTender: {
+      findFirst: vi
+        .fn()
+        .mockResolvedValue({ type: 'CREDIT', sale: { createdByUserId: 'cashier-maker' } }),
+    },
     pharmacySale: { findFirst: vi.fn().mockResolvedValue({ customerId: 'customer-a' }) },
     pharmacyFamilyAccount: {
       findMany: vi.fn().mockResolvedValue([
@@ -233,4 +249,32 @@ describe('Khata router trust and recovery boundary', () => {
       }),
     });
   });
+});
+
+it.each(['CASH', 'CARD', 'KHATA'] as const)(
+  'denies %s outcome reads for an unassigned nonowner before tender evidence is read',
+  async (type) => {
+    const f = fixture();
+    f.db.pharmacyBranchAssignment.findMany.mockResolvedValue([]);
+    await expect(
+      f.caller().tenderOutcome({
+        ...input,
+        type,
+        ...(type === 'KHATA' ? {} : { familyAccountId: undefined }),
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(readPharmacyTenderOutcome).not.toHaveBeenCalled();
+  }
+);
+
+it('denies Khata account reads and payments for a nonowner assigned only to another branch', async () => {
+  const f = fixture();
+  f.db.pharmacyBranchAssignment.findMany.mockResolvedValue([{ branchId: 'sibling-branch' }]);
+  await expect(
+    f.caller().khataAccounts({ branchId: 'branch-a', saleId: 'sale-a' })
+  ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  await expect(f.caller().tender(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  expect(applyPharmacyTender).not.toHaveBeenCalled();
+  expect(f.db.pharmacyFamilyAccount.findMany).not.toHaveBeenCalled();
+  expect(f.db.$transaction).not.toHaveBeenCalled();
 });

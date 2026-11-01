@@ -232,7 +232,12 @@ export const VERTICALS: Record<OrganizationVertical, VerticalDefinition> = {
   },
 };
 
-export const ALL_VERTICALS: readonly OrganizationVertical[] = ['AGENCY', 'RESTAURANT', 'PHARMACY', 'HOSPITALITY'];
+export const ALL_VERTICALS: readonly OrganizationVertical[] = [
+  'AGENCY',
+  'RESTAURANT',
+  'PHARMACY',
+  'HOSPITALITY',
+];
 
 export type DepartmentDefinition = {
   key: string;
@@ -712,7 +717,10 @@ export type RoleTemplate = {
   /** System role templates are created during onboarding (§9 Step 6). */
   isSystem: boolean;
   /** Capabilities granted by default. `['*']` = full administration, matching the
-   * bootstrap admin role. All entries are provisional (Phase 0 / D10). */
+   * bootstrap admin role, except that wildcards (`*`, `pharmacy:*`) never grant
+   * pharmacy:dispense, pharmacy:safety or pharmacy:catalogue-review: those must be
+   * granted exactly (separation of duties). A wildcard DENY still revokes them.
+   * All entries are provisional (Phase 0 / D10). */
   capabilities: readonly string[];
 };
 
@@ -730,6 +738,9 @@ export const PHARMACY_CAPABILITIES: readonly string[] = [
   'pharmacy:procurement',
   'pharmacy:inventory',
   'pharmacy:orders',
+  'pharmacy:loyalty-manage',
+  'pharmacy:wallet-topup',
+  'pharmacy:wallet-adjust',
   'reports:operational',
   'reports:financial',
   'pharmacy:safety',
@@ -745,6 +756,9 @@ export const PHARMACY_CHECKED_CAPABILITIES = [
   'pharmacy:safety',
   'pharmacy:catalogue-review',
   'pharmacy:orders',
+  'pharmacy:loyalty-manage',
+  'pharmacy:wallet-topup',
+  'pharmacy:wallet-adjust',
   'reports:operational',
   'reports:financial',
 ] as const;
@@ -754,7 +768,15 @@ export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
     key: 'owner',
     name: 'Owner',
     isSystem: true,
-    capabilities: ['pharmacy:*', 'reports:operational', 'reports:financial'],
+    capabilities: [
+      'pharmacy:*',
+      'pharmacy:loyalty-manage',
+      'reports:operational',
+      'reports:financial',
+      'pharmacy:dispense',
+      'pharmacy:safety',
+      'pharmacy:catalogue-review',
+    ],
   },
   {
     // Optional, explicitly assigned proprietor role. Pair with tenant UserRole.ADMIN
@@ -783,13 +805,13 @@ export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
     key: 'manager',
     name: 'Manager',
     isSystem: true,
-    capabilities: ['pharmacy:manage', 'pharmacy:orders'],
+    capabilities: ['pharmacy:manage', 'pharmacy:orders', 'pharmacy:procurement', 'pharmacy:wallet-topup', 'pharmacy:wallet-adjust'],
   },
   {
     key: 'cashier',
     name: 'Cashier',
     isSystem: true,
-    capabilities: ['pharmacy:counter', 'pharmacy:orders'],
+    capabilities: ['pharmacy:counter', 'pharmacy:orders', 'pharmacy:wallet-topup'],
   },
   {
     key: 'procurement',
@@ -1021,6 +1043,7 @@ export const RESTAURANT_ROLE_TEMPLATES: readonly RoleTemplate[] = [
       'sop:complete',
       'sop:verify',
       'sop:manage',
+      'staff:manage',
       'customers:read',
       'customers:manage',
       'loyalty:redeem',
@@ -1062,6 +1085,7 @@ export const RESTAURANT_ROLE_TEMPLATES: readonly RoleTemplate[] = [
       'purchasing:create',
       'sop:complete',
       'sop:verify',
+      'staff:manage',
       'customers:read',
       'customers:manage',
       'loyalty:redeem',
@@ -1598,11 +1622,15 @@ export function isRestaurantModuleKey(key: string): boolean {
 /** Commercial packages offered for a vertical (§2.3 onboarding filter). Agency
  * packages are not modeled here; only their compatibility rule is. */
 export function packagesForVertical(vertical: OrganizationVertical): readonly PackageDefinition[] {
-  return [...RESTAURANT_PACKAGES, ...PHARMACY_PACKAGES, ...HOSPITALITY_PACKAGES].filter((pkg) => pkg.vertical === vertical);
+  return [...RESTAURANT_PACKAGES, ...PHARMACY_PACKAGES, ...HOSPITALITY_PACKAGES].filter(
+    (pkg) => pkg.vertical === vertical
+  );
 }
 
 export function packageByKey(key: string): PackageDefinition | undefined {
-  return [...RESTAURANT_PACKAGES, ...PHARMACY_PACKAGES, ...HOSPITALITY_PACKAGES].find((pkg) => pkg.key === key);
+  return [...RESTAURANT_PACKAGES, ...PHARMACY_PACKAGES, ...HOSPITALITY_PACKAGES].find(
+    (pkg) => pkg.key === key
+  );
 }
 
 /** The §7 limit key that caps a vertical's licensed users. The `defaultSeats`

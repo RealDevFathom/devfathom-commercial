@@ -1,5 +1,7 @@
 'use client';
 
+import { OperationApproval, operationApprovalReady } from './operation-approval';
+
 import { browserUuid } from '@/lib/browser-uuid';
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
@@ -75,6 +77,7 @@ import {
   type CounterBrowserPrintReservation,
   type CounterReceiptFormat,
 } from '@/lib/pharmacy/counter-browser-print';
+import { workspaceToday } from '@/lib/timezone';
 import { trpc } from '@/lib/trpc';
 
 type Notice = {
@@ -130,10 +133,13 @@ function useCounterDeviceId(): string | null {
   return useSyncExternalStore(subscribeToNothing, readCounterDeviceId, () => null);
 }
 
-/** Today, as the date-only value the settlement tables store. */
-function businessDate(): Date {
-  const now = new Date();
-  return new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+/**
+ * Today in the workspace's zone, as the date-only value the settlement tables
+ * store: the day the day close opens on, whatever zone this device is set to.
+ * `workspaceToday` reads a missing or refused zone as UTC, as the close does.
+ */
+function businessDate(timeZone: string | null | undefined): Date {
+  return new Date(`${workspaceToday(timeZone)}T00:00:00.000Z`);
 }
 
 /**
@@ -205,6 +211,26 @@ const UNKNOWN_TENDER_MESSAGE =
 
 type ConsoleProps = { initialSaleId?: string | null; initialBranchId?: string };
 
+function counterSelectionPreview(
+  row: CounterSearchRow | null,
+  option: CounterSearchRow['saleUnits'][number] | null,
+  quantity: number
+) {
+  if (!row || !option || row.printedMrpMinor === null || row.unitsPerPack === null) return null;
+  try {
+    return previewSaleLine({
+      option,
+      quantity,
+      printedMrpMinor: row.printedMrpMinor,
+      unitsPerPack: row.unitsPerPack,
+      roundingIncrementMinor: row.roundingIncrementMinor,
+      availableUnits: row.onHandUnits,
+    });
+  } catch {
+    return null;
+  }
+}
+
 export function PharmacyCounterConsole(props: ConsoleProps = {}) {
   const { data: session, status } = useSession();
   const entitlements = useEntitlements();
@@ -236,6 +262,7 @@ export function PharmacyCounterConsole(props: ConsoleProps = {}) {
       organizationId={user.organizationId}
       accountId={user.id}
       evidenceAuthorized={user.role === 'ADMIN'}
+      safetyLicensed={isModuleGranted('pharmacy-safety', entitlements.enabledModules)}
       accountEmail={user.email}
     />
   );
@@ -256,11 +283,14 @@ function ScopedPharmacyCounterConsole({
   organizationId,
   accountId,
   evidenceAuthorized = false,
+  safetyLicensed,
   accountEmail,
 }: ConsoleProps & {
   organizationId: string;
   accountId: string;
   evidenceAuthorized?: boolean;
+  /** Pharmacy Safety owns the approving-pharmacist list; without it that read is refused. */
+  safetyLicensed: boolean;
   accountEmail: string;
 }) {
   const utils = trpc.useUtils();
@@ -270,6 +300,12 @@ function ScopedPharmacyCounterConsole({
   const [submittedSearch, setSubmittedSearch] = useState({ text: '', query: '', branchId: '' });
   const submittedQuery = submittedSearch.query;
   const scannerRevision = useRef(0);
+  useEffect(
+    () => () => {
+      scannerRevision.current += 1;
+    },
+    []
+  );
   const [activeRow, setActiveRow] = useState<CounterSearchRow | null>(null);
   const [saleUnit, setSaleUnit] = useState<SaleUnitKind | null>(null);
   const [quantity, setQuantity] = useState(1);
@@ -278,6 +314,10 @@ function ScopedPharmacyCounterConsole({
   const [heldSaleId, setHeldSaleId] = useState<string | null>(null);
   const [patientQuery, setPatientQuery] = useState('');
   const [submittedPatientQuery, setSubmittedPatientQuery] = useState('');
+  const [overridePin, setOverridePin] = useState('');
+  const [overrideCheckerId, setOverrideCheckerId] = useState('');
+  const [rxApprovalPin, setRxApprovalPin] = useState('');
+  const [rxCheckerId, setRxCheckerId] = useState('');
   const [controlledAuth, setControlledAuth] = useState({
     prescriptionLineId: '',
     staffProfileId: '',
@@ -288,7 +328,6 @@ function ScopedPharmacyCounterConsole({
     prescriberRegNo: '',
     refSerial: '',
   });
-  const pharmacistsQuery = trpc.pharmacySafety.controlledPharmacists.useQuery();
   const [patientId, setPatientId] = useState<string | null>(null);
   const [patientAddressDraft, setPatientAddressDraft] = useState<string | null>(null);
   const [customerId, setCustomerId] = useState<string | null>(null);
@@ -315,7 +354,6 @@ function ScopedPharmacyCounterConsole({
   const outcomeInFlight = useRef(false);
 
   const searchRef = useRef<HTMLInputElement>(null);
-  const barcodeAdd = useRef<string | null>(null);
   const rxPanelRef = useRef<HTMLDivElement>(null);
   const tenderRef = useRef<HTMLDivElement>(null);
 
@@ -325,10 +363,28 @@ function ScopedPharmacyCounterConsole({
     staleTime: 60_000,
   });
   const branches = useMemo(() => branchesQuery.data?.branches ?? [], [branchesQuery.data]);
+  // Every drawer, tender and loyalty write is stamped with the workspace's day.
+  const workspaceZone = branchesQuery.data?.timezone;
+  const todayBusinessDate = useCallback(() => businessDate(workspaceZone), [workspaceZone]);
 
   // Derived, not mirrored into state: the default branch is simply "the first
   // one" until the operator picks another, so an effect would only add a render.
   const branchId = selectedBranchId || (branches[0]?.id ?? '');
+  const rxApproversQuery = trpc.pharmacySales.rxApprovers.useQuery(
+    { branchId },
+    { enabled: Boolean(branchId) }
+  );
+  const overrideApprovers = trpc.pharmacySales.rxApprovers.useQuery(
+    { branchId, purpose: 'OPERATION' },
+    { enabled: Boolean(branchId) }
+  );
+  const pharmacistsQuery = trpc.pharmacySafety.controlledPharmacists.useQuery(
+    branchId ? { branchId } : undefined,
+    {
+      enabled: safetyLicensed,
+    }
+  );
+
   const recoveryScope = useMemo<TenderAttemptScope>(
     () => ({ organizationId, accountId, branchId }),
     [organizationId, accountId, branchId]
@@ -471,14 +527,26 @@ function ScopedPharmacyCounterConsole({
     if (!evidenceAuthorized) void utils.pharmacySales.counterEvidence.reset();
   }, [evidenceAuthorized, utils]);
 
+  const [loyaltySearch, setLoyaltySearch] = useState('');
+  const [loyaltyQuery, setLoyaltyQuery] = useState('');
+  const [loyaltyPatient, setLoyaltyPatient] = useState<{
+    patientId: string;
+    displayName: string;
+    loyaltyConsent: boolean;
+  } | null>(null);
+  const loyaltyCustomers = trpc.pharmacySales.counterCustomers.useQuery(
+    { branchId, query: loyaltyQuery },
+    { enabled: branchAuthorized && loyaltyQuery.trim().length >= 2, retry: false }
+  );
+  const linkCounterCustomer = trpc.pharmacySales.linkCounterCustomer.useMutation();
   const patientsQuery = trpc.pharmacyPrescriptions.counterPatients.useQuery(
-    { query: submittedPatientQuery },
-    { enabled: submittedPatientQuery.trim().length >= 2 && patientId === null }
+    { branchId, query: submittedPatientQuery },
+    { enabled: Boolean(branchId) && submittedPatientQuery.trim().length >= 2 && patientId === null }
   );
 
   const patientPanelQuery = trpc.pharmacyPrescriptions.counterPatientPanel.useQuery(
-    { patientId: patientId ?? '' },
-    { enabled: patientId !== null }
+    { branchId, patientId: patientId ?? '' },
+    { enabled: Boolean(branchId) && patientId !== null }
   );
   const lotOptionsQuery = trpc.pharmacySales.counterLotOptions.useQuery(
     { branchId, medicineId: activeRow?.medicineId ?? '' },
@@ -499,6 +567,8 @@ function ScopedPharmacyCounterConsole({
   const captureDemand = trpc.pharmacySales.captureDemand.useMutation();
   const declineSubstitute = trpc.pharmacySales.declineSubstitute.useMutation();
   const linkCustomer = trpc.pharmacySales.linkCustomer.useMutation();
+  const loyaltyConsent = trpc.pharmacySales.loyaltyConsent.useMutation();
+  const pointsPolicy = trpc.pharmacySales.counterPointsPolicy.useQuery();
   const redeemLoyalty = trpc.pharmacySales.redeemPoints.useMutation();
   const authenticatePack = trpc.pharmacySales.authenticatePack.useMutation();
 
@@ -532,28 +602,10 @@ function ScopedPharmacyCounterConsole({
     [activeRow, saleUnit]
   );
 
-  const preview = useMemo(() => {
-    if (
-      !activeRow ||
-      !selectedOption ||
-      activeRow.printedMrpMinor === null ||
-      activeRow.unitsPerPack === null
-    ) {
-      return null;
-    }
-    try {
-      return previewSaleLine({
-        option: selectedOption,
-        quantity,
-        printedMrpMinor: activeRow.printedMrpMinor,
-        unitsPerPack: activeRow.unitsPerPack,
-        roundingIncrementMinor: activeRow.roundingIncrementMinor,
-        availableUnits: activeRow.onHandUnits,
-      });
-    } catch {
-      return null;
-    }
-  }, [activeRow, quantity, selectedOption]);
+  const preview = useMemo(
+    () => counterSelectionPreview(activeRow, selectedOption, quantity),
+    [activeRow, quantity, selectedOption]
+  );
 
   const requestedCanonicalUnits = selectedOption
     ? selectedOption.canonicalUnitsPerSaleUnit * quantity
@@ -798,12 +850,12 @@ function ScopedPharmacyCounterConsole({
       setNotice({ tone: 'warning', message: 'Type at least two characters to search.' });
       return;
     }
+    const revision = ++scannerRevision.current;
     const looksLikeGs1 = trimmed.startsWith(']d2') || trimmed.startsWith('(01)');
     if (!looksLikeGs1) {
       setSubmittedSearch({ text: trimmed, query: trimmed, branchId });
-      return;
+      return { query: trimmed, revision };
     }
-    const revision = ++scannerRevision.current;
     setPending('authenticatePack');
     try {
       const verdict = await authenticatePack.mutateAsync({ branchId, payload: trimmed });
@@ -818,6 +870,7 @@ function ScopedPharmacyCounterConsole({
               : 'warning',
         message: verdict.explanation,
       });
+      return { query: verdict.parsed?.gtin ?? trimmed, revision };
     } catch (error) {
       if (revision !== scannerRevision.current) return;
       setNotice({ tone: 'danger', message: messageFrom(error) });
@@ -830,6 +883,7 @@ function ScopedPharmacyCounterConsole({
     setActiveRow(row);
     setQuantity(1);
     setSaleUnit(row.saleUnits[0]?.kind ?? null);
+    setOverridePin('');
     setLotOverride(null);
   }, []);
 
@@ -840,166 +894,208 @@ function ScopedPharmacyCounterConsole({
     return created.id;
   }, [branchId, createSale, saleId, setActiveSale]);
 
-  const addToCart = useCallback(async () => {
-    if (!activeRow || !selectedOption || !preview || busy) return;
-    if (!preview.sufficient) {
-      setNotice({
-        tone: 'warning',
-        message: `Only ${preview.availableUnits} safe units are on hand. Reduce the quantity or capture the shortfall.`,
-      });
-      return;
-    }
-    const overrideLotId = lotOverride?.inventoryLotId ?? null;
-    if (overrideLotId && !lotOverride?.reason.trim()) {
-      setNotice({ tone: 'warning', message: 'Enter a reason before selling a non-FEFO batch.' });
-      return;
-    }
-    setPending('addToCart');
-    setNotice(null);
-    try {
-      const activeSaleId = await ensureSale();
-      const controlled = activeRow.restriction.controlled;
-      const addressOk = patientAddress.trim().length >= 3;
-      const prescriptionOk = controlledAuth.emergency || Boolean(controlledAuth.prescriptionLineId);
-      const emergencyOk =
-        !controlledAuth.emergency || controlledAuth.prescriberName.trim().length > 0;
+  const addToCart = useCallback(
+    async (scannedRow?: CounterSearchRow, scanRevision?: number) => {
+      const scanIsCurrent = () =>
+        scanRevision === undefined || scanRevision === scannerRevision.current;
+      if (!scanIsCurrent()) return;
+      const row = scannedRow ?? activeRow;
+      const option = scannedRow ? (scannedRow.saleUnits[0] ?? null) : selectedOption;
+      const units = scannedRow ? 1 : quantity;
+      const selectionPreview = scannedRow ? counterSelectionPreview(row, option, units) : preview;
+      const batchOverride = scannedRow ? null : lotOverride;
+      if (!row || !option || !selectionPreview || busy) return;
+      if (!selectionPreview.sufficient) {
+        setNotice({
+          tone: 'warning',
+          message: `Only ${selectionPreview.availableUnits} safe units are on hand. Reduce the quantity or capture the shortfall.`,
+        });
+        return;
+      }
+      const overrideLotId = batchOverride?.inventoryLotId ?? null;
+      if (overrideLotId && !batchOverride?.reason.trim()) {
+        setNotice({ tone: 'warning', message: 'Enter a reason before selling a non-FEFO batch.' });
+        return;
+      }
       if (
-        controlled &&
-        (!patient ||
-          !addressOk ||
-          !prescriptionOk ||
-          !emergencyOk ||
-          !controlledAuth.staffProfileId ||
-          !/^\d{4,8}$/.test(controlledAuth.pin) ||
-          !navigator.onLine)
+        overrideLotId &&
+        (overrideApprovers.isFetching ||
+          overrideApprovers.isError ||
+          !operationApprovalReady(overrideApprovers.data, overridePin, overrideCheckerId))
       ) {
         setNotice({
           tone: 'warning',
           message:
-            'Controlled medicine needs the patient address, a pharmacist PIN, and a prescription or an emergency prescriber. Connect online, then complete the authorization panel.',
+            'Enter the batch approval PIN and select an independent checker in staffed mode.',
         });
-        rxPanelRef.current?.focus();
         return;
       }
-      const refSerial = Number(controlledAuth.refSerial);
-      const added = await addLine.mutateAsync({
-        controlledAuthorization:
-          controlled && patient
+      setPending('addToCart');
+      setNotice(null);
+      try {
+        const activeSaleId = await ensureSale();
+        // Creating a bill can outlive this scan or the mounted counter.
+        if (!scanIsCurrent()) return;
+        const controlled = row.restriction.controlled;
+        const addressOk = patientAddress.trim().length >= 3;
+        const prescriptionOk =
+          controlledAuth.emergency || Boolean(controlledAuth.prescriptionLineId);
+        const emergencyOk =
+          !controlledAuth.emergency || controlledAuth.prescriberName.trim().length > 0;
+        if (
+          controlled &&
+          (!patient ||
+            !addressOk ||
+            !prescriptionOk ||
+            !emergencyOk ||
+            !controlledAuth.staffProfileId ||
+            !/^\d{4,8}$/.test(controlledAuth.pin) ||
+            !navigator.onLine)
+        ) {
+          setNotice({
+            tone: 'warning',
+            message:
+              'Controlled medicine needs the patient address, a pharmacist PIN, and a prescription or an emergency prescriber. Connect online, then complete the authorization panel.',
+          });
+          rxPanelRef.current?.focus();
+          return;
+        }
+        const refSerial = Number(controlledAuth.refSerial);
+        const batchPin = overridePin;
+        if (overrideLotId) setOverridePin('');
+        const added = await addLine.mutateAsync({
+          approvalPin: overrideLotId ? batchPin : undefined,
+          approvedByUserId: overrideLotId ? overrideCheckerId || undefined : undefined,
+          prescriptionApproval:
+            !controlled && (row.restriction.rx || row.restriction.restricted)
+              ? { pin: rxApprovalPin || undefined, checkerId: rxCheckerId || undefined }
+              : undefined,
+          controlledAuthorization:
+            controlled && patient
+              ? {
+                  patientId: patient.patientId,
+                  patientAddress: patientAddress.trim(),
+                  staffProfileId: controlledAuth.staffProfileId,
+                  pin: controlledAuth.pin,
+                  rxSerialWritten: controlledAuth.rxSerialWritten,
+                  emergency: controlledAuth.emergency,
+                  prescriptionLineId: controlledAuth.prescriptionLineId || undefined,
+                  prescriberName: controlledAuth.prescriberName.trim() || undefined,
+                  prescriberRegNo: controlledAuth.prescriberRegNo.trim() || undefined,
+                  refSerial: Number.isInteger(refSerial) && refSerial > 0 ? refSerial : undefined,
+                }
+              : undefined,
+          branchId,
+          saleId: activeSaleId,
+          medicineId: row.medicineId,
+          presentationId: row.presentationId,
+          packLevelId: option.packLevelId,
+          saleUnit: option.kind,
+          quantity: units,
+          canonicalUnitsPerSaleUnit: option.canonicalUnitsPerSaleUnit,
+          // A stable key per (sale, medicine, unit, quantity) so a double-press of
+          // the add chord cannot post the same line twice.
+          idempotencyKey: `counter:${activeSaleId}:${row.medicineId}:${option.packLevelId}:${option.kind}:${units}${overrideLotId ? `:${overrideLotId}` : ''}`,
+          ...(overrideLotId && batchOverride
             ? {
-                patientId: patient.patientId,
-                patientAddress: patientAddress.trim(),
-                staffProfileId: controlledAuth.staffProfileId,
-                pin: controlledAuth.pin,
-                rxSerialWritten: controlledAuth.rxSerialWritten,
-                emergency: controlledAuth.emergency,
-                prescriptionLineId: controlledAuth.prescriptionLineId || undefined,
-                prescriberName: controlledAuth.prescriberName.trim() || undefined,
-                prescriberRegNo: controlledAuth.prescriberRegNo.trim() || undefined,
-                refSerial: Number.isInteger(refSerial) && refSerial > 0 ? refSerial : undefined,
+                override: {
+                  inventoryLotId: overrideLotId,
+                  reason: batchOverride.reason.trim(),
+                  approvalPolicy: COUNTER_OVERRIDE_APPROVAL_POLICY,
+                },
               }
-            : undefined,
-        branchId,
-        saleId: activeSaleId,
-        medicineId: activeRow.medicineId,
-        presentationId: activeRow.presentationId,
-        packLevelId: selectedOption.packLevelId,
-        saleUnit: selectedOption.kind,
-        quantity,
-        canonicalUnitsPerSaleUnit: selectedOption.canonicalUnitsPerSaleUnit,
-        // A stable key per (sale, medicine, unit, quantity) so a double-press of
-        // the add chord cannot post the same line twice.
-        idempotencyKey: `counter:${activeSaleId}:${activeRow.medicineId}:${selectedOption.packLevelId}:${selectedOption.kind}:${quantity}${overrideLotId ? `:${overrideLotId}` : ''}`,
-        ...(overrideLotId && lotOverride
-          ? {
-              override: {
-                inventoryLotId: overrideLotId,
-                reason: lotOverride.reason.trim(),
-                approvalPolicy: COUNTER_OVERRIDE_APPROVAL_POLICY,
-              },
-            }
-          : {}),
-      });
-      if ('blocked' in added) {
-        setNotice({ tone: 'warning', message: added.blocked });
-        return;
+            : {}),
+        });
+        if ('blocked' in added) {
+          setNotice({ tone: 'warning', message: added.blocked });
+          return;
+        }
+        await refreshCart();
+        await utils.pharmacyPrescriptions.counterPatientPanel.invalidate();
+        await utils.pharmacySafety.controlledRegister.invalidate();
+        await utils.pharmacySales.counterSearch.invalidate();
+        setLotOverride(null);
+        setNotice({
+          tone: 'success',
+          message: `${units} × ${row.displayName} added${overrideLotId ? ' with a recorded batch override' : ''}.`,
+        });
+        setQuery('');
+        focusSearch();
+      } catch (error) {
+        const message = messageFrom(error);
+        setNotice({
+          tone: 'danger',
+          message,
+          ...(message === COUNTER_ERROR_MESSAGES.INVALID_ARRANGEMENT
+            ? { inventoryBranchId: branchId }
+            : {}),
+        });
+      } finally {
+        setControlledAuth((value) => ({ ...value, pin: '' }));
+        setOverridePin('');
+        setRxApprovalPin('');
+        setPending(null);
       }
-      await refreshCart();
-      await utils.pharmacyPrescriptions.counterPatientPanel.invalidate();
-      await utils.pharmacySafety.controlledRegister.invalidate();
-      await utils.pharmacySales.counterSearch.invalidate();
-      setLotOverride(null);
-      setNotice({
-        tone: 'success',
-        message: `${quantity} × ${activeRow.displayName} added${overrideLotId ? ' with a recorded batch override' : ''}.`,
-      });
-      setQuery('');
-      focusSearch();
-    } catch (error) {
-      const message = messageFrom(error);
-      setNotice({
-        tone: 'danger',
-        message,
-        ...(message === COUNTER_ERROR_MESSAGES.INVALID_ARRANGEMENT
-          ? { inventoryBranchId: branchId }
-          : {}),
-      });
-    } finally {
-      setControlledAuth((value) => ({ ...value, pin: '' }));
-      setPending(null);
-    }
-  }, [
-    activeRow,
-    addLine,
-    controlledAuth,
-    patient,
-    patientAddress,
-    branchId,
-    busy,
-    ensureSale,
-    focusSearch,
-    lotOverride,
-    preview,
-    quantity,
-    refreshCart,
-    selectedOption,
-    utils,
-  ]);
+    },
+    [
+      activeRow,
+      addLine,
+      controlledAuth,
+      overridePin,
+      overrideCheckerId,
+      overrideApprovers.data,
+      overrideApprovers.isFetching,
+      overrideApprovers.isError,
+      rxApprovalPin,
+      rxCheckerId,
+      patient,
+      patientAddress,
+      branchId,
+      busy,
+      ensureSale,
+      focusSearch,
+      lotOverride,
+      preview,
+      quantity,
+      refreshCart,
+      selectedOption,
+      utils,
+    ]
+  );
 
+  // Authentication belongs to this scan; other pending actions must still block its add.
+  const barcodeBusy = useRef(false);
   useEffect(() => {
-    const token = barcodeAdd.current;
-    if (!token || token !== trimmedQuery || !searchCurrent) return;
-    if (searchQuery.isFetching || searchQuery.isPlaceholderData || searchQuery.isError) return;
-    const found = searchQuery.data?.rows ?? [];
-    if (found.length !== 1) {
-      barcodeAdd.current = null;
-      return;
+    barcodeBusy.current = busy && pending !== 'authenticatePack';
+  }, [busy, pending]);
+
+  const addBarcode = useCallback(async () => {
+    if (busy) return;
+    const search = await runSearch();
+    if (!search) return;
+    try {
+      const result = await utils.pharmacySales.counterSearch.fetch(
+        { branchId, query: search.query },
+        { staleTime: 10_000 }
+      );
+      if (search.revision !== scannerRevision.current || result.rows.length !== 1) return;
+      const row = result.rows[0]!;
+      const restage =
+        activeRow?.medicineId !== row.medicineId || saleUnit !== (row.saleUnits[0]?.kind ?? null);
+      if (restage) stageRow(row);
+      const scanPreview = restage
+        ? counterSelectionPreview(row, row.saleUnits[0] ?? null, 1)
+        : preview;
+      if (scanPreview?.sufficient && !barcodeBusy.current) {
+        await addToCart(restage ? row : undefined, search.revision);
+      }
+    } catch {
+      // The search query renders its own error; a failed scan never adds a line.
     }
-    const row = found[0]!;
-    const nextUnit = row.saleUnits[0]?.kind ?? null;
-    if (!activeRow || activeRow.medicineId !== row.medicineId || saleUnit !== nextUnit) {
-      stageRow(row);
-      return;
-    }
-    barcodeAdd.current = null;
-    if (!preview?.sufficient || busy) return;
-    void addToCart();
-  }, [
-    activeRow,
-    addToCart,
-    busy,
-    preview,
-    saleUnit,
-    searchCurrent,
-    searchQuery.data,
-    searchQuery.isError,
-    searchQuery.isFetching,
-    searchQuery.isPlaceholderData,
-    stageRow,
-    trimmedQuery,
-  ]);
+  }, [activeRow, addToCart, branchId, busy, preview, runSearch, saleUnit, stageRow, utils]);
 
   const runTransition = useCallback(
-    async (action: 'hold' | 'resume' | 'complete' | 'void', reason?: string) => {
+    async (action: 'hold' | 'resume' | 'void', reason?: string) => {
       const target = action === 'resume' ? heldSaleId : saleId;
       if (!target || busy) return;
       setPending(action);
@@ -1010,7 +1106,6 @@ function ScopedPharmacyCounterConsole({
           saleId: target,
           action,
           reason,
-          deviceId: readCounterDeviceId() ?? undefined,
         });
         if (action === 'hold') {
           setHeldSaleId(target);
@@ -1152,7 +1247,7 @@ function ScopedPharmacyCounterConsole({
           branchId,
           saleId,
           deviceId: counterDeviceId(),
-          businessDate: businessDate(),
+          businessDate: todayBusinessDate(),
           type: input.type,
           amountMinor: input.amountMinor,
           ...(input.cashReceivedMinor !== undefined
@@ -1227,6 +1322,7 @@ function ScopedPharmacyCounterConsole({
       refreshTenderBill,
       saleId,
       tender,
+      todayBusinessDate,
     ]
   );
 
@@ -1311,7 +1407,7 @@ function ScopedPharmacyCounterConsole({
         saleId,
         points: redeemPoints,
         deviceId: counterDeviceId(),
-        businessDate: businessDate(),
+        businessDate: todayBusinessDate(),
         idempotencyKey: `counter-loyalty:${saleId}:${browserUuid()}`,
       });
       await Promise.all([refreshCart(), customerQuery.refetch()]);
@@ -1324,7 +1420,16 @@ function ScopedPharmacyCounterConsole({
     } finally {
       setPending(null);
     }
-  }, [branchId, busy, customerQuery, redeemLoyalty, redeemPoints, refreshCart, saleId]);
+  }, [
+    branchId,
+    busy,
+    customerQuery,
+    redeemLoyalty,
+    redeemPoints,
+    refreshCart,
+    saleId,
+    todayBusinessDate,
+  ]);
 
   const captureShortfall = useCallback(async () => {
     if (busy || !branchAuthorized) return;
@@ -1688,7 +1793,7 @@ function ScopedPharmacyCounterConsole({
             organizationId={organizationId}
             accountId={accountId}
             deviceId={counterDeviceId}
-            businessDate={businessDate}
+            businessDate={todayBusinessDate}
           />
           <Link
             className={buttonVariants({
@@ -1733,7 +1838,7 @@ function ScopedPharmacyCounterConsole({
                   .mutateAsync({
                     branchId,
                     deviceId: counterDeviceId(),
-                    businessDate: businessDate(),
+                    businessDate: todayBusinessDate(),
                     openingFloatMinor: 0,
                   })
                   .then(() =>
@@ -1805,6 +1910,8 @@ function ScopedPharmacyCounterConsole({
                   <Input
                     id="counter-search"
                     ref={searchRef}
+                    // POS-01: focus rests here for the whole bill, so F-keys stay live in this field.
+                    data-counter-scan=""
                     autoFocus
                     autoComplete="off"
                     value={query}
@@ -1827,8 +1934,7 @@ function ScopedPharmacyCounterConsole({
                         trimmed.startsWith(']d2') ||
                         trimmed.startsWith('(01)');
                       if (barcode) {
-                        barcodeAdd.current = trimmed;
-                        void runSearch();
+                        void addBarcode();
                         return;
                       }
                       if (activeRow) {
@@ -1853,7 +1959,11 @@ function ScopedPharmacyCounterConsole({
                     disabled={busy}
                     onChange={(event) => {
                       scannerRevision.current += 1;
+                      setOverridePin('');
+                      setOverrideCheckerId('');
                       setSelectedBranchId(event.target.value);
+                      setRxApprovalPin('');
+                      setRxCheckerId('');
                       setActiveRow(null);
                       setActiveSale(null);
                       setHeldSaleId(null);
@@ -1998,9 +2108,25 @@ function ScopedPharmacyCounterConsole({
                   }
                   error={lotOptionsQuery.error ? messageFrom(lotOptionsQuery.error) : null}
                   disabled={busy}
-                  onChange={setLotOverride}
+                  onChange={(value) => {
+                    setOverridePin('');
+                    setLotOverride(value);
+                  }}
                   onRetry={() => void lotOptionsQuery.refetch()}
                 />
+                {lotOverride?.inventoryLotId && (
+                  <OperationApproval
+                    id="batch-approval"
+                    data={overrideApprovers.data}
+                    loading={overrideApprovers.isLoading}
+                    error={overrideApprovers.isError}
+                    disabled={busy}
+                    pin={overridePin}
+                    checkerId={overrideCheckerId}
+                    onPin={setOverridePin}
+                    onChecker={setOverrideCheckerId}
+                  />
+                )}
               </div>
             ) : (
               <p className="text-sm text-text-muted">
@@ -2092,7 +2218,7 @@ function ScopedPharmacyCounterConsole({
                 branchId={branchId}
                 saleId={saleId}
                 deviceId={counterDeviceId()}
-                businessDate={businessDate()}
+                businessDate={todayBusinessDate()}
                 disabled={busy || blocked}
                 onRecorded={refreshCart}
               />
@@ -2189,13 +2315,129 @@ function ScopedPharmacyCounterConsole({
                 type="button"
                 variant="outline"
                 className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
-                disabled={busy || !patient || !saleId}
+                disabled={busy || !patient || !saleId || !patientPanelQuery.data?.loyaltyConsent}
                 onClick={() => void attachCustomer()}
               >
                 {pending === 'customer' ? 'Linking…' : 'Link selected patient'}
               </Button>
             }
           >
+            <form
+              className="mb-4 space-y-2"
+              onSubmit={(event) => {
+                event.preventDefault();
+                setLoyaltyQuery(loyaltySearch.trim());
+              }}
+            >
+              <Label htmlFor="counter-loyalty-search">
+                Find loyalty customer by name or last four phone digits
+              </Label>
+              <div className="flex gap-2">
+                <Input
+                  id="counter-loyalty-search"
+                  value={loyaltySearch}
+                  onChange={(event) => setLoyaltySearch(event.target.value)}
+                  maxLength={100}
+                />
+                <Button
+                  type="submit"
+                  variant="outline"
+                  disabled={busy || loyaltySearch.trim().length < 2}
+                >
+                  Search
+                </Button>
+              </div>
+              {loyaltyQuery && loyaltyCustomers.isLoading && (
+                <p role="status">Searching customers…</p>
+              )}
+              {loyaltyCustomers.isError && (
+                <p role="alert">{messageFrom(loyaltyCustomers.error)}</p>
+              )}
+              {loyaltyQuery && loyaltyCustomers.data?.length === 0 && (
+                <p>No customers match that search.</p>
+              )}
+              {branchAuthorized &&
+                !loyaltyCustomers.isError &&
+                loyaltyCustomers.data?.map((candidate) => (
+                  <Button
+                    key={candidate.patientId}
+                    type="button"
+                    variant="outline"
+                    disabled={busy || linkCounterCustomer.isPending}
+                    onClick={async () => {
+                      setLoyaltyPatient(candidate);
+                      if (!candidate.loyaltyConsent) return;
+                      try {
+                        const activeSaleId = await ensureSale();
+                        const linked = await linkCounterCustomer.mutateAsync({
+                          branchId,
+                          saleId: activeSaleId,
+                          patientId: candidate.patientId,
+                        });
+                        if (linked) setCustomerId(linked.id);
+                        setNotice({
+                          tone: 'success',
+                          message: 'Loyalty customer linked to this bill.',
+                        });
+                      } catch (error) {
+                        setNotice({ tone: 'warning', message: messageFrom(error) });
+                      }
+                    }}
+                  >
+                    {candidate.displayName} · {candidate.phone ?? 'No phone'}
+                    {!candidate.loyaltyConsent ? ' · Loyalty consent required' : ''}
+                  </Button>
+                ))}
+            </form>
+            {loyaltyPatient && (
+              <div className="mb-4 space-y-2 text-sm">
+                <p>
+                  Loyalty consent for {loyaltyPatient.displayName}:{' '}
+                  {loyaltyPatient.loyaltyConsent ? 'Opted in' : 'Not opted in'}. Ask the customer
+                  before recording a choice.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {[true, false].map((granted) => (
+                    <Button
+                      key={String(granted)}
+                      type="button"
+                      variant="outline"
+                      disabled={busy || loyaltyConsent.isPending}
+                      onClick={async () => {
+                        try {
+                          await loyaltyConsent.mutateAsync({
+                            branchId,
+                            patientId: loyaltyPatient.patientId,
+                            granted,
+                          });
+                          setLoyaltyPatient((selected) =>
+                            selected ? { ...selected, loyaltyConsent: granted } : selected
+                          );
+                          await loyaltyCustomers.refetch();
+                          setNotice({
+                            tone: 'success',
+                            message: granted
+                              ? 'Customer opted in to loyalty.'
+                              : 'Customer opted out of loyalty.',
+                          });
+                        } catch (error) {
+                          setNotice({ tone: 'danger', message: messageFrom(error) });
+                        }
+                      }}
+                    >
+                      {granted ? 'Record customer opt in' : 'Record customer opt out'}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {pointsPolicy.data && (
+              <p className="mb-3 text-sm text-text-muted">
+                {pointsPolicy.data.pointsEnabled
+                  ? `Earn 1 point per ${formatMinor(pointsPolicy.data.earnEveryMinor)} paid. Each point redeems ${formatMinor(pointsPolicy.data.pointValueMinor)}; minimum ${pointsPolicy.data.minimumRedeemPoints} points.`
+                  : 'Points earning and redemption are disabled.'}
+              </p>
+            )}
             {customerQuery.data ? (
               <div className="space-y-4 text-sm text-text-body">
                 <div>
@@ -2211,10 +2453,8 @@ function ScopedPharmacyCounterConsole({
                     Available credit {formatMinor(customerQuery.data.availableCreditMinor)}
                   </p>
                 </div>
-                <div className="flex gap-2">
-                  <Label htmlFor="counter-redeem-points" className="sr-only">
-                    Points to redeem
-                  </Label>
+                <div className="flex flex-wrap items-end gap-2">
+                  <Label htmlFor="counter-redeem-points">Points to redeem</Label>
                   <Input
                     id="counter-redeem-points"
                     type="number"
@@ -2230,7 +2470,12 @@ function ScopedPharmacyCounterConsole({
                     type="button"
                     className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
                     disabled={
-                      busy || redeemPoints <= 0 || balanceMinor === null || balanceMinor <= 0
+                      busy ||
+                      !pointsPolicy.data?.pointsEnabled ||
+                      redeemPoints < (pointsPolicy.data?.minimumRedeemPoints ?? 1) ||
+                      redeemPoints > customerQuery.data.pointsBalance ||
+                      balanceMinor === null ||
+                      balanceMinor <= 0
                     }
                     onClick={() => void redeemCustomerPoints()}
                   >
@@ -2280,7 +2525,8 @@ function ScopedPharmacyCounterConsole({
               </div>
             ) : (
               <p className="text-sm text-text-muted">
-                Select a patient, open a bill, then link. Current loyalty consent is required.
+                Search for a customer above and select a match to link this bill. Current loyalty
+                consent is required.
               </p>
             )}
           </SectionCard>
@@ -2294,14 +2540,65 @@ function ScopedPharmacyCounterConsole({
               </kbd>
             }
           >
+            {activeRow &&
+            !activeRow.restriction.controlled &&
+            (activeRow.restriction.rx || activeRow.restriction.restricted) ? (
+              <div className="mb-4 space-y-3">
+                {rxApproversQuery.data?.mode !== 'SOLO' ? (
+                  <div>
+                    <Label htmlFor="rx-checker">Approving pharmacist</Label>
+                    <select
+                      id="rx-checker"
+                      className="mt-1 min-h-11 w-full rounded-[var(--radius-sm)] border border-border-default bg-surface-raised px-3 text-sm"
+                      value={rxCheckerId}
+                      onChange={(event) => setRxCheckerId(event.target.value)}
+                      disabled={busy || rxApproversQuery.isLoading || rxApproversQuery.isError}
+                    >
+                      <option value="">Select independent pharmacist</option>
+                      {rxApproversQuery.data?.users.map((checker) => (
+                        <option key={checker.id} value={checker.id}>
+                          {checker.name || 'Pharmacist'}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ) : null}
+                <Label htmlFor="rx-approval-pin">
+                  {rxApproversQuery.data?.mode === 'SOLO'
+                    ? 'Owner PIN'
+                    : 'Approving pharmacist PIN'}
+                </Label>
+                <Input
+                  className="min-h-11"
+                  id="rx-approval-pin"
+                  type="password"
+                  autoComplete="off"
+                  inputMode="numeric"
+                  pattern="[0-9]{4,8}"
+                  minLength={4}
+                  maxLength={8}
+                  disabled={busy}
+                  value={rxApprovalPin}
+                  onChange={(event) => setRxApprovalPin(event.target.value)}
+                />
+                {rxApproversQuery.isError ? (
+                  <p role="alert" className="text-sm text-destructive">
+                    Unable to load prescription approvers. Retry this page.
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
             <CounterRxPanel
+              branchId={branchId}
               ref={rxPanelRef}
               controlled={
                 // QA-138: controlledPharmacists requires pharmacy:dispense/safety. A
                 // FORBIDDEN read means this actor cannot dispense, so the controlled
                 // authorization panel is not offered (the server refuses it anyway).
+                // Without Pharmacy Safety the read is not made at all, with the same outcome.
+                !safetyLicensed ||
                 (pharmacistsQuery.error as { data?: { code?: string } } | null)?.data?.code ===
-                'FORBIDDEN'
+                  'FORBIDDEN'
                   ? undefined
                   : {
                       ...controlledAuth,
