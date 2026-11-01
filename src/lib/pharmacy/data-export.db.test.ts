@@ -31,6 +31,7 @@ let withTenantDb: typeof import('@/lib/tenancy/scoped-db').withTenantDb;
 let withPlatformDb: typeof import('@/lib/tenancy/scoped-db').withPlatformDb;
 let workbench: typeof import('./migration/workbench');
 let catalogueProfiler: typeof import('./migration/devfathom-catalogue-profiler');
+let stockLotsProfiler: typeof import('./migration/devfathom-stock-lots-profiler');
 let exporter: typeof import('./data-export');
 let format: typeof import('./data-export-format');
 let profiler: typeof import('./migration/profiler');
@@ -197,6 +198,7 @@ beforeAll(async () => {
   withPlatformDb = scoped.withPlatformDb;
   workbench = await import('./migration/workbench');
   catalogueProfiler = await import('./migration/devfathom-catalogue-profiler');
+  stockLotsProfiler = await import('./migration/devfathom-stock-lots-profiler');
   exporter = await import('./data-export');
   format = await import('./data-export-format');
   profiler = await import('./migration/profiler');
@@ -240,7 +242,9 @@ suite('owner data export under forced PostgreSQL RLS', () => {
       const profiled = profiler.profileTable(
         key === 'medicines'
           ? catalogueProfiler.devfathomCatalogueProfiler
-          : csvProfiler.excelCsvProfiler,
+          : key === 'stockLots'
+            ? stockLotsProfiler.devfathomStockLotsProfiler
+            : csvProfiler.excelCsvProfiler,
         table
       );
       expect(profiled.rows, spec.name).toHaveLength(dataset[key].length);

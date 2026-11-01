@@ -42,7 +42,7 @@ export default async function PharmacyDataExportPage() {
       <PageHeader
         eyebrow="Pharmacy"
         heading="Download my data"
-        description="A ZIP of CSV files: medicines and packs, stock lots, customers and khata, suppliers and balances, sales, purchases and GRNs, and the controlled register. The columns match DevFathom's import headers, and a README explains each one."
+        description="A ZIP of CSV files: medicines and packs, stock lots, customers and khata, suppliers and balances with credit and debit notes, sales, purchases and GRNs, and the controlled register. The columns match DevFathom's import headers, and a README explains each one."
       />
       <SectionCard title="Your exports" titleLevel={2}>
         <DataExportConsole initial={initial} />

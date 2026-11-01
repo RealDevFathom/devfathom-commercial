@@ -902,13 +902,155 @@ export async function collectPharmacyDataExport(
     if (!supplierId) continue;
     paidBySupplier.set(supplierId, (paidBySupplier.get(supplierId) ?? 0) + payment.amountMinor);
   }
+
+  // Supplier credit notes, debit notes and their settlements (PUR-06). A credit
+  // note reduces what the pharmacy owes until a posted payment settles it, so
+  // the portable balance reconciles: purchased - paid - remaining credit.
+  const supplierCredits = await db.pharmacySupplierCredit.findMany({
+    where: { organizationId },
+    orderBy: [{ receivedAt: 'asc' }, { id: 'asc' }],
+    select: {
+      id: true,
+      branchId: true,
+      supplierId: true,
+      reference: true,
+      amountMinor: true,
+      receivedAt: true,
+      createdAt: true,
+    },
+  });
+  const debitNotes = await db.pharmacyDebitNote.findMany({
+    where: { organizationId },
+    orderBy: [{ issuedAt: 'asc' }, { id: 'asc' }],
+    select: {
+      id: true,
+      branchId: true,
+      supplierId: true,
+      reference: true,
+      status: true,
+      expectedCreditMinor: true,
+      issuedAt: true,
+      cancelledAt: true,
+      purchaseReturn: { select: { reference: true, kind: true, status: true } },
+    },
+  });
+  const creditAllocations = await db.pharmacySupplierCreditAllocation.findMany({
+    where: { organizationId },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    select: {
+      id: true,
+      supplierCreditId: true,
+      debitNoteId: true,
+      amountMinor: true,
+      createdAt: true,
+    },
+  });
+  const creditSettlements = await db.pharmacyBookkeepingAllocation.findMany({
+    where: {
+      organizationId,
+      sourceKind: 'SUPPLIER_CREDIT',
+      transaction: {
+        organizationId,
+        kind: { in: ['SUPPLIER_PAYMENT', 'CHEQUE', 'VOUCHER'] },
+        status: 'POSTED',
+      },
+    },
+    select: { sourceId: true, amountMinor: true },
+  });
+  const creditById = new Map(supplierCredits.map((credit) => [credit.id, credit]));
+  const debitNoteById = new Map(debitNotes.map((note) => [note.id, note]));
+  const settledByCredit = new Map<string, number>();
+  for (const settlement of creditSettlements) {
+    if (!creditById.has(settlement.sourceId)) continue;
+    settledByCredit.set(
+      settlement.sourceId,
+      (settledByCredit.get(settlement.sourceId) ?? 0) + settlement.amountMinor
+    );
+  }
+  const allocatedByCredit = new Map<string, number>();
+  const receivedByNote = new Map<string, number>();
+  for (const allocation of creditAllocations) {
+    allocatedByCredit.set(
+      allocation.supplierCreditId,
+      (allocatedByCredit.get(allocation.supplierCreditId) ?? 0) + allocation.amountMinor
+    );
+    receivedByNote.set(
+      allocation.debitNoteId,
+      (receivedByNote.get(allocation.debitNoteId) ?? 0) + allocation.amountMinor
+    );
+  }
+  const creditBySupplier = new Map<string, { total: number; settled: number }>();
+  const supplierCreditRows: ExportRow[] = supplierCredits.map((credit) => {
+    const settled = settledByCredit.get(credit.id) ?? 0;
+    const totals = creditBySupplier.get(credit.supplierId) ?? { total: 0, settled: 0 };
+    totals.total += credit.amountMinor;
+    totals.settled += settled;
+    creditBySupplier.set(credit.supplierId, totals);
+    return {
+      code: credit.id,
+      reference: credit.reference,
+      supplier: supplierName.get(credit.supplierId) ?? null,
+      supplier_code: credit.supplierId,
+      branch_code: branchCode.get(credit.branchId) ?? credit.branchId,
+      amount: formatMinor(credit.amountMinor),
+      received_at: formatInstant(credit.receivedAt),
+      allocated_to_debit_notes: formatMinor(allocatedByCredit.get(credit.id) ?? 0),
+      settled_through_payments: formatMinor(settled),
+      remaining: formatMinor(credit.amountMinor - settled),
+      created_at: formatInstant(credit.createdAt),
+    };
+  });
+  const openClaimBySupplier = new Map<string, number>();
+  const debitNoteRows: ExportRow[] = debitNotes.map((note) => {
+    const received = receivedByNote.get(note.id) ?? 0;
+    const openClaim =
+      note.status === 'CANCELLED' ? 0 : Math.max(0, note.expectedCreditMinor - received);
+    openClaimBySupplier.set(
+      note.supplierId,
+      (openClaimBySupplier.get(note.supplierId) ?? 0) + openClaim
+    );
+    return {
+      code: note.id,
+      reference: note.reference,
+      supplier: supplierName.get(note.supplierId) ?? null,
+      supplier_code: note.supplierId,
+      branch_code: branchCode.get(note.branchId) ?? note.branchId,
+      return_reference: note.purchaseReturn.reference,
+      return_kind: note.purchaseReturn.kind,
+      return_status: note.purchaseReturn.status,
+      status: note.status,
+      expected_credit: formatMinor(note.expectedCreditMinor),
+      received_credit: formatMinor(received),
+      open_claim: formatMinor(openClaim),
+      issued_at: formatInstant(note.issuedAt),
+      cancelled_at: formatInstant(note.cancelledAt),
+    };
+  });
+  const supplierCreditAllocationRows: ExportRow[] = creditAllocations.map((allocation) => {
+    const credit = creditById.get(allocation.supplierCreditId);
+    const note = debitNoteById.get(allocation.debitNoteId);
+    const supplierId = credit?.supplierId ?? note?.supplierId;
+    return {
+      code: allocation.id,
+      credit_reference: credit?.reference ?? null,
+      credit_code: allocation.supplierCreditId,
+      debit_note_reference: note?.reference ?? null,
+      debit_note_code: allocation.debitNoteId,
+      supplier: supplierId ? (supplierName.get(supplierId) ?? null) : null,
+      amount: formatMinor(allocation.amountMinor),
+      allocated_at: formatInstant(allocation.createdAt),
+    };
+  });
+
   const supplierRows: ExportRow[] = suppliers.map((supplier) => {
     const purchased = purchasedBySupplier.get(supplier.id) ?? 0;
     const paid = paidBySupplier.get(supplier.id) ?? 0;
+    const credit = creditBySupplier.get(supplier.id) ?? { total: 0, settled: 0 };
+    const creditRemaining = credit.total - credit.settled;
     return {
       code: supplier.id,
       supplier: supplier.name,
-      balance: formatMinor(purchased - paid),
+      balance: formatMinor(purchased - paid - creditRemaining),
       purchased_total: formatMinor(purchased),
       paid_total: formatMinor(paid),
       legal_name: supplier.legalName,
@@ -920,6 +1062,10 @@ export async function collectPharmacyDataExport(
       authorized: supplier.authorized,
       active: supplier.active,
       created_at: formatInstant(supplier.createdAt),
+      credit_total: formatMinor(credit.total),
+      credit_settled_total: formatMinor(credit.settled),
+      credit_remaining_total: formatMinor(creditRemaining),
+      open_claim_total: formatMinor(openClaimBySupplier.get(supplier.id) ?? 0),
     };
   });
 
@@ -1100,6 +1246,9 @@ export async function collectPharmacyDataExport(
       customers: customerRows,
       khataLedger: khataRows,
       suppliers: supplierRows,
+      supplierCredits: supplierCreditRows,
+      debitNotes: debitNoteRows,
+      supplierCreditAllocations: supplierCreditAllocationRows,
       sales: saleRows,
       saleLines: saleLineRows,
       purchaseOrders: purchaseOrderRows,

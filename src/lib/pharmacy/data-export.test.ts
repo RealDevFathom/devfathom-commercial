@@ -347,6 +347,10 @@ function seededDb() {
         { sourceId: 'unknown-bill', amountMinor: 999 },
       ]),
     },
+    // PUR-06 supplier credits: none by default; the credit test seeds them.
+    pharmacySupplierCredit: { findMany: vi.fn(async (): Promise<unknown[]> => []) },
+    pharmacyDebitNote: { findMany: vi.fn(async (): Promise<unknown[]> => []) },
+    pharmacySupplierCreditAllocation: { findMany: vi.fn(async (): Promise<unknown[]> => []) },
     pharmacySale: {
       findMany: vi.fn(async () => [
         {
@@ -620,6 +624,97 @@ describe('collection', () => {
     }
   );
 
+  it('reconciles the supplier balance with credit notes, debit notes and their settlements', async () => {
+    const { db } = seededDb();
+    db.pharmacySupplierCredit.findMany.mockResolvedValue([
+      {
+        id: 'cr-1', branchId: 'br-a', supplierId: 'sup-1', reference: 'CN-1', amountMinor: 400,
+        receivedAt: new Date('2026-09-01T00:00:00.000Z'), createdAt: new Date('2026-09-01T01:00:00.000Z'),
+      },
+      {
+        id: 'cr-2', branchId: 'br-a', supplierId: 'sup-1', reference: 'CN-2', amountMinor: 200,
+        receivedAt: new Date('2026-09-05T00:00:00.000Z'), createdAt: new Date('2026-09-05T01:00:00.000Z'),
+      },
+    ]);
+    db.pharmacyDebitNote.findMany.mockResolvedValue([
+      {
+        id: 'dn-1', branchId: 'br-a', supplierId: 'sup-1', reference: 'DN-1', status: 'PARTIALLY_SETTLED',
+        expectedCreditMinor: 700, issuedAt: new Date('2026-08-30T00:00:00.000Z'), cancelledAt: null,
+        purchaseReturn: { reference: 'PR-1', kind: 'EXPIRY_CLAIM', status: 'DISPATCHED' },
+      },
+      {
+        id: 'dn-2', branchId: 'br-a', supplierId: 'sup-1', reference: 'DN-2', status: 'CANCELLED',
+        expectedCreditMinor: 900, issuedAt: new Date('2026-08-31T00:00:00.000Z'),
+        cancelledAt: new Date('2026-09-02T00:00:00.000Z'),
+        purchaseReturn: { reference: 'PR-2', kind: 'EXPIRY_CLAIM', status: 'CANCELLED' },
+      },
+    ]);
+    db.pharmacySupplierCreditAllocation.findMany.mockResolvedValue([
+      {
+        id: 'al-1', supplierCreditId: 'cr-1', debitNoteId: 'dn-1', amountMinor: 300,
+        createdAt: new Date('2026-09-03T00:00:00.000Z'),
+      },
+    ]);
+    db.pharmacyBookkeepingAllocation.findMany.mockImplementation(async (...args: unknown[]) => {
+      const query = args[0] as { where: { sourceKind: string } };
+      return query.where.sourceKind === 'SUPPLIER_CREDIT'
+        ? [
+            { sourceId: 'cr-2', amountMinor: 150 },
+            // Another tenant's or a deleted credit never reaches this supplier.
+            { sourceId: 'unknown-credit', amountMinor: 999 },
+          ]
+        : [{ sourceId: 'grn-1', amountMinor: 500 }];
+    });
+    const { dataset } = await collectPharmacyDataExport(db as unknown as ScopedDb, 'org-a', RANGE, NOW);
+
+    // 18.00 purchased − 5.00 paid − (6.00 credited − 1.50 settled) = 8.50.
+    expect(dataset.suppliers[0]).toMatchObject({
+      purchased_total: '18.00',
+      paid_total: '5.00',
+      credit_total: '6.00',
+      credit_settled_total: '1.50',
+      credit_remaining_total: '4.50',
+      open_claim_total: '4.00',
+      balance: '8.50',
+    });
+    expect(dataset.supplierCredits).toEqual([
+      expect.objectContaining({
+        code: 'cr-1', reference: 'CN-1', supplier: 'Muller & Phipps', supplier_code: 'sup-1',
+        amount: '4.00', allocated_to_debit_notes: '3.00', settled_through_payments: '0.00',
+        remaining: '4.00',
+      }),
+      expect.objectContaining({
+        code: 'cr-2', amount: '2.00', allocated_to_debit_notes: '0.00',
+        settled_through_payments: '1.50', remaining: '0.50',
+      }),
+    ]);
+    expect(dataset.debitNotes).toEqual([
+      expect.objectContaining({
+        code: 'dn-1', reference: 'DN-1', return_reference: 'PR-1', status: 'PARTIALLY_SETTLED',
+        expected_credit: '7.00', received_credit: '3.00', open_claim: '4.00',
+      }),
+      expect.objectContaining({ code: 'dn-2', status: 'CANCELLED', open_claim: '0.00' }),
+    ]);
+    expect(dataset.supplierCreditAllocations).toEqual([
+      expect.objectContaining({
+        code: 'al-1', credit_reference: 'CN-1', debit_note_reference: 'DN-1',
+        supplier: 'Muller & Phipps', amount: '3.00',
+      }),
+    ]);
+    expect(db.pharmacyBookkeepingAllocation.findMany).toHaveBeenCalledWith({
+      where: {
+        organizationId: 'org-a',
+        sourceKind: 'SUPPLIER_CREDIT',
+        transaction: {
+          organizationId: 'org-a',
+          kind: { in: ['SUPPLIER_PAYMENT', 'CHEQUE', 'VOUCHER'] },
+          status: 'POSTED',
+        },
+      },
+      select: { sourceId: true, amountMinor: true },
+    });
+  });
+
   it('builds every file from the tenant, scoped to the organization', async () => {
     const { db, queries } = seededDb();
     const { dataset, organizationName } = await collectPharmacyDataExport(
@@ -635,6 +730,9 @@ describe('collection', () => {
       db.pharmacyInventoryLot,
       db.pharmacyCustomer,
       db.pharmacySupplier,
+      db.pharmacySupplierCredit,
+      db.pharmacyDebitNote,
+      db.pharmacySupplierCreditAllocation,
       db.pharmacyPurchaseOrder,
       db.pharmacyGoodsReceipt,
       db.pharmacySale,
