@@ -35,10 +35,11 @@
  *   DATABASE_URL='postgresql://...' bunx tsx scripts/report-global-email-collisions.ts
  *
  * Flags:
- *   --reveal    print full addresses, organization slugs and account ids
+ *   --unmasked  print full addresses, organization slugs and account ids
  *               (default masks the local part and drops slugs)
+ *   --reveal    alias for --unmasked
  *   --summary   totals and classification only, no per-group detail
- *   --json      emit JSON instead of text (honours --reveal)
+ *   --json      emit JSON instead of text (honours --unmasked)
  *
  * The output is customer data. It is deliberately not written to a file, and it
  * must not be committed, pasted into an issue, or attached to a PR — not even
@@ -48,6 +49,9 @@
 // exports DATABASE_URL for one specific database gets that database, and a
 // developer with a local `.env` does not have to retype it.
 import 'dotenv/config';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import pg from 'pg';
 
 const { Client } = pg;
@@ -119,8 +123,8 @@ type Group = {
   classification: Classification;
 };
 
-function parseArgs(argv: string[]) {
-  const known = new Set(['--reveal', '--summary', '--json']);
+export function parseArgs(argv: string[]) {
+  const known = new Set(['--unmasked', '--reveal', '--summary', '--json']);
   for (const arg of argv) {
     if (!known.has(arg)) {
       console.error(`Unknown flag ${arg}. Supported: ${[...known].join(', ')}`);
@@ -128,7 +132,8 @@ function parseArgs(argv: string[]) {
     }
   }
   return {
-    reveal: argv.includes('--reveal'),
+    // Addresses are masked unless the operator explicitly opts in.
+    reveal: argv.includes('--unmasked') || argv.includes('--reveal'),
     summary: argv.includes('--summary'),
     json: argv.includes('--json'),
   };
@@ -149,7 +154,7 @@ function isSeedAddress(normalized: string, domains: string[]): boolean {
   return domains.some((candidate) => domain === candidate || domain.endsWith(`.${candidate}`));
 }
 
-function maskAddress(normalized: string): string {
+export function maskAddress(normalized: string): string {
   const at = normalized.lastIndexOf('@');
   if (at <= 0) return '***';
   const local = normalized.slice(0, at);
@@ -158,7 +163,7 @@ function maskAddress(normalized: string): string {
   return `${head}${'*'.repeat(Math.max(local.length - 1, 1))}@${domain}`;
 }
 
-function maskId(id: string): string {
+export function maskId(id: string): string {
   return `${id.slice(0, 8)}…`;
 }
 
@@ -395,7 +400,7 @@ function printText(
   console.log(
     options.reveal
       ? 'Per-group detail (revealed — do not paste this anywhere).'
-      : 'Per-group detail (masked — pass --reveal to an operator session that needs the addresses).'
+      : 'Per-group detail (masked — pass --unmasked to an operator session that needs the addresses).'
   );
   console.log('');
 
@@ -541,7 +546,9 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+  main().catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+}
