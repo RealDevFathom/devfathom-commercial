@@ -9,7 +9,13 @@ import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
 import { StatusPill } from '@/components/ui/status-pill';
+import { pharmacyBranchLabel } from '@/lib/pharmacy/branch-label';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
+import {
+  reportFailureKind,
+  reportFailureMessage,
+  type ReportFailureKind,
+} from '@/lib/pharmacy/report-failure';
 import { readPharmacyStaffAccess } from '@/lib/pharmacy/staff-access';
 import { pharmacyReportsRouter } from '@/server/routers/pharmacy-reports';
 import { pharmacySalesRouter } from '@/server/routers/pharmacy-sales';
@@ -123,6 +129,16 @@ export default async function PharmacyReportsPage({
   let anomalies: Awaited<ReturnType<typeof caller.anomalySignals>> | null = null;
   let expiryAdvice: Awaited<ReturnType<typeof caller.expiryAdvice>> | null = null;
   let authenticationFlags: Awaited<ReturnType<typeof caller.packAuthenticationFlags>> | null = null;
+  // Why an owner card is empty: a refusal, a missing branch, bad filters or an
+  // outage each get their own sentence instead of a blanket permission message.
+  // Without a valid range or a reportable branch neither card is requested.
+  const notRequested: ReportFailureKind = invalidRange
+    ? 'invalid'
+    : branchResult.branches.length === 0
+      ? 'not-found'
+      : 'unavailable';
+  let expiryFailure: ReportFailureKind = notRequested;
+  let anomalyFailure: ReportFailureKind = notRequested;
   let reportError = false;
   let marketing: Awaited<ReturnType<typeof caller.marketing>> | null = null;
   let demand: Awaited<
@@ -160,7 +176,9 @@ export default async function PharmacyReportsPage({
     else reportError = true;
     if (digestResult.status === 'fulfilled') digest = digestResult.value;
     if (anomalyResult.status === 'fulfilled') anomalies = anomalyResult.value;
+    else anomalyFailure = reportFailureKind(anomalyResult.reason);
     if (expiryResult.status === 'fulfilled') expiryAdvice = expiryResult.value;
+    else expiryFailure = reportFailureKind(expiryResult.reason);
     if (authenticationResult.status === 'fulfilled')
       authenticationFlags = authenticationResult.value;
   }
@@ -354,7 +372,7 @@ export default async function PharmacyReportsPage({
               <option value="">All available</option>
               {branchResult.branches.map((item) => (
                 <option key={item.id} value={item.id}>
-                  {item.name}
+                  {pharmacyBranchLabel(item)}
                 </option>
               ))}
             </select>
@@ -593,7 +611,7 @@ export default async function PharmacyReportsPage({
               titleLevel={2}
             >
               <p className="text-sm text-text-muted">
-                Financial report and owner permissions are required to view value-at-risk advice.
+                {reportFailureMessage(expiryFailure, 'value-at-risk advice')}
               </p>
             </SectionCard>
           )}
@@ -796,7 +814,7 @@ export default async function PharmacyReportsPage({
               titleLevel={2}
             >
               <p className="text-sm text-text-muted">
-                Financial report and owner permissions are required to view anomaly evidence.
+                {reportFailureMessage(anomalyFailure, 'anomaly evidence')}
               </p>
             </SectionCard>
           )}

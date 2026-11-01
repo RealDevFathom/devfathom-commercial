@@ -139,7 +139,8 @@ async function limitedScope(ctx: TRPCContext) {
   const branches = await ctx.db.pharmacyBranch.findMany({
     where: { organizationId, active: true, ...(limit ? { id: { in: limit } } : {}) },
     orderBy: { name: 'asc' },
-    select: { id: true, name: true },
+    // Name and city, so every branch picker labels a branch the same way.
+    select: { id: true, name: true, city: true },
   });
   return { branches, organizationId, limited: limit !== null };
 }
@@ -181,11 +182,29 @@ async function requireFinancialReports(ctx: TRPCContext) {
     });
 }
 
-async function ownerFilters(ctx: TRPCContext, input: z.infer<typeof filters>) {
+/**
+ * Owner report surfaces (expiry and supplier-return advice, anomaly review, pack
+ * authentication, repeat purchasing, marketing and category growth) are decided
+ * by capability, not by the account role: the Owner and Owner / Operator
+ * templates carry `reports:financial`, and nobody without it passes. An owner
+ * whose account role is not ADMIN is therefore admitted, and a session from
+ * another organization is refused before any query.
+ */
+async function requireOwnerReports(ctx: TRPCContext) {
+  const organizationId = ctx.entitlements?.organizationId;
+  const user = ctx.session?.user;
+  if (!organizationId || !user?.id) throw new TRPCError({ code: 'UNAUTHORIZED' });
+  if (
+    user.organizationId !== organizationId ||
+    (ctx.organization && ctx.organization.id !== organizationId)
+  )
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your report scope.' });
   await requireFinancialReports(ctx);
+}
+
+async function ownerFilters(ctx: TRPCContext, input: z.infer<typeof filters>) {
+  await requireOwnerReports(ctx);
   const available = await scope(ctx);
-  if (ctx.session!.user.role !== 'ADMIN')
-    throw new TRPCError({ code: 'FORBIDDEN', message: 'Owner access is required.' });
   const branchIds = input.branchId
     ? [input.branchId]
     : available.branches.map((branch) => branch.id);
@@ -198,9 +217,8 @@ async function ownerFilters(ctx: TRPCContext, input: z.infer<typeof filters>) {
 }
 
 async function requireOwnerBranch(ctx: TRPCContext, branchId: string) {
+  await requireOwnerReports(ctx);
   const available = await scope(ctx);
-  if (ctx.session!.user.role !== 'ADMIN')
-    throw new TRPCError({ code: 'FORBIDDEN', message: 'Owner access is required.' });
   if (!available.branches.some((branch) => branch.id === branchId))
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your report scope.' });
 }
@@ -478,7 +496,7 @@ export const pharmacyReportsRouter = router({
         branch: { organizationId, active: true },
       },
       orderBy: { branch: { name: 'asc' } },
-      select: { branch: { select: { id: true, name: true } } },
+      select: { branch: { select: { id: true, name: true, city: true } } },
     });
     return {
       branches: assignments.map((row) => row.branch),
@@ -690,7 +708,6 @@ export const pharmacyReportsRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      await requireFinancialReports(ctx);
       await requireOwnerBranch(ctx, input.branchId);
       return proposeExpiryReturn(
         ctx.db,
@@ -709,7 +726,6 @@ export const pharmacyReportsRouter = router({
   acknowledgePackAuthenticationFlag: reports
     .input(anomalyDecision)
     .mutation(async ({ ctx, input }) => {
-      await requireFinancialReports(ctx);
       await requireOwnerBranch(ctx, input.branchId);
       await acknowledgePackAuthenticationFlag(ctx.db, {
         organizationId: ctx.entitlements.organizationId,
@@ -725,7 +741,6 @@ export const pharmacyReportsRouter = router({
     return refreshPharmacyAnomalySignals(ctx.db, bounded, ctx.session!.user.id);
   }),
   acknowledgeAnomaly: reports.input(anomalyDecision).mutation(async ({ ctx, input }) => {
-    await requireFinancialReports(ctx);
     await requireOwnerBranch(ctx, input.branchId);
     return acknowledgePharmacyAnomalySignal(ctx.db, {
       ...input,
@@ -733,7 +748,6 @@ export const pharmacyReportsRouter = router({
     });
   }),
   snoozeAnomaly: reports.input(anomalySnooze).mutation(async ({ ctx, input }) => {
-    await requireFinancialReports(ctx);
     await requireOwnerBranch(ctx, input.branchId);
     return snoozePharmacyAnomalySignal(ctx.db, {
       ...input,

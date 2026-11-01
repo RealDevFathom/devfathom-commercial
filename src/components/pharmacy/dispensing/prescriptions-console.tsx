@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo, useRef, useState, useSyncExternalStore, type FormEvent } from 'react';
+import { pharmacyBranchLabel } from '@/lib/pharmacy/branch-label';
 import { CalendarClock, Plus, Upload } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import type { PrescriptionUpload } from '@/lib/pharmacy/prescription-files';
@@ -607,7 +608,7 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
                   ) : null}
                   {workspace.data.branches.map((branch) => (
                     <option key={branch.id} value={branch.id}>
-                      {branch.name}
+                      {pharmacyBranchLabel(branch)}
                     </option>
                   ))}
                 </select>

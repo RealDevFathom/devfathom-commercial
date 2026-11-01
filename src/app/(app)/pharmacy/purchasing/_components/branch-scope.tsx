@@ -1,4 +1,5 @@
 import { SectionCard } from '@/components/ui/section-card';
+import { pharmacyBranchLabel } from '@/lib/pharmacy/branch-label';
 import type { BranchOption } from '../_lib/types';
 import { EmptyState } from './console-chrome';
 
@@ -69,7 +70,7 @@ export function BranchPicker({
           </option>
           {branches.map((branch) => (
             <option key={branch.id} value={branch.id}>
-              {branch.name} — {branch.city}
+              {pharmacyBranchLabel(branch)}
             </option>
           ))}
         </select>

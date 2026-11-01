@@ -321,6 +321,25 @@ describe('pharmacy branch list scope by role (QA: cashier dashboard)', () => {
     );
   });
 
+  it('reads name and city for every branch, so pickers label branches like the counter', async () => {
+    mocks.can.mockResolvedValue(true);
+    mocks.branchFindMany.mockResolvedValue([{ id: 'branch_1', name: 'Main', city: 'Lahore' }]);
+    await expect(caller().branches()).resolves.toMatchObject({
+      branches: [{ id: 'branch_1', name: 'Main', city: 'Lahore' }],
+    });
+    expect(mocks.branchFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({ select: { id: true, name: true, city: true } })
+    );
+
+    mocks.can.mockImplementation(async (_subject, action) => action === 'pharmacy:counter');
+    await caller('EMPLOYEE').branches();
+    expect(mocks.assignmentFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        select: { branch: { select: { id: true, name: true, city: true } } },
+      })
+    );
+  });
+
   it('returns an empty list, not an error, for a cashier with no assignment', async () => {
     mocks.can.mockResolvedValue(false);
     mocks.assignmentFindMany.mockResolvedValue([]);
@@ -450,7 +469,7 @@ describe('pharmacy owner digest capability boundary', () => {
     expect(mocks.branchFindMany).toHaveBeenCalledWith({
       where: { organizationId: 'org_1', active: true },
       orderBy: { name: 'asc' },
-      select: { id: true, name: true },
+      select: { id: true, name: true, city: true },
     });
     expect(mocks.comparisonRead).toHaveBeenCalledWith(
       mocks.comparisonTx,
@@ -934,7 +953,12 @@ describe('repeat purchasing authorization', () => {
     await expect(caller().repeatPurchasing(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(mocks.repeatRead).not.toHaveBeenCalled();
   });
-  it('denies non-admin role despite capabilities', async () => {
+  it('admits an owner whose account role is not ADMIN through reports:financial', async () => {
+    await caller('EMPLOYEE').repeatPurchasing(input);
+    expect(mocks.repeatRead).toHaveBeenCalledTimes(1);
+  });
+  it('denies a non-ADMIN member without reports:financial', async () => {
+    mocks.can.mockImplementation(async (_subject, action) => action !== 'reports:financial');
     await expect(caller('EMPLOYEE').repeatPurchasing(input)).rejects.toMatchObject({
       code: 'FORBIDDEN',
     });
@@ -1011,4 +1035,62 @@ describe('category growth report input boundaries', () => {
       ]);
     }
   );
+});
+
+describe('owner report gate (ownerFilters) is capability-based, not the account role', () => {
+  const input = { from: '2026-09-01', to: '2026-09-04' };
+  beforeEach(() => {
+    vi.mocked(hasModule).mockReturnValue(true);
+    mocks.branchFindMany.mockResolvedValue([{ id: 'branch_1', name: 'Main' }]);
+    mocks.expiryRead.mockResolvedValue([{ lotId: 'lot_1' }]);
+    mocks.anomalyRead.mockResolvedValue([]);
+    mocks.createDraft.mockResolvedValue({ id: 'claim_1' });
+  });
+
+  it('admits an owner whose account role is not ADMIN via reports:financial', async () => {
+    mocks.can.mockResolvedValue(true);
+    const api = caller('EMPLOYEE');
+    await expect(api.expiryAdvice(input)).resolves.toEqual([{ lotId: 'lot_1' }]);
+    expect(mocks.expiryRead).toHaveBeenCalledWith(expect.anything(), ['branch_1']);
+    await expect(api.anomalySignals(input)).resolves.toEqual([]);
+    await expect(
+      api.proposeExpiryReturn({ branchId: 'branch_1', lotId: 'lot_1' })
+    ).resolves.toEqual({ id: 'claim_1' });
+    expect(mocks.can).toHaveBeenCalledWith(
+      expect.objectContaining({ role: 'EMPLOYEE' }),
+      'reports:financial',
+      undefined,
+      expect.anything()
+    );
+  });
+
+  it('refuses a non-owner, non-ADMIN member before any branch read', async () => {
+    // Holds the operational grant (an auditor or manager) but not reports:financial.
+    mocks.can.mockImplementation(async (_subject, action) => action !== 'reports:financial');
+    const api = caller('EMPLOYEE');
+    await expect(api.expiryAdvice(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      api.proposeExpiryReturn({ branchId: 'branch_1', lotId: 'lot_1' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.branchFindMany).not.toHaveBeenCalled();
+    expect(mocks.expiryRead).not.toHaveBeenCalled();
+    expect(mocks.createDraft).not.toHaveBeenCalled();
+  });
+
+  it('still admits an ADMIN owner holding reports:financial', async () => {
+    mocks.can.mockResolvedValue(true);
+    await expect(caller('ADMIN').expiryAdvice(input)).resolves.toEqual([{ lotId: 'lot_1' }]);
+  });
+
+  it('gives nothing back to an owner from another organization, before any query', async () => {
+    mocks.can.mockResolvedValue(true);
+    const api = caller('ADMIN', 'org_other');
+    await expect(api.expiryAdvice(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      api.proposeExpiryReturn({ branchId: 'branch_1', lotId: 'lot_1' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.branchFindMany).not.toHaveBeenCalled();
+    expect(mocks.expiryRead).not.toHaveBeenCalled();
+    expect(mocks.createDraft).not.toHaveBeenCalled();
+  });
 });
