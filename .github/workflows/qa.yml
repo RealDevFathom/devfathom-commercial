@@ -555,10 +555,7 @@ jobs:
       - name: Record 05-run-agency
         if: always()
         run: printf '05-run-agency=%s\n' '${{ steps.agency.outcome == 'success' && '0' || '1' }}' >> gate/browser/exit-codes.txt
-      # The time-to-first-sale journey deliberately requires an operator-owned
-      # isolated-staging attestation and is run by its dedicated staging gate;
-      # this disposable localhost lane exercises the complete counter corpus.
-      - name: Run pharmacy counter
+      - name: Run pharmacy counter and time-to-first-sale
         id: pharmacy
         continue-on-error: true
         env:
@@ -571,10 +568,10 @@ jobs:
           PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/pharmacy
         run: >-
           bunx tsx scripts/run-pharmacy-e2e.ts --workers=1 --reporter=html,json
-          tests/e2e/pharmacy-counter.spec.ts
+          tests/e2e/pharmacy-counter.spec.ts tests/e2e/time-to-first-sale.spec.ts
       - name: Record pharmacy lane
         if: always()
-        run: printf 'pharmacy-counter=%s\n' '${{ steps.pharmacy.outcome == 'success' && '0' || '1' }}' >> gate/browser/exit-codes.txt
+        run: printf 'pharmacy-counter-time-to-first-sale=%s\n' '${{ steps.pharmacy.outcome == 'success' && '0' || '1' }}' >> gate/browser/exit-codes.txt
       - name: 21-run-all-lanes summary
         if: always()
         shell: bash
@@ -589,7 +586,7 @@ jobs:
             '03-run-platform',
             '04-run-catering',
             '05-run-agency',
-            'pharmacy-counter',
+            'pharmacy-counter-time-to-first-sale',
           ];
           let aggregate = 0;
           let lines = [];

@@ -131,6 +131,8 @@ export async function recordOfflineCommand(
     // A backfilled cursor can catch up with history after a gap is filled.
     // Advance only across this validated command at the current position;
     // future history must not skip a gap and older retries must not rewind it.
+    // History recorded before the cursor existed may hold the INTEGER maximum,
+    // which must never be incremented.
     if (existing.sequence < MAX_OFFLINE_COMMAND_CURSOR) {
       await db.pharmacyRegisteredDevice.updateMany({
         where: {

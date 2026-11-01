@@ -7,13 +7,13 @@ import { describe, expect, it } from 'vitest';
 const databaseUrl = process.env.M8_TEST_RUNTIME_DATABASE_URL ?? process.env.TEST_DATABASE_URL;
 const describeIfDatabase = databaseUrl ? describe : describe.skip;
 const migration = readFileSync(
-  'prisma/migrations/20261025000000_pharmacy_offline_command_cursor/migration.sql',
+  'prisma/migrations/20261101183100_pharmacy_offline_command_cursor/migration.sql',
   'utf8'
 );
 
 describeIfDatabase('offline command cursor migration under forced RLS', () => {
   it.each(['', 'tenant-a'])(
-    'backfills every tenant and restores the initial tenant scope %j',
+    'backfills every tenant past historical gaps and restores the initial tenant scope %j',
     async (tenantScope) => {
       const client = new Client({ connectionString: databaseUrl });
       await client.connect();
@@ -74,9 +74,11 @@ describeIfDatabase('offline command cursor migration under forced RLS', () => {
             'tenant-b',
             [
               { id: 'empty', nextOfflineCommandSequence: 1 },
-              { id: 'first-gap', nextOfflineCommandSequence: 1 },
-              { id: 'large-gap', nextOfflineCommandSequence: 2 },
-              { id: 'shared', nextOfflineCommandSequence: 2 },
+              // Historical gaps never block a counter on deploy: each device
+              // resumes after its highest recorded sequence.
+              { id: 'first-gap', nextOfflineCommandSequence: 4 },
+              { id: 'large-gap', nextOfflineCommandSequence: 2147483647 },
+              { id: 'shared', nextOfflineCommandSequence: 4 },
             ],
           ],
         ] as const) {

@@ -729,26 +729,17 @@ describeIfDatabase('PH-OFF OFF-01 — the append-only command log', () => {
     expect(outcome.command).toMatchObject({ status: 'PENDING', attempts: 0 });
   });
 
-  it('backfills a gapped history to its first missing sequence', async () => {
+  it('backfills a gapped history past its highest sequence so old gaps never block', async () => {
+    // Pre-cursor rejected replays rolled back and left gaps the counter has
+    // already quarantined; resuming at a gap would refuse every new sale.
     const [backfill] = await inOrg(
       ORG_A,
       (db) => db.$queryRaw<Array<{ nextSequence: number }>>`
-        WITH ordered AS (
-          SELECT sequence,
-            LAG(sequence) OVER (ORDER BY sequence) AS previous,
-            MAX(sequence) OVER () AS maximum
-          FROM (VALUES (2::INTEGER), (3::INTEGER), (5::INTEGER)) AS historical(sequence)
-        )
-        SELECT LEAST(MIN(CASE
-          WHEN previous IS NULL AND sequence > 1 THEN 1::BIGINT
-          WHEN previous IS NOT NULL AND sequence::BIGINT > previous::BIGINT + 1
-            THEN previous::BIGINT + 1
-          WHEN sequence = maximum THEN sequence::BIGINT + 1
-        END), 2147483647)::INTEGER AS "nextSequence"
-        FROM ordered
+        SELECT LEAST(MAX("sequence")::BIGINT + 1, 2147483647)::INTEGER AS "nextSequence"
+        FROM (VALUES (2::INTEGER), (3::INTEGER), (5::INTEGER)) AS historical("sequence")
       `
     );
-    expect(backfill?.nextSequence).toBe(1);
+    expect(backfill?.nextSequence).toBe(6);
   });
 
   it('advances across historical commands only after filling their preceding gap', async () => {
@@ -760,8 +751,8 @@ describeIfDatabase('PH-OFF OFF-01 — the append-only command log', () => {
     });
     await inOrg(ORG_A, async (db) => {
       await deps.log.recordOfflineCommand(db, scope, command(fixture));
-      // A pre-cursor deployment could record sequences 1 and 3. Its backfill
-      // resumes at 2, which is also the cursor after recording sequence 1 here.
+      // A row recorded outside this helper can sit ahead of the cursor; the
+      // cursor after recording sequence 1 here is 2.
       await db.pharmacyOfflineCommand.create({
         data: {
           ...historical,

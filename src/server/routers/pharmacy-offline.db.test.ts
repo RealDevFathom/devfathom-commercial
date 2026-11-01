@@ -286,7 +286,7 @@ async function setup(manualType?: ManualTenderType, allowReferenceSkip = false) 
   const established = await call('establish');
   expect(established.status).toBe(201);
   token = (await established.json()).sessionToken;
-  const leased = await call('lease', { size: 2 });
+  const leased = await call('lease', { size: 3 });
   expect(leased.status).toBe(200);
   const lease = await leased.json();
   const granted = await call('quota', { ...bucketOf(fixture), units: 10 });
@@ -390,7 +390,47 @@ async function setup(manualType?: ManualTenderType, allowReferenceSkip = false) 
       }));
     });
   }
-  return { fixture, command, call, replay, counts, journalBalances, lease };
+  function nextCommand(sequence: number) {
+    return {
+      ...command,
+      sequence,
+      idempotencyKey: tag(`command-${sequence}`),
+      leasedReceipt: {
+        ...command.leasedReceipt,
+        receiptNumber: lease.blockStart + sequence - 1,
+      },
+    };
+  }
+  async function commandStatus(idempotencyKey: string) {
+    return inOrg(ORG_A, (db) =>
+      db.pharmacyOfflineCommand.findFirstOrThrow({
+        where: { deviceId: fixture.deviceId, idempotencyKey },
+        select: { sequence: true, status: true, rejectionReason: true },
+      })
+    );
+  }
+  async function cursor() {
+    return (
+      await inOrg(ORG_A, (db) =>
+        db.pharmacyRegisteredDevice.findFirstOrThrow({
+          where: { id: fixture.deviceId },
+          select: { nextOfflineCommandSequence: true },
+        })
+      )
+    ).nextOfflineCommandSequence;
+  }
+  return {
+    fixture,
+    command,
+    call,
+    replay,
+    counts,
+    journalBalances,
+    lease,
+    nextCommand,
+    commandStatus,
+    cursor,
+  };
 }
 
 describeIfDatabase('offline counter REST on forced-RLS PostgreSQL', () => {
@@ -552,7 +592,9 @@ describeIfDatabase('offline counter REST on forced-RLS PostgreSQL', () => {
     f.command.manualCapture = { type: 'RAAST', payerName: 'Ayesha', referenceSkipped: true };
     await inOrg(ORG_A, (db) => db.pharmacyBranch.update({ where: { id: f.fixture.branchId }, data: { manualPaymentSettings: { RAAST: { destination: 'Merchant till', allowReferenceSkip: false } } } }));
     expect((await f.replay()).status).toBe(409);
-    expect(await f.counts()).toMatchObject({ commands: 0, sales: 0, consumed: 0, nextNumber: f.lease.blockStart });
+    // The rejected sale consumes its sequence and printed number, but no stock or sale.
+    expect(await f.counts()).toMatchObject({ commands: 1, sales: 0, consumed: 0, nextNumber: f.lease.blockStart + 1 });
+    expect(await f.commandStatus(f.command.idempotencyKey)).toMatchObject({ status: 'REJECTED' });
   });
   it('replays identical concurrent Idempotency-Key requests into exactly one sale', async () => {
     const f = await setup();
@@ -575,7 +617,7 @@ describeIfDatabase('offline counter REST on forced-RLS PostgreSQL', () => {
     });
   });
   it.each(['signature', 'scope', 'payload'] as const)(
-    'rejects bad snapshot %s with no effects',
+    'rejects bad snapshot %s and records only the rejection',
     async (mode) => {
       const f = await setup();
       if (mode === 'signature') f.command.snapshots[0].signature = 'bad';
@@ -590,10 +632,14 @@ describeIfDatabase('offline counter REST on forced-RLS PostgreSQL', () => {
       expect(r.status).toBe(403);
       expect(await r.json()).toEqual({ error: 'invalid_snapshot' });
       expect(await f.counts()).toEqual({
-        commands: 0,
+        commands: 1,
         sales: 0,
         consumed: 0,
-        nextNumber: f.lease.blockStart,
+        nextNumber: f.lease.blockStart + 1,
+      });
+      expect(await f.commandStatus(f.command.idempotencyKey)).toMatchObject({
+        status: 'REJECTED',
+        rejectionReason: 'invalid_snapshot',
       });
     }
   );
@@ -605,7 +651,11 @@ describeIfDatabase('offline counter REST on forced-RLS PostgreSQL', () => {
     });
     expect(r.status).toBe(409);
     expect(await r.json()).toEqual({ error: 'ACTION_DENIED' });
-    expect((await f.counts()).commands).toBe(0);
+    expect(await f.counts()).toMatchObject({ commands: 1, sales: 0, consumed: 0 });
+    expect(await f.commandStatus(f.command.idempotencyKey)).toMatchObject({
+      status: 'REJECTED',
+      rejectionReason: 'ACTION_DENIED',
+    });
   });
   it('caps receipt leases at 1000', async () => {
     const f = await setup();
@@ -615,12 +665,81 @@ describeIfDatabase('offline counter REST on forced-RLS PostgreSQL', () => {
     const lease = await r.json();
     expect(lease.blockEnd - lease.blockStart + 1).toBe(1000);
   });
-  it('rolls back stock, quota and log when tender total changes', async () => {
+  it('rolls back stock and sale but records the rejection when tender total changes', async () => {
     const f = await setup();
     const before = await f.counts();
-    const r = await f.replay({ ...f.command, amountMinor: 1 });
+    const changed = { ...f.command, amountMinor: 1 };
+    const r = await f.replay(changed);
     expect(r.status).toBe(409);
-    expect(await f.counts()).toEqual(before);
+    expect(await f.counts()).toEqual({
+      ...before,
+      commands: 1,
+      nextNumber: f.lease.blockStart + 1,
+    });
+    // The key is now settled; a retry is refused again without a second effect.
+    const retry = await f.replay(changed);
+    expect(retry.status).toBe(409);
+    expect(await retry.json()).toEqual({ error: 'command_rejected' });
+    expect((await f.replay(f.nextCommand(2))).status).toBe(200);
+    expect(await f.counts()).toMatchObject({ commands: 2, sales: 1, consumed: 1 });
+  });
+  it('#489 records a rejected sale and keeps replaying the counter\'s later sales', async () => {
+    const f = await setup();
+    const rejected = { ...f.command, amountMinor: 1 };
+    const r = await f.replay(rejected);
+    expect(r.status).toBe(409);
+    expect(await r.json()).toEqual({ error: 'offline_total_changed' });
+    expect(await f.commandStatus(rejected.idempotencyKey)).toMatchObject({
+      sequence: 1,
+      status: 'REJECTED',
+      rejectionReason: 'offline_total_changed',
+    });
+    expect(await f.cursor()).toBe(2);
+
+    const second = f.nextCommand(2);
+    const third = f.nextCommand(3);
+    const accepted = await f.replay(second);
+    expect(accepted.status).toBe(200);
+    expect(await accepted.json()).toMatchObject({
+      receiptNumber: f.lease.blockStart + 1,
+      replayed: false,
+    });
+    expect((await f.replay(third)).status).toBe(200);
+    expect(await f.cursor()).toBe(4);
+    expect(await f.counts()).toMatchObject({
+      commands: 3,
+      sales: 2,
+      consumed: 2,
+      nextNumber: f.lease.blockStart + 3,
+    });
+  });
+  it('#489 records a rejection after quota exhaustion and accepts the next sale', async () => {
+    const f = await setup();
+    const exhausted = {
+      ...f.command,
+      // The setup grants a 10-unit quota.
+      lines: [{ ...f.command.lines[0], quantity: 11 }],
+      amountMinor: 1100,
+      cashReceivedMinor: 1100,
+    };
+    const r = await f.replay(exhausted);
+    expect(r.status).toBe(409);
+    expect(await r.json()).toEqual({ error: 'quota_exhausted' });
+    expect(await f.commandStatus(exhausted.idempotencyKey)).toMatchObject({
+      status: 'REJECTED',
+      rejectionReason: 'quota_exhausted',
+    });
+    expect((await f.replay(f.nextCommand(2))).status).toBe(200);
+    expect(await f.counts()).toMatchObject({ commands: 2, sales: 1, consumed: 1 });
+  });
+  it('#489 does not consume a sequence for unauthenticated or out-of-order replays', async () => {
+    const f = await setup();
+    expect((await f.replay(f.command, { 'x-command-signature': '0'.repeat(64) })).status).toBe(401);
+    const gap = await f.replay(f.nextCommand(2));
+    expect(gap.status).toBe(409);
+    expect(await gap.json()).toEqual({ error: 'SEQUENCE_OUT_OF_ORDER' });
+    expect(await f.cursor()).toBe(1);
+    expect(await f.counts()).toMatchObject({ commands: 0, nextNumber: f.lease.blockStart });
     expect((await f.replay()).status).toBe(200);
   });
   it('rejects missing command MAC and mismatched idempotency header', async () => {
@@ -685,6 +804,7 @@ describeIfDatabase('offline transport authorization and conflicts', () => {
     const r = await f.replay();
     expect(r.status).toBe(403);
     expect(await r.json()).toEqual({ error: 'medicine_not_offline_otc' });
-    expect((await f.counts()).commands).toBe(0);
+    expect(await f.counts()).toMatchObject({ commands: 1, sales: 0, consumed: 0 });
+    expect(await f.commandStatus(f.command.idempotencyKey)).toMatchObject({ status: 'REJECTED' });
   });
 });
