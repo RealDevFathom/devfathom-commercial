@@ -11,6 +11,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
   // theming, and Motion before the user can interact with the form.
   if (
     pathname === '/login' ||
+    pathname.startsWith('/login/') ||
     pathname === '/terminal' ||
     pathname === '/pos' ||
     pathname === '/kds'

@@ -2,7 +2,7 @@ import 'server-only';
 
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { businessDateToUtcDate } from '@/lib/restaurant/business-date';
+import { businessDateToUtcDate, resolveBusinessDate } from '@/lib/restaurant/business-date';
 import {
   RecurrenceError,
   type RecurrenceFrequency,
@@ -670,6 +670,9 @@ export async function updateAssignment(db: ScopedDb, id: string, patch: UpdateAs
   if (patch.assigneeTarget) await assertAssigneeTarget(db, patch.assigneeTarget);
 
   return runSopTransaction(db, async (tx) => {
+    const predecessorEndDate = new Date(businessDateToUtcDate(merged.startDate));
+    predecessorEndDate.setUTCDate(predecessorEndDate.getUTCDate() - 1);
+    const predecessorHasEffectivePeriod = predecessorEndDate >= existing.startDate;
     const successor = await tx.restaurantSopAssignment.create({
       data: {
         branchId: existing.branchId,
@@ -697,7 +700,20 @@ export async function updateAssignment(db: ScopedDb, id: string, patch: UpdateAs
     });
     await tx.restaurantSopAssignment.update({
       where: { id: existing.id },
-      data: { active: false, supersededAt: new Date() },
+      data: {
+        // Keep a live predecessor visible to the scheduler until the successor's
+        // effective date; its bounded date range performs the boundary switch.
+        active: existing.active && predecessorHasEffectivePeriod,
+        // A same-day revision has no representable predecessor date range. Keep
+        // its valid historical bounds while deactivating it instead of writing
+        // an end date before its start date.
+        endDate: predecessorHasEffectivePeriod
+          ? existing.endDate && existing.endDate < predecessorEndDate
+            ? existing.endDate
+            : predecessorEndDate
+          : existing.endDate,
+        supersededAt: new Date(),
+      },
     });
     return successor;
   });
@@ -707,11 +723,28 @@ export async function updateAssignment(db: ScopedDb, id: string, patch: UpdateAs
 export async function setAssignmentActive(db: ScopedDb, id: string, active: boolean) {
   const existing = await db.restaurantSopAssignment.findUnique({
     where: { id },
-    select: { id: true, supersededAt: true },
+    select: {
+      id: true,
+      supersededAt: true,
+      endDate: true,
+      supersededBy: { select: { startDate: true } },
+      branch: { select: { timezone: true, businessDayCutoff: true } },
+    },
   });
   if (!existing) throw new SopTemplateError(`Assignment ${id} was not found.`, 'NOT_FOUND');
   if (active && existing.supersededAt) {
-    throw new SopTemplateError('A superseded assignment cannot be reactivated.', 'INVALID_STATE');
+    // A bounded predecessor may still own the current business day while its
+    // successor is pending. Same-start-date revisions retain historical bounds
+    // that overlap the successor, so those predecessors must stay inactive.
+    const canResume =
+      existing.endDate &&
+      existing.supersededBy &&
+      existing.endDate < existing.supersededBy.startDate &&
+      dateColumnToISO(existing.endDate) >=
+        resolveBusinessDate(new Date(), existing.branch.timezone, existing.branch.businessDayCutoff);
+    if (!canResume) {
+      throw new SopTemplateError('A superseded assignment cannot be reactivated.', 'INVALID_STATE');
+    }
   }
   return db.restaurantSopAssignment.update({ where: { id }, data: { active } });
 }

@@ -120,6 +120,7 @@ type BoardItem = {
   windowEndsAt: string;
   completedSteps: number;
   totalSteps: number;
+  claimable: boolean;
 };
 
 type BoardGroup = {
@@ -183,6 +184,7 @@ type OccurrenceDetail = {
   evidence: DetailEvidence[];
   verifications: DetailVerification[];
   escalationEvents: DetailEscalation[];
+  claimable: boolean;
 };
 
 type Notice = { kind: 'success' | 'error'; text: string };
@@ -380,8 +382,11 @@ function SopBoardView(props: SopBoardViewProps) {
   const total = groups.reduce((count, group) => count + group.items.length, 0);
   const reviewAllowed = selected ? ['SUBMITTED', 'LATE'].includes(selected.status) : false;
   const waiveAllowed = selected ? ['SUBMITTED', 'LATE', 'MISSED'].includes(selected.status) : false;
-  const startAllowed = selected ? ['SCHEDULED', 'REJECTED'].includes(selected.status) : false;
-  const submitAllowed = selected?.status === 'IN_PROGRESS';
+  const startAllowed = selected
+    ? ['SCHEDULED', 'REJECTED'].includes(selected.status) && !selected.claimable
+    : false;
+  const submitAllowed =
+    selected?.status === 'IN_PROGRESS' && selected.steps.every((step) => step.completed);
   const escalationKinds = new Set(selected?.escalationEvents.map((event) => event.kind) ?? []);
   const acknowledgeAllowed =
     escalationKinds.has('FIRED') &&
@@ -597,7 +602,7 @@ function SopBoardView(props: SopBoardViewProps) {
                 </div>
               </dl>
 
-              {startAllowed || submitAllowed || acknowledgeAllowed ? (
+              {startAllowed || selected.claimable || submitAllowed || acknowledgeAllowed ? (
                 <section className="mt-6 border-t border-border-subtle pt-5">
                   <h3 className="font-semibold text-text-strong">Operator controls</h3>
                   <form action={action} className="mt-3 space-y-3">
@@ -617,6 +622,17 @@ function SopBoardView(props: SopBoardViewProps) {
                           value="start"
                         >
                           {selected.status === 'REJECTED' ? 'Start rework' : 'Start SOP'}
+                        </Button>
+                      ) : null}
+                      {selected.claimable ? (
+                        <Button
+                          className="min-h-11"
+                          disabled={!action}
+                          name="intent"
+                          type="submit"
+                          value="claim"
+                        >
+                          Claim SOP
                         </Button>
                       ) : null}
                       {submitAllowed ? (
@@ -747,7 +763,15 @@ function SopBoardView(props: SopBoardViewProps) {
                               <StaffSelect label="Completing staff" staff={staff} />
                               <label className="text-sm text-text-body">
                                 Completion note
-                                <Input className="mt-1 min-h-11" maxLength={2000} name="note" />
+                                <Input
+                                  className="mt-1 min-h-11"
+                                  maxLength={2000}
+                                  name="note"
+                                  pattern={
+                                    step.requirements.includes('note') ? '.*\\S.*' : undefined
+                                  }
+                                  required={step.requirements.includes('note')}
+                                />
                               </label>
                               <Button
                                 className="min-h-11 sm:col-span-2"
@@ -1008,9 +1032,10 @@ export default async function SopPage({ searchParams }: { searchParams: SearchPa
   if (!user) return <SopBoardView state="permission" />;
 
   const subject = subjectFromSession(user);
-  const [canComplete, canVerify] = await Promise.all([
+  const [canComplete, canVerify, canConfigure] = await Promise.all([
     can(subject, 'sop:complete', undefined, { db: ctx.db, source: 'TRPC' }),
     can(subject, 'sop:verify', undefined, { db: ctx.db, source: 'TRPC' }),
+    can(subject, 'restaurant:configure', undefined, { db: ctx.db, source: 'TRPC' }),
   ]);
 
   if (!canComplete) return <SopBoardView state="permission" />;
@@ -1029,6 +1054,14 @@ export default async function SopPage({ searchParams }: { searchParams: SearchPa
       let success: string;
 
       switch (intent) {
+        case 'claim': {
+          const outcome = await caller.claim({ occurrenceId });
+          success =
+            outcome.status === 'CLAIMED_BY_OTHER'
+              ? 'Another eligible staff member claimed this SOP first.'
+              : 'SOP claimed. You can now start it.';
+          break;
+        }
         case 'start':
           await caller.start({ occurrenceId, actorStaffProfileId });
           success = 'SOP started.';
@@ -1126,6 +1159,14 @@ export default async function SopPage({ searchParams }: { searchParams: SearchPa
         where: {
           organizationId: ctx.organization?.id ?? ctx.session!.user.organizationId,
           active: true,
+          ...(canConfigure
+            ? {}
+            : {
+                OR: [
+                  { staffProfiles: { some: { userId: user.id, status: 'ACTIVE' } } },
+                  { assignments: { some: { userId: user.id } } },
+                ],
+              }),
         },
         orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
         select: {
@@ -1194,6 +1235,7 @@ export default async function SopPage({ searchParams }: { searchParams: SearchPa
           windowEndsAt: item.windowEndsAt.toISOString(),
           completedSteps: item.steps.filter((step) => step.completed).length,
           totalSteps: item.steps.length,
+          claimable: item.canClaim,
         })),
       }));
       const allItems = groups.flatMap((group) => group.items);
@@ -1260,6 +1302,7 @@ export default async function SopPage({ searchParams }: { searchParams: SearchPa
             actorStaffProfileId: event.actorStaffProfileId,
             createdAt: event.createdAt.toISOString(),
           })),
+          claimable: selectedSummary.claimable,
         };
       }
 

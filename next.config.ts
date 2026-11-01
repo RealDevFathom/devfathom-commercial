@@ -1,66 +1,7 @@
 import type { NextConfig } from 'next';
 
-// Content-Security-Policy. `'unsafe-inline'` for scripts is a temporary allowance
-// (Next's inline hydration bootstrap); the hardening goal is a nonce-based policy.
-// `connect-src` must allow Ably's realtime hosts — both the https REST token
-// requests AND the realtime websocket. The legacy Socket.IO origin is retained
-// only while NEXT_PUBLIC_SOCKET_URL is set; it's a harmless no-op once unset.
-// NOTE: tune this if a feature breaks (e.g. a new third-party origin).
-// (The legacy Socket.IO connect-src origin was removed in SEC-01 — Ably/LiveKit are
-// allowlisted explicitly, so no blanket ws:/wss: or NEXT_PUBLIC_SOCKET_URL is used.)
-// Ably cycles a primary host plus lettered fallbacks across these domains; ALL
-// must be allowed or the browser's CSP blocks the token request before it's even
-// sent (surfaces as Ably "requestToken … statusCode=400" + connection failure).
-const ablyOrigins =
-  'https://*.ably.io https://*.ably-realtime.com https://*.ably.net ' +
-  'wss://*.ably.io wss://*.ably-realtime.com wss://*.ably.net';
-// Self-hosted LiveKit: the browser opens a WebSocket to the SFU and fetches
-// over https, both on this one origin. `ws:`/`wss:` are special schemes, so
-// `URL.origin` serialises them rather than returning "null".
-//
-// An unset or unparseable value yields an empty allowance, which FAILS CLOSED —
-// the call cannot connect — rather than widening `connect-src`. A malformed
-// value must not take the whole build down with an opaque URL error, so it is
-// caught here and left to surface as a blocked connection instead.
-function liveKitConnectSrc(): string {
-  const value = process.env.NEXT_PUBLIC_LIVEKIT_URL;
-  if (!value) return '';
-  try {
-    return new URL(value).origin;
-  } catch {
-    return '';
-  }
-}
-const liveKitOrigin = liveKitConnectSrc();
-// Dev/HMR (Turbopack) needs 'unsafe-eval'; keep it OUT of production.
-const isDev = process.env.NODE_ENV !== 'production';
-const scriptSrc = isDev
-  ? "script-src 'self' 'unsafe-inline' 'unsafe-eval'"
-  : "script-src 'self' 'unsafe-inline'";
-const contentSecurityPolicy = [
-  "default-src 'self'",
-  scriptSrc,
-  "style-src 'self' 'unsafe-inline'",
-  // SEC-02: was `'self' data: https:`, allowing images from ANY https origin (a
-  // tracking-pixel/exfil surface). Avatars/attachments are served same-origin
-  // (/api/files, plain <img>) or as data:/blob: previews — no external host needed.
-  "img-src 'self' data: blob:",
-  "font-src 'self' data:",
-  // Camera playback streams through /api/restaurant/cameras/*/stream as blob: media.
-  "media-src 'self' blob:",
-  // SEC-01: the explicit Ably/LiveKit wss: allowlist above is authoritative — drop
-  // the blanket `ws: wss:` (which let a WebSocket reach ANY host, nullifying the
-  // allowlist) and the stale Socket.IO origin (which had leaked as localhost:3001).
-  `connect-src 'self' ${ablyOrigins} ${liveKitOrigin}`,
-  "frame-src 'self'",
-  "frame-ancestors 'none'",
-  "base-uri 'self'",
-  "form-action 'self'",
-  "object-src 'none'",
-]
-  .join('; ')
-  .replace(/\s+/g, ' ')
-  .trim();
+// Content-Security-Policy is generated per request in src/proxy.ts so Next can
+// propagate its nonce to framework and application scripts.
 
 const nextConfig: NextConfig = {
   output: 'standalone',
@@ -89,6 +30,9 @@ const nextConfig: NextConfig = {
     formats: ['image/avif', 'image/webp'],
   },
   experimental: {
+    // Coupled to Dockerfile's per-process NODE_OPTIONS heap ceiling. Raising this
+    // multiplies concurrently available heaps and must be evaluated against the
+    // image builder's total memory before changing the worker count.
     cpus: 1,
     optimizePackageImports: ['@base-ui/react', 'cmdk'],
   },
@@ -109,7 +53,6 @@ const nextConfig: NextConfig = {
           key: 'Strict-Transport-Security',
           value: 'max-age=63072000; includeSubDomains; preload',
         },
-        { key: 'Content-Security-Policy', value: contentSecurityPolicy },
       ],
     },
   ],

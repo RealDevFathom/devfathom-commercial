@@ -12,19 +12,75 @@ const END = new Date('2026-09-05T00:00:00.000Z');
 const empty = (): AnomalyFactSet => ({
   shrinkage: [],
   discountOverride: [],
+  staffVoid: [],
   ghostReturn: [],
   cashVariance: [],
+  tenderMismatch: [],
   purchasePriceDrift: [],
 });
 const detect = (facts: AnomalyFactSet, computedAt = NOW) =>
   detectPharmacyAnomalies(facts, { windowStart: START, windowEnd: END, computedAt });
 
 describe('AI-04 deterministic anomaly thresholds and explanations', () => {
+  it('does not report any signal for a clean synthetic fixture', () => {
+    const facts = empty();
+    facts.staffVoid.push({
+      branchId: 'branch_1',
+      userId: 'cashier_1',
+      voidEvents: 0,
+      completedSales: 40,
+      occurredAt: NOW,
+      sourceObservedAt: NOW,
+    });
+    facts.discountOverride.push({
+      branchId: 'branch_1',
+      userId: 'cashier_1',
+      affectedLines: 1,
+      approvedOverrideLines: 0,
+      grossMinor: 100_000,
+      discountMinor: 500,
+      occurredAt: NOW,
+      sourceObservedAt: NOW,
+    });
+    facts.ghostReturn.push({
+      branchId: 'branch_1',
+      userId: 'cashier_1',
+      unmatchedRefunds: 0,
+      unmatchedAmountMinor: 0,
+      occurredAt: NOW,
+      sourceObservedAt: NOW,
+    });
+    facts.cashVariance.push({
+      closeId: 'close_1',
+      branchId: 'branch_1',
+      userId: 'cashier_1',
+      businessDate: '2026-09-04',
+      expectedMinor: 1_000_000,
+      countedMinor: 1_000_000,
+      varianceMinor: 0,
+      occurredAt: NOW,
+      sourceObservedAt: NOW,
+    });
+    facts.tenderMismatch.push({
+      closeId: 'close_1',
+      branchId: 'branch_1',
+      userId: 'cashier_1',
+      businessDate: '2026-09-04',
+      tenderNetMinor: 1_000_000,
+      closeExpectedMinor: 1_000_000,
+      mismatchMinor: 0,
+      occurredAt: NOW,
+      sourceObservedAt: NOW,
+    });
+    expect(detect(facts)).toEqual([]);
+  });
+
   it('raises shrinkage only above the approved count threshold', () => {
     const facts = empty();
     facts.shrinkage.push({
       countLineId: 'line_1',
       branchId: 'branch_1',
+      userId: 'cashier_1',
       medicineId: 'med_1',
       batchId: 'batch_1',
       expectedUnits: 100,
@@ -81,11 +137,32 @@ describe('AI-04 deterministic anomaly thresholds and explanations', () => {
     expect(detect(facts)).toEqual([]);
   });
 
+  it('flags per-staff void frequency and leaves a clean staff fixture clear', () => {
+    const facts = empty();
+    facts.staffVoid.push({
+      branchId: 'branch_1',
+      userId: 'cashier_1',
+      voidEvents: 2,
+      completedSales: 18,
+      occurredAt: NOW,
+      sourceObservedAt: NOW,
+    });
+    expect(detect(facts)[0]).toMatchObject({
+      kind: 'VOID_ABUSE',
+      scope: { userId: 'cashier_1' },
+      exactNumbers: { voidRateBps: 1_000 },
+    });
+    facts.staffVoid[0]!.voidEvents = 1;
+    facts.staffVoid[0]!.completedSales = 99;
+    expect(detect(facts)).toEqual([]);
+  });
+
   it('uses the greater absolute/proportional cash materiality threshold', () => {
     const facts = empty();
     facts.cashVariance.push({
       closeId: 'close_1',
       branchId: 'branch_1',
+      userId: 'cashier_1',
       businessDate: '2026-09-04',
       expectedMinor: 20_000_000,
       countedMinor: 20_200_000,
@@ -122,6 +199,29 @@ describe('AI-04 deterministic anomaly thresholds and explanations', () => {
     expect(signal.estimateExclusions).toContain('draft/reversed');
     expect(signal.estimateConfidence).toBe('LOW');
     facts.purchasePriceDrift[0]!.comparisonReceipts = 1;
+    expect(detect(facts)).toEqual([]);
+  });
+
+  it('flags tender evidence that materially differs from the close per closing staff member', () => {
+    const facts = empty();
+    facts.tenderMismatch.push({
+      closeId: 'close_1',
+      branchId: 'branch_1',
+      userId: 'cashier_1',
+      businessDate: '2026-09-04',
+      tenderNetMinor: 900_000,
+      closeExpectedMinor: 1_000_000,
+      mismatchMinor: -100_000,
+      occurredAt: NOW,
+      sourceObservedAt: NOW,
+    });
+    expect(detect(facts)[0]).toMatchObject({
+      kind: 'TENDER_MISMATCH',
+      scope: { userId: 'cashier_1' },
+      exactNumbers: { mismatchMinor: -100_000 },
+    });
+    facts.tenderMismatch[0]!.tenderNetMinor = 999_999;
+    facts.tenderMismatch[0]!.mismatchMinor = -1;
     expect(detect(facts)).toEqual([]);
   });
 

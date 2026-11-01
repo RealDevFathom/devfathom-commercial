@@ -1,0 +1,9 @@
+"ABC Medical Store",,,,,,,,
+"Batch Stock As On 31-10-2026",,,,,,,,
+Item Code,Item Name,Pack,Batch,Exp.,Qty,MRP,Rate,Value
+M001,Panadol 500mg Tab,10X10,B2411,03/27,120,250.00,212.50,25500.00
+M001,Panadol 500mg Tab,10X10,B2502,09/27,40,250.00,212.50,8500.00
+M002,Augmentin 625mg Tab,1X6,AG-77,May-27,36,845.50,720.00,25920.00
+M003,Brufen 400mg Tab,20,BR-9012,06/28,200,123.25,100.00,20000.00
+
+,Total,,,,396,,,79920.00

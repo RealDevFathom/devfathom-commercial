@@ -41,6 +41,13 @@ const inAppDelivery = {
   some: { channel: 'IN_APP' as const, status: 'DELIVERED_IN_APP' as const },
 };
 
+const DEAD_LETTER_PAGE_SIZE = 25;
+
+/** Idempotency key of the job `retryWebhook` enqueues for a dead letter. */
+function retrySuccessorKey(eventId: string, deadJobId: string) {
+  return `notification-webhook:${eventId}:retry:${deadJobId}`;
+}
+
 const matrixProcedure = capabilityProcedure('staff:manage');
 const webhookProcedure = capabilityProcedure('staff:manage');
 
@@ -174,35 +181,106 @@ export const restaurantNotificationsRouter = router({
       return ctx.db.restaurantNotificationChannelSetting.create({ data: input });
     }),
 
-  webhookStatus: webhookProcedure.input(z.object({}).strict()).query(async ({ ctx }) => {
-    const [config, deliveries] = await Promise.all([
-      ctx.db.restaurantNotificationWebhook.findFirst({
-        select: {
-          id: true,
-          endpointUrl: true,
-          enabled: true,
-          lastSuccessAt: true,
-          lastFailureAt: true,
-          lastFailure: true,
-          updatedAt: true,
-        },
-      }),
-      ctx.db.restaurantJob.findMany({
-        where: { type: NOTIFICATION_WEBHOOK_JOB_TYPE },
-        select: {
-          id: true,
-          status: true,
-          attempts: true,
-          nextAttemptAt: true,
-          lastError: true,
-          createdAt: true,
-        },
-        orderBy: { createdAt: 'desc' },
-        take: 20,
-      }),
-    ]);
-    return { config: config ? { ...config, signingSecretConfigured: true } : null, deliveries };
-  }),
+  webhookStatus: webhookProcedure
+    .input(
+      z
+        .object({
+          deadLetterCursor: identifier.optional(),
+          deadLetterLimit: z.number().int().min(1).max(100).default(DEAD_LETTER_PAGE_SIZE),
+        })
+        .strict()
+    )
+    .query(async ({ ctx, input }) => {
+      const [config, deliveries, deadRows] = await Promise.all([
+        ctx.db.restaurantNotificationWebhook.findFirst({
+          select: {
+            id: true,
+            endpointUrl: true,
+            enabled: true,
+            lastSuccessAt: true,
+            lastFailureAt: true,
+            lastFailure: true,
+            updatedAt: true,
+          },
+        }),
+        ctx.db.restaurantJob.findMany({
+          where: { type: NOTIFICATION_WEBHOOK_JOB_TYPE, status: { not: 'DEAD' } },
+          select: {
+            id: true,
+            status: true,
+            attempts: true,
+            nextAttemptAt: true,
+            lastError: true,
+            createdAt: true,
+          },
+          orderBy: { createdAt: 'desc' },
+          take: 20,
+        }),
+        // Dead letters are retained indefinitely, so the list is keyset-paginated:
+        // every request reads at most one bounded page and older rows stay
+        // reachable through `deadLetterNextCursor`.
+        ctx.db.restaurantJob.findMany({
+          where: { type: NOTIFICATION_WEBHOOK_JOB_TYPE, status: 'DEAD' },
+          select: {
+            id: true,
+            status: true,
+            attempts: true,
+            nextAttemptAt: true,
+            lastError: true,
+            createdAt: true,
+            payload: true,
+          },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          take: input.deadLetterLimit + 1,
+          ...(input.deadLetterCursor ? { cursor: { id: input.deadLetterCursor }, skip: 1 } : {}),
+        }),
+      ]);
+      const page = deadRows.slice(0, input.deadLetterLimit);
+      const deadLetterNextCursor =
+        deadRows.length > input.deadLetterLimit ? page[page.length - 1]?.id : undefined;
+
+      // `retryWebhook` keeps the original DEAD row and enqueues a successor under a
+      // deterministic idempotency key. Resolve that successor so a recovered or
+      // in-flight retry is shown as history rather than as an open failure.
+      const successorKeyById = new Map<string, string>();
+      for (const row of page) {
+        const parsed = notificationWebhookJobPayloadSchema.safeParse(row.payload);
+        if (parsed.success) {
+          successorKeyById.set(row.id, retrySuccessorKey(parsed.data.eventId, row.id));
+        }
+      }
+      const successors = successorKeyById.size
+        ? await ctx.db.restaurantJob.findMany({
+            where: {
+              type: NOTIFICATION_WEBHOOK_JOB_TYPE,
+              idempotencyKey: { in: [...successorKeyById.values()] },
+            },
+            select: { id: true, status: true, idempotencyKey: true },
+          })
+        : [];
+      const successorByKey = new Map(
+        successors.map((job) => [job.idempotencyKey, { id: job.id, status: job.status }])
+      );
+      const deadLetters = page.map((row) => {
+        const key = successorKeyById.get(row.id);
+        return {
+          id: row.id,
+          status: row.status,
+          attempts: row.attempts,
+          nextAttemptAt: row.nextAttemptAt,
+          lastError: row.lastError,
+          createdAt: row.createdAt,
+          successor: (key ? successorByKey.get(key) : undefined) ?? null,
+        };
+      });
+
+      return {
+        config: config ? { ...config, signingSecretConfigured: true } : null,
+        deliveries,
+        deadLetters,
+        deadLetterNextCursor,
+      };
+    }),
 
   configureWebhook: webhookProcedure
     .input(
@@ -261,6 +339,33 @@ export const restaurantNotificationsRouter = router({
       return { ...saved, signingSecretConfigured: true };
     }),
 
+  deleteWebhook: webhookProcedure
+    .input(z.object({ confirmation: z.literal('DELETE') }).strict())
+    .mutation(async ({ ctx }) => {
+      const existing = await ctx.db.restaurantNotificationWebhook.findFirst({
+        select: { id: true },
+      });
+      if (!existing) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Webhook configuration not found.' });
+      }
+      annotateAudit(ctx, {
+        action: 'DELETE_RESTAURANT_NOTIFICATION_WEBHOOK',
+        targetType: 'RestaurantNotificationWebhook',
+        targetId: existing.id,
+      });
+      return ctx.db.$transaction(async (tx) => {
+        const stopped = await tx.restaurantJob.updateMany({
+          where: { type: NOTIFICATION_WEBHOOK_JOB_TYPE, status: 'QUEUED' },
+          data: {
+            status: 'DEAD',
+            lastError: 'Webhook endpoint was deleted before delivery.',
+          },
+        });
+        await tx.restaurantNotificationWebhook.delete({ where: { id: existing.id } });
+        return { id: existing.id, stoppedDeliveries: stopped.count };
+      });
+    }),
+
   testWebhook: webhookProcedure.input(z.object({}).strict()).mutation(async ({ ctx }) => {
     const config = await ctx.db.restaurantNotificationWebhook.findFirst({
       select: { enabled: true },
@@ -294,7 +399,7 @@ export const restaurantNotificationsRouter = router({
       if (!dead)
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Dead-letter webhook event not found.' });
       const payload = notificationWebhookJobPayloadSchema.parse(dead.payload);
-      const idempotencyKey = `notification-webhook:${payload.eventId}:retry:${dead.id}`;
+      const idempotencyKey = retrySuccessorKey(payload.eventId, dead.id);
       const successorPayload = JSON.stringify({
         ...payload,
         attemptOffset: payload.attemptOffset + dead.attempts,

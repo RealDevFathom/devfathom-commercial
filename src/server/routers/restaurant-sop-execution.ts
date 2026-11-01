@@ -27,6 +27,8 @@ import {
 import { summarizeSopReport } from '@/lib/restaurant/sop-reporting';
 import { businessDateToUtcDate } from '@/lib/restaurant/business-date';
 import { can, subjectFromSession } from '@/lib/abac';
+import { requireRestaurantBranchScope } from '@/server/restaurant-branch-scope';
+import { claimSopOccurrence } from '@/lib/restaurant/sop-assignment';
 
 /**
  * M7-L4 — the SOP execution router (branch-board reads + operator/verifier commands).
@@ -145,6 +147,151 @@ async function requireReportBranch(ctx: TRPCContext, branchId: string) {
   const organizationId = ctx.entitlements.organizationId ?? user.organizationId;
   if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
   await assertInOrganization(ctx.db.restaurantBranch, organizationId, [branchId], { active: true });
+}
+
+async function executionScope(ctx: TRPCContext, branchId: string) {
+  await requireRestaurantBranchScope(ctx, branchId);
+  const user = ctx.session!.user;
+  const subject = subjectFromSession(user);
+  const [canConfigure, canVerify] = await Promise.all([
+    can(subject, 'restaurant:configure', undefined, {
+      db: ctx.db,
+      source: 'TRPC',
+      ip: ctx.requestMeta.ip,
+    }),
+    can(subject, 'sop:verify', undefined, {
+      db: ctx.db,
+      source: 'TRPC',
+      ip: ctx.requestMeta.ip,
+    }),
+  ]);
+  // A user may hold active staff profiles at several branches (`userId` is not
+  // unique). Resolve deterministically, preferring the profile whose primary
+  // branch is this branch, then one holding an active job role here, then the
+  // oldest-by-id profile — never an arbitrary row from another branch.
+  const staffSelect = {
+    id: true,
+    jobRoles: { where: { branchId, jobRole: { active: true } }, select: { jobRoleId: true } },
+  } as const;
+  const staff =
+    (await ctx.db.restaurantStaffProfile.findFirst({
+      where: { userId: user.id, status: 'ACTIVE', primaryBranchId: branchId },
+      orderBy: { id: 'asc' },
+      select: staffSelect,
+    })) ??
+    (await ctx.db.restaurantStaffProfile.findFirst({
+      where: {
+        userId: user.id,
+        status: 'ACTIVE',
+        jobRoles: { some: { branchId, jobRole: { active: true } } },
+      },
+      orderBy: { id: 'asc' },
+      select: staffSelect,
+    })) ??
+    (await ctx.db.restaurantStaffProfile.findFirst({
+      where: { userId: user.id, status: 'ACTIVE' },
+      orderBy: { id: 'asc' },
+      select: staffSelect,
+    }));
+  return {
+    organizationWide: canConfigure || canVerify,
+    staffProfileId: staff?.id ?? null,
+    jobRoleIds: staff?.jobRoles.map((row) => row.jobRoleId) ?? [],
+  };
+}
+
+function visibleOccurrenceFilter(scope: Awaited<ReturnType<typeof executionScope>>) {
+  if (scope.organizationWide) return {};
+  if (!scope.staffProfileId) return { id: { in: [] } };
+  return {
+    OR: [
+      { assignedStaffProfileId: scope.staffProfileId },
+      { claimedByStaffProfileId: scope.staffProfileId },
+      ...(scope.jobRoleIds.length
+        ? [{ poolJobRoleId: { in: scope.jobRoleIds }, claimedByStaffProfileId: null }]
+        : []),
+    ],
+  };
+}
+
+type ExecutionScope = Awaited<ReturnType<typeof executionScope>>;
+
+/**
+ * Branch scope for a single, already-loaded occurrence. An out-of-branch caller
+ * receives NOT_FOUND (not FORBIDDEN) so the response never confirms that an
+ * occurrence id exists in another branch.
+ */
+async function occurrenceScope(ctx: TRPCContext, branchId: string): Promise<ExecutionScope> {
+  try {
+    return await executionScope(ctx, branchId);
+  } catch (err) {
+    if (err instanceof TRPCError && err.code === 'FORBIDDEN') {
+      throw new TRPCError({ code: 'NOT_FOUND', message: 'Occurrence not found.' });
+    }
+    throw err;
+  }
+}
+
+function isOccurrenceVisible(
+  scope: ExecutionScope,
+  occ: {
+    assignedStaffProfileId: string | null;
+    claimedByStaffProfileId: string | null;
+    poolJobRoleId: string | null;
+  }
+): boolean {
+  if (scope.organizationWide) return true;
+  return (
+    Boolean(scope.staffProfileId) &&
+    (occ.assignedStaffProfileId === scope.staffProfileId ||
+      occ.claimedByStaffProfileId === scope.staffProfileId ||
+      (occ.claimedByStaffProfileId === null &&
+        occ.poolJobRoleId !== null &&
+        scope.jobRoleIds.includes(occ.poolJobRoleId)))
+  );
+}
+
+/**
+ * Authorize an execution mutation against the caller's session. The occurrence
+ * must be in the caller's branch scope and visible to them. A branch operator
+ * always acts as their own session-linked staff profile — a caller-chosen actor
+ * id that differs is refused, so one operator cannot act as another. Only an
+ * organization-wide supervisor (`restaurant:configure` / `sop:verify`) may
+ * attribute the action to another staff profile.
+ */
+async function authorizeExecutionMutation(
+  ctx: TRPCContext,
+  occurrenceId: string,
+  requestedActor: string | null | undefined
+): Promise<string | null | undefined> {
+  const occ = await ctx.db.restaurantSopOccurrence.findUnique({
+    where: { id: occurrenceId },
+    select: {
+      branchId: true,
+      assignedStaffProfileId: true,
+      claimedByStaffProfileId: true,
+      poolJobRoleId: true,
+    },
+  });
+  if (!occ) throw new TRPCError({ code: 'NOT_FOUND', message: 'Occurrence not found.' });
+  const scope = await occurrenceScope(ctx, occ.branchId);
+  if (!isOccurrenceVisible(scope, occ)) {
+    throw new TRPCError({ code: 'NOT_FOUND', message: 'Occurrence not found.' });
+  }
+  if (scope.organizationWide) return requestedActor ?? scope.staffProfileId;
+  if (!scope.staffProfileId) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'An active staff profile linked to your account is required to work on SOPs.',
+    });
+  }
+  if (requestedActor && requestedActor !== scope.staffProfileId) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'You may only record SOP work as your own staff profile.',
+    });
+  }
+  return scope.staffProfileId;
 }
 
 // ── Read: branch board ────────────────────────────────────────────────────────
@@ -270,7 +417,11 @@ export const restaurantSopExecutionRouter = router({
 
   listOccurrences: completeProcedure.input(BoardFilterSchema).query(async ({ ctx, input }) => {
     assertSopDepth(ctx.entitlements, 'sop.execution');
-    const where: Record<string, unknown> = { branchId: input.branchId };
+    const scope = await executionScope(ctx, input.branchId);
+    const where: Record<string, unknown> = {
+      branchId: input.branchId,
+      ...visibleOccurrenceFilter(scope),
+    };
 
     if (input.businessDate) {
       // Filter by business date (stored as UTC @db.Date midnight)
@@ -287,14 +438,15 @@ export const restaurantSopExecutionRouter = router({
       };
     }
 
-    if (input.cursor) {
-      where['id'] = { gt: input.cursor };
-    }
-
+    // Keyset pagination via Prisma's cursor, which resumes from the cursor row's
+    // position in the (dueAt, id) ordering. The cursor never becomes a `where`
+    // key, so it cannot overwrite the visibility filter above (e.g. the
+    // deny-all `{ id: { in: [] } }` for a caller without a staff profile).
     const items = await ctx.db.restaurantSopOccurrence.findMany({
       where,
       orderBy: [{ dueAt: 'asc' }, { id: 'asc' }],
       take: input.limit + 1,
+      ...(input.cursor ? { cursor: { id: input.cursor }, skip: 1 } : {}),
       select: {
         id: true,
         status: true,
@@ -304,6 +456,9 @@ export const restaurantSopExecutionRouter = router({
         startedAt: true,
         submittedAt: true,
         resolvedAt: true,
+        assignedStaffProfileId: true,
+        poolJobRoleId: true,
+        claimedByStaffProfileId: true,
         assignment: {
           select: {
             id: true,
@@ -319,7 +474,20 @@ export const restaurantSopExecutionRouter = router({
     const hasMore = items.length > input.limit;
     const page = hasMore ? items.slice(0, input.limit) : items;
     return {
-      items: page,
+      // `canClaim` tells the board whether THIS caller may claim the row (an
+      // unclaimed pool occurrence for a role the caller actively holds here),
+      // so managers/verifiers without the pool role are not offered a claim
+      // that would be refused.
+      items: page.map((item) => ({
+        ...item,
+        canClaim: Boolean(
+          scope.staffProfileId &&
+          item.poolJobRoleId &&
+          !item.claimedByStaffProfileId &&
+          ['SCHEDULED', 'REJECTED'].includes(item.status) &&
+          scope.jobRoleIds.includes(item.poolJobRoleId)
+        ),
+      })),
       nextCursor: hasMore ? page[page.length - 1].id : null,
     };
   }),
@@ -341,6 +509,9 @@ export const restaurantSopExecutionRouter = router({
           startedAt: true,
           submittedAt: true,
           resolvedAt: true,
+          assignedStaffProfileId: true,
+          poolJobRoleId: true,
+          claimedByStaffProfileId: true,
           branchId: true,
           assignment: {
             select: {
@@ -415,7 +586,64 @@ export const restaurantSopExecutionRouter = router({
         },
       });
       if (!occ) throw new TRPCError({ code: 'NOT_FOUND', message: 'Occurrence not found.' });
+      const scope = await occurrenceScope(ctx, occ.branchId);
+      if (!isOccurrenceVisible(scope, occ)) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Occurrence not found.' });
+      }
       return occ;
+    }),
+
+  claim: completeProcedure
+    .input(z.object({ occurrenceId: OCCURRENCE_ID }).strict())
+    .mutation(async ({ ctx, input }) => {
+      assertSopDepth(ctx.entitlements, 'sop.execution');
+      const occurrence = await ctx.db.restaurantSopOccurrence.findUnique({
+        where: { id: input.occurrenceId },
+        select: { branchId: true, status: true, poolJobRoleId: true },
+      });
+      if (!occurrence) throw new TRPCError({ code: 'NOT_FOUND', message: 'Occurrence not found.' });
+      if (!['SCHEDULED', 'REJECTED'].includes(occurrence.status)) {
+        throw new TRPCError({
+          code: 'CONFLICT',
+          message: 'Only scheduled or rejected role-pool work can be claimed.',
+        });
+      }
+      const scope = await executionScope(ctx, occurrence.branchId);
+      if (!scope.staffProfileId) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'An active staff profile linked to your account is required to claim SOP work.',
+        });
+      }
+      if (!occurrence.poolJobRoleId || !scope.jobRoleIds.includes(occurrence.poolJobRoleId)) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'You are not eligible for this role-pool occurrence.',
+        });
+      }
+      const outcome = await claimSopOccurrence(ctx.db, input.occurrenceId, scope.staffProfileId);
+      if (outcome.status === 'NOT_CLAIMABLE') {
+        throw new TRPCError({
+          code:
+            outcome.reason === 'NOT_FOUND'
+              ? 'NOT_FOUND'
+              : outcome.reason === 'INVALID_STATE'
+                ? 'CONFLICT'
+                : 'FORBIDDEN',
+          message:
+            outcome.reason === 'NOT_ELIGIBLE'
+              ? 'You are not eligible for this role-pool occurrence.'
+              : 'This occurrence is not available to claim.',
+        });
+      }
+      if (outcome.status === 'CLAIMED') {
+        annotateAudit(ctx, {
+          targetType: 'RestaurantSopOccurrence',
+          targetId: input.occurrenceId,
+          description: 'Claimed SOP occurrence from role pool',
+        });
+      }
+      return outcome;
     }),
 
   // ── Commands: execution lifecycle ─────────────────────────────────────────
@@ -431,8 +659,13 @@ export const restaurantSopExecutionRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       assertSopDepth(ctx.entitlements, 'sop.execution');
+      const actorStaffProfileId = await authorizeExecutionMutation(
+        ctx,
+        input.occurrenceId,
+        input.actorStaffProfileId
+      );
       try {
-        const result = await startOccurrence(ctx.db, input);
+        const result = await startOccurrence(ctx.db, { ...input, actorStaffProfileId });
         annotateAudit(ctx, {
           targetType: 'RestaurantSopOccurrence',
           targetId: result.occurrenceId,
@@ -457,8 +690,13 @@ export const restaurantSopExecutionRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       assertSopDepth(ctx.entitlements, 'sop.execution');
+      const actorStaffProfileId = await authorizeExecutionMutation(
+        ctx,
+        input.occurrenceId,
+        input.actorStaffProfileId
+      );
       try {
-        return await completeStep(ctx.db, input);
+        return await completeStep(ctx.db, { ...input, actorStaffProfileId });
       } catch (err) {
         mapExecutionError(err);
       }
@@ -481,6 +719,11 @@ export const restaurantSopExecutionRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       assertSopDepth(ctx.entitlements, 'sop.evidence');
+      const uploaderStaffProfileId = await authorizeExecutionMutation(
+        ctx,
+        input.occurrenceId,
+        input.uploaderStaffProfileId
+      );
       try {
         const result = await attachEvidence(ctx.db, {
           occurrenceId: input.occurrenceId,
@@ -489,7 +732,7 @@ export const restaurantSopExecutionRouter = router({
           mimeType: input.mimeType,
           sizeBytes: input.sizeBytes,
           storageRef: input.storageRef,
-          uploaderStaffProfileId: input.uploaderStaffProfileId,
+          uploaderStaffProfileId,
         });
         annotateAudit(ctx, {
           targetType: 'RestaurantSopEvidence',
@@ -513,8 +756,13 @@ export const restaurantSopExecutionRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       assertSopDepth(ctx.entitlements, 'sop.execution');
+      const actorStaffProfileId = await authorizeExecutionMutation(
+        ctx,
+        input.occurrenceId,
+        input.actorStaffProfileId
+      );
       try {
-        const result = await submitOccurrence(ctx.db, input);
+        const result = await submitOccurrence(ctx.db, { ...input, actorStaffProfileId });
         annotateAudit(ctx, {
           targetType: 'RestaurantSopOccurrence',
           targetId: result.occurrenceId,
