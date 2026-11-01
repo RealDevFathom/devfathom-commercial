@@ -237,6 +237,45 @@ describe('tenancy and licensing (UX rule 7)', () => {
     expect(mocks.createCaller).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['overview', () => OverviewPage({ searchParams: params() })],
+    ['suppliers', () => SuppliersPage({ searchParams: params() })],
+    ['requisitions & orders', () => OrdersPage({ searchParams: params() })],
+    ['goods-in', () => ReceivingPage({ searchParams: params() })],
+    ['returns & claims', () => ReturnsPage({ searchParams: params() })],
+  ] as const)(
+    'hides the %s screen and its actions from a cashier without procurement',
+    async (_screen, renderPage) => {
+      mocks.createTRPCContext.mockResolvedValue({
+        ...contextStub(),
+        db: {
+          user: {
+            findUnique: vi.fn().mockResolvedValue({
+              organizationRole: {
+                permissions: [
+                  { capability: 'pharmacy:counter', effect: 'ALLOW' },
+                  { capability: 'pharmacy:orders', effect: 'ALLOW' },
+                ],
+              },
+              permissionOverrides: [],
+            }),
+          },
+        },
+      });
+
+      render(await renderPage());
+
+      expect(
+        screen.getByRole('heading', { name: 'You do not have purchasing access' })
+      ).toBeDefined();
+      expect(screen.queryByRole('link', { name: /Add a supplier/ })).toBeNull();
+      expect(screen.queryByRole('link', { name: /Draft a requisition/ })).toBeNull();
+      expect(screen.queryByRole('heading', { name: /Add a supplier/ })).toBeNull();
+      expect(screen.queryByRole('textbox')).toBeNull();
+      expect(mocks.createCaller).not.toHaveBeenCalled();
+    }
+  );
+
   it('says "no purchasing access" — a different sentence — when the session has no user', async () => {
     mocks.createTRPCContext.mockResolvedValue({ ...contextStub(), session: null });
 

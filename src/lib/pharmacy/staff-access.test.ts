@@ -11,7 +11,12 @@ vi.mock('@/lib/abac', () => ({
   }),
 }));
 
-import { pharmacyStaffCapabilities, readPharmacyStaffAccess } from './staff-access';
+import {
+  NO_PHARMACY_STAFF_ACCESS,
+  pharmacyHomePath,
+  pharmacyStaffCapabilities,
+  readPharmacyStaffAccess,
+} from './staff-access';
 
 const db = {} as never;
 
@@ -19,7 +24,13 @@ const db = {} as never;
 const personas = {
   owner: [
     'ADMIN',
-    ['reports:operational', 'reports:financial', 'pharmacy:close', 'pharmacy:inventory'],
+    [
+      'reports:operational',
+      'reports:financial',
+      'pharmacy:close',
+      'pharmacy:inventory',
+      'pharmacy:procurement',
+    ],
   ],
   admin: ['ADMIN', []],
   manager: [
@@ -57,6 +68,8 @@ describe('readPharmacyStaffAccess', () => {
       inventoryImport: true,
       dispense: false,
       prescriptions: false,
+      purchasing: true,
+      administration: true,
     });
   });
 
@@ -70,15 +83,29 @@ describe('readPharmacyStaffAccess', () => {
     });
   });
 
-  it('gives a manager the command centre, day close and reports without import', async () => {
+  it('gives a manager the command centre, day close, reports, purchasing and team without import', async () => {
     const [role, grants] = personas.manager;
     grant(grants);
     await expect(readPharmacyStaffAccess({ id: 'manager', role }, db)).resolves.toMatchObject({
       commandCentre: true,
       dayClose: true,
       reports: true,
+      purchasing: true,
+      administration: true,
       inventoryImport: false,
     });
+  });
+
+  it('reads purchasing from the procurement grant', async () => {
+    grant(['pharmacy:procurement']);
+    const access = await readPharmacyStaffAccess({ id: 'buyer', role: 'EMPLOYEE' }, db);
+    expect(access).toMatchObject({ purchasing: true, administration: false, dayClose: false });
+    expect(can).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'buyer' }),
+      'pharmacy:procurement',
+      undefined,
+      expect.objectContaining({ db })
+    );
   });
 
   it('keeps a cashier to the counter: no command centre, day close, reports or inventory admin', async () => {
@@ -93,6 +120,8 @@ describe('readPharmacyStaffAccess', () => {
       inventoryImport: false,
       dispense: false,
       prescriptions: false,
+      purchasing: false,
+      administration: false,
     });
     expect(pharmacyStaffCapabilities(access)).toEqual([]);
   });
@@ -105,7 +134,15 @@ describe('readPharmacyStaffAccess', () => {
       'pharmacy:close',
     ]);
     const access = await readPharmacyStaffAccess({ id: 'pharmacist', role: 'EMPLOYEE' }, db);
-    expect(access).toMatchObject({ dispense: true, prescriptions: true, dayClose: true });
+    expect(access).toMatchObject({
+      dispense: true,
+      prescriptions: true,
+      dayClose: true,
+      commandCentre: false,
+      reports: false,
+      purchasing: false,
+      administration: false,
+    });
     expect(pharmacyStaffCapabilities(access)).toEqual(
       expect.arrayContaining(['pharmacy:dispense', 'pharmacy:prescriptions'])
     );
@@ -115,5 +152,45 @@ describe('readPharmacyStaffAccess', () => {
     const access = await readPharmacyStaffAccess(null, db);
     expect(Object.values(access).some(Boolean)).toBe(false);
     expect(can).not.toHaveBeenCalled();
+  });
+});
+
+describe('pharmacyHomePath', () => {
+  const modules = ['pharmacy-counter', 'pharmacy-dispensing'];
+
+  it('keeps the command centre audience on the dashboard', () => {
+    expect(pharmacyHomePath({ ...NO_PHARMACY_STAFF_ACCESS, commandCentre: true }, modules)).toBe(
+      null
+    );
+    expect(
+      pharmacyHomePath(
+        { ...NO_PHARMACY_STAFF_ACCESS, commandCentre: true, dispense: true },
+        modules
+      )
+    ).toBe(null);
+  });
+
+  it('lands a pharmacist on the Pharmacist queue', () => {
+    expect(
+      pharmacyHomePath(
+        { ...NO_PHARMACY_STAFF_ACCESS, dispense: true, prescriptions: true, dayClose: true },
+        modules
+      )
+    ).toBe('/pharmacy/pharmacist-queue');
+  });
+
+  it('lands a cashier on the Counter', () => {
+    expect(pharmacyHomePath(NO_PHARMACY_STAFF_ACCESS, modules)).toBe('/pharmacy/counter');
+  });
+
+  it('falls back to the Counter when dispensing is not licensed', () => {
+    expect(
+      pharmacyHomePath({ ...NO_PHARMACY_STAFF_ACCESS, dispense: true }, ['pharmacy-counter'])
+    ).toBe('/pharmacy/counter');
+  });
+
+  it('sends nobody to an unlicensed surface', () => {
+    expect(pharmacyHomePath({ ...NO_PHARMACY_STAFF_ACCESS, dispense: true }, [])).toBe(null);
+    expect(pharmacyHomePath(NO_PHARMACY_STAFF_ACCESS, null)).toBe(null);
   });
 });

@@ -890,106 +890,110 @@ export default async function PharmacyInventoryPage({
         ) : null}
       </SectionCard>
 
-      <SectionCard
-        title="Inter-branch transfers"
-        eyebrow="INV-07 · allocate → approve → dispatch → receive"
-      >
-        {available.length && destinationLocations.length ? (
-          <form action={perform} className="grid gap-3 md:grid-cols-3">
-            <input name="action" type="hidden" value="allocate-transfer" />
-            <input name="branchId" type="hidden" value={branch.id} />
-            <label className="text-sm md:col-span-2">
-              Stock
-              <select className={inputClass} name="position">
-                {available.map(({ lot, balance }) => (
-                  <option
-                    key={`${lot.id}:${balance.stockLocationId}`}
-                    value={`${lot.id}:${balance.stockLocationId}`}
-                  >
-                    {lot.batch.medicine.productName} · {lot.batch.batchNumber} ·{' '}
-                    {balance.location.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="text-sm">
-              Destination branch and location
-              <select className={inputClass} name="destination">
-                {destinationLocations.map((l) => (
-                  <option key={l.id} value={`${l.branchId}:${l.id}`}>
-                    {branchNames.get(l.branchId)} · {l.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="text-sm">
-              Units
-              <Input className="mt-1" min="1" name="units" required type="number" />
-            </label>
-            <Button className="md:col-span-3" type="submit">
-              Allocate transfer
-            </Button>
-          </form>
-        ) : (
-          <Empty>
-            Transfers need available stock and a second active branch. Add the branch and its
-            receiving location in onboarding.
-          </Empty>
-        )}
-        <div className="mt-5 space-y-2">
-          {transfers.map((transfer) => (
-            <div
-              className="flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius-sm)] border border-border-subtle p-3"
-              key={transfer.id}
-            >
-              <div>
-                <p className="font-medium text-text-strong">
-                  {branchNames.get(transfer.fromBranchId) ?? 'Source branch'} →{' '}
-                  {branchNames.get(transfer.toBranchId) ?? 'Destination branch'}
-                </p>
-                <p className="text-xs text-text-muted">
-                  {transfer.lines.reduce((sum, line) => sum + line.quantityUnits, 0)} units ·
-                  received {transfer.lines.reduce((sum, line) => sum + line.receivedUnits, 0)}
-                </p>
+      {/* Transfers (allocate, approve, dispatch, receive) all need
+          `pharmacy:inventory`; a cashier is not shown them. */}
+      {staffAccess.inventoryControl ? (
+        <SectionCard
+          title="Inter-branch transfers"
+          eyebrow="INV-07 · allocate → approve → dispatch → receive"
+        >
+          {available.length && destinationLocations.length ? (
+            <form action={perform} className="grid gap-3 md:grid-cols-3">
+              <input name="action" type="hidden" value="allocate-transfer" />
+              <input name="branchId" type="hidden" value={branch.id} />
+              <label className="text-sm md:col-span-2">
+                Stock
+                <select className={inputClass} name="position">
+                  {available.map(({ lot, balance }) => (
+                    <option
+                      key={`${lot.id}:${balance.stockLocationId}`}
+                      value={`${lot.id}:${balance.stockLocationId}`}
+                    >
+                      {lot.batch.medicine.productName} · {lot.batch.batchNumber} ·{' '}
+                      {balance.location.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="text-sm">
+                Destination branch and location
+                <select className={inputClass} name="destination">
+                  {destinationLocations.map((l) => (
+                    <option key={l.id} value={`${l.branchId}:${l.id}`}>
+                      {branchNames.get(l.branchId)} · {l.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="text-sm">
+                Units
+                <Input className="mt-1" min="1" name="units" required type="number" />
+              </label>
+              <Button className="md:col-span-3" type="submit">
+                Allocate transfer
+              </Button>
+            </form>
+          ) : (
+            <Empty>
+              Transfers need available stock and a second active branch. Add the branch and its
+              receiving location in onboarding.
+            </Empty>
+          )}
+          <div className="mt-5 space-y-2">
+            {transfers.map((transfer) => (
+              <div
+                className="flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius-sm)] border border-border-subtle p-3"
+                key={transfer.id}
+              >
+                <div>
+                  <p className="font-medium text-text-strong">
+                    {branchNames.get(transfer.fromBranchId) ?? 'Source branch'} →{' '}
+                    {branchNames.get(transfer.toBranchId) ?? 'Destination branch'}
+                  </p>
+                  <p className="text-xs text-text-muted">
+                    {transfer.lines.reduce((sum, line) => sum + line.quantityUnits, 0)} units ·
+                    received {transfer.lines.reduce((sum, line) => sum + line.receivedUnits, 0)}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <StatusPill status={label(transfer.status)} tone={tone(transfer.status)} />
+                  {transfer.status === 'ALLOCATED' ? (
+                    <form action={perform}>
+                      <input name="action" type="hidden" value="approve-transfer" />
+                      <input name="branchId" type="hidden" value={branch.id} />
+                      <input name="transferId" type="hidden" value={transfer.id} />
+                      <Submit>Approve</Submit>
+                    </form>
+                  ) : null}
+                  {transfer.status === 'APPROVED' ? (
+                    <form action={perform}>
+                      <input name="action" type="hidden" value="dispatch-transfer" />
+                      <input name="branchId" type="hidden" value={branch.id} />
+                      <input name="transferId" type="hidden" value={transfer.id} />
+                      <Submit>Dispatch</Submit>
+                    </form>
+                  ) : null}
+                  {['DISPATCHED', 'PARTIALLY_RECEIVED'].includes(transfer.status) &&
+                  transfer.lines[0] ? (
+                    <form action={perform}>
+                      <input name="action" type="hidden" value="receive-transfer" />
+                      <input name="branchId" type="hidden" value={transfer.toBranchId} />
+                      <input name="transferId" type="hidden" value={transfer.id} />
+                      <input name="lineId" type="hidden" value={transfer.lines[0].id} />
+                      <input
+                        name="units"
+                        type="hidden"
+                        value={transfer.lines[0].quantityUnits - transfer.lines[0].receivedUnits}
+                      />
+                      <Submit>Receive remaining</Submit>
+                    </form>
+                  ) : null}
+                </div>
               </div>
-              <div className="flex items-center gap-2">
-                <StatusPill status={label(transfer.status)} tone={tone(transfer.status)} />
-                {transfer.status === 'ALLOCATED' ? (
-                  <form action={perform}>
-                    <input name="action" type="hidden" value="approve-transfer" />
-                    <input name="branchId" type="hidden" value={branch.id} />
-                    <input name="transferId" type="hidden" value={transfer.id} />
-                    <Submit>Approve</Submit>
-                  </form>
-                ) : null}
-                {transfer.status === 'APPROVED' ? (
-                  <form action={perform}>
-                    <input name="action" type="hidden" value="dispatch-transfer" />
-                    <input name="branchId" type="hidden" value={branch.id} />
-                    <input name="transferId" type="hidden" value={transfer.id} />
-                    <Submit>Dispatch</Submit>
-                  </form>
-                ) : null}
-                {['DISPATCHED', 'PARTIALLY_RECEIVED'].includes(transfer.status) &&
-                transfer.lines[0] ? (
-                  <form action={perform}>
-                    <input name="action" type="hidden" value="receive-transfer" />
-                    <input name="branchId" type="hidden" value={transfer.toBranchId} />
-                    <input name="transferId" type="hidden" value={transfer.id} />
-                    <input name="lineId" type="hidden" value={transfer.lines[0].id} />
-                    <input
-                      name="units"
-                      type="hidden"
-                      value={transfer.lines[0].quantityUnits - transfer.lines[0].receivedUnits}
-                    />
-                    <Submit>Receive remaining</Submit>
-                  </form>
-                ) : null}
-              </div>
-            </div>
-          ))}
-        </div>
-      </SectionCard>
+            ))}
+          </div>
+        </SectionCard>
+      ) : null}
 
       <div className="grid gap-6 xl:grid-cols-2">
         <SectionCard title="Recalls and quarantine" eyebrow="INV-08">

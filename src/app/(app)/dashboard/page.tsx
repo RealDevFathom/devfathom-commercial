@@ -15,7 +15,11 @@ import { can, subjectFromSession } from '@/lib/abac';
 import { hotelPropertyRouter } from '@/server/routers/hotel-property';
 import { isModuleGranted } from '@/lib/module-catalog';
 import { pharmacyBranchLabel } from '@/lib/pharmacy/branch-label';
-import { readPharmacyStaffAccess } from '@/lib/pharmacy/staff-access';
+import {
+  pharmacyHomePath,
+  readPharmacyStaffAccess,
+  type PharmacyStaffAccess,
+} from '@/lib/pharmacy/staff-access';
 
 export const metadata: Metadata = {
   title: 'Dashboard',
@@ -55,14 +59,23 @@ export default async function DashboardPage({
       : null;
 
   // The owner command centre is for Owner / Admin / Manager (and report
-  // holders). Anyone else — a cashier — gets their own home: the Counter and
-  // the drawer they opened. Decided here, server-side, from the same
-  // capability checks the report procedures enforce, so a cashier never asks
-  // the command centre for data it would refuse.
-  const cashierShifts: PharmacyCashierShift[] | null =
+  // holders). Anyone else gets their own home, decided here, server-side, from
+  // the same capability checks the report procedures enforce: a fresh sign-in
+  // lands a pharmacist on the Pharmacist queue and counter staff on the
+  // Counter; an explicit dashboard visit shows counter staff the Counter and
+  // the drawer they opened. Nobody outside the audience sees the command centre.
+  const pharmacyLanding: { home: string | null; access: PharmacyStaffAccess } | null =
     pharmacy && organizationId && user
       ? await withTenantDb(organizationId, async (db) => {
-          if ((await readPharmacyStaffAccess(user, db)).commandCentre) return null;
+          const access = await readPharmacyStaffAccess(user, db);
+          return { access, home: pharmacyHomePath(access, ssr?.entitlements.enabledModules) };
+        })
+      : null;
+  if (signInLanding && pharmacyLanding?.home) redirect(pharmacyLanding.home);
+
+  const cashierShifts: PharmacyCashierShift[] | null =
+    pharmacy && organizationId && user && pharmacyLanding && !pharmacyLanding.access.commandCentre
+      ? await withTenantDb(organizationId, async (db) => {
           const drawers = await db.pharmacyDrawerSession.findMany({
             where: { organizationId, openedByActorId: user.id, status: 'OPEN' },
             orderBy: { openedAt: 'desc' },

@@ -330,6 +330,19 @@ describe('Inventory admin actions by role', () => {
     ).toBeInTheDocument();
   });
 
+  it('hides the inter-branch transfer screen and its actions from a cashier', async () => {
+    staffAccess.current = { ...fullAccess, inventoryControl: false, inventoryImport: false };
+    await show();
+    expect(screen.queryByRole('heading', { name: 'Inter-branch transfers' })).toBeNull();
+    for (const name of ['Allocate transfer', 'Approve', 'Dispatch', 'Receive remaining'])
+      expect(screen.queryByRole('button', { name })).toBeNull();
+  });
+
+  it('shows the inter-branch transfer screen to a member with inventory control', async () => {
+    await show();
+    expect(screen.getByRole('heading', { name: 'Inter-branch transfers' })).toBeInTheDocument();
+  });
+
   it('keeps every admin action for an owner', async () => {
     await show();
     expect(screen.getByRole('link', { name: 'Import opening stock' })).toBeInTheDocument();

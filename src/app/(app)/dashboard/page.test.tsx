@@ -263,3 +263,69 @@ describe('PHARMACY dashboard audience by role', () => {
     );
   });
 });
+
+describe('PHARMACY sign-in landing: each role lands on its own home', () => {
+  const pharmacist = ['pharmacy:dispense', 'pharmacy:catalogue-review', 'pharmacy:close'];
+  const cashier = ['pharmacy:counter', 'pharmacy:orders'];
+  const manager = [
+    'pharmacy:manage',
+    'pharmacy:orders',
+    'pharmacy:procurement',
+    'pharmacy:close',
+    'reports:operational',
+  ];
+  const owner = ['reports:operational', 'reports:financial', 'pharmacy:close'];
+
+  function signIn(
+    role: string,
+    grants: readonly string[],
+    enabledModules = ['pharmacy-counter', 'pharmacy-dispensing', 'pharmacy-reports']
+  ) {
+    mocks.createSSRHelpers.mockResolvedValue({
+      helpers: helpers(),
+      session: { user: { id: `${role}-user`, role, status: 'ACTIVE' } },
+      organization: { id: 'tenant', timezone: 'Asia/Karachi', currency: 'PKR' },
+      entitlements: { vertical: 'PHARMACY', enabledModules },
+    });
+    mocks.can.mockImplementation(async (_subject: unknown, action: string) =>
+      grants.includes(action)
+    );
+  }
+  const landing = () => DashboardPage({ searchParams: Promise.resolve({ landing: '1' }) });
+
+  it('lands a pharmacist on the Pharmacist queue, never the command centre', async () => {
+    signIn('EMPLOYEE', pharmacist);
+    await expect(landing()).rejects.toThrow('redirect');
+    expect(mocks.redirect).toHaveBeenCalledWith('/pharmacy/pharmacist-queue');
+  });
+
+  it('lands a cashier on the Counter, never the command centre', async () => {
+    signIn('EMPLOYEE', cashier);
+    await expect(landing()).rejects.toThrow('redirect');
+    expect(mocks.redirect).toHaveBeenCalledWith('/pharmacy/counter');
+    expect(mocks.drawerFindMany).not.toHaveBeenCalled();
+  });
+
+  it('lands a pharmacist on the Counter when dispensing is not licensed', async () => {
+    signIn('EMPLOYEE', pharmacist, ['pharmacy-counter', 'pharmacy-reports']);
+    await expect(landing()).rejects.toThrow('redirect');
+    expect(mocks.redirect).toHaveBeenCalledWith('/pharmacy/counter');
+  });
+
+  it.each([
+    ['owner', 'ADMIN', owner],
+    ['manager', 'EMPLOYEE', manager],
+  ] as const)('keeps the %s on the owner command centre', async (_persona, role, grants) => {
+    signIn(role, grants);
+    const page = await landing();
+    expect(mocks.redirect).not.toHaveBeenCalled();
+    expect(page.props.children.type).toBe(PharmacyDashboardContent);
+  });
+
+  it('shows a pharmacist visiting the dashboard directly their own home, not the command centre', async () => {
+    signIn('EMPLOYEE', pharmacist);
+    const page = await DashboardPage({});
+    expect(mocks.redirect).not.toHaveBeenCalled();
+    expect(page.props.children.type).toBe(PharmacyCashierHome);
+  });
+});

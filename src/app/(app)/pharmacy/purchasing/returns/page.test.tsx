@@ -6,10 +6,12 @@ const mocks = vi.hoisted(() => ({
   context: vi.fn(),
   caller: vi.fn(),
   module: vi.fn(),
+  canProcure: vi.fn(),
 }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: mocks.actor }));
 vi.mock('@/server/trpc', () => ({ createTRPCContext: mocks.context }));
 vi.mock('@/lib/entitlements', () => ({ hasModule: mocks.module }));
+vi.mock('@/lib/pharmacy/procurement-access', () => ({ actorCanProcure: mocks.canProcure }));
 vi.mock('@/server/routers/pharmacy-purchasing', () => ({
   pharmacyPurchasingRouter: { createCaller: mocks.caller },
 }));
@@ -33,6 +35,7 @@ beforeEach(() => {
     entitlements: { organizationId: 'org' },
   });
   mocks.module.mockReturnValue(true);
+  mocks.canProcure.mockResolvedValue(true);
   mocks.caller.mockReturnValue(reads);
   reads.workspace.mockResolvedValue({
     branches: [{ id: 'branch', name: 'Branch', stockLocations: [] }],
@@ -53,6 +56,13 @@ it('does not read or render priorities without module access', async () => {
   ).toBeVisible();
   expect(reads.purchaseReturns).not.toHaveBeenCalled();
   expect(screen.queryByRole('heading', { name: 'Supplier-credit follow-up' })).toBeNull();
+});
+it('shows a member without procurement the closed state, not the returns screen', async () => {
+  mocks.canProcure.mockResolvedValue(false);
+  render(await ReturnsPage({ searchParams: params() }));
+  expect(screen.getByRole('heading', { name: 'You do not have purchasing access' })).toBeVisible();
+  expect(mocks.caller).not.toHaveBeenCalled();
+  expect(reads.purchaseReturns).not.toHaveBeenCalled();
 });
 it('does not render priorities after branch read denial', async () => {
   reads.purchaseReturns.mockRejectedValue(new Error('FORBIDDEN'));

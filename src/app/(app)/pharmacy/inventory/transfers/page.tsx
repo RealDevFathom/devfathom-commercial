@@ -26,6 +26,7 @@ import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { pharmacyInventoryRouter } from '@/server/routers/pharmacy-inventory';
 import { createTRPCContext } from '@/server/trpc';
 import { pharmacyBranchLabel } from '@/lib/pharmacy/branch-label';
+import { readPharmacyStaffAccess } from '@/lib/pharmacy/staff-access';
 
 export const metadata: Metadata = { title: 'Stock transfers' };
 
@@ -74,7 +75,14 @@ export default async function PharmacyTransfersPage({
   const query = await searchParams;
   const ctx = await tenantContext();
   const moduleEnabled = ctx ? hasModule(ctx.entitlements, 'pharmacy-inventory') : false;
-  if (!ctx?.session?.user || !moduleEnabled) {
+  // Every transfer step (allocate, approve, dispatch, receive) needs
+  // `pharmacy:inventory`; a member without it, such as a cashier, is shown the
+  // permission state instead of the transfer screen.
+  const inventoryControl =
+    ctx?.session?.user && moduleEnabled
+      ? (await readPharmacyStaffAccess(ctx.session.user, ctx.db)).inventoryControl
+      : false;
+  if (!ctx?.session?.user || !moduleEnabled || !inventoryControl) {
     return (
       <main className="min-w-0 space-y-6">
         <PageHeader {...header} />
