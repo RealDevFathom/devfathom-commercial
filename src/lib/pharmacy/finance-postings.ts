@@ -760,6 +760,46 @@ export async function postTenderRefundEntry(
   });
 }
 
+/**
+ * #380: a Khata cash collection settles the customer's receivable into the drawer.
+ * Sourced from the PAID_IN drawer movement so the journal and the drawer agree
+ * on one fact, and keyed on that movement so a retry never posts twice.
+ */
+export async function postKhataCollectionEntry(
+  db: ScopedDb,
+  scope: PostingScope,
+  input: { drawerMovementId: string; at: Date }
+) {
+  const movement = await db.pharmacyDrawerMovement.findFirst({
+    where: { id: input.drawerMovementId, organizationId: scope.organizationId },
+    include: { drawerSession: { select: { branchId: true } } },
+  });
+  if (!movement) throw new PharmacyFinanceError('NOT_FOUND');
+  if (movement.drawerSession.branchId !== scope.branchId)
+    throw new PharmacyFinanceError('CROSS_BRANCH_REFERENCE');
+  if (movement.kind !== 'PAID_IN') throw new PharmacyFinanceError('INVALID_STATE');
+  if (!Number.isSafeInteger(movement.amountMinor) || movement.amountMinor <= 0)
+    throw new PharmacyFinanceError('NOTHING_TO_POST');
+  const branchId = movement.drawerSession.branchId;
+  return postJournalEntry(db, scope, {
+    sourceKind: 'PHARMACY_KHATA_COLLECTION',
+    sourceId: movement.id,
+    description: `Khata cash collection ${movement.id}`,
+    occurredAt: input.at,
+    idempotencyKey: postingKey('PHARMACY_KHATA_COLLECTION', movement.id),
+    branchId,
+    lines: [
+      { accountCode: 'CASH', side: 'DEBIT', amountMinor: movement.amountMinor, branchId },
+      {
+        accountCode: 'ACCOUNTS_RECEIVABLE',
+        side: 'CREDIT',
+        amountMinor: movement.amountMinor,
+        branchId,
+      },
+    ],
+  });
+}
+
 /** POS-B: close is a reconciliation event; only its cash variance changes value. */
 export async function postDailyCloseEntry(
   db: ScopedDb,

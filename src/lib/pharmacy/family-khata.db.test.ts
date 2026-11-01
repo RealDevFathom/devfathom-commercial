@@ -270,6 +270,29 @@ suite('cash Khata collection PostgreSQL atomicity and replay', () => {
           where: { drawerSessionId: drawer.id, kind: 'PAID_IN' },
         })
       ).toEqual([expect.objectContaining({ amountMinor: 250 })]);
+      const [movement] = await db.pharmacyDrawerMovement.findMany({
+        where: { drawerSessionId: drawer.id, kind: 'PAID_IN' },
+      });
+      const entries = await db.financeJournalEntry.findMany({
+        where: { sourceKind: 'PHARMACY_KHATA_COLLECTION', branchId: scope.branchId },
+        include: { lines: true },
+      });
+      expect(entries).toEqual([
+        expect.objectContaining({
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          sourceId: movement.id,
+          idempotencyKey: `finance:PHARMACY_KHATA_COLLECTION:${movement.id}`,
+        }),
+      ]);
+      expect(
+        entries[0].lines
+          .map((line) => [line.accountCode, line.side, line.amountMinor])
+          .sort()
+      ).toEqual([
+        ['ACCOUNTS_RECEIVABLE', 'CREDIT', 250],
+        ['CASH', 'DEBIT', 250],
+      ]);
       expect(
         await closePharmacyDrawer(db, scope, {
           drawerSessionId: drawer.id,
@@ -296,6 +319,13 @@ suite('cash Khata collection PostgreSQL atomicity and replay', () => {
     expect(
       await inScope(scope, (db) => khata.readKhataBalance(db, scope, scope.familyAccountId))
     ).toBe(350);
+    expect(
+      await inScope(scope, (db) =>
+        db.financeJournalEntry.count({
+          where: { sourceKind: 'PHARMACY_KHATA_COLLECTION', branchId: scope.branchId },
+        })
+      )
+    ).toBe(1);
   });
 
   it('rolls back payments, the drawer movement and the key when the transaction fails', async () => {
@@ -331,8 +361,18 @@ suite('cash Khata collection PostgreSQL atomicity and replay', () => {
       expect(
         await db.pharmacyMoneyIdempotencyKey.count({ where: { key: input.idempotencyKey } })
       ).toBe(0);
+      expect(
+        await db.financeJournalEntry.count({
+          where: { sourceKind: 'PHARMACY_KHATA_COLLECTION', branchId: scope.branchId },
+        })
+      ).toBe(0);
       await khata.settleFamilyKhata(db, scope, input);
       expect(await khata.readKhataBalance(db, scope, scope.familyAccountId)).toBe(350);
+      expect(
+        await db.financeJournalEntry.count({
+          where: { sourceKind: 'PHARMACY_KHATA_COLLECTION', branchId: scope.branchId },
+        })
+      ).toBe(1);
     });
   });
 });

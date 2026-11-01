@@ -31,6 +31,7 @@ function cashFixture() {
     status: 'OPEN',
     businessDate: new Date('2026-10-29T00:00:00.000Z'),
   };
+  const journal: { id: string; idempotencyKey: string; lines: unknown[] }[] = [];
   let prior: {
     commandType: string;
     payloadHash: string;
@@ -67,10 +68,42 @@ function cashFixture() {
         ...data,
       })),
     },
-    pharmacyDrawerMovement: { create: vi.fn().mockResolvedValue({ id: 'movement_1' }) },
+    pharmacyDrawerMovement: {
+      create: vi.fn().mockResolvedValue({
+        id: 'movement_1',
+        createdAt: new Date('2026-10-29T09:00:05.000Z'),
+      }),
+      findFirst: vi.fn(async () => ({
+        id: 'movement_1',
+        organizationId: scope.organizationId,
+        drawerSessionId: 'drawer_1',
+        kind: 'PAID_IN',
+        amountMinor: 250,
+        drawerSession: { branchId: scope.branchId },
+      })),
+    },
     pharmacyDailyClose: { findFirst: vi.fn().mockResolvedValue(null) },
+    financeJournalEntry: {
+      findFirst: vi.fn(async ({ where }: { where: { idempotencyKey: string } }) =>
+        journal.find((entry) => entry.idempotencyKey === where.idempotencyKey) ?? null
+      ),
+      create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
+        const entry = { id: `entry_${journal.length + 1}`, ...data, lines: [] as unknown[] };
+        journal.push(entry as (typeof journal)[number]);
+        return entry;
+      }),
+      findFirstOrThrow: vi.fn(async ({ where }: { where: { id: string } }) =>
+        journal.find((entry) => entry.id === where.id)
+      ),
+    },
+    financeJournalLine: {
+      create: vi.fn(async ({ data }: { data: { entryId: string } }) => {
+        journal.find((entry) => entry.id === data.entryId)!.lines.push(data);
+        return data;
+      }),
+    },
   };
-  return { db, drawer };
+  return { db, drawer, journal };
 }
 
 describe('CRM-L02 family privacy and khata settlement', () => {
@@ -168,6 +201,58 @@ describe('CRM-L02 family privacy and khata settlement', () => {
     });
   });
 
+  it('posts Dr CASH / Cr ACCOUNTS_RECEIVABLE once for a cash collection, keyed on its drawer movement', async () => {
+    const { db, journal } = cashFixture();
+    await settleFamilyKhata(db as never, scope, cashCollection);
+    await settleFamilyKhata(db as never, scope, cashCollection);
+
+    expect(db.pharmacyDrawerMovement.findFirst).toHaveBeenCalledWith({
+      where: { id: 'movement_1', organizationId: scope.organizationId },
+      include: { drawerSession: { select: { branchId: true } } },
+    });
+    expect(db.financeJournalEntry.create).toHaveBeenCalledExactlyOnceWith({
+      data: expect.objectContaining({
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        sourceKind: 'PHARMACY_KHATA_COLLECTION',
+        sourceId: 'movement_1',
+        occurredAt: new Date('2026-10-29T09:00:05.000Z'),
+        idempotencyKey: 'finance:PHARMACY_KHATA_COLLECTION:movement_1',
+        actorId: scope.actorId,
+      }),
+    });
+    expect(journal).toHaveLength(1);
+    expect(journal[0].lines).toEqual([
+      expect.objectContaining({ accountCode: 'CASH', side: 'DEBIT', amountMinor: 250 }),
+      expect.objectContaining({
+        accountCode: 'ACCOUNTS_RECEIVABLE',
+        side: 'CREDIT',
+        amountMinor: 250,
+      }),
+    ]);
+  });
+
+  it('fails the collection when the journal posting cannot be made', async () => {
+    const { db } = cashFixture();
+    db.pharmacyDrawerMovement.findFirst.mockResolvedValue(null as never);
+    await expect(settleFamilyKhata(db as never, scope, cashCollection)).rejects.toMatchObject({
+      reason: 'NOT_FOUND',
+    });
+    expect(db.financeJournalEntry.create).not.toHaveBeenCalled();
+    expect(db.pharmacyMoneyIdempotencyKey.update).not.toHaveBeenCalled();
+  });
+
+  it('does not post a journal entry for a non-cash Khata settlement', async () => {
+    const { db } = cashFixture();
+    await settleFamilyKhata(db as never, scope, {
+      familyAccountId: 'family_1',
+      amountMinor: 250,
+      occurredAt: cashCollection.occurredAt,
+    });
+    expect(db.pharmacyDrawerMovement.create).not.toHaveBeenCalled();
+    expect(db.financeJournalEntry.create).not.toHaveBeenCalled();
+  });
+
   it('replays a committed collection after drawer and day close without writing again', async () => {
     const { db, drawer } = cashFixture();
     const result = await settleFamilyKhata(db as never, scope, cashCollection);
@@ -179,6 +264,7 @@ describe('CRM-L02 family privacy and khata settlement', () => {
     expect(db.pharmacyDailyClose.findFirst).not.toHaveBeenCalled();
     expect(db.pharmacyKhataEvent.create).toHaveBeenCalledTimes(1);
     expect(db.pharmacyDrawerMovement.create).toHaveBeenCalledTimes(1);
+    expect(db.financeJournalEntry.create).toHaveBeenCalledTimes(1);
     expect(db.pharmacyMoneyIdempotencyKey.update).toHaveBeenCalledTimes(1);
   });
 

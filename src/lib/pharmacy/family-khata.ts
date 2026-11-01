@@ -4,6 +4,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { Prisma, type PharmacyKhataEvent } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
+import { postKhataCollectionEntry } from './finance-postings';
 import { auditPatientRead } from './patient-prescriptions';
 import { PharmacySettlementError, recordPharmacyCashMovement } from './settlement';
 
@@ -294,13 +295,20 @@ export async function settleFamilyKhata(
     );
     remaining -= amountMinor;
   }
-  if (drawer)
-    await recordPharmacyCashMovement(db, scope, {
+  if (drawer) {
+    const movement = await recordPharmacyCashMovement(db, scope, {
       drawerSessionId: drawer.id,
       kind: 'PAID_IN',
       amountMinor: input.amountMinor,
       reason: `Khata collection: ${input.familyAccountId}`,
     });
+    // Dr CASH / Cr ACCOUNTS_RECEIVABLE in the caller's transaction, keyed on the
+    // drawer movement so the journal posts exactly once with the collection.
+    await postKhataCollectionEntry(db, scope, {
+      drawerMovementId: movement.id,
+      at: movement.createdAt,
+    });
+  }
   const result = {
     paidMinor: input.amountMinor,
     remainingBalanceMinor: balanceMinor - input.amountMinor,
