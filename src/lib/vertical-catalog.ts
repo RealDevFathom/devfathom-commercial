@@ -724,6 +724,12 @@ export type RoleTemplate = {
    * still revokes them.
    * All entries are provisional (Phase 0 / D10). */
   capabilities: readonly string[];
+  /**
+   * When true, a member holding this template reads reports and closes days only
+   * at the active pharmacy branches assigned to them, not organization-wide.
+   * Session ADMIN is never narrowed by it.
+   */
+  branchScoped?: boolean;
 };
 
 export const AGENCY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
@@ -807,8 +813,16 @@ export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
     name: 'Manager',
     isSystem: true,
     // Managers retain the purchasing and Goods-in access that predates the
-    // explicit pharmacy capability model (#375).
-    capabilities: ['pharmacy:manage', 'pharmacy:orders', 'pharmacy:procurement'],
+    // explicit pharmacy capability model (#375). They also close the day and read
+    // operational reports, but only for their own assigned branch (branchScoped).
+    capabilities: [
+      'pharmacy:manage',
+      'pharmacy:orders',
+      'pharmacy:procurement',
+      'pharmacy:close',
+      'reports:operational',
+    ],
+    branchScoped: true,
   },
   {
     key: 'cashier',
@@ -826,6 +840,11 @@ export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
   { key: 'finance', name: 'Finance', isSystem: true, capabilities: ['reports:financial'] },
   { key: 'auditor', name: 'Auditor', isSystem: true, capabilities: ['reports:operational'] },
 ];
+
+/** Pharmacy role-template keys whose reports and day close stay on assigned branches. */
+export const PHARMACY_BRANCH_SCOPED_ROLE_KEYS: ReadonlySet<string> = new Set(
+  PHARMACY_ROLE_TEMPLATES.filter((role) => role.branchScoped).map((role) => role.key)
+);
 
 /**
  * H1-01 — the nineteen hospitality capabilities of `06-roles-reports` §1, in the

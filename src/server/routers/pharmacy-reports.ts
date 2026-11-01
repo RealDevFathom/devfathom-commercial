@@ -43,6 +43,7 @@ import {
 } from '@/lib/pharmacy/pack-authentication-operations';
 import { readPharmacyBranchComparison } from '@/lib/pharmacy/branch-comparison';
 import { auditedProtectedProcedure, capabilityProcedure, router, type TRPCContext } from '../trpc';
+import { pharmacyBranchLimit } from '../pharmacy-branch-limit';
 import {
   PHARMACY_GROWTH_CATEGORIES,
   readPharmacyCategoryGrowthReport,
@@ -128,16 +129,43 @@ const anomalySnooze = anomalyDecision
   .extend({ snoozedUntil: z.iso.datetime({ offset: true }) })
   .strict();
 
-async function scope(ctx: TRPCContext) {
+async function limitedScope(ctx: TRPCContext) {
   if (!hasModule(ctx.entitlements, 'pharmacy-reports'))
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Pharmacy reports are not licensed.' });
   const organizationId = ctx.entitlements.organizationId;
+  // A branch-scoped member (the Manager template) reads reports only for their
+  // own assigned branches; everyone else keeps the organization-wide list.
+  const limit = await pharmacyBranchLimit(ctx, organizationId);
   const branches = await ctx.db.pharmacyBranch.findMany({
-    where: { organizationId, active: true },
+    where: { organizationId, active: true, ...(limit ? { id: { in: limit } } : {}) },
     orderBy: { name: 'asc' },
     select: { id: true, name: true },
   });
+  return { branches, organizationId, limited: limit !== null };
+}
+
+async function scope(ctx: TRPCContext) {
+  const { branches, organizationId } = await limitedScope(ctx);
   return { branches, organizationId };
+}
+
+/**
+ * The tenant boundary for the branch list, checked the way
+ * `pharmacyOrganizationId()` does before any query: the session, the resolved
+ * organization and the entitlements must all name the same Pharmacy tenant.
+ */
+function reportOrganizationId(ctx: TRPCContext): string {
+  const organizationId = ctx.entitlements?.organizationId;
+  const user = ctx.session?.user;
+  if (!organizationId || !user?.id) throw new TRPCError({ code: 'UNAUTHORIZED' });
+  if (
+    ctx.organization?.vertical !== 'PHARMACY' ||
+    ctx.organization.id !== organizationId ||
+    user.organizationId !== organizationId
+  ) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+  }
+  return organizationId;
 }
 
 async function requireFinancialReports(ctx: TRPCContext) {
@@ -417,22 +445,31 @@ export const pharmacyReportsRouter = router({
         })),
       };
     }),
-  // The branch list never errors for a signed-in member: report holders and
-  // organization administrators see every active branch; everyone else (for
-  // example a cashier) sees only the active branches assigned to them, which may
-  // be none. Report reads stay behind `reports:operational` below.
+  // The branch list never errors for a signed-in member of this Pharmacy tenant:
+  // report holders and organization administrators see every active branch,
+  // except a branch-scoped manager, who sees only their assigned branches;
+  // everyone else (for example a cashier) sees only the active branches assigned
+  // to them, which may be none. A session from another organization is refused
+  // before any query. Report reads stay behind `reports:operational` below.
   branches: auditedProtectedProcedure.query(async ({ ctx }) => {
+    const organizationId = reportOrganizationId(ctx);
     const user = ctx.session!.user;
-    const organizationId = ctx.entitlements.organizationId;
-    // The grant is always evaluated (and so recorded) before the ADMIN fallback.
-    const organizationWide =
-      (await can(subjectFromSession(user), 'reports:operational', undefined, {
-        db: ctx.db,
-        source: 'TRPC',
-        ip: ctx.requestMeta.ip,
-      })) || user.role === 'ADMIN';
-    if (organizationWide && hasModule(ctx.entitlements, 'pharmacy-reports'))
-      return { ...(await scope(ctx)), scope: 'organization' as const };
+    // The shared operational grant is always evaluated (and so recorded) before
+    // the ADMIN fallback; an admin is organization-wide without it.
+    const operational = await can(subjectFromSession(user), 'reports:operational', undefined, {
+      db: ctx.db,
+      source: 'TRPC',
+      ip: ctx.requestMeta.ip,
+    });
+    const organizationWide = user.role === 'ADMIN' || operational;
+    if (organizationWide && hasModule(ctx.entitlements, 'pharmacy-reports')) {
+      const { branches, limited } = await limitedScope(ctx);
+      return {
+        branches,
+        organizationId,
+        scope: limited ? ('assigned' as const) : ('organization' as const),
+      };
+    }
     const assignments = await ctx.db.pharmacyBranchAssignment.findMany({
       where: {
         organizationId,

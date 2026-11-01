@@ -22,7 +22,16 @@ const personas = {
     ['reports:operational', 'reports:financial', 'pharmacy:close', 'pharmacy:inventory'],
   ],
   admin: ['ADMIN', []],
-  manager: ['EMPLOYEE', ['pharmacy:manage', 'pharmacy:orders', 'pharmacy:procurement']],
+  manager: [
+    'EMPLOYEE',
+    [
+      'pharmacy:manage',
+      'pharmacy:orders',
+      'pharmacy:procurement',
+      'pharmacy:close',
+      'reports:operational',
+    ],
+  ],
   cashier: ['EMPLOYEE', ['pharmacy:counter', 'pharmacy:orders']],
 } as const;
 
@@ -61,11 +70,13 @@ describe('readPharmacyStaffAccess', () => {
     });
   });
 
-  it('gives a manager the command centre without import', async () => {
+  it('gives a manager the command centre, day close and reports without import', async () => {
     const [role, grants] = personas.manager;
     grant(grants);
     await expect(readPharmacyStaffAccess({ id: 'manager', role }, db)).resolves.toMatchObject({
       commandCentre: true,
+      dayClose: true,
+      reports: true,
       inventoryImport: false,
     });
   });

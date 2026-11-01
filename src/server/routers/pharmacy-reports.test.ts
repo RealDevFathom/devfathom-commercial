@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   assignmentFindMany: vi.fn(),
   settingUpsert: vi.fn(),
   userFindUnique: vi.fn(),
+  userFindFirst: vi.fn(),
   branchFindFirst: vi.fn(),
   reportFindFirst: vi.fn(),
   reportFindMany: vi.fn(),
@@ -79,7 +80,7 @@ import { hasModule } from '@/lib/entitlements';
 import type { TRPCContext } from '../trpc';
 import { pharmacyReportsRouter } from './pharmacy-reports';
 
-function context(role = 'ADMIN') {
+function context(role = 'ADMIN', organizationId = 'org_1') {
   return {
     db: {
       $queryRaw: mocks.raw,
@@ -93,7 +94,7 @@ function context(role = 'ADMIN') {
         updateManyAndReturn: mocks.reportUpdateManyAndReturn,
       },
       pharmacyOwnerDigestSetting: { upsert: mocks.settingUpsert },
-      user: { findUnique: mocks.userFindUnique },
+      user: { findUnique: mocks.userFindUnique, findFirst: mocks.userFindFirst },
     },
     entitlements: {
       organizationId: 'org_1',
@@ -102,17 +103,17 @@ function context(role = 'ADMIN') {
     },
     session: {
       expires: 'later',
-      user: { id: 'user_admin', role, status: 'ACTIVE', organizationId: 'org_1' },
+      user: { id: 'user_admin', role, status: 'ACTIVE', organizationId },
     },
-    organization: { id: 'org_1' },
+    organization: { id: 'org_1', vertical: 'PHARMACY' },
     support: null,
     requestMeta: { ip: null, userAgent: null },
     audit: { detail: {} },
   } as unknown as TRPCContext;
 }
 
-function caller(role = 'ADMIN') {
-  return pharmacyReportsRouter.createCaller(context(role));
+function caller(role = 'ADMIN', organizationId = 'org_1') {
+  return pharmacyReportsRouter.createCaller(context(role, organizationId));
 }
 
 function pvCaller() {
@@ -230,6 +231,8 @@ describe('normal Reports daily work pack', () => {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.transaction.mockImplementation((run) => run(mocks.comparisonTx));
+  // A member without a branch-scoped role template reads organization-wide.
+  mocks.userFindFirst.mockResolvedValue({ organizationRole: null });
 });
 
 describe('pharmacy administrator report bootstrap (#434)', () => {
@@ -331,6 +334,97 @@ describe('pharmacy branch list scope by role (QA: cashier dashboard)', () => {
   it('still refuses a cashier the report reads themselves', async () => {
     mocks.can.mockResolvedValue(false);
     await expect(caller('EMPLOYEE').catalog()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+
+  it('gives nothing back to a user from another organization, before any query', async () => {
+    mocks.can.mockResolvedValue(true);
+    await expect(caller('ADMIN', 'org_2').branches()).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    await expect(caller('EMPLOYEE', 'org_2').branches()).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mocks.can).not.toHaveBeenCalled();
+    expect(mocks.branchFindMany).not.toHaveBeenCalled();
+    expect(mocks.assignmentFindMany).not.toHaveBeenCalled();
+    expect(mocks.userFindFirst).not.toHaveBeenCalled();
+  });
+});
+
+describe('pharmacy manager report scope (own branch only)', () => {
+  const allBranches = [
+    { id: 'branch_1', name: 'Main' },
+    { id: 'branch_2', name: 'Second' },
+  ];
+  beforeEach(() => {
+    vi.mocked(hasModule).mockReturnValue(true);
+    // The Manager template: operational reports and day close, no financial grant.
+    mocks.can.mockImplementation(async (_subject, action) =>
+      [
+        'pharmacy:manage',
+        'pharmacy:orders',
+        'pharmacy:procurement',
+        'pharmacy:close',
+        'reports:operational',
+      ].includes(action)
+    );
+    mocks.userFindFirst.mockResolvedValue({ organizationRole: { key: 'manager' } });
+    mocks.assignmentFindMany.mockResolvedValue([{ branchId: 'branch_2' }]);
+    // The mocked query honours the branch filter the router passes.
+    mocks.branchFindMany.mockImplementation(
+      async ({ where }: { where: { id?: { in: string[] } } }) =>
+        where.id ? allBranches.filter((branch) => where.id!.in.includes(branch.id)) : allBranches
+    );
+  });
+  afterEach(() => {
+    // Leave the shared mocks as the previous block left them.
+    mocks.can.mockImplementation(async () => false);
+    mocks.branchFindMany.mockResolvedValue(allBranches);
+    mocks.assignmentFindMany.mockResolvedValue([{ branch: { id: 'branch_2', name: 'Second' } }]);
+  });
+
+  it("lists only the manager's assigned branch", async () => {
+    await expect(caller('EMPLOYEE').branches()).resolves.toEqual({
+      organizationId: 'org_1',
+      branches: [{ id: 'branch_2', name: 'Second' }],
+      scope: 'assigned',
+    });
+    expect(mocks.userFindFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'user_admin', organizationId: 'org_1' } })
+    );
+    expect(mocks.branchFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { organizationId: 'org_1', active: true, id: { in: ['branch_2'] } },
+      })
+    );
+  });
+
+  it('refuses a report read for a sibling branch and allows the own branch', async () => {
+    const input = { from: '2026-09-01', to: '2026-09-10', asOf: '2026-09-11T00:00:00Z' };
+    mocks.stockDashboard.mockResolvedValue([]);
+    mocks.stockDigest.mockResolvedValue({
+      branchId: 'branch_2',
+      overdue: [],
+      dueSoon: [],
+      stale: [],
+      resuming: [],
+    });
+    await expect(
+      caller('EMPLOYEE').dailyWorkPack({ ...input, branchId: 'branch_1' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.stockDashboard).not.toHaveBeenCalled();
+    await expect(
+      caller('EMPLOYEE').dailyWorkPack({ ...input, branchId: 'branch_2' })
+    ).resolves.toBeDefined();
+  });
+
+  it('keeps an auditor (not branch-scoped) organization-wide', async () => {
+    mocks.userFindFirst.mockResolvedValue({ organizationRole: { key: 'auditor' } });
+    await expect(caller('EMPLOYEE').branches()).resolves.toEqual({
+      organizationId: 'org_1',
+      branches: allBranches,
+      scope: 'organization',
+    });
   });
 });
 

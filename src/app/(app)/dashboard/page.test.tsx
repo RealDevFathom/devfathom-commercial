@@ -201,7 +201,17 @@ describe('PHARMACY dashboard audience by role', () => {
   const personas = [
     ['owner', 'ADMIN', ['reports:operational', 'reports:financial', 'pharmacy:close']],
     ['admin', 'ADMIN', []],
-    ['manager', 'EMPLOYEE', ['pharmacy:manage', 'pharmacy:orders', 'pharmacy:procurement']],
+    [
+      'manager',
+      'EMPLOYEE',
+      [
+        'pharmacy:manage',
+        'pharmacy:orders',
+        'pharmacy:procurement',
+        'pharmacy:close',
+        'reports:operational',
+      ],
+    ],
     ['cashier', 'EMPLOYEE', ['pharmacy:counter', 'pharmacy:orders']],
   ] as const;
 
