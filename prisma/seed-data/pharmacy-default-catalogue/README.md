@@ -8,7 +8,7 @@ It holds no patient data and no prices or stock.
 
 | Column                | Meaning                                                              |
 | --------------------- | -------------------------------------------------------------------- |
-| `sourceKey`           | Source catalogue key (`catalog-<POS alias>`); unique within a version |
+| `sourceKey`           | Source catalogue key (`catalog-<POS alias>`), verbatim; unique within a version |
 | `productName`         | Source product name, or `brandName` when the source left it empty    |
 | `brandName`           | Brand as exported                                                    |
 | `manufacturer`        | Manufacturer as exported                                             |
@@ -24,6 +24,27 @@ It holds no patient data and no prices or stock.
 `rowSourceKey` `catalog-<alias>` = POS `aliasname`. One reference row has no alias; it joins on
 its exact, unique name instead. Text is trimmed and whitespace-collapsed. Output is sorted, so the
 same inputs give a byte-identical file.
+
+### Source keys are exact strings
+
+POS aliases are barcode-like strings with leading zeros, so a `sourceKey` is never trimmed,
+case-folded, parsed as a number or stripped of zeros — in the builder, the seed parser, the loader
+or the materialiser — and the POS join compares exact strings. Compared numerically, nine groups
+(21 keys) of v1 would collide; compared exactly they are different products:
+
+| Value | Keys                                                                         |
+| ----- | ---------------------------------------------------------------------------- |
+| 0     | `catalog-0` LITEPLUS TAB (Wilshire), `catalog-00` DISPRIN 300MG TAB (Reckitt), `catalog-000`, `catalog-0000`, `catalog-000000` |
+| 11    | `catalog-11`, `catalog-000011`                                               |
+| 33324 | `catalog-33324`, `catalog-033324`                                            |
+| …     | `331078600091`, `735816607241`, `745604647823`, `745604648165`, `909846321006`, `7137571699364` each with a `0`-prefixed twin |
+
+v1 holds 18,933 unique, exact keys, every one of them the reference `rowSourceKey` verbatim; all but
+`catalog-row-11419` join a POS row by exact alias. Rebuilding from the source exports reproduces the
+committed file byte for byte (the sha256 above). The builder refuses a key with surrounding
+whitespace and a repeated POS alias rather than repairing either. Rows are ordered numerically by
+digit string (never converted to a number), keys of equal value by their exact string — ordering
+only, never identity.
 
 Only the POS `Name`, `classname` and `Category` are read. Sale/purchase prices, `QTY`,
 `StockValue` and every other POS column are dropped.
@@ -58,12 +79,37 @@ bun run pharmacy:catalogue:backfill --apply --actor ops@example.com  # materiali
 ```
 
 Each pharmacy gets its own `Medicine` copies (plus a presentation when a strength or dosage form is
-known) with zero stock: no batches, lots, pack levels or prices. Every copy starts
+known) with zero stock: no batches, lots, pack levels or prices.
+
+### Medicines a pharmacy already entered by hand
+
+An item is never copied when it is a likely duplicate of a medicine the pharmacy entered by hand
+(manual entry, the importer wizard, a reference connector — anything without catalogue
+provenance). It is a likely duplicate when all of these agree (`src/lib/pharmacy/default-catalogue-match.ts`):
+
+- **Name**: a brand or product name of the item equals a brand or product name of the medicine,
+  ignoring case, spaces and punctuation.
+- **Strength**: the item's strength equals the medicine's structured strength (by value, unit
+  case-insensitive), or neither has one. When only one side has a strength it still agrees if that
+  strength is a whole token of the shared name (`300mg` in `DISPRIN 300MG TAB`; never `1mg` in `11mg`).
+- **Dosage form**: equals one of the medicine's presentation dosage forms, or neither has one.
+- **Manufacturer**, when both name one.
+
+The dry run lists every pair under `likelyDuplicates`: the catalogue `sourceKey`, the existing
+medicine id and name, the action, and the reason it matched. On `--apply` the existing medicine is
+linked through a provenance row (`source = platform-default`, catalogue version, `sourceKey`,
+`linkedExisting = true`) and none of its fields are written. A provenance row is one per medicine,
+so a second item matching an already-linked medicine is reported as `skip` and neither created nor
+linked. Re-running is stable: a linked item counts as already held, a skipped one is reported again,
+nothing is created. A linked item flagged NARCOTICS carries the same review flag on its provenance
+row. Every copy starts
 `saleable = false` — the catalogue carries no DRAP registration, which the saleable gate requires —
 so a pharmacist completes an item before it can be bought or sold.
 
 New pharmacies queue a `pharmacy.default-catalogue.v1` platform job when they are created. Status
-and retry live under Platform → Jobs → Pharmacy default catalogue.
+and retry live under Platform → Jobs → Pharmacy default catalogue, which lists every pharmacy with
+server-side pagination (`?page=<n>&pageSize=<1-200>`, default 50, ordered by name then id, with
+the total count and previous/next controls).
 
 To publish a new version, rebuild the seed as `v2.csv.gz` and load it with `--version 2`. Applying
 it adds only items a pharmacy does not hold yet; items it already holds are never overwritten, and

@@ -3,7 +3,12 @@ import 'server-only';
 import { createHash, randomUUID } from 'node:crypto';
 import { gunzipSync } from 'node:zlib';
 
-import type { OrganizationStatus, PlatformJob, Prisma } from '@/generated/prisma/client';
+import type {
+  OrganizationStatus,
+  PlatformJob,
+  PlatformMedicineCatalogueItem,
+  Prisma,
+} from '@/generated/prisma/client';
 import { withPlatformDb, withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import {
@@ -13,6 +18,12 @@ import {
   seedRowContent,
   type DefaultCatalogueSeedRow,
 } from './default-catalogue-seed';
+import {
+  CATALOGUE_NAME_KEY_SQL_PATTERN,
+  catalogueNameKeys,
+  findHandEnteredMatches,
+  type HandEnteredMedicine,
+} from './default-catalogue-match';
 
 /**
  * Platform default medicine catalogue — the database half.
@@ -43,11 +54,16 @@ import {
  * a reviewed `controlled` decision is published with it. Tenants may read and
  * insert provenance but never update or delete it (RLS), so the flag sticks.
  *
- * NO DUPLICATES OF WHAT A PHARMACY ALREADY HAS. A medicine the tenant holds
- * from another route (manual entry, the importer wizard, a reference
- * connector) is matched by name, brand and presentation and skipped, reported
- * as `matchedExisting`. Every batch that creates medicines writes one tenant
- * audit row naming the job, requesting operator or backfill actor, and counts.
+ * NO DUPLICATES OF WHAT A PHARMACY ALREADY HAS. A catalogue item that is a
+ * likely duplicate of a medicine the tenant entered by hand (manual entry, the
+ * importer wizard, a reference connector) — same normalised brand/product
+ * name, strength and dosage form, and manufacturer when both name one; see
+ * `default-catalogue-match.ts` — is never copied. The existing medicine is
+ * linked to the item through a provenance row (`linkedExisting`) and none of
+ * its fields are written. A second item matching an already-linked medicine is
+ * skipped. The backfill dry run lists every such pair with the reason it
+ * matched. Every batch that creates or links medicines writes one tenant audit
+ * row naming the job, requesting operator or backfill actor, and counts.
  *
  * IDEMPOTENT AND RESUMABLE. The provenance row is unique per (organization,
  * catalogue key, source key). Each batch commits on its own, under a per-tenant
@@ -63,7 +79,8 @@ export const DEFAULT_CATALOGUE_SOURCE = 'platform-default';
 export const DEFAULT_CATALOGUE_JOB = 'pharmacy.default-catalogue.v1';
 export const DEFAULT_CATALOGUE_BATCH_SIZE = 1_000;
 const MAX_DIFF_SAMPLE = 100;
-const OVERVIEW_ORGANIZATION_LIMIT = 500;
+export const OVERVIEW_DEFAULT_PAGE_SIZE = 50;
+export const OVERVIEW_MAX_PAGE_SIZE = 200;
 const TERMINAL_STATUSES: OrganizationStatus[] = ['TERMINATED', 'PURGING', 'PURGED'];
 
 export type DefaultCatalogueErrorCode =
@@ -238,7 +255,7 @@ export type ApplyDefaultCatalogueResult = {
   batches: number;
   /** Medicines this run created. */
   created: number;
-  /** Items the tenant already held from this catalogue; left untouched. */
+  /** Items the tenant already held from this catalogue (created or linked); left untouched. */
   alreadyPresent: number;
   /** Of `created`, how many were NARCOTICS-class candidates held for review. */
   controlledCandidates: number;
@@ -246,12 +263,31 @@ export type ApplyDefaultCatalogueResult = {
   upstreamChanged: number;
   upstreamChangedSample: string[];
   /**
-   * Items skipped because the tenant already holds the same medicine from
-   * another route (manual entry, the importer wizard, a reference connector).
-   * Never duplicated, never overwritten — reported for the pharmacy to reconcile.
+   * Items not created because they are likely duplicates of a medicine the
+   * pharmacy entered by hand (manual entry, the importer wizard, a reference
+   * connector): `linkedExisting` of them were linked to that medicine through a
+   * provenance row, the rest matched a medicine already linked to another item.
    */
   matchedExisting: number;
-  matchedExistingSample: string[];
+  /** Of `matchedExisting`, how many this run linked. */
+  linkedExisting: number;
+  matchedExistingSample: CatalogueDuplicateMatch[];
+};
+
+/**
+ * One likely duplicate between a catalogue item and a medicine the pharmacy
+ * entered by hand. `link`: the apply records a provenance row naming the
+ * medicine instead of creating a copy. `skip`: the medicine is already linked
+ * to `linkedSourceKey`, so this item is neither created nor linked.
+ */
+export type CatalogueDuplicateMatch = {
+  sourceKey: string;
+  catalogueName: string;
+  medicineId: string;
+  medicineName: string;
+  action: 'link' | 'skip';
+  linkedSourceKey?: string;
+  reason: string;
 };
 
 /** Who caused an apply, for the tenant audit trail. */
@@ -265,79 +301,160 @@ export type DefaultCatalogueAuditContext = {
   actorName?: string | null;
 };
 
-type CatalogueBatchResult = {
-  last: string;
-  full: boolean;
-  created: number;
-  alreadyPresent: number;
-  controlledCandidates: number;
+type CatalogueVersionRef = { id: string; key: string; version: number };
+type PlannedItem = PlatformMedicineCatalogueItem & { digest: string };
+
+type CatalogueBatchPlan = {
+  items: PlatformMedicineCatalogueItem[];
+  /** Not held, not a likely duplicate: create a medicine. */
+  missing: Array<PlannedItem & { medicineId: string }>;
+  /** Not held, a likely duplicate: link the existing medicine. */
+  linked: Array<PlannedItem & { medicineId: string }>;
+  /** Every likely duplicate in the batch, linked or skipped. */
+  duplicates: CatalogueDuplicateMatch[];
+  /** Held items a newer version changed. */
   changed: string[];
-  matched: string[];
 };
 
-/** The comparison key for "the same medicine": case- and whitespace-insensitive. */
-export function catalogueMatchText(value: string | null | undefined): string {
-  return (value ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
-}
-
-type ExistingMedicineRow = {
-  id: string;
-  productName: string;
-  brandName: string | null;
-  presentations: string[];
-};
+type CandidateMedicine = HandEnteredMedicine & { linkedSourceKey: string | null };
 
 /**
- * Tenant medicines with no catalogue provenance whose product name matches one
- * of `names` (already normalised by {@link catalogueMatchText}). Run in the
- * tenant scope: RLS confines it to that pharmacy.
+ * Tenant medicines a catalogue item may be a hand-entered duplicate of: no
+ * catalogue provenance, or provenance that only links them (`linkedExisting`) —
+ * never a medicine the catalogue itself created. Prefiltered by normalised
+ * product or brand name in SQL; {@link findHandEnteredMatches} decides. Run in
+ * the tenant scope: RLS confines it to that pharmacy.
  */
-async function existingNonCatalogueMedicines(
+async function handEnteredCandidates(
   db: ScopedDb,
   organizationId: string,
-  names: string[]
-): Promise<ExistingMedicineRow[]> {
-  if (!names.length) return [];
-  return db.$queryRaw<ExistingMedicineRow[]>`
-    SELECT m.id, m."productName", m."brandName",
-           COALESCE(array_remove(array_agg(p.presentation), NULL), ARRAY[]::text[]) AS presentations
+  nameKeys: string[]
+): Promise<CandidateMedicine[]> {
+  if (!nameKeys.length) return [];
+  const ids = await db.$queryRaw<Array<{ id: string }>>`
+    SELECT m.id
       FROM pharmacy_medicines m
-      LEFT JOIN pharmacy_presentations p
-        ON p."organizationId" = m."organizationId" AND p."medicineId" = m.id
+      LEFT JOIN pharmacy_medicine_catalogue_provenance c
+        ON c."organizationId" = m."organizationId" AND c."medicineId" = m.id
      WHERE m."organizationId" = ${organizationId}
-       AND lower(btrim(regexp_replace(m."productName", '[[:space:]]+', ' ', 'g')))
-         = ANY(${names}::text[])
-       AND NOT EXISTS (
-         SELECT 1 FROM pharmacy_medicine_catalogue_provenance c
-          WHERE c."organizationId" = m."organizationId" AND c."medicineId" = m.id
-       )
-     GROUP BY m.id`;
+       AND (c.id IS NULL OR c."linkedExisting")
+       AND (
+         lower(regexp_replace(m."productName", ${CATALOGUE_NAME_KEY_SQL_PATTERN}, '', 'g'))
+           = ANY(${nameKeys}::text[])
+         OR lower(regexp_replace(
+              COALESCE(m."brandName", ''), ${CATALOGUE_NAME_KEY_SQL_PATTERN}, '', 'g'
+            )) = ANY(${nameKeys}::text[])
+       )`;
+  if (!ids.length) return [];
+  const medicines = await db.medicine.findMany({
+    where: { organizationId, id: { in: ids.map(({ id }) => id) } },
+    select: {
+      id: true,
+      productName: true,
+      brandName: true,
+      manufacturer: true,
+      strengths: { select: { value: true, unit: true } },
+      presentations: { select: { dosageForm: true } },
+      catalogueProvenance: { select: { sourceKey: true } },
+    },
+    orderBy: { id: 'asc' },
+  });
+  return medicines.map((medicine) => ({
+    id: medicine.id,
+    productName: medicine.productName,
+    brandName: medicine.brandName,
+    manufacturer: medicine.manufacturer,
+    strengths: medicine.strengths,
+    dosageForms: medicine.presentations.map((presentation) => presentation.dosageForm),
+    linkedSourceKey: medicine.catalogueProvenance?.sourceKey ?? null,
+  }));
 }
 
 /**
- * Whether a tenant already holds this catalogue item from another route: same
- * product name and brand, and either the same presentation label or nothing to
- * tell them apart (one side has no presentation). Deliberately conservative —
- * a skipped item is reported; a duplicated medicine is a dispensing hazard.
+ * Decide, read-only, what one batch of a version means for one pharmacy:
+ * which items it already holds, which are likely duplicates of a medicine it
+ * entered by hand (link, or skip when that medicine is already linked), and
+ * which must be created. The apply and the backfill dry run share this, so the
+ * dry run lists exactly what the apply would do.
+ *
+ * `claimed` (medicine id → source key) carries links planned by earlier batches
+ * of the same run, so a dry run — which writes nothing — still never plans two
+ * items onto one medicine.
  */
-function matchesExistingMedicine(
-  item: {
-    productName: string;
-    brandName: string | null;
-    strength: string | null;
-    dosageForm: string | null;
-  },
-  existing: ExistingMedicineRow[]
-): boolean {
-  const name = catalogueMatchText(item.productName);
-  const brand = catalogueMatchText(item.brandName);
-  const label = catalogueMatchText(presentationLabel(item));
-  return existing.some((medicine) => {
-    if (catalogueMatchText(medicine.productName) !== name) return false;
-    if (catalogueMatchText(medicine.brandName) !== brand) return false;
-    if (!label || !medicine.presentations.length) return true;
-    return medicine.presentations.some((value) => catalogueMatchText(value) === label);
+async function planCatalogueBatch(
+  db: ScopedDb,
+  organizationId: string,
+  version: CatalogueVersionRef,
+  after: string | null,
+  batchSize: number,
+  claimed: Map<string, string>
+): Promise<CatalogueBatchPlan | null> {
+  const items = await db.platformMedicineCatalogueItem.findMany({
+    where: { versionId: version.id, ...(after === null ? {} : { sourceKey: { gt: after } }) },
+    orderBy: { sourceKey: 'asc' },
+    take: batchSize,
   });
+  if (!items.length) return null;
+
+  // Source keys are exact strings everywhere: `catalog-0` and `catalog-00`
+  // are different products and are looked up, held and linked separately.
+  const held = new Map(
+    (
+      await db.medicineCatalogueProvenance.findMany({
+        where: {
+          organizationId,
+          catalogueKey: version.key,
+          sourceKey: { in: items.map((item) => item.sourceKey) },
+        },
+        select: { sourceKey: true, contentDigest: true, catalogueVersion: true },
+      })
+    ).map((row) => [row.sourceKey, row])
+  );
+
+  const unheld = items.filter((item) => !held.has(item.sourceKey));
+  const candidates = await handEnteredCandidates(db, organizationId, catalogueNameKeys(unheld));
+  for (const candidate of candidates) {
+    if (candidate.linkedSourceKey && !claimed.has(candidate.id)) {
+      claimed.set(candidate.id, candidate.linkedSourceKey);
+    }
+  }
+
+  const plan: CatalogueBatchPlan = { items, missing: [], linked: [], duplicates: [], changed: [] };
+  for (const item of items) {
+    const digest = catalogueItemDigest(item);
+    const existing = held.get(item.sourceKey);
+    if (existing) {
+      if (existing.catalogueVersion < version.version && existing.contentDigest !== digest) {
+        plan.changed.push(item.sourceKey);
+      }
+      continue;
+    }
+    const matches = findHandEnteredMatches(item, candidates);
+    if (!matches.length) {
+      plan.missing.push({ ...item, digest, medicineId: randomUUID() });
+      continue;
+    }
+    // Prefer a medicine no other item has claimed; the provenance row is one
+    // per medicine, so a second item matching the same medicine is skipped.
+    const open = matches.find((match) => !claimed.has(match.medicine.id));
+    const chosen = open ?? matches[0]!;
+    const duplicate: CatalogueDuplicateMatch = {
+      sourceKey: item.sourceKey,
+      catalogueName: item.brandName ?? item.productName,
+      medicineId: chosen.medicine.id,
+      medicineName: chosen.medicine.productName,
+      action: open ? 'link' : 'skip',
+      reason: chosen.reason,
+    };
+    if (open) {
+      claimed.set(open.medicine.id, item.sourceKey);
+      plan.linked.push({ ...item, digest, medicineId: open.medicine.id });
+    } else {
+      duplicate.linkedSourceKey = claimed.get(chosen.medicine.id);
+    }
+    plan.duplicates.push(duplicate);
+  }
+  return plan;
 }
 
 async function assertApplicable(organizationId: string, versionId: string) {
@@ -379,7 +496,9 @@ async function assertApplicable(organizationId: string, versionId: string) {
 
 /**
  * Copy every item of a published catalogue version that the pharmacy does not
- * already hold into its own medicines. See the module comment for the rules.
+ * already hold into its own medicines, and link — never copy — the items that
+ * are likely duplicates of a medicine it entered by hand. See the module
+ * comment for the rules.
  */
 export async function applyDefaultCatalogue(
   organizationId: string,
@@ -401,75 +520,31 @@ export async function applyDefaultCatalogue(
     upstreamChanged: 0,
     upstreamChangedSample: [],
     matchedExisting: 0,
+    linkedExisting: 0,
     matchedExistingSample: [],
   };
 
+  const claimed = new Map<string, string>();
   let cursor: string | null = null;
   for (;;) {
     const after: string | null = cursor;
-    const batch: CatalogueBatchResult | null = await withTenantDb(
+    const batch: CatalogueBatchPlan | null = await withTenantDb(
       organizationId,
-      async (db): Promise<CatalogueBatchResult | null> => {
+      async (db): Promise<CatalogueBatchPlan | null> => {
         // Two applies for one tenant (provisioning job and a backfill, say)
         // would otherwise both see a source key as missing and race to it.
         const lockKey = `${DEFAULT_CATALOGUE_JOB}:${organizationId}`;
         await db.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
-        const items = await db.platformMedicineCatalogueItem.findMany({
-          where: { versionId: version.id, ...(after === null ? {} : { sourceKey: { gt: after } }) },
-          orderBy: { sourceKey: 'asc' },
-          take: batchSize,
-        });
-        if (!items.length) return null;
-
-        const held = new Map(
-          (
-            await db.medicineCatalogueProvenance.findMany({
-              where: {
-                organizationId,
-                catalogueKey: version.key,
-                sourceKey: { in: items.map((item) => item.sourceKey) },
-              },
-              select: { sourceKey: true, contentDigest: true, catalogueVersion: true },
-            })
-          ).map((row) => [row.sourceKey, row])
-        );
-
-        // A medicine the pharmacy already holds from another route (manual
-        // entry, the importer wizard, a reference connector) has no catalogue
-        // provenance, so `held` cannot see it. Match it by name, brand and
-        // presentation and skip it rather than create a duplicate beside it.
-        const unheldNames = [
-          ...new Set(
-            items
-              .filter((item) => !held.has(item.sourceKey))
-              .map((item) => catalogueMatchText(item.productName))
-          ),
-        ];
-        const existingMedicines = await existingNonCatalogueMedicines(
+        const plan = await planCatalogueBatch(
           db,
           organizationId,
-          unheldNames
+          version,
+          after,
+          batchSize,
+          claimed
         );
-
-        const changed: string[] = [];
-        const matched: string[] = [];
-        const missing: Array<(typeof items)[number] & { medicineId: string; digest: string }> = [];
-        for (const item of items) {
-          const digest = catalogueItemDigest(item);
-          const existing = held.get(item.sourceKey);
-          if (!existing) {
-            if (matchesExistingMedicine(item, existingMedicines)) {
-              matched.push(item.sourceKey);
-            } else {
-              missing.push({ ...item, medicineId: randomUUID(), digest });
-            }
-          } else if (
-            existing.catalogueVersion < version.version &&
-            existing.contentDigest !== digest
-          ) {
-            changed.push(item.sourceKey);
-          }
-        }
+        if (!plan) return null;
+        const { items, missing, linked, duplicates } = plan;
 
         if (missing.length) {
           await db.medicine.createMany({
@@ -497,8 +572,15 @@ export async function applyDefaultCatalogue(
             }
           }
           if (presentations.length) await db.presentation.createMany({ data: presentations });
+        }
+        // Created and linked items alike get a provenance row; a linked row
+        // names the pharmacy's own medicine and writes none of its fields.
+        if (missing.length || linked.length) {
           await db.medicineCatalogueProvenance.createMany({
-            data: missing.map((item) => ({
+            data: [
+              ...missing.map((item) => ({ item, linkedExisting: false })),
+              ...linked.map((item) => ({ item, linkedExisting: true })),
+            ].map(({ item, linkedExisting }) => ({
               organizationId,
               medicineId: item.medicineId,
               source: DEFAULT_CATALOGUE_SOURCE,
@@ -508,13 +590,15 @@ export async function applyDefaultCatalogue(
               sourceKey: item.sourceKey,
               contentDigest: item.digest,
               controlledCandidate: item.controlledCandidate,
+              linkedExisting,
             })),
           });
         }
 
         const controlledCandidates = missing.filter((item) => item.controlledCandidate).length;
-        if (missing.length) {
-          // One tenant audit row per batch that created medicines, in the same
+        const skipped = duplicates.length - linked.length;
+        if (missing.length || linked.length) {
+          // One tenant audit row per batch that wrote anything, in the same
           // transaction as the writes it describes. Platform operators are not
           // tenant users, so the actor is recorded as SYSTEM with the operator
           // and job named in metadata.
@@ -527,17 +611,22 @@ export async function applyDefaultCatalogue(
               category: 'PHARMACY',
               operation: 'CREATE',
               action: `${DEFAULT_CATALOGUE_JOB}.apply`,
-              description: `Default medicine catalogue ${version.key} v${version.version}: created ${missing.length}, skipped ${matched.length} already held.`,
+              description: `Default medicine catalogue ${version.key} v${version.version}: created ${missing.length}, linked ${linked.length} hand-entered, skipped ${skipped} duplicate.`,
               targetType: 'PlatformMedicineCatalogueVersion',
               targetId: version.id,
               targetLabel: `${version.key} v${version.version}`,
               result: {
                 created: missing.length,
                 controlledCandidates,
-                matchedExisting: matched.length,
-                alreadyPresent: items.length - missing.length - matched.length,
+                linkedExisting: linked.length,
+                matchedExisting: duplicates.length,
+                alreadyPresent: items.length - missing.length - duplicates.length,
                 firstSourceKey: items[0]!.sourceKey,
                 lastSourceKey: items[items.length - 1]!.sourceKey,
+                linked: linked.map((item) => ({
+                  sourceKey: item.sourceKey,
+                  medicineId: item.medicineId,
+                })),
               },
               metadata: {
                 trigger: audit.trigger,
@@ -548,34 +637,26 @@ export async function applyDefaultCatalogue(
             },
           });
         }
-
-        return {
-          last: items[items.length - 1]!.sourceKey,
-          full: items.length === batchSize,
-          created: missing.length,
-          alreadyPresent: items.length - missing.length - matched.length,
-          controlledCandidates,
-          changed,
-          matched,
-        };
+        return plan;
       },
       { skipDrain: true, timeout: 60_000 }
     );
     if (!batch) break;
     result.batches += 1;
-    result.created += batch.created;
-    result.alreadyPresent += batch.alreadyPresent;
-    result.controlledCandidates += batch.controlledCandidates;
+    result.created += batch.missing.length;
+    result.alreadyPresent += batch.items.length - batch.missing.length - batch.duplicates.length;
+    result.controlledCandidates += batch.missing.filter((item) => item.controlledCandidate).length;
     result.upstreamChanged += batch.changed.length;
     result.upstreamChangedSample.push(
       ...batch.changed.slice(0, MAX_DIFF_SAMPLE - result.upstreamChangedSample.length)
     );
-    result.matchedExisting += batch.matched.length;
+    result.matchedExisting += batch.duplicates.length;
+    result.linkedExisting += batch.linked.length;
     result.matchedExistingSample.push(
-      ...batch.matched.slice(0, MAX_DIFF_SAMPLE - result.matchedExistingSample.length)
+      ...batch.duplicates.slice(0, MAX_DIFF_SAMPLE - result.matchedExistingSample.length)
     );
-    if (!batch.full) break;
-    cursor = batch.last;
+    if (batch.items.length < batchSize) break;
+    cursor = batch.items[batch.items.length - 1]!.sourceKey;
   }
   return result;
 }
@@ -664,56 +745,57 @@ export type BackfillDefaultCatalogueReport = {
     status: string;
     heldBefore: number;
     missingBefore: number;
-    /**
-     * Catalogue items whose product name and brand match a medicine the
-     * pharmacy already holds from another route. An upper bound on what the
-     * apply will skip as already held (presentation is checked at apply time).
-     */
+    /** Items the apply would create (exact, from the same plan the apply runs). */
+    wouldCreate: number;
+    /** `likelyDuplicates.length`. */
     possibleExistingMatches: number;
+    /**
+     * Every catalogue item, not yet held, that is a likely duplicate of a
+     * medicine the pharmacy entered by hand — with the existing medicine and
+     * why they matched. `link` items are linked on apply, never copied.
+     */
+    likelyDuplicates: CatalogueDuplicateMatch[];
     applied?: ApplyDefaultCatalogueResult;
     error?: string;
   }>;
 };
 
 /**
- * Dry-run overlap check: how many items of the version, not yet held from the
- * catalogue, share a product name and brand with a medicine the pharmacy
- * already holds from another route. Read-only, in the tenant's RLS scope.
+ * The dry-run plan for one pharmacy: what the apply would create and every
+ * likely hand-entered duplicate it would link or skip. Read-only, batch by
+ * batch in the tenant's RLS scope, through the same planner as the apply.
  */
-async function countPossibleExistingMatches(
+async function planDefaultCatalogue(
   organizationId: string,
-  versionId: string,
-  catalogueKey: string
-): Promise<number> {
-  const rows = await withTenantDb(organizationId, (db) =>
-    db.$queryRaw<Array<{ count: bigint }>>`
-      SELECT count(DISTINCT i.id) AS count
-        FROM platform_medicine_catalogue_items i
-        JOIN pharmacy_medicines m
-          ON m."organizationId" = ${organizationId}
-         AND lower(btrim(regexp_replace(m."productName", '[[:space:]]+', ' ', 'g')))
-           = lower(btrim(regexp_replace(i."productName", '[[:space:]]+', ' ', 'g')))
-         AND lower(btrim(regexp_replace(COALESCE(m."brandName", ''), '[[:space:]]+', ' ', 'g')))
-           = lower(btrim(regexp_replace(COALESCE(i."brandName", ''), '[[:space:]]+', ' ', 'g')))
-       WHERE i."versionId" = ${versionId}
-         AND NOT EXISTS (
-           SELECT 1 FROM pharmacy_medicine_catalogue_provenance c
-            WHERE c."organizationId" = m."organizationId" AND c."medicineId" = m.id
-         )
-         AND NOT EXISTS (
-           SELECT 1 FROM pharmacy_medicine_catalogue_provenance h
-            WHERE h."organizationId" = ${organizationId}
-              AND h."catalogueKey" = ${catalogueKey}
-              AND h."sourceKey" = i."sourceKey"
-         )`
-  );
-  return Number(rows[0]?.count ?? 0);
+  version: CatalogueVersionRef,
+  batchSize: number
+): Promise<{ wouldCreate: number; likelyDuplicates: CatalogueDuplicateMatch[] }> {
+  const claimed = new Map<string, string>();
+  const likelyDuplicates: CatalogueDuplicateMatch[] = [];
+  let wouldCreate = 0;
+  let after: string | null = null;
+  for (;;) {
+    const cursor: string | null = after;
+    const plan: CatalogueBatchPlan | null = await withTenantDb(
+      organizationId,
+      (db) => planCatalogueBatch(db, organizationId, version, cursor, batchSize, claimed),
+      { skipDrain: true, timeout: 60_000 }
+    );
+    if (!plan) break;
+    wouldCreate += plan.missing.length;
+    likelyDuplicates.push(...plan.duplicates);
+    if (plan.items.length < batchSize) break;
+    after = plan.items[plan.items.length - 1]!.sourceKey;
+  }
+  return { wouldCreate, likelyDuplicates };
 }
 
 /**
  * Apply a published catalogue version to every existing, non-terminal pharmacy
  * (or one, with `organizationId`). Dry-run unless `apply` is true: a dry run
- * only reads. Idempotent — a second apply creates nothing.
+ * only reads, and lists every likely hand-entered duplicate; an apply links
+ * those instead of copying them. Idempotent — a second apply creates and
+ * links nothing.
  */
 export async function backfillDefaultCatalogue(input: {
   apply: boolean;
@@ -790,14 +872,19 @@ export async function backfillDefaultCatalogue(input: {
       heldBefore,
       // An upper bound: items held from an older version may not be in this one.
       missingBefore: Math.max(0, version.rowCount - heldBefore),
+      wouldCreate: 0,
       possibleExistingMatches: 0,
+      likelyDuplicates: [],
     };
     try {
-      entry.possibleExistingMatches = await countPossibleExistingMatches(
+      const plan = await planDefaultCatalogue(
         organization.id,
-        version.id,
-        catalogueKey
+        version,
+        batchSizeOf(input.batchSize)
       );
+      entry.wouldCreate = plan.wouldCreate;
+      entry.likelyDuplicates = plan.likelyDuplicates;
+      entry.possibleExistingMatches = plan.likelyDuplicates.length;
     } catch (error) {
       entry.error = error instanceof Error ? error.message : String(error);
     }
@@ -830,8 +917,12 @@ export type DefaultCatalogueOverview = {
     publishedAt: Date | null;
     createdAt: Date;
   }>;
-  /** More pharmacies exist than the console lists. */
-  organizationsTruncated: boolean;
+  /** Server-side pagination of `organizations`: 1-based page, clamped to the last page. */
+  page: number;
+  pageSize: number;
+  /** Every listed pharmacy (not PURGED), across all pages. */
+  totalOrganizations: number;
+  pageCount: number;
   organizations: Array<{
     id: string;
     displayName: string;
@@ -850,26 +941,59 @@ export type DefaultCatalogueOverview = {
   }>;
 };
 
-/** Read-only overview for the platform console. Run under `withPlatformDb`. */
+/** A page request from the URL → a safe page and page size. */
+export function overviewPageRequest(input: { page?: unknown; pageSize?: unknown }): {
+  page: number;
+  pageSize: number;
+} {
+  const whole = (value: unknown): number => {
+    const first: unknown = Array.isArray(value) ? value[0] : value;
+    if (typeof first === 'number') return Number.isInteger(first) ? first : NaN;
+    return typeof first === 'string' && /^\d{1,6}$/.test(first) ? Number(first) : NaN;
+  };
+  const page = whole(input.page);
+  const pageSize = whole(input.pageSize);
+  return {
+    page: page >= 1 ? page : 1,
+    pageSize:
+      pageSize >= 1 ? Math.min(OVERVIEW_MAX_PAGE_SIZE, pageSize) : OVERVIEW_DEFAULT_PAGE_SIZE,
+  };
+}
+
+/**
+ * Read-only overview for the platform console. Run under `withPlatformDb`.
+ *
+ * Pharmacies are paginated on the server: a stable order (display name, then
+ * id, so equal names never swap between pages), `page`/`pageSize` with a total
+ * count, and a page past the end clamped to the last page.
+ */
 export async function defaultCatalogueOverview(
   db: ScopedDb,
-  catalogueKey = DEFAULT_CATALOGUE_KEY
+  options: { catalogueKey?: string; page?: number; pageSize?: number } = {}
 ): Promise<DefaultCatalogueOverview> {
-  const [versions, listed] = await Promise.all([
+  const catalogueKey = options.catalogueKey ?? DEFAULT_CATALOGUE_KEY;
+  const request = overviewPageRequest(options);
+  const pharmacies: Prisma.OrganizationWhereInput = {
+    vertical: 'PHARMACY',
+    status: { not: 'PURGED' },
+  };
+  const [versions, totalOrganizations] = await Promise.all([
     db.platformMedicineCatalogueVersion.findMany({
       where: { key: catalogueKey },
       orderBy: { version: 'desc' },
       take: 20,
     }),
-    db.organization.findMany({
-      where: { vertical: 'PHARMACY', status: { not: 'PURGED' } },
-      orderBy: { displayName: 'asc' },
-      select: { id: true, displayName: true, status: true },
-      take: OVERVIEW_ORGANIZATION_LIMIT + 1,
-    }),
+    db.organization.count({ where: pharmacies }),
   ]);
-  const organizationsTruncated = listed.length > OVERVIEW_ORGANIZATION_LIMIT;
-  const organizations = listed.slice(0, OVERVIEW_ORGANIZATION_LIMIT);
+  const pageCount = Math.max(1, Math.ceil(totalOrganizations / request.pageSize));
+  const page = Math.min(request.page, pageCount);
+  const organizations = await db.organization.findMany({
+    where: pharmacies,
+    orderBy: [{ displayName: 'asc' }, { id: 'asc' }],
+    select: { id: true, displayName: true, status: true },
+    skip: (page - 1) * request.pageSize,
+    take: request.pageSize,
+  });
   const ids = organizations.map((organization) => organization.id);
   const [held, controlled, jobs] = await Promise.all([
     db.medicineCatalogueProvenance.groupBy({
@@ -908,7 +1032,10 @@ export async function defaultCatalogueOverview(
     }
   }
   return {
-    organizationsTruncated,
+    page,
+    pageSize: request.pageSize,
+    totalOrganizations,
+    pageCount,
     versions: versions.map(({ id, key, version, digest, rowCount, publishedAt, createdAt }) => ({
       id,
       key,

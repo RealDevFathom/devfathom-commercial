@@ -1,12 +1,15 @@
 // @vitest-environment node
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { gunzipSync } from 'node:zlib';
 
 import { describe, expect, it } from 'vitest';
 
 import {
   buildSeedRows,
   cleanText,
+  compareSourceKeys,
   familyForPosCategory,
   isControlledCandidate,
   parseCsv,
@@ -17,6 +20,7 @@ import {
 } from './default-catalogue-seed';
 
 const FIXTURE = join(process.cwd(), 'tests/fixtures/pharmacy-default-catalogue-50.csv');
+const SEED_V1 = join(process.cwd(), 'prisma/seed-data/pharmacy-default-catalogue/v1.csv.gz');
 
 function reference(overrides: Record<string, string>) {
   return {
@@ -273,5 +277,155 @@ describe('helpers', () => {
     expect(presentationLabel({ strength: '30MG', dosageForm: 'Tablet' })).toBe('30MG Tablet');
     expect(presentationLabel({ strength: null, dosageForm: 'Syrup' })).toBe('Syrup');
     expect(presentationLabel({ strength: null, dosageForm: null })).toBeNull();
+  });
+});
+
+/*
+ * POS aliases are barcode-like strings. Compared as numbers these collide;
+ * compared exactly (as they must be) they are distinct products. These are the
+ * real colliding groups from the source export.
+ */
+const LEADING_ZERO_GROUPS: ReadonlyArray<ReadonlyArray<[alias: string, name: string]>> = [
+  [
+    ['0', 'LITEPLUS TAB'],
+    ['00', 'DISPRIN 300MG TAB'],
+    ['000', 'DISPRIN 300MG TAB (100S)'],
+    ['0000', 'LABELLO LIP BALM ROSE SOFT'],
+    ['000000', 'HIN NEU D'],
+  ],
+  [
+    ['11', 'BECEFOL TAB (25S)'],
+    ['000011', 'A/F SULTAN AL RAHEEB 300ML'],
+  ],
+  [
+    ['33324', 'ALOE VERA GEL 160ML'],
+    ['033324', 'ALOE VERA SOOTHING GEL 99%'],
+  ],
+  [
+    ['745604648165', 'BUTTERFLY BREATHABLE 28 PCS'],
+    ['0745604648165', 'BUTTERFLY MAXI THICK XL 28PC'],
+  ],
+  [
+    ['7137571699364', 'KINGTOX BLACK COIL'],
+    ['07137571699364', 'KINGTOX GREEN COIL'],
+  ],
+];
+
+describe('source keys with leading zeros', () => {
+  const pairs = LEADING_ZERO_GROUPS.flat();
+  const categories = ['MEDICINE', 'COSMETIC', 'SURGICAL ITEMS', 'CONSUMER', 'NARCOTICS'];
+
+  it('keeps every key exact and joins each to its own POS row, never a numeric twin', () => {
+    const rows = buildSeedRows(
+      // Shuffled, so the join cannot lean on input order.
+      [...pairs].reverse().map(([alias, name]) =>
+        reference({ brandName: name, rowSourceKey: `catalog-${alias}` })
+      ),
+      pairs.map(([alias, name], index) =>
+        pos({ aliasname: alias, Name: name, Category: categories[index % categories.length]! })
+      )
+    );
+    expect(rows).toHaveLength(pairs.length);
+    expect(new Set(rows.map((row) => row.sourceKey)).size).toBe(pairs.length);
+    pairs.forEach(([alias, name], index) => {
+      const row = rows.find((candidate) => candidate.sourceKey === `catalog-${alias}`);
+      expect(row, alias).toMatchObject({
+        brandName: name,
+        productFamily: familyForPosCategory(categories[index % categories.length]),
+        controlledCandidate: categories[index % categories.length] === 'NARCOTICS',
+      });
+    });
+    expect(rows.find((row) => row.sourceKey === 'catalog-0')!.brandName).toBe('LITEPLUS TAB');
+    expect(rows.find((row) => row.sourceKey === 'catalog-00')!.brandName).toBe(
+      'DISPRIN 300MG TAB'
+    );
+
+    // And the keys survive the seed file byte for byte.
+    const parsed = parseSeedCsv(serializeSeedCsv(rows));
+    expect(parsed.map((row) => row.sourceKey)).toEqual(rows.map((row) => row.sourceKey));
+  });
+
+  it('never joins a key to a POS alias that only equals it numerically', () => {
+    const [row] = buildSeedRows(
+      [reference({ brandName: 'LITEPLUS TAB', rowSourceKey: 'catalog-0' })],
+      [
+        pos({ aliasname: '00', Name: 'DISPRIN 300MG TAB', classname: 'NARCOTICS' }),
+        pos({ aliasname: '000', Name: 'DISPRIN 300MG TAB (100S)', Category: 'COSMETIC' }),
+      ]
+    );
+    // No exact `0` alias: conservative defaults, nothing borrowed from `00`/`000`.
+    expect(row).toMatchObject({
+      sourceKey: 'catalog-0',
+      productFamily: 'PHARMACEUTICAL',
+      controlledCandidate: false,
+    });
+  });
+
+  it('orders numerically without merging keys of equal value', () => {
+    const keys = [
+      'catalog-00',
+      'catalog-AJE007',
+      'catalog-000011',
+      'catalog-0',
+      'catalog-2',
+      'catalog-11',
+    ];
+    expect([...keys].sort(compareSourceKeys)).toEqual([
+      'catalog-0',
+      'catalog-00',
+      'catalog-2',
+      'catalog-000011',
+      'catalog-11',
+      'catalog-AJE007',
+    ]);
+    for (const group of LEADING_ZERO_GROUPS) {
+      for (const [left] of group) {
+        for (const [right] of group) {
+          const order = compareSourceKeys(`catalog-${left}`, `catalog-${right}`);
+          expect(order === 0, `${left} vs ${right}`).toBe(left === right);
+        }
+      }
+    }
+  });
+
+  it('refuses padded keys and repeated POS aliases instead of normalising them', () => {
+    expect(() =>
+      buildSeedRows([reference({ brandName: 'A', rowSourceKey: ' catalog-00 ' })], [])
+    ).toThrow(/rowSourceKey/);
+    expect(() =>
+      buildSeedRows(
+        [reference({ brandName: 'A', rowSourceKey: 'catalog-00' })],
+        [pos({ aliasname: '00' }), pos({ aliasname: '00' })]
+      )
+    ).toThrow(/repeats/);
+    const header = SEED_COLUMNS.join(',');
+    expect(() => parseSeedCsv(`${header}\n" catalog-0",X,,,,,DEVICE,false\n`)).toThrow(
+      /sourceKey/
+    );
+    const twins = `${header}\ncatalog-0,X,,,,,DEVICE,false\ncatalog-00,Y,,,,,DEVICE,false\n`;
+    expect(parseSeedCsv(twins).map((row) => row.sourceKey)).toEqual(['catalog-0', 'catalog-00']);
+  });
+
+  it('is what the committed v1 seed holds: 18,933 exact, unique keys', () => {
+    const raw = gunzipSync(readFileSync(SEED_V1));
+    expect(createHash('sha256').update(raw).digest('hex')).toBe(
+      '5bd01d7489068e8ae678d6625c77f0c250326e957fcb6ba52d091afe64310e3d'
+    );
+    const rows = parseSeedCsv(raw.toString('utf8'));
+    expect(rows).toHaveLength(18_933);
+    const byKey = new Map(rows.map((row) => [row.sourceKey, row]));
+    expect(byKey.size).toBe(18_933);
+    expect(byKey.get('catalog-0')).toMatchObject({
+      brandName: 'LITEPLUS TAB',
+      manufacturer: 'WILSHIRE LABORATORIES(PVT)LTD',
+    });
+    expect(byKey.get('catalog-00')).toMatchObject({
+      brandName: 'DISPRIN 300MG TAB',
+      manufacturer: 'RECKIT&BENCKISER(BMC )',
+      strength: '300MG',
+    });
+    for (const [alias, name] of pairs) {
+      expect(byKey.get(`catalog-${alias}`)?.brandName, alias).toBe(name);
+    }
   });
 });

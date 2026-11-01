@@ -1,7 +1,12 @@
 import Link from 'next/link';
 import { PlatformCommandButton } from '@/components/platform/platform-command-form';
 import { PlatformPageHeading, PlatformStatus } from '@/components/platform/platform-ui';
-import { defaultCatalogueOverview, DEFAULT_CATALOGUE_KEY } from '@/lib/pharmacy/default-catalogue';
+import {
+  defaultCatalogueOverview,
+  DEFAULT_CATALOGUE_KEY,
+  OVERVIEW_DEFAULT_PAGE_SIZE,
+  overviewPageRequest,
+} from '@/lib/pharmacy/default-catalogue';
 import { requirePlatformRead } from '@/lib/platform/page-access';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 
@@ -13,10 +18,27 @@ function skippedForNoVersion(result: unknown): boolean {
   );
 }
 
-export default async function PharmacyDefaultCataloguePage() {
+const PAGE_PATH = '/platform/jobs/pharmacy-catalogue';
+
+function pageHref(page: number, pageSize: number): string {
+  const params = new URLSearchParams({ page: String(page) });
+  if (pageSize !== OVERVIEW_DEFAULT_PAGE_SIZE) params.set('pageSize', String(pageSize));
+  return `${PAGE_PATH}?${params}`;
+}
+
+export default async function PharmacyDefaultCataloguePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ page?: string | string[]; pageSize?: string | string[] }>;
+}) {
   await requirePlatformRead('/platform/jobs');
-  const overview = await withPlatformDb((db) => defaultCatalogueOverview(db));
+  const request = overviewPageRequest(await searchParams);
+  const overview = await withPlatformDb((db) => defaultCatalogueOverview(db, request));
   const published = overview.versions.find((version) => version.publishedAt);
+  const firstShown = overview.organizations.length
+    ? (overview.page - 1) * overview.pageSize + 1
+    : 0;
+  const lastShown = firstShown ? firstShown + overview.organizations.length - 1 : 0;
 
   return (
     <div className="mx-auto max-w-[1480px]">
@@ -90,10 +112,11 @@ export default async function PharmacyDefaultCataloguePage() {
         <h2 id="catalogue-organizations" className="px-4 pt-4 text-sm font-semibold">
           Pharmacies
         </h2>
-        {overview.organizationsTruncated ? (
+        {overview.totalOrganizations ? (
           <p className="px-4 pt-2 text-xs text-text-muted" role="status">
-            Showing the first {overview.organizations.length.toLocaleString()} pharmacies by name;
-            more exist. Use the backfill dry run for a complete report.
+            Showing {firstShown.toLocaleString()}–{lastShown.toLocaleString()} of{' '}
+            {overview.totalOrganizations.toLocaleString()} pharmacies by name · page{' '}
+            {overview.page.toLocaleString()} of {overview.pageCount.toLocaleString()}
           </p>
         ) : null}
         {overview.organizations.length ? (
@@ -181,6 +204,42 @@ export default async function PharmacyDefaultCataloguePage() {
             created.
           </p>
         )}
+        {overview.pageCount > 1 ? (
+          <nav
+            aria-label="Pharmacy pages"
+            className="flex items-center justify-between gap-3 border-t border-border-subtle px-4 py-3 text-xs"
+          >
+            {overview.page > 1 ? (
+              <Link
+                href={pageHref(overview.page - 1, overview.pageSize)}
+                rel="prev"
+                className="underline focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                Previous page
+              </Link>
+            ) : (
+              <span className="text-text-muted" aria-disabled="true">
+                Previous page
+              </span>
+            )}
+            <span className="font-mono text-[10px] tabular-nums text-text-muted">
+              {overview.page.toLocaleString()} / {overview.pageCount.toLocaleString()}
+            </span>
+            {overview.page < overview.pageCount ? (
+              <Link
+                href={pageHref(overview.page + 1, overview.pageSize)}
+                rel="next"
+                className="underline focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                Next page
+              </Link>
+            ) : (
+              <span className="text-text-muted" aria-disabled="true">
+                Next page
+              </span>
+            )}
+          </nav>
+        ) : null}
       </section>
     </div>
   );

@@ -10,11 +10,15 @@
  * pharmacy holds and is missing. With --apply each pharmacy is materialised in
  * batches of 1,000 inside its own RLS scope: medicines with zero stock, never
  * a batch or price, never overwriting a medicine the pharmacy already holds.
- * A medicine the pharmacy already holds from another route (manual entry, the
- * importer wizard, a reference connector) is matched by name, brand and
- * presentation and skipped, never duplicated; the dry run reports possible
- * matches. Every applied batch writes a tenant audit row naming --actor.
- * Idempotent — running it twice creates nothing the second time. Exits
+ * A catalogue item that is a likely duplicate of a medicine the pharmacy
+ * entered by hand (manual entry, the importer wizard, a reference connector) —
+ * same normalised brand/product name, strength and dosage form, and
+ * manufacturer when both have one — is never copied: the dry run lists each
+ * pair (`likelyDuplicates`: sourceKey, medicine id and name, reason), and
+ * --apply links the existing medicine through a provenance row without
+ * writing any of its fields. Every applied batch writes a tenant audit row
+ * naming --actor. Idempotent — running it twice creates and links nothing the
+ * second time. Exits
  * non-zero if any organization failed; the others still complete.
  */
 import 'dotenv/config';

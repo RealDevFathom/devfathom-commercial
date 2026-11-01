@@ -33,7 +33,12 @@ const ORG_A = `org_medcat_a_${suffix}`;
 const ORG_B = `org_medcat_b_${suffix}`;
 const ORG_AGENCY = `org_medcat_agency_${suffix}`;
 const ORG_C = `org_medcat_c_${suffix}`;
-const ORGS = [ORG_A, ORG_B, ORG_AGENCY, ORG_C];
+const ORG_D = `org_medcat_d_${suffix}`;
+const ORGS = [ORG_A, ORG_B, ORG_AGENCY, ORG_C, ORG_D];
+// A second catalogue for the leading-zero source keys, so the 50-row fixture
+// counts above stay as they are.
+const ZERO_KEY = `${KEY}-zeros`;
+const KEYS = [KEY, ZERO_KEY];
 
 const FIXTURE = readFileSync(
   join(process.cwd(), 'tests/fixtures/pharmacy-default-catalogue-50.csv'),
@@ -107,7 +112,8 @@ beforeAll(async () => {
      VALUES ($1, $2, 'Medcat A', 'Medcat A', 'PHARMACY', 'ONBOARDING', 'SHARED', now(), now()),
             ($3, $4, 'Medcat B', 'Medcat B', 'PHARMACY', 'ACTIVE', 'SHARED', now(), now()),
             ($5, $6, 'Medcat Agency', 'Medcat Agency', 'AGENCY', 'ACTIVE', 'SHARED', now(), now()),
-            ($7, $8, 'Medcat C', 'Medcat C', 'PHARMACY', 'ACTIVE', 'SHARED', now(), now())`,
+            ($7, $8, 'Medcat C', 'Medcat C', 'PHARMACY', 'ACTIVE', 'SHARED', now(), now()),
+            ($9, $10, 'Medcat D', 'Medcat D', 'PHARMACY', 'ACTIVE', 'SHARED', now(), now())`,
     [
       ORG_A,
       `medcat-a-${suffix}`,
@@ -117,6 +123,8 @@ beforeAll(async () => {
       `medcat-agency-${suffix}`,
       ORG_C,
       `medcat-c-${suffix}`,
+      ORG_D,
+      `medcat-d-${suffix}`,
     ]
   );
 });
@@ -129,13 +137,18 @@ afterAll(async () => {
   );
   await ownerQuery('DELETE FROM audit_logs WHERE "organizationId" = ANY($1)', [ORGS]);
   await ownerQuery('DELETE FROM pharmacy_presentations WHERE "organizationId" = ANY($1)', [ORGS]);
+  await ownerQuery(
+    'DELETE FROM pharmacy_medicine_strength_components WHERE "organizationId" = ANY($1)',
+    [ORGS]
+  );
+  await ownerQuery('DELETE FROM pharmacy_ingredients WHERE "organizationId" = ANY($1)', [ORGS]);
   await ownerQuery('DELETE FROM pharmacy_medicines WHERE "organizationId" = ANY($1)', [ORGS]);
   await ownerQuery(
     `DELETE FROM platform_medicine_catalogue_items WHERE "versionId" IN
-       (SELECT id FROM platform_medicine_catalogue_versions WHERE key = $1)`,
-    [KEY]
+       (SELECT id FROM platform_medicine_catalogue_versions WHERE key = ANY($1))`,
+    [KEYS]
   );
-  await ownerQuery('DELETE FROM platform_medicine_catalogue_versions WHERE key = $1', [KEY]);
+  await ownerQuery('DELETE FROM platform_medicine_catalogue_versions WHERE key = ANY($1)', [KEYS]);
   await ownerQuery('DELETE FROM platform_jobs WHERE "organizationId" = ANY($1)', [ORGS]);
   await ownerQuery('DELETE FROM organizations WHERE id = ANY($1)', [ORGS]);
 });
@@ -404,37 +417,125 @@ describeIfDatabase('platform default medicine catalogue', { timeout: 60_000 }, (
     expect((await tenantCounts(ORG_A)).controlledCandidates).toBe(FIXTURE_CONTROLLED);
   });
 
-  it('skips medicines a pharmacy already holds from another route, and audits the apply', async () => {
-    // Loaded earlier by the importer wizard: same name and brand, different
-    // case and spacing, same presentation. No catalogue provenance.
+  it('lists hand-entered duplicates in the dry run, links them on apply, and stays stable', async () => {
+    // Medicines the pharmacy entered by hand (manual entry, the importer
+    // wizard, a reference connector) before the catalogue arrived. None has
+    // catalogue provenance.
     const manual = await inOrg(ORG_C, async (db) => {
-      const medicine = await db.medicine.create({
-        data: {
-          organizationId: ORG_C,
+      const create = async (
+        data: { productName: string; brandName?: string; manufacturer?: string },
+        dosageForm: string,
+        presentation: string
+      ) => {
+        const medicine = await db.medicine.create({
+          data: { organizationId: ORG_C, productFamily: 'PHARMACEUTICAL', ...data },
+        });
+        await db.presentation.create({
+          data: { organizationId: ORG_C, medicineId: medicine.id, dosageForm, presentation },
+        });
+        return medicine;
+      };
+      const ingredient = await db.ingredient.create({
+        data: { organizationId: ORG_C, name: `Acetylsalicylic acid ${suffix}` },
+      });
+      // Same name and brand in different case and spacing, structured 300 mg,
+      // same dosage form, the same manufacturer written differently.
+      const disprin = await create(
+        {
           productName: 'Disprin 300mg Tab',
           brandName: 'DISPRIN  300MG TAB',
-          productFamily: 'PHARMACEUTICAL',
+          manufacturer: 'Reckit & Benckiser (BMC)',
         },
-      });
-      await db.presentation.create({
+        'Tablet',
+        '300mg tablet'
+      );
+      await db.medicineStrengthComponent.create({
         data: {
           organizationId: ORG_C,
-          medicineId: medicine.id,
-          dosageForm: 'Tablet',
-          presentation: '300mg tablet',
+          medicineId: disprin.id,
+          ingredientId: ingredient.id,
+          value: '300',
+          unit: 'mg',
         },
       });
-      return medicine;
+      // Its product name is catalog-20 and its brand is catalog-21: both match,
+      // but one medicine can carry only one catalogue link.
+      const bremax = await create(
+        { productName: 'Bremax 1mg Tab', brandName: 'BREMAX 2MG TAB' },
+        'Tablet',
+        'Bremax tablet'
+      );
+      // Same name, strength and form as catalog-26 but another manufacturer:
+      // not a duplicate, so the catalogue copy is still created.
+      const cecon = await create(
+        { productName: 'CECON 500MG TAB', manufacturer: 'GlaxoSmithKline' },
+        'Tablet',
+        '500mg tablet'
+      );
+      return {
+        disprin,
+        bremax,
+        cecon,
+        before: await db.medicine.findMany({
+          where: { id: { in: [disprin.id, bremax.id, cecon.id] } },
+          orderBy: { id: 'asc' },
+        }),
+      };
     });
 
+    const expectedDuplicates = [
+      {
+        sourceKey: 'catalog-00',
+        catalogueName: 'DISPRIN 300MG TAB',
+        medicineId: manual.disprin.id,
+        medicineName: 'Disprin 300mg Tab',
+        action: 'link',
+        reason:
+          'name "disprin300mgtab" (catalogue productName = medicine productName); ' +
+          'strength 300mg; dosage form tablet; manufacturer reckitbenckiserbmc',
+      },
+      {
+        sourceKey: 'catalog-20',
+        catalogueName: 'BREMAX 1MG TAB',
+        medicineId: manual.bremax.id,
+        medicineName: 'Bremax 1mg Tab',
+        action: 'link',
+        reason: expect.stringContaining(
+          'name "bremax1mgtab" (catalogue productName = medicine productName); ' +
+            "strength 1mg (in the medicine's name"
+        ),
+      },
+      {
+        sourceKey: 'catalog-21',
+        catalogueName: 'BREMAX 2MG TAB',
+        medicineId: manual.bremax.id,
+        medicineName: 'Bremax 1mg Tab',
+        action: 'skip',
+        linkedSourceKey: 'catalog-20',
+        reason: expect.stringContaining(
+          'name "bremax2mgtab" (catalogue productName = medicine brandName)'
+        ),
+      },
+    ];
+
+    // Dry run: lists every likely duplicate with the medicine and the reason,
+    // and writes nothing.
     const dryRun = await deps.catalogue.backfillDefaultCatalogue({
       apply: false,
       organizationId: ORG_C,
       catalogueKey: KEY,
       version: 1,
+      batchSize: 20,
     });
-    expect(dryRun.organizations[0]).toMatchObject({ heldBefore: 0, possibleExistingMatches: 1 });
+    expect(dryRun.organizations[0]).toMatchObject({
+      heldBefore: 0,
+      wouldCreate: 47,
+      possibleExistingMatches: 3,
+    });
+    expect(dryRun.organizations[0]!.likelyDuplicates).toEqual(expectedDuplicates);
+    expect(await tenantCounts(ORG_C)).toMatchObject({ medicines: 3, provenance: 0 });
 
+    // Apply: links instead of duplicating, and never touches the tenant's fields.
     const applied = await deps.catalogue.backfillDefaultCatalogue({
       apply: true,
       organizationId: ORG_C,
@@ -443,32 +544,84 @@ describeIfDatabase('platform default medicine catalogue', { timeout: 60_000 }, (
       batchSize: 20,
       actor: 'ops@example.com',
     });
+    expect(applied.organizations[0]!.likelyDuplicates).toEqual(expectedDuplicates);
     expect(applied.organizations[0]!.applied).toMatchObject({
-      created: 49,
+      created: 47,
       alreadyPresent: 0,
-      matchedExisting: 1,
-      matchedExistingSample: ['catalog-00'],
+      linkedExisting: 2,
+      matchedExisting: 3,
     });
+    expect(applied.organizations[0]!.applied!.matchedExistingSample).toEqual(expectedDuplicates);
 
-    const after = await inOrg(ORG_C, async (db) => ({
-      medicines: await db.medicine.count(),
-      disprin: await db.medicine.count({
-        where: { productName: { equals: 'DISPRIN 300MG TAB', mode: 'insensitive' } },
+    const snapshot = () =>
+      inOrg(ORG_C, async (db) => ({
+        counts: await tenantCounts(ORG_C),
+        manual: await db.medicine.findMany({
+          where: { id: { in: [manual.disprin.id, manual.bremax.id, manual.cecon.id] } },
+          orderBy: { id: 'asc' },
+        }),
+        manualPresentations: await db.presentation.count({
+          where: { medicineId: { in: [manual.disprin.id, manual.bremax.id, manual.cecon.id] } },
+        }),
+        links: await db.medicineCatalogueProvenance.findMany({
+          where: { linkedExisting: true },
+          orderBy: { sourceKey: 'asc' },
+        }),
+        catalog21: await db.medicineCatalogueProvenance.count({
+          where: { sourceKey: 'catalog-21' },
+        }),
+        copies: {
+          disprin: await db.medicine.count({
+            where: { productName: { equals: 'DISPRIN 300MG TAB', mode: 'insensitive' } },
+          }),
+          bremax1: await db.medicine.count({
+            where: { productName: { equals: 'BREMAX 1MG TAB', mode: 'insensitive' } },
+          }),
+          bremax2: await db.medicine.count({
+            where: { productName: { equals: 'BREMAX 2MG TAB', mode: 'insensitive' } },
+          }),
+          cecon: await db.medicine.count({ where: { productName: 'CECON 500MG TAB' } }),
+        },
+        audits: await db.auditLog.findMany({
+          where: { action: 'pharmacy.default-catalogue.v1.apply' },
+        }),
+      }));
+    const after = await snapshot();
+    expect(after.counts).toMatchObject({ medicines: 50, provenance: 49 });
+    // Every field of the tenant's own medicines, updatedAt included, is unchanged.
+    expect(after.manual).toEqual(manual.before);
+    expect(after.manualPresentations).toBe(3);
+    expect(after.links).toEqual([
+      expect.objectContaining({
+        medicineId: manual.disprin.id,
+        source: 'platform-default',
+        catalogueKey: KEY,
+        catalogueVersion: 1,
+        catalogueVersionId: versionOneId,
+        sourceKey: 'catalog-00',
+        linkedExisting: true,
       }),
-      manual: await db.medicine.findUniqueOrThrow({ where: { id: manual.id } }),
-      audits: await db.auditLog.findMany({
-        where: { action: 'pharmacy.default-catalogue.v1.apply' },
+      expect.objectContaining({
+        medicineId: manual.bremax.id,
+        source: 'platform-default',
+        catalogueVersion: 1,
+        sourceKey: 'catalog-20',
+        linkedExisting: true,
       }),
-    }));
-    expect(after.medicines).toBe(50);
-    expect(after.disprin).toBe(1);
-    expect(after.manual.productName).toBe('Disprin 300mg Tab');
+    ]);
+    expect(after.catalog21).toBe(0);
+    // No copies beside the linked medicines; the other manufacturer's CECON is
+    // not a duplicate, so its catalogue copy exists beside the tenant's.
+    expect(after.copies).toEqual({ disprin: 1, bremax1: 1, bremax2: 0, cecon: 2 });
+
     expect(after.audits).toHaveLength(3);
-    const audited = after.audits.reduce(
-      (sum, row) => sum + Number((row.result as { created: number }).created),
-      0
-    );
-    expect(audited).toBe(49);
+    const total = (key: 'created' | 'linkedExisting') =>
+      after.audits.reduce(
+        (sum, row) => sum + Number((row.result as Record<string, number>)[key]),
+        0
+      );
+    expect(total('created')).toBe(47);
+    expect(total('linkedExisting')).toBe(2);
     for (const row of after.audits) {
       expect(row).toMatchObject({
         actorType: 'SYSTEM',
@@ -477,9 +630,90 @@ describeIfDatabase('platform default medicine catalogue', { timeout: 60_000 }, (
       });
     }
 
-    // A re-run still never duplicates the pharmacy's own medicine.
-    const again = await deps.catalogue.applyDefaultCatalogue(ORG_C, versionOneId);
-    expect(again).toMatchObject({ created: 0, alreadyPresent: 49, matchedExisting: 1 });
-    expect((await tenantCounts(ORG_C)).medicines).toBe(50);
+    // Re-runs, by apply and by dry run: nothing created, nothing re-linked,
+    // the same skipped duplicate reported, everything else unchanged.
+    for (let run = 0; run < 2; run += 1) {
+      const again = await deps.catalogue.applyDefaultCatalogue(ORG_C, versionOneId, {
+        batchSize: 20,
+      });
+      expect(again).toMatchObject({
+        created: 0,
+        linkedExisting: 0,
+        alreadyPresent: 49,
+        matchedExisting: 1,
+      });
+      expect(again.matchedExistingSample).toEqual([expectedDuplicates[2]]);
+    }
+    const reDryRun = await deps.catalogue.backfillDefaultCatalogue({
+      apply: false,
+      organizationId: ORG_C,
+      catalogueKey: KEY,
+      version: 1,
+    });
+    expect(reDryRun.organizations[0]).toMatchObject({
+      heldBefore: 49,
+      wouldCreate: 0,
+      possibleExistingMatches: 1,
+      likelyDuplicates: [expectedDuplicates[2]],
+    });
+    expect(await snapshot()).toEqual(after);
+  });
+
+  it('keeps leading-zero source keys distinct from load to tenant', async () => {
+    const zeros = [
+      ['catalog-0', 'LITEPLUS TAB', 'WILSHIRE LABORATORIES(PVT)LTD'],
+      ['catalog-00', 'DISPRIN 300MG TAB', 'RECKIT&BENCKISER(BMC )'],
+      ['catalog-000', 'DISPRIN 300MG TAB (100S)', 'RECKIT&BENCKISER(BMC )'],
+      ['catalog-0000', 'LABELLO LIP BALM ROSE SOFT', 'MISC'],
+      ['catalog-000000', 'HIN NEU D', 'NABIQASIM'],
+      ['catalog-11', 'BECEFOL TAB (25S)', 'ABBOTT LABORATORIES'],
+      ['catalog-000011', 'A/F SULTAN AL RAHEEB 300ML', 'CONSUMER'],
+      ['catalog-33324', 'ALOE VERA GEL 160ML', 'CONSUMER'],
+      ['catalog-033324', 'ALOE VERA SOOTHING GEL 99%', 'CONSUMER'],
+      ['catalog-745604648165', 'BUTTERFLY BREATHABLE 28 PCS', 'CONSUMER'],
+      ['catalog-0745604648165', 'BUTTERFLY MAXI THICK XL 28PC', 'MISC'],
+    ] as const;
+    const loaded = await deps.catalogue.loadDefaultCatalogue({
+      text: serializeSeedCsv(
+        zeros.map(([sourceKey, name, manufacturer]) => ({
+          sourceKey,
+          productName: name,
+          brandName: name,
+          manufacturer,
+          strength: null,
+          dosageForm: null,
+          productFamily: 'PHARMACEUTICAL' as const,
+          controlledCandidate: false,
+        }))
+      ),
+      version: 1,
+      key: ZERO_KEY,
+      batchSize: 4,
+    });
+    expect(loaded).toMatchObject({
+      status: 'created',
+      rowCount: zeros.length,
+      inserted: zeros.length,
+    });
+
+    const applied = await deps.catalogue.applyDefaultCatalogue(ORG_D, loaded.versionId, {
+      batchSize: 3,
+    });
+    expect(applied).toMatchObject({ created: zeros.length, matchedExisting: 0 });
+
+    const held = await inOrg(ORG_D, (db) =>
+      db.medicineCatalogueProvenance.findMany({
+        where: { catalogueKey: ZERO_KEY },
+        include: { medicine: true },
+      })
+    );
+    expect(new Map(held.map((row) => [row.sourceKey, row.medicine.productName]))).toEqual(
+      new Map(zeros.map(([sourceKey, name]) => [sourceKey, name]))
+    );
+
+    const again = await deps.catalogue.applyDefaultCatalogue(ORG_D, loaded.versionId, {
+      batchSize: 3,
+    });
+    expect(again).toMatchObject({ created: 0, alreadyPresent: zeros.length });
   });
 });

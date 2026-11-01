@@ -158,29 +158,62 @@ function csvCell(value: string): string {
 export type PosExportRow = Record<string, string>;
 export type ReferenceImportRow = Record<string, string>;
 
-/** `catalog-123` → `123`, the POS `aliasname` it was exported from. */
-function posAliasForSourceKey(sourceKey: string): string | null {
+/*
+ * SOURCE KEYS ARE EXACT STRINGS. POS aliases are barcode-like: `0`, `00`,
+ * `000011` and `11` are different products (`catalog-0` is LITEPLUS TAB,
+ * `catalog-00` is DISPRIN 300MG TAB). A source key is therefore never trimmed,
+ * case-folded, parsed as a number or stripped of leading zeros — not here, not
+ * in the loader, not in the materialiser — and the POS join is an exact string
+ * comparison. A key with surrounding whitespace is rejected, never repaired.
+ */
+
+/** `catalog-00123` → `00123`, the POS `aliasname` it was exported from, verbatim. */
+export function posAliasForSourceKey(sourceKey: string): string | null {
   return sourceKey.startsWith('catalog-') ? sourceKey.slice('catalog-'.length) || null : null;
 }
 
-/** Purely numeric aliases sort numerically, ahead of everything else. */
-function numericOrder(sourceKey: string): number {
-  const match = /^catalog-(\d+)$/.exec(sourceKey);
-  return match ? Number(match[1]) : Number.MAX_SAFE_INTEGER;
+/** A source key exactly as exported, or null when it is not a valid key. Never normalised. */
+export function exactSourceKey(value: string | null | undefined): string | null {
+  return typeof value === 'string' && SOURCE_KEY.test(value) ? value : null;
+}
+
+/**
+ * Seed row order. Purely numeric aliases come first in numeric order, compared
+ * as digit strings (length after leading zeros, then digits) so no key is ever
+ * converted to a number; keys equal in value (`catalog-0`, `catalog-00`) stay
+ * distinct and are ordered by their exact string. Everything else follows, by
+ * exact string. Ordering only — never identity.
+ */
+export function compareSourceKeys(left: string, right: string): number {
+  const exact = left < right ? -1 : left > right ? 1 : 0;
+  const leftDigits = /^catalog-(\d+)$/.exec(left)?.[1];
+  const rightDigits = /^catalog-(\d+)$/.exec(right)?.[1];
+  if (leftDigits === undefined || rightDigits === undefined) {
+    if (leftDigits !== undefined) return -1;
+    if (rightDigits !== undefined) return 1;
+    return exact;
+  }
+  const leftValue = leftDigits.replace(/^0+(?=\d)/, '');
+  const rightValue = rightDigits.replace(/^0+(?=\d)/, '');
+  if (leftValue.length !== rightValue.length) return leftValue.length - rightValue.length;
+  if (leftValue !== rightValue) return leftValue < rightValue ? -1 : 1;
+  return exact;
 }
 
 /**
  * Join the reference rows to the POS rows they came from and produce the seed.
  *
- * The join is reference `rowSourceKey` `catalog-<alias>` = POS `aliasname`. A
+ * The join is reference `rowSourceKey` `catalog-<alias>` = POS `aliasname`,
+ * compared as exact strings (see SOURCE KEYS ARE EXACT STRINGS). A POS alias
+ * that repeats is refused, so a join can never pick between two products. A
  * reference row with no such key falls back to an exact name match against a
  * POS row that has no aliasname at all — and only when that name is unique —
  * so a renamed or duplicated product can never borrow another row's class. A
  * row with no POS match keeps the conservative defaults (PHARMACEUTICAL, not a
  * controlled candidate).
  *
- * Output is sorted (numeric aliases by number, then by key), so the same inputs
- * always produce byte-identical seed files.
+ * Output is sorted by {@link compareSourceKeys}, so the same inputs always
+ * produce byte-identical seed files.
  */
 export function buildSeedRows(
   reference: readonly ReferenceImportRow[],
@@ -189,9 +222,10 @@ export function buildSeedRows(
   const byAlias = new Map<string, PosExportRow>();
   const unaliasedByName = new Map<string, PosExportRow[]>();
   for (const row of pos) {
-    const alias = cleanText(row.aliasname);
-    if (alias) {
-      if (!byAlias.has(alias)) byAlias.set(alias, row);
+    const alias = row.aliasname ?? '';
+    if (alias !== '') {
+      if (byAlias.has(alias)) throw new Error(`POS aliasname ${JSON.stringify(alias)} repeats.`);
+      byAlias.set(alias, row);
       continue;
     }
     const name = cleanText(row.Name)?.toUpperCase();
@@ -201,9 +235,11 @@ export function buildSeedRows(
   const seen = new Set<string>();
   const rows: DefaultCatalogueSeedRow[] = [];
   for (const source of reference) {
-    const sourceKey = cleanText(source.rowSourceKey);
-    if (!sourceKey || !SOURCE_KEY.test(sourceKey)) {
-      throw new Error(`Reference row has an invalid rowSourceKey: ${JSON.stringify(sourceKey)}.`);
+    const sourceKey = exactSourceKey(source.rowSourceKey);
+    if (!sourceKey) {
+      throw new Error(
+        `Reference row has an invalid rowSourceKey: ${JSON.stringify(source.rowSourceKey)}.`
+      );
     }
     if (seen.has(sourceKey)) throw new Error(`Duplicate rowSourceKey ${sourceKey}.`);
     seen.add(sourceKey);
@@ -230,11 +266,7 @@ export function buildSeedRows(
       controlledCandidate: match ? isControlledCandidate(match) : false,
     });
   }
-  return rows.sort(
-    (left, right) =>
-      numericOrder(left.sourceKey) - numericOrder(right.sourceKey) ||
-      (left.sourceKey < right.sourceKey ? -1 : left.sourceKey > right.sourceKey ? 1 : 0)
-  );
+  return rows.sort((left, right) => compareSourceKeys(left.sourceKey, right.sourceKey));
 }
 
 export function serializeSeedCsv(rows: readonly DefaultCatalogueSeedRow[]): string {
@@ -260,10 +292,8 @@ export function parseSeedCsv(text: string): DefaultCatalogueSeedRow[] {
     for (const column of SEED_COLUMNS) {
       if (!(column in record)) throw new Error(`Seed is missing the ${column} column.`);
     }
-    const sourceKey = cleanText(record.sourceKey);
-    if (!sourceKey || !SOURCE_KEY.test(sourceKey)) {
-      throw new Error(`Seed line ${line} has an invalid sourceKey.`);
-    }
+    const sourceKey = exactSourceKey(record.sourceKey);
+    if (!sourceKey) throw new Error(`Seed line ${line} has an invalid sourceKey.`);
     if (seen.has(sourceKey)) throw new Error(`Seed line ${line} repeats sourceKey ${sourceKey}.`);
     seen.add(sourceKey);
     const productName = cleanText(record.productName);

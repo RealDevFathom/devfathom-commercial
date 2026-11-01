@@ -663,8 +663,9 @@ model PlatformMedicineCatalogueItem {
 }
 
 /// Where a tenant medicine came from when the platform default catalogue
-/// created it: source `platform-default`, the catalogue version, and the item's
-/// source key. Unique per (organization, catalogue, source key), which is what
+/// created it — or, with `linkedExisting`, which catalogue item a medicine the
+/// pharmacy entered by hand was matched to instead of being copied: source
+/// `platform-default`, the catalogue version, and the item's source key. Unique per (organization, catalogue, source key), which is what
 /// makes applying a catalogue — or a later version of it — idempotent: an item
 /// the tenant already holds is never created again and its medicine is never
 /// overwritten. `contentDigest` is the item as it was copied, so a later version
@@ -680,6 +681,10 @@ model MedicineCatalogueProvenance {
   sourceKey           String
   contentDigest       String
   controlledCandidate Boolean                          @default(false)
+  /// The medicine was entered by the pharmacy (not created by the catalogue)
+  /// and only linked to this item as a likely duplicate; its fields were never
+  /// written by the catalogue.
+  linkedExisting      Boolean                          @default(false)
   createdAt           DateTime                         @default(now())
   medicine            Medicine                         @relation(fields: [organizationId, medicineId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_medicine_catalogue_provenance_medicine_fkey")
   catalogue           PlatformMedicineCatalogueVersion @relation(fields: [catalogueVersionId], references: [id], onDelete: Restrict, map: "pharmacy_medicine_catalogue_provenance_version_fkey")
