@@ -375,6 +375,22 @@ describe('actor + idempotency plumbing', () => {
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(mocks.createPurchaseOrder).not.toHaveBeenCalled();
   });
+
+  it('never treats a DENY-only override at another branch as branch access', async () => {
+    mocks.can.mockImplementation(async (_subject, action) => action !== 'restaurant:configure');
+    mocks.findStaffProfiles.mockResolvedValue([
+      {
+        id: 'staff_server',
+        primaryBranchId: 'b1',
+        jobRoles: [],
+        directCapabilityGrants: [{ branchId: 'b2', effect: 'DENY' }],
+      },
+    ]);
+    await expect(
+      caller().createPurchaseOrder({ supplierId: 's1', branchId: 'b2' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.createPurchaseOrder).not.toHaveBeenCalled();
+  });
 });
 
 describe('domain error mapping', () => {

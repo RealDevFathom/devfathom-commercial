@@ -304,6 +304,37 @@ describe('restaurantInventoryRouter', () => {
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
 
+  it('rejects wastage at a branch held only through a DENY override', async () => {
+    mocks.can.mockImplementation(async (_subject, action) => action !== 'restaurant:configure');
+    mocks.findStaffProfiles.mockResolvedValue([
+      {
+        id: 'staff_test',
+        primaryBranchId: 'branch_1',
+        jobRoles: [],
+        directCapabilityGrants: [{ branchId: 'branch_2', effect: 'DENY' }],
+      },
+    ]);
+    await expect(
+      caller().postWastage({
+        stockItemId: 'si_1',
+        locationId: 'loc_2',
+        reason: 'WASTAGE',
+        quantity: '1',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.findStaffProfiles).toHaveBeenCalledWith(
+      expect.objectContaining({
+        select: expect.objectContaining({
+          directCapabilityGrants: {
+            where: { effect: 'ALLOW' },
+            select: { branchId: true, effect: true },
+          },
+        }),
+      })
+    );
+    expect(mocks.postWastage).not.toHaveBeenCalled();
+  });
+
   // ── Strict input ─────────────────────────────────────────────────────────────
 
   it('rejects unknown fields on listStockOnHand', async () => {

@@ -400,7 +400,8 @@ describe('cancellation authorization and device directory', () => {
           id: 'staff_1',
           primaryBranchId: 'b1',
           jobRoles: binding === 'jobRoles' ? [{ branchId: 'b2' }] : [],
-          directCapabilityGrants: binding === 'directCapabilityGrants' ? [{ branchId: 'b2' }] : [],
+          directCapabilityGrants:
+            binding === 'directCapabilityGrants' ? [{ branchId: 'b2', effect: 'ALLOW' }] : [],
         },
       ]);
       mocks.orderFindUnique.mockResolvedValue({ branchId: 'b2' });
@@ -417,7 +418,10 @@ describe('cancellation authorization and device directory', () => {
           id: true,
           primaryBranchId: true,
           jobRoles: { select: { branchId: true } },
-          directCapabilityGrants: { select: { branchId: true } },
+          directCapabilityGrants: {
+            where: { effect: 'ALLOW' },
+            select: { branchId: true, effect: true },
+          },
         },
         orderBy: { id: 'asc' },
         take: 2,
@@ -440,6 +444,26 @@ describe('cancellation authorization and device directory', () => {
       expect(mocks.deviceFindMany).toHaveBeenCalledOnce();
     }
   );
+
+  it('never treats a DENY-only override at a secondary branch as branch access', async () => {
+    mocks.can.mockImplementation(async (_subject, action) => action === 'orders:void');
+    mocks.staffFindMany.mockResolvedValue([
+      {
+        id: 'staff_1',
+        primaryBranchId: 'b1',
+        jobRoles: [],
+        directCapabilityGrants: [{ branchId: 'b2', effect: 'DENY' }],
+      },
+    ]);
+    mocks.orderFindUnique.mockResolvedValue({ branchId: 'b2' });
+
+    await expect(caller().cancel(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(caller().listCancellationDevices({ branchId: 'b2' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mocks.cancelOrder).not.toHaveBeenCalled();
+    expect(mocks.deviceFindMany).not.toHaveBeenCalled();
+  });
 
   it('rejects a bound branch that is inactive or outside the session organization', async () => {
     mocks.can.mockImplementation(async (_subject, action) => action === 'orders:void');

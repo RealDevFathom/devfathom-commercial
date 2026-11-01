@@ -536,6 +536,22 @@ describe('restaurant catering production and cost', () => {
     mocks.can.mockImplementation(async (_subject, action) => action !== 'restaurant:configure');
     await expect(caller().get({ orderId: 'order_1' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
+  it('never treats a DENY-only override at the order branch as branch access', async () => {
+    db.restaurantStaffProfile.findMany.mockResolvedValue([
+      {
+        id: 'staff_1',
+        primaryBranchId: 'other',
+        jobRoles: [],
+        directCapabilityGrants: [{ branchId: 'branch_1', effect: 'DENY' }],
+      },
+    ]);
+    mocks.can.mockImplementation(async (_subject, action) => action !== 'restaurant:configure');
+    await expect(caller().get({ orderId: 'order_1' })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      caller().transition({ orderId: 'order_1', to: 'QUOTED' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.restaurantCateringOrder.update).not.toHaveBeenCalled();
+  });
   it('fails closed for missing active stock location without advancing READY', async () => {
     db = makeDb('IN_PRODUCTION');
     db.restaurantStockLocation.findFirst.mockResolvedValue(null);

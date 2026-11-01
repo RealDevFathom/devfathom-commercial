@@ -20,7 +20,11 @@ export async function resolveRestaurantActor(ctx: TRPCContext, branchIds: string
       id: true,
       primaryBranchId: true,
       jobRoles: { select: { branchId: true } },
-      directCapabilityGrants: { select: { branchId: true } },
+      // Only positive overrides bind a branch; a DENY override must never establish access.
+      directCapabilityGrants: {
+        where: { effect: 'ALLOW' },
+        select: { branchId: true, effect: true },
+      },
     },
     orderBy: { id: 'asc' },
     take: 2,
@@ -36,8 +40,9 @@ export async function resolveRestaurantActor(ctx: TRPCContext, branchIds: string
   const authorizedBranchIds = new Set(assigned.map(({ branchId }) => branchId));
   if (actor.primaryBranchId) authorizedBranchIds.add(actor.primaryBranchId);
   // Match the staff directory's branch bindings; identity still comes only from the session.
-  for (const binding of [...actor.jobRoles, ...actor.directCapabilityGrants]) {
-    authorizedBranchIds.add(binding.branchId);
+  for (const binding of actor.jobRoles) authorizedBranchIds.add(binding.branchId);
+  for (const grant of actor.directCapabilityGrants) {
+    if (grant.effect === 'ALLOW') authorizedBranchIds.add(grant.branchId);
   }
 
   const assignedToEveryBranch = requiredBranchIds.every((branchId) =>
