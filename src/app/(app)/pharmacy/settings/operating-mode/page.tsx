@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { TRPCError } from '@trpc/server';
 import { OperatingModeSettings } from '@/components/pharmacy/operating-mode-settings';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
@@ -9,7 +10,16 @@ export const metadata: Metadata = { title: 'Pharmacy operating mode' };
 
 export default async function OperatingModePage() {
   const caller = pharmacyOperatingModeRouter.createCaller(await createTRPCContext());
-  const settings = await caller.get().catch(() => null);
+  // Only an authorization refusal means "not available to you"; any other
+  // failure (database, configuration) must surface instead of being disguised.
+  const settings = await caller.get().catch((error: unknown) => {
+    if (
+      error instanceof TRPCError &&
+      (error.code === 'FORBIDDEN' || error.code === 'UNAUTHORIZED')
+    )
+      return null;
+    throw error;
+  });
   if (settings) {
     return (
       <main className="min-w-0 space-y-6">

@@ -27,7 +27,7 @@ const managerProcurementMigration = readFileSync(
   'utf8'
 );
 const managerApprovalMigration = readFileSync(
-  'prisma/migrations/20261031000100_pharmacy_manager_approvals/migration.sql',
+  'prisma/migrations/20261101180300_pharmacy_manager_approvals/migration.sql',
   'utf8'
 )
   .replace(/^BEGIN;$/m, '')

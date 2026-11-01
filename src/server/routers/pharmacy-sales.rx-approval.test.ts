@@ -97,35 +97,81 @@ describe('Rx approval on a discounted line', () => {
 });
 
 
-it('locks the organization before a controlled witness credential, matching delegated Rx approval', async () => {
-  const locks: string[] = [];
+it.each([
+  ['SOLO', ['FROM organizations', 'FROM restaurant_operator_credentials']],
+  ['STAFFED', ['FROM restaurant_operator_credentials']],
+] as const)(
+  'in %s, locks the organization before a controlled witness credential only when SOLO approvals can hold it',
+  async (operatingMode, expectedLocks) => {
+    const locks: string[] = [];
+    mocks.branch.mockImplementation(async (_db, scope) => scope);
+    const db = {
+      pharmacyBranch: { findMany: vi.fn(async () => [{ id: 'branch' }]) },
+      organization: { findFirst: vi.fn(async () => ({ pharmacyOperatingMode: operatingMode })) },
+      medicine: { findFirst: vi.fn(async () => ({ controlled: true })) },
+      $queryRaw: vi.fn(async (sql: TemplateStringsArray) => {
+        const statement = sql.join('?');
+        if (statement.includes('FOR ')) locks.push(statement);
+        return statement.includes('restaurant_staff_profiles') ? [{ userId: 'checker' }] : [];
+      }),
+      restaurantOperatorCredential: { findFirst: vi.fn(async () => null) },
+      $transaction: (run: (tx: unknown) => unknown) => run(db),
+    };
+    const ctx = {
+      db,
+      session: { user: { id: 'actor', organizationId: 'org', status: 'ACTIVE', role: 'EMPLOYEE' } },
+      entitlements: { organizationId: 'org', enabledModules: ['pharmacy-counter'] },
+      audit: { detail: {} }, requestMeta: { ip: null, userAgent: null },
+    } as unknown as TRPCContext;
+    await expect(pharmacySalesRouter.createCaller(ctx).addLine({
+      branchId: 'branch', saleId: 'sale', medicineId: 'medicine', presentationId: 'presentation',
+      packLevelId: 'pack', saleUnit: 'UNIT', quantity: 1, canonicalUnitsPerSaleUnit: 1,
+      idempotencyKey: 'controlled-lock-order',
+      controlledAuthorization: { patientId: 'patient', patientAddress: 'Address',
+        staffProfileId: 'checker-profile', pin: '4729', rxSerialWritten: true,
+        emergency: true, prescriberName: 'Prescriber' },
+    })).resolves.toHaveProperty('blocked');
+    expect(locks).toHaveLength(expectedLocks.length);
+    expectedLocks.forEach((fragment, index) => expect(locks[index]).toContain(fragment));
+  }
+);
+
+it('never stores client approval fields on a line with no discount or override', async () => {
+  mocks.mode.mockReset();
+  mocks.add.mockReset();
   mocks.branch.mockImplementation(async (_db, scope) => scope);
+  mocks.add.mockResolvedValue({ line: { id: 'line' } });
   const db = {
     pharmacyBranch: { findMany: vi.fn(async () => [{ id: 'branch' }]) },
-    medicine: { findFirst: vi.fn(async () => ({ controlled: true })) },
-    $queryRaw: vi.fn(async (sql: TemplateStringsArray) => {
-      const statement = sql.join('?');
-      if (statement.includes('FOR ')) locks.push(statement);
-      return statement.includes('restaurant_staff_profiles') ? [{ userId: 'checker' }] : [];
-    }),
-    restaurantOperatorCredential: { findFirst: vi.fn(async () => null) },
-    $transaction: (run: (tx: unknown) => unknown) => run(db),
+    medicine: {
+      findFirst: vi.fn(async () => ({ rx: false, restricted: false, controlled: false })),
+    },
+    pharmacySale: { findFirst: vi.fn(async () => ({ createdByUserId: 'maker' })) },
+    auditLog: { create: vi.fn() },
+    $transaction: (run: (db: unknown) => unknown) => run(db),
   };
   const ctx = {
     db,
     session: { user: { id: 'actor', organizationId: 'org', status: 'ACTIVE', role: 'EMPLOYEE' } },
     entitlements: { organizationId: 'org', enabledModules: ['pharmacy-counter'] },
-    audit: { detail: {} }, requestMeta: { ip: null, userAgent: null },
+    audit: { detail: {} },
+    requestMeta: { ip: null, userAgent: null },
   } as unknown as TRPCContext;
-  await expect(pharmacySalesRouter.createCaller(ctx).addLine({
-    branchId: 'branch', saleId: 'sale', medicineId: 'medicine', presentationId: 'presentation',
-    packLevelId: 'pack', saleUnit: 'UNIT', quantity: 1, canonicalUnitsPerSaleUnit: 1,
-    idempotencyKey: 'controlled-lock-order',
-    controlledAuthorization: { patientId: 'patient', patientAddress: 'Address',
-      staffProfileId: 'checker-profile', pin: '4729', rxSerialWritten: true,
-      emergency: true, prescriberName: 'Prescriber' },
-  })).resolves.toHaveProperty('blocked');
-  expect(locks).toHaveLength(2);
-  expect(locks[0]).toContain('FROM organizations');
-  expect(locks[1]).toContain('FROM restaurant_operator_credentials');
+  await pharmacySalesRouter.createCaller(ctx).addLine({
+    branchId: 'branch',
+    saleId: 'sale',
+    medicineId: 'medicine',
+    presentationId: 'presentation',
+    packLevelId: 'pack',
+    saleUnit: 'UNIT',
+    quantity: 1,
+    canonicalUnitsPerSaleUnit: 1,
+    approvedByUserId: 'forged-owner',
+    approvalPolicy: 'FORGED_OVERRIDE_APPROVAL',
+    idempotencyKey: 'forged-approval',
+  });
+  expect(mocks.mode).not.toHaveBeenCalled();
+  const written = mocks.add.mock.calls[0]![2];
+  expect(written.approvedByUserId).toBeUndefined();
+  expect(written.approvalPolicy).toBeUndefined();
 });

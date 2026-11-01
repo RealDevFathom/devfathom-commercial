@@ -216,7 +216,12 @@ async function khataScope(ctx: TRPCContext, branch: string, access: 'read' | 'wr
   // Finance reads and counter money operations share the active member/branch boundary.
   return requireCounterReceiptAccess(ctx, branch, false, (rules) => {
     const decision = counterCapabilityDecision(rules, KHATA_CAPABILITIES);
-    return decision === 'ALLOW' || (decision !== 'DENY' && financialReadAccess);
+    // Khata money operations require a canonical counter grant; legacy receipt
+    // aliases still participate in DENY precedence and other counter workflows.
+    const canonicalCounterGrant = rules.some(
+      (rule) => rule.effect === 'ALLOW' && capabilityMatches(rule.capability, 'pharmacy:counter')
+    );
+    return decision !== 'DENY' && (canonicalCounterGrant || financialReadAccess);
   });
 }
 
@@ -393,6 +398,25 @@ async function branchScopeOrForbidden(ctx: TRPCContext, branch: string): Promise
     }
     throw error;
   }
+}
+
+/** Colleague approver lists are for counter or dispensing staff, not any branch member. */
+async function requireApproverListAccess(ctx: TRPCContext) {
+  const subject = subjectFromSession(ctx.session!.user);
+  const options = { db: ctx.db, source: 'TRPC' as const };
+  if (
+    !(await can(subject, 'pharmacy:counter', undefined, options)) &&
+    !(await can(subject, 'pharmacy:dispense', undefined, options))
+  )
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Pharmacy counter permission required.' });
+}
+
+async function pharmacyOperatingModeOf(db: ScopedDb, organizationId: string) {
+  const organization = await db.organization.findFirst({
+    where: { id: organizationId, vertical: 'PHARMACY' },
+    select: { pharmacyOperatingMode: true },
+  });
+  return organization?.pharmacyOperatingMode ?? 'STAFFED';
 }
 
 async function requireCounterReceiptAccess(
@@ -960,9 +984,11 @@ export const pharmacySalesRouter = router({
               code: 'FORBIDDEN',
               message: 'You do not have permission for this action.',
             });
+          // Khata money authority is checked before any approval is evaluated or audited.
+          if (tender?.type === 'CREDIT') await khataScope(ctx, input.branchId, 'write');
           await enforceOperatingMode(db, scope, {
             kind: 'REFUND',
-            makerIds: [tender?.sale.createdByUserId ?? scope.actorId],
+            makerIds: [tender?.sale?.createdByUserId ?? scope.actorId],
             targetType: 'PharmacyTender',
             targetId: input.originalTenderId,
             pin: input.approvalPin,
@@ -972,7 +998,6 @@ export const pharmacySalesRouter = router({
           void _approvalPin;
           void _checkerId;
           if (tender?.type !== 'CREDIT') return refundPharmacyTender(db, scope, refundInput);
-          await khataScope(ctx, input.branchId, 'write');
           await bindKhataBranch(db, scope);
           const charge = await db.pharmacyKhataEvent.findFirst({
             where: {
@@ -1146,6 +1171,11 @@ export const pharmacySalesRouter = router({
             });
             input.approvedByUserId = approval.actorId;
             input.approvalPolicy = approval.policy;
+          } else {
+            // Approval fields are server evidence: a line with no discount or
+            // override has nothing to approve, so client values are never stored.
+            input.approvedByUserId = undefined;
+            input.approvalPolicy = undefined;
           }
 
           if (!medicine?.controlled) {
@@ -1285,10 +1315,13 @@ export const pharmacySalesRouter = router({
               'Controlled medicine requires the patient address, an independent pharmacist PIN, and either a valid prescription or an emergency supply with the prescriber name.',
           } as const;
           if (!authorization) return blocked;
-          // Match enforceOperatingMode: organization before credential. Otherwise a
-          // delegated Rx approval can hold the organization while its independent
-          // PIN verifier waits on this credential, blocking both sale transactions.
-          await db.$queryRaw`SELECT id FROM organizations WHERE id=${scope.organizationId} FOR NO KEY UPDATE`;
+          // Match enforceOperatingMode: only SOLO approvals hold the organization row,
+          // and they take it before any credential. Take it first here too in SOLO,
+          // otherwise a SOLO approval holding the organization while its PIN verifier
+          // waits on this credential would block both sale transactions. STAFFED
+          // counters do not serialize on the tenant row.
+          if ((await pharmacyOperatingModeOf(db, scope.organizationId)) === 'SOLO')
+            await db.$queryRaw`SELECT id FROM organizations WHERE id=${scope.organizationId} FOR NO KEY UPDATE`;
           // Serialize credential attempts; returning a denial commits durable lockout counters.
 
           const solo = await pinProfileBelongsToActor(db, scope, authorization.staffProfileId);
@@ -1940,6 +1973,7 @@ export const pharmacySalesRouter = router({
   /** Live branch-scoped identities; the write repeats role, permission and PIN checks. */
   rxApprovers: protectedProcedure.input(z.object({ branchId })).query(async ({ ctx, input }) => {
     const scope = await scopeFor(ctx, input.branchId);
+    await requireApproverListAccess(ctx);
     const assigned = await ctx.db.user.findMany({
       where: {
         organizationId: scope.organizationId,
@@ -1963,7 +1997,10 @@ export const pharmacySalesRouter = router({
         users.push(user);
     const soloApprovalAllowed = await soloOwnerEligible(ctx.db, scope);
     return {
+      // `mode` is the approval path offered to this caller (SOLO = own PIN);
+      // `operatingMode` is the pharmacy's configured mode.
       mode: soloApprovalAllowed ? ('SOLO' as const) : ('STAFFED' as const),
+      operatingMode: await pharmacyOperatingModeOf(ctx.db, scope.organizationId),
       users,
       soloApprovalAllowed,
     };
@@ -1973,11 +2010,12 @@ export const pharmacySalesRouter = router({
     .input(z.object({ branchId }))
     .query(async ({ ctx, input }) => {
       const scope = await scopeFor(ctx, input.branchId);
+      await requireApproverListAccess(ctx);
       const users = await ctx.db.user.findMany({
         where: {
           organizationId: scope.organizationId,
           status: 'ACTIVE',
-          organizationRole: { key: { in: ['owner', 'manager'] } },
+          organizationRole: { key: { in: ['owner', 'owner-operator', 'manager'] }, isSystem: true },
           OR: [
             { organizationRole: { key: 'owner', isSystem: true } },
             { pharmacyBranchAssignments: { some: { branchId: input.branchId, active: true } } },
@@ -1987,7 +2025,10 @@ export const pharmacySalesRouter = router({
       });
       const soloApprovalAllowed = await soloOwnerEligible(ctx.db, scope);
       return {
+        // `mode` is the approval path offered to this caller (SOLO = own PIN);
+        // `operatingMode` is the pharmacy's configured mode.
         mode: soloApprovalAllowed ? ('SOLO' as const) : ('STAFFED' as const),
+        operatingMode: await pharmacyOperatingModeOf(ctx.db, scope.organizationId),
         users,
         soloApprovalAllowed,
       };

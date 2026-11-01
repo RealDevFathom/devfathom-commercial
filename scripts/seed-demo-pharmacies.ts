@@ -585,6 +585,31 @@ export async function seedDemoPharmacies(
           const saleScope = { ...scope, actorId };
           const makerScope = plan.mode === 'STAFFED' ? { ...scope, actorId: id('cashier') } : scope;
           const sale = await createSale(db, makerScope);
+          // Seeded approvals bypass the interactive PIN/checker flow, so record an
+          // explicit synthetic approval audit row instead of leaving none.
+          const recordSeededApproval = (
+            kind: 'DISCOUNT' | 'REFUND',
+            targetType: string,
+            targetId: string
+          ) =>
+            tx.auditLog.create({
+              data: {
+                organizationId,
+                actorId: id('owner'),
+                source: 'SYSTEM',
+                category: 'PHARMACY',
+                action: `DEMO:APPROVAL_SEEDED:${kind}`,
+                targetType,
+                targetId,
+                metadata: {
+                  synthetic: true,
+                  operatingMode: plan.mode,
+                  branchId,
+                  makerIds: [makerScope.actorId],
+                  note: 'Demo seed approval; no PIN or checker re-authentication was performed.',
+                },
+              },
+            });
           // Alternate OTC and Rx; controlled drugs remain catalog-only.
           const choices = day % 2 ? otcSaleIndexes : rxSaleIndexes;
           const index = choices[Math.floor(day / 2) % choices.length]!;
@@ -607,6 +632,8 @@ export async function seedDemoPharmacies(
                 }
               : {}),
           });
+          if (result.line.approvedByUserId)
+            await recordSeededApproval('DISCOUNT', 'PharmacySaleLine', result.line.id);
           if (product.rx) {
             const prescription = await tx.prescription.create({
               data: {
@@ -671,6 +698,7 @@ export async function seedDemoPharmacies(
               reason: 'Synthetic demo return refund',
               idempotencyKey: `${saleKey}:refund`,
             });
+            await recordSeededApproval('REFUND', 'PharmacyTender', tender.tenderId);
           }
           await closePharmacyDrawer(db, saleScope, {
             drawerSessionId: drawer.id,

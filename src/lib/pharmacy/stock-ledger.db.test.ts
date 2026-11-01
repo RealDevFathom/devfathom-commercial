@@ -336,7 +336,9 @@ beforeAll(async () => {
   });
   await inOrg(ORG_A, async (db) => {
     await db.organizationDepartment.create({ data: { key: 'PHARMACY', name: 'Pharmacy' } });
-    const role = await db.organizationRole.create({ data: { key: 'manager', name: 'Manager' } });
+    const role = await db.organizationRole.create({
+      data: { key: 'manager', name: 'Manager', isSystem: true },
+    });
     await db.organizationRolePermission.create({
       data: { organizationRoleId: role.id, capability: 'pharmacy:inventory', effect: 'ALLOW' },
     });

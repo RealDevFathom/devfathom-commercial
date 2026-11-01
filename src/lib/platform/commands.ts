@@ -985,6 +985,9 @@ async function bootstrapOrganization(
     legalName: input.legalName,
     displayName: input.displayName,
     vertical: input.vertical,
+    // A new pharmacy starts with its bootstrap owner as the only member, so it is
+    // provisioned SOLO; the owner switches to STAFFED (PIN-protected) when hiring.
+    ...(input.vertical === 'PHARMACY' ? { pharmacyOperatingMode: 'SOLO' as const } : {}),
     status: 'ONBOARDING',
     deploymentMode: input.deploymentMode,
     packageId: input.packageId,

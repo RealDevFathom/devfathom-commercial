@@ -138,7 +138,7 @@ const RETURN_LINE = {
 beforeEach(() => {
   db = makeDb();
   mocks.can.mockReset().mockResolvedValue(true);
-  db.user.findFirst.mockResolvedValue({ organizationRole: { key: 'manager' } });
+  db.user.findFirst.mockResolvedValue({ organizationRole: { key: 'manager', isSystem: true } });
   db.user.findUnique.mockResolvedValue({
     id: 'user_a',
     organizationId: 'org_a',

@@ -26,7 +26,7 @@ function fixture() {
     organization: { findFirstOrThrow: vi.fn(async () => ({ pharmacyOperatingMode: 'STAFFED' })) },
     auditLog: model(),
     user: {
-      findFirst: vi.fn(async () => ({ organizationRole: { key: 'manager' } })),
+      findFirst: vi.fn(async () => ({ organizationRole: { key: 'manager', isSystem: true } })),
       findUnique: vi.fn().mockResolvedValue({
         id: 'actor',
         status: 'ACTIVE',

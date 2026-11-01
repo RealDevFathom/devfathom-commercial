@@ -54,6 +54,8 @@ function callerFor(permissions: Permission[], permissionOverrides: Permission[] 
   const db = {
     $transaction: async (callback: (tx: unknown) => unknown) => callback(db),
     $queryRaw: lock,
+    // SOLO approvals hold the organization row, so the controlled path locks it first.
+    organization: { findFirst: async () => ({ pharmacyOperatingMode: 'SOLO' }) },
     pharmacyBranchAssignment: { findMany: vi.fn(async () => [{ branchId: 'branch-1' }]) },
     pharmacyBranch: {
       findFirst: vi.fn(async () => ({ id: 'branch-1' })),

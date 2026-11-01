@@ -38,10 +38,27 @@ Browser checks covered 375, 768, 1024 and 1440 pixels, light/dark themes and nor
 
 ## PR #734 second review follow-up
 
-- The operating-mode migrations are renamed to `20261101000100_*` and `20261101000200_*` so they sort after every #683 and develop migration. They no longer redefine `pharmacy_solo_owner_eligible`, so applying them after #683 cannot drop the "exactly one active user" rule. SOLO mode is still enforced by `soloOwnerEligible` and the `pharmacy_solo_mode_audit` triggers.
+- The operating-mode migrations were renamed so they sort after every #683 and develop migration (current names are listed in the third follow-up below). They no longer redefine `pharmacy_solo_owner_eligible`, so applying them after #683 cannot drop the "exactly one active user" rule. SOLO mode is still enforced by `soloOwnerEligible` and the `pharmacy_solo_mode_audit` triggers.
 - #683's `20261101170100_pharmacy_solo_roster_advisory_lock` is included unchanged (same name, so it is never applied twice). Roster writes take a shared per-tenant advisory lock instead of locking and rewriting the organization row. SOLO approvals take the organization row and the exclusive roster lock. STAFFED approvals take neither, because the independent-checker rule holds in either mode, so counters no longer serialize on one tenant row.
 - Rx eligibility uses the live `pharmacy:dispense` grant instead of the `pharmacist` role key, at approval, at payment recheck, and in the approver list. A dispense holder may approve their own STAFFED Rx line, as before operating modes. Cashiers still need an independent dispense holder with a PIN.
 - First PIN enrollment requires the account password. It is rate-limited and never audited.
 - Delegated checker PINs are throttled per requester and checker (3 per 15 minutes), below the checker's own 5-attempt window.
 - `scripts/seed-demo-pharmacies.ts` refuses `DEPLOY_ENV=production`, `NODE_ENV=production` without `DEPLOY_ENV=staging`, and production-named database hosts or names.
 - New database suites skip without `DATABASE_URL`, like the other database suites. The demo-seed suite reads fixtures inside the same RLS context the seed uses.
+
+## PR #734 third review follow-up (scope B: follows #683 and #685)
+
+- Migrations owned by this PR now sort after develop's latest (`20261101172600_*`): `20261101180100_pharmacy_operating_mode` (enum and column, `DEFAULT 'STAFFED'`, no DML), `20261101180200_pharmacy_operating_mode_guards` and `20261101180300_pharmacy_manager_approvals` (formerly `20261031000100`). #683's `20261101170100_pharmacy_solo_roster_advisory_lock` keeps its shared name.
+- The manager-approvals migration adds `pharmacy:counter` and `pharmacy:inventory` to every system `manager` role in pharmacy tenants that lacks a row for them, matching the template. This is deliberate: refunds, returns, discounts, overrides and adjustments now need an independent checker in STAFFED mode, and a system manager is the default checker. Existing DENYs and custom roles are untouched.
+- Owners get scoped pharmacy approvals only, not tenant administration. A non-clinical checker must hold a system `owner`, `owner-operator` or `manager` role and the action's own capability (DENY wins). A tenant-authored role reusing one of those keys is not a checker. Rx checking still needs the live `pharmacy:dispense` grant.
+- Existing pharmacies keep `STAFFED` (no tenant data is rewritten). Pharmacies provisioned from now on start in `SOLO`, because their only member is the bootstrap owner. In STAFFED mode, a refused self-approval names the switch: Pharmacy settings > Operating mode (`/pharmacy/settings/operating-mode`). A sole owner of an existing pharmacy enrolls a PIN and switches to SOLO there.
+- When a SOLO pharmacy uses an independent checker, the evidence records `operatingMode: 'SOLO'` and the policy `PHARMACY:SOLO_INDEPENDENT_CHECKER:<kind>`. STAFFED evidence keeps `PHARMACY:STAFFED:<kind>`.
+- Client `approvedByUserId` and `approvalPolicy` are dropped from a sale line with no discount and no override, so they can no longer be counted as approved override lines.
+- `rxApprovers` and `approvalCheckers` require `pharmacy:counter` or `pharmacy:dispense`. They return `operatingMode` (the configured mode) beside `mode` (the approval path offered to the caller).
+- Controlled sales lock the organization row only in SOLO, where SOLO approvals hold it before a credential. STAFFED counters do not serialize on the tenant row.
+- Khata refunds check Khata write access before evaluating or auditing the refund approval. Khata money operations require a canonical `pharmacy:counter` grant, as in #683.
+- `pharmacyOperatingMode` and `/pharmacy/settings/operating-mode` are licensed on Pharmacy Core. The settings page shows "not available" only for an authorization refusal; other errors surface. The PIN field uses the shared `Input`, and a refused change is announced with `role="alert"`.
+- The demo seed writes an explicit `DEMO:APPROVAL_SEEDED:<kind>` audit row, marked synthetic, for each seeded discount and refund.
+- Known residual: the operating-mode switch and delegated checker PINs verify through #683's `verifyPharmacyUserPin`. It commits lockout counters on its own connection while the caller holds the organization row, so under heavy load it uses a second pooled connection per approval.
+
+No tests, typecheck, lint, build or Prisma commands were run in this follow-up. The checks machine runs them.

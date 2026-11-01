@@ -15,6 +15,16 @@ const NON_CLINICAL_APPROVAL_CAPABILITY = {
   DISCOUNT: 'pharmacy:counter',
   ADJUSTMENT: 'pharmacy:inventory',
 } as const satisfies Record<Exclude<PharmacyApprovalKind, 'RX' | 'PURCHASE'>, string>;
+/**
+ * System roles that may check non-clinical work. Owners get scoped pharmacy
+ * approvals through these roles plus the action's own capability (DENY wins);
+ * a tenant-authored role reusing one of these keys is not a checker.
+ */
+const NON_CLINICAL_CHECKER_ROLES: ReadonlySet<string> = new Set([
+  'owner',
+  'owner-operator',
+  'manager',
+]);
 /** Call inside the document transaction. Identity and roles always come from storage. */
 export async function enforceOperatingMode(
   db: ScopedDb,
@@ -83,11 +93,12 @@ export async function enforceOperatingMode(
       await assertBranchAssignment(db, { ...scope, branchId: scope.branchId, actorId: checkerId });
     const actor = await db.user.findFirst({
       where: { id: checkerId, organizationId: scope.organizationId, status: 'ACTIVE' },
-      select: { organizationRole: { select: { key: true } } },
+      select: { organizationRole: { select: { key: true, isSystem: true } } },
     });
     if (!actor)
       throw new TRPCError({ code: 'FORBIDDEN', message: 'Active checker membership required.' });
-    const role = actor.organizationRole?.key;
+    const role =
+      actor.organizationRole?.isSystem === true ? actor.organizationRole.key : undefined;
     // Rx is a clinical grant, not a role name: any live pharmacy:dispense holder
     // (including a custom pharmacist role or a pharmacist-owner) may check it.
     const eligible =
@@ -100,7 +111,8 @@ export async function enforceOperatingMode(
           ))
         : input.kind === 'PURCHASE'
           ? await actorCanProcure(db, checkerId)
-          : (role === 'owner' || role === 'manager') &&
+          : role !== undefined &&
+            NON_CLINICAL_CHECKER_ROLES.has(role) &&
             (await can(
               { id: checkerId, role: 'EMPLOYEE', organizationId: scope.organizationId },
               NON_CLINICAL_APPROVAL_CAPABILITY[input.kind],
@@ -120,7 +132,12 @@ export async function enforceOperatingMode(
           code: 'FORBIDDEN',
           message: 'Checker PIN re-authentication required.',
         });
-      const policy = `PHARMACY:STAFFED:${input.kind}`;
+      // Record the mode actually in force: a SOLO pharmacy may still use an
+      // independent checker, and its evidence must not claim STAFFED.
+      const policy =
+        mode === 'SOLO'
+          ? `PHARMACY:SOLO_INDEPENDENT_CHECKER:${input.kind}`
+          : `PHARMACY:STAFFED:${input.kind}`;
       await db.auditLog.create({
         data: {
           organizationId: scope.organizationId,
@@ -132,7 +149,7 @@ export async function enforceOperatingMode(
           targetId: input.targetId,
           metadata: {
             branchId: scope.branchId,
-            operatingMode: 'STAFFED',
+            operatingMode: mode,
             makerIds: input.makerIds,
             ...(selfDispense && input.makerIds.includes(checkerId) ? { selfDispense: true } : {}),
           },
@@ -143,6 +160,18 @@ export async function enforceOperatingMode(
   }
   throw new TRPCError({
     code: 'FORBIDDEN',
-    message: 'Independent authorized approval or SOLO owner PIN re-authentication required.',
+    message:
+      mode === 'STAFFED' && input.makerIds.includes(input.checkerId ?? scope.actorId)
+        ? STAFFED_SELF_APPROVAL_MESSAGE
+        : 'Independent authorized approval or SOLO owner PIN re-authentication required.',
   });
 }
+
+/**
+ * Pharmacies default to STAFFED, so a sole owner's own work needs an
+ * independent checker until the owner opts into SOLO. Point them at the switch.
+ */
+export const STAFFED_SELF_APPROVAL_MESSAGE =
+  'This pharmacy is in STAFFED mode, so another authorized staff member must approve. ' +
+  'A sole owner can switch to SOLO in Pharmacy settings > Operating mode ' +
+  '(/pharmacy/settings/operating-mode) and approve with their PIN.';

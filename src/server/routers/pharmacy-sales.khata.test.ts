@@ -63,7 +63,7 @@ function fixture(
     $transaction: vi.fn(),
     user: {
       findUnique: vi.fn(async () => member),
-      findFirst: vi.fn(async () => ({ organizationRole: { key: 'manager' } })),
+      findFirst: vi.fn(async () => ({ organizationRole: { key: 'manager', isSystem: true } })),
     },
     pharmacyBranchAssignment: {
       findMany: vi.fn(async () => [{ branchId: 'branch-a' }]),

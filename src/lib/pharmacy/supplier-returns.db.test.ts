@@ -229,7 +229,7 @@ beforeAll(async () => {
   await inOrg(ORG_A, async (db) => {
     await db.organizationDepartment.create({ data: { key: 'pharmacy', name: 'Pharmacy' } });
     const role = await db.organizationRole.create({
-      data: { key: 'manager', name: 'Procurement checker' },
+      data: { key: 'manager', name: 'Procurement checker', isSystem: true },
     });
     await db.organizationRolePermission.create({
       data: { organizationRoleId: role.id, capability: 'pharmacy:procurement' },

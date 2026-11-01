@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { enforceOperatingMode, type PharmacyApprovalKind } from './operating-mode';
+import {
+  enforceOperatingMode,
+  STAFFED_SELF_APPROVAL_MESSAGE,
+  type PharmacyApprovalKind,
+} from './operating-mode';
 const mocks = vi.hoisted(() => ({ solo: vi.fn(), can: vi.fn(), branch: vi.fn(), pin: vi.fn() }));
 vi.mock('./solo-approval', () => ({
   authorizeSoloApproval: mocks.solo,
@@ -11,11 +15,11 @@ vi.mock('./procurement-access', () => ({
 vi.mock('./branch-assignment', () => ({ assertBranchAssignment: mocks.branch }));
 vi.mock('@/lib/abac', () => ({ can: mocks.can }));
 const scope = { organizationId: 'org', branchId: 'branch', actorId: 'actor' };
-function fixture(mode: string, role = 'owner') {
+function fixture(mode: string, role = 'owner', isSystem = true) {
   return {
     $queryRaw: vi.fn(async () => []),
     organization: { findFirstOrThrow: vi.fn(async () => ({ pharmacyOperatingMode: mode })) },
-    user: { findFirst: vi.fn(async () => ({ organizationRole: { key: role } })) },
+    user: { findFirst: vi.fn(async () => ({ organizationRole: { key: role, isSystem } })) },
     auditLog: { create: vi.fn() },
   };
 }
@@ -231,4 +235,84 @@ it('falls back to independent STAFFED approval when SOLO ends before the row loc
     })
   ).rejects.toMatchObject({ code: 'FORBIDDEN' });
   expect(mocks.solo).not.toHaveBeenCalled();
+});
+
+it('records the SOLO mode when a SOLO pharmacy uses an independent checker', async () => {
+  const db = fixture('SOLO', 'manager');
+  await expect(
+    enforceOperatingMode(db as never, scope, {
+      kind: 'REFUND',
+      makerIds: ['maker'],
+      targetType: 'PharmacyTender',
+      targetId: 'tender',
+    })
+  ).resolves.toEqual({ actorId: 'actor', policy: 'PHARMACY:SOLO_INDEPENDENT_CHECKER:REFUND' });
+  expect(mocks.solo).not.toHaveBeenCalled();
+  expect(db.auditLog.create).toHaveBeenCalledWith({
+    data: expect.objectContaining({
+      action: 'PHARMACY:SOLO_INDEPENDENT_CHECKER:REFUND',
+      metadata: expect.objectContaining({ operatingMode: 'SOLO' }),
+    }),
+  });
+});
+it('keeps the STAFFED label for STAFFED independent approvals', async () => {
+  const db = fixture('STAFFED', 'manager');
+  await enforceOperatingMode(db as never, scope, {
+    kind: 'RETURN',
+    makerIds: ['maker'],
+    targetType: 'PharmacySaleLine',
+    targetId: 'line',
+  });
+  expect(db.auditLog.create).toHaveBeenCalledWith({
+    data: expect.objectContaining({
+      action: 'PHARMACY:STAFFED:RETURN',
+      metadata: expect.objectContaining({ operatingMode: 'STAFFED' }),
+    }),
+  });
+});
+it.each(['owner', 'manager'])(
+  'rejects a tenant-authored %s lookalike role as a non-clinical checker',
+  async (role) => {
+    const db = fixture('STAFFED', role, false);
+    await expect(
+      enforceOperatingMode(db as never, scope, {
+        kind: 'OVERRIDE',
+        makerIds: ['maker'],
+        targetType: 'PharmacySaleLine',
+        targetId: 'line',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.auditLog.create).not.toHaveBeenCalled();
+  }
+);
+it('accepts the scoped system owner-operator role with the action capability', async () => {
+  const db = fixture('STAFFED', 'owner-operator');
+  await expect(
+    enforceOperatingMode(db as never, scope, {
+      kind: 'ADJUSTMENT',
+      makerIds: ['maker'],
+      targetType: 'WriteOff',
+      targetId: 'write-off',
+    })
+  ).resolves.toHaveProperty('policy', 'PHARMACY:STAFFED:ADJUSTMENT');
+  expect(mocks.can).toHaveBeenCalledWith(
+    expect.objectContaining({ id: 'actor' }),
+    'pharmacy:inventory',
+    undefined,
+    expect.anything()
+  );
+});
+it('points a STAFFED sole owner at the SOLO switch when self-approval is refused', async () => {
+  await expect(
+    enforceOperatingMode(fixture('STAFFED', 'owner') as never, scope, {
+      kind: 'REFUND',
+      makerIds: ['actor'],
+      targetType: 'PharmacyTender',
+      targetId: 'tender',
+      pin: '4729',
+    })
+  ).rejects.toMatchObject({
+    code: 'FORBIDDEN',
+    message: STAFFED_SELF_APPROVAL_MESSAGE,
+  });
 });

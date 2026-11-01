@@ -58,7 +58,7 @@ function fixture() {
     organization: { findFirstOrThrow: vi.fn(async () => ({ pharmacyOperatingMode: 'STAFFED' })) },
     auditLog: { create: vi.fn(async () => ({ id: 'approval-audit' })) },
     user: {
-      findFirst: vi.fn(async () => ({ organizationRole: { key: 'manager' } })),
+      findFirst: vi.fn(async () => ({ organizationRole: { key: 'manager', isSystem: true } })),
       findUnique: vi.fn(async () => ({
         id: 'actor-1',
         role: 'EMPLOYEE',

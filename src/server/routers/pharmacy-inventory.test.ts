@@ -175,7 +175,10 @@ beforeEach(() => {
 describe('pharmacy write-off accounting', () => {
   it('posts the write-off journal in the same transaction as the stock movement', async () => {
     grant([allow('pharmacy:inventory')]);
-    db.user.findFirst.mockResolvedValue({ id: 'user_b', organizationRole: { key: 'manager' } });
+    db.user.findFirst.mockResolvedValue({
+      id: 'user_b',
+      organizationRole: { key: 'manager', isSystem: true },
+    });
     const occurredAt = new Date('2026-10-29T00:02:07.000Z');
     db.pharmacyInventoryLot.findFirst.mockResolvedValue({
       id: 'lot_1',
@@ -488,7 +491,10 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
 
   it('accepts an active same-tenant witness assigned to the write-off branch', async () => {
     grant([allow('pharmacy:inventory')]);
-    db.user.findFirst.mockResolvedValue({ id: 'witness_a', organizationRole: { key: 'manager' } });
+    db.user.findFirst.mockResolvedValue({
+      id: 'witness_a',
+      organizationRole: { key: 'manager', isSystem: true },
+    });
     db.pharmacyInventoryLot.findFirst.mockResolvedValue({ id: 'lot_1', unitsPerPack: 1 });
     db.pharmacyStockBalance.findFirst.mockResolvedValue({
       onHandUnits: 5,
