@@ -1,3 +1,9 @@
+import {
+  assertStoredBranchMayOperate,
+  BranchOperationDeniedError,
+  pendingLegalReviewAllowed,
+  ruleSetPendingLegalReview,
+} from '@/lib/pharmacy/regulatory';
 /**
  * PLAT-02 / PLAT-03 tenant surfaces — the twelve-step onboarding checklist, the
  * branch regulatory profile, and the activation status the operator reads when
@@ -34,12 +40,16 @@ import {
   pharmacyOnboardingChecklist,
 } from '@/lib/pharmacy/onboarding-checklist';
 import {
+  branchProvinceMismatch,
   fieldError,
   provinceName,
-  regulatoryProfileInput,
+  regulatoryGrantAllowed,
+  regulatoryProfileShape,
+  regulatoryProfileSchema,
   ruleSetOptions,
   type RegulatoryProfileInput,
 } from '@/lib/pharmacy/regulatory-profile-form';
+import { isSupportedTimezone } from '@/lib/platform/timezones';
 import { adminProcedure, router, type TRPCContext } from '../trpc';
 
 /** The gates an operator may attest to; the rest are answered from data. */
@@ -135,32 +145,39 @@ async function jurisdictionsInForce(ctx: TRPCContext, at: Date) {
       effectiveFrom: { lte: at },
       OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
     },
-    orderBy: [{ code: 'asc' }, { effectiveFrom: 'desc' }],
+    orderBy: [{ code: 'asc' }, { effectiveFrom: 'desc' }, { version: 'desc' }],
   });
   // One rule set per province — the first, because the ordering puts the most
   // recently effective version of each code first.
   const byCode = new Map<string, (typeof ruleSets)[number]>();
   for (const ruleSet of ruleSets) if (!byCode.has(ruleSet.code)) byCode.set(ruleSet.code, ruleSet);
-  return [...byCode.values()].map((ruleSet) => {
-    const categories = ruleSetOptions(ruleSet.licenceCategories);
-    const schedules = ruleSetOptions(ruleSet.permittedSchedules);
-    return {
-      id: ruleSet.id,
-      provinceCode: ruleSet.code,
-      provinceName: provinceName(ruleSet.code),
-      version: ruleSet.version,
-      effectiveFrom: ruleSet.effectiveFrom,
-      licenceCategories: categories.values,
-      permittedSchedules: schedules.values,
-      // Provisional anywhere is provisional everywhere: the regulatory guard
-      // refuses the branch if *any* of the three fields it reads is unconfirmed,
-      // so the surface must report the same thing rather than a rosier subset.
-      provisional:
-        categories.provisional ||
-        schedules.provisional ||
-        ruleSetOptions(ruleSet.pharmacistCoverageRule).provisional,
-    };
-  });
+  // Rules awaiting legal sign-off (PK-SD today) are neither offered nor
+  // accepted where the regulatory guard would refuse them: production serves
+  // only confirmed provinces, while staging/pilot keep exercising Sindh.
+  const offerPendingLegalReview = pendingLegalReviewAllowed();
+  return [...byCode.values()]
+    .filter((ruleSet) => offerPendingLegalReview || !ruleSetPendingLegalReview(ruleSet))
+    .map((ruleSet) => {
+      const categories = ruleSetOptions(ruleSet.licenceCategories);
+      const schedules = ruleSetOptions(ruleSet.permittedSchedules);
+      return {
+        id: ruleSet.id,
+        provinceCode: ruleSet.code,
+        provinceName: provinceName(ruleSet.code),
+        version: ruleSet.version,
+        effectiveFrom: ruleSet.effectiveFrom,
+        licenceCategories: categories.values,
+        permittedSchedules: schedules.values,
+        // Provisional anywhere is provisional everywhere: the regulatory guard
+        // refuses the branch if *any* of the three fields it reads is unconfirmed,
+        // so the surface must report the same thing rather than a rosier subset.
+        pendingLegalReview: ruleSetPendingLegalReview(ruleSet),
+        provisional:
+          categories.provisional ||
+          schedules.provisional ||
+          ruleSetOptions(ruleSet.pharmacistCoverageRule).provisional,
+      };
+    });
 }
 
 export const pharmacyOnboardingRouter = router({
@@ -310,7 +327,20 @@ export const pharmacyOnboardingRouter = router({
           })
         : [];
 
+      let operationBlocked: string | null = null;
+      if (selected) {
+        try {
+          await assertStoredBranchMayOperate(ctx.db, organizationId, selected.id, {
+            name: 'REGULATORY_STATUS',
+            at: now,
+          });
+        } catch (error) {
+          if (!(error instanceof BranchOperationDeniedError)) throw error;
+          operationBlocked = error.reason;
+        }
+      }
       return {
+        operationBlocked,
         branches,
         jurisdictions,
         selectedBranchId: selected?.id ?? null,
@@ -336,14 +366,40 @@ export const pharmacyOnboardingRouter = router({
    * force.
    */
   saveRegulatoryProfile: adminProcedure
-    .input(regulatoryProfileInput)
+    .input(regulatoryProfileShape)
     .mutation(async ({ ctx, input }) => {
       const organizationId = ctx.entitlements.organizationId;
       const effectiveFrom = midnightUtc(input.effectiveFrom);
+      // Security (#162): a profile cannot be backdated. It takes effect today or later,
+      // so it can never retroactively legitimise past dispensing.
+      const today = midnightUtc(new Date().toISOString().slice(0, 10));
+      if (effectiveFrom < today) {
+        throw badRequest('effectiveFrom', 'The effective date cannot be in the past.');
+      }
+
+      const organization = await ctx.db.organization.findUnique({
+        where: { id: organizationId },
+        select: { timezone: true },
+      });
+      // Security (#162): a mis-configured workspace timezone must surface as a
+      // rejected request, never as the `RangeError` the licence-expiry check
+      // would otherwise throw deep inside `safeParse` (an uncaught 500).
+      const timezone = organization?.timezone ?? undefined;
+      if (timezone !== undefined && !isSupportedTimezone(timezone)) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message:
+            "This workspace's time zone is not a valid IANA zone. Fix the workspace time zone before recording a regulatory profile.",
+        });
+      }
+      const validated = regulatoryProfileSchema(timezone).safeParse(input);
+      if (!validated.success) {
+        throw new TRPCError({ code: 'BAD_REQUEST', cause: validated.error });
+      }
 
       const branch = await ctx.db.pharmacyBranch.findFirst({
         where: { organizationId, id: input.branchId, active: true },
-        select: { id: true },
+        select: { id: true, provinceCode: true },
       });
       if (!branch) {
         throw badRequest('branchId', 'Choose one of this workspace’s active branches.');
@@ -354,24 +410,37 @@ export const pharmacyOnboardingRouter = router({
         (candidate) => candidate.provinceCode === input.provinceCode
       );
       if (!jurisdiction) {
+        const earliest = await ctx.db.jurisdictionRuleSet.findFirst({
+          where: { code: input.provinceCode },
+          orderBy: { effectiveFrom: 'asc' },
+          select: { effectiveFrom: true },
+        });
+        if (earliest && effectiveFrom < earliest.effectiveFrom) {
+          throw badRequest(
+            'effectiveFrom',
+            `${provinceName(input.provinceCode)} rules take effect on ${earliest.effectiveFrom.toISOString().slice(0, 10)}. Choose that date or later.`
+          );
+        }
         throw badRequest(
           'provinceCode',
           'No jurisdiction rules are published for that province on the date you chose. Pick a province that appears in the list.'
         );
       }
-      if (
-        jurisdiction.licenceCategories.length > 0 &&
-        !jurisdiction.licenceCategories.includes(input.licenceCategory)
-      ) {
+      // QA-129 / Security (#162): a branch operates under its own province's
+      // rules, and a branch with no province on record fails the check closed
+      // rather than letting the client's chosen province stand unverified.
+      const provinceMismatch = branchProvinceMismatch(branch.provinceCode, input.provinceCode);
+      if (provinceMismatch) {
+        throw badRequest(provinceMismatch.field, provinceMismatch.message);
+      }
+      if (!regulatoryGrantAllowed(jurisdiction.licenceCategories, input.licenceCategory)) {
         throw badRequest(
           'licenceCategory',
           `Choose one of the licence categories ${jurisdiction.provinceName} publishes.`
         );
       }
       const unpermitted = input.permittedSchedules.filter(
-        (schedule) =>
-          jurisdiction.permittedSchedules.length > 0 &&
-          !jurisdiction.permittedSchedules.includes(schedule)
+        (schedule) => !regulatoryGrantAllowed(jurisdiction.permittedSchedules, schedule)
       );
       if (unpermitted.length > 0) {
         throw badRequest(
@@ -400,10 +469,22 @@ export const pharmacyOnboardingRouter = router({
 
       await ctx.db.$transaction(async (tx) => {
         if (latest && latest.effectiveTo === null) {
-          await tx.branchRegulatoryProfile.update({
-            where: { id: latest.id },
+          const closed = await tx.branchRegulatoryProfile.updateMany({
+            where: {
+              id: latest.id,
+              organizationId,
+              branchId: branch.id,
+              effectiveTo: null,
+            },
             data: { effectiveTo: effectiveFrom },
           });
+          if (closed.count !== 1) {
+            throw new TRPCError({
+              code: 'CONFLICT',
+              message:
+                'The regulatory profile changed while you were saving. Reload and try again.',
+            });
+          }
         }
         await tx.branchRegulatoryProfile.create({
           data: {

@@ -1,9 +1,11 @@
+import { licenceDateStarted, licenceDateValid } from './licence-validity';
 import type { PrismaClient } from '@/generated/prisma/client';
 import { recordAudit } from '@/server/audit';
 
 export type BranchOperationDenialReason =
   | 'PROFILE_MISSING'
   | 'RULE_SET_UNCONFIRMED'
+  | 'RULE_SET_PENDING_LEGAL_REVIEW'
   | 'LICENCE_INVALID'
   | 'QUALIFIED_PERSON_COVERAGE_MISSING'
   | 'SCHEDULE_NOT_PERMITTED';
@@ -23,6 +25,7 @@ export type BranchOperationAction = {
 };
 
 export type BranchRegulatoryState = {
+  timezone?: string;
   branchId: string;
   licenceCategory: string;
   licenceValidFrom: Date;
@@ -33,6 +36,7 @@ export type BranchRegulatoryState = {
   qualifiedPersonValidTo: Date;
   qualifiedPersonCoverageRosterRef: string;
   ruleSet: {
+    code?: string;
     licenceCategories: unknown;
     permittedSchedules: unknown;
     pharmacistCoverageRule: unknown;
@@ -40,10 +44,44 @@ export type BranchRegulatoryState = {
   auditDenied: (reason: BranchOperationDenialReason, action: BranchOperationAction) => void;
 };
 
-type RuleField = { provisional?: boolean; values?: unknown };
+type RuleField = { provisional?: boolean; pendingLegalReview?: boolean; values?: unknown };
+
+/**
+ * Rule sets flagged `pendingLegalReview` (e.g. PK-SD until counsel signs off) may be
+ * exercised in development, tests, staging and pilots, but production enforcement
+ * refuses them. Fail closed: under NODE_ENV=production only an explicit
+ * APP_ENV of `staging` or `pilot` allows them.
+ */
+export function pendingLegalReviewAllowed(env: Record<string, string | undefined> = process.env) {
+  if (env.NODE_ENV !== 'production') return true;
+  return env.APP_ENV === 'staging' || env.APP_ENV === 'pilot';
+}
 
 function ruleField(value: unknown): RuleField {
   return value && typeof value === 'object' ? (value as RuleField) : {};
+}
+
+/**
+ * Whether a rule set is still awaiting legal sign-off. PK-SD rows written before
+ * the explicit flag existed (v1) count as pending, so Sindh stays behind the
+ * production gate until counsel publishes a confirmed version.
+ */
+export function ruleSetPendingLegalReview(ruleSet: {
+  code?: string;
+  licenceCategories: unknown;
+  permittedSchedules: unknown;
+  pharmacistCoverageRule: unknown;
+}): boolean {
+  const fields = [
+    ruleSet.licenceCategories,
+    ruleSet.permittedSchedules,
+    ruleSet.pharmacistCoverageRule,
+  ];
+  return (
+    fields.some((field) => ruleField(field).pendingLegalReview === true) ||
+    (ruleSet.code === 'PK-SD' &&
+      fields.some((field) => ruleField(field).pendingLegalReview === undefined))
+  );
 }
 
 function stringValues(value: unknown): readonly string[] {
@@ -73,12 +111,15 @@ export function assertBranchMayOperate(
   if (relevantRules.some((field) => ruleField(field).provisional !== false)) {
     deny('RULE_SET_UNCONFIRMED');
   }
+  if (ruleSetPendingLegalReview(branch.ruleSet) && !pendingLegalReviewAllowed()) {
+    deny('RULE_SET_PENDING_LEGAL_REVIEW');
+  }
 
   if (
     !branch.licenceCategory.trim() ||
     !stringValues(branch.ruleSet.licenceCategories).includes(branch.licenceCategory) ||
-    at < branch.licenceValidFrom ||
-    at >= branch.licenceValidTo
+    !licenceDateStarted(branch.licenceValidFrom, at, branch.timezone) ||
+    !licenceDateValid(branch.licenceValidTo, at, branch.timezone)
   ) {
     deny('LICENCE_INVALID');
   }
@@ -140,10 +181,25 @@ export async function assertStoredBranchMayOperate(
     throw new BranchOperationDeniedError('PROFILE_MISSING');
   }
 
+  // Existing profiles can still reference v1; enforce the latest rules in force.
+  const latestRules = await db.jurisdictionRuleSet.findFirst({
+    where: {
+      code: profile.jurisdictionRuleSet.code,
+      effectiveFrom: { lte: at },
+      OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
+    },
+    orderBy: [{ effectiveFrom: 'desc' }, { version: 'desc' }],
+  });
+
+  const organization = await db.organization.findUnique({
+    where: { id: organizationId },
+    select: { timezone: true },
+  });
   assertBranchMayOperate(
     {
       ...profile,
-      ruleSet: profile.jurisdictionRuleSet,
+      timezone: organization?.timezone ?? undefined,
+      ruleSet: latestRules ?? profile.jurisdictionRuleSet,
       auditDenied,
     },
     { ...action, at }

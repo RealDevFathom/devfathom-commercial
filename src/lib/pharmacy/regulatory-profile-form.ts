@@ -1,3 +1,4 @@
+import { licenceDateValid, LICENCE_EXPIRY_ERROR } from './licence-validity';
 /**
  * PLAT-02 form contract — the branch regulatory profile, as the operator fills
  * it in and as the server validates it.
@@ -34,8 +35,83 @@ export const PAKISTAN_PROVINCES: Record<string, string> = {
   'PK-AJK': 'Azad Jammu and Kashmir',
 };
 
+const LEGACY_PROVINCE_CODES: Record<string, string> = {
+  PB: 'PK-PB',
+  SD: 'PK-SD',
+  KP: 'PK-KP',
+  BA: 'PK-BA',
+  ICT: 'PK-ICT',
+  GB: 'PK-GB',
+  AJK: 'PK-AJK',
+};
+
+/** Convert province codes written before the ISO-style `PK-` prefix was adopted. */
+export function canonicalProvinceCode(code: string): string {
+  return LEGACY_PROVINCE_CODES[code] ?? code;
+}
+
 export function provinceName(code: string): string {
-  return PAKISTAN_PROVINCES[code] ?? code;
+  const canonicalCode = canonicalProvinceCode(code);
+  return PAKISTAN_PROVINCES[canonicalCode] ?? code;
+}
+
+/**
+ * The province the form should start on for a given branch.
+ *
+ * A branch records which province it operates in, so the form defaults to that
+ * province when its rules are published — a Karachi branch opens on Sindh, not
+ * on whichever province happens to sort first (QA-129). Only when the branch's
+ * own province has no published rule set does it fall back to the first
+ * published jurisdiction, so the select is never empty while any exist.
+ */
+export function defaultProvinceCode(
+  jurisdictions: readonly { provinceCode: string }[],
+  branchProvinceCode: string | null | undefined
+): string {
+  const canonicalBranchProvinceCode = branchProvinceCode
+    ? canonicalProvinceCode(branchProvinceCode)
+    : null;
+  if (
+    canonicalBranchProvinceCode &&
+    jurisdictions.some((jurisdiction) => jurisdiction.provinceCode === canonicalBranchProvinceCode)
+  ) {
+    return canonicalBranchProvinceCode;
+  }
+  return jurisdictions[0]?.provinceCode ?? '';
+}
+
+/**
+ * Which province a branch's regulatory profile may be recorded against.
+ *
+ * A branch operates under its own province's rules (QA-129), so the province
+ * the client submits must be the one the branch records. Crucially this fails
+ * *closed*: a branch with no province on record cannot be verified at all, so
+ * the save is refused rather than trusting whatever province the client chose
+ * (PR #162 — an empty branch province must never wave the check through).
+ *
+ * Returns the field error to raise, or `null` when `inputProvinceCode` is the
+ * branch's own province. Legacy un-prefixed branch codes are canonicalised
+ * first, so `PB` recorded on the branch matches a submitted `PK-PB`.
+ */
+export function branchProvinceMismatch(
+  branchProvinceCode: string | null | undefined,
+  inputProvinceCode: string
+): { field: 'provinceCode'; message: string } | null {
+  const recorded = branchProvinceCode?.trim() ?? '';
+  if (!recorded) {
+    return {
+      field: 'provinceCode',
+      message:
+        "This branch has no province on record, so its licence rules can't be verified. Set the branch's province before recording a regulatory profile.",
+    };
+  }
+  if (canonicalProvinceCode(recorded) !== inputProvinceCode) {
+    return {
+      field: 'provinceCode',
+      message: `This branch is registered in ${provinceName(recorded)}. Use that province's rules.`,
+    };
+  }
+  return null;
 }
 
 /** Fiscal registration states, with the sentence the operator picks by. */
@@ -66,7 +142,7 @@ const retentionYears = (subject: string) =>
     .min(1, `${subject} must be kept for at least 1 year.`)
     .max(30, 'Enter 30 years or fewer.');
 
-export const regulatoryProfileInput = z
+export const regulatoryProfileShape = z
   .object({
     branchId: required('Choose the branch this profile belongs to.', 128),
     effectiveFrom: isoDate('Choose the date this profile takes effect, as YYYY-MM-DD.'),
@@ -128,6 +204,18 @@ export const regulatoryProfileInput = z
     }
   });
 
+export function regulatoryProfileSchema(timezone = 'Asia/Karachi', at?: Date) {
+  return regulatoryProfileShape.superRefine((value, ctx) => {
+    if (
+      value.licenceValidTo > value.licenceValidFrom &&
+      !licenceDateValid(value.licenceValidTo, at, timezone)
+    ) {
+      ctx.addIssue({ code: 'custom', path: ['licenceValidTo'], message: LICENCE_EXPIRY_ERROR });
+    }
+  });
+}
+export const regulatoryProfileInput = regulatoryProfileSchema();
+
 export type RegulatoryProfileInput = z.infer<typeof regulatoryProfileInput>;
 
 /**
@@ -161,4 +249,12 @@ export function ruleSetOptions(field: unknown): {
   // unconfirmed, and a form that were more optimistic than the guard would offer
   // choices that cannot be acted on.
   return { values, provisional: rule.provisional !== false };
+}
+
+/**
+ * Regulatory capabilities are an allow-list, never a default allow. An absent,
+ * malformed, or empty rule therefore grants nothing.
+ */
+export function regulatoryGrantAllowed(grants: readonly string[], requested: string): boolean {
+  return grants.includes(requested);
 }

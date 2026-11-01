@@ -116,22 +116,47 @@ describeIfDatabase('pharmacy regulatory persistence', () => {
     }
   });
 
-  it('seeds only provisional PK-PB and rejects regulated-record rewrites', async () => {
+  it('seeds provisional PK-PB and pending-review PK-SD v2, and rejects regulated-record rewrites', async () => {
     const client = new Client({ connectionString: runtimeUrl });
     await client.connect();
     try {
       const rules = await client.query<{ code: string; provisional: boolean }>(
-        `SELECT code, ("licenceCategories"->>'provisional')::boolean provisional
-           FROM pharmacy_jurisdiction_rule_sets`
+        `SELECT DISTINCT ON (code) code, ("licenceCategories"->>'provisional')::boolean provisional
+           FROM pharmacy_jurisdiction_rule_sets
+          WHERE code IN ('PK-PB', 'PK-SD')
+          ORDER BY code, "effectiveFrom" DESC, version DESC`
       );
-      expect(rules.rows).toEqual([{ code: 'PK-PB', provisional: true }]);
+      // PK-SD is usable in staging/pilots while awaiting counsel sign-off.
+      expect(rules.rows).toEqual([
+        { code: 'PK-PB', provisional: true },
+        { code: 'PK-SD', provisional: false },
+      ]);
+      const sindh = await client.query(`
+        SELECT version, "licenceCategories", "permittedSchedules", "prescriptionOnlyClasses",
+          "prescriptionRetentionDays", "controlledRegisterFlags", "pharmacistCoverageRule", "recordRetentionByClass"
+        FROM pharmacy_jurisdiction_rule_sets WHERE code = 'PK-SD' ORDER BY version DESC
+      `);
+      expect(sindh.rows.map((row) => row.version)).toEqual([2, 1]);
+      for (const [key, value] of Object.entries(sindh.rows[0])) {
+        if (key !== 'version') expect(value).toMatchObject({ pendingLegalReview: true });
+      }
+      expect(sindh.rows[1].licenceCategories).not.toHaveProperty('pendingLegalReview');
+      const security = await client.query(`
+        SELECT relrowsecurity, relforcerowsecurity FROM pg_class
+        WHERE oid = 'pharmacy_jurisdiction_rule_sets'::regclass
+      `);
+      expect(security.rows).toEqual([{ relrowsecurity: true, relforcerowsecurity: true }]);
+      const role = await client.query(
+        'SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user'
+      );
+      expect(role.rows).toEqual([{ rolsuper: false, rolbypassrls: false }]);
       await expect(
         client.query(
           `INSERT INTO pharmacy_jurisdiction_rule_sets
            (id, code, version, "effectiveFrom", "licenceCategories", "permittedSchedules",
             "prescriptionOnlyClasses", "prescriptionRetentionDays", "controlledRegisterFlags",
             "pharmacistCoverageRule", "recordRetentionByClass")
-           VALUES ('forbidden', 'PK-SD', 1, now(), '{}', '{}', '{}', '{}', '{}', '{}', '{}')`
+           VALUES ('forbidden', 'PK-KP', 1, now(), '{}', '{}', '{}', '{}', '{}', '{}', '{}')`
         )
       ).rejects.toMatchObject({ code: '42501' });
       await client.query(`SELECT set_config('app.current_organization_id', $1, false)`, [orgA]);

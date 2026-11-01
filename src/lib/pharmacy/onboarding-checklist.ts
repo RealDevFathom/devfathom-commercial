@@ -162,9 +162,13 @@ export function checklistItemForGate(gate: PharmacyGateResult): ReadinessCheckli
     state: done ? 'DONE' : gate.p0 ? 'NEEDS_YOU' : 'OPTIONAL',
     why: done
       ? guidance.done
-      : gate.downgradeReason
-        ? DOWNGRADE_COPY[gate.downgradeReason]
-        : guidance.todo,
+      : gate.regulatoryReason === 'LICENCE_INVALID'
+        ? 'The branch licence dates or category are invalid. Check the licence expiry date on the regulatory profile.'
+        : gate.regulatoryReason === 'RULE_SET_PENDING_LEGAL_REVIEW'
+          ? 'The jurisdiction rules are pending legal review.'
+          : gate.downgradeReason
+            ? DOWNGRADE_COPY[gate.downgradeReason]
+            : guidance.todo,
     href: guidance.href,
     linkLabel: guidance.linkLabel,
     blocksActivation: gate.p0 && !done,

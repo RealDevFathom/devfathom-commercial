@@ -111,9 +111,10 @@ test.beforeAll(async () => {
         WHERE p.key = 'e2e-pharmacy-package'
        ON CONFLICT ("packageId", "moduleId") DO UPDATE SET enabled = true`
     );
-    // A jurisdiction whose rules counsel has confirmed. The migration ships only
-    // a provisional Punjab, on which no branch may operate — the form must offer
-    // both and the gate must flip only on the confirmed one.
+    // A jurisdiction whose rules counsel has confirmed. The migrations ship a
+    // provisional Punjab, on which no branch may operate, and a confirmed Sindh
+    // (QA-129); this upsert matches the shipped Sindh set, so the form offers
+    // both and the gate flips only on a confirmed one.
     await db.query(
       `INSERT INTO pharmacy_jurisdiction_rule_sets
          (id, code, version, "effectiveFrom", "licenceCategories", "permittedSchedules",

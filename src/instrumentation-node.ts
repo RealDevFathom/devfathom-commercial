@@ -7,6 +7,9 @@ export async function assertProductionStartup() {
     assertProductionClientIpConfig();
     const { assertProductionDatabaseRole } = await import('@/lib/db/rls-role');
     await assertProductionDatabaseRole();
+    const { assertProductionAppEnv } = await import('@/lib/app-env');
+    assertProductionAppEnv();
+    console.info(`[startup] APP_ENV=${process.env.APP_ENV}`);
   } catch (error) {
     console.error(error);
     process.exit(1);

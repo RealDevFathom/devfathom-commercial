@@ -2,10 +2,15 @@ import { describe, expect, it } from 'vitest';
 
 import { formatValidationError } from '@/lib/validation-error';
 import {
+  branchProvinceMismatch,
+  canonicalProvinceCode,
+  defaultProvinceCode,
   FISCAL_STATUSES,
   fieldError,
   provinceName,
+  regulatoryGrantAllowed,
   regulatoryProfileInput,
+  regulatoryProfileSchema,
   ruleSetOptions,
 } from './regulatory-profile-form';
 
@@ -123,6 +128,7 @@ describe('branch regulatory profile input', () => {
 
   it('prints a province name rather than its code, and falls back to the code it does not know', () => {
     expect(provinceName('PK-PB')).toBe('Punjab');
+    expect(provinceName('SD')).toBe('Sindh');
     expect(provinceName('PK-ICT')).toBe('Islamabad Capital Territory');
     expect(provinceName('PK-ZZ')).toBe('PK-ZZ');
   });
@@ -131,6 +137,93 @@ describe('branch regulatory profile input', () => {
     for (const status of FISCAL_STATUSES) {
       expect(status.label).not.toBe(status.value);
       expect(status.label).toMatch(/[a-z]/);
+    }
+  });
+
+  it('starts the form on the branch’s own province when its rules are published (QA-129)', () => {
+    const jurisdictions = [{ provinceCode: 'PK-PB' }, { provinceCode: 'PK-SD' }];
+    // A Karachi branch opens on Sindh even though Punjab sorts first.
+    expect(defaultProvinceCode(jurisdictions, 'PK-SD')).toBe('PK-SD');
+    expect(defaultProvinceCode(jurisdictions, 'SD')).toBe('PK-SD');
+    expect(defaultProvinceCode(jurisdictions, 'PK-PB')).toBe('PK-PB');
+    // A branch whose province has no published rules falls back to the first
+    // published jurisdiction rather than leaving the select empty.
+    expect(defaultProvinceCode(jurisdictions, 'PK-KP')).toBe('PK-PB');
+    expect(defaultProvinceCode(jurisdictions, null)).toBe('PK-PB');
+    expect(defaultProvinceCode([], 'PK-SD')).toBe('');
+  });
+
+  it('maps every legacy short province code to its canonical stored value', () => {
+    expect(canonicalProvinceCode('PB')).toBe('PK-PB');
+    expect(canonicalProvinceCode('SD')).toBe('PK-SD');
+    expect(canonicalProvinceCode('KP')).toBe('PK-KP');
+    expect(canonicalProvinceCode('BA')).toBe('PK-BA');
+    expect(canonicalProvinceCode('ICT')).toBe('PK-ICT');
+    expect(canonicalProvinceCode('GB')).toBe('PK-GB');
+    expect(canonicalProvinceCode('AJK')).toBe('PK-AJK');
+    expect(canonicalProvinceCode('PK-SD')).toBe('PK-SD');
+    expect(canonicalProvinceCode('UNKNOWN')).toBe('UNKNOWN');
+  });
+});
+
+describe('regulatoryGrantAllowed', () => {
+  it('requires an exact published grant', () => {
+    expect(regulatoryGrantAllowed(['RETAIL', 'WHOLESALE'], 'RETAIL')).toBe(true);
+    expect(regulatoryGrantAllowed(['RETAIL'], 'retail')).toBe(false);
+    expect(regulatoryGrantAllowed(['RETAIL'], 'WHOLESALE')).toBe(false);
+  });
+
+  it('fails closed when the published grant list is empty', () => {
+    expect(regulatoryGrantAllowed([], 'RETAIL')).toBe(false);
+    expect(regulatoryGrantAllowed([], 'G')).toBe(false);
+  });
+});
+
+describe('branchProvinceMismatch (QA-129 / #162 fail closed)', () => {
+  it('accepts the branch’s own province', () => {
+    expect(branchProvinceMismatch('PK-PB', 'PK-PB')).toBeNull();
+  });
+
+  it('accepts a legacy branch code against its canonical submitted province', () => {
+    expect(branchProvinceMismatch('PB', 'PK-PB')).toBeNull();
+  });
+
+  it('rejects a province that differs from the branch’s, naming the branch’s province', () => {
+    const error = branchProvinceMismatch('PK-SD', 'PK-PB');
+    expect(error).toMatchObject({ field: 'provinceCode' });
+    expect(error?.message).toContain('Sindh');
+  });
+
+  it.each([
+    ['null', null],
+    ['undefined', undefined],
+    ['empty string', ''],
+    ['whitespace only', '   '],
+  ])('fails closed when the branch has no province on record (%s)', (_label, recorded) => {
+    const error = branchProvinceMismatch(recorded, 'PK-PB');
+    expect(error).toMatchObject({ field: 'provinceCode' });
+    expect(error?.message).toContain('no province on record');
+  });
+});
+
+describe('expiry save validation at PKT day boundaries', () => {
+  it.each([
+    ['2026-10-20T23:59:59Z', true],
+    ['2026-10-21T00:00:00Z', true],
+    ['2026-10-21T18:59:59.999Z', true],
+    ['2026-10-21T19:00:00Z', false],
+  ])('validates an expires-today save at %s', (instant, accepted) => {
+    const result = regulatoryProfileSchema('Asia/Karachi', new Date(instant)).safeParse({
+      ...valid,
+      licenceValidTo: '2026-10-21',
+    });
+    expect(result.success).toBe(accepted);
+    if (!result.success) {
+      const error = formatValidationError(result.error)!;
+      expect(error.fields.licenceValidTo).toEqual([
+        'The licence expiry date must be today or later.',
+      ]);
+      expect(error.message).toMatch(/^Licence Valid To:/);
     }
   });
 });

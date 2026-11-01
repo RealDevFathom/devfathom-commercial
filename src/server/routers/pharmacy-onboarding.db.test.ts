@@ -47,6 +47,7 @@ const organizationId = `ph1198_org_${suffix}`;
 const otherOrganizationId = `ph1198_other_${suffix}`;
 const branchId = `ph1198_branch_${suffix}`;
 const secondBranchId = `ph1198_branch2_${suffix}`;
+const sindhBranchId = `ph1198_sindh_${suffix}`;
 const otherBranchId = `ph1198_otherbranch_${suffix}`;
 const userId = `ph1198_user_${suffix}`;
 const owner = new pg.Client({ connectionString: ownerUrl });
@@ -79,10 +80,14 @@ function caller(db: ScopedDb, actingOrganizationId = organizationId) {
   } as never);
 }
 
+/** ISO date `offset` days from today (UTC); profiles cannot be backdated. */
+const day = (offset: number) =>
+  new Date(Date.now() + offset * 86_400_000).toISOString().slice(0, 10);
+
 /** A complete, valid profile; individual tests vary one field at a time. */
 const profile = {
   branchId,
-  effectiveFrom: '2026-09-02',
+  effectiveFrom: day(0),
   provinceCode: 'PK-PB',
   premisesAddressLine: '12 Mall Road',
   premisesCity: 'Lahore',
@@ -90,12 +95,12 @@ const profile = {
   licenceCategory: 'PROVISIONAL',
   licenceNumber: 'LIC-4471',
   licenceValidFrom: '2026-01-01',
-  licenceValidTo: '2027-01-01',
+  licenceValidTo: day(400),
   licenceEvidenceFileRef: '/api/files/licence.pdf',
   permittedSchedules: [] as string[],
   qualifiedPersonRegistration: 'PC-9981',
   qualifiedPersonValidFrom: '2026-01-01',
-  qualifiedPersonValidTo: '2027-01-01',
+  qualifiedPersonValidTo: day(400),
   qualifiedPersonCoverageRosterRef: '/api/files/roster.pdf',
   fiscalStatus: 'UNCONFIRMED' as const,
   retentionPrescriptionYears: 5,
@@ -118,10 +123,11 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
     }
     await owner.query(
       `INSERT INTO pharmacy_branches (id,"organizationId",code,name,"addressLine",city,"provinceCode","updatedAt")
-       VALUES ($1,$2,$1,'Gulberg','12 Mall Road','Lahore','PB',now()),
-              ($3,$2,$3,'Model Town','9 Link Road','Lahore','PB',now()),
-              ($4,$5,$4,'Other tenant','1 Elsewhere','Karachi','SD',now())`,
-      [branchId, organizationId, secondBranchId, otherBranchId, otherOrganizationId]
+       VALUES ($1,$2,$1,'Gulberg','12 Mall Road','Lahore','PK-PB',now()),
+              ($3,$2,$3,'Model Town','9 Link Road','Lahore','PK-PB',now()),
+              ($6,$2,$6,'Clifton','5 Clifton Road','Karachi','PK-SD',now()),
+              ($4,$5,$4,'Other tenant','1 Elsewhere','Karachi','PK-SD',now())`,
+      [branchId, organizationId, secondBranchId, otherBranchId, otherOrganizationId, sindhBranchId]
     );
   });
 
@@ -181,7 +187,7 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
     await withTenantDb(organizationId, async (db) => {
       const result = await caller(db).regulatory();
       expect(result.branches.map((branch) => branch.id).sort()).toEqual(
-        [branchId, secondBranchId].sort()
+        [branchId, secondBranchId, sindhBranchId].sort()
       );
       // The other tenant's branch is absent from the picker, by an explicit
       // organization predicate — RLS is the second wall, not the only one.
@@ -198,6 +204,33 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
       }
       expect(result.versions).toEqual([]);
     });
+  });
+
+  it('hides and refuses Sindh rules pending legal review in production (Punjab only)', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('APP_ENV', 'production');
+    try {
+      await withTenantDb(organizationId, async (db) => {
+        const result = await caller(db).regulatory();
+        expect(result.jurisdictions.some((option) => option.provinceCode === 'PK-SD')).toBe(false);
+        expect(result.jurisdictions.some((option) => option.provinceCode === 'PK-PB')).toBe(true);
+        await expect(
+          caller(db).saveRegulatoryProfile({
+            ...profile,
+            branchId: sindhBranchId,
+            effectiveFrom: day(0),
+            provinceCode: 'PK-SD',
+            licenceCategory: 'RETAIL',
+            permittedSchedules: ['G'],
+          })
+        ).rejects.toMatchObject({
+          code: 'BAD_REQUEST',
+          message: expect.stringContaining('No jurisdiction rules are published'),
+        });
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it('never falls back to another branch when an unknown one is requested', async () => {
@@ -240,6 +273,128 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
     });
   });
 
+  it('refuses a province that differs from the branch’s own province (QA-129)', async () => {
+    await withTenantDb(organizationId, async (db) => {
+      await expect(
+        caller(db).saveRegulatoryProfile({
+          ...profile,
+          effectiveFrom: day(0),
+          provinceCode: 'PK-SD',
+          licenceCategory: 'RETAIL',
+          permittedSchedules: ['G'],
+        })
+      ).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+        message: expect.stringContaining('This branch is registered in'),
+      });
+    });
+  });
+
+  it('fails closed when the branch has no province on record (#162)', async () => {
+    // A branch that predates the non-empty province CHECK — added NOT VALID, so
+    // it never validated the rows already on file — carries an empty province.
+    // The client picks a published province (PK-PB), which clears the
+    // jurisdiction lookup, so the only thing standing between it and a stored
+    // profile is the branch-province check. That check must refuse, never wave
+    // an unverifiable branch through on the client's say-so.
+    await owner.query(
+      'ALTER TABLE pharmacy_branches DROP CONSTRAINT IF EXISTS pharmacy_branches_province_nonempty'
+    );
+    await owner.query(`UPDATE pharmacy_branches SET "provinceCode" = '' WHERE id = $1`, [
+      secondBranchId,
+    ]);
+    try {
+      await withTenantDb(organizationId, async (db) => {
+        const before = await db.branchRegulatoryProfile.count({ where: { organizationId } });
+        await expect(
+          caller(db).saveRegulatoryProfile({
+            ...profile,
+            branchId: secondBranchId,
+            provinceCode: 'PK-PB',
+          })
+        ).rejects.toMatchObject({
+          code: 'BAD_REQUEST',
+          message: expect.stringContaining('no province on record'),
+        });
+        expect(await db.branchRegulatoryProfile.count({ where: { organizationId } })).toBe(before);
+      });
+    } finally {
+      await owner.query(`UPDATE pharmacy_branches SET "provinceCode" = 'PK-PB' WHERE id = $1`, [
+        secondBranchId,
+      ]);
+      await owner.query(
+        `ALTER TABLE pharmacy_branches ADD CONSTRAINT pharmacy_branches_province_nonempty CHECK (btrim("provinceCode") <> '') NOT VALID`
+      );
+    }
+  });
+
+  it('rejects an invalid workspace time zone with a validation error, not a 500 (#162)', async () => {
+    // A bad IANA zone stored on the organization once reached the licence-expiry
+    // check and threw a RangeError deep inside the schema — an uncaught 500. It
+    // must surface as a BAD_REQUEST instead.
+    await owner.query(`UPDATE organizations SET "timezone" = 'Not/AZone' WHERE id = $1`, [
+      organizationId,
+    ]);
+    try {
+      await withTenantDb(organizationId, async (db) => {
+        await expect(caller(db).saveRegulatoryProfile(profile)).rejects.toMatchObject({
+          code: 'BAD_REQUEST',
+          message: expect.stringContaining('time zone'),
+        });
+      });
+    } finally {
+      await owner.query(`UPDATE organizations SET "timezone" = 'UTC' WHERE id = $1`, [
+        organizationId,
+      ]);
+    }
+  });
+
+  it.each([
+    ['expired', '2026-01-01', '2026-06-01'],
+    ['reversed', day(30), day(20)],
+  ])('refuses a %s licence window without storing a profile', async (_, validFrom, validTo) => {
+    await withTenantDb(organizationId, async (db) => {
+      const before = await db.branchRegulatoryProfile.count({ where: { organizationId } });
+      await expect(
+        caller(db).saveRegulatoryProfile({
+          ...profile,
+          licenceValidFrom: validFrom,
+          licenceValidTo: validTo,
+        })
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      expect(await db.branchRegulatoryProfile.count({ where: { organizationId } })).toBe(before);
+    });
+  });
+
+  it('accepts a licence expiring today in Asia/Karachi (#240, #291)', async () => {
+    const todayInKarachi = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Karachi',
+    }).format(new Date());
+    await owner.query(`UPDATE organizations SET "timezone" = 'Asia/Karachi' WHERE id = $1`, [
+      organizationId,
+    ]);
+    await withTenantDb(organizationId, async (db) => {
+      await expect(
+        caller(db).saveRegulatoryProfile({
+          ...profile,
+          branchId: secondBranchId,
+          licenceValidTo: todayInKarachi,
+        })
+      ).resolves.toMatchObject({ version: 1 });
+    });
+  });
+
+  it('refuses a backdated effective date (#162)', async () => {
+    await withTenantDb(organizationId, async (db) => {
+      await expect(
+        caller(db).saveRegulatoryProfile({ ...profile, effectiveFrom: day(-1) })
+      ).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+        message: expect.stringContaining('cannot be in the past'),
+      });
+    });
+  });
+
   it('saves version 1 and leaves the licences step outstanding while the rules are provisional', async () => {
     await withTenantDb(organizationId, async (db) => {
       const saved = await caller(db).saveRegulatoryProfile(profile);
@@ -267,7 +422,7 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
     await withTenantDb(organizationId, async (db) => {
       const saved = await caller(db).saveRegulatoryProfile({
         ...profile,
-        effectiveFrom: '2026-10-01',
+        effectiveFrom: day(29),
         licenceNumber: 'LIC-5588',
       });
       expect(saved.version).toBe(2);
@@ -284,7 +439,7 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
   it('refuses a version that starts on or before the one already on file', async () => {
     await withTenantDb(organizationId, async (db) => {
       await expect(
-        caller(db).saveRegulatoryProfile({ ...profile, effectiveFrom: '2026-10-01' })
+        caller(db).saveRegulatoryProfile({ ...profile, effectiveFrom: day(29) })
       ).rejects.toMatchObject({
         code: 'BAD_REQUEST',
         message: expect.stringContaining('must start after the version already on file'),
@@ -400,6 +555,52 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
       const result = await caller(db, otherOrganizationId).regulatory();
       expect(result.branches.map((branch) => branch.id)).toEqual([otherBranchId]);
       expect(result.versions).toEqual([]);
+    });
+  });
+
+  // Use the other tenant so earlier Punjab profiles cannot tie with the Sindh
+  // profile on effectiveFrom when readiness chooses a branch.
+  it('lets a Sindh branch record an operable profile that passes the licences gate (QA-129)', async () => {
+    await withTenantDb(otherOrganizationId, async (db) => {
+      // Sindh publishes RETAIL/WHOLESALE licence categories and G/H schedules,
+      // so a complete profile on that confirmed rule set is one the regulatory
+      // guard allows the branch to operate on — unlike the provisional Punjab a
+      // Karachi branch used to be forced onto.
+      const saved = await caller(db, otherOrganizationId).saveRegulatoryProfile({
+        ...profile,
+        branchId: otherBranchId,
+        effectiveFrom: day(0),
+        provinceCode: 'PK-SD',
+        premisesCity: 'Karachi',
+        licenceCategory: 'RETAIL',
+        licenceNumber: 'SD-LIC-1001',
+        permittedSchedules: ['G', 'H'],
+        fiscalStatus: 'REGISTERED',
+      });
+      expect(saved.version).toBe(1);
+      const stored = await db.branchRegulatoryProfile.findFirst({
+        where: { organizationId: otherOrganizationId, branchId: otherBranchId },
+        include: { jurisdictionRuleSet: true },
+      });
+      expect(stored?.jurisdictionRuleSet.version).toBe(2);
+      expect(stored?.jurisdictionRuleSet.licenceCategories).toMatchObject({
+        pendingLegalReview: true,
+      });
+
+      // The gate the operator came for: with published rules and a complete
+      // profile, premises-and-licences is done and activation is no longer
+      // blocked on it.
+      const licences = saved.readiness.items.find((item) => item.key === 'PREMISES_AND_LICENCES');
+      expect(licences?.state).toBe('DONE');
+
+      const listed = await caller(db, otherOrganizationId).regulatory({ branchId: otherBranchId });
+      expect(listed.versions).toHaveLength(1);
+      expect(listed.versions[0]).toMatchObject({
+        version: 1,
+        inForce: true,
+        provinceName: 'Sindh',
+        licenceCategory: 'RETAIL',
+      });
     });
   });
 });
