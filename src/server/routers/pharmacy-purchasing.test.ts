@@ -1434,3 +1434,119 @@ describe('PUR-06 — the returns and settlement transport', () => {
     );
   });
 });
+
+describe('#979 supplier, requisition and order writes need the procurement capability', () => {
+  const gated = [
+    ['createSupplier', () => caller().createSupplier({ name: 'Karachi Distributors' })],
+    [
+      'recordSupplierLicence',
+      () =>
+        caller().recordSupplierLicence({
+          supplierId: 'supplier_a',
+          licenceType: 'DSL',
+          licenceNumber: 'DSL-1',
+          issuingAuthority: 'DRAP',
+          issuedAt: PAST,
+          expiresAt: FUTURE,
+        }),
+    ],
+    [
+      'setSupplierAuthorization',
+      () => caller().setSupplierAuthorization({ supplierId: 'supplier_a', authorized: true }),
+    ],
+    [
+      'createRequisition',
+      () =>
+        caller().createRequisition({
+          reference: 'REQ-1',
+          lines: [
+            {
+              medicineId: 'medicine_a',
+              packLevelId: 'pack_a',
+              quantityPacks: 1,
+              canonicalUnitsPerPack: 10,
+            },
+          ],
+        }),
+    ],
+    ['submitRequisition', () => caller().submitRequisition({ requisitionId: 'req_a' })],
+    [
+      'recordQuote',
+      () =>
+        caller().recordQuote({
+          requisitionId: 'req_a',
+          supplierId: 'supplier_a',
+          quotedAt: PAST,
+          validUntil: FUTURE,
+          lines: [
+            {
+              requisitionLineId: 'line_a',
+              pricePerPackMinor: 100,
+              forecastSellThroughPacks: 1,
+              canonicalUnitsPerPack: 10,
+            },
+          ],
+        }),
+    ],
+    [
+      'createPurchaseOrder',
+      () =>
+        caller().createPurchaseOrder({
+          reference: 'PO-1',
+          supplierId: 'supplier_a',
+          lines: [ORDER_LINE],
+        }),
+    ],
+    ['submitPurchaseOrder', () => caller().submitPurchaseOrder({ purchaseOrderId: 'po_a' })],
+    [
+      'approvePurchaseOrder',
+      () => caller().approvePurchaseOrder({ purchaseOrderId: 'po_a', decision: 'APPROVED' }),
+    ],
+    ['sendPurchaseOrder', () => caller().sendPurchaseOrder({ purchaseOrderId: 'po_a' })],
+  ] as const;
+
+  it.each(gated)('refuses %s to a cashier before any read or write', async (_name, call) => {
+    mocks.can.mockImplementation(
+      async (_subject: unknown, action: string) => action !== 'pharmacy:procurement'
+    );
+    orderableSupplier();
+    resolvableCatalog();
+
+    await expect(call()).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission for this action.',
+    });
+    expect(mocks.can).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user_a' }),
+      'pharmacy:procurement',
+      undefined,
+      expect.objectContaining({ db, source: 'TRPC' })
+    );
+    for (const delegate of [
+      db.pharmacySupplier,
+      db.pharmacySupplierLicence,
+      db.pharmacyRequisition,
+      db.pharmacyQuote,
+      db.pharmacyPurchaseOrder,
+      db.medicine,
+    ]) {
+      expect(delegate.findFirst).not.toHaveBeenCalled();
+      expect(delegate.create).not.toHaveBeenCalled();
+      expect(delegate.update).not.toHaveBeenCalled();
+    }
+    expect(db.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('lets a procurement holder create a supplier', async () => {
+    await expect(caller().createSupplier({ name: 'Karachi Distributors' })).resolves.toMatchObject({
+      name: 'Karachi Distributors',
+    });
+    expect(mocks.can).toHaveBeenCalledWith(
+      expect.anything(),
+      'pharmacy:procurement',
+      undefined,
+      expect.anything()
+    );
+    expect(db.pharmacySupplier.create).toHaveBeenCalledOnce();
+  });
+});

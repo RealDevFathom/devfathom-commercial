@@ -6,6 +6,7 @@ import { PurchasingOutcomeScope, PurchasingOutcomes } from '../_components/actio
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
 import { hasModule } from '@/lib/entitlements';
+import { actorCanProcure } from '@/lib/pharmacy/procurement-access';
 import type { SupplierSummary } from '@/lib/pharmacy/purchasing-console';
 import {
   AccessState,
@@ -75,6 +76,11 @@ export default async function PharmacySuppliersPage({
     return (
       <AccessState heading={HEADING} description={DESCRIPTION} moduleEnabled={moduleEnabled} />
     );
+  }
+  // #979: suppliers, requisitions and orders are procurement work, closed to a
+  // counter-only role exactly as Goods-in is.
+  if (!(await actorCanProcure(ctx.db, ctx.session.user.id))) {
+    return <AccessState heading={HEADING} description={DESCRIPTION} moduleEnabled />;
   }
 
   const caller = await purchasingCaller();

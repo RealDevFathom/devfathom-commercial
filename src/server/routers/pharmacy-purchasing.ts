@@ -78,7 +78,12 @@ import {
 import type { ReceivingScope } from '@/lib/pharmacy/goods-receipt';
 import { authenticatePharmacyPack } from '@/lib/pharmacy/pack-authentication-operations';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { auditedProtectedProcedure, protectedProcedure, router } from '../trpc';
+import {
+  auditedProtectedProcedure,
+  capabilityProcedure,
+  protectedProcedure,
+  router,
+} from '../trpc';
 import type { TRPCContext } from '../trpc';
 
 /**
@@ -366,10 +371,18 @@ async function supplierFollowUpScope(ctx: TRPCContext, branch: string) {
   return scope;
 }
 
+/**
+ * Supplier, requisition, quote and purchase-order writes are procurement acts.
+ * They need the same `pharmacy:procurement` capability Goods-in already needs,
+ * so a counter-only role (cashier: `pharmacy:counter` + `pharmacy:orders`)
+ * cannot create or authorize suppliers or raise and approve orders (#979).
+ */
+const procurementProcedure = capabilityProcedure('pharmacy:procurement');
+
 const purchasingRouter = router({
   // ----- PUR-01 licensed suppliers -----
 
-  createSupplier: protectedProcedure
+  createSupplier: procurementProcedure
     .input(
       z
         .object({
@@ -386,7 +399,7 @@ const purchasingRouter = router({
     .mutation(({ ctx, input }) => ctx.db.pharmacySupplier.create({ data: input })),
 
   /** Licence evidence is append-only; a correction supersedes the earlier filing. */
-  recordSupplierLicence: protectedProcedure
+  recordSupplierLicence: procurementProcedure
     .input(
       z
         .object({
@@ -419,7 +432,7 @@ const purchasingRouter = router({
       });
     }),
 
-  setSupplierAuthorization: protectedProcedure
+  setSupplierAuthorization: procurementProcedure
     .input(z.object({ supplierId: z.string().min(1), authorized: z.boolean() }).strict())
     .mutation(async ({ ctx, input }) => {
       if (!(await ctx.db.pharmacySupplier.findFirst({ where: { id: input.supplierId } })))
@@ -432,7 +445,7 @@ const purchasingRouter = router({
 
   // ----- PUR-02 requisition -----
 
-  createRequisition: protectedProcedure
+  createRequisition: procurementProcedure
     .input(
       z
         .object({
@@ -487,7 +500,7 @@ const purchasingRouter = router({
       }
     }),
 
-  submitRequisition: protectedProcedure
+  submitRequisition: procurementProcedure
     .input(z.object({ requisitionId: z.string().min(1) }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
@@ -507,7 +520,7 @@ const purchasingRouter = router({
 
   // ----- PUR-02 quotes and comparison -----
 
-  recordQuote: protectedProcedure
+  recordQuote: procurementProcedure
     .input(
       z
         .object({
@@ -626,7 +639,7 @@ const purchasingRouter = router({
 
   // ----- PUR-02 purchase order and approval -----
 
-  createPurchaseOrder: protectedProcedure
+  createPurchaseOrder: procurementProcedure
     .input(
       z
         .object({
@@ -755,7 +768,7 @@ const purchasingRouter = router({
       }
     }),
 
-  submitPurchaseOrder: protectedProcedure
+  submitPurchaseOrder: procurementProcedure
     .input(z.object({ purchaseOrderId: z.string().min(1) }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
@@ -778,7 +791,7 @@ const purchasingRouter = router({
    * it is refused for whoever raised the order or the underlying requisition.
    * A rejection is recorded too, and returns the order to DRAFT.
    */
-  approvePurchaseOrder: protectedProcedure
+  approvePurchaseOrder: procurementProcedure
     .input(
       z
         .object({
@@ -856,7 +869,7 @@ const purchasingRouter = router({
       }
     }),
 
-  sendPurchaseOrder: protectedProcedure
+  sendPurchaseOrder: procurementProcedure
     .input(z.object({ purchaseOrderId: z.string().min(1) }).strict())
     .mutation(async ({ ctx, input }) => {
       try {

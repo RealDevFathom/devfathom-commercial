@@ -9,6 +9,12 @@ const useSessionMock = vi.hoisted(() =>
   vi.fn(() => ({ data: { user: { role: 'ADMIN', name: 'Test operator' } } }))
 );
 const usePathnameMock = vi.hoisted(() => vi.fn(() => '/dashboard'));
+// The pharmacy rail's capability read (#979); unanswered unless a pharmacy case sets it.
+const pharmacyRailQuery = vi.hoisted(() => ({
+  data: undefined as
+    | undefined
+    | { userId: string; organizationId: string | null; capabilities: string[] },
+}));
 // The hospitality rail's one read; unanswered unless a hospitality case sets it.
 const railQuery = vi.hoisted(() => ({
   data: undefined as
@@ -66,6 +72,9 @@ vi.mock('@/lib/trpc', () => ({
     },
     pharmacySafety: {
       access: { useQuery: () => ({ data: { allowed: false } }) },
+    },
+    pharmacyAccess: {
+      navigation: { useQuery: () => ({ data: pharmacyRailQuery.data }) },
     },
   },
 }));
@@ -220,13 +229,20 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
     vertical = 'PHARMACY',
     granted = pharmacyModules,
     pathname = '/dashboard',
+    capabilities = ['pharmacy:procurement', 'reports:operational'],
+    railUserId = 'pharmacy-user-1',
   }: {
     role?: string;
     vertical?: EntitlementView['vertical'];
     granted?: string[];
     pathname?: string;
+    capabilities?: string[];
+    railUserId?: string;
   } = {}) {
-    useSessionMock.mockReturnValue({ data: { user: { role, name: 'Test operator' } } });
+    useSessionMock.mockReturnValue({
+      data: { user: { id: 'pharmacy-user-1', role, name: 'Test operator' } },
+    } as unknown as ReturnType<typeof useSessionMock>);
+    pharmacyRailQuery.data = { userId: railUserId, organizationId: 'pharmacy-1', capabilities };
     usePathnameMock.mockReturnValue(pathname);
     const onNavigate = vi.fn();
     render(
@@ -291,6 +307,21 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
       'Regulatory profile',
       'Branch assignments',
     ]) {
+      expect(screen.queryByRole('link', { name: new RegExp(`${label}$`) })).not.toBeInTheDocument();
+    }
+  });
+
+  it('offers a cashier without procurement or reports neither destination (#979)', () => {
+    renderNavigation({ role: 'MEMBER', capabilities: [] });
+    expect(screen.getByRole('link', { name: /Inventory$/ })).toBeInTheDocument();
+    for (const label of ['Purchasing', 'Reports & Insights', 'Day close', 'Team']) {
+      expect(screen.queryByRole('link', { name: new RegExp(`${label}$`) })).not.toBeInTheDocument();
+    }
+  });
+
+  it('ignores a cached capability answer for another signed-in identity (#979)', () => {
+    renderNavigation({ role: 'MEMBER', railUserId: 'someone-else' });
+    for (const label of ['Purchasing', 'Reports & Insights']) {
       expect(screen.queryByRole('link', { name: new RegExp(`${label}$`) })).not.toBeInTheDocument();
     }
   });

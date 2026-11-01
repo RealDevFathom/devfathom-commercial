@@ -237,6 +237,41 @@ describe('tenancy and licensing (UX rule 7)', () => {
     expect(mocks.createCaller).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['overview', () => OverviewPage({ searchParams: params() })],
+    ['suppliers', () => SuppliersPage({ searchParams: params() })],
+    ['orders', () => OrdersPage({ searchParams: params() })],
+  ] as const)(
+    'closes %s to a cashier who lacks the procurement capability (#979)',
+    async (_surface, page) => {
+      mocks.createTRPCContext.mockResolvedValue({
+        ...contextStub(),
+        db: {
+          user: {
+            findUnique: vi.fn().mockResolvedValue({
+              role: 'EMPLOYEE',
+              organizationRole: {
+                permissions: [
+                  { capability: 'pharmacy:counter', effect: 'ALLOW' },
+                  { capability: 'pharmacy:orders', effect: 'ALLOW' },
+                ],
+              },
+              permissionOverrides: [],
+            }),
+          },
+        },
+      });
+
+      render(await page());
+
+      expect(
+        screen.getByRole('heading', { name: 'You do not have purchasing access' })
+      ).toBeDefined();
+      expect(screen.queryByRole('button', { name: /Add supplier|Create requisition/i })).toBeNull();
+      expect(mocks.createCaller).not.toHaveBeenCalled();
+    }
+  );
+
   it('says "no purchasing access" — a different sentence — when the session has no user', async () => {
     mocks.createTRPCContext.mockResolvedValue({ ...contextStub(), session: null });
 

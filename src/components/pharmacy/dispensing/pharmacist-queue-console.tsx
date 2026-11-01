@@ -15,7 +15,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { QueueActions, type ReviewKind } from './queue-actions';
-import { WorkspaceState } from './field';
+import { AccessDeniedState, WorkspaceState, isAccessDenied } from './field';
 
 export function PharmacistQueueConsole() {
   const utils = trpc.useUtils();
@@ -79,9 +79,15 @@ export function PharmacistQueueConsole() {
         </WorkspaceState>
       ) : null}
       {queue.error ? (
-        <WorkspaceState title="Review queue could not be loaded" tone="danger">
-          {queue.error.message}
-        </WorkspaceState>
+        isAccessDenied(queue.error) ? (
+          <AccessDeniedState title="You do not have pharmacist review access">
+            The pharmacist queue is restricted to users holding the dispensing permission.
+          </AccessDeniedState>
+        ) : (
+          <WorkspaceState title="Review queue could not be loaded" tone="danger">
+            {queue.error.message}
+          </WorkspaceState>
+        )
       ) : null}
       {queue.data?.items.length === 0 ? (
         <WorkspaceState title="Queue clear">
