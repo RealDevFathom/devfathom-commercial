@@ -345,7 +345,10 @@ describe('counter receipt authorization', () => {
     );
   });
 
-  it.each(paths)('$name denies another branch before the receipt is read', async (path) => {
+  // Receipt lookup never refuses a branch: it searches the caller's own branches instead.
+  const branchBound = paths.filter((path) => path.name !== 'lookupReceiptByNumber');
+
+  it.each(branchBound)('$name denies another branch before the receipt is read', async (path) => {
     const f = fixture(dispense);
     assign(f, ['branch-a']);
     await expect(path.run(f.caller(), 'branch-b')).rejects.toMatchObject({ code: 'FORBIDDEN' });
@@ -354,7 +357,7 @@ describe('counter receipt authorization', () => {
     expect(buildPharmacyReceiptEscPosJob).not.toHaveBeenCalled();
   });
 
-  it.each(paths)('$name denies a dispenser with no assignment', async (path) => {
+  it.each(branchBound)('$name denies a dispenser with no assignment', async (path) => {
     const f = fixture(dispense);
     await expect(path.run(f.caller())).rejects.toMatchObject({
       code: 'FORBIDDEN',
@@ -753,10 +756,11 @@ describe('counter receipt authorization', () => {
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(inactive.db.pharmacyBranchAssignment.findMany).not.toHaveBeenCalled();
 
+    // Without an active assignment, lookup has no branch to search: the same "not found".
     const paused = fixture(dispense);
     await expect(
       paused.caller().lookupReceiptByNumber({ branchId: 'branch-a', receiptNumber: 7 })
-    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    ).resolves.toEqual([]);
     expect(paused.db.pharmacySale.findMany).not.toHaveBeenCalled();
   });
 
@@ -832,6 +836,75 @@ describe('counter receipt authorization', () => {
     await expect(
       cashier.caller().counterSaveReceiptFormat({ branchId: 'branch-a', revision: 0, layout })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+
+  describe('receipt lookup scope', () => {
+    const sales = [
+      { id: 'sale-a', branchId: 'branch-a', receiptNumber: 7 },
+      { id: 'sale-b', branchId: 'branch-b', receiptNumber: 8 },
+    ];
+    type LookupArgs = { where: { branchId: { in: string[] }; receiptNumber: number } };
+    function lookupFixture(assigned: string[]) {
+      const f = fixture(dispense);
+      assign(f, assigned);
+      const find = async ({ where }: LookupArgs) =>
+        sales
+          .filter((sale) => where.branchId.in.includes(sale.branchId))
+          .filter((sale) => sale.receiptNumber === where.receiptNumber)
+          .map((sale) => ({
+            ...sale,
+            receiptDeviceId: 'device-a',
+            businessDate: new Date('2026-10-01T00:00:00.000Z'),
+          }));
+      f.db.pharmacySale.findMany.mockImplementation(find as never);
+      return f;
+    }
+    type LookupCall = [LookupArgs];
+    const searchedBranches = (f: ReturnType<typeof fixture>) =>
+      (f.db.pharmacySale.findMany.mock.calls as unknown as LookupCall[]).flatMap(
+        ([args]) => args.where.branchId.in
+      );
+
+    it('finds a receipt in the cashier own active branch', async () => {
+      const f = lookupFixture(['branch-a']);
+      await expect(
+        f.caller().lookupReceiptByNumber({ branchId: 'branch-a', receiptNumber: 7 })
+      ).resolves.toEqual([expect.objectContaining({ id: 'sale-a', branchId: 'branch-a' })]);
+      expect(searchedBranches(f)).toEqual(['branch-a']);
+    });
+
+    it('finds a receipt in another assigned branch after the active branch', async () => {
+      const f = lookupFixture(['branch-a', 'branch-b']);
+      await expect(
+        f.caller().lookupReceiptByNumber({ branchId: 'branch-a', receiptNumber: 8 })
+      ).resolves.toEqual([expect.objectContaining({ id: 'sale-b', branchId: 'branch-b' })]);
+      expect(searchedBranches(f)).toEqual(['branch-a', 'branch-b']);
+    });
+
+    it('answers "not found" for a receipt held by another branch', async () => {
+      const f = lookupFixture(['branch-a']);
+      const api = f.caller();
+      const branchId = 'branch-a';
+      const foreign = await api.lookupReceiptByNumber({ branchId, receiptNumber: 8 });
+      const missing = await api.lookupReceiptByNumber({ branchId, receiptNumber: 99999 });
+      expect(foreign).toEqual([]);
+      expect(foreign).toEqual(missing);
+      expect(searchedBranches(f)).not.toContain('branch-b');
+    });
+
+    it('does not reveal scope when the active branch is not assigned', async () => {
+      const f = lookupFixture(['branch-a']);
+      await expect(
+        f.caller().lookupReceiptByNumber({ branchId: 'branch-b', receiptNumber: 8 })
+      ).resolves.toEqual([]);
+      expect(searchedBranches(f)).toEqual(['branch-a']);
+
+      const none = lookupFixture([]);
+      await expect(
+        none.caller().lookupReceiptByNumber({ branchId: 'branch-a', receiptNumber: 7 })
+      ).resolves.toEqual([]);
+      expect(none.db.pharmacySale.findMany).not.toHaveBeenCalled();
+    });
   });
 
   it('denies a branch that is not in the session organization before the sale is read', async () => {

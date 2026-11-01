@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ReturnForm } from './counter-return-panel';
+import { parseReceiptNumber, ReturnForm } from './counter-return-panel';
 const mocks = vi.hoisted(() => ({
   returnLine: vi.fn(),
   refund: vi.fn(),
@@ -43,7 +43,14 @@ beforeEach(() => {
   mocks.lookup = {
     isSuccess: true,
     data: [
-      { id: 'sale', receiptNumber: 12, businessDate: new Date('2026-09-29'), receiptDeviceId: 'd' },
+      {
+        id: 'sale',
+        branchId: 'b',
+        branchName: null,
+        receiptNumber: 12,
+        businessDate: new Date('2026-09-29'),
+        receiptDeviceId: 'd',
+      },
     ],
   };
   mocks.history = {
@@ -86,7 +93,59 @@ describe('counter returns', () => {
     expect(screen.getByRole('status')).toHaveTextContent('Looking up receipt');
     mocks.lookup = { isSuccess: true, data: [] };
     view.rerender(<ReturnForm {...props} />);
-    expect(screen.getByText('No settled receipt found in this branch.')).toBeVisible();
+    expect(screen.getByText('Receipt not found')).toBeVisible();
+    expect(screen.queryByText(/outside your scope/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retry lookup' })).not.toBeInTheDocument();
+  });
+  it('accepts the printed receipt format and shows a format hint', () => {
+    mocks.lookup = {};
+    mocks.history = {};
+    render(<ReturnForm {...props} />);
+    const field = screen.getByLabelText('Receipt number');
+    expect(field).toHaveAttribute('type', 'text');
+    expect(field).toHaveAccessibleDescription(/for example 1042 or QA-1042/);
+    fireEvent.change(field, { target: { value: 'QA-0000' } });
+    expect(field).toHaveValue('QA-0000');
+    expect(screen.getByRole('button', { name: 'Find receipt' })).toBeEnabled();
+    fireEvent.submit(screen.getByRole('button', { name: 'Find receipt' }).closest('form')!);
+    expect(screen.getByText('Receipt not found')).toBeVisible();
+  });
+  it('reads the receipt sequence from printed references', () => {
+    expect(parseReceiptNumber('1042')).toBe(1042);
+    expect(parseReceiptNumber(' QA-1042 ')).toBe(1042);
+    expect(parseReceiptNumber('Receipt 99999')).toBe(99999);
+    expect(parseReceiptNumber('receipt:7')).toBe(7);
+    expect(parseReceiptNumber('QA-0000')).toBeNull();
+    expect(parseReceiptNumber('QA-')).toBeNull();
+    expect(parseReceiptNumber('12;DROP')).toBeNull();
+  });
+  it('records a return against the branch that holds the chosen receipt', async () => {
+    mocks.lookup = {
+      isSuccess: true,
+      data: [
+        {
+          id: 'sale',
+          branchId: 'b2',
+          branchName: 'North',
+          receiptNumber: 12,
+          businessDate: new Date('2026-09-29'),
+          receiptDeviceId: 'd',
+        },
+      ],
+    };
+    render(<ReturnForm {...props} />);
+    expect(screen.getByRole('button', { name: /Receipt 12 .* North/ })).toBeVisible();
+    chooseReceipt();
+    fireEvent.change(screen.getByLabelText('Sold line'), { target: { value: 'line' } });
+    fireEvent.change(screen.getByLabelText('Quarantine location'), { target: { value: 'q' } });
+    fireEvent.change(screen.getByLabelText('Inspection and integrity decision'), {
+      target: { value: 'seal unknown' },
+    });
+    fireEvent.click(screen.getByLabelText(/I confirm the quantity/));
+    fireEvent.click(screen.getByRole('button', { name: 'Record return' }));
+    await waitFor(() =>
+      expect(mocks.returnLine).toHaveBeenCalledWith(expect.objectContaining({ branchId: 'b2' }))
+    );
   });
   it('explains lookup permission errors and offers retry', () => {
     mocks.lookup = {

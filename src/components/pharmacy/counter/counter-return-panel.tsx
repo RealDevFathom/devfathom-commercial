@@ -50,6 +50,18 @@ type Attempt = z.infer<typeof attemptSchema>;
 type ControlledWitness = { staffProfileId: string; pin: string };
 const witnessPinPattern = /^\d{4,8}$/;
 
+/**
+ * Reads a typed receipt reference. Accepts the printed forms ("1042", "Receipt 1042",
+ * "QA-1042", "receipt:1042") and returns the trailing receipt sequence, or null.
+ */
+export function parseReceiptNumber(value: string): number | null {
+  const trimmed = value.trim();
+  if (!/^[A-Za-z0-9][A-Za-z0-9 :#-]*$/.test(trimmed)) return null;
+  const digits = /(\d+)$/.exec(trimmed)?.[1];
+  const parsed = digits ? Number(digits) : NaN;
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
 export function isBlockedResult(result: unknown): result is { blocked: string } {
   return (
     typeof result === 'object' &&
@@ -110,7 +122,6 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
     try {
       const saved = localStorage.getItem(storageKey);
       const attempt = saved ? attemptSchema.parse(JSON.parse(saved)) : null;
-      if (attempt && attempt.input.branchId !== branchId) throw new Error('Branch mismatch');
       return { attempt, error: '' };
     } catch {
       return {
@@ -127,8 +138,10 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
     () => false
   );
   const [number, setNumber] = useState('');
-  const [searched, setSearched] = useState(0);
+  const [searched, setSearched] = useState<{ value: number | null } | null>(null);
   const [saleId, setSaleId] = useState(recovery.attempt?.saleId ?? '');
+  // The matched receipt may belong to another of the cashier's assigned branches.
+  const [saleBranchId, setSaleBranchId] = useState(recovery.attempt?.input.branchId ?? branchId);
   const [lineId, setLineId] = useState('');
   const [lotId, setLotId] = useState('');
   const [units, setUnits] = useState('1');
@@ -152,15 +165,17 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
   );
   const [error, setError] = useState(recovery.error);
   const lookup = trpc.pharmacySales.lookupReceiptByNumber.useQuery(
-    { branchId, receiptNumber: searched || 1 },
-    { enabled: ready && online && searched > 0, retry: false }
+    { branchId, receiptNumber: searched?.value ?? 1 },
+    { enabled: ready && online && !!searched?.value, retry: false }
   );
+  // A reference with no receipt sequence (for example QA-0000) cannot match any receipt.
+  const unparsed = !!searched && searched.value === null;
   const history = trpc.pharmacySales.returnHistory.useQuery(
-    { branchId, saleId },
+    { branchId: saleBranchId, saleId },
     { enabled: ready && online && !!saleId, retry: false }
   );
   const receipt = trpc.pharmacySales.counterReceipt.useQuery(
-    { branchId, saleId },
+    { branchId: saleBranchId, saleId },
     { enabled: ready && online && !!saleId, retry: false }
   );
   const returnLine = trpc.pharmacySales.returnLine.useMutation();
@@ -384,7 +399,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
         className="flex flex-wrap items-end gap-2"
         onSubmit={(event) => {
           event.preventDefault();
-          setSearched(Number(number));
+          setSearched({ value: parseReceiptNumber(number) });
           setSaleId('');
           setLineId('');
           setTenderId('');
@@ -395,10 +410,12 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
           <Label htmlFor="return-receipt">Receipt number</Label>
           <Input
             id="return-receipt"
-            type="number"
-            min="1"
-            step="1"
+            type="text"
+            autoComplete="off"
+            spellCheck={false}
+            maxLength={40}
             required
+            aria-describedby="return-receipt-hint"
             value={number}
             disabled={locked}
             onChange={(event) => setNumber(event.target.value)}
@@ -409,12 +426,15 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
           type="submit"
           variant="outline"
           className="h-11"
-          disabled={locked || !Number.isSafeInteger(Number(number)) || Number(number) < 1}
+          disabled={locked || !number.trim()}
         >
           Find receipt
         </Button>
+        <p id="return-receipt-hint" className="w-full text-sm text-text-muted">
+          Enter the number printed on the receipt, for example 1042 or QA-1042.
+        </p>
       </form>
-      {lookup.isFetching && searched > 0 && <p role="status">Looking up receipt…</p>}
+      {lookup.isFetching && !!searched?.value && <p role="status">Looking up receipt…</p>}
       {lookup.isError && (
         <p role="alert">
           {counterErrorMessage(lookup.error)}{' '}
@@ -423,10 +443,10 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
           </Button>
         </p>
       )}
-      {searched > 0 && lookup.isSuccess && lookup.data.length === 0 && (
-        <p>No settled receipt found in this branch.</p>
+      {(unparsed || (!!searched?.value && lookup.isSuccess && lookup.data.length === 0)) && (
+        <p role="status">Receipt not found</p>
       )}
-      {!!lookup.data?.length && (
+      {!unparsed && !!lookup.data?.length && (
         <div className="space-y-2">
           <p>Choose the matching date and counter. Receipt numbers can repeat.</p>
           {lookup.data.map((row) => (
@@ -437,6 +457,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
               disabled={locked}
               aria-pressed={row.id === saleId}
               onClick={() => {
+                setSaleBranchId(row.branchId);
                 setSaleId(row.id);
                 setLineId('');
                 setTenderId('');
@@ -445,6 +466,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
             >
               Receipt {row.receiptNumber} · {row.businessDate?.toISOString().slice(0, 10)} ·{' '}
               {row.receiptDeviceId}
+              {row.branchName ? ` · ${row.branchName}` : ''}
             </Button>
           ))}
         </div>
@@ -636,7 +658,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
                     kind: 'return',
                     saleId,
                     input: {
-                      branchId,
+                      branchId: saleBranchId,
                       saleLineId: lineId,
                       lotId: lotId || undefined,
                       canonicalUnits: Number(units),
@@ -715,7 +737,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
                   kind: 'refund',
                   saleId,
                   input: {
-                    branchId,
+                    branchId: saleBranchId,
                     originalTenderId: tenderId,
                     amountMinor,
                     deviceId: deviceId(),

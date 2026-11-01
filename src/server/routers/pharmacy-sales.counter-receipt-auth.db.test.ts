@@ -284,9 +284,10 @@ describeIfDatabase('counter receipt authorization against Postgres', () => {
         code: 'FORBIDDEN',
         message: 'Branch is outside your scope.',
       });
+      // Lookup searches only the caller's own branches; branch B's receipt is never returned.
       await expect(
         api.lookupReceiptByNumber({ branchId: ids.branchB, receiptNumber: 7 })
-      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      ).resolves.toEqual([expect.objectContaining({ id: ids.saleA })]);
       await expect(
         api.counterReceiptPrintJob({
           branchId: ids.branchB,
