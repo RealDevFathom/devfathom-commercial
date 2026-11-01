@@ -27,9 +27,11 @@ import {
 import { summarizeSopReport } from '@/lib/restaurant/sop-reporting';
 import { businessDateToUtcDate } from '@/lib/restaurant/business-date';
 import { can, subjectFromSession } from '@/lib/abac';
-import { authenticateOperator } from '@/lib/restaurant/terminal-auth';
-import { operatorHasCapability } from '@/lib/restaurant/checkout-routes';
-import { withTenantDb } from '@/lib/tenancy/scoped-db';
+import {
+  APPROVER_REFUSED_MESSAGE,
+  verifyBackOfficeApprover,
+  withBackOfficeApprovalScope,
+} from '@/lib/restaurant/back-office-approval';
 
 import { requireSopActor } from '@/lib/restaurant/sop-actor';
 import { requireRestaurantBranchScope } from '@/server/restaurant-branch-scope';
@@ -266,10 +268,7 @@ function isOccurrenceVisible(
  * so no caller — operator or organization-wide supervisor — can attribute SOP
  * work to another staff member.
  */
-async function authorizeExecutionMutation(
-  ctx: TRPCContext,
-  occurrenceId: string
-): Promise<string> {
+async function authorizeExecutionMutation(ctx: TRPCContext, occurrenceId: string): Promise<string> {
   const occ = await ctx.db.restaurantSopOccurrence.findUnique({
     where: { id: occurrenceId },
     select: {
@@ -827,68 +826,53 @@ export const restaurantSopExecutionRouter = router({
       assertSopDepth(ctx.entitlements, 'sop.waiver');
       try {
         const actorStaffProfileId = await requireSopActor(ctx);
-        if (actorStaffProfileId === input.approvingStaffProfileId.trim()) {
-          throw new SopVerificationError(
-            'A distinct approving manager is required.',
-            'CO_AUTH_REQUIRED'
-          );
-        }
         const occurrence = await ctx.db.restaurantSopOccurrence.findUnique({
           where: { id: input.occurrenceId },
           select: { branchId: true },
         });
         if (!occurrence) throw new SopVerificationError('Occurrence not found.', 'NOT_FOUND');
-        // Commit credential attempts independently of the request transaction: a
-        // refusal must not roll back the durable brute-force counters.
-        const auth = await withTenantDb(ctx.entitlements.organizationId!, async (db) => {
-          // Serialize attempts before reading counters or comparing a PIN. Parallel
-          // guesses must not overwrite each other's durable lockout progress.
-          await db.$queryRawUnsafe(
-            `SELECT id FROM restaurant_operator_credentials
-             WHERE "staffProfileId" = $1 AND type::text = $2
-               AND "deviceId" IS NULL AND "revokedAt" IS NULL
-             ORDER BY id FOR UPDATE`,
-            input.approvingStaffProfileId,
-            input.approvingType
-          );
-          return authenticateOperator(db, {
-            staffProfileId: input.approvingStaffProfileId,
-            type: input.approvingType,
-            secret: input.approvingSecret,
-            now: new Date(),
-          });
-        });
-        if (!auth.ok) {
-          throw new TRPCError({
-            // One code for every refusal: callers must not learn lockout state.
-            code: 'FORBIDDEN',
-            message: 'Approving credential is invalid or locked.',
-          });
-        }
-        if (
-          !(await operatorHasCapability(
-            ctx.db,
-            auth.staffProfileId,
-            'sop:verify',
-            new Date(),
-            occurrence.branchId
-          ))
-        ) {
-          throw new SopVerificationError(
-            'Approver lacks SOP verification permission.',
-            'CO_AUTH_REQUIRED'
-          );
-        }
-        const result = await waiveOccurrence(ctx.db, {
-          occurrenceId: input.occurrenceId,
-          actorStaffProfileId,
-          approvingStaffProfileId: auth.staffProfileId,
-          reason: input.reason,
-        });
+        // The approver proves their identity server-side (PIN/badge, durable
+        // lockout) and must hold `sop:verify` at the occurrence branch. A distinct
+        // approver is required unless the session actor is a sole owner who has
+        // just re-entered their PIN (`verifyBackOfficeApprover`); that solo
+        // self-approval is stamped on the co-authorization written with the waive.
+        const { result, mode } = await withBackOfficeApprovalScope(
+          { actingStaffProfileId: actorStaffProfileId },
+          async () => {
+            const approval = await verifyBackOfficeApprover(ctx.db, {
+              organizationId: ctx.entitlements.organizationId!,
+              actingStaffProfileId: actorStaffProfileId,
+              approvingStaffProfileId: input.approvingStaffProfileId,
+              type: input.approvingType,
+              secret: input.approvingSecret,
+              capability: 'sop:verify',
+              branchId: occurrence.branchId,
+            });
+            if (!approval.ok) {
+              throw new TRPCError({
+                // One code and message for every refusal: callers must not learn
+                // lockout state, staff existence, or approver permissions.
+                code: 'FORBIDDEN',
+                message: APPROVER_REFUSED_MESSAGE,
+              });
+            }
+            const waived = await waiveOccurrence(ctx.db, {
+              occurrenceId: input.occurrenceId,
+              actorStaffProfileId,
+              approvingStaffProfileId: approval.staffProfileId,
+              reason: input.reason,
+            });
+            return { result: waived, mode: approval.mode };
+          }
+        );
         annotateAudit(ctx, {
           targetType: 'RestaurantSopOccurrence',
           targetId: input.occurrenceId,
-          description: 'Waived SOP occurrence',
+          description:
+            mode === 'OWNER_PIN_REAUTHENTICATION'
+              ? 'Waived SOP occurrence (sole-owner PIN self-approval)'
+              : 'Waived SOP occurrence',
+          metadata: { approvalMode: mode },
         });
         return result;
       } catch (err) {

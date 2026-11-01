@@ -641,6 +641,88 @@ describe('waive', () => {
     });
     expect(result.action).toBe('WAIVE');
   });
+
+  describe('sole-owner self-approval', () => {
+    const owner = { id: 'staff_a', user: { organizationRole: { key: 'owner' } }, jobRoles: [] };
+    const selfWaiver = {
+      occurrenceId: OCC_ID,
+      approvingStaffProfileId: 'staff_a',
+      approvingType: 'PIN' as const,
+      approvingSecret: '4821',
+      reason: 'Closed for the day',
+    };
+    function staffRoster(roster: unknown[]) {
+      db.restaurantStaffProfile.findMany.mockImplementation(
+        async (args: { select?: { user?: unknown } }) =>
+          // `isSoloOwner` selects the user's role; the session lookup selects ids.
+          args?.select?.user ? roster : [{ id: 'staff_a' }]
+      );
+    }
+
+    beforeEach(() => {
+      db.restaurantSopOccurrence.findUnique.mockResolvedValue({
+        id: OCC_ID,
+        branchId: 'branch_1',
+        status: 'MISSED',
+      });
+      db.restaurantCoAuthorization.create.mockResolvedValue({ id: 'coauth_solo' });
+      db.restaurantSopVerification.create.mockResolvedValue({ id: 'ver_1', createdAt: new Date() });
+      mocks.authenticateOperator.mockResolvedValue({ ok: true, staffProfileId: 'staff_a' });
+    });
+
+    it('lets the only active staff member, an owner, waive after a fresh PIN', async () => {
+      staffRoster([owner]);
+      await expect(caller().waive(selfWaiver)).resolves.toMatchObject({ action: 'WAIVE' });
+      expect(mocks.authenticateOperator).toHaveBeenCalledWith(db, {
+        staffProfileId: 'staff_a',
+        type: 'PIN',
+        secret: '4821',
+        now: expect.any(Date),
+      });
+      expect(db.restaurantCoAuthorization.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            actingStaffProfileId: 'staff_a',
+            approvingStaffProfileId: 'staff_a',
+            reason: 'Closed for the day [Owner PIN reauthentication]',
+          }),
+        })
+      );
+      expect(mocks.annotateAudit).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ metadata: { approvalMode: 'OWNER_PIN_REAUTHENTICATION' } })
+      );
+    });
+
+    it('refuses a solo owner whose PIN is wrong, without writing the waiver', async () => {
+      staffRoster([owner]);
+      mocks.authenticateOperator.mockResolvedValue({ ok: false, reason: 'INVALID' });
+      await expect(
+        caller().waive({ ...selfWaiver, approvingSecret: '0000' })
+      ).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'Approving credential is invalid or locked.',
+      });
+      expect(db.restaurantCoAuthorization.create).not.toHaveBeenCalled();
+      expect(db.restaurantSopOccurrence.update).not.toHaveBeenCalled();
+    });
+
+    it('refuses self-approval when a second active staff member exists', async () => {
+      staffRoster([owner, { id: 'staff_b', user: null, jobRoles: [] }]);
+      await expect(caller().waive(selfWaiver)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(db.restaurantCoAuthorization.create).not.toHaveBeenCalled();
+      expect(db.restaurantSopOccurrence.update).not.toHaveBeenCalled();
+    });
+
+    it('refuses self-approval by badge (a PIN re-entry is required)', async () => {
+      staffRoster([owner]);
+      await expect(
+        caller().waive({ ...selfWaiver, approvingType: 'BADGE', approvingSecret: 'badge-1' })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(mocks.authenticateOperator).not.toHaveBeenCalled();
+      expect(db.restaurantCoAuthorization.create).not.toHaveBeenCalled();
+    });
+  });
 });
 
 // ── acknowledge command ────────────────────────────────────────────────────────
