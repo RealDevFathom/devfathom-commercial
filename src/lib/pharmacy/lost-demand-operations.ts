@@ -709,7 +709,7 @@ export async function executeLostDemandAction(
                     lines: {
                       create: [
                         {
-                          organizationId: actor.organizationId,
+                          // organizationId is derived from the composite parent relation.
                           ...line,
                           lineNumber: 1,
                           orderedCanonicalUnits: line.orderedPacks * supplier.packUnits,
@@ -740,7 +740,7 @@ export async function executeLostDemandAction(
                     allocatedById: actor.userId,
                     lines: {
                       create: source.lines.map((line) => ({
-                        organizationId: actor.organizationId,
+                        // organizationId is derived from the composite parent relation.
                         sourceBranchId: draft.fromBranchId,
                         ...line,
                       })),

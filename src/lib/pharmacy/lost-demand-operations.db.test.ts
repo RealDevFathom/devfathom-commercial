@@ -144,7 +144,6 @@ async function fixture() {
         authorized: true,
         licences: {
           create: {
-            organizationId,
             licenceType: 'DISTRIBUTOR',
             licenceNumber: tag,
             issuingAuthority: 'Test',
@@ -164,7 +163,6 @@ async function fixture() {
         requestedByUserId: userId,
         lines: {
           create: {
-            organizationId,
             lineNumber: 1,
             medicineId: medicine.id,
             packLevelId: pack.id,
@@ -185,7 +183,6 @@ async function fixture() {
         validUntil: expiresAt,
         lines: {
           create: {
-            organizationId,
             requisitionLineId: requisition.lines[0].id,
             pricePerPackMinor: 1000,
             canonicalUnitsPerPack: 10,
