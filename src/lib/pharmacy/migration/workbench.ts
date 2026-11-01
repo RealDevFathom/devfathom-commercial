@@ -284,7 +284,12 @@ export async function importCatalogueSource(
   if (profile.exceptions.some((exception) => exception.severity === 'BLOCKING')) {
     throw new PharmacyCatalogueImportError();
   }
-  return db.$transaction(async (tx) => {
+  return db.$transaction(async (transaction) => {
+    // `db` is always a tenant-scoped client (`withTenantDb`), whose nested
+    // `$transaction` hands back the same scoped proxy — model delegates and a
+    // re-entrant `$transaction` included. Prisma types the callback argument as
+    // the narrower transaction client, so restore the application-facing type.
+    const tx = transaction as unknown as ScopedDb;
     const source = await recordSource(tx, {
       kind: devfathomCatalogueProfiler.kind,
       fileName: input.fileName,
