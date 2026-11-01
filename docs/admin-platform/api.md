@@ -73,10 +73,13 @@ permissions granted by a custom role. SCIM credential management can delegate
 role assignment to a directory provider and also requires the identity module
 when creating a token.
 
-`organizationAdmin.updateMember` always submits base and custom roles, so the
-role capability is required even when those values are unchanged. Profile-only
-edits through `team.adminUpdateMember` omit `role` and retain their existing
-admin permission gate.
+Every team-member edit requires `team:setRole`, including profile-only and
+status-only edits. This covers `organizationAdmin.updateMember`,
+`team.inviteMember`, `team.adminUpdateMember`, `team.adminResetPassword`, and
+the matching assistant tools (`inviteMember`, `updateMember`, `setMemberStatus`,
+`resetMemberPassword`). The member editors send `role` only when it changed;
+when `organizationAdmin.updateMember` receives no `role`, the stored base role
+is kept.
 
 All existing product routers remain available through the same tenant context.
 

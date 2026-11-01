@@ -10,7 +10,7 @@ import {
   capabilityProcedure,
   assertModuleLicensed,
 } from '../trpc';
-import { can, subjectFromSession } from '@/lib/abac';
+import { can, subjectFromSession, type CanOptions } from '@/lib/abac';
 import { assertNotificationOwner } from '../authz';
 import { annotateAudit, diffChanges } from '../audit';
 import { appUrl, templates, sendEmail } from '@/lib/email';
@@ -49,6 +49,27 @@ const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 // IMP-HR-01: the leave types we track balances for (mirrors the LeaveType enum).
 const LEAVE_TYPES = ['VACATION', 'SICK', 'REMOTE'] as const;
+
+/**
+ * Team-member edits, invitations, and password resets can all grant or move
+ * access. `adminProcedure` only proves coarse admin access; `team:setRole` is
+ * independently revocable, so honor a DENY before touching member data.
+ */
+async function assertMaySetRole(ctx: {
+  session: { user: Parameters<typeof subjectFromSession>[0] };
+  db: CanOptions['db'];
+}) {
+  const allowed = await can(subjectFromSession(ctx.session.user), 'team:setRole', undefined, {
+    source: 'TRPC',
+    db: ctx.db,
+  });
+  if (!allowed) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission for this action.',
+    });
+  }
+}
 
 // IMP-HR-01: inclusive whole-day span of a leave request (Jun 3 → Jun 5 = 3 days).
 // Normalize to local midnight so partial-day timestamps don't skew the count.
@@ -154,21 +175,7 @@ export const teamRouter = router({
       // `adminProcedure` only proves the caller has coarse admin access. Role
       // assignment is independently revocable, so honor a custom DENY before
       // looking up invitation data or creating a member.
-      const maySetRole = await can(
-        subjectFromSession(ctx.session.user),
-        'team:setRole',
-        undefined,
-        {
-          source: 'TRPC',
-          db: ctx.db,
-        }
-      );
-      if (!maySetRole) {
-        throw new TRPCError({
-          code: 'FORBIDDEN',
-          message: 'You do not have permission for this action.',
-        });
-      }
+      await assertMaySetRole(ctx);
       const email = input.email;
       const department = await ctx.db.organizationDepartment.findFirst({
         where: { key: input.department, active: true },
@@ -831,22 +838,9 @@ export const teamRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const { id, ...data } = input;
-      if (input.role !== undefined) {
-        // Keep profile-only edits behind the existing admin gate, but require
-        // the independently revocable role capability for privilege changes.
-        const maySetRole = await can(
-          subjectFromSession(ctx.session.user),
-          'team:setRole',
-          undefined,
-          { source: 'TRPC', db: ctx.db }
-        );
-        if (!maySetRole) {
-          throw new TRPCError({
-            code: 'FORBIDDEN',
-            message: 'You do not have permission for this action.',
-          });
-        }
-      }
+      // Every member edit (profile, status, or role) requires the independently
+      // revocable role capability on top of the coarse admin gate.
+      await assertMaySetRole(ctx);
       if (input.department) {
         const department = await ctx.db.organizationDepartment.findFirst({
           where: { key: input.department, active: true },
@@ -915,6 +909,9 @@ export const teamRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      // A password reset lets the caller assume the member's access, so it is
+      // gated like a role change (mirrors organizationAdmin.resetMemberPassword).
+      await assertMaySetRole(ctx);
       const hashed = await hash(input.newPassword, 12);
       // AUTH-01: an admin reset must also revoke the member's existing sessions.
       const user = await ctx.db.user.update({

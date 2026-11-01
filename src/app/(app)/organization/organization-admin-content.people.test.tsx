@@ -168,6 +168,31 @@ describe('organization people and access — staff onboarding', () => {
     expect(options).toEqual(['Counter', 'Dispensary', 'Store']);
   });
 
+  it('omits an unchanged system role when updating member access', () => {
+    render(<OrganizationAdminContent />);
+
+    const form = screen.getByRole('button', { name: 'Update access', hidden: true }).closest('form')!;
+    fireEvent.submit(form);
+
+    const update = mutationFor('updateMember').mutate;
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'owner_1', status: 'ACTIVE', department: 'COUNTER' })
+    );
+    expect(update.mock.calls[0]![0]).not.toHaveProperty('role');
+  });
+
+  it('sends a changed system role for server authorization', () => {
+    render(<OrganizationAdminContent />);
+
+    const form = screen.getByRole('button', { name: 'Update access', hidden: true }).closest('form')!;
+    fireEvent.change(form.querySelector('select[name="role"]')!, { target: { value: 'HR' } });
+    fireEvent.submit(form);
+
+    expect(mutationFor('updateMember').mutate).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'owner_1', role: 'HR' })
+    );
+  });
+
   it('shows the complete password policy when adding or resetting a staff password', () => {
     render(<OrganizationAdminContent />);
 

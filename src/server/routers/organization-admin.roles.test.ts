@@ -32,6 +32,7 @@ const db = {
   },
   organizationRolePermission: { deleteMany: vi.fn(), createMany: vi.fn() },
   organizationScimToken: { findFirst: vi.fn(), create: vi.fn(), update: vi.fn() },
+  $transaction: vi.fn(async (run: (tx: unknown) => Promise<unknown>) => run(db)),
 };
 
 function caller(enabledModules = ['identity']) {
@@ -69,6 +70,14 @@ const memberInput = {
   title: 'Manager',
   department: 'LEADERSHIP',
 };
+// The editor omits an unchanged base role; every member edit is still gated.
+const profileOnlyInput = {
+  id: memberInput.id,
+  status: memberInput.status,
+  organizationRoleId: memberInput.organizationRoleId,
+  title: memberInput.title,
+  department: memberInput.department,
+};
 // Synthetic policy-valid input; never used as a credential outside these mocks.
 const testPassword = 'Aa1'.repeat(4);
 const scimInput = { name: 'Test directory', expiresAt: null };
@@ -88,6 +97,10 @@ const mutations = [
   {
     name: 'remove a custom role',
     run: () => caller().updateMember({ ...memberInput, id: 'admin_a' }),
+  },
+  {
+    name: 'edit a member profile without sending a role',
+    run: () => caller().updateMember({ ...profileOnlyInput, title: 'Senior manager' }),
   },
   {
     name: 'create an admin',
@@ -234,6 +247,31 @@ describe('organization role authorization with the real ABAC engine', () => {
         passwordChangedAt: null,
         mustChangePassword: true,
         tokenVersion: { increment: 1 },
+      },
+    });
+  });
+
+  it('keeps the stored base role when an unrestricted admin omits it', async () => {
+    db.user.findFirst.mockResolvedValue({
+      id: 'member_b',
+      status: 'ACTIVE',
+      role: 'HR',
+      email: 'member@example.test',
+    });
+    db.organizationDepartment.findFirst.mockResolvedValue({ id: 'dept_leadership' });
+    db.user.update.mockResolvedValue({ id: 'member_b', email: 'member@example.test' });
+
+    await caller().updateMember({ ...profileOnlyInput, title: 'Senior manager' });
+
+    expect(db.user.update).toHaveBeenCalledWith({
+      where: { id: 'member_b' },
+      data: {
+        role: 'HR',
+        status: 'ACTIVE',
+        organizationRoleId: null,
+        title: 'Senior manager',
+        department: 'LEADERSHIP',
+        tokenVersion: undefined,
       },
     });
   });

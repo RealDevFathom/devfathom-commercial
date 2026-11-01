@@ -499,7 +499,9 @@ export const organizationAdminRouter = router({
     .input(
       z.object({
         id: z.string(),
-        role: z.enum(['ADMIN', 'HR', 'EMPLOYEE']),
+        // Optional: the editor omits an unchanged base role. The procedure still
+        // requires `team:setRole` for every member edit.
+        role: z.enum(['ADMIN', 'HR', 'EMPLOYEE']).optional(),
         status: z.enum(['ACTIVE', 'INACTIVE', 'ON_LEAVE', 'INVITED']),
         organizationRoleId: z.string().nullable(),
         title: z.string().trim().min(1).max(150),
@@ -519,6 +521,7 @@ export const organizationAdminRouter = router({
       });
       if (!department) throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invalid department.' });
       const activating = !occupiesSeat(before.status) && occupiesSeat(input.status);
+      const nextRole = input.role ?? before.role;
       if (input.organizationRoleId) {
         const role = await ctx.db.organizationRole.findFirst({
           where: { id: input.organizationRoleId, organizationId: id },
@@ -533,7 +536,7 @@ export const organizationAdminRouter = router({
         const removesActiveAdmin =
           before.role === 'ADMIN' &&
           before.status === 'ACTIVE' &&
-          (input.role !== 'ADMIN' || input.status !== 'ACTIVE');
+          (nextRole !== 'ADMIN' || input.status !== 'ACTIVE');
 
         // Serialize every transition that can remove an active admin. Reading the
         // count before taking this lock would let two concurrent demotions both
@@ -555,13 +558,13 @@ export const organizationAdminRouter = router({
         return tx.user.update({
           where: { id: input.id },
           data: {
-            role: input.role,
+            role: nextRole,
             status: input.status,
             organizationRoleId: input.organizationRoleId,
             title: input.title,
             department: input.department,
             tokenVersion:
-              before.role !== input.role || before.status !== input.status
+              before.role !== nextRole || before.status !== input.status
                 ? { increment: 1 }
                 : undefined,
           },

@@ -233,18 +233,59 @@ describe('team.inviteMember duplicate guard', () => {
     });
   });
 
-  it('allows profile-only updates when team:setRole is denied', async () => {
+  it.each([
+    ['profile', { title: 'Senior Engineer' }],
+    ['status', { status: 'ON_LEAVE' as const }],
+  ])('rejects %s-only updates when team:setRole is denied', async (_kind, edit) => {
     mocks.can.mockImplementation(async (_subject, action) => action !== 'team:setRole');
+
+    await expect(
+      caller(1, ['admin', 'hr']).adminUpdateMember({ id: 'user_2', ...edit })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+
+    expect(mocks.can).toHaveBeenCalledWith(
+      expect.anything(),
+      'team:setRole',
+      undefined,
+      expect.objectContaining({ source: 'TRPC', db })
+    );
+    expect(mocks.findUnique).not.toHaveBeenCalled();
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+
+  it('allows profile-only updates when team:setRole is granted', async () => {
     mocks.findUnique.mockResolvedValue({ id: 'user_2', role: 'EMPLOYEE' });
     mocks.update.mockResolvedValue({ id: 'user_2', name: 'Alex Carter' });
 
     await caller(1, ['admin', 'hr']).adminUpdateMember({ id: 'user_2', title: 'Senior Engineer' });
 
-    expect(mocks.can.mock.calls.map(([, action]) => action)).toEqual(['admin:access']);
+    expect(mocks.can.mock.calls.map(([, action]) => action)).toEqual([
+      'admin:access',
+      'team:setRole',
+    ]);
     expect(mocks.update).toHaveBeenCalledWith({
       where: { id: 'user_2' },
       data: { title: 'Senior Engineer' },
     });
+  });
+
+  it('rejects a password reset when team:setRole is denied', async () => {
+    mocks.can.mockImplementation(async (_subject, action) => action !== 'team:setRole');
+
+    await expect(
+      caller(1, ['admin', 'hr']).adminResetPassword({
+        id: 'user_2',
+        newPassword: 'Aa1'.repeat(4),
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+
+    expect(mocks.can).toHaveBeenCalledWith(
+      expect.anything(),
+      'team:setRole',
+      undefined,
+      expect.objectContaining({ source: 'TRPC', db })
+    );
+    expect(mocks.update).not.toHaveBeenCalled();
   });
 
   it('retains seat limits without HR', async () => {

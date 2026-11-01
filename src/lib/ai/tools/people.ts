@@ -691,6 +691,11 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
       needsApproval: true,
       execute: async ({ name, status }) => {
         if (!h.isAdmin) return { error: "Only admins can change a team member's status." };
+        // Same gate as team.adminUpdateMember: every member edit needs the
+        // independently revocable role capability, not just the session role.
+        if (!(await h.can('team:setRole'))) {
+          return { error: 'You do not have permission to change team member access.' };
+        }
         const r = await h.resolvePerson(name, { includeInactive: true });
         if (r.kind === 'notfound') return { error: `No team member matches "${name}".` };
         if (r.kind === 'ambiguous')
@@ -757,6 +762,10 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
       needsApproval: true,
       execute: async ({ name, email, role, department, title, phone, bio, skills }) => {
         if (!h.isAdmin) return { error: 'Only admins can invite members.' };
+        // Same gate as team.inviteMember: an invite assigns a role.
+        if (!(await h.can('team:setRole'))) {
+          return { error: 'You do not have permission to change team member access.' };
+        }
         // D10: normalize BEFORE validating, so a padded or upper-cased address
         // the model echoed back from a chat message is accepted and stored in the
         // one canonical form used by the guard, the create, and the invitation.
@@ -881,6 +890,11 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
       needsApproval: true,
       execute: async ({ name, role, department, title, phone, bio, skills }) => {
         if (!h.isAdmin) return { error: 'Only admins can update team members.' };
+        // Same gate as team.adminUpdateMember: honor a team:setRole DENY for
+        // every member edit, not just the raw session role.
+        if (!(await h.can('team:setRole'))) {
+          return { error: 'You do not have permission to change team member access.' };
+        }
         const r = await h.resolvePerson(name, { includeInactive: true });
         if (r.kind === 'notfound') return { error: `No team member matches "${name}".` };
         if (r.kind === 'ambiguous')
@@ -995,6 +1009,10 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
       needsApproval: true,
       execute: async ({ name, newPassword }) => {
         if (!h.isAdmin) return { error: 'Only admins can reset passwords.' };
+        // Same gate as team.adminResetPassword: a reset hands over the member's access.
+        if (!(await h.can('team:setRole'))) {
+          return { error: 'You do not have permission to change team member access.' };
+        }
         if (!passwordMeetsPolicy(newPassword)) {
           return {
             error:
