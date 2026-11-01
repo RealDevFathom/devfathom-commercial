@@ -477,37 +477,44 @@ const purchasingRouter = router({
     .meta(PROCUREMENT)
     .input(z.object({ licenceId: z.string().min(1) }).strict())
     .mutation(async ({ ctx, input }) => {
-      const actorId = ctx.session.user.id;
-      const filed = await ctx.db.pharmacySupplierLicence.findFirst({
-        where: { id: input.licenceId },
-      });
-      if (!filed) throw new TRPCError({ code: 'NOT_FOUND', message: 'NOT_FOUND' });
-      if (filed.verifiedAt)
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'INVALID_TRANSITION' });
-      if (
-        await ctx.db.pharmacySupplierLicence.findFirst({
-          where: { supersedesId: filed.id },
-          select: { id: true },
-        })
-      )
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'INVALID_TRANSITION' });
-      const someoneElseFiled =
-        filed.recordedByUserId !== null && filed.recordedByUserId !== actorId;
-      if (!someoneElseFiled && !(await isSoloOwner(ctx))) throw selfVerification();
-      return ctx.db.pharmacySupplierLicence.create({
-        data: {
-          supplierId: filed.supplierId,
-          licenceType: filed.licenceType,
-          licenceNumber: filed.licenceNumber,
-          issuingAuthority: filed.issuingAuthority,
-          issuedAt: filed.issuedAt,
-          expiresAt: filed.expiresAt,
-          evidenceUri: filed.evidenceUri,
-          supersedesId: filed.id,
-          recordedByUserId: actorId,
-          verifiedAt: new Date(),
-          verifiedByUserId: actorId,
-        },
+      const { organizationId, actorId } = procurementActor(ctx);
+      // One transaction holding the filing's row lock: two colleagues verifying
+      // the same filing at once serialize here, and the second then sees the
+      // first one's superseding row and is refused (#979).
+      return ctx.db.$transaction(async (tx) => {
+        const db = txDb(tx);
+        await db.$queryRaw`SELECT id FROM pharmacy_supplier_licences WHERE id=${input.licenceId} AND "organizationId"=${organizationId} FOR UPDATE`;
+        const filed = await db.pharmacySupplierLicence.findFirst({
+          where: { id: input.licenceId },
+        });
+        if (!filed) throw new TRPCError({ code: 'NOT_FOUND', message: 'NOT_FOUND' });
+        if (filed.verifiedAt)
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'INVALID_TRANSITION' });
+        if (
+          await db.pharmacySupplierLicence.findFirst({
+            where: { supersedesId: filed.id },
+            select: { id: true },
+          })
+        )
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'INVALID_TRANSITION' });
+        const someoneElseFiled =
+          filed.recordedByUserId !== null && filed.recordedByUserId !== actorId;
+        if (!someoneElseFiled && !(await isSoloOwner(ctx, db))) throw selfVerification();
+        return db.pharmacySupplierLicence.create({
+          data: {
+            supplierId: filed.supplierId,
+            licenceType: filed.licenceType,
+            licenceNumber: filed.licenceNumber,
+            issuingAuthority: filed.issuingAuthority,
+            issuedAt: filed.issuedAt,
+            expiresAt: filed.expiresAt,
+            evidenceUri: filed.evidenceUri,
+            supersedesId: filed.id,
+            recordedByUserId: actorId,
+            verifiedAt: new Date(),
+            verifiedByUserId: actorId,
+          },
+        });
       });
     }),
 
@@ -1194,10 +1201,18 @@ const purchasingRouter = router({
           if (input.purchaseOrderId) {
             // Lock the referenced order before validating any mutable data so
             // cancellation cannot commit while the receipt is being checked.
-            await lockReceivablePurchaseOrder(db, scope, {
+            const order = await lockReceivablePurchaseOrder(db, scope, {
               purchaseOrderId: input.purchaseOrderId,
               supplierId: input.supplierId,
             });
+            // An organization-wide order raised from a branch requisition is
+            // still that branch's demand: receiving against it needs reach
+            // there too, as every other order-scoped procedure does (#979).
+            await assertOrderBranches(
+              ctx,
+              { branchId: order.branchId, requisitionId: order.requisitionId },
+              db
+            );
           }
           // PUR-01: an unauthorized or licence-expired supplier cannot be
           // received from, checked here and again when the receipt posts.
@@ -1382,6 +1397,25 @@ const purchasingRouter = router({
     .mutation(async ({ ctx, input }) => {
       await assertProcurement(ctx);
       const scope = await receivingScope(ctx, input.branchId);
+      // The receipt's order carries the branch of the requisition it came from;
+      // posting against it needs reach there too (#979). The order's link to a
+      // receipt and to its requisition does not change once the receipt exists.
+      const receipt = await ctx.db.pharmacyGoodsReceipt.findFirst({
+        where: { id: input.goodsReceiptId, organizationId: scope.organizationId },
+        select: { purchaseOrderId: true },
+      });
+      if (receipt?.purchaseOrderId) {
+        const order = await ctx.db.pharmacyPurchaseOrder.findFirst({
+          where: { id: receipt.purchaseOrderId, organizationId: scope.organizationId },
+          select: { branchId: true, requisition: { select: { branchId: true } } },
+        });
+        if (order) {
+          await assertOrderBranches(ctx, {
+            branchId: order.branchId,
+            requisitionBranchId: order.requisition?.branchId ?? null,
+          });
+        }
+      }
       // Lockout counters commit even when the PIN is refused. Stock posting is
       // a second transaction, so a refused PIN never leaves a half-posted receipt.
       const attempt = await ctx.db.$transaction((tx) =>

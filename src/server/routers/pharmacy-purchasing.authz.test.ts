@@ -52,6 +52,9 @@ const PEOPLE: Record<string, Person> = {
   owner: { role: 'ADMIN', grants: ['*', 'pharmacy:dispense'] },
   // Legacy owner (#375): tenant ADMIN with no organization role at all.
   legacy_owner: { role: 'ADMIN', grants: null },
+  // A proprietor on the optional Owner / Operator template (#975), which an
+  // assigned role makes the boundary even for a tenant ADMIN.
+  owner_operator: { role: 'ADMIN', grants: template('owner-operator') },
   // Roles that do no procurement work (#979, PR J follow-up).
   pharmacist: { role: 'EMPLOYEE', grants: template('pharmacist') },
   // A member invited with the default EMPLOYEE role and no organization role.
@@ -895,6 +898,20 @@ describe('approving and sending a purchase order needs the approver capability',
     expect(m('pharmacyPurchaseOrderApproval').create).not.toHaveBeenCalled();
   });
 
+  it('lets an Owner / Operator approve and send an order somebody else raised (#975 template)', async () => {
+    m('pharmacyPurchaseOrder').findFirst.mockResolvedValue(order({ createdByUserId: 'buyer' }));
+    await expect(CALLS.approvePurchaseOrder(caller('owner_operator'))).resolves.toMatchObject({
+      status: 'APPROVED',
+      approvedByUserId: 'owner_operator',
+    });
+    m('pharmacyPurchaseOrder').findFirst.mockResolvedValue(
+      order({ createdByUserId: 'buyer', status: 'APPROVED' })
+    );
+    await expect(CALLS.sendPurchaseOrder(caller('owner_operator'))).resolves.toMatchObject({
+      status: 'SENT',
+    });
+  });
+
   it('lets a manager approve an order somebody else raised', async () => {
     m('pharmacyPurchaseOrder').findFirst.mockResolvedValue(order({ createdByUserId: 'buyer' }));
     await expect(CALLS.approvePurchaseOrder(caller('manager_a'))).resolves.toMatchObject({
@@ -967,6 +984,12 @@ describe('authorizing a supplier needs the approver capability too (PUR-01)', ()
     await expect(
       caller('manager_a').setSupplierAuthorization({ supplierId: 'supplier_a', authorized: false })
     ).resolves.toMatchObject({ authorized: false });
+  });
+
+  it('lets an Owner / Operator authorize a supplier (#975 template)', async () => {
+    await expect(CALLS.setSupplierAuthorization(caller('owner_operator'))).resolves.toMatchObject({
+      authorized: true,
+    });
   });
 
   it('keeps it for the provisioned owner and the legacy owner under the solo rule', async () => {
@@ -1085,6 +1108,63 @@ describe('a procurement member acts only at branches they are assigned to', () =
   });
 });
 
+describe("Goods-in against an organization-wide order checks its requisition's branch (#979)", () => {
+  beforeEach(() => {
+    m('pharmacyBranch').findFirst.mockImplementation(
+      async ({ where }: { where: { id: string } }) => ({ id: where.id })
+    );
+    assignments({ buyer: ['branch_a'] });
+  });
+
+  const receiveAgainstOrder = (c: Caller) =>
+    c.createGoodsReceipt({
+      reference: 'GR-1',
+      branchId: 'branch_a',
+      supplierId: 'supplier_a',
+      purchaseOrderId: 'po_a',
+      supplierInvoiceRef: 'INV-1',
+      supplierInvoiceDate: PAST,
+      warrantyEvidenceRef: 'WAR-1',
+      receivedAt: new Date(),
+      lines: [RECEIPT_LINE],
+    });
+
+  it('refuses to draft a receipt when the requisition belongs to an unassigned branch', async () => {
+    m('pharmacyPurchaseOrder').findFirst.mockResolvedValue(
+      order({ status: 'SENT', branchId: null, requisitionId: 'req_b' })
+    );
+    m('pharmacyRequisition').findFirst.mockResolvedValue({ branchId: 'branch_b' });
+    await expect(receiveAgainstOrder(caller('buyer'))).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: OUTSIDE_BRANCH,
+    });
+    expect(m('pharmacyGoodsReceipt').create).not.toHaveBeenCalled();
+  });
+
+  it('does not refuse by branch once the receiver is assigned to the requisition branch', async () => {
+    assignments({ buyer: ['branch_a', 'branch_b'] });
+    m('pharmacyPurchaseOrder').findFirst.mockResolvedValue(
+      order({ status: 'SENT', branchId: null, requisitionId: 'req_b' })
+    );
+    m('pharmacyRequisition').findFirst.mockResolvedValue({ branchId: 'branch_b' });
+    const outcome = await settle(receiveAgainstOrder(caller('buyer')));
+    expect(outcome instanceof TRPCError && outcome.message === OUTSIDE_BRANCH).toBe(false);
+  });
+
+  it('refuses to post such a receipt before any receipt transaction', async () => {
+    m('pharmacyGoodsReceipt').findFirst.mockResolvedValue({ purchaseOrderId: 'po_a' });
+    m('pharmacyPurchaseOrder').findFirst.mockResolvedValue({
+      branchId: null,
+      requisition: { branchId: 'branch_b' },
+    });
+    await expect(CALLS.postGoodsReceipt(caller('buyer'))).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: OUTSIDE_BRANCH,
+    });
+    expect(db.$transaction).not.toHaveBeenCalled();
+  });
+});
+
 // ── licence verification ──────────────────────────────────────────────────
 
 describe('a supplier licence is verified by a second person (PUR-01)', () => {
@@ -1157,6 +1237,21 @@ describe('a supplier licence is verified by a second person (PUR-01)', () => {
       recordedByUserId: 'manager_a',
       verifiedByUserId: 'manager_a',
     });
+  });
+
+  it('locks the filing in one transaction before checking it is not yet superseded', async () => {
+    m('pharmacySupplierLicence').findFirst.mockImplementation(
+      async ({ where }: { where: { id?: string } }) => (where.id ? filed('buyer') : null)
+    );
+    await CALLS.verifySupplierLicence(caller('manager_a'));
+    expect(db.$transaction).toHaveBeenCalledTimes(1);
+    const lockSql = (db.$queryRaw.mock.calls[0]![0] as TemplateStringsArray).join('?');
+    expect(lockSql).toContain('pharmacy_supplier_licences');
+    expect(lockSql).toContain('FOR UPDATE');
+    expect(db.$queryRaw.mock.calls[0]!.slice(1)).toEqual(['lic_a', 'org_a']);
+    expect(db.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      m('pharmacySupplierLicence').findFirst.mock.invocationCallOrder[0]!
+    );
   });
 
   it('refuses a filing that is already verified or already superseded', async () => {
