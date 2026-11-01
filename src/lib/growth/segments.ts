@@ -44,7 +44,7 @@ export type Candidate = {
     churnBand: string;
     nextRefillDueAt: Date | null;
     lastPurchaseAt: Date | null;
-    spend90dMinor: number;
+    spend90dMinor: number | bigint;
   } | null;
   growthRecipients: Array<{ sentAt: Date | null }>;
 };
@@ -99,9 +99,11 @@ export function selectSegment(candidates: Candidate[], raw: unknown, now: Date):
   if (segment.type === 'top_spenders')
     selected = selected
       .sort(
-        (a, b) =>
-          (b.growthMetrics?.spend90dMinor ?? 0) - (a.growthMetrics?.spend90dMinor ?? 0) ||
-          a.id.localeCompare(b.id)
+        (a, b) => {
+          const left = BigInt(a.growthMetrics?.spend90dMinor ?? 0);
+          const right = BigInt(b.growthMetrics?.spend90dMinor ?? 0);
+          return right > left ? 1 : right < left ? -1 : a.id.localeCompare(b.id);
+        }
       )
       .slice(0, segment.n);
   return selected.map((c) => c.id);

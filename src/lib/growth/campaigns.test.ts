@@ -83,6 +83,24 @@ describe('G5 segments', () => {
   ])('resolves %j', (segment, expected) =>
     expect(selectSegment([a, b], segment, now)).toEqual(expected)
   );
+  it('ranks top spenders by BigInt 90-day spend beyond the safe integer range', () => {
+    const big = candidate('big', {
+      growthMetrics: {
+        ...a.growthMetrics!,
+        spend90dMinor: BigInt(Number.MAX_SAFE_INTEGER) + BigInt(2),
+      },
+    });
+    const bigger = candidate('bigger', {
+      growthMetrics: {
+        ...a.growthMetrics!,
+        spend90dMinor: BigInt(Number.MAX_SAFE_INTEGER) + BigInt(3),
+      },
+    });
+    expect(selectSegment([big, a, bigger], { type: 'top_spenders', n: 2 }, now)).toEqual([
+      'bigger',
+      'big',
+    ]);
+  });
   it('excludes missing consent/number, inactive and seven-day cooldown', () => {
     expect(
       selectSegment(
@@ -240,7 +258,9 @@ function fixture(patch = {}) {
       findUniqueOrThrow: async () => ({ displayName: 'Demo Pharmacy', timezone: 'Asia/Karachi' }),
     },
     growthSettings: { findUnique: async () => settings, findUniqueOrThrow: async () => settings },
-    customerMetrics: { aggregate: async () => ({ _sum: { spend90dMinor: 30000, orders90d: 3 } }) },
+    customerMetrics: {
+      aggregate: async () => ({ _sum: { spend90dMinor: BigInt(30000), orders90d: 3 } }),
+    },
     pharmacyCustomer: {
       findMany: async () => customers,
       findFirstOrThrow: async ({ where }: { where: { id: string } }) =>

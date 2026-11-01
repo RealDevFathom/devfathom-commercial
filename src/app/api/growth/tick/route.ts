@@ -1,6 +1,7 @@
 import { timingSafeEqual } from 'node:crypto';
 import { NextResponse } from 'next/server';
 
+import { runCustomerMetrics } from '@/lib/growth/metrics';
 import { isGrowthEnabled } from '@/lib/growth';
 import { advanceCampaigns, dispatchCampaignMessages } from '@/lib/growth/campaigns';
 import { withTenantDb, withPlatformDb } from '@/lib/tenancy/scoped-db';
@@ -24,11 +25,13 @@ export async function POST(request: Request) {
   for (const organization of organizations) {
     try {
       if (await isGrowthEnabled(organization.id)) {
+        await runCustomerMetrics(organization.id);
         await withTenantDb(organization.id, (db) => advanceCampaigns(db, organization.id));
         await dispatchCampaignMessages(organization.id);
+        console.info(`[growth] tick organizationId=${organization.id}`);
       }
     } catch (error) {
-      console.error('Growth organization tick failed', { organizationId: organization.id, error });
+      console.error(`[growth] tick failed organizationId=${organization.id}`, error);
     }
   }
   return NextResponse.json({ ok: true });

@@ -179,7 +179,7 @@ export async function advanceCampaigns(db: ScopedDb, organizationId: string, now
           _sum: { spend90dMinor: true, orders90d: true },
         });
         const avg = Math.ceil(
-          (metrics._sum.spend90dMinor ?? 0) / Math.max(1, metrics._sum.orders90d ?? 0)
+          Number(metrics._sum.spend90dMinor ?? 0) / Math.max(1, metrics._sum.orders90d ?? 0)
         );
         const spent = await monthlyCampaignSpend(db, organizationId, now);
         // Reserve estimates of other active campaigns as well as actual monthly spend.
