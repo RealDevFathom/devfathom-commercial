@@ -203,33 +203,12 @@ export async function postGoodsReceipt(
   }
   assertGoodsReceiptTransition(receipt.status, 'POSTED');
   if (receipt.lines.length === 0) throw new PharmacyReceivingError('INVALID_QUANTITY');
-  let purchaseOrder: {
-    id: string;
-    branchId: string | null;
-    supplierId: string;
-    status: 'DRAFT' | 'SUBMITTED' | 'APPROVED' | 'SENT' | 'RECEIVING' | 'CANCELLED';
-  } | null = null;
-  if (receipt.purchaseOrderId) {
-    const [lockedOrder] = await db.$queryRaw<
-      Array<{
-        id: string;
-        branchId: string | null;
-        supplierId: string;
-        status: 'DRAFT' | 'SUBMITTED' | 'APPROVED' | 'SENT' | 'RECEIVING' | 'CANCELLED';
-      }>
-    >`SELECT id, "branchId", "supplierId", status FROM pharmacy_purchase_orders WHERE id=${receipt.purchaseOrderId} AND "organizationId"=${scope.organizationId} FOR UPDATE`;
-    purchaseOrder = lockedOrder ?? null;
-    if (!purchaseOrder) throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
-    if (purchaseOrder.supplierId !== receipt.supplierId) {
-      throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
-    }
-    if (purchaseOrder.branchId !== null && purchaseOrder.branchId !== scope.branchId) {
-      throw new PharmacyReceivingError('CROSS_BRANCH_REFERENCE');
-    }
-    if (purchaseOrder.status !== 'SENT' && purchaseOrder.status !== 'RECEIVING') {
-      throw new PharmacyReceivingError('INVALID_TRANSITION');
-    }
-  }
+  const purchaseOrder = receipt.purchaseOrderId
+    ? await lockReceivablePurchaseOrder(db, scope, {
+        purchaseOrderId: receipt.purchaseOrderId,
+        supplierId: receipt.supplierId,
+      })
+    : null;
 
   const controlledMedicines = await db.medicine.findMany({
     where: {
