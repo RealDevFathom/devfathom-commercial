@@ -102,6 +102,21 @@ deploy).
   - `20261102140000_organization_ai_deep_strategy`
   - `20261102140100_ai_assistant_actions`
 
+**Review verdicts on #1238**
+
+QA and Security at head `1276a75e` (20:16 UTC, box run): **both FAIL**.
+
+- **What ran:** install ✅, lint ✅, typecheck inconclusive (tsc OOM on the box), targeted vitest
+  7 failed / 624 passed.
+- **Blocker 1:** unset `AI_PROVIDER` turned AI on. **Fixed in `d0af5dc4`:** unset or blank now
+  means disabled. The 7 failures came from ambient provider keys. The suites now pass both with
+  and without local keys (701/701).
+- **Blocker 2:** Bedrock should use the global profiles from ap-southeast-1. In progress
+  (router and infra streams).
+- **Blocker 3:** widen the Bedrock IAM. In progress (infra stream).
+- **Hygiene:** commit messages name model versions, so merge with a clean squash message.
+- **Next step:** after integration, reply on the PR with the fixes and ask for QA/Security again.
+
 **Other state**
 
 - **Build:** the Dockerfile-style build of `f579ee24` and later passes. Plain `bun run build`
