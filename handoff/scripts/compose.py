@@ -104,7 +104,8 @@ else:
                 msg += f"; {len(prex)} failure(s) in {', '.join(files)} also fail identically on develop (pre-existing)"
             if env and not att:
                 files = sorted({p.split(' > ')[0] for p in env})
-                msg += f"; {', '.join(files)} only fails under the gate's runtime DB role (it needs CREATE ROLE) and passes on this PR with a superuser role"
+                msg += (f"; {', '.join(files)} only {'fails' if len(files) == 1 else 'fail'} under the gate's runtime DB role "
+                        f"(needs CREATE ROLE) and {'passes' if len(files) == 1 else 'pass'} on this PR with a superuser role")
     parts.append(msg)
 # build
 b = s["build"]
