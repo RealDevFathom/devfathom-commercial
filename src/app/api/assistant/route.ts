@@ -32,6 +32,7 @@ import { responseForPasswordChange } from '@/lib/auth/session-state';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { createTenantDb } from '@/lib/tenancy/scoped-db';
 import { resolveOrganizationEntitlements } from '@/lib/entitlements';
+import { createActionLedgerContext, recordProposalsTransform } from '@/lib/ai/action-ledger';
 
 // The turn itself stops at 90 s (ASK_FATHOM_TURN_TIMEOUT_MS); this leaves room to
 // finish the stream and log after the deadline.
@@ -166,6 +167,8 @@ async function respond(req: Request) {
     status: session.user.status,
     enabledModules: entitlements.enabledModules,
   };
+  // DEV-576 write ledger: approval-gated writes run once, only as proposed.
+  const ledger = createActionLedgerContext({ organizationId: organization.id, userId: ctx.userId });
 
   // SECURITY INVARIANT (AI-04): the approval gate is a UX confirmation, NOT the
   // security boundary. The client supplies the full message history including the
@@ -187,7 +190,10 @@ async function respond(req: Request) {
   );
 
   const hint = recentUserText(messages);
-  const assembled = buildAssistantTools(ctx, isApprovalContinuation ? {} : { hint });
+  const assembled = buildAssistantTools(ctx, {
+    ...(isApprovalContinuation ? {} : { hint }),
+    ledger,
+  });
   // Client approval history cannot resurrect a disabled or wrong-vertical tool.
   if (hasUnavailableApprovedTool(messages, new Set(Object.keys(assembled)))) {
     return Response.json({ error: 'This action is no longer available.' }, { status: 403 });
@@ -244,10 +250,15 @@ async function respond(req: Request) {
     // retries would multiply attempts past the turn budget.
     maxRetries: 0,
     abortSignal: AbortSignal.any([req.signal, AbortSignal.timeout(ASK_FATHOM_TURN_TIMEOUT_MS)]),
-    // Number grounding and the dosing guard, applied to every text block before it
-    // leaves the server.
-    experimental_transform: createAnswerGuardTransform<typeof tools>(evidence),
+    // 1. Record each approval request in the write ledger before its card leaves.
+    // 2. Number grounding and the dosing guard on every text block.
+    experimental_transform: [
+      recordProposalsTransform(ledger),
+      createAnswerGuardTransform<typeof tools>(evidence),
+    ],
     providerOptions: ai.providerOptions,
+    // Approvals are HMAC-signed and verified before any approved tool runs.
+    experimental_toolApprovalSecret: ledger.approvalSecret,
   });
 
   return result.toUIMessageStreamResponse({
