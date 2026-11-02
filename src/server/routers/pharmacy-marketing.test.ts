@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TRPCContext } from '../trpc';
 const mocks = vi.hoisted(() => ({
   licensed: vi.fn(),
@@ -221,6 +221,34 @@ describe('marketing workflow authorization', () => {
       { occasion: 'WELCOME', tone: 'FRIENDLY' },
       { organizationId: 'org-a', branchId: 'branch-a' }
     );
+  });
+  describe('reports which AI prerequisite is missing (DEV-591)', () => {
+    afterEach(() => vi.unstubAllEnvs());
+    it('reports the company switch and provider as booleans only', async () => {
+      vi.stubEnv('AI_PROVIDER', 'groq');
+      vi.stubEnv('AI_MODEL', 'synthetic-model');
+      vi.stubEnv('GROQ_API_KEY', 'synthetic-key');
+      mocks.settings.mockResolvedValue({ askFathomEnabled: false });
+      expect(await caller().growthAvailability(input)).toEqual({
+        companyAiEnabled: false,
+        providerReady: true,
+        canManageAiSettings: true,
+      });
+    });
+    it('reports a provider that is not configured', async () => {
+      vi.stubEnv('AI_PROVIDER', 'disabled');
+      mocks.settings.mockResolvedValue({ askFathomEnabled: true });
+      expect(await caller().growthAvailability(input)).toMatchObject({
+        companyAiEnabled: true,
+        providerReady: false,
+      });
+    });
+    it('keeps the same owner, license and branch gate', async () => {
+      await expect(caller('EMPLOYEE').growthAvailability(input)).rejects.toMatchObject({
+        message: MARKETING_ACCESS_DENIAL.OWNER,
+      });
+      expect(mocks.settings).not.toHaveBeenCalled();
+    });
   });
 });
 

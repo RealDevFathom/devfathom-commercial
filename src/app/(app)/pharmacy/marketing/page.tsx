@@ -15,10 +15,12 @@ import {
 import { pharmacyMarketingRouter } from '@/server/routers/pharmacy-marketing';
 import { createTRPCContext } from '@/server/trpc';
 import { MarketingActionForm } from './action-form';
+import { AiNextStep, aiReady, type MarketingAiAvailability } from './ai-next-step';
+import { nativeControl as control, inputControl } from './controls';
+import { defaultDayRange, defaultSendTime, localTime, zoneLabel } from './period';
+import { PeriodFields, SendTimeField } from './period-fields';
 
 export const metadata = { title: 'Marketing · Pharmacy' };
-const control =
-  'mt-1 min-h-11 w-full rounded-md border border-input bg-surface-raised px-3 text-sm focus-visible:outline-2 focus-visible:outline-ring';
 const scalar = (value: string | string[] | undefined) =>
   typeof value === 'string' ? value : undefined;
 
@@ -33,17 +35,27 @@ async function loadWorkspace(params: Record<string, string | string[] | undefine
   const delivery = campaignId ? await caller.deliveryHistory({ branchId, campaignId }) : null;
   let growth = null;
   let growthUnavailable = false;
+  let growthDenial: string | undefined;
   try {
     growth = await caller.growthHistory({ branchId });
-  } catch {
+  } catch (error) {
     growthUnavailable = true;
+    growthDenial = denialText(error);
   }
   let baskets = null;
   let basketsUnavailable = false;
+  let basketsDenial: string | undefined;
   try {
     baskets = await caller.basketHistory({ branchId });
-  } catch {
+  } catch (error) {
     basketsUnavailable = true;
+    basketsDenial = denialText(error);
+  }
+  let ai: MarketingAiAvailability = null;
+  try {
+    ai = (await caller.growthAvailability({ branchId })) ?? null;
+  } catch {
+    // Unknown: the page still names both prerequisites and where to change them.
   }
   return {
     branches,
@@ -53,9 +65,19 @@ async function loadWorkspace(params: Record<string, string | string[] | undefine
     delivery,
     growth,
     growthUnavailable,
+    growthDenial,
     baskets,
     basketsUnavailable,
+    basketsDenial,
+    ai,
   };
+}
+
+/** A router denial explains itself; other failures stay generic. */
+function denialText(error: unknown) {
+  return error instanceof TRPCError && error.code === 'FORBIDDEN' && error.message !== error.code
+    ? error.message
+    : undefined;
 }
 
 export default async function PharmacyMarketingPage({
@@ -129,9 +151,18 @@ export default async function PharmacyMarketingPage({
     delivery,
     growth,
     growthUnavailable,
+    growthDenial,
     baskets,
     basketsUnavailable,
+    basketsDenial,
+    ai,
   } = workspace;
+  // DEV-591: every date and send time is picked in the workspace zone, with defaults.
+  const timeZone = history.timezone;
+  const zone = zoneLabel(timeZone);
+  const period = defaultDayRange(timeZone);
+  const sendDefault = defaultSendTime(timeZone);
+  const local = (instant: Date) => localTime(instant, timeZone);
   return (
     <main key={branchId} className="min-w-0 space-y-6">
       {heading}
@@ -152,8 +183,8 @@ export default async function PharmacyMarketingPage({
           </Button>
         </form>
         <p className="mt-4 text-sm text-text-muted">
-          Local sandbox only. No customer messages are sent. Sandbox delivery is simulated. Quiet
-          hours use {history.timezone}; schedules below use explicit UTC timestamps.
+          Local sandbox only. No customer messages are sent. Sandbox delivery is simulated. Dates,
+          send times and quiet hours on this page use {zone}.
         </p>
       </SectionCard>
       <SectionCard title="Run due sandbox campaigns" titleLevel={2}>
@@ -176,20 +207,56 @@ export default async function PharmacyMarketingPage({
                   {campaign.name}
                 </label>
               ))}
+            {!history.campaigns.some((campaign) => campaign.status === 'CAPTURED') && (
+              <p className="text-sm text-text-muted">
+                No prepared campaigns yet. Approve a campaign and save its prepared captures first.
+              </p>
+            )}
           </fieldset>
-          <label className="block text-sm">
-            Batch request key (reuse for replay)
-            <Input className="mt-1 min-h-11" name="requestKey" required maxLength={128} />
-          </label>
+          <details className="rounded-md border border-border-subtle p-4">
+            <summary className="min-h-11 cursor-pointer content-center text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring">
+              Advanced: batch reference
+            </summary>
+            <label className="mt-2 block text-sm">
+              Batch reference
+              <Input
+                className={inputControl}
+                name="requestKey"
+                required
+                maxLength={128}
+                defaultValue={browserUuid()}
+                aria-describedby="batch-reference-help"
+              />
+            </label>
+            <p id="batch-reference-help" className="mt-2 text-sm text-text-muted">
+              Filled in for you. If the connection drops, run the batch again with the same
+              reference: one reference never sends a campaign twice.
+            </p>
+          </details>
         </MarketingActionForm>
       </SectionCard>
       <GrowthPanel
         branchId={branchId}
         history={growth}
         unavailable={growthUnavailable}
+        unavailableReason={growthDenial}
         templates={history.templates}
+        timeZone={timeZone}
+        zone={zone}
+        period={period}
+        sendDefault={sendDefault}
+        ai={ai}
       />
-      <BasketPanel branchId={branchId} history={baskets} unavailable={basketsUnavailable} />
+      <BasketPanel
+        branchId={branchId}
+        history={baskets}
+        unavailable={basketsUnavailable}
+        unavailableReason={basketsDenial}
+        timeZone={timeZone}
+        zone={zone}
+        period={period}
+        sendDefault={sendDefault}
+      />
       {review && (
         <SectionCard
           key={review.campaign.id}
@@ -204,7 +271,7 @@ export default async function PharmacyMarketingPage({
             />
             <p className="whitespace-pre-wrap break-words text-sm">{review.template.body}</p>
             <p className="text-sm text-text-muted">
-              Scheduled: {review.campaign.scheduledAt.toISOString()}. Rules:{' '}
+              Send time: {local(review.campaign.scheduledAt)} ({zone}). Rules:{' '}
               {review.rules.all
                 .map(
                   (rule) =>
@@ -215,7 +282,7 @@ export default async function PharmacyMarketingPage({
             </p>
             <p className="break-words text-sm text-text-muted">
               Quiet hours: {String(review.quietHours.startHour).padStart(2, '0')}:00–
-              {String(review.quietHours.endHour).padStart(2, '0')}:00 ({history.timezone}). Maximum{' '}
+              {String(review.quietHours.endHour).padStart(2, '0')}:00 ({zone}). Maximum{' '}
               {review.frequencyCap.max} captures per customer over {review.frequencyCap.windowDays}{' '}
               days. Consent and caps are checked again at capture.
             </p>
@@ -299,8 +366,7 @@ export default async function PharmacyMarketingPage({
             <ul className="mt-3 space-y-2 text-sm">
               {delivery.attempts.map((attempt) => (
                 <li key={attempt.id}>
-                  {attempt.provider} attempt {attempt.attemptNumber} ·{' '}
-                  {attempt.reservedAt.toISOString()} ·{' '}
+                  {attempt.provider} attempt {attempt.attemptNumber} · {local(attempt.reservedAt)} ·{' '}
                   {attempt.contradictory
                     ? 'Conflicting evidence — resend blocked'
                     : attempt.delivered
@@ -330,24 +396,10 @@ export default async function PharmacyMarketingPage({
           operation="attribution"
           label="Generate receipt links"
         >
-          <label className="block text-sm">
-            From (UTC)
-            <Input
-              name="from"
-              required
-              placeholder="2026-10-01T00:00:00Z"
-              className="mt-1 min-h-11"
-            />
-          </label>
-          <label className="block text-sm">
-            Cutoff (UTC, exclusive)
-            <Input
-              name="cutoff"
-              required
-              placeholder="2026-10-06T12:00:00Z"
-              className="mt-1 min-h-11"
-            />
-          </label>
+          <PeriodFields timeZone={timeZone} {...period} />
+          <p className="text-sm text-text-muted">
+            Whole days in {zone} that have already ended. The last 30 days are filled in for you.
+          </p>
         </MarketingActionForm>
       </SectionCard>
       <SectionCard title="Campaign history" titleLevel={2}>
@@ -367,7 +419,7 @@ export default async function PharmacyMarketingPage({
                 <tr>
                   <th className="p-3">Campaign</th>
                   <th className="p-3">Status</th>
-                  <th className="p-3">Scheduled (UTC)</th>
+                  <th className="p-3">Send time</th>
                   <th className="p-3">Review</th>
                 </tr>
               </thead>
@@ -386,7 +438,7 @@ export default async function PharmacyMarketingPage({
                       />
                     </td>
                     <td className="whitespace-nowrap p-3 font-mono text-xs">
-                      {campaign.scheduledAt.toISOString()}
+                      {local(campaign.scheduledAt)}
                     </td>
                     <td className="p-3">
                       <Link
@@ -403,7 +455,8 @@ export default async function PharmacyMarketingPage({
           </div>
         )}
         <p className="mt-3 text-xs text-text-muted">
-          Latest 50 campaigns. Prepared captures do not establish provider acceptance or delivery.
+          Latest 50 campaigns. Send times use {zone}. Prepared captures do not establish provider
+          acceptance or delivery.
         </p>
       </SectionCard>
       <div className="grid items-start gap-6 xl:grid-cols-2">
@@ -415,7 +468,7 @@ export default async function PharmacyMarketingPage({
           >
             <label className="block text-sm">
               Template name
-              <Input className="mt-1 min-h-11" name="name" required maxLength={100} />
+              <Input className={inputControl} name="name" required maxLength={100} />
             </label>
             <label className="block text-sm">
               Message
@@ -440,11 +493,13 @@ export default async function PharmacyMarketingPage({
             <summary className="cursor-pointer text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring">
               Get a generic AI draft
             </summary>
-            <div className="mt-4">
+            <div className="mt-4 space-y-4">
+              <AiNextStep id="assist-ai-next-step" availability={ai} feature="AI drafts" />
               <MarketingActionForm
                 branchId={branchId}
                 operation="assist"
                 label="Suggest unapproved copy"
+                disabled={ai !== null && !aiReady(ai)}
               >
                 <label className="block text-sm">
                   Occasion
@@ -476,7 +531,7 @@ export default async function PharmacyMarketingPage({
             )}
             <label className="block text-sm">
               Campaign name
-              <Input className="mt-1 min-h-11" name="name" required maxLength={100} />
+              <Input className={inputControl} name="name" required maxLength={100} />
             </label>
             <label className="block text-sm">
               Approved template
@@ -500,7 +555,7 @@ export default async function PharmacyMarketingPage({
                 At least
                 <Input
                   name="threshold"
-                  className="mt-1 min-h-11"
+                  className={inputControl}
                   type="number"
                   min={0}
                   max={100000}
@@ -509,22 +564,13 @@ export default async function PharmacyMarketingPage({
                 />
               </label>
             </div>
-            <label className="block text-sm">
-              Scheduled time (ISO UTC)
-              <Input
-                name="scheduledAt"
-                className="mt-1 min-h-11"
-                required
-                placeholder="2026-10-07T07:00:00Z"
-                pattern=".*Z"
-              />
-            </label>
+            <SendTimeField timeZone={timeZone} zone={zone} defaultValue={sendDefault} />
             <div className="grid gap-4 sm:grid-cols-2">
               <label className="block text-sm">
                 Quiet hours start (0–23)
                 <Input
                   name="quietStart"
-                  className="mt-1 min-h-11"
+                  className={inputControl}
                   type="number"
                   min={0}
                   max={23}
@@ -536,7 +582,7 @@ export default async function PharmacyMarketingPage({
                 Quiet hours end (0–23)
                 <Input
                   name="quietEnd"
-                  className="mt-1 min-h-11"
+                  className={inputControl}
                   type="number"
                   min={0}
                   max={23}
@@ -548,7 +594,7 @@ export default async function PharmacyMarketingPage({
                 Maximum captures per customer
                 <Input
                   name="cap"
-                  className="mt-1 min-h-11"
+                  className={inputControl}
                   type="number"
                   min={1}
                   max={10}
@@ -560,7 +606,7 @@ export default async function PharmacyMarketingPage({
                 Rolling window (days)
                 <Input
                   name="window"
-                  className="mt-1 min-h-11"
+                  className={inputControl}
                   type="number"
                   min={1}
                   max={90}

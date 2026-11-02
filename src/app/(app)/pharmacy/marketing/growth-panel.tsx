@@ -5,6 +5,10 @@ import { Input } from '@/components/ui/input';
 import { GROWTH_METRICS, presentGrowthRecommendation } from '@/lib/ai/growth-recommendations';
 import type { listGrowthInsights } from '@/lib/pharmacy/growth-insights';
 import { MarketingActionForm } from './action-form';
+import { AiNextStep, aiReady, type MarketingAiAvailability } from './ai-next-step';
+import { nativeControl as control, inputControl } from './controls';
+import { instantToLocalDateTime, localTime } from './period';
+import { PeriodFields, SendTimeField } from './period-fields';
 
 type History = Awaited<ReturnType<typeof listGrowthInsights>>;
 const REVIEW_WORKSPACES: Partial<
@@ -22,52 +26,60 @@ const REVIEW_WORKSPACES: Partial<
     href: (branchId) => `/pharmacy/inventory?branch=${encodeURIComponent(branchId)}`,
   },
 };
-const control =
-  'mt-1 min-h-11 w-full rounded-md border border-input bg-surface-raised px-3 text-sm focus-visible:outline-2 focus-visible:outline-ring';
 export function GrowthPanel({
   branchId,
   history,
   templates,
   unavailable = false,
+  unavailableReason,
+  timeZone,
+  zone,
+  period,
+  sendDefault,
+  ai,
 }: {
   branchId: string;
   history: History | null;
   templates: Array<{ id: string; name: string }>;
   unavailable?: boolean;
+  /** A denial the router explained (missing report permission, inactive owner). */
+  unavailableReason?: string;
+  timeZone: string;
+  /** `zoneLabel(timeZone)` */
+  zone: string;
+  /** Default whole-day period; `lastDay` is also the latest day that has ended. */
+  period: { firstDay: string; lastDay: string };
+  /** Default `datetime-local` send time. */
+  sendDefault: string;
+  ai: MarketingAiAvailability;
 }) {
   return (
     <SectionCard title="AI growth insights" titleLevel={2}>
       <div className="space-y-6">
         <p className="text-sm text-text-body">
-          Review hypotheses grounded in aggregate receipt counts, consented loyalty cohorts, posted
-          Finance amounts and estimated stock valuation. Small cohorts are withheld. Evidence is
-          observational; message cost and causal uplift are unknown. Live Meta outcomes exclude
-          sandbox.
+          Get review ideas from your own totals: completed receipts, consented loyalty groups,
+          posted Finance amounts and estimated stock value. Groups too small to stay anonymous are
+          hidden. These are observations, not proof that a campaign will work, and message cost is
+          unknown. Sandbox results never count.
         </p>
         {unavailable && (
           <p role="alert" className="text-sm text-text-body">
-            Insight history is unavailable. Manual campaign drafting remains available below. Reload
-            before retrying a review.
+            {unavailableReason ??
+              'Insight history is unavailable. Reload before retrying a review.'}{' '}
+            Manual campaign drafting remains available below.
           </p>
         )}
+        <AiNextStep id="growth-ai-next-step" availability={ai} feature="AI growth insights" />
         <MarketingActionForm
           branchId={branchId}
           operation="growth-generate"
-          label="Generate insights"
+          label="Generate AI growth insights"
+          disabled={ai !== null && !aiReady(ai)}
         >
-          <div className="grid gap-4 sm:grid-cols-2">
-            <label className="text-sm">
-              Period start (UTC)
-              <Input name="from" type="date" required className="mt-1 min-h-11" />
-            </label>
-            <label className="text-sm">
-              Exclusive cutoff (UTC)
-              <Input name="cutoff" type="date" required className="mt-1 min-h-11" />
-            </label>
-          </div>
+          <PeriodFields timeZone={timeZone} {...period} />
           <p className="text-sm text-text-muted">
-            One to ninety completed days, compared with the preceding equal period. Requires enabled
-            AI settings and a configured provider.
+            Whole days in {zone}, up to 90 days that have already ended. The last 30 days are filled
+            in for you. Results are compared with the same number of days just before.
           </p>
         </MarketingActionForm>
         {history && !history.insights.length && (
@@ -79,8 +91,9 @@ export function GrowthPanel({
           <article key={insight.id} className="space-y-4 border-t border-border-subtle pt-4">
             <StatusPill status={insight.status} label={insight.status.replaceAll('_', ' ')} />
             <p className="break-words text-sm text-text-muted">
-              {insight.snapshot.current.from} to {insight.snapshot.current.cutoff} (exclusive).
-              Saved {insight.createdAt.toISOString()}.{' '}
+              {localTime(insight.snapshot.current.from, timeZone)} up to{' '}
+              {localTime(insight.snapshot.current.cutoff, timeZone)} ({zone}). Saved{' '}
+              {localTime(insight.createdAt, timeZone)}.{' '}
               {insight.provider && insight.model
                 ? `${insight.provider} / ${insight.model}`
                 : 'No model output.'}
@@ -88,8 +101,8 @@ export function GrowthPanel({
             <section className="space-y-3" aria-label="Saved aggregate evidence">
               <h3 className="font-medium">Saved evidence</h3>
               <p className="break-words text-sm text-text-muted">
-                Comparison: {insight.snapshot.comparison.from} to{' '}
-                {insight.snapshot.comparison.cutoff} (exclusive). Currency:{' '}
+                Comparison: {localTime(insight.snapshot.comparison.from, timeZone)} up to{' '}
+                {localTime(insight.snapshot.comparison.cutoff, timeZone)}. Currency:{' '}
                 {insight.snapshot.currency}. Missing or suppressed facts are unknown, not zero.
               </p>
               {!insight.snapshot.facts.length ? (
@@ -109,7 +122,7 @@ export function GrowthPanel({
                         : 'count'}{' '}
                       · {fact.period.toLowerCase()} · {GROWTH_METRICS[fact.metric]} Coverage:{' '}
                       {fact.coverage.toLowerCase()}; cohort: {fact.cohortSize}; fresh at{' '}
-                      {fact.freshAt}.
+                      {localTime(fact.freshAt, timeZone)}.
                     </li>
                   ))}
                 </ul>
@@ -151,7 +164,7 @@ export function GrowthPanel({
                             ? `${insight.snapshot.currency} minor units`
                             : 'count'}{' '}
                           · {f.period.toLowerCase()} · {f.definition} Coverage:{' '}
-                          {f.coverage.toLowerCase()}; fresh at {f.freshAt}.
+                          {f.coverage.toLowerCase()}; fresh at {localTime(f.freshAt, timeZone)}.
                         </li>
                       ))}
                     </ul>
@@ -228,7 +241,7 @@ export function GrowthPanel({
                                 name="name"
                                 defaultValue={edit?.name ?? 'Retail outreach review'}
                                 maxLength={100}
-                                className="mt-1 min-h-11"
+                                className={inputControl}
                               />
                             </label>
                             <label className="text-sm">
@@ -246,15 +259,16 @@ export function GrowthPanel({
                                 ))}
                               </select>
                             </label>
-                            <label className="text-sm">
-                              Scheduled at (UTC ISO)
-                              <Input
-                                name="scheduledAt"
-                                placeholder="2026-10-10T12:00:00Z"
-                                defaultValue={edit?.scheduledAt}
-                                className="mt-1 min-h-11"
-                              />
-                            </label>
+                            <SendTimeField
+                              timeZone={timeZone}
+                              zone={zone}
+                              required={false}
+                              defaultValue={
+                                edit?.scheduledAt
+                                  ? instantToLocalDateTime(new Date(edit.scheduledAt), timeZone)
+                                  : sendDefault
+                              }
+                            />
                           </div>
                           <p className="text-sm text-text-muted">
                             Draft uses completed receipt count ≥ 1, a weekly cap of one, and quiet

@@ -4,6 +4,45 @@ import { revalidatePath } from 'next/cache';
 import { TRPCError } from '@trpc/server';
 import { pharmacyMarketingRouter } from '@/server/routers/pharmacy-marketing';
 import { createTRPCContext } from '@/server/trpc';
+import { workspaceTimezone } from '@/lib/timezone';
+import { dayRangeToPeriod, localDateTimeToInstant } from './period';
+
+// Plain outcomes for a saved insight that is not READY (DEV-591), instead of status codes.
+const GROWTH_OUTCOME: Record<string, string> = {
+  CONFIGURATION:
+    'AI is not connected for this workspace yet. Contact DevFathom support to connect an AI provider.',
+  SPARSE:
+    'Not enough customer activity in these days to suggest anything; groups too small to stay anonymous are hidden. Try a longer period.',
+  TIMEOUT: 'The AI service took too long to answer. Try again in a few minutes.',
+  PROVIDER: 'The AI service could not be reached. Try again in a few minutes.',
+  OUTPUT:
+    'The AI answer did not match your saved figures, so it was not kept as advice. Try again later.',
+};
+
+const SEND_TIME_MESSAGE = 'Choose a send date and time.';
+
+/** Advanced basket thresholds, checked here so a bad value gets a sentence, not a schema dump. */
+function basketThresholds(text: (key: string) => string) {
+  const read = (key: string) => (text(key).trim() === '' ? Number.NaN : Number(text(key)));
+  const config = {
+    minimumPairCount: read('minimumPairCount'),
+    minimumSupport: read('minimumSupport'),
+    minimumConfidence: read('minimumConfidence'),
+    minimumLift: read('minimumLift'),
+    maximumProposals: read('maximumProposals'),
+  };
+  const share = (value: number) => value >= 0 && value <= 1;
+  return Number.isInteger(config.minimumPairCount) &&
+    config.minimumPairCount >= 1 &&
+    share(config.minimumSupport) &&
+    share(config.minimumConfidence) &&
+    config.minimumLift >= 0 &&
+    Number.isInteger(config.maximumProposals) &&
+    config.maximumProposals >= 1 &&
+    config.maximumProposals <= 3
+    ? config
+    : null;
+}
 
 function exclusionsText(exclusions: Record<string, number>) {
   return (
@@ -17,6 +56,10 @@ export async function marketingAction(
   form: FormData
 ): Promise<{ error: boolean; message: string; campaignId?: string }> {
   const text = (key: string) => String(form.get(key) ?? '');
+  // Days and send times arrive as wall time in the workspace zone the page names.
+  const timeZone = workspaceTimezone(text('timezone'));
+  const period = () => dayRangeToPeriod(text('firstDay'), text('lastDay'), timeZone);
+  const sendTime = () => localDateTimeToInstant(text('scheduledAt'), timeZone);
   try {
     // Every invocation resolves the current session, tenant, license and branch.
     const caller = pharmacyMarketingRouter.createCaller(await createTRPCContext());
@@ -26,17 +69,20 @@ export async function marketingAction(
     let savedCampaignId: string | undefined;
     switch (text('operation')) {
       case 'basket-generate': {
+        const days = period();
+        if (!days.ok) return { error: true, message: days.message };
+        const config = basketThresholds(text);
+        if (!config)
+          return {
+            error: true,
+            message:
+              'Check the Advanced settings: receipts with both products is a whole number of at least 1, support and confidence are between 0 and 1, lift is 0 or more, and at most 3 bundles.',
+          };
         const result = await caller.generateBaskets({
           branchId,
-          from: new Date(text('from')),
-          cutoff: new Date(text('cutoff')),
-          config: {
-            minimumPairCount: Number(text('minimumPairCount')),
-            minimumSupport: Number(text('minimumSupport')),
-            minimumConfidence: Number(text('minimumConfidence')),
-            minimumLift: Number(text('minimumLift')),
-            maximumProposals: Number(text('maximumProposals')),
-          },
+          from: days.from,
+          cutoff: days.cutoff,
+          config,
         });
         message = `${result.count} bundle proposals saved for owner review.`;
         break;
@@ -47,14 +93,15 @@ export async function marketingAction(
         const decision = text('decision');
         if (decision !== 'APPROVE' && decision !== 'REJECT')
           return { error: true, message: 'Choose a bundle decision.' };
+        const scheduledAt = decision === 'APPROVE' ? sendTime() : null;
+        if (decision === 'APPROVE' && !scheduledAt)
+          return { error: true, message: SEND_TIME_MESSAGE };
         const result = await caller.reviewBasket({
           branchId,
           insightId: text('insightId'),
           recommendation: Number(text('recommendation')),
           decision,
-          ...(decision === 'APPROVE'
-            ? { pinCredential: text('pin'), scheduledAt: new Date(text('scheduledAt')) }
-            : {}),
+          ...(scheduledAt ? { pinCredential: text('pin'), scheduledAt } : {}),
         });
         if ('blocked' in result && typeof result.blocked === 'string')
           return { error: true, message: result.blocked };
@@ -65,15 +112,17 @@ export async function marketingAction(
         break;
       }
       case 'growth-generate': {
+        const days = period();
+        if (!days.ok) return { error: true, message: days.message };
         const result = await caller.generateGrowth({
           branchId,
-          from: new Date(text('from')),
-          cutoff: new Date(text('cutoff')),
+          from: days.from,
+          cutoff: days.cutoff,
         });
         message =
           result.status === 'READY'
             ? 'Insights saved. Review evidence before creating a draft.'
-            : `Insight status: ${result.status}. ${result.failureCode ?? ''}. Manual campaigns remain available.`;
+            : `${GROWTH_OUTCOME[result.failureCode ?? ''] ?? 'No insight was generated for these days.'} Manual campaigns remain available.`;
         break;
       }
       case 'growth-review': {
@@ -82,20 +131,17 @@ export async function marketingAction(
         const decision = text('decision');
         if (decision !== 'EDIT' && decision !== 'APPROVE' && decision !== 'REJECT')
           return { error: true, message: 'Choose a review decision.' };
+        const scheduledAt = decision === 'REJECT' ? null : sendTime();
+        if (decision !== 'REJECT' && !scheduledAt)
+          return { error: true, message: SEND_TIME_MESSAGE };
         const result = await caller.reviewGrowth({
           branchId,
           insightId: text('insightId'),
           recommendation: Number(text('recommendation')),
           decision,
-          ...(decision === 'REJECT'
-            ? {}
-            : {
-                edit: {
-                  name: text('name'),
-                  templateId: text('templateId'),
-                  scheduledAt: new Date(text('scheduledAt')),
-                },
-              }),
+          ...(scheduledAt
+            ? { edit: { name: text('name'), templateId: text('templateId'), scheduledAt } }
+            : {}),
         });
         savedCampaignId = result.campaignId ?? undefined;
         message = result.campaignId
@@ -120,11 +166,13 @@ export async function marketingAction(
         const field = text('field');
         if (field !== 'receiptCount' && field !== 'daysSinceLastReceipt')
           return { error: true, message: 'Choose a supported retail field.' };
+        const scheduledAt = sendTime();
+        if (!scheduledAt) return { error: true, message: SEND_TIME_MESSAGE };
         const draft = await caller.createDraft({
           branchId,
           name: text('name'),
           templateId: text('templateId'),
-          scheduledAt: new Date(text('scheduledAt')),
+          scheduledAt,
           definition: {
             version: 1,
             all: [{ field, operator: 'gte', value: Number(text('threshold')) }],
@@ -154,10 +202,18 @@ export async function marketingAction(
         break;
       }
       case 'sandbox-due': {
+        const campaignIds = form.getAll('campaignIds').map(String);
+        if (!campaignIds.length || campaignIds.length > 5)
+          return { error: true, message: 'Select one to five prepared campaigns.' };
+        if (!text('requestKey').trim())
+          return {
+            error: true,
+            message: 'The batch reference is empty. Reload the page to get a new one.',
+          };
         const result = await caller.sandboxDue({
           branchId,
-          requestKey: text('requestKey'),
-          campaignIds: form.getAll('campaignIds').map(String),
+          requestKey: text('requestKey').trim(),
+          campaignIds,
           outcome: 'DELIVERED',
         });
         message = `Sandbox only: processed ${result.results.length} due captured campaigns. ${result.hasMore ? 'More campaigns remain.' : 'End of bounded batch.'} No live messages sent; review each campaign history for outcomes.`;
@@ -177,10 +233,12 @@ export async function marketingAction(
         break;
       }
       case 'attribution': {
+        const days = period();
+        if (!days.ok) return { error: true, message: days.message };
         const result = await caller.attributeReceipts({
           branchId,
-          from: new Date(text('from')),
-          cutoff: new Date(text('cutoff')),
+          from: days.from,
+          cutoff: days.cutoff,
         });
         message = `Estimated receipt links: ${result.created} saved, ${result.eligible} eligible. Sandbox delivery never qualifies. Message cost is unavailable.`;
         break;
@@ -194,7 +252,7 @@ export async function marketingAction(
           error: !result.available,
           message: result.available
             ? `Unapproved draft — review before saving: ${result.body}`
-            : 'AI assistance unavailable. Write and review your template manually.',
+            : 'AI drafts are not available right now. Check that Ask Fathom is on in Organization settings, or write the template yourself above.',
         };
       }
       default:

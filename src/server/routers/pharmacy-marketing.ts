@@ -21,6 +21,7 @@ import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { hasModule, resolveOrganizationEntitlements } from '@/lib/entitlements';
 import { readAskFathomSettings } from '@/lib/ai/ask-fathom-settings';
+import { readAIConfig } from '@/lib/ai/provider';
 import { isTenantLifecycleAccessible } from '@/lib/tenancy/host';
 import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import { workspaceTimezone } from '@/lib/timezone';
@@ -225,10 +226,9 @@ export const pharmacyMarketingRouter = router({
     const facts = await growthExecute(ctx, input.branchId, async (db, resolved) => {
       const settings = await readAskFathomSettings(db, resolved.organizationId);
       if (!settings?.askFathomEnabled)
-        throw new TRPCError({
-          code: 'FORBIDDEN',
-          message: 'AI insights are disabled. Manual campaigns remain available.',
-        });
+        throw denied(
+          'AI is turned off for your company. Turn on Ask Fathom in Organization settings, then try again. Manual campaigns remain available.'
+        );
       return buildPharmacyGrowthInput(db, resolved, input.from, input.cutoff);
     });
     const result = await generateGrowthRecommendations(facts);
@@ -236,6 +236,26 @@ export const pharmacyMarketingRouter = router({
       saveGrowthInsight(db, resolved, result)
     );
   }),
+  // What the page needs to explain a missing AI prerequisite (DEV-591). Booleans only:
+  // no provider name, model or credential leaves the server.
+  growthAvailability: protectedProcedure
+    .input(marketingScopeInput)
+    .query(async ({ ctx, input }) => {
+      const resolved = await scope(ctx, input.branchId);
+      const settings = await readAskFathomSettings(ctx.db, resolved.organizationId);
+      let providerReady = true;
+      try {
+        readAIConfig();
+      } catch {
+        providerReady = false;
+      }
+      return {
+        companyAiEnabled: settings?.askFathomEnabled === true,
+        providerReady,
+        // The company AI switch is an ADMIN-only control in Organization settings.
+        canManageAiSettings: ctx.session?.user.role === 'ADMIN',
+      };
+    }),
   reviewGrowth: protectedProcedure
     .input(growthReviewInput)
     .mutation(({ ctx, input }) =>

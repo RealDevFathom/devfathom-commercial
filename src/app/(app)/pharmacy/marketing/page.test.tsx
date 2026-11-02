@@ -1,8 +1,8 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { TRPCError } from '@trpc/server';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   MARKETING_ACCESS_DENIAL,
   MARKETING_ACCESS_FALLBACK,
@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   history: vi.fn(),
   review: vi.fn(),
   deliveryHistory: vi.fn(),
+  growthAvailability: vi.fn(),
 }));
 vi.mock('@/server/trpc', () => ({ createTRPCContext: async () => ({}) }));
 vi.mock('@/server/routers/pharmacy-marketing', () => ({
@@ -33,6 +34,11 @@ const campaign = {
 beforeEach(() => {
   vi.resetAllMocks();
   mocks.growthHistory.mockResolvedValue({ insights: [], reviews: [] });
+  mocks.growthAvailability.mockResolvedValue({
+    companyAiEnabled: true,
+    providerReady: true,
+    canManageAiSettings: true,
+  });
   mocks.basketHistory.mockResolvedValue({ insights: [], reviews: [] });
   mocks.deliveryHistory.mockResolvedValue({
     accepted: 0,
@@ -407,4 +413,123 @@ it('shows loyalty and inventory-cost insights as review-only with workspace link
   expect(screen.queryByRole('button', { name: 'Save review decision' })).not.toBeInTheDocument();
   expect(screen.queryByText(/Approve insight and create draft/)).not.toBeInTheDocument();
   expect(screen.getByText('Rejected. No campaign created.')).toBeInTheDocument();
+});
+
+describe('AI growth insights explain the next step and use plain inputs (DEV-591)', () => {
+  beforeEach(() => {
+    // 17:00 in Karachi on 2 November 2026: 1 November is the latest day that has ended.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-02T12:00:00Z'));
+  });
+  afterEach(() => vi.useRealTimers());
+  const generate = () => screen.getByRole('button', { name: 'Generate AI growth insights' });
+
+  it('links an owner to the company AI switch when AI is off', async () => {
+    mocks.growthAvailability.mockResolvedValue({
+      companyAiEnabled: false,
+      providerReady: true,
+      canManageAiSettings: true,
+    });
+    render(await Page({ searchParams: Promise.resolve({}) }));
+    const note = document.getElementById('growth-ai-next-step')!;
+    expect(note).toHaveTextContent('AI growth insights are off for now.');
+    expect(note).toHaveTextContent('Turn on Ask Fathom for your company');
+    expect(within(note).getByRole('link', { name: 'Open Organization settings' })).toHaveAttribute(
+      'href',
+      '/organization'
+    );
+    expect(note).not.toHaveTextContent('DevFathom support');
+    expect(generate()).toBeDisabled();
+    expect(
+      screen.queryByText(/Requires enabled AI settings and a configured provider/)
+    ).not.toBeInTheDocument();
+  });
+
+  it('names DevFathom support when the AI provider is not connected', async () => {
+    mocks.growthAvailability.mockResolvedValue({
+      companyAiEnabled: true,
+      providerReady: false,
+      canManageAiSettings: true,
+    });
+    render(await Page({ searchParams: Promise.resolve({}) }));
+    const note = document.getElementById('growth-ai-next-step')!;
+    expect(note).toHaveTextContent(
+      'Contact DevFathom support and ask them to connect an AI provider for your workspace'
+    );
+    expect(within(note).queryByRole('link')).not.toBeInTheDocument();
+  });
+
+  it('tells someone who cannot manage AI settings who to ask', async () => {
+    mocks.growthAvailability.mockResolvedValue({
+      companyAiEnabled: false,
+      providerReady: true,
+      canManageAiSettings: false,
+    });
+    render(await Page({ searchParams: Promise.resolve({}) }));
+    expect(document.getElementById('growth-ai-next-step')).toHaveTextContent(
+      'Ask your workspace owner to turn on Ask Fathom in Organization settings'
+    );
+  });
+
+  it('still names both prerequisites when AI status cannot be read', async () => {
+    mocks.growthAvailability.mockRejectedValue(new Error('synthetic'));
+    render(await Page({ searchParams: Promise.resolve({}) }));
+    const note = document.getElementById('growth-ai-next-step')!;
+    expect(within(note).getByRole('link', { name: 'Open Organization settings' })).toBeVisible();
+    expect(note).toHaveTextContent('contact DevFathom support');
+    expect(generate()).toBeEnabled();
+  });
+
+  it('shows no blocker and enables generation when AI is ready', async () => {
+    render(await Page({ searchParams: Promise.resolve({}) }));
+    expect(document.getElementById('growth-ai-next-step')).toBeNull();
+    expect(generate()).toBeEnabled();
+  });
+
+  it('offers plain local day pickers defaulting to the last 30 completed days', async () => {
+    render(await Page({ searchParams: Promise.resolve({}) }));
+    const form = generate().closest('form')!;
+    expect(within(form).getByLabelText('First day')).toHaveValue('2026-10-03');
+    expect(within(form).getByLabelText('Last day')).toHaveValue('2026-11-01');
+    expect(within(form).getByLabelText('Last day')).toHaveAttribute('max', '2026-11-01');
+    expect(form.querySelector('input[name="timezone"]')).toHaveValue('Asia/Karachi');
+    expect(within(form).getByText(/Whole days in Pakistan Standard Time/)).toBeInTheDocument();
+  });
+
+  it('removes UTC, ISO and replay jargon from labels; thresholds and keys sit behind Advanced', async () => {
+    mocks.history.mockResolvedValue({
+      campaigns: [{ ...campaign, status: 'CAPTURED' }],
+      templates: [{ id: 'template-a', name: 'Store welcome' }],
+      timezone: 'Asia/Karachi',
+    });
+    render(await Page({ searchParams: Promise.resolve({}) }));
+    for (const jargon of [
+      'Period start (UTC)',
+      'Exclusive cutoff (UTC)',
+      'Basket period start (UTC)',
+      'Batch request key (reuse for replay)',
+      'Scheduled time (ISO UTC)',
+      'From (UTC)',
+      'Cutoff (UTC, exclusive)',
+      'Minimum support (fraction of all receipts)',
+      'Minimum lift',
+    ])
+      expect(screen.queryByLabelText(jargon)).not.toBeInTheDocument();
+    expect(screen.queryAllByText(/schedules below use explicit UTC/)).toHaveLength(0);
+    expect(screen.getByRole('columnheader', { name: 'Send time' })).toBeInTheDocument();
+
+    const batch = screen.getByLabelText('Batch reference');
+    expect(batch.closest('details')).toHaveTextContent('Advanced: batch reference');
+    expect(batch.closest('details')).not.toHaveAttribute('open');
+    expect((batch as HTMLInputElement).value).toMatch(/^[0-9a-f-]{36}$/);
+    for (const threshold of [/support/, /confidence/, /lift/])
+      expect(screen.getByLabelText(threshold).closest('details')).toHaveTextContent(
+        'Advanced: how strong a pair must be'
+      );
+    expect(screen.getByLabelText('Send date and time (Pakistan Standard Time)')).toHaveValue(
+      '2026-11-03T10:00'
+    );
+    // Saved send times read in the same zone: 07:00Z is 12:00 in Karachi.
+    expect(screen.getByText('2026-10-07 12:00')).toBeInTheDocument();
+  });
 });
