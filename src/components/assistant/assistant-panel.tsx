@@ -5,14 +5,15 @@ import { useSession } from 'next-auth/react';
 import { useReducedMotion } from 'motion/react';
 import { useEntitlements } from '@/components/entitlements-provider';
 import { Button } from '@/components/ui/button';
-import { assistantEntry } from './assistant-suggestions';
+import { assistantEntry, type AssistantEntry } from './assistant-suggestions';
+import { hasSettledToolStep } from './assistant-history';
 import { useChat } from '@ai-sdk/react';
 import {
   DefaultChatTransport,
   lastAssistantMessageIsCompleteWithToolCalls,
   lastAssistantMessageIsCompleteWithApprovalResponses,
 } from 'ai';
-import { Sparkles, ArrowUp, Check, X, Loader2, Wrench, Square } from 'lucide-react';
+import { Sparkles, ArrowUp, Check, X, Loader2, Wrench, Square, RotateCcw } from 'lucide-react';
 import { Sheet, SheetContent, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { useAssistant } from '@/lib/assistant-store';
 import { cn } from '@/lib/utils';
@@ -131,62 +132,65 @@ function createConversationTransport(canChat: boolean) {
   };
 }
 
+const UNAVAILABLE_COPY =
+  "Ask Fathom can't answer right now. Try again in a few minutes; if it keeps happening, contact support.";
+const PERMISSION_COPY =
+  'Permission denied. Your session or workspace access may have changed. Reload to check your access.';
+const NOTICE_COPY = {
+  empty: 'No answer was returned for this question.',
+  stopped: 'Response stopped. Completed actions are not undone.',
+  unanswered: 'This question has not been answered yet.',
+} as const;
+
 // Touch-first screens open on the panel itself, as Base UI does for a touch
 // trigger, so the on-screen keyboard does not cover the examples.
 const prefersTouch = () =>
   typeof window.matchMedia === 'function' &&
   window.matchMedia('(hover: none) and (pointer: coarse)').matches;
 
-function AssistantConversation({ entry }: { entry: ReturnType<typeof assistantEntry> }) {
+function AssistantConversation({ entry }: { entry: AssistantEntry }) {
   const { open, setOpen } = useAssistant();
   const [input, setInput] = useState('');
+  const [emptyHint, setEmptyHint] = useState(false);
   const [requestError, setRequestError] = useState<'permission' | 'provider' | null>(null);
-  const [notice, setNotice] = useState('');
+  const [notice, setNotice] = useState<'empty' | 'stopped' | null>(null);
+  // Set before the SDK reports `submitted` and held until every automatic
+  // continuation settles, so a repeat Enter can never queue a second question.
+  const [pending, setPending] = useState(false);
+  const inFlight = useRef(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const popupRef = useRef<HTMLDivElement>(null);
-  const sending = useRef(false);
-  const submittedInput = useRef('');
   const reducedMotion = useReducedMotion();
 
   const [conversation] = useState(() => createConversationTransport(entry.canChat));
 
-  const { messages, sendMessage, status, stop, clearError, addToolApprovalResponse } = useChat({
-    transport: conversation.transport,
-    onError: (error) => {
-      if (!conversation.isActive()) return;
-      sending.current = false;
-      setRequestError(error.message === 'ASSISTANT_PERMISSION_DENIED' ? 'permission' : 'provider');
-      // The SDK reports provider errors through onError; sendMessage can resolve
-      // on failure. Keep the draft, including failures in later tool steps.
-      setInput((draft) => draft || submittedInput.current);
-    },
-    onFinish: ({ isAbort, isError, message }) => {
-      if (!conversation.isActive()) return;
-      sending.current = false;
-      if (isAbort || isError) return;
-      const parts = message.parts as AnyPart[];
-      const failed = parts.some(
-        (part) => part.state === 'output-error' || resultMessage(part.output)?.kind === 'error'
-      );
-      setInput((draft) =>
-        failed ? draft || submittedInput.current : draft === submittedInput.current ? '' : draft
-      );
-      const hasContent = parts.some(
-        (part) => (part.type === 'text' && part.text?.trim()) || part.type.startsWith('tool-')
-      );
-      setNotice(
-        hasContent ? '' : 'No answer was returned. Your question is still available to retry.'
-      );
-      if (!hasContent) setInput((draft) => draft || submittedInput.current);
-    },
-    // Auto-continue reads and explicit approval responses, but never a run that
-    // belonged to an unmounted tenant context.
-    sendAutomaticallyWhen: (opts) =>
-      conversation.isActive() &&
-      entry.canChat &&
-      (lastAssistantMessageIsCompleteWithApprovalResponses(opts) ||
-        lastAssistantMessageIsCompleteWithToolCalls(opts)),
-  });
+  const { messages, sendMessage, regenerate, status, stop, clearError, addToolApprovalResponse } =
+    useChat({
+      transport: conversation.transport,
+      onError: (error) => {
+        if (!conversation.isActive()) return;
+        // The SDK reports provider errors through onError; sendMessage can resolve
+        // on failure. The question stays in its bubble for an explicit retry.
+        setRequestError(
+          error.message === 'ASSISTANT_PERMISSION_DENIED' ? 'permission' : 'provider'
+        );
+      },
+      onFinish: ({ isAbort, isError, message }) => {
+        if (!conversation.isActive() || isAbort || isError) return;
+        const parts = message.parts as AnyPart[];
+        const hasContent = parts.some(
+          (part) => (part.type === 'text' && part.text?.trim()) || part.type.startsWith('tool-')
+        );
+        setNotice(hasContent ? null : 'empty');
+      },
+      // Auto-continue reads and explicit approval responses, but never a run that
+      // belonged to an unmounted tenant context.
+      sendAutomaticallyWhen: (opts) =>
+        conversation.isActive() &&
+        entry.canChat &&
+        (lastAssistantMessageIsCompleteWithApprovalResponses(opts) ||
+          lastAssistantMessageIsCompleteWithToolCalls(opts)),
+    });
 
   useEffect(() => {
     conversation.activate();
@@ -204,31 +208,56 @@ function AssistantConversation({ entry }: { entry: ReturnType<typeof assistantEn
     });
   }, [messages, status, open, reducedMotion]);
 
-  const busy = status === 'submitted' || status === 'streaming';
+  const busy = pending || status === 'submitted' || status === 'streaming';
   const failed = requestError !== null || status === 'error';
-  const send = async (text: string) => {
-    const t = text.trim();
-    if (
-      !conversation.isActive() ||
-      !t ||
-      busy ||
-      sending.current ||
-      !entry.canChat ||
-      requestError === 'permission'
-    )
-      return;
-    sending.current = true;
-    submittedInput.current = text;
-    setInput(text);
+  const denied = requestError === 'permission';
+  const last = messages.at(-1);
+  const unanswered = !busy && last?.role === 'user';
+  const canRetry =
+    entry.canChat &&
+    !busy &&
+    !denied &&
+    messages.some((message) => message.role === 'user') &&
+    (failed || notice === 'empty' || unanswered);
+
+  const run = async (request: () => Promise<void>) => {
+    if (inFlight.current || !conversation.isActive() || !entry.canChat) return;
+    inFlight.current = true;
+    setPending(true);
     setRequestError(null);
-    setNotice('');
+    setNotice(null);
     try {
-      await sendMessage({ text: t });
+      await request();
     } catch {
       if (conversation.isActive()) setRequestError('provider');
     } finally {
-      sending.current = false;
+      inFlight.current = false;
+      if (conversation.isActive()) setPending(false);
     }
+  };
+
+  const send = (text: string) => {
+    const question = text.trim();
+    if (!question) {
+      setEmptyHint(true);
+      inputRef.current?.focus();
+      return;
+    }
+    if (busy || inFlight.current || denied || !entry.canChat) return;
+    setInput('');
+    setEmptyHint(false);
+    void run(() => sendMessage({ text: question }));
+  };
+
+  // Resend the last question in place: regenerate keeps (or returns to) its
+  // bubble. A reply that already recorded a tool step is continued instead, so
+  // completed results are never discarded.
+  const retry = () => {
+    if (!canRetry) return;
+    const continueTurn = last?.role === 'assistant' && hasSettledToolStep(last);
+    clearError();
+    inputRef.current?.focus();
+    void run(() => (continueTurn ? sendMessage() : regenerate()));
   };
 
   const approve = (approvalId: string, approved: boolean) => {
@@ -247,6 +276,15 @@ function AssistantConversation({ entry }: { entry: ReturnType<typeof assistantEn
     }
     return box;
   };
+
+  const hintId = 'assistant-question-hint';
+  const statusText = notice ? NOTICE_COPY[notice] : unanswered ? NOTICE_COPY.unanswered : null;
+  const retryButton = canRetry ? (
+    <Button type="button" variant="outline" size="touch" onClick={retry}>
+      <RotateCcw className="h-3.5 w-3.5" />
+      Retry
+    </Button>
+  ) : null;
 
   return (
     <Sheet open={open} onOpenChange={setOpen}>
@@ -289,43 +327,27 @@ function AssistantConversation({ entry }: { entry: ReturnType<typeof assistantEn
         {/* Messages */}
         <div ref={scrollRef} className="flex-1 space-y-4 overflow-y-auto px-4 py-5">
           {messages.length === 0 ? (
-            <EmptyState entry={entry} onPick={send} disabled={busy || failed} />
+            <EmptyState entry={entry} onPick={send} disabled={busy} />
           ) : (
             messages.map((m) => (
               <MessageBubble key={m.id} message={m} onApprove={approve} disabled={busy || failed} />
             ))
           )}
           {busy && <Thinking />}
-          {notice && (
-            <p role="status" className="text-sm text-muted-foreground">
-              {notice}
-            </p>
-          )}
-          {failed && (
+          {failed ? (
             <div
               role="alert"
               className="space-y-2 rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"
             >
-              <p>
-                {requestError === 'permission'
-                  ? 'Permission denied. Your session or workspace access may have changed. Reload to check your access.'
-                  : 'Ask Fathom is currently unavailable. No cached answer was used. Your draft is retained. Review any action results before retrying.'}
-              </p>
-              {requestError !== 'permission' && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => {
-                    clearError();
-                    setRequestError(null);
-                    inputRef.current?.focus();
-                  }}
-                >
-                  Review and retry
-                </Button>
-              )}
+              <p>{denied ? PERMISSION_COPY : UNAVAILABLE_COPY}</p>
+              {retryButton}
             </div>
-          )}
+          ) : statusText ? (
+            <div role="status" className="space-y-2 text-sm text-muted-foreground">
+              <p>{statusText}</p>
+              {retryButton}
+            </div>
+          ) : null}
         </div>
 
         {/* Composer */}
@@ -347,26 +369,30 @@ function AssistantConversation({ entry }: { entry: ReturnType<typeof assistantEn
               ref={inputRef}
               id="assistant-question"
               dir="auto"
-              disabled={!entry.canChat || requestError === 'permission'}
+              disabled={!entry.canChat || denied}
+              readOnly={busy}
+              aria-describedby={emptyHint ? hintId : undefined}
               value={input}
-              onChange={(e) => setInput(e.target.value)}
+              onChange={(e) => {
+                setInput(e.target.value);
+                if (emptyHint) setEmptyHint(false);
+              }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                   e.preventDefault();
-                  send(input);
+                  if (!busy) send(input);
                 }
               }}
               rows={1}
-              placeholder="Ask about your workspace…"
+              placeholder={busy ? 'Waiting for the answer…' : 'Ask about your workspace…'}
               className="max-h-32 min-h-[44px] min-w-0 flex-1 resize-none bg-transparent text-sm text-foreground outline-none [unicode-bidi:plaintext] placeholder:text-muted-foreground"
             />
             {busy ? (
               <Button
                 type="button"
                 onClick={() => {
-                  sending.current = false;
                   void stop();
-                  setNotice('Response stopped. Completed actions are not undone.');
+                  setNotice('stopped');
                 }}
                 className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-muted text-foreground transition-colors hover:bg-secondary"
                 variant="secondary"
@@ -377,7 +403,7 @@ function AssistantConversation({ entry }: { entry: ReturnType<typeof assistantEn
             ) : (
               <Button
                 type="submit"
-                disabled={!input.trim() || !entry.canChat || requestError === 'permission'}
+                disabled={!input.trim() || !entry.canChat || denied}
                 className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-none transition-all hover:bg-primary-hover active:scale-95 disabled:opacity-40"
                 aria-label="Send"
               >
@@ -385,6 +411,18 @@ function AssistantConversation({ entry }: { entry: ReturnType<typeof assistantEn
               </Button>
             )}
           </div>
+          {/* DEV-593: an empty send explains itself instead of doing nothing. */}
+          <p
+            id={hintId}
+            role="status"
+            className={cn('px-1 text-xs text-muted-foreground', emptyHint && 'mt-2')}
+          >
+            {emptyHint
+              ? messages.length === 0 && entry.suggestions.length > 0
+                ? 'Type a question first, or choose an example above.'
+                : 'Type a question first.'
+              : null}
+          </p>
           <p className="mt-2 px-1 text-center text-[10px] text-muted-foreground">
             Access is checked for each request. Supported changes require your confirmation.
           </p>
@@ -746,10 +784,11 @@ function EmptyState({
   onPick,
   disabled,
 }: {
-  entry: ReturnType<typeof assistantEntry>;
+  entry: AssistantEntry;
   onPick: (q: string) => void;
   disabled: boolean;
 }) {
+  const examples = entry.canChat ? entry.suggestions : [];
   return (
     <div className="flex min-h-full flex-col items-center justify-center px-2 text-center">
       <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/10 text-primary">
@@ -759,25 +798,38 @@ function EmptyState({
       <p role="status" className="mt-1.5 max-w-[18rem] text-xs text-muted-foreground">
         {entry.description}
       </p>
-      {entry.canChat && entry.suggestions.length === 0 && (
-        <p className="mt-3 text-xs text-muted-foreground">
-          No suggested actions are available for your current access.
+      {examples.length > 0 && (
+        <div className="mt-5 w-full text-start">
+          <p
+            id="assistant-examples"
+            className="px-1 font-mono text-[10px] uppercase tracking-[0.18em] text-text-muted"
+          >
+            Try asking
+          </p>
+          <ul aria-labelledby="assistant-examples" className="mt-2 grid gap-2">
+            {examples.map((s) => (
+              <li key={s}>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={disabled}
+                  onClick={() => onPick(s)}
+                  className="h-auto min-h-11 w-full justify-start whitespace-normal rounded-xl border border-border bg-card px-3 py-2 text-start text-[13px] text-foreground"
+                >
+                  {s}
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {/* DEV-584: access wording only where the role, not the workspace, narrows the examples. */}
+      {entry.canChat && entry.limitedByRole && (
+        <p className="mt-3 max-w-[18rem] text-xs text-muted-foreground">
+          Examples match your role. Report questions need report access from your workspace
+          administrator.
         </p>
       )}
-      <div className="mt-5 grid w-full gap-2">
-        {entry.suggestions.map((s) => (
-          <Button
-            key={s}
-            type="button"
-            variant="outline"
-            disabled={disabled}
-            onClick={() => onPick(s)}
-            className="h-auto min-h-11 justify-start whitespace-normal rounded-xl border border-border bg-card px-3 py-2 text-left text-[13px] text-foreground"
-          >
-            {s}
-          </Button>
-        ))}
-      </div>
     </div>
   );
 }

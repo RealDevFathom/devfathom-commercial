@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Session } from 'next-auth';
 import { type UIMessage, type UIMessageChunk, createUIMessageStreamResponse } from 'ai';
@@ -238,6 +238,53 @@ describe('Ask Fathom context and suggestions', () => {
   });
 });
 
+describe('Ask Fathom role-aware empty state', () => {
+  const pharmacy = () =>
+    entitlement('PHARMACY', ['pharmacy-core', 'pharmacy-counter', 'pharmacy-reports']);
+  const examples = () =>
+    within(screen.getByRole('list', { name: 'Try asking' }))
+      .getAllByRole('button')
+      .map((button) => button.textContent);
+
+  it('gives the owner report examples without access wording (DEV-584, DEV-605)', () => {
+    asRole('ADMIN');
+    render(panel(pharmacy()));
+    expect(examples()).toEqual([
+      "What were today's sales?",
+      'Which stock is expiring soon?',
+      'Which medicines are running low and need reordering?',
+      'How do I process a customer return?',
+      'What can you help me with?',
+    ]);
+    expect(
+      screen.queryByText(/No suggested actions|current access|Examples match your role/)
+    ).not.toBeInTheDocument();
+  });
+  it('gives the cashier counter examples and never promises reports (DEV-605)', () => {
+    render(panel(pharmacy()));
+    expect(examples()).toEqual([
+      'How do I check whether a medicine is in stock?',
+      'How do I process a customer return?',
+      'What can you help me with?',
+    ]);
+    expect(screen.getByText(/counter tasks/)).toBeVisible();
+    expect(screen.queryByText(/Report access is checked when you ask/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Ask about .*pharmacy reports/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /sales|expir|reorder/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/Examples match your role/)).toBeVisible();
+  });
+  it('offers three to five tappable examples and sends the one tapped (DEV-593)', async () => {
+    render(panel(pharmacy()));
+    expect(examples().length).toBeGreaterThanOrEqual(3);
+    expect(examples().length).toBeLessThanOrEqual(5);
+    fireEvent.click(screen.getByRole('button', { name: 'How do I process a customer return?' }));
+    expect(await screen.findByText('Synthetic answer')).toBeVisible();
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body)).messages[0].parts[0].text).toBe(
+      'How do I process a customer return?'
+    );
+  });
+});
+
 describe('Ask Fathom request and result states', () => {
   it('has no failure alert before a request fails', () => {
     render(panel());
@@ -253,43 +300,53 @@ describe('Ask Fathom request and result states', () => {
     );
     expect(screen.getByLabelText('Your question')).toHaveValue('');
   });
-  it('retains the draft on provider failure and requires review before an explicit retry', async () => {
+  it('explains a failure plainly and retries the same question without a second bubble (DEV-592)', async () => {
     fetchMock.mockResolvedValueOnce(
       new Response('synthetic provider diagnostic must not render', { status: 503 })
     );
     render(panel());
     enter();
-    expect(await screen.findByRole('alert')).toHaveTextContent('currently unavailable');
-    expect(screen.getByRole('alert')).toHaveTextContent('No cached answer was used');
-    expect(screen.getByRole('button', { name: 'Close assistant' })).toBeEnabled();
-    expect(screen.getByRole('textbox')).toBeEnabled();
-    expect(screen.getByLabelText('Your question')).toHaveValue('Find my notes');
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(
+      "Ask Fathom can't answer right now. Try again in a few minutes; if it keeps happening, contact support."
+    );
+    expect(alert).not.toHaveTextContent(/action results|cached/i);
     expect(screen.queryByText(/synthetic provider diagnostic/)).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Review and retry' }));
-    expect(screen.getByLabelText('Your question')).toHaveFocus();
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    expect(screen.getByRole('button', { name: 'Close assistant' })).toBeEnabled();
+    expect(screen.getByLabelText('Your question')).toBeEnabled();
+    expect(userBubbles('Find my notes')).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(await screen.findByText('Synthetic answer')).toBeVisible();
     expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(userBubbles('Find my notes')).toHaveLength(1);
+    const retried = JSON.parse(String(fetchMock.mock.calls[1][1]?.body)) as {
+      messages: UIMessage[];
+    };
+    expect(retried.messages.filter((message) => message.role === 'user')).toHaveLength(1);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
   });
   it.each([401, 403])(
-    'shows permission denial for HTTP %s without a retry or discarded draft',
+    'shows permission denial for HTTP %s without a retry or a lost question',
     async (status) => {
       fetchMock.mockResolvedValueOnce(new Response('denied', { status }));
       render(panel());
       enter();
       expect(await screen.findByRole('alert')).toHaveTextContent('Permission denied');
-      expect(screen.getByLabelText('Your question')).toHaveValue('Find my notes');
+      expect(userBubbles('Find my notes')).toHaveLength(1);
       expect(screen.getByLabelText('Your question')).toBeDisabled();
-      expect(screen.queryByRole('button', { name: 'Review and retry' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
     }
   );
-  it('shows an explicit empty response and retains its question', async () => {
+  it('shows an explicit empty response and retries its question in place', async () => {
     fetchMock.mockResolvedValueOnce(response());
     render(panel());
     enter();
     expect(await screen.findByText(/No answer was returned/)).toBeVisible();
-    expect(screen.getByLabelText('Your question')).toHaveValue('Find my notes');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('Synthetic answer')).toBeVisible();
+    expect(userBubbles('Find my notes')).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
   it('shows pending status and stops the request without claiming rollback', async () => {
     const signal = pendingFetch();
@@ -299,8 +356,52 @@ describe('Ask Fathom request and result states', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
     await waitFor(() => expect(signal()?.aborted).toBe(true));
     expect(screen.getByText(/Completed actions are not undone/)).toBeVisible();
-    expect(screen.getByLabelText('Your question')).toHaveValue('Find my notes');
+    expect(userBubbles('Find my notes')).toHaveLength(1);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+  it('ignores repeat Enter while a reply loads and locks the composer (DEV-600)', async () => {
+    pendingFetch();
+    render(panel());
+    enter('Loading question');
+    const box = screen.getByLabelText('Your question');
+    expect(await screen.findByText('Working on your request…')).toBeVisible();
+    expect(box).toHaveValue('');
+    expect(box).toHaveAttribute('readonly');
+    // Even text forced into the locked box cannot queue a second question.
+    fireEvent.change(box, { target: { value: 'Loading question' } });
+    for (let press = 0; press < 3; press++) fireEvent.keyDown(box, { key: 'Enter' });
+    await act(async () => {});
+    expect(userBubbles('Loading question')).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+  it('does not resend a failed question as a new bubble on Enter (DEV-600)', async () => {
+    fetchMock.mockImplementation(async () => new Response('down', { status: 503 }));
+    render(panel());
+    enter('Owner question');
+    await screen.findByRole('alert');
+    const box = screen.getByLabelText('Your question');
+    expect(box).toHaveValue('');
+    fireEvent.keyDown(box, { key: 'Enter' });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    await act(async () => {});
+    expect(userBubbles('Owner question')).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+  it('explains an empty send instead of doing nothing (DEV-593)', () => {
+    render(panel());
+    const box = screen.getByLabelText('Your question');
+    const hint = 'Type a question first, or choose an example above.';
+    expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+    expect(screen.queryByText(hint)).not.toBeInTheDocument();
+    fireEvent.keyDown(box, { key: 'Enter' });
+    expect(screen.getByText(hint)).toBeVisible();
+    expect(box).toHaveAccessibleDescription(hint);
+    fireEvent.change(box, { target: { value: '   ' } });
+    expect(screen.queryByText(hint)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+    fireEvent.keyDown(box, { key: 'Enter' });
+    expect(screen.getByText(hint)).toBeVisible();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
   it("lays out mixed Urdu and English by each paragraph's first strong character (DEV-599)", async () => {
     const mixed = 'آج کی سیل کتنی ہے؟ Panadol 500mg کے 1,250 units اور PKR 45,300 کی ریفنڈ';
